@@ -7,6 +7,10 @@
  */
 
 import path from "path";
+import {
+  ATTACHMENT_COUNT_FOR_EMAIL_SQL,
+  EMAIL_FETCH_IDENTITY_SQL,
+} from "../db/folderExportAttachmentSql";
 import fs from "fs/promises";
 import fsSync from "fs";
 import { net } from "electron";
@@ -148,13 +152,13 @@ async function downloadMissingAttachmentsForExport(
     if (!email.has_attachments) continue;
 
     const existingCount = db.prepare(
-      "SELECT COUNT(*) as cnt FROM attachments WHERE email_id = ?"
+      ATTACHMENT_COUNT_FOR_EMAIL_SQL
     ).get(email.id) as { cnt: number };
 
     if (existingCount.cnt === 0) {
       // Need to look up the email record for external_id and source
       const emailRecord = db.prepare(
-        "SELECT id, external_id, source, user_id FROM emails WHERE id = ?"
+        EMAIL_FETCH_IDENTITY_SQL
       ).get(email.id) as { id: string; external_id: string; source: string; user_id: string } | undefined;
 
       if (emailRecord?.external_id && emailRecord?.source) {

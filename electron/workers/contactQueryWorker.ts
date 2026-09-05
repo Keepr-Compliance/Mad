@@ -27,6 +27,11 @@ import {
   type ContactSourceRecordRow,
 } from "../services/db/contactSourceLinkSql";
 import { IMPORTED_CONTACTS_SELECT_SQL } from "../services/db/contactProjectionSql";
+import {
+  IMPORTED_CONTACT_IDS_SQL,
+  CONTACT_EXISTING_EMAILS_SQL,
+  CONTACT_EXISTING_PHONES_SQL,
+} from "../services/db/contactBackfillPlanSql";
 
 type QueryType = "external" | "imported" | "backfill";
 
@@ -103,9 +108,9 @@ function runExternalQuery(userId: string): unknown[] {
 function runBackfillQuery(userId: string): unknown[] {
   if (!db) throw new Error("Database not initialized");
 
-  const importedContacts = db.prepare(
-    `SELECT id FROM contacts WHERE user_id = ? AND is_imported = 1`
-  ).all(userId) as Array<{ id: string }>;
+  const importedContacts = db
+    .prepare(IMPORTED_CONTACT_IDS_SQL)
+    .all(userId) as Array<{ id: string }>;
 
   const plan: Array<{ contactId: string; emails: string[]; phones: string[] }> = [];
 
@@ -136,16 +141,16 @@ function runBackfillQuery(userId: string): unknown[] {
     // INSERT OR IGNORE, because this plan is a snapshot and the contact may
     // have changed between the scan and the write.
     const existingEmails = new Set(
-      (db.prepare(
-        `SELECT LOWER(email) as email FROM contact_emails WHERE contact_id = ?`
-      ).all(contact.id) as Array<{ email: string }>).map((r) => r.email)
+      (
+        db.prepare(CONTACT_EXISTING_EMAILS_SQL).all(contact.id) as Array<{ email: string }>
+      ).map((r) => r.email)
     );
     const existingPhoneKeys = new Set(
-      (db.prepare(
-        `SELECT phone_e164 FROM contact_phones WHERE contact_id = ?`
-      ).all(contact.id) as Array<{ phone_e164: string }>).map((r) =>
-        r.phone_e164.replace(/\D/g, "").slice(-10)
-      )
+      (
+        db.prepare(CONTACT_EXISTING_PHONES_SQL).all(contact.id) as Array<{
+          phone_e164: string;
+        }>
+      ).map((r) => r.phone_e164.replace(/\D/g, "").slice(-10))
     );
 
     const missingEmails: string[] = [];

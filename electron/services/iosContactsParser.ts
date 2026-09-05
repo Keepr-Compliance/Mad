@@ -27,73 +27,13 @@ import {
   isPhoneNumber,
   getTrailingDigits,
 } from "../utils/phoneNormalization";
-
-/**
- * ABPerson columns selected LITERALLY, unconditionally, always.
- *
- * BACKLOG-2407 — these MUST NOT be probe-gated. `PRAGMA table_info` does not
- * list an implicit rowid, so a probe governing `ROWID` would emit
- * `NULL AS ROWID` against any ABPerson that does not declare it and null the id
- * of every contact — silent total corruption, strictly worse than the crash the
- * probe exists to prevent.
- *
- * BACKLOG-2413 — EACH ONE IS ALIASED TO ITSELF, which looks redundant and is
- * not. It is the same result-key trap `identitySelectList()` documents at
- * length, and the bare form left the REQUIRED columns exposed to it while the
- * optional ones were fixed. SQLite resolves an identifier case-insensitively
- * but names the RESULT column after the case it was DECLARED with — and an
- * implicit rowid has no declared case at all, so `SELECT ROWID` comes back
- * under the key `rowid`.
- *
- * Measured on the real driver, bare form vs. this one:
- *
- *   declared `first`/`last`/`organization` — keys `first`/`last`/`organization`,
- *     so `row.First` is undefined and `computeDisplayName` optional-chains past
- *     three undefineds to `"Unknown"`. Cosmetic: matching is on phone/email.
- *   declared `rowid`, OR an IMPLICIT rowid — key `rowid`, so `row.ROWID` is
- *     undefined and `id` is undefined. `buildLookupIndexes()` then misses on
- *     `multiValuesByContact.get(undefined)` and EVERY contact imports with zero
- *     phones and zero emails, while `contactCache.set(undefined, …)` collapses
- *     the whole address book to one entry. The import reports success and
- *     produces contacts that can match nothing.
- *
- * The implicit-rowid shape is precisely the one a probe cannot rescue —
- * `PRAGMA table_info` never lists it — which is why this is an unconditional
- * alias and not an extension of `ABPERSON_OPTIONAL_COLUMNS`. Identical output
- * on the canonical schema, strictly better on every other shape tested. Pinned
- * by the implicit-rowid, lower-case-rowid and lower-case-name suites in
- * `iosContactsParser.realSchema.test.ts`.
- */
-const ABPERSON_REQUIRED_COLUMNS =
-  "ROWID AS ROWID, First AS First, Last AS Last, Organization AS Organization";
-
-/**
- * ABPerson identity columns (BACKLOG-2407), each emitted only if this backup's
- * ABPerson actually has it.
- *
- * WHY PROBED RATHER THAN HARDCODED INTO THE SQL. `db.prepare()` validates column
- * names, so a `SELECT` naming a column the backup lacks THROWS — inside
- * `open()`, which rethrows at :87-92 — taking down the ENTIRE iPhone contacts
- * import for that user. iPhone sync is the ungated DEFAULT import source for
- * every Windows user (`useImportSource.ts:20-22`), so that blast radius is not
- * niche. The identical hazard on the identical backup format is already handled
- * this way for `message.audio_transcript` in the sibling parser
- * (`iosMessagesParser.ts:192-210`); this mirrors that mechanism rather than
- * inventing a variant.
- *
- * These constants are the ONLY text ever placed into the SQL. The probe decides
- * *whether* an entry is emitted, never *what* is emitted — the `.sqlitedb` is a
- * user-supplied restored backup, and splicing an identifier read out of it into
- * a statement would be a needless injection surface, readonly or not.
- */
-const ABPERSON_OPTIONAL_COLUMNS = [
-  "ExternalUUID",
-  "ExternalIdentifier",
-  "ExternalModificationTag",
-  "ModificationDate",
-  "CreationDate",
-  "StoreID",
-] as const;
+import {
+  ABPERSON_OPTIONAL_COLUMNS,
+  ABPERSON_TABLE_INFO_SQL,
+  AB_MULTIVALUE_ALL_SQL,
+  AB_MULTIVALUE_BY_RECORD_SQL,
+  prepareAbPersonStatements,
+} from "./db/appleAddressBookSql";
 
 /**
  * Apple/CF absolute time (SECONDS since 2001-01-01T00:00:00Z) to ISO-8601.
@@ -292,7 +232,7 @@ export class iOSContactsParser {
       if (!this.db) {
         throw new Error("Database not open");
       }
-      const rows = this.db.prepare("PRAGMA table_info(ABPerson)").all() as Array<{
+      const rows = this.db.prepare(ABPERSON_TABLE_INFO_SQL).all() as Array<{
         name: string;
       }>;
       const declared = new Set(rows.map((r) => String(r.name).toLowerCase()));
@@ -311,91 +251,29 @@ export class iOSContactsParser {
     return present;
   }
 
-  /**
-   * BACKLOG-2407: the identity part of an ABPerson SELECT list.
-   *
-   * A column the backup has is selected `<col> AS <col>`; one it lacks becomes
-   * `NULL AS <col>`. Either way the row shape is IDENTICAL, so `RawContactRow`
-   * can type every field as present-and-nullable rather than optional. Only the
-   * constants in `ABPERSON_OPTIONAL_COLUMNS` are ever emitted.
-   *
-   * WHY THE PRESENT BRANCH IS ALIASED TO ITSELF, WHICH LOOKS REDUNDANT AND IS
-   * NOT. SQLite resolves an identifier case-insensitively but names the RESULT
-   * column after the case it was DECLARED with. Against an ABPerson declaring
-   * `EXTERNALUUID`, `SELECT ExternalUUID` therefore succeeds and returns the row
-   * keyed `EXTERNALUUID`; `row.ExternalUUID` is `undefined`, and `buildContact`'s
-   * `?? null` converts that into a null capture. The bare form made the
-   * case-insensitive probe above a NO-OP — identical in outcome to having no
-   * case handling at all, while reading as a protection. Measured on the real
-   * driver: with `EXTERNALUUID` declared, the bare form yields result key
-   * `EXTERNALUUID` and captures null; `ExternalUUID AS ExternalUUID` yields key
-   * `ExternalUUID` and captures the value. Pinned by the "declared in a
-   * different case" suite in `iosContactsParser.realSchema.test.ts`, and the
-   * same result-key trap on this same table is why that file declares `ROWID`
-   * explicitly (see its ABPERSON_REAL_SCHEMA note).
-   */
-  private identitySelectList(): string {
-    const present = this.probeIdentityColumns();
-    return ABPERSON_OPTIONAL_COLUMNS.map((col) =>
-      present.has(col) ? `        ${col} AS ${col}` : `        NULL AS ${col}`,
-    ).join(",\n");
-  }
-
-  /**
+    /**
    * Prepares SQL statements for reuse.
    */
   private prepareStatements(): void {
     if (!this.db) return;
 
-    // BACKLOG-2407: BOTH ABPerson statements are built from the same list. The
-    // by-id statement below is not dead code — getContactById() falls through to
+    // BACKLOG-2407: BOTH ABPerson statements are built from the same list —
+    // enforced in db/appleAddressBookSql now that they share one builder. The
+    // by-id statement below is not dead code: getContactById() falls through to
     // it on a cache miss, so widening only the first would have that path return
     // contacts whose identity fields were silently undefined.
-    const identityColumns = this.identitySelectList();
 
-    // Get all contacts from ABPerson table
-    this.stmtAllContacts = this.db.prepare(`
-      SELECT
-        ${ABPERSON_REQUIRED_COLUMNS},
-${identityColumns}
-      FROM ABPerson
-      ORDER BY ROWID
-    `);
+    // Prepared as a PAIR in db/, so preparing one without the other is not
+    // expressible — which is what BACKLOG-2407's finding actually requires.
+    const abPerson = prepareAbPersonStatements(this.db, this.probeIdentityColumns());
+    this.stmtAllContacts = abPerson.all;
+    this.stmtContactById = abPerson.byId;
 
     // Get all multi-values (phones, emails) with labels
-    this.stmtMultiValues = this.db.prepare(`
-      SELECT
-        mv.record_id,
-        mv.property,
-        COALESCE(mvl.value, 'other') as label,
-        mv.value
-      FROM ABMultiValue mv
-      LEFT JOIN ABMultiValueLabel mvl ON mv.label = mvl.ROWID
-      WHERE mv.property IN (?, ?)
-      ORDER BY mv.record_id
-    `);
-
-    // Get single contact by ID
-    this.stmtContactById = this.db.prepare(`
-      SELECT
-        ${ABPERSON_REQUIRED_COLUMNS},
-${identityColumns}
-      FROM ABPerson
-      WHERE ROWID = ?
-    `);
+    this.stmtMultiValues = this.db.prepare(AB_MULTIVALUE_ALL_SQL);
 
     // Get multi-values for a specific contact
-    this.stmtMultiValuesByContact = this.db.prepare(`
-      SELECT
-        mv.record_id,
-        mv.property,
-        COALESCE(mvl.value, 'other') as label,
-        mv.value
-      FROM ABMultiValue mv
-      LEFT JOIN ABMultiValueLabel mvl ON mv.label = mvl.ROWID
-      WHERE mv.record_id = ?
-        AND mv.property IN (?, ?)
-    `);
+    this.stmtMultiValuesByContact = this.db.prepare(AB_MULTIVALUE_BY_RECORD_SQL);
   }
 
   /**

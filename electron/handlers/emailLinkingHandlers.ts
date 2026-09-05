@@ -12,6 +12,10 @@ import logService from "../services/logService";
 import { createEmail, getEmailById, getEmailByExternalId, getCachedEmails } from "../services/db/emailDbService";
 import { createCommunication, removeIgnoredCommunication, confirmEmailLinksByEmailIds } from "../services/db/communicationDbService";
 import { dbAll } from "../services/db/core/dbConnection";
+import {
+  REMOVED_EMAILS_SQL,
+  REMOVED_MESSAGES_SQL,
+} from "../services/db/removedCommunicationSql";
 import gmailFetchService from "../services/gmailFetchService";
 import outlookFetchService from "../services/outlookFetchService";
 import emailSyncService from "../services/emailSyncService";
@@ -626,41 +630,8 @@ export function registerEmailLinkingHandlers(): void {
 
       // Query ignored_communications joined with messages to get actual message content
       // Handles both thread-based suppression and per-message suppression
-      const sql = `
-        SELECT DISTINCT
-          ic.id as ignored_id,
-          ic.thread_id as ic_thread_id,
-          ic.reason,
-          ic.ignored_at,
-          m.id as message_id,
-          m.body_text as body,
-          m.subject,
-          m.channel,
-          m.thread_id,
-          m.sent_at,
-          m.received_at,
-          m.participants,
-          m.participants_flat,
-          m.direction,
-          -- BACKLOG-2814: the group's user-visible name, so a removed group
-          -- conversation is identified the same way it was before removal.
-          tn.display_name as thread_display_name
-        FROM ignored_communications ic
-        LEFT JOIN messages m ON (
-          (ic.thread_id IS NOT NULL AND ic.thread_id != '' AND m.thread_id = ic.thread_id)
-          OR (ic.original_communication_id IS NOT NULL AND m.id = ic.original_communication_id)
-        )
-        -- BACKLOG-2814: (user_id, thread_id) is the table's PK; joining on
-        -- thread_id alone would leak one user's group name onto another's.
-        LEFT JOIN message_thread_names tn ON (
-          tn.thread_id = m.thread_id AND tn.user_id = m.user_id
-        )
-        WHERE ic.transaction_id = ?
-        AND m.id IS NOT NULL
-        ORDER BY ic.ignored_at DESC, m.sent_at DESC
-      `;
 
-      const rows = dbAll(sql, [validatedTransactionId]);
+      const rows = dbAll(REMOVED_MESSAGES_SQL, [validatedTransactionId]);
 
       logService.info("Retrieved removed messages", "Transactions", {
         transactionId: validatedTransactionId,
@@ -690,39 +661,8 @@ export function registerEmailLinkingHandlers(): void {
       }
 
       // Query ignored_communications joined with emails to get actual email content
-      const sql = `
-        SELECT DISTINCT
-          ic.id as ignored_id,
-          ic.email_id as ic_email_id,
-          ic.reason,
-          -- BACKLOG-2831: part of the identity a duplicate is collapsed on, and
-          -- half of what classifyRemoval reads to decide where a Restore goes.
-          ic.match_reason,
-          ic.ignored_at,
-          e.id as email_id,
-          e.subject,
-          e.sender,
-          e.recipients,
-          e.cc,
-          e.sent_at,
-          e.thread_id,
-          SUBSTR(e.body_plain, 1, 200) as body_preview,
-          e.body_plain,
-          e.has_attachments,
-          e.source
-        FROM ignored_communications ic
-        JOIN emails e ON (
-          (ic.email_id IS NOT NULL AND ic.email_id = e.id)
-          OR (ic.original_communication_id IS NOT NULL
-              AND EXISTS (SELECT 1 FROM communications c
-                          WHERE c.id = ic.original_communication_id AND c.email_id = e.id))
-        )
-        WHERE ic.transaction_id = ?
-        AND e.id IS NOT NULL
-        ORDER BY ic.ignored_at DESC
-      `;
 
-      const rows = dbAll<RemovedEmailQueryRow>(sql, [validatedTransactionId]);
+      const rows = dbAll<RemovedEmailQueryRow>(REMOVED_EMAILS_SQL, [validatedTransactionId]);
 
       // BACKLOG-2831: one email, one entry.
       //

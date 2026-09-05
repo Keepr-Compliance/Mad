@@ -28,7 +28,28 @@ const OWNERS = [
   // The migration and the schema create the table; they do not read state.
   "electron/services/databaseService.ts",
   "electron/database/schema.sql",
+  // BACKLOG-3044 moved the statement TEXT into the db layer. This file names the
+  // tables because it is where the sentences now live; it executes nothing and
+  // decides nothing. The "one read path" rule is about who RUNS a query, and the
+  // only importer of this module is asserted below — which is what keeps listing it
+  // here from being a hole rather than a relocation.
+  "electron/services/db/reviewStateSql.ts",
 ];
+
+/**
+ * Moving the text into `db/` would QUIETLY WEAKEN the two greps above if it stopped
+ * there, and that is worth saying plainly rather than discovering later.
+ *
+ * Before the move, a second surface wanting review state had to write
+ * `pending_review_communications` in its own file, and the grep caught it. Now it
+ * could `import { PENDING_REVIEW_COUNT_SQL }` and never name the table at all —
+ * invisible to a text search, which is exactly the second read path this suite exists
+ * to prevent.
+ *
+ * So the import is pinned too. Together the two rules cover both routes: write the SQL
+ * yourself and the grep fires; borrow the constant and this does.
+ */
+const SQL_MODULE = "electron/services/db/reviewStateSql";
 
 function sourceFiles(): string[] {
   const out: string[] = [];
@@ -86,6 +107,16 @@ describe("BACKLOG-2791 — review state has exactly one read path", () => {
       .filter((f) => !OWNERS.includes(f));
 
     expect(offenders).toEqual([]);
+  });
+
+  it("only reviewStateService imports the review SQL module", () => {
+    const importers = files
+      .filter((f) => new RegExp(`from "[^"]*${SQL_MODULE.split("/").pop()}"`).test(
+        fs.readFileSync(f, "utf8"),
+      ))
+      .map(relative);
+
+    expect(importers).toEqual(["electron/services/reviewStateService.ts"]);
   });
 
   it("no renderer file names the pending store at all", () => {

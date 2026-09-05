@@ -16,6 +16,11 @@ import databaseService from "../services/databaseService";
 import logService from "../services/logService";
 import { wrapHandler } from "../utils/wrapHandler";
 import {
+  CONTACT_EMAILS_BY_ADDRESS_SQL,
+  EMAILS_BY_PARTICIPANT_SQL,
+  USER_EMAIL_COUNT_SQL,
+} from "../services/db/emailAddressDiagnosticSql";
+import {
   ValidationError,
   validateUserId,
   validateString,
@@ -325,34 +330,20 @@ export function registerDiagnosticHandlers(): void {
       const db = databaseService.getRawDatabase();
 
       // Check contact_emails junction table
-      const contactEmails = db.prepare(`
-        SELECT ce.*, c.display_name
-        FROM contact_emails ce
-        JOIN contacts c ON ce.contact_id = c.id
-        WHERE c.user_id = ? AND LOWER(ce.email) = LOWER(?)
-      `).all(userId, emailAddress);
+      const contactEmails = db
+        .prepare(CONTACT_EMAILS_BY_ADDRESS_SQL)
+        .all(userId, emailAddress);
 
-      // BACKLOG-506: Check emails table (communications is now junction only)
-      // BACKLOG-1722: indexed exact match via email_participants junction.
-      // The previous LIKE scan was unindexed AND missed BCC-only matches
-      // for diagnostic triage of "where is this address mentioned".
-      const communications = db.prepare(`
-        SELECT DISTINCT e.id, e.sender, e.recipients, e.subject, e.sent_at,
-               c.transaction_id
-        FROM email_participants ep
-        JOIN emails e ON e.id = ep.email_id
-        LEFT JOIN communications c ON c.email_id = e.id
-        WHERE e.user_id = ?
-          AND ep.email_address = ?
-        ORDER BY e.sent_at DESC
-        LIMIT 20
-      `).all(userId, emailAddress.toLowerCase().trim());
+      // BACKLOG-506 / BACKLOG-1722 — why this reads the junction rather than
+      // scanning `emails` is documented with the statement in db/.
+      const communications = db
+        .prepare(EMAILS_BY_PARTICIPANT_SQL)
+        .all(userId, emailAddress.toLowerCase().trim());
 
       // Count total emails for this user
-      const totalEmails = db.prepare(`
-        SELECT COUNT(*) as count FROM emails
-        WHERE user_id = ?
-      `).get(userId) as { count: number };
+      const totalEmails = db
+        .prepare(USER_EMAIL_COUNT_SQL)
+        .get(userId) as { count: number };
 
       return {
         success: true,

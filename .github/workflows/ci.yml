@@ -427,6 +427,47 @@ jobs:
       - name: Verify the guard itself
         run: npm run verify:sql-boundary
 
+  # BACKLOG-2962: native capabilities (OS secret storage) live behind an
+  # interface, so the core does not import Electron to reach them. Two rules:
+  # `safeStorage` may only be value-imported inside the Electron implementation
+  # directory, and modules declared portable may not value-import "electron" at
+  # all. Both are AST rules -- a comment or a string mentioning safeStorage is
+  # not a call, which is precisely the mistake that mis-measured this item's
+  # scope three times before it was built.
+  #
+  # Unique job name + unique status-check name. Do NOT add a second job with
+  # this name.
+  native-capabilities:
+    name: Native Capability Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20.x
+          cache: 'npm'
+
+      # The gate parses TypeScript with the compiler API, so `typescript` must be
+      # installed. ignore-scripts skips the electron/native rebuild: parsing needs
+      # no native module and no app build.
+      - name: Install dependencies
+        run: npm install
+        env:
+          npm_config_ignore_scripts: true
+
+      - name: Assert native capabilities are reached only through their interface
+        run: npm run check:native-capabilities
+
+      # A guard that has never been seen red proves nothing. This plants a
+      # violation of every shape the gate claims to catch, and every shape it
+      # claims to ignore.
+      - name: Verify the guard itself
+        run: npm run verify:native-capabilities
+
   # BACKLOG-2637: a source file holding a raw NUL is classified as binary by the
   # search tools, which then omit it from every repo-wide sweep WITHOUT warning
   # and WITHOUT a non-zero exit. The result is not a slow search or a failed one

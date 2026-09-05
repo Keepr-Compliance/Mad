@@ -30,6 +30,15 @@ import { createCommunicationReference } from "../messageMatchingService";
 import { autoLinkCommunicationsForContact, type AutoLinkResult } from "../autoLinkService";
 import emailSyncService from "../emailSyncService";
 import { dbGet, dbAll } from "../db/core/dbConnection";
+import {
+  COMMUNICATIONS_IN_THREAD_SQL,
+  EMAIL_COMMUNICATION_EXISTS_SQL,
+  EMAIL_THREAD_ID_SQL,
+  IGNORED_IN_THREAD_SQL,
+  IGNORED_THREAD_AND_REASON_SQL,
+  LATEST_EMAIL_IN_THREAD_SQL,
+  TRANSACTION_FIRST_EXPORTED_SQL,
+} from "../db/transactionThreadSql";
 import { isTransactionFrozen } from "../transactionFreezePolicy";
 import { UNFREEZE_OVERRIDE_KEY } from "../db/transactionDbService";
 import auditService from "../auditService";
@@ -1433,7 +1442,7 @@ class TransactionService {
    */
   private isTransactionFrozenById(transactionId: string): boolean {
     const row = dbGet<{ first_exported_at: string | null }>(
-      "SELECT first_exported_at FROM transactions WHERE id = ?",
+      TRANSACTION_FIRST_EXPORTED_SQL,
       [transactionId],
     );
     return isTransactionFrozen(row ?? undefined);
@@ -1554,7 +1563,7 @@ class TransactionService {
     if (!resolvedThreadId && commRecord.email_id) {
       try {
         const emailRow = dbGet<{ thread_id: string | null }>(
-          "SELECT thread_id FROM emails WHERE id = ?",
+          EMAIL_THREAD_ID_SQL,
           [commRecord.email_id],
         );
         resolvedThreadId = emailRow?.thread_id || undefined;
@@ -1583,20 +1592,7 @@ class TransactionService {
         // This covers communications rows created by restoreRemovedEmailThread
         // before R5, which wrote NULL thread_id and broke subsequent unlinks.
         const siblings = dbAll<{ id: string }>(
-          `SELECT c.id FROM communications c
-            WHERE c.transaction_id = ?
-              AND (
-                c.thread_id = ?
-                OR (
-                  c.thread_id IS NULL
-                  AND c.email_id IS NOT NULL
-                  AND EXISTS (
-                    SELECT 1 FROM emails e
-                    WHERE e.id = c.email_id AND e.thread_id = ?
-                  )
-                )
-              )
-              AND (c.message_id IS NULL OR c.message_id = '')`,
+          COMMUNICATIONS_IN_THREAD_SQL,
           [communication.transaction_id, resolvedThreadId, resolvedThreadId],
         );
         for (const row of siblings) idsToUnlink.add(row.id);
@@ -1634,7 +1630,7 @@ class TransactionService {
         if (!resolvedEmailId && siblingRec.thread_id) {
           try {
             const emailByThread = dbGet<{ id: string }>(
-              "SELECT id FROM emails WHERE thread_id = ? ORDER BY sent_at DESC LIMIT 1",
+              LATEST_EMAIL_IN_THREAD_SQL,
               [siblingRec.thread_id],
             );
             if (emailByThread) resolvedEmailId = emailByThread.id;
@@ -1710,7 +1706,7 @@ class TransactionService {
   ): Promise<{ restoredCount: number }> {
     // Resolve thread_id (+ BACKLOG-2319 match_reason) from the clicked ignored row.
     const clickedRow = dbGet<{ thread_id: string | null; match_reason: string | null }>(
-      "SELECT thread_id, match_reason FROM ignored_communications WHERE id = ?",
+      IGNORED_THREAD_AND_REASON_SQL,
       [ignoredCommId],
     );
 
@@ -1720,7 +1716,7 @@ class TransactionService {
     if (!resolvedThreadId && emailId) {
       try {
         const emailRow = dbGet<{ thread_id: string | null }>(
-          "SELECT thread_id FROM emails WHERE id = ?",
+          EMAIL_THREAD_ID_SQL,
           [emailId],
         );
         resolvedThreadId = emailRow?.thread_id ?? null;
@@ -1756,20 +1752,7 @@ class TransactionService {
         // email_id → emails.thread_id matches. This handles rows written by
         // the pre-R5 unlink path operating on NULL-thread_id communications.
         const siblings = dbAll<{ id: string; email_id: string | null; match_reason: string | null }>(
-          `SELECT ic.id, ic.email_id, ic.match_reason FROM ignored_communications ic
-            WHERE ic.transaction_id = ?
-              AND (
-                ic.thread_id = ?
-                OR (
-                  ic.thread_id IS NULL
-                  AND ic.email_id IS NOT NULL
-                  AND EXISTS (
-                    SELECT 1 FROM emails e
-                    WHERE e.id = ic.email_id AND e.thread_id = ?
-                  )
-                )
-              )
-              AND ic.email_id IS NOT NULL`,
+          IGNORED_IN_THREAD_SQL,
           [transactionId, resolvedThreadId, resolvedThreadId],
         );
         for (const row of siblings) rowsToRestore.set(row.id, row);
@@ -1802,7 +1785,7 @@ class TransactionService {
       // link genuinely does not exist and is re-inserted cleanly.
       const alreadyLinked = rowEmailId
         ? dbGet<{ id: string }>(
-            "SELECT id FROM communications WHERE email_id = ? AND transaction_id = ?",
+            EMAIL_COMMUNICATION_EXISTS_SQL,
             [rowEmailId, transactionId],
           )
         : null;

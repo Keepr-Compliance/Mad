@@ -12,6 +12,7 @@ import crypto from "crypto";
 import type { UserFeedback } from "../../types";
 import { DatabaseError } from "../../types";
 import { dbGet, dbAll, dbRun } from "./core/dbConnection";
+import { sql } from "./core/sqlText";
 
 /**
  * Save user feedback on classified data
@@ -25,7 +26,7 @@ export async function saveFeedback(
   // `UserFeedback` declares it (models.ts:1421), but the INSERT used to omit it
   // — so document-type feedback about an attachment landed with no attachment on
   // it. The declared model and the writer now agree.
-  const sql = `
+  const statement = sql`
     INSERT INTO classification_feedback (
       id, user_id, transaction_id, message_id, attachment_id, contact_id,
       feedback_type, original_value, corrected_value, reason
@@ -45,10 +46,10 @@ export async function saveFeedback(
     feedbackData.reason || null,
   ];
 
-  dbRun(sql, params);
+  dbRun(statement, params);
 
   const feedback = dbGet<UserFeedback>(
-    "SELECT * FROM classification_feedback WHERE id = ?",
+    sql`SELECT * FROM classification_feedback WHERE id = ?`,
     [id],
   );
   if (!feedback) {
@@ -64,13 +65,13 @@ export async function saveFeedback(
 export async function getFeedbackByTransaction(
   transactionId: string,
 ): Promise<UserFeedback[]> {
-  const sql = `
+  const statement = sql`
     SELECT * FROM classification_feedback
     WHERE transaction_id = ?
     ORDER BY created_at DESC
   `;
 
-  return dbAll<UserFeedback>(sql, [transactionId]);
+  return dbAll<UserFeedback>(statement, [transactionId]);
 }
 
 /**
@@ -81,14 +82,14 @@ export async function getFeedbackByField(
   fieldName: string,
   limit: number = 100,
 ): Promise<UserFeedback[]> {
-  const sql = `
+  const statement = sql`
     SELECT * FROM classification_feedback
     WHERE user_id = ? AND feedback_type = ?
     ORDER BY created_at DESC
     LIMIT ?
   `;
 
-  return dbAll<UserFeedback>(sql, [userId, fieldName, limit]);
+  return dbAll<UserFeedback>(statement, [userId, fieldName, limit]);
 }
 
 /**
@@ -98,14 +99,14 @@ export async function getFeedbackByUser(
   userId: string,
   limit: number = 100,
 ): Promise<UserFeedback[]> {
-  const sql = `
+  const statement = sql`
     SELECT * FROM classification_feedback
     WHERE user_id = ?
     ORDER BY created_at DESC
     LIMIT ?
   `;
 
-  return dbAll<UserFeedback>(sql, [userId, limit]);
+  return dbAll<UserFeedback>(statement, [userId, limit]);
 }
 
 /**
@@ -114,8 +115,8 @@ export async function getFeedbackByUser(
 export async function getFeedbackById(
   feedbackId: string,
 ): Promise<UserFeedback | null> {
-  const sql = "SELECT * FROM classification_feedback WHERE id = ?";
-  const feedback = dbGet<UserFeedback>(sql, [feedbackId]);
+  const statement = sql`SELECT * FROM classification_feedback WHERE id = ?`;
+  const feedback = dbGet<UserFeedback>(statement, [feedbackId]);
   return feedback || null;
 }
 
@@ -123,6 +124,6 @@ export async function getFeedbackById(
  * Delete feedback
  */
 export async function deleteFeedback(feedbackId: string): Promise<void> {
-  const sql = "DELETE FROM classification_feedback WHERE id = ?";
-  dbRun(sql, [feedbackId]);
+  const statement = sql`DELETE FROM classification_feedback WHERE id = ?`;
+  dbRun(statement, [feedbackId]);
 }

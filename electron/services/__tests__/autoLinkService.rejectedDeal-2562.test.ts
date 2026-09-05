@@ -59,10 +59,11 @@ import {
   countContactCandidateTransactions,
   getOtherCandidateTransactionAddresses,
 } from "../autoLinkService";
+import { isLiveTransactionStatus } from "../transactionEligibility";
 import {
   LIVE_TRANSACTION_SQL_PREDICATE,
-  isLiveTransactionStatus,
-} from "../transactionEligibility";
+  withLiveTransactionParam,
+} from "../db/core/transactionEligibilitySql";
 
 // ---------------------------------------------------------------------------
 // Fixture identities
@@ -458,6 +459,26 @@ function readAutoLinkSource(): string {
   return readServiceSource("autoLinkService.ts");
 }
 
+/**
+ * Read a `db/` SQL module's source verbatim.
+ *
+ * BACKLOG-3044 PR 5 moved the STATEMENTS into `electron/services/db/**`, so the
+ * `${LIVE_TRANSACTION_SQL_PREDICATE}` interpolations moved with them. The BINDINGS
+ * (`withLiveTransactionParam`) did not: the params array is assembled by the caller, and
+ * clause and bound value have to stay in lockstep with it.
+ *
+ * That split is why these assertions now read two files per site instead of one — and it
+ * is worth more than it costs, because the two halves can now be checked against EACH
+ * OTHER. A statement that splices the fragment without a caller binding its value, or a
+ * caller that binds a value for a statement that no longer splices, shows up as a count
+ * mismatch rather than as a silent wrong-slot parameter.
+ */
+function readDbSqlSource(fileName: string): string {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const fs = require("fs") as typeof import("fs");
+  return fs.readFileSync(path.join(__dirname, "..", "db", fileName), "utf8");
+}
+
 /** Drop `//` and block-comment content so only executable code is inspected. */
 function stripComments(source: string): string {
   return source
@@ -468,9 +489,18 @@ function stripComments(source: string): string {
 }
 
 describe("the eligibility rule has exactly one definition", () => {
-  it("the SQL predicate names 'rejected', not the dead 'archived' form", () => {
-    expect(LIVE_TRANSACTION_SQL_PREDICATE).toBe("t.status != 'rejected'");
-    expect(LIVE_TRANSACTION_SQL_PREDICATE).not.toContain("archived");
+  it("the eligibility rule binds 'rejected', not the dead 'archived' form", () => {
+    // BACKLOG-3103 moved the status out of the TEXT and into the PARAMS, so this
+    // assertion moved with it. What it protects is unchanged: the rule must
+    // encode the live status name and not the dead `'archived'` tautology that
+    // excluded nothing. Before 3103 that fact lived in the fragment's text;
+    // it now lives in the value the fragment's helper binds, and the fragment
+    // itself carries only a placeholder.
+    expect(LIVE_TRANSACTION_SQL_PREDICATE).toBe("t.status != ?");
+    expect(withLiveTransactionParam([])).toEqual(["rejected"]);
+    expect(withLiveTransactionParam([])).not.toContain("archived");
+    // Nothing quoted survives in the text — the whole point of 3103.
+    expect(LIVE_TRANSACTION_SQL_PREDICATE).not.toContain("'");
   });
 
   it("no autoLinkService query still carries the dead 'archived' predicate", () => {
@@ -489,17 +519,46 @@ describe("the eligibility rule has exactly one definition", () => {
     expect(readAutoLinkSource()).toContain("archived");
   });
 
-  it("every rejected-deal SQL site interpolates the shared constant", () => {
+  it("every rejected-deal SQL site interpolates the shared constant AND binds through the helper", () => {
     const code = stripComments(readAutoLinkSource());
 
-    // Three sites, three interpolations of the ONE definition.
-    const interpolations = code.match(/\$\{LIVE_TRANSACTION_SQL_PREDICATE\}/g) ?? [];
+    // Three sites, three interpolations of the ONE definition — now in the db module
+    // the statements moved to (BACKLOG-3044 PR 5), not in the service.
+    const sqlModule = stripComments(readDbSqlSource("autoLinkSql.ts"));
+    const interpolations = sqlModule.match(/\$\{LIVE_TRANSACTION_SQL_PREDICATE\}/g) ?? [];
     expect(interpolations).toHaveLength(3);
 
+    // The service must no longer author the predicate itself. Before the move this was
+    // implied by the count above; now that the statements live elsewhere it has to be
+    // said, or the guard would pass on a service that kept a fourth copy.
+    expect(code).not.toContain("${LIVE_TRANSACTION_SQL_PREDICATE}");
+
+    // BACKLOG-3103: the fragment now carries a PLACEHOLDER, so interpolating it
+    // is only half the contract — the value has to reach the params array in the
+    // right slot. `withLiveTransactionParam` is the only spelling of that rule,
+    // so a site that splices the fragment and hand-writes its params is a NEW
+    // drift mode this change created, and it fails here.
+    const bindings = code.match(/withLiveTransactionParam\(/g) ?? [];
+    expect(bindings).toHaveLength(3);
+
+    // The two halves are now in different files, so assert them against each other: one
+    // binding per spliced statement. A statement that splices without a binding, or a
+    // binding left behind by a statement that stopped splicing, is a wrong-slot
+    // parameter waiting to happen — and this is the only assertion that sees it.
+    expect(bindings).toHaveLength(interpolations.length);
+
     // A hand-written fourth copy of the rule fails here — which is the whole
-    // point of the shared constant.
-    const handWritten = code.match(/status\s*!=\s*'rejected'/g) ?? [];
-    expect(handWritten).toEqual([]);
+    // point of the shared constant. Before 3103 a copy read `status != 'rejected'`;
+    // it now reads `status != ?`, so BOTH spellings are refused: the old one can
+    // still be typed by someone working from a stale example, and the new one is
+    // what a copy would look like today.
+    expect(code.match(/status\s*!=\s*'rejected'/g) ?? []).toEqual([]);
+    expect(code.match(/status\s*!=\s*\?/g) ?? []).toEqual([]);
+
+    // …and the same refusal in the db module the statements moved to, which is where a
+    // hand-written fourth copy would most plausibly be typed now.
+    expect(sqlModule.match(/status\s*!=\s*'rejected'/g) ?? []).toEqual([]);
+    expect(sqlModule.match(/status\s*!=\s*\?/g) ?? []).toEqual([]);
   });
 
   it("the JS form treats a NULL status as live, matching auditCoverageService's early return", () => {
@@ -527,7 +586,11 @@ describe("the eligibility rule has exactly one definition", () => {
 
     const underNewRule = db
       .prepare(`SELECT id FROM transactions t WHERE ${LIVE_TRANSACTION_SQL_PREDICATE}`)
-      .all();
+      // BACKLOG-3103: the predicate now carries a placeholder, so the value is
+      // passed rather than quoted. Without this the statement throws
+      // `RangeError: Too few parameter values were provided` — which is how this
+      // control announced the change rather than passing vacuously through it.
+      .all(...withLiveTransactionParam([]));
     const underDeadRule = db
       .prepare(`SELECT id FROM transactions t WHERE t.status != 'archived'`)
       .all();
@@ -547,8 +610,19 @@ describe("the eligibility rule has exactly one definition", () => {
   it("importPlanInputs reads the shared predicate rather than spelling it out", () => {
     const code = stripComments(readServiceSource("importPlanInputs.ts"));
 
-    expect(code).toContain("${LIVE_TRANSACTION_SQL_PREDICATE_UNALIASED}");
+    // BACKLOG-3044 PR 5: the statement moved into db/importPlanSql.ts, so the
+    // interpolation is asserted there and the binding stays here.
+    const sqlModule = stripComments(readDbSqlSource("importPlanSql.ts"));
+    expect(sqlModule).toContain("${LIVE_TRANSACTION_SQL_PREDICATE_UNALIASED}");
+    expect(code).not.toContain("${LIVE_TRANSACTION_SQL_PREDICATE_UNALIASED}");
+
+    // BACKLOG-3103, as at the autoLinkService sites: splicing the fragment is
+    // half the contract, binding its value is the other half.
+    expect(code.match(/withLiveTransactionParam\(/g) ?? []).toHaveLength(1);
     expect(code.match(/status\s*!=\s*'rejected'/g) ?? []).toEqual([]);
+    expect(code.match(/status\s*!=\s*\?/g) ?? []).toEqual([]);
+    expect(sqlModule.match(/status\s*!=\s*'rejected'/g) ?? []).toEqual([]);
+    expect(sqlModule.match(/status\s*!=\s*\?/g) ?? []).toEqual([]);
     expect(code).not.toContain("status != 'archived'");
   });
 

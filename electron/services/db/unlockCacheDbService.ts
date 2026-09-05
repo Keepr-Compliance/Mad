@@ -17,6 +17,7 @@
  */
 
 import { dbGet, dbRun } from "./core/dbConnection";
+import { sql } from "./core/sqlText";
 import logService from "../logService";
 
 /** A cached mirror of a confirmed server unlock. */
@@ -37,7 +38,7 @@ export function getCachedUnlock(
   userId: string,
 ): CachedUnlock | null {
   const row = dbGet<CachedUnlock>(
-    `SELECT local_transaction_id, user_id, unlocked_at, funding_source, cached_at
+    sql`SELECT local_transaction_id, user_id, unlocked_at, funding_source, cached_at
        FROM transaction_unlocks_cache
       WHERE local_transaction_id = ? AND user_id = ?`,
     [localTransactionId, userId],
@@ -59,7 +60,7 @@ export function upsertUnlock(params: {
   fundingSource?: string | null;
 }): void {
   dbRun(
-    `INSERT INTO transaction_unlocks_cache
+    sql`INSERT INTO transaction_unlocks_cache
        (local_transaction_id, user_id, unlocked_at, funding_source, cached_at)
      VALUES (?, ?, ?, ?, datetime('now'))
      ON CONFLICT(local_transaction_id, user_id) DO UPDATE SET
@@ -84,7 +85,7 @@ export function removeCachedUnlock(
   userId: string,
 ): void {
   dbRun(
-    `DELETE FROM transaction_unlocks_cache
+    sql`DELETE FROM transaction_unlocks_cache
       WHERE local_transaction_id = ? AND user_id = ?`,
     [localTransactionId, userId],
   );
@@ -94,7 +95,7 @@ export function removeCachedUnlock(
  * Clear all cached unlocks (call on logout, mirroring feature-gate cache clear).
  */
 export function clearUnlockCache(): void {
-  dbRun(`DELETE FROM transaction_unlocks_cache`, []);
+  dbRun(sql`DELETE FROM transaction_unlocks_cache`, []);
   logService.info(
     "[UnlockCache] Cleared all cached unlocks",
     "UnlockCacheDbService",

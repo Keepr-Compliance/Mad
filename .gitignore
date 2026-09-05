@@ -74,6 +74,7 @@ test-results/
 
 # Reliable QA driver scratch: isolated profile + screenshots (BACKLOG-1940 pivot)
 .qa-scratch/
+.tmp2990/
 
 # Python bytecode (QA seeder tooling, BACKLOG-1851)
 __pycache__/

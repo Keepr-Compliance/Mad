@@ -10,6 +10,12 @@
  */
 
 import type { Database as DatabaseType } from "better-sqlite3";
+import {
+  FIND_BY_CONTENT_HASH_SQL,
+  FIND_BY_MESSAGE_ID_HEADER_SQL,
+  findExistingByContentHashes,
+  findExistingByMessageIdHeaders,
+} from "./db/emailDeduplicationSql";
 import * as Sentry from "@sentry/electron/main";
 import databaseService from "./databaseService";
 import logService from "./logService";
@@ -92,13 +98,7 @@ export class EmailDeduplicationService {
       try {
         const existing = this.db
           .prepare(
-            `
-          SELECT id FROM messages
-          WHERE user_id = ?
-            AND message_id_header = ?
-            AND duplicate_of IS NULL
-          LIMIT 1
-        `
+  FIND_BY_MESSAGE_ID_HEADER_SQL
           )
           .get(userId, messageIdHeader) as { id: string } | undefined;
 
@@ -133,13 +133,7 @@ export class EmailDeduplicationService {
       try {
         const existing = this.db
           .prepare(
-            `
-          SELECT id FROM messages
-          WHERE user_id = ?
-            AND content_hash = ?
-            AND duplicate_of IS NULL
-          LIMIT 1
-        `
+  FIND_BY_CONTENT_HASH_SQL
           )
           .get(userId, contentHash) as { id: string } | undefined;
 
@@ -204,20 +198,13 @@ export class EmailDeduplicationService {
     try {
       // Query for Message-ID matches
       if (messageIds.length > 0) {
-        const placeholders = messageIds.map(() => "?").join(", ");
-        const messageIdRows = this.db
-          .prepare(
-            `
-            SELECT id, message_id_header FROM messages
-            WHERE user_id = ?
-              AND message_id_header IN (${placeholders})
-              AND duplicate_of IS NULL
-          `
-          )
-          .all(userId, ...messageIds) as Array<{
-          id: string;
-          message_id_header: string;
-        }>;
+        // The IN width is derived from the array that is bound, inside db/ —
+        // see emailDeduplicationSql for why those cannot be two separate steps.
+        const messageIdRows = findExistingByMessageIdHeaders(
+          this.db,
+          userId,
+          messageIds,
+        );
 
         for (const row of messageIdRows) {
           existingByMessageId.set(row.message_id_header, row.id);
@@ -226,20 +213,7 @@ export class EmailDeduplicationService {
 
       // Query for content hash matches
       if (contentHashes.length > 0) {
-        const placeholders = contentHashes.map(() => "?").join(", ");
-        const hashRows = this.db
-          .prepare(
-            `
-            SELECT id, content_hash FROM messages
-            WHERE user_id = ?
-              AND content_hash IN (${placeholders})
-              AND duplicate_of IS NULL
-          `
-          )
-          .all(userId, ...contentHashes) as Array<{
-          id: string;
-          content_hash: string;
-        }>;
+        const hashRows = findExistingByContentHashes(this.db, userId, contentHashes);
 
         for (const row of hashRows) {
           existingByContentHash.set(row.content_hash, row.id);

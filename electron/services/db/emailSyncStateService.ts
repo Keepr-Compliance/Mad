@@ -18,6 +18,7 @@
 // ============================================
 
 import { dbGet, dbRun } from "./core/dbConnection";
+import { sql } from "./core/sqlText";
 import logService from "../logService";
 
 /** oauth_tokens.provider values that own a mailbox. */
@@ -63,7 +64,7 @@ export function resolveMailboxAccountId(
   provider: MailboxProvider,
 ): string | null {
   const row = dbGet<{ id: string }>(
-    "SELECT id FROM oauth_tokens WHERE user_id = ? AND provider = ? AND purpose = 'mailbox' LIMIT 1",
+    sql`SELECT id FROM oauth_tokens WHERE user_id = ? AND provider = ? AND purpose = 'mailbox' LIMIT 1`,
     [userId, provider],
   );
   return row?.id ?? null;
@@ -72,7 +73,7 @@ export function resolveMailboxAccountId(
 /** Read the per-account sync state row, if it exists. */
 export function getSyncState(userId: string, accountId: string): EmailSyncStateRow | undefined {
   return dbGet<EmailSyncStateRow>(
-    "SELECT * FROM email_sync_state WHERE user_id = ? AND account_id = ?",
+    sql`SELECT * FROM email_sync_state WHERE user_id = ? AND account_id = ?`,
     [userId, accountId],
   );
 }
@@ -88,7 +89,7 @@ export function ensureSyncStateRow(
   provider: MailboxProvider,
 ): void {
   dbRun(
-    `INSERT OR IGNORE INTO email_sync_state (user_id, account_id, provider)
+    sql`INSERT OR IGNORE INTO email_sync_state (user_id, account_id, provider)
      VALUES (?, ?, ?)`,
     [userId, accountId, provider],
   );
@@ -112,14 +113,14 @@ export function updateCachedBounds(
 
   if (existing) {
     dbRun(
-      `UPDATE email_sync_state
+      sql`UPDATE email_sync_state
          SET newest_cached_at = ?, oldest_cached_at = ?, updated_at = CURRENT_TIMESTAMP
        WHERE user_id = ? AND account_id = ?`,
       [newest, oldest, userId, accountId],
     );
   } else {
     dbRun(
-      `INSERT INTO email_sync_state (user_id, account_id, provider, newest_cached_at, oldest_cached_at)
+      sql`INSERT INTO email_sync_state (user_id, account_id, provider, newest_cached_at, oldest_cached_at)
        VALUES (?, ?, ?, ?, ?)`,
       [userId, accountId, provider, newest, oldest],
     );
@@ -146,7 +147,7 @@ export function getCursor(userId: string, accountId: string): string | null {
  */
 export function setCursor(userId: string, accountId: string, cursor: string): void {
   dbRun(
-    `UPDATE email_sync_state
+    sql`UPDATE email_sync_state
         SET cursor = ?, updated_at = CURRENT_TIMESTAMP
       WHERE user_id = ? AND account_id = ?`,
     [cursor, userId, accountId],
@@ -161,7 +162,7 @@ export function recordSyncSuccess(
 ): void {
   ensureSyncStateRow(userId, accountId, provider);
   dbRun(
-    `UPDATE email_sync_state
+    sql`UPDATE email_sync_state
        SET last_error = NULL, failure_count = 0, updated_at = CURRENT_TIMESTAMP
      WHERE user_id = ? AND account_id = ?`,
     [userId, accountId],
@@ -178,7 +179,7 @@ export function recordSyncFailure(
   const message = error instanceof Error ? error.message : String(error);
   ensureSyncStateRow(userId, accountId, provider);
   dbRun(
-    `UPDATE email_sync_state
+    sql`UPDATE email_sync_state
        SET last_error = ?, failure_count = failure_count + 1, updated_at = CURRENT_TIMESTAMP
      WHERE user_id = ? AND account_id = ?`,
     [message.slice(0, 500), userId, accountId],

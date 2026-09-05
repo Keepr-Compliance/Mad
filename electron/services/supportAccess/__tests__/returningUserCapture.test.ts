@@ -125,6 +125,9 @@ describe("support access on a returning user's Mac", () => {
    */
   async function launch(): Promise<Launch> {
     jest.resetModules();
+    // BACKLOG-2962: a fresh registry means a fresh, empty capability provider.
+    // A real launch installs the shell's SecretStore; so does this one.
+    require("../../../../tests/helpers/installTestSecretStore").installTestSecretStore();
     const gate = (await import("../../keychainGate")).default;
 
     const cipher = createAesGcmCipher(

@@ -107,11 +107,27 @@
  *   guarantee from the classifier limits above: a site here is not classified
  *   COMPLIANT, it is never enumerated. Both are swept and empty today; neither
  *   is closed in principle.
- *   A. MATCHER SHAPE. Only `<expr>.prepare(...)` / `.exec(...)` / `.pragma(...)`
- *      property-access calls are enumerated. `db["prepare"](sql)`,
- *      `db.prepare.bind(db)(sql)` and `const { prepare } = db; prepare(sql)`
- *      produce ZERO call sites — invisible, absent from the census entirely.
- *      Zero instances in the tree. Closing this means matching bare calls, which
+ *   A. MATCHER SHAPE. For BETTER-SQLITE3, only `<expr>.prepare(...)` /
+ *      `.exec(...)` / `.pragma(...)` property-access calls are enumerated.
+ *      `db["prepare"](sql)`, `db.prepare.bind(db)(sql)` and
+ *      `const { prepare } = db; prepare(sql)` produce ZERO call sites —
+ *      invisible, absent from the census entirely.
+ *      Zero instances in the tree; re-measured 2026-09-02, still zero for these
+ *      three verbs (0 aliased, 0 destructured).
+ *
+ *      NODE-SQLITE3 is a SEPARATE matcher and this axis does not describe it.
+ *      BACKLOG-3059 added it, and it DOES follow aliases — `const dbAll =
+ *      db.all; dbAll(sql)` is enumerated — because that form has 4 instances in
+ *      the tree and is how Apple's databases are read. It can do so safely only
+ *      because it anchors on receiver provenance (`openSqliteReadOnly`) rather
+ *      than on verb names; see NODE_SQLITE_VERBS. Controls C17, C18, C19.
+ *
+ *      The two were confused once, in BACKLOG-3059's own filing: "the header
+ *      claims zero and that claim is false" — it was measuring `.all` aliases
+ *      against a sentence about `.prepare` aliases. The claim was true. Read
+ *      this axis as being about THESE THREE VERBS only.
+ *
+ *      Closing the better-sqlite3 half means matching bare calls, which
  *      reintroduces the receiver-name blacklist this design deliberately avoids.
  *   B. ENUMERATION. `.ts`/`.tsx` only. The single non-TS source file under
  *      `electron/` or `src/` is a 7-line `electron/main.js` with no db calls,
@@ -124,6 +140,11 @@
  *   node scripts/ci/check-sql-boundary.mjs --update-baseline [--allow-growth]
  *   node scripts/ci/check-sql-boundary.mjs --root <dir> --baseline <file>
  *        [--expect-sites N] [--expect-reasons in-layer=1,regex=2] [--json]
+ *
+ * A `--root` tree that contains a `.git` is enumerated through the SAME git
+ * enumeration the real repository uses; one without is walked on the
+ * filesystem. That is what lets the verification harness exercise the shipped
+ * enumeration rather than a copy of it (BACKLOG-3049).
  */
 
 import { execFileSync } from "node:child_process";
@@ -147,6 +168,37 @@ const DEFAULT_BASELINE = path.join(HERE, "sql-boundary-baseline.json");
 const SCAN_SPEC = ["electron", "src"];
 const DB_LAYER = "electron/services/db/";
 const VERBS = new Set(["prepare", "exec", "pragma"]);
+
+/**
+ * NODE-SQLITE3 — a SECOND driver, taught to the gate by BACKLOG-3059.
+ *
+ * `VERBS` above are better-sqlite3's. This app ALSO uses node-sqlite3, whose
+ * API is `.all()` / `.get()` / `.run()` / `.each()`, to read Apple's databases
+ * read-only — `chat.db` and the address book. Those calls were never
+ * enumerated: not classified COMPLIANT, never seen at all.
+ *
+ * This is a CAPABILITY THE GATE NEVER HAD, not a defect in one it claimed. The
+ * NOT-ENFORCED axis A above is about aliasing THESE three verbs, and its "zero
+ * instances" claim is accurate — measured 0 aliased, 0 destructured. What is
+ * aliased is `.all`, which belonged to a driver the gate did not model.
+ *
+ * ## Enumerated by RECEIVER PROVENANCE, never by verb name
+ *
+ * `all`, `get`, `run` and `each` collide with `Map.get`, `Headers.get`,
+ * `Promise.all`, `Array.every` and — worst — better-sqlite3's OWN
+ * `statement.get`. Adding them to `VERBS` would enumerate hundreds of
+ * non-database calls, and since UNRESOLVABLE is CI-blocking that turns the gate
+ * red on unrelated code. BACKLOG-3044's census made exactly this mistake by
+ * matching a callee NAME: 114 by name against 103 by binding, 11 collisions.
+ *
+ * So a site is enumerated only when its receiver is TRACEABLE to
+ * `openSqliteReadOnly` — which `electron/services/db/readOnlySqlite.ts`
+ * declares to be the one place node-sqlite3 is opened, and which has exactly
+ * three non-test importers. Same shape as `isRegexReceiver`, inverted: there a
+ * receiver proves a call is NOT SQL; here it proves that it IS.
+ */
+const NODE_SQLITE_VERBS = new Set(["all", "get", "run", "each"]);
+const NODE_SQLITE_ANCHOR = /\bopenSqliteReadOnly\s*\(/;
 const ALIAS_DEPTH_CUTOFF = 2; // see "ALIAS DEPTH AND ITS FAIL DIRECTION" above
 
 /**
@@ -182,13 +234,45 @@ const DECLARED_EXCEPTIONS = [
  */
 const OWNERS = {
   "electron/services/databaseService.ts": "BACKLOG-2991",
-  "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts": "BACKLOG-2990",
+  // BACKLOG-3062, re-owned by BACKLOG-2990 chunk 5 — the commit that made the
+  // work someone else's is the commit that moves the ownership.
+  //
+  // 2990 moved every statement it could. The SIX that remain are 3062's and
+  // cannot close before it: four sit immediately after `buildMessageWindowSql(plan)`
+  // and splice the window predicate as TEXT, and two are the `dbGet`/`dbAllSizes`
+  // wrapper conduits those four consume. Leaving them owned by 2990 would hold a
+  // finished item open against work it does not own — a false NOT-DONE, and the
+  // mirror of the false DONE that 3062 was filed to name.
+  //
+  // `expr:4ec7c53222c8` is the same hash as `storageDiagnostics.ts:281` from
+  // BACKLOG-2989: a `(sql: string) => db.verb(sql)` conduit, UNRESOLVABLE because
+  // argument 0 is a parameter. Third appearance across two items, so the hash is
+  // now a signature for the shape — a match on it is the conduit, without
+  // re-deriving.
+  "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts": "BACKLOG-3062",
   "electron/services/macOSMessagesImportService/forceStaging.ts": "BACKLOG-2990",
   "electron/services/macOSMessagesImportService/importHelpers.ts": "BACKLOG-2990",
   "electron/services/iosMessagesParser.ts": "BACKLOG-2990",
   "electron/services/iosContactsParser.ts": "BACKLOG-2990",
   "electron/handlers/sessionHandlers.ts": "BACKLOG-2765",
   "electron/handlers/sharedAuthHandlers.ts": "BACKLOG-2765",
+  // BACKLOG-3043. The worker's DECLARED_EXCEPTIONS entry above is `pragma`-only
+  // (BACKLOG-2959 ruling 3) and never covered query text. Three of its six
+  // `prepare` sites (:106, :139, :144) AUTHOR their SQL: the file imports
+  // fragments from db/ and then interpolates them into a template AT THE CALL
+  // SITE, which classifies LITERAL. BACKLOG-2989's brief excludes this file by
+  // name, so without this line the three entries default to BACKLOG-2989 and
+  // that owner can never reach zero. Naming 3043 makes the owner a decision
+  // rather than a fall-through.
+  "electron/workers/contactQueryWorker.ts": "BACKLOG-3043",
+  // BACKLOG-3059. These two hold node-sqlite3 reads of Apple's databases and
+  // are in NO item's move scope. Added in the SAME commit that teaches the gate
+  // to see them: `DEFAULT_OWNER` is BACKLOG-2989, which closed at zero, so
+  // enumerating them without an owner would silently re-open a finished item.
+  // Exactly the contactQueryWorker.ts fall-through above, at the far end of the
+  // same epic.
+  "electron/handlers/conversationHandlers.ts": "BACKLOG-3059",
+  "electron/services/contactsService.ts": "BACKLOG-3059",
 };
 const DEFAULT_OWNER = "BACKLOG-2989";
 const ILLEGAL_OWNER = "UNOWNED";
@@ -201,7 +285,34 @@ const ownerFor = (file) => OWNERS[file] ?? DEFAULT_OWNER;
 // A `git ls-files 'electron/**/*.ts'` pathspec silently skips top-level
 // `electron/*.ts` (git's `**` must span a directory), and a bare `electron/`
 // pathspec pulls in non-TS files. Both traps were hit while measuring this
-// item. Enumerate the tracked set, then filter on extension.
+// item. Enumerate the file set, then filter on extension.
+//
+// THE WORKING TREE, NOT THE INDEX (BACKLOG-3049).
+//
+// This enumeration used a bare `git ls-files`, which lists TRACKED files only.
+// A module that exists on disk but has never been `git add`-ed was invisible to
+// the gate: measured on one tree with two new `db/` modules present, unstaged
+// gave 782 sites / 123 keys and staged gave 784 / 127. Same working tree, same
+// command, two answers, and the only variable was `git add`.
+//
+// It failed in the safe-looking direction — the baseline was unaffected, so
+// nothing went red — which is exactly why it survived. The author of a brand
+// new `db/*Sql.ts` ran the gate, read green, and had verified NOTHING about the
+// file they had just written. A new file is when this gate has the most to say.
+//
+// CI never saw it: a fresh checkout is fully tracked by definition, so both
+// enumerations agree there. It appeared only in the local loop, which is the
+// one place an author is supposed to catch their own mistake.
+//
+// `--cached --others --exclude-standard` is tracked PLUS untracked-but-not-
+// ignored: the set the author actually has in front of them. `.gitignore` stays
+// respected, so build output, `dist/` and `node_modules` stay out — and git
+// never descends into a symlinked directory, which matters here because every
+// worktree symlinks `node_modules` at the main repo.
+//
+// The Set dedupes. `--cached` lists a path once PER STAGE during a merge
+// conflict, so an unmerged tree would otherwise scan (and count) the same file
+// up to three times.
 // ---------------------------------------------------------------------------
 
 const isScannable = (rel) =>
@@ -209,14 +320,35 @@ const isScannable = (rel) =>
   !/(^|\/)__tests__\//.test(rel) &&
   !/\.(test|spec)\.tsx?$/.test(rel);
 
-function enumerateRepo() {
-  const out = execFileSync("git", ["ls-files", "--", ...SCAN_SPEC], {
-    cwd: REPO_ROOT,
+const GIT_ENUMERATE_ARGS = [
+  "ls-files",
+  "--cached",
+  "--others",
+  "--exclude-standard",
+  "--",
+  ...SCAN_SPEC,
+];
+
+function enumerateRepo(root = REPO_ROOT) {
+  const out = execFileSync("git", GIT_ENUMERATE_ARGS, {
+    cwd: root,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
   });
-  return out.split("\n").filter(Boolean).filter(isScannable).sort();
+  const rels = out.split("\n").filter(Boolean).filter(isScannable);
+  return [...new Set(rels)].sort();
 }
+
+/**
+ * Does `dir` hold its own git repository?
+ *
+ * `existsSync`, never `statSync().isDirectory()`: inside a git WORKTREE `.git`
+ * is a FILE holding a `gitdir:` pointer, and a directory check would misroute
+ * every worktree to the non-git enumerator. Deliberately does not walk parents
+ * (`git rev-parse --git-dir` would), so a fixture tree created under a path that
+ * happens to sit inside some other repository cannot silently attach to it.
+ */
+const isGitRoot = (dir) => existsSync(path.join(dir, ".git"));
 
 function enumerateDir(root) {
   const found = [];
@@ -475,6 +607,95 @@ function isRegexReceiver(node, ctx) {
 const isDeclaredException = (file, verb) =>
   DECLARED_EXCEPTIONS.find((e) => e.file === file && e.verb === verb) ?? null;
 
+/**
+ * Names that hold a node-sqlite3 handle, and names that alias one of its verbs.
+ *
+ * Resolved to a FIXPOINT over the cross-product of binding forms:
+ *
+ *     { declaration, assignment } x { direct openSqliteReadOnly, wrapper call }
+ *
+ * Every one of those four corners exists in the tree today, and patching them
+ * one at a time is how the hand-written census that preceded this was wrong
+ * four times running:
+ *
+ *     const db  = await openSqliteReadOnly(...)          declaration + direct
+ *     db2       = await openSqliteReadOnly(...)          assignment  + direct
+ *     const h   = openAddressBookReadOnly(path)          declaration + wrapper
+ *     db        = await openAddressBookReadOnly(path)    assignment  + wrapper
+ *
+ * A wrapper is any function whose body mentions the anchor. The loop repeats
+ * until nothing new is found, so a wrapper around a wrapper resolves too.
+ */
+function buildNodeSqliteBindings(sf) {
+  const handles = new Set();
+  const wrappers = new Set();
+  const aliases = new Map(); // name -> the verb it wraps
+
+  const nameOf = (n) => (n && ts.isIdentifier(n) ? n.text : null);
+
+  // Pass 1: functions that hand back a handle.
+  (function w(n) {
+    if ((ts.isFunctionDeclaration(n) || ts.isMethodDeclaration(n)) && n.name && n.body &&
+        NODE_SQLITE_ANCHOR.test(n.body.getText(sf)))
+      wrappers.add(n.name.getText(sf));
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer &&
+        (ts.isArrowFunction(n.initializer) || ts.isFunctionExpression(n.initializer)) &&
+        NODE_SQLITE_ANCHOR.test(n.initializer.getText(sf)))
+      wrappers.add(n.name.text);
+    ts.forEachChild(n, w);
+  })(sf);
+
+  // Pass 2: handles, to a fixpoint over both binding forms and both sources.
+  const acquires = (text) => {
+    if (NODE_SQLITE_ANCHOR.test(text)) return true;
+    for (const wr of wrappers) if (new RegExp(`\\b${wr}\\s*\\(`).test(text)) return true;
+    return false;
+  };
+  let grew = true;
+  while (grew) {
+    grew = false;
+    (function w(n) {
+      let name = null, init = null;
+      if (ts.isVariableDeclaration(n)) { name = nameOf(n.name); init = n.initializer; }
+      else if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+        name = nameOf(n.left); init = n.right;
+      }
+      if (name && init && !handles.has(name) && acquires(init.getText(sf))) {
+        handles.add(name);
+        grew = true;
+      }
+      ts.forEachChild(n, w);
+    })(sf);
+  }
+
+  // Pass 3: `const dbAll = handle.all` — a METHOD REFERENCE, not a call.
+  (function w(n) {
+    let name = null, init = null;
+    if (ts.isVariableDeclaration(n)) { name = nameOf(n.name); init = n.initializer; }
+    else if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+      name = nameOf(n.left); init = n.right;
+    }
+    if (name && init && ts.isPropertyAccessExpression(init) &&
+        NODE_SQLITE_VERBS.has(init.name.text) && ts.isIdentifier(init.expression) &&
+        handles.has(init.expression.text))
+      aliases.set(name, init.name.text);
+    // and `const dbGet = (sql) => handle.get(sql)` — a wrapper around one verb.
+    // The verb is READ OFF the body, never assumed: an earlier revision
+    // hardcoded "all" here and mislabelled every `dbGet()` site, which would
+    // have written a wrong verb into the baseline key.
+    if (name && init && (ts.isArrowFunction(init) || ts.isFunctionExpression(init))) {
+      const body = init.getText(sf);
+      for (const h of handles) {
+        const m = new RegExp(`\\b${h}\\.(all|get|run|each)\\s*[(<]`).exec(body);
+        if (m) { aliases.set(name, m[1]); break; }
+      }
+    }
+    ts.forEachChild(n, w);
+  })(sf);
+
+  return { handles, aliases };
+}
+
 function scanFile(rel, source) {
   const sf = ts.createSourceFile(
     rel,
@@ -493,6 +714,7 @@ function scanFile(rel, source) {
 
   const bound = buildBindings(sf, rel);
   const ctx = { sf, bindings: bound.bindings, taints: bound.taints };
+  const nodeSql = buildNodeSqliteBindings(sf);
   const inDb = rel.startsWith(DB_LAYER);
   const sites = [];
 
@@ -535,7 +757,45 @@ function scanFile(rel, source) {
     }
   }
 
+  /** Same classification a better-sqlite3 site gets; only enumeration differs. */
+  const classifyNodeSqlSite = (n, verb) => {
+    const line = sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+    const site = { file: rel, line, verb, receiver: "node-sqlite3" };
+    if (inDb) {
+      Object.assign(site, { bucket: "COMPLIANT", reason: "in-layer" });
+    } else {
+      const arg0 = n.arguments[0];
+      const c = classifyArg(arg0, 0, n.getStart(sf), ctx);
+      if (c.tag === "FROM_DB") Object.assign(site, { bucket: "COMPLIANT", reason: "from-db-import" });
+      else if (c.tag === "LITERAL")
+        Object.assign(site, {
+          bucket: "VIOLATION",
+          reason: "sql-text-authored-outside-db-layer",
+          match: `text:${hash12(normalize(c.node.getText(sf)))}`,
+        });
+      else if (c.tag === "IMPORTED_ELSEWHERE")
+        Object.assign(site, { bucket: "VIOLATION", reason: "sql-text-imported-from-non-db-module", match: c.importRef });
+      else
+        Object.assign(site, {
+          bucket: "UNRESOLVABLE",
+          reason: "origin-not-statically-determinable",
+          match: `expr:${hash12(normalize(arg0 ? arg0.getText(sf) : "<no-argument>"))}`,
+        });
+    }
+    sites.push(site);
+  };
+
   (function walk(n) {
+    // node-sqlite3, enumerated by RECEIVER PROVENANCE (BACKLOG-3059).
+    if (ts.isCallExpression(n)) {
+      const e = n.expression;
+      if (ts.isPropertyAccessExpression(e) && NODE_SQLITE_VERBS.has(e.name.text) &&
+          ts.isIdentifier(e.expression) && nodeSql.handles.has(e.expression.text)) {
+        classifyNodeSqlSite(n, e.name.text);
+      } else if (ts.isIdentifier(e) && nodeSql.aliases.has(e.text)) {
+        classifyNodeSqlSite(n, nodeSql.aliases.get(e.text));
+      }
+    }
     if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression)) {
       const verb = n.expression.name.text;
       if (VERBS.has(verb)) {
@@ -690,7 +950,15 @@ function main() {
   const baselineFile = args.baseline ? path.resolve(args.baseline) : DEFAULT_BASELINE;
   const fixtureMode = Boolean(args.root);
 
-  const files = fixtureMode ? enumerateDir(root) : enumerateRepo();
+  // A fixture tree that IS a git repo is enumerated through the REAL
+  // `enumerateRepo`, so the harness can exercise the git enumeration itself
+  // rather than a copy of it (BACKLOG-3049). Non-git fixture trees — every
+  // pre-existing control — keep the plain filesystem walk.
+  const files = fixtureMode
+    ? isGitRoot(root)
+      ? enumerateRepo(root)
+      : enumerateDir(root)
+    : enumerateRepo(REPO_ROOT);
 
   const sites = [];
   const layerFindings = [];

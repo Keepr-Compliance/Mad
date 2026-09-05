@@ -29,6 +29,12 @@
  */
 
 import { dbAll, dbGet } from "./db/core/dbConnection";
+import {
+  CONTACTS_SHARE_TRANSACTION_SQL,
+  CONTACT_DISPLAY_NAME_SQL,
+  EXTERNAL_RECORD_NAME_SQL,
+  SHARED_TRANSACTION_ADDRESSES_SQL,
+} from "./db/contactLinkEvidenceSql";
 import type { ExternalContactSource } from "./db/externalContactDbService";
 import type {
   ContactLinkSourceType,
@@ -284,7 +290,7 @@ export function relationshipPhrase(assessment: RelationshipAssessment): string {
 
 export function contactDisplayName(contactId: string): string {
   const row = dbGet<{ display_name: string | null }>(
-    `SELECT display_name FROM contacts WHERE id = ?`,
+    CONTACT_DISPLAY_NAME_SQL,
     [contactId],
   );
   const name = row?.display_name?.trim();
@@ -297,8 +303,7 @@ export function sourceRecordName(
   sourceRecordId: string,
 ): string | null {
   const row = dbGet<{ name: string | null }>(
-    `SELECT name FROM external_contacts
-      WHERE user_id = ? AND source = ? AND external_record_id = ? LIMIT 1`,
+    EXTERNAL_RECORD_NAME_SQL,
     [userId, sourceType, sourceRecordId],
   );
   const name = row?.name?.trim();
@@ -318,35 +323,8 @@ export function sourceRecordName(
  */
 export function contactsShareTransaction(contactA: string, contactB: string): boolean {
   if (!contactA || !contactB || contactA === contactB) return false;
-  // BACKLOG-2366: the transaction_contacts branch below is DELIBERATELY NOT
-  // filtered by removed_at, unlike the "who is on this deal now" readers. Two
-  // contacts appearing on the same transaction is evidence they are DIFFERENT
-  // PEOPLE — you do not put one human on a deal twice — so this is an anti-merge
-  // signal, and it stays true after one of them is taken off the deal. Filtering
-  // here would DISCARD evidence and make a wrong merge more likely: the
-  // under-reporting trap this module's own docblock warns about. Historical
-  // co-occurrence is still co-occurrence.
-  const onTransaction = `(
-      t.buyer_agent_id = @c
-      OR t.seller_agent_id = @c
-      OR t.escrow_officer_id = @c
-      OR t.inspector_id = @c
-      OR EXISTS (
-        SELECT 1 FROM transaction_contacts tc
-         WHERE tc.transaction_id = t.id AND tc.contact_id = @c
-      )
-      OR (
-        t.other_contacts IS NOT NULL
-        AND EXISTS (
-          SELECT 1 FROM json_each(t.other_contacts) j WHERE j.value = @c
-        )
-      )
-    )`;
   const row = dbGet<{ hit: number }>(
-    `SELECT 1 AS hit FROM transactions t
-      WHERE ${onTransaction.replace(/@c/g, "@a")}
-        AND ${onTransaction.replace(/@c/g, "@b")}
-      LIMIT 1`,
+    CONTACTS_SHARE_TRANSACTION_SQL,
     [{ a: contactA, b: contactB }],
   );
   return row !== undefined && row !== null;
@@ -362,36 +340,8 @@ export function contactsShareTransaction(contactA: string, contactB: string): bo
  */
 export function sharedTransactionAddresses(contactA: string, contactB: string): string[] {
   if (!contactA || !contactB || contactA === contactB) return [];
-  // BACKLOG-2366: the transaction_contacts branch below is DELIBERATELY NOT
-  // filtered by removed_at, unlike the "who is on this deal now" readers. Two
-  // contacts appearing on the same transaction is evidence they are DIFFERENT
-  // PEOPLE — you do not put one human on a deal twice — so this is an anti-merge
-  // signal, and it stays true after one of them is taken off the deal. Filtering
-  // here would DISCARD evidence and make a wrong merge more likely: the
-  // under-reporting trap this module's own docblock warns about. Historical
-  // co-occurrence is still co-occurrence.
-  const onTransaction = `(
-      t.buyer_agent_id = @c
-      OR t.seller_agent_id = @c
-      OR t.escrow_officer_id = @c
-      OR t.inspector_id = @c
-      OR EXISTS (
-        SELECT 1 FROM transaction_contacts tc
-         WHERE tc.transaction_id = t.id AND tc.contact_id = @c
-      )
-      OR (
-        t.other_contacts IS NOT NULL
-        AND EXISTS (
-          SELECT 1 FROM json_each(t.other_contacts) j WHERE j.value = @c
-        )
-      )
-    )`;
   return dbAll<{ property_address: string | null }>(
-    `SELECT t.property_address FROM transactions t
-      WHERE ${onTransaction.replace(/@c/g, "@a")}
-        AND ${onTransaction.replace(/@c/g, "@b")}
-      ORDER BY t.property_address
-      LIMIT 3`,
+    SHARED_TRANSACTION_ADDRESSES_SQL,
     [{ a: contactA, b: contactB }],
   )
     .map((r) => r.property_address?.trim())

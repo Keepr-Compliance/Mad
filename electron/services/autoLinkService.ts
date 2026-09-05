@@ -10,6 +10,25 @@
 
 import * as Sentry from "@sentry/electron/main";
 import { dbAll, dbGet, dbRun } from "./db/core/dbConnection";
+import {
+  AUTOLINK_CONTACT_EMAILS_SQL,
+  AUTOLINK_CONTACT_PHONES_SQL,
+  CONTACT_BY_ID_EXISTS_SQL,
+  EMAIL_USER_AND_THREAD_SQL,
+  EXISTING_EMAIL_COMMUNICATION_SQL,
+  INSERT_EMAIL_COMMUNICATION_SQL,
+  LINKED_THREAD_PAIRS_SQL,
+  LIVE_TRANSACTION_CONTACT_PAIRS_SQL,
+  LIVE_TRANSACTION_COUNT_FOR_CONTACT_SQL,
+  LOCAL_USER_EMAIL_SQL,
+  OTHER_CANDIDATE_TRANSACTION_ADDRESSES_SQL,
+  THREAD_DIRECTION_PARTICIPANTS_SQL,
+  TRANSACTION_AUTOLINK_WINDOW_SQL,
+  UNLINKED_SIBLINGS_IN_THREAD_SQL,
+  candidateEmailsSql,
+  candidateMessageThreadsSql,
+  unlinkedMessagesInThreadsSql,
+} from "./db/autoLinkSql";
 import logService from "./logService";
 import { normalizePhone, createCommunicationReference } from "./messageMatchingService";
 import { linkMessageToTransaction } from "./db/messageDbService";
@@ -30,11 +49,17 @@ import {
   type NormalizedAddress,
 } from "../utils/addressNormalization";
 import type { MatchReason } from "../types/models";
-import { reactionExclusion } from "./db/reactionExclusion";
 // BACKLOG-2562: the ONE definition of "is this deal live?". These queries
 // previously carried `status != 'archived'`, which is a tautology ('archived'
 // is not a permitted status) and therefore admitted REJECTED deals.
-import { LIVE_TRANSACTION_SQL_PREDICATE } from "./transactionEligibility";
+//
+// BACKLOG-3103: the status is now BOUND, not quoted into the text, so splicing
+// the fragment is only half of it — `withLiveTransactionParam` supplies the
+// value, and the fragment must be the LAST PLACEHOLDER in the statement. Note
+// that is the last `?`, NOT the last conjunct: two of the three queries below
+// carry `AND tc.removed_at IS NULL` after the predicate, which binds nothing
+// and so does not move it.
+import { withLiveTransactionParam } from "./db/core/transactionEligibilitySql";
 // BACKLOG-2393: scoped support-access tracing. A no-op unless a user has
 // granted a support window covering the transaction-linking scope.
 import { supportTrace } from "./supportAccess/trace";
@@ -147,27 +172,18 @@ interface TransactionInfo {
  */
 async function getContactInfo(contactId: string): Promise<ContactInfo | null> {
   // Get contact to verify it exists
-  const contactSql = "SELECT id FROM contacts WHERE id = ?";
-  const contact = dbGet<{ id: string }>(contactSql, [contactId]);
+  const contact = dbGet<{ id: string }>(CONTACT_BY_ID_EXISTS_SQL, [contactId]);
 
   if (!contact) {
     return null;
   }
 
   // Get all email addresses for this contact
-  const emailsSql = `
-    SELECT email FROM contact_emails
-    WHERE contact_id = ?
-  `;
-  const emailRows = dbAll<{ email: string }>(emailsSql, [contactId]);
+  const emailRows = dbAll<{ email: string }>(AUTOLINK_CONTACT_EMAILS_SQL, [contactId]);
   const emails = emailRows.map((r) => r.email.toLowerCase().trim());
 
   // Get all phone numbers for this contact
-  const phonesSql = `
-    SELECT phone_e164 FROM contact_phones
-    WHERE contact_id = ?
-  `;
-  const phoneRows = dbAll<{ phone_e164: string }>(phonesSql, [contactId]);
+  const phoneRows = dbAll<{ phone_e164: string }>(AUTOLINK_CONTACT_PHONES_SQL, [contactId]);
   const phoneNumbers = phoneRows
     .map((r) => normalizePhone(r.phone_e164))
     .filter((p): p is string => p !== null);
@@ -200,18 +216,6 @@ async function getContactInfo(contactId: string): Promise<ContactInfo | null> {
 async function getTransactionInfo(
   transactionId: string
 ): Promise<TransactionInfo | null> {
-  const sql = `
-    SELECT
-      user_id,
-      started_at,
-      created_at,
-      closed_at,
-      property_address,
-      property_street,
-      skip_address_filter
-    FROM transactions
-    WHERE id = ?
-  `;
 
   const transaction = dbGet<{
     user_id: string;
@@ -221,7 +225,7 @@ async function getTransactionInfo(
     property_address: string | null;
     property_street: string | null;
     skip_address_filter: number | null;
-  }>(sql, [transactionId]);
+  }>(TRANSACTION_AUTOLINK_WINDOW_SQL, [transactionId]);
 
   if (!transaction) {
     return null;
@@ -292,8 +296,7 @@ async function findCandidateEmailsWithMatch(
   }
 
   // Get the user's email to exclude it from contact matching
-  const userSql = "SELECT email FROM users_local WHERE id = ?";
-  const userResult = dbGet<{ email: string | null }>(userSql, [userId]);
+  const userResult = dbGet<{ email: string | null }>(LOCAL_USER_EMAIL_SQL, [userId]);
   const userEmail = userResult?.email?.toLowerCase().trim();
 
   // Filter out user's own email from contact emails
@@ -323,7 +326,6 @@ async function findCandidateEmailsWithMatch(
   //     in normalized lowercase form — exact match, indexed, BCC-aware.
   //   - Normalization to lowercase happens at INSERT time, so the WHERE
   //     clause is `ep.email_address IN (?, ?, ...)` against the index.
-  const placeholders = contactEmails.map(() => "?").join(", ");
   const emailParams = contactEmails.map((e) => e.toLowerCase().trim());
 
   // BACKLOG-2311: Address filtering moved OUT of SQL and into JS.
@@ -338,18 +340,6 @@ async function findCandidateEmailsWithMatch(
   //
   // BACKLOG-1722 G5: EXPLAIN QUERY PLAN still shows
   // `SEARCH email_participants USING INDEX idx_email_participants_email_address`.
-  const sql = `
-    SELECT DISTINCT e.id, e.subject, e.body_plain
-    FROM email_participants ep
-    JOIN emails e ON e.id = ep.email_id
-    LEFT JOIN communications c ON c.email_id = e.id AND c.transaction_id = ?
-    WHERE ep.email_address IN (${placeholders})
-      AND e.user_id = ?
-      AND c.id IS NULL
-      AND e.sent_at >= ?
-      AND e.sent_at <= ?
-    ORDER BY e.sent_at DESC
-  `;
 
   const sqlParams: (string | number)[] = [
     transactionId,
@@ -360,7 +350,7 @@ async function findCandidateEmailsWithMatch(
   ];
 
   const results = dbAll<{ id: string; subject: string | null; body_plain: string | null }>(
-    sql,
+    candidateEmailsSql(contactEmails.length),
     sqlParams
   );
 
@@ -400,16 +390,10 @@ async function findCandidateEmailsWithMatch(
  * Exported so the eligibility contract can be asserted per-site.
  */
 export function countContactCandidateTransactions(userId: string, contactId: string): number {
-  const sql = `
-    SELECT COUNT(DISTINCT tc.transaction_id) AS cnt
-    FROM transaction_contacts tc
-    JOIN transactions t ON t.id = tc.transaction_id
-    WHERE tc.contact_id = ?
-      AND t.user_id = ?
-      AND ${LIVE_TRANSACTION_SQL_PREDICATE}
-      AND tc.removed_at IS NULL
-  `;
-  const row = dbGet<{ cnt: number }>(sql, [contactId, userId]);
+  const row = dbGet<{ cnt: number }>(
+    LIVE_TRANSACTION_COUNT_FOR_CONTACT_SQL,
+    withLiveTransactionParam([contactId, userId]),
+  );
   return row?.cnt ?? 0;
 }
 
@@ -429,18 +413,10 @@ export function getOtherCandidateTransactionAddresses(
   contactId: string,
   transactionId: string
 ): string[] {
-  const sql = `
-    SELECT DISTINCT COALESCE(t.property_address, t.property_street) AS address
-    FROM transaction_contacts tc
-    JOIN transactions t ON t.id = tc.transaction_id
-    WHERE tc.contact_id = ?
-      AND t.user_id = ?
-      AND ${LIVE_TRANSACTION_SQL_PREDICATE}
-      AND t.id != ?
-      AND tc.removed_at IS NULL
-      AND COALESCE(t.property_address, t.property_street) IS NOT NULL
-  `;
-  return dbAll<{ address: string }>(sql, [contactId, userId, transactionId])
+  return dbAll<{ address: string }>(
+    OTHER_CANDIDATE_TRANSACTION_ADDRESSES_SQL,
+    withLiveTransactionParam([contactId, userId, transactionId]),
+  )
     .map((r) => r.address)
     .filter((a): a is string => !!a);
 }
@@ -473,10 +449,6 @@ async function findMessagesByContactPhones(
 
   // Build phone patterns for matching
   // Use participants_flat which contains normalized phone digits
-  const phoneConditions = phoneNumbers
-    .map(() => "m.participants_flat LIKE ?")
-    .join(" OR ");
-
   // BACKLOG-1560: Extra param for ignored_communications SQL-level suppression
   const params: (string | number)[] = [userId, transactionId, transactionId, transactionId];
 
@@ -501,33 +473,8 @@ async function findMessagesByContactPhones(
   // BACKLOG-1560: SQL-level suppression check against ignored_communications (belt-and-suspenders).
   // This is the primary defense — prevents suppressed threads from even being returned.
   // The JS-level filter in autoLinkForContact is the backup layer.
-  const sql = `
-    SELECT DISTINCT m.thread_id, MIN(m.id) as id
-    FROM messages m
-    WHERE m.user_id = ?
-      AND m.channel IN ('sms', 'imessage')
-      AND m.duplicate_of IS NULL
-      AND ${reactionExclusion("m")}
-      AND (
-        m.transaction_id IS NULL
-        OR m.transaction_id != ?
-      )
-      AND m.thread_id NOT IN (
-        SELECT thread_id FROM communications
-        WHERE transaction_id = ? AND thread_id IS NOT NULL
-      )
-      AND m.thread_id NOT IN (
-        SELECT ic.thread_id FROM ignored_communications ic
-        WHERE ic.transaction_id = ? AND ic.thread_id IS NOT NULL
-      )
-      AND (${phoneConditions})
-      AND m.sent_at >= ?
-      AND m.sent_at <= ?
-    GROUP BY m.thread_id
-    ORDER BY MAX(m.sent_at) DESC
-  `;
 
-  const results = dbAll<MessageWithThread>(sql, params);
+  const results = dbAll<MessageWithThread>(candidateMessageThreadsSql(phoneNumbers.length), params);
   return results;
 }
 
@@ -552,11 +499,7 @@ export async function linkEmailToTransaction(
   matchReason: MatchReason = "address_found"
 ): Promise<"linked" | "already_linked" | "pending_review" | "error"> {
   // Check if this email is already linked to this transaction via communications table
-  const checkSql = `
-    SELECT id, transaction_id FROM communications
-    WHERE email_id = ? AND transaction_id = ?
-  `;
-  const existing = dbGet<{ id: string; transaction_id: string }>(checkSql, [emailId, transactionId]);
+  const existing = dbGet<{ id: string; transaction_id: string }>(EXISTING_EMAIL_COMMUNICATION_SQL, [emailId, transactionId]);
 
   if (existing) {
     // Already linked to this transaction. BACKLOG-2319: intentionally leave the
@@ -613,7 +556,7 @@ export async function linkEmailToTransaction(
   // BACKLOG-1718 (R3): thread_id must be propagated so unlinkCommunication can
   // expand the deletion to all sibling emails sharing the same thread.
   const emailRow = dbGet<{ user_id: string; thread_id: string | null }>(
-    "SELECT user_id, thread_id FROM emails WHERE id = ?",
+    EMAIL_USER_AND_THREAD_SQL,
     [emailId]
   );
 
@@ -629,11 +572,7 @@ export async function linkEmailToTransaction(
   // BACKLOG-2319: persist match_reason so the Emails tab can split Needs-review
   // (address_missing) from Linked (address_found / manual / user_confirmed).
   const { v4: uuidv4 } = await import("uuid");
-  const insertSql = `
-    INSERT INTO communications (id, user_id, transaction_id, email_id, thread_id, link_source, link_confidence, match_reason, linked_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-  `;
-  dbRun(insertSql, [
+  dbRun(INSERT_EMAIL_COMMUNICATION_SQL, [
     uuidv4(),
     emailRow.user_id,
     transactionId,
@@ -1275,19 +1214,11 @@ export async function autoLinkNewMessagesForUser(
     // removed would keep dragging their communications back into the transaction
     // on every sync — the same failure `ignored_communications` prevents for
     // individually unlinked emails.
-    const sql = `
-      SELECT DISTINCT
-        tc.contact_id,
-        tc.transaction_id
-      FROM transaction_contacts tc
-      JOIN transactions t ON t.id = tc.transaction_id
-      WHERE t.user_id = ?
-        AND ${LIVE_TRANSACTION_SQL_PREDICATE}
-        AND tc.removed_at IS NULL
-      ORDER BY tc.transaction_id
-    `;
 
-    const pairs = dbAll<{ contact_id: string; transaction_id: string }>(sql, [userId]);
+    const pairs = dbAll<{ contact_id: string; transaction_id: string }>(
+      LIVE_TRANSACTION_CONTACT_PAIRS_SQL,
+      withLiveTransactionParam([userId]),
+    );
 
     if (pairs.length === 0) {
       await logService.debug(
@@ -1588,19 +1519,7 @@ export async function expandAttachedThreadsForUser(
     //    convert thread-links into per-message rows and break thread-level unlink
     //    (BACKLOG-2285 SR review, I1). This also keeps the candidate lookup on an
     //    indexed thread_id equality (no LIKE scan).
-    const pairSql = `
-      SELECT DISTINCT
-        c.transaction_id AS transaction_id,
-        m.thread_id AS thread_id
-      FROM communications c
-      JOIN messages m ON m.id = c.message_id
-      WHERE c.user_id = ?
-        AND c.transaction_id IS NOT NULL
-        AND c.message_id IS NOT NULL
-        AND m.thread_id IS NOT NULL
-        AND m.thread_id != ''
-    `;
-    const pairs = dbAll<{ transaction_id: string; thread_id: string }>(pairSql, [userId]);
+    const pairs = dbAll<{ transaction_id: string; thread_id: string }>(LINKED_THREAD_PAIRS_SQL, [userId]);
     result.pairsExamined = pairs.length;
 
     if (pairs.length === 0) {
@@ -1632,13 +1551,7 @@ export async function expandAttachedThreadsForUser(
       direction: string | null;
       participants: string | null;
     }>(
-      `SELECT thread_id, direction, participants
-         FROM messages
-        WHERE user_id = ?
-          AND channel IN ('sms', 'imessage')
-          AND duplicate_of IS NULL
-          AND thread_id IS NOT NULL
-          AND thread_id != ''`,
+      THREAD_DIRECTION_PARTICIPANTS_SQL,
       [userId],
     );
     const rowsByThread = new Map<
@@ -1692,17 +1605,7 @@ export async function expandAttachedThreadsForUser(
         // polluting the compliance junction (and getMessagesByTransaction). The
         // reaction still renders as a pill via the thread-join in
         // getCommunicationsWithMessages, so nothing is hidden.
-        const siblingSql = `
-          SELECT m.id AS id, m.thread_id AS thread_id
-          FROM messages m
-          WHERE m.user_id = ?
-            AND m.thread_id = ?
-            AND m.transaction_id IS NULL
-            AND m.channel IN ('sms', 'imessage')
-            AND m.duplicate_of IS NULL
-            AND ${reactionExclusion("m")}
-        `;
-        const siblings = dbAll<{ id: string; thread_id: string | null }>(siblingSql, [
+        const siblings = dbAll<{ id: string; thread_id: string | null }>(UNLINKED_SIBLINGS_IN_THREAD_SQL, [
           userId,
           threadId,
         ]);
@@ -1739,21 +1642,10 @@ export async function expandAttachedThreadsForUser(
 
         if (candidateThreadIds.size > 0) {
           const tids = [...candidateThreadIds];
-          const placeholders = tids.map(() => "?").join(", ");
           // Same candidate shape as the sibling pass: unlinked, text, non-duplicate,
           // reactions excluded (BACKLOG-2280 — a reaction must never be auto-linked
           // into the compliance junction). No date floor — this is backfill history.
-          const crossSql = `
-            SELECT m.id AS id, m.thread_id AS thread_id
-            FROM messages m
-            WHERE m.user_id = ?
-              AND m.thread_id IN (${placeholders})
-              AND m.transaction_id IS NULL
-              AND m.channel IN ('sms', 'imessage')
-              AND m.duplicate_of IS NULL
-              AND ${reactionExclusion("m")}
-          `;
-          const crossMsgs = dbAll<{ id: string; thread_id: string | null }>(crossSql, [
+          const crossMsgs = dbAll<{ id: string; thread_id: string | null }>(unlinkedMessagesInThreadsSql(tids.length), [
             userId,
             ...tids,
           ]);

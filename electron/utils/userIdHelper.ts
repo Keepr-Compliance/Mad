@@ -16,6 +16,7 @@
  */
 
 import databaseService from "../services/databaseService";
+import { LOCAL_USER_BY_ID_SQL, LOCAL_USER_ID_SQL } from "../services/db/localUserSql";
 import logService from "../services/logService";
 
 /**
@@ -49,7 +50,7 @@ export async function getValidUserId(
 
   // Look up any user in the database (single-user app fallback)
   const db = databaseService.getRawDatabase();
-  const anyUser = db.prepare("SELECT id FROM users_local LIMIT 1").get() as
+  const anyUser = db.prepare(LOCAL_USER_ID_SQL).get() as
     | { id: string }
     | undefined;
 
@@ -93,7 +94,7 @@ export function getValidUserIdSync(
   // If provided, verify it exists
   if (providedUserId) {
     const user = db
-      .prepare("SELECT id FROM users_local WHERE id = ?")
+      .prepare(LOCAL_USER_BY_ID_SQL)
       .get(providedUserId) as { id: string } | undefined;
     if (user) {
       return providedUserId;
@@ -106,7 +107,7 @@ export function getValidUserIdSync(
   }
 
   // Look up any user in the database (single-user app fallback)
-  const anyUser = db.prepare("SELECT id FROM users_local LIMIT 1").get() as
+  const anyUser = db.prepare(LOCAL_USER_ID_SQL).get() as
     | { id: string }
     | undefined;
 

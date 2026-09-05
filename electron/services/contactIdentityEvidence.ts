@@ -85,6 +85,13 @@
  */
 
 import { dbAll, dbGet } from "./db/core/dbConnection";
+import {
+  CONTACT_EMAILS_SQL,
+  CONTACT_NAME_AND_ACTIVE_SQL,
+  CONTACT_PHONES_SQL,
+  EXTERNAL_RECORD_WITH_RECENCY_SQL,
+  IMPORTED_CONTACT_RECENCY_SQL,
+} from "./db/contactIdentityEvidenceSql";
 import logService from "./logService";
 import type { ExternalContactSource } from "./db/externalContactDbService";
 import {
@@ -103,11 +110,6 @@ import { normalizeNameKey } from "./contactNameAutoLink";
 import { realContactName } from "../utils/contactDisplayLabel";
 import { contactsShareTransaction, sharedTransactionAddresses } from "./contactLinkEvidence";
 import { isContactOnFrozenTransaction } from "./db/frozenContactDbService";
-import { ACTIVE_CONTACTS_CLAUSE_UNALIASED } from "./db/contactTombstoneSql";
-import {
-  IMPORTED_CONTACT_LAST_COMMUNICATION_SQL,
-  EXTERNAL_CONTACT_LAST_MESSAGE_EXPR,
-} from "./db/contactRecencySql";
 
 // ---------------------------------------------------------------------------
 // THE ENDPOINTS
@@ -339,11 +341,7 @@ function readContactEndpoint(userId: string, contactId: string): EndpointValues 
   // there is deliberately no redirect to whichever contact absorbed it —
   // reporting a survivor here would answer a question nobody asked.
   const row = dbGet<{ display_name: string | null; is_active: number }>(
-    `SELECT display_name,
-            CASE WHEN EXISTS (
-              SELECT 1 FROM contacts WHERE id = @id${ACTIVE_CONTACTS_CLAUSE_UNALIASED}
-            ) THEN 1 ELSE 0 END AS is_active
-       FROM contacts WHERE id = @id AND user_id = @userId`,
+    CONTACT_NAME_AND_ACTIVE_SQL,
     [{ id: contactId, userId }],
   );
 
@@ -361,7 +359,7 @@ function readContactEndpoint(userId: string, contactId: string): EndpointValues 
   }
 
   const emails = dbAll<{ email: string | null }>(
-    `SELECT email FROM contact_emails WHERE contact_id = ?`,
+    CONTACT_EMAILS_SQL,
     [contactId],
   )
     .map((r) => r.email)
@@ -383,14 +381,14 @@ function readContactEndpoint(userId: string, contactId: string): EndpointValues 
   // change is the reported `unkeyableCount`, which is the honest fact: this
   // contact holds a number that may not be used to propose a match.
   const phones = dbAll<{ phone_e164: string | null }>(
-    `SELECT phone_e164 FROM contact_phones WHERE contact_id = ?`,
+    CONTACT_PHONES_SQL,
     [contactId],
   )
     .map((r) => r.phone_e164)
     .filter((p): p is string => typeof p === "string");
 
   const recency = dbGet<{ last_communication_at: string | null }>(
-    `SELECT ${IMPORTED_CONTACT_LAST_COMMUNICATION_SQL} FROM contacts c WHERE c.id = ?`,
+    IMPORTED_CONTACT_RECENCY_SQL,
     [contactId],
   );
 
@@ -417,11 +415,7 @@ function readRecordEndpoint(
     phones_json: string | null;
     last_message_at: string | null;
   }>(
-    `SELECT name, emails_json, phones_json,
-            ${EXTERNAL_CONTACT_LAST_MESSAGE_EXPR} AS last_message_at
-       FROM external_contacts
-      WHERE user_id = ? AND source = ? AND external_record_id = ?
-      LIMIT 1`,
+    EXTERNAL_RECORD_WITH_RECENCY_SQL,
     [userId, sourceType, sourceRecordId],
   );
 

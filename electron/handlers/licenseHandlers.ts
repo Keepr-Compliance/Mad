@@ -8,6 +8,10 @@ import type { IpcMainInvokeEvent } from "electron";
 import sessionService from "../services/sessionService";
 import { getUserById } from "../services/db/userDbService";
 import { dbRun } from "../services/db/core/dbConnection";
+import {
+  SET_LOCAL_USER_AI_DETECTION_SQL,
+  SET_LOCAL_USER_LICENSE_TYPE_SQL,
+} from "../services/db/localUserSql";
 import logService from "../services/logService";
 import supabaseService from "../services/supabaseService";
 import type { LicenseType, UserLicense } from "../types/models";
@@ -203,7 +207,7 @@ export function registerLicenseHandlers(): void {
 
           // Update local database directly (SQLite uses INTEGER 0/1 for boolean)
           dbRun(
-            "UPDATE users_local SET ai_detection_enabled = ? WHERE id = ?",
+            SET_LOCAL_USER_AI_DETECTION_SQL,
             [enabled ? 1 : 0, userId]
           );
 
@@ -240,7 +244,7 @@ export function registerLicenseHandlers(): void {
           );
 
           dbRun(
-            "UPDATE users_local SET license_type = ? WHERE id = ?",
+            SET_LOCAL_USER_LICENSE_TYPE_SQL,
             [licenseType, userId]
           );
 

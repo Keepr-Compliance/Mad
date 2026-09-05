@@ -4,7 +4,9 @@
  * Single gatekeeper that controls ALL access to macOS Keychain / Windows DPAPI.
  * Prevents keychain prompts from appearing before user is ready.
  *
- * RULE: No code should call safeStorage directly. All calls go through this gate.
+ * RULE: No code should reach the OS secret store directly. All calls go through
+ * this gate, and the gate itself goes through the SecretStore capability
+ * (BACKLOG-2962) rather than importing Electron.
  *
  * Flow (first run):
  * 1. App starts with gate LOCKED
@@ -29,14 +31,21 @@
  * @module electron/services/keychainGate
  */
 
-import { safeStorage } from "electron";
+import type { SecretStore } from "../capabilities/secretStore";
+import { hostSecretStore } from "../capabilities/secretStoreProvider";
 import logService from "./logService";
 
-class KeychainGateService {
+export class KeychainGateService {
   private _unlocked = false;
   private _platform: NodeJS.Platform;
+  private readonly secrets: SecretStore;
 
-  constructor() {
+  /**
+   * @param secrets - The host shell's secret store. Injected so this class can
+   *   be constructed under any shell, and so tests need no Electron mock.
+   */
+  constructor(secrets: SecretStore) {
+    this.secrets = secrets;
     this._platform = process.platform;
   }
 
@@ -130,7 +139,7 @@ class KeychainGateService {
    */
   isEncryptionAvailable(): boolean {
     try {
-      return safeStorage.isEncryptionAvailable();
+      return this.secrets.isEncryptionAvailable();
     } catch (error) {
       logService.error("[KeychainGate] Error checking encryption availability", "KeychainGate", {
         error: error instanceof Error ? error.message : String(error),
@@ -150,7 +159,7 @@ class KeychainGateService {
       throw error;
     }
 
-    return safeStorage.encryptString(plaintext);
+    return this.secrets.encryptString(plaintext);
   }
 
   /**
@@ -164,7 +173,7 @@ class KeychainGateService {
       throw error;
     }
 
-    return safeStorage.decryptString(encrypted);
+    return this.secrets.decryptString(encrypted);
   }
 
   /**
@@ -188,5 +197,5 @@ class KeychainGateService {
 }
 
 // Singleton instance
-const keychainGate = new KeychainGateService();
+const keychainGate = new KeychainGateService(hostSecretStore);
 export default keychainGate;

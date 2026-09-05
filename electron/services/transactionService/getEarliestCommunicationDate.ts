@@ -5,7 +5,12 @@
  */
 
 import { dbGet, dbAll } from "../db/core/dbConnection";
-import { reactionExclusion } from "../db/reactionExclusion";
+import {
+  contactEmailsForContactsSql,
+  contactPhonesForContactsSql,
+  earliestEmailSql,
+  earliestMessageSql,
+} from "../db/earliestCommunicationSql";
 
 /**
  * Get the earliest communication date (email or message) for a set of contacts.
@@ -24,15 +29,14 @@ export function getEarliestCommunicationDate(
   }
 
   // Get email addresses for the contacts
-  const emailPlaceholders = contactIds.map(() => "?").join(", ");
   const contactEmails = dbAll<{ email: string }>(
-    `SELECT DISTINCT LOWER(email) as email FROM contact_emails WHERE contact_id IN (${emailPlaceholders})`,
+    contactEmailsForContactsSql(contactIds.length),
     contactIds,
   );
 
   // Get phone numbers for the contacts
   const contactPhones = dbAll<{ phone_e164: string }>(
-    `SELECT DISTINCT phone_e164 FROM contact_phones WHERE contact_id IN (${emailPlaceholders})`,
+    contactPhonesForContactsSql(contactIds.length),
     contactIds,
   );
 
@@ -45,19 +49,13 @@ export function getEarliestCommunicationDate(
   // The previous LIKE-based scan was unindexed AND missed BCC-only emails
   // (BCC was being dropped at INSERT time — fixed in Phase 2).
   if (contactEmails.length > 0) {
-    const placeholders = contactEmails.map(() => "?").join(", ");
     const emailParams: unknown[] = [
       userId,
       ...contactEmails.map((ce) => ce.email.toLowerCase().trim()),
     ];
 
     const emailResult = dbGet<{ earliest: string | null }>(
-      `SELECT MIN(e.sent_at) as earliest
-       FROM email_participants ep
-       JOIN emails e ON e.id = ep.email_id
-       WHERE e.user_id = ?
-         AND ep.email_address IN (${placeholders})
-         AND e.sent_at IS NOT NULL`,
+      earliestEmailSql(contactEmails.length),
       emailParams,
     );
 
@@ -74,19 +72,8 @@ export function getEarliestCommunicationDate(
       .filter((p) => p.length > 0);
 
     if (normalizedPhones.length > 0) {
-      const phoneConditions = normalizedPhones
-        .map(() => "m.participants_flat LIKE '%' || ? || '%'")
-        .join(" OR ");
-
       const messageResult = dbGet<{ earliest: string | null }>(
-        `SELECT MIN(m.sent_at) as earliest
-         FROM messages m
-         WHERE m.user_id = ?
-           AND m.channel IN ('sms', 'imessage')
-           AND m.duplicate_of IS NULL
-           AND ${reactionExclusion("m")}
-           AND (${phoneConditions})
-           AND m.sent_at IS NOT NULL`,
+        earliestMessageSql(normalizedPhones.length),
         [userId, ...normalizedPhones],
       );
 
