@@ -134,11 +134,11 @@
  */
 
 import { dbAll, dbGet } from "./db/core/dbConnection";
+import { CONTACT_DISPLAY_NAME_SQL } from "./db/contactLinkEvidenceSql";
 import {
   ALL_KEYED_EXTERNAL_RECORDS_SQL,
-  CONTACT_DISPLAY_NAME_SQL,
   EXTERNAL_RECORD_IS_CURRENT_SQL,
-  EXTERNAL_RECORD_VALUES_SQL,
+  EXTERNAL_RECORD_VALUES_ONE_SQL,
 } from "./db/contactSourceLinkerSql";
 import type { ExternalContactSource } from "./db/externalContactDbService";
 import { createLink, getLinksForContactBySource } from "./db/contactSourceLinkDbService";
@@ -315,7 +315,7 @@ function sourceRecordCarriesIdentifier(
   values: string[],
 ): boolean {
   const row = dbGet<{ emails_json: string | null; phones_json: string | null }>(
-    EXTERNAL_RECORD_VALUES_SQL,
+    EXTERNAL_RECORD_VALUES_ONE_SQL,
     [userId, sourceType, sourceRecordId],
   );
   if (!row) return false;

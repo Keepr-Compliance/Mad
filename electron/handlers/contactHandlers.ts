@@ -100,8 +100,8 @@ import {
 } from "../services/contactCompare";
 import { queryContacts, isPoolReady } from "../workers/contactWorkerPool";
 import { dbAll, dbRun } from "../services/db/core/dbConnection";
+import { IMPORTED_CONTACT_IDS_SQL } from "../services/db/contactBackfillPlanSql";
 import {
-  IMPORTED_CONTACT_IDS_SQL,
   SET_CONTACT_DEFAULT_ROLE_SQL,
   TRANSACTION_IDS_FOR_CONTACT_SQL,
 } from "../services/db/contactHandlersSql";

@@ -12,6 +12,13 @@
  * Text is byte-identical to what it replaced, verified by
  * `scripts/ci/sql-move-identity.mjs`. The hanging indentation inside these templates
  * is the original's — the control hashes cooked text and fails on one changed space.
+ *
+ * ## Three of the four statements are here; the fourth is a reference
+ *
+ * `contactSourceLinker.ts:520` reads a contact's display name — the same sentence
+ * BACKLOG-3044 PR 2 had already exported as `CONTACT_DISPLAY_NAME_SQL` from
+ * `db/contactLinkEvidenceSql.ts`. The first version of this module defined a
+ * byte-identical copy under the same name. The caller now imports the existing one.
  */
 
 import { sql } from "./core/sqlText";
@@ -19,8 +26,20 @@ import { sql } from "./core/sqlText";
 /**
  * One external record's value blobs. Three bound parameters: user id, source,
  * external record id.
+ *
+ * ## Named `_ONE_` because a same-named twin exists and they are NOT the same statement
+ *
+ * `contactSourceValuesSql.EXTERNAL_RECORD_VALUES_SQL` selects the same columns from the
+ * same table under the same predicate and **ends without `LIMIT 1`**. Two different
+ * texts. This module first exported them under the identical name, which is a reader
+ * trap rather than a duplication: an import list shows one name, and which statement
+ * you get depends on the module path.
+ *
+ * They are not merged, because merging would change one of the two statements — the
+ * thing this move must not do. They are distinguished by name instead, which changes
+ * no text at all.
  */
-export const EXTERNAL_RECORD_VALUES_SQL = sql`SELECT emails_json, phones_json FROM external_contacts
+export const EXTERNAL_RECORD_VALUES_ONE_SQL = sql`SELECT emails_json, phones_json FROM external_contacts
       WHERE user_id = ? AND source = ? AND external_record_id = ? LIMIT 1`;
 
 /**
@@ -47,9 +66,6 @@ export const EXTERNAL_RECORD_IS_CURRENT_SQL = sql`SELECT 1 AS hit FROM external_
           )
         )
       LIMIT 1`;
-
-/** A contact's display name. One bound parameter: contact id. */
-export const CONTACT_DISPLAY_NAME_SQL = sql`SELECT display_name FROM contacts WHERE id = ?`;
 
 /**
  * Every external record for a user that has a crosswalk key. One bound parameter.

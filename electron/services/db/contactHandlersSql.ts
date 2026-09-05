@@ -10,14 +10,25 @@
  * already `db/contactSourceLinkSql.ts`, and this PR removes its escape by BRANDING
  * that constant rather than by relocating anything.
  *
+ * ## Only TWO of the three moved statements are here, and that is the point
+ *
+ * `contactHandlers.ts:901` reads every imported contact for a user. That sentence was
+ * ALREADY exported from `db/contactBackfillPlanSql.ts` as `IMPORTED_CONTACT_IDS_SQL`,
+ * written by sibling item BACKLOG-3043, whose own docblock names this very call site
+ * and asks for convergence on it. The first version of this module defined a
+ * byte-identical copy under the same name instead — which is the exact drift this epic
+ * exists to remove, committed by the PR that catalogued a six-fold duplication two
+ * constants further down. The caller now imports 3043's constant.
+ *
+ * **Before adding an exported SQL constant here, check whether one already exists.**
+ * By text, not by name: the two copies had the same name, but a copy under a different
+ * name is the same defect wearing a disguise.
+ *
  * Text is byte-identical to what it replaced, verified by
  * `scripts/ci/sql-move-identity.mjs`.
  */
 
 import { sql } from "./core/sqlText";
-
-/** Every imported contact for a user. One bound parameter: the user id. */
-export const IMPORTED_CONTACT_IDS_SQL = sql`SELECT id FROM contacts WHERE user_id = ? AND is_imported = 1`;
 
 /**
  * The transactions a contact appears on. One bound parameter: contact id.
