@@ -31,10 +31,17 @@ for a reason unrelated to the role logic — including 1 and 3, which are meant 
 stay green under it. One finding, one red. Before first-user-wins every caller was an admin, so sending
 every fresh provision to `/setup/consent` was always right. It is not any more —
 a plain agent cannot complete a tenant-wide Microsoft admin-consent grant, so
-that page is a dead end for them. Non-admins now go to `/download`, which is
-where `middleware.ts` already sends an agent who touches a protected route. The
-route reads the returned value rather than re-querying, so the callback and the
-database cannot disagree about which branch was taken.
+that page is a dead end for them. Every non-admin now goes to `/dashboard` —
+one destination, not a role → destination table. `middleware.ts` already owns
+that decision for every protected request (it admits `broker` and `it_admin`,
+and bounces `agent` to `/download`), and two places deciding would drift the
+moment either changed. They already would have: an earlier version of this
+branch sent every non-admin to `/download`, correct for an agent and wrong for a
+broker. When BACKLOG-3080 changes where agents land it changes middleware, and
+this callback needs no edit.
+
+The route reads the returned value rather than re-querying, so the callback and
+the database cannot disagree about which branch was taken.
 
 ---
 
@@ -121,15 +128,25 @@ Re-measured after the return shape changed; mutants 02–04 were re-derived from
 the updated body first, so no count here is taken against a stale fixture.
 
 The route's own branch is covered by
-`broker-portal/__tests__/app/auth/setup/callback/route.test.ts` (6 assertions),
-made to fail the same way:
+`broker-portal/__tests__/app/auth/setup/callback/route.test.ts` (11 assertions),
+made to fail the same way. It asserts **both hops** — the callback's redirect,
+and then what the REAL `middleware.ts` does with it, imported and invoked with a
+`NextRequest` rather than restated:
 
-| Mutation of `route.ts` | Reds | Which assertion |
+| Mutation | Reds | Which assertion |
 |---|---|---|
-| delete the `/download` branch — i.e. the pre-fix route | 3 of 6 | agent → `/download` · broker → `/download` · missing role fails closed |
-| invert the branch (admin → `/download`) | 4 of 6 | the three above, plus admin → consent |
-| narrow `canGrantAdminConsent` to drop `it_admin` | 1 of 6 | an existing `it_admin` still reaches the consent page |
-| restored | **0** — 6 passed | — |
+| callback hardcodes `/download` — the literal reading this ruling replaced | 5 of 11 | agent → `/dashboard` · **broker → `/dashboard`** · missing role fails closed · both hop-2 tests |
+| delete the non-admin branch — i.e. the pre-fix route | 6 of 11 | the four hop-1 non-admin assertions, plus both hop-2 tests |
+| invert the branch (admin → `/dashboard`) | 7 of 11 | the six above, plus admin → consent |
+| narrow `canGrantAdminConsent` to drop `it_admin` | 2 of 11 | existing `it_admin` reaches consent · the enumerated consent sweep |
+| **`middleware.ts` stops admitting `broker`** | 1 of 11 | "admits a provisioned broker" |
+| restored | **0** — 11 passed | — |
+
+The last row is not a defect anyone would ship — it is the control on the
+control. `admits a broker` asserts a **null** location, and a middleware that
+threw and fell into its catch would return exactly that. Breaking middleware's
+admit list on purpose and watching that one test go red is what shows hop 2 is
+executing the real routing decision rather than passing on an exception.
 
 Counts were measured with `--bail=0`, so they are exact rather than truncated.
 The 04 red on the `'admin'` assertion fires on the count-is-zero branch, not on

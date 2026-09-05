@@ -148,11 +148,20 @@ export async function GET(request: Request) {
   // Branch on the role the RPC actually wrote — not a re-query — so the
   // callback and the database cannot disagree about which branch was taken.
   if (!canGrantAdminConsent(data.role)) {
-    // /download is where middleware.ts already sends an agent who touches a
-    // protected route, so this is that role's existing destination rather than
-    // a new one. BACKLOG-3080 owns changing where agents land; this must not
-    // pre-empt it by inventing a third destination.
-    return NextResponse.redirect(`${origin}/download`);
+    // /dashboard, NOT a per-role destination.
+    //
+    // This callback deliberately does not own a role -> destination table.
+    // middleware.ts already owns that decision and applies it to every
+    // protected request: it admits broker and it_admin, and bounces agent to
+    // /download. If this file also decided, the two would drift the moment
+    // either changed -- and they already would have: an earlier version of
+    // this branch sent every non-admin to /download, which is right for an
+    // agent and wrong for a broker, whom middleware admits to /dashboard.
+    //
+    // So there is ONE destination here and ONE routing authority. When
+    // BACKLOG-3080 changes where agents land, it changes middleware.ts and
+    // this file needs no edit.
+    return NextResponse.redirect(`${origin}/dashboard`);
   }
 
   // An admin can pre-approve Graph API permissions for all tenant users.
