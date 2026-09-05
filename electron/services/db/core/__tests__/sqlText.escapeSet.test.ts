@@ -225,6 +225,26 @@ const SELF = "electron/services/db/core/__tests__/sqlText.escapeSet.test.ts";
  * REFUSE — `LIVE_TRANSACTION_SQL_PREDICATE` hand-quotes a status VALUE into SQL text —
  * and belong to **BACKLOG-3103**, not to trying harder.
  *
+ * ## 2026-09-04 — BACKLOG-3103 bound the status. The four that "will REFUSE" no longer do.
+ *
+ * Three sections above say four of BACKLOG-3044's remaining escapes CANNOT convert,
+ * because they splice `LIVE_TRANSACTION_SQL_PREDICATE` and that fragment hand-quoted a
+ * status VALUE into SQL text. **That was true when written and is now false**, and the
+ * sentences are left standing with this correction under them rather than edited away,
+ * so the reader can see what changed and when.
+ *
+ * BACKLOG-3103 moved the fragment to `db/core/transactionEligibilitySql.ts` and bound
+ * the value: `t.status != ?`, with `withLiveTransactionParam` appending it. The tag
+ * accepts it now — proved by compiling a statement through `sql` exactly as
+ * BACKLOG-3044 does, in
+ * `electron/services/__tests__/transactionEligibilitySql.boundStatus-3103.test.ts`.
+ *
+ * **This map does not move.** Binding a value is not moving a statement: all four
+ * statements are still authored outside the layer, so all four escapes are still here
+ * and still owned by BACKLOG-3044. `autoLinkService.ts` stays at 17 and
+ * `importPlanInputs.ts` stays at 1. They leave when PR 5 moves them, which is what
+ * BACKLOG-3103 unblocked and deliberately did not do itself.
+ *
  * OWNERS, and what each one means:
  *
  *   BACKLOG-3044 — the statement is authored OUTSIDE `electron/services/db/**`.
