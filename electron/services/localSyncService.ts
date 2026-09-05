@@ -1286,18 +1286,20 @@ class LocalSyncService {
       // sender in one millisecond would hash identically and all but the first
       // would be dropped as duplicates that never existed.
       //
-      // LOOSE equality below, deliberately. `msg.smsId` is typed
+      // BOTH null and undefined are guarded, deliberately. `msg.smsId` is typed
       // `string | undefined`, so TypeScript believes null is impossible here —
       // but this value arrives as JSON from another process and `{"smsId":
-      // null}` is wire-legal. `null ?? null` is `null`, which a `=== undefined`
-      // test lets through, and the template string then hashes the LITERAL
-      // "null": every body-less message from one sender in one millisecond
-      // collides again. That is this item's own defect re-entering through a
-      // value the compiler cannot see. No shipping producer emits it today
-      // (`JSON.stringify` drops undefined, and `MappedMms.smsId` is a required
-      // string), but BACKLOG-3109 populates exactly this field.
+      // null}` is wire-legal. `null ?? null` is `null`, which an
+      // undefined-only test lets through, and the template string then hashes
+      // the LITERAL "null": every body-less message from one sender in one
+      // millisecond collides again. That is this item's own defect re-entering
+      // through a value the compiler cannot see. No shipping producer emits it
+      // today (`JSON.stringify` drops undefined, and `MappedMms.smsId` is a
+      // required string), but BACKLOG-3109 populates exactly this field.
+      //
+      // Spelled out rather than `== null` because the repo enforces `eqeqeq`.
       const hashInput = msg.body ?? msg.smsId;
-      if (hashInput == null) {
+      if (hashInput === null || hashInput === undefined) {
         skippedMessages++;
         continue;
       }
