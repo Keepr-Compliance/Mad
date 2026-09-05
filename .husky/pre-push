@@ -83,6 +83,21 @@ is_zero() {
   esac
 }
 
+# Which workspace a repo-relative path belongs to. ONE classifier with TWO
+# callers: the portal lint stage, which asks it about every PUSHED file, and the
+# jest split near the end of this file, which asks it about the SELECTED TEST
+# files. Two different inputs -- deliberately, see the lint block's comment --
+# but one definition of "which portal", so the two stages can never disagree
+# about where a file lives. Add a workspace here and both callers learn it.
+portal_of() {
+  case "$1" in
+    broker-portal/*) echo "broker-portal" ;;
+    admin-portal/*) echo "admin-portal" ;;
+    android-companion/*) echo "android-companion" ;;
+    *) echo "root" ;;
+  esac
+}
+
 repo_root=$(git rev-parse --show-toplevel 2>/dev/null || echo ".")
 
 # --- Remote validation -------------------------------------------------------
@@ -378,6 +393,40 @@ for file in $changed_files; do
 done
 IFS="$prepush_prev_ifs"
 
+# --- Which portals do the pushed files touch? (BACKLOG-3099) ----------------
+# `npm run lint` is `eslint electron src scripts .claude/scripts`. It does not
+# reach broker-portal/ or admin-portal/, CI's only lint step runs that same
+# command, and this hook ran no lint at all -- so a portal-only push was linted
+# by NOTHING, locally or in CI. PR #2494 changed seven broker-portal/ files and
+# no linter read one of them.
+#
+# DERIVED FROM `changed_files`, NOT from `test_files` below, even though the
+# jest split down there sorts by the same portals with the same classifier. Two
+# reasons, both fatal to the alternative:
+#   1. `test_files` holds only test files that have a source counterpart. A push
+#      carrying one .tsx page with no test contributes nothing to it.
+#   2. The hook exits 0 above that split when `test_files` is empty. A
+#      portal-only push would skip the lint entirely -- the exact hole this
+#      block exists to close.
+# Same `portal_of`, different input, on purpose.
+#
+# THE WHOLE WORKSPACE IS LINTED, not just the changed files: `next lint` takes
+# directories, and both portals rest at 0 errors, so a full pass is green and
+# costs 1.7-1.8s each (measured). Only the portals a push actually touches run,
+# so a desktop-only push pays nothing beyond this loop.
+bp_changed=""
+ap_changed=""
+prepush_prev_ifs="$IFS"
+IFS='
+'
+for file in $changed_files; do
+  case "$(portal_of "$file")" in
+    broker-portal) bp_changed="1" ;;
+    admin-portal) ap_changed="1" ;;
+  esac
+done
+IFS="$prepush_prev_ifs"
+
 # Find related test files for changed .ts/.tsx source files
 test_files=""
 for file in $changed_files; do
@@ -504,6 +553,17 @@ if [ -n "$typecheck_tests_uncovered" ]; then
   echo "$typecheck_tests_uncovered" | sed '/^$/d;s/^/  - /'
 fi
 
+if [ -n "$bp_changed" ]; then
+  echo "[pre-push] portal lint: broker-portal RUN (the pushed commits touch broker-portal/)"
+else
+  echo "[pre-push] portal lint: broker-portal SKIP (the pushed commits touch no broker-portal/ file)"
+fi
+if [ -n "$ap_changed" ]; then
+  echo "[pre-push] portal lint: admin-portal RUN (the pushed commits touch admin-portal/)"
+else
+  echo "[pre-push] portal lint: admin-portal SKIP (the pushed commits touch no admin-portal/ file)"
+fi
+
 if [ -n "$PREPUSH_DRYRUN" ]; then
   echo "[pre-push] PREPUSH_DRYRUN=1 — decisions reported above, no tests executed."
   exit 0
@@ -561,6 +621,62 @@ if [ -n "$typecheck_tests" ]; then
   fi
 fi
 
+# --- Portal lint (BACKLOG-3099) ---------------------------------------------
+# ABOVE the `test_files` early exit on purpose: a portal push that changes no
+# test file exits there, and a lint placed after it would never run on exactly
+# the pushes it exists for.
+#
+# ERRORS block the push; WARNINGS do not. No --max-warnings=0 -- that is what
+# `next lint` does unmodified, and it matches how `npm run lint` already behaves
+# for the desktop tree. Measured at 4be1c694f: broker-portal 0 errors /
+# 24 warnings, admin-portal 0 errors / 6 warnings, so this gate is green the day
+# it lands. Making those 30 warnings fatal is a 25-file cleanup and a separate
+# decision; bundling it here would have made the gate un-landable, which is how
+# a gate ends up never being added at all. New ERRORS still block: 89 rules sit
+# at error severity in broker-portal (eqeqeq, no-eval, react-hooks/rules-of-hooks,
+# @next/next/no-html-link-for-pages, the whole eslint:recommended core) and 26 in
+# admin-portal.
+#
+# `if !` rather than a bare command: husky runs this file under `sh -e`, so an
+# unguarded non-zero exit would kill the hook before it printed its own verdict.
+if [ -n "$bp_changed" ]; then
+  if ! npm run portal:lint; then
+    echo ""
+    echo "[pre-push] broker-portal lint failed. Push blocked."
+    echo "[pre-push] Only ERRORS block. Warnings are printed and allowed."
+    echo "[pre-push] Reproduce, and fix, with:"
+    echo "[pre-push]   npm run portal:lint"
+    echo "[pre-push] 'npm run lint' does NOT cover broker-portal/ -- a clean run"
+    echo "[pre-push] there says nothing about the files above. CI runs the same"
+    echo "[pre-push] command in its 'Broker Portal Lint' job."
+    exit 1
+  fi
+fi
+
+if [ -n "$ap_changed" ]; then
+  if ! npm run admin:lint; then
+    echo ""
+    echo "[pre-push] admin-portal lint failed. Push blocked."
+    echo "[pre-push] Only ERRORS block. Warnings are printed and allowed."
+    echo "[pre-push] Reproduce, and fix, with:"
+    echo "[pre-push]   npm run admin:lint"
+    echo "[pre-push] 'npm run lint' does NOT cover admin-portal/. CI runs the same"
+    echo "[pre-push] command in its 'Admin Portal Lint' job."
+    echo ""
+    echo "[pre-push] IF the output above says 'Invalid Options: Unknown options:"
+    echo "[pre-push] useEslintrc', that is NOT your change and NOT a lint finding."
+    echo "[pre-push] admin-portal pins eslint 9 + eslint.config.mjs (flat config) in"
+    echo "[pre-push] its OWN nested node_modules; the root tree carries eslint 8."
+    echo "[pre-push] A git worktree symlinks only the ROOT node_modules, so the"
+    echo "[pre-push] nested install is missing and next lint hands eslint-8 options"
+    echo "[pre-push] to a flat config. Repair from the worktree root -- symlink it,"
+    echo "[pre-push] NEVER npm install (every worktree shares one node_modules tree"
+    echo "[pre-push] and a reinstall breaks the running dev app):"
+    echo "[pre-push]   ln -s <main-checkout>/admin-portal/node_modules admin-portal/node_modules"
+    exit 1
+  fi
+fi
+
 if [ -z "$test_files" ]; then
   exit 0
 fi
@@ -576,14 +692,14 @@ ap_tests=""
 ac_tests=""
 root_tests=""
 for f in $test_files; do
-  case "$f" in
-    broker-portal/*)
+  case "$(portal_of "$f")" in
+    broker-portal)
       bp_tests="$bp_tests $f"
       ;;
-    admin-portal/*)
+    admin-portal)
       ap_tests="$ap_tests $f"
       ;;
-    android-companion/*)
+    android-companion)
       ac_tests="$ac_tests $f"
       ;;
     *)

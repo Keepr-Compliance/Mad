@@ -329,10 +329,27 @@ npm run type-check
 - [ ] No `any` types without justification
 
 ### 5.2 Lint Check
+
+`npm run lint` is `eslint electron src scripts .claude/scripts`. It does **not**
+reach `broker-portal/` or `admin-portal/` — each portal has its own ESLint config
+and its own command (BACKLOG-3099). Run the ones your branch touches:
+
 ```bash
-npm run lint
+npm run lint          # desktop: electron/, src/, scripts/, .claude/scripts/
+npm run portal:lint   # broker-portal/   (run if the branch touches it)
+npm run admin:lint    # admin-portal/    (run if the branch touches it)
 ```
+
 - [ ] No lint errors (warnings acceptable with justification)
+- [ ] Portal command run for every portal the branch touches — a clean `npm run lint`
+      says nothing about portal files, and CI's `Run linter` step runs that identical
+      command, so it will not catch them either
+- [ ] Errors block, warnings do not: the CI jobs (`Broker Portal Lint`, `Admin Portal Lint`)
+      and the pre-push hook both run these commands without `--max-warnings=0`
+
+The pre-push hook runs the portal commands automatically, scoped to which portal the
+pushed files touch. It prints its decision on every run (`portal lint: broker-portal
+RUN|SKIP`), and `PREPUSH_DRYRUN=1 git push …` shows the decision without running anything.
 
 ### 5.3 Performance Check
 Review for:
