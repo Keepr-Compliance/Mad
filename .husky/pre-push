@@ -629,8 +629,10 @@ fi
 # ERRORS block the push; WARNINGS do not. No --max-warnings=0 -- that is what
 # `next lint` does unmodified, and it matches how `npm run lint` already behaves
 # for the desktop tree. Measured at 4be1c694f: broker-portal 0 errors /
-# 24 warnings, admin-portal 0 errors / 6 warnings, so this gate is green the day
-# it lands. Making those 30 warnings fatal is a 25-file cleanup and a separate
+# 23 warnings, admin-portal 0 errors / 6 warnings (counted as `line:col Warning:`
+# findings -- `next lint` also prints one non-finding "inferred your workspace
+# root" notice that a naive grep miscounts as a 24th), so this gate is green the
+# day it lands. Making those 29 warnings fatal is a 25-file cleanup and a separate
 # decision; bundling it here would have made the gate un-landable, which is how
 # a gate ends up never being added at all. New ERRORS still block: 89 rules sit
 # at error severity in broker-portal (eqeqeq, no-eval, react-hooks/rules-of-hooks,

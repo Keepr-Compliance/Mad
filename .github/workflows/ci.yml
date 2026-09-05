@@ -551,8 +551,10 @@ jobs:
   #
   # ERRORS fail this job; WARNINGS do not -- no --max-warnings=0, which is what
   # `next lint` does on its own. Measured at 4be1c694f: broker-portal 0 errors /
-  # 24 warnings, admin-portal 0 errors / 6 warnings. So this gate is green the day
-  # it lands. Making the 30 existing warnings fatal is a separate cleanup, and
+  # 23 warnings, admin-portal 0 errors / 6 warnings (counted as `line:col Warning:`
+  # findings -- `next lint` also prints one non-finding "inferred your workspace
+  # root" notice that a naive grep miscounts as a 24th). So this gate is green the
+  # day it lands. Making the 29 existing warnings fatal is a separate cleanup, and
   # bundling it here would have made the gate un-landable -- which is how a gate
   # ends up never being added at all. New errors of ANY rule still fail it (89
   # rules sit at error severity in broker-portal, 26 in admin-portal).
