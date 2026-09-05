@@ -330,8 +330,9 @@ describe('readSmsMessages — failure vs zero-results (BACKLOG-2206)', () => {
 // budget the remainder is RETAINED (cursor held upstream), never dropped.
 //
 // These tests drive a fixture-backed native module that honours the real
-// SmsModule.list contract (box, minDate>=, sortOrder date ASC, indexFrom,
-// maxCount) so pagination is exercised end-to-end. Per the repo rule, they
+// SmsModule.list contract (box, minDate>=, sortOrder, indexFrom, maxCount) --
+// INCLUDING the sort direction (BACKLOG-3046) -- so pagination is exercised
+// end-to-end. Per the repo rule, they
 // assert exact ID SETS/sequences (identity), not just counts.
 // ===========================================================================
 
@@ -341,6 +342,34 @@ interface PageCall {
   indexFrom: number;
   maxCount: number;
   minDate?: number;
+  /**
+   * The `sortOrder` string the reader actually passed (BACKLOG-3046).
+   *
+   * Captured because until 3046 it was NOT: the fake below sorted the fixture
+   * `date ASC` itself and never looked at this field, so `SMS_SORT_OLDEST_FIRST`
+   * could be flipped to `date DESC` and all 38 tests stayed green. The invariant
+   * the whole BACKLOG-2199 cursor rests on was unasserted in shipped test code.
+   */
+  sortOrder?: string;
+}
+
+/**
+ * How the fake orders a page, derived from the `sortOrder` it was HANDED
+ * (BACKLOG-3046) rather than assumed.
+ *
+ * The default when no `sortOrder` is supplied is DESCENDING on purpose: that is
+ * what `content://sms` actually does, and it is the entire reason
+ * `SMS_SORT_OLDEST_FIRST` exists. A fake that defaults to ascending is a fake
+ * that cannot tell a reader which forces the sort apart from one which forgot
+ * to — which is exactly the state this file was in.
+ */
+function orderOf(sortOrder: string | undefined): 'asc' | 'desc' {
+  if (sortOrder === undefined) return 'desc'; // the provider's own default
+  if (/\bdesc\b/i.test(sortOrder)) return 'desc';
+  if (/\basc\b/i.test(sortOrder)) return 'asc';
+  // An unrecognised string is not quietly treated as ascending: SQLite would
+  // reject it and the reader would get nothing, so neither may it pass here.
+  throw new Error(`fake SmsModule: unrecognised sortOrder ${JSON.stringify(sortOrder)}`);
 }
 
 /** Build `n` oldest-first raw rows with unique _id / address / body / date. */
@@ -380,12 +409,14 @@ function installPagingSms(
       indexFrom?: number;
       maxCount: number;
       minDate?: number;
+      sortOrder?: string;
     };
     const call: PageCall = {
       box: raw.box,
       indexFrom: raw.indexFrom ?? 0,
       maxCount: raw.maxCount,
       minDate: raw.minDate,
+      sortOrder: raw.sortOrder,
     };
     calls.push(call);
 
@@ -397,11 +428,19 @@ function installPagingSms(
 
     const source = call.box === 'sent' ? store.sent : store.inbox;
     const minDate = call.minDate;
+    // BACKLOG-3046: order by the direction the READER ASKED FOR. This used to be
+    // an unconditional ascending sort, which made every ordering assertion in
+    // this file a property of the fixture rather than of the code under test.
+    const direction = orderOf(call.sortOrder);
     const matched = (
       minDate !== undefined
         ? source.filter((r) => Number(r.date) >= minDate)
         : source.slice()
-    ).sort((a, b) => Number(a.date) - Number(b.date));
+    ).sort((a, b) =>
+      direction === 'asc'
+        ? Number(a.date) - Number(b.date)
+        : Number(b.date) - Number(a.date)
+    );
 
     const page =
       call.maxCount > 0
@@ -418,6 +457,125 @@ function installPagingSms(
 
 const idsOf = (msgs: Array<{ smsId?: string }>): Array<string | undefined> =>
   msgs.map((m) => m.smsId);
+
+// ===========================================================================
+// The sort direction the reader ACTUALLY asks for (BACKLOG-3046).
+//
+// `content://sms` defaults to `date DESC`. BACKLOG-2199 forces `date ASC` so a
+// bounded page is a contiguous PREFIX of the backlog rather than the newest n —
+// otherwise the caller advances the cursor past those newest rows and every
+// older message below it is stranded forever.
+//
+// That invariant had no test. The fake above sorted the fixture ascending on its
+// own and never read `sortOrder`, so flipping `SMS_SORT_OLDEST_FIRST` to
+// `date DESC` left all 38 tests green. The fake now honours the direction it is
+// handed; these assert the reader hands it the right one.
+// ===========================================================================
+
+describe('readSmsMessages — sort order (BACKLOG-3046 / 2199)', () => {
+  it('the FAKE can produce newest-first — so an oldest-first result is a real observation', async () => {
+    // A control on the control. If this fails, every ordering assertion below is
+    // a property of the fixture, which is precisely the defect 3046 records.
+    const rows = makeRows(3); // ids 1,2,3 ascending by date
+    installPagingSms({ inbox: rows });
+    const list = (NativeModules as unknown as { Sms: SmsListFn extends never ? never : { list: SmsListFn } }).Sms.list;
+
+    const ask = (sortOrder?: string): Promise<string[]> =>
+      new Promise((resolve, reject) => {
+        list(
+          JSON.stringify({ box: 'inbox', indexFrom: 0, maxCount: 10, ...(sortOrder ? { sortOrder } : {}) }),
+          (fail: string) => reject(new Error(fail)),
+          (_c: number, json: string) =>
+            resolve((JSON.parse(json) as RawSmsRecord[]).map((r) => r._id))
+        );
+      });
+
+    expect(await ask('date ASC')).toEqual(['1', '2', '3']);
+    expect(await ask('date DESC')).toEqual(['3', '2', '1']);
+    // No sortOrder at all => the provider's own default, which is NEWEST-first.
+    // A reader that forgot to force the sort gets this, and must not look like
+    // one that remembered.
+    expect(await ask(undefined)).toEqual(['3', '2', '1']);
+  });
+
+  it('EVERY page call asks for date ASC — on both boxes, on every page', async () => {
+    // Two full pages plus a tail, so the assertion covers pages after the first.
+    const total = SMS_READ_PAGE_SIZE + 5;
+    const { calls } = installPagingSms({
+      inbox: makeRows(total),
+      sent: makeRows(3, { startId: 10_000 }),
+    });
+
+    const result = await readSmsMessages(0, total + 100);
+
+    // Non-vacuous first: the read RAN and returned rows. An assertion about the
+    // arguments of a call that never happened proves nothing.
+    if (!result.ok) throw new Error('expected a successful read');
+    expect(result.messages.length).toBe(total + 3);
+    expect(calls.length).toBeGreaterThan(2);
+
+    // Exact SET of distinct sort strings — not "every call contains ASC", which
+    // a single stray DESC page could still satisfy under a sloppier matcher.
+    expect(new Set(calls.map((c) => c.sortOrder))).toEqual(new Set(['date ASC']));
+  });
+
+  it('asks the provider for the BUDGET, not a full page, when the budget is smaller', async () => {
+    // Found by a control on the shared paging loop: replacing
+    // `Math.min(pageSize, remaining)` with the raw page size left this suite
+    // 42/42 GREEN, because every case asserted the RESULT and none asserted the
+    // page size REQUESTED. The result stays correct — the loop still stops at
+    // the budget — so the only visible symptom is the provider being asked to
+    // materialize 200 rows to satisfy a budget of 3, on the exact path
+    // back-pressure exists to keep small. Same family as BACKLOG-3046: a
+    // parameter the reader passes that nothing reads back.
+    const { calls } = installPagingSms({ inbox: makeRows(10), sent: makeRows(10, { startId: 500 }) });
+
+    const result = await readSmsMessages(0, 3);
+
+    // Non-vacuous: the read ran and was genuinely truncated by the budget.
+    if (!result.ok) throw new Error('expected a successful read');
+    expect(result.messages.filter((m) => m.direction === 'inbound').length).toBe(3);
+    expect(calls.length).toBeGreaterThan(0);
+    // Exact SET of requested page sizes — every call asked for 3, not 200.
+    expect(new Set(calls.map((c) => c.maxCount))).toEqual(new Set([3]));
+  });
+
+  it('a bounded read returns the OLDEST slice, by exact ID set', async () => {
+    // 10 rows available, budget 3. Oldest-first => 1,2,3. Newest-first => 10,9,8,
+    // and the cursor then advances past 4..10, stranding them permanently.
+    const { calls } = installPagingSms({ inbox: makeRows(10) });
+
+    const result = await readSmsMessages(0, 3);
+
+    if (!result.ok) throw new Error('expected a successful read');
+    const inbox = result.messages.filter((m) => m.direction === 'inbound');
+    expect(idsOf(inbox)).toEqual(['1', '2', '3']);
+    expect(calls.some((c) => c.box === 'inbox')).toBe(true);
+  });
+
+  it('a multi-page walk is gap-free and ascending across the page boundary', async () => {
+    // NOTE, because it is the whole reason this bug is dangerous: this test does
+    // NOT go red when the sort is flipped, and it is not meant to.
+    // `readSmsMessages` sorts the combined result by timestamp before returning,
+    // so an UNTRUNCATED read comes back in the right order either way. The flip
+    // is invisible until the read is BOUNDED — and then it silently returns the
+    // newest n and strands the rest. That is why the direction is asserted on the
+    // page ARGUMENTS and on the BOUNDED result above, and why this case is here
+    // for gap-freeness across the boundary only.
+    const total = SMS_READ_PAGE_SIZE + 7;
+    installPagingSms({ inbox: makeRows(total) });
+
+    const result = await readSmsMessages(0, total + 50);
+
+    if (!result.ok) throw new Error('expected a successful read');
+    const inbox = result.messages.filter((m) => m.direction === 'inbound');
+    expect(inbox.length).toBe(total);
+    expect(idsOf(inbox)).toEqual(makeRows(total).map((r) => r._id));
+    for (let i = 1; i < inbox.length; i++) {
+      expect(inbox[i].timestamp).toBeGreaterThan(inbox[i - 1].timestamp);
+    }
+  });
+});
 
 describe('readSmsMessages — pagination (BACKLOG-2207)', () => {
   it('reads ALL messages across multiple pages when the backlog exceeds one page (no drop)', async () => {
@@ -565,6 +723,32 @@ describe('readSmsMessages — pagination (BACKLOG-2207)', () => {
       ...calls.filter((c) => c.box === 'inbox').map((c) => c.indexFrom)
     );
     expect(maxInboxOffset).toBeLessThan(budget);
+  });
+
+  // The shared loop's own docblock says `rawCount` is deliberately distinct from
+  // `messages.length` and that conflating them "makes the walk skip rows".
+  // Nothing could observe that: keying exhaustion OR the offset advance on
+  // `messages.length` left both suites 78/78 green. This is the control for it,
+  // written by SR review.
+  //
+  // Only the SMS suite CAN cover it. `readBoxPage` drops rows with no address or
+  // no body (carrier alerts, voicemail notifications), so `messages.length <
+  // rawCount` happens on real devices — `smsReader.ts` line 456,
+  // `.filter((r) => r.address && r.body)`. The MMS reader drops nothing, so its
+  // pages always have `messages.length === rawCount` and the bug is invisible
+  // there.
+  //
+  // What the offset mutation does to a real user: a 200-row page holding 30
+  // carrier alerts advances by 170 instead of 200, so the next page re-reads
+  // rows 170-199. With a run of 200 consecutive alerts `messages.length` is 0,
+  // the offset never advances, and the walk burns all 500 pages on one window.
+  it('a page containing DROPPED rows still advances the walk by RAW rows', async () => {
+    const rows = makeRows(5);                 // ids 1..5, ascending by date
+    rows[1] = { ...rows[1], body: '' };       // readBoxPage drops body-less rows
+    installPagingSms({ inbox: rows });
+    const result = await readSmsMessages(0, 3);
+    if (!result.ok) throw new Error('expected a successful read');
+    expect(idsOf(result.messages)).toEqual(['1', '3', '4']);
   });
 
   it('respects minDate while paging (only messages at/after the cursor are read)', async () => {
