@@ -53,13 +53,23 @@ export const CONTACT_SOURCE_VALUES_SQL = sql`SELECT ec.source, ec.external_recor
       ORDER BY ec.source, ec.external_record_id`;
 
 /**
- * One external record's value blobs. Three bound parameters: user id, source,
- * external record id.
+ * The value blobs of EVERY external record matching a crosswalk key. Three bound
+ * parameters: user id, source, external record id.
  *
- * Deliberately NOT merged with `contactSourceLinkerSql.EXTERNAL_RECORD_VALUES_SQL`,
- * which reads the same columns from the same table: that one ends `LIMIT 1` and this
- * one does not. Two different texts, and collapsing them would change one statement to
- * save a constant — the tidy-up this move exists to refuse.
+ * ## It is the multi-row variant, and the docblock used to say the opposite
+ *
+ * This opened "One external record's value blobs" — copied from its sibling and wrong
+ * here. `sourceRecordValues` (`contactSourceValues.ts:200`) calls it with `dbAll`,
+ * returns null only when `rows.length === 0`, and then **loops over every row**
+ * accumulating emails and phones. A reader who believed the old sentence would think
+ * the loop was defensive and that dropping it changed nothing.
+ *
+ * Deliberately NOT merged with `contactSourceLinkerSql.EXTERNAL_RECORD_VALUES_ONE_SQL`,
+ * which reads the same columns from the same table under the same predicate but ends
+ * `LIMIT 1`. Two different texts, and collapsing them would change one statement to
+ * save a constant — the tidy-up this move exists to refuse. That sibling carries the
+ * `_ONE_` qualifier because it is the one that stops at a single row; this one is the
+ * general case and keeps the plain name.
  */
 export const EXTERNAL_RECORD_VALUES_SQL = sql`SELECT emails_json, phones_json FROM external_contacts
       WHERE user_id = ? AND source = ? AND external_record_id = ?`;

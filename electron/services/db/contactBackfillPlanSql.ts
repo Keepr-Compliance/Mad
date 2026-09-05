@@ -32,14 +32,45 @@
  *
  * ## The statements are duplicated elsewhere, and this module does not fix that
  *
- * Recorded so a later convergence is discoverable rather than re-derived. These
- * files were deliberately NOT edited by BACKLOG-3043, whose scope is the worker:
+ * This list is the REGISTER for these duplicate families — the place someone looks
+ * before writing a fourth copy. It was stale within two months of being written, so
+ * treat the note below about re-measuring as part of the register, not a caveat.
  *
- *   `IMPORTED_CONTACT_IDS_SQL`      byte-identical to `electron/handlers/contactHandlers.ts:901`
- *                                   (the main-thread backfill twin, behind `unsafeSql`)
- *   `CONTACT_EXISTING_EMAILS_SQL`   byte-identical to `electron/services/db/contactDbService.ts:978`
- *   `CONTACT_EXISTING_PHONES_SQL`   byte-identical to `electron/services/contactIdentityEvidence.ts:387`
- *                                   (behind `unsafeSql`)
+ * **Re-measured 2026-09-04 by BACKLOG-3044 PR 3**, by AST over cooked text rather than
+ * by grep, because a grep finds a NAME and these copies do not share one:
+ *
+ *   `IMPORTED_CONTACT_IDS_SQL`      **NO LONGER DUPLICATED.** Its twin was
+ *                                   `contactHandlers.ts:901` behind `unsafeSql`;
+ *                                   BACKLOG-3044 PR 3 moved that statement and pointed
+ *                                   the handler at THIS constant. One occurrence in the
+ *                                   tree. The convergence this register asked for
+ *                                   happened.
+ *
+ *   `CONTACT_EXISTING_EMAILS_SQL`   2 occurrences — `:64` here, and
+ *                                   `electron/services/db/contactDbService.ts:977`
+ *                                   (local `existingSql`, `sql` tag).
+ *                                   The old entry said `:978`; it is `:977`.
+ *
+ *   `CONTACT_EXISTING_PHONES_SQL`   **3 occurrences, not 2** — `:74` here,
+ *                                   `electron/services/db/contactDbService.ts:1041`
+ *                                   (local `existingSql`), and
+ *                                   `electron/services/db/contactIdentityEvidenceSql.ts:48`
+ *                                   (`CONTACT_PHONES_SQL`).
+ *                                   The old entry named `contactIdentityEvidence.ts:387`
+ *                                   "behind `unsafeSql`" — that site moved into the layer
+ *                                   in BACKLOG-3044 PR 2 and is no longer an escape, but
+ *                                   it is still a copy. **`contactDbService.ts:1041` was
+ *                                   never listed at all.**
+ *
+ * **Not consolidated, deliberately.** SR's ruling on the identical question for the
+ * six-fold `default_role` UPDATE applies here: a consolidation waits for the next real
+ * edit to one of these statements, so it rides with a change that has a reason and a
+ * test, rather than becoming a standalone diff that touches several services to save
+ * characters. The register exists so that edit finds all of them.
+ *
+ * A name-based search will NOT find this family — the three phone copies are called
+ * `CONTACT_EXISTING_PHONES_SQL`, `existingSql` and `CONTACT_PHONES_SQL`. Search by
+ * TEXT.
  *
  * The worker copy is the one that runs in production whenever the worker pool is
  * warm (see `contactSourceLinkSql.ts`'s header on the same two-implementation
