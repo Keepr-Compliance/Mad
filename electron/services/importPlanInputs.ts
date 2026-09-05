@@ -36,7 +36,10 @@ import {
   type StoredImportFilters,
 } from "./importPlan";
 
-import { LIVE_TRANSACTION_SQL_PREDICATE_UNALIASED } from "./transactionEligibility";
+import {
+  LIVE_TRANSACTION_SQL_PREDICATE_UNALIASED,
+  withLiveTransactionParam,
+} from "./db/core/transactionEligibilitySql";
 
 const SERVICE_NAME = "ImportPlanInputs";
 
@@ -74,7 +77,7 @@ export function readNonRejectedTransactions(userId: string): TransactionDateRow[
     unsafeSql(`SELECT started_at, created_at, closed_at
        FROM transactions
       WHERE user_id = ? AND ${LIVE_TRANSACTION_SQL_PREDICATE_UNALIASED}`),
-    [userId]
+    withLiveTransactionParam([userId])
   );
 }
 

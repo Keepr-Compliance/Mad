@@ -35,7 +35,17 @@ import { reactionExclusion } from "./db/reactionExclusion";
 // BACKLOG-2562: the ONE definition of "is this deal live?". These queries
 // previously carried `status != 'archived'`, which is a tautology ('archived'
 // is not a permitted status) and therefore admitted REJECTED deals.
-import { LIVE_TRANSACTION_SQL_PREDICATE } from "./transactionEligibility";
+//
+// BACKLOG-3103: the status is now BOUND, not quoted into the text, so splicing
+// the fragment is only half of it — `withLiveTransactionParam` supplies the
+// value, and the fragment must be the LAST PLACEHOLDER in the statement. Note
+// that is the last `?`, NOT the last conjunct: two of the three queries below
+// carry `AND tc.removed_at IS NULL` after the predicate, which binds nothing
+// and so does not move it.
+import {
+  LIVE_TRANSACTION_SQL_PREDICATE,
+  withLiveTransactionParam,
+} from "./db/core/transactionEligibilitySql";
 // BACKLOG-2393: scoped support-access tracing. A no-op unless a user has
 // granted a support window covering the transaction-linking scope.
 import { supportTrace } from "./supportAccess/trace";
@@ -410,7 +420,10 @@ export function countContactCandidateTransactions(userId: string, contactId: str
       AND ${LIVE_TRANSACTION_SQL_PREDICATE}
       AND tc.removed_at IS NULL
   `;
-  const row = dbGet<{ cnt: number }>(unsafeSql(sql), [contactId, userId]);
+  const row = dbGet<{ cnt: number }>(
+    unsafeSql(sql),
+    withLiveTransactionParam([contactId, userId]),
+  );
   return row?.cnt ?? 0;
 }
 
@@ -436,12 +449,15 @@ export function getOtherCandidateTransactionAddresses(
     JOIN transactions t ON t.id = tc.transaction_id
     WHERE tc.contact_id = ?
       AND t.user_id = ?
-      AND ${LIVE_TRANSACTION_SQL_PREDICATE}
       AND t.id != ?
       AND tc.removed_at IS NULL
       AND COALESCE(t.property_address, t.property_street) IS NOT NULL
+      AND ${LIVE_TRANSACTION_SQL_PREDICATE}
   `;
-  return dbAll<{ address: string }>(unsafeSql(sql), [contactId, userId, transactionId])
+  return dbAll<{ address: string }>(
+    unsafeSql(sql),
+    withLiveTransactionParam([contactId, userId, transactionId]),
+  )
     .map((r) => r.address)
     .filter((a): a is string => !!a);
 }
@@ -1288,7 +1304,10 @@ export async function autoLinkNewMessagesForUser(
       ORDER BY tc.transaction_id
     `;
 
-    const pairs = dbAll<{ contact_id: string; transaction_id: string }>(unsafeSql(sql), [userId]);
+    const pairs = dbAll<{ contact_id: string; transaction_id: string }>(
+      unsafeSql(sql),
+      withLiveTransactionParam([userId]),
+    );
 
     if (pairs.length === 0) {
       await logService.debug(
