@@ -23,9 +23,23 @@
  * values would be swapped, so the window would run from the end date to the start
  * date and match nothing. This suite is what makes that a failure instead of a bug.
  *
- * The expected strings are GENERATED from the pre-move source at `1ba6557ff` by
- * `.tmp3044d/gen-datefilter-test.mjs` and written in by script. Typing them by hand
- * would let one typo enter both the builder and the fixture and cancel itself out.
+ * ## Where the expected strings came from, and how to reproduce them
+ *
+ * They were EXTRACTED from the pre-move source, not typed. Typing them by hand would
+ * let one typo enter both the builder and the fixture and cancel itself out.
+ *
+ * The extraction, stated so it can be re-run rather than taken on trust: parse
+ * `git show 1ba6557ff:electron/services/messageMatchingService.ts` with the TypeScript
+ * compiler API, find the `VariableDeclaration` named `sql` whose initializer is a
+ * `TemplateExpression` with a single span whose expression text is `dateFilter`, and
+ * take `head.text` and `templateSpans[0].literal.text`. The four expected strings are
+ * `head + df + tail` for `df` in `""`, `" AND m.sent_at >= ?"`, `" AND m.sent_at <= ?"`,
+ * and both concatenated in that order.
+ *
+ * An earlier version of this comment cited a generator script by path. That script was
+ * a scratch file and is gone, so the citation pointed at nothing — the fourth citation
+ * of its kind on this branch to name a file that does not exist. A method that can be
+ * re-run beats a path that can rot.
  */
 import { messagesForPhoneMatchingSql } from "../messageMatchingSql";
 

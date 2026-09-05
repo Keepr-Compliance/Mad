@@ -78,7 +78,43 @@ export const ATTACHMENT_COUNT_SQL = `SELECT COUNT(*) as count FROM attachments`;
 // Message reads
 // ---------------------------------------------------------------------------
 
-/** One message's external (Apple GUID) id, by internal id. */
+/**
+ * One message's external (Apple GUID) id, by internal id.
+ *
+ * ## This sentence is authored THREE times at base, not two
+ *
+ * Enumerated by grep over the exact text at `1ba6557ff`, and stated here because
+ * BACKLOG-3044 PR 4's own account of it said "a pair" and was wrong:
+ *
+ *   electron/services/db/messageImportSql.ts:82          this constant
+ *   electron/services/db/attachmentDbService.ts:267      inline `db.prepare(...)`, inside
+ *                                                        `getAttachmentsForMessageWithFallback`
+ *   electron/services/messageMatchingService.ts:811      BACKLOG-3044 PR 4 pointed this
+ *                                                        one HERE, so it is no longer
+ *                                                        authored — two copies remain
+ *
+ * The `attachmentDbService` one is a near-line-for-line twin of the importer's own
+ * attachment fallback: both ask "I have no rows for this message id — what is its
+ * external id, so I can try again by that." Same question, same sentence, two
+ * implementations.
+ *
+ * **Not consolidated.** Same disposition as the six-fold `default_role` UPDATE and the
+ * phone/email family in `contactBackfillPlanSql.ts`: a consolidation waits for the next
+ * real edit to one of these, so it rides with a change that has a reason and a test.
+ * This register exists so that edit finds all of them.
+ *
+ * ## Why PR 4's duplicate scan missed it — twice over
+ *
+ * That scan collected only the `sql` tag and `unsafeSql`, so this ENTIRE MODULE was
+ * invisible to it (nothing here was tagged before PR 4 branded this one constant). It
+ * was corrected to read exported module-level bare literals as well — and it would
+ * STILL miss `attachmentDbService.ts:267`, because that is an inline literal handed
+ * straight to `db.prepare(...)` and never bound to a name at all.
+ *
+ * Both limits are properties of a name-and-declaration corpus, not oversights to patch
+ * one at a time. A scan that cannot see a form reports "none", never "cannot see" —
+ * which is why this register is written down rather than left to the next scan.
+ */
 export const MESSAGE_EXTERNAL_ID_BY_ID_SQL = sql`SELECT external_id FROM messages WHERE id = ?`;
 
 /** Every message that carries an external id, for building the repair map. */
