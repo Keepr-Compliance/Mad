@@ -24,6 +24,15 @@
  *   high-only-advisories.txt  Same, pinning ansi-regex@4.1.0 + braces@3.0.2 — two high,
  *                             zero critical. npm exited 0 under --audit-level=critical.
  *   clean.txt                 Same, no dependencies. npm exited 0.
+ *   enolock.txt               Same package.json as critical-advisory but with NO lockfile, so
+ *                             npm fails before it can audit anything: ENOLOCK, exit 1. Captured
+ *                             with `--cache <mktemp -d>` so npm's "complete log" line carries a
+ *                             throwaway path and no home directory or username — this repo is
+ *                             public. npm's lines are otherwise verbatim.
+ *
+ * One input in this suite is NOT a transcript: the synthetic 'some unfamiliar npm failure'
+ * string in the exit-7 test. That is deliberate and it should stay synthetic — see the comment
+ * on that test.
  *
  * The guard is spawned as a subprocess rather than imported. That runs the exact CLI
  * contract ci.yml invokes — argument parsing, stdin, exit code — instead of a function
@@ -83,16 +92,36 @@ describe('audit-guard: real advisories still fail', () => {
     expect(stdout).not.toContain('::warning::');
   });
 
-  it('a critical advisory report contains neither the marker nor any "npm error" line', () => {
-    // Both halves are load-bearing. The first is why one condition is safe. The second
-    // records why the obvious over-broad mutation (`includes('npm error')`) does NOT
-    // turn the test above red: npm writes the advisory report to stdout unprefixed, so
-    // that widening is under-broad here rather than over-broad. The mutation that DOES
-    // catch it is `includes('npm')` — the report has "# npm audit report".
-    const report = transcript('critical-advisory');
-    expect(report).not.toContain('audit endpoint returned an error');
-    expect(report).not.toContain('npm error');
-    expect(report).toContain('1 critical severity vulnerability');
+  // The other half of control 2, and the reason this suite needs a third kind of transcript.
+  //
+  // Widening the condition to `includes('npm error')` leaves the critical-advisory test above
+  // green, because npm writes the advisory report to stdout with no `npm error` prefix at all.
+  // That is a true fact about THAT fixture and it is NOT evidence the widening is safe: npm
+  // prefixes every one of its OWN error lines with `npm error`, so the widening fails open on
+  // any audit failure that is not an endpoint failure. ENOLOCK is a real one. Without this
+  // transcript the suite could not tell the shipped condition apart from a version that
+  // swallows every npm error, and reported 10/10 either way.
+  //
+  // Not reachable from the `security` job today — it audits a checked-in package-lock.json —
+  // but it becomes reachable the day a PR removes or renames that file, and the same fail-open
+  // covers EJSONPARSE, ELSPROBLEMS, and whatever npm adds next.
+  it('exits 1 on a real ENOLOCK failure — an npm error that is not a registry outage', () => {
+    const { code, stdout } = runGuard(transcript('enolock'), 1);
+    expect(code).toBe(1);
+    expect(stdout).not.toContain('::warning::');
+  });
+
+  it('the two non-infra failure transcripts are distinguishable from an outage', () => {
+    // What makes the single condition safe: neither carries npm's marker. The `npm error`
+    // counts are the discriminator that a too-wide condition would key on by mistake —
+    // 0 in the advisory report, 5 in ENOLOCK.
+    const advisory = transcript('critical-advisory');
+    const enolock = transcript('enolock');
+    expect(advisory).not.toContain('audit endpoint returned an error');
+    expect(enolock).not.toContain('audit endpoint returned an error');
+    expect(advisory).not.toContain('npm error');
+    expect(enolock).toContain('npm error code ENOLOCK');
+    expect(advisory).toContain('1 critical severity vulnerability');
   });
 });
 
@@ -113,6 +142,10 @@ describe('audit-guard: successful audits pass through', () => {
     expect(transcript('high-only-advisories')).toContain('2 high severity vulnerabilities');
   });
 
+  // Deliberately synthetic, and it must stay that way. Every real transcript in this suite
+  // exits 0 or 1, so a mutation that normalised any non-zero to 1 would pass all of them
+  // unnoticed. This is the only case pinning that npm's code is forwarded VERBATIM rather
+  // than merely non-zero.
   it('forwards an unrecognised non-zero exit code unchanged', () => {
     const { code } = runGuard('some unfamiliar npm failure\n', 7);
     expect(code).toBe(7);
