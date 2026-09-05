@@ -17,14 +17,105 @@
 export interface SyncMessage {
   /** Phone number in E.164 format (e.g., +15555550112) */
   sender: string;
-  /** Message text content */
-  body: string;
+  /**
+   * Message text content, or **null when the message has no body**
+   * (BACKLOG-2977, founder ruling 2026-09-02).
+   *
+   * An MMS photo with no caption is a real message with no text. The absence
+   * stays an absence all the way to `messages.body_text` (already nullable);
+   * only the display layer adds words. A marker string such as `"[Photo]"` was
+   * rejected because it writes text nobody typed into an evidence record, and
+   * `""` was rejected because it poisons the dedup hash — see
+   * {@link SyncMessage.smsId}.
+   *
+   * `""` is NOT an absence: a `text/plain` part whose text is genuinely empty
+   * is an observation, and it stores as `""` and hashes exactly as it always
+   * has. Which KIND of absence a null is travels in {@link bodyAbsence}.
+   *
+   * Widening `string` -> `string | null` is backward compatible: an older
+   * companion that always sends a string still type-checks and still stores
+   * byte-identically. Mirror of `android-companion/types/sync.ts`; keep the two
+   * in sync.
+   */
+  body: string | null;
   /** Unix timestamp in milliseconds */
   timestamp: number;
   /** Android thread ID for conversation grouping */
   threadId?: string;
   /** Message direction relative to the device owner */
   direction: "inbound" | "outbound";
+  /**
+   * Android content-provider row id — `content://sms._id`, or `mms:<_id>` for
+   * an MMS (BACKLOG-2974's `MMS_ID_NAMESPACE`).
+   *
+   * BACKLOG-2977 made this part of the DESKTOP wire contract. It used to be
+   * phone-side only (the local queue's de-dup key, BACKLOG-2199) and the
+   * desktop ignored it. The desktop now hashes it IN PLACE OF the body when
+   * `body` is null, because `SHA-256(sender|timestamp|"")` makes two
+   * caption-less photos from one person in the same millisecond collide and
+   * the second is dropped as a duplicate that never existed.
+   *
+   * ## The contract BACKLOG-3109 must honour
+   *
+   * **Every wire message derived from an MMS carries `smsId`.**
+   * `MappedMms.smsId` is REQUIRED, not optional
+   * (`android-companion/services/mmsMapper.ts:144`), and is set unconditionally
+   * at `:397` from `` `${MMS_ID_NAMESPACE}${id}` `` — independent of `body`. So
+   * neither the `no_text_part` nor the `unreadable` outcome can produce a
+   * body-less message without one. A body-less message that arrives WITHOUT an
+   * `smsId` has no safe identity and is skipped rather than folded to `""`.
+   *
+   * **Known limit, accepted by the founder ruling:** the MMS `_id` is
+   * phone-local, so clearing app data re-mints ids. A data clear re-sends
+   * everything regardless, and every message WITH a body still dedups on
+   * sender+timestamp+body, so only caption-less photos can duplicate.
+   *
+   * Optional because a synthesized/fallback record (a carrier alert with no
+   * `_id`) may not carry one. Mirror of `android-companion/types/sync.ts`; keep
+   * the two in sync.
+   */
+  smsId?: string;
+  /**
+   * The non-SMIL content types of the message's attachment parts, in provider
+   * order — e.g. `["image/jpeg"]` (BACKLOG-2977).
+   *
+   * This is the "record that a photo existed" marker: no bytes are
+   * transferred, and the desktop writes one `attachments` row per entry with a
+   * NULL `storage_path` that BACKLOG-3071 later fills on the same row.
+   * `has_attachments` and `message_type` derive from it.
+   *
+   * **Orthogonal to {@link body} on purpose.** A CAPTIONED photo is a non-null
+   * body WITH a marker, and that has to be representable. (The mapper does not
+   * yet emit it for that case — `attachmentContentTypes` currently exists only
+   * on the `no_text_part` outcome, and `unreadable` carries `partIds` instead.
+   * Both gaps belong to BACKLOG-3109; the wire is already able to carry them.)
+   *
+   * **The desktop SORTS a copy before deriving filenames**, because this list
+   * is built unsorted (`mmsMapper.ts:291-297`, in contrast to the text parts
+   * immediately below it at `:311`) and an index into an unsorted list is not
+   * stable across re-reads. Mirror of `android-companion/types/sync.ts`; keep
+   * the two in sync.
+   */
+  attachmentContentTypes?: string[];
+  /**
+   * WHICH kind of absence a null {@link body} is (BACKLOG-2977).
+   *
+   * Both kinds store `body_text = NULL` — absence stays an absence — so
+   * without this field an audit cannot tell "the sender wrote no caption" from
+   * "the sender wrote something we could not read". They are different facts
+   * and `unreadable` is a READ FAILURE that must never look like an empty
+   * message.
+   *
+   * | value | meaning |
+   * |---|---|
+   * | `no_text_part` | no `text/plain` part exists — a photo with no caption, or a part-less stub |
+   * | `unreadable`   | a `text/plain` part EXISTS but its text sits in the provider's file store, unread |
+   *
+   * Carried in the message's `metadata` JSON, not a column: recoverable by
+   * JSON extraction, never by a `WHERE`. Mirror of
+   * `android-companion/types/sync.ts`; keep the two in sync.
+   */
+  bodyAbsence?: "no_text_part" | "unreadable";
 }
 
 // ============================================
@@ -173,6 +264,39 @@ export interface LocalSyncResult {
   messagesReceived?: number;
   /** Number of messages stored in the database (excluding duplicates) */
   messagesStored?: number;
+  /**
+   * How many attachment-marker rows failed to write (BACKLOG-2977). Present
+   * only when non-zero.
+   *
+   * ## Why this is on the response and not just in a log
+   *
+   * The attachment write happens AFTER `batchInsertMessages` has committed its
+   * own transaction, so the message row is already durable and already claims
+   * `has_attachments = 1`. BACKLOG-2977 catches each attachment failure
+   * per-row so it cannot escape `storeMessages` — deliberately, because
+   * wrapping both writes in one transaction would trade a mis-marked message
+   * for a LOST one, and for an evidence product the message surviving is
+   * better.
+   *
+   * The consequence is that the failure no longer throws, so it is invisible
+   * to the `catch` that BACKLOG-3110 will change. Without this field a failed
+   * attachment row would be unobservable at every boundary: `success` is a
+   * hardcoded literal and `messagesStored` is a MESSAGE count.
+   *
+   * **The contract BACKLOG-3110 must honour:** derive the success flag from
+   * `attachmentsFailed` as well as from a caught throw. A throw-only fix leaves
+   * this case reporting `success: true` forever, the phone never re-enqueues
+   * (it retries only on `success === false`), and the message keeps
+   * `has_attachments = 1` with no row permanently. Until 3110 consumes this,
+   * a failed attachment row is not retried.
+   *
+   * DESKTOP-ONLY and deliberately not mirrored onto the companion's
+   * `SyncResult`. The two result types already diverge in production:
+   * `messagesStored` has been sent by the desktop since TASK-1429/1431 and the
+   * phone's `SyncResult` (`android-companion/types/sync.ts`) has never declared
+   * it. The phone ignores response fields it does not know.
+   */
+  attachmentsFailed?: number;
   /** Error message if success is false */
   error?: string;
 }

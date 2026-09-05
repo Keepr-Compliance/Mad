@@ -158,10 +158,20 @@ describe('rawToSyncMessage — dedup id stability (BACKLOG-2202)', () => {
   // must emit the SAME `sender`, `timestamp`, and `body` for the SAME underlying
   // SMS on every independent read — otherwise the desktop hashes it twice and
   // stores a duplicate instead of an INSERT-OR-IGNORE no-op.
+  //
+  // BACKLOG-2977: `body` became nullable and the desktop substitutes `smsId`
+  // when it is null, so this mirror folds the same way. Every record in THIS
+  // suite comes from `rawToSyncMessage`, which always emits a string body, so
+  // the fold is never exercised here — it is mirrored so the helper stays a
+  // truthful copy of what the desktop hashes rather than drifting from it.
 
   /** The exact tuple the desktop hashes into external_id. */
-  const desktopHashInput = (m: { sender: string; timestamp: number; body: string }) =>
-    `${m.sender}|${m.timestamp}|${m.body}`;
+  const desktopHashInput = (m: {
+    sender: string;
+    timestamp: number;
+    body: string | null;
+    smsId?: string;
+  }) => `${m.sender}|${m.timestamp}|${m.body ?? m.smsId}`;
 
   afterEach(() => {
     jest.restoreAllMocks();

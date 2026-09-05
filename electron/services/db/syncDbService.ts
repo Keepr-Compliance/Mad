@@ -144,7 +144,36 @@ export function getExistingAttachmentRecords(): Set<string> {
 }
 
 /**
- * Insert a single attachment record (for iPhone sync).
+ * Insert a single attachment record.
+ *
+ * Written for iPhone sync (TASK-2100) but nothing in it is iPhone-specific;
+ * BACKLOG-2977 reuses it for the Android companion's attachment MARKERS.
+ *
+ * ## `fileSizeBytes` and `storagePath` are nullable (BACKLOG-2977)
+ *
+ * Both columns have always been nullable in `electron/database/schema.sql`
+ * (`:40-41`) — only these parameter types were stricter than the table. A
+ * marker row records THAT a photo existed without transferring its bytes, so it
+ * has neither a size nor a path until BACKLOG-3071 fills `storage_path` on the
+ * same row. This is the shape the email path already uses
+ * (`upsertEmailAttachmentMetadata` writes a NULL `storage_path`,
+ * `attachmentDbService.ts:85`; `setEmailAttachmentStorage` fills it later).
+ *
+ * Widening a parameter is compatible with every existing caller, and every
+ * consumer of `storage_path` already null-guards before touching the
+ * filesystem (`folderExport/attachmentHelpers.ts:319`,
+ * `folderExport/folderExportService.ts:770`,
+ * `folderExport/textExportHelpers.ts:725` and `:753`).
+ *
+ * ## This function does NOT de-duplicate — the caller must
+ *
+ * `INSERT OR IGNORE` here keys on `id TEXT PRIMARY KEY` only, and every caller
+ * mints a fresh `crypto.randomUUID()`, so the IGNORE never fires. There is
+ * also no unique index on `attachments` (all five in `schema.sql:1146-1154` are
+ * plain). A re-synced message would therefore write a SECOND row for the same
+ * attachment. Callers guard with {@link getExistingAttachmentRecords} and add
+ * to that set in-loop; see `iPhoneSyncStorageService.ts:809` and
+ * `localSyncService.storeMessages`.
  */
 export function insertAttachment(params: {
   id: string;
@@ -152,8 +181,8 @@ export function insertAttachment(params: {
   externalMessageId: string;
   filename: string;
   mimeType: string;
-  fileSizeBytes: number;
-  storagePath: string;
+  fileSizeBytes: number | null;
+  storagePath: string | null;
   sessionId?: string;
 }): void {
   const db = ensureDb();
