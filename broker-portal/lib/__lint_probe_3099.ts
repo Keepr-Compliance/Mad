@@ -1,3 +1,3 @@
-// BACKLOG-3099 control 1: deliberate ERROR-severity lint violation (eqeqeq).
-// Removed before merge. If you are reading this on a merged commit, file a bug.
-export const probeEq = (a: number, b: number): boolean => a == b;
+// BACKLOG-3099 control 2: deliberate WARNING-severity lint violation
+// (no-unused-vars on an argument). Removed before merge.
+export const probeWarn = (unusedArg: number): number => 42;
