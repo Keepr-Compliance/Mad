@@ -327,12 +327,74 @@ function isMintedDeviceId(id: string): boolean {
 /**
  * Generate a dedup external_id from sender + timestamp + body.
  * Uses SHA-256 hash to create a deterministic, unique identifier.
+ *
+ * ## `body` is deliberately `string`, not `string | null` (BACKLOG-2977)
+ *
+ * `SyncMessage.body` became nullable, but this parameter did NOT. A body-less
+ * message hashes its own identity (`smsId`) instead, and the caller substitutes
+ * it before calling. Widening this parameter would make
+ * `sender|timestamp|undefined` type-legal and stop the compiler guarding the
+ * exact case the caller's skip exists for.
+ *
+ * The format string is unchanged, so **every message with a body hashes exactly
+ * as it always has** — any change here would re-duplicate every already-synced
+ * message on every paired desktop.
  */
 function generateExternalId(sender: string, timestamp: number, body: string): string {
   return crypto
     .createHash("sha256")
     .update(`${sender}|${timestamp}|${body}`)
     .digest("hex");
+}
+
+/** What {@link LocalSyncService.storeMessages} reports back (BACKLOG-2977). */
+interface StoreMessagesResult {
+  /** Messages actually inserted, excluding duplicates. */
+  stored: number;
+  /**
+   * Attachment marker rows that could not be written. Non-zero means at least
+   * one stored message claims `has_attachments = 1` with no row behind it.
+   */
+  attachmentsFailed: number;
+  /**
+   * Messages with no body AND no `smsId` — nothing safe to hash, so they were
+   * not stored. Distinct from a duplicate: the caller's log used to derive
+   * "duplicates skipped" by subtraction, which would have reported these as
+   * duplicates.
+   */
+  skippedMessages: number;
+}
+
+/**
+ * Deterministic filename for an attachment MARKER row (BACKLOG-2977).
+ *
+ * There are no bytes yet, so there is no real name to use. The name has to be
+ * deterministic because the duplicate guard keys on
+ * `${message_id}:${filename}` — a name that moved between syncs would let a
+ * second row through.
+ *
+ * The caller sorts the content types first, so this indexes into a sorted
+ * multiset. Two consequences, both accepted:
+ *
+ *  - Two parts of the same MIME type are indistinguishable. That is correct
+ *    while no bytes exist: the marker's claim is "this message carried two
+ *    JPEGs", and their order carries no evidentiary meaning.
+ *  - **Membership** stability is not unconditional. A part appearing between
+ *    reads — the mapper documents part-less rows as undownloaded stubs — shifts
+ *    the slots, so `["image/png"]` re-read as `["image/jpeg", "image/png"]`
+ *    renames that row's slot from `mms-part-0.png` to `mms-part-1.png`, leaving
+ *    an orphan and writing a duplicate. It needs a partial-download race; it is
+ *    recorded rather than fixed here.
+ *
+ * **BACKLOG-3071 must never match incoming bytes to a row by `filename`** —
+ * two same-MIME parts would silently swap, which is a wrong attribution in an
+ * evidence record. It should replace a message's marker row set wholesale,
+ * and when it does it must not delete rows that already carry a
+ * `storage_path`.
+ */
+function attachmentMarkerFilename(index: number, mimeType: string): string {
+  const subtype = mimeType.split("/")[1]?.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return `mms-part-${index}.${subtype && subtype.length > 0 ? subtype : "bin"}`;
 }
 
 /**
@@ -1095,13 +1157,28 @@ class LocalSyncService {
 
       // TASK-1431: Store messages in the database via the message pipeline
       let storedCount = 0;
+      let attachmentsFailed = 0;
       if (this.userId && syncPayload.messages.length > 0) {
         try {
-          storedCount = this.storeMessages(this.userId, syncPayload.deviceId, syncPayload.messages);
+          const storeResult = this.storeMessages(
+            this.userId,
+            syncPayload.deviceId,
+            syncPayload.messages
+          );
+          storedCount = storeResult.stored;
+          attachmentsFailed = storeResult.attachmentsFailed;
           this.totalMessagesReceived += storedCount;
           this.lastSyncTimestamp = Date.now();
+          // BACKLOG-2977: duplicates are what is left after BOTH the stored
+          // messages and the ones with no hashable identity. Subtracting only
+          // `storedCount` reported an unhashable message as a duplicate, which
+          // it is not — it was never stored at all.
+          const duplicates =
+            syncPayload.messages.length - storedCount - storeResult.skippedMessages;
           logService.info(
-            `[LocalSync] Stored ${storedCount} messages (${syncPayload.messages.length - storedCount} duplicates skipped)`,
+            `[LocalSync] Stored ${storedCount} messages (${duplicates} duplicates skipped` +
+              `${storeResult.skippedMessages > 0 ? `, ${storeResult.skippedMessages} skipped — no hashable identity` : ""}` +
+              `${attachmentsFailed > 0 ? `, ${attachmentsFailed} attachment markers FAILED` : ""})`,
             LOG_TAG
           );
 
@@ -1131,10 +1208,16 @@ class LocalSyncService {
         }
       }
 
+      // BACKLOG-2977: `attachmentsFailed` is surfaced here so a failed marker
+      // row is observable at the response boundary. It does NOT change
+      // `success` — deriving that flag is BACKLOG-3110's change, and that item
+      // must consume this field as well as a caught throw, because the
+      // per-attachment guard means this failure no longer throws at all.
       const result: LocalSyncResult = {
         success: true,
         messagesReceived: syncPayload.messages.length,
         messagesStored: storedCount,
+        ...(attachmentsFailed > 0 ? { attachmentsFailed } : {}),
       };
 
       sendJSON(res, 200, result as unknown as Record<string, unknown>);
@@ -1163,17 +1246,53 @@ class LocalSyncService {
    *   - If Android provides a thread_id: "android-thread-{androidThreadId}"
    *   - Fallback: "android-thread-{normalizedSender}" for consistent grouping
    *
-   * **Dedup**: SHA-256 hash of sender + timestamp + body (generateExternalId)
+   * **Dedup**: SHA-256 hash of sender + timestamp + body (generateExternalId),
+   * with `smsId` standing in for the body when there is none — see
+   * {@link generateExternalId} and BACKLOG-2977.
+   *
+   * ## Attachment markers (BACKLOG-2977)
+   *
+   * A message carrying `attachmentContentTypes` gets `has_attachments = 1`, a
+   * `message_type` reflecting whether it is attachment-ONLY, and one
+   * `attachments` row per content type with a NULL `storage_path` that
+   * BACKLOG-3071 later fills. The whole attachment path is GATED on at least
+   * one message carrying a marker, because both of its pre-reads are expensive
+   * per batch: `getMessageIdMap` loads every message for the user, and
+   * `getExistingAttachmentRecords` scans the entire `attachments` table.
    *
    * @param userId - User ID for message ownership
    * @param deviceId - Android device ID from pairing
    * @param messages - Array of SyncMessage from the Android device
-   * @returns Number of messages actually stored (excluding duplicates)
+   * @returns Counts of what happened — see {@link StoreMessagesResult}. This is
+   *   a shape rather than a bare number so that an attachment failure is
+   *   OBSERVABLE at the return boundary; it no longer throws, so it is
+   *   otherwise invisible to the caller's `catch`.
    */
-  private storeMessages(userId: string, deviceId: string, messages: SyncMessage[]): number {
-    const messagesToInsert = messages.map((msg) => {
+  private storeMessages(
+    userId: string,
+    deviceId: string,
+    messages: SyncMessage[]
+  ): StoreMessagesResult {
+    const messagesToInsert: Parameters<typeof databaseService.batchInsertMessages>[0] = [];
+    /** Messages that carry an attachment marker, paired with their dedup key. */
+    const markers: { externalId: string; contentTypes: string[] }[] = [];
+    let skippedMessages = 0;
+
+    for (const msg of messages) {
+      // BACKLOG-2977: a message with no body hashes its own identity instead.
+      // The skip runs HERE and not inside generateExternalId, so that function's
+      // parameter can stay `string` and the compiler keeps guarding the case.
+      // Folding `""` is the original defect: every caption-less photo from one
+      // sender in one millisecond would hash identically and all but the first
+      // would be dropped as duplicates that never existed.
+      const hashInput = msg.body ?? msg.smsId;
+      if (hashInput === undefined) {
+        skippedMessages++;
+        continue;
+      }
+
       const normalizedSender = normalizePhoneNumber(msg.sender);
-      const externalId = generateExternalId(msg.sender, msg.timestamp, msg.body);
+      const externalId = generateExternalId(msg.sender, msg.timestamp, hashInput);
 
       // Build participants JSON matching the existing message format
       const participants = JSON.stringify({
@@ -1194,14 +1313,27 @@ class LocalSyncService {
         ? `android-thread-${msg.threadId}`
         : `android-thread-${normalizedSender}`;
 
+      // BACKLOG-2977: `bodyAbsence` is spread on `msg.body === null` rather than
+      // on the field's presence, so a producer mistake cannot attach it to a
+      // message that HAS a body. Conditional so a legacy message's metadata
+      // string stays byte-identical to what this code has always written.
       const metadata = JSON.stringify({
         source: "android_wifi_sync",
         deviceId,
         androidThreadId: msg.threadId || null,
         originalSender: msg.sender,
+        ...(msg.body === null && msg.bodyAbsence
+          ? { bodyAbsence: msg.bodyAbsence }
+          : {}),
       });
 
-      return {
+      // BACKLOG-2977: sorted COPY. `attachmentContentTypes` is built unsorted by
+      // the phone's mapper, and the filename indexes into this list, so an
+      // unsorted index is not stable across re-reads and would defeat the
+      // duplicate guard below.
+      const contentTypes = [...(msg.attachmentContentTypes ?? [])].sort();
+
+      messagesToInsert.push({
         id: crypto.randomUUID(),
         userId,
         channel: "sms" as const,
@@ -1212,14 +1344,135 @@ class LocalSyncService {
         participantsFlat,
         threadId,
         sentAt: new Date(msg.timestamp).toISOString(),
-        hasAttachments: 0,
-        messageType: "text" as const,
+        hasAttachments: contentTypes.length > 0 ? 1 : 0,
+        messageType:
+          contentTypes.length > 0 && msg.body === null
+            ? "attachment_only"
+            : msg.body === null
+              ? "unknown"
+              : "text",
         metadata,
-      };
-    });
+      });
+
+      if (contentTypes.length > 0) {
+        markers.push({ externalId, contentTypes });
+      }
+    }
 
     const result = databaseService.batchInsertMessages(messagesToInsert, 500);
-    return result.stored;
+
+    // Gated: skipped entirely on the overwhelming majority of batches, which
+    // carry no attachment at all. Messages skipped above are absent from
+    // `markers` by construction — they have no externalId to key on.
+    const attachmentsFailed =
+      markers.length > 0 ? this.storeAttachmentMarkers(userId, markers) : 0;
+
+    return { stored: result.stored, attachmentsFailed, skippedMessages };
+  }
+
+  /**
+   * Write one `attachments` row per attachment content type (BACKLOG-2977).
+   *
+   * No bytes are transferred — this records THAT a photo existed. BACKLOG-3071
+   * fills `storage_path` on these same rows, exactly as the email path does
+   * (`upsertEmailAttachmentMetadata` writes NULL, `setEmailAttachmentStorage`
+   * fills it later).
+   *
+   * ## Why this never throws
+   *
+   * `batchInsertMessages` has already COMMITTED by the time this runs, so the
+   * message row is durable and already claims `has_attachments = 1`. If an
+   * insert here threw, the exception would leave `storeMessages`, skip the
+   * auto-link trigger for the whole batch, and be swallowed into a 200 by the
+   * caller's catch — and the phone re-enqueues only on `success === false`, so
+   * the batch would be dropped and never retried.
+   *
+   * So each row is guarded individually, in the shape
+   * `iPhoneSyncStorageService.ts:797-823` already uses for this table, and the
+   * count is RETURNED so the failure is observable. Wrapping the message insert
+   * and these rows in one transaction is the tempting alternative and it is
+   * worse: on failure nothing is stored, this still throws, the response is
+   * still 200, and the phone still drops the batch — trading a mis-marked
+   * message for a LOST one. For an evidence product the message surviving is
+   * strictly better.
+   *
+   * ## Linking
+   *
+   * Rows carry BOTH `message_id` and `external_message_id`. `attachments` has
+   * `CHECK (message_id IS NOT NULL OR email_id IS NOT NULL)`
+   * (`electron/database/schema.sql:64`), so linking by `external_message_id`
+   * alone would be rejected outright. The real id comes from
+   * `getMessageIdMap`, which re-reads the table AFTER the insert and therefore
+   * returns whichever id survived: `batchInsertMessages` is `INSERT OR IGNORE`,
+   * so a duplicate message keeps its ORIGINAL id and the freshly generated
+   * `crypto.randomUUID()` is discarded. Linking by that discarded UUID would
+   * produce orphans.
+   *
+   * @returns How many rows could not be written.
+   */
+  private storeAttachmentMarkers(
+    userId: string,
+    markers: { externalId: string; contentTypes: string[] }[]
+  ): number {
+    let failed = 0;
+    const messageIdMap = databaseService.getMessageIdMap(userId);
+    // `${message_id}:${filename}` pairs already in the table. Without this the
+    // insert cannot dedup itself: it is INSERT OR IGNORE on a PRIMARY KEY we
+    // mint fresh every time, and `attachments` has no unique index — so a
+    // re-synced photo would write a second row while the message itself
+    // correctly dedups.
+    const existingRecords = databaseService.getExistingAttachmentRecords();
+
+    for (const marker of markers) {
+      const messageId = messageIdMap.get(marker.externalId);
+      if (!messageId) {
+        // The message row is absent, so there is nothing to hang the marker on
+        // and no id satisfying the CHECK. Counted, never silently dropped.
+        failed += marker.contentTypes.length;
+        logService.warn(
+          `[LocalSync] No message row for attachment marker (external_id ${marker.externalId.slice(0, 12)}…)`,
+          LOG_TAG
+        );
+        continue;
+      }
+
+      for (let index = 0; index < marker.contentTypes.length; index++) {
+        const mimeType = marker.contentTypes[index];
+        const filename = attachmentMarkerFilename(index, mimeType);
+        const recordKey = `${messageId}:${filename}`;
+        if (existingRecords.has(recordKey)) continue;
+
+        try {
+          databaseService.insertAttachment({
+            id: crypto.randomUUID(),
+            messageId,
+            externalMessageId: marker.externalId,
+            filename,
+            mimeType,
+            fileSizeBytes: null,
+            storagePath: null,
+          });
+          // In-loop, matching iPhoneSyncStorageService.ts:809 — otherwise the
+          // same message appearing twice in ONE batch writes twice.
+          existingRecords.add(recordKey);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          logService.error(
+            `[LocalSync] Attachment marker write failed for ${filename}: ${message}`,
+            LOG_TAG
+          );
+          Sentry.addBreadcrumb({
+            category: "localSync",
+            message: "Attachment marker write failed",
+            level: "warning",
+            data: { mimeType, error: message },
+          });
+          failed++;
+        }
+      }
+    }
+
+    return failed;
   }
 
   /**
