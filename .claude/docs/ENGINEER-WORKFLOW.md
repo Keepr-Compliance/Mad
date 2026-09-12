@@ -121,7 +121,7 @@ Nothing in the toolchain catches this. **`tsc`, eslint and jest all read source;
 
 **Do this before writing a plan:**
 
-1. **Walk the import chain upward** to a mounted component, a registered IPC handler, or an app entry point. **Stop at the first orphan** — a parent that nothing imports means the whole chain below it is dead.
+1. **Walk the import chain upward** to a mounted component or an app entry point. **A registered IPC handler is NOT a terminus** — in Electron a handler registration is a *leaf* of the preload bridge, not a root. A change inside `ipcMain.handle(...)` is reachable only if something in `src/` invokes that channel: `git grep -n '<channel>\|<preloadMethod>' -- src`. Zero hits means unreachable, however many callers exist inside `electron/`. **Stop at the first
 2. **Check for dynamic reachability before declaring anything dead** — `React.lazy`, a runtime `import()`, a string-keyed registry, a barrel re-export. **"No static imports found" is not proof.** A wrong "this is dead" is worse than leaving dead code alone.
 3. **For a screen, ask the founder to confirm what he sees.** One click beats any amount of import tracing. Give him a distinguishing detail — a button's exact label — not "does this screen work".
 4. **If it turns out unreachable: STOP.** Report it, and say whether the defect also exists on the live surface in different code. **Do not fix the dead copy, and do not move the fix to the live one without saying so** — that is a different change against a different file.

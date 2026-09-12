@@ -383,6 +383,39 @@ Step 7 exists because an engineer who plans in the open gets corrected before wr
 
 **Skipping Steps 6-8 is the single most expensive shortcut in this workflow.**
 
+### Step 7 blocking exit criterion: reachability
+
+**SR cannot approve a plan without stating, in the review, that the code the item changes is
+reachable from `src/` — with the caller cited, or the finding that there is none.**
+
+```
+git grep -n '<channel>\|<preloadMethod>\|<exportedSymbol>' -- src
+```
+
+Callers inside `electron/` do not count. A handler calling a handler is not a user reaching a
+feature. A registered `ipcMain.handle(...)` is a *leaf* of the preload bridge, not a root.
+
+**Zero hits is a STOP, not a note.** The item returns to the founder with the fact and a
+wire / delete / build-anyway question, before any code is written. **A prior founder ruling on
+the item does not survive it** — the ruling was made on a premise nobody had checked. **Filing a
+follow-up item is not a disposition.**
+
+**Why this is an exit criterion and not a checklist line.** BACKLOG-3234: the orphan status of
+`transactions:export-pdf` was written down four times before the PR opened — in BACKLOG-2771's own
+commit (`68becf9b2`, *"orphan channel, no renderer caller"*, which then added two test cases for
+it), in the engineer's plan §9.7, in the SR plan review (*"No user can reach it today"* — and
+approved), and at the founder gate (*"THE GATE IS NOT UI-REPRODUCIBLE… There is no button."*).
+Every gate saw it, wrote it down, and continued. **Detection was never the problem.** Nothing made
+STOP the default, so four surfacings became four paragraphs and a merged PR nobody can reach.
+Precedent: BACKLOG-2515, same shape, five weeks earlier.
+
+**A well-evidenced item is more dangerous here, not less.** 3234 had correct `file:line` cites, a
+correct mechanism, and a real defect. All of that was true. Only reachability was never asked, and
+the quality of the rest is what carried it past four reviews.
+
+Full rule: `.claude/docs/PR-SOP.md` §6.2k. Decision-time counterpart (before the founder is asked
+anything): §6.2l. How to walk the chain: `.claude/docs/ENGINEER-WORKFLOW.md` Step 1a.
+
 ---
 
 ## The Human-Facing Summary (MANDATORY)
@@ -418,16 +451,22 @@ SUMMARY
 
 ### At Step 7 (Plan Review)
 ```
-Is the plan complete and correct?
-├─ Yes, fully approved
-│   → Write approval to plan file
-│   → Handoff to PM (Step 8, approved)
-├─ Mostly good, minor changes needed
-│   → List specific changes
-│   → Handoff to Engineer (Step 6)
-└─ Fundamentally flawed or out of scope
-    → Document rejection reason
-    → Handoff to PM (Step 8, rejected)
+Can any code in src/ reach what this item changes?
+├─ NO  → STOP. Do not approve, do not reject, do not file a follow-up.
+│         → Cite the zero-hit grep
+│         → Return to the founder: wire it / delete it / build it anyway?
+│         → A prior ruling on this item does NOT carry past this point
+└─ YES → cite the caller (file:line), then:
+    Is the plan complete and correct?
+    ├─ Yes, fully approved
+    │   → Write approval to plan file
+    │   → Handoff to PM (Step 8, approved)
+    ├─ Mostly good, minor changes needed
+    │   → List specific changes
+    │   → Handoff to Engineer (Step 6)
+    └─ Fundamentally flawed or out of scope
+        → Document rejection reason
+        → Handoff to PM (Step 8, rejected)
 ```
 
 > **Change-request loops (Steps 7→6 and 10→9):** resume the SAME engineer
