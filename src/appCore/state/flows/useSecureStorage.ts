@@ -4,9 +4,12 @@
  * Manages secure storage initialization and keychain state.
  * Handles:
  * - Checking if encryption key store exists
- * - Database initialization (with platform-specific handling)
- * - Windows DPAPI auto-initialization
- * - macOS keychain prompts
+ * - Database initialization
+ *
+ * There is no Windows-specific initialization here, despite what this docblock
+ * claimed until BACKLOG-3253. `autoInitializesStorage()` (platformInit.ts)
+ * picks between two branches that call the identical IPC with identical
+ * dispatches; DPAPI-vs-Keychain lives entirely inside Electron `safeStorage`.
  *
  * @module appCore/state/flows/useSecureStorage
  *
@@ -15,9 +18,10 @@
  * This hook derives all state from the state machine.
  * The LoadingOrchestrator handles actual initialization.
  *
- * For first-time macOS users, DB initialization is deferred until the
- * onboarding secure-storage step. This hook's initializeSecureStorage
- * function triggers the actual DB init for those users.
+ * BACKLOG-3253 deleted the first-run-macOS deferral, so `deferredDbInit` is no
+ * longer produced anywhere and `initializeSecureStorage()` always takes its
+ * "already initialized" return. The deferred branch is kept, inert, until the
+ * flag itself is removed (see the follow-up noted on BACKLOG-3253).
  *
  * Requires the state machine feature flag to be enabled.
  * If disabled, throws an error - legacy code paths have been removed.

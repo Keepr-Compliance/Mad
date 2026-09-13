@@ -486,11 +486,37 @@ function OnboardingFlowInner({ app, machineState, resumeBundle }: OnboardingFlow
   // onboarding session. Computed once via useMemo — resumeBundle is stable
   // for this mount (OnboardingFlow only mounts OnboardingFlowInner after the
   // bundle resolves).
+  //
+  // BACKLOG-3212: `permissions` joins that set when the user has already
+  // declined Full Disk Access in a previous session, INDEPENDENT of
+  // `isResuming`. The 1842 gate above is the wrong gate for this: a launch
+  // with no resume marker is exactly when a persisted skip has to be honoured,
+  // and the resume-bundle resolver returns NOT_RESUMING before it ever reads
+  // preferences. So the flag arrives by a different road — the state machine
+  // reads it in Phase 4 and carries it on onboarding state — and this hook
+  // simply reads it there. `permissions.meta.isComplete` still means
+  // `permissionsGranted === true` and is untouched; this is the same
+  // "already answered, move on" semantic the manual-advance path already has.
+  //
+  // Note this is the SECOND line of defence, not the fix. The reducer keeps a
+  // user who declined FDA out of onboarding entirely (isOnboardingComplete).
+  // This covers the case where they re-enter onboarding for an unrelated
+  // reason — no mailbox connected yet — and must not be re-asked on the way
+  // through.
   const initialManuallyCompletedIds = useMemo(() => {
-    if (!resumeBundle.isResuming) return undefined;
+    const fdaAlreadyDeclined =
+      machineState.state.status === "onboarding" && machineState.state.fda === "declined";
+
+    if (!resumeBundle.isResuming) {
+      return fdaAlreadyDeclined ? ["permissions"] : undefined;
+    }
+
     const ids: string[] = ["data-sync"];
     if (resumeBundle.contactSourceSelected) {
       ids.push("contact-source");
+    }
+    if (fdaAlreadyDeclined) {
+      ids.push("permissions");
     }
     return ids;
   }, []);

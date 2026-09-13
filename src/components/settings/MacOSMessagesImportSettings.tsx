@@ -34,9 +34,10 @@ import {
   importPhaseDisplayFor,
   type ImportPhaseDisplay,
 } from "../../utils/importPhaseDisplay";
+import { FdaHelpSheet } from "../permissions/FdaHelpSheet";
 import { usePlatform } from "../../contexts/PlatformContext";
 import { useSyncOrchestrator } from "../../hooks/useSyncOrchestrator";
-import { settingsService } from '../../services';
+import { settingsService, systemService } from '../../services';
 import logger from '../../utils/logger';
 import { safeErrorMessage } from '../../utils/formatUtils';
 import { parseLocalCalendarDay } from '../../utils/dateRangeUtils';
@@ -136,6 +137,36 @@ interface MacOSMessagesImportSettingsProps {
    */
   disabledReason?: string;
 }
+
+/**
+ * BACKLOG-3213: the fragment of main's absent-database refusal this panel
+ * matches on, lower-cased.
+ *
+ * TRANSCRIBED, NOT INVENTED. It is a substring of
+ * `permissionService.checkFullDiskAccess()`'s `userMessage` on the absent
+ * path — "Keepr couldn't find a Messages database on this Mac." — which
+ * `getAvailableMessageCount` returns verbatim as its `error`.
+ *
+ * It has to be a copy rather than an import: the producer lives in
+ * `electron/`, and the renderer cannot value-import from there (Vite parses
+ * it as JavaScript, and `rootDir` refuses the other direction). So the tie is
+ * held by a test instead — the absent suite builds its refusal from the shared
+ * fixture `tests/fixtures/fdaDeniedIssue-3219.ts` and asserts that the
+ * producer's real sentence contains this fragment. Reword either side alone
+ * and that assertion reds, rather than the panel silently failing to classify
+ * the refusal it can no longer recognise.
+ *
+ * Deliberately narrower than "messages database": `getPermissionError` emits
+ * "Could not find the iMessages database…" on a different channel, and a
+ * fragment that matched both would classify a future producer's string by
+ * accident.
+ *
+ * EXPORTED for the drift guard only. A guard that re-typed this literal would
+ * tie the FIXTURE to the producer and leave THIS constant free to drift away
+ * from both — which is the one direction its name promises to cover.
+ */
+export const MESSAGES_ABSENT_REASON_FRAGMENT =
+  "couldn't find a messages database";
 
 /**
  * Messages import settings for macOS users.
@@ -341,6 +372,99 @@ export function MacOSMessagesImportSettings({
    * - `ready`       a response for THIS window arrived; `sizeEstimate` is its verdict
    * - `unavailable` main could not size this window (`{success:false}`, or the IPC threw)
    */
+  /**
+   * BACKLOG-3208 — Full Disk Access, as this panel sees it.
+   *
+   * ## Why this state exists at all
+   *
+   * Onboarding's `PermissionsStep` gained a "Skip for now" button in
+   * BACKLOG-1842 — correctly, and at the founder's direction. But the step's
+   * `meta.shouldShow` is `context.permissionsGranted !== true`, and once
+   * onboarding completes the step is never queued again. So skipping it was a
+   * one-way door: `checkPermissions` had ZERO callers anywhere under
+   * `src/components/settings/`, this panel had no permission awareness of any
+   * kind, and there was no banner, prompt or setting anywhere else. The user
+   * was left with a Messages import panel that looks fully available, does
+   * nothing, and explains nothing.
+   *
+   * ## Why THREE states and not a boolean
+   *
+   * `unknown` is not a synonym for `denied`, and collapsing them would put a
+   * "you have not granted Full Disk Access" notice in front of users who have.
+   * The notice renders on `denied` ONLY — i.e. only when the main process
+   * actually answered `hasPermission: false`. An IPC that throws, or a
+   * response without the field, leaves this `unknown` and the panel renders
+   * exactly as it did before this change.
+   *
+   * - `unknown`  not asked yet, or the check did not answer
+   * - `granted`  main reported `hasPermission: true`
+   * - `denied`   main reported `hasPermission: false` for a reason that is a
+   *              permission refusal (EPERM/EACCES, or anything unrecognised)
+   * - `absent`   BACKLOG-3213: main reported `hasPermission: false` because
+   *              there is no Messages database on this Mac (ENOENT/ENOTDIR).
+   *              The import is refused just as firmly, but Full Disk Access
+   *              is not the reason and granting it would change nothing, so
+   *              this state must never render an FDA affordance.
+   */
+  const [fdaStatus, setFdaStatus] = useState<
+    "unknown" | "granted" | "denied" | "absent"
+  >("unknown");
+
+  /**
+   * BACKLOG-3208: true once this panel has seen `denied` in this session.
+   *
+   * This is what separates "FDA was already on when you opened Settings"
+   * (nothing to say — no notice) from "you just granted it while Keepr was
+   * running" (a restart is required, and the panel must say so).
+   *
+   * macOS caches the sandbox/TCC decision per-process at launch: a process
+   * that was denied `chat.db` does not gain working access when the toggle is
+   * flipped under it. That is the premise the whole BACKLOG-1842 relaunch flow
+   * rests on, and it is just as true here. So a `denied -> granted` flip
+   * within one session is NOT "you are done", it is "restart to finish".
+   */
+  const [fdaWasDenied, setFdaWasDenied] = useState(false);
+
+  /** BACKLOG-3208: a user-initiated relaunch is in flight. */
+  const [isRestartingForFda, setIsRestartingForFda] = useState(false);
+
+  /**
+   * BACKLOG-3210 (part 2): the Full Disk Access explainer is open.
+   *
+   * The notice's button used to open the macOS Privacy pane directly — a list
+   * of apps with no statement of what Keepr wants, why, or what happens to the
+   * data. The founder's instruction was to show the explanation the app
+   * already has first, and keep the pane one click further in. Same component
+   * the dashboard health banner opens, so both dead-ends land in one place.
+   */
+  const [showFdaExplainer, setShowFdaExplainer] = useState(false);
+
+  /**
+   * BACKLOG-3208: the relaunch was asked for and did not happen.
+   *
+   * `relaunchApp` resolves `{ relaunched: false }` when the main-process
+   * handler suppressed it (the `!app.isPackaged && KEEPR_E2E === "1"` gate),
+   * and can fail outright. Either way the process is still running, so the
+   * button must return to a usable state and say what to do instead of
+   * spinning forever on a restart that is never coming.
+   */
+  const [restartUnavailable, setRestartUnavailable] = useState(false);
+
+  /**
+   * BACKLOG-3208: the reason main gave for refusing the size estimate.
+   *
+   * The `!result.success` branch below used to drop `result.error` on the
+   * floor. That mattered more than it looks: `getAvailableMessageCount` checks
+   * Full Disk Access FIRST and returns
+   * `{ success: false, error: "Full Disk Access permission is required to read
+   * iMessages." }`, so a permission failure arrived here as a resolved value
+   * and was rendered to the user as "Keepr could not work out how much space
+   * this import needs" — a permission problem reported as a disk problem.
+   */
+  const [estimateFailureReason, setEstimateFailureReason] = useState<
+    string | null
+  >(null);
+
   const [estimateStatus, setEstimateStatus] = useState<
     "pending" | "ready" | "unavailable"
   >("pending");
@@ -452,6 +576,62 @@ export function MacOSMessagesImportSettings({
   //      from a window that fits to one that does not leaves the old "fits"
   //      verdict on screen — and Import clickable — for as long as the new
   //      estimate takes, which on a large library is seconds of open door.
+  /**
+   * BACKLOG-3208: ask the main process whether Full Disk Access is usable, and
+   * record the answer.
+   *
+   * Uses the EXISTING `check-permissions` IPC (via `systemService`, so this
+   * component keeps its `window.api` calls where the rest of the panel already
+   * has them: none of this is a new channel). No new main-process code exists
+   * for this feature.
+   */
+  const refreshFdaStatus = useCallback(async () => {
+    if (!isMacOS) return;
+    const result = await systemService.checkMessagesPermission();
+    if (!result.success || result.data?.hasPermission === undefined) {
+      // The check did not answer. Leave the status alone rather than inventing
+      // a verdict — see the `unknown` note on `fdaStatus`.
+      logger.warn(
+        "[MacOSMessagesImportSettings] Full Disk Access check did not answer:",
+        result.error
+      );
+      return;
+    }
+    if (result.data.hasPermission) {
+      setFdaStatus("granted");
+      return;
+    }
+    // BACKLOG-3213: main says WHICH failure it saw, and the two need opposite
+    // sentences. `MESSAGES_STORE_NOT_FOUND` means `chat.db` is not on this
+    // Mac — the import is still refused, but Full Disk Access is not the
+    // reason, granting it would change nothing, and no FDA affordance may
+    // render.
+    //
+    // `setFdaWasDenied` is NOT set on this path, deliberately. It exists to
+    // fire the "Full Disk Access granted — restart Keepr to finish" notice on
+    // a later grant, and an absence was never a denial: a Mac that simply has
+    // no messages must not be told to restart to finish something that never
+    // started.
+    if (result.data.errorCode === "MESSAGES_STORE_NOT_FOUND") {
+      logger.warn(
+        "[MacOSMessagesImportSettings] No Messages database on this Mac:",
+        result.data.reason
+      );
+      setFdaStatus("absent");
+      return;
+    }
+    // Log the reason main gave (the raw `EPERM: operation not permitted,
+    // access '<home>/Library/Messages/chat.db'` from `fs.access`). It is not
+    // shown to the user — the notice says the useful thing — but a support
+    // log that says only "denied" cannot distinguish this from a missing file.
+    logger.warn(
+      "[MacOSMessagesImportSettings] Full Disk Access denied:",
+      result.data.reason
+    );
+    setFdaStatus("denied");
+    setFdaWasDenied(true);
+  }, [isMacOS]);
+
   useEffect(() => {
     if (!isMacOS) return;
     if (!estimateInputsReady) return;
@@ -493,10 +673,57 @@ export function MacOSMessagesImportSettings({
           // `getAvailableMessageCount` returns `{success:false}` for any internal
           // failure and logs nothing. This branch used to be absent, so a failed
           // estimate silently left whatever was on screen standing.
+          //
+          // BACKLOG-3208: it also used to DROP `result.error`, and that is the
+          // real swallow behind this item — not the bare `catch` below, which
+          // only ever sees an IPC-transport throw. The permission failure
+          // resolves NORMALLY: `getAvailableMessageCount` checks Full Disk
+          // Access before it opens anything and returns
+          // `{ success: false, error: "Full Disk Access permission is required
+          // to read iMessages." }`. Discarded here, that became the generic
+          // "could not work out how much space this import needs" copy below —
+          // a permission problem told to the user as a disk problem.
+          logger.warn(
+            "[MacOSMessagesImportSettings] Import estimate refused by main:",
+            result.error
+          );
+          setEstimateFailureReason(result.error ?? null);
           setEstimateStatus("unavailable");
+          // BACKLOG-3213: an ADDED disjunct, never a replacement. Dropping the
+          // Full Disk Access term here would take the denial's self-heal with
+          // it, and exactly one test in the repo would notice
+          // (`fdaRecovery-3208.test.tsx:541`) — so this line is the one to
+          // read carefully in review.
+          //
+          // The absent case needs the same re-ask for the same reason: main
+          // and this panel read the permission at different moments, so main
+          // can refuse because `chat.db` is missing while this panel still
+          // holds an older `granted`. Without this the space copy renders on a
+          // Mac with no database, and with "import text only" on, Import is
+          // clickable.
+          if (
+            (result.error ?? "").toLowerCase().includes("full disk access") ||
+            (result.error ?? "")
+              .toLowerCase()
+              .includes(MESSAGES_ABSENT_REASON_FRAGMENT)
+          ) {
+            // BACKLOG-3208: main and this panel read the permission at
+            // different moments, so main can refuse for want of Full Disk
+            // Access while this panel still holds an older `granted` or
+            // `unknown`. Left alone that is the worst of both: the space copy
+            // is suppressed as a permission problem, and no permission notice
+            // renders to replace it — a refused import with nothing on screen
+            // explaining it, which is the failure BACKLOG-2760 exists to
+            // prevent. Re-asking makes the authoritative check catch up, and
+            // the notice appears.
+            void refreshFdaStatus();
+          }
           return;
         }
 
+        // BACKLOG-3208: a later success must not leave the previous refusal's
+        // reason standing.
+        setEstimateFailureReason(null);
         setAvailableCount(result.filteredCount ?? result.count ?? null);
         setWindowCount(result.windowCount ?? result.count ?? null);
         // BACKLOG-2749: carried, never reconstructed. See `planFacts`.
@@ -519,8 +746,18 @@ export function MacOSMessagesImportSettings({
             : null
         );
         setEstimateStatus("ready");
-      } catch {
+      } catch (error) {
         if (requestId !== estimateRequestIdRef.current) return;
+        // BACKLOG-3208: this catch was bare (`} catch {`) and threw the error
+        // away. It is NOT the Full Disk Access path — a denial resolves as
+        // `{success:false}` and is handled above — but a transport-level throw
+        // left no trace anywhere, so an import that refused to start had no
+        // explanation in the logs either. It gets one now.
+        logger.warn(
+          "[MacOSMessagesImportSettings] Import estimate request threw:",
+          safeErrorMessage(error)
+        );
+        setEstimateFailureReason(null);
         setEstimateStatus("unavailable");
       }
     };
@@ -532,7 +769,71 @@ export function MacOSMessagesImportSettings({
     // BACKLOG-2749: re-estimate when the cap changes — see the selection above.
     maxMessages,
     effectiveWindow?.effectiveCutoffISO,
+    // BACKLOG-3208: the self-heal call above. Stable (`[isMacOS]`), so it does
+    // not re-run the estimate.
+    refreshFdaStatus,
   ]);
+
+  /**
+   * BACKLOG-3208: check on mount, and again whenever the window regains focus.
+   *
+   * The focus listener IS the "re-check when the user returns" requirement:
+   * granting Full Disk Access means leaving Keepr for System Settings, so the
+   * moment the user comes back is exactly when the answer may have changed.
+   * Same mechanism `LicenseContext` already uses for its own return-to-app
+   * refresh, so this is not a new pattern in the renderer.
+   */
+  useEffect(() => {
+    if (!isMacOS) return;
+    void refreshFdaStatus();
+    const handleFocus = () => {
+      void refreshFdaStatus();
+    };
+    window.addEventListener("focus", handleFocus);
+    return () => window.removeEventListener("focus", handleFocus);
+  }, [isMacOS, refreshFdaStatus]);
+
+  /**
+   * BACKLOG-3208 / BACKLOG-3210 (part 2): `handleOpenFdaSettings` used to live
+   * here and is DELETED, not orphaned.
+   *
+   * Its whole body — `systemService.openFullDiskAccessSettings()` (the
+   * trigger-then-open sequence borrowed from `PermissionsStep`, where
+   * BACKLOG-2192 established the pre-list trigger has to fire on every open),
+   * an error log, then a status re-check — now lives in `FdaHelpSheet`, which
+   * this panel renders and hands `refreshFdaStatus` as its `onOpenedSettings`.
+   * The behaviour is identical and the pane is still opened from exactly one
+   * place; only the surface the user meets first has changed. Leaving the old
+   * copy behind would have been a second, silently divergent path to the same
+   * pane.
+   */
+
+  /**
+   * BACKLOG-3208: restart Keepr so a grant made while it was running takes
+   * effect. User-initiated only — never automatic, and never from the focus
+   * listener. Settings is a place the user is doing something else; an app
+   * that quits itself out from under them there would be worse than the bug.
+   */
+  const handleRestartForFda = useCallback(async () => {
+    setIsRestartingForFda(true);
+    setRestartUnavailable(false);
+    const result = await systemService.relaunchApp();
+    // In a packaged build the process exits inside that call and nothing below
+    // runs. Reaching here means it did not.
+    const suppressed = !result.success || result.data?.relaunched === false;
+    if (!result.success) {
+      logger.error(
+        "[MacOSMessagesImportSettings] Relaunch failed:",
+        result.error
+      );
+    }
+    setIsRestartingForFda(false);
+    // Only claim the restart did not happen when main actually said so (the
+    // E2E/dev suppression gate) or the call failed. A `relaunched: true` that
+    // still returns here means the process is on its way out; telling the user
+    // it failed while it is quitting would be its own false statement.
+    setRestartUnavailable(suppressed);
+  }, []);
 
   const loadImportStatus = async () => {
     try {
@@ -722,6 +1023,40 @@ export function MacOSMessagesImportSettings({
   // response that says nothing about size cannot deadlock the panel.
   const estimateResolved = estimateStatus === "ready";
 
+  /**
+   * BACKLOG-3208: the estimate was refused because Keepr cannot read Messages,
+   * not because it could not size the import.
+   *
+   * `getAvailableMessageCount` checks Full Disk Access before it opens
+   * anything, so a denial comes back as a normal `{ success: false, error:
+   * "Full Disk Access permission is required to read iMessages." }`. Both
+   * signals are used: the panel's own permission check (authoritative, and the
+   * thing the notice above is already rendering), and the reason main sent
+   * with the refusal (which covers a denial that main sees and the renderer's
+   * own check has not caught up with yet — they are separate reads at separate
+   * moments).
+   *
+   * When this is true the disk-space copy is suppressed: the notice above is
+   * the explanation, and telling the user Keepr "could not work out how much
+   * space this import needs" would be a wrong answer, not a vague one.
+   */
+  const estimateBlockedByPermission =
+    estimateStatus === "unavailable" &&
+    // BACKLOG-3213: `absent` joins both halves. The STATE disjunct covers the
+    // panel's own resolved answer; the STRING disjunct covers the window
+    // between main's refusal and the re-ask above landing, in which
+    // `fdaStatus` is still whatever it was. Both are ADDED terms — removing
+    // either of the Full Disk Access ones would change the denial's
+    // behaviour, which this item must not do.
+    (fdaStatus === "denied" ||
+      fdaStatus === "absent" ||
+      (estimateFailureReason ?? "")
+        .toLowerCase()
+        .includes("full disk access") ||
+      (estimateFailureReason ?? "")
+        .toLowerCase()
+        .includes(MESSAGES_ABSENT_REASON_FRAGMENT));
+
   // BACKLOG-2743: True when the attachment copy does NOT fit and the user has
   // not chosen to skip attachments. Import is BLOCKED in this state — there is
   // deliberately no "import anyway" override, because an override is exactly
@@ -766,10 +1101,71 @@ export function MacOSMessagesImportSettings({
   // BACKLOG-2749: the third reason ("not enough free disk space") is gone from
   // here because that state no longer disables the button — it opens the
   // refusal dialog, which says considerably more than a tooltip could.
+  //
+  // BACKLOG-3208 (SR review of PR #2578): these two branches stay exactly as
+  // they are. They are right for the states they describe — a space question
+  // whose answer is not in yet, and one that could not be answered. The
+  // permission case is NOT one of them, and is layered on in
+  // `importBlockedReason` below rather than smuggled in here.
   const spaceBlockedReason =
     estimateStatus === "pending"
       ? "Still checking how much space this import needs"
       : "Keepr could not work out how much space this import needs";
+
+  /**
+   * BACKLOG-3208 (SR review of PR #2578): why the import is refused, when the
+   * reason is not about space at all.
+   *
+   * `spaceBlocked` above keys on the SIZE of the attachment copy, so it is
+   * false whenever `skipAttachments` is on — and Import and Force Re-import
+   * stayed clickable with Full Disk Access denied, running an import that
+   * could not read one message. The tooltip had the mirror-image gap: its two
+   * branches both talk about space, so a permission refusal was explained, in
+   * the one place a user reads only after trying to click, as Keepr not
+   * working out how much space the import needs.
+   *
+   * Both come from ONE term, and that term is derived from the permission
+   * state this component already keeps — no second source of truth:
+   *   - `fdaStatus === "denied"` is the panel's own authoritative answer, and
+   *     it holds from the moment the check returns, before any estimate has
+   *     resolved.
+   *   - `estimateBlockedByPermission` additionally covers main refusing for
+   *     permission in the window before the panel's own check has caught up.
+   */
+  const permissionBlocked =
+    fdaStatus === "denied" ||
+    // BACKLOG-3213: an absent database refuses the import just as firmly as a
+    // denial. THIS IS THE LINE THAT KEEPS THE GATE CLOSED. Printing the
+    // honest sentence and leaving the gate open is a separate change from
+    // printing it at all, and only one of the two is obvious: with "import
+    // text only" on, `spaceBlocked` is false, so nothing else holds Import
+    // and Force Re-import shut on a Mac with no database.
+    fdaStatus === "absent" ||
+    estimateBlockedByPermission;
+
+  /** Every reason Import and Force Re-import are refused, space and otherwise. */
+  const importBlocked = spaceBlocked || permissionBlocked;
+
+  /**
+   * The permission case FIRST: when Keepr cannot read Messages at all, what the
+   * import would have cost in disk space is not the thing to say.
+   */
+  // BACKLOG-3213: the ABSENT branch comes FIRST, and the order is load-bearing.
+  // `permissionBlocked` now includes `absent`, so testing it first would put
+  // the Full Disk Access sentence in the tooltip of a Mac whose problem is not
+  // Full Disk Access — the exact lie this item removes, surviving in the one
+  // place a user reads only after trying to click.
+  //
+  // The tooltip is no longer the only thing standing between this state and a
+  // blank screen — the visible notice below is — but it must not lie either.
+  // Force Re-import never shows this string at all (it carries a static
+  // title), which is why a tooltip alone was never enough.
+  const importBlockedReason =
+    fdaStatus === "absent"
+      ? "Keepr couldn't find a Messages database on this Mac"
+      : permissionBlocked
+        ? "Keepr needs Full Disk Access to read your messages"
+        : spaceBlockedReason;
 
   // BACKLOG-2743: Plain size formatting — real numbers, no adjectives.
   const formatGb = (bytes: number): string => {
@@ -1416,6 +1812,147 @@ export function MacOSMessagesImportSettings({
         </div>
       )}
 
+      {/* BACKLOG-3208 — THE WAY BACK TO FULL DISK ACCESS.
+          ────────────────────────────────────────────────────────────────────
+          Skipping the onboarding Full Disk Access step used to be a one-way
+          door: `PermissionsStep` is the only surface in the app that has ever
+          mentioned FDA, and its `shouldShow` retires it for good once
+          onboarding completes. Nothing else asked, offered or even noticed —
+          `checkPermissions` had no caller under `src/components/settings/` at
+          all. This panel is where that gap is felt, because it is the panel
+          that owns the feature FDA gates, and it stayed fully clickable while
+          being incapable of reading one message.
+
+          Rendered only while this panel is the ACTIVE message source: when it
+          is not, the note directly above already says the panel is inactive,
+          and a second, different reason for the same inactive panel is noise.
+
+          No <h1>-<h6> in here on purpose — `settingsBlockShape-3156` reds on
+          any heading a block does not declare, and this notice declares none. */}
+      {isMacOS && enabled && fdaStatus === "denied" && (
+        <div
+          data-testid="macos-fda-denied-notice"
+          className="mb-3 p-3 rounded text-xs bg-amber-50 text-amber-800 border border-amber-200"
+        >
+          <p className="font-medium mb-1">
+            Keepr does not have Full Disk Access
+          </p>
+          <p className="mb-2">
+            macOS keeps your Messages history behind Full Disk Access. Until you
+            grant it, Keepr cannot read any messages and an import here will not
+            bring anything in.
+          </p>
+          {/* BACKLOG-3210 (part 2): "Show me how" opens the explainer.
+              `handleOpenFdaSettings` is not gone — it is now the explainer's
+              primary action, so the pane still opens through the same
+              trigger-then-open path and this panel still re-checks its status
+              when the user comes back. */}
+          <button
+            type="button"
+            onClick={() => setShowFdaExplainer(true)}
+            data-testid="macos-fda-open-settings"
+            className="px-3 py-1.5 bg-primary text-white rounded text-xs font-medium hover:bg-primary-dark"
+          >
+            Show me how
+          </button>
+          <p className="mt-2">
+            Switch Keepr on under Privacy &amp; Security &rarr; Full Disk Access,
+            then come back here — Keepr checks again on its own.
+          </p>
+          {showFdaExplainer && (
+            <FdaHelpSheet
+              onClose={() => setShowFdaExplainer(false)}
+              onOpenedSettings={refreshFdaStatus}
+              // BACKLOG-3210 (part 2): the explainer closes itself on the
+              // grant; this is what takes the notice around it down at the
+              // same moment rather than on the next window focus.
+              onPermissionGranted={refreshFdaStatus}
+            />
+          )}
+        </div>
+      )}
+
+      {/* BACKLOG-3213: there is no Messages database on this Mac.
+          ────────────────────────────────────────────────────────────────────
+          A VISIBLE notice, not a tooltip. The import is refused in this state,
+          and `importBlockedReason` has exactly one render site — a `title=`
+          attribute on the Import button — so with the Full Disk Access notice
+          correctly withheld and the disk-space copy correctly suppressed, this
+          state would otherwise be two disabled buttons and no sentence on
+          screen. Force Re-import does not even carry that tooltip; its title
+          is static. A refused import with nothing on screen explaining it is
+          the failure BACKLOG-2760 exists to prevent, and replacing a wrong
+          message with no message is not a fix.
+
+          NO "Show me how", NO `FdaHelpSheet`, NO System Settings link — and
+          no `action` on the banner row this state raises either. Full Disk
+          Access is not the problem here; the explainer would report a
+          permission as "not detected" when granting it changes nothing, which
+          is the BACKLOG-2392 defect pointing the other way.
+
+          The copy names the missing DATABASE, never "no history". ENOENT
+          proves the file is not there and says nothing about whether Messages
+          was ever used — and an EMPTY `chat.db` is a different state entirely
+          (it passes `fs.access`, reports granted, and is out of scope here).
+
+          Same amber container as the denial notice above, so it reads as the
+          same class of notice. No <h1>-<h6> in here on purpose —
+          `settingsBlockShape-3156` reds on any heading a block does not
+          declare, and this notice declares none. */}
+      {isMacOS && enabled && fdaStatus === "absent" && (
+        <div
+          data-testid="macos-messages-absent-notice"
+          className="mb-3 p-3 rounded text-xs bg-amber-50 text-amber-800 border border-amber-200"
+        >
+          <p className="font-medium mb-1">
+            Keepr couldn&apos;t find a Messages database on this Mac
+          </p>
+          <p>There is nothing here for Keepr to import.</p>
+        </div>
+      )}
+
+      {/* BACKLOG-3208: granted, but not yet usable.
+          macOS decides an app's Full Disk Access when the process starts and
+          does not revisit it, so flipping the toggle under a running Keepr
+          leaves this process still unable to read `chat.db`. BACKLOG-1842
+          established this in onboarding and relaunches there; the same fact
+          applies here, so the panel says so and offers the restart rather than
+          reporting success the import cannot deliver.
+
+          The restart is USER-INITIATED only, never triggered by the focus
+          re-check. Settings is somewhere the user is in the middle of
+          something else; an app that quit itself out from under them there
+          would be a worse bug than the one this fixes. */}
+      {isMacOS && enabled && fdaStatus === "granted" && fdaWasDenied && (
+        <div
+          data-testid="macos-fda-restart-notice"
+          className="mb-3 p-3 rounded text-xs bg-blue-50 text-blue-800 border border-blue-200"
+        >
+          <p className="font-medium mb-1">
+            Full Disk Access granted — restart Keepr to finish
+          </p>
+          <p className="mb-2">
+            macOS only grants an app the access it had when it started, so Keepr
+            needs to restart before it can read your messages. Nothing is lost.
+          </p>
+          <button
+            type="button"
+            onClick={handleRestartForFda}
+            disabled={isRestartingForFda}
+            data-testid="macos-fda-restart"
+            className="px-3 py-1.5 bg-primary text-white rounded text-xs font-medium hover:bg-primary-dark disabled:opacity-50"
+          >
+            {isRestartingForFda ? "Restarting\u2026" : "Restart Keepr"}
+          </button>
+          {restartUnavailable && (
+            <p data-testid="macos-fda-restart-unavailable" className="mt-2">
+              Keepr could not restart itself. Quit Keepr and open it again to
+              finish.
+            </p>
+          )}
+        </div>
+      )}
+
       {/* BACKLOG-2335: Mute the controls region while inactive (the note above
           stays full-strength so the reason is always legible). */}
       <div className={enabled ? "" : "opacity-60"}>
@@ -1602,7 +2139,12 @@ export function MacOSMessagesImportSettings({
             rather than attempted, because the failure mode this guard exists for
             — filling the disk and evicting the user's Time Machine snapshots —
             is not one worth risking on an unread number. */}
-        {!isImporting && !skipAttachments && estimateStatus === "unavailable" && (
+        {!isImporting &&
+          !skipAttachments &&
+          estimateStatus === "unavailable" &&
+          /* BACKLOG-3208: not when the refusal was a permission refusal — see
+             `estimateBlockedByPermission`. */
+          !estimateBlockedByPermission && (
           <p
             data-testid="import-estimate-unavailable"
             className="text-xs text-amber-700 mt-2"
@@ -1878,7 +2420,9 @@ export function MacOSMessagesImportSettings({
       {/* BACKLOG-3156 stage A: the actions, BARE — no card, no heading, primary
           then destructive. Still muted with the rest of the controls when this
           is not the active source (BACKLOG-2335), and neither `disabled`
-          expression changed: both remain `controlsDisabled || spaceBlocked`. */}
+          expression changed: both remain `controlsDisabled || <blocked>`.
+          BACKLOG-3208 (SR review) widened that term from `spaceBlocked` to
+          `importBlocked`, which is `spaceBlocked` plus the permission case. */}
       <div className={enabled ? "" : "opacity-60"}>
       <div data-testid="messages-block-actions" className="flex gap-2 items-center">
         <button
@@ -1892,15 +2436,18 @@ export function MacOSMessagesImportSettings({
           // opens the refusal dialog, which offers a window that does fit. The
           // import is still refused — no path from that dialog starts a run
           // that does not fit.
-          disabled={controlsDisabled || spaceBlocked}
-          title={spaceBlocked ? spaceBlockedReason : undefined}
+          // BACKLOG-3208 (SR review): `importBlocked`, not `spaceBlocked` —
+          // a missing Full Disk Access refuses the import too, and did not
+          // reach this gate while "import text only" was on.
+          disabled={controlsDisabled || importBlocked}
+          title={importBlocked ? importBlockedReason : undefined}
           className="flex-1 px-3 py-2 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {isImporting ? "Importing..." : "Import Messages"}
         </button>
         <button
           onClick={() => setShowForceWarning(true)}
-          disabled={controlsDisabled || spaceBlocked}
+          disabled={controlsDisabled || importBlocked}
           className="px-3 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           title="Delete all existing messages and re-import from scratch"
         >

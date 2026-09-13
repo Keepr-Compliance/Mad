@@ -47,6 +47,23 @@ export type SyncItemStatus = 'pending' | 'running' | 'complete' | 'error' | 'ski
 export type ReconnectProvider = 'microsoft' | 'google';
 
 /**
+ * BACKLOG-3203: why the contacts sync is asking the user to reconnect.
+ *
+ * Both causes end at the same place — an EmailReconnectError, the contacts item
+ * in status:'error', and the provider-aware "Reconnect" CTA — because the remedy
+ * is the same one: redo the mailbox connection in Settings. They are kept apart
+ * only so the message can be true. `SyncStatusIndicator` renders the error text
+ * verbatim as the completion subtitle, so telling a user with a live connection
+ * that it "expired" would be a false statement on screen.
+ *
+ * - `token-expired`  — the stored OAuth grant is dead (typed `tokenExpired`).
+ * - `reconnect-required` — the connection works, but cannot read contacts
+ *   (missing scope, or a 403 at fetch). The flag cannot separate those two, so
+ *   the copy it selects must not name either.
+ */
+export type ContactsReconnectCause = 'token-expired' | 'reconnect-required';
+
+/**
  * BACKLOG-2127: typed error thrown by the emails sync when a provider's stored
  * OAuth token is dead. Carries the provider so the SyncStatusIndicator can
  * render a provider-aware "Reconnect" CTA WITHOUT string-matching the message.
@@ -424,8 +441,18 @@ class SyncOrchestratorServiceClass {
       // but a dead token is surfaced AFTER all phases run by throwing an
       // EmailReconnectError — landing the contacts item in status:'error' with
       // the typed reconnectProvider that drives the "Reconnect" CTA. Typed
-      // discriminator (`tokenExpired`) only — never message string-matching.
-      let contactsReconnect: ReconnectProvider | undefined;
+      // discriminators only — never message string-matching.
+      //
+      // BACKLOG-3203: `reconnectRequired` now joins `tokenExpired` on this
+      // channel. It used to log and fall through, so a provider that could not
+      // read contacts ended the run at "All contacts sync complete" with
+      // nothing on screen. The two arrive with DIFFERENT causes and must not
+      // claim each other's: `tokenExpired` is "your grant lapsed",
+      // `reconnectRequired` is "the connection cannot read contacts". The cause
+      // travels with the provider because the message below is rendered
+      // verbatim to the user (SyncStatusIndicator's completionSubtitle), so a
+      // wrong sentence here is a wrong sentence on screen.
+      let contactsReconnect: { provider: ReconnectProvider; cause: ContactsReconnectCause } | undefined;
 
       // Phase 2: Outlook contacts sync (all platforms, non-fatal, skip if source disabled)
       // TASK-1953: Outlook contacts sync via Graph API
@@ -439,9 +466,13 @@ class SyncOrchestratorServiceClass {
             logger.info('[SyncOrchestrator] Outlook contacts synced:', outlookResult.count);
           } else if (outlookResult.tokenExpired) {
             logger.warn('[SyncOrchestrator] Outlook contacts token expired — reconnect required');
-            contactsReconnect = contactsReconnect ?? 'microsoft';
+            contactsReconnect = contactsReconnect ?? { provider: 'microsoft', cause: 'token-expired' };
           } else if (outlookResult.reconnectRequired) {
-            logger.warn('[SyncOrchestrator] Outlook contacts need reconnection');
+            // BACKLOG-3203: log the provider's OWN error rather than naming a
+            // cause this branch has not established — `reconnectRequired`
+            // covers a missing Contacts.Read grant and a 403 at fetch alike.
+            logger.warn('[SyncOrchestrator] Outlook contacts need reconnection:', outlookResult.error);
+            contactsReconnect = contactsReconnect ?? { provider: 'microsoft', cause: 'reconnect-required' };
           } else {
             logger.warn('[SyncOrchestrator] Outlook contacts sync returned error:', outlookResult.error);
           }
@@ -474,9 +505,15 @@ class SyncOrchestratorServiceClass {
             logger.info('[SyncOrchestrator] Google contacts synced:', googleResult.count);
           } else if (googleResult.tokenExpired) {
             logger.warn('[SyncOrchestrator] Google contacts token expired — reconnect required');
-            contactsReconnect = contactsReconnect ?? 'google';
+            contactsReconnect = contactsReconnect ?? { provider: 'google', cause: 'token-expired' };
           } else if (googleResult.reconnectRequired) {
-            logger.warn('[SyncOrchestrator] Google contacts need reconnection (contacts.readonly scope missing)');
+            // BACKLOG-3203: this line used to read "(contacts.readonly scope
+            // missing)" for EVERY `reconnectRequired`, including a mailbox that
+            // was never connected — which is what it was actually reporting in
+            // the log that opened this item. A log line must not name a cause
+            // it has not established; the provider's own error carries it.
+            logger.warn('[SyncOrchestrator] Google contacts need reconnection:', googleResult.error);
+            contactsReconnect = contactsReconnect ?? { provider: 'google', cause: 'reconnect-required' };
           } else {
             logger.warn('[SyncOrchestrator] Google contacts sync returned error:', googleResult.error);
           }
@@ -504,10 +541,18 @@ class SyncOrchestratorServiceClass {
       // the "Sync Completed with Errors" variant + reconnect CTA. macOS contacts
       // are NOT lost; the copy must read as partial, not total, failure.
       if (contactsReconnect) {
-        const providerLabel = contactsReconnect === 'microsoft' ? 'Outlook' : 'Gmail';
+        const providerLabel = contactsReconnect.provider === 'microsoft' ? 'Outlook' : 'Gmail';
         throw new EmailReconnectError(
-          contactsReconnect,
-          `${providerLabel} connection expired — reconnect to sync contacts`,
+          contactsReconnect.provider,
+          // BACKLOG-3203: this string is rendered to the user verbatim, so it
+          // may only assert what the discriminator actually established.
+          // "connection expired" is FALSE for a connection that is alive but
+          // cannot read contacts, so the `reconnectRequired` wording names the
+          // remedy and no cause — it has to hold for a missing grant and a 403
+          // alike, since the flag cannot tell them apart.
+          contactsReconnect.cause === 'token-expired'
+            ? `${providerLabel} connection expired — reconnect to sync contacts`
+            : `${providerLabel} needs to be reconnected to sync contacts`,
         );
       }
 

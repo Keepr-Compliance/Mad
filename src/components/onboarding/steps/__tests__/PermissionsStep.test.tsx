@@ -737,4 +737,96 @@ describe("PermissionsStep (BACKLOG-1842)", () => {
       );
     });
   });
+
+  // ==========================================================================
+  // BACKLOG-3212 — the skip has to outlive the process
+  // ==========================================================================
+  //
+  // Before this, "Skip for now" only dispatched NAVIGATE_NEXT. That marks the
+  // step complete in the queue's `manuallyCompletedIds`, a React useState Set —
+  // so the choice died with the process and the user was sent back through
+  // onboarding on every launch. The write below is what makes it stick; the
+  // reducer half of the pair lives in reducer.fdaSkip.test.ts.
+  //
+  // The exact payload asserted here is the one
+  // preferenceHandlers.onboardingSkip.test.ts drives through the REAL
+  // `preferences:update` handler, so this test and the read side agree on a
+  // key that has been observed to land, not one that was assumed.
+  describe("persisting the skip (BACKLOG-3212)", () => {
+    const clickSkip = () => {
+      fireEvent.click(screen.getByTestId("onboarding-permissions-safety-link"));
+      fireEvent.click(screen.getByTestId("fda-safety-skip"));
+    };
+
+    it("writes onboarding.fdaSkipped to the cloud preferences bag", async () => {
+      (window.api.preferences.update as jest.Mock).mockResolvedValue({ success: true });
+
+      render(<Content context={createMockContext({ userId: "test-user-123" })} onAction={jest.fn()} />);
+      clickSkip();
+
+      await waitFor(() => {
+        expect(window.api.preferences.update).toHaveBeenCalledTimes(1);
+      });
+
+      const [userId, partial] = (window.api.preferences.update as jest.Mock).mock.calls[0];
+      expect(userId).toBe("test-user-123");
+      expect(partial.onboarding.fdaSkipped).toBe(true);
+      expect(typeof partial.onboarding.fdaSkippedAt).toBe("number");
+    });
+
+    it("does not write anything on any other interaction with the step", async () => {
+      // CONTROL for the other half of the pair: only an explicit skip records
+      // a skip. Opening the safety sheet and backing out with "Let's go" must
+      // leave the user in the "still being asked" state.
+      render(<Content context={createMockContext()} onAction={jest.fn()} />);
+
+      fireEvent.click(screen.getByTestId("onboarding-permissions-safety-link"));
+      fireEvent.click(screen.getByTestId("fda-safety-lets-go"));
+
+      await waitFor(() => {
+        expect(screen.queryByTestId("fda-safety-skip")).not.toBeInTheDocument();
+      });
+      expect(window.api.preferences.update).not.toHaveBeenCalled();
+    });
+
+    it("still advances when the cloud write rejects — the user is never trapped", async () => {
+      (window.api.preferences.update as jest.Mock).mockRejectedValue(new Error("offline"));
+      const onAction = jest.fn();
+
+      render(<Content context={createMockContext()} onAction={onAction} />);
+      clickSkip();
+
+      // Navigation is synchronous and independent of the write.
+      expect(onAction).toHaveBeenCalledWith({ type: "NAVIGATE_NEXT" });
+      await waitFor(() => {
+        expect(window.api.preferences.update).toHaveBeenCalled();
+      });
+    });
+
+    it("still advances when the write reports failure without throwing", async () => {
+      (window.api.preferences.update as jest.Mock).mockResolvedValue({
+        success: false,
+        error: "row locked",
+      });
+      const onAction = jest.fn();
+
+      render(<Content context={createMockContext()} onAction={onAction} />);
+      clickSkip();
+
+      expect(onAction).toHaveBeenCalledWith({ type: "NAVIGATE_NEXT" });
+      await waitFor(() => {
+        expect(window.api.preferences.update).toHaveBeenCalled();
+      });
+    });
+
+    it("skips the write when there is no userId, and still advances", () => {
+      const onAction = jest.fn();
+
+      render(<Content context={createMockContext({ userId: null })} onAction={onAction} />);
+      clickSkip();
+
+      expect(window.api.preferences.update).not.toHaveBeenCalled();
+      expect(onAction).toHaveBeenCalledWith({ type: "NAVIGATE_NEXT" });
+    });
+  });
 });

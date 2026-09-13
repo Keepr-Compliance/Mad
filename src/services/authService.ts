@@ -6,7 +6,23 @@
  */
 
 import type { User, Subscription } from "@/types";
+import type {
+  MailboxRevokeOutcome,
+  MailboxRevokeReason,
+} from "../../electron/types/ipc/window-api-auth";
 import { type ApiResult, getErrorMessage } from "./index";
+
+/**
+ * BACKLOG-3206: a disconnect now also asks the provider to end its grant, and
+ * the two facts come back separately — `success` is whether this computer was
+ * disconnected, `revokeOutcome` is what happened to the grant. A disconnect can
+ * succeed while the revoke did not, which is the case the UI has to be able to
+ * say something about.
+ */
+export interface DisconnectMailboxResult extends ApiResult {
+  revokeOutcome?: MailboxRevokeOutcome;
+  revokeReason?: MailboxRevokeReason;
+}
 
 /**
  * Login result containing user and session info
@@ -264,10 +280,17 @@ export const authService = {
   /**
    * Disconnect Google mailbox
    */
-  async googleDisconnectMailbox(userId: string): Promise<ApiResult> {
+  async googleDisconnectMailbox(
+    userId: string,
+  ): Promise<DisconnectMailboxResult> {
     try {
       const result = await window.api.auth.googleDisconnectMailbox(userId);
-      return { success: result.success, error: result.error };
+      return {
+        success: result.success,
+        error: result.error,
+        revokeOutcome: result.revokeOutcome,
+        revokeReason: result.revokeReason,
+      };
     } catch (error) {
       return { success: false, error: getErrorMessage(error) };
     }
@@ -276,10 +299,17 @@ export const authService = {
   /**
    * Disconnect Microsoft mailbox
    */
-  async microsoftDisconnectMailbox(userId: string): Promise<ApiResult> {
+  async microsoftDisconnectMailbox(
+    userId: string,
+  ): Promise<DisconnectMailboxResult> {
     try {
       const result = await window.api.auth.microsoftDisconnectMailbox(userId);
-      return { success: result.success, error: result.error };
+      return {
+        success: result.success,
+        error: result.error,
+        revokeOutcome: result.revokeOutcome,
+        revokeReason: result.revokeReason,
+      };
     } catch (error) {
       return { success: false, error: getErrorMessage(error) };
     }

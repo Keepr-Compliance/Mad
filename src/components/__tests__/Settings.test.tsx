@@ -521,14 +521,23 @@ describe("Settings", () => {
 
         await renderSettings({ userId: mockUserId, onClose: mockOnClose });
 
-        await waitFor(() => {
-          expect(sources().getByText("Gmail")).toBeInTheDocument();
-        });
+        // BACKLOG-2487: gate on the control this test is about, not on the
+        // <h4> beside it. The provider heading renders unconditionally, so a
+        // wait on it opens on the FIRST render — while the row still reads
+        // "Checking..." and carries no button at all, and the synchronous read
+        // that followed then missed a button that was merely not there YET.
+        // Waiting for the button itself makes the wait and the read the same
+        // element.
+        expect(
+          await screen.findByRole("button", { name: "Connect Gmail" }),
+        ).toBeInTheDocument();
+        // ...and it is the Emails Sources block that offers it.
+        expect(sources().getByText("Gmail")).toBeInTheDocument();
+        expect(
+          sources().getByRole("button", { name: "Connect Gmail" }),
+        ).toBeInTheDocument();
         // A never-connected provider offers Connect, NOT Reconnect — the
         // NOT_CONNECTED error type must not be read as a broken connection.
-        expect(
-          screen.getByRole("button", { name: "Connect Gmail" }),
-        ).toBeInTheDocument();
         expect(
           screen.queryByRole("button", { name: /reconnect gmail/i }),
         ).not.toBeInTheDocument();

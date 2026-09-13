@@ -177,10 +177,11 @@ Within the markdown stored in `pm_sprints.body`:
 ### Sprint Creation Checklist
 
 - [ ] Sprint created in Supabase: `SELECT pm_create_sprint(p_name := 'SPRINT-XXX', p_goal := 'Sprint goal');`
-- [ ] **Integration branch created:** `git checkout -b int/<sprint-name> develop && git push -u origin int/<sprint-name>`
+- [ ] **Integration branch named:** does any task in this sprint change `broker-portal/`, `admin-portal/`, `packages/design-system/` or `packages/ui/`? Yes → name the branch `int-portal/<sprint-name>`; no → `int/<sprint-name>` (`.claude/docs/shared/git-branching.md` → Branch Naming, BACKLOG-3205)
+- [ ] **Integration branch created:** `git checkout -b int/<sprint-name> develop && git push -u origin int/<sprint-name>` (or the `int-portal/` name)
 - [ ] Sprint plan populated in Supabase: `UPDATE pm_sprints SET body = '<sprint plan markdown>' WHERE id = '<sprint-uuid>';`
 - [ ] All task plans populated in Supabase: `UPDATE pm_backlog_items SET body = '<task plan markdown>' WHERE id = '<item-uuid>';` (one per task)
-- [ ] **All task plan bodies specify PR target:** `int/<sprint-name>` (NOT develop)
+- [ ] **All task plan bodies specify PR target:** `int/<sprint-name>` or `int-portal/<sprint-name>` (NOT develop)
 - [ ] Items assigned to sprint in Supabase: `SELECT pm_assign_to_sprint(p_item_ids := ARRAY['<uuid>']::uuid[], p_sprint_id := '<uuid>');`
 - [ ] **All task items have `legacy_id` set:** `UPDATE pm_backlog_items SET legacy_id = 'TASK-' || item_number WHERE sprint_id = '<sprint-uuid>' AND legacy_id IS NULL;`
   - The admin portal's token breakdown UI joins `pm_token_metrics.task_id` against `pm_backlog_items.legacy_id`

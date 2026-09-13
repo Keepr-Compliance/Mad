@@ -383,6 +383,11 @@ export function EmailSettings({
             if (cleanup) cleanup();
           },
         );
+      } else {
+        // BACKLOG-3281: the pre-flight call failed, so no listener was
+        // registered and no mailbox-connected event will ever arrive to clear
+        // the spinner below.
+        setConnectingProvider(null);
       }
     } catch (error) {
       logger.error("Failed to connect Google:", error);
@@ -412,6 +417,9 @@ export function EmailSettings({
             if (cleanup) cleanup();
           },
         );
+      } else {
+        // BACKLOG-3281: see handleConnectGoogle above.
+        setConnectingProvider(null);
       }
     } catch (error) {
       logger.error("Failed to connect Microsoft:", error);

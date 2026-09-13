@@ -160,23 +160,31 @@ describe('GoogleContactProvider', () => {
       expect(mockGetOAuthToken).toHaveBeenCalledWith(TEST_USER_ID, 'google', 'mailbox');
     });
 
-    it('should return ready=false with reconnectRequired when no token exists', async () => {
+    // BACKLOG-3203: these two used to assert `reconnectRequired: true`. A
+    // mailbox that was NEVER CONNECTED is not a mailbox asking to be
+    // reconnected, and the orchestrator turns that flag into a red "Sync
+    // Completed with Errors" + a "Reconnect Gmail" CTA. Because the Google
+    // contacts source defaults ON with no connection-state gate on the sync
+    // path, flagging this case prompted every user without a Google mailbox on
+    // every sync. This is the exact shape the orchestrator's
+    // "never connected -> plain success" test feeds in.
+    it('reports not-ready WITHOUT reconnectRequired when no token exists (never connected)', async () => {
       mockGetOAuthToken.mockResolvedValue(null);
 
       const result = await provider.canSync(TEST_USER_ID);
 
       expect(result.ready).toBe(false);
-      expect(result.reconnectRequired).toBe(true);
+      expect(result.reconnectRequired).toBeUndefined();
       expect(result.error).toContain('No Google OAuth token found');
     });
 
-    it('should return ready=false with reconnectRequired when token has no access_token', async () => {
+    it('reports not-ready WITHOUT reconnectRequired when the token has no access_token', async () => {
       mockGetOAuthToken.mockResolvedValue(createMockTokenRecord({ access_token: '' }));
 
       const result = await provider.canSync(TEST_USER_ID);
 
       expect(result.ready).toBe(false);
-      expect(result.reconnectRequired).toBe(true);
+      expect(result.reconnectRequired).toBeUndefined();
     });
 
     it('should return ready=false with reconnectRequired when contacts.readonly scope is missing', async () => {

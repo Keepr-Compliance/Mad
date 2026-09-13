@@ -131,12 +131,35 @@ async function completePhoneTypeStep(
 /** Read the import source the way the dashboard does. */
 async function readImportSource(): Promise<string> {
   const { result } = renderHook(() => useImportSource(USER_ID, false));
-  // The hook seeds from the platform default and then re-reads asynchronously;
-  // wait for the effect to settle so we assert the resolved value.
-  await waitFor(() => expect(mockGetPreferences).toHaveBeenCalled());
-  await act(async () => {
-    await Promise.resolve();
+  const stored = mockPrefs?.messages?.source;
+
+  // BACKLOG-2487: gate on the value being read, not on a sibling that happens
+  // earlier. `toHaveBeenCalled()` is already true SYNCHRONOUSLY inside the
+  // hook's effect, and flushing one microtask afterwards does not guarantee
+  // the hook's own `.then` has run and committed — so `result.current` could
+  // still hold the platform seed. That gap is the flake.
+  await waitFor(() => {
+    // The hook genuinely consulted storage — it is not short-circuiting.
+    expect(mockGetPreferences).toHaveBeenCalledWith(USER_ID);
+    if (stored !== undefined) {
+      // Storage holds a source, so the hook MUST have applied it before the
+      // caller is allowed to read. If it never does, this times out and the
+      // suite goes red — the property is still proven here, not assumed.
+      expect(result.current).toBe(stored);
+    }
   });
+
+  if (stored === undefined) {
+    // Nothing stored, so the hook keeps its platform seed and there is no
+    // value change to wait for. Settle the read anyway, so "unchanged" is a
+    // resolved outcome rather than an unfinished one.
+    await act(async () => {
+      await Promise.all(
+        mockGetPreferences.mock.results.map((r) => r.value as Promise<unknown>),
+      );
+    });
+  }
+
   return result.current;
 }
 

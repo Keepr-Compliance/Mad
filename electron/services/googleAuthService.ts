@@ -19,6 +19,7 @@ import http from "http";
 import url from "url";
 import databaseService from "./databaseService";
 import logService from "./logService";
+import type { MailboxRevokeReason } from "../types/ipc/window-api-auth";
 
 // ============================================
 // GOOGLE OAUTH2 ENDPOINTS
@@ -29,9 +30,33 @@ const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo";
 const GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke";
 
+/**
+ * BACKLOG-3206: how long the revoke may hold up a disconnect.
+ *
+ * `electron/` calls axios bare — `git grep "axios.create\|axios.defaults" --
+ * electron` returns nothing — so a request with no `timeout` inherits none and
+ * waits on the OS TCP timeout. This call sits between the user pressing
+ * Disconnect and the UI answering, so it gets an explicit bound.
+ */
+const REVOKE_TIMEOUT_MS = 5000;
+
 // ============================================
 // TYPES & INTERFACES
 // ============================================
+
+/**
+ * BACKLOG-3206: the three states a Google revoke can end in. The wider union
+ * the handler reports (`no-token`, `read-failed`, `unsupported`) describes
+ * things that happen before or instead of this call, so they are not this
+ * method's to return.
+ */
+export interface GoogleRevokeResult {
+  outcome: "revoked" | "already-invalid" | "failed";
+  /** Only set when `outcome` is `failed`. */
+  reason?: MailboxRevokeReason;
+  /** The HTTP status, when the server answered at all. */
+  status?: number;
+}
 
 interface AuthFlowResult {
   authUrl: string;
@@ -728,29 +753,79 @@ class GoogleAuthService {
 
   /**
    * Revoke tokens via HTTP POST to Google's revocation endpoint (no googleapis dependency)
-   * @param accessToken - Access token to revoke
+   *
+   * BACKLOG-3206: this used to resolve `void` on success and re-throw on any
+   * failure, which gave the caller two states where there are four. The caller
+   * has to tell the user what happened, and "Google says this token was already
+   * dead" is a success for the user's purposes while "Google answered 429" is
+   * not. So the outcome is classified here, where the response is, and the
+   * method no longer throws.
+   *
+   * @param token - The refresh token where one exists, otherwise the access
+   *   token. Google's endpoint accepts either.
    */
-  async revokeToken(accessToken: string): Promise<void> {
+  async revokeToken(token: string): Promise<GoogleRevokeResult> {
     try {
       logService.info("[GoogleAuth] Revoking token", "GoogleAuth");
 
       await axios.post(
         GOOGLE_REVOKE_URL,
-        new URLSearchParams({ token: accessToken }).toString(),
+        new URLSearchParams({ token }).toString(),
         {
           headers: {
             "Content-Type": "application/x-www-form-urlencoded",
           },
+          timeout: REVOKE_TIMEOUT_MS,
         },
       );
 
       logService.info("[GoogleAuth] Token revoked successfully", "GoogleAuth");
+      return { outcome: "revoked" };
     } catch (error) {
-      const axiosError = error as AxiosError;
+      const axiosError = error as AxiosError<{ error?: string }>;
+      const status = axiosError.response?.status;
+      const errorCode = axiosError.response?.data?.error;
+
+      // `400 invalid_token` is Google saying the token is already dead. That is
+      // the state we were asking it to reach, so it is not a failure — and
+      // classifying it as one would show the user a warning about a grant that
+      // is already gone.
+      if (status === 400 && errorCode === "invalid_token") {
+        logService.info(
+          "[GoogleAuth] Token was already invalid; nothing left to revoke",
+          "GoogleAuth",
+        );
+        return { outcome: "already-invalid", status };
+      }
+
+      // axios attaches `response` only when the server answered
+      // (axios 1.18.1, lib/core/settle.js). Its absence is the transport
+      // failing: timeout, DNS, connection reset.
+      const reason: MailboxRevokeReason = axiosError.response
+        ? "rejected"
+        : "network";
+
       logService.error("[GoogleAuth] Token revocation failed:", "GoogleAuth", {
+        reason,
+        status,
+        errorCode,
         error: axiosError.response?.data || axiosError.message || error,
       });
-      throw error;
+
+      // Transport failures are expected noise and are suppressed. An answer we
+      // did not expect means our request shape is probably wrong, which is both
+      // rare and actionable.
+      if (reason === "rejected") {
+        Sentry.captureException(error, {
+          tags: {
+            service: "google-auth-service",
+            operation: "disconnectMailbox.revoke",
+          },
+          extra: { status, errorCode },
+        });
+      }
+
+      return { outcome: "failed", reason, status };
     }
   }
 

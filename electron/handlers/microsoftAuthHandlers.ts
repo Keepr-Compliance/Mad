@@ -17,6 +17,7 @@ import databaseService from "../services/databaseService";
 import microsoftAuthService from "../services/microsoftAuthService";
 import supabaseService from "../services/supabaseService";
 import sessionService from "../services/sessionService";
+import { provisionLogin } from "../services/loginProvisioningService";
 import rateLimitService from "../services/rateLimitService";
 import auditService from "../services/auditService";
 import logService from "../services/logService";
@@ -340,14 +341,16 @@ export async function handleMicrosoftLogin(
           "Looking up or creating local user...",
           "AuthHandlers"
         );
-        let localUser = await databaseService.getUserByOAuthId(
-          "microsoft",
-          userInfo.id
-        );
+        // BACKLOG-2546: user row, token row and session row commit as ONE unit.
+        const expiresAt = new Date(
+          Date.now() + tokens.expires_in * 1000
+        ).toISOString();
 
-        if (!localUser) {
-          // TASK-1507G: Use Supabase Auth UUID as local user ID for unified IDs
-          localUser = await databaseService.createUser({
+        const provisioned = provisionLogin({
+          provider: "microsoft",
+          oauthId: userInfo.id,
+          create: {
+            // TASK-1507G: Use Supabase Auth UUID as local user ID for unified IDs
             id: cloudUser.id,
             email: userInfo.email,
             first_name: userInfo.given_name,
@@ -360,9 +363,8 @@ export async function handleMicrosoftLogin(
             subscription_status: cloudUser.subscription_status,
             trial_ends_at: cloudUser.trial_ends_at,
             is_active: true,
-          });
-        } else {
-          await databaseService.updateUser(localUser.id, {
+          },
+          updateExisting: {
             email: userInfo.email,
             first_name: userInfo.given_name,
             last_name: userInfo.family_name,
@@ -382,63 +384,48 @@ export async function handleMicrosoftLogin(
             }),
             subscription_tier: cloudUser.subscription_tier,
             subscription_status: cloudUser.subscription_status,
-          });
+          },
+          touchLastLogin: true,
+          token: {
+            purpose: "authentication",
+            data: {
+              access_token: accessToken,
+              refresh_token: refreshToken ?? undefined,
+              token_expires_at: expiresAt,
+              scopes_granted: tokens.scope,
+            },
+          },
+        });
 
-          // Bidirectional sync for terms
-          if (localUser.terms_accepted_at && !cloudUser.terms_accepted_at) {
-            try {
-              await supabaseService.syncTermsAcceptance(
-                cloudUser.id,
-                localUser.terms_version_accepted || CURRENT_TERMS_VERSION,
-                localUser.privacy_policy_version_accepted ||
-                  CURRENT_PRIVACY_POLICY_VERSION
-              );
-            } catch (syncError) {
-              await logService.error(
-                "Failed to sync local terms to cloud",
-                "AuthHandlers",
-                {
-                  error:
-                    syncError instanceof Error
-                      ? syncError.message
-                      : "Unknown error",
-                }
-              );
-            }
+        const localUser = provisioned.user;
+        const sessionToken = provisioned.sessionToken;
+
+        // Bidirectional sync for terms — a NETWORK call, so it runs after the
+        // commit. It reads the PRE-update snapshot, which is what the
+        // pre-BACKLOG-2546 code read: `localUser` was bound before `updateUser`
+        // ran and never reassigned before this call.
+        const beforeUpdate = provisioned.existingBefore;
+        if (beforeUpdate?.terms_accepted_at && !cloudUser.terms_accepted_at) {
+          try {
+            await supabaseService.syncTermsAcceptance(
+              cloudUser.id,
+              beforeUpdate.terms_version_accepted || CURRENT_TERMS_VERSION,
+              beforeUpdate.privacy_policy_version_accepted ||
+                CURRENT_PRIVACY_POLICY_VERSION
+            );
+          } catch (syncError) {
+            await logService.error(
+              "Failed to sync local terms to cloud",
+              "AuthHandlers",
+              {
+                error:
+                  syncError instanceof Error
+                    ? syncError.message
+                    : "Unknown error",
+              }
+            );
           }
         }
-
-        if (!localUser) {
-          throw new Error("Local user is unexpectedly null");
-        }
-
-        // Update last login
-        await databaseService.updateLastLogin(localUser.id);
-        const refreshedUser = await databaseService.getUserById(localUser.id);
-        if (!refreshedUser) {
-          throw new Error("Failed to retrieve user after update");
-        }
-        localUser = refreshedUser;
-
-        // Save auth token
-        const expiresAt = new Date(
-          Date.now() + tokens.expires_in * 1000
-        ).toISOString();
-
-        await databaseService.saveOAuthToken(
-          localUser.id,
-          "microsoft",
-          "authentication",
-          {
-            access_token: accessToken,
-            refresh_token: refreshToken ?? undefined,
-            token_expires_at: expiresAt,
-            scopes_granted: tokens.scope,
-          }
-        );
-
-        // Create session
-        const sessionToken = await databaseService.createSession(localUser.id);
 
         // Save session to disk for persistence across app restarts
         await sessionService.saveSession({

@@ -27,7 +27,11 @@ import type { RemovedContactRow } from "../services/db/contactDbService";
 import { dbTransaction } from "../services/db/core/dbConnection";
 import { getLiveSourcesForContact } from "../services/db/contactSourceSets";
 import { getContactNames } from "../services/contactsService";
-import type { ContactInfo, PhoneToContactInfo } from "../services/contactsService";
+// BACKLOG-3210 — consulted ONLY to explain an empty macOS contacts read.
+// See `classifyEmptyMacOSRead` below for why this probe exists and for the
+// precedence rule that keeps it from overruling a successful read.
+import permissionService from "../services/permissionService";
+import type { ContactInfo, LoadStatus, PhoneToContactInfo } from "../services/contactsService";
 import { resolveHandles } from "../services/contactResolutionService";
 import auditService from "../services/auditService";
 import logService from "../services/logService";
@@ -215,6 +219,98 @@ interface RemovedContactsResponse {
  * (which cannot import from `electron/`) and held in step by a parity test.
  */
 
+
+// ============================================================================
+// BACKLOG-3210 — WHY A macOS CONTACTS READ CAME BACK EMPTY
+// ============================================================================
+//
+// `contacts:syncExternal` used to answer this with one sentence for every
+// cause: "No contacts found in macOS Contacts". Without Full Disk Access the
+// read returns EMPTY rather than failing, so a user who had simply not granted
+// the permission was told, plausibly and wrongly, that her address book was
+// empty. Nothing looked broken, so nothing got investigated — that is the
+// shape of the defect, and it is worse than an error.
+//
+// THE THREE CAUSES, AND WHAT SEPARATES THEM:
+//
+//   ACCESS_DENIED  We were not permitted to look. `addressBookDiscovery`
+//                  swallows its own `readdir` rejection, so a denied directory
+//                  and an absent one BOTH arrive here as `booksFound: 0` —
+//                  the same ambiguity, one level down. The reader cannot tell
+//                  them apart, so a probe must: `checkContactsPermission`
+//                  distinguishes EPERM (TCC refusal) from ENOENT (not there).
+//
+//   UNREADABLE     Address books ARE on disk and not one of them opened. If
+//                  the directory listed, TCC allowed the tree — so this is a
+//                  locked or damaged store, not a permissions problem. Calling
+//                  it a Full Disk Access failure would send a user to grant a
+//                  permission she already holds, which is BACKLOG-2392's bug
+//                  reintroduced; calling it "empty" is BACKLOG-3210's. It gets
+//                  its own answer because it is its own cause.
+//
+//   EMPTY          We opened an address book and it held nobody, or the
+//                  directory is readable and holds no address book at all.
+//                  The original message, now said only when it is true.
+//
+// PRECEDENCE — DIRECT EVIDENCE OUTRANKS THE PROBE. `booksRead > 0` is tested
+// FIRST and short-circuits: if a store actually opened, we were demonstrably
+// not denied, and no probe result may overrule that. The probe is a weaker
+// signal (a different path, a moment later, and cached), so it is consulted
+// only where the read itself could not answer.
+type MacOSEmptyReadCause =
+  | "CONTACTS_ACCESS_DENIED"
+  | "CONTACTS_UNREADABLE"
+  | "CONTACTS_EMPTY";
+
+/**
+ * What the user reads. Keyed by cause so the two can never drift apart, and so
+ * tests can assert the CAUSE (stable) while the copy stays free to change.
+ */
+const MACOS_EMPTY_READ_MESSAGE: Record<MacOSEmptyReadCause, string> = {
+  CONTACTS_ACCESS_DENIED:
+    "Keepr could not read macOS Contacts because Full Disk Access is not granted. " +
+    "Open System Settings > Privacy & Security > Full Disk Access, turn Keepr on, " +
+    "then run the sync again.",
+  CONTACTS_UNREADABLE:
+    "Keepr found address books on this Mac but could not open any of them. " +
+    "The Contacts store may be in use or damaged — open the Contacts app, then " +
+    "run the sync again.",
+  // Unchanged wording. This is the sentence that was previously said for all
+  // three causes; it stays exactly as it was for the one case where it is true.
+  CONTACTS_EMPTY: "No contacts found in macOS Contacts",
+};
+
+/**
+ * Decide why a macOS contacts read produced nobody. Called ONLY once the read
+ * has already come back empty.
+ *
+ * The permission probe runs at most once, and never at all when the reader
+ * already proved a store opened.
+ */
+async function classifyEmptyMacOSRead(
+  status: LoadStatus | undefined,
+): Promise<MacOSEmptyReadCause> {
+  // A store opened. We were not denied, whatever any probe says next.
+  if (status && status.booksRead > 0) {
+    return "CONTACTS_EMPTY";
+  }
+
+  const permission = await permissionService.checkContactsPermission();
+  if (
+    !permission.hasPermission &&
+    permission.errorCode === "CONTACTS_ACCESS_DENIED"
+  ) {
+    return "CONTACTS_ACCESS_DENIED";
+  }
+
+  // Not denied. Stores on disk that would not open are a different failure
+  // from an address book with nobody in it.
+  if (status && status.booksFound > 0) {
+    return "CONTACTS_UNREADABLE";
+  }
+
+  return "CONTACTS_EMPTY";
+}
 
 /**
  * BACKLOG-2316: Build the macOS shadow-table sync payload from a person-deduped
@@ -3453,6 +3549,24 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
 
         // Pass userId to enable external_contacts lookup (iPhone, macOS, Outlook, Google)
         const validatedUserId = userId ? await getValidUserId(userId, "Contacts") : undefined;
+        // =====================================================================
+        // BACKLOG-3254 — AN UNCONFIRMED ID ENDS THIS CALL
+        // =====================================================================
+        // This is the one channel in this file where `null` must not simply be
+        // coalesced and forwarded. Downstream, a missing id is not read as "no
+        // user" — so an unconfirmed id has to stop here rather than travel on.
+        // Details are on BACKLOG-3254's pm_comments trail.
+        //
+        // Callers see raw handles rather than an error banner: all three
+        // consumers gate on `result.success && result.names` and render the
+        // handle itself otherwise. That is the intended outcome — a number is
+        // honest, a name resolved outside this user's scope is not.
+        //
+        // The `userId`-absent path is untouched and still resolves unscoped by
+        // design; only a supplied-but-unconfirmed id stops here.
+        if (userId && validatedUserId === null) {
+          return { success: false, names: {}, error: "No valid user found in database" };
+        }
         // BACKLOG-2757: the IPC contract stays `Record<handle, label>`; the
         // label is now the honest one ("A or B" for a shared line) rather than
         // whichever contact was inserted last.
@@ -3548,6 +3662,12 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         coverage: "complete" | "partial" | "none";
       };
       error?: string;
+      /**
+       * BACKLOG-3210 — WHY the sync produced nothing, as a value rather than
+       * as prose. `error` is what the user reads and will be reworded; this is
+       * what code and tests may depend on. Absent on success.
+       */
+      errorCode?: MacOSEmptyReadCause;
     }> => {
       try {
         logService.info("[Main] Manual external contacts sync requested", "Contacts", { userId });
@@ -3593,7 +3713,24 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           (!contacts || contacts.length === 0) &&
           (!phoneToContactInfo || Object.keys(phoneToContactInfo).length === 0)
         ) {
-          return { success: false, read, error: "No contacts found in macOS Contacts" };
+          // BACKLOG-3210: an empty read is a QUESTION, not an answer. Ask it.
+          const cause = await classifyEmptyMacOSRead(status);
+          logService.warn(
+            "[Main] macOS contacts sync produced nothing",
+            "Contacts",
+            {
+              cause,
+              booksFound: status?.booksFound,
+              booksRead: status?.booksRead,
+              coverage: status?.coverage,
+            },
+          );
+          return {
+            success: false,
+            read,
+            error: MACOS_EMPTY_READ_MESSAGE[cause],
+            errorCode: cause,
+          };
         }
 
         // BACKLOG-2316: person-deduped payload (see initial-sync path).

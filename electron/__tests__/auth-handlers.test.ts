@@ -60,6 +60,20 @@ jest.mock("os", () => ({
 }));
 
 // Mock services with inline factories (hoisting-safe)
+// BACKLOG-2546: the login write chain is one transaction behind
+// `provisionLogin`, so that is the seam these handler tests intercept. WHICH of
+// create/update runs is now decided inside the transaction against the real row,
+// and is covered on the real driver in
+// `services/db/__tests__/loginProvisioningAtomicity-2546.test.ts`. What is
+// asserted here is what the HANDLER decides to send, which is what these cases
+// were always about.
+const mockProvisionLogin = jest.fn();
+
+jest.mock("../services/loginProvisioningService", () => ({
+  __esModule: true,
+  provisionLogin: (...args: unknown[]) => mockProvisionLogin(...args),
+}));
+
 jest.mock("../services/databaseService", () => ({
   __esModule: true,
   default: {
@@ -82,6 +96,26 @@ jest.mock("../services/databaseService", () => ({
   },
 }));
 
+/**
+ * BACKLOG-3206 — SECOND LINE OF DEFENCE.
+ *
+ * The disconnect handlers registered by this suite now call
+ * `googleAuthService.revokeToken`, which POSTs to Google's revocation endpoint.
+ * The factory below mocks that service — but the factory is a WHITELIST, and
+ * this one had already gone stale for `revokeToken` before the method had a
+ * caller: every method it does not list resolves to `undefined`, so the call
+ * would have thrown a `TypeError`, been swallowed by the handler's catch, and
+ * the suite would have passed on the failure path without anybody noticing.
+ *
+ * Nothing in this repository blocks a jest run from making a real outbound
+ * request — `jest.config.js`'s `moduleNameMapper` has no `axios` entry and
+ * `tests/setup.js` installs no network guard — so the whitelist going stale in
+ * the other direction (a future edit dropping the service mock) would put a
+ * live request to Google inside a unit test. This line makes that impossible
+ * independently of the factory below. Filed repo-wide as BACKLOG-3284.
+ */
+jest.mock("axios");
+
 jest.mock("../services/googleAuthService", () => ({
   __esModule: true,
   default: {
@@ -92,6 +126,7 @@ jest.mock("../services/googleAuthService", () => ({
     stopLocalServer: jest.fn(),
     resolveCodeDirectly: jest.fn(),
     rejectCodeDirectly: jest.fn(),
+    revokeToken: jest.fn().mockResolvedValue({ outcome: "revoked" }),
   },
 }));
 
@@ -105,6 +140,10 @@ jest.mock("../services/microsoftAuthService", () => ({
     stopLocalServer: jest.fn(),
     resolveCodeDirectly: jest.fn(),
     rejectCodeDirectly: jest.fn(),
+    revokeToken: jest.fn().mockResolvedValue({
+      outcome: "unsupported",
+      message: "Microsoft publishes no revocation endpoint for app grants",
+    }),
   },
 }));
 
@@ -388,10 +427,12 @@ describe("Auth Handlers", () => {
         userInfo: mockUserInfo,
       });
       mockSupabaseService.syncUser.mockResolvedValue(fixture(mockCloudUser));
-      mockDatabaseService.getUserByOAuthId.mockResolvedValue(null);
-      mockDatabaseService.createUser.mockResolvedValue(fixture(mockLocalUser));
-      mockDatabaseService.getUserById.mockResolvedValue(fixture(mockLocalUser));
-      mockDatabaseService.createSession.mockResolvedValue("session-token-123");
+      mockProvisionLogin.mockReturnValue({
+        user: mockLocalUser,
+        sessionToken: "session-token-123",
+        isNewUser: true,
+        existingBefore: null,
+      });
       mockSupabaseService.validateSubscription.mockResolvedValue(fixture({
         tier: "pro",
       }));
@@ -418,15 +459,27 @@ describe("Auth Handlers", () => {
         ...mockLocalUser,
         terms_accepted_at: new Date().toISOString(),
       };
-      mockDatabaseService.getUserByOAuthId.mockResolvedValue(fixture(existingUser));
-      mockDatabaseService.getUserById.mockResolvedValue(fixture(existingUser));
+      mockProvisionLogin.mockReturnValue({
+        user: existingUser,
+        sessionToken: "session-token-123",
+        isNewUser: false,
+        existingBefore: existingUser,
+      });
 
       const handler = registeredHandlers.get("auth:google:complete-login");
       const result = await handler(mockEvent, "valid-auth-code");
 
       expect(result.success).toBe(true);
-      expect(mockDatabaseService.updateUser).toHaveBeenCalled();
-      expect(mockDatabaseService.createUser).not.toHaveBeenCalled();
+      // The handler sends both the create payload and the update payload; the
+      // transaction picks by what is actually in the table. That the RETURNING
+      // path updates rather than inserts is asserted against the real driver
+      // (H2 in loginProvisioningAtomicity-2546).
+      expect(mockProvisionLogin).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "google",
+          updateExisting: expect.objectContaining({ email: expect.any(String) }),
+        }),
+      );
     });
 
     it("should handle invalid auth code", async () => {
@@ -665,7 +718,24 @@ describe("Auth Handlers", () => {
       expect(result.completed).toBe(true);
     });
 
-    it("should return completed=false when onboarding done but no mailbox token (session-only OAuth)", async () => {
+    // BACKLOG-3293. The rule this handler implements is an OR:
+    //     completed := onboardingCompleted || hasValidMailboxToken
+    // The four tests in this describe pin the COMPLETE flag x token truth
+    // table, so any handler that passes all four implements exactly that
+    // expression — not merely something compatible with it:
+    //     flag=true,  token=present -> true   "…onboarding done and mailbox token exists"
+    //     flag=true,  token=null    -> true   the test below
+    //     flag=false, token=present -> true   "…(TASK-1039)", which also pins the auto-correct
+    //     flag=false, token=null    -> false  "…onboarding not done and no token"
+    // So the test below cannot be read on its own: its fixture returns true
+    // under the OR AND under a bare `onboardingCompleted`, because every
+    // observable on flag=true/token=null is identical between the two. It is
+    // the TASK-1039 row that separates them. Do not delete any of the four.
+    it("returns completed=true when the user answered the email step but holds no mailbox token — do not re-run onboarding (BACKLOG-3293)", async () => {
+      // A deliberate skip and a session-only token that was never persisted
+      // are indistinguishable to THIS handler — both are flag=true, no token —
+      // and stay so until an email-decline is persisted (BACKLOG-3244). For the
+      // routing question both have the same right answer, so it does not guess.
       mockDatabaseService.hasCompletedEmailOnboarding.mockResolvedValue(true);
       mockDatabaseService.getOAuthToken.mockResolvedValue(null); // No token
 
@@ -673,7 +743,9 @@ describe("Auth Handlers", () => {
       const result = await handler(mockEvent, TEST_USER_ID);
 
       expect(result.success).toBe(true);
-      expect(result.completed).toBe(false);
+      expect(result.completed).toBe(true);
+      // The disagreement between the two facts still goes on the record — this
+      // is the log line the founder's own reproduction was read from.
       expect(mockLogService.info).toHaveBeenCalledWith(
         "Email onboarding flag is true but no valid mailbox token found",
         "AuthHandlers",
@@ -835,9 +907,7 @@ describe("Auth Handlers", () => {
 
     beforeEach(() => {
       // Reset mocks
-      mockDatabaseService.getUserByOAuthId.mockReset();
-      mockDatabaseService.updateUser.mockReset();
-      mockDatabaseService.createUser.mockReset();
+      mockProvisionLogin.mockReset();
       mockSupabaseService.syncUser.mockReset();
       mockSupabaseService.syncTermsAcceptance.mockReset();
       mockGoogleAuthService.exchangeCodeForTokens.mockReset();
@@ -879,10 +949,13 @@ describe("Auth Handlers", () => {
         privacy_policy_accepted_at: null,
       };
 
-      mockDatabaseService.getUserByOAuthId.mockResolvedValue(
-        fixture(localUserWithTerms),
-      );
-      mockDatabaseService.getUserById.mockResolvedValue(fixture(localUserWithTerms));
+      mockProvisionLogin.mockReturnValue({
+        user: localUserWithTerms,
+        sessionToken: "test-session-token",
+        isNewUser: false,
+        // The PRE-update snapshot is what drives the sync-up decision.
+        existingBefore: localUserWithTerms,
+      });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       mockSupabaseService.syncUser.mockResolvedValue(cloudUserNoTerms as any);
       mockSupabaseService.syncTermsAcceptance.mockResolvedValue(fixture(undefined));
@@ -891,11 +964,12 @@ describe("Auth Handlers", () => {
       await handler(mockEvent, "test-auth-code");
 
       // Verify local terms were NOT overwritten (updateUser should not include terms fields)
-      expect(mockDatabaseService.updateUser).toHaveBeenCalledWith(
-        TEST_USER_ID,
-        expect.not.objectContaining({
-          terms_accepted_at: null,
-          privacy_policy_accepted_at: null,
+      expect(mockProvisionLogin).toHaveBeenCalledWith(
+        expect.objectContaining({
+          updateExisting: expect.not.objectContaining({
+            terms_accepted_at: null,
+            privacy_policy_accepted_at: null,
+          }),
         }),
       );
 
@@ -930,11 +1004,13 @@ describe("Auth Handlers", () => {
         privacy_policy_version_accepted: "1.0",
       };
 
-      mockDatabaseService.getUserByOAuthId.mockResolvedValue(fixture(localUserNoTerms));
-      mockDatabaseService.getUserById.mockResolvedValue(fixture({
-        ...localUserNoTerms,
-        ...cloudUserWithTerms,
-      }));
+      mockProvisionLogin.mockReturnValue({
+        user: { ...localUserNoTerms, ...cloudUserWithTerms },
+        sessionToken: "test-session-token",
+        isNewUser: false,
+        // No local terms, so the sync-up must NOT fire.
+        existingBefore: localUserNoTerms,
+      });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       mockSupabaseService.syncUser.mockResolvedValue(cloudUserWithTerms as any);
 
@@ -942,13 +1018,14 @@ describe("Auth Handlers", () => {
       await handler(mockEvent, "test-auth-code");
 
       // Verify cloud terms were synced to local
-      expect(mockDatabaseService.updateUser).toHaveBeenCalledWith(
-        TEST_USER_ID,
+      expect(mockProvisionLogin).toHaveBeenCalledWith(
         expect.objectContaining({
-          terms_accepted_at: "2024-01-15T00:00:00.000Z",
-          privacy_policy_accepted_at: "2024-01-15T00:00:00.000Z",
-          terms_version_accepted: "1.0",
-          privacy_policy_version_accepted: "1.0",
+          updateExisting: expect.objectContaining({
+            terms_accepted_at: "2024-01-15T00:00:00.000Z",
+            privacy_policy_accepted_at: "2024-01-15T00:00:00.000Z",
+            terms_version_accepted: "1.0",
+            privacy_policy_version_accepted: "1.0",
+          }),
         }),
       );
 
@@ -974,10 +1051,12 @@ describe("Auth Handlers", () => {
         privacy_policy_accepted_at: null,
       };
 
-      mockDatabaseService.getUserByOAuthId.mockResolvedValue(
-        fixture(localUserWithTerms),
-      );
-      mockDatabaseService.getUserById.mockResolvedValue(fixture(localUserWithTerms));
+      mockProvisionLogin.mockReturnValue({
+        user: localUserWithTerms,
+        sessionToken: "test-session-token",
+        isNewUser: false,
+        existingBefore: localUserWithTerms,
+      });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       mockSupabaseService.syncUser.mockResolvedValue(cloudUserNoTerms as any);
       mockSupabaseService.syncTermsAcceptance.mockRejectedValue(
@@ -1183,11 +1262,20 @@ describe("Auth Handlers", () => {
         "google",
         "mailbox",
       );
+      // BACKLOG-3206: `expect.objectContaining` is loose only at the TOP
+      // level — a nested object is compared exactly — so this had to be
+      // loosened for `revokeOutcome` to be admitted. The positive assertion
+      // moves down a line rather than disappearing: no token row is stored in
+      // this fixture, so nothing was sent to Google and `no-token` is the
+      // honest report.
       expect(mockAuditService.log).toHaveBeenCalledWith(
         expect.objectContaining({
           action: "MAILBOX_DISCONNECT",
           resourceType: "MAILBOX",
-          metadata: { provider: "google" },
+          metadata: expect.objectContaining({
+            provider: "google",
+            revokeOutcome: "no-token",
+          }),
           success: true,
         }),
       );
@@ -1204,9 +1292,21 @@ describe("Auth Handlers", () => {
      * The confirmation added to Settings > Emails tells the user that emails
      * and contacts already stored on this computer are KEPT. That is a claim
      * about this handler, and no renderer test can see it, so it is asserted
-     * here: the whole disconnect path touches the database exactly twice — one
-     * read to resolve the user (`getValidUserId` -> `getUserById`) and one
-     * write, the token delete.
+     * here: the whole disconnect path makes exactly one database WRITE, the
+     * token delete.
+     *
+     * BACKLOG-3206 admitted a third name, `getOAuthToken`. The claim this pin
+     * guards is about what gets thrown away, and a read cannot throw anything
+     * away — the handler now reads the token row so it can ask Google to end
+     * the grant before the row goes. Moving that read somewhere else to keep
+     * the set at two would have been fixing the measurement instead of the
+     * claim.
+     *
+     * So the pin gets a second half rather than a wider allowance: exactly one
+     * of the called methods may be write-shaped. A future change that added a
+     * second write — a second `DELETE`, an `UPDATE`, anything that removes or
+     * rewrites stored data — reds the write assertion even though the name set
+     * was updated to admit it.
      *
      * Enumerated from the mock by execution rather than compared against a list
      * written by hand, so a mutation that added a second write shows up as a
@@ -1243,7 +1343,23 @@ describe("Auth Handlers", () => {
         .map(([name]) => name)
         .sort();
 
-      expect(called).toEqual(["deleteOAuthToken", "getUserById"]);
+      expect(called).toEqual([
+        "deleteOAuthToken",
+        "getOAuthToken",
+        "getUserById",
+      ]);
+
+      // The half that keeps enforcing the docstring now that a third name is
+      // admitted. Matched on the name, because that is what the enumeration
+      // above yields — a method whose name starts with one of these verbs
+      // changes stored data.
+      const writeShaped = called.filter((name) =>
+        /^(accept|clear|complete|create|delete|drop|insert|purge|remove|reset|save|set|update|upsert|write)/.test(
+          name,
+        ),
+      );
+
+      expect(writeShaped).toEqual(["deleteOAuthToken"]);
     });
 
     it("should handle invalid user ID", async () => {
@@ -1254,6 +1370,22 @@ describe("Auth Handlers", () => {
       expect(result.error).toBeDefined();
     });
 
+    /**
+     * BACKLOG-3206 — THIS ALSO GUARDS THE `finally`. Do not delete it as a
+     * duplicate of the sibling error tests.
+     *
+     * The disconnect handler deletes the token row in a `finally`, so the row
+     * goes whatever the revoke does. That makes this test load-bearing in a way
+     * its name does not say: rejecting `deleteOAuthToken` is now a rejection
+     * raised INSIDE a `finally`, and what this asserts is that it still
+     * propagates out of the handler as `success: false` with the message
+     * intact.
+     *
+     * The mutation that reds it is the "let's be safe" refactor a future author
+     * will reach for: wrap the `finally`'s delete in its own try/catch. Run
+     * 2026-09-12 against the real implementation — 2 failed, this test and its
+     * Microsoft twin below.
+     */
     it("should handle database error during disconnect", async () => {
       mockDatabaseService.deleteOAuthToken.mockRejectedValueOnce(
         new Error("Database error"),
@@ -1303,11 +1435,17 @@ describe("Auth Handlers", () => {
         "microsoft",
         "mailbox",
       );
+      // BACKLOG-3206: as above. `unsupported` is the whole Microsoft story —
+      // Microsoft publishes no revocation endpoint, and asserting it here is
+      // what stops that path ever reporting a success it did not earn.
       expect(mockAuditService.log).toHaveBeenCalledWith(
         expect.objectContaining({
           action: "MAILBOX_DISCONNECT",
           resourceType: "MAILBOX",
-          metadata: { provider: "microsoft" },
+          metadata: expect.objectContaining({
+            provider: "microsoft",
+            revokeOutcome: "unsupported",
+          }),
           success: true,
         }),
       );
@@ -1327,6 +1465,22 @@ describe("Auth Handlers", () => {
       expect(result.error).toBeDefined();
     });
 
+    /**
+     * BACKLOG-3206 — THIS ALSO GUARDS THE `finally`. Do not delete it as a
+     * duplicate of the sibling error tests.
+     *
+     * The disconnect handler deletes the token row in a `finally`, so the row
+     * goes whatever the revoke does. That makes this test load-bearing in a way
+     * its name does not say: rejecting `deleteOAuthToken` is now a rejection
+     * raised INSIDE a `finally`, and what this asserts is that it still
+     * propagates out of the handler as `success: false` with the message
+     * intact.
+     *
+     * The mutation that reds it is the "let's be safe" refactor a future author
+     * will reach for: wrap the `finally`'s delete in its own try/catch. Run
+     * 2026-09-12 against the real implementation — 2 failed, this test and its
+     * Google twin above.
+     */
     it("should handle database error during disconnect", async () => {
       mockDatabaseService.deleteOAuthToken.mockRejectedValueOnce(
         new Error("Database error"),

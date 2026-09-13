@@ -34,7 +34,7 @@ name: PR Metrics Validation
 
 on:
   pull_request:
-    branches: [main, develop, 'int/**']
+    branches: [main, develop, 'int/**', 'int-portal/**']
     types: [opened, edited, synchronize, reopened]
 
 permissions:
@@ -110,10 +110,10 @@ jobs:
             "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.title'
           PR_TITLE="$(cat "$RUNNER_TEMP/pr-title.txt")"
 
-          if [[ "$HEAD_REF" == int/* ]]; then
+          if [[ "$HEAD_REF" == int/* || "$HEAD_REF" == int-portal/* ]]; then
             echo "skip=true" >> $GITHUB_OUTPUT
-            echo "skip_reason=integration branch (int/*)" >> $GITHUB_OUTPUT
-            echo "::notice::Metrics validation skipped - integration branch (int/*) combines multiple tasks"
+            echo "skip_reason=integration branch (int/*, int-portal/*)" >> $GITHUB_OUTPUT
+            echo "::notice::Metrics validation skipped - integration branch (int/*, int-portal/*) combines multiple tasks"
           elif [[ "$HEAD_REF" == squash/* ]]; then
             # PM squash/aggregate PRs (BACKLOG-2685). A squash collapses many
             # agents' commits into one; there is no single engineer to attribute

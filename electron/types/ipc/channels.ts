@@ -22,6 +22,7 @@ import type { ExportResult, ExtractionResult, SyncStatus } from "../database";
 // metadata + surviving-role count), owned by the service that produces it.
 import type { RemovedContactRow } from "../../services/db/contactDbService";
 import type { TransactionContactResult } from "../../services/db/transactionContactDbService";
+import type { HealthIssue } from "./healthIssue";
 
 // ============================================
 // IPC CHANNEL DEFINITIONS
@@ -324,7 +325,14 @@ export interface IpcChannels {
     response: {
       healthy: boolean;
       provider?: OAuthProvider;
-      issues?: string[];
+      // BACKLOG-3230: corrected to the real payload shape. NOTE that this map
+      // types only the generic `window.api.invoke(channel, ...)` escape hatch,
+      // which nothing in `src/` calls — the live path is typed by
+      // `window-api-system.ts`. Mutating this entry to a contradictory type was
+      // measured at exit 0 on BOTH `type-check` and `type-check:tests`, so it
+      // carries no guarantee and deliberately has no control. It is corrected
+      // because a known-false type in a shared map misleads the next reader.
+      issues?: HealthIssue[];
     };
   };
 
