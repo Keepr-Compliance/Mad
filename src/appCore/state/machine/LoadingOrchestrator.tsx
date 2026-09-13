@@ -28,6 +28,41 @@ import { fdaFromProbe, unknownFdaFor } from "./fdaState";
 import type { PlatformInfo, User, UserData } from "./types";
 import logger from "../../../utils/logger";
 
+type RecordedPhoneType = "iphone" | "android";
+
+/** Only a successful read of a valid value is an answer. */
+function asRecordedPhoneType(
+  result: { success: boolean; phoneType?: unknown } | null | undefined,
+): RecordedPhoneType | null {
+  if (!result || result.success !== true) return null;
+  return result.phoneType === "iphone" || result.phoneType === "android"
+    ? result.phoneType
+    : null;
+}
+
+/**
+ * BACKLOG-3276: copy a cloud-only phone type into the local database, then
+ * return what the local database now holds.
+ *
+ * - The sync's own result is deliberately ignored: it reports success whether
+ *   it wrote a value, found nothing in the cloud, or found no local user row.
+ *   The local re-read is the record.
+ * - Callers invoke this only after a SUCCESSFUL local read found nothing. That
+ *   read waited for the database, which this sync handler does not do.
+ * - Any failure means "no answer", never an exception into the Phase 4
+ *   fallback, which would also discard the user's email and permission state.
+ */
+async function recoverPhoneTypeFromCloud(
+  userId: string,
+): Promise<RecordedPhoneType | null> {
+  try {
+    await window.api.user.syncPhoneTypeFromCloud(userId);
+    return asRecordedPhoneType(await window.api.user.getPhoneType(userId));
+  } catch {
+    return null;
+  }
+}
+
 interface LoadingOrchestratorProps {
   children: React.ReactNode;
 }
@@ -227,8 +262,10 @@ export function LoadingOrchestrator({
 
     // console.log("[LoadingOrchestrator] PHASE 2: Starting database initialization...");
 
-    // Guard: respect deferredDbInit flag - let onboarding SecureStorageStep handle DB init
-    // This prevents the Keychain prompt from appearing before the login screen on fresh macOS installs
+    // Guard: respect deferredDbInit flag - let onboarding SecureStorageStep handle DB init.
+    // BACKLOG-3253 deleted the only producer of this flag, so this branch is
+    // now unreachable. Kept inert rather than deleted, to keep that PR to one
+    // hunk on a contended file; removal is a tracked follow-up.
     const loadingState = state as import("./types").LoadingState;
     if (loadingState.deferredDbInit) {
       return;
@@ -666,11 +703,20 @@ export function LoadingOrchestrator({
             : Promise.resolve(undefined),
         ]);
 
-      // Determine phone type
+      // Determine phone type.
+      //
+      // BACKLOG-3276: the local database is the record read here. On a fresh
+      // local profile it is empty while the user's answer is already in
+      // Supabase (usePhoneTypeApi writes the cloud copy first). When, and only
+      // when, the local read SUCCEEDED and found nothing, copy the cloud answer
+      // into the local database and read local again. See
+      // recoverPhoneTypeFromCloud for the rules.
+      const localPhoneType = asRecordedPhoneType(phoneTypeResult);
       const phoneType =
-        phoneTypeResult.success && phoneTypeResult.phoneType
-          ? phoneTypeResult.phoneType
-          : null;
+        localPhoneType ??
+        (phoneTypeResult.success === true
+          ? await recoverPhoneTypeFromCloud(userId)
+          : null);
 
       // Determine if any email provider is connected
       const hasEmailConnected =
@@ -795,15 +841,18 @@ export function LoadingOrchestrator({
     // init still falls through to the reads below, which have their own
     // `.catch()` fallbacks.
     //
-    // BACKLOG-2171: a returning user on a fresh macOS profile routes here with
-    // DB init intentionally DEFERRED to onboarding's secure-storage step
-    // (deferredDbInit) — init hasn't been kicked off and won't be until the
-    // user reaches that step, which is BEHIND this loading screen. Polling
-    // for db-ready in that state burns the full MAX_WAIT_MS for nothing, which
-    // was the launch-blocking "frozen Loading your data" regression. `idle`/
-    // any non-in-progress stage now returns immediately; only a stage that
-    // indicates init is genuinely underway keeps polling (preserves the
-    // BACKLOG-2149 memory-pressure protection).
+    // BACKLOG-2171: this was written for a fresh macOS profile that routed here
+    // with DB init intentionally DEFERRED to onboarding's secure-storage step —
+    // init hadn't been kicked off and wouldn't be until the user reached that
+    // step, which is BEHIND this loading screen. Polling for db-ready in that
+    // state burned the full MAX_WAIT_MS for nothing: the launch-blocking
+    // "frozen Loading your data" regression.
+    //
+    // BACKLOG-3253 removed that deferral, so the stated cause is gone. The
+    // logic stays: `idle`/any non-in-progress stage returns immediately and
+    // only a stage indicating init is genuinely underway keeps polling, which
+    // still bounds a STUCK init and still preserves the BACKLOG-2149
+    // memory-pressure protection.
     const waitForDbReadyBounded = async (): Promise<void> => {
       const getInitStage = window.api?.system?.getInitStage;
       if (!getInitStage) return;

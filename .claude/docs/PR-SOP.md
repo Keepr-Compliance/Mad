@@ -473,8 +473,10 @@ and what to establish first.**
       assertions that cannot observe the error they assert, snapshot tests that were regenerated
       rather than read. **A blind spot under a refactor is worse than under a fix** — a fix at
       least changes behaviour the founder can see.
-- [ ] **Is the code reachable?** Refactoring code no user can reach is work with no upside and a
-      real downside: it makes the dead code look maintained. See ENGINEER-WORKFLOW Step 1a.
+- [ ] **Is the code reachable?** Not only for refactors — for ANY item. Work on code no user can
+      reach has no upside and a real downside: it makes the dead code look maintained. A registered
+      IPC handler is not proof of reachability; the proof is a caller in `src/`.
+      See ENGINEER-WORKFLOW Step 1a and §6.2k.
 
 **Sequencing — refactors go last**
 - [ ] **Correctness fixes first, then test-suite integrity, then structure.** A refactor performed
@@ -687,6 +689,53 @@ Rule out what you controlled before you name anything you didn't.
 4. **Before routing anything to the founder, state what you have already ruled out.** If you cannot list it, you have not earned the handoff — see the Tool-First Rule in `CLAUDE.md`. Handing over a console to go check, while holding the file that contains the defect, is the failure this section exists to prevent.
 
 This is distinct from 6.2g. That one is about inheriting a claim without checking it. This one is about **ordering**: even when you check honestly, checking the far end first wastes the founder's attention and often ends in an accusation you have to withdraw.
+
+### 6.2k An unreachability finding is a STOP, not a note (MANDATORY)
+
+**If no code in `src/` reaches the code an item changes, the item returns to the founder before any
+code is written** — with a wire / delete / build-anyway question. Filing a follow-up item is not a
+disposition. A prior ruling on the item does not survive it.
+
+**Attaches to Step 7 (SR plan review) as a blocking exit criterion**, and to the engineer plan at
+Step 6 if it surfaces there first.
+
+**The check, which takes seconds:**
+
+```
+git grep -n '<channel>\|<preloadMethod>' -- src
+```
+
+Zero hits is the finding. Callers inside `electron/` do not count — a handler calling a handler is
+not a user reaching a feature.
+
+**Why this is a STOP and not a checklist item.** BACKLOG-3234 is the worked example. The orphan
+status of `transactions:export-pdf` was written down **four times** before the PR opened: in
+BACKLOG-2771's own commit (`68becf9b2`, 2026-08-21, *"orphan channel, no renderer caller"*, which
+then added two test cases for it); in the engineer's plan at §9.7; in the SR plan review, which
+verified it independently and wrote *"No user can reach it today"* — and approved; and in the
+founder gate, which recorded *"THE GATE IS NOT UI-REPRODUCIBLE… There is no button."*
+
+**Every gate saw it. Every gate wrote it down and continued.** Detection was never the problem.
+Nothing made STOP the default, so four surfacings became four paragraphs. Precedent: BACKLOG-2515,
+same shape, five weeks earlier, also caught before merge, also not stopped.
+
+**A well-evidenced item is MORE dangerous here, not less.** 3234 had correct `file:line` cites, a
+correct mechanism and a reproducible defect. All of that was true. Only its reachability was never
+asked, and the quality of the rest is what carried it past four reviews.
+
+### 6.2l Establish reachability BEFORE putting a decision to the founder (MANDATORY)
+
+**Before asking the founder a product or design question about a code path, establish the path is
+reachable — and state the result in the same message.** *"Reachable from `ExportModal.tsx:207`"* or
+*"no caller in `src/`"*. If it is not reachable, the question is not "how should this behave" but
+"should this exist".
+
+**A ruling obtained on a reachability the asker did not check does not bind the work that follows.**
+
+This is separate from §6.2k and fires earlier. On BACKLOG-3234 the founder ruled on 2026-09-08;
+SR established unreachability on 2026-09-09 at 07:14. A Step 7 STOP would have caught the build —
+it could not have caught the decision, which had already been made on a false premise and was then
+treated as settled. §6.2k protects the build; this protects the decision.
 
 ### 6.3 Review Prompt Template
 

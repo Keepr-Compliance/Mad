@@ -262,14 +262,21 @@ export function setupNewUserMacOS(): void {
 
 /**
  * Configures mock API for a new user on Windows.
- * - DPAPI doesn't require keystore check
+ * - No keystore initially
  * - DB init succeeds
  * - No existing session
+ *
+ * BACKLOG-3253: this used to report `hasKeyStore: true` with the reason
+ * "Windows DPAPI doesn't need keychain". That is a state the producer cannot
+ * emit on a first run — `hasEncryptionKeyStore()` is `fs.existsSync()` on a
+ * file under userData (databaseEncryptionService.ts `hasKeyStore()`), so a
+ * genuine first run reports false on EVERY platform. The outcome was unchanged
+ * either way, which is why the drift stayed latent.
  */
 export function setupNewUserWindows(): void {
   mockApi.system.hasEncryptionKeyStore.mockResolvedValue({
     success: true,
-    hasKeyStore: true, // Windows DPAPI doesn't need keychain
+    hasKeyStore: false,
   });
   mockApi.system.initializeSecureStorage.mockResolvedValue({
     success: true,

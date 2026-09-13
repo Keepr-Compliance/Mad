@@ -140,45 +140,48 @@ describe("BACKLOG-3275 — a declined permission is never reported as granted", 
     expect(isFdaGranted(back.fda!)).toBe(false);
   });
 
-  it("FIX 4 (user-visible): the Resume-Setup banner now appears for a zero-source user", () => {
-    // Chain: declined -> ready -> the Resume/Email affordance dispatches
-    // START_EMAIL_SETUP (useNavigationFlow.ts:121) -> the user connects no
-    // mailbox -> the queue reports done (OnboardingFlow.tsx:474) -> ready with
-    // NO data source at all.
+  it("FIX 4: a declined permission is not a data source, so a user with no other source reports setup incomplete", () => {
+    // What BACKLOG-3275 guarantees here: the floor does not count a DECLINED
+    // Full Disk Access as a texts source (userDataSelectors.ts,
+    // `permissionsGranted: isFdaGranted(userData.fda)`).
     //
-    // Narrow by construction: this requires the ONBOARDING_QUEUE_DONE exit.
-    // Exiting via ONBOARDING_STEP_COMPLETE recovers `phoneType` from
-    // `platform.hasIPhone` and the floor then passes on the phone regardless.
+    // FIXTURE: reducer-emitted, not UI-reachable. USER_DATA_LOADED with no
+    // phone type, then ONBOARDING_QUEUE_DONE with nothing answered. The UI
+    // cannot complete the queue while phone-type is unanswered (PhoneTypeStep:
+    // no skip, Continue hidden), so no user reaches this state. It isolates the
+    // floor's treatment of a declined permission from every other source.
     //
-    // Before the fix `selectSetupIncomplete` returned false here — the floor
-    // counted Full Disk Access as a live texts source for a user who declined
-    // it, so the banner was suppressed. This is a visible change to a shipping
-    // surface, not only a correctness cleanup.
-    const onboarding = load(declinedFdaMidOnboarding);
-    const ready1 = appStateReducer(onboarding, { type: "ONBOARDING_STEP_COMPLETE", step: "email-connect" });
-    expect(ready1).not.toBe(onboarding); // ANTI-VACUITY (BACKLOG-3277)
-    if (ready1.status !== "ready") throw new Error("expected ready");
+    // Not a user-visible banner case. A ready user always has a phone type
+    // (BACKLOG-3276), any phone type satisfies the floor
+    // (hasMinimumDataSourceForUser sets driverSetupComplete from
+    // needsDriverSetup === false; dataSourceFloor.ts iPhone and Android
+    // branches), so selectSetupIncomplete has no reachable true case. Traced by
+    // reading and swept over USER_DATA_LOADED inputs in BACKLOG-3276's review.
+    const producible: PlatformInfo = { isMacOS: true, isWindows: false, hasIPhone: false };
+    const onboarding = load(
+      {
+        phoneType: null,
+        hasCompletedEmailOnboarding: false,
+        hasEmailConnected: false,
+        needsDriverSetup: false,
+        fda: "declined",
+      },
+      producible
+    );
+    expect(onboarding.status).toBe("onboarding"); // PRECONDITION
+    const ready = appStateReducer(onboarding, { type: "ONBOARDING_QUEUE_DONE" });
+    expect(ready).not.toBe(onboarding); // ANTI-VACUITY (BACKLOG-3277)
+    expect(ready.status).toBe("ready");
+    if (ready.status !== "ready") return;
 
-    const back = appStateReducer(ready1, { type: "START_EMAIL_SETUP" });
-    expect(back).not.toBe(ready1); // ANTI-VACUITY (BACKLOG-3277)
-    const ready2 = appStateReducer(back, { type: "ONBOARDING_QUEUE_DONE" });
-    expect(ready2).not.toBe(back); // ANTI-VACUITY (BACKLOG-3277)
-    expect(ready2.status).toBe("ready");
-    if (ready2.status !== "ready") return;
-
-    // Zero real sources: no mailbox, no phone selection carried across
-    // (BACKLOG-3276, a separate defect, deliberately not fixed here), and Full
-    // Disk Access was declined.
-    expect(ready2.userData.hasEmailConnected).toBe(false);
-    expect(ready2.userData.phoneType).toBeNull();
-    expect(isFdaGranted(ready2.userData.fda)).toBe(false);
-
-    expect(selectSetupIncomplete(ready2)).toBe(true);
+    expect(ready.userData.hasEmailConnected).toBe(false);
+    expect(ready.userData.phoneType).toBeNull();
+    expect(ready.userData.fda).toBe("declined");
+    expect(selectSetupIncomplete(ready)).toBe(true);
 
     // DISCRIMINATING CONTROL: the identical state with a genuine grant does NOT
-    // raise the banner — a texts-only user has satisfied the floor and must not
-    // be shamed for it (BACKLOG-1709/1711).
-    const granted = { ...ready2, userData: { ...ready2.userData, fda: "granted" as const } };
+    // report setup incomplete; a texts-only user has satisfied the floor.
+    const granted = { ...ready, userData: { ...ready.userData, fda: "granted" as const } };
     expect(selectSetupIncomplete(granted)).toBe(false);
   });
 });

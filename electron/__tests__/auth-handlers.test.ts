@@ -693,7 +693,24 @@ describe("Auth Handlers", () => {
       expect(result.completed).toBe(true);
     });
 
-    it("should return completed=false when onboarding done but no mailbox token (session-only OAuth)", async () => {
+    // BACKLOG-3293. The rule this handler implements is an OR:
+    //     completed := onboardingCompleted || hasValidMailboxToken
+    // The four tests in this describe pin the COMPLETE flag x token truth
+    // table, so any handler that passes all four implements exactly that
+    // expression — not merely something compatible with it:
+    //     flag=true,  token=present -> true   "…onboarding done and mailbox token exists"
+    //     flag=true,  token=null    -> true   the test below
+    //     flag=false, token=present -> true   "…(TASK-1039)", which also pins the auto-correct
+    //     flag=false, token=null    -> false  "…onboarding not done and no token"
+    // So the test below cannot be read on its own: its fixture returns true
+    // under the OR AND under a bare `onboardingCompleted`, because every
+    // observable on flag=true/token=null is identical between the two. It is
+    // the TASK-1039 row that separates them. Do not delete any of the four.
+    it("returns completed=true when the user answered the email step but holds no mailbox token — do not re-run onboarding (BACKLOG-3293)", async () => {
+      // A deliberate skip and a session-only token that was never persisted
+      // are indistinguishable to THIS handler — both are flag=true, no token —
+      // and stay so until an email-decline is persisted (BACKLOG-3244). For the
+      // routing question both have the same right answer, so it does not guess.
       mockDatabaseService.hasCompletedEmailOnboarding.mockResolvedValue(true);
       mockDatabaseService.getOAuthToken.mockResolvedValue(null); // No token
 
@@ -701,7 +718,9 @@ describe("Auth Handlers", () => {
       const result = await handler(mockEvent, TEST_USER_ID);
 
       expect(result.success).toBe(true);
-      expect(result.completed).toBe(false);
+      expect(result.completed).toBe(true);
+      // The disagreement between the two facts still goes on the record — this
+      // is the log line the founder's own reproduction was read from.
       expect(mockLogService.info).toHaveBeenCalledWith(
         "Email onboarding flag is true but no valid mailbox token found",
         "AuthHandlers",

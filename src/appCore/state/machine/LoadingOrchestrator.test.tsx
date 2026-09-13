@@ -626,30 +626,32 @@ describe("LoadingOrchestrator phase transitions", () => {
     );
   }, 15000);
 
-  // BACKLOG-2171 (second gate site): a fresh-macOS-profile RETURNING user
-  // (no keystore -> deferredDbInit=true, isNewUser=false) routes STRAIGHT to
-  // the loading-auth phase (reducer.ts STORAGE_CHECKED, skipping
-  // validating-auth/initializing-db entirely). Phase 3's getCurrentUser()
-  // hits main-process handleGetCurrentUser, which — pre-fix — awaited
-  // whenDbReady() for up to 30s on EVERY attempt because DB init is
-  // deferred to onboarding and never kicked off during this window. With
-  // MAX_TRANSIENT_RETRIES=6 retries each blocking up to 30s inside the
-  // handler before returning transient:true, that compounds to minutes of
-  // "Loading authentication..." — the founder-reported 3+ minute hang.
-  // whenDbReady()'s idle fast-path (see initializationBroadcaster.ts) fixes
-  // this at the source: handleGetCurrentUser's internal wait resolves
-  // immediately instead of blocking, so the response comes back fast
-  // regardless of transient/non-transient shape.
-  it("reaches the login screen quickly on a fresh macOS profile with deferred DB init (does not hang on 'Loading authentication')", async () => {
-    // Fresh macOS profile: no keystore -> deferredDbInit=true, routes
-    // straight to loading-auth (STORAGE_CHECKED in reducer.ts).
+  // BACKLOG-2171 (second gate site), re-pointed by BACKLOG-3253.
+  //
+  // This was the founder-reported 3+ minute "Loading authentication..." hang.
+  // A fresh macOS profile used to route STRAIGHT to loading-auth with the
+  // database open deferred to onboarding, so Phase 3's getCurrentUser() hit a
+  // main-process handler that awaited whenDbReady() for up to 30s on EVERY
+  // attempt — with 6 transient retries that compounds to minutes.
+  //
+  // BACKLOG-3253 deleted that deferral, so a fresh profile now runs
+  // checking-storage -> validating-auth -> initializing-db -> loading-auth,
+  // the same route every other profile takes. The hang must stay fixed on the
+  // new route: the timing assertion below is the part that still earns its
+  // keep, and whenDbReady()'s idle fast-path still backs it.
+  it("reaches the login screen quickly on a fresh macOS profile (does not hang on 'Loading authentication')", async () => {
+    // Fresh macOS profile: no keystore. Post-3253 this no longer branches.
     mockApi.system.hasEncryptionKeyStore.mockResolvedValue({
       success: true,
       hasKeyStore: false,
     });
-    // Returning user, no session yet on this fresh profile — this is the
-    // shape handleGetCurrentUser now returns quickly once whenDbReady's
-    // idle fast-path stops it from blocking 30s per call.
+    // A fresh profile has no session, so pre-auth waves it through.
+    mockApi.auth.preValidateSession.mockResolvedValue({ valid: true, noSession: true });
+    mockApi.system.initializeSecureStorage.mockResolvedValue({
+      success: true,
+      available: true,
+    });
+    // Returning user, no session yet on this fresh profile.
     mockApi.auth.getCurrentUser.mockResolvedValue({ success: false });
 
     render(
@@ -667,9 +669,9 @@ describe("LoadingOrchestrator phase transitions", () => {
       { timeout: 1500 }
     );
 
-    // initializeSecureStorage must never be called on the deferred path —
-    // DB init is reserved for onboarding's secure-storage step.
-    expect(mockApi.system.initializeSecureStorage).not.toHaveBeenCalled();
+    // And the database was opened on the way, rather than deferred behind the
+    // login screen — that is the whole point of BACKLOG-3253.
+    expect(mockApi.system.initializeSecureStorage).toHaveBeenCalled();
   });
 
   it("transitions to onboarding for new user", async () => {
@@ -704,19 +706,24 @@ describe("LoadingOrchestrator phase transitions", () => {
     );
   });
 
-  it("skips DB init for first-time macOS users (deferredDbInit)", async () => {
-    // First-time macOS user: no keystore exists
+  // BACKLOG-3253: the inverse of the test that used to live here. A first-run
+  // macOS profile no longer skips the database open, and no longer skips the
+  // TASK-2086 pre-auth check that the deferred branch routed around.
+  it("opens the database at startup for first-run macOS users, and runs pre-auth first (BACKLOG-3253)", async () => {
+    // First-run macOS user: no keystore exists.
     mockApi.system.hasEncryptionKeyStore.mockResolvedValue({
       success: true,
-      hasKeyStore: false, // No keystore = first time macOS user
+      hasKeyStore: false,
     });
-    // initializeSecureStorage should NOT be called - that's what we're testing
-    mockApi.system.initializeSecureStorage.mockImplementation(() => {
-      throw new Error("initializeSecureStorage should not be called when deferredDbInit is true");
+    // TASK-2086 pre-auth: no session on a first run, so it waves through.
+    mockApi.auth.preValidateSession.mockResolvedValue({ valid: true, noSession: true });
+    mockApi.system.initializeSecureStorage.mockResolvedValue({
+      success: true,
+      available: true,
     });
-    // Auth should proceed normally
+    // No session - goes to unauthenticated, i.e. the login screen.
     mockApi.auth.getCurrentUser.mockResolvedValue({
-      success: false, // No session - goes to unauthenticated
+      success: false,
     });
 
     render(
@@ -725,8 +732,6 @@ describe("LoadingOrchestrator phase transitions", () => {
       </TestWrapper>
     );
 
-    // Should skip DB init and go directly to loading-auth, then unauthenticated
-    // If initializeSecureStorage was called, the test would fail with an error
     await waitFor(
       () => {
         expect(screen.getByTestId("children")).toBeInTheDocument();
@@ -734,8 +739,15 @@ describe("LoadingOrchestrator phase transitions", () => {
       { timeout: 2000 }
     );
 
-    // Verify initializeSecureStorage was never called
-    expect(mockApi.system.initializeSecureStorage).not.toHaveBeenCalled();
+    // The deferred branch skipped BOTH of these on a first run. Both must now
+    // happen, and pre-auth must happen before the database is opened.
+    expect(mockApi.auth.preValidateSession).toHaveBeenCalled();
+    expect(mockApi.system.initializeSecureStorage).toHaveBeenCalled();
+    expect(
+      mockApi.auth.preValidateSession.mock.invocationCallOrder[0]
+    ).toBeLessThan(
+      mockApi.system.initializeSecureStorage.mock.invocationCallOrder[0]
+    );
   });
 });
 

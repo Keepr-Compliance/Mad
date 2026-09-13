@@ -225,7 +225,11 @@ describe("appStateReducer - Loading Phase Transitions", () => {
       });
     });
 
-    it("defers DB init for first-time macOS users (no key store + isMacOS)", () => {
+    // BACKLOG-3253: this input used to be the one case that branched away from
+    // pre-auth and left the database closed behind the login screen. It no
+    // longer does. The assertion is exact-shape on purpose -- `toEqual` fails
+    // if `deferredDbInit` reappears on the result.
+    it("routes first-run macOS to validating-auth, with no deferral (BACKLOG-3253)", () => {
       const state = INITIAL_APP_STATE;
       const action: AppAction = { type: "STORAGE_CHECKED", hasKeyStore: false, isMacOS: true };
 
@@ -233,9 +237,9 @@ describe("appStateReducer - Loading Phase Transitions", () => {
 
       expect(result).toEqual({
         status: "loading",
-        phase: "loading-auth",
-        deferredDbInit: true,
+        phase: "validating-auth",
       });
+      expect(result).not.toHaveProperty("deferredDbInit");
     });
 
     it("transitions to validating-auth for returning macOS users (has key store) (TASK-2086)", () => {

@@ -227,9 +227,17 @@ describe("usePhoneTypeApi - State Machine Path", () => {
       expect(result.current.selectedPhoneType).toBeNull();
     });
 
-    it("returns iphone from platform during onboarding when hasIPhone is true", () => {
+    it("returns null during onboarding when nothing is recorded, even with hasIPhone true", () => {
+      // BACKLOG-3276: no platform default. Only a recorded answer counts.
       const { result } = renderHook(() => usePhoneTypeApi(defaultOptions), {
         wrapper: createWrapper(onboardingStateEmailConnect),
+      });
+      expect(result.current.selectedPhoneType).toBeNull();
+    });
+
+    it("returns the recorded selection during onboarding", () => {
+      const { result } = renderHook(() => usePhoneTypeApi(defaultOptions), {
+        wrapper: createWrapper({ ...onboardingStateEmailConnect, selectedPhoneType: "iphone" }),
       });
       expect(result.current.selectedPhoneType).toBe("iphone");
     });
@@ -658,10 +666,11 @@ describe("usePhoneTypeApi - State Machine Path", () => {
       expect(resultOnboarding.current.hasSelectedPhoneType).toBe(false);
       expect(resultOnboarding.current.selectedPhoneType).toBeNull();
 
-      // Test onboarding state (past phone-type step)
+      // Test onboarding state (past phone-type step). On every UI route a user
+      // past phone-type has a recorded selection (BACKLOG-3276).
       const { result: resultOnboardingPast } = renderHook(
         () => usePhoneTypeApi(defaultOptions),
-        { wrapper: createWrapper(onboardingStateEmailConnect) }
+        { wrapper: createWrapper({ ...onboardingStateEmailConnect, selectedPhoneType: "iphone" }) }
       );
       expect(resultOnboardingPast.current.isLoadingPhoneType).toBe(false);
       expect(resultOnboardingPast.current.hasSelectedPhoneType).toBe(true);

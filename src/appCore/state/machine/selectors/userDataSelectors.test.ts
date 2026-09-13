@@ -250,8 +250,13 @@ describe("userDataSelectors", () => {
       expect(selectPhoneType(errorState)).toBeNull();
     });
 
-    it("returns iphone when onboarding with hasIPhone true", () => {
-      expect(selectPhoneType(onboardingSecureStorage)).toBe("iphone");
+    it("returns null when onboarding with no recorded selection, even with hasIPhone true", () => {
+      // BACKLOG-3276: no platform default. Only a recorded answer counts.
+      expect(selectPhoneType(onboardingSecureStorage)).toBeNull();
+    });
+
+    it("returns the recorded selection when onboarding", () => {
+      expect(selectPhoneType({ ...onboardingSecureStorage, selectedPhoneType: "android" })).toBe("android");
     });
 
     it("returns null when onboarding with hasIPhone false", () => {
