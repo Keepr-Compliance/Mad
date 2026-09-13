@@ -239,8 +239,13 @@ jobs:
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
 
+      # BACKLOG-3288: --bail=0 makes CI report EVERY failing suite in one run. It
+      # overrides `bail: 1` in jest.config.js for CI only; local `npm test` and
+      # `npx jest` still stop at the first failure.
+      # --bail=0 needs "=": "--bail 0" is parsed as bail 1 plus a test filter "0"
+      # and runs 68 of 1010 files, green.
       - name: Run tests
-        run: npm test -- --silent --maxWorkers=2 --workerIdleMemoryLimit=512MB --forceExit
+        run: npm test -- --silent --maxWorkers=2 --workerIdleMemoryLimit=512MB --forceExit --bail=0
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
 
@@ -258,8 +263,12 @@ jobs:
       # broker-portal jest suite (BACKLOG-2005a re-enabled it: config + route tests now
       # exist). Runs from the repo root so ts-jest / jest-environment-* resolve from the
       # hoisted root node_modules; the portal config remaps @/ to the portal root.
+      # BACKLOG-3288: the portal config spreads the root config, so it inherits
+      # `bail: 1`; --bail=0 reports every failing suite, CI only.
+      # --bail=0 needs "=": "--bail 0" is parsed as bail 1 plus a test filter "0"
+      # and runs 1 of 54 files, green.
       - name: Run broker-portal tests
-        run: npx jest --config broker-portal/jest.config.js --silent
+        run: npx jest --config broker-portal/jest.config.js --silent --bail=0
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
 
