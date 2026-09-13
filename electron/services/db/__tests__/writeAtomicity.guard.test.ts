@@ -56,6 +56,7 @@
  */
 
 import fs from "fs";
+import os from "os";
 import path from "path";
 import ts from "typescript";
 
@@ -330,16 +331,15 @@ const EXEMPT: Record<string, string> = {
  *     class widening only put it on more units. Population unmeasured. Tracked
  *     by BACKLOG-3311, which also names the in-tree fix shape.
  *
- *   - A unit can ENUMERATE AND STILL COUNT ZERO, which is worse than not being
- *     enumerated: `failureLogService.ts::pruneOldEntries` is a unit as of this
- *     change and counts 0 writes, because both its DELETEs execute HOISTED SQL
- *     CONSTANTS and `WRITE_PATTERN` reads literal SQL text only. BACKLOG-2554
- *     already names that site as two unwrapped DELETEs, so this guard now reads
- *     GREEN over a site an open item says is unsafe. A false green is
- *     indistinguishable from a verified-safe unit in every count above and in
- *     the "may only SHRINK" assertion. Tracked by BACKLOG-3312, whose first
- *     action is to MEASURE the affected population — hoisting SQL into a named
- *     constant is an established pattern here, so this is not one function.
+ *   - ~~A unit can ENUMERATE AND STILL COUNT ZERO~~ — **CLOSED by BACKLOG-3312**,
+ *     and the sentence is corrected rather than deleted so a reader can see what
+ *     changed. It read "`WRITE_PATTERN` reads literal SQL text only". The
+ *     pattern was never at fault: `writeCount` takes a body string and nothing
+ *     else, so there was no file to resolve a constant AGAINST. Hoisted SQL
+ *     constants are now resolved through their declaration — see
+ *     `readBindings` / `writeConstsIn` below. Measured at `8f17c1e16`: 21 units
+ *     count more, 5 cross the threshold, TWO are real new offenders and are the
+ *     last two entries in this list.
  *
  * Add a floor here when one is found; do not let the list's completeness be
  * assumed from its length.
@@ -458,6 +458,31 @@ const KNOWN_UNWRAPPED: Record<string, string> = {
     "BACKLOG-2550 — junction rows written with messages.transaction_id still NULL, so the message is re-offered as unlinked; or the inverse, the pointer set with no junction row, so the message is invisible to every junction reader. Transient, not permanent: INSERT OR IGNORE plus the unique indexes make a re-run idempotent.",
   "electron/services/transactionService/transactionService.ts::unlinkMessages":
     "BACKLOG-2547 — the suppression row written but the link DELETE never ran, so the message is simultaneously linked (junction row survives) and suppressed (ignore row exists); the next auto-link scan keeps it linked while it also sits in the ignore set.",
+
+
+  // ==========================================================================
+  // BACKLOG-3312 — SURFACED BY CONSTANT RESOLUTION
+  // ==========================================================================
+  // Both ran HOISTED SQL CONSTANTS, so every previous version of this guard
+  // counted them as ZERO-write and reported them clean. Neither is new code and
+  // neither is fixed here; what is new is that the guard can see them.
+  //
+  // Measured at `8f17c1e16`: these two are the ENTIRE pipeline-surviving
+  // population of the widening — 21 units count more, 5 cross the threshold,
+  // and the other three were each opened and read (two are genuinely atomic,
+  // one was a false positive of a naive resolver). The unwrapped set goes
+  // 18 -> 20 and loses nothing.
+  //
+  // Damage strings TRANSCRIBED from each item's "Crash leaves" section. Note
+  // that `pruneOldEntries` cites 3319 and NOT its parent BACKLOG-2554, which
+  // names the same site: an entry citing a nine-bullet batch survives until the
+  // batch closes, so if 2554 shipped with this bullet unfixed the entry would
+  // cite a completed item while preserving a live defect — the BACKLOG-3053
+  // shape. The bullet was split out of 2554's scope for exactly that reason.
+  "electron/services/failureLogService.ts::pruneOldEntries":
+    "BACKLOG-3319 — the age DELETE commits and the cap DELETE does not, so the failure log keeps rows above the 500-row cap until the next startup prunes again. Diagnostics only — no user-visible record is lost. That is why this is low despite inheriting from a critical batch.",
+  "electron/services/reviewStateService.ts::restoreRejectedToQueue":
+    "BACKLOG-3320 — a crash after the INSERT and before the DELETE leaves the item queued for review AND still listed as rejected: it appears twice, in two places that contradict each other. It loops per sibling, so a multi-email thread can end up part-restored. The MIRROR of BACKLOG-3310, not the same failure — that one writes in the opposite order and leaves NEITHER.",
 
   // MERGE NOTE: the incoming side of this conflict was the original nine-entry
   // list. It is deliberately discarded, not merged — every entry in it was
@@ -615,11 +640,17 @@ function captureHandlerUnit(
  * SQL write in its own body — the ground truth the composition rule stands on.
  * 114 of 439 at `0dca6beb1`.
  *
- * STATED FLOOR: this is derived from body TEXT, so a db-layer function that
- * writes through a hoisted SQL constant is missing from it. Exactly one is, at
- * `0dca6beb1` — `emailSyncSql.ts:263 clearSyncCursor`, which runs
- * `dbRun(CLEAR_SYNC_CURSOR_SQL, ...)` against a constant declared at :148. The
- * count is written down so the floor can be re-measured rather than assumed.
+ * ~~STATED FLOOR: this is derived from body TEXT, so a db-layer function that
+ * writes through a hoisted SQL constant is missing from it.~~ **CLOSED by
+ * BACKLOG-3312** — kept and struck through, because the floor being written
+ * down with a name is what made it closeable. It named ONE function at
+ * `0dca6beb1`, `emailSyncSql.ts:263 clearSyncCursor`. Re-measured at
+ * `8f17c1e16` there were TWO, `clearSyncCursor` and
+ * `externalContactDbService.ts:978 updateLastMessageAtFromLookupTable`, and the
+ * writer set goes 127 -> 129 with both admitted. `dbLayerWriters` resolves the
+ * constants; `writersFrom` stays a pure function over declarations and reads the
+ * count off the `constWrites` field, so the BACKLOG-3235 fixtures are untouched.
+ * Pinned by `a db/ writer that hoists its statement is in the writer set`.
  *
  * A builder that RETURNS SQL rather than executing it is also in this set —
  * `claimMessagesForTransactionSql09` builds a `SafeSql`. A builder call is not
@@ -741,11 +772,14 @@ function dbWriterDeclsIn(lines: string[]): { name: string; body: string }[] {
  * `dbLayerWriters()` takes the default.
  */
 function writersFrom(
-  decls: { name: string; body: string }[],
+  decls: { name: string; body: string; constWrites?: number }[],
   followTwins = true
 ): Set<string> {
   const base = new Set<string>();
-  for (const d of decls) if (writeCount(d.body) >= 1) base.add(d.name);
+  // BACKLOG-3312: `constWrites` is supplied by `dbLayerWriters`, which has the
+  // file in hand. This function still touches no disk, so the BACKLOG-3235
+  // fixtures keep running the REAL derivation over a transcribed source string.
+  for (const d of decls) if (writeCount(d.body) + (d.constWrites ?? 0) >= 1) base.add(d.name);
   if (!followTwins) return base;
 
   const writers = new Set(base);
@@ -759,9 +793,11 @@ function writersFrom(
 }
 
 function dbLayerWriters(): Set<string> {
-  const decls: { name: string; body: string }[] = [];
+  const decls: { name: string; body: string; constWrites?: number }[] = [];
   for (const file of sourceFiles(DB_DIR)) {
-    decls.push(...dbWriterDeclsIn(fs.readFileSync(file, "utf8").split("\n")));
+    for (const d of dbWriterDeclsIn(fs.readFileSync(file, "utf8").split("\n"))) {
+      decls.push({ ...d, constWrites: constWriteOffsets(stripComments(d.body), file).length });
+    }
   }
   return writersFrom(decls);
 }
@@ -963,10 +999,22 @@ function unitsInFile(rel: string, lines: string[], dbWriters: Set<string>): Fn[]
   // recordSyncSuccess (:158) / recordSyncFailure (:173).
   //
   // The delta is NOT noise: the last two are named in BACKLOG-2554 as "two
-  // unwrapped statements" already. They are invisible to the raw-SQL rule
-  // because one of each pair goes through a hoisted SQL constant. So the
-  // scoped-out decision is a FLOOR, not a proof of absence, and the floor has a
-  // measured size. Not adopted here — eight new dispositions inside the
+  // unwrapped statements" already.
+  //
+  // CORRECTED BY BACKLOG-3312 — this used to say they are invisible to the
+  // raw-SQL rule "because one of each pair goes through a hoisted SQL
+  // constant". That was not true when it was written. Measured at `8f17c1e16`:
+  // `recordSyncSuccess` and `recordSyncFailure` each hold ONE INLINE `sql` tag
+  // and ZERO constant references, and `git show 0dca6beb1` shows the SQL was
+  // already inline at the SHA the paragraph cites. Their second write is the
+  // `ensureSyncStateRow(...)` CALL, invisible for the reason this paragraph is
+  // actually about — call tokens are OFF inside `db/`. So resolving constants
+  // does NOT close these two; BACKLOG-3226 still owns them. The sentence is
+  // corrected rather than deleted because a known-false comment left in place
+  // is worse than the defect it describes.
+  //
+  // So the scoped-out decision is a FLOOR, not a proof of absence, and the floor
+  // has a measured size. Not adopted here — eight new dispositions inside the
   // write-densest directory in the repo is its own task, and SR ruled it comes
   // back for review rather than being absorbed.
   //
@@ -1072,6 +1120,259 @@ function stripComments(body: string): string {
 function writeCount(body: string): number {
   const matches = stripComments(body).match(new RegExp(WRITE_PATTERN, "gi"));
   return matches ? matches.length : 0;
+}
+
+/**
+ * ===========================================================================
+ * BACKLOG-3312 — A UNIT THAT ENUMERATES AND STILL COUNTS ZERO
+ * ===========================================================================
+ * `failureLogService.ts::pruneOldEntries` became a unit under BACKLOG-3232 and
+ * then counted ZERO writes, because both its DELETEs execute HOISTED SQL
+ * CONSTANTS — `dbRun(PRUNE_BY_AGE_SQL, ...)`, with the text in
+ * `db/failureLogSql.ts`. BACKLOG-2554 already named that site as two unwrapped
+ * DELETEs, so the guard read GREEN over a site an open item called unsafe.
+ *
+ * **Before the class widening the guard did not look. After it, the guard
+ * looked and reported clean.** The second is the worse state: a unit that
+ * enumerates but cannot count is indistinguishable from a verified-safe one in
+ * every count above, and in the "may only SHRINK" assertion.
+ *
+ * ---------------------------------------------------------------------------
+ * WHAT WAS ACTUALLY AT FAULT — the item blamed the wrong thing
+ * ---------------------------------------------------------------------------
+ * BACKLOG-3312 was filed saying `WRITE_PATTERN` "cannot see" a constant. The
+ * pattern is fine. `writeCount` takes a BODY STRING AND NOTHING ELSE, so there
+ * was no file to resolve a constant AGAINST — at any breadth, the SQL is not in
+ * the body. That is why the fix is a resolver and not a wider regex.
+ *
+ * AND IT IS DELIBERATELY NOT A WIDER REGEX. Matching identifiers that LOOK like
+ * SQL constant names is the line-matcher failure this guard has already hit
+ * five times (BACKLOG-3223, 3224, 3225, 3232, 3239). `the pattern is NOT
+ * widened` pins the distinction: after this change `writeCount` ALONE still
+ * counts 0 for `pruneOldEntries`; its two writes come from resolution.
+ *
+ * ---------------------------------------------------------------------------
+ * POPULATION, measured at `8f17c1e16` BEFORE any of this was written
+ * ---------------------------------------------------------------------------
+ * Across 2,546 units: **21** count more with resolution, **5** cross 0/1 -> >=2,
+ * and **TWO** survive the whole pipeline as new offenders — the last two
+ * entries in KNOWN_UNWRAPPED, each citing its own filed item. 23 distinct
+ * write-SQL constants are referenced inside units; 66 write-resolving constant
+ * bindings exist across the scanned tree. The unwrapped set goes 18 -> 20 and
+ * LOSES nothing.
+ *
+ * The other three crossers were each opened and read, never classified from a
+ * name: `contactSourceValues.ts::removeUnlinkedSourceValues` (0->2) really does
+ * run inside `dbTransaction<UnlinkOutcome>(` at `contactProvenance.ts:246`;
+ * `importHelpers.ts::syncMacChatThreadNames` (1->3) opens its own
+ * `db.transaction(...)`; and `db/transactionDbService.ts::updateTransaction`
+ * (1->2) is a FALSE POSITIVE of a naive resolver — the next paragraph.
+ *
+ * ---------------------------------------------------------------------------
+ * ONLY SQL TEXT RESOLVES, AND A MEASURED FALSE POSITIVE IS WHY
+ * ---------------------------------------------------------------------------
+ * A first cut resolved ANY module-level const, and reported
+ * `db/transactionDbService.ts:979 updateTransaction` as a new offender by
+ * resolving `TRANSACTION_COLUMN_POLICY` — an OBJECT LITERAL whose `why:` prose
+ * at `:310` QUOTES `UPDATE transactions SET text_thread_count = ?`. Prose about
+ * a statement, not a statement. Under this guard's rule that every
+ * KNOWN_UNWRAPPED entry cites a filed item, that false positive could only have
+ * been quieted by filing a bogus item against a function that is not defective.
+ *
+ * So an initializer resolves only when it IS SQL TEXT: a string literal, a
+ * template, or a tagged template (`sql` / `unsafeSql`, per `core/sqlText`).
+ * Pinned by `prose inside an object literal is not a write`, whose fixture is
+ * transcribed from that constant.
+ *
+ * ---------------------------------------------------------------------------
+ * TWO PHASES, BECAUSE ONE PHASE GAVE TWO DIFFERENT ANSWERS
+ * ---------------------------------------------------------------------------
+ * The first resolver cached a module's resolved map keyed by FILE while
+ * computing it under a recursion DEPTH CAP. A module first reached AT the cap
+ * had its own imports left unresolved, and that partial map was then cached as
+ * final. `reviewStateService.ts` imports every one of its SQL constants, so
+ * reached deep it resolved to the EMPTY set and `restoreRejectedToQueue`
+ * counted 0. Measured: **19 offenders on one run and 20 on three others, from
+ * the same code** — the answer depended on which file was visited first.
+ *
+ * A guard whose result depends on visit order is worse than no guard, so the
+ * shape below has neither a depth cap nor a partial cache. `readBindings`
+ * parses ONE file and follows NO edge. `resolveBinding` walks the binding graph
+ * one name at a time with its own cycle set. Only COMPLETE maps are cached.
+ * Pinned by `the resolved set does not depend on visit order`, which derives one
+ * module's set twice with the cache warmed in opposite directions.
+ *
+ * ---------------------------------------------------------------------------
+ * STATED FLOORS — measured sizes, none fixed here
+ * ---------------------------------------------------------------------------
+ *   1. `localWriters` is NOT resolved. Two non-exported helpers hold a
+ *      const-only write: `emailSyncService.ts:533 fetchStoreAndDedup` and
+ *      `reviewStateService.ts:996 resolveLegacyTwins`. Measured BOTH ways:
+ *      resolving there too changes the offender set by ZERO. Left out to keep
+ *      this change to one mechanism, and recorded with its size rather than
+ *      omitted.
+ *   2. NAMESPACE imports (`import * as x` -> `x.CONST`) do not resolve. Eight
+ *      exist, all of `db/externalContactDbService`, and ZERO namespace-qualified
+ *      references to a write constant appear in any unit body.
+ *   3. A REFERENCE counts, executed or not — the same treatment an inline SQL
+ *      literal already gets. All 23 referenced constants are passed to `dbRun`
+ *      or `prepare`. A constant NAME appearing inside a string literal would
+ *      also count; none does.
+ *   4. Only RELATIVE specifiers are followed. A constant re-exported through a
+ *      package entry point would not resolve; none is.
+ *   5. MODULE LEVEL only. A constant declared inside a function is already in
+ *      the body and needs no resolution. Measured: ZERO units shadow a resolved
+ *      name with a local `const` / `let` / `var`.
+ */
+interface ModuleBindings {
+  /** `const NAME = <sql text>` declared HERE -> writes in that text. 0 is kept. */
+  own: Map<string, number>;
+  /** `import { A as B }` / `export { A } from` -> where B's value comes from. */
+  from: Map<string, { file: string; name: string }>;
+}
+
+/** Is this initializer SQL TEXT? See the false-positive paragraph above. */
+function isSqlTextInitializer(node: ts.Expression): boolean {
+  return (
+    ts.isStringLiteral(node) ||
+    ts.isNoSubstitutionTemplateLiteral(node) ||
+    ts.isTemplateExpression(node) ||
+    ts.isTaggedTemplateExpression(node)
+  );
+}
+
+const bindingCache = new Map<string, ModuleBindings>();
+const writeConstCache = new Map<string, Map<string, number>>();
+
+/** Test-only: clear both caches so visit order can be varied deliberately. */
+function clearConstCaches(): void {
+  bindingCache.clear();
+  writeConstCache.clear();
+}
+
+/** PHASE ONE. One file's own SQL-text constants and its import edges. Follows nothing. */
+function readBindings(abs: string): ModuleBindings {
+  const cached = bindingCache.get(abs);
+  if (cached) return cached;
+  const out: ModuleBindings = { own: new Map(), from: new Map() };
+  bindingCache.set(abs, out);
+  if (!fs.existsSync(abs)) return out;
+
+  const sf = ts.createSourceFile(abs, fs.readFileSync(abs, "utf8"), ts.ScriptTarget.ES2020, true);
+  const resolveSpec = (spec: string): string | null => {
+    if (!spec.startsWith(".")) return null;
+    const base = path.resolve(path.dirname(abs), spec);
+    for (const cand of [base + ".ts", path.join(base, "index.ts")]) {
+      if (fs.existsSync(cand)) return cand;
+    }
+    return null;
+  };
+
+  for (const st of sf.statements) {
+    if (ts.isVariableStatement(st)) {
+      for (const d of st.declarationList.declarations) {
+        if (!ts.isIdentifier(d.name) || !d.initializer) continue;
+        if (!isSqlTextInitializer(d.initializer)) continue;
+        out.own.set(d.name.text, writeCount(d.initializer.getText(sf)));
+      }
+    } else if (ts.isImportDeclaration(st) && ts.isStringLiteral(st.moduleSpecifier)) {
+      const from = resolveSpec(st.moduleSpecifier.text);
+      const nb = st.importClause?.namedBindings;
+      if (!from || !nb || !ts.isNamedImports(nb)) continue;
+      for (const e of nb.elements) {
+        out.from.set(e.name.text, { file: from, name: (e.propertyName ?? e.name).text });
+      }
+    } else if (
+      ts.isExportDeclaration(st) &&
+      st.moduleSpecifier &&
+      ts.isStringLiteral(st.moduleSpecifier) &&
+      st.exportClause &&
+      ts.isNamedExports(st.exportClause)
+    ) {
+      const from = resolveSpec(st.moduleSpecifier.text);
+      if (!from) continue;
+      for (const e of st.exportClause.elements) {
+        out.from.set(e.name.text, { file: from, name: (e.propertyName ?? e.name).text });
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * PHASE TWO. Follow ONE name through the binding graph to the text it names.
+ * `seen` is per NAME and per query — never shared, never cached — so a cycle
+ * terminates without making the answer depend on who asked first.
+ */
+function resolveBinding(file: string, name: string, seen: Set<string>): number {
+  const key = `${file}::${name}`;
+  if (seen.has(key)) return 0;
+  seen.add(key);
+  const b = readBindings(file);
+  const own = b.own.get(name);
+  if (own !== undefined) return own;
+  const edge = b.from.get(name);
+  if (!edge) return 0;
+  return resolveBinding(edge.file, edge.name, seen);
+}
+
+/** Names visible in `abs` that resolve to SQL text issuing at least one write. */
+function writeConstsIn(abs: string): Map<string, number> {
+  const cached = writeConstCache.get(abs);
+  if (cached) return cached;
+  const b = readBindings(abs);
+  const out = new Map<string, number>();
+  for (const [name, n] of b.own) if (n >= 1) out.set(name, n);
+  for (const name of b.from.keys()) {
+    const n = resolveBinding(abs, name, new Set<string>());
+    if (n >= 1) out.set(name, n);
+  }
+  // Cached only once COMPLETE. A partial map cached as final is the defect the
+  // header describes, and it cost a measurement that could not be reproduced.
+  writeConstCache.set(abs, out);
+  return out;
+}
+
+/**
+ * Offsets at which a body REFERENCES a constant holding write SQL — the same
+ * stream shape `writeOffsets` produces, labelled with the constant's name so a
+ * reported offender says WHICH statement it ran.
+ *
+ * Identifiers are tokenised rather than matched with `\b`, so `A_PRUNE_BY_AGE_SQL`
+ * cannot match `PRUNE_BY_AGE_SQL`.
+ */
+function constWriteOffsets(src: string, absFile: string): { at: number; label: string }[] {
+  const names = writeConstsIn(absFile);
+  if (names.size === 0) return [];
+  const out: { at: number; label: string }[] = [];
+  for (const m of src.matchAll(/[A-Za-z_$][A-Za-z0-9_$]*/g)) {
+    const n = names.get(m[0]);
+    if (n === undefined) continue;
+    for (let k = 0; k < n; k++) out.push({ at: m.index ?? 0, label: m[0] });
+  }
+  return out;
+}
+
+/**
+ * THE ONE VIEW every heuristic reads — raw SQL, db-layer calls, and resolved
+ * constants, in offset order.
+ *
+ * BACKLOG-2569 made `writeCount` and `writesAreBranchExclusive` share one
+ * pattern because two views of one body silently cleared `updateContactRole`.
+ * BACKLOG-3312 adds a third source of writes, so it shares the VIEW as well:
+ * `file` is what enables constant resolution, and both callers pass the same
+ * one. `file` stays optional so every heuristic fixture below keeps the exact
+ * behaviour it was written against.
+ */
+function writeStream(
+  src: string,
+  isDbWriterCall: ((name: string) => boolean) | null,
+  selfName: string | null,
+  file: string | null
+): { at: number; label: string }[] {
+  const raw = writeOffsets(src, isDbWriterCall, selfName);
+  if (file === null) return raw;
+  return [...raw, ...constWriteOffsets(src, path.join(REPO_ROOT, file))].sort((a, b) => a.at - b.at);
 }
 
 /**
@@ -1253,13 +1554,17 @@ function writeOffsets(
 
 /** Writes a unit issues, under the rule that applies to the layer it lives in. */
 function unitWrites(unit: Fn): { at: number; label: string }[] {
-  return writeOffsets(stripComments(unit.body), unit.isDbWriterCall, unit.name);
+  return writeStream(stripComments(unit.body), unit.isDbWriterCall, unit.name, unit.file);
 }
 
 function writesAreBranchExclusive(
   body: string,
   isDbWriterCall: ((name: string) => boolean) | null = null,
-  selfName: string | null = null
+  selfName: string | null = null,
+  // BACKLOG-3312: the repo-relative file, so this heuristic sees the SAME
+  // resolved constants `unitWrites` does. `null` keeps the fixtures below
+  // reading exactly the stream they were written against.
+  file: string | null = null
 ): boolean {
   const src = stripComments(body);
   const depths = braceDepths(src);
@@ -1268,7 +1573,7 @@ function writesAreBranchExclusive(
   // as an exit sorts first, preserving the old `else if` precedence where a
   // line containing a write was never also read as an exit.
   const tokens: { at: number; isWrite: boolean; depth: number; isReturn: boolean }[] = [];
-  for (const w of writeOffsets(src, isDbWriterCall, selfName)) {
+  for (const w of writeStream(src, isDbWriterCall, selfName, file)) {
     tokens.push({ at: w.at, isWrite: true, depth: depths[w.at] ?? 0, isReturn: false });
   }
   // Anchored per line via /m. `[ \t]*` NOT `\s*`, and `\}[ \t]*else` NOT
@@ -2187,6 +2492,161 @@ export default new TransactionService();
   });
 });
 
+/**
+ * ===========================================================================
+ * BACKLOG-3312 — THE RESOLVER, TESTED DIRECTLY
+ * ===========================================================================
+ * The scan below can only prove things about the tree as it stands today. It
+ * cannot prove the RULE — and on this defect a green scan was the SYMPTOM, not
+ * the evidence: `pruneOldEntries` enumerated and reported clean for its whole
+ * life under the widened enumerator.
+ *
+ * Every fixture here is TRANSCRIBED from real source at `8f17c1e16`, never
+ * invented. `SQL_MODULE` is `electron/services/db/failureLogSql.ts`, `CONSUMER`
+ * is the shape of `failureLogService.ts::pruneOldEntries`, and `PROSE_MODULE`
+ * is `TRANSACTION_COLUMN_POLICY` from `db/transactionDbService.ts:310` — the
+ * constant that made a naive resolver report a function with no defect.
+ */
+describe("a hoisted SQL constant is resolved, not pattern-matched (BACKLOG-3312)", () => {
+  let dir = "";
+
+  const SQL_MODULE = [
+    'import { sql } from "./core/sqlText";',
+    "",
+    "export const PRUNE_BY_AGE_SQL = sql`DELETE FROM failure_log WHERE timestamp < datetime('now', ?)`;",
+    "",
+    "export const FAILURE_LOG_COUNT_SQL = sql`SELECT COUNT(*) as count FROM failure_log`;",
+    "",
+    "export const PRUNE_BY_CAP_SQL = sql`DELETE FROM failure_log WHERE id IN (",
+    "            SELECT id FROM failure_log ORDER BY timestamp ASC LIMIT ?",
+    "          )`;",
+  ].join("\n");
+
+  const CONSUMER = [
+    'import { dbRun, dbGet } from "./dbConnection";',
+    "import {",
+    "  FAILURE_LOG_COUNT_SQL,",
+    "  PRUNE_BY_AGE_SQL,",
+    "  PRUNE_BY_CAP_SQL,",
+    '} from "./failureLogSql";',
+  ].join("\n");
+
+  const PROSE_MODULE = [
+    "export const TRANSACTION_COLUMN_POLICY = {",
+    "  text_thread_count: {",
+    "    insert: undefined,",
+    '    why: "Owned by a hand-built `UPDATE transactions SET text_thread_count = ?` in communicationDbService.ts:1085 and :1125, which bypasses this writer and the whitelist entirely (BACKLOG-2739 Phase-2 input).",',
+    "  },",
+    "};",
+  ].join("\n");
+
+  beforeAll(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "guard-3312-"));
+    fs.writeFileSync(path.join(dir, "failureLogSql.ts"), SQL_MODULE);
+    fs.writeFileSync(path.join(dir, "consumer.ts"), CONSUMER);
+    fs.writeFileSync(path.join(dir, "prose.ts"), PROSE_MODULE);
+    fs.writeFileSync(
+      path.join(dir, "proseConsumer.ts"),
+      'import { TRANSACTION_COLUMN_POLICY } from "./prose";'
+    );
+    // A binding chain SIX hops long. The first resolver capped recursion at
+    // four AND cached what it found at the cap, so a module first reached deep
+    // resolved to nothing and stayed that way. Six, so a cap of four fails.
+    fs.writeFileSync(path.join(dir, "hop6.ts"), "export const DEEP_SQL = `DELETE FROM deep_table WHERE id = ?`;");
+    for (let i = 5; i >= 1; i--) {
+      fs.writeFileSync(
+        path.join(dir, `hop${i}.ts`),
+        `export { DEEP_SQL } from "./hop${i + 1}";`
+      );
+    }
+    fs.writeFileSync(path.join(dir, "deepConsumer.ts"), 'import { DEEP_SQL } from "./hop1";');
+  });
+
+  afterAll(() => {
+    clearConstCaches();
+    if (dir) fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("resolves an imported constant to the writes its text issues, and a SELECT to none", () => {
+    const consts = writeConstsIn(path.join(dir, "consumer.ts"));
+    // Assert the SET, not its size: a count cannot tell "resolved the two
+    // DELETEs" from "resolved a DELETE and the SELECT".
+    expect([...consts.keys()].sort()).toEqual(["PRUNE_BY_AGE_SQL", "PRUNE_BY_CAP_SQL"]);
+    expect(consts.get("PRUNE_BY_AGE_SQL")).toBe(1);
+    expect(consts.get("PRUNE_BY_CAP_SQL")).toBe(1);
+    expect(consts.has("FAILURE_LOG_COUNT_SQL")).toBe(false);
+  });
+
+  it("prose inside an object literal is NOT a write", () => {
+    // Measured: without the SQL-text restriction this resolves, and
+    // `db/transactionDbService.ts:979 updateTransaction` becomes a reported
+    // offender — a function with no defect, which under this guard's own rule
+    // could only be quieted by filing a bogus item.
+    expect(writeCount(PROSE_MODULE)).toBeGreaterThan(0); // the text really does match
+    expect([...writeConstsIn(path.join(dir, "proseConsumer.ts")).keys()]).toEqual([]);
+  });
+
+  it("the resolved set does not depend on visit order", () => {
+    clearConstCaches();
+    const askedFirst = writeConstsIn(path.join(dir, "deepConsumer.ts")).get("DEEP_SQL");
+
+    clearConstCaches();
+    // Warm every module in the chain from the far end before asking. Under the
+    // first implementation this produced a DIFFERENT answer: 19 offenders on
+    // one run and 20 on three others, from identical code.
+    for (let i = 6; i >= 1; i--) writeConstsIn(path.join(dir, `hop${i}.ts`));
+    const warmedFromTheEnd = writeConstsIn(path.join(dir, "deepConsumer.ts")).get("DEEP_SQL");
+
+    expect(askedFirst).toBe(1);
+    expect(warmedFromTheEnd).toBe(askedFirst);
+    clearConstCaches();
+  });
+
+  it("a constant name is not matched as a SUBSTRING of a longer identifier", () => {
+    const abs = path.join(dir, "consumer.ts");
+    expect(constWriteOffsets("dbRun(PRUNE_BY_AGE_SQL, [d]);", abs).map((w) => w.label)).toEqual([
+      "PRUNE_BY_AGE_SQL",
+    ]);
+    expect(constWriteOffsets("dbRun(LEGACY_PRUNE_BY_AGE_SQL_V2, [d]);", abs)).toEqual([]);
+  });
+
+  it("PRECONDITION: the unit that enumerated and counted ZERO now counts its two DELETEs", () => {
+    // THE named false green. `failureLogService.ts` is class-shaped, so it
+    // enumerated nothing until BACKLOG-3232; it then enumerated nine units and
+    // counted ZERO writes in this one, over a site BACKLOG-2554 already called
+    // unsafe. Revert the resolution and this goes red.
+    const prune = scanUnits().find(
+      (u) => u.file === "electron/services/failureLogService.ts" && u.name === "pruneOldEntries"
+    );
+    expect(prune).toBeDefined();
+    // NAMES, not a count: the count cannot tell the two DELETEs from a DELETE
+    // counted twice.
+    expect(unitWrites(prune as Fn).map((w) => w.label).sort()).toEqual([
+      "PRUNE_BY_AGE_SQL",
+      "PRUNE_BY_CAP_SQL",
+    ]);
+  });
+
+  it("the pattern is NOT widened — `writeCount` alone still sees nothing in that body", () => {
+    // The forbidden fix was a regex matching things that LOOK like SQL constant
+    // names. This is the difference, asserted: the body holds no SQL at any
+    // pattern breadth, and the two writes come from resolving the declaration.
+    const prune = scanUnits().find(
+      (u) => u.file === "electron/services/failureLogService.ts" && u.name === "pruneOldEntries"
+    ) as Fn;
+    expect(writeCount(prune.body)).toBe(0);
+    expect(unitWrites(prune).length).toBe(2);
+  });
+
+  it("a db/ writer that hoists its statement is in the writer set — it was not before", () => {
+    // The floor `dbWriterDeclsIn` named at `0dca6beb1` and struck through above.
+    // File-qualified by construction: both names are unique in `db/`.
+    const writers = dbLayerWriters();
+    expect(writers.has("clearSyncCursor")).toBe(true);
+    expect(writers.has("updateLastMessageAtFromLookupTable")).toBe(true);
+  });
+});
+
 describe("a multi-statement write may not ship without a transaction (BACKLOG-2530)", () => {
   const units = scanUnits();
   const insideATransaction = namesCalledInsideATransaction();
@@ -2299,7 +2759,7 @@ describe("a multi-statement write may not ship without a transaction (BACKLOG-25
     return units
       .filter((u) => unitWrites(u).length >= 2)
       .filter((u) => !wrapsItself(u.body))
-      .filter((u) => !writesAreBranchExclusive(u.body, u.isDbWriterCall, u.name))
+      .filter((u) => !writesAreBranchExclusive(u.body, u.isDbWriterCall, u.name, u.file))
       .filter((u) => !insideATransaction.has(u.name))
       .filter((u) => !(exemptKey(u) in EXEMPT));
   }
