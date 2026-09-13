@@ -40,8 +40,15 @@ interface MailboxInfo {
   unreadItemCount: number;
 }
 
+/**
+ * BACKLOG-3206: this used to be `{ success: true, message: "Token will expire
+ * naturally" }` — a success for having done nothing, which a caller deciding
+ * what to tell the user could not distinguish from a real revocation. The
+ * shape no longer has a `success` field, so the Microsoft path cannot report
+ * one.
+ */
 interface RevokeTokenResult {
-  success: boolean;
+  outcome: "unsupported";
   message: string;
 }
 
@@ -639,17 +646,30 @@ class MicrosoftAuthService {
   }
 
   /**
-   * Revoke access token (logout)
-   * @param accessToken - Access token to revoke
+   * Report that Microsoft offers an app no way to end its own access.
+   *
+   * This is the only place in the codebase that records WHY the Microsoft
+   * disconnect cannot do what the Google one does, which is why it stays a
+   * method here rather than becoming a branch in the handler.
+   *
+   * Microsoft publishes no revocation endpoint. The two Graph calls that come
+   * up as substitutes are both wrong for this: `revokeSignInSessions` ends every
+   * refresh token the user holds across every app (and needs
+   * `User.RevokeSessions.All`), and `DELETE /oauth2PermissionGrants/{id}` needs
+   * tenant-admin permission. Neither is "this app releases its own grant".
+   *
+   * BACKLOG-3206: takes no token, because the caller short-circuits before it
+   * reads one — there is nothing to send anywhere.
    */
-  async revokeToken(_accessToken: string): Promise<RevokeTokenResult> {
-    // Microsoft OAuth2 doesn't provide a revocation endpoint
-    // For proper logout, direct user to: https://login.microsoftonline.com/common/oauth2/v2.0/logout
+  async revokeToken(): Promise<RevokeTokenResult> {
     logService.info(
       "Microsoft tokens cannot be revoked programmatically. User should sign out from Microsoft account.",
       "MicrosoftAuth"
     );
-    return { success: true, message: "Token will expire naturally" };
+    return {
+      outcome: "unsupported",
+      message: "Microsoft publishes no revocation endpoint for app grants",
+    };
   }
 
   /**

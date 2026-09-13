@@ -271,6 +271,28 @@ export function isDownstreamOfFdaDenial(issue: unknown): boolean {
   return typeof type === "string" && FDA_DOWNSTREAM_ISSUE_TYPES.has(type);
 }
 
+/** BACKLOG-3233 — the address book is ABSENT, which is not a denial. */
+const CONTACTS_STORE_ABSENT_ERROR_CODES = new Set(["CONTACTS_STORE_NOT_FOUND"]);
+
+/**
+ * NARROWER than FDA_DOWNSTREAM_ISSUE_TYPES on purpose. An absent store fully
+ * explains "we read zero books" (CONTACTS_LOADING_FAILED). It does NOT explain
+ * the check itself THROWING (CONTACTS_CHECK_FAILED), so that row still speaks.
+ */
+const STORE_ABSENT_DOWNSTREAM_ISSUE_TYPES = new Set(["CONTACTS_LOADING_FAILED"]);
+
+export function hasContactsStoreAbsent(errors: ReadonlyArray<unknown>): boolean {
+  return errors.some((issue) => {
+    const code = errorCodeOf(issue);
+    return code !== undefined && CONTACTS_STORE_ABSENT_ERROR_CODES.has(code);
+  });
+}
+
+export function isDownstreamOfContactsStoreAbsent(issue: unknown): boolean {
+  const type = (issue as { type?: unknown } | null)?.type;
+  return typeof type === "string" && STORE_ABSENT_DOWNSTREAM_ISSUE_TYPES.has(type);
+}
+
 /**
  * Collapse every Full Disk Access denial into ONE decorated row, in the
  * position of the first one. Everything else — `CONTACTS_STORE_NOT_FOUND`
@@ -461,9 +483,13 @@ export function registerDiagnosticHandlers(): void {
         // CONTACTS_STORE_NOT_FOUND — an absent address book must not silence
         // this row.
         const fdaDenied = hasFdaDenial(permissions.errors);
+        const storeAbsent = hasContactsStoreAbsent(permissions.errors);
         const contactsResult = contactsLoading as { canLoadContacts: boolean; error?: unknown };
         if (!contactsResult.canLoadContacts && contactsResult.error) {
-          if (!(fdaDenied && isDownstreamOfFdaDenial(contactsResult.error))) {
+          const explainedAlready =
+            (fdaDenied && isDownstreamOfFdaDenial(contactsResult.error)) ||
+            (storeAbsent && isDownstreamOfContactsStoreAbsent(contactsResult.error));
+          if (!explainedAlready) {
             // BACKLOG-3230 seam, the second of two: `checkContactsLoading` reaches
             // this handler through the `require()` at the top of the file, so its
             // result arrives as `any` and the shape has to be asserted here. The

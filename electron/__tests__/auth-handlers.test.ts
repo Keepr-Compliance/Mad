@@ -96,6 +96,26 @@ jest.mock("../services/databaseService", () => ({
   },
 }));
 
+/**
+ * BACKLOG-3206 — SECOND LINE OF DEFENCE.
+ *
+ * The disconnect handlers registered by this suite now call
+ * `googleAuthService.revokeToken`, which POSTs to Google's revocation endpoint.
+ * The factory below mocks that service — but the factory is a WHITELIST, and
+ * this one had already gone stale for `revokeToken` before the method had a
+ * caller: every method it does not list resolves to `undefined`, so the call
+ * would have thrown a `TypeError`, been swallowed by the handler's catch, and
+ * the suite would have passed on the failure path without anybody noticing.
+ *
+ * Nothing in this repository blocks a jest run from making a real outbound
+ * request — `jest.config.js`'s `moduleNameMapper` has no `axios` entry and
+ * `tests/setup.js` installs no network guard — so the whitelist going stale in
+ * the other direction (a future edit dropping the service mock) would put a
+ * live request to Google inside a unit test. This line makes that impossible
+ * independently of the factory below. Filed repo-wide as BACKLOG-3284.
+ */
+jest.mock("axios");
+
 jest.mock("../services/googleAuthService", () => ({
   __esModule: true,
   default: {
@@ -106,6 +126,7 @@ jest.mock("../services/googleAuthService", () => ({
     stopLocalServer: jest.fn(),
     resolveCodeDirectly: jest.fn(),
     rejectCodeDirectly: jest.fn(),
+    revokeToken: jest.fn().mockResolvedValue({ outcome: "revoked" }),
   },
 }));
 
@@ -119,6 +140,10 @@ jest.mock("../services/microsoftAuthService", () => ({
     stopLocalServer: jest.fn(),
     resolveCodeDirectly: jest.fn(),
     rejectCodeDirectly: jest.fn(),
+    revokeToken: jest.fn().mockResolvedValue({
+      outcome: "unsupported",
+      message: "Microsoft publishes no revocation endpoint for app grants",
+    }),
   },
 }));
 
@@ -1237,11 +1262,20 @@ describe("Auth Handlers", () => {
         "google",
         "mailbox",
       );
+      // BACKLOG-3206: `expect.objectContaining` is loose only at the TOP
+      // level — a nested object is compared exactly — so this had to be
+      // loosened for `revokeOutcome` to be admitted. The positive assertion
+      // moves down a line rather than disappearing: no token row is stored in
+      // this fixture, so nothing was sent to Google and `no-token` is the
+      // honest report.
       expect(mockAuditService.log).toHaveBeenCalledWith(
         expect.objectContaining({
           action: "MAILBOX_DISCONNECT",
           resourceType: "MAILBOX",
-          metadata: { provider: "google" },
+          metadata: expect.objectContaining({
+            provider: "google",
+            revokeOutcome: "no-token",
+          }),
           success: true,
         }),
       );
@@ -1258,9 +1292,21 @@ describe("Auth Handlers", () => {
      * The confirmation added to Settings > Emails tells the user that emails
      * and contacts already stored on this computer are KEPT. That is a claim
      * about this handler, and no renderer test can see it, so it is asserted
-     * here: the whole disconnect path touches the database exactly twice — one
-     * read to resolve the user (`getValidUserId` -> `getUserById`) and one
-     * write, the token delete.
+     * here: the whole disconnect path makes exactly one database WRITE, the
+     * token delete.
+     *
+     * BACKLOG-3206 admitted a third name, `getOAuthToken`. The claim this pin
+     * guards is about what gets thrown away, and a read cannot throw anything
+     * away — the handler now reads the token row so it can ask Google to end
+     * the grant before the row goes. Moving that read somewhere else to keep
+     * the set at two would have been fixing the measurement instead of the
+     * claim.
+     *
+     * So the pin gets a second half rather than a wider allowance: exactly one
+     * of the called methods may be write-shaped. A future change that added a
+     * second write — a second `DELETE`, an `UPDATE`, anything that removes or
+     * rewrites stored data — reds the write assertion even though the name set
+     * was updated to admit it.
      *
      * Enumerated from the mock by execution rather than compared against a list
      * written by hand, so a mutation that added a second write shows up as a
@@ -1297,7 +1343,23 @@ describe("Auth Handlers", () => {
         .map(([name]) => name)
         .sort();
 
-      expect(called).toEqual(["deleteOAuthToken", "getUserById"]);
+      expect(called).toEqual([
+        "deleteOAuthToken",
+        "getOAuthToken",
+        "getUserById",
+      ]);
+
+      // The half that keeps enforcing the docstring now that a third name is
+      // admitted. Matched on the name, because that is what the enumeration
+      // above yields — a method whose name starts with one of these verbs
+      // changes stored data.
+      const writeShaped = called.filter((name) =>
+        /^(accept|clear|complete|create|delete|drop|insert|purge|remove|reset|save|set|update|upsert|write)/.test(
+          name,
+        ),
+      );
+
+      expect(writeShaped).toEqual(["deleteOAuthToken"]);
     });
 
     it("should handle invalid user ID", async () => {
@@ -1308,6 +1370,22 @@ describe("Auth Handlers", () => {
       expect(result.error).toBeDefined();
     });
 
+    /**
+     * BACKLOG-3206 — THIS ALSO GUARDS THE `finally`. Do not delete it as a
+     * duplicate of the sibling error tests.
+     *
+     * The disconnect handler deletes the token row in a `finally`, so the row
+     * goes whatever the revoke does. That makes this test load-bearing in a way
+     * its name does not say: rejecting `deleteOAuthToken` is now a rejection
+     * raised INSIDE a `finally`, and what this asserts is that it still
+     * propagates out of the handler as `success: false` with the message
+     * intact.
+     *
+     * The mutation that reds it is the "let's be safe" refactor a future author
+     * will reach for: wrap the `finally`'s delete in its own try/catch. Run
+     * 2026-09-12 against the real implementation — 2 failed, this test and its
+     * Microsoft twin below.
+     */
     it("should handle database error during disconnect", async () => {
       mockDatabaseService.deleteOAuthToken.mockRejectedValueOnce(
         new Error("Database error"),
@@ -1357,11 +1435,17 @@ describe("Auth Handlers", () => {
         "microsoft",
         "mailbox",
       );
+      // BACKLOG-3206: as above. `unsupported` is the whole Microsoft story —
+      // Microsoft publishes no revocation endpoint, and asserting it here is
+      // what stops that path ever reporting a success it did not earn.
       expect(mockAuditService.log).toHaveBeenCalledWith(
         expect.objectContaining({
           action: "MAILBOX_DISCONNECT",
           resourceType: "MAILBOX",
-          metadata: { provider: "microsoft" },
+          metadata: expect.objectContaining({
+            provider: "microsoft",
+            revokeOutcome: "unsupported",
+          }),
           success: true,
         }),
       );
@@ -1381,6 +1465,22 @@ describe("Auth Handlers", () => {
       expect(result.error).toBeDefined();
     });
 
+    /**
+     * BACKLOG-3206 — THIS ALSO GUARDS THE `finally`. Do not delete it as a
+     * duplicate of the sibling error tests.
+     *
+     * The disconnect handler deletes the token row in a `finally`, so the row
+     * goes whatever the revoke does. That makes this test load-bearing in a way
+     * its name does not say: rejecting `deleteOAuthToken` is now a rejection
+     * raised INSIDE a `finally`, and what this asserts is that it still
+     * propagates out of the handler as `success: false` with the message
+     * intact.
+     *
+     * The mutation that reds it is the "let's be safe" refactor a future author
+     * will reach for: wrap the `finally`'s delete in its own try/catch. Run
+     * 2026-09-12 against the real implementation — 2 failed, this test and its
+     * Google twin above.
+     */
     it("should handle database error during disconnect", async () => {
       mockDatabaseService.deleteOAuthToken.mockRejectedValueOnce(
         new Error("Database error"),

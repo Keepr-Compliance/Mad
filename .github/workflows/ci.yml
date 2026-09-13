@@ -9,9 +9,12 @@ name: CI/CD
 
 on:
   push:
-    branches: [main, develop, 'feature/**', 'fix/**', 'claude/**', 'docs/**', 'portal/**', '*-portal/**']
+    # The two negations keep int-portal/ and hotfix-portal/ pushes at today's
+    # int/ and hotfix/ behaviour (no push run); they must stay AFTER '*-portal/**'
+    # (BACKLOG-3205).
+    branches: [main, develop, 'feature/**', 'fix/**', 'claude/**', 'docs/**', 'portal/**', '*-portal/**', '!int-portal/**', '!hotfix-portal/**']
   pull_request:
-    branches: [main, develop, 'int/**']
+    branches: [main, develop, 'int/**', 'int-portal/**']
 
 jobs:
   # Fast check to determine if we can skip heavy CI jobs
@@ -132,7 +135,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           GITHUB_REF_NAME: ${{ github.ref_name }}
         run: |
-          # PRs (to develop/main/int/*) and pushes to develop/main: run both macOS + Windows
+          # PRs (to develop/main/int/*/int-portal/*) and pushes to develop/main: run both macOS + Windows
           # Pushes to feature/fix/claude branches: macOS only (Windows runs on the PR)
           if [ "$EVENT_NAME" = "pull_request" ]; then
             echo 'os-matrix=["macos-latest","windows-latest"]' >> $GITHUB_OUTPUT

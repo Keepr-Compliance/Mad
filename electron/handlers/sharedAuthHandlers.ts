@@ -15,9 +15,16 @@ import type {
   SubscriptionTier,
   SubscriptionStatus,
 } from "../types/models";
+import type {
+  DisconnectMailboxResult,
+  MailboxRevokeOutcome,
+  MailboxRevokeReason,
+} from "../types/ipc/window-api-auth";
 
 // Import services
 import databaseService from "../services/databaseService";
+import googleAuthService from "../services/googleAuthService";
+import microsoftAuthService from "../services/microsoftAuthService";
 import supabaseService from "../services/supabaseService";
 import auditService from "../services/auditService";
 import logService from "../services/logService";
@@ -427,13 +434,33 @@ export async function handleSavePendingMailboxTokens(
 }
 
 /**
- * Disconnect mailbox (remove OAuth token for mailbox purpose)
+ * Disconnect mailbox: end the provider's grant, then remove the local OAuth
+ * token row.
+ *
+ * BACKLOG-3206: this used to delete the row and stop. Deleting the row stops
+ * Keepr reading the mailbox from this computer, but the grant the user gave at
+ * the provider stays live — so the app still holds access the user believes
+ * they just took away. The disconnect now asks the provider to end that grant.
+ *
+ * ORDER: revoke first, delete in a `finally`.
+ *
+ * The handler has to await the revoke either way, because it reports the
+ * outcome — so deleting first would return no sooner and would shorten no
+ * window. It would change only which artifact survives a crash mid-operation,
+ * and delete-first leaves the worst one: row gone, grant alive, nothing left to
+ * retry from. Revoke-first is self-healing — press Disconnect again and the
+ * second revoke gets `invalid_token`, which is `already-invalid`, and the
+ * delete completes.
+ *
+ * The delete is in a `finally` so it runs whatever the revoke does. A user who
+ * pressed Disconnect gets the local row deleted; whether the provider answered
+ * is a separate fact, reported separately as `revokeOutcome`.
  */
 export async function handleDisconnectMailbox(
   mainWindow: BrowserWindow | null,
   userId: string,
   provider: "google" | "microsoft"
-): Promise<AuthResponse> {
+): Promise<DisconnectMailboxResult> {
   try {
     await logService.info(
       `Starting ${provider} mailbox disconnect`,
@@ -450,11 +477,79 @@ export async function handleDisconnectMailbox(
       };
     }
 
-    await databaseService.deleteOAuthToken(
-      validatedUserId,
-      provider,
-      "mailbox"
-    );
+    let revokeOutcome: MailboxRevokeOutcome;
+    let revokeReason: MailboxRevokeReason | undefined;
+    // True only while the Google token read is in flight. It is what tells the
+    // catch below which half threw, and it is why `read-failed` is Google-only
+    // by construction rather than by a copy check: the Microsoft branch never
+    // sets it because it never reaches the read.
+    let readingTokenRow = false;
+
+    try {
+      if (provider === "microsoft") {
+        // Short-circuit BEFORE the token read. Microsoft publishes no
+        // revocation endpoint, so reading the row would buy a database call
+        // that nothing can use.
+        revokeOutcome = (await microsoftAuthService.revokeToken()).outcome;
+      } else {
+        readingTokenRow = true;
+        const tokenRow = await databaseService.getOAuthToken(
+          validatedUserId,
+          provider,
+          "mailbox"
+        );
+        readingTokenRow = false;
+
+        // Google's endpoint accepts either token, and revoking an access token
+        // cascades to the refresh token it belongs to. Prefer the refresh
+        // token: it is the one that is still alive.
+        //
+        // KNOWN LIMIT: `refresh_token` is nullable
+        // (`oauthTokenDbService.ts:50` writes `tokenData.refresh_token ||
+        // null`), and a reconnect over a live grant can come back without one.
+        // In that state this falls back to a probably-expired access token, and
+        // a revoke of an expired token revokes nothing. Recorded, not fixed
+        // here.
+        const tokenToRevoke =
+          tokenRow?.refresh_token || tokenRow?.access_token;
+
+        if (!tokenToRevoke) {
+          revokeOutcome = "no-token";
+        } else {
+          const revokeResult =
+            await googleAuthService.revokeToken(tokenToRevoke);
+          revokeOutcome = revokeResult.outcome;
+          revokeReason = revokeResult.reason;
+        }
+      }
+    } catch (revokeError) {
+      // A read we could not perform is NOT "there was no token". There may
+      // well have been one; we could not see it, and the `finally` below is
+      // about to delete the row regardless. Calling that `no-token` would
+      // report silence to the user about a grant that is probably still live.
+      revokeOutcome = readingTokenRow ? "read-failed" : "failed";
+
+      await logService.error(
+        `${provider} mailbox revoke step failed`,
+        "AuthHandlers",
+        {
+          userId: validatedUserId,
+          revokeOutcome,
+          error:
+            revokeError instanceof Error
+              ? revokeError.message
+              : "Unknown error",
+        }
+      );
+    } finally {
+      // Unconditional. Do not move this into the `try` — a throwing read would
+      // then skip it and the user would press Disconnect and stay connected.
+      await databaseService.deleteOAuthToken(
+        validatedUserId,
+        provider,
+        "mailbox"
+      );
+    }
 
     await logService.info(
       `${provider} mailbox disconnected successfully`,
@@ -462,11 +557,17 @@ export async function handleDisconnectMailbox(
       { userId: validatedUserId }
     );
 
+    await logService.info(
+      `${provider} mailbox revoke outcome: ${revokeOutcome}`,
+      "AuthHandlers",
+      { userId: validatedUserId, revokeOutcome, revokeReason }
+    );
+
     await auditService.log({
       userId: validatedUserId,
       action: "MAILBOX_DISCONNECT",
       resourceType: "MAILBOX",
-      metadata: { provider },
+      metadata: { provider, revokeOutcome, revokeReason },
       success: true,
     });
 
@@ -476,7 +577,7 @@ export async function handleDisconnectMailbox(
       });
     }
 
-    return { success: true };
+    return { success: true, revokeOutcome, revokeReason };
   } catch (error) {
     await logService.error(
       `${provider} mailbox disconnect failed`,

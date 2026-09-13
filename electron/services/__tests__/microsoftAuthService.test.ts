@@ -331,16 +331,29 @@ describe("MicrosoftAuthService - Direct Code Resolution", () => {
 // The axios mock is set up but the singleton service imports the real axios
 // before the mock takes effect. These tests are covered by integration tests.
 
+/**
+ * BACKLOG-3206 — Microsoft cannot end its own grant, and must say so.
+ *
+ * This test used to assert `result.success === true`, which pinned a lie: the
+ * method does nothing, and "success" for doing nothing is indistinguishable, to
+ * a caller deciding what to tell the user, from a grant that was actually
+ * revoked. The `success` field is gone from the shape, so the assertion is now
+ * that no success-shaped result can come back at all.
+ */
 describe("MicrosoftAuthService - revokeToken", () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
-  it("should return success message (Microsoft does not support revocation)", async () => {
-    const result = await microsoftAuthService.revokeToken("any-token");
+  // S7
+  it("reports unsupported, and reports no success of any kind", async () => {
+    const result = await microsoftAuthService.revokeToken();
 
-    expect(result.success).toBe(true);
-    expect(result.message).toBe("Token will expire naturally");
+    expect(result.outcome).toBe("unsupported");
+    // The part that matters: a caller reading this cannot mistake it for a
+    // revocation that happened.
+    expect(result).not.toHaveProperty("success");
+    expect(result.message).toContain("no revocation endpoint");
   });
 });
 

@@ -42,7 +42,7 @@ name: Message Hygiene
 #
 # ## No exemptions, no branch filter, no job-level `if:`
 #
-# - **No exemptions.** `pr-metrics-check.yml` skips int/*, squash/*, chore/ci-*
+# - **No exemptions.** `pr-metrics-check.yml` skips int/*, int-portal/*, squash/*, chore/ci-*
 #   and labelled PRs because those branches have no honest Agent ID to cite.
 #   That reasoning does not transfer: a PR body is world-readable whoever wrote
 #   it and whatever it targets.

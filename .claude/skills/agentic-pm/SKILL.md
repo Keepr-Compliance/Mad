@@ -274,7 +274,7 @@ See `modules/backlog-maintenance.md` for procedures.
 
 **ALL sprint work MUST use an integration branch. NEVER target develop directly with multiple sprint PRs.**
 
-**PM creates the integration branch at sprint start:**
+**PM creates the integration branch at sprint start.** First, does any task in this sprint change `broker-portal/`, `admin-portal/`, `packages/design-system/` or `packages/ui/`? Yes → name the branch `int-portal/<sprint-name>`; no → `int/<sprint-name>` (`.claude/docs/shared/git-branching.md` → Branch Naming, BACKLOG-3205).
 ```bash
 git checkout develop
 git pull origin develop
