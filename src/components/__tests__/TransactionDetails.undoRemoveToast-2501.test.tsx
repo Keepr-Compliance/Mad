@@ -154,8 +154,9 @@ beforeAll(() => {
 
 /** Open the Edit Contacts modal (the stub) and run one of its saves. */
 async function saveVia(testId: string): Promise<void> {
+  const [editButton] = await screen.findAllByTestId("edit-contacts-button");
   await act(async () => {
-    await userEvent.click(screen.getAllByTestId("edit-contacts-button")[0]);
+    await userEvent.click(editButton);
   });
   await act(async () => {
     await userEvent.click(await screen.findByTestId(testId));
