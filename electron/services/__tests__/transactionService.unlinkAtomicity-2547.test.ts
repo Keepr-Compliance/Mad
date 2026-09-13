@@ -183,6 +183,15 @@ jest.mock("../db/core/dbConnection", () => ({
  * `databaseService` is REDIRECTED to the real db services, never stubbed. The
  * writers are the code under test; stubbing any of them makes every assertion
  * below vacuous.
+ *
+ * EVERY FAKE IS `async`, BECAUSE EVERY FACADE IT STANDS IN FOR IS `async` in
+ * `databaseService.ts`. That is load-bearing, not tidy. A plain-arrow fake lets
+ * the db layer's synchronous throw escape at the call site, so a transaction
+ * body that calls a facade WITHOUT `await` would still roll back here — while
+ * in production the `async` facade turns that throw into a rejection nobody
+ * observes, the callback returns, and the transaction COMMITS the other
+ * writes. A non-async fake describes a facade shape production does not have,
+ * and the sweep read green over exactly that regression.
  */
 jest.mock("../databaseService", () => {
   const messageDb = jest.requireActual(
@@ -200,24 +209,25 @@ jest.mock("../databaseService", () => {
   return {
     __esModule: true,
     default: {
-      getMessageById: (id: string) => Promise.resolve(messageDb.getMessageById(id)),
-      unlinkMessageFromTransaction: (id: string) =>
-        Promise.resolve(messageDb.unlinkMessageFromTransaction(id)),
-      addIgnoredCommunication: (data: any) => communicationDb.addIgnoredCommunication(data),
-      deleteCommunicationByMessageId: (id: string) =>
+      getMessageById: async (id: string) => messageDb.getMessageById(id),
+      unlinkMessageFromTransaction: async (id: string) =>
+        messageDb.unlinkMessageFromTransaction(id),
+      addIgnoredCommunication: async (data: any) =>
+        communicationDb.addIgnoredCommunication(data),
+      deleteCommunicationByMessageId: async (id: string) =>
         communicationDb.deleteCommunicationByMessageId(id),
-      deleteCommunicationByThread: (threadId: string, txId: string) =>
+      deleteCommunicationByThread: async (threadId: string, txId: string) =>
         communicationDb.deleteCommunicationByThread(threadId, txId),
       // The facade takes (id, channelFilter, limit); the db-layer function takes
       // the id alone and the facade narrows in JS. `getTransactionDetails` passes
       // both extras as `undefined` on this path, and nothing here reads the
       // returned communications, so delegating the id alone is faithful.
-      getCommunicationsByTransaction: (txId: string) =>
+      getCommunicationsByTransaction: async (txId: string) =>
         communicationDb.getCommunicationsByTransaction(txId),
-      updateTransaction: (txId: string, updates: any) =>
+      updateTransaction: async (txId: string, updates: any) =>
         transactionDb.updateTransaction(txId, updates),
-      getTransactionById: (txId: string) => transactionDb.getTransactionById(txId),
-      getTransactionContactsWithRoles: (txId: string) =>
+      getTransactionById: async (txId: string) => transactionDb.getTransactionById(txId),
+      getTransactionContactsWithRoles: async (txId: string) =>
         transactionContactDb.getTransactionContactsWithRoles(txId),
     },
   };
@@ -408,14 +418,27 @@ function transactionCounts(db: TestDb): Record<string, unknown> {
     .get(TX) as Record<string, unknown>;
 }
 
-/** Run the unlink, swallowing whatever it does. State is the assertion. */
+/**
+ * Run the unlink and return what it threw (or null). State is the assertion.
+ *
+ * THE `setImmediate` TURN IS LOAD-BEARING. With the `async` fakes above, a
+ * facade called WITHOUT `await` inside the transaction body turns the injected
+ * throw into a rejected promise nobody holds. Node delivers that rejection
+ * after the microtask queue drains. Waiting one macrotask here makes it arrive
+ * while the case is still running, so jest-circus's own `unhandledRejection`
+ * handler records it against THAT case, by name, next to the case's snapshot
+ * diff. Without the wait, the same mutation killed the jest worker with a bare
+ * stack trace and no test result at all (measured).
+ */
 async function runUnlink(ids: string[], txId?: string): Promise<Error | null> {
+  let thrown: Error | null = null;
   try {
     await transactionService.unlinkMessages(ids, txId);
-    return null;
   } catch (error) {
-    return error as Error;
+    thrown = error as Error;
   }
+  await new Promise((resolve) => setImmediate(resolve));
+  return thrown;
 }
 
 beforeEach(() => {
@@ -636,6 +659,31 @@ describe("BACKLOG-2547 — a crash anywhere in the write phase changes nothing",
       suppressed: [],
     });
     expect(fullSnapshot(realDb!)).toEqual(before);
+  });
+
+  /**
+   * THE ERROR THE USER SEES. `transactions:unlink-messages` runs inside
+   * `wrapHandler`, which returns `{ success: false, error: error.message }`,
+   * and the Texts tab renders that string verbatim. So the message is pinned
+   * exactly, and the driver error must survive as `cause` for Sentry.
+   *
+   * Its OWN case, not folded into `REACHABILITY RECORD`: the pre-fix code
+   * rejects with the raw driver error at write 4, so an assertion on the
+   * message there would report the wrong string instead of the
+   * linked-and-suppressed pair that case exists to name.
+   */
+  it("a failed unlink rejects with the user-facing sentence and keeps the driver error as its cause", async () => {
+    resetInjector(4);
+    const error = await runUnlink(PRODUCTION_IDS, TX);
+    resetInjector(0);
+
+    expect(error).not.toBeNull();
+    expect(error!.message).toBe(
+      "Could not remove those messages from the transaction. Nothing was changed — please try again.",
+    );
+    expect(String((error as Error & { cause?: unknown }).cause)).toContain(
+      `${INJECTED} at write 4`,
+    );
   });
 
   /**
