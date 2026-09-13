@@ -127,6 +127,8 @@ When verifying a fix or process (sync jobs, reindexing, CI automations), confirm
 
 **Incident Reference:** BACKLOG-1875 — pm-task-sync ran "successfully" while every RPC call was rejected; the error was masked as "task not found".
 
+**Before putting a product decision about a code path to the founder, state its reachability in the same message** — the caller or entry point as `file:line`, or "no caller". A ruling made on an unchecked reachability does not bind the work after it. Full rule: `.claude/docs/PR-SOP.md` §6.2l.
+
 ### Break it and watch it go red (MANDATORY for any PR)
 
 **A check is only worth what its inputs can distinguish. "It passed" says nothing until you have made it fail on purpose.**
