@@ -243,7 +243,7 @@ jobs:
       # overrides `bail: 1` in jest.config.js for CI only; local `npm test` and
       # `npx jest` still stop at the first failure.
       # --bail=0 needs "=": "--bail 0" is parsed as bail 1 plus a test filter "0"
-      # and runs 68 of 1010 files, green.
+      # that runs only 68 of 1010 files, and the step can still pass green.
       - name: Run tests
         run: npm test -- --silent --maxWorkers=2 --workerIdleMemoryLimit=512MB --forceExit --bail=0
         env:
@@ -266,7 +266,7 @@ jobs:
       # BACKLOG-3288: the portal config spreads the root config, so it inherits
       # `bail: 1`; --bail=0 reports every failing suite, CI only.
       # --bail=0 needs "=": "--bail 0" is parsed as bail 1 plus a test filter "0"
-      # and runs 1 of 54 files, green.
+      # that matches 0 of 54 files, and the step fails with "No tests found".
       - name: Run broker-portal tests
         run: npx jest --config broker-portal/jest.config.js --silent --bail=0
         env:
