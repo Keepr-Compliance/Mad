@@ -36,6 +36,7 @@ import crypto from "crypto";
 import { setDb, closeDb } from "../core/dbConnection";
 import { createSession, validateSession } from "../sessionDbService";
 import { sessionSecurityService } from "../../sessionSecurityService";
+import { parseDbTimestamp } from "../../../utils/dbTimestamp";
 
 /**
  * Minimal production-faithful schema for the two tables involved in the JOIN.
@@ -264,31 +265,61 @@ describe("BACKLOG-2132 validateSession column-collision regression", () => {
       expect(check.reason).toBe("expired");
     });
 
-    it("idle-fallback uses the real session last_accessed_at (>30min idle expires)", async () => {
-      const userId = "user-idle";
+    /**
+     * BACKLOG-3297 — relaunch after the app was closed. The session is made by
+     * the REAL producer (`createSession`, so `created_at` / `last_accessed_at`
+     * are SQLite `CURRENT_TIMESTAMP` values: "YYYY-MM-DD HH:MM:SS", UTC, no
+     * zone), looked up once as a launch would, then looked up again from a
+     * fresh process (in-process activity cleared) with the JS clock moved on.
+     * Only `Date` is faked; SQLite stamps with the real clock.
+     */
+    async function relaunchAfter(closedFor: number, userId: string) {
       insertUser(db, userId, iso(-2 * DAY), iso(-2 * DAY));
-      const token = "token-idle";
-      insertSession(db, {
-        sessionId: crypto.randomUUID(),
-        userId,
-        token,
-        expiresAt: iso(+DAY),
-        createdAt: iso(-1 * HOUR),
-        lastAccessedAt: iso(-1 * HOUR),
+      const token = await createSession(userId);
+
+      const atLaunch = await validateSession(token);
+      expect(atLaunch).not.toBeNull();
+      await expect(
+        sessionSecurityService.checkSessionValidity(
+          { created_at: atLaunch!.created_at, last_accessed_at: atLaunch!.last_accessed_at },
+          token,
+        ),
+      ).resolves.toEqual({ valid: true });
+
+      // Quit: the in-process activity record does not survive the process.
+      sessionSecurityService.clearAllActivity();
+
+      jest.useFakeTimers({
+        now: Date.now() + closedFor,
+        doNotFake: [
+          "nextTick",
+          "queueMicrotask",
+          "setImmediate",
+          "clearImmediate",
+          "setTimeout",
+          "clearTimeout",
+          "setInterval",
+          "clearInterval",
+        ],
       });
+      try {
+        const atRelaunch = await validateSession(token);
+        if (!atRelaunch) return null;
+        return await sessionSecurityService.checkSessionValidity(
+          { created_at: atRelaunch.created_at, last_accessed_at: atRelaunch.last_accessed_at },
+          token,
+        );
+      } finally {
+        jest.useRealTimers();
+      }
+    }
 
-      const session = await validateSession(token);
-      expect(session).not.toBeNull();
+    it("relaunch 13h after the last launch is still signed in (closed time is not idle)", async () => {
+      await expect(relaunchAfter(13 * HOUR, "user-relaunch-13h")).resolves.toEqual({ valid: true });
+    });
 
-      // Feed a stale last_accessed_at (45 min ago) to exercise the DB idle
-      // fallback branch (no in-memory activity tracked for this token).
-      const check = await sessionSecurityService.checkSessionValidity(
-        { created_at: session!.created_at, last_accessed_at: iso(-45 * 60 * 1000) },
-        token,
-      );
-
-      expect(check.valid).toBe(false);
-      expect(check.reason).toBe("idle");
+    it("relaunch 24h10m after sign-in: the session row has expired", async () => {
+      await expect(relaunchAfter(24 * HOUR + 10 * 60 * 1000, "user-relaunch-24h")).resolves.toBeNull();
     });
   });
 
@@ -301,7 +332,12 @@ describe("BACKLOG-2132 validateSession column-collision regression", () => {
 
     expect(result).not.toBeNull();
     // Session was just created → its age must be well under the account age.
-    const sessionAgeMs = Date.now() - new Date(result!.created_at).getTime();
-    expect(sessionAgeMs).toBeLessThan(HOUR);
+    // `created_at` is SQLite's zone-less UTC value; a bare `new Date()` reads it
+    // as local time, which made this red east of UTC and vacuous west of it
+    // (BACKLOG-3297). Parse it as UTC and bound both sides.
+    const createdAt = parseDbTimestamp(result!.created_at);
+    expect(createdAt).not.toBeNull();
+    const sessionAgeMs = Date.now() - createdAt!.getTime();
+    expect(Math.abs(sessionAgeMs)).toBeLessThan(60 * 1000);
   });
 });
