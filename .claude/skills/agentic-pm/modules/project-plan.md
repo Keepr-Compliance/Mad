@@ -14,12 +14,8 @@ Define:
 
 ### Branch naming convention
 
-```
-feature/<ID>-<slug>     # Feature branches (matches CLAUDE.md)
-fix/<ID>-<slug>         # Bug fixes
-int/phase<N>-<name>     # Integration branches (if needed)
-claude/<ID>-<slug>      # AI-assisted development
-```
+Follow `.claude/docs/shared/git-branching.md` → **Branch Naming**. Include the backlog ID in feature and fix
+branch names. Use `int-portal/<name>` instead of `int/<name>` when the integration branch will carry portal code.
 
 ### Merge order patterns
 

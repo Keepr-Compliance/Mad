@@ -80,6 +80,7 @@ PHASE A: SETUP (PM)
     - echo '{"agent_type": "pm", "sprint_id": "<sprint-uuid>", "description": "Sprint setup"}' > .claude/.current-task
 
 1a. PM: Create integration branch (if not already created for this sprint)
+    - First, does any task in this sprint change `broker-portal/`, `admin-portal/`, `packages/design-system/` or `packages/ui/`? Yes → name the branch `int-portal/<sprint-name>`; no → `int/<sprint-name>` (`.claude/docs/shared/git-branching.md` → Branch Naming, BACKLOG-3205)
     - git checkout develop && git pull origin develop
     - git checkout -b int/<sprint-name>
     - git push -u origin int/<sprint-name>
