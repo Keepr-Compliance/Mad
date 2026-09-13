@@ -120,7 +120,7 @@ describe("TransactionDetails — attachments auto-refresh (BACKLOG-322 #3)", () 
     const before = getAllAttachments.mock.calls.length;
 
     // Open the Emails tab (renders the stub), then fire onEmailsChanged.
-    await userEvent.click(screen.getByText("Emails"));
+    await userEvent.click(await screen.findByText("Emails"));
     await userEvent.click(await screen.findByTestId("fire-emails-changed"));
 
     await waitFor(() =>
@@ -136,7 +136,7 @@ describe("TransactionDetails — attachments auto-refresh (BACKLOG-322 #3)", () 
     await waitFor(() => expect(getAllAttachments).toHaveBeenCalled());
     const before = getAllAttachments.mock.calls.length;
 
-    await userEvent.click(screen.getByText("Texts"));
+    await userEvent.click(await screen.findByText("Texts"));
     await userEvent.click(await screen.findByTestId("fire-messages-changed"));
 
     await waitFor(() =>
