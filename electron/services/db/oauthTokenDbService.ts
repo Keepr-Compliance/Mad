@@ -15,12 +15,19 @@ import { assignmentList } from "./core/columnSql";
 /**
  * Save OAuth token (encrypted)
  */
-export async function saveOAuthToken(
+/**
+ * BACKLOG-2546 — SYNC TWIN. See `userDbService.createUserSync` for the full
+ * reasoning: the login provisioning chain commits as one `dbTransaction` unit,
+ * `dbTransaction` takes a SYNCHRONOUS callback by type, so the body needs a
+ * callee that is synchronous all the way down. The primitive is this one; the
+ * promise-returning export below is a one-line wrapper over it.
+ */
+export function saveOAuthTokenSync(
   userId: string,
   provider: OAuthProvider,
   purpose: OAuthPurpose,
   tokenData: Partial<OAuthToken>,
-): Promise<string> {
+): string {
   const id = crypto.randomUUID();
 
   const statement = sql`
@@ -57,6 +64,15 @@ export async function saveOAuthToken(
 
   dbRun(statement, params);
   return id;
+}
+
+export async function saveOAuthToken(
+  userId: string,
+  provider: OAuthProvider,
+  purpose: OAuthPurpose,
+  tokenData: Partial<OAuthToken>,
+): Promise<string> {
+  return saveOAuthTokenSync(userId, provider, purpose, tokenData);
 }
 
 /**

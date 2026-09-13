@@ -159,6 +159,15 @@ export interface WindowApiUser {
     phoneType?: "iphone" | "android";
     error?: string;
   }>;
+  /**
+   * Copies the Supabase phone type into the local database when they differ.
+   * Resolves `{ success: true }` when it wrote, when the cloud has nothing,
+   * and when there is no local user row, so callers must re-read local rather
+   * than trust the result (BACKLOG-3276). Bridge: settingsBridge.ts.
+   */
+  syncPhoneTypeFromCloud: (
+    userId: string,
+  ) => Promise<{ success: boolean; error?: string }>;
   /** TASK-1600: sets phone type in Supabase cloud storage. */
   setPhoneTypeCloud: (
     userId: string,

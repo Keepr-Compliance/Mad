@@ -156,6 +156,17 @@ const mockLogService = {
   warn: jest.fn().mockResolvedValue(undefined),
 };
 
+// BACKLOG-2546: the login write chain is one transaction behind
+// `provisionLogin`. These flows assert the handler's end-to-end response and
+// what it sends; the transaction's own behaviour is covered against the real
+// driver in `services/db/__tests__/loginProvisioningAtomicity-2546.test.ts`.
+const mockProvisionLogin = jest.fn();
+
+jest.mock("../services/loginProvisioningService", () => ({
+  __esModule: true,
+  provisionLogin: (...args: unknown[]) => mockProvisionLogin(...args),
+}));
+
 jest.mock("../services/databaseService", () => ({
   __esModule: true,
   default: mockDatabaseService,
@@ -313,18 +324,16 @@ describe("Auth Handlers Integration Tests", () => {
         userInfo: mockUserInfo,
       });
       mockSupabaseService.syncUser.mockResolvedValue(mockCloudUser);
-      mockDatabaseService.getUserByOAuthId.mockResolvedValue(null); // New user
-      mockDatabaseService.createUser.mockResolvedValue({
-        id: TEST_USER_ID,
-        email: mockUserInfo.email,
-        terms_accepted_at: null,
+      mockProvisionLogin.mockReturnValue({
+        user: {
+          id: TEST_USER_ID,
+          email: mockUserInfo.email,
+          terms_accepted_at: null,
+        },
+        sessionToken: TEST_SESSION_TOKEN,
+        isNewUser: true, // New user
+        existingBefore: null,
       });
-      mockDatabaseService.getUserById.mockResolvedValue({
-        id: TEST_USER_ID,
-        email: mockUserInfo.email,
-        terms_accepted_at: null,
-      });
-      mockDatabaseService.createSession.mockResolvedValue(TEST_SESSION_TOKEN);
       mockSupabaseService.validateSubscription.mockResolvedValue({
         tier: "free",
         status: "active",
@@ -342,9 +351,17 @@ describe("Auth Handlers Integration Tests", () => {
 
       // Verify all steps were executed (session-only OAuth: no token encryption, no session file persistence)
       expect(mockSupabaseService.syncUser).toHaveBeenCalled();
-      expect(mockDatabaseService.createUser).toHaveBeenCalled();
-      expect(mockDatabaseService.saveOAuthToken).toHaveBeenCalled();
-      expect(mockDatabaseService.createSession).toHaveBeenCalled();
+      // One call now carries the user row, the token row and the session row —
+      // that is the point of BACKLOG-2546. The payload is asserted here; that
+      // all three land together, or none do, is asserted on the real driver.
+      expect(mockProvisionLogin).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "google",
+          create: expect.objectContaining({ email: mockUserInfo.email }),
+          token: expect.objectContaining({ purpose: "authentication" }),
+          touchLastLogin: true,
+        }),
+      );
       // Note: sessionService.saveSession not called in session-only OAuth
       expect(mockRateLimitService.recordAttempt).toHaveBeenCalledWith(
         mockUserInfo.email,
@@ -372,9 +389,12 @@ describe("Auth Handlers Integration Tests", () => {
         userInfo: { ...mockUserInfo, email: "existing@gmail.com" },
       });
       mockSupabaseService.syncUser.mockResolvedValue(mockCloudUser);
-      mockDatabaseService.getUserByOAuthId.mockResolvedValue(existingUser);
-      mockDatabaseService.getUserById.mockResolvedValue(existingUser);
-      mockDatabaseService.createSession.mockResolvedValue(TEST_SESSION_TOKEN);
+      mockProvisionLogin.mockReturnValue({
+        user: existingUser,
+        sessionToken: TEST_SESSION_TOKEN,
+        isNewUser: false,
+        existingBefore: existingUser,
+      });
       mockSupabaseService.validateSubscription.mockResolvedValue({
         tier: "pro",
         status: "active",
@@ -387,8 +407,14 @@ describe("Auth Handlers Integration Tests", () => {
 
       expect(result.success).toBe(true);
       expect(result.isNewUser).toBe(false);
-      expect(mockDatabaseService.updateUser).toHaveBeenCalled();
-      expect(mockDatabaseService.createUser).not.toHaveBeenCalled();
+      // Which of create/update runs is decided inside the transaction against
+      // the real row (H2 in loginProvisioningAtomicity-2546). What the handler
+      // decides is that a returning user carries an update payload.
+      expect(mockProvisionLogin).toHaveBeenCalledWith(
+        expect.objectContaining({
+          updateExisting: expect.objectContaining({ email: expect.any(String) }),
+        }),
+      );
     });
   });
 
@@ -570,10 +596,9 @@ describe("Auth Handlers Integration Tests", () => {
         userInfo: { id: "123", email: "test@example.com" },
       });
       mockSupabaseService.syncUser.mockResolvedValue({ id: "cloud-123" });
-      mockDatabaseService.getUserByOAuthId.mockResolvedValue(null);
-      mockDatabaseService.createUser.mockRejectedValue(
-        new Error("Database connection lost"),
-      );
+      mockProvisionLogin.mockImplementation(() => {
+        throw new Error("Database connection lost");
+      });
 
       const handler = registeredHandlers.get("auth:google:complete-login");
       const result = await handler(mockEvent, TEST_AUTH_CODE);

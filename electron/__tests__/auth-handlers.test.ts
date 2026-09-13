@@ -60,6 +60,20 @@ jest.mock("os", () => ({
 }));
 
 // Mock services with inline factories (hoisting-safe)
+// BACKLOG-2546: the login write chain is one transaction behind
+// `provisionLogin`, so that is the seam these handler tests intercept. WHICH of
+// create/update runs is now decided inside the transaction against the real row,
+// and is covered on the real driver in
+// `services/db/__tests__/loginProvisioningAtomicity-2546.test.ts`. What is
+// asserted here is what the HANDLER decides to send, which is what these cases
+// were always about.
+const mockProvisionLogin = jest.fn();
+
+jest.mock("../services/loginProvisioningService", () => ({
+  __esModule: true,
+  provisionLogin: (...args: unknown[]) => mockProvisionLogin(...args),
+}));
+
 jest.mock("../services/databaseService", () => ({
   __esModule: true,
   default: {
@@ -413,10 +427,12 @@ describe("Auth Handlers", () => {
         userInfo: mockUserInfo,
       });
       mockSupabaseService.syncUser.mockResolvedValue(fixture(mockCloudUser));
-      mockDatabaseService.getUserByOAuthId.mockResolvedValue(null);
-      mockDatabaseService.createUser.mockResolvedValue(fixture(mockLocalUser));
-      mockDatabaseService.getUserById.mockResolvedValue(fixture(mockLocalUser));
-      mockDatabaseService.createSession.mockResolvedValue("session-token-123");
+      mockProvisionLogin.mockReturnValue({
+        user: mockLocalUser,
+        sessionToken: "session-token-123",
+        isNewUser: true,
+        existingBefore: null,
+      });
       mockSupabaseService.validateSubscription.mockResolvedValue(fixture({
         tier: "pro",
       }));
@@ -443,15 +459,27 @@ describe("Auth Handlers", () => {
         ...mockLocalUser,
         terms_accepted_at: new Date().toISOString(),
       };
-      mockDatabaseService.getUserByOAuthId.mockResolvedValue(fixture(existingUser));
-      mockDatabaseService.getUserById.mockResolvedValue(fixture(existingUser));
+      mockProvisionLogin.mockReturnValue({
+        user: existingUser,
+        sessionToken: "session-token-123",
+        isNewUser: false,
+        existingBefore: existingUser,
+      });
 
       const handler = registeredHandlers.get("auth:google:complete-login");
       const result = await handler(mockEvent, "valid-auth-code");
 
       expect(result.success).toBe(true);
-      expect(mockDatabaseService.updateUser).toHaveBeenCalled();
-      expect(mockDatabaseService.createUser).not.toHaveBeenCalled();
+      // The handler sends both the create payload and the update payload; the
+      // transaction picks by what is actually in the table. That the RETURNING
+      // path updates rather than inserts is asserted against the real driver
+      // (H2 in loginProvisioningAtomicity-2546).
+      expect(mockProvisionLogin).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "google",
+          updateExisting: expect.objectContaining({ email: expect.any(String) }),
+        }),
+      );
     });
 
     it("should handle invalid auth code", async () => {
@@ -690,7 +718,24 @@ describe("Auth Handlers", () => {
       expect(result.completed).toBe(true);
     });
 
-    it("should return completed=false when onboarding done but no mailbox token (session-only OAuth)", async () => {
+    // BACKLOG-3293. The rule this handler implements is an OR:
+    //     completed := onboardingCompleted || hasValidMailboxToken
+    // The four tests in this describe pin the COMPLETE flag x token truth
+    // table, so any handler that passes all four implements exactly that
+    // expression — not merely something compatible with it:
+    //     flag=true,  token=present -> true   "…onboarding done and mailbox token exists"
+    //     flag=true,  token=null    -> true   the test below
+    //     flag=false, token=present -> true   "…(TASK-1039)", which also pins the auto-correct
+    //     flag=false, token=null    -> false  "…onboarding not done and no token"
+    // So the test below cannot be read on its own: its fixture returns true
+    // under the OR AND under a bare `onboardingCompleted`, because every
+    // observable on flag=true/token=null is identical between the two. It is
+    // the TASK-1039 row that separates them. Do not delete any of the four.
+    it("returns completed=true when the user answered the email step but holds no mailbox token — do not re-run onboarding (BACKLOG-3293)", async () => {
+      // A deliberate skip and a session-only token that was never persisted
+      // are indistinguishable to THIS handler — both are flag=true, no token —
+      // and stay so until an email-decline is persisted (BACKLOG-3244). For the
+      // routing question both have the same right answer, so it does not guess.
       mockDatabaseService.hasCompletedEmailOnboarding.mockResolvedValue(true);
       mockDatabaseService.getOAuthToken.mockResolvedValue(null); // No token
 
@@ -698,7 +743,9 @@ describe("Auth Handlers", () => {
       const result = await handler(mockEvent, TEST_USER_ID);
 
       expect(result.success).toBe(true);
-      expect(result.completed).toBe(false);
+      expect(result.completed).toBe(true);
+      // The disagreement between the two facts still goes on the record — this
+      // is the log line the founder's own reproduction was read from.
       expect(mockLogService.info).toHaveBeenCalledWith(
         "Email onboarding flag is true but no valid mailbox token found",
         "AuthHandlers",
@@ -860,9 +907,7 @@ describe("Auth Handlers", () => {
 
     beforeEach(() => {
       // Reset mocks
-      mockDatabaseService.getUserByOAuthId.mockReset();
-      mockDatabaseService.updateUser.mockReset();
-      mockDatabaseService.createUser.mockReset();
+      mockProvisionLogin.mockReset();
       mockSupabaseService.syncUser.mockReset();
       mockSupabaseService.syncTermsAcceptance.mockReset();
       mockGoogleAuthService.exchangeCodeForTokens.mockReset();
@@ -904,10 +949,13 @@ describe("Auth Handlers", () => {
         privacy_policy_accepted_at: null,
       };
 
-      mockDatabaseService.getUserByOAuthId.mockResolvedValue(
-        fixture(localUserWithTerms),
-      );
-      mockDatabaseService.getUserById.mockResolvedValue(fixture(localUserWithTerms));
+      mockProvisionLogin.mockReturnValue({
+        user: localUserWithTerms,
+        sessionToken: "test-session-token",
+        isNewUser: false,
+        // The PRE-update snapshot is what drives the sync-up decision.
+        existingBefore: localUserWithTerms,
+      });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       mockSupabaseService.syncUser.mockResolvedValue(cloudUserNoTerms as any);
       mockSupabaseService.syncTermsAcceptance.mockResolvedValue(fixture(undefined));
@@ -916,11 +964,12 @@ describe("Auth Handlers", () => {
       await handler(mockEvent, "test-auth-code");
 
       // Verify local terms were NOT overwritten (updateUser should not include terms fields)
-      expect(mockDatabaseService.updateUser).toHaveBeenCalledWith(
-        TEST_USER_ID,
-        expect.not.objectContaining({
-          terms_accepted_at: null,
-          privacy_policy_accepted_at: null,
+      expect(mockProvisionLogin).toHaveBeenCalledWith(
+        expect.objectContaining({
+          updateExisting: expect.not.objectContaining({
+            terms_accepted_at: null,
+            privacy_policy_accepted_at: null,
+          }),
         }),
       );
 
@@ -955,11 +1004,13 @@ describe("Auth Handlers", () => {
         privacy_policy_version_accepted: "1.0",
       };
 
-      mockDatabaseService.getUserByOAuthId.mockResolvedValue(fixture(localUserNoTerms));
-      mockDatabaseService.getUserById.mockResolvedValue(fixture({
-        ...localUserNoTerms,
-        ...cloudUserWithTerms,
-      }));
+      mockProvisionLogin.mockReturnValue({
+        user: { ...localUserNoTerms, ...cloudUserWithTerms },
+        sessionToken: "test-session-token",
+        isNewUser: false,
+        // No local terms, so the sync-up must NOT fire.
+        existingBefore: localUserNoTerms,
+      });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       mockSupabaseService.syncUser.mockResolvedValue(cloudUserWithTerms as any);
 
@@ -967,13 +1018,14 @@ describe("Auth Handlers", () => {
       await handler(mockEvent, "test-auth-code");
 
       // Verify cloud terms were synced to local
-      expect(mockDatabaseService.updateUser).toHaveBeenCalledWith(
-        TEST_USER_ID,
+      expect(mockProvisionLogin).toHaveBeenCalledWith(
         expect.objectContaining({
-          terms_accepted_at: "2024-01-15T00:00:00.000Z",
-          privacy_policy_accepted_at: "2024-01-15T00:00:00.000Z",
-          terms_version_accepted: "1.0",
-          privacy_policy_version_accepted: "1.0",
+          updateExisting: expect.objectContaining({
+            terms_accepted_at: "2024-01-15T00:00:00.000Z",
+            privacy_policy_accepted_at: "2024-01-15T00:00:00.000Z",
+            terms_version_accepted: "1.0",
+            privacy_policy_version_accepted: "1.0",
+          }),
         }),
       );
 
@@ -999,10 +1051,12 @@ describe("Auth Handlers", () => {
         privacy_policy_accepted_at: null,
       };
 
-      mockDatabaseService.getUserByOAuthId.mockResolvedValue(
-        fixture(localUserWithTerms),
-      );
-      mockDatabaseService.getUserById.mockResolvedValue(fixture(localUserWithTerms));
+      mockProvisionLogin.mockReturnValue({
+        user: localUserWithTerms,
+        sessionToken: "test-session-token",
+        isNewUser: false,
+        existingBefore: localUserWithTerms,
+      });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       mockSupabaseService.syncUser.mockResolvedValue(cloudUserNoTerms as any);
       mockSupabaseService.syncTermsAcceptance.mockRejectedValue(

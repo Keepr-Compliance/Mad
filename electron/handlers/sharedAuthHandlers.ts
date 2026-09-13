@@ -29,6 +29,7 @@ import supabaseService from "../services/supabaseService";
 import auditService from "../services/auditService";
 import logService from "../services/logService";
 import sessionService from "../services/sessionService";
+import { provisionLogin } from "../services/loginProvisioningService";
 import { setSyncUserId } from "./syncHandlers";
 
 // Import validation utilities
@@ -44,6 +45,49 @@ import {
 interface AuthResponse {
   success: boolean;
   error?: string;
+}
+
+/**
+ * The pending-login payload, as a NAMED type rather than an inline object type
+ * in the parameter list.
+ *
+ * That is not cosmetic. `writeAtomicity.guard.test.ts` brace-matches a function
+ * body from its DECLARATION line, so an inline object type in the parameter list
+ * closes the capture before the body opens and the function reads as having no
+ * body at all — zero writes, zero transaction, invisible. This function is the
+ * primary login path, so it should not be invisible. Filed as BACKLOG-3225 for
+ * the general fix; this hoist lifts one function out of it.
+ */
+interface PendingLoginPayload {
+  provider: "google" | "microsoft";
+  userInfo: {
+    id: string;
+    email: string;
+    given_name?: string;
+    family_name?: string;
+    name?: string;
+    picture?: string;
+  };
+  tokens: {
+    access_token: string;
+    refresh_token: string | null;
+    expires_at?: string;
+    expires_in?: number;
+    scopes?: string[];
+    scope?: string;
+  };
+  cloudUser: {
+    id: string;
+    subscription_tier?: SubscriptionTier;
+    subscription_status?: SubscriptionStatus;
+    trial_ends_at?: string;
+    terms_accepted_at?: string;
+    privacy_policy_accepted_at?: string;
+    terms_version_accepted?: string;
+    privacy_policy_version_accepted?: string;
+    email_onboarding_completed_at?: string;
+  };
+  subscription?: Subscription;
 }
 
 interface LoginCompleteResponse extends AuthResponse {
@@ -88,37 +132,7 @@ function needsToAcceptTerms(user: User): boolean {
  */
 export async function handleCompletePendingLogin(
   _event: IpcMainInvokeEvent,
-  oauthData: {
-    provider: "google" | "microsoft";
-    userInfo: {
-      id: string;
-      email: string;
-      given_name?: string;
-      family_name?: string;
-      name?: string;
-      picture?: string;
-    };
-    tokens: {
-      access_token: string;
-      refresh_token: string | null;
-      expires_at?: string;
-      expires_in?: number;
-      scopes?: string[];
-      scope?: string;
-    };
-    cloudUser: {
-      id: string;
-      subscription_tier?: SubscriptionTier;
-      subscription_status?: SubscriptionStatus;
-      trial_ends_at?: string;
-      terms_accepted_at?: string;
-      privacy_policy_accepted_at?: string;
-      terms_version_accepted?: string;
-      privacy_policy_version_accepted?: string;
-      email_onboarding_completed_at?: string;
-    };
-    subscription?: Subscription;
-  }
+  oauthData: PendingLoginPayload
 ): Promise<LoginCompleteResponse> {
   try {
     await logService.info(
@@ -128,15 +142,21 @@ export async function handleCompletePendingLogin(
 
     const { provider, userInfo, tokens, cloudUser, subscription } = oauthData;
 
-    let localUser = await databaseService.getUserByOAuthId(
-      provider,
-      userInfo.id
-    );
-    const isNewUser = !localUser;
+    const expiresAt = tokens.expires_at
+      ? tokens.expires_at
+      : tokens.expires_in
+        ? new Date(Date.now() + tokens.expires_in * 1000).toISOString()
+        : new Date(Date.now() + 3600 * 1000).toISOString();
 
-    if (!localUser) {
-      // TASK-1507G: Use Supabase Auth UUID as local user ID for unified IDs
-      localUser = await databaseService.createUser({
+    // BACKLOG-2546: the user row, the token row and the session row commit as
+    // ONE unit. Before this they autocommitted separately, and a failure part
+    // way through left an account that existed but could never log in — the
+    // next attempt takes the update branch and never re-runs provisioning.
+    const provisioned = provisionLogin({
+      provider,
+      oauthId: userInfo.id,
+      create: {
+        // TASK-1507G: Use Supabase Auth UUID as local user ID for unified IDs
         id: cloudUser.id,
         email: userInfo.email,
         first_name: userInfo.given_name,
@@ -149,24 +169,18 @@ export async function handleCompletePendingLogin(
         subscription_status: cloudUser.subscription_status ?? "trial",
         trial_ends_at: cloudUser.trial_ends_at,
         is_active: true,
-      });
-
+      },
       // BACKLOG-546: Sync terms data from cloud if user has already accepted
-      if (cloudUser.terms_accepted_at) {
-        await databaseService.updateUser(localUser.id, {
-          terms_accepted_at: cloudUser.terms_accepted_at,
-          terms_version_accepted: cloudUser.terms_version_accepted,
-          privacy_policy_accepted_at: cloudUser.privacy_policy_accepted_at,
-          privacy_policy_version_accepted: cloudUser.privacy_policy_version_accepted,
-        });
-        // Re-fetch to get updated terms data
-        const updatedUser = await databaseService.getUserById(localUser.id);
-        if (updatedUser) {
-          localUser = updatedUser;
-        }
-      }
-    } else {
-      await databaseService.updateUser(localUser.id, {
+      updateOnCreate: cloudUser.terms_accepted_at
+        ? {
+            terms_accepted_at: cloudUser.terms_accepted_at,
+            terms_version_accepted: cloudUser.terms_version_accepted,
+            privacy_policy_accepted_at: cloudUser.privacy_policy_accepted_at,
+            privacy_policy_version_accepted:
+              cloudUser.privacy_policy_version_accepted,
+          }
+        : undefined,
+      updateExisting: {
         email: userInfo.email,
         first_name: userInfo.given_name,
         last_name: userInfo.family_name,
@@ -187,70 +201,76 @@ export async function handleCompletePendingLogin(
         }),
         subscription_tier: cloudUser.subscription_tier ?? "free",
         subscription_status: cloudUser.subscription_status ?? "trial",
-      });
+      },
+      touchLastLogin: true,
+      token: {
+        purpose: "authentication",
+        data: {
+          access_token: tokens.access_token,
+          refresh_token: tokens.refresh_token ?? undefined,
+          token_expires_at: expiresAt,
+          scopes_granted: tokens.scopes
+            ? tokens.scopes.join(" ")
+            : tokens.scope || "",
+        },
+      },
+    });
 
-      // Bidirectional sync
-      if (localUser.terms_accepted_at && !cloudUser.terms_accepted_at) {
-        try {
-          await supabaseService.syncTermsAcceptance(
-            cloudUser.id,
-            localUser.terms_version_accepted || CURRENT_TERMS_VERSION,
-            localUser.privacy_policy_version_accepted ||
-              CURRENT_PRIVACY_POLICY_VERSION
-          );
-        } catch (syncError) {
-          await logService.error(
-            "Failed to sync local terms to cloud",
-            "AuthHandlers",
-            {
-              error:
-                syncError instanceof Error
-                  ? syncError.message
-                  : "Unknown error",
-            }
-          );
-          Sentry.captureException(syncError, {
-            tags: { service: "shared-auth-handlers", operation: "completePendingLogin.syncTerms" },
-          });
-        }
+    const localUser = provisioned.user;
+    const sessionToken = provisioned.sessionToken;
+    const isNewUser = provisioned.isNewUser;
+
+    // Bidirectional sync — a NETWORK call, so it runs after the commit rather
+    // than in the middle of the write chain. It reads `existingBefore`, the
+    // pre-update snapshot, because that is what the pre-BACKLOG-2546 code read:
+    // `localUser` was bound before `updateUser` ran and was never reassigned
+    // before this call. Using `provisioned.user` here would send different
+    // values to the cloud.
+    const beforeUpdate = provisioned.existingBefore;
+    if (
+      beforeUpdate?.terms_accepted_at &&
+      !cloudUser.terms_accepted_at
+    ) {
+      try {
+        await supabaseService.syncTermsAcceptance(
+          cloudUser.id,
+          beforeUpdate.terms_version_accepted || CURRENT_TERMS_VERSION,
+          beforeUpdate.privacy_policy_version_accepted ||
+            CURRENT_PRIVACY_POLICY_VERSION
+        );
+      } catch (syncError) {
+        await logService.error(
+          "Failed to sync local terms to cloud",
+          "AuthHandlers",
+          {
+            error:
+              syncError instanceof Error
+                ? syncError.message
+                : "Unknown error",
+          }
+        );
+        Sentry.captureException(syncError, {
+          tags: { service: "shared-auth-handlers", operation: "completePendingLogin.syncTerms" },
+        });
       }
     }
 
-    if (!localUser) {
-      throw new Error("Local user is unexpectedly null");
-    }
-
-    await databaseService.updateLastLogin(localUser.id);
-    const refreshedUser = await databaseService.getUserById(localUser.id);
-    if (!refreshedUser) {
-      throw new Error("Failed to retrieve user after update");
-    }
-    localUser = refreshedUser;
-
-    const expiresAt = tokens.expires_at
-      ? tokens.expires_at
-      : tokens.expires_in
-        ? new Date(Date.now() + tokens.expires_in * 1000).toISOString()
-        : new Date(Date.now() + 3600 * 1000).toISOString();
-
-    await databaseService.saveOAuthToken(
-      localUser.id,
-      provider,
-      "authentication",
-      {
-        access_token: tokens.access_token,
-        refresh_token: tokens.refresh_token ?? undefined,
-        token_expires_at: expiresAt,
-        scopes_granted: tokens.scopes
-          ? tokens.scopes.join(" ")
-          : tokens.scope || "",
-      }
-    );
-
-    const sessionToken = await databaseService.createSession(localUser.id);
-
-    // Save session to file for persistence across app restarts
-    await sessionService.saveSession({
+    // Save session to file for persistence across app restarts.
+    //
+    // BACKLOG-3299: `saveSession` REPORTS failure, it does not throw — a session
+    // that cannot be encrypted or cannot be written resolves `false`. Discarding
+    // that boolean returned `success: true` with no session file, and the user
+    // landed on a dashboard that was signed out again on the next launch.
+    //
+    // The database commit STANDS. There is no compensating delete: the rows are a
+    // complete, usable account, `provisionLogin` is idempotent, and the next
+    // attempt takes the update branch and writes a fresh session. Deleting them
+    // would recreate the ghost account this whole item exists to remove.
+    //
+    // Device registration, the login audit entry and `setSyncUserId` are all
+    // deliberately skipped below — this login did not succeed, so nothing may
+    // record that it did.
+    const sessionSaved = await sessionService.saveSession({
       user: localUser,
       sessionToken,
       provider,
@@ -258,6 +278,27 @@ export async function handleCompletePendingLogin(
       expiresAt: Date.now() + sessionService.getSessionExpirationMs(),
       createdAt: Date.now(),
     });
+
+    if (!sessionSaved) {
+      await logService.error(
+        "Pending login completed in the database but the session could not be saved",
+        "AuthHandlers",
+        { userId: localUser.id, provider }
+      );
+      await auditService.log({
+        userId: localUser.id,
+        action: "LOGIN_FAILED",
+        resourceType: "SESSION",
+        resourceId: sessionToken,
+        metadata: { provider, pendingLogin: true, reason: "session-not-saved" },
+        success: false,
+        errorMessage: "Session could not be saved",
+      });
+      return {
+        success: false,
+        error: "Could not save your session. Please try signing in again.",
+      };
+    }
 
     const deviceInfo = {
       device_id: crypto.randomUUID(),

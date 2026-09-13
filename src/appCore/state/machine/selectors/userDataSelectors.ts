@@ -156,14 +156,16 @@ export function selectPhoneType(
     return state.userData.phoneType;
   }
   if (state.status === "onboarding") {
-    // Use explicit selection from onboarding state if available
-    // This is set when ONBOARDING_STEP_COMPLETE is dispatched with phoneType
+    // The recorded selection, set by every transition that knows the answer:
+    // ONBOARDING_STEP_COMPLETE(phone-type), USER_DATA_LOADED,
+    // START_EMAIL_SETUP and RESUME_MARKER_APPLIED.
+    //
+    // BACKLOG-3276: no platform fallback. It returned "iphone" when
+    // platform.hasIPhone was true, which no production producer sets, so it
+    // never ran in the app and only let test fixtures answer the question for
+    // the user.
     if (state.selectedPhoneType) {
       return state.selectedPhoneType;
-    }
-    // Fallback to platform detection (legacy behavior for states before phone-type step)
-    if (state.platform) {
-      return state.platform.hasIPhone ? "iphone" : null;
     }
   }
   return null;

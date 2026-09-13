@@ -723,6 +723,54 @@ When making UI/CSS changes, match the existing reference implementation exactly.
 - Target 40-80% coverage
 - No flaky tests
 
+### Tests never touch the network (BACKLOG-3284)
+
+**An unmocked outbound connection in a jest run fails the test.** This is new — before
+BACKLOG-3284 the call went out to the real internet and the test passed. The guard lives in
+`tests/net-guard/` and is wired from `jest.config.js`: `install.js` patches
+`net.Socket.prototype.connect` (every `http(s)`, `tls`, axios and `fetch` client bottoms out
+there), `assert.js` turns a blocked attempt into a failing test. Loopback and this machine's own
+addresses are allowed; nothing else is.
+
+Two greppable prefixes, and they mean different things:
+
+```
+NET_GUARD: 1 outbound network connection(s) attempted by this test:   <- a jest hook, red test
+NET_GUARD BACKSTOP: 1 blocked connection(s) were never reported ...   <- end of run, see below
+```
+
+A `try/catch` does not rescue the test: a handler that swallows the error still fails in
+`afterEach`, and a shipped fixture proves that on every run. If code must recognise the error, use
+`err.code === "KEEPR_NET_GUARD_BLOCKED"` — never the message, which jsdom rewrites to
+"Network Error" and undici to "fetch failed".
+
+**The remedy is to mock the client, not to exempt the call.** There is deliberately **no opt-in
+helper** — one was built and proven during design and left unshipped, because an escape hatch with
+no consumers becomes the way people silence the guard. If you are genuinely blocked, edit
+`tests/net-guard/install.js` itself, which is visible in review.
+
+**Two shapes fail at the END of the run instead of against a test:** a call in a test file's own
+`afterAll`, and a module-scope call in a file whose tests are all skipped. No jest hook can see
+either, so a `globalTeardown` backstop catches them — the run exits 1 with every test line reading
+*passed*, and `NET_GUARD BACKSTOP:` after the summary names the host and the file. Read the file
+path out of that list; there is no red test to lead you to it.
+
+**Its limits, measured not assumed:** `child_process` (shelling out to `curl` and friends) and
+jsdom **synchronous** XHR (`xhr.open(..., false)`, which jsdom runs in its own child process) both
+get past it; so do UDP/`dgram` and bare DNS lookups, which involve no `Socket.connect` at all.
+Neither of the first two shapes exists in `electron/` or `src/` today.
+
+**Why it exists:** the mailbox disconnect now performs a real OAuth revocation, and a test file on
+that path mocked no auth service at all. A forgotten mock could have issued a genuine revocation
+against the developer's own account.
+
+**A jest config that spreads the root config AND sets its own `rootDir` must clear
+`globalSetup`/`globalTeardown`, or jest refuses to start** — the inherited `<rootDir>`-relative
+paths resolve against that config's directory, where the guard does not exist.
+`broker-portal/jest.config.js` is the only such config and clears both.
+`jest.integration.config.js` and `jest.qa.config.js` spread the root config but keep `<rootDir>` at
+the repo root, so they inherit the guard and should keep it.
+
 ## Architecture Boundaries
 
 **Full reference:** `.claude/docs/shared/architecture-guardrails.md`

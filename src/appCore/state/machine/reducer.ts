@@ -214,23 +214,16 @@ export function appStateReducer(
         return state; // Invalid transition
       }
 
-      // Check if this is a first-time macOS user (no key store = new installation)
-      const isFirstTimeMacOS = !action.hasKeyStore && action.isMacOS;
-
-      if (isFirstTimeMacOS) {
-        // Skip DB init for first-time macOS users to avoid showing Keychain prompt
-        // before the login screen. DB will be initialized during onboarding
-        // secure-storage step after user has been properly informed.
-        return {
-          status: "loading",
-          phase: "loading-auth",
-          deferredDbInit: true,
-        };
-      }
-
+      // BACKLOG-3253: first-run macOS used to branch off here and defer the
+      // database open to onboarding's secure-storage step, to stay ahead of a
+      // Keychain prompt. That prompt does not happen -- macOS prompts when an
+      // app READS an item written under a different code signature, and a
+      // first run is always a WRITE. Measured on two Macs, 2026-09-08.
+      //
+      // Every platform now takes the same route, first run and returning.
+      //
       // TASK-2086: Proceed to pre-DB auth validation (SOC 2 CC6.1)
-      // Auth must be validated BEFORE database decryption
-      // (returning macOS users with key store, or Windows users)
+      // Auth must be validated BEFORE database decryption.
       return {
         status: "loading",
         phase: "validating-auth",
@@ -520,6 +513,13 @@ export function appStateReducer(
         // Without this, OnboardingState.hasEmailConnected defaults to undefined,
         // causing selectHasEmailConnectedNullable to return false.
         hasEmailConnected: data.hasEmailConnected,
+        // BACKLOG-3276: carry the loaded phone type into onboarding state.
+        // `completedSteps` above already says phone-type is answered, but the
+        // queue reads the answer itself (OnboardingFlow -> selectPhoneType ->
+        // PhoneTypeStep.isComplete), so without this a returning user is asked
+        // "What phone do you use?" again. Record only what was loaded; `null`
+        // stays unset and is never defaulted from the platform.
+        selectedPhoneType: data.phoneType ?? undefined,
         // Preserve deferredDbInit for first-time macOS installs (even for returning users)
         deferredDbInit,
       };
@@ -563,9 +563,14 @@ export function appStateReducer(
       }
 
       // Determine user data state based on completed steps
-      // Use selectedPhoneType from action/state, fallback to platform detection only if no explicit selection
+      //
+      // BACKLOG-3276: only a recorded selection counts. This used to fall back
+      // to `platform.hasIPhone ? "iphone" : "android"`, but every production
+      // producer of PlatformInfo sets hasIPhone to false, so the fallback wrote
+      // "android" for any user without a recorded selection, including iPhone
+      // users. An unanswered phone type stays null.
       const phoneTypeForUserData: "iphone" | "android" | null = completedSteps.includes("phone-type")
-        ? (selectedPhoneType ?? (state.platform.hasIPhone ? "iphone" : "android"))
+        ? (selectedPhoneType ?? null)
         : null;
 
       const userData: UserData = {
@@ -770,6 +775,12 @@ export function appStateReducer(
 
     case "START_EMAIL_SETUP": {
       // Only valid from ready state - allows user to connect email after initial onboarding
+      //
+      // BACKLOG-3276: the only dispatcher is useNavigationFlow.ts
+      // (goToEmailOnboarding), called only from the Resume Setup banner
+      // (useResumeSetup.ts). That banner shows only when selectSetupIncomplete
+      // is true, which no ready user with a phone type satisfies. The phone-type
+      // handling below guards this transition for any future entry point.
       if (state.status !== "ready") {
         return state;
       }
@@ -781,8 +792,17 @@ export function appStateReducer(
         step: "email-connect",
         user: state.user,
         platform: state.platform,
-        // Mark all steps before email-connect as complete
-        completedSteps: ["phone-type", ...(state.platform.isMacOS ? ["secure-storage" as const] : [])],
+        // Mark the steps before email-connect as complete. BACKLOG-3276:
+        // phone-type counts only when an answer is recorded, so a user who
+        // never answered is routed back to it instead of being treated as
+        // answered.
+        completedSteps: [
+          ...(state.userData.phoneType !== null ? ["phone-type" as const] : []),
+          ...(state.platform.isMacOS ? ["secure-storage" as const] : []),
+        ],
+        // BACKLOG-3276: carry the recorded answer so the queue does not ask
+        // "What phone do you use?" again. `null` stays unset.
+        selectedPhoneType: state.userData.phoneType ?? undefined,
         // Preserve email connected state if they already have it (shouldn't happen, but be safe)
         hasEmailConnected: state.userData.hasEmailConnected,
         // BACKLOG-3212 / BACKLOG-3275: a ready user who opens email setup must

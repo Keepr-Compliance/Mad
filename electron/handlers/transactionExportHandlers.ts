@@ -62,9 +62,21 @@ interface ExportOptions {
  * holds even against a racing export, not just by caller convention. The
  * in-memory `currentFirstExportedAt` short-circuit is a cheap fast-path only.
  * Non-throwing — a failure to stamp must never fail the export the user just
- * performed; it is logged and the next export retries. Kept in the export
- * handler (the completion path) rather than the export services so all three
- * formats funnel through one place.
+ * performed; it is logged and the next export retries.
+ *
+ * BACKLOG-2549 — THIS IS NO LONGER A SHARED FUNNEL, and the sentence that said
+ * so has been removed rather than left to read as live. Only
+ * `transactions:export-pdf` still calls this. The enhanced and folder paths
+ * fold the stamp into their single export-completion UPDATE
+ * (`recordExportCompletion`, write-once via `COALESCE`), because writing the
+ * marker separately from `export_status` left a window in which a deal was
+ * exported and still editable.
+ *
+ * What the swallow means on the one path that remains: a stamp failure is still
+ * silent here. It cannot produce that window, because the PDF path never sets
+ * `export_status` at all — it produces the INVERSE state (frozen, artifact on
+ * disk, still reading as `not_exported`), which is a separate defect reported
+ * out of BACKLOG-2549 and deliberately not changed here.
  */
 async function markFirstExport(
   transactionId: string,
@@ -336,17 +348,16 @@ export function registerTransactionExportHandlers(
         },
       );
 
-      // Update export tracking in database
-      // Note: uses `as any` to match original require()-based call that bypassed strict types
-      await databaseService.updateTransaction(validatedTransactionId, {
-        export_status: "exported",
-        export_format: sanitizedOptions.exportFormat || "pdf",
-        last_exported_on: new Date().toISOString(),
-        export_count: (details.export_count || 0) + 1,
-      } as any);
-
-      // BACKLOG-2013 — stamp the freeze boundary on first successful export.
-      await markFirstExport(validatedTransactionId, details.first_exported_at);
+      // BACKLOG-2549 — export tracking AND the BACKLOG-2013 freeze boundary in
+      // ONE statement, so a deal can never be `exported` while still editable.
+      // Write-once on the marker is enforced in SQL by COALESCE.
+      const enhancedExportedAt = new Date().toISOString();
+      databaseService.recordExportCompletion(validatedTransactionId, {
+        exportFormat: sanitizedOptions.exportFormat || "pdf",
+        exportedAt: enhancedExportedAt,
+        exportCount: (details.export_count || 0) + 1,
+        firstExportedAt: enhancedExportedAt,
+      });
 
       // Audit log data export
       await auditService.log({
@@ -503,17 +514,21 @@ export function registerTransactionExportHandlers(
         },
       );
 
-      // Update export tracking in database
-      // Note: export_format constraint doesn't include "folder", so we use NULL
-      // Note: uses `as any` to match original require()-based call that bypassed strict types
-      await databaseService.updateTransaction(validatedTransactionId, {
-        export_status: "exported",
-        last_exported_on: new Date().toISOString(),
-        export_count: (details.export_count || 0) + 1,
-      } as any);
-
-      // BACKLOG-2013 — stamp the freeze boundary on first successful export.
-      await markFirstExport(validatedTransactionId, details.first_exported_at);
+      // BACKLOG-2549 — export tracking AND the BACKLOG-2013 freeze boundary in
+      // ONE statement (see the enhanced path above).
+      //
+      // `export_format` is OMITTED, not set to NULL: this path has never
+      // written the column, so whatever a previous export recorded survives.
+      // (The old comment here said the constraint excludes "folder" — it does
+      // not, schema.sql permits it. Recording "folder" would change what that
+      // column means to every reader of it, which is a product decision and not
+      // part of an atomicity fix.)
+      const folderExportedAt = new Date().toISOString();
+      databaseService.recordExportCompletion(validatedTransactionId, {
+        exportedAt: folderExportedAt,
+        exportCount: (details.export_count || 0) + 1,
+        firstExportedAt: folderExportedAt,
+      });
 
       // Audit log data export
       await auditService.log({

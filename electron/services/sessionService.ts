@@ -39,6 +39,24 @@ interface EncryptedSessionFile {
   encrypted: string; // base64-encoded safeStorage-encrypted data
 }
 
+/**
+ * Why a session could not be encrypted, and therefore was not written.
+ *
+ * Carried as a Sentry tag. The two are separable only there: at the API boundary
+ * both surface as `false`.
+ */
+type EncryptionRefusalReason = "unavailable" | "encrypt-failed";
+
+/**
+ * Refusal reasons already reported to Sentry in this process.
+ *
+ * A host whose secret store cannot encrypt refuses every write, and writes are
+ * routine -- token rotation and startup validation both call through here -- so
+ * reporting each occurrence would bury a rare reason under a constant one. The
+ * log line is emitted every time; only the report is deduplicated.
+ */
+const reportedRefusals = new Set<EncryptionRefusalReason>();
+
 // ============================================
 // SERVICE CLASS
 // ============================================
@@ -46,13 +64,15 @@ interface EncryptedSessionFile {
 /**
  * Session Service
  * Manages user session persistence using local file storage.
- * Session data is encrypted at rest using Electron's safeStorage API
+ * Session data is encrypted at rest using the host secret store
  * (OS Keychain on macOS, DPAPI on Windows, libsecret on Linux).
  *
- * Graceful fallback:
- * - If safeStorage is unavailable, falls back to plaintext (with warning)
+ * Encryption is required, never optional:
+ * - A session is written only when it can be encrypted. If it cannot, nothing is
+ *   written, the write reports failure, and the user signs in again next launch.
  * - If decryption fails (e.g., keychain conflict), deletes session and forces re-login
- * - Plaintext sessions from before encryption are auto-migrated on first read
+ * - Sessions stored before encryption are migrated on first read; a session file
+ *   that cannot be secured is removed rather than kept.
  */
 export class SessionService {
   private sessionFilePath: string | null = null;
@@ -110,17 +130,48 @@ export class SessionService {
   }
 
   /**
-   * Encrypt a JSON string using safeStorage.
-   * Returns an EncryptedSessionFile JSON string, or the original plaintext
-   * if encryption is not available.
+   * Record that a session could not be encrypted, and answer the caller with the
+   * value that means "there is nothing to write".
+   *
+   * Logged at error level every time, because the session did not persist.
+   * Reported to Sentry once per reason per process -- see {@link reportedRefusals}.
    */
-  private encryptSessionData(jsonString: string): string {
-    if (!this.isEncryptionAvailable()) {
-      logService.warn(
-        "safeStorage not available, saving session as plaintext",
-        "SessionService",
+  private refuseEncryption(
+    reason: EncryptionRefusalReason,
+    detail?: string,
+  ): null {
+    logService.error(
+      "Session not saved: the session could not be encrypted",
+      "SessionService",
+      detail ? { reason, error: detail } : { reason },
+    );
+
+    if (!reportedRefusals.has(reason)) {
+      reportedRefusals.add(reason);
+      Sentry.captureException(
+        new Error(`Session not saved: could not encrypt (${reason})`),
+        {
+          tags: {
+            service: "session-service",
+            operation: "saveSession",
+            reason,
+          },
+        },
       );
-      return jsonString;
+    }
+
+    return null;
+  }
+
+  /**
+   * Encrypt a JSON string for storage.
+   *
+   * @returns the EncryptedSessionFile JSON to write, or `null` when the session
+   *   cannot be encrypted -- in which case the caller writes nothing at all.
+   */
+  private encryptSessionData(jsonString: string): string | null {
+    if (!this.isEncryptionAvailable()) {
+      return this.refuseEncryption("unavailable");
     }
 
     try {
@@ -130,12 +181,10 @@ export class SessionService {
       };
       return JSON.stringify(wrapper);
     } catch (error) {
-      logService.warn(
-        "safeStorage encryption failed, saving session as plaintext",
-        "SessionService",
-        { error: error instanceof Error ? error.message : "Unknown error" },
+      return this.refuseEncryption(
+        "encrypt-failed",
+        error instanceof Error ? error.message : "Unknown error",
       );
-      return jsonString;
     }
   }
 
@@ -218,8 +267,22 @@ export class SessionService {
   }
 
   /**
-   * Save session data to disk (encrypted with safeStorage when available)
+   * Save session data to disk, encrypted with the host secret store.
+   *
    * @param sessionData - Session data to save
+   * @returns `true` when the session was written.
+   *
+   *   `false` means **nothing was written and the session did not persist** --
+   *   the user will sign in again next launch. It does not mean "written, but
+   *   less securely": no file is produced on this path.
+   *
+   *   `false` is deliberately **overloaded**. It is returned both when the
+   *   session could not be encrypted and when the file write itself failed, and
+   *   the two are indistinguishable here -- they are separable only by the
+   *   `reason` tag on the logged and reported event. A caller reading only
+   *   `Promise<boolean>` learns neither, which is a contract the compiler cannot
+   *   express and therefore cannot enforce: a caller that needs to tell them
+   *   apart must read the log, not the return value.
    */
   async saveSession(sessionData: SessionData): Promise<boolean> {
     return this.runSerialized(() => this._writeSession(sessionData));
@@ -236,6 +299,11 @@ export class SessionService {
       };
       const jsonString = JSON.stringify(data, null, 2);
       const fileContent = this.encryptSessionData(jsonString);
+      if (fileContent === null) {
+        // Nothing to write. Answering before the write keeps the refusal ahead of
+        // the file system, so no session file can be produced on this path.
+        return false;
+      }
       await fs.writeFile(this.getSessionFilePath(), fileContent, "utf8");
       await logService.info("Session saved successfully", "SessionService");
       return true;
@@ -281,8 +349,20 @@ export class SessionService {
       }
 
       // Migrate plaintext session to encrypted format (internal write for the same reason).
+      // If the re-save does not succeed the file cannot be secured, so it is removed
+      // rather than left in place, and the user signs in again. The boolean does not
+      // say why the write did not happen and it does not need to: the outcome is the
+      // same either way.
       if (needsMigration) {
-        await this._writeSession(session);
+        const migrated = await this._writeSession(session);
+        if (!migrated) {
+          await logService.warn(
+            "Session file could not be secured, removing it and forcing re-login",
+            "SessionService",
+          );
+          await this._clearSessionInternal();
+          return null;
+        }
         await logService.info(
           "Plaintext session migrated to encrypted format",
           "SessionService",

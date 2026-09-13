@@ -3549,6 +3549,24 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
 
         // Pass userId to enable external_contacts lookup (iPhone, macOS, Outlook, Google)
         const validatedUserId = userId ? await getValidUserId(userId, "Contacts") : undefined;
+        // =====================================================================
+        // BACKLOG-3254 — AN UNCONFIRMED ID ENDS THIS CALL
+        // =====================================================================
+        // This is the one channel in this file where `null` must not simply be
+        // coalesced and forwarded. Downstream, a missing id is not read as "no
+        // user" — so an unconfirmed id has to stop here rather than travel on.
+        // Details are on BACKLOG-3254's pm_comments trail.
+        //
+        // Callers see raw handles rather than an error banner: all three
+        // consumers gate on `result.success && result.names` and render the
+        // handle itself otherwise. That is the intended outcome — a number is
+        // honest, a name resolved outside this user's scope is not.
+        //
+        // The `userId`-absent path is untouched and still resolves unscoped by
+        // design; only a supplied-but-unconfirmed id stops here.
+        if (userId && validatedUserId === null) {
+          return { success: false, names: {}, error: "No valid user found in database" };
+        }
         // BACKLOG-2757: the IPC contract stays `Record<handle, label>`; the
         // label is now the honest one ("A or B" for a shared line) rather than
         // whichever contact was inserted last.

@@ -87,9 +87,10 @@ describe("AppState Integration Tests", () => {
       // Verify API calls were made (at least once each)
       // Note: React StrictMode may cause double calls in dev mode
       expect(mockApi.system.hasEncryptionKeyStore).toHaveBeenCalled();
-      // NOTE: For first-time macOS users, initializeSecureStorage is DEFERRED
-      // until the onboarding secure-storage step (not called during loading)
-      expect(mockApi.system.initializeSecureStorage).not.toHaveBeenCalled();
+      // BACKLOG-3253: initializeSecureStorage used to be DEFERRED here until
+      // the onboarding secure-storage step. It now runs during loading, so the
+      // login screen is reached with the database already open.
+      expect(mockApi.system.initializeSecureStorage).toHaveBeenCalled();
       expect(mockApi.auth.getCurrentUser).toHaveBeenCalled();
     });
 

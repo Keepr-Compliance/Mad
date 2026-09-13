@@ -71,9 +71,13 @@ const mockDatabaseService = {
     updateTransaction: jest.fn(),
     // BACKLOG-2013: export completion stamps the freeze marker via this path.
     stampFirstExportedAt: jest.fn().mockReturnValue(true),
+    // BACKLOG-2549: the enhanced and folder paths now write tracking + the
+    // freeze marker in ONE statement through this method instead.
+    recordExportCompletion: jest.fn(),
   },
   updateTransaction: jest.fn(),
   stampFirstExportedAt: jest.fn().mockReturnValue(true),
+  recordExportCompletion: jest.fn(),
   isInitialized: jest.fn().mockReturnValue(true),
 };
 
@@ -722,6 +726,15 @@ describe("Transaction Handlers Integration Tests", () => {
           action: "DATA_EXPORT",
           metadata: expect.objectContaining({ format: "pdf" }),
         }),
+      );
+
+      // BACKLOG-2549: this test's NAME promised the increment and nothing here
+      // checked it — the only assertion was the audit log, which is true of
+      // every export. Asserting the count the completion write actually
+      // receives: the fixture holds 2, so the write must carry 3.
+      expect(mockDatabaseService.recordExportCompletion).toHaveBeenCalledWith(
+        TEST_TXN_ID,
+        expect.objectContaining({ exportCount: 3 }),
       );
     });
   });

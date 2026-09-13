@@ -1835,6 +1835,21 @@ class DatabaseService implements IDatabaseService {
     return transactionDb.stampFirstExportedAt(transactionId, timestamp);
   }
 
+  /**
+   * BACKLOG-2549 — record an export completion as ONE statement, so
+   * `export_status` and the BACKLOG-2013 freeze marker can never flip
+   * separately. SYNCHRONOUS, mirroring `stampFirstExportedAt` above rather than
+   * the async `updateTransaction`: an async wrapper over a sync primitive turns
+   * a throw into a rejection, which is the shape `syncTwin.guard.test.ts`
+   * forbids.
+   */
+  recordExportCompletion(
+    transactionId: string,
+    params: transactionDb.ExportCompletionParams,
+  ): void {
+    return transactionDb.recordExportCompletion(transactionId, params);
+  }
+
   async deleteTransaction(transactionId: string): Promise<void> {
     return transactionDb.deleteTransaction(transactionId);
   }

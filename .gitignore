@@ -93,3 +93,7 @@ supabase/*.sql
 # `supabase start` writes .branches/. Neither belongs in the repo.
 supabase/.temp/
 supabase/.branches/
+
+# BACKLOG-2553: esbuild bundle of the contact worker, built and removed by
+# electron/workers/__tests__/contactWorkerPool.drain-2553.test.ts
+.tmp-2553/

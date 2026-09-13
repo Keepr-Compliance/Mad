@@ -126,7 +126,10 @@ jest.mock("../../services/auditService", () => ({
 }));
 
 const mockSessionService = {
-  saveSession: jest.fn().mockResolvedValue(undefined),
+  // `saveSession` resolves a BOOLEAN — true on success, false when the session
+  // could not be encrypted or written (sessionService.ts:287). It never resolves
+  // `undefined` and never rejects. BACKLOG-3299.
+  saveSession: jest.fn().mockResolvedValue(true),
   getSessionExpirationMs: jest.fn().mockReturnValue(86400000),
 };
 
@@ -137,6 +140,19 @@ jest.mock("../../services/sessionService", () => ({
 
 jest.mock("../syncHandlers", () => ({
   setSyncUserId: jest.fn(),
+}));
+
+// BACKLOG-2546: the login write chain no longer runs as separate
+// `databaseService` calls — it is one transaction owned by
+// `loginProvisioningService.provisionLogin`, so that is the interception point
+// now. What a partial failure leaves behind is asserted against the REAL driver
+// in `db/__tests__/loginProvisioningAtomicity-2546.test.ts`; these cases are
+// about the handler's own response shape.
+const mockProvisionLogin = jest.fn();
+
+jest.mock("../../services/loginProvisioningService", () => ({
+  __esModule: true,
+  provisionLogin: (...args: unknown[]) => mockProvisionLogin(...args),
 }));
 
 jest.mock("../../utils/userIdHelper", () => ({
@@ -233,11 +249,12 @@ describe("SharedAuthHandlers", () => {
         privacy_policy_version_accepted: "1.0",
       };
 
-      mockDatabaseService.getUserByOAuthId.mockResolvedValue(null);
-      mockDatabaseService.createUser.mockResolvedValue(mockUser);
-      mockDatabaseService.getUserById.mockResolvedValue(mockUser);
-      mockDatabaseService.updateLastLogin.mockResolvedValue(undefined);
-      mockDatabaseService.createSession.mockResolvedValue("mock-session-token");
+      mockProvisionLogin.mockReturnValue({
+        user: mockUser,
+        sessionToken: "mock-session-token",
+        isNewUser: true,
+        existingBefore: null,
+      });
 
       const result = await handleCompletePendingLogin(
         {} as any,
@@ -260,10 +277,12 @@ describe("SharedAuthHandlers", () => {
         privacy_policy_version_accepted: "1.0",
       };
 
-      mockDatabaseService.getUserByOAuthId.mockResolvedValue(existingUser);
-      mockDatabaseService.getUserById.mockResolvedValue(existingUser);
-      mockDatabaseService.updateLastLogin.mockResolvedValue(undefined);
-      mockDatabaseService.createSession.mockResolvedValue("mock-session-token");
+      mockProvisionLogin.mockReturnValue({
+        user: existingUser,
+        sessionToken: "mock-session-token",
+        isNewUser: false,
+        existingBefore: existingUser,
+      });
 
       const result = await handleCompletePendingLogin(
         {} as any,
@@ -275,9 +294,9 @@ describe("SharedAuthHandlers", () => {
     });
 
     it("should return error on database failure", async () => {
-      mockDatabaseService.getUserByOAuthId.mockRejectedValue(
-        new Error("Database connection lost")
-      );
+      mockProvisionLogin.mockImplementation(() => {
+        throw new Error("Database connection lost");
+      });
 
       const result = await handleCompletePendingLogin(
         {} as any,

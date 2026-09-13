@@ -20,6 +20,14 @@ import logService from "./logService";
 import databaseService from "./databaseService";
 import { databaseEncryptionService } from "./databaseEncryptionService";
 import { ensureDb } from "./db/core/dbConnection";
+// BACKLOG-2553. NOTE: this module has its own `getDbPath()` below, so the
+// pool is restarted from the credentials it was OPENED with (passing null
+// lets the pool use its stored `lastDbPath`/`lastEncryptionKey`) rather than
+// from a second, independent derivation of the database location.
+import {
+  drainPoolForExclusiveAccess,
+  restartPoolAfterExclusiveAccess,
+} from "../workers/contactWorkerPool";
 import { BACKUP_TABLE_COUNT_SQL } from "./db/backupVerificationSql";
 
 /** Result of a backup operation */
@@ -29,6 +37,17 @@ export interface BackupResult {
   fileSize?: number;
   error?: string;
 }
+
+/**
+ * BACKLOG-2553 — shown when the contact worker could not be stopped.
+ *
+ * It is exact about the two things the user needs: the database was NOT
+ * changed, and quitting the app clears the condition. `backupRestoreHandlers`
+ * returns this result verbatim, so this string is what reaches the dialog.
+ */
+export const RESTORE_POOL_DRAIN_REFUSAL =
+  "Restore cancelled - the contact background task could not be stopped, so " +
+  "your database was not changed. Quit and reopen Keepr, then try the restore again.";
 
 /** Result of a restore operation */
 export interface RestoreResult {
@@ -252,6 +271,14 @@ export async function restoreDatabase(
   const dbPath = getDbPath();
   const safetyPath = `${dbPath}.safety-restore-copy`;
   let safetyCreated = false;
+  /**
+   * BACKLOG-2553 — gates the restart in `finally`. Deliberately NOT
+   * `safetyCreated`: that flag is false whenever the database file did not
+   * exist, and the existing catch only re-initialises inside its
+   * `if (safetyCreated && ...)` block, so keying the restart off it would leave
+   * the app with no contact worker on exactly the paths that already went wrong.
+   */
+  let poolDrained = false;
 
   try {
     await logService.info(
@@ -268,6 +295,43 @@ export async function restoreDatabase(
           "The selected file is not a valid backup. It may be corrupted or encrypted with a different key.",
       };
     }
+
+    /**
+     * Step 1b (BACKLOG-2553): stop the contact worker BEFORE anything is closed
+     * or copied.
+     *
+     * The worker holds its own connection to this exact file and is shut down
+     * nowhere but app quit. With it running, the copy below either fails
+     * (Windows, EBUSY/EPERM on a file a second thread holds open) or succeeds
+     * while the worker goes on reading the old unlinked inode (macOS), serving
+     * the user pre-restore contacts after a restore they asked for. The
+     * worker's connection is `readonly: true` since BACKLOG-2536, so no WRITE
+     * can be lost — this is a failed restore and a stale read, not corruption.
+     *
+     * Ordered ahead of `databaseService.close()` on purpose: a refusal here has
+     * closed nothing, written no safety copy, and replaced no file.
+     *
+     * WHAT A REFUSAL IS NOT: a no-op for the POOL. The drain marks the pool
+     * not-ready and rejects in-flight queries before it posts the shutdown
+     * message, and a posted message cannot be un-posted. So a refused restore
+     * leaves the database file untouched and the contact pool unusable until
+     * the app restarts — which is exactly what the message below tells the user
+     * to do.
+     */
+    const drain = await drainPoolForExclusiveAccess();
+    if (!drain.drained) {
+      await logService.error(
+        "Restore refused: contact worker pool could not be drained",
+        "SqliteBackupService",
+        { reason: drain.reason }
+      );
+      return { success: false, error: RESTORE_POOL_DRAIN_REFUSAL };
+    }
+    poolDrained = true;
+    await logService.info(
+      `Contact worker pool drained for restore (via: ${drain.via})`,
+      "SqliteBackupService"
+    );
 
     // Step 2: Close the current database
     await logService.info(
@@ -370,6 +434,39 @@ export async function restoreDatabase(
       success: false,
       error: `Restore failed: ${errorMessage}`,
     };
+  } finally {
+    /**
+     * BACKLOG-2553 — the restart, on EVERY exit.
+     *
+     * `finally` and not the catch block: the catch re-initialises the database
+     * only inside `if (safetyCreated && fs.existsSync(safetyPath))`, and it has
+     * its own early return on the recovery-failed path. A restart placed in
+     * either would be skipped on the paths that need it most. This runs after
+     * the return value is computed and before it is handed back, so the pool is
+     * up before the renderer is answered.
+     *
+     * The whole body is wrapped: a throw in a `finally` REPLACES the return
+     * value, so a failure here would turn a successful restore into an
+     * exception at the IPC boundary. `restartPoolAfterExclusiveAccess` already
+     * swallows its own errors; this guards the call itself.
+     *
+     * `spawn` is `databaseService.isInitialized()` — on the double-failure path
+     * the file is not open, and a worker started against it would hold the
+     * user's error dialog behind a 10-second init timeout for nothing. The hold
+     * is still released in that case; only the spawn is skipped.
+     */
+    if (poolDrained) {
+      try {
+        await restartPoolAfterExclusiveAccess(
+          null,
+          null,
+          databaseService.isInitialized()
+        );
+      } catch {
+        // Unreachable in practice; the restart swallows its own errors. Kept so
+        // that a future change there cannot silently rewrite this return value.
+      }
+    }
   }
 }
 
