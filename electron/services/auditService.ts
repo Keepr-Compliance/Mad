@@ -98,6 +98,45 @@ export interface AuditLogDbRow {
   synced_at: string | null;
 }
 
+/**
+ * BACKLOG-3052: metadata keys that carry a third party's identity.
+ *
+ * These are the two shapes measured in production `audit_logs.metadata` on
+ * 2026-09-01: `name` (a contact — 468 rows) and `propertyAddress` (a client's
+ * property — 350 rows). Both are written by purely LOCAL actions —
+ * CONTACT_CREATE, TRANSACTION_DELETE, DATA_EXPORT — none of which involve a
+ * broker, a submission or any other reason for the value to leave the machine.
+ *
+ * Top-level keys only, which is what production carries. A nested walk would
+ * cost more than it buys today and would silently change what a future caller
+ * can rely on; if metadata ever nests a name, this list is not the fix — the
+ * allowlist in the follow-up is.
+ *
+ * Note what is deliberately NOT here:
+ *  - `updatedFields` is an array of COLUMN NAMES ("name", "property_address").
+ *    The strip is key-based, so `updatedFields: ["name"]` survives intact. That
+ *    is the point: the audit log must still say a name was changed.
+ *  - `email` on MAILBOX_CONNECT (458 rows) is the user's OWN mailbox address,
+ *    not a third party's. Out of this item's stated scope ("names and
+ *    addresses"); raised separately rather than expanded into silently.
+ */
+export const AUDIT_PII_METADATA_KEYS = ["name", "propertyAddress"] as const;
+
+/**
+ * BACKLOG-3052: the support-access grant, read at cloud-sync time.
+ *
+ * Injected rather than imported. `services/supportAccess` is a barrel that
+ * pulls `BrowserWindow` and builds a singleton over disk state; importing it
+ * here would put Electron in the import graph of a service whose test suite
+ * deliberately mocks nothing but its two dependencies.
+ *
+ * `isActive()` is synchronous and pure on the real service (see
+ * SupportAccessService.isActive) precisely so it can sit in a hot path.
+ */
+export interface ISupportAccessGate {
+  isActive(): boolean;
+}
+
 // ============================================
 // DATABASE SERVICE INTERFACE
 // ============================================
@@ -131,6 +170,9 @@ class AuditService {
   private syncIntervalId: NodeJS.Timeout | null = null;
   private databaseService: IDatabaseService | null = null;
   private supabaseService: ISupabaseService | null = null;
+  // BACKLOG-3052: null until wired. Unset reads as "no grant", so the PII
+  // strip is on by default and a missed wiring under-shares rather than leaks.
+  private supportAccessGate: ISupportAccessGate | null = null;
   private initialized = false;
 
   // BACKLOG-2149: On the deep-link auth path, audit writes can fire BEFORE
@@ -497,8 +539,13 @@ class AuditService {
         return;
       }
 
-      // Sync to cloud
-      await this.supabaseService.batchInsertAuditLogs(entriesToSync);
+      // Sync to cloud.
+      // BACKLOG-3052: names and addresses are stripped here unless a support
+      // access window is open. `entriesToSync` itself is untouched — the ids
+      // below, and the local rows they mark synced, are the originals.
+      await this.supabaseService.batchInsertAuditLogs(
+        this.stripPiiForCloud(entriesToSync),
+      );
 
       // Mark as synced in local database
       const ids = entriesToSync.map((e) => e.id);
@@ -530,6 +577,87 @@ class AuditService {
     while (this.pendingSyncQueue.length > 0) {
       await this.syncToCloud();
     }
+  }
+
+  /**
+   * BACKLOG-3052: supply the support-access grant this service consults before
+   * uploading names and addresses. Wired in `authHandlers.initializeDatabase`,
+   * next to `initialize()`.
+   *
+   * Separate from `initialize()` on purpose: `initialize()` is guarded by an
+   * `if (this.initialized) return` and is called on a path that can run twice,
+   * so folding a fourth dependency into it would make re-wiring a no-op.
+   */
+  setSupportAccessGate(gate: ISupportAccessGate | null): void {
+    this.supportAccessGate = gate;
+  }
+
+  /**
+   * BACKLOG-3052: is a support-access window open right now?
+   *
+   * Fails closed in both directions. No gate wired -> false. Gate throws (the
+   * barrel builds its singleton lazily and touches disk) -> false, and the sync
+   * still happens with the PII stripped rather than failing and stranding the
+   * whole batch. The only way this returns true is a live grant that answered.
+   */
+  private isSupportAccessActive(): boolean {
+    const gate = this.supportAccessGate;
+    if (!gate) return false;
+    try {
+      return gate.isActive() === true;
+    } catch (error) {
+      logService.warn(
+        "Support access gate threw; treating audit sync as ungranted",
+        "AuditService",
+        { error: error instanceof Error ? error.message : "Unknown error" },
+      );
+      return false;
+    }
+  }
+
+  /**
+   * BACKLOG-3052: remove third-party identity from the metadata that leaves
+   * this machine, unless the user has an open support-access window.
+   *
+   * ## Why here and not in `sanitizeMetadata`
+   *
+   * `sanitizeMetadata` runs inside `log()`, BEFORE the local write. Stripping
+   * there would delete the user's own audit detail from their own machine to
+   * protect them from themselves, which is not the problem. The problem is the
+   * upload. This is the egress boundary — the one place the data crosses to
+   * Keepr — so it is the one place the gate belongs.
+   *
+   * It is also the only placement that is robust: metadata objects are built at
+   * ~16 call sites across handlers and services, and a source-side fix has to
+   * find every one of them and stay found. A sink-side scrub does not care who
+   * constructed the object.
+   *
+   * ## Copies, never mutation
+   *
+   * `pendingSyncQueue` holds the SAME object references that `log()` handed to
+   * the local write. Deleting a key in place would edit the caller's object and
+   * the in-memory copy of a row already on disk. Entries without PII are passed
+   * through by reference; only an entry that actually loses a key is copied.
+   */
+  private stripPiiForCloud(entries: AuditLogEntry[]): AuditLogEntry[] {
+    if (this.isSupportAccessActive()) {
+      return entries;
+    }
+
+    return entries.map((entry) => {
+      const metadata = entry.metadata;
+      if (!metadata) return entry;
+
+      let stripped: Record<string, unknown> | null = null;
+      for (const key of AUDIT_PII_METADATA_KEYS) {
+        if (Object.prototype.hasOwnProperty.call(metadata, key)) {
+          if (!stripped) stripped = { ...metadata };
+          delete stripped[key];
+        }
+      }
+
+      return stripped ? { ...entry, metadata: stripped } : entry;
+    });
   }
 
   /**
