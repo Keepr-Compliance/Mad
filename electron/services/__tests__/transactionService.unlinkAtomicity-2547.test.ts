@@ -32,22 +32,22 @@
  * the happy-path case therefore has to carry more than anti-vacuity: it covers
  * BOTH predicate branches (see `PREDICATE ASYMMETRY` below).
  *
- * There is NO write-atomicity guard control for this lane.
- * `writeAtomicity.guard.test.ts` enumerates units only from `^export function`
- * and `ipcMain.handle(`; `transactionService.ts` is a class whose sole export
- * is `export default new TransactionService()`, so it contributes ZERO
- * enumerable units and reverting the wrap does NOT turn that guard red
- * (BACKLOG-3232). This suite is the only control. It has to carry the bar
- * alone, which is why the sweep is exhaustive rather than sampled.
+ * TWO CONTROLS COVER THIS CHANGE, AND THEY PROVE DIFFERENT THINGS.
  *
- * Do not read that as "the atomicity guard is inert for this change". It is
- * inert as a control OVER `unlinkMessages`, and separately it goes RED on this
- * change for an unrelated reason: `dbLayerWriters()` reads only a function's
- * OWN body, so splitting a writer into `<name>Sync` + a one-line wrapper drops
- * `<name>` from its writer set and de-detects every caller outside `db/` that
- * names it. Three units in other lanes' files stop being seen. That is a defect
- * in the guard's model of the BACKLOG-2960 seam recipe, not a fix to those
- * units, and it is filed rather than silenced here.
+ * `writeAtomicity.guard.test.ts` is a STRUCTURAL control over `unlinkMessages`.
+ * When this suite was first written it was not: the guard enumerated nothing
+ * from a class-shaped service (BACKLOG-3232), and splitting a writer into
+ * `<name>Sync` + a one-line wrapper dropped `<name>` from its writer set
+ * (BACKLOG-3235). Both are fixed. The guard now enumerates `unlinkMessages`
+ * (its own PRECONDITION names this unit), counts the db-layer writes it calls,
+ * and reports the unit as an unwrapped multi-write when only the
+ * `dbTransaction` wrap is removed. Its `KNOWN_UNWRAPPED` entry was deleted with
+ * this fix for that reason.
+ *
+ * The guard can only see that a transaction is OPENED. It cannot see whether
+ * every write actually lands inside it, or whether a failure rolls back. This
+ * suite is the BEHAVIOURAL control for that, which is why the sweep is
+ * exhaustive rather than sampled.
  *
  * ===========================================================================
  * HOW THE CRASH IS INJECTED

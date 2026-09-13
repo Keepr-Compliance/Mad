@@ -446,21 +446,28 @@ const KNOWN_UNWRAPPED: Record<string, string> = {
   // ==========================================================================
   // BACKLOG-3232 — SURFACED BY THE CLASS WIDENING, ALREADY-FILED SITES
   // ==========================================================================
-  // These three were named in an open item BEFORE this widening and had no
-  // standing red, because the guard enumerated nothing from their files. They
-  // are the item's whole point: the control existed on paper and not in the
-  // build. Each cites the item that already owns the fix; none is fixed here.
+  // These were named in an open item BEFORE this widening and had no standing
+  // red, because the guard enumerated nothing from their files. They are the
+  // item's whole point: the control existed on paper and not in the build.
+  // Each cites the item that already owns the fix; none is fixed here.
   // Damage strings transcribed from those items, not restated from the code.
   //
   // Measured at `abaa1ff20`. The items' own line numbers have drifted (2552
-  // says `:326`, 2550 says `:2069-2107`, 2547 says `:2150-2256`); the
-  // `file::function` key survives that drift, which is why it is the key.
+  // says `:326`, 2550 says `:2069-2107`); the `file::function` key survives
+  // that drift, which is why it is the key.
+  //
+  // --- BACKLOG-2547: DISCHARGED — `transactionService.ts::unlinkMessages` ---
+  // The third entry that was here is deleted because its bug is fixed: the
+  // whole write phase of `unlinkMessages` now runs in one `dbTransaction`.
+  // Unlike the 2546 deletion above, THIS guard can tell fixed from invisible
+  // here, and both directions were run: with the fix, the entry is reported
+  // as fixed-but-still-listed; with only the `dbTransaction` wrap removed, the
+  // unit is reported as an unwrapped multi-write again. The behavioural control
+  // is the forced-crash suite `transactionService.unlinkAtomicity-2547.test.ts`.
   "electron/services/iPhoneSyncStorageService.ts::rollbackSession":
     "BACKLOG-2552 — a half-rolled-back sync session: attachment rows deleted while their parent message rows remain, or messages gone while contacts survive. The rollback that exists to guarantee an atomic cancel is itself non-atomic.",
   "electron/services/transactionService/transactionService.ts::linkMessages":
     "BACKLOG-2550 — junction rows written with messages.transaction_id still NULL, so the message is re-offered as unlinked; or the inverse, the pointer set with no junction row, so the message is invisible to every junction reader. Transient, not permanent: INSERT OR IGNORE plus the unique indexes make a re-run idempotent.",
-  "electron/services/transactionService/transactionService.ts::unlinkMessages":
-    "BACKLOG-2547 — the suppression row written but the link DELETE never ran, so the message is simultaneously linked (junction row survives) and suppressed (ignore row exists); the next auto-link scan keeps it linked while it also sits in the ignore set.",
 
 
   // ==========================================================================
