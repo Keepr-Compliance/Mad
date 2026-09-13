@@ -28,6 +28,41 @@ import { fdaFromProbe, unknownFdaFor } from "./fdaState";
 import type { PlatformInfo, User, UserData } from "./types";
 import logger from "../../../utils/logger";
 
+type RecordedPhoneType = "iphone" | "android";
+
+/** Only a successful read of a valid value is an answer. */
+function asRecordedPhoneType(
+  result: { success: boolean; phoneType?: unknown } | null | undefined,
+): RecordedPhoneType | null {
+  if (!result || result.success !== true) return null;
+  return result.phoneType === "iphone" || result.phoneType === "android"
+    ? result.phoneType
+    : null;
+}
+
+/**
+ * BACKLOG-3276: copy a cloud-only phone type into the local database, then
+ * return what the local database now holds.
+ *
+ * - The sync's own result is deliberately ignored: it reports success whether
+ *   it wrote a value, found nothing in the cloud, or found no local user row.
+ *   The local re-read is the record.
+ * - Callers invoke this only after a SUCCESSFUL local read found nothing. That
+ *   read waited for the database, which this sync handler does not do.
+ * - Any failure means "no answer", never an exception into the Phase 4
+ *   fallback, which would also discard the user's email and permission state.
+ */
+async function recoverPhoneTypeFromCloud(
+  userId: string,
+): Promise<RecordedPhoneType | null> {
+  try {
+    await window.api.user.syncPhoneTypeFromCloud(userId);
+    return asRecordedPhoneType(await window.api.user.getPhoneType(userId));
+  } catch {
+    return null;
+  }
+}
+
 interface LoadingOrchestratorProps {
   children: React.ReactNode;
 }
@@ -668,11 +703,20 @@ export function LoadingOrchestrator({
             : Promise.resolve(undefined),
         ]);
 
-      // Determine phone type
+      // Determine phone type.
+      //
+      // BACKLOG-3276: the local database is the record read here. On a fresh
+      // local profile it is empty while the user's answer is already in
+      // Supabase (usePhoneTypeApi writes the cloud copy first). When, and only
+      // when, the local read SUCCEEDED and found nothing, copy the cloud answer
+      // into the local database and read local again. See
+      // recoverPhoneTypeFromCloud for the rules.
+      const localPhoneType = asRecordedPhoneType(phoneTypeResult);
       const phoneType =
-        phoneTypeResult.success && phoneTypeResult.phoneType
-          ? phoneTypeResult.phoneType
-          : null;
+        localPhoneType ??
+        (phoneTypeResult.success === true
+          ? await recoverPhoneTypeFromCloud(userId)
+          : null);
 
       // Determine if any email provider is connected
       const hasEmailConnected =
