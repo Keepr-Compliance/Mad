@@ -208,8 +208,11 @@ const EXEMPT: Record<string, string> = {
     "eight awaited fetchStoreAndDedup round trips (inbox/all-folder/gmail/all-label, each with a backfill pass), every one a provider fetch followed by its own store; a crash between batches leaves fewer emails cached, which is the ordinary resumable state of an incremental cache and is healed by the next run's dedup on external_id",
   "electron/services/emailSyncService.ts::fetchOutlookEmails":
     "three awaited fetchStoreAndDedup round trips (inbox, sent, all-folder) against Microsoft Graph; same resumable-batch shape as precacheEmails above, and no dbTransaction can span an awaited network call because its callback is synchronous",
+  // BACKLOG-3314: this reason used to call the terminal recordSyncSuccess /
+  // recordSyncFailure pair "try/catch-exclusive". Measured, it is not. The
+  // exemption stands; only that stated reason was wrong, and it is corrected here.
   "electron/services/shadowDeltaSyncService.ts::runOnce":
-    "a per-folder delta loop that persists each folder's cursor only AFTER that folder is fully stored, which its own comment calls crash-safe per folder, plus a terminal recordSyncSuccess/recordSyncFailure pair that is try/catch-exclusive; the writes belong to different logical units by design and are separated by awaited Graph calls",
+    "a per-folder delta loop that persists each folder's cursor only AFTER that folder is fully stored, which its own comment calls crash-safe per folder; the writes belong to different logical units by design and are separated by awaited Graph calls. NOT try/catch-exclusive (BACKLOG-3314 @0285e214c): four unseparated pairs, two of them plain sequences, so no try/catch rule would recover this slot; ensureSyncStateRow at :112 commits before the :115 throw that lands in the catch writing recordSyncFailure, and recordSyncSuccess is itself two statements (emailSyncStateService.ts:163-164). Harmless — an idempotent INSERT OR IGNORE and a failure counter — so the exemption stands",
   "electron/services/db/contactValueProvenanceBackfill.ts::relabelTypedContactValues":
     "called only from a migration — inside migration v60's migrate() at databaseService.ts:3276 — and EVERY migration is run by `const runInTransaction = currentDb.transaction(...)` at databaseService.ts:3513, verified by reading the caller, not inferred (BACKLOG-2569 re-checked these; they had drifted from :3231/:3468)",
 };
@@ -1503,6 +1506,61 @@ function wrapsItself(body: string): boolean {
  * is a floor, not a guarantee. Closing it needs the exits to be attributed to
  * the function they actually leave.
  *
+ * STATED FLOOR, measured and NOT fixed by decision (BACKLOG-3314): `try`/`catch`
+ * is not an exit. A write in a `try` and a write in its `catch` count as a
+ * pair. That is a false POSITIVE only when the two genuinely cannot both run —
+ * and a try/catch is NOT exclusive by construction: `try { W1; mayThrow(); }
+ * catch { W2 }` runs W1 and then W2.
+ *
+ * Measured at `0285e214c` by two independent methods (this predicate's own
+ * offsets, and the TypeScript AST): 26 multi-write units not otherwise cleared,
+ * 53 `try` blocks among them, and ONE unit with a write in a try and in its
+ * catch — `shadowDeltaSyncService.ts::runOnce`, already EXEMPT and not
+ * recoverable by any try/catch rule (see its entry). A rule clearing EVERY
+ * try/catch pair would reclassify zero units. Not added, on the measured-need
+ * bar BACKLOG-3312 was held to.
+ *
+ * THE RULE, if a unit ever needs it. A `} catch` separates W1 -> W2 only when
+ * ALL four hold:
+ *   1. W2 is inside that catch arm, and W1 inside the try block it follows.
+ *   2. W1 is at the try block's TOP LEVEL (`lastWriteDepth === catch depth + 1`).
+ *      `try { for (…) { W1 } } catch { W2 }` commits W1 on one pass and throws
+ *      on the next.
+ *   3. W1 is the try block's LAST statement — only whitespace between the end
+ *      of its statement and the try's `}`. Otherwise
+ *      `try { W1; mayThrow(); } catch { W2 }` clears.
+ *   4. W1 is the ONLY write in the try block. The pairwise walk below never
+ *      compares W0 with W2, so `try { if (a) { W0; mayThrow(); return; } W1; }
+ *      catch { W2 }` would clear with W0 and W2 both run. `runOnce`'s outer try
+ *      is this shape: `ensureSyncStateRow` commits, then a throw reaches the
+ *      catch.
+ * `} finally` never separates anything; it always runs.
+ *
+ * THREE GAPS THAT RULE STILL HAS. Each of these passes all four conditions,
+ * and each lets W1 commit and W2 run. Verified two ways at `1463e12d4`: the
+ * four conditions were sketched on this file's own `braceDepths` / `writeStream`
+ * / `elseArmRange`, and each shape was run in node to watch both writes happen.
+ * The same sketch still rejected condition 2's braced loop, condition 3's
+ * trailing `mayThrow()` and condition 4's `W0 … return` shape, so it
+ * discriminates.
+ *   (i)  A LOOP WITHOUT BRACES. `try { for (…) W1(…); } catch { W2 }`, and
+ *        `xs.forEach((x) => W1(x));`. A braceless body opens no brace, so
+ *        condition 2's depth test reads W1 as top level. It commits on one pass
+ *        and throws on the next.
+ *   (ii) A THROW LATER IN W1'S OWN STATEMENT. `await W1(…).then((r) => f(r));`,
+ *        or `W1(…).id.toString()`. Condition 3 ends at the statement's `;`, but
+ *        the rest of that statement runs after W1 has committed. W1's OWN
+ *        ARGUMENTS are not this gap: they are evaluated before the call, so a
+ *        throw there means W1 never ran (run in node, W2 alone).
+ *   (iii) A WRITER CALL COUNTS AS ONE WRITE. A two-statement writer that commits
+ *        its first statement and throws on its second still sends control to
+ *        the catch, so W2 runs beside a half-done W1. `recordSyncSuccess`
+ *        (`emailSyncStateService.ts:163-164`) is exactly that.
+ * (i) and (ii) need a statement-level parse this offset machinery does not
+ * have. (iii) cannot be seen from the caller at all. Any rule built from the
+ * four conditions opens holes in the CLEARING direction. Leaving it out costs a
+ * false positive, which this guard reports rather than hides.
+ *
  * ===========================================================================
  * BACKLOG-2569 — WHY THIS READS THE JOINED BODY AND NOT LINES
  * ===========================================================================
@@ -1638,9 +1696,9 @@ function unitWrites(unit: Fn): { at: number; label: string }[] {
  *
  * FILED AS BACKLOG-3323, which carries the shape above and the measurement
  * behind it: of the nine units cleared only by this predicate at `73d3e3fbe`,
- * none has it. Take it AFTER BACKLOG-3314 — try/catch exclusivity extends this
- * same predicate, and two widenings of one rule in flight at once is how a
- * classification change gets attributed to the wrong one.
+ * none has it. It was sequenced after BACKLOG-3314, which made NO change to
+ * this predicate — try/catch is recorded as a stated floor on
+ * `writesAreBranchExclusive` instead — so nothing is ahead of it here.
  */
 function elseArmRange(
   src: string,
