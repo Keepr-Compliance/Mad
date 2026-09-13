@@ -73,14 +73,33 @@ export const CONTACTS_DENIED_PERMISSION_RESULT = {
  * BACKLOG-3210 part 1's third outcome: the address book is not on this Mac at
  * all. Deliberately NOT decorated with an explainer action — sending this user
  * to grant a permission she may already hold is the BACKLOG-2392 bug.
+ *
+ * BACKLOG-3233 — NOTE WHAT IS ABSENT: there is no `action`, and the copy names
+ * no permission. Until this item it carried the DENIAL's `userMessage` and the
+ * denial's `action` text with no `actionHandler` behind it — a dead button,
+ * pinned as "today's behaviour" by two suites.
+ *
+ * THOSE TWO SUITES COULD NOT SEE THE PRODUCER CHANGE. Both asserted
+ * `row.action === CONTACTS_STORE_NOT_FOUND_PERMISSION_RESULT.action` through a
+ * MOCKED `checkAllPermissions`, so both sides of the comparison came from this
+ * file and the real producer never ran. Changing `checkContactsPermission` left
+ * them green. That is the exact drift this file's header warns about, found by
+ * running the mutation rather than by reading the tests.
+ *
+ * SO THIS CONSTANT IS NOW TETHERED: `permissionService.contactsStoreShape-3214.test.ts`
+ * drives the REAL `checkContactsPermission` against a real temp HOME with no
+ * address book — a real ENOENT — and asserts this exact key set. Drift the
+ * producer and that suite reds FIRST, then everything fed from it.
+ *
+ * Four suites consume this constant: `diagnosticHandlers.oneRowPerCause-3237`,
+ * `diagnosticHandlers.fdaIssueAction-3219`, `src/utils/__tests__/healthIssueIdentity`
+ * (keys on `errorCode`, so it is unaffected by the copy) and the transcription
+ * leg above.
  */
 export const CONTACTS_STORE_NOT_FOUND_PERMISSION_RESULT = {
   hasPermission: false,
   errorCode: "CONTACTS_STORE_NOT_FOUND",
-  userMessage:
-    "Contacts permission is required to match phone numbers to names.",
-  action:
-    "Full Disk Access in System Settings > Privacy & Security > Full Disk Access will grant access to Contacts",
+  userMessage: "Keepr couldn't find a Contacts database on this Mac.",
 } as const;
 
 /**
@@ -94,11 +113,10 @@ export const CONTACTS_STORE_NOT_FOUND_PERMISSION_RESULT = {
  * producer in `permissionService.fdaDeniedShape-3219.test.ts`, so the absence
  * is measured rather than described.
  *
- * This DIVERGES from `CONTACTS_STORE_NOT_FOUND_PERMISSION_RESULT` above, which
- * still carries the denial's `action` text with no handler behind it — a dead
- * button, pinned as today's behaviour by
- * `diagnosticHandlers.oneRowPerCause-3237.test.ts`. BACKLOG-3233 reconciles
- * the two; this file states the divergence rather than hiding it.
+ * BACKLOG-3233 CLOSED the divergence this note used to describe.
+ * `CONTACTS_STORE_NOT_FOUND_PERMISSION_RESULT` above now has the same shape for
+ * the same reason: an absent store, named honestly, with no `action`. The two
+ * probes answer "it is not here" identically.
  */
 export const MESSAGES_STORE_NOT_FOUND_PERMISSION_RESULT = {
   hasPermission: false,
