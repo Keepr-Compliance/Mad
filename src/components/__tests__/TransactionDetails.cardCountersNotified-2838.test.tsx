@@ -182,7 +182,7 @@ describe("BACKLOG-2838 Half B: attach and unlink tell the list its counters move
     mount();
     await settleMount();
 
-    await userEvent.click(screen.getByText("Emails"));
+    await userEvent.click(await screen.findByText("Emails"));
     await userEvent.click(await screen.findByTestId("fire-emails-changed"));
 
     await waitFor(() => expect(onTransactionUpdated).toHaveBeenCalled());
@@ -193,7 +193,7 @@ describe("BACKLOG-2838 Half B: attach and unlink tell the list its counters move
     mount();
     await settleMount();
 
-    await userEvent.click(screen.getByText("Emails"));
+    await userEvent.click(await screen.findByText("Emails"));
     // Open the confirmation the tab raises, then confirm it — the unlink runs
     // through the real handler, not a stub of it.
     await userEvent.click(await screen.findByTestId("fire-show-unlink-thread"));
@@ -210,7 +210,7 @@ describe("BACKLOG-2838 Half B: attach and unlink tell the list its counters move
     mount();
     await settleMount();
 
-    await userEvent.click(screen.getByText("Emails"));
+    await userEvent.click(await screen.findByText("Emails"));
     await userEvent.click(await screen.findByTestId("fire-show-unlink-thread"));
     await userEvent.click(await screen.findByTestId("unlink-email-confirm-button"));
 
@@ -222,7 +222,7 @@ describe("BACKLOG-2838 Half B: attach and unlink tell the list its counters move
     mount();
     await settleMount();
 
-    await userEvent.click(screen.getByText("Texts"));
+    await userEvent.click(await screen.findByText("Texts"));
     await userEvent.click(await screen.findByTestId("fire-messages-changed"));
 
     await waitFor(() => expect(onTransactionUpdated).toHaveBeenCalled());
@@ -232,7 +232,7 @@ describe("BACKLOG-2838 Half B: attach and unlink tell the list its counters move
     mount();
     await settleMount();
 
-    await userEvent.click(screen.getByText("Emails"));
+    await userEvent.click(await screen.findByText("Emails"));
     await userEvent.click(await screen.findByTestId("fire-restore-complete"));
 
     await waitFor(() => expect(onTransactionUpdated).toHaveBeenCalled());
@@ -252,7 +252,7 @@ describe("BACKLOG-2838 Half B: attach and unlink tell the list its counters move
     mount();
     await settleMount();
 
-    await userEvent.click(screen.getByText("Texts"));
+    await userEvent.click(await screen.findByText("Texts"));
     await userEvent.click(await screen.findByTestId("fire-messages-restore-complete"));
 
     await waitFor(() => expect(onTransactionUpdated).toHaveBeenCalled());
