@@ -23,11 +23,17 @@ import {
 } from 'recharts';
 import { ChevronDown, ChevronRight, User } from 'lucide-react';
 import { Card, Badge } from '@keepr/design-system';
-import type { VersionDistribution as VersionDistributionData } from '@/lib/analytics-queries';
+import type {
+  CountMode,
+  VersionDistribution as VersionDistributionData,
+} from '@/lib/analytics-queries';
+import { CountModeToggle, countModeCaption } from './CountModeToggle';
+import { SeeMoreList } from './SeeMoreList';
 
 interface Props {
   data: VersionDistributionData[];
   activePeriod: number;
+  activeMode: CountMode;
 }
 
 const PERIODS = [
@@ -46,7 +52,7 @@ const COLORS = [
   '#7dd3fc', // primary-300
 ];
 
-export function VersionDistribution({ data, activePeriod }: Props) {
+export function VersionDistribution({ data, activePeriod, activeMode }: Props) {
   const [expandedVersion, setExpandedVersion] = useState<string | null>(null);
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -148,6 +154,19 @@ export function VersionDistribution({ data, activePeriod }: Props) {
         </ResponsiveContainer>
       </div>
 
+      {/*
+        Count-mode toggle — founder-specified placement: below the bar chart,
+        directly above the `Version | Users | Adoption` header row. It drives the
+        chart and the table together, because both render from the same `data`
+        prop, refetched server-side when the mode changes.
+      */}
+      <div className="mb-3">
+        <CountModeToggle activeMode={activeMode} />
+        <p className="text-xs text-gray-500 mt-2">
+          {countModeCaption(activeMode, 'version')}
+        </p>
+      </div>
+
       {/* Data Table */}
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
@@ -201,10 +220,16 @@ export function VersionDistribution({ data, activePeriod }: Props) {
                         {row.users.length === 0 ? (
                           <p className="text-xs text-gray-400">No user details available</p>
                         ) : (
-                          <div className="space-y-1">
-                            {row.users.map((u) => (
+                          /*
+                            SeeMoreList resets to 5 when this block unmounts,
+                            which is what collapsing the version row does — the
+                            list is rendered inside `{isExpanded && …}` above.
+                          */
+                          <SeeMoreList
+                            items={row.users}
+                            getKey={(u) => u.id}
+                            renderItem={(u) => (
                               <Link
-                                key={u.id}
                                 href={`/dashboard/users/${u.id}`}
                                 className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-100 transition-colors group/user"
                               >
@@ -218,8 +243,8 @@ export function VersionDistribution({ data, activePeriod }: Props) {
                                   </span>
                                 )}
                               </Link>
-                            ))}
-                          </div>
+                            )}
+                          />
                         )}
                       </div>
                     )}
