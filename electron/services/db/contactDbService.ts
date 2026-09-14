@@ -936,8 +936,15 @@ export async function getUnimportedContactsByUserId(
  * Optionally update the source field (e.g., when importing from macOS Contacts)
  * @param contactId - The contact ID to update
  * @param source - Optional source to set (e.g., "contacts_app")
+ *
+ * SYNCHRONOUS ON PURPOSE (BACKLOG-3220). `contacts:import` calls it inside one
+ * `dbTransaction` callback, which must not contain an async call: an `async`
+ * function turns its own throw into a rejection the transaction never sees, so
+ * the failure commits instead of rolling back. Do not add `async` for
+ * consistency with the neighbours; `contact-handlers.importAtomic-3220.test.ts`
+ * pins this at compile time.
  */
-export async function markContactAsImported(contactId: string, source?: string): Promise<void> {
+export function markContactAsImported(contactId: string, source?: string): void {
   if (source) {
     const statement =
       sql`UPDATE contacts SET is_imported = 1, source = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`;

@@ -106,6 +106,8 @@ jest.mock("../services/databaseService", () => {
       isInitialized: jest.fn(() => true),
       backfillContactEmails: jest.fn(() => Promise.resolve(0)),
       backfillContactPhones: jest.fn(() => Promise.resolve(0)),
+      backfillContactEmailsSync: jest.fn(() => 0),
+      backfillContactPhonesSync: jest.fn(() => 0),
       markContactAsImported: jest.fn(() => Promise.resolve()),
       getContactById: jest.fn((id: string) =>
         Promise.resolve(
