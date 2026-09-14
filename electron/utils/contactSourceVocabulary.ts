@@ -115,6 +115,35 @@ export const MESSAGE_DERIVED_ONLY_SOURCES: readonly string[] = [
 ];
 
 /**
+ * VALUES THE `contacts.source` CHECK ADMITS BUT NO DOOR MAY STORE (BACKLOG-3193)
+ *
+ * The persisted values the source filter can place ONLY when the contact is
+ * message-derived. A SAVED contact never is: the one projection behind
+ * `contacts:get-all` hard-codes `0 as is_message_derived`
+ * (`services/db/contactProjectionSql.ts`). So a saved contact carrying one of
+ * these matches NO filter leaf — hidden under the default selection, hidden with
+ * every box ticked, and not found by searching its own name — while
+ * `contactSourceLabel` names it after a leaf that cannot find it.
+ *
+ * Nothing in the tree stores them today, but both doors used to accept all
+ * three from a caller and store them verbatim. The first caller likely to send
+ * one is an unsaved email-derived record spelled `email` or `inferred`: that
+ * spelling lands on Inferred > From Email with no filter change, and pressing
+ * Import on it would have saved a contact nobody could find.
+ *
+ * DERIVED, NOT LISTED. `contactFilterModel.vocabularyCoverage.test.ts` pins
+ * `MESSAGE_DERIVED_ONLY_SOURCES` against what the filter predicate actually
+ * does. If a leaf that finds a saved `sms` contact is ever added, that test
+ * forces the list to change, and this constant — and therefore the write
+ * boundary below — follows without a second list to keep in step.
+ *
+ * `messages` is absent because it is not persisted: it has its own destination
+ * in `SYNTHETIC_SOURCE_DESTINATION`.
+ */
+export const UNFILTERABLE_WHEN_SAVED_CONTACT_SOURCES: readonly PersistedContactSource[] =
+  PERSISTED_CONTACT_SOURCES.filter((value) => MESSAGE_DERIVED_ONLY_SOURCES.includes(value));
+
+/**
  * WHERE A SYNTHETIC SOURCE IS STORED WHEN ITS ROW IS SAVED (BACKLOG-2481)
  *
  * ===========================================================================
@@ -166,6 +195,22 @@ export const SYNTHETIC_SOURCE_DESTINATION: Readonly<
  * Returns the value to STORE, or `null` when the input is one this vocabulary
  * cannot place.
  *
+ * `null` has TWO causes, and each door answers both the same way:
+ *
+ *   1. an unrecognised string (below);
+ *   2. a value the CHECK admits but no filter leaf can find on a SAVED contact
+ *      — `UNFILTERABLE_WHEN_SAVED_CONTACT_SOURCES`, i.e. `email`, `sms`,
+ *      `inferred` (BACKLOG-3193). Storing one creates a contact that is
+ *      invisible under every filter setting, so it is refused rather than
+ *      stored. `contacts:import` refuses the whole batch; `contacts:create`
+ *      folds it to `manual`, its rule for any value it cannot store.
+ *
+ * Refused rather than mapped to `manual` on purpose: a caller that spelled out a
+ * provenance should learn at once that it cannot be stored, instead of having
+ * its record silently re-labelled. A synthetic value that wants a destination
+ * gets one in `SYNTHETIC_SOURCE_DESTINATION`, where the typed record will not
+ * compile without it.
+ *
  * ===========================================================================
  * WHY `null` RATHER THAN A FALLBACK FOR AN UNRECOGNISED STRING
  * ===========================================================================
@@ -209,6 +254,11 @@ export const SYNTHETIC_SOURCE_DESTINATION: Readonly<
  * `contact-handlers.messagesSource-2481.test.ts` pins the six rows above so the
  * normalisation cannot come back unnoticed.
  *
+ * Since BACKLOG-3193 the `"SMS"` rows no longer tell the two spellings apart —
+ * `sms` is refused too, so both give the same answer on both doors. The
+ * `"Contacts_App"` and `" manual "` rows still do, and they are what now holds
+ * the exact comparison in place.
+ *
  * @param inbound  the caller-supplied `source`, unvalidated and NOT normalised.
  *   Compared exactly, so `"SMS"` is not `sms` and `" manual "` is not `manual`;
  *   both are unrecognised, and each door answers that as it always has.
@@ -222,6 +272,11 @@ export function toStorableContactSource(
 ): PersistedContactSource | null {
   const value = typeof inbound === "string" ? inbound : "";
   if (value.length === 0) return fallbackWhenAbsent;
+
+  // BACKLOG-3193: admitted by the CHECK, invisible once saved. Before the
+  // persisted check, or `includes` below would store it verbatim.
+  const unfilterable = UNFILTERABLE_WHEN_SAVED_CONTACT_SOURCES as readonly string[];
+  if (unfilterable.includes(value)) return null;
 
   const persisted = PERSISTED_CONTACT_SOURCES as readonly string[];
   if (persisted.includes(value)) return value as PersistedContactSource;
