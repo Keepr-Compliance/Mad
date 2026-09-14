@@ -309,6 +309,26 @@ describe("a token refresh keeps the mailbox address (BACKLOG-3286)", () => {
       });
       expect(row()).toBeUndefined();
     });
+
+    it("does not bring the row back when it is removed while the refresh itself is in flight", async () => {
+      // The late variant: the row still exists when the 401 arrives and is gone
+      // by the time the refresh returns. Catches an implementation that reads
+      // the row first and writes it back afterwards.
+      seedMailbox({ address: ADDRESS, scopes: SEEDED_SCOPES });
+      await outlookFetch.initialize(USER);
+      let calls = 0;
+      mockAxios.mockImplementation(() => {
+        calls++;
+        if (calls <= 2) return Promise.reject({ response: { status: 401 }, message: "Unauthorized" });
+        return Promise.resolve({ data: { value: [], "@odata.count": 0 } });
+      });
+      jest.spyOn(microsoftAuth, "refreshToken").mockImplementation(async () => {
+        db.prepare("DELETE FROM oauth_tokens WHERE user_id = ?").run(USER);
+        return refreshResponse();
+      });
+      await outlookFetch.searchEmails({});
+      expect(row()).toBeUndefined();
+    });
   });
 
   describe("W2: the Outlook fetch refresh followed by the Microsoft refresher", () => {
