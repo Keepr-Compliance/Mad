@@ -54,6 +54,18 @@
  * converse) and is counted, not forbidden, in C2.
  *
  * ===========================================================================
+ * BACKLOG-3354 — `savedContactIds` ON A FAILURE RESPONSE
+ * ===========================================================================
+ *   H0 (in C4) A successful call carries no `savedContactIds` key.
+ *   H1 (in C2) A forced failure that leaves the state BEFORE carries no key; one
+ *      that leaves it AFTER with `success: false` carries exactly the ids of the
+ *      contacts saved — compared as a SET against `sc.touched`, which reads the
+ *      database, never the response.
+ *   H-COMMIT  The outermost transaction fails after its callback has returned,
+ *      so the driver rolls back: no key, state unchanged. The only control that
+ *      sees ids assigned inside the callback (before COMMIT).
+ *
+ * ===========================================================================
  * FIXTURES
  * ===========================================================================
  *   S1R  transcribed from the only producer of an `isFromDatabase` row,
@@ -118,6 +130,11 @@ const probe = {
   post: null as string | null,
   snapshotFn: null as null | (() => string),
   txDepth: 0,
+  /**
+   * BACKLOG-3354 H-COMMIT: make the OUTERMOST transaction throw after its
+   * callback returns. Models a failed COMMIT; see the H-COMMIT test.
+   */
+  failCommit: false,
 };
 const WRITE = /\b(INSERT\s+(OR\s+\w+\s+)?INTO|UPDATE\s+[a-z_]+\s+SET|DELETE\s+FROM)\b/i;
 
@@ -176,6 +193,15 @@ jest.mock("../services/db/core/dbConnection", () => ({
   dbTransaction: <T>(fn: () => T): T => {
     probe.txDepth++;
     try {
+      if (probe.failCommit && probe.txDepth === 1) {
+        // Thrown INSIDE the driver's transaction, after `fn` returned, so the
+        // driver rolls everything back — to the handler, indistinguishable
+        // from COMMIT failing. No real COMMIT statement fails here.
+        return countedDb.transaction((): T => {
+          fn();
+          throw new Error("H-COMMIT: the outermost transaction failed after its callback returned");
+        })();
+      }
       return countedDb.transaction(fn)();
     } finally {
       probe.txDepth--;
@@ -525,6 +551,7 @@ function resetProbe(): void {
   probe.pre = null;
   probe.post = null;
   probe.snapshotFn = null;
+  probe.failCommit = false;
 }
 
 // Diagnostic only: keeps the jest worker alive if a promise is abandoned inside
@@ -532,7 +559,13 @@ function resetProbe(): void {
 // instead of a crashed worker. It is not itself a control.
 const keepWorkerAlive = (): void => undefined;
 
-async function runImport(sc: Scenario): Promise<{ success: boolean; error?: string }> {
+interface ImportResult {
+  success: boolean;
+  error?: string;
+  savedContactIds?: string[];
+}
+
+async function runImport(sc: Scenario): Promise<ImportResult> {
   const res = await registeredHandlers.get("contacts:import")({} as IpcMainInvokeEvent, USER, sc.input());
   // Let anything the handler abandoned settle inside THIS run.
   await new Promise((r) => setImmediate(r));
@@ -570,6 +603,29 @@ it("C1-TYPE: every function the import transaction calls directly is synchronous
   expect(SYNC_PINS).toEqual([true, true, true, true, true, true]);
 });
 
+it("H-COMMIT (BACKLOG-3354): the outermost transaction fails after its callback returned -> no savedContactIds, state unchanged", async () => {
+  // SIMULATES A FAILED COMMIT: `probe.failCommit` throws inside the driver's
+  // outermost transaction after the handler's callback has returned, so the
+  // driver rolls back. It does not execute a real failing COMMIT statement.
+  // Break caught: `savedContactIds` assigned as the callback's last line
+  // (before COMMIT) — the statement sweeps cannot see it, because COMMIT is not
+  // a counted statement. Also red when the ids are assigned before
+  // `dbTransaction` is called.
+  const sc = mixedBatch();
+  openFresh();
+  sc.seed(realDb!);
+  const before = jointState(realDb!, sc);
+  resetProbe();
+  probe.failCommit = true;
+  const res = await runImport(sc);
+  probe.failCommit = false;
+  expect({
+    success: res.success,
+    hasSavedContactIds: Object.prototype.hasOwnProperty.call(res, "savedContactIds"),
+    stateUnchanged: jointState(realDb!, sc) === before,
+  }).toEqual({ success: false, hasSavedContactIds: false, stateUnchanged: true });
+});
+
 describe.each(SCENARIOS.map((make) => [make().name, make] as const))("%s", (_name, make) => {
   const sc = make();
   let before = "";
@@ -577,7 +633,7 @@ describe.each(SCENARIOS.map((make) => [make().name, make] as const))("%s", (_nam
   let total = 0;
   let writes = 0;
   let labels: string[] = [];
-  let clean: { success: boolean; error?: string } = { success: false, error: "not run" };
+  let clean: ImportResult = { success: false, error: "not run" };
 
   beforeAll(async () => {
     openFresh();
@@ -593,6 +649,9 @@ describe.each(SCENARIOS.map((make) => [make().name, make] as const))("%s", (_nam
 
   it("C4 PRECONDITION: the clean run succeeds, writes, and changes state", () => {
     expect({ success: clean.success, error: clean.error ?? null }).toEqual({ success: true, error: null });
+    // H0 (BACKLOG-3354). Break caught: `savedContactIds` also on the success
+    // return — the renderer would read a saved-but-failed shape into a success.
+    expect(Object.prototype.hasOwnProperty.call(clean, "savedContactIds")).toBe(false);
     expect(writes).toBeGreaterThan(0);
     expect(after).not.toEqual(before);
   });
@@ -620,6 +679,7 @@ describe.each(SCENARIOS.map((make) => [make().name, make] as const))("%s", (_nam
     if (!clean.success) throw new Error(`sweep not run: clean run failed: ${clean.error}`);
     const violations: string[] = [];
     const notFired: number[] = [];
+    let failedRuns = 0;
     for (let n = 1; n <= total; n++) {
       openFresh();
       sc.seed(realDb!);
@@ -631,13 +691,32 @@ describe.each(SCENARIOS.map((make) => [make().name, make] as const))("%s", (_nam
       // a clean pass. Stronger than `probe.count >= n`, which it implies: that
       // form stays green when the throw is removed.
       if (probe.firedAt !== n) notFired.push(n);
+      if (res.success === false) failedRuns++;
       const fin = jointState(realDb!, sc);
       const shape = fin === before ? "BEFORE" : fin === after ? "AFTER" : "HALF";
       if (shape === "HALF" || (shape === "BEFORE" && res.success !== false) || (res.success === true && shape !== "AFTER")) {
         violations.push(`#${n} (${labels[n - 1]}) success=${res.success} ${shape}`);
       }
+      // H1 (BACKLOG-3354). Breaks caught: the field never assigned; assigned
+      // before `dbTransaction` runs (BEFORE runs carry it); taken from the
+      // request records instead of what the transaction saved (S2, S3, S4 —
+      // on S1R/S1F a request id IS the contact id, so they cannot tell).
+      const hasIds = Object.prototype.hasOwnProperty.call(res, "savedContactIds");
+      const gotIds = JSON.stringify([...(res.savedContactIds ?? [])].sort());
+      const wantIds = JSON.stringify([...sc.touched(realDb!)].sort());
+      if (shape === "BEFORE" && hasIds) {
+        violations.push(`H1 #${n} (${labels[n - 1]}) BEFORE but savedContactIds=${gotIds}`);
+      }
+      if (shape === "AFTER" && res.success === false && (!hasIds || gotIds !== wantIds)) {
+        violations.push(`H1 #${n} (${labels[n - 1]}) AFTER, success=false, savedContactIds=${hasIds ? gotIds : "absent"}, saved=${wantIds}`);
+      }
     }
     expect(notFired).toEqual([]);
+    // Every forced failure reports failure (84 of 84 across the five scenarios
+    // at 7b4828906). Break caught: deleting only the `throw` line in `boundary`
+    // while keeping `probe.firedAt = n` — every run then completes and succeeds,
+    // which `notFired` and the violations above both permit.
+    expect(failedRuns).toBe(total);
     expect(violations).toEqual([]);
   });
 });
