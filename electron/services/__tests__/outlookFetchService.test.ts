@@ -269,13 +269,23 @@ describe("OutlookFetchService", () => {
         expires_in: 3600,
         scope: "Mail.Read",
       });
-      mockDatabaseService.saveOAuthToken.mockResolvedValue("token-id");
+      mockDatabaseService.updateOAuthToken.mockResolvedValue(undefined);
 
       const results = await outlookFetchService.searchEmails({});
 
       expect(results).toHaveLength(0);
       expect(mockMicrosoftAuthService.refreshToken).toHaveBeenCalled();
-      expect(mockDatabaseService.saveOAuthToken).toHaveBeenCalled();
+      // BACKLOG-3286: the refresh updates the loaded row by id with the token
+      // fields only — never the upsert, which erased the mailbox address. The
+      // row-level proof (address and scopes survive) is in
+      // mailboxAddressPreservation-3286.test.ts; this is the call-shape check.
+      expect(mockDatabaseService.saveOAuthToken).not.toHaveBeenCalled();
+      expect(mockDatabaseService.updateOAuthToken).toHaveBeenCalledWith("token-id", {
+        access_token: "new-access-token",
+        token_expires_at: expect.any(String),
+        refresh_token: "new-refresh-token",
+        scopes_granted: JSON.stringify("Mail.Read"),
+      });
     });
   });
 
