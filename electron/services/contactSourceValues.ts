@@ -259,7 +259,7 @@ export function applyLinkedSourceValuesOrThrow(
     if (emailsAdded > 0 || phonesAdded > 0) {
       // No display name and no address in the log line — this ends up in
       // support tickets.
-      logService.info(
+      void logService.info(
         `[Contacts] a newly linked source contributed +${emailsAdded} email(s), ` +
           `+${phonesAdded} phone(s) to a contact`,
         "Contacts",
@@ -290,7 +290,7 @@ export function applyLinkedSourceValues(
   try {
     return applyLinkedSourceValuesOrThrow(userId, contactId);
   } catch (error) {
-    logService.warn(
+    void logService.warn(
       `[Contacts] could not apply a linked source's values: ${error}`,
       "Contacts",
     );
@@ -349,7 +349,7 @@ export function removeUnlinkedSourceValues(
     // that shares everything with a surviving source is not reported as
     // "refused" when nothing was going to be removed anyway.
     if (isContactOnFrozenTransaction(contactId)) {
-      logService.info(
+      void logService.info(
         `[Contacts] a ${sourceType} source was unlinked from a contact on an EXPORTED ` +
           `transaction; its ${emailsToRemove.length} email(s) and ${phonesToRemove.length} ` +
           `phone(s) were KEPT so the exported audit's search set is unchanged`,
@@ -385,7 +385,7 @@ export function removeUnlinkedSourceValues(
     }
 
     if (removedEmails > 0 || removedPhones > 0) {
-      logService.info(
+      void logService.info(
         `[Contacts] unlinking a ${sourceType} source took back ${removedEmails} email(s) ` +
           `and ${removedPhones} phone(s) that no remaining source contributes`,
         "Contacts",
@@ -394,7 +394,7 @@ export function removeUnlinkedSourceValues(
 
     return { removedEmails, removedPhones };
   } catch (error) {
-    logService.warn(
+    void logService.warn(
       `[Contacts] could not take back an unlinked source's values: ${error}`,
       "Contacts",
     );

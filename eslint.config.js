@@ -348,7 +348,10 @@ module.exports = [
     // BACKLOG-2546 adds `loginProvisioningService.ts`: it is outside db/** by
     // design (see its header) but it OWNS a transaction body, so it needs the
     // same rule — a floated promise inside a body loses the error path.
-    files: ['electron/services/db/**/*.ts', 'electron/services/loginProvisioningService.ts'],
+    // BACKLOG-3220 adds `contactSourceValues.ts` on the same criterion: its
+    // `applyLinkedSourceValuesOrThrow` owns a transaction body. (`contactHandlers.ts`
+    // owns bodies too; widening it is BACKLOG-3355.)
+    files: ['electron/services/db/**/*.ts', 'electron/services/loginProvisioningService.ts', 'electron/services/contactSourceValues.ts'],
     ignores: ['**/*.test.ts', '**/__tests__/**'],
     rules: {
       '@typescript-eslint/no-floating-promises': 'error',
