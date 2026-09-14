@@ -11,7 +11,7 @@
  * and passed as props to prevent duplicate API calls when switching
  * between steps 2 and 3.
  */
-import React, { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import React, { useState, useMemo, useCallback, useEffect, useRef, useContext } from "react";
 import {
   buildRoleOptions,
   resolveDefaultContactRole,
@@ -36,6 +36,7 @@ import type { ExtendedContact } from "../../types/components";
 import { settingsService } from "../../services";
 import logger from '../../utils/logger';
 import { labelForContact } from "../../utils/contactDisplayLabel";
+import { NotificationContext } from "../../contexts/NotificationContext";
 
 interface ContactAssignmentStepProps {
   /** Current step (2 = select contacts, 3 = assign roles) */
@@ -194,6 +195,10 @@ function ContactAssignmentStep({
 }: ContactAssignmentStepProps): React.ReactElement {
   // Contact preview/edit modal state
   const [previewContact, setPreviewContact] = useState<ExtendedContact | null>(null);
+  // BACKLOG-3354: import failures are shown as a toast. Read through
+  // `useContext`, not `useNotification`, which throws without a provider; the
+  // memoised `notify` object is the `handleImportContact` dependency.
+  const notify = useContext(NotificationContext)?.notify;
   const [showEditModal, setShowEditModal] = useState(false);
   const [editContact, setEditContact] = useState<ExtendedContact | undefined>(undefined);
 
@@ -665,7 +670,28 @@ function ContactAssignmentStep({
          * screens hand `contacts:import` the same shape.
          */
         const { is_message_derived: _listBadge, ...record } = contact;
-        const result = await window.api.contacts.import(userId, [record]);
+
+        /**
+         * BACKLOG-3354 — A FAILED "+ Add" IS SHOWN, NOT ONLY LOGGED.
+         *
+         * `ContactSearchList`'s catch only logs, so a failed import used to
+         * clear the row's importing state and show nothing else. Raised here,
+         * the one place holding the IPC result. Two shapes, told apart by the
+         * main process:
+         *   (a) nothing was saved — `success: false` with no `savedContactIds`,
+         *       a rejected invoke, or `success: true` with no contact;
+         *   (b) saved, then a read after the commit failed — `success: false`
+         *       WITH `savedContactIds`.
+         * The raw `result.error` stays in the log, never the toast.
+         */
+        const nothingSaved = `Couldn't add ${labelForContact(contact)} — nothing was saved.`;
+        let result: Awaited<ReturnType<typeof window.api.contacts.import>>;
+        try {
+          result = await window.api.contacts.import(userId, [record]);
+        } catch (invokeError) {
+          notify?.error(nothingSaved);
+          throw invokeError;
+        }
         const importedContact = result.contacts?.[0];
 
         if (result.success && importedContact) {
@@ -730,6 +756,29 @@ function ContactAssignmentStep({
           return newContact;
         }
 
+        /**
+         * BACKLOG-3354 (b) — saved, but the import reported failure.
+         *
+         * The toast is raised BEFORE the refresh is awaited: the prop is typed
+         * `() => Promise<void>` and nothing forbids it rejecting, and the
+         * caller's catch only logs. Both halves are re-read so the saved
+         * person leaves Available (crosswalk for records with a source
+         * identity; address suppression for email-derived people) instead of
+         * inviting a second import. Nothing is selected: this prop returns no
+         * rows (the loaded rows are discarded upstream in
+         * `useAuditContactAssignment` and `ContactsContext`), so there is no
+         * saved row here to select.
+         */
+        const savedIds = result.success === false ? (result.savedContactIds ?? []) : [];
+        if (savedIds.length > 0) {
+          notify?.error(
+            `${labelForContact(contact)} was saved, but wasn't added. Find them in the list and add them again.`,
+          );
+          await onRefreshBothLists();
+          throw new Error(result.error || "Failed to import contact");
+        }
+
+        notify?.error(nothingSaved);
         throw new Error(result.error || "Failed to import contact");
       } else {
         // Already imported contact: just add to selection
@@ -739,7 +788,7 @@ function ContactAssignmentStep({
         return contact;
       }
     },
-    [userId, onRefreshBothLists, selectedContactIds, onSelectedContactIdsChange, contacts]
+    [userId, onRefreshBothLists, selectedContactIds, onSelectedContactIdsChange, contacts, notify]
   );
 
   // Handle importing from preview (needs to be after handleImportContact)
