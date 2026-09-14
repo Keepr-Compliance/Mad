@@ -241,11 +241,11 @@ describe("BACKLOG-3354 Clients & Contacts card: a failed import is shown", () =>
   });
 
   it("C-a2: after (a), Import is enabled and a second press reaches contacts:import again", async () => {
-    // Break caught: a failed round trip left in `inFlightImports` (cleanup only
-    // on success) — the button is enabled, but the second press returns the
-    // cached rejection: no IPC call and no toast. That is this item's defect
-    // again. ("Treat any failure as saved" does NOT redden this test; C-a
-    // catches that one.)
+    // Break caught: the `inFlightImports` entry removed only when the import
+    // succeeds, while the importing state is still cleared. The button is
+    // enabled, but the second press returns the cached rejection: no IPC call
+    // and no toast, which is this item's defect again. ("Treat any failure as
+    // saved" does NOT redden this test; C-a catches that one.)
     installBackend();
     jest.mocked(window.api.contacts.import).mockResolvedValue({ success: false, error: "database is locked" });
     await renderAndOpenRosey();
