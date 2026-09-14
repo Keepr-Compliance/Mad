@@ -386,20 +386,45 @@ Step 7 exists because an engineer who plans in the open gets corrected before wr
 
 ### Step 7 blocking exit criterion: reachability
 
-**SR cannot approve a plan without stating, in the review, that the code the item changes is
-reachable from `src/` — with the caller cited, or the finding that there is none.**
+**SR cannot approve a plan without stating, in the review, that a user action or app start reaches
+the code the item changes — with the caller or root cited (`file:line`), or the finding that there
+is none.** For code behind an IPC channel or preload bridge method, that is a caller in `src/`. For
+main-process code that no channel fronts, it is a root in `electron/main.ts` or a bootstrap — an
+`app.on(...)` event, a protocol handler, a menu or tray item, a timer.
 
 ```
 git grep -n '<channel>\|<preloadMethod>\|<exportedSymbol>' -- src
 ```
 
+**Before a zero counts, prove the grep can find each name.** Copy the channel and method names from
+`electron/preload/` rather than typing them, run each name on its own against the file that defines
+it (`-- electron/preload` for a channel or bridge method) and show it hits, and check dynamic access
+(ENGINEER-WORKFLOW Step 1a item 2). One hit from the whole alternation proves only that one
+alternative is spelled right. A proven zero shows there is no caller at all; a hit shows nothing
+until the gate walk is done — which is how this squares with `CLAUDE.md`'s *"none of these are
+greppable"* (Derive sets by execution, rule 2).
+
 Callers inside `electron/` do not count. A handler calling a handler is not a user reaching a
 feature. A registered `ipcMain.handle(...)` is a *leaf* of the preload bridge, not a root.
+
+**A hit is where the walk starts, not where it ends.** Discard hits in tests, type declarations and
+comments, then walk the remaining call upward to a mounted component or an entry point. If the call
+only runs when a value is set — `if (x)`, `x &&`, an early return, an optional prop or callback —
+enumerate every writer of that value (every `setX(` call, every place the prop is passed and every
+place it is invoked) and cite one writer that is itself reached by the same test. A call whose gate
+has no reachable writer counts as zero hits. Worked example: BACKLOG-2546 — a real call in `src/`
+sat behind a gate whose only non-null writer was never invoked; it was ruled reachable on 2026-09-08
+by citing the call (trace in `pm_comments` on the item).
 
 **Zero hits is a STOP, not a note.** The item returns to the founder with the fact and a
 wire / delete / build-anyway question, before any code is written. **A prior founder ruling on
 the item does not survive it** — the ruling was made on a premise nobody had checked. **Filing a
 follow-up item is not a disposition.**
+
+**After a STOP:** post the grep, its positive control and any gate trace to `pm_comments` on the
+item, headed `STOP — UNREACHABLE`; build nothing. PM sets the item to `waiting_for_user` and puts the
+wire / delete / build-anyway question to the founder in SUMMARY slot 5. Only his answer releases the
+item.
 
 **Why this is an exit criterion and not a checklist line.** BACKLOG-3234: the orphan status of
 `transactions:export-pdf` was written down four times before the PR opened — in BACKLOG-2771's own
@@ -407,11 +432,13 @@ commit (`68becf9b2`, *"orphan channel, no renderer caller"*, which then added tw
 it), in the engineer's plan §9.7, in the SR plan review (*"No user can reach it today"* — and
 approved), and at the founder gate (*"THE GATE IS NOT UI-REPRODUCIBLE… There is no button."*).
 Every gate saw it, wrote it down, and continued. **Detection was never the problem.** Nothing made
-STOP the default, so four surfacings became four paragraphs and a merged PR nobody can reach.
-Precedent: BACKLOG-2515, same shape, five weeks earlier.
+STOP the default, so four surfacings became four paragraphs and an opened PR nobody can reach
+(PR #2600, closed unmerged 2026-09-12). Earlier precedent, different shape: BACKLOG-2515
+(2026-08-05) — three PRs merged on an unmounted contact picker before anyone noticed. That was a
+detection miss; 3234 shows that fixing detection alone is not enough.
 
-**A well-evidenced item is more dangerous here, not less.** 3234 had correct `file:line` cites, a
-correct mechanism, and a real defect. All of that was true. Only reachability was never asked, and
+**A well-evidenced item is more dangerous here, not less.** 3234 had a correct mechanism, a real
+defect, and pre-registered controls. All of that was true. Only reachability was never asked, and
 the quality of the rest is what carried it past four reviews.
 
 Full rule: `.claude/docs/PR-SOP.md` §6.2k. Decision-time counterpart (before the founder is asked
@@ -452,12 +479,15 @@ SUMMARY
 
 ### At Step 7 (Plan Review)
 ```
-Can any code in src/ reach what this item changes?
+Does a user action or app start reach what this item changes?
+(IPC/bridge code: a caller in src/. Main-process code: a root in main.ts or a bootstrap. Walk every gate either way.)
 ├─ NO  → STOP. Do not approve, do not reject, do not file a follow-up.
-│         → Cite the zero-hit grep
-│         → Return to the founder: wire it / delete it / build it anyway?
+│         → Post the grep, its positive control and any gate trace to pm_comments, headed STOP — UNREACHABLE
+│         → Handoff to PM: item to waiting_for_user; PM puts wire it / delete it / build it anyway?
+│           to the founder in SUMMARY slot 5. Only his answer releases the item
 │         → A prior ruling on this item does NOT carry past this point
-└─ YES → cite the caller (file:line), then:
+└─ YES → cite the caller or root (file:line). A hit is where the walk starts: discard test, type
+         and comment hits; every gate on the call needs a reachable writer, or it counts as NO. Then:
     Is the plan complete and correct?
     ├─ Yes, fully approved
     │   → Write approval to plan file
