@@ -168,6 +168,27 @@ interface ContactResponse {
    * contact — a no-op, not an error.
    */
   restored?: boolean;
+  /**
+   * BACKLOG-3354 — `contacts:import` only. Present only on `success: false`,
+   * and only when the import's write transaction COMMITTED before the failure.
+   * It lists every contact that call saved: existing-DB rows, then created,
+   * then already-claimed (the order `contacts` would have had). Absent means
+   * nothing was saved.
+   *
+   * "Present ⇒ committed" rests on one premise. This handler is an IPC entry
+   * point, so its `dbTransaction` is OUTERMOST and returns only after COMMIT.
+   * Nothing in the app holds a transaction across an await
+   * (`macOSMessagesImportService.ts` states and asserts the same premise). The
+   * ids are therefore assigned on the statement after `dbTransaction` returns,
+   * never inside the callback, where a later COMMIT failure would make them
+   * false (pinned by H-COMMIT in `contact-handlers.importAtomic-3220.test.ts`).
+   *
+   * Known gap: the failure that produces this field is a post-commit read,
+   * which throws before `reportImportLinking` and `runContactLinkingNow`. The
+   * duplicate-detection pass for that import waits for the next linking
+   * trigger.
+   */
+  savedContactIds?: string[];
 }
 
 /**
@@ -534,8 +555,8 @@ interface LinkImportOutcome {
  * swallowed throw COMMITS whatever ran before it: a contact marked imported
  * with no crosswalk row, or some of a source record's addresses copied and the
  * rest not. So it throws, the transaction rolls the whole import back, and the
- * handler returns `{ success: false }`. The renderer logs that failure; it does
- * not show one (BACKLOG-3354).
+ * handler returns `{ success: false }`, which the renderer shows as a toast
+ * (BACKLOG-3354).
  *
  * Every caller is inside `contacts:import`'s `dbTransaction`. Do not call it
  * outside one.
@@ -1966,6 +1987,9 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
       userId: string,
       contactsToImport: unknown[],
     ): Promise<ContactResponse> => {
+      // BACKLOG-3354: set only once the write transaction has committed; read
+      // by both catch returns. See `ContactResponse.savedContactIds`.
+      let savedContactIds: string[] | undefined;
       try {
         logService.info("[Main] Importing contacts", "Contacts", {
           userId,
@@ -2456,6 +2480,15 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           return { createdIds, claimedByExisting };
         });
 
+        // BACKLOG-3354: the transaction has committed. Assigned HERE, on the
+        // statement after `dbTransaction` returns and never inside its
+        // callback, so a failure in any read below can report what was saved.
+        savedContactIds = [
+          ...existingDbContacts.map((c) => c.id),
+          ...importWrites.createdIds,
+          ...importWrites.claimedByExisting.map((c) => c.contactId),
+        ];
+
         // BACKLOG-3220: every read happens after the commit, in the order
         // `importedContacts` has always had — existing-DB contacts, then the
         // contacts just created, then the already-claimed incumbents below.
@@ -2478,16 +2511,12 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
          * BACKLOG-2525 — return the INCUMBENT, so a repeat press lands on the
          * saved contact rather than failing.
          *
-         * `Contacts.tsx:826` throws when `result.contacts[0]` is absent
-         * (`result.error || "Failed to import contact"`). That throw is only
-         * LOGGED: `ContactSearchList.tsx:759-760` catches it and its `finally`
-         * clears the row's importing state. So returning nothing would make the
-         * second press fail SILENTLY — the row stays and nothing opens — on a
-         * screen where nothing is actually wrong: the person IS imported.
-         * Handing back the existing contact makes the second press land on the
-         * same card the first one opened. (Corrected by BACKLOG-3220: this used
-         * to say "visible failure". No import failure is shown to the user;
-         * BACKLOG-3354.)
+         * `Contacts.tsx` treats a response with no `result.contacts[0]` as a
+         * failure. Returning nothing would make the second press show
+         * "Couldn't import … — nothing was saved" (BACKLOG-3354) on a screen
+         * where nothing is actually wrong: the person IS imported. Handing back
+         * the existing contact makes the second press land on the same card the
+         * first one opened.
          */
         for (const claimed of importWrites.claimedByExisting) {
           const contact = await databaseService.getContactById(claimed.contactId);
@@ -2531,11 +2560,13 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           return {
             success: false,
             error: `Validation error: ${error.message}`,
+            ...(savedContactIds ? { savedContactIds } : {}),
           };
         }
         return {
           success: false,
           error: error instanceof Error ? error.message : "Unknown error",
+          ...(savedContactIds ? { savedContactIds } : {}),
         };
       }
     },

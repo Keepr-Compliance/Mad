@@ -170,7 +170,8 @@ export interface IpcChannels {
   };
   "contacts:import": {
     request: { userId: string; contactsToImport: NewContact[] };
-    response: { success: boolean; contacts?: Contact[]; error?: string };
+    /** BACKLOG-3354: `savedContactIds` — see `ContactResponse` in contactHandlers.ts. */
+    response: { success: boolean; contacts?: Contact[]; error?: string; savedContactIds?: string[] };
   };
   "contacts:forceReimport": {
     /**

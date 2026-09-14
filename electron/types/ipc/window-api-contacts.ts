@@ -142,7 +142,18 @@ export interface WindowApiContacts {
   import: (
     userId: string,
     contacts: NewContact[],
-  ) => Promise<{ success: boolean; contacts?: Contact[]; error?: string }>;
+  ) => Promise<{
+    success: boolean;
+    contacts?: Contact[];
+    error?: string;
+    /**
+     * BACKLOG-3354: present only on `success: false`, and only when the import
+     * committed before the failure — the ids of every contact it saved. Absent
+     * means nothing was saved. Full contract on `ContactResponse` in
+     * `electron/handlers/contactHandlers.ts`.
+     */
+    savedContactIds?: string[];
+  }>;
   /** Listen for import progress updates */
   onImportProgress: (
     callback: (progress: { current: number; total: number; percent: number }) => void
