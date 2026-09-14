@@ -28,6 +28,18 @@ export function saveOAuthTokenSync(
   purpose: OAuthPurpose,
   tokenData: Partial<OAuthToken>,
 ): string {
+  // BACKLOG-3286: a mailbox row without its address is the state this item
+  // exists to prevent. The statement below is an upsert, so a caller that omits
+  // the address does not merely skip it — it overwrites the stored one with
+  // NULL. Refuse before anything is written. Keyed on purpose and the address
+  // only: `mailbox_connected` has no readers, and a partial payload omits it.
+  const address = tokenData.connected_email_address;
+  if (purpose === "mailbox" && (address === undefined || address === null || address === "")) {
+    throw new DatabaseError(
+      "Refusing to save a mailbox token with no connected email address",
+    );
+  }
+
   const id = crypto.randomUUID();
 
   const statement = sql`

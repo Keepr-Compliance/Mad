@@ -2081,14 +2081,23 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
            * the create branch and the `markContactAsImported` branch cannot
            * disagree about the same record.
            *
-           * `null` means the value is neither storable nor a synthetic one this
-           * vocabulary knows how to place. THAT IS REFUSED, NOT DEFAULTED, and
-           * the refusal is deliberate: on this door an unrecognised string is
-           * refused TODAY (measured — it reaches the CHECK and the batch fails),
+           * `null` means the value cannot be stored, for one of two reasons:
+           *
+           *   - it is an unrecognised string — neither a `contacts.source` value
+           *     nor a synthetic one this vocabulary knows how to place;
+           *   - it is `email`, `sms` or `inferred`, which the CHECK admits but no
+           *     filter leaf can find on a saved contact, so storing one would
+           *     save a contact that is invisible under every filter setting
+           *     (BACKLOG-3193, `UNFILTERABLE_WHEN_SAVED_CONTACT_SOURCES`).
+           *
+           * THAT IS REFUSED, NOT DEFAULTED, and the refusal is deliberate. An
+           * unrecognised string was already refused on this door before
+           * BACKLOG-2481 (measured — it reached the CHECK and the batch failed),
            * and defaulting it to `contacts_app` would silently start claiming
            * that every unknown record came out of the macOS address book. The
-           * outcome is unchanged; only the message improves — a stated reason
-           * instead of a raw SQLite constraint error.
+           * three unfilterable values were stored verbatim until BACKLOG-3193;
+           * refusing them tells the caller at once, instead of re-labelling a
+           * record whose producer named a provenance.
            *
            * REFUSES THE WHOLE BATCH, like every other refusal in this loop. See
            * the note above `importRefusalReason`.
