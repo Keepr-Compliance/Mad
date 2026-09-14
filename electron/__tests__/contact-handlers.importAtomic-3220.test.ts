@@ -111,6 +111,8 @@ const probe = {
   writes: 0,
   labels: [] as string[],
   throwAt: -1,
+  /** The statement the forced failure actually fired at; -1 when none did. */
+  firedAt: -1,
   snapshotAt: -1,
   pre: null as string | null,
   post: null as string | null,
@@ -126,7 +128,10 @@ function boundary<T>(sqlText: string, kind: string, exec: () => T): T {
   probe.labels.push(
     `${probe.txDepth > 0 ? "tx" : "--"} ${kind} ${sqlText.replace(/\s+/g, " ").trim().slice(0, 60)}`,
   );
-  if (n === probe.throwAt) throw new Error(`forced failure at statement ${n}`);
+  if (n === probe.throwAt) {
+    probe.firedAt = n;
+    throw new Error(`forced failure at statement ${n}`);
+  }
   if (n === probe.snapshotAt && probe.snapshotFn) probe.pre = probe.snapshotFn();
   const result = exec();
   if (n === probe.snapshotAt && probe.snapshotFn) probe.post = probe.snapshotFn();
@@ -264,7 +269,7 @@ jest.mock("../services/contactLinkingScheduler", () => ({
 
 import { registerContactHandlers } from "../handlers/contactHandlers";
 
-const USER = "550e8400-e29b-41d4-a716-446655440000"; // pii-allow-uuid: the RFC 4122 example UUID, invented
+const USER = "550e8400-e29b-41d4-a716-446655440000"; // pii-allow-uuid: placeholder UUID shared with the sibling contact-handler suites (not in RFC 4122 or RFC 9562); invented, not from any live row
 const SHA = "075d0cc68";
 let dir = "";
 
@@ -515,6 +520,7 @@ function resetProbe(): void {
   probe.writes = 0;
   probe.labels = [];
   probe.throwAt = -1;
+  probe.firedAt = -1;
   probe.snapshotAt = -1;
   probe.pre = null;
   probe.post = null;
@@ -613,21 +619,25 @@ describe.each(SCENARIOS.map((make) => [make().name, make] as const))("%s", (_nam
   it("C2 error sweep: every statement fails once; BEFORE => failure, success => AFTER, never HALF", async () => {
     if (!clean.success) throw new Error(`sweep not run: clean run failed: ${clean.error}`);
     const violations: string[] = [];
-    let ran = 0;
+    const notFired: number[] = [];
     for (let n = 1; n <= total; n++) {
       openFresh();
       sc.seed(realDb!);
       resetProbe();
       probe.throwAt = n;
       const res = await runImport(sc);
-      ran++;
+      // The forced failure must have fired at statement n itself. Without this,
+      // a run that stopped before n, or a probe that no longer throws, reads as
+      // a clean pass. Stronger than `probe.count >= n`, which it implies: that
+      // form stays green when the throw is removed.
+      if (probe.firedAt !== n) notFired.push(n);
       const fin = jointState(realDb!, sc);
       const shape = fin === before ? "BEFORE" : fin === after ? "AFTER" : "HALF";
       if (shape === "HALF" || (shape === "BEFORE" && res.success !== false) || (res.success === true && shape !== "AFTER")) {
         violations.push(`#${n} (${labels[n - 1]}) success=${res.success} ${shape}`);
       }
     }
-    expect(ran).toBe(total);
+    expect(notFired).toEqual([]);
     expect(violations).toEqual([]);
   });
 });
