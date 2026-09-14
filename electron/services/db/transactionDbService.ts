@@ -976,10 +976,10 @@ function normalizeFrozenFieldValue(field: string, value: unknown): string {
 /**
  * Update transaction
  */
-export async function updateTransaction(
+export function updateTransactionSync(
   transactionId: string,
   updates: Partial<Transaction>,
-): Promise<void> {
+): void {
   // BACKLOG-2558 — there is no `allowedFields` array here any more.
   //
   // The 46-name array this replaces invented 11 columns that exist in no table
@@ -1127,6 +1127,24 @@ export async function updateTransaction(
     });
   }
 }
+
+/**
+ * BACKLOG-2547 — promise seam over the primitive.
+ *
+ * PLAIN `Promise.resolve`, NOT `async`, and deliberately a different shape from
+ * `createTransaction` (`async`) ~400 lines above. That is not drift: under an
+ * unawaited call inside a transaction body an `async` wrapper commits partial
+ * work while this one rolls back — measured on the shipping driver. The `async`
+ * anchor disclaims itself in its own comment as "NOT yet the plain shape
+ * BACKLOG-2960 rules for a seam export"; do not converge them backwards.
+ */
+export function updateTransaction(
+  transactionId: string,
+  updates: Partial<Transaction>,
+): Promise<void> {
+  return Promise.resolve(updateTransactionSync(transactionId, updates));
+}
+
 
 /**
  * BACKLOG-2013 — stamp the export-freeze marker (`first_exported_at`) write-once
