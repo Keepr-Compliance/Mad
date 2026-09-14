@@ -261,27 +261,16 @@ const ADDRESS_BOOK = ["manual", "contacts_app", "android_sync", "iphone", "outlo
 
 /**
  * The tables the imported-contacts read path touches beyond the identity
- * schema. DDL taken from `schema.sql`, not written here, so the fixture cannot
- * describe a table production does not have.
+ * schema. All four are built from their `CREATE TABLE` statements in
+ * `schema.sql`, not written here, so the fixture cannot describe a table
+ * production does not have.
  */
 function seedReadPathTables(): void {
-  mockDb!.exec(`
-    CREATE TABLE messages (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      channel TEXT,
-      direction TEXT,
-      participants TEXT,
-      sent_at DATETIME,
-      message_type TEXT,
-      associated_message_type INTEGER
-    );
-  `);
   const schema = (jest.requireActual("fs") as typeof import("fs")).readFileSync(
     (jest.requireActual("path") as typeof import("path")).join(__dirname, "..", "database", "schema.sql"),
     "utf8",
   );
-  for (const table of ["phone_last_message", "emails", "email_participants"]) {
+  for (const table of ["messages", "phone_last_message", "emails", "email_participants"]) {
     const ddl = schema.match(
       new RegExp(`CREATE TABLE IF NOT EXISTS "?${table}"? \\([\\s\\S]*?\\n\\s*\\);`),
     );
@@ -357,13 +346,13 @@ describe("contacts:create will not save a contact no filter can find (BACKLOG-31
  * `databaseService`, which this harness mocks. The source is decided once,
  * before the branch, so the refusal must fire before that call.
  *
- * THE SPY TARGET FOLLOWS WHICHEVER FACADE THE HANDLER CALLS. Today that is
- * `markContactAsImported`. BACKLOG-3220 moves the handler to a sync twin,
- * `markContactAsImportedSync`. After that rename the "not called" rows would
- * pass against a function nobody calls any more — so the positive CONTROL sits
- * in this same block: it asserts the SAME spy IS called for an address-book
- * value on the same branch. If the facade is renamed and this spy is not, the
- * CONTROL goes red, not green. Re-point both together.
+ * THE SPY TARGET FOLLOWS WHICHEVER FACADE THE HANDLER CALLS — today
+ * `markContactAsImported`. If the handler ever calls a differently named
+ * facade, the "not called" rows would pass against a function nobody calls any
+ * more. So the positive CONTROL sits in this same block: it asserts the SAME spy
+ * IS called for an address-book value on the same branch. If the facade is
+ * renamed and this spy is not, the CONTROL goes red, not green. Re-point both
+ * together.
  */
 describe("the isFromDatabase branch refuses before the import-marking write (BACKLOG-3193)", () => {
   const SAVED_ID = "saved-contact-3193";

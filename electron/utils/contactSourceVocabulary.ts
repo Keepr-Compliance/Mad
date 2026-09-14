@@ -125,7 +125,7 @@ export const MESSAGE_DERIVED_ONLY_SOURCES: readonly string[] = [
  * every box ticked, and not found by searching its own name — while
  * `contactSourceLabel` names it after a leaf that cannot find it.
  *
- * Nothing in the tree stores them today, but both doors used to accept all
+ * No door stores them today, but both doors used to accept all
  * three from a caller and store them verbatim. The first caller likely to send
  * one is an unsaved email-derived record spelled `email` or `inferred`: that
  * spelling lands on Inferred > From Email with no filter change, and pressing
