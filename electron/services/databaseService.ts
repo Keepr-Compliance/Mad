@@ -1648,8 +1648,31 @@ class DatabaseService implements IDatabaseService {
     return contactDb.getUnimportedContactsByUserId(userId);
   }
 
-  async markContactAsImported(contactId: string, source?: string): Promise<void> {
+  /** Synchronous: called inside `contacts:import`'s transaction (BACKLOG-3220). */
+  markContactAsImported(contactId: string, source?: string): void {
     return contactDb.markContactAsImported(contactId, source);
+  }
+
+  /**
+   * The synchronous email backfill, for callers inside a `dbTransaction`
+   * callback (BACKLOG-3220). The async `backfillContactEmails` below delegates
+   * to the same core; calling THAT inside a transaction loses its error path.
+   */
+  backfillContactEmailsSync(
+    contactId: string,
+    emails: string[],
+    source?: ContactInfoSource,
+  ): number {
+    return contactDb.backfillContactEmailsSync(contactId, emails, source);
+  }
+
+  /** The synchronous phone backfill — see `backfillContactEmailsSync`. */
+  backfillContactPhonesSync(
+    contactId: string,
+    phones: string[],
+    source?: ContactInfoSource,
+  ): number {
+    return contactDb.backfillContactPhonesSync(contactId, phones, source);
   }
 
   async backfillContactEmails(
