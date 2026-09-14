@@ -88,12 +88,28 @@ jest.mock("../../workers/contactWorkerPool", () => ({
   isPoolReady: jest.fn(() => false),
 }));
 jest.mock("axios");
+// For the email store path (R controls): the same three stand-ins as
+// emailSyncService.forceRecache-2856.test.ts — retries run once, the cache
+// window is fixed, and the derivation reprocess pass is a no-op.
+jest.mock("../networkResilience", () => ({
+  retryOnNetwork: (fn: () => Promise<unknown>) => fn(),
+  networkResilienceService: {},
+}));
+jest.mock("../../utils/preferenceHelper", () => ({
+  getEmailCacheDurationMonths: jest.fn().mockResolvedValue(12),
+  computeEmailCacheSinceDate: jest.fn(() => new Date("2026-01-01T00:00:00Z")),
+}));
+jest.mock("../emailDerivationReprocessService", () => ({
+  reprocessEmailDerivations: jest.fn().mockResolvedValue({ scanned: 0, rewritten: 0, unchanged: 0, batches: 0 }),
+}));
 
 import axios from "axios";
 import { setDb, setDbPath, setEncryptionKey } from "../db/core/dbConnection";
 import type outlookFetchServiceType from "../outlookFetchService";
 import type microsoftAuthServiceType from "../microsoftAuthService";
 import type connectionStatusServiceType from "../connectionStatusService";
+import type * as emailSyncModule from "../emailSyncService";
+import type { StoreableEmail } from "../emailSyncService";
 
 // Bypass the moduleNameMapper that rewrites the driver to the auto-mock.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -123,6 +139,9 @@ describe("a token refresh keeps the mailbox address (BACKLOG-3286)", () => {
   let outlookFetch: typeof outlookFetchServiceType;
   let microsoftAuth: typeof microsoftAuthServiceType;
   let connectionStatus: typeof connectionStatusServiceType;
+  let emailSync: typeof emailSyncModule;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let logMock: any;
 
   beforeAll(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "keepr-3286-address-"));
@@ -153,6 +172,8 @@ describe("a token refresh keeps the mailbox address (BACKLOG-3286)", () => {
     outlookFetch = require("../outlookFetchService").default;
     microsoftAuth = require("../microsoftAuthService").default;
     connectionStatus = require("../connectionStatusService").default;
+    emailSync = require("../emailSyncService");
+    logMock = require("../logService").default;
     /* eslint-enable @typescript-eslint/no-require-imports */
   });
 
@@ -174,6 +195,8 @@ describe("a token refresh keeps the mailbox address (BACKLOG-3286)", () => {
   beforeEach(() => {
     jest.restoreAllMocks();
     mockAxios.mockReset();
+    jest.clearAllMocks();
+    db.prepare("DELETE FROM emails WHERE user_id = ?").run(USER);
     db.prepare("DELETE FROM oauth_tokens WHERE user_id = ?").run(USER);
   });
 
@@ -451,6 +474,188 @@ describe("a token refresh keeps the mailbox address (BACKLOG-3286)", () => {
       });
       expect(row()?.connected_email_address).toBe(ADDRESS);
       expect(row()?.access_token).toBe("connect-access");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // R — a row that already lost its address is repaired before a store reads it
+  // -------------------------------------------------------------------------
+  const PROFILE_PATH = "/me?$select=mail,userPrincipalName";
+
+  /** Graph stand-in: the profile request answers from `profile`; everything else is empty. */
+  function graph(profile: (attempt: number) => Promise<unknown>): { profileAttempts: () => number } {
+    let attempts = 0;
+    mockAxios.mockImplementation((config: { url?: string }) => {
+      if (String(config.url).endsWith(PROFILE_PATH)) {
+        attempts++;
+        return profile(attempts);
+      }
+      return Promise.resolve({ data: { value: [], "@odata.count": 0 } });
+    });
+    return { profileAttempts: () => attempts };
+  }
+  const profileOk = () => Promise.resolve({ data: { mail: ADDRESS, userPrincipalName: ADDRESS } });
+  const httpError = (status: number) => Promise.reject({ response: { status }, message: `HTTP ${status}` });
+
+  /**
+   * An email the user SENT, in the shape the fetch services hand to the store
+   * (fixture shape from emailSyncService.forceRecache-2856.test.ts). Its
+   * direction can only be "outbound" if the store knows the mailbox address.
+   */
+  function sentEmail(n: number): StoreableEmail {
+    return {
+      id: `sent-3286-${n}`,
+      threadId: `thread-3286-${n}`,
+      subject: `Sent ${n}`,
+      from: ADDRESS,
+      to: "recipient@example.invalid",
+      cc: null,
+      bcc: null,
+      body: "<p>Hello</p>",
+      bodyPlain: "Hello",
+      date: new Date("2026-03-02T10:00:00Z"),
+      messageIdHeader: `<sent-3286-${n}@example.invalid>`,
+      hasAttachments: false,
+      attachmentCount: 0,
+      attachments: [],
+      participants: [
+        { role: "from", position: 0, email_address: ADDRESS, display_name: null },
+        { role: "to", position: 0, email_address: "recipient@example.invalid", display_name: null },
+      ],
+    } as StoreableEmail;
+  }
+
+  function storedDirection(externalId: string): string | null | "(no row)" {
+    const stored = db
+      .prepare("SELECT direction FROM emails WHERE user_id = ? AND external_id = ?")
+      .get(USER, externalId) as { direction: string | null } | undefined;
+    return stored === undefined ? "(no row)" : stored.direction;
+  }
+
+  /** Every log call's arguments, flattened, for the "no address in logs" check. */
+  function loggedText(): string {
+    return ["info", "warn", "error", "debug"]
+      .flatMap((level) => (logMock[level] as jest.Mock).mock.calls)
+      .map((args) => JSON.stringify(args))
+      .join("\n");
+  }
+
+  describe("R1: a sync entry repairs the address before the store reads it", () => {
+    it("restores the address and stores a sent email as outbound", async () => {
+      seedMailbox({ address: null, scopes: null });
+      graph(profileOk);
+      await outlookFetch.initialize(USER);
+      await emailSync.storeParsedEmailsForAccount({ userId: USER, provider: "outlook", emails: [sentEmail(1)] });
+      expect(row()?.connected_email_address).toBe(ADDRESS);
+      expect(storedDirection("sent-3286-1")).toBe("outbound");
+      expect(loggedText()).not.toContain(ADDRESS);
+    });
+
+    it("R1-pos: with the address already present, the same email is outbound (the fixture can pass)", async () => {
+      seedMailbox({ address: ADDRESS, scopes: SEEDED_SCOPES });
+      const calls = graph(profileOk);
+      await outlookFetch.initialize(USER);
+      await emailSync.storeParsedEmailsForAccount({ userId: USER, provider: "outlook", emails: [sentEmail(2)] });
+      expect(storedDirection("sent-3286-2")).toBe("outbound");
+      expect(calls.profileAttempts()).toBe(0);
+    });
+  });
+
+  describe("R2: the post-login precache repairs the address with no expiry and no connection check", () => {
+    async function precacheWith(address: string | null, email: StoreableEmail): Promise<void> {
+      seedMailbox({ address, scopes: address ? SEEDED_SCOPES : null });
+      graph(profileOk);
+      jest.spyOn(outlookFetch, "searchEmails").mockResolvedValue([email] as never);
+      jest.spyOn(outlookFetch, "searchAllFolders").mockResolvedValue([] as never);
+      jest.spyOn(outlookFetch, "getAttachments").mockResolvedValue([]);
+      const checkSpy = jest.spyOn(connectionStatus, "checkMicrosoftConnection");
+      await emailSync.default.precacheEmails(USER);
+      expect(checkSpy).not.toHaveBeenCalled();
+    }
+
+    it("restores the address and stores a sent email as outbound", async () => {
+      await precacheWith(null, sentEmail(3));
+      expect(row()?.connected_email_address).toBe(ADDRESS);
+      expect(storedDirection("sent-3286-3")).toBe("outbound");
+    });
+
+    it("R2-pos: with the address already present, the same email is outbound (the fixture can pass)", async () => {
+      await precacheWith(ADDRESS, sentEmail(4));
+      expect(storedDirection("sent-3286-4")).toBe("outbound");
+    });
+  });
+
+  describe("R3: the repair is one best-effort attempt", () => {
+    /** Drive a promise to completion under fake timers, advancing them rather than waiting. */
+    async function settle<T>(promise: Promise<T>): Promise<T> {
+      let settled = false;
+      promise.then(
+        () => { settled = true; },
+        () => { settled = true; },
+      );
+      for (let i = 0; i < 400 && !settled; i++) {
+        await jest.advanceTimersByTimeAsync(5_000);
+      }
+      expect(settled).toBe(true);
+      return promise;
+    }
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it("a failing profile request is tried once, initialize still succeeds, and the sync still stores", async () => {
+      seedMailbox({ address: null, scopes: null });
+      const calls = graph(() => httpError(500));
+      jest.useFakeTimers();
+      const ready = await settle(outlookFetch.initialize(USER));
+      jest.useRealTimers();
+
+      expect(calls.profileAttempts()).toBe(1);
+      expect(ready).toBe(true);
+      expect(row()?.connected_email_address ?? null).toBeNull();
+      expect(logMock.warn).toHaveBeenCalledWith(
+        "Mailbox address repair failed; continuing without it",
+        "OutlookFetch",
+        expect.anything(),
+      );
+
+      await emailSync.storeParsedEmailsForAccount({ userId: USER, provider: "outlook", emails: [sentEmail(5)] });
+      expect(storedDirection("sent-3286-5")).toBeNull();
+    });
+
+    it("after a 401 and a refresh, the retried profile request is also tried once", async () => {
+      seedMailbox({ address: null, scopes: null });
+      const calls = graph((attempt) => (attempt === 1 ? httpError(401) : httpError(500)));
+      const refreshSpy = jest.spyOn(microsoftAuth, "refreshToken").mockResolvedValue(refreshResponse());
+      jest.useFakeTimers();
+      const ready = await settle(outlookFetch.initialize(USER));
+      jest.useRealTimers();
+
+      expect(refreshSpy).toHaveBeenCalledTimes(1);
+      expect(calls.profileAttempts()).toBe(2);
+      expect(ready).toBe(true);
+    });
+  });
+
+  describe("R4: the repair runs with the loaded row's tokens", () => {
+    it("a 401 on the profile request refreshes with the stored refresh token and the address is restored", async () => {
+      seedMailbox({ address: null, scopes: null });
+      // Clear what an earlier initialize left on the shared service instance, so
+      // only this row's tokens can make the refresh possible.
+      Object.assign(outlookFetch as unknown as Record<string, unknown>, {
+        accessToken: null,
+        refreshToken: null,
+        tokenId: null,
+      });
+      graph((attempt) => (attempt === 1 ? httpError(401) : profileOk()));
+      const refreshSpy = jest.spyOn(microsoftAuth, "refreshToken").mockResolvedValue(refreshResponse());
+
+      await outlookFetch.initialize(USER);
+
+      expect(refreshSpy).toHaveBeenCalledWith("stored-refresh");
+      expect(row()?.connected_email_address).toBe(ADDRESS);
+      expect(row()?.access_token).toBe("refreshed-access");
     });
   });
 });

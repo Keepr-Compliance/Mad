@@ -407,6 +407,14 @@ class OutlookFetchService {
       this.refreshToken = tokenRecord.refresh_token || null;
       this.tokenId = tokenRecord.id;
 
+      // BACKLOG-3286: every Outlook store path calls `initialize` before it
+      // reads the mailbox address to set each email's direction. A row that
+      // lost its address is repaired here, before that read. Runs only after
+      // the id and both tokens above are set, so a 401 can reach the refresh.
+      if (!tokenRecord.connected_email_address) {
+        await this.repairMissingMailboxAddress(tokenRecord.id);
+      }
+
       logService.debug("Initialized successfully", "OutlookFetch");
       return true;
     } catch (error) {
@@ -415,6 +423,52 @@ class OutlookFetchService {
         tags: { service: "outlook-fetch", operation: "initialize" },
       });
       throw error;
+    }
+  }
+
+  /**
+   * BACKLOG-3286: restore the address of the loaded mailbox row from the
+   * signed-in account's own profile. Best-effort: a failure is logged and the
+   * caller carries on, so emails stored in that sync get no direction and the
+   * next `initialize` tries again.
+   *
+   * One attempt only (`maxRetries: 0`). This runs inside `initialize`, ahead of
+   * every Outlook sync, so the default retry schedule would hold each sync for
+   * over half a minute when the request keeps failing.
+   */
+  private async repairMissingMailboxAddress(tokenId: string): Promise<void> {
+    try {
+      const profile = await this._graphRequest<{
+        mail?: string | null;
+        userPrincipalName?: string | null;
+      }>(
+        "/me?$select=mail,userPrincipalName",
+        "GET",
+        null,
+        false,
+        undefined,
+        undefined,
+        { maxRetries: 0 },
+      );
+      // Same mapping the Microsoft connect uses.
+      const address = profile?.mail || profile?.userPrincipalName;
+      if (!address) {
+        logService.warn(
+          "Mailbox address repair: the profile carried no address",
+          "OutlookFetch",
+        );
+        return;
+      }
+      await databaseService.updateOAuthToken(tokenId, {
+        connected_email_address: address,
+      });
+      logService.info("Mailbox address repaired from Graph", "OutlookFetch");
+    } catch (error) {
+      logService.warn(
+        "Mailbox address repair failed; continuing without it",
+        "OutlookFetch",
+        { error: error instanceof Error ? error.message : String(error) },
+      );
     }
   }
 
@@ -438,6 +492,10 @@ class OutlookFetchService {
     // BACKLOG-2856: the caller's cancellation signal. Optional, and every
     // existing caller omits it — only the pre-cache paths thread one through.
     signal?: AbortSignal,
+    // BACKLOG-3286: a retry-count override for one caller (the address repair).
+    // Every other caller omits it and keeps the default schedule below. It is
+    // passed on to the request retried after a token refresh.
+    retryOverride?: Pick<RetryOptions, "maxRetries">,
   ): Promise<T> {
     // BACKLOG-2856: checked BEFORE the throttler and again after it. The
     // throttler can hold a request for hundreds of milliseconds, so a cancel
@@ -449,7 +507,7 @@ class OutlookFetchService {
     throwIfCancelled(signal, `graphRequest:${endpoint}`);
 
     const retryOptions: RetryOptions = {
-      maxRetries: 5,
+      maxRetries: retryOverride?.maxRetries ?? 5,
       baseDelay: 1000,
       maxDelay: 30000,
       context: "OutlookFetch",
@@ -583,7 +641,7 @@ class OutlookFetchService {
 
               logService.info("Token refreshed successfully", "OutlookFetch");
               // Retry the request with new token (mark as retry to avoid infinite loop)
-              return this._graphRequest<T>(endpoint, method, data, true, extraHeaders, signal);
+              return this._graphRequest<T>(endpoint, method, data, true, extraHeaders, signal, retryOverride);
             } catch (refreshError) {
               logService.error("Token refresh failed", "OutlookFetch", {
                 error: refreshError,
