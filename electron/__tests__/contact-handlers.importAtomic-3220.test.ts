@@ -299,7 +299,11 @@ const USER = "550e8400-e29b-41d4-a716-446655440000"; // pii-allow-uuid: placehol
 const SHA = "075d0cc68";
 let dir = "";
 
-function openFresh(): void {
+function workFile(): string {
+  return path.join(dir, "import-atomic.db");
+}
+
+function closeBoth(): void {
   try {
     observer?.close();
   } catch {
@@ -310,10 +314,18 @@ function openFresh(): void {
   } catch {
     /* already closed */
   }
-  const file = path.join(dir, "import-atomic.db");
+}
+
+function removeDbFiles(file: string): void {
   for (const f of [file, `${file}-journal`, `${file}-wal`, `${file}-shm`]) {
     fs.rmSync(f, { force: true });
   }
+}
+
+function openFresh(): void {
+  closeBoth();
+  const file = workFile();
+  removeDbFiles(file);
   realDb = openTestDb(file);
   realDb.exec(CONTACT_IDENTITY_SCHEMA);
   // Transcribed from electron/database/schema.sql (the `contacts` block). The
@@ -321,6 +333,41 @@ function openFresh(): void {
   // refuses a non-constant default on a table that already has rows, so this
   // runs BEFORE any seeding.
   realDb.exec("ALTER TABLE contacts ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP");
+  observer = openTestDb(file);
+}
+
+/**
+ * The scenario's starting database, built ONCE per scenario: `openFresh()` and
+ * the seed, exactly as each run used to build its own, then both connections
+ * closed and the file copied aside.
+ *
+ * Why: building it is one autocommit transaction per statement (13 schema
+ * statements, the ALTER, every seed row; 20 for S4), each with its own journal
+ * file and syncs. The sweeps repeated that before every statement they sweep,
+ * and it was most of their cost. With `PRAGMA fullfsync = ON` as a stand-in for
+ * a filesystem where syncs are expensive, building took 13.4 s of the 14.3 s
+ * timed inside S4's crash sweep (BACKLOG-3220).
+ */
+function buildTemplate(sc: Scenario, template: string): void {
+  openFresh();
+  sc.seed(realDb!);
+  closeBoth();
+  removeDbFiles(template);
+  fs.copyFileSync(workFile(), template);
+}
+
+/**
+ * Every run starts from a byte copy of the scenario's template, on two NEW
+ * connections, so the database the handler and the observer open is identical
+ * to the one `openFresh()` plus the seed produced. Still file-backed, still two
+ * connections, and the import still commits for real.
+ */
+function openFromTemplate(template: string): void {
+  closeBoth();
+  const file = workFile();
+  removeDbFiles(file);
+  fs.copyFileSync(template, file);
+  realDb = openTestDb(file);
   observer = openTestDb(file);
 }
 
@@ -626,8 +673,9 @@ it("H-COMMIT (BACKLOG-3354): the outermost transaction fails after its callback 
   }).toEqual({ success: false, hasSavedContactIds: false, stateUnchanged: true });
 });
 
-describe.each(SCENARIOS.map((make) => [make().name, make] as const))("%s", (_name, make) => {
+describe.each(SCENARIOS.map((make, i) => [make().name, make, i] as const))("%s", (_name, make, i) => {
   const sc = make();
+  let template = "";
   let before = "";
   let after = "";
   let total = 0;
@@ -636,8 +684,9 @@ describe.each(SCENARIOS.map((make) => [make().name, make] as const))("%s", (_nam
   let clean: ImportResult = { success: false, error: "not run" };
 
   beforeAll(async () => {
-    openFresh();
-    sc.seed(realDb!);
+    template = path.join(dir, `template-${i}.db`);
+    buildTemplate(sc, template);
+    openFromTemplate(template);
     before = jointState(realDb!, sc);
     resetProbe();
     clean = await runImport(sc);
@@ -661,8 +710,7 @@ describe.each(SCENARIOS.map((make) => [make().name, make] as const))("%s", (_nam
     const violations: string[] = [];
     let fired = 0;
     for (let n = 1; n <= total; n++) {
-      openFresh();
-      sc.seed(realDb!);
+      openFromTemplate(template);
       resetProbe();
       probe.snapshotAt = n;
       probe.snapshotFn = () => jointState(observer!, sc);
@@ -681,8 +729,7 @@ describe.each(SCENARIOS.map((make) => [make().name, make] as const))("%s", (_nam
     const notFired: number[] = [];
     let failedRuns = 0;
     for (let n = 1; n <= total; n++) {
-      openFresh();
-      sc.seed(realDb!);
+      openFromTemplate(template);
       resetProbe();
       probe.throwAt = n;
       const res = await runImport(sc);
