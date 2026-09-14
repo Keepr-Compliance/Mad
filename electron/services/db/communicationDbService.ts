@@ -364,7 +364,7 @@ export async function deleteCommunication(communicationId: string): Promise<void
  * Delete communication by message_id
  * Used when unlinking messages from a transaction - removes the communications table reference
  */
-export async function deleteCommunicationByMessageId(messageId: string): Promise<void> {
+export function deleteCommunicationByMessageIdSync(messageId: string): void {
   // BACKLOG-506 (TASK-1307): Get the transaction ID before deleting.
   // Check if the message is a text type to update thread count.
   const comm = dbGet<{ transaction_id: string | null }>(
@@ -386,6 +386,21 @@ export async function deleteCommunicationByMessageId(messageId: string): Promise
     }
   }
 }
+
+/**
+ * BACKLOG-2547 — the promise-returning seam over the synchronous primitive.
+ *
+ * PLAIN `Promise.resolve`, NOT `async`. Measured on the shipping driver: under
+ * an unawaited call inside a transaction body, an `async` wrapper swallows the
+ * throw into a rejected promise, the callback returns normally and the
+ * transaction COMMITS partial work; this shape evaluates the primitive as the
+ * argument to `Promise.resolve`, so the throw escapes the body synchronously
+ * and SQLite rolls back. It fails closed where `async` fails open.
+ */
+export function deleteCommunicationByMessageId(messageId: string): Promise<void> {
+  return Promise.resolve(deleteCommunicationByMessageIdSync(messageId));
+}
+
 
 /**
  * Link communication to transaction
@@ -421,9 +436,9 @@ export async function linkCommunicationToTransaction(
  * Add a communication to the ignored list for a transaction
  * This prevents the email from being re-added during future scans
  */
-export async function addIgnoredCommunication(
+export function addIgnoredCommunicationSync(
   data: NewIgnoredCommunication,
-): Promise<IgnoredCommunication> {
+): IgnoredCommunication {
   const id = crypto.randomUUID();
 
   // BACKLOG-2632: persist ignored_at EXPLICITLY instead of leaning on the column
@@ -487,6 +502,15 @@ export async function addIgnoredCommunication(
 
   return ignoredComm;
 }
+
+/** BACKLOG-2547 — promise seam over the primitive. Plain, not `async`; see
+ *  `deleteCommunicationByMessageId` for the measurement behind that. */
+export function addIgnoredCommunication(
+  data: NewIgnoredCommunication,
+): Promise<IgnoredCommunication> {
+  return Promise.resolve(addIgnoredCommunicationSync(data));
+}
+
 
 /**
  * Get all ignored communications for a transaction
@@ -1058,10 +1082,10 @@ export async function createThreadCommunicationReference(
  * @param threadId - The thread identifier
  * @param transactionId - The transaction to unlink from
  */
-export async function deleteCommunicationByThread(
+export function deleteCommunicationByThreadSync(
   threadId: string,
   transactionId: string,
-): Promise<void> {
+): void {
   const statement = sql`
     DELETE FROM communications
     WHERE thread_id = ? AND transaction_id = ?
@@ -1071,6 +1095,16 @@ export async function deleteCommunicationByThread(
   // BACKLOG-396: Thread-based unlinking is always for text messages, update count
   updateTransactionThreadCountInternal(transactionId);
 }
+
+/** BACKLOG-2547 — promise seam over the primitive. Plain, not `async`; see
+ *  `deleteCommunicationByMessageId` for the measurement behind that. */
+export function deleteCommunicationByThread(
+  threadId: string,
+  transactionId: string,
+): Promise<void> {
+  return Promise.resolve(deleteCommunicationByThreadSync(threadId, transactionId));
+}
+
 
 /**
  * Check if a thread is already linked to a transaction.
