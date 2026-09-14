@@ -172,6 +172,7 @@ import { registerContactHandlers } from "../handlers/contactHandlers";
 import { unlinkContactSource } from "../services/contactProvenance";
 import { createLink } from "../services/db/contactSourceLinkDbService";
 import { resolveSourceRecord } from "../services/contactSourceLinker";
+import { contactInfoSourceFor } from "../utils/contactValueProvenance";
 
 const USER = "550e8400-e29b-41d4-a716-446655440000";
 const mockEvent = {} as IpcMainInvokeEvent;
@@ -295,16 +296,43 @@ describe("the manual Add Contact form records its values as hand-typed", () => {
     expect(rows.phones.map((p) => p.source)).toEqual(["import"]);
   });
 
-  it("carries 'inferred' through rather than flattening it to 'import'", async () => {
+  /**
+   * The value-provenance MAPPING still carries `inferred` through rather than
+   * flattening it to `import`.
+   *
+   * Asserted on the function, not through `contacts:create`, since BACKLOG-3193:
+   * the door no longer stores `contacts.source = 'inferred'` (a saved contact
+   * with that source matches no filter leaf), so no create reaches this branch.
+   * The mapping is kept, and pinned here, for a future caller that passes value
+   * provenance on its own — which a confirmed email-derived person may need.
+   */
+  it("carries 'inferred' through rather than flattening it to 'import'", () => {
+    expect(contactInfoSourceFor("inferred")).toBe("inferred");
+    expect(contactInfoSourceFor("manual")).toBe("manual");
+    expect(contactInfoSourceFor("outlook")).toBe("import");
+  });
+
+  /**
+   * BACKLOG-3193 — what `contacts:create` does with `inferred` now: stores the
+   * contact as `manual`, its rule for a value it cannot store, and so stamps
+   * the typed email `manual` as well. That is the safe direction per
+   * `contactValueProvenance.ts`: a value treated as typed is never deleted by an
+   * unlink.
+   */
+  it("stores an 'inferred' create as manual, and stamps its email manual", async () => {
     const handler = registeredHandlers.get("contacts:create");
     const result = await handler(mockEvent, USER, {
       name: "Inferred Person",
       email: "seen@inmessages.com",
       source: "inferred",
     });
+    if (!result.success) throw new Error(`contacts:create failed: ${result.error}`);
 
+    expect(
+      mockDb!.prepare("SELECT source FROM contacts WHERE id = ?").get(result.contact.id),
+    ).toEqual({ source: "manual" });
     expect(valueRows(result.contact.id).emails).toEqual([
-      { email: "seen@inmessages.com", source: "inferred" },
+      { email: "seen@inmessages.com", source: "manual" },
     ]);
   });
 });
