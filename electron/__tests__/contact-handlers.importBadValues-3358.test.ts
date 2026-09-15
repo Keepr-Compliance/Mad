@@ -747,7 +747,10 @@ describe("E the Sentry warning", () => {
     expect(mockSentryScope.processors).toHaveLength(1);
     const out = mockSentryScope.processors[0]({
       message: "m",
-      breadcrumbs: [{ category: "console", message: "x", data: { arguments: ["x"] } }],
+      breadcrumbs: [
+        { category: "console", message: "x", data: { arguments: ["x"] } },
+        { category: "electron", message: "app.ready" },
+      ],
     });
     expect(out).toBeTruthy();
     expect(out.breadcrumbs ?? []).toEqual([]);
