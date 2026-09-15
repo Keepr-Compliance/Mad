@@ -2526,14 +2526,21 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
          * call, not per record.
          */
         if (importAdjustments.recordsAdjusted > 0) {
-          Sentry.captureMessage("Contact import saved values that used to block it", {
-            level: "warning",
-            tags: { area: "contacts", operation: "import-lenient" },
-            extra: {
-              recordsInCall: contactsToImport.length,
-              ...importAdjustments,
-              fields: adjustedFieldNames(importAdjustments),
-            },
+          // BACKLOG-3358: this event is sent without breadcrumbs.
+          Sentry.withScope((scope) => {
+            scope.addEventProcessor((event) => {
+              delete event.breadcrumbs;
+              return event;
+            });
+            Sentry.captureMessage("Contact import saved values that used to block it", {
+              level: "warning",
+              tags: { area: "contacts", operation: "import-lenient" },
+              extra: {
+                recordsInCall: contactsToImport.length,
+                ...importAdjustments,
+                fields: adjustedFieldNames(importAdjustments),
+              },
+            });
           });
         }
 

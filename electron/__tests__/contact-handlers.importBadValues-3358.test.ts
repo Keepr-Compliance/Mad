@@ -68,7 +68,12 @@ const mockSwitches = {
   failNextEmailInsertAfterBatch: false,
   /** Resolved by the phone-backfill spy — see `relaunchBackfill`. */
   afterBackfillPhones: null as null | (() => void),
+  /** Set by the batch spy; the OUTERMOST transaction throws after its callback returns. */
+  failOuterCommit: false,
+  armOuterCommitFromBatch: false,
 };
+let mockTxDepth = 0;
+const mockSentryScope = { inScope: false, processors: [] as Array<(e: any) => any> };
 
 const registeredHandlers = new Map<string, any>();
 
@@ -92,7 +97,22 @@ jest.mock("../services/db/core/dbConnection", () => ({
     const r = mockDb!.prepare(sql).run(...(params as never[]));
     return { lastInsertRowid: r.lastInsertRowid, changes: r.changes };
   },
-  dbTransaction: <T>(fn: () => T): T => mockDb!.transaction(fn)(),
+  dbTransaction: <T>(fn: () => T): T => {
+    const outer = mockTxDepth === 0;
+    mockTxDepth++;
+    try {
+      return mockDb!.transaction(() => {
+        const r = fn();
+        if (outer && mockSwitches.failOuterCommit) {
+          mockSwitches.failOuterCommit = false;
+          throw new Error("test: commit failed");
+        }
+        return r;
+      })();
+    } finally {
+      mockTxDepth--;
+    }
+  },
   getDbPath: () => "/fake/path/mad.db",
   getEncryptionKey: () => "fake-key",
 }));
@@ -128,6 +148,10 @@ jest.mock("../services/databaseService", () => {
           throw new Error("database is locked");
         }
         const ids = real.createContactsBatch(rows);
+        if (mockSwitches.armOuterCommitFromBatch) {
+          mockSwitches.armOuterCommitFromBatch = false;
+          mockSwitches.failOuterCommit = true;
+        }
         if (mockSwitches.failNextEmailInsertAfterBatch) {
           mockSwitches.failNextEmailInsertAfterBatch = false;
           mockDb!.exec("INSERT INTO fail_email_insert_arm (v) VALUES (1)");
@@ -143,7 +167,15 @@ jest.mock("../services/databaseService", () => {
 });
 
 jest.mock("@sentry/electron/main", () => ({
-  captureMessage: jest.fn(),
+  withScope: jest.fn((cb: (scope: any) => unknown) => {
+    mockSentryScope.inScope = true;
+    try {
+      return cb({ addEventProcessor: (p: (e: any) => any) => mockSentryScope.processors.push(p) });
+    } finally {
+      mockSentryScope.inScope = false;
+    }
+  }),
+  captureMessage: jest.fn((..._args: unknown[]) => ({ inScope: mockSentryScope.inScope })),
   captureException: jest.fn(),
   addBreadcrumb: jest.fn(),
 }));
@@ -325,6 +357,10 @@ beforeEach(() => {
   mockSwitches.batchThrows = false;
   mockSwitches.failNextEmailInsertAfterBatch = false;
   mockSwitches.afterBackfillPhones = null;
+  mockSwitches.failOuterCommit = false;
+  mockSwitches.armOuterCommitFromBatch = false;
+  mockTxDepth = 0;
+  mockSentryScope.processors = [];
   captureMessage.mockClear();
   (SentryMock as any).captureException.mockClear();
   (SentryMock as any).addBreadcrumb.mockClear();
@@ -675,6 +711,47 @@ describe("E the Sentry warning", () => {
     expect(r.success).toBe(true);
     expect(state().emails).toContain("avery.extra@example.com");
     expect(importEvents()).toHaveLength(1);
+  });
+
+  it("E2d an adjusted import whose OUTER transaction fails after its callback returns (commit failure): nothing saved, no event", async () => {
+    seedMac("AB-3358-E2d", "Pat Riverton", ["name@localhost", "avery@example.com"]);
+    const row = await pickerRow("AB-3358-E2d");
+    mockSwitches.armOuterCommitFromBatch = true;
+    const r = await call("contacts:import", USER, [row]);
+    const logged = (logServiceMock.error as jest.Mock).mock.calls.map((c: any[]) =>
+      String(c[2]?.error?.message ?? c[2]?.error ?? ""),
+    );
+    expect(logged.some((m) => m.includes("test: commit failed"))).toBe(true);
+    expect(batchSpy).toHaveBeenCalledTimes(1);
+    expect(r.success).toBe(false);
+    expect(state().contacts).toHaveLength(0);
+    expect(importEvents()).toHaveLength(0);
+  });
+
+  it("E1m the event message is exactly the fixed sentence", async () => {
+    seedMac("AB-3358-E1m", "Pat Riverton", ["name@localhost", "avery@example.com"]);
+    const r = await call("contacts:import", USER, [await pickerRow("AB-3358-E1m")]);
+    expect(r.success).toBe(true);
+    const ev = captureMessage.mock.calls.filter((c) => (c[1] as any)?.tags?.operation === "import-lenient");
+    expect(ev).toHaveLength(1);
+    expect(ev[0][0]).toBe("Contact import saved values that used to block it");
+  });
+
+  it("E4 the event is captured inside withScope, whose processor drops every breadcrumb", async () => {
+    seedMac("AB-3358-R4", "Pat Riverton", ["name@localhost", "avery@example.com"]);
+    const r = await call("contacts:import", USER, [await pickerRow("AB-3358-R4")]);
+    expect(r.success).toBe(true);
+    expect(importEvents()).toHaveLength(1);
+    const idx = captureMessage.mock.calls.findIndex((c) => /used to block it/.test(String(c[0])));
+    expect(captureMessage.mock.results[idx].value).toEqual({ inScope: true });
+    expect(mockSentryScope.processors).toHaveLength(1);
+    const out = mockSentryScope.processors[0]({
+      message: "m",
+      breadcrumbs: [{ category: "console", message: "x", data: { arguments: ["x"] } }],
+    });
+    expect(out).toBeTruthy();
+    expect(out.breadcrumbs ?? []).toEqual([]);
+    expect(out.message).toBe("m");
   });
 
   it("E3 nothing adjusted: no event", async () => {
