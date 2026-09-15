@@ -44,7 +44,7 @@ $H "$URL" teardown      # takes the txn-mutant's partial state back off
 $H "$URL" apply         # migration 1 + its history row
 $H "$URL" twice         # apply-twice control and its mutant
 $H "$URL" controls      # 14 controls, each in its own rolled-back transaction
-$H "$URL" mutants       # 19 SQL mutants x 14 controls, plus the backfill mutant
+$H "$URL" mutants       # 20 SQL mutants x 14 controls, plus the backfill mutant
 
 # PostgREST response fixtures (pre = before apply, post = after):
 psql "$URL" -f supabase/tests/backlog-3364/postgrest/seed.sql
@@ -129,7 +129,7 @@ Each runs inside `BEGIN … ROLLBACK` after `lib/fixtures.sql`. RLS cases run as
 | `s-a` | ensure ×2 → 1 org, 1 plan row (default individual plan), 1 membership agent/active; max_seats 1, JIT off, legacy plan `trial`; no license → nothing; NULL → nothing | 24 |
 | `s-b` | active **and** suspended brokerage member → nothing | 6 |
 | `s-c` | unexpired invite, and NULL-expiry invite in other case with a trailing space → nothing; expired invite → created | 7 |
-| `s-d` | brokerage membership INSERT, and invite claimed by UPDATE via the real `claim_pending_invite()` as the user → personal membership removed, org and plan kept; unclaimed invite row removes nothing; a second brokerage leaves the first | 14 |
+| `s-d` | brokerage membership INSERT, and invite claimed by UPDATE via the real `claim_pending_invite()` as the user → personal membership removed, org and plan kept; unclaimed invite row removes nothing; a second brokerage leaves the first; another user's personal membership is kept through all of those writes | 17 |
 | `s-e` | leave the brokerage → ensure re-attaches the same org and plan row | 7 |
 | `s-f` | submission INSERT: personal agent into own personal org denied by RLS; brokerage agent into brokerage allowed | 5 |
 | `s-g` | upload INSERT on `storage.objects`: personal prefix denied by RLS; brokerage prefix allowed | 6 |
@@ -169,6 +169,7 @@ before any control runs; `run.sh` refuses a result without it. Every mutant was 
 | m17 attaches to an occupied org | s-k2 | returned `attached` |
 | m18 internal function granted to authenticated | s-i | authenticated has no EXECUTE |
 | m19 wrapper takes a user id | s-j, s-i, c9 | wrapper takes no arguments (s-i, c9 red on the missing zero-argument signature) |
+| m20 retirement DELETE without the user filter | s-d | another user's personal membership kept when a user joins a brokerage |
 | b01 backfill without the invite skip | b-backfill | user with an EXPIRED unclaimed invite was skipped |
 
 ## Text test (CI) — made to fail before being trusted

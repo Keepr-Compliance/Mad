@@ -6,7 +6,8 @@
 --       called as the signed-in user;
 -- and the negatives:
 --   (3) inserting an UNCLAIMED invite row (user_id NULL) removes nothing;
---   (4) joining a second brokerage leaves the first brokerage membership alone.
+--   (4) joining a second brokerage leaves the first brokerage membership alone;
+--   (5) another user's personal membership stays through every write above.
 
 DO $control$
 DECLARE
@@ -15,10 +16,18 @@ DECLARE
   k_two     uuid := current_setting('t3364.u_two_brk')::uuid;
   k_brk_a   uuid := current_setting('t3364.o_brk_a')::uuid;
   k_brk_b   uuid := current_setting('t3364.o_brk_b')::uuid;
+  k_bystander uuid := current_setting('t3364.u_bystander')::uuid;
   v jsonb;
   v_org uuid;
   v_plan uuid;
+  v_bystander_org uuid;
 BEGIN
+  -- (5) setup: a second user with their own personal organization.
+  v := public._ensure_personal_organization_for(k_bystander);
+  PERFORM pg_temp.check(v->>'status' = 'created', format('bystander: personal organization created first, got %s', v));
+  v_bystander_org := (v->>'organization_id')::uuid;
+  PERFORM set_config('t3364.bystander_org', v_bystander_org::text, true);
+
   -- (1) direct INSERT of a claimed brokerage membership
   v := public._ensure_personal_organization_for(k_joiner);
   PERFORM pg_temp.check(v->>'status' = 'created', format('joiner: personal organization created first, got %s', v));
@@ -36,6 +45,8 @@ BEGIN
                         'joiner: plan row kept, same plan');
   PERFORM pg_temp.check(EXISTS (SELECT 1 FROM public.organization_members WHERE organization_id = k_brk_b AND user_id = k_joiner),
                         'joiner: brokerage membership present');
+  PERFORM pg_temp.check(EXISTS (SELECT 1 FROM public.organization_members WHERE organization_id = v_bystander_org AND user_id = k_bystander),
+                        'bystander: personal membership kept when another user joins a brokerage');
 END
 $control$;
 
@@ -91,5 +102,11 @@ BEGIN
                         'two brokerages: first brokerage membership kept');
   PERFORM pg_temp.check(EXISTS (SELECT 1 FROM public.organization_members WHERE organization_id = k_brk_b AND user_id = k_two),
                         'two brokerages: second brokerage membership present');
+
+  -- (5) after the claim by UPDATE and the second-brokerage INSERT above.
+  PERFORM pg_temp.check(EXISTS (SELECT 1 FROM public.organization_members
+                                WHERE organization_id = current_setting('t3364.bystander_org')::uuid
+                                  AND user_id = current_setting('t3364.u_bystander')::uuid),
+                        'bystander: personal membership kept through the other users'' brokerage writes');
 END
 $control$;

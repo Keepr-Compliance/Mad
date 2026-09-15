@@ -150,6 +150,20 @@ const mutants = {
     ),
     proof: proof(`${defOf(RETIRE)} LIKE '%<> NEW.organization_id%'`, `'retirement deletes all other memberships'`),
   },
+  "m20-retirement-deletes-without-user-filter.sql": {
+    what: "the retirement function's DELETE has no user filter (every user's personal membership is removed)",
+    sql: edit(
+      retire,
+      `     AND o.personal_owner_user_id IS NOT NULL
+     AND m.user_id = NEW.user_id;`,
+      `     AND o.personal_owner_user_id IS NOT NULL;`,
+      "m20",
+    ),
+    proof: proof(
+      `${defOf(RETIRE)} NOT LIKE '%m.user_id = NEW.user_id%'`,
+      `regexp_replace(substring(${defOf(RETIRE)} from 'DELETE FROM[^;]*;'), '\\s+', ' ', 'g')`,
+    ),
+  },
   "m08-trigger-added-on-auth-users.sql": {
     what: "a sign-up trigger on auth.users that calls ensure",
     sql: `CREATE FUNCTION public._t3364_mutant_signup_ensure() RETURNS trigger

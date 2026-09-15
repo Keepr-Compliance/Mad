@@ -38,6 +38,7 @@ DECLARE
   u_bf_plain      uuid := '00000000-0000-4000-8000-000033640010'; -- pii-allow-uuid: invented fixture id (B-a)
   u_bf_old_invite uuid := '00000000-0000-4000-8000-000033640011'; -- pii-allow-uuid: invented fixture id (B-b)
   u_bf_live_inv   uuid := '00000000-0000-4000-8000-000033640012'; -- pii-allow-uuid: invented fixture id (B-b)
+  u_bystander     uuid := '00000000-0000-4000-8000-000033640013'; -- pii-allow-uuid: invented fixture id (S-d)
   -- organizations
   o_brk_a         uuid := '00000000-0000-4000-8000-00003364a0a0'; -- pii-allow-uuid: invented fixture id
   o_brk_b         uuid := '00000000-0000-4000-8000-00003364b0b0'; -- pii-allow-uuid: invented fixture id
@@ -66,6 +67,7 @@ BEGIN
   PERFORM set_config('t3364.u_bf_plain', u_bf_plain::text, true);
   PERFORM set_config('t3364.u_bf_old_invite', u_bf_old_invite::text, true);
   PERFORM set_config('t3364.u_bf_live_inv', u_bf_live_inv::text, true);
+  PERFORM set_config('t3364.u_bystander', u_bystander::text, true);
   PERFORM set_config('t3364.o_brk_a', o_brk_a::text, true);
   PERFORM set_config('t3364.o_brk_b', o_brk_b::text, true);
 
@@ -85,7 +87,7 @@ BEGIN
       (u_nolicense, 'nolicense'), (u_joiner, 'joiner'), (u_claimer, 'claimer'), (u_leaver, 'leaver'),
       (u_brk_admin, 'brk-admin'), (u_target, 'target'), (u_other, 'other'), (u_two_brk, 'two-brk'),
       (u_personal_f, 'personal-f'), (u_bf_plain, 'bf-plain'), (u_bf_old_invite, 'bf-old-invite'),
-      (u_bf_live_inv, 'bf-live-invite')
+      (u_bf_live_inv, 'bf-live-invite'), (u_bystander, 'bystander')
     ) v(id, label)
   LOOP
     INSERT INTO auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data)
