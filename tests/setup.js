@@ -90,6 +90,9 @@ if (typeof window !== 'undefined') {
       // machinery — needed in all test environments.
       getRemovedMessages: jest.fn().mockResolvedValue({ success: true, removedMessages: [] }),
       restoreRemovedMessage: jest.fn().mockResolvedValue({ success: true }),
+      // BACKLOG-3366: hide / unhide a text from export (conversation view).
+      hideTextFromExport: jest.fn().mockResolvedValue({ success: true, hidden: true }),
+      unhideTextFromExport: jest.fn().mockResolvedValue({ success: true, hidden: false }),
       // BACKLOG-1866 / 1876: linked-content + global search (LinkedContentSearch
       // mounts in the details overview AND the transaction list).
       searchLinkedContent: jest.fn().mockResolvedValue({

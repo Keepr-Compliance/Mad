@@ -1460,6 +1460,33 @@ BEGIN
   UPDATE users_local SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
 END;
 
+-- BACKLOG-3366: texts a user has hidden from THIS transaction's export.
+-- One row per (transaction, message). The text itself, its communications link
+-- and every count are untouched; the shared conversation read projects a
+-- `hidden_from_export` marker from this table and never filters on it.
+--   message_external_id  the provider id (messages.external_id) copied from the
+--                        message at the moment of hiding. A macOS force re-import
+--                        deletes and re-inserts message rows with NEW ids, so a
+--                        row keyed on message_id alone would stop matching and
+--                        the text would silently return to the export.
+--   message_id           no FK on purpose: ON DELETE CASCADE would erase the
+--                        user's decision when a re-import deletes the old row.
+--   hidden_by            users_local.id, no FK on purpose: the legacy user-id
+--                        migration deletes the old users_local row, and a
+--                        cascading FK would wipe every hidden row with it.
+CREATE TABLE IF NOT EXISTS transaction_hidden_texts (
+  transaction_id      TEXT NOT NULL,
+  message_id          TEXT NOT NULL,
+  message_external_id TEXT,
+  hidden_by           TEXT NOT NULL,
+  hidden_at           DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (transaction_id, message_id),
+  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_hidden_texts_txn_external
+  ON transaction_hidden_texts(transaction_id, message_external_id)
+  WHERE message_external_id IS NOT NULL;
+
 -- Initialize schema version if not exists.
 -- Version 70: the post-reset baseline (BACKLOG-2993). This file IS the
 -- v69-chain shape, declared as version 70 so that the baseline fence in
