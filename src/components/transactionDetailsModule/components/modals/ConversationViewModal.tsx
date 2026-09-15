@@ -705,7 +705,7 @@ export function ConversationViewModal({
                       click on the bubble — the text is selectable and images
                       already own their click. */}
                   {showHiddenFromExportControl && (
-                    <div className="flex justify-start mt-2">
+                    <div className="flex justify-start">
                       <button
                         type="button"
                         onClick={(e) => {

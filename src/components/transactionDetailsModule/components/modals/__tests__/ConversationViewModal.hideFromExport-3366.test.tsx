@@ -167,6 +167,10 @@ describe("BACKLOG-3366 U2 — Hide from export", () => {
       "inline-flex", "items-center", "px-3", "py-1.5", "bg-gray-200", "hover:bg-gray-300",
       "rounded-full", "text-xs", "font-medium", "text-gray-700", "transition-all",
     );
+    // The wrapper matches EmailThreadViewModal's reference exactly: its `mt-2`
+    // was removed on purpose (BACKLOG-2862 follow-up round 2), so none here.
+    const wrapper = screen.getByTestId("hide-from-export-m1").parentElement;
+    expect(wrapper?.className).toBe("flex justify-start");
   });
 });
 
