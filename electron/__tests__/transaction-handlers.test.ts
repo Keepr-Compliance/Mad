@@ -811,6 +811,10 @@ describe("Transaction Handlers", () => {
         mockDetails,
         expect.any(Array),
         "/custom/path.pdf",
+        // BACKLOG-3367: the omissions argument the renderer now requires. This
+        // fixture hides nothing, so the real values are pinned rather than
+        // loosened to `expect.anything()` — a wrong count here must still red.
+        { hiddenTextCount: 0, hiddenTexts: [] },
       );
     });
 
