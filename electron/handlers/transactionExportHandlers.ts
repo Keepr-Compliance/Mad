@@ -200,10 +200,16 @@ export function registerTransactionExportHandlers(
         validatedPath || folderExportService.getDefaultExportPath(details).replace(/\/$/, "") + ".pdf";
 
       // Generate combined PDF using folder export service
+      // BACKLOG-3367: the hidden-text filter reaches this channel for free —
+      // it goes through the same resolver — so the count it passes is correct.
+      // Nothing was BUILT for this channel: it has no renderer caller and the
+      // founder ruled it deleted on 2026-09-12 (BACKLOG-3234 → BACKLOG-3302).
+      // This argument exists only because the signature now requires it.
       const generatedPath = await folderExportService.exportTransactionToCombinedPDF(
         details,
         pdfPlan.communications,
         pdfPath,
+        { hiddenTextCount: pdfPlan.hiddenTextCount, hiddenTexts: pdfPlan.hiddenTexts },
       );
 
       // BACKLOG-2006a — funnel: export-completed (main-side, non-throwing).
@@ -368,6 +374,9 @@ export function registerTransactionExportHandlers(
         metadata: {
           format: sanitizedOptions.exportFormat || "pdf",
           propertyAddress: details.property_address,
+          // BACKLOG-3367: the audit trail records what the artifact left out,
+          // not only that an export happened.
+          hiddenTextCount: enhancedPlan.hiddenTextCount,
         },
         success: true,
       });
@@ -459,12 +468,37 @@ export function registerTransactionExportHandlers(
         startDate: details.started_at as string | null | undefined,
         endDate: details.closed_at as string | null | undefined,
       };
-      let folderPlan = resolveExportPlan(folderRequest, details.communications || []);
+      // BACKLOG-2006a / 2075 — AUTHORITATIVE PAYWALL GATE (fail-closed, Option A).
+      // A locked tx is blocked outright; an unlocked one exports the full
+      // (filtered) record.
+      //
+      // BACKLOG-3367 — GATE FIRST, THEN RESOLVE ONCE. This handler used to
+      // resolve, gate, then resolve AGAIN over the gate's output, which is the
+      // already-resolved list (Option A returns its input unchanged). That is
+      // harmless while a plan holds only membership, and silently wrong the
+      // moment it holds a COUNT OF WHAT WAS REMOVED: the second pass sees a set
+      // with no hidden texts left in it and reports `hiddenTextCount: 0`, and
+      // the second plan is the one the renderer receives. Measured at plan
+      // review: folder 0 vs enhanced 1 for the same transaction (pm_comments
+      // d590f7c6, mutation M1). Resolving once, after the gate, is also the
+      // order the other two export channels already use.
+      //
+      // BEHAVIOUR CHANGE, deliberate: a LOCKED transaction whose narrowed
+      // content selection matches nothing now returns PAYWALL_LOCKED instead of
+      // "No text communications found...". The paywall is the truer answer, and
+      // it is what export-pdf and export-enhanced have always returned.
+      const folderGate = await enforceExportGate({
+        transactionId: validatedTransactionId,
+        userId: details.user_id,
+        communications: details.communications || [],
+      });
+      const folderPlan = resolveExportPlan(folderRequest, folderGate.communications);
       const communications = folderPlan.communications;
 
       logService.info("Resolved folder export include set", "Transactions", {
         original: (details.communications || []).length,
         included: communications.length,
+        hiddenTexts: folderPlan.hiddenTextCount,
         contentType: folderContentType,
         startDate: details.started_at,
         endDate: details.closed_at,
@@ -475,26 +509,24 @@ export function registerTransactionExportHandlers(
       // matched nothing. Unchanged: fires only for a narrowed selection, and
       // only after the date window has been applied.
       if (folderContentType !== "both" && communications.length === 0) {
+        // BACKLOG-3367: when the selection is empty because every in-window text
+        // was HIDDEN, "no text communications found" is false — they were found,
+        // and the user removed them. Say which it was.
+        if (folderPlan.hiddenTextCount > 0) {
+          return {
+            success: false,
+            error:
+              folderPlan.hiddenTextCount === 1
+                ? "The only text in the selected date range is hidden from export."
+                : `All ${folderPlan.hiddenTextCount} texts in the selected date range are hidden from export.`,
+          };
+        }
         const typeLabel = folderContentType === "emails" ? "email" : "text";
         return {
           success: false,
           error: `No ${typeLabel} communications found for this transaction in the selected date range.`,
         };
       }
-
-      // BACKLOG-2006a / 2075 — AUTHORITATIVE PAYWALL GATE (fail-closed, Option A).
-      // Applied to the already date/content-filtered set. A locked tx is blocked
-      // outright; an unlocked one exports the full (filtered) record.
-      const folderGate = await enforceExportGate({
-        transactionId: validatedTransactionId,
-        userId: details.user_id,
-        communications,
-      });
-      // Re-resolve over whatever the gate permitted, so `attachmentComms` can
-      // never reference a communication the gate removed. Filtering is
-      // idempotent — over an already-resolved set this is a no-op today (Option
-      // A returns the input unchanged) and stays correct if that ever changes.
-      folderPlan = resolveExportPlan(folderRequest, folderGate.communications);
 
       // Export to folder structure
       const exportPath = await folderExportService.exportTransactionToFolder(
@@ -539,6 +571,8 @@ export function registerTransactionExportHandlers(
         metadata: {
           format: "folder",
           propertyAddress: details.property_address,
+          // BACKLOG-3367: see the enhanced handler above.
+          hiddenTextCount: folderPlan.hiddenTextCount,
         },
         success: true,
       });

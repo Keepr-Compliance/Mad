@@ -25,6 +25,11 @@ import pdfExportService from "../pdfExportService";
 import enhancedExportService from "../enhancedExportService";
 import type { Transaction } from "../../types/models";
 
+// BACKLOG-3367: these cases hide nothing, and now have to say so — the
+// omissions argument is required precisely so no caller can leave it unstated.
+import type { ExportOmissions } from "../exportNotices";
+const NO_OMISSIONS_3367: ExportOmissions = { hiddenTextCount: 0 };
+
 function makeTransaction(transactionType: string | undefined): TransactionWithDetails {
   return {
     id: "txn-2805",
@@ -50,13 +55,17 @@ function txtSummary(transactionType: string | undefined): string {
   return (enhancedExportService as any)._createSummary(
     makeTransaction(transactionType) as unknown as Transaction,
     [],
+    // BACKLOG-3367: this helper reaches a PRIVATE method through an `any` cast,
+    // so the compiler does not enforce the required omissions argument here the
+    // way it does at every production call site. Stated explicitly.
+    NO_OMISSIONS_3367,
   );
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
 describe("BACKLOG-2805 — the audit summary HTML", () => {
   it('prints "Listing" for a purchase', () => {
-    const html = generateSummaryHTML(makeTransaction("purchase"), []);
+    const html = generateSummaryHTML(makeTransaction("purchase"), [], NO_OMISSIONS_3367);
     expect(html).toContain(">Listing<");
     // BACKLOG-2850: the string it REPLACED must be gone. "Listing" is a
     // prefix of "Listing/Purchase", so the presence assertion above passes on
@@ -65,7 +74,7 @@ describe("BACKLOG-2805 — the audit summary HTML", () => {
   });
 
   it('still prints "Sale" for a sale, unchanged', () => {
-    const html = generateSummaryHTML(makeTransaction("sale"), []);
+    const html = generateSummaryHTML(makeTransaction("sale"), [], NO_OMISSIONS_3367);
     expect(html).toContain(">Sale<");
     // BACKLOG-2850: the negative is scoped to the VALUE cell (`>Listing<`),
     // not to the bare token. These documents already contain "Listing Price"
@@ -77,7 +86,7 @@ describe("BACKLOG-2805 — the audit summary HTML", () => {
 
   it("still prints N/A for a type it cannot name", () => {
     // Pre-existing behaviour that must survive the refactor.
-    expect(generateSummaryHTML(makeTransaction("other"), [])).toContain("N/A");
+    expect(generateSummaryHTML(makeTransaction("other"), [], NO_OMISSIONS_3367)).toContain("N/A");
   });
 });
 
