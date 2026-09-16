@@ -19,6 +19,7 @@ import { getContactNamesByHandles } from "../../utils/exportUtils";
 // BACKLOG-2805: mirrors src/constants/transactionTypes.ts (electron cannot
 // import from src/). Keep the two in step.
 import { TRANSACTION_TYPE_LABELS } from "../../constants/transactionTypeLabels";
+import { exportNoticesHtml, type ExportOmissions } from "../exportNotices";
 
 /**
  * Generate HTML for summary report.
@@ -32,6 +33,11 @@ import { TRANSACTION_TYPE_LABELS } from "../../constants/transactionTypeLabels";
 export function generateSummaryHTML(
   transaction: TransactionWithDetails,
   communications: Communication[],
+  // BACKLOG-3367: what this export left out, stated on the page. REQUIRED and
+  // third, before the optional tail — a default would let a caller silently
+  // print a complete-looking report for a pruned export (SR required change 2,
+  // pm_comments d590f7c6). Pass `NO_OMISSIONS` only where nothing was omitted.
+  omissions: ExportOmissions,
   phoneNameMap?: Record<string, string>,
   emailExportMode: "thread" | "individual" = "thread",
   // BACKLOG-2757: lets the text index reach the same naming decision the
@@ -203,6 +209,18 @@ export function generateSummaryHTML(
       color: #4a5568;
       margin-top: 16px;
     }
+    /* BACKLOG-3367: what this export left out. Deliberately heavier than
+       .note — a reader must not mistake a pruned record for a complete one. */
+    .export-notice {
+      background: #fffaf0;
+      border: 1px solid #f6ad55;
+      border-left: 4px solid #dd6b20;
+      padding: 12px 14px;
+      border-radius: 6px;
+      font-size: 13px;
+      color: #7b341e;
+      margin: 20px 0;
+    }
     .footer {
       margin-top: 40px;
       padding-top: 20px;
@@ -244,6 +262,12 @@ export function generateSummaryHTML(
       <div class="value">${texts.length}</div>
     </div>
   </div>
+
+  ${/* BACKLOG-3367: OUTSIDE every `length > 0` section below. When the user hid
+       every text in the window, `texts.length` is 0 and the Text Threads Index
+       section does not render at all — putting the notice inside it would hide
+       the notice in exactly the case that most needs it. */ ""}
+  ${exportNoticesHtml(omissions, "transaction")}
 
   ${generateContactsSection(transaction.contact_assignments, transaction.transaction_type)}
 

@@ -125,6 +125,7 @@ export async function resolveOrgId(): Promise<string | null> {
  */
 const STRICT_FEATURE_KEYS: Record<StrictFeatureKey, true> = {
   email_contact_inference: true,
+  desktop_hide_from_export: true,
 };
 
 /**
@@ -279,6 +280,43 @@ export async function isContactInferenceAllowed(
   provider: ContactInferenceProvider
 ): Promise<boolean> {
   return isStrictFeatureAllowed(CONTACT_INFERENCE_FEATURE_KEYS[provider]);
+}
+
+// ---------------------------------------------------------------------------
+// Hide texts from export — BACKLOG-3365
+// ---------------------------------------------------------------------------
+
+/**
+ * The plan feature that governs HIDING a text from an export.
+ *
+ * Named for the capability rather than for texts, on the founder's ruling
+ * (epic BACKLOG-3227): when email hiding arrives it reuses this same switch
+ * rather than arriving as a second row he has to remember to turn on.
+ */
+export const HIDE_FROM_EXPORT_FEATURE_KEY: StrictFeatureKey =
+  "desktop_hide_from_export";
+
+/**
+ * May this user hide a text from their export?
+ *
+ * **The only entry point.** `transactions:hide-text-from-export` calls it
+ * before any read or write; nothing else in the main process may.
+ *
+ * Deliberately NOT routed through `featureGateService.checkFeature`, which
+ * answers ALLOWED for a key that is not in the cache and for no cache at all.
+ * That is right for an export — a user on a plane must still be able to export
+ * — and catastrophic here: the feature row is not applied to production, so
+ * every organization would read allowed. The strict reader answers `blocked`
+ * for an absent key and `unknown` for a read it could not complete, and both
+ * answer false here.
+ *
+ * There is no three-state wrapper beside this one on purpose. The renderer gets
+ * its three-state answer straight off `feature-gate:strict-state`, and main's
+ * only consumer acts rather than explains, so a second export here would be a
+ * second way in that nothing calls.
+ */
+export async function isHideFromExportAllowed(): Promise<boolean> {
+  return isStrictFeatureAllowed(HIDE_FROM_EXPORT_FEATURE_KEY);
 }
 
 /**
