@@ -22,6 +22,7 @@ import {
   createUserLicense,
   incrementTransactionCount,
   clearLicenseCache,
+  ensurePersonalOrganization,
 } from "../services/licenseService";
 import {
   registerDevice,
@@ -87,7 +88,27 @@ async function getLicenseData(): Promise<LicenseResponse> {
     // This takes precedence over local database
     const orgMembership = await supabaseService.getActiveOrganizationMembership(user.id);
 
-    if (orgMembership) {
+    /**
+     * BACKLOG-3364 — A PERSONAL ORGANIZATION IS NOT A TEAM.
+     *
+     * This branch used to read "has an active membership row" as "is a team
+     * user". A solo user now holds such a row, for an organization of their
+     * own, created so that a plan can be recorded against them. Left as it was,
+     * every solo user would be reported as `team` with an organization id, and
+     * the renderer would route Complete to Submit-for-review
+     * (`useCompleteTransaction`) — a button whose insert the database refuses,
+     * because the submission rules exclude personal organizations.
+     *
+     * A personal membership therefore falls through to exactly the path a user
+     * with NO membership row takes: the local licence row below, then the
+     * defaults. That is the answer this handler gave before personal
+     * organizations existed, and it is the answer it must keep giving.
+     *
+     * The membership is NOT filtered out upstream: the feature-gate reader
+     * needs it, because the personal organization is where a solo user's plan
+     * lives. See `supabaseService.getActiveOrganizationMembershipOutcome`.
+     */
+    if (orgMembership && !orgMembership.is_personal) {
       logService.debug("[License] Team membership found in Supabase", "License", {
         organization_id: orgMembership.organization_id,
         organization_name: orgMembership.organization_name,
@@ -279,7 +300,46 @@ export function registerLicenseHandlers(): void {
       userId: string
     ): Promise<LicenseValidationResult> => {
       logService.debug("[License] Validating license", "License", { userId });
-      return validateLicense(userId);
+      const result = await validateLicense(userId);
+
+      /**
+       * BACKLOG-3364 — the self-healing point.
+       *
+       * Sign-in provisions a personal organization (main.ts, after the deep
+       * link's licence step). This is the path that catches everyone else: a
+       * user who was signed in before the feature existed, and a user who has
+       * just LEFT a brokerage, whose personal organization is re-attached on
+       * their next launch.
+       *
+       * Gated on a valid licence because the organization exists to record
+       * which plan the licence is on: there is nothing to record for a user
+       * whose licence is missing, expired or suspended.
+       *
+       * DO NOT REMOVE THIS GATE AS REDUNDANT — THERE IS NO DATABASE BACKSTOP.
+       * `_ensure_personal_organization_for` tests licence EXISTENCE, not
+       * status. Its only reference to the table is
+       *
+       *     IF NOT EXISTS (SELECT 1 FROM public.licenses
+       *                     WHERE user_id = p_user_id) THEN
+       *       RETURN jsonb_build_object('status', 'no_license');
+       *
+       * (`supabase/migrations/20260915160637_backlog_3364_personal_organizations.sql:93`).
+       * A suspended, cancelled or expired licence row — and an expired trial —
+       * still EXISTS, so the function would proceed and create the
+       * organization. `calculateLicenseStatus` in licenseService is the only
+       * place any of those four states is read, and this `isValid` check (with
+       * its twin at main.ts Step 4.5) is the only thing keeping a suspended or
+       * expired holder from self-provisioning. Removing either one changes
+       * behaviour.
+       *
+       * Awaited, and it never throws — the validation result is returned
+       * whatever happens here.
+       */
+      if (result.isValid) {
+        await ensurePersonalOrganization(userId);
+      }
+
+      return result;
     }
   );
 

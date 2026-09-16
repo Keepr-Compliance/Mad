@@ -59,6 +59,11 @@ jest.mock("../../services/licenseService", () => ({
   createUserLicense: jest.fn(),
   incrementTransactionCount: jest.fn(),
   clearLicenseCache: jest.fn(),
+  // BACKLOG-3364: listed so this factory matches the real module's exports. The
+  // `license:validate` handler calls it after a valid licence, and a factory
+  // that omitted it would hand that path `undefined` — surfacing as a confusing
+  // TypeError in whichever test reaches it next rather than here.
+  ensurePersonalOrganization: jest.fn(),
 }));
 
 jest.mock("../../services/deviceService", () => ({
