@@ -33,11 +33,34 @@ import {
   foldEmailDerivedRecords,
   type EmailDerivedCandidateRow,
   type EmailDerivedNameRow,
+  MAILBOX_ADDRESS_SQL,
+  MAILBOX_TOKEN_PROVIDER,
   type EmailDerivedProvider,
   type EmailDerivedRecord,
 } from "./emailDerivedContactsSql";
 
 export type { EmailDerivedProvider, EmailDerivedRecord } from "./emailDerivedContactsSql";
+
+/**
+ * The address stored for one of the user's mailboxes, or null.
+ *
+ * FOR THE LOG LINE ONLY. The rule that a mailbox with no stored address
+ * contributes no people is enforced in the producer's SQL, where the worker
+ * and the main thread both run it; this read exists so the handler can say
+ * WHICH of the four reasons produced an empty list. The founder's first report
+ * will be "nobody shows up", and that sentence has four different causes.
+ */
+export function getMailboxAddress(
+  userId: string,
+  provider: EmailDerivedProvider,
+): string | null {
+  const rows = dbAll<{ connected_email_address: string | null }>(
+    MAILBOX_ADDRESS_SQL,
+    [userId, MAILBOX_TOKEN_PROVIDER[provider]],
+  );
+  const value = rows[0]?.connected_email_address;
+  return value && value.trim() !== "" ? value.trim() : null;
+}
 
 /**
  * Run the producer on the main thread.

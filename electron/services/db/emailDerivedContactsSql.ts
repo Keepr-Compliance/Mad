@@ -131,6 +131,16 @@ export const EMAIL_DERIVED_LIMIT = 200;
 /** The same number as SQL text, so the statement can splice it under the brand. */
 const EMAIL_DERIVED_LIMIT_SQL = sql`200`;
 
+/**
+ * The address stored for one mailbox. Used for the handler's log line only —
+ * the rule itself is the `EXISTS` inside the candidate query below.
+ */
+export const MAILBOX_ADDRESS_SQL = sql`
+  SELECT connected_email_address
+    FROM oauth_tokens
+   WHERE user_id = ? AND provider = ? AND purpose = 'mailbox'
+   LIMIT 1`;
+
 export interface EmailDerivedCandidateRow {
   address: string;
   communication_count: number;

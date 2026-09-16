@@ -32,6 +32,12 @@ import type {
  */
 export const CONTACT_INFERENCE_FEATURE_KEYS = {
   outlook: "email_contact_inference",
+  // BACKLOG-1717. Must stay identical to the main-process map above it in
+  // `featureGateHandlers.ts`: `satisfies` proves each value is *a* strict key,
+  // never that it is *the* key main gates on. A parity control asserts the two
+  // maps agree, because drift here shows the user a row that says "not in your
+  // plan" while the feature works, or the reverse.
+  gmail: "email_contact_inference",
 } as const satisfies Record<string, StrictFeatureKey>;
 
 export type ContactInferenceProvider = keyof typeof CONTACT_INFERENCE_FEATURE_KEYS;
@@ -43,8 +49,9 @@ export type ContactInferenceStates = Record<
 
 export function useContactInferenceState(): ContactInferenceStates {
   const outlook = useStrictFeatureState(CONTACT_INFERENCE_FEATURE_KEYS.outlook);
+  const gmail = useStrictFeatureState(CONTACT_INFERENCE_FEATURE_KEYS.gmail);
 
-  return useMemo(() => ({ outlook }), [outlook]);
+  return useMemo(() => ({ outlook, gmail }), [outlook, gmail]);
 }
 
 export default useContactInferenceState;
