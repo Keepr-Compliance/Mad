@@ -1129,11 +1129,12 @@ class SubmissionService {
        *    and no throw — which reads here as "no organization" and would stop
        *    every real brokerage member from submitting.
        *
-       * No `license_status` filter, deliberately: the database's own submission
-       * rules have none either, so a suspended brokerage member can submit
-       * today and this change does not take that away. Both `.order()` columns
-       * are base columns of `organization_members`, so neither names the new
-       * column nor sorts on the embed.
+       * The absence of a `license_status` filter here is deliberate and is NOT
+       * changed by this item — it matches the rule the database already
+       * applies, and narrowing it would take away something that works today.
+       * Rationale on the backlog item, not here. Both `.order()` columns are
+       * base columns of `organization_members`, so neither names the new column
+       * nor sorts on the embed.
        */
       const { data, error } = await client
         .from("organization_members")

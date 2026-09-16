@@ -6,10 +6,10 @@
  * BACKLOG-3364 — bulk Submit must not aim at a personal organization.
  *
  * `submissionService` does NOT go through the shared membership helper: it keeps
- * its own query, deliberately, because the helper filters on
- * `license_status = 'active'` and the database's submission rules do not — a
- * suspended brokerage member can submit today and this item does not take that
- * away (SR delta pm_comments 3e27deee ruling 4).
+ * its own query, deliberately, because the helper narrows by
+ * `license_status = 'active'` and this lookup must not — narrowing it would
+ * take away something that works today. Rationale on the backlog item
+ * (SR delta pm_comments 3e27deee ruling 4), not here.
  *
  * So the same three properties have to be proved again here, against this
  * query:
@@ -117,10 +117,11 @@ describe("BACKLOG-3364 — which organization a submission is aimed at", () => {
     await expect(getUserOrganizationId()).resolves.toBe(FIXTURE_BROKERAGE_ORG_ID);
   });
 
-  it("does not filter by licence status — a suspended brokerage member can still submit", async () => {
-    // The database's submission rules have no status filter, so neither does
-    // this query. Adding `.eq("license_status", "active")` here would take away
-    // something that works today.
+  it("does not narrow this lookup by licence status", async () => {
+    // Deliberate, and unchanged by this item: the filter is absent to match the
+    // rule the database already applies. Adding `.eq("license_status",
+    // "active")` here would take away something that works today. Rationale on
+    // the backlog item, not here.
     emulator.set({
       rows: {
         organization_members: [brokerageMembership({ licenseStatus: "suspended" })],
