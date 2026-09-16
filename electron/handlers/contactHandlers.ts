@@ -195,6 +195,38 @@ interface ContactResponse {
    * trigger.
    */
   savedContactIds?: string[];
+  /**
+   * BACKLOG-3376 — `contacts:import` only. Present only on `success: true`, and
+   * only when the import saved at least one address that no email can be
+   * addressed from: an address with whitespace inside it, or with no `@`. The
+   * values are the source's own strings, deduped case-insensitively per record.
+   *
+   * It does NOT list every address the app cannot validate. `pat@intranet` is
+   * stored and its mail links normally, so it is deliberately absent — the full
+   * trace, and which arm of the predicate is enforced and which is a premise, is
+   * on `isUnmatchableImportEmail` in `electron/utils/contactImportValues.ts`.
+   * Phones are not covered at all (MECHANISM UNTRACED; BACKLOG-3377).
+   *
+   * SUCCESS ONLY, and that is what keeps this and `savedContactIds` mutually
+   * exclusive by construction: that field is spread on the two catch returns
+   * only, this one on the success return only. A rolled-back import saved
+   * nothing, so it has nothing to warn about. Assigned on the statement AFTER
+   * `dbTransaction` returns, never inside its callback, for the same reason
+   * `savedContactIds` is.
+   *
+   * FLAT ACROSS THE WHOLE CALL, with no per-contact attribution. `contacts` is
+   * not in input order (existing-DB rows, then created, then claimed), so
+   * index-pairing is unavailable; both live callers — `Contacts.tsx` and
+   * `ContactAssignmentStep.tsx` — send exactly one record, which is what makes
+   * the flat shape unambiguous today. A future batch caller needs a per-contact
+   * shape, and changing this one is the smaller half of that work.
+   *
+   * Known gap, stated rather than fixed: when the import commits and a read
+   * after it throws, the response is a failure and carries `savedContactIds`
+   * instead, so this message is lost for that import. Carrying the field on a
+   * failure response is what the success-only rule above exists to refuse.
+   */
+  unmatchableEmails?: string[];
 }
 
 /**
@@ -1996,6 +2028,10 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
       // BACKLOG-3354: set only once the write transaction has committed; read
       // by both catch returns. See `ContactResponse.savedContactIds`.
       let savedContactIds: string[] | undefined;
+      // BACKLOG-3376: the mirror image — set only once the write transaction has
+      // committed, and read by the SUCCESS return only. See
+      // `ContactResponse.unmatchableEmails`.
+      let unmatchableEmails: string[] | undefined;
       try {
         logService.info("[Main] Importing contacts", "Contacts", {
           userId,
@@ -2057,6 +2093,13 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         // BACKLOG-3358: what the import had to reorder or cut, counted across
         // the whole call and reported once, after the commit.
         const importAdjustments = emptyImportAdjustmentCounts();
+        // BACKLOG-3376: the addresses this call saved that no email can be
+        // addressed from, collected per record and reported once, after the
+        // commit. VALUES, not counts — the user is told which address it was,
+        // and these are their own address book's strings. They never reach
+        // Sentry: that warning stays counts-only (BACKLOG-3358), which is why
+        // this is a local array and not a field on `ImportAdjustmentCounts`.
+        const unmatchable: string[] = [];
 
         for (const [index, contact] of contactsToImport.entries()) {
           const sanitizedContact = sanitizeObject(contact) as ImportableContact;
@@ -2115,6 +2158,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
            */
           const shaped = shapeImportValues(sanitizedContact);
           addImportAdjustments(importAdjustments, shaped.adjustments);
+          unmatchable.push(...shaped.unmatchableEmails);
           const validatedData = validateContactData(shaped.forValidation, false);
           const sourceIdentities = toSourceIdentities(sanitizedContact);
 
@@ -2517,6 +2561,12 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           ...importWrites.claimedByExisting.map((c) => c.contactId),
         ];
 
+        // BACKLOG-3376: assigned HERE, on the same statement boundary and for
+        // the same reason — a save that rolled back must not report values it
+        // did not save. Left `undefined` until the commit, so the success
+        // return's spread adds nothing if any read below throws first.
+        unmatchableEmails = unmatchable.length > 0 ? unmatchable : undefined;
+
         /**
          * BACKLOG-3358 — ONE COUNTS-ONLY WARNING, AFTER THE COMMIT.
          *
@@ -2606,6 +2656,10 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         return {
           success: true,
           contacts: importedContacts,
+          // BACKLOG-3376: the SUCCESS return, and only this one. Never spread
+          // onto either catch return below — that is half of what makes this
+          // message and BACKLOG-3354's failure message mutually exclusive.
+          ...(unmatchableEmails?.length ? { unmatchableEmails } : {}),
         };
       } catch (error) {
         logService.error("[Main] Import contacts failed:", "Contacts", {

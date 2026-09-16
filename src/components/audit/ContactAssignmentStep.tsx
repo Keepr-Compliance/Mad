@@ -36,6 +36,10 @@ import type { ExtendedContact } from "../../types/components";
 import { settingsService } from "../../services";
 import logger from '../../utils/logger';
 import { labelForContact } from "../../utils/contactDisplayLabel";
+import {
+  UNMATCHABLE_EMAIL_TOAST_MS,
+  unmatchableEmailMessage,
+} from "../../utils/importSkippedMessage";
 import { NotificationContext } from "../../contexts/NotificationContext";
 
 interface ContactAssignmentStepProps {
@@ -752,6 +756,31 @@ function ContactAssignmentStep({
             address-book half had nothing to stop offering — the refresh
             re-fetched the record and put it straight back on the list.
           */
+          /**
+           * BACKLOG-3376 — SAY WHAT WAS SAVED THAT NO EMAIL CAN COME FROM.
+           *
+           * The same message the Clients & Contacts card raises, with the one
+           * word this screen differs on: it "added" the person rather than
+           * "imported" them. Both strings come from one builder so they cannot
+           * drift apart (`src/utils/importSkippedMessage.ts`).
+           *
+           * INSIDE the success branch — the renderer half of the guard that
+           * keeps this and BACKLOG-3354's failure message mutually exclusive —
+           * and BEFORE the refresh is awaited, for the reason 3354's (b) branch
+           * states directly below: `onRefreshBothLists` is typed
+           * `() => Promise<void>`, nothing forbids it rejecting, and the
+           * caller's catch only logs.
+           */
+          const unmatchable = result.unmatchableEmails ?? [];
+          if (unmatchable.length > 0) {
+            const message = unmatchableEmailMessage({
+              name: labelForContact(contact),
+              verb: "added",
+              addresses: unmatchable,
+            });
+            if (message) notify?.info(message, { duration: UNMATCHABLE_EMAIL_TOAST_MS });
+          }
+
           await onRefreshBothLists();
           return newContact;
         }
