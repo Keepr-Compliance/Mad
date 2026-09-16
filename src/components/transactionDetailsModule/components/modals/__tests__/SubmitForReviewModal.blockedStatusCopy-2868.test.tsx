@@ -118,7 +118,7 @@ const EXPECTED: Record<string, { title: string; lead: string }> = {
 
 describe("BACKLOG-2868 — per-status copy on a blocked deal", () => {
   test.each(Object.keys(EXPECTED))(
-    "at '%s' the lead is that status's own copy, and none of the other three appear",
+    "at '%s' the lead is that status's own copy, and no other status's copy appears",
     (status) => {
       renderAt(status);
 
