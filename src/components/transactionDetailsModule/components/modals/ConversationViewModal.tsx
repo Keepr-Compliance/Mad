@@ -19,18 +19,6 @@ import logger from '../../../../utils/logger';
 import type { HideFromExportState } from "../../../../hooks/useHideFromExportState";
 
 /**
- * BACKLOG-3366: the pill surface for "Hide from export" — the reference
- * treatment copied from EmailThreadViewModal's "View formatted email" button.
- */
-const HIDE_PILL_SURFACE = "bg-gray-200 hover:bg-gray-300";
-/**
- * BACKLOG-3366: the pill surface for "Unhide". The ONE deviation from the
- * reference: an Unhide pill sits on a gray hidden bubble, where the reference
- * `bg-gray-200` pill has no contrast at all. Swap this constant to revert.
- */
-const UNHIDE_PILL_SURFACE = "bg-white hover:bg-gray-50 border border-gray-300";
-
-/**
  * Attachment info for display (TASK-1012)
  */
 interface MessageAttachmentInfo {
@@ -684,13 +672,84 @@ export function ConversationViewModal({
                         [Media not available]
                       </p>
                     )}
-                  <p
-                    className={`text-xs mt-1 ${
-                      bubbleIsDark ? "text-green-100" : "text-gray-400"
-                    }`}
-                  >
-                    {formatMessageTime(msgTime)}
-                  </p>
+                  {/* BACKLOG-3366: the timestamp and the hide control share ONE
+                      row — timestamp on the left (unchanged), the control
+                      right-aligned against the bubble's edge. */}
+                  <div className="flex items-center justify-between gap-2">
+                    <p
+                      className={`text-xs mt-1 ${
+                        bubbleIsDark ? "text-green-100" : "text-gray-400"
+                      }`}
+                    >
+                      {formatMessageTime(msgTime)}
+                    </p>
+                    {/* BACKLOG-3366: a real button inside the bubble, never a
+                        click on the bubble — the text is selectable and images
+                        already own their click. The GLYPH carries the state (a
+                        crossed-out eye means hidden); the accessible name and
+                        the tooltip carry the ACTION. Eye / eye-off paths copied
+                        verbatim from the password-visibility toggle in
+                        src/components/settings/LLMSettings.tsx:202-234. */}
+                    {showHiddenFromExportControl && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void handleSetHiddenFromExport(hiddenFromExportTargetId, !isHiddenFromExport);
+                        }}
+                        disabled={pendingHiddenFromExportId === hiddenFromExportTargetId}
+                        aria-pressed={isHiddenFromExport}
+                        aria-label={isHiddenFromExport ? "Unhide" : "Hide from export"}
+                        title={isHiddenFromExport ? "Unhide" : "Hide from export"}
+                        className={`inline-flex items-center justify-center flex-shrink-0 rounded-full p-1 transition-colors disabled:opacity-50 ${
+                          bubbleIsDark
+                            ? "text-green-100 hover:bg-white hover:bg-opacity-20"
+                            : "text-gray-500 hover:bg-gray-300"
+                        }`}
+                        data-testid={`hide-from-export-${hiddenFromExportTargetId}`}
+                      >
+                        {isHiddenFromExport ? (
+                          <svg
+                            className="w-4 h-4"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                            aria-hidden="true"
+                            data-testid="hidden-from-export-icon-hidden"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"
+                            />
+                          </svg>
+                        ) : (
+                          <svg
+                            className="w-4 h-4"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                            aria-hidden="true"
+                            data-testid="hidden-from-export-icon-visible"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+                            />
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
+                            />
+                          </svg>
+                        )}
+                      </button>
+                    )}
+                  </div>
                   {/* BACKLOG-3366: text, not colour alone, tells a hidden text
                       apart from an out-of-range one (both are gray). */}
                   {isHiddenFromExport && (
@@ -700,28 +759,6 @@ export function ConversationViewModal({
                     >
                       Hidden from export
                     </p>
-                  )}
-                  {/* BACKLOG-3366: a real button inside the bubble, never a
-                      click on the bubble — the text is selectable and images
-                      already own their click. */}
-                  {showHiddenFromExportControl && (
-                    <div className="flex justify-start">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void handleSetHiddenFromExport(hiddenFromExportTargetId, !isHiddenFromExport);
-                        }}
-                        disabled={pendingHiddenFromExportId === hiddenFromExportTargetId}
-                        aria-pressed={isHiddenFromExport}
-                        className={`inline-flex items-center px-3 py-1.5 ${
-                          isHiddenFromExport ? UNHIDE_PILL_SURFACE : HIDE_PILL_SURFACE
-                        } rounded-full text-xs font-medium text-gray-700 transition-all`}
-                        data-testid={`hide-from-export-${hiddenFromExportTargetId}`}
-                      >
-                        {isHiddenFromExport ? "Unhide" : "Hide from export"}
-                      </button>
-                    </div>
                   )}
                 </div>
                 {/* BACKLOG-2280 / BACKLOG-2306: native-style tapback chip nudged

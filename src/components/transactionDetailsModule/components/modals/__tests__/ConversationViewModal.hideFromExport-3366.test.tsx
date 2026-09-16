@@ -136,8 +136,10 @@ describe("BACKLOG-3366 U2 — Hide from export", () => {
     renderModal({ onSetHiddenFromExport: jest.fn(), hideFromExportState: "allowed" });
 
     expect(screen.getAllByRole("button", { name: "Hide from export" })).toHaveLength(2);
-    expect(screen.getByTestId("hide-from-export-m1")).toHaveTextContent("Hide from export");
-    expect(screen.getByTestId("hide-from-export-m3")).toHaveTextContent("Hide from export");
+    // The visible label is a glyph now, so the ACTION lives in the accessible
+    // name (BACKLOG-3366 follow-up) — assert that, never the text content.
+    expect(screen.getByTestId("hide-from-export-m1")).toHaveAccessibleName("Hide from export");
+    expect(screen.getByTestId("hide-from-export-m3")).toHaveAccessibleName("Hide from export");
     expect(screen.queryByTestId("hide-from-export-r1")).not.toBeInTheDocument();
     // One control per rendered bubble: m1, m2 (Unhide), m3.
     expect(controls()).toHaveLength(3);
@@ -161,16 +163,31 @@ describe("BACKLOG-3366 U2 — Hide from export", () => {
     await waitFor(() => expect(screen.getByTestId("hide-from-export-m3")).not.toBeDisabled());
   });
 
-  it("uses the reference pill classes exactly", () => {
+  it("sits on the timestamp's own row, right-aligned across from it", () => {
     renderModal({ onSetHiddenFromExport: jest.fn(), hideFromExportState: "allowed" });
-    expect(screen.getByTestId("hide-from-export-m1")).toHaveClass(
-      "inline-flex", "items-center", "px-3", "py-1.5", "bg-gray-200", "hover:bg-gray-300",
-      "rounded-full", "text-xs", "font-medium", "text-gray-700", "transition-all",
-    );
-    // The wrapper matches EmailThreadViewModal's reference exactly: its `mt-2`
-    // was removed on purpose (BACKLOG-2862 follow-up round 2), so none here.
-    const wrapper = screen.getByTestId("hide-from-export-m1").parentElement;
-    expect(wrapper?.className).toBe("flex justify-start");
+
+    const button = screen.getByTestId("hide-from-export-m1");
+    // Structure, not a class string: the control's immediate previous sibling
+    // is the timestamp <p>, and the row they share pushes them apart.
+    const stamp = button.previousElementSibling as HTMLElement | null;
+    expect(stamp?.tagName).toBe("P");
+    expect(stamp?.textContent).toMatch(/\d{1,2}:\d{2}/);
+    const row = button.parentElement as HTMLElement;
+    expect(row).toBe(stamp?.parentElement);
+    expect(row.className).toContain("justify-between");
+  });
+
+  it("shows a plain eye on a visible text", () => {
+    renderModal({ onSetHiddenFromExport: jest.fn(), hideFromExportState: "allowed" });
+
+    const button = screen.getByTestId("hide-from-export-m1");
+    expect(within(button).getByTestId("hidden-from-export-icon-visible")).toBeInTheDocument();
+    expect(within(button).queryByTestId("hidden-from-export-icon-hidden")).not.toBeInTheDocument();
+    // `title` alone would already satisfy toHaveAccessibleName (the accname
+    // algorithm falls back to it), so pin the aria-label explicitly — it is
+    // the name a screen reader gets regardless of tooltip behaviour.
+    expect(button).toHaveAttribute("aria-label", "Hide from export");
+    expect(button).toHaveAttribute("title", "Hide from export");
   });
 });
 
@@ -191,11 +208,14 @@ describe("BACKLOG-3366 U3 — Unhide is never gated", () => {
     });
   }
 
-  it("the Unhide pill on a gray bubble uses the white surface (the one deviation from the reference)", () => {
+  it("shows a crossed-out eye on a hidden text, and names the action, not the state", () => {
     renderModal({ onSetHiddenFromExport: jest.fn(), hideFromExportState: "blocked" });
     const unhide = screen.getByTestId("hide-from-export-m2");
-    expect(unhide).toHaveClass("bg-white", "hover:bg-gray-50", "border", "border-gray-300");
-    expect(unhide).not.toHaveClass("bg-gray-200");
+    expect(within(unhide).getByTestId("hidden-from-export-icon-hidden")).toBeInTheDocument();
+    expect(within(unhide).queryByTestId("hidden-from-export-icon-visible")).not.toBeInTheDocument();
+    expect(unhide).toHaveAccessibleName("Unhide");
+    expect(unhide).toHaveAttribute("aria-label", "Unhide");
+    expect(unhide).toHaveAttribute("title", "Unhide");
   });
 });
 
