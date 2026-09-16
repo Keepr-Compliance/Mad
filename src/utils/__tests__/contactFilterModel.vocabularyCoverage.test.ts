@@ -234,7 +234,8 @@ describe("source-filter vocabulary coverage (BACKLOG-2473, SR ask on #2197)", ()
         [...PERSISTED_CONTACT_SOURCES, ...SYNTHETIC_CONTACT_SOURCES].sort(),
       );
       // A coverage test over an empty list would pass forever. Name the size.
-      expect(ALL_CONTACT_SOURCE_VALUES.length).toBe(10);
+      // 11 since BACKLOG-1717 added the synthetic `email_derived`.
+      expect(ALL_CONTACT_SOURCE_VALUES.length).toBe(11);
     });
   });
 
