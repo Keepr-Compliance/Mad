@@ -42,8 +42,9 @@
  * It is not the `SubmissionStatus` union (that is `electron/types/models.ts`),
  * and it is not a statement about which statuses a deal may be IN — only about
  * which ones a fresh `submitTransaction` is refused in, and why. `needs_changes`
- * and `resubmitted` are deliberately absent; see `submissionService.ts` at the
- * check site for what each of them does instead.
+ * is deliberately absent — it is the one blocked-looking status a user CAN act
+ * on, and it routes to `resubmitTransaction`; see `submissionService.ts` at the
+ * check site.
  */
 
 /**
@@ -53,27 +54,52 @@
  * a deal awaiting the broker fell through to a delete whose own comment
  * advertises that it cascades to messages and attachments.
  *
- * `resubmitted` is NOT here. It is not an oversight and it is not a decision
- * that this list is the right place to take: a row only ever reaches
- * `resubmitted` at version >= 2 (`submissionService.ts` — `finalStatus` is
- * `resubmitted` only when `options.version` is set, and `resubmitTransaction`
- * always sets it to `current + 1`), by which point two rows share
- * `(organization_id, local_transaction_id)`.
+ * `resubmitted` IS HERE, AS OF BACKLOG-3390. THE OPEN DECISION IS TAKEN.
  *
- * BACKLOG-2853 added that the check was therefore never reached on such a
- * deal, so adding the word here would change nothing. THAT IS NO LONGER TRUE:
- * BACKLOG-2867 made the lookup order by version and take one row, so a
- * `resubmitted` deal now reaches the check and is declined by it. Adding the
- * word WOULD change behaviour — it would refuse a plain submit on a
- * round-tripped deal instead of letting it walk to a duplicate-key error. That
- * is a live product decision and it is still not taken here; what BACKLOG-2867
- * did instead was stop the fall-through from destroying anything, by refusing
- * to delete a row at a version the pending insert is not replacing.
- * Both states proven by execution in `submissionResubmitGuard-2853.test.ts`.
+ * It was deferred twice, and both deferrals rested on arguments that are now
+ * spent. BACKLOG-2853 said the word carried "the identical hazard one broker
+ * round trip later" — withdrawn as wrong. BACKLOG-2867 said adding it would
+ * change nothing, because a `resubmitted` row only exists at version >= 2
+ * (`submissionService.ts` — `finalStatus` is `resubmitted` only when
+ * `options.version` is set, and `resubmitTransaction` always sets it to
+ * `current + 1`), so two rows shared `(organization_id, local_transaction_id)`,
+ * the old `.maybeSingle()` lookup returned PGRST116, and the guard never ran.
+ * BACKLOG-2867 FIXED that lookup, which is what left the decision live — and
+ * left it live in the one place a deferred decision costs the most: in front of
+ * a user.
+ *
+ * WHAT THE FOUNDER HIT, released v2.37.0, 2026-09-16. After a successful
+ * resubmit the deal sits at `resubmitted`, and the modal LABELS its action
+ * "Resubmit for Review" (`SubmitForReviewModal` — `isResubmit` covers
+ * `resubmitted`) while the routing in `TransactionDetails.tsx` does NOT
+ * (`isResubmit = submission_status === "needs_changes"`, one status only). So
+ * the press ran a PLAIN submit at version 1. The fixed lookup named the
+ * version-2 row, `resubmitted` was not on this list, the guard let it by, the
+ * whole attachment upload ran, and the version-1 insert then collided with the
+ * retained version-1 row. The refusal reached him as a raw unique-constraint
+ * name, minutes after the press.
+ *
+ * WHY THE LIST AND NOT A VERSION-AWARE GUARD. A guard that compared versions
+ * would refuse the insert, but only in the service and only after the press —
+ * and the founder's first defect is that the action is OFFERED at all. The
+ * modal derives its disabled set from the keys of its copy map, and the parity
+ * test pins that set to THIS array by execution, so a status added here is a
+ * status the modal cannot leave enabled. The list is the only one of the two
+ * that reaches the screen before anything is pressed. (It also needs no second
+ * query: the lookup names one row, so a lower-version collision is invisible to
+ * a version comparison.)
+ *
+ * WHAT MUST NOT CHANGE WITH IT: the legitimate round trip. `needs_changes` is
+ * not on this list, `TransactionDetails` and `useBulkSubmit` both route it to
+ * `resubmitTransaction`, and that path versions properly. Widening the ROUTING
+ * to `resubmitted` instead would have been the wrong fix twice over — it would
+ * insert version 3 and SUCCEED, sending a second package on a deal the broker
+ * has not answered yet.
  */
 export const BLOCKED_SUBMISSION_STATUSES = [
   "submitted",
   "under_review",
+  "resubmitted",
   "approved",
   "rejected",
 ] as const;
@@ -89,6 +115,11 @@ export type BlockedSubmissionStatus =
  * and it happened to be the `submitted` one, so the three terminal-ish states
  * inherited a description of a deal still under review.
  *
+ * NONE OF THESE MAY NAME A DATABASE OBJECT. They are the sentences a user
+ * reads; BACKLOG-3390 was filed on a refusal that reached him as
+ * `transaction_submissions_org_txn_version_user_key`, and the test suite asserts
+ * every string here is free of constraint names and SQL.
+ *
  * These are the strings the SERVICE throws. The modal shows them before the
  * user presses anything, and may add a next-step sentence of its own on top
  * (at `rejected` it adds "Please contact your broker."), but it may never
@@ -103,6 +134,19 @@ export const BLOCKED_SUBMISSION_MESSAGES: Record<
     "This transaction has already been submitted and is waiting for your broker to review it. If your broker asks for changes you will be able to resubmit.",
   under_review:
     "Cannot resubmit while broker is reviewing. Please wait for their decision.",
+  /**
+   * BACKLOG-3390. Says the two things `submitted`'s line says — it is gone, and
+   * here is the way back — about the state that is actually true: a SECOND
+   * package is with the broker, and the next resubmit is gated on the broker
+   * asking for MORE changes, not on the first round of them.
+   *
+   * Deliberately not a reworded `submitted`: the parity test asserts the
+   * canonical strings are mutually distinct and the modal's rendered leads are
+   * too, so a near-copy of a neighbouring sentence is a real red, not a style
+   * note.
+   */
+  resubmitted:
+    "This transaction has already been resubmitted and is waiting for your broker to review the new version. If your broker asks for more changes you will be able to resubmit again.",
   approved: "This submission has already been approved.",
   rejected: "This submission has been rejected.",
 };
