@@ -236,6 +236,36 @@ describe("BACKLOG-3388: auth cache follows the signed-in user", () => {
     // The login. `setSession` with an unexpired token emits SIGNED_IN.
     await signIn(USER_B);
 
+    // ...and the login must NOT write back to session.json.
+    //
+    // The listener mirrors every session-carrying event into the in-memory
+    // cache, but persists to session.json on TOKEN_REFRESHED alone. That is a
+    // deliberate choice and this is the control for it: `updateSession` MERGES
+    // into the record already on disk (`sessionService.updateSession`,
+    // `{...currentSession, ...updates}`), so a write-back here would stamp B's
+    // tokens into a record whose `user` block is still A's — manufacturing the
+    // mismatched session file the whole item is about, one layer up. The other
+    // session-carrying events are not rotations: their tokens came from the
+    // caller that already owns persisting them (main.ts / sessionHandlers.ts).
+    //
+    // Exactly one call, and it is the ROTATION's tokens — A's, post-rotation.
+    // Count alone would not be enough: it can stay at 1 for an innocuous
+    // reason while the one call is the dangerous one, so the identity of the
+    // persisted pair is asserted too.
+    expect(mockUpdateSession).toHaveBeenCalledTimes(1);
+    expect(mockUpdateSession).toHaveBeenCalledWith({
+      supabaseTokens: {
+        access_token: issuedAccessTokens[USER_A],
+        refresh_token: refreshTokenFor(USER_A),
+      },
+    });
+    expect(mockUpdateSession).not.toHaveBeenCalledWith({
+      supabaseTokens: {
+        access_token: issuedAccessTokens[USER_B],
+        refresh_token: refreshTokenFor(USER_B),
+      },
+    });
+
     // The synchronous reader (sessionHandlers, syncHandlers) — no SDK fallback,
     // so it sees the cache and nothing else.
     expect(supabaseService.getAuthUserId()).toBe(USER_B);
