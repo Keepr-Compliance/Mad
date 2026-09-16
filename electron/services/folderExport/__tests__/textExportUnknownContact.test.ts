@@ -26,6 +26,11 @@ jest.mock("../../contactResolutionService", () => ({
 }));
 
 import type { Communication } from "../../../types/models";
+
+// BACKLOG-3367: these cases hide nothing, and now have to say so — the
+// omissions argument is required precisely so no caller can leave it unstated.
+import type { ExportOmissions } from "../../exportNotices";
+const NO_OMISSIONS_3367: ExportOmissions = { hiddenTextCount: 0 };
 import {
   getThreadContact,
   generateTextIndex,
@@ -144,6 +149,7 @@ describe("generateTextThreadHTML — the thread page header (BACKLOG-2463)", () 
       {},
       false,
       0,
+      NO_OMISSIONS_3367,
     );
     expect(html).toContain(
       '<h1>Conversation with +1 (206) 555-0103 <span class="badge">#001</span></h1>',
@@ -158,6 +164,7 @@ describe("generateTextThreadHTML — the thread page header (BACKLOG-2463)", () 
       {},
       false,
       0,
+      NO_OMISSIONS_3367,
     );
     expect(html).toContain('<h1>No name <span class="badge">#001</span></h1>');
     expect(html.toLowerCase()).not.toContain("unknown");
@@ -198,7 +205,7 @@ describe("generateTextThreadHTML — the thread page header (BACKLOG-2463)", () 
         participants: JSON.stringify({ chat_members: ["+12065550103", "+12065550113"] }),
       }),
     ];
-    const html = generateTextThreadHTML(group, { phone: "", name: null }, {}, true, 0, [
+    const html = generateTextThreadHTML(group, { phone: "", name: null }, {}, true, 0, NO_OMISSIONS_3367, [
       { phone: "+12065550103", name: "Jane Rivera" },
       { phone: "+12065550113", name: null },
       { phone: "", name: null },

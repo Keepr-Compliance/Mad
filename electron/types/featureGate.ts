@@ -37,9 +37,18 @@ export interface FeatureAccess {
  * VALUE in `electron/` cannot be imported by `src/` — Vite parses it as
  * JavaScript — so the two records are separate values by necessity.
  *
- * BACKLOG-3365 adds `desktop_hide_from_export` here and to both records.
+ * BACKLOG-3365 added `desktop_hide_from_export` here and to both records.
+ *
+ * `desktop_hide_from_export` gates ONLY the ability to HIDE a text from an
+ * export. The export itself never reads it, and neither does unhide: a user
+ * whose plan later loses the feature must still be able to put a text back into
+ * their own export. `electron/handlers/hiddenTextHandlers.ts` is where that
+ * lives — the hide channel calls the gate, the unhide channel does not import
+ * it at all.
  */
-export type StrictFeatureKey = "email_contact_inference";
+export type StrictFeatureKey =
+  | "email_contact_inference"
+  | "desktop_hide_from_export";
 
 /**
  * What a strict read concluded.
