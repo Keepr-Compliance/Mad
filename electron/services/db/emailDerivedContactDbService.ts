@@ -28,11 +28,7 @@ import { dbAll } from "./core/dbConnection";
 import { queryContacts, isPoolReady } from "../../workers/contactWorkerPool";
 import logService from "../logService";
 import {
-  buildEmailDerivedCandidateQuery,
-  buildEmailDerivedNameQuery,
-  foldEmailDerivedRecords,
-  type EmailDerivedCandidateRow,
-  type EmailDerivedNameRow,
+  runEmailDerivedQueryOn,
   MAILBOX_ADDRESS_SQL,
   MAILBOX_TOKEN_PROVIDER,
   type EmailDerivedProvider,
@@ -74,18 +70,14 @@ export function getEmailDerivedContacts(
 ): EmailDerivedRecord[] {
   if (providers.length === 0) return [];
 
-  const candidate = buildEmailDerivedCandidateQuery(userId, providers);
-  const rows = dbAll<EmailDerivedCandidateRow>(candidate.sql, candidate.params);
-  if (rows.length === 0) return [];
-
-  const nameQuery = buildEmailDerivedNameQuery(
+  // The SAME function the worker calls, handed this process's connection.
+  // Two implementations of one read is how the worker and the fallback come to
+  // disagree (BACKLOG-2457); there is only one here.
+  return runEmailDerivedQueryOn(
+    { prepare: (text: string) => ({ all: (...params: unknown[]) => dbAll(text as never, params) }) },
     userId,
     providers,
-    rows.map((r) => r.address),
   );
-  const nameRows = dbAll<EmailDerivedNameRow>(nameQuery.sql, nameQuery.params);
-
-  return foldEmailDerivedRecords(rows, nameRows);
 }
 
 /**

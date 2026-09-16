@@ -397,6 +397,49 @@ export function foldEmailDerivedRecords(
 }
 
 /**
+ * The minimum a caller must provide to run these statements.
+ *
+ * Structural rather than a driver type, so the worker's own connection and the
+ * main thread's both satisfy it without this module importing a database.
+ */
+export interface StatementRunner {
+  prepare(sql: string): { all(...params: unknown[]): unknown[] };
+}
+
+/**
+ * Run both statements on a caller-supplied connection and fold the result.
+ *
+ * WHY THIS EXISTS RATHER THAN THE WORKER PREPARING THE TEXT ITSELF: the SQL
+ * boundary gate requires statement text to live under `electron/services/db/`,
+ * and it is right to. These statements are BUILT rather than constant — the
+ * provider placeholders vary with how many mailboxes are enabled — so a worker
+ * calling `prepare()` on a returned object is text the gate cannot trace to its
+ * definition, which is exactly the shape the rule exists to prevent. Handing
+ * the connection in keeps every `prepare` of this text inside the db layer, and
+ * gives the worker and the main thread ONE implementation instead of two.
+ */
+export function runEmailDerivedQueryOn(
+  db: StatementRunner,
+  userId: string,
+  providers: readonly EmailDerivedProvider[],
+): EmailDerivedRecord[] {
+  if (providers.length === 0) return [];
+
+  const candidate = buildEmailDerivedCandidateQuery(userId, providers);
+  const rows = db.prepare(candidate.sql).all(...candidate.params) as EmailDerivedCandidateRow[];
+  if (rows.length === 0) return [];
+
+  const nameQuery = buildEmailDerivedNameQuery(
+    userId,
+    providers,
+    rows.map((r) => r.address),
+  );
+  const nameRows = db.prepare(nameQuery.sql).all(...nameQuery.params) as EmailDerivedNameRow[];
+
+  return foldEmailDerivedRecords(rows, nameRows);
+}
+
+/**
  * The picker id for an email person.
  *
  * Derived from the address alone, so it is stable across syncs and identical

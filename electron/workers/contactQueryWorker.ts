@@ -34,11 +34,7 @@ import {
 } from "../services/db/contactBackfillPlanSql";
 import {
   EMAIL_DERIVED_PROVIDERS,
-  buildEmailDerivedCandidateQuery,
-  buildEmailDerivedNameQuery,
-  foldEmailDerivedRecords,
-  type EmailDerivedCandidateRow,
-  type EmailDerivedNameRow,
+  runEmailDerivedQueryOn,
   type EmailDerivedProvider,
 } from "../services/db/emailDerivedContactsSql";
 
@@ -129,8 +125,9 @@ function runExternalQuery(userId: string): unknown[] {
 /**
  * People found in the user's email (BACKLOG-1717).
  *
- * Runs the SAME two statements the main-thread fallback runs, and folds them
- * with the same pure function — the BACKLOG-2514 rule. The per-mailbox
+ * Delegates to the db layer's runner, which is the SAME function the
+ * main-thread fallback calls — the BACKLOG-2514 rule, and what keeps every
+ * `prepare` of this text inside `electron/services/db/`. The per-mailbox
  * fail-closed check lives inside the candidate statement, so it applies here
  * without this function knowing about it.
  */
@@ -141,18 +138,7 @@ function runEmailDerivedQuery(userId: string, providers: string[] | undefined): 
   );
   if (enabled.length === 0) return [];
 
-  const candidate = buildEmailDerivedCandidateQuery(userId, enabled);
-  const rows = db.prepare(candidate.sql).all(...candidate.params) as EmailDerivedCandidateRow[];
-  if (rows.length === 0) return [];
-
-  const nameQuery = buildEmailDerivedNameQuery(
-    userId,
-    enabled,
-    rows.map((r) => r.address),
-  );
-  const nameRows = db.prepare(nameQuery.sql).all(...nameQuery.params) as EmailDerivedNameRow[];
-
-  return foldEmailDerivedRecords(rows, nameRows);
+  return runEmailDerivedQueryOn(db, userId, enabled);
 }
 
 function runBackfillQuery(userId: string): unknown[] {

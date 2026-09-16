@@ -48,11 +48,9 @@ import gmailFetchService from "../../gmailFetchService";
 import outlookFetchService from "../../outlookFetchService";
 import {
   buildEmailDerivedCandidateQuery,
-  buildEmailDerivedNameQuery,
-  foldEmailDerivedRecords,
+  runEmailDerivedQueryOn,
   emailDerivedRecordId,
   type EmailDerivedCandidateRow,
-  type EmailDerivedNameRow,
   type EmailDerivedProvider,
   type EmailDerivedRecord,
 } from "../emailDerivedContactsSql";
@@ -253,26 +251,16 @@ function addSaved(
   );
 }
 
-/** Run the SHIPPED builders end to end and return the folded records. */
+/**
+ * Run the SHIPPED runner — the same function the worker and the main-thread
+ * fallback both call — and return the folded records.
+ */
 function produce(
   db: Db,
   providers: EmailDerivedProvider[],
   userId = U,
 ): EmailDerivedRecord[] {
-  const candidate = buildEmailDerivedCandidateQuery(userId, providers);
-  const rows = db
-    .prepare(candidate.sql)
-    .all(...candidate.params) as EmailDerivedCandidateRow[];
-  if (rows.length === 0) return [];
-  const nameQuery = buildEmailDerivedNameQuery(
-    userId,
-    providers,
-    rows.map((r) => r.address),
-  );
-  const nameRows = db
-    .prepare(nameQuery.sql)
-    .all(...nameQuery.params) as EmailDerivedNameRow[];
-  return foldEmailDerivedRecords(rows, nameRows);
+  return runEmailDerivedQueryOn(db, userId, providers);
 }
 
 const addresses = (records: EmailDerivedRecord[]): string[] =>
