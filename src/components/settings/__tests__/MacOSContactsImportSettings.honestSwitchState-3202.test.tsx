@@ -89,6 +89,11 @@ const baseProps = {
   gmailContactsEnabled: false,
   googleContactsEnabled: false,
   outlookEmailsInferred: false,
+  // BACKLOG-3349: the plan gate is a third term in this suite's own rule
+  // (draw what is in effect). The base fixture states "allowed", so the cases
+  // that predate the gate keep measuring the connection term alone; the three
+  // cases that ARE about the plan override it.
+  contactInference: { outlook: "allowed" } as const,
   gmailEmailsInferred: false,
   messagesInferred: false,
   loadingPreferences: false,
