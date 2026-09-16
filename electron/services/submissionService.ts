@@ -69,9 +69,32 @@ export interface SubmissionResult {
   success: boolean;
   submissionId: string | null;
   error?: string;
+  /**
+   * Attachments that were gathered and then FAILED TO UPLOAD. Unchanged in
+   * BACKLOG-3389 — see {@link SubmissionResult.flaggedWithoutAttachments} for
+   * the number this one never could have reported.
+   */
   attachmentsFailed: number;
   messagesCount: number;
   attachmentsCount: number;
+  /**
+   * BACKLOG-3389: in-window texts and emails that ADVERTISE an attachment
+   * (`has_attachments`) and contributed NOTHING to this submission.
+   *
+   * `attachmentsFailed` counts upload failures, so it can only ever see an
+   * attachment the gather already returned. Everything lost BEFORE the gather —
+   * a metadata-only row whose bytes were never downloaded, a download that
+   * failed, an attachment row the importer never wrote — was invisible: the run
+   * reported `attachmentsCount: 0, attachmentsFailed: 0` while silently
+   * dropping a real attachment. That silent zero is what made BACKLOG-3389
+   * take a month to notice.
+   *
+   * Counted AFTER the gather, so it is the honest residue of the whole
+   * pipeline — pre-download included — and not a prediction made inside any one
+   * step of it. Zero here means "nothing to send"; non-zero means "we could not
+   * send these", and the two are now distinguishable.
+   */
+  flaggedWithoutAttachments: number;
 }
 
 /** Progress stages for submission flow */
@@ -352,6 +375,27 @@ class SubmissionService {
         auditStartDate,
         auditEndDate
       );
+
+      // BACKLOG-3389: what advertised an attachment and gave us nothing. Must
+      // be measured HERE — after the gather, before anything is uploaded — so
+      // it counts the residue of the whole pipeline rather than of one step.
+      const flaggedWithoutAttachments = this.countFlaggedWithoutAttachments(
+        messages,
+        emails,
+        attachments
+      );
+      if (flaggedWithoutAttachments > 0) {
+        logService.warn(
+          `[Submission] ${flaggedWithoutAttachments} in-window items advertise an attachment but contributed none — they will NOT be in this submission`,
+          "SubmissionService",
+          {
+            transactionId,
+            flaggedWithoutAttachments,
+            attachmentsGathered: attachments.length,
+          }
+        );
+      }
+
       const orgId = await this.getUserOrganizationId();
       const currentUserId = await this.getCurrentUserId();
 
@@ -827,6 +871,10 @@ class SubmissionService {
           attachmentsCount: successfulUploads.length,
           attachmentsFailed: attachmentUploadResults.filter((r) => !r.success)
             .length,
+          // BACKLOG-3389: the number that used to be unrecorded. Logged even
+          // when it is 0 — a zero that is PRINTED is a measurement; a zero that
+          // is absent is what this item was.
+          flaggedWithoutAttachments,
         }
       );
 
@@ -838,6 +886,7 @@ class SubmissionService {
         attachmentsCount: successfulUploads.length,
         attachmentsFailed: attachmentUploadResults.filter((r) => !r.success)
           .length,
+        flaggedWithoutAttachments,
       };
     } catch (error) {
       const errorMessage =
@@ -887,6 +936,10 @@ class SubmissionService {
         messagesCount: 0,
         attachmentsCount: 0,
         attachmentsFailed: 0,
+        // Nothing was submitted, so nothing was dropped from a submission. The
+        // error is the report here; this field would only add a second,
+        // weaker one.
+        flaggedWithoutAttachments: 0,
       };
     }
   }
@@ -948,12 +1001,65 @@ class SubmissionService {
   }
 
   /**
+   * BACKLOG-3389: how many in-window texts and emails advertise an attachment
+   * and contributed none to this submission.
+   *
+   * Counted by SET MEMBERSHIP against the attachments actually gathered — the
+   * owning `message_id` / `email_id` of each — not by re-running a query or
+   * subtracting counts. Two counts agreeing is not the same as the right rows
+   * being present, and this number exists precisely because a count agreed with
+   * itself while an attachment went missing.
+   *
+   * `has_attachments` arrives as SQLite's 0/1 through a `boolean` field on
+   * {@link Message} and as an unknown on the email rows, so the truth test is
+   * explicit about all three spellings rather than leaning on truthiness.
+   */
+  private countFlaggedWithoutAttachments(
+    messages: Message[],
+    emails: Record<string, unknown>[],
+    attachments: Attachment[]
+  ): number {
+    const messagesWithBytes = new Set<string>();
+    const emailsWithBytes = new Set<string>();
+    for (const attachment of attachments) {
+      // `getTransactionAttachments` does `SELECT a.*`, so `email_id` is on the
+      // row at runtime even though the `Attachment` interface omits it.
+      const row = attachment as Attachment & { email_id?: string | null };
+      if (row.message_id) messagesWithBytes.add(row.message_id);
+      if (row.email_id) emailsWithBytes.add(row.email_id);
+    }
+
+    const advertisesAttachment = (value: unknown): boolean =>
+      value === true || value === 1 || value === "1";
+
+    let missing = 0;
+    for (const message of messages) {
+      const flagged = advertisesAttachment(
+        (message as unknown as Record<string, unknown>).has_attachments
+      );
+      if (flagged && !messagesWithBytes.has(message.id)) missing += 1;
+    }
+    for (const email of emails) {
+      const id = email.id;
+      if (typeof id !== "string") continue;
+      if (advertisesAttachment(email.has_attachments) && !emailsWithBytes.has(id)) {
+        missing += 1;
+      }
+    }
+    return missing;
+  }
+
+  /**
    * BACKLOG-1369: Load transaction attachments, downloading any missing email
    * attachments on-demand before returning.
    *
    * Since sync no longer downloads attachments eagerly, this method checks for
-   * emails with has_attachments=true but no attachment records, and downloads
-   * them from the provider before querying.
+   * emails that advertise attachments whose BYTES are not stored locally, and
+   * downloads them from the provider before querying.
+   *
+   * BACKLOG-3389: "whose bytes are not stored" is the corrected test. It used
+   * to read "with no attachment records", which is what the SQL asked and what
+   * silently dropped a metadata-only attachment from a submission.
    */
   private async loadTransactionAttachments(
     transactionId: string,
@@ -968,8 +1074,15 @@ class SubmissionService {
 
   /**
    * BACKLOG-1369: Download missing email attachments for a transaction.
-   * Finds emails linked to this transaction that have has_attachments=true but
-   * no attachment records in the DB, then downloads from the provider.
+   * Finds emails linked to this transaction that have has_attachments=true and
+   * are missing the BYTES of at least one attachment, then downloads from the
+   * provider.
+   *
+   * BACKLOG-3389: "missing the bytes" replaced "have no attachment records".
+   * A normal sync writes a metadata-only row (`storage_path` NULL), which
+   * satisfied the old row-existence test — so the download was skipped and the
+   * gather then discarded the row for having nothing to upload. The predicate
+   * and the reasoning live in `db/submissionEmailSql.ts`.
    */
   private async downloadMissingEmailAttachments(transactionId: string): Promise<void> {
     // Check network connectivity first

@@ -1005,7 +1005,14 @@ export interface WindowApiTransactions {
     submissionId?: string;
     messagesCount?: number;
     attachmentsCount?: number;
+    /** Gathered attachments that failed to UPLOAD. */
     attachmentsFailed?: number;
+    /**
+     * BACKLOG-3389: in-window texts/emails that advertise an attachment and
+     * contributed none — lost before the upload stage, so `attachmentsFailed`
+     * structurally cannot see them.
+     */
+    flaggedWithoutAttachments?: number;
     error?: string;
   }>;
 
@@ -1017,7 +1024,14 @@ export interface WindowApiTransactions {
     submissionId?: string;
     messagesCount?: number;
     attachmentsCount?: number;
+    /** Gathered attachments that failed to UPLOAD. */
     attachmentsFailed?: number;
+    /**
+     * BACKLOG-3389: in-window texts/emails that advertise an attachment and
+     * contributed none — lost before the upload stage, so `attachmentsFailed`
+     * structurally cannot see them.
+     */
+    flaggedWithoutAttachments?: number;
     error?: string;
   }>;
 
