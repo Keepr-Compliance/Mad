@@ -50,6 +50,7 @@ import { render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { ContactsImportSettings } from "../MacOSContactsImportSettings";
 import { PlatformProvider } from "../../../contexts/PlatformContext";
+import type { ContactInferenceStates } from "../../../hooks/useContactInferenceState";
 
 const mockRequestSync = jest.fn();
 jest.mock("../../../hooks/useSyncOrchestrator", () => ({
@@ -93,7 +94,7 @@ const baseProps = {
   // (draw what is in effect). The base fixture states "allowed", so the cases
   // that predate the gate keep measuring the connection term alone; the three
   // cases that ARE about the plan override it.
-  contactInference: { outlook: "allowed" } as const,
+  contactInference: { outlook: "allowed" } as ContactInferenceStates,
   gmailEmailsInferred: false,
   messagesInferred: false,
   loadingPreferences: false,
@@ -298,5 +299,134 @@ describe("A source switch tells the truth about reachability (BACKLOG-3202)", ()
     renderCard({ messagesInferred: true, isGoogleConnected: false, isMicrosoftConnected: false });
 
     expectReadsOn("Messages SMS auto-discover");
+  });
+});
+
+/**
+ * BACKLOG-3349 — the plan is a third term in the same rule.
+ *
+ * `disabled` on this row was UNASSERTED before these cases: removing
+ * `|| !isMicrosoftConnected` from the Outlook-emails toggle left all 75 tests
+ * of the 13 settings suites green. So each case below asserts the disabled
+ * attribute as well as the drawn state, or it would be measuring nothing.
+ */
+describe("C9-C11 — the Outlook emails row and the plan (BACKLOG-3349)", () => {
+  /** The row that owns this switch, for reading its inline label. */
+  function outlookEmailsRow(): HTMLElement {
+    const sw = screen.getByRole("switch", { name: "Outlook emails auto-discover" });
+    const row = sw.closest("div.flex.items-center.justify-between");
+    if (!row) throw new Error("Outlook emails row not found");
+    return row as HTMLElement;
+  }
+
+  it("C9: blocked — disabled, drawn off, labelled and explained, even with the preference ON", () => {
+    renderCard({
+      outlookEmailsInferred: true,
+      isMicrosoftConnected: true,
+      contactInference: { outlook: "blocked" },
+    });
+
+    const sw = screen.getByRole("switch", { name: "Outlook emails auto-discover" });
+    expect(sw).toBeDisabled();
+    expect(sw).toHaveAttribute("aria-checked", "false");
+    expect(sw.className).not.toContain("bg-blue-500");
+    expect(sw).toHaveAttribute("title", "Not available on your current plan");
+    expect(outlookEmailsRow()).toHaveTextContent("(not in your plan)");
+  });
+
+  it("C9b: blocked wins over not-connected, because connecting cannot fix it", () => {
+    renderCard({
+      outlookEmailsInferred: true,
+      isMicrosoftConnected: false,
+      contactInference: { outlook: "blocked" },
+    });
+
+    const row = outlookEmailsRow();
+    expect(row).toHaveTextContent("(not in your plan)");
+    expect(row).not.toHaveTextContent("(not connected)");
+    expect(screen.getByRole("switch", { name: "Outlook emails auto-discover" })).toHaveAttribute(
+      "title",
+      "Not available on your current plan"
+    );
+  });
+
+  it("C10: allowed, connected, preference on — enabled and drawn on", () => {
+    // Without this, every case above passes against a row that is permanently
+    // disabled and always off.
+    renderCard({
+      outlookEmailsInferred: true,
+      isMicrosoftConnected: true,
+      contactInference: { outlook: "allowed" },
+    });
+
+    const sw = screen.getByRole("switch", { name: "Outlook emails auto-discover" });
+    expect(sw).toBeEnabled();
+    expect(sw).toHaveAttribute("aria-checked", "true");
+    expect(sw.className).toContain("bg-blue-500");
+    expect(sw).not.toHaveAttribute("title");
+    expect(outlookEmailsRow()).not.toHaveTextContent("(not in your plan)");
+  });
+
+  it("C11: unknown — disabled and off, but it makes NO claim about the plan", () => {
+    // An offline but entitled user must not be told he did not pay for this.
+    renderCard({
+      outlookEmailsInferred: true,
+      isMicrosoftConnected: true,
+      contactInference: { outlook: "unknown" },
+    });
+
+    const sw = screen.getByRole("switch", { name: "Outlook emails auto-discover" });
+    expect(sw).toBeDisabled();
+    expect(sw).toHaveAttribute("aria-checked", "false");
+    expect(sw).toHaveAttribute("title", "Can't check your plan right now");
+    expect(outlookEmailsRow()).not.toHaveTextContent("(not in your plan)");
+  });
+
+  it("C11b: unknown with no connection — the actionable reason wins", () => {
+    renderCard({
+      outlookEmailsInferred: true,
+      isMicrosoftConnected: false,
+      contactInference: { outlook: "unknown" },
+    });
+
+    const row = outlookEmailsRow();
+    expect(row).toHaveTextContent("(not connected)");
+    expect(row).not.toHaveTextContent("(not in your plan)");
+    expect(screen.getByRole("switch", { name: "Outlook emails auto-discover" })).toHaveAttribute(
+      "title",
+      "Connect email to enable import"
+    );
+  });
+
+  it("C11c: pending — disabled and off, and silent", () => {
+    renderCard({
+      outlookEmailsInferred: true,
+      isMicrosoftConnected: true,
+      contactInference: { outlook: "pending" },
+    });
+
+    const sw = screen.getByRole("switch", { name: "Outlook emails auto-discover" });
+    expect(sw).toBeDisabled();
+    expect(sw).toHaveAttribute("aria-checked", "false");
+    expect(sw).not.toHaveAttribute("title");
+    expect(outlookEmailsRow()).not.toHaveTextContent("(not in your plan)");
+  });
+
+  it("C11d: the plan gate reaches ONLY this row — Gmail and Messages are untouched", () => {
+    renderCard({
+      outlookEmailsInferred: true,
+      gmailEmailsInferred: true,
+      messagesInferred: true,
+      isMicrosoftConnected: true,
+      isGoogleConnected: true,
+      contactInference: { outlook: "blocked" },
+    });
+
+    expect(screen.getByRole("switch", { name: "Gmail emails auto-discover" })).toBeEnabled();
+    expect(screen.getByRole("switch", { name: "Gmail emails auto-discover" })).toHaveAttribute(
+      "aria-checked",
+      "true"
+    );
+    expect(screen.getByRole("switch", { name: "Messages SMS auto-discover" })).toBeEnabled();
   });
 });

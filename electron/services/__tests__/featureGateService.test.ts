@@ -606,3 +606,64 @@ describe("FeatureGateService", () => {
     });
   });
 });
+
+// ==========================================
+// getAllFeaturesOrNull — BACKLOG-3349
+// ==========================================
+
+describe("getAllFeaturesOrNull (BACKLOG-3349)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    featureGateService.invalidateCache();
+    mockFs.readFile.mockRejectedValue(
+      Object.assign(new Error("ENOENT"), { code: "ENOENT" })
+    );
+    mockFs.writeFile.mockResolvedValue(undefined);
+    mockFs.unlink.mockResolvedValue(undefined);
+    mockGetSession.mockResolvedValue({
+      data: { session: { user: { id: "user-mock" }, access_token: "token-mock" } },
+    });
+    mockGetAuthSession.mockResolvedValue({
+      userId: "user-mock",
+      accessToken: "token-mock",
+    });
+  });
+
+  it("answers null — not {} — when there is no fetch and no cache", async () => {
+    // This IS the difference the method exists for. `{}` is what a plan that
+    // grants nothing looks like; a strict reader that saw `{}` here would tell
+    // the user his plan excludes a feature on the strength of a failed network
+    // call.
+    mockRpc.mockResolvedValue({ data: null, error: { message: "offline" } });
+
+    await expect(featureGateService.getAllFeaturesOrNull("org-1")).resolves.toBeNull();
+  });
+
+  it("answers the map on a successful fetch", async () => {
+    mockRpc.mockResolvedValue(
+      mockOrgFeaturesResponse({
+        text_export: { enabled: true, value: "", source: "plan" },
+      })
+    );
+
+    const result = await featureGateService.getAllFeaturesOrNull("org-1");
+
+    expect(result).not.toBeNull();
+    expect(result?.["text_export"]?.allowed).toBe(true);
+  });
+
+  it("answers an EMPTY map when the RPC really did answer with no features", async () => {
+    // Empty and absent are different answers, and only this method can tell
+    // them apart. The caller decides what to do with each.
+    mockRpc.mockResolvedValue({ data: { features: {} }, error: null });
+
+    await expect(featureGateService.getAllFeaturesOrNull("org-1")).resolves.toEqual({});
+  });
+
+  it("getAllFeatures still answers {} in the case that answers null here", async () => {
+    // The fail-open contract 21 existing key reads depend on is unchanged.
+    mockRpc.mockResolvedValue({ data: null, error: { message: "offline" } });
+
+    await expect(featureGateService.getAllFeatures("org-1")).resolves.toEqual({});
+  });
+});
