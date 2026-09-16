@@ -25,7 +25,7 @@
  * Wording is FOUNDER CONFIRMS AT END-OF-A TEST.
  */
 import React, { useContext, useEffect } from "react";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import ContactAssignmentStep from "./ContactAssignmentStep";
@@ -247,5 +247,53 @@ describe("BACKLOG-3376 deal wizard (+ Add): what was saved that no email can com
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(infoToasts()).toHaveLength(1);
     expect(within(infoToasts()[0]).getByText(TEXT_ONE)).toBeInTheDocument();
+  });
+
+  it("C-sticky: the message stays until the user dismisses it, however long that is", async () => {
+    // Same control as the Clients & Contacts card's C-sticky, on the surface
+    // the founder tested second. Breaks caught: `{ duration: 12000 }`, and a
+    // bare `notify?.info(message)` falling back to the provider's 5s default.
+    //
+    // FAKE TIMERS ARE INSTALLED BEFORE THE TOAST IS RAISED, on purpose.
+    // `NotificationProvider` arms its auto-dismiss `setTimeout` at raise time;
+    // install them afterwards and a REAL timeout is already running that
+    // `advanceTimersByTime` can never fire — the toast would survive whatever
+    // the call site passed and this control would pass forever.
+    //
+    // It clicks with `fireEvent` rather than reusing `pressAdd`: that helper
+    // drives this screen with `userEvent`, which waits on real timers and
+    // hangs under fake ones unless it is handed an advance function. Same row,
+    // same button, same handler.
+    jest.useFakeTimers();
+    try {
+      jest
+        .mocked(window.api.contacts.import)
+        .mockResolvedValue({ success: true, contacts: [savedCasey], unmatchableEmails: [BAD_ONE] });
+      render(<Harness />);
+      const row = screen
+        .getAllByTestId("contact-row")
+        .find((r) => r.textContent?.includes("Casey Phone"));
+      if (!row) throw new Error("no Casey Phone row");
+      await act(async () => {
+        fireEvent.click(within(row).getByTestId("contact-row-add-button"));
+      });
+      await waitFor(() => expect(window.api.contacts.import).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(infoToasts()).toHaveLength(1));
+
+      // Ten minutes: past the 12s this used to use and past the 5s default.
+      await act(async () => {
+        jest.advanceTimersByTime(10 * 60 * 1000);
+      });
+      expect(infoToasts()).toHaveLength(1);
+      expect(infoToasts()[0]).toHaveTextContent(BAD_ONE);
+
+      // And there is a way out of a message that never leaves by itself.
+      await act(async () => {
+        fireEvent.click(within(infoToasts()[0]).getByTestId("notification-dismiss"));
+      });
+      expect(infoToasts()).toHaveLength(0);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

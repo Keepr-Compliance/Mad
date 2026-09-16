@@ -358,4 +358,47 @@ describe("BACKLOG-3376 Clients & Contacts card: what was saved that no email can
     await settle();
     expect(infoToasts()).toHaveLength(1);
   });
+
+  it("C-sticky: the message stays until the user dismisses it, however long that is", async () => {
+    // Breaks caught: `{ duration: 12000 }` (what the founder tested and asked
+    // to change on 2026-09-16), and a bare `notify?.info(message)` falling
+    // back to the provider's 5s default. Either one auto-dismisses; this does
+    // not. Whole shipped set for this file was measured green against the
+    // persistent call site first, so this is the only test on this surface
+    // that can see the difference.
+    //
+    // FAKE TIMERS ARE INSTALLED BEFORE THE TOAST IS RAISED, on purpose.
+    // `NotificationProvider` arms its auto-dismiss `setTimeout` at raise time;
+    // install them afterwards and a REAL timeout is already running that
+    // `advanceTimersByTime` can never fire — the toast would survive whatever
+    // the call site passed and this control would pass forever. The mutation
+    // run is what proves the order is right.
+    jest.useFakeTimers();
+    try {
+      installBackend("rosey");
+      jest
+        .mocked(window.api.contacts.import)
+        .mockResolvedValue({ success: true, contacts: [savedRosey], unmatchableEmails: [BAD_ONE] });
+      await renderAndOpenRosey();
+      await pressImport();
+      await waitFor(() => expect(infoToasts()).toHaveLength(1));
+
+      // Ten minutes: past the 12s this used to use, past the 5s default, and
+      // past anything a future edit would plausibly reintroduce.
+      await act(async () => {
+        jest.advanceTimersByTime(10 * 60 * 1000);
+      });
+      expect(infoToasts()).toHaveLength(1);
+      expect(infoToasts()[0]).toHaveTextContent(BAD_ONE);
+
+      // And there is a way out of a message that never leaves by itself — the
+      // half that makes "persistent" safe rather than a trap.
+      await act(async () => {
+        fireEvent.click(within(infoToasts()[0]).getByTestId("notification-dismiss"));
+      });
+      expect(infoToasts()).toHaveLength(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 });
