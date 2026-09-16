@@ -38,24 +38,30 @@
 // Mock setup -- must be before imports
 // ---------------------------------------------------------------------------
 
+import {
+  BROKERAGE_ORG_POST,
+  createPostgrestEmulator,
+} from '../../../../helpers/postgrestEmulator';
+
 const mockExchangeCodeForSession = jest.fn();
 const mockGetUser = jest.fn();
 const mockSignOut = jest.fn();
 const mockRpc = jest.fn();
-const mockMembershipSingle = jest.fn();
-const mockOrgSingle = jest.fn();
 
-/** Table-aware query chain shared by the route's client and middleware's. */
-function queryChain(table: string) {
-  const single = table === 'organizations' ? mockOrgSingle : mockMembershipSingle;
-  const chain = {
-    select: () => chain,
-    eq: () => chain,
-    limit: () => chain,
-    single,
-  };
-  return chain;
-}
+/**
+ * Table-aware query stub shared by the route's client and middleware's.
+ *
+ * BACKLOG-3364 replaced the hand-rolled chain that used to sit here. That one
+ * ignored every argument and resolved a fixed `.single()` value, which was
+ * enough while both readers ended in `.limit(1).single()` — and is true of
+ * neither any more: both now embed the organization record and await an ARRAY.
+ * It also could not tell a query that named
+ * `organizations.personal_owner_user_id` from one that did not, so a reader
+ * that named it — fatal against a database that has not had that migration
+ * applied — would have passed here. The shared emulator answers 42703 for that,
+ * from the responses PR 1 captured off a real PostgREST.
+ */
+const mockEmulator = createPostgrestEmulator();
 
 // The route builds its client here...
 jest.mock('@/lib/supabase/server', () => ({
@@ -66,7 +72,7 @@ jest.mock('@/lib/supabase/server', () => ({
       signOut: mockSignOut,
     },
     rpc: mockRpc,
-    from: queryChain,
+    from: (table: string) => mockEmulator.from(table),
   })),
 }));
 
@@ -75,7 +81,7 @@ jest.mock('@/lib/supabase/server', () => ({
 jest.mock('@supabase/ssr', () => ({
   createServerClient: jest.fn(() => ({
     auth: { getUser: mockGetUser },
-    from: queryChain,
+    from: (table: string) => mockEmulator.from(table),
   })),
 }));
 
@@ -115,8 +121,26 @@ function signedInAzureUser(): void {
   });
 }
 
+/** A membership row in someone else's brokerage — never a personal org. */
+function brokerageRow(role: string): Record<string, unknown> {
+  return {
+    id: `${ORG_ID}-${role}`,
+    user_id: USER_ID,
+    role,
+    organization_id: ORG_ID,
+    // BACKLOG-3364: the embedded organization record the query now asks for,
+    // transcribed from a real PostgREST response. `personal_owner_user_id` is
+    // null here — this is a brokerage.
+    organizations: { ...BROKERAGE_ORG_POST, id: ORG_ID },
+  };
+}
+
 function noExistingMembership(): void {
-  mockMembershipSingle.mockResolvedValue({ data: null });
+  mockEmulator.set({ rows: { organization_members: [] } });
+}
+
+function existingMembership(role: string): void {
+  mockEmulator.set({ rows: { organization_members: [brokerageRow(role)] } });
 }
 
 function provisionedAs(role: string | undefined): void {
@@ -150,13 +174,14 @@ async function middlewareVerdict(path: string, role: string): Promise<string | n
   // alone with `-t`, they failed with `/login`. A test that depends on its
   // neighbour reads green until the neighbour is deleted or reordered.
   signedInAzureUser();
-  mockMembershipSingle.mockResolvedValue({ data: { role, organization_id: ORG_ID } });
+  existingMembership(role);
   const response = await middleware(new NextRequest(`${ORIGIN}${path}`));
   return response.headers.get('location');
 }
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockEmulator.reset();
 });
 
 describe('/auth/setup/callback — hop 1: the callback names one destination', () => {
@@ -278,9 +303,7 @@ describe('hop 2: middleware is the only role → destination authority', () => {
 describe('/auth/setup/callback — existing members are unaffected', () => {
   it('sends an existing agent to the dashboard, as before', async () => {
     signedInAzureUser();
-    mockMembershipSingle.mockResolvedValue({
-      data: { role: 'agent', organization_id: ORG_ID },
-    });
+    existingMembership('agent');
 
     expect(await callbackRedirect()).toBe(`${ORIGIN}/dashboard`);
     expect(mockRpc).not.toHaveBeenCalled();
@@ -290,11 +313,17 @@ describe('/auth/setup/callback — existing members are unaffected', () => {
     // Guards the canGrantAdminConsent() extraction: this branch used to spell
     // the role check inline, and must not have narrowed.
     signedInAzureUser();
-    mockMembershipSingle.mockResolvedValue({
-      data: { role: 'it_admin', organization_id: ORG_ID },
-    });
-    mockOrgSingle.mockResolvedValue({
-      data: { graph_admin_consent_granted: false, microsoft_tenant_id: TENANT_ID },
+    mockEmulator.set({
+      rows: {
+        organization_members: [brokerageRow('it_admin')],
+        organizations: [
+          {
+            id: ORG_ID,
+            graph_admin_consent_granted: false,
+            microsoft_tenant_id: TENANT_ID,
+          },
+        ],
+      },
     });
 
     expect(await callbackRedirect()).toContain('/setup/consent');
