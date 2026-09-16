@@ -17,9 +17,24 @@
  * back from the tables, never from the handler's own verdict.
  *
  * THE GATE. `isHideFromExportAllowed` is wrapped so each test can choose, and
- * by DEFAULT it runs the SHIPPED stand-in (`hideFromExportGateStub.ts`). The
- * "shipped stand-in refuses" case therefore turns red if the stand-in is ever
- * flipped to allow.
+ * by DEFAULT it runs the REAL, SHIPPED gate — BACKLOG-3365 replaced the
+ * stand-in module with `featureGateHandlers.isHideFromExportAllowed`, and the
+ * `requireActual` below reaches that function, not a copy of it.
+ *
+ * Which means this file must say what the real gate is allowed to talk to.
+ * `jest.requireActual` bypasses the mock for the module it names, NOT for that
+ * module's dependencies — so the real gate runs its real chain down to
+ * `supabaseService.getClient().auth.getSession()`. Left unmocked that is a live
+ * outbound connection: the net guard would red the suite in `afterEach` naming
+ * a HOST rather than this line, or the call would throw before any socket, the
+ * gate's own `catch` would answer "unknown", and every assertion in C9 would
+ * still pass while meaning nothing at all.
+ *
+ * So `supabaseService` is mocked to a signed-OUT session below. The default
+ * then means something stronger than it used to: THE REAL GATE REFUSES HIDING
+ * WHEN THE PLAN CANNOT BE READ. `blocked` and `unknown` are both refusals here,
+ * which is the property that matters — `featureGateHandlers.hideFromExport-3365`
+ * is where the two are told apart.
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -93,8 +108,21 @@ jest.mock("../../services/databaseService", () => ({
   },
 }));
 
+// The boundary the REAL gate bottoms out at. Signed out, so `resolveOrgOutcome`
+// answers `no_session`, the strict reader answers `unknown` and the gate answers
+// false — offline, with no socket opened. `auditService` is unaffected: it takes
+// its Supabase client by injection in `beforeAll`, never by import.
+jest.mock("../../services/supabaseService", () => ({
+  __esModule: true,
+  default: {
+    getClient: () => ({
+      auth: { getSession: async () => ({ data: { session: null }, error: null }) },
+    }),
+  },
+}));
+
 const mockGate = jest.fn();
-jest.mock("../hideFromExportGateStub", () => ({
+jest.mock("../featureGateHandlers", () => ({
   isHideFromExportAllowed: (...args: unknown[]) => mockGate(...args),
 }));
 
@@ -106,7 +134,7 @@ import {
   registerHiddenTextHandlers,
 } from "../hiddenTextHandlers";
 
-const SHIPPED_STAND_IN = jest.requireActual("../hideFromExportGateStub") as {
+const SHIPPED_GATE = jest.requireActual("../featureGateHandlers") as {
   isHideFromExportAllowed: () => Promise<boolean>;
 };
 
@@ -197,8 +225,8 @@ afterAll(() => {
 beforeEach(() => {
   mockDb = buildDb();
   mockGate.mockReset();
-  // Default: the shipped stand-in decides.
-  mockGate.mockImplementation(() => SHIPPED_STAND_IN.isHideFromExportAllowed());
+  // Default: the real, shipped gate decides.
+  mockGate.mockImplementation(() => SHIPPED_GATE.isHideFromExportAllowed());
 });
 
 afterEach(() => {
@@ -218,7 +246,7 @@ const unhide = (messageId: string, transactionId = TRANSACTION) =>
   invoke("transactions:unhide-text-from-export", transactionId, messageId);
 
 describe("BACKLOG-3366 C9 — hide is gated, unhide is not", () => {
-  it("the SHIPPED stand-in refuses hide: failure, no hidden row, no audit row", async () => {
+  it("the REAL gate refuses hide when the plan cannot be read: failure, no hidden row, no audit row", async () => {
     const result = await hide("m-linked");
 
     expect(result).toEqual({ success: false, error: HIDE_FROM_EXPORT_NOT_ALLOWED_ERROR });
@@ -247,7 +275,7 @@ describe("BACKLOG-3366 C9 — hide is gated, unhide is not", () => {
     mockGate.mockResolvedValue(true);
     await hide("m-linked");
     mockGate.mockReset();
-    mockGate.mockImplementation(() => SHIPPED_STAND_IN.isHideFromExportAllowed());
+    mockGate.mockImplementation(() => SHIPPED_GATE.isHideFromExportAllowed());
 
     const result = await unhide("m-linked");
 

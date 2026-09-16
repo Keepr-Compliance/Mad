@@ -285,10 +285,18 @@ describe("BACKLOG-3367 P9 — the export never consults the hide feature gate", 
   // export honours it unconditionally: a plan change must never resurrect
   // already-hidden texts into an audit package a third party has been given.
   // Source-level, in the shape of `exportPlan.noReviewFilter-2866.test.ts`.
+  //
+  // BACKLOG-3365 added `exportUtils.ts`: it is imported by `pdfExportService`,
+  // by all three `folderExport` helpers and by `exportHandleSql`, so it is as
+  // much on the export path as the three above. A named list can never be
+  // proven complete, though, which is why `hideFromExportGateIdentity-3365`
+  // asks the same question from the other end — the set of files that name the
+  // gate, over the whole production tree.
   const sources = [
     "../exportPlan.ts",
     "../../handlers/transactionExportHandlers.ts",
     "../exportNotices.ts",
+    "../../utils/exportUtils.ts",
   ];
 
   for (const rel of sources) {
