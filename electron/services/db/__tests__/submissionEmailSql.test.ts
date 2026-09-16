@@ -80,11 +80,34 @@ function link(commId: string, emailId: string, txId: string = TX): void {
   ).run(commId, USER, txId, emailId);
 }
 
-function attach(attachmentId: string, emailId: string): void {
+/**
+ * Insert an attachment row for an email.
+ *
+ * BACKLOG-3389: `storagePath` is REQUIRED and has no default, on purpose.
+ * Before this item the helper wrote no `storage_path` at all, so EVERY case
+ * that used it was a METADATA-ONLY row — the exact shape the statement now has
+ * to select. Two cases below asserted such a row meant "already fetched",
+ * which is the defect written down as a passing test. Forcing the caller to
+ * choose means a new case cannot silently inherit the wrong shape.
+ */
+function attach(
+  attachmentId: string,
+  emailId: string,
+  storagePath: string | null,
+): void {
   db.prepare(
-    `INSERT INTO attachments (id, email_id, filename) VALUES (?, ?, ?)`,
-  ).run(attachmentId, emailId, `${attachmentId}.pdf`);
+    `INSERT INTO attachments (id, email_id, filename, storage_path)
+     VALUES (?, ?, ?, ?)`,
+  ).run(attachmentId, emailId, `${attachmentId}.pdf`, storagePath);
 }
+
+/** A row a sync wrote: filename known, no bytes on disk. */
+const metadataOnly = (attachmentId: string, emailId: string): void =>
+  attach(attachmentId, emailId, null);
+
+/** A row a download completed: bytes on disk. */
+const stored = (attachmentId: string, emailId: string): void =>
+  attach(attachmentId, emailId, `/tmp/keepr/${attachmentId}.pdf`);
 
 beforeEach(() => {
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "keepr-2989-submission-"));
@@ -156,9 +179,9 @@ describe("TRANSACTION_EMAILS_MISSING_ATTACHMENTS_SQL", () => {
     insertEmail("e-null-source", { source: null }); // source IS NOT NULL
     link("c-null-source", "e-null-source");
 
-    insertEmail("e-already-fetched"); // NOT EXISTS (attachments)
+    insertEmail("e-already-fetched"); // every attachment already has bytes
     link("c-already-fetched", "e-already-fetched");
-    attach("a-1", "e-already-fetched");
+    stored("a-1", "e-already-fetched");
 
     insertEmail("e-other-tx"); // INNER JOIN … transaction_id = ?
     link("c-other-tx", "e-other-tx", OTHER_TX);
@@ -203,11 +226,52 @@ describe("TRANSACTION_EMAILS_MISSING_ATTACHMENTS_SQL", () => {
     expect(run()).toEqual(["e-double"]);
   });
 
-  it("returns nothing when every linked email already has its attachments", () => {
+  it("returns nothing when every linked email already has its attachment BYTES", () => {
     insertEmail("e-done");
     link("c-done", "e-done");
-    attach("a-done", "e-done");
+    stored("a-done", "e-done");
 
     expect(run()).toEqual([]);
+  });
+
+  /**
+   * BACKLOG-3389 — THE DEFECT, AS A TEST.
+   *
+   * A normal email sync writes attachment METADATA and no bytes
+   * (`upsertEmailAttachmentMetadata`, BACKLOG-1870: `storage_path` NULL). The
+   * old predicate asked "is there a ROW", so this email was reported as having
+   * nothing to fetch, the download was skipped, and the gather then dropped the
+   * row for having no bytes — a silent zero on the submission.
+   *
+   * Reverting the predicate to the bare `NOT EXISTS (… WHERE a.email_id = e.id)`
+   * turns this case red and leaves every other case in the file green. That is
+   * the mutation, and it was run.
+   */
+  it("selects an email whose only attachment row is metadata with no bytes", () => {
+    insertEmail("e-metadata-only");
+    link("c-metadata-only", "e-metadata-only");
+    metadataOnly("a-metadata-only", "e-metadata-only");
+
+    expect(run()).toEqual(["e-metadata-only"]);
+  });
+
+  /**
+   * THE MIXED CASE, which is why the predicate is a disjunction rather than a
+   * narrowed `NOT EXISTS (… AND a.storage_path IS NOT NULL)`.
+   *
+   * Under that narrowing this email has a stored row, so `NOT EXISTS` is false
+   * and the byte-less sibling never downloads — a fix that still drops an
+   * attachment, on a shape BACKLOG-2551 proves is real (two attachments on one
+   * email, fetched independently). The download itself is per-attachment
+   * idempotent (`emailAttachmentService.ts:333` skips a row that already has
+   * `storage_path`), so re-selecting this email re-fetches only the missing one.
+   */
+  it("selects an email that has one stored attachment and one with no bytes", () => {
+    insertEmail("e-mixed");
+    link("c-mixed", "e-mixed");
+    stored("a-mixed-stored", "e-mixed");
+    metadataOnly("a-mixed-pending", "e-mixed");
+
+    expect(run()).toEqual(["e-mixed"]);
   });
 });
