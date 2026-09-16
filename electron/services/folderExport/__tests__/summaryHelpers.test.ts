@@ -21,6 +21,11 @@ import { generateSummaryHTML } from "../summaryHelpers";
 import type { Communication } from "../../../types/models";
 import type { TransactionWithDetails } from "../../transactionService/types";
 
+// BACKLOG-3367: these cases hide nothing, and now have to say so — the
+// omissions argument is required precisely so no caller can leave it unstated.
+import type { ExportOmissions } from "../../exportNotices";
+const NO_OMISSIONS_3367: ExportOmissions = { hiddenTextCount: 0 };
+
 function email(id: string, fields: Partial<Communication> = {}): Communication {
   return {
     id,
@@ -57,7 +62,7 @@ describe("generateSummaryHTML — Email Threads Index header (BACKLOG-2161 QA re
       email("q1", { thread_id: undefined, subject: "Qantas", sent_at: "2026-01-04T00:00:00.000Z" }),
       email("m1", { thread_id: undefined, subject: "Monarch", sent_at: "2026-01-05T00:00:00.000Z" }),
     ];
-    const html = generateSummaryHTML(transaction(), emails, undefined, "thread");
+    const html = generateSummaryHTML(transaction(), emails, NO_OMISSIONS_3367, undefined, "thread");
     // BACKLOG-1842 (visual-polish, founder QA): inner parens around the email
     // count replaced with " - " to avoid the awkward "(N (M))" double-nesting.
     expect(html).toContain("<h3>Email Threads Index (3 conversations - 5 emails)</h3>");
@@ -68,7 +73,7 @@ describe("generateSummaryHTML — Email Threads Index header (BACKLOG-2161 QA re
 
   it("thread mode: singular conversation and singular email are both grammatically correct", () => {
     const emails = [email("only", { thread_id: "T1" })];
-    const html = generateSummaryHTML(transaction(), emails, undefined, "thread");
+    const html = generateSummaryHTML(transaction(), emails, NO_OMISSIONS_3367, undefined, "thread");
     expect(html).toContain("<h3>Email Threads Index (1 conversation - 1 email)</h3>");
   });
 
@@ -77,7 +82,7 @@ describe("generateSummaryHTML — Email Threads Index header (BACKLOG-2161 QA re
       email("a", { thread_id: "T1", sent_at: "2026-01-01T00:00:00.000Z" }),
       email("b", { thread_id: "T1", sent_at: "2026-01-02T00:00:00.000Z" }),
     ];
-    const html = generateSummaryHTML(transaction(), emails, undefined, "thread");
+    const html = generateSummaryHTML(transaction(), emails, NO_OMISSIONS_3367, undefined, "thread");
     expect(html).toContain("<h3>Email Threads Index (1 conversation - 2 emails)</h3>");
   });
 
@@ -86,7 +91,7 @@ describe("generateSummaryHTML — Email Threads Index header (BACKLOG-2161 QA re
       email("a", { thread_id: "T1", sent_at: "2026-01-01T00:00:00.000Z" }),
       email("b", { thread_id: "T1", sent_at: "2026-01-02T00:00:00.000Z" }),
     ];
-    const html = generateSummaryHTML(transaction(), emails, undefined, "individual");
+    const html = generateSummaryHTML(transaction(), emails, NO_OMISSIONS_3367, undefined, "individual");
     expect(html).toContain("<h3>Email Threads Index (2)</h3>");
     expect(html).not.toContain("conversation");
   });
@@ -99,21 +104,21 @@ describe("generateSummaryHTML — Thread View row data-multi marker (BACKLOG-216
       email("b", { thread_id: "T1", subject: "Re: Owner of App", sent_at: "2026-01-02T00:00:00.000Z" }),
       email("c", { thread_id: "T1", subject: "Re: Owner of App", sent_at: "2026-01-03T00:00:00.000Z" }),
     ];
-    const html = generateSummaryHTML(transaction(), emails, undefined, "thread");
+    const html = generateSummaryHTML(transaction(), emails, NO_OMISSIONS_3367, undefined, "thread");
     expect(html).toContain('<div class="email-item" data-multi="true">');
     expect(html).toContain("Owner of App (3 emails)");
   });
 
   it("marks a single-email group row data-multi=\"false\" with no count label", () => {
     const emails = [email("q1", { thread_id: undefined, subject: "Qantas" })];
-    const html = generateSummaryHTML(transaction(), emails, undefined, "thread");
+    const html = generateSummaryHTML(transaction(), emails, NO_OMISSIONS_3367, undefined, "thread");
     expect(html).toContain('<div class="email-item" data-multi="false">');
     expect(html).not.toContain("Qantas (1 email");
   });
 
   it("individual mode rows carry no data-multi attribute (unchanged legacy markup)", () => {
     const emails = [email("a", { thread_id: "T1" }), email("b", { thread_id: "T1" })];
-    const html = generateSummaryHTML(transaction(), emails, undefined, "individual");
+    const html = generateSummaryHTML(transaction(), emails, NO_OMISSIONS_3367, undefined, "individual");
     expect(html).not.toContain("data-multi");
   });
 });
@@ -151,6 +156,7 @@ describe("generateSummaryHTML — Closing Date card (BACKLOG-2190 BUG A)", () =>
         closed_at: "2026-06-06T00:00:00.000Z",
       }),
       [],
+      NO_OMISSIONS_3367,
       undefined,
       "thread"
     );
@@ -169,6 +175,7 @@ describe("generateSummaryHTML — Closing Date card (BACKLOG-2190 BUG A)", () =>
       // No closing_deadline; closed_at IS set (audit-period end).
       transaction({ closed_at: "2026-06-06T00:00:00.000Z" }),
       [],
+      NO_OMISSIONS_3367,
       undefined,
       "thread"
     );
@@ -182,6 +189,7 @@ describe("generateSummaryHTML — Closing Date card (BACKLOG-2190 BUG A)", () =>
     const html = generateSummaryHTML(
       transaction({ closing_deadline: "", closed_at: "2026-06-06T00:00:00.000Z" }),
       [],
+      NO_OMISSIONS_3367,
       undefined,
       "thread"
     );
@@ -200,7 +208,7 @@ describe("generateSummaryHTML — Generated on uses local time (BACKLOG-2190 BUG
       month: "long",
       day: "numeric",
     });
-    const html = generateSummaryHTML(transaction(), [], undefined, "thread");
+    const html = generateSummaryHTML(transaction(), [], NO_OMISSIONS_3367, undefined, "thread");
     expect(html).toContain(`Generated on ${expectedLocalToday}`);
   });
 });
