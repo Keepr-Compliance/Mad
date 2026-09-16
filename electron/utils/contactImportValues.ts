@@ -75,6 +75,107 @@ export function isUsableImportEmail(value: unknown): value is string {
   return trimmed.length > 0 && accepts(() => validateEmail(trimmed, false));
 }
 
+/**
+ * BACKLOG-3376 — CAN THIS VALUE EVER EQUAL AN `email_participants.email_address`?
+ *
+ * A STRICT SUBSET of "not usable", and deliberately much narrower than it. The
+ * import saves every address the source holds (`createContactsBatch` and
+ * `backfillContactEmailsSync` apply no format check at all), and the
+ * auto-linker reads every stored row back and matches it by EXACT string
+ * equality after `toLowerCase().trim()` — `AUTOLINK_CONTACT_EMAILS_SQL` in
+ * `autoLinkSql.ts` selects every row, and the candidate lookup binds them into
+ * an `email_participants.email_address IN (...)`. So an address links iff some
+ * participant address equals it. Validity never enters it.
+ *
+ * `validateEmail` refuses far more than that. `pat@intranet` has no dot after
+ * the `@`, so the import calls it unusable — and it is stored, and its mail
+ * links perfectly normally. "Emails from it won't be linked" would be a FALSE
+ * statement about that address. Same for `name@`, `@domain.com`,
+ * `name@domain.`, `two@@domain.com` and a 256-character address: all unusable,
+ * all matchable, all SILENT.
+ *
+ * Two arms, and they do NOT rest on the same footing:
+ *
+ *   - NO `@` — ENFORCED in this repo, on every writer of
+ *     `email_participants.email_address`. Gmail (`gmailFetchService.ts`) and the
+ *     legacy self-derive (`emailDbService.ts`) both go through
+ *     `parseEmailAddressList` -> `validateAddress` (`emailAddress.ts`), which
+ *     returns "missing \'@\'" and pushes the value into `.errors`; neither
+ *     reader ever looks at `.errors`. Outlook/Graph (`outlookFetchService.ts`)
+ *     rejects `indexOf("@") < 1` and a trailing `@` inline. The staging promote
+ *     (`emailStagingSql.ts`) is an `INSERT ... SELECT` relaying rows already
+ *     produced by one of those three, so it introduces no new address shape.
+ *
+ *   - INTERIOR WHITESPACE — enforced on the Gmail and legacy paths by that same
+ *     `validateAddress` ("invalid character: whitespace in address"), but on the
+ *     Outlook/Graph direct path it is a PREMISE, not a check:
+ *     `normalizeEmailAddress` is `toLowerCase().trim()` and deliberately does
+ *     not collapse interior space. The premise is that providers deliver
+ *     RFC 5321 addr-specs, which cannot carry a space. NOT verified against live
+ *     provider output.
+ *
+ * The direction of the error matters. Being a strict subset, this can only ever
+ * UNDER-warn — stay silent about an address that in fact will not link. For a
+ * sentence stated as definitely true, that is the safe direction.
+ *
+ * `isUsableImportEmail` is checked as well, so the subset relation holds by
+ * construction rather than by coincidence. Today that check is redundant: a
+ * value the validator accepts has matched `/^[^\s@]+@[^\s@]+\.[^\s@]+$/`, so
+ * it can carry neither whitespace nor a missing `@` — and removing it was
+ * MEASURED INERT (BACKLOG-3376 implementation handoff, mutation M10). It is kept
+ * because it is the only thing that would still hold the invariant if that regex
+ * were ever loosened, which is what the sweep in `contactImportValues-3376.test.ts`
+ * exists to catch.
+ *
+ * PHONES ARE NOT COVERED. An unusable phone is only one longer than 50
+ * characters (`isUsableImportPhone` passes no pattern), and whether such a value
+ * can match a message handle runs through `normalizeToE164` ->
+ * `phone_normalized` -> `normalizePhone` in `autoLinkService.ts`. **MECHANISM
+ * UNTRACED** — no phone sentence is shipped on it. The question is on
+ * BACKLOG-3377.
+ */
+export function isUnmatchableImportEmail(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (trimmed === "") return false;
+  // The two arms: whitespace inside it, or no `@` at all.
+  const cannotBeAddressed = /\s/.test(trimmed) || !trimmed.includes("@");
+  if (!cannotBeAddressed) return false;
+  // The subset guard. LAST for a compiler reason, not a logical one:
+  // `isUsableImportEmail` is declared `value is string`, so testing it in a
+  // condition narrows an already-`string` binding to `never` in the false
+  // branch and every use of `trimmed` after it fails to compile. Order does not
+  // change the result — the conjunction is the same either way.
+  return !isUsableImportEmail(trimmed);
+}
+
+/**
+ * The unmatchable entries of ONE record's email list, in the address book's own
+ * order and its own casing, deduped on `toLowerCase().trim()` — the same key
+ * `createContactsBatch` dedupes stored rows on, so the message can never name
+ * two entries the database stored as one.
+ *
+ * Reads the ORDERED list, which is a permutation of the record's candidates with
+ * the usable ones hoisted to the front. Every unmatchable value is unusable, so
+ * all of them sit in the tail, where the source's own order is preserved.
+ *
+ * The address book's casing, not the stored lowercase form: the user is being
+ * asked to go and find this address on their own contact card.
+ */
+function unmatchableFrom(ordered: unknown[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of ordered) {
+    if (!isUnmatchableImportEmail(value)) continue;
+    const trimmed = value.trim();
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
+  }
+  return out;
+}
+
 /** Usable = the create/update phone validator accepts it once trimmed. */
 export function isUsableImportPhone(value: unknown): value is string {
   if (typeof value !== "string") return false;
@@ -166,6 +267,15 @@ export interface ShapedImportValues<T> {
   allEmails: string[];
   /** Every phone the record holds, usable first. */
   allPhones: string[];
+  /**
+   * BACKLOG-3376 — the record's addresses that satisfy
+   * `isUnmatchableImportEmail`: saved as the source has them, and unable to
+   * equal any `email_participants.email_address`. Empty when there is nothing
+   * to say. NOT on `ImportAdjustments` or `ImportAdjustmentCounts` on purpose —
+   * the handler spreads the counts object straight into a Sentry `extra`, and
+   * that warning stays counts-only (BACKLOG-3358).
+   */
+  unmatchableEmails: string[];
   adjustments: ImportAdjustments;
 }
 
@@ -256,6 +366,7 @@ export function shapeImportValues<T extends object>(
     // raw ones before: typed `string[]`, contents whatever the source held.
     allEmails: emails.ordered as string[],
     allPhones: phones.ordered as string[],
+    unmatchableEmails: unmatchableFrom(emails.ordered),
     adjustments: {
       nameCut: name.cut,
       companyCut: company.cut,

@@ -153,6 +153,14 @@ export interface WindowApiContacts {
      * `electron/handlers/contactHandlers.ts`.
      */
     savedContactIds?: string[];
+    /**
+     * BACKLOG-3376: present only on `success: true`, and only when the import
+     * saved an address no email can be addressed from — whitespace inside it, or
+     * no `@`. The source's own strings, flat across the call. Absent means there
+     * is nothing to tell the user. Full contract on `ContactResponse` in
+     * `electron/handlers/contactHandlers.ts`.
+     */
+    unmatchableEmails?: string[];
   }>;
   /** Listen for import progress updates */
   onImportProgress: (

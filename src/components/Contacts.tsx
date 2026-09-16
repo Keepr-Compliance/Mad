@@ -31,6 +31,10 @@ import { LinkSourceSearch } from "./shared/LinkSourceSearch";
 import { ContactCompareSources } from "./shared/ContactCompareSources";
 import { NotificationContext } from "../contexts/NotificationContext";
 import { labelForContact } from "../utils/contactDisplayLabel";
+import {
+  UNMATCHABLE_EMAIL_TOAST_MS,
+  unmatchableEmailMessage,
+} from "../utils/importSkippedMessage";
 
 interface ContactsProps {
   userId: string;
@@ -754,6 +758,39 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
         const importedContact = result.contacts?.[0];
 
         if (result.success && importedContact) {
+          /**
+           * ==================================================================
+           * BACKLOG-3376 — SAY WHAT WAS SAVED THAT NO EMAIL CAN COME FROM.
+           * ==================================================================
+           * BACKLOG-3358 stopped an address the app cannot validate from
+           * blocking the import, so the contact now saves with the value as the
+           * address book has it — and nothing said so. An address with a space
+           * in it or no `@` can never equal a participant address, so mail from
+           * it will never link to a deal, and the user had no way to find that
+           * out.
+           *
+           * INSIDE the success branch, which is the renderer half of what keeps
+           * this and BACKLOG-3354's failure message mutually exclusive; the main
+           * process only ever sets the field on a success response, which is the
+           * other half. Deliberately belt and braces.
+           *
+           * BEFORE the refresh is awaited. `refreshBothLists` is two IPC round
+           * trips and can take seconds on a large address book; the message
+           * belongs on screen from the moment the import returned, not after the
+           * lists catch up.
+           *
+           * `info`, not `error` — the contact imported, and it is on screen.
+           */
+          const unmatchable = result.unmatchableEmails ?? [];
+          if (unmatchable.length > 0) {
+            const message = unmatchableEmailMessage({
+              name: labelForContact(contact),
+              verb: "imported",
+              addresses: unmatchable,
+            });
+            if (message) notify?.info(message, { duration: UNMATCHABLE_EMAIL_TOAST_MS });
+          }
+
           /**
            * ==================================================================
            * BACKLOG-2511 — REFRESH BOTH LISTS, BECAUSE THIS SCREEN IS BOTH.
