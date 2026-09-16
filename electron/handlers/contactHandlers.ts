@@ -145,6 +145,19 @@ import {
 import { type ContactOrigin } from "../services/db/contactOriginLink";
 import { getValidUserId } from "../utils/userIdHelper";
 import { isContactSourceEnabled } from "../utils/preferenceHelper";
+// BACKLOG-1717 — people found in the user's Outlook and Gmail mail.
+import {
+  getEmailDerivedContactsAsync,
+  getMailboxAddress,
+} from "../services/db/emailDerivedContactDbService";
+import {
+  EMAIL_DERIVED_PROVIDERS,
+  type EmailDerivedProvider,
+} from "../services/db/emailDerivedContactsSql";
+import {
+  CONTACT_INFERENCE_FEATURE_KEYS,
+  resolveContactInferenceState,
+} from "./featureGateHandlers";
 import contactSyncService from "../services/contactSyncService";
 import { OutlookContactProvider } from "../services/providers/outlookContactProvider";
 import { GoogleContactProvider } from "../services/providers/googleContactProvider";
@@ -1937,6 +1950,149 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             // directly, and one picker row now claims exactly one source
             // record.
           });
+        }
+
+        /**
+         * =====================================================================
+         * BACKLOG-1717 — PEOPLE FOUND IN THE USER'S EMAIL
+         * =====================================================================
+         * Appended to the ADDRESS-BOOK half, deliberately, and this is the
+         * decision the whole item rests on. Measured on both deal surfaces: a
+         * row in this array is routed to `handleExternalSelect -> handleImport`,
+         * so picking one runs `contacts:import` and the deal receives the SAVED
+         * contact's id. A row in the SAVED half is treated as already in the
+         * database — the picker selects the synthetic `email_` id, no contact
+         * is ever created, and the transaction ends up pointing at a person who
+         * does not exist. That is the shape BACKLOG-3194 records for text
+         * people, and this item exists partly to avoid repeating it.
+         *
+         * TWO GATES, BOTH REQUIRED, BOTH READ HERE AND NOT IN THE PRODUCER:
+         * the plan feature (is this in what the customer bought?) and the
+         * user's own Settings switch per mailbox. Reading them here means a
+         * read with nothing enabled never touches the database, and it means
+         * the log below can say WHICH of them produced an empty list.
+         *
+         * FAIL CLOSED: anything that throws — an offline membership read, a
+         * rejected promise, a missing session — leaves the provider set empty.
+         * The renderer cannot grant what main denies.
+         *
+         * The per-mailbox "no stored address" rule is NOT here: it lives in the
+         * producer's SQL, so the worker and the main-thread fallback cannot
+         * disagree about it. The mailbox addresses are read here only to say so
+         * in the log.
+         */
+        let emailDerivedShown = 0;
+        try {
+          /**
+           * Resolve once per DISTINCT PLAN KEY, not once per mailbox.
+           *
+           * Every resolution is a NETWORK read, and this handler already awaits
+           * five preference reads in series. Today both mailboxes share the key
+           * `email_contact_inference`, so this is ONE read covering both; if
+           * the founder ever splits them it becomes two, with no other change.
+           */
+          const keysInPlay = new Set(
+            EMAIL_DERIVED_PROVIDERS.map((p) => CONTACT_INFERENCE_FEATURE_KEYS[p]),
+          );
+          const [stateEntries, preferenceEntries] = await Promise.all([
+            Promise.all(
+              [...keysInPlay].map(
+                async (key) =>
+                  [key, await resolveContactInferenceState(
+                    EMAIL_DERIVED_PROVIDERS.find(
+                      (p) => CONTACT_INFERENCE_FEATURE_KEYS[p] === key,
+                    )!,
+                  )] as const,
+              ),
+            ),
+            Promise.all(
+              EMAIL_DERIVED_PROVIDERS.map(
+                async (provider) =>
+                  [
+                    provider,
+                    await isContactSourceEnabled(
+                      validatedUserId,
+                      "inferred",
+                      provider === "outlook" ? "outlookEmails" : "gmailEmails",
+                      // Inferred sources default OFF, unlike the direct ones.
+                      false,
+                    ),
+                  ] as const,
+              ),
+            ),
+          ]);
+          const planStates = new Map(stateEntries);
+          const preferences = new Map(preferenceEntries);
+
+          /**
+           * ONE LOG REASON PER MAILBOX, and the plan reason is the STATE word
+           * rather than a boolean.
+           *
+           * `isContactInferenceAllowed` collapses "not in your plan" and "I
+           * could not find out" into one `false`. The founder's first report
+           * here will be "nobody shows up", and an offline user told "not in
+           * your plan" has been told something false about what he bought.
+           *
+           * Counts and state words only — never an address.
+           */
+          const enabledProviders: EmailDerivedProvider[] = [];
+          const reasons: string[] = [];
+          for (const provider of EMAIL_DERIVED_PROVIDERS) {
+            const state = planStates.get(CONTACT_INFERENCE_FEATURE_KEYS[provider]);
+            if (state !== "allowed") {
+              reasons.push(`${provider}: plan ${state ?? "unknown"}`);
+              continue;
+            }
+            if (!preferences.get(provider)) {
+              reasons.push(`${provider}: switched off in Settings`);
+              continue;
+            }
+            const mailboxAddress = getMailboxAddress(validatedUserId, provider);
+            if (!mailboxAddress) {
+              reasons.push(`${provider}: connected mailbox has no stored address`);
+              // Still passed to the producer, whose SQL enforces the same rule;
+              // this branch exists so the log can NAME the reason.
+            }
+            enabledProviders.push(provider);
+          }
+
+          if (enabledProviders.length === 0) {
+            logService.info(
+              `[Contacts] No email-derived people read (${reasons.join("; ")})`,
+              "Contacts",
+            );
+          } else {
+            const emailPeople = await getEmailDerivedContactsAsync(
+              validatedUserId,
+              enabledProviders,
+            );
+            for (const person of emailPeople) {
+              availableContacts.push(person);
+            }
+            emailDerivedShown = emailPeople.length;
+            logService.info(
+              `[Contacts] Offered ${emailDerivedShown} people found in email ` +
+                `(mailboxes: ${enabledProviders.join(", ")}` +
+                `${reasons.length > 0 ? `; skipped ${reasons.join("; ")}` : ""})`,
+              "Contacts",
+            );
+          }
+        } catch (emailDerivedError) {
+          /**
+           * A producer failure must not take the address book down with it.
+           *
+           * A worker timeout, a pool rejection or a bad read here would
+           * otherwise reject the whole handler and the picker would show
+           * NOTHING — no macOS contacts, no Outlook cards, nothing — because
+           * one optional list could not be built. BACKLOG-2576 makes a timeout
+           * likelier than it looks: this item adds a query type to a pool whose
+           * timeouts are already unhandled rejections.
+           */
+          logService.error(
+            "[Contacts] Could not read people from email; the rest of the picker is unaffected",
+            "Contacts",
+            { error: emailDerivedError },
+          );
         }
 
         // Contacts are already sorted by last_message_at from shadow table

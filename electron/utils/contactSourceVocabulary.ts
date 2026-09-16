@@ -67,12 +67,24 @@ export const PERSISTED_CONTACT_SOURCES = [
 /**
  * Source values produced at SELECT time that are never written to any column.
  *
- * `messages` is the only one: `contactDbService` synthesises it for contacts
- * derived from text threads (`contactDbService.ts:273` and `:2594`).
+ * `messages` — `contactDbService` synthesises it for contacts derived from text
+ * threads (`contactDbService.ts:273` and `:2594`).
  *
- * It is ABSENT FROM THE `contacts.source` CHECK, and that absence is correct
+ * `email_derived` (BACKLOG-1717) — a person found in the user's Outlook or
+ * Gmail mail, built at read time from `email_participants` and never stored as
+ * a row. ONE value for both providers, deliberately: a person who writes from
+ * both mailboxes has no single provider, and the record's identity is the
+ * address alone. If the founder ever wants to see which mailbox someone came
+ * from, that is a new field on the record, not a second source value.
+ *
+ * Why not spell it `email` or `inferred`, which the CHECK already admits: both
+ * are in `UNFILTERABLE_WHEN_SAVED_CONTACT_SOURCES` below, so the import door
+ * refuses them — and refuses them for a good reason, since a saved contact
+ * carrying one matches no filter leaf and cannot be found again.
+ *
+ * Both are ABSENT FROM THE `contacts.source` CHECK, and that absence is correct
  * rather than an oversight — which is precisely why a vocabulary list built only
- * from the CHECK would miss it. `schema.sql:398` is a BARE CHECK carrying no
+ * from the CHECK would miss them. `schema.sql:398` is a BARE CHECK carrying no
  * note; the statement lives here, beside the enumeration. (An earlier version of
  * this comment pointed the reader at a note in `schema.sql` that has never
  * existed — corrected by BACKLOG-2481.)
@@ -81,7 +93,7 @@ export const PERSISTED_CONTACT_SOURCES = [
  * `toStorableContactSource` below, which is the one place the two vocabularies
  * meet.
  */
-export const SYNTHETIC_CONTACT_SOURCES = ["messages"] as const;
+export const SYNTHETIC_CONTACT_SOURCES = ["messages", "email_derived"] as const;
 
 /** Exactly the values the `contacts.source` CHECK admits. */
 export type PersistedContactSource = (typeof PERSISTED_CONTACT_SOURCES)[number];
@@ -112,6 +124,10 @@ export const MESSAGE_DERIVED_ONLY_SOURCES: readonly string[] = [
   "sms",
   "messages",
   "inferred",
+  // BACKLOG-1717. Only ever on an unsaved email-derived record; a saved
+  // contact can never carry it, because the import door maps it to `manual`
+  // before anything is stored.
+  "email_derived",
 ];
 
 /**
@@ -187,6 +203,13 @@ export const SYNTHETIC_SOURCE_DESTINATION: Readonly<
   Record<SyntheticContactSource, PersistedContactSource>
 > = Object.freeze({
   messages: "manual",
+  /**
+   * BACKLOG-1717. Confirming a person found in your email IS the consent step,
+   * so they are stored exactly as a person you typed in: `manual`. That is
+   * also what makes their address survive an Unlink (see the provenance note
+   * in `contactDbService.createContactsBatch`).
+   */
+  email_derived: "manual",
 });
 
 /**

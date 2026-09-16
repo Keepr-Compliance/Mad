@@ -94,6 +94,9 @@ describe("contactSourceLabel — every source is called by its own name", () => 
       sms: "From Texts",
       contacts_app: "Contacts App",
       inferred: "From Email",
+      // BACKLOG-1717: the unsaved record built from the user's Outlook and
+      // Gmail mail. One value for both providers, so one label.
+      email_derived: "From Email",
       android_sync: "Android",
       iphone: "iPhone",
       outlook: "Outlook",
@@ -142,7 +145,7 @@ describe("contactSourceLabel — every source is called by its own name", () => 
       Gmail: ["google_contacts"],
       iPhone: ["iphone"],
       Android: ["android_sync"],
-      "From Email": ["email", "inferred"],
+      "From Email": ["email", "inferred", "email_derived"],
       "From Texts": ["sms", "messages"],
     });
   });

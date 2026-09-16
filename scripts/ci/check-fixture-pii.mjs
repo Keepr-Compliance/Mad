@@ -300,6 +300,29 @@ const IDENTITY_CONTEXT_RE = /@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|\+?\d[\d ().-]{8,}\d/
  * a human's confirmation.
  */
 const FICTIONAL_NAMES = new Set([
+  // BACKLOG-1717 — the people-found-in-email suites
+  // (services/db/__tests__/emailDerivedContacts-1717.test.ts and its
+  // siblings). Every one is invented for a specific rule under test and none
+  // refers to anyone:
+  //   Avery / Gina / Dana  — correspondents, for the name-choice and ordering
+  //                          controls (Dana appears twice under two spellings
+  //                          because the tie-break is what is being measured).
+  //   Morgan Saved / Riley Gone / Both Saved — a saved, a removed and a
+  //                          both-mailbox contact, for the suppression rules.
+  //   Michael Chen         — already this repo's illustration of the
+  //                          same-name-different-person case (see the
+  //                          BACKLOG-2618 note in contactDbService), reused
+  //                          here for the control that keeps him visible.
+  // Listed here rather than baselined because they are invented, and the
+  // baseline is for values a human confirmed are safe.
+  "avery example",
+  "gina example",
+  "dana one",
+  "dana uno",
+  "morgan saved",
+  "riley gone",
+  "both saved",
+  "michael chen",
   "pat riverton",
   "robin marsh",
   "jane seller",

@@ -187,6 +187,31 @@ describe("SourcePill", () => {
       expect(mapToSourcePillSource("outlook", true)).toBe("outlook");
     });
 
+    /**
+     * BACKLOG-1717, PM addition 13 — the control that keeps an email person
+     * from being badged "Contacts App".
+     *
+     * `isExternal` is TRUE for every one of these records: they are unsaved,
+     * and the picker's address-book half is where they live. The mapper's
+     * `isExternal || contacts_app` line therefore answers first unless
+     * `email_derived` is handled above it, which is exactly the shape of the
+     * BACKLOG-1900 P0.3 defect this repeats for a new source.
+     *
+     * Mutation that reds this: move the `email_derived` line below the
+     * `isExternal` line in `mapToSourcePillSource`.
+     */
+    it('maps model "email_derived" to the Email pill, external or not', () => {
+      expect(mapToSourcePillSource("email_derived", true)).toBe("email");
+      expect(mapToSourcePillSource("email_derived", false)).toBe("email");
+    });
+
+    it("renders the Email pill for an unsaved email-derived record", () => {
+      const { getByTestId } = render(
+        <SourcePill source={mapToSourcePillSource("email_derived", true)} />
+      );
+      expect(getByTestId("source-pill-email")).toHaveTextContent("Email");
+    });
+
     it("preserves existing mappings", () => {
       expect(mapToSourcePillSource("manual", false)).toBe("manual");
       expect(mapToSourcePillSource("contacts_app", false)).toBe("contacts_app");
