@@ -20,7 +20,19 @@ import path from "path";
 import crypto from "crypto";
 import logService from "../services/logService";
 
-type QueryType = "external" | "imported" | "backfill";
+type QueryType = "external" | "imported" | "backfill" | "emailDerived";
+
+/**
+ * Per-type payload carried alongside `{ id, type, userId }` (BACKLOG-1717).
+ *
+ * Passed as an OPTIONS OBJECT rather than a fourth positional argument so the
+ * three existing callers are untouched, and so a second payload field later
+ * does not reopen the same signature.
+ */
+export interface ContactQueryPayload {
+  /** `emailDerived` only: which mailboxes this read covers. */
+  providers?: readonly string[];
+}
 
 interface PendingQuery {
   resolve: (data: unknown[]) => void;
@@ -258,9 +270,26 @@ export function queryContacts(
   type: QueryType,
   userId: string,
   timeoutMs: number = 30_000,
+  payload: ContactQueryPayload = {},
 ): Promise<unknown[]> {
-  // Deduplication key
-  const dedupKey = `${userId}:${type}`;
+  /**
+   * THE DEDUP KEY MUST NAME THE PAYLOAD, NOT JUST THE TYPE (BACKLOG-1717).
+   *
+   * It was `${userId}:${type}`. With one query type that takes arguments, two
+   * reads for the same user with DIFFERENT provider sets collide on that key
+   * and the second caller is handed the first's in-flight promise — i.e. the
+   * first call's answer, for the wrong set of mailboxes.
+   *
+   * Reachable without contrivance: the user flips the Gmail switch while a
+   * picker read is in flight, or two surfaces load either side of a toggle
+   * change. The sort makes the key order-independent, so ["outlook","gmail"]
+   * and ["gmail","outlook"] still dedup against each other, which is correct —
+   * they are the same read.
+   *
+   * Types that carry no payload keep exactly the key they had.
+   */
+  const providerKey = payload.providers ? `:${[...payload.providers].sort().join(",")}` : "";
+  const dedupKey = `${userId}:${type}${providerKey}`;
 
   // If same query is already in-flight, return the same promise
   const inflight = inflightQueries.get(dedupKey);
@@ -285,7 +314,12 @@ export function queryContacts(
 
     pendingQueries.set(id, { resolve, reject, timeout });
 
-    worker.postMessage({ id, type, userId });
+    worker.postMessage({
+      id,
+      type,
+      userId,
+      ...(payload.providers ? { providers: [...payload.providers] } : {}),
+    });
   });
 
   // Store for deduplication, clean up when resolved/rejected

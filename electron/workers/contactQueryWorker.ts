@@ -32,8 +32,17 @@ import {
   CONTACT_EXISTING_EMAILS_SQL,
   CONTACT_EXISTING_PHONES_SQL,
 } from "../services/db/contactBackfillPlanSql";
+import {
+  EMAIL_DERIVED_PROVIDERS,
+  buildEmailDerivedCandidateQuery,
+  buildEmailDerivedNameQuery,
+  foldEmailDerivedRecords,
+  type EmailDerivedCandidateRow,
+  type EmailDerivedNameRow,
+  type EmailDerivedProvider,
+} from "../services/db/emailDerivedContactsSql";
 
-type QueryType = "external" | "imported" | "backfill";
+type QueryType = "external" | "imported" | "backfill" | "emailDerived";
 
 interface InitMessage {
   type: "init";
@@ -45,6 +54,18 @@ interface QueryMessage {
   id: string;
   type: QueryType;
   userId: string;
+  /**
+   * BACKLOG-1717 — which mailboxes this read covers.
+   *
+   * The message carried only `{ id, type, userId }` before this. The enabled
+   * provider set cannot be computed here: it needs the user's Settings
+   * switches AND a NETWORK read of the plan feature, neither of which belongs
+   * on a read-only worker thread. So the handler decides and passes the answer
+   * down.
+   *
+   * Only the `emailDerived` query reads it.
+   */
+  providers?: string[];
 }
 
 interface ShutdownMessage {
@@ -105,6 +126,35 @@ function runExternalQuery(userId: string): unknown[] {
  * to add. `is_primary` is deliberately NOT decided here: it depends on what the
  * contact holds at the moment of the write, and only the writer can see that.
  */
+/**
+ * People found in the user's email (BACKLOG-1717).
+ *
+ * Runs the SAME two statements the main-thread fallback runs, and folds them
+ * with the same pure function — the BACKLOG-2514 rule. The per-mailbox
+ * fail-closed check lives inside the candidate statement, so it applies here
+ * without this function knowing about it.
+ */
+function runEmailDerivedQuery(userId: string, providers: string[] | undefined): unknown[] {
+  if (!db) throw new Error("Database not initialized");
+  const enabled = (providers ?? []).filter((p): p is EmailDerivedProvider =>
+    (EMAIL_DERIVED_PROVIDERS as readonly string[]).includes(p),
+  );
+  if (enabled.length === 0) return [];
+
+  const candidate = buildEmailDerivedCandidateQuery(userId, enabled);
+  const rows = db.prepare(candidate.sql).all(...candidate.params) as EmailDerivedCandidateRow[];
+  if (rows.length === 0) return [];
+
+  const nameQuery = buildEmailDerivedNameQuery(
+    userId,
+    enabled,
+    rows.map((r) => r.address),
+  );
+  const nameRows = db.prepare(nameQuery.sql).all(...nameQuery.params) as EmailDerivedNameRow[];
+
+  return foldEmailDerivedRecords(rows, nameRows);
+}
+
 function runBackfillQuery(userId: string): unknown[] {
   if (!db) throw new Error("Database not initialized");
 
@@ -213,6 +263,8 @@ parentPort?.on("message", (msg: WorkerMessage) => {
       rows = runExternalQuery(queryMsg.userId);
     } else if (queryMsg.type === "backfill") {
       rows = runBackfillQuery(queryMsg.userId);
+    } else if (queryMsg.type === "emailDerived") {
+      rows = runEmailDerivedQuery(queryMsg.userId, queryMsg.providers);
     } else {
       throw new Error(`Unknown query type: ${queryMsg.type}`);
     }
