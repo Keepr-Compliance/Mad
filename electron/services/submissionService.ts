@@ -546,21 +546,34 @@ class SubmissionService {
          * that ever reaches this code is not covered by the RLS that covers
          * the desktop today.
          *
-         * `resubmitted` is deliberately NOT in the list. BACKLOG-2853 justified
-         * that with "it carries the identical hazard one broker round trip
-         * later" — WRONG, and withdrawn. It was then argued that adding the
-         * word would change nothing, because a `resubmitted` row only exists
-         * at version >= 2, two rows share `(organization_id,
-         * local_transaction_id)`, and the old single-row lookup returned
-         * PGRST116 so execution never arrived here at all.
+         * BACKLOG-3390 — `resubmitted` IS ON THE LIST NOW, and this paragraph
+         * is where it used to say it was not.
          *
-         * BACKLOG-2867 FIXED THAT LOOKUP, so that argument is now spent too:
-         * a `resubmitted` deal DOES reach this check. It is still not on the
-         * list, and it still must not fall into a delete — which is why the
-         * branch below now refuses to delete a row at a version this attempt
-         * is not replacing. Whether `resubmitted` belongs on the list is a
-         * separate decision, deliberately not taken here; see
-         * `submissionStatusMessages.ts`.
+         * BACKLOG-2853 justified leaving it off with "it carries the identical
+         * hazard one broker round trip later" — WRONG, and withdrawn. It was
+         * then argued that adding the word would change nothing, because a
+         * `resubmitted` row only exists at version >= 2, two rows share
+         * `(organization_id, local_transaction_id)`, and the old single-row
+         * lookup returned PGRST116 so execution never arrived here at all.
+         * BACKLOG-2867 fixed that lookup and spent the second argument too,
+         * leaving a live decision sitting in front of a user.
+         *
+         * It arrived as one. After a successful resubmit the deal sits at
+         * `resubmitted`; the modal labels its action "Resubmit for Review"
+         * while `TransactionDetails` routes only `needs_changes` to
+         * `resubmitTransaction`, so the press ran a PLAIN submit holding
+         * version 1. The fixed lookup named the version-2 row, the list let it
+         * through, the full attachment upload ran, and the insert collided with
+         * the retained version-1 row — reaching the user as a raw unique
+         * constraint name. Released v2.37.0, founder QA 2026-09-16.
+         *
+         * The refusal now happens HERE, before the upload. The routing is
+         * deliberately NOT widened to send `resubmitted` to
+         * `resubmitTransaction`: that would insert version 3 and succeed,
+         * sending a second package on a deal the broker has not answered.
+         *
+         * The version-mismatch condition on the delete below is unchanged and
+         * still load-bearing — `needs_changes` at version >= 2 reaches it.
          *
          * BACKLOG-2868 — THE LIST AND THE MESSAGES NOW LIVE IN THEIR OWN
          * MODULE. Not for tidiness: the renderer must tell the user the same
@@ -761,6 +774,43 @@ class SubmissionService {
         .insert(submissionRecord);
 
       if (insertError) {
+        /**
+         * BACKLOG-3390 — THE LAST LINE OF DEFENCE DOES NOT SPEAK SQL.
+         *
+         * `23505` is Postgres's unique_violation. On this insert it can only be
+         * UNIQUE (organization_id, local_transaction_id, version, submitted_by)
+         * — i.e. this user already has a submission of this transaction at this
+         * version. The driver's `message` for it is the sentence the founder was
+         * shown verbatim:
+         *
+         *   duplicate key value violates unique constraint
+         *   "transaction_submissions_org_txn_version_user_key"
+         *
+         * The guard above is what stops him ever reaching this line by pressing
+         * Resubmit; this is what stops the raw name reaching ANY user by any
+         * other route (a second device, a service-role caller, a policy drift).
+         * A guard that only covers the one reported press would leave the string
+         * itself intact, and defect 2 of the item is the string.
+         *
+         * The raw driver text is LOGGED, not thrown — the diagnosis must survive
+         * somewhere, and the application log is the right somewhere. Other
+         * insert failures keep the driver's words, because they are genuinely
+         * unclassified and a vague sentence would be worse than a specific one;
+         * this branch is narrow on purpose.
+         */
+        if (insertError.code === "23505") {
+          logService.error(
+            `[Submission] Insert collided with an existing submission for ${transactionId} at version ${submissionRecord.version}`,
+            "SubmissionService",
+            {
+              code: insertError.code,
+              message: insertError.message,
+            }
+          );
+          throw new Error(
+            "This transaction already has a submission at this version, so nothing new was sent. Close this window and reopen the transaction to refresh its status, then try again."
+          );
+        }
         throw new Error(
           `Failed to insert submission: ${insertError.message}`
         );
