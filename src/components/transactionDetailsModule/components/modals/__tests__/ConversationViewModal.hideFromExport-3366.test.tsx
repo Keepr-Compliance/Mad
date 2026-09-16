@@ -183,6 +183,11 @@ describe("BACKLOG-3366 U2 — Hide from export", () => {
     const button = screen.getByTestId("hide-from-export-m1");
     expect(within(button).getByTestId("hidden-from-export-icon-visible")).toBeInTheDocument();
     expect(within(button).queryByTestId("hidden-from-export-icon-hidden")).not.toBeInTheDocument();
+    // `title` alone would already satisfy toHaveAccessibleName (the accname
+    // algorithm falls back to it), so pin the aria-label explicitly — it is
+    // the name a screen reader gets regardless of tooltip behaviour.
+    expect(button).toHaveAttribute("aria-label", "Hide from export");
+    expect(button).toHaveAttribute("title", "Hide from export");
   });
 });
 
@@ -209,6 +214,7 @@ describe("BACKLOG-3366 U3 — Unhide is never gated", () => {
     expect(within(unhide).getByTestId("hidden-from-export-icon-hidden")).toBeInTheDocument();
     expect(within(unhide).queryByTestId("hidden-from-export-icon-visible")).not.toBeInTheDocument();
     expect(unhide).toHaveAccessibleName("Unhide");
+    expect(unhide).toHaveAttribute("aria-label", "Unhide");
     expect(unhide).toHaveAttribute("title", "Unhide");
   });
 });
