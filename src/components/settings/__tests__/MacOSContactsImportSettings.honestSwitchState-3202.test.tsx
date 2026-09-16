@@ -326,7 +326,7 @@ describe("C9-C11 — the Outlook emails row and the plan (BACKLOG-3349)", () => 
     renderCard({
       outlookEmailsInferred: true,
       isMicrosoftConnected: true,
-      contactInference: { outlook: "blocked" },
+      contactInference: { outlook: "blocked", gmail: "allowed" },
     });
 
     const sw = screen.getByRole("switch", { name: "Outlook emails auto-discover" });
@@ -341,7 +341,7 @@ describe("C9-C11 — the Outlook emails row and the plan (BACKLOG-3349)", () => 
     renderCard({
       outlookEmailsInferred: true,
       isMicrosoftConnected: false,
-      contactInference: { outlook: "blocked" },
+      contactInference: { outlook: "blocked", gmail: "allowed" },
     });
 
     const row = outlookEmailsRow();
@@ -359,7 +359,7 @@ describe("C9-C11 — the Outlook emails row and the plan (BACKLOG-3349)", () => 
     renderCard({
       outlookEmailsInferred: true,
       isMicrosoftConnected: true,
-      contactInference: { outlook: "allowed" },
+      contactInference: { outlook: "allowed", gmail: "allowed" },
     });
 
     const sw = screen.getByRole("switch", { name: "Outlook emails auto-discover" });
@@ -375,7 +375,7 @@ describe("C9-C11 — the Outlook emails row and the plan (BACKLOG-3349)", () => 
     renderCard({
       outlookEmailsInferred: true,
       isMicrosoftConnected: true,
-      contactInference: { outlook: "unknown" },
+      contactInference: { outlook: "unknown", gmail: "allowed" },
     });
 
     const sw = screen.getByRole("switch", { name: "Outlook emails auto-discover" });
@@ -389,7 +389,7 @@ describe("C9-C11 — the Outlook emails row and the plan (BACKLOG-3349)", () => 
     renderCard({
       outlookEmailsInferred: true,
       isMicrosoftConnected: false,
-      contactInference: { outlook: "unknown" },
+      contactInference: { outlook: "unknown", gmail: "allowed" },
     });
 
     const row = outlookEmailsRow();
@@ -405,7 +405,7 @@ describe("C9-C11 — the Outlook emails row and the plan (BACKLOG-3349)", () => 
     renderCard({
       outlookEmailsInferred: true,
       isMicrosoftConnected: true,
-      contactInference: { outlook: "pending" },
+      contactInference: { outlook: "pending", gmail: "allowed" },
     });
 
     const sw = screen.getByRole("switch", { name: "Outlook emails auto-discover" });

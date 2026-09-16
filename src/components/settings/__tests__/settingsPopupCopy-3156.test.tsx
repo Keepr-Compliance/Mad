@@ -447,7 +447,8 @@ describe("BACKLOG-3156 stage B — the Contacts popup", () => {
     // states "allowed" so that every assertion here keeps testing what it was
     // written to test. The gate's own behaviour is covered in
     // MacOSContactsImportSettings.honestSwitchState-3202.test.tsx (C9-C11).
-      contactInference: { outlook: "allowed" } as const,
+      // BACKLOG-1717 added `gmail`: both mailboxes are one paid feature.
+      contactInference: { outlook: "allowed", gmail: "allowed" } as const,
     gmailEmailsInferred: false,
     messagesInferred: false,
     loadingPreferences: false,
