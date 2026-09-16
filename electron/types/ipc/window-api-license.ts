@@ -229,6 +229,11 @@ export interface WindowApiFeatureGate {
     value: string;
     source: "plan" | "override" | "default";
   }>>;
+  /**
+   * BACKLOG-3349: strict (fail-closed) state for one feature key.
+   * "allowed" only on a positive read; "unknown" when it could not find out.
+   */
+  strictState: (featureKey: string) => Promise<"allowed" | "blocked" | "unknown">;
   /** Invalidate the feature gate cache */
   invalidateCache: () => Promise<void>;
 }

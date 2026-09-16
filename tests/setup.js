@@ -346,6 +346,12 @@ if (typeof window !== 'undefined') {
     featureGate: {
       getAll: jest.fn().mockResolvedValue({}),
       check: jest.fn().mockResolvedValue({ allowed: true, value: '', source: 'default' }),
+      // BACKLOG-3349: strict (fail-closed) plan state. Default 'blocked' for the
+      // same reason `entitlement` below defaults to locked — a test that forgets
+      // to override must not accidentally grant a commercial feature. Note the
+      // asymmetry with `check`/`getAll` above: those stay fail-open because the
+      // keys they answer for are.
+      strictState: jest.fn().mockResolvedValue('blocked'),
       invalidateCache: jest.fn().mockResolvedValue(undefined),
     },
     // BACKLOG-2006a: per-transaction paywall entitlement. Default is fail-closed
