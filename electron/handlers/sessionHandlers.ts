@@ -1377,13 +1377,21 @@ async function handleSignOutAllDevices(): Promise<AuthResponse> {
  * Open broker portal auth page in the default browser
  * TASK-1507: Used for deep-link authentication flow
  * TASK-1510: Redirects to broker portal for provider selection (Google/Microsoft)
+ *
+ * BACKLOG-3394: the URL carries `?from=desktop`. Without it the portal's
+ * callback page has to infer whether the user has the app from a `devices` row
+ * that this app writes only AFTER that page has rendered — so a first-ever
+ * desktop sign-in, the one case where the app is certainly installed, was shown
+ * "It looks like you don't have Keepr installed yet". The portal copies the
+ * parameter into sessionStorage immediately, because it does not survive the
+ * redirect through the provider's consent screen.
  */
 async function handleOpenAuthInBrowser(): Promise<{ success: boolean; error?: string }> {
   try {
     // Use broker portal for provider selection page
     // Production: app.keeprcompliance.com, Dev: localhost:3001 (via .env.development)
     const brokerPortalUrl = process.env.BROKER_PORTAL_URL || 'https://app.keeprcompliance.com';
-    const authUrl = `${brokerPortalUrl}/auth/desktop`;
+    const authUrl = `${brokerPortalUrl}/auth/desktop?from=desktop`;
 
     await logService.info("Opening auth URL in browser", "AuthHandlers", {
       url: authUrl,

@@ -18,6 +18,7 @@ import { enforceSingleDesktopSession } from '@/lib/actions/enforceSingleDesktopS
 import { mintDesktopSession } from '@/lib/actions/mintDesktopSession';
 import { Spinner } from '@keepr/design-system';
 import { CheckCircle2, Loader2, XCircle } from 'lucide-react';
+import { arrivedFromDesktop } from '@/lib/desktop-handoff';
 
 type Status = 'loading' | 'redirecting' | 'success' | 'error';
 
@@ -26,6 +27,10 @@ function DesktopCallbackContent() {
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [deepLinkUrl, setDeepLinkUrl] = useState<string>('');
   const [hasDesktopApp, setHasDesktopApp] = useState<boolean | null>(null);
+  // BACKLOG-3394: the desktop app opened this tab, so it is installed — we do
+  // not have to guess from the `devices` table, which is written by the app
+  // AFTER this page renders and is therefore empty on a first-ever sign-in.
+  const [fromDesktop, setFromDesktop] = useState(false);
 
   const handleCallback = useCallback(async () => {
     // Check for errors in hash fragment first (Supabase puts errors there)
@@ -182,6 +187,14 @@ function DesktopCallbackContent() {
     }
   }, []);
 
+  // BACKLOG-3394: read the marker on mount, not inside the async chain. It was
+  // written by `/auth/desktop` at the very start of this flow; by the time this
+  // page exists the write has long happened, and reading it here keeps the
+  // answer independent of whether the Supabase calls below succeed.
+  useEffect(() => {
+    setFromDesktop(arrivedFromDesktop());
+  }, []);
+
   useEffect(() => {
     handleCallback();
   }, [handleCallback]);
@@ -210,7 +223,38 @@ function DesktopCallbackContent() {
               <CheckCircle2 className="w-12 h-12 mx-auto" />
             </div>
             <p className="text-gray-900 font-medium">Sign in successful!</p>
-            {hasDesktopApp === false ? (
+            {/*
+              BACKLOG-3394: three states, and the order of the branches is the
+              fix.
+
+              `fromDesktop` first: the desktop app opened this tab, so it is
+              installed and offering a download would be nonsense. No Download
+              call-to-action is rendered at all in this branch — "demoted to a
+              footnote" was considered and rejected, because a footnote is still
+              a thing to read and decide about on a screen whose only remaining
+              job is "go back to the app you already have open".
+
+              `hasDesktopApp === false` keeps its meaning for a genuine
+              browser-first visitor, who really may not have the app. Note that
+              the state is `null` until the `devices` query answers, so a failed
+              or slow query falls to the third branch rather than to Download.
+            */}
+            {fromDesktop ? (
+              <>
+                <p className="text-gray-500 text-sm">
+                  If Keepr didn&apos;t come back to the front, click below.
+                </p>
+                <a
+                  href={deepLinkUrl}
+                  className="inline-block mt-4 px-6 py-3 bg-primary-600 text-white rounded-md hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 transition-colors"
+                >
+                  Open Keepr
+                </a>
+                <p className="text-gray-400 text-xs mt-4">
+                  You can close this browser tab.
+                </p>
+              </>
+            ) : hasDesktopApp === false ? (
               <>
                 <p className="text-gray-500 text-sm">
                   It looks like you don&apos;t have Keepr installed yet. Download it to get started.

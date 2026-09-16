@@ -362,6 +362,27 @@ class GoogleAuthService {
 
   /**
    * Build HTML success page for OAuth callback
+   *
+   * BACKLOG-3394: this page used to carry a "Return to Application" button that
+   * navigated to `keepr://focus`, plus a script that tried `window.close()`
+   * first and revealed the button when that failed.
+   *
+   * Both are gone, and the page now contains NO script and NO `keepr://` URL:
+   *
+   *  - The button made the browser ask permission to open an external app. That
+   *    permission is keyed to (origin, scheme), and `startLocalServer()` binds
+   *    with `listen(0)`, so the origin is different on every connect and
+   *    Chrome's "Always allow" never applies to the next one. The app now pulls
+   *    itself forward from the main process instead (`bringAppToFront`, called
+   *    by the mailbox handlers just before they notify the renderer), which
+   *    needs no permission from anyone.
+   *  - The `window.close()` attempt was already dead on this path: the tab is
+   *    opened by `shell.openExternal`, so the browser did not script-open it
+   *    and refuses to let a script close it. That is precisely why the button
+   *    existed as a fallback.
+   *
+   * What is left is a static "you can close this tab" acknowledgement.
+   *
    * @private
    */
   private _buildSuccessPage(): string {
@@ -370,7 +391,7 @@ class GoogleAuthService {
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Authentication Successful</title>
+    <title>Connected</title>
   </head>
   <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
     <div style="text-align: center; background: white; padding: 2rem 2rem; border-radius: 1rem; box-shadow: 0 20px 60px rgba(0,0,0,0.3); max-width: 380px; margin: 1.5rem; box-sizing: border-box;">
@@ -379,28 +400,10 @@ class GoogleAuthService {
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path>
         </svg>
       </div>
-      <h1 style="color: #1a202c; font-size: 1.875rem; font-weight: 700; margin: 0 0 1rem 0;">Authentication Successful!</h1>
-      <p id="status-message" style="color: #4a5568; font-size: 1rem; margin: 0 0 1.5rem 0; line-height: 1.5;">You have been successfully authenticated with Google.</p>
-      <p id="close-message" style="color: #718096; font-size: 0.875rem; margin: 0 0 1rem 0;">Attempting to close this window...</p>
-      <button id="return-button" style="display: none; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; padding: 0.75rem 2rem; border-radius: 0.5rem; font-size: 1rem; font-weight: 600; cursor: pointer; box-shadow: 0 4px 6px rgba(0,0,0,0.1); transition: transform 0.2s;">Return to Application</button>
+      <h1 style="color: #1a202c; font-size: 1.875rem; font-weight: 700; margin: 0 0 1rem 0;">Connected</h1>
+      <p id="status-message" style="color: #4a5568; font-size: 1rem; margin: 0 0 1.5rem 0; line-height: 1.5;">Your Google account is connected to Keepr.</p>
+      <p id="close-message" style="color: #718096; font-size: 0.875rem; margin: 0;">You can close this tab — Keepr has already picked this up.</p>
     </div>
-    <script>
-      setTimeout(function() {
-        window.close();
-        setTimeout(function() {
-          var closeMsg = document.getElementById('close-message');
-          var returnBtn = document.getElementById('return-button');
-          if (closeMsg) closeMsg.textContent = 'Please return to the application to continue.';
-          if (returnBtn) {
-            returnBtn.style.display = 'inline-block';
-            returnBtn.onclick = function() {
-              window.location.href = 'keepr://focus';
-              setTimeout(function() { window.close(); }, 300);
-            };
-          }
-        }, 500);
-      }, 2000);
-    </script>
   </body>
 </html>`;
   }

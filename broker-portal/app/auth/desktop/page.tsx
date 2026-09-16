@@ -13,6 +13,10 @@ import { useSearchParams } from 'next/navigation';
 import { Alert, Spinner } from '@keepr/design-system';
 import { Wordmark } from '@keepr/ui';
 import { Loader2, Mail, XCircle } from 'lucide-react';
+import {
+  FROM_DESKTOP_PARAM,
+  markArrivedFromDesktop,
+} from '@/lib/desktop-handoff';
 
 // Error messages for auth failure states
 const ERROR_MESSAGES: Record<string, string> = {
@@ -41,6 +45,16 @@ function DesktopLoginForm() {
   const [sentEmail, setSentEmail] = useState('');
   const [cooldown, setCooldown] = useState(0);
   const cooldownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // BACKLOG-3394: remember that the desktop app opened this tab, BEFORE the user
+  // can start any sign-in. The `?from=desktop` parameter does not survive the
+  // round trip through the provider's consent screen, so it is copied into
+  // sessionStorage here and read on the callback page. Write-only: re-entering
+  // this page without the parameter (the stale-session bounce, or "Try Again"
+  // on the error state) must not erase it.
+  useEffect(() => {
+    markArrivedFromDesktop(searchParams.get(FROM_DESKTOP_PARAM));
+  }, [searchParams]);
 
   // Parse error details from URL hash (Supabase puts detailed errors there)
   useEffect(() => {

@@ -26,6 +26,7 @@ import { importEnabledEmptyContactSources } from "../services/postConnectContact
 // Import validation utilities
 import { ValidationError, validateAuthCode } from "../utils/validation";
 import { getValidUserId } from "../utils/userIdHelper";
+import { bringAppToFront } from "../utils/bringAppToFront";
 
 // Import constants
 import {
@@ -768,6 +769,32 @@ export async function handleGoogleConnectMailbox(
           metadata: { provider: "google", email: userInfo.email },
           success: true,
         });
+
+        // BACKLOG-3394: bring the app forward OURSELVES. The user is looking at
+        // a browser tab; before this the served page asked them to click
+        // "Return to Application", which fired `keepr://focus` and made the
+        // browser prompt for permission — from a `listen(0)` origin that is
+        // different on every connect, so "Always allow" never stuck.
+        //
+        // Focus FIRST, then notify; the order is pinned by an assertion. It is
+        // pinned because it is free and directionally right, NOT because it is
+        // known to fix delivery. `app.focus({ steal: true })` is an
+        // ASYNCHRONOUS OS activation request, so this ordering does not
+        // establish that the renderer is foreground when the send happens, and
+        // no unit test here can establish it.
+        //
+        // UNTRACED LEAD — do not build on it. Whether focusing first affects
+        // BACKLOG-1709's lost success event is unproven: 1709's pass 2 wrote
+        // the backgrounded-webContents candidate down as "Offered as a lead,
+        // not a finding … n = 3. Do not build on it." (pm_comments 7ae840b3).
+        // It cannot touch 1709's lost-REPLY branch at all — this code runs
+        // inside processLoginInBackground, after codePromise resolves, while
+        // the invoke reply was already dispatched at the `return` below,
+        // before codePromise had resolved.
+        //
+        // Only this branch focuses. A failed connect must not steal the user's
+        // browser out from under them.
+        bringAppToFront(mainWindow);
 
         // Notify renderer
         if (mainWindow && !mainWindow.isDestroyed()) {
