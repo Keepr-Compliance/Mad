@@ -10,6 +10,8 @@ import { sanitizeFileSystemName } from "../utils/fileUtils";
 // BACKLOG-2771: this service no longer decides its own include set.
 import type { ExportPlan } from "./exportPlan";
 import { orderAttachmentComms } from "./exportPlan";
+// BACKLOG-3367: every format states what the export left out.
+import { exportNoticeLines, type ExportOmissionDetail } from "./exportNotices";
 // BACKLOG-2805: mirrors src/constants/transactionTypes.ts (electron cannot
 // import from src/). Keep the two in step.
 import { getTransactionTypeLabel } from "../constants/transactionTypeLabels";
@@ -78,11 +80,26 @@ class EnhancedExportService {
         "EnhancedExport",
       );
 
+      // BACKLOG-3367: read ONCE from the plan, here, and handed to whichever
+      // format runs. No renderer recounts from `transaction.communications` —
+      // that set holds texts this export's window already excluded, which this
+      // export did not omit.
+      const omissions: ExportOmissionDetail = {
+        hiddenTextCount: plan.hiddenTextCount,
+        hiddenTexts: plan.hiddenTexts,
+      };
+
       // Export based on format
       let exportPath: string;
       switch (exportFormat) {
         case "pdf":
-          exportPath = await this._exportPDF(transaction, plan, filteredComms, summaryOnly);
+          exportPath = await this._exportPDF(
+            transaction,
+            plan,
+            filteredComms,
+            omissions,
+            summaryOnly,
+          );
           break;
         case "excel":
         case "csv":
@@ -90,13 +107,14 @@ class EnhancedExportService {
             transaction,
             filteredComms,
             exportFormat,
+            omissions,
           );
           break;
         case "json":
-          exportPath = await this._exportJSON(transaction, filteredComms);
+          exportPath = await this._exportJSON(transaction, filteredComms, omissions);
           break;
         case "txt_eml":
-          exportPath = await this._exportTxtEml(transaction, filteredComms);
+          exportPath = await this._exportTxtEml(transaction, filteredComms, omissions);
           break;
         default:
           throw new Error(`Unknown export format: ${exportFormat}`);
@@ -120,6 +138,10 @@ class EnhancedExportService {
     transaction: TransactionWithDetails,
     plan: ExportPlan,
     communications: Communication[],
+    // BACKLOG-3367: required, and BEFORE `summaryOnly`. This method reaches the
+    // combined renderer from two branches; the compiler now refuses a call that
+    // omits the omissions from either (SR required change 2).
+    omissions: ExportOmissionDetail,
     summaryOnly: boolean = false,
   ): Promise<string> {
     const downloadsPath = app.getPath("downloads");
@@ -141,6 +163,7 @@ class EnhancedExportService {
         transaction,
         communications,
         pdfPath,
+        omissions,
         summaryOnly,
       );
 
@@ -154,7 +177,12 @@ class EnhancedExportService {
       const attachmentComms = orderAttachmentComms(plan, communications);
 
       // Use folderExportService's attachment export
-      await folderExportService.exportAttachments(transaction, attachmentComms, attachmentsPath);
+      await folderExportService.exportAttachments(
+        transaction,
+        attachmentComms,
+        attachmentsPath,
+        omissions,
+      );
 
       return folderPath;
     } else {
@@ -169,6 +197,7 @@ class EnhancedExportService {
         transaction,
         communications,
         outputPath,
+        omissions,
         summaryOnly,
       );
     }
@@ -182,6 +211,9 @@ class EnhancedExportService {
     transaction: Transaction,
     communications: Communication[],
     format: "excel" | "csv",
+    // BACKLOG-3367: required. One method serves BOTH "csv" and "excel", so the
+    // notice cannot be present in one and absent in the other.
+    omissions: ExportOmissionDetail,
   ): Promise<string> {
     const downloadsPath = app.getPath("downloads");
     const ext = format === "excel" ? "xlsx" : "csv";
@@ -228,6 +260,10 @@ class EnhancedExportService {
           : "N/A"
       }`,
       `Total Communications: ${communications.length}`,
+      // BACKLOG-3367: in the header block, beside the count it qualifies. Each
+      // notice is its own quoted single-column line so a spreadsheet shows it as
+      // text and a comma in the sentence cannot shift the columns below.
+      ...exportNoticeLines(omissions).map((line) => `"${line.replace(/"/g, '""')}"`),
       "",
       headers.map((h) => `"${h}"`).join(","),
       ...rows.map((row) => row.map((cell) => `"${cell}"`).join(",")),
@@ -247,6 +283,9 @@ class EnhancedExportService {
   private async _exportJSON(
     transaction: Transaction,
     communications: Communication[],
+    // BACKLOG-3367: required — a machine-readable export must be able to state
+    // the omission too, or a consumer counts rows and believes it has them all.
+    omissions: ExportOmissionDetail,
   ): Promise<string> {
     const downloadsPath = app.getPath("downloads");
     const fileName = sanitizeFileSystemName(
@@ -267,8 +306,15 @@ class EnhancedExportService {
         earnest_money_amount: transaction.earnest_money_amount,
         extraction_confidence: transaction.extraction_confidence,
         total_communications_count: communications.length,
+        // BACKLOG-3367: beside the total it qualifies. A new KEY, never a
+        // changed one — existing consumers keep reading what they read.
+        hidden_texts_count: omissions.hiddenTextCount,
         exported_at: new Date().toISOString(),
       },
+      // The same sentences the other formats print, so a JSON consumer can show
+      // a human the identical wording without composing it itself. Empty array
+      // when nothing was omitted.
+      export_notices: exportNoticeLines(omissions),
       communications: communications.map((comm) => ({
         id: comm.id,
         type: comm.communication_type,
@@ -302,6 +348,8 @@ class EnhancedExportService {
   private async _exportTxtEml(
     transaction: Transaction,
     communications: Communication[],
+    // BACKLOG-3367: required; carried to SUMMARY.txt below.
+    omissions: ExportOmissionDetail,
   ): Promise<string> {
     const downloadsPath = app.getPath("downloads");
     const folderName = sanitizeFileSystemName(
@@ -345,7 +393,7 @@ class EnhancedExportService {
     }
 
     // Create summary.txt
-    const summaryContent = this._createSummary(transaction, communications);
+    const summaryContent = this._createSummary(transaction, communications, omissions);
     await fs.writeFile(
       path.join(basePath, "SUMMARY.txt"),
       summaryContent,
@@ -410,6 +458,9 @@ class EnhancedExportService {
   private _createSummary(
     transaction: Transaction,
     communications: Communication[],
+    // BACKLOG-3367: required. SUMMARY.txt is the only file in this package that
+    // describes the whole export; the per-message .txt/.eml files carry nothing.
+    omissions: ExportOmissionDetail,
   ): string {
     const lines: string[] = [];
 
@@ -460,6 +511,11 @@ class EnhancedExportService {
         communications.filter((c) => isTextMessage(c)).length
       }`,
     );
+    // BACKLOG-3367: directly under the counts it qualifies.
+    for (const notice of exportNoticeLines(omissions)) {
+      lines.push("");
+      lines.push(notice);
+    }
     lines.push("");
     lines.push(`Export Date: ${new Date().toLocaleString()}`);
     lines.push("");
