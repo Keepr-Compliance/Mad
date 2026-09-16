@@ -222,6 +222,33 @@ describe("N1 / F1 — the combined PDF's index page states the count", () => {
     );
 
     expect(lastLoadedHtmlContent).toContain(TWO_HIDDEN);
+
+    // F3 — the same branch writes an attachments/manifest.json. Asserted here
+    // rather than only through the folder export, which is a different caller.
+    const manifests = written("manifest.json");
+    expect(manifests).toHaveLength(1);
+    expect(JSON.parse(manifests[0]).hiddenFromExport).toEqual({ texts: 2 });
+  });
+
+  it("each per-thread SECTION of the combined PDF states its own count", async () => {
+    // The combined PDF's thread sections each carry their own anchor and
+    // back-link and are read as units, so each states what was removed from it.
+    // `renderCombinedHTML` groups them with `getThreadKey()`, the same helper
+    // `exportTextConversations` uses — the two formats must not disagree about
+    // what a conversation lost.
+    await enhancedExportService.exportTransaction(TRANSACTION, plan(MIXED, { format: "pdf" }), {
+      exportFormat: "pdf",
+    });
+    const doc = renderedHtml();
+
+    const sections = doc.split('<div class="doc-section doc-text-thread');
+    const sectionA = sections.find((s) => s.includes("body of a-visible"));
+    const sectionB = sections.find((s) => s.includes("body of b-visible"));
+
+    expect(sectionA).toBeDefined();
+    expect(sectionB).toBeDefined();
+    expect(sectionA).toContain(TWO_HIDDEN_CONVO);
+    expect(sectionB).not.toContain("hidden from this export");
   });
 
   it("does not disturb the index links the combined PDF depends on", async () => {
