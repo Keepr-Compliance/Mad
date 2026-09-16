@@ -143,6 +143,7 @@ import { registerEmailSyncHandlers } from "./handlers/emailSyncHandlers";
 import { registerEmailLinkingHandlers } from "./handlers/emailLinkingHandlers";
 import { registerEmailAutoLinkHandlers } from "./handlers/emailAutoLinkHandlers";
 import { registerReviewQueueHandlers } from "./handlers/reviewQueueHandlers";
+import { registerHiddenTextHandlers } from "./handlers/hiddenTextHandlers";
 import { registerAttachmentHandlers } from "./handlers/attachmentHandlers";
 import { registerContactHandlers } from "./handlers/contactHandlers";
 import { registerAddressHandlers } from "./handlers/addressHandlers";
@@ -1716,6 +1717,8 @@ app.whenReady().then(async () => {
   registerEmailLinkingHandlers();
   registerEmailAutoLinkHandlers();
   registerReviewQueueHandlers();
+  // BACKLOG-3366: hide / unhide individual texts from a transaction's export.
+  registerHiddenTextHandlers();
   registerAttachmentHandlers(mainWindow!);
   registerContactHandlers(mainWindow!);
   registerAddressHandlers();
