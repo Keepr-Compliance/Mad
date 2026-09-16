@@ -776,10 +776,21 @@ export async function handleGoogleConnectMailbox(
         // browser prompt for permission — from a `listen(0)` origin that is
         // different on every connect, so "Always allow" never stuck.
         //
-        // The order matters and is asserted: focus FIRST, then notify. The
-        // renderer is foreground at send time, which also removes the
-        // backgrounded-webContents delivery risk that BACKLOG-1709 has as a
-        // surviving candidate for its lost success event.
+        // Focus FIRST, then notify; the order is pinned by an assertion. It is
+        // pinned because it is free and directionally right, NOT because it is
+        // known to fix delivery. `app.focus({ steal: true })` is an
+        // ASYNCHRONOUS OS activation request, so this ordering does not
+        // establish that the renderer is foreground when the send happens, and
+        // no unit test here can establish it.
+        //
+        // UNTRACED LEAD — do not build on it. Whether focusing first affects
+        // BACKLOG-1709's lost success event is unproven: 1709's pass 2 wrote
+        // the backgrounded-webContents candidate down as "Offered as a lead,
+        // not a finding … n = 3. Do not build on it." (pm_comments 7ae840b3).
+        // It cannot touch 1709's lost-REPLY branch at all — this code runs
+        // inside processLoginInBackground, after codePromise resolves, while
+        // the invoke reply was already dispatched at the `return` below,
+        // before codePromise had resolved.
         //
         // Only this branch focuses. A failed connect must not steal the user's
         // browser out from under them.

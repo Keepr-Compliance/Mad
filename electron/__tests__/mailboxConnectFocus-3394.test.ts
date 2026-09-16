@@ -18,10 +18,20 @@
  *     not the claim.
  *
  *  2. **It fires BEFORE the renderer is notified.** `mock.invocationCallOrder`
- *     is compared, not merely "both were called". Order is the whole point:
- *     BACKLOG-1709's surviving candidate for its lost success event is a
- *     delivery loss to a backgrounded `webContents`, and focusing after the
- *     send would leave that exactly as it was.
+ *     is compared, not merely "both were called". What this pins is CALL ORDER
+ *     IN THE MAIN PROCESS, and nothing more. It does NOT establish that the
+ *     renderer is foreground when the send happens: `app.focus({ steal: true })`
+ *     is an ASYNCHRONOUS OS activation request, and no unit test can observe
+ *     the window server acting on it.
+ *
+ *     The BACKLOG-1709 connection is an UNTRACED LEAD, not the thing being
+ *     proved. 1709's pass 2 wrote the backgrounded-`webContents` candidate down
+ *     as "Offered as a lead, not a finding … n = 3. Do not build on it."
+ *     (pm_comments 7ae840b3), and the ordering cannot touch 1709's lost-REPLY
+ *     branch at all — the invoke reply is dispatched when the handler returns,
+ *     before `codePromise` resolves and long before `processLoginInBackground`
+ *     reaches this focus call. The order is pinned because it is free and
+ *     directionally right, not because it is known to affect delivery.
  *
  *  3. **It fires EXACTLY ONCE, and only on success.** Without the failure-path
  *     partner, claim 1 passes for a handler that focuses unconditionally — and
