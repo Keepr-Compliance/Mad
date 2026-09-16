@@ -26,9 +26,9 @@ import {
 import logService from "../services/logService";
 import { wrapHandler } from "../utils/wrapHandler";
 import { ValidationError, validateTransactionId } from "../utils/validation";
-// BACKLOG-3365 repoints this import at the real fail-closed check and deletes
-// the stub module. Only the hide channel may use it.
-import { isHideFromExportAllowed } from "./hideFromExportGateStub";
+// BACKLOG-3365: the real fail-closed plan check. Only the hide channel may use
+// it — the unhide channel below deliberately does not import it.
+import { isHideFromExportAllowed } from "./featureGateHandlers";
 
 export interface HiddenTextResponse {
   success: boolean;
