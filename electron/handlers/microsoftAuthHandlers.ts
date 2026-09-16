@@ -27,6 +27,7 @@ import { isAdminConsentError } from "../utils/adminConsent";
 
 // Import validation utilities
 import { getValidUserId } from "../utils/userIdHelper";
+import { bringAppToFront } from "../utils/bringAppToFront";
 
 // Import constants
 import {
@@ -648,6 +649,12 @@ export async function handleMicrosoftConnectMailbox(
           metadata: { provider: "microsoft", email: userInfo.email },
           success: true,
         });
+
+        // BACKLOG-3394: bring the app forward OURSELVES — see the matching
+        // comment in googleAuthHandlers.ts. Focus FIRST, then notify; the order
+        // is asserted. Only this branch focuses: a failed connect must not
+        // steal the user's browser out from under them.
+        bringAppToFront(mainWindow);
 
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send("microsoft:mailbox-connected", {

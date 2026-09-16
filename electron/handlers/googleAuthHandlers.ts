@@ -26,6 +26,7 @@ import { importEnabledEmptyContactSources } from "../services/postConnectContact
 // Import validation utilities
 import { ValidationError, validateAuthCode } from "../utils/validation";
 import { getValidUserId } from "../utils/userIdHelper";
+import { bringAppToFront } from "../utils/bringAppToFront";
 
 // Import constants
 import {
@@ -768,6 +769,21 @@ export async function handleGoogleConnectMailbox(
           metadata: { provider: "google", email: userInfo.email },
           success: true,
         });
+
+        // BACKLOG-3394: bring the app forward OURSELVES. The user is looking at
+        // a browser tab; before this the served page asked them to click
+        // "Return to Application", which fired `keepr://focus` and made the
+        // browser prompt for permission — from a `listen(0)` origin that is
+        // different on every connect, so "Always allow" never stuck.
+        //
+        // The order matters and is asserted: focus FIRST, then notify. The
+        // renderer is foreground at send time, which also removes the
+        // backgrounded-webContents delivery risk that BACKLOG-1709 has as a
+        // surviving candidate for its lost success event.
+        //
+        // Only this branch focuses. A failed connect must not steal the user's
+        // browser out from under them.
+        bringAppToFront(mainWindow);
 
         // Notify renderer
         if (mainWindow && !mainWindow.isDestroyed()) {
