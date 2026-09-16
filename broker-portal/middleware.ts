@@ -11,6 +11,15 @@ import { type NextRequest, NextResponse } from 'next/server';
 import { createServerClient, type CookieOptions } from '@supabase/ssr';
 import { IMPERSONATION_COOKIE_NAME } from '@/lib/constants';
 import { isBareAuthTokenCookie, safeAuthErrorInfo } from '@/lib/supabase/cookie-guard';
+import { PORTAL_MEMBERSHIP_SELECT, pickBrokerageMembership } from '@/lib/auth/membership';
+
+/**
+ * Roles admitted to /dashboard. Everything else is bounced to /download.
+ *
+ * Named rather than inline because BACKLOG-3364 adds a second condition to the
+ * same decision below and the list must stay one thing, not two.
+ */
+const PORTAL_ROLES = ['admin', 'it_admin', 'broker'];
 
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({
@@ -116,14 +125,21 @@ export async function middleware(request: NextRequest) {
 
     // Redirect agent-role users away from dashboard to download page
     if (isProtectedRoute && user) {
-      const { data: membership } = await supabase
+      // BACKLOG-3364: a personal organization is not a placement. The row this
+      // decision is about is a BROKERAGE membership; a solo user's own
+      // organization must leave them exactly where a user with no row is left —
+      // admitted here, and refused by each page's own role gate. See
+      // lib/auth/membership.ts for why the new column is never named.
+      const { data: memberships } = await supabase
         .from('organization_members')
-        .select('role')
+        .select(PORTAL_MEMBERSHIP_SELECT)
         .eq('user_id', user.id)
-        .limit(1)
-        .single();
+        .order('created_at', { ascending: true })
+        .order('id', { ascending: true });
 
-      if (membership && !['admin', 'it_admin', 'broker'].includes(membership.role)) {
+      const membership = pickBrokerageMembership(memberships);
+
+      if (membership && !PORTAL_ROLES.includes(membership.role)) {
         return NextResponse.redirect(new URL('/download', request.url));
       }
     }
