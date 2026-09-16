@@ -313,8 +313,24 @@ export function registerLicenseHandlers(): void {
        *
        * Gated on a valid licence because the organization exists to record
        * which plan the licence is on: there is nothing to record for a user
-       * whose licence is missing, expired or suspended, and the database
-       * function refuses those cases anyway.
+       * whose licence is missing, expired or suspended.
+       *
+       * DO NOT REMOVE THIS GATE AS REDUNDANT — THERE IS NO DATABASE BACKSTOP.
+       * `_ensure_personal_organization_for` tests licence EXISTENCE, not
+       * status. Its only reference to the table is
+       *
+       *     IF NOT EXISTS (SELECT 1 FROM public.licenses
+       *                     WHERE user_id = p_user_id) THEN
+       *       RETURN jsonb_build_object('status', 'no_license');
+       *
+       * (`supabase/migrations/20260915160637_backlog_3364_personal_organizations.sql:93`).
+       * A suspended, cancelled or expired licence row — and an expired trial —
+       * still EXISTS, so the function would proceed and create the
+       * organization. `calculateLicenseStatus` in licenseService is the only
+       * place any of those four states is read, and this `isValid` check (with
+       * its twin at main.ts Step 4.5) is the only thing keeping a suspended or
+       * expired holder from self-provisioning. Removing either one changes
+       * behaviour.
        *
        * Awaited, and it never throws — the validation result is returned
        * whatever happens here.
