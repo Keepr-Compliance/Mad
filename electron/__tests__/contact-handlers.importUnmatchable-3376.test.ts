@@ -429,8 +429,10 @@ describe("U-fail the field can never ride a failure response", () => {
     // that keep this message and BACKLOG-3354's failure message mutually
     // exclusive: the array is assigned only on the statement AFTER
     // `dbTransaction` returns, AND the spread is on the success return only.
-    // Breaking either one alone is unobservable, so the mutation that reddens
-    // this test breaks BOTH (handoff, M5).
+    // THIS fixture cannot see the spread break on its own: it throws before the
+    // assignment runs, so the field is `undefined` at catch time either way.
+    // The mutation that reddens THIS test breaks BOTH guards (handoff, M5);
+    // U6b below is the control for the spread on its own (SR, RC1).
     seedMac("AB-3376-U6", "Pat Riverton", ["Pat@ Example.com", "avery@example.com"]);
     const row = await pickerRow("AB-3376-U6");
     mockSwitches.armOuterCommitFromBatch = true;
@@ -448,6 +450,24 @@ describe("U-fail the field can never ride a failure response", () => {
     expect(r.success).toBe(true);
     expect(r.unmatchableEmails).toEqual(["Pat@ Example.com"]);
     expect(state().contacts).toHaveLength(1);
+  });
+
+  it("U6b a read AFTER the commit throws: savedContactIds present, unmatchableEmails ABSENT", async () => {
+    // The commit SUCCEEDED, so `unmatchableEmails` is already assigned when the
+    // catch runs. The success-only spread is the only thing keeping it off this
+    // response — U6 above throws before that assignment and cannot see it.
+    // Covers the spread ONLY: the post-commit assignment is redundant given the
+    // spread, so this is not a control for the pair.
+    seedMac("AB-3376-U6b", "Pat Riverton", ["Pat@ Example.com", "avery@example.com"]);
+    const row = await pickerRow("AB-3376-U6b");
+    const getById = (databaseServiceMock as any).getContactById as jest.Mock;
+    getById.mockImplementationOnce(() =>
+      Promise.reject(new Error("test: post-commit read failed")),
+    );
+    const r = await call("contacts:import", USER, [row]);
+    expect(r.success).toBe(false);
+    expect(Array.isArray(r.savedContactIds)).toBe(true); // the write DID commit
+    expect("unmatchableEmails" in r).toBe(false); // the success-only spread
   });
 
   it("U7 a record refused outright: the whole call fails and carries no field", async () => {
