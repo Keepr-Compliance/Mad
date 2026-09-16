@@ -38,18 +38,21 @@
  *     cannot be edited before import, which is why this is an after-the-fact
  *     message rather than a block.
  *
- * Wording is FOUNDER CONFIRMS at the end-of-A test.
- */
-
-/**
- * How long the message stays on screen, in milliseconds.
+ * Wording is FOUNDER-CONFIRMED on both surfaces (2026-09-16).
  *
- * `NotificationProvider`'s default is 5s (`DEFAULT_DURATION`), which three
- * clauses do not read in. Not `{ persistent: true }`: an info toast the user
- * must dismiss by hand reads as an error, and this is not one — the contact
- * imported.
+ * -----------------------------------------------------------------------------
+ * HOW LONG IT STAYS: UNTIL THE USER DISMISSES IT
+ * -----------------------------------------------------------------------------
+ * Both call sites raise this with `{ persistent: true }`. There is deliberately
+ * NO duration constant in this module any more, and adding one back would be a
+ * regression: the founder tested the 12-second version on both surfaces on
+ * 2026-09-16 and asked for a message the user has to dismiss, because a timed
+ * one can be missed.
+ *
+ * Still `info` and still the ordinary notification rather than a modal dialog —
+ * the contact did import — and `NotificationToast` always renders a dismiss
+ * button (`notification-dismiss`), so the user is never stuck with it.
  */
-export const UNMATCHABLE_EMAIL_TOAST_MS = 12000;
 
 /** "imported" on the Clients & Contacts card, "added" in the deal wizard. */
 export type ImportVerb = "imported" | "added";

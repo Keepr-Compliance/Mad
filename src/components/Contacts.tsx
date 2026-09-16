@@ -31,10 +31,7 @@ import { LinkSourceSearch } from "./shared/LinkSourceSearch";
 import { ContactCompareSources } from "./shared/ContactCompareSources";
 import { NotificationContext } from "../contexts/NotificationContext";
 import { labelForContact } from "../utils/contactDisplayLabel";
-import {
-  UNMATCHABLE_EMAIL_TOAST_MS,
-  unmatchableEmailMessage,
-} from "../utils/importSkippedMessage";
+import { unmatchableEmailMessage } from "../utils/importSkippedMessage";
 
 interface ContactsProps {
   userId: string;
@@ -788,7 +785,18 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
               verb: "imported",
               addresses: unmatchable,
             });
-            if (message) notify?.info(message, { duration: UNMATCHABLE_EMAIL_TOAST_MS });
+            /*
+             * `{ persistent: true }` — it stays until the user dismisses it.
+             * FOUNDER CHANGE REQUEST, 2026-09-16 (BACKLOG-3376): he tested the
+             * 12-second version on this surface and on the deal wizard and
+             * asked for a message he has to dismiss, because a timed one can
+             * be missed. `persistent` is `duration: 0` and wins over
+             * `duration` (`ui/Notification/types.ts`), so the two are not
+             * combined — the duration is gone. Still the ordinary toast and
+             * not a modal: `NotificationToast` always renders a dismiss
+             * button, so this cannot trap anyone.
+             */
+            if (message) notify?.info(message, { persistent: true });
           }
 
           /**
