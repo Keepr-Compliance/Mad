@@ -232,7 +232,7 @@ describe("BACKLOG-3366 — the SHIPPED stand-in", () => {
     await screen.findByRole("button", { name: "Close" });
 
     expect(screen.queryByRole("button", { name: "Hide from export" })).not.toBeInTheDocument();
-    expect(screen.getByTestId("hide-from-export-m-hidden")).toHaveTextContent("Unhide");
+    expect(screen.getByTestId("hide-from-export-m-hidden")).toHaveAccessibleName("Unhide");
     expect(controls()).toHaveLength(1);
   });
 });

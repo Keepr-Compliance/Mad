@@ -242,7 +242,7 @@ describe("BACKLOG-3366 — Hide / Unhide click reaches the database call and the
     // Starting state: both bubbles normal, both offer Hide.
     expect(bubble(X)).toHaveAttribute("data-hidden-from-export", "false");
     expect(bubble(X)).not.toHaveClass("bg-gray-200");
-    expect(pill(X)).toHaveTextContent("Hide from export");
+    expect(pill(X)).toHaveAccessibleName("Hide from export");
     expect(bubble(Y)).toHaveAttribute("data-hidden-from-export", "false");
 
     // ── Hide ────────────────────────────────────────────────────────────
@@ -261,7 +261,7 @@ describe("BACKLOG-3366 — Hide / Unhide click reaches the database call and the
     // The founder-visible result, in the conversation that is still open.
     await waitFor(() => expect(bubble(X)).toHaveAttribute("data-hidden-from-export", "true"));
     expect(bubble(X)).toHaveClass("bg-gray-200", "text-gray-500", "border", "border-gray-300");
-    expect(pill(X)).toHaveTextContent("Unhide");
+    expect(pill(X)).toHaveAccessibleName("Unhide");
     expect(pill(X)).toHaveAttribute("aria-pressed", "true");
     // Only the clicked text changed.
     expect(bubble(Y)).toHaveAttribute("data-hidden-from-export", "false");
@@ -281,7 +281,7 @@ describe("BACKLOG-3366 — Hide / Unhide click reaches the database call and the
 
     await waitFor(() => expect(bubble(X)).toHaveAttribute("data-hidden-from-export", "false"));
     expect(bubble(X)).not.toHaveClass("bg-gray-200");
-    expect(pill(X)).toHaveTextContent("Hide from export");
+    expect(pill(X)).toHaveAccessibleName("Hide from export");
     expect(pill(X)).toHaveAttribute("aria-pressed", "false");
     expect(textReads()).toBeGreaterThan(readsBeforeUnhide);
   });
@@ -310,7 +310,7 @@ describe("BACKLOG-3366 — Hide / Unhide click reaches the database call and the
     expect(bubble(X)).toHaveAttribute("data-hidden-from-export", "false");
     expect(bubble(X)).not.toHaveClass("bg-gray-200");
     expect(screen.queryByTestId("hidden-from-export-label")).not.toBeInTheDocument();
-    expect(pill(X)).toHaveTextContent("Hide from export");
+    expect(pill(X)).toHaveAccessibleName("Hide from export");
     expect(pill(X)).toHaveAttribute("aria-pressed", "false");
     expect(screen.queryByTestId("notification-success")).not.toBeInTheDocument();
   });
