@@ -9,6 +9,7 @@
 import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
 import { extractEmail, orgNameFromEmail } from '@/lib/auth/helpers';
+import { PORTAL_MEMBERSHIP_SELECT, pickBrokerageMembership } from '@/lib/auth/membership';
 
 // Microsoft consumer tenant ID (personal Outlook/Hotmail accounts)
 const CONSUMER_TENANT_ID = '9188040d-6c67-4c5b-b112-36a304b66dad';
@@ -80,13 +81,22 @@ export async function GET(request: Request) {
     return NextResponse.redirect(`${origin}/setup?error=no_email`);
   }
 
-  // Check if user already has a membership (redirect to dashboard)
-  const { data: membership } = await supabase
+  // Check if the user already belongs to a BROKERAGE (redirect to dashboard).
+  //
+  // BACKLOG-3364: a solo user's own personal organization is not one. Counted
+  // as a membership it would return /dashboard below without ever calling
+  // auto_provision_it_admin, so a solo agent who later starts a brokerage could
+  // never set one up through /setup. Skipping it leaves them where they were
+  // before personal organizations existed: no membership, so provisioning runs.
+  // The membership the RPC then writes retires the personal one in the database.
+  const { data: memberships } = await supabase
     .from('organization_members')
-    .select('role, organization_id')
+    .select(PORTAL_MEMBERSHIP_SELECT)
     .eq('user_id', user.id)
-    .limit(1)
-    .single();
+    .order('created_at', { ascending: true })
+    .order('id', { ascending: true });
+
+  const membership = pickBrokerageMembership(memberships);
 
   if (membership) {
     // If IT admin and consent not yet granted, redirect to consent page
