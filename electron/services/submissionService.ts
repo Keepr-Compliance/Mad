@@ -91,6 +91,48 @@ export interface SubmissionProgress {
   currentItem?: string;
 }
 
+/**
+ * The organization record embedded by this service's membership lookup.
+ *
+ * BACKLOG-3364. `personal_owner_user_id` is optional because it is exactly what
+ * a database without that migration omits — the whole record is selected so
+ * that its absence is a missing key rather than an error.
+ */
+interface SubmissionEmbeddedOrganization {
+  personal_owner_user_id?: string | null;
+}
+
+/**
+ * One row of `select("organization_id, organizations(*)")`.
+ *
+ * Object on the wire, ARRAY in the inferred type: PostgREST returns a single
+ * object for this many-to-one embed, but the client is built without a
+ * generated `Database` type, so supabase-js infers an array from the select
+ * string alone. Both are declared and both are handled — narrowing to the array
+ * alone compiles and then reads `undefined` at runtime, which would make every
+ * organization look non-personal and is precisely the bug this guards.
+ */
+interface SubmissionMembershipRow {
+  organization_id: string;
+  organizations?:
+    | SubmissionEmbeddedOrganization
+    | SubmissionEmbeddedOrganization[]
+    | null;
+}
+
+/**
+ * Is this membership row the user's own personal organization?
+ *
+ * A null, empty or missing embed reads as NOT personal, which is the
+ * pre-migration answer and the safe one: it can only leave today's behaviour in
+ * place.
+ */
+function isPersonalSubmissionMembership(row: SubmissionMembershipRow): boolean {
+  const embed = row.organizations;
+  const org = !embed ? null : Array.isArray(embed) ? (embed[0] ?? null) : embed;
+  return !!org?.personal_owner_user_id;
+}
+
 /** Record structure for transaction_submissions table */
 interface SubmissionRecord {
   id: string;
@@ -1060,11 +1102,46 @@ class SubmissionService {
 
     try {
       const client = supabaseService.getClient();
+      /**
+       * BACKLOG-3364 — WHICH ORGANIZATION A SUBMISSION GOES TO.
+       *
+       * Three things changed here, each a separate failure this query had or
+       * would have acquired:
+       *
+       * 1. **A personal organization is refused.** A solo user now holds a
+       *    membership row, so this lookup would hand back their own
+       *    organization: the submission would be built, its attachments
+       *    uploaded, and only then would the insert be refused by the database,
+       *    which excludes personal organizations from the submission rules.
+       *    Returning null makes the existing "not a member of any organization"
+       *    refusal in `submitTransactionInternal` fire BEFORE any upload — the
+       *    same refusal a solo user got before personal organizations existed.
+       *
+       * 2. **`.maybeSingle()` is gone.** Against two rows PostgREST answers
+       *    PGRST116 with `data: null`, so a brokerage member who also still
+       *    held a personal row could not submit at all. The rows are ordered
+       *    and picked here instead.
+       *
+       * 3. **The column is never named.** `organizations(*)` embeds the whole
+       *    record and the personal flag is read from a key that is simply
+       *    absent until BACKLOG-3364's migration is applied. Naming it in the
+       *    select, order or filter returns HTTP 400 / `42703` with `data: null`
+       *    and no throw — which reads here as "no organization" and would stop
+       *    every real brokerage member from submitting.
+       *
+       * The absence of a `license_status` filter here is deliberate and is NOT
+       * changed by this item — it matches the rule the database already
+       * applies, and narrowing it would take away something that works today.
+       * Rationale on the backlog item, not here. Both `.order()` columns are
+       * base columns of `organization_members`, so neither names the new column
+       * nor sorts on the embed.
+       */
       const { data, error } = await client
         .from("organization_members")
-        .select("organization_id")
+        .select("organization_id, organizations(*)")
         .eq("user_id", userId)
-        .maybeSingle();
+        .order("created_at", { ascending: true })
+        .order("id", { ascending: true });
 
       if (error) {
         logService.warn(
@@ -1074,7 +1151,27 @@ class SubmissionService {
         return null;
       }
 
-      return data?.organization_id || null;
+      if (!Array.isArray(data)) {
+        logService.warn(
+          "[Submission] Failed to get org: result was not a list of rows",
+          "SubmissionService"
+        );
+        return null;
+      }
+
+      const brokerage = (data as SubmissionMembershipRow[]).find(
+        (row) => !isPersonalSubmissionMembership(row)
+      );
+
+      if (!brokerage) {
+        logService.info(
+          "[Submission] No brokerage organization for this user — nothing to submit to",
+          "SubmissionService"
+        );
+        return null;
+      }
+
+      return brokerage.organization_id || null;
     } catch (err) {
       logService.error(
         `[Submission] Error fetching org: ${err instanceof Error ? err.message : "Unknown"}`,
