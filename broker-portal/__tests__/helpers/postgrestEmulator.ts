@@ -111,6 +111,18 @@ export interface EmulatorState {
   writes: { table: string; op: 'insert' | 'update' | 'upsert' | 'delete'; values: unknown }[];
   /** Every select string issued, per table, for assertions. */
   selects: { table: string; columns: string }[];
+  /**
+   * Every `.order()` call issued, per table, in the order they were chained.
+   *
+   * `options` is recorded verbatim, not just the column name, because the wrong
+   * implementation a column-name-only assertion cannot see is
+   * `.order('created_at', { referencedTable: 'organizations' })`: it names no
+   * new column, `organizations.created_at` exists on both sides of the
+   * migration, and it sorts on the EMBED rather than on `organization_members`
+   * — which 3e27deee ruling 3 forbids, and which `pickBrokerageMembership`
+   * would then consume in an order the caller never asked for.
+   */
+  orders: { table: string; column: string; options: unknown }[];
 }
 
 const PGRST116 = {
@@ -213,8 +225,15 @@ function buildChain(table: string, state: EmulatorState) {
     },
     order(column: string, options?: unknown) {
       note(column, options);
-      // Ordering is not emulated: fixtures are written in the order the query
+      // Ordering is not APPLIED: fixtures are written in the order the query
       // would return them, which is what pickBrokerageMembership consumes.
+      //
+      // The call is RECORDED, because the deterministic order is a requirement
+      // (3e27deee rulings 3 and 7 — `created_at` then `id`, both base columns
+      // of organization_members) and until this line existed it had no guard:
+      // deleting both `.order()` calls from all three readers reddened 0 of
+      // 1171 tests (SR review bd8347f1 §2d, change R3).
+      state.orders.push({ table, column, options });
       return chain;
     },
     limit(n: number) {
@@ -273,6 +292,7 @@ export function createPostgrestEmulator(
     rows: initial.rows ?? {},
     writes: [],
     selects: [],
+    orders: [],
   };
   return {
     state,
@@ -286,6 +306,7 @@ export function createPostgrestEmulator(
       state.rows = {};
       state.writes = [];
       state.selects = [];
+      state.orders = [];
     },
   };
 }

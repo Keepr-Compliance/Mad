@@ -153,6 +153,31 @@ describe('against a database that has not had the migration applied', () => {
     expect(selects.length).toBeGreaterThan(0);
     for (const s of selects) expect(s.columns).not.toContain(PERSONAL_COLUMN);
   });
+
+  it('orders the membership query by created_at then id, on base columns only', async () => {
+    given([brokerageMembership('agent', 'pre')], false);
+    await verdict();
+
+    // `.limit(1)` is gone, so the reader receives every row this user holds and
+    // pickBrokerageMembership takes the first non-personal one. Which row that
+    // is depends entirely on the order the database returned them in, and two
+    // brokerage rows are reachable (SCIM and directory sync both write). The
+    // order is therefore part of the contract, not an incidental detail:
+    // 3e27deee rulings 3 and 7 fix it at `created_at`, then `id` as the
+    // tie-break — both base columns of `organization_members`, so neither can
+    // name the column a pre-migration database does not have.
+    //
+    // Asserted as a whole array, and with the options, so that dropping either
+    // call, swapping the two, or sorting on the embed with `referencedTable`
+    // all fail here. Before this existed, deleting both `.order()` calls
+    // reddened nothing (SR review bd8347f1 §2d).
+    expect(
+      mockEmulator.state.orders.filter((o) => o.table === 'organization_members')
+    ).toEqual([
+      { table: 'organization_members', column: 'created_at', options: { ascending: true } },
+      { table: 'organization_members', column: 'id', options: { ascending: true } },
+    ]);
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -104,8 +104,24 @@ describe('a solo user holding only a personal organization', () => {
 
     const location = await callbackRedirect();
 
-    // The invite was linked: the users row was upserted and the membership
-    // row updated to carry this user.
+    // THE WRITES BELOW ARE EMULATOR-ONLY, and deliberately so.
+    //
+    // What this test proves is REACHABILITY, which is all BACKLOG-3364 owes
+    // here: before this change the route returned /download on the personal
+    // membership row and never got as far as looking for an invite. It now
+    // gets there.
+    //
+    // What it does NOT prove is that the link happens on production. The
+    // emulator has no row-level security; the real database does, and its
+    // rules hide a pending invite row from the very person invited — so the
+    // lookup this test feeds returns zero rows there, the branch finds
+    // nothing, and the user continues to JIT and then to signOut. Claiming the
+    // invite for real is BACKLOG-3359, which replaces this select/update pair
+    // with a single privileged call. Expect these two assertions to change
+    // when it lands.
+    //
+    // So: the invite was linked HERE — the users row was upserted and the
+    // membership row updated to carry this user.
     const writes = mockEmulator.state.writes;
     expect(writes.map((w) => `${w.table}:${w.op}`)).toEqual([
       'users:upsert',
@@ -127,6 +143,8 @@ describe('a solo user holding only a personal organization', () => {
     given([personalMembership(), pendingInvite(EMAIL, 'broker')]);
 
     expect(await callbackRedirect()).toBe(`${ORIGIN}/dashboard`);
+    // Emulator-side writes again — see the note above: reachability, not
+    // production linking, which waits on BACKLOG-3359.
     expect(mockEmulator.state.writes).toHaveLength(2);
   });
 
@@ -246,5 +264,29 @@ describe('against a database without the column', () => {
     for (const s of mockEmulator.state.selects) {
       expect(s.columns).not.toContain(PERSONAL_COLUMN);
     }
+  });
+
+  it('orders the membership query by created_at then id, on base columns only', async () => {
+    signedIn();
+    given([brokerageMembership('agent', 'pre')], false);
+    await callbackRedirect();
+
+    // The contract, not an incidental detail: with `.limit(1)` gone, which row
+    // pickBrokerageMembership returns is decided by the order the database
+    // returned them in, and two brokerage rows are reachable. 3e27deee rulings
+    // 3 and 7 fix it at `created_at`, then `id` as the tie-break — both base
+    // columns of `organization_members`, so neither names the new column.
+    //
+    // Whole array with options, so dropping either call, swapping them, or
+    // sorting on the embed with `referencedTable` all fail here. Before this
+    // existed, deleting both `.order()` calls reddened nothing (bd8347f1 §2d).
+    // The invite lookup further down this route issues no `.order()` at all,
+    // so these two are the membership read's and nothing else's.
+    expect(
+      mockEmulator.state.orders.filter((o) => o.table === 'organization_members')
+    ).toEqual([
+      { table: 'organization_members', column: 'created_at', options: { ascending: true } },
+      { table: 'organization_members', column: 'id', options: { ascending: true } },
+    ]);
   });
 });

@@ -211,4 +211,26 @@ describe('against a database without the column', () => {
       expect(s.columns).not.toContain(PERSONAL_COLUMN);
     }
   });
+
+  it('orders the membership query by created_at then id, on base columns only', async () => {
+    signedInAzureUser();
+    given([brokerageRow('agent', 'pre')], false);
+    await callbackRedirect();
+
+    // The contract, not an incidental detail: with `.limit(1)` gone, which row
+    // pickBrokerageMembership returns is decided by the order the database
+    // returned them in, and two brokerage rows are reachable. 3e27deee rulings
+    // 3 and 7 fix it at `created_at`, then `id` as the tie-break — both base
+    // columns of `organization_members`, so neither names the new column.
+    //
+    // Whole array with options, so dropping either call, swapping them, or
+    // sorting on the embed with `referencedTable` all fail here. Before this
+    // existed, deleting both `.order()` calls reddened nothing (bd8347f1 §2d).
+    expect(
+      mockEmulator.state.orders.filter((o) => o.table === 'organization_members')
+    ).toEqual([
+      { table: 'organization_members', column: 'created_at', options: { ascending: true } },
+      { table: 'organization_members', column: 'id', options: { ascending: true } },
+    ]);
+  });
 });
