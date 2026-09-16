@@ -219,7 +219,38 @@ describe("SupabaseService", () => {
       expect((supabaseService as any).authSession).toBeNull();
     });
 
-    it("should not update session for unrelated auth events", () => {
+    // BACKLOG-3388: this test used to assert the OPPOSITE — that an
+    // INITIAL_SESSION carrying a session left the cache untouched. That was the
+    // defect written down as intent. The cache is meant to be a mirror of the
+    // SDK, and an event arriving WITH a session is the SDK saying who it is now
+    // signed in as. Keeping the older value is how a second sign-in in a
+    // running app ended up querying the previous account's id.
+    it("BACKLOG-3388: updates the cache on any event that carries a session", () => {
+      supabaseService.initialize();
+
+      (supabaseService as any).authSession = {
+        userId: "user-123",
+        accessToken: "existing-token",
+      };
+
+      capturedAuthStateCallback!("INITIAL_SESSION", {
+        user: { id: "other" },
+        access_token: "other-token",
+        refresh_token: "other-refresh",
+        expires_at: 9999,
+      });
+
+      const authSession = (supabaseService as any).authSession;
+      expect(authSession.userId).toBe("other");
+      expect(authSession.accessToken).toBe("other-token");
+      expect(authSession.refreshToken).toBe("other-refresh");
+    });
+
+    // The other half of the rule: no session on the event means there is
+    // nothing to mirror, NOT that the user signed out. The SDK emits
+    // INITIAL_SESSION(null) to every new subscriber, and clearing on that would
+    // wipe a perfectly good cache.
+    it("BACKLOG-3388: leaves the cache alone on an event that carries no session", () => {
       supabaseService.initialize();
 
       const existingSession = {
@@ -228,15 +259,8 @@ describe("SupabaseService", () => {
       };
       (supabaseService as any).authSession = existingSession;
 
-      // Simulate an unrelated event like INITIAL_SESSION
-      capturedAuthStateCallback!("INITIAL_SESSION", {
-        user: { id: "other" },
-        access_token: "other-token",
-        refresh_token: "other-refresh",
-        expires_at: 9999,
-      });
+      capturedAuthStateCallback!("INITIAL_SESSION", null);
 
-      // Session should be unchanged
       expect((supabaseService as any).authSession).toBe(existingSession);
     });
 
