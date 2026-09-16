@@ -5,16 +5,24 @@
  * People found in the user's email — the producer's controls (BACKLOG-1717).
  *
  * ===========================================================================
- * WHY THIS SUITE LOADS THE DRIVER BY ABSOLUTE PATH
+ * WHY THIS SUITE USES `openTestDb` RATHER THAN REQUIRING THE DRIVER
  * ===========================================================================
  * `jest.config.js` maps `^better-sqlite3-multiple-ciphers$` to a MOCK. A suite
  * that imports the driver by package name gets that mock: every write appears
  * to succeed, every read returns nothing, and a producer test passes while
- * measuring NOTHING. The planning engineer hit exactly this and it cost ten
- * minutes to see, because the failure mode is a green run.
+ * measuring NOTHING. The failure mode is a GREEN run, which is why this matters.
  *
- * The mapper's pattern is anchored, so an absolute path escapes it. Every
- * `describe` below therefore also asserts a NON-ZERO fixture row count before
+ * `openTestDb` is the repo's answer: it resolves the real driver by a path
+ * RELATIVE to this file — escaping the anchored mapper — and falls back to
+ * `node:sqlite` when the shared binary is built for the Electron ABI and cannot
+ * load under plain Node. Both are real SQLite running the real statements.
+ *
+ * An earlier version of this file required the driver by an ABSOLUTE path
+ * lifted from a throwaway planning probe. It worked on the machine that wrote
+ * it and failed on CI with `Cannot find module`, because that path exists on
+ * exactly one computer. A test fixture is shipped code.
+ *
+ * Every `describe` below also asserts a NON-ZERO fixture row count before
  * asserting anything about the producer — a green run on an empty database is
  * the thing this file must not be able to produce.
  *
@@ -38,14 +46,13 @@
  * expected to redden, is in the PR body and the implementation handoff.
  */
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const Database = require("/Users/daniel/Developer/Mad/node_modules/better-sqlite3-multiple-ciphers");
 import fs from "fs";
 import path from "path";
 import { prepareParticipantInsert } from "../emailSyncSql";
 import { computeParticipantHash } from "../../../utils/emailAddress";
 import gmailFetchService from "../../gmailFetchService";
 import outlookFetchService from "../../outlookFetchService";
+import { openTestDb, currentEngine } from "../../__tests__/helpers/syncSqliteDriver";
 import {
   buildEmailDerivedCandidateQuery,
   runEmailDerivedQueryOn,
@@ -74,7 +81,7 @@ const GMAIL_ONLY: EmailDerivedProvider[] = ["gmail"];
 type Db = any;
 
 function newDb(): Db {
-  const db = new Database(":memory:");
+  const db = openTestDb();
   db.exec(SCHEMA);
   return db;
 }
@@ -287,6 +294,26 @@ function assertFixtureLanded(db: Db, userId = U): void {
 }
 
 describe("BACKLOG-1717 — people found in the user's email", () => {
+  /**
+   * THE HARNESS CONTROL (D8). Everything below is worthless if this suite is
+   * talking to the jest mock rather than a database.
+   *
+   * The mock's `prepare().get()` returns undefined and its `all()` returns an
+   * empty array, so it cannot compute `1 + 1` and cannot report an engine.
+   */
+  it("runs real SQL on a real engine, not the jest mock", () => {
+    const db = newDb();
+    expect(["better-sqlite3", "node:sqlite"]).toContain(currentEngine());
+    expect(db.prepare("SELECT 1 + 1 AS sum").get()).toEqual({ sum: 2 });
+    // and the real schema is loaded, not a convenient subset
+    const cols = (
+      db.prepare("PRAGMA table_info(email_participants)").all() as Array<{ name: string }>
+    ).map((c) => c.name);
+    expect(cols).toContain("email_address");
+    expect(cols).toContain("display_name");
+    db.close();
+  });
+
   describe("the list the picker is handed", () => {
     let db: Db;
 
