@@ -23,6 +23,8 @@ import { extractAllHandles } from "../../../utils/phoneNormalization";
 import { mergeThreadsByContact, type MergedThreadEntry } from "../../../utils/threadMergeUtils";
 import { formatDateRangeLabel, parseLocalCalendarDay, isTimestampInAuditPeriod } from "../../../utils/dateRangeUtils";
 import { isReactionRow } from "../../../utils/reactionUtils";
+import { useHideFromExportState } from "../../../hooks/useHideFromExportState";
+import { transactionService } from "../../../services/transactionService";
 import logger from '../../../utils/logger';
 
 /**
@@ -106,6 +108,12 @@ interface TransactionMessagesTabProps {
    *  re-fetches — a trash on a review card removes the item, and the removed
    *  list only ever fetched on mount. */
   reviewRefreshKey?: number;
+  /**
+   * BACKLOG-3366: called after a text is hidden from or put back into this
+   * transaction's export, so the parent can refetch texts without a spinner and
+   * the open conversation re-renders with the new marker.
+   */
+  onHiddenFromExportChanged?: () => void | Promise<void>;
 }
 
 /**
@@ -139,7 +147,12 @@ export function TransactionMessagesTab({
   reviewSection = null,
   hasReviewItems = false,
   reviewRefreshKey = 0,
+  onHiddenFromExportChanged,
 }: TransactionMessagesTabProps): React.ReactElement {
+  // BACKLOG-3366: read ONCE here and passed down to each linked conversation.
+  // Stand-in until BACKLOG-3365: always "blocked", so only Unhide can render.
+  const hideFromExportState = useHideFromExportState();
+
   // TASK-2074: Disable sync when offline, already syncing, or when a global dashboard sync is running.
   // BACKLOG-2294: a BACKGROUND messages sync (audit-date-change / create auto-import, the
   // orchestrator's post-login sync, or the 2293 re-sync expansion) is also "active" — surface the
@@ -371,6 +384,27 @@ export function TransactionMessagesTab({
       onShowSuccess?.("Messages attached successfully", { action: undoAction });
     },
     [onMessagesChanged, onShowSuccess, transactionId, undoAttachMessages]
+  );
+
+  // BACKLOG-3366: hide one text from (or put it back into) this transaction's
+  // export. The text stays linked either way; on success the parent refetches
+  // silently so the open conversation shows the new state.
+  const handleSetHiddenFromExport = useCallback(
+    async (messageId: string, hide: boolean): Promise<void> => {
+      if (!transactionId) return;
+      const result = hide
+        ? await transactionService.hideTextFromExport(transactionId, messageId)
+        : await transactionService.unhideTextFromExport(transactionId, messageId);
+      if (!result.success) {
+        onShowError?.(
+          result.error ||
+            (hide ? "Failed to hide text from export" : "Failed to unhide text"),
+        );
+        return;
+      }
+      await onHiddenFromExportChanged?.();
+    },
+    [transactionId, onShowError, onHiddenFromExportChanged],
   );
 
   // Handle unlink button click on a thread
@@ -1072,6 +1106,10 @@ export function TransactionMessagesTab({
               isSelected={isThreadSelected(threadId)}
               onToggleSelect={() => toggleThreadSelection(threadId)}
               isHighlighted={threadId === highlightedThreadId}
+              /* BACKLOG-3366: only linked conversations get Hide / Unhide. The
+                 removed list and the review queue below never receive it. */
+              onSetHiddenFromExport={transactionId ? handleSetHiddenFromExport : undefined}
+              hideFromExportState={hideFromExportState}
             />
           );
         })}

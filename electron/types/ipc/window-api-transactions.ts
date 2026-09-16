@@ -682,6 +682,21 @@ export interface WindowApiTransactions {
     success: boolean;
     error?: string;
   }>;
+  /**
+   * BACKLOG-3366: hide one text from this transaction's export. The text stays
+   * linked and visible. `hidden` is read back from the database.
+   */
+  hideTextFromExport: (transactionId: string, messageId: string) => Promise<{
+    success: boolean;
+    hidden?: boolean;
+    error?: string;
+  }>;
+  /** BACKLOG-3366: put a hidden text back into this transaction's export. Never gated. */
+  unhideTextFromExport: (transactionId: string, messageId: string) => Promise<{
+    success: boolean;
+    hidden?: boolean;
+    error?: string;
+  }>;
   /** BACKLOG-1578: Get removed/unlinked emails for a transaction */
   getRemovedEmails: (transactionId: string) => Promise<{
     success: boolean;

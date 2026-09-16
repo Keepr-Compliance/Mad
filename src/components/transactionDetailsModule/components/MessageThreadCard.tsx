@@ -8,6 +8,7 @@ import type { Communication, Message } from "../types";
 import { ConversationViewModal } from "./modals";
 import { normalizePhoneForLookup } from "../../../utils/phoneNormalization";
 import { getContactAvatarInitial } from "../../../utils/avatarUtils";
+import type { HideFromExportState } from "../../../hooks/useHideFromExportState";
 
 /**
  * Union type for messages - can be from messages table or communications table
@@ -76,6 +77,15 @@ export interface MessageThreadCardProps {
    * the parent so the ring survives list remounts during loading flips.
    */
   isHighlighted?: boolean;
+  /**
+   * BACKLOG-3366: hide / unhide one text from this transaction's export,
+   * forwarded to the conversation modal. Pass it ONLY for a conversation linked
+   * to the transaction (the Texts tab's active list); when absent the modal
+   * renders no Hide or Unhide control.
+   */
+  onSetHiddenFromExport?: (messageId: string, hide: boolean) => void | Promise<void>;
+  /** BACKLOG-3366: whether hiding is allowed, forwarded to the modal. */
+  hideFromExportState?: HideFromExportState;
 }
 
 /**
@@ -268,6 +278,8 @@ export function MessageThreadCard({
   isSelected = false,
   onToggleSelect,
   isHighlighted = false,
+  onSetHiddenFromExport,
+  hideFromExportState,
 }: MessageThreadCardProps): React.ReactElement {
   const [showModal, setShowModal] = useState(false);
 
@@ -478,6 +490,8 @@ export function MessageThreadCard({
           auditStartDate={auditStartDate}
           auditEndDate={auditEndDate}
           onClose={() => setShowModal(false)}
+          onSetHiddenFromExport={onSetHiddenFromExport}
+          hideFromExportState={hideFromExportState}
         />
       )}
     </>

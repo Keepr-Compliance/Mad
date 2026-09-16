@@ -141,6 +141,17 @@ function createSchema(db: DatabaseType): void {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY (user_id, thread_id)
     );
+    -- BACKLOG-3366: getCommunicationsWithMessages projects a hidden_from_export
+    -- marker with an EXISTS over this table. Without it the query throws at
+    -- prepare(), the same way the missing thread-names table did above. Empty
+    -- in this suite, so every marker is 0 and the reaction assertions are
+    -- unaffected. Shape copied from schema.sql.
+    CREATE TABLE transaction_hidden_texts (
+      transaction_id TEXT NOT NULL, message_id TEXT NOT NULL,
+      message_external_id TEXT, hidden_by TEXT NOT NULL,
+      hidden_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (transaction_id, message_id)
+    );
   `);
 }
 
