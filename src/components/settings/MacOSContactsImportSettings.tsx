@@ -54,6 +54,7 @@ const STORED_CELL = {
 import { ImportInfoPopover } from "./ImportInfoPopover";
 import logger from '../../utils/logger';
 import { safeErrorMessage } from '../../utils/formatUtils';
+import type { ContactInferenceStates } from "../../hooks/useContactInferenceState";
 
 /**
  * BACKLOG-2388: Shared "counts clause" for a contact-sync result so the macOS,
@@ -160,6 +161,17 @@ interface ContactsImportSettingsProps {
   /** TASK-2303: Google Contacts toggle (People API) */
   googleContactsEnabled: boolean;
   outlookEmailsInferred: boolean;
+  /**
+   * BACKLOG-3349: what the plan on record says about inferring contacts from
+   * email, per provider, as the strict gate resolved it.
+   *
+   * REQUIRED, not optional with a default. An optional prop would let a new
+   * caller — or a fixture — leave it out and silently get the permissive
+   * branch, which is the one shape this gate exists to prevent. Making it
+   * required means `npm run type-check:tests` names every fixture that has to
+   * state it.
+   */
+  contactInference: ContactInferenceStates;
   gmailEmailsInferred: boolean;
   messagesInferred: boolean;
   loadingPreferences: boolean;
@@ -186,6 +198,7 @@ export function ContactsImportSettings({
   gmailContactsEnabled,
   googleContactsEnabled,
   outlookEmailsInferred,
+  contactInference,
   gmailEmailsInferred,
   messagesInferred,
   loadingPreferences,
@@ -483,8 +496,53 @@ export function ContactsImportSettings({
   */
   const outlookContactsSwitchOn = outlookContactsEnabled && hasOutlook;
   const googleContactsSwitchOn = googleContactsEnabled && hasGoogle;
-  const outlookEmailsSwitchOn = outlookEmailsInferred && hasOutlook;
+  /*
+    BACKLOG-3349 — the plan is a third term in the same rule BACKLOG-3202 set.
+
+    3202's rule is: DRAW WHAT IS IN EFFECT. A stored `true` with no connection
+    used to render a blue, checked switch on a control that was greyed out and
+    so could not be clicked to correct it. The plan gate is the same shape — a
+    stored `true` that the plan does not permit is not in effect either — so it
+    joins the same expression rather than getting a rule of its own.
+
+    `allowed` is required, not "not blocked": `unknown` and `pending` must not
+    draw the switch on. Those two say the plan could not be read, and a switch
+    drawn ON for a feature that will not run is the lie 3202 removed.
+
+    The STORED PREFERENCE IS NEVER WRITTEN by any of this. If the plan turns
+    back on, the user's own choice comes back untouched.
+  */
+  const outlookInferenceState = contactInference.outlook;
+  const outlookInferenceAllowed = outlookInferenceState === "allowed";
+  const outlookInferenceBlocked = outlookInferenceState === "blocked";
+
+  const outlookEmailsSwitchOn =
+    outlookEmailsInferred && hasOutlook && outlookInferenceAllowed;
   const gmailEmailsSwitchOn = gmailEmailsInferred && hasGoogle;
+
+  /*
+    Which of the two reasons the row is unavailable does it name?
+
+    BLOCKED WINS over "not connected", because connecting the mailbox cannot fix
+    it — sending a user to an OAuth flow that changes nothing is worse than
+    telling him the plain reason.
+
+    UNKNOWN LOSES to "not connected", the other way round, because there the
+    connection IS actionable and the plan may well be fine. With the mailbox
+    connected, unknown says so in its own words; it must never borrow the plan
+    sentence, which would tell an entitled user something false about what he
+    bought.
+
+    PENDING gets no title at all — it lasts one IPC round trip, and a tooltip
+    that flickers is noise.
+  */
+  const outlookEmailsTitle = outlookInferenceBlocked
+    ? "Not available on your current plan"
+    : !isMicrosoftConnected
+      ? "Connect email to enable import"
+      : outlookInferenceState === "unknown"
+        ? "Can't check your plan right now"
+        : undefined;
   // BACKLOG-2486: `showIphoneContacts` counts as a source. Without it, a Windows
   // user with an iPhone and no mailbox connected hit the "no sources" placeholder
   // below and never saw the one switch that governs their only contact source.
@@ -815,15 +873,23 @@ export function ContactsImportSettings({
           <div className="flex items-center justify-between py-1">
             <div className="flex items-center gap-2">
               <span className="text-sm text-gray-700">Outlook emails</span>
-              {!isMicrosoftConnected && (
+              {/* BACKLOG-3349: one reason at a time, in the row's existing
+                  inline-label slot. The plan reason replaces the connection
+                  reason rather than sitting beside it. */}
+              {outlookInferenceBlocked ? (
+                <span className="text-xs text-gray-400">(not in your plan)</span>
+              ) : !isMicrosoftConnected ? (
                 <span className="text-xs text-gray-400">(not connected)</span>
-              )}
+              ) : null}
             </div>
             <button
               onClick={() => onToggleSource("inferred", "outlookEmails", outlookEmailsInferred)}
-              disabled={loadingPreferences || !isMicrosoftConnected}
+              // BACKLOG-3349: the plan gate disables the control as firmly as a
+              // missing connection does. Main decides either way — this only
+              // stops the user clicking something that cannot take effect.
+              disabled={loadingPreferences || !isMicrosoftConnected || !outlookInferenceAllowed}
               // BACKLOG-2142: explain why a disabled import toggle is grayed out.
-              title={!isMicrosoftConnected ? "Connect email to enable import" : undefined}
+              title={outlookEmailsTitle}
               className={`ml-4 relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                 outlookEmailsSwitchOn ? "bg-blue-500" : "bg-gray-300"
               }`}

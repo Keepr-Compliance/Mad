@@ -174,7 +174,7 @@ import { registerPairingHandlers, cleanupPairingHandlers } from "./handlers/pair
 import { LLMConfigService } from "./services/llm/llmConfigService";
 
 // Import license and device services for deep link auth validation (TASK-1507)
-import { validateLicense, createUserLicense } from "./services/licenseService";
+import { validateLicense, createUserLicense, ensurePersonalOrganization } from "./services/licenseService";
 import { registerDevice } from "./services/deviceService";
 import supabaseService from "./services/supabaseService";
 import databaseService from "./services/databaseService";
@@ -616,6 +616,17 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
         });
         focusMainWindow();
         return;
+      }
+
+      // BACKLOG-3364: Step 4.5 - the personal organization a solo user's plan
+      // is recorded against. Placed after the block check rather than directly
+      // after the licence step so that it fires on exactly the same condition
+      // as the `license:validate` handler does — a licence that is not
+      // blocking. It never throws and never stops sign-in; a failure here
+      // leaves the user exactly as they were before personal organizations
+      // existed, and the next launch asks again.
+      if (licenseStatus.isValid) {
+        await ensurePersonalOrganization(user.id);
       }
 
       // TASK-1507: Step 5 - Register device

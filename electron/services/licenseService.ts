@@ -11,6 +11,11 @@ import { app } from "electron";
 import * as Sentry from "@sentry/electron/main";
 import supabaseService from "./supabaseService";
 import logService from "./logService";
+// BACKLOG-3364: a personal organization brings a plan with it, so the
+// feature-gate cache — populated while the user had no organization — has to be
+// dropped. featureGateService imports only supabaseService and logService, so
+// this does not cycle.
+import featureGateService from "./featureGateService";
 import type {
   License,
   LicenseType,
@@ -301,6 +306,117 @@ export async function createUserLicense(
       tags: { service: "license-service", operation: "createUserLicense" },
     });
     throw error;
+  }
+}
+
+/**
+ * What {@link ensurePersonalOrganization} did, for logs and for controls.
+ *
+ * `called: false` means the remote function was never invoked and nothing was
+ * written; `reason` says why. `called: true` carries the status the database
+ * returned (`created`, `exists`, `attached`, `has_membership`, `no_license`,
+ * `no_user`, `pending_invite`, `no_default_plan`, `conflict`,
+ * `not_authenticated`), or `"rpc_error"` when the call itself failed.
+ */
+export interface EnsurePersonalOrganizationResult {
+  called: boolean;
+  reason?: "has_membership" | "membership_unknown";
+  status?: string;
+}
+
+/**
+ * Give this user the personal organization their plan is recorded against.
+ *
+ * BACKLOG-3364. A solo user has no brokerage, so there was nowhere to record
+ * which plan they are on. They now get an organization of their own holding
+ * exactly one member — themselves, as `agent` — and one individual-tier plan
+ * record. The database function decides everything (whether one is owed, which
+ * plan, and idempotency under an advisory lock), so this is a single call.
+ *
+ * **It never throws and never blocks sign-in.** Every failure is logged and
+ * swallowed: a user who cannot be given a personal organization must still be
+ * able to use the app exactly as they could before one existed.
+ *
+ * **It is not called when the user already has an active membership.** The
+ * database function short-circuits on that case anyway, so this is not what
+ * makes the operation safe — it keeps a brokerage member's every launch from
+ * carrying a pointless round trip, and it keeps the write off any path where we
+ * do not positively know the user has no organization. An `error` from the
+ * membership lookup is NOT a licence to write: "I could not find out" is not
+ * "they have none", so that skips too and the next launch asks again.
+ *
+ * @param userId - the signed-in user. Used only for the membership question;
+ *        the remote function takes no arguments and resolves the caller from
+ *        the session itself, so it can never be aimed at another account.
+ */
+export async function ensurePersonalOrganization(
+  userId: string
+): Promise<EnsurePersonalOrganizationResult> {
+  try {
+    const outcome = await supabaseService.getActiveOrganizationMembershipOutcome(userId);
+
+    if (outcome.status === "member") {
+      logService.debug(
+        "[License] Personal organization not needed — user already has a membership",
+        "LicenseService",
+        { isPersonal: outcome.is_personal }
+      );
+      return { called: false, reason: "has_membership" };
+    }
+
+    if (outcome.status === "error") {
+      logService.warn(
+        "[License] Could not read organization membership — not creating a personal organization this time",
+        "LicenseService"
+      );
+      return { called: false, reason: "membership_unknown" };
+    }
+
+    const { data, error } = await supabaseService
+      .getClient()
+      .rpc("ensure_personal_organization");
+
+    if (error) {
+      // PGRST202 is "no such function": the database has not had BACKLOG-3364's
+      // migration applied yet. That is an expected state for a build running
+      // ahead of the migration, not an incident, so it is not reported.
+      if (error.code === "PGRST202") {
+        logService.warn(
+          "[License] Personal organizations are not available on this database yet",
+          "LicenseService"
+        );
+      } else {
+        logService.error(
+          `[License] Failed to ensure personal organization: ${error.message}`,
+          "LicenseService",
+          { code: error.code ?? null }
+        );
+        Sentry.captureException(
+          new Error(`ensure_personal_organization failed: ${error.message}`),
+          { tags: { service: "license-service", operation: "ensurePersonalOrganization" } }
+        );
+      }
+      return { called: true, status: "rpc_error" };
+    }
+
+    const status = (data as { status?: string } | null)?.status ?? "unknown";
+    logService.info("[License] Personal organization ensured", "LicenseService", { status });
+
+    // A new organization means a new plan to read, and the feature-gate cache
+    // was populated while the user had no organization at all.
+    if (status === "created" || status === "attached") {
+      featureGateService.invalidateCache();
+    }
+
+    return { called: true, status };
+  } catch (err) {
+    logService.error("[License] Error ensuring personal organization", "LicenseService", {
+      error: err instanceof Error ? err.message : "Unknown error",
+    });
+    Sentry.captureException(err, {
+      tags: { service: "license-service", operation: "ensurePersonalOrganization" },
+    });
+    return { called: false, reason: "membership_unknown" };
   }
 }
 
