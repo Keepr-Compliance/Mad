@@ -189,7 +189,11 @@ describe("BACKLOG-1717 — a confirmed person keeps their address", () => {
     expect(link.id).toBeTruthy(); // the link really exists, or the unlink proves nothing
 
     const outcome = unlinkContactSource(USER, id, link.id!);
-    expect(outcome).toMatchObject({ ok: true });
+    // Narrow first: the failure arm of the union carries no counts, and an
+    // unlink that silently failed would otherwise "keep" the address for the
+    // wrong reason entirely.
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) throw new Error(`unlink failed: ${outcome.error}`);
     expect(outcome.removedEmails ?? 0).toBe(0);
     expect(emailRowsOn(id).map((r) => r.email)).toEqual([AVERY]);
   });
