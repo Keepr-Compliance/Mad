@@ -133,6 +133,12 @@ import {
   type ImportableRecordParts,
 } from "../utils/importableRecord";
 import { applyLinkedSourceValuesOrThrow } from "../services/contactSourceValues";
+import {
+  addImportAdjustments,
+  adjustedFieldNames,
+  emptyImportAdjustmentCounts,
+  shapeImportValues,
+} from "../utils/contactImportValues";
 // BACKLOG-2617: `recordContactOrigin` was imported here for the duplicate-by-name
 // early return in `contacts:create` and nothing else. That branch is deleted, so
 // the import goes with it. Only the type remains in use.
@@ -2048,6 +2054,9 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         // Every link attempt this import made, reported in one line at the end
         // rather than one line per contact (BACKLOG-2458 I2).
         const linkOutcomes: Array<{ contactId: string; outcome: LinkImportOutcome }> = [];
+        // BACKLOG-3358: what the import had to reorder or cut, counted across
+        // the whole call and reported once, after the commit.
+        const importAdjustments = emptyImportAdjustmentCounts();
 
         for (const [index, contact] of contactsToImport.entries()) {
           const sanitizedContact = sanitizeObject(contact) as ImportableContact;
@@ -2088,7 +2097,25 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             );
           }
 
-          const validatedData = validateContactData(sanitizedContact, false);
+          /**
+           * BACKLOG-3358 — AN UNUSABLE FIRST EMAIL OR PHONE NO LONGER BLOCKS
+           * THE RECORD.
+           *
+           * The validator checks the scalar `email`/`phone`, which on a picker
+           * row is the address book's FIRST value. `shapeImportValues` puts
+           * usable values first, hands the validator the first usable one (or
+           * none), and cuts long names, companies and titles. Nothing is
+           * removed: the arrays below carry every value the source holds, and
+           * `createContactsBatch` marks the first one primary.
+           *
+           * ONLY HERE. `contacts:create` and `contacts:update` hand the
+           * validator their raw payloads, so typed input is still refused.
+           * The refusal above runs on the RAW record, and the source
+           * identities and legacy branch below keep reading it.
+           */
+          const shaped = shapeImportValues(sanitizedContact);
+          addImportAdjustments(importAdjustments, shaped.adjustments);
+          const validatedData = validateContactData(shaped.forValidation, false);
           const sourceIdentities = toSourceIdentities(sanitizedContact);
 
           /**
@@ -2174,8 +2201,9 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
               // BACKLOG-2481: the value decided above, not the raw input.
               source: storableSource,
               is_imported: true,
-              allPhones: sanitizedContact.allPhones || [],
-              allEmails: sanitizedContact.allEmails || [],
+              // BACKLOG-3358: every value the source holds, usable first.
+              allPhones: shaped.allPhones,
+              allEmails: shaped.allEmails,
             });
             newContactSources.push(sourceIdentities);
           }
@@ -2488,6 +2516,33 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           ...importWrites.createdIds,
           ...importWrites.claimedByExisting.map((c) => c.contactId),
         ];
+
+        /**
+         * BACKLOG-3358 — ONE COUNTS-ONLY WARNING, AFTER THE COMMIT.
+         *
+         * After `dbTransaction` returns and never inside its callback: a save
+         * that rolls back must not report values it did not save. Counts and
+         * field names only — no name, address, number or id. One event per
+         * call, not per record.
+         */
+        if (importAdjustments.recordsAdjusted > 0) {
+          // BACKLOG-3358: this event is sent without breadcrumbs.
+          Sentry.withScope((scope) => {
+            scope.addEventProcessor((event) => {
+              delete event.breadcrumbs;
+              return event;
+            });
+            Sentry.captureMessage("Contact import saved values that used to block it", {
+              level: "warning",
+              tags: { area: "contacts", operation: "import-lenient" },
+              extra: {
+                recordsInCall: contactsToImport.length,
+                ...importAdjustments,
+                fields: adjustedFieldNames(importAdjustments),
+              },
+            });
+          });
+        }
 
         // BACKLOG-3220: every read happens after the commit, in the order
         // `importedContacts` has always had — existing-DB contacts, then the
