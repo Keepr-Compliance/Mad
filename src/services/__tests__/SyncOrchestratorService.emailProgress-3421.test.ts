@@ -179,12 +179,21 @@ describe('BACKLOG-3421 — the emails leg forwards the pre-cache percent', () =>
     //
     // MUTATION: put `onProgress(50)` back before the precache invoke -> red
     // ("50 was never emitted by the producer").
+    //
+    // THE FIRST FORM OF THIS FIXTURE WAS VACUOUS, and running the mutation is
+    // what showed it: the emitted list contained 50, because 50 is a published
+    // anchor (`FETCH_SECOND_PROVIDER`). A restored hard-coded 50 was then
+    // indistinguishable from the producer's own, and this test stayed green
+    // under the one mutation it exists for. The run below is an OUTLOOK-ONLY
+    // one — `interpolateFetchPercent` never returns a range's `end`, so the
+    // inbox round yields 10..29 and the folder walk 30..49, then `FETCH_DONE`
+    // at 90 — and it therefore never emits 50 at all.
     let release: (() => void) | undefined;
     precacheEmails.mockImplementation(
       () => new Promise((resolve) => { release = () => resolve({ success: true }); }),
     );
 
-    const emitted = [10, 21, 34, 50, 52];
+    const emitted = [10, 21, 30, 44, 90];
     const { snapshots, stop } = captureQueues();
     void syncOrchestrator.requestSync({ types: ['emails'], userId: 'test-user' });
     await tick();
@@ -192,7 +201,9 @@ describe('BACKLOG-3421 — the emails leg forwards the pre-cache percent', () =>
     emitted.forEach((percent) =>
       emitPrecacheProgress({
         phase: 'fetching',
-        stage: percent < 50 ? 'outlook-inbox' : 'gmail-messages',
+        // The last event of the fetch phase is the `FETCH_DONE` boundary, which
+        // names no round — hence the `undefined`.
+        stage: percent === 90 ? undefined : percent < 30 ? 'outlook-inbox' : 'outlook-folders',
         current: percent * 10,
         total: 1200,
         percent,
