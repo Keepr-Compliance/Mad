@@ -1,24 +1,73 @@
 ; ---------------------------------------------------------------------------
-; Keepr NSIS custom installer hooks (BACKLOG-2114)
+; Keepr NSIS custom installer hooks (BACKLOG-2114, BACKLOG-3417)
 ;
-; Adds an OPTIONAL user-data cleanup step to the assisted (oneClick:false)
+; Adds an OPTIONAL user-data cleanup question to the one-click (oneClick:true)
 ; uninstaller. This macro is !insertmacro'd by electron-builder inside the
 ; uninstall Section, AFTER un.onInit has run initMultiUser (which sets
-; $installMode and the shell-var context) and parsed the /S flag
-; (SetSilent silent). So ${Silent}, ${isUpdated}, and $installMode are all
-; authoritative here.
+; $installMode and the shell-var context). So ${isUpdated} and $installMode are
+; authoritative here. ${Silent}/IfSilent is NOT -- see WHY NOT IfSilent below.
 ;
-; See node_modules/app-builder-lib/templates/nsis/uninstaller.nsh:
-;   Function un.onInit -> initMultiUser (sets $installMode + SetShellVarContext),
-;                         parses "/S" -> SetSilent silent
-;   Section un.<name>  -> `!insertmacro customUnInstall`, then the default
-;                         delete-app-data block guarded by `$installMode == "all"`.
+; See node_modules/app-builder-lib/templates/nsis/uninstaller.nsh
+; (app-builder-lib 26.15.6):
+;   Function un.onInit -> parses "/S" -> SetSilent silent (:12-16); with
+;                         ONE_CLICK and no /S, shows "Are you sure you want to
+;                         uninstall?" and then ALSO calls SetSilent silent
+;                         (:21-28); then initMultiUser (:31, sets $installMode
+;                         + SetShellVarContext).
+;   Section un.<name>  -> `!insertmacro customUnInstall` (:156-157), then the
+;                         default delete-app-data block, which runs only with
+;                         --delete-app-data or DELETE_APP_DATA_ON_UNINSTALL
+;                         (neither applies to Keepr) (:216-248).
 ;
-; CRITICAL (silent/update safety): the auto-updater (electron-updater / NSIS
-; differential update) runs the uninstaller SILENTLY during an update. We must
-; NEVER touch user data in that path, and NEVER show a MessageBox when silent
-; (a modal in a silent update would hang the updater indefinitely). We bail on
-; BOTH ${isUpdated} and ${Silent}/IfSilent.
+; CRITICAL (silent/update safety): an update runs this uninstaller SILENTLY. The
+; NEW installer calls the OLD uninstaller as
+;   "<uninstaller>" /S /KEEP_APP_DATA /currentuser --updated _?=<dir>
+; (templates/nsis/include/installUtil.nsh:224, retry :230; --updated added at
+; :206). We must NEVER touch user data in that path, and NEVER show a MessageBox
+; when the caller asked for silent (a modal in a silent update would hang the
+; updater indefinitely). We bail on BOTH ${isUpdated} and a /S on the command
+; line. Who passes what:
+;   - Windows Settings / Add-Remove Programs: UninstallString, no /S
+;     (include/installer.nsh:122) -> we ask.
+;   - winget and similar tools: QuietUninstallString, /S
+;     (include/installer.nsh:123) -> we never ask, never delete.
+;   - In-app uninstall/reset (BACKLOG-2111): Start-Process ... -ArgumentList '/S'
+;     (electron/services/appCleanupService.ts) -> we never ask; that flow deletes
+;     the data itself.
+;
+; WHY NOT IfSilent (BACKLOG-3417): with oneClick:true, un.onInit calls
+; `SetSilent silent` for EVERY uninstall, including one a person started from
+; Windows Settings, right after its own "Are you sure" box -- uninstaller.nsh:25-27:
+; "one-click installer executes uninstall section in the silent mode". IfSilent
+; is therefore always true here and would skip the question for everyone.
+; Instead we re-parse the real command line for /S exactly as un.onInit does
+; (uninstaller.nsh:12-13) and as the stock delete-app-data block does inside
+; this same Section (:219-221). SetSilent does not rewrite the command line, so
+; we ask exactly when un.onInit showed its "Are you sure" box. This is also
+; correct if oneClick is ever set back to false: there, un.onInit sets silent
+; only when this same parse matches. GetOptions matches case-insensitively on
+; the prefix, so any switch starting with /S counts as silent -- that errs
+; toward NOT asking, which keeps data.
+;
+; WHY THE MessageBox STILL SHOWS WHILE THE UNINSTALLER IS SILENT: NSIS suppresses
+; a MessageBox in silent mode ONLY when it carries an /SD default. NSIS
+; Source/exehead/util.c, my_MessageBox:
+;   if (g_exec_flags.silent && type >> 21) return type >> 21;
+;   // no silent or no default, just show
+; DO NOT add /SD to the MessageBox below: under oneClick the Section is always
+; silent, so an /SD default would hide the question on every uninstall again.
+; The /S check is what keeps it out of genuinely silent runs.
+; `SetSilent normal` around the box is not an option: the NSIS docs say SetSilent
+; "Can only be used in .onInit" (NSIS Docs/src/ui.but, SetSilent).
+;
+; MB_TOPMOST|MB_SETFOREGROUND: a silent uninstaller has no window to own the box,
+; so ask Windows to bring it to the front. electron-builder uses the same flags
+; for its own ownerless box (templates/nsis/installer.nsi:110).
+;
+; WHAT THE USER SEES: an interactive uninstall shows TWO dialogs in a row --
+; electron-builder's "Are you sure you want to uninstall Keepr?" (OK/Cancel,
+; uninstaller.nsh:22), then this question (Yes/No, No is the default). If Keepr
+; is running, electron-builder's "app is running" box appears between them.
 ;
 ; CRITICAL (per-machine path): for a per-machine install ($installMode == "all")
 ; un.onInit runs `SetShellVarContext all`, so $APPDATA/$LOCALAPPDATA would
@@ -26,6 +75,8 @@
 ; always writes its data under the USER profile, so we temporarily switch to
 ; `SetShellVarContext current` around the RMDir calls (then restore `all`),
 ; mirroring electron-builder's own delete-app-data block in uninstaller.nsh.
+; (A one-click build with perMachine unset installs per-user, so $installMode is
+; "CurrentUser" for new installs; the swap is kept for safety.)
 ;
 ; KNOWN LIMITATION (documented; matches electron-builder's own behaviour): on an
 ; IT-managed machine a standard user's per-machine uninstall UAC-elevates, so the
@@ -48,11 +99,21 @@
 !macro customUnInstall
   ; Skip entirely during an auto-update reinstall.
   ${ifNot} ${isUpdated}
-    ; Skip entirely for any silent uninstall (no modal that could hang the updater).
-    IfSilent keepr_skip_data_cleanup keepr_maybe_prompt
+    ; Skip entirely when the caller asked for a silent uninstall (/S on the
+    ; command line). NOT IfSilent: always true under oneClick (see WHY NOT
+    ; IfSilent above). GetOptions sets the error flag when /S is ABSENT, so
+    ; clear it first -- a stale error from earlier in the Section must never
+    ; read as "no /S" and put a modal in a silent run. Mirrors
+    ; uninstaller.nsh:219-221. $R0/$R1 are overwritten by that stock block
+    ; right after this macro, so using them here is safe.
+    ClearErrors
+    ${GetParameters} $R0
+    ${GetOptions} $R0 "/S" $R1
+    IfErrors keepr_maybe_prompt keepr_skip_data_cleanup
 
     keepr_maybe_prompt:
-      MessageBox MB_YESNO|MB_DEFBUTTON2 "Also delete your Keepr data and saved credentials (emails, transactions, and DPAPI-encrypted secrets)? This cannot be undone." IDYES keepr_delete_data IDNO keepr_skip_data_cleanup
+      ; No /SD on purpose -- see WHY THE MessageBox STILL SHOWS above.
+      MessageBox MB_YESNO|MB_DEFBUTTON2|MB_TOPMOST|MB_SETFOREGROUND "Also delete your Keepr data and saved credentials (emails, transactions, and DPAPI-encrypted secrets)? This cannot be undone." IDYES keepr_delete_data IDNO keepr_skip_data_cleanup
 
       keepr_delete_data:
         ; Electron always stores data under the USER profile. For a per-machine
