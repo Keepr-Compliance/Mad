@@ -5,11 +5,25 @@ import logger from "../../utils/logger";
 const BYTE_UNITS = ["B", "KB", "MB", "GB"] as const;
 
 /**
+ * BACKLOG-3416: the floor. The transferred figure is shown in MB or GB and in
+ * nothing else — the founder's ask was "either only in MB or GB".
+ *
+ * This is not cosmetic. `bytesProcessed` originates in
+ * `electron/services/backupService.ts:1839`, which advances the counter ONLY when
+ * a whole file completes, by that file's size. The first non-zero sample is
+ * therefore the first completed file — typically a few KB — so latching on the
+ * raw promotion would pin an entire multi-gigabyte sync to KB and read
+ * "6291456.0 KB". On the founder's own reported run it would have shown
+ * "1010995.2 KB" where he had been watching "987.3 MB".
+ */
+const MB_UNIT_INDEX = 2;
+
+/**
  * BACKLOG-3416: the unit DECISION, separated from the formatting.
  *
  * Which unit would this byte count normally be shown in — the same KB/MB/GB
- * promotion the display has always used. This is evaluated ONCE per sync (see
- * the latch in the component) rather than on every frame.
+ * promotion the display has always used. Evaluated ONCE per sync (see the latch
+ * in the component), and floored at MB by its caller.
  */
 export function pickByteUnitIndex(bytes: number): number {
   let unitIndex = 0;
@@ -23,17 +37,26 @@ export function pickByteUnitIndex(bytes: number): number {
   return unitIndex;
 }
 
+/** The unit this display may latch for a sync: the normal promotion, never below MB. */
+export function pickDisplayUnitIndex(bytes: number): number {
+  return Math.max(pickByteUnitIndex(bytes), MB_UNIT_INDEX);
+}
+
 /**
  * BACKLOG-3416: the FORMATTING, with no unit decision in it.
  *
  * Formats at whatever unit it is handed, however large the result gets — a sync
- * latched at MB that goes on to move 5 GiB reads "5120.0 MB", deliberately.
+ * latched at MB that goes on to move 6 GiB reads "6144.0 MB", deliberately.
  * That is the point: the founder asked for no mid-sync unit changes, ever.
+ *
+ * Zero formats at the given unit too ("0.0 MB"), rather than short-circuiting to
+ * "0 B". A "0 B" reading would be a third unit on screen and would flip to MB on
+ * the next update — the exact behaviour this all removes.
  */
 export function formatBytesAtUnit(bytes: number | undefined, unitIndex: number): string {
-  if (!bytes || bytes === 0) return "0 B";
+  const safeBytes = bytes && bytes > 0 ? bytes : 0;
 
-  return `${(bytes / 1024 ** unitIndex).toFixed(1)} ${BYTE_UNITS[unitIndex]}`;
+  return `${(safeBytes / 1024 ** unitIndex).toFixed(1)} ${BYTE_UNITS[unitIndex]}`;
 }
 
 /**
@@ -67,10 +90,13 @@ export const SyncProgress: React.FC<SyncProgressProps> = ({
    *
    * There is no total size to pick the final unit from in advance (idevicebackup2
    * reports per-file progress only), so the rule is: whatever unit the FIRST
-   * non-zero byte count would have chosen is the unit for the whole sync.
+   * non-zero byte count would have chosen — floored at MB — is the unit for the
+   * whole sync. Only MB and GB ever reach the screen.
    *
-   * A zero must not latch — "0 B" is shown while `processedFiles` alone is
-   * non-zero, and latching at B there would pin the entire transfer to bytes.
+   * A zero must not latch. The floor means a zero-latch would give MB anyway on
+   * an ordinary sync, but NOT on one whose first completed file is 1 GiB or
+   * larger: that sync should read GB, and latching before its first real sample
+   * would pin it to MB.
    *
    * Latching in a ref during render is idempotent: the value is derived purely
    * from `bytes`, so a discarded/double-invoked render writes the same index.
@@ -80,9 +106,9 @@ export const SyncProgress: React.FC<SyncProgressProps> = ({
   const latchedUnitIndex = useRef<number | null>(null);
   const bytesProcessed = progress.bytesProcessed ?? 0;
   if (latchedUnitIndex.current === null && bytesProcessed > 0) {
-    latchedUnitIndex.current = pickByteUnitIndex(bytesProcessed);
+    latchedUnitIndex.current = pickDisplayUnitIndex(bytesProcessed);
   }
-  const displayUnitIndex = latchedUnitIndex.current ?? 0;
+  const displayUnitIndex = latchedUnitIndex.current ?? MB_UNIT_INDEX;
 
   /**
    * Option C: 2-Level Progress Display

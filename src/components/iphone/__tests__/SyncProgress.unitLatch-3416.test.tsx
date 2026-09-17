@@ -1,21 +1,34 @@
 /**
- * BACKLOG-3416 — the transferred-bytes unit is picked once and held for the sync.
+ * BACKLOG-3416 — the transferred-bytes unit is picked once, held for the sync,
+ * and is never below MB.
  *
- * `bytesProcessed` climbs continuously and the display re-rendered on every
- * update, recomputing the unit from the current value each time. The founder
- * watched "987.3 MB" become "1.0 GB" mid-transfer: the unit changed under him
- * and the number appeared to collapse to a hundredth of what it had been.
+ * TWO REQUIREMENTS, and a test for each, because either one alone is satisfiable
+ * without the other:
  *
- * WHAT THESE TESTS DISCRIMINATE. A presence test ("it shows some bytes") passes
- * against the old code, so it carries no information. Each test below is aimed
- * at a specific wrong implementation:
+ *   (1) the unit never changes mid-sync. It used to be recomputed from the
+ *       current value on every render, so the founder watched "987.3 MB" become
+ *       "1.0 GB" and the number appear to collapse to a hundredth of itself.
  *
- *  1. the climb sweep      -> catches the shipped bug (recompute every render)
- *  2. zero must not latch  -> catches a latch that fires on the first render
- *                             regardless of value, pinning the sync to "B"
- *  3. scaling at the latch  -> catches latching the unit STRING while leaving the
- *                             divisor recomputed (that bug reads "1.0 KB" at 1 GiB)
- *  4. remount resets       -> the next sync gets to pick its own unit
+ *   (2) the unit is MB or GB, never B or KB. His ask was "either only in MB or
+ *       GB". This is NOT cosmetic: `bytesProcessed` comes from
+ *       `electron/services/backupService.ts:1839`, which advances the counter only
+ *       when a whole FILE completes, by that file's size. The first non-zero
+ *       sample is therefore the first completed file — typically a few KB — so a
+ *       latch without a floor pins a multi-gigabyte sync to KB and reads
+ *       "6291456.0 KB". That satisfies (1) perfectly while missing the ask.
+ *
+ * WHAT EACH TEST DISCRIMINATES. A presence test ("it shows some bytes") passes
+ * against the old code and carries no information. Each test below is aimed at a
+ * specific wrong implementation, and each was shown red by a mutation that
+ * reproduces exactly that implementation:
+ *
+ *   climb sweep         -> recompute-every-render (the shipped bug)
+ *   small first sample  -> a latch with no MB floor (reads KB forever)
+ *   zero does not latch -> a latch that fires on the first render regardless of
+ *                          value, which pins a GB-scale sync to MB
+ *   scaling at latch    -> latching the unit STRING while leaving the divisor
+ *                          recomputed (a wrong number wearing the right label)
+ *   remount resets      -> the next sync gets to pick its own unit
  *
  * The boundary is swept, not sampled (CLAUDE.md, "Sweep boundaries"): the climb
  * crosses 1024^3 and keeps going, because one value per branch cannot catch a
@@ -59,9 +72,7 @@ function displayedText(): string {
 }
 
 describe("BACKLOG-3416: the byte unit is latched for the sync", () => {
-  it("never changes unit as the count climbs from 500 KiB past 1 GiB", () => {
-    // Latches at MB: 500 KiB would be KB, so start the sync where the founder's
-    // did — already in MB — and climb across the GiB boundary and beyond.
+  it("never changes unit as the count climbs from 500 MiB past 1 GiB", () => {
     const { rerender } = render(<SyncProgress progress={transferring(500 * MiB)} />);
     const latched = displayedUnit();
     expect(latched).toBe("MB");
@@ -87,32 +98,57 @@ describe("BACKLOG-3416: the byte unit is latched for the sync", () => {
     expect(displayedText()).toBe("9216.0 MB");
   });
 
-  it("does not latch on zero — a sync showing '0 B' still picks its unit from the first real count", () => {
-    // `hasStartedTransfer` is true on processedFiles alone, so the readout renders
-    // at 0 bytes. Latching there would pin the whole transfer to "B".
+  it("shows MB, never KB, when the first completed file is only a few KB", () => {
+    // The realistic live shape: the counter advances a whole file at a time, and
+    // the first one is small. Without the MB floor this whole sync reads in KB.
+    const { rerender } = render(<SyncProgress progress={transferring(8 * KiB)} />);
+    expect(displayedText()).toBe("0.0 MB");
+    expect(displayedUnit()).toBe("MB");
+
+    // It stays MB all the way up — no promotion to GB, no relapse to KB.
+    for (const bytes of [900 * KiB, 5 * MiB, 500 * MiB, GiB, 6 * GiB]) {
+      rerender(<SyncProgress progress={transferring(bytes)} />);
+      expect(displayedUnit()).toBe("MB");
+    }
+
+    expect(displayedText()).toBe("6144.0 MB");
+  });
+
+  it("shows MB, not B, before any file has completed", () => {
+    // `hasStartedTransfer` is true on processedFiles alone, so the readout can
+    // render at 0 bytes. "0 B" would be a third unit on screen that then flips.
+    render(<SyncProgress progress={{ ...transferring(0), bytesProcessed: 0 }} />);
+
+    expect(displayedText()).toBe("0.0 MB");
+  });
+
+  it("does not latch on zero — a GB-scale first sample still gets GB", () => {
+    // The MB floor makes a zero-latch indistinguishable on an ordinary sync, so
+    // the case that still discriminates is a first completed file of 1 GiB or
+    // more: latching before the first real sample would pin this to MB.
     const { rerender } = render(
       <SyncProgress progress={{ ...transferring(0), bytesProcessed: 0 }} />
     );
-    expect(displayedText()).toBe("0 B");
+    expect(displayedText()).toBe("0.0 MB");
 
-    rerender(<SyncProgress progress={transferring(5 * MiB)} />);
-    expect(displayedText()).toBe("5.0 MB");
+    rerender(<SyncProgress progress={transferring(2 * GiB)} />);
+    expect(displayedText()).toBe("2.0 GB");
   });
 
   it("scales the NUMBER at the latched unit, not just the unit label", () => {
     // A latch that keeps the unit string but recomputes the divisor reads
-    // "1.0 KB" here — a wrong number wearing the right label.
-    const { rerender } = render(<SyncProgress progress={transferring(500 * KiB)} />);
-    expect(displayedText()).toBe("500.0 KB");
+    // "1.0 GB" here — a wrong number wearing the right label.
+    const { rerender } = render(<SyncProgress progress={transferring(500 * MiB)} />);
+    expect(displayedText()).toBe("500.0 MB");
 
     rerender(<SyncProgress progress={transferring(GiB)} />);
-    expect(displayedText()).toBe("1048576.0 KB");
+    expect(displayedText()).toBe("1024.0 MB");
   });
 
   it("resets on remount so the next sync picks its own unit", () => {
-    const { unmount, rerender } = render(<SyncProgress progress={transferring(500 * KiB)} />);
+    const { unmount, rerender } = render(<SyncProgress progress={transferring(4 * MiB)} />);
     rerender(<SyncProgress progress={transferring(2 * GiB)} />);
-    expect(displayedUnit()).toBe("KB");
+    expect(displayedUnit()).toBe("MB");
     unmount();
 
     // The flow unmounts SyncProgress when it leaves the `progress` view, so a
