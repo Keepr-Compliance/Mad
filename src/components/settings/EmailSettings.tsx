@@ -9,6 +9,7 @@ import logger from '../../utils/logger';
 import { safeErrorMessage } from '../../utils/formatUtils';
 import { ResponsiveModal } from "../common/ResponsiveModal";
 import { ImportInfoPopover } from "./ImportInfoPopover";
+import { emailPrecacheStageDisplayFor } from "../../utils/emailPrecacheStageDisplay";
 import { ConnectionMenu } from "./ConnectionMenu";
 import type {
   Connections,
@@ -499,6 +500,8 @@ export function EmailSettings({
     phase: "repairing" | "fetching" | "swapping" | "done";
     current: number;
     percent: number;
+    /** Which fetch round, when the event names one. See the label below. */
+    stage?: string;
   } | null>(null);
   const [isCancellingRecache, setIsCancellingRecache] = useState(false);
 
@@ -521,6 +524,7 @@ export function EmailSettings({
         phase: progress.phase,
         current: progress.current,
         percent: progress.percent,
+        stage: progress.stage,
       });
     });
   }, []);
@@ -913,7 +917,14 @@ export function EmailSettings({
                       }...`
                     : recacheProgress.phase === "swapping"
                       ? "Replacing your cached emails..."
-                      : `Downloading emails${
+                      : // Name the round when the event names one. The generic
+                        // sentence is the fallback, not the exception: the
+                        // boundary events and the backfill sweep carry no stage,
+                        // and an older main process carries none at all.
+                        `${
+                          emailPrecacheStageDisplayFor(recacheProgress.stage)
+                            ?.label ?? "Downloading emails"
+                        }${
                           recacheProgress.current > 0
                             ? ` (${recacheProgress.current.toLocaleString()} so far)`
                             : ""

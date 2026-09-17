@@ -41,6 +41,10 @@
  * each call site, so a round added later cannot forget to.
  */
 
+import type { EmailPrecacheStage } from "../types/ipc/emailPrecacheStage";
+
+export type { EmailPrecacheStage };
+
 /** The channel the main process pushes progress over. Renderer subscribes via
  *  `window.api.transactions.onPrecacheProgress`. */
 export const EMAIL_PRECACHE_PROGRESS_CHANNEL = "emails:precache-progress";
@@ -70,6 +74,13 @@ export interface EmailPrecacheProgress {
   total: number;
   percent: number;
   outcome?: EmailPrecacheOutcome;
+  /**
+   * Which round is downloading. Present only while `phase` is `"fetching"`, and
+   * only for rounds that report progress of their own — the boundary events and
+   * the backfill sweep carry none, so a surface must be able to render the
+   * generic "Downloading emails" without one. See `EmailPrecacheStage`.
+   */
+  stage?: EmailPrecacheStage;
 }
 
 export type EmailPrecacheProgressCallback = (progress: EmailPrecacheProgress) => void;

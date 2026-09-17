@@ -2395,6 +2395,7 @@ class EmailSyncService {
                 // repair pass above already uses.
                 onProgress: (p) => emitProgress({
                   phase: "fetching",
+                  stage: "outlook-inbox",
                   current: outlookBaseFetched + p.fetched,
                   total: p.hasEstimate ? outlookBaseFetched + p.total : outlookBaseFetched + p.fetched,
                   percent: interpolateFetchPercent(
@@ -2449,6 +2450,7 @@ class EmailSyncService {
                   // starts — the bar never claims a folder it has not walked.
                   onProgress: (p) => emitProgress({
                     phase: "fetching",
+                    stage: "outlook-folders",
                     current: currentAfterInbox,
                     total: currentAfterInbox,
                     percent: interpolateFetchPercent(
@@ -2546,6 +2548,7 @@ class EmailSyncService {
                 // number drop when the body pass restarted the count at ten.
                 onProgress: (p) => emitProgress({
                   phase: "fetching",
+                  stage: "gmail-messages",
                   current: p.hasEstimate ? gmailBaseFetched + p.fetched : gmailBaseFetched,
                   total: p.hasEstimate ? gmailBaseFetched + p.total : gmailBaseFetched,
                   percent: p.hasEstimate
@@ -2587,6 +2590,7 @@ class EmailSyncService {
                   // Labels completed — the Gmail mirror of the folder walk.
                   onProgress: (p) => emitProgress({
                     phase: "fetching",
+                    stage: "gmail-labels",
                     current: currentAfterGmailSearch,
                     total: currentAfterGmailSearch,
                     percent: interpolateFetchPercent(
