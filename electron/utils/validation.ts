@@ -473,6 +473,23 @@ export interface RawContactData {
 }
 
 /**
+ * The length limits `validateContactData` enforces on contact free-text and
+ * phone fields, stated once.
+ *
+ * BACKLOG-3358: the import path cuts name, company and title to these limits
+ * and treats a phone longer than `phone` as unusable
+ * (`contactImportValues.ts`). Reading the same constant is what keeps "what the
+ * import prepares" and "what this validator accepts" from drifting apart.
+ * Changing a value here changes both.
+ */
+export const CONTACT_FIELD_MAX_LENGTH = {
+  name: 200,
+  phone: 50,
+  company: 200,
+  title: 100,
+} as const;
+
+/**
  * Validate contact data for creation/update
  *
  * @param contactData - Contact data to validate
@@ -565,7 +582,7 @@ export function validateContactData(
     } else {
       validated.name = validateString(data.name, "name", {
         required: false,
-        maxLength: 200,
+        maxLength: CONTACT_FIELD_MAX_LENGTH.name,
       });
     }
   }
@@ -579,7 +596,7 @@ export function validateContactData(
   if (data.phone !== undefined && data.phone !== null) {
     validated.phone = validateString(data.phone, "phone", {
       required: false,
-      maxLength: 50,
+      maxLength: CONTACT_FIELD_MAX_LENGTH.phone,
     });
   }
 
@@ -587,7 +604,7 @@ export function validateContactData(
   if (data.company !== undefined && data.company !== null) {
     validated.company = validateString(data.company, "company", {
       required: false,
-      maxLength: 200,
+      maxLength: CONTACT_FIELD_MAX_LENGTH.company,
     });
   }
 
@@ -595,7 +612,7 @@ export function validateContactData(
   if (data.title !== undefined && data.title !== null) {
     validated.title = validateString(data.title, "title", {
       required: false,
-      maxLength: 100,
+      maxLength: CONTACT_FIELD_MAX_LENGTH.title,
     });
   }
 

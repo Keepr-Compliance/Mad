@@ -390,8 +390,12 @@ const KNOWN_UNWRAPPED: Record<string, string> = {
     "BACKLOG-2845 @0dca6beb1 (:1071, addIgnoredCommunication + resolveLegacyTwins): a failure after the suppression row is written leaves the legacy address_missing link alive — the email is hidden from future discovery but still counted by getReviewState(), so the Complete gate never clears",
 
   // --- Filed by BACKLOG-2584 itself, before being listed here -------------
-  "electron/handlers/contactHandlers.ts::ipc:contacts:import":
-    "BACKLOG-3220 @1cd39acd0 (:1954, markContactAsImported + linkImportedContact across three for loops, PLUS backfillContactEmails + backfillContactPhones on the same path — 4 counted writes became 6 when BACKLOG-3235 restored the two twin facades to the writer set; zero dbTransaction anywhere in the handler): some contacts marked imported with their crosswalk link written and others marked imported with no link, so those source rows are never suppressed and re-offer on the next pass — and now also a contact whose emails were backfilled while its phones were not",
+  // `electron/handlers/contactHandlers.ts::ipc:contacts:import` (BACKLOG-3220)
+  // was DELETED when the handler's whole write phase moved into one
+  // `dbTransaction`. READ THIS BEFORE TRUSTING THE DELETION: this guard cannot
+  // prove it — a no-op `dbTransaction(() => {})` anywhere in the handler also
+  // clears the unit (measured, filed as BACKLOG-3352). The proof is the crash
+  // and error sweeps in `contact-handlers.importAtomic-3220.test.ts`.
 
   // --- BACKLOG-3259 (open): surfaced BY BACKLOG-3235's own fix ------------
   // Listed, never fixed: the widening PR must list what it surfaces or CI is

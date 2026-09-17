@@ -603,14 +603,17 @@ class MicrosoftAuthService {
         Date.now() + newTokens.expires_in * 1000,
       ).toISOString();
 
-      // Update database with new tokens (no encryption needed)
-      await databaseService.saveOAuthToken(userId, "microsoft", "mailbox", {
+      // BACKLOG-3286: update the loaded row by id — only the fields the refresh
+      // produced. The previous upsert copied the address forward, so a row whose
+      // address was already empty stayed empty, and it wrote `scope` raw.
+      await databaseService.updateOAuthToken(tokenRecord.id, {
         access_token: newTokens.access_token,
-        refresh_token: newTokens.refresh_token || tokenRecord.refresh_token, // Keep old if new not provided
         token_expires_at: expiresAt,
-        scopes_granted: newTokens.scope,
-        connected_email_address: tokenRecord.connected_email_address,
-        mailbox_connected: true,
+        // Keep the stored refresh token when the response carries none.
+        ...(newTokens.refresh_token ? { refresh_token: newTokens.refresh_token } : {}),
+        // JSON-encoded, as every other writer stores it and `getOAuthToken`
+        // parses it; `updateOAuthToken` encodes arrays only.
+        ...(newTokens.scope ? { scopes_granted: JSON.stringify(newTokens.scope) } : {}),
       });
 
       logService.info(

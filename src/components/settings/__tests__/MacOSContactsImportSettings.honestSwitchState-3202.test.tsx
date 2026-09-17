@@ -94,7 +94,10 @@ const baseProps = {
   // (draw what is in effect). The base fixture states "allowed", so the cases
   // that predate the gate keep measuring the connection term alone; the three
   // cases that ARE about the plan override it.
-  contactInference: { outlook: "allowed" } as ContactInferenceStates,
+  // BACKLOG-1717 added `gmail` here: the Gmail emails row is now plan-gated
+  // the same way the Outlook one is, so the connection-gated rows below need
+  // the plan to be allowed before "connected" is the only variable left.
+  contactInference: { outlook: "allowed", gmail: "allowed" } as ContactInferenceStates,
   gmailEmailsInferred: false,
   messagesInferred: false,
   loadingPreferences: false,
@@ -323,7 +326,7 @@ describe("C9-C11 — the Outlook emails row and the plan (BACKLOG-3349)", () => 
     renderCard({
       outlookEmailsInferred: true,
       isMicrosoftConnected: true,
-      contactInference: { outlook: "blocked" },
+      contactInference: { outlook: "blocked", gmail: "allowed" },
     });
 
     const sw = screen.getByRole("switch", { name: "Outlook emails auto-discover" });
@@ -338,7 +341,7 @@ describe("C9-C11 — the Outlook emails row and the plan (BACKLOG-3349)", () => 
     renderCard({
       outlookEmailsInferred: true,
       isMicrosoftConnected: false,
-      contactInference: { outlook: "blocked" },
+      contactInference: { outlook: "blocked", gmail: "allowed" },
     });
 
     const row = outlookEmailsRow();
@@ -356,7 +359,7 @@ describe("C9-C11 — the Outlook emails row and the plan (BACKLOG-3349)", () => 
     renderCard({
       outlookEmailsInferred: true,
       isMicrosoftConnected: true,
-      contactInference: { outlook: "allowed" },
+      contactInference: { outlook: "allowed", gmail: "allowed" },
     });
 
     const sw = screen.getByRole("switch", { name: "Outlook emails auto-discover" });
@@ -372,7 +375,7 @@ describe("C9-C11 — the Outlook emails row and the plan (BACKLOG-3349)", () => 
     renderCard({
       outlookEmailsInferred: true,
       isMicrosoftConnected: true,
-      contactInference: { outlook: "unknown" },
+      contactInference: { outlook: "unknown", gmail: "allowed" },
     });
 
     const sw = screen.getByRole("switch", { name: "Outlook emails auto-discover" });
@@ -386,7 +389,7 @@ describe("C9-C11 — the Outlook emails row and the plan (BACKLOG-3349)", () => 
     renderCard({
       outlookEmailsInferred: true,
       isMicrosoftConnected: false,
-      contactInference: { outlook: "unknown" },
+      contactInference: { outlook: "unknown", gmail: "allowed" },
     });
 
     const row = outlookEmailsRow();
@@ -402,7 +405,7 @@ describe("C9-C11 — the Outlook emails row and the plan (BACKLOG-3349)", () => 
     renderCard({
       outlookEmailsInferred: true,
       isMicrosoftConnected: true,
-      contactInference: { outlook: "pending" },
+      contactInference: { outlook: "pending", gmail: "allowed" },
     });
 
     const sw = screen.getByRole("switch", { name: "Outlook emails auto-discover" });
@@ -412,21 +415,41 @@ describe("C9-C11 — the Outlook emails row and the plan (BACKLOG-3349)", () => 
     expect(outlookEmailsRow()).not.toHaveTextContent("(not in your plan)");
   });
 
-  it("C11d: the plan gate reaches ONLY this row — Gmail and Messages are untouched", () => {
+  /**
+   * BACKLOG-1717 CHANGED WHAT THIS CONTROL ASSERTS, DELIBERATELY.
+   *
+   * It read "the plan gate reaches ONLY this row — Gmail and Messages are
+   * untouched", and that was right while Outlook was the only mailbox the
+   * feature covered. It is now wrong: both mailboxes are ONE paid feature on
+   * ONE plan key, so a customer without it must see both rows greyed.
+   *
+   * Leaving the old assertion standing would have pinned the interim state SR
+   * measured on BACKLOG-3349 and named the trust cost of — the Outlook row
+   * greyed beside a live Gmail row, which reads as "Gmail is included and
+   * Outlook is not". This item closes that.
+   *
+   * What has NOT changed, and is still asserted: the gate does not reach the
+   * Messages row. Text people are a different feature.
+   */
+  it("C11d: the plan gate reaches both mail rows and NOT Messages", () => {
     renderCard({
       outlookEmailsInferred: true,
       gmailEmailsInferred: true,
       messagesInferred: true,
       isMicrosoftConnected: true,
       isGoogleConnected: true,
-      contactInference: { outlook: "blocked" },
+      contactInference: { outlook: "blocked", gmail: "blocked" },
     });
 
-    expect(screen.getByRole("switch", { name: "Gmail emails auto-discover" })).toBeEnabled();
-    expect(screen.getByRole("switch", { name: "Gmail emails auto-discover" })).toHaveAttribute(
-      "aria-checked",
-      "true"
-    );
+    const gmail = screen.getByRole("switch", { name: "Gmail emails auto-discover" });
+    expect(gmail).toBeDisabled();
+    expect(gmail).toHaveAttribute("aria-checked", "false");
+    expect(gmail).toHaveAttribute("title", "Not available on your current plan");
+
+    const outlook = screen.getByRole("switch", { name: "Outlook emails auto-discover" });
+    expect(outlook).toBeDisabled();
+
+    // Texts are a different feature and this gate must not reach them.
     expect(screen.getByRole("switch", { name: "Messages SMS auto-discover" })).toBeEnabled();
   });
 });

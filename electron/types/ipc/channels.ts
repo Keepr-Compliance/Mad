@@ -170,7 +170,18 @@ export interface IpcChannels {
   };
   "contacts:import": {
     request: { userId: string; contactsToImport: NewContact[] };
-    response: { success: boolean; contacts?: Contact[]; error?: string };
+    /**
+     * BACKLOG-3354: `savedContactIds` — `success: false` only.
+     * BACKLOG-3376: `unmatchableEmails` — `success: true` only.
+     * Both contracts in full on `ContactResponse` in contactHandlers.ts.
+     */
+    response: {
+      success: boolean;
+      contacts?: Contact[];
+      error?: string;
+      savedContactIds?: string[];
+      unmatchableEmails?: string[];
+    };
   };
   "contacts:forceReimport": {
     /**

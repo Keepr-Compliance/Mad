@@ -136,6 +136,15 @@ const CASES: Row[] = [
     why: "NO DIGIT TEST — an iMessage handle can be an Apple ID and still identify a person",
   },
   {
+    // BACKLOG-3358 — transcribed from the `contacts:get-available` row for a
+    // nameless Outlook record whose only address has a dotless domain. Presence
+    // decides, not validity: the import stores the value as the source holds
+    // it, so neither copy may start refusing this record.
+    parts: { name: null, phone: null, company: null, email: "name@localhost", allEmails: ["name@localhost"], allPhones: [] },
+    expected: false,
+    why: "an address the app cannot use still makes the record importable (BACKLOG-3358)",
+  },
+  {
     parts: { name: "unknown", allPhones: ["", "+14155550142"] },
     expected: false,
     why: "one usable entry among blanks is enough",

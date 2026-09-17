@@ -219,3 +219,47 @@ describe("nesting", () => {
     expect(values()).toEqual(["L1", "L2", "L3"]);
   });
 });
+
+/**
+ * BACKLOG-3220 — a callback that RETURNS A PROMISE is refused, as production refuses it.
+ * Transcribed from better-sqlite3-multiple-ciphers under Electron (lib/methods/transaction.js:64-66):
+ *   top-level async callback  -> TypeError "Transaction function cannot return a promise", rows []
+ *   nested, outer catches it  -> same TypeError, outer commits ["outer"]
+ *   plain thenable            -> same TypeError, rows []
+ */
+describe("a promise-returning callback (BACKLOG-3220)", () => {
+  it("top level: throws the production TypeError and rolls back what ran before the return", () => {
+    expect(() =>
+      db.transaction((async () => {
+        db.prepare("INSERT INTO t (v) VALUES (?)").run("a");
+      }) as never)(),
+    ).toThrow(new TypeError("Transaction function cannot return a promise"));
+    expect(values()).toEqual([]);
+  });
+
+  it("nested: the inner is refused and rolled back; an outer that catches it still commits", () => {
+    let inner: unknown;
+    db.transaction(() => {
+      db.prepare("INSERT INTO t (v) VALUES (?)").run("outer");
+      try {
+        db.transaction((async () => {
+          db.prepare("INSERT INTO t (v) VALUES (?)").run("inner");
+        }) as never)();
+      } catch (e) {
+        inner = e;
+      }
+    })();
+    expect(inner).toEqual(new TypeError("Transaction function cannot return a promise"));
+    expect(values()).toEqual(["outer"]);
+  });
+
+  it("any thenable, not only a native Promise", () => {
+    expect(() =>
+      db.transaction((() => {
+        db.prepare("INSERT INTO t (v) VALUES (?)").run("thenable");
+        return { then() {} };
+      }) as never)(),
+    ).toThrow(TypeError);
+    expect(values()).toEqual([]);
+  });
+});

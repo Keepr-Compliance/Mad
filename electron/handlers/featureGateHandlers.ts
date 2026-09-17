@@ -239,6 +239,24 @@ export async function isStrictFeatureAllowed(
  */
 export const CONTACT_INFERENCE_FEATURE_KEYS = {
   outlook: "email_contact_inference",
+  /**
+   * BACKLOG-1717 — the second mailbox, on the SAME key.
+   *
+   * Founder, 2026-09-16, asked whether people found in Gmail are part of the
+   * same paid feature as people found in Outlook: one shared feature. So this
+   * is one line and nothing else — no migration, no second plan row to switch
+   * on per customer, no second admin name, and one network read covering both
+   * mailboxes instead of two.
+   *
+   * Per-mailbox control is not lost by sharing the key: it lives in the two
+   * Settings switches, which already exist and which the user owns.
+   *
+   * Splitting this later costs exactly what adding a second key would have
+   * cost now — one union member, one plan row, one line here. Collapsing two
+   * keys that customers have already been provisioned against is the harder
+   * direction, which is why one key is the reversible choice.
+   */
+  gmail: "email_contact_inference",
 } as const satisfies Record<string, StrictFeatureKey>;
 
 export type ContactInferenceProvider = keyof typeof CONTACT_INFERENCE_FEATURE_KEYS;
