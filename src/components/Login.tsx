@@ -48,6 +48,18 @@ const LOGIN_RETRY_CONFIG = {
   nonRetryableCodes: ["MISSING_TOKENS", "INVALID_TOKENS", "INVALID_URL"],
 } as const;
 
+/**
+ * BACKLOG-3415: how long a browser sign-in waits before offering "Stuck? Retry"
+ * beside Cancel in the waiting panel (ms).
+ *
+ * Deliberately INDEPENDENT of LOGIN_RETRY_CONFIG.callbackTimeoutMs. That value
+ * is when the client gives up and shows a failure; this is when we offer a way
+ * out of a wait that is still perfectly alive. Tying the two together would
+ * mean the offer never appears before the give-up message, which is the whole
+ * problem it exists to solve.
+ */
+const STUCK_RETRY_HINT_MS = 60 * 1000;
+
 // Type for pending OAuth data
 export interface PendingOAuthData {
   provider: "google" | "microsoft";
@@ -132,6 +144,11 @@ const Login = ({
   const callbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // BACKLOG-3415: after STUCK_RETRY_HINT_MS of waiting, offer "Stuck? Retry"
+  // beside Cancel in the browserAuthInProgress panel.
+  const [showStuckRetry, setShowStuckRetry] = useState(false);
+  const stuckRetryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // ==========================================
   // TASK-2044: Retry timer cleanup
   // ==========================================
@@ -148,6 +165,13 @@ const Login = ({
       clearTimeout(retryTimeoutRef.current);
       retryTimeoutRef.current = null;
     }
+    // BACKLOG-3415: the "Stuck? Retry" reveal timer is cleared on exactly the
+    // same paths as the others (unmount, cancel, success, error, and at the
+    // start of every fresh attempt), so none can survive into a later attempt.
+    if (stuckRetryTimeoutRef.current) {
+      clearTimeout(stuckRetryTimeoutRef.current);
+      stuckRetryTimeoutRef.current = null;
+    }
   }, []);
 
   /**
@@ -158,6 +182,7 @@ const Login = ({
     setRetryAttempt(0);
     setIsRetrying(false);
     setRetriesExhausted(false);
+    setShowStuckRetry(false);
   }, [clearRetryTimers]);
 
   // Clean up timers on unmount
@@ -375,6 +400,8 @@ const Login = ({
     setProvider("browser");
     setBrowserAuthInProgress(true);
     setRetriesExhausted(false);
+    // BACKLOG-3415: every fresh attempt starts with Cancel alone again.
+    setShowStuckRetry(false);
 
     try {
       const result = await window.api.auth.openAuthInBrowser();
@@ -390,6 +417,14 @@ const Login = ({
           logger.warn("[Login] Deep link callback timeout -- triggering retry logic");
           handleDeepLinkError({ error: "Authentication timed out", code: "UNKNOWN_ERROR" });
         }, LOGIN_RETRY_CONFIG.callbackTimeoutMs);
+
+        // BACKLOG-3415: separately, offer a way out of the wait well before the
+        // give-up above. (The auto-retry path in handleDeepLinkError starts its
+        // own callback timer but not this one; with maxRetries: 0 that path
+        // never runs today.)
+        stuckRetryTimeoutRef.current = setTimeout(() => {
+          setShowStuckRetry(true);
+        }, STUCK_RETRY_HINT_MS);
       }
     } catch (err) {
       logger.error("Browser login error:", err);
@@ -497,12 +532,25 @@ const Login = ({
                     ? "Reconnecting... Please wait."
                     : "Complete sign-in in your default browser. The app will update automatically when finished."}
                 </p>
-                <button
-                  onClick={handleCancel}
-                  className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors"
-                >
-                  Cancel
-                </button>
+                {/* BACKLOG-3415: Cancel alone until STUCK_RETRY_HINT_MS has
+                    passed, then "Stuck? Retry" joins it. Retry cancels this
+                    attempt and starts a fresh sign-in in one click. */}
+                <div className="flex items-center justify-center gap-3">
+                  <button
+                    onClick={handleCancel}
+                    className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  {showStuckRetry && (
+                    <button
+                      onClick={handleTryAgain}
+                      className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors"
+                    >
+                      Stuck? Retry
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           </div>
