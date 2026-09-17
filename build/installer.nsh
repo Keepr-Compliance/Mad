@@ -114,6 +114,7 @@
     keepr_maybe_prompt:
       ; No /SD on purpose -- see WHY THE MessageBox STILL SHOWS above.
       MessageBox MB_YESNO|MB_DEFBUTTON2|MB_TOPMOST|MB_SETFOREGROUND "Also delete your Keepr data and saved credentials (emails, transactions, and DPAPI-encrypted secrets)? This cannot be undone." IDYES keepr_delete_data IDNO keepr_skip_data_cleanup
+      Goto keepr_skip_data_cleanup ; fail-safe: a MessageBox that fails to show falls through to the next line, so keep the data
 
       keepr_delete_data:
         ; Electron always stores data under the USER profile. For a per-machine
