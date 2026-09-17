@@ -1,6 +1,14 @@
 /**
  * Tests for IPhoneSyncFlow component
- * TASK-2116: Tests re-open modal redirect message during active sync
+ *
+ * BACKLOG-3416: these tests used to assert that `onSyncStarted` fired at the
+ * `backing_up` phase (TASK-2116's auto-minimise). That prop and its effect are
+ * gone — nothing dismisses the flow on its own now. The view assertions below
+ * survive unchanged, because what they check is still true: the progress view
+ * renders during an active sync and through the phases that follow. The
+ * auto-close removal is proven at the modal, in
+ * `src/appCore/modals/__tests__/IPhoneSyncModal.test.tsx` — a Flow-level test
+ * cannot catch it (nothing here would pass the prop the old guard required).
  */
 
 import React from "react";
@@ -82,16 +90,13 @@ describe("IPhoneSyncFlow", () => {
     expect(screen.getByTestId("connection-status")).toBeInTheDocument();
   });
 
-  it("shows sync progress when re-opening modal during active sync", () => {
+  it("shows sync progress when the sync starts while the modal is open", () => {
     const onClose = jest.fn();
-    const onSyncStarted = jest.fn();
 
     // Start from idle (modal opened before sync starts)
-    const { rerender } = render(
-      <IPhoneSyncFlow onClose={onClose} onSyncStarted={onSyncStarted} />
-    );
+    const { rerender } = render(<IPhoneSyncFlow onClose={onClose} />);
 
-    // Transition to syncing (user clicked Sync — wasAlreadySyncingOnMount is false)
+    // Transition to syncing (user clicked Sync)
     mockContextValue = {
       ...mockSyncReturn,
       syncStatus: "syncing",
@@ -102,25 +107,19 @@ describe("IPhoneSyncFlow", () => {
       },
     };
 
-    rerender(
-      <IPhoneSyncFlow onClose={onClose} onSyncStarted={onSyncStarted} />
-    );
-
-    // onSyncStarted should have been called (triggering modal auto-close)
-    expect(onSyncStarted).toHaveBeenCalledTimes(1);
+    rerender(<IPhoneSyncFlow onClose={onClose} />);
 
     // Should show the SyncProgress component (full details in modal)
     expect(screen.getByTestId("sync-progress")).toBeInTheDocument();
+    // BACKLOG-3416: and the flow does not dismiss itself on that phase.
+    expect(onClose).not.toHaveBeenCalled();
   });
 
-  it("shows sync progress during extracting phase after auto-close", () => {
+  it("shows sync progress during extracting phase", () => {
     const onClose = jest.fn();
-    const onSyncStarted = jest.fn();
 
     // Start from idle, then transition to syncing
-    const { rerender } = render(
-      <IPhoneSyncFlow onClose={onClose} onSyncStarted={onSyncStarted} />
-    );
+    const { rerender } = render(<IPhoneSyncFlow onClose={onClose} />);
 
     mockContextValue = {
       ...mockSyncReturn,
@@ -131,11 +130,7 @@ describe("IPhoneSyncFlow", () => {
       },
     };
 
-    rerender(
-      <IPhoneSyncFlow onClose={onClose} onSyncStarted={onSyncStarted} />
-    );
-
-    expect(onSyncStarted).toHaveBeenCalledTimes(1);
+    rerender(<IPhoneSyncFlow onClose={onClose} />);
 
     // Progress moves to extracting phase
     mockContextValue = {
@@ -148,12 +143,11 @@ describe("IPhoneSyncFlow", () => {
       },
     };
 
-    rerender(
-      <IPhoneSyncFlow onClose={onClose} onSyncStarted={onSyncStarted} />
-    );
+    rerender(<IPhoneSyncFlow onClose={onClose} />);
 
     // Should show SyncProgress component with full details
     expect(screen.getByTestId("sync-progress")).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   // BACKLOG-2333: Cancel resets to the clean idle state. Reopening the modal
