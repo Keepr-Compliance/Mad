@@ -1,63 +1,7 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect } from "react";
 import type { SyncProgressProps } from "../../types/iphone";
 import logger from "../../utils/logger";
-
-const BYTE_UNITS = ["B", "KB", "MB", "GB"] as const;
-
-/**
- * BACKLOG-3416: the floor. The transferred figure is shown in MB or GB and in
- * nothing else — the founder's ask was "either only in MB or GB".
- *
- * This is not cosmetic. `bytesProcessed` originates in
- * `electron/services/backupService.ts:1839`, which advances the counter ONLY when
- * a whole file completes, by that file's size. The first non-zero sample is
- * therefore the first completed file — typically a few KB — so latching on the
- * raw promotion would pin an entire multi-gigabyte sync to KB and read
- * "6291456.0 KB". On the founder's own reported run it would have shown
- * "1010995.2 KB" where he had been watching "987.3 MB".
- */
-const MB_UNIT_INDEX = 2;
-
-/**
- * BACKLOG-3416: the unit DECISION, separated from the formatting.
- *
- * Which unit would this byte count normally be shown in — the same KB/MB/GB
- * promotion the display has always used. Evaluated ONCE per sync (see the latch
- * in the component), and floored at MB by its caller.
- */
-export function pickByteUnitIndex(bytes: number): number {
-  let unitIndex = 0;
-  let size = bytes;
-
-  while (size >= 1024 && unitIndex < BYTE_UNITS.length - 1) {
-    size /= 1024;
-    unitIndex++;
-  }
-
-  return unitIndex;
-}
-
-/** The unit this display may latch for a sync: the normal promotion, never below MB. */
-export function pickDisplayUnitIndex(bytes: number): number {
-  return Math.max(pickByteUnitIndex(bytes), MB_UNIT_INDEX);
-}
-
-/**
- * BACKLOG-3416: the FORMATTING, with no unit decision in it.
- *
- * Formats at whatever unit it is handed, however large the result gets — a sync
- * latched at MB that goes on to move 6 GiB reads "6144.0 MB", deliberately.
- * That is the point: the founder asked for no mid-sync unit changes, ever.
- *
- * Zero formats at the given unit too ("0.0 MB"), rather than short-circuiting to
- * "0 B". A "0 B" reading would be a third unit on screen and would flip to MB on
- * the next update — the exact behaviour this all removes.
- */
-export function formatBytesAtUnit(bytes: number | undefined, unitIndex: number): string {
-  const safeBytes = bytes && bytes > 0 ? bytes : 0;
-
-  return `${(safeBytes / 1024 ** unitIndex).toFixed(1)} ${BYTE_UNITS[unitIndex]}`;
-}
+import { formatBytesAtUnit, MB_UNIT_INDEX } from "../../utils/transferByteUnit";
 
 /**
  * SyncProgress Component
@@ -81,34 +25,31 @@ export const SyncProgress: React.FC<SyncProgressProps> = ({
   }, [progress.phase, progress.percent, isWaitingForPasscode]);
 
   /**
-   * BACKLOG-3416: the displayed unit is latched for the life of this component.
+   * BACKLOG-3416: the displayed unit is decided by the SYNC, not by this component.
    *
    * `bytesProcessed` climbs continuously during a transfer and the display
    * re-rendered on every update, so recomputing the unit each time made it flip
    * under the founder's eyes the moment the count crossed a 1024x boundary —
    * "987.3 MB" became "1.0 GB" and the number appeared to collapse.
    *
-   * There is no total size to pick the final unit from in advance (idevicebackup2
-   * reports per-file progress only), so the rule is: whatever unit the FIRST
-   * non-zero byte count would have chosen — floored at MB — is the unit for the
-   * whole sync. Only MB and GB ever reach the screen.
+   * `useIPhoneSync` decides the unit once, on the sync's first non-zero byte
+   * count (floored at MB), and carries it on `progress.displayUnitIndex` until the
+   * next sync replaces the progress object. It is NOT held here: minimizing the
+   * modal unmounts this component, and a unit held here was re-picked from the
+   * current count on reopen, so one sync could read "800.0 MB" and then "1.5 GB".
    *
-   * A zero must not latch. The floor means a zero-latch would give MB anyway on
-   * an ordinary sync, but NOT on one whose first completed file is 1 GiB or
-   * larger: that sync should read GB, and latching before its first real sample
-   * would pin it to MB.
+   * `progress.estimatedTotalBytes` exists but does not pick the unit. It is the
+   * size of the WHOLE backup (an existing backup's size, or derived from the
+   * device's used storage — deviceSyncOrchestrator.ts), not how much this sync
+   * will move. An incremental sync transfers only what changed, so a unit chosen
+   * from the estimate could be GB for a sync that moves a few MB.
    *
-   * Latching in a ref during render is idempotent: the value is derived purely
-   * from `bytes`, so a discarded/double-invoked render writes the same index.
-   * The component unmounts when the flow leaves the `progress` view, so the next
-   * sync starts with a fresh latch and picks its own unit.
+   * No unit yet means nothing has transferred, so the pre-transfer zero reads
+   * "0.0 MB". The fallback is a constant on purpose: recomputing it from the
+   * current count here would bring the flip back.
    */
-  const latchedUnitIndex = useRef<number | null>(null);
   const bytesProcessed = progress.bytesProcessed ?? 0;
-  if (latchedUnitIndex.current === null && bytesProcessed > 0) {
-    latchedUnitIndex.current = pickDisplayUnitIndex(bytesProcessed);
-  }
-  const displayUnitIndex = latchedUnitIndex.current ?? MB_UNIT_INDEX;
+  const displayUnitIndex = progress.displayUnitIndex ?? MB_UNIT_INDEX;
 
   /**
    * Option C: 2-Level Progress Display
