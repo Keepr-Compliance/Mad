@@ -11,10 +11,18 @@
  * four rounds and several minutes, so the panel said the same thing throughout
  * and gave the user nothing to distinguish progress from a hang.
  *
- * WHY `src/utils/` AND NOT THE SETTINGS COMPONENT: nothing else needs this copy
- * today, but the dashboard's sync indicator is the obvious second consumer and a
- * dashboard component importing from a settings component is the wrong
- * direction. This is the shared place both can reach.
+ * WHY `src/utils/` AND NOT THE SETTINGS COMPONENT: a dashboard component
+ * importing from a settings component is the wrong direction, and the
+ * dashboard's sync indicator was the obvious second consumer. It IS that
+ * consumer as of BACKLOG-3421 — `SyncStatusIndicator` resolves the emails
+ * pill's label through `emailPrecacheStageDisplayFor` — so this is now the
+ * shared place both surfaces reach rather than the place one of them might.
+ *
+ * The two consumers use different fields and neither may assume the other's:
+ * the Settings panel splices `label` into a sentence with a count, the pill
+ * renders `pill` alone. The pill also has NO raw-identifier fallback, so an
+ * unknown stage there renders no phase at all rather than "Emails -
+ * outlook-inbox".
  *
  * The `EmailPrecacheStage` import is TYPE-ONLY and erases at compile time — the
  * renderer never takes a runtime value from `electron/`. Same boundary ruling as
