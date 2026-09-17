@@ -30,7 +30,7 @@ module.exports = {
   testPathIgnorePatterns: [
     '/node_modules/',
     '/dist/',
-    '/release/', // BACKLOG-3425: electron-builder's output directory
+    '<rootDir>/release/', // BACKLOG-3425: electron-builder's output directory
     '/build/',
     '/\\.claude/worktrees/',
     '/worktrees/',

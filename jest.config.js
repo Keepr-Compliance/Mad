@@ -180,9 +180,11 @@ module.exports = {
   testPathIgnorePatterns: process.env.CI ? [
     '/node_modules/',
     '/dist/',
-    // BACKLOG-3425: electron-builder's output directory. A packaged app contains
-    // thousands of third-party *.test.js files; jest must not walk into them.
-    '/release/',
+    // BACKLOG-3425: electron-builder's output directory, anchored to the repo root --
+    // these are regexes on the absolute path, so a bare '/release/' would also match any
+    // nested directory of that name. A packaged app holds thousands of third-party
+    // *.test.js files; jest must not walk into them.
+    '<rootDir>/release/',
     '/build/',
     '/packages/', // Workspace packages (e.g. @keepr/ui) run their own jest config
     '/worktrees/',
@@ -217,9 +219,11 @@ module.exports = {
   ] : [
     '/node_modules/',
     '/dist/',
-    // BACKLOG-3425: electron-builder's output directory. A packaged app contains
-    // thousands of third-party *.test.js files; jest must not walk into them.
-    '/release/',
+    // BACKLOG-3425: electron-builder's output directory, anchored to the repo root --
+    // these are regexes on the absolute path, so a bare '/release/' would also match any
+    // nested directory of that name. A packaged app holds thousands of third-party
+    // *.test.js files; jest must not walk into them.
+    '<rootDir>/release/',
     '/build/',
     '/packages/', // Workspace packages (e.g. @keepr/ui) run their own jest config
     '/\\.claude/worktrees/', // Exclude git worktree copies from test discovery
