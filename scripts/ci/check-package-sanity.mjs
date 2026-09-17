@@ -62,6 +62,12 @@
 import { openSync, readSync, closeSync, statSync, existsSync, readFileSync } from 'node:fs';
 import { join, basename } from 'node:path';
 
+// Both workflows invoke this with plain `node`, where this is an inert property. Under
+// Electron -- including ELECTRON_RUN_AS_NODE, which the pre-push hook uses -- `fs` is
+// patched to treat any path ending in `.asar` as an ARCHIVE TO LOOK INSIDE, and reading
+// `app.asar` as a file fails with "Invalid package". This guard must read it as a file.
+process.noAsar = true;
+
 const TWO_GIB = 2 ** 31;
 
 const DEFAULTS = {

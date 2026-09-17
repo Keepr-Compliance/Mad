@@ -42,12 +42,36 @@
  * output — instead of a function the workflows never call.
  */
 import { spawnSync } from 'child_process';
-import { mkdtempSync, writeFileSync, readFileSync } from 'fs';
+import { mkdtempSync, writeFileSync, readFileSync, renameSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
 
 const GUARD = path.resolve(__dirname, '../ci/check-package-sanity.mjs');
 const FIXTURES = path.resolve(__dirname, 'fixtures/package-sanity');
+
+/**
+ * ## This suite has to run under two different runtimes
+ *
+ * `npx jest` runs it under Node. The pre-push hook runs it under
+ * `ELECTRON_RUN_AS_NODE=1 electron` whenever the shared native module is resting on the
+ * Electron ABI. Electron patches `fs` so that any path ending in `.asar` is an ARCHIVE TO
+ * LOOK INSIDE, so the first version of this file was green under `npx jest` and failed 15
+ * of 24 under the hook with "Invalid package" -- on `writeFileSync`, before a single
+ * assertion ran.
+ *
+ * Measured, Electron 38.8.6, rather than assumed:
+ *
+ *   writeFileSync(<...>.asar)                      FAIL "Invalid package"
+ *   ... with process.noAsar = true set in the test FAIL -- jest's `process` is not the
+ *                                                  one the patch reads, so this does
+ *                                                  nothing here
+ *   writeFileSync(<...>.asar.tmp) then renameSync  OK   <- what buildHeaderOnlyAsar does
+ *   child process reading it, guard sets noAsar    OK   <- exit 0
+ *   child process reading it, without noAsar       FAIL exit 1, Electron asar error
+ *
+ * The last two rows are why `process.noAsar = true` sits at the top of the guard: in a
+ * fresh process it IS the real `process`, and the read fails without it.
+ */
 
 interface ManifestEntry {
   path: string;
@@ -126,7 +150,11 @@ function buildHeaderOnlyAsar(entries: ManifestEntry[], outPath: string, dataStar
   buf.writeUInt32LE(payloadSize, 8);
   buf.writeUInt32LE(stringLength, 12);
   buf.write(json, 16, 'utf8');
-  writeFileSync(outPath, buf);
+  // Write under a name Electron's fs patch ignores, then rename into place. See the note
+  // at the top of this file: a direct writeFileSync to a *.asar path throws under the
+  // pre-push hook's Electron route, and renameSync does not.
+  writeFileSync(`${outPath}.tmp`, buf);
+  renameSync(`${outPath}.tmp`, outPath);
   return outPath;
 }
 
@@ -146,7 +174,13 @@ function materialise(name: string, entries: ManifestEntry[], dataStart: number):
 }
 
 function runGuard(args: string[]): { status: number; stdout: string; stderr: string } {
-  const result = spawnSync(process.execPath, [GUARD, ...args], { encoding: 'utf8' });
+  // ELECTRON_RUN_AS_NODE is set for the child on purpose: under the pre-push hook's
+  // Electron route `process.execPath` IS the Electron binary, and without it this would
+  // try to start an app rather than run a script. Harmless under plain Node.
+  const result = spawnSync(process.execPath, [GUARD, ...args], {
+    encoding: 'utf8',
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+  });
   return { status: result.status ?? -1, stdout: result.stdout, stderr: result.stderr };
 }
 
@@ -163,6 +197,25 @@ describe('check-package-sanity: the container reader', () => {
     const { status, stdout } = runGuard(['--max-content-mb', '100000', '--max-ratio', '0', asar]);
     expect(stdout).toContain(`${arm64.files.length} entries`);
     expect(status).toBe(1); // still fails: the arm64 build carries its own output
+  });
+
+  it('resolves the layouts the workflows actually pass it', () => {
+    // release.yml and ci.yml hand this `release/mac-arm64/Keepr.app` and
+    // `release/win-unpacked`, never a path to the archive itself. Both forms are resolved
+    // here, with the file named `app.asar` exactly as electron-builder names it.
+    const bundle = path.join(workDir, 'layouts', 'Keepr.app', 'Contents', 'Resources');
+    const unpacked = path.join(workDir, 'layouts', 'win-unpacked', 'resources');
+    mkdirSync(bundle, { recursive: true });
+    mkdirSync(unpacked, { recursive: true });
+    buildHeaderOnlyAsar(arm64Fixed, path.join(bundle, 'app.asar'), arm64.source.dataStart);
+    buildHeaderOnlyAsar(arm64Fixed, path.join(unpacked, 'app.asar'), arm64.source.dataStart);
+
+    for (const target of [path.dirname(path.dirname(bundle)), path.dirname(unpacked)]) {
+      const { status, stdout, stderr } = runGuard(['--output-dir', 'release', target]);
+      expect(stderr).toBe('');
+      expect(status).toBe(0);
+      expect(stdout).toContain('app.asar: 50 entries');
+    }
   });
 
   it('exits 2, never 0, on something that is not an asar', () => {
