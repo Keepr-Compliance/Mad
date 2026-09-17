@@ -79,6 +79,37 @@ describe("InfoTooltip — standalone trigger", () => {
     expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
+  it("closes on a window scroll", async () => {
+    const user = userEvent.setup();
+    render(<InfoTooltip text="Tooltip body" />);
+    await user.hover(trigger());
+    expect(screen.getByRole("tooltip")).toBeInTheDocument();
+
+    fireEvent.scroll(window);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it("closes when an enclosing scroll container scrolls, not only the window", async () => {
+    // `scroll` does not bubble. A container scroll reaches this component only
+    // because the listener is registered on `window` with `capture: true`, and
+    // the Export modal's pills sit inside exactly such a container — which is
+    // the path that matters. Dropping the capture flag, or the listener
+    // entirely, reds this.
+    const user = userEvent.setup();
+    render(
+      <div data-testid="scroller" style={{ overflowY: "auto", height: 40 }}>
+        <div style={{ height: 400 }}>
+          <InfoTooltip text="Tooltip body" />
+        </div>
+      </div>,
+    );
+    await user.hover(trigger());
+    expect(screen.getByRole("tooltip")).toBeInTheDocument();
+
+    fireEvent.scroll(screen.getByTestId("scroller"));
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
   it("keeps only one bubble open at a time", async () => {
     const user = userEvent.setup();
     render(
@@ -283,6 +314,113 @@ describe("InfoTooltip — nested inside an interactive host", () => {
       });
       expect(screen.getByRole("button", { name: "One PDF" })).toHaveFocus();
       expect(screen.queryByRole("tooltip")).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+/**
+ * Measured in Electron 38.8.6 / Chromium 140 against the real component, driven
+ * with `sendInputEvent` under CDP focus emulation (a hidden window dispatches no
+ * focus events without it, which is why this join went unmeasured before):
+ *
+ *   tab that does NOT scroll  -> bubble stays OPEN
+ *   every tab that DOES scroll -> bubble SHUT 180ms later,
+ *                                 `focusin` then `scroll` 0.5ms apart
+ *
+ * So a tooltip on any control the browser had to scroll into view was
+ * unreachable by keyboard. With `scroll-behavior: smooth` — `Settings.tsx:181`,
+ * which holds five of these call sites — that one focus fires ~77 `scroll`
+ * events across ~640ms, largest gap between consecutive events 17ms. Hence a
+ * SLIDING 150ms window rather than a fixed short one.
+ */
+describe("InfoTooltip — the scroll that keyboard focus itself causes", () => {
+  const renderHostInScroller = () => {
+    const utils = render(
+      <div data-testid="scroller">
+        <button type="button">
+          One PDF
+          <InfoTooltip text="Tooltip body" />
+        </button>
+      </div>,
+    );
+    const host = screen.getByRole("button", { name: "One PDF" });
+    act(() => host.focus());
+    expect(screen.getByRole("tooltip")).toBeInTheDocument();
+    return { ...utils, host, scroller: screen.getByTestId("scroller") };
+  };
+
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  it("keeps a focus-opened bubble through the scroll focus caused", () => {
+    const { scroller } = renderHostInScroller();
+    fireEvent.scroll(scroller);
+    expect(screen.getByRole("tooltip")).toBeInTheDocument();
+  });
+
+  it("keeps it through a whole smooth-scroll train, then closes on a genuine scroll", () => {
+    const { scroller } = renderHostInScroller();
+
+    // ~640ms of animation events, well past a fixed 150ms window. The window
+    // slides, so none of these close it.
+    for (let elapsed = 0; elapsed < 640; elapsed += 16) {
+      act(() => { jest.advanceTimersByTime(16); });
+      fireEvent.scroll(scroller);
+      expect(screen.getByRole("tooltip")).toBeInTheDocument();
+    }
+
+    // The animation stops. Once the window lapses, the user's own scroll closes
+    // it exactly as it always did.
+    act(() => { jest.advanceTimersByTime(151); });
+    fireEvent.scroll(scroller);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it("closes on a genuine scroll once the window has lapsed", () => {
+    const { scroller } = renderHostInScroller();
+    act(() => { jest.advanceTimersByTime(151); });
+    fireEvent.scroll(scroller);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it("gives a POINTER-opened bubble no window at all", () => {
+    render(
+      <div data-testid="scroller">
+        <button type="button">
+          One PDF
+          <InfoTooltip text="Tooltip body" />
+        </button>
+      </div>,
+    );
+    fireEvent.mouseEnter(trigger());
+    expect(screen.getByRole("tooltip")).toBeInTheDocument();
+
+    fireEvent.scroll(screen.getByTestId("scroller"));
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it("re-places the bubble on a swallowed scroll instead of letting it drift", () => {
+    // jsdom returns an all-zero rect, so give the icon a moving one: the bubble
+    // must follow it while a smooth container glides.
+    let iconTop = 400;
+    const realRect = Element.prototype.getBoundingClientRect;
+    const spy = jest
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: Element) {
+        if (this.getAttribute?.("data-testid") === "info-tooltip-trigger") {
+          return { top: iconTop, left: 30, bottom: iconTop + 16, right: 46, width: 16, height: 16, x: 30, y: iconTop, toJSON: () => ({}) } as DOMRect;
+        }
+        return realRect.call(this);
+      });
+    try {
+      const { scroller } = renderHostInScroller();
+      expect(screen.getByRole("tooltip").style.top).toBe("392px");
+
+      iconTop = 120;
+      fireEvent.scroll(scroller);
+      expect(screen.getByRole("tooltip").style.top).toBe("112px");
     } finally {
       spy.mockRestore();
     }
