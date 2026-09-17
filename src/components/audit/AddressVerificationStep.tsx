@@ -198,8 +198,20 @@ function AddressVerificationStep({
 
       <div>
         <div className="flex items-center justify-between mb-3">
-          <label className="block text-sm font-medium text-gray-700">
+          <label className="flex items-center text-sm font-medium text-gray-700">
             Transaction Dates
+            {/* One (i) for both dates (founder, 2026-09-17, BACKLOG-3415). It
+                replaced the tooltip on the start-date label and the two helper
+                lines that sat under the inputs, so this is now the only place
+                either date is explained. The End Date wording is the founder's
+                own definition. */}
+            <InfoTooltip
+              wide
+              text={
+                "Representation Start Date: when you started representing this client on this deal.\n" +
+                "End Date: the last date you communicated with the client about this transaction, by text or email."
+              }
+            />
           </label>
         </div>
 
@@ -210,12 +222,6 @@ function AddressVerificationStep({
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">
               Representation Start Date *
-              {/* Says something the helper line below the field does not: this
-                  date is per-transaction, not the start of the client
-                  relationship. Carries over the old title attribute's "…in this
-                  transaction". Do not reduce it to a restatement of the helper
-                  line — a tooltip that repeats visible copy is noise. */}
-              <InfoTooltip text="When you started representing this client on this specific deal — not when you first began working together." />
             </label>
             <input
               type="date"
@@ -231,9 +237,6 @@ function AddressVerificationStep({
               required
               data-testid="create-audit-start-date-input"
             />
-            <p className="text-xs text-gray-500 mt-1">
-              Required — The date you began representing this client
-            </p>
           </div>
           <div>
             {/* Deliberately optional, and deliberately NOT marked required: an
@@ -256,9 +259,6 @@ function AddressVerificationStep({
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-gray-900 bg-white min-h-[44px]"
               data-testid="create-audit-end-date-input"
             />
-            <p className="text-xs text-gray-500 mt-1">
-              When transaction ended
-            </p>
           </div>
         </div>
       </div>
