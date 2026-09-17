@@ -49,6 +49,9 @@ module.exports = {
   ignorePatterns: [
     'node_modules/',
     'dist/',
+    // electron-builder's output directory (BACKLOG-3425). Packaged apps contain
+    // thousands of third-party .js files; linting them is meaningless and slow.
+    'release/',
     'build/',
     '*.min.js',
   ],

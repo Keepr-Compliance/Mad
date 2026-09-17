@@ -223,10 +223,10 @@ jobs:
         run: |
           set -euo pipefail
           FOUND=0
-          for APP in dist/mac-arm64/Keepr.app dist/mac/Keepr.app; do
+          for APP in release/mac-arm64/Keepr.app release/mac/Keepr.app; do
             if [ ! -d "$APP" ]; then
               echo "::error::Missing $APP"
-              ls -la dist/ || true
+              ls -la release/ || true
               exit 1
             fi
             FOUND=$((FOUND+1))
@@ -249,17 +249,34 @@ jobs:
             echo "::endgroup::"
           done
           [ "$FOUND" -eq 2 ] || { echo "::error::Expected 2 .app bundles, found $FOUND"; exit 1; }
-          ls dist/*.dmg >/dev/null
+          ls release/*.dmg >/dev/null
+
+      # BACKLOG-3425. v2.35.0, v2.36.0 and v2.37.0 all shipped an Intel build that could
+      # not launch: `build.files` listed dist/** and dist was ALSO the packager's output,
+      # so the x64 pass (which runs second) packed the arm64 pass's artifacts into its own
+      # app.asar. It reached 2.3 GB of content, package.json landed past the 2 GiB offset
+      # boundary and extracted as corrupted bytes, and the app died before running a line
+      # of its own code. No Sentry event -- the crash precedes SDK init.
+      #
+      # Every check above reads the app's SIGNATURE. None of them reads what is inside it.
+      # This one does, from the asar header. Both architectures are passed together so the
+      # cross-architecture size gap -- 3.2x, sitting in plain sight across three releases
+      # -- is itself a failure.
+      - name: Verify the packages contain no build output
+        run: |
+          node scripts/ci/check-package-sanity.mjs \
+            --output-dir release --max-content-mb 400 --max-ratio 1.5 \
+            release/mac-arm64/Keepr.app release/mac/Keepr.app
 
       - name: Upload macOS Artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-macos
           path: |
-            dist/*.dmg
-            dist/*.zip
-            dist/*.blockmap
-            dist/latest-mac.yml
+            release/*.dmg
+            release/*.zip
+            release/*.blockmap
+            release/latest-mac.yml
           # Default is `warn`. A build that produced nothing uploaded nothing
           # and passed, and the absence only surfaced later as a glob error in
           # the mirror step (BACKLOG-3192).
@@ -488,10 +505,10 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          $exe = Get-ChildItem -Path dist -Filter "*.exe" | Select-Object -First 1
-          if (-not $exe) { Write-Error "No .exe found in dist to verify the manifest against"; exit 1 }
-          $ymlPath = Join-Path dist "latest.yml"
-          if (-not (Test-Path $ymlPath)) { Write-Error "dist/latest.yml not found"; exit 1 }
+          $exe = Get-ChildItem -Path release -Filter "*.exe" | Select-Object -First 1
+          if (-not $exe) { Write-Error "No .exe found in release to verify the manifest against"; exit 1 }
+          $ymlPath = Join-Path release "latest.yml"
+          if (-not (Test-Path $ymlPath)) { Write-Error "release/latest.yml not found"; exit 1 }
 
           Write-Host "Verifying latest.yml matches the signed exe: $($exe.Name)"
 
@@ -532,14 +549,27 @@ jobs:
           "
           if ($LASTEXITCODE -ne 0) { Write-Error "Manifest verify failed"; exit 1 }
 
+      # BACKLOG-3425. The macOS side is where the defect shipped, but the cause is a
+      # `build.files` pattern shared by every platform. Windows was spared only by an
+      # accident of naming -- electron-builder appends exactly one output exclusion,
+      # `!<outDir>/*-unpacked{,/**/*}`, which `win-unpacked/` matches and `mac-arm64/`
+      # does not. Check it too rather than rely on that.
+      - name: Verify the package contains no build output
+        shell: pwsh
+        run: |
+          node scripts/ci/check-package-sanity.mjs `
+            --output-dir release --max-content-mb 400 `
+            release/win-unpacked
+          if ($LASTEXITCODE -ne 0) { Write-Error "Package sanity check failed"; exit 1 }
+
       - name: Upload Windows Artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-windows
           path: |
-            dist/*.exe
-            dist/*.blockmap
-            dist/latest.yml
+            release/*.exe
+            release/*.blockmap
+            release/latest.yml
           # Same defect as the macOS upload: the default `warn` lets a job that
           # produced nothing report success, and with the create-release gate now
           # requiring BOTH platforms, an empty-but-green Windows job would let a

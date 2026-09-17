@@ -13,7 +13,7 @@ const base = require('./jest.config.js');
 module.exports = {
   ...base,
   testMatch: ['**/scripts/qa/harness/**/__tests__/**/*.(test|spec).{js,ts}'],
-  testPathIgnorePatterns: ['/node_modules/', '/dist/', '/build/'],
+  testPathIgnorePatterns: ['/node_modules/', '/dist/', '/release/', '/build/'],
   collectCoverage: false,
   coverageThreshold: undefined,
 };

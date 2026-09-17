@@ -4,6 +4,10 @@ node_modules
 # Build outputs
 dist/
 build/
+# electron-builder's output (build.directories.output). Anchored to the repo root ON
+# PURPOSE: a bare `release/` would also match the tracked .claude/skills/release/
+# (BACKLOG-3425).
+/release/
 !build/entitlements.mac.plist
 !build/icon.icns
 !build/icon.ico
