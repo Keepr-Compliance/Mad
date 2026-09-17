@@ -18,8 +18,24 @@ const LOGIN_RETRY_CONFIG = {
   maxRetries: 0,
   baseDelayMs: 1000,
   maxDelayMs: 10000,
-  /** Timeout for waiting for deep link callback (ms) */
-  callbackTimeoutMs: 60000,
+  /**
+   * Timeout for waiting for deep link callback (ms).
+   *
+   * MUST stay ABOVE the backend's own auth window, `AUTH_TIMEOUT_MS`
+   * (`5 * 60 * 1000`), declared in electron/services/googleAuthService.ts:123
+   * and electron/services/microsoftAuthService.ts:95. This timer only exists to
+   * catch a callback that is never coming; the backend is what actually decides
+   * a sign-in has failed.
+   *
+   * At the previous 60s this fired while the flow was still perfectly alive —
+   * picking an account and reading a consent screen routinely takes longer than
+   * a minute. The user got "Sign-in is taking longer than expected", and then
+   * the real deep link arrived a few seconds later and moved them on anyway,
+   * because handleDeepLinkSuccess's listener is not torn down by this timeout.
+   * The Cancel button in the browserAuthInProgress panel is the intended way out
+   * of a wait; this timer is the backstop, not the gate.
+   */
+  callbackTimeoutMs: 5 * 60 * 1000 + 10000,
   /** Error codes from deep link that should NOT trigger retry */
   nonRetryableCodes: ["MISSING_TOKENS", "INVALID_TOKENS", "INVALID_URL"],
 } as const;
@@ -157,6 +173,10 @@ const Login = ({
     setBrowserAuthInProgress(false);
     setLoading(false);
     setProvider(null);
+    // Defence in depth: a success can still arrive after an error was shown (the
+    // deep-link listeners are only torn down on unmount). Clear the error so it
+    // cannot linger over whatever renders next.
+    setError(null);
     resetRetryState();
 
     if (onDeepLinkAuthSuccess) {
