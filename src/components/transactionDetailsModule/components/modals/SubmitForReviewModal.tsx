@@ -123,16 +123,28 @@ export function SubmitForReviewModal({
    * the SET on each end. BACKLOG-2868 is what that judgement cost: the SET was
    * pinned, THE WORDS WERE NOT, and the words are what the user reads.
    *
-   * `resubmitted` is NOT here, and the reason BACKLOG-2853 gave — "the service
-   * still permits a submit in that state" — is WRONG and withdrawn. The
-   * service does not permit it; the service never gets asked. A `resubmitted`
-   * row only exists at version >= 2, so its deal has two submission rows, the
-   * service's `.maybeSingle()` lookup returns PGRST116, and the whole guard is
-   * skipped (BACKLOG-2867). Pressing the button there runs a plain submit that
-   * always dies on the unique key after a full attachment upload. Leaving it
-   * enabled is therefore NOT the "honest label" that comment claimed — it is
-   * an inviting control that cannot work. Not widened here because the fix is
-   * the lookup, not the list; raised on BACKLOG-2868 rather than taken.
+   * `resubmitted` IS here now — BACKLOG-3390 — and this paragraph used to end
+   * "not widened here". It predicted the defect precisely and deferred it:
+   *
+   *   "Pressing the button there runs a plain submit that always dies on the
+   *    unique key after a full attachment upload. Leaving it enabled is
+   *    therefore NOT the 'honest label' that comment claimed — it is an
+   *    inviting control that cannot work."
+   *
+   * That is exactly what the founder hit in released v2.37.0 on 2026-09-16,
+   * minus the diagnosis: the app offered Resubmit for Review after a successful
+   * resubmit, and the press died minutes later on a raw unique-constraint name.
+   * The reason it dies is that this modal LABELS the action for `resubmitted`
+   * (see `isResubmit` below) while the routing in `TransactionDetails.tsx` does
+   * not — so "Resubmit" runs a plain first submit at version 1 against a deal
+   * whose version 1 still exists.
+   *
+   * The fix is on the service's list, not in this file's routing: a
+   * `resubmitted` deal is with the broker and must not be sent again at all.
+   * This entry is the mirror of that decision, and the control it disables is
+   * the founder's defect 1 ("offered when it cannot succeed") — which the
+   * service-side guard alone could not have reached, because it only runs after
+   * a press.
    */
   /**
    * BACKLOG-2868 — ONE MESSAGE FOR FOUR DIFFERENT STATES IS THREE WRONG
@@ -185,6 +197,23 @@ export function SubmitForReviewModal({
       title: "Under Review",
       lead: "Cannot resubmit while broker is reviewing. Please wait for their decision.",
     },
+    resubmitted: {
+      /**
+       * BACKLOG-3390. A distinct title, not a reuse of "Already Submitted":
+       * the whole point of this map is that a status is told something true of
+       * ITSELF, and the parity test asserts the other statuses' titles are
+       * absent at each one.
+       *
+       * The lead is the canonical service string VERBATIM and adds nothing —
+       * that sentence already carries both halves a blocked screen needs
+       * (nothing is going to be sent; here is what unblocks it). `rejected` is
+       * the case where the service's error has no room for a next step and
+       * this mirror supplies one; there is no such gap here, and inventing an
+       * extra sentence for symmetry is what BACKLOG-2868 was filed on.
+       */
+      title: "Already Resubmitted",
+      lead: "This transaction has already been resubmitted and is waiting for your broker to review the new version. If your broker asks for more changes you will be able to resubmit again.",
+    },
     approved: {
       title: "Already Approved",
       lead: "This submission has already been approved. There is nothing further to send.",
@@ -217,11 +246,22 @@ export function SubmitForReviewModal({
   const submissionIsWithBroker = blockedCopy !== undefined;
 
   /**
-   * Label-only. Routing lives in TransactionDetails.tsx, which computes its
-   * own `isResubmit` and is untouched by this change — so widening this to
-   * `resubmitted` changes what the button SAYS and nothing about which IPC
-   * call it makes. Saying "Resubmit" on a deal that has already been
-   * submitted twice is the accurate word for the act either way.
+   * Label-only, and BACKLOG-3390 is what that cost. Routing lives in
+   * TransactionDetails.tsx, which computes its own `isResubmit` from
+   * `needs_changes` ALONE. So this disjunct made the button say "Resubmit" on a
+   * `resubmitted` deal while the press ran a plain first submit — a label and a
+   * routing that named different acts, which is how an offered action became an
+   * unavoidable duplicate-key failure.
+   *
+   * The disjunct is now INERT, and that is stated rather than assumed: this
+   * value has exactly three readers in this file — the title, the lead and the
+   * button text — and at `resubmitted` all three are decided by the
+   * `blockedCopy` / `submissionIsWithBroker` branch that sits in front of them.
+   * It is kept rather than deleted because it is still a true statement of the
+   * act, and because deleting it would move the BACKLOG-2849 button-literal
+   * suite for a string nothing renders. If a fourth reader is ever added
+   * WITHOUT such a branch in front of it, this disjunct wakes up — check it
+   * then.
    */
   const isResubmit =
     transaction.submission_status === "needs_changes" ||
