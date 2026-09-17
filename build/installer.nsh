@@ -62,7 +62,7 @@
 ;
 ; MB_TOPMOST|MB_SETFOREGROUND: a silent uninstaller has no window to own the box,
 ; so ask Windows to bring it to the front. electron-builder uses the same flags
-; for its own ownerless box (templates/nsis/installer.nsi:110).
+; for its own ownerless box (templates/nsis/installer.nsi:112).
 ;
 ; WHAT THE USER SEES: an interactive uninstall shows TWO dialogs in a row --
 ; electron-builder's "Are you sure you want to uninstall Keepr?" (OK/Cancel,
