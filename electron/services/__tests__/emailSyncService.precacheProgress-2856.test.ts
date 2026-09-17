@@ -402,6 +402,14 @@ describe("BACKLOG-2856 — the progress sequence an ordinary re-cache reports", 
     expect(
       events.filter((e) => e.phase === "repairing").map((e) => e.current),
     ).toEqual([0, 200, 400]);
+
+    // `current` is deliberately NOT clamped in `emitProgress`. The repair pass
+    // counts rows scanned, not emails downloaded, so the first fetching event
+    // resets it to 0. A clamp would read "(400 so far)" under "Downloading
+    // emails" at 10%.
+    // MUTATION: clamp `current` to a running max in `emitProgress` -> RED here
+    // (`Received: 400`).
+    expect(events.find((e) => e.phase === "fetching")?.current).toBe(0);
   });
 
   /**
@@ -1141,20 +1149,26 @@ describe("the message count never retracts", () => {
    * CONTROL — the round's own count is an UPPER BOUND on the boundary's, and the
    * panel must not walk it back.
    *
-   * `outlookFetchService.searchEmails` pages until it has AT LEAST `maxResults`
-   * and reports the PRE-SLICE length, so against the 2,000 cap this call passes
-   * it can report 2,099 and then return 2,000. `fetchStoreAndDedup` then reports
-   * what survived its `seenIds` filter, which is smaller again. The panel reads
-   * "Downloading emails (N so far)", so an unguarded `current` says 2,099 and
-   * then corrects itself to 2,000 — the overstate-then-retract this repo's rules
-   * exist to catch, introduced by the very change that made the count move.
+   * `outlookFetchService.searchEmails` reports its PRE-SLICE length and returns
+   * `slice(0, maxResults)`. `fetchStoreAndDedup` then reports what survived its
+   * `seenIds` filter, which is smaller again. The panel reads "Downloading
+   * emails (N so far)", so if the call ever reported more than the 2,000 it was
+   * passed, an unguarded `current` would say 2,099 and then correct itself to
+   * 2,000 — the overstate-then-retract this repo's rules exist to catch.
    *
-   * The 2,099 is an input for the cap, not a transcript of the pre-cache's
-   * usual path. That call is date-filtered, pages at `$top=100` and stops at
-   * `>= 2,000`, so it overshoots only if Graph returns a page longer than
-   * `$top` (traced by reading `outlookFetchService.searchEmails`, not run
-   * against Graph). The cap is defensive there. The rows the mock RETURNS are
-   * transcribed: `slice(0, 2000)`, so 2,000.
+   * On the pre-cache path the clamp cannot bind today; it is a defensive pin.
+   * The inbox call passes no `query` and no `contactEmails`, so it runs the
+   * `$filter`/`$skip` page loop, which stops after `MAX_GRAPH_PAGES` (10) pages
+   * of `$top=100` (`outlookFetchService.ts:368`, `:859`). The call therefore
+   * reports 1,000 at most, and the loop's `>= maxResults` break is never
+   * reached. Reporting more than 2,000 would need Graph to return pages
+   * averaging more than twice `$top`. (Traced by reading `searchEmails`; the
+   * 10-page stop on that loop is pinned by `outlookFetchService.pagination.test.ts`.
+   * Not run against Graph. The 1,000 inbox ceiling is BACKLOG-2312's, ruled
+   * not a bug because the folder walk stores the rest.)
+   *
+   * So 2,099 is an input for the clamp, not a transcript of this path, and the
+   * 2,000 rows the mock RETURNS are what `slice(0, 2000)` would hand back.
    *
    * MUTATION: drop `Math.min(p.fetched, EMAIL_FETCH_SAFETY_CAP)` -> RED here
    * (2,099 appears). Dropping the `reportOutlook(...)` wrapper does NOT red
@@ -1186,7 +1200,7 @@ describe("the message count never retracts", () => {
     expect(currents).toEqual([
       0,    // FETCH_START, before any round
       1000, // inbox, mid-page
-      2000, // inbox's 2,099, capped at what the call returns
+      2000, // inbox's 2,099, clamped to the 2,000 the call was passed
       2000, // the folder walk holds the mark
       2000, // the boundary: the run's total, 2,000 from the inbox + 0 new
       2000, // FETCH_DONE
