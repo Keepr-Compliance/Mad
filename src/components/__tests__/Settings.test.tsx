@@ -10,6 +10,7 @@ import "@testing-library/jest-dom";
 import Settings from "../Settings";
 import { PlatformProvider } from "../../contexts/PlatformContext";
 import { NotificationProvider } from "../../contexts/NotificationContext";
+import { IPhoneSyncProvider } from "../../contexts/IPhoneSyncContext";
 
 // Polyfill Element.scrollTo for jsdom (SettingsTabBar uses it)
 if (typeof Element.prototype.scrollTo !== "function") {
@@ -1386,6 +1387,102 @@ describe("Settings", () => {
       expect(
         screen.queryByText(/available when your import source is set to iphone/i),
       ).not.toBeInTheDocument();
+    });
+  });
+
+  // BACKLOG-3423: the source radio must re-gate iPhone USB detection live.
+  // These render Settings inside the REAL IPhoneSyncProvider — the tests above
+  // deliberately do not, and so exercise the provider-less fallback. Without the
+  // provider none of this is observable: it owns the enablement and the single
+  // `useIPhoneSync` instance that talks to `window.api.sync`.
+  describe("iPhone Sync source gate — the Settings wire (BACKLOG-3423)", () => {
+    const syncApi = () =>
+      (window as unknown as {
+        api: { sync: { startDetection: jest.Mock; stopDetection: jest.Mock } };
+      }).api.sync;
+
+    beforeEach(() => {
+      (window as unknown as { api: Record<string, unknown> }).api.sync = {
+        startDetection: jest.fn(),
+        stopDetection: jest.fn(),
+        getUnifiedStatus: jest
+          .fn()
+          .mockResolvedValue({ isAnyOperationRunning: false, currentOperation: null }),
+        start: jest.fn().mockResolvedValue({ success: true }),
+        cancel: jest.fn().mockResolvedValue(undefined),
+        onDeviceConnected: jest.fn(() => jest.fn()),
+        onDeviceDisconnected: jest.fn(() => jest.fn()),
+        onProgress: jest.fn(() => jest.fn()),
+        onPasswordRequired: jest.fn(() => jest.fn()),
+        onError: jest.fn(() => jest.fn()),
+        onComplete: jest.fn(() => jest.fn()),
+        onWaitingForPasscode: jest.fn(() => jest.fn()),
+        onPasscodeEntered: jest.fn(() => jest.fn()),
+        onStorageComplete: jest.fn(() => jest.fn()),
+        onStorageError: jest.fn(() => jest.fn()),
+      };
+
+      // The founder's stored state on 2026-09-17: the USB opt-in is ON and the
+      // source is macOS Messages. Preferences follow the account, which is why a
+      // clean QA profile still showed the toggle ON.
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
+        success: true,
+        preferences: {
+          export: { defaultFormat: "combined-pdf" },
+          integrations: { iphoneSyncEnabled: true },
+          messages: { source: "macos-native" },
+        },
+      });
+    });
+
+    const renderWithSyncProvider = async () => {
+      const result = render(
+        <NotificationProvider>
+          <PlatformProvider>
+            <IPhoneSyncProvider userId={mockUserId}>
+              <Settings userId={mockUserId} onClose={mockOnClose} />
+            </IPhoneSyncProvider>
+          </PlatformProvider>
+        </NotificationProvider>,
+      );
+      await waitFor(() => {
+        expect(screen.queryByText("Loading settings...")).not.toBeInTheDocument();
+      });
+      return result;
+    };
+
+    const usbToggle = () =>
+      screen.getByRole("switch", { name: /enable iphone sync over usb/i });
+
+    it("starts detection when the source changes to iPhone, and stops it on the way back", async () => {
+      await renderWithSyncProvider();
+
+      // macOS Messages + stored ON: nothing may be detecting.
+      await waitFor(() => expect(usbToggle()).toHaveAttribute("aria-checked", "false"));
+      expect(syncApi().startDetection).not.toHaveBeenCalled();
+
+      await userEvent.click(screen.getByRole("radio", { name: /iPhone Sync/i }));
+
+      await waitFor(() => expect(syncApi().startDetection).toHaveBeenCalled());
+      expect(usbToggle()).toHaveAttribute("aria-checked", "true");
+
+      await userEvent.click(screen.getByRole("radio", { name: /macOS Messages/i }));
+
+      await waitFor(() => expect(syncApi().stopDetection).toHaveBeenCalled());
+      expect(usbToggle()).toHaveAttribute("aria-checked", "false");
+    });
+
+    it("writes only the source — the stored iPhone-sync opt-in is left alone", async () => {
+      await renderWithSyncProvider();
+
+      await userEvent.click(screen.getByRole("radio", { name: /iPhone Sync/i }));
+      await userEvent.click(screen.getByRole("radio", { name: /macOS Messages/i }));
+
+      const writtenKeys = jest
+        .mocked(window.api.preferences.update)
+        .mock.calls.flatMap((call) => Object.keys(call[1] ?? {}));
+      expect(writtenKeys).toContain("messages");
+      expect(writtenKeys).not.toContain("integrations");
     });
   });
 
