@@ -19,21 +19,29 @@ const LOGIN_RETRY_CONFIG = {
   baseDelayMs: 1000,
   maxDelayMs: 10000,
   /**
-   * Timeout for waiting for deep link callback (ms).
+   * Timeout for waiting for the keepr:// deep link callback (ms).
    *
-   * MUST stay ABOVE the backend's own auth window, `AUTH_TIMEOUT_MS`
-   * (`5 * 60 * 1000`), declared in electron/services/googleAuthService.ts:123
-   * and electron/services/microsoftAuthService.ts:95. This timer only exists to
-   * catch a callback that is never coming; the backend is what actually decides
-   * a sign-in has failed.
+   * There is NO server-side deadline on this flow, so this value is the only
+   * thing besides the user's own Cancel that can end the wait. Traced:
+   * `auth:open-in-browser` (sessionHandlers.ts:1389) only calls
+   * shell.openExternal and returns; the main process then handles
+   * keepr://callback reactively and emits "auth:deep-link-callback" when — and
+   * only when — the URL arrives. There is no timer anywhere on that path.
    *
-   * At the previous 60s this fired while the flow was still perfectly alive —
-   * picking an account and reading a consent screen routinely takes longer than
-   * a minute. The user got "Sign-in is taking longer than expected", and then
-   * the real deep link arrived a few seconds later and moved them on anyway,
-   * because handleDeepLinkSuccess's listener is not torn down by this timeout.
-   * The Cancel button in the browserAuthInProgress panel is the intended way out
-   * of a wait; this timer is the backstop, not the gate.
+   * Do NOT confuse this with AUTH_TIMEOUT_MS in googleAuthService.ts:123 /
+   * microsoftAuthService.ts:95. That is a local-callback-SERVER port-leak
+   * timeout (BACKLOG-1121) belonging to the mailbox-connect OAuth flow, which
+   * redirects to http://localhost:<port>/callback. It never runs for login.
+   *
+   * 5:10 mirrors the five minutes that flow already treats as a reasonable time
+   * to leave a person in a browser, plus slack. At the previous 60s this fired
+   * while the flow was still perfectly alive — picking an account and reading a
+   * consent screen routinely takes longer than a minute. The user got "Sign-in
+   * is taking longer than expected", and then the real deep link arrived
+   * seconds later and moved them on anyway, because handleDeepLinkSuccess's
+   * listener is not torn down by this timeout (it is registered in a useEffect
+   * that cleans up only on unmount). Cancel in the browserAuthInProgress panel
+   * is the intended way out of a wait; this is the backstop, not the gate.
    */
   callbackTimeoutMs: 5 * 60 * 1000 + 10000,
   /** Error codes from deep link that should NOT trigger retry */
