@@ -2374,12 +2374,17 @@ class EmailSyncService {
       // THE HIGH-WATER MARK OF WHAT THE USER HAS BEEN TOLD.
       //
       // The panel reads "Downloading emails (N so far)", and N must not
-      // retract. Three ways it would without this:
+      // retract. Three ways it could without this:
       //
-      //   - `searchEmails` reports its pre-slice length while the result is
-      //     `slice(0, maxResults)` (`outlookFetchService`: the page loop breaks
-      //     on `>= maxResults`), so the round's number is capped at what the
-      //     call can return;
+      //   - `searchEmails` reports its pre-slice length while it returns
+      //     `slice(0, maxResults)`, so a report above the 2,000 this round
+      //     passes would print and then retract at the boundary. That cannot
+      //     happen on this path today: the inbox call passes no `query` and no
+      //     `contactEmails`, so it runs the `$filter`/`$skip` page loop, which
+      //     stops after `MAX_GRAPH_PAGES` (10) pages of `$top=100` and reports
+      //     1,000 at most, before its `>= maxResults` break is reached. The
+      //     `EMAIL_FETCH_SAFETY_CAP` clamp in `onProgress` below is therefore
+      //     a defensive pin, not a live bound;
       //   - `fetchStoreAndDedup` reports what SURVIVED its `seenIds` filter,
       //     which is never more than what was downloaded;
       //   - `retryOnNetwork` re-runs the WHOLE block on a network error, and the
@@ -2422,8 +2427,9 @@ class EmailSyncService {
                 onProgress: (p) => emitProgress({
                   phase: "fetching",
                   stage: "outlook-inbox",
-                  // Capped at what this call can actually return, for the
-                  // overshoot described beside `outlookReported`.
+                  // Clamped to the 2,000 this call is passed. Defensive only:
+                  // the page loop stops at `MAX_GRAPH_PAGES` (1,000 messages)
+                  // first, as described beside `outlookReported`.
                   current: reportOutlook(
                     outlookBaseFetched + Math.min(p.fetched, EMAIL_FETCH_SAFETY_CAP),
                   ),

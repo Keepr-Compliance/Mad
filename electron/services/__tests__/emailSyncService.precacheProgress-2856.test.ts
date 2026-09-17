@@ -1175,7 +1175,7 @@ describe("the message count never retracts", () => {
    * this test: on a clean run the mark and the returned count agree. The retry
    * control in the describe above is what catches that one.
    */
-  it("caps the Outlook round at what the call can return, and holds the high mark", async () => {
+  it("clamps the Outlook round to the cap it was passed (defensive; MAX_GRAPH_PAGES binds first), and holds the high mark", async () => {
     mockOutlookSearch.mockImplementation(async (opts: ProgressOptions) => {
       opts.onProgress?.({ fetched: 1000, total: 2000, estimatedTotal: 5000, percentage: 50, hasEstimate: true });
       // Overshooting the 2,000 cap it was given.
