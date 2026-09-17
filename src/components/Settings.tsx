@@ -19,6 +19,7 @@ import { SyncToolsSettings } from "./settings/SyncToolsSettings";
 import { useScrollSpy } from "@/hooks/useScrollSpy";
 import { useFeatureGate } from "@/hooks/useFeatureGate";
 import { usePlatform } from "@/contexts/PlatformContext";
+import { useIPhoneSyncEnabled } from "@/contexts/IPhoneSyncContext";
 import { OfflineNotice } from './common/OfflineNotice';
 import { settingsService } from '../services';
 import logger from '../utils/logger';
@@ -56,6 +57,8 @@ interface SettingsComponentProps {
 function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconnected, onConnectAndroid }: SettingsComponentProps) {
   const { isAllowed } = useFeatureGate();
   const hasAIAddon = isAllowed("ai_detection");
+  // BACKLOG-3423: lets a source change re-gate iPhone USB detection live.
+  const { applyImportSource } = useIPhoneSyncEnabled();
   // BACKLOG-1937: renderer-safe platform detection (contextIsolation=true → no process.platform)
   const { isWindows, isMacOS } = usePlatform();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -139,7 +142,12 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
   // BACKLOG-1458: Callback for ImportSourceSettings to notify parent of source changes
   const handleImportSourceChange = useCallback((newSource: ImportSource) => {
     setActiveImportSource(newSource);
-  }, []);
+    // BACKLOG-3423: re-gate iPhone USB detection on the new source without
+    // waiting for a restart — switching away from iPhone stops the 2s device
+    // poll, switching back to it starts it again. This writes no preference:
+    // the user's stored `iphoneSyncEnabled` choice is left exactly as it was.
+    applyImportSource(newSource);
+  }, [applyImportSource]);
 
   return (
     <ResponsiveModal onClose={onClose} overlayClassName="bg-black bg-opacity-50" panelClassName="max-w-3xl sm:max-h-[90vh]">
