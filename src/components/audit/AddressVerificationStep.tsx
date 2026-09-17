@@ -231,8 +231,15 @@ function AddressVerificationStep({
             </p>
           </div>
           <div>
+            {/* Deliberately optional, and deliberately NOT marked required: an
+                empty end date is how an ongoing deal is represented. The audit
+                window then rolls forward to today (emailDateRange.ts) and the
+                transaction reads as "<start> - Ongoing" in the details tab. An
+                asterisk was tried here and reverted (founder, 2026-09-16) —
+                requiring it would make an open deal impossible to create or to
+                re-save, and would cap message capture at an invented date. */}
             <label className="block text-xs font-medium text-gray-600 mb-1">
-              End Date *
+              End Date
             </label>
             <input
               type="date"
@@ -241,12 +248,7 @@ function AddressVerificationStep({
                 onEndDateChange(e.target.value || undefined)
               }
               min={addressData.started_at}
-              className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-gray-900 min-h-[44px] ${
-                !addressData.closed_at
-                  ? "border-red-300 bg-red-50"
-                  : "border-gray-300 bg-white"
-              }`}
-              required
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-gray-900 bg-white min-h-[44px]"
               data-testid="create-audit-end-date-input"
             />
             <p className="text-xs text-gray-500 mt-1">
