@@ -378,4 +378,34 @@ describe("TASK-2062: Session Management Handlers", () => {
       expect(result.devices).toHaveLength(0);
     });
   });
+
+  /**
+   * BACKLOG-3394 — the URL the app hands the browser must say the app opened it.
+   *
+   * This sits in the 2062 harness because that harness already mocks
+   * `shell.openExternal` and every service `registerSessionHandlers()` pulls in
+   * at module scope; a separate file would be 140 lines of the same mocks.
+   *
+   * Without the parameter the portal's callback page has to infer whether the
+   * user has the app from a `devices` row this app writes only AFTER that page
+   * renders, so a first-ever desktop sign-in is always told it has no app. The
+   * portal half of the fix — copying the parameter into sessionStorage and
+   * rendering on it — is covered in
+   * `broker-portal/__tests__/app/auth/desktop/from-desktop-marker-3394.test.tsx`.
+   */
+  describe("BACKLOG-3394: auth:open-in-browser", () => {
+    const { shell } = jest.requireMock("electron") as {
+      shell: { openExternal: jest.Mock };
+    };
+
+    it("tells the portal that the desktop app opened the tab", async () => {
+      await handlers["auth:open-in-browser"]({} as unknown);
+
+      expect(shell.openExternal).toHaveBeenCalledTimes(1);
+      const opened = new URL(shell.openExternal.mock.calls[0][0] as string);
+
+      expect(opened.pathname).toBe("/auth/desktop");
+      expect(opened.searchParams.get("from")).toBe("desktop");
+    });
+  });
 });
