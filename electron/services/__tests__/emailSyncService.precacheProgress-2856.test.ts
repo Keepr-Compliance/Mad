@@ -1062,6 +1062,78 @@ describe("a round that restarts does not walk the bar backwards", () => {
       expect(percents[i]).toBeGreaterThanOrEqual(percents[i - 1]);
     }
   });
+
+  /**
+   * CONTROL — the Gmail mark survives a retry too.
+   *
+   * The Outlook control above cannot see the Gmail block: moving only
+   * `gmailReported` back inside its callback left the whole suite green. So the
+   * same retry, on the Gmail side.
+   *
+   * 30 messages, because `gmailFetchService.searchEmails` downloads bodies in
+   * batches of 10 and reports once per batch — fewer than 11 gives a single body
+   * event and nothing for a restart to walk back.
+   *
+   * MUTATION: move `gmailReported`/`reportGmail` back inside the
+   * `retryOnNetwork` callback -> RED (the re-run's scan reports 0 again and its
+   * bodies climb 10, 20, 30 a second time).
+   */
+  it("holds the Gmail count when a network retry restarts the Gmail block", async () => {
+    mockGetOAuthToken.mockImplementation(async (_u: string, provider: string) =>
+      provider === "microsoft" ? OUTLOOK_TOKEN : GMAIL_TOKEN,
+    );
+    mockGmailInit.mockResolvedValue(true);
+    mockRetryOnNetwork.mockImplementation(async (operation: () => Promise<unknown>) => {
+      try {
+        return await operation();
+      } catch (error) {
+        if (!isNetworkError(error)) throw error;
+        return await operation();
+      }
+    });
+
+    // Both attempts list the same 30 IDs and download the same 30 bodies.
+    let attempt = 0;
+    mockGmailSearch.mockImplementation(async (opts: ProgressOptions) => {
+      attempt++;
+      opts.onProgress?.({ fetched: 30, total: 30, estimatedTotal: 30, percentage: 0, hasEstimate: false });
+      for (const fetched of [10, 20, 30]) {
+        opts.onProgress?.({
+          fetched,
+          total: 30,
+          estimatedTotal: 30,
+          percentage: Math.round((fetched / 30) * 100),
+          hasEstimate: true,
+        });
+      }
+      return providerEmails(1, 30);
+    });
+    let labelAttempt = 0;
+    mockGmailSearchAll.mockImplementation(async (opts: ProgressOptions) => {
+      labelAttempt++;
+      if (labelAttempt === 1) throw new Error("socket hang up");
+      opts.onProgress?.({ fetched: 32, total: 32, percentage: 100, hasEstimate: true, labelIndex: 0, labelCount: 2 });
+      // The label walk re-finds the 30 and adds two of its own.
+      return providerEmails(1, 32);
+    });
+
+    const { events } = await runCollecting(false);
+
+    expect(attempt).toBe(2);
+    expect(labelAttempt).toBe(2);
+
+    const gmailRoundCounts = events
+      .filter((e) => e.stage === "gmail-messages" || e.stage === "gmail-labels")
+      .map((e) => e.current);
+    expect(gmailRoundCounts).toEqual([
+      0, 10, 20, 30, // attempt 1: the scan counts no bodies, then three batches
+      30, 30, 30, 30, // attempt 2: its scan and batches, held at the mark
+      30, // the label walk
+    ]);
+    for (let i = 1; i < gmailRoundCounts.length; i++) {
+      expect(gmailRoundCounts[i]).toBeGreaterThanOrEqual(gmailRoundCounts[i - 1]);
+    }
+  });
 });
 
 describe("the message count never retracts", () => {
