@@ -23,6 +23,13 @@
  * (`EMAIL_PRECACHE_FETCH_RANGE`: 10..30 for the Outlook inbox, 50..54 for the
  * Gmail scan), a `stage` only while `phase` is `"fetching"`, and a terminal
  * `"done"` carrying an `outcome`.
+ *
+ * WITH ONE DELIBERATE DEPARTURE, and it is load-bearing rather than incidental:
+ * the run in "reports no number this run did not measure" WITHHOLDS the
+ * `FETCH_SECOND_PROVIDER` boundary event, which a real run emits
+ * unconditionally. That omission is the only thing making that control
+ * distinguishing, and its own header says so at length. Nothing else in this
+ * file departs from what the producer emits.
  */
 
 import type { SyncItem } from '../SyncOrchestratorService';
@@ -184,10 +191,35 @@ describe('BACKLOG-3421 — the emails leg forwards the pre-cache percent', () =>
     // what showed it: the emitted list contained 50, because 50 is a published
     // anchor (`FETCH_SECOND_PROVIDER`). A restored hard-coded 50 was then
     // indistinguishable from the producer's own, and this test stayed green
-    // under the one mutation it exists for. The run below is an OUTLOOK-ONLY
-    // one — `interpolateFetchPercent` never returns a range's `end`, so the
-    // inbox round yields 10..29 and the folder walk 30..49, then `FETCH_DONE`
-    // at 90 — and it therefore never emits 50 at all.
+    // under the one mutation it exists for.
+    //
+    // WHAT MAKES IT NON-VACUOUS NOW IS THAT THE FIXTURE WITHHOLDS AN EVENT, AND
+    // NOTHING ELSE. Each percent below is one a real run can emit —
+    // `FETCH_START` (10), the inbox round (21), `OUTLOOK_FOLDERS.start` (30),
+    // the folder walk (44), `FETCH_DONE` (90); `interpolateFetchPercent` never
+    // returns a range's `end`, so the rounds themselves top out at 29 and 49.
+    // But a real Outlook-only run ALSO emits the `FETCH_SECOND_PROVIDER`
+    // boundary at 50, and the list below leaves it out. That emit is
+    // unconditional — `emailSyncService.ts:2569-2574` sits outside both the
+    // `microsoftToken` block (which closes at `:2546`) and the `googleToken`
+    // block (which opens at `:2579`), and `emitProgress` (`:2042-2047`) clamps
+    // only upward, so nothing suppresses it when Gmail is absent. The
+    // producer's own pinned test says so: under a microsoft-only token mock it
+    // asserts the fetching series `[10, 13, 21, 29, 50, 90]`
+    // (`electron/services/__tests__/emailSyncService.precacheProgress-2856.test.ts:775-797`).
+    //
+    // SO THIS CONTROL DISTINGUISHES A RESTORED HARD-CODED 50 ONLY BECAUSE THE
+    // FIXTURE DOES NOT SUPPLY THE PRODUCER'S. Add the 50 back and it goes green
+    // under its own mutation — measured in the SR review of this PR
+    // (BACKLOG-3421), not merely reasoned about. Keep the enumeration for what
+    // it does catch, but do not treat it as the last line of defence, and do
+    // not "fix" the fixture's fidelity without replacing the guard first.
+    //
+    // THE GUARD NO FIXTURE CAN DEFEAT is the next test, "reports NO percentage
+    // before the producer has said anything". It separates a hard-coded 50 from
+    // a producer's 50 on ORDERING rather than on value: the hard-coded one is
+    // written before any producer event exists, and no choice of fixture makes
+    // that frame legitimate.
     let release: (() => void) | undefined;
     precacheEmails.mockImplementation(
       () => new Promise((resolve) => { release = () => resolve({ success: true }); }),
