@@ -40,10 +40,12 @@ export interface EmailPrecacheStageDisplay {
 /**
  * The wording answers "what is it doing", not "which API is it calling".
  *
- * "Shared folders" rather than "all folders" for the two walk rounds: they sweep
- * sent items, archives and every custom folder or label, which is not one place
- * the user can point at, and "all folders" reads as a claim about completeness
- * that a cancelled or partial walk would not have kept.
+ * "Other Outlook folders" for the folder walk. It reads the user's OWN folder
+ * tree (`/me/mailFolders` and each folder's `childFolders`): Sent, Archive and
+ * the folders they created. Not "shared folders", which in Outlook means folders
+ * or mailboxes other people shared with you, and the walk reads none of those.
+ * Not "all folders" either, which reads as a claim about completeness that a
+ * cancelled or partial walk would not have kept.
  *
  * No trailing punctuation: the panel appends "(N so far)..." to whichever stem
  * it picked, the same way it already does for the generic "Downloading emails".
@@ -57,7 +59,7 @@ export const EMAIL_PRECACHE_STAGE_DISPLAY: Record<
     pill: "Outlook mailbox",
   },
   "outlook-folders": {
-    label: "Downloading your Outlook shared folders",
+    label: "Downloading your other Outlook folders",
     pill: "Outlook folders",
   },
   "gmail-messages": {

@@ -183,6 +183,19 @@ function providerEmail(n: number, opts: { sentAt?: string } = {}) {
   };
 }
 
+/**
+ * `count` provider rows numbered from `first`.
+ *
+ * For fixtures whose mock REPORTS progress. A real `searchEmails` that reported
+ * 500 downloaded returns those 500, and `fetchStoreAndDedup` counts what it
+ * returns. A mock that reports 500 and returns `[]` describes a run the code
+ * cannot produce, and the count assertions built on it then expect a drop to 0
+ * that no real run shows.
+ */
+function providerEmails(first: number, count: number) {
+  return Array.from({ length: count }, (_, i) => providerEmail(first + i));
+}
+
 function loadSchema(database: DatabaseType): void {
   database.pragma("foreign_keys = OFF");
   database.exec(fs.readFileSync(SCHEMA, "utf8"));
@@ -787,13 +800,16 @@ describe("the Outlook rounds report their own progress", () => {
     mockOutlookSearch.mockImplementation(async (opts: ProgressOptions) => {
       opts.onProgress?.({ fetched: 100, total: 500, estimatedTotal: 500, percentage: 20, hasEstimate: true });
       opts.onProgress?.({ fetched: 500, total: 500, estimatedTotal: 500, percentage: 100, hasEstimate: true });
-      return [];
+      // Returns the 500 it reported, as the real call does.
+      return providerEmails(1, 500);
     });
 
     const { events } = await runCollecting(false);
 
+    // The boundary and FETCH_DONE carry the run's total, which on a clean run
+    // is the 500 the round reported. No drop.
     expect(events.filter((e) => e.phase === "fetching").map((e) => e.current))
-      .toEqual([0, 100, 500, 0, 0]);
+      .toEqual([0, 100, 500, 500, 500]);
   });
 
   /**
@@ -813,14 +829,14 @@ describe("the Outlook rounds report their own progress", () => {
     mockOutlookSearch.mockImplementation(async (opts: ProgressOptions) => {
       opts.onProgress?.({ fetched: 100, total: 100, estimatedTotal: 0, percentage: 0, hasEstimate: false });
       opts.onProgress?.({ fetched: 200, total: 200, estimatedTotal: 0, percentage: 0, hasEstimate: false });
-      return [];
+      return providerEmails(1, 200);
     });
 
     const { events } = await runCollecting(false);
 
     const fetching = events.filter((e) => e.phase === "fetching");
     expect(fetching.map((e) => e.percent)).toEqual([10, 10, 10, 50, 90]);
-    expect(fetching.map((e) => e.current)).toEqual([0, 100, 200, 0, 0]);
+    expect(fetching.map((e) => e.current)).toEqual([0, 100, 200, 200, 200]);
   });
 
   /**
@@ -894,7 +910,10 @@ describe("the Gmail rounds report their own progress", () => {
       opts.onProgress?.({ fetched: 140, total: 1400, estimatedTotal: 9999, percentage: 10, hasEstimate: true });
       opts.onProgress?.({ fetched: 700, total: 1400, estimatedTotal: 9999, percentage: 50, hasEstimate: true });
       opts.onProgress?.({ fetched: 1400, total: 1400, estimatedTotal: 9999, percentage: 100, hasEstimate: true });
-      return [];
+      // The 1,400 bodies it reported downloading. The numbers stay this large
+      // because the scan divides by the 2,000 cap: reaching 52 takes at least
+      // 1,334 listed IDs, and the body pass downloads one per listed ID.
+      return providerEmails(1, 1400);
     });
 
     const { events } = await runCollecting(false);
@@ -907,7 +926,8 @@ describe("the Gmail rounds report their own progress", () => {
       55, 61, 69, // the bodies
       EMAIL_PRECACHE_PERCENT.FETCH_DONE,
     ]);
-    expect(fetching.map((e) => e.current)).toEqual([0, 0, 0, 0, 140, 700, 1400, 0]);
+    // FETCH_DONE carries the run's total: the 1,400 the body pass reported.
+    expect(fetching.map((e) => e.current)).toEqual([0, 0, 0, 0, 140, 700, 1400, 1400]);
     // Never reaches FETCH_DONE while Gmail is still downloading.
     expect(69).toBeLessThan(EMAIL_PRECACHE_PERCENT.FETCH_DONE);
   });
@@ -973,16 +993,18 @@ describe("a round that restarts does not walk the bar backwards", () => {
       }
     });
 
+    // The same five messages on both attempts, as the same mailbox would give.
+    // Each attempt reports what it has paged so far and returns what it paged.
     let attempt = 0;
     mockOutlookSearch.mockImplementation(async (opts: ProgressOptions) => {
       attempt++;
       if (attempt === 1) {
-        opts.onProgress?.({ fetched: 500, total: 500, estimatedTotal: 500, percentage: 100, hasEstimate: true });
+        opts.onProgress?.({ fetched: 5, total: 5, estimatedTotal: 5, percentage: 100, hasEstimate: true });
       } else {
-        opts.onProgress?.({ fetched: 100, total: 500, estimatedTotal: 500, percentage: 20, hasEstimate: true });
-        opts.onProgress?.({ fetched: 300, total: 500, estimatedTotal: 500, percentage: 60, hasEstimate: true });
+        opts.onProgress?.({ fetched: 1, total: 5, estimatedTotal: 5, percentage: 20, hasEstimate: true });
+        opts.onProgress?.({ fetched: 3, total: 5, estimatedTotal: 5, percentage: 60, hasEstimate: true });
       }
-      return [];
+      return providerEmails(1, 5);
     });
     let folderAttempt = 0;
     mockOutlookSearchAll.mockImplementation(async (opts: ProgressOptions) => {
@@ -990,14 +1012,39 @@ describe("a round that restarts does not walk the bar backwards", () => {
       // `isNetworkError` matches this string, so `precacheEmails` rethrows it
       // out of the folder round's own catch and the retry wrapper sees it.
       if (folderAttempt === 1) throw new Error("socket hang up");
-      opts.onProgress?.({ fetched: 10, total: 10, percentage: 0, hasEstimate: false, folderIndex: 0, folderCount: 2 });
-      return [];
+      opts.onProgress?.({ fetched: 7, total: 7, percentage: 0, hasEstimate: false, folderIndex: 0, folderCount: 2 });
+      // `/me/messages` spans every folder, so the walk re-finds the inbox's
+      // five and adds two of its own.
+      return providerEmails(1, 7);
     });
 
     const { events } = await runCollecting(false);
 
     // The block really did run twice — otherwise this control proves nothing.
     expect(attempt).toBe(2);
+    expect(folderAttempt).toBe(2);
+
+    // THE COUNT HOLDS ACROSS THE RETRY TOO.
+    //
+    // The high-water mark lives outside the retried callback. Inside it, the
+    // re-run started the mark over and the panel read "(5 so far)" and then
+    // "(1 so far)".
+    //
+    // Scoped to the round events (the ones naming a stage). The between-providers
+    // event after them reads `totalFetched`, which on this path is only the two
+    // messages the walk found new — attempt 2's inbox dedups to 0 against the
+    // ids attempt 1 already saw. That residual is described beside the event in
+    // the service and is not what this control is about.
+    //
+    // MUTATION: move `outlookReported`/`reportOutlook` back inside the
+    // `retryOnNetwork` callback -> RED (the series becomes [5, 1, 3, 3]).
+    const roundCounts = events
+      .filter((e) => e.phase === "fetching" && e.stage !== undefined)
+      .map((e) => e.current);
+    expect(roundCounts).toEqual([5, 5, 5, 5]);
+    for (let i = 1; i < roundCounts.length; i++) {
+      expect(roundCounts[i]).toBeGreaterThanOrEqual(roundCounts[i - 1]);
+    }
 
     const percents = fetchPercents(events);
     // The re-run's 20% and 60% would interpolate to these. They must not appear.
@@ -1030,19 +1077,31 @@ describe("the message count never retracts", () => {
    * then corrects itself to 2,000 — the overstate-then-retract this repo's rules
    * exist to catch, introduced by the very change that made the count move.
    *
-   * MUTATION: drop the `reportOutlook(...)` wrapper, or the
-   * `Math.min(p.fetched, EMAIL_FETCH_SAFETY_CAP)` -> RED.
+   * The 2,099 is an input for the cap, not a transcript of the pre-cache's
+   * usual path. That call is date-filtered, pages at `$top=100` and stops at
+   * `>= 2,000`, so it overshoots only if Graph returns a page longer than
+   * `$top` (traced by reading `outlookFetchService.searchEmails`, not run
+   * against Graph). The cap is defensive there. The rows the mock RETURNS are
+   * transcribed: `slice(0, 2000)`, so 2,000.
+   *
+   * MUTATION: drop `Math.min(p.fetched, EMAIL_FETCH_SAFETY_CAP)` -> RED here
+   * (2,099 appears). Dropping the `reportOutlook(...)` wrapper does NOT red
+   * this test: on a clean run the mark and the returned count agree. The retry
+   * control in the describe above is what catches that one.
    */
   it("caps the Outlook round at what the call can return, and holds the high mark", async () => {
     mockOutlookSearch.mockImplementation(async (opts: ProgressOptions) => {
       opts.onProgress?.({ fetched: 1000, total: 2000, estimatedTotal: 5000, percentage: 50, hasEstimate: true });
-      // The page loop's last iteration: 21 pages of 100 against a 2,000 cap.
+      // Overshooting the 2,000 cap it was given.
       opts.onProgress?.({ fetched: 2099, total: 2000, estimatedTotal: 5000, percentage: 100, hasEstimate: true });
-      return [];
+      // What the call hands back after `slice(0, maxResults)`.
+      return providerEmails(1, 2000);
     });
     mockOutlookSearchAll.mockImplementation(async (opts: ProgressOptions) => {
       opts.onProgress?.({ fetched: 5, total: 5, percentage: 0, hasEstimate: false, folderIndex: 0, folderCount: 2 });
-      return [];
+      // Five messages the inbox round already has: `/me/messages` spans every
+      // folder, so the walk re-finds them and `seenIds` drops all five.
+      return providerEmails(1, 5);
     });
 
     const { events } = await runCollecting(false);
@@ -1056,21 +1115,84 @@ describe("the message count never retracts", () => {
       0,    // FETCH_START, before any round
       1000, // inbox, mid-page
       2000, // inbox's 2,099, capped at what the call returns
-      2000, // the folder walk holds the high mark...
-      0,    // ...and the boundary reports the run's real deduped total
-      0,    // FETCH_DONE
+      2000, // the folder walk holds the mark
+      2000, // the boundary: the run's total, 2,000 from the inbox + 0 new
+      2000, // FETCH_DONE
     ]);
 
-    // The walk holds the mark rather than falling to `fetchStoreAndDedup`'s 0,
-    // which is what it reports here (the mock resolves no emails).
-    expect(fetching.find((e) => e.stage === "outlook-folders")?.current).toBe(2000);
-
-    // Monotone across the rounds themselves — the stretch whose label the user
-    // watches. The boundary event afterwards carries the authoritative deduped
-    // total and is allowed to be smaller; see the note in the service.
-    const throughTheRounds = currents.slice(0, 4);
-    for (let i = 1; i < throughTheRounds.length; i++) {
-      expect(throughTheRounds[i]).toBeGreaterThanOrEqual(throughTheRounds[i - 1]);
+    // Monotone across the whole fetch phase. On a clean run the boundary's
+    // total equals the mark, so there is nothing for it to step down from.
+    for (let i = 1; i < currents.length; i++) {
+      expect(currents[i]).toBeGreaterThanOrEqual(currents[i - 1]);
     }
+  });
+});
+
+describe("the backfill round does not walk the bar backwards", () => {
+  /**
+   * CONTROL — the clamp against its second producer.
+   *
+   * The backfill round (`[cacheSinceDate .. oldestCached)`, BACKLOG-3056) runs
+   * AFTER both providers' incremental rounds and emits FETCH_SECOND_PROVIDER
+   * (50) as its floor. With Gmail connected the label walk has already taken
+   * the bar past 50, so without the clamp in `emitProgress` the bar would jump
+   * back to 50 for the whole backfill.
+   *
+   * The retry control above guards the same clamp line through a different
+   * producer. Until this test, nothing committed exercised this one.
+   *
+   * Note what the series also shows: the backfill's own rounds report nothing,
+   * so the bar holds at the label walk's last value (82 here, up to 89) until
+   * FETCH_DONE.
+   *
+   * MUTATION: replace `Math.max(lastPercent, progress.percent)` in
+   * `emitProgress` with `progress.percent` -> RED (50 appears after 82).
+   */
+  it("holds the percent when the backfill round re-emits the between-providers anchor", async () => {
+    // Already cached and newer than the configured floor (2026-01-01), so the
+    // gap behind it is what the backfill fetches — the fixture shape
+    // `emailSyncService.windowBackfill-3056.test.ts` uses.
+    seedEmail({ id: "live-1", externalId: "ext-cached-1", source: "outlook", sentAt: "2026-03-01T10:00:00Z" });
+    mockGetOAuthToken.mockImplementation(async (_u: string, provider: string) =>
+      provider === "microsoft" ? OUTLOOK_TOKEN : GMAIL_TOKEN,
+    );
+    mockGmailInit.mockResolvedValue(true);
+    mockGmailSearchAll.mockImplementation(
+      async (opts: ProgressOptions & { before?: Date | null }) => {
+        // The backfill's call carries a `before` and no `onProgress`. Nothing
+        // older is left in this mailbox.
+        if (opts.before) return [];
+        // The incremental label walk: three labels, one message each.
+        for (let labelIndex = 0; labelIndex < 3; labelIndex++) {
+          opts.onProgress?.({ fetched: 1, total: 1, percentage: 100, hasEstimate: true, labelIndex, labelCount: 3 });
+        }
+        return providerEmails(1, 3);
+      },
+    );
+
+    const { events } = await runCollecting(false);
+
+    // The backfill really ran, for both providers — otherwise the floor event
+    // below is not the backfill's and this control proves nothing.
+    const backfillCalls = (mock: jest.Mock) =>
+      mock.mock.calls.filter(([opts]) => (opts as { before?: Date | null }).before);
+    expect(backfillCalls(mockOutlookSearch)).toHaveLength(1);
+    expect(backfillCalls(mockGmailSearch)).toHaveLength(1);
+    expect(backfillCalls(mockGmailSearchAll)).toHaveLength(1);
+
+    expect(fetchPercents(events)).toEqual([
+      EMAIL_PRECACHE_PERCENT.FETCH_START,
+      EMAIL_PRECACHE_PERCENT.FETCH_SECOND_PROVIDER,
+      70, 76, 82, // the label walk
+      82, // the backfill's floor: 50 raw, held by the clamp
+      EMAIL_PRECACHE_PERCENT.FETCH_DONE,
+    ]);
+
+    // And the held event is the backfill's floor, not a round's: it names no
+    // stage and sits directly before FETCH_DONE.
+    const fetching = events.filter((e) => e.phase === "fetching");
+    const floor = fetching[fetching.length - 2];
+    expect(floor.stage).toBeUndefined();
+    expect(floor.percent).toBe(82);
   });
 });

@@ -2367,36 +2367,41 @@ class EmailSyncService {
 
     // Fetch from Outlook (no contact filter = all emails)
     if (microsoftToken && !isCancelled()) {
+      // The count the Outlook rounds report against. `totalFetched` only grows
+      // at the very end of the retried block below, so reading it here gives
+      // every `retryOnNetwork` attempt the same base as reading it inside would.
+      const outlookBaseFetched = totalFetched;
+      // THE HIGH-WATER MARK OF WHAT THE USER HAS BEEN TOLD.
+      //
+      // The panel reads "Downloading emails (N so far)", and N must not
+      // retract. Three ways it would without this:
+      //
+      //   - `searchEmails` reports its pre-slice length while the result is
+      //     `slice(0, maxResults)` (`outlookFetchService`: the page loop breaks
+      //     on `>= maxResults`), so the round's number is capped at what the
+      //     call can return;
+      //   - `fetchStoreAndDedup` reports what SURVIVED its `seenIds` filter,
+      //     which is never more than what was downloaded;
+      //   - `retryOnNetwork` re-runs the WHOLE block on a network error, and the
+      //     re-run's inbox round reports from zero again.
+      //
+      // Declared OUTSIDE the retried callback for the third reason. Inside it, a
+      // re-run started the mark over and the panel read "(500 so far)" and then
+      // "(100 so far)".
+      //
+      // Reporting the max is the honest direction: it is what has been
+      // downloaded, and nothing on screen claims those rows were all new —
+      // `stored` is reported separately when the run finishes.
+      let outlookReported = outlookBaseFetched;
+      const reportOutlook = (current: number): number => {
+        outlookReported = Math.max(outlookReported, current);
+        return outlookReported;
+      };
       try {
         await retryOnNetwork(async () => {
           const outlookReady = await outlookFetchService.initialize(userId);
           if (outlookReady) {
             // Fetch inbox emails (no contact filter fetches all)
-            // The count the Outlook rounds report against. Captured before the
-            // round so a `retryOnNetwork` re-run starts from the same base
-            // rather than from a half-counted previous attempt.
-            const outlookBaseFetched = totalFetched;
-            // THE HIGH-WATER MARK OF WHAT THE USER HAS BEEN TOLD.
-            //
-            // The panel reads "Downloading emails (N so far)", and N must not
-            // retract. Two ways it would without this:
-            //
-            //   - `searchEmails` pages until it has AT LEAST `maxResults` and
-            //     reports the pre-slice length, so it can say 2,099 for a 2,000
-            //     cap and then return 2,000 (`outlookFetchService`: the page
-            //     loop breaks on `>= maxResults`, the result is `slice(0, n)`);
-            //   - `fetchStoreAndDedup` reports what SURVIVED its `seenIds`
-            //     filter, which is never more than what was downloaded.
-            //
-            // Both make the round's own number an upper bound on the boundary
-            // number. Reporting the max is the honest direction: it is what has
-            // been downloaded, and nothing on screen claims those rows were all
-            // new — `stored` is reported separately when the run finishes.
-            let outlookReported = outlookBaseFetched;
-            const reportOutlook = (current: number): number => {
-              outlookReported = Math.max(outlookReported, current);
-              return outlookReported;
-            };
             const inboxResult = await fetchStoreAndDedup({
               provider: "outlook",
               fetchFn: () => outlookFetchService.searchEmails({
@@ -2534,13 +2539,27 @@ class EmailSyncService {
       }
     }
 
-    // KNOWN, NARROW RESIDUAL: `totalFetched` is the run's deduped total and is
-    // therefore allowed to be SMALLER than the high mark the Outlook rounds
-    // reported, so this one event can step the count down. It needs the folder
-    // walk to have found less new mail than the inbox round's page overshoot
-    // plus its dedup drops — normally it found far more, since it is most of the
-    // mailbox. Not clamped, because this event is the only honest total in the
-    // fetch phase and the run's result strip is built from the same number.
+    // KNOWN RESIDUAL: THIS EVENT CAN STEP THE COUNT DOWN, AND IT IS NOT CLAMPED.
+    //
+    // It carries `totalFetched`, which grows only when a provider block
+    // COMPLETES. The Outlook high mark above is what the panel showed while the
+    // rounds ran. On a clean run the two agree: the inbox round's last report is
+    // the length of what it returns, and nothing has been seen yet to dedup
+    // against. They disagree in two cases, and in both the drop is large:
+    //
+    //   - AFTER A NETWORK RETRY. Attempt 1 already put the inbox's ids into
+    //     `seenEmailIds`, so attempt 2's inbox round dedups to 0 and this event
+    //     reads only the mail the folder walk found new. The drop is the whole
+    //     inbox round (the retry control's fixture shows 5, then 2).
+    //   - WHEN THE BLOCK THROWS OUT after reporting progress — network retries
+    //     exhausted, or a non-network error in the inbox round. The `+=` never
+    //     runs and this event reads the base, even when attempt 1 stored rows.
+    //
+    // Both are `totalFetched` undercounting, not this event misreporting it: the
+    // run's returned `fetched`/`stored` are short by the same amount, and that
+    // predates the moving count, which only makes it visible. Clamping here
+    // would hide it on the bar and leave the bar disagreeing with the result.
+    // The same two cases apply to FETCH_DONE after the Gmail block.
     emitProgress({
       phase: "fetching",
       current: totalFetched,
@@ -2552,19 +2571,19 @@ class EmailSyncService {
     // Skipped outright if the user cancelled during the Outlook round — a cancel
     // must stop the NEXT unit of work, not merely stop the current one early.
     if (googleToken && !isCancelled()) {
+      // Same base and same high-water rule as the Outlook rounds above, and
+      // declared outside the retried callback for the same reason: a
+      // `retryOnNetwork` re-run must not start the reported count over.
+      const gmailBaseFetched = totalFetched;
+      let gmailReported = gmailBaseFetched;
+      const reportGmail = (current: number): number => {
+        gmailReported = Math.max(gmailReported, current);
+        return gmailReported;
+      };
       try {
         await retryOnNetwork(async () => {
           const gmailReady = await gmailFetchService.initialize(userId);
           if (gmailReady) {
-            // Same rule as the Outlook rounds: captured before the round so a
-            // network retry restarts from the same base.
-            const gmailBaseFetched = totalFetched;
-            // Same high-water rule as the Outlook rounds above.
-            let gmailReported = gmailBaseFetched;
-            const reportGmail = (current: number): number => {
-              gmailReported = Math.max(gmailReported, current);
-              return gmailReported;
-            };
             const gmailResult = await fetchStoreAndDedup({
               provider: "gmail",
               fetchFn: () => gmailFetchService.searchEmails({

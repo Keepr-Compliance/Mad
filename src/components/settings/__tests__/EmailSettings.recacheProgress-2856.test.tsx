@@ -300,7 +300,7 @@ describe("the fetch label names the round when the event names one", () => {
    */
   it.each([
     ["outlook-inbox", /Downloading your Outlook mailbox/i],
-    ["outlook-folders", /Downloading your Outlook shared folders/i],
+    ["outlook-folders", /Downloading your other Outlook folders/i],
     ["gmail-messages", /Downloading your Gmail messages/i],
     ["gmail-labels", /Downloading your Gmail labels/i],
   ])("names the %s round", async (stage, expected) => {
