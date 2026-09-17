@@ -1,23 +1,39 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useRef } from "react";
 import type { SyncProgressProps } from "../../types/iphone";
 import logger from "../../utils/logger";
 
-/**
- * Format bytes to human readable string
- */
-function formatBytes(bytes: number | undefined): string {
-  if (!bytes || bytes === 0) return "0 B";
+const BYTE_UNITS = ["B", "KB", "MB", "GB"] as const;
 
-  const units = ["B", "KB", "MB", "GB"];
+/**
+ * BACKLOG-3416: the unit DECISION, separated from the formatting.
+ *
+ * Which unit would this byte count normally be shown in — the same KB/MB/GB
+ * promotion the display has always used. This is evaluated ONCE per sync (see
+ * the latch in the component) rather than on every frame.
+ */
+export function pickByteUnitIndex(bytes: number): number {
   let unitIndex = 0;
   let size = bytes;
 
-  while (size >= 1024 && unitIndex < units.length - 1) {
+  while (size >= 1024 && unitIndex < BYTE_UNITS.length - 1) {
     size /= 1024;
     unitIndex++;
   }
 
-  return `${size.toFixed(1)} ${units[unitIndex]}`;
+  return unitIndex;
+}
+
+/**
+ * BACKLOG-3416: the FORMATTING, with no unit decision in it.
+ *
+ * Formats at whatever unit it is handed, however large the result gets — a sync
+ * latched at MB that goes on to move 5 GiB reads "5120.0 MB", deliberately.
+ * That is the point: the founder asked for no mid-sync unit changes, ever.
+ */
+export function formatBytesAtUnit(bytes: number | undefined, unitIndex: number): string {
+  if (!bytes || bytes === 0) return "0 B";
+
+  return `${(bytes / 1024 ** unitIndex).toFixed(1)} ${BYTE_UNITS[unitIndex]}`;
 }
 
 /**
@@ -40,6 +56,34 @@ export const SyncProgress: React.FC<SyncProgressProps> = ({
   useEffect(() => {
     logger.debug(`[SyncProgress] Phase: ${progress.phase}, ${progress.percent}%`, { isWaitingForPasscode });
   }, [progress.phase, progress.percent, isWaitingForPasscode]);
+
+  /**
+   * BACKLOG-3416: the displayed unit is latched for the life of this component.
+   *
+   * `bytesProcessed` climbs continuously during a transfer and the display
+   * re-rendered on every update, so recomputing the unit each time made it flip
+   * under the founder's eyes the moment the count crossed a 1024x boundary —
+   * "987.3 MB" became "1.0 GB" and the number appeared to collapse.
+   *
+   * There is no total size to pick the final unit from in advance (idevicebackup2
+   * reports per-file progress only), so the rule is: whatever unit the FIRST
+   * non-zero byte count would have chosen is the unit for the whole sync.
+   *
+   * A zero must not latch — "0 B" is shown while `processedFiles` alone is
+   * non-zero, and latching at B there would pin the entire transfer to bytes.
+   *
+   * Latching in a ref during render is idempotent: the value is derived purely
+   * from `bytes`, so a discarded/double-invoked render writes the same index.
+   * The component unmounts when the flow leaves the `progress` view, so the next
+   * sync starts with a fresh latch and picks its own unit.
+   */
+  const latchedUnitIndex = useRef<number | null>(null);
+  const bytesProcessed = progress.bytesProcessed ?? 0;
+  if (latchedUnitIndex.current === null && bytesProcessed > 0) {
+    latchedUnitIndex.current = pickByteUnitIndex(bytesProcessed);
+  }
+  const displayUnitIndex = latchedUnitIndex.current ?? 0;
+
   /**
    * Option C: 2-Level Progress Display
    * Level 1: Combined title + context (bold, larger)
@@ -79,7 +123,7 @@ export const SyncProgress: React.FC<SyncProgressProps> = ({
   const isPreparing = progress.phase === "preparing";
   const isExtracting = progress.phase === "extracting";
   const isStoring = progress.phase === "storing";
-  const hasStartedTransfer = (progress.bytesProcessed ?? 0) > 0 || (progress.processedFiles ?? 0) > 0;
+  const hasStartedTransfer = bytesProcessed > 0 || (progress.processedFiles ?? 0) > 0;
 
   // Show passcode waiting warning (special state with detailed instructions)
   const showPasscodeWarning = isWaitingForPasscode;
@@ -226,7 +270,7 @@ export const SyncProgress: React.FC<SyncProgressProps> = ({
       {hasStartedTransfer && !isComplete && (
         <div className="text-center mb-4">
           <p className="text-2xl font-bold text-gray-800">
-            {formatBytes(progress.bytesProcessed)}
+            {formatBytesAtUnit(progress.bytesProcessed, displayUnitIndex)}
           </p>
           <p className="text-sm text-gray-500">
             transferred
