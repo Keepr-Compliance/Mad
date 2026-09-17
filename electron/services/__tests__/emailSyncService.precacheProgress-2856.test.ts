@@ -1016,3 +1016,61 @@ describe("a round that restarts does not walk the bar backwards", () => {
     }
   });
 });
+
+describe("the message count never retracts", () => {
+  /**
+   * CONTROL — the round's own count is an UPPER BOUND on the boundary's, and the
+   * panel must not walk it back.
+   *
+   * `outlookFetchService.searchEmails` pages until it has AT LEAST `maxResults`
+   * and reports the PRE-SLICE length, so against the 2,000 cap this call passes
+   * it can report 2,099 and then return 2,000. `fetchStoreAndDedup` then reports
+   * what survived its `seenIds` filter, which is smaller again. The panel reads
+   * "Downloading emails (N so far)", so an unguarded `current` says 2,099 and
+   * then corrects itself to 2,000 — the overstate-then-retract this repo's rules
+   * exist to catch, introduced by the very change that made the count move.
+   *
+   * MUTATION: drop the `reportOutlook(...)` wrapper, or the
+   * `Math.min(p.fetched, EMAIL_FETCH_SAFETY_CAP)` -> RED.
+   */
+  it("caps the Outlook round at what the call can return, and holds the high mark", async () => {
+    mockOutlookSearch.mockImplementation(async (opts: ProgressOptions) => {
+      opts.onProgress?.({ fetched: 1000, total: 2000, estimatedTotal: 5000, percentage: 50, hasEstimate: true });
+      // The page loop's last iteration: 21 pages of 100 against a 2,000 cap.
+      opts.onProgress?.({ fetched: 2099, total: 2000, estimatedTotal: 5000, percentage: 100, hasEstimate: true });
+      return [];
+    });
+    mockOutlookSearchAll.mockImplementation(async (opts: ProgressOptions) => {
+      opts.onProgress?.({ fetched: 5, total: 5, percentage: 0, hasEstimate: false, folderIndex: 0, folderCount: 2 });
+      return [];
+    });
+
+    const { events } = await runCollecting(false);
+
+    const fetching = events.filter((e) => e.phase === "fetching");
+    const currents = fetching.map((e) => e.current);
+
+    // 2,099 is more than this call can hand back; 2,000 is the cap it passed.
+    expect(currents).not.toContain(2099);
+    expect(currents).toEqual([
+      0,    // FETCH_START, before any round
+      1000, // inbox, mid-page
+      2000, // inbox's 2,099, capped at what the call returns
+      2000, // the folder walk holds the high mark...
+      0,    // ...and the boundary reports the run's real deduped total
+      0,    // FETCH_DONE
+    ]);
+
+    // The walk holds the mark rather than falling to `fetchStoreAndDedup`'s 0,
+    // which is what it reports here (the mock resolves no emails).
+    expect(fetching.find((e) => e.stage === "outlook-folders")?.current).toBe(2000);
+
+    // Monotone across the rounds themselves — the stretch whose label the user
+    // watches. The boundary event afterwards carries the authoritative deduped
+    // total and is allowed to be smaller; see the note in the service.
+    const throughTheRounds = currents.slice(0, 4);
+    for (let i = 1; i < throughTheRounds.length; i++) {
+      expect(throughTheRounds[i]).toBeGreaterThanOrEqual(throughTheRounds[i - 1]);
+    }
+  });
+});

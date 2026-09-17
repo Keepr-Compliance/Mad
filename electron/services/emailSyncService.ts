@@ -2376,6 +2376,27 @@ class EmailSyncService {
             // round so a `retryOnNetwork` re-run starts from the same base
             // rather than from a half-counted previous attempt.
             const outlookBaseFetched = totalFetched;
+            // THE HIGH-WATER MARK OF WHAT THE USER HAS BEEN TOLD.
+            //
+            // The panel reads "Downloading emails (N so far)", and N must not
+            // retract. Two ways it would without this:
+            //
+            //   - `searchEmails` pages until it has AT LEAST `maxResults` and
+            //     reports the pre-slice length, so it can say 2,099 for a 2,000
+            //     cap and then return 2,000 (`outlookFetchService`: the page
+            //     loop breaks on `>= maxResults`, the result is `slice(0, n)`);
+            //   - `fetchStoreAndDedup` reports what SURVIVED its `seenIds`
+            //     filter, which is never more than what was downloaded.
+            //
+            // Both make the round's own number an upper bound on the boundary
+            // number. Reporting the max is the honest direction: it is what has
+            // been downloaded, and nothing on screen claims those rows were all
+            // new — `stored` is reported separately when the run finishes.
+            let outlookReported = outlookBaseFetched;
+            const reportOutlook = (current: number): number => {
+              outlookReported = Math.max(outlookReported, current);
+              return outlookReported;
+            };
             const inboxResult = await fetchStoreAndDedup({
               provider: "outlook",
               fetchFn: () => outlookFetchService.searchEmails({
@@ -2396,8 +2417,14 @@ class EmailSyncService {
                 onProgress: (p) => emitProgress({
                   phase: "fetching",
                   stage: "outlook-inbox",
-                  current: outlookBaseFetched + p.fetched,
-                  total: p.hasEstimate ? outlookBaseFetched + p.total : outlookBaseFetched + p.fetched,
+                  // Capped at what this call can actually return, for the
+                  // overshoot described beside `outlookReported`.
+                  current: reportOutlook(
+                    outlookBaseFetched + Math.min(p.fetched, EMAIL_FETCH_SAFETY_CAP),
+                  ),
+                  total: p.hasEstimate
+                    ? outlookBaseFetched + Math.min(p.total, EMAIL_FETCH_SAFETY_CAP)
+                    : outlookReported,
                   percent: interpolateFetchPercent(
                     EMAIL_PRECACHE_FETCH_RANGE.OUTLOOK_INBOX,
                     p.hasEstimate ? p.percentage / 100 : 0,
@@ -2432,7 +2459,7 @@ class EmailSyncService {
               // `fetched` would climb to a number the deduped result then has to
               // correct downwards. A count that overstates and then retracts is
               // worse than one that waits.
-              const currentAfterInbox = outlookBaseFetched + inboxResult.fetched;
+              const currentAfterInbox = reportOutlook(outlookBaseFetched + inboxResult.fetched);
               allFolderResult = await fetchStoreAndDedup({
                 provider: "outlook",
                 fetchFn: () => outlookFetchService.searchAllFolders({
@@ -2507,6 +2534,13 @@ class EmailSyncService {
       }
     }
 
+    // KNOWN, NARROW RESIDUAL: `totalFetched` is the run's deduped total and is
+    // therefore allowed to be SMALLER than the high mark the Outlook rounds
+    // reported, so this one event can step the count down. It needs the folder
+    // walk to have found less new mail than the inbox round's page overshoot
+    // plus its dedup drops — normally it found far more, since it is most of the
+    // mailbox. Not clamped, because this event is the only honest total in the
+    // fetch phase and the run's result strip is built from the same number.
     emitProgress({
       phase: "fetching",
       current: totalFetched,
@@ -2525,6 +2559,12 @@ class EmailSyncService {
             // Same rule as the Outlook rounds: captured before the round so a
             // network retry restarts from the same base.
             const gmailBaseFetched = totalFetched;
+            // Same high-water rule as the Outlook rounds above.
+            let gmailReported = gmailBaseFetched;
+            const reportGmail = (current: number): number => {
+              gmailReported = Math.max(gmailReported, current);
+              return gmailReported;
+            };
             const gmailResult = await fetchStoreAndDedup({
               provider: "gmail",
               fetchFn: () => gmailFetchService.searchEmails({
@@ -2549,8 +2589,10 @@ class EmailSyncService {
                 onProgress: (p) => emitProgress({
                   phase: "fetching",
                   stage: "gmail-messages",
-                  current: p.hasEstimate ? gmailBaseFetched + p.fetched : gmailBaseFetched,
-                  total: p.hasEstimate ? gmailBaseFetched + p.total : gmailBaseFetched,
+                  current: reportGmail(
+                    p.hasEstimate ? gmailBaseFetched + p.fetched : gmailBaseFetched,
+                  ),
+                  total: p.hasEstimate ? gmailBaseFetched + p.total : gmailReported,
                   percent: p.hasEstimate
                     ? interpolateFetchPercent(
                         EMAIL_PRECACHE_FETCH_RANGE.GMAIL_BODIES,
@@ -2580,7 +2622,7 @@ class EmailSyncService {
               // for the reason the Outlook folder walk holds: a Gmail message
               // carries several labels, the walk dedups them, and a count that
               // climbed per label would have to retract at the boundary.
-              const currentAfterGmailSearch = gmailBaseFetched + gmailResult.fetched;
+              const currentAfterGmailSearch = reportGmail(gmailBaseFetched + gmailResult.fetched);
               allLabelResult = await fetchStoreAndDedup({
                 provider: "gmail",
                 fetchFn: () => gmailFetchService.searchAllLabels({
