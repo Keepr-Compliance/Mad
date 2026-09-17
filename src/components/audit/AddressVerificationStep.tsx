@@ -210,7 +210,12 @@ function AddressVerificationStep({
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">
               Representation Start Date *
-              <InfoTooltip text="The date you began representing this client" />
+              {/* Says something the helper line below the field does not: this
+                  date is per-transaction, not the start of the client
+                  relationship. Carries over the old title attribute's "…in this
+                  transaction". Do not reduce it to a restatement of the helper
+                  line — a tooltip that repeats visible copy is noise. */}
+              <InfoTooltip text="When you started representing this client on this specific deal — not when you first began working together." />
             </label>
             <input
               type="date"

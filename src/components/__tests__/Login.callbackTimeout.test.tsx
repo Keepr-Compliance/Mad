@@ -71,7 +71,7 @@ describe("Login — browser sign-in callback timeout", () => {
     expect(err()).toBeNull();
   });
 
-  it("still fails past the backend's 5min window (5:10)", async () => {
+  it("still fails once the client's own give-up window elapses (5:10)", async () => {
     await startLogin();
     act(() => { jest.advanceTimersByTime(5 * 60_000 + 10_000 + 1); });
     await waitFor(() => expect(err()).not.toBeNull());
