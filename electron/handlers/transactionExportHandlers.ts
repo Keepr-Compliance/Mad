@@ -663,6 +663,10 @@ export function registerTransactionExportHandlers(
         messagesCount: result.messagesCount,
         attachmentsCount: result.attachmentsCount,
         attachmentsFailed: result.attachmentsFailed,
+        // BACKLOG-3389: in-window items that advertised an attachment and
+        // contributed none. Carried across the boundary because a number the
+        // renderer cannot read is a number no one will ever act on.
+        flaggedWithoutAttachments: result.flaggedWithoutAttachments,
         error: result.error,
       };
     }, { module: "Transactions" }),
@@ -753,6 +757,10 @@ export function registerTransactionExportHandlers(
         messagesCount: result.messagesCount,
         attachmentsCount: result.attachmentsCount,
         attachmentsFailed: result.attachmentsFailed,
+        // BACKLOG-3389: in-window items that advertised an attachment and
+        // contributed none. Carried across the boundary because a number the
+        // renderer cannot read is a number no one will ever act on.
+        flaggedWithoutAttachments: result.flaggedWithoutAttachments,
         error: result.error,
       };
     }, { module: "Transactions" }),

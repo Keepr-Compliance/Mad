@@ -118,7 +118,15 @@ describe("BACKLOG-2853 — the action on a deal already with the broker", () => 
     ["submitted", "Already Submitted", true],
     ["under_review", "Already Submitted", true],
     ["needs_changes", "Resubmit", false],
-    ["resubmitted", "Resubmit", false],
+    /**
+     * BACKLOG-3390 — this row read `["resubmitted", "Resubmit", false]`, and
+     * that live control is the founder's defect: the label said Resubmit, the
+     * routing in TransactionDetails.tsx ran a plain submit at version 1, and
+     * the press died on the unique key after a full attachment upload.
+     * `resubmitted` is now on the service's blocked list, so the deal reads as
+     * what it is — already with the broker — and the control is dead.
+     */
+    ["resubmitted", "Already Submitted", true],
     ["approved", "Already Submitted", true],
     ["rejected", "Already Submitted", true],
   ])("status %s → label %s, disabled=%s", (status, label, disabled) => {
@@ -144,12 +152,18 @@ describe("BACKLOG-2853 — the action on a deal already with the broker", () => 
   });
 
   /**
-   * The disabled set is exactly the four statuses `submissionService`'s
+   * The disabled set is exactly the statuses `submissionService`'s
    * `blockedStatuses` refuses. The two lists live in different files because
    * the main/renderer boundary forbids a shared value import, so this pins the
    * renderer's half as a SET; the service's half is pinned by execution in
    * electron/services/__tests__/submissionResubmitGuard-2853.test.ts. A change
    * to either without the other turns one of the two red.
+   *
+   * BACKLOG-3390 added `resubmitted`. Kept as a hand-written literal rather
+   * than imported from `submissionStatusMessages`: this file's job is to be the
+   * SECOND, independent statement of the set — importing the canonical array
+   * would make it assert that the array equals itself and leave only the sister
+   * suite (blockedStatusCopy-2868) checking the renderer at all.
    */
   test("the disabled SET matches the service's blockedStatuses SET", () => {
     const disabled = new Set<string>();
@@ -167,7 +181,13 @@ describe("BACKLOG-2853 — the action on a deal already with the broker", () => 
       unmount();
     }
     expect(disabled).toEqual(
-      new Set(["submitted", "under_review", "approved", "rejected"])
+      new Set([
+        "submitted",
+        "under_review",
+        "resubmitted",
+        "approved",
+        "rejected",
+      ])
     );
   });
 });

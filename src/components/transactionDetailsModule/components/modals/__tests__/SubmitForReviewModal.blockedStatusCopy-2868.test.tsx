@@ -95,6 +95,17 @@ const EXPECTED: Record<string, { title: string; lead: string }> = {
     title: "Under Review",
     lead: "Cannot resubmit while broker is reviewing. Please wait for their decision.",
   },
+  /**
+   * BACKLOG-3390 — the status this map was missing, and the one the founder
+   * pressed. Retyped here on purpose: this table is the EXACT-string pin, and
+   * importing the canonical value into it would make the pin assert only that
+   * a string equals itself. The containment tests below are where the import
+   * does the work.
+   */
+  resubmitted: {
+    title: "Already Resubmitted",
+    lead: "This transaction has already been resubmitted and is waiting for your broker to review the new version. If your broker asks for more changes you will be able to resubmit again.",
+  },
   approved: {
     title: "Already Approved",
     lead: "This submission has already been approved. There is nothing further to send.",
@@ -107,7 +118,7 @@ const EXPECTED: Record<string, { title: string; lead: string }> = {
 
 describe("BACKLOG-2868 — per-status copy on a blocked deal", () => {
   test.each(Object.keys(EXPECTED))(
-    "at '%s' the lead is that status's own copy, and none of the other three appear",
+    "at '%s' the lead is that status's own copy, and no other status's copy appears",
     (status) => {
       renderAt(status);
 
@@ -256,19 +267,23 @@ describe("BACKLOG-2868 — per-status copy on a blocked deal", () => {
     });
 
     /**
-     * Guards the containment assertion above from becoming vacuous. If the four
+     * Guards the containment assertion above from becoming vacuous. If the
      * canonical messages were ever collapsed to one shared string, every
-     * `toContain` would still pass while the modal said one thing four times —
-     * the defect, re-created one level up.
+     * `toContain` would still pass while the modal said one thing at every
+     * blocked status — the defect, re-created one level up.
+     *
+     * Counted off `BLOCKED_SUBMISSION_STATUSES.length` rather than a literal,
+     * so adding a status (BACKLOG-3390 added `resubmitted`) raises the bar
+     * instead of leaving a stale "four" that the new string never has to clear.
      */
-    test("the four canonical messages are four DISTINCT strings", () => {
+    test("the canonical messages are all DISTINCT strings", () => {
       const distinct = new Set(
         BLOCKED_SUBMISSION_STATUSES.map((s) => BLOCKED_SUBMISSION_MESSAGES[s])
       );
       expect(distinct.size).toBe(BLOCKED_SUBMISSION_STATUSES.length);
     });
 
-    test("and so are the four rendered leads", () => {
+    test("and so are the rendered leads", () => {
       const leads = new Set<string>();
       for (const status of BLOCKED_SUBMISSION_STATUSES) {
         renderAt(status);
@@ -280,9 +295,64 @@ describe("BACKLOG-2868 — per-status copy on a blocked deal", () => {
   });
 
   /**
+   * BACKLOG-3390 — NO REFUSAL THE USER READS MAY NAME A DATABASE OBJECT.
+   *
+   * The item was filed on this sentence, shown under the heading "Submission
+   * Failed":
+   *
+   *   Failed to insert submission: duplicate key value violates unique
+   *   constraint "transaction_submissions_org_txn_version_user_key"
+   *
+   * The patterns below are transcribed from it plus the SQL vocabulary that
+   * would arrive the same way (a Postgres SQLSTATE, a table name, a PostgREST
+   * code). Asserted over BOTH copies — the canonical strings the service throws
+   * AND what the modal actually renders — because either one reaching a user is
+   * the defect, and the modal's copy is written by hand.
+   */
+  test("no blocked-status sentence names a constraint, a table or a SQLSTATE", () => {
+    const FORBIDDEN: RegExp[] = [
+      /transaction_submissions/i,
+      /_key\b/,
+      /unique constraint/i,
+      /duplicate key/i,
+      /\bconstraint\b/i,
+      /\bSQL\b/,
+      /\b23505\b/,
+      /\bPGRST\d+/,
+      /\b(?:INSERT INTO|SELECT |UPDATE |DELETE FROM)\b/i,
+    ];
+
+    const subjects: Array<{ where: string; text: string }> = [];
+    for (const status of BLOCKED_SUBMISSION_STATUSES) {
+      subjects.push({
+        where: `canonical[${status}]`,
+        text: BLOCKED_SUBMISSION_MESSAGES[status],
+      });
+      renderAt(status);
+      subjects.push({ where: `rendered lead at '${status}'`, text: lead() });
+      cleanup();
+    }
+
+    // Anti-vacuity: an empty or short subject list would pass every assertion
+    // below while proving nothing. Two subjects per blocked status, non-empty.
+    expect(subjects).toHaveLength(BLOCKED_SUBMISSION_STATUSES.length * 2);
+    for (const s of subjects) {
+      expect(s.text.length).toBeGreaterThan(20);
+      for (const pattern of FORBIDDEN) {
+        expect({ where: s.where, matched: pattern.test(s.text) }).toEqual({
+          where: s.where,
+          matched: false,
+        });
+      }
+    }
+  });
+
+  /**
    * The statuses this change must NOT have moved. `needs_changes` is the
    * broker-returned deal that legitimately resubmits; `not_submitted` is the
-   * first-submit screen. Both were green before and must stay green.
+   * first-submit screen. Both were green before BACKLOG-2868 and before
+   * BACKLOG-3390, and must stay green: 3390 blocks the state AFTER a resubmit,
+   * never the state that starts one.
    */
   test("'needs_changes' and 'not_submitted' keep their live, non-blocked screens", () => {
     renderAt("needs_changes");
