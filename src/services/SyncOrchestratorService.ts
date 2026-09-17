@@ -102,6 +102,18 @@ export interface SyncItem {
    * described the phase list rather than the work. A value that is not known
    * must never render as known (BACKLOG-2886).
    *
+   * BACKLOG-3421 added three more setters, so "the messages import sets it" is
+   * no longer the whole story:
+   *   - EVERY leg is seeded with it at leg start, because at that instant no
+   *     producer has reported anything and `progress: 0` is a claim. A leg with
+   *     an honest number clears it on its own first tick.
+   *   - The CONTACTS leg sets it for its whole run: ~334ms, and its 0/50/100
+   *     were positions in a phase list rather than measurements (founder:
+   *     "i honestly thing we we even don't do a % for the contacts").
+   *   - The EMAILS leg sets it until the pre-cache producer emits a real
+   *     percent, then stops — the one leg here that goes from indeterminate to
+   *     honestly determinate mid-run.
+   *
    * NOTE FOR CONSUMERS: `progress` stays 0 for such an item, so
    * `item.progress ?? null` does NOT filter it out — `0 ?? null` is `0`. Gate
    * on THIS flag. See `SyncStatusIndicator`.
