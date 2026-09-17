@@ -252,6 +252,49 @@ describe('check-package-sanity: each rule fires on its own', () => {
     expect(stderr).not.toContain('build-output file(s)');
   });
 
+  it('flags the output directory by name, with nothing a signature would catch', () => {
+    // DERIVED, and the derivation is the point: after this branch the packager writes to
+    // release/, so a recurrence looks like these paths rather than the /dist/ ones the
+    // published manifests carry. Each entry here is a real v2.37.0 artifact path with its
+    // leading directory rewritten, chosen because NONE of them trips a signature — no
+    // `.app` segment, no nested `.asar`, no Electron Framework, no installer extension.
+    // Without the output-directory rule this manifest passes.
+    const asar = materialise(
+      'release-dir-only',
+      [
+        { path: '/release/mac-arm64/LICENSES.chromium.html', size: 15_200_000, offset: '0' },
+        { path: '/release/latest-mac.yml', size: 795, offset: '15200000' },
+        { path: '/release/builder-effective-config.yaml', size: 2048, offset: '15200795' },
+        { path: '/package.json', size: 1845, offset: '15202843' },
+      ],
+      1024,
+    );
+    const { status, stderr } = runGuard(['--output-dir', 'release', '--max-content-mb', '400', asar]);
+    expect(status).toBe(1);
+    expect(stderr).toContain('inside the packager\'s own output directory "release/"');
+    expect(stderr).not.toContain('nested application bundle');
+    expect(stderr).not.toContain('2 GiB offset boundary');
+  });
+
+  it('leaves the same files alone when they are not under the output directory', () => {
+    // The mirror of the case above: identical entries, `--output-dir` naming a directory
+    // they are not in. Nothing else about them is suspicious, so the guard must pass —
+    // otherwise the rule above is being satisfied by something other than the name.
+    const asar = materialise(
+      'release-dir-only-renamed',
+      [
+        { path: '/release/mac-arm64/LICENSES.chromium.html', size: 15_200_000, offset: '0' },
+        { path: '/release/latest-mac.yml', size: 795, offset: '15200000' },
+        { path: '/release/builder-effective-config.yaml', size: 2048, offset: '15200795' },
+        { path: '/package.json', size: 1845, offset: '15202843' },
+      ],
+      1024,
+    );
+    const { status, stderr } = runGuard(['--output-dir', 'out', '--max-content-mb', '400', asar]);
+    expect(stderr).toBe('');
+    expect(status).toBe(0);
+  });
+
   it('flags the content ceiling with nothing else wrong', () => {
     const asar = materialise('arm64-fixed', arm64Fixed, arm64.source.dataStart);
     const { status, stderr } = runGuard(['--output-dir', 'release', '--max-content-mb', '10', asar]);
