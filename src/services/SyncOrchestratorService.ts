@@ -359,7 +359,28 @@ class SyncOrchestratorServiceClass {
     // TASK-2098: Read contact source preferences to conditionally skip phases
     this.registerSyncFunction('contacts', async (userId, onProgress, options, signal) => {
       logger.info('[SyncOrchestrator] Starting contacts sync, forceReimport:', !!options?.forceReimport);
-      onProgress(0);
+      // BACKLOG-3421: THIS LEG REPORTS NO PERCENTAGE, AT ANY POINT.
+      //
+      // The founder, on seeing the dashboard already at 50 whenever he looked:
+      // "i honestly thing we we even don't do a % for the contacts its fine
+      // since they are alwasy so fast". It is — 334ms measured, 321-577ms
+      // across his runs, about 0.6% of a first sync against ~84% for the email
+      // download.
+      //
+      // The three numbers this leg used to emit (0 here, 50 after the macOS
+      // phase, 100 at the end) were the emails leg's hard-coded 50 in
+      // miniature: positions in a phase LIST, not measurements. The phases take
+      // wildly different times, two of the three are skipped outright whenever
+      // a source is unticked, and the 50 arrived a few hundred milliseconds in
+      // and sat there for the rest of the run. A value that is not known must
+      // never render as known (BACKLOG-2886).
+      //
+      // The mechanism is the existing `indeterminate` flag — the same one the
+      // macOS Messages import uses, documented at the top of this file — so the
+      // dashboard's existing gate suppresses the number with no renderer
+      // change. No phase label is invented either: contacts has no honest
+      // per-phase vocabulary, so the pill reads "Contacts".
+      onProgress(0, undefined, { indeterminate: true });
 
       if (signal?.aborted) return;
 
@@ -431,7 +452,9 @@ class SyncOrchestratorServiceClass {
         logger.info('[SyncOrchestrator] Skipping macOS Contacts (disabled by user preference)');
       }
 
-      onProgress(50);
+      // BACKLOG-3421: the mid-leg `onProgress(50)` that used to sit here is
+      // gone rather than flagged. A number nothing reads is a trap for whoever
+      // touches this next.
 
       if (signal?.aborted) return;
 
@@ -533,7 +556,13 @@ class SyncOrchestratorServiceClass {
         }
       }
 
-      onProgress(100);
+      // BACKLOG-3421: the leg's end still reports, and still reports no number.
+      // The flag is repeated rather than dropped because a bare `onProgress(100)`
+      // would CLEAR it (`updateQueueItem` writes `indeterminate:
+      // detail?.indeterminate`), painting a determinate "100%" on an item that
+      // is still 'running' — and on the reconnect path below the leg then throws
+      // rather than completing, so that frame would be the last one rendered.
+      onProgress(100, undefined, { indeterminate: true });
 
       // BACKLOG-2142: all phases have run (macOS contacts persisted, BOTH cloud
       // providers attempted). If a cloud token was dead, surface it now as a
