@@ -562,7 +562,20 @@ class SyncOrchestratorServiceClass {
     // Register emails sync (all platforms - API-based)
     this.registerSyncFunction('emails', async (userId, onProgress, _options, signal) => {
       logger.info('[SyncOrchestrator] Starting emails sync');
-      onProgress(0);
+      // BACKLOG-3421: this leg reports NO percentage until the pre-cache
+      // producer emits a real one.
+      //
+      // What used to be here: `onProgress(0)`, then a hard-coded
+      // `onProgress(50)` emitted BEFORE `precacheEmails` ran and held for its
+      // entire duration — 48s on the founder's own machine, and he reports five
+      // minutes for some users — then 100. "Emails 50%" for a minute was the
+      // midpoint of a two-item list, not a measurement of anything, and it is
+      // the flat number that opened this item.
+      //
+      // The AI scan below is the one stretch of this leg with no producer behind
+      // it, so it says so instead of standing in a placeholder (BACKLOG-2886: a
+      // value that is not known must never render as known).
+      onProgress(0, undefined, { indeterminate: true });
 
       // AI scan (non-fatal — precache should run regardless)
       if (signal?.aborted) return;
@@ -597,7 +610,6 @@ class SyncOrchestratorServiceClass {
       } else {
         logger.info('[SyncOrchestrator] Skipping AI email scan — ai_detection not entitled (precache still runs)');
       }
-      onProgress(50);
 
       // BACKLOG-1362: Pre-cache emails from connected providers.
       // Independent of AI scan — runs for all users with email connected.
@@ -608,10 +620,53 @@ class SyncOrchestratorServiceClass {
       // with Errors" variant and drives the reconnect prompt, instead of a
       // green "0 new messages". Transient/network precache failures stay
       // non-fatal (no providerError → caught + warned below).
+      //
+      // BACKLOG-3421: THE PRE-CACHE'S OWN PROGRESS IS WHAT THIS LEG REPORTS.
+      //
+      // `precacheEmails` has published real, interpolated, monotonically
+      // non-decreasing progress on `emails:precache-progress` since
+      // BACKLOG-2856, and until now its only consumer in the app was the
+      // Settings panel (`EmailSettings`). Subscribing here is the whole fix:
+      // this stage measured ~84% of the founder's first sync, so it is the one
+      // stretch where a moving number is worth anything.
+      //
+      // IPC listener OWNED here — the same rule the messages leg follows. It is
+      // created immediately before the invoke and torn down in the `finally`
+      // below, on success, throw and abort alike. The channel is app-global, so
+      // a listener that outlived this leg would let a Settings-initiated
+      // re-cache drive a dashboard row with no dashboard run behind it.
+      //
+      // The subscribe is guarded the way `EmailSettings` guards it: an older
+      // preload does not have it, and neither does any test double that mocks
+      // `window.api.transactions` without it.
+      const subscribeToPrecacheProgress = window.api.transactions.onPrecacheProgress;
+      const stopListening = subscribeToPrecacheProgress
+        ? subscribeToPrecacheProgress((progress) => {
+            // The terminal event is deliberately NOT forwarded. It carries no
+            // progress this leg does not already own, and on an error or a
+            // cancel its `percent` is the last percent the run reached — so
+            // forwarding it would pin a stale number on a leg that has stopped.
+            // The leg's completion (`startSync`) writes the 100.
+            if (progress.phase === 'done') return;
+            // Counts ride TOGETHER or not at all, which is the messages
+            // listener's contract above: a `current` with no `total` is a state
+            // no producer in this tree emits.
+            const hasCounts = progress.total > 0;
+            // `stage` travels as the item's phase, not `phase`, because `stage`
+            // is the one of the two with user-facing copy
+            // (`emailPrecacheStageDisplay`, which this item makes the dashboard
+            // its second consumer of). It is absent on the boundary events, on
+            // the backfill sweep and on both non-fetch phases, so the pill has
+            // to render without one — and does.
+            onProgress(progress.percent, progress.stage, {
+              current: hasCounts ? progress.current : undefined,
+              total: hasCounts ? progress.total : undefined,
+            });
+          })
+        : undefined;
       try {
         logger.info('[SyncOrchestrator] Starting email pre-cache');
-        // TODO: Pass progress callback to precacheEmails to report 50-100% progress during precache
-        const { providerError } = await window.api.transactions.precacheEmails(userId);
+        const { providerError, rateLimited } = await window.api.transactions.precacheEmails(userId);
         if (providerError?.tokenExpired) {
           const providerLabel = providerError.provider === 'microsoft' ? 'Outlook' : 'Gmail';
           throw new EmailReconnectError(
@@ -619,7 +674,16 @@ class SyncOrchestratorServiceClass {
             `${providerLabel} connection expired — reconnect to sync email`,
           );
         }
-        logger.info('[SyncOrchestrator] Email pre-cache complete');
+        // BACKLOG-3421: a refused run is not a completed one. The rate limiter
+        // returns before `precacheEmails` starts — so this leg receives no
+        // progress events at all, which is why it now reports no number for the
+        // ~2ms it lasts instead of the old 50 then 100. Branching on the typed
+        // flag, never on the error text.
+        if (rateLimited) {
+          logger.info('[SyncOrchestrator] Email pre-cache refused by the rate limiter — nothing was fetched');
+        } else {
+          logger.info('[SyncOrchestrator] Email pre-cache complete');
+        }
       } catch (precacheError) {
         // Re-throw auth-class failures (typed EmailReconnectError) so the emails
         // item errors AND carries the provider for the reconnect CTA; keep
@@ -628,9 +692,15 @@ class SyncOrchestratorServiceClass {
           throw precacheError;
         }
         logger.warn('[SyncOrchestrator] Email pre-cache failed (non-fatal):', precacheError);
+      } finally {
+        stopListening?.();
       }
 
-      onProgress(100);
+      // BACKLOG-3421: no `onProgress(100)` here. It was redundant — the
+      // completion in `startSync` writes `progress: 100` — and on the
+      // rate-limited path it was the last invented number in this leg: it would
+      // clear the indeterminate flag and paint a determinate "100%" on a leg
+      // that is still 'running' and has fetched nothing.
       logger.info('[SyncOrchestrator] Emails sync complete');
     });
 
@@ -1389,7 +1459,21 @@ class SyncOrchestratorServiceClass {
         }
 
         // Update current sync
-        this.updateQueueItem(type, { status: 'running', progress: 0 });
+        //
+        // BACKLOG-3421: the seed is INDETERMINATE, because at this instant no
+        // producer has reported anything and `progress: 0` is therefore a value
+        // presented as known that is not. On the messages leg that window is
+        // ~380ms of a hard "0%" on the dashboard — a fabricated known value,
+        // which is precisely what BACKLOG-3128 removed from the rest of that
+        // leg and left here. `honestProgress-3128.test.tsx` could not have
+        // caught it: it constructs the item already flagged.
+        //
+        // One uniform rule rather than a per-type table that would drift out of
+        // date. A leg with an honest number of its own clears the flag on its
+        // OWN first tick: `updateQueueItem` writes `indeterminate:
+        // detail?.indeterminate`, so any `onProgress(n)` that passes no detail
+        // sets it back to undefined.
+        this.updateQueueItem(type, { status: 'running', progress: 0, indeterminate: true });
         this.setState({ currentSync: type });
 
         Sentry.addBreadcrumb({
