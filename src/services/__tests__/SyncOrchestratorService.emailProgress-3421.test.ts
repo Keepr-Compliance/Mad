@@ -17,30 +17,29 @@
  * at a control that ran green because the code under test was the one thing the
  * fixture replaced.
  *
- * THE FIXTURE IS TRANSCRIBED, NOT INVENTED. Every progress payload below has
- * the shape `emailPrecacheProgress.ts` defines and the values `precacheEmails`
- * actually emits: `percent` interpolated inside the published anchors
- * (`EMAIL_PRECACHE_FETCH_RANGE`: 10..30 for the Outlook inbox, 50..54 for the
- * Gmail scan), a `stage` only while `phase` is `"fetching"`, and a terminal
- * `"done"` carrying an `outcome`.
+ * THE FIXTURE'S SHAPE IS THE PRODUCER'S; ITS VALUES ARE HAND-CHOSEN. Every
+ * payload below has the shape `emailPrecacheProgress.ts` defines — the field
+ * names, a `stage` only while `phase` is `"fetching"`, and a terminal `"done"`
+ * carrying an `outcome`. The VALUES were picked to drive a test, not
+ * transcribed from a run, so NO payload in this file may be cited as evidence
+ * of what `precacheEmails` emits — none of them, not a named subset. For what
+ * the producer does emit, read the producer, or its own pinned test
+ * (`electron/services/__tests__/emailSyncService.precacheProgress-2856.test.ts`).
  *
- * WITH TWO DEPARTURES. The first is deliberate and load-bearing: the run in
+ * ONE DEPARTURE IS CALLED OUT BECAUSE A CONTROL DEPENDS ON IT, not because it
+ * is the only one. The run in
  * "reports no number this run did not measure" WITHHOLDS the
  * `FETCH_SECOND_PROVIDER` boundary event, which a real run emits
  * unconditionally. That omission is the only thing making that control
  * distinguishing, and its own header says so at length.
  *
- * The second is inaccuracy, recorded rather than quietly corrected so that the
- * transcription claim above is not read as covering it. Three payloads pair a
- * `stage` with a `percent` outside that round's slice — `outlook-inbox` with 34
- * twice, and `gmail-messages` with 77 — where `EMAIL_PRECACHE_FETCH_RANGE` puts
- * the inbox at 10..29, the Gmail scan and bodies at 50..69, and 77 inside
- * `gmail-labels`. Each percent and each stage is individually emittable; the
- * PAIR is not. Neither test that uses them asserts that a pair is producible:
- * one checks that an arriving payload is forwarded field for field, the other
- * that a cancel freezes the item at the earlier percent and never shows the
- * later one, and both would read identically with a producible pair. Do not
- * cite these payloads as evidence of what the producer emits.
+ * Two axes on which payloads here are known to depart, given as EXAMPLES and
+ * not as a census: a `stage` paired with a `percent` outside that round's
+ * published slice in `EMAIL_PRECACHE_FETCH_RANGE`, and a `current` differing
+ * from a `total` the producer emits equal to it (the Outlook folder walk, the
+ * Gmail label walk and the `FETCH_DONE` boundary each pass one value for
+ * both). Further axes have not been enumerated, and the bounded claim above is
+ * the one to rely on.
  */
 
 import type { SyncItem } from '../SyncOrchestratorService';
