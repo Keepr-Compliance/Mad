@@ -24,12 +24,23 @@
  * Gmail scan), a `stage` only while `phase` is `"fetching"`, and a terminal
  * `"done"` carrying an `outcome`.
  *
- * WITH ONE DELIBERATE DEPARTURE, and it is load-bearing rather than incidental:
- * the run in "reports no number this run did not measure" WITHHOLDS the
+ * WITH TWO DEPARTURES. The first is deliberate and load-bearing: the run in
+ * "reports no number this run did not measure" WITHHOLDS the
  * `FETCH_SECOND_PROVIDER` boundary event, which a real run emits
  * unconditionally. That omission is the only thing making that control
- * distinguishing, and its own header says so at length. Nothing else in this
- * file departs from what the producer emits.
+ * distinguishing, and its own header says so at length.
+ *
+ * The second is inaccuracy, recorded rather than quietly corrected so that the
+ * transcription claim above is not read as covering it. Three payloads pair a
+ * `stage` with a `percent` outside that round's slice — `outlook-inbox` with 34
+ * twice, and `gmail-messages` with 77 — where `EMAIL_PRECACHE_FETCH_RANGE` puts
+ * the inbox at 10..29, the Gmail scan and bodies at 50..69, and 77 inside
+ * `gmail-labels`. Each percent and each stage is individually emittable; the
+ * PAIR is not. Neither test that uses them asserts that a pair is producible:
+ * one checks that an arriving payload is forwarded field for field, the other
+ * that a cancel freezes the item at the earlier percent and never shows the
+ * later one, and both would read identically with a producible pair. Do not
+ * cite these payloads as evidence of what the producer emits.
  */
 
 import type { SyncItem } from '../SyncOrchestratorService';
