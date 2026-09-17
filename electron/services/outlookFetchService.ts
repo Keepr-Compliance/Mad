@@ -1937,7 +1937,26 @@ class OutlookFetchService {
       // BACKLOG-1802: upper date bound propagated to every folder for delta windowing.
       before?: Date | null;
       maxResults?: number;
-      onProgress?: (progress: FetchProgress & { folder?: string; currentFolder?: string }) => void;
+      /**
+       * Per-page progress, forwarded from each folder's own paging loop.
+       *
+       * `fetched` / `percentage` describe THE CURRENT FOLDER ONLY — `fetched`
+       * restarts at zero on every folder and `searchEmailsByFolder` has no count
+       * to divide by, so it always reports `percentage: 0, hasEstimate: false`.
+       * A caller drawing a bar from those alone would see it reset once per
+       * folder. `folderIndex` / `folderCount` are the walk-level pair that is
+       * actually monotone, and they are what `precacheEmails` draws with.
+       */
+      onProgress?: (
+        progress: FetchProgress & {
+          folder?: string;
+          currentFolder?: string;
+          /** 0-based index of the folder being fetched. */
+          folderIndex?: number;
+          /** How many folders the walk will visit in total. */
+          folderCount?: number;
+        },
+      ) => void;
       /** BACKLOG-2856: stop between folders, and inside each folder's paging. */
       signal?: AbortSignal;
     } = {}
@@ -1956,7 +1975,8 @@ class OutlookFetchService {
       const seenMessageIds = new Set<string>();
       const allEmails: ParsedEmail[] = [];
 
-      for (const folder of folders) {
+      for (let folderIndex = 0; folderIndex < folders.length; folderIndex++) {
+        const folder = folders[folderIndex];
         // BACKLOG-2856 — THE BETWEEN-FOLDER CHECK.
         //
         // This is the boundary the founder's 28.3-second cancel was waiting on.
@@ -1981,6 +2001,8 @@ class OutlookFetchService {
                   options.onProgress!({
                     ...progress,
                     currentFolder: folder.displayName,
+                    folderIndex,
+                    folderCount: folders.length,
                   });
                 }
               : undefined,
