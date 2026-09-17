@@ -85,11 +85,20 @@ jest.mock("../../../components/sync/SyncLockBanner", () => ({
   SyncLockBanner: () => <div data-testid="sync-lock-banner">Locked</div>,
 }));
 
+/**
+ * Real transfer is under way in every syncing fixture below: bytes and files
+ * have moved. Without them, an auto-close re-added to fire only once transfer
+ * starts ("bytesProcessed > 0") never sees its condition met and every test here
+ * stays green. With them, both that variant and the original backing_up trigger
+ * go red. (SR measured both, BACKLOG-3416.)
+ */
+const TRANSFERRING = { bytesProcessed: 500 * 1024 * 1024, processedFiles: 12 };
+
 /** The phase the auto-close used to fire on, reached while the phone may still be locked. */
 const backingUp: UseIPhoneSyncReturn = {
   ...baseSync,
   syncStatus: "syncing",
-  progress: { phase: "backing_up", percent: 30, message: "Transferring…" },
+  progress: { phase: "backing_up", percent: 30, message: "Transferring…", ...TRANSFERRING },
 };
 
 describe("BACKLOG-3416: IPhoneSyncModal never minimises itself", () => {
@@ -123,7 +132,7 @@ describe("BACKLOG-3416: IPhoneSyncModal never minimises itself", () => {
       mockContextValue = {
         ...baseSync,
         syncStatus: "syncing",
-        progress: { phase, percent: 40 },
+        progress: { phase, percent: 40, ...TRANSFERRING },
       };
       rerender(<IPhoneSyncModal onClose={onClose} />);
       expect(onClose).not.toHaveBeenCalled();
