@@ -45,7 +45,15 @@ function isFocusVisible(el: Element): boolean {
   }
 }
 
-export function InfoTooltip({ text, wide = false }: { text: string; wide?: boolean }) {
+/**
+ * `text` is a ReactNode, not a string (BACKLOG-3415). 15 of the 16 call sites
+ * pass a plain string and are unaffected; the Transaction Dates tooltip passes
+ * JSX so each date's name can be bold on its own line. Nothing else consumes
+ * this value — there is no `title` attribute and no string-only assumption. The
+ * bubble is the `aria-describedby` target, so its rendered content is what a
+ * screen reader announces; keep any JSX in reading order.
+ */
+export function InfoTooltip({ text, wide = false }: { text: React.ReactNode; wide?: boolean }) {
   const [show, setShow] = useState(false);
   const [pos, setPos] = useState({ top: 0, left: 0 });
   // undefined = not measured yet; null = no interactive ancestor.

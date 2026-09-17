@@ -113,6 +113,28 @@ describe("InfoTooltip — standalone trigger", () => {
     expect(bubble.className).toContain("whitespace-pre-line");
     expect(bubble.className).not.toContain("w-52");
   });
+
+  it("renders a plain string exactly as before, and markup when given a node (BACKLOG-3415)", async () => {
+    const user = userEvent.setup();
+
+    // `text` was widened from string to ReactNode so the Transaction Dates
+    // tooltip can bold each date's name. 15 of the 16 call sites still pass a
+    // plain string: the bubble must hold that string and nothing else — no
+    // wrapper element introduced by the widening.
+    const { unmount } = render(<InfoTooltip text="Plain string body" />);
+    await user.hover(trigger());
+    const plain = screen.getByRole("tooltip");
+    expect(plain).toHaveTextContent("Plain string body");
+    expect(plain.childElementCount).toBe(0);
+    expect(plain.innerHTML).toBe("Plain string body");
+    unmount();
+
+    render(<InfoTooltip wide text={<strong className="font-semibold">Bold body</strong>} />);
+    await user.hover(trigger());
+    const rich = screen.getByRole("tooltip");
+    expect(rich.querySelector("strong")).not.toBeNull();
+    expect(rich.querySelector("strong")!.textContent).toBe("Bold body");
+  });
 });
 
 describe("InfoTooltip — clicking or pressing keys on the icon is inert", () => {

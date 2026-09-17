@@ -205,11 +205,22 @@ function AddressVerificationStep({
                 lines that sat under the inputs, so this is now the only place
                 either date is explained. The End Date wording is the founder's
                 own definition. */}
+            {/* BACKLOG-3415: each date's name bold on its own line, its
+                definition beneath, a blank line between the two entries. The
+                wording is unchanged; only the layout is. */}
             <InfoTooltip
               wide
               text={
-                "Representation Start Date: when you started representing this client on this deal.\n" +
-                "End Date: the last date you communicated with the client about this transaction, by text or email."
+                <span className="block space-y-3">
+                  <span className="block">
+                    <strong className="block font-semibold">Representation Start Date</strong>
+                    when you started representing this client on this deal.
+                  </span>
+                  <span className="block">
+                    <strong className="block font-semibold">End Date</strong>
+                    the last date you communicated with the client about this transaction, by text or email.
+                  </span>
+                </span>
               }
             />
           </label>

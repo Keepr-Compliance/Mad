@@ -13,6 +13,9 @@
  *     BOTH dates; the start-date label has no icon, and the two helper lines
  *     that used to sit under the inputs are gone (founder, 2026-09-17,
  *     BACKLOG-3415)
+ *   - inside that tooltip each date's name is bold on its own line with its
+ *     definition beneath it, and a blank line separates the two entries
+ *     (founder, 2026-09-17, BACKLOG-3415)
  *   - End Date is deliberately optional — no asterisk, no `required`, no
  *     red-when-empty border. An empty end date is how an ongoing deal is
  *     represented (founder, 2026-09-16). Representation Start Date keeps all
@@ -106,19 +109,54 @@ describe("AddressVerificationStep — dates section", () => {
     expect(screen.queryByText("(?)")).toBeNull();
   });
 
-  it("explains both dates in that one tooltip", async () => {
+  it("explains both dates in that one tooltip, each name bold on its own line", async () => {
     const user = userEvent.setup();
     renderStep();
     const heading = screen.getByText("Transaction Dates");
     await user.hover(heading.querySelector('[data-testid="info-tooltip-trigger"]')!);
 
     const bubble = screen.getByRole("tooltip");
+
+    // Both definitions are still there, wording untouched. BACKLOG-3415 changed
+    // the layout only: the single "Name: definition" run became a bold name on
+    // its own line with the definition beneath it, so the old concatenated
+    // assertion is split into a definition check and the structure checks below
+    // rather than dropped.
     expect(bubble).toHaveTextContent(
-      "Representation Start Date: when you started representing this client on this deal.",
+      "when you started representing this client on this deal.",
     );
     expect(bubble).toHaveTextContent(
-      "End Date: the last date you communicated with the client about this transaction, by text or email.",
+      "the last date you communicated with the client about this transaction, by text or email.",
     );
+
+    // Reading order — this bubble is the aria-describedby target, so its
+    // content order is what a screen reader announces.
+    expect(bubble.textContent).toMatch(
+      /Representation Start Date.*when you started representing this client on this deal\..*End Date.*the last date you communicated/s,
+    );
+
+    // Each date's NAME is bold and occupies its own line.
+    const names = Array.from(bubble.querySelectorAll("strong"));
+    expect(names.map((el) => el.textContent)).toEqual([
+      "Representation Start Date",
+      "End Date",
+    ]);
+    for (const name of names) {
+      expect(name.className).toContain("block");
+      expect(name.className).toContain("font-semibold");
+    }
+
+    // Two entries with a blank line between them. A flatten back to one run of
+    // text leaves the bubble with no element structure at all.
+    const list = bubble.firstElementChild!;
+    expect(list.className).toContain("space-y-3");
+    const entries = Array.from(list.children);
+    expect(entries).toHaveLength(2);
+    entries.forEach((entry, i) => {
+      // name element first, definition as the bare text node after it
+      expect(entry.firstElementChild).toBe(names[i]);
+      expect(entry.childElementCount).toBe(1);
+    });
   });
 
   it("no longer renders the helper lines under the date inputs", () => {
