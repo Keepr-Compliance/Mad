@@ -30,8 +30,11 @@ const SETTINGS_TABS = [
   { id: "settings-general", label: "General" },
   { id: "settings-email", label: "Email" },
   { id: "settings-messages", label: "Messages" },
-  // BACKLOG-1937: merged "Sync Tools" + iPhone USB toggle into one iPhone Sync category
-  { id: "settings-iphone-sync", label: "iPhone Sync" },
+  // BACKLOG-3423: no "iPhone Sync" nav entry, for any user on any platform.
+  // The iPhone Sync SECTION below (#settings-iphone-sync, BACKLOG-1937's merge
+  // of "Sync Tools" + the iPhone USB toggle) stays on the page and stays
+  // reachable by scrolling — grayed out and disabled unless the import source
+  // is iPhone, so a user can see the feature exists and is currently off.
   { id: "settings-contacts", label: "Contacts" },
   { id: "settings-ai", label: "AI" },
   { id: "settings-security", label: "Security" },

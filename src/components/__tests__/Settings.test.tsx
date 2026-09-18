@@ -1296,13 +1296,46 @@ describe("Settings", () => {
 
   // BACKLOG-1937: merged iPhone Sync category + gray-out gating
   describe("iPhone Sync Category (BACKLOG-1937)", () => {
-    it("should show an 'iPhone Sync' tab and no longer a 'Sync' tab", async () => {
+    // BACKLOG-3423: the nav entry is gone for every user on every platform; the
+    // SECTION stays on the page, grayed out, so a user can see the feature is
+    // there and currently off.
+    //
+    // The tab and the section <h3> render the SAME literal text, "iPhone Sync",
+    // so a bare `getAllByText("iPhone Sync")` cannot tell them apart. The
+    // previous assertion here (`.length >= 1`) was measured against the tab
+    // deletion and stayed GREEN — it could not see the change at all. Both
+    // assertions below are therefore anchored: one inside the tab strip, one
+    // inside `#settings-iphone-sync`.
+    it("should NOT offer an 'iPhone Sync' nav tab (BACKLOG-3423)", async () => {
       await renderSettings({ userId: mockUserId, onClose: mockOnClose });
 
-      // New tab present (label appears in the tab bar + the category <h3>)
-      expect(screen.getAllByText("iPhone Sync").length).toBeGreaterThanOrEqual(1);
-      // Old standalone "Sync" tab gone
-      expect(screen.queryByText("Sync")).not.toBeInTheDocument();
+      // Anti-vacuity: the strip rendered and has tabs, so a "no iPhone tab"
+      // result cannot come from an empty or missing tab bar.
+      const tabStrip = screen.getByTestId("settings-tabs");
+      expect(within(tabStrip).getAllByRole("tab").length).toBeGreaterThan(0);
+
+      // No iPhone Sync entry among them — checked by testid and by accessible
+      // name, scoped to the strip so the section <h3> cannot satisfy either.
+      expect(screen.queryByTestId("settings-tab-iphone-sync")).not.toBeInTheDocument();
+      expect(
+        within(tabStrip).queryByRole("tab", { name: "iPhone Sync" }),
+      ).not.toBeInTheDocument();
+      // Old standalone "Sync" tab gone as well
+      expect(within(tabStrip).queryByRole("tab", { name: "Sync" })).not.toBeInTheDocument();
+    });
+
+    it("still shows the iPhone Sync section heading on the page (BACKLOG-3423)", async () => {
+      const { container } = await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+
+      const section = container.querySelector<HTMLElement>("#settings-iphone-sync");
+      expect(section).toBeInTheDocument();
+
+      // The section's own heading, scoped inside the section. `name` is an
+      // exact string match, so the <h4>iPhone Sync (USB)</h4> that the toggle
+      // renders inside this same section does NOT satisfy it.
+      expect(
+        within(section as HTMLElement).getByRole("heading", { name: "iPhone Sync" }),
+      ).toBeInTheDocument();
     });
 
     it("should render the iPhone Sync category section anchor", async () => {
