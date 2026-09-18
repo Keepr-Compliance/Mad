@@ -218,6 +218,15 @@ applyLogFileConfig(log.transports.file);
 // This import only binds the namespace for the calls below.
 import * as Sentry from "@sentry/electron/main";
 import { runStartupHealthChecks } from "./services/startupHealthCheck";
+import { getInstallMode } from "./services/diagnostics/installMode";
+
+// BACKLOG-3432: which installer this build came from, as a derived value only.
+// The Windows one-click installer migrates a prior per-machine install to
+// per-user; a user who declines the elevation prompt stays where they were and
+// is told nothing. This value is what makes that user findable afterwards
+// instead of invisible. NEVER report process.execPath -- a per-user path
+// contains the Windows account name. See services/diagnostics/installMode.ts.
+const installMode = getInstallMode(app.isPackaged);
 
 // TASK-2330: Set auto-updater context immediately after Sentry.init()
 // so all subsequent events/breadcrumbs carry version + platform info
@@ -226,7 +235,15 @@ Sentry.setContext("auto-updater", {
   platform: process.platform,
   arch: process.arch,
   feedRepo: "Keepr-Compliance/keepr-releases",
+  installMode,
 });
+
+// A context field is not searchable in Sentry issue search; a tag is. The tag
+// is what turns "somebody may be stuck" into the list of who.
+Sentry.setTag("install_mode", installMode);
+// Logged as well so the value is observable locally, without waiting for a
+// Sentry event to fire.
+log.info(`[Startup] Install mode: ${installMode}`);
 
 // Global error handlers - must be registered early, before any async operations
 // These catch uncaught exceptions and unhandled promise rejections to prevent silent crashes
