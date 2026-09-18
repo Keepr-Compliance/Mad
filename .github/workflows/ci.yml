@@ -943,7 +943,7 @@ jobs:
   package:
     name: Package Application
     runs-on: ${{ matrix.os }}
-    needs: [check-changes]
+    needs: [check-changes, test, build]
     if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/fix/BACKLOG-3438-package-guard-arch') && needs.check-changes.outputs.docs-only != 'true'
 
     strategy:
@@ -989,7 +989,7 @@ jobs:
           set -o pipefail
           echo "Building unsigned macOS package (arm64 + x64)..."
           export CSC_IDENTITY_AUTO_DISCOVERY=false
-          if ! npm run package:unsigned-CONTROL-3438 2>&1 | tee package.log; then
+          if ! npm run package:unsigned 2>&1 | tee package.log; then
             echo "::error::Unsigned package build failed. Check package.log for details."
             cat package.log
             exit 1
@@ -1089,10 +1089,15 @@ jobs:
           # fires only when BOTH are empty. Count them here instead: one DMG means
           # one architecture shipped, which is the failure this job missed for
           # eleven days.
-          DMGS=$(ls -1 release/*.dmg 2>/dev/null | wc -l | tr -d ' ')
-          ZIPS=$(ls -1 release/*.zip 2>/dev/null | wc -l | tr -d ' ')
+          #
+          # The `|| true` on each pipeline is load-bearing. An unmatched glob makes
+          # `ls` exit non-zero, and under `set -eo pipefail` that ends the step
+          # immediately -- red, but with no ::error:: line saying why, which is the
+          # one case these counts exist to describe.
+          DMGS=$(ls -1 release/*.dmg 2>/dev/null | wc -l | tr -d ' ' || true)
+          ZIPS=$(ls -1 release/*.zip 2>/dev/null | wc -l | tr -d ' ' || true)
           echo "Found $DMGS dmg, $ZIPS zip:"
-          ls -la release/*.dmg release/*.zip
+          ls -la release/*.dmg release/*.zip || true
           [ "$DMGS" -eq 2 ] || { echo "::error::Expected 2 .dmg files, found $DMGS"; exit 1; }
           [ "$ZIPS" -eq 2 ] || { echo "::error::Expected 2 .zip files, found $ZIPS"; exit 1; }
           echo "OK: both architectures packaged."
