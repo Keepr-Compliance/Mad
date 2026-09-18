@@ -1,2 +1,0 @@
-Push B: rehearsal for BACKLOG-3438. Non-docs sentinel so the docs-only filter
-leaves test/build/package enabled. Deleted before the PR.

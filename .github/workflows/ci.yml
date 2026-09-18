@@ -944,7 +944,7 @@ jobs:
     name: Package Application
     runs-on: ${{ matrix.os }}
     needs: [check-changes, test, build]
-    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/fix/BACKLOG-3438-package-guard-arch') && needs.check-changes.outputs.docs-only != 'true'
+    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop') && needs.check-changes.outputs.docs-only != 'true'
 
     strategy:
       matrix:
