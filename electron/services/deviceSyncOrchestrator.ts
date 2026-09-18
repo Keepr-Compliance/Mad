@@ -569,6 +569,12 @@ export class DeviceSyncOrchestrator extends EventEmitter {
   private setupEventForwarding(): void {
     // Forward backup progress events
     this.backupService.on("progress", (progress: BackupProgress) => {
+      // BACKLOG-3440: THE ONLY PLACE THE BYTE COUNT IS OBSERVED, so it is the only place
+      // it can be recorded. The timeline keeps a high-water mark and the timestamp of
+      // the last increase; the pair is what separates "57 GB moving slowly" from "2 GB
+      // and then nothing" — the distinction the 2026-09-16 incident could not make.
+      syncTimeline.recordBytesTransferred(progress.bytesTransferred);
+
       // Calculate progress based on bytes transferred if we have estimated size
       let calculatedProgress = progress.percentComplete;
       if (this.estimatedBackupSize > 0 && progress.bytesTransferred > 0) {
@@ -595,6 +601,25 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     // Forward password required events
     this.backupService.on("password-required", () => {
       this.emit("password-required");
+    });
+
+    // BACKLOG-3440: FIRST SYNC OR INCREMENTAL, RECORDED THE MOMENT THE DEVICE SAYS SO.
+    //
+    // The founder called this one "super important", and the reason he had to ask is
+    // measurable: across the 19 rows recorded before this change, all 5 `cancelled` runs
+    // had `incremental` and `backup_mode_source` NULL, because both were written after
+    // the sync resolved and a run that never resolves never reaches that line. A first
+    // sync and an incremental sync have completely different expected durations, so any
+    // judgement about "this is taking too long" is meaningless without knowing which is
+    // running — and that judgement is most needed on exactly the runs that were missing
+    // it. `backupService` parses the device's own "Full backup mode." / "Incremental
+    // backup mode." line mid-run; this carries it to the row at that moment instead of
+    // at the end.
+    this.backupService.on("backup-mode", (mode: "incremental" | "full") => {
+      syncTimeline.setContext({
+        incremental: mode === "incremental",
+        backupModeSource: "device-reported",
+      });
     });
 
     // BACKLOG-2911 (FIX 3): the event name is historical. It means "the device has not
@@ -1387,6 +1412,15 @@ export class DeviceSyncOrchestrator extends EventEmitter {
             estimatedBackupSize: this.estimatedBackupSize,
           },
         });
+        // BACKLOG-3440: the app stopped this run to protect the volume. That is neither
+        // a user act nor a device fault, and the row can now say which it was.
+        //
+        // `endedBy` only, deliberately no `reasonCode`. `reason_code` carries the
+        // `BackupErrorCode` union and nothing else; inventing a fourteenth value here
+        // would be the same mistake BACKLOG-2953 found — a string outside the union,
+        // hidden from `tsc` — and `ended_by=host-guard` already identifies this
+        // completely.
+        syncTimeline.setContext({ endedBy: "host-guard" });
         this.isRunning = false;
         this.setPhase("error");
         this.emit("error", { message });
@@ -1425,6 +1459,32 @@ export class DeviceSyncOrchestrator extends EventEmitter {
 
       if (!backupResult.success || !backupResult.backupPath) {
         const error = backupResult.error || "Backup failed";
+
+        // BACKLOG-3440: STOP DISCARDING THE CAUSE THAT WAS ALREADY ESTABLISHED.
+        //
+        // Since BACKLOG-2913 the backup path has parsed the device's own account of a
+        // failure — `MBErrorDomain/208` becomes `errorCode: "DEVICE_LOCKED"`, a broken
+        // usbmuxd pipe becomes `CONNECTION_LOST`, the 30-minute no-progress watchdog
+        // becomes `BACKUP_TIMEOUT` — and kept the numeric MBErrorDomain code beside it.
+        // Both were sitting on `backupResult` and neither reached the row: only
+        // `backupResult.error`, the sentence written for the user, was forwarded. So
+        // "her phone was locked" was observable at the moment it happened and then
+        // thrown away, and the founder had to ask the user instead.
+        //
+        // Nothing is classified here. The values are copied.
+        syncTimeline.setContext({
+          ...(backupResult.errorCode ? { reasonCode: backupResult.errorCode } : {}),
+          // `null` means "the device did not say", never "no error". Absent stays
+          // absent rather than becoming a zero code — the same rule the rest of this
+          // sync path already follows for an unmeasured backup size.
+          ...(typeof backupResult.failureCause?.deviceErrorCode === "number"
+            ? { deviceErrorCode: backupResult.failureCause.deviceErrorCode }
+            : {}),
+          // The watchdog killing an unresponsive process and the device reporting a
+          // fault are different events with different fixes; they were the same row.
+          endedBy: backupResult.errorCode === "BACKUP_TIMEOUT" ? "watchdog" : "device-error",
+        });
+
         const isDiskSpaceError = /disk space|no space|ENOSPC|not enough space/i.test(error);
         if (isDiskSpaceError) {
           Sentry.captureMessage("Backup failed due to insufficient disk space", {
@@ -1687,6 +1747,12 @@ export class DeviceSyncOrchestrator extends EventEmitter {
    */
   cancel(): void {
     log.info("[DeviceSyncOrchestrator] Cancelling sync");
+    // BACKLOG-3440: THE USER PRESSED CANCEL, and until now the row could not say so.
+    // `outcome = cancelled` has only ever meant "the abort signal was set", and
+    // `forceReset()` sets it too — so "I cancelled it" and "it hung, so I hit Try Again"
+    // produced identical rows. Recorded here, at the act itself, rather than inferred
+    // later from a string that both paths produce.
+    syncTimeline.noteEndedBy("user-cancel");
     this.abortController?.abort();
     // Don't null the controller -- sync() checks signal.aborted at checkpoints
     // and the next sync()/processExistingBackup() call creates a fresh controller.
@@ -1731,8 +1797,24 @@ export class DeviceSyncOrchestrator extends EventEmitter {
   /**
    * Force reset sync state (use when sync gets stuck)
    */
-  forceReset(): void {
-    log.warn("[DeviceSyncOrchestrator] Force resetting sync state");
+  forceReset(reason: string = "reset"): void {
+    log.warn("[DeviceSyncOrchestrator] Force resetting sync state", { reason });
+    // BACKLOG-3440: WHICH RESET THIS IS.
+    //
+    // `forceReset` has two very different callers. One is the Reset control. The other —
+    // the one nobody expects — is the "sync appears stuck, forcing reset before
+    // starting" guard in `syncHandlers`, which fires when a user clicks Sync or Try
+    // Again while a run is already going. Both abort the run and both used to produce
+    // the same `cancelled` row, which is why the founder's open question ("did you press
+    // cancel, or did it stop on its own?") had to be put to the users by hand.
+    //
+    // `noteEndedBy` writes immediately rather than waiting for the run to end, and that
+    // matters most here: a restart is followed within milliseconds by a new `beginSync`
+    // that clears this context, and the abandoned run's own terminal write is suppressed
+    // by the `isRunning` guard in `errorResult`. Written now, the abandoned row reads
+    // `outcome=running, ended_by=restart-while-running` — which is exactly what
+    // happened — instead of staying an unexplained open row.
+    syncTimeline.noteEndedBy(reason);
     this.abortController?.abort();
     this.abortController = null;
     this.isRunning = false;
