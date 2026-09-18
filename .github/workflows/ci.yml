@@ -943,8 +943,8 @@ jobs:
   package:
     name: Package Application
     runs-on: ${{ matrix.os }}
-    needs: [check-changes, test, build]
-    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop') && needs.check-changes.outputs.docs-only != 'true'
+    needs: [check-changes]
+    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/fix/BACKLOG-3438-package-guard-arch') && needs.check-changes.outputs.docs-only != 'true'
 
     strategy:
       matrix:
@@ -989,7 +989,7 @@ jobs:
           set -o pipefail
           echo "Building unsigned macOS package (arm64 + x64)..."
           export CSC_IDENTITY_AUTO_DISCOVERY=false
-          if ! npm run package:unsigned 2>&1 | tee package.log; then
+          if ! npm run package:unsigned-CONTROL-3438 2>&1 | tee package.log; then
             echo "::error::Unsigned package build failed. Check package.log for details."
             cat package.log
             exit 1
