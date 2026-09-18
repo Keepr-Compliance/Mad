@@ -18,6 +18,10 @@ import {
   useEmailAdminConsentListener,
   type EmailAdminConsentEventDetail,
 } from "../../../utils/emailAdminConsentEvents";
+import {
+  useEmailConnectFailedListener,
+  type EmailConnectFailedEventDetail,
+} from "../../../utils/emailConnectFailedEvents";
 import logger from "../../../utils/logger";
 
 // =============================================================================
@@ -397,6 +401,21 @@ export function Content({
     }, []),
   );
 
+  // BACKLOG-3281: track a connect attempt that ended in failure. Before this,
+  // the spinner below was cleared ONLY on `context.emailConnected === true` or
+  // on an admin-consent block, so every other outcome left the Connect button
+  // reading "Connecting..." and disabled with no error and no way to retry.
+  const [connectFailure, setConnectFailure] =
+    React.useState<EmailConnectFailedEventDetail | null>(null);
+
+  useEmailConnectFailedListener(
+    React.useCallback((detail: EmailConnectFailedEventDetail) => {
+      setConnectFailure(detail);
+      // The attempt has terminated — re-enabling the button IS the retry.
+      setConnectingProvider(null);
+    }, []),
+  );
+
   // Connection status from context (convert undefined to false for boolean checks)
   const primaryConnected =
     context.emailConnected === true && context.emailProvider === primaryProvider;
@@ -411,6 +430,10 @@ export function Content({
   React.useEffect(() => {
     if (context.emailConnected === true) {
       setConnectingProvider(null);
+      // BACKLOG-3281: a success also retires any earlier failure line, so a
+      // failed Gmail attempt does not keep complaining beside a connected
+      // Outlook.
+      setConnectFailure(null);
     }
   }, [context.emailConnected]);
 
@@ -419,6 +442,10 @@ export function Content({
     // fresh attempt (the admin may have just approved).
     if (adminConsentBlocked === provider) {
       setAdminConsentBlocked(null);
+    }
+    // BACKLOG-3281: same for a prior failure line on a fresh attempt.
+    if (connectFailure?.provider === provider) {
+      setConnectFailure(null);
     }
     setConnectingProvider(provider);
     onAction({
@@ -504,6 +531,26 @@ export function Content({
           attempt was blocked because the tenant admin has not approved Keepr) */}
       {adminConsentBlocked && (
         <AdminConsentBlockedPanel provider={adminConsentBlocked} />
+      )}
+
+      {/* BACKLOG-3281: a connect attempt that ended in failure. The Connect
+          button below is enabled again, so it is also the retry. */}
+      {connectFailure && (
+        <div
+          className="mb-4 bg-red-50 border border-red-200 rounded-xl p-3"
+          data-testid="onboarding-email-connect-failed"
+          role="alert"
+        >
+          <h3 className="text-sm font-semibold text-red-900 mb-1">
+            Couldn&apos;t connect {PROVIDER_CONFIG[connectFailure.provider].name}
+          </h3>
+          <p className="text-xs text-red-800">
+            {connectFailure.error
+              ? connectFailure.error
+              : "The connection didn't complete."}{" "}
+            You can try again below, or skip this for now and connect later.
+          </p>
+        </div>
       )}
 
       {/* Primary Provider Card */}

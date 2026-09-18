@@ -4,7 +4,6 @@
 // ============================================
 
 import { ipcMain, BrowserWindow } from "electron";
-import { LOCAL_USER_ID_SQL } from "../services/db/localUserSql";
 import { MESSAGE_IMPORT_SUMMARY_SQL } from "../services/db/messageImportStatsSql";
 import type { IpcMainInvokeEvent } from "electron";
 import * as Sentry from "@sentry/electron/main";
@@ -153,32 +152,35 @@ export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
       forceReimport = false
     ): Promise<MacOSImportResult> => {
       // BACKLOG-551: Verify user exists in database (ID may have been migrated)
-      let validUserId = userId;
+      //
+      // BACKLOG-3254: an id that is not in `users_local` ends the call. The
+      // second lookup that used to run here — and hand this import a different
+      // id to write under — is DELETED, not disabled. The terminal branch below
+      // already existed for the empty-database case and is now the only outcome
+      // for an id this database cannot confirm.
+      //
+      // Unlike `getValidUserId`, this path has no falsy guard, so an absent or
+      // empty id ends here too. That is safe as written: every renderer entry
+      // reaches this channel with a signed-in user's id
+      // (`AppModals` -> `Settings` -> `MacOSMessagesImportSettings` ->
+      // `requestSync` -> `SyncOrchestratorService`, and `useAutoRefresh`, which
+      // returns early without one).
+      const validUserId = userId;
       const userExists = await databaseService.getUserById(userId);
       if (!userExists) {
-        logService.warn("[MessageImport] User ID not found, may have been migrated", "MessageImportHandlers", {
-          providedId: userId.substring(0, 8) + "...",
+        logService.warn("[MessageImport] User ID is not present in users_local; no import started", "MessageImportHandlers", {
+          providedId: userId ? userId.substring(0, 8) + "..." : "(none)",
         });
-        // Try to find any user in the database (single-user app)
-        const db = databaseService.getRawDatabase();
-        const anyUser = db.prepare(LOCAL_USER_ID_SQL).get() as { id: string } | undefined;
-        if (anyUser) {
-          validUserId = anyUser.id;
-          logService.info("[MessageImport] Using migrated user ID", "MessageImportHandlers", {
-            correctedId: validUserId.substring(0, 8) + "...",
-          });
-        } else {
-          return {
-            success: false,
-            messagesImported: 0,
-            messagesSkipped: 0,
-            attachmentsImported: 0,
-            attachmentsUpdated: 0,
-            attachmentsSkipped: 0,
-            duration: 0,
-            error: "No valid user found in database",
-          };
-        }
+        return {
+          success: false,
+          messagesImported: 0,
+          messagesSkipped: 0,
+          attachmentsImported: 0,
+          attachmentsUpdated: 0,
+          attachmentsSkipped: 0,
+          duration: 0,
+          error: "No valid user found in database",
+        };
       }
 
       // BACKLOG-2772: ONE resolver decides what this run fetches.

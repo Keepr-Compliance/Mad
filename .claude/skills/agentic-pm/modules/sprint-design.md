@@ -13,7 +13,7 @@ Sprint Design is the mandatory pre-execution workflow that transforms backlog it
 ### Step 1: Define Sprint Goal + Select Candidates (PM)
 - Query backlog for candidate items
 - Draft sprint narrative (what and why)
-- Check for existing `int/*` branches
+- Check for existing `int/*` or `int-portal/*` branches
 - **Output:** Candidate list + sprint goal
 
 ### Step 2: Current State Investigation (PM) — MANDATORY

@@ -877,6 +877,12 @@ function TransactionDetails({
     onTransactionUpdated?.();
   }, [refreshCommunicationsSilently, refreshAttachments, onTransactionUpdated]);
 
+  // BACKLOG-3366: hiding a text from export changes only its marker — not the
+  // link, the attachments or any count — so only the texts are refetched.
+  const handleHiddenFromExportChanged = useCallback(async () => {
+    await refreshCommunicationsSilently("text");
+  }, [refreshCommunicationsSilently]);
+
   // BACKLOG-2791 — THE LINKED LIST HEARS THE REVIEW NOTIFICATION TOO.
   //
   // Founder walk, 2026-08-23: approving a suggested thread made it DISAPPEAR.
@@ -1278,6 +1284,9 @@ function TransactionDetails({
               // BACKLOG-1793: restore uses a silent refresh — no loading cycle,
               // no spinner, scroll never moves (parallels the Emails tab).
               onRestoreComplete={handleRefreshMessagesSilently}
+              // BACKLOG-3366: hide/unhide changes only the texts' marker, so
+              // refetch texts silently (no spinner; the open conversation stays).
+              onHiddenFromExportChanged={handleHiddenFromExportChanged}
               onRemoveMessagesByIds={removeCommunicationsByIds}
               onShowSuccess={showSuccess}
               onShowError={showError}

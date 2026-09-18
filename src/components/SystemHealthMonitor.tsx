@@ -1,7 +1,15 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 
 import type { OAuthProvider } from "../../electron/types/models";
+// BACKLOG-3230: the real wire shape, replacing a local all-optional interface
+// that was mutually comparable with `string` — which is why `string[] as
+// SystemIssue[]` compiled with zero diagnostics and the contract could not fail.
+import type {
+  HealthIssue,
+  HealthIssueSeverity,
+} from "../../electron/types/ipc/healthIssue";
 import { systemService, authService } from '../services';
+import { identityOf } from '../utils/healthIssueIdentity';
 import logger from '../utils/logger';
 import { openEmailSettings } from '../utils/openEmailSettings';
 import { FdaHelpSheet } from './permissions/FdaHelpSheet';
@@ -14,14 +22,38 @@ interface SystemHealthMonitorProps {
   onOpenSettings?: (scrollTarget?: string) => void;
 }
 
-interface SystemIssue {
-  severity?: "error" | "warning" | "info";
-  title?: string;
-  message?: string;
-  userMessage?: string;
-  details?: string;
-  action?: string;
-  actionHandler?: string;
+/**
+ * The severity this banner PAINTS a row in, which is not the severity the wire
+ * carries — a reconnectable mailbox is painted amber even though the health
+ * summary counts it as an error.
+ *
+ * It is exactly `HealthIssueSeverity` and is declared as an alias of it rather
+ * than restated, so the paint vocabulary cannot drift from the wire vocabulary.
+ *
+ * BACKLOG-3230, and worth the paragraph. An earlier revision of this PR widened
+ * this to `"error" | "warning" | "info"` to keep an `=== "info"` render branch
+ * compiling. That branch is dead — `permissionService` has nine `severity`
+ * writes and every one is "error" or "warning", and the single site that could
+ * emit "info" (`connectionStatusService.formatUserError`) has NO CALLERS and
+ * would only fire it for `NOT_CONNECTED`, which `BROKEN_TOKEN_TYPES` keeps out
+ * of this banner anyway.
+ *
+ * Widening the return type to silence that was the same move as the
+ * `as SystemIssue[]` cast this item deletes: assert a shape the producer cannot
+ * produce so the compiler stops objecting. The whole deliverable of BACKLOG-3230
+ * is a compiler that CAN object here, so the branch went instead.
+ */
+type DisplaySeverity = HealthIssueSeverity;
+
+function displaySeverity(
+  issue: HealthIssue,
+  isReconnectIssue: boolean,
+): DisplaySeverity {
+  // BACKLOG-2127: a broken mailbox token is RECOVERABLE, so it is painted amber
+  // even though the health summary still counts it as severity:"error".
+  if (isReconnectIssue) return "warning";
+  // An absent severity is amber on purpose: a permission result carries none.
+  return issue.severity || "warning";
 }
 
 /**
@@ -41,8 +73,9 @@ function SystemHealthMonitor({
   hidden = false,
   onOpenSettings,
 }: SystemHealthMonitorProps) {
-  const [issues, setIssues] = useState<SystemIssue[]>([]);
-  const [dismissed, setDismissed] = useState(new Set<number>());
+  const [issues, setIssues] = useState<HealthIssue[]>([]);
+  // BACKLOG-3229: identities, NOT array indices. See utils/healthIssueIdentity.
+  const [dismissed, setDismissed] = useState(new Set<string>());
   const checkingRef = useRef(false);
   /**
    * BACKLOG-3210 (part 2): the Full Disk Access explainer, opened from this
@@ -80,16 +113,33 @@ function SystemHealthMonitor({
       // banner exactly as it was rather than silently clearing it. An
       // unanswerable check is not a recovery.
       if (result.success && result.data && Array.isArray(result.data.issues)) {
-        const nextIssues = result.data.issues as SystemIssue[];
+        // BACKLOG-3230: the cast that used to sit here is GONE, and its absence
+        // is the point — it was what stopped the compiler seeing that the
+        // declared `string[]` and the emitted objects disagreed.
+        const nextIssues = result.data.issues;
         setIssues(nextIssues);
-        // `dismissed` holds INDICES into the issue array. Now that the array
-        // can shrink, a stale index would suppress an unrelated future issue
-        // that happened to land in the same slot. Clearing the set when there
-        // is nothing left to dismiss keeps the two in step; a non-empty update
-        // is left alone, which is the pre-existing behaviour.
-        if (nextIssues.length === 0) {
-          setDismissed(new Set<number>());
-        }
+        // BACKLOG-3229: PRUNE the dismissed set to the identities still
+        // present. This replaces the old "clear it when the list is empty"
+        // mitigation, which could only fire on a list that reached zero — and
+        // the damaging case (one issue replaced by a different one) never does.
+        //
+        // Pruning also gives recurrence the right behaviour for free: an issue
+        // that is resolved and later comes back has had its identity dropped in
+        // between, so it reappears rather than staying dismissed forever.
+        //
+        // The functional updater is REQUIRED, not stylistic. `checkSystemHealth`
+        // is a `useCallback` keyed on [userId, provider], and `setInterval`
+        // holds ONE closure for the life of the effect — so reading `dismissed`
+        // from scope here would read the empty set captured on first render and
+        // wipe every dismissal on each 2-minute poll. Adding `dismissed` to the
+        // deps is the wrong fix: it would tear down and rebuild the interval on
+        // every dismissal.
+        const liveIdentities = new Set(
+          nextIssues.map(identityOf).filter((id): id is string => id !== null),
+        );
+        setDismissed(
+          (prev) => new Set([...prev].filter((id) => liveIdentities.has(id))),
+        );
       }
     } catch (error) {
       logger.error("[SystemHealthMonitor] System health check failed:", error);
@@ -114,11 +164,13 @@ function SystemHealthMonitor({
     };
   }, [checkSystemHealth]);
 
-  const handleDismiss = (issueIndex: number) => {
-    setDismissed((prev) => new Set([...prev, issueIndex]));
+  const handleDismiss = (issueIdentity: string | null) => {
+    // A row with no derivable identity is not dismissable — see identityOf.
+    if (issueIdentity === null) return;
+    setDismissed((prev) => new Set([...prev, issueIdentity]));
   };
 
-  const handleAction = async (issue: SystemIssue, issueIndex: number) => {
+  const handleAction = async (issue: HealthIssue, issueIdentity: string | null) => {
     switch (issue.actionHandler) {
       case "open-system-settings":
         await systemService.openPrivacyPane("fullDiskAccess");
@@ -147,7 +199,7 @@ function SystemHealthMonitor({
           // Navigate to Settings + highlight email connections (shared with the
           // SyncStatusIndicator reconnect CTA so both land in the same place).
           openEmailSettings(onOpenSettings);
-          handleDismiss(issueIndex);
+          handleDismiss(issueIdentity);
         } else {
           // Fallback: Try OAuth directly if Settings callback not available
           try {
@@ -162,7 +214,7 @@ function SystemHealthMonitor({
                   if (connectionResult.success) {
                     await checkSystemHealth();
                     if (!isGoogle) {
-                      handleDismiss(issueIndex);
+                      handleDismiss(issueIdentity);
                     }
                   }
                   cleanup();
@@ -180,7 +232,7 @@ function SystemHealthMonitor({
 
       case "retry":
         await checkSystemHealth();
-        handleDismiss(issueIndex);
+        handleDismiss(issueIdentity);
         break;
 
       default:
@@ -191,7 +243,12 @@ function SystemHealthMonitor({
     }
   };
 
-  const visibleIssues = issues.filter((_, index) => !dismissed.has(index));
+  // BACKLOG-3229: filtered by IDENTITY, not by position. A row with no
+  // identity is never filtered out — it cannot have been dismissed.
+  const visibleIssues = issues.filter((issue) => {
+    const identity = identityOf(issue);
+    return identity === null || !dismissed.has(identity);
+  });
 
   // Hide during onboarding tour or when no issues
   if (hidden || visibleIssues.length === 0) {
@@ -199,28 +256,24 @@ function SystemHealthMonitor({
   }
 
   // Severity styling - using amber for warnings to match Dashboard setup banner
-  const severityClasses: Record<"error" | "warning" | "info", string> = {
+  const severityClasses: Record<DisplaySeverity, string> = {
     error: "bg-red-50 border-red-200",
     warning: "bg-gradient-to-r from-amber-50 to-orange-50 border-amber-200",
-    info: "bg-blue-50 border-blue-200",
   };
 
-  const iconClasses: Record<"error" | "warning" | "info", string> = {
+  const iconClasses: Record<DisplaySeverity, string> = {
     error: "text-red-600",
     warning: "text-amber-600",
-    info: "text-blue-600",
   };
 
-  const textClasses: Record<"error" | "warning" | "info", string> = {
+  const textClasses: Record<DisplaySeverity, string> = {
     error: "text-red-800",
     warning: "text-amber-900",
-    info: "text-blue-800",
   };
 
-  const buttonClasses: Record<"error" | "warning" | "info", string> = {
+  const buttonClasses: Record<DisplaySeverity, string> = {
     error: "bg-red-200 hover:bg-red-300 text-red-800",
     warning: "bg-amber-500 hover:bg-amber-600 text-white",
-    info: "bg-blue-200 hover:bg-blue-300 text-blue-800",
   };
 
   return (
@@ -236,10 +289,8 @@ function SystemHealthMonitor({
           onPermissionGranted={checkSystemHealth}
         />
       )}
-      {visibleIssues.map((issue, _index) => {
-        const originalIndex = issues.findIndex(
-          (i, idx) => i === issue && !dismissed.has(idx),
-        );
+      {visibleIssues.map((issue, index) => {
+        const issueIdentity = identityOf(issue);
         // BACKLOG-2127: a broken mailbox token is RECOVERABLE — the user just
         // needs to reconnect. Render it in the amber (warning) family so the
         // same fact has one visual voice across the sync card and this banner,
@@ -248,13 +299,15 @@ function SystemHealthMonitor({
         const isReconnectIssue =
           issue.actionHandler === "reconnect-microsoft" ||
           issue.actionHandler === "reconnect-google";
-        const severity: "error" | "warning" | "info" = isReconnectIssue
-          ? "warning"
-          : issue.severity || "warning";
+        const severity = displaySeverity(issue, isReconnectIssue);
 
         return (
           <div
-            key={originalIndex}
+            // BACKLOG-3229: the identity is the key, so React keeps a row bound
+            // to its issue across a reorder. The index is the fallback ONLY for
+            // a row with no identity, and ONLY for React's key — never for
+            // dismissal, which is what this item removed positions from.
+            key={issueIdentity ?? `no-identity:${index}`}
             className={`flex-shrink-0 ${severityClasses[severity]} border-b px-4 py-3`}
           >
             <div className="flex items-center justify-between max-w-4xl mx-auto">
@@ -291,21 +344,6 @@ function SystemHealthMonitor({
                       />
                     </svg>
                   )}
-                  {severity === "info" && (
-                    <svg
-                      className="w-5 h-5"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                      />
-                    </svg>
-                  )}
                 </div>
 
                 {/* Content */}
@@ -329,18 +367,23 @@ function SystemHealthMonitor({
               <div className="flex items-center gap-2">
                 {issue.action && (
                   <button
-                    onClick={() => handleAction(issue, originalIndex)}
+                    onClick={() => handleAction(issue, issueIdentity)}
                     className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${buttonClasses[severity]}`}
                   >
                     {issue.action}
                   </button>
                 )}
-                <button
-                  onClick={() => handleDismiss(originalIndex)}
-                  className={`px-3 py-1.5 text-xs font-medium ${severity === 'warning' ? 'text-amber-700 hover:text-amber-900' : textClasses[severity]} hover:opacity-80 transition-colors`}
-                >
-                  Dismiss
-                </button>
+                {/* BACKLOG-3229: no identity, no Dismiss button. Such a row cannot
+                    be remembered across a poll, so offering the control would
+                    produce a button that silently does nothing. */}
+                {issueIdentity !== null && (
+                  <button
+                    onClick={() => handleDismiss(issueIdentity)}
+                    className={`px-3 py-1.5 text-xs font-medium ${severity === 'warning' ? 'text-amber-700 hover:text-amber-900' : textClasses[severity]} hover:opacity-80 transition-colors`}
+                  >
+                    Dismiss
+                  </button>
+                )}
               </div>
             </div>
           </div>

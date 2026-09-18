@@ -18,11 +18,47 @@ const LOGIN_RETRY_CONFIG = {
   maxRetries: 0,
   baseDelayMs: 1000,
   maxDelayMs: 10000,
-  /** Timeout for waiting for deep link callback (ms) */
-  callbackTimeoutMs: 60000,
+  /**
+   * Timeout for waiting for the keepr:// deep link callback (ms).
+   *
+   * There is NO server-side deadline on this flow, so this value is the only
+   * thing besides the user's own Cancel that can end the wait. Traced:
+   * `auth:open-in-browser` (sessionHandlers.ts:1389) only calls
+   * shell.openExternal and returns; the main process then handles
+   * keepr://callback reactively and emits "auth:deep-link-callback" when — and
+   * only when — the URL arrives. There is no timer anywhere on that path.
+   *
+   * Do NOT confuse this with AUTH_TIMEOUT_MS in googleAuthService.ts:123 /
+   * microsoftAuthService.ts:95. That is a local-callback-SERVER port-leak
+   * timeout (BACKLOG-1121) belonging to the mailbox-connect OAuth flow, which
+   * redirects to http://localhost:<port>/callback. It never runs for login.
+   *
+   * 5:10 mirrors the five minutes that flow already treats as a reasonable time
+   * to leave a person in a browser, plus slack. At the previous 60s this fired
+   * while the flow was still perfectly alive — picking an account and reading a
+   * consent screen routinely takes longer than a minute. The user got "Sign-in
+   * is taking longer than expected", and then the real deep link arrived
+   * seconds later and moved them on anyway, because handleDeepLinkSuccess's
+   * listener is not torn down by this timeout (it is registered in a useEffect
+   * that cleans up only on unmount). Cancel in the browserAuthInProgress panel
+   * is the intended way out of a wait; this is the backstop, not the gate.
+   */
+  callbackTimeoutMs: 5 * 60 * 1000 + 10000,
   /** Error codes from deep link that should NOT trigger retry */
   nonRetryableCodes: ["MISSING_TOKENS", "INVALID_TOKENS", "INVALID_URL"],
 } as const;
+
+/**
+ * BACKLOG-3415: how long a browser sign-in waits before offering "Stuck? Retry"
+ * beside Cancel in the waiting panel (ms).
+ *
+ * Deliberately INDEPENDENT of LOGIN_RETRY_CONFIG.callbackTimeoutMs. That value
+ * is when the client gives up and shows a failure; this is when we offer a way
+ * out of a wait that is still perfectly alive. Tying the two together would
+ * mean the offer never appears before the give-up message, which is the whole
+ * problem it exists to solve.
+ */
+const STUCK_RETRY_HINT_MS = 60 * 1000;
 
 // Type for pending OAuth data
 export interface PendingOAuthData {
@@ -108,6 +144,11 @@ const Login = ({
   const callbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // BACKLOG-3415: after STUCK_RETRY_HINT_MS of waiting, offer "Stuck? Retry"
+  // beside Cancel in the browserAuthInProgress panel.
+  const [showStuckRetry, setShowStuckRetry] = useState(false);
+  const stuckRetryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // ==========================================
   // TASK-2044: Retry timer cleanup
   // ==========================================
@@ -124,6 +165,13 @@ const Login = ({
       clearTimeout(retryTimeoutRef.current);
       retryTimeoutRef.current = null;
     }
+    // BACKLOG-3415: the "Stuck? Retry" reveal timer is cleared on exactly the
+    // same paths as the others (unmount, cancel, success, error, and at the
+    // start of every fresh attempt), so none can survive into a later attempt.
+    if (stuckRetryTimeoutRef.current) {
+      clearTimeout(stuckRetryTimeoutRef.current);
+      stuckRetryTimeoutRef.current = null;
+    }
   }, []);
 
   /**
@@ -134,6 +182,7 @@ const Login = ({
     setRetryAttempt(0);
     setIsRetrying(false);
     setRetriesExhausted(false);
+    setShowStuckRetry(false);
   }, [clearRetryTimers]);
 
   // Clean up timers on unmount
@@ -157,6 +206,10 @@ const Login = ({
     setBrowserAuthInProgress(false);
     setLoading(false);
     setProvider(null);
+    // Defence in depth: a success can still arrive after an error was shown (the
+    // deep-link listeners are only torn down on unmount). Clear the error so it
+    // cannot linger over whatever renders next.
+    setError(null);
     resetRetryState();
 
     if (onDeepLinkAuthSuccess) {
@@ -347,6 +400,8 @@ const Login = ({
     setProvider("browser");
     setBrowserAuthInProgress(true);
     setRetriesExhausted(false);
+    // BACKLOG-3415: every fresh attempt starts with Cancel alone again.
+    setShowStuckRetry(false);
 
     try {
       const result = await window.api.auth.openAuthInBrowser();
@@ -362,6 +417,14 @@ const Login = ({
           logger.warn("[Login] Deep link callback timeout -- triggering retry logic");
           handleDeepLinkError({ error: "Authentication timed out", code: "UNKNOWN_ERROR" });
         }, LOGIN_RETRY_CONFIG.callbackTimeoutMs);
+
+        // BACKLOG-3415: separately, offer a way out of the wait well before the
+        // give-up above. (The auto-retry path in handleDeepLinkError starts its
+        // own callback timer but not this one; with maxRetries: 0 that path
+        // never runs today.)
+        stuckRetryTimeoutRef.current = setTimeout(() => {
+          setShowStuckRetry(true);
+        }, STUCK_RETRY_HINT_MS);
       }
     } catch (err) {
       logger.error("Browser login error:", err);
@@ -469,12 +532,25 @@ const Login = ({
                     ? "Reconnecting... Please wait."
                     : "Complete sign-in in your default browser. The app will update automatically when finished."}
                 </p>
-                <button
-                  onClick={handleCancel}
-                  className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors"
-                >
-                  Cancel
-                </button>
+                {/* BACKLOG-3415: Cancel alone until STUCK_RETRY_HINT_MS has
+                    passed, then "Stuck? Retry" joins it. Retry cancels this
+                    attempt and starts a fresh sign-in in one click. */}
+                <div className="flex items-center justify-center gap-3">
+                  <button
+                    onClick={handleCancel}
+                    className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  {showStuckRetry && (
+                    <button
+                      onClick={handleTryAgain}
+                      className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors"
+                    >
+                      Stuck? Retry
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -487,17 +563,9 @@ const Login = ({
               <button
                 onClick={handleBrowserLogin}
                 disabled={loading}
-                className="w-full flex items-center justify-center gap-3 bg-gradient-to-r from-green-500 to-teal-500 text-white py-3 px-4 rounded-lg hover:from-green-600 hover:to-teal-600 disabled:from-gray-300 disabled:to-gray-300 disabled:cursor-not-allowed transition-colors"
+                className="w-full flex items-center justify-center bg-gradient-to-r from-green-500 to-teal-500 text-white py-3 px-4 rounded-lg hover:from-green-600 hover:to-teal-600 disabled:from-gray-300 disabled:to-gray-300 disabled:cursor-not-allowed transition-colors"
               >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"
-                  />
-                </svg>
-                <span className="font-medium">Sign in with Browser</span>
+                <span className="text-lg font-medium">Sign in</span>
               </button>
             </div>
           )}

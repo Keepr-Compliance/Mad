@@ -504,11 +504,69 @@ describe('SyncOrchestratorService', () => {
       expect(item?.reconnectProvider).toBe('microsoft');
     });
 
-    it('completes the contacts item (not error) when a cloud provider fails WITHOUT a dead token', async () => {
+    // =========================================================================
+    // BACKLOG-3203: NARROWING OF THE BACKLOG-2142 DECISION.
+    //
+    // 2142 wrote one test here — "completes the contacts item (not error) when
+    // a cloud provider fails WITHOUT a dead token", fixture `reconnectRequired:
+    // true // scope-missing, NOT a dead token`. It was right that a
+    // scope-missing sync is not a dead token, and it deliberately left that
+    // case non-fatal. What it could not have anticipated is that
+    // `reconnectRequired` was ALSO being set for a mailbox that was never
+    // connected — so the flag did not mean what its name says, and the only
+    // safe reading of it was "ignore".
+    //
+    // BACKLOG-3203 fixes the producer instead (a never-connected Google mailbox
+    // no longer sets the flag), which leaves `reconnectRequired` meaning
+    // "connected, but cannot read contacts" — a state that MUST be surfaced,
+    // because it is a sync that silently returns nothing. So 2142's test splits
+    // in two: the case it was actually protecting (a generic failure stays
+    // non-fatal) keeps its behaviour, and the case it was accidentally
+    // suppressing now errors.
+    // =========================================================================
+
+    it('errors the contacts item when Outlook CAN be reached but cannot read contacts', async () => {
       (window as any).api.contacts.syncOutlookContacts = jest.fn().mockResolvedValue({
         success: false,
-        reconnectRequired: true, // scope-missing, NOT a dead token
-        error: 'Contacts permission not granted',
+        reconnectRequired: true, // connected, but the grant cannot read contacts
+        error: 'Contacts.Read permission not granted. Please disconnect and reconnect your Microsoft mailbox to grant contact access.',
+      });
+
+      syncOrchestrator.requestSync({ types: ['contacts'], userId: 'test-user' });
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      const item = syncOrchestrator.getState().queue.find(q => q.type === 'contacts');
+      expect(item?.status).toBe('error');
+      expect(item?.reconnectProvider).toBe('microsoft');
+      // The copy is rendered verbatim as the completion subtitle, so it must
+      // not claim the connection expired — this one has not.
+      expect(item?.error).toBe('Outlook needs to be reconnected to sync contacts');
+      expect(item?.error).not.toContain('expired');
+    });
+
+    it('errors the contacts item when Gmail CAN be reached but cannot read contacts', async () => {
+      (window as any).api.contacts.syncGoogleContacts = jest.fn().mockResolvedValue({
+        success: false,
+        reconnectRequired: true,
+        error: 'Contacts permission not granted. Please disconnect and reconnect your Google mailbox to grant contact access.',
+      });
+
+      syncOrchestrator.requestSync({ types: ['contacts'], userId: 'test-user' });
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      const item = syncOrchestrator.getState().queue.find(q => q.type === 'contacts');
+      expect(item?.status).toBe('error');
+      expect(item?.reconnectProvider).toBe('google');
+      expect(item?.error).toBe('Gmail needs to be reconnected to sync contacts');
+      expect(item?.error).not.toContain('expired');
+    });
+
+    // The case the BACKLOG-2142 test was actually protecting: a failure that is
+    // neither a dead token nor a reconnect signal stays non-fatal.
+    it('completes the contacts item when a cloud provider fails with a GENERIC error', async () => {
+      (window as any).api.contacts.syncOutlookContacts = jest.fn().mockResolvedValue({
+        success: false,
+        error: 'Graph API returned 500',
       });
 
       syncOrchestrator.requestSync({ types: ['contacts'], userId: 'test-user' });
@@ -517,6 +575,109 @@ describe('SyncOrchestratorService', () => {
       const item = syncOrchestrator.getState().queue.find(q => q.type === 'contacts');
       expect(item?.status).toBe('complete');
       expect(item?.reconnectProvider).toBeUndefined();
+    });
+
+    // =========================================================================
+    // BACKLOG-3203: the case a naive fix breaks, and the reason the producer
+    // was changed rather than only the orchestrator.
+    //
+    // The Google contacts source defaults ON and nothing on this path gates on
+    // whether a Google mailbox exists, so "user has never connected Google" is
+    // an ORDINARY state, not an error. The fixtures below are the verbatim
+    // shape `GoogleContactProvider.canSync` / `OutlookContactProvider.canSync`
+    // now produce for it — no `reconnectRequired`, no `tokenExpired`, just the
+    // error string — as pinned by `electron/__tests__/google-contact-provider
+    // .test.ts` ("reports not-ready WITHOUT reconnectRequired when no token
+    // exists"). If that producer test goes red, THESE fixtures are stale and
+    // whatever they prove is worthless.
+    // =========================================================================
+
+    it('completes with NO reconnect prompt when Google was never connected', async () => {
+      (window as any).api.contacts.syncGoogleContacts = jest.fn().mockResolvedValue({
+        success: false,
+        error: 'No Google OAuth token found. Please connect your Google mailbox first.',
+      });
+
+      syncOrchestrator.requestSync({ types: ['contacts'], userId: 'test-user' });
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      const item = syncOrchestrator.getState().queue.find(q => q.type === 'contacts');
+      expect(item?.status).toBe('complete');
+      expect(item?.reconnectProvider).toBeUndefined();
+      expect(item?.error).toBeUndefined();
+    });
+
+    it('completes with NO reconnect prompt when Outlook was never connected', async () => {
+      (window as any).api.contacts.syncOutlookContacts = jest.fn().mockResolvedValue({
+        success: false,
+        error: 'No Outlook OAuth token found. User needs to connect Outlook first.',
+      });
+
+      syncOrchestrator.requestSync({ types: ['contacts'], userId: 'test-user' });
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      const item = syncOrchestrator.getState().queue.find(q => q.type === 'contacts');
+      expect(item?.status).toBe('complete');
+      expect(item?.reconnectProvider).toBeUndefined();
+      expect(item?.error).toBeUndefined();
+    });
+
+    it('completes with NO reconnect prompt when NEITHER mailbox was ever connected', async () => {
+      (window as any).api.contacts.syncOutlookContacts = jest.fn().mockResolvedValue({
+        success: false,
+        error: 'No Outlook OAuth token found. User needs to connect Outlook first.',
+      });
+      (window as any).api.contacts.syncGoogleContacts = jest.fn().mockResolvedValue({
+        success: false,
+        error: 'No Google OAuth token found. Please connect your Google mailbox first.',
+      });
+
+      syncOrchestrator.requestSync({ types: ['contacts'], userId: 'test-user' });
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      const item = syncOrchestrator.getState().queue.find(q => q.type === 'contacts');
+      expect(item?.status).toBe('complete');
+      expect(item?.reconnectProvider).toBeUndefined();
+    });
+
+    // The rule is ORDER, not cause: `contactsReconnect ??=` means the first
+    // failing provider wins, and the Outlook phase runs first. Both directions
+    // are pinned below, because a name claiming "dead tokens outrank reconnect
+    // signals" would describe a precedence the code does not implement — the
+    // second test would fail under it.
+    it('lets the first failing provider win, keeping its own cause and copy (Outlook dead, Gmail unreadable)', async () => {
+      (window as any).api.contacts.syncOutlookContacts = jest.fn().mockResolvedValue({
+        success: false, tokenExpired: true, error: 'Outlook token expired',
+      });
+      (window as any).api.contacts.syncGoogleContacts = jest.fn().mockResolvedValue({
+        success: false, reconnectRequired: true, error: 'Contacts permission not granted',
+      });
+
+      syncOrchestrator.requestSync({ types: ['contacts'], userId: 'test-user' });
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      const item = syncOrchestrator.getState().queue.find(q => q.type === 'contacts');
+      expect(item?.status).toBe('error');
+      expect(item?.reconnectProvider).toBe('microsoft');
+      expect(item?.error).toBe('Outlook connection expired — reconnect to sync contacts');
+    });
+
+    it('lets the first failing provider win even when the LATER one is the dead token (Outlook unreadable, Gmail dead)', async () => {
+      (window as any).api.contacts.syncOutlookContacts = jest.fn().mockResolvedValue({
+        success: false, reconnectRequired: true, error: 'Contacts.Read permission not granted',
+      });
+      (window as any).api.contacts.syncGoogleContacts = jest.fn().mockResolvedValue({
+        success: false, tokenExpired: true, error: 'Gmail token expired',
+      });
+
+      syncOrchestrator.requestSync({ types: ['contacts'], userId: 'test-user' });
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      const item = syncOrchestrator.getState().queue.find(q => q.type === 'contacts');
+      expect(item?.status).toBe('error');
+      // Outlook ran first, so Outlook is reported — cause does not jump the queue.
+      expect(item?.reconnectProvider).toBe('microsoft');
+      expect(item?.error).toBe('Outlook needs to be reconnected to sync contacts');
     });
 
     it('completes the contacts item on a clean sync of all sources', async () => {

@@ -16,9 +16,20 @@
  * went on asserting the old one — green for the wrong reason, which is the
  * failure this repo has hit twice.
  *
- * The transcription suite asserts that `DENIED` below equals what the REAL
- * `permissionService.checkFullDiskAccess()` returns. Drift the constant and
- * that suite reds FIRST, then everything fed from it.
+ * BACKLOG-3213 re-pointed which leg of the transcription suite proves which
+ * constant, because `checkFullDiskAccess` now reads the errno:
+ *
+ *   ABSENT (ENOENT/ENOTDIR)  `MESSAGES_STORE_NOT_FOUND_PERMISSION_RESULT`,
+ *                            proved by the REAL filesystem leg — an empty temp
+ *                            HOME produces a real ENOENT.
+ *   DENIED (everything else) `FDA_DENIED_PERMISSION_RESULT`, proved two ways:
+ *                            a real `chmod 000` fixture on POSIX, and an
+ *                            errno-injected EPERM in
+ *                            `permissionService.messagesErrno-3213.test.ts`,
+ *                            which runs on every platform.
+ *
+ * Either way the tie to the real producer is kept, not loosened: drift a
+ * constant and one of those legs reds FIRST, then everything fed from it.
  *
  * These are TEST FIXTURES ONLY. Nothing in `src/` or `electron/` imports this
  * file, so it never crosses the main/renderer boundary at runtime.
@@ -62,14 +73,55 @@ export const CONTACTS_DENIED_PERMISSION_RESULT = {
  * BACKLOG-3210 part 1's third outcome: the address book is not on this Mac at
  * all. Deliberately NOT decorated with an explainer action — sending this user
  * to grant a permission she may already hold is the BACKLOG-2392 bug.
+ *
+ * BACKLOG-3233 — NOTE WHAT IS ABSENT: there is no `action`, and the copy names
+ * no permission. Until this item it carried the DENIAL's `userMessage` and the
+ * denial's `action` text with no `actionHandler` behind it — a dead button,
+ * pinned as "today's behaviour" by two suites.
+ *
+ * THOSE TWO SUITES COULD NOT SEE THE PRODUCER CHANGE. Both asserted
+ * `row.action === CONTACTS_STORE_NOT_FOUND_PERMISSION_RESULT.action` through a
+ * MOCKED `checkAllPermissions`, so both sides of the comparison came from this
+ * file and the real producer never ran. Changing `checkContactsPermission` left
+ * them green. That is the exact drift this file's header warns about, found by
+ * running the mutation rather than by reading the tests.
+ *
+ * SO THIS CONSTANT IS NOW TETHERED: `permissionService.contactsStoreShape-3214.test.ts`
+ * drives the REAL `checkContactsPermission` against a real temp HOME with no
+ * address book — a real ENOENT — and asserts this exact key set. Drift the
+ * producer and that suite reds FIRST, then everything fed from it.
+ *
+ * Four suites consume this constant: `diagnosticHandlers.oneRowPerCause-3237`,
+ * `diagnosticHandlers.fdaIssueAction-3219`, `src/utils/__tests__/healthIssueIdentity`
+ * (keys on `errorCode`, so it is unaffected by the copy) and the transcription
+ * leg above.
  */
 export const CONTACTS_STORE_NOT_FOUND_PERMISSION_RESULT = {
   hasPermission: false,
   errorCode: "CONTACTS_STORE_NOT_FOUND",
-  userMessage:
-    "Contacts permission is required to match phone numbers to names.",
-  action:
-    "Full Disk Access in System Settings > Privacy & Security > Full Disk Access will grant access to Contacts",
+  userMessage: "Keepr couldn't find a Contacts database on this Mac.",
+} as const;
+
+/**
+ * BACKLOG-3213's third outcome for the MESSAGES probe: `chat.db` is not on
+ * this Mac at all.
+ *
+ * NOTE WHAT IS ABSENT: there is no `action`. `SystemHealthMonitor` renders its
+ * button as `{issue.action && (<button …>)}`, so omitting the field is what
+ * takes the "grant Full Disk Access" instruction off a row where granting it
+ * would change nothing. The key set is asserted directly against the real
+ * producer in `permissionService.fdaDeniedShape-3219.test.ts`, so the absence
+ * is measured rather than described.
+ *
+ * BACKLOG-3233 CLOSED the divergence this note used to describe.
+ * `CONTACTS_STORE_NOT_FOUND_PERMISSION_RESULT` above now has the same shape for
+ * the same reason: an absent store, named honestly, with no `action`. The two
+ * probes answer "it is not here" identically.
+ */
+export const MESSAGES_STORE_NOT_FOUND_PERMISSION_RESULT = {
+  hasPermission: false,
+  errorCode: "MESSAGES_STORE_NOT_FOUND",
+  userMessage: "Keepr couldn't find a Messages database on this Mac.",
 } as const;
 
 /** The button label the health banner must show for an FDA denial. */

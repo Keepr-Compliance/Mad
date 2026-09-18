@@ -1172,7 +1172,25 @@ class GmailFetchService {
       // BACKLOG-1802: upper date bound propagated to every label for delta windowing.
       before?: Date | null;
       maxResults?: number;
-      onProgress?: (progress: FetchProgress & { label?: string; currentLabel?: string }) => void;
+      /**
+       * Per-batch progress, forwarded from each label's own body loop.
+       *
+       * `fetched` / `percentage` describe THE CURRENT LABEL ONLY and restart at
+       * zero on every label, so a caller drawing a bar from them alone would see
+       * it reset once per label. `labelIndex` / `labelCount` are the walk-level
+       * pair that is monotone; see the same note on
+       * `outlookFetchService.searchAllFolders`.
+       */
+      onProgress?: (
+        progress: FetchProgress & {
+          label?: string;
+          currentLabel?: string;
+          /** 0-based index of the label being fetched. */
+          labelIndex?: number;
+          /** How many labels the walk will visit in total. */
+          labelCount?: number;
+        },
+      ) => void;
       /** BACKLOG-2856: stop between labels, and inside each label's paging. */
       signal?: AbortSignal;
     } = {}
@@ -1191,7 +1209,8 @@ class GmailFetchService {
       const seenMessageIds = new Set<string>();
       const allEmails: ParsedEmail[] = [];
 
-      for (const label of labels) {
+      for (let labelIndex = 0; labelIndex < labels.length; labelIndex++) {
+        const label = labels[labelIndex];
         // BACKLOG-2856: the between-label check — Gmail's counterpart to the
         // between-folder check in `outlookFetchService.searchAllFolders`. One
         // `searchAllLabels` call walks every label, so without this a cancel was
@@ -1214,6 +1233,8 @@ class GmailFetchService {
                   options.onProgress!({
                     ...progress,
                     currentLabel: label.name,
+                    labelIndex,
+                    labelCount: labels.length,
                   });
                 }
               : undefined,

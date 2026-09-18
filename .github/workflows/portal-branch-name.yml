@@ -1,0 +1,72 @@
+name: Portal Branch Name
+
+# BACKLOG-3205 — fail when a plain int/ or hotfix/ branch carries portal changes.
+#
+# broker-portal and admin-portal are not deployed for plain int/** or hotfix/**
+# branches (git.deploymentEnabled in both vercel.json files). Portal work on an
+# integration or hotfix branch opts in by name: int-portal/<name>,
+# hotfix-portal/<name>. A denied branch gets no deployment and no commit status
+# for the portal it changes, so this check is what makes a mis-named branch
+# visible.
+#
+# ## Triggers
+#
+# - push to the branch: checks the branch's own accumulated changes. Its check
+#   run attaches to the pushed commit, which is what an int -> develop PR shows.
+# - pull_request into the branch: checks the PR's own changes before they merge.
+#
+# The opt-in names are in both filters on purpose. After a branch is recreated
+# as int-portal/<name>, or a PR is moved to it, this workflow runs again on the
+# same commit and reports "not applicable". `edited` is listed because moving a
+# PR to another base fires `edited`.
+#
+# ## Why its own workflow and not a job in ci.yml
+#
+# Same reasons as vercel-deploy-map.yml: ci.yml gates jobs behind path filters
+# and is edited concurrently by other branches.
+#
+# Not a required check. Cheap: ubuntu, no install, no node_modules, no build.
+
+on:
+  push:
+    branches: ['int/**', 'hotfix/**', 'int-portal/**', 'hotfix-portal/**']
+  pull_request:
+    branches: ['int/**', 'hotfix/**', 'int-portal/**', 'hotfix-portal/**']
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  portal-branch-name:
+    name: Portal Branch Name
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Full history: the check computes merge-bases against develop, main
+          # and the PR base. A pull_request checks out the PR head commit, not
+          # refs/pull/N/merge, so a PR with conflicts is still checked.
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20.x
+
+      - name: Verify the check itself
+        run: node scripts/__tests__/check-portal-branch-name.verify.js
+
+      - name: Check the branch name against its portal changes
+        env:
+          # Passed via env, never inline in run:, so event text cannot inject shell.
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/ci/check-portal-branch-name.mjs

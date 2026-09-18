@@ -1,6 +1,6 @@
 {
   "name": "keepr",
-  "version": "2.37.0",
+  "version": "2.38.0",
   "description": "Keepr - Export and archive iMessage conversations and emails",
   "main": "electron/main.js",
   "engines": {
@@ -90,7 +90,8 @@
     "outlook"
   ],
   "author": "",
-  "license": "MIT",
+  "license": "UNLICENSED",
+  "private": true,
   "devDependencies": {
     "@babel/preset-env": "^7.29.2",
     "@babel/preset-react": "^7.23.3",
@@ -201,8 +202,8 @@
       "icon": "build/icon.ico"
     },
     "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
+      "oneClick": true,
+      "runAfterFinish": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "artifactName": "${productName}-Setup-${version}.${ext}",
@@ -255,7 +256,8 @@
       "electron/**/*"
     ],
     "directories": {
-      "buildResources": "build"
+      "buildResources": "build",
+      "output": "release"
     },
     "extraResources": [
       {

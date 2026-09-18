@@ -332,8 +332,37 @@ export function registerPermissionHandlers(): void {
       logService.info("Permission check PASSED - Messages database accessible", "PermissionHandlers");
       return { hasPermission: true };
     } catch (error) {
-      logService.warn("Permission check FAILED", "PermissionHandlers", { error: (error as Error).message });
-      return { hasPermission: false, error: (error as Error).message };
+      // ---------------------------------------------------------------------
+      // BACKLOG-3213 — WHICH errno, not merely "it threw".
+      // ---------------------------------------------------------------------
+      // Same split as `permissionService.checkFullDiskAccess`, and it has to be
+      // here TOO: these are two independent reads of the same file, and neither
+      // calls the other. This one drives the Messages settings panel (via
+      // `systemService.checkMessagesPermission`); that one drives the System
+      // Health banner. Fixing only one leaves the other still telling a Mac
+      // with no database to grant a permission that will change nothing.
+      //
+      // ENOENT / ENOTDIR mean the database is not there. Everything else —
+      // EPERM, EACCES, an unrecognised errno, and a rejection carrying no
+      // `code` at all — stays a denial. The default direction is asserted, not
+      // assumed; defaulting the other way would tell a denied Mac it has no
+      // messages, which is the bug this item exists to delete.
+      const code = (error as NodeJS.ErrnoException).code;
+      const storeIsAbsent = code === "ENOENT" || code === "ENOTDIR";
+      logService.warn("Permission check FAILED", "PermissionHandlers", {
+        code: code ?? "UNKNOWN",
+        error: (error as Error).message,
+      });
+      // `hasPermission` and `error` are UNCHANGED. `errorCode` is ADDITIVE —
+      // the denied payload gains one field and loses none, which is what lets
+      // every existing consumer read this object exactly as before.
+      return {
+        hasPermission: false,
+        error: (error as Error).message,
+        errorCode: storeIsAbsent
+          ? "MESSAGES_STORE_NOT_FOUND"
+          : "FULL_DISK_ACCESS_DENIED",
+      };
     }
   });
 

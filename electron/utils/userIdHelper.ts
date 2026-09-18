@@ -7,7 +7,21 @@
  * failures when inserting into tables with user_id foreign keys.
  *
  * Solution: Always validate the user ID exists in the local database before use.
- * For single-user apps, fall back to looking up any user in users_local.
+ *
+ * ===========================================================================
+ * BACKLOG-3254 — WHEN AN ID IS SUPPLIED, THE ANSWER IS THAT ID OR NOTHING
+ * ===========================================================================
+ * If a supplied id is not in `users_local`, both functions return null. They do
+ * not resolve to a different id.
+ *
+ * The discovery lookup below still exists, and now runs ONLY when no id was
+ * supplied at all. That path is a live contract, not dead code — see
+ * `electron/preload/outlookBridge.ts`, whose channels invoke with no argument.
+ * Closing it as well is BACKLOG-3254's follow-up F2, and it needs those
+ * channels changed first.
+ *
+ * Callers: `null` means "no answer", and every call site already branches on
+ * it. Do not treat it as "use whoever is there".
  *
  * Usage:
  * - Import getValidUserId from this module
@@ -22,14 +36,16 @@ import logService from "../services/logService";
 /**
  * Get a valid user ID that exists in the local database.
  *
- * This function handles cases where:
- * 1. The renderer passes an invalid/stale userId
- * 2. The renderer passes no userId (legacy bridge compatibility)
- * 3. The Supabase auth.uid() doesn't match local users_local.id
+ * Two shapes, and they answer differently:
+ * 1. An id IS supplied — it is confirmed against `users_local` and returned, or
+ *    null. Nothing else is returned.
+ * 2. NO id is supplied (legacy bridge compatibility) — the local user is looked
+ *    up. Unchanged by BACKLOG-3254; see the file header.
  *
  * @param providedUserId - User ID from the renderer (may be invalid)
  * @param context - Context string for logging (e.g., "MicrosoftAuth", "GoogleAuth")
- * @returns Valid user ID if found, null if no user exists in database
+ * @returns The supplied id once confirmed, the local user's id when none was
+ *          supplied, or null
  */
 export async function getValidUserId(
   providedUserId?: string,
@@ -41,14 +57,19 @@ export async function getValidUserId(
     if (user) {
       return providedUserId;
     }
+    // BACKLOG-3254: this line and the `No user found in database` error below
+    // are the whole field diagnosis, and they must stay distinguishable. THIS
+    // one means a local user exists and is not the one the caller named. That
+    // one means there is no local user at all. Neither costs an extra read.
     logService.warn(
-      `[${context}] Provided userId not found in local DB, looking up correct ID`,
+      `[${context}] Provided userId is not present in users_local; returning null`,
       context,
       { providedId: providedUserId.substring(0, 8) + "..." },
     );
+    return null;
   }
 
-  // Look up any user in the database (single-user app fallback)
+  // No id was supplied. Look up the local user (legacy bridge compatibility).
   const db = databaseService.getRawDatabase();
   const anyUser = db.prepare(LOCAL_USER_ID_SQL).get() as
     | { id: string }
@@ -99,14 +120,17 @@ export function getValidUserIdSync(
     if (user) {
       return providedUserId;
     }
+    // BACKLOG-3254: see the note on the async twin above. Same pair, same
+    // reason to keep the two strings apart.
     logService.warn(
-      `[${context}] Provided userId not found in local DB, looking up correct ID`,
+      `[${context}] Provided userId is not present in users_local; returning null`,
       context,
       { providedId: providedUserId.substring(0, 8) + "..." },
     );
+    return null;
   }
 
-  // Look up any user in the database (single-user app fallback)
+  // No id was supplied. Look up the local user (legacy bridge compatibility).
   const anyUser = db.prepare(LOCAL_USER_ID_SQL).get() as
     | { id: string }
     | undefined;

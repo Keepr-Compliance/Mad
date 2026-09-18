@@ -7,6 +7,7 @@
  */
 
 export * from "./common";
+export * from "./healthIssue";
 export * from "./llm";
 export * from "./channels";
 export * from "./window-api-auth";

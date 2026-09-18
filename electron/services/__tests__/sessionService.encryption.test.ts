@@ -3,13 +3,14 @@
  */
 
 /**
- * Tests for SessionService encryption functionality (TASK-2017)
+ * Tests for SessionService encryption functionality (TASK-2017, BACKLOG-3255)
  *
  * Tests cover:
  * - Encrypt/decrypt round-trip via safeStorage
  * - Plaintext migration (legacy session -> encrypted on first read)
  * - Decrypt failure -> returns null (force re-login), deletes corrupt file
- * - Encryption unavailable -> falls back to plaintext
+ * - Encryption unavailable -> nothing is written and the save reports failure
+ * - A session file that cannot be secured is removed, not kept
  */
 
 import path from "path";
@@ -65,6 +66,14 @@ jest.mock("../logService", () => {
  */
 function getMockLogService() {
   return jest.requireMock("../logService").default;
+}
+
+/**
+ * Helper: get the current Sentry mock reference (mapped in jest.config.js).
+ * Like getMockLogService, it must be called AFTER resetModules + re-import.
+ */
+function getMockSentry() {
+  return require("@sentry/electron/main");
 }
 
 /**
@@ -215,6 +224,11 @@ describe("SessionService - Encryption (TASK-2017)", () => {
       const wrapper = JSON.parse(writtenContent);
       expect(wrapper).toHaveProperty("encrypted");
 
+      // The bytes that reach disk must not carry the token. Asserting the wrapper
+      // shape alone would pass on content that still contained it verbatim.
+      expect(writtenContent).not.toContain("plaintext-token");
+      expect(writtenContent).not.toContain("test@example.com");
+
       // Should log migration info
       expect(getMockLogService().info).toHaveBeenCalledWith(
         "Found plaintext session, will migrate to encrypted format",
@@ -236,6 +250,58 @@ describe("SessionService - Encryption (TASK-2017)", () => {
 
       // Should NOT re-write the file (no migration needed)
       expect(mockFs.writeFile).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The migration re-save can fail for two independent reasons, and the call
+     * site sees only a boolean. Both must reach the same outcome, so both get a
+     * test of their own -- a single test would leave one cause unexercised.
+     */
+    const unmigratableSession = {
+      user: {
+        id: "user-123",
+        email: "legacy@example.com",
+        oauth_provider: "google",
+        oauth_id: "google-123",
+      },
+      sessionToken: "legacy-session-token",
+      provider: "google",
+      expiresAt: Date.now() + 24 * 60 * 60 * 1000,
+      createdAt: Date.now(),
+    };
+
+    it("removes a session file that cannot be secured and forces re-login", async () => {
+      mockSafeStorage.isEncryptionAvailable.mockReturnValue(false);
+      mockFs.readFile.mockResolvedValue(JSON.stringify(unmigratableSession));
+
+      const loaded = await sessionService.loadSession();
+
+      expect(loaded).toBeNull();
+      expect(mockFs.writeFile).not.toHaveBeenCalled();
+      expect(mockFs.unlink).toHaveBeenCalledWith(
+        path.join("/mock/user/data", "session.json"),
+      );
+      expect(getMockLogService().info).not.toHaveBeenCalledWith(
+        "Plaintext session migrated to encrypted format",
+        "SessionService",
+      );
+    });
+
+    it("removes a session file when the migration write fails", async () => {
+      // Encryption is available; the file system is what refuses.
+      mockFs.readFile.mockResolvedValue(JSON.stringify(unmigratableSession));
+      mockFs.writeFile.mockRejectedValue(new Error("EACCES: permission denied"));
+
+      const loaded = await sessionService.loadSession();
+
+      expect(loaded).toBeNull();
+      expect(mockFs.unlink).toHaveBeenCalledWith(
+        path.join("/mock/user/data", "session.json"),
+      );
+      expect(getMockLogService().info).not.toHaveBeenCalledWith(
+        "Plaintext session migrated to encrypted format",
+        "SessionService",
+      );
     });
   });
 
@@ -311,53 +377,76 @@ describe("SessionService - Encryption (TASK-2017)", () => {
     });
   });
 
-  describe("Encryption Unavailable - Plaintext Fallback", () => {
-    it("should save session as plaintext when encryption unavailable", async () => {
+  describe("Encryption Unavailable - Nothing Is Written", () => {
+    it("writes no session file when the secret store reports encryption unavailable", async () => {
       mockSafeStorage.isEncryptionAvailable.mockReturnValue(false);
 
       await sessionService.saveSession(validSessionData);
 
-      expect(mockFs.writeFile).toHaveBeenCalledTimes(1);
-      const writtenContent = mockFs.writeFile.mock.calls[0][1] as string;
-      const parsed = JSON.parse(writtenContent);
-
-      // Should NOT have encrypted wrapper -- should be raw session data
-      expect(parsed).not.toHaveProperty("encrypted");
-      expect(parsed.sessionToken).toBe("session-token-abc123");
-      expect(parsed.user.email).toBe("test@example.com");
-
-      // safeStorage.encryptString should NOT have been called
+      expect(mockFs.writeFile).not.toHaveBeenCalled();
       expect(mockSafeStorage.encryptString).not.toHaveBeenCalled();
+    });
 
-      // Should log a warning
-      expect(getMockLogService().warn).toHaveBeenCalledWith(
-        "safeStorage not available, saving session as plaintext",
+    it("resolves false without writing when the secret store reports encryption unavailable", async () => {
+      mockSafeStorage.isEncryptionAvailable.mockReturnValue(false);
+
+      await expect(sessionService.saveSession(validSessionData)).resolves.toBe(
+        false,
+      );
+      expect(mockFs.writeFile).not.toHaveBeenCalled();
+    });
+
+    it("logs a refused save at error level with a distinguishing reason", async () => {
+      mockSafeStorage.isEncryptionAvailable.mockReturnValue(false);
+
+      await sessionService.saveSession(validSessionData);
+
+      expect(getMockLogService().error).toHaveBeenCalledWith(
+        "Session not saved: the session could not be encrypted",
+        "SessionService",
+        { reason: "unavailable" },
+      );
+      // The success line belongs to a write that happened.
+      expect(getMockLogService().info).not.toHaveBeenCalledWith(
+        "Session saved successfully",
         "SessionService",
       );
     });
 
-    it("should load plaintext session when encryption unavailable", async () => {
+    it("leaves an existing session file untouched when a write is refused", async () => {
       mockSafeStorage.isEncryptionAvailable.mockReturnValue(false);
 
-      // Plaintext session (no encryption wrapper)
-      mockFs.readFile.mockResolvedValue(
-        JSON.stringify(validSessionData),
-      );
+      await sessionService.saveSession(validSessionData);
 
-      const loaded = await sessionService.loadSession();
-
-      expect(loaded).not.toBeNull();
-      expect(loaded!.sessionToken).toBe("session-token-abc123");
-
-      // Should still attempt to re-save (migration), but it will save as plaintext
-      // since encryption is unavailable
-      expect(mockFs.writeFile).toHaveBeenCalledTimes(1);
-      const writtenContent = mockFs.writeFile.mock.calls[0][1] as string;
-      const parsed = JSON.parse(writtenContent);
-      expect(parsed).not.toHaveProperty("encrypted");
+      // Refusing a new write must not reach for the file that is already there.
+      expect(mockFs.unlink).not.toHaveBeenCalled();
     });
 
-    it("should fall back to plaintext when encryptString throws", async () => {
+    it("treats a secret store that cannot answer availability as unavailable", async () => {
+      mockSafeStorage.isEncryptionAvailable.mockImplementation(() => {
+        throw new Error("secret store not initialized");
+      });
+
+      await expect(sessionService.saveSession(validSessionData)).resolves.toBe(
+        false,
+      );
+      expect(mockFs.writeFile).not.toHaveBeenCalled();
+      expect(mockSafeStorage.encryptString).not.toHaveBeenCalled();
+    });
+
+    it("writes no session file when the encrypt call fails", async () => {
+      mockSafeStorage.isEncryptionAvailable.mockReturnValue(true);
+      mockSafeStorage.encryptString.mockImplementation(() => {
+        throw new Error("Keychain locked");
+      });
+
+      await expect(sessionService.saveSession(validSessionData)).resolves.toBe(
+        false,
+      );
+      expect(mockFs.writeFile).not.toHaveBeenCalled();
+    });
+
+    it("logs a failed encrypt call under its own reason", async () => {
       mockSafeStorage.isEncryptionAvailable.mockReturnValue(true);
       mockSafeStorage.encryptString.mockImplementation(() => {
         throw new Error("Keychain locked");
@@ -365,35 +454,70 @@ describe("SessionService - Encryption (TASK-2017)", () => {
 
       await sessionService.saveSession(validSessionData);
 
-      expect(mockFs.writeFile).toHaveBeenCalledTimes(1);
-      const writtenContent = mockFs.writeFile.mock.calls[0][1] as string;
-      const parsed = JSON.parse(writtenContent);
-
-      // Should fall back to plaintext
-      expect(parsed).not.toHaveProperty("encrypted");
-      expect(parsed.sessionToken).toBe("session-token-abc123");
-
-      expect(getMockLogService().warn).toHaveBeenCalledWith(
-        "safeStorage encryption failed, saving session as plaintext",
+      expect(getMockLogService().error).toHaveBeenCalledWith(
+        "Session not saved: the session could not be encrypted",
         "SessionService",
-        expect.objectContaining({ error: "Keychain locked" }),
+        { reason: "encrypt-failed", error: "Keychain locked" },
       );
     });
-  });
 
-  describe("isEncryptionAvailable error handling", () => {
-    it("should return false when isEncryptionAvailable throws", async () => {
-      mockSafeStorage.isEncryptionAvailable.mockImplementation(() => {
-        throw new Error("safeStorage not initialized");
-      });
+    it("reports a refusal to Sentry once per reason per process", async () => {
+      mockSafeStorage.isEncryptionAvailable.mockReturnValue(false);
 
       await sessionService.saveSession(validSessionData);
+      await sessionService.saveSession(validSessionData);
 
-      // Should fall back to plaintext
-      const writtenContent = mockFs.writeFile.mock.calls[0][1] as string;
-      const parsed = JSON.parse(writtenContent);
-      expect(parsed).not.toHaveProperty("encrypted");
-      expect(parsed.sessionToken).toBe("session-token-abc123");
+      // Refusals repeat for as long as the condition lasts, and writes are routine.
+      // The log line is emitted every time; the report is not, or a constant reason
+      // would drown out a rare one.
+      const sentry = getMockSentry();
+      expect(sentry.captureException).toHaveBeenCalledTimes(1);
+      expect(sentry.captureException).toHaveBeenCalledWith(
+        expect.any(Error),
+        expect.objectContaining({
+          tags: expect.objectContaining({
+            service: "session-service",
+            reason: "unavailable",
+          }),
+        }),
+      );
+      // ...while every occurrence is still logged.
+      expect(getMockLogService().error).toHaveBeenCalledTimes(2);
+    });
+
+    it("reports distinct refusal reasons separately", async () => {
+      mockSafeStorage.isEncryptionAvailable.mockReturnValue(false);
+      await sessionService.saveSession(validSessionData);
+
+      mockSafeStorage.isEncryptionAvailable.mockReturnValue(true);
+      mockSafeStorage.encryptString.mockImplementation(() => {
+        throw new Error("Keychain locked");
+      });
+      await sessionService.saveSession(validSessionData);
+
+      // Deduplication is per reason, not global: the second reason must still arrive.
+      const sentry = getMockSentry();
+      expect(sentry.captureException).toHaveBeenCalledTimes(2);
+      const reasons = sentry.captureException.mock.calls.map(
+        (call: [Error, { tags: { reason: string } }]) => call[1].tags.reason,
+      );
+      expect(reasons.sort()).toEqual(["encrypt-failed", "unavailable"]);
+    });
+
+    it("reports a refused update without writing or clearing", async () => {
+      // Load succeeds (the store can decrypt); only the write back is refused.
+      mockFs.readFile.mockResolvedValue(
+        createEncryptedFileContent(validSessionData),
+      );
+      mockSafeStorage.encryptString.mockImplementation(() => {
+        throw new Error("Keychain locked");
+      });
+
+      await expect(
+        sessionService.updateSession({ lastServerValidatedAt: Date.now() }),
+      ).resolves.toBe(false);
+      expect(mockFs.writeFile).not.toHaveBeenCalled();
+      expect(mockFs.unlink).not.toHaveBeenCalled();
     });
   });
 });

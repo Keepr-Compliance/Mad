@@ -121,10 +121,14 @@ Nothing in the toolchain catches this. **`tsc`, eslint and jest all read source;
 
 **Do this before writing a plan:**
 
-1. **Walk the import chain upward** to a mounted component, a registered IPC handler, or an app entry point. **Stop at the first orphan** — a parent that nothing imports means the whole chain below it is dead.
+1. **Walk the import chain upward** to a mounted component or an app entry point. **A registered IPC handler is NOT a terminus** — in Electron a handler registration is a *leaf* of the preload bridge, not a root. A change inside `ipcMain.handle(...)` is reachable only if something in `src/` invokes that channel: `git grep -n '<channel>\|<preloadMethod>\|<exportedSymbol>' -- src`. A proven zero (PR-SOP §6.2k) means unreachable, however many callers exist inside `electron/`. **Stop at the first orphan** — a parent that nothing imports means the whole chain below it is dead.
+
+   **A hit is where the walk starts, not where it ends.** Discard hits in tests, type declarations and comments, then walk the remaining call upward to a mounted component or an entry point. If the call only runs when a value is set — `if (x)`, `x &&`, an early return, an optional prop or callback — enumerate every writer of that value (every `setX(` call, every place the prop is passed and every place it is invoked) and cite one writer that is itself reached by the same test. A call whose gate has no reachable writer counts as zero hits. Worked example: BACKLOG-2546 — a real call in `src/` sat behind a gate whose only non-null writer was never invoked; it was ruled reachable on 2026-09-08 by citing the call (trace in `pm_comments` on the item).
 2. **Check for dynamic reachability before declaring anything dead** — `React.lazy`, a runtime `import()`, a string-keyed registry, a barrel re-export. **"No static imports found" is not proof.** A wrong "this is dead" is worse than leaving dead code alone.
 3. **For a screen, ask the founder to confirm what he sees.** One click beats any amount of import tracing. Give him a distinguishing detail — a button's exact label — not "does this screen work".
 4. **If it turns out unreachable: STOP.** Report it, and say whether the defect also exists on the live surface in different code. **Do not fix the dead copy, and do not move the fix to the live one without saying so** — that is a different change against a different file.
+
+   **After a STOP:** post the grep, its positive control and any gate trace to `pm_comments` on the item, headed `STOP — UNREACHABLE`; build nothing. PM sets the item to `waiting_for_user` and puts the wire / delete / build-anyway question to the founder in SUMMARY slot 5. Only his answer releases the item.
 
 **Also check the item itself is not already built.** BACKLOG-2364 was dispatched to an engineer weeks after it had shipped. `git log -S` on a distinctive string from the item beats reading the status field.
 
@@ -336,6 +340,8 @@ Engineers MUST complete these checks before committing or pushing. Do not rely o
 
 3. **Check mock alignment:**
    If you changed a function signature, added a parameter, or changed a return type, verify that all mocks of that function match the new signature. Mismatched mocks cause false passes locally and failures in CI.
+
+> **The network guard (BACKLOG-3284):** an unmocked outbound connection in a jest run is a RED test — mock the client, there is deliberately no opt-in, and a run can exit 1 with every test *passed* when the `globalTeardown` backstop catches it. What it covers and what it does not: `CLAUDE.md` → "Tests never touch the network".
 
 > **Controls (breaking your code on purpose to prove a test can see it):** prove the mutation applied before you count its result, treat `Tests: 0 total` as a failure, and commit the fix before any control that reverts with `git checkout --`. Rules and worked example: `.claude/docs/PR-SOP.md` → §4.4.
 

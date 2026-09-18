@@ -81,6 +81,7 @@ describe('supabase/migrations directory hygiene (BACKLOG-3126)', () => {
         '20260320_add_directory_sync_provisioning.sql',
         '20260320_add_directory_sync_tracking.sql',
         '20260320_add_google_workspace_domain.sql',
+        'backfill_personal_organizations.sql',
       ]);
     });
 

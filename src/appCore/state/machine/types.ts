@@ -8,6 +8,10 @@
  * @module appCore/state/machine/types
  */
 
+import type { FdaState } from "./fdaState";
+
+export type { FdaState };
+
 // ============================================
 // LOADING PHASES
 // ============================================
@@ -94,18 +98,17 @@ export interface UserData {
   hasEmailConnected: boolean;
   /** True if Windows + iPhone user needs Apple Mobile Device driver */
   needsDriverSetup: boolean;
-  /** True if macOS user has granted Full Disk Access */
-  hasPermissions: boolean;
   /**
-   * BACKLOG-3212: true if the user chose "Skip for now" on the Full Disk
-   * Access step at some point (Supabase user_preferences
-   * `onboarding.fdaSkipped`). Distinct from `hasPermissions` on purpose —
-   * skipping does NOT grant access to the local Messages database, it only
-   * records that the user was already asked and declined. Optional: absent
-   * (the pre-3212 shape) means "never skipped", so every existing
-   * construction site keeps its meaning.
+   * BACKLOG-3275: the Full Disk Access situation, as ONE named state.
+   *
+   * Replaces the `hasPermissions` / `fdaSkipped` pair. Read the capability
+   * through {@link isFdaGranted} — never by comparing this to a string at a
+   * call site — so that adding a state fails to compile at every consumer.
+   *
+   * BACKLOG-3212's meaning is preserved exactly: `"declined"` records that the
+   * user was asked and said no. It never implies access was granted.
    */
-  fdaSkipped?: boolean;
+  fda: FdaState;
 }
 
 // ============================================
@@ -217,14 +220,19 @@ export interface OnboardingState {
   completedSteps: OnboardingStep[];
   /** True if email was connected during this onboarding session */
   hasEmailConnected?: boolean;
-  /** True if macOS Full Disk Access is granted (checked during loading) */
-  hasPermissions?: boolean;
   /**
-   * BACKLOG-3212: the persisted "Skip for now" choice from a previous
-   * session, carried onto onboarding state so the queue can seed `permissions`
-   * as already-answered instead of re-asking. Never implies FDA is granted.
+   * BACKLOG-3275: the Full Disk Access situation during onboarding.
+   *
+   * Optional, and `undefined` is load-bearing: it means "not established yet".
+   * `selectHasPermissionsNullable` maps it to `undefined` rather than `false`
+   * so a half-loaded state never satisfies the BACKLOG-1821 data-source floor
+   * (`dataSourceFloor.ts:67`) and never marks the permissions step complete
+   * (`PermissionsStep.tsx:683`).
+   *
+   * BACKLOG-3212: when this is `"declined"`, the queue seeds `permissions` as
+   * already-answered instead of re-asking.
    */
-  fdaSkipped?: boolean;
+  fda?: FdaState;
   /** Phone type selected during onboarding (iphone or android) */
   selectedPhoneType?: "iphone" | "android";
   /**
@@ -282,6 +290,7 @@ export type AppAction =
   | OnboardingStepCompleteAction
   | OnboardingSkipAction
   | OnboardingQueueDoneAction
+  | FdaGrantedAction
   | PhoneTypeResetAction
   | ResumeMarkerAppliedAction
   | EmailConnectedAction
@@ -292,6 +301,30 @@ export type AppAction =
   | ErrorAction
   | RetryAction
   | InitStageReceivedAction;
+
+/**
+ * BACKLOG-3275: the Full Disk Access capability was OBSERVED to be present.
+ *
+ * This is the ONLY action that may set the state to `"granted"`, and it exists
+ * so that no navigation action can. Before it, completing the permissions step
+ * was what made the app believe the capability was held — which meant a user
+ * who DECLINED, and a user who was never asked, both ended up reported as
+ * having granted it.
+ *
+ * Dispatched from `usePermissionsFlow.handlePermissionsGranted`, which fires
+ * only after the permission check reports the capability is present.
+ *
+ * Deliberately separate from `ONBOARDING_STEP_COMPLETE{step:"permissions"}`:
+ * that action says where the user is, this one says what the app can do. The
+ * two are dispatched together today, but `ONBOARDING_SKIP` re-dispatches as a
+ * step completion (see its case in the reducer), so a step completion can
+ * arrive from a path that granted nothing. Exhaustiveness checking cannot see
+ * that — the coupling is semantic, not typed — so the separation is structural
+ * rather than conventional.
+ */
+export interface FdaGrantedAction {
+  type: "FDA_GRANTED";
+}
 
 /**
  * Storage check completed - determined if key store exists.

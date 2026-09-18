@@ -143,6 +143,7 @@ import { registerEmailSyncHandlers } from "./handlers/emailSyncHandlers";
 import { registerEmailLinkingHandlers } from "./handlers/emailLinkingHandlers";
 import { registerEmailAutoLinkHandlers } from "./handlers/emailAutoLinkHandlers";
 import { registerReviewQueueHandlers } from "./handlers/reviewQueueHandlers";
+import { registerHiddenTextHandlers } from "./handlers/hiddenTextHandlers";
 import { registerAttachmentHandlers } from "./handlers/attachmentHandlers";
 import { registerContactHandlers } from "./handlers/contactHandlers";
 import { registerAddressHandlers } from "./handlers/addressHandlers";
@@ -173,7 +174,7 @@ import { registerPairingHandlers, cleanupPairingHandlers } from "./handlers/pair
 import { LLMConfigService } from "./services/llm/llmConfigService";
 
 // Import license and device services for deep link auth validation (TASK-1507)
-import { validateLicense, createUserLicense } from "./services/licenseService";
+import { validateLicense, createUserLicense, ensurePersonalOrganization } from "./services/licenseService";
 import { registerDevice } from "./services/deviceService";
 import supabaseService from "./services/supabaseService";
 import databaseService from "./services/databaseService";
@@ -217,6 +218,15 @@ applyLogFileConfig(log.transports.file);
 // This import only binds the namespace for the calls below.
 import * as Sentry from "@sentry/electron/main";
 import { runStartupHealthChecks } from "./services/startupHealthCheck";
+import { getInstallMode } from "./services/diagnostics/installMode";
+
+// BACKLOG-3432: which installer this build came from, as a derived value only.
+// The Windows one-click installer migrates a prior per-machine install to
+// per-user; a user who declines the elevation prompt stays where they were and
+// is told nothing. This value is what makes that user findable afterwards
+// instead of invisible. NEVER report process.execPath -- a per-user path
+// contains the Windows account name. See services/diagnostics/installMode.ts.
+const installMode = getInstallMode(app.isPackaged);
 
 // TASK-2330: Set auto-updater context immediately after Sentry.init()
 // so all subsequent events/breadcrumbs carry version + platform info
@@ -225,7 +235,15 @@ Sentry.setContext("auto-updater", {
   platform: process.platform,
   arch: process.arch,
   feedRepo: "Keepr-Compliance/keepr-releases",
+  installMode,
 });
+
+// A context field is not searchable in Sentry issue search; a tag is. The tag
+// is what turns "somebody may be stuck" into the list of who.
+Sentry.setTag("install_mode", installMode);
+// Logged as well so the value is observable locally, without waiting for a
+// Sentry event to fire.
+log.info(`[Startup] Install mode: ${installMode}`);
 
 // Global error handlers - must be registered early, before any async operations
 // These catch uncaught exceptions and unhandled promise rejections to prevent silent crashes
@@ -615,6 +633,17 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
         });
         focusMainWindow();
         return;
+      }
+
+      // BACKLOG-3364: Step 4.5 - the personal organization a solo user's plan
+      // is recorded against. Placed after the block check rather than directly
+      // after the licence step so that it fires on exactly the same condition
+      // as the `license:validate` handler does — a licence that is not
+      // blocking. It never throws and never stops sign-in; a failure here
+      // leaves the user exactly as they were before personal organizations
+      // existed, and the next launch asks again.
+      if (licenseStatus.isValid) {
+        await ensurePersonalOrganization(user.id);
       }
 
       // TASK-1507: Step 5 - Register device
@@ -1716,6 +1745,8 @@ app.whenReady().then(async () => {
   registerEmailLinkingHandlers();
   registerEmailAutoLinkHandlers();
   registerReviewQueueHandlers();
+  // BACKLOG-3366: hide / unhide individual texts from a transaction's export.
+  registerHiddenTextHandlers();
   registerAttachmentHandlers(mainWindow!);
   registerContactHandlers(mainWindow!);
   registerAddressHandlers();

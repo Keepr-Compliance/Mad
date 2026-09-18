@@ -84,9 +84,10 @@ jest.mock("../services/databaseService", () => {
       restoreContact: (id: string) => real.restoreContact(id),
       getRemovedContacts: (userId: string) => real.getRemovedContacts(userId),
       getUserById: (id: string) => Promise.resolve(id === USER ? { id } : null),
-      // getValidUserId falls back to "any user in the database" when the
-      // provided id is unknown — this is a single-user desktop app. Pointed at
-      // the real test database so that fallback runs for real.
+      // Pointed at the real test database so `getValidUserId` runs its real
+      // lookup rather than a hand-written answer. BACKLOG-3254: an id this
+      // database cannot confirm now resolves to null — see the last test in
+      // this file, whose empty assertion is deliberate.
       getRawDatabase: () => db,
     },
   };
@@ -271,19 +272,46 @@ describe("contacts:get-removed", () => {
     expect(result).toEqual({ success: true, contacts: [] });
   });
 
-  it("falls back to the local user when the renderer sends an unknown id", async () => {
-    // Documents REAL behaviour, not the behaviour this test first assumed.
-    // `getValidUserId` resolves an unrecognised id to "any user in the
-    // database" (userIdHelper.ts) because this is a single-user desktop app —
-    // it is a deliberate recovery path for a stale renderer id, not a leak.
-    // The first version of this test asserted an empty list and failed, which
-    // is the test being wrong rather than the handler.
+  /**
+   * ===========================================================================
+   * THE EMPTY LIST BELOW IS DELIBERATE AND LOAD-BEARING. DO NOT "FIX" IT.
+   * ===========================================================================
+   * This assertion has been written once before and reverted. The version this
+   * one replaces asserted the opposite — that an unknown id returns DANA — and
+   * carried the note: *"The first version of this test asserted an empty list
+   * and failed, which is the test being wrong rather than the handler."*
+   *
+   * That was an accurate reading of the handler at the time. It is no longer:
+   * BACKLOG-3254 changed `getValidUserId` so that an id which is not in
+   * `users_local` resolves to null rather than to a different id, and
+   * `contacts:get-removed` returns an empty list for a null user.
+   *
+   * So if this test goes red, the question is NOT "which assertion is right?"
+   * — it is "did something reintroduce a resolution this id never asked for?".
+   * The empty list is the fix, not a stale expectation. `USER` is seeded and
+   * the id below is not; nothing may make one stand in for the other.
+   */
+  it("returns an empty list for an id that is not the local user", async () => {
     await deleteContact(DANA);
 
     const result = (await handlerFor("contacts:get-removed")(
       EVENT,
       "11111111-2222-4333-8444-555555555555" as never,
     )) as { success: boolean; contacts?: Array<{ id: string }> };
+
+    expect(result.success).toBe(true);
+    expect(result.contacts).toEqual([]);
+  });
+
+  it("still returns the removed contact for the id that IS the local user", async () => {
+    // The anti-vacuity leg for the test above: an empty list proves nothing
+    // unless the same fixture can also produce a non-empty one.
+    await deleteContact(DANA);
+
+    const result = (await handlerFor("contacts:get-removed")(EVENT, USER as never)) as {
+      success: boolean;
+      contacts?: Array<{ id: string }>;
+    };
 
     expect(result.success).toBe(true);
     expect(result.contacts?.map((c) => c.id)).toEqual([DANA]);

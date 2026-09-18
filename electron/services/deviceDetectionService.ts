@@ -6,6 +6,7 @@
  */
 
 import { spawn, exec } from "child_process";
+import { createHash } from "crypto";
 import { promisify } from "util";
 import { EventEmitter } from "events";
 import log from "electron-log";
@@ -15,6 +16,20 @@ import { getCommand, canUseLibimobiledevice } from "./libimobiledeviceService";
 import { validateDeviceUdid, isValidDeviceUdid, ValidationError } from "../utils/validation";
 
 const execAsync = promisify(exec);
+
+/**
+ * BACKLOG-3422: a stable, non-reversible handle for one device, for logs.
+ *
+ * This repository is public and its logs get pasted into issues, so a device UDID or
+ * serial must never appear in one. Correlating two runs against the same phone still
+ * has to be possible, which rules out omitting the device entirely — hence a digest
+ * rather than a prefix of the UDID, which would be a substring of the real identifier.
+ *
+ * 8 hex characters. Enough to tell two phones apart in one log file; not an identifier.
+ */
+export function deviceLogTag(udid: string): string {
+  return createHash("sha256").update(udid).digest("hex").slice(0, 8);
+}
 
 /** Minimum polling interval in milliseconds */
 const MIN_POLL_INTERVAL_MS = 2000;
@@ -1104,24 +1119,68 @@ export class DeviceDetectionService extends EventEmitter {
       }
 
       const ideviceinfoCmd = getCommand("ideviceinfo");
-      log.debug(`[DeviceDetection] Getting storage info for device: ${validatedUdid}`);
+      // BACKLOG-3422: the UDID is NOT logged. `deviceTag` is a one-way 8-hex digest of
+      // it, so two runs against the same phone correlate inside one log file and the
+      // identifier itself never reaches a log the founder pastes into a public issue.
+      // A UDID *prefix* would have correlated too, and is a substring of the real
+      // identifier — hence the digest.
+      const deviceTag = deviceLogTag(validatedUdid);
+      // Promoted from log.debug (BACKLOG-3422). Two reasons. The founder's build
+      // records nothing below `info` (established by BACKLOG-2925, which is why the
+      // keysSeen warning sits at warn), and this line is the ONLY thing that covers a
+      // `close` that never fires: a start line with no [STORAGE-QUERY] line after it is
+      // itself a diagnosis.
+      log.info(`[DeviceDetection] [STORAGE-QUERY] start device=${deviceTag}`);
 
       return new Promise((resolve) => {
         // Query disk usage domain for storage information
         // SECURITY: validatedUdid has been validated
+        const startedAt = Date.now();
         const proc = spawn(ideviceinfoCmd, ["-u", validatedUdid, "-q", "com.apple.disk_usage"]);
         let stdout = "";
         let stderr = "";
+        // BACKLOG-3422: byte counts come off the Buffer chunks, NOT off `stdout.length`,
+        // which is UTF-16 code units and only coincides with bytes for ASCII.
+        let stdoutBytes = 0;
+        let stderrBytes = 0;
+        // Elapsed ms to the FIRST byte of stdout, or null if the process never wrote
+        // one. This is the field that separates the two states the 2026-09-17 log could
+        // not tell apart: "the process never answered" (null, with a long elapsedMs)
+        // from "the query answered and said nothing usable" (a number).
+        let firstByteMs: number | null = null;
 
         proc.stdout.on("data", (data) => {
+          if (firstByteMs === null) firstByteMs = Date.now() - startedAt;
+          stdoutBytes += Buffer.isBuffer(data) ? data.length : Buffer.byteLength(String(data));
           stdout += data.toString();
         });
 
         proc.stderr.on("data", (data) => {
+          stderrBytes += Buffer.isBuffer(data) ? data.length : Buffer.byteLength(String(data));
           stderr += data.toString();
         });
 
-        proc.on("close", (code) => {
+        proc.on("close", (code, signal) => {
+          // BACKLOG-3422 — the instrument. Emitted on EVERY close, before the exit-code
+          // branch, because the failure this exists for exits 0.
+          //
+          // On 2026-09-17 this query took 60.036s and then 60.047s, twice, and produced
+          // empty stdout, empty stderr and exit 0. None of that was recorded: the 60s
+          // was recovered by subtracting two unrelated log timestamps by eye, and the
+          // success path recorded no duration at all, so there was no baseline to
+          // compare against. Replicated on demand the same query answers in 40-60ms.
+          //
+          // `signal` is carried because the close handler previously took only `code`:
+          // a signalled kill arrives as `code=null` and went down the non-zero branch
+          // with empty stderr, indistinguishable from several other things.
+          //
+          // WHY the query stalls is NOT established — see the item. This line does not
+          // explain it; it records enough that the next occurrence can be read off the
+          // log instead of re-derived.
+          log.info(
+            `[DeviceDetection] [STORAGE-QUERY] device=${deviceTag} elapsedMs=${Date.now() - startedAt} firstByteMs=${firstByteMs ?? "none"} exitCode=${code} signal=${signal ?? "none"} stdoutBytes=${stdoutBytes} stderrBytes=${stderrBytes}`,
+          );
+
           if (code !== 0) {
             log.warn(`[DeviceDetection] Failed to get storage info: ${stderr}`);
             resolve(null);
@@ -1138,8 +1197,11 @@ export class DeviceDetectionService extends EventEmitter {
               // stderr is reported because the exit code already told us nothing: on
               // the founder's 2026-08-27 run the process exited 0, so this branch is
               // the ONLY place a lockdownd complaint can still be observed.
+              //
+              // BACKLOG-3422: `stderrBytes` now counts BYTES. It read `stderr.length`,
+              // which is UTF-16 code units and only coincides with bytes for ASCII.
               log.warn(
-                `[DeviceDetection] Storage query exited 0 but reported no usable capacity; treating device storage as UNKNOWN. stderrBytes=${stderr.length}${stderr.trim() ? ` stderrFirstLine=${JSON.stringify(stderr.trim().split("\n")[0])}` : ""}`,
+                `[DeviceDetection] Storage query exited 0 but reported no usable capacity; treating device storage as UNKNOWN. stderrBytes=${stderrBytes}${stderr.trim() ? ` stderrFirstLine=${JSON.stringify(stderr.trim().split("\n")[0])}` : ""}`,
               );
               resolve(null);
               return;

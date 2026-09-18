@@ -62,9 +62,21 @@ interface ExportOptions {
  * holds even against a racing export, not just by caller convention. The
  * in-memory `currentFirstExportedAt` short-circuit is a cheap fast-path only.
  * Non-throwing — a failure to stamp must never fail the export the user just
- * performed; it is logged and the next export retries. Kept in the export
- * handler (the completion path) rather than the export services so all three
- * formats funnel through one place.
+ * performed; it is logged and the next export retries.
+ *
+ * BACKLOG-2549 — THIS IS NO LONGER A SHARED FUNNEL, and the sentence that said
+ * so has been removed rather than left to read as live. Only
+ * `transactions:export-pdf` still calls this. The enhanced and folder paths
+ * fold the stamp into their single export-completion UPDATE
+ * (`recordExportCompletion`, write-once via `COALESCE`), because writing the
+ * marker separately from `export_status` left a window in which a deal was
+ * exported and still editable.
+ *
+ * What the swallow means on the one path that remains: a stamp failure is still
+ * silent here. It cannot produce that window, because the PDF path never sets
+ * `export_status` at all — it produces the INVERSE state (frozen, artifact on
+ * disk, still reading as `not_exported`), which is a separate defect reported
+ * out of BACKLOG-2549 and deliberately not changed here.
  */
 async function markFirstExport(
   transactionId: string,
@@ -188,10 +200,16 @@ export function registerTransactionExportHandlers(
         validatedPath || folderExportService.getDefaultExportPath(details).replace(/\/$/, "") + ".pdf";
 
       // Generate combined PDF using folder export service
+      // BACKLOG-3367: the hidden-text filter reaches this channel for free —
+      // it goes through the same resolver — so the count it passes is correct.
+      // Nothing was BUILT for this channel: it has no renderer caller and the
+      // founder ruled it deleted on 2026-09-12 (BACKLOG-3234 → BACKLOG-3302).
+      // This argument exists only because the signature now requires it.
       const generatedPath = await folderExportService.exportTransactionToCombinedPDF(
         details,
         pdfPlan.communications,
         pdfPath,
+        { hiddenTextCount: pdfPlan.hiddenTextCount, hiddenTexts: pdfPlan.hiddenTexts },
       );
 
       // BACKLOG-2006a — funnel: export-completed (main-side, non-throwing).
@@ -336,17 +354,16 @@ export function registerTransactionExportHandlers(
         },
       );
 
-      // Update export tracking in database
-      // Note: uses `as any` to match original require()-based call that bypassed strict types
-      await databaseService.updateTransaction(validatedTransactionId, {
-        export_status: "exported",
-        export_format: sanitizedOptions.exportFormat || "pdf",
-        last_exported_on: new Date().toISOString(),
-        export_count: (details.export_count || 0) + 1,
-      } as any);
-
-      // BACKLOG-2013 — stamp the freeze boundary on first successful export.
-      await markFirstExport(validatedTransactionId, details.first_exported_at);
+      // BACKLOG-2549 — export tracking AND the BACKLOG-2013 freeze boundary in
+      // ONE statement, so a deal can never be `exported` while still editable.
+      // Write-once on the marker is enforced in SQL by COALESCE.
+      const enhancedExportedAt = new Date().toISOString();
+      databaseService.recordExportCompletion(validatedTransactionId, {
+        exportFormat: sanitizedOptions.exportFormat || "pdf",
+        exportedAt: enhancedExportedAt,
+        exportCount: (details.export_count || 0) + 1,
+        firstExportedAt: enhancedExportedAt,
+      });
 
       // Audit log data export
       await auditService.log({
@@ -357,6 +374,9 @@ export function registerTransactionExportHandlers(
         metadata: {
           format: sanitizedOptions.exportFormat || "pdf",
           propertyAddress: details.property_address,
+          // BACKLOG-3367: the audit trail records what the artifact left out,
+          // not only that an export happened.
+          hiddenTextCount: enhancedPlan.hiddenTextCount,
         },
         success: true,
       });
@@ -448,12 +468,37 @@ export function registerTransactionExportHandlers(
         startDate: details.started_at as string | null | undefined,
         endDate: details.closed_at as string | null | undefined,
       };
-      let folderPlan = resolveExportPlan(folderRequest, details.communications || []);
+      // BACKLOG-2006a / 2075 — AUTHORITATIVE PAYWALL GATE (fail-closed, Option A).
+      // A locked tx is blocked outright; an unlocked one exports the full
+      // (filtered) record.
+      //
+      // BACKLOG-3367 — GATE FIRST, THEN RESOLVE ONCE. This handler used to
+      // resolve, gate, then resolve AGAIN over the gate's output, which is the
+      // already-resolved list (Option A returns its input unchanged). That is
+      // harmless while a plan holds only membership, and silently wrong the
+      // moment it holds a COUNT OF WHAT WAS REMOVED: the second pass sees a set
+      // with no hidden texts left in it and reports `hiddenTextCount: 0`, and
+      // the second plan is the one the renderer receives. Measured at plan
+      // review: folder 0 vs enhanced 1 for the same transaction (pm_comments
+      // d590f7c6, mutation M1). Resolving once, after the gate, is also the
+      // order the other two export channels already use.
+      //
+      // BEHAVIOUR CHANGE, deliberate: a LOCKED transaction whose narrowed
+      // content selection matches nothing now returns PAYWALL_LOCKED instead of
+      // "No text communications found...". The paywall is the truer answer, and
+      // it is what export-pdf and export-enhanced have always returned.
+      const folderGate = await enforceExportGate({
+        transactionId: validatedTransactionId,
+        userId: details.user_id,
+        communications: details.communications || [],
+      });
+      const folderPlan = resolveExportPlan(folderRequest, folderGate.communications);
       const communications = folderPlan.communications;
 
       logService.info("Resolved folder export include set", "Transactions", {
         original: (details.communications || []).length,
         included: communications.length,
+        hiddenTexts: folderPlan.hiddenTextCount,
         contentType: folderContentType,
         startDate: details.started_at,
         endDate: details.closed_at,
@@ -464,26 +509,24 @@ export function registerTransactionExportHandlers(
       // matched nothing. Unchanged: fires only for a narrowed selection, and
       // only after the date window has been applied.
       if (folderContentType !== "both" && communications.length === 0) {
+        // BACKLOG-3367: when the selection is empty because every in-window text
+        // was HIDDEN, "no text communications found" is false — they were found,
+        // and the user removed them. Say which it was.
+        if (folderPlan.hiddenTextCount > 0) {
+          return {
+            success: false,
+            error:
+              folderPlan.hiddenTextCount === 1
+                ? "The only text in the selected date range is hidden from export."
+                : `All ${folderPlan.hiddenTextCount} texts in the selected date range are hidden from export.`,
+          };
+        }
         const typeLabel = folderContentType === "emails" ? "email" : "text";
         return {
           success: false,
           error: `No ${typeLabel} communications found for this transaction in the selected date range.`,
         };
       }
-
-      // BACKLOG-2006a / 2075 — AUTHORITATIVE PAYWALL GATE (fail-closed, Option A).
-      // Applied to the already date/content-filtered set. A locked tx is blocked
-      // outright; an unlocked one exports the full (filtered) record.
-      const folderGate = await enforceExportGate({
-        transactionId: validatedTransactionId,
-        userId: details.user_id,
-        communications,
-      });
-      // Re-resolve over whatever the gate permitted, so `attachmentComms` can
-      // never reference a communication the gate removed. Filtering is
-      // idempotent — over an already-resolved set this is a no-op today (Option
-      // A returns the input unchanged) and stays correct if that ever changes.
-      folderPlan = resolveExportPlan(folderRequest, folderGate.communications);
 
       // Export to folder structure
       const exportPath = await folderExportService.exportTransactionToFolder(
@@ -503,17 +546,21 @@ export function registerTransactionExportHandlers(
         },
       );
 
-      // Update export tracking in database
-      // Note: export_format constraint doesn't include "folder", so we use NULL
-      // Note: uses `as any` to match original require()-based call that bypassed strict types
-      await databaseService.updateTransaction(validatedTransactionId, {
-        export_status: "exported",
-        last_exported_on: new Date().toISOString(),
-        export_count: (details.export_count || 0) + 1,
-      } as any);
-
-      // BACKLOG-2013 — stamp the freeze boundary on first successful export.
-      await markFirstExport(validatedTransactionId, details.first_exported_at);
+      // BACKLOG-2549 — export tracking AND the BACKLOG-2013 freeze boundary in
+      // ONE statement (see the enhanced path above).
+      //
+      // `export_format` is OMITTED, not set to NULL: this path has never
+      // written the column, so whatever a previous export recorded survives.
+      // (The old comment here said the constraint excludes "folder" — it does
+      // not, schema.sql permits it. Recording "folder" would change what that
+      // column means to every reader of it, which is a product decision and not
+      // part of an atomicity fix.)
+      const folderExportedAt = new Date().toISOString();
+      databaseService.recordExportCompletion(validatedTransactionId, {
+        exportedAt: folderExportedAt,
+        exportCount: (details.export_count || 0) + 1,
+        firstExportedAt: folderExportedAt,
+      });
 
       // Audit log data export
       await auditService.log({
@@ -524,6 +571,8 @@ export function registerTransactionExportHandlers(
         metadata: {
           format: "folder",
           propertyAddress: details.property_address,
+          // BACKLOG-3367: see the enhanced handler above.
+          hiddenTextCount: folderPlan.hiddenTextCount,
         },
         success: true,
       });
@@ -614,6 +663,10 @@ export function registerTransactionExportHandlers(
         messagesCount: result.messagesCount,
         attachmentsCount: result.attachmentsCount,
         attachmentsFailed: result.attachmentsFailed,
+        // BACKLOG-3389: in-window items that advertised an attachment and
+        // contributed none. Carried across the boundary because a number the
+        // renderer cannot read is a number no one will ever act on.
+        flaggedWithoutAttachments: result.flaggedWithoutAttachments,
         error: result.error,
       };
     }, { module: "Transactions" }),
@@ -704,6 +757,10 @@ export function registerTransactionExportHandlers(
         messagesCount: result.messagesCount,
         attachmentsCount: result.attachmentsCount,
         attachmentsFailed: result.attachmentsFailed,
+        // BACKLOG-3389: in-window items that advertised an attachment and
+        // contributed none. Carried across the boundary because a number the
+        // renderer cannot read is a number no one will ever act on.
+        flaggedWithoutAttachments: result.flaggedWithoutAttachments,
         error: result.error,
       };
     }, { module: "Transactions" }),

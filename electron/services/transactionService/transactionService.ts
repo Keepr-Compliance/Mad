@@ -29,7 +29,7 @@ import { FIRST_SCAN_LOOKBACK_MONTHS } from "../../constants";
 import { createCommunicationReference } from "../messageMatchingService";
 import { autoLinkCommunicationsForContact, type AutoLinkResult } from "../autoLinkService";
 import emailSyncService from "../emailSyncService";
-import { dbGet, dbAll } from "../db/core/dbConnection";
+import { dbGet, dbAll, dbTransaction } from "../db/core/dbConnection";
 import {
   COMMUNICATIONS_IN_THREAD_SQL,
   EMAIL_COMMUNICATION_EXISTS_SQL,
@@ -40,7 +40,19 @@ import {
   TRANSACTION_FIRST_EXPORTED_SQL,
 } from "../db/transactionThreadSql";
 import { isTransactionFrozen } from "../transactionFreezePolicy";
-import { UNFREEZE_OVERRIDE_KEY } from "../db/transactionDbService";
+import { UNFREEZE_OVERRIDE_KEY, updateTransactionSync } from "../db/transactionDbService";
+// BACKLOG-2547 — the SYNCHRONOUS primitives, imported straight from the db
+// layer. `unlinkMessages` calls these from inside a `dbTransaction` body, where
+// a promise-returning wrapper would be an atomicity hole dressed as a fix: the
+// callback returns, the transaction commits, and the failure arrives later as
+// an unhandled rejection. `unlinkMessageFromTransaction` was always sync — only
+// the `databaseService` facade made it look otherwise.
+import { unlinkMessageFromTransaction } from "../db/messageDbService";
+import {
+  addIgnoredCommunicationSync,
+  deleteCommunicationByMessageIdSync,
+  deleteCommunicationByThreadSync,
+} from "../db/communicationDbService";
 import auditService from "../auditService";
 import { createEmail, getEmailByExternalId } from "../db/emailDbService";
 import emailAttachmentService from "../emailAttachmentService";
@@ -2110,9 +2122,15 @@ class TransactionService {
     const transactionUsers = new Map<string, string>();
     // BACKLOG-1560: Track messages without valid thread_id for per-message suppression
     const transactionThreadlessMessages = new Map<string, Set<string>>();
+    // BACKLOG-2547: phase 1's reads, kept so the write phase does not re-issue
+    // them. Safe because the only writes between the two reads are the
+    // suppression INSERTs, and those touch `ignored_communications` alone —
+    // nothing on this path writes a `messages` row before the write phase.
+    const messagesById = new Map<string, Message | null>();
 
     for (const messageId of messageIds) {
       const message = await databaseService.getMessageById(messageId);
+      messagesById.set(messageId, message);
 
       const transactionId = passedTransactionId || message?.transaction_id;
 
@@ -2150,90 +2168,154 @@ class TransactionService {
       }
     }
 
-    // BACKLOG-1560 FIX: Record suppression BEFORE deleting communication records.
-    // Previous attempts deleted comms first, then if suppression INSERT failed,
-    // the communication was already gone and auto-link would re-add it.
-
-    // Record thread-level suppression so auto-link skips these threads
-    for (const [transactionId, threadIds] of transactionThreads) {
-      const userId = transactionUsers.get(transactionId);
-      if (userId) {
-        for (const threadId of threadIds) {
-          try {
-            await logService.debug("[BACKLOG-1560] Recording suppression", "TransactionService", {
-              transactionId, threadId, userId
-            });
-            await databaseService.addIgnoredCommunication({
-              user_id: userId,
-              transaction_id: transactionId,
-              thread_id: threadId,
-              reason: "Manually unlinked by user",
-            });
-          } catch (error) {
-            await logService.warn(
-              `[BACKLOG-1560] Failed to record thread suppression: ${error instanceof Error ? error.message : "Unknown"}`,
-              "TransactionService",
-              { transactionId, threadId }
-            );
-          }
-        }
-      }
-
-      await logService.debug("[BACKLOG-1560] Suppression records created", "TransactionService", {
-        transactionId, threadIds: Array.from(threadIds)
-      });
-    }
-
-    // Record per-message suppression for messages without valid thread_id
-    for (const [transactionId, msgIds] of transactionThreadlessMessages) {
-      const userId = transactionUsers.get(transactionId);
-      if (userId) {
-        for (const msgId of msgIds) {
-          try {
-            await logService.debug("[BACKLOG-1560] Recording suppression (no thread_id)", "TransactionService", {
-              transactionId, messageId: msgId, userId
-            });
-            await databaseService.addIgnoredCommunication({
-              user_id: userId,
-              transaction_id: transactionId,
-              original_communication_id: msgId,
-              reason: "Manually unlinked by user (no thread_id)",
-            });
-          } catch (error) {
-            await logService.warn(
-              `[BACKLOG-1560] Failed to record message suppression: ${error instanceof Error ? error.message : "Unknown"}`,
-              "TransactionService",
-              { transactionId, messageId: msgId }
-            );
-          }
-        }
-      }
-    }
-
-    // NOW delete communication records and unlink messages (after suppression is recorded)
-    for (const messageId of messageIds) {
-      const message = await databaseService.getMessageById(messageId);
-      if (message?.transaction_id) {
-        await databaseService.unlinkMessageFromTransaction(messageId);
-      }
-      await databaseService.deleteCommunicationByMessageId(messageId);
-    }
-
-    // Delete thread-level communication records
-    for (const [transactionId, threadIds] of transactionThreads) {
-      for (const threadId of threadIds) {
-        await databaseService.deleteCommunicationByThread(threadId, transactionId);
-      }
-    }
-
-    for (const [transactionId, unlinkedCount] of transactionCounts) {
+    // BACKLOG-2547: the last remaining async read on the write path, HOISTED
+    // out of the transaction so the body below can be synchronous.
+    //
+    // Only `message_count` is used. Nothing in the write phase writes that
+    // column — the thread-count updates inside the delete helpers target
+    // `text_thread_count`, and the only two writers of `message_count` in the
+    // tree are `linkMessages` and group (e) below — so reading it before the
+    // deletes yields the same value it used to read after them. `null` carries
+    // today's "transaction row not found -> skip the fixup" branch.
+    const messageCounts = new Map<string, number | null>();
+    for (const transactionId of transactionCounts.keys()) {
       const transaction = await this.getTransactionDetails(transactionId);
-      if (transaction) {
-        const newCount = Math.max(0, (transaction.message_count || 0) - unlinkedCount);
-        await databaseService.updateTransaction(transactionId, {
-          message_count: newCount,
-        });
-      }
+      messageCounts.set(transactionId, transaction ? transaction.message_count || 0 : null);
+    }
+
+    // BACKLOG-2547: ONE transaction for the whole write phase.
+    //
+    // This used to be five separate awaited write groups. A failure between the
+    // suppression INSERTs and the deletes left a message simultaneously LINKED
+    // (its `communications` junction row survived) and SUPPRESSED (its
+    // `ignored_communications` row existed), so the next auto-link scan kept it
+    // linked while it also sat in the ignore set.
+    //
+    // The body is SYNCHRONOUS and every write in it calls a `*Sync` primitive.
+    // `better-sqlite3` commits when the callback RETURNS, so an `await` here —
+    // or an unawaited call to a promise-returning wrapper — would commit before
+    // the work finished and turn a throw into a post-commit unhandled rejection.
+    // Logging is the exception and is deliberate: `void logService.…` writes no
+    // SQL, and hoisting these lines out of the loops would lose the per-row
+    // context they carry.
+    try {
+      dbTransaction(() => {
+        // BACKLOG-1560 FIX: Record suppression BEFORE deleting communication records.
+        // Previous attempts deleted comms first, then if suppression INSERT failed,
+        // the communication was already gone and auto-link would re-add it.
+        //
+        // BACKLOG-2547: that ordering is kept. Inside a transaction it is no
+        // longer the only protection, but it keeps a concurrent partial read
+        // coherent and changing it would be an unrelated change.
+
+        // Record thread-level suppression so auto-link skips these threads
+        for (const [transactionId, threadIds] of transactionThreads) {
+          const userId = transactionUsers.get(transactionId);
+          if (userId) {
+            for (const threadId of threadIds) {
+              void logService.debug("[BACKLOG-1560] Recording suppression", "TransactionService", {
+                transactionId, threadId, userId
+              });
+              // BACKLOG-2547: the try/catch that used to sit here is GONE, and
+              // its removal is the point rather than a side effect. A caught
+              // constraint violation inside a live SQLite transaction is a
+              // STATEMENT-level abort — the transaction stays alive and the
+              // deletes below still commit — so swallowing a failed suppression
+              // reproduced this item's own filed defect with no crash at all,
+              // and contradicted the BACKLOG-1560 comment directly above, which
+              // says not to delete when the suppression INSERT fails.
+              addIgnoredCommunicationSync({
+                user_id: userId,
+                transaction_id: transactionId,
+                thread_id: threadId,
+                reason: "Manually unlinked by user",
+              });
+            }
+          }
+
+          void logService.debug("[BACKLOG-1560] Suppression records created", "TransactionService", {
+            transactionId, threadIds: Array.from(threadIds)
+          });
+        }
+
+        // Record per-message suppression for messages without valid thread_id
+        for (const [transactionId, msgIds] of transactionThreadlessMessages) {
+          const userId = transactionUsers.get(transactionId);
+          if (userId) {
+            for (const msgId of msgIds) {
+              void logService.debug("[BACKLOG-1560] Recording suppression (no thread_id)", "TransactionService", {
+                transactionId, messageId: msgId, userId
+              });
+              addIgnoredCommunicationSync({
+                user_id: userId,
+                transaction_id: transactionId,
+                original_communication_id: msgId,
+                reason: "Manually unlinked by user (no thread_id)",
+              });
+            }
+          }
+        }
+
+        // NOW delete communication records and unlink messages (after suppression is recorded)
+        //
+        // BACKLOG-2547: this iterates `messageIds` — the INPUT LIST — and not
+        // one of the Maps above, because `deleteCommunicationByMessageIdSync`
+        // must run for every input id unconditionally. Only the detach is
+        // gated, and it is gated on the message's OWN `transaction_id`, which
+        // is a DIFFERENT predicate from phase 1's
+        // `passedTransactionId || message?.transaction_id`. Both are preserved.
+        for (const messageId of messageIds) {
+          const message = messagesById.get(messageId) ?? null;
+          if (message?.transaction_id) {
+            unlinkMessageFromTransaction(messageId);
+          }
+          deleteCommunicationByMessageIdSync(messageId);
+        }
+
+        // Delete thread-level communication records
+        for (const [transactionId, threadIds] of transactionThreads) {
+          for (const threadId of threadIds) {
+            deleteCommunicationByThreadSync(threadId, transactionId);
+          }
+        }
+
+        for (const [transactionId, unlinkedCount] of transactionCounts) {
+          const currentCount = messageCounts.get(transactionId);
+          if (currentCount !== null && currentCount !== undefined) {
+            const newCount = Math.max(0, currentCount - unlinkedCount);
+            updateTransactionSync(transactionId, {
+              message_count: newCount,
+            });
+          }
+        }
+      });
+    } catch (error) {
+      // BACKLOG-2547: OUTSIDE the transaction, so the rollback has already
+      // completed by the time this runs. It ALWAYS rethrows — swallowing here
+      // would put the lie back at a different altitude, with the handler
+      // reporting success over a no-op.
+      //
+      // The message is wrapped because it is rendered to the user verbatim:
+      // `wrapHandler` returns `{ success: false, error }` and
+      // `TransactionMessagesTab` shows `result.error`. Unwrapped, a failed
+      // suppression would put "FOREIGN KEY constraint failed" on screen.
+      // `cause` is preserved so `Sentry.captureException` still sees the real
+      // driver error instead of grouping on the human sentence.
+      void logService.error(
+        "Unlink failed and was rolled back",
+        "TransactionService.unlinkMessages",
+        { messageIds, passedTransactionId, error: error instanceof Error ? error.message : String(error) },
+      );
+      const failure = new Error(
+        "Could not remove those messages from the transaction. Nothing was changed \u2014 please try again.",
+      );
+      // `cause` is assigned rather than passed to the constructor: that overload
+      // needs `lib: ES2022` and this project targets ES2020, so the two-argument
+      // form does not type-check here. The runtime property is what matters —
+      // `Sentry.captureException` reads it and would otherwise group every one of
+      // these on the human sentence, losing SQLITE_CONSTRAINT_FOREIGNKEY.
+      (failure as Error & { cause?: unknown }).cause = error;
+      throw failure;
     }
 
     await logService.info(

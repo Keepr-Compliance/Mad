@@ -91,6 +91,33 @@ const ALLOWED_EVOLUTION: AllowedEvolution[] = [
       "table_info, which cannot see CHECK. A green run here is not evidence for it.",
     ref: "BACKLOG-2551",
   },
+  {
+    key: "TABLE:transaction_hidden_texts",
+    what: "New table recording texts hidden from one transaction's export.",
+    why:
+      "BACKLOG-3366: a user can hide an individual text from a transaction's " +
+      "export without removing it from the transaction. A new table is fully " +
+      "IF NOT EXISTS, so schema.sql's exec on every open creates it on fresh and " +
+      "upgraded databases alike; no migration entry is needed.",
+    ref: "BACKLOG-3366",
+  },
+  {
+    key: "INDEX:idx_hidden_texts_txn_external",
+    what: "Partial index on (transaction_id, message_external_id).",
+    why:
+      "BACKLOG-3366: the shared conversation read matches a hidden row by the " +
+      "message's provider id as well as its row id, so a hide survives a macOS " +
+      "force re-import that re-inserts messages under new ids.",
+    ref: "BACKLOG-3366",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_transaction_hidden_texts_1",
+    what: "SQLite's automatic index for the (transaction_id, message_id) primary key.",
+    why:
+      "BACKLOG-3366: produced by the composite PRIMARY KEY on the new table; it " +
+      "is not declared separately and cannot be omitted.",
+    ref: "BACKLOG-3366",
+  },
 ];
 
 const ALLOWED_KEYS = new Set(ALLOWED_EVOLUTION.map((d) => d.key));

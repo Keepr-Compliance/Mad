@@ -11,6 +11,7 @@
 import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
 import { extractEmail } from '@/lib/auth/helpers';
+import { PORTAL_MEMBERSHIP_SELECT, pickBrokerageMembership } from '@/lib/auth/membership';
 
 // Allowed roles for broker portal access (dashboard)
 const PORTAL_ROLES = ['broker', 'admin', 'it_admin'];
@@ -38,13 +39,22 @@ export async function GET(request: Request) {
     } = await supabase.auth.getUser();
 
     if (user) {
-      // Check for existing membership
-      const { data: membership } = await supabase
+      // Check for an existing BROKERAGE membership.
+      //
+      // BACKLOG-3364: a solo user's own personal organization is not one. Read
+      // as a placement it would return /download two lines below — before the
+      // pending-invite branch has run — and a solo user could never accept a
+      // brokerage invite through the portal again. Skipping it leaves them
+      // where they were before personal organizations existed: no membership,
+      // so invite linking and JIT both get their turn.
+      const { data: memberships } = await supabase
         .from('organization_members')
-        .select('role, organization_id')
+        .select(PORTAL_MEMBERSHIP_SELECT)
         .eq('user_id', user.id)
-        .limit(1)
-        .single();
+        .order('created_at', { ascending: true })
+        .order('id', { ascending: true });
+
+      const membership = pickBrokerageMembership(memberships);
 
       if (membership && DESKTOP_ROLES.includes(membership.role)) {
         // Agent role - redirect to desktop app download

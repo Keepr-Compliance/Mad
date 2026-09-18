@@ -22,6 +22,23 @@
  *
  * Both constants are byte-identical to the text they replaced, verified by the
  * gate's own content hashes (`e37e12ba8b64`, `ae88b2ae96f2`).
+ *
+ * ## 2026-09-09, BACKLOG-3254 — the counts above are history, not the state
+ *
+ * The `messageImportHandlers.ts` site described above is GONE, so the count
+ * recorded for that file is now 0. That handler no longer asks "who is the
+ * local user": an id it cannot confirm ends the call instead.
+ *
+ * `LOCAL_USER_ID_SQL` keeps its two callers in `userIdHelper.ts`, but they now
+ * reach it only when the caller supplied NO id. It is never used to answer for
+ * an id that was supplied and not found — that returns null.
+ *
+ * So the `LIMIT 1` paragraph above says something narrower than it did when it
+ * was written. It no longer stands behind any path that had an id to check; it
+ * answers "who is the local user" only for callers that never named one. For
+ * that remaining path the arbitrary-result note stays accurate, and closing it
+ * is BACKLOG-3254's follow-up F2 — it needs `electron/preload/outlookBridge.ts`
+ * changed first, because those channels invoke with no argument at all.
  */
 
 import { sql } from "./core/sqlText";

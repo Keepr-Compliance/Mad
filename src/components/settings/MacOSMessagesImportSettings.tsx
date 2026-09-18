@@ -139,6 +139,36 @@ interface MacOSMessagesImportSettingsProps {
 }
 
 /**
+ * BACKLOG-3213: the fragment of main's absent-database refusal this panel
+ * matches on, lower-cased.
+ *
+ * TRANSCRIBED, NOT INVENTED. It is a substring of
+ * `permissionService.checkFullDiskAccess()`'s `userMessage` on the absent
+ * path — "Keepr couldn't find a Messages database on this Mac." — which
+ * `getAvailableMessageCount` returns verbatim as its `error`.
+ *
+ * It has to be a copy rather than an import: the producer lives in
+ * `electron/`, and the renderer cannot value-import from there (Vite parses
+ * it as JavaScript, and `rootDir` refuses the other direction). So the tie is
+ * held by a test instead — the absent suite builds its refusal from the shared
+ * fixture `tests/fixtures/fdaDeniedIssue-3219.ts` and asserts that the
+ * producer's real sentence contains this fragment. Reword either side alone
+ * and that assertion reds, rather than the panel silently failing to classify
+ * the refusal it can no longer recognise.
+ *
+ * Deliberately narrower than "messages database": `getPermissionError` emits
+ * "Could not find the iMessages database…" on a different channel, and a
+ * fragment that matched both would classify a future producer's string by
+ * accident.
+ *
+ * EXPORTED for the drift guard only. A guard that re-typed this literal would
+ * tie the FIXTURE to the producer and leave THIS constant free to drift away
+ * from both — which is the one direction its name promises to cover.
+ */
+export const MESSAGES_ABSENT_REASON_FRAGMENT =
+  "couldn't find a messages database";
+
+/**
  * Messages import settings for macOS users.
  * Allows manual import of messages from the macOS Messages app.
  */
@@ -368,11 +398,17 @@ export function MacOSMessagesImportSettings({
    *
    * - `unknown`  not asked yet, or the check did not answer
    * - `granted`  main reported `hasPermission: true`
-   * - `denied`   main reported `hasPermission: false`
+   * - `denied`   main reported `hasPermission: false` for a reason that is a
+   *              permission refusal (EPERM/EACCES, or anything unrecognised)
+   * - `absent`   BACKLOG-3213: main reported `hasPermission: false` because
+   *              there is no Messages database on this Mac (ENOENT/ENOTDIR).
+   *              The import is refused just as firmly, but Full Disk Access
+   *              is not the reason and granting it would change nothing, so
+   *              this state must never render an FDA affordance.
    */
-  const [fdaStatus, setFdaStatus] = useState<"unknown" | "granted" | "denied">(
-    "unknown"
-  );
+  const [fdaStatus, setFdaStatus] = useState<
+    "unknown" | "granted" | "denied" | "absent"
+  >("unknown");
 
   /**
    * BACKLOG-3208: true once this panel has seen `denied` in this session.
@@ -565,6 +601,25 @@ export function MacOSMessagesImportSettings({
       setFdaStatus("granted");
       return;
     }
+    // BACKLOG-3213: main says WHICH failure it saw, and the two need opposite
+    // sentences. `MESSAGES_STORE_NOT_FOUND` means `chat.db` is not on this
+    // Mac — the import is still refused, but Full Disk Access is not the
+    // reason, granting it would change nothing, and no FDA affordance may
+    // render.
+    //
+    // `setFdaWasDenied` is NOT set on this path, deliberately. It exists to
+    // fire the "Full Disk Access granted — restart Keepr to finish" notice on
+    // a later grant, and an absence was never a denial: a Mac that simply has
+    // no messages must not be told to restart to finish something that never
+    // started.
+    if (result.data.errorCode === "MESSAGES_STORE_NOT_FOUND") {
+      logger.warn(
+        "[MacOSMessagesImportSettings] No Messages database on this Mac:",
+        result.data.reason
+      );
+      setFdaStatus("absent");
+      return;
+    }
     // Log the reason main gave (the raw `EPERM: operation not permitted,
     // access '<home>/Library/Messages/chat.db'` from `fs.access`). It is not
     // shown to the user — the notice says the useful thing — but a support
@@ -634,8 +689,23 @@ export function MacOSMessagesImportSettings({
           );
           setEstimateFailureReason(result.error ?? null);
           setEstimateStatus("unavailable");
+          // BACKLOG-3213: an ADDED disjunct, never a replacement. Dropping the
+          // Full Disk Access term here would take the denial's self-heal with
+          // it, and exactly one test in the repo would notice
+          // (`fdaRecovery-3208.test.tsx:541`) — so this line is the one to
+          // read carefully in review.
+          //
+          // The absent case needs the same re-ask for the same reason: main
+          // and this panel read the permission at different moments, so main
+          // can refuse because `chat.db` is missing while this panel still
+          // holds an older `granted`. Without this the space copy renders on a
+          // Mac with no database, and with "import text only" on, Import is
+          // clickable.
           if (
-            (result.error ?? "").toLowerCase().includes("full disk access")
+            (result.error ?? "").toLowerCase().includes("full disk access") ||
+            (result.error ?? "")
+              .toLowerCase()
+              .includes(MESSAGES_ABSENT_REASON_FRAGMENT)
           ) {
             // BACKLOG-3208: main and this panel read the permission at
             // different moments, so main can refuse for want of Full Disk
@@ -972,10 +1042,20 @@ export function MacOSMessagesImportSettings({
    */
   const estimateBlockedByPermission =
     estimateStatus === "unavailable" &&
+    // BACKLOG-3213: `absent` joins both halves. The STATE disjunct covers the
+    // panel's own resolved answer; the STRING disjunct covers the window
+    // between main's refusal and the re-ask above landing, in which
+    // `fdaStatus` is still whatever it was. Both are ADDED terms — removing
+    // either of the Full Disk Access ones would change the denial's
+    // behaviour, which this item must not do.
     (fdaStatus === "denied" ||
+      fdaStatus === "absent" ||
       (estimateFailureReason ?? "")
         .toLowerCase()
-        .includes("full disk access"));
+        .includes("full disk access") ||
+      (estimateFailureReason ?? "")
+        .toLowerCase()
+        .includes(MESSAGES_ABSENT_REASON_FRAGMENT));
 
   // BACKLOG-2743: True when the attachment copy does NOT fit and the user has
   // not chosen to skip attachments. Import is BLOCKED in this state — there is
@@ -1053,7 +1133,15 @@ export function MacOSMessagesImportSettings({
    *     permission in the window before the panel's own check has caught up.
    */
   const permissionBlocked =
-    fdaStatus === "denied" || estimateBlockedByPermission;
+    fdaStatus === "denied" ||
+    // BACKLOG-3213: an absent database refuses the import just as firmly as a
+    // denial. THIS IS THE LINE THAT KEEPS THE GATE CLOSED. Printing the
+    // honest sentence and leaving the gate open is a separate change from
+    // printing it at all, and only one of the two is obvious: with "import
+    // text only" on, `spaceBlocked` is false, so nothing else holds Import
+    // and Force Re-import shut on a Mac with no database.
+    fdaStatus === "absent" ||
+    estimateBlockedByPermission;
 
   /** Every reason Import and Force Re-import are refused, space and otherwise. */
   const importBlocked = spaceBlocked || permissionBlocked;
@@ -1062,9 +1150,22 @@ export function MacOSMessagesImportSettings({
    * The permission case FIRST: when Keepr cannot read Messages at all, what the
    * import would have cost in disk space is not the thing to say.
    */
-  const importBlockedReason = permissionBlocked
-    ? "Keepr needs Full Disk Access to read your messages"
-    : spaceBlockedReason;
+  // BACKLOG-3213: the ABSENT branch comes FIRST, and the order is load-bearing.
+  // `permissionBlocked` now includes `absent`, so testing it first would put
+  // the Full Disk Access sentence in the tooltip of a Mac whose problem is not
+  // Full Disk Access — the exact lie this item removes, surviving in the one
+  // place a user reads only after trying to click.
+  //
+  // The tooltip is no longer the only thing standing between this state and a
+  // blank screen — the visible notice below is — but it must not lie either.
+  // Force Re-import never shows this string at all (it carries a static
+  // title), which is why a tooltip alone was never enough.
+  const importBlockedReason =
+    fdaStatus === "absent"
+      ? "Keepr couldn't find a Messages database on this Mac"
+      : permissionBlocked
+        ? "Keepr needs Full Disk Access to read your messages"
+        : spaceBlockedReason;
 
   // BACKLOG-2743: Plain size formatting — real numbers, no adjectives.
   const formatGb = (bytes: number): string => {
@@ -1768,6 +1869,45 @@ export function MacOSMessagesImportSettings({
               onPermissionGranted={refreshFdaStatus}
             />
           )}
+        </div>
+      )}
+
+      {/* BACKLOG-3213: there is no Messages database on this Mac.
+          ────────────────────────────────────────────────────────────────────
+          A VISIBLE notice, not a tooltip. The import is refused in this state,
+          and `importBlockedReason` has exactly one render site — a `title=`
+          attribute on the Import button — so with the Full Disk Access notice
+          correctly withheld and the disk-space copy correctly suppressed, this
+          state would otherwise be two disabled buttons and no sentence on
+          screen. Force Re-import does not even carry that tooltip; its title
+          is static. A refused import with nothing on screen explaining it is
+          the failure BACKLOG-2760 exists to prevent, and replacing a wrong
+          message with no message is not a fix.
+
+          NO "Show me how", NO `FdaHelpSheet`, NO System Settings link — and
+          no `action` on the banner row this state raises either. Full Disk
+          Access is not the problem here; the explainer would report a
+          permission as "not detected" when granting it changes nothing, which
+          is the BACKLOG-2392 defect pointing the other way.
+
+          The copy names the missing DATABASE, never "no history". ENOENT
+          proves the file is not there and says nothing about whether Messages
+          was ever used — and an EMPTY `chat.db` is a different state entirely
+          (it passes `fs.access`, reports granted, and is out of scope here).
+
+          Same amber container as the denial notice above, so it reads as the
+          same class of notice. No <h1>-<h6> in here on purpose —
+          `settingsBlockShape-3156` reds on any heading a block does not
+          declare, and this notice declares none. */}
+      {isMacOS && enabled && fdaStatus === "absent" && (
+        <div
+          data-testid="macos-messages-absent-notice"
+          className="mb-3 p-3 rounded text-xs bg-amber-50 text-amber-800 border border-amber-200"
+        >
+          <p className="font-medium mb-1">
+            Keepr couldn&apos;t find a Messages database on this Mac
+          </p>
+          <p>There is nothing here for Keepr to import.</p>
         </div>
       )}
 

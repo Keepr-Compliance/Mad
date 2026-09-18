@@ -116,6 +116,14 @@ import {
 import { getThreadKey as getThreadKeyHelper } from "../folderExport/textExportHelpers";
 // BACKLOG-2771: plans are built by the REAL resolver, never by hand.
 import { testExportPlan } from "./helpers/exportPlanFixture";
+import type { ExportOmissionDetail } from "../exportNotices";
+
+/**
+ * BACKLOG-3367: these pre-existing cases assert on index links and section ids,
+ * not on omissions — nothing is hidden in their fixtures, so they say so
+ * explicitly. The parameter is required precisely so a caller has to state it.
+ */
+const NO_OMISSIONS_3367: ExportOmissionDetail = { hiddenTextCount: 0, hiddenTexts: [] };
 
 describe("FolderExportService", () => {
   let folderExportService: typeof import("../folderExportService").default;
@@ -1312,6 +1320,7 @@ describe("FolderExportService", () => {
         mockTransaction,
         comms,
         "/mock/output/Combined_Report.pdf",
+        NO_OMISSIONS_3367,
         false
       );
 
@@ -1368,6 +1377,7 @@ describe("FolderExportService", () => {
         mockTransaction,
         comms,
         "/mock/output/Combined_Report.pdf",
+        NO_OMISSIONS_3367,
         false
       );
       const doc = lastLoadedHtmlContent as string;
@@ -1405,6 +1415,7 @@ describe("FolderExportService", () => {
         mockTransaction,
         comms,
         "/mock/output/Combined_Summary.pdf",
+        NO_OMISSIONS_3367,
         true
       );
       const doc = lastLoadedHtmlContent as string;
@@ -1430,6 +1441,7 @@ describe("FolderExportService", () => {
         mockTransaction,
         comms,
         "/mock/output/Combined_Report.pdf",
+        NO_OMISSIONS_3367,
         false
       );
       const doc = lastLoadedHtmlContent as string;
@@ -1451,6 +1463,7 @@ describe("FolderExportService", () => {
         mockTransaction,
         comms,
         "/mock/output/Combined_Report.pdf",
+        NO_OMISSIONS_3367,
         false
       );
       const doc = lastLoadedHtmlContent as string;
@@ -1479,6 +1492,7 @@ describe("FolderExportService", () => {
         mockTransaction,
         comms,
         "/mock/output/Combined_Report.pdf",
+        NO_OMISSIONS_3367,
         false
       );
       const doc = lastLoadedHtmlContent as string;

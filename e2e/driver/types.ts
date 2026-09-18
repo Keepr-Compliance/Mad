@@ -30,7 +30,7 @@ export type LaunchStrategy = 'electron' | 'cdp' | 'unpackaged';
 export type AppState = 'ready' | 'onboarding' | 'unknown';
 
 export interface AppDriverOptions {
-  /** Path to the packaged app executable. Defaults resolve /Applications then dist/. Override with KEEPR_APP_PATH. */
+  /** Path to the packaged app executable. Defaults resolve release/ then /Applications. Override with KEEPR_APP_PATH. */
   executablePath?: string;
   /** Launch strategy. Default 'electron' (falls back to 'cdp' guidance if the fuse blocks it). */
   strategy?: LaunchStrategy;

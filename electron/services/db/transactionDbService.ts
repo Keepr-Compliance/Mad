@@ -337,7 +337,7 @@ export const TRANSACTION_COLUMN_POLICY: Record<TransactionColumn, ColumnPolicy> 
   first_exported_at: {
     insert: "db-default",
     update: "writable",
-    why: "BACKLOG-2013 freeze marker. Set write-once at the SQL layer by stampFirstExportedAt and cleared by admin unfreeze — both via the override path below. A brand-new deal has never been exported.",
+    why: "BACKLOG-2013 freeze marker. Set write-once at the SQL layer by TWO writers — `recordExportCompletion` folds it into the export-completion UPDATE (BACKLOG-2549; the enhanced and folder paths) and `stampFirstExportedAt` sets it alone (the PDF path) — and cleared by admin unfreeze via the override path below. Both enforce write-once in SQL, one with COALESCE and one with a NULL predicate. A brand-new deal has never been exported.",
   },
   detection_source: {
     insert: "writable",
@@ -976,10 +976,10 @@ function normalizeFrozenFieldValue(field: string, value: unknown): string {
 /**
  * Update transaction
  */
-export async function updateTransaction(
+export function updateTransactionSync(
   transactionId: string,
   updates: Partial<Transaction>,
-): Promise<void> {
+): void {
   // BACKLOG-2558 — there is no `allowedFields` array here any more.
   //
   // The 46-name array this replaces invented 11 columns that exist in no table
@@ -1129,6 +1129,24 @@ export async function updateTransaction(
 }
 
 /**
+ * BACKLOG-2547 — promise seam over the primitive.
+ *
+ * PLAIN `Promise.resolve`, NOT `async`, and deliberately a different shape from
+ * `createTransaction` (`async`) ~400 lines above. That is not drift: under an
+ * unawaited call inside a transaction body an `async` wrapper commits partial
+ * work while this one rolls back — measured on the shipping driver. The `async`
+ * anchor disclaims itself in its own comment as "NOT yet the plain shape
+ * BACKLOG-2960 rules for a seam export"; do not converge them backwards.
+ */
+export function updateTransaction(
+  transactionId: string,
+  updates: Partial<Transaction>,
+): Promise<void> {
+  return Promise.resolve(updateTransactionSync(transactionId, updates));
+}
+
+
+/**
  * BACKLOG-2013 — stamp the export-freeze marker (`first_exported_at`) write-once
  * at the SQL layer. The `WHERE first_exported_at IS NULL` predicate makes the
  * boundary immutable in the database itself: a second (or racing) export can
@@ -1148,6 +1166,91 @@ export function stampFirstExportedAt(
     [timestamp, transactionId],
   );
   return result.changes === 1;
+}
+
+/**
+ * BACKLOG-2549 — parameters of one export completion.
+ *
+ * DECLARED AS A NAMED INTERFACE, NOT INLINE IN THE PARAMETER LIST, AND THAT IS
+ * LOAD-BEARING. `writeAtomicity.guard.test.ts` brace-matches a function body
+ * from its DECLARATION line (BACKLOG-3225), so an inline object type in the
+ * parameter list closes the capture before the body opens and the function
+ * reads as having NO body: zero writes, invisible to `dbLayerWriters()`, and
+ * every caller of it silently loses a counted write. Measured both forms; the
+ * inline one is invisible in every formatting variant. Keep this named.
+ */
+export interface ExportCompletionParams {
+  /** Omitted entirely by the folder path, which leaves any previous format in place. */
+  exportFormat?: string | null;
+  /** ISO timestamp -> `last_exported_on`. */
+  exportedAt: string;
+  /** Caller-computed, unchanged from the pre-BACKLOG-2549 handlers. */
+  exportCount: number;
+  /** ISO timestamp -> `first_exported_at`, applied only when it is still NULL. */
+  firstExportedAt: string;
+}
+
+/**
+ * BACKLOG-2549 — record an export completion as ONE statement.
+ *
+ * The export handlers used to write the tracking columns and the BACKLOG-2013
+ * freeze marker as two separate awaited statements. Between them the row is
+ * `export_status = 'exported'` with `first_exported_at` NULL: an exported
+ * artifact on disk while the deal's identity anchors are still editable. A
+ * crash is not required to reach it — `markFirstExport` is non-throwing, so a
+ * stamp FAILURE produced the same row and returned success to the user.
+ *
+ * The write-once rule moves from a `WHERE` predicate into the `SET`:
+ * `COALESCE(first_exported_at, ?)` keeps the boundary immutable in SQL, exactly
+ * as `stampFirstExportedAt` does, while still permitting the four tracking
+ * columns to be written on EVERY export. `WHERE` is `id = ?` alone and must
+ * stay that way — adding `AND first_exported_at IS NULL` here would silently
+ * stop recording re-exports.
+ *
+ * ONE statement text on purpose: `export_format` is a conditional COLUMN, not
+ * an if/else over two complete UPDATEs, because two statement texts read as two
+ * writes to the atomicity guard and would re-offend the rule this fix clears.
+ *
+ * The freeze guard in `updateTransaction` is not bypassed by this path — none
+ * of these five columns is in `FROZEN_IDENTITY_FIELDS`, so that guard already
+ * takes its early-out on this payload. Pinned behaviourally by case F of
+ * `transactionExportHandlers.exportFreezeAtomic-2549.test.ts`.
+ */
+export function recordExportCompletion(
+  transactionId: string,
+  params: ExportCompletionParams,
+): void {
+  const columns: TransactionColumn[] = [
+    "export_status",
+    "last_exported_on",
+    "export_count",
+  ];
+  const values: unknown[] = ["exported", params.exportedAt, params.exportCount];
+
+  if (params.exportFormat !== undefined && params.exportFormat !== null) {
+    columns.push("export_format");
+    values.push(params.exportFormat);
+  }
+
+  values.push(params.firstExportedAt, transactionId);
+
+  const statement = sql`UPDATE transactions SET ${assignmentList(columns)}, ${columnList([
+    "first_exported_at",
+  ])} = COALESCE(${columnList(["first_exported_at"])}, ?) WHERE id = ?`;
+  const result = dbRun(statement, values);
+
+  void logService.debug("Export completion recorded", "TransactionDbService", {
+    transactionId,
+    columns,
+    rowsChanged: result.changes,
+  });
+
+  if (result.changes === 0) {
+    void logService.warn("Export completion changed 0 rows", "TransactionDbService", {
+      transactionId,
+      columns,
+    });
+  }
 }
 
 /**

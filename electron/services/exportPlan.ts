@@ -39,6 +39,7 @@
 
 import type { Communication } from "../types/models";
 import { isEmailMessage, isTextMessage } from "../utils/channelHelpers";
+import { isReactionRow } from "../utils/reactionUtils";
 import type {
   ExportAttachmentType,
   ExportContentType,
@@ -101,6 +102,28 @@ export interface ExportPlan {
   includeEmails: boolean;
   /** Whether the export includes texts at all (drives folder creation). */
   includeTexts: boolean;
+  /**
+   * BACKLOG-3367 — the texts this export OMITTED because the user hid them
+   * (BACKLOG-3366), in the caller's input order.
+   *
+   * These are the rows removed from `communications`, kept so a renderer can
+   * state a per-CONVERSATION count without re-deriving the predicate: the
+   * folder exporter groups them with the same `getThreadKey()` it groups the
+   * included texts with. Membership is decided here and nowhere else.
+   *
+   * Reactions dropped because their parent is hidden are NOT listed here — they
+   * are not messages a reader would have seen, and they are not counted.
+   */
+  hiddenTexts: Communication[];
+  /**
+   * How many texts this export omitted because the user hid them.
+   *
+   * `hiddenTexts.length`, stated as its own field because every artifact prints
+   * it and a renderer must never recount from `transaction.communications`: a
+   * transaction can hold hidden texts outside this export's window, and those
+   * were left out by the WINDOW, not by hiding.
+   */
+  hiddenTextCount: number;
 }
 
 /**
@@ -314,6 +337,24 @@ function filterByContentType(
 }
 
 /**
+ * A text the user hid from THIS transaction's export (BACKLOG-3366).
+ *
+ * The marker is projected by the shared conversation read
+ * (`communicationDbService.getCommunicationsWithMessages`) as the SQLite
+ * integer 0 or 1 — never a boolean. Emails carry 0 by construction (the hide
+ * table keys on a `messages` row), so the `isTextMessage` guard is about
+ * meaning, not safety: the count is a count of TEXTS.
+ *
+ * A reaction row is excluded. The hide handler refuses to hide one
+ * (`hiddenTextHandlers.ts`), so this is defensive — but it also keeps the
+ * count honest if that ever changes: a tapback is not a message a reader was
+ * going to see, it is decoration on one.
+ */
+function isHiddenText(comm: Communication): boolean {
+  return isTextMessage(comm) && !isReactionRow(comm) && !!comm.hidden_from_export;
+}
+
+/**
  * Resolve the single include-set decision for one export.
  *
  * Pure: no logging, no I/O, no database. Every entry point calls this exactly
@@ -333,10 +374,54 @@ export function resolveExportPlan(
     summaryOnly = false,
   } = request;
 
-  const included = filterByContentType(
-    filterByDateWindow(communications ?? [], startDate, endDate),
+  const input = communications ?? [];
+
+  const inScope = filterByContentType(
+    filterByDateWindow(input, startDate, endDate),
     contentType,
   );
+
+  // BACKLOG-3367 — hidden texts, applied LAST.
+  //
+  // Order is the whole meaning of the count. The window and the content
+  // selection run first, so `hiddenTextCount` reads "texts THIS export would
+  // otherwise have shown", not "texts this transaction has ever hidden". A text
+  // hidden but outside the audit window was left out by the window (founder
+  // default, pm_comments d590f7c6), and counting it would tell the reader
+  // something was removed from a report it was never going to be in.
+  //
+  // `attachmentComms` is derived from the survivors below, so a hidden text's
+  // attachments are never selected and never fetched from the provider — the
+  // BACKLOG-2769 property, inherited rather than re-stated.
+  const hiddenTexts = inScope.filter(isHiddenText);
+
+  // The parent guids come from the WHOLE input, not from `inScope` (SR required
+  // change 4, pm_comments d590f7c6). A hidden text just OUTSIDE the window can
+  // carry a tapback just inside it; scoping the guids would leave that tapback
+  // in the CSV and JSON rows, where it reveals that a message existed at that
+  // time and who reacted to it. The parent's own omission is the window's doing
+  // and is not counted, but its reactions still have nothing left to attach to.
+  //
+  // The key is the parent's bare `external_id` matched against the reaction's
+  // stored `associated_message_guid` — the SAME lookup the renderer performs
+  // (`folderExport/textExportHelpers.ts`: `reactionsByParentGuid.get(msg.external_id)`).
+  // The stored guid is already normalized at import time, so nothing is
+  // re-normalized here; parity with that lookup is the property under test.
+  const hiddenParentGuids = new Set<string>();
+  for (const comm of input) {
+    if (!isHiddenText(comm)) continue;
+    const guid = comm.external_id;
+    if (guid) hiddenParentGuids.add(guid);
+  }
+
+  const included = inScope.filter((comm) => {
+    if (isHiddenText(comm)) return false;
+    if (isReactionRow(comm)) {
+      const parentGuid = comm.associated_message_guid;
+      if (parentGuid && hiddenParentGuids.has(parentGuid)) return false;
+    }
+    return true;
+  });
 
   const includeEmails = contentType !== "texts";
   const includeTexts = contentType !== "emails";
@@ -365,6 +450,8 @@ export function resolveExportPlan(
     writesAttachmentsToDisk,
     includeEmails,
     includeTexts,
+    hiddenTexts,
+    hiddenTextCount: hiddenTexts.length,
   };
 }
 

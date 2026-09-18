@@ -19,6 +19,11 @@ import { generateSummaryHTML } from "../summaryHelpers";
 import type { TransactionWithDetails } from "../../transactionService/types";
 import type { TransactionContactResult } from "../../db/transactionContactDbService";
 
+// BACKLOG-3367: these cases hide nothing, and now have to say so — the
+// omissions argument is required precisely so no caller can leave it unstated.
+import type { ExportOmissions } from "../../exportNotices";
+const NO_OMISSIONS_3367: ExportOmissions = { hiddenTextCount: 0 };
+
 function makeTransaction(
   contacts: Array<Partial<TransactionContactResult>>,
 ): TransactionWithDetails {
@@ -69,6 +74,7 @@ describe("BACKLOG-2461 — the audit PDF names a party by what we hold", () => {
         },
       ]),
       [],
+      NO_OMISSIONS_3367,
     );
     const section = contactsSection(html);
 
@@ -83,6 +89,7 @@ describe("BACKLOG-2461 — the audit PDF names a party by what we hold", () => {
         { contact_name: "", contact_email: "jane@acme.com", specific_role: "CLIENT" },
       ]),
       [],
+      NO_OMISSIONS_3367,
     );
     const section = contactsSection(html);
 
@@ -94,6 +101,7 @@ describe("BACKLOG-2461 — the audit PDF names a party by what we hold", () => {
     const html = generateSummaryHTML(
       makeTransaction([{ contact_name: "", specific_role: "CLIENT" }]),
       [],
+      NO_OMISSIONS_3367,
     );
     const section = contactsSection(html);
 
@@ -108,6 +116,7 @@ describe("BACKLOG-2461 — the audit PDF names a party by what we hold", () => {
         { contact_name: "", contact_phone: "+50664103686", specific_role: "CLIENT" },
       ]),
       [],
+      NO_OMISSIONS_3367,
     );
 
     expect(contactsSection(html)).toContain("+50664103686");
@@ -125,6 +134,7 @@ describe("BACKLOG-2461 — the audit PDF names a party by what we hold", () => {
         },
       ]),
       [],
+      NO_OMISSIONS_3367,
     );
 
     expect(contactsSection(html)).toContain("Jane Doe");
@@ -141,6 +151,7 @@ describe("BACKLOG-2461 — the audit PDF names a party by what we hold", () => {
         },
       ]),
       [],
+      NO_OMISSIONS_3367,
     );
     const section = contactsSection(html);
 
@@ -156,6 +167,7 @@ describe("BACKLOG-2461 — the audit PDF names a party by what we hold", () => {
         { contact_name: "", contact_phone: "+14155550134", specific_role: "CLIENT" },
       ]),
       [],
+      NO_OMISSIONS_3367,
     );
     const section = contactsSection(html);
 
@@ -172,6 +184,7 @@ describe("BACKLOG-2461 — the audit PDF names a party by what we hold", () => {
         { contact_name: "", contact_phone: "+14155550199", specific_role: "LISTING_AGENT" },
       ]),
       [],
+      NO_OMISSIONS_3367,
     );
     const section = contactsSection(html);
 
@@ -188,6 +201,7 @@ describe("BACKLOG-2461 — the audit PDF names a party by what we hold", () => {
         { contact_name: "Unknown", contact_phone: "+14155550134", specific_role: "CLIENT" },
       ]),
       [],
+      NO_OMISSIONS_3367,
     );
     const section = contactsSection(html);
 

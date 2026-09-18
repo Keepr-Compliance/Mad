@@ -132,4 +132,5 @@ selectors. Central map: `e2e/driver/selectors.ts`.
   stub). Under `cdp`, `triggerExport` opens the modal but can't complete the OS picker.
 - Full green `KEEPR_E2E_FULL` walkthrough needs a **notarized QA build + logged-in session** (above).
 - The installed `/Applications/Keepr.app` observed this spike was a **dev-flavored** package (its
-  renderer pointed at `http://localhost:5173`). Prefer a clean `dist/` artifact from `package:qa*`.
+  renderer pointed at `http://localhost:5173`). Prefer a clean `release/` artifact from `package:qa*`
+  (BACKLOG-3425 moved electron-builder's output there; `dist/` is the Vite renderer build only).

@@ -16,6 +16,15 @@ module.exports = {
   roots: ['<rootDir>'],
   setupFiles: [],
   setupFilesAfterEnv: [],
+  // BACKLOG-3284: the root config's network guard is scoped to the desktop app's
+  // jest tiers. This portal spreads the root config, so its `<rootDir>`-relative
+  // globalSetup/globalTeardown paths would resolve against broker-portal/ and jest
+  // would refuse to start ("Module <rootDir>/tests/net-guard/globalSetup.js in the
+  // globalSetup option was not found"). Cleared here for the same reason
+  // setupFiles/setupFilesAfterEnv above are cleared: this portal runs its own
+  // harness. Adopting the guard here would be its own change.
+  globalSetup: undefined,
+  globalTeardown: undefined,
   transform: {
     ...rootConfig.transform,
     // Same ts-jest setup as root, plus the react/react-dom type pins from

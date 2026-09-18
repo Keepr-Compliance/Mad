@@ -3,8 +3,15 @@ module.exports = {
   testEnvironment: 'jest-environment-jsdom',
 
   // Setup files
-  setupFiles: ['<rootDir>/tests/setup-env.js'],
-  setupFilesAfterEnv: ['<rootDir>/tests/setup.js'],
+  // BACKLOG-3284: the network guard. install.js patches net.Socket.prototype.connect
+  // before any test module loads; assert.js turns a blocked attempt into a failing
+  // test; globalSetup/globalTeardown are the backstop for a file no hook can see
+  // (a call in the file's own afterAll, or a file whose tests are all skipped).
+  // Read tests/net-guard/install.js before changing any of the four.
+  globalSetup: '<rootDir>/tests/net-guard/globalSetup.js',
+  globalTeardown: '<rootDir>/tests/net-guard/globalTeardown.js',
+  setupFiles: ['<rootDir>/tests/setup-env.js', '<rootDir>/tests/net-guard/install.js'],
+  setupFilesAfterEnv: ['<rootDir>/tests/setup.js', '<rootDir>/tests/net-guard/assert.js'],
 
   // Use node environment for backend tests
   testEnvironmentOptions: {
@@ -173,6 +180,11 @@ module.exports = {
   testPathIgnorePatterns: process.env.CI ? [
     '/node_modules/',
     '/dist/',
+    // BACKLOG-3425: electron-builder's output directory, anchored to the repo root --
+    // these are regexes on the absolute path, so a bare '/release/' would also match any
+    // nested directory of that name. A packaged app holds thousands of third-party
+    // *.test.js files; jest must not walk into them.
+    '<rootDir>/release/',
     '/build/',
     '/packages/', // Workspace packages (e.g. @keepr/ui) run their own jest config
     '/worktrees/',
@@ -207,6 +219,11 @@ module.exports = {
   ] : [
     '/node_modules/',
     '/dist/',
+    // BACKLOG-3425: electron-builder's output directory, anchored to the repo root --
+    // these are regexes on the absolute path, so a bare '/release/' would also match any
+    // nested directory of that name. A packaged app holds thousands of third-party
+    // *.test.js files; jest must not walk into them.
+    '<rootDir>/release/',
     '/build/',
     '/packages/', // Workspace packages (e.g. @keepr/ui) run their own jest config
     '/\\.claude/worktrees/', // Exclude git worktree copies from test discovery

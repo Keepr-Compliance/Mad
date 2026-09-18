@@ -33,6 +33,13 @@ name: Vercel Deploy Map
 # PR #2541 adds a job to it against this same base — so a standalone file has no
 # collision surface. Same reasoning as message-hygiene.yml.
 #
+# ## What else it asserts (BACKLOG-3205)
+#
+# "*-portal/**" must be true, and "int/**" / "hotfix/**" must not be. Plain
+# integration and hotfix branches are not deployed; portal work on them opts in
+# by branch name (int-portal/<name>, hotfix-portal/<name>). The Portal Branch
+# Name workflow is the red check for a plain branch that carries portal changes.
+#
 # Cheap: ubuntu, no install, no node_modules, no build.
 
 on:
@@ -58,3 +65,6 @@ jobs:
 
       - name: Assert the catch-all is present, false, and last
         run: node scripts/ci/check-vercel-deploy-map.mjs
+
+      - name: Verify the guard itself
+        run: node scripts/__tests__/check-vercel-deploy-map.verify.js
