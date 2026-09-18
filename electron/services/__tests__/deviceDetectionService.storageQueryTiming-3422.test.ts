@@ -31,12 +31,24 @@ jest.mock("child_process", () => ({
   exec: jest.fn(),
 }));
 
+/**
+ * Lines are recorded WITH THEIR LEVEL, and the level is asserted.
+ *
+ * This matters more than it looks. The most likely wrong implementation of this item is
+ * a correct line emitted at `log.debug` — which reads as shipped, passes any assertion
+ * on the text, and records nothing at all in the founder's build (BACKLOG-2925
+ * established that his build captures nothing below `info`; it is why the keysSeen
+ * warning sits at warn). A mock that flattens the levels cannot see that, so this one
+ * does not flatten them.
+ */
 const logLines: string[] = [];
+const record = (level: string) => (...args: unknown[]) =>
+  logLines.push(`${level}|${args.map(String).join(" ")}`);
 jest.mock("electron-log", () => ({
-  info: (...args: unknown[]) => logLines.push(args.map(String).join(" ")),
-  warn: (...args: unknown[]) => logLines.push(args.map(String).join(" ")),
-  error: (...args: unknown[]) => logLines.push(args.map(String).join(" ")),
-  debug: (...args: unknown[]) => logLines.push(args.map(String).join(" ")),
+  info: record("info"),
+  warn: record("warn"),
+  error: record("error"),
+  debug: record("debug"),
 }));
 
 jest.mock("../libimobiledeviceService", () => ({
@@ -113,10 +125,14 @@ async function runQuery(opts: QueryOptions = {}) {
   return { result, lines: [...logLines] };
 }
 
-/** The one instrument line for a run. Asserted to exist exactly once. */
+/**
+ * The one instrument line for a run. Asserted to exist exactly once AND to have been
+ * emitted at `info` — a line the founder's build does not record is not an instrument.
+ */
 function timingLine(lines: string[]): string {
   const matches = lines.filter((l) => l.includes(TAG) && !l.includes("start device="));
   expect(matches).toHaveLength(1);
+  expect(matches[0].split("|")[0]).toBe("info");
   return matches[0];
 }
 
@@ -243,6 +259,7 @@ describe("BACKLOG-3422: the storage query reports its own duration and whether i
 
     const start = lines.find((l) => l.includes(TAG) && l.includes("start device="));
     expect(start).toBeDefined();
+    expect(start!.split("|")[0]).toBe("info");
     expect(start).toContain(deviceLogTag(TEST_UDID));
   });
 
