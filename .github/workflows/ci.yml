@@ -969,49 +969,35 @@ jobs:
       - name: Build application
         run: npm run build
 
+      # BACKLOG-3438. This job packages UNSIGNED, exactly as the Windows job in the
+      # same matrix already does. What CI asks of packaging is whether the app
+      # packages at all, on both architectures, with nothing foreign inside it --
+      # every question below reads the package's CONTENTS. The shippable artifact
+      # is release.yml's, and release.yml keeps the signing, notarisation and
+      # stapling along with the four checks that verify them.
+      #
+      # The branch that used to run here died on every run from 2026-09-07 and
+      # this job reported success for eleven days: the pipeline's exit status was
+      # `tee`'s, and the upload step defaulted to `warn` on zero files. Both of
+      # those maskers are removed below -- do not reintroduce either.
       - name: Package for macOS
         if: matrix.os == 'macos-latest'
         run: |
-          echo "::group::Package Configuration"
-          echo "Checking code signing configuration..."
-          if [ -n "$MACOS_CERT" ]; then
-            echo "✓ Code signing certificate: configured"
-            echo "✓ Certificate password: $([ -n "$MACOS_CERT_PASSWORD" ] && echo 'configured' || echo 'not set')"
-            echo "✓ Apple ID: $([ -n "$APPLE_ID" ] && echo 'configured' || echo 'not set')"
-            echo "✓ Apple Team ID: $([ -n "$APPLE_TEAM_ID" ] && echo 'configured' || echo 'not set')"
-            echo "::endgroup::"
-            echo ""
-            echo "Building signed package..."
-            export CSC_LINK="$MACOS_CERT"
-            export CSC_KEY_PASSWORD="$MACOS_CERT_PASSWORD"
-            if ! npm run package 2>&1 | tee package.log; then
-              echo "::error::Package build failed. Check package.log for details."
-              cat package.log
-              exit 1
-            fi
-          else
-            echo "✗ Code signing certificate: not configured"
-            echo "::warning::Building unsigned package - code signing secrets not configured"
-            echo "::endgroup::"
-            echo ""
-            echo "Building unsigned package..."
-            export CSC_IDENTITY_AUTO_DISCOVERY=false
-            if ! npm run package:unsigned 2>&1 | tee package.log; then
-              echo "::error::Unsigned package build failed. Check package.log for details."
-              cat package.log
-              exit 1
-            fi
+          # Without pipefail the status of `cmd | tee` is TEE's, which is always
+          # 0, so a failed build cannot fail this step. That is how eleven days
+          # of empty green runs happened (BACKLOG-3438). Keep this line first.
+          set -o pipefail
+          echo "Building unsigned macOS package (arm64 + x64)..."
+          export CSC_IDENTITY_AUTO_DISCOVERY=false
+          if ! npm run package:unsigned 2>&1 | tee package.log; then
+            echo "::error::Unsigned package build failed. Check package.log for details."
+            cat package.log
+            exit 1
           fi
           echo ""
           echo "::group::Build Artifacts"
           ls -la release/*.dmg release/*.zip 2>/dev/null || echo "No package artifacts found"
           echo "::endgroup::"
-        env:
-          MACOS_CERT: ${{ secrets.MACOS_CERTIFICATE }}
-          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
       - name: Download and extract Apple drivers (Windows)
         if: matrix.os == 'windows-latest'
@@ -1074,6 +1060,43 @@ jobs:
           Get-ChildItem -Path release -Filter "*.exe" | Format-Table Name, Length
         shell: pwsh
 
+      # BACKLOG-3438. release.yml has asserted this since BACKLOG-3192 (release.yml
+      # :225-251); ci.yml never did. A macOS build that dies partway leaves exactly
+      # ONE pre-signature bundle behind, and the step above still exits 0 for every
+      # reason except the one it was just taught. This is the step that says so.
+      #
+      # The two paths are named EXPLICITLY and must stay that way. Discovering
+      # bundles under release/ would pass on a single bundle -- which is precisely
+      # the broken state this exists to catch. electron-builder names the output
+      # directory by TARGET architecture, not host, so `mac-arm64` and `mac` are
+      # stable regardless of which runner image this lands on.
+      - name: Verify both macOS architectures were packaged
+        if: matrix.os == 'macos-latest'
+        run: |
+          set -euo pipefail
+          FOUND=0
+          for APP in release/mac-arm64/Keepr.app release/mac/Keepr.app; do
+            if [ ! -d "$APP" ]; then
+              echo "::error::Missing $APP -- the macOS packaging step did not complete both architectures"
+              ls -la release/ || true
+              exit 1
+            fi
+            FOUND=$((FOUND+1))
+          done
+          [ "$FOUND" -eq 2 ] || { echo "::error::Expected 2 .app bundles, found $FOUND"; exit 1; }
+
+          # The upload below globs *.dmg and *.zip together, so `if-no-files-found`
+          # fires only when BOTH are empty. Count them here instead: one DMG means
+          # one architecture shipped, which is the failure this job missed for
+          # eleven days.
+          DMGS=$(ls -1 release/*.dmg 2>/dev/null | wc -l | tr -d ' ')
+          ZIPS=$(ls -1 release/*.zip 2>/dev/null | wc -l | tr -d ' ')
+          echo "Found $DMGS dmg, $ZIPS zip:"
+          ls -la release/*.dmg release/*.zip
+          [ "$DMGS" -eq 2 ] || { echo "::error::Expected 2 .dmg files, found $DMGS"; exit 1; }
+          [ "$ZIPS" -eq 2 ] || { echo "::error::Expected 2 .zip files, found $ZIPS"; exit 1; }
+          echo "OK: both architectures packaged."
+
       # BACKLOG-3425. This job runs on every push to develop and main, so it is the
       # EARLIER of the two gates -- a package that has swallowed the build's own output
       # fails here, days before anyone cuts a tag. release.yml runs the same check on the
@@ -1102,6 +1125,11 @@ jobs:
           path: |
             release/*.dmg
             release/*.zip
+          # Default is `warn`. A build that produced nothing uploaded nothing and
+          # reported success -- one of the two reasons this job went unnoticed for
+          # eleven days (BACKLOG-3438). release.yml has set `error` since
+          # BACKLOG-3192; this is the same line, finally ported.
+          if-no-files-found: error
           retention-days: 30
 
       - name: Upload Windows package artifacts
