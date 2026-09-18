@@ -533,6 +533,49 @@ describe("GmailFetchService - Label Discovery (TASK-2046)", () => {
       );
     });
 
+    /**
+     * CONTROL — the walk reports WHERE IN THE WALK it is.
+     *
+     * The Gmail mirror of `searchAllFolders`'s folderIndex/folderCount control,
+     * and for the same reason: `precacheEmails` draws the pre-cache bar's 70->90
+     * stretch from this pair, because the per-label numbers beside it restart on
+     * every label.
+     *
+     * THREE labels, not one — a single-label fixture cannot separate a real
+     * `labelIndex` from a hardcoded 0.
+     *
+     * MUTATION: stop forwarding `labelIndex`/`labelCount` in `searchAllLabels`
+     * -> RED.
+     */
+    it("reports labelIndex and labelCount so a caller can draw a bar", async () => {
+      mockLabelsList.mockResolvedValue({
+        data: {
+          labels: [
+            { id: "Label_1", name: "Work" },
+            { id: "Label_2", name: "Personal" },
+            { id: "Label_3", name: "Receipts" },
+          ],
+        },
+      });
+
+      mockMessagesList.mockResolvedValue({
+        data: { messages: [{ id: "msg-1" }] },
+      });
+
+      mockMessagesGet.mockResolvedValue(createMockMessage("msg-1"));
+
+      const seen: Array<{ labelIndex?: number; labelCount?: number }> = [];
+      await gmailFetchService.searchAllLabels({
+        onProgress: (p) => seen.push({ labelIndex: p.labelIndex, labelCount: p.labelCount }),
+      });
+
+      expect(seen).toEqual([
+        { labelIndex: 0, labelCount: 3 },
+        { labelIndex: 1, labelCount: 3 },
+        { labelIndex: 2, labelCount: 3 },
+      ]);
+    });
+
     it("should throw when not initialized", async () => {
       const uninitializedService = Object.create(
         Object.getPrototypeOf(gmailFetchService)

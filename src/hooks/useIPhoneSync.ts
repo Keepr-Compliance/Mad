@@ -10,6 +10,7 @@ import type {
 import logger from '../utils/logger';
 import { syncOrchestrator } from '../services/SyncOrchestratorService';
 import { usePlatform } from '../contexts/PlatformContext';
+import { pickDisplayUnitIndex } from '../utils/transferByteUnit';
 
 /**
  * BACKLOG-1773: Sync status poll backoff bounds.
@@ -363,15 +364,28 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
           // Update ref for disconnect handler (avoids stale closure)
           progressPhaseRef.current = phase;
           const percent = syncProgress.overallProgress ?? 0;
-          setProgress({
+          const bytesProcessed = progressWithBackup.backupProgress?.bytesTransferred;
+          setProgress((prev) => ({
             phase,
             percent,
             message: syncProgress.message,
-            bytesProcessed: progressWithBackup.backupProgress?.bytesTransferred,
+            bytesProcessed,
             processedFiles: progressWithBackup.backupProgress?.filesTransferred,
             estimatedTotalBytes: progressWithBackup.estimatedTotalBytes,
             priorBackup: progressWithBackup.priorBackup,
-          });
+            // BACKLOG-3416: the readout's unit is decided ONCE per sync — on the
+            // first non-zero byte count, floored at MB — and carried from then on.
+            // A zero does not decide it: a sync whose first completed file is
+            // 1 GiB+ should read GB. It lives here, on the sync's state, so it
+            // survives the modal unmounting on minimize. Every new sync replaces
+            // the progress object (startSync, submitPassword, cancelSync,
+            // dismissSync), and that replacement is the reset.
+            displayUnitIndex:
+              prev?.displayUnitIndex ??
+              (bytesProcessed && bytesProcessed > 0
+                ? pickDisplayUnitIndex(bytesProcessed)
+                : undefined),
+          }));
 
           // TASK-2119: Update orchestrator with progress
           syncOrchestrator.updateExternalSync('iphone', { progress: percent, phase });
@@ -398,6 +412,8 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
             phase: "backing_up",
             percent: prev?.percent ?? 0,
             message: "Your iPhone is preparing the export...",
+            // BACKLOG-3416: same sync, same unit.
+            displayUnitIndex: prev?.displayUnitIndex,
           }));
         });
         cleanups.push(unsub);
@@ -412,6 +428,8 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
             phase: "backing_up",
             percent: prev?.percent ?? 0,
             message: "Passcode accepted! iPhone is preparing backup...",
+            // BACKLOG-3416: same sync, same unit.
+            displayUnitIndex: prev?.displayUnitIndex,
           }));
         });
         cleanups.push(unsub);

@@ -22,7 +22,13 @@ export function IPhoneSyncModal({ onClose }: IPhoneSyncModalProps) {
 
   return (
     <ResponsiveModal onClose={onClose} zIndex="z-[60]" overlayClassName="bg-black/50" panelClassName="max-w-lg sm:max-h-[90vh] sm:overflow-y-auto">
-        {/* Minimize button — dismisses modal without stopping sync */}
+        {/* Minimize button — dismisses modal without stopping sync.
+
+            BACKLOG-3416: this is now the ONLY thing that minimises the modal
+            during a sync. It used to share that job with `onSyncStarted`, which
+            fired automatically at the `backing_up` phase — before the user had
+            necessarily unlocked the phone, tapped "Trust This Computer" or
+            entered their passcode — and hid the instructions for doing so. */}
         <div className="flex justify-end p-4 pb-0">
           <button
             onClick={() => { logger.info("[IPhoneSyncModal] Minimize clicked"); onClose(); }}
@@ -34,7 +40,7 @@ export function IPhoneSyncModal({ onClose }: IPhoneSyncModalProps) {
             </svg>
           </button>
         </div>
-        <IPhoneSyncFlow onClose={onClose} onSyncStarted={onClose} />
+        <IPhoneSyncFlow onClose={onClose} />
     </ResponsiveModal>
   );
 }

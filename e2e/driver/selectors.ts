@@ -82,9 +82,24 @@ export const TourMarkers = {
   visibleText: /Welcome to Keepr|Step 1 of/i,
 } as const;
 
-/** The login wall (Sign in with Browser). Intentionally NOT tagged — text is the contract. */
+/**
+ * The login wall. Intentionally NOT tagged — text is the contract.
+ *
+ * Consumed by `atLoginWall()` in scripts/qa/drive-pivot.ts, which uses it to
+ * tell "the seeded session never authenticated" apart from "stuck on a
+ * transient screen". It therefore has to be ACCURATE rather than broad: a false
+ * positive misdiagnoses the run.
+ *
+ * Both alternatives are live in Login.tsx — the `<h1>` (:457) and the sign-in
+ * button's label (:500). The button label is anchored `^…$` so it matches only
+ * the exact label, not "Signing in…" or other "sign in" copy elsewhere.
+ *
+ * Two earlier alternatives ("Real Estate Compliance Made Simple", "Start your
+ * 14-day free trial") were removed: neither string exists anywhere in src/, so
+ * they could never match and made this regex look better-covered than it was.
+ */
 export const LoginWall = {
-  visibleText: /Sign in with Browser|Real Estate Compliance Made Simple|Start your 14-day free trial/i,
+  visibleText: /Sign in to Keepr|^Sign in$/i,
 } as const;
 
 export const RootMount = '#root';
@@ -214,7 +229,8 @@ export const CreateAudit = {
   createManuallyTestId: 'create-manually-button',
   addressInputTestId: 'create-audit-address-input',
   startDateInputTestId: 'create-audit-start-date-input',
-  closingDateInputTestId: 'create-audit-closing-date-input',
+  // No closingDateInputTestId: step 1 no longer renders a Closing Date field.
+  // A closing date is set from the Export modal instead.
   endDateInputTestId: 'create-audit-end-date-input',
   typePurchaseTestId: 'create-audit-type-purchase',
   typeSaleTestId: 'create-audit-type-sale',

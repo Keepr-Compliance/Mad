@@ -12,6 +12,8 @@ import type {
 // shape without gaining a dependency on main-process code. One definition
 // rather than a hand-copied mirror that drifts the first time a column moves.
 import type { TransactionContactResult } from "../../services/db/transactionContactDbService";
+// The one definition of the pre-cache fetch rounds. TYPE-ONLY, same ruling.
+import type { EmailPrecacheStage } from "./emailPrecacheStage";
 
 
 /** BACKLOG-2791: which store a review item came from. */
@@ -850,6 +852,12 @@ export interface WindowApiTransactions {
       total: number;
       percent: number;
       outcome?: "success" | "error" | "cancelled";
+      /**
+       * Which fetch round is downloading, when one is. Absent on the boundary
+       * events and on every non-fetching phase, so a consumer has to handle it
+       * missing — `emailPrecacheStageDisplay` in the renderer does.
+       */
+      stage?: EmailPrecacheStage;
     }) => void,
   ) => () => void;
   /** Export transaction to organized folder structure */

@@ -342,8 +342,8 @@ describe("App", () => {
       });
 
       // Should show login button
-      // SPRINT-062: Login now shows single "Sign in with Browser" button instead of separate Google/Microsoft buttons
-      expect(screen.getByText(/sign in with browser/i)).toBeInTheDocument();
+      // SPRINT-062: Login now shows a single "Sign in" button instead of separate Google/Microsoft buttons
+      expect(screen.getByText("Sign in")).toBeInTheDocument();
     });
 
     // Skip: The "permissions" step only exists in the new onboarding flow (USE_NEW_ONBOARDING).
@@ -583,9 +583,9 @@ describe("App", () => {
       renderApp();
 
       // The app should render the login screen
-      // SPRINT-062: Login now shows "Sign in with Browser" instead of "Sign in with Google"
+      // SPRINT-062: Login now shows "Sign in" instead of "Sign in with Google"
       await waitFor(() => {
-        expect(screen.getByText(/sign in with browser/i)).toBeInTheDocument();
+        expect(screen.getByText("Sign in")).toBeInTheDocument();
       });
 
       // checkPermissions is called internally by the state machine
@@ -605,9 +605,9 @@ describe("App", () => {
       renderApp();
 
       // Verify login screen renders (permissions check is part of useAppStateMachine)
-      // SPRINT-062: Login now shows "Sign in with Browser" instead of "Sign in with Google"
+      // SPRINT-062: Login now shows "Sign in" instead of "Sign in with Google"
       await waitFor(() => {
-        expect(screen.getByText(/sign in with browser/i)).toBeInTheDocument();
+        expect(screen.getByText("Sign in")).toBeInTheDocument();
       });
 
       // The checkPermissions function exists and is callable
@@ -625,9 +625,9 @@ describe("App", () => {
       renderApp();
 
       // Verify login screen renders (app location check is part of useAppStateMachine)
-      // SPRINT-062: Login now shows "Sign in with Browser" instead of "Sign in with Google"
+      // SPRINT-062: Login now shows "Sign in" instead of "Sign in with Google"
       await waitFor(() => {
-        expect(screen.getByText(/sign in with browser/i)).toBeInTheDocument();
+        expect(screen.getByText("Sign in")).toBeInTheDocument();
       });
     });
   });
@@ -862,9 +862,9 @@ describe("App", () => {
 
       renderApp();
 
-      // SPRINT-062: Login now shows "Sign in with Browser" instead of "Sign in with Google"
+      // SPRINT-062: Login now shows "Sign in" instead of "Sign in with Google"
       await waitFor(() => {
-        expect(screen.getByText(/sign in with browser/i)).toBeInTheDocument();
+        expect(screen.getByText("Sign in")).toBeInTheDocument();
       });
 
       // The move prompt should not appear

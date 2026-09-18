@@ -32,6 +32,10 @@ import { openEmailSettings } from "../../utils/openEmailSettings";
 // BACKLOG-3128: the macOS Messages phase vocabulary, shared with the Settings
 // panel so the pill and the panel cannot disagree about what is happening.
 import { importPhaseDisplayFor } from "../../utils/importPhaseDisplay";
+// BACKLOG-3421: the email pre-cache's round vocabulary, shared with the Settings
+// panel for the same reason. Its own header named this surface as the obvious
+// second consumer; this is that consumer.
+import { emailPrecacheStageDisplayFor } from "../../utils/emailPrecacheStageDisplay";
 
 interface SyncStatusIndicatorProps {
   /** Pending transaction count (shown in completion message) */
@@ -599,8 +603,23 @@ export function SyncStatusIndicator({
     // string-keyed record would recreate exactly the untyped map this item
     // exists to replace; `renderPill` already takes `type`, so discriminating
     // costs nothing.
+    // BACKLOG-3421: a THIRD vocabulary, for the email pre-cache's fetch rounds.
+    // Same reasoning as above, with one deliberate difference: there is no
+    // `?? phase` fallback.
+    //
+    // The emails leg forwards the producer's `stage` — "outlook-inbox",
+    // "gmail-labels" — which is an internal identifier and not copy. Falling
+    // through to it would put "Emails - outlook-inbox" on the dashboard, the
+    // exact defect the messages branch exists to fix ("Messages - querying").
+    // The field is also legitimately absent on the boundary events, on the
+    // backfill sweep and during `repairing`/`swapping`, so "no phase" is the
+    // ordinary case here rather than the exception: the pill reads "Emails" and
+    // the percentage beside it still moves. An unknown stage from a newer main
+    // process lands in the same place — nothing, never another round's label.
     const friendlyPhase = type === 'messages'
       ? (importPhaseDisplayFor(phase)?.pill ?? phase)
+      : type === 'emails'
+      ? emailPrecacheStageDisplayFor(phase)?.pill
       : phase ? ({
       backing_up: 'Exporting',
       preparing: 'Preparing',
