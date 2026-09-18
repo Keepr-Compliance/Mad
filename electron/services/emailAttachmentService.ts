@@ -41,7 +41,24 @@ export interface EmailAttachmentMeta {
   filename: string;
   mimeType: string;
   size: number;
-  attachmentId: string; // Gmail attachment ID or Outlook attachment ID
+  /**
+   * BACKLOG-3187: Gmail's IDENTITY — the immutable id of the MIME part — or null
+   * for Outlook, which has no such concept.
+   *
+   * REQUIRED and nullable ON PURPOSE. Nine call sites across five files build
+   * this shape with their own inline `.map()`. Optional would let any one of them
+   * drop the field with nothing red: `tsc` sees a valid object either way, and the
+   * only symptom would be a Gmail row silently keeping a NULL provider id — the
+   * exact defect this item exists to close. Required makes the compiler the
+   * control, so a new call site cannot be added without answering the question.
+   */
+  partId: string | null;
+  /**
+   * Gmail attachment ID or Outlook attachment ID — a FETCH TOKEN, passed straight
+   * to `attachments.get` / Graph. BACKLOG-3187 measured Gmail's rotating between
+   * two fetches of the same attachment, so it is never persisted as identity.
+   */
+  attachmentId: string;
 }
 
 /**
@@ -174,6 +191,40 @@ class EmailAttachmentService {
     // Load existing content hashes for deduplication
     const existingHashes = await this.loadExistingHashes();
 
+    // BACKLOG-2551 — THE download-side gate, deliberately here and nowhere else.
+    // `source` is a parameter of this function, so this single line covers all
+    // nine call sites across four files. Replicating it at those call sites (each
+    // has its own inline .map()) would mean missing one lets a Gmail attachmentId
+    // into idx_attachments_email_provider — reintroducing the very regression this
+    // avoids, with nothing red, since tsc sees a valid string either way.
+    //
+    // BACKLOG-3187 — identity comes from the DATA SHAPE, not the provider label.
+    //
+    // Gmail keys on `partId`, which Google documents as "the immutable ID of the
+    // message part". It does NOT key on `attachmentId`: Google documents no
+    // stability property for that field, and on 2026-09-07 it was MEASURED
+    // rotating — the same attachment fetched twice seconds apart, with a fresh
+    // OAuth2 client each time, returned two different values of equal length while
+    // `partId` was identical. Keying the unique index on it would have been
+    // actively wrong: every sync would see a new value, no row would ever match
+    // its predecessor, and BACKLOG-2551's duplication would continue underneath an
+    // index asserting it could not.
+    //
+    // Outlook is unchanged: a Graph attachment carries no `partId`, so the first
+    // term is always null for it and the second is the behaviour v71 shipped.
+    //
+    // THE LIMIT OF THIS GATE, and why the shape term comes first: `source` is not
+    // always derived. At one of the nine call sites (transactionService.ts,
+    // BACKLOG-3189) the provider is GUESSED from the sender's address rather than
+    // read from the mailbox the message came from. Reading the shape means a Gmail
+    // message misread as "outlook" can no longer have a rotating fetch token
+    // written as its identity. The reverse — an Outlook message from a gmail.com
+    // sender, labelled "gmail", having its Graph id nulled — is UNFIXED here and
+    // remains BACKLOG-3189. Nothing goes red for it: the union member is valid
+    // either way. Do not read this gate as evidence the provider is reliably known.
+    const providerAttachmentIdFor = (meta: EmailAttachmentMeta): string | null =>
+      meta.partId || (source === "gmail" ? null : (meta.attachmentId ?? null));
+
     for (const attachment of attachments) {
       try {
         const downloadResult = await this.processAttachment(
@@ -183,7 +234,8 @@ class EmailAttachmentService {
           source,
           attachment,
           attachmentsDir,
-          existingHashes
+          existingHashes,
+          providerAttachmentIdFor(attachment)
         );
 
         result.details.push(downloadResult);
@@ -234,7 +286,12 @@ class EmailAttachmentService {
     source: "gmail" | "outlook",
     attachment: EmailAttachmentMeta,
     attachmentsDir: string,
-    existingHashes: Set<string>
+    existingHashes: Set<string>,
+    /**
+     * BACKLOG-2551: already gated by the caller. BACKLOG-3187: this is Gmail's
+     * `partId` or Outlook's Graph id — never a Gmail `attachmentId`.
+     */
+    providerAttachmentId: string | null
   ): Promise<{ filename: string; status: "stored" | "skipped" | "error"; reason?: string }> {
     // BACKLOG-1870: `sanitizedFilename` is ONLY for deriving the on-disk file's
     // extension (the file itself is named by content hash — see below), NOT for the
@@ -264,7 +321,15 @@ class EmailAttachmentService {
     //   - a sync persisted METADATA ONLY (storage_path NULL) → download the bytes
     //     now and backfill storage on THAT SAME row (no duplicate).
     // Keyed by the RAW display filename so it reconciles with the sync-created row.
-    const existingRow = this.getExistingAttachmentRow(emailId, displayFilename);
+    // BACKLOG-2551: resolve through the SAME four-step order the sync upsert uses.
+    // Keyed on filename alone, the second of two identically-named attachments
+    // matched the FIRST one's row, saw storage_path set, and was skipped — it never
+    // downloaded. That is the defect; this is the line that fixes it.
+    const existingRow = this.getExistingAttachmentRow(
+      emailId,
+      displayFilename,
+      providerAttachmentId
+    );
     if (existingRow && existingRow.storage_path) {
       return {
         filename: displayFilename,
@@ -334,10 +399,14 @@ class EmailAttachmentService {
     // a fresh record (the pre-BACKLOG-1870 behavior).
     let storedAttachmentId: string;
     if (existingRow) {
+      // BACKLOG-2551: passing the provider id here is what stamps an ADOPTED
+      // legacy row (matched by step 2, provider id NULL) so the next sync finds it
+      // by step 1 instead of inserting beside it.
       databaseService.setEmailAttachmentStorage(
         existingRow.id,
         storagePath,
-        data.length
+        data.length,
+        providerAttachmentId
       );
       storedAttachmentId = existingRow.id;
     } else {
@@ -348,7 +417,8 @@ class EmailAttachmentService {
         displayFilename,
         attachment.mimeType,
         data.length,
-        storagePath
+        storagePath,
+        providerAttachmentId
       );
     }
 
@@ -426,10 +496,15 @@ class EmailAttachmentService {
    */
   private getExistingAttachmentRow(
     emailId: string,
-    filename: string
-  ): { id: string; storage_path: string | null } | undefined {
+    filename: string,
+    providerAttachmentId: string | null
+  ): { id: string; storage_path: string | null; provider_attachment_id: string | null } | undefined {
     try {
-      return databaseService.getEmailAttachmentByFilename(emailId, filename);
+      return databaseService.findEmailAttachmentRow(
+        emailId,
+        filename,
+        providerAttachmentId
+      );
     } catch {
       // If the email_id column doesn't exist yet, treat as no existing row.
       return undefined;
@@ -446,7 +521,8 @@ class EmailAttachmentService {
     filename: string,
     mimeType: string,
     fileSize: number,
-    storagePath: string
+    storagePath: string,
+    providerAttachmentId: string | null
   ): Promise<string> {
     const attachmentId = crypto.randomUUID();
 
@@ -460,6 +536,7 @@ class EmailAttachmentService {
       mimeType,
       fileSizeBytes: fileSize,
       storagePath,
+      providerAttachmentId,
     });
 
     await logService.debug(

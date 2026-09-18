@@ -26,6 +26,70 @@ interface UserSyncData {
   subscription_tier?: SubscriptionTier;
 }
 
+// ---------------------------------------------------------------------------
+// Organization membership — BACKLOG-3364
+// ---------------------------------------------------------------------------
+
+/**
+ * The organization record embedded by the membership query.
+ *
+ * Only two keys are read. `personal_owner_user_id` is declared optional because
+ * it is exactly what a database without BACKLOG-3364's migration omits, and the
+ * whole record is selected precisely so that its absence is a missing key
+ * rather than an error (see {@link SupabaseService.getActiveOrganizationMembershipOutcome}).
+ */
+interface EmbeddedOrganization {
+  name?: string | null;
+  personal_owner_user_id?: string | null;
+}
+
+/**
+ * One row of `select("organization_id, organizations(*)")`.
+ *
+ * **Object on the wire; ARRAY in the inferred type.** PostgREST returns a
+ * single object for this embed — it is a many-to-one relationship — and that is
+ * what the responses transcribed in `supabase/tests/backlog-3364/fixtures/`
+ * contain. But this client is built without a generated `Database` type
+ * (`createClient(url, key)` above), so supabase-js cannot know the cardinality
+ * and infers an array from the select string alone.
+ *
+ * Both shapes are declared and {@link embeddedOrganization} takes either.
+ * Narrowing to the object alone is what the build rejects; narrowing to the
+ * array alone would compile and then read `undefined` at runtime, which
+ * silently makes every organization non-personal — the exact failure this code
+ * exists to prevent, and one no type error would report. Same finding as the
+ * broker portal's `lib/auth/membership.ts` (BACKLOG-3364 PR 2).
+ */
+interface MembershipRow {
+  organization_id: string;
+  organizations?: EmbeddedOrganization | EmbeddedOrganization[] | null;
+}
+
+/** The embedded record, whichever of the two shapes it arrived in. */
+function embeddedOrganization(row: MembershipRow): EmbeddedOrganization | null {
+  const embed = row.organizations;
+  if (!embed) return null;
+  return Array.isArray(embed) ? (embed[0] ?? null) : embed;
+}
+
+/**
+ * What the membership lookup found — BACKLOG-3364.
+ *
+ * `none` (the query succeeded and the user is in no active organization) and
+ * `error` (the query could not be answered) are deliberately different values.
+ * Collapsing them is how a failed lookup gets acted on as a fact.
+ */
+export type MembershipOutcome =
+  | {
+      status: "member";
+      organization_id: string;
+      organization_name?: string;
+      /** True when this organization is the user's own personal organization. */
+      is_personal: boolean;
+    }
+  | { status: "none" }
+  | { status: "error" };
+
 /**
  * Device information
  */
@@ -355,71 +419,224 @@ class SupabaseService {
 
   /**
    * Get active organization membership for a user
-   * Used to determine team license status
+   *
+   * BACKLOG-3364: a membership row no longer means "this user is in a
+   * brokerage". A solo user holds a row in an organization of their own, and
+   * the callers of this method need OPPOSITE answers about it:
+   *
+   *   - the license reader (licenseHandlers) must NOT call them a team user;
+   *   - the feature-gate reader (featureGateHandlers.resolveOrgId) MUST use
+   *     that organization, because it is where their plan lives.
+   *
+   * So this method does not filter personal organizations out. It returns the
+   * organization plus `is_personal`, and each caller decides. Putting the
+   * filter in here instead is the most likely wrong implementation: the license
+   * reader would look correct while `resolveOrgId` returned null, so no solo
+   * user's plan would ever be read (plan 0b9fef3c W2).
+   *
    * @param userId - User UUID to check
-   * @returns Organization membership data or null if not a team member
+   * @returns Organization membership data, or null when there is no active
+   *          membership AND when the lookup failed. Callers that must tell
+   *          those two apart use {@link getActiveOrganizationMembershipOutcome}.
    */
   async getActiveOrganizationMembership(
     userId: string
-  ): Promise<{ organization_id: string; organization_name?: string } | null> {
+  ): Promise<{
+    organization_id: string;
+    organization_name?: string;
+    is_personal: boolean;
+  } | null> {
+    const outcome = await this.getActiveOrganizationMembershipOutcome(userId);
+    if (outcome.status !== "member") {
+      // `none` and `error` both answer null here — the behaviour this method
+      // has always had. No second Sentry capture: the outcome method already
+      // reported anything worth reporting.
+      return null;
+    }
+    return {
+      organization_id: outcome.organization_id,
+      organization_name: outcome.organization_name,
+      is_personal: outcome.is_personal,
+    };
+  }
+
+  /**
+   * Get active organization membership, distinguishing "none" from "error".
+   *
+   * BACKLOG-3364 (contract fixed by SR delta pm_comments 3e27deee §7, consumed
+   * by BACKLOG-3349). Three things this method guarantees:
+   *
+   *   1. **It never throws.** Every failure — an error result, a result that is
+   *      not a list of rows, anything thrown, `_ensureClient()` included —
+   *      becomes `{ status: "error" }`.
+   *   2. **`none` and `error` stay distinct.** "This user is in no
+   *      organization" and "I could not find out" are different answers, and a
+   *      caller that writes to the database on the strength of the first must
+   *      not act on the second.
+   *   3. **No argument ever names `organizations.personal_owner_user_id`.**
+   *
+   * On (3): that column arrives in BACKLOG-3364's own migration, applied to
+   * production on its own schedule. A build that NAMES it in a select, order or
+   * filter gets HTTP 400 / PostgREST `42703` from a database that does not have
+   * it yet — with `data: null` and NO throw. This method would then answer
+   * `error` for everyone, and every real brokerage member would silently lose
+   * their team license. Measured, not assumed: cases A, C and D of
+   * `supabase/tests/backlog-3364/fixtures/postgrest-pre-migration.json`.
+   *
+   * So the query embeds the WHOLE organization record — case B, 200 on both
+   * sides of the migration — and `is_personal` is computed here in code from a
+   * key that is simply absent beforehand. Absent key → not personal → exactly
+   * today's behaviour.
+   *
+   * @param userId - User UUID to check
+   */
+  async getActiveOrganizationMembershipOutcome(
+    userId: string
+  ): Promise<MembershipOutcome> {
     try {
       const client = this._ensureClient();
-      // Use limit(1) instead of maybeSingle() to handle users with multiple org memberships
-      // Filter by active license_status to only consider valid memberships
+      // No `.limit(1)`: with two rows the row the database happened to return
+      // first would decide whether a brokerage member is a team user. The rows
+      // come back in a deterministic order and this method picks.
+      //
+      // Both `.order()` columns are base columns of `organization_members`, so
+      // neither names the new column, and neither sorts on the embed.
+      // `created_at` is nullable, so `id` settles any tie.
       const { data, error } = await client
         .from("organization_members")
-        .select("organization_id, organizations(name)")
+        .select("organization_id, organizations(*)")
         .eq("user_id", userId)
         .eq("license_status", "active")
-        .limit(1);
+        .order("created_at", { ascending: true })
+        .order("id", { ascending: true });
 
       if (error) {
         logService.warn(
           `[Supabase] Failed to get org membership: ${error.message}`,
           "SupabaseService"
         );
-        return null;
+        return { status: "error" };
       }
 
-      // data is now an array, get first element
-      const membership = data?.[0];
-      if (!membership) {
-        return null;
+      if (!Array.isArray(data)) {
+        // A shape this code cannot read is not "no membership".
+        logService.warn(
+          "[Supabase] Failed to get org membership: result was not a list of rows",
+          "SupabaseService"
+        );
+        return { status: "error" };
       }
+
+      if (data.length === 0) {
+        return { status: "none" };
+      }
+
+      const rows = (data as MembershipRow[]).map((row) => {
+        const org = embeddedOrganization(row);
+        return {
+          organization_id: row.organization_id,
+          organization_name: org?.name ?? undefined,
+          is_personal: !!org?.personal_owner_user_id,
+        };
+      });
+
+      // Brokerage first, keeping the SQL order inside each group.
+      //
+      // Taking the first non-personal row and falling back to the first row is
+      // exactly a stable partition on `is_personal === false` followed by
+      // "take the head", with no intermediate array: `find` scans in index
+      // order, so it returns the EARLIEST brokerage row, and `rows[0]` is the
+      // earliest row overall in the case where every row is personal.
+      const chosen = rows.find((row) => !row.is_personal) ?? rows[0];
 
       return {
-        organization_id: membership.organization_id,
-        organization_name: (membership.organizations as { name?: string } | null)?.name,
+        status: "member",
+        organization_id: chosen.organization_id,
+        organization_name: chosen.organization_name,
+        is_personal: chosen.is_personal,
       };
     } catch (err) {
       logService.error("[Supabase] Error checking org membership", "SupabaseService", { err });
       Sentry.captureException(err, {
         tags: { service: "supabase-service", operation: "getActiveOrganizationMembership" },
       });
-      return null;
+      return { status: "error" };
     }
   }
 
   /**
    * TASK-2040: Set up auth state change listener.
-   * Keeps the local authSession cache in sync when the Supabase SDK
-   * auto-refreshes the access token (which happens proactively before
-   * the 1-hour JWT expiry).
+   *
+   * BACKLOG-3388: this listener is the ONLY thing that keeps `authSession` —
+   * the cache every caller of {@link getAuthSession} and {@link getAuthUserId}
+   * reads — pointing at the user the SDK is actually signed in as. It therefore
+   * mirrors EVERY event that carries a session, not just `TOKEN_REFRESHED`.
+   *
+   * Why that matters: a login calls `client.auth.setSession(...)`, and for a
+   * token that has not expired the SDK emits **SIGNED_IN**, not
+   * `TOKEN_REFRESHED` (`@supabase/auth-js` 2.110.2,
+   * `dist/main/GoTrueClient.js:3018` — only the `hasExpired` branch goes
+   * through `_callRefreshToken`, which emits `TOKEN_REFRESHED` at `:4183`).
+   * With `SIGNED_IN` unhandled, signing in as a second account in an
+   * already-running app left the cache holding the PREVIOUS account's id and
+   * tokens while the SDK held the new one. Every reader then asked the database
+   * about the wrong identity under the right JWT, which RLS answers with zero
+   * rows and no error.
+   *
+   * The events `auth-js` 2.110.2 can deliver are `INITIAL_SESSION`,
+   * `PASSWORD_RECOVERY`, `SIGNED_IN`, `SIGNED_OUT`, `TOKEN_REFRESHED`,
+   * `USER_UPDATED` and `MFA_CHALLENGE_VERIFIED` (`lib/types.d.ts:14-15`); all
+   * but `SIGNED_OUT` can arrive with a session. So the rule here is the shape
+   * of the data, not a list of event names: a session present means mirror it,
+   * `SIGNED_OUT` means clear it, and anything carrying no session (an
+   * `INITIAL_SESSION` with nothing to restore) leaves the cache alone — only a
+   * sign-out clears.
+   *
    * @private
    */
   private _setupAuthStateListener(): void {
     if (!this.client) return;
 
     const { data } = this.client.auth.onAuthStateChange((event, session) => {
-      if (event === "TOKEN_REFRESHED" && session) {
-        this.authSession = {
-          userId: session.user.id,
-          accessToken: session.access_token,
-          refreshToken: session.refresh_token,
-          expiresAt: session.expires_at
-            ? new Date(session.expires_at * 1000)
-            : undefined,
-        };
+      if (event === "SIGNED_OUT") {
+        this.authSession = null;
+        logService.info(
+          "[Supabase] Auth state: signed out",
+          "SupabaseService"
+        );
+        return;
+      }
+
+      // No session on this event — nothing to mirror. Note this is NOT a
+      // sign-out: clearing here would wipe a valid cache on the
+      // `INITIAL_SESSION(null)` the SDK emits to every new subscriber.
+      if (!session?.user?.id) {
+        return;
+      }
+
+      const previousUserId = this.authSession?.userId ?? null;
+
+      this.authSession = {
+        userId: session.user.id,
+        accessToken: session.access_token,
+        refreshToken: session.refresh_token,
+        expiresAt: session.expires_at
+          ? new Date(session.expires_at * 1000)
+          : undefined,
+      };
+
+      if (previousUserId && previousUserId !== session.user.id) {
+        // The in-process account switch that BACKLOG-3388 was filed for. Worth
+        // a warning: before this handler existed it happened silently and the
+        // next database read asked about the wrong person.
+        logService.warn(
+          "[Supabase] Auth cache repointed to a different user",
+          "SupabaseService",
+          { event, previousUserId, userId: session.user.id }
+        );
+      }
+
+      if (event === "TOKEN_REFRESHED") {
         logService.info(
           "[Supabase] Token auto-refreshed successfully",
           "SupabaseService",
@@ -432,6 +649,12 @@ class SupabaseService {
         // that BACKLOG-2332 gives the desktop a stable own session that actually survives to
         // rotate, persist the rotated tokens. Fire-and-forget: never block the refresh; updateSession
         // returns false (no throw) if session.json is absent (e.g. a refresh before initial save).
+        //
+        // BACKLOG-3388 kept this write-back on TOKEN_REFRESHED ALONE. The other
+        // session-carrying events are not rotations: their tokens were handed
+        // to the SDK by the caller that already owns persisting them
+        // (main.ts / sessionHandlers.ts), so writing here would be a second,
+        // racing writer of session.json rather than a fix.
         void sessionService
           .updateSession({
             supabaseTokens: {
@@ -446,11 +669,11 @@ class SupabaseService {
               { error: error instanceof Error ? error.message : "Unknown error" }
             );
           });
-      } else if (event === "SIGNED_OUT") {
-        this.authSession = null;
+      } else {
         logService.info(
-          "[Supabase] Auth state: signed out",
-          "SupabaseService"
+          "[Supabase] Auth cache updated from session-carrying event",
+          "SupabaseService",
+          { event, userId: session.user.id }
         );
       }
     });

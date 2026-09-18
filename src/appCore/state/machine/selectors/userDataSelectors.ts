@@ -8,7 +8,8 @@
  * @module appCore/state/machine/selectors/userDataSelectors
  */
 
-import type { AppState, OnboardingStep } from "../types";
+import { isFdaGranted } from "../fdaState";
+import type { AppState, OnboardingStep, PlatformInfo, UserData } from "../types";
 import logger from '../../../../utils/logger';
 import type { OnboardingContext, Platform } from "../../../../components/onboarding/types";
 import { hasMinimumDataSource } from "../../../../components/onboarding/queue/dataSourceFloor";
@@ -155,14 +156,16 @@ export function selectPhoneType(
     return state.userData.phoneType;
   }
   if (state.status === "onboarding") {
-    // Use explicit selection from onboarding state if available
-    // This is set when ONBOARDING_STEP_COMPLETE is dispatched with phoneType
+    // The recorded selection, set by every transition that knows the answer:
+    // ONBOARDING_STEP_COMPLETE(phone-type), USER_DATA_LOADED,
+    // START_EMAIL_SETUP and RESUME_MARKER_APPLIED.
+    //
+    // BACKLOG-3276: no platform fallback. It returned "iphone" when
+    // platform.hasIPhone was true, which no production producer sets, so it
+    // never ran in the app and only let test fixtures answer the question for
+    // the user.
     if (state.selectedPhoneType) {
       return state.selectedPhoneType;
-    }
-    // Fallback to platform detection (legacy behavior for states before phone-type step)
-    if (state.platform) {
-      return state.platform.hasIPhone ? "iphone" : null;
     }
   }
   return null;
@@ -199,12 +202,14 @@ export function selectHasEmailConnected(state: AppState): boolean {
  */
 export function selectHasPermissions(state: AppState): boolean {
   if (state.status === "ready") {
-    return state.userData.hasPermissions;
+    return isFdaGranted(state.userData.fda);
   }
   if (state.status === "onboarding") {
-    // Check if permissions were loaded during initialization
-    // This fixes the bug where returning users with FDA granted were stuck
-    return state.hasPermissions ?? false;
+    // Check if permissions were loaded during initialization.
+    // This fixes the bug where returning users with FDA granted were stuck.
+    // BACKLOG-3275: `fda === undefined` means "not established yet"; this
+    // selector's contract is a plain boolean, so unknown reads as not granted.
+    return state.fda === undefined ? false : isFdaGranted(state.fda);
   }
   return false;
 }
@@ -260,10 +265,15 @@ export function selectHasPermissionsNullable(
   state: AppState
 ): boolean | undefined {
   if (state.status === "ready") {
-    return state.userData.hasPermissions;
+    return isFdaGranted(state.userData.fda);
   }
   if (state.status === "onboarding") {
-    return state.hasPermissions ?? undefined;
+    // BACKLOG-3275: `undefined` must survive. It is the load-bearing third
+    // value this selector exists for — `PermissionsStep.tsx:680` (`!== true`)
+    // and `dataSourceFloor.ts:67` both depend on unknown reading as neither
+    // granted nor explicitly false, so a half-loaded state never satisfies the
+    // BACKLOG-1821 floor. Mapping it through `isFdaGranted` would collapse it.
+    return state.fda === undefined ? undefined : isFdaGranted(state.fda);
   }
   // Loading/unauthenticated/error: state is unknown
   return undefined;
@@ -290,37 +300,37 @@ function platformInfoToOnboardingPlatform(info: {
 }
 
 /**
- * Whether a user who has reached the main app (`ready`) is still genuinely
- * BELOW the onboarding data-source floor (BACKLOG-1821) — i.e. they have NO
- * connected data source at all (no mailbox AND no texts capability).
+ * Whether a user SATISFIES the onboarding data-source floor (BACKLOG-1821) —
+ * i.e. they have at least one source this app can audit (a mailbox, or a texts
+ * capability).
  *
- * This is the single signal behind the "Resume setup" affordance
- * (BACKLOG-1709 / BACKLOG-1711). It deliberately reuses the floor's
- * {@link hasMinimumDataSource} predicate so the definition of "complete enough"
- * stays single-sourced with onboarding — a texts-only user (macOS Full Disk
- * Access, or an iPhone/Android selection) has satisfied the floor and MUST NOT
- * be surfaced as incomplete (no shaming of texts-only completion).
+ * It deliberately reuses the floor's own {@link hasMinimumDataSource} predicate
+ * so the definition of "complete enough" stays single-sourced with onboarding —
+ * a texts-only user (macOS Full Disk Access, or an iPhone/Android selection)
+ * has satisfied the floor and MUST NOT be treated as incomplete (no shaming of
+ * texts-only completion).
  *
- * Returns `false` for every non-`ready` state:
- *   - onboarding renders its own flow/floor UI,
- *   - loading/login/error/unauthenticated show no main-app chrome.
+ * Two callers read it with OPPOSITE polarity, which is why it is extracted:
+ *   - {@link selectSetupIncomplete} negates it to drive the "Resume setup"
+ *     affordance (BACKLOG-1709 / BACKLOG-1711).
+ *   - the onboarding routing gate calls it directly (BACKLOG-3277,
+ *     `reducer.ts:167-172`) rather than re-deriving a stricter answer of its
+ *     own, which is what held a declined-permission user in onboarding forever.
  *
  * Fail-open, exactly like the floor: because the `ready` state records
  * `needsDriverSetup: false` (so `driverSetupComplete` reads true) and any phone
- * selection satisfies the floor, an iPhone/Android user never trips this. The
- * banner therefore appears ONLY for the true zero-source dead-end
- * (no email, not macOS-with-FDA, and no phone selected).
+ * selection satisfies the floor, an iPhone/Android user always satisfies this.
+ * The only population it reports as unsatisfied is the true zero-source
+ * dead-end — no email, not macOS-with-FDA, and no phone selected.
  *
- * @param state - Current application state
- * @returns true only when in `ready` AND the data-source floor is unmet
+ * @param userData - The user's persisted source and permission facts
+ * @param platform - The desktop platform they are running on
+ * @returns true when the floor IS satisfied
  */
-export function selectSetupIncomplete(state: AppState): boolean {
-  if (state.status !== "ready") {
-    return false;
-  }
-
-  const { userData, platform } = state;
-
+export function hasMinimumDataSourceForUser(
+  userData: Pick<UserData, "phoneType" | "hasEmailConnected" | "needsDriverSetup" | "fda">,
+  platform: Pick<PlatformInfo, "isMacOS" | "isWindows">
+): boolean {
   // Reconstruct the minimal OnboardingContext the floor reads. Fields the floor
   // ignores are given inert defaults; only platform/email/permissions/phone/
   // driver actually drive hasMinimumDataSource.
@@ -334,7 +344,7 @@ export function selectSetupIncomplete(state: AppState): boolean {
     // In `ready`, driver setup is resolved (needsDriverSetup === false),
     // so treat the driver capability as present for an iPhone user (fail-open).
     driverSetupComplete: userData.needsDriverSetup === false,
-    permissionsGranted: userData.hasPermissions,
+    permissionsGranted: isFdaGranted(userData.fda),
     termsAccepted: true,
     emailProvider: null,
     authProvider: "google",
@@ -345,5 +355,34 @@ export function selectSetupIncomplete(state: AppState): boolean {
     isResumedFromFdaRelaunch: false,
   };
 
-  return !hasMinimumDataSource(context);
+  return hasMinimumDataSource(context);
+}
+
+/**
+ * Whether a user who has reached the main app (`ready`) is still genuinely
+ * BELOW the onboarding data-source floor (BACKLOG-1821) — i.e. they have NO
+ * connected data source at all (no mailbox AND no texts capability).
+ *
+ * This is the single signal behind the "Resume setup" affordance
+ * (BACKLOG-1709 / BACKLOG-1711). It is the exact negation of
+ * {@link hasMinimumDataSourceForUser} over the same projection, so the banner
+ * and the onboarding routing gate cannot drift apart.
+ *
+ * Returns `false` for every non-`ready` state:
+ *   - onboarding renders its own flow/floor UI,
+ *   - loading/login/error/unauthenticated show no main-app chrome.
+ *
+ * Because the predicate fails open (see above), the banner appears ONLY for the
+ * true zero-source dead-end: no email, not macOS-with-FDA, and no phone
+ * selected.
+ *
+ * @param state - Current application state
+ * @returns true only when in `ready` AND the data-source floor is unmet
+ */
+export function selectSetupIncomplete(state: AppState): boolean {
+  if (state.status !== "ready") {
+    return false;
+  }
+  const { userData, platform } = state;
+  return !hasMinimumDataSourceForUser(userData, platform);
 }

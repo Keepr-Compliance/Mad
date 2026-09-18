@@ -92,7 +92,7 @@ const readyState: ReadyState = {
     hasCompletedEmailOnboarding: true,
     hasEmailConnected: true,
     needsDriverSetup: false,
-    hasPermissions: true,
+    fda: "granted",
   },
 };
 

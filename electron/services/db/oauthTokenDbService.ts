@@ -15,12 +15,31 @@ import { assignmentList } from "./core/columnSql";
 /**
  * Save OAuth token (encrypted)
  */
-export async function saveOAuthToken(
+/**
+ * BACKLOG-2546 — SYNC TWIN. See `userDbService.createUserSync` for the full
+ * reasoning: the login provisioning chain commits as one `dbTransaction` unit,
+ * `dbTransaction` takes a SYNCHRONOUS callback by type, so the body needs a
+ * callee that is synchronous all the way down. The primitive is this one; the
+ * promise-returning export below is a one-line wrapper over it.
+ */
+export function saveOAuthTokenSync(
   userId: string,
   provider: OAuthProvider,
   purpose: OAuthPurpose,
   tokenData: Partial<OAuthToken>,
-): Promise<string> {
+): string {
+  // BACKLOG-3286: a mailbox row without its address is the state this item
+  // exists to prevent. The statement below is an upsert, so a caller that omits
+  // the address does not merely skip it — it overwrites the stored one with
+  // NULL. Refuse before anything is written. Keyed on purpose and the address
+  // only: `mailbox_connected` has no readers, and a partial payload omits it.
+  const address = tokenData.connected_email_address;
+  if (purpose === "mailbox" && (address === undefined || address === null || address === "")) {
+    throw new DatabaseError(
+      "Refusing to save a mailbox token with no connected email address",
+    );
+  }
+
   const id = crypto.randomUUID();
 
   const statement = sql`
@@ -57,6 +76,15 @@ export async function saveOAuthToken(
 
   dbRun(statement, params);
   return id;
+}
+
+export async function saveOAuthToken(
+  userId: string,
+  provider: OAuthProvider,
+  purpose: OAuthPurpose,
+  tokenData: Partial<OAuthToken>,
+): Promise<string> {
+  return saveOAuthTokenSync(userId, provider, purpose, tokenData);
 }
 
 /**

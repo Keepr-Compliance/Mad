@@ -70,6 +70,12 @@ interface AttachmentMetaLite {
   filename: string;
   mimeType: string | null;
   size: number | null;
+  /**
+   * BACKLOG-2551: the provider's own attachment id, pre-gated at normalisation.
+   * BACKLOG-3187: for Gmail this is the `partId` (identity), never the
+   * `attachmentId` (fetch token, measured rotating).
+   */
+  providerAttachmentId: string | null;
 }
 
 type MissingEmailRow = { id: string; external_id: string; source: string };
@@ -82,19 +88,35 @@ type MissingEmailRow = { id: string; external_id: string; source: string };
  * `.trim()`-ed to match the sync path's `normalizeAttachmentMeta`, so a later
  * on-demand download reconciles the SAME row instead of creating a duplicate.
  */
-function normalizeAttachmentMeta(raw: {
-  filename?: string | null;
-  name?: string | null;
-  mimeType?: string | null;
-  contentType?: string | null;
-  size?: number | null;
-}): AttachmentMetaLite | null {
+function normalizeAttachmentMeta(
+  raw: {
+    filename?: string | null;
+    name?: string | null;
+    mimeType?: string | null;
+    contentType?: string | null;
+    size?: number | null;
+    /** BACKLOG-3187: Gmail identity. Absent on every Outlook shape. */
+    partId?: string | null;
+    attachmentId?: string | null;
+    id?: string | null;
+  },
+  provider: "outlook" | "gmail",
+): AttachmentMetaLite | null {
   const filename = (raw.filename ?? raw.name ?? "").trim();
   if (!filename) return null;
   return {
     filename,
     mimeType: raw.mimeType ?? raw.contentType ?? null,
     size: typeof raw.size === "number" ? raw.size : null,
+    // BACKLOG-2551: this service is a THIRD write path into
+    // upsertEmailAttachmentMetadata, reached from neither of the two chokepoints
+    // in emailSyncService / emailAttachmentService, so it carries the same gate.
+    // BACKLOG-3187: identity from the data shape — Gmail's immutable `partId`
+    // when the part carries one, Outlook Graph's `id` otherwise. A Gmail
+    // `attachmentId` is a fetch token and never reaches the column.
+    providerAttachmentId:
+      raw.partId ||
+      (provider === "gmail" ? null : (raw.attachmentId ?? raw.id ?? null)),
   };
 }
 
@@ -111,13 +133,13 @@ async function fetchAttachmentMetaOnly(
   if (provider === "outlook") {
     const graphAttachments = await outlookFetchService.getAttachments(externalId);
     return graphAttachments
-      .map(normalizeAttachmentMeta)
+      .map((a) => normalizeAttachmentMeta(a, provider))
       .filter((m): m is AttachmentMetaLite => m !== null);
   }
 
   const email = await gmailFetchService.getEmailById(externalId);
   return (email.attachments ?? [])
-    .map(normalizeAttachmentMeta)
+    .map((a) => normalizeAttachmentMeta(a, provider))
     .filter((m): m is AttachmentMetaLite => m !== null);
 }
 
@@ -160,6 +182,7 @@ async function backfillProvider(
           filename: m.filename,
           mimeType: m.mimeType,
           fileSizeBytes: m.size,
+          providerAttachmentId: m.providerAttachmentId,
         });
         upserted++;
       }

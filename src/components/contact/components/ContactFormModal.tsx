@@ -3,6 +3,7 @@ import { ResponsiveModal } from "../../common/ResponsiveModal";
 import { ExtendedContact, ContactFormData, ContactEmailEntry, ContactPhoneEntry } from "../types";
 import { ROLE_DISPLAY_NAMES, SPECIFIC_ROLES } from "../../../constants/contactRoles";
 import { contactService } from "../../../services/contactService";
+import { hasNothingToSave } from "../../../utils/importableRecord";
 
 interface ContactFormModalProps {
   userId: string;
@@ -39,7 +40,38 @@ function ContactFormModal({
 
   // Load email/phone entries with IDs when editing
   useEffect(() => {
-    if (!contact?.id || contact.id.startsWith("msg_")) return;
+    if (!contact?.id) return;
+
+    /**
+     * UNSAVED RECORDS HAVE NOTHING TO LOOK UP — AND MUST KEEP WHAT THEY CARRY.
+     *
+     * `msg_…` (a person found in texts) and `email_…` (BACKLOG-1717, a person
+     * found in the user's mail) are both built at read time. Neither has a row,
+     * so `getEditData` cannot answer for them: their ids are not UUIDs, the
+     * handler's validation rejects them, and it returns `{ success: false }`.
+     *
+     * That answer is the trap. The seeding below lives inside `if (success)`,
+     * and `.catch` never runs because a RESOLVED failure is not a rejection —
+     * so the form settled with an EMPTY address list, and saving an email
+     * person from Clients & Contacts created a contact with no address at all.
+     * The address is the entire record; losing it loses the person.
+     *
+     * It also looked fine while the lookup was in flight, because the form
+     * falls back to its single-field layout during the load and that field
+     * renders the flat `email`. The address appeared, then vanished.
+     *
+     * So: no lookup, and seed the entry lists from what the record already
+     * carries — the same seeding the success path does for a saved contact
+     * that has no entry rows yet.
+     */
+    if (contact.id.startsWith("msg_") || contact.id.startsWith("email_")) {
+      setFormData((prev) => ({
+        ...prev,
+        emails: prev.email ? [{ email: prev.email, is_primary: true }] : [],
+        phones: prev.phone ? [{ phone: prev.phone, is_primary: true }] : [],
+      }));
+      return;
+    }
 
     setLoadingEntries(true);
     window.api.contacts
@@ -97,10 +129,73 @@ function ContactFormModal({
 
   const hasEmailEntries = (formData.emails || []).some(e => e.email.trim());
   const hasPhoneEntries = (formData.phones || []).some(p => p.phone.trim());
-  const hasContactInfo = hasEmailEntries || hasPhoneEntries;
 
-  const showMissingInfoWarning = isExternalContact && !hasContactInfo;
-  const canSave = !!formData.name.trim() && hasContactInfo;
+  /**
+   * =========================================================================
+   * BACKLOG-2707 — THE "MISSING CONTACT INFORMATION" BANNER IS DELETED
+   * =========================================================================
+   * It read `isExternalContact && !hasContactInfo` and rendered an amber
+   * "Please add an email address or phone number to import this contact".
+   *
+   * IT IS UNREACHABLE AFTER THIS ITEM. It only ever showed for an EXTERNAL
+   * record, and the two ways one could reach this form are both closed:
+   * `Contacts.tsx` no longer diverts an incomplete record here, and
+   * `ContactPreview` renders its Edit arm only when `isExternal` is false — so
+   * the pane for an external record offers no Edit button at all. Enumerated
+   * across all four non-test mounts and driven, not read.
+   *
+   * AND IT CARRIED A CONTRADICTION THIS PR WOULD HAVE INTRODUCED. Rendered
+   * directly with an external company-only record, measured at both SHAs:
+   *
+   *   base   banner shown = true   Save disabled = true    (consistent)
+   *   head   banner shown = true   Save disabled = false   (banner demands an
+   *                                email or phone; Save works anyway)
+   *
+   * Two surfaces disagreeing about whether the same record is acceptable — the
+   * exact shape this item exists to remove, in the very destination the
+   * deleted diversion used to land in. It also said "to import this contact"
+   * on a form that creates.
+   *
+   * Deleted rather than reworded because there is no reachable record for a
+   * reworded version to speak to. If an external record is ever routed here
+   * again, it needs an affordance written for that flow, not this one revived.
+   */
+
+  /**
+   * =========================================================================
+   * BACKLOG-2707 — THE FORM ASKS THE SAME QUESTION THE HANDLER ASKS
+   * =========================================================================
+   * This was `!!formData.name.trim() && hasContactInfo`, and `handleSave`
+   * below carried a second copy of the name half. Together they refused two
+   * things `contacts:create` accepts — measured through the registered
+   * handler, not read:
+   *
+   *   CREATE company-only  refused=false  display_name:"" company:"Vantrees…"
+   *   CREATE name-only     refused=false  display_name:"Gus Example"
+   *
+   * That is a RENDERER rule refusing what the handler allows — the fourth
+   * instance of this item's own shape, after the writer's "Unknown" fallback,
+   * the create-guard TypeError, and the diversion in `Contacts.tsx` that the
+   * founder's testing gate caught.
+   *
+   * It also caused the exact harm PM decision `5fac2d84` exists to prevent.
+   * The Name field is marked required and Save is disabled without it, so a
+   * user who wants a company-only contact has one move available: type
+   * "Vantrees Realty" into the NAME box. A company then sits in a person's
+   * name field, defeating the company field and polluting every name-based
+   * match — and it was not a risk, it was the only path the UI offered.
+   *
+   * `hasNothingToSave` is the LOOSE rule: a name, OR a company, OR a phone,
+   * OR an email is enough. `hasNothingToImport` is derived from it and is
+   * strictly narrower; this form must never use that one, because import is
+   * inference and typing into this form is intent.
+   */
+  const canSave = !hasNothingToSave({
+    name: formData.name,
+    company: formData.company,
+    email: hasEmailEntries ? (formData.emails || []).find((e) => e.email.trim())?.email : null,
+    phone: hasPhoneEntries ? (formData.phones || []).find((p) => p.phone.trim())?.phone : null,
+  });
 
   const handleChange = (field: keyof ContactFormData, value: string) => {
     setFormData({ ...formData, [field]: value });
@@ -187,8 +282,12 @@ function ContactFormModal({
   }, []);
 
   const handleSave = async () => {
-    if (!formData.name.trim()) {
-      setError("Name is required");
+    // BACKLOG-2707: the same predicate the Save button is disabled by, so the
+    // two cannot answer differently. It used to be `!formData.name.trim()`,
+    // which refused a company-only and a name-only contact that
+    // `contacts:create` accepts — see the note on `canSave` above.
+    if (!canSave) {
+      setError("Enter a name, company, phone, or email");
       return;
     }
 
@@ -311,18 +410,15 @@ function ContactFormModal({
         {/* Form (scrollable) */}
         <div className="p-3 sm:p-6 space-y-4 overflow-y-auto flex-1">
           {/* Missing contact info warning */}
-          {showMissingInfoWarning && (
-            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
-              <p className="text-sm text-amber-800">
-                <span className="font-medium">Missing contact information:</span> Please add an email address or phone number to import this contact.
-              </p>
-            </div>
-          )}
-
           {/* Name */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Name <span className="text-red-500">*</span>
+              {/* BACKLOG-2707: the asterisk claimed a rule the form no longer
+                  enforces and `contacts:create` never did. A name, a company, a
+                  phone or an email is enough — an affordance that states a
+                  requirement the code does not have is the same defect as a
+                  disabled button stating an untrue reason. */}
+              Name
             </label>
             <input
               type="text"

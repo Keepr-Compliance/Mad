@@ -364,7 +364,7 @@ export async function deleteCommunication(communicationId: string): Promise<void
  * Delete communication by message_id
  * Used when unlinking messages from a transaction - removes the communications table reference
  */
-export async function deleteCommunicationByMessageId(messageId: string): Promise<void> {
+export function deleteCommunicationByMessageIdSync(messageId: string): void {
   // BACKLOG-506 (TASK-1307): Get the transaction ID before deleting.
   // Check if the message is a text type to update thread count.
   const comm = dbGet<{ transaction_id: string | null }>(
@@ -386,6 +386,21 @@ export async function deleteCommunicationByMessageId(messageId: string): Promise
     }
   }
 }
+
+/**
+ * BACKLOG-2547 — the promise-returning seam over the synchronous primitive.
+ *
+ * PLAIN `Promise.resolve`, NOT `async`. Measured on the shipping driver: under
+ * an unawaited call inside a transaction body, an `async` wrapper swallows the
+ * throw into a rejected promise, the callback returns normally and the
+ * transaction COMMITS partial work; this shape evaluates the primitive as the
+ * argument to `Promise.resolve`, so the throw escapes the body synchronously
+ * and SQLite rolls back. It fails closed where `async` fails open.
+ */
+export function deleteCommunicationByMessageId(messageId: string): Promise<void> {
+  return Promise.resolve(deleteCommunicationByMessageIdSync(messageId));
+}
+
 
 /**
  * Link communication to transaction
@@ -421,9 +436,9 @@ export async function linkCommunicationToTransaction(
  * Add a communication to the ignored list for a transaction
  * This prevents the email from being re-added during future scans
  */
-export async function addIgnoredCommunication(
+export function addIgnoredCommunicationSync(
   data: NewIgnoredCommunication,
-): Promise<IgnoredCommunication> {
+): IgnoredCommunication {
   const id = crypto.randomUUID();
 
   // BACKLOG-2632: persist ignored_at EXPLICITLY instead of leaning on the column
@@ -487,6 +502,15 @@ export async function addIgnoredCommunication(
 
   return ignoredComm;
 }
+
+/** BACKLOG-2547 — promise seam over the primitive. Plain, not `async`; see
+ *  `deleteCommunicationByMessageId` for the measurement behind that. */
+export function addIgnoredCommunication(
+  data: NewIgnoredCommunication,
+): Promise<IgnoredCommunication> {
+  return Promise.resolve(addIgnoredCommunicationSync(data));
+}
+
 
 /**
  * Get all ignored communications for a transaction
@@ -866,6 +890,25 @@ export async function getCommunicationsWithMessages(
       -- their parent bubble. Emails have neither; both are NULL for normal texts.
       m.associated_message_type as associated_message_type,
       m.associated_message_guid as associated_message_guid,
+      -- BACKLOG-3366: 1 when the user hid this text from THIS transaction's
+      -- export, else 0. A MARKER, never a filter: the Texts tab must still show
+      -- the text (gray), and only the export plan drops it (BACKLOG-3367).
+      --   h.transaction_id = c.transaction_id  a hide in one deal never marks
+      --                                        the same text in another
+      --   h.message_id = m.id                  m.id, not c.message_id, which is
+      --                                        NULL on a thread link
+      --   the external_id arm                  a macOS force re-import gives the
+      --                                        message a new id but keeps its
+      --                                        provider id
+      -- EXISTS, not a LEFT JOIN: two hidden rows can share an external_id after
+      -- a re-import and a re-hide, and a JOIN would duplicate the message row
+      -- BEFORE the LIMIT below is applied (BACKLOG-3102). Emails have no m.id,
+      -- so their marker is 0 by construction.
+      EXISTS (SELECT 1 FROM transaction_hidden_texts h
+              WHERE h.transaction_id = c.transaction_id
+                AND (h.message_id = m.id
+                     OR (h.message_external_id IS NOT NULL AND h.message_external_id = m.external_id))
+      ) AS hidden_from_export,
       -- Email-specific fields from emails table only
       e.source as source,
       e.cc as cc,
@@ -928,14 +971,37 @@ export async function getCommunicationsWithMessages(
 
   // Content-based deduplication for text messages
   // Catches cases where same content exists with different IDs
-  const seenContent = new Set<string>();
-  const deduped = dedupedById.filter(r => {
+  const isTextRow = (r: Communication): boolean => {
     const channel = (r as { channel?: string }).channel;
     const commType = (r as { communication_type?: string }).communication_type;
-    const isTextMessage = channel === 'sms' || channel === 'imessage' ||
-                          commType === 'sms' || commType === 'imessage';
+    return channel === 'sms' || channel === 'imessage' ||
+           commType === 'sms' || commType === 'imessage';
+  };
+  const contentKeyOf = (r: Communication): string =>
+    `${(r as { body_text?: string }).body_text || ''}|${(r as { sent_at?: string }).sent_at || ''}`;
+  const isHiddenRow = (r: Communication): boolean =>
+    !!(r as { hidden_from_export?: 0 | 1 }).hidden_from_export;
 
-    if (!isTextMessage) return true;
+  // BACKLOG-3366: WITHIN A CONTENT GROUP, A HIDDEN COPY WINS.
+  //
+  // Which duplicate survives the first-wins rule below is decided by row order,
+  // and two duplicates share `sent_at` by definition, so the tie is broken by
+  // insertion order of the `communications` and `messages` rows (measured in
+  // the SR plan review). Removing and restoring a conversation re-inserts its
+  // link rows, so the copy a user hid can stop being the survivor later — and
+  // then the UNHIDDEN copy is what the export reads. Keeping the hidden copy
+  // also keeps the gray bubble and the stored row on the same id, so Unhide on
+  // that bubble deletes the row it is looking at.
+  const hiddenContent = new Set<string>();
+  for (const r of dedupedById) {
+    if (!isTextRow(r) || !isHiddenRow(r)) continue;
+    if (((r as { body_text?: string }).body_text || '').trim().length === 0) continue;
+    hiddenContent.add(contentKeyOf(r));
+  }
+
+  const seenContent = new Set<string>();
+  const deduped = dedupedById.filter(r => {
+    if (!isTextRow(r)) return true;
 
     const bodyText = (r as { body_text?: string }).body_text || '';
 
@@ -948,10 +1014,12 @@ export async function getCommunicationsWithMessages(
     // exempt them from content-dedup entirely.
     if (bodyText.trim().length === 0) return true;
 
-    const sentAt = (r as { sent_at?: string }).sent_at || '';
-    const contentKey = `${bodyText}|${sentAt}`;
+    const contentKey = contentKeyOf(r);
 
     if (seenContent.has(contentKey)) return false;
+    // BACKLOG-3366: a group that contains a hidden copy keeps the first HIDDEN
+    // copy, so an unhidden duplicate is dropped even when it comes first.
+    if (hiddenContent.has(contentKey) && !isHiddenRow(r)) return false;
     seenContent.add(contentKey);
     return true;
   });
@@ -1058,10 +1126,10 @@ export async function createThreadCommunicationReference(
  * @param threadId - The thread identifier
  * @param transactionId - The transaction to unlink from
  */
-export async function deleteCommunicationByThread(
+export function deleteCommunicationByThreadSync(
   threadId: string,
   transactionId: string,
-): Promise<void> {
+): void {
   const statement = sql`
     DELETE FROM communications
     WHERE thread_id = ? AND transaction_id = ?
@@ -1071,6 +1139,16 @@ export async function deleteCommunicationByThread(
   // BACKLOG-396: Thread-based unlinking is always for text messages, update count
   updateTransactionThreadCountInternal(transactionId);
 }
+
+/** BACKLOG-2547 — promise seam over the primitive. Plain, not `async`; see
+ *  `deleteCommunicationByMessageId` for the measurement behind that. */
+export function deleteCommunicationByThread(
+  threadId: string,
+  transactionId: string,
+): Promise<void> {
+  return Promise.resolve(deleteCommunicationByThreadSync(threadId, transactionId));
+}
+
 
 /**
  * Check if a thread is already linked to a transaction.

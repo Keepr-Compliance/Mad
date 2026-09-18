@@ -35,6 +35,26 @@ import {
   vacuumDb,
 } from "./db/core/dbConnection";
 import { SCHEMA_VERSION_SQL } from "./db/storageDiagnosticsSql";
+// BACKLOG-2551: migration v71's SQL text lives in the db layer and is imported, per
+// the SQL boundary rule. Importing a const string is not a service call — the
+// migration body still uses only the handle the runner passes it.
+import {
+  V71_ATTACHMENTS_TABLE_INFO_SQL,
+  V71_ADD_PROVIDER_COLUMN_SQL,
+  V71_SELECT_DUPLICATE_ATTACHMENTS_SQL,
+  V71_COALESCE_DESCRIPTIVE_COLUMNS_SQL,
+  V71_MERGE_CLASSIFICATION_TRIPLE_SQL,
+  V71_REPOINT_CLASSIFICATION_FEEDBACK_SQL,
+  V71_DELETE_ATTACHMENT_SQL,
+  V71_CREATE_PROVIDER_INDEX_SQL,
+  V71_SELECT_THREAD_NAMES_DDL_SQL,
+  V71_CREATE_THREAD_NAMES_NEW_SQL,
+  V71_COUNT_THREAD_NAMES_SQL,
+  V71_COPY_THREAD_NAMES_SQL,
+  V71_DROP_THREAD_NAMES_SQL,
+  V71_RENAME_THREAD_NAMES_SQL,
+  V71_RECREATE_THREAD_NAME_INDEX_SQL,
+} from "./db/migrationV71Sql";
 import {
   SCHEMA_VERSION_UPDATE_SQL,
   SCHEMA_VERSION_TABLE_EXISTS_SQL,
@@ -681,10 +701,23 @@ class DatabaseService implements IDatabaseService {
             `schema baseline (version ${baseline}). The migration chain that could ` +
             "have upgraded it no longer exists.";
         } else {
-          if (version > baseline) {
+          // BACKLOG-2551: compare against the LATEST version this build ships, not
+          // the baseline. The two were the same only while MIGRATIONS was empty.
+          // Once v71 ships, every database sits at 71 with the baseline still 70,
+          // so a `version > baseline` test would fire on EVERY launch for EVERY
+          // user and say something untrue ("written by a newer build") — polluting
+          // the exact support diagnostics this line exists to serve.
+          //
+          // The REFUSAL predicate above (`version < baseline`) is deliberately
+          // untouched: that is the load-bearing half, and it must keep refusing
+          // pre-reset databases. This changes only when the warning speaks, making
+          // the predicate four-way: below baseline refuse, baseline..latest silent,
+          // above latest warn. That is what the warning always meant.
+          const latest = this.getLatestSchemaVersion();
+          if (version > latest) {
             hostLogger.warn(
               `[BaselineFence] database schema_version ${version} is ABOVE this build's ` +
-                `baseline ${baseline} — written by a newer build; proceeding.`,
+                `latest schema version ${latest} — written by a newer build; proceeding.`,
             );
           }
           return;
@@ -1263,7 +1296,80 @@ class DatabaseService implements IDatabaseService {
    * (databaseService.schema-parity.test.ts) — see BACKLOG-2551 / BACKLOG-2807
    * for the pattern.
    */
-  static readonly MIGRATIONS: MigrationEntry[] = [];
+  static readonly MIGRATIONS: MigrationEntry[] = [
+    {
+      version: 71,
+      description:
+        "BACKLOG-2551 attachments.provider_attachment_id + partial unique index (dedup on storage_path); " +
+        "BACKLOG-2839 message_thread_names non-blank display_name CHECK (table rebuild)",
+      // Runs SYNCHRONOUSLY inside currentDb.transaction(...), so this body uses raw
+      // d.prepare / d.exec only and never calls a db/ service. foreign_keys is OFF
+      // for the whole loop (see _runVersionedMigrations) -- which is why the
+      // classification_feedback re-point below is explicit rather than left to
+      // ON DELETE SET NULL.
+      migrate: (d) => {
+        // ------------------------------------------------------------------
+        // BACKLOG-2551
+        // ------------------------------------------------------------------
+        // Guarded: a FRESH install already has the column from schema.sql and
+        // still runs v71 (schema_version is seeded at BASELINE 70), so this must
+        // be a no-op there. Also makes the whole migration re-runnable.
+        const hasCol = (
+          d.prepare(V71_ATTACHMENTS_TABLE_INFO_SQL).all() as Array<{ name: string }>
+        ).some((c) => c.name === "provider_attachment_id");
+        if (!hasCol) {
+          d.exec(V71_ADD_PROVIDER_COLUMN_SQL);
+        }
+
+        const losers = d
+          .prepare(V71_SELECT_DUPLICATE_ATTACHMENTS_SQL)
+          .all() as Array<{ loser: string; keep: string }>;
+
+        const coalesce = d.prepare(V71_COALESCE_DESCRIPTIVE_COLUMNS_SQL);
+        const triple = d.prepare(V71_MERGE_CLASSIFICATION_TRIPLE_SQL);
+        const repoint = d.prepare(V71_REPOINT_CLASSIFICATION_FEEDBACK_SQL);
+        const drop = d.prepare(V71_DELETE_ATTACHMENT_SQL);
+
+        for (const l of losers) {
+          coalesce.run(l.loser, l.loser, l.loser, l.loser, l.loser, l.keep);
+          triple.run(l.loser, l.loser, l.loser, l.keep, l.loser, l.loser);
+          repoint.run(l.keep, l.loser);
+          drop.run(l.loser);
+        }
+
+        d.exec(V71_CREATE_PROVIDER_INDEX_SQL);
+
+        // ------------------------------------------------------------------
+        // BACKLOG-2839 -- SQLite has no ALTER TABLE ADD CONSTRAINT: rebuild.
+        // ------------------------------------------------------------------
+        const existingSql =
+          (
+            d.prepare(V71_SELECT_THREAD_NAMES_DDL_SQL).get() as
+              | { sql: string }
+              | undefined
+          )?.sql ?? "";
+        let blankNamesDropped = 0;
+        if (!existingSql.includes("trim(display_name")) {
+          d.exec(V71_CREATE_THREAD_NAMES_NEW_SQL);
+          const total = (
+            d.prepare(V71_COUNT_THREAD_NAMES_SQL).get() as { n: number }
+          ).n;
+          const kept = d.prepare(V71_COPY_THREAD_NAMES_SQL).run().changes;
+          d.exec(V71_DROP_THREAD_NAMES_SQL);
+          d.exec(V71_RENAME_THREAD_NAMES_SQL);
+          d.exec(V71_RECREATE_THREAD_NAME_INDEX_SQL);
+          blankNamesDropped = total - kept;
+        }
+
+        // Field evidence: whether the 2551 race has actually fired on a real
+        // machine is learned from this COUNT, never by reading anyone's rows.
+        hostLogger.info(
+          `[v71] deduped ${losers.length} duplicate attachment row(s); ` +
+            `dropped ${blankNamesDropped} blank thread name(s)`,
+        );
+      },
+    },
+  ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {
     const seen = new Set<number>();
@@ -1542,8 +1648,31 @@ class DatabaseService implements IDatabaseService {
     return contactDb.getUnimportedContactsByUserId(userId);
   }
 
-  async markContactAsImported(contactId: string, source?: string): Promise<void> {
+  /** Synchronous: called inside `contacts:import`'s transaction (BACKLOG-3220). */
+  markContactAsImported(contactId: string, source?: string): void {
     return contactDb.markContactAsImported(contactId, source);
+  }
+
+  /**
+   * The synchronous email backfill, for callers inside a `dbTransaction`
+   * callback (BACKLOG-3220). The async `backfillContactEmails` below delegates
+   * to the same core; calling THAT inside a transaction loses its error path.
+   */
+  backfillContactEmailsSync(
+    contactId: string,
+    emails: string[],
+    source?: ContactInfoSource,
+  ): number {
+    return contactDb.backfillContactEmailsSync(contactId, emails, source);
+  }
+
+  /** The synchronous phone backfill — see `backfillContactEmailsSync`. */
+  backfillContactPhonesSync(
+    contactId: string,
+    phones: string[],
+    source?: ContactInfoSource,
+  ): number {
+    return contactDb.backfillContactPhonesSync(contactId, phones, source);
   }
 
   async backfillContactEmails(
@@ -1727,6 +1856,21 @@ class DatabaseService implements IDatabaseService {
    */
   stampFirstExportedAt(transactionId: string, timestamp: string): boolean {
     return transactionDb.stampFirstExportedAt(transactionId, timestamp);
+  }
+
+  /**
+   * BACKLOG-2549 — record an export completion as ONE statement, so
+   * `export_status` and the BACKLOG-2013 freeze marker can never flip
+   * separately. SYNCHRONOUS, mirroring `stampFirstExportedAt` above rather than
+   * the async `updateTransaction`: an async wrapper over a sync primitive turns
+   * a throw into a rejection, which is the shape `syncTwin.guard.test.ts`
+   * forbids.
+   */
+  recordExportCompletion(
+    transactionId: string,
+    params: transactionDb.ExportCompletionParams,
+  ): void {
+    return transactionDb.recordExportCompletion(transactionId, params);
   }
 
   async deleteTransaction(transactionId: string): Promise<void> {
@@ -2081,8 +2225,27 @@ class DatabaseService implements IDatabaseService {
     return attachmentDb.getEmailAttachmentByFilename(emailId, filename);
   }
 
-  setEmailAttachmentStorage(id: string, storagePath: string, fileSizeBytes: number) {
-    return attachmentDb.setEmailAttachmentStorage(id, storagePath, fileSizeBytes);
+  /** BACKLOG-2551: the shared insert-vs-reconcile lookup order. */
+  findEmailAttachmentRow(
+    emailId: string,
+    filename: string,
+    providerAttachmentId: string | null
+  ) {
+    return attachmentDb.findEmailAttachmentRow(emailId, filename, providerAttachmentId);
+  }
+
+  setEmailAttachmentStorage(
+    id: string,
+    storagePath: string,
+    fileSizeBytes: number,
+    providerAttachmentId?: string | null
+  ) {
+    return attachmentDb.setEmailAttachmentStorage(
+      id,
+      storagePath,
+      fileSizeBytes,
+      providerAttachmentId
+    );
   }
 
   // BACKLOG-2257: persist locally-extracted text_content onto an attachment row.

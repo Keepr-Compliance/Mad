@@ -372,7 +372,25 @@ export async function createContact(
     const params = [
       id,
       contactData.user_id,
-      contactData.display_name || "Unknown",
+      /**
+       * BACKLOG-2707 — THE WRITER NO LONGER OVERRULES ITS CALLER.
+       *
+       * This was `|| "Unknown"`. It is the reason a validator-only fix for
+       * BACKLOG-2707 was vacuous: the handler could forward `""` all it liked
+       * and this line put the literal back. Measured before the fix — real
+       * `createContactsBatch`, real transaction, real SQLite, then a `SELECT`:
+       * `{display_name: ""}` stored `"Unknown"`.
+       *
+       * `""` is what "no name" means for this column: `display_name` is
+       * `TEXT NOT NULL`, so writing nothing was never available, and writing a
+       * label is forbidden by `contactDisplayLabel.ts` — a persisted fallback
+       * freezes a phone number as somebody's name (BACKLOG-2464). `""` is read
+       * as "no name" by `realContactName`, which is what makes the display
+       * chain render the phone at READ time instead.
+       *
+       * `??` not `||`, so the caller's value is honoured whatever it is.
+       */
+      contactData.display_name ?? "",
       contactData.company || null,
       contactData.title || null,
       contactSource,
@@ -533,13 +551,53 @@ export function createContactsBatch(
         [
           id,
           contactData.user_id,
-          contactData.display_name || "Unknown",
+          // BACKLOG-2707 — see `createContact` above for why this is `?? ""`
+          // and not `|| "Unknown"`. THIS is the line `contacts:import` reaches,
+          // and the one that made a validator-only fix vacuous.
+          contactData.display_name ?? "",
           contactData.company || null,
           contactData.title || null,
           contactData.source || "contacts_app",
           contactData.is_imported !== undefined ? (contactData.is_imported ? 1 : 0) : 1,
         ]
       );
+
+      /**
+       * BACKLOG-1717 — THE VALUE-LEVEL PROVENANCE, TRANSLATED. Both inserts
+       * below hard-coded the literal `'import'`.
+       *
+       * This is the same translation the single-contact create path already
+       * makes (`contactInfoSourceFor`, ~:410) and the doctrine stated in
+       * `utils/contactValueProvenance.ts`: `contacts.source` says where the
+       * CONTACT came from, `contact_emails.source` / `contact_phones.source`
+       * say where a single VALUE came from, and BACKLOG-2427 gives Unlink
+       * permission to delete a value stamped `'import'`, on the grounds that
+       * no human typed it.
+       *
+       * WHAT WENT WRONG WITHOUT IT, measured on this item's shape before any
+       * of it shipped: a person found in the user's email is confirmed
+       * through `contacts:import`, which stores them as `manual` and wrote
+       * their address here stamped `'import'`. Every import then runs the
+       * linker, which links an address-book card carrying the same address.
+       * Unlinking that card deleted the address off the confirmed contact —
+       * `removedEmails: 1`, `contact_emails` left empty. The user confirms a
+       * person and the app silently discards the one thing it knows about
+       * them.
+       *
+       * WHY THIS IS NOT A BEHAVIOUR CHANGE FOR ADDRESS BOOKS. The external
+       * sources ('contacts_app', 'outlook', 'google_contacts', 'iphone',
+       * 'android_sync', …) all still map to `'import'` and stay removable,
+       * which is what BACKLOG-2427 needs. Only a STORED `manual` changes — the
+       * confirmed email person here, and the text-derived person on the
+       * BACKLOG-2481 path, both of which reach this door through
+       * `toStorableContactSource`'s synthetic map. Confirming IS the consent
+       * step, so those values are user-asserted.
+       *
+       * The asymmetry that decides the default: misclassifying an imported
+       * value as typed costs a stale row the user can delete; the reverse
+       * deletes a client's address.
+       */
+      const valueSource = contactInfoSourceFor(contactData.source || "contacts_app");
 
       // Store phones
       const allPhones = contactData.allPhones || [];
@@ -556,8 +614,8 @@ export function createContactsBatch(
         storedPhones.add(normalizedKey);
         dbRun(
           sql`INSERT OR IGNORE INTO contact_phones (id, contact_id, phone_e164, phone_display, phone_normalized, is_primary, source, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)`,
-          [crypto.randomUUID(), id, phoneE164, phone, toLookupKey(phoneE164), isFirstPhone ? 1 : 0]
+           VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+          [crypto.randomUUID(), id, phoneE164, phone, toLookupKey(phoneE164), isFirstPhone ? 1 : 0, valueSource]
         );
         isFirstPhone = false;
       }
@@ -579,8 +637,8 @@ export function createContactsBatch(
         storedEmails.add(normalizedEmail);
         dbRun(
           sql`INSERT OR IGNORE INTO contact_emails (id, contact_id, email, is_primary, source, created_at)
-           VALUES (?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)`,
-          [crypto.randomUUID(), id, normalizedEmail, isFirstEmail ? 1 : 0]
+           VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+          [crypto.randomUUID(), id, normalizedEmail, isFirstEmail ? 1 : 0, valueSource]
         );
         isFirstEmail = false;
       }
@@ -915,8 +973,15 @@ export async function getUnimportedContactsByUserId(
  * Optionally update the source field (e.g., when importing from macOS Contacts)
  * @param contactId - The contact ID to update
  * @param source - Optional source to set (e.g., "contacts_app")
+ *
+ * SYNCHRONOUS ON PURPOSE (BACKLOG-3220). `contacts:import` calls it inside one
+ * `dbTransaction` callback, which must not contain an async call: an `async`
+ * function turns its own throw into a rejection the transaction never sees, so
+ * the failure commits instead of rolling back. Do not add `async` for
+ * consistency with the neighbours; `contact-handlers.importAtomic-3220.test.ts`
+ * pins this at compile time.
  */
-export async function markContactAsImported(contactId: string, source?: string): Promise<void> {
+export function markContactAsImported(contactId: string, source?: string): void {
   if (source) {
     const statement =
       sql`UPDATE contacts SET is_imported = 1, source = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`;

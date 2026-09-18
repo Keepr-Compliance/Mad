@@ -40,8 +40,15 @@ interface MailboxInfo {
   unreadItemCount: number;
 }
 
+/**
+ * BACKLOG-3206: this used to be `{ success: true, message: "Token will expire
+ * naturally" }` — a success for having done nothing, which a caller deciding
+ * what to tell the user could not distinguish from a real revocation. The
+ * shape no longer has a `success` field, so the Microsoft path cannot report
+ * one.
+ */
 interface RevokeTokenResult {
-  success: boolean;
+  outcome: "unsupported";
   message: string;
 }
 
@@ -230,6 +237,16 @@ class MicrosoftAuthService {
               new Error((parsedUrl.query.error_description as string) || error),
             );
           } else if (code) {
+            // BACKLOG-3394: the "Return to Application" button (which navigated
+            // to `keepr://focus`) and the script that revealed it are gone, so
+            // this page now contains NO script and NO `keepr://` URL. The
+            // button made the browser prompt for permission to open an external
+            // app, keyed to an origin that `listen(0)` makes different on every
+            // connect — so "Always allow" never carried over. The app pulls
+            // itself forward from the main process instead
+            // (`bringAppToFront`, called by the mailbox handler just before it
+            // notifies the renderer). Full reasoning in the matching comment on
+            // googleAuthService._buildSuccessPage.
             res.writeHead(200, { "Content-Type": "text/html" });
             res.end(`
               <!DOCTYPE html>
@@ -237,7 +254,7 @@ class MicrosoftAuthService {
                 <head>
                   <meta charset="UTF-8">
                   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                  <title>Authentication Successful</title>
+                  <title>Connected</title>
                 </head>
                 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
                   <div style="text-align: center; background: white; padding: 2rem 2rem; border-radius: 1rem; box-shadow: 0 20px 60px rgba(0,0,0,0.3); max-width: 380px; margin: 1.5rem; box-sizing: border-box;">
@@ -246,36 +263,10 @@ class MicrosoftAuthService {
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path>
                       </svg>
                     </div>
-                    <h1 style="color: #1a202c; font-size: 1.875rem; font-weight: 700; margin: 0 0 1rem 0;">Authentication Successful!</h1>
-                    <p id="status-message" style="color: #4a5568; font-size: 1rem; margin: 0 0 1.5rem 0; line-height: 1.5;">You've been successfully authenticated with Microsoft.</p>
-                    <p id="close-message" style="color: #718096; font-size: 0.875rem; margin: 0 0 1rem 0;">Attempting to close this window...</p>
-                    <button id="return-button" style="display: none; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; padding: 0.75rem 2rem; border-radius: 0.5rem; font-size: 1rem; font-weight: 600; cursor: pointer; box-shadow: 0 4px 6px rgba(0,0,0,0.1); transition: transform 0.2s;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">Return to Application</button>
+                    <h1 style="color: #1a202c; font-size: 1.875rem; font-weight: 700; margin: 0 0 1rem 0;">Connected</h1>
+                    <p id="status-message" style="color: #4a5568; font-size: 1rem; margin: 0 0 1.5rem 0; line-height: 1.5;">Your Microsoft account is connected to Keepr.</p>
+                    <p id="close-message" style="color: #718096; font-size: 0.875rem; margin: 0;">You can close this tab — Keepr has already picked this up.</p>
                   </div>
-                  <script>
-                    // Try to close the window
-                    setTimeout(() => {
-                      window.close();
-
-                      // If window didn't close (we're still here after 500ms), show fallback
-                      setTimeout(() => {
-                        const closeMsg = document.getElementById('close-message');
-                        const returnBtn = document.getElementById('return-button');
-
-                        closeMsg.innerHTML = 'Please return to the application to continue.';
-                        closeMsg.style.color = '#4a5568';
-                        closeMsg.style.fontSize = '1rem';
-                        closeMsg.style.marginBottom = '1.5rem';
-                        returnBtn.style.display = 'inline-block';
-
-                        returnBtn.onclick = () => {
-                          // Use the app's deep link protocol to bring it to focus
-                          window.location.href = 'keepr://focus';
-                          // Also try to close the tab
-                          setTimeout(() => window.close(), 300);
-                        };
-                      }, 500);
-                    }, 2000);
-                  </script>
                 </body>
               </html>
             `);
@@ -612,14 +603,17 @@ class MicrosoftAuthService {
         Date.now() + newTokens.expires_in * 1000,
       ).toISOString();
 
-      // Update database with new tokens (no encryption needed)
-      await databaseService.saveOAuthToken(userId, "microsoft", "mailbox", {
+      // BACKLOG-3286: update the loaded row by id — only the fields the refresh
+      // produced. The previous upsert copied the address forward, so a row whose
+      // address was already empty stayed empty, and it wrote `scope` raw.
+      await databaseService.updateOAuthToken(tokenRecord.id, {
         access_token: newTokens.access_token,
-        refresh_token: newTokens.refresh_token || tokenRecord.refresh_token, // Keep old if new not provided
         token_expires_at: expiresAt,
-        scopes_granted: newTokens.scope,
-        connected_email_address: tokenRecord.connected_email_address,
-        mailbox_connected: true,
+        // Keep the stored refresh token when the response carries none.
+        ...(newTokens.refresh_token ? { refresh_token: newTokens.refresh_token } : {}),
+        // JSON-encoded, as every other writer stores it and `getOAuthToken`
+        // parses it; `updateOAuthToken` encodes arrays only.
+        ...(newTokens.scope ? { scopes_granted: JSON.stringify(newTokens.scope) } : {}),
       });
 
       logService.info(
@@ -639,17 +633,30 @@ class MicrosoftAuthService {
   }
 
   /**
-   * Revoke access token (logout)
-   * @param accessToken - Access token to revoke
+   * Report that Microsoft offers an app no way to end its own access.
+   *
+   * This is the only place in the codebase that records WHY the Microsoft
+   * disconnect cannot do what the Google one does, which is why it stays a
+   * method here rather than becoming a branch in the handler.
+   *
+   * Microsoft publishes no revocation endpoint. The two Graph calls that come
+   * up as substitutes are both wrong for this: `revokeSignInSessions` ends every
+   * refresh token the user holds across every app (and needs
+   * `User.RevokeSessions.All`), and `DELETE /oauth2PermissionGrants/{id}` needs
+   * tenant-admin permission. Neither is "this app releases its own grant".
+   *
+   * BACKLOG-3206: takes no token, because the caller short-circuits before it
+   * reads one — there is nothing to send anywhere.
    */
-  async revokeToken(_accessToken: string): Promise<RevokeTokenResult> {
-    // Microsoft OAuth2 doesn't provide a revocation endpoint
-    // For proper logout, direct user to: https://login.microsoftonline.com/common/oauth2/v2.0/logout
+  async revokeToken(): Promise<RevokeTokenResult> {
     logService.info(
       "Microsoft tokens cannot be revoked programmatically. User should sign out from Microsoft account.",
       "MicrosoftAuth"
     );
-    return { success: true, message: "Token will expire naturally" };
+    return {
+      outcome: "unsupported",
+      message: "Microsoft publishes no revocation endpoint for app grants",
+    };
   }
 
   /**

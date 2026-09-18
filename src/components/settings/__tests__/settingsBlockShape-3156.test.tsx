@@ -124,6 +124,22 @@ jest.mock("../../../hooks/useSyncOrchestrator", () => ({
 }));
 
 jest.mock("../../../services", () => ({
+  /**
+   * BACKLOG-3208: the panel now asks whether Full Disk Access is usable before
+   * it offers an import, through the same service abstraction it already uses
+   * for preferences. Granted is this suite's premise — every case here is about
+   * what the import does once Keepr CAN read Messages. The denied path has its
+   * own suite (`MacOSMessagesImportSettings.fdaRecovery-3208.test.tsx`).
+   */
+  systemService: {
+    checkMessagesPermission: jest
+      .fn()
+      .mockResolvedValue({ success: true, data: { hasPermission: true } }),
+    openFullDiskAccessSettings: jest.fn().mockResolvedValue({ success: true }),
+    relaunchApp: jest
+      .fn()
+      .mockResolvedValue({ success: true, data: { relaunched: true } }),
+  },
   settingsService: {
     getPreferences: jest.fn().mockResolvedValue({ success: true, data: {} }),
     updatePreferences: jest.fn().mockResolvedValue({ success: true }),

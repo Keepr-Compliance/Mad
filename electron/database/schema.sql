@@ -39,6 +39,14 @@ CREATE TABLE IF NOT EXISTS attachments (
   mime_type TEXT,
   file_size_bytes INTEGER,
   storage_path TEXT,                     -- Local file path
+  -- BACKLOG-2551: the provider's own id for this attachment (Outlook Graph
+  -- attachment id). Nullable: rows predating v71 have none, and Gmail rows
+  -- deliberately leave it NULL (Google documents no stability property for
+  -- Gmail's attachmentId, so it is not used as an identity key -- see
+  -- BACKLOG-3187). idx_attachments_email_provider is created by MIGRATION v71,
+  -- NOT here: a standalone CREATE INDEX naming this column aborts this file's
+  -- unconditional exec on every database that predates the column.
+  provider_attachment_id TEXT,
 
   -- Extracted Content (for LLMs)
   text_content TEXT,                     -- OCR / extracted text from PDFs
@@ -710,7 +718,16 @@ CREATE TABLE IF NOT EXISTS message_import_state (
 CREATE TABLE IF NOT EXISTS message_thread_names (
   user_id TEXT NOT NULL,
   thread_id TEXT NOT NULL,               -- Matches messages.thread_id ("macos-chat-<chat ROWID>")
-  display_name TEXT NOT NULL,            -- Trimmed, non-empty; absence = no row
+  -- BACKLOG-2839: the non-blank rule, previously only a comment here and a JS
+  -- .trim() in two writers. This charset is a FLOOR, not parity with JS .trim():
+  -- U+2000-U+200A, U+3000 and U+FEFF pass it and are empty to .trim(). SQLite's
+  -- trim() takes a character set, not a Unicode class, so parity is unreachable
+  -- in SQL. normalizeChatDisplayName (importHelpers.ts) and getThreadDisplayName
+  -- (MessageThreadCard.tsx) remain canonical; this is a backstop against writers
+  -- that do not go through them. Applied to existing databases by MIGRATION v71
+  -- (a rebuild -- CREATE TABLE IF NOT EXISTS cannot add a CHECK).
+  display_name TEXT NOT NULL
+    CHECK (length(trim(display_name, ' '||char(9)||char(10)||char(13)||char(11)||char(12)||char(160))) > 0),
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 
   PRIMARY KEY (user_id, thread_id),
@@ -1442,6 +1459,33 @@ AFTER UPDATE ON users_local
 BEGIN
   UPDATE users_local SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
 END;
+
+-- BACKLOG-3366: texts a user has hidden from THIS transaction's export.
+-- One row per (transaction, message). The text itself, its communications link
+-- and every count are untouched; the shared conversation read projects a
+-- `hidden_from_export` marker from this table and never filters on it.
+--   message_external_id  the provider id (messages.external_id) copied from the
+--                        message at the moment of hiding. A macOS force re-import
+--                        deletes and re-inserts message rows with NEW ids, so a
+--                        row keyed on message_id alone would stop matching and
+--                        the text would silently return to the export.
+--   message_id           no FK on purpose: ON DELETE CASCADE would erase the
+--                        user's decision when a re-import deletes the old row.
+--   hidden_by            users_local.id, no FK on purpose: the legacy user-id
+--                        migration deletes the old users_local row, and a
+--                        cascading FK would wipe every hidden row with it.
+CREATE TABLE IF NOT EXISTS transaction_hidden_texts (
+  transaction_id      TEXT NOT NULL,
+  message_id          TEXT NOT NULL,
+  message_external_id TEXT,
+  hidden_by           TEXT NOT NULL,
+  hidden_at           DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (transaction_id, message_id),
+  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_hidden_texts_txn_external
+  ON transaction_hidden_texts(transaction_id, message_external_id)
+  WHERE message_external_id IS NOT NULL;
 
 -- Initialize schema version if not exists.
 -- Version 70: the post-reset baseline (BACKLOG-2993). This file IS the

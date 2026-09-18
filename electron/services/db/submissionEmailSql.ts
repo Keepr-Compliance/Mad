@@ -22,8 +22,46 @@
  *  - `external_id IS NOT NULL AND source IS NOT NULL` — without both, the row
  *    cannot be re-fetched from any provider, so selecting it produces a
  *    download attempt that can only fail.
- *  - `NOT EXISTS (SELECT 1 FROM attachments …)` — the "still missing" test.
- *    Dropping it re-downloads every attachment on every export.
+ *  - The "still missing" test. Dropping it re-downloads every attachment on
+ *    every export. **What counts as "missing" changed in BACKLOG-3389 — see
+ *    the next section.**
+ *
+ * ## BACKLOG-3389: "missing" means NO BYTES, not NO ROW
+ *
+ * Until 2026-09-16 the test was a bare `NOT EXISTS (SELECT 1 FROM attachments a
+ * WHERE a.email_id = e.id)` — "is there a ROW". Since BACKLOG-1870
+ * (`bd3612476`, 2026-07-25) an ordinary email sync persists attachment METADATA
+ * with `storage_path` NULL ({@link
+ * import("./attachmentDbService").upsertEmailAttachmentMetadata}) so filenames
+ * are searchable without downloading anything. Such a row satisfied the bare
+ * `NOT EXISTS`, so the pre-download was SKIPPED — and the gather that follows
+ * it (`submissionDbService.getTransactionAttachments`, email branch) then
+ * discarded the row on `AND a.storage_path IS NOT NULL`, because an upload
+ * needs bytes.
+ *
+ * The attachment was therefore dropped from the submission silently: nothing
+ * was attempted, so nothing failed, and the run logged `attachmentsFailed: 0`.
+ * Traced on a real submission — `[Submission] Downloading attachments for N
+ * emails before export` never appeared in the main-process log.
+ *
+ * The test is now a disjunction, and BOTH arms are load-bearing:
+ *
+ *  - `NOT EXISTS (any row)` — nothing has ever been persisted for this email.
+ *  - `EXISTS (row WHERE storage_path IS NULL)` — a row exists but holds no
+ *    bytes. Written as a second EXISTS rather than by narrowing the first to
+ *    `storage_path IS NOT NULL`, because narrowing gets the MIXED case wrong:
+ *    an email with one stored attachment and one metadata-only attachment HAS
+ *    a stored row, so the narrowed `NOT EXISTS` is false and the byte-less one
+ *    would never download. That case is pinned in the test.
+ *
+ * Re-selecting an email whose attachments are already stored costs nothing:
+ * `emailAttachmentService.downloadEmailAttachment` skips per attachment when
+ * that attachment's own row already has `storage_path` (`:333`), so only the
+ * byte-less ones are fetched.
+ *
+ * This statement carries NO audit window — pre-existing, and unchanged here. An
+ * email linked to the transaction but outside `[started_at, closed_at]` is
+ * downloaded and then correctly excluded by the gather's own window.
  *
  * ## `DISTINCT` is unreachable, and is kept anyway — deliberately
  *
@@ -45,23 +83,27 @@
  * trusting a fixture written from the statement: the first draft of that test
  * tried to insert the duplicate and the database refused it.
  *
- * The keyword is nonetheless retained BYTE-IDENTICALLY, for two reasons.
- * BACKLOG-2989 is a mechanical text move — editing a statement inside a move is
- * how a refactor smuggles a behaviour change past review — and the statement's
- * content hash is the control proving the move altered nothing. And the
- * unreachability rests on an INDEX, which a future migration can drop far more
- * easily than this reasoning can be reconstructed. So it is pinned instead:
- * `submissionEmailSql.test.ts`, "cannot hold the duplicate link its DISTINCT
- * would deduplicate", fails if that index ever goes away.
+ * The keyword is nonetheless retained, because the unreachability rests on an
+ * INDEX, which a future migration can drop far more easily than this reasoning
+ * can be reconstructed. So it is pinned instead: `submissionEmailSql.test.ts`,
+ * "cannot hold the duplicate link its DISTINCT would deduplicate", fails if
+ * that index ever goes away.
  *
- * The text is byte-identical to the statement this replaced; the move was
- * verified by comparing the SQL boundary gate's own content hash
- * (`d7061f35bd88`) before and after.
+ * **The statement is NO LONGER byte-identical to the one BACKLOG-2989 moved.**
+ * An earlier revision of this docblock said it was, and cited the SQL boundary
+ * gate's content hash `d7061f35bd88` as the proof. That claim was true of the
+ * move and is false of the text below: BACKLOG-3389 changed the "still
+ * missing" predicate, for the reason given above. The hash is deliberately not
+ * restated here — a stale hash reads as a live control.
  */
 
 /**
- * Emails linked to a transaction that advertise attachments but have none
- * stored. One bound parameter: the transaction id.
+ * Emails linked to a transaction that advertise attachments and are missing the
+ * BYTES of at least one of them. One bound parameter: the transaction id.
+ *
+ * BACKLOG-3389: "missing" is not "has no attachment row" — a metadata-only row
+ * (`storage_path` NULL) is exactly the shape a normal sync writes, and it has
+ * no bytes to upload. See the module docblock.
  *
  * Columns are the four the caller needs to re-fetch from the provider:
  * `id`, `external_id`, `source`, `user_id`.
@@ -74,5 +116,11 @@ export const TRANSACTION_EMAILS_MISSING_ATTACHMENTS_SQL = `
           AND e.has_attachments = 1
           AND e.external_id IS NOT NULL
           AND e.source IS NOT NULL
-          AND NOT EXISTS (SELECT 1 FROM attachments a WHERE a.email_id = e.id)
+          AND (
+            NOT EXISTS (SELECT 1 FROM attachments a WHERE a.email_id = e.id)
+            OR EXISTS (
+              SELECT 1 FROM attachments a
+              WHERE a.email_id = e.id AND a.storage_path IS NULL
+            )
+          )
       `;

@@ -6,6 +6,54 @@
 import type { User, Subscription } from "../models";
 
 /**
+ * BACKLOG-3206 — what the disconnect did about the provider's grant.
+ *
+ * Disconnecting a mailbox used to delete the local token row and stop there,
+ * which left the provider-side grant intact. The disconnect now asks the
+ * provider to end that grant first, and this is what came back:
+ *
+ * - `revoked`         the provider confirmed the grant is gone
+ * - `already-invalid` the provider says the token was already dead, which is
+ *                     the same end state
+ * - `no-token`        the row held nothing to send, so there was nothing to end
+ * - `unsupported`     the provider publishes no way for an app to end its own
+ *                     access (Microsoft)
+ * - `failed`          we asked and did not get a confirmation
+ * - `read-failed`     we could not read the token row, so we could not ask.
+ *                     NOT the same as `no-token`: there may well have been a
+ *                     token. Google-only by construction — the Microsoft path
+ *                     never reaches the read.
+ *
+ * The local row is deleted either way, so `success` is about the disconnect and
+ * this field is about the grant. They are separate facts and are reported
+ * separately.
+ */
+export type MailboxRevokeOutcome =
+  | "revoked"
+  | "already-invalid"
+  | "no-token"
+  | "unsupported"
+  | "failed"
+  | "read-failed";
+
+/**
+ * Why a `failed` outcome failed. `network` means nothing came back at all
+ * (timeout, DNS, reset); `rejected` means the provider answered and the answer
+ * was not a confirmation.
+ */
+export type MailboxRevokeReason = "network" | "rejected";
+
+/**
+ * What `auth:{provider}:disconnect-mailbox` resolves to.
+ */
+export interface DisconnectMailboxResult {
+  success: boolean;
+  error?: string;
+  revokeOutcome?: MailboxRevokeOutcome;
+  revokeReason?: MailboxRevokeReason;
+}
+
+/**
  * Auth methods on window.api
  */
 export interface WindowApiAuth {
@@ -41,12 +89,10 @@ export interface WindowApiAuth {
   microsoftConnectMailbox: (
     userId: string,
   ) => Promise<{ success: boolean; error?: string }>;
-  googleDisconnectMailbox: (
-    userId: string,
-  ) => Promise<{ success: boolean; error?: string }>;
+  googleDisconnectMailbox: (userId: string) => Promise<DisconnectMailboxResult>;
   microsoftDisconnectMailbox: (
     userId: string,
-  ) => Promise<{ success: boolean; error?: string }>;
+  ) => Promise<DisconnectMailboxResult>;
   logout: (
     sessionToken: string,
   ) => Promise<{ success: boolean; error?: string }>;

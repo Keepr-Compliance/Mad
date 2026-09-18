@@ -84,7 +84,12 @@ describe("MicrosoftAuthService - Token Refresh", () => {
         "mailbox",
       );
       // Session-only OAuth: tokens used directly, no encryption/decryption
-      expect(mockDatabaseService.saveOAuthToken).toHaveBeenCalled();
+      // BACKLOG-3286: a targeted update of the loaded row, never the upsert.
+      expect(mockDatabaseService.saveOAuthToken).not.toHaveBeenCalled();
+      expect(mockDatabaseService.updateOAuthToken).toHaveBeenCalledWith(
+        "token-id",
+        expect.objectContaining({ access_token: mockAccessToken }),
+      );
     });
 
     it("should return error when no refresh token exists", async () => {
@@ -163,9 +168,10 @@ describe("MicrosoftAuthService - Token Refresh", () => {
       expect(result.success).toBe(false);
       expect(result.error).toBe("Invalid refresh token");
       expect(mockDatabaseService.saveOAuthToken).not.toHaveBeenCalled();
+      expect(mockDatabaseService.updateOAuthToken).not.toHaveBeenCalled();
     });
 
-    it("should preserve email address and scopes when refreshing", async () => {
+    it("should leave the email address untouched and store scopes JSON-encoded when refreshing", async () => {
       // Setup mocks
       // Cast: this fixture carries exactly the OAuthToken columns
       // microsoftAuthService reads. The full row type also requires
@@ -202,16 +208,16 @@ describe("MicrosoftAuthService - Token Refresh", () => {
       // Execute
       await microsoftAuthService.refreshAccessToken(mockUserId);
 
-      // Verify saveOAuthToken was called with preserved data
-      expect(mockDatabaseService.saveOAuthToken).toHaveBeenCalledWith(
-        mockUserId,
-        "microsoft",
-        "mailbox",
-        expect.objectContaining({
-          connected_email_address: "user@company.com",
-          mailbox_connected: true,
-        }),
-      );
+      // BACKLOG-3286: the refresh writes only what it produced, to the loaded
+      // row. The address is never in the payload, so it cannot be overwritten;
+      // the row-level proof is in mailboxAddressPreservation-3286.test.ts.
+      expect(mockDatabaseService.saveOAuthToken).not.toHaveBeenCalled();
+      expect(mockDatabaseService.updateOAuthToken).toHaveBeenCalledWith("token-id", {
+        access_token: mockAccessToken,
+        token_expires_at: expect.any(String),
+        refresh_token: mockRefreshToken,
+        scopes_granted: JSON.stringify("Mail.Read Mail.Send"),
+      });
     });
 
     it("should calculate correct expiry time from expires_in", async () => {
@@ -252,9 +258,9 @@ describe("MicrosoftAuthService - Token Refresh", () => {
       const afterCall = Date.now();
 
       // Verify the expiry time is approximately 1 hour from now
-      const savedCall = (mockDatabaseService.saveOAuthToken as jest.Mock).mock
+      const savedCall = (mockDatabaseService.updateOAuthToken as jest.Mock).mock
         .calls[0];
-      const savedExpiresAt = new Date(savedCall[3].token_expires_at).getTime();
+      const savedExpiresAt = new Date(savedCall[1].token_expires_at).getTime();
       const expectedMin = beforeCall + expiresInSeconds * 1000;
       const expectedMax = afterCall + expiresInSeconds * 1000;
 
@@ -331,16 +337,29 @@ describe("MicrosoftAuthService - Direct Code Resolution", () => {
 // The axios mock is set up but the singleton service imports the real axios
 // before the mock takes effect. These tests are covered by integration tests.
 
+/**
+ * BACKLOG-3206 — Microsoft cannot end its own grant, and must say so.
+ *
+ * This test used to assert `result.success === true`, which pinned a lie: the
+ * method does nothing, and "success" for doing nothing is indistinguishable, to
+ * a caller deciding what to tell the user, from a grant that was actually
+ * revoked. The `success` field is gone from the shape, so the assertion is now
+ * that no success-shaped result can come back at all.
+ */
 describe("MicrosoftAuthService - revokeToken", () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
-  it("should return success message (Microsoft does not support revocation)", async () => {
-    const result = await microsoftAuthService.revokeToken("any-token");
+  // S7
+  it("reports unsupported, and reports no success of any kind", async () => {
+    const result = await microsoftAuthService.revokeToken();
 
-    expect(result.success).toBe(true);
-    expect(result.message).toBe("Token will expire naturally");
+    expect(result.outcome).toBe("unsupported");
+    // The part that matters: a caller reading this cannot mistake it for a
+    // revocation that happened.
+    expect(result).not.toHaveProperty("success");
+    expect(result.message).toContain("no revocation endpoint");
   });
 });
 

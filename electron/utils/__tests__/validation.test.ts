@@ -9,6 +9,7 @@
 import {
   ValidationError,
   validateContactId,
+  validateContactData,
   validateTransactionId,
   validateTransactionData,
   validateProvider,
@@ -1024,5 +1025,127 @@ describe("validateTransactionData — clearing a field (BACKLOG-2759)", () => {
     expect(() => validateTransactionData({ sale_price: -1 }, true)).toThrow(
       "Sale price must be a non-negative number",
     );
+  });
+});
+
+/**
+ * =============================================================================
+ * BACKLOG-2707 — the contact name guard, swept at the validator boundary
+ * =============================================================================
+ * DOCUMENTATION, NOT EVIDENCE, and saying so is the point. Every assertion here
+ * would pass on a fix that stored the literal "Unknown", because the
+ * substitution that produced it lived downstream in `createContactsBatch`. The
+ * claims that can actually fail live in
+ * `electron/services/db/__tests__/contactDbService.namelessDisplayName-2707.test.ts`
+ * (the stored value) and `electron/__tests__/contact-handlers.namelessImport-2707.test.ts`
+ * (the handlers, including the `contacts:update` NOT NULL path).
+ *
+ * What this file DOES pin: that the four spellings of "no name" reach one
+ * outcome, that the outcome is `""` and never `null`, and that the type check
+ * was not relaxed along with the emptiness rule.
+ */
+describe("validateContactData — a missing name is not a validation failure (BACKLOG-2707)", () => {
+  describe.each([
+    ["create", false],
+    ["update", true],
+  ])("on %s", (_label, isUpdate) => {
+    /**
+     * SWEPT, not sampled. `""` and `"   "` were refused by DIFFERENT clauses
+     * with DIFFERENT messages — `required` and `minLength: 1` — so a suite that
+     * tested only one of them would have called a half-fix green.
+     */
+    it.each([
+      ["null", null],
+      ["an empty string", ""],
+      ["whitespace only", "   "],
+      ["a tab and a newline", "\t\n"],
+    ])("resolves %s to an empty string", (_spelling, value) => {
+      const validated = validateContactData({ name: value }, isUpdate);
+
+      expect(validated.name).toBe("");
+      // NEVER null: `contacts.display_name` is TEXT NOT NULL, and a null
+      // survives `contacts:update` to raise a constraint error at the writer.
+      expect(validated.name).not.toBeNull();
+    });
+
+    it("leaves a real name alone", () => {
+      expect(validateContactData({ name: "Rosalind Vance" }, isUpdate).name).toBe(
+        "Rosalind Vance",
+      );
+    });
+
+    it("still trims a real name rather than storing the padding", () => {
+      expect(validateContactData({ name: "  Rosalind Vance  " }, isUpdate).name).toBe(
+        "Rosalind Vance",
+      );
+    });
+
+    it("says nothing about a name the caller did not send", () => {
+      const validated = validateContactData({ company: "Vantrees Realty" }, isUpdate);
+
+      expect("name" in validated).toBe(false);
+    });
+
+    /**
+     * The emptiness rule was relaxed; the TYPE rule was not. Turning a
+     * wrong-typed name into a silent `null` would trade a ValidationError for
+     * silence — the direction PR #2563 argued against when it deleted the
+     * `amount` check.
+     */
+    it.each([
+      ["a number", 42],
+      ["an object", { first: "Rosalind" }],
+      ["an array", ["Rosalind"]],
+    ])("still throws on %s", (_spelling, value) => {
+      expect(() => validateContactData({ name: value }, isUpdate)).toThrow(ValidationError);
+    });
+
+    /**
+     * PRE-EXISTING, PINNED, NOT FIXED HERE — BACKLOG-3186.
+     *
+     * `validateString` returns early on `!value`, so a FALSY non-string is not
+     * a "no name" spelling and is not a throw either: it comes back as `null`,
+     * silently. BACKLOG-2707 did not cause this — the base validator does the
+     * same — and did not fix it. It is pinned so that whoever does fix it sees
+     * this file go red rather than discovering the change downstream, and so
+     * the "non-strings throw" reading of the guard above cannot re-form.
+     *
+     * `null` is the value that matters: on `contacts:update` it survives the
+     * handler's `undefined`-only filter and fails the NOT NULL column. The
+     * create and import paths are safe from it only because of the `?? ""` at
+     * their two `display_name` sites.
+     */
+    it.each([
+      ["zero", 0],
+      ["false", false],
+      ["NaN", NaN],
+    ])("returns null for %s rather than throwing (BACKLOG-3186)", (_spelling, value) => {
+      const validated = validateContactData({ name: value }, isUpdate);
+
+      expect(validated.name).toBeNull();
+      // NOT `""` — stating the difference from the four handled spellings, so
+      // this test cannot be read as endorsing the behaviour.
+      expect(validated.name).not.toBe("");
+    });
+
+    it("still enforces the length ceiling", () => {
+      expect(() =>
+        validateContactData({ name: "R".repeat(201) }, isUpdate),
+      ).toThrow(/200/);
+    });
+  });
+
+  /**
+   * The regression this item is named for, at the validator boundary: the two
+   * messages that used to come back are gone. Both are asserted by ABSENCE of
+   * a throw rather than by message text, because the messages no longer exist.
+   */
+  it("no longer produces either of the two refusals it used to", () => {
+    expect(() =>
+      validateContactData({ name: "", phone: "+14155550142" }, false),
+    ).not.toThrow();
+    expect(() =>
+      validateContactData({ name: "   ", phone: "+14155550142" }, false),
+    ).not.toThrow();
   });
 });

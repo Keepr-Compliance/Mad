@@ -47,6 +47,23 @@ export type SyncItemStatus = 'pending' | 'running' | 'complete' | 'error' | 'ski
 export type ReconnectProvider = 'microsoft' | 'google';
 
 /**
+ * BACKLOG-3203: why the contacts sync is asking the user to reconnect.
+ *
+ * Both causes end at the same place — an EmailReconnectError, the contacts item
+ * in status:'error', and the provider-aware "Reconnect" CTA — because the remedy
+ * is the same one: redo the mailbox connection in Settings. They are kept apart
+ * only so the message can be true. `SyncStatusIndicator` renders the error text
+ * verbatim as the completion subtitle, so telling a user with a live connection
+ * that it "expired" would be a false statement on screen.
+ *
+ * - `token-expired`  — the stored OAuth grant is dead (typed `tokenExpired`).
+ * - `reconnect-required` — the connection works, but cannot read contacts
+ *   (missing scope, or a 403 at fetch). The flag cannot separate those two, so
+ *   the copy it selects must not name either.
+ */
+export type ContactsReconnectCause = 'token-expired' | 'reconnect-required';
+
+/**
  * BACKLOG-2127: typed error thrown by the emails sync when a provider's stored
  * OAuth token is dead. Carries the provider so the SyncStatusIndicator can
  * render a provider-aware "Reconnect" CTA WITHOUT string-matching the message.
@@ -84,6 +101,18 @@ export interface SyncItem {
    * with nothing in between: the phases do not take equal time, so the number
    * described the phase list rather than the work. A value that is not known
    * must never render as known (BACKLOG-2886).
+   *
+   * BACKLOG-3421 added three more setters, so "the messages import sets it" is
+   * no longer the whole story:
+   *   - EVERY leg is seeded with it at leg start, because at that instant no
+   *     producer has reported anything and `progress: 0` is a claim. A leg with
+   *     an honest number clears it on its own first tick.
+   *   - The CONTACTS leg sets it for its whole run: ~334ms, and its 0/50/100
+   *     were positions in a phase list rather than measurements (founder:
+   *     "i honestly thing we we even don't do a % for the contacts").
+   *   - The EMAILS leg sets it until the pre-cache producer emits a real
+   *     percent, then stops — the one leg here that goes from indeterminate to
+   *     honestly determinate mid-run.
    *
    * NOTE FOR CONSUMERS: `progress` stays 0 for such an item, so
    * `item.progress ?? null` does NOT filter it out — `0 ?? null` is `0`. Gate
@@ -342,7 +371,28 @@ class SyncOrchestratorServiceClass {
     // TASK-2098: Read contact source preferences to conditionally skip phases
     this.registerSyncFunction('contacts', async (userId, onProgress, options, signal) => {
       logger.info('[SyncOrchestrator] Starting contacts sync, forceReimport:', !!options?.forceReimport);
-      onProgress(0);
+      // BACKLOG-3421: THIS LEG REPORTS NO PERCENTAGE, AT ANY POINT.
+      //
+      // The founder, on seeing the dashboard already at 50 whenever he looked:
+      // "i honestly thing we we even don't do a % for the contacts its fine
+      // since they are alwasy so fast". It is — 334ms measured, 321-577ms
+      // across his runs, about 0.6% of a first sync against ~84% for the email
+      // download.
+      //
+      // The three numbers this leg used to emit (0 here, 50 after the macOS
+      // phase, 100 at the end) were the emails leg's hard-coded 50 in
+      // miniature: positions in a phase LIST, not measurements. The phases take
+      // wildly different times, two of the three are skipped outright whenever
+      // a source is unticked, and the 50 arrived a few hundred milliseconds in
+      // and sat there for the rest of the run. A value that is not known must
+      // never render as known (BACKLOG-2886).
+      //
+      // The mechanism is the existing `indeterminate` flag — the same one the
+      // macOS Messages import uses, documented at the top of this file — so the
+      // dashboard's existing gate suppresses the number with no renderer
+      // change. No phase label is invented either: contacts has no honest
+      // per-phase vocabulary, so the pill reads "Contacts".
+      onProgress(0, undefined, { indeterminate: true });
 
       if (signal?.aborted) return;
 
@@ -414,7 +464,9 @@ class SyncOrchestratorServiceClass {
         logger.info('[SyncOrchestrator] Skipping macOS Contacts (disabled by user preference)');
       }
 
-      onProgress(50);
+      // BACKLOG-3421: the mid-leg `onProgress(50)` that used to sit here is
+      // gone rather than flagged. A number nothing reads is a trap for whoever
+      // touches this next.
 
       if (signal?.aborted) return;
 
@@ -424,8 +476,18 @@ class SyncOrchestratorServiceClass {
       // but a dead token is surfaced AFTER all phases run by throwing an
       // EmailReconnectError — landing the contacts item in status:'error' with
       // the typed reconnectProvider that drives the "Reconnect" CTA. Typed
-      // discriminator (`tokenExpired`) only — never message string-matching.
-      let contactsReconnect: ReconnectProvider | undefined;
+      // discriminators only — never message string-matching.
+      //
+      // BACKLOG-3203: `reconnectRequired` now joins `tokenExpired` on this
+      // channel. It used to log and fall through, so a provider that could not
+      // read contacts ended the run at "All contacts sync complete" with
+      // nothing on screen. The two arrive with DIFFERENT causes and must not
+      // claim each other's: `tokenExpired` is "your grant lapsed",
+      // `reconnectRequired` is "the connection cannot read contacts". The cause
+      // travels with the provider because the message below is rendered
+      // verbatim to the user (SyncStatusIndicator's completionSubtitle), so a
+      // wrong sentence here is a wrong sentence on screen.
+      let contactsReconnect: { provider: ReconnectProvider; cause: ContactsReconnectCause } | undefined;
 
       // Phase 2: Outlook contacts sync (all platforms, non-fatal, skip if source disabled)
       // TASK-1953: Outlook contacts sync via Graph API
@@ -439,9 +501,13 @@ class SyncOrchestratorServiceClass {
             logger.info('[SyncOrchestrator] Outlook contacts synced:', outlookResult.count);
           } else if (outlookResult.tokenExpired) {
             logger.warn('[SyncOrchestrator] Outlook contacts token expired — reconnect required');
-            contactsReconnect = contactsReconnect ?? 'microsoft';
+            contactsReconnect = contactsReconnect ?? { provider: 'microsoft', cause: 'token-expired' };
           } else if (outlookResult.reconnectRequired) {
-            logger.warn('[SyncOrchestrator] Outlook contacts need reconnection');
+            // BACKLOG-3203: log the provider's OWN error rather than naming a
+            // cause this branch has not established — `reconnectRequired`
+            // covers a missing Contacts.Read grant and a 403 at fetch alike.
+            logger.warn('[SyncOrchestrator] Outlook contacts need reconnection:', outlookResult.error);
+            contactsReconnect = contactsReconnect ?? { provider: 'microsoft', cause: 'reconnect-required' };
           } else {
             logger.warn('[SyncOrchestrator] Outlook contacts sync returned error:', outlookResult.error);
           }
@@ -474,9 +540,15 @@ class SyncOrchestratorServiceClass {
             logger.info('[SyncOrchestrator] Google contacts synced:', googleResult.count);
           } else if (googleResult.tokenExpired) {
             logger.warn('[SyncOrchestrator] Google contacts token expired — reconnect required');
-            contactsReconnect = contactsReconnect ?? 'google';
+            contactsReconnect = contactsReconnect ?? { provider: 'google', cause: 'token-expired' };
           } else if (googleResult.reconnectRequired) {
-            logger.warn('[SyncOrchestrator] Google contacts need reconnection (contacts.readonly scope missing)');
+            // BACKLOG-3203: this line used to read "(contacts.readonly scope
+            // missing)" for EVERY `reconnectRequired`, including a mailbox that
+            // was never connected — which is what it was actually reporting in
+            // the log that opened this item. A log line must not name a cause
+            // it has not established; the provider's own error carries it.
+            logger.warn('[SyncOrchestrator] Google contacts need reconnection:', googleResult.error);
+            contactsReconnect = contactsReconnect ?? { provider: 'google', cause: 'reconnect-required' };
           } else {
             logger.warn('[SyncOrchestrator] Google contacts sync returned error:', googleResult.error);
           }
@@ -496,7 +568,13 @@ class SyncOrchestratorServiceClass {
         }
       }
 
-      onProgress(100);
+      // BACKLOG-3421: the leg's end still reports, and still reports no number.
+      // The flag is repeated rather than dropped because a bare `onProgress(100)`
+      // would CLEAR it (`updateQueueItem` writes `indeterminate:
+      // detail?.indeterminate`), painting a determinate "100%" on an item that
+      // is still 'running' — and on the reconnect path below the leg then throws
+      // rather than completing, so that frame would be the last one rendered.
+      onProgress(100, undefined, { indeterminate: true });
 
       // BACKLOG-2142: all phases have run (macOS contacts persisted, BOTH cloud
       // providers attempted). If a cloud token was dead, surface it now as a
@@ -504,10 +582,18 @@ class SyncOrchestratorServiceClass {
       // the "Sync Completed with Errors" variant + reconnect CTA. macOS contacts
       // are NOT lost; the copy must read as partial, not total, failure.
       if (contactsReconnect) {
-        const providerLabel = contactsReconnect === 'microsoft' ? 'Outlook' : 'Gmail';
+        const providerLabel = contactsReconnect.provider === 'microsoft' ? 'Outlook' : 'Gmail';
         throw new EmailReconnectError(
-          contactsReconnect,
-          `${providerLabel} connection expired — reconnect to sync contacts`,
+          contactsReconnect.provider,
+          // BACKLOG-3203: this string is rendered to the user verbatim, so it
+          // may only assert what the discriminator actually established.
+          // "connection expired" is FALSE for a connection that is alive but
+          // cannot read contacts, so the `reconnectRequired` wording names the
+          // remedy and no cause — it has to hold for a missing grant and a 403
+          // alike, since the flag cannot tell them apart.
+          contactsReconnect.cause === 'token-expired'
+            ? `${providerLabel} connection expired — reconnect to sync contacts`
+            : `${providerLabel} needs to be reconnected to sync contacts`,
         );
       }
 
@@ -517,7 +603,20 @@ class SyncOrchestratorServiceClass {
     // Register emails sync (all platforms - API-based)
     this.registerSyncFunction('emails', async (userId, onProgress, _options, signal) => {
       logger.info('[SyncOrchestrator] Starting emails sync');
-      onProgress(0);
+      // BACKLOG-3421: this leg reports NO percentage until the pre-cache
+      // producer emits a real one.
+      //
+      // What used to be here: `onProgress(0)`, then a hard-coded
+      // `onProgress(50)` emitted BEFORE `precacheEmails` ran and held for its
+      // entire duration — 48s on the founder's own machine, and he reports five
+      // minutes for some users — then 100. "Emails 50%" for a minute was the
+      // midpoint of a two-item list, not a measurement of anything, and it is
+      // the flat number that opened this item.
+      //
+      // The AI scan below is the one stretch of this leg with no producer behind
+      // it, so it says so instead of standing in a placeholder (BACKLOG-2886: a
+      // value that is not known must never render as known).
+      onProgress(0, undefined, { indeterminate: true });
 
       // AI scan (non-fatal — precache should run regardless)
       if (signal?.aborted) return;
@@ -552,7 +651,6 @@ class SyncOrchestratorServiceClass {
       } else {
         logger.info('[SyncOrchestrator] Skipping AI email scan — ai_detection not entitled (precache still runs)');
       }
-      onProgress(50);
 
       // BACKLOG-1362: Pre-cache emails from connected providers.
       // Independent of AI scan — runs for all users with email connected.
@@ -563,10 +661,53 @@ class SyncOrchestratorServiceClass {
       // with Errors" variant and drives the reconnect prompt, instead of a
       // green "0 new messages". Transient/network precache failures stay
       // non-fatal (no providerError → caught + warned below).
+      //
+      // BACKLOG-3421: THE PRE-CACHE'S OWN PROGRESS IS WHAT THIS LEG REPORTS.
+      //
+      // `precacheEmails` has published real, interpolated, monotonically
+      // non-decreasing progress on `emails:precache-progress` since
+      // BACKLOG-2856, and until now its only consumer in the app was the
+      // Settings panel (`EmailSettings`). Subscribing here is the whole fix:
+      // this stage measured ~84% of the founder's first sync, so it is the one
+      // stretch where a moving number is worth anything.
+      //
+      // IPC listener OWNED here — the same rule the messages leg follows. It is
+      // created immediately before the invoke and torn down in the `finally`
+      // below, on success, throw and abort alike. The channel is app-global, so
+      // a listener that outlived this leg would let a Settings-initiated
+      // re-cache drive a dashboard row with no dashboard run behind it.
+      //
+      // The subscribe is guarded the way `EmailSettings` guards it: an older
+      // preload does not have it, and neither does any test double that mocks
+      // `window.api.transactions` without it.
+      const subscribeToPrecacheProgress = window.api.transactions.onPrecacheProgress;
+      const stopListening = subscribeToPrecacheProgress
+        ? subscribeToPrecacheProgress((progress) => {
+            // The terminal event is deliberately NOT forwarded. It carries no
+            // progress this leg does not already own, and on an error or a
+            // cancel its `percent` is the last percent the run reached — so
+            // forwarding it would pin a stale number on a leg that has stopped.
+            // The leg's completion (`startSync`) writes the 100.
+            if (progress.phase === 'done') return;
+            // Counts ride TOGETHER or not at all, which is the messages
+            // listener's contract above: a `current` with no `total` is a state
+            // no producer in this tree emits.
+            const hasCounts = progress.total > 0;
+            // `stage` travels as the item's phase, not `phase`, because `stage`
+            // is the one of the two with user-facing copy
+            // (`emailPrecacheStageDisplay`, which this item makes the dashboard
+            // its second consumer of). It is absent on the boundary events, on
+            // the backfill sweep and on both non-fetch phases, so the pill has
+            // to render without one — and does.
+            onProgress(progress.percent, progress.stage, {
+              current: hasCounts ? progress.current : undefined,
+              total: hasCounts ? progress.total : undefined,
+            });
+          })
+        : undefined;
       try {
         logger.info('[SyncOrchestrator] Starting email pre-cache');
-        // TODO: Pass progress callback to precacheEmails to report 50-100% progress during precache
-        const { providerError } = await window.api.transactions.precacheEmails(userId);
+        const { providerError, rateLimited } = await window.api.transactions.precacheEmails(userId);
         if (providerError?.tokenExpired) {
           const providerLabel = providerError.provider === 'microsoft' ? 'Outlook' : 'Gmail';
           throw new EmailReconnectError(
@@ -574,7 +715,16 @@ class SyncOrchestratorServiceClass {
             `${providerLabel} connection expired — reconnect to sync email`,
           );
         }
-        logger.info('[SyncOrchestrator] Email pre-cache complete');
+        // BACKLOG-3421: a refused run is not a completed one. The rate limiter
+        // returns before `precacheEmails` starts — so this leg receives no
+        // progress events at all, which is why it now reports no number for the
+        // ~2ms it lasts instead of the old 50 then 100. Branching on the typed
+        // flag, never on the error text.
+        if (rateLimited) {
+          logger.info('[SyncOrchestrator] Email pre-cache refused by the rate limiter — nothing was fetched');
+        } else {
+          logger.info('[SyncOrchestrator] Email pre-cache complete');
+        }
       } catch (precacheError) {
         // Re-throw auth-class failures (typed EmailReconnectError) so the emails
         // item errors AND carries the provider for the reconnect CTA; keep
@@ -583,9 +733,15 @@ class SyncOrchestratorServiceClass {
           throw precacheError;
         }
         logger.warn('[SyncOrchestrator] Email pre-cache failed (non-fatal):', precacheError);
+      } finally {
+        stopListening?.();
       }
 
-      onProgress(100);
+      // BACKLOG-3421: no `onProgress(100)` here. It was redundant — the
+      // completion in `startSync` writes `progress: 100` — and on the
+      // rate-limited path it was the last invented number in this leg: it would
+      // clear the indeterminate flag and paint a determinate "100%" on a leg
+      // that is still 'running' and has fetched nothing.
       logger.info('[SyncOrchestrator] Emails sync complete');
     });
 
@@ -1344,7 +1500,21 @@ class SyncOrchestratorServiceClass {
         }
 
         // Update current sync
-        this.updateQueueItem(type, { status: 'running', progress: 0 });
+        //
+        // BACKLOG-3421: the seed is INDETERMINATE, because at this instant no
+        // producer has reported anything and `progress: 0` is therefore a value
+        // presented as known that is not. On the messages leg that window is
+        // ~380ms of a hard "0%" on the dashboard — a fabricated known value,
+        // which is precisely what BACKLOG-3128 removed from the rest of that
+        // leg and left here. `honestProgress-3128.test.tsx` could not have
+        // caught it: it constructs the item already flagged.
+        //
+        // One uniform rule rather than a per-type table that would drift out of
+        // date. A leg with an honest number of its own clears the flag on its
+        // OWN first tick: `updateQueueItem` writes `indeterminate:
+        // detail?.indeterminate`, so any `onProgress(n)` that passes no detail
+        // sets it back to undefined.
+        this.updateQueueItem(type, { status: 'running', progress: 0, indeterminate: true });
         this.setState({ currentSync: type });
 
         Sentry.addBreadcrumb({

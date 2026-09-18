@@ -55,7 +55,7 @@ const mockCompleteUserData: UserData = {
   hasCompletedEmailOnboarding: true,
   hasEmailConnected: true,
   needsDriverSetup: false,
-  hasPermissions: true,
+  fda: "granted",
 };
 
 const mockIncompleteUserData: UserData = {
@@ -63,7 +63,22 @@ const mockIncompleteUserData: UserData = {
   hasCompletedEmailOnboarding: false,
   hasEmailConnected: false,
   needsDriverSetup: true,
-  hasPermissions: false,
+  fda: "not-asked",
+};
+
+/**
+ * The same user on Windows.
+ *
+ * BACKLOG-3275: this fixture exists because `{ isWindows: true, fda: "not-asked" }`
+ * is a state the app cannot produce — `fdaFromProbe` returns "not-applicable"
+ * for every non-macOS platform. Before the union, the Windows tests reused the
+ * macOS fixture and it was harmless only because a `platform.isMacOS &&` guard
+ * discarded the value. Now the union carries the platform fact, so the fixture
+ * has to be honest about which platform it describes.
+ */
+const mockIncompleteUserDataWindows: UserData = {
+  ...mockIncompleteUserData,
+  fda: "not-applicable",
 };
 
 // ============================================
@@ -99,7 +114,7 @@ describe("getNextOnboardingStep", () => {
       const result = getNextOnboardingStep(
         ["phone-type", "secure-storage", "email-connect"],
         mockMacOSPlatform,
-        { ...mockIncompleteUserData, hasPermissions: false }
+        { ...mockIncompleteUserData, fda: "not-asked" as const }
       );
       expect(result).toBe("permissions");
     });
@@ -108,7 +123,7 @@ describe("getNextOnboardingStep", () => {
       const result = getNextOnboardingStep(
         ["phone-type", "secure-storage", "email-connect", "permissions"],
         mockMacOSPlatform,
-        { ...mockIncompleteUserData, hasPermissions: true }
+        { ...mockIncompleteUserData, fda: "granted" as const }
       );
       expect(result).toBeNull();
     });
@@ -117,7 +132,7 @@ describe("getNextOnboardingStep", () => {
       const result = getNextOnboardingStep(
         ["phone-type", "secure-storage", "email-connect"],
         mockMacOSPlatform,
-        { ...mockIncompleteUserData, hasPermissions: true }
+        { ...mockIncompleteUserData, fda: "granted" as const }
       );
       expect(result).toBeNull();
     });
@@ -125,7 +140,7 @@ describe("getNextOnboardingStep", () => {
 
   describe("Windows + iPhone platform", () => {
     it("returns phone-type as first step", () => {
-      const result = getNextOnboardingStep([], mockWindowsPlatform, mockIncompleteUserData);
+      const result = getNextOnboardingStep([], mockWindowsPlatform, mockIncompleteUserDataWindows);
       expect(result).toBe("phone-type");
     });
 
@@ -133,7 +148,7 @@ describe("getNextOnboardingStep", () => {
       const result = getNextOnboardingStep(
         ["phone-type"],
         mockWindowsPlatform,
-        mockIncompleteUserData
+        mockIncompleteUserDataWindows
       );
       expect(result).toBe("email-connect");
     });
@@ -144,7 +159,7 @@ describe("getNextOnboardingStep", () => {
       const result = getNextOnboardingStep(
         ["phone-type", "email-connect"],
         mockWindowsPlatform,
-        { ...mockIncompleteUserData, phoneType: "iphone", needsDriverSetup: true }
+        { ...mockIncompleteUserDataWindows, phoneType: "iphone", needsDriverSetup: true }
       );
       expect(result).toBe("apple-driver");
     });
@@ -153,7 +168,7 @@ describe("getNextOnboardingStep", () => {
       const result = getNextOnboardingStep(
         ["phone-type", "email-connect"],
         mockWindowsPlatform,
-        { ...mockIncompleteUserData, needsDriverSetup: false }
+        { ...mockIncompleteUserDataWindows, needsDriverSetup: false }
       );
       expect(result).toBeNull();
     });
@@ -162,7 +177,7 @@ describe("getNextOnboardingStep", () => {
       const result = getNextOnboardingStep(
         ["phone-type", "email-connect", "apple-driver"],
         mockWindowsPlatform,
-        { ...mockIncompleteUserData, needsDriverSetup: false }
+        { ...mockIncompleteUserDataWindows, needsDriverSetup: false }
       );
       expect(result).toBeNull();
     });
@@ -173,7 +188,7 @@ describe("getNextOnboardingStep", () => {
       const result = getNextOnboardingStep(
         ["phone-type", "email-connect"],
         mockWindowsAndroidPlatform,
-        mockIncompleteUserData
+        mockIncompleteUserDataWindows
       );
       expect(result).toBeNull();
     });
@@ -210,7 +225,11 @@ describe("appStateReducer - Loading Phase Transitions", () => {
       });
     });
 
-    it("defers DB init for first-time macOS users (no key store + isMacOS)", () => {
+    // BACKLOG-3253: this input used to be the one case that branched away from
+    // pre-auth and left the database closed behind the login screen. It no
+    // longer does. The assertion is exact-shape on purpose -- `toEqual` fails
+    // if `deferredDbInit` reappears on the result.
+    it("routes first-run macOS to validating-auth, with no deferral (BACKLOG-3253)", () => {
       const state = INITIAL_APP_STATE;
       const action: AppAction = { type: "STORAGE_CHECKED", hasKeyStore: false, isMacOS: true };
 
@@ -218,9 +237,9 @@ describe("appStateReducer - Loading Phase Transitions", () => {
 
       expect(result).toEqual({
         status: "loading",
-        phase: "loading-auth",
-        deferredDbInit: true,
+        phase: "validating-auth",
       });
+      expect(result).not.toHaveProperty("deferredDbInit");
     });
 
     it("transitions to validating-auth for returning macOS users (has key store) (TASK-2086)", () => {
@@ -613,7 +632,7 @@ describe("appStateReducer - Loading Phase Transitions", () => {
         hasCompletedEmailOnboarding: true,
         hasEmailConnected: false,
         needsDriverSetup: false,
-        hasPermissions: false, // Still needs permissions on macOS
+        fda: "not-asked", // Still needs permissions on macOS
       };
       const action = {
         type: "USER_DATA_LOADED" as const,
@@ -849,7 +868,14 @@ describe("appStateReducer - Onboarding Transitions", () => {
       if (result.status === "ready") {
         expect(result.user).toEqual(mockUser);
         expect(result.platform).toEqual(mockMacOSPlatform);
-        expect(result.userData.hasPermissions).toBe(true);
+        // BACKLOG-3275, deliberate behaviour change. This used to assert
+        // `hasPermissions === true`, which held only because `completedSteps`
+        // contained "permissions" — navigation deciding capability, the defect
+        // this item removes. A step completion now carries the Full Disk Access
+        // state through untouched; only FDA_GRANTED may report a grant, and the
+        // single production dispatcher sends it alongside this action.
+        // See reducer.fdaInversion.test.ts for the paired assertion.
+        expect(result.userData.fda).toBe("not-asked");
       }
     });
 
@@ -1232,7 +1258,7 @@ describe("appStateReducer - Ready State Transitions", () => {
         expect(result.userData.hasEmailConnected).toBe(true);
         // Other userData should be preserved
         expect(result.userData.phoneType).toBe(userDataNoEmail.phoneType);
-        expect(result.userData.hasPermissions).toBe(userDataNoEmail.hasPermissions);
+        expect(result.userData.fda).toBe(userDataNoEmail.fda);
       }
     });
 
@@ -1325,7 +1351,7 @@ describe("appStateReducer - Ready State Transitions", () => {
         expect(result.userData.hasEmailConnected).toBe(false);
         // Other userData should be preserved
         expect(result.userData.phoneType).toBe(userDataWithEmail.phoneType);
-        expect(result.userData.hasPermissions).toBe(userDataWithEmail.hasPermissions);
+        expect(result.userData.fda).toBe(userDataWithEmail.fda);
       }
     });
 

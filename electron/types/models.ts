@@ -642,6 +642,19 @@ export interface Message {
    */
   associated_message_guid?: string | null;
 
+  /**
+   * BACKLOG-3366: 1 when this text is hidden from the export of the transaction
+   * it was READ FOR, 0 otherwise.
+   *
+   * NOT a stored column on `messages`. It is projected by the shared
+   * conversation read (`getCommunicationsWithMessages`) from
+   * `transaction_hidden_texts`, so it is only present on rows that read
+   * returned, and it is always 0 on emails. It is SQLite's `EXISTS` result, so
+   * the value is the NUMBER 0 or 1, never a boolean: read it by truthiness,
+   * never with `=== true`.
+   */
+  hidden_from_export?: 0 | 1;
+
   // Classification Results
   is_transaction_related?: boolean; // null = not classified
   classification_confidence?: number; // 0.0 - 1.0

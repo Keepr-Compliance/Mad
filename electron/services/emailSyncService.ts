@@ -37,7 +37,9 @@ import type { BulkMailHeaders } from "../utils/bulkMailHeaders";
 import { CURRENT_DERIVATION_VERSION } from "../utils/derivationVersion";
 import { reprocessEmailDerivations } from "./emailDerivationReprocessService";
 import {
+  EMAIL_PRECACHE_FETCH_RANGE,
   EMAIL_PRECACHE_PERCENT,
+  interpolateFetchPercent,
   terminalProgress,
   type EmailPrecacheProgressCallback,
 } from "./emailPrecacheProgress";
@@ -285,8 +287,15 @@ export interface StoreableEmail {
     mimeType?: string;
     contentType?: string;
     size?: number;
-    attachmentId?: string;
+    /**
+     * BACKLOG-3187: Gmail's immutable MIME part id — the attachment's IDENTITY.
+     * Undeclared until now, which is why it was structurally invisible to the
+     * writer no matter what the fetch service parsed. Absent for Outlook.
+     */
+    partId?: string;
     id?: string;
+    /** Fetch token only — Gmail's rotates between calls. Never identity. */
+    attachmentId?: string;
   }>;
   // BACKLOG-1722: structured participants for the junction
   participants?: import("../types/models").ParsedParticipant[];
@@ -362,6 +371,24 @@ interface AttachmentMetaLite {
   filename: string;
   mimeType: string | null;
   size: number | null;
+  /**
+   * BACKLOG-3187: Gmail's IDENTITY — the immutable id of the MIME part. Null for
+   * Outlook, which has no such concept (a Graph attachment is addressed by its id
+   * and nothing else). Empty string is normalised to null here, so downstream code
+   * never has to remember that the payload's own partId is "".
+   */
+  partId: string | null;
+  /**
+   * BACKLOG-2551: the provider's own attachment id. Both providers supply one —
+   * Gmail as `part.body.attachmentId`, Outlook Graph as `id` — and this normaliser
+   * used to DISCARD it, which is why the column could not be populated at all.
+   * Whether it is then STORED is decided by the gate in
+   * persistEmailAttachmentMetadata, not here.
+   *
+   * BACKLOG-3187: for Gmail this is a FETCH TOKEN and was measured rotating
+   * between two fetches of the same attachment. It never becomes identity.
+   */
+  providerAttachmentId: string | null;
 }
 
 /**
@@ -378,6 +405,10 @@ function normalizeAttachmentMeta(
     mimeType?: string | null;
     contentType?: string | null;
     size?: number | null;
+    /** BACKLOG-3187: Gmail identity. Absent on every Outlook shape. */
+    partId?: string | null;
+    attachmentId?: string | null;
+    id?: string | null;
   }>,
 ): AttachmentMetaLite[] {
   const out: AttachmentMetaLite[] = [];
@@ -388,6 +419,10 @@ function normalizeAttachmentMeta(
       filename,
       mimeType: a.mimeType ?? a.contentType ?? null,
       size: typeof a.size === "number" ? a.size : null,
+      // BACKLOG-3187: `|| null`, not `?? null` — "" means absent (see partId).
+      partId: a.partId || null,
+      // Gmail parses `attachmentId`; Outlook Graph carries `id`.
+      providerAttachmentId: a.attachmentId ?? a.id ?? null,
     });
   }
   return out;
@@ -413,6 +448,8 @@ function normalizeAttachmentMeta(
 async function persistEmailAttachmentMetadata(args: {
   emailsToInsert: StoreableEmail[];
   insertedEmailMap: Map<string, string>;
+  /** BACKLOG-2551: which provider this batch came from — see the gate below. */
+  provider: "outlook" | "gmail";
   getAttachmentsFn?: (
     messageId: string,
   ) => Promise<
@@ -426,7 +463,30 @@ async function persistEmailAttachmentMetadata(args: {
    */
   force?: EmailForceStaging;
 }): Promise<void> {
-  const { emailsToInsert, insertedEmailMap, getAttachmentsFn, force } = args;
+  const { emailsToInsert, insertedEmailMap, provider, getAttachmentsFn, force } = args;
+
+  // BACKLOG-2551 — THE sync-side gate, the counterpart to the one inside
+  // emailAttachmentService.downloadEmailAttachments. Two chokepoints, both of
+  // which every write path must pass through; the decision is never replicated
+  // out to individual call sites, where missing one would be silent.
+  //
+  // BACKLOG-3187 — identity comes from the DATA SHAPE, not the provider label.
+  //
+  // `partId` exists only on a Gmail MIME part; a Graph attachment has no such
+  // field, so an Outlook row is unaffected by the first term and keeps the
+  // behaviour v71 shipped. A Gmail row now keys on `partId` — the field Google
+  // documents as immutable — and never on `attachmentId`, which was MEASURED
+  // rotating between two fetches of the same attachment (2026-09-07).
+  //
+  // Reading the shape rather than `provider` also matters because `provider` is
+  // not always derived: at one of the nine download call sites
+  // (transactionService.ts, BACKLOG-3189) it is GUESSED from the sender's address.
+  // Under a label-only gate a Gmail message misread as "outlook" would persist a
+  // rotating fetch token AS IDENTITY. It cannot now: no `partId`, no Gmail part.
+  // 3189 stays open — the reverse case, an Outlook message misread as "gmail",
+  // still has its Graph id nulled — but it is not made worse here.
+  const providerIdFor = (m: AttachmentMetaLite): string | null =>
+    m.partId || (provider === "gmail" ? null : m.providerAttachmentId);
 
   for (const email of emailsToInsert) {
     const internalId = insertedEmailMap.get(email.id);
@@ -451,6 +511,7 @@ async function persistEmailAttachmentMetadata(args: {
           filename: m.filename,
           mimeType: m.mimeType,
           fileSizeBytes: m.size,
+          providerAttachmentId: providerIdFor(m),
         };
         if (force) {
           force.attachmentMeta.push(row);
@@ -894,6 +955,7 @@ async function fetchStoreAndDedup(params: {
       // here so filenames are searchable after a normal sync. Runs after the insert
       // transaction, is idempotent, and never downloads bytes.
       await persistEmailAttachmentMetadata({
+        provider,
         emailsToInsert,
         insertedEmailMap,
         getAttachmentsFn,
@@ -1960,10 +2022,28 @@ class EmailSyncService {
     let lastPercent = 0;
     let progressCurrent = 0;
     let progressOutcome: "success" | "error" | "cancelled" = "error";
+    // THE ONE PLACE `percent` IS ALLOWED TO BE DECIDED.
+    //
+    // Since the fetch rounds interpolate inside the anchors, several independent
+    // counters now feed this callback, and two of them can legitimately restart:
+    //
+    //   - `retryOnNetwork` re-runs an ENTIRE provider block on a network error,
+    //     so a round that had reached 29 begins again reporting 12;
+    //   - the backfill round below re-emits FETCH_SECOND_PROVIDER after Gmail has
+    //     already interpolated past it.
+    //
+    // Clamping here rather than at each call site means a round added later
+    // cannot reintroduce a backwards bar by forgetting to clamp.
+    //
+    // `current` is deliberately NOT clamped. The repair pass leaves it at the
+    // row count it scanned and the first fetching event resets it to 0 — a
+    // legitimate reset, because they count different things, and a clamp would
+    // relabel the bar "(400 so far)" under "Downloading emails" at 10%.
     const emitProgress: EmailPrecacheProgressCallback = (progress) => {
-      lastPercent = progress.percent;
+      const percent = Math.max(lastPercent, progress.percent);
+      lastPercent = percent;
       progressCurrent = progress.current;
-      onProgress?.(progress);
+      onProgress?.({ ...progress, percent });
     };
 
     // BACKLOG-2960 — TIMING BOOKKEEPING, declared out here for the same reason
@@ -2287,6 +2367,41 @@ class EmailSyncService {
 
     // Fetch from Outlook (no contact filter = all emails)
     if (microsoftToken && !isCancelled()) {
+      // The count the Outlook rounds report against. `totalFetched` only grows
+      // at the very end of the retried block below, so reading it here gives
+      // every `retryOnNetwork` attempt the same base as reading it inside would.
+      const outlookBaseFetched = totalFetched;
+      // THE HIGH-WATER MARK OF WHAT THE USER HAS BEEN TOLD.
+      //
+      // The panel reads "Downloading emails (N so far)", and N must not
+      // retract. Three ways it could without this:
+      //
+      //   - `searchEmails` reports its pre-slice length while it returns
+      //     `slice(0, maxResults)`, so a report above the 2,000 this round
+      //     passes would print and then retract at the boundary. That cannot
+      //     happen on this path today: the inbox call passes no `query` and no
+      //     `contactEmails`, so it runs the `$filter`/`$skip` page loop, which
+      //     stops after `MAX_GRAPH_PAGES` (10) pages of `$top=100` and reports
+      //     1,000 at most, before its `>= maxResults` break is reached. The
+      //     `EMAIL_FETCH_SAFETY_CAP` clamp in `onProgress` below is therefore
+      //     a defensive pin, not a live bound;
+      //   - `fetchStoreAndDedup` reports what SURVIVED its `seenIds` filter,
+      //     which is never more than what was downloaded;
+      //   - `retryOnNetwork` re-runs the WHOLE block on a network error, and the
+      //     re-run's inbox round reports from zero again.
+      //
+      // Declared OUTSIDE the retried callback for the third reason. Inside it, a
+      // re-run started the mark over and the panel read "(500 so far)" and then
+      // "(100 so far)".
+      //
+      // Reporting the max is the honest direction: it is what has been
+      // downloaded, and nothing on screen claims those rows were all new —
+      // `stored` is reported separately when the run finishes.
+      let outlookReported = outlookBaseFetched;
+      const reportOutlook = (current: number): number => {
+        outlookReported = Math.max(outlookReported, current);
+        return outlookReported;
+      };
       try {
         await retryOnNetwork(async () => {
           const outlookReady = await outlookFetchService.initialize(userId);
@@ -2300,6 +2415,32 @@ class EmailSyncService {
                 // BACKLOG-2856: the signal reaches the paging loop and the HTTP
                 // request, not just the boundary check above.
                 signal: abort.signal,
+                // The inbox round is the one fetch in this method with a REAL
+                // denominator: `searchEmails` asks Graph for `@odata.count`
+                // before it pages, so `percentage` is a true fraction of the
+                // messages this window holds. When that count request fails,
+                // `hasEstimate` is false and `percentage` is a hardcoded 0 —
+                // trusting it then would peg the bar at the bottom of the slice
+                // and call it progress. So the bar holds at the slice start and
+                // `current` carries the movement instead, which is the idiom the
+                // repair pass above already uses.
+                onProgress: (p) => emitProgress({
+                  phase: "fetching",
+                  stage: "outlook-inbox",
+                  // Clamped to the 2,000 this call is passed. Defensive only:
+                  // the page loop stops at `MAX_GRAPH_PAGES` (1,000 messages)
+                  // first, as described beside `outlookReported`.
+                  current: reportOutlook(
+                    outlookBaseFetched + Math.min(p.fetched, EMAIL_FETCH_SAFETY_CAP),
+                  ),
+                  total: p.hasEstimate
+                    ? outlookBaseFetched + Math.min(p.total, EMAIL_FETCH_SAFETY_CAP)
+                    : outlookReported,
+                  percent: interpolateFetchPercent(
+                    EMAIL_PRECACHE_FETCH_RANGE.OUTLOOK_INBOX,
+                    p.hasEstimate ? p.percentage / 100 : 0,
+                  ),
+                }),
               }),
               userId,
               seenIds: seenEmailIds,
@@ -2323,6 +2464,13 @@ class EmailSyncService {
             if (isCancelled()) allFoldersComplete = false;
             try {
               if (!isCancelled()) {
+              // Held at the inbox round's real count for the whole folder walk.
+              // The walk re-scans mail the inbox round already has — Graph's
+              // `/me/messages` spans every folder — so adding its per-folder
+              // `fetched` would climb to a number the deduped result then has to
+              // correct downwards. A count that overstates and then retracts is
+              // worse than one that waits.
+              const currentAfterInbox = reportOutlook(outlookBaseFetched + inboxResult.fetched);
               allFolderResult = await fetchStoreAndDedup({
                 provider: "outlook",
                 fetchFn: () => outlookFetchService.searchAllFolders({
@@ -2333,6 +2481,23 @@ class EmailSyncService {
                   // signal the next boundary check below is unreachable until it
                   // has finished.
                   signal: abort.signal,
+                  // Folders completed, not messages fetched: the per-folder
+                  // counters restart on every folder, the walk-level pair does
+                  // not. `folderIndex` is the folder currently being paged, so
+                  // the slice fills as each one is finished rather than when it
+                  // starts — the bar never claims a folder it has not walked.
+                  onProgress: (p) => emitProgress({
+                    phase: "fetching",
+                    stage: "outlook-folders",
+                    current: currentAfterInbox,
+                    total: currentAfterInbox,
+                    percent: interpolateFetchPercent(
+                      EMAIL_PRECACHE_FETCH_RANGE.OUTLOOK_FOLDERS,
+                      p.folderCount && p.folderCount > 0
+                        ? (p.folderIndex ?? 0) / p.folderCount
+                        : 0,
+                    ),
+                  }),
                 }),
                 userId,
                 seenIds: seenEmailIds,
@@ -2380,6 +2545,27 @@ class EmailSyncService {
       }
     }
 
+    // KNOWN RESIDUAL: THIS EVENT CAN STEP THE COUNT DOWN, AND IT IS NOT CLAMPED.
+    //
+    // It carries `totalFetched`, which grows only when a provider block
+    // COMPLETES. The Outlook high mark above is what the panel showed while the
+    // rounds ran. On a clean run the two agree: the inbox round's last report is
+    // the length of what it returns, and nothing has been seen yet to dedup
+    // against. They disagree in two cases, and in both the drop is large:
+    //
+    //   - AFTER A NETWORK RETRY. Attempt 1 already put the inbox's ids into
+    //     `seenEmailIds`, so attempt 2's inbox round dedups to 0 and this event
+    //     reads only the mail the folder walk found new. The drop is the whole
+    //     inbox round (the retry control's fixture shows 5, then 2).
+    //   - WHEN THE BLOCK THROWS OUT after reporting progress — network retries
+    //     exhausted, or a non-network error in the inbox round. The `+=` never
+    //     runs and this event reads the base, even when attempt 1 stored rows.
+    //
+    // Both are `totalFetched` undercounting, not this event misreporting it: the
+    // run's returned `fetched`/`stored` are short by the same amount, and that
+    // predates the moving count, which only makes it visible. Clamping here
+    // would hide it on the bar and leave the bar disagreeing with the result.
+    // The same two cases apply to FETCH_DONE after the Gmail block.
     emitProgress({
       phase: "fetching",
       current: totalFetched,
@@ -2391,6 +2577,15 @@ class EmailSyncService {
     // Skipped outright if the user cancelled during the Outlook round — a cancel
     // must stop the NEXT unit of work, not merely stop the current one early.
     if (googleToken && !isCancelled()) {
+      // Same base and same high-water rule as the Outlook rounds above, and
+      // declared outside the retried callback for the same reason: a
+      // `retryOnNetwork` re-run must not start the reported count over.
+      const gmailBaseFetched = totalFetched;
+      let gmailReported = gmailBaseFetched;
+      const reportGmail = (current: number): number => {
+        gmailReported = Math.max(gmailReported, current);
+        return gmailReported;
+      };
       try {
         await retryOnNetwork(async () => {
           const gmailReady = await gmailFetchService.initialize(userId);
@@ -2401,6 +2596,38 @@ class EmailSyncService {
                 maxResults: EMAIL_FETCH_SAFETY_CAP,
                 after: fetchSinceDate,
                 signal: abort.signal,
+                // TWO PASSES, TWO DENOMINATORS, AND ONLY THE SECOND ONE IS REAL.
+                //
+                // `searchEmails` lists message IDs (`hasEstimate: false`,
+                // `percentage` hardcoded 0) and then downloads one body per ID
+                // (`hasEstimate: true`, `percentage` against the ID count it
+                // just finished listing). Gmail's own `resultSizeEstimate` never
+                // reaches `percentage` at all — the service distrusts it in
+                // writing — so the scan pass is divided by the cap this call
+                // passed instead, which bounds the listing from above and can
+                // therefore only ever UNDERSTATE how far along it is.
+                //
+                // `current` counts bodies downloaded, so it holds through the
+                // scan and climbs through the bodies. Listing an ID is not
+                // downloading an email, and counting it as one would make the
+                // number drop when the body pass restarted the count at ten.
+                onProgress: (p) => emitProgress({
+                  phase: "fetching",
+                  stage: "gmail-messages",
+                  current: reportGmail(
+                    p.hasEstimate ? gmailBaseFetched + p.fetched : gmailBaseFetched,
+                  ),
+                  total: p.hasEstimate ? gmailBaseFetched + p.total : gmailReported,
+                  percent: p.hasEstimate
+                    ? interpolateFetchPercent(
+                        EMAIL_PRECACHE_FETCH_RANGE.GMAIL_BODIES,
+                        p.percentage / 100,
+                      )
+                    : interpolateFetchPercent(
+                        EMAIL_PRECACHE_FETCH_RANGE.GMAIL_SCAN,
+                        p.fetched / EMAIL_FETCH_SAFETY_CAP,
+                      ),
+                }),
               }),
               userId,
               seenIds: seenEmailIds,
@@ -2416,12 +2643,30 @@ class EmailSyncService {
             if (isCancelled()) allLabelsComplete = false;
             try {
               if (!isCancelled()) {
+              // Held at the search round's real count for the whole label walk,
+              // for the reason the Outlook folder walk holds: a Gmail message
+              // carries several labels, the walk dedups them, and a count that
+              // climbed per label would have to retract at the boundary.
+              const currentAfterGmailSearch = reportGmail(gmailBaseFetched + gmailResult.fetched);
               allLabelResult = await fetchStoreAndDedup({
                 provider: "gmail",
                 fetchFn: () => gmailFetchService.searchAllLabels({
                   maxResults: EMAIL_FETCH_SAFETY_CAP,
                   after: fetchSinceDate,
                   signal: abort.signal,
+                  // Labels completed — the Gmail mirror of the folder walk.
+                  onProgress: (p) => emitProgress({
+                    phase: "fetching",
+                    stage: "gmail-labels",
+                    current: currentAfterGmailSearch,
+                    total: currentAfterGmailSearch,
+                    percent: interpolateFetchPercent(
+                      EMAIL_PRECACHE_FETCH_RANGE.GMAIL_LABELS,
+                      p.labelCount && p.labelCount > 0
+                        ? (p.labelIndex ?? 0) / p.labelCount
+                        : 0,
+                    ),
+                  }),
                 }),
                 userId,
                 seenIds: seenEmailIds,
@@ -2496,9 +2741,15 @@ class EmailSyncService {
         before: backfillWindow.before.toISOString(),
       });
 
-      // Progress holds at the same percent while `current` climbs — the idiom
-      // the repair pass already uses. The bar must not go backwards, and a
-      // backfill over a year of mail must not look like a frozen run.
+      // Progress holds while `current` climbs — the idiom the repair pass
+      // already uses. The bar must not go backwards, and a backfill over a year
+      // of mail must not look like a frozen run.
+      //
+      // The literal below is now a FLOOR, not the percent that will be emitted:
+      // the Gmail round above interpolates past FETCH_SECOND_PROVIDER, so
+      // `emitProgress`'s clamp holds this at wherever the run actually got to.
+      // The backfill's own four fetch rounds still report nothing of their own —
+      // they are the last unwired rounds in this method.
       emitProgress({
         phase: "fetching",
         current: totalFetched,

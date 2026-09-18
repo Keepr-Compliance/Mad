@@ -103,6 +103,20 @@ export interface TestDb {
    * `depth` is per-handle rather than module-level: two databases open at once
    * in one suite would otherwise share a counter and mis-label a top-level
    * transaction as nested.
+   *
+   * -------------------------------------------------------------------------
+   * A PROMISE-RETURNING CALLBACK IS REFUSED (BACKLOG-3220)
+   * -------------------------------------------------------------------------
+   * better-sqlite3 checks the callback's result before it commits
+   * (`lib/methods/transaction.js`: `throw new TypeError('Transaction function
+   * cannot return a promise')`) and rolls back. This helper used to commit
+   * instead, so `dbTransaction(async () => {...})` passed every suite while
+   * failing on every call in production. Transcribed from the real driver under
+   * Electron:
+   *
+   *   top-level async callback   TypeError, rows []
+   *   nested, outer catches it   TypeError, the outer commits its own rows
+   *   any thenable, not only a native Promise   TypeError, rows []
    */
   transaction<T>(fn: () => T): () => T;
 }
@@ -159,6 +173,11 @@ function wrap(db: {
         db.exec(isTop ? "BEGIN" : `SAVEPOINT ${savepoint}`);
         try {
           const result = fn();
+          // Same check, same message, same point (before COMMIT/RELEASE) as the
+          // production driver; the catch below rolls back.
+          if (result && typeof (result as { then?: unknown }).then === "function") {
+            throw new TypeError("Transaction function cannot return a promise");
+          }
           db.exec(isTop ? "COMMIT" : `RELEASE ${savepoint}`);
           depth--;
           return result;

@@ -26,12 +26,31 @@ import {
 } from "../utils/apiRateLimit";
 
 /**
- * Email attachment metadata
+ * Email attachment metadata.
+ *
+ * BACKLOG-3187: the two fields below are NOT interchangeable and the names are
+ * the only thing that says so.
+ *
+ *   `partId`       — IDENTITY. Google documents it as "the immutable ID of the
+ *                    message part". This is what is persisted as
+ *                    `attachments.provider_attachment_id` and what the partial
+ *                    unique index keys on.
+ *   `attachmentId` — FETCH TOKEN. Google documents no stability property for it,
+ *                    and it was MEASURED rotating: the same attachment fetched
+ *                    twice seconds apart, with a fresh OAuth2 client each time,
+ *                    returned two different 404-character values while `partId`
+ *                    stayed identical. Read it from the message in hand, use it
+ *                    immediately, never persist it as identity — a UNIQUE index
+ *                    built on it would never match its own predecessor and would
+ *                    give false assurance while duplication continued.
  */
 interface EmailAttachment {
   filename: string;
   mimeType: string;
   size: number;
+  /** Identity. Immutable per Google; see the note above. */
+  partId: string;
+  /** Fetch token only. Rotates between calls; never stored as identity. */
   attachmentId: string;
 }
 
@@ -635,6 +654,18 @@ class GmailFetchService {
           filename: part.filename,
           mimeType: part.mimeType || "application/octet-stream",
           size: part.body.size || 0,
+          /**
+           * BACKLOG-3187: this line is the identity. Before it, `partId` appeared
+           * nowhere in this codebase outside comments and every Gmail attachment
+           * row was written with a NULL provider id.
+           *
+           * `?? ""` rather than a non-null assertion: `Schema$MessagePart.partId`
+           * is `string | null | undefined`, and the payload's OWN partId is the
+           * empty string on a single-part message. Empty is treated as ABSENT by
+           * the gates downstream (`partId || ...`), which fall back to exactly the
+           * pre-BACKLOG-3187 behaviour rather than keying on "".
+           */
+          partId: part.partId ?? "",
           attachmentId: part.body.attachmentId,
         });
       }
@@ -1141,7 +1172,25 @@ class GmailFetchService {
       // BACKLOG-1802: upper date bound propagated to every label for delta windowing.
       before?: Date | null;
       maxResults?: number;
-      onProgress?: (progress: FetchProgress & { label?: string; currentLabel?: string }) => void;
+      /**
+       * Per-batch progress, forwarded from each label's own body loop.
+       *
+       * `fetched` / `percentage` describe THE CURRENT LABEL ONLY and restart at
+       * zero on every label, so a caller drawing a bar from them alone would see
+       * it reset once per label. `labelIndex` / `labelCount` are the walk-level
+       * pair that is monotone; see the same note on
+       * `outlookFetchService.searchAllFolders`.
+       */
+      onProgress?: (
+        progress: FetchProgress & {
+          label?: string;
+          currentLabel?: string;
+          /** 0-based index of the label being fetched. */
+          labelIndex?: number;
+          /** How many labels the walk will visit in total. */
+          labelCount?: number;
+        },
+      ) => void;
       /** BACKLOG-2856: stop between labels, and inside each label's paging. */
       signal?: AbortSignal;
     } = {}
@@ -1160,7 +1209,8 @@ class GmailFetchService {
       const seenMessageIds = new Set<string>();
       const allEmails: ParsedEmail[] = [];
 
-      for (const label of labels) {
+      for (let labelIndex = 0; labelIndex < labels.length; labelIndex++) {
+        const label = labels[labelIndex];
         // BACKLOG-2856: the between-label check — Gmail's counterpart to the
         // between-folder check in `outlookFetchService.searchAllFolders`. One
         // `searchAllLabels` call walks every label, so without this a cancel was
@@ -1183,6 +1233,8 @@ class GmailFetchService {
                   options.onProgress!({
                     ...progress,
                     currentLabel: label.name,
+                    labelIndex,
+                    labelCount: labels.length,
                   });
                 }
               : undefined,

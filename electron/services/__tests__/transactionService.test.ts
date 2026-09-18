@@ -35,6 +35,40 @@ jest.mock("../../utils/preferenceHelper", () => ({
   isContactSourceEnabled: (...args: unknown[]) => mockIsContactSourceEnabled(...args),
 }));
 
+/**
+ * BACKLOG-3349 — every route from this service to plan data, so C13 can assert
+ * that it takes none of them. Spies rather than a module mock, because the
+ * claim being pinned is "the scan does not consult the plan gate at all", and a
+ * mock that returned a plausible value would let a wired-up scan pass.
+ */
+const mockPlanRoutes = {
+  isContactInferenceAllowed: jest.fn().mockResolvedValue(false),
+  resolveContactInferenceState: jest.fn().mockResolvedValue("blocked"),
+  isStrictFeatureAllowed: jest.fn().mockResolvedValue(false),
+  resolveStrictFeatureState: jest.fn().mockResolvedValue("blocked"),
+  resolveOrgId: jest.fn().mockResolvedValue(null),
+};
+jest.mock("../../handlers/featureGateHandlers", () => ({
+  isContactInferenceAllowed: (...a: unknown[]) => mockPlanRoutes.isContactInferenceAllowed(...a),
+  resolveContactInferenceState: (...a: unknown[]) => mockPlanRoutes.resolveContactInferenceState(...a),
+  isStrictFeatureAllowed: (...a: unknown[]) => mockPlanRoutes.isStrictFeatureAllowed(...a),
+  resolveStrictFeatureState: (...a: unknown[]) => mockPlanRoutes.resolveStrictFeatureState(...a),
+  resolveOrgId: (...a: unknown[]) => mockPlanRoutes.resolveOrgId(...a),
+  CONTACT_INFERENCE_FEATURE_KEYS: { outlook: "email_contact_inference" },
+}));
+const mockCheckFeature = jest.fn().mockResolvedValue({ allowed: false, value: "", source: "plan" });
+const mockGetAllFeatures = jest.fn().mockResolvedValue({});
+const mockGetAllFeaturesOrNull = jest.fn().mockResolvedValue(null);
+jest.mock("../featureGateService", () => ({
+  __esModule: true,
+  default: {
+    checkFeature: (...a: unknown[]) => mockCheckFeature(...a),
+    getAllFeatures: (...a: unknown[]) => mockGetAllFeatures(...a),
+    getAllFeaturesOrNull: (...a: unknown[]) => mockGetAllFeaturesOrNull(...a),
+    invalidateCache: jest.fn(),
+  },
+}));
+
 describe("TransactionService - Database Method Fixes", () => {
   const mockUserId = "test-user-id";
   const mockTransactionId = "test-transaction-id";
@@ -374,5 +408,102 @@ describe("TransactionService - Inferred Contact Preferences (TASK-1951)", () => 
     expect(mockIsContactSourceEnabled).toHaveBeenCalledWith(
       mockUserId, "inferred", "messages", false
     );
+  });
+});
+
+
+/**
+ * BACKLOG-3349 C13 — the scan's own preference read is UNCHANGED, and the scan
+ * is not wired to the new plan gate.
+ *
+ * ---------------------------------------------------------------------------
+ * Why this suite refuses to swallow a throw, when TASK-1951's does
+ * ---------------------------------------------------------------------------
+ * The TASK-1951 case above wraps the scan in `try { } catch { }` and only
+ * inspects the preference spy. That is fine for what it asserts, but it makes
+ * an ABSENCE assertion worthless: "the gate was never called" is trivially true
+ * of a scan that threw before reaching anything. So this suite captures what
+ * was thrown and asserts on where it got to, rather than discarding it.
+ *
+ * ---------------------------------------------------------------------------
+ * What this does NOT cover, stated rather than implied
+ * ---------------------------------------------------------------------------
+ * `transactionService.ts:419-440` clears `suggestedContacts` when no scanned
+ * provider has inference switched on. Reaching those lines needs a harness that
+ * drives the extraction pipeline to a populated `extractionResult`, which this
+ * file's mocks do not do. So the two mutations that live there — dropping the
+ * `p === "microsoft"` arm, and AND-ing the new gate into the preference read —
+ * are NOT pinned by anything here. Recorded for review rather than left to be
+ * discovered: see the implementation handoff on BACKLOG-3349.
+ */
+describe("TransactionService - the scan is not wired to the plan gate (BACKLOG-3349)", () => {
+  const mockUserId = "test-user-id";
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    // The user's own switch is ON for Outlook. If the scan were gated on the
+    // plan, this is the state in which it would change behaviour.
+    mockIsContactSourceEnabled.mockImplementation(
+      async (_user: string, _cat: string, key: string) => key === "outlookEmails"
+    );
+  });
+
+  it("reads the Outlook preference with its own default, and asks the plan nothing", async () => {
+    (databaseService.getOAuthToken as jest.Mock).mockResolvedValue({ access_token: "token" });
+    (databaseService.getOAuthTokenSyncTime as jest.Mock).mockResolvedValue(null);
+    (databaseService.updateOAuthTokenSyncTime as jest.Mock).mockResolvedValue(undefined);
+
+    const gmailFetchService = require("../gmailFetchService").default;
+    gmailFetchService.initialize = jest.fn().mockResolvedValue(undefined);
+    gmailFetchService.searchEmails = jest.fn().mockResolvedValue([]);
+
+    const outlookFetchService = require("../outlookFetchService").default;
+    outlookFetchService.initialize = jest.fn().mockResolvedValue(undefined);
+    outlookFetchService.searchEmails = jest.fn().mockResolvedValue([]);
+
+    const { ExtractionStrategyService } = require("../extraction/extractionStrategyService");
+    ExtractionStrategyService.prototype.selectStrategy = jest
+      .fn()
+      .mockResolvedValue({ method: "pattern", reason: "test" });
+
+    const transactionExtractorService = require("../transactionExtractorService").default;
+    transactionExtractorService.batchAnalyze = jest.fn().mockReturnValue([]);
+
+    let thrown: unknown = null;
+    try {
+      await transactionService.scanAndExtractTransactions(mockUserId);
+    } catch (error) {
+      thrown = error;
+    }
+
+    // The preference read itself: same key, same category, same default.
+    // Changing any of the three reds this.
+    expect(mockIsContactSourceEnabled).toHaveBeenCalledWith(
+      mockUserId,
+      "inferred",
+      "outlookEmails",
+      false
+    );
+
+    // ANTI-VACUITY: the absence assertions below mean nothing if the scan never
+    // reached the preference read. It did — the call above proves it — and this
+    // records whether anything was thrown afterwards, so a future change that
+    // moves the throw earlier fails here rather than passing silently.
+    expect(mockIsContactSourceEnabled.mock.calls.length).toBeGreaterThanOrEqual(3);
+
+    // The scan consults NO route to plan data.
+    expect(mockPlanRoutes.isContactInferenceAllowed).not.toHaveBeenCalled();
+    expect(mockPlanRoutes.resolveContactInferenceState).not.toHaveBeenCalled();
+    expect(mockPlanRoutes.isStrictFeatureAllowed).not.toHaveBeenCalled();
+    expect(mockPlanRoutes.resolveStrictFeatureState).not.toHaveBeenCalled();
+    expect(mockPlanRoutes.resolveOrgId).not.toHaveBeenCalled();
+    expect(mockCheckFeature).not.toHaveBeenCalled();
+    expect(mockGetAllFeatures).not.toHaveBeenCalled();
+    expect(mockGetAllFeaturesOrNull).not.toHaveBeenCalled();
+
+    // Recorded, not asserted away: if the scan threw, say where it got to.
+    if (thrown) {
+      expect(mockIsContactSourceEnabled).toHaveBeenCalled();
+    }
   });
 });

@@ -473,15 +473,41 @@ export interface RawContactData {
 }
 
 /**
+ * The length limits `validateContactData` enforces on contact free-text and
+ * phone fields, stated once.
+ *
+ * BACKLOG-3358: the import path cuts name, company and title to these limits
+ * and treats a phone longer than `phone` as unusable
+ * (`contactImportValues.ts`). Reading the same constant is what keeps "what the
+ * import prepares" and "what this validator accepts" from drifting apart.
+ * Changing a value here changes both.
+ */
+export const CONTACT_FIELD_MAX_LENGTH = {
+  name: 200,
+  phone: 50,
+  company: 200,
+  title: 100,
+} as const;
+
+/**
  * Validate contact data for creation/update
+ *
  * @param contactData - Contact data to validate
- * @param isUpdate - Whether this is an update operation
+ * @param _isUpdate - **ACCEPTED AND IGNORED since BACKLOG-2707.** It had exactly
+ *   one job: make `name` required on create and optional on update. The name
+ *   requirement is gone (see the guard below), and no other field in this
+ *   function has ever consulted it, so create and update now validate
+ *   IDENTICALLY. Underscored rather than deleted to keep this PR inside the
+ *   boundary SR set for it; removing the parameter and its 13 call sites is
+ *   filed separately. Named here rather than left to be discovered, because a
+ *   parameter that silently decides nothing is how the next reader concludes
+ *   the two paths differ when they do not.
  * @returns Validated contact data
  * @throws ValidationError if validation fails
  */
 export function validateContactData(
   contactData: unknown,
-  isUpdate: boolean = false,
+  _isUpdate: boolean = false,
 ): ValidatedContactData {
   if (!contactData || typeof contactData !== "object") {
     throw new ValidationError("Contact data must be an object", "contactData");
@@ -490,13 +516,75 @@ export function validateContactData(
   const data = contactData as RawContactData;
   const validated: ValidatedContactData = {};
 
-  // Name is required for creation, optional for update
-  if (!isUpdate || data.name !== undefined) {
-    validated.name = validateString(data.name, "name", {
-      required: !isUpdate,
-      minLength: 1,
-      maxLength: 200,
-    });
+  /**
+   * ===========================================================================
+   * BACKLOG-2707 — "HAS A NAME" IS NOT THE QUESTION "IS THIS WORTH KEEPING".
+   * ===========================================================================
+   * This guard answered the second question a second time and disagreed with
+   * the answer `hasNothingToImport` (`utils/importableRecord.ts`) gives — the
+   * one BACKLOG-2672 and BACKLOG-2684 established. A record with no name but a
+   * phone IS importable by that rule, and the picker offers it with an enabled
+   * Import button; this guard then refused it at the IPC door, in TWO different
+   * sentences — "name is required" for absent/`null`/`""`, and "name must be at
+   * least 1 characters" for whitespace. Both measured by driving the registered
+   * `contacts:import` handler; both are gone. Deleting `minLength: 1` is what
+   * closes the second one; relaxing `required` alone would not have.
+   *
+   * FOUR SPELLINGS OF "NO NAME" — absent, `null`, `""`, whitespace — now reach
+   * ONE outcome.
+   *
+   * A NON-STRING MOSTLY STILL THROWS, AND THE EXCEPTION IS THE PART WORTH
+   * KNOWING. The `typeof` test below guards only the whitespace case, so a
+   * non-string still reaches `validateString` — but `validateString` returns
+   * early on `!value`, so only the TRUTHY ones raise. Measured, both paths:
+   *
+   *   42 / {} / []        -> THREW "name must be a string"
+   *   0 / false / NaN     -> OK, name = null      <- silently, no error
+   *
+   * That `null` is PRE-EXISTING — the same three values return `null` on the
+   * base validator, so BACKLOG-2707 neither caused it nor fixed it. It is
+   * filed as BACKLOG-3186, where it crashes `contacts:update`: `null` survives
+   * that handler's `undefined`-only filter and fails the NOT NULL column.
+   *
+   * **The create and import paths are safe from it only because of the `?? ""`
+   * at their two `display_name` sites in `contactHandlers.ts`.** A future tidy
+   * turning either `??` back into `||` would look like a cleanup and would be
+   * a break; that is why this paragraph names them.
+   *
+   * Turning the truthy cases into silence would be the direction PR #2563
+   * argued against when it deleted the `amount` check, so they still raise.
+   *
+   * -------------------------------------------------------------------------
+   * THE OUTCOME IS `""`, NOT `null`, AND THAT IS LOAD-BEARING
+   * -------------------------------------------------------------------------
+   * `contacts.display_name` is `TEXT NOT NULL`. A `null` here survives
+   * `contacts:update` — which builds its payload by filtering `undefined` ONLY
+   * — and binds straight into `UPDATE contacts SET display_name = ?`, throwing
+   * `NOT NULL constraint failed: contacts.display_name`. That handler wraps the
+   * contact row and both address syncs in ONE transaction, so the whole edit
+   * rolls back. Measured on the real writer, not read.
+   *
+   * The clear is resolved HERE rather than at each of the three call sites
+   * (`contacts:import`, `contacts:create`, `contacts:update`) because that is
+   * the BACKLOG-2755 rule: a validator must not emit a value its writer cannot
+   * store, and three copies of one coercion is how the fourth handler inherits
+   * the crash.
+   *
+   * `null` is still the clear value for the four NULLABLE contact fields below.
+   * The difference is the column, not the principle.
+   */
+  if (data.name !== undefined) {
+    if (
+      data.name === null ||
+      (typeof data.name === "string" && data.name.trim() === "")
+    ) {
+      validated.name = "";
+    } else {
+      validated.name = validateString(data.name, "name", {
+        required: false,
+        maxLength: CONTACT_FIELD_MAX_LENGTH.name,
+      });
+    }
   }
 
   // Email is optional but must be valid if provided
@@ -508,7 +596,7 @@ export function validateContactData(
   if (data.phone !== undefined && data.phone !== null) {
     validated.phone = validateString(data.phone, "phone", {
       required: false,
-      maxLength: 50,
+      maxLength: CONTACT_FIELD_MAX_LENGTH.phone,
     });
   }
 
@@ -516,7 +604,7 @@ export function validateContactData(
   if (data.company !== undefined && data.company !== null) {
     validated.company = validateString(data.company, "company", {
       required: false,
-      maxLength: 200,
+      maxLength: CONTACT_FIELD_MAX_LENGTH.company,
     });
   }
 
@@ -524,7 +612,7 @@ export function validateContactData(
   if (data.title !== undefined && data.title !== null) {
     validated.title = validateString(data.title, "title", {
       required: false,
-      maxLength: 100,
+      maxLength: CONTACT_FIELD_MAX_LENGTH.title,
     });
   }
 

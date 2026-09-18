@@ -232,6 +232,15 @@ export interface PendingAttachmentMeta {
   readonly filename: string;
   readonly mimeType: string | null;
   readonly fileSizeBytes: number | null;
+  /**
+   * BACKLOG-2551: already gated by persistEmailAttachmentMetadata. BACKLOG-3187:
+   * that gate now yields Gmail's `partId` as well as Outlook's Graph id, so a force
+   * re-cache carries identity for BOTH providers rather than for one. Without this
+   * field a force re-cache would write NULL for every provider and silently drop
+   * its rows out of idx_attachments_email_provider — with nothing red, since the
+   * applier just passes the row through.
+   */
+  readonly providerAttachmentId: string | null;
 }
 
 export interface EmailForceStaging {

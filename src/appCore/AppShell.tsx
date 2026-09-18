@@ -35,7 +35,6 @@ export function AppShell({ app, children }: AppShellProps) {
     isDatabaseInitialized,
     currentUser,
     authProvider,
-    hasPermissions,
     isTourActive,
     needsTermsAcceptance,
     isOnline,
@@ -161,11 +160,39 @@ export function AppShell({ app, children }: AppShellProps) {
       {/* BACKLOG-2127: mount whenever on the dashboard, NOT gated on
           hasEmailConnected — otherwise the reconnect banner unmounts exactly
           when a stored connection's token breaks (hasEmailConnected flips
-          false), so the user never sees a reconnect prompt. */}
+          false), so the user never sees a reconnect prompt.
+
+          BACKLOG-3219: `hasPermissions` is gone from this gate for the same
+          class of reason, one subsystem over. SystemHealthMonitor is the
+          component that REPORTS a missing permission — `diagnosticHandlers`
+          pushes `permissions.errors` into its issue list precisely when
+          `!permissions.allGranted` — so gating it on that permission being
+          PRESENT meant the banner could never fire for the users it exists to
+          help. The condition was redundant when permissions are fine and
+          inverted when they are not.
+
+          Nothing replaces it, deliberately. The component already decides its
+          own visibility (`if (hidden || visibleIssues.length === 0) return
+          null`), so a healthy Mac renders nothing from a mounted monitor.
+          Substituting `!hasPermissions` would be the same mistake pointed the
+          other way — it would suppress the OAuth reconnect banner for every
+          user who HAS granted Full Disk Access, i.e. nearly all of them.
+
+          Not a regression from BACKLOG-3212: before it, a user without Full
+          Disk Access never reached the dashboard, so this gate was never
+          exercised in the failing direction. 3212 correctly releases a user
+          who skipped, and that is what made the inversion reachable.
+
+          The remaining conditions were each re-examined and kept.
+          `isAuthenticated` / `currentUser` because `currentUser.id` is both
+          the `userId` prop and the remount `key`; `authProvider` because it
+          supplies the `provider` prop; `currentStep === "dashboard"` because
+          that is the surface this banner belongs to. `isTourActive` and
+          `needsTermsAcceptance` are NOT render conditions — they are the
+          `hidden` prop below, which the component honours itself. */}
       {isAuthenticated &&
         currentUser &&
         authProvider &&
-        hasPermissions &&
         currentStep === "dashboard" && (
           <SystemHealthMonitor
             key={`health-monitor-${currentUser.id}`}

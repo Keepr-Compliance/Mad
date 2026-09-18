@@ -100,7 +100,7 @@ const completeUserData = {
   hasCompletedEmailOnboarding: true,
   hasEmailConnected: true,
   needsDriverSetup: false,
-  hasPermissions: true,
+  fda: "granted" as const,
 };
 
 // Test states

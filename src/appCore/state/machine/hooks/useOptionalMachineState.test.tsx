@@ -81,7 +81,7 @@ describe("useOptionalMachineState", () => {
           hasCompletedEmailOnboarding: true,
           hasEmailConnected: true,
           needsDriverSetup: false,
-          hasPermissions: true,
+          fda: "granted",
         },
       };
 

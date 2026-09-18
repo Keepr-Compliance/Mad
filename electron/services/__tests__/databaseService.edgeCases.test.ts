@@ -108,6 +108,8 @@ import fs from "fs";
 describe("DatabaseService - Edge Cases", () => {
   let databaseService: typeof import("../databaseService").default;
 
+  let parkedMigrations: unknown[] | undefined;
+
   beforeEach(async () => {
     jest.clearAllMocks();
     jest.resetModules();
@@ -129,6 +131,23 @@ describe("DatabaseService - Edge Cases", () => {
     // Re-import to get fresh instance
     const module = await import("../databaseService");
     databaseService = module.default;
+
+    // BACKLOG-2551: park the real migration chain. This suite drives initialize()
+    // against a fully-mocked better-sqlite3, where a real migration body cannot
+    // run, so a non-empty chain sends every test into the migration-failure path.
+    // Not this suite's subject; v71's body is covered against the REAL driver in
+    // databaseService.migration-v71.test.ts.
+    parkedMigrations = (
+      databaseService.constructor as unknown as { MIGRATIONS: unknown[] }
+    ).MIGRATIONS;
+    (databaseService.constructor as unknown as { MIGRATIONS: unknown[] }).MIGRATIONS = [];
+  });
+
+  afterEach(() => {
+    if (parkedMigrations && databaseService) {
+      (databaseService.constructor as unknown as { MIGRATIONS: unknown[] }).MIGRATIONS =
+        parkedMigrations;
+    }
   });
 
   describe("NULL/undefined input handling", () => {

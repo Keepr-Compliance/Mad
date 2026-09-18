@@ -282,3 +282,69 @@ describe("BACKLOG-2856 — the confirmation dialog is unchanged and still gates 
     expect(mockPrecacheEmails).not.toHaveBeenCalled();
   });
 });
+
+/* ===========================================================================
+ * THE LABEL NAMES THE ROUND
+ * ===========================================================================
+ * "Downloading emails..." covered all four fetch rounds and several minutes,
+ * so the panel said the same sentence throughout and gave the user nothing to
+ * tell progress from a hang. The `stage` field names the round; the generic
+ * sentence remains the fallback, because the boundary events, the backfill
+ * sweep and any older main process carry no stage at all.
+ * ======================================================================== */
+describe("the fetch label names the round when the event names one", () => {
+  /**
+   * MUTATION: stop passing `stage: progress.stage` into `setRecacheProgress`,
+   * or drop `emailPrecacheStageDisplayFor` from the label expression -> RED
+   * (every case falls back to "Downloading emails").
+   */
+  it.each([
+    ["outlook-inbox", /Downloading your Outlook mailbox/i],
+    ["outlook-folders", /Downloading your other Outlook folders/i],
+    ["gmail-messages", /Downloading your Gmail messages/i],
+    ["gmail-labels", /Downloading your Gmail labels/i],
+  ])("names the %s round", async (stage, expected) => {
+    const user = userEvent.setup();
+    const gate = pendingPrecache();
+    renderPanel();
+    await waitFor(() => expect(screen.getByTestId("recache-emails")).toBeInTheDocument());
+
+    await user.click(screen.getByTestId("recache-emails"));
+    emitProgress({ phase: "fetching", stage, current: 1204, total: 1204, percent: 21 });
+
+    const label = screen.getByTestId("recache-progress-label");
+    expect(label).toHaveTextContent(expected);
+    // The count still reaches the user — the round name replaces the generic
+    // sentence, it does not replace the number beside it.
+    expect(label).toHaveTextContent("1,204");
+    expect(label).not.toHaveTextContent(/Downloading emails/i);
+
+    gate.release({ success: true, emailsStored: 0, emailsFetched: 0 });
+  });
+
+  /**
+   * CONTROL — an unnamed round keeps the sentence it has always had.
+   *
+   * Both real cases: the between-providers boundary event carries no stage, and
+   * so does every event from a main process built before this field existed. An
+   * unknown stage must not be given some other round's label.
+   */
+  it.each([
+    ["no stage at all", undefined],
+    ["a stage this build has never heard of", "imap-inbox"],
+  ])("falls back to the generic sentence for %s", async (_name, stage) => {
+    const user = userEvent.setup();
+    const gate = pendingPrecache();
+    renderPanel();
+    await waitFor(() => expect(screen.getByTestId("recache-emails")).toBeInTheDocument());
+
+    await user.click(screen.getByTestId("recache-emails"));
+    emitProgress({ phase: "fetching", stage, current: 12, total: 12, percent: 50 });
+
+    const label = screen.getByTestId("recache-progress-label");
+    expect(label).toHaveTextContent(/Downloading emails/i);
+    expect(label).toHaveTextContent("12");
+
+    gate.release({ success: true, emailsStored: 12, emailsFetched: 12 });
+  });
+});

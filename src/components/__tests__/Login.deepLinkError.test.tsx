@@ -4,7 +4,7 @@
  * BACKLOG-2173b root cause: on a fresh macOS profile, a deep-link login can
  * dead-end when the FDA-grant relaunch outruns session persistence. Part of
  * the fix is honest error copy: LOGIN_RETRY_CONFIG.maxRetries is 0, so a
- * single 60s callback timeout was reaching the "max retries reached" branch
+ * single callback timeout was reaching the "max retries reached" branch
  * and showing "Login failed after multiple attempts" -- misleading, since
  * exactly ONE attempt was made (retryAttempt is always 0 with maxRetries: 0).
  *

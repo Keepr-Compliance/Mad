@@ -58,14 +58,7 @@
 
 import { realContactName } from "./contactDisplayLabel";
 
-/**
- * The reason a refusal carries. Mirrors the renderer string exactly — the
- * parity test asserts the two are identical, because a caller that shows the
- * handler's message next to the button's message must not show two different
- * sentences for one rule.
- */
-export const NOTHING_TO_IMPORT_REASON =
-  "No name, phone, or email — nothing to import";
+
 
 /**
  * The fields that decide whether there is anything to import.
@@ -95,24 +88,122 @@ function anyUsable(values: (string | null | undefined)[]): boolean {
 }
 
 /**
- * Nothing on this record to make a contact out of.
+ * Nothing on this record to make a contact out of AT ALL.
  *
- * THE PREDICATE IS DELIBERATELY NARROW, and every widening breaks a real
- * record. Control 2 of the founder's BACKLOG-2672 decision is that a record
- * with NO NAME but WITH A PHONE stays importable — 23 such records were parsed
- * at his last app start.
+ * THE LOOSER OF THE TWO RULES, and the one every other rule is derived from.
+ * It answers "may this be SAVED?" — the question `contacts:create` and the Add
+ * Contact form ask. `hasNothingToImport` below answers the narrower question by
+ * CALLING this one, so the two can never drift apart.
  *
- *  - COMPANY counts as a name. The display chain's second tier is the company,
- *    so a company-only record renders as "Vantrees Realty" on screen. Refusing
- *    it with "no name" would be false on its face.
+ * THE PREDICATE IS DELIBERATELY NARROW. Control 2 of the founder's decision is
+ * that a record with NO NAME but WITH A PHONE must stay importable — 23 such
+ * records were parsed at his last app start, and they are the common, useful
+ * case. Every widening of this function is a step toward breaking them:
+ *
+ *  - COMPANY counts. The display chain's second tier is the company, so a
+ *    company-only record renders as "Acme Corp" on screen. Refusing to SAVE
+ *    that would be false on its face — and PM decision `5fac2d84` (2026-09-07,
+ *    on the founder's delegated authority) makes it explicit: blocking
+ *    hand-creation does not stop the data, it makes the user type the company
+ *    into the NAME field, which is strictly worse. Import treats it differently
+ *    — see below — and that is the ONLY difference between the two rules.
  *  - NO DIGIT TEST on phones. An iMessage handle can be an Apple ID that is
- *    neither digits nor an email address and identifies a person perfectly
+ *    neither digits nor an email address, and it identifies a person perfectly
  *    well. Non-empty and non-placeholder is the whole test.
  */
-export function hasNothingToImport(contact: ImportableRecordParts): boolean {
+export function hasNothingToSave(contact: ImportableRecordParts): boolean {
   if (usable(contact.display_name) || usable(contact.name)) return false;
   if (usable(contact.company)) return false;
   if (anyUsable([contact.phone, ...(contact.allPhones ?? [])])) return false;
   if (anyUsable([contact.email, ...(contact.allEmails ?? [])])) return false;
   return true;
+}
+
+/**
+ * Nothing on this record to IMPORT. Strictly narrower than `hasNothingToSave`,
+ * BY CONSTRUCTION rather than by agreement.
+ *
+ * ===========================================================================
+ * WHY THIS CALLS THE OTHER RULE INSTEAD OF RESTATING IT
+ * ===========================================================================
+ * BACKLOG-2707 is an item about two rules that were supposed to agree and did
+ * not — the renderer offered an Import button the handler then refused. It was
+ * fixed at the validator, and the founder's testing gate found the SAME shape
+ * again in the renderer, and again in the Add Contact form. Writing a second
+ * field list here, however carefully it matched on the day it was written,
+ * would be that defect with new names.
+ *
+ * So the single import-specific fact — **a company is not an identifier you can
+ * import somebody on** — is expressed as ONE FIELD OVERRIDE, and every other
+ * field is inherited. Two properties follow and neither needs asserting:
+ *
+ *  1. Blanking a field can only move `hasNothingToSave` toward `true`, so
+ *     nothing unsaveable can be importable. `importable ⊂ saveable` holds by
+ *     construction.
+ *  2. A new identifier added to `hasNothingToSave` — a second email column, a
+ *     messaging handle — is honoured here for free, with nothing to remember.
+ *
+ * PM decision `5fac2d84`: import is inference, creation is intent. A nameless
+ * record arriving from a sync is Keepr guessing a scrap is worth keeping; a
+ * person typing a company name and pressing Save has said what they want.
+ */
+export function hasNothingToImport(contact: ImportableRecordParts): boolean {
+  return hasNothingToSave({ ...contact, company: null });
+}
+
+/**
+ * The reason, shown ON the disabled control — never in a tooltip.
+ *
+ * FOUNDER DECISION, 12 Aug (BACKLOG-2672, option 2): the reason must name the
+ * MISSING THING, not the rule. "This record cannot be imported" tells him
+ * nothing the grey button did not.
+ *
+ * His example string was *"No name or phone number — nothing to import"*. It
+ * omits email while his rule names all three fields, and a record that shows
+ * this string is missing all three — so the complete list is the accurate one.
+ *
+ * ===========================================================================
+ * BACKLOG-2707 — WHY THERE ARE NOW TWO STRINGS AND NOT ONE
+ * ===========================================================================
+ * Once a company-only record became un-importable (PM decision `5fac2d84`),
+ * ONE string could no longer be true of every record it covered. Measured: a
+ * row rendering the label **"Vantrees Realty Test"** — because `labelForContact`
+ * shows the company when there is no name — displayed a disabled button reading
+ * "No name, phone, or email — nothing to import". Literally true of the three
+ * fields; false to the person reading it, beside a row that is plainly showing
+ * a name.
+ *
+ * A disabled button stating an untrue reason is THIS ITEM'S OWN DEFECT one
+ * layer down: a control that says one thing and means another. So the reason is
+ * chosen per record by `importRefusalReason`, and each string is true of
+ * exactly the records it is shown on.
+ */
+export const NOTHING_TO_IMPORT_REASON =
+  "No name, phone, or email — nothing to import";
+
+/**
+ * Shown when the record HAS a company and nothing else.
+ *
+ * It must read true next to the label on that same row, which is the company
+ * name itself. It says what is missing and it says what would fix it, without
+ * claiming the row is empty — which the reader can see it is not.
+ */
+export const COMPANY_ONLY_IMPORT_REASON =
+  "A company on its own can't be imported — needs a name, phone, or email";
+
+/**
+ * WHICH reason this record gets, decided once so every surface agrees.
+ *
+ * Returns `null` when there is nothing to refuse. Both `importBlockedReason`
+ * (the renderer's disabled-button text) and the `contacts:import` handler's
+ * refusal message read it, so the string a user sees on the button is the same
+ * string the door gives back — the disagreement this whole item is about.
+ */
+export function importRefusalReason(
+  contact: ImportableRecordParts,
+): string | null {
+  if (!hasNothingToImport(contact)) return null;
+  return usable(contact.company)
+    ? COMPANY_ONLY_IMPORT_REASON
+    : NOTHING_TO_IMPORT_REASON;
 }

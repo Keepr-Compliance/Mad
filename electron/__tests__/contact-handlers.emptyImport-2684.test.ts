@@ -322,38 +322,47 @@ describe("contacts:import refuses a record with nothing on it (BACKLOG-2684)", (
 
 /**
  * ===========================================================================
- * THE PREDICATE MUST NOT BE THE THING THAT REFUSES THESE
+ * THE PREDICATE MUST NOT BE THE THING THAT REFUSES THESE — AND NOW NOTHING IS
  * ===========================================================================
  * Control 2 of the founder's BACKLOG-2672 decision is that a record with NO
- * NAME but WITH a phone stays importable. Asserting `refused === false` here
- * would be WRONG, and measuring it is what proved that:
+ * NAME but WITH a phone stays importable.
  *
- *   {name:"", phone:"+14155550142"}  ->  pre-fix: REFUSED, "name is required"
- *   {name:"", email:"d@e.com"}       ->  pre-fix: REFUSED, "name is required"
- *   {name:"", company:"Vantrees"}    ->  pre-fix: REFUSED, "name is required"
+ * WHEN THIS FILE WAS WRITTEN, ASSERTING `refused === false` HERE WOULD HAVE
+ * BEEN WRONG, and measuring it is what proved that:
  *
- * `contacts:import` has ALWAYS refused those, because `validateContactData`
- * requires a non-empty `name`. That shape is not hypothetical — it is exactly
- * what `contacts:get-available` emits for an `external_contacts` row with an
- * empty `name`, transcribed from the real producer rather than invented:
+ *   {name:"", phone:"+14155550142"}  ->  REFUSED, "name is required"
+ *   {name:"", email:"d@e.com"}       ->  REFUSED, "name is required"
+ *   {name:"", company:"Vantrees"}    ->  REFUSED, "name is required"
  *
- *   { id:"ext-1", name:"", phone:"+14155550142", email:null, company:null,
- *     allPhones:["+14155550142"], allEmails:[], isFromDatabase:false, ... }
+ * `validateContactData` required a non-empty `name`, so `contacts:import` had
+ * ALWAYS refused those — while `hasNothingToImport` called every one of them
+ * importable and the picker offered them with an enabled Import button. These
+ * three tests pinned that refusal and, crucially, ATTRIBUTED it: the error had
+ * to be `name is required` and must NOT be `nothing to import`, so that a later
+ * widening of the 2684 predicate would go red instead of quietly making the
+ * disagreement worse. That attribution is what made BACKLOG-2707 findable.
  *
- * So the boundary the 2672 decision names is ALREADY crossed in the main
- * process, and the renderer offers an Import button that the handler then
- * rejects. **That is a separate live defect, filed rather than fixed here** —
- * repairing it means deciding what `display_name` a nameless contact gets, and
- * `display_name: validatedData.name || "Unknown"` is BACKLOG-2461/2464
- * territory and a founder call.
+ * BACKLOG-2707 FIXED IT, so the assertions are FLIPPED rather than deleted.
+ * Deleting them would erase the record of a defect this suite discovered. The
+ * name requirement is gone from `validateContactData`; the handler and the
+ * writer store `""` instead of the literal "Unknown"; and all three records
+ * below now import. `hasNothingToImport` is still not what decides — nothing
+ * refuses them at all.
  *
- * What these tests DO gate is the thing this PR could break: that the NEW
- * predicate is not too broad. Each record below must be refused by the
- * PRE-EXISTING name check and NOT by `hasNothingToImport` — so if someone
- * widens the predicate later, these go red.
+ * WHAT THESE THREE STILL GATE, and it is a narrower claim than it looks: that
+ * the predicate has not been widened to swallow a record with an identifier on
+ * it. The seven tests above are the other half — a record with genuinely
+ * nothing on it is still refused whole.
+ *
+ * WHAT THEY DO NOT GATE: the value actually stored. This file's
+ * `createContactsBatch` mock writes `row.display_name` raw and its INSERT omits
+ * `company` and `title` entirely, so it cannot go red on the writer's own
+ * substitution and cannot see a company at all. That claim lives in
+ * `electron/services/db/__tests__/contactDbService.namelessDisplayName-2707.test.ts`,
+ * which drives the real writer. Do not mistake one for the other.
  */
-describe("the new predicate is not the thing refusing a nameless-but-identified record", () => {
-  it("a record with no name but a phone is not refused by the import predicate", async () => {
+describe("a nameless-but-identified record is refused by nothing (BACKLOG-2707)", () => {
+  it("a record with no name but a phone imports", async () => {
     const outcome = await importRecords([
       {
         id: "ext-1",
@@ -367,23 +376,39 @@ describe("the new predicate is not the thing refusing a nameless-but-identified 
       },
     ]);
 
-    expect(outcome.error).toMatch(/name is required/i);
-    expect(outcome.error).not.toMatch(/nothing to import/i);
+    expect(outcome.refused).toBe(false);
+    expect(outcome.error).toBeNull();
+    expect(rowsCreated()).toBe(1);
+    // The two messages that used to refuse it, both named so a regression to
+    // either one is legible rather than a bare "expected false".
+    expect(createdRows[0].display_name).not.toMatch(/unknown/i);
   });
 
-  it("a record with no name but an email is not refused by the import predicate", async () => {
+  it("a record with no name but an email imports", async () => {
     const outcome = await importRecords([
       { name: "", email: "dana@example.com", allPhones: [], allEmails: ["dana@example.com"] },
     ]);
 
-    expect(outcome.error).toMatch(/name is required/i);
-    expect(outcome.error).not.toMatch(/nothing to import/i);
+    expect(outcome.refused).toBe(false);
+    expect(rowsCreated()).toBe(1);
   });
 
-  it("a company-only record is not refused by the import predicate", async () => {
+  /**
+   * REVERSED by founder ruling `a41a805b` (2026-09-07). It read "a company-only
+   * record imports". A company alone is not somebody to import — but it is
+   * still something a user may CREATE by hand, which is PM decision `5fac2d84`
+   * and is pinned in `contact-handlers.namelessImport-2707.test.ts`.
+   *
+   * It still is not `hasNothingToImport`'s *empty-record* branch that refuses
+   * it, which is what this describe exists to distinguish: the reason names the
+   * company rather than claiming the row is blank.
+   */
+  it("a company-only record is refused — and told why, accurately", async () => {
     const outcome = await importRecords([{ name: "", company: "Vantrees Realty" }]);
 
-    expect(outcome.error).toMatch(/name is required/i);
+    expect(outcome.refused).toBe(true);
+    expect(outcome.error).toMatch(/company on its own/i);
     expect(outcome.error).not.toMatch(/nothing to import/i);
+    expect(rowsCreated()).toBe(0);
   });
 });

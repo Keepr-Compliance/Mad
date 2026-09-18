@@ -64,6 +64,11 @@ describe("SessionService - Initialization Bug Fix", () => {
   beforeEach(async () => {
     jest.clearAllMocks();
     jest.resetModules();
+    // BACKLOG-2962: resetModules gave us a fresh capability provider with nothing
+    // installed. Re-install, or the first secret-store call throws -- and this
+    // suite's write assertions need the encrypted path, not a store that cannot
+    // answer. Same line as sessionService.test.ts and sessionService.encryption.test.ts.
+    require("../../../tests/helpers/installTestSecretStore").installTestSecretStore();
 
     // Reset mock implementations
     mockFs.writeFile.mockResolvedValue(undefined);

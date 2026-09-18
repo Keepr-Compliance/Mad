@@ -51,19 +51,22 @@
  * matcher would then believe the user had confirmed something the card does not
  * show.
  *
- * `writeAtomicity.guard.test.ts` (BACKLOG-2530) would catch a missing
- * `dbTransaction` — but its `DB_DIR` is `electron/services/db`, and this file is
- * a COMPOSITION service, alongside `contactLinkReview.ts` and
- * `contactProvenance.ts`, which are outside that scan for the same reason. The
- * layering is deliberate: `db/` is the data layer, and the business-rule
- * refusals below (tombstoned target, prior rejection, claimed by another) belong
- * above it. A guard's directory constant must not dictate architecture.
+ * `writeAtomicity.guard.test.ts` (BACKLOG-2530) catches a missing
+ * `dbTransaction` here. It did NOT until BACKLOG-2584: its scan root was
+ * `electron/services/db`, and this file is a COMPOSITION service, alongside
+ * `contactLinkReview.ts` and `contactProvenance.ts`, which were outside that
+ * scan for the same reason. The layering is deliberate and unchanged: `db/` is
+ * the data layer, and the business-rule refusals below (tombstoned target,
+ * prior rejection, claimed by another) belong above it. A guard's directory
+ * constant must not dictate architecture, so the guard moved, not the code.
  *
- * The consequence is stated rather than hidden: `contactManualLink.rollback.test.ts`
- * is the ONLY check that the transaction is here. It covers removal of
- * `dbTransaction` from this function as written; it does NOT cover a new
- * multi-write added to this file later without its own crash test. Widening the
- * guard to composition services is BACKLOG-2584.
+ * What that guard now covers, stated precisely rather than generally: the root
+ * is `electron/`, and a call to a db-layer function that writes counts as a
+ * write, so a NEW multi-write added to this file later is red without anyone
+ * remembering to test it. That is the standing check. The authoring-time crash
+ * test is `electron/services/__tests__/contactManualLink.test.ts`,
+ * `describe("the write is all-or-nothing")` — at :524 as measured at
+ * `0dca6beb1`; a line number drifts, the describe name does not.
  */
 
 import { dbGet, dbTransaction } from "./db/core/dbConnection";
@@ -193,11 +196,18 @@ function toLinkable(record: ExternalContact): LinkableSourceRecord {
  * move the same volume through a WORKER (TASK-1956; `contacts:get-available`
  * was measured at ~3.7s at 1000+ contacts) — this path does not.
  *
- * MEASURED, not assumed: see `contactManualLink.scale.test.ts`, which seeds a
- * realistic address book and records the wall time of one call. If that number
- * ever approaches the worker path's, the mitigation is to move this read behind
- * the same worker rather than to reinstate a limit — a limit would silently
- * hide linkable records, which is the one thing this function may never do.
+ * NOT MEASURED. This paragraph used to claim "MEASURED, not assumed: see
+ * `contactManualLink.scale.test.ts`" — a file that has never existed, describing
+ * a wall-time measurement nobody took. Corrected rather than repointed
+ * (BACKLOG-2584): there is no other test covering it, so repointing would have
+ * preserved the false claim, and a claim of measurement with no measurement
+ * behind it is the exact failure this module's tests exist to prevent.
+ *
+ * The cost above is therefore an ESTIMATE by comparison with the worker path,
+ * not a reading. If it is ever measured and the number approaches the worker
+ * path's, the mitigation is to move this read behind the same worker rather than
+ * to reinstate a limit — a limit would silently hide linkable records, which is
+ * the one thing this function may never do.
  */
 export function findLinkableSourceRecords(userId: string): LinkableSourceRecord[] {
   const candidates = getAllForUser(userId);

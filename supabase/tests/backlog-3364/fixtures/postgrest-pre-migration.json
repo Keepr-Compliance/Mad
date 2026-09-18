@@ -1,0 +1,215 @@
+{
+  "backlog": "BACKLOG-3364",
+  "phase": "pre-migration",
+  "captured_at": "2026-09-15T16:24:47.966Z",
+  "client": "@supabase/supabase-js 2.110.2",
+  "venue": "NAS Supabase test stack (Postgres 17.6, PostgREST), see ../README.md",
+  "note": "UUIDs replaced: fixture ids by <fixture:...> labels, database-generated ids by <generated-uuid-N>. Everything else is verbatim.",
+  "cases": [
+    {
+      "label": "A",
+      "description": "select(\"organization_id, organizations(name, personal_owner_user_id)\").eq(\"user_id\", <broker>)",
+      "threw": false,
+      "status": 400,
+      "statusText": "Bad Request",
+      "error": {
+        "code": "42703",
+        "details": null,
+        "hint": null,
+        "message": "column organizations_1.personal_owner_user_id does not exist"
+      },
+      "data": null
+    },
+    {
+      "label": "B",
+      "description": "select(\"organization_id, organizations(*)\").eq(\"user_id\", <broker>)",
+      "threw": false,
+      "status": 200,
+      "statusText": "OK",
+      "error": null,
+      "data": [
+        {
+          "organization_id": "<fixture:org-brokerage>",
+          "organizations": {
+            "id": "<fixture:org-brokerage>",
+            "name": "Fixture Probe Brokerage 3364",
+            "plan": "trial",
+            "slug": "fixture-3364-probe-brokerage",
+            "settings": {},
+            "max_seats": 10,
+            "created_at": "2026-09-15T16:24:47.670616+00:00",
+            "updated_at": "2026-09-15T16:24:47.670616+00:00",
+            "sso_enabled": false,
+            "scim_enabled": false,
+            "sso_required": false,
+            "google_domain": null,
+            "retention_years": 7,
+            "default_member_role": "agent",
+            "microsoft_tenant_id": null,
+            "require_dual_approval": false,
+            "auto_reject_incomplete": false,
+            "directory_sync_enabled": false,
+            "directory_sync_last_at": null,
+            "graph_admin_consent_at": null,
+            "sso_domain_restriction": null,
+            "jit_provisioning_enabled": true,
+            "minimum_attachment_types": null,
+            "graph_admin_consent_granted": false
+          }
+        }
+      ]
+    },
+    {
+      "label": "C",
+      "description": "B + .order(\"personal_owner_user_id\", { referencedTable: \"organizations\" })",
+      "threw": false,
+      "status": 400,
+      "statusText": "Bad Request",
+      "error": {
+        "code": "42703",
+        "details": null,
+        "hint": null,
+        "message": "column organizations_1.personal_owner_user_id does not exist"
+      },
+      "data": null
+    },
+    {
+      "label": "D",
+      "description": "B + .is(\"organizations.personal_owner_user_id\", null)",
+      "threw": false,
+      "status": 400,
+      "statusText": "Bad Request",
+      "error": {
+        "code": "42703",
+        "details": null,
+        "hint": null,
+        "message": "column organizations_1.personal_owner_user_id does not exist"
+      },
+      "data": null
+    },
+    {
+      "label": "E",
+      "description": "B + .order(\"created_at\") on organization_members",
+      "threw": false,
+      "status": 200,
+      "statusText": "OK",
+      "error": null,
+      "data": [
+        {
+          "organization_id": "<fixture:org-brokerage>",
+          "organizations": {
+            "id": "<fixture:org-brokerage>",
+            "name": "Fixture Probe Brokerage 3364",
+            "plan": "trial",
+            "slug": "fixture-3364-probe-brokerage",
+            "settings": {},
+            "max_seats": 10,
+            "created_at": "2026-09-15T16:24:47.670616+00:00",
+            "updated_at": "2026-09-15T16:24:47.670616+00:00",
+            "sso_enabled": false,
+            "scim_enabled": false,
+            "sso_required": false,
+            "google_domain": null,
+            "retention_years": 7,
+            "default_member_role": "agent",
+            "microsoft_tenant_id": null,
+            "require_dual_approval": false,
+            "auto_reject_incomplete": false,
+            "directory_sync_enabled": false,
+            "directory_sync_last_at": null,
+            "graph_admin_consent_at": null,
+            "sso_domain_restriction": null,
+            "jit_provisioning_enabled": true,
+            "minimum_attachment_types": null,
+            "graph_admin_consent_granted": false
+          }
+        }
+      ]
+    },
+    {
+      "label": "R7-broker",
+      "description": "ruling-7 membership query (3e27deee §7), brokerage agent",
+      "threw": false,
+      "status": 200,
+      "statusText": "OK",
+      "error": null,
+      "data": [
+        {
+          "organization_id": "<fixture:org-brokerage>",
+          "organizations": {
+            "id": "<fixture:org-brokerage>",
+            "name": "Fixture Probe Brokerage 3364",
+            "plan": "trial",
+            "slug": "fixture-3364-probe-brokerage",
+            "settings": {},
+            "max_seats": 10,
+            "created_at": "2026-09-15T16:24:47.670616+00:00",
+            "updated_at": "2026-09-15T16:24:47.670616+00:00",
+            "sso_enabled": false,
+            "scim_enabled": false,
+            "sso_required": false,
+            "google_domain": null,
+            "retention_years": 7,
+            "default_member_role": "agent",
+            "microsoft_tenant_id": null,
+            "require_dual_approval": false,
+            "auto_reject_incomplete": false,
+            "directory_sync_enabled": false,
+            "directory_sync_last_at": null,
+            "graph_admin_consent_at": null,
+            "sso_domain_restriction": null,
+            "jit_provisioning_enabled": true,
+            "minimum_attachment_types": null,
+            "graph_admin_consent_granted": false
+          }
+        }
+      ]
+    },
+    {
+      "label": "R7-solo-before-ensure",
+      "description": "ruling-7 membership query, solo user before ensure",
+      "threw": false,
+      "status": 200,
+      "statusText": "OK",
+      "error": null,
+      "data": []
+    },
+    {
+      "label": "RPC-ensure",
+      "description": "rpc(\"ensure_personal_organization\") as the solo user",
+      "threw": false,
+      "status": 404,
+      "statusText": "Not Found",
+      "error": {
+        "code": "PGRST202",
+        "details": "Searched for the function public.ensure_personal_organization without parameters or with a single unnamed json/jsonb parameter, but no matches were found in the schema cache.",
+        "hint": "Perhaps you meant to call the function public.jit_join_organization",
+        "message": "Could not find the function public.ensure_personal_organization without parameters in the schema cache"
+      },
+      "data": null
+    },
+    {
+      "label": "RPC-ensure-again",
+      "description": "rpc(\"ensure_personal_organization\") second call",
+      "threw": false,
+      "status": 404,
+      "statusText": "Not Found",
+      "error": {
+        "code": "PGRST202",
+        "details": "Searched for the function public.ensure_personal_organization without parameters or with a single unnamed json/jsonb parameter, but no matches were found in the schema cache.",
+        "hint": "Perhaps you meant to call the function public.jit_join_organization",
+        "message": "Could not find the function public.ensure_personal_organization without parameters in the schema cache"
+      },
+      "data": null
+    },
+    {
+      "label": "R7-solo-after-ensure",
+      "description": "ruling-7 membership query, solo user after ensure",
+      "threw": false,
+      "status": 200,
+      "statusText": "OK",
+      "error": null,
+      "data": []
+    }
+  ]
+}

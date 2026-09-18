@@ -178,6 +178,25 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
     MIGRATIONS: Array<{ version: number; description: string; migrate: (d: unknown) => void }>;
   };
 
+  // BACKLOG-2551: this suite's subject is the RUNNER, exercised with the synthetic
+  // chain `injectFakeMigrations` installs per test. Its 15 `databaseService
+  // .initialize()` calls were only safe while the REAL chain was empty (the
+  // post-BACKLOG-2993 state): a non-empty chain makes `initialize()` run a real
+  // migration body against this file's fully-mocked `better-sqlite3`, which cannot
+  // answer `PRAGMA table_info`, so the body throws and `initialize()` lands in the
+  // migration-failure dialog path (`hostAppLifecycle.isReady()` — absent from the
+  // shared electron mock BY DESIGN, see installTestCapabilities.js).
+  //
+  // Neutralise the real chain for the whole suite and let each test inject what it
+  // means to exercise. This masks nothing about v71: v71's own body is covered
+  // against the REAL driver in databaseService.migration-v71.test.ts, which is a
+  // stronger check than a mocked suite could make.
+  let realMigrations: typeof DatabaseServiceClass.MIGRATIONS;
+
+  afterEach(() => {
+    if (realMigrations) DatabaseServiceClass.MIGRATIONS = realMigrations;
+  });
+
   beforeEach(async () => {
     jest.clearAllMocks();
     jest.resetModules();
@@ -203,6 +222,11 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
 
     // Access the class via the constructor of the default export
     DatabaseServiceClass = (databaseService as unknown as { constructor: typeof DatabaseServiceClass }).constructor as unknown as typeof DatabaseServiceClass;
+
+    // See the note above the afterEach: park the real chain so `initialize()`
+    // below does not execute a real migration body against the mocked driver.
+    realMigrations = DatabaseServiceClass.MIGRATIONS;
+    DatabaseServiceClass.MIGRATIONS = [];
   });
 
   // ============================================

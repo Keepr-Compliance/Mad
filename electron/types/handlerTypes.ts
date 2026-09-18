@@ -4,6 +4,7 @@
  */
 
 import type { Transaction } from "./models";
+import type { PersistedContactSource } from "../utils/contactSourceVocabulary";
 
 // ============================================
 // TRANSACTION HANDLER RESPONSE TYPES
@@ -276,6 +277,16 @@ export interface ImportableContact {
 export interface ExistingDbContactRecord {
   id: string;
   contact: ImportableContact;
+  /**
+   * BACKLOG-2481: the value `contacts:import` decided this record's
+   * `contacts.source` should be, already put through `toStorableContactSource`.
+   *
+   * Carried rather than re-derived from `contact.source` at the update site, so
+   * the create branch and the `markContactAsImported` branch cannot end up
+   * applying two different rules to the same record — which is how `messages`
+   * came to be admitted by one enumeration and refused by the CHECK.
+   */
+  source: PersistedContactSource;
 }
 
 /**

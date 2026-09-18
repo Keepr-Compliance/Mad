@@ -59,7 +59,7 @@
 import { readFileSync } from "fs";
 import path from "path";
 import { openTestDb, type TestDb } from "../../__tests__/helpers/syncSqliteDriver";
-import { hasNothingToImport } from "../../../../src/utils/importableRecord";
+import { hasNothingToImport, hasNothingToSave } from "../../../../src/utils/importableRecord";
 import { CONTACT_SOURCE_LINKS_TABLE_SQL } from "../contactIdentitySchemaSql";
 
 let db: TestDb;
@@ -318,8 +318,19 @@ describe("CONTROL 2 — no name but WITH a phone stays importable", () => {
     ]);
   });
 
-  it("blocks EXACTLY the record with nothing on it", () => {
-    expect(blockedRecordIds()).toEqual(["iphone-empty"]);
+  /**
+   * REVERSED by founder ruling `a41a805b` / PM `5fac2d84` (2026-09-07): the
+   * blocked set gained the company-only record. It read `["iphone-empty"]`.
+   *
+   * A SET assertion on purpose, not `toContain` — it is the only form that goes
+   * red when a record LEAVES the blocked set as well as when one joins it, and
+   * a silent widening of an import guard is the defect BACKLOG-2684 exists to
+   * prevent.
+   */
+  it("blocks EXACTLY the empty record and the company-only one", () => {
+    expect(blockedRecordIds().sort()).toEqual(
+      ["iphone-company-only", "iphone-empty"].sort(),
+    );
   });
 
   it("a nameless record WITH phones is not blocked", () => {
@@ -330,7 +341,18 @@ describe("CONTROL 2 — no name but WITH a phone stays importable", () => {
     expect(blockedRecordIds()).not.toContain("iphone-email-only");
   });
 
-  it("a nameless record WITH a company is not blocked", () => {
-    expect(blockedRecordIds()).not.toContain("iphone-company-only");
+  /**
+   * REVERSED, same ruling. It read "a nameless record WITH a company is not
+   * blocked". Import refuses it now; `contacts:create` still accepts it, which
+   * is asserted at the handler in
+   * `electron/__tests__/contact-handlers.namelessImport-2707.test.ts`.
+   *
+   * Kept rather than deleted so the reversal is legible from the file that
+   * recorded the original rule.
+   */
+  it("a nameless record WITH ONLY a company IS blocked from import", () => {
+    expect(blockedRecordIds()).toContain("iphone-company-only");
+    // …but the looser rule still keeps it: it is saveable, just not importable.
+    expect(hasNothingToSave({ company: "Vantrees Realty" })).toBe(false);
   });
 });

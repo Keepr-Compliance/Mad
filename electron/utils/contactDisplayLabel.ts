@@ -37,15 +37,38 @@
  * `electron/utils/__tests__/contactDisplayLabel.persistence.test.ts` asserts the
  * column is untouched.
  *
- * NOTE (BACKLOG-2461, honest limit): that constraint is ALREADY violated in
+ * NOTE (BACKLOG-2461, honest limit): that constraint is STILL violated in
  * shipped data by a different path. `contactsService.buildContactLabel` bakes an
- * email/phone fallback into the external contact's `name`, and
- * `validateContactData` requires a name of at least one character on create, so
- * the import has no choice but to store it. That cannot be undone here: an empty
- * `display_name` is compatible with EVERY name under `namesAreCompatible`, so
- * clearing it would let one nameless record claim a shared office line against
- * every real person on it. It moves only when the dedup gate moves
- * (BACKLOG-2416); the two are sequenced together as BACKLOG-2464.
+ * email/phone fallback into the macOS record's `name` before it ever reaches an
+ * import, so the founder's nameless-but-phoned address-book contacts arrive
+ * already carrying a phone number as their name and are stored that way. That
+ * producer is untouched, and BACKLOG-2464 still owns it.
+ *
+ * WHAT CHANGED (BACKLOG-2707): this note used to add that the situation "cannot
+ * be undone here", because an empty `display_name` is compatible with EVERY
+ * name under `namesAreCompatible` and clearing it would let one nameless record
+ * claim a shared office line against every real person on it — gated on
+ * BACKLOG-2416. **Both halves of that are now stale, and the write paths this
+ * module governs no longer store a label.** Re-measured before relying on it:
+ *
+ *   - `phoneClaimedByImported` / `emailClaimedByImported` — DELETED
+ *     (BACKLOG-2608). Only the tombstone in `contactHandlers.ts` remains.
+ *   - the renderer dedup pass — gone (BACKLOG-2370). `contactsShareIdentity`
+ *     survives in `src/utils/contactListAnchor.ts` as a SCROLL rule that, as
+ *     its own header says, removes nothing.
+ *   - auto-link — guarded (BACKLOG-2624). `autoLinkNameGuard.ts` returns
+ *     `name_unknown` for a missing name BEFORE calling `namesAreCompatible`,
+ *     precisely because that function would answer `true`.
+ *   - BACKLOG-2416, the stated blocking dependency — completed.
+ *
+ * `namesAreCompatible("", x)` is still `true`. What is gone is every live
+ * consumer that would ACT on that answer to hide or fold a record.
+ *
+ * So `contacts:import` and `contacts:create` now store `""` for a nameless
+ * contact, and the label is computed here at read time. Two producers outside
+ * this PR still write the `"Unknown"` literal — `iPhoneSyncStorageService` and
+ * the Android promote path in `localSyncService` — which is why the sentinel
+ * set below stays.
  */
 
 import { formatPhoneNumber } from "./phoneNormalization";
@@ -58,22 +81,30 @@ export const NO_NAME_PLACEHOLDER = "No name";
  * chose. Matched EXACTLY (trimmed, case-insensitive), so a real contact called
  * "Unknown Records LLC" keeps its name.
  *
- * NOT legacy, despite the name. Five live paths still write this literal into
- * `display_name` on every nameless import — `contactDbService.ts:187,327`,
- * `contactHandlers.ts:1280,1519` and `localSyncService.ts:1534` — so the set
- * below is permanent machinery, not a migration shim, and it is load-bearing
- * for rows created after this change as much as before it.
+ * NOT legacy, despite the name, and THIS SET STAYS.
  *
- * They cannot simply stop writing it. `schema.sql:141` declares
- * `display_name TEXT NOT NULL`, so "write nothing" was never on the table, and
- * writing `""` instead is an active regression: an empty name is compatible
- * with EVERY name under `namesAreCompatible`, so one nameless record would
- * claim a shared office line against every real person on it. Removing the
- * literal needs the dedup gate to move first — BACKLOG-2464, sequenced with
- * BACKLOG-2416.
+ * BACKLOG-2707 removed four of the paths this note used to list — the two
+ * substitutions in `contactDbService` (`createContact`, `createContactsBatch`)
+ * and the two in `contactHandlers` (`contacts:import`, `contacts:create`). They
+ * now write `""`. Two live producers of the literal remain, both outside that
+ * item's scope and both filed:
  *
- * Reading the literal as empty is therefore what lets these rows display
- * correctly without a migration and without touching a write path.
+ *   - `iPhoneSyncStorageService` defaults a null iPhone display name to
+ *     "Unknown" on the way INTO `external_contacts`, so the string arrives at
+ *     the import already looking like a name.
+ *   - `localSyncService`'s Android promote path substitutes it caller-side,
+ *     building rows for `createContactsBatch` — so removing the writer's
+ *     fallback does not reach it.
+ *
+ * And every row already on disk. The set is therefore permanent machinery for
+ * as long as either producer or any shipped row exists, not a migration shim.
+ *
+ * Why "write nothing" was never the alternative: `contacts.display_name` is
+ * declared `TEXT NOT NULL`. `""` is the empty spelling the column allows, and
+ * it is strictly safer than the literal for the one rule that still reads this
+ * column to suppress a row — `namesThatAreTheirOwnIdentity` builds its Set with
+ * `.filter(Boolean)`, so `""` drops out while `"unknown"` becomes a live key
+ * that hides every message-derived person of that name.
  */
 const LEGACY_NO_NAME_SENTINELS = new Set(["unknown", "unknown contact"]);
 

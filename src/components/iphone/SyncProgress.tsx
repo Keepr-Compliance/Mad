@@ -1,24 +1,7 @@
 import React, { useEffect } from "react";
 import type { SyncProgressProps } from "../../types/iphone";
 import logger from "../../utils/logger";
-
-/**
- * Format bytes to human readable string
- */
-function formatBytes(bytes: number | undefined): string {
-  if (!bytes || bytes === 0) return "0 B";
-
-  const units = ["B", "KB", "MB", "GB"];
-  let unitIndex = 0;
-  let size = bytes;
-
-  while (size >= 1024 && unitIndex < units.length - 1) {
-    size /= 1024;
-    unitIndex++;
-  }
-
-  return `${size.toFixed(1)} ${units[unitIndex]}`;
-}
+import { formatBytesAtUnit, MB_UNIT_INDEX } from "../../utils/transferByteUnit";
 
 /**
  * SyncProgress Component
@@ -40,6 +23,34 @@ export const SyncProgress: React.FC<SyncProgressProps> = ({
   useEffect(() => {
     logger.debug(`[SyncProgress] Phase: ${progress.phase}, ${progress.percent}%`, { isWaitingForPasscode });
   }, [progress.phase, progress.percent, isWaitingForPasscode]);
+
+  /**
+   * BACKLOG-3416: the displayed unit is decided by the SYNC, not by this component.
+   *
+   * `bytesProcessed` climbs continuously during a transfer and the display
+   * re-rendered on every update, so recomputing the unit each time made it flip
+   * under the founder's eyes the moment the count crossed a 1024x boundary —
+   * "987.3 MB" became "1.0 GB" and the number appeared to collapse.
+   *
+   * `useIPhoneSync` decides the unit once, on the sync's first non-zero byte
+   * count (floored at MB), and carries it on `progress.displayUnitIndex` until the
+   * next sync replaces the progress object. It is NOT held here: minimizing the
+   * modal unmounts this component, and a unit held here was re-picked from the
+   * current count on reopen, so one sync could read "800.0 MB" and then "1.5 GB".
+   *
+   * `progress.estimatedTotalBytes` exists but does not pick the unit. It is the
+   * size of the WHOLE backup (an existing backup's size, or derived from the
+   * device's used storage — deviceSyncOrchestrator.ts), not how much this sync
+   * will move. An incremental sync transfers only what changed, so a unit chosen
+   * from the estimate could be GB for a sync that moves a few MB.
+   *
+   * No unit yet means nothing has transferred, so the pre-transfer zero reads
+   * "0.0 MB". The fallback is a constant on purpose: recomputing it from the
+   * current count here would bring the flip back.
+   */
+  const bytesProcessed = progress.bytesProcessed ?? 0;
+  const displayUnitIndex = progress.displayUnitIndex ?? MB_UNIT_INDEX;
+
   /**
    * Option C: 2-Level Progress Display
    * Level 1: Combined title + context (bold, larger)
@@ -79,7 +90,7 @@ export const SyncProgress: React.FC<SyncProgressProps> = ({
   const isPreparing = progress.phase === "preparing";
   const isExtracting = progress.phase === "extracting";
   const isStoring = progress.phase === "storing";
-  const hasStartedTransfer = (progress.bytesProcessed ?? 0) > 0 || (progress.processedFiles ?? 0) > 0;
+  const hasStartedTransfer = bytesProcessed > 0 || (progress.processedFiles ?? 0) > 0;
 
   // Show passcode waiting warning (special state with detailed instructions)
   const showPasscodeWarning = isWaitingForPasscode;
@@ -226,7 +237,7 @@ export const SyncProgress: React.FC<SyncProgressProps> = ({
       {hasStartedTransfer && !isComplete && (
         <div className="text-center mb-4">
           <p className="text-2xl font-bold text-gray-800">
-            {formatBytes(progress.bytesProcessed)}
+            {formatBytesAtUnit(progress.bytesProcessed, displayUnitIndex)}
           </p>
           <p className="text-sm text-gray-500">
             transferred

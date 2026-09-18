@@ -92,6 +92,27 @@
  *       → "FAIL CLOSED" RED: the submit succeeds and writes a row.
  *   M3  revert the `existingVersion !== pendingVersion` condition on the
  *       delete → PERMIT_DELETE "does NOT delete the current version" RED.
+ *       (BACKLOG-3390 retargeted that test's fixture so this stays a real red —
+ *       see the note above it, and the three measured states it records.)
+ *
+ * BACKLOG-3390 ADDED THE `resubmitted` REFUSAL AND THE TRANSLATION OF THE
+ * UNIQUE VIOLATION. Controls run, with measured red counts in THIS file:
+ *   R1  remove "resubmitted" from BLOCKED_SUBMISSION_STATUSES
+ *       → 2 RED: "at 'resubmitted' the guard REFUSES before the upload" and
+ *         "the blocked SET, derived by executing every status".
+ *         (+1 RED in the renderer's parity suite, which pins the modal's
+ *         disabled set to this array by execution.)
+ *   R2  put the driver's duplicate-key text into
+ *       BLOCKED_SUBMISSION_MESSAGES.resubmitted
+ *       → 1 RED here, 2 RED in the renderer suite (containment + the no-SQL
+ *         sweep). Proves the "no constraint name" assertions are not vacuous.
+ *   R3  disable the `insertError.code === "23505"` branch
+ *       → 2 RED: the BACKLOG-3390 translation test and the PERMIT_DELETE
+ *         round-trip test.
+ *   R4  add "needs_changes" to BLOCKED_SUBMISSION_STATUSES
+ *       → 9 RED, including "'needs_changes' still resubmits, reaches the
+ *         VERSIONING path" — so the legitimate round trip's green is a
+ *         measurement, not an absence.
  * ─────────────────────────────────────────────────────────────────────────────
  *
  * RUNNER:
@@ -116,8 +137,12 @@ import { submissionService } from "../submissionService";
 import supabaseService from "../supabaseService";
 import supabaseStorageService from "../supabaseStorageService";
 import databaseService from "../databaseService";
+import logService from "../logService";
 import { getContactNames } from "../contactsService";
-import { BLOCKED_SUBMISSION_MESSAGES } from "../submissionStatusMessages";
+import {
+  BLOCKED_SUBMISSION_MESSAGES,
+  BLOCKED_SUBMISSION_STATUSES,
+} from "../submissionStatusMessages";
 
 // ============================================================================
 // FAKE SUPABASE — models the transcribed constraints + RLS above
@@ -725,20 +750,36 @@ describe("BACKLOG-2853 · LIVE_RLS disposition (anon key + user session, the des
    * false. The guard did not decline to block `resubmitted`; it never ran.
    *
    * The lookup now orders by version and takes one row, so the guard IS
-   * reached on a two-row deal — and `resubmitted` is genuinely not on the
-   * list, which is the mechanism this test now measures. It also pins the two
-   * things that must NOT have changed with it:
+   * reached on a two-row deal.
    *
-   *   - the delete is SKIPPED, because the current row is version 2 and this
-   *     attempt inserts version 1. Deleting it would clear nothing and would
-   *     destroy the live submission (see the PERMIT_DELETE twin, which is
-   *     where that is a real red).
-   *   - the outcome is unchanged from before the fix: the upload still runs
-   *     and the insert still dies on the unique key. Closing THAT window is
-   *     BACKLOG-2790's reorder, not this change, and pretending otherwise
-   *     here would be claiming a fix nobody wrote.
+   * BACKLOG-3390 — AND IT NOW REFUSES. What this test asserted until then was
+   * the founder's defect, written down and called expected:
+   *
+   *   expect(supabaseStorageService.uploadAttachments).toHaveBeenCalled();
+   *   expect(result.error).toMatch(/duplicate key/i);
+   *   expect(result.error).toMatch(
+   *     /transaction_submissions_org_txn_version_user_key/
+   *   );
+   *
+   * That is the screen he was shown in released v2.37.0, reproduced exactly by
+   * this suite and green. The comment above it said the outcome was "unchanged
+   * from before the fix" and that closing the window was BACKLOG-2790's
+   * reorder — but a reorder would only have moved WHEN the duplicate-key error
+   * appeared, never removed it, because the attempt is a plain submit at
+   * version 1 on a deal whose version 1 exists. There is no ordering in which
+   * that insert can succeed. The action could not work and had to stop being
+   * offered, which is `resubmitted` joining BLOCKED_SUBMISSION_STATUSES.
+   *
+   * THE THREE FORMER ASSERTIONS ARE THE REVERT CONTROL. Take `resubmitted` off
+   * the list and this test goes red on all three of the new ones below — the
+   * upload runs, the message is the driver's, and the constraint name is back.
+   *
+   * What must NOT have changed with it, still pinned here: the lookup names ONE
+   * row out of two, by id; and both rows survive across all three tables,
+   * because refusing at the guard skips the delete branch entirely rather than
+   * reaching it and declining.
    */
-  test("at 'resubmitted' the guard is now REACHED, declines, and skips the delete (BACKLOG-2867)", async () => {
+  test("at 'resubmitted' the guard REFUSES before the upload, in plain words (BACKLOG-3390)", async () => {
     const { parentId, resubmittedId } = await arriveAtResubmitted();
 
     const before = survivors();
@@ -758,24 +799,28 @@ describe("BACKLOG-2853 · LIVE_RLS disposition (anon key + user session, the des
 
     expect(result.success).toBe(false);
 
-    // Not a guard refusal — `resubmitted` is not on the list.
-    expect(result.error).not.toMatch(/Cannot resubmit/i);
-    expect(result.error).not.toMatch(/already been (submitted|approved)/i);
-    expect(result.error).not.toMatch(/has been rejected/i);
-    expect(result.error).not.toMatch(/Could not check whether/i);
+    // THE REFUSAL IS THE GUARD'S, quoted from the canonical producer rather
+    // than retyped — so a reworded message cannot pass this by accident.
+    expect(result.error).toBe(BLOCKED_SUBMISSION_MESSAGES.resubmitted);
 
-    // What it IS, unchanged from before the fix: the late duplicate-key
-    // failure, after the longest stage.
-    expect(supabaseStorageService.uploadAttachments).toHaveBeenCalled();
-    expect(result.error).toMatch(/duplicate key/i);
-    expect(result.error).toMatch(
+    // BEFORE THE LONGEST STAGE. This is the observable that separates an
+    // immediate refusal from a multi-minute walk to a database error.
+    expect(supabaseStorageService.uploadAttachments).not.toHaveBeenCalled();
+
+    // AND NOT THE DATABASE'S WORDS. The founder's exact screen, asserted absent.
+    expect(result.error).not.toMatch(/duplicate key/i);
+    expect(result.error).not.toMatch(/unique constraint/i);
+    expect(result.error).not.toMatch(
       /transaction_submissions_org_txn_version_user_key/
     );
+    expect(result.error).not.toMatch(/Failed to insert submission/i);
+    // Nor the fail-closed branch's, which would be a different refusal wearing
+    // the same success=false.
+    expect(result.error).not.toMatch(/Could not check whether/i);
 
-    // BOTH rows survive, by id, across all three tables — including the
-    // version-2 row the fixed lookup just named and the delete declined to
-    // touch. Under LIVE_RLS the database would have stopped that delete
-    // anyway; the PERMIT_DELETE twin is where this assertion has teeth.
+    // BOTH rows survive, by id, across all three tables. The delete branch is
+    // not reached at all now — the PERMIT_DELETE section is where the delete's
+    // own version condition keeps its red, on a `needs_changes` fixture.
     expect(survivors()).toEqual(before);
     expect(fake.submissions.map((r) => r.id).sort()).toEqual(
       [parentId, resubmittedId].sort()
@@ -848,46 +893,65 @@ describe("BACKLOG-2853 · LIVE_RLS disposition (anon key + user session, the des
       // Post-limit: whatever the filters matched, the lookup must name ONE row.
       expect(guardLookup?.returnedIds).toHaveLength(1);
 
-      // Every refusal is a REAL refusal, named by the message the service
-      // throws — not merely an absence of an upload.
+      /**
+       * Every refusal is a REAL refusal, named by the message the service
+       * throws — not merely an absence of an upload.
+       *
+       * BACKLOG-3390 replaced a hand-written alternation here
+       * (`/Cannot resubmit|already been (submitted|approved)|has been
+       * rejected/i`) with an exact match against the canonical map. The
+       * alternation was the weaker check twice over: it matched on a fragment,
+       * and it would have been RED for the correct new message — "already been
+       * resubmitted" does not contain "already been submitted" — which is a
+       * test that fails for spelling rather than for behaviour. The map is the
+       * producer; comparing against it cannot drift and cannot be vague.
+       *
+       * It is also the no-SQL assertion for the service side: the driver's
+       * duplicate-key text is not a value in this map, so any refusal wearing
+       * it fails here.
+       */
       if (uploaded === 0) {
-        expect(result.error).toMatch(
-          /Cannot resubmit|already been (submitted|approved)|has been rejected/i
+        expect(Object.values(BLOCKED_SUBMISSION_MESSAGES)).toContain(
+          result.error
         );
       }
     }
 
+    /**
+     * BACKLOG-3390 — `resubmitted` MOVED BUCKETS, and that move is the item.
+     * It read `fellThroughToUpload: ["needs_changes", "resubmitted"]` until
+     * now; the second of those is the founder's press.
+     *
+     * The refused set is derived from `BLOCKED_SUBMISSION_STATUSES` rather than
+     * retyped, so the two cannot drift: adding a status to the list without a
+     * guard that refuses it is red here, and a guard that refuses a status not
+     * on the list is red here too.
+     */
     expect(new Set(refusedBeforeUpload)).toEqual(
-      new Set(["submitted", "under_review", "approved", "rejected"])
+      new Set(BLOCKED_SUBMISSION_STATUSES)
     );
-    expect(new Set(fellThroughToUpload)).toEqual(
-      new Set(["needs_changes", "resubmitted"])
-    );
+    expect(new Set(fellThroughToUpload)).toEqual(new Set(["needs_changes"]));
 
     /**
-     * AND THE TWO IN THAT SECOND BUCKET ARE THERE FOR DIFFERENT REASONS —
-     * which the outcome alone cannot show, since both end in the same
-     * duplicate-key error.
+     * `lookupMatched` IS WHAT KEEPS THE MOVE HONEST. `resubmitted` is now in
+     * the refused bucket alongside four statuses that reach it trivially, and
+     * the bucket alone cannot tell the two situations apart.
      *
-     * `needs_changes`: the lookup named ONE row, so the guard ran and the list
-     * legitimately declined to block it.
+     * `resubmitted` is the ONLY status here whose lookup filters match TWO
+     * rows. Before BACKLOG-2867 that meant PGRST116, a dropped error and a
+     * guard that was never consulted; since BACKLOG-2867 the lookup orders by
+     * version and takes one, so the guard runs against version 2. Asserting
+     * `matched === 2` proves the refusal below came from a guard that ran on a
+     * round-tripped deal — not from a fixture that quietly collapsed to one
+     * row and would have been refused for an ordinary reason.
      *
-     * `resubmitted`: the lookup's FILTERS match TWO rows. Before BACKLOG-2867
-     * that meant PGRST116, a dropped error, and a guard that was never
-     * consulted; since BACKLOG-2867 the lookup orders by version and takes
-     * one, so the guard runs against version 2 and declines it on the same
-     * terms as `needs_changes` — the version-mismatch branch then skips the
-     * delete. Same bucket, and now for a reason that is written down.
+     * It stays the PRE-limit count on purpose: it is the number that says "this
+     * deal has been round-tripped", and flipping it to 1 to match the
+     * `.limit(1)` would erase the distinction this test exists to draw.
+     * `returnedIds` carries the post-limit answer.
      *
-     * `lookupMatched` stays the PRE-limit count on purpose: it is the number
-     * that says "this deal has been round-tripped", and flipping it to 1 to
-     * match the new `.limit(1)` would have quietly erased the distinction
-     * this test exists to draw. `returnedIds` carries the post-limit answer.
-     *
-     * Whether "resubmitted" belongs on `BLOCKED_SUBMISSION_STATUSES` is now a
-     * live question rather than a moot one — adding it would change behaviour
-     * where before it could not. BACKLOG-2867 deliberately does not take that
-     * decision; see `submissionStatusMessages.ts`.
+     * BACKLOG-3390 took the decision this comment used to call live. See
+     * `submissionStatusMessages.ts` for the argument.
      */
     expect(lookupMatched.needs_changes).toBe(1);
     expect(lookupMatched.resubmitted).toBe(2);
@@ -1137,37 +1201,89 @@ describe("BACKLOG-2853 · PERMIT_DELETE disposition (service_role_full_access_su
    * BACKLOG-2867 — THE CONTROL FOR THE REGRESSION THE FIX ITSELF CREATED.
    *
    * Making the lookup name the current version is what puts a two-row deal in
-   * front of the guard for the first time. `resubmitted` is not on the blocked
-   * list, so execution reaches the delete branch — now holding VERSION 2 while
-   * about to insert version 1. Under the desktop's RLS that delete no-ops, but
-   * `service_role_full_access_submissions` is live on this table and grants
-   * ALL, and under this disposition the delete LANDS: the current submission
-   * and its cascaded messages and attachments are destroyed, and the version-1
-   * insert then fails on the unique key regardless. The broker's whole review
-   * round trip lost, by a change that was meant to protect it.
+   * front of the guard for the first time. Execution then reaches the delete
+   * branch holding VERSION 2 while about to insert version 1. Under the
+   * desktop's RLS that delete no-ops, but `service_role_full_access_submissions`
+   * is live on this table and grants ALL, and under this disposition the delete
+   * LANDS: the current submission and its cascaded messages and attachments are
+   * destroyed, and the version-1 insert then fails on the unique key regardless.
+   * The broker's whole review round trip lost, by a change that was meant to
+   * protect it.
    *
    * The `existingVersion !== pendingVersion` condition on the delete is what
    * closes that, and this test is where removing it is a real red.
+   *
+   * BACKLOG-3390 — THE FIXTURE MOVED, AND THAT IS THE POINT OF THIS NOTE.
+   *
+   * It used to reach the delete branch through `resubmitted`, which is now
+   * refused at the guard — so it no longer reaches the delete at all. THE TRAP
+   * IS NOT THAT THE TEST GOES QUIET; IT IS WHERE THE OBVIOUS REPAIR LEADS. All
+   * three states below were MEASURED, not reasoned — the first draft of this
+   * note asserted the first one and was wrong:
+   *
+   *   Leave it alone         → RED, on `uploadAttachments toHaveBeenCalled`
+   *                            (calls = 0) and on the `/duplicate key/` match.
+   *                            It does NOT silently pass.
+   *   Repair the obvious way → GREEN. Those two assertions are exactly the ones
+   *     (delete the two red     the guard change legitimately invalidates, so
+   *      outcome assertions,    deleting them reads as housekeeping. The
+   *      keep the survival)     survival assertions still pass — AND THEY PASS
+   *                            WITH THE `existingVersion !== pendingVersion`
+   *                            CONDITION REVERTED. M3 becomes vacuous, and
+   *                            nothing anywhere goes red to say so.
+   *   Retarget the fixture    → M3 reds it again: 1 failure, this test.
+   *
+   * So the fixture moves to the OTHER status that reaches the delete branch at
+   * a mismatched version: a round-tripped deal the broker has sent back, i.e.
+   * version 2 at `needs_changes`, taking a plain submit at version 1. The
+   * "delete branch was reached" assertions below are what stop the second state
+   * being arrived at again — they fail on an early refusal, so a future guard
+   * change cannot quietly empty this control the way this one nearly did.
+   *
+   * Reachability, stated plainly: no user presses this. `TransactionDetails`
+   * and `useBulkSubmit` both route `needs_changes` to `resubmitTransaction`.
+   * This branch guards the caller the file's own RLS note names — a service-role
+   * caller, for which `service_role_full_access_submissions` grants ALL and the
+   * database stops nothing. That is exactly what the PERMIT_DELETE disposition
+   * models, and it is the only disposition in which this assertion has teeth.
    */
   test("BACKLOG-2867: a plain submit on a round-tripped deal does NOT delete the current version", async () => {
     const { parentId, resubmittedId } = await arriveAtResubmitted();
+    // The broker sends version 2 back for changes. The deal now has two rows,
+    // the current one is NOT blocked, and a plain submit therefore walks all
+    // the way to the delete branch holding version 2 / inserting version 1.
+    brokerSetsStatus(resubmittedId, "needs_changes");
 
     const before = survivors();
     (supabaseStorageService.uploadAttachments as jest.Mock).mockClear();
+    fake.maybeSingleLookups = [];
 
     const result = await submissionService.submitTransaction(TX);
 
-    // SURVIVAL FIRST, over all three tables in one comparison, so a revert
-    // shows the whole cascade rather than stopping at the first table.
+    // THE DELETE BRANCH WAS REACHED, not skipped upstream by the guard. Without
+    // this the whole test could pass on an early refusal and prove nothing —
+    // which is precisely what BACKLOG-3390 would have done to it silently.
+    const guardLookup = fake.maybeSingleLookups.find(
+      (l) => l.table === "transaction_submissions"
+    );
+    expect(guardLookup?.matched).toBe(2);
+    expect(guardLookup?.returnedIds).toEqual([resubmittedId]);
+    expect(Object.values(BLOCKED_SUBMISSION_MESSAGES)).not.toContain(
+      result.error
+    );
+
+    // SURVIVAL, over all three tables in one comparison, so a revert shows the
+    // whole cascade rather than stopping at the first table.
     expect(survivors()).toEqual(before);
     expect(idSet(fake.submissions)).toEqual(new Set([parentId, resubmittedId]));
 
     // The outcome is the pre-existing one and is NOT claimed as fixed: the
-    // upload still runs and the insert still dies on the unique key. Closing
-    // that window is BACKLOG-2790's reorder.
+    // upload still runs and the insert still collides. What BACKLOG-3390 did
+    // change is the WORDS — the collision no longer names the constraint.
     expect(result.success).toBe(false);
     expect(supabaseStorageService.uploadAttachments).toHaveBeenCalled();
-    expect(result.error).toMatch(/duplicate key/i);
+    expect(result.error).toMatch(/already has a submission at this version/i);
+    expect(result.error).not.toMatch(/duplicate key/i);
   });
 
   test("a resubmit from 'needs_changes' does NOT delete its own parent — the row `parent_submission_id` points at is still there", async () => {
@@ -1195,5 +1311,81 @@ describe("BACKLOG-2853 · PERMIT_DELETE disposition (service_role_full_access_su
     const fresh = fake.submissions.find((s) => s.id === result.submissionId);
     expect(fresh?.version).toBe(2);
     expect(fresh?.parent_submission_id).toBe(seeded.id);
+  });
+});
+
+// ============================================================================
+// BACKLOG-3390 — no refusal the user reads may name a database object
+// ============================================================================
+
+/**
+ * DEFECT 2, ON ITS OWN FIXTURE.
+ *
+ * The item has two halves and the guard only closes one. Blocking `resubmitted`
+ * stops the founder REACHING the insert; it does nothing to the sentence the
+ * insert produces, which is what he was actually shown:
+ *
+ *   Failed to insert submission: duplicate key value violates unique constraint
+ *   "transaction_submissions_org_txn_version_user_key"
+ *
+ * That string is still reachable — a second device, a service-role caller, a
+ * policy drift — so the translation is tested where it lives rather than being
+ * assumed dead. `FakeSupabase` emits `code: "23505"` with the production message
+ * transcribed verbatim (see its insert path), so this is the driver's real shape
+ * and not a stand-in.
+ *
+ * MUTATION THAT REDS IT: drop the `insertError.code === "23505"` branch in
+ * `submissionService.submitTransactionInternal` and the raw message is back.
+ */
+describe("BACKLOG-3390 · a unique-violation is translated before it reaches the user", () => {
+  beforeEach(() => {
+    fake.deletePolicy = "PERMIT_DELETE";
+  });
+
+  test("the collision refuses in plain English, and the driver's text survives only in the log", async () => {
+    const { resubmittedId } = await arriveAtResubmitted();
+    // The only remaining status that walks a plain submit into the insert.
+    brokerSetsStatus(resubmittedId, "needs_changes");
+    (logService.error as jest.Mock).mockClear();
+
+    const result = await submissionService.submitTransaction(TX);
+
+    expect(result.success).toBe(false);
+    const shown = result.error ?? "";
+
+    // ANTI-VACUITY: a missing/empty error would satisfy every `not.toMatch`
+    // below while proving nothing at all.
+    expect(shown.length).toBeGreaterThan(20);
+
+    // The founder's screen, fragment by fragment, asserted absent.
+    for (const forbidden of [
+      /transaction_submissions/i,
+      /_key\b/,
+      /duplicate key/i,
+      /unique constraint/i,
+      /\bconstraint\b/i,
+      /\b23505\b/,
+      /violates/i,
+      /Failed to insert submission/i,
+    ]) {
+      expect({ pattern: String(forbidden), matched: forbidden.test(shown) }).toEqual(
+        { pattern: String(forbidden), matched: false }
+      );
+    }
+
+    // And it still SAYS something — the state, and the way out.
+    expect(shown).toMatch(/already has a submission at this version/i);
+    expect(shown).toMatch(/nothing new was sent/i);
+
+    /**
+     * THE DIAGNOSIS IS NOT DESTROYED, ONLY MOVED. Without this the "fix" could
+     * be a bare `catch`-and-replace that loses the cause for whoever has to
+     * debug the next collision — which is a different defect, not a fix.
+     */
+    const logged = (logService.error as jest.Mock).mock.calls
+      .map((c) => JSON.stringify(c))
+      .join("\n");
+    expect(logged).toMatch(/duplicate key/i);
+    expect(logged).toMatch(/transaction_submissions_org_txn_version_user_key/);
   });
 });

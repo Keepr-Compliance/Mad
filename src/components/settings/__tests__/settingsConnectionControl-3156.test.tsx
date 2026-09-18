@@ -459,6 +459,56 @@ describe("BACKLOG-3156 stage C — the five states of one control", () => {
     expect(control).toBeDisabled();
   });
 
+  /**
+   * BACKLOG-3281 (C3b) — and it must come BACK out of "Connecting...".
+   *
+   * The test directly above proves the in-flight state exists. It cannot prove
+   * the state ever ends, because its mock never resolves. When the pre-flight
+   * IPC call resolves `success: false`, `authService.onMailboxConnected` is
+   * never called, so no mailbox-connected event will ever arrive to clear the
+   * flag — and there is no `finally`. Before the `else` this asserts, the
+   * control stayed disabled and reading "Connecting..." until the window was
+   * reloaded.
+   *
+   * Asserted for BOTH providers: the two handlers are separate code paths with
+   * the same defect, and a fix applied to one reads as a fix to both.
+   *
+   * MUTATION (each, separately): delete the
+   * `} else { setConnectingProvider(null); }` block from the matching handler
+   * in EmailSettings.tsx -> this test goes red on "Connecting..." / disabled.
+   */
+  it.each([
+    ["google", "googleConnectMailbox", "Connect Gmail", "email-connection-google-connect"],
+    [
+      "microsoft",
+      "microsoftConnectMailbox",
+      "Connect Outlook",
+      "email-connection-microsoft-connect",
+    ],
+  ] as const)(
+    "%s: a pre-flight failure returns the control to %s, enabled",
+    async (_provider, method, label, testId) => {
+      setConnections(NOT_CONNECTED, NOT_CONNECTED);
+      authService[method].mockResolvedValue({
+        success: false,
+        error: "No valid user session",
+      });
+      await renderEmails();
+
+      await userEvent.click(await screen.findByRole("button", { name: label }));
+
+      await waitFor(() => {
+        expect(screen.getByTestId(testId)).not.toHaveTextContent("Connecting...");
+      });
+      const control = screen.getByTestId(testId);
+      expect(control).toHaveTextContent(label);
+      expect(control).toBeEnabled();
+      // The pre-flight failed, so no listener was ever registered: nothing else
+      // could have cleared the state.
+      expect(authService.onMailboxConnected).not.toHaveBeenCalled();
+    },
+  );
+
   it("connected: a label, not a button", async () => {
     setConnections({ connected: true, email: "gmail-user@example.com" }, NOT_CONNECTED);
     await renderEmails();

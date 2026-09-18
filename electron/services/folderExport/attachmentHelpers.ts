@@ -192,6 +192,10 @@ async function downloadMissingAttachmentsForExport(
                   filename: att.name || "attachment",
                   mimeType: att.contentType || "application/octet-stream",
                   size: att.size || 0,
+                  // BACKLOG-3187: a Graph attachment has no MIME part, so no identity
+                  // beyond its own id. Explicitly null — the field is required so this
+                  // decision cannot be left unmade at a new call site.
+                  partId: null,
                   attachmentId: att.id,
                 })),
               );
@@ -220,10 +224,13 @@ async function downloadMissingAttachmentsForExport(
             if (fullEmail.attachments && fullEmail.attachments.length > 0) {
               await emailAttachmentService.downloadEmailAttachments(
                 email.user_id, email.id, email.external_id, "gmail",
-                fullEmail.attachments.map((att: { filename?: string; name?: string; mimeType?: string; contentType?: string; size?: number; attachmentId?: string; id?: string }) => ({
+                fullEmail.attachments.map((att: { filename?: string; name?: string; mimeType?: string; contentType?: string; size?: number; partId?: string; attachmentId?: string; id?: string }) => ({
                   filename: att.filename || att.name || "attachment",
                   mimeType: att.mimeType || att.contentType || "application/octet-stream",
                   size: att.size || 0,
+                  // BACKLOG-3187: identity (Gmail's immutable MIME part id) travels
+                  // separately from the fetch token below, which rotates between calls.
+                  partId: att.partId ?? null,
                   attachmentId: att.attachmentId || att.id || "",
                 })),
               );

@@ -107,13 +107,46 @@ const emptyMessageRecord = {
   communication_count: 3,
 } as unknown as Contact;
 
-/** CONTROL 2 — no name, but a real number. Same population, must stay importable. */
+/**
+ * CONTROL 2 — no name, but a real number. Same population, must stay importable.
+ *
+ * ===========================================================================
+ * BACKLOG-2707 — THIS FIXTURE DESCRIBED A STATE ITS PRODUCER CANNOT EMIT
+ * ===========================================================================
+ * It was built by spreading `emptyMessageRecord` (`source: "messages"`) and
+ * nulling `name` and `display_name`. **A message-derived row can never have
+ * those null.** Transcribed from the producer rather than assumed —
+ * `getMessageDerivedContacts` (`electron/services/db/contactDbService.ts`):
+ *
+ *     json_extract(participants, '$.from') as display_name,
+ *     json_extract(participants, '$.from') as name,
+ *
+ * Both columns are the sender handle, and `MessageDerivedContact` types both as
+ * a non-nullable `string`. So a real nameless message-derived record carries the
+ * PHONE NUMBER in `name` — which passes any truthiness test and never reached
+ * the block this test was pinning.
+ *
+ * It is now an ADDRESS-BOOK record, which is the population that actually
+ * produces `name: null` — `contacts:get-available` passes `external_contacts.name`
+ * straight through (`contactHandlers.ts`, the `isFromDatabase: false` branch),
+ * and android_sync / Outlook / Google Contacts all write `null` there for a
+ * nameless card. That is the founder's Google Contacts record from his 12a run.
+ */
 const namelessButReachable = {
-  ...(emptyMessageRecord as unknown as Record<string, unknown>),
-  id: "msg_reachable",
+  id: "ext_reachable",
+  user_id: USER_ID,
   display_name: null,
   name: null,
   phone: "+16175550147",
+  email: null,
+  company: null,
+  source: "google_contacts",
+  allPhones: ["+16175550147"],
+  allEmails: [],
+  isFromDatabase: false,
+  is_message_derived: 0,
+  externalRecordId: "GC-RECORD-1",
+  externalSourceType: "google_contacts",
 } as unknown as Contact;
 
 /** An ordinary saved contact, so "everything was blocked" cannot pass. */
@@ -130,13 +163,25 @@ const ordinarySaved = {
   updated_at: "2026-08-01T09:12:00Z",
 } as unknown as Contact;
 
+/**
+ * BACKLOG-2707: each record is routed to the channel that really produces it.
+ * `getAll` merges saved contacts with message-derived pseudo-contacts;
+ * `getAvailable` is the address-book/sync side. Putting an `isFromDatabase:
+ * false` record in `getAll` gives it no Import control at all, because
+ * `isUnimportedSourceRecord` is false for it — which is a fixture describing a
+ * state the app does not produce, and the reason this split is not optional.
+ */
 function installBackend(contacts: Contact[]) {
+  const external = contacts.filter(
+    (c) => (c as unknown as { isFromDatabase?: boolean }).isFromDatabase === false,
+  );
+  const saved = contacts.filter((c) => !external.includes(c));
   jest
     .mocked(window.api.contacts.getAll)
-    .mockResolvedValue({ success: true, contacts });
+    .mockResolvedValue({ success: true, contacts: saved });
   jest
     .mocked(window.api.contacts.getAvailable)
-    .mockResolvedValue({ success: true, contacts: [] });
+    .mockResolvedValue({ success: true, contacts: external });
   jest
     .mocked(window.api.contacts.checkCanDelete)
     .mockResolvedValue({ success: true, transactions: [] });
@@ -203,7 +248,7 @@ describe("BACKLOG-2672 — Clients & Contacts", () => {
 
     await waitFor(() =>
       expect(renderedContactIds()).toEqual(
-        ["c-marisol", "msg_reachable", "msg_unknown"].sort(),
+        ["c-marisol", "ext_reachable", "msg_unknown"].sort(),
       ),
     );
   });
@@ -284,8 +329,8 @@ describe("BACKLOG-2672 — Clients & Contacts", () => {
   it("a record with NO NAME but WITH a phone is still importable", async () => {
     installBackend([namelessButReachable]);
     render(<Contacts userId={USER_ID} onClose={jest.fn()} />);
-    await waitFor(() => expect(renderedContactIds()).toEqual(["msg_reachable"]));
-    await userEvent.click(rowFor("msg_reachable"));
+    await waitFor(() => expect(renderedContactIds()).toEqual(["ext_reachable"]));
+    await userEvent.click(rowFor("ext_reachable"));
 
     const live = await screen.findByTestId("contact-preview-import");
     expect(live).toBeEnabled();
@@ -295,25 +340,24 @@ describe("BACKLOG-2672 — Clients & Contacts", () => {
     ).not.toBeInTheDocument();
 
     /*
-      AND IT LEADS SOMEWHERE. `handlePreviewImport` (`Contacts.tsx:951-957`) has
-      its own completeness check — a record with no name is routed to the
-      contact FORM so the user can supply one, rather than imported blind. That
-      is pre-existing behaviour and this change does not touch it; asserting it
-      here is what makes "the control is live" mean something, since a button
-      that renders and does nothing would satisfy the checks above.
+      AND IT LEADS SOMEWHERE — TO THE IMPORT, WHICH IS THE REVERSAL.
 
-      It also shows why that check could not close BACKLOG-2672 on its own:
-      `hasName` is plain truthiness, so the founder's record — whose name is the
-      STRING "unknown" — passes it and reaches `contacts:import`.
+      This block asserted the opposite: that pressing Import opened the contact
+      FORM and that `contacts:import` was NOT called. Its comment called that
+      "pre-existing behaviour this change does not touch".
+
+      The founder's Step 12a run (`a104375f`, 2026-09-07) is what overrode it —
+      he could import none of his three nameless Google contacts — and his
+      ruling `a41a805b` deleted the block in `handlePreviewImport` that caused
+      it. A test named "is still importable" that asserted "was not imported"
+      was the clearest statement of the disagreement this whole item is about,
+      which is why it is REWRITTEN here rather than removed.
     */
     fireEvent.click(live);
-    // `ContactFormModal` opened over the pane. Its heading reads "Edit Contact"
-    // because `selectedContact` is set, though it saves down the CREATE leg —
-    // see the note at `Contacts.tsx:958-968`.
-    await waitFor(() =>
-      expect(screen.getAllByText("Edit Contact").length).toBeGreaterThan(0),
-    );
-    expect(window.api.contacts.import).not.toHaveBeenCalled();
+    await waitFor(() => expect(window.api.contacts.import).toHaveBeenCalled());
+    // The form must NOT open. That is also how "no banner for the name case" is
+    // satisfied structurally: there is no form to put an affordance on.
+    expect(screen.queryAllByText("Edit Contact")).toHaveLength(0);
   });
 
   /** An ordinary saved contact never sees an Import button at all. */

@@ -189,6 +189,97 @@ describe("schema-baseline fence — a chain-built v69 database is refused (BACKL
     }
   }
 
+  // -------------------------------------------------------------------------
+  // BACKLOG-2551 / ruling 6.3 — the "ABOVE this build" warning speaks against the
+  // LATEST shipped version, not the baseline.
+  //
+  // Before this fix the warn compared against BASELINE_VERSION. The two were the
+  // same only while MIGRATIONS was empty; once v71 ships, every upgraded database
+  // sits at 71 with the baseline still 70, so the warning would fire on EVERY
+  // launch for EVERY user and assert something untrue ("written by a newer
+  // build"). Nothing pinned this branch before, so the fix ships with the test.
+  //
+  // The REFUSAL half (`version < baseline`) is untouched by the fix; the third
+  // case below is the regression guard that proves it.
+  // -------------------------------------------------------------------------
+  describe("the ABOVE-baseline warning (ruling 6.3)", () => {
+    /** A minimal encrypted database carrying just a schema_version row. */
+    function buildVersionedFixture(version: number): void {
+      const db = new RealDatabase(dbFile) as DatabaseType;
+      db.pragma(PRODUCTION_KEY_PRAGMA);
+      db.pragma("cipher_compatibility = 4");
+      db.exec(
+        `CREATE TABLE schema_version (id INTEGER PRIMARY KEY CHECK (id = 1),
+           version INTEGER NOT NULL DEFAULT 1,
+           updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+           migrated_at TEXT DEFAULT (datetime('now')));
+         INSERT INTO schema_version (id, version) VALUES (1, ${version});`,
+      );
+      db.close();
+    }
+
+    /** Warnings emitted by _evaluateSchemaBaseline for a database at `version`. */
+    function fenceWarningsFor(version: number): string[] {
+      buildVersionedFixture(version);
+      const warnings: string[] = [];
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const provider = require("../../capabilities/loggerProvider");
+      provider.installLogger({
+        info: () => {},
+        warn: (msg: unknown) => warnings.push(String(msg)),
+        error: () => {},
+        debug: () => {},
+        verbose: () => {},
+      });
+      try {
+        const db = new RealDatabase(dbFile, { readonly: true }) as DatabaseType;
+        try {
+          db.pragma(PRODUCTION_KEY_PRAGMA);
+          db.pragma("cipher_compatibility = 4");
+          service._evaluateSchemaBaseline(db, "read-only");
+        } finally {
+          db.close();
+        }
+      } finally {
+        provider.resetLogger();
+      }
+      return warnings.filter((w) => w.includes("[BaselineFence]"));
+    }
+
+    it("is SILENT at the latest shipped version — the case that fires on every launch after v71", () => {
+      const latest = service.getLatestSchemaVersion();
+      expect(latest).toBeGreaterThan(service.constructor.BASELINE_VERSION - 1);
+      expect(fenceWarningsFor(latest)).toEqual([]);
+    });
+
+    it("is SILENT between the baseline and the latest", () => {
+      expect(fenceWarningsFor(service.constructor.BASELINE_VERSION)).toEqual([]);
+    });
+
+    it("WARNS above the latest shipped version — a genuinely newer build", () => {
+      const latest = service.getLatestSchemaVersion();
+      const warnings = fenceWarningsFor(latest + 1);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain(`schema_version ${latest + 1}`);
+      expect(warnings[0]).toContain("written by a newer build");
+    });
+
+    it("REGRESSION GUARD: still REFUSES below the baseline — the untouched half", () => {
+      const baseline = service.constructor.BASELINE_VERSION;
+      buildVersionedFixture(baseline - 1);
+      const db = new RealDatabase(dbFile, { readonly: true }) as DatabaseType;
+      try {
+        db.pragma(PRODUCTION_KEY_PRAGMA);
+        db.pragma("cipher_compatibility = 4");
+        expect(() => service._evaluateSchemaBaseline(db, "read-only")).toThrow(
+          SchemaBaselineRefusalError,
+        );
+      } finally {
+        db.close();
+      }
+    });
+  });
+
   it("PRECONDITION: the fixture opens with the production keying and reads schema_version 69", () => {
     buildEncryptedV69Fixture();
     expect(readVersionFromDisk()).toBe(69);
@@ -265,7 +356,7 @@ describe("schema-baseline fence — a chain-built v69 database is refused (BACKL
     expect(dialogArg.detail).toContain(`Database: ${dbFile}`);
   });
 
-  it("fresh install (no file) lands at schema_version 70 with the four previously-chain-only tables present", async () => {
+  it("fresh install (no file) lands at the latest shipped schema_version with the four previously-chain-only tables present", async () => {
     expect(fs.existsSync(dbFile)).toBe(false);
 
     await expect(service.initialize()).resolves.toBe(true);
@@ -278,7 +369,21 @@ describe("schema-baseline fence — a chain-built v69 database is refused (BACKL
         version: number;
       }
     ).version;
-    expect(version).toBe(70);
+    // BACKLOG-2551: was pinned to 70. A fresh install seeds schema_version at
+    // BASELINE_VERSION (70) and THEN runs every pending migration, so once v71
+    // ships a fresh install lands at 71. That is not incidental -- it is the
+    // property the v71 design depends on: because a fresh install runs the
+    // migration too, idx_attachments_email_provider can live in the migration
+    // ALONE (it cannot go in schema.sql, whose unconditional exec would abort on
+    // every pre-v71 database) and still reach new installs.
+    //
+    // Assert the shipped latest, not a frozen number, so this keeps testing the
+    // claim rather than the constant.
+    const latest = (
+      service as unknown as { getLatestSchemaVersion(): number }
+    ).getLatestSchemaVersion();
+    expect(version).toBe(latest);
+    expect(latest).toBeGreaterThanOrEqual(70);
 
     // Not just the number: the four tables only the old chain used to create
     // must exist on a fresh install — the exact loss the schema regeneration

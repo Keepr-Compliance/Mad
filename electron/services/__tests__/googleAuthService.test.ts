@@ -8,6 +8,7 @@
  * BACKLOG-733: Updated to reflect PKCE migration (no googleapis OAuth2Client)
  */
 
+import axios from "axios";
 import googleAuthService from "../googleAuthService";
 import databaseService from "../databaseService";
 import type { OAuthToken } from "../../types/models";
@@ -376,5 +377,180 @@ describe("GoogleAuthService - rejectCodeDirectly edge cases", () => {
     expect(() => {
       googleAuthService.rejectCodeDirectly("test-error");
     }).not.toThrow();
+  });
+});
+
+
+/**
+ * BACKLOG-3206 — the revoke call, at the level where the HTTP response exists.
+ *
+ * These live here rather than in the handler suite for one reason: the handler
+ * suite mocks `googleAuthService` wholesale, so a mutation anywhere inside this
+ * file changes nothing it can observe and every control would pass with the
+ * feature removed. The classification and the timeout are decided from the
+ * response, so they are asserted where the response is.
+ *
+ * FIXTURES ARE TRANSCRIBED, NOT INVENTED. Every error below is built by axios's
+ * own `AxiosError` constructor with the argument list axios itself passes,
+ * pulled out of the installed copy (axios 1.18.1 in `node_modules`):
+ *
+ *   - an HTTP error answer: `lib/core/settle.js:19-25` —
+ *     `new AxiosError("Request failed with status code " + status,
+ *      status >= 400 && status < 500 ? ERR_BAD_REQUEST : ERR_BAD_RESPONSE,
+ *      config, request, response)`. The response is attached.
+ *
+ *   - a timeout: `lib/adapters/http.js:599-613` —
+ *     `new AxiosError("timeout of " + timeout + "ms exceeded",
+ *      transitional.clarifyTimeoutError ? ETIMEDOUT : ECONNABORTED,
+ *      config, req)`, and `clarifyTimeoutError` defaults to false
+ *     (`lib/defaults/transitional.js:6`), so the code is ECONNABORTED. NO
+ *     response is attached — which is the property the classification reads,
+ *     rather than the message text.
+ *
+ * A hand-written `new Error("timeout")` would have described a state axios
+ * cannot produce, and the control built on it would have proved nothing.
+ */
+const { AxiosError } = jest.requireActual<typeof import("axios")>("axios");
+
+const mockAxios = axios as jest.Mocked<typeof axios>;
+
+/** An answer from the server. Shaped by `lib/core/settle.js`. */
+const httpErrorResponse = (status: number, data: unknown) =>
+  new AxiosError(
+    `Request failed with status code ${status}`,
+    status >= 400 && status < 500 ? "ERR_BAD_REQUEST" : "ERR_BAD_RESPONSE",
+    {} as never,
+    {},
+    {
+      status,
+      statusText: "",
+      data,
+      headers: {},
+      config: {} as never,
+    },
+  );
+
+/** No answer at all. Shaped by `lib/adapters/http.js` `createTimeoutError`. */
+const timeoutError = () =>
+  new AxiosError("timeout of 5000ms exceeded", "ECONNABORTED", {} as never, {});
+
+describe("GoogleAuthService - revokeToken (BACKLOG-3206)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  // S1
+  it("posts the token, form-encoded, to Google's revocation endpoint", async () => {
+    mockAxios.post.mockResolvedValue({ status: 200, data: "" });
+
+    const result = await googleAuthService.revokeToken("the-refresh-token");
+
+    expect(mockAxios.post).toHaveBeenCalledWith(
+      "https://oauth2.googleapis.com/revoke",
+      "token=the-refresh-token",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          "Content-Type": "application/x-www-form-urlencoded",
+        }),
+      }),
+    );
+    expect(result).toEqual({ outcome: "revoked" });
+  });
+
+  /**
+   * S2 — the bound on how long a Disconnect can hang.
+   *
+   * STATED LIMIT: this proves the option is PASSED, not that a hang is bounded
+   * in wall-clock time. The bound itself is axios's documented contract, and
+   * testing a maintained dependency's own contract from inside this repo would
+   * need a real socket. The compensating control is at the handler level: when
+   * the revoke rejects for any reason, the disconnect still resolves.
+   */
+  // S2
+  it("bounds the request with an explicit timeout", async () => {
+    mockAxios.post.mockResolvedValue({ status: 200, data: "" });
+
+    await googleAuthService.revokeToken("the-refresh-token");
+
+    expect(mockAxios.post).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({ timeout: 5000 }),
+    );
+  });
+
+  // S3 — the grant is already gone, which is the state we were asking for.
+  it("classifies 400 invalid_token as already-invalid, not a failure", async () => {
+    mockAxios.post.mockRejectedValue(
+      httpErrorResponse(400, { error: "invalid_token" }),
+    );
+
+    const result = await googleAuthService.revokeToken("dead-token");
+
+    expect(result.outcome).toBe("already-invalid");
+    expect(result.status).toBe(400);
+  });
+
+  /**
+   * S4 — the reason the classification reads the error BODY and not the status.
+   *
+   * `invalid_request` is also a 400, and it means our request was malformed
+   * while the grant is fully alive. Classifying by status alone would tell the
+   * user their access had been withdrawn when it had not.
+   */
+  // S4
+  it("classifies 400 invalid_request as failed", async () => {
+    mockAxios.post.mockRejectedValue(
+      httpErrorResponse(400, { error: "invalid_request" }),
+    );
+
+    const result = await googleAuthService.revokeToken("the-refresh-token");
+
+    expect(result.outcome).toBe("failed");
+    expect(result.outcome).not.toBe("already-invalid");
+    expect(result.reason).toBe("rejected");
+  });
+
+  /**
+   * S5 — a 429 is a 4xx with a completely live grant.
+   *
+   * This is here because "a 4xx means the grant is gone" is the plausible
+   * shortcut, and under it the user would be told nothing while Keepr's access
+   * remained intact.
+   */
+  // S5
+  it("classifies 429 as failed, so the user is told", async () => {
+    mockAxios.post.mockRejectedValue(
+      httpErrorResponse(429, { error: "rate_limit_exceeded" }),
+    );
+
+    const result = await googleAuthService.revokeToken("the-refresh-token");
+
+    expect(result.outcome).toBe("failed");
+    expect(result.reason).toBe("rejected");
+    expect(result.status).toBe(429);
+  });
+
+  it("classifies a 5xx as failed", async () => {
+    mockAxios.post.mockRejectedValue(httpErrorResponse(503, ""));
+
+    const result = await googleAuthService.revokeToken("the-refresh-token");
+
+    expect(result.outcome).toBe("failed");
+    expect(result.reason).toBe("rejected");
+  });
+
+  // S6 — nothing came back at all.
+  it("classifies a timeout as failed for a network reason, and does not throw", async () => {
+    mockAxios.post.mockRejectedValue(timeoutError());
+
+    const result = await googleAuthService.revokeToken("the-refresh-token");
+
+    expect(result.outcome).toBe("failed");
+    expect(result.reason).toBe("network");
+    // `network` is what separates "Google refused us" from "we never reached
+    // Google", and it keys on the ABSENCE of a response rather than on the
+    // message text, which is configurable.
+    expect(result.reason).not.toBe("rejected");
   });
 });

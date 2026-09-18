@@ -17,6 +17,11 @@ jest.mock("../../contactResolutionService", () => ({
 }));
 
 import type { Communication } from "../../../types/models";
+
+// BACKLOG-3367: these cases hide nothing, and now have to say so — the
+// omissions argument is required precisely so no caller can leave it unstated.
+import type { ExportOmissions } from "../../exportNotices";
+const NO_OMISSIONS_3367: ExportOmissions = { hiddenTextCount: 0 };
 import {
   generateTextThreadHTML,
   getMessageTypeCounts,
@@ -61,7 +66,7 @@ describe("generateTextThreadHTML — reactions (BACKLOG-2280)", () => {
   const contact = { phone: "+12065550103", name: "Jane" };
 
   it("renders exactly one evidentiary reactions line, and no empty reaction bubble", () => {
-    const html = generateTextThreadHTML([parent, reaction], contact, {}, false, 0);
+    const html = generateTextThreadHTML([parent, reaction], contact, {}, false, 0, NO_OMISSIONS_3367);
     // The parent body is present.
     expect(html).toContain("Are we still on for Friday?");
     // Exactly one reactions line, carrying the heart glyph + reactor ("You").
@@ -73,7 +78,7 @@ describe("generateTextThreadHTML — reactions (BACKLOG-2280)", () => {
   });
 
   it("keeps the header message count honest (excludes the reaction)", () => {
-    const html = generateTextThreadHTML([parent, reaction], contact, {}, false, 0);
+    const html = generateTextThreadHTML([parent, reaction], contact, {}, false, 0, NO_OMISSIONS_3367);
     // One real message in the thread — NOT two.
     expect(html).toContain("1 message");
     expect(html).not.toContain("2 messages");
@@ -90,7 +95,7 @@ describe("generateTextThreadHTML — reactions (BACKLOG-2280)", () => {
       associated_message_type: 3000, // remove heart
       associated_message_guid: "GUID-P1",
     });
-    const html = generateTextThreadHTML([parent, reaction, removed], contact, {}, false, 0);
+    const html = generateTextThreadHTML([parent, reaction, removed], contact, {}, false, 0, NO_OMISSIONS_3367);
     expect(html).not.toContain("class=\"reactions\"");
   });
 });

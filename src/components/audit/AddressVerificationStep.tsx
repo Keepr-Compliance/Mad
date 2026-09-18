@@ -17,6 +17,7 @@ import type { AddressData, AddressSuggestion } from "../../hooks/useAuditTransac
 // BACKLOG-2805: the words on the two buttons. The values they emit are the
 // stored enum and are spelled out below, unchanged.
 import { TRANSACTION_TYPE_LABELS } from "../../constants/transactionTypes";
+import { InfoTooltip } from "../common/InfoTooltip";
 
 interface AddressVerificationStepProps {
   addressData: AddressData;
@@ -36,7 +37,9 @@ function AddressVerificationStep({
   onAddressChange,
   onTransactionTypeChange,
   onStartDateChange,
-  onClosingDateChange,
+  // onClosingDateChange is still part of the props contract (callers pass it and
+  // the Export modal still sets a closing date) but this step no longer renders
+  // a Closing Date field, so it is deliberately not destructured here.
   onEndDateChange,
   showAutocomplete,
   suggestions,
@@ -195,61 +198,65 @@ function AddressVerificationStep({
 
       <div>
         <div className="flex items-center justify-between mb-3">
-          <label className="block text-sm font-medium text-gray-700">
+          <label className="flex items-center text-sm font-medium text-gray-700">
             Transaction Dates
+            {/* One (i) for both dates (founder, 2026-09-17, BACKLOG-3415). It
+                replaced the tooltip on the start-date label and the two helper
+                lines that sat under the inputs, so this is now the only place
+                either date is explained. The End Date wording is the founder's
+                own definition. */}
+            {/* BACKLOG-3415: each date's name bold on its own line, its
+                definition beneath, a blank line between the two entries. The
+                wording is unchanged; only the layout is. */}
+            <InfoTooltip
+              wide
+              text={
+                <span className="block space-y-3">
+                  <span className="block">
+                    <strong className="block font-semibold">Representation Start Date</strong>
+                    when you started representing this client on this deal.
+                  </span>
+                  <span className="block">
+                    <strong className="block font-semibold">End Date</strong>
+                    the last date you communicated with the client about this transaction, by text or email.
+                  </span>
+                </span>
+              }
+            />
           </label>
         </div>
 
-        <div className="mb-4">
-          <label className="block text-xs font-medium text-gray-600 mb-1">
-            Representation Start Date *
-            <span
-              className="ml-1 text-gray-400 cursor-help"
-              title="The date you officially started representing this client in this transaction"
-            >
-              (?)
-            </span>
-          </label>
-          <input
-            type="date"
-            value={addressData.started_at}
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-              onStartDateChange(e.target.value)
-            }
-            className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-gray-900 min-h-[44px] ${
-              !addressData.started_at
-                ? "border-red-300 bg-red-50"
-                : "border-gray-300 bg-white"
-            }`}
-            required
-            data-testid="create-audit-start-date-input"
-          />
-          <p className="text-xs text-gray-500 mt-1">
-            Required — The date you began representing this client
-          </p>
-        </div>
-
-        {/* Closing date and end date */}
+        {/* Representation start date and end date, side by side from sm: up.
+            The closing date is not asked for here — it is optional in the data
+            model and is set later from the Export modal. */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">
-              Closing Date
+              Representation Start Date *
             </label>
             <input
               type="date"
-              value={addressData.closing_deadline || ""}
+              value={addressData.started_at}
               onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                onClosingDateChange(e.target.value || undefined)
+                onStartDateChange(e.target.value)
               }
-              min={addressData.started_at}
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-gray-900 bg-white min-h-[44px]"
-              data-testid="create-audit-closing-date-input"
+              className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-gray-900 min-h-[44px] ${
+                !addressData.started_at
+                  ? "border-red-300 bg-red-50"
+                  : "border-gray-300 bg-white"
+              }`}
+              required
+              data-testid="create-audit-start-date-input"
             />
-            <p className="text-xs text-gray-500 mt-1">
-              Scheduled closing date
-            </p>
           </div>
           <div>
+            {/* Deliberately optional, and deliberately NOT marked required: an
+                empty end date is how an ongoing deal is represented. The audit
+                window then rolls forward to today (emailDateRange.ts) and the
+                transaction reads as "<start> - Ongoing" in the details tab. An
+                asterisk was tried here and reverted (founder, 2026-09-16) —
+                requiring it would make an open deal impossible to create or to
+                re-save, and would cap message capture at an invented date. */}
             <label className="block text-xs font-medium text-gray-600 mb-1">
               End Date
             </label>
@@ -263,9 +270,6 @@ function AddressVerificationStep({
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-gray-900 bg-white min-h-[44px]"
               data-testid="create-audit-end-date-input"
             />
-            <p className="text-xs text-gray-500 mt-1">
-              When transaction ended
-            </p>
           </div>
         </div>
       </div>

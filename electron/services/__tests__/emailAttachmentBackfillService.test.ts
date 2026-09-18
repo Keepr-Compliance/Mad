@@ -137,6 +137,10 @@ describe("BACKLOG-2250 backfillAttachmentMetadata", () => {
       filename: "Purchase Agreement (final).pdf",
       mimeType: "application/pdf",
       fileSizeBytes: 5555,
+      // BACKLOG-2551: this service is a THIRD write path, reached from neither of
+      // the two chokepoints, so it carries its own copy of the same gate. Outlook
+      // Graph's `id` is stored.
+      providerAttachmentId: "a1",
     });
     expectNoBytesDownloaded();
     expect(result).toMatchObject({
@@ -157,6 +161,9 @@ describe("BACKLOG-2250 backfillAttachmentMetadata", () => {
           filename: "disclosure.docx",
           mimeType: "application/msword",
           size: 6789,
+          // BACKLOG-3187: a real Gmail part always carries one. The fixture that
+          // omitted it described a message Gmail does not emit.
+          partId: "1",
           attachmentId: "att-1",
         },
       ],
@@ -172,9 +179,51 @@ describe("BACKLOG-2250 backfillAttachmentMetadata", () => {
       filename: "disclosure.docx",
       mimeType: "application/msword",
       fileSizeBytes: 6789,
+      // BACKLOG-2551/3187: the SAME rule as the other two write paths — Gmail's
+      // immutable partId, never its rotating attachmentId. "att-1" here would mean
+      // this third write path had persisted a fetch token as identity.
+      providerAttachmentId: "1",
     });
     expectNoBytesDownloaded();
     expect(result).toMatchObject({ processed: 1, indexed: 1, attachments: 1 });
+  });
+
+  it("BACKLOG-3187: a Gmail part with no partId falls back to null, never to the fetch token", async () => {
+    setup([{ id: "e2", external_id: "g1", source: "gmail" }]);
+    mockGmailGetEmailById.mockResolvedValue({
+      attachments: [
+        {
+          filename: "disclosure.docx",
+          mimeType: "application/msword",
+          size: 6789,
+          partId: "",
+          attachmentId: "att-1",
+        },
+      ],
+    });
+
+    await backfillAttachmentMetadata("u1");
+
+    const written = mockUpsertEmailAttachmentMetadata.mock.calls[0][0] as {
+      providerAttachmentId: string | null;
+    };
+    expect(written.providerAttachmentId).toBeNull();
+    expect(written.providerAttachmentId).not.toBe("att-1");
+  });
+
+  it("BACKLOG-3187 CONTROL 2: the Outlook branch of this gate is unchanged", async () => {
+    setup([{ id: "e1", external_id: "o1", source: "outlook" }]);
+    mockOutlookGetAttachments.mockResolvedValue([
+      { id: "graph-att-1", name: "disclosure.docx", contentType: "application/msword", size: 6789 },
+    ]);
+
+    await backfillAttachmentMetadata("u1");
+
+    expect(
+      (mockUpsertEmailAttachmentMetadata.mock.calls[0][0] as {
+        providerAttachmentId: string | null;
+      }).providerAttachmentId,
+    ).toBe("graph-att-1");
   });
 
   it("skips emails that already have attachment rows (NOT EXISTS)", async () => {

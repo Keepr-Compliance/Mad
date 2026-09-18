@@ -735,6 +735,61 @@ describe("OutlookFetchService - Folder Discovery (TASK-2046)", () => {
       );
     });
 
+    /**
+     * CONTROL — the walk reports WHERE IN THE WALK it is.
+     *
+     * `precacheEmails` draws the pre-cache progress bar's 30->50 stretch from
+     * this pair and nothing else, because the per-folder numbers beside it
+     * cannot carry a bar: `searchEmailsByFolder` restarts `fetched` on every
+     * folder and always reports `percentage: 0, hasEstimate: false`.
+     *
+     * THREE folders, not one. A single-folder fixture cannot separate a real
+     * `folderIndex` from a hardcoded 0 — the whole claim is that it ADVANCES.
+     *
+     * MUTATION: stop forwarding `folderIndex`/`folderCount` in
+     * `searchAllFolders` -> RED.
+     */
+    it("reports folderIndex and folderCount so a caller can draw a bar", async () => {
+      mockAxios.mockImplementation(({ url }: { url: string }) => {
+        if (url.includes("/me/mailFolders?")) {
+          return Promise.resolve({
+            data: {
+              value: [
+                { id: "folder-inbox", displayName: "Inbox", childFolderCount: 0 },
+                { id: "folder-archive", displayName: "Archive", childFolderCount: 0 },
+                { id: "folder-custom", displayName: "Projects", childFolderCount: 0 },
+              ],
+            },
+          });
+        }
+        return Promise.resolve({
+          data: {
+            value: [
+              {
+                id: `msg-${url.slice(-8)}`,
+                conversationId: "conv-1",
+                subject: "Test",
+                receivedDateTime: "2024-01-15T10:00:00Z",
+                sentDateTime: "2024-01-15T09:59:00Z",
+                hasAttachments: false,
+              },
+            ],
+          },
+        });
+      });
+
+      const seen: Array<{ folderIndex?: number; folderCount?: number }> = [];
+      await outlookFetchService.searchAllFolders({
+        onProgress: (p) => seen.push({ folderIndex: p.folderIndex, folderCount: p.folderCount }),
+      });
+
+      expect(seen).toEqual([
+        { folderIndex: 0, folderCount: 3 },
+        { folderIndex: 1, folderCount: 3 },
+        { folderIndex: 2, folderCount: 3 },
+      ]);
+    });
+
     it("should throw when not initialized", async () => {
       const uninitializedService = Object.create(
         Object.getPrototypeOf(outlookFetchService)

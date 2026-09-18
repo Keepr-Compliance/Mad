@@ -4,13 +4,11 @@ name: Release
 on:
   push:
     branches: [main]
+  # No inputs. A dispatch behaves exactly like a push to main: what gets
+  # published is decided by the create-release job's github.ref guard alone.
+  # The former `publish` input was declared and read nowhere, so it read as a
+  # safety control while being none (BACKLOG-3192).
   workflow_dispatch:
-    inputs:
-      publish:
-        description: 'Publish release (true/false)'
-        required: true
-        default: 'true'
-        type: boolean
 
 # Required permissions for creating releases
 permissions:
@@ -71,8 +69,24 @@ jobs:
           # Allow codesign to access the certificate
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
 
+          # BACKLOG-3192: prove the import produced a *usable* identity before
+          # anything tries to sign with it. `-v` lists valid identities only, so
+          # this single call is at once the expiry check, the revocation check,
+          # and the check that the issuing intermediate resolves on this runner.
+          # Without it, any of those failures surfaces later as an unrelated
+          # error inside the packager.
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+          if ! security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -q "Developer ID Application"; then
+            echo "::error::No valid Developer ID Application identity in the signing keychain"
+            exit 1
+          fi
+
           echo "Certificate imported successfully"
           echo "signing_enabled=true" >> $GITHUB_OUTPUT
+          # Consumed as CSC_KEYCHAIN by the packaging step. Emitted from here so
+          # the two steps cannot drift on the path, and so it is empty whenever
+          # signing is disabled above (an empty value resolves to no keychain).
+          echo "keychain_path=$KEYCHAIN_PATH" >> $GITHUB_OUTPUT
 
       # Create .env.production with secrets for runtime use
       # The app loads credentials from this file at runtime (electron/main.ts)
@@ -104,9 +118,17 @@ jobs:
 
       - name: Package and Sign macOS App
         env:
-          # Code signing
-          CSC_LINK: ${{ secrets.MACOS_CERTIFICATE }}
-          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          # Code signing. Hand the packager the keychain the Import step already
+          # prepared, rather than letting it build one of its own. Its own path
+          # passes the certificate password to `security set-key-partition-list
+          # -k`, which takes the *keychain* password -- wrong on every release we
+          # have shipped, silently tolerated until the runner image moved, then
+          # fatal (BACKLOG-3192).
+          #
+          # This variable is honoured ONLY when no CSC link is set, so CSC_LINK
+          # and CSC_KEY_PASSWORD must be ABSENT here rather than empty: an empty
+          # CSC_LINK still counts as set and would restore the broken path.
+          CSC_KEYCHAIN: ${{ steps.import-cert.outputs.keychain_path }}
           # Notarization
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
@@ -148,24 +170,117 @@ jobs:
           fi
           echo ".env.production verified: $(wc -l < .env.production) lines"
 
-          # Package with electron-builder (publish handled by Mirror step)
-          if [ -n "$CSC_LINK" ]; then
+          # Package with electron-builder (publish handled by Mirror step).
+          #
+          # Gate on the Import step's own result, NOT on $CSC_LINK. That variable
+          # is deliberately no longer set, and testing it here would silently
+          # select the unsigned branch and ship an unsigned build with every
+          # check green -- which is why this line and the env block above must
+          # never be changed independently of each other (BACKLOG-3192).
+          #
+          # The unsigned branch is retained ON PURPOSE: it is what the signing
+          # gate below is measured against. Do not turn it into a hard error.
+          if [ "${{ steps.import-cert.outputs.signing_enabled }}" = "true" ]; then
             echo "Packaging signed macOS app..."
             npx electron-builder --publish never
           else
             echo "Packaging unsigned macOS app..."
-            CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --config.mac.identity=null
+            CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --config.mac.identity=null --publish never
           fi
+
+      # BACKLOG-3192. Runs with `if: always()` on purpose. This is the one
+      # observation that distinguishes "we signed from our keychain" from "we
+      # silently fell back to the packager's own", and it must not be skipped by
+      # an earlier failure -- a fall-through that also fails is still the answer.
+      #
+      # The packager's keychain path, and only that path, appends its bundled
+      # root-certs keychain to the user search list, and nothing ever removes it
+      # again. Our Import step replaces that list with ours alone, so the entry
+      # cannot pre-exist. Its presence therefore means the fallback ran.
+      #
+      # This is also the durable guard: re-adding CSC_LINK later would restore
+      # the broken path at runtime, and no static reading of this file catches
+      # that. This step does.
+      - name: Verify the signing keychain path was honoured
+        if: always()
+        run: |
+          echo "User keychain search list after packaging:"
+          security list-keychains -d user
+          if security list-keychains -d user | grep -q "electron-builder-root-certs.keychain"; then
+            echo "::error::The packager built its own keychain -- CSC_KEYCHAIN was not honoured and signing did not use our keychain"
+            exit 1
+          fi
+          echo "OK: no packager-managed keychain in the search list."
+
+      # BACKLOG-3192. Nothing in this pipeline previously distinguished a signed
+      # build from an unsigned one, so an unsigned artifact could ship green.
+      #
+      # Gate the .app and NEVER the disk image. Every release we have shipped
+      # carries an un-ticketed DMG wrapping a notarised .app, and they open; a
+      # DMG assessment here would be red on a correct build, and a standing red
+      # gets quieted. Presence of the DMG is all this asserts.
+      - name: Verify macOS signing and notarisation
+        run: |
+          set -euo pipefail
+          FOUND=0
+          for APP in release/mac-arm64/Keepr.app release/mac/Keepr.app; do
+            if [ ! -d "$APP" ]; then
+              echo "::error::Missing $APP"
+              ls -la release/ || true
+              exit 1
+            fi
+            FOUND=$((FOUND+1))
+            echo "::group::$APP"
+            codesign --verify --deep --strict --verbose=2 "$APP"
+            # Capture first, match second -- do NOT pipe into `grep -q`. grep -q
+            # exits at its first match and closes the pipe, so codesign can take
+            # SIGPIPE (141); under `set -o pipefail` that becomes the pipeline's
+            # status and this reports "not notarised" for an app that IS
+            # notarised. The ticket line is not codesign's last output, so the
+            # race is real, and it would fail the release on a correct build.
+            INFO=$(codesign -dv --verbose=4 "$APP" 2>&1)
+            grep -q "Notarization Ticket=stapled" <<<"$INFO" || {
+              echo "::error::$APP has no stapled notarisation ticket"
+              echo "$INFO"
+              exit 1
+            }
+            xcrun stapler validate "$APP"
+            spctl -a -t exec -vv "$APP"
+            echo "::endgroup::"
+          done
+          [ "$FOUND" -eq 2 ] || { echo "::error::Expected 2 .app bundles, found $FOUND"; exit 1; }
+          ls release/*.dmg >/dev/null
+
+      # BACKLOG-3425. v2.35.0, v2.36.0 and v2.37.0 all shipped an Intel build that could
+      # not launch: `build.files` listed dist/** and dist was ALSO the packager's output,
+      # so the x64 pass (which runs second) packed the arm64 pass's artifacts into its own
+      # app.asar. It reached 2.3 GB of content, package.json landed past the 2 GiB offset
+      # boundary and extracted as corrupted bytes, and the app died before running a line
+      # of its own code. No Sentry event -- the crash precedes SDK init.
+      #
+      # Every check above reads the app's SIGNATURE. None of them reads what is inside it.
+      # This one does, from the asar header. Both architectures are passed together so the
+      # cross-architecture size gap -- 3.2x, sitting in plain sight across three releases
+      # -- is itself a failure.
+      - name: Verify the packages contain no build output
+        run: |
+          node scripts/ci/check-package-sanity.mjs \
+            --output-dir release --max-content-mb 400 --max-ratio 1.5 \
+            release/mac-arm64/Keepr.app release/mac/Keepr.app
 
       - name: Upload macOS Artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-macos
           path: |
-            dist/*.dmg
-            dist/*.zip
-            dist/*.blockmap
-            dist/latest-mac.yml
+            release/*.dmg
+            release/*.zip
+            release/*.blockmap
+            release/latest-mac.yml
+          # Default is `warn`. A build that produced nothing uploaded nothing
+          # and passed, and the absence only surfaced later as a glob error in
+          # the mirror step (BACKLOG-3192).
+          if-no-files-found: error
           retention-days: 30
 
   # Build and release for Windows
@@ -390,10 +505,10 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          $exe = Get-ChildItem -Path dist -Filter "*.exe" | Select-Object -First 1
-          if (-not $exe) { Write-Error "No .exe found in dist to verify the manifest against"; exit 1 }
-          $ymlPath = Join-Path dist "latest.yml"
-          if (-not (Test-Path $ymlPath)) { Write-Error "dist/latest.yml not found"; exit 1 }
+          $exe = Get-ChildItem -Path release -Filter "*.exe" | Select-Object -First 1
+          if (-not $exe) { Write-Error "No .exe found in release to verify the manifest against"; exit 1 }
+          $ymlPath = Join-Path release "latest.yml"
+          if (-not (Test-Path $ymlPath)) { Write-Error "release/latest.yml not found"; exit 1 }
 
           Write-Host "Verifying latest.yml matches the signed exe: $($exe.Name)"
 
@@ -434,14 +549,32 @@ jobs:
           "
           if ($LASTEXITCODE -ne 0) { Write-Error "Manifest verify failed"; exit 1 }
 
+      # BACKLOG-3425. The macOS side is where the defect shipped, but the cause is a
+      # `build.files` pattern shared by every platform. Windows was spared only by an
+      # accident of naming -- electron-builder appends exactly one output exclusion,
+      # `!<outDir>/*-unpacked{,/**/*}`, which `win-unpacked/` matches and `mac-arm64/`
+      # does not. Check it too rather than rely on that.
+      - name: Verify the package contains no build output
+        shell: pwsh
+        run: |
+          node scripts/ci/check-package-sanity.mjs `
+            --output-dir release --max-content-mb 400 `
+            release/win-unpacked
+          if ($LASTEXITCODE -ne 0) { Write-Error "Package sanity check failed"; exit 1 }
+
       - name: Upload Windows Artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-windows
           path: |
-            dist/*.exe
-            dist/*.blockmap
-            dist/latest.yml
+            release/*.exe
+            release/*.blockmap
+            release/latest.yml
+          # Same defect as the macOS upload: the default `warn` lets a job that
+          # produced nothing report success, and with the create-release gate now
+          # requiring BOTH platforms, an empty-but-green Windows job would let a
+          # half-release through the guard that exists to stop it (BACKLOG-3192).
+          if-no-files-found: error
           retention-days: 30
 
   # Create GitHub Release (after both platforms complete)
@@ -449,8 +582,16 @@ jobs:
     name: Create GitHub Release
     needs: [release-macos, release-windows]
     runs-on: ubuntu-latest
-    # Create release if at least one platform succeeded
-    if: always() && (needs.release-macos.result == 'success' || needs.release-windows.result == 'success')
+    # BACKLOG-3192. Two guards, both load-bearing:
+    #  - github.ref: this job publishes a draft AND mirrors assets to the public
+    #    releases repo, where an upload for an existing tag runs with --clobber.
+    #    A dispatch from any other branch must never reach those steps.
+    #  - BOTH platforms must succeed. This was `||`, so a run with one platform
+    #    dead still drafted a release advertising downloads that did not exist.
+    if: >-
+      always() && github.ref == 'refs/heads/main' &&
+      needs.release-macos.result == 'success' &&
+      needs.release-windows.result == 'success'
 
     steps:
       - name: Checkout code

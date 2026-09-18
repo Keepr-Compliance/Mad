@@ -8,6 +8,7 @@
 
 import type { OAuthProvider } from "@/types";
 import type { ConnectionErrorType } from "../../electron/services/connectionStatusService";
+import type { HealthIssue } from "../../electron/types/ipc/healthIssue";
 import { type ApiResult, getErrorMessage } from "./index";
 
 /**
@@ -83,8 +84,11 @@ export interface AllConnections {
 export interface HealthCheck {
   healthy: boolean;
   provider?: OAuthProvider;
-  issues?: string[];
+  /** BACKLOG-3230: objects, not strings. See electron/types/ipc/healthIssue.ts. */
+  issues?: HealthIssue[];
 }
+
+export type { HealthIssue };
 
 /**
  * Secure storage status
@@ -110,6 +114,105 @@ export const systemService = {
   // ============================================
   // PERMISSION METHODS
   // ============================================
+
+  /**
+   * BACKLOG-3208: Is Full Disk Access usable by THIS process right now?
+   *
+   * Wraps the existing `check-permissions` IPC — the same one the onboarding
+   * `PermissionsStep` uses — so a Settings surface can ask the question without
+   * a scattered `window.api` call. The handler resolves rather than throws on
+   * a denial: `{ hasPermission: false, error: "EPERM: operation not
+   * permitted, access '<home>/Library/Messages/chat.db'" }`.
+   *
+   * `hasPermission` is returned as `boolean | undefined` ON PURPOSE. The
+   * three states are distinct and the caller must be able to tell them apart:
+   * granted, denied, and "the check did not answer" (the IPC threw, or an
+   * older/other producer omitted the field). Collapsing unknown into denied
+   * would put a "you have not granted Full Disk Access" notice in front of
+   * users who have.
+   */
+  async checkMessagesPermission(): Promise<
+    ApiResult<{
+      hasPermission: boolean | undefined;
+      reason?: string;
+      errorCode?: string;
+    }>
+  > {
+    try {
+      const result = await window.api.system.checkPermissions();
+      return {
+        success: true,
+        data: {
+          hasPermission:
+            typeof result?.hasPermission === "boolean"
+              ? result.hasPermission
+              : undefined,
+          reason: result?.error,
+          // BACKLOG-3213: WHICH failure, carried through unchanged. A caller
+          // that ignores it sees exactly the previous behaviour; the panel
+          // uses it to tell "Full Disk Access is refused" from "there is no
+          // Messages database on this Mac", which need opposite sentences.
+          errorCode: result?.errorCode,
+        },
+      };
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) };
+    }
+  },
+
+  /**
+   * BACKLOG-3208: Open the macOS Full Disk Access pane, with Keepr already
+   * listed in it.
+   *
+   * Both calls, in this order, are the working sequence from
+   * `PermissionsStep.handleOpenSystemSettings` and are reused verbatim rather
+   * than re-derived:
+   *   1. `triggerFullDiskAccess()` reads `~/Library/Messages/chat.db`, which is
+   *      what makes macOS add Keepr to the Full Disk Access list. Without it the
+   *      pane can open with no Keepr row to switch on. It is idempotent, and
+   *      BACKLOG-2192 established that re-firing it on every open is both safe
+   *      and necessary (a single mount-time trigger sometimes had not landed in
+   *      the pane by the time the user looked).
+   *   2. `openSystemSettings()` opens the pane itself.
+   *
+   * Step 1 is best-effort: if the trigger fails the pane is still opened, which
+   * is strictly better than refusing to open it.
+   */
+  async openFullDiskAccessSettings(): Promise<ApiResult> {
+    try {
+      try {
+        await window.api.system.triggerFullDiskAccess();
+      } catch {
+        // Non-fatal: the pane is still worth opening, the user can add Keepr
+        // with the "+" button. Swallowing is the intended behaviour here and
+        // the reason is this comment, not an empty block.
+      }
+      const result = await window.api.system.openSystemSettings();
+      return { success: result?.success !== false };
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) };
+    }
+  },
+
+  /**
+   * BACKLOG-3208: Relaunch the app cleanly (no data wipe) so a freshly granted
+   * Full Disk Access actually takes effect.
+   *
+   * macOS caches the sandbox/TCC decision per-process at launch, so a process
+   * that was denied `chat.db` does not gain access when the toggle is flipped
+   * under it — this is the premise BACKLOG-1842 was built on. `relaunched` is
+   * `false` when the main-process handler suppressed the relaunch (the
+   * `!app.isPackaged && KEEPR_E2E=1` gate), which callers must handle rather
+   * than assuming the process is about to exit.
+   */
+  async relaunchApp(): Promise<ApiResult<{ relaunched: boolean }>> {
+    try {
+      const result = await window.api.system.relaunchApp();
+      return { success: true, data: { relaunched: result?.relaunched === true } };
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) };
+    }
+  },
 
   /**
    * Run the permission setup wizard

@@ -36,10 +36,20 @@
  * `contacts:get-available` projection of a nameless address-book row.
  */
 
-import { hasNothingToImport as electronRule } from "../../../electron/utils/importableRecord";
-import { NOTHING_TO_IMPORT_REASON as electronReason } from "../../../electron/utils/importableRecord";
-import { hasNothingToImport as rendererRule } from "../importableRecord";
-import { NOTHING_TO_IMPORT_REASON as rendererReason } from "../importableRecord";
+import {
+  hasNothingToImport as electronRule,
+  hasNothingToSave as electronSaveRule,
+  importRefusalReason as electronRefusalReason,
+  NOTHING_TO_IMPORT_REASON as electronReason,
+  COMPANY_ONLY_IMPORT_REASON as electronCompanyReason,
+} from "../../../electron/utils/importableRecord";
+import {
+  hasNothingToImport as rendererRule,
+  hasNothingToSave as rendererSaveRule,
+  importRefusalReason as rendererRefusalReason,
+  NOTHING_TO_IMPORT_REASON as rendererReason,
+  COMPANY_ONLY_IMPORT_REASON as rendererCompanyReason,
+} from "../importableRecord";
 
 interface Row {
   parts: Parameters<typeof rendererRule>[0];
@@ -89,9 +99,15 @@ const CASES: Row[] = [
   { parts: { name: "Dana Whitlock" }, expected: false, why: "an ordinary name" },
   { parts: { display_name: "Dana Whitlock" }, expected: false, why: "name only in display_name" },
   {
+    // BACKLOG-2707 — REVERSED, by founder ruling `a41a805b` / PM `5fac2d84`.
+    // This case read "COMPANY COUNTS — the display chain's second tier renders
+    // it on screen" and expected `false`. It still renders on screen, and it is
+    // still SAVEABLE (asserted in the subset describe below) — but a company is
+    // not somebody you can import, so IMPORT now refuses it. Reversed rather
+    // than removed, so the trail from 2672 to here stays legible.
     parts: { company: "Vantrees Realty" },
-    expected: false,
-    why: "COMPANY COUNTS — the display chain's second tier renders it on screen",
+    expected: true,
+    why: "a company alone is SAVEABLE but not IMPORTABLE (BACKLOG-2707)",
   },
   {
     parts: { name: "", phone: "+14155550142", allPhones: ["+14155550142"], allEmails: [] },
@@ -120,6 +136,15 @@ const CASES: Row[] = [
     why: "NO DIGIT TEST — an iMessage handle can be an Apple ID and still identify a person",
   },
   {
+    // BACKLOG-3358 — transcribed from the `contacts:get-available` row for a
+    // nameless Outlook record whose only address has a dotless domain. Presence
+    // decides, not validity: the import stores the value as the source holds
+    // it, so neither copy may start refusing this record.
+    parts: { name: null, phone: null, company: null, email: "name@localhost", allEmails: ["name@localhost"], allPhones: [] },
+    expected: false,
+    why: "an address the app cannot use still makes the record importable (BACKLOG-3358)",
+  },
+  {
     parts: { name: "unknown", allPhones: ["", "+14155550142"] },
     expected: false,
     why: "one usable entry among blanks is enough",
@@ -141,6 +166,39 @@ describe("the main-process and renderer copies of hasNothingToImport agree", () 
   });
 
   /**
+   * BACKLOG-2707 — the mirror pair grew three members and a second string, and
+   * a drift in any of them is silent unless it is pinned here.
+   */
+  it("states the company-only reason identically on both sides", () => {
+    expect(electronCompanyReason).toBe(rendererCompanyReason);
+    expect(electronCompanyReason).not.toBe(electronReason);
+  });
+
+  it("hasNothingToSave agrees on both sides across the same corpus", () => {
+    for (const { parts } of CASES) {
+      expect(rendererSaveRule(parts)).toBe(electronSaveRule(parts));
+    }
+  });
+
+  it("importRefusalReason picks the same string on both sides", () => {
+    for (const { parts } of CASES) {
+      expect(rendererRefusalReason(parts)).toBe(electronRefusalReason(parts));
+    }
+  });
+
+  /**
+   * The subset property, asserted across the MIRROR PAIR rather than within one
+   * copy: if the two `hasNothingToSave` bodies ever drift, the derived import
+   * rule drifts with them and this catches it on both sides at once.
+   */
+  it("importable implies saveable, on both copies", () => {
+    for (const { parts } of CASES) {
+      if (!rendererRule(parts)) expect(rendererSaveRule(parts)).toBe(false);
+      if (!electronRule(parts)) expect(electronSaveRule(parts)).toBe(false);
+    }
+  });
+
+  /**
    * THE COPIES MUST NOT SILENTLY BECOME DIFFERENT FUNCTIONS.
    *
    * The table above is a fixed corpus, so a divergence outside it would pass.
@@ -159,7 +217,12 @@ describe("the main-process and renderer copies of hasNothingToImport agree", () 
       if (i === FIELDS.length) {
         const parts = acc as Parameters<typeof rendererRule>[0];
         compared += 1;
-        if (rendererRule(parts) !== electronRule(parts)) {
+        // BACKLOG-2707: all four mirror-pair members swept, not just the one.
+        if (
+          rendererRule(parts) !== electronRule(parts) ||
+          rendererSaveRule(parts) !== electronSaveRule(parts) ||
+          rendererRefusalReason(parts) !== electronRefusalReason(parts)
+        ) {
           disagreements.push(JSON.stringify(parts));
         }
         return;

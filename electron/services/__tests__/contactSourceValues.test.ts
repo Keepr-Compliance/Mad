@@ -47,19 +47,11 @@ jest.mock("../db/core/dbConnection", () => ({
     const r = mockDb!.prepare(sql).run(...(params as never[]));
     return { lastInsertRowid: r.lastInsertRowid, changes: r.changes };
   },
-  // node:sqlite has no `db.transaction(fn)` helper, so the semantics
-  // `unlinkContactSource` relies on (all-or-nothing) are spelled out.
-  dbTransaction: <T>(fn: () => T): T => {
-    mockDb!.exec("BEGIN");
-    try {
-      const out = fn();
-      mockDb!.exec("COMMIT");
-      return out;
-    } catch (e) {
-      mockDb!.exec("ROLLBACK");
-      throw e;
-    }
-  },
+  // The helper's REAL transaction (BACKLOG-3220). The hand-rolled BEGIN/COMMIT
+  // this replaced could not nest — and `applyLinkedSourceValuesOrThrow` now
+  // opens its own transaction inside callers that already hold one — and it
+  // did not refuse a promise-returning callback as better-sqlite3 does.
+  dbTransaction: <T>(fn: () => T): T => mockDb!.transaction(fn)(),
   getDbPath: () => "/fake/path/mad.db",
   getEncryptionKey: () => "fake-key",
 }));
@@ -682,5 +674,75 @@ describe("BACKLOG-2423 — a newly linked source contributes immediately", () =>
 
     unlinkContactSource(USER, "round", link.id!);
     expect(emailsOn("round")).toEqual([]);
+  });
+});
+
+describe("BACKLOG-3220 — the address copy is one unit: all of it or none", () => {
+  /**
+   * `applyLinkedSourceValuesOrThrow` wraps the email copy and the phone copy in
+   * its own `dbTransaction`. Before, the emails were inserted (and committed,
+   * outside any caller's transaction) before the phones were tried, so a
+   * failure on a phone left some of a source record's addresses copied and the
+   * rest not — and the swallowing wrapper reported nothing.
+   *
+   * The failure is a real engine failure, not a thrown mock: a trigger aborts
+   * the `contact_phones` INSERT, which fires for plain INSERT and INSERT OR
+   * IGNORE alike (measured on both engines, contactDbService.atomicCreate-2496).
+   *
+   * NEGATIVE CONTROL: remove the core's `dbTransaction` wrapper and this goes
+   * red — the new email is left on the contact.
+   */
+  it("a failing phone insert leaves no new email behind, and the wrapper reports zero", () => {
+    addContact("halfcopy", "Half Copy");
+    addEmail("halfcopy", "kept@example.com", "import", 1);
+    addExternal(
+      "out-halfcopy",
+      "Half Copy",
+      "outlook",
+      ["kept@example.com", "arrives@example.com"],
+      ["(415) 555-0177"],
+    );
+    createLink({
+      userId: USER,
+      contactId: "halfcopy",
+      sourceType: "outlook",
+      sourceRecordId: "out-halfcopy",
+      matchMethod: "email",
+    });
+    mockDb!.exec(`
+      CREATE TRIGGER force_phone_insert_failure BEFORE INSERT ON contact_phones
+      BEGIN SELECT RAISE(ABORT, 'forced phone insert failure (BACKLOG-3220)'); END;
+    `);
+
+    const result = applyLinkedSourceValues(USER, "halfcopy");
+
+    expect(result).toEqual({ emailsAdded: 0, phonesAdded: 0 });
+    expect(emailsOn("halfcopy")).toEqual(["kept@example.com"]);
+    expect(phonesOn("halfcopy")).toEqual([]);
+  });
+
+  it("PRECONDITION — the forced failure really fires, and the copy works without it", () => {
+    addContact("precon", "Test Contact");
+    addExternal("out-precon", "Test Contact", "outlook", ["precon@example.com"], ["(415) 555-0178"]);
+    createLink({
+      userId: USER,
+      contactId: "precon",
+      sourceType: "outlook",
+      sourceRecordId: "out-precon",
+      matchMethod: "email",
+    });
+    expect(applyLinkedSourceValues(USER, "precon")).toEqual({ emailsAdded: 1, phonesAdded: 1 });
+
+    mockDb!.exec(`
+      CREATE TRIGGER force_phone_insert_failure BEFORE INSERT ON contact_phones
+      BEGIN SELECT RAISE(ABORT, 'forced phone insert failure (BACKLOG-3220)'); END;
+    `);
+    expect(() =>
+      mockDb!
+        .prepare(
+          "INSERT OR IGNORE INTO contact_phones (id, contact_id, phone_e164, is_primary, source) VALUES ('p', 'precon', '+14155550199', 0, 'import')",
+        )
+        .run(),
+    ).toThrow(/forced phone insert failure/);
   });
 });
