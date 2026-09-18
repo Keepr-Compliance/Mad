@@ -16,12 +16,17 @@
   "//include4": "e2e/driver/__tests__ also runs in CI jest; it is gated separately by e2e/tsconfig.json",
   "//include5": "(`npm run qa:e2e:typecheck`) and is not pulled in here, to avoid rootDir cross-tree",
   "//include6": "errors — same reasoning as scripts/qa/harness/tsconfig.json (BACKLOG-1849).",
+  "//include7": "BACKLOG-3425: scripts/__tests__ runs in CI jest (jest.config.js testMatch) but was",
+  "//include8": "in no type-check include list, so its four suites were exactly the hole BACKLOG-2414",
+  "//include9": "closed everywhere else. The pre-push hook reports the omission by name; adding the",
+  "//include10": "tree is clean against all of them today.",
   "include": [
     "electron/**/*",
     "src/**/*",
     "tests/**/*",
-    "scripts/qa/harness/**/*"
+    "scripts/qa/harness/**/*",
+    "scripts/__tests__/**/*"
   ],
   "//exclude": "BACKLOG-3067: this config redeclares `exclude` in full (see the BACKLOG-2414 note above — inheriting the base one would re-open the *.test.* hole), so the type-fixture directory has to be named here SEPARATELY. Omitting it takes `npm run type-check:tests` red on fixtures that are failing to compile by design.",
-  "exclude": ["node_modules", "dist", "build", "electron/types/__typefixtures__/**"]
+  "exclude": ["node_modules", "dist", "release", "build", "electron/types/__typefixtures__/**"]
 }

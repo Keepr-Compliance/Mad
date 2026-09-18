@@ -150,6 +150,8 @@ const SKIP_DIRS = new Set([
   "node_modules",
   "dist",
   "dist-electron",
+  // BACKLOG-3425: electron-builder's output directory
+  "release",
   "build",
   "out",
   "coverage",

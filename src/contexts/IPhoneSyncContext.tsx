@@ -17,6 +17,15 @@
  * exposed via a separate IPhoneSyncEnabledContext so the Settings toggle can
  * start/stop detection live without touching the hook's return contract.
  *
+ * BACKLOG-3423: the import source is now a gate on the EFFECTIVE enablement, so
+ * a macOS Messages (or Android) user gets no device detection and a toggle that
+ * reads OFF even when their stored `iphoneSyncEnabled` is `true`. The stored
+ * preference is never rewritten — switching back to iPhone restores it. The
+ * provider therefore keeps the raw preference and the source as separate state
+ * and derives `enabled` from both, and `applyImportSource` lets Settings re-gate
+ * live when the source radio changes (before, enablement was resolved once per
+ * `[userId, platform]` and a source change did nothing until the next restart).
+ *
  * @module contexts/IPhoneSyncContext
  */
 
@@ -27,6 +36,7 @@ import React, {
   useEffect,
   useCallback,
   useMemo,
+  useRef,
 } from "react";
 import { useIPhoneSync } from "../hooks/useIPhoneSync";
 import type { UseIPhoneSyncReturn } from "../types/iphone";
@@ -43,10 +53,21 @@ const IPhoneSyncContext = createContext<UseIPhoneSyncReturn | null>(null);
  * on the full useIPhoneSync return shape.
  */
 export interface IPhoneSyncEnabledContextValue {
-  /** Whether iPhone detection/sync is currently active. */
+  /**
+   * Whether iPhone detection/sync is currently active — the EFFECTIVE value
+   * (stored preference gated by the import source, BACKLOG-3423), which is what
+   * the Settings toggle displays.
+   */
   enabled: boolean;
   /** Persist + live-apply the opt-in. Optimistic; reverts on persistence failure. */
   setIphoneSyncEnabled: (next: boolean) => Promise<void>;
+  /**
+   * BACKLOG-3423: re-gate on a live import-source change. Settings calls this
+   * after ImportSourceSettings has persisted `messages.source`, so detection
+   * starts/stops with the radio instead of at the next app start. It changes NO
+   * stored value — in particular it never writes `integrations`.
+   */
+  applyImportSource: (source: ImportSource) => void;
 }
 
 const IPhoneSyncEnabledContext =
@@ -61,17 +82,34 @@ interface IPhoneSyncProviderProps {
 export function IPhoneSyncProvider({ userId = null, children }: IPhoneSyncProviderProps) {
   const { platform } = usePlatform();
 
-  // Initialise from the platform default (no pref, no source) so macOS starts
-  // OFF (no detection flash while prefs load) and Windows/Linux start ON.
-  const [enabled, setEnabled] = useState<boolean>(() =>
-    resolveIphoneSyncEnabled(undefined, platform, null),
+  // BACKLOG-3423: the raw stored preference and the effective import source are
+  // held separately, and `enabled` is derived from both. Both start "unknown"
+  // (undefined / null), which resolves to the platform default — macOS OFF (no
+  // detection flash while prefs load), Windows/Linux ON (their primary import
+  // path must not wait on an IPC round-trip).
+  const [prefEnabled, setPrefEnabled] = useState<boolean | undefined>(undefined);
+  const [importSource, setImportSource] = useState<ImportSource | null>(null);
+
+  // Mirror of `prefEnabled` so the optimistic-write path can restore the exact
+  // previous value on failure (which may be `undefined` — "never set" — and is
+  // NOT the same as `!next`).
+  const prefEnabledRef = useRef<boolean | undefined>(undefined);
+  const applyPrefEnabled = useCallback((next: boolean | undefined) => {
+    prefEnabledRef.current = next;
+    setPrefEnabled(next);
+  }, []);
+
+  const enabled = useMemo(
+    () => resolveIphoneSyncEnabled(prefEnabled, platform, importSource),
+    [prefEnabled, platform, importSource],
   );
 
-  // Resolve effective enablement from the user's stored preference + import source.
+  // Read the user's stored preference + import source.
   useEffect(() => {
     if (!userId) {
       // Logged out / pre-onboarding: fall back to the platform default.
-      setEnabled(resolveIphoneSyncEnabled(undefined, platform, null));
+      applyPrefEnabled(undefined);
+      setImportSource(null);
       return;
     }
 
@@ -82,28 +120,27 @@ export function IPhoneSyncProvider({ userId = null, children }: IPhoneSyncProvid
         const prefsRes = await settingsService.getPreferences(userId);
         const prefs = prefsRes.success ? prefsRes.data : undefined;
 
-        const prefEnabled =
+        const storedPref =
           typeof prefs?.integrations?.iphoneSyncEnabled === "boolean"
             ? prefs.integrations.iphoneSyncEnabled
             : undefined;
 
-        // Only need the effective import source when there's no explicit opt-in.
-        let source: ImportSource | null = null;
-        if (typeof prefEnabled !== "boolean") {
-          source = prefs?.messages?.source ?? null;
-          if (!source) {
-            // Mirror Settings.tsx / useImportSource default derivation.
-            const phone = await settingsService.getPhoneType(userId);
-            if (phone.success && phone.data === "android") {
-              source = "android-companion";
-            } else {
-              source = platform === "macos" ? "macos-native" : "iphone-sync";
-            }
+        // BACKLOG-3423: the source is needed whether or not there is an explicit
+        // opt-in — it now gates the opt-in rather than only standing in for it.
+        let source: ImportSource | null = prefs?.messages?.source ?? null;
+        if (!source) {
+          // Mirror Settings.tsx / useImportSource default derivation.
+          const phone = await settingsService.getPhoneType(userId);
+          if (phone.success && phone.data === "android") {
+            source = "android-companion";
+          } else {
+            source = platform === "macos" ? "macos-native" : "iphone-sync";
           }
         }
 
         if (cancelled) return;
-        setEnabled(resolveIphoneSyncEnabled(prefEnabled, platform, source));
+        applyPrefEnabled(storedPref);
+        setImportSource(source);
       } catch (err) {
         if (!cancelled) {
           logger.warn(
@@ -117,31 +154,40 @@ export function IPhoneSyncProvider({ userId = null, children }: IPhoneSyncProvid
     return () => {
       cancelled = true;
     };
-  }, [userId, platform]);
+  }, [userId, platform, applyPrefEnabled]);
 
   // Live-toggle: optimistic state update (starts/stops detection immediately via
   // the hook's `enabled` dependency) then persist. Revert on persistence failure.
   const setIphoneSyncEnabled = useCallback(
     async (next: boolean): Promise<void> => {
-      setEnabled(next);
+      const previous = prefEnabledRef.current;
+      applyPrefEnabled(next);
       if (!userId) return;
       const res = await settingsService.setIphoneSyncEnabled(userId, next);
       if (!res.success) {
-        setEnabled(!next);
+        applyPrefEnabled(previous);
         logger.warn(
           "[IPhoneSyncProvider] Failed to persist iphoneSyncEnabled; reverting",
           res.error,
         );
       }
     },
-    [userId],
+    [userId, applyPrefEnabled],
   );
+
+  // BACKLOG-3423: Settings calls this when the source radio changes, AFTER
+  // ImportSourceSettings has persisted it. Re-gating is all this does: no
+  // preference is written here, so a user who had the toggle ON as an iPhone
+  // user keeps that stored choice while their source is elsewhere.
+  const applyImportSource = useCallback((source: ImportSource) => {
+    setImportSource(source);
+  }, []);
 
   const sync = useIPhoneSync(enabled);
 
   const enabledValue = useMemo<IPhoneSyncEnabledContextValue>(
-    () => ({ enabled, setIphoneSyncEnabled }),
-    [enabled, setIphoneSyncEnabled],
+    () => ({ enabled, setIphoneSyncEnabled, applyImportSource }),
+    [enabled, setIphoneSyncEnabled, applyImportSource],
   );
 
   return (
@@ -173,7 +219,11 @@ export function useIPhoneSyncContext(): UseIPhoneSyncReturn {
 export function useIPhoneSyncEnabled(): IPhoneSyncEnabledContextValue {
   const ctx = useContext(IPhoneSyncEnabledContext);
   if (!ctx) {
-    return { enabled: false, setIphoneSyncEnabled: async () => {} };
+    return {
+      enabled: false,
+      setIphoneSyncEnabled: async () => {},
+      applyImportSource: () => {},
+    };
   }
   return ctx;
 }

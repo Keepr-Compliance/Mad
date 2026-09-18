@@ -33,6 +33,11 @@ function isValidEmail(email: string): boolean {
 // Resend cooldown in seconds
 const RESEND_COOLDOWN = 60;
 
+// Magic-link sign-in is hidden for now. The handlers, state and the
+// "check your email" confirmation view below are all kept intact so this can be
+// switched back on by flipping this one constant.
+const MAGIC_LINK_ENABLED = false;
+
 function DesktopLoginForm() {
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -320,41 +325,45 @@ function DesktopLoginForm() {
           </button>
         </div>
 
-        {/* Divider */}
-        <div className="relative">
-          <div className="absolute inset-0 flex items-center">
-            <div className="w-full border-t border-gray-300" />
-          </div>
-          <div className="relative flex justify-center text-sm">
-            <span className="px-2 bg-gray-50 text-gray-500">or</span>
-          </div>
-        </div>
+        {MAGIC_LINK_ENABLED && (
+          <>
+            {/* Divider */}
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-gray-300" />
+              </div>
+              <div className="relative flex justify-center text-sm">
+                <span className="px-2 bg-gray-50 text-gray-500">or</span>
+              </div>
+            </div>
 
-        {/* Magic Link */}
-        <form onSubmit={handleMagicLink} className="space-y-3">
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="Enter your email address"
-            required
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg shadow-sm bg-white text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors"
-          />
-          <button
-            type="submit"
-            disabled={loading !== null}
-            className="w-full px-4 py-3 bg-primary-600 text-white rounded-lg shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-medium"
-          >
-            {loading === 'email' ? (
-              <span className="flex items-center justify-center gap-2">
-                <Loader2 className="h-5 w-5 animate-spin text-white" />
-                Sending...
-              </span>
-            ) : (
-              'Continue with email'
-            )}
-          </button>
-        </form>
+            {/* Magic Link */}
+            <form onSubmit={handleMagicLink} className="space-y-3">
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="Enter your email address"
+                required
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg shadow-sm bg-white text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors"
+              />
+              <button
+                type="submit"
+                disabled={loading !== null}
+                className="w-full px-4 py-3 bg-primary-600 text-white rounded-lg shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-medium"
+              >
+                {loading === 'email' ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <Loader2 className="h-5 w-5 animate-spin text-white" />
+                    Sending...
+                  </span>
+                ) : (
+                  'Continue with email'
+                )}
+              </button>
+            </form>
+          </>
+        )}
 
         {/* Footer */}
         <p className="text-center text-sm text-gray-500">
