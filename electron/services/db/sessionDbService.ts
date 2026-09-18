@@ -12,7 +12,14 @@ import logService from "../logService";
 /**
  * Create a new session for a user
  */
-export async function createSession(userId: string): Promise<string> {
+/**
+ * BACKLOG-2546 — SYNC TWIN. See `userDbService.createUserSync` for the full
+ * reasoning: the login provisioning chain commits as one `dbTransaction` unit,
+ * `dbTransaction` takes a SYNCHRONOUS callback by type, so the body needs a
+ * callee that is synchronous all the way down. The primitive is this one; the
+ * promise-returning export below is a one-line wrapper over it.
+ */
+export function createSessionSync(userId: string): string {
   const id = crypto.randomUUID();
   const sessionToken = crypto.randomUUID();
 
@@ -27,6 +34,10 @@ export async function createSession(userId: string): Promise<string> {
 
   dbRun(statement, [id, userId, sessionToken, expiresAt.toISOString()]);
   return sessionToken;
+}
+
+export async function createSession(userId: string): Promise<string> {
+  return createSessionSync(userId);
 }
 
 /**

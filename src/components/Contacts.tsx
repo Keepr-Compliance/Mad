@@ -30,6 +30,8 @@ import { RemovedContactsSection } from "./contact/components/RemovedContactsSect
 import { LinkSourceSearch } from "./shared/LinkSourceSearch";
 import { ContactCompareSources } from "./shared/ContactCompareSources";
 import { NotificationContext } from "../contexts/NotificationContext";
+import { labelForContact } from "../utils/contactDisplayLabel";
+import { unmatchableEmailMessage } from "../utils/importSkippedMessage";
 
 interface ContactsProps {
   userId: string;
@@ -390,8 +392,9 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
   } = useContactList(userId, { onContactDeleted: handleContactDeleted });
 
   /**
-   * BACKLOG-2367: toasts for the removed-contacts restore path. The rest of this
-   * screen still uses alert() for failures; a restore is a SUCCESS case, and an
+   * BACKLOG-2367: toasts for the removed-contacts restore path. Remove, restore
+   * and delete-check failures in `useContactList` still use alert(); import
+   * failures use this toast (BACKLOG-3354). A restore is a SUCCESS case, and an
    * alert() would be a modal interruption for good news.
    *
    * Read through `useContext` rather than the `useNotification` hook on purpose.
@@ -404,6 +407,9 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
    * before this section existed.
    */
   const notification = useContext(NotificationContext);
+  // The memoised `notify` object, not the context value: it is a dependency of
+  // `handleImportContact` below (BACKLOG-3354).
+  const notify = notification?.notify;
 
   /**
    * Remove the staged contact, then offer Undo (BACKLOG-2501).
@@ -719,10 +725,80 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
         // of the IPC boundary has any use for. Dropped here, at the boundary,
         // rather than by rebuilding the object.
         const { is_message_derived: _listBadge, ...record } = contact;
-        const result = await window.api.contacts.import(userId, [record]);
+
+        /**
+         * ==================================================================
+         * BACKLOG-3354 — A FAILED IMPORT IS SHOWN, NOT ONLY LOGGED.
+         * ==================================================================
+         * Every catch above this function only logs, so a failed import used
+         * to clear the button's importing state and show nothing else. The
+         * toast is raised HERE, inside `run`, because this is the one place
+         * that holds the IPC result, and a second press of the same row shares
+         * `run` — so it fires once per round trip, never once per press.
+         *
+         * Two shapes, told apart by the main process, never guessed here:
+         *   (a) nothing was saved — `success: false` with no `savedContactIds`,
+         *       a rejected invoke, or `success: true` with no contact;
+         *   (b) saved, then a read after the commit failed — `success: false`
+         *       WITH `savedContactIds`. See below.
+         * The raw `result.error` (SQLite text) stays in the log, never the
+         * toast.
+         */
+        const nothingSaved = `Couldn't import ${labelForContact(contact)} — nothing was saved.`;
+        let result: Awaited<ReturnType<typeof window.api.contacts.import>>;
+        try {
+          result = await window.api.contacts.import(userId, [record]);
+        } catch (invokeError) {
+          notify?.error(nothingSaved);
+          throw invokeError;
+        }
         const importedContact = result.contacts?.[0];
 
         if (result.success && importedContact) {
+          /**
+           * ==================================================================
+           * BACKLOG-3376 — SAY WHAT WAS SAVED THAT NO EMAIL CAN COME FROM.
+           * ==================================================================
+           * BACKLOG-3358 stopped an address the app cannot validate from
+           * blocking the import, so the contact now saves with the value as the
+           * address book has it — and nothing said so. An address with a space
+           * in it or no `@` can never equal a participant address, so mail from
+           * it will never link to a deal, and the user had no way to find that
+           * out.
+           *
+           * INSIDE the success branch, which is the renderer half of what keeps
+           * this and BACKLOG-3354's failure message mutually exclusive; the main
+           * process only ever sets the field on a success response, which is the
+           * other half. Deliberately belt and braces.
+           *
+           * BEFORE the refresh is awaited. `refreshBothLists` is two IPC round
+           * trips and can take seconds on a large address book; the message
+           * belongs on screen from the moment the import returned, not after the
+           * lists catch up.
+           *
+           * `info`, not `error` — the contact imported, and it is on screen.
+           */
+          const unmatchable = result.unmatchableEmails ?? [];
+          if (unmatchable.length > 0) {
+            const message = unmatchableEmailMessage({
+              name: labelForContact(contact),
+              verb: "imported",
+              addresses: unmatchable,
+            });
+            /*
+             * `{ persistent: true }` — it stays until the user dismisses it.
+             * FOUNDER CHANGE REQUEST, 2026-09-16 (BACKLOG-3376): he tested the
+             * 12-second version on this surface and on the deal wizard and
+             * asked for a message he has to dismiss, because a timed one can
+             * be missed. `persistent` is `duration: 0` and wins over
+             * `duration` (`ui/Notification/types.ts`), so the two are not
+             * combined — the duration is gone. Still the ordinary toast and
+             * not a modal: `NotificationToast` always renders a dismiss
+             * button, so this cannot trap anyone.
+             */
+            if (message) notify?.info(message, { persistent: true });
+          }
+
           /**
            * ==================================================================
            * BACKLOG-2511 — REFRESH BOTH LISTS, BECAUSE THIS SCREEN IS BOTH.
@@ -823,6 +899,40 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
           return refreshed.find((c) => c.id === created.id) ?? created;
         }
 
+        /**
+         * BACKLOG-3354 (b) — SAVED, BUT THE IMPORT REPORTED FAILURE.
+         *
+         * The ids come from the main process, which assigns them only after
+         * the write transaction committed (`ContactResponse.savedContactIds`).
+         * Finding the row by one of THOSE ids is the same lookup the success
+         * path does (BACKLOG-2459); it is not this screen deciding who is saved
+         * (BACKLOG-2370/2511).
+         *
+         * Found in the refreshed list → return it, with no toast. The saved
+         * person is on screen, which is the truth, and `handlePreviewImport`
+         * switches the card exactly as on success — only if the user is still
+         * on it (BACKLOG-2527). `showPreviewContact` is NEVER called in here:
+         * that would decide what the user is looking at from an async
+         * completion.
+         *
+         * Not found → the saved-half read failed too (`refreshBothLists`
+         * commits neither half on a failed read). Say so, and keep the card.
+         */
+        const savedIds = result.success === false ? (result.savedContactIds ?? []) : [];
+        if (savedIds.length > 0) {
+          const refreshed = await refreshBothLists();
+          // The BACKLOG-2526 case: the refetch may have failed, and the pill is
+          // then the only honest signal that the person was saved.
+          setImportedContactIds((prev) => new Set(prev).add(contact.id));
+          const shown = refreshed.find((c) => savedIds.includes(c.id));
+          if (shown) return shown;
+          notify?.error(
+            `${labelForContact(contact)} was saved, but couldn't be shown. Find them in your contacts list instead of importing again.`,
+          );
+          throw new Error(result.error || "Failed to import contact");
+        }
+
+        notify?.error(nothingSaved);
         throw new Error(result.error || "Failed to import contact");
       } catch (err) {
         logger.error("Failed to import contact:", err);
@@ -857,7 +967,7 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
 
       return run;
     },
-    [userId, refreshBothLists]
+    [userId, refreshBothLists, notify]
   );
 
   /**

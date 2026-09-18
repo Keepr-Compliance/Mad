@@ -75,7 +75,7 @@ const readyStateEmailConnected: ReadyState = {
     hasCompletedEmailOnboarding: true,
     hasEmailConnected: true,
     needsDriverSetup: false,
-    hasPermissions: true,
+    fda: "granted",
   },
 };
 
@@ -88,7 +88,7 @@ const readyStateEmailNotConnected: ReadyState = {
     hasCompletedEmailOnboarding: true,
     hasEmailConnected: false,
     needsDriverSetup: false,
-    hasPermissions: true,
+    fda: "granted",
   },
 };
 

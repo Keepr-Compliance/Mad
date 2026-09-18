@@ -75,6 +75,10 @@ jest.mock("../services/databaseService", () => ({
     isInitialized: jest.fn().mockReturnValue(true),
     backfillContactEmails: jest.fn(),
     backfillContactPhones: jest.fn(),
+    // BACKLOG-3220: `contacts:import` calls the synchronous facades inside its
+    // transaction.
+    backfillContactEmailsSync: jest.fn(() => 0),
+    backfillContactPhonesSync: jest.fn(() => 0),
     // BACKLOG-2617: `findContactByName` is deleted from the facade, so the mock
     // key for it goes too. A stale key is a standing invitation to write a test
     // against a method production no longer has.
@@ -187,6 +191,21 @@ jest.mock("../services/db/contactDbService", () => ({
   ...jest.requireActual("../services/db/contactDbService"),
   getContactEmailEntries: jest.fn().mockReturnValue([]),
   getContactPhoneEntries: jest.fn().mockReturnValue([]),
+}));
+
+// BACKLOG-3220: `contacts:import` now runs its writes inside `dbTransaction`.
+// This suite has no database and asserts wiring, not atomicity (that proof is
+// `contact-handlers.importAtomic-3220.test.ts`), so the callback runs directly —
+// but a promise-returning callback is refused, as better-sqlite3 refuses it.
+jest.mock("../services/db/core/dbConnection", () => ({
+  ...jest.requireActual("../services/db/core/dbConnection"),
+  dbTransaction: <T>(fn: () => T): T => {
+    const result = fn();
+    if (result && typeof (result as { then?: unknown }).then === "function") {
+      throw new TypeError("Transaction function cannot return a promise");
+    }
+    return result;
+  },
 }));
 
 // Import after mocks are set up

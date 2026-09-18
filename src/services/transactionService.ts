@@ -288,6 +288,46 @@ export const transactionService = {
       return { success: false, error: message };
     }
   },
+
+  /**
+   * BACKLOG-3366: hide one text from this transaction's export. The text stays
+   * linked and visible (gray). `data.hidden` is read back by the main process.
+   */
+  async hideTextFromExport(
+    transactionId: string,
+    messageId: string,
+  ): Promise<ApiResult<{ hidden: boolean }>> {
+    try {
+      const result = await window.api.transactions.hideTextFromExport(transactionId, messageId);
+      if (result.success) {
+        return { success: true, data: { hidden: !!result.hidden } };
+      }
+      return { success: false, error: result.error };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      return { success: false, error: message };
+    }
+  },
+
+  /**
+   * BACKLOG-3366: put a hidden text back into this transaction's export. Never
+   * gated. `data.hidden` is read back by the main process.
+   */
+  async unhideTextFromExport(
+    transactionId: string,
+    messageId: string,
+  ): Promise<ApiResult<{ hidden: boolean }>> {
+    try {
+      const result = await window.api.transactions.unhideTextFromExport(transactionId, messageId);
+      if (result.success) {
+        return { success: true, data: { hidden: !!result.hidden } };
+      }
+      return { success: false, error: result.error };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      return { success: false, error: message };
+    }
+  },
 };
 
 export default transactionService;

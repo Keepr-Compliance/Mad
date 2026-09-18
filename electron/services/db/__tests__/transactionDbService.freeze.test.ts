@@ -31,6 +31,24 @@ import {
   UNFREEZE_OVERRIDE_KEY,
 } from "../transactionDbService";
 
+/**
+ * BACKLOG-2547 — `updateTransaction` is now a PLAIN function returning
+ * `Promise<void>` over `updateTransactionSync`, not an `async` function, so the
+ * frozen-field guard throws SYNCHRONOUSLY at the call site instead of returning
+ * a rejected promise.
+ *
+ * That is the POINT of the shape rather than an accident. Called unawaited from
+ * inside a `dbTransaction` body, an `async` wrapper swallows the throw into a
+ * rejected promise and the transaction COMMITS partial work; this shape lets the
+ * throw escape synchronously so SQLite rolls back — measured on the shipping
+ * driver. Every PRODUCTION caller awaits at the call site, where a synchronous
+ * throw and a rejection are indistinguishable. `expect(...).rejects` is the one
+ * caller shape that CAN tell them apart, so the call is deferred into a thunk
+ * here. Every assertion below is unchanged.
+ */
+const rejecting = (...args: Parameters<typeof updateTransaction>): Promise<void> =>
+  (async () => updateTransaction(...args))();
+
 describe("updateTransaction — export freeze (BACKLOG-2013)", () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -61,7 +79,7 @@ describe("updateTransaction — export freeze (BACKLOG-2013)", () => {
       });
 
       await expect(
-        updateTransaction("txn-1", { property_address: "swap" } as never),
+        rejecting("txn-1", { property_address: "swap" } as never),
       ).rejects.toBeInstanceOf(TransactionFrozenError);
 
       // No SQL UPDATE should have executed.
@@ -76,7 +94,7 @@ describe("updateTransaction — export freeze (BACKLOG-2013)", () => {
       });
 
       await expect(
-        updateTransaction("txn-1", {
+        rejecting("txn-1", {
           property_address: "swap",
           started_at: "2020-01-01",
         } as never),
@@ -95,7 +113,7 @@ describe("updateTransaction — export freeze (BACKLOG-2013)", () => {
       // `updateTransaction` resolves to void, so the union here is `void | Error`.
       // This call is expected to REJECT (the frozen-field guard), so the resolve
       // branch is unreachable and the value is always the caught Error.
-      const err = (await updateTransaction("txn-1", {
+      const err = (await rejecting("txn-1", {
         property_address: "swap",
       } as never).catch((e) => e as Error)) as Error;
 
@@ -132,7 +150,7 @@ describe("updateTransaction — export freeze (BACKLOG-2013)", () => {
       });
 
       await expect(
-        updateTransaction("txn-1", { started_at: "2020-07-01" } as never),
+        rejecting("txn-1", { started_at: "2020-07-01" } as never),
       ).rejects.toBeInstanceOf(TransactionFrozenError);
 
       expect(mockDbRun).not.toHaveBeenCalled();

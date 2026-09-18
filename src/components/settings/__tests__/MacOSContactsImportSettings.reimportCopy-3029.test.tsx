@@ -69,6 +69,12 @@ const defaultProps = {
   gmailContactsEnabled: true,
   googleContactsEnabled: true,
   outlookEmailsInferred: false,
+  // BACKLOG-3349: this suite predates the plan gate and is not about it. It
+  // states "allowed" so that every assertion here keeps testing what it was
+  // written to test. The gate's own behaviour is covered in
+  // MacOSContactsImportSettings.honestSwitchState-3202.test.tsx (C9-C11).
+  // BACKLOG-1717 added `gmail`: both mailboxes are one paid feature.
+  contactInference: { outlook: "allowed", gmail: "allowed" } as const,
   gmailEmailsInferred: false,
   messagesInferred: false,
   loadingPreferences: false,

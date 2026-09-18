@@ -6,6 +6,7 @@
 import type { OAuthProvider } from "../models";
 import type { InitStageEvent } from "../../services/initializationBroadcaster";
 import type { ConnectionErrorType } from "../../services/connectionStatusService";
+import type { HealthIssue } from "./healthIssue";
 
 /**
  * System methods on window.api
@@ -38,6 +39,19 @@ export interface WindowApiSystem {
      * without an `as` cast. Declared here so the reason can be logged.
      */
     error?: string;
+    /**
+     * BACKLOG-3213: WHICH failure the probe saw, so a caller can tell a
+     * permission refusal from a database that is not on this Mac.
+     *
+     *   "FULL_DISK_ACCESS_DENIED"  macOS refused us — granting FDA is the fix.
+     *   "MESSAGES_STORE_NOT_FOUND" `chat.db` is absent (ENOENT/ENOTDIR) —
+     *                              there is nothing to grant.
+     *
+     * ADDITIVE. `hasPermission` and `error` are unchanged on every path, and
+     * this field is absent on the granted path. Every existing consumer reads
+     * named fields, so none of them sees a difference.
+     */
+    errorCode?: string;
   }>;
   triggerFullDiskAccess: () => Promise<{ granted: boolean }>;
   requestPermissions: () => Promise<Record<string, unknown>>;
@@ -122,7 +136,9 @@ export interface WindowApiSystem {
   ) => Promise<{
     healthy: boolean;
     provider?: OAuthProvider;
-    issues?: string[];
+    // BACKLOG-3230: objects, not strings. This is the declaration the live path
+    // reads — `systemService.healthCheck` calls through it.
+    issues?: HealthIssue[];
   }>;
   // Secure storage / keychain methods
   getSecureStorageStatus: () => Promise<{

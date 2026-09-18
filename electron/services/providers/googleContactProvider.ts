@@ -68,10 +68,26 @@ export class GoogleContactProvider implements ContactSyncProvider {
         'mailbox',
       );
 
+      // BACKLOG-3203: NO `reconnectRequired` HERE — "never connected" is not
+      // "reconnect me". The orchestrator surfaces `reconnectRequired` as a red
+      // "Sync Completed with Errors" + a "Reconnect Gmail" CTA, and the Google
+      // contacts source defaults ON (`googleContacts` is deliberately excluded
+      // from BACKEND_DERIVED_DEFAULT_KEYS) with no connection-state gate on the
+      // sync path. Flagging the no-token case therefore prompted every user who
+      // has never connected a Google mailbox, on every sync, forever.
+      //
+      // `OutlookContactProvider` already behaves this way, BY ACCIDENT and not
+      // by design: `outlookFetchService.initialize()` THROWS on a missing token
+      // rather than returning false, so its `canSync` catch returns a bare
+      // `{ ready: false, error }` and the `reconnectRequired: true` on its
+      // `!initialized` path is unreachable. The accident is correct — do not
+      // "fix" it into setting the flag.
+      //
+      // What remains flagged below is the state the flag is FOR: a mailbox that
+      // IS connected but whose grant cannot read contacts.
       if (!tokenRecord || !tokenRecord.access_token) {
         return {
           ready: false,
-          reconnectRequired: true,
           error: 'No Google OAuth token found. Please connect your Google mailbox first.',
         };
       }

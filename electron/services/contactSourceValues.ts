@@ -82,7 +82,7 @@
  * consults the verdict rather than the leftover phone number.
  */
 
-import { dbAll, dbRun } from "./db/core/dbConnection";
+import { dbAll, dbRun, dbTransaction } from "./db/core/dbConnection";
 import {
   CONTACT_SOURCE_VALUES_SQL,
   DELETE_IMPORTED_EMAIL_SQL,
@@ -226,15 +226,28 @@ function sourceRecordValues(
  * `UNIQUE(contact_id, email)` / `UNIQUE(contact_id, phone_e164)`, so calling it
  * on every link creation costs nothing once converged.
  *
- * NEVER THROWS. A link that was correctly recorded must not be reported as
- * failed because the copy that follows it hit a problem; the session backfill
- * is still there as the safety net.
+ * ---------------------------------------------------------------------------
+ * THE THROWING CORE, AND WHY IT OPENS ITS OWN TRANSACTION (BACKLOG-3220)
+ * ---------------------------------------------------------------------------
+ * This is the one body. `applyLinkedSourceValues` below is a wrapper around it
+ * that swallows; nothing else copies the rule.
+ *
+ * It THROWS on failure, and it is ATOMIC: the email copy and the phone copy
+ * are one unit. At top level that is its own BEGIN/COMMIT; inside a caller's
+ * transaction it nests as a SAVEPOINT, so a failure part-way rolls back the
+ * addresses it had already copied before the error leaves this function. That
+ * is what lets a caller inside a transaction choose between failing the whole
+ * unit (`contacts:import`, via `linkImportedContact`) and carrying on without
+ * the copy (the wrapper) — without ever committing half of it.
+ *
+ * The transaction must stay inline here: the write-atomicity guard reads it
+ * from this body.
  */
-export function applyLinkedSourceValues(
+export function applyLinkedSourceValuesOrThrow(
   userId: string,
   contactId: string,
 ): ApplyLinkedValuesResult {
-  try {
+  return dbTransaction(() => {
     const values = linkedSourceValues(userId, contactId);
     if (values.emails.length === 0 && values.phones.length === 0) {
       return { emailsAdded: 0, phonesAdded: 0 };
@@ -246,15 +259,38 @@ export function applyLinkedSourceValues(
     if (emailsAdded > 0 || phonesAdded > 0) {
       // No display name and no address in the log line — this ends up in
       // support tickets.
-      logService.info(
+      void logService.info(
         `[Contacts] a newly linked source contributed +${emailsAdded} email(s), ` +
           `+${phonesAdded} phone(s) to a contact`,
         "Contacts",
       );
     }
     return { emailsAdded, phonesAdded };
+  });
+}
+
+/**
+ * `applyLinkedSourceValuesOrThrow`, with any failure logged and swallowed.
+ *
+ * SWALLOWING IS CORRECT ONLY OUTSIDE A TRANSACTION (BACKLOG-3220). This used to
+ * say "NEVER THROWS. A link that was correctly recorded must not be reported as
+ * failed because the copy that follows it hit a problem" — true for a link that
+ * has already committed. Inside a caller's transaction the premise is false: a
+ * swallowed failure lets the caller COMMIT with the copy missing. The core's
+ * own savepoint means that is no longer a PARTIAL copy, but it is still a link
+ * committed without the addresses it should have brought. A caller inside a
+ * transaction that must not commit that state calls the core instead, as
+ * `contacts:import` does. The session backfill remains the safety net for the
+ * callers that keep this wrapper.
+ */
+export function applyLinkedSourceValues(
+  userId: string,
+  contactId: string,
+): ApplyLinkedValuesResult {
+  try {
+    return applyLinkedSourceValuesOrThrow(userId, contactId);
   } catch (error) {
-    logService.warn(
+    void logService.warn(
       `[Contacts] could not apply a linked source's values: ${error}`,
       "Contacts",
     );
@@ -313,7 +349,7 @@ export function removeUnlinkedSourceValues(
     // that shares everything with a surviving source is not reported as
     // "refused" when nothing was going to be removed anyway.
     if (isContactOnFrozenTransaction(contactId)) {
-      logService.info(
+      void logService.info(
         `[Contacts] a ${sourceType} source was unlinked from a contact on an EXPORTED ` +
           `transaction; its ${emailsToRemove.length} email(s) and ${phonesToRemove.length} ` +
           `phone(s) were KEPT so the exported audit's search set is unchanged`,
@@ -349,7 +385,7 @@ export function removeUnlinkedSourceValues(
     }
 
     if (removedEmails > 0 || removedPhones > 0) {
-      logService.info(
+      void logService.info(
         `[Contacts] unlinking a ${sourceType} source took back ${removedEmails} email(s) ` +
           `and ${removedPhones} phone(s) that no remaining source contributes`,
         "Contacts",
@@ -358,7 +394,7 @@ export function removeUnlinkedSourceValues(
 
     return { removedEmails, removedPhones };
   } catch (error) {
-    logService.warn(
+    void logService.warn(
       `[Contacts] could not take back an unlinked source's values: ${error}`,
       "Contacts",
     );

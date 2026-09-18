@@ -225,3 +225,94 @@ describe("LoadingOrchestrator Phase 4 — persisted FDA skip (BACKLOG-3212)", ()
     }
   });
 });
+
+/**
+ * BACKLOG-3293 — the seam that carries the MAIN-PROCESS answer to the router.
+ *
+ * The suite above cannot observe that seam: its `beforeEach` mocks
+ * `checkAllConnections -> google connected`, so BOTH operands of the OR at
+ * LoadingOrchestrator.tsx:684 are true and `checkEmailOnboarding`'s answer is
+ * masked. The cases below disconnect the mailbox so the handler's answer is the
+ * only thing left deciding — which is exactly the founder's reproduced state:
+ * Full Disk Access declined and on record, iPhone picked, no mailbox. He
+ * reached the dashboard, quit, relaunched, and was sent back to onboarding
+ * because the main-process handler discarded the persisted flag.
+ */
+describe("LoadingOrchestrator Phase 4 — the handler's answer reaches the router (BACKLOG-3293)", () => {
+  /** The founder's state: FDA declined and on record, iPhone, NO mailbox. */
+  function founderState() {
+    mockApi.system.checkAllConnections.mockResolvedValue({
+      success: true,
+      google: { connected: false },
+      microsoft: { connected: false },
+    });
+    mockApi.preferences.get.mockResolvedValue({
+      success: true,
+      preferences: {
+        onboarding: { fdaSkipped: true, fdaSkippedAt: 1_700_000_000_000 },
+      },
+    });
+  }
+
+  it("a user who answered the email step with no mailbox connected reaches ready", async () => {
+    founderState();
+    mockApi.auth.checkEmailOnboarding.mockResolvedValue({
+      success: true,
+      completed: true,
+    });
+
+    const status = await renderAndSettle();
+
+    expect(status).toBe("ready");
+  });
+
+  it("CONTROL: the pre-fix handler answer (completed=false) sends the same user to onboarding", async () => {
+    // This is what the founder hit, twice. It proves the seam actually carries
+    // the handler's answer rather than the connection OR: with the mailbox
+    // disconnected, `completed` is the only operand left.
+    //
+    // `success: true` is deliberate and transcribed from the handler, not
+    // invented: the pre-fix handler RETURNED successfully and answered
+    // completed=false (`return { success: true, completed }`). `success: false`
+    // is the failure path — a different cause, covered by the case below — and
+    // using it here would flip two variables against the positive case instead
+    // of isolating `completed`, which is the one this control is about.
+    founderState();
+    mockApi.auth.checkEmailOnboarding.mockResolvedValue({
+      success: true,
+      completed: false,
+    });
+
+    const status = await renderAndSettle();
+
+    expect(status).toBe("onboarding");
+  });
+
+  it("a connected mailbox still rescues the user when the handler call itself fails", async () => {
+    // After BACKLOG-3293 a live token makes `completed` true on its own
+    // (`checkGoogleConnection` in connectionStatusService.ts reads the same
+    // oauth_tokens row the handler does), so the `|| hasEmailConnected` operand
+    // of `hasCompletedEmailOnboarding` is redundant on a normal launch. Its
+    // ONLY remaining job is the handler's failure paths — the `.catch` on the
+    // checkEmailOnboarding call in LoadingOrchestrator, and the transient
+    // DB-not-ready return in `handleCheckEmailOnboarding` — both of which
+    // answer completed=false for a user who DOES have a mailbox. Nothing else
+    // pins that operand, and it is the last thing between a transient
+    // main-process hiccup and a mailbox-having user dropped into onboarding.
+    mockApi.preferences.get.mockResolvedValue({
+      success: true,
+      preferences: {
+        onboarding: { fdaSkipped: true, fdaSkippedAt: 1_700_000_000_000 },
+      },
+    });
+    mockApi.auth.checkEmailOnboarding.mockResolvedValue({
+      success: false,
+      completed: false,
+    });
+    // `beforeEach` leaves google connected — that is the operand under test.
+
+    const status = await renderAndSettle();
+
+    expect(status).toBe("ready");
+  });
+});

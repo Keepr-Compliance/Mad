@@ -44,32 +44,35 @@ const FILES = ['broker-portal/vercel.json', 'admin-portal/vercel.json'];
 
 // Fixtures, not knobs.
 //
-// These three are settled arrangements nobody has proposed changing. Losing any
-// of them is silent: a branch the config denies posts NO commit status at all,
-// so there is no red check, no error and no failed deployment — production,
-// staging or the founder's testing surface simply stops being deployed, and it
-// is found late and by accident.
+// REQUIRED_TRUE are settled arrangements nobody has proposed changing. Losing
+// any of them is silent: a branch the config denies posts NO commit status at
+// all, so there is no red check, no error and no failed deployment — the branch
+// simply stops being deployed, and it is found late and by accident.
+//
+// "*-portal/**" joined this list with BACKLOG-3205. Plain int/** and hotfix/**
+// branches are no longer deployed, so a sprint or hotfix that changes a portal
+// opts in by branch name (int-portal/<name>, hotfix-portal/<name>). That makes
+// the opt-in key the only way portal work on those branches gets a deployment,
+// and deleting it would be exactly the silent failure described above.
 //
 // The rest of the map is knobs we already expect to turn — dependabot/** has an
-// open item against it (BACKLOG-3151), and the *-portal/** opt-in is a naming
-// convention that may still move. Asserting those would make an anticipated
+// open item against it (BACKLOG-3151). Asserting those would make an anticipated
 // edit fight the guard, which is how a check earns a reputation for crying wolf.
-//
-// int/** was initially left out on the grounds that someone waiting on a preview
-// notices within minutes and the branch-naming docs tell them to check the
-// branch name first. That reasoning was wrong, and the way it fails is worth
-// recording: if int/** is deleted, the branch name is CORRECT, so the documented
-// first step misdirects while the real cause is a deleted key with no red
-// anywhere. A diagnostic that points away from the fault does not make a failure
-// self-announcing. Being a glob over the whole namespace, it also costs nothing
-// to assert: reorganising which int branches exist never touches this key.
-const REQUIRED_TRUE = ['main', 'develop', 'int/**'];
+const REQUIRED_TRUE = ['main', 'develop', '*-portal/**'];
+
+// Keys that must NOT be true (BACKLOG-3205). Re-allowing either brings back a
+// deployment for every push to every integration or hotfix branch, and it
+// would also make scripts/ci/check-portal-branch-name.mjs wrong: that check
+// tells a plain int/ or hotfix/ branch carrying portal changes to rename,
+// because such a branch gets no deployment for the portal it changes. Exact
+// keys only.
+const FORBIDDEN_TRUE = ['int/**', 'hotfix/**'];
 
 // What stops working when each goes missing, for the error message.
 const ROLE = {
   main: 'production',
   develop: 'staging',
-  'int/**': "the founder's integration testing surface",
+  '*-portal/**': 'branches using the <type>-portal/ name opt-in',
 };
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -120,6 +123,12 @@ for (const rel of FILES) {
       findings.push(`${rel}: "${key}" is missing from git.deploymentEnabled, so the "${CATCH_ALL}" catch-all denies it. That silently stops ${ROLE[key]} deploying — a denied branch posts no commit status at all, so nothing goes red and nothing fails; it just stops being deployed.`);
     } else if (map[key] !== true) {
       findings.push(`${rel}: "${key}" must be true, got ${JSON.stringify(map[key])}. That silently stops ${ROLE[key]} deploying.`);
+    }
+  }
+
+  for (const key of FORBIDDEN_TRUE) {
+    if (map[key] === true) {
+      findings.push(`${rel}: "${key}" must not be true (BACKLOG-3205). Integration and hotfix branches get a portal deployment by name instead: int-portal/<name>, hotfix-portal/<name>.`);
     }
   }
 

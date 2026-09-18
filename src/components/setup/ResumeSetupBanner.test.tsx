@@ -53,7 +53,7 @@ const zeroSourceReady: ReadyState = {
     hasCompletedEmailOnboarding: true,
     hasEmailConnected: false,
     needsDriverSetup: false,
-    hasPermissions: false,
+    fda: "not-asked",
   },
 };
 
@@ -67,7 +67,7 @@ describe("ResumeSetupBanner / useResumeSetup", () => {
   it("does NOT appear for a texts-only (macOS FDA) user — no shaming of texts-only completion", () => {
     mockState = {
       ...zeroSourceReady,
-      userData: { ...zeroSourceReady.userData, hasPermissions: true },
+      userData: { ...zeroSourceReady.userData, fda: "granted" as const },
     };
     renderStrict(<ResumeSetupBanner app={makeApp()} />);
     expect(screen.queryByTestId("resume-setup-banner")).not.toBeInTheDocument();

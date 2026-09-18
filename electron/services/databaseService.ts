@@ -1648,8 +1648,31 @@ class DatabaseService implements IDatabaseService {
     return contactDb.getUnimportedContactsByUserId(userId);
   }
 
-  async markContactAsImported(contactId: string, source?: string): Promise<void> {
+  /** Synchronous: called inside `contacts:import`'s transaction (BACKLOG-3220). */
+  markContactAsImported(contactId: string, source?: string): void {
     return contactDb.markContactAsImported(contactId, source);
+  }
+
+  /**
+   * The synchronous email backfill, for callers inside a `dbTransaction`
+   * callback (BACKLOG-3220). The async `backfillContactEmails` below delegates
+   * to the same core; calling THAT inside a transaction loses its error path.
+   */
+  backfillContactEmailsSync(
+    contactId: string,
+    emails: string[],
+    source?: ContactInfoSource,
+  ): number {
+    return contactDb.backfillContactEmailsSync(contactId, emails, source);
+  }
+
+  /** The synchronous phone backfill — see `backfillContactEmailsSync`. */
+  backfillContactPhonesSync(
+    contactId: string,
+    phones: string[],
+    source?: ContactInfoSource,
+  ): number {
+    return contactDb.backfillContactPhonesSync(contactId, phones, source);
   }
 
   async backfillContactEmails(
@@ -1833,6 +1856,21 @@ class DatabaseService implements IDatabaseService {
    */
   stampFirstExportedAt(transactionId: string, timestamp: string): boolean {
     return transactionDb.stampFirstExportedAt(transactionId, timestamp);
+  }
+
+  /**
+   * BACKLOG-2549 — record an export completion as ONE statement, so
+   * `export_status` and the BACKLOG-2013 freeze marker can never flip
+   * separately. SYNCHRONOUS, mirroring `stampFirstExportedAt` above rather than
+   * the async `updateTransaction`: an async wrapper over a sync primitive turns
+   * a throw into a rejection, which is the shape `syncTwin.guard.test.ts`
+   * forbids.
+   */
+  recordExportCompletion(
+    transactionId: string,
+    params: transactionDb.ExportCompletionParams,
+  ): void {
+    return transactionDb.recordExportCompletion(transactionId, params);
   }
 
   async deleteTransaction(transactionId: string): Promise<void> {

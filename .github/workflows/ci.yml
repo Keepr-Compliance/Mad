@@ -9,9 +9,12 @@ name: CI/CD
 
 on:
   push:
-    branches: [main, develop, 'feature/**', 'fix/**', 'claude/**', 'docs/**', 'portal/**', '*-portal/**']
+    # The two negations keep int-portal/ and hotfix-portal/ pushes at today's
+    # int/ and hotfix/ behaviour (no push run); they must stay AFTER '*-portal/**'
+    # (BACKLOG-3205).
+    branches: [main, develop, 'feature/**', 'fix/**', 'claude/**', 'docs/**', 'portal/**', '*-portal/**', '!int-portal/**', '!hotfix-portal/**']
   pull_request:
-    branches: [main, develop, 'int/**']
+    branches: [main, develop, 'int/**', 'int-portal/**']
 
 jobs:
   # Fast check to determine if we can skip heavy CI jobs
@@ -132,7 +135,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           GITHUB_REF_NAME: ${{ github.ref_name }}
         run: |
-          # PRs (to develop/main/int/*) and pushes to develop/main: run both macOS + Windows
+          # PRs (to develop/main/int/*/int-portal/*) and pushes to develop/main: run both macOS + Windows
           # Pushes to feature/fix/claude branches: macOS only (Windows runs on the PR)
           if [ "$EVENT_NAME" = "pull_request" ]; then
             echo 'os-matrix=["macos-latest","windows-latest"]' >> $GITHUB_OUTPUT
@@ -236,8 +239,13 @@ jobs:
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
 
+      # BACKLOG-3288: --bail=0 makes CI report EVERY failing suite in one run. It
+      # overrides `bail: 1` in jest.config.js for CI only; local `npm test` and
+      # `npx jest` still stop at the first failure.
+      # --bail=0 needs "=": "--bail 0" is parsed as bail 1 plus a test filter "0"
+      # that runs only 68 of 1010 files, and the step can still pass green.
       - name: Run tests
-        run: npm test -- --silent --maxWorkers=2 --workerIdleMemoryLimit=512MB --forceExit
+        run: npm test -- --silent --maxWorkers=2 --workerIdleMemoryLimit=512MB --forceExit --bail=0
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
 
@@ -255,8 +263,12 @@ jobs:
       # broker-portal jest suite (BACKLOG-2005a re-enabled it: config + route tests now
       # exist). Runs from the repo root so ts-jest / jest-environment-* resolve from the
       # hoisted root node_modules; the portal config remaps @/ to the portal root.
+      # BACKLOG-3288: the portal config spreads the root config, so it inherits
+      # `bail: 1`; --bail=0 reports every failing suite, CI only.
+      # --bail=0 needs "=": "--bail 0" is parsed as bail 1 plus a test filter "0"
+      # that matches 0 of 54 files, and the step fails with "No tests found".
       - name: Run broker-portal tests
-        run: npx jest --config broker-portal/jest.config.js --silent
+        run: npx jest --config broker-portal/jest.config.js --silent --bail=0
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
 
@@ -409,6 +421,33 @@ jobs:
 
       - name: Assert nothing under .husky/_ is tracked
         run: npm run check:hooks
+
+  # BACKLOG-3425: `build.files` must never reach electron-builder's own output directory.
+  # It did for at least three releases -- `files` listed `dist/**` and `dist` was also the
+  # default output -- and the second architecture's pass packed the first one's artifacts,
+  # producing an Intel build that could not start.
+  #
+  # Deliberately NOT gated on docs-only and carrying no `needs:`, for the same reason the
+  # SQL-boundary gate below is not: the docs-only filter treats .github/workflows/* as
+  # documentation, and the `package` job only runs on develop and main, so a package.json
+  # edit on a feature branch would otherwise reach develop with nothing having read it.
+  #
+  # No npm install: the check parses package.json and nothing else.
+  package-config:
+    name: Package Config Guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20.x
+
+      - name: Assert the packager cannot pack its own output
+        run: node scripts/ci/check-package-sanity.mjs --config package.json
 
   # BACKLOG-2959: SQL text belongs in electron/services/db/** (the *Sql.ts
   # pattern). This gate fails when a NEW site defines SQL text anywhere else.
@@ -800,6 +839,12 @@ jobs:
     if: needs.check-changes.outputs.docs-only != 'true'
 
     strategy:
+      # BACKLOG-3242: without this, `fail-fast` defaults to true and one platform's
+      # failure CANCELS the other, so a single-platform problem destroys the signal
+      # for both. On 2026-09-08 the macOS job failed and Windows was cancelled mid-run,
+      # leaving no evidence of whether Windows would have built. Same form as the
+      # `test` job above, which has carried it for the same reason.
+      fail-fast: false
       matrix:
         os: ${{ fromJson(needs.check-changes.outputs.os-matrix) }}
 
@@ -816,8 +861,20 @@ jobs:
       - name: Install Python setuptools
         run: pip install setuptools
 
+      # BACKLOG-3242: this job's only output is the `dist/` upload below, and
+      # `npm run build` is vite + tsc + a file copy + esbuild -- none of which load a
+      # compiled native binary. Without ignore-scripts, `npm install` still ran the
+      # native module's own install script (a from-source compile fallback) plus the
+      # root postinstall's Electron-ABI rebuild, so the job did two builds of a module
+      # it never uses and made two downloads it did not need. One of those downloads
+      # timing out on 2026-09-08 failed the job and, via fail-fast, cancelled the other
+      # platform. Skipping the scripts removes the work and the failure mode together.
+      # Same form as the seven sibling jobs above. Jobs that DO need the native module
+      # (`package` below, and the release workflow) are deliberately untouched.
       - name: Install dependencies
         run: npm install
+        env:
+          npm_config_ignore_scripts: true
 
       - name: Build Vite app
         run: npm run build
@@ -947,7 +1004,7 @@ jobs:
           fi
           echo ""
           echo "::group::Build Artifacts"
-          ls -la dist/*.dmg dist/*.zip 2>/dev/null || echo "No package artifacts found"
+          ls -la release/*.dmg release/*.zip 2>/dev/null || echo "No package artifacts found"
           echo "::endgroup::"
         env:
           MACOS_CERT: ${{ secrets.MACOS_CERTIFICATE }}
@@ -1014,8 +1071,28 @@ jobs:
           echo "Building Windows package..."
           npm run package:unsigned
           echo "Build complete. Checking artifacts..."
-          Get-ChildItem -Path dist -Filter "*.exe" | Format-Table Name, Length
+          Get-ChildItem -Path release -Filter "*.exe" | Format-Table Name, Length
         shell: pwsh
+
+      # BACKLOG-3425. This job runs on every push to develop and main, so it is the
+      # EARLIER of the two gates -- a package that has swallowed the build's own output
+      # fails here, days before anyone cuts a tag. release.yml runs the same check on the
+      # signed artifacts. See scripts/ci/check-package-sanity.mjs for what it reads.
+      - name: Verify the macOS packages contain no build output
+        if: matrix.os == 'macos-latest'
+        run: |
+          node scripts/ci/check-package-sanity.mjs \
+            --output-dir release --max-content-mb 400 --max-ratio 1.5 \
+            release/mac-arm64/Keepr.app release/mac/Keepr.app
+
+      - name: Verify the Windows package contains no build output
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          node scripts/ci/check-package-sanity.mjs `
+            --output-dir release --max-content-mb 400 `
+            release/win-unpacked
+          if ($LASTEXITCODE -ne 0) { Write-Error "Package sanity check failed"; exit 1 }
 
       - name: Upload macOS package artifacts
         if: matrix.os == 'macos-latest'
@@ -1023,8 +1100,8 @@ jobs:
         with:
           name: packages-${{ matrix.os }}
           path: |
-            dist/*.dmg
-            dist/*.zip
+            release/*.dmg
+            release/*.zip
           retention-days: 30
 
       - name: Upload Windows package artifacts
@@ -1033,5 +1110,5 @@ jobs:
         with:
           name: packages-${{ matrix.os }}
           path: |
-            dist/*.exe
+            release/*.exe
           retention-days: 30

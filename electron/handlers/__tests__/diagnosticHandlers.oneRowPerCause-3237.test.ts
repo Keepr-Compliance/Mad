@@ -221,10 +221,23 @@ describe("BACKLOG-3237 — the health banner shows one row per cause", () => {
       expect(result.healthy).toBe(false);
     });
 
-    it("shows it alongside CONTACTS_STORE_NOT_FOUND — an absent address book is not a denial", async () => {
-      // The reason `fdaDenied` is derived from the error CODES and not from
-      // `allGranted`: `allGranted` is false here too, and keying off it would
-      // silence the contacts row for a user who has granted everything.
+    it("folds CONTACTS_LOADING_FAILED into the absent row — one cause, one row", async () => {
+      // BACKLOG-3233 RE-POINTED THIS. It used to assert TWO rows here, which
+      // pinned the stacking bug: an absent address book produced both
+      // `CONTACTS_STORE_NOT_FOUND` and the downstream "Cannot Load Contacts",
+      // each naming Full Disk Access in different words for one fact.
+      //
+      // WHAT THIS PROVES, EXACTLY: that suppression FIRES. Nothing more.
+      // Break the absent leg of `explainedAlready` and this reds.
+      //
+      // WHAT IT DOES NOT PROVE — and the comment that used to sit here claimed
+      // otherwise, which is why it is gone. It said this test showed
+      // suppression was keyed on the error CODES rather than on `allGranted`.
+      // Measured: it does not. `allGranted` is false in this fixture too, so a
+      // wrong fix keying on `allGranted` produces one row here and passes.
+      // That discrimination lives entirely in
+      // `diagnosticHandlers.contactsStoreAbsent-3214.test.ts` -> C8, and in
+      // `diagnosticHandlers.messagesAbsentPassthrough-3213.test.ts`.
       mockCheckAllPermissions.mockResolvedValue(
         permissionErrors([
           { ...CONTACTS_STORE_NOT_FOUND_PERMISSION_RESULT, error: "ENOENT: no such file or directory" },
@@ -235,10 +248,8 @@ describe("BACKLOG-3237 — the health banner shows one row per cause", () => {
       const result = await getHealthCheckHandler()({}, null, null);
 
       const types = (result.issues as Issue[]).map((i) => i.type ?? i.errorCode);
-      expect(types).toEqual(
-        expect.arrayContaining(["CONTACTS_STORE_NOT_FOUND", "CONTACTS_LOADING_FAILED"]),
-      );
-      expect(result.issues).toHaveLength(2);
+      expect(types).toEqual(["CONTACTS_STORE_NOT_FOUND"]);
+      expect(result.issues).toHaveLength(1);
     });
   });
 
@@ -254,9 +265,17 @@ describe("BACKLOG-3237 — the health banner shows one row per cause", () => {
 
       // BACKLOG-2392: telling a user to grant a permission she may already
       // hold is the bug BACKLOG-3210 part 1 was careful not to re-create.
+      //
+      // BACKLOG-3233 re-pointed the last assertion. It used to read
+      // `expect(row.action).toBe(CONTACTS_STORE_NOT_FOUND_PERMISSION_RESULT.action)`
+      // — both sides sourced from the fixture, through a mocked producer, so it
+      // compared the fixture to itself and stayed green when the real producer
+      // dropped the field. The absence is now asserted directly, and the
+      // fixture is tied to the producer in
+      // `permissionService.contactsStoreShape-3214.test.ts`.
       expect(row).not.toHaveProperty("actionHandler");
       expect(row).not.toHaveProperty("title");
-      expect(row.action).toBe(CONTACTS_STORE_NOT_FOUND_PERMISSION_RESULT.action);
+      expect(row).not.toHaveProperty("action");
     });
 
     it("survives the collapse as its own row when a denial is also present", async () => {

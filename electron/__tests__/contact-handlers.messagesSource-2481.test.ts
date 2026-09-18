@@ -289,6 +289,12 @@ describe("a message-derived person can be saved, and lands somewhere reachable (
    * The values that were never broken, swept rather than sampled — a fix that
    * folded everything to `manual` would pass the two tests above and destroy
    * every real provenance on the way through.
+   *
+   * `sms`, `email` and `inferred` used to be rows here, pinned as "stored
+   * unchanged". Stored, each became a contact no filter leaf can find, so
+   * BACKLOG-3193 refuses them on this door. Their rows moved to
+   * `contact-handlers.unfilterableSource-3193.test.ts`, which asserts the
+   * refusal for all three on both doors.
    */
   it.each([
     ["contacts_app", "contacts_app"],
@@ -296,9 +302,6 @@ describe("a message-derived person can be saved, and lands somewhere reachable (
     ["outlook", "outlook"],
     ["google_contacts", "google_contacts"],
     ["android_sync", "android_sync"],
-    ["sms", "sms"],
-    ["email", "email"],
-    ["inferred", "inferred"],
     ["manual", "manual"],
   ])("contacts:import still stores %s unchanged", async (inbound, stored) => {
     const outcome = await importRecords([{ ...MESSAGE_DERIVED, source: inbound }]);
@@ -529,10 +532,15 @@ describe("after the import, is the same person still offered as unsaved? (BACKLO
  * door arriving as a side effect of a refactor, which is the one thing the
  * `null`-not-fallback design exists to prevent.
  *
- * The row that matters is `"SMS"`: under the normalisation `contacts:import`
+ * The row that mattered was `"SMS"`: under the normalisation `contacts:import`
  * stopped refusing it and stored `sms` — and a stored `sms` contact matches no
  * filter leaf, so a loud refusal became the silent failure this item's
  * destination decision was chosen to avoid.
+ *
+ * BACKLOG-3193 now refuses `sms` itself, so the `"SMS"` rows no longer tell a
+ * normalising boundary from an exact one: both answer the same. They stay, as
+ * refusals. The case-sensitivity is held by the other rows, and by the
+ * `"Outlook"` row added beside the CONTROL's canonical `outlook`.
  *
  * These are the six probe rows that changed answer, pinned as assertions so the
  * normalisation cannot return unnoticed. Latent, not live: every contact-source
@@ -540,7 +548,8 @@ describe("after the import, is the same person still offered as unsaved? (BACKLO
  */
 describe("the write boundary compares exactly (BACKLOG-2481, SR required change A)", () => {
   it.each([
-    ["SMS — the row that would become an invisible contact", "SMS"],
+    ["SMS", "SMS"],
+    ["Outlook — the CONTROL's value below, in the wrong case", "Outlook"],
     ["Contacts_App", "Contacts_App"],
     ["Messages — the synthetic value in the wrong case", "Messages"],
     ["' manual ' — untrimmed", " manual "],
@@ -570,14 +579,18 @@ describe("the write boundary compares exactly (BACKLOG-2481, SR required change 
    * The positive control. Without it, every assertion above is satisfied by a
    * boundary that refuses EVERYTHING, and the suite would be proving nothing
    * about case sensitivity.
+   *
+   * `outlook`, not `sms`: since BACKLOG-3193 `sms` is refused in any spelling,
+   * so it can no longer show that the canonical spelling gets through. The
+   * `"Outlook"` refusal row above is this control's pair.
    */
-  it("CONTROL: the canonical lower-case spelling is still accepted on both doors", async () => {
-    expect(await importRecords([{ ...MESSAGE_DERIVED, source: "sms" }])).toEqual({
+  it("CONTROL: the canonical lower-case spelling is still accepted on the import door", async () => {
+    expect(await importRecords([{ ...MESSAGE_DERIVED, source: "outlook" }])).toEqual({
       refused: false,
       error: null,
     });
     expect(rows()).toEqual([
-      { id: expect.any(String), display_name: "Rosalind Quill", source: "sms" },
+      { id: expect.any(String), display_name: "Rosalind Quill", source: "outlook" },
     ]);
   });
 });

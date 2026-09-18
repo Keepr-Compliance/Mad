@@ -7,6 +7,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
 import logService from "./logService";
+import { CONTACTS_BASE_DIR } from "../constants";
 
 interface PermissionResult {
   hasPermission: boolean;
@@ -136,14 +137,71 @@ class PermissionService {
       this.permissionCache.fullDiskAccess = false;
       this.permissionCache.cachedAt = Date.now();
 
+      // ---------------------------------------------------------------------
+      // BACKLOG-3213 — WHICH errno, not merely "it threw".
+      // ---------------------------------------------------------------------
+      // Mirrors `checkContactsPermission` below, which BACKLOG-3210 gave this
+      // exact split for the address book. macOS TCC refuses a protected path
+      // with EPERM; a `chat.db` that is simply not on this Mac fails with
+      // ENOENT. Collapsing the two told a Mac that has never run Messages to
+      // grant Full Disk Access — and granting it changed nothing, because the
+      // permission was never the problem.
+      //
+      // THE DEFAULT IS DENIED, DELIBERATELY. Only the errnos that positively
+      // mean "nothing is there" are carved out; an unknown errno, or a
+      // rejection carrying no `code` at all, stays FULL_DISK_ACCESS_DENIED.
+      // Defaulting the other way would tell a denied Mac it has no messages.
+      //
+      // MECHANISM UNTRACED — the denied-AND-absent intersection. A `chat.db`
+      // that does not exist inside a TCC-protected `~/Library/Messages`, on a
+      // Mac WITHOUT Full Disk Access, has not been measured: the two hand
+      // measurements this split rests on (2026-09-07, macOS 15, a process
+      // without FDA) covered a `chat.db` that EXISTS -> EPERM, and the
+      // AddressBook path. Neither covers the intersection, and it is not
+      // measurable on a development machine, whose `chat.db` exists and whose
+      // process inherits Full Disk Access from its parent. Both fail
+      // directions are acceptable: EPERM -> denied is today's behaviour;
+      // ENOENT -> absent still REFUSES the import and still offers no false
+      // permission instruction. The worst case is an under-informative
+      // sentence, never a wrong instruction.
+      //
+      // An EMPTY `chat.db` is out of scope by construction: it passes
+      // `fs.access`, so it never reaches this catch and is reported granted.
+      const code = (error as NodeJS.ErrnoException).code;
+      const storeIsAbsent = code === "ENOENT" || code === "ENOTDIR";
+
       return {
+        // UNCHANGED on BOTH paths. This is the only field crossing
+        // `window.api` that `checkAllPermissions`, the import preflight and
+        // the support-ticket diagnostics branch on. This change moves the
+        // diagnosis, never the verdict.
         hasPermission: false,
         error: (error as Error).message,
-        errorCode: "FULL_DISK_ACCESS_DENIED",
-        userMessage:
-          "Full Disk Access permission is required to read iMessages.",
-        action:
-          "Please grant Full Disk Access in System Settings > Privacy & Security > Full Disk Access",
+        errorCode: storeIsAbsent
+          ? "MESSAGES_STORE_NOT_FOUND"
+          : "FULL_DISK_ACCESS_DENIED",
+        // The absent copy names the missing DATABASE, never "no history":
+        // ENOENT proves the file is not there and says nothing about whether
+        // Messages was ever used. It mentions no permission and no System
+        // Settings, because neither is the fix.
+        userMessage: storeIsAbsent
+          ? "Keepr couldn't find a Messages database on this Mac."
+          : "Full Disk Access permission is required to read iMessages.",
+        // `action` is OMITTED on the absent path, and that omission is the
+        // whole of the banner change: `SystemHealthMonitor` renders its button
+        // as `{issue.action && (<button …>)}`, so keeping the denial's action
+        // here would put the wrong instruction back as a live button.
+        //
+        // This DIVERGES from `checkContactsPermission`, which keeps its action
+        // on both paths on purpose (see its comment). There, rewording was out
+        // of scope. Here the wrong sentence IS the item. BACKLOG-3233
+        // reconciles the two.
+        ...(storeIsAbsent
+          ? {}
+          : {
+              action:
+                "Please grant Full Disk Access in System Settings > Privacy & Security > Full Disk Access",
+            }),
       };
     }
   }
@@ -165,10 +223,30 @@ class PermissionService {
     }
 
     try {
-      const contactsDbPath = path.join(
-        process.env.HOME!,
-        "Library/Application Support/AddressBook/Sources",
-      );
+      // -----------------------------------------------------------------
+      // BACKLOG-3214 — PROBE WHAT THE READER READS.
+      // -----------------------------------------------------------------
+      // This used to be a hardcoded `.../AddressBook/Sources`, and that is a
+      // SUBFOLDER macOS only creates once a network account has been added.
+      // The reader walks the PARENT (`contactsService.ts:509`, via this same
+      // constant) and also reads `AddressBook-v22.abcddb` sitting directly in
+      // it — the "On My Mac" store.
+      //
+      // So a Mac whose contacts are all local had its address book read
+      // perfectly while this probe returned ENOENT, and the user was told a
+      // permission was missing. Granting it did not help: there was nothing
+      // to grant, and the subfolder stayed absent.
+      //
+      // The consequence was never only cosmetic. `checkAllPermissions` turns
+      // this into `allGranted: false`, which reaches `useAutoRefresh.ts:303`
+      // — `isMacOS && hasPermissions && importSource === 'macos-native'` —
+      // so a false reading here SWITCHES OFF macOS message sync.
+      //
+      // `CONTACTS_BASE_DIR` is imported rather than restated so the probe and
+      // the reader answer from ONE path and cannot drift apart again.
+      // `permissionService.probeReaderParity-3214.test.ts` sweeps the layouts
+      // and asserts that invariant directly.
+      const contactsDbPath = path.join(process.env.HOME!, CONTACTS_BASE_DIR);
       await fs.access(contactsDbPath, fs.constants.R_OK);
 
       this.permissionCache.contacts = true;
@@ -196,6 +274,19 @@ class PermissionService {
       //   ~/Library/Application Support/AddressBook/Sources   -> EPERM
       //   a non-existent sibling of the same directory        -> ENOENT
       //
+      // BACKLOG-3214 moved the probe to the FIRST of those. That measurement
+      // covers it, so a denied Mac still classifies as denied — and it also
+      // closes 3214's originally-filed bar, "denied AND `Sources/` absent",
+      // because `AddressBook/` itself exists on a denied Mac and answers
+      // EPERM where the subfolder answered ENOENT. The errno-injection legs
+      // in `permissionService.contactsStoreShape-3214.test.ts` are the
+      // control for that.
+      //
+      // STILL UNTRACED, and not closed by this change: denied AND
+      // `AddressBook/` ITSELF absent. That is a different intersection, it
+      // has never been measured, and it is not measurable on a development
+      // machine — see the same note on `checkFullDiskAccess` above.
+      //
       // THE DEFAULT IS DENIED, DELIBERATELY. Only the errnos that positively
       // mean "nothing is there" are carved out; an unknown errno, or a
       // rejection carrying no `code` at all, stays `CONTACTS_ACCESS_DENIED`.
@@ -210,17 +301,33 @@ class PermissionService {
         errorCode: storeIsAbsent
           ? "CONTACTS_STORE_NOT_FOUND"
           : "CONTACTS_ACCESS_DENIED",
-        // `hasPermission`, `userMessage` and `action` are UNCHANGED on both
-        // paths, and that is on purpose. `checkAllPermissions` pushes these
-        // objects into the System Health banner (`diagnosticHandlers.ts` ->
-        // `SystemHealthMonitor.tsx:255`, which renders `userMessage`), so
-        // rewording them here would be a user-facing change to a surface this
-        // item does not cover. `errorCode` is the field callers branch on, and
-        // it is the only thing this change moves.
-        userMessage:
-          "Contacts permission is required to match phone numbers to names.",
-        action:
-          "Full Disk Access in System Settings > Privacy & Security > Full Disk Access will grant access to Contacts",
+        // `hasPermission` is UNCHANGED on both paths. It is the field that
+        // crosses `window.api`, and `checkAllPermissions`, the health banner
+        // and `classifyEmptyMacOSRead` all branch on it; this change moves
+        // the diagnosis, never the verdict.
+        //
+        // BACKLOG-3233 — `userMessage` and `action` now DIVERGE by path, and
+        // the divergence is the deliverable. The absent copy names the
+        // missing DATABASE and mentions no permission, because naming one
+        // would be BACKLOG-2392: telling someone to grant what she may
+        // already hold. `action` is OMITTED rather than reworded —
+        // `SystemHealthMonitor.tsx:368` renders its button as
+        // `{issue.action && (…)}`, so omitting the field is what removes a
+        // button that had no `actionHandler` behind it and fell through to
+        // `default:` "Unknown action handler".
+        //
+        // This is the reconciliation `checkFullDiskAccess` above predicted
+        // ("BACKLOG-3233 reconciles the two"): the two probes now answer an
+        // absent store in the same shape.
+        userMessage: storeIsAbsent
+          ? "Keepr couldn't find a Contacts database on this Mac."
+          : "Contacts permission is required to match phone numbers to names.",
+        ...(storeIsAbsent
+          ? {}
+          : {
+              action:
+                "Full Disk Access in System Settings > Privacy & Security > Full Disk Access will grant access to Contacts",
+            }),
       };
     }
   }

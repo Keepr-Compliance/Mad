@@ -66,15 +66,14 @@ jest.mock("../logService", () => ({
  */
 function extractSavedSessionData(writeCallArg: string): Record<string, unknown> {
   const wrapper = JSON.parse(writeCallArg);
-  if (wrapper.encrypted) {
-    // Our mock encryptString produces Buffer.from(`encrypted:${str}`)
-    // and the wrapper stores it as base64, so decode base64 -> strip prefix
-    const decoded = Buffer.from(wrapper.encrypted, "base64").toString();
-    const json = decoded.startsWith("encrypted:") ? decoded.slice("encrypted:".length) : decoded;
-    return JSON.parse(json);
-  }
-  // Fallback: plaintext (encryption unavailable)
-  return wrapper;
+  // Anything that reaches disk is the wrapper, so there is no other shape to
+  // handle here -- and a write that somehow was not the wrapper must fail loudly
+  // rather than be parsed as if it were expected.
+  // Our mock encryptString produces Buffer.from(`encrypted:${str}`)
+  // and the wrapper stores it as base64, so decode base64 -> strip prefix
+  const decoded = Buffer.from(wrapper.encrypted, "base64").toString();
+  const json = decoded.startsWith("encrypted:") ? decoded.slice("encrypted:".length) : decoded;
+  return JSON.parse(json);
 }
 
 /**

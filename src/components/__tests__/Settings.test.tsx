@@ -10,6 +10,7 @@ import "@testing-library/jest-dom";
 import Settings from "../Settings";
 import { PlatformProvider } from "../../contexts/PlatformContext";
 import { NotificationProvider } from "../../contexts/NotificationContext";
+import { IPhoneSyncProvider } from "../../contexts/IPhoneSyncContext";
 
 // Polyfill Element.scrollTo for jsdom (SettingsTabBar uses it)
 if (typeof Element.prototype.scrollTo !== "function") {
@@ -521,14 +522,23 @@ describe("Settings", () => {
 
         await renderSettings({ userId: mockUserId, onClose: mockOnClose });
 
-        await waitFor(() => {
-          expect(sources().getByText("Gmail")).toBeInTheDocument();
-        });
+        // BACKLOG-2487: gate on the control this test is about, not on the
+        // <h4> beside it. The provider heading renders unconditionally, so a
+        // wait on it opens on the FIRST render — while the row still reads
+        // "Checking..." and carries no button at all, and the synchronous read
+        // that followed then missed a button that was merely not there YET.
+        // Waiting for the button itself makes the wait and the read the same
+        // element.
+        expect(
+          await screen.findByRole("button", { name: "Connect Gmail" }),
+        ).toBeInTheDocument();
+        // ...and it is the Emails Sources block that offers it.
+        expect(sources().getByText("Gmail")).toBeInTheDocument();
+        expect(
+          sources().getByRole("button", { name: "Connect Gmail" }),
+        ).toBeInTheDocument();
         // A never-connected provider offers Connect, NOT Reconnect — the
         // NOT_CONNECTED error type must not be read as a broken connection.
-        expect(
-          screen.getByRole("button", { name: "Connect Gmail" }),
-        ).toBeInTheDocument();
         expect(
           screen.queryByRole("button", { name: /reconnect gmail/i }),
         ).not.toBeInTheDocument();
@@ -1286,13 +1296,46 @@ describe("Settings", () => {
 
   // BACKLOG-1937: merged iPhone Sync category + gray-out gating
   describe("iPhone Sync Category (BACKLOG-1937)", () => {
-    it("should show an 'iPhone Sync' tab and no longer a 'Sync' tab", async () => {
+    // BACKLOG-3423: the nav entry is gone for every user on every platform; the
+    // SECTION stays on the page, grayed out, so a user can see the feature is
+    // there and currently off.
+    //
+    // The tab and the section <h3> render the SAME literal text, "iPhone Sync",
+    // so a bare `getAllByText("iPhone Sync")` cannot tell them apart. The
+    // previous assertion here (`.length >= 1`) was measured against the tab
+    // deletion and stayed GREEN — it could not see the change at all. Both
+    // assertions below are therefore anchored: one inside the tab strip, one
+    // inside `#settings-iphone-sync`.
+    it("should NOT offer an 'iPhone Sync' nav tab (BACKLOG-3423)", async () => {
       await renderSettings({ userId: mockUserId, onClose: mockOnClose });
 
-      // New tab present (label appears in the tab bar + the category <h3>)
-      expect(screen.getAllByText("iPhone Sync").length).toBeGreaterThanOrEqual(1);
-      // Old standalone "Sync" tab gone
-      expect(screen.queryByText("Sync")).not.toBeInTheDocument();
+      // Anti-vacuity: the strip rendered and has tabs, so a "no iPhone tab"
+      // result cannot come from an empty or missing tab bar.
+      const tabStrip = screen.getByTestId("settings-tabs");
+      expect(within(tabStrip).getAllByRole("tab").length).toBeGreaterThan(0);
+
+      // No iPhone Sync entry among them — checked by testid and by accessible
+      // name, scoped to the strip so the section <h3> cannot satisfy either.
+      expect(screen.queryByTestId("settings-tab-iphone-sync")).not.toBeInTheDocument();
+      expect(
+        within(tabStrip).queryByRole("tab", { name: "iPhone Sync" }),
+      ).not.toBeInTheDocument();
+      // Old standalone "Sync" tab gone as well
+      expect(within(tabStrip).queryByRole("tab", { name: "Sync" })).not.toBeInTheDocument();
+    });
+
+    it("still shows the iPhone Sync section heading on the page (BACKLOG-3423)", async () => {
+      const { container } = await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+
+      const section = container.querySelector<HTMLElement>("#settings-iphone-sync");
+      expect(section).toBeInTheDocument();
+
+      // The section's own heading, scoped inside the section. `name` is an
+      // exact string match, so the <h4>iPhone Sync (USB)</h4> that the toggle
+      // renders inside this same section does NOT satisfy it.
+      expect(
+        within(section as HTMLElement).getByRole("heading", { name: "iPhone Sync" }),
+      ).toBeInTheDocument();
     });
 
     it("should render the iPhone Sync category section anchor", async () => {
@@ -1377,6 +1420,102 @@ describe("Settings", () => {
       expect(
         screen.queryByText(/available when your import source is set to iphone/i),
       ).not.toBeInTheDocument();
+    });
+  });
+
+  // BACKLOG-3423: the source radio must re-gate iPhone USB detection live.
+  // These render Settings inside the REAL IPhoneSyncProvider — the tests above
+  // deliberately do not, and so exercise the provider-less fallback. Without the
+  // provider none of this is observable: it owns the enablement and the single
+  // `useIPhoneSync` instance that talks to `window.api.sync`.
+  describe("iPhone Sync source gate — the Settings wire (BACKLOG-3423)", () => {
+    const syncApi = () =>
+      (window as unknown as {
+        api: { sync: { startDetection: jest.Mock; stopDetection: jest.Mock } };
+      }).api.sync;
+
+    beforeEach(() => {
+      (window as unknown as { api: Record<string, unknown> }).api.sync = {
+        startDetection: jest.fn(),
+        stopDetection: jest.fn(),
+        getUnifiedStatus: jest
+          .fn()
+          .mockResolvedValue({ isAnyOperationRunning: false, currentOperation: null }),
+        start: jest.fn().mockResolvedValue({ success: true }),
+        cancel: jest.fn().mockResolvedValue(undefined),
+        onDeviceConnected: jest.fn(() => jest.fn()),
+        onDeviceDisconnected: jest.fn(() => jest.fn()),
+        onProgress: jest.fn(() => jest.fn()),
+        onPasswordRequired: jest.fn(() => jest.fn()),
+        onError: jest.fn(() => jest.fn()),
+        onComplete: jest.fn(() => jest.fn()),
+        onWaitingForPasscode: jest.fn(() => jest.fn()),
+        onPasscodeEntered: jest.fn(() => jest.fn()),
+        onStorageComplete: jest.fn(() => jest.fn()),
+        onStorageError: jest.fn(() => jest.fn()),
+      };
+
+      // The founder's stored state on 2026-09-17: the USB opt-in is ON and the
+      // source is macOS Messages. Preferences follow the account, which is why a
+      // clean QA profile still showed the toggle ON.
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
+        success: true,
+        preferences: {
+          export: { defaultFormat: "combined-pdf" },
+          integrations: { iphoneSyncEnabled: true },
+          messages: { source: "macos-native" },
+        },
+      });
+    });
+
+    const renderWithSyncProvider = async () => {
+      const result = render(
+        <NotificationProvider>
+          <PlatformProvider>
+            <IPhoneSyncProvider userId={mockUserId}>
+              <Settings userId={mockUserId} onClose={mockOnClose} />
+            </IPhoneSyncProvider>
+          </PlatformProvider>
+        </NotificationProvider>,
+      );
+      await waitFor(() => {
+        expect(screen.queryByText("Loading settings...")).not.toBeInTheDocument();
+      });
+      return result;
+    };
+
+    const usbToggle = () =>
+      screen.getByRole("switch", { name: /enable iphone sync over usb/i });
+
+    it("starts detection when the source changes to iPhone, and stops it on the way back", async () => {
+      await renderWithSyncProvider();
+
+      // macOS Messages + stored ON: nothing may be detecting.
+      await waitFor(() => expect(usbToggle()).toHaveAttribute("aria-checked", "false"));
+      expect(syncApi().startDetection).not.toHaveBeenCalled();
+
+      await userEvent.click(screen.getByRole("radio", { name: /iPhone Sync/i }));
+
+      await waitFor(() => expect(syncApi().startDetection).toHaveBeenCalled());
+      expect(usbToggle()).toHaveAttribute("aria-checked", "true");
+
+      await userEvent.click(screen.getByRole("radio", { name: /macOS Messages/i }));
+
+      await waitFor(() => expect(syncApi().stopDetection).toHaveBeenCalled());
+      expect(usbToggle()).toHaveAttribute("aria-checked", "false");
+    });
+
+    it("writes only the source — the stored iPhone-sync opt-in is left alone", async () => {
+      await renderWithSyncProvider();
+
+      await userEvent.click(screen.getByRole("radio", { name: /iPhone Sync/i }));
+      await userEvent.click(screen.getByRole("radio", { name: /macOS Messages/i }));
+
+      const writtenKeys = jest
+        .mocked(window.api.preferences.update)
+        .mock.calls.flatMap((call) => Object.keys(call[1] ?? {}));
+      expect(writtenKeys).toContain("messages");
+      expect(writtenKeys).not.toContain("integrations");
     });
   });
 

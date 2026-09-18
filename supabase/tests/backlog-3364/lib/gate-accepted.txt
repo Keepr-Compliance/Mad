@@ -1,0 +1,13 @@
+# BACKLOG-3364 venue gate: differences between the venue and production that are
+# accepted, one per line: key|venue value|reason. A venue value not listed here
+# fails the gate.
+#
+# NAS test stack, measured 2026-09-15:
+fnacl:jit_join_organization|aa1711dc7cb8f77c00535f091058bd72|Production grants EXECUTE to postgres and service_role only; the venue also grants anon and authenticated. Migration 1 neither calls nor changes this function, and it has no app caller.
+relacl:storage.buckets|ec4eca80b891ffad2d1e18012145b2b3|Grant-option flag on supabase_storage_admin's own entry differs (storage image version). postgres and authenticated entries are identical.
+relacl:storage.objects|ec4eca80b891ffad2d1e18012145b2b3|Grant-option flag on supabase_storage_admin's own entry differs (storage image version). postgres and authenticated entries are identical; authenticated holds INSERT on both.
+trg:auth.users|d41d8cd98f00b204e9800998ecf8427e|The venue's schema baseline covers public only, so production's on_auth_user_created trigger is absent. Not re-created: it would change the BACKLOG-3096 controls on this venue, which seed public.users themselves. Migration 1 does not touch auth.users; control c9 checks it adds nothing there.
+#
+# After migration 1 is applied, the two policies it replaces carry their new text:
+policy:s2|e7a45518a090b26f35d08a23a1c61f98|Migration 1's agents_can_create_submissions (venue has migration 1 applied).
+policy:s3|c4c52619e1f6b8adfda16a7dd274a7bf|Migration 1's "Members can upload submission attachments" (venue has migration 1 applied).

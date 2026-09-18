@@ -52,6 +52,18 @@ export interface BackupProgress {
    * "first sync".
    */
   priorBackup?: PriorBackupState;
+  /**
+   * BACKLOG-3416: the unit index (into `BYTE_UNITS`, `utils/transferByteUnit.ts`)
+   * the transferred-bytes readout is shown in for this whole sync — 2 = MB,
+   * 3 = GB, never lower.
+   *
+   * Decided by `useIPhoneSync` on the sync's first non-zero `bytesProcessed` and
+   * carried on every later progress update of the same sync. Undefined until
+   * bytes have moved. It lives on the sync's state rather than in the component
+   * so it survives the modal being minimized and reopened. Every new sync
+   * replaces the progress object, which is what resets it.
+   */
+  displayUnitIndex?: number;
 }
 
 export interface BackupResult {

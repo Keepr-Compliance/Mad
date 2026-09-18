@@ -16,6 +16,7 @@ import {
   REACTION_EMOJI,
 } from "../../../../utils/reactionUtils";
 import logger from '../../../../utils/logger';
+import type { HideFromExportState } from "../../../../hooks/useHideFromExportState";
 
 /**
  * Attachment info for display (TASK-1012)
@@ -53,6 +54,20 @@ interface ConversationViewModalProps {
    * EmailViewModal.onSeeTransaction in BACKLOG-1934).
    */
   onSeeTransaction?: () => void;
+  /**
+   * BACKLOG-3366: hide (`hide = true`) or unhide one text from the export of
+   * the transaction this conversation was opened from. When ABSENT, no Hide or
+   * Unhide control renders at all. Only the linked-conversation cards on a
+   * transaction's Texts tab pass it; the removed-conversations list, the review
+   * queue and the contact card do not.
+   */
+  onSetHiddenFromExport?: (messageId: string, hide: boolean) => void | Promise<void>;
+  /**
+   * BACKLOG-3366: whether hiding is allowed. "Hide from export" renders only on
+   * "allowed". "Unhide" renders in EVERY state: putting a text back into the
+   * export is never gated. Defaults to "blocked".
+   */
+  hideFromExportState?: HideFromExportState;
 }
 
 // normalizePhoneForLookup and getSenderPhone imported from src/utils/phoneNormalization.ts (TASK-2027)
@@ -231,6 +246,8 @@ export function ConversationViewModal({
   auditEndDate,
   onClose,
   onSeeTransaction,
+  onSetHiddenFromExport,
+  hideFromExportState = "blocked",
 }: ConversationViewModalProps): React.ReactElement {
   // BACKLOG-2280: split reaction rows out of the bubble list and key them to
   // their parent message guid. Reactions render as pills under their parent, not
@@ -271,6 +288,22 @@ export function ConversationViewModal({
   // MessageThreadCard / TransactionMessagesTab).
   const [showOutOfRange, setShowOutOfRange] = useState<boolean>(false);
 
+  // BACKLOG-3366: the text whose hide/unhide request is in flight, so its pill
+  // cannot be clicked twice.
+  const [pendingHiddenFromExportId, setPendingHiddenFromExportId] = useState<string | null>(null);
+  const handleSetHiddenFromExport = React.useCallback(
+    async (messageId: string, hide: boolean): Promise<void> => {
+      if (!onSetHiddenFromExport) return;
+      setPendingHiddenFromExportId(messageId);
+      try {
+        await onSetHiddenFromExport(messageId, hide);
+      } finally {
+        setPendingHiddenFromExportId(null);
+      }
+    },
+    [onSetHiddenFromExport],
+  );
+
   // TASK-1794: Sort messages newest-first (reverse chronological)
   const sortedMessages = [...bubbleMessages].sort((a, b) => {
     const dateA = new Date(a.sent_at || a.received_at || 0).getTime();
@@ -297,6 +330,10 @@ export function ConversationViewModal({
     }
     return sortedMessages.filter(isInAuditRange);
   }, [sortedMessages, hasAuditDates, showOutOfRange, isInAuditRange]);
+
+  // BACKLOG-3366: hiding never removes a bubble; the legend explains the gray
+  // treatment whenever a visible bubble is hidden, independent of the toggle.
+  const hasVisibleHiddenFromExport = visibleMessages.some((msg) => !!msg.hidden_from_export);
 
   // Collect unique participants from all sources (not just inbound senders)
   const uniqueSenders = new Set<string>();
@@ -480,7 +517,16 @@ export function ConversationViewModal({
             // unchanged. bubbleIsDark drives inner text color: light-on-green for a
             // normal outbound bubble, but muted-on-gray for an excluded one.
             const isOutOfRange = showOutOfRange && hasAuditDates && !isInAuditRange(msg);
-            const bubbleIsDark = isOutbound && !isOutOfRange;
+            // BACKLOG-3366: a text hidden from this transaction's export gets the
+            // SAME gray treatment. The marker is the number 0/1 from the shared
+            // read, so it is read by truthiness.
+            const isHiddenFromExport = !!msg.hidden_from_export;
+            const isGray = isOutOfRange || isHiddenFromExport;
+            const bubbleIsDark = isOutbound && !isGray;
+            const hiddenFromExportTargetId = msg.message_id || msg.id;
+            const showHiddenFromExportControl =
+              !!onSetHiddenFromExport &&
+              (isHiddenFromExport || hideFromExportState === "allowed");
             // BACKLOG-2280: tapbacks targeting this bubble (matched by parent guid).
             const parentReactions =
               (msg.external_id && reactionsByParentGuid.get(msg.external_id)) || [];
@@ -545,8 +591,9 @@ export function ConversationViewModal({
                 <div
                   data-testid={isOutOfRange ? "out-of-range-message" : "in-range-message"}
                   data-out-of-range={isOutOfRange ? "true" : "false"}
+                  data-hidden-from-export={isHiddenFromExport ? "true" : "false"}
                   className={`rounded-2xl px-3 py-2 sm:px-4 ${
-                    isOutOfRange
+                    isGray
                       ? `bg-gray-200 text-gray-500 border border-gray-300 ${isOutbound ? "rounded-br-md" : "rounded-bl-md"}`
                       : isOutbound
                       ? "bg-green-500 text-white rounded-br-md"
@@ -625,13 +672,94 @@ export function ConversationViewModal({
                         [Media not available]
                       </p>
                     )}
-                  <p
-                    className={`text-xs mt-1 ${
-                      bubbleIsDark ? "text-green-100" : "text-gray-400"
-                    }`}
-                  >
-                    {formatMessageTime(msgTime)}
-                  </p>
+                  {/* BACKLOG-3366: the timestamp and the hide control share ONE
+                      row — timestamp on the left (unchanged), the control
+                      right-aligned against the bubble's edge. */}
+                  <div className="flex items-center justify-between gap-2">
+                    <p
+                      className={`text-xs mt-1 ${
+                        bubbleIsDark ? "text-green-100" : "text-gray-400"
+                      }`}
+                    >
+                      {formatMessageTime(msgTime)}
+                    </p>
+                    {/* BACKLOG-3366: a real button inside the bubble, never a
+                        click on the bubble — the text is selectable and images
+                        already own their click. The GLYPH carries the state (a
+                        crossed-out eye means hidden); the accessible name and
+                        the tooltip carry the ACTION. Eye / eye-off paths copied
+                        verbatim from the password-visibility toggle in
+                        src/components/settings/LLMSettings.tsx:202-234. */}
+                    {showHiddenFromExportControl && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void handleSetHiddenFromExport(hiddenFromExportTargetId, !isHiddenFromExport);
+                        }}
+                        disabled={pendingHiddenFromExportId === hiddenFromExportTargetId}
+                        aria-pressed={isHiddenFromExport}
+                        aria-label={isHiddenFromExport ? "Unhide" : "Hide from export"}
+                        title={isHiddenFromExport ? "Unhide" : "Hide from export"}
+                        className={`inline-flex items-center justify-center flex-shrink-0 rounded-full p-1 transition-colors disabled:opacity-50 ${
+                          bubbleIsDark
+                            ? "text-green-100 hover:bg-white hover:bg-opacity-20"
+                            : "text-gray-500 hover:bg-gray-300"
+                        }`}
+                        data-testid={`hide-from-export-${hiddenFromExportTargetId}`}
+                      >
+                        {isHiddenFromExport ? (
+                          <svg
+                            className="w-4 h-4"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                            aria-hidden="true"
+                            data-testid="hidden-from-export-icon-hidden"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"
+                            />
+                          </svg>
+                        ) : (
+                          <svg
+                            className="w-4 h-4"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                            aria-hidden="true"
+                            data-testid="hidden-from-export-icon-visible"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+                            />
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
+                            />
+                          </svg>
+                        )}
+                      </button>
+                    )}
+                  </div>
+                  {/* BACKLOG-3366: text, not colour alone, tells a hidden text
+                      apart from an out-of-range one (both are gray). */}
+                  {isHiddenFromExport && (
+                    <p
+                      className="text-xs mt-1 font-medium text-gray-500"
+                      data-testid="hidden-from-export-label"
+                    >
+                      Hidden from export
+                    </p>
+                  )}
                 </div>
                 {/* BACKLOG-2280 / BACKLOG-2306: native-style tapback chip nudged
                     onto the bubble's top corner (top-left for sent, top-right for
@@ -665,6 +793,24 @@ export function ConversationViewModal({
               Messages with a gray background are outside the audit range and
               won&rsquo;t be included in the export &mdash; to include them, change
               the audit date range.
+            </span>
+          </div>
+        )}
+
+        {/* BACKLOG-3366: hidden-from-export legend — same markup as the
+            exclusion legend above, shown whenever a visible bubble is hidden. */}
+        {hasVisibleHiddenFromExport && (
+          <div
+            className="bg-gray-100 border-t border-gray-200 px-4 py-2 flex items-start gap-2 text-xs text-gray-600"
+            data-testid="hidden-from-export-legend"
+          >
+            <span
+              className="mt-0.5 inline-block w-3.5 h-3.5 flex-shrink-0 rounded bg-gray-200 border border-gray-300"
+              aria-hidden="true"
+            />
+            <span>
+              Texts marked Hidden from export stay in this transaction but
+              won&rsquo;t be included in exports. Select Unhide to include them.
             </span>
           </div>
         )}

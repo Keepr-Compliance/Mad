@@ -139,7 +139,7 @@ describe("TransactionDetails — re-sync refreshes on expansion-only link (BACKL
     const before = getAllAttachments.mock.calls.length;
 
     // Open the Texts tab (renders the stub), then fire the Sync Messages action.
-    await userEvent.click(screen.getByText("Texts"));
+    await userEvent.click(await screen.findByText("Texts"));
     await userEvent.click(await screen.findByTestId("fire-sync-messages"));
 
     await waitFor(() => expect(resyncAutoLink).toHaveBeenCalledWith("txn-123"));

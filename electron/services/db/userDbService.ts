@@ -22,7 +22,18 @@ import { assignmentList } from "./core/columnSql";
  *
  * @param userData - User data including optional ID (Supabase Auth UUID when available)
  */
-export async function createUser(userData: NewUser & { id?: string }): Promise<User> {
+/**
+ * BACKLOG-2546 — SYNC TWIN. The login provisioning chain (create-or-update the
+ * user, stamp last-login, save the token, open the session) has to commit as ONE
+ * unit, and `dbTransaction` takes a SYNCHRONOUS callback by type
+ * (`db/core/dbConnection.ts:287`). So the transaction body needs a callee that is
+ * synchronous all the way down. The primitive is this one; the promise-returning
+ * export below is a one-line wrapper over it — never the reverse, because an
+ * `async` callee lets the transaction COMMIT over an error.
+ * Same shape and same reason as `createTransactionSync` (BACKLOG-2538) and
+ * `updateContactSync` (BACKLOG-2496). Rule derived by `electron/__tests__/syncTwin.guard.test.ts`.
+ */
+export function createUserSync(userData: NewUser & { id?: string }): User {
   const id = userData.id || crypto.randomUUID();
   const statement = sql`
     INSERT INTO users_local (
@@ -51,21 +62,40 @@ export async function createUser(userData: NewUser & { id?: string }): Promise<U
   ];
 
   dbRun(statement, params);
-  const user = await getUserById(id);
+  const user = getUserByIdSync(id);
   if (!user) {
     throw new DatabaseError("Failed to create user");
   }
   return user;
 }
 
+export async function createUser(userData: NewUser & { id?: string }): Promise<User> {
+  return createUserSync(userData);
+}
+
 /**
  * Get user by ID
  */
-export async function getUserById(userId: string): Promise<User | null> {
+/**
+ * BACKLOG-2546 — SYNC TWIN. The login provisioning chain (create-or-update the
+ * user, stamp last-login, save the token, open the session) has to commit as ONE
+ * unit, and `dbTransaction` takes a SYNCHRONOUS callback by type
+ * (`db/core/dbConnection.ts:287`). So the transaction body needs a callee that is
+ * synchronous all the way down. The primitive is this one; the promise-returning
+ * export below is a one-line wrapper over it — never the reverse, because an
+ * `async` callee lets the transaction COMMIT over an error.
+ * Same shape and same reason as `createTransactionSync` (BACKLOG-2538) and
+ * `updateContactSync` (BACKLOG-2496). Rule derived by `electron/__tests__/syncTwin.guard.test.ts`.
+ */
+export function getUserByIdSync(userId: string): User | null {
   const statement = sql`SELECT * FROM users_local WHERE id = ?`;
   const user = dbGet<User>(statement, [userId]);
   if (!user) return null;
   return validateResponse(UserSchema, user, 'userDbService.getUserById') as User;
+}
+
+export async function getUserById(userId: string): Promise<User | null> {
+  return getUserByIdSync(userId);
 }
 
 /**
@@ -80,23 +110,52 @@ export async function getUserByEmail(email: string): Promise<User | null> {
 /**
  * Get user by OAuth provider and ID
  */
-export async function getUserByOAuthId(
+/**
+ * BACKLOG-2546 — SYNC TWIN. The login provisioning chain (create-or-update the
+ * user, stamp last-login, save the token, open the session) has to commit as ONE
+ * unit, and `dbTransaction` takes a SYNCHRONOUS callback by type
+ * (`db/core/dbConnection.ts:287`). So the transaction body needs a callee that is
+ * synchronous all the way down. The primitive is this one; the promise-returning
+ * export below is a one-line wrapper over it — never the reverse, because an
+ * `async` callee lets the transaction COMMIT over an error.
+ * Same shape and same reason as `createTransactionSync` (BACKLOG-2538) and
+ * `updateContactSync` (BACKLOG-2496). Rule derived by `electron/__tests__/syncTwin.guard.test.ts`.
+ */
+export function getUserByOAuthIdSync(
   provider: OAuthProvider,
   oauthId: string,
-): Promise<User | null> {
+): User | null {
   const statement =
     sql`SELECT * FROM users_local WHERE oauth_provider = ? AND oauth_id = ?`;
   const user = dbGet<User>(statement, [provider, oauthId]);
   return user || null;
 }
 
+export async function getUserByOAuthId(
+  provider: OAuthProvider,
+  oauthId: string,
+): Promise<User | null> {
+  return getUserByOAuthIdSync(provider, oauthId);
+}
+
 /**
  * Update user data
  */
-export async function updateUser(
+/**
+ * BACKLOG-2546 — SYNC TWIN. The login provisioning chain (create-or-update the
+ * user, stamp last-login, save the token, open the session) has to commit as ONE
+ * unit, and `dbTransaction` takes a SYNCHRONOUS callback by type
+ * (`db/core/dbConnection.ts:287`). So the transaction body needs a callee that is
+ * synchronous all the way down. The primitive is this one; the promise-returning
+ * export below is a one-line wrapper over it — never the reverse, because an
+ * `async` callee lets the transaction COMMIT over an error.
+ * Same shape and same reason as `createTransactionSync` (BACKLOG-2538) and
+ * `updateContactSync` (BACKLOG-2496). Rule derived by `electron/__tests__/syncTwin.guard.test.ts`.
+ */
+export function updateUserSync(
   userId: string,
   updates: Partial<User>,
-): Promise<void> {
+): void {
   const allowedFields: readonly ColumnOf<"users_local">[] = [
     "email",
     "first_name",
@@ -155,6 +214,13 @@ export async function updateUser(
   dbRun(statement, values);
 }
 
+export async function updateUser(
+  userId: string,
+  updates: Partial<User>,
+): Promise<void> {
+  return updateUserSync(userId, updates);
+}
+
 /**
  * Delete user
  */
@@ -166,13 +232,28 @@ export async function deleteUser(userId: string): Promise<void> {
 /**
  * Update last login timestamp
  */
-export async function updateLastLogin(userId: string): Promise<void> {
+/**
+ * BACKLOG-2546 — SYNC TWIN. The login provisioning chain (create-or-update the
+ * user, stamp last-login, save the token, open the session) has to commit as ONE
+ * unit, and `dbTransaction` takes a SYNCHRONOUS callback by type
+ * (`db/core/dbConnection.ts:287`). So the transaction body needs a callee that is
+ * synchronous all the way down. The primitive is this one; the promise-returning
+ * export below is a one-line wrapper over it — never the reverse, because an
+ * `async` callee lets the transaction COMMIT over an error.
+ * Same shape and same reason as `createTransactionSync` (BACKLOG-2538) and
+ * `updateContactSync` (BACKLOG-2496). Rule derived by `electron/__tests__/syncTwin.guard.test.ts`.
+ */
+export function updateLastLoginSync(userId: string): void {
   const statement = sql`
     UPDATE users_local
     SET last_login_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `;
   dbRun(statement, [userId]);
+}
+
+export async function updateLastLogin(userId: string): Promise<void> {
+  return updateLastLoginSync(userId);
 }
 
 /**

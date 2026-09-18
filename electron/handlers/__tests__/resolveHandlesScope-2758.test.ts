@@ -280,11 +280,44 @@ describe("BACKLOG-2758 — contacts:resolve-handles carries a transaction scope"
     expect(scope.transactionId).toBe(TX_ID);
   });
 
-  it("resolves with no user at all when the id fails validation, and still scopes", async () => {
-    // An unvalidatable user must not silently become "every user". Both fields
-    // are asserted so a fix that dropped the scope on this branch would red.
+  /**
+   * BACKLOG-3254 — REPLACES a leg that asserted the opposite of its own comment.
+   *
+   * The previous version read:
+   *
+   *     it("resolves with no user at all when the id fails validation, and still scopes")
+   *     // An unvalidatable user must not silently become "every user".
+   *     expect(scope.userId).toBeUndefined();
+   *
+   * The comment named the right rule; the assertion pinned the opposite of it.
+   * Passing the unvalidated call onward with `userId: undefined` did not
+   * narrow anything downstream — see BACKLOG-3254's pm_comments trail for the
+   * measurement.
+   *
+   * The channel ends the call instead. Asserting `transactionId` would now be
+   * meaningless — there is no resolver call left to carry it — so what is
+   * asserted is that no resolution happens.
+   *
+   * Do not restore the old leg. If this ever has to change, read what happens
+   * downstream to the value being sent before changing the assertion.
+   */
+  it("returns an error and resolves nothing when the supplied id does not validate", async () => {
     mockGetValidUserId.mockResolvedValue(null);
-    await invokeResolve([SHARED_PHONE], "not-a-user", { transactionId: TX_ID });
+
+    const res = await invokeResolve([SHARED_PHONE], "not-a-user", { transactionId: TX_ID });
+
+    expect(res.success).toBe(false);
+    expect(res.names).toEqual({});
+    expect(mockResolveHandles).not.toHaveBeenCalled();
+  });
+
+  it("still resolves unscoped when the caller supplies no user id at all", async () => {
+    // The absent-id contract is UNCHANGED by BACKLOG-3254, and this leg is what
+    // says so. Without it the guard above could be tightened into a refusal of
+    // this call too and nothing here would report it.
+    await invokeResolve([SHARED_PHONE], undefined, { transactionId: TX_ID });
+
+    expect(mockGetValidUserId).not.toHaveBeenCalled();
     const scope = scopeSentToResolver();
     expect(scope.userId).toBeUndefined();
     expect(scope.transactionId).toBe(TX_ID);

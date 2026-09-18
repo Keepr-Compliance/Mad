@@ -440,6 +440,27 @@ export const transactionBridge = {
     ipcRenderer.invoke("transactions:restore-removed-message", ignoredCommId, messageIds, transactionId),
 
   /**
+   * BACKLOG-3366: hide one text from this transaction's export. The text stays
+   * linked and visible; only the export drops it. Refused in the main process
+   * when hiding is not allowed.
+   * @param transactionId - Transaction the text is hidden from
+   * @param messageId - messages.id of the text
+   * @returns { success, hidden } with `hidden` read back from the database
+   */
+  hideTextFromExport: (transactionId: string, messageId: string) =>
+    ipcRenderer.invoke("transactions:hide-text-from-export", transactionId, messageId),
+
+  /**
+   * BACKLOG-3366: put a hidden text back into this transaction's export.
+   * Never gated.
+   * @param transactionId - Transaction the text was hidden from
+   * @param messageId - messages.id of the text
+   * @returns { success, hidden } with `hidden` read back from the database
+   */
+  unhideTextFromExport: (transactionId: string, messageId: string) =>
+    ipcRenderer.invoke("transactions:unhide-text-from-export", transactionId, messageId),
+
+  /**
    * BACKLOG-1578: Get removed/unlinked emails for a transaction.
    * Returns emails that were manually unlinked (from ignored_communications).
    * @param transactionId - Transaction ID to get removed emails for

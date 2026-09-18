@@ -8,10 +8,21 @@ import logger from "../../utils/logger";
 import { SyncStepChangeLog } from "../../utils/syncStepLog";
 
 interface IPhoneSyncFlowProps {
-  /** Callback when sync is complete and user clicks Continue */
+  /**
+   * Callback when the user dismisses the flow — Continue on success, Close on
+   * error, and the modal's own minimize button.
+   *
+   * BACKLOG-3416: there is deliberately no "sync started" callback beside it.
+   * TASK-2116 added one that auto-minimised the modal the moment the phase
+   * reached `backing_up`, and it fired on a signal that says nothing about
+   * whether the user has finished with the phone: `backing_up` is reached while
+   * the iPhone may still be locked, still showing "Trust This Computer", or
+   * still asking for a passcode. The modal hid those instructions while the user
+   * was reading them. The app blocks other actions during a sync anyway, so
+   * auto-minimising bought nothing. The manual minimize button is the only way
+   * out now, and it stays the user's decision.
+   */
   onClose?: () => void;
-  /** TASK-2116: Called when sync starts backing_up phase (modal auto-closes) */
-  onSyncStarted?: () => void;
 }
 
 /**
@@ -27,7 +38,7 @@ interface IPhoneSyncFlowProps {
  * This component ties together the useIPhoneSync hook with
  * the individual UI components for a complete user experience.
  */
-export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose, onSyncStarted }) => {
+export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
   const {
     isConnected,
     device,
@@ -104,29 +115,9 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose, onSyncS
     }
   }, [view, syncStatus, syncLocked, progress, isConnected, needsPassword]);
 
-  // TASK-2116: Auto-close modal when sync enters backing_up phase
-  // Track whether sync was already running when the modal opened — if so,
-  // don't auto-close (the user deliberately reopened it to see progress).
-  const hasCalledSyncStarted = useRef(false);
-  const wasAlreadySyncingOnMount = useRef(isSyncing);
-  useEffect(() => {
-    if (
-      isSyncing &&
-      progress?.phase === "backing_up" &&
-      !needsPassword &&
-      !hasCalledSyncStarted.current &&
-      !wasAlreadySyncingOnMount.current &&
-      onSyncStarted
-    ) {
-      hasCalledSyncStarted.current = true;
-      onSyncStarted();
-    }
-    // Reset when sync ends so it can fire again for future syncs
-    if (!isSyncing) {
-      hasCalledSyncStarted.current = false;
-      wasAlreadySyncingOnMount.current = false;
-    }
-  }, [isSyncing, progress?.phase, needsPassword, onSyncStarted]);
+  // BACKLOG-3416: TASK-2116's auto-close effect lived here and was removed with
+  // the `onSyncStarted` prop it fired. See the prop doc above for why. Nothing
+  // dismisses this flow on its own any more — only the user does.
 
   return (
     <div className="iphone-sync-flow">

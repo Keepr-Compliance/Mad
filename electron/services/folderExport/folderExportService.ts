@@ -35,6 +35,7 @@ import type { FolderExportProgress } from "../../types/ipc";
 // BACKLOG-2771: the single include-set decision, resolved by the caller.
 import type { ExportPlan } from "../exportPlan";
 import { orderAttachmentComms } from "../exportPlan";
+import type { ExportOmissionDetail, ExportOmissions } from "../exportNotices";
 import { isEmailMessage, isTextMessage } from "../../utils/channelHelpers";
 import { isReactionRow } from "../../utils/reactionUtils";
 import {
@@ -135,6 +136,13 @@ interface AttachmentManifest {
   transactionId: string;
   propertyAddress: string;
   exportDate: string;
+  /**
+   * BACKLOG-3367 — what this export omitted, as its OWN top-level key rather
+   * than nested under `attachments` (SR required change 8, pm_comments
+   * d590f7c6). BACKLOG-3058 will list missing attachments in this same file;
+   * the two are different kinds of gap and must stay separately readable.
+   */
+  hiddenFromExport: { texts: number };
   attachments: AttachmentManifestEntry[];
   /** TASK-2050: Summary of email attachments exported to thread directories */
   emailAttachments?: {
@@ -267,6 +275,7 @@ class FolderExportService {
         transaction,
         communications,
         basePath,
+        { hiddenTextCount: plan.hiddenTextCount },
         phoneNameMap,
         emailRenderMode,
         (handle) => matchedNamesFor(resolution, handle)
@@ -381,6 +390,11 @@ class FolderExportService {
         await this.exportTextConversations(
           texts,
           textsPath,
+          // BACKLOG-3367: the rows the resolver REMOVED, so each conversation
+          // file can state its own count. Grouped below with the same
+          // getThreadKey() this method groups the included texts with — the
+          // predicate is never re-derived.
+          plan.hiddenTexts,
           phoneNameMap,
           userName,
           userEmail,
@@ -409,7 +423,13 @@ class FolderExportService {
         // then texts ascending) — manifest.json encodes array position as
         // `sourceEmailIndex`, so the order is observable and preserved.
         const attachmentComms = orderAttachmentComms(plan, [...emails, ...texts]);
-        await this.exportAttachments(transaction, attachmentComms, attachmentsPath, emailAttachmentResult);
+        await this.exportAttachments(
+          transaction,
+          attachmentComms,
+          attachmentsPath,
+          { hiddenTextCount: plan.hiddenTextCount },
+          emailAttachmentResult
+        );
 
         onProgress?.({
           stage: "attachments",
@@ -444,6 +464,8 @@ class FolderExportService {
     transaction: TransactionWithDetails,
     communications: Communication[],
     basePath: string,
+    // BACKLOG-3367: required, no default — see generateSummaryHTML.
+    omissions: ExportOmissions,
     phoneNameMap?: Record<string, string>,
     emailExportMode: "thread" | "individual" = "thread",
     matchedNames?: (handle: string | null | undefined) => readonly string[]
@@ -451,6 +473,7 @@ class FolderExportService {
     const html = generateSummaryHTML(
       transaction,
       communications,
+      omissions,
       phoneNameMap,
       emailExportMode,
       matchedNames
@@ -533,6 +556,8 @@ class FolderExportService {
   private async exportTextConversations(
     texts: Communication[],
     outputPath: string,
+    // BACKLOG-3367: required, no default — the texts the plan removed.
+    hiddenTexts: Communication[],
     phoneNameMap?: Record<string, string>,
     userName?: string,
     userEmail?: string,
@@ -549,6 +574,18 @@ class FolderExportService {
       textThreads.set(key, thread);
     }
 
+    // BACKLOG-3367: how many texts each conversation lost, keyed by the SAME
+    // getThreadKey() used above so a hidden text lands on the conversation it
+    // came from. A thread whose every text was hidden produces no file at all
+    // (it is not in `texts`), so there is nothing to annotate and no entry here
+    // is ever read — correct, and the reason the summary report's
+    // transaction-level count is the one that covers that case.
+    const hiddenByThread = new Map<string, number>();
+    for (const msg of hiddenTexts) {
+      const key = getThreadKey(msg);
+      hiddenByThread.set(key, (hiddenByThread.get(key) || 0) + 1);
+    }
+
     // Sort messages within each thread chronologically
     textThreads.forEach((msgs, key) => {
       textThreads.set(
@@ -563,7 +600,7 @@ class FolderExportService {
 
     // Export each thread as PDF
     let threadIndex = 0;
-    for (const [, msgs] of textThreads) {
+    for (const [threadKey, msgs] of textThreads) {
       // BACKLOG-2280: a thread with only reaction rows (parents outside this
       // export) is not a real conversation — skip it so we don't emit an empty PDF.
       if (!msgs.some((m) => !isReactionRow(m))) continue;
@@ -581,6 +618,7 @@ class FolderExportService {
         nameMap,
         groupChat,
         threadIndex,
+        { hiddenTextCount: hiddenByThread.get(threadKey) || 0 },
         participants,
         getAttachmentsForMessage,
         threadMatchedNames
@@ -628,12 +666,19 @@ class FolderExportService {
     transaction: Transaction,
     communications: Communication[],
     outputPath: string,
+    // BACKLOG-3367: REQUIRED and fourth, before the optional tail. The manifest
+    // is the machine-readable index of the package; it must state the omission
+    // for the same reason the summary page does.
+    omissions: ExportOmissions,
     emailAttachmentResult?: AttachmentExportResult
   ): Promise<void> {
     const manifest: AttachmentManifest = {
       transactionId: transaction.id,
       propertyAddress: transaction.property_address,
       exportDate: new Date().toISOString(),
+      // Set HERE, on the single object both write sites serialize, so the
+      // early return below cannot omit it (the plan's N4 mutation).
+      hiddenFromExport: { texts: omissions.hiddenTextCount },
       attachments: [],
     };
 
@@ -1010,6 +1055,11 @@ class FolderExportService {
     transaction: TransactionWithDetails,
     communications: Communication[],
     outputPath: string,
+    // BACKLOG-3367: REQUIRED and fourth, before the optional tail. This method
+    // is called from BOTH branches of enhancedExportService._exportPDF (with and
+    // without an attachments folder); a default of 0 would let one branch forget
+    // it and still compile, which is the failure SR's required change 2 names.
+    omissions: ExportOmissionDetail,
     summaryOnly: boolean = false,
     _emailExportMode: "thread" | "individual" = "thread"
   ): Promise<string> {
@@ -1018,9 +1068,10 @@ class FolderExportService {
         transactionId: transaction.id,
         outputPath,
         summaryOnly,
+        hiddenTexts: omissions.hiddenTextCount,
       });
 
-      const html = await this.renderCombinedHTML(transaction, communications, summaryOnly);
+      const html = await this.renderCombinedHTML(transaction, communications, summaryOnly, omissions);
       const pdfBuffer = await this.combinedHtmlToPdf(html);
       await fs.writeFile(outputPath, pdfBuffer);
 
@@ -1046,7 +1097,11 @@ class FolderExportService {
   private async renderCombinedHTML(
     transaction: TransactionWithDetails,
     communications: Communication[],
-    summaryOnly: boolean
+    summaryOnly: boolean,
+    // BACKLOG-3367: required, no default. Reaches BOTH the index page (via
+    // generateSummaryHTML, so the summary-only artifact states it too) and each
+    // per-thread section below.
+    omissions: ExportOmissionDetail
   ): Promise<string> {
     const emails = communications.filter((c) => isEmailMessage(c));
     const texts = communications.filter((c) => isTextMessage(c));
@@ -1081,6 +1136,7 @@ class FolderExportService {
     const summaryHtml = generateSummaryHTML(
       transaction,
       communications,
+      omissions,
       phoneNameMap,
       "thread",
       (handle) => matchedNamesFor(resolution, handle)
@@ -1157,6 +1213,17 @@ class FolderExportService {
           .filter((msgs) => msgs.some((m) => !isReactionRow(m)))
           .sort((a, b) => lastRealTime(a) - lastRealTime(b));
 
+        // BACKLOG-3367: per-section counts, keyed by the SAME getThreadKey()
+        // that grouped `textThreads` just above — so a hidden text lands on the
+        // section it came from. Identical derivation to
+        // exportTextConversations(); the two formats must not disagree about
+        // what a conversation lost.
+        const hiddenByThread = new Map<string, number>();
+        for (const msg of omissions.hiddenTexts) {
+          const key = getThreadKey(msg);
+          hiddenByThread.set(key, (hiddenByThread.get(key) || 0) + 1);
+        }
+
         let textIdx = 0;
         for (const msgs of orderedThreads) {
           const contact = getThreadContact(msgs, phoneNameMap);
@@ -1174,6 +1241,7 @@ class FolderExportService {
               phoneNameMap,
               groupChat,
               textIdx,
+              { hiddenTextCount: hiddenByThread.get(getThreadKey(msgs[0])) || 0 },
               participants,
               getAttachmentsForMessage,
               matchedNamesFor(resolution, contact.phone)

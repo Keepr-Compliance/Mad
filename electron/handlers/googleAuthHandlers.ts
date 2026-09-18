@@ -17,6 +17,7 @@ import databaseService from "../services/databaseService";
 import googleAuthService from "../services/googleAuthService";
 import supabaseService from "../services/supabaseService";
 import sessionService from "../services/sessionService";
+import { provisionLogin } from "../services/loginProvisioningService";
 import rateLimitService from "../services/rateLimitService";
 import auditService from "../services/auditService";
 import logService from "../services/logService";
@@ -25,6 +26,7 @@ import { importEnabledEmptyContactSources } from "../services/postConnectContact
 // Import validation utilities
 import { ValidationError, validateAuthCode } from "../utils/validation";
 import { getValidUserId } from "../utils/userIdHelper";
+import { bringAppToFront } from "../utils/bringAppToFront";
 
 // Import constants
 import {
@@ -321,12 +323,14 @@ export async function handleGoogleLogin(
         }
 
         // Create or find user in local database
-        let localUser = await databaseService.getUserByOAuthId("google", userInfo.id);
-        const isNewUser = !localUser;
-
-        if (!localUser) {
-          // TASK-1507G: Use Supabase Auth UUID as local user ID for unified IDs
-          localUser = await databaseService.createUser({
+        // BACKLOG-2546: the user row and the session row commit as ONE unit.
+        // This path writes no token and does not stamp last-login, matching its
+        // pre-change behaviour exactly.
+        const provisioned = provisionLogin({
+          provider: "google",
+          oauthId: userInfo.id,
+          create: {
+            // TASK-1507G: Use Supabase Auth UUID as local user ID for unified IDs
             id: cloudUser.id,
             email: userInfo.email,
             first_name: userInfo.given_name,
@@ -339,11 +343,13 @@ export async function handleGoogleLogin(
             subscription_status: cloudUser.subscription_status,
             trial_ends_at: cloudUser.trial_ends_at,
             is_active: true,
-          });
-        }
+          },
+          touchLastLogin: false,
+        });
 
-        // Create session
-        const sessionToken = await databaseService.createSession(localUser.id);
+        const localUser = provisioned.user;
+        const sessionToken = provisioned.sessionToken;
+        const isNewUser = provisioned.isNewUser;
 
         // Save session to disk for persistence across app restarts
         await sessionService.saveSession({
@@ -459,14 +465,16 @@ export async function handleGoogleCompleteLogin(
     });
 
     // Create user in local database
-    let localUser = await databaseService.getUserByOAuthId(
-      "google",
-      userInfo.id
-    );
+    // BACKLOG-2546: user row, token row and session row commit as ONE unit.
+    const scopesGranted = Array.isArray(tokens.scopes)
+      ? tokens.scopes.join(" ")
+      : tokens.scopes;
 
-    if (!localUser) {
-      // TASK-1507G: Use Supabase Auth UUID as local user ID for unified IDs
-      localUser = await databaseService.createUser({
+    const provisioned = provisionLogin({
+      provider: "google",
+      oauthId: userInfo.id,
+      create: {
+        // TASK-1507G: Use Supabase Auth UUID as local user ID for unified IDs
         id: cloudUser.id,
         email: userInfo.email,
         first_name: userInfo.given_name,
@@ -479,10 +487,9 @@ export async function handleGoogleCompleteLogin(
         subscription_status: cloudUser.subscription_status,
         trial_ends_at: cloudUser.trial_ends_at,
         is_active: true,
-      });
-    } else {
+      },
       // Update existing user - sync profile AND user state from cloud
-      await databaseService.updateUser(localUser.id, {
+      updateExisting: {
         email: userInfo.email,
         first_name: userInfo.given_name,
         last_name: userInfo.family_name,
@@ -503,67 +510,52 @@ export async function handleGoogleCompleteLogin(
         }),
         subscription_tier: cloudUser.subscription_tier,
         subscription_status: cloudUser.subscription_status,
-      });
+      },
+      touchLastLogin: true,
+      token: {
+        purpose: "authentication",
+        data: {
+          access_token: accessToken,
+          refresh_token: refreshToken ?? undefined,
+          token_expires_at: tokens.expires_at ?? undefined,
+          scopes_granted: scopesGranted,
+        },
+      },
+    });
 
-      // Bidirectional sync
-      if (localUser.terms_accepted_at && !cloudUser.terms_accepted_at) {
-        await logService.info(
-          "Local user has accepted terms but cloud does not - syncing to cloud",
-          "AuthHandlers"
+    const localUser = provisioned.user;
+    const sessionToken = provisioned.sessionToken;
+
+    // Bidirectional sync — a NETWORK call, so it runs after the commit. It reads
+    // the PRE-update snapshot, which is what the pre-BACKLOG-2546 code read:
+    // `localUser` was bound before `updateUser` ran and never reassigned before
+    // this call. Using `provisioned.user` would send different values.
+    const beforeUpdate = provisioned.existingBefore;
+    if (beforeUpdate?.terms_accepted_at && !cloudUser.terms_accepted_at) {
+      await logService.info(
+        "Local user has accepted terms but cloud does not - syncing to cloud",
+        "AuthHandlers"
+      );
+      try {
+        await supabaseService.syncTermsAcceptance(
+          cloudUser.id,
+          beforeUpdate.terms_version_accepted || CURRENT_TERMS_VERSION,
+          beforeUpdate.privacy_policy_version_accepted ||
+            CURRENT_PRIVACY_POLICY_VERSION
         );
-        try {
-          await supabaseService.syncTermsAcceptance(
-            cloudUser.id,
-            localUser.terms_version_accepted || CURRENT_TERMS_VERSION,
-            localUser.privacy_policy_version_accepted ||
-              CURRENT_PRIVACY_POLICY_VERSION
-          );
-        } catch (syncError) {
-          await logService.error(
-            "Failed to sync local terms to cloud",
-            "AuthHandlers",
-            {
-              error:
-                syncError instanceof Error
-                  ? syncError.message
-                  : "Unknown error",
-            }
-          );
-        }
+      } catch (syncError) {
+        await logService.error(
+          "Failed to sync local terms to cloud",
+          "AuthHandlers",
+          {
+            error:
+              syncError instanceof Error
+                ? syncError.message
+                : "Unknown error",
+          }
+        );
       }
     }
-
-    // Update last login
-    if (!localUser) {
-      throw new Error("Local user is unexpectedly null after creation/update");
-    }
-
-    await databaseService.updateLastLogin(localUser.id);
-    const refreshedUser = await databaseService.getUserById(localUser.id);
-    if (!refreshedUser) {
-      throw new Error("Failed to retrieve user after update");
-    }
-    localUser = refreshedUser;
-
-    // Save auth token
-    const scopesGranted = Array.isArray(tokens.scopes)
-      ? tokens.scopes.join(" ")
-      : tokens.scopes;
-
-    await databaseService.saveOAuthToken(
-      localUser.id,
-      "google",
-      "authentication",
-      {
-        access_token: accessToken,
-        refresh_token: refreshToken ?? undefined,
-        token_expires_at: tokens.expires_at ?? undefined,
-        scopes_granted: scopesGranted,
-      }
-    );
-
-    // Create session
-    const sessionToken = await databaseService.createSession(localUser.id);
 
     // Save session to disk for persistence across app restarts
     await sessionService.saveSession({
@@ -777,6 +769,32 @@ export async function handleGoogleConnectMailbox(
           metadata: { provider: "google", email: userInfo.email },
           success: true,
         });
+
+        // BACKLOG-3394: bring the app forward OURSELVES. The user is looking at
+        // a browser tab; before this the served page asked them to click
+        // "Return to Application", which fired `keepr://focus` and made the
+        // browser prompt for permission — from a `listen(0)` origin that is
+        // different on every connect, so "Always allow" never stuck.
+        //
+        // Focus FIRST, then notify; the order is pinned by an assertion. It is
+        // pinned because it is free and directionally right, NOT because it is
+        // known to fix delivery. `app.focus({ steal: true })` is an
+        // ASYNCHRONOUS OS activation request, so this ordering does not
+        // establish that the renderer is foreground when the send happens, and
+        // no unit test here can establish it.
+        //
+        // UNTRACED LEAD — do not build on it. Whether focusing first affects
+        // BACKLOG-1709's lost success event is unproven: 1709's pass 2 wrote
+        // the backgrounded-webContents candidate down as "Offered as a lead,
+        // not a finding … n = 3. Do not build on it." (pm_comments 7ae840b3).
+        // It cannot touch 1709's lost-REPLY branch at all — this code runs
+        // inside processLoginInBackground, after codePromise resolves, while
+        // the invoke reply was already dispatched at the `return` below,
+        // before codePromise had resolved.
+        //
+        // Only this branch focuses. A failed connect must not steal the user's
+        // browser out from under them.
+        bringAppToFront(mainWindow);
 
         // Notify renderer
         if (mainWindow && !mainWindow.isDestroyed()) {

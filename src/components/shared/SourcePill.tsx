@@ -225,6 +225,18 @@ export function mapToSourcePillSource(
   if (source === "iphone") return "iphone";
   if (source === "android_sync") return "android_sync";
   if (source === "google_contacts") return "google_contacts";
+  /**
+   * BACKLOG-1717 — a person found in the user's email, above the `isExternal`
+   * line and for exactly that reason.
+   *
+   * These records are external by construction (`isFromDatabase: false`, and
+   * `useContactDirectory` stamps every address-book row), so without this line
+   * the very next one answers first and the person is badged "Contacts App" —
+   * naming a source they did not come from, on a record whose whole point is
+   * that it came from mail rather than from an address book. Same class of
+   * mistake as the one BACKLOG-1900 P0.3 fixed for iPhone and Android above.
+   */
+  if (source === "email_derived") return "email";
   if (isExternal || source === "contacts_app") return "contacts_app";
   switch (source) {
     case "manual":

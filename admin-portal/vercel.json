@@ -5,11 +5,9 @@
     "deploymentEnabled": {
       "main": true,
       "develop": true,
-      "int/**": true,
       "*-portal/**": true,
       "portal/**": true,
       "dependabot/**": true,
-      "hotfix/**": true,
       "release/**": true,
       "**": false
     }

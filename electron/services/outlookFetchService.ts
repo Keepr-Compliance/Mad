@@ -376,6 +376,11 @@ class OutlookFetchService {
   private accessToken: string | null = null;
   private refreshToken: string | null = null;
   private userId: string | null = null;
+  /**
+   * BACKLOG-3286: the id of the mailbox row loaded by `initialize`. A token
+   * refresh updates exactly this row and nothing else.
+   */
+  private tokenId: string | null = null;
 
   /**
    * Initialize Outlook API with user's OAuth tokens
@@ -384,6 +389,8 @@ class OutlookFetchService {
   async initialize(userId: string): Promise<boolean> {
     try {
       this.userId = userId;
+      // Cleared first so a failed lookup cannot leave the previous row's id.
+      this.tokenId = null;
 
       // Get OAuth token from database
       const tokenRecord: OAuthToken | null =
@@ -398,6 +405,15 @@ class OutlookFetchService {
       // Session-only OAuth: tokens stored unencrypted in encrypted database
       this.accessToken = tokenRecord.access_token || "";
       this.refreshToken = tokenRecord.refresh_token || null;
+      this.tokenId = tokenRecord.id;
+
+      // BACKLOG-3286: every Outlook store path calls `initialize` before it
+      // reads the mailbox address to set each email's direction. A row that
+      // lost its address is repaired here, before that read. Runs only after
+      // the id and both tokens above are set, so a 401 can reach the refresh.
+      if (!tokenRecord.connected_email_address) {
+        await this.repairMissingMailboxAddress(tokenRecord.id);
+      }
 
       logService.debug("Initialized successfully", "OutlookFetch");
       return true;
@@ -407,6 +423,52 @@ class OutlookFetchService {
         tags: { service: "outlook-fetch", operation: "initialize" },
       });
       throw error;
+    }
+  }
+
+  /**
+   * BACKLOG-3286: restore the address of the loaded mailbox row from the
+   * signed-in account's own profile. Best-effort: a failure is logged and the
+   * caller carries on, so emails stored in that sync get no direction and the
+   * next `initialize` tries again.
+   *
+   * One attempt only (`maxRetries: 0`). This runs inside `initialize`, ahead of
+   * every Outlook sync, so the default retry schedule would hold each sync for
+   * over half a minute when the request keeps failing.
+   */
+  private async repairMissingMailboxAddress(tokenId: string): Promise<void> {
+    try {
+      const profile = await this._graphRequest<{
+        mail?: string | null;
+        userPrincipalName?: string | null;
+      }>(
+        "/me?$select=mail,userPrincipalName",
+        "GET",
+        null,
+        false,
+        undefined,
+        undefined,
+        { maxRetries: 0 },
+      );
+      // Same mapping the Microsoft connect uses.
+      const address = profile?.mail || profile?.userPrincipalName;
+      if (!address) {
+        logService.warn(
+          "Mailbox address repair: the profile carried no address",
+          "OutlookFetch",
+        );
+        return;
+      }
+      await databaseService.updateOAuthToken(tokenId, {
+        connected_email_address: address,
+      });
+      logService.info("Mailbox address repaired from Graph", "OutlookFetch");
+    } catch (error) {
+      logService.warn(
+        "Mailbox address repair failed; continuing without it",
+        "OutlookFetch",
+        { error: error instanceof Error ? error.message : String(error) },
+      );
     }
   }
 
@@ -430,6 +492,10 @@ class OutlookFetchService {
     // BACKLOG-2856: the caller's cancellation signal. Optional, and every
     // existing caller omits it — only the pre-cache paths thread one through.
     signal?: AbortSignal,
+    // BACKLOG-3286: a retry-count override for one caller (the address repair).
+    // Every other caller omits it and keeps the default schedule below. It is
+    // passed on to the request retried after a token refresh.
+    retryOverride?: Pick<RetryOptions, "maxRetries">,
   ): Promise<T> {
     // BACKLOG-2856: checked BEFORE the throttler and again after it. The
     // throttler can hold a request for hundreds of milliseconds, so a cancel
@@ -441,7 +507,7 @@ class OutlookFetchService {
     throwIfCancelled(signal, `graphRequest:${endpoint}`);
 
     const retryOptions: RetryOptions = {
-      maxRetries: 5,
+      maxRetries: retryOverride?.maxRetries ?? 5,
       baseDelay: 1000,
       maxDelay: 30000,
       context: "OutlookFetch",
@@ -541,25 +607,41 @@ class OutlookFetchService {
                 this.refreshToken,
               );
               this.accessToken = tokenResponse.access_token;
-              this.refreshToken = tokenResponse.refresh_token;
+              // BACKLOG-3286: keep the refresh token we hold when the response
+              // carries none.
+              if (tokenResponse.refresh_token) {
+                this.refreshToken = tokenResponse.refresh_token;
+              }
 
-              // Update token in database
-              await databaseService.saveOAuthToken(
-                this.userId,
-                "microsoft",
-                "mailbox",
-                {
+              // BACKLOG-3286: update the loaded row by id — only the fields the
+              // refresh produced. This used to be the upsert, which rewrote every
+              // column the payload omitted (the mailbox address among them) and
+              // re-created a row that had been removed while the sync ran.
+              if (this.tokenId) {
+                await databaseService.updateOAuthToken(this.tokenId, {
                   access_token: tokenResponse.access_token,
-                  refresh_token: tokenResponse.refresh_token,
                   token_expires_at: new Date(
                     Date.now() + tokenResponse.expires_in * 1000,
                   ).toISOString(),
-                },
-              );
+                  ...(tokenResponse.refresh_token
+                    ? { refresh_token: tokenResponse.refresh_token }
+                    : {}),
+                  // Stored JSON-encoded, the shape every other writer uses and
+                  // `getOAuthToken` parses; `updateOAuthToken` encodes arrays only.
+                  ...(tokenResponse.scope
+                    ? { scopes_granted: JSON.stringify(tokenResponse.scope) }
+                    : {}),
+                });
+              } else {
+                logService.warn(
+                  "Token refreshed but no mailbox row is loaded; not persisted",
+                  "OutlookFetch",
+                );
+              }
 
               logService.info("Token refreshed successfully", "OutlookFetch");
               // Retry the request with new token (mark as retry to avoid infinite loop)
-              return this._graphRequest<T>(endpoint, method, data, true, extraHeaders, signal);
+              return this._graphRequest<T>(endpoint, method, data, true, extraHeaders, signal, retryOverride);
             } catch (refreshError) {
               logService.error("Token refresh failed", "OutlookFetch", {
                 error: refreshError,
@@ -1855,7 +1937,26 @@ class OutlookFetchService {
       // BACKLOG-1802: upper date bound propagated to every folder for delta windowing.
       before?: Date | null;
       maxResults?: number;
-      onProgress?: (progress: FetchProgress & { folder?: string; currentFolder?: string }) => void;
+      /**
+       * Per-page progress, forwarded from each folder's own paging loop.
+       *
+       * `fetched` / `percentage` describe THE CURRENT FOLDER ONLY — `fetched`
+       * restarts at zero on every folder and `searchEmailsByFolder` has no count
+       * to divide by, so it always reports `percentage: 0, hasEstimate: false`.
+       * A caller drawing a bar from those alone would see it reset once per
+       * folder. `folderIndex` / `folderCount` are the walk-level pair that is
+       * actually monotone, and they are what `precacheEmails` draws with.
+       */
+      onProgress?: (
+        progress: FetchProgress & {
+          folder?: string;
+          currentFolder?: string;
+          /** 0-based index of the folder being fetched. */
+          folderIndex?: number;
+          /** How many folders the walk will visit in total. */
+          folderCount?: number;
+        },
+      ) => void;
       /** BACKLOG-2856: stop between folders, and inside each folder's paging. */
       signal?: AbortSignal;
     } = {}
@@ -1874,7 +1975,8 @@ class OutlookFetchService {
       const seenMessageIds = new Set<string>();
       const allEmails: ParsedEmail[] = [];
 
-      for (const folder of folders) {
+      for (let folderIndex = 0; folderIndex < folders.length; folderIndex++) {
+        const folder = folders[folderIndex];
         // BACKLOG-2856 — THE BETWEEN-FOLDER CHECK.
         //
         // This is the boundary the founder's 28.3-second cancel was waiting on.
@@ -1899,6 +2001,8 @@ class OutlookFetchService {
                   options.onProgress!({
                     ...progress,
                     currentFolder: folder.displayName,
+                    folderIndex,
+                    folderCount: folders.length,
                   });
                 }
               : undefined,

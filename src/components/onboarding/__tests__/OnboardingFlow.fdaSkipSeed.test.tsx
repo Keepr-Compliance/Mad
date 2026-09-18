@@ -25,6 +25,7 @@ import React from "react";
 import { render, waitFor } from "@testing-library/react";
 import { OnboardingFlow } from "../OnboardingFlow";
 import type { AppStateMachine } from "../../../appCore/state/types";
+import type { FdaState } from "../../../appCore/state/machine/fdaState";
 
 jest.mock("../../../contexts/PlatformContext", () => ({
   usePlatform: () => ({ isWindows: false, isMacOS: true, isLinux: false, platform: "macos" }),
@@ -88,10 +89,11 @@ jest.mock("../queue/useOnboardingQueue", () => ({
 const mockDispatch = jest.fn();
 
 /**
- * The value USER_DATA_LOADED put on onboarding state. `undefined` is the
- * pre-BACKLOG-3212 shape (and every user who never skipped).
+ * The value USER_DATA_LOADED put on onboarding state. `undefined` means the
+ * Full Disk Access state was never established (the pre-BACKLOG-3212 shape);
+ * BACKLOG-3275 replaced the `fdaSkipped` boolean with this named state.
  */
-let machineFdaSkipped: boolean | undefined;
+let machineFda: FdaState | undefined;
 
 jest.mock("../../../appCore/state/machine", () => ({
   useOptionalMachineState: () => ({
@@ -99,7 +101,7 @@ jest.mock("../../../appCore/state/machine", () => ({
       status: "onboarding" as const,
       user: { id: "u1", email: "user@example.com" },
       // eslint-disable-next-line @typescript-eslint/no-use-before-define
-      fdaSkipped: machineFdaSkipped,
+      fda: machineFda,
     },
     dispatch: mockDispatch,
   }),
@@ -149,12 +151,12 @@ describe("OnboardingFlow — seeding `permissions` from a persisted skip (BACKLO
   beforeEach(() => {
     capturedQueueOptions = null;
     mockDispatch.mockClear();
-    machineFdaSkipped = undefined;
+    machineFda = undefined;
   });
 
   it("seeds `permissions` on a NORMAL launch (no resume marker) when the skip is on record", async () => {
     // The whole point: this is the launch the old `isResuming` gate excluded.
-    machineFdaSkipped = true;
+    machineFda = "declined";
     installWindowApi(null);
 
     const seeded = await renderAndCapture();
@@ -165,7 +167,7 @@ describe("OnboardingFlow — seeding `permissions` from a persisted skip (BACKLO
   it("CONTROL: seeds NOTHING on a normal launch when no skip is on record", async () => {
     // Same launch, same everything, flag absent. If this ever starts seeding,
     // the app has quietly stopped asking anyone for Full Disk Access.
-    machineFdaSkipped = undefined;
+    machineFda = undefined;
     installWindowApi(null);
 
     const seeded = await renderAndCapture();
@@ -174,7 +176,7 @@ describe("OnboardingFlow — seeding `permissions` from a persisted skip (BACKLO
   });
 
   it("CONTROL: an explicit false is not treated as a skip", async () => {
-    machineFdaSkipped = false;
+    machineFda = "not-asked";
     installWindowApi(null);
 
     const seeded = await renderAndCapture();
@@ -185,7 +187,7 @@ describe("OnboardingFlow — seeding `permissions` from a persisted skip (BACKLO
   it("adds `permissions` alongside the BACKLOG-1842 resume seeds when both apply", async () => {
     // Resuming from the FDA-grant relaunch AND carrying an older skip: the
     // 1842 seeds must survive, not be replaced.
-    machineFdaSkipped = true;
+    machineFda = "declined";
     installWindowApi("permissions");
 
     const seeded = await renderAndCapture();
@@ -194,7 +196,7 @@ describe("OnboardingFlow — seeding `permissions` from a persisted skip (BACKLO
   });
 
   it("leaves the resuming-without-a-skip seed exactly as BACKLOG-1842 left it", async () => {
-    machineFdaSkipped = undefined;
+    machineFda = undefined;
     installWindowApi("permissions");
 
     const seeded = await renderAndCapture();

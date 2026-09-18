@@ -194,10 +194,13 @@ describe("BACKLOG-3219 — system:health-check decorates a Full Disk Access deni
 
     // BACKLOG-2392: telling a user to grant a permission she may already hold
     // is the bug BACKLOG-3210 part 1 was careful to avoid re-creating.
+    // BACKLOG-3233 re-pointed the second assertion. It used to compare
+    // `issue.action` to the FIXTURE's `action` — both sides from the same
+    // constant, through a mocked producer — so it could not see the real
+    // producer drop the field. An absent store now carries no `action` at all,
+    // which is what takes the dead button off the row.
     expect(issue).not.toHaveProperty("actionHandler");
-    expect(issue.action).toBe(
-      CONTACTS_STORE_NOT_FOUND_PERMISSION_RESULT.action
-    );
+    expect(issue).not.toHaveProperty("action");
   });
 
   it("STATE 2 — permissions all granted produces NO issues at all", async () => {

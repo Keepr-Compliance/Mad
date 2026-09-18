@@ -118,13 +118,8 @@ develop
 
 ### Branch Naming
 
-| Prefix | Example | Use Case |
-|--------|---------|----------|
-| `feature/` | `feature/backlog-101-types` | New features |
-| `fix/` | `fix/backlog-102-login-crash` | Bug fixes |
-| `hotfix/` | `hotfix/security-patch` | Urgent production fixes (target main + develop) |
-| `claude/` | `claude/103-refactor-auth` | AI-assisted development |
-| `int/` | `int/sprint-name` | Integration branches for sprints |
+Prefixes, examples and the portal opt-in live in one place: `.claude/docs/shared/git-branching.md` → **Branch Naming**.
+Use `int-portal/<sprint-name>` instead of `int/<sprint-name>` when the sprint changes portal code.
 
 ### Merge Policy
 

@@ -26,6 +26,40 @@ import {
   validateString,
   validateProvider,
 } from "../utils/validation";
+import type { HealthIssue } from "../types/ipc/healthIssue";
+import type { ConnectionError } from "../services/connectionStatusService";
+
+/**
+ * BACKLOG-3230 — the broken-token types the health banner speaks for.
+ *
+ * `NOT_CONNECTED` is deliberately absent: a provider that was never connected is
+ * the setup prompt's job, not a health error, and it is the only connection error
+ * whose action is `connect-*` rather than `reconnect-*`.
+ *
+ * Hoisted to module scope so `isBrokenTokenError` below can be the ONE place
+ * where the runtime check and the type agree.
+ */
+const BROKEN_TOKEN_TYPES = new Set([
+  "TOKEN_REFRESH_FAILED",
+  "TOKEN_EXPIRED",
+  "CONNECTION_CHECK_FAILED",
+]);
+
+/**
+ * BACKLOG-3230 — narrow a connection error the banner should speak for.
+ *
+ * A type PREDICATE rather than an annotation, deliberately. `connectionStatusService`
+ * is loaded through `require()` (see the top of this file), so everything it
+ * returns arrives as `any`; annotating the status object would be an unchecked
+ * assertion wearing an annotation's clothes — the same blindfold BACKLOG-3230
+ * removes, just quieter. Here the runtime check IS the narrowing, so the two
+ * cannot drift apart.
+ */
+function isBrokenTokenError(error: unknown): error is ConnectionError {
+  if (typeof error !== "object" || error === null) return false;
+  const type = (error as { type?: unknown }).type;
+  return typeof type === "string" && BROKEN_TOKEN_TYPES.has(type);
+}
 
 // Type definitions
 interface HealthCheckResponse {
@@ -34,7 +68,10 @@ interface HealthCheckResponse {
   permissions?: unknown;
   connection?: unknown;
   contactsLoading?: unknown;
-  issues?: unknown[];
+  // BACKLOG-3230: was `unknown[]`, which accepted every shape and made a
+  // producer-side rename invisible to `npm run type-check`. Typing it is half
+  // the fix; deleting the renderer's cast is the other half.
+  issues?: HealthIssue[];
   summary?: {
     totalIssues: number;
     criticalIssues: number;
@@ -234,6 +271,28 @@ export function isDownstreamOfFdaDenial(issue: unknown): boolean {
   return typeof type === "string" && FDA_DOWNSTREAM_ISSUE_TYPES.has(type);
 }
 
+/** BACKLOG-3233 — the address book is ABSENT, which is not a denial. */
+const CONTACTS_STORE_ABSENT_ERROR_CODES = new Set(["CONTACTS_STORE_NOT_FOUND"]);
+
+/**
+ * NARROWER than FDA_DOWNSTREAM_ISSUE_TYPES on purpose. An absent store fully
+ * explains "we read zero books" (CONTACTS_LOADING_FAILED). It does NOT explain
+ * the check itself THROWING (CONTACTS_CHECK_FAILED), so that row still speaks.
+ */
+const STORE_ABSENT_DOWNSTREAM_ISSUE_TYPES = new Set(["CONTACTS_LOADING_FAILED"]);
+
+export function hasContactsStoreAbsent(errors: ReadonlyArray<unknown>): boolean {
+  return errors.some((issue) => {
+    const code = errorCodeOf(issue);
+    return code !== undefined && CONTACTS_STORE_ABSENT_ERROR_CODES.has(code);
+  });
+}
+
+export function isDownstreamOfContactsStoreAbsent(issue: unknown): boolean {
+  const type = (issue as { type?: unknown } | null)?.type;
+  return typeof type === "string" && STORE_ABSENT_DOWNSTREAM_ISSUE_TYPES.has(type);
+}
+
 /**
  * Collapse every Full Disk Access denial into ONE decorated row, in the
  * position of the first one. Everything else — `CONTACTS_STORE_NOT_FOUND`
@@ -337,7 +396,7 @@ export function healthIssueTier(issue: unknown): number {
  * renderer. Synthesising one here would produce a value identical for every
  * row in a run, which sorts by nothing while looking like it sorts by time.
  */
-export function orderHealthIssues(issues: ReadonlyArray<unknown>): unknown[] {
+export function orderHealthIssues<T>(issues: ReadonlyArray<T>): T[] {
   return issues
     .map((issue, index) => ({ issue, index }))
     .sort((a, b) => healthIssueTier(a.issue) - healthIssueTier(b.issue) || a.index - b.index)
@@ -389,7 +448,9 @@ export function registerDiagnosticHandlers(): void {
             : { canLoadContacts: true, contactCount: 0 },
         ]);
 
-        const issues: unknown[] = [];
+        // BACKLOG-3230: typed, so the literal built below is checked and the
+        // two narrowing seams are forced to be explicit rather than implicit.
+        const issues: HealthIssue[] = [];
 
         // Add permission issues.
         // BACKLOG-3219: decorated on the way in so the Full Disk Access row
@@ -400,7 +461,12 @@ export function registerDiagnosticHandlers(): void {
         // permission, same fix, so the consequences ride along as secondary
         // text instead of stacking.
         if (!permissions.allGranted) {
-          issues.push(...collapseFdaPermissionIssues(permissions.errors));
+          // BACKLOG-3230 seam: `collapseFdaPermissionIssues` is declared
+          // `: unknown[]` by BACKLOG-3237's design (anything it does not
+          // recognise is passed through rather than swallowed), so the shape has
+          // to be asserted here. BACKLOG-3233 owns those helpers and can retype
+          // them, which would delete this cast.
+          issues.push(...(collapseFdaPermissionIssues(permissions.errors) as HealthIssue[]));
         }
 
         // Add contacts loading issue.
@@ -417,10 +483,20 @@ export function registerDiagnosticHandlers(): void {
         // CONTACTS_STORE_NOT_FOUND — an absent address book must not silence
         // this row.
         const fdaDenied = hasFdaDenial(permissions.errors);
+        const storeAbsent = hasContactsStoreAbsent(permissions.errors);
         const contactsResult = contactsLoading as { canLoadContacts: boolean; error?: unknown };
         if (!contactsResult.canLoadContacts && contactsResult.error) {
-          if (!(fdaDenied && isDownstreamOfFdaDenial(contactsResult.error))) {
-            issues.push(contactsResult.error);
+          const explainedAlready =
+            (fdaDenied && isDownstreamOfFdaDenial(contactsResult.error)) ||
+            (storeAbsent && isDownstreamOfContactsStoreAbsent(contactsResult.error));
+          if (!explainedAlready) {
+            // BACKLOG-3230 seam, the second of two: `checkContactsLoading` reaches
+            // this handler through the `require()` at the top of the file, so its
+            // result arrives as `any` and the shape has to be asserted here. The
+            // producer types it `ContactsIssue` (`permissionService.ts:22-30`),
+            // which is the contacts variant of `HealthIssue` field for field.
+            // BACKLOG-3289 (require -> ES import) is what would delete this cast.
+            issues.push(contactsResult.error as HealthIssue);
           }
         }
 
@@ -428,14 +504,12 @@ export function registerDiagnosticHandlers(): void {
         // token is broken (TOKEN_REFRESH_FAILED / TOKEN_EXPIRED /
         // CONNECTION_CHECK_FAILED). Skip pure NOT_CONNECTED — a provider that
         // was never connected is the setup prompt's job, not a health error.
-        const brokenTokenTypes = new Set([
-          "TOKEN_REFRESH_FAILED",
-          "TOKEN_EXPIRED",
-          "CONNECTION_CHECK_FAILED",
-        ]);
+        // BACKLOG-3230: the allow-list moved to module scope as
+        // BROKEN_TOKEN_TYPES, paired with the `isBrokenTokenError` predicate, so
+        // the runtime check and the narrowed type are one fact instead of two.
         const providerStatuses: Array<[
           "google" | "microsoft",
-          { error: { type?: string } | null; lastSyncAt?: string | null } | undefined,
+          { error: unknown; lastSyncAt?: string | null } | undefined,
         ]> = allConnections
           ? [
               ["google", allConnections.google],
@@ -444,18 +518,29 @@ export function registerDiagnosticHandlers(): void {
           : [];
         for (const [providerName, status] of providerStatuses) {
           const connError = status?.error;
-          if (connError && connError.type && brokenTokenTypes.has(connError.type)) {
+          if (isBrokenTokenError(connError)) {
             // BACKLOG-2142: when a prior successful email sync exists, add a
             // "No email captured since <date>" subtitle to the reconnect banner.
             // Display-only — composed here so the discriminator stays `type` and
             // no new renderer plumbing is needed (SystemHealthMonitor renders
             // `issue.message` as the subtitle). Omitted cleanly when null.
             const sinceMessage = formatSinceMessage(status?.lastSyncAt);
+            // BACKLOG-3230: `type` is NOT set here. It arrives from the spread
+            // below — `isBrokenTokenError` has already established that
+            // `connError.type` is a broken-token type, so the spread always
+            // supplies it. A literal `type` written above the spread would be
+            // silently overwritten by it, which is what used to happen here;
+            // once `connError` is typed the compiler says so directly (TS2783).
+            //
+            // The spread is of a TYPED value now. It used to be
+            // `connError as unknown as Record<string, unknown>`, and that cast
+            // was load-bearing in the wrong direction: an index-signature spread
+            // erases the field names, so neither the overwrite above nor a
+            // renamed field here could be seen by the compiler.
             issues.push({
-              type: "OAUTH_CONNECTION" as string,
               provider: providerName,
               severity: "error",
-              ...(connError as unknown as Record<string, unknown>),
+              ...connError,
               ...(sinceMessage ? { message: sinceMessage } : {}),
             });
           }

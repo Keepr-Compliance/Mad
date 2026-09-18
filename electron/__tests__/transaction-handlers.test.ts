@@ -127,9 +127,13 @@ jest.mock("../services/databaseService", () => ({
       updateTransaction: jest.fn(),
       // BACKLOG-2013: export completion stamps the freeze marker via this path.
       stampFirstExportedAt: jest.fn().mockReturnValue(true),
+      // BACKLOG-2549: the enhanced and folder paths now write tracking + the
+      // freeze marker in ONE statement through this method instead.
+      recordExportCompletion: jest.fn(),
     },
     updateTransaction: jest.fn(),
     stampFirstExportedAt: jest.fn().mockReturnValue(true),
+    recordExportCompletion: jest.fn(),
     isInitialized: jest.fn().mockReturnValue(true),
   },
 }));
@@ -807,6 +811,10 @@ describe("Transaction Handlers", () => {
         mockDetails,
         expect.any(Array),
         "/custom/path.pdf",
+        // BACKLOG-3367: the omissions argument the renderer now requires. This
+        // fixture hides nothing, so the real values are pinned rather than
+        // loosened to `expect.anything()` — a wrong count here must still red.
+        { hiddenTextCount: 0, hiddenTexts: [] },
       );
     });
 

@@ -14,9 +14,31 @@ import type { AppState } from "../types";
  * Returns true if database is initialized.
  * In loading state, checks if we've passed the 'initializing-db' phase.
  *
- * Note: For first-time macOS users, DB init is deferred until the onboarding
- * secure-storage step. In this case, deferredDbInit flag is set and we
- * return false even though we're past the initializing-db phase.
+ * Note: `deferredDbInit` has had no producer since BACKLOG-3253 deleted the
+ * first-run-macOS deferral, so the branches below that read it are inert.
+ *
+ * KNOWN LIMIT, recorded rather than fixed here: for `status: "onboarding"` this
+ * returns `true` on machine POSITION, not on a database fact. BACKLOG-3321
+ * replaces the inference with a recorded fact. Four things its engineer should
+ * not have to rediscover:
+ *
+ * 1. Every producer of `onboarding` bar one arrives via DB_INIT_COMPLETE(success).
+ *    The exception is LOGIN_SUCCESS from an `unauthenticated` state produced by
+ *    AUTH_PRE_VALIDATED(valid:false), which never opened the database.
+ * 2. LOGOUT is a second, STRUCTURAL producer of `unauthenticated` that also drops
+ *    every flag. It is only dispatched from a user action today, so it is not
+ *    reachable pre-DB -- but it is one programmatic sign-out away from being so.
+ * 3. The apparent second guard on this selector is inert. `OnboardingFlow.tsx`
+ *    ANDs it with `(!waitingForDbInit || dbInitConfirmed)`; `waitingForDbInit`
+ *    has exactly one setter, the SECURE_STORAGE_SETUP action, i.e. a Continue
+ *    click on a screen that no reachable route renders since BACKLOG-3253. The
+ *    conjunct is permanently true and this selector stands alone. It READS like
+ *    a guard and guards nothing.
+ * 4. The fact is derived in TWO independent places. `useAppStateMachine.ts`
+ *    negates `deferredDbInit` across three statuses and so now returns an
+ *    unconditional `true` for every state; it feeds `useAuthFlow`, NOT the
+ *    ~10 components, which reach the answer through this selector. A fix applied
+ *    only here leaves that one inferring exactly as before.
  *
  * @param state - Current application state
  * @returns true if database is initialized
@@ -33,7 +55,7 @@ export function selectIsDatabaseInitialized(state: AppState): boolean {
   let result: boolean;
   switch (state.status) {
     case "loading":
-      // For first-time macOS users, DB init is deferred - return false
+      // Inert since BACKLOG-3253 removed the flag's only producer.
       if (state.deferredDbInit) {
         result = false;
         break;
@@ -45,7 +67,8 @@ export function selectIsDatabaseInitialized(state: AppState): boolean {
       result = true;
       break;
     case "onboarding":
-      // For first-time macOS users, DB init is deferred until secure-storage step
+      // Inert since BACKLOG-3253 removed the flag's only producer. See the
+      // KNOWN LIMIT note above: this `true` is machine position, not a fact.
       if (state.deferredDbInit) {
         result = false;
         break;
@@ -53,7 +76,7 @@ export function selectIsDatabaseInitialized(state: AppState): boolean {
       result = true;
       break;
     case "unauthenticated":
-      // For first-time macOS users, DB init is deferred
+      // Inert since BACKLOG-3253 removed the flag's only producer.
       if (state.deferredDbInit) {
         result = false;
         break;
@@ -72,7 +95,9 @@ export function selectIsDatabaseInitialized(state: AppState): boolean {
 
 /**
  * Returns true if DB initialization was deferred for first-time macOS users.
- * When true, the DB will be initialized during the onboarding secure-storage step.
+ *
+ * BACKLOG-3253 deleted the only producer of `deferredDbInit`, so this always
+ * returns false. Kept until the flag itself is removed.
  *
  * This flag is preserved through state transitions:
  * loading -> unauthenticated -> onboarding

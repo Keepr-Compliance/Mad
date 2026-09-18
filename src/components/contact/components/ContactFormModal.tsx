@@ -40,7 +40,38 @@ function ContactFormModal({
 
   // Load email/phone entries with IDs when editing
   useEffect(() => {
-    if (!contact?.id || contact.id.startsWith("msg_")) return;
+    if (!contact?.id) return;
+
+    /**
+     * UNSAVED RECORDS HAVE NOTHING TO LOOK UP — AND MUST KEEP WHAT THEY CARRY.
+     *
+     * `msg_…` (a person found in texts) and `email_…` (BACKLOG-1717, a person
+     * found in the user's mail) are both built at read time. Neither has a row,
+     * so `getEditData` cannot answer for them: their ids are not UUIDs, the
+     * handler's validation rejects them, and it returns `{ success: false }`.
+     *
+     * That answer is the trap. The seeding below lives inside `if (success)`,
+     * and `.catch` never runs because a RESOLVED failure is not a rejection —
+     * so the form settled with an EMPTY address list, and saving an email
+     * person from Clients & Contacts created a contact with no address at all.
+     * The address is the entire record; losing it loses the person.
+     *
+     * It also looked fine while the lookup was in flight, because the form
+     * falls back to its single-field layout during the load and that field
+     * renders the flat `email`. The address appeared, then vanished.
+     *
+     * So: no lookup, and seed the entry lists from what the record already
+     * carries — the same seeding the success path does for a saved contact
+     * that has no entry rows yet.
+     */
+    if (contact.id.startsWith("msg_") || contact.id.startsWith("email_")) {
+      setFormData((prev) => ({
+        ...prev,
+        emails: prev.email ? [{ email: prev.email, is_primary: true }] : [],
+        phones: prev.phone ? [{ phone: prev.phone, is_primary: true }] : [],
+      }));
+      return;
+    }
 
     setLoadingEntries(true);
     window.api.contacts

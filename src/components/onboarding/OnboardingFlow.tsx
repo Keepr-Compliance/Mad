@@ -505,7 +505,7 @@ function OnboardingFlowInner({ app, machineState, resumeBundle }: OnboardingFlow
   // through.
   const initialManuallyCompletedIds = useMemo(() => {
     const fdaAlreadyDeclined =
-      machineState.state.status === "onboarding" && machineState.state.fdaSkipped === true;
+      machineState.state.status === "onboarding" && machineState.state.fda === "declined";
 
     if (!resumeBundle.isResuming) {
       return fdaAlreadyDeclined ? ["permissions"] : undefined;
