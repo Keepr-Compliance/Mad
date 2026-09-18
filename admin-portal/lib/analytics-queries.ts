@@ -53,6 +53,28 @@ export interface PhoneTypeBreakdown {
   pct: number;
 }
 
+/**
+ * How a user is attributed to a bucket (version / platform).
+ *
+ * - `recent`     — one bucket per user: the bucket of their most-recently-seen
+ *                  active device. Bucket counts sum to the distinct active-user
+ *                  count, so adoption percentages sum to 100 (+/- rounding).
+ * - `cumulative` — a user is counted once under EACH bucket they have an active
+ *                  device in. Two Macs still count once under macOS; a Mac and a
+ *                  PC count under both. Percentages therefore sum above 100.
+ *
+ * `recent` is the default: it is the only mode in which the numerators and the
+ * denominator are the same kind of thing.
+ */
+export type CountMode = 'recent' | 'cumulative';
+
+/** The columns any device row needs for per-user attribution. */
+export interface DeviceAttribution {
+  user_id: string;
+  last_seen_at: string | null;
+  app_version: string | null;
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────
 
 function daysAgo(days: number): string {
@@ -64,10 +86,10 @@ function daysAgo(days: number): string {
 // ─── Queries ─────────────────────────────────────────────────────
 
 /**
- * Active users by app version (last 30 days).
+ * Active users by app version over the selected period (default 30 days).
  *
- * Fetches only app_version and user_id (two columns, no payloads),
- * then aggregates in JS. For 10K+ devices, migrate to an RPC.
+ * Fetches only app_version, user_id and last_seen_at (no payloads), then
+ * aggregates in JS. For 10K+ devices, migrate to an RPC.
  */
 /**
  * Compare two semver strings numerically (e.g. "2.9.1" < "2.10.1").
@@ -89,13 +111,73 @@ function compareSemver(a: string, b: string): number {
   return 0;
 }
 
+/**
+ * Reduce device rows to ONE row per user — the row that represents that user.
+ *
+ * Ordering:
+ *   1. `last_seen_at` DESC. A null `last_seen_at` is treated as the oldest
+ *      possible timestamp, so a device that has never reported in can only win
+ *      if it is the user's only device.
+ *   2. Ties on `last_seen_at` go to the higher semver, via `compareSemver`, so
+ *      2.10.1 beats 2.9.1 (numeric compare — a string compare would pick 2.9.1).
+ *
+ * DELIBERATE CONSEQUENCE — do not "fix" without a decision:
+ * if the winning device reports `app_version = null` the user is `Unknown`,
+ * even when an older device of theirs does report a version. The card answers
+ * "what is this user running now", and the answer for a user whose newest
+ * device does not say is "we do not know". Note that the tie-break still
+ * prefers a real version over a null one at an IDENTICAL `last_seen_at` (see
+ * `beats`) — null only wins when the null-version device is strictly newer.
+ */
+export function pickMostRecentDevicePerUser<T extends DeviceAttribution>(
+  rows: T[]
+): T[] {
+  const winners = new Map<string, T>();
+  for (const row of rows) {
+    const held = winners.get(row.user_id);
+    if (!held || beats(row, held)) winners.set(row.user_id, row);
+  }
+  return [...winners.values()];
+}
+
+/**
+ * True when `candidate` should represent the user instead of `held`.
+ *
+ * NOTE on the tie-break: `compareSemver` is a DISPLAY ordering — it returns +1
+ * for a non-numeric string like "Unknown" so that "Unknown" sorts to the end of
+ * the table. That is the opposite of what a tie-break wants, where a device
+ * reporting no version must LOSE to one that reports a version. So the null
+ * case is handled explicitly here and `compareSemver` is consulted only when
+ * both sides have a version.
+ */
+function beats(candidate: DeviceAttribution, held: DeviceAttribution): boolean {
+  const seenCandidate = parseSeen(candidate.last_seen_at);
+  const seenHeld = parseSeen(held.last_seen_at);
+  if (seenCandidate !== seenHeld) return seenCandidate > seenHeld;
+
+  // Identical last_seen_at from here down.
+  const versionCandidate = candidate.app_version || null;
+  const versionHeld = held.app_version || null;
+  if (versionCandidate === null) return false; // never displace a real version
+  if (versionHeld === null) return true; // a real version displaces "Unknown"
+  return compareSemver(versionCandidate, versionHeld) > 0;
+}
+
+/** Milliseconds since epoch; null / unparseable sorts oldest. */
+function parseSeen(value: string | null): number {
+  if (!value) return -Infinity;
+  const ms = Date.parse(value);
+  return Number.isNaN(ms) ? -Infinity : ms;
+}
+
 export async function getVersionDistribution(
   supabase: SupabaseClient,
-  days = 30
+  days = 30,
+  mode: CountMode = 'recent'
 ): Promise<VersionDistribution[]> {
   const { data: devices, error } = await supabase
     .from('devices')
-    .select('app_version, user_id')
+    .select('app_version, user_id, last_seen_at')
     .eq('is_active', true)
     .gte('last_seen_at', daysAgo(days));
 
@@ -104,15 +186,22 @@ export async function getVersionDistribution(
     return [];
   }
 
+  // The denominator is distinct users in BOTH modes, and it is taken from the
+  // unreduced rows so that `recent` sums to 100% and `cumulative` sums above it.
+  const totalActive = new Set(devices.map((d) => d.user_id)).size || 1;
+
+  // `recent`: one representative device per user, so a user with two active
+  // devices on different versions lands in exactly one bucket.
+  const counted: DeviceAttribution[] =
+    mode === 'recent' ? pickMostRecentDevicePerUser(devices) : devices;
+
   // Collect unique user IDs per version
   const versionMap = new Map<string, Set<string>>();
-  for (const d of devices) {
+  for (const d of counted) {
     const version = d.app_version || 'Unknown';
     if (!versionMap.has(version)) versionMap.set(version, new Set());
     versionMap.get(version)!.add(d.user_id);
   }
-
-  const totalActive = new Set(devices.map((d) => d.user_id)).size || 1;
 
   // Fetch user details for all unique user IDs
   const allUserIds = [...new Set(devices.map((d) => d.user_id))];
@@ -190,14 +279,18 @@ export async function getSystemCounts(
 }
 
 /**
- * Platform breakdown using minimal select (two columns only).
+ * Platform breakdown using minimal select.
+ *
+ * `app_version` is selected only to break `last_seen_at` ties in `recent` mode;
+ * it is never reported by this function.
  */
 export async function getPlatformBreakdown(
-  supabase: SupabaseClient
+  supabase: SupabaseClient,
+  mode: CountMode = 'recent'
 ): Promise<PlatformBreakdown[]> {
   const { data: devices, error } = await supabase
     .from('devices')
-    .select('platform, user_id')
+    .select('platform, user_id, last_seen_at, app_version')
     .eq('is_active', true);
 
   if (error || !devices) {
@@ -205,14 +298,17 @@ export async function getPlatformBreakdown(
     return [];
   }
 
+  const totalUsers = new Set(devices.map((d) => d.user_id)).size || 1;
+
+  const counted: (DeviceAttribution & { platform: string | null })[] =
+    mode === 'recent' ? pickMostRecentDevicePerUser(devices) : devices;
+
   const platformMap = new Map<string, Set<string>>();
-  for (const d of devices) {
+  for (const d of counted) {
     const platform = d.platform || 'Unknown';
     if (!platformMap.has(platform)) platformMap.set(platform, new Set());
     platformMap.get(platform)!.add(d.user_id);
   }
-
-  const totalUsers = new Set(devices.map((d) => d.user_id)).size || 1;
 
   const results: PlatformBreakdown[] = [];
   for (const [platform, users] of platformMap) {

@@ -8,10 +8,15 @@
  */
 
 import { Card } from '@keepr/design-system';
-import type { PlatformBreakdown as PlatformBreakdownData } from '@/lib/analytics-queries';
+import type {
+  CountMode,
+  PlatformBreakdown as PlatformBreakdownData,
+} from '@/lib/analytics-queries';
+import { CountModeToggle, countModeCaption } from './CountModeToggle';
 
 interface Props {
   data: PlatformBreakdownData[];
+  activeMode: CountMode;
 }
 
 const PLATFORM_COLORS: Record<string, string> = {
@@ -28,7 +33,7 @@ const PLATFORM_LABELS: Record<string, string> = {
   Unknown: 'Unknown',
 };
 
-export function PlatformBreakdown({ data }: Props) {
+export function PlatformBreakdown({ data, activeMode }: Props) {
   if (data.length === 0) {
     return (
       <Card>
@@ -42,15 +47,13 @@ export function PlatformBreakdown({ data }: Props) {
     );
   }
 
-  const totalUsers = data.reduce((sum, d) => sum + d.user_count, 0);
-
   return (
     <Card>
       <h3 className="text-lg font-semibold text-gray-900 mb-4">
         Platform Breakdown
       </h3>
       <p className="text-sm text-gray-500 mb-6">
-        Active devices by operating system
+        Active users by operating system
       </p>
 
       {/* Stacked progress bar */}
@@ -68,6 +71,19 @@ export function PlatformBreakdown({ data }: Props) {
             title={`${PLATFORM_LABELS[entry.platform] ?? entry.platform}: ${entry.pct}%`}
           />
         ))}
+      </div>
+
+      {/*
+        Count-mode toggle — founder-specified placement: directly above the
+        legend list, the Platform card's equivalent of the Version card's table
+        header. The stacked bar above and this list render from the same `data`
+        prop, so the toggle moves both together.
+      */}
+      <div className="mb-4">
+        <CountModeToggle activeMode={activeMode} />
+        <p className="text-xs text-gray-500 mt-2">
+          {countModeCaption(activeMode, 'platform')}
+        </p>
       </div>
 
       {/* Legend & counts */}
@@ -93,11 +109,15 @@ export function PlatformBreakdown({ data }: Props) {
                 <span className="text-sm text-gray-600">
                   {entry.user_count.toLocaleString()} user{entry.user_count !== 1 ? 's' : ''}
                 </span>
+                {/*
+                  `entry.pct` and not a locally recomputed share: the stacked bar
+                  above sizes its segments from `entry.pct`, and the previous
+                  local `user_count / sum(user_count)` renormalised to 100%, so
+                  the bar and this number disagreed the moment any user spanned
+                  two platforms — exactly the case this card exists to show.
+                */}
                 <span className="text-sm font-semibold text-gray-900 w-12 text-right">
-                  {totalUsers > 0
-                    ? Math.round((entry.user_count / totalUsers) * 100)
-                    : 0}
-                  %
+                  {entry.pct}%
                 </span>
               </div>
             </div>
