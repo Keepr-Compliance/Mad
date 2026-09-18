@@ -25,6 +25,7 @@
   "skip-missing": false,
   "ignore-patterns": [
     "dist",
+    "release",
     "build",
     "coverage"
   ]

@@ -6,7 +6,7 @@ import { join } from 'node:path';
  * Resolves the packaged Keepr app + its persisted userData profile.
  *
  * The installed /Applications build may be a dev-flavored package (its renderer can point at
- * the Vite dev server). Prefer a clean artifact from `npm run package:qa[:dir]` (dist/) for
+ * the Vite dev server). Prefer a clean artifact from `npm run package:qa[:dir]` (release/) for
  * deterministic runs; fall back to /Applications for a quick smoke against whatever is installed.
  * Override everything with KEEPR_APP_PATH.
  */
@@ -25,8 +25,10 @@ export function candidateExecutables(repoRoot: string): string[] {
   const candidates: string[] = [];
   if (fromEnv) candidates.push(fromEnv);
   // Clean build artifacts (preferred — loads renderer from the bundled asar).
-  candidates.push(macAppBinary(join(repoRoot, 'dist', 'mac-arm64', `${APP_NAME}.app`)));
-  candidates.push(macAppBinary(join(repoRoot, 'dist', 'mac', `${APP_NAME}.app`)));
+  // BACKLOG-3425: electron-builder writes to release/, not dist/. dist/ is the Vite
+  // renderer output and nothing else.
+  candidates.push(macAppBinary(join(repoRoot, 'release', 'mac-arm64', `${APP_NAME}.app`)));
+  candidates.push(macAppBinary(join(repoRoot, 'release', 'mac', `${APP_NAME}.app`)));
   // Installed build (may be dev-flavored — smoke only).
   candidates.push(macAppBinary(`/Applications/${APP_NAME}.app`));
   return candidates;

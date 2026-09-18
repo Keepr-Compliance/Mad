@@ -58,6 +58,7 @@
     "electron/types/__typefixtures__/**",
     "node_modules",
     "dist",
+    "release",
     "build",
     "**/*.test.js",
     "**/*.test.jsx",
