@@ -33,6 +33,7 @@ import {
   getAppliedAppDataPaths,
 } from "./bootstrap/appDataPaths";
 import { getStartupFailure } from "./bootstrap/startupFailure";
+import { setMainWindow } from "./windowRegistry";
 import { redactEmail, redactId } from "./utils/redactSensitive";
 
 // ==========================================
@@ -1096,6 +1097,14 @@ function createWindow(): void {
       | "customButtonsOnHover",
     backgroundColor: WINDOW_CONFIG.BACKGROUND_COLOR,
   });
+
+  // BACKLOG-3454: hand the new window to the registry every handler's sender
+  // reads. On macOS `activate` (the Dock icon) calls createWindow() again after
+  // the user closes the window, and `register*Handlers(mainWindow!)` ran once in
+  // `whenReady` — so without this line every main->renderer push after a reopen
+  // goes to the destroyed first window and is dropped in silence. THE SOLE
+  // WRITER: `windowRecreation-3454.test.ts` fails if this call leaves.
+  setMainWindow(mainWindow);
 
   // Prevent closing while a submission is uploading
   mainWindow.on("close", (e) => {

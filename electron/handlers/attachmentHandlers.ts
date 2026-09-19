@@ -284,7 +284,7 @@ async function downloadEmailAttachmentsOnDemand(
 
 /**
  * Register attachment IPC handlers
- * @param _mainWindow - Main window instance (unused in attachment handlers)
+ * @param _mainWindow - Main window instance (unused in attachment handlers) (BACKLOG-3454: IGNORED — pushes resolve the live window via sendToMainWindow; kept so existing call sites and suites compile)
  */
 export function registerAttachmentHandlers(
   _mainWindow: BrowserWindow | null,

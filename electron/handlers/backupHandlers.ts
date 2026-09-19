@@ -13,41 +13,35 @@ import { backupDecryptionService } from "../services/backupDecryptionService";
 import { BackupOptions, BackupProgress } from "../types/backup";
 import { rateLimiters } from "../utils/rateLimit";
 
+import { sendToMainWindow } from "../windowRegistry";
+
 /**
  * Register all backup-related IPC handlers
- * @param mainWindow The main BrowserWindow instance for sending events
+ * @param _mainWindow The main BrowserWindow instance for sending events (BACKLOG-3454: IGNORED — pushes resolve the live window via sendToMainWindow; kept so existing call sites and suites compile)
  */
-export function registerBackupHandlers(mainWindow: BrowserWindow): void {
+export function registerBackupHandlers(_mainWindow: BrowserWindow): void {
   log.info("[BackupHandlers] Registering backup handlers");
 
   // Forward progress events to renderer
   backupService.on("progress", (progress: BackupProgress) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("backup:progress", progress);
-    }
+    sendToMainWindow("backup:progress", progress);
   });
 
   // Forward completion events to renderer
   backupService.on("complete", (result) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("backup:complete", result);
-    }
+    sendToMainWindow("backup:complete", result);
   });
 
   // Forward error events to renderer
   backupService.on("error", (error: Error) => {
     log.error("[BackupHandlers] Backup error:", error);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("backup:error", { message: error.message });
-    }
+    sendToMainWindow("backup:error", { message: error.message });
   });
 
   // Forward password-required events to renderer (TASK-007)
   backupService.on("password-required", (data: { udid: string }) => {
     log.info("[BackupHandlers] Password required for device:", data.udid);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("backup:password-required", data);
-    }
+    sendToMainWindow("backup:password-required", data);
   });
 
   /**

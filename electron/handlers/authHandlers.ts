@@ -68,18 +68,18 @@ export const initializeDatabase = async (): Promise<void> => {
  * Register all authentication handlers
  * This is the main entry point called from main.ts
  */
-export function registerAuthHandlers(mainWindow: BrowserWindow | null): void {
+export function registerAuthHandlers(_mainWindow: BrowserWindow | null): void {
   // Google OAuth handlers (login, mailbox connection)
-  registerGoogleAuthHandlers(mainWindow);
+  registerGoogleAuthHandlers(_mainWindow);
 
   // Microsoft OAuth handlers (login, mailbox connection)
-  registerMicrosoftAuthHandlers(mainWindow);
+  registerMicrosoftAuthHandlers(_mainWindow);
 
   // Session handlers (logout, terms, validation)
   registerSessionHandlers();
 
   // Shared handlers (pending login completion, mailbox disconnect)
-  registerSharedAuthHandlers(mainWindow);
+  registerSharedAuthHandlers(_mainWindow);
 }
 
 // Re-export for backward compatibility
