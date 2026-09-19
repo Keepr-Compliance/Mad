@@ -29,13 +29,29 @@ jest.mock("../supabaseService", () => ({
 const getClient = (supabaseService as unknown as { getClient: jest.Mock }).getClient;
 
 let insert: jest.Mock;
+let upsert: jest.Mock;
+let update: jest.Mock;
+let eq: jest.Mock;
 let from: jest.Mock;
 
-/** A client shaped like the real one: authed session, chainable `.from().insert()`. */
+/**
+ * A client shaped like the real one: authed session, chainable `.from().<verb>()`.
+ *
+ * BACKLOG-3440 CHANGED THE VERB OF THE TERMINAL WRITE, from `insert` to `upsert`, and
+ * this mock had to grow with it. That is not cosmetic: the terminal write now has to be
+ * able to amend a row the START write already created, and an `insert` would collide on
+ * the primary key. `update` (+ `.eq`) is the heartbeat, which exists for the first time.
+ *
+ * `insertResult` still names the result every verb resolves to, so the failure-mode
+ * tests below keep working unchanged.
+ */
 function mockClient(opts: { userId?: string | null; insertResult?: unknown } = {}) {
   const { userId = "user-123", insertResult = { error: null } } = opts;
   insert = jest.fn().mockResolvedValue(insertResult);
-  from = jest.fn(() => ({ insert }));
+  upsert = jest.fn().mockResolvedValue(insertResult);
+  eq = jest.fn().mockResolvedValue(insertResult);
+  update = jest.fn(() => ({ eq }));
+  from = jest.fn(() => ({ insert, upsert, update }));
   return {
     auth: {
       getSession: jest
@@ -54,8 +70,15 @@ const flush = () =>
     setTimeout(r, 0);
   });
 
+/** BACKLOG-3440: a run has an identity and a start time on every write. */
+// pii-allow-uuid: invented sync run id, typed by hand for this fixture
+const RUN_ID = "3a7c1e90-0b2d-4f61-9a3e-5c8d21b47f06";
+const STARTED_AT = Date.UTC(2026, 8, 16, 9, 0, 0);
+
 function realisticRow(overrides: Partial<SyncOutcomeRow> = {}): SyncOutcomeRow {
   return {
+    runId: RUN_ID,
+    startedAt: STARTED_AT,
     source: SYNC_OUTCOME_SOURCE,
     outcome: "complete",
     elapsedMs: 3_120_000,
@@ -88,25 +111,25 @@ beforeEach(() => {
 });
 
 describe("BACKLOG-2914: a successful sync writes a row — the denominator", () => {
-  it("inserts one row into sync_outcomes for a COMPLETE sync", async () => {
+  it("writes one row into sync_outcomes for a COMPLETE sync", async () => {
     recordSyncOutcome(realisticRow());
     await flush();
     expect(from).toHaveBeenCalledWith(SYNC_OUTCOMES_TABLE);
-    expect(insert).toHaveBeenCalledTimes(1);
-    expect(insert.mock.calls[0][0].outcome).toBe("complete");
+    expect(upsert).toHaveBeenCalledTimes(1);
+    expect(upsert.mock.calls[0][0].outcome).toBe("complete");
   });
 
-  it.each(["complete", "cancelled", "error"] as const)("inserts for outcome=%s", async (o) => {
+  it.each(["complete", "cancelled", "error"] as const)("writes for outcome=%s", async (o) => {
     recordSyncOutcome(realisticRow({ outcome: o }));
     await flush();
-    expect(insert).toHaveBeenCalledTimes(1);
-    expect(insert.mock.calls[0][0].outcome).toBe(o);
+    expect(upsert).toHaveBeenCalledTimes(1);
+    expect(upsert.mock.calls[0][0].outcome).toBe(o);
   });
 
   it("attributes the row to the authenticated user, as RLS requires", async () => {
     recordSyncOutcome(realisticRow());
     await flush();
-    expect(insert.mock.calls[0][0].user_id).toBe("user-123");
+    expect(upsert.mock.calls[0][0].user_id).toBe("user-123");
   });
 });
 
@@ -186,7 +209,7 @@ describe("BACKLOG-2914: NO PII reaches durable storage", () => {
     recordSyncOutcome(row);
     await flush();
 
-    const payload = JSON.stringify(insert.mock.calls[0][0]);
+    const payload = JSON.stringify(upsert.mock.calls[0][0]);
     expect(payload).not.toContain("00008030-001A2C3E1E88802E");
     expect(payload).not.toContain("Danny Boy");
     expect(payload).not.toContain("F2LX93KJQ1GH");
@@ -195,7 +218,7 @@ describe("BACKLOG-2914: NO PII reaches durable storage", () => {
     expect(JSON.stringify(row.fields)).toContain("00008030-001A2C3E1E88802E");
     expect(JSON.stringify(row.fields)).toContain("Danny Boy");
     // and the legitimate device fact still travels
-    expect(insert.mock.calls[0][0].device_model).toBe("iPhone14,3");
+    expect(upsert.mock.calls[0][0].device_model).toBe("iPhone14,3");
   });
 
   it("copies only named columns, so an unknown future field cannot reach the table", () => {
@@ -214,12 +237,12 @@ describe("BACKLOG-2914: the write NEVER affects the sync", () => {
     expect(() => recordSyncOutcome(realisticRow())).not.toThrow();
   });
 
-  it("does not throw or reject when the insert fails (offline)", async () => {
+  it("does not throw or reject when the write fails (offline)", async () => {
     const rejection = jest.fn();
     process.on("unhandledRejection", rejection);
     getClient.mockReturnValue({
       auth: { getSession: jest.fn().mockResolvedValue({ data: { session: { user: { id: "u" } } } }) },
-      from: () => ({ insert: jest.fn().mockRejectedValue(new Error("network unreachable")) }),
+      from: () => ({ upsert: jest.fn().mockRejectedValue(new Error("network unreachable")) }),
     });
     expect(() => recordSyncOutcome(realisticRow())).not.toThrow();
     await flush();
@@ -238,7 +261,7 @@ describe("BACKLOG-2914: the write NEVER affects the sync", () => {
     getClient.mockReturnValue(mockClient({ userId: null }));
     recordSyncOutcome(realisticRow());
     await flush();
-    expect(insert).not.toHaveBeenCalled();
+    expect(upsert).not.toHaveBeenCalled();
   });
 
   it("returns synchronously — nothing on the sync's critical path can await it", () => {
@@ -252,7 +275,7 @@ describe("BACKLOG-2914: THE WIRING — the real timeline reaches Supabase", () =
    * pass on a module wired to nothing. This drives a `SyncTimeline` with NO reporter
    * injected — production wiring — and reds if the Supabase sink is unwired.
    */
-  it("inserts a row from an un-injected SyncTimeline on endSync", async () => {
+  it("writes a row from an un-injected SyncTimeline on endSync", async () => {
     const timeline = new SyncTimeline({ sink: () => {} });
     timeline.beginSync({ platform: "darwin" });
     timeline.setContext({ deviceModel: "iPhone14,3", priorBackup: "exists" });
@@ -261,7 +284,11 @@ describe("BACKLOG-2914: THE WIRING — the real timeline reaches Supabase", () =
     await flush();
 
     expect(from).toHaveBeenCalledWith(SYNC_OUTCOMES_TABLE);
-    const payload = insert.mock.calls[0][0];
+    // BACKLOG-3440: TWO upserts now, not one — the start write and the terminal write.
+    // The terminal one is last, and it is the one this test has always been about.
+    expect(upsert).toHaveBeenCalledTimes(2);
+    expect(upsert.mock.calls[0][0].outcome).toBe("running");
+    const payload = upsert.mock.calls[1][0];
     expect(payload.outcome).toBe("complete");
     expect(payload.source).toBe(SYNC_OUTCOME_SOURCE);
     expect(payload.device_model).toBe("iPhone14,3");
@@ -280,6 +307,8 @@ describe("BACKLOG-2914: THE WIRING — the real timeline reaches Supabase", () =
     timeline.beginSync();
     timeline.endSync("complete");
     await flush();
-    expect(insert).toHaveBeenCalledTimes(1);
+    // start + terminal (BACKLOG-3440); the terminal write is what this asserts on.
+    expect(upsert).toHaveBeenCalledTimes(2);
+    expect(upsert.mock.calls[1][0].outcome).toBe("complete");
   });
 });

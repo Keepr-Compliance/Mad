@@ -135,7 +135,11 @@ export function buildOutcomeTags(row: SyncOutcomeRow): Record<string, string> {
   // Present only when the run established them — an absent dimension must stay
   // absent rather than become the string "undefined", the same rule `setContext`
   // enforces on the row itself.
-  for (const key of ["priorBackup", "backupModeSource", "incremental"] as const) {
+  // BACKLOG-3440: `endedBy` joins these because it is the dimension a human filters on
+  // — "show me the runs the app gave up on, not the ones people cancelled" — and that
+  // is exactly what a tag is for. Low cardinality by construction: six producers, all
+  // named at their call sites.
+  for (const key of ["priorBackup", "backupModeSource", "incremental", "endedBy"] as const) {
     const v = tagValue(safe[key] as string | number | boolean | undefined);
     if (v !== undefined) tags[key] = v;
   }
