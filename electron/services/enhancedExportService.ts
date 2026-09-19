@@ -157,8 +157,18 @@ class EnhancedExportService {
       const folderPath = path.join(downloadsPath, folderName);
       await fs.mkdir(folderPath, { recursive: true });
 
-      // Generate the combined PDF inside the folder
-      const pdfPath = path.join(folderPath, "Combined_Report.pdf");
+      // Generate the combined PDF inside the folder.
+      // BACKLOG-3449: the PDF states the property address too. It used to be a
+      // bare "Combined_Report.pdf", so the moment it left this folder — moved,
+      // emailed, dropped in a shared drive — it was indistinguishable from
+      // every other combined report. The FOLDER name is unchanged.
+      // `.pdf` is appended AFTER sanitizing (the sibling branches sanitize the
+      // extension along with the name): sanitizeFileSystemName truncates at 200
+      // characters, and a long address would otherwise eat the extension.
+      const pdfPath = path.join(
+        folderPath,
+        `${sanitizeFileSystemName(`${transaction.property_address} - Combined Report`)}.pdf`,
+      );
       await folderExportService.exportTransactionToCombinedPDF(
         transaction,
         communications,
