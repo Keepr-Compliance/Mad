@@ -7,7 +7,14 @@
  */
 
 import { AlertTriangle, CheckCircle2, MinusCircle, XCircle, type LucideIcon } from 'lucide-react';
-import { formatCount, formatMinutesLabel, type OutcomeTone, type SyncRun } from '@/lib/reports/iphone-sync';
+import {
+  formatCount,
+  formatGb,
+  formatMinutesLabel,
+  formatUtc,
+  type OutcomeTone,
+  type SyncRun,
+} from '@/lib/reports/iphone-sync';
 
 /** Validated against the white card surface — see BACKLOG-3441 notes. */
 export const BAR_COLOR = '#2a78d6';
@@ -147,6 +154,14 @@ export function RunCard({ run }: { run: SyncRun }) {
           <dd className="tabular-nums text-gray-900">{run.minPerGbLabel}</dd>
         </div>
         <div>
+          <dt className="text-xs text-gray-500">Rate</dt>
+          <dd className="tabular-nums text-gray-900">{run.rateLabel}</dd>
+        </div>
+        <div>
+          <dt className="text-xs text-gray-500">Sync type</dt>
+          <dd className="text-gray-900">{run.syncTypeLabel}</dd>
+        </div>
+        <div>
           <dt className="text-xs text-gray-500">Messages extracted</dt>
           <dd className="tabular-nums text-gray-900">
             {run.messagesExtracted == null || run.messagesExtracted === 0 ? (
@@ -168,7 +183,44 @@ export function RunCard({ run }: { run: SyncRun }) {
         </div>
       </dl>
 
+      <RunEvidence run={run} />
+
       <PhaseChart run={run} />
     </div>
+  );
+}
+
+/**
+ * The BACKLOG-3440 run-evidence fields, rendered ONLY when present.
+ *
+ * Five of the six are on zero rows until 2.38.1 reaches users, so an empty
+ * value here is the normal case and must render NOTHING — not an em dash, not
+ * "unknown", both of which read as "we looked and there was none" rather than
+ * "this build does not report it yet".
+ */
+function RunEvidence({ run }: { run: SyncRun }) {
+  const items: { label: string; value: string }[] = [];
+  if (run.startedAtIso) items.push({ label: 'Started', value: formatUtc(run.startedAtIso) });
+  if (run.bytesTransferred != null) {
+    items.push({ label: 'Bytes moved', value: formatGb(run.bytesTransferred) });
+  }
+  if (run.bytesLastIncreasedAtIso) {
+    items.push({ label: 'Bytes last increased', value: formatUtc(run.bytesLastIncreasedAtIso) });
+  }
+  if (run.lastPhaseRaw) items.push({ label: 'Last phase', value: run.lastPhaseRaw });
+  if (run.endedBy) items.push({ label: 'Ended by', value: run.endedBy });
+  if (run.reasonCode) items.push({ label: 'Reason', value: run.reasonCode });
+
+  if (items.length === 0) return null;
+
+  return (
+    <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-2 border-t border-gray-100 pt-3 text-sm sm:grid-cols-4">
+      {items.map((item) => (
+        <div key={item.label}>
+          <dt className="text-xs text-gray-500">{item.label}</dt>
+          <dd className="tabular-nums text-gray-900">{item.value}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }
