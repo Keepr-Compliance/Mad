@@ -192,7 +192,7 @@ describe("userFacingErrors", () => {
 
   /**
    * BACKLOG-3443. This message is shown to every user whose iPhone backup size
-   * could not be read, and 22 of 24 recorded syncs are Windows. Telling a
+   * could not be read, and most recorded syncs come from Windows. Telling a
    * Windows user their backup may not fit on "this Mac" reads as a message
    * meant for somebody else.
    */
