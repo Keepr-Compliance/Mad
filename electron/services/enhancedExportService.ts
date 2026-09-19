@@ -167,7 +167,7 @@ class EnhancedExportService {
       // characters, and a long address would otherwise eat the extension.
       const pdfPath = path.join(
         folderPath,
-        `${sanitizeFileSystemName(`${transaction.property_address} - Combined Report`)}.pdf`,
+        `${sanitizeFileSystemName(`${transaction.property_address} Combined Report`)}.pdf`,
       );
       await folderExportService.exportTransactionToCombinedPDF(
         transaction,

@@ -194,7 +194,7 @@ describe("BACKLOG-3449: the combined PDF is named after the property address", (
     await runFolderPdfExport("27 Selector Way / Unit 2: Rear");
 
     const pdf = writtenPdf();
-    expect(path.basename(pdf)).toBe("27_Selector_Way_Unit_2_Rear_-_Combined_Report.pdf");
+    expect(path.basename(pdf)).toBe("27_Selector_Way_Unit_2_Rear_Combined_Report.pdf");
     // No `/` from the address survived into a directory level: the file sits
     // directly in the export folder.
     expect(path.dirname(pdf)).toMatch(
@@ -213,7 +213,7 @@ describe("BACKLOG-3449: the combined PDF is named after the property address", (
     // assertions above. A different transaction must produce a different name.
     await runFolderPdfExport("123 Main St");
 
-    expect(path.basename(writtenPdf())).toBe("123_Main_St_-_Combined_Report.pdf");
+    expect(path.basename(writtenPdf())).toBe("123_Main_St_Combined_Report.pdf");
   });
 
   it("leaves the FOLDER name exactly as it was", async () => {
