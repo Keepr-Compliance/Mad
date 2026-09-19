@@ -38,19 +38,34 @@
 
 import fs from "fs";
 import path from "path";
+import {
+  CONTACTS_WITH_EMAIL_SQL,
+  CONTACTS_WITH_NEITHER_SQL,
+  CONTACTS_WITH_PHONE_SQL,
+  EXISTING_TABLE_NAMES_SQL,
+  PHONES_NORMALIZED_SQL,
+  QUICK_CHECK_PRAGMA,
+  SCHEMA_VERSION_SQL,
+  countBySourceIn,
+  countRowsIn,
+  selectDateRangeIn,
+  selectDeepestScannedIn,
+  type DiagnosableDateColumn,
+  type DiagnosableTable,
+  type StorageQueryable,
+} from "./db/storageDiagnosticsSql";
 
 // ============================================
 // TYPES
 // ============================================
 
-/** The minimal synchronous handle this module needs (better-sqlite3-shaped). */
-export interface StorageQueryable {
-  prepare(sql: string): {
-    get(...params: unknown[]): unknown;
-    all(...params: unknown[]): unknown[];
-  };
-  pragma(sql: string, options?: { simple?: boolean }): unknown;
-}
+/**
+ * The minimal synchronous handle this module needs (better-sqlite3-shaped).
+ *
+ * Defined in `db/storageDiagnosticsSql` — that is where the statements are now
+ * prepared — and re-exported here so existing importers are unaffected.
+ */
+export type { StorageQueryable };
 
 /** Why no numbers are being reported. A category, never a raw error. */
 export type StorageUnavailableReason =
@@ -168,19 +183,18 @@ const COUNTED_TABLES = [
 ] as const;
 
 function existingTables(db: StorageQueryable): Set<string> {
-  const rows = db
-    .prepare("SELECT name FROM sqlite_master WHERE type='table'")
-    .all() as Array<{ name: string }>;
+  const rows = db.prepare(EXISTING_TABLE_NAMES_SQL).all() as Array<{
+    name: string;
+  }>;
   return new Set(rows.map((r) => r.name));
 }
 
 /** `COUNT(*)`, or `null` if the query failed. Never a silent 0. */
-function countRows(db: StorageQueryable, table: string): number | null {
+function countRows(db: StorageQueryable, table: DiagnosableTable): number | null {
   try {
-    // Table names come from COUNTED_TABLES / sqlite_master, never from input.
-    const row = db.prepare(`SELECT COUNT(*) AS n FROM "${table}"`).get() as
-      | { n: number }
-      | undefined;
+    // The table name is constrained by TYPE and by a runtime check in
+    // `countRowsIn`, not by the comment that used to sit here.
+    const row = countRowsIn(db, table);
     return typeof row?.n === "number" ? row.n : null;
   } catch {
     return null;
@@ -190,21 +204,10 @@ function countRows(db: StorageQueryable, table: string): number | null {
 /** `{ macos: 716, outlook: 682 }`, or null when the table/query is unavailable. */
 function countBySource(
   db: StorageQueryable,
-  table: string,
+  table: DiagnosableTable,
 ): Record<string, number> | null {
   try {
-    const rows = db
-      .prepare(
-        // ORDER BY n DESC, source ASC — the tiebreak is load-bearing. Two
-        // sources with equal counts otherwise come back in whatever order the
-        // planner picks, and a diagnostics line that reorders itself between
-        // two runs is the same class of defect BACKLOG-2392 removed from
-        // address-book discovery.
-        `SELECT COALESCE(source, '(null)') AS source, COUNT(*) AS n
-           FROM "${table}" GROUP BY COALESCE(source, '(null)')
-           ORDER BY n DESC, source ASC`,
-      )
-      .all() as Array<{ source: string; n: number }>;
+    const rows = countBySourceIn(db, table);
     const out: Record<string, number> = {};
     for (const r of rows) out[String(r.source)] = r.n;
     return out;
@@ -223,9 +226,9 @@ function collectCoverage(
   db: StorageQueryable,
   tables: Set<string>,
   opts: {
-    table: string;
-    dateColumn: string;
-    deepestSql?: { table: string; column: string };
+    table: DiagnosableTable;
+    dateColumn: DiagnosableDateColumn;
+    deepestSql?: { table: DiagnosableTable; column: DiagnosableDateColumn };
   },
 ): CoverageWindow {
   const window: CoverageWindow = {
@@ -239,12 +242,7 @@ function collectCoverage(
 
   window.rows = countRows(db, opts.table);
   try {
-    const row = db
-      .prepare(
-        `SELECT MIN("${opts.dateColumn}") AS lo, MAX("${opts.dateColumn}") AS hi
-           FROM "${opts.table}"`,
-      )
-      .get() as { lo: unknown; hi: unknown } | undefined;
+    const row = selectDateRangeIn(db, opts.table, opts.dateColumn);
     window.oldest = toDateOnly(row?.lo);
     window.newest = toDateOnly(row?.hi);
   } catch {
@@ -253,11 +251,11 @@ function collectCoverage(
 
   if (opts.deepestSql && tables.has(opts.deepestSql.table)) {
     try {
-      const row = db
-        .prepare(
-          `SELECT MIN("${opts.deepestSql.column}") AS d FROM "${opts.deepestSql.table}"`,
-        )
-        .get() as { d: unknown } | undefined;
+      const row = selectDeepestScannedIn(
+        db,
+        opts.deepestSql.table,
+        opts.deepestSql.column,
+      );
       window.deepest_scanned = toDateOnly(row?.d);
     } catch {
       /* leave null */
@@ -276,9 +274,26 @@ function collectDataQuality(
   const hasPhones = tables.has("contact_phones");
   const hasEmails = tables.has("contact_emails");
 
-  const scalar = (sql: string): number | null => {
+  /**
+   * Runs a counting query and degrades to `null`.
+   *
+   * Takes a THUNK rather than a SQL string. Two reasons, and the first is a
+   * behaviour guarantee rather than a style preference:
+   *
+   *  - `db.prepare(...)` is invoked INSIDE the `try`. Accepting a prepared
+   *    statement instead would move `prepare` to the argument position, so a
+   *    missing or corrupt table would throw out of this function rather than
+   *    return `null` — turning a degrading diagnostics block into a crash in
+   *    the support-ticket path whose whole purpose is to report what it could
+   *    not read.
+   *  - Each `.prepare()` keeps a `db/` constant as its argument, so all four
+   *    sites stay ENUMERATED by the SQL boundary gate as COMPLIANT. Moving the
+   *    execution into `db/` would have removed them from the census entirely;
+   *    visible-and-compliant beats invisible-and-in-layer.
+   */
+  const scalar = (query: () => { n: number } | undefined): number | null => {
     try {
-      const row = db.prepare(sql).get() as { n: number } | undefined;
+      const row = query();
       return typeof row?.n === "number" ? row.n : null;
     } catch {
       return null;
@@ -287,32 +302,21 @@ function collectDataQuality(
 
   return {
     contacts_with_phone: hasPhones
-      ? scalar(
-          `SELECT COUNT(DISTINCT c.id) AS n FROM contacts c
-             JOIN contact_phones p ON p.contact_id = c.id`,
-        )
+      ? scalar(() => db.prepare(CONTACTS_WITH_PHONE_SQL).get() as { n: number } | undefined)
       : null,
     contacts_with_email: hasEmails
-      ? scalar(
-          `SELECT COUNT(DISTINCT c.id) AS n FROM contacts c
-             JOIN contact_emails e ON e.contact_id = c.id`,
-        )
+      ? scalar(() => db.prepare(CONTACTS_WITH_EMAIL_SQL).get() as { n: number } | undefined)
       : null,
     contacts_with_neither:
       hasPhones && hasEmails
         ? scalar(
-            `SELECT COUNT(*) AS n FROM contacts c
-               WHERE NOT EXISTS (SELECT 1 FROM contact_phones p WHERE p.contact_id = c.id)
-                 AND NOT EXISTS (SELECT 1 FROM contact_emails e WHERE e.contact_id = c.id)`,
+            () => db.prepare(CONTACTS_WITH_NEITHER_SQL).get() as { n: number } | undefined,
           )
         : null,
     phone_rows: hasPhones ? countRows(db, "contact_phones") : null,
     // Ticket 94. A large gap between these two IS the bug report.
     phone_rows_normalized: hasPhones
-      ? scalar(
-          `SELECT COUNT(*) AS n FROM contact_phones
-             WHERE phone_normalized IS NOT NULL AND phone_normalized <> ''`,
-        )
+      ? scalar(() => db.prepare(PHONES_NORMALIZED_SQL).get() as { n: number } | undefined)
       : null,
   };
 }
@@ -426,9 +430,9 @@ export function collectStorageDiagnostics(input: {
   // Schema version + pending migration.
   if (tables.has("schema_version")) {
     try {
-      const row = input.db
-        .prepare("SELECT version FROM schema_version WHERE id = 1")
-        .get() as { version: number } | undefined;
+      const row = input.db.prepare(SCHEMA_VERSION_SQL).get() as
+        | { version: number }
+        | undefined;
       diag.schema_version = typeof row?.version === "number" ? row.version : null;
     } catch {
       /* leave null */
@@ -455,7 +459,7 @@ export function collectStorageDiagnostics(input: {
     diag.quick_check_skipped = "db-too-large";
   } else {
     try {
-      const res = input.db.pragma("quick_check", { simple: true });
+      const res = input.db.pragma(QUICK_CHECK_PRAGMA, { simple: true });
       diag.quick_check = res === "ok" ? "ok" : "failed";
     } catch {
       /* leave null — unknown, not "failed" */

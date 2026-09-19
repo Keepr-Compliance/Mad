@@ -27,6 +27,11 @@
  *   A2a      3-hop alias chain                                 -> UNRESOLVABLE (fail-closed)
  *   A2b      2-hop alias to a db/ import (the :83 shape)       -> COMPLIANT
  *   VSUM     absolute call-site count + COMPLIANT reason census on a known tree
+ *   G1       a violation in an UNTRACKED file                 -> RED  (BACKLOG-3049)
+ *   G2       the same file staged                             -> RED, same finding
+ *   G3       census staged vs unstaged                        -> EQUAL, and both see it
+ *   G4       a gitignored path under electron/ excluded; un-ignored -> RED
+ *   G5       a symlinked directory under electron/ is not descended into
  *
  * WHY ABSOLUTE COUNTS ARE ASSERTED ONLY ON FIXTURE TREES
  *   `in-layer` is designed to climb from 123 toward 310 as BACKLOG-2989/2990/
@@ -45,7 +50,8 @@ const REPO_ROOT = path.join(__dirname, "..", "..");
 const GATE = path.join(REPO_ROOT, "scripts", "ci", "check-sql-boundary.mjs");
 
 const results = [];
-const record = (id, name, ok, detail) => results.push({ id, name, ok, detail });
+const record = (id, name, ok, detail, skipped = false) =>
+  results.push({ id, name, ok, detail, skipped });
 
 function runGate(args) {
   const r = spawnSync(process.execPath, [GATE, ...args], { encoding: "utf8", cwd: REPO_ROOT });
@@ -668,6 +674,126 @@ for (const [id, verb, call] of [
 }
 
 // ---------------------------------------------------------------------------
+// C17 — node-sqlite3 is enumerated by RECEIVER PROVENANCE, and NOT by verb name.
+//
+// BACKLOG-3059. `.all` / `.get` / `.run` are node-sqlite3's verbs, and they
+// collide with `Map.get`, `Promise.all` and better-sqlite3's own
+// `statement.get`. A verb-name matcher would enumerate all of those; since
+// UNRESOLVABLE is CI-blocking, that reds the gate on unrelated code. This is
+// how BACKLOG-3044's census reached 114-by-name against 103-by-binding.
+//
+// Both halves are asserted. The negative half is the one that matters: a
+// control that only proved the SQL is caught would pass a matcher that also
+// catches every `Map.get` in the tree.
+// ---------------------------------------------------------------------------
+{
+  const dir = mkTree({
+    "electron/services/db/readOnlySqlite.ts":
+      "export async function openSqliteReadOnly(p: string, who: string): Promise<any> { return {} as any; }\n",
+    "electron/handlers/appleReader.ts": [
+      'import { openSqliteReadOnly } from "../services/db/readOnlySqlite";',
+      'export async function read(p: string) {',
+      '  const db = await openSqliteReadOnly(p, "T");',
+      '  const rows = await db.all(`SELECT handle FROM chat`);',      // (i) SQL -> VIOLATION
+      '  const m = new Map<string, string>();',
+      '  const hit = m.get("k");',                                    // (ii) Map.get -> NOT a site
+      '  const settled = await Promise.all([1, 2]);',                 // (iii) Promise.all -> NOT a site
+      '  return { rows, hit, settled };',
+      '}',
+      "",
+    ].join("\n"),
+  });
+  const r = seedAndRun(dir, ["--explain"]);
+  const lines = r.all.split("\n");
+  const sql = lines.filter((l) => /appleReader\.ts:4\b/.test(l) && /VIOLATION/.test(l)).length;
+  const noise = lines.filter((l) => /appleReader\.ts:(6|7)\b/.test(l)).length;
+  record(
+    "C17",
+    "node-sqlite3 enumerated by receiver provenance; Map.get / Promise.all are NOT enumerated",
+    sql === 1 && noise === 0,
+    `sql=${sql} (want 1)  noise=${noise} (want 0)`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// C18 — the handle-binding CROSS-PRODUCT, all four corners.
+//
+// { declaration, assignment } x { direct openSqliteReadOnly, wrapper call }.
+// Every corner exists in the tree, and the hand-written census that preceded
+// this gate change was wrong four times running by patching them one at a time:
+// it found `const db = await openSqliteReadOnly(...)` and missed the other
+// three. A control that exercises one corner would have passed each of those
+// four broken versions.
+// ---------------------------------------------------------------------------
+{
+  const dir = mkTree({
+    "electron/services/db/readOnlySqlite.ts":
+      "export async function openSqliteReadOnly(p: string, who: string): Promise<any> { return {} as any; }\n",
+    "electron/handlers/fourCorners.ts": [
+      'import { openSqliteReadOnly } from "../services/db/readOnlySqlite";',
+      'function wrap(p: string) { return openSqliteReadOnly(p, "T"); }',
+      'export async function f(p: string) {',
+      '  const a = await openSqliteReadOnly(p, "T");',                // corner 1
+      '  await a.all(`SELECT 1 FROM t`);',
+      '  let b: any; b = await openSqliteReadOnly(p, "T");',          // corner 2
+      '  await b.all(`SELECT 2 FROM t`);',
+      '  const c = await wrap(p);',                                    // corner 3
+      '  await c.all(`SELECT 3 FROM t`);',
+      '  let d: any; d = await wrap(p);',                              // corner 4
+      '  await d.all(`SELECT 4 FROM t`);',
+      '  const alias = a.all;',                                        // alias of a verb
+      '  await alias(`SELECT 5 FROM t`);',
+      '}',
+      "",
+    ].join("\n"),
+  });
+  const r = seedAndRun(dir, ["--explain"]);
+  const hits = r.all.split("\n").filter((l) => /fourCorners\.ts:\d+/.test(l) && /VIOLATION/.test(l)).length;
+  record(
+    "C18",
+    "all four handle-binding corners enumerate, plus a verb alias (5 sites)",
+    hits === 5,
+    `sites=${hits} (want 5 — decl/assign x direct/wrapper, + alias)`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// C19 — an alias records the verb it WRAPS, not a hardcoded one.
+//
+// A first revision of this feature labelled every alias site `all`, so a
+// `const dbGet = (sql) => db.get(sql)` site was keyed under the wrong verb.
+// The baseline key is `file :: verb :: match`, so a wrong verb writes a wrong
+// key — stable, and stably wrong.
+// ---------------------------------------------------------------------------
+{
+  const dir = mkTree({
+    "electron/services/db/readOnlySqlite.ts":
+      "export async function openSqliteReadOnly(p: string, who: string): Promise<any> { return {} as any; }\n",
+    "electron/handlers/verbLabel.ts": [
+      'import { openSqliteReadOnly } from "../services/db/readOnlySqlite";',
+      'export async function f(p: string) {',
+      '  const db = await openSqliteReadOnly(p, "T");',
+      '  const dbGet = (sql: string) => db.get(sql);',
+      '  const dbAll = db.all;',
+      '  await dbGet(`SELECT 1 FROM t`);',
+      '  await dbAll(`SELECT 2 FROM t`);',
+      '}',
+      "",
+    ].join("\n"),
+  });
+  const r = seedAndRun(dir, ["--explain"]);
+  const lines = r.all.split("\n").filter((l) => /verbLabel\.ts:(6|7)\b/.test(l));
+  const asGet = lines.filter((l) => /\bget\b/.test(l)).length;
+  const asAll = lines.filter((l) => /\ball\b/.test(l)).length;
+  record(
+    "C19",
+    "an alias is keyed under the verb it wraps (dbGet -> get, dbAll -> all)",
+    asGet === 1 && asAll === 1,
+    `get=${asGet} all=${asAll} (want 1/1)`
+  );
+}
+
+// ---------------------------------------------------------------------------
 // VSUM — a tree of KNOWN contents. Asserts the absolute call-site count and the
 // COMPLIANT reason census by name.
 //
@@ -715,6 +841,234 @@ for (const [id, verb, call] of [
   record("VSUM", "known tree: absolute site count + COMPLIANT reason census by name", ok, detail);
 }
 
+
+// ---------------------------------------------------------------------------
+// G1-G5 — ENUMERATION READS THE WORKING TREE, NOT THE INDEX (BACKLOG-3049)
+//
+// The gate enumerated the real tree with a bare `git ls-files`, which lists the
+// INDEX. A module on disk that had never been `git add`-ed did not exist as far
+// as the gate was concerned. Measured on one tree with two new `db/` modules
+// present: unstaged 782 sites / 123 keys, staged 784 / 127. Same working tree,
+// same command, two answers, and the only variable was `git add`.
+//
+// WHY EVERY CONTROL ABOVE MISSED IT. C1-C19 and VSUM all run in fixture mode
+// (`--root <tmpdir>`), which dispatched to `enumerateDir()` -- a plain
+// filesystem walk that has always seen untracked files. `enumerateRepo()`, the
+// function the real tree actually uses, had ZERO control coverage. The harness
+// was not weak here; it was pointed at the other enumerator.
+//
+// So these controls build fixture trees that ARE git repos. The gate routes a
+// git fixture tree through the REAL `enumerateRepo()`, which is what makes
+// these controls test the shipped code path rather than a copy of it.
+//
+// They never touch this repository's index: every `git add` below runs inside a
+// throwaway `git init` tree under the OS temp dir. Nothing is ever committed --
+// `--cached` reads the index, so staging is enough, and a commit would need
+// user identity configured (a CI flake source).
+// ---------------------------------------------------------------------------
+
+const EMPTY_EXCLUDES = ".sqlgate-empty-excludes";
+
+/**
+ * A fixture tree that is its own git repository.
+ *
+ * `core.excludesFile` is pinned to an empty file: `--exclude-standard` honours
+ * the user's GLOBAL gitignore, and a developer's personal ignore rules must not
+ * decide what these controls enumerate.
+ */
+function mkGitTree(files) {
+  const dir = mkTree({ ...files, [EMPTY_EXCLUDES]: "" });
+  const init = spawnSync("git", ["init", "-q"], { cwd: dir, encoding: "utf8" });
+  if (init.status !== 0) {
+    return { dir, ok: false, why: `git init failed: ${(init.stderr || "").trim() || init.error}` };
+  }
+  spawnSync("git", ["config", "core.excludesFile", path.join(dir, EMPTY_EXCLUDES)], {
+    cwd: dir,
+    encoding: "utf8",
+  });
+  return { dir, ok: true, why: "" };
+}
+
+const gitAdd = (dir, ...rels) =>
+  spawnSync("git", ["add", "--", ...rels], { cwd: dir, encoding: "utf8" }).status === 0;
+
+/** Seed a baseline for a git fixture tree. Must run BEFORE any violation exists. */
+const seedBaseline = (dir) =>
+  runGate(["--root", dir, "--baseline", bl(dir), "--update-baseline"]).code === 0;
+
+/** Run the gate against a git fixture tree and parse its --json census. */
+function census(dir) {
+  const r = runGate(["--root", dir, "--baseline", bl(dir), "--json"]);
+  let json = null;
+  try {
+    json = JSON.parse(r.out);
+  } catch {
+    /* left null; callers treat that as a failure */
+  }
+  return { ...r, json };
+}
+
+const CLEAN_TREE = {
+  [DB_MODULE]: DB_MODULE_SRC,
+  "electron/workers/w.ts": [
+    'import { OK_SQL } from "../services/db/okSql";',
+    "export function q(db: any) { return db.prepare(OK_SQL).all(); }",
+    "",
+  ].join("\n"),
+};
+
+// --- G1 / G2 / G3 ----------------------------------------------------------
+{
+  const REL = "electron/handlers/lateArrival.ts";
+  const SRC = 'export function q(db: any) { db.prepare("SELECT 9 FROM widgets").get(); }\n';
+  const { dir, ok: repoOk, why } = mkGitTree(CLEAN_TREE);
+
+  const bail = (detail) => {
+    record("G1", "a violation in an UNTRACKED file is enumerated", false, detail);
+    record("G2", "the same file, staged, reports the same violation", false, detail);
+    record("G3", "census is IDENTICAL staged and unstaged, and both see the violation", false, detail);
+  };
+
+  if (!repoOk) bail(why);
+  else if (!gitAdd(dir, ".")) bail("git add of the seed tree failed");
+  // The baseline is seeded BEFORE the violation is written. `--update-baseline`
+  // now sees untracked files too, so seeding afterwards would bake the
+  // violation into the baseline and G1 would read green for the wrong reason.
+  else if (!seedBaseline(dir)) bail("baseline seed failed");
+  else {
+    const clean = census(dir);
+    fs.mkdirSync(path.dirname(path.join(dir, REL)), { recursive: true });
+    fs.writeFileSync(path.join(dir, REL), SRC);
+    const unstaged = census(dir);
+
+    record(
+      "G1",
+      "a violation in an UNTRACKED file is enumerated",
+      clean.code === 0 &&
+        unstaged.code === 1 &&
+        unstaged.all.includes("lateArrival.ts") &&
+        Boolean(clean.json && unstaged.json) &&
+        unstaged.json.callSites === clean.json.callSites + 1,
+      `clean=${clean.code}/${clean.json && clean.json.callSites} ` +
+        `unstaged=${unstaged.code}/${unstaged.json && unstaged.json.callSites} ` +
+        `named=${unstaged.all.includes("lateArrival.ts")}`
+    );
+
+    const stagedOk = gitAdd(dir, REL);
+    const staged = stagedOk ? census(dir) : { code: null, all: "", json: null };
+
+    record(
+      "G2",
+      "the same file, staged, reports the same violation",
+      stagedOk && staged.code === 1 && staged.all.includes("lateArrival.ts"),
+      `staged code=${staged.code} named=${staged.all.includes("lateArrival.ts")}`
+    );
+
+    // EQUALITY IS THE ASSERTION. A census that changes with staging state IS
+    // the defect. But equality alone is also satisfied by two BLIND runs, so
+    // the second clause pins both states to a census that actually grew.
+    const same =
+      Boolean(unstaged.json && staged.json) &&
+      JSON.stringify(unstaged.json) === JSON.stringify(staged.json);
+    const bothSee = Boolean(clean.json && unstaged.json) && unstaged.json.callSites > clean.json.callSites;
+
+    record(
+      "G3",
+      "census is IDENTICAL staged and unstaged, and both see the violation",
+      same && bothSee && unstaged.code === staged.code,
+      `identical=${same} grew=${bothSee} codes=${unstaged.code}/${staged.code}`
+    );
+  }
+}
+
+// --- G4 --------------------------------------------------------------------
+// Reaching untracked files must not mean reaching IGNORED files: that would
+// trade a blind spot for a flood of build output. The second half is the
+// discriminator -- the SAME file, same content, still untracked, with only the
+// ignore rule removed. Without it, "excluded" is indistinguishable from "the
+// gate cannot see untracked files at all", which is the bug being fixed.
+{
+  const REL = "electron/generated/ignoredEvil.ts";
+  const SRC = 'export function q(db: any) { db.prepare("SELECT 7 FROM widgets").get(); }\n';
+  const { dir, ok: repoOk, why } = mkGitTree({ ...CLEAN_TREE, ".gitignore": "electron/generated/\n" });
+
+  if (!repoOk || !gitAdd(dir, ".") || !seedBaseline(dir)) {
+    record("G4", "a gitignored path under electron/ is excluded; un-ignoring the same file goes RED", false, why || "setup failed");
+  } else {
+    const clean = census(dir);
+    fs.mkdirSync(path.join(dir, "electron", "generated"), { recursive: true });
+    fs.writeFileSync(path.join(dir, REL), SRC);
+    const ignored = census(dir);
+
+    fs.writeFileSync(path.join(dir, ".gitignore"), "\n");
+    const unignored = census(dir);
+
+    const excluded =
+      ignored.code === 0 &&
+      Boolean(clean.json && ignored.json) &&
+      ignored.json.enumeratedFiles === clean.json.enumeratedFiles &&
+      ignored.json.callSites === clean.json.callSites;
+    const seenWhenNotIgnored = unignored.code === 1 && unignored.all.includes("ignoredEvil.ts");
+
+    record(
+      "G4",
+      "a gitignored path under electron/ is excluded; un-ignoring the same file goes RED",
+      excluded && seenWhenNotIgnored,
+      `ignored: code=${ignored.code} files=${ignored.json && ignored.json.enumeratedFiles} ` +
+        `(clean ${clean.json && clean.json.enumeratedFiles}) | un-ignored: code=${unignored.code} ` +
+        `named=${unignored.all.includes("ignoredEvil.ts")}`
+    );
+  }
+}
+
+// --- G5 --------------------------------------------------------------------
+// git lists a symlink to a directory as ONE entry and never descends into it.
+// That is load-bearing here and not a detail: every git worktree in this repo
+// symlinks `node_modules` at the main checkout, so an enumeration that followed
+// directory symlinks would walk the entire dependency tree.
+{
+  const { dir, ok: repoOk, why } = mkGitTree(CLEAN_TREE);
+
+  if (!repoOk || !gitAdd(dir, ".") || !seedBaseline(dir)) {
+    record("G5", "a symlinked directory under electron/ is not descended into", false, why || "setup failed");
+  } else {
+    const clean = census(dir);
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "sqlgate-outside-"));
+    fs.writeFileSync(
+      path.join(outside, "deep.ts"),
+      'export function q(db: any) { db.prepare("SELECT 6 FROM widgets").get(); }\n'
+    );
+
+    let linkErr = "";
+    try {
+      fs.symlinkSync(outside, path.join(dir, "electron", "linked"), "dir");
+    } catch (e) {
+      linkErr = String((e && e.message) || e);
+    }
+
+    if (linkErr && process.platform === "win32") {
+      // Creating a directory symlink on Windows needs Developer Mode or
+      // elevation. The sql-boundary CI job runs ubuntu-latest, where this
+      // control always executes. Recorded as SKIP so it prints its reason
+      // rather than passing silently.
+      record("G5", "a symlinked directory under electron/ is not descended into", true, `skipped on win32: ${linkErr}`, true);
+    } else {
+      const after = census(dir);
+      record(
+        "G5",
+        "a symlinked directory under electron/ is not descended into",
+        !linkErr &&
+          after.code === 0 &&
+          Boolean(clean.json && after.json) &&
+          after.json.callSites === clean.json.callSites,
+        linkErr
+          ? `symlink creation failed: ${linkErr}`
+          : `code=${after.code} sites ${clean.json && clean.json.callSites}->${after.json && after.json.callSites}`
+      );
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Report
 // ---------------------------------------------------------------------------
@@ -722,7 +1076,12 @@ let failed = 0;
 console.log("check-sql-boundary.mjs — guard verification\n");
 for (const r of results) {
   if (!r.ok) failed++;
-  console.log(`  ${r.ok ? "PASS" : "FAIL"}  ${r.id.padEnd(5)} ${r.name}${r.ok ? "" : `\n          -> ${r.detail}`}`);
+  // A skipped control prints its reason even when green. A skip that renders
+  // identically to a pass is a green carrying no information -- the exact shape
+  // this gate exists to catch.
+  const label = r.skipped ? "SKIP" : r.ok ? "PASS" : "FAIL";
+  const showDetail = !r.ok || r.skipped;
+  console.log(`  ${label}  ${r.id.padEnd(5)} ${r.name}${showDetail ? `\n          -> ${r.detail}` : ""}`);
 }
 console.log(`\n${results.length - failed}/${results.length} controls passed.`);
 if (failed) {

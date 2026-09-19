@@ -23,6 +23,7 @@ import {
   threadNaming,
   GROUP_CHAT_LABEL,
 } from "./threadContactLabel";
+import { exportNoticesHtml, type ExportOmissions } from "../exportNotices";
 
 /**
  * BACKLOG-2757: how a renderer asks "how many contacts does this handle name?".
@@ -367,6 +368,14 @@ export function generateTextThreadHTML(
   phoneNameMap: Record<string, string>,
   groupChat: boolean,
   threadIndex: number,
+  // BACKLOG-3367: what was hidden from THIS conversation. REQUIRED and sixth,
+  // before the optional tail. A folder export's texts/*.pdf is one file that can
+  // be handed to someone on its own, so the summary report's count never reaches
+  // its reader (founder decision 2026-09-15, pm_comments 6306f393 item 2).
+  // The combined PDF's per-thread sections pass their real count too: each has
+  // its own anchor and back-link and is read as a unit, so passing 0 there would
+  // state that nothing was removed from a thread that had texts removed from it.
+  omissions: ExportOmissions,
   participants?: Array<{ phone: string; name: string | null }>,
   getAttachmentsForMessage?: (messageId: string, externalId?: string) => {
     id: string;
@@ -510,6 +519,17 @@ export function generateTextThreadHTML(
       color: #718096;
       margin-left: 8px;
     }
+    /* BACKLOG-3367: matches the summary report's notice. */
+    .export-notice {
+      background: #fffaf0;
+      border: 1px solid #f6ad55;
+      border-left: 4px solid #dd6b20;
+      padding: 12px 14px;
+      border-radius: 6px;
+      font-size: 13px;
+      color: #7b341e;
+      margin: 0 0 24px 0;
+    }
     .footer {
       margin-top: 40px;
       padding-top: 20px;
@@ -560,6 +580,11 @@ export function generateTextThreadHTML(
     </div>
     ` : ""}
   </div>
+
+  ${/* BACKLOG-3367: above the messages, not below them — this file is read as a
+       conversation transcript, and a reader who stops before the end must still
+       learn that messages were removed from it. */ ""}
+  ${exportNoticesHtml(omissions, "conversation")}
 
   ${messagesHtml}
 

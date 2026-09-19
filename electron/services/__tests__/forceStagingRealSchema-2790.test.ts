@@ -250,8 +250,26 @@ describe("BACKLOG-2790 — the force set's boundary, against the real schema", (
       `INSERT INTO "${staging.messagesTable}" (id, user_id, channel, external_id)
        VALUES ('new','u1','imessage','g-1')`,
     ).run();
-    swapStagingIntoLive(db, staging);
+    const counts = swapStagingIntoLive(db, staging);
     staging.drop();
+
+    // BACKLOG-2960 — the DELETE half of the swap reports WHAT IT REMOVED, and
+    // until now nothing in the tree read those two fields. That gap was found by
+    // a mutation, not by inspection: pointing the transaction body at the
+    // promise-returning seam export instead of its `*Sync` twin still deletes
+    // and inserts correctly (a plain wrapper's work completes synchronously), so
+    // the only observable difference is that `messagesDeleted` and
+    // `attachmentsDeleted` go MISSING from the returned object — and all 25
+    // related suites stayed green. `tsc` does catch it (TS2739 on this file's
+    // own return annotation); no test did. Now one does.
+    //
+    // The numbers are the force set's boundary restated as counts: 'mine' is the
+    // only row in it, 'theirs' is another user's and 'mine-null' has no
+    // external_id, and 'a-theirs' hangs off a spared message.
+    expect({
+      messagesDeleted: counts.messagesDeleted,
+      attachmentsDeleted: counts.attachmentsDeleted,
+    }).toEqual({ messagesDeleted: 1, attachmentsDeleted: 0 });
 
     // Exact ID sets, both tables.
     expect(

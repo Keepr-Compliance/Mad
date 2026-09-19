@@ -302,7 +302,13 @@ describe("BACKLOG-2776 — the dashboard stops reporting progress once Cancel is
 
     render(<SyncStatusIndicator />);
 
-    expect(screen.getByTestId("sync-pill-messages")).toHaveTextContent("Messages - deleting");
+    // BACKLOG-3128: the expected text changed from the RAW phase ("deleting") to
+    // its label ("Clearing"). Before 3128 the pill's phase record listed iPhone
+    // phases only, so every macOS Messages phase fell through its `?? phase`
+    // fallback and this surface published an internal identifier to the user.
+    // The assertion this test exists to make — without a cancel, the pill shows
+    // the phase rather than "Cancelling" — is unchanged.
+    expect(screen.getByTestId("sync-pill-messages")).toHaveTextContent("Messages - Clearing");
     expect(screen.getByTestId("sync-pill-messages")).not.toHaveTextContent("Cancelling");
   });
 });

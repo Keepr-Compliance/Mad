@@ -90,6 +90,9 @@ if (typeof window !== 'undefined') {
       // machinery — needed in all test environments.
       getRemovedMessages: jest.fn().mockResolvedValue({ success: true, removedMessages: [] }),
       restoreRemovedMessage: jest.fn().mockResolvedValue({ success: true }),
+      // BACKLOG-3366: hide / unhide a text from export (conversation view).
+      hideTextFromExport: jest.fn().mockResolvedValue({ success: true, hidden: true }),
+      unhideTextFromExport: jest.fn().mockResolvedValue({ success: true, hidden: false }),
       // BACKLOG-1866 / 1876: linked-content + global search (LinkedContentSearch
       // mounts in the details overview AND the transaction list).
       searchLinkedContent: jest.fn().mockResolvedValue({
@@ -346,6 +349,12 @@ if (typeof window !== 'undefined') {
     featureGate: {
       getAll: jest.fn().mockResolvedValue({}),
       check: jest.fn().mockResolvedValue({ allowed: true, value: '', source: 'default' }),
+      // BACKLOG-3349: strict (fail-closed) plan state. Default 'blocked' for the
+      // same reason `entitlement` below defaults to locked — a test that forgets
+      // to override must not accidentally grant a commercial feature. Note the
+      // asymmetry with `check`/`getAll` above: those stay fail-open because the
+      // keys they answer for are.
+      strictState: jest.fn().mockResolvedValue('blocked'),
       invalidateCache: jest.fn().mockResolvedValue(undefined),
     },
     // BACKLOG-2006a: per-transaction paywall entitlement. Default is fail-closed
@@ -463,3 +472,23 @@ afterAll(() => {
     // Already using real timers, ignore
   }
 });
+
+// ---------------------------------------------------------------------------
+// BACKLOG-2962: install the native-capability implementations for this shell.
+//
+// The jest harness IS a shell — it runs the Electron main-process code against
+// `tests/__mocks__/electron.js`. So it installs the real `ElectronSecretStore`,
+// which forwards to that mocked `safeStorage`. Suites written before the seam
+// existed keep exercising exactly the code path they always did, and a break in
+// `ElectronSecretStore` still shows up in them.
+//
+// A suite that calls `jest.resetModules()` gets a FRESH provider module with
+// nothing installed, and must re-install. `tests/helpers/installTestSecretStore`
+// exists for that; see its own file for why it is not done automatically.
+// ---------------------------------------------------------------------------
+require('./helpers/installTestSecretStore').installTestSecretStore();
+// The same, for the seams BACKLOG-2962 added after secret storage. Kept in a
+// separate helper because that one installs the mocked `safeStorage` OBJECT
+// (identity matters to its callers' assertions) while these forward at call
+// time; see the two files for the difference and why it is not cosmetic.
+require('./helpers/installTestCapabilities').installTestCapabilities();

@@ -22,14 +22,28 @@ const Database = require(
 import type { Database as DatabaseType } from "better-sqlite3";
 
 import {
-  deriveStagingTableDdl,
-  FORCE_SET_MESSAGES,
   forceStagingLifecycle,
   sweepStaleStaging,
   STAGING_TABLE_PREFIX,
-  SURVIVING_ATTACHMENTS,
-  SURVIVING_MESSAGES,
 } from "../macOSMessagesImportService/forceStaging";
+// BACKLOG-2990 chunk 5: the force-set predicates moved to the db layer and stopped
+// being TEXT. These tests used to interpolate the exported strings; they now call
+// the builders, which return the SQL and its POSITIONAL parameters together.
+//
+// What is asserted did not change, and that is the point: every expectation below
+// is still an exact ID SET read back from the database. A test that interpolated a
+// predicate was asserting the predicate's spelling; these assert its rows, so they
+// keep their meaning across a change that rewrote every one of those spellings.
+import {
+  forceSetMessages,
+  macOSForceSetFor,
+  survivingAttachments,
+  survivingMessages,
+} from "../db/macosForceSetSql";
+// BACKLOG-2989 commit A: `deriveStagingTableDdl` moved to the db layer, where
+// it is now the single copy shared by the messages force re-import and the
+// email force re-cache. Import re-pointed; no assertion in this suite changed.
+import { checkedStagingTable, deriveStagingTableDdl } from "../db/stagingDdlSql";
 
 const USER = "user-2790";
 
@@ -177,9 +191,10 @@ describe("BACKLOG-2790 — what a force re-import does NOT replace", () => {
     // `NOT (${FORCE_SET_ATTACHMENTS_BY_MESSAGE_ID} OR ${FORCE_SET_ATTACHMENTS_BY_EXTERNAL_ID})`
     // and this goes red — the email attachment vanishes from the result.
     const survivors = (
-      db
-        .prepare(`SELECT id FROM attachments WHERE ${SURVIVING_ATTACHMENTS}`)
-        .all({ userId: USER }) as Array<{ id: string }>
+      (() => {
+        const p = survivingAttachments(macOSForceSetFor(USER));
+        return db.prepare(`SELECT id FROM attachments WHERE ${p.sql}`).all(...p.params);
+      })() as Array<{ id: string }>
     ).map((r) => r.id);
 
     // BACKLOG-2796: the iPhone attachment is here for the same reason — its
@@ -198,9 +213,10 @@ describe("BACKLOG-2790 — what a force re-import does NOT replace", () => {
     // MUTATION (NULL-safety): make SURVIVING_MESSAGES `NOT (…)` again and
     // `msg-null-metadata` disappears, because `NOT NULL` is NULL.
     const survivors = (
-      db
-        .prepare(`SELECT id FROM messages WHERE ${SURVIVING_MESSAGES}`)
-        .all({ userId: USER }) as Array<{ id: string }>
+      (() => {
+        const p = survivingMessages(macOSForceSetFor(USER));
+        return db.prepare(`SELECT id FROM messages WHERE ${p.sql}`).all(...p.params);
+      })() as Array<{ id: string }>
     ).map((r) => r.id);
 
     expect(survivors.sort()).toEqual([
@@ -216,9 +232,10 @@ describe("BACKLOG-2790 — what a force re-import does NOT replace", () => {
     // The other half. Without it, a predicate that matched nothing at all would
     // pass every test above.
     const replaced = (
-      db
-        .prepare(`SELECT id FROM messages WHERE ${FORCE_SET_MESSAGES}`)
-        .all({ userId: USER }) as Array<{ id: string }>
+      (() => {
+        const p = forceSetMessages(macOSForceSetFor(USER));
+        return db.prepare(`SELECT id FROM messages WHERE ${p.sql}`).all(...p.params);
+      })() as Array<{ id: string }>
     ).map((r) => r.id);
 
     expect(replaced.sort()).toEqual(["msg-macos-imessage", "msg-macos-sms"]);
@@ -241,9 +258,10 @@ describe("BACKLOG-2790 — what a force re-import does NOT replace", () => {
     ).run("msg-bad-metadata", USER, "guid-5", "sms", "not json at all");
 
     const replaced = (
-      db
-        .prepare(`SELECT id FROM messages WHERE ${FORCE_SET_MESSAGES}`)
-        .all({ userId: USER }) as Array<{ id: string }>
+      (() => {
+        const p = forceSetMessages(macOSForceSetFor(USER));
+        return db.prepare(`SELECT id FROM messages WHERE ${p.sql}`).all(...p.params);
+      })() as Array<{ id: string }>
     ).map((r) => r.id);
 
     expect(replaced.sort()).toEqual(["msg-macos-imessage", "msg-macos-sms"]);
@@ -352,8 +370,17 @@ describe("BACKLOG-2790 — a derived staging table", () => {
     // A silent no-op rename would produce a staging table named `messages` —
     // i.e. writes going straight to live, which is the one outcome this whole
     // design exists to prevent. It must throw instead.
+    // BACKLOG-2989 commit A: the staging name is now a BRANDED type, so the
+    // literal `"staging_x"` this used to pass no longer compiles. It is
+    // replaced with a real checked name — which is strictly closer to what the
+    // caller does. The assertion is unchanged: the derive must still throw when
+    // it cannot rename the live table.
     expect(() =>
-      deriveStagingTableDdl("CREATE TABLE somethingelse (id TEXT)", "messages", "staging_x")
+      deriveStagingTableDdl(
+        "CREATE TABLE somethingelse (id TEXT)",
+        "messages",
+        checkedStagingTable(`${STAGING_TABLE_PREFIX}0123456789ab_messages`, "message-import")
+      )
     ).toThrow(/staging table/i);
   });
 });

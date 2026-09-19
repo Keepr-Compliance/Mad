@@ -103,6 +103,7 @@ import {
   getCommunicationById,
   linkCommunicationToTransaction,
   countTextThreadsForTransaction,
+  backfillAllTransactionThreadCounts,
 } from "../communicationDbService";
 import type { NewCommunication } from "../../../types";
 // BACKLOG-3067: `linkCommunicationToTransaction` now demands branded ids. These are
@@ -257,8 +258,8 @@ describe("linkCommunicationToTransaction — characterization (BACKLOG-2565)", (
     expect((await getCommunicationById(comm.id))?.transaction_id).toBe(TX_NEW);
 
     // ...and a fresh recount agrees it moved.
-    expect(countTextThreadsForTransaction(TX_OLD)).toBe(0);
-    expect(countTextThreadsForTransaction(TX_NEW)).toBe(1);
+    expect(await countTextThreadsForTransaction(TX_OLD)).toBe(0);
+    expect(await countTextThreadsForTransaction(TX_NEW)).toBe(1);
 
     // But the CACHED column on both rows still describes the world before the
     // move. This is the latent gap BACKLOG-2565 filed; BACKLOG-2766 owns the fix.
@@ -321,5 +322,42 @@ describe("linkCommunicationToTransaction — characterization (BACKLOG-2565)", (
     // `filterAlreadyLinked` treats a null here as "not linked to anything yet".
     // The email IS linked — to TX_OLD — and the lookup cannot see it.
     expect(await getCommunicationById(EMAIL)).toBeNull();
+  });
+});
+
+/**
+ * BACKLOG-2960 (wave 1, lane B round 4) — `backfillAllTransactionThreadCounts`
+ * has no production caller and had no test at `c81aabfa9`: a grep for its name
+ * over `electron/` and `src/` returned its own declaration and nothing else. It
+ * is one of the seven exports this round moves to the promise seam, so the
+ * "drop one `await`" control needs somewhere to land.
+ *
+ * This suite already owns a real driver, a `transactions` table with
+ * `text_thread_count`, and both a text-linked and an unlinked transaction, so
+ * the assertion costs a fixture of zero.
+ *
+ * Written against the UNCONVERTED, synchronous export and green there
+ * (PR-SOP §6.2c: fix the blind spot before the code moves).
+ */
+describe("backfillAllTransactionThreadCounts (BACKLOG-2960)", () => {
+  it("rewrites the stored count of EVERY transaction, keyed by id, not just the linked one", async () => {
+    await createCommunication({
+      user_id: USER,
+      transaction_id: TX_OLD,
+      message_id: TEXT_MESSAGE,
+    } as NewCommunication);
+
+    // Move BOTH columns off their correct values first. Without this a backfill
+    // that wrote nothing at all would pass: `createCommunication` has already
+    // left TX_OLD at 1 and TX_NEW at 0, which is the answer.
+    mockDb!.prepare("UPDATE transactions SET text_thread_count = ?").run(99);
+    expect(storedThreadCount(TX_OLD)).toBe(99);
+    expect(storedThreadCount(TX_NEW)).toBe(99);
+
+    const result = await backfillAllTransactionThreadCounts();
+
+    expect(result).toEqual({ updated: 2, errors: 0 });
+    expect(storedThreadCount(TX_OLD)).toBe(1);
+    expect(storedThreadCount(TX_NEW)).toBe(0);
   });
 });

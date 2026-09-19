@@ -1,12 +1,28 @@
 #!/usr/bin/env bash
-# lint-migrations.sh - Validate Supabase migration files
+# lint-migrations.sh - Validate the CONTENTS of Supabase migration files
 #
 # Checks:
-#   1. Naming convention: YYYYMMDD_description.sql (or YYYYMMDDHHMMSS_description.sql)
-#   2. No duplicate timestamps (same YYYYMMDD prefix with identical name)
-#   3. Dangerous patterns: DROP TABLE/COLUMN without IF EXISTS
-#   4. SQL file is not empty
-#   5. No trailing whitespace in filenames
+#   1. Dangerous patterns: DROP TABLE/COLUMN without IF EXISTS, DROP SCHEMA, TRUNCATE
+#   2. SQL file is not empty
+#
+# NOT CHECKED HERE — filenames and version stamps belong to
+# scripts/check-migration-names.mjs, which runs in the same workflow step list.
+#
+# This script used to own both, and both were wrong:
+#
+#   Its naming check accepted `YYYYMMDD_` as valid. That is the form the new gate
+#   rejects, so leaving it here left two checkers disagreeing about what a valid
+#   migration name is.
+#
+#   Its "Duplicate Timestamps" check was `uniq -d` over basenames collected by
+#   `find` from a single directory — a list in which two identical entries cannot
+#   occur. It was structurally incapable of firing, and printed
+#   "OK: No duplicate filenames" on every run. On 2026-09-07 two migrations both
+#   claimed the stamp `20260905`; this check was green throughout, and reads to a
+#   human as though collisions had been ruled out.
+#
+# Both were removed rather than repaired: the .mjs gate already covers every name
+# this one would have rejected, and it is grandfather-aware, which this was not.
 #
 # Usage:
 #   ./scripts/lint-migrations.sh              # Check all migrations
@@ -67,41 +83,15 @@ FILE_COUNT=$(echo "$FILES" | grep -c '.' || echo 0)
 echo "Checking $FILE_COUNT migration file(s)..."
 echo ""
 
-# --- Check 1: Naming convention ---
-echo "=== Naming Convention ==="
-while IFS= read -r filepath; do
-  [ -z "$filepath" ] && continue
-  basename=$(basename "$filepath")
-
-  # Accept both YYYYMMDD_ and YYYYMMDDHHMMSS_ prefixes
-  if [[ "$basename" =~ ^[0-9]{8}_.*\.sql$ ]] || [[ "$basename" =~ ^[0-9]{14}_.*\.sql$ ]]; then
-    : # Valid
-  else
-    error "Invalid migration name: $basename (expected: YYYYMMDD_description.sql or YYYYMMDDHHMMSS_description.sql)"
-  fi
-
-  # Check for spaces in filename
-  if [[ "$basename" == *" "* ]]; then
-    error "Migration filename contains spaces: $basename"
-  fi
-done <<< "$FILES"
+# Filenames and version stamps are checked by scripts/check-migration-names.mjs.
+# See the header for why the two checks that used to live here were removed rather
+# than repaired.
+echo "=== Naming and duplicate stamps ==="
+info "checked by scripts/check-migration-names.mjs"
 echo ""
 
-# --- Check 2: Duplicate timestamps ---
-echo "=== Duplicate Timestamps ==="
-ALL_FILES=$(find "$MIGRATIONS_DIR" -name "*.sql" -type f -exec basename {} \; | sort)
-# Extract the full filenames and check for exact duplicates
-DUPLICATES=$(echo "$ALL_FILES" | uniq -d)
-if [ -n "$DUPLICATES" ]; then
-  error "Duplicate migration filenames found:"
-  echo "$DUPLICATES" | while read -r dup; do
-    echo "  - $dup"
-  done
-else
-  info "No duplicate filenames"
-fi
-
 # Check for same-day timestamp collisions (just warn, not error -- multiple migrations per day is common)
+ALL_FILES=$(find "$MIGRATIONS_DIR" -name "*.sql" -type f -exec basename {} \; | sort)
 DAY_TIMESTAMPS=$(echo "$ALL_FILES" | grep -oE '^[0-9]{8}' | sort)
 DAY_DUPES=$(echo "$DAY_TIMESTAMPS" | uniq -c | sort -rn | head -5)
 echo "Top 5 busiest migration days:"
@@ -115,7 +105,7 @@ while read -r count day; do
 done <<< "$DAY_DUPES"
 echo ""
 
-# --- Check 3: Dangerous patterns ---
+# --- Check 1: Dangerous patterns ---
 echo "=== Dangerous Patterns ==="
 while IFS= read -r filepath; do
   [ -z "$filepath" ] && continue
@@ -155,7 +145,7 @@ while IFS= read -r filepath; do
 done <<< "$FILES"
 echo ""
 
-# --- Check 4: Empty files ---
+# --- Check 2: Empty files ---
 echo "=== Empty File Check ==="
 while IFS= read -r filepath; do
   [ -z "$filepath" ] && continue

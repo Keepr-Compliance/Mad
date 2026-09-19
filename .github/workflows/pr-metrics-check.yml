@@ -7,6 +7,9 @@ name: PR Metrics Validation
 # 1. Engineer Metrics section must be present
 # 2. Agent ID must be present (linkage key into pm_token_metrics)
 # 3. Task/Backlog cross-reference (TASK-#### or BACKLOG-####) must be present
+# 4. The Public Repository Notice must be present VERBATIM (BACKLOG-3133) --
+#    an exact-string test, because "try not to describe vulnerabilities" passes
+#    every keyword check and is not the rule.
 #
 # Numeric metrics (Total Tokens, Duration, API Calls, Variance) are NOT
 # validated in the PR body: they are auto-captured by the SubagentStop hook
@@ -31,8 +34,12 @@ name: PR Metrics Validation
 
 on:
   pull_request:
-    branches: [main, develop, 'int/**']
+    branches: [main, develop, 'int/**', 'int-portal/**']
     types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: read
 
 jobs:
   validate-metrics:
@@ -62,15 +69,51 @@ jobs:
       - name: Check for skip flag
         id: skip-check
         env:
-          PR_TITLE: ${{ github.event.pull_request.title }}
+          # The TITLE is fetched too, for the same reason as the body below: a
+          # title can be edited, and the Actions log keeps the version that was
+          # current when the run happened. PR #2524's title was changed for
+          # exactly this reason on 2026-09-06. (BACKLOG-3133)
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_REF: ${{ github.head_ref }}
         run: |
+          set -e
           echo "Head branch: $HEAD_REF"
 
-          if [[ "$HEAD_REF" == int/* ]]; then
+          # THREE ATTEMPTS, then fail closed. `bash -e` makes a single transient
+          # 5xx or one rate-limit window red this PR with a message its author
+          # cannot act on, and a check whose failures are not actionable is the
+          # one people learn to ignore. Writes to a `.part` file and moves it
+          # only on success, so a half-written response is never read back.
+          gh_api_retry() {
+            dest="$1"
+            shift
+            attempt=0
+            while [ "$attempt" -lt 3 ]; do
+              attempt=$((attempt + 1))
+              if gh api "$@" > "$dest.part" 2> "$dest.err"; then
+                mv "$dest.part" "$dest"
+                return 0
+              fi
+              echo "gh api attempt $attempt of 3 failed."
+              # First line only, from gh's own stderr. An API error is
+              # 'gh: Not Found (HTTP 404)'-shaped; a whole response could carry
+              # the PR body, which is the thing BACKLOG-3133 keeps out of logs.
+              head -n 1 "$dest.err" || true
+              if [ "$attempt" -lt 3 ]; then sleep 5; fi
+            done
+            echo "::error title=Validate PR Metrics::Could not read the pull request from the API after 3 attempts. Infrastructure failure, not a metrics finding — re-run the job."
+            return 1
+          }
+
+          gh_api_retry "$RUNNER_TEMP/pr-title.txt" \
+            "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.title'
+          PR_TITLE="$(cat "$RUNNER_TEMP/pr-title.txt")"
+
+          if [[ "$HEAD_REF" == int/* || "$HEAD_REF" == int-portal/* ]]; then
             echo "skip=true" >> $GITHUB_OUTPUT
-            echo "skip_reason=integration branch (int/*)" >> $GITHUB_OUTPUT
-            echo "::notice::Metrics validation skipped - integration branch (int/*) combines multiple tasks"
+            echo "skip_reason=integration branch (int/*, int-portal/*)" >> $GITHUB_OUTPUT
+            echo "::notice::Metrics validation skipped - integration branch (int/*, int-portal/*) combines multiple tasks"
           elif [[ "$HEAD_REF" == squash/* ]]; then
             # PM squash/aggregate PRs (BACKLOG-2685). A squash collapses many
             # agents' commits into one; there is no single engineer to attribute
@@ -102,12 +145,61 @@ jobs:
         id: validate
         if: steps.skip-check.outputs.skip != 'true'
         env:
-          # Untrusted input passed via env, never interpolated into run: —
-          # prevents GitHub Actions workflow injection (a PR body containing
-          # a heredoc terminator could otherwise execute arbitrary shell).
-          PR_BODY: ${{ github.event.pull_request.body }}
+          # The body is FETCHED, not handed in through `env:`. (BACKLOG-3133)
+          #
+          # This step used to carry `PR_BODY: ${{ github.event.pull_request.body }}`.
+          # That is injection-safe and DISCLOSURE-UNSAFE: the runner prints the
+          # resolved `env:` block into the step log, so the whole PR description
+          # was republished verbatim into a log that on this PUBLIC repository is
+          # world-readable and survives every later edit of that description.
+          #
+          # Measured: the log for this workflow's 2026-09-06T02:46:13Z run on
+          # PR #2524 still carries that PR's pre-rewrite body — the revision the
+          # SR blocked over — and the run page answers an unauthenticated GET
+          # with HTTP 200. Editing the description did not touch it. Deleting the
+          # workflow run is the self-service remedy, and that is the founder's
+          # call, not this workflow's.
+          #
+          # Injection safety is unchanged: only the PR number travels through
+          # `env:`, and nothing author-controlled is interpolated into `run:`.
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           echo "=== Validating PR Metrics ==="
+          echo ""
+
+          # THREE ATTEMPTS, then fail closed. `bash -e` makes a single transient
+          # 5xx or one rate-limit window red this PR with a message its author
+          # cannot act on, and a check whose failures are not actionable is the
+          # one people learn to ignore. Writes to a `.part` file and moves it
+          # only on success, so a half-written response is never read back.
+          gh_api_retry() {
+            dest="$1"
+            shift
+            attempt=0
+            while [ "$attempt" -lt 3 ]; do
+              attempt=$((attempt + 1))
+              if gh api "$@" > "$dest.part" 2> "$dest.err"; then
+                mv "$dest.part" "$dest"
+                return 0
+              fi
+              echo "gh api attempt $attempt of 3 failed."
+              # First line only, from gh's own stderr. An API error is
+              # 'gh: Not Found (HTTP 404)'-shaped; a whole response could carry
+              # the PR body, which is the thing BACKLOG-3133 keeps out of logs.
+              head -n 1 "$dest.err" || true
+              if [ "$attempt" -lt 3 ]; then sleep 5; fi
+            done
+            echo "::error title=Validate PR Metrics::Could not read the pull request from the API after 3 attempts. Infrastructure failure, not a metrics finding — re-run the job."
+            return 1
+          }
+
+          # Read the body from a file rather than an env var, so it never
+          # appears in the step's printed environment.
+          gh_api_retry "$RUNNER_TEMP/pr-body.txt" \
+            "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.body // ""'
+          PR_BODY="$(cat "$RUNNER_TEMP/pr-body.txt")"
+          echo "body bytes: $(wc -c < "$RUNNER_TEMP/pr-body.txt")"
           echo ""
 
           # Check 1: Engineer Metrics section exists
@@ -141,6 +233,36 @@ jobs:
             exit 1
           fi
           echo "  [PASS] Task/Backlog cross-reference found"
+
+          # Check 4: the locked Public Repository Notice, VERBATIM (BACKLOG-3133)
+          #
+          # An EXACT-string test, not a keyword test. The point is that the
+          # sentence cannot be softened. "Try not to describe vulnerabilities"
+          # and "Do not describe vulnerabilities" both contain every word a
+          # keyword check would look for; only one of them is the rule.
+          #
+          # `grep -F` on a here-string rather than a bash `=~` match: the
+          # sentence contains no regex metacharacters today, but a future edit
+          # to it would silently turn one into a wildcard and weaken the check
+          # without anyone touching this file.
+          echo ""
+          echo "Check 4: Public Repository Notice (verbatim)..."
+          NOTICE='This repository is public. Do not describe vulnerabilities, addresses, credentials, endpoints, or network layout here. Link the backlog item.'
+          if ! printf '%s' "$PR_BODY" | grep -qF -- "$NOTICE"; then
+            echo "::error::PR body is missing the Public Repository Notice, or it has been altered"
+            echo "  The PR body must contain this sentence, exactly, unaltered:"
+            echo ""
+            echo "    $NOTICE"
+            echo ""
+            echo "  It is a fixed sentence and not a checkbox because a checkbox gets"
+            echo "  ticked. On 2026-09-03 and 2026-09-06 an agent wrote accurate security"
+            echo "  detail into a commit message and a PR body having read the prose rule"
+            echo "  minutes earlier (BACKLOG-3087, BACKLOG-3114)."
+            echo ""
+            echo "  Copy it from .github/PULL_REQUEST_TEMPLATE.md. Do not reword it."
+            exit 1
+          fi
+          echo "  [PASS] Public Repository Notice present and unaltered"
 
           echo ""
           echo "Note: numeric metrics are auto-captured to Supabase pm_token_metrics"
@@ -185,6 +307,7 @@ jobs:
             echo "- [x] Engineer Metrics section" >> $GITHUB_STEP_SUMMARY
             echo "- [x] Agent ID (pm_token_metrics linkage key)" >> $GITHUB_STEP_SUMMARY
             echo "- [x] Task/Backlog cross-reference" >> $GITHUB_STEP_SUMMARY
+            echo "- [x] Public Repository Notice (verbatim)" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "> Numeric metrics live in Supabase \`pm_token_metrics\` (auto-captured — BACKLOG-1873)." >> $GITHUB_STEP_SUMMARY
           else

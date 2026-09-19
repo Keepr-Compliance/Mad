@@ -4,6 +4,10 @@
  * Extracted from macOSMessagesImportService.ts for maintainability.
  */
 
+// BACKLOG-2832: ONE definition of the progress phase, shared with the IPC
+// contract, the preload bridge and the renderer.
+import type { ImportPhase } from "../../types/ipc/importPhase";
+
 // ============================================
 // EXPORTED TYPES (public API)
 // ============================================
@@ -180,7 +184,7 @@ export interface MacOSImportResult {
  * Progress callback for import operations
  */
 export type ImportProgressCallback = (progress: {
-  phase: "querying" | "deleting" | "importing" | "attachments";
+  phase: ImportPhase;
   current: number;
   total: number;
   percent: number;

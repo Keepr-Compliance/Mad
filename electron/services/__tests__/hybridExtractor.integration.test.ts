@@ -142,7 +142,7 @@ describe('HybridExtractor Integration Tests', () => {
 
     // Setup default mocks for fully configured LLM
     mockGetUserConfig.mockResolvedValue(mockUserConfigs.fullyConfigured);
-    mockGetLLMSettings.mockReturnValue(mockLLMSettings.configured);
+    mockGetLLMSettings.mockResolvedValue(mockLLMSettings.configured);
 
     // Setup pattern matcher to recognize real estate emails
     mockAnalyzeEmail.mockImplementation((email: { subject?: string; body?: string }) => {

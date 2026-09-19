@@ -97,6 +97,7 @@
 import crypto from "crypto";
 import type { Contact } from "../../types";
 import { dbGet, dbAll, dbRun, ensureDb, dbTransaction } from "./core/dbConnection";
+import { sql } from "./core/sqlText";
 
 // Transaction contact association data
 // Note: `role` now stores SPECIFIC_ROLES values (ContactRole) — normalized from specific_role on writes
@@ -205,9 +206,11 @@ export async function linkContactToTransaction(
    * contact's default role are ONE write. A throw between them left the person
    * attached to the deal while their stored role said something else.
    *
-   * The callback is SYNCHRONOUS even though this function is `async` — that is
-   * what makes wrapping safe here. An async callback would let the transaction
-   * commit over a rejected promise; see `createTransactionSync`.
+   * The callback below is deliberately synchronous even though this function is
+   * `async`; `dbTransaction` requires a synchronous callback (BACKLOG-2960).
+   * What is at stake if a callback in this position is not synchronous is
+   * asserted, by name, in
+   * `db/__tests__/transactionDbService.atomicDealCreate-2538.test.ts`.
    */
   dbTransaction(() => {
     const id = crypto.randomUUID();
@@ -217,7 +220,7 @@ export async function linkContactToTransaction(
     // throw on every re-add. Upsert instead, clearing the tombstone — re-adding
     // someone revives the original row and its history rather than starting a new
     // one.
-    const sql = `
+    const statement = sql`
       INSERT INTO transaction_contacts (
         id, transaction_id, contact_id, role, role_category, specific_role, is_primary, notes
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -240,12 +243,12 @@ export async function linkContactToTransaction(
       null,
     ];
 
-    dbRun(sql, params);
+    dbRun(statement, params);
 
     // Auto-update contact default_role
     if (role) {
       dbRun(
-        `UPDATE contacts SET default_role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+        sql`UPDATE contacts SET default_role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
         [role, contactId]
       );
     }
@@ -254,30 +257,37 @@ export async function linkContactToTransaction(
 }
 
 /**
- * Assign contact to transaction with detailed role data
- * Uses INSERT OR REPLACE to handle duplicate assignments gracefully
+ * Assign a contact to a transaction with detailed role data.
+ *
+ * The promise side of the pair (BACKLOG-2960). Deliberately a PLAIN function
+ * rather than `async`, and deliberately eager: the sync core is called and only
+ * its VALUE is handed to `Promise.resolve`. The reason that shape is required
+ * of every seam export, and what changes when it is not held, is asserted by
+ * name in `db/__tests__/transactionDbService.atomicDealCreate-2538.test.ts`.
+ *
+ * Duplicate assignments are resolved inside the sync core, which probes for an
+ * existing (transaction, contact) row and UPDATEs it. There is no
+ * `INSERT OR REPLACE` on this path.
  */
-export async function assignContactToTransaction(
+export function assignContactToTransaction(
   transactionId: string,
   data: TransactionContactData,
 ): Promise<string> {
-  return assignContactToTransactionSync(transactionId, data);
+  return Promise.resolve(assignContactToTransactionSync(transactionId, data));
 }
 
 /**
  * The synchronous core of `assignContactToTransaction` (BACKLOG-2538).
  *
- * WHY IT HAD TO BE SPLIT OUT. Creating a deal with its parties is now ONE
- * transaction, and `dbTransaction` takes a SYNCHRONOUS callback. This body was
- * already synchronous — every statement is `dbGet`/`dbRun` — but the `async`
- * keyword turns a throw into a REJECTED PROMISE rather than a synchronous
- * throw. Called from inside `dbTransaction`, the callback would appear to
- * return normally and the transaction would COMMIT over the failure, with the
- * error surfacing later as an unhandled rejection. **The deal would keep the
- * parties that had already been written and lose the rest, silently** — the
- * exact outcome the transaction exists to prevent.
+ * WHY IT IS SPLIT OUT. Creating a deal with its parties is ONE transaction, and
+ * `dbTransaction` takes a SYNCHRONOUS callback — so the composition in
+ * `transactionDbService.createTransactionWithContactsSync` needs a callee that
+ * is synchronous all the way down. Every statement here is `dbGet`/`dbRun`.
  *
- * The async wrapper stays because other callers await it.
+ * This function must stay synchronous, and stays exported for that one
+ * consumer; the promise side of the pair is the plain wrapper above. What is at
+ * stake if it does not stay synchronous is asserted, by name, in
+ * `db/__tests__/transactionDbService.atomicDealCreate-2538.test.ts`.
  */
 export function assignContactToTransactionSync(
   transactionId: string,
@@ -311,7 +321,7 @@ export function assignContactToTransactionSync(
   }
 
   // First check if this contact is already assigned to this transaction
-  const existingCheck = `
+  const existingCheck = sql`
     SELECT id FROM transaction_contacts
     WHERE transaction_id = ? AND contact_id = ?
   `;
@@ -328,7 +338,7 @@ export function assignContactToTransactionSync(
     // removed_at/removed_reason here IS the revive path: re-adding someone
     // restores their original row (and its created_at) instead of inserting a
     // second one.
-    const updateSql = `
+    const updateSql = sql`
       UPDATE transaction_contacts
       SET role = ?, role_category = ?, specific_role = ?, is_primary = ?, notes = ?,
           removed_at = NULL, removed_reason = NULL, updated_at = CURRENT_TIMESTAMP
@@ -346,7 +356,7 @@ export function assignContactToTransactionSync(
     // Auto-update contact default_role
     if (data.specific_role) {
       dbRun(
-        `UPDATE contacts SET default_role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+        sql`UPDATE contacts SET default_role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
         [data.specific_role, data.contact_id]
       );
     }
@@ -356,7 +366,7 @@ export function assignContactToTransactionSync(
 
   // Insert new assignment
   const id = crypto.randomUUID();
-  const sql = `
+  const statement = sql`
     INSERT INTO transaction_contacts (
       id, transaction_id, contact_id, role, role_category, specific_role, is_primary, notes
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -373,12 +383,12 @@ export function assignContactToTransactionSync(
     data.notes || null,
   ];
 
-  dbRun(sql, params);
+  dbRun(statement, params);
 
   // Auto-update contact default_role
   if (data.specific_role) {
     dbRun(
-      `UPDATE contacts SET default_role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      sql`UPDATE contacts SET default_role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
       [data.specific_role, data.contact_id]
     );
   }
@@ -392,7 +402,7 @@ export function assignContactToTransactionSync(
 export async function getTransactionContacts(
   transactionId: string,
 ): Promise<Contact[]> {
-  const sql = `
+  const statement = sql`
     SELECT
       c.*
     FROM transaction_contacts tc
@@ -401,7 +411,7 @@ export async function getTransactionContacts(
     ORDER BY tc.is_primary DESC, tc.created_at ASC
   `;
 
-  return dbAll<Contact>(sql, [transactionId]);
+  return dbAll<Contact>(statement, [transactionId]);
 }
 
 /**
@@ -410,7 +420,7 @@ export async function getTransactionContacts(
 export async function getTransactionContactsWithRoles(
   transactionId: string,
 ): Promise<TransactionContactResult[]> {
-  const sql = `
+  const statement = sql`
     SELECT
       tc.*,
       c.display_name as contact_name,
@@ -439,7 +449,7 @@ export async function getTransactionContactsWithRoles(
     ORDER BY tc.is_primary DESC, tc.created_at ASC
   `;
 
-  return dbAll<TransactionContactResult>(sql, [transactionId]);
+  return dbAll<TransactionContactResult>(statement, [transactionId]);
 }
 
 /**
@@ -449,7 +459,7 @@ export async function getTransactionContactsByRole(
   transactionId: string,
   role: string,
 ): Promise<TransactionContactResult[]> {
-  const sql = `
+  const statement = sql`
     SELECT
       tc.*,
       c.display_name as contact_name,
@@ -477,7 +487,7 @@ export async function getTransactionContactsByRole(
     ORDER BY tc.is_primary DESC
   `;
 
-  return dbAll<TransactionContactResult>(sql, [transactionId, role]);
+  return dbAll<TransactionContactResult>(statement, [transactionId, role]);
 }
 
 /** Default when a caller removes a party without stating why. */
@@ -496,12 +506,12 @@ export async function unlinkContactFromTransaction(
   contactId: string,
   reason?: string,
 ): Promise<void> {
-  const sql = `
+  const statement = sql`
     UPDATE transaction_contacts
     SET removed_at = CURRENT_TIMESTAMP, removed_reason = ?
     WHERE transaction_id = ? AND contact_id = ? AND removed_at IS NULL
   `;
-  dbRun(sql, [reason || DEFAULT_REMOVAL_REASON, transactionId, contactId]);
+  dbRun(statement, [reason || DEFAULT_REMOVAL_REASON, transactionId, contactId]);
 }
 
 /**
@@ -514,9 +524,9 @@ export async function isContactAssignedToTransaction(
   transactionId: string,
   contactId: string,
 ): Promise<boolean> {
-  const sql =
-    "SELECT id FROM transaction_contacts WHERE transaction_id = ? AND contact_id = ? AND removed_at IS NULL LIMIT 1";
-  const result = dbGet(sql, [transactionId, contactId]);
+  const statement =
+    sql`SELECT id FROM transaction_contacts WHERE transaction_id = ? AND contact_id = ? AND removed_at IS NULL LIMIT 1`;
+  const result = dbGet(statement, [transactionId, contactId]);
   return !!result;
 }
 
@@ -531,7 +541,7 @@ export async function isContactAssignedToTransaction(
 export async function getRemovedTransactionContacts(
   transactionId: string,
 ): Promise<TransactionContactResult[]> {
-  const sql = `
+  const statement = sql`
     SELECT
       tc.*,
       c.display_name as contact_name,
@@ -557,7 +567,7 @@ export async function getRemovedTransactionContacts(
     ORDER BY tc.removed_at DESC
   `;
 
-  return dbAll<TransactionContactResult>(sql, [transactionId]);
+  return dbAll<TransactionContactResult>(statement, [transactionId]);
 }
 
 /**
@@ -601,12 +611,12 @@ export async function restoreContactToTransaction(
   transactionId: string,
   contactId: string,
 ): Promise<boolean> {
-  const sql = `
+  const statement = sql`
     UPDATE transaction_contacts
     SET removed_at = NULL, removed_reason = NULL, updated_at = CURRENT_TIMESTAMP
     WHERE transaction_id = ? AND contact_id = ? AND removed_at IS NOT NULL
   `;
-  const { changes } = dbRun(sql, [transactionId, contactId]);
+  const { changes } = dbRun(statement, [transactionId, contactId]);
   return changes > 0;
 }
 

@@ -111,7 +111,7 @@ export function openSqliteReadOnly(
         // Post-open driver error. This listener exists so the event has somewhere
         // to go — without it Node turns it into an uncaught exception. Log rather
         // than swallow so a late failure is at least diagnosable.
-        logService.error(
+        void logService.error(
           `SQLite error after open: ${err.message}`,
           context,
           { error: err },

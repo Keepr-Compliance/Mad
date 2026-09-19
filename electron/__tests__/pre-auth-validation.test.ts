@@ -98,6 +98,9 @@ describe("handlePreAuthValidation", () => {
       expect(result).toEqual({ valid: true, noSession: true });
       expect(mockSetSession).not.toHaveBeenCalled();
       expect(mockGetUser).not.toHaveBeenCalled();
+      // BACKLOG-3147: this guard is why this caller cannot produce "No session to update"
+      // on a signed-out startup. Goes red if the early return is ever removed.
+      expect(mockUpdateSession).not.toHaveBeenCalled();
     });
 
     it("returns valid with noSession when session exists but no supabaseTokens", async () => {
@@ -110,6 +113,8 @@ describe("handlePreAuthValidation", () => {
 
       expect(result).toEqual({ valid: true, noSession: true });
       expect(mockSetSession).not.toHaveBeenCalled();
+      // BACKLOG-3147: same guard, the no-tokens half of it.
+      expect(mockUpdateSession).not.toHaveBeenCalled();
     });
   });
 

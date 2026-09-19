@@ -65,10 +65,10 @@ describe("llmSettingsDbService", () => {
   });
 
   describe("getLLMSettingsByUserId", () => {
-    it("should return null when no settings exist", () => {
+    it("should return null when no settings exist", async () => {
       mockDbGet.mockReturnValue(undefined);
 
-      const result = getLLMSettingsByUserId(TEST_USER_ID);
+      const result = await getLLMSettingsByUserId(TEST_USER_ID);
 
       expect(result).toBeNull();
       expect(mockDbGet).toHaveBeenCalledWith(
@@ -77,10 +77,10 @@ describe("llmSettingsDbService", () => {
       );
     });
 
-    it("should return settings when they exist", () => {
+    it("should return settings when they exist", async () => {
       mockDbGet.mockReturnValue(mockLLMSettingsRow);
 
-      const result = getLLMSettingsByUserId(TEST_USER_ID);
+      const result = await getLLMSettingsByUserId(TEST_USER_ID);
 
       expect(result).not.toBeNull();
       expect(result?.id).toBe("test-llm-settings-uuid");
@@ -88,7 +88,7 @@ describe("llmSettingsDbService", () => {
       expect(result?.preferred_provider).toBe("openai");
     });
 
-    it("should convert SQLite integers to booleans", () => {
+    it("should convert SQLite integers to booleans", async () => {
       mockDbGet.mockReturnValue({
         ...mockLLMSettingsRow,
         use_platform_allowance: 1,
@@ -97,7 +97,7 @@ describe("llmSettingsDbService", () => {
         llm_data_consent: 1,
       });
 
-      const result = getLLMSettingsByUserId(TEST_USER_ID);
+      const result = await getLLMSettingsByUserId(TEST_USER_ID);
 
       expect(result?.use_platform_allowance).toBe(true);
       expect(result?.enable_auto_detect).toBe(false);
@@ -107,11 +107,11 @@ describe("llmSettingsDbService", () => {
   });
 
   describe("createLLMSettings", () => {
-    it("should create settings with default values", () => {
+    it("should create settings with default values", async () => {
       mockDbRun.mockReturnValue({ lastInsertRowid: 1, changes: 1 });
       mockDbGet.mockReturnValue(mockLLMSettingsRow);
 
-      const result = createLLMSettings(TEST_USER_ID);
+      const result = await createLLMSettings(TEST_USER_ID);
 
       expect(mockDbRun).toHaveBeenCalledWith(
         expect.stringContaining("INSERT INTO llm_settings"),
@@ -121,7 +121,12 @@ describe("llmSettingsDbService", () => {
       expect(result.user_id).toBe(TEST_USER_ID);
     });
 
-    it("should throw error if creation fails", () => {
+    // BACKLOG-2960: kept SYNCHRONOUS on purpose. These exports return promises
+    // but are plain functions, never `async`, so a failure still throws before
+    // the promise is constructed — `.toThrow()` here is what goes red if anyone
+    // makes one of them `async` (SR 79c3aa69 §2a: an async wrapper turns the
+    // throw into a rejection and an enclosing transaction commits over it).
+    it("should throw error if creation fails", async () => {
       mockDbRun.mockReturnValue({ lastInsertRowid: 0, changes: 0 });
       mockDbGet.mockReturnValue(undefined);
 
@@ -132,23 +137,23 @@ describe("llmSettingsDbService", () => {
   });
 
   describe("getOrCreateLLMSettings", () => {
-    it("should return existing settings if they exist", () => {
+    it("should return existing settings if they exist", async () => {
       mockDbGet.mockReturnValue(mockLLMSettingsRow);
 
-      const result = getOrCreateLLMSettings(TEST_USER_ID);
+      const result = await getOrCreateLLMSettings(TEST_USER_ID);
 
       expect(result.id).toBe("test-llm-settings-uuid");
       expect(mockDbRun).not.toHaveBeenCalled();
     });
 
-    it("should create settings if they do not exist", () => {
+    it("should create settings if they do not exist", async () => {
       mockDbGet
         .mockReturnValueOnce(undefined) // First call: check if exists
         .mockReturnValue(mockLLMSettingsRow); // Second call: after creation
 
       mockDbRun.mockReturnValue({ lastInsertRowid: 1, changes: 1 });
 
-      const result = getOrCreateLLMSettings(TEST_USER_ID);
+      const result = await getOrCreateLLMSettings(TEST_USER_ID);
 
       expect(result.id).toBe("test-llm-settings-uuid");
       expect(mockDbRun).toHaveBeenCalled();
@@ -156,14 +161,14 @@ describe("llmSettingsDbService", () => {
   });
 
   describe("updateLLMSettings", () => {
-    it("should update allowed fields", () => {
+    it("should update allowed fields", async () => {
       mockDbRun.mockReturnValue({ lastInsertRowid: 0, changes: 1 });
       mockDbGet.mockReturnValue({
         ...mockLLMSettingsRow,
         preferred_provider: "anthropic",
       });
 
-      const result = updateLLMSettings(TEST_USER_ID, {
+      const result = await updateLLMSettings(TEST_USER_ID, {
         preferred_provider: "anthropic",
       });
 
@@ -174,14 +179,14 @@ describe("llmSettingsDbService", () => {
       expect(result.preferred_provider).toBe("anthropic");
     });
 
-    it("should convert boolean values to integers", () => {
+    it("should convert boolean values to integers", async () => {
       mockDbRun.mockReturnValue({ lastInsertRowid: 0, changes: 1 });
       mockDbGet.mockReturnValue({
         ...mockLLMSettingsRow,
         enable_auto_detect: 0,
       });
 
-      updateLLMSettings(TEST_USER_ID, {
+      await updateLLMSettings(TEST_USER_ID, {
         enable_auto_detect: false,
       });
 
@@ -199,7 +204,9 @@ describe("llmSettingsDbService", () => {
      * the caller was handed a settings object for a write that never happened.
      * Throwing matches `updateUser`, `updateCommunication` and the rest of db/.
      */
-    it("throws on a payload with nothing writable, rather than reporting success", () => {
+    // Synchronous on purpose — see the note on `createLLMSettings` above: a
+    // plain promise-returning wrapper still throws before the promise exists.
+    it("throws on a payload with nothing writable, rather than reporting success", async () => {
       mockDbGet.mockReturnValue(mockLLMSettingsRow);
 
       expect(() => updateLLMSettings(TEST_USER_ID, {})).toThrow(
@@ -214,10 +221,10 @@ describe("llmSettingsDbService", () => {
   });
 
   describe("incrementTokenUsage", () => {
-    it("should increment token count", () => {
+    it("should increment token count", async () => {
       mockDbRun.mockReturnValue({ lastInsertRowid: 0, changes: 1 });
 
-      incrementTokenUsage(TEST_USER_ID, 100);
+      await incrementTokenUsage(TEST_USER_ID, 100);
 
       expect(mockDbRun).toHaveBeenCalledWith(
         expect.stringContaining("tokens_used_this_month = tokens_used_this_month + ?"),
@@ -227,10 +234,10 @@ describe("llmSettingsDbService", () => {
   });
 
   describe("incrementPlatformAllowanceUsage", () => {
-    it("should increment platform allowance usage", () => {
+    it("should increment platform allowance usage", async () => {
       mockDbRun.mockReturnValue({ lastInsertRowid: 0, changes: 1 });
 
-      incrementPlatformAllowanceUsage(TEST_USER_ID, 50);
+      await incrementPlatformAllowanceUsage(TEST_USER_ID, 50);
 
       expect(mockDbRun).toHaveBeenCalledWith(
         expect.stringContaining("platform_allowance_used = platform_allowance_used + ?"),
@@ -240,10 +247,10 @@ describe("llmSettingsDbService", () => {
   });
 
   describe("resetMonthlyUsage", () => {
-    it("should reset monthly token usage", () => {
+    it("should reset monthly token usage", async () => {
       mockDbRun.mockReturnValue({ lastInsertRowid: 0, changes: 1 });
 
-      resetMonthlyUsage(TEST_USER_ID);
+      await resetMonthlyUsage(TEST_USER_ID);
 
       expect(mockDbRun).toHaveBeenCalledWith(
         expect.stringContaining("tokens_used_this_month = 0"),
@@ -253,7 +260,7 @@ describe("llmSettingsDbService", () => {
   });
 
   describe("setLLMDataConsent", () => {
-    it("should set consent to true with timestamp", () => {
+    it("should set consent to true with timestamp", async () => {
       mockDbRun.mockReturnValue({ lastInsertRowid: 0, changes: 1 });
       mockDbGet.mockReturnValue({
         ...mockLLMSettingsRow,
@@ -261,7 +268,7 @@ describe("llmSettingsDbService", () => {
         llm_data_consent_at: "2025-12-17T12:00:00.000Z",
       });
 
-      const result = setLLMDataConsent(TEST_USER_ID, true);
+      const result = await setLLMDataConsent(TEST_USER_ID, true);
 
       expect(mockDbRun).toHaveBeenCalledWith(
         expect.stringContaining("llm_data_consent = ?"),
@@ -270,7 +277,7 @@ describe("llmSettingsDbService", () => {
       expect(result.llm_data_consent).toBe(true);
     });
 
-    it("should set consent to false and clear timestamp", () => {
+    it("should set consent to false and clear timestamp", async () => {
       mockDbRun.mockReturnValue({ lastInsertRowid: 0, changes: 1 });
       mockDbGet.mockReturnValue({
         ...mockLLMSettingsRow,
@@ -278,7 +285,7 @@ describe("llmSettingsDbService", () => {
         llm_data_consent_at: null,
       });
 
-      const result = setLLMDataConsent(TEST_USER_ID, false);
+      const result = await setLLMDataConsent(TEST_USER_ID, false);
 
       expect(mockDbRun).toHaveBeenCalledWith(
         expect.stringContaining("llm_data_consent = ?"),
@@ -289,10 +296,10 @@ describe("llmSettingsDbService", () => {
   });
 
   describe("deleteLLMSettings", () => {
-    it("should delete settings for user", () => {
+    it("should delete settings for user", async () => {
       mockDbRun.mockReturnValue({ lastInsertRowid: 0, changes: 1 });
 
-      deleteLLMSettings(TEST_USER_ID);
+      await deleteLLMSettings(TEST_USER_ID);
 
       expect(mockDbRun).toHaveBeenCalledWith(
         expect.stringContaining("DELETE FROM llm_settings"),

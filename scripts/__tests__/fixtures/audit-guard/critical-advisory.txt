@@ -1,0 +1,15 @@
+# npm audit report
+
+shell-quote  <=1.8.4
+Severity: critical
+Potential Command Injection in shell-quote - https://github.com/advisories/GHSA-qg8p-v9q4-gh34
+shell-quote quote() does not escape newlines in object .op values - https://github.com/advisories/GHSA-w7jw-789q-3m8p
+shell-quote: Quadratic-complexity Denial of Service in `parse()` (CWE-407) - https://github.com/advisories/GHSA-395f-4hp3-45gv
+fix available via `npm audit fix --force`
+Will install shell-quote@1.10.0, which is outside the stated dependency range
+node_modules/shell-quote
+
+1 critical severity vulnerability
+
+To address all issues, run:
+  npm audit fix --force

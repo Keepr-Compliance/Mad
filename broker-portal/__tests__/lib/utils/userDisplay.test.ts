@@ -17,6 +17,9 @@ import {
   getAssignableRoles,
   canAssignRole,
   getProvisioningDescription,
+  getDashboardHeading,
+  resolveViewerIdentity,
+  resolveViewerName,
 } from '../../../lib/utils/userDisplay';
 
 import {
@@ -314,5 +317,117 @@ describe('Type Constants', () => {
       expect(PROVISIONING_SOURCE_LABELS.jit).toBe('Just-in-Time');
       expect(PROVISIONING_SOURCE_LABELS.invite).toBe('Invited');
     });
+  });
+});
+
+// ============================================================================
+// Viewer Identity Tests (BACKLOG-3077)
+// ============================================================================
+
+describe('resolveViewerIdentity', () => {
+  it('names the signed-in user from user_metadata.full_name', () => {
+    expect(
+      resolveViewerIdentity(null, {
+        email: 'john.doe@example.com',
+        user_metadata: { full_name: 'John Doe', name: 'jdoe' },
+      })
+    ).toEqual({ displayName: 'John Doe', displayEmail: 'john.doe@example.com' });
+  });
+
+  it('falls back to user_metadata.name when full_name is absent', () => {
+    expect(
+      resolveViewerIdentity(null, {
+        email: 'john.doe@example.com',
+        user_metadata: { name: 'Johnny' },
+      })
+    ).toEqual({ displayName: 'Johnny', displayEmail: 'john.doe@example.com' });
+  });
+
+  it('leaves displayName undefined when metadata carries no usable name', () => {
+    expect(
+      resolveViewerIdentity(null, {
+        email: 'john.doe@example.com',
+        user_metadata: { full_name: '   ', name: 42 },
+      })
+    ).toEqual({ displayName: undefined, displayEmail: 'john.doe@example.com' });
+  });
+
+  it('names the IMPERSONATED user, not the admin driving the session', () => {
+    expect(
+      resolveViewerIdentity(
+        { target_name: 'Jane Seller', target_email: 'jane.seller@example.com' },
+        { email: 'admin@example.com', user_metadata: { full_name: 'Pat Riverton' } }
+      )
+    ).toEqual({ displayName: 'Jane Seller', displayEmail: 'jane.seller@example.com' });
+  });
+
+  it('uses the impersonated email when the session carries no target name', () => {
+    expect(
+      resolveViewerIdentity(
+        { target_name: '', target_email: 'jane.seller@example.com' },
+        { email: 'admin@example.com', user_metadata: { full_name: 'Pat Riverton' } }
+      )
+    ).toEqual({ displayName: undefined, displayEmail: 'jane.seller@example.com' });
+  });
+
+  it('returns an empty identity when there is no session and no user', () => {
+    expect(resolveViewerIdentity(null, null)).toEqual({
+      displayName: undefined,
+      displayEmail: '',
+    });
+  });
+});
+
+describe('resolveViewerName', () => {
+  it('prefers the display name', () => {
+    expect(
+      resolveViewerName({ displayName: 'John Doe', displayEmail: 'jdoe@example.com' })
+    ).toBe('John Doe');
+  });
+
+  it('falls back to the email local part', () => {
+    expect(resolveViewerName({ displayEmail: 'jdoe@example.com' })).toBe('jdoe');
+  });
+
+  it('returns empty string when the email has an empty local part', () => {
+    expect(resolveViewerName({ displayEmail: '@example.com' })).toBe('');
+  });
+
+  it('returns empty string when nothing is available', () => {
+    expect(resolveViewerName({ displayName: '   ', displayEmail: '' })).toBe('');
+  });
+});
+
+describe('getDashboardHeading', () => {
+  it('greets by first name when a full name is available', () => {
+    expect(
+      getDashboardHeading({ displayName: 'John Doe', displayEmail: 'john@example.com' })
+    ).toBe('Welcome back, John');
+  });
+
+  it('uses a single-word name whole', () => {
+    expect(getDashboardHeading({ displayName: 'Madison', displayEmail: '' })).toBe(
+      'Welcome back, Madison'
+    );
+  });
+
+  it('greets with the email local part when there is no name', () => {
+    expect(getDashboardHeading({ displayEmail: 'jdoe@example.com' })).toBe(
+      'Welcome back, jdoe'
+    );
+  });
+
+  it('falls back to "Dashboard" when nothing identifies the person', () => {
+    expect(getDashboardHeading({ displayEmail: '' })).toBe('Dashboard');
+  });
+
+  it('falls back to "Dashboard" rather than greeting an empty email local part', () => {
+    expect(getDashboardHeading({ displayEmail: '@example.com' })).toBe('Dashboard');
+  });
+
+  it('falls back to "Dashboard" for a whitespace-only name and no email', () => {
+    expect(getDashboardHeading({ displayName: '   ', displayEmail: '   ' })).toBe(
+      'Dashboard'
+    );
   });
 });

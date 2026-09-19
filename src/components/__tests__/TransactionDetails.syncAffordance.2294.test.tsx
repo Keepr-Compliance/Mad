@@ -25,6 +25,7 @@ import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import TransactionDetails from "../TransactionDetails";
 import type { Transaction } from "../../../electron/types/models";
+import type { ImportPhase } from "../../../electron/types/ipc/importPhase";
 
 jest.mock("../../contexts/LicenseContext", () => ({
   useLicense: () => ({
@@ -77,7 +78,7 @@ jest.mock("../transactionDetailsModule/components/TransactionMessagesTab", () =>
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
 interface ImportProgress {
-  phase: "deleting" | "importing" | "attachments";
+  phase: ImportPhase;
   current: number;
   total: number;
   percent: number;
@@ -142,7 +143,7 @@ describe("TransactionDetails — messagesSyncInFlight is driven by the 2292 life
     await waitFor(() => expect(window.api.transactions.getDetails).toHaveBeenCalled());
 
     // Open the Texts tab so the (stubbed) tab renders and we can read the prop.
-    await userEvent.click(screen.getByText("Texts"));
+    await userEvent.click(await screen.findByText("Texts"));
     const tab = await screen.findByTestId("messages-tab");
     expect(tab).toHaveAttribute("data-in-flight", "false");
 

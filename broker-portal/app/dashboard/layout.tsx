@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
 import { getImpersonationSession } from '@/lib/impersonation';
 import { DashboardShell } from '@/components/layout/DashboardShell';
+import { resolveViewerIdentity } from '@/lib/utils/userDisplay';
 
 async function getUserWithRole() {
   const supabase = await createClient();
@@ -19,7 +20,6 @@ async function getUserWithRole() {
   return {
     ...user,
     role: membership?.role || undefined,
-    name: user.user_metadata?.full_name || user.user_metadata?.name || undefined,
   };
 }
 
@@ -39,13 +39,9 @@ export default async function DashboardLayout({
     redirect('/login');
   }
 
-  // During impersonation, use target user info from the session
-  const displayEmail = isImpersonating
-    ? impersonation.target_email
-    : (user?.email || '');
-  const displayName = isImpersonating
-    ? impersonation.target_name
-    : user?.name;
+  // During impersonation, use target user info from the session.
+  // BACKLOG-3077: one resolution, shared with the dashboard header.
+  const { displayName, displayEmail } = resolveViewerIdentity(impersonation, user);
   const displayRole = isImpersonating ? undefined : user?.role;
 
   return (

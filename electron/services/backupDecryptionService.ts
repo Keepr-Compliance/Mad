@@ -13,6 +13,7 @@ import fs from "fs";
 import path from "path";
 import plist from "simple-plist";
 import logService from "./logService";
+import { MANIFEST_FILE_BY_ID_SQL } from "./db/iosBackupManifestSql";
 import type {
   DecryptionResult,
   ManifestPlist,
@@ -542,9 +543,7 @@ export class BackupDecryptionService {
   ): Promise<void> {
     // Look up file in Manifest.db
     const row = manifestDb
-      .prepare(
-        "SELECT fileID, domain, relativePath, file FROM Files WHERE fileID = ?",
-      )
+      .prepare(MANIFEST_FILE_BY_ID_SQL)
       .get(fileHash) as
       | { fileID: string; domain: string; relativePath: string; file: Buffer }
       | undefined;

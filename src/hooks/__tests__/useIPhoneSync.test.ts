@@ -559,6 +559,8 @@ describe("useIPhoneSync", () => {
         bytesProcessed: 300000,
         processedFiles: 50,
         estimatedTotalBytes: 1000000,
+        // BACKLOG-3416: ~293 KiB would promote to KB; the unit is floored at MB.
+        displayUnitIndex: 2,
       });
     });
   });
@@ -1513,6 +1515,201 @@ describe("useIPhoneSync", () => {
       expect(result.current.installDriverError).toMatch(/cancelled/i);
       // Still missing so the recovery button stays available.
       expect(result.current.driverMissing).toBe(true);
+    });
+  });
+
+  /**
+   * BACKLOG-3416: the transferred-bytes readout's unit is a property of the SYNC.
+   *
+   * It is decided here, on the first non-zero byte count, floored at MB, and
+   * carried on `progress.displayUnitIndex` for the rest of that sync. It lives on
+   * the hook's state (not in SyncProgress) so it survives the modal unmounting on
+   * minimize — see IPhoneSyncModal.unitAcrossReopen-3416.test.tsx for that path.
+   *
+   * Each test is aimed at a specific wrong implementation:
+   *   climb sweep          -> deciding again on every sample (the shipped flip)
+   *   first file is small  -> no MB floor (a whole sync reads in KB)
+   *   zero does not decide -> deciding before bytes move (pins a GB sync to MB)
+   *   passcode events      -> a same-sync progress writer that drops the unit
+   *   Cancel / Continue /
+   *   Try Again / password -> a unit that bleeds into the NEXT sync
+   */
+  describe("BACKLOG-3416: the transferred-bytes unit is decided once per sync", () => {
+    const KiB = 1024;
+    const MiB = 1024 * KiB;
+    const GiB = 1024 * MiB;
+    const MB = 2;
+    const GB = 3;
+
+    const connectDevice = async () => {
+      const syncApi = setupSyncApiMock();
+      (window as unknown as { api: unknown }).api = {
+        sync: syncApi,
+        backup: { checkStatus: jest.fn().mockResolvedValue({ success: true }) },
+      };
+      const hook = renderHook(() => useIPhoneSync());
+      await act(async () => {
+        deviceConnectedCallback?.(mockDevice);
+        await Promise.resolve();
+      });
+      return hook;
+    };
+
+    type Hook = Awaited<ReturnType<typeof connectDevice>>;
+
+    const startSync = async ({ result }: Hook) => {
+      await act(async () => {
+        await result.current.startSync();
+      });
+      expect(result.current.syncStatus).toBe("syncing");
+    };
+
+    /** A backup progress event, shaped as deviceSyncOrchestrator.ts emits it. */
+    const transfer = (bytesTransferred: number | undefined) => {
+      act(() => {
+        syncProgressCallback?.({
+          phase: "backup",
+          overallProgress: 10,
+          message: "Transferring...",
+          backupProgress: { bytesTransferred, filesTransferred: 12 },
+        });
+      });
+    };
+
+    const unit = ({ result }: Hook) => result.current.progress?.displayUnitIndex;
+
+    it("decides on the first non-zero sample and holds it as the count climbs past 1 GiB", async () => {
+      const hook = await connectDevice();
+      await startSync(hook);
+
+      transfer(500 * MiB);
+      expect(unit(hook)).toBe(MB);
+
+      // Sweep the boundary rather than sampling either side of it.
+      for (const bytes of [700 * MiB, 1023 * MiB, GiB - 1, GiB, GiB + 1, 2 * GiB, 9 * GiB]) {
+        transfer(bytes);
+        expect(hook.result.current.progress?.bytesProcessed).toBe(bytes);
+        expect(unit(hook)).toBe(MB);
+      }
+    });
+
+    it("floors the decision at MB when the first completed file is only a few KB", async () => {
+      const hook = await connectDevice();
+      await startSync(hook);
+
+      // The live counter advances a whole file at a time; the first is small.
+      transfer(8 * KiB);
+      expect(unit(hook)).toBe(MB);
+
+      for (const bytes of [900 * KiB, 5 * MiB, GiB, 6 * GiB]) {
+        transfer(bytes);
+        expect(unit(hook)).toBe(MB);
+      }
+    });
+
+    it("does not decide on zero — a first real sample of 2 GiB gets GB", async () => {
+      const hook = await connectDevice();
+      await startSync(hook);
+
+      transfer(undefined);
+      expect(unit(hook)).toBeUndefined();
+      transfer(0);
+      expect(unit(hook)).toBeUndefined();
+
+      transfer(2 * GiB);
+      expect(unit(hook)).toBe(GB);
+      transfer(9 * GiB);
+      expect(unit(hook)).toBe(GB);
+    });
+
+    it("carries the unit through the passcode events of the same sync", async () => {
+      const hook = await connectDevice();
+      await startSync(hook);
+
+      transfer(8 * KiB);
+      expect(unit(hook)).toBe(MB);
+
+      act(() => {
+        waitingForPasscodeCallback?.();
+      });
+      expect(unit(hook)).toBe(MB);
+
+      act(() => {
+        passcodeEnteredCallback?.();
+      });
+      expect(unit(hook)).toBe(MB);
+
+      transfer(2 * GiB);
+      expect(unit(hook)).toBe(MB);
+    });
+
+    it("a new sync after Cancel picks its own unit", async () => {
+      const hook = await connectDevice();
+      await startSync(hook);
+      transfer(8 * KiB);
+      expect(unit(hook)).toBe(MB);
+
+      await act(async () => {
+        await hook.result.current.cancelSync();
+      });
+      expect(hook.result.current.progress).toBeNull();
+
+      await startSync(hook);
+      transfer(2 * GiB);
+      expect(unit(hook)).toBe(GB);
+    });
+
+    it("a new sync after Continue (dismiss) picks its own unit", async () => {
+      const hook = await connectDevice();
+      await startSync(hook);
+      transfer(8 * KiB);
+      expect(unit(hook)).toBe(MB);
+
+      act(() => {
+        storageCompleteCallback?.({ messagesStored: 10, contactsStored: 2, duration: 1000 });
+      });
+      expect(hook.result.current.syncStatus).toBe("complete");
+
+      act(() => {
+        hook.result.current.dismissSync();
+      });
+      expect(hook.result.current.progress).toBeNull();
+
+      await startSync(hook);
+      transfer(2 * GiB);
+      expect(unit(hook)).toBe(GB);
+    });
+
+    it("Try Again after an error picks its own unit — the old progress is still there", async () => {
+      const hook = await connectDevice();
+      await startSync(hook);
+      transfer(8 * KiB);
+
+      act(() => {
+        syncErrorCallback?.({ message: "Device disconnected" });
+      });
+      expect(hook.result.current.syncStatus).toBe("error");
+      // Nothing cleared the failed sync's progress: the error view's Try Again
+      // calls startSync directly, so startSync alone must start the unit afresh.
+      expect(unit(hook)).toBe(MB);
+
+      await startSync(hook);
+      transfer(2 * GiB);
+      expect(unit(hook)).toBe(GB);
+    });
+
+    it("a password retry is a new transfer and picks its own unit", async () => {
+      const hook = await connectDevice();
+      await startSync(hook);
+      transfer(8 * KiB);
+      expect(unit(hook)).toBe(MB);
+
+      await act(async () => {
+        await hook.result.current.submitPassword("backup-password");
+      });
+
+      transfer(2 * GiB);
+      expect(unit(hook)).toBe(GB);
     });
   });
 });

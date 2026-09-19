@@ -15,6 +15,8 @@ import type {
   MessageImportCountFilters,
   MessageImportCountResult,
 } from "@electron/types/ipc/window-api-messages";
+// BACKLOG-2832: the phase union, from the same leaf the contract uses.
+import type { ImportPhase } from "@electron/types/ipc/importPhase";
 
 /**
  * Message import status (from getImportStatus)
@@ -135,7 +137,7 @@ export const messageService = {
    */
   onImportProgress(
     callback: (progress: {
-      phase: "deleting" | "importing" | "attachments";
+      phase: ImportPhase;
       current: number;
       total: number;
       percent: number;

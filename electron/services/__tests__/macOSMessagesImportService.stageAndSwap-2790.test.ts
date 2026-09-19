@@ -534,7 +534,27 @@ describe("BACKLOG-2790 — the staging rebuild reports progress exactly as the d
     for (const event of force) {
       expect(typeof event.percent).toBe("number");
       expect(Number.isFinite(event.percent)).toBe(true);
-      expect(event.total).toBeGreaterThan(0);
+    }
+
+    // BACKLOG-3132: `total > 0` used to be asserted for EVERY event here. That
+    // was right when every phase counted something, and it is no longer: since
+    // BACKLOG-3128, `total === 0` is the contract for "this phase has no count",
+    // and it is what makes surfaces render an indeterminate stripe instead of a
+    // fabricated bar. `finalizing` — the save/swap step — genuinely has nothing
+    // to count and no knowable duration.
+    //
+    // So the invariant is narrowed to the phases that DO carry counts, and the
+    // countless one is asserted deliberately rather than exempted silently. The
+    // parity assertion above is untouched and remains this test's real promise:
+    // it passes only because the force path emits `finalizing` identically to
+    // the delta path, which is the cross-path claim BACKLOG-3132 makes.
+    for (const event of force) {
+      if (event.phase === "finalizing") {
+        expect(event.total).toBe(0);
+        expect(event.current).toBe(0);
+      } else {
+        expect(event.total).toBeGreaterThan(0);
+      }
     }
 
     // Monotonic: progress never goes backwards within a phase.

@@ -33,6 +33,10 @@
  */
 
 import * as Sentry from "@sentry/electron/main";
+import {
+  COUNT_EMAILS_MISSING_ATTACHMENTS_SQL,
+  SELECT_EMAILS_MISSING_ATTACHMENTS_SQL,
+} from "./db/emailAttachmentBackfillSql";
 import databaseService from "./databaseService";
 import gmailFetchService from "./gmailFetchService";
 import outlookFetchService from "./outlookFetchService";
@@ -66,6 +70,12 @@ interface AttachmentMetaLite {
   filename: string;
   mimeType: string | null;
   size: number | null;
+  /**
+   * BACKLOG-2551: the provider's own attachment id, pre-gated at normalisation.
+   * BACKLOG-3187: for Gmail this is the `partId` (identity), never the
+   * `attachmentId` (fetch token, measured rotating).
+   */
+  providerAttachmentId: string | null;
 }
 
 type MissingEmailRow = { id: string; external_id: string; source: string };
@@ -78,19 +88,35 @@ type MissingEmailRow = { id: string; external_id: string; source: string };
  * `.trim()`-ed to match the sync path's `normalizeAttachmentMeta`, so a later
  * on-demand download reconciles the SAME row instead of creating a duplicate.
  */
-function normalizeAttachmentMeta(raw: {
-  filename?: string | null;
-  name?: string | null;
-  mimeType?: string | null;
-  contentType?: string | null;
-  size?: number | null;
-}): AttachmentMetaLite | null {
+function normalizeAttachmentMeta(
+  raw: {
+    filename?: string | null;
+    name?: string | null;
+    mimeType?: string | null;
+    contentType?: string | null;
+    size?: number | null;
+    /** BACKLOG-3187: Gmail identity. Absent on every Outlook shape. */
+    partId?: string | null;
+    attachmentId?: string | null;
+    id?: string | null;
+  },
+  provider: "outlook" | "gmail",
+): AttachmentMetaLite | null {
   const filename = (raw.filename ?? raw.name ?? "").trim();
   if (!filename) return null;
   return {
     filename,
     mimeType: raw.mimeType ?? raw.contentType ?? null,
     size: typeof raw.size === "number" ? raw.size : null,
+    // BACKLOG-2551: this service is a THIRD write path into
+    // upsertEmailAttachmentMetadata, reached from neither of the two chokepoints
+    // in emailSyncService / emailAttachmentService, so it carries the same gate.
+    // BACKLOG-3187: identity from the data shape — Gmail's immutable `partId`
+    // when the part carries one, Outlook Graph's `id` otherwise. A Gmail
+    // `attachmentId` is a fetch token and never reaches the column.
+    providerAttachmentId:
+      raw.partId ||
+      (provider === "gmail" ? null : (raw.attachmentId ?? raw.id ?? null)),
   };
 }
 
@@ -107,13 +133,13 @@ async function fetchAttachmentMetaOnly(
   if (provider === "outlook") {
     const graphAttachments = await outlookFetchService.getAttachments(externalId);
     return graphAttachments
-      .map(normalizeAttachmentMeta)
+      .map((a) => normalizeAttachmentMeta(a, provider))
       .filter((m): m is AttachmentMetaLite => m !== null);
   }
 
   const email = await gmailFetchService.getEmailById(externalId);
   return (email.attachments ?? [])
-    .map(normalizeAttachmentMeta)
+    .map((a) => normalizeAttachmentMeta(a, provider))
     .filter((m): m is AttachmentMetaLite => m !== null);
 }
 
@@ -156,6 +182,7 @@ async function backfillProvider(
           filename: m.filename,
           mimeType: m.mimeType,
           fileSizeBytes: m.size,
+          providerAttachmentId: m.providerAttachmentId,
         });
         upserted++;
       }
@@ -200,28 +227,17 @@ export async function backfillAttachmentMetadata(
   try {
     const db = databaseService.getRawDatabase();
 
-    // Emails with attachments but no attachment rows yet (the search gap).
-    const MISSING_WHERE = `
-      FROM emails e
-      WHERE e.user_id = ?
-        AND e.has_attachments = 1
-        AND e.external_id IS NOT NULL
-        AND e.source IS NOT NULL
-        AND NOT EXISTS (SELECT 1 FROM attachments a WHERE a.email_id = e.id)
-    `;
-
+    // The statement and its shared WHERE fragment live in db/ — see
+    // db/emailAttachmentBackfillSql.ts for why the fragment had to move with
+    // the statements rather than be imported and composed here.
     const totalRow = db
-      .prepare(`SELECT COUNT(*) AS n ${MISSING_WHERE}`)
+      .prepare(COUNT_EMAILS_MISSING_ATTACHMENTS_SQL)
       .get(userId) as { n: number } | undefined;
     result.totalMissing = totalRow?.n ?? 0;
     if (result.totalMissing === 0) return result;
 
     const emails = db
-      .prepare(
-        `SELECT e.id, e.external_id, e.source ${MISSING_WHERE}
-         ORDER BY e.received_at DESC
-         LIMIT ?`,
-      )
+      .prepare(SELECT_EMAILS_MISSING_ATTACHMENTS_SQL)
       .all(userId, maxEmails) as MissingEmailRow[];
 
     result.remaining = Math.max(0, result.totalMissing - emails.length);

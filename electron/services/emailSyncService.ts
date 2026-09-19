@@ -11,6 +11,18 @@
 // ============================================
 
 import * as Sentry from "@sentry/electron/main";
+import {
+  UPDATE_EMAIL_IDENTITY_SQL,
+  clearSyncCursor,
+  prepareEmailInsert,
+  prepareParticipantInsert,
+  selectEarliestByParticipants,
+  selectExistingByMessageIdHeader,
+  selectExistingExternalIds,
+  selectLegacyCandidatesBySubject,
+  type EmailReadSource,
+  type EmailWriteTarget,
+} from "./db/emailSyncSql";
 import logService from "./logService";
 import { autoLinkCommunicationsForContact } from "./autoLinkService";
 import type { AutoLinkResult } from "./autoLinkService";
@@ -25,11 +37,25 @@ import type { BulkMailHeaders } from "../utils/bulkMailHeaders";
 import { CURRENT_DERIVATION_VERSION } from "../utils/derivationVersion";
 import { reprocessEmailDerivations } from "./emailDerivationReprocessService";
 import {
+  EMAIL_PRECACHE_FETCH_RANGE,
   EMAIL_PRECACHE_PERCENT,
+  interpolateFetchPercent,
   terminalProgress,
   type EmailPrecacheProgressCallback,
 } from "./emailPrecacheProgress";
+// BACKLOG-2960: the wall-clock instrument. Pure formatter — the clock, the log
+// transport and the build lookup stay here; only the line SHAPE lives there, so
+// it cannot drift between the before and the after measurement.
+import {
+  formatEmailPrecacheTimingLine,
+  type EmailPrecacheMode,
+} from "./emailPrecacheTiming";
 import { dbGet, dbAll, dbRun, getRawDatabase } from "./db/core/dbConnection";
+// BACKLOG-2960 — imported from `dbTiming`, not `dbConnection`, on purpose: the
+// pre-cache suites `jest.mock` `dbConnection` with a hand-written partial, so a
+// new export there would arrive `undefined` and render `dbMs=NaN`. The pure
+// module is unmocked, and reports 0 when nothing instrumented ran.
+import { readDbTimeMs } from "./db/core/dbTiming";
 import gmailFetchService from "./gmailFetchService";
 import outlookFetchService from "./outlookFetchService";
 import databaseService from "./databaseService";
@@ -55,7 +81,6 @@ import { planEmailWrites, computeLegacyContentKey, type ExistingByMessageId } fr
 // the rebuild never touches the live table until one final transaction.
 import {
   buildEmailForceSet,
-  emailForceReadView,
   emailForceStagingLifecycle,
   restrictForceSetToRebuiltProviders,
   sweepStaleEmailStaging,
@@ -262,8 +287,15 @@ export interface StoreableEmail {
     mimeType?: string;
     contentType?: string;
     size?: number;
-    attachmentId?: string;
+    /**
+     * BACKLOG-3187: Gmail's immutable MIME part id — the attachment's IDENTITY.
+     * Undeclared until now, which is why it was structurally invisible to the
+     * writer no matter what the fetch service parsed. Absent for Outlook.
+     */
+    partId?: string;
     id?: string;
+    /** Fetch token only — Gmail's rotates between calls. Never identity. */
+    attachmentId?: string;
   }>;
   // BACKLOG-1722: structured participants for the junction
   participants?: import("../types/models").ParsedParticipant[];
@@ -339,6 +371,24 @@ interface AttachmentMetaLite {
   filename: string;
   mimeType: string | null;
   size: number | null;
+  /**
+   * BACKLOG-3187: Gmail's IDENTITY — the immutable id of the MIME part. Null for
+   * Outlook, which has no such concept (a Graph attachment is addressed by its id
+   * and nothing else). Empty string is normalised to null here, so downstream code
+   * never has to remember that the payload's own partId is "".
+   */
+  partId: string | null;
+  /**
+   * BACKLOG-2551: the provider's own attachment id. Both providers supply one —
+   * Gmail as `part.body.attachmentId`, Outlook Graph as `id` — and this normaliser
+   * used to DISCARD it, which is why the column could not be populated at all.
+   * Whether it is then STORED is decided by the gate in
+   * persistEmailAttachmentMetadata, not here.
+   *
+   * BACKLOG-3187: for Gmail this is a FETCH TOKEN and was measured rotating
+   * between two fetches of the same attachment. It never becomes identity.
+   */
+  providerAttachmentId: string | null;
 }
 
 /**
@@ -355,6 +405,10 @@ function normalizeAttachmentMeta(
     mimeType?: string | null;
     contentType?: string | null;
     size?: number | null;
+    /** BACKLOG-3187: Gmail identity. Absent on every Outlook shape. */
+    partId?: string | null;
+    attachmentId?: string | null;
+    id?: string | null;
   }>,
 ): AttachmentMetaLite[] {
   const out: AttachmentMetaLite[] = [];
@@ -365,6 +419,10 @@ function normalizeAttachmentMeta(
       filename,
       mimeType: a.mimeType ?? a.contentType ?? null,
       size: typeof a.size === "number" ? a.size : null,
+      // BACKLOG-3187: `|| null`, not `?? null` — "" means absent (see partId).
+      partId: a.partId || null,
+      // Gmail parses `attachmentId`; Outlook Graph carries `id`.
+      providerAttachmentId: a.attachmentId ?? a.id ?? null,
     });
   }
   return out;
@@ -390,6 +448,8 @@ function normalizeAttachmentMeta(
 async function persistEmailAttachmentMetadata(args: {
   emailsToInsert: StoreableEmail[];
   insertedEmailMap: Map<string, string>;
+  /** BACKLOG-2551: which provider this batch came from — see the gate below. */
+  provider: "outlook" | "gmail";
   getAttachmentsFn?: (
     messageId: string,
   ) => Promise<
@@ -403,7 +463,30 @@ async function persistEmailAttachmentMetadata(args: {
    */
   force?: EmailForceStaging;
 }): Promise<void> {
-  const { emailsToInsert, insertedEmailMap, getAttachmentsFn, force } = args;
+  const { emailsToInsert, insertedEmailMap, provider, getAttachmentsFn, force } = args;
+
+  // BACKLOG-2551 — THE sync-side gate, the counterpart to the one inside
+  // emailAttachmentService.downloadEmailAttachments. Two chokepoints, both of
+  // which every write path must pass through; the decision is never replicated
+  // out to individual call sites, where missing one would be silent.
+  //
+  // BACKLOG-3187 — identity comes from the DATA SHAPE, not the provider label.
+  //
+  // `partId` exists only on a Gmail MIME part; a Graph attachment has no such
+  // field, so an Outlook row is unaffected by the first term and keeps the
+  // behaviour v71 shipped. A Gmail row now keys on `partId` — the field Google
+  // documents as immutable — and never on `attachmentId`, which was MEASURED
+  // rotating between two fetches of the same attachment (2026-09-07).
+  //
+  // Reading the shape rather than `provider` also matters because `provider` is
+  // not always derived: at one of the nine download call sites
+  // (transactionService.ts, BACKLOG-3189) it is GUESSED from the sender's address.
+  // Under a label-only gate a Gmail message misread as "outlook" would persist a
+  // rotating fetch token AS IDENTITY. It cannot now: no `partId`, no Gmail part.
+  // 3189 stays open — the reverse case, an Outlook message misread as "gmail",
+  // still has its Graph id nulled — but it is not made worse here.
+  const providerIdFor = (m: AttachmentMetaLite): string | null =>
+    m.partId || (provider === "gmail" ? null : m.providerAttachmentId);
 
   for (const email of emailsToInsert) {
     const internalId = insertedEmailMap.get(email.id);
@@ -428,6 +511,7 @@ async function persistEmailAttachmentMetadata(args: {
           filename: m.filename,
           mimeType: m.mimeType,
           fileSizeBytes: m.size,
+          providerAttachmentId: providerIdFor(m),
         };
         if (force) {
           force.attachmentMeta.push(row);
@@ -466,7 +550,10 @@ async function fetchStoreAndDedup(params: {
    * BACKLOG-2856: present only during a force re-cache. When set, this batch is
    * written into the run's STAGING tables and the live `emails` table is neither
    * written nor read on its own — every dedup read becomes "survivors of the
-   * pending swap ∪ what this run has staged so far" (`emailForceReadView`).
+   * pending swap ∪ what this run has staged so far"
+   * (`db/emailForceSetSql.ts`'s `emailForceReadView`, reached through
+   * `emailSyncSql.ts`'s `readSource` — the thin re-export that used to sit in
+   * `emailForceStaging.ts` was dead and was deleted by BACKLOG-3102 PR 2).
    *
    * Absent, every line below behaves exactly as it did before, which is the
    * property that keeps ordinary delta syncs out of this feature's blast radius.
@@ -488,14 +575,23 @@ async function fetchStoreAndDedup(params: {
   // live still holds the entire force set (that is the point of staging), so
   // every re-fetched row would match, be classified an already-cached duplicate,
   // and never be staged — staging would finish empty and the swap would delete
-  // the user's corpus and put nothing back. `emailForceReadView` substitutes
+  // the user's corpus and put nothing back. `db/emailForceSetSql.ts`'s
+  // `emailForceReadView` substitutes
   // "rows the swap will keep ∪ rows staged so far" for the table name.
-  const emailsSource = (columns: string): { sql: string; params: readonly string[] } =>
-    force
-      ? emailForceReadView(force, columns)
-      : { sql: "emails", params: [] };
-  const writeEmailsTable = force ? `"${force.emailsTable}"` : "emails";
-  const writeParticipantsTable = force ? `"${force.participantsTable}"` : "email_participants";
+  // BACKLOG-2989 chunk 4: what crosses into db/ is a DISCRIMINATED TARGET
+  // carrying the branded staging names, never a pre-quoted identifier. The
+  // previous `force ? `"${force.emailsTable}"` : "emails"` destroyed the
+  // StagingTableName brand with a template literal and no annotation to notice.
+  const writeTarget: EmailWriteTarget = force
+    ? {
+        mode: "force",
+        emailsTable: force.emailsTable,
+        participantsTable: force.participantsTable,
+      }
+    : { mode: "live" };
+  const readSource: EmailReadSource = force
+    ? { mode: "force", set: force.forceSet, emailsTable: force.emailsTable }
+    : { mode: "live" };
 
   // BACKLOG-1549: Look up the user's connected email address to compute direction
   const oauthProvider = provider === "outlook" ? "microsoft" : "google";
@@ -530,11 +626,10 @@ async function fetchStoreAndDedup(params: {
     const CHUNK_SIZE = 500;
     for (let i = 0; i < newEmails.length; i += CHUNK_SIZE) {
       const chunk = newEmails.slice(i, i + CHUNK_SIZE);
-      const placeholders = chunk.map(() => "?").join(",");
-      const src = emailsSource("external_id, user_id");
-      const rows = dbAll<{ external_id: string }>(
-        `SELECT external_id FROM ${src.sql} WHERE user_id = ? AND external_id IN (${placeholders})`,
-        [...src.params, userId, ...chunk.map((e) => e.id)],
+      const rows = selectExistingExternalIds(
+        readSource,
+        userId,
+        chunk.map((e) => e.id),
       );
       for (const row of rows) {
         existingExternalIds.add(row.external_id);
@@ -553,12 +648,7 @@ async function fetchStoreAndDedup(params: {
     const CHUNK_SIZE = 500;
     for (let i = 0; i < headersToCheck.length; i += CHUNK_SIZE) {
       const chunk = headersToCheck.slice(i, i + CHUNK_SIZE);
-      const placeholders = chunk.map(() => "?").join(",");
-      const src = emailsSource("id, external_id, message_id_header, user_id");
-      const rows = dbAll<{ id: string; external_id: string | null; message_id_header: string }>(
-        `SELECT id, external_id, message_id_header FROM ${src.sql} WHERE user_id = ? AND message_id_header IN (${placeholders})`,
-        [...src.params, userId, ...chunk],
-      );
+      const rows = selectExistingByMessageIdHeader(readSource, userId, chunk);
       for (const row of rows) {
         existingByMessageId.set(row.message_id_header, { id: row.id, externalId: row.external_id });
       }
@@ -586,27 +676,7 @@ async function fetchStoreAndDedup(params: {
       const LEGACY_CHUNK = 500;
       for (let i = 0; i < subjectsToCheck.length; i += LEGACY_CHUNK) {
         const chunk = subjectsToCheck.slice(i, i + LEGACY_CHUNK);
-        const placeholders = chunk.map(() => "?").join(",");
-        const legacySrc = emailsSource(
-          "id, external_id, subject, sender, sent_at, user_id, message_id_header",
-        );
-        const legacyRows = dbAll<{
-          id: string;
-          external_id: string | null;
-          subject: string;
-          sender: string;
-          sent_at: string;
-        }>(
-          `SELECT id, external_id, subject, sender, sent_at
-           FROM ${legacySrc.sql}
-           WHERE user_id = ?
-             AND message_id_header IS NULL
-             AND sent_at IS NOT NULL
-             AND sender IS NOT NULL
-             AND subject IS NOT NULL
-             AND LOWER(TRIM(subject)) IN (${placeholders})`,
-          [...legacySrc.params, userId, ...chunk],
-        );
+        const legacyRows = selectLegacyCandidatesBySubject(readSource, userId, chunk);
         // Build key → row map and frequency count for ambiguity detection.
         const keyCount = new Map<string, number>();
         const keyToRow = new Map<string, { id: string; external_id: string | null }>();
@@ -661,34 +731,10 @@ async function fetchStoreAndDedup(params: {
     try {
       const db = getRawDatabase();
       const crypto = await import("crypto");
-      const insertStmt = db.prepare(`
-        INSERT INTO ${writeEmailsTable} (
-          id, user_id, external_id, source, account_id, direction,
-          subject, body_plain, body_html,
-          sender, recipients, cc, bcc,
-          thread_id, in_reply_to, references_header,
-          sent_at, received_at,
-          has_attachments, attachment_count,
-          message_id_header, content_hash, labels,
-          bulk_mail_headers,
-          ingest_source, validated_at,
-          -- BACKLOG-2857: stamped at write time so a later derivation fix can
-          -- tell this row apart from one produced by superseded logic.
-          -- APPENDED after every other bound parameter on purpose:
-          -- emailSyncService.retainedHeaders.test.ts transcribes positional
-          -- indices into this list, so inserting mid-list would silently
-          -- re-point its assertions at the wrong columns.
-          derived_version,
-          created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-      `);
+      const insertStmt = prepareEmailInsert(db, writeTarget);
 
       // BACKLOG-1722: Junction participant INSERT, prepared once and reused.
-      const insertParticipantStmt = db.prepare(`
-        INSERT INTO ${writeParticipantsTable}
-          (email_id, role, position, participant_hash, email_address, display_name)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `);
+      const insertParticipantStmt = prepareParticipantInsert(db, writeTarget);
 
       // BACKLOG-1769: resurrection remap — point an already-stored row at the new
       // provider id when the same Message-ID was re-delivered under a fresh id.
@@ -697,7 +743,7 @@ async function fetchStoreAndDedup(params: {
       // requiring the forward guard again. COALESCE is a no-op for rows that
       // already have a message_id_header (standard BACKLOG-1769 resurrections).
       const updateExternalIdStmt = db.prepare(
-        `UPDATE emails SET external_id = ?, message_id_header = COALESCE(message_id_header, ?) WHERE id = ?`,
+        UPDATE_EMAIL_IDENTITY_SQL,
       );
 
       // Map of external_id -> generated internal id for attachment processing
@@ -909,6 +955,7 @@ async function fetchStoreAndDedup(params: {
       // here so filenames are searchable after a normal sync. Runs after the insert
       // transaction, is idempotent, and never downloads bytes.
       await persistEmailAttachmentMetadata({
+        provider,
         emailsToInsert,
         insertedEmailMap,
         getAttachmentsFn,
@@ -967,6 +1014,37 @@ export async function storeParsedEmailsForAccount(params: {
     seenIds: params.seenIds ?? new Set<string>(),
     getAttachmentsFn: params.getAttachmentsFn,
   });
+}
+
+/**
+ * BACKLOG-2960: which build produced a timing number.
+ *
+ * READ FROM SENTRY'S RELEASE, NOT FROM `app.getVersion()`, ON PURPOSE.
+ * `main.ts:226` initialises Sentry with `release: app.getVersion()`, so the
+ * release IS the app version in any real run — and reading it back costs this
+ * module nothing, because Sentry is already imported here. Importing `electron`
+ * to call `app.getVersion()` directly would move `emailSyncService` into the
+ * set of Electron-coupled modules BACKLOG-2961 is currently measuring and
+ * cutting, which is a bad trade for one string.
+ *
+ * Falls back to `npm_package_version` (set by `npm run dev`, absent in a
+ * packaged app) and finally to "unknown". It never throws and never guesses:
+ * an unreadable build is reported as unknown rather than as a plausible number,
+ * because a duration attributed to the wrong build is worse than one attributed
+ * to none. The `try` also covers the test suites that mock `@sentry/electron`
+ * down to `addBreadcrumb`/`captureException`, where `getClient` does not exist.
+ */
+function resolvePrecacheBuild(): string {
+  try {
+    const release = Sentry.getClient()?.getOptions?.().release;
+    if (typeof release === "string" && release.length > 0) {
+      return release;
+    }
+  } catch {
+    // Sentry not initialised, or mocked away. Fall through.
+  }
+  const packageVersion = process.env.npm_package_version;
+  return packageVersion && packageVersion.length > 0 ? packageVersion : "unknown";
 }
 
 /**
@@ -1656,18 +1734,7 @@ class EmailSyncService {
     // LOWER(sender) IN (...) OR LOWER(recipients) LIKE ... scan, which
     // could miss BCC-only and Outlook display-name-only matches and was
     // unindexed for the LIKE clause.
-    const placeholders = contactEmails.map(() => "?").join(", ");
-    const sql = `
-      SELECT MIN(e.sent_at) as earliest, COUNT(DISTINCT e.id) as total
-      FROM email_participants ep
-      JOIN emails e ON e.id = ep.email_id
-      WHERE e.user_id = ?
-        AND ep.email_address IN (${placeholders})
-    `;
-    const lowerEmails = contactEmails.map((e) => e.toLowerCase().trim());
-    const params = [userId, ...lowerEmails];
-
-    const row = dbGet<{ earliest: string | null; total: number }>(sql, params);
+    const row = selectEarliestByParticipants(userId, contactEmails);
 
     if (!row || row.total === 0 || !row.earliest) {
       return false;
@@ -1955,11 +2022,57 @@ class EmailSyncService {
     let lastPercent = 0;
     let progressCurrent = 0;
     let progressOutcome: "success" | "error" | "cancelled" = "error";
+    // THE ONE PLACE `percent` IS ALLOWED TO BE DECIDED.
+    //
+    // Since the fetch rounds interpolate inside the anchors, several independent
+    // counters now feed this callback, and two of them can legitimately restart:
+    //
+    //   - `retryOnNetwork` re-runs an ENTIRE provider block on a network error,
+    //     so a round that had reached 29 begins again reporting 12;
+    //   - the backfill round below re-emits FETCH_SECOND_PROVIDER after Gmail has
+    //     already interpolated past it.
+    //
+    // Clamping here rather than at each call site means a round added later
+    // cannot reintroduce a backwards bar by forgetting to clamp.
+    //
+    // `current` is deliberately NOT clamped. The repair pass leaves it at the
+    // row count it scanned and the first fetching event resets it to 0 — a
+    // legitimate reset, because they count different things, and a clamp would
+    // relabel the bar "(400 so far)" under "Downloading emails" at 10%.
     const emitProgress: EmailPrecacheProgressCallback = (progress) => {
-      lastPercent = progress.percent;
+      const percent = Math.max(lastPercent, progress.percent);
+      lastPercent = percent;
       progressCurrent = progress.current;
-      onProgress?.(progress);
+      onProgress?.({ ...progress, percent });
     };
+
+    // BACKLOG-2960 — TIMING BOOKKEEPING, declared out here for the same reason
+    // the progress counters are: the line is emitted from the `finally`, which
+    // is the only place every exit path passes through.
+    //
+    // The clock starts HERE rather than inside the fetch loop, and that is the
+    // whole point of the instrument. `precacheEmails` on a full re-cache spends
+    // time in the repair pass, in the staging setup, in two providers' fetches
+    // and in the swap; a timer around any one of those would report a number
+    // that a 3% regression could hide in. Entry to `finally` is the span the
+    // founder actually waits through.
+    //
+    // The counters below are the run's own — hoisted out of the `try` rather
+    // than copied into a record after each `+=`, because a throw between a
+    // mutation and its copy would hand the `finally` stale numbers.
+    const runStartedAt = Date.now();
+    // Taken here, beside the wall clock, so both figures cover the same span.
+    const dbMsAtRunStart = readDbTimeMs();
+    let totalFetched = 0;
+    let totalStored = 0;
+    // Non-force runs start at "cache" and become "re-cache" the moment the
+    // bounds read shows this mailbox already held mail. A non-force run
+    // cancelled before that read (the pre-repair checkpoint) reports the
+    // default, which is the honest reading: no cached mail was ever observed.
+    let precacheMode: EmailPrecacheMode = isForce ? "force" : "cache";
+    // Assigned once the connected tokens are known; stays empty on the
+    // no-provider-connected exit, where "none" is exactly right.
+    let timedProviders: readonly EmailForceProvider[] = [];
 
     let forceStaging: EmailForceStaging | null = null;
     let forceSwap: {
@@ -2092,6 +2205,14 @@ class EmailSyncService {
     // a force run has no high-water mark to clamp to and no gap to backfill,
     // because it re-fetches the entire configured window by construction.
     const cachedBounds = isForce ? null : getCachedEmailSentAtBounds(userId);
+    // BACKLOG-2960: the timing line's `mode`, decided by the SAME expression the
+    // "date range computed" line below reports as `isIncremental`, so the two
+    // lines in one log can never disagree about what kind of run this was.
+    // A force run keeps `force` — `cachedBounds` is null on that path by
+    // construction, so this branch cannot overwrite it.
+    if (cachedBounds?.newest) {
+      precacheMode = "re-cache";
+    }
     let fetchSinceDate = cacheSinceDate;
     if (cachedBounds?.newest) {
       const latestCached = new Date(cachedBounds.newest);
@@ -2159,8 +2280,9 @@ class EmailSyncService {
     });
 
     const seenEmailIds = new Set<string>();
-    let totalFetched = 0;
-    let totalStored = 0;
+    // BACKLOG-2960: `totalFetched` / `totalStored` are declared above the `try`
+    // so the timing line in the `finally` reads the counts this run actually
+    // reached, including on a throw. Same values, same mutations, wider scope.
     // BACKLOG-2127: records the FIRST auth-class provider failure so the
     // caller (SyncOrchestrator) can raise a reconnect prompt. Transient
     // (network) failures are intentionally NOT recorded here.
@@ -2186,6 +2308,19 @@ class EmailSyncService {
       ...(microsoftToken ? (["outlook"] as const) : []),
       ...(googleToken ? (["gmail"] as const) : []),
     ];
+    // BACKLOG-2960: the timing line reports the providers this run WORKED, which
+    // is the connected set — not `rebuiltProviders`, which is narrowed to the
+    // ones that finished. A duration is spent on every provider the run tried,
+    // including one that failed halfway, so the connected set is what makes two
+    // measurements comparable.
+    //
+    // COPIED, not aliased. `connectedProviders` is not mutated anywhere today
+    // (checked: its five references are all reads), but `rebuiltProviders` two
+    // lines below IS mutated in place and holds the narrowed set — so an edit
+    // that ever narrowed this array instead would silently change what the
+    // timing line means, with no test to catch it. The copy costs nothing and
+    // makes the snapshot the intent rather than a coincidence.
+    timedProviders = [...connectedProviders];
     // A provider joins this only when its ENTIRE fetch succeeded — the inbox
     // round AND the all-folders/all-labels round. A partial fetch must not
     // delete that provider's live rows; see `restrictForceSetToRebuiltProviders`.
@@ -2232,6 +2367,41 @@ class EmailSyncService {
 
     // Fetch from Outlook (no contact filter = all emails)
     if (microsoftToken && !isCancelled()) {
+      // The count the Outlook rounds report against. `totalFetched` only grows
+      // at the very end of the retried block below, so reading it here gives
+      // every `retryOnNetwork` attempt the same base as reading it inside would.
+      const outlookBaseFetched = totalFetched;
+      // THE HIGH-WATER MARK OF WHAT THE USER HAS BEEN TOLD.
+      //
+      // The panel reads "Downloading emails (N so far)", and N must not
+      // retract. Three ways it could without this:
+      //
+      //   - `searchEmails` reports its pre-slice length while it returns
+      //     `slice(0, maxResults)`, so a report above the 2,000 this round
+      //     passes would print and then retract at the boundary. That cannot
+      //     happen on this path today: the inbox call passes no `query` and no
+      //     `contactEmails`, so it runs the `$filter`/`$skip` page loop, which
+      //     stops after `MAX_GRAPH_PAGES` (10) pages of `$top=100` and reports
+      //     1,000 at most, before its `>= maxResults` break is reached. The
+      //     `EMAIL_FETCH_SAFETY_CAP` clamp in `onProgress` below is therefore
+      //     a defensive pin, not a live bound;
+      //   - `fetchStoreAndDedup` reports what SURVIVED its `seenIds` filter,
+      //     which is never more than what was downloaded;
+      //   - `retryOnNetwork` re-runs the WHOLE block on a network error, and the
+      //     re-run's inbox round reports from zero again.
+      //
+      // Declared OUTSIDE the retried callback for the third reason. Inside it, a
+      // re-run started the mark over and the panel read "(500 so far)" and then
+      // "(100 so far)".
+      //
+      // Reporting the max is the honest direction: it is what has been
+      // downloaded, and nothing on screen claims those rows were all new —
+      // `stored` is reported separately when the run finishes.
+      let outlookReported = outlookBaseFetched;
+      const reportOutlook = (current: number): number => {
+        outlookReported = Math.max(outlookReported, current);
+        return outlookReported;
+      };
       try {
         await retryOnNetwork(async () => {
           const outlookReady = await outlookFetchService.initialize(userId);
@@ -2245,6 +2415,32 @@ class EmailSyncService {
                 // BACKLOG-2856: the signal reaches the paging loop and the HTTP
                 // request, not just the boundary check above.
                 signal: abort.signal,
+                // The inbox round is the one fetch in this method with a REAL
+                // denominator: `searchEmails` asks Graph for `@odata.count`
+                // before it pages, so `percentage` is a true fraction of the
+                // messages this window holds. When that count request fails,
+                // `hasEstimate` is false and `percentage` is a hardcoded 0 —
+                // trusting it then would peg the bar at the bottom of the slice
+                // and call it progress. So the bar holds at the slice start and
+                // `current` carries the movement instead, which is the idiom the
+                // repair pass above already uses.
+                onProgress: (p) => emitProgress({
+                  phase: "fetching",
+                  stage: "outlook-inbox",
+                  // Clamped to the 2,000 this call is passed. Defensive only:
+                  // the page loop stops at `MAX_GRAPH_PAGES` (1,000 messages)
+                  // first, as described beside `outlookReported`.
+                  current: reportOutlook(
+                    outlookBaseFetched + Math.min(p.fetched, EMAIL_FETCH_SAFETY_CAP),
+                  ),
+                  total: p.hasEstimate
+                    ? outlookBaseFetched + Math.min(p.total, EMAIL_FETCH_SAFETY_CAP)
+                    : outlookReported,
+                  percent: interpolateFetchPercent(
+                    EMAIL_PRECACHE_FETCH_RANGE.OUTLOOK_INBOX,
+                    p.hasEstimate ? p.percentage / 100 : 0,
+                  ),
+                }),
               }),
               userId,
               seenIds: seenEmailIds,
@@ -2268,6 +2464,13 @@ class EmailSyncService {
             if (isCancelled()) allFoldersComplete = false;
             try {
               if (!isCancelled()) {
+              // Held at the inbox round's real count for the whole folder walk.
+              // The walk re-scans mail the inbox round already has — Graph's
+              // `/me/messages` spans every folder — so adding its per-folder
+              // `fetched` would climb to a number the deduped result then has to
+              // correct downwards. A count that overstates and then retracts is
+              // worse than one that waits.
+              const currentAfterInbox = reportOutlook(outlookBaseFetched + inboxResult.fetched);
               allFolderResult = await fetchStoreAndDedup({
                 provider: "outlook",
                 fetchFn: () => outlookFetchService.searchAllFolders({
@@ -2278,6 +2481,23 @@ class EmailSyncService {
                   // signal the next boundary check below is unreachable until it
                   // has finished.
                   signal: abort.signal,
+                  // Folders completed, not messages fetched: the per-folder
+                  // counters restart on every folder, the walk-level pair does
+                  // not. `folderIndex` is the folder currently being paged, so
+                  // the slice fills as each one is finished rather than when it
+                  // starts — the bar never claims a folder it has not walked.
+                  onProgress: (p) => emitProgress({
+                    phase: "fetching",
+                    stage: "outlook-folders",
+                    current: currentAfterInbox,
+                    total: currentAfterInbox,
+                    percent: interpolateFetchPercent(
+                      EMAIL_PRECACHE_FETCH_RANGE.OUTLOOK_FOLDERS,
+                      p.folderCount && p.folderCount > 0
+                        ? (p.folderIndex ?? 0) / p.folderCount
+                        : 0,
+                    ),
+                  }),
                 }),
                 userId,
                 seenIds: seenEmailIds,
@@ -2325,6 +2545,27 @@ class EmailSyncService {
       }
     }
 
+    // KNOWN RESIDUAL: THIS EVENT CAN STEP THE COUNT DOWN, AND IT IS NOT CLAMPED.
+    //
+    // It carries `totalFetched`, which grows only when a provider block
+    // COMPLETES. The Outlook high mark above is what the panel showed while the
+    // rounds ran. On a clean run the two agree: the inbox round's last report is
+    // the length of what it returns, and nothing has been seen yet to dedup
+    // against. They disagree in two cases, and in both the drop is large:
+    //
+    //   - AFTER A NETWORK RETRY. Attempt 1 already put the inbox's ids into
+    //     `seenEmailIds`, so attempt 2's inbox round dedups to 0 and this event
+    //     reads only the mail the folder walk found new. The drop is the whole
+    //     inbox round (the retry control's fixture shows 5, then 2).
+    //   - WHEN THE BLOCK THROWS OUT after reporting progress — network retries
+    //     exhausted, or a non-network error in the inbox round. The `+=` never
+    //     runs and this event reads the base, even when attempt 1 stored rows.
+    //
+    // Both are `totalFetched` undercounting, not this event misreporting it: the
+    // run's returned `fetched`/`stored` are short by the same amount, and that
+    // predates the moving count, which only makes it visible. Clamping here
+    // would hide it on the bar and leave the bar disagreeing with the result.
+    // The same two cases apply to FETCH_DONE after the Gmail block.
     emitProgress({
       phase: "fetching",
       current: totalFetched,
@@ -2336,6 +2577,15 @@ class EmailSyncService {
     // Skipped outright if the user cancelled during the Outlook round — a cancel
     // must stop the NEXT unit of work, not merely stop the current one early.
     if (googleToken && !isCancelled()) {
+      // Same base and same high-water rule as the Outlook rounds above, and
+      // declared outside the retried callback for the same reason: a
+      // `retryOnNetwork` re-run must not start the reported count over.
+      const gmailBaseFetched = totalFetched;
+      let gmailReported = gmailBaseFetched;
+      const reportGmail = (current: number): number => {
+        gmailReported = Math.max(gmailReported, current);
+        return gmailReported;
+      };
       try {
         await retryOnNetwork(async () => {
           const gmailReady = await gmailFetchService.initialize(userId);
@@ -2346,6 +2596,38 @@ class EmailSyncService {
                 maxResults: EMAIL_FETCH_SAFETY_CAP,
                 after: fetchSinceDate,
                 signal: abort.signal,
+                // TWO PASSES, TWO DENOMINATORS, AND ONLY THE SECOND ONE IS REAL.
+                //
+                // `searchEmails` lists message IDs (`hasEstimate: false`,
+                // `percentage` hardcoded 0) and then downloads one body per ID
+                // (`hasEstimate: true`, `percentage` against the ID count it
+                // just finished listing). Gmail's own `resultSizeEstimate` never
+                // reaches `percentage` at all — the service distrusts it in
+                // writing — so the scan pass is divided by the cap this call
+                // passed instead, which bounds the listing from above and can
+                // therefore only ever UNDERSTATE how far along it is.
+                //
+                // `current` counts bodies downloaded, so it holds through the
+                // scan and climbs through the bodies. Listing an ID is not
+                // downloading an email, and counting it as one would make the
+                // number drop when the body pass restarted the count at ten.
+                onProgress: (p) => emitProgress({
+                  phase: "fetching",
+                  stage: "gmail-messages",
+                  current: reportGmail(
+                    p.hasEstimate ? gmailBaseFetched + p.fetched : gmailBaseFetched,
+                  ),
+                  total: p.hasEstimate ? gmailBaseFetched + p.total : gmailReported,
+                  percent: p.hasEstimate
+                    ? interpolateFetchPercent(
+                        EMAIL_PRECACHE_FETCH_RANGE.GMAIL_BODIES,
+                        p.percentage / 100,
+                      )
+                    : interpolateFetchPercent(
+                        EMAIL_PRECACHE_FETCH_RANGE.GMAIL_SCAN,
+                        p.fetched / EMAIL_FETCH_SAFETY_CAP,
+                      ),
+                }),
               }),
               userId,
               seenIds: seenEmailIds,
@@ -2361,12 +2643,30 @@ class EmailSyncService {
             if (isCancelled()) allLabelsComplete = false;
             try {
               if (!isCancelled()) {
+              // Held at the search round's real count for the whole label walk,
+              // for the reason the Outlook folder walk holds: a Gmail message
+              // carries several labels, the walk dedups them, and a count that
+              // climbed per label would have to retract at the boundary.
+              const currentAfterGmailSearch = reportGmail(gmailBaseFetched + gmailResult.fetched);
               allLabelResult = await fetchStoreAndDedup({
                 provider: "gmail",
                 fetchFn: () => gmailFetchService.searchAllLabels({
                   maxResults: EMAIL_FETCH_SAFETY_CAP,
                   after: fetchSinceDate,
                   signal: abort.signal,
+                  // Labels completed — the Gmail mirror of the folder walk.
+                  onProgress: (p) => emitProgress({
+                    phase: "fetching",
+                    stage: "gmail-labels",
+                    current: currentAfterGmailSearch,
+                    total: currentAfterGmailSearch,
+                    percent: interpolateFetchPercent(
+                      EMAIL_PRECACHE_FETCH_RANGE.GMAIL_LABELS,
+                      p.labelCount && p.labelCount > 0
+                        ? (p.labelIndex ?? 0) / p.labelCount
+                        : 0,
+                    ),
+                  }),
                 }),
                 userId,
                 seenIds: seenEmailIds,
@@ -2441,9 +2741,15 @@ class EmailSyncService {
         before: backfillWindow.before.toISOString(),
       });
 
-      // Progress holds at the same percent while `current` climbs — the idiom
-      // the repair pass already uses. The bar must not go backwards, and a
-      // backfill over a year of mail must not look like a frozen run.
+      // Progress holds while `current` climbs — the idiom the repair pass
+      // already uses. The bar must not go backwards, and a backfill over a year
+      // of mail must not look like a frozen run.
+      //
+      // The literal below is now a FLOOR, not the percent that will be emitted:
+      // the Gmail round above interpolates past FETCH_SECOND_PROVIDER, so
+      // `emitProgress`'s clamp holds this at wherever the run actually got to.
+      // The backfill's own four fetch rounds still report nothing of their own —
+      // they are the last unwired rounds in this method.
       emitProgress({
         phase: "fetching",
         current: totalFetched,
@@ -2741,6 +3047,56 @@ class EmailSyncService {
       this.precacheInProgress = false;
       this.precacheAbortController = null;
 
+      // BACKLOG-2960 — THE ONE TIMING LINE, on every exit path, emitted FIRST.
+      //
+      // First, so the staging drop below is outside the measured span. That drop
+      // runs on EVERY exit path, success included: it is gated on whether a
+      // force run created staging, not on how the run ended, and
+      // `swapEmailStagingIntoLive` does not drop the tables itself — it copies
+      // out of them and returns, so on a successful force run they still hold
+      // the whole corpus when the drop reaches them. Excluding it keeps ~44 ms
+      // at 33,637 emails (measured on the real driver — SR review, pm_comments
+      // `f18e9103` §2) out of the number, identically on both sides of the
+      // before/after comparison. The founder does wait through it.
+      //
+      // Wrapped, because an instrument must never be the reason a re-cache
+      // fails. An unguarded throw here would skip `forceStaging.drop()` and leak
+      // two staging tables per run — an observability line causing a data-layer
+      // leak is exactly the trade this must not make.
+      //
+      // The "already in progress" guard returns BEFORE the `try` and therefore
+      // emits nothing. That is deliberate: a rejected second invocation is not a
+      // run, and giving it an `elapsedMs` near zero would pollute the very
+      // measurement this line exists to produce.
+      try {
+        const elapsedMs = Date.now() - runStartedAt;
+        // Rounded once, here. The accumulator is fractional because a single
+        // prepared statement is well under a millisecond; rounding per call
+        // would floor most of them to zero.
+        const dbMs = Math.round(readDbTimeMs() - dbMsAtRunStart);
+        const timing = {
+          mode: precacheMode,
+          outcome: progressOutcome,
+          providers: timedProviders,
+          checked: totalFetched,
+          written: totalStored,
+          // Present only when the swap actually ran; see the field's doc.
+          ...(forceSwap ? { inserted: forceSwap.emailsInserted } : {}),
+          elapsedMs,
+          build: resolvePrecacheBuild(),
+          dbMs,
+        };
+        logService.info(
+          formatEmailPrecacheTimingLine(timing),
+          "EmailSyncService",
+          { ...timing, userId },
+        );
+      } catch (timingError) {
+        logService.warn("Could not emit email pre-cache timing", "EmailSyncService", {
+          error: timingError instanceof Error ? timingError.message : String(timingError),
+        });
+      }
+
       // BACKLOG-2856 — THE ONE TERMINAL PROGRESS EVENT, on every exit path.
       //
       // Success, a structured error return, a thrown failure, a cancel: all of
@@ -2783,10 +3139,7 @@ class EmailSyncService {
    * swallowed rather than allowed to fail the run.
    */
   private clearShadowDeltaCursors(userId: string): void {
-    dbRun(
-      `UPDATE email_sync_state SET cursor = NULL, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?`,
-      [userId],
-    );
+    clearSyncCursor(userId);
   }
 
   /**

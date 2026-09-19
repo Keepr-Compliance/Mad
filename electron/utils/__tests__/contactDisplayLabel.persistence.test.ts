@@ -224,10 +224,23 @@ describe("BACKLOG-2461 — dedup verdicts are unchanged by this PR", () => {
     expect(namesAreCompatible("Unknown", "Bob Smith")).toBe(false);
   });
 
-  it("an EMPTY name would be compatible with every name — which is why we did not clear it", () => {
-    // Documented, not endorsed. Clearing display_name would flip the assertions
-    // above to `true` and let one nameless record claim a shared line against
-    // every named person on it. See BACKLOG-2416.
+  /**
+   * BACKLOG-2707 — this test's name used to end "…which is why we did not clear
+   * it". The import and create paths now DO clear it, so that reason is no
+   * longer true and leaving it would read as a live blocker.
+   *
+   * The FACT is unchanged and still worth pinning: an empty name is compatible
+   * with every name. What changed is that no live consumer acts on that answer
+   * to hide or fold a record. Re-measured before the clear was allowed:
+   * `phoneClaimedByImported`/`emailClaimedByImported` deleted (BACKLOG-2608),
+   * the renderer dedup pass gone (BACKLOG-2370, `contactsShareIdentity` is now
+   * a scroll rule that removes nothing), auto-link returns `name_unknown` for a
+   * missing name BEFORE calling this function (BACKLOG-2624), and BACKLOG-2416
+   * is completed. The one surviving reader of `display_name` that suppresses a
+   * row — `namesThatAreTheirOwnIdentity` — builds its Set with `.filter(Boolean)`,
+   * so `""` drops out of it while `"unknown"` does not.
+   */
+  it("an EMPTY name is compatible with every name — true, and no longer acted on", () => {
     expect(namesAreCompatible("", "Jane Doe")).toBe(true);
     expect(namesAreCompatible("", "Bob Smith")).toBe(true);
   });

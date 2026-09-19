@@ -165,6 +165,8 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let service: any;
 
+  let parkedMigrations: unknown[] | undefined;
+
   beforeEach(() => {
     jest.clearAllMocks();
 
@@ -253,6 +255,31 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
     mockDbTransaction.mockImplementation((fn: () => void) => {
       return () => fn();
     });
+
+    // BACKLOG-2551: this suite's subject is the backup / auto-restore / snapshot
+    // plumbing, exercised against a fully-mocked better-sqlite3. A real migration
+    // body cannot run there -- it asks the driver questions (PRAGMA table_info,
+    // sqlite_master) the mock does not answer -- so with a non-empty chain every
+    // `initialize()` here would land in the migration-FAILURE path and assert
+    // against a dialog it never meant to trigger. Park the real chain; the tests
+    // that mean to exercise a migration already install their own (see the
+    // `klass.MIGRATIONS = original` finally blocks below).
+    //
+    // This masks nothing about v71: its body is covered against the REAL driver in
+    // databaseService.migration-v71.test.ts. What the parking DOES change here is
+    // the backup decision, so the input to that decision is asserted directly
+    // below ("a database at the baseline is now BEHIND the latest").
+    parkedMigrations = (
+      service.constructor as unknown as { MIGRATIONS: unknown[] }
+    ).MIGRATIONS;
+    (service.constructor as unknown as { MIGRATIONS: unknown[] }).MIGRATIONS = [];
+  });
+
+  afterEach(() => {
+    if (parkedMigrations) {
+      (service.constructor as unknown as { MIGRATIONS: unknown[] }).MIGRATIONS =
+        parkedMigrations;
+    }
   });
 
   /**
@@ -361,12 +388,39 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
       }
     });
 
+    it("BACKLOG-2551: a database at the BASELINE is now BEHIND the latest, which is what arms the backup", () => {
+      // The rolling pre-migration backup is taken when the on-disk version is below
+      // the latest migration version. While the chain was empty those were the same
+      // number and the backup never armed for a v70 database; with v71 shipping it
+      // does. Asserted on the real (unparked) chain, since the parking above would
+      // otherwise make this trivially false.
+      const klass = service.constructor as unknown as {
+        MIGRATIONS: Array<{ version: number }>;
+        BASELINE_VERSION: number;
+      };
+      const parked = klass.MIGRATIONS;
+      klass.MIGRATIONS = parkedMigrations as Array<{ version: number }>;
+      try {
+        const latest = (
+          service as unknown as { getLatestSchemaVersion(): number }
+        ).getLatestSchemaVersion();
+        expect(latest).toBeGreaterThan(klass.BASELINE_VERSION);
+        expect(klass.BASELINE_VERSION).toBeLessThan(latest); // i.e. a v70 DB is behind
+      } finally {
+        klass.MIGRATIONS = parked;
+      }
+    });
+
     it("SKIPS the rolling pre-migration backup when the DB is already at the latest version", async () => {
-      // Latest migration version, so no migration runs and no backup is needed
+      // At the latest version, so no migration runs and no backup is needed
       // (previously every launch copied the DB and churned the 3-file window).
-      // BACKLOG-2993: "latest" is the baseline — the chain is gone.
-      const latest = (service.constructor as { BASELINE_VERSION: number })
-        .BASELINE_VERSION;
+      // BACKLOG-2551: read "latest" from the production accessor rather than
+      // pinning BASELINE_VERSION. getLatestSchemaVersion() returns the baseline
+      // while the chain is empty and the last migration's version once it is not,
+      // so this keeps asserting the real claim instead of a frozen number.
+      const latest = (
+        service as unknown as { getLatestSchemaVersion(): number }
+      ).getLatestSchemaVersion();
       seedOnDiskVersion(latest);
 
       const result = await service.initialize();
@@ -475,9 +529,18 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
       expect(result).toBe(true);
       expect(mockQuit).not.toHaveBeenCalled();
       expect(service.isInitialized()).toBe(true);
-      expect(mockShowMessageBox).toHaveBeenCalledWith(
-        expect.objectContaining({ type: "warning", title: "Database Update Notice" }),
-      );
+      // BACKLOG-2962, seams PR B: full object, not `objectContaining`. This box
+      // now reaches the platform through the Dialog capability, and a seam that
+      // dropped `detail` or `buttons` would have passed the partial match.
+      // Transcribed from `databaseService.ts:346-352`.
+      expect(mockShowMessageBox).toHaveBeenCalledWith({
+        type: "warning",
+        title: "Database Update Notice",
+        message: "A database update failed, but your data has been restored.",
+        detail:
+          "The app will continue with your existing data. Please contact support if this happens again.",
+        buttons: ["OK"],
+      });
     });
   });
 
@@ -503,6 +566,17 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
           message: expect.stringContaining("could not be automatically fixed"),
         })
       );
+      // BACKLOG-2962, seams PR B: the three keys above were the whole assertion,
+      // so `buttons` and the exact headline were unpinned. Transcribed from
+      // `databaseService.ts:394-403`.
+      const fullArg = mockShowMessageBox.mock.calls[0][0] as {
+        message: string;
+        buttons: string[];
+      };
+      expect(fullArg.message).toBe(
+        "A database update failed and could not be automatically fixed.",
+      );
+      expect(fullArg.buttons).toEqual(["OK"]);
       // BACKLOG-2999 (Amendment 8): the copy still says "contact support /
       // manual recovery" -- deliberately NOT the cleanup scripts the
       // BACKLOG-2993 refusal points at, which would destroy data that may

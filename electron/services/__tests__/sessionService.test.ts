@@ -42,20 +42,21 @@ jest.mock("fs", () => ({
   promises: mockFs,
 }));
 
-// Mock logService - must use factory function
-jest.mock("../logService", () => {
-  const mockFns = {
-    info: jest.fn().mockResolvedValue(undefined),
-    debug: jest.fn().mockResolvedValue(undefined),
-    warn: jest.fn().mockResolvedValue(undefined),
-    error: jest.fn().mockResolvedValue(undefined),
-  };
-  return {
-    __esModule: true,
-    default: mockFns,
-    logService: mockFns,
-  };
-});
+// Mock logService. BACKLOG-3147: the handles are hoisted OUT of the factory so tests can
+// assert on the LEVEL a message was logged at, not just that it was logged. (Name must start
+// with "mock" — jest hoists the factory above this declaration and only allows such refs.)
+const mockLog = {
+  info: jest.fn().mockResolvedValue(undefined),
+  debug: jest.fn().mockResolvedValue(undefined),
+  warn: jest.fn().mockResolvedValue(undefined),
+  error: jest.fn().mockResolvedValue(undefined),
+};
+
+jest.mock("../logService", () => ({
+  __esModule: true,
+  default: mockLog,
+  logService: mockLog,
+}));
 
 /**
  * Helper: extract the session data from a writeFile call.
@@ -65,15 +66,14 @@ jest.mock("../logService", () => {
  */
 function extractSavedSessionData(writeCallArg: string): Record<string, unknown> {
   const wrapper = JSON.parse(writeCallArg);
-  if (wrapper.encrypted) {
-    // Our mock encryptString produces Buffer.from(`encrypted:${str}`)
-    // and the wrapper stores it as base64, so decode base64 -> strip prefix
-    const decoded = Buffer.from(wrapper.encrypted, "base64").toString();
-    const json = decoded.startsWith("encrypted:") ? decoded.slice("encrypted:".length) : decoded;
-    return JSON.parse(json);
-  }
-  // Fallback: plaintext (encryption unavailable)
-  return wrapper;
+  // Anything that reaches disk is the wrapper, so there is no other shape to
+  // handle here -- and a write that somehow was not the wrapper must fail loudly
+  // rather than be parsed as if it were expected.
+  // Our mock encryptString produces Buffer.from(`encrypted:${str}`)
+  // and the wrapper stores it as base64, so decode base64 -> strip prefix
+  const decoded = Buffer.from(wrapper.encrypted, "base64").toString();
+  const json = decoded.startsWith("encrypted:") ? decoded.slice("encrypted:".length) : decoded;
+  return JSON.parse(json);
 }
 
 /**
@@ -92,11 +92,18 @@ describe("SessionService", () => {
   beforeEach(async () => {
     jest.clearAllMocks();
     jest.resetModules();
+    // BACKLOG-2962: resetModules gave us a fresh capability provider with nothing
+    // installed. Re-install, or the first secret-store call throws.
+    require("../../../tests/helpers/installTestSecretStore").installTestSecretStore();
 
     // Reset mock implementations
     mockFs.writeFile.mockResolvedValue(undefined);
     mockFs.readFile.mockResolvedValue("{}");
     mockFs.unlink.mockResolvedValue(undefined);
+    mockLog.info.mockResolvedValue(undefined);
+    mockLog.debug.mockResolvedValue(undefined);
+    mockLog.warn.mockResolvedValue(undefined);
+    mockLog.error.mockResolvedValue(undefined);
 
     // Re-import to get fresh instance
     const module = await import("../sessionService");
@@ -440,7 +447,105 @@ describe("SessionService", () => {
       // Error message may vary depending on implementation
     });
 
-    it("should handle update error", async () => {
+    // ------------------------------------------------------------------
+    // BACKLOG-3147: "No session to update" is a NORMAL outcome, not a failure.
+    //
+    // Enumerated by the compiler (ts.Program over tsconfig.electron.json, checker-resolved)
+    // there are exactly three production callers of updateSession. Two of them —
+    // preAuthValidationHandler.ts:111 and sessionHandlers.ts:917 — already return early when
+    // loadSession() is null, so there is no unguarded startup caller to fix. The third,
+    // supabaseService.ts:436, is unguarded BY DESIGN: it is the fire-and-forget persist of
+    // SDK-rotated tokens, and its own comment states session.json may legitimately be absent.
+    // So the message level, not the call, is what is wrong.
+    //
+    // These two tests go RED if the ERROR line can reappear on a signed-out startup.
+    // ------------------------------------------------------------------
+
+    it("BACKLOG-3147: logs at INFO and never ERROR when no session file exists (signed-out startup)", async () => {
+      const enoent: NodeJS.ErrnoException = new Error("ENOENT");
+      enoent.code = "ENOENT";
+      mockFs.readFile.mockRejectedValue(enoent);
+
+      const result = await sessionService.updateSession({
+        sessionToken: "new-token",
+      });
+
+      expect(result).toBe(false);
+      // Order matters: assert the LEVEL first, so a regression's failure output names the
+      // ERROR line itself rather than reporting a missing INFO line.
+      expect(mockLog.error).not.toHaveBeenCalled();
+      expect(mockLog.info).toHaveBeenCalledWith("No session to update", "SessionService");
+      expect(mockFs.writeFile).not.toHaveBeenCalled();
+    });
+
+    it("BACKLOG-3147: logs at INFO and never ERROR when the stored session has expired (inactivity timeout cleared it)", async () => {
+      // The founder's observed shape: the session existed but had timed out, and the
+      // loadSession INSIDE updateSession is what clears it. Different branch, same outcome.
+      const expiredSession = {
+        user: {
+          id: "user-123",
+          email: "test@example.com",
+          oauth_provider: "google",
+          oauth_id: "google-123",
+        },
+        sessionToken: "stale-token",
+        provider: "google",
+        expiresAt: Date.now() - 1000,
+        createdAt: Date.now() - 25 * 60 * 60 * 1000,
+      };
+      mockFs.readFile.mockResolvedValue(createEncryptedFileContent(expiredSession));
+
+      const result = await sessionService.updateSession({
+        sessionToken: "new-token",
+      });
+
+      expect(result).toBe(false);
+      // loadSession deleted the expired file on the way through.
+      expect(mockFs.unlink).toHaveBeenCalled();
+      // Order matters: assert the LEVEL first, so a regression's failure output names the
+      // ERROR line itself rather than reporting a missing INFO line.
+      expect(mockLog.error).not.toHaveBeenCalled();
+      expect(mockLog.info).toHaveBeenCalledWith("No session to update", "SessionService");
+      expect(mockFs.writeFile).not.toHaveBeenCalled();
+    });
+
+    // BACKLOG-3147 control #3: the signed-IN path is untouched — a live session still
+    // merges the updates over the stored fields and still writes.
+    it("BACKLOG-3147: still merges and writes on a live session (signed-in path unchanged)", async () => {
+      const liveSession = {
+        user: {
+          id: "user-123",
+          email: "test@example.com",
+          oauth_provider: "google",
+          oauth_id: "google-123",
+        },
+        sessionToken: "existing-token",
+        provider: "google",
+        expiresAt: Date.now() + 24 * 60 * 60 * 1000,
+        createdAt: Date.now() - 60_000,
+      };
+      mockFs.readFile.mockResolvedValue(createEncryptedFileContent(liveSession));
+
+      const result = await sessionService.updateSession({
+        sessionToken: "rotated-token",
+      });
+
+      expect(result).toBe(true);
+      const savedData = extractSavedSessionData(mockFs.writeFile.mock.calls[0][1] as string);
+      // The update was applied...
+      expect(savedData.sessionToken).toBe("rotated-token");
+      // ...and the fields it did not mention were carried over from the stored session.
+      expect((savedData.user as { id?: string }).id).toBe("user-123");
+      expect(savedData.provider).toBe("google");
+      expect(savedData.createdAt).toBe(liveSession.createdAt);
+      expect(mockLog.error).not.toHaveBeenCalled();
+    });
+
+    // BACKLOG-3147 control #4: ERROR must still mean something went wrong. A live session
+    // whose write actually fails is the genuine failure, and it stays at ERROR. Was previously
+    // "should handle update error", which asserted only that readFile had been called and so
+    // could not distinguish a successful write from a failed one.
+    it("still reports a genuine write failure at ERROR (signed-in path)", async () => {
       const existingSession = {
         user: {
           id: "user-123",
@@ -450,20 +555,24 @@ describe("SessionService", () => {
         },
         sessionToken: "token",
         provider: "google",
-        expiresAt: Date.now() + 1000,
+        expiresAt: Date.now() + 24 * 60 * 60 * 1000,
         createdAt: Date.now(),
       };
 
       mockFs.readFile.mockResolvedValue(createEncryptedFileContent(existingSession));
       mockFs.writeFile.mockRejectedValue(new Error("Write failed"));
 
-      // Update may succeed or fail depending on implementation
-      await sessionService.updateSession({
+      const result = await sessionService.updateSession({
         sessionToken: "new-token",
       });
 
-      // Just verify the call was attempted
-      expect(mockFs.readFile).toHaveBeenCalled();
+      expect(result).toBe(false);
+      expect(mockFs.writeFile).toHaveBeenCalled();
+      expect(mockLog.error).toHaveBeenCalledWith(
+        "Error saving session",
+        "SessionService",
+        expect.objectContaining({ error: "Write failed" }),
+      );
     });
 
     it("should update savedAt timestamp on update", async () => {

@@ -71,9 +71,13 @@ const mockDatabaseService = {
     updateTransaction: jest.fn(),
     // BACKLOG-2013: export completion stamps the freeze marker via this path.
     stampFirstExportedAt: jest.fn().mockReturnValue(true),
+    // BACKLOG-2549: the enhanced and folder paths now write tracking + the
+    // freeze marker in ONE statement through this method instead.
+    recordExportCompletion: jest.fn(),
   },
   updateTransaction: jest.fn(),
   stampFirstExportedAt: jest.fn().mockReturnValue(true),
+  recordExportCompletion: jest.fn(),
   isInitialized: jest.fn().mockReturnValue(true),
 };
 
@@ -723,16 +727,34 @@ describe("Transaction Handlers Integration Tests", () => {
           metadata: expect.objectContaining({ format: "pdf" }),
         }),
       );
+
+      // BACKLOG-2549: this test's NAME promised the increment and nothing here
+      // checked it — the only assertion was the audit log, which is true of
+      // every export. Asserting the count the completion write actually
+      // receives: the fixture holds 2, so the write must carry 3.
+      expect(mockDatabaseService.recordExportCompletion).toHaveBeenCalledWith(
+        TEST_TXN_ID,
+        expect.objectContaining({ exportCount: 3 }),
+      );
     });
   });
 
   describe("Audited Transaction Creation", () => {
+    // BACKLOG-2755 — THIS FIXTURE USED TO CARRY A TYPE THE DATABASE REJECTS.
+    //
+    // It read `transaction_type: "lease"`, and it was green only because
+    // `transactionService` is mocked here: `transactions.transaction_type` has
+    // a CHECK of ('purchase', 'sale', 'other'), so against a real database that
+    // INSERT fails. The validator accepted `lease` and the column did not, and
+    // this test documented the disagreement as if it were the intended
+    // behaviour. Corrected to a legal type, with the refusal asserted below so
+    // the case that used to pass wrongly now has a test of its own.
     it("should create audited transaction with full details", async () => {
       const auditedTransaction = {
         id: TEST_TXN_ID,
         user_id: TEST_USER_ID,
         property_address: "100 Corporate Dr, Suite 500",
-        transaction_type: "lease",
+        transaction_type: "purchase",
         status: "active",
         started_at: "2025-01-01",
         closed_at: "2025-06-30",
@@ -748,7 +770,7 @@ describe("Transaction Handlers Integration Tests", () => {
       const handler = registeredHandlers.get("transactions:create-audited");
       const result = await handler(mockEvent, TEST_USER_ID, {
         property_address: "100 Corporate Dr, Suite 500",
-        transaction_type: "lease",
+        transaction_type: "purchase",
         status: "active",
         started_at: "2025-01-01",
         closed_at: "2025-06-30",
@@ -757,8 +779,25 @@ describe("Transaction Handlers Integration Tests", () => {
       });
 
       expect(result.success).toBe(true);
-      expect(result.transaction.transaction_type).toBe("lease");
+      expect(result.transaction.transaction_type).toBe("purchase");
       expect(result.transaction.property_address).toContain("Corporate");
+    });
+
+    it("refuses a transaction type the column rejects, with a message naming the legal ones", async () => {
+      const handler = registeredHandlers.get("transactions:create-audited");
+      const result = await handler(mockEvent, TEST_USER_ID, {
+        property_address: "100 Corporate Dr, Suite 500",
+        transaction_type: "lease",
+        status: "active",
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain(
+        "Transaction type must be one of: purchase, sale, other",
+      );
+      expect(
+        mockTransactionService.createAuditedTransaction,
+      ).not.toHaveBeenCalled();
     });
   });
 

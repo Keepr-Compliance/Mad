@@ -10,8 +10,8 @@
  * without validation -- sudden strict enforcement would break things.
  */
 import { z } from 'zod/v4';
-import log from 'electron-log';
-import * as Sentry from '@sentry/electron/main';
+import { hostLogger } from '../capabilities/loggerProvider';
+import { hostErrorReporter } from '../capabilities/errorReporterProvider';
 
 /**
  * Validate data against a Zod schema with graceful degradation.
@@ -34,11 +34,11 @@ export function validateResponse<T>(schema: z.ZodType<T>, data: unknown, context
       (issue) => `  - ${issue.path.join('.')}: ${issue.message}`
     );
     const warnMsg = `[Validation] ${context}: Schema validation failed (${result.error.issues.length} issue(s)):\n${issueMessages.join('\n')}`;
-    log.warn(warnMsg);
+    hostLogger.warn(warnMsg);
 
     // Sentry breadcrumb with specific field-level details (BACKLOG-1347)
     try {
-      Sentry.addBreadcrumb({
+      hostErrorReporter.addBreadcrumb({
         category: "validation",
         message: `Schema validation failed: ${context}`,
         level: "warning",
@@ -104,7 +104,7 @@ export function validateArray<T>(
       invalidCount++;
       if (invalidCount <= 3) {
         const firstIssue = result.error.issues[0];
-        log.warn(
+        hostLogger.warn(
           `[Validation] ${context}[${index}]: ${firstIssue?.path.join('.')}: ${firstIssue?.message}`
         );
       }
@@ -114,7 +114,7 @@ export function validateArray<T>(
   });
 
   if (invalidCount > 3) {
-    log.warn(
+    hostLogger.warn(
       `[Validation] ${context}: ${invalidCount} invalid items total (showing first 3)`
     );
   }

@@ -30,10 +30,13 @@
  *
  * MUTATION: restore "Only downloads emails newer than what is already cached."
  * in EmailSettings -> the first two tests go red.
+ *
+ * BACKLOG-3156 stage B: the sentences moved from a card on the page into the
+ * `?` popup. Same claims, same testids, one `mouseDown` further in.
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { EmailSettings } from "../EmailSettings";
 
@@ -83,13 +86,23 @@ const renderPanel = () =>
  * below it. Reading the whole panel would let the force line's "unlinks" satisfy
  * an assertion about the ordinary one, which is the confusion under test.
  */
+async function openInfoPopup(): Promise<void> {
+  // BACKLOG-3156 stage B moved BOTH descriptions off the page and into the `?`
+  // popup, which is where a user now reads them — so this suite reads them
+  // there. The four claims below are unchanged; only their location is.
+  fireEvent.mouseDown(await screen.findByTestId("emails-import-info-button"));
+}
+
 async function recacheBlockText(): Promise<string> {
-  const button = await screen.findByTestId("recache-emails");
-  // The description shares a row with the button; its container is the row's
-  // parent block, which also holds the Force re-cache paragraph — so climb to
-  // the row and read only that.
-  const row = button.parentElement as HTMLElement;
-  return (row.textContent ?? "").replace(/\s+/g, " ");
+  // BACKLOG-3156 stage A moved the buttons OUT of the description card and onto
+  // the page, so climbing from the button lands on a row with no prose in it.
+  // Stage B then moved the prose itself into the popup. The description keeps
+  // its own testid through both moves; reading it names the same text the
+  // original traversal reached, and cannot silently start reading the Force
+  // paragraph if the markup shifts again — which is the confusion under test.
+  await openInfoPopup();
+  const block = await screen.findByTestId("recache-description");
+  return (block.textContent ?? "").replace(/\s+/g, " ");
 }
 
 describe("BACKLOG-3056 — Re-cache copy", () => {
@@ -123,7 +136,8 @@ describe("BACKLOG-3056 — Re-cache copy", () => {
   it("still warns that Force re-cache unlinks — the contrast must survive", async () => {
     renderPanel();
     await waitFor(() => expect(screen.getByTestId("force-recache-emails")).toBeInTheDocument());
-    const forceRow = screen.getByTestId("force-recache-emails").parentElement as HTMLElement;
+    await openInfoPopup();
+    const forceRow = screen.getByTestId("force-recache-description");
 
     expect((forceRow.textContent ?? "").replace(/\s+/g, " ")).toMatch(
       /unlinks your emails from their transactions/i,

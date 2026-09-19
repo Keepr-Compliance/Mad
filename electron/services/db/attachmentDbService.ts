@@ -4,7 +4,7 @@
  */
 
 import { randomUUID } from "crypto";
-import { ensureDb } from "./core/dbConnection";
+import { ensureDb, dbTransaction } from "./core/dbConnection";
 // BACKLOG-2781: the closing-day end bound is the export resolver's canonical
 // one, so the Attachments tab and the submission package agree on where the
 // closing day ends. LATENT today — the tab's only caller
@@ -16,6 +16,13 @@ import { auditWindowEnd } from "../exportPlan";
 // ============================================
 // ATTACHMENT CRUD OPERATIONS
 // ============================================
+
+/** BACKLOG-2551: what both writers need to decide insert-vs-reconcile. */
+export interface AttachmentLookupRow {
+  id: string;
+  storage_path: string | null;
+  provider_attachment_id: string | null;
+}
 
 /**
  * Get all attachment storage paths (for content hash deduplication).
@@ -49,13 +56,19 @@ export function createAttachmentRecord(params: {
   mimeType: string;
   fileSizeBytes: number;
   storagePath: string;
+  /**
+   * BACKLOG-2551: the provider's own id — Gmail's `partId` or Outlook's Graph id
+   * (BACKLOG-3187), never a Gmail `attachmentId`. Null where no identity exists.
+   */
+  providerAttachmentId?: string | null;
 }): void {
   const db = ensureDb();
   db.prepare(
     `
     INSERT INTO attachments (
-      id, email_id, external_message_id, filename, mime_type, file_size_bytes, storage_path, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      id, email_id, external_message_id, filename, mime_type, file_size_bytes, storage_path,
+      provider_attachment_id, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
   `
   ).run(
     params.id,
@@ -64,7 +77,8 @@ export function createAttachmentRecord(params: {
     params.filename,
     params.mimeType,
     params.fileSizeBytes,
-    params.storagePath
+    params.storagePath,
+    params.providerAttachmentId ?? null
   );
 }
 
@@ -88,9 +102,101 @@ export function upsertEmailAttachmentMetadata(params: {
   filename: string;
   mimeType?: string | null;
   fileSizeBytes?: number | null;
+  /**
+   * BACKLOG-2551: the provider's own attachment id, or null.
+   *
+   * BACKLOG-3187: for Gmail this is the `partId` — the immutable id of the MIME
+   * part — and NEVER the `attachmentId`, which is a fetch token measured rotating
+   * between two fetches of the same attachment. For Outlook it is the Graph id.
+   * Null still arrives here, from a legacy row's re-write or from a call site whose
+   * provider could not supply an identity, and step 4 handles it exactly as before.
+   * The gate that decides this lives at the three call-site chokepoints, never
+   * here: the database layer must not know which provider a row came from.
+   */
+  providerAttachmentId?: string | null;
+}): string {
+  // BACKLOG-2551 / BACKLOG-2530: the ORIGINAL finding on this function was two
+  // faults, not one — "SELECT then UPDATE or INSERT, no transaction, and NO
+  // UNIQUE constraint". The partial unique index closes the duplicate-ROW window;
+  // this transaction closes the read-modify-write window around it, so a caller
+  // that loses the race fails cleanly instead of interleaving. better-sqlite3
+  // implements a nested transaction as a SAVEPOINT, so the force-recache swap
+  // (which already runs inside db.transaction) nests safely.
+  return dbTransaction(() => upsertEmailAttachmentMetadataInner(params));
+}
+
+function upsertEmailAttachmentMetadataInner(params: {
+  emailId: string;
+  externalEmailId: string | null;
+  filename: string;
+  mimeType?: string | null;
+  fileSizeBytes?: number | null;
+  providerAttachmentId?: string | null;
 }): string {
   const db = ensureDb();
+  const providerId = params.providerAttachmentId ?? null;
 
+  // Backfill only where NULL — never clobber a value a download already wrote.
+  const backfill = (id: string): void => {
+    db.prepare(
+      `UPDATE attachments
+         SET mime_type = COALESCE(mime_type, ?),
+             file_size_bytes = COALESCE(file_size_bytes, ?)
+       WHERE id = ?`
+    ).run(params.mimeType ?? null, params.fileSizeBytes ?? null, id);
+  };
+
+  if (providerId !== null) {
+    // Steps 1 and 2 — see findEmailAttachmentRow for why the order is what it is.
+    const existing = findEmailAttachmentRow(params.emailId, params.filename, providerId);
+    if (existing) {
+      if (existing.provider_attachment_id === null) {
+        // Adopt: a pre-v71 row for this same attachment. Stamping the id here is
+        // what stops the insert below creating a duplicate beside it.
+        db.prepare(
+          `UPDATE attachments SET provider_attachment_id = ? WHERE id = ?`
+        ).run(providerId, existing.id);
+      }
+      backfill(existing.id);
+      return existing.id;
+    }
+
+    // Step 3. The ON CONFLICT target MUST repeat the partial index's WHERE clause:
+    // without it SQLite rejects the statement at PREPARE time with "ON CONFLICT
+    // clause does not match any PRIMARY KEY or UNIQUE constraint". This is the
+    // clause that closes the race — two callers that both miss the lookup above
+    // now collapse to one row instead of two.
+    const id = randomUUID();
+    db.prepare(
+      `INSERT INTO attachments (
+        id, email_id, external_message_id, filename, mime_type, file_size_bytes,
+        provider_attachment_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(email_id, provider_attachment_id) WHERE provider_attachment_id IS NOT NULL
+      DO UPDATE SET
+        mime_type = COALESCE(attachments.mime_type, excluded.mime_type),
+        file_size_bytes = COALESCE(attachments.file_size_bytes, excluded.file_size_bytes)`
+    ).run(
+      id,
+      params.emailId,
+      params.externalEmailId,
+      params.filename,
+      params.mimeType ?? null,
+      params.fileSizeBytes ?? null,
+      providerId
+    );
+    // On conflict the surviving row is the EXISTING one, not `id`, so read the id
+    // back rather than returning the one we generated.
+    return (
+      db
+        .prepare(
+          `SELECT id FROM attachments WHERE email_id = ? AND provider_attachment_id = ? LIMIT 1`
+        )
+        .get(params.emailId, providerId) as { id: string }
+    ).id;
+  }
+
+  // Step 4 — no provider id: byte-for-byte the pre-v71 path.
   const existing = db
     .prepare(
       `SELECT id FROM attachments WHERE email_id = ? AND filename = ? LIMIT 1`
@@ -98,14 +204,7 @@ export function upsertEmailAttachmentMetadata(params: {
     .get(params.emailId, params.filename) as { id: string } | undefined;
 
   if (existing) {
-    // Backfill metadata only where it is currently NULL — never clobber a value a
-    // download (or a previous sync) already wrote.
-    db.prepare(
-      `UPDATE attachments
-         SET mime_type = COALESCE(mime_type, ?),
-             file_size_bytes = COALESCE(file_size_bytes, ?)
-       WHERE id = ?`
-    ).run(params.mimeType ?? null, params.fileSizeBytes ?? null, existing.id);
+    backfill(existing.id);
     return existing.id;
   }
 
@@ -134,15 +233,66 @@ export function upsertEmailAttachmentMetadata(params: {
 export function getEmailAttachmentByFilename(
   emailId: string,
   filename: string
-): { id: string; storage_path: string | null } | undefined {
+): AttachmentLookupRow | undefined {
   const db = ensureDb();
   return db
     .prepare(
-      `SELECT id, storage_path FROM attachments WHERE email_id = ? AND filename = ? LIMIT 1`
+      `SELECT id, storage_path, provider_attachment_id
+         FROM attachments WHERE email_id = ? AND filename = ? LIMIT 1`
     )
-    .get(emailId, filename) as
-    | { id: string; storage_path: string | null }
-    | undefined;
+    .get(emailId, filename) as AttachmentLookupRow | undefined;
+}
+
+/**
+ * BACKLOG-2551: resolve the row an incoming attachment belongs to, in ONE order
+ * shared by both writers — the sync/metadata upsert below and the on-demand
+ * download path (emailAttachmentService.processAttachment).
+ *
+ * The order matters and each step earns its place:
+ *   1. provider id     — the only key that distinguishes two attachments in one
+ *                        email that share a filename (image001.png repeats across
+ *                        Outlook signature chains), which is why filename alone
+ *                        cannot be an identity key.
+ *   2. legacy adopt    — a row written before v71 has NULL here. Without this
+ *                        step the first sync after upgrade would miss on step 1
+ *                        and insert a SECOND row beside every existing one: v71
+ *                        would ship the duplication it exists to prevent. The
+ *                        `IS NULL` guard is what keeps step 2 from swallowing a
+ *                        legitimate same-named sibling that already has its own id.
+ *   3. (caller inserts)
+ *   4. no provider id  — filename only: byte-for-byte the pre-v71 behaviour. Until
+ *                        BACKLOG-3187 this was the path every Gmail row took; it is
+ *                        now the path taken only by rows written before it and by
+ *                        call sites that cannot supply an identity.
+ *
+ * This function knows the ORDER, never the provider: no gmail/outlook branch
+ * belongs in the database layer.
+ */
+export function findEmailAttachmentRow(
+  emailId: string,
+  filename: string,
+  providerAttachmentId: string | null
+): AttachmentLookupRow | undefined {
+  const db = ensureDb();
+  if (providerAttachmentId !== null) {
+    const byProvider = db
+      .prepare(
+        `SELECT id, storage_path, provider_attachment_id
+           FROM attachments WHERE email_id = ? AND provider_attachment_id = ? LIMIT 1`
+      )
+      .get(emailId, providerAttachmentId) as AttachmentLookupRow | undefined;
+    if (byProvider) return byProvider;
+
+    return db
+      .prepare(
+        `SELECT id, storage_path, provider_attachment_id
+           FROM attachments
+          WHERE email_id = ? AND filename = ? AND provider_attachment_id IS NULL
+          LIMIT 1`
+      )
+      .get(emailId, filename) as AttachmentLookupRow | undefined;
+  }
+  return getEmailAttachmentByFilename(emailId, filename);
 }
 
 /**
@@ -153,12 +303,19 @@ export function getEmailAttachmentByFilename(
 export function setEmailAttachmentStorage(
   id: string,
   storagePath: string,
-  fileSizeBytes: number
+  fileSizeBytes: number,
+  providerAttachmentId?: string | null
 ): void {
   const db = ensureDb();
+  // BACKLOG-2551: COALESCE, never overwrite — this is how a legacy row adopted by
+  // step 2 of findEmailAttachmentRow gets its provider id, while a row that
+  // already has one keeps it.
   db.prepare(
-    `UPDATE attachments SET storage_path = ?, file_size_bytes = ? WHERE id = ?`
-  ).run(storagePath, fileSizeBytes, id);
+    `UPDATE attachments
+        SET storage_path = ?, file_size_bytes = ?,
+            provider_attachment_id = COALESCE(provider_attachment_id, ?)
+      WHERE id = ?`
+  ).run(storagePath, fileSizeBytes, providerAttachmentId ?? null, id);
 }
 
 /**

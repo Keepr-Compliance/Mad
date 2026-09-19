@@ -168,6 +168,21 @@ export interface RecoveryHooks {
   onError?: (err: unknown) => void;
 }
 
+
+/**
+ * Runtime guard for a mocked `updater` whose `downloadUpdate()` returns nothing.
+ *
+ * The declared type says `Promise<unknown>`, so `if (p && typeof p.then === …)`
+ * on the typed value is `if (<always truthy>)` — the exact `if (promise)` shape
+ * `@typescript-eslint/no-misused-promises` exists to catch (BACKLOG-2960 PR 0b).
+ * The check itself is deliberate and stays: it is what keeps a test double that
+ * returns `undefined` from throwing here. It is now written against `unknown`,
+ * so the compiler knows the value may be anything and the narrowing is real.
+ */
+function isThenable(value: unknown): value is Promise<unknown> {
+  return !!value && typeof (value as { then?: unknown }).then === "function";
+}
+
 /**
  * Execute a {@link RecoveryDecision} against the injected updater, MUTATING the
  * retry state to record the consumed attempt. This is the wiring that
@@ -211,8 +226,8 @@ export function executeRecovery(
     schedule(() => {
       try {
         updater.disableDifferentialDownload = true;
-        const p = updater.downloadUpdate();
-        if (p && typeof p.then === "function") {
+        const p: unknown = updater.downloadUpdate();
+        if (isThenable(p)) {
           p.catch((err) => hooks.onError?.(err));
         }
       } catch (err) {
@@ -230,8 +245,8 @@ export function executeRecovery(
       // B2: handle the rejection so a failed retry re-surfaces through the
       // tagged/scrubbed autoUpdater "error" path (via onError) instead of
       // leaking a raw token via the untagged unhandledRejection handler.
-      const p = updater.downloadUpdate();
-      if (p && typeof p.then === "function") {
+      const p: unknown = updater.downloadUpdate();
+      if (isThenable(p)) {
         p.catch((err) => hooks.onError?.(err));
       }
     } catch (err) {

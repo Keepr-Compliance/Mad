@@ -41,10 +41,10 @@ describe("communicationDbService", () => {
 
   describe("countTextThreadsForTransaction", () => {
     describe("basic counting", () => {
-      it("should return 0 when no text messages are linked to the transaction", () => {
+      it("should return 0 when no text messages are linked to the transaction", async () => {
         mockDbAll.mockReturnValue([]);
 
-        const result = countTextThreadsForTransaction(TEST_TRANSACTION_ID);
+        const result = await countTextThreadsForTransaction(TEST_TRANSACTION_ID);
 
         expect(result).toBe(0);
         expect(mockDbAll).toHaveBeenCalledWith(
@@ -53,17 +53,17 @@ describe("communicationDbService", () => {
         );
       });
 
-      it("should return 1 when a single text thread is linked", () => {
+      it("should return 1 when a single text thread is linked", async () => {
         mockDbAll.mockReturnValue([
           { id: "msg-1", thread_id: "thread-abc", participants: null },
         ]);
 
-        const result = countTextThreadsForTransaction(TEST_TRANSACTION_ID);
+        const result = await countTextThreadsForTransaction(TEST_TRANSACTION_ID);
 
         expect(result).toBe(1);
       });
 
-      it("should return correct count with multiple different threads", () => {
+      it("should return correct count with multiple different threads", async () => {
         mockDbAll.mockReturnValue([
           { id: "msg-1", thread_id: "thread-abc", participants: null },
           { id: "msg-2", thread_id: "thread-abc", participants: null },
@@ -72,13 +72,13 @@ describe("communicationDbService", () => {
           { id: "msg-5", thread_id: "thread-xyz", participants: null },
         ]);
 
-        const result = countTextThreadsForTransaction(TEST_TRANSACTION_ID);
+        const result = await countTextThreadsForTransaction(TEST_TRANSACTION_ID);
 
         // 2 unique threads: thread-abc and thread-xyz
         expect(result).toBe(2);
       });
 
-      it("should count unique threads, not total messages", () => {
+      it("should count unique threads, not total messages", async () => {
         // 10 messages but only 3 unique threads
         mockDbAll.mockReturnValue([
           { id: "msg-1", thread_id: "thread-1", participants: null },
@@ -93,7 +93,7 @@ describe("communicationDbService", () => {
           { id: "msg-10", thread_id: "thread-3", participants: null },
         ]);
 
-        const result = countTextThreadsForTransaction(TEST_TRANSACTION_ID);
+        const result = await countTextThreadsForTransaction(TEST_TRANSACTION_ID);
 
         // Should count distinct threads, not messages
         expect(result).toBe(3);
@@ -101,7 +101,7 @@ describe("communicationDbService", () => {
     });
 
     describe("NULL thread_id handling", () => {
-      it("should treat each message with NULL thread_id as its own thread (fallback to message id)", () => {
+      it("should treat each message with NULL thread_id as its own thread (fallback to message id)", async () => {
         // When thread_id is NULL, each message becomes its own "thread"
         mockDbAll.mockReturnValue([
           { id: "msg-1", thread_id: null, participants: null },
@@ -109,13 +109,13 @@ describe("communicationDbService", () => {
           { id: "msg-3", thread_id: null, participants: null },
         ]);
 
-        const result = countTextThreadsForTransaction(TEST_TRANSACTION_ID);
+        const result = await countTextThreadsForTransaction(TEST_TRANSACTION_ID);
 
         // Each message with NULL thread_id becomes its own thread: msg-msg-1, msg-msg-2, msg-msg-3
         expect(result).toBe(3);
       });
 
-      it("should count NULL thread_id messages separately from regular threads", () => {
+      it("should count NULL thread_id messages separately from regular threads", async () => {
         mockDbAll.mockReturnValue([
           { id: "msg-1", thread_id: "thread-abc", participants: null },
           { id: "msg-2", thread_id: "thread-abc", participants: null },
@@ -123,7 +123,7 @@ describe("communicationDbService", () => {
           { id: "msg-4", thread_id: null, participants: null },
         ]);
 
-        const result = countTextThreadsForTransaction(TEST_TRANSACTION_ID);
+        const result = await countTextThreadsForTransaction(TEST_TRANSACTION_ID);
 
         // 1 real thread (thread-abc) + 2 "threads" from NULL messages
         expect(result).toBe(3);
@@ -131,7 +131,7 @@ describe("communicationDbService", () => {
     });
 
     describe("participant-based grouping fallback", () => {
-      it("should group messages by participants when thread_id is NULL", () => {
+      it("should group messages by participants when thread_id is NULL", async () => {
         // Messages with same participants but NULL thread_id should group together
         mockDbAll.mockReturnValue([
           {
@@ -146,13 +146,13 @@ describe("communicationDbService", () => {
           },
         ]);
 
-        const result = countTextThreadsForTransaction(TEST_TRANSACTION_ID);
+        const result = await countTextThreadsForTransaction(TEST_TRANSACTION_ID);
 
         // Both messages share the same participant set, should be 1 thread
         expect(result).toBe(1);
       });
 
-      it("should separate messages with different participants when thread_id is NULL", () => {
+      it("should separate messages with different participants when thread_id is NULL", async () => {
         mockDbAll.mockReturnValue([
           {
             id: "msg-1",
@@ -166,13 +166,13 @@ describe("communicationDbService", () => {
           },
         ]);
 
-        const result = countTextThreadsForTransaction(TEST_TRANSACTION_ID);
+        const result = await countTextThreadsForTransaction(TEST_TRANSACTION_ID);
 
         // Different participants = different threads
         expect(result).toBe(2);
       });
 
-      it("should normalize phone numbers for participant grouping", () => {
+      it("should normalize phone numbers for participant grouping", async () => {
         // Phone numbers with different formats should normalize to same key
         mockDbAll.mockReturnValue([
           {
@@ -187,7 +187,7 @@ describe("communicationDbService", () => {
           },
         ]);
 
-        const result = countTextThreadsForTransaction(TEST_TRANSACTION_ID);
+        const result = await countTextThreadsForTransaction(TEST_TRANSACTION_ID);
 
         // Both normalize to same phone number, should be 1 thread
         expect(result).toBe(1);
@@ -195,7 +195,7 @@ describe("communicationDbService", () => {
     });
 
     describe("mixed scenarios", () => {
-      it("should handle mix of thread_id, participants, and neither", () => {
+      it("should handle mix of thread_id, participants, and neither", async () => {
         mockDbAll.mockReturnValue([
           // Messages in a real thread
           { id: "msg-1", thread_id: "thread-abc", participants: null },
@@ -215,13 +215,13 @@ describe("communicationDbService", () => {
           { id: "msg-5", thread_id: null, participants: null },
         ]);
 
-        const result = countTextThreadsForTransaction(TEST_TRANSACTION_ID);
+        const result = await countTextThreadsForTransaction(TEST_TRANSACTION_ID);
 
         // 1 (thread-abc) + 1 (participant group) + 1 (standalone) = 3 threads
         expect(result).toBe(3);
       });
 
-      it("should prioritize thread_id over participant grouping", () => {
+      it("should prioritize thread_id over participant grouping", async () => {
         // Even if participants differ, thread_id takes precedence
         mockDbAll.mockReturnValue([
           {
@@ -236,7 +236,7 @@ describe("communicationDbService", () => {
           },
         ]);
 
-        const result = countTextThreadsForTransaction(TEST_TRANSACTION_ID);
+        const result = await countTextThreadsForTransaction(TEST_TRANSACTION_ID);
 
         // Same thread_id = 1 thread, regardless of participant difference
         expect(result).toBe(1);
@@ -244,10 +244,10 @@ describe("communicationDbService", () => {
     });
 
     describe("SQL query verification", () => {
-      it("should query communications joined with messages", () => {
+      it("should query communications joined with messages", async () => {
         mockDbAll.mockReturnValue([]);
 
-        countTextThreadsForTransaction(TEST_TRANSACTION_ID);
+        await countTextThreadsForTransaction(TEST_TRANSACTION_ID);
 
         const sqlCall = mockDbAll.mock.calls[0][0] as string;
 
@@ -257,10 +257,10 @@ describe("communicationDbService", () => {
         expect(sqlCall).toContain("WHERE c.transaction_id = ?");
       });
 
-      it("should filter for text message channels", () => {
+      it("should filter for text message channels", async () => {
         mockDbAll.mockReturnValue([]);
 
-        countTextThreadsForTransaction(TEST_TRANSACTION_ID);
+        await countTextThreadsForTransaction(TEST_TRANSACTION_ID);
 
         const sqlCall = mockDbAll.mock.calls[0][0] as string;
 
@@ -268,10 +268,10 @@ describe("communicationDbService", () => {
         expect(sqlCall).toContain("m.channel IN ('text', 'sms', 'imessage')");
       });
 
-      it("should handle thread-based linking (c.thread_id IS NOT NULL)", () => {
+      it("should handle thread-based linking (c.thread_id IS NOT NULL)", async () => {
         mockDbAll.mockReturnValue([]);
 
-        countTextThreadsForTransaction(TEST_TRANSACTION_ID);
+        await countTextThreadsForTransaction(TEST_TRANSACTION_ID);
 
         const sqlCall = mockDbAll.mock.calls[0][0] as string;
 
@@ -282,14 +282,14 @@ describe("communicationDbService", () => {
   });
 
   describe("updateTransactionThreadCount", () => {
-    it("should count threads and update the transaction", () => {
+    it("should count threads and update the transaction", async () => {
       // Mock the count query
       mockDbAll.mockReturnValue([
         { id: "msg-1", thread_id: "thread-abc", participants: null },
         { id: "msg-2", thread_id: "thread-xyz", participants: null },
       ]);
 
-      updateTransactionThreadCount(TEST_TRANSACTION_ID);
+      await updateTransactionThreadCount(TEST_TRANSACTION_ID);
 
       // Verify the count was queried
       expect(mockDbAll).toHaveBeenCalledWith(
@@ -304,10 +304,10 @@ describe("communicationDbService", () => {
       );
     });
 
-    it("should set count to 0 when no threads are linked", () => {
+    it("should set count to 0 when no threads are linked", async () => {
       mockDbAll.mockReturnValue([]);
 
-      updateTransactionThreadCount(TEST_TRANSACTION_ID);
+      await updateTransactionThreadCount(TEST_TRANSACTION_ID);
 
       expect(mockDbRun).toHaveBeenCalledWith(
         expect.stringContaining("UPDATE transactions SET text_thread_count"),
@@ -315,10 +315,10 @@ describe("communicationDbService", () => {
       );
     });
 
-    it("should update with correct SQL syntax", () => {
+    it("should update with correct SQL syntax", async () => {
       mockDbAll.mockReturnValue([]);
 
-      updateTransactionThreadCount(TEST_TRANSACTION_ID);
+      await updateTransactionThreadCount(TEST_TRANSACTION_ID);
 
       const [sql, params] = mockDbRun.mock.calls[0] as [string, unknown[]];
 
@@ -403,10 +403,10 @@ describe("communicationDbService", () => {
       expect(insert[1][columns.indexOf("match_reason")]).toBe("user_confirmed");
     });
 
-    it("confirmEmailLinksByEmailIds updates only the given emails on the given transaction", () => {
+    it("confirmEmailLinksByEmailIds updates only the given emails on the given transaction", async () => {
       mockDbRun.mockReturnValue({ changes: 2 });
 
-      const changed = confirmEmailLinksByEmailIds(["email-a", "email-b"], "txn-9");
+      const changed = await confirmEmailLinksByEmailIds(["email-a", "email-b"], "txn-9");
 
       expect(changed).toBe(2);
       const [sql, params] = mockDbRun.mock.calls[0] as [string, unknown[]];
@@ -418,8 +418,8 @@ describe("communicationDbService", () => {
       expect(params).toEqual(["txn-9", "email-a", "email-b"]);
     });
 
-    it("confirmEmailLinksByEmailIds is a no-op (0) for an empty id list — no SQL run", () => {
-      const changed = confirmEmailLinksByEmailIds([], "txn-9");
+    it("confirmEmailLinksByEmailIds is a no-op (0) for an empty id list — no SQL run", async () => {
+      const changed = await confirmEmailLinksByEmailIds([], "txn-9");
       expect(changed).toBe(0);
       expect(mockDbRun).not.toHaveBeenCalled();
     });

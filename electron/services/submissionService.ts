@@ -39,6 +39,7 @@ import logService from "./logService";
 import emailAttachmentService from "./emailAttachmentService";
 import gmailFetchService from "./gmailFetchService";
 import outlookFetchService from "./outlookFetchService";
+import { TRANSACTION_EMAILS_MISSING_ATTACHMENTS_SQL } from "./db/submissionEmailSql";
 // BACKLOG-2758 finding 3: party names come from the SAME resolver the exported
 // PDF uses, not from a second read of the macOS AddressBook. The AddressBook is
 // still consulted — as tier 3 inside that resolver — so no name previously
@@ -68,9 +69,32 @@ export interface SubmissionResult {
   success: boolean;
   submissionId: string | null;
   error?: string;
+  /**
+   * Attachments that were gathered and then FAILED TO UPLOAD. Unchanged in
+   * BACKLOG-3389 — see {@link SubmissionResult.flaggedWithoutAttachments} for
+   * the number this one never could have reported.
+   */
   attachmentsFailed: number;
   messagesCount: number;
   attachmentsCount: number;
+  /**
+   * BACKLOG-3389: in-window texts and emails that ADVERTISE an attachment
+   * (`has_attachments`) and contributed NOTHING to this submission.
+   *
+   * `attachmentsFailed` counts upload failures, so it can only ever see an
+   * attachment the gather already returned. Everything lost BEFORE the gather —
+   * a metadata-only row whose bytes were never downloaded, a download that
+   * failed, an attachment row the importer never wrote — was invisible: the run
+   * reported `attachmentsCount: 0, attachmentsFailed: 0` while silently
+   * dropping a real attachment. That silent zero is what made BACKLOG-3389
+   * take a month to notice.
+   *
+   * Counted AFTER the gather, so it is the honest residue of the whole
+   * pipeline — pre-download included — and not a prediction made inside any one
+   * step of it. Zero here means "nothing to send"; non-zero means "we could not
+   * send these", and the two are now distinguishable.
+   */
+  flaggedWithoutAttachments: number;
 }
 
 /** Progress stages for submission flow */
@@ -88,6 +112,48 @@ export interface SubmissionProgress {
   stageProgress: number; // 0-100 within current stage
   overallProgress: number; // 0-100 total
   currentItem?: string;
+}
+
+/**
+ * The organization record embedded by this service's membership lookup.
+ *
+ * BACKLOG-3364. `personal_owner_user_id` is optional because it is exactly what
+ * a database without that migration omits — the whole record is selected so
+ * that its absence is a missing key rather than an error.
+ */
+interface SubmissionEmbeddedOrganization {
+  personal_owner_user_id?: string | null;
+}
+
+/**
+ * One row of `select("organization_id, organizations(*)")`.
+ *
+ * Object on the wire, ARRAY in the inferred type: PostgREST returns a single
+ * object for this many-to-one embed, but the client is built without a
+ * generated `Database` type, so supabase-js infers an array from the select
+ * string alone. Both are declared and both are handled — narrowing to the array
+ * alone compiles and then reads `undefined` at runtime, which would make every
+ * organization look non-personal and is precisely the bug this guards.
+ */
+interface SubmissionMembershipRow {
+  organization_id: string;
+  organizations?:
+    | SubmissionEmbeddedOrganization
+    | SubmissionEmbeddedOrganization[]
+    | null;
+}
+
+/**
+ * Is this membership row the user's own personal organization?
+ *
+ * A null, empty or missing embed reads as NOT personal, which is the
+ * pre-migration answer and the safe one: it can only leave today's behaviour in
+ * place.
+ */
+function isPersonalSubmissionMembership(row: SubmissionMembershipRow): boolean {
+  const embed = row.organizations;
+  const org = !embed ? null : Array.isArray(embed) ? (embed[0] ?? null) : embed;
+  return !!org?.personal_owner_user_id;
 }
 
 /** Record structure for transaction_submissions table */
@@ -309,6 +375,27 @@ class SubmissionService {
         auditStartDate,
         auditEndDate
       );
+
+      // BACKLOG-3389: what advertised an attachment and gave us nothing. Must
+      // be measured HERE — after the gather, before anything is uploaded — so
+      // it counts the residue of the whole pipeline rather than of one step.
+      const flaggedWithoutAttachments = this.countFlaggedWithoutAttachments(
+        messages,
+        emails,
+        attachments
+      );
+      if (flaggedWithoutAttachments > 0) {
+        logService.warn(
+          `[Submission] ${flaggedWithoutAttachments} in-window items advertise an attachment but contributed none — they will NOT be in this submission`,
+          "SubmissionService",
+          {
+            transactionId,
+            flaggedWithoutAttachments,
+            attachmentsGathered: attachments.length,
+          }
+        );
+      }
+
       const orgId = await this.getUserOrganizationId();
       const currentUserId = await this.getCurrentUserId();
 
@@ -459,21 +546,34 @@ class SubmissionService {
          * that ever reaches this code is not covered by the RLS that covers
          * the desktop today.
          *
-         * `resubmitted` is deliberately NOT in the list. BACKLOG-2853 justified
-         * that with "it carries the identical hazard one broker round trip
-         * later" — WRONG, and withdrawn. It was then argued that adding the
-         * word would change nothing, because a `resubmitted` row only exists
-         * at version >= 2, two rows share `(organization_id,
-         * local_transaction_id)`, and the old single-row lookup returned
-         * PGRST116 so execution never arrived here at all.
+         * BACKLOG-3390 — `resubmitted` IS ON THE LIST NOW, and this paragraph
+         * is where it used to say it was not.
          *
-         * BACKLOG-2867 FIXED THAT LOOKUP, so that argument is now spent too:
-         * a `resubmitted` deal DOES reach this check. It is still not on the
-         * list, and it still must not fall into a delete — which is why the
-         * branch below now refuses to delete a row at a version this attempt
-         * is not replacing. Whether `resubmitted` belongs on the list is a
-         * separate decision, deliberately not taken here; see
-         * `submissionStatusMessages.ts`.
+         * BACKLOG-2853 justified leaving it off with "it carries the identical
+         * hazard one broker round trip later" — WRONG, and withdrawn. It was
+         * then argued that adding the word would change nothing, because a
+         * `resubmitted` row only exists at version >= 2, two rows share
+         * `(organization_id, local_transaction_id)`, and the old single-row
+         * lookup returned PGRST116 so execution never arrived here at all.
+         * BACKLOG-2867 fixed that lookup and spent the second argument too,
+         * leaving a live decision sitting in front of a user.
+         *
+         * It arrived as one. After a successful resubmit the deal sits at
+         * `resubmitted`; the modal labels its action "Resubmit for Review"
+         * while `TransactionDetails` routes only `needs_changes` to
+         * `resubmitTransaction`, so the press ran a PLAIN submit holding
+         * version 1. The fixed lookup named the version-2 row, the list let it
+         * through, the full attachment upload ran, and the insert collided with
+         * the retained version-1 row — reaching the user as a raw unique
+         * constraint name. Released v2.37.0, founder QA 2026-09-16.
+         *
+         * The refusal now happens HERE, before the upload. The routing is
+         * deliberately NOT widened to send `resubmitted` to
+         * `resubmitTransaction`: that would insert version 3 and succeed,
+         * sending a second package on a deal the broker has not answered.
+         *
+         * The version-mismatch condition on the delete below is unchanged and
+         * still load-bearing — `needs_changes` at version >= 2 reaches it.
          *
          * BACKLOG-2868 — THE LIST AND THE MESSAGES NOW LIVE IN THEIR OWN
          * MODULE. Not for tidiness: the renderer must tell the user the same
@@ -674,6 +774,43 @@ class SubmissionService {
         .insert(submissionRecord);
 
       if (insertError) {
+        /**
+         * BACKLOG-3390 — THE LAST LINE OF DEFENCE DOES NOT SPEAK SQL.
+         *
+         * `23505` is Postgres's unique_violation. On this insert it can only be
+         * UNIQUE (organization_id, local_transaction_id, version, submitted_by)
+         * — i.e. this user already has a submission of this transaction at this
+         * version. The driver's `message` for it is the sentence the founder was
+         * shown verbatim:
+         *
+         *   duplicate key value violates unique constraint
+         *   "transaction_submissions_org_txn_version_user_key"
+         *
+         * The guard above is what stops him ever reaching this line by pressing
+         * Resubmit; this is what stops the raw name reaching ANY user by any
+         * other route (a second device, a service-role caller, a policy drift).
+         * A guard that only covers the one reported press would leave the string
+         * itself intact, and defect 2 of the item is the string.
+         *
+         * The raw driver text is LOGGED, not thrown — the diagnosis must survive
+         * somewhere, and the application log is the right somewhere. Other
+         * insert failures keep the driver's words, because they are genuinely
+         * unclassified and a vague sentence would be worse than a specific one;
+         * this branch is narrow on purpose.
+         */
+        if (insertError.code === "23505") {
+          logService.error(
+            `[Submission] Insert collided with an existing submission for ${transactionId} at version ${submissionRecord.version}`,
+            "SubmissionService",
+            {
+              code: insertError.code,
+              message: insertError.message,
+            }
+          );
+          throw new Error(
+            "This transaction already has a submission at this version, so nothing new was sent. Close this window and reopen the transaction to refresh its status, then try again."
+          );
+        }
         throw new Error(
           `Failed to insert submission: ${insertError.message}`
         );
@@ -784,6 +921,10 @@ class SubmissionService {
           attachmentsCount: successfulUploads.length,
           attachmentsFailed: attachmentUploadResults.filter((r) => !r.success)
             .length,
+          // BACKLOG-3389: the number that used to be unrecorded. Logged even
+          // when it is 0 — a zero that is PRINTED is a measurement; a zero that
+          // is absent is what this item was.
+          flaggedWithoutAttachments,
         }
       );
 
@@ -795,6 +936,7 @@ class SubmissionService {
         attachmentsCount: successfulUploads.length,
         attachmentsFailed: attachmentUploadResults.filter((r) => !r.success)
           .length,
+        flaggedWithoutAttachments,
       };
     } catch (error) {
       const errorMessage =
@@ -844,6 +986,10 @@ class SubmissionService {
         messagesCount: 0,
         attachmentsCount: 0,
         attachmentsFailed: 0,
+        // Nothing was submitted, so nothing was dropped from a submission. The
+        // error is the report here; this field would only add a second,
+        // weaker one.
+        flaggedWithoutAttachments: 0,
       };
     }
   }
@@ -905,12 +1051,65 @@ class SubmissionService {
   }
 
   /**
+   * BACKLOG-3389: how many in-window texts and emails advertise an attachment
+   * and contributed none to this submission.
+   *
+   * Counted by SET MEMBERSHIP against the attachments actually gathered — the
+   * owning `message_id` / `email_id` of each — not by re-running a query or
+   * subtracting counts. Two counts agreeing is not the same as the right rows
+   * being present, and this number exists precisely because a count agreed with
+   * itself while an attachment went missing.
+   *
+   * `has_attachments` arrives as SQLite's 0/1 through a `boolean` field on
+   * {@link Message} and as an unknown on the email rows, so the truth test is
+   * explicit about all three spellings rather than leaning on truthiness.
+   */
+  private countFlaggedWithoutAttachments(
+    messages: Message[],
+    emails: Record<string, unknown>[],
+    attachments: Attachment[]
+  ): number {
+    const messagesWithBytes = new Set<string>();
+    const emailsWithBytes = new Set<string>();
+    for (const attachment of attachments) {
+      // `getTransactionAttachments` does `SELECT a.*`, so `email_id` is on the
+      // row at runtime even though the `Attachment` interface omits it.
+      const row = attachment as Attachment & { email_id?: string | null };
+      if (row.message_id) messagesWithBytes.add(row.message_id);
+      if (row.email_id) emailsWithBytes.add(row.email_id);
+    }
+
+    const advertisesAttachment = (value: unknown): boolean =>
+      value === true || value === 1 || value === "1";
+
+    let missing = 0;
+    for (const message of messages) {
+      const flagged = advertisesAttachment(
+        (message as unknown as Record<string, unknown>).has_attachments
+      );
+      if (flagged && !messagesWithBytes.has(message.id)) missing += 1;
+    }
+    for (const email of emails) {
+      const id = email.id;
+      if (typeof id !== "string") continue;
+      if (advertisesAttachment(email.has_attachments) && !emailsWithBytes.has(id)) {
+        missing += 1;
+      }
+    }
+    return missing;
+  }
+
+  /**
    * BACKLOG-1369: Load transaction attachments, downloading any missing email
    * attachments on-demand before returning.
    *
    * Since sync no longer downloads attachments eagerly, this method checks for
-   * emails with has_attachments=true but no attachment records, and downloads
-   * them from the provider before querying.
+   * emails that advertise attachments whose BYTES are not stored locally, and
+   * downloads them from the provider before querying.
+   *
+   * BACKLOG-3389: "whose bytes are not stored" is the corrected test. It used
+   * to read "with no attachment records", which is what the SQL asked and what
+   * silently dropped a metadata-only attachment from a submission.
    */
   private async loadTransactionAttachments(
     transactionId: string,
@@ -925,8 +1124,15 @@ class SubmissionService {
 
   /**
    * BACKLOG-1369: Download missing email attachments for a transaction.
-   * Finds emails linked to this transaction that have has_attachments=true but
-   * no attachment records in the DB, then downloads from the provider.
+   * Finds emails linked to this transaction that have has_attachments=true and
+   * are missing the BYTES of at least one attachment, then downloads from the
+   * provider.
+   *
+   * BACKLOG-3389: "missing the bytes" replaced "have no attachment records".
+   * A normal sync writes a metadata-only row (`storage_path` NULL), which
+   * satisfied the old row-existence test — so the download was skipped and the
+   * gather then discarded the row for having nothing to upload. The predicate
+   * and the reasoning live in `db/submissionEmailSql.ts`.
    */
   private async downloadMissingEmailAttachments(transactionId: string): Promise<void> {
     // Check network connectivity first
@@ -947,16 +1153,9 @@ class SubmissionService {
       const db = databaseService.getRawDatabase();
 
       // Find emails linked to this transaction that have attachments but no records
-      const emailsMissing = db.prepare(`
-        SELECT DISTINCT e.id, e.external_id, e.source, e.user_id
-        FROM emails e
-        INNER JOIN communications c ON c.email_id = e.id
-        WHERE c.transaction_id = ?
-          AND e.has_attachments = 1
-          AND e.external_id IS NOT NULL
-          AND e.source IS NOT NULL
-          AND NOT EXISTS (SELECT 1 FROM attachments a WHERE a.email_id = e.id)
-      `).all(transactionId) as { id: string; external_id: string; source: string; user_id: string }[];
+      const emailsMissing = db
+        .prepare(TRANSACTION_EMAILS_MISSING_ATTACHMENTS_SQL)
+        .all(transactionId) as { id: string; external_id: string; source: string; user_id: string }[];
 
       if (emailsMissing.length === 0) return;
 
@@ -985,6 +1184,10 @@ class SubmissionService {
                       filename: att.name || "attachment",
                       mimeType: att.contentType || "application/octet-stream",
                       size: att.size || 0,
+                      // BACKLOG-3187: a Graph attachment has no MIME part, so no identity
+                      // beyond its own id. Explicitly null — the field is required so this
+                      // decision cannot be left unmade at a new call site.
+                      partId: null,
                       attachmentId: att.id,
                     })),
                   );
@@ -1014,10 +1217,13 @@ class SubmissionService {
                 if (fullEmail.attachments && fullEmail.attachments.length > 0) {
                   await emailAttachmentService.downloadEmailAttachments(
                     email.user_id, email.id, email.external_id, "gmail",
-                    fullEmail.attachments.map((att: { filename?: string; name?: string; mimeType?: string; contentType?: string; size?: number; attachmentId?: string; id?: string }) => ({
+                    fullEmail.attachments.map((att: { filename?: string; name?: string; mimeType?: string; contentType?: string; size?: number; partId?: string; attachmentId?: string; id?: string }) => ({
                       filename: att.filename || att.name || "attachment",
                       mimeType: att.mimeType || att.contentType || "application/octet-stream",
                       size: att.size || 0,
+                      // BACKLOG-3187: identity (Gmail's immutable MIME part id) travels
+                      // separately from the fetch token below, which rotates between calls.
+                      partId: att.partId ?? null,
                       attachmentId: att.attachmentId || att.id || "",
                     })),
                   );
@@ -1059,11 +1265,46 @@ class SubmissionService {
 
     try {
       const client = supabaseService.getClient();
+      /**
+       * BACKLOG-3364 — WHICH ORGANIZATION A SUBMISSION GOES TO.
+       *
+       * Three things changed here, each a separate failure this query had or
+       * would have acquired:
+       *
+       * 1. **A personal organization is refused.** A solo user now holds a
+       *    membership row, so this lookup would hand back their own
+       *    organization: the submission would be built, its attachments
+       *    uploaded, and only then would the insert be refused by the database,
+       *    which excludes personal organizations from the submission rules.
+       *    Returning null makes the existing "not a member of any organization"
+       *    refusal in `submitTransactionInternal` fire BEFORE any upload — the
+       *    same refusal a solo user got before personal organizations existed.
+       *
+       * 2. **`.maybeSingle()` is gone.** Against two rows PostgREST answers
+       *    PGRST116 with `data: null`, so a brokerage member who also still
+       *    held a personal row could not submit at all. The rows are ordered
+       *    and picked here instead.
+       *
+       * 3. **The column is never named.** `organizations(*)` embeds the whole
+       *    record and the personal flag is read from a key that is simply
+       *    absent until BACKLOG-3364's migration is applied. Naming it in the
+       *    select, order or filter returns HTTP 400 / `42703` with `data: null`
+       *    and no throw — which reads here as "no organization" and would stop
+       *    every real brokerage member from submitting.
+       *
+       * The absence of a `license_status` filter here is deliberate and is NOT
+       * changed by this item — it matches the rule the database already
+       * applies, and narrowing it would take away something that works today.
+       * Rationale on the backlog item, not here. Both `.order()` columns are
+       * base columns of `organization_members`, so neither names the new column
+       * nor sorts on the embed.
+       */
       const { data, error } = await client
         .from("organization_members")
-        .select("organization_id")
+        .select("organization_id, organizations(*)")
         .eq("user_id", userId)
-        .maybeSingle();
+        .order("created_at", { ascending: true })
+        .order("id", { ascending: true });
 
       if (error) {
         logService.warn(
@@ -1073,7 +1314,27 @@ class SubmissionService {
         return null;
       }
 
-      return data?.organization_id || null;
+      if (!Array.isArray(data)) {
+        logService.warn(
+          "[Submission] Failed to get org: result was not a list of rows",
+          "SubmissionService"
+        );
+        return null;
+      }
+
+      const brokerage = (data as SubmissionMembershipRow[]).find(
+        (row) => !isPersonalSubmissionMembership(row)
+      );
+
+      if (!brokerage) {
+        logService.info(
+          "[Submission] No brokerage organization for this user — nothing to submit to",
+          "SubmissionService"
+        );
+        return null;
+      }
+
+      return brokerage.organization_id || null;
     } catch (err) {
       logService.error(
         `[Submission] Error fetching org: ${err instanceof Error ? err.message : "Unknown"}`,

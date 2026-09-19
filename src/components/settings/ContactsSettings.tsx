@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { ContactsImportSettings } from "./MacOSContactsImportSettings";
+import { useContactInferenceState } from "../../hooks/useContactInferenceState";
 import { settingsService } from '../../services';
 import { usePlatform } from "../../contexts/PlatformContext";
 import {
@@ -144,6 +145,16 @@ export function ContactsSettings({
   const androidContactsDeclared =
     phoneType === "android" ||
     typeof initialPreferences?.contactSources?.direct?.androidContacts === "boolean";
+  /**
+   * BACKLOG-3349: does the plan on record allow inferring contacts from email?
+   *
+   * The user's own switch (below) and this are independent, and BOTH are
+   * required. The switch stays exactly as the user left it whether or not the
+   * plan allows it, so turning the plan back on restores his choice rather than
+   * silently resetting it — the same rule the connection state follows.
+   */
+  const contactInference = useContactInferenceState();
+
   // Contact source preferences - inferred from conversations
   const [outlookEmailsInferred, setOutlookEmailsInferred] = useState<boolean>(() => {
     const val = initialPreferences?.contactSources?.inferred?.outlookEmails;
@@ -277,6 +288,11 @@ export function ContactsSettings({
           gmailContactsEnabled={gmailContactsEnabled}
           googleContactsEnabled={googleContactsEnabled}
           outlookEmailsInferred={outlookEmailsInferred}
+          /* BACKLOG-3349: the plan's answer for inferring contacts from email.
+             Read ONCE here, in the container, and passed down — the row is
+             rendered per source and must not open a separate IPC call each
+             time. */
+          contactInference={contactInference}
           gmailEmailsInferred={gmailEmailsInferred}
           messagesInferred={messagesInferred}
           loadingPreferences={false}

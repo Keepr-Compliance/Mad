@@ -36,6 +36,10 @@ const addBreadcrumb = Sentry.addBreadcrumb as unknown as jest.Mock;
  */
 function realisticRow(overrides: Partial<SyncOutcomeRow> = {}): SyncOutcomeRow {
   return {
+    // BACKLOG-3440: a run has an identity and a start time on every write.
+    // pii-allow-uuid: invented sync run id, typed by hand for this fixture
+    runId: "3a7c1e90-0b2d-4f61-9a3e-5c8d21b47f06",
+    startedAt: Date.UTC(2026, 8, 16, 9, 0, 0),
     source: SYNC_OUTCOME_SOURCE,
     outcome: "complete",
     elapsedMs: 3_120_000,

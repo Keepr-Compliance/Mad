@@ -152,6 +152,16 @@ export interface RawEmailAttachment {
   mimeType?: string;
   contentType?: string;
   size?: number;
+  /**
+   * BACKLOG-3187: Gmail's immutable MIME part id — the attachment's IDENTITY.
+   * Absent on every Outlook shape, which has no MIME part concept.
+   */
+  partId?: string;
+  /**
+   * The provider's fetch token, passed to `attachments.get` / Graph and used
+   * immediately. BACKLOG-3187 measured Gmail's rotating between two fetches of
+   * the same attachment, so it is never persisted as identity.
+   */
   attachmentId?: string;
   id?: string;
 }

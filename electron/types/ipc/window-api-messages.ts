@@ -13,6 +13,10 @@ import type { AttachmentsRefusedForSpace } from "../../services/macOSMessagesImp
 // in the resolver becomes a compile-time fact on the renderer side instead of a
 // silently-unhandled case.
 import type { ImportPlanOverride } from "../../services/importPlan";
+// BACKLOG-2832: ONE definition of the progress phase. This declaration used to
+// spell the union by hand and omitted "querying", a phase the producer has
+// always emitted.
+import type { ImportPhase } from "./importPhase";
 
 export type { AttachmentsRefusedForSpace, ImportPlanOverride };
 
@@ -248,7 +252,7 @@ export interface WindowApiMessages {
    */
   cancelImport: () => void;
   /** Listen for import progress updates */
-  onImportProgress: (callback: (progress: { phase: "deleting" | "importing" | "attachments"; current: number; total: number; percent: number }) => void) => () => void;
+  onImportProgress: (callback: (progress: { phase: ImportPhase; current: number; total: number; percent: number }) => void) => () => void;
   /** Get attachments for a message with base64 data (TASK-1012) */
   getMessageAttachments: (messageId: string) => Promise<MessageAttachmentInfo[]>;
   /** Get attachments for multiple messages at once (TASK-1012) */

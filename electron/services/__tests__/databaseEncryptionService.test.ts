@@ -69,6 +69,11 @@ describe("DatabaseEncryptionService", () => {
     // Clear all mock calls
     jest.clearAllMocks();
 
+    // BACKLOG-2962: this suite is the host, so it installs the secret store the
+    // service will be handed — the same mocked `safeStorage` object it configures
+    // below, so every existing expectation still points at the right mock.
+    require("../../../tests/helpers/installTestSecretStore").installTestSecretStore();
+
     // Reset the service state by clearing cache
     databaseEncryptionService.clearCache();
 

@@ -293,10 +293,10 @@ describe("BACKLOG-2560 — writers vs the real database", () => {
   // -------------------------------------------------------------------------
 
   describe("clearing an API key (BACKLOG-2932)", () => {
-    beforeEach(() => {
+    beforeEach(async () => {
       db.prepare("DELETE FROM llm_settings WHERE user_id = ?").run(USER_ID);
-      createLLMSettings(USER_ID);
-      updateLLMSettings(USER_ID, {
+      await createLLMSettings(USER_ID);
+      await updateLLMSettings(USER_ID, {
         openai_api_key_encrypted: "encrypted-openai-key-fixture",
         anthropic_api_key_encrypted: "encrypted-anthropic-key-fixture",
       });
@@ -309,24 +309,27 @@ describe("BACKLOG-2560 — writers vs the real database", () => {
         )
         .get(USER_ID) as { openai: string | null; anthropic: string | null };
 
-    it("removes the key from the DATABASE, not just from the returned object", () => {
+    it("removes the key from the DATABASE, not just from the returned object", async () => {
       expect(storedKeys().openai).toBe("encrypted-openai-key-fixture");
 
-      clearLLMSettingsField(USER_ID, "openai_api_key_encrypted");
+      await clearLLMSettingsField(USER_ID, "openai_api_key_encrypted");
 
       // THIS is the assertion the old code failed. It returned the settings
       // object as success while the row below still held the key.
       expect(storedKeys().openai).toBeNull();
     });
 
-    it("clears only the column asked for", () => {
-      clearLLMSettingsField(USER_ID, "openai_api_key_encrypted");
+    it("clears only the column asked for", async () => {
+      await clearLLMSettingsField(USER_ID, "openai_api_key_encrypted");
 
       const keys = storedKeys();
       expect(keys.openai).toBeNull();
       expect(keys.anthropic).toBe("encrypted-anthropic-key-fixture");
     });
 
+    // BACKLOG-2960: still SYNCHRONOUS. These exports return promises but are
+    // plain functions, never `async`, so a rejected precondition throws before
+    // the promise is constructed. If anyone makes one `async`, this goes red.
     it("refuses a column that is not clearable", () => {
       expect(() =>
         clearLLMSettingsField(
@@ -345,7 +348,8 @@ describe("BACKLOG-2560 — writers vs the real database", () => {
       ).toBe("openai");
     });
 
-    it("throws on a payload with no writable field instead of reporting success", () => {
+    // Synchronous on purpose — see the note above.
+    it("throws on a payload with no writable field instead of reporting success", async () => {
       // The shape that let `removeApiKey` report success for a write that never
       // happened: every value dropped, nothing left to set.
       expect(() => updateLLMSettings(USER_ID, {})).toThrow(/No valid fields to update/);
@@ -355,7 +359,7 @@ describe("BACKLOG-2560 — writers vs the real database", () => {
 
       // The row is untouched either way — a throw must not be a partial write.
       expect(storedKeys().openai).toBe("encrypted-openai-key-fixture");
-      expect(getLLMSettingsByUserId(USER_ID)?.anthropic_api_key_encrypted).toBe(
+      expect((await getLLMSettingsByUserId(USER_ID))?.anthropic_api_key_encrypted).toBe(
         "encrypted-anthropic-key-fixture",
       );
     });

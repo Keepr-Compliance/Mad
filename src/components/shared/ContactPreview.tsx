@@ -7,8 +7,7 @@ import type { Communication, ContactMessageThread, Message } from "@/types";
 import type { ContactSourceProvenance } from "@/types/contactProvenance";
 import { labelForContact } from "@/utils/contactDisplayLabel";
 import {
-  hasNothingToImport,
-  NOTHING_TO_IMPORT_REASON,
+  importRefusalReason,
 } from "@/utils/importableRecord";
 import { parseDbTimestamp } from "@/utils/dateFormatters";
 import {
@@ -784,7 +783,17 @@ export function ContactPreview({
                   it is external, and a new prop would be a thing each of the
                   five call sites could forget to pass.
                 */
-                hasNothingToImport(contact) ? (
+                /*
+                  BACKLOG-2707: ONE call decides both the state and the words.
+                  This read `hasNothingToImport(contact)` for the state and then
+                  hard-coded `NOTHING_TO_IMPORT_REASON` for the label, which went
+                  wrong the moment a second reason existed: a company-only row —
+                  labelled "Vantrees Realty" by `labelForContact` — displayed a
+                  button reading "No name, phone, or email — nothing to import".
+                  A control that says one thing and means another is this item's
+                  own defect, one layer down.
+                */
+                importRefusalReason(contact) ? (
                   /*
                     `aria-disabled`, not `disabled` — see the note on
                     `ContactRow.blockedButton`. The reason is the button's own
@@ -796,7 +805,7 @@ export function ContactPreview({
                     className="flex-shrink-0 max-w-[16rem] px-3.5 py-1.5 text-gray-500 text-sm font-semibold rounded-lg bg-gray-100 text-right leading-snug cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500"
                     data-testid="contact-preview-import-blocked"
                   >
-                    {NOTHING_TO_IMPORT_REASON}
+                    {importRefusalReason(contact)}
                   </button>
                 ) : (
                   /* BACKLOG-2525: `disabled` is the load-bearing attribute, not

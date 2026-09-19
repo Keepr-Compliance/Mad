@@ -13,13 +13,14 @@
 
 import type { AuditLogEntry, AuditLogDbRow } from "../auditService";
 import { dbAll, dbRun, ensureDb } from "./core/dbConnection";
+import { sql } from "./core/sqlText";
 
 /**
  * Insert an audit log entry (append-only)
  * Note: The audit_logs table has triggers that prevent UPDATE and DELETE
  */
 export async function insertAuditLog(entry: AuditLogEntry): Promise<void> {
-  const sql = `
+  const statement = sql`
     INSERT INTO audit_logs (
       id, timestamp, user_id, session_id, action, resource_type,
       resource_id, metadata, ip_address, user_agent, success, error_message
@@ -41,21 +42,21 @@ export async function insertAuditLog(entry: AuditLogEntry): Promise<void> {
     entry.errorMessage || null,
   ];
 
-  dbRun(sql, params);
+  dbRun(statement, params);
 }
 
 /**
  * Get audit logs that haven't been synced to cloud
  */
 export async function getUnsyncedAuditLogs(limit: number = 100): Promise<AuditLogEntry[]> {
-  const sql = `
+  const statement = sql`
     SELECT * FROM audit_logs
     WHERE synced_at IS NULL
     ORDER BY timestamp ASC
     LIMIT ?
   `;
 
-  const rows = dbAll<AuditLogDbRow>(sql, [limit]);
+  const rows = dbAll<AuditLogDbRow>(statement, [limit]);
   return rows.map(mapAuditLogRowToEntry);
 }
 
@@ -169,47 +170,47 @@ export interface AuditLogFilters {
  * Get audit logs for a user with optional filters
  */
 export async function getAuditLogs(filters: AuditLogFilters): Promise<AuditLogEntry[]> {
-  let sql = "SELECT * FROM audit_logs WHERE 1=1";
+  let statement = sql`SELECT * FROM audit_logs WHERE 1=1`;
   const params: (string | number)[] = [];
 
   if (filters.userId) {
-    sql += " AND user_id = ?";
+    statement = sql`${statement} AND user_id = ?`;
     params.push(filters.userId);
   }
 
   if (filters.action) {
-    sql += " AND action = ?";
+    statement = sql`${statement} AND action = ?`;
     params.push(filters.action);
   }
 
   if (filters.resourceType) {
-    sql += " AND resource_type = ?";
+    statement = sql`${statement} AND resource_type = ?`;
     params.push(filters.resourceType);
   }
 
   if (filters.startDate) {
-    sql += " AND timestamp >= ?";
+    statement = sql`${statement} AND timestamp >= ?`;
     params.push(filters.startDate.toISOString());
   }
 
   if (filters.endDate) {
-    sql += " AND timestamp <= ?";
+    statement = sql`${statement} AND timestamp <= ?`;
     params.push(filters.endDate.toISOString());
   }
 
-  sql += " ORDER BY timestamp DESC";
+  statement = sql`${statement} ORDER BY timestamp DESC`;
 
   if (filters.limit) {
-    sql += " LIMIT ?";
+    statement = sql`${statement} LIMIT ?`;
     params.push(filters.limit);
   }
 
   if (filters.offset) {
-    sql += " OFFSET ?";
+    statement = sql`${statement} OFFSET ?`;
     params.push(filters.offset);
   }
 
-  const rows = dbAll<AuditLogDbRow>(sql, params);
+  const rows = dbAll<AuditLogDbRow>(statement, params);
   return rows.map(mapAuditLogRowToEntry);
 }
 

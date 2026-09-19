@@ -85,7 +85,9 @@
  *     neighbours. If you revert it and see green, the suite is not failing you;
  *     there is genuinely nothing there to catch.
  */
-export const IMPORTED_CONTACT_LAST_COMMUNICATION_SQL = `
+import { sql } from "./core/sqlText";
+
+export const IMPORTED_CONTACT_LAST_COMMUNICATION_SQL = sql`
       NULLIF(
         MAX(
           COALESCE((
@@ -215,7 +217,7 @@ export const IMPORTED_CONTACT_LAST_COMMUNICATION_SQL = `
  * whole-mailbox scan per contact. The plan is asserted, in both stats regimes,
  * by contactRecencySql.queryPlan.test.ts.
  */
-export const EXTERNAL_CONTACT_LAST_MESSAGE_EXPR = `
+export const EXTERNAL_CONTACT_LAST_MESSAGE_EXPR = sql`
       NULLIF(
         MAX(
           COALESCE((
@@ -253,7 +255,7 @@ export const EXTERNAL_CONTACT_LAST_MESSAGE_EXPR = `
  * ORDER BY term and would otherwise silently fall back to the stored column
  * inside the `last_message_at IS NULL` expression). One `?` bind: userId.
  */
-export const EXTERNAL_CONTACTS_GET_ALL_SQL = `
+export const EXTERNAL_CONTACTS_GET_ALL_SQL = sql`
   SELECT * FROM (
     SELECT id, user_id, name, phones_json, emails_json, company,
            ${EXTERNAL_CONTACT_LAST_MESSAGE_EXPR} as last_message_at,

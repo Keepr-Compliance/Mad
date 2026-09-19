@@ -33,6 +33,23 @@ import fs from "fs";
 import os from "os";
 import { iOSMessagesParser, convertAppleTimestamp } from "../iosMessagesParser";
 
+/**
+ * Settle a promise by hand and hand back plain values.
+ *
+ * BACKLOG-3152: no `Error` object is passed to a matcher — the message is
+ * captured as a string first.
+ */
+const settle = async (
+  p: Promise<unknown>,
+): Promise<{ rejected: boolean; message: string | null }> => {
+  try {
+    await p;
+    return { rejected: false, message: null };
+  } catch (e) {
+    return { rejected: true, message: e instanceof Error ? e.message : String(e) };
+  }
+};
+
 describe("iOSMessagesParser", () => {
   let parser: iOSMessagesParser;
   let testDir: string;
@@ -129,8 +146,11 @@ describe("iOSMessagesParser", () => {
     const baseTimestamp = 708696000000000000; // nanoseconds
 
     // Insert test messages
-    // Message 7: voice message with audio_transcript
-    // Message 8: message with null text but attributedBody (will be tested async)
+    // Message 7: null text, audio_transcript set.
+    // Message 8: text AND audio_transcript both set.
+    // No row here sets attributedBody — every value in that column is NULL, so
+    // the attributedBody pre-parsing branch of getMessagesAsync is unreached by
+    // this fixture.
     db.exec(`
       INSERT INTO message (ROWID, guid, text, attributedBody, audio_transcript, handle_id, is_from_me, date, date_read, date_delivered, service) VALUES
         (1, 'msg-guid-1', 'Hello there!', NULL, NULL, 1, 0, ${baseTimestamp}, ${baseTimestamp + 1000000000}, NULL, 'iMessage'),
@@ -317,14 +337,14 @@ describe("iOSMessagesParser", () => {
       parser.open(testDir);
     });
 
-    it("should return messages for a chat", () => {
-      const messages = parser.getMessages(1); // Individual chat with person 1
+    it("should return messages for a chat", async () => {
+      const messages = await parser.getMessages(1); // Individual chat with person 1
 
       expect(messages.length).toBe(5); // 5 messages in chat 1
     });
 
-    it("should return messages in chronological order", () => {
-      const messages = parser.getMessages(1);
+    it("should return messages in chronological order", async () => {
+      const messages = await parser.getMessages(1);
 
       for (let i = 0; i < messages.length - 1; i++) {
         expect(messages[i].date.getTime()).toBeLessThanOrEqual(
@@ -333,61 +353,65 @@ describe("iOSMessagesParser", () => {
       }
     });
 
-    it("should correctly identify messages from me", () => {
-      const messages = parser.getMessages(1);
+    it("should correctly identify messages from me", async () => {
+      const messages = await parser.getMessages(1);
       const myMessage = messages.find((m) => m.text === "Hi! How are you?");
 
       expect(myMessage).toBeDefined();
       expect(myMessage!.isFromMe).toBe(true);
     });
 
-    it("should correctly identify messages from others", () => {
-      const messages = parser.getMessages(1);
+    it("should correctly identify messages from others", async () => {
+      const messages = await parser.getMessages(1);
       const theirMessage = messages.find((m) => m.text === "Hello there!");
 
       expect(theirMessage).toBeDefined();
       expect(theirMessage!.isFromMe).toBe(false);
     });
 
-    it("should handle messages with null text", () => {
-      const messages = parser.getMessages(1);
+    it("should handle messages with null text", async () => {
+      const messages = await parser.getMessages(1);
       const nullTextMessage = messages.find((m) => m.text === null);
 
       expect(nullTextMessage).toBeDefined();
       expect(nullTextMessage!.text).toBeNull();
     });
 
-    it("should distinguish iMessage from SMS", () => {
-      const smsMessages = parser.getMessages(2); // Group chat has SMS message
+    it("should distinguish iMessage from SMS", async () => {
+      const smsMessages = await parser.getMessages(2); // Group chat has SMS message
       const smsMessage = smsMessages.find((m) => m.service === "SMS");
 
       expect(smsMessage).toBeDefined();
     });
 
-    it("should support pagination with limit", () => {
-      const allMessages = parser.getMessages(1);
-      const limitedMessages = parser.getMessages(1, 2);
+    it("should support pagination with limit", async () => {
+      const allMessages = await parser.getMessages(1);
+      const limitedMessages = await parser.getMessages(1, 2);
 
       expect(limitedMessages.length).toBe(2);
       expect(limitedMessages[0].id).toBe(allMessages[0].id);
     });
 
-    it("should support pagination with limit and offset", () => {
-      const allMessages = parser.getMessages(1);
-      const offsetMessages = parser.getMessages(1, 2, 1);
+    it("should support pagination with limit and offset", async () => {
+      const allMessages = await parser.getMessages(1);
+      const offsetMessages = await parser.getMessages(1, 2, 1);
 
       expect(offsetMessages.length).toBe(2);
       expect(offsetMessages[0].id).toBe(allMessages[1].id);
     });
 
-    it("should return empty array for non-existent chat", () => {
-      const messages = parser.getMessages(999);
+    it("should return empty array for non-existent chat", async () => {
+      const messages = await parser.getMessages(999);
       expect(messages).toEqual([]);
     });
 
-    it("should throw error when database not open", () => {
+    it("should reject when database not open", async () => {
       parser.close();
-      expect(() => parser.getMessages(1)).toThrow("Database not open");
+
+      expect(await settle(parser.getMessages(1))).toEqual({
+        rejected: true,
+        message: expect.stringContaining("Database not open"),
+      });
     });
   });
 
@@ -414,8 +438,8 @@ describe("iOSMessagesParser", () => {
       expect(attachments).toEqual([]);
     });
 
-    it("should include attachments in message objects", () => {
-      const messages = parser.getMessages(1);
+    it("should include attachments in message objects", async () => {
+      const messages = await parser.getMessages(1);
       const messageWithAttachment = messages.find(
         (m) => m.text === "Hello there!",
       );
@@ -430,37 +454,41 @@ describe("iOSMessagesParser", () => {
       parser.open(testDir);
     });
 
-    it("should find messages matching query", () => {
-      const results = parser.searchMessages("Hello");
+    it("should find messages matching query", async () => {
+      const results = await parser.searchMessages("Hello");
 
       expect(results.length).toBeGreaterThan(0);
       expect(results[0].text).toContain("Hello");
     });
 
-    it("should be case-insensitive", () => {
-      const results = parser.searchMessages("hello");
+    it("should be case-insensitive", async () => {
+      const results = await parser.searchMessages("hello");
 
       expect(results.length).toBeGreaterThan(0);
     });
 
-    it("should return empty array for no matches", () => {
-      const results = parser.searchMessages("xyznonexistent");
+    it("should return empty array for no matches", async () => {
+      const results = await parser.searchMessages("xyznonexistent");
       expect(results).toEqual([]);
     });
 
-    it("should return empty array for empty query", () => {
-      expect(parser.searchMessages("")).toEqual([]);
-      expect(parser.searchMessages("   ")).toEqual([]);
+    it("should return empty array for empty query", async () => {
+      expect(await parser.searchMessages("")).toEqual([]);
+      expect(await parser.searchMessages("   ")).toEqual([]);
     });
 
-    it("should support limit parameter", () => {
-      const results = parser.searchMessages("message", 1);
+    it("should support limit parameter", async () => {
+      const results = await parser.searchMessages("message", 1);
       expect(results.length).toBeLessThanOrEqual(1);
     });
 
-    it("should throw error when database not open", () => {
+    it("should reject when database not open", async () => {
       parser.close();
-      expect(() => parser.searchMessages("test")).toThrow("Database not open");
+
+      expect(await settle(parser.searchMessages("test"))).toEqual({
+        rejected: true,
+        message: expect.stringContaining("Database not open"),
+      });
     });
   });
 
@@ -490,31 +518,33 @@ describe("iOSMessagesParser", () => {
       parser.open(testDir);
     });
 
-    it("should return conversation with messages populated", () => {
-      const conversation = parser.getConversationWithMessages(1);
+    it("should return conversation with messages populated", async () => {
+      const conversation = await parser.getConversationWithMessages(1);
 
       expect(conversation).not.toBeNull();
       expect(conversation!.chatId).toBe(1);
       expect(conversation!.messages.length).toBe(5);
     });
 
-    it("should support pagination", () => {
-      const conversation = parser.getConversationWithMessages(1, 2);
+    it("should support pagination", async () => {
+      const conversation = await parser.getConversationWithMessages(1, 2);
 
       expect(conversation).not.toBeNull();
       expect(conversation!.messages.length).toBe(2);
     });
 
-    it("should return null for non-existent chat", () => {
-      const conversation = parser.getConversationWithMessages(999);
+    it("should return null for non-existent chat", async () => {
+      const conversation = await parser.getConversationWithMessages(999);
       expect(conversation).toBeNull();
     });
 
-    it("should throw error when database not open", () => {
+    it("should reject when database not open", async () => {
       parser.close();
-      expect(() => parser.getConversationWithMessages(1)).toThrow(
-        "Database not open",
-      );
+
+      expect(await settle(parser.getConversationWithMessages(1))).toEqual({
+        rejected: true,
+        message: expect.stringContaining("Database not open"),
+      });
     });
   });
 
@@ -531,8 +561,8 @@ describe("iOSMessagesParser", () => {
       parser.open(testDir);
     });
 
-    it("should resolve handle to phone number", () => {
-      const messages = parser.getMessages(1);
+    it("should resolve handle to phone number", async () => {
+      const messages = await parser.getMessages(1);
       const messageFromContact = messages.find(
         (m) => !m.isFromMe && m.handle !== "",
       );
@@ -541,8 +571,8 @@ describe("iOSMessagesParser", () => {
       expect(messageFromContact!.handle).toBe("+14155550109");
     });
 
-    it("should handle messages from me (no handle)", () => {
-      const messages = parser.getMessages(1);
+    it("should handle messages from me (no handle)", async () => {
+      const messages = await parser.getMessages(1);
       const myMessage = messages.find((m) => m.isFromMe);
 
       expect(myMessage).toBeDefined();
@@ -556,8 +586,8 @@ describe("iOSMessagesParser", () => {
       parser.open(testDir);
     });
 
-    it("should include audioTranscript when present", () => {
-      const messages = parser.getMessages(1);
+    it("should include audioTranscript when present", async () => {
+      const messages = await parser.getMessages(1);
       const voiceMessage = messages.find((m) => m.guid === "msg-guid-7");
 
       expect(voiceMessage).toBeDefined();
@@ -565,8 +595,8 @@ describe("iOSMessagesParser", () => {
       expect(voiceMessage!.text).toBeNull(); // Text is null for voice messages
     });
 
-    it("should return audioTranscript alongside text when both present", () => {
-      const messages = parser.getMessages(1);
+    it("should return audioTranscript alongside text when both present", async () => {
+      const messages = await parser.getMessages(1);
       const messageWithBoth = messages.find((m) => m.guid === "msg-guid-8");
 
       expect(messageWithBoth).toBeDefined();
@@ -574,8 +604,8 @@ describe("iOSMessagesParser", () => {
       expect(messageWithBoth!.audioTranscript).toBe("Transcript should be ignored when text exists");
     });
 
-    it("should return null audioTranscript when not present", () => {
-      const messages = parser.getMessages(1);
+    it("should return null audioTranscript when not present", async () => {
+      const messages = await parser.getMessages(1);
       const regularMessage = messages.find((m) => m.guid === "msg-guid-1");
 
       expect(regularMessage).toBeDefined();
@@ -613,9 +643,13 @@ describe("iOSMessagesParser", () => {
       expect(messages).toEqual([]);
     });
 
-    it("should throw error when database not open", async () => {
+    it("should reject when database not open", async () => {
       parser.close();
-      await expect(parser.getMessagesAsync(1)).rejects.toThrow("Database not open");
+
+      expect(await settle(parser.getMessagesAsync(1))).toEqual({
+        rejected: true,
+        message: expect.stringContaining("Database not open"),
+      });
     });
   });
 
@@ -650,25 +684,28 @@ describe("iOSMessagesParser", () => {
       }
     });
 
-    it("should handle empty database gracefully", () => {
+    it("should handle empty database gracefully", async () => {
       const emptyParser = new iOSMessagesParser();
       emptyParser.open(emptyDbDir);
 
       expect(emptyParser.getConversations()).toEqual([]);
-      expect(emptyParser.getMessages(1)).toEqual([]);
-      expect(emptyParser.searchMessages("test")).toEqual([]);
+      expect(await emptyParser.getMessages(1)).toEqual([]);
+      expect(await emptyParser.searchMessages("test")).toEqual([]);
 
       emptyParser.close();
     });
 
-    it("should handle database without audio_transcript column", () => {
+    it("should handle database without audio_transcript column", async () => {
       // The empty database was created WITHOUT audio_transcript column
       // Parser should still work gracefully
       const emptyParser = new iOSMessagesParser();
       emptyParser.open(emptyDbDir);
 
-      // Should not throw - gracefully handles missing column
-      expect(() => emptyParser.getMessages(1)).not.toThrow();
+      // Degrades instead of failing the whole query when audio_transcript is absent.
+      expect(await settle(emptyParser.getMessages(1))).toEqual({
+        rejected: false,
+        message: null,
+      });
 
       emptyParser.close();
     });

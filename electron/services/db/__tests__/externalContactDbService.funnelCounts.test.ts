@@ -68,6 +68,12 @@ jest.mock("../../logService", () => ({
 
 import { fullSync, type MacOSContact } from "../externalContactDbService";
 import {
+  CONTACT_SOURCE_LINKS_TABLE_SQL,
+  CONTACT_SOURCE_LINKS_INDEX_SQL,
+  CONTACT_LINK_PROPOSALS_TABLE_SQL,
+  CONTACT_LINK_PROPOSALS_INDEX_SQL,
+} from "../contactIdentitySchemaSql";
+import {
   getContactIngestionFunnel,
   resetContactIngestionFunnel,
 } from "../../contactIngestionFunnel";
@@ -99,26 +105,51 @@ function createSchema(db: DatabaseType): void {
     );
 
     /**
+     * contacts -- FK-RESOLUTION STUB, NOT A FIXTURE (BACKLOG-2614).
+     *
+     * The production DDL below carries real foreign keys:
+     * contact_source_links.contact_id, and contact_link_proposals'
+     * contact_id and target_contact_id, all REFERENCE contacts(id).
+     *
+     * This driver enables foreign_keys BY DEFAULT -- SQLite's own default is
+     * OFF, which is the opposite, and is why this table looked unnecessary.
+     * SQLite resolves a foreign key's parent TABLE on every DML statement even
+     * when no row is touched, so without this the suite dies on the crosswalk
+     * DELETE with "no such table: main.contacts". Measured, not assumed: the
+     * DDL swap alone reds 6 of the 17 tests across this file and
+     * staleDeleteScope, and adding this one line restores all 17.
+     *
+     * ZERO ROWS, and no test reads a contacts column -- it exists only so the
+     * constraint can resolve. "id TEXT PRIMARY KEY" is LOAD-BEARING: a parent
+     * key that is neither PRIMARY KEY nor UNIQUE raises "foreign key mismatch".
+     * user_id is inert here, kept for shape parity with the 2480 suite.
+     *
+     * Deliberately a stub rather than production's contacts: there is no
+     * exported constant for that table, so "use the real shape" would mean
+     * hand-writing a copy of a production table inside the very change that
+     * deletes hand-written copies. The table_info and row-count pins at the end
+     * of this file are what keep the stub from becoming a fixture.
+     */
+    CREATE TABLE contacts (id TEXT PRIMARY KEY, user_id TEXT NOT NULL);
+
+    /**
      * BACKLOG-2480 — every deletion path now removes the crosswalk rows that
      * pointed at the records it deleted, so the tables must exist here. A
      * fixture that omits a table the production path writes is a fixture that
      * describes a state the code cannot be in.
+     *
+     * BACKLOG-2614 — and they are now the PRODUCTION DDL rather than a
+     * hand-written echo of it. These were five-column copies with no UNIQUE, no
+     * CHECK vocabulary and no foreign keys, so a constraint could change in the
+     * migration while this suite stayed green. contactIdentitySchemaSql.ts is
+     * the ONE definition -- its header forbids transcribing these statements --
+     * and the pins at the end of this file hold that by execution rather than
+     * by import discipline.
      */
-    CREATE TABLE contact_source_links (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      contact_id TEXT,
-      source_type TEXT NOT NULL,
-      source_record_id TEXT NOT NULL,
-      match_method TEXT
-    );
-    CREATE TABLE contact_link_proposals (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      contact_id TEXT,
-      source_type TEXT NOT NULL,
-      source_record_id TEXT NOT NULL
-    );
+    ${CONTACT_SOURCE_LINKS_TABLE_SQL}
+    ${CONTACT_SOURCE_LINKS_INDEX_SQL}
+    ${CONTACT_LINK_PROPOSALS_TABLE_SQL}
+    ${CONTACT_LINK_PROPOSALS_INDEX_SQL}
     CREATE TABLE phone_last_message (
       phone_normalized TEXT NOT NULL,
       user_id TEXT NOT NULL,
@@ -195,6 +226,56 @@ describe("BACKLOG-2391: fullSync distinguishes inserted / updated / unchanged", 
   afterEach(() => {
     mockDb?.close();
     mockDb = null;
+  });
+
+  /**
+   * BACKLOG-2614 — THE GUARD IS BY EXECUTION, NOT BY IMPORT DISCIPLINE.
+   *
+   * Importing the production DDL fixes the drift once; these pins are what stop
+   * it coming back. Paste a hand-written five-column `contact_link_proposals`
+   * over the import and the UNIQUE count here goes 2 -> 0 — which is exactly
+   * the failure this item exists to close. The header on
+   * `contactIdentitySchemaSql.ts` records the incident it comes from: dropping
+   * the proposals UNIQUE from the REAL migration left a 27-test suite fully
+   * green, because no suite was running the real DDL.
+   *
+   * `origin = 'u'` selects the auto-indexes SQLite creates for TABLE-LEVEL
+   * UNIQUE constraints, so this counts constraints and ignores the plain
+   * `CREATE INDEX` that ships beside each table.
+   */
+  describe("the identity tables are the production DDL (BACKLOG-2614)", () => {
+    const uniqueConstraintCount = (table: string): number =>
+      (
+        mockDb!.prepare(`PRAGMA index_list('${table}')`).all() as Array<{ origin: string }>
+      ).filter((r) => r.origin === "u").length;
+
+    const columnNames = (table: string): string[] =>
+      (mockDb!.prepare(`PRAGMA table_info('${table}')`).all() as Array<{ name: string }>).map(
+        (c) => c.name,
+      );
+
+    it("contact_link_proposals carries BOTH table-level UNIQUEs", () => {
+      // (user_id, contact_id, source_type, source_record_id) and (user_id, pair_key).
+      expect(uniqueConstraintCount("contact_link_proposals")).toBe(2);
+    });
+
+    it("contact_source_links carries its table-level UNIQUE", () => {
+      // (user_id, source_type, source_record_id).
+      expect(uniqueConstraintCount("contact_source_links")).toBe(1);
+    });
+
+    it("contacts is a bare FK-resolution stub, not a fixture", () => {
+      expect(columnNames("contacts")).toEqual(["id", "user_id"]);
+    });
+
+    it("...and the stub holds no rows", () => {
+      // SCOPE LIMIT: this runs after `beforeEach`, so it pins the FIXTURE
+      // contract. It cannot see an `INSERT INTO contacts` inside some future
+      // `it()`. A task that needs contacts rows here must revisit BACKLOG-2614.
+      expect(
+        (mockDb!.prepare("SELECT COUNT(*) AS n FROM contacts").get() as { n: number }).n,
+      ).toBe(0);
+    });
   });
 
   it("counts a first sync as all inserts, nothing updated or unchanged", () => {

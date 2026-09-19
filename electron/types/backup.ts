@@ -312,6 +312,15 @@ export type BackupErrorCode =
   | "SERVICE_UNAVAILABLE"
   /** The device could not find a file the backup needed (MBErrorDomain/4). */
   | "BACKUP_FILE_MISSING"
+  // BACKLOG-2953: the caller-supplied UDID failed `validateDeviceUdid` before any
+  // process was spawned — the TASK-601 command-injection guard that is the first
+  // statement of `BackupService.startBackup`. Emitted from that guard only. It used
+  // to leave as the string "BACKUP_FAILED" cast to this type — a value outside the
+  // union that the cast hid from `tsc`. It is NOT `UNKNOWN_ERROR`: this Mac rejected
+  // the input for a stated reason, and `BackupResult.error` carries it. It is NOT
+  // `DEVICE_NOT_FOUND`: a malformed identifier is not a missing device.
+  /** The UDID handed to `startBackup` is missing, not a string, the wrong length, or not hex. */
+  | "INVALID_UDID"
   | "UNKNOWN_ERROR";
 
 /**

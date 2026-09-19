@@ -58,7 +58,9 @@
  *   - operational / derived / bookkeeping columns (status, stage, message_count,
  *     export_*, submission_*, financial figures, metadata, skip_address_filter).
  */
-export const FROZEN_IDENTITY_FIELDS: readonly string[] = [
+import type { TransactionColumn } from "../utils/sqlFieldWhitelist";
+
+export const FROZEN_IDENTITY_FIELDS: readonly TransactionColumn[] = [
   // Property identity (address block) — the primary "which deal" anchor.
   "property_address",
   "property_street",

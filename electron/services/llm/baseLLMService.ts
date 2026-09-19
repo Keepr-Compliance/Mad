@@ -21,9 +21,9 @@ import logService from '../logService';
  * Allows dependency injection for flexibility and testing.
  */
 export interface LLMDbCallbacks {
-  getSettings: (userId: string) => LLMSettings | null;
-  incrementTokenUsage: (userId: string, tokens: number) => void;
-  resetMonthlyUsage: (userId: string) => void;
+  getSettings: (userId: string) => Promise<LLMSettings | null>;
+  incrementTokenUsage: (userId: string, tokens: number) => Promise<void>;
+  resetMonthlyUsage: (userId: string) => Promise<void>;
 }
 
 /**
@@ -198,14 +198,14 @@ export abstract class BaseLLMService {
       return { allowed: true, remaining: Infinity }; // No tracking enabled
     }
 
-    const settings = this.dbCallbacks.getSettings(userId);
+    const settings = await this.dbCallbacks.getSettings(userId);
     if (!settings) {
       return { allowed: true, remaining: Infinity }; // No settings = no limit
     }
 
     // Check monthly reset
     if (this.shouldResetMonthly(settings.budget_reset_date)) {
-      this.dbCallbacks.resetMonthlyUsage(userId);
+      await this.dbCallbacks.resetMonthlyUsage(userId);
     }
 
     const limit = settings.use_platform_allowance
@@ -239,7 +239,7 @@ export abstract class BaseLLMService {
   async recordUsage(userId: string, usage: TokenUsage): Promise<void> {
     if (!this.dbCallbacks) return;
 
-    this.dbCallbacks.incrementTokenUsage(userId, usage.totalTokens);
+    await this.dbCallbacks.incrementTokenUsage(userId, usage.totalTokens);
     this.log('info', `Recorded ${usage.totalTokens} tokens for user ${userId}`);
   }
 

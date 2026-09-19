@@ -6,12 +6,20 @@
 import crypto from "crypto";
 import type { Session, User } from "../../types";
 import { dbGet, dbRun } from "./core/dbConnection";
+import { sql } from "./core/sqlText";
 import logService from "../logService";
 
 /**
  * Create a new session for a user
  */
-export async function createSession(userId: string): Promise<string> {
+/**
+ * BACKLOG-2546 — SYNC TWIN. See `userDbService.createUserSync` for the full
+ * reasoning: the login provisioning chain commits as one `dbTransaction` unit,
+ * `dbTransaction` takes a SYNCHRONOUS callback by type, so the body needs a
+ * callee that is synchronous all the way down. The primitive is this one; the
+ * promise-returning export below is a one-line wrapper over it.
+ */
+export function createSessionSync(userId: string): string {
   const id = crypto.randomUUID();
   const sessionToken = crypto.randomUUID();
 
@@ -19,13 +27,17 @@ export async function createSession(userId: string): Promise<string> {
   const expiresAt = new Date();
   expiresAt.setTime(expiresAt.getTime() + 24 * 60 * 60 * 1000);
 
-  const sql = `
+  const statement = sql`
     INSERT INTO sessions (id, user_id, session_token, expires_at)
     VALUES (?, ?, ?, ?)
   `;
 
-  dbRun(sql, [id, userId, sessionToken, expiresAt.toISOString()]);
+  dbRun(statement, [id, userId, sessionToken, expiresAt.toISOString()]);
   return sessionToken;
+}
+
+export async function createSession(userId: string): Promise<string> {
+  return createSessionSync(userId);
 }
 
 /**
@@ -43,7 +55,7 @@ export async function validateSession(
   // Project `u.*` first, then expose the session's own columns under distinct
   // aliases so they cannot be clobbered, and remap them back onto the
   // `Session & User` contract before returning (callers are unchanged).
-  const sql = `
+  const statement = sql`
     SELECT
       u.*,
       s.id               AS session_id,
@@ -63,7 +75,7 @@ export async function validateSession(
       session_created_at: string;
       session_last_accessed_at: string;
     }
-  >(sql, [sessionToken]);
+  >(statement, [sessionToken]);
 
   if (!row) {
     return null;
@@ -78,7 +90,7 @@ export async function validateSession(
 
   // Update last accessed time
   dbRun(
-    "UPDATE sessions SET last_accessed_at = CURRENT_TIMESTAMP WHERE session_token = ?",
+    sql`UPDATE sessions SET last_accessed_at = CURRENT_TIMESTAMP WHERE session_token = ?`,
     [sessionToken],
   );
 
@@ -104,16 +116,16 @@ export async function validateSession(
  * Delete a session (logout)
  */
 export async function deleteSession(sessionToken: string): Promise<void> {
-  const sql = "DELETE FROM sessions WHERE session_token = ?";
-  dbRun(sql, [sessionToken]);
+  const statement = sql`DELETE FROM sessions WHERE session_token = ?`;
+  dbRun(statement, [sessionToken]);
 }
 
 /**
  * Delete all sessions for a user
  */
 export async function deleteAllUserSessions(userId: string): Promise<void> {
-  const sql = "DELETE FROM sessions WHERE user_id = ?";
-  dbRun(sql, [userId]);
+  const statement = sql`DELETE FROM sessions WHERE user_id = ?`;
+  dbRun(statement, [userId]);
 }
 
 /**
@@ -121,7 +133,7 @@ export async function deleteAllUserSessions(userId: string): Promise<void> {
  * This forces all users to re-authenticate each app launch
  */
 export async function clearAllSessions(): Promise<void> {
-  const sql = "DELETE FROM sessions";
-  dbRun(sql, []);
-  logService.info("[SessionDbService] Cleared all sessions for session-only OAuth", "SessionDbService");
+  const statement = sql`DELETE FROM sessions`;
+  dbRun(statement, []);
+  void logService.info("[SessionDbService] Cleared all sessions for session-only OAuth", "SessionDbService");
 }

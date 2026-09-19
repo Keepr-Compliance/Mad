@@ -5,7 +5,8 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import log from "electron-log";
+
+import { hostLogger } from "../capabilities/loggerProvider";
 
 /**
  * Log level enumeration
@@ -183,29 +184,37 @@ export class LogService {
   }
 
   /**
-   * Write log entry via electron-log so messages reach the file transport in packaged builds.
+   * Write log entry via the host shell's Logger so messages reach the file
+   * transport in packaged builds.
    *
    * electron-log v5 does NOT monkey-patch console.* — bare console.info() calls from the
    * main process are silently dropped in packaged builds (no TTY, no file intercept). By
-   * routing through electron-log we ensure the file transport (configured in main.ts at
-   * log.transports.file.level = "info") captures every info/warn/error call, preserving
-   * sync telemetry ([CACHE-HITMISS], [SHADOW-DELTA], ceremony lines) in installed builds.
+   * routing through the Logger capability (which the Electron shell backs with electron-log)
+   * we ensure the file transport (configured in main.ts at log.transports.file.level = "info")
+   * captures every info/warn/error call, preserving sync telemetry ([CACHE-HITMISS],
+   * [SHADOW-DELTA], ceremony lines) in installed builds.
+   *
+   * BACKLOG-2962: this method used to call `electron-log` directly, which made this file —
+   * and the 11 modules whose only Electron coupling is importing it — unloadable by any
+   * non-Electron shell. `hostLogger` forwards to whatever the host installed; the Electron
+   * shell installs `ElectronLogger`, which passes the same string to the same `log.*` method,
+   * so the bytes in main.log are unchanged. `logService.byteIdentity-2962.test.ts` pins that.
    *
    * All input is already sanitized by sanitizeForLog() in formatLogEntry() before this point.
    */
   private writeToConsole(level: LogLevel, formattedEntry: string): void {
     switch (level) {
       case "debug":
-        log.debug(formattedEntry);
+        hostLogger.debug(formattedEntry);
         break;
       case "info":
-        log.info(formattedEntry);
+        hostLogger.info(formattedEntry);
         break;
       case "warn":
-        log.warn(formattedEntry);
+        hostLogger.warn(formattedEntry);
         break;
       case "error":
-        log.error(formattedEntry);
+        hostLogger.error(formattedEntry);
         break;
     }
   }

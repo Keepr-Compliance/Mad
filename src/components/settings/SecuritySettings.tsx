@@ -92,7 +92,7 @@ export function SecuritySettings({ userId, onLogout }: SecuritySettingsProps) {
               onClick={handleSignOutAllDevices}
               disabled={signingOutAllDevices || !isOnline}
               title={!isOnline ? "You are offline" : undefined}
-              className="ml-4 px-3 py-1.5 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded border border-red-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="ml-4 px-3 py-2 bg-white border border-red-300 text-red-700 hover:bg-red-50 text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
             >
               {signingOutAllDevices ? "Signing out..." : "Sign Out All Devices"}
             </button>

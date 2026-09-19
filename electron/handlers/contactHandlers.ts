@@ -27,14 +27,21 @@ import type { RemovedContactRow } from "../services/db/contactDbService";
 import { dbTransaction } from "../services/db/core/dbConnection";
 import { getLiveSourcesForContact } from "../services/db/contactSourceSets";
 import { getContactNames } from "../services/contactsService";
-import type { ContactInfo, PhoneToContactInfo } from "../services/contactsService";
+// BACKLOG-3210 — consulted ONLY to explain an empty macOS contacts read.
+// See `classifyEmptyMacOSRead` below for why this probe exists and for the
+// precedence rule that keeps it from overruling a successful read.
+import permissionService from "../services/permissionService";
+import type { ContactInfo, LoadStatus, PhoneToContactInfo } from "../services/contactsService";
 import { resolveHandles } from "../services/contactResolutionService";
 import auditService from "../services/auditService";
 import logService from "../services/logService";
 import * as externalContactDb from "../services/db/externalContactDbService";
 import type { ExternalContactSource } from "../services/db/externalContactDbService";
 import { recordPicker, recordLinks } from "../services/contactIngestionFunnel";
-import { toPersistedContactSource } from "../utils/contactSourceVocabulary";
+import {
+  toPersistedContactSource,
+  toStorableContactSource,
+} from "../utils/contactSourceVocabulary";
 import {
   cancelPendingContactLinking,
   configureContactLinking,
@@ -100,6 +107,11 @@ import {
 } from "../services/contactCompare";
 import { queryContacts, isPoolReady } from "../workers/contactWorkerPool";
 import { dbAll, dbRun } from "../services/db/core/dbConnection";
+import { IMPORTED_CONTACT_IDS_SQL } from "../services/db/contactBackfillPlanSql";
+import {
+  SET_CONTACT_DEFAULT_ROLE_SQL,
+  TRANSACTION_IDS_FOR_CONTACT_SQL,
+} from "../services/db/contactHandlersSql";
 import type { Contact, Transaction, ContactSource, Communication } from "../types/models";
 
 // Import validation utilities
@@ -116,16 +128,36 @@ import {
 // "in case" is how a deleted rule grows a second call site.
 import { contactInfoSourceFor } from "../utils/contactValueProvenance";
 import {
-  hasNothingToImport,
-  NOTHING_TO_IMPORT_REASON,
+  hasNothingToSave,
+  importRefusalReason,
+  type ImportableRecordParts,
 } from "../utils/importableRecord";
-import { applyLinkedSourceValues } from "../services/contactSourceValues";
+import { applyLinkedSourceValuesOrThrow } from "../services/contactSourceValues";
+import {
+  addImportAdjustments,
+  adjustedFieldNames,
+  emptyImportAdjustmentCounts,
+  shapeImportValues,
+} from "../utils/contactImportValues";
 // BACKLOG-2617: `recordContactOrigin` was imported here for the duplicate-by-name
 // early return in `contacts:create` and nothing else. That branch is deleted, so
 // the import goes with it. Only the type remains in use.
 import { type ContactOrigin } from "../services/db/contactOriginLink";
 import { getValidUserId } from "../utils/userIdHelper";
 import { isContactSourceEnabled } from "../utils/preferenceHelper";
+// BACKLOG-1717 — people found in the user's Outlook and Gmail mail.
+import {
+  getEmailDerivedContactsAsync,
+  getMailboxAddress,
+} from "../services/db/emailDerivedContactDbService";
+import {
+  EMAIL_DERIVED_PROVIDERS,
+  type EmailDerivedProvider,
+} from "../services/db/emailDerivedContactsSql";
+import {
+  CONTACT_INFERENCE_FEATURE_KEYS,
+  resolveContactInferenceState,
+} from "./featureGateHandlers";
 import contactSyncService from "../services/contactSyncService";
 import { OutlookContactProvider } from "../services/providers/outlookContactProvider";
 import { GoogleContactProvider } from "../services/providers/googleContactProvider";
@@ -155,6 +187,59 @@ interface ContactResponse {
    * contact — a no-op, not an error.
    */
   restored?: boolean;
+  /**
+   * BACKLOG-3354 — `contacts:import` only. Present only on `success: false`,
+   * and only when the import's write transaction COMMITTED before the failure.
+   * It lists every contact that call saved: existing-DB rows, then created,
+   * then already-claimed (the order `contacts` would have had). Absent means
+   * nothing was saved.
+   *
+   * "Present ⇒ committed" rests on one premise. This handler is an IPC entry
+   * point, so its `dbTransaction` is OUTERMOST and returns only after COMMIT.
+   * Nothing in the app holds a transaction across an await
+   * (`macOSMessagesImportService.ts` states and asserts the same premise). The
+   * ids are therefore assigned on the statement after `dbTransaction` returns,
+   * never inside the callback, where a later COMMIT failure would make them
+   * false (pinned by H-COMMIT in `contact-handlers.importAtomic-3220.test.ts`).
+   *
+   * Known gap: the failure that produces this field is a post-commit read,
+   * which throws before `reportImportLinking` and `runContactLinkingNow`. The
+   * duplicate-detection pass for that import waits for the next linking
+   * trigger.
+   */
+  savedContactIds?: string[];
+  /**
+   * BACKLOG-3376 — `contacts:import` only. Present only on `success: true`, and
+   * only when the import saved at least one address that no email can be
+   * addressed from: an address with whitespace inside it, or with no `@`. The
+   * values are the source's own strings, deduped case-insensitively per record.
+   *
+   * It does NOT list every address the app cannot validate. `pat@intranet` is
+   * stored and its mail links normally, so it is deliberately absent — the full
+   * trace, and which arm of the predicate is enforced and which is a premise, is
+   * on `isUnmatchableImportEmail` in `electron/utils/contactImportValues.ts`.
+   * Phones are not covered at all (MECHANISM UNTRACED; BACKLOG-3377).
+   *
+   * SUCCESS ONLY, and that is what keeps this and `savedContactIds` mutually
+   * exclusive by construction: that field is spread on the two catch returns
+   * only, this one on the success return only. A rolled-back import saved
+   * nothing, so it has nothing to warn about. Assigned on the statement AFTER
+   * `dbTransaction` returns, never inside its callback, for the same reason
+   * `savedContactIds` is.
+   *
+   * FLAT ACROSS THE WHOLE CALL, with no per-contact attribution. `contacts` is
+   * not in input order (existing-DB rows, then created, then claimed), so
+   * index-pairing is unavailable; both live callers — `Contacts.tsx` and
+   * `ContactAssignmentStep.tsx` — send exactly one record, which is what makes
+   * the flat shape unambiguous today. A future batch caller needs a per-contact
+   * shape, and changing this one is the smaller half of that work.
+   *
+   * Known gap, stated rather than fixed: when the import commits and a read
+   * after it throws, the response is a failure and carries `savedContactIds`
+   * instead, so this message is lost for that import. Carrying the field on a
+   * failure response is what the success-only rule above exists to refuse.
+   */
+  unmatchableEmails?: string[];
 }
 
 /**
@@ -206,6 +291,98 @@ interface RemovedContactsResponse {
  * (which cannot import from `electron/`) and held in step by a parity test.
  */
 
+
+// ============================================================================
+// BACKLOG-3210 — WHY A macOS CONTACTS READ CAME BACK EMPTY
+// ============================================================================
+//
+// `contacts:syncExternal` used to answer this with one sentence for every
+// cause: "No contacts found in macOS Contacts". Without Full Disk Access the
+// read returns EMPTY rather than failing, so a user who had simply not granted
+// the permission was told, plausibly and wrongly, that her address book was
+// empty. Nothing looked broken, so nothing got investigated — that is the
+// shape of the defect, and it is worse than an error.
+//
+// THE THREE CAUSES, AND WHAT SEPARATES THEM:
+//
+//   ACCESS_DENIED  We were not permitted to look. `addressBookDiscovery`
+//                  swallows its own `readdir` rejection, so a denied directory
+//                  and an absent one BOTH arrive here as `booksFound: 0` —
+//                  the same ambiguity, one level down. The reader cannot tell
+//                  them apart, so a probe must: `checkContactsPermission`
+//                  distinguishes EPERM (TCC refusal) from ENOENT (not there).
+//
+//   UNREADABLE     Address books ARE on disk and not one of them opened. If
+//                  the directory listed, TCC allowed the tree — so this is a
+//                  locked or damaged store, not a permissions problem. Calling
+//                  it a Full Disk Access failure would send a user to grant a
+//                  permission she already holds, which is BACKLOG-2392's bug
+//                  reintroduced; calling it "empty" is BACKLOG-3210's. It gets
+//                  its own answer because it is its own cause.
+//
+//   EMPTY          We opened an address book and it held nobody, or the
+//                  directory is readable and holds no address book at all.
+//                  The original message, now said only when it is true.
+//
+// PRECEDENCE — DIRECT EVIDENCE OUTRANKS THE PROBE. `booksRead > 0` is tested
+// FIRST and short-circuits: if a store actually opened, we were demonstrably
+// not denied, and no probe result may overrule that. The probe is a weaker
+// signal (a different path, a moment later, and cached), so it is consulted
+// only where the read itself could not answer.
+type MacOSEmptyReadCause =
+  | "CONTACTS_ACCESS_DENIED"
+  | "CONTACTS_UNREADABLE"
+  | "CONTACTS_EMPTY";
+
+/**
+ * What the user reads. Keyed by cause so the two can never drift apart, and so
+ * tests can assert the CAUSE (stable) while the copy stays free to change.
+ */
+const MACOS_EMPTY_READ_MESSAGE: Record<MacOSEmptyReadCause, string> = {
+  CONTACTS_ACCESS_DENIED:
+    "Keepr could not read macOS Contacts because Full Disk Access is not granted. " +
+    "Open System Settings > Privacy & Security > Full Disk Access, turn Keepr on, " +
+    "then run the sync again.",
+  CONTACTS_UNREADABLE:
+    "Keepr found address books on this Mac but could not open any of them. " +
+    "The Contacts store may be in use or damaged — open the Contacts app, then " +
+    "run the sync again.",
+  // Unchanged wording. This is the sentence that was previously said for all
+  // three causes; it stays exactly as it was for the one case where it is true.
+  CONTACTS_EMPTY: "No contacts found in macOS Contacts",
+};
+
+/**
+ * Decide why a macOS contacts read produced nobody. Called ONLY once the read
+ * has already come back empty.
+ *
+ * The permission probe runs at most once, and never at all when the reader
+ * already proved a store opened.
+ */
+async function classifyEmptyMacOSRead(
+  status: LoadStatus | undefined,
+): Promise<MacOSEmptyReadCause> {
+  // A store opened. We were not denied, whatever any probe says next.
+  if (status && status.booksRead > 0) {
+    return "CONTACTS_EMPTY";
+  }
+
+  const permission = await permissionService.checkContactsPermission();
+  if (
+    !permission.hasPermission &&
+    permission.errorCode === "CONTACTS_ACCESS_DENIED"
+  ) {
+    return "CONTACTS_ACCESS_DENIED";
+  }
+
+  // Not denied. Stores on disk that would not open are a different failure
+  // from an address book with nobody in it.
+  if (status && status.booksFound > 0) {
+    return "CONTACTS_UNREADABLE";
+  }
+
+  return "CONTACTS_EMPTY";
+}
 
 /**
  * BACKLOG-2316: Build the macOS shadow-table sync payload from a person-deduped
@@ -417,9 +594,23 @@ interface LinkImportOutcome {
  * silently, and the founder's imported contact was matched by CONTENT on the
  * following sync as if he had never chosen it.
  *
- * A skip is now RETURNED so the caller can report it. Thrown failures are still
- * swallowed, and that part of the old reasoning stands: an import that
- * succeeded must not be reported as failed because a link could not be written.
+ * A skip is now RETURNED so the caller can report it.
+ *
+ * ---------------------------------------------------------------------------
+ * A FAILURE IS NO LONGER SWALLOWED (BACKLOG-3220)
+ * ---------------------------------------------------------------------------
+ * This used to catch and log any throw from `createLink` or the value copy, on
+ * the reasoning that "an import that succeeded must not be reported as failed
+ * because a link could not be written". That assumed the import had already
+ * committed. It now runs inside the import's single transaction, where a
+ * swallowed throw COMMITS whatever ran before it: a contact marked imported
+ * with no crosswalk row, or some of a source record's addresses copied and the
+ * rest not. So it throws, the transaction rolls the whole import back, and the
+ * handler returns `{ success: false }`, which the renderer shows as a toast
+ * (BACKLOG-3354).
+ *
+ * Every caller is inside `contacts:import`'s `dbTransaction`. Do not call it
+ * outside one.
  */
 function linkImportedContact(
   userId: string,
@@ -431,36 +622,30 @@ function linkImportedContact(
     return { created: 0, attempted: 0, skipped: skipped ?? "no-external-record" };
   }
   let created = 0;
-  try {
-    for (const identity of identities) {
-      // `assertMethod` because the USER PICKED THIS EXACT RECORD — the original
-      // BACKLOG-2419 case. Latent in practice since BACKLOG-2458: the import
-      // now writes before any sync runs, and the picker hides records the
-      // matcher has already claimed, so there is normally no weaker incumbent
-      // to upgrade. Correct if that ever stops being true.
-      const result = createLink({
-        userId,
-        contactId,
-        sourceType: identity.sourceType,
-        sourceRecordId: identity.sourceRecordId,
-        matchMethod: "source_id",
-        externalUuid: identity.externalUuid,
-        assertMethod: true,
-      });
-      if (result.created) created++;
-    }
-    // BACKLOG-2423: the import already copies the values the PICKER carried;
-    // this copies what the linked SOURCE RECORDS hold, which is a superset once
-    // the shadow rows have been refreshed since the picker was built. Run once
-    // after every link, because it reads all of them. Idempotent, so on the
-    // common path it inserts nothing.
-    applyLinkedSourceValues(userId, contactId);
-  } catch (error) {
-    logService.warn(
-      `[Contacts] could not write a source link on import: ${error}`,
-      "Contacts",
-    );
+  for (const identity of identities) {
+    // `assertMethod` because the USER PICKED THIS EXACT RECORD — the original
+    // BACKLOG-2419 case. Latent in practice since BACKLOG-2458: the import
+    // now writes before any sync runs, and the picker hides records the
+    // matcher has already claimed, so there is normally no weaker incumbent
+    // to upgrade. Correct if that ever stops being true.
+    const result = createLink({
+      userId,
+      contactId,
+      sourceType: identity.sourceType,
+      sourceRecordId: identity.sourceRecordId,
+      matchMethod: "source_id",
+      externalUuid: identity.externalUuid,
+      assertMethod: true,
+    });
+    if (result.created) created++;
   }
+  // BACKLOG-2423: the import already copies the values the PICKER carried;
+  // this copies what the linked SOURCE RECORDS hold, which is a superset once
+  // the shadow rows have been refreshed since the picker was built. Run once
+  // after every link, because it reads all of them. Idempotent, so on the
+  // common path it inserts nothing. The THROWING core (BACKLOG-3220): see the
+  // docblock above.
+  applyLinkedSourceValuesOrThrow(userId, contactId);
   return { created, attempted: identities.length, skipped: null };
 }
 
@@ -897,7 +1082,7 @@ async function backfillImportedContactsFromExternal(userId: string): Promise<{ u
     // lands. Contacts with no crosswalk row yet fall through to the SAME
     // email/phone matching used everywhere else — NEVER back to name.
     const importedContacts = dbAll<{ id: string }>(
-      `SELECT id FROM contacts WHERE user_id = ? AND is_imported = 1`,
+      IMPORTED_CONTACT_IDS_SQL,
       [userId],
     );
 
@@ -1502,7 +1687,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
               "Contacts",
             );
 
-            setImmediate(async () => {
+            const refreshContactNamesInBackground = async () => {
               try {
                 const { phoneToContactInfo, contacts } = await getContactNames();
 
@@ -1537,6 +1722,9 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
               } catch (err) {
                 logService.warn(`[Main] Background external contacts sync failed: ${err}`, "Contacts");
               }
+            };
+            setImmediate(() => {
+              void refreshContactNamesInBackground();
             });
           }
         }
@@ -1764,6 +1952,149 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           });
         }
 
+        /**
+         * =====================================================================
+         * BACKLOG-1717 — PEOPLE FOUND IN THE USER'S EMAIL
+         * =====================================================================
+         * Appended to the ADDRESS-BOOK half, deliberately, and this is the
+         * decision the whole item rests on. Measured on both deal surfaces: a
+         * row in this array is routed to `handleExternalSelect -> handleImport`,
+         * so picking one runs `contacts:import` and the deal receives the SAVED
+         * contact's id. A row in the SAVED half is treated as already in the
+         * database — the picker selects the synthetic `email_` id, no contact
+         * is ever created, and the transaction ends up pointing at a person who
+         * does not exist. That is the shape BACKLOG-3194 records for text
+         * people, and this item exists partly to avoid repeating it.
+         *
+         * TWO GATES, BOTH REQUIRED, BOTH READ HERE AND NOT IN THE PRODUCER:
+         * the plan feature (is this in what the customer bought?) and the
+         * user's own Settings switch per mailbox. Reading them here means a
+         * read with nothing enabled never touches the database, and it means
+         * the log below can say WHICH of them produced an empty list.
+         *
+         * FAIL CLOSED: anything that throws — an offline membership read, a
+         * rejected promise, a missing session — leaves the provider set empty.
+         * The renderer cannot grant what main denies.
+         *
+         * The per-mailbox "no stored address" rule is NOT here: it lives in the
+         * producer's SQL, so the worker and the main-thread fallback cannot
+         * disagree about it. The mailbox addresses are read here only to say so
+         * in the log.
+         */
+        let emailDerivedShown = 0;
+        try {
+          /**
+           * Resolve once per DISTINCT PLAN KEY, not once per mailbox.
+           *
+           * Every resolution is a NETWORK read, and this handler already awaits
+           * five preference reads in series. Today both mailboxes share the key
+           * `email_contact_inference`, so this is ONE read covering both; if
+           * the founder ever splits them it becomes two, with no other change.
+           */
+          const keysInPlay = new Set(
+            EMAIL_DERIVED_PROVIDERS.map((p) => CONTACT_INFERENCE_FEATURE_KEYS[p]),
+          );
+          const [stateEntries, preferenceEntries] = await Promise.all([
+            Promise.all(
+              [...keysInPlay].map(
+                async (key) =>
+                  [key, await resolveContactInferenceState(
+                    EMAIL_DERIVED_PROVIDERS.find(
+                      (p) => CONTACT_INFERENCE_FEATURE_KEYS[p] === key,
+                    )!,
+                  )] as const,
+              ),
+            ),
+            Promise.all(
+              EMAIL_DERIVED_PROVIDERS.map(
+                async (provider) =>
+                  [
+                    provider,
+                    await isContactSourceEnabled(
+                      validatedUserId,
+                      "inferred",
+                      provider === "outlook" ? "outlookEmails" : "gmailEmails",
+                      // Inferred sources default OFF, unlike the direct ones.
+                      false,
+                    ),
+                  ] as const,
+              ),
+            ),
+          ]);
+          const planStates = new Map(stateEntries);
+          const preferences = new Map(preferenceEntries);
+
+          /**
+           * ONE LOG REASON PER MAILBOX, and the plan reason is the STATE word
+           * rather than a boolean.
+           *
+           * `isContactInferenceAllowed` collapses "not in your plan" and "I
+           * could not find out" into one `false`. The founder's first report
+           * here will be "nobody shows up", and an offline user told "not in
+           * your plan" has been told something false about what he bought.
+           *
+           * Counts and state words only — never an address.
+           */
+          const enabledProviders: EmailDerivedProvider[] = [];
+          const reasons: string[] = [];
+          for (const provider of EMAIL_DERIVED_PROVIDERS) {
+            const state = planStates.get(CONTACT_INFERENCE_FEATURE_KEYS[provider]);
+            if (state !== "allowed") {
+              reasons.push(`${provider}: plan ${state ?? "unknown"}`);
+              continue;
+            }
+            if (!preferences.get(provider)) {
+              reasons.push(`${provider}: switched off in Settings`);
+              continue;
+            }
+            const mailboxAddress = getMailboxAddress(validatedUserId, provider);
+            if (!mailboxAddress) {
+              reasons.push(`${provider}: connected mailbox has no stored address`);
+              // Still passed to the producer, whose SQL enforces the same rule;
+              // this branch exists so the log can NAME the reason.
+            }
+            enabledProviders.push(provider);
+          }
+
+          if (enabledProviders.length === 0) {
+            logService.info(
+              `[Contacts] No email-derived people read (${reasons.join("; ")})`,
+              "Contacts",
+            );
+          } else {
+            const emailPeople = await getEmailDerivedContactsAsync(
+              validatedUserId,
+              enabledProviders,
+            );
+            for (const person of emailPeople) {
+              availableContacts.push(person);
+            }
+            emailDerivedShown = emailPeople.length;
+            logService.info(
+              `[Contacts] Offered ${emailDerivedShown} people found in email ` +
+                `(mailboxes: ${enabledProviders.join(", ")}` +
+                `${reasons.length > 0 ? `; skipped ${reasons.join("; ")}` : ""})`,
+              "Contacts",
+            );
+          }
+        } catch (emailDerivedError) {
+          /**
+           * A producer failure must not take the address book down with it.
+           *
+           * A worker timeout, a pool rejection or a bad read here would
+           * otherwise reject the whole handler and the picker would show
+           * NOTHING — no macOS contacts, no Outlook cards, nothing — because
+           * one optional list could not be built. BACKLOG-2576 makes a timeout
+           * likelier than it looks: this item adds a query type to a pool whose
+           * timeouts are already unhandled rejections.
+           */
+          logService.error(
+            "[Contacts] Could not read people from email; the rest of the picker is unaffected",
+            "Contacts",
+            { error: emailDerivedError },
+          );
+        }
+
         // Contacts are already sorted by last_message_at from shadow table
         // Just need to ensure the combined list respects the order
         // Sort the full list: most recent first, then by name
@@ -1850,6 +2181,13 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
       userId: string,
       contactsToImport: unknown[],
     ): Promise<ContactResponse> => {
+      // BACKLOG-3354: set only once the write transaction has committed; read
+      // by both catch returns. See `ContactResponse.savedContactIds`.
+      let savedContactIds: string[] | undefined;
+      // BACKLOG-3376: the mirror image — set only once the write transaction has
+      // committed, and read by the SUCCESS return only. See
+      // `ContactResponse.unmatchableEmails`.
+      let unmatchableEmails: string[] | undefined;
       try {
         logService.info("[Main] Importing contacts", "Contacts", {
           userId,
@@ -1908,6 +2246,16 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         // Every link attempt this import made, reported in one line at the end
         // rather than one line per contact (BACKLOG-2458 I2).
         const linkOutcomes: Array<{ contactId: string; outcome: LinkImportOutcome }> = [];
+        // BACKLOG-3358: what the import had to reorder or cut, counted across
+        // the whole call and reported once, after the commit.
+        const importAdjustments = emptyImportAdjustmentCounts();
+        // BACKLOG-3376: the addresses this call saved that no email can be
+        // addressed from, collected per record and reported once, after the
+        // commit. VALUES, not counts — the user is told which address it was,
+        // and these are their own address book's strings. They never reach
+        // Sentry: that warning stays counts-only (BACKLOG-3358), which is why
+        // this is a local array and not a field on `ImportAdjustmentCounts`.
+        const unmatchable: string[] = [];
 
         for (const [index, contact] of contactsToImport.entries()) {
           const sanitizedContact = sanitizeObject(contact) as ImportableContact;
@@ -1937,15 +2285,84 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
            * silently-dropped import is worse than a rejected one: the caller
            * would have no way to tell which of its records landed.
            */
-          if (hasNothingToImport(sanitizedContact)) {
+          const importRefusal = importRefusalReason(sanitizedContact);
+          if (importRefusal) {
+            // BACKLOG-2707: the reason is chosen per record rather than fixed,
+            // so a company-only record is refused with a sentence that is TRUE
+            // beside the label its own row renders — which is the company name.
             throw new ValidationError(
-              `Record ${index + 1} has ${NOTHING_TO_IMPORT_REASON.toLowerCase()}`,
+              `Record ${index + 1}: ${importRefusal}`,
               "contactsToImport",
             );
           }
 
-          const validatedData = validateContactData(sanitizedContact, false);
+          /**
+           * BACKLOG-3358 — AN UNUSABLE FIRST EMAIL OR PHONE NO LONGER BLOCKS
+           * THE RECORD.
+           *
+           * The validator checks the scalar `email`/`phone`, which on a picker
+           * row is the address book's FIRST value. `shapeImportValues` puts
+           * usable values first, hands the validator the first usable one (or
+           * none), and cuts long names, companies and titles. Nothing is
+           * removed: the arrays below carry every value the source holds, and
+           * `createContactsBatch` marks the first one primary.
+           *
+           * ONLY HERE. `contacts:create` and `contacts:update` hand the
+           * validator their raw payloads, so typed input is still refused.
+           * The refusal above runs on the RAW record, and the source
+           * identities and legacy branch below keep reading it.
+           */
+          const shaped = shapeImportValues(sanitizedContact);
+          addImportAdjustments(importAdjustments, shaped.adjustments);
+          unmatchable.push(...shaped.unmatchableEmails);
+          const validatedData = validateContactData(shaped.forValidation, false);
           const sourceIdentities = toSourceIdentities(sanitizedContact);
+
+          /**
+           * BACKLOG-2481 — THE DOOR BOTH LIVE SCREENS USE, AND THE ONE THAT
+           * COULD NOT STORE A PERSON FROM A TEXT THREAD.
+           *
+           * This handler had no allow-list at all. `source` went straight into
+           * the insert, so a message-derived record — which carries
+           * `source: "messages"`, a SELECT-time label the `contacts.source`
+           * CHECK has never admitted — took the whole call down with it: no
+           * contact row, no origin link, nothing saved.
+           *
+           * DECIDED ONCE, HERE, rather than at each of the two writes below, so
+           * the create branch and the `markContactAsImported` branch cannot
+           * disagree about the same record.
+           *
+           * `null` means the value cannot be stored, for one of two reasons:
+           *
+           *   - it is an unrecognised string — neither a `contacts.source` value
+           *     nor a synthetic one this vocabulary knows how to place;
+           *   - it is `email`, `sms` or `inferred`, which the CHECK admits but no
+           *     filter leaf can find on a saved contact, so storing one would
+           *     save a contact that is invisible under every filter setting
+           *     (BACKLOG-3193, `UNFILTERABLE_WHEN_SAVED_CONTACT_SOURCES`).
+           *
+           * THAT IS REFUSED, NOT DEFAULTED, and the refusal is deliberate. An
+           * unrecognised string was already refused on this door before
+           * BACKLOG-2481 (measured — it reached the CHECK and the batch failed),
+           * and defaulting it to `contacts_app` would silently start claiming
+           * that every unknown record came out of the macOS address book. The
+           * three unfilterable values were stored verbatim until BACKLOG-3193;
+           * refusing them tells the caller at once, instead of re-labelling a
+           * record whose producer named a provenance.
+           *
+           * REFUSES THE WHOLE BATCH, like every other refusal in this loop. See
+           * the note above `importRefusalReason`.
+           */
+          const storableSource = toStorableContactSource(
+            sanitizedContact.source,
+            "contacts_app",
+          );
+          if (storableSource === null) {
+            throw new ValidationError(
+              `Record ${index + 1}: "${sanitizedContact.source}" is not a contact source this app can store`,
+              "contactsToImport",
+            );
+          }
 
           if (
             sanitizedContact.isFromDatabase &&
@@ -1953,20 +2370,40 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             !sanitizedContact.id.startsWith("contacts-app-")
           ) {
             logService.warn(`[DIAG-1270] Import path: ${sanitizedContact.name || validatedData.name} → existingDB, allEmails=[${(sanitizedContact.allEmails || []).join(', ')}]`, 'Contacts');
-            existingDbContacts.push({ id: sanitizedContact.id, contact: sanitizedContact });
+            existingDbContacts.push({
+              id: sanitizedContact.id,
+              contact: sanitizedContact,
+              source: storableSource,
+            });
           } else {
             logService.warn(`[DIAG-1270] Import path: ${sanitizedContact.name || validatedData.name} → newCreate, allEmails=[${(sanitizedContact.allEmails || []).join(', ')}]`, 'Contacts');
             newContactsToCreate.push({
               user_id: validatedUserId,
-              display_name: validatedData.name || "Unknown",
+              /**
+               * BACKLOG-2707 — `?? ""`, NOT `|| "Unknown"`.
+               *
+               * The literal was unreachable before this item (the validator
+               * refused every nameless record on the way here) and would have
+               * become reachable the moment it stopped. Storing it writes the
+               * state BACKLOG-2461 exists to remove, and a row `contacts:import`
+               * would itself refuse on input: `hasNothingToImport` reads
+               * "Unknown" as no name at all.
+               *
+               * `??` rather than `||` so a future non-empty falsy value is not
+               * swallowed. The writer no longer substitutes either — see
+               * `contactDbService.createContactsBatch`.
+               */
+              display_name: validatedData.name ?? "",
               email: validatedData.email ?? undefined,
               phone: validatedData.phone ?? undefined,
               company: validatedData.company ?? undefined,
               title: validatedData.title ?? undefined,
-              source: sanitizedContact.source || "contacts_app",
+              // BACKLOG-2481: the value decided above, not the raw input.
+              source: storableSource,
               is_imported: true,
-              allPhones: sanitizedContact.allPhones || [],
-              allEmails: sanitizedContact.allEmails || [],
+              // BACKLOG-3358: every value the source holds, usable first.
+              allPhones: shaped.allPhones,
+              allEmails: shaped.allEmails,
             });
             newContactSources.push(sourceIdentities);
           }
@@ -1974,275 +2411,375 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
 
         let processed = 0;
 
-        // Mark existing DB contacts as imported and backfill any missing emails/phones
-        // Also update source to "contacts_app" when importing from macOS Contacts
-        for (const { id, contact } of existingDbContacts) {
-          logService.warn(`[DIAG-1270] DB contact backfill: ${contact.name}, contact.allEmails=[${(contact.allEmails || []).join(', ')}], contact.allPhones=[${(contact.allPhones || []).join(', ')}]`, 'Contacts');
-          await databaseService.markContactAsImported(id, contact.source || "contacts_app");
-
-          // BACKLOG-2401 / BACKLOG-2458: record WHERE this contact came from, at
-          // the one moment the answer is known for certain, for EVERY source
-          // record the picked row stands for. match_method is 'source_id'
-          // because the user picked a row representing these exact records —
-          // nothing was inferred.
-          const dbIdentities = toSourceIdentities(contact);
-          linkOutcomes.push({
-            contactId: id,
-            outcome: linkImportedContact(
-              validatedUserId,
-              id,
-              dbIdentities.identities,
-              dbIdentities.skipped,
-            ),
-          });
-
-          // Backfill emails/phones from macOS Contacts if available
-          if (contact.allEmails && contact.allEmails.length > 0) {
-            await databaseService.backfillContactEmails(id, contact.allEmails);
-          }
-          if (contact.allPhones && contact.allPhones.length > 0) {
-            await databaseService.backfillContactPhones(id, contact.allPhones);
-          }
-
-          const updatedContact = await databaseService.getContactById(id);
-          if (updatedContact) {
-            importedContacts.push(updatedContact);
-          }
-          processed++;
-          if (_mainWindow && !_mainWindow.isDestroyed()) {
-            _mainWindow.webContents.send("contacts:import-progress", {
-              current: processed,
-              total,
-              percent: Math.round((processed / total) * 100),
-            });
-          }
-        }
-
         /**
          * =====================================================================
-         * BACKLOG-2525 — IMPORTING THE SAME SOURCE RECORD TWICE IS ONE CONTACT.
+         * BACKLOG-3220 — ONE TRANSACTION FOR THE WHOLE WRITE PHASE
          * =====================================================================
-         * Founder, 2026-08-05, on `5037fcfc`: *"the import button seems like
-         * it's not working — you can click it a few times and nothing happens.
-         * i was able to click it three times and i went back to the list and i
-         * see rosey 3 times"*. Three real `contacts` rows.
+         * Every write this import makes — marking legacy rows imported, their
+         * crosswalk rows and copied addresses, the re-link of already-claimed
+         * records, the batch insert of new contacts and their links — runs in
+         * this ONE synchronous callback. The call saves everything it was given
+         * or nothing: a failure anywhere rolls all of it back and reaches the
+         * catch below as `{ success: false }`. That is the rule the validation
+         * loop above already states for refusals (BACKLOG-2684): the caller must
+         * never be left unable to tell which of its records landed.
          *
-         * This handler splits its input on `isFromDatabase` ALONE (:1979-1983).
-         * An address-book row carries `isFromDatabase: false`, so it went
-         * straight to `createContactsBatch` and nothing ever asked whether the
-         * source record behind it was already claimed by a saved contact.
+         * The callback must stay SYNCHRONOUS. better-sqlite3 throws on a callback
+         * that returns a promise, and an `async` function called inside it turns
+         * its own throw into a rejection the transaction never sees, so the
+         * failure commits. Every DB call in here is synchronous:
+         * `markContactAsImported`, `backfillContact{Emails,Phones}Sync`,
+         * `findContactIdBySourceRecord`, `createContactsBatch` (its own
+         * transaction nests as a SAVEPOINT) and `linkImportedContact`. The
+         * compile-time pin and the crash and error sweeps live in
+         * `contact-handlers.importAtomic-3220.test.ts`.
          *
-         * WHY THE RECORD IDENTITY AND NOT THE DISPLAY NAME. The path this flow
-         * used before BACKLOG-2510 (`contacts:create`, :2166-2193 →
-         * `contactDbService.ts:465-475`) guarded on exact `LOWER(display_name)`.
-         * Restoring THAT would reintroduce the defect BACKLOG-2316 removed from
-         * the picker: two genuinely different clients who share a name are two
-         * contacts, and a name guard silently discards the second. BACKLOG-2510
-         * exists precisely so we record WHICH address-book entry a contact came
-         * from — a strictly stronger key, and one already written.
+         * The reads that follow the writes (`getContactById`),
+         * `reportImportLinking` and `runContactLinkingNow` run after the commit.
+         * The progress sends stay inside: they are synchronous IPC, not DB, and
+         * the batch's own progress callback already fires inside, so moving loop
+         * 1's sends out would make progress run backwards.
          *
-         * It is also the SAME `(source_type, source_record_id)` pair that
-         * `createLink` holds UNIQUE (`contactSourceLinkDbService.ts:260-264`)
-         * and that `contacts:get-available` suppresses on (:1695-1701). One key,
-         * three consumers, agreeing by construction rather than by three rules
-         * that have to be kept in step.
-         *
-         * ---------------------------------------------------------------------
-         * WHY THIS SITS HERE AND NOT WHERE IT READS MORE NATURALLY
-         * ---------------------------------------------------------------------
-         * A guard against re-entry is only as good as the window between reading
-         * and writing. The main process is a single JS thread, so the check and
-         * the crosswalk write that makes it true must fall in ONE SYNCHRONOUS
-         * STRETCH — otherwise three overlapping invocations all read "unclaimed"
-         * at their own `await` boundary and all three insert.
-         *
-         * From here to `linkImportedContact` below there is no `await`:
-         * `createContactsBatch` is synchronous (`contactDbService.ts:317-331`,
-         * `dbTransaction` takes a sync callback) and so is `linkImportedContact`.
-         * Moving this check earlier — next to `toSourceIdentities` at :1974,
-         * which is where it reads better — puts the existing-DB loop's `await`s
-         * between the read and the write and reopens the exact race. Do not.
-         *
-         * Pinned by execution, three concurrent invocations with no `await`
-         * between them: `contact-handlers.importIdempotent-2525.test.ts`.
+         * Keep this call INLINE in the handler body: the write-atomicity guard
+         * reads this unit's transaction from here.
          */
-        const claimedByExisting: Array<{
-          contactId: string;
-          identities: SourceIdentity[];
-          skipped: IdentitySkipReason | null;
-        }> = [];
-        // BACKLOG-2496 — each carries the origin it will be created WITH, so the
-        // crosswalk rows land inside `createContactsBatch`'s transaction rather
-        // than in a loop afterwards. See the push below.
-        const unclaimedToCreate: Array<NewContactData & { origin: ContactOrigin }> = [];
-        const unclaimedSources: typeof newContactSources = [];
-
-        for (let i = 0; i < newContactsToCreate.length; i++) {
-          const source = newContactSources[i];
-          /**
-           * BACKLOG-2556 — THIS LOOP'S INPUT SET CHANGED, AND THAT IS THE POINT.
-           *
-           * It used to read: *"A collapsed picker row stands for several source
-           * records (BACKLOG-2458); if even one of them is already owned, the
-           * person is already imported."* That sentence was true and it was the
-           * laundering mechanism — the fold decided which records travelled
-           * together, and this loop and `linkImportedContact` below turned that
-           * decision into `source_id` crosswalk rows.
-           *
-           * `toSourceIdentities` now yields AT MOST ONE identity: the row's own
-           * record. So the loop runs zero or one iteration and the question it
-           * asks has narrowed from "is any of the records this row was folded
-           * from already owned?" to "is THIS record already owned?" — which is
-           * the only question the crosswalk can actually answer.
-           *
-           * The loop is KEPT rather than rewritten to `source.identities[0]`.
-           * The behaviour is identical for a one- or zero-element array, and
-           * indexing would bake the arity into the code at the exact site where
-           * a future plural input would need to be noticed. Verified by
-           * execution, not by reading: `contact-handlers.foldDeleted-2556.test.ts`
-           * asserts the crosswalk row ID SET after importing one row.
-           */
-          let incumbent: string | null = null;
-          for (const identity of source.identities) {
-            incumbent = findContactIdBySourceRecord(
-              validatedUserId,
-              identity.sourceType,
-              identity.sourceRecordId,
-            );
-            if (incumbent) break;
-          }
-
-          if (incumbent) {
-            claimedByExisting.push({ contactId: incumbent, ...source });
-          } else {
+        const importWrites = dbTransaction(() => {
+          // Mark existing DB contacts as imported and backfill any missing emails/phones
+          // Also update source to "contacts_app" when importing from macOS Contacts
+          for (const { id, contact, source: storedSource } of existingDbContacts) {
+            void logService.warn(`[DIAG-1270] DB contact backfill: ${contact.name}, contact.allEmails=[${(contact.allEmails || []).join(', ')}], contact.allPhones=[${(contact.allPhones || []).join(', ')}]`, 'Contacts');
             /**
-             * BACKLOG-2496 — THE ORIGIN TRAVELS WITH THE CONTACT.
+             * BACKLOG-2481 — the THIRD write of `contacts.source`, and the third
+             * that could hit the CHECK. This is an `UPDATE contacts SET source = ?`
+             * (`contactDbService.markContactAsImported`), so a raw `messages` here
+             * would throw exactly as the insert did.
              *
-             * The crosswalk rows for an import used to be written by a loop
-             * AFTER `createContactsBatch` returned, outside its transaction. An
-             * interruption between the two left contacts committed with no
-             * origin, and that is not a cosmetic gap: BACKLOG-2525's duplicate
-             * guard reads `findContactIdBySourceRecord` a few lines above, so an
-             * address-book entry whose crosswalk row never landed reads as
-             * UNCLAIMED and the next press creates a second contact.
-             *
-             * Passing the identities in means the rows are written by the batch,
-             * inside the one transaction that also inserts the contact.
-             *
-             * A row carrying NO identity still gets an origin — the synthetic
-             * one, from `contacts.source` — because "derived" is the truthful
-             * answer for a picker row with no external record behind it, and a
-             * contact with no origin at all is the state being eliminated.
+             * It takes the value decided in the loop above rather than re-reading
+             * `contact.source`, so there is no second rule to drift. It is not
+             * reachable by a message-derived record today — that path needs
+             * `isFromDatabase`, which the pseudo-contact does not carry — and it is
+             * changed anyway, because a value no door may store should not be
+             * storable through a door nobody is currently looking at.
              */
-            unclaimedToCreate.push({
-              ...newContactsToCreate[i],
-              origin:
-                source.identities.length > 0
-                  ? { kind: "sourceRecords", identities: source.identities }
-                  : { kind: "derived" },
+            databaseService.markContactAsImported(id, storedSource);
+
+            // BACKLOG-2401 / BACKLOG-2458: record WHERE this contact came from, at
+            // the one moment the answer is known for certain, for EVERY source
+            // record the picked row stands for. match_method is 'source_id'
+            // because the user picked a row representing these exact records —
+            // nothing was inferred.
+            const dbIdentities = toSourceIdentities(contact);
+            linkOutcomes.push({
+              contactId: id,
+              outcome: linkImportedContact(
+                validatedUserId,
+                id,
+                dbIdentities.identities,
+                dbIdentities.skipped,
+              ),
             });
-            unclaimedSources.push(source);
-          }
-        }
 
-        if (claimedByExisting.length > 0) {
-          logService.info(
-            `[Contacts] import: ${claimedByExisting.length} row(s) already claimed by a saved ` +
-              `contact — returned the existing contact rather than creating a duplicate ` +
-              `(BACKLOG-2525)`,
-            "Contacts",
-          );
-        }
-
-        // Re-link rather than no-op. A collapsed row whose representative is
-        // claimed may still carry records nothing owns yet; those belong on the
-        // incumbent. `createLink` is idempotent, so the claimed pair costs a
-        // read and writes nothing.
-        for (const claimed of claimedByExisting) {
-          linkOutcomes.push({
-            contactId: claimed.contactId,
-            outcome: linkImportedContact(
-              validatedUserId,
-              claimed.contactId,
-              claimed.identities,
-              claimed.skipped,
-            ),
-          });
-        }
-
-        // Batch create new contacts (much faster with transaction)
-        if (unclaimedToCreate.length > 0) {
-          logService.info(
-            `[Main] Batch importing ${unclaimedToCreate.length} new contacts...`,
-            "Contacts"
-          );
-
-          const createdIds = databaseService.createContactsBatch(
-            unclaimedToCreate,
-            (current, _batchTotal) => {
-              const overallCurrent = existingDbContacts.length + current;
-              if (_mainWindow && !_mainWindow.isDestroyed()) {
-                _mainWindow.webContents.send("contacts:import-progress", {
-                  current: overallCurrent,
-                  total,
-                  percent: Math.round((overallCurrent / total) * 100),
-                });
-              }
+            // Backfill emails/phones from macOS Contacts if available
+            if (contact.allEmails && contact.allEmails.length > 0) {
+              databaseService.backfillContactEmailsSync(id, contact.allEmails);
             }
-          );
+            if (contact.allPhones && contact.allPhones.length > 0) {
+              databaseService.backfillContactPhonesSync(id, contact.allPhones);
+            }
 
-          // BACKLOG-2401: pair each created id back to the source record it came
-          // from. createContactsBatch preserves input order, so index i of
-          // createdIds is index i of unclaimedToCreate — and therefore of
-          // unclaimedSources. Guarded on length so a future batch that skips a
-          // row cannot silently mis-attribute every link after it.
-          //
-          // BACKLOG-2525: the two arrays are the POST-GUARD ones. They are built
-          // in one pass above and stay index-for-index with each other; pairing
-          // created ids against the pre-guard `newContactSources` would
-          // mis-attribute every link after the first already-claimed row.
-          if (createdIds.length === unclaimedSources.length) {
-            for (let i = 0; i < createdIds.length; i++) {
-              linkOutcomes.push({
-                contactId: createdIds[i],
-                outcome: linkImportedContact(
-                  validatedUserId,
-                  createdIds[i],
-                  unclaimedSources[i].identities,
-                  unclaimedSources[i].skipped,
-                ),
+            processed++;
+            if (_mainWindow && !_mainWindow.isDestroyed()) {
+              _mainWindow.webContents.send("contacts:import-progress", {
+                current: processed,
+                total,
+                percent: Math.round((processed / total) * 100),
               });
             }
-          } else {
-            logService.warn(
-              `[Contacts] createContactsBatch returned ${createdIds.length} ids for ` +
-                `${unclaimedSources.length} inputs — source links skipped for this batch ` +
-                `rather than guessed (BACKLOG-2401). They will be created on the next sync.`,
+          }
+
+          /**
+           * =====================================================================
+           * BACKLOG-2525 — IMPORTING THE SAME SOURCE RECORD TWICE IS ONE CONTACT.
+           * =====================================================================
+           * Founder, 2026-08-05, on `5037fcfc`: *"the import button seems like
+           * it's not working — you can click it a few times and nothing happens.
+           * i was able to click it three times and i went back to the list and i
+           * see rosey 3 times"*. Three real `contacts` rows.
+           *
+           * This handler splits its input on `isFromDatabase` ALONE (:1979-1983).
+           * An address-book row carries `isFromDatabase: false`, so it went
+           * straight to `createContactsBatch` and nothing ever asked whether the
+           * source record behind it was already claimed by a saved contact.
+           *
+           * WHY THE RECORD IDENTITY AND NOT THE DISPLAY NAME. The path this flow
+           * used before BACKLOG-2510 (`contacts:create`, :2166-2193 →
+           * `contactDbService.ts:465-475`) guarded on exact `LOWER(display_name)`.
+           * Restoring THAT would reintroduce the defect BACKLOG-2316 removed from
+           * the picker: two genuinely different clients who share a name are two
+           * contacts, and a name guard silently discards the second. BACKLOG-2510
+           * exists precisely so we record WHICH address-book entry a contact came
+           * from — a strictly stronger key, and one already written.
+           *
+           * It is also the SAME `(source_type, source_record_id)` pair that
+           * `createLink` holds UNIQUE (`contactSourceLinkDbService.ts:260-264`)
+           * and that `contacts:get-available` suppresses on (:1695-1701). One key,
+           * three consumers, agreeing by construction rather than by three rules
+           * that have to be kept in step.
+           *
+           * ---------------------------------------------------------------------
+           * WHY THIS SITS HERE AND NOT WHERE IT READS MORE NATURALLY
+           * ---------------------------------------------------------------------
+           * A guard against re-entry is only as good as the window between reading
+           * and writing. The main process is a single JS thread, so the check and
+           * the crosswalk write that makes it true must fall in ONE SYNCHRONOUS
+           * STRETCH — otherwise three overlapping invocations all read "unclaimed"
+           * at their own `await` boundary and all three insert.
+           *
+           * From here to `linkImportedContact` below there is no `await`, and since
+           * BACKLOG-3220 that is structural rather than a convention: this check,
+           * the batch insert and every crosswalk write run inside ONE synchronous
+           * `dbTransaction` callback, which cannot contain an `await`. Another
+           * `contacts:import` invocation arrives as a separate IPC event and cannot
+           * run until that callback has committed. Moving this check out of the
+           * callback — for example next to `toSourceIdentities` in the validation
+           * loop, which is where it reads better — puts an `await` back between the
+           * read and the write and reopens the exact race. Do not.
+           *
+           * No test pins three concurrent invocations yet; that is BACKLOG-3353.
+           */
+          const claimedByExisting: Array<{
+            contactId: string;
+            identities: SourceIdentity[];
+            skipped: IdentitySkipReason | null;
+          }> = [];
+          // BACKLOG-2496 — each carries the origin it will be created WITH, so the
+          // crosswalk rows land inside `createContactsBatch`'s transaction rather
+          // than in a loop afterwards. See the push below.
+          const unclaimedToCreate: Array<NewContactData & { origin: ContactOrigin }> = [];
+          const unclaimedSources: typeof newContactSources = [];
+
+          for (let i = 0; i < newContactsToCreate.length; i++) {
+            const source = newContactSources[i];
+            /**
+             * BACKLOG-2556 — THIS LOOP'S INPUT SET CHANGED, AND THAT IS THE POINT.
+             *
+             * It used to read: *"A collapsed picker row stands for several source
+             * records (BACKLOG-2458); if even one of them is already owned, the
+             * person is already imported."* That sentence was true and it was the
+             * laundering mechanism — the fold decided which records travelled
+             * together, and this loop and `linkImportedContact` below turned that
+             * decision into `source_id` crosswalk rows.
+             *
+             * `toSourceIdentities` now yields AT MOST ONE identity: the row's own
+             * record. So the loop runs zero or one iteration and the question it
+             * asks has narrowed from "is any of the records this row was folded
+             * from already owned?" to "is THIS record already owned?" — which is
+             * the only question the crosswalk can actually answer.
+             *
+             * The loop is KEPT rather than rewritten to `source.identities[0]`.
+             * The behaviour is identical for a one- or zero-element array, and
+             * indexing would bake the arity into the code at the exact site where
+             * a future plural input would need to be noticed. Verified by
+             * execution, not by reading: `contact-handlers.foldDeleted-2556.test.ts`
+             * asserts the crosswalk row ID SET after importing one row.
+             */
+            let incumbent: string | null = null;
+            for (const identity of source.identities) {
+              incumbent = findContactIdBySourceRecord(
+                validatedUserId,
+                identity.sourceType,
+                identity.sourceRecordId,
+              );
+              if (incumbent) break;
+            }
+
+            if (incumbent) {
+              claimedByExisting.push({ contactId: incumbent, ...source });
+            } else {
+              /**
+               * BACKLOG-2496 — THE ORIGIN TRAVELS WITH THE CONTACT.
+               *
+               * The crosswalk rows for an import used to be written by a loop
+               * AFTER `createContactsBatch` returned, outside its transaction. An
+               * interruption between the two left contacts committed with no
+               * origin, and that is not a cosmetic gap: BACKLOG-2525's duplicate
+               * guard reads `findContactIdBySourceRecord` a few lines above, so an
+               * address-book entry whose crosswalk row never landed reads as
+               * UNCLAIMED and the next press creates a second contact.
+               *
+               * Passing the identities in means the rows are written by the batch,
+               * inside the one transaction that also inserts the contact.
+               *
+               * A row carrying NO identity still gets an origin — the synthetic
+               * one, from `contacts.source` — because "derived" is the truthful
+               * answer for a picker row with no external record behind it, and a
+               * contact with no origin at all is the state being eliminated.
+               */
+              unclaimedToCreate.push({
+                ...newContactsToCreate[i],
+                origin:
+                  source.identities.length > 0
+                    ? { kind: "sourceRecords", identities: source.identities }
+                    : { kind: "derived" },
+              });
+              unclaimedSources.push(source);
+            }
+          }
+
+          if (claimedByExisting.length > 0) {
+            void logService.info(
+              `[Contacts] import: ${claimedByExisting.length} row(s) already claimed by a saved ` +
+                `contact — returned the existing contact rather than creating a duplicate ` +
+                `(BACKLOG-2525)`,
               "Contacts",
             );
           }
 
-          // Fetch created contacts
-          for (const id of createdIds) {
-            const contact = await databaseService.getContactById(id);
-            if (contact) {
-              importedContacts.push(contact);
+          // Re-link rather than no-op. A collapsed row whose representative is
+          // claimed may still carry records nothing owns yet; those belong on the
+          // incumbent. `createLink` is idempotent, so the claimed pair costs a
+          // read and writes nothing.
+          for (const claimed of claimedByExisting) {
+            linkOutcomes.push({
+              contactId: claimed.contactId,
+              outcome: linkImportedContact(
+                validatedUserId,
+                claimed.contactId,
+                claimed.identities,
+                claimed.skipped,
+              ),
+            });
+          }
+
+          // Batch create new contacts (much faster with transaction)
+          let createdIds: string[] = [];
+          if (unclaimedToCreate.length > 0) {
+            void logService.info(
+              `[Main] Batch importing ${unclaimedToCreate.length} new contacts...`,
+              "Contacts"
+            );
+
+            createdIds = databaseService.createContactsBatch(
+              unclaimedToCreate,
+              (current, _batchTotal) => {
+                const overallCurrent = existingDbContacts.length + current;
+                if (_mainWindow && !_mainWindow.isDestroyed()) {
+                  _mainWindow.webContents.send("contacts:import-progress", {
+                    current: overallCurrent,
+                    total,
+                    percent: Math.round((overallCurrent / total) * 100),
+                  });
+                }
+              }
+            );
+
+            // BACKLOG-2401: pair each created id back to the source record it came
+            // from. createContactsBatch preserves input order, so index i of
+            // createdIds is index i of unclaimedToCreate — and therefore of
+            // unclaimedSources. Guarded on length so a future batch that skips a
+            // row cannot silently mis-attribute every link after it.
+            //
+            // BACKLOG-2525: the two arrays are the POST-GUARD ones. They are built
+            // in one pass above and stay index-for-index with each other; pairing
+            // created ids against the pre-guard `newContactSources` would
+            // mis-attribute every link after the first already-claimed row.
+            if (createdIds.length === unclaimedSources.length) {
+              for (let i = 0; i < createdIds.length; i++) {
+                linkOutcomes.push({
+                  contactId: createdIds[i],
+                  outcome: linkImportedContact(
+                    validatedUserId,
+                    createdIds[i],
+                    unclaimedSources[i].identities,
+                    unclaimedSources[i].skipped,
+                  ),
+                });
+              }
+            } else {
+              void logService.warn(
+                `[Contacts] createContactsBatch returned ${createdIds.length} ids for ` +
+                  `${unclaimedSources.length} inputs — source links skipped for this batch ` +
+                  `rather than guessed (BACKLOG-2401). They will be created on the next sync.`,
+                "Contacts",
+              );
             }
+          }
+
+          return { createdIds, claimedByExisting };
+        });
+
+        // BACKLOG-3354: the transaction has committed. Assigned HERE, on the
+        // statement after `dbTransaction` returns and never inside its
+        // callback, so a failure in any read below can report what was saved.
+        savedContactIds = [
+          ...existingDbContacts.map((c) => c.id),
+          ...importWrites.createdIds,
+          ...importWrites.claimedByExisting.map((c) => c.contactId),
+        ];
+
+        // BACKLOG-3376: assigned HERE, on the same statement boundary and for
+        // the same reason — a save that rolled back must not report values it
+        // did not save. Left `undefined` until the commit, so the success
+        // return's spread adds nothing if any read below throws first.
+        unmatchableEmails = unmatchable.length > 0 ? unmatchable : undefined;
+
+        /**
+         * BACKLOG-3358 — ONE COUNTS-ONLY WARNING, AFTER THE COMMIT.
+         *
+         * After `dbTransaction` returns and never inside its callback: a save
+         * that rolls back must not report values it did not save. Counts and
+         * field names only — no name, address, number or id. One event per
+         * call, not per record.
+         */
+        if (importAdjustments.recordsAdjusted > 0) {
+          // BACKLOG-3358: this event is sent without breadcrumbs.
+          Sentry.withScope((scope) => {
+            scope.addEventProcessor((event) => {
+              delete event.breadcrumbs;
+              return event;
+            });
+            Sentry.captureMessage("Contact import saved values that used to block it", {
+              level: "warning",
+              tags: { area: "contacts", operation: "import-lenient" },
+              extra: {
+                recordsInCall: contactsToImport.length,
+                ...importAdjustments,
+                fields: adjustedFieldNames(importAdjustments),
+              },
+            });
+          });
+        }
+
+        // BACKLOG-3220: every read happens after the commit, in the order
+        // `importedContacts` has always had — existing-DB contacts, then the
+        // contacts just created, then the already-claimed incumbents below.
+        for (const { id } of existingDbContacts) {
+          const updatedContact = await databaseService.getContactById(id);
+          if (updatedContact) {
+            importedContacts.push(updatedContact);
+          }
+        }
+
+        // Fetch created contacts
+        for (const id of importWrites.createdIds) {
+          const contact = await databaseService.getContactById(id);
+          if (contact) {
+            importedContacts.push(contact);
           }
         }
 
         /**
-         * BACKLOG-2525 — return the INCUMBENT, so a repeat press is a no-op the
-         * user can see rather than an error.
+         * BACKLOG-2525 — return the INCUMBENT, so a repeat press lands on the
+         * saved contact rather than failing.
          *
-         * `Contacts.tsx:459-461` reads `result.contacts[0]` and throws
-         * "Failed to import contact" when it is absent. Skipping the insert and
-         * returning nothing would turn the second press into a visible failure
-         * on a screen where nothing is actually wrong — the person IS imported.
-         * Handing back the existing contact makes the second press land on the
-         * same card the first one opened.
+         * `Contacts.tsx` treats a response with no `result.contacts[0]` as a
+         * failure. Returning nothing would make the second press show
+         * "Couldn't import … — nothing was saved" (BACKLOG-3354) on a screen
+         * where nothing is actually wrong: the person IS imported. Handing back
+         * the existing contact makes the second press land on the same card the
+         * first one opened.
          */
-        for (const claimed of claimedByExisting) {
+        for (const claimed of importWrites.claimedByExisting) {
           const contact = await databaseService.getContactById(claimed.contactId);
           if (contact) {
             importedContacts.push(contact);
@@ -2275,6 +2812,10 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         return {
           success: true,
           contacts: importedContacts,
+          // BACKLOG-3376: the SUCCESS return, and only this one. Never spread
+          // onto either catch return below — that is half of what makes this
+          // message and BACKLOG-3354's failure message mutually exclusive.
+          ...(unmatchableEmails?.length ? { unmatchableEmails } : {}),
         };
       } catch (error) {
         logService.error("[Main] Import contacts failed:", "Contacts", {
@@ -2284,11 +2825,13 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           return {
             success: false,
             error: `Validation error: ${error.message}`,
+            ...(savedContactIds ? { savedContactIds } : {}),
           };
         }
         return {
           success: false,
           error: error instanceof Error ? error.message : "Unknown error",
+          ...(savedContactIds ? { savedContactIds } : {}),
         };
       }
     },
@@ -2386,6 +2929,90 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         const validatedData = validateContactData(contactData, false);
 
         /**
+         * BACKLOG-2707 — THE DOOR STILL REFUSES A RECORD WITH NOTHING ON IT.
+         *
+         * `validateContactData` no longer requires a name (see its comment), so
+         * without this block `contacts:create` would accept `{}` and mint a row
+         * with no name, no company, no phone and no email — the exact state
+         * BACKLOG-2684 put this predicate on `contacts:import` to prevent.
+         *
+         * THIS CHANNEL IS LIVE, not dormant. `contactBridge.ts` bridges it and
+         * `ContactFormModal.tsx` calls it, mounted in four places. What kept
+         * the relaxation off the founder's screen is a RENDERER guard
+         * (`ContactFormModal.tsx`, which refuses an empty name box before the
+         * call), and a renderer guard cannot protect a caller that does not go
+         * through the renderer — which is the whole reason BACKLOG-2684 exists.
+         *
+         * ITS OWN MESSAGE, AND ITS OWN PREDICATE. This gate asks
+         * `hasNothingToSave`, the LOOSER rule — not `hasNothingToImport`.
+         * PM decision `5fac2d84` (2026-09-07, on the founder's delegated
+         * authority): a company-only contact may be CREATED by hand even though
+         * it may not be IMPORTED. Import is inference, creation is intent, and
+         * blocking hand-creation does not stop the data — it makes the user type
+         * the company into the NAME field, which is strictly worse for every
+         * name-based match. The message below therefore still names `company`
+         * and is still true; do not "tidy" it to match the import string.
+         *
+         * -------------------------------------------------------------------
+         * TYPES FIRST, THEN EMPTINESS — AND THE ORDER IS THE WHOLE FIX
+         * -------------------------------------------------------------------
+         * This ran BEFORE the validator in the first cut of BACKLOG-2707, on
+         * the argument that "nothing to make a contact out of" is the truer
+         * reason than a missing `name` field. That was wrong, in two axes, and
+         * both were measured through the registered handler rather than read:
+         *
+         *   createContact(null)        -> "Cannot read properties of null"
+         *   createContact({name: 42})  -> "(name || \"\").trim is not a function"
+         *   createContact({allPhones: [42]})  -> the same TypeError
+         *
+         * `hasNothingToImport` reads fields off its argument and hands each to
+         * `realContactName`, which is `(name || "").trim()`. It therefore
+         * assumes BOTH that the payload is an object AND that every field it
+         * reads is a string. Neither is guaranteed at an IPC boundary. Asking
+         * "is this record empty?" of a record whose fields are not strings is
+         * not a question with an answer — the type check is the prior question,
+         * and `validateContactData` already asks it and answers it well
+         * ("Contact data must be an object", "name must be a string").
+         *
+         * So the predicate now runs SECOND, on values the validator has already
+         * proven are strings or null. The plural arrays are the one thing the
+         * validator does not inspect, so non-string entries are dropped here
+         * rather than handed to `.trim()`: an entry that is not a string is not
+         * a usable identifier, so removing it cannot make an empty record look
+         * full. `{allPhones: [42]}` is still refused, with the message below.
+         *
+         * NOT FIXED HERE, and not claimed to be: `contacts:import` calls this
+         * same predicate with the same hazard at its own site above, and
+         * `sanitizeObject` copies values without coercing them, so it does not
+         * protect that path either. Pre-existing since BACKLOG-2684. Recorded
+         * for filing in the SR review of this PR (pm_comments `965a95f0`) —
+         * "recorded", not "filed", because at the time of writing no item
+         * exists for it and a comment that promises one is how a hazard gets
+         * considered handled.
+         */
+        const rawContact = contactData as Record<string, unknown>;
+        const usableStrings = (value: unknown): string[] =>
+          Array.isArray(value)
+            ? value.filter((entry): entry is string => typeof entry === "string")
+            : [];
+
+        if (
+          hasNothingToSave({
+            name: validatedData.name,
+            company: validatedData.company,
+            phone: validatedData.phone,
+            email: validatedData.email,
+            allPhones: usableStrings(rawContact.allPhones),
+            allEmails: usableStrings(rawContact.allEmails),
+          } satisfies ImportableRecordParts)
+        ) {
+          throw new ValidationError(
+            "A contact needs at least a name, company, phone, or email",
+            "contactData",
+          );
+        }
+
+        /**
          * CREATING A CONTACT CREATES A CONTACT (BACKLOG-2617).
          *
          * A duplicate-by-name branch used to sit on this line. It called
@@ -2427,18 +3054,35 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
          * required argument and writes it in the same transaction.
          */
 
-        // Extract source from input data (falls back to "manual" if not provided)
-        // BACKLOG-1900 (P0.1): allow distinct per-origin sources so an inbound
-        // 'iphone'/'outlook'/'android_sync' value is preserved, not coerced to "manual".
-        const validSources: ContactSource[] = ["manual", "email", "sms", "messages", "contacts_app", "inferred", "google_contacts", "outlook", "android_sync", "iphone"];
+        /**
+         * Extract source from input data.
+         *
+         * BACKLOG-1900 (P0.1): allow distinct per-origin sources so an inbound
+         * 'iphone'/'outlook'/'android_sync' value is preserved, not coerced to
+         * "manual".
+         *
+         * BACKLOG-2481 — THE ALLOW-LIST THAT USED TO BE HERE ADMITTED A VALUE
+         * THE DATABASE REFUSES. It was a hand-copied second enumeration of the
+         * vocabulary, and it had drifted: it listed `messages`, which is a
+         * SELECT-time label and has never been in the `contacts.source` CHECK.
+         * So a contact whose source was `messages` did not arrive mislabelled —
+         * `createContact` threw on the CHECK and NO CONTACT WAS CREATED.
+         *
+         * `toStorableContactSource` is that enumeration's only copy now, beside
+         * the constant it is derived from. `null` back means "not storable"; on
+         * THIS door that folds to `manual`, which is exactly what the old
+         * allow-list did with an unrecognised value, so nothing else changes.
+         */
         const inputSource = (contactData as { source?: string })?.source;
-        const source: ContactSource = validSources.includes(inputSource as ContactSource)
-          ? (inputSource as ContactSource)
-          : "manual";
+        const source: ContactSource =
+          toStorableContactSource(inputSource, "manual") ?? "manual";
         const contact = await databaseService.createContact(
           {
             user_id: validatedUserId,
-            display_name: validatedData.name || "Unknown",
+            // BACKLOG-2707 — `?? ""`, not `|| "Unknown"`. Same reason as the
+            // import loop above; one substitution site left behind is how this
+            // recurs.
+            display_name: validatedData.name ?? "",
             email: validatedData.email ?? undefined,
             phone: validatedData.phone ?? undefined,
             company: validatedData.company ?? undefined,
@@ -2768,7 +3412,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
               "../services/reviewStateService"
             );
             const affected = dbAll<{ transaction_id: string }>(
-              "SELECT DISTINCT transaction_id FROM transaction_contacts WHERE contact_id = ?",
+              TRANSACTION_IDS_FOR_CONTACT_SQL,
               [validatedContactId],
             );
             for (const row of affected) {
@@ -3267,6 +3911,24 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
 
         // Pass userId to enable external_contacts lookup (iPhone, macOS, Outlook, Google)
         const validatedUserId = userId ? await getValidUserId(userId, "Contacts") : undefined;
+        // =====================================================================
+        // BACKLOG-3254 — AN UNCONFIRMED ID ENDS THIS CALL
+        // =====================================================================
+        // This is the one channel in this file where `null` must not simply be
+        // coalesced and forwarded. Downstream, a missing id is not read as "no
+        // user" — so an unconfirmed id has to stop here rather than travel on.
+        // Details are on BACKLOG-3254's pm_comments trail.
+        //
+        // Callers see raw handles rather than an error banner: all three
+        // consumers gate on `result.success && result.names` and render the
+        // handle itself otherwise. That is the intended outcome — a number is
+        // honest, a name resolved outside this user's scope is not.
+        //
+        // The `userId`-absent path is untouched and still resolves unscoped by
+        // design; only a supplied-but-unconfirmed id stops here.
+        if (userId && validatedUserId === null) {
+          return { success: false, names: {}, error: "No valid user found in database" };
+        }
         // BACKLOG-2757: the IPC contract stays `Record<handle, label>`; the
         // label is now the honest one ("A or B" for a shared line) rather than
         // whichever contact was inserted last.
@@ -3362,6 +4024,12 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         coverage: "complete" | "partial" | "none";
       };
       error?: string;
+      /**
+       * BACKLOG-3210 — WHY the sync produced nothing, as a value rather than
+       * as prose. `error` is what the user reads and will be reworded; this is
+       * what code and tests may depend on. Absent on success.
+       */
+      errorCode?: MacOSEmptyReadCause;
     }> => {
       try {
         logService.info("[Main] Manual external contacts sync requested", "Contacts", { userId });
@@ -3407,7 +4075,24 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           (!contacts || contacts.length === 0) &&
           (!phoneToContactInfo || Object.keys(phoneToContactInfo).length === 0)
         ) {
-          return { success: false, read, error: "No contacts found in macOS Contacts" };
+          // BACKLOG-3210: an empty read is a QUESTION, not an answer. Ask it.
+          const cause = await classifyEmptyMacOSRead(status);
+          logService.warn(
+            "[Main] macOS contacts sync produced nothing",
+            "Contacts",
+            {
+              cause,
+              booksFound: status?.booksFound,
+              booksRead: status?.booksRead,
+              coverage: status?.coverage,
+            },
+          );
+          return {
+            success: false,
+            read,
+            error: MACOS_EMPTY_READ_MESSAGE[cause],
+            errorCode: cause,
+          };
         }
 
         // BACKLOG-2316: person-deduped payload (see initial-sync path).
@@ -3767,7 +4452,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         }
 
         dbRun(
-          `UPDATE contacts SET default_role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+          SET_CONTACT_DEFAULT_ROLE_SQL,
           [validatedRole, validatedContactId]
         );
 

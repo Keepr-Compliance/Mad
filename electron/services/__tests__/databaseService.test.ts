@@ -224,9 +224,19 @@ import { asCommunicationId, asTransactionId } from "../../types/ids";
 describe("DatabaseService", () => {
   let databaseService: typeof import("../databaseService").default;
 
+  let parkedMigrations: unknown[] | undefined;
+
   beforeEach(async () => {
     jest.clearAllMocks();
     jest.resetModules();
+    // BACKLOG-2962: `resetModules` hands the module under test a FRESH
+    // capability provider with nothing installed, and no jest hook fires after
+    // an in-test reset. Without this, `hostErrorReporter.captureException` in
+    // databaseService reaches the silent default and the Sentry assertions in
+    // this file see zero calls. Same reason the six SecretStore suites call
+    // `installTestSecretStore()` here.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    require("../../../tests/helpers/installTestCapabilities").installTestCapabilities();
 
     // Reset mock defaults
     mockStatement.get.mockReturnValue(undefined);
@@ -239,6 +249,25 @@ describe("DatabaseService", () => {
     // Re-import to get fresh instance
     const module = await import("../databaseService");
     databaseService = module.default;
+
+    // BACKLOG-2551: this suite drives initialize() against a fully-mocked
+    // better-sqlite3. A real migration body cannot run there -- it asks the driver
+    // questions (PRAGMA table_info, sqlite_master) the mock does not answer -- so a
+    // non-empty chain turns every initialize() into a migration FAILURE and the
+    // suite asserts against recovery it never meant to trigger. Park the chain; it
+    // is not this suite's subject. v71's body is covered against the REAL driver in
+    // databaseService.migration-v71.test.ts.
+    parkedMigrations = (
+      databaseService.constructor as unknown as { MIGRATIONS: unknown[] }
+    ).MIGRATIONS;
+    (databaseService.constructor as unknown as { MIGRATIONS: unknown[] }).MIGRATIONS = [];
+  });
+
+  afterEach(() => {
+    if (parkedMigrations && databaseService) {
+      (databaseService.constructor as unknown as { MIGRATIONS: unknown[] }).MIGRATIONS =
+        parkedMigrations;
+    }
   });
 
   describe("initialization", () => {
@@ -1474,6 +1503,9 @@ describe("DatabaseService", () => {
     beforeEach(async () => {
       jest.clearAllMocks();
       jest.resetModules();
+      // BACKLOG-2962 — see the outer beforeEach for why.
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      require("../../../tests/helpers/installTestCapabilities").installTestCapabilities();
 
       // Reset mock defaults on shared mocks (these survive resetModules)
       // CRITICAL: clearAllMocks() removes implementations from all mocks,

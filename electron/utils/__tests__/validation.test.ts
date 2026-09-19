@@ -9,6 +9,7 @@
 import {
   ValidationError,
   validateContactId,
+  validateContactData,
   validateTransactionId,
   validateTransactionData,
   validateProvider,
@@ -21,6 +22,10 @@ import {
   SESSION_TOKEN_MIN_LENGTH,
   SESSION_TOKEN_MAX_LENGTH,
 } from "../validation";
+import {
+  TransactionTypeSchema,
+  TransactionStatusSchema,
+} from "../../schemas/transaction";
 
 describe("Contact Validation", () => {
   describe("validateContactId", () => {
@@ -170,17 +175,28 @@ describe("Transaction Validation", () => {
       );
     });
 
-    it("should allow null values for date fields", () => {
+    it("forwards null for date fields, because null is how they are cleared", () => {
+      // BACKLOG-2759 — THIS TEST USED TO ASSERT THE DEFECT.
+      //
+      // It read "should allow null values for date fields" and then required
+      // that all three keys be ABSENT from the result, i.e. that an explicit
+      // clear be silently discarded. That is the bug: the writer never learned
+      // a clear was asked for, and `useAuditSubmission.ts` sends `closed_at`
+      // as `|| null`, so blanking a closing date left the old date on the row
+      // while the call reported success.
+      //
+      // Inverted rather than deleted, so the change of intent is on the record
+      // where the old expectation stood.
       const data = {
         started_at: null,
         closed_at: null,
         closing_date_verified: null,
       };
       const validated = validateTransactionData(data, true);
-      // Null values should not be included in validated object
-      expect(validated.started_at).toBeUndefined();
-      expect(validated.closed_at).toBeUndefined();
-      expect(validated.closing_date_verified).toBeUndefined();
+
+      expect(validated.started_at).toBeNull();
+      expect(validated.closed_at).toBeNull();
+      expect(validated.closing_date_verified).toBeNull();
     });
   });
 
@@ -268,19 +284,16 @@ describe("Transaction Validation", () => {
       expect("notes" in validated).toBe(false);
     });
 
-    it("still REJECTS a malformed notes value even though it is not forwarded", () => {
-      // The check must not have been deleted along with the forwarding — that
-      // would turn today's ValidationError into silence.
-      expect(() =>
-        validateTransactionData({ notes: "x".repeat(10001) }, true),
-      ).toThrow();
-    });
-
-    it("still REJECTS a malformed amount even though it is not forwarded", () => {
-      expect(() => validateTransactionData({ amount: -5 }, true)).toThrow(
-        "Amount must be a non-negative number",
-      );
-    });
+    // BACKLOG-2755: two tests stood here — "still REJECTS a malformed notes
+    // value even though it is not forwarded" and the same for `amount`. They
+    // pinned a deliberate BACKLOG-2558 decision to keep validating two keys
+    // that belong to no table. That decision is REPLACED, not quietly dropped:
+    // `RawTransactionData` is now keyed off the real column set, so `amount`
+    // and `notes` cannot be read here at all and a re-added check is a compile
+    // error rather than a runtime one. What is traded away is the error a
+    // caller got for `amount: -5`; no caller sends it. The replacement
+    // guarantee is asserted in
+    // `electron/utils/__tests__/validationFieldSet-2560.test.ts`.
 
     it("forwards suggested_contacts, which the review UI sends as its only key", () => {
       // BACKLOG-2737/2558 (F6): stripped here before the fix, so dismissing a
@@ -804,5 +817,335 @@ describe("Security Validation - TASK-601", () => {
         expect(isSessionTokenCorruptionError("string error")).toBe(false);
       });
     });
+  });
+});
+
+// ===========================================================================
+// BACKLOG-2755 — VALUE DOMAINS
+// ===========================================================================
+// Before this item the two enums below were hand-written arrays inside
+// `validateTransactionData`, and they had drifted from the `transactions`
+// CHECK constraints in BOTH directions: the validator accepted `lease`,
+// `refinance` and `cancelled` (which the CHECK rejects) and rejected
+// `rejected` (which the CHECK accepts).
+//
+// Nothing caught it. The whole of this file was green at the time — 91 tests —
+// because every existing case sampled a value that happened to be legal on
+// both sides. So these tests PROBE the function over a value list that spans
+// the disagreement, and assert the ACCEPTED SET, not membership samples.
+//
+// TWO assertions per field, and they are not redundant:
+//
+//  - against a HAND-WRITTEN literal. This is the tripwire. A change to the
+//    column's CHECK must consciously update this line; it cannot ride in.
+//  - against `Schema.options`. This one is green under any domain change by
+//    construction — it compares the code with the same source the code derives
+//    from. Its only job is to fail if someone re-introduces a hand-written
+//    array here that DIFFERS from the schema. An identical one is invisible to
+//    it, which is exactly why the literal above is also required.
+describe("validateTransactionData — value domains (BACKLOG-2755)", () => {
+  /** A value no CHECK list contains, to prove the domain is closed at all. */
+  const DOMAIN_SENTINEL = "zzz_not_a_real_domain_value";
+
+  /**
+   * Drive the real function and report which values it ACCEPTS, by asking the
+   * returned object rather than by reading the validator's source.
+   */
+  function acceptedSet(field: "transaction_type" | "status", candidates: string[]): string[] {
+    const accepted: string[] = [];
+    for (const value of candidates) {
+      try {
+        const validated = validateTransactionData({ [field]: value }, true);
+        if (validated[field] === value) accepted.push(value);
+      } catch {
+        // rejected — deliberately not accepted
+      }
+    }
+    return accepted.sort();
+  }
+
+  const TYPE_CANDIDATES = [
+    // the CHECK's own list
+    "purchase", "sale", "other",
+    // the three the validator used to accept and the database rejects
+    "lease", "refinance",
+    DOMAIN_SENTINEL,
+  ];
+
+  const STATUS_CANDIDATES = [
+    // the CHECK's own list
+    "pending", "active", "closed", "rejected",
+    // the one the validator used to accept and the database rejects
+    "cancelled",
+    DOMAIN_SENTINEL,
+  ];
+
+  describe("transaction_type", () => {
+    it("accepts exactly the CHECK's list — pinned by hand, so a domain change cannot ride in", () => {
+      expect(acceptedSet("transaction_type", TYPE_CANDIDATES)).toEqual([
+        "other",
+        "purchase",
+        "sale",
+      ]);
+    });
+
+    it("accepts exactly what the schema declares, so no hand-written list can return here", () => {
+      expect(acceptedSet("transaction_type", TYPE_CANDIDATES)).toEqual(
+        [...TransactionTypeSchema.options].sort(),
+      );
+    });
+
+    it("names the legal values in the error, so the message cannot drift from the check", () => {
+      expect(() =>
+        validateTransactionData({ transaction_type: "lease" }, true),
+      ).toThrow("Transaction type must be one of: purchase, sale, other");
+    });
+  });
+
+  describe("status", () => {
+    it("accepts exactly the CHECK's list — pinned by hand, so a domain change cannot ride in", () => {
+      expect(acceptedSet("status", STATUS_CANDIDATES)).toEqual([
+        "active",
+        "closed",
+        "pending",
+        "rejected",
+      ]);
+    });
+
+    it("accepts exactly what the schema declares, so no hand-written list can return here", () => {
+      expect(acceptedSet("status", STATUS_CANDIDATES)).toEqual(
+        [...TransactionStatusSchema.options].sort(),
+      );
+    });
+
+    it("accepts 'rejected', the review-queue status it used to block outright", () => {
+      // The half of the drift that was USER-VISIBLE: the database and the
+      // writer both accept this status, and this validator refused it.
+      expect(validateTransactionData({ status: "rejected" }, true).status).toBe(
+        "rejected",
+      );
+    });
+  });
+});
+
+// ===========================================================================
+// BACKLOG-2759 — CLEARING A FIELD
+// ===========================================================================
+// Six guards read `!== undefined && !== null`, which collapses two opposite
+// instructions — "clear this column" and "say nothing about this column" —
+// into one and drops the key. The writer never saw the clear, and the caller
+// was told it worked. `useAuditSubmission.ts` sends `closed_at` and
+// `closing_deadline` as `|| null`, so blanking a closing date left the old
+// date on the row of an audit whose window is computed from it.
+//
+// Every one of the six is covered here, not only the two with a known caller:
+// the five others are the same line one field apart, and a per-column decision
+// is the discipline this epic applies to writers.
+//
+// These tests assert the KEY SURVIVES and what it carries. They cannot prove
+// the row is actually cleared — the writer is downstream of here — which is
+// what `electron/__tests__/transactionNullClear-2759.test.ts` exists for.
+describe("validateTransactionData — clearing a field (BACKLOG-2759)", () => {
+  const CLEARABLE = [
+    "sale_price",
+    "listing_price",
+    "closing_date_verified",
+    "started_at",
+    "closed_at",
+    "closing_deadline",
+  ] as const;
+
+  describe.each(CLEARABLE)("%s", (field) => {
+    it("forwards an explicit null instead of dropping the key", () => {
+      const validated = validateTransactionData({ [field]: null }, true);
+
+      expect(field in validated).toBe(true);
+      expect(validated[field]).toBeNull();
+    });
+
+    it("still skips the field when it is not mentioned at all", () => {
+      // The other half of the distinction: `undefined` must remain "no
+      // instruction", or the fix would start writing nulls over live data.
+      const validated = validateTransactionData({}, true);
+
+      expect(field in validated).toBe(false);
+    });
+  });
+
+  describe("the empty string, which is a separate decision per column", () => {
+    it.each(["started_at", "closed_at", "closing_deadline"] as const)(
+      "%s clears, because an empty string is what a blanked form field sends",
+      (field) => {
+        // The writer declares `emptyToNull: true` for these columns, but that
+        // rule fires on the INSERT path only — measured against a real
+        // database in `electron/__tests__/transactionNullClear-2759.test.ts`.
+        // Forwarding `""` to the update path stored a literal empty string in
+        // a DATETIME column, which is not NULL and still reads as "a date is
+        // set", so the clear is resolved here instead.
+        const validated = validateTransactionData({ [field]: "" }, true);
+
+        expect(field in validated).toBe(true);
+        expect(validated[field]).toBeNull();
+      },
+    );
+
+    it.each(["sale_price", "listing_price"] as const)(
+      "%s clears rather than writing 0, which is what Number('') used to produce",
+      (field) => {
+        // Latent, not live — no renderer writes either price today — but a
+        // cleared price landing as a real $0 is wrong in kind, so it is fixed
+        // with the strip it shares a line with.
+        const validated = validateTransactionData({ [field]: "" }, true);
+
+        expect(validated[field]).toBeNull();
+      },
+    );
+
+    it("closing_date_verified keeps 0, deliberately", () => {
+      // INTEGER DEFAULT 0, and 0 IS the column's "not verified" resting state,
+      // so Number("") lands the right value here rather than a wrong one. The
+      // one member of the group not changed, stated so its absence is a
+      // decision and not an oversight.
+      const validated = validateTransactionData(
+        { closing_date_verified: "" },
+        true,
+      );
+
+      expect(validated.closing_date_verified).toBe(0);
+    });
+  });
+
+  it("still rejects a malformed date, so opening the guard did not open the format", () => {
+    expect(() =>
+      validateTransactionData({ closed_at: "15-01-2026" }, true),
+    ).toThrow("Closed at date must be in YYYY-MM-DD format");
+  });
+
+  it("still rejects a negative price, so opening the guard did not open the range", () => {
+    expect(() => validateTransactionData({ sale_price: -1 }, true)).toThrow(
+      "Sale price must be a non-negative number",
+    );
+  });
+});
+
+/**
+ * =============================================================================
+ * BACKLOG-2707 — the contact name guard, swept at the validator boundary
+ * =============================================================================
+ * DOCUMENTATION, NOT EVIDENCE, and saying so is the point. Every assertion here
+ * would pass on a fix that stored the literal "Unknown", because the
+ * substitution that produced it lived downstream in `createContactsBatch`. The
+ * claims that can actually fail live in
+ * `electron/services/db/__tests__/contactDbService.namelessDisplayName-2707.test.ts`
+ * (the stored value) and `electron/__tests__/contact-handlers.namelessImport-2707.test.ts`
+ * (the handlers, including the `contacts:update` NOT NULL path).
+ *
+ * What this file DOES pin: that the four spellings of "no name" reach one
+ * outcome, that the outcome is `""` and never `null`, and that the type check
+ * was not relaxed along with the emptiness rule.
+ */
+describe("validateContactData — a missing name is not a validation failure (BACKLOG-2707)", () => {
+  describe.each([
+    ["create", false],
+    ["update", true],
+  ])("on %s", (_label, isUpdate) => {
+    /**
+     * SWEPT, not sampled. `""` and `"   "` were refused by DIFFERENT clauses
+     * with DIFFERENT messages — `required` and `minLength: 1` — so a suite that
+     * tested only one of them would have called a half-fix green.
+     */
+    it.each([
+      ["null", null],
+      ["an empty string", ""],
+      ["whitespace only", "   "],
+      ["a tab and a newline", "\t\n"],
+    ])("resolves %s to an empty string", (_spelling, value) => {
+      const validated = validateContactData({ name: value }, isUpdate);
+
+      expect(validated.name).toBe("");
+      // NEVER null: `contacts.display_name` is TEXT NOT NULL, and a null
+      // survives `contacts:update` to raise a constraint error at the writer.
+      expect(validated.name).not.toBeNull();
+    });
+
+    it("leaves a real name alone", () => {
+      expect(validateContactData({ name: "Rosalind Vance" }, isUpdate).name).toBe(
+        "Rosalind Vance",
+      );
+    });
+
+    it("still trims a real name rather than storing the padding", () => {
+      expect(validateContactData({ name: "  Rosalind Vance  " }, isUpdate).name).toBe(
+        "Rosalind Vance",
+      );
+    });
+
+    it("says nothing about a name the caller did not send", () => {
+      const validated = validateContactData({ company: "Vantrees Realty" }, isUpdate);
+
+      expect("name" in validated).toBe(false);
+    });
+
+    /**
+     * The emptiness rule was relaxed; the TYPE rule was not. Turning a
+     * wrong-typed name into a silent `null` would trade a ValidationError for
+     * silence — the direction PR #2563 argued against when it deleted the
+     * `amount` check.
+     */
+    it.each([
+      ["a number", 42],
+      ["an object", { first: "Rosalind" }],
+      ["an array", ["Rosalind"]],
+    ])("still throws on %s", (_spelling, value) => {
+      expect(() => validateContactData({ name: value }, isUpdate)).toThrow(ValidationError);
+    });
+
+    /**
+     * PRE-EXISTING, PINNED, NOT FIXED HERE — BACKLOG-3186.
+     *
+     * `validateString` returns early on `!value`, so a FALSY non-string is not
+     * a "no name" spelling and is not a throw either: it comes back as `null`,
+     * silently. BACKLOG-2707 did not cause this — the base validator does the
+     * same — and did not fix it. It is pinned so that whoever does fix it sees
+     * this file go red rather than discovering the change downstream, and so
+     * the "non-strings throw" reading of the guard above cannot re-form.
+     *
+     * `null` is the value that matters: on `contacts:update` it survives the
+     * handler's `undefined`-only filter and fails the NOT NULL column. The
+     * create and import paths are safe from it only because of the `?? ""` at
+     * their two `display_name` sites.
+     */
+    it.each([
+      ["zero", 0],
+      ["false", false],
+      ["NaN", NaN],
+    ])("returns null for %s rather than throwing (BACKLOG-3186)", (_spelling, value) => {
+      const validated = validateContactData({ name: value }, isUpdate);
+
+      expect(validated.name).toBeNull();
+      // NOT `""` — stating the difference from the four handled spellings, so
+      // this test cannot be read as endorsing the behaviour.
+      expect(validated.name).not.toBe("");
+    });
+
+    it("still enforces the length ceiling", () => {
+      expect(() =>
+        validateContactData({ name: "R".repeat(201) }, isUpdate),
+      ).toThrow(/200/);
+    });
+  });
+
+  /**
+   * The regression this item is named for, at the validator boundary: the two
+   * messages that used to come back are gone. Both are asserted by ABSENCE of
+   * a throw rather than by message text, because the messages no longer exist.
+   */
+  it("no longer produces either of the two refusals it used to", () => {
+    expect(() =>
+      validateContactData({ name: "", phone: "+14155550142" }, false),
+    ).not.toThrow();
+    expect(() =>
+      validateContactData({ name: "   ", phone: "+14155550142" }, false),
+    ).not.toThrow();
   });
 });

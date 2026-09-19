@@ -1,0 +1,6 @@
+{
+  "//": "BACKLOG-2960 PR 0b — one fixture, one tsc invocation, one exit code. Compiling the",
+  "//2": "fixtures together would let a failure in one mask a pass in another.",
+  "extends": "./tsconfig.base.json",
+  "files": ["./mustNotCompile-asyncBody.ts"]
+}

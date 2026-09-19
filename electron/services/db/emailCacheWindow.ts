@@ -30,6 +30,7 @@
 // ============================================
 
 import { dbGet } from "./core/dbConnection";
+import { sql } from "./core/sqlText";
 
 export interface CachedEmailBounds {
   /** ISO timestamp of the OLDEST cached email, or null when nothing is cached. */
@@ -37,6 +38,19 @@ export interface CachedEmailBounds {
   /** ISO timestamp of the NEWEST cached email, or null when nothing is cached. */
   newest: string | null;
 }
+
+/**
+ * Both bounds in one statement.
+ *
+ * Exported so its pin asserts the TEXT THIS MODULE EXECUTES rather than a copy
+ * of it: a test holding its own duplicate of this SQL keeps passing after the
+ * production string drifts. The `dbGet`-backed function binds through the
+ * module singleton and is not drivable from the db/ suites, so the string is
+ * the only honest seam — the same one `LATEST_SENT_AT_SQL` was pinned through
+ * before BACKLOG-3056 subsumed it into this MIN/MAX pair.
+ */
+export const CACHED_EMAIL_SENT_AT_BOUNDS_SQL =
+  sql`SELECT MIN(sent_at) as oldest, MAX(sent_at) as newest FROM emails WHERE user_id = ?`;
 
 /**
  * The oldest and newest `sent_at` across a user's cached emails.
@@ -48,7 +62,7 @@ export interface CachedEmailBounds {
  */
 export function getCachedEmailSentAtBounds(userId: string): CachedEmailBounds {
   const row = dbGet<{ oldest: string | null; newest: string | null }>(
-    "SELECT MIN(sent_at) as oldest, MAX(sent_at) as newest FROM emails WHERE user_id = ?",
+    CACHED_EMAIL_SENT_AT_BOUNDS_SQL,
     [userId],
   );
   return { oldest: row?.oldest ?? null, newest: row?.newest ?? null };

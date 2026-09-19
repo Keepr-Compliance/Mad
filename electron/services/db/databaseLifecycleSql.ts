@@ -1,0 +1,150 @@
+/**
+ * SQL the database service runs on the database's OWN state — BACKLOG-2991.
+ *
+ * ## What belongs here, and what does not
+ *
+ * These statements are not application queries. They are the three things
+ * `databaseService` asks of a database as an object in its own right:
+ *
+ *   - **migration bookkeeping** — recording which schema version a file is at,
+ *     and asking whether the table that records it exists yet
+ *   - **restore verification** — proving a restored file answers at all
+ *
+ * That distinction is why they are separated from the larger set that STAYS in
+ * `databaseService.ts`: **38** of that file's 49 gate sites — 22 pragma, 9 prepare,
+ * 7 exec. The full classification, with per-site evidence, is on BACKLOG-2991.
+ *
+ * **Why those 38 stay is scope and ownership, NOT impossibility.** An earlier draft
+ * of this header said "none of which is query text a `db/` module can own", and SR
+ * rejected exactly that framing in the PR #2484 review: *"it inspects the schema is
+ * not on its own a licence to author SQL outside the layer"*. Seven of the nine
+ * prepares are static text that could move as one-line constants today. Four of the
+ * seven execs genuinely have nothing to move — they replay DDL the database itself
+ * produced — and the pragmas are better-sqlite3's connection-configuration API
+ * rather than a query channel. The rest stay because they are BACKLOG-2992's, and
+ * because BACKLOG-2834/2836 are rewriting that path. A boundary someone else drew,
+ * honoured — which is a different sentence from "unmovable", and the difference
+ * matters to whoever picks 2992 up.
+ *
+ * **This header said 42 until the probe below moved.** Those 38 are now owned by
+ * BACKLOG-2992, the deferred item whose scope is exactly that class — recorded in
+ * `scripts/ci/sql-boundary-baseline.json` and in the `OWNERS` map of
+ * `scripts/ci/check-sql-boundary.mjs`, which is what `--update-baseline` reads.
+ *
+ * ## The one reflection statement that is NOT in that 38, and why
+ *
+ * `SCHEMA_VERSION_TABLE_EXISTS_SQL` below is `sqlite_master` reflection, which is
+ * the class this header just said stays. It moved anyway, and the reason is not
+ * that reflection changed category — it is that at **all four** of its call sites
+ * it is the GUARD for a statement that had already moved:
+ *
+ *     const svTableRow = currentDb.prepare(SCHEMA_VERSION_TABLE_EXISTS_SQL).get();
+ *     if (svTableRow) {
+ *       currentDb.prepare(SCHEMA_VERSION_SQL)                 // moved in PR #2484
+ *
+ * Before this change `databaseService.ts` imported the version read from `db/` and
+ * authored its existence probe inline five lines above it, four times over. That
+ * seam is precisely what the `*Sql.ts` pattern exists to remove, and it was SR's
+ * one non-blocking finding on PR #2484. A class boundary that separates a
+ * statement from its own guard is not a boundary worth keeping.
+ *
+ * The other NINE prepare sites in `databaseService.ts` guard nothing that moved and
+ * stay: six static `sqlite_master` reflections (`:655 :796 :800 :804 :824 :1054`),
+ * one static `PRAGMA table_info(schema_version)` prepared rather than pragma'd
+ * (`:1302` — reflection, but not via `sqlite_master`), and the two interpolated
+ * backup/restore column-list statements (`:859 :867`).
+ *
+ * Nine, not twelve. SR's #2484 review counted "13 reflection prepares" INCLUDING
+ * this probe's four sites; 13 - 4 = 9. Subtracting the probe's one baseline KEY
+ * instead of its four SITES gives 12, and 12 does not add up: the remainder is
+ * 22 pragma + 9 prepare + 7 exec = 38, enumerated with
+ * `check-sql-boundary.mjs --explain`, not derived from the review's prose.
+ *
+ * ## The schema_version READ is deliberately not here
+ *
+ * `SELECT version FROM schema_version WHERE id = 1` already exists in the layer,
+ * as `SCHEMA_VERSION_SQL` in `./storageDiagnosticsSql` (BACKLOG-2989). Its text
+ * is byte-identical to the four call sites this item moved — verified by hash
+ * (`1ddb16d1edc29131`), not by reading — so those four import the existing
+ * constant. Minting a second copy of a sentence the layer already spells would
+ * recreate exactly the drift hazard the `*Sql.ts` pattern removes, and
+ * relocating the existing one would edit a module this item does not own.
+ *
+ * The read and the write therefore sit in different modules. That is a real
+ * seam and it is recorded rather than tidied away: moving `SCHEMA_VERSION_SQL`
+ * to sit beside `SCHEMA_VERSION_UPDATE_SQL` is a change to
+ * `storageDiagnosticsSql.ts` and its other consumers, which is not this item's.
+ */
+
+import { sql } from "./core/sqlText";
+
+/**
+ * Stamps a completed migration onto the single `schema_version` row.
+ *
+ * One bound parameter: the version just applied. `updated_at` and `migrated_at`
+ * are computed by SQLite rather than by the caller — `CURRENT_TIMESTAMP` and
+ * `datetime('now')` are both UTC, and both were already in this statement
+ * before it moved. The text is byte-identical to what
+ * `databaseService._runVersionedMigrations` prepared (`e30e26e15f743e2e`);
+ * substituting a JavaScript timestamp here would change what reaches SQLite,
+ * which is the one thing a move must not do.
+ */
+export const SCHEMA_VERSION_UPDATE_SQL = sql`UPDATE schema_version SET version = ?, updated_at = CURRENT_TIMESTAMP, migrated_at = datetime('now') WHERE id = 1`;
+
+/**
+ * Does this file have a `schema_version` table at all?
+ *
+ * The guard in front of every read of that table. A database that predates the
+ * schema baseline, or a fresh empty file, has no such table, and
+ * `SELECT version FROM schema_version` on it does not return zero rows — it
+ * throws. So the probe is not a nicety: it is what makes the read legal.
+ *
+ * Four call sites in `databaseService.ts` ask it, for four different decisions —
+ * refuse a pre-baseline file, decide whether a migration is about to run, decide
+ * whether to take the pre-junction snapshot, and decide whether to create the
+ * table or to widen it. One text, four questions.
+ *
+ * Byte-identical to the literal those four sites authored inline before it moved.
+ * `sha256` of the COOKED value — what reaches SQLite, not the source slice — is
+ * `97199d038b7fcd99c95d4e792297e1adcb47cf1cd2b199f8aa5372d8f5a6333f` at all four
+ * old sites and at this constant. Measured on both sides of the move rather than
+ * asserted. Its first 16 hex are `97199d038b7fcd99`, the
+ * key SR's independently built extractor named in the #2484 review — two
+ * extractors, same identifier.
+ *
+ * The gate's own `text:a73cb4792d87` key is NOT that check, and the difference is
+ * narrower than "it ignores whitespace". What the gate builds is
+ * `hash12(normalize(node.getText(sf)))` (`check-sql-boundary.mjs:800`), where
+ * `normalize` is `s.replace(/\s+/g, " ").trim()` and `hash12` is the first 12 hex
+ * of a sha256. Two consequences, both measured on this statement rather than
+ * reasoned about:
+ *
+ *   - It keys on the SOURCE SLICE, quotes included — not on the value. Rewriting
+ *     `"…"` as a backtick template with byte-identical cooked text moves the key
+ *     (`a73cb4792d87` -> `f98f3d772978`). So it reacts to changes SQLite never sees.
+ *   - `normalize` collapses each existing RUN of whitespace to one space and trims
+ *     the ends. It is therefore blind to the AMOUNT of whitespace where whitespace
+ *     already is — an extra space, a newline plus indent, leading or trailing
+ *     padding all keep `a73cb4792d87`. It is NOT blind to whitespace generally:
+ *     adding a space where there was none (`type=` -> `type =`) gives
+ *     `066baf6fa1f0`, and removing one entirely gives `b42847a568d2`.
+ *
+ * That blind spot is the one a move has to worry about — reindenting a statement
+ * into a new file is exactly "the amount of whitespace where whitespace already
+ * is" — which is why the identity control above hashes the cooked value at full
+ * length instead. Do not cite the gate key as evidence of byte identity.
+ *
+ * No bound parameters: the table name is a constant of the schema, not an input.
+ */
+export const SCHEMA_VERSION_TABLE_EXISTS_SQL = sql`SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'`;
+
+/**
+ * The cheapest question that still proves a connection answers: no tables, no
+ * schema, no rows on disk. Used after an automatic restore, where "the file
+ * opened" is not evidence — an encrypted file opens fine under the wrong key
+ * and fails on the first real read.
+ *
+ * No bound parameters. Returns `{ ok: 1 }`; anything else, including no row at
+ * all, means the restored file is not usable.
+ */
+export const CONNECTIVITY_PROBE_SQL = sql`SELECT 1 AS ok`;

@@ -152,10 +152,10 @@ describe("iOSContactsParser", () => {
   });
 
   describe("open", () => {
-    it("should open the database in readonly mode", () => {
+    it("should open the database in readonly mode", async () => {
       const Database = require("better-sqlite3-multiple-ciphers");
 
-      parser.open("/path/to/backup");
+      await parser.open("/path/to/backup");
 
       expect(Database).toHaveBeenCalledWith(
         expect.stringContaining("31bb7ba8914766d4ba40d6dfb6113c8b614be442"),
@@ -163,15 +163,15 @@ describe("iOSContactsParser", () => {
       );
     });
 
-    it("should prepare SQL statements on open", () => {
-      parser.open("/path/to/backup");
+    it("should prepare SQL statements on open", async () => {
+      await parser.open("/path/to/backup");
 
       // Should have prepared statements for contacts and multi-values
       expect(mockDb.prepare).toHaveBeenCalled();
     });
 
-    it("should build lookup indexes on open", () => {
-      parser.open("/path/to/backup");
+    it("should build lookup indexes on open", async () => {
+      await parser.open("/path/to/backup");
 
       const stats = parser.getStats();
       expect(stats.contactCount).toBe(mockContacts.length);
@@ -181,8 +181,8 @@ describe("iOSContactsParser", () => {
   });
 
   describe("close", () => {
-    it("should close the database and clear caches", () => {
-      parser.open("/path/to/backup");
+    it("should close the database and clear caches", async () => {
+      await parser.open("/path/to/backup");
       parser.close();
 
       expect(mockDb.close).toHaveBeenCalled();
@@ -192,16 +192,16 @@ describe("iOSContactsParser", () => {
   });
 
   describe("getAllContacts", () => {
-    it("should return all contacts with parsed data", () => {
-      parser.open("/path/to/backup");
+    it("should return all contacts with parsed data", async () => {
+      await parser.open("/path/to/backup");
 
       const contacts = parser.getAllContacts();
 
       expect(contacts.length).toBe(mockContacts.length);
     });
 
-    it("should compute display names correctly", () => {
-      parser.open("/path/to/backup");
+    it("should compute display names correctly", async () => {
+      await parser.open("/path/to/backup");
 
       const contacts = parser.getAllContacts();
       const contactMap = new Map(contacts.map((c) => [c.id, c]));
@@ -219,8 +219,8 @@ describe("iOSContactsParser", () => {
       expect(contactMap.get(4)?.displayName).toBe("Unknown");
     });
 
-    it("should parse phone numbers correctly", () => {
-      parser.open("/path/to/backup");
+    it("should parse phone numbers correctly", async () => {
+      await parser.open("/path/to/backup");
 
       const contacts = parser.getAllContacts();
       const johnDoe = contacts.find((c) => c.id === 1);
@@ -231,8 +231,8 @@ describe("iOSContactsParser", () => {
       expect(johnDoe?.phoneNumbers[0].normalizedNumber).toBe("+15555550112");
     });
 
-    it("should parse email addresses correctly", () => {
-      parser.open("/path/to/backup");
+    it("should parse email addresses correctly", async () => {
+      await parser.open("/path/to/backup");
 
       const contacts = parser.getAllContacts();
       const johnDoe = contacts.find((c) => c.id === 1);
@@ -242,8 +242,8 @@ describe("iOSContactsParser", () => {
       expect(johnDoe?.emails[0].email).toBe("john.doe@example.com");
     });
 
-    it("should handle contacts with multiple phones", () => {
-      parser.open("/path/to/backup");
+    it("should handle contacts with multiple phones", async () => {
+      await parser.open("/path/to/backup");
 
       const contacts = parser.getAllContacts();
       const janeSmith = contacts.find((c) => c.id === 2);
@@ -253,8 +253,8 @@ describe("iOSContactsParser", () => {
   });
 
   describe("getContactById", () => {
-    it("should return contact from cache", () => {
-      parser.open("/path/to/backup");
+    it("should return contact from cache", async () => {
+      await parser.open("/path/to/backup");
 
       const contact = parser.getContactById(1);
 
@@ -263,8 +263,8 @@ describe("iOSContactsParser", () => {
       expect(contact?.firstName).toBe("John");
     });
 
-    it("should return null for non-existent contact", () => {
-      parser.open("/path/to/backup");
+    it("should return null for non-existent contact", async () => {
+      await parser.open("/path/to/backup");
 
       const contact = parser.getContactById(999);
 
@@ -273,8 +273,8 @@ describe("iOSContactsParser", () => {
   });
 
   describe("lookupByPhone", () => {
-    it("should find contact by exact phone number", () => {
-      parser.open("/path/to/backup");
+    it("should find contact by exact phone number", async () => {
+      await parser.open("/path/to/backup");
 
       const result = parser.lookupByPhone("(555) 555-0112");
 
@@ -283,8 +283,8 @@ describe("iOSContactsParser", () => {
       expect(result.matchedOn).toBe("phone");
     });
 
-    it("should find contact by normalized phone number", () => {
-      parser.open("/path/to/backup");
+    it("should find contact by normalized phone number", async () => {
+      await parser.open("/path/to/backup");
 
       // Different format but same number
       const result = parser.lookupByPhone("+1 555 555 0112");
@@ -294,8 +294,8 @@ describe("iOSContactsParser", () => {
       expect(result.matchedOn).toBe("phone");
     });
 
-    it("should return null for non-existent phone", () => {
-      parser.open("/path/to/backup");
+    it("should return null for non-existent phone", async () => {
+      await parser.open("/path/to/backup");
 
       const result = parser.lookupByPhone("1234567890");
 
@@ -305,8 +305,8 @@ describe("iOSContactsParser", () => {
   });
 
   describe("lookupByEmail", () => {
-    it("should find contact by email (case-insensitive)", () => {
-      parser.open("/path/to/backup");
+    it("should find contact by email (case-insensitive)", async () => {
+      await parser.open("/path/to/backup");
 
       const result = parser.lookupByEmail("JOHN.DOE@EXAMPLE.COM");
 
@@ -315,8 +315,8 @@ describe("iOSContactsParser", () => {
       expect(result.matchedOn).toBe("email");
     });
 
-    it("should return null for non-existent email", () => {
-      parser.open("/path/to/backup");
+    it("should return null for non-existent email", async () => {
+      await parser.open("/path/to/backup");
 
       const result = parser.lookupByEmail("nonexistent@example.com");
 
@@ -326,8 +326,8 @@ describe("iOSContactsParser", () => {
   });
 
   describe("lookupByHandle", () => {
-    it("should lookup phone number handles", () => {
-      parser.open("/path/to/backup");
+    it("should lookup phone number handles", async () => {
+      await parser.open("/path/to/backup");
 
       const result = parser.lookupByHandle("5555550112");
 
@@ -335,8 +335,8 @@ describe("iOSContactsParser", () => {
       expect(result.matchedOn).toBe("phone");
     });
 
-    it("should lookup email handles", () => {
-      parser.open("/path/to/backup");
+    it("should lookup email handles", async () => {
+      await parser.open("/path/to/backup");
 
       const result = parser.lookupByHandle("john.doe@example.com");
 
@@ -344,8 +344,8 @@ describe("iOSContactsParser", () => {
       expect(result.matchedOn).toBe("email");
     });
 
-    it("should return null for empty handle", () => {
-      parser.open("/path/to/backup");
+    it("should return null for empty handle", async () => {
+      await parser.open("/path/to/backup");
 
       const result = parser.lookupByHandle("");
 
@@ -353,8 +353,8 @@ describe("iOSContactsParser", () => {
       expect(result.matchedOn).toBeNull();
     });
 
-    it("should return null for whitespace-only handle", () => {
-      parser.open("/path/to/backup");
+    it("should return null for whitespace-only handle", async () => {
+      await parser.open("/path/to/backup");
 
       const result = parser.lookupByHandle("   ");
 
@@ -364,8 +364,8 @@ describe("iOSContactsParser", () => {
   });
 
   describe("label cleaning", () => {
-    it("should clean iOS label format", () => {
-      parser.open("/path/to/backup");
+    it("should clean iOS label format", async () => {
+      await parser.open("/path/to/backup");
 
       const contacts = parser.getAllContacts();
       const johnDoe = contacts.find((c) => c.id === 1);
@@ -376,8 +376,8 @@ describe("iOSContactsParser", () => {
       expect(johnDoe?.emails[0].label).toBe("home");
     });
 
-    it("should handle null labels", () => {
-      parser.open("/path/to/backup");
+    it("should handle null labels", async () => {
+      await parser.open("/path/to/backup");
 
       const contacts = parser.getAllContacts();
       const testCompany = contacts.find((c) => c.id === 3);
@@ -388,8 +388,8 @@ describe("iOSContactsParser", () => {
   });
 
   describe("getStats", () => {
-    it("should return accurate statistics", () => {
-      parser.open("/path/to/backup");
+    it("should return accurate statistics", async () => {
+      await parser.open("/path/to/backup");
 
       const stats = parser.getStats();
 
@@ -416,8 +416,8 @@ describe("iOSContactsParser", () => {
   });
 
   describe("edge cases", () => {
-    it("should handle contacts with no phone or email", () => {
-      parser.open("/path/to/backup");
+    it("should handle contacts with no phone or email", async () => {
+      await parser.open("/path/to/backup");
 
       const contacts = parser.getAllContacts();
       const noInfo = contacts.find((c) => c.id === 4);
@@ -428,8 +428,8 @@ describe("iOSContactsParser", () => {
       expect(noInfo?.displayName).toBe("Unknown");
     });
 
-    it("should handle organization-only contacts", () => {
-      parser.open("/path/to/backup");
+    it("should handle organization-only contacts", async () => {
+      await parser.open("/path/to/backup");
 
       const contacts = parser.getAllContacts();
       const orgOnly = contacts.find((c) => c.id === 3);

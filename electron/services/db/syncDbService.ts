@@ -67,7 +67,7 @@ export function batchInsertMessages(
   for (let batchNum = 0; batchNum < totalBatches; batchNum++) {
     // TASK-2110: Check cancel signal between batches
     if (cancelSignal?.cancelled) {
-      logService.info(
+      void logService.info(
         `Batch insert cancelled after ${batchNum}/${totalBatches} batches (${stored} stored)`,
         "syncDbService"
       );
@@ -186,7 +186,7 @@ export function deleteMessagesBySessionId(userId: string, sessionId: string): nu
   const result = db.prepare(
     `DELETE FROM messages WHERE user_id = ? AND sync_session_id = ?`
   ).run(userId, sessionId);
-  logService.info(
+  void logService.info(
     `Deleted ${result.changes} messages for session ${sessionId}`,
     "syncDbService"
   );
@@ -231,7 +231,7 @@ export function deleteAttachmentsBySessionId(sessionId: string): { deleted: numb
     }
   }
 
-  logService.info(
+  void logService.info(
     `Deleted ${deleteResult.changes} attachments for session ${sessionId}, ${orphanedFiles.length} orphaned files`,
     "syncDbService"
   );
@@ -254,7 +254,7 @@ export function deleteMessagesByMetadataSource(userId: string, metadataSource: s
   const result = db.prepare(
     `DELETE FROM messages WHERE user_id = ? AND json_extract(metadata, '$.source') = ?`
   ).run(userId, metadataSource);
-  logService.info(
+  void logService.info(
     `Deleted ${result.changes} messages with metadata source '${metadataSource}'`,
     "syncDbService"
   );
@@ -269,7 +269,7 @@ export function deleteContactsBySessionId(userId: string, sessionId: string): nu
   const result = db.prepare(
     `DELETE FROM external_contacts WHERE user_id = ? AND sync_session_id = ?`
   ).run(userId, sessionId);
-  logService.info(
+  void logService.info(
     `Deleted ${result.changes} contacts for session ${sessionId}`,
     "syncDbService"
   );

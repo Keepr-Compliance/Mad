@@ -76,8 +76,10 @@
 
 import { randomUUID } from "crypto";
 import { dbAll, dbRun } from "./core/dbConnection";
+import { sql } from "./core/sqlText";
 import { ORIGIN_MATCH_METHOD } from "./contactIdentitySchemaSql";
 import logService from "../logService";
+import { placeholderList } from "./core/sqlFragments";
 
 /**
  * One external address-book record a contact is being created FROM.
@@ -257,9 +259,9 @@ export function findClaimedSourceRecordIds(
   try {
     for (let i = 0; i < sourceRecordIds.length; i += CHUNK) {
       const chunk = sourceRecordIds.slice(i, i + CHUNK);
-      const placeholders = chunk.map(() => "?").join(",");
+      const placeholders = placeholderList(chunk.length, sql`,`);
       const rows = dbAll<{ source_record_id: string }>(
-        `SELECT source_record_id FROM contact_source_links
+        sql`SELECT source_record_id FROM contact_source_links
           WHERE user_id = ? AND source_type = ?
             AND source_record_id IN (${placeholders})`,
         [userId, sourceType, ...chunk],
@@ -267,7 +269,7 @@ export function findClaimedSourceRecordIds(
       for (const row of rows) claimed.add(row.source_record_id);
     }
   } catch (error) {
-    logService.warn(
+    void logService.warn(
       `[Contacts] could not read existing source claims: ${error}`,
       "Contacts",
     );
@@ -307,7 +309,7 @@ export function recordContactOrigin(
     if (!userId || !contactId) return false;
     return insertOriginRow(userId, contactId, contactSource);
   } catch (error) {
-    logService.warn(
+    void logService.warn(
       `[Contacts] could not record where a new contact came from: ${error}`,
       "Contacts",
     );
@@ -338,7 +340,7 @@ function insertOriginRow(
   }
 
   const result = dbRun(
-    `INSERT OR IGNORE INTO contact_source_links
+    sql`INSERT OR IGNORE INTO contact_source_links
        (id, user_id, contact_id, source_type, source_record_id, external_uuid,
         match_method, confidence, evidence_ref)
      VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, NULL)`,
@@ -407,7 +409,7 @@ export function writeContactOriginInTransaction(
       );
     }
     dbRun(
-      `INSERT OR IGNORE INTO contact_source_links
+      sql`INSERT OR IGNORE INTO contact_source_links
          (id, user_id, contact_id, source_type, source_record_id, external_uuid,
           match_method, confidence, evidence_ref)
        VALUES (?, ?, ?, ?, ?, ?, 'source_id', NULL, NULL)`,

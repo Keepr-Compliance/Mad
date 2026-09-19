@@ -13,7 +13,8 @@
  */
 
 import * as Sentry from "@sentry/electron/main";
-import { app, dialog, safeStorage } from "electron";
+import { app, dialog } from "electron";
+import { hostSecretStore } from "../capabilities/secretStoreProvider";
 import * as fs from "fs";
 import * as os from "os";
 import checkDiskSpace from "check-disk-space";
@@ -54,7 +55,7 @@ export function checkNativeModules(): { passed: boolean; error?: string } {
  * Without safeStorage, the DB encryption key cannot be stored securely.
  */
 export function checkSafeStorage(): { passed: boolean; error?: string } {
-  if (!safeStorage.isEncryptionAvailable()) {
+  if (!hostSecretStore.isEncryptionAvailable()) {
     const message =
       "Encryption not available. Please check your system keychain.\n\nThe app requires system encryption to protect your data.";
     dialog.showErrorBox("Encryption Unavailable", message);

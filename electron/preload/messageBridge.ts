@@ -11,6 +11,9 @@ import type {
   MessageImportCountResult,
   BackgroundImportSignal,
 } from "../types/ipc/window-api-messages";
+// BACKLOG-2832: ONE definition of the progress phase. This interface and the
+// contract's used to be unrelated hand-written unions with nothing comparing them.
+import type { ImportPhase } from "../types/ipc/importPhase";
 // BACKLOG-2748: ONE spelling of the cancel channel, shared with the handler.
 import {
   MESSAGES_IMPORT_CANCEL_CHANNEL,
@@ -23,7 +26,7 @@ import {
  * Enhanced with querying phase, elapsed time tracking for ETA calculation
  */
 export interface ImportProgress {
-  phase: "querying" | "deleting" | "importing" | "attachments";
+  phase: ImportPhase;
   current: number;
   total: number;
   percent: number;

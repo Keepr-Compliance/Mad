@@ -12,6 +12,14 @@
  * PermissionsStep has ever had. Flagged for SR review — skipping FDA was not
  * previously possible from this step.
  *
+ * BACKLOG-3210 (part 2): this sheet is no longer onboarding-only. It is the
+ * ONE Full Disk Access explainer, and the post-onboarding dead-ends (the
+ * Settings → Messages notice from BACKLOG-3208 and the dashboard health
+ * banner) reach it through `components/permissions/FdaHelpSheet`, which wires
+ * the labels and actions for that context. Everything added here is an
+ * OPTIONAL prop with the onboarding value as its default, so `PermissionsStep`
+ * renders byte-identically and was not modified.
+ *
  * @module onboarding/steps/FdaSafetySheet
  */
 
@@ -19,8 +27,40 @@ import React from "react";
 import { ResponsiveModal } from "../../common/ResponsiveModal";
 
 export interface FdaSafetySheetProps {
+  /** Primary (top) button. In onboarding this closes the sheet. */
   onLetsGo: () => void;
+  /** Secondary (bottom) button. In onboarding this skips Full Disk Access. */
   onSkip: () => void;
+  /**
+   * BACKLOG-3210 (part 2) — dismissal, separated from the primary action.
+   *
+   * `onLetsGo` doubles as `ResponsiveModal`'s `onClose` (backdrop click),
+   * which is correct while the primary action IS "close". It stops being
+   * correct the moment a caller points the primary button at something with a
+   * side effect: outside onboarding the primary opens the macOS Full Disk
+   * Access pane, and without this prop a stray backdrop click would open a
+   * System Settings window the user never asked for.
+   *
+   * Defaults to `onLetsGo`, so the onboarding call site is unchanged.
+   */
+  onClose?: () => void;
+  /** Label for the primary button. Defaults to the onboarding copy. */
+  primaryLabel?: React.ReactNode;
+  /**
+   * NOTE: the secondary button's label is deliberately NOT overridable. It is
+   * "Skip for now" in every context, because outside onboarding it is still a
+   * skip — the founder's stated reason for keeping this sheet reachable at all
+   * is that it is how a user who cannot make Full Disk Access work gets out.
+   * Renaming it there would hide the exit behind a different word.
+   */
+  /**
+   * Trailing explanatory paragraph under the buttons. Defaults to the
+   * onboarding copy, which talks about skipping a step that only exists
+   * during onboarding.
+   */
+  footer?: React.ReactNode;
+  /** data-testid for the modal overlay, so callers are distinguishable. */
+  testId?: string;
 }
 
 function LockIcon() {
@@ -42,10 +82,18 @@ function LockIcon() {
   );
 }
 
-export function FdaSafetySheet({ onLetsGo, onSkip }: FdaSafetySheetProps) {
+export function FdaSafetySheet({
+  onLetsGo,
+  onSkip,
+  onClose,
+  primaryLabel,
+  footer,
+  testId,
+}: FdaSafetySheetProps) {
   return (
     <ResponsiveModal
-      onClose={onLetsGo}
+      testId={testId}
+      onClose={onClose ?? onLetsGo}
       overlayClassName="bg-black bg-opacity-50"
       // BACKLOG-1842 (whitespace fix, round 2): the real cause of the dead
       // whitespace BELOW the card on desktop was ResponsiveModal's base
@@ -124,7 +172,7 @@ export function FdaSafetySheet({ onLetsGo, onSkip }: FdaSafetySheetProps) {
         data-testid="fda-safety-lets-go"
         className="w-full bg-primary text-white py-2.5 px-6 rounded-lg font-semibold hover:bg-blue-600 transition-colors mb-2"
       >
-        Let&rsquo;s go
+        {primaryLabel ?? <>Let&rsquo;s go</>}
       </button>
       <button
         type="button"
@@ -135,11 +183,15 @@ export function FdaSafetySheet({ onLetsGo, onSkip }: FdaSafetySheetProps) {
         Skip for now
       </button>
       <p className="text-center text-[11px] text-gray-500 mt-3 leading-relaxed">
-        Skipping only pauses text-message capture.
-        <br />
-        Your email records keep building.
-        <br />
-        Turn it on any time in Settings &rarr; Permissions.
+        {footer ?? (
+          <>
+            Skipping only pauses text-message capture.
+            <br />
+            Your email records keep building.
+            <br />
+            Turn it on any time in Settings &rarr; Permissions.
+          </>
+        )}
       </p>
     </ResponsiveModal>
   );

@@ -90,6 +90,19 @@ describe('LLMConfigService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    // BACKLOG-2960: the seam is promise-returning, so its mocks must be too.
+    // A mock that returns a bare value leaves a DROPPED `await` in
+    // llmConfigService fully green — `await 5` and `5` are the same value —
+    // which is exactly the blind spot this conversion exists to close. Every
+    // mock here resolves; a test that needs a specific value overrides it with
+    // `mockResolvedValue`.
+    mockGetLLMSettingsByUserId.mockResolvedValue(null);
+    mockGetOrCreateLLMSettings.mockResolvedValue(createDefaultSettings());
+    mockUpdateLLMSettings.mockResolvedValue(createDefaultSettings());
+    mockClearLLMSettingsField.mockResolvedValue(createDefaultSettings());
+    mockSetLLMDataConsent.mockResolvedValue(createDefaultSettings());
+    mockIncrementTokenUsage.mockResolvedValue(undefined);
+    mockIncrementPlatformAllowanceUsage.mockResolvedValue(undefined);
     service = new LLMConfigService();
   });
 
@@ -107,7 +120,7 @@ describe('LLMConfigService', () => {
         tokens_used_this_month: 5000,
         budget_limit_tokens: 50000,
       });
-      mockGetOrCreateLLMSettings.mockReturnValue(settings);
+      mockGetOrCreateLLMSettings.mockResolvedValue(settings);
 
       const config = await service.getUserConfig(testUserId);
 
@@ -129,7 +142,7 @@ describe('LLMConfigService', () => {
 
     it('should create default settings if none exist', async () => {
       const settings = createDefaultSettings();
-      mockGetOrCreateLLMSettings.mockReturnValue(settings);
+      mockGetOrCreateLLMSettings.mockResolvedValue(settings);
 
       await service.getUserConfig(testUserId);
 
@@ -138,7 +151,7 @@ describe('LLMConfigService', () => {
 
     it('should indicate no API keys when none configured', async () => {
       const settings = createDefaultSettings();
-      mockGetOrCreateLLMSettings.mockReturnValue(settings);
+      mockGetOrCreateLLMSettings.mockResolvedValue(settings);
 
       const config = await service.getUserConfig(testUserId);
 
@@ -152,7 +165,7 @@ describe('LLMConfigService', () => {
         platform_allowance_used: 3000,
         use_platform_allowance: true,
       });
-      mockGetOrCreateLLMSettings.mockReturnValue(settings);
+      mockGetOrCreateLLMSettings.mockResolvedValue(settings);
 
       const config = await service.getUserConfig(testUserId);
 
@@ -163,7 +176,7 @@ describe('LLMConfigService', () => {
   describe('setApiKey', () => {
     it('should encrypt and store OpenAI API key', async () => {
       const settings = createDefaultSettings();
-      mockGetOrCreateLLMSettings.mockReturnValue(settings);
+      mockGetOrCreateLLMSettings.mockResolvedValue(settings);
       mockEncrypt.mockReturnValue('encrypted-openai-key');
 
       await service.setApiKey(testUserId, 'openai', 'sk-test-key');
@@ -176,7 +189,7 @@ describe('LLMConfigService', () => {
 
     it('should encrypt and store Anthropic API key', async () => {
       const settings = createDefaultSettings();
-      mockGetOrCreateLLMSettings.mockReturnValue(settings);
+      mockGetOrCreateLLMSettings.mockResolvedValue(settings);
       mockEncrypt.mockReturnValue('encrypted-anthropic-key');
 
       await service.setApiKey(testUserId, 'anthropic', 'sk-ant-test-key');
@@ -189,7 +202,7 @@ describe('LLMConfigService', () => {
 
     it('should ensure settings exist before updating', async () => {
       const settings = createDefaultSettings();
-      mockGetOrCreateLLMSettings.mockReturnValue(settings);
+      mockGetOrCreateLLMSettings.mockResolvedValue(settings);
       mockEncrypt.mockReturnValue('encrypted-key');
 
       await service.setApiKey(testUserId, 'openai', 'test-key');
@@ -266,7 +279,7 @@ describe('LLMConfigService', () => {
   describe('updatePreferences', () => {
     it('should update preferred provider', async () => {
       const settings = createDefaultSettings();
-      mockGetOrCreateLLMSettings.mockReturnValue(settings);
+      mockGetOrCreateLLMSettings.mockResolvedValue(settings);
 
       await service.updatePreferences(testUserId, {
         preferredProvider: 'anthropic',
@@ -279,7 +292,7 @@ describe('LLMConfigService', () => {
 
     it('should update multiple preferences at once', async () => {
       const settings = createDefaultSettings();
-      mockGetOrCreateLLMSettings.mockReturnValue(settings);
+      mockGetOrCreateLLMSettings.mockResolvedValue(settings);
 
       await service.updatePreferences(testUserId, {
         preferredProvider: 'anthropic',
@@ -304,7 +317,7 @@ describe('LLMConfigService', () => {
 
     it('should not include undefined preferences in update', async () => {
       const settings = createDefaultSettings();
-      mockGetOrCreateLLMSettings.mockReturnValue(settings);
+      mockGetOrCreateLLMSettings.mockResolvedValue(settings);
 
       await service.updatePreferences(testUserId, {
         preferredProvider: 'openai',
@@ -318,7 +331,7 @@ describe('LLMConfigService', () => {
   describe('recordConsent', () => {
     it('should record consent as true', async () => {
       const settings = createDefaultSettings();
-      mockGetOrCreateLLMSettings.mockReturnValue(settings);
+      mockGetOrCreateLLMSettings.mockResolvedValue(settings);
 
       await service.recordConsent(testUserId, true);
 
@@ -327,7 +340,7 @@ describe('LLMConfigService', () => {
 
     it('should record consent as false', async () => {
       const settings = createDefaultSettings();
-      mockGetOrCreateLLMSettings.mockReturnValue(settings);
+      mockGetOrCreateLLMSettings.mockResolvedValue(settings);
 
       await service.recordConsent(testUserId, false);
 
@@ -336,7 +349,7 @@ describe('LLMConfigService', () => {
 
     it('should ensure settings exist before recording consent', async () => {
       const settings = createDefaultSettings();
-      mockGetOrCreateLLMSettings.mockReturnValue(settings);
+      mockGetOrCreateLLMSettings.mockResolvedValue(settings);
 
       await service.recordConsent(testUserId, true);
 
@@ -355,7 +368,7 @@ describe('LLMConfigService', () => {
     };
 
     it('should throw error if settings not found', async () => {
-      mockGetLLMSettingsByUserId.mockReturnValue(null);
+      mockGetLLMSettingsByUserId.mockResolvedValue(null);
 
       await expect(service.complete(testUserId, testMessages)).rejects.toMatchObject({
         type: 'invalid_api_key',
@@ -368,7 +381,7 @@ describe('LLMConfigService', () => {
         llm_data_consent: false,
         openai_api_key_encrypted: 'encrypted-key',
       });
-      mockGetLLMSettingsByUserId.mockReturnValue(settings);
+      mockGetLLMSettingsByUserId.mockResolvedValue(settings);
 
       await expect(service.complete(testUserId, testMessages)).rejects.toMatchObject({
         type: 'quota_exceeded',
@@ -381,7 +394,7 @@ describe('LLMConfigService', () => {
         openai_api_key_encrypted: 'encrypted-key',
         preferred_provider: 'openai',
       });
-      mockGetLLMSettingsByUserId.mockReturnValue(settings);
+      mockGetLLMSettingsByUserId.mockResolvedValue(settings);
       mockDecrypt.mockReturnValue('decrypted-api-key');
       mockOpenAICompleteWithTracking.mockResolvedValue(testResponse);
 
@@ -405,7 +418,7 @@ describe('LLMConfigService', () => {
         anthropic_api_key_encrypted: 'encrypted-ant-key',
         preferred_provider: 'anthropic',
       });
-      mockGetLLMSettingsByUserId.mockReturnValue(settings);
+      mockGetLLMSettingsByUserId.mockResolvedValue(settings);
       mockDecrypt.mockReturnValue('decrypted-ant-key');
       mockAnthropicCompleteWithTracking.mockResolvedValue(testResponse);
 
@@ -423,7 +436,7 @@ describe('LLMConfigService', () => {
         anthropic_api_key_encrypted: 'encrypted-ant-key',
         preferred_provider: 'openai',
       });
-      mockGetLLMSettingsByUserId.mockReturnValue(settings);
+      mockGetLLMSettingsByUserId.mockResolvedValue(settings);
       mockDecrypt.mockReturnValue('decrypted-key');
       mockAnthropicCompleteWithTracking.mockResolvedValue(testResponse);
 
@@ -437,7 +450,7 @@ describe('LLMConfigService', () => {
       const settings = createDefaultSettings({
         openai_api_key_encrypted: 'encrypted-key',
       });
-      mockGetLLMSettingsByUserId.mockReturnValue(settings);
+      mockGetLLMSettingsByUserId.mockResolvedValue(settings);
       mockDecrypt.mockReturnValue('decrypted-key');
       mockOpenAICompleteWithTracking.mockResolvedValue(testResponse);
 
@@ -460,7 +473,7 @@ describe('LLMConfigService', () => {
       const settings = createDefaultSettings({
         preferred_provider: 'openai',
       });
-      mockGetLLMSettingsByUserId.mockReturnValue(settings);
+      mockGetLLMSettingsByUserId.mockResolvedValue(settings);
 
       await expect(service.complete(testUserId, testMessages)).rejects.toMatchObject({
         type: 'invalid_api_key',
@@ -472,7 +485,7 @@ describe('LLMConfigService', () => {
       const settings = createDefaultSettings({
         preferred_provider: 'anthropic',
       });
-      mockGetLLMSettingsByUserId.mockReturnValue(settings);
+      mockGetLLMSettingsByUserId.mockResolvedValue(settings);
 
       await expect(service.complete(testUserId, testMessages)).rejects.toMatchObject({
         type: 'invalid_api_key',
@@ -485,7 +498,7 @@ describe('LLMConfigService', () => {
         openai_api_key_encrypted: 'encrypted-key',
         use_platform_allowance: true,
       });
-      mockGetLLMSettingsByUserId.mockReturnValue(settings);
+      mockGetLLMSettingsByUserId.mockResolvedValue(settings);
       mockDecrypt.mockReturnValue('decrypted-key');
       mockOpenAICompleteWithTracking.mockResolvedValue(testResponse);
 
@@ -502,7 +515,7 @@ describe('LLMConfigService', () => {
         openai_api_key_encrypted: 'encrypted-key',
         use_platform_allowance: false,
       });
-      mockGetLLMSettingsByUserId.mockReturnValue(settings);
+      mockGetLLMSettingsByUserId.mockResolvedValue(settings);
       mockDecrypt.mockReturnValue('decrypted-key');
       mockOpenAICompleteWithTracking.mockResolvedValue(testResponse);
 
@@ -521,7 +534,7 @@ describe('LLMConfigService', () => {
         platform_allowance_used: 2000,
         budget_reset_date: '2024-02-01',
       });
-      mockGetLLMSettingsByUserId.mockReturnValue(settings);
+      mockGetLLMSettingsByUserId.mockResolvedValue(settings);
 
       const stats = await service.getUsageStats(testUserId);
 
@@ -536,7 +549,7 @@ describe('LLMConfigService', () => {
     });
 
     it('should return zeros if no settings found', async () => {
-      mockGetLLMSettingsByUserId.mockReturnValue(null);
+      mockGetLLMSettingsByUserId.mockResolvedValue(null);
 
       const stats = await service.getUsageStats(testUserId);
 
@@ -552,7 +565,7 @@ describe('LLMConfigService', () => {
         tokens_used_this_month: 5000,
         budget_limit_tokens: undefined,
       });
-      mockGetLLMSettingsByUserId.mockReturnValue(settings);
+      mockGetLLMSettingsByUserId.mockResolvedValue(settings);
 
       const stats = await service.getUsageStats(testUserId);
 
@@ -566,7 +579,7 @@ describe('LLMConfigService', () => {
       const settings = createDefaultSettings({
         llm_data_consent: false,
       });
-      mockGetOrCreateLLMSettings.mockReturnValue(settings);
+      mockGetOrCreateLLMSettings.mockResolvedValue(settings);
 
       const result = await service.canUseLLM(testUserId);
 
@@ -580,7 +593,7 @@ describe('LLMConfigService', () => {
       const settings = createDefaultSettings({
         use_platform_allowance: false,
       });
-      mockGetOrCreateLLMSettings.mockReturnValue(settings);
+      mockGetOrCreateLLMSettings.mockResolvedValue(settings);
 
       const result = await service.canUseLLM(testUserId);
 
@@ -596,7 +609,7 @@ describe('LLMConfigService', () => {
         tokens_used_this_month: 50000,
         budget_limit_tokens: 50000,
       });
-      mockGetOrCreateLLMSettings.mockReturnValue(settings);
+      mockGetOrCreateLLMSettings.mockResolvedValue(settings);
 
       const result = await service.canUseLLM(testUserId);
 
@@ -612,7 +625,7 @@ describe('LLMConfigService', () => {
         platform_allowance_tokens: 10000,
         platform_allowance_used: 10000,
       });
-      mockGetOrCreateLLMSettings.mockReturnValue(settings);
+      mockGetOrCreateLLMSettings.mockResolvedValue(settings);
 
       const result = await service.canUseLLM(testUserId);
 
@@ -626,7 +639,7 @@ describe('LLMConfigService', () => {
       const settings = createDefaultSettings({
         openai_api_key_encrypted: 'encrypted-key',
       });
-      mockGetOrCreateLLMSettings.mockReturnValue(settings);
+      mockGetOrCreateLLMSettings.mockResolvedValue(settings);
 
       const result = await service.canUseLLM(testUserId);
 
@@ -637,7 +650,7 @@ describe('LLMConfigService', () => {
       const settings = createDefaultSettings({
         anthropic_api_key_encrypted: 'encrypted-key',
       });
-      mockGetOrCreateLLMSettings.mockReturnValue(settings);
+      mockGetOrCreateLLMSettings.mockResolvedValue(settings);
 
       const result = await service.canUseLLM(testUserId);
 
@@ -650,7 +663,7 @@ describe('LLMConfigService', () => {
         platform_allowance_tokens: 10000,
         platform_allowance_used: 5000,
       });
-      mockGetOrCreateLLMSettings.mockReturnValue(settings);
+      mockGetOrCreateLLMSettings.mockResolvedValue(settings);
 
       const result = await service.canUseLLM(testUserId);
 
@@ -663,7 +676,7 @@ describe('LLMConfigService', () => {
         tokens_used_this_month: 40000,
         budget_limit_tokens: 50000,
       });
-      mockGetOrCreateLLMSettings.mockReturnValue(settings);
+      mockGetOrCreateLLMSettings.mockResolvedValue(settings);
 
       const result = await service.canUseLLM(testUserId);
 

@@ -80,6 +80,12 @@ import {
   clearRefetchableSourcesForUser,
   deleteBySessionId,
 } from "../externalContactDbService";
+import {
+  CONTACT_SOURCE_LINKS_TABLE_SQL,
+  CONTACT_SOURCE_LINKS_INDEX_SQL,
+  CONTACT_LINK_PROPOSALS_TABLE_SQL,
+  CONTACT_LINK_PROPOSALS_INDEX_SQL,
+} from "../contactIdentitySchemaSql";
 
 const USER = "user-2480";
 const OTHER_USER = "user-2480-other";
@@ -101,21 +107,41 @@ const SCHEMA = `
     external_uuid TEXT,
     source_identity_json TEXT
   );
-  CREATE TABLE contact_source_links (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    contact_id TEXT,
-    source_type TEXT NOT NULL,
-    source_record_id TEXT NOT NULL,
-    match_method TEXT
-  );
-  CREATE TABLE contact_link_proposals (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    contact_id TEXT,
-    source_type TEXT NOT NULL,
-    source_record_id TEXT NOT NULL
-  );
+  /**
+   * contacts -- FK-RESOLUTION PARENT (BACKLOG-2614).
+   *
+   * The production DDL below carries real foreign keys:
+   * contact_source_links.contact_id, and contact_link_proposals'
+   * contact_id and target_contact_id, all REFERENCE contacts(id).
+   *
+   * This driver enables foreign_keys BY DEFAULT -- SQLite's own default is OFF,
+   * which is the opposite. SQLite resolves a foreign key's parent TABLE on every
+   * DML statement even when no row is touched, so the table is required here
+   * whether or not rows are seeded.
+   *
+   * UNLIKE the funnelCounts and staleDeleteScope suites, this one DOES seed
+   * rows: contact_source_links.contact_id is TEXT NOT NULL in production, with
+   * no NULL escape hatch, so every seeded contact-<id> must exist as a parent.
+   * seedRecord inserts them.
+   *
+   * "id TEXT PRIMARY KEY" is LOAD-BEARING: a parent key that is neither PRIMARY
+   * KEY nor UNIQUE raises "foreign key mismatch". No test reads a contacts
+   * column -- the survival assertions below read only the id set, to prove the
+   * ON DELETE CASCADE did NOT fire.
+   */
+  CREATE TABLE contacts (id TEXT PRIMARY KEY, user_id TEXT NOT NULL);
+
+  /**
+   * BACKLOG-2614 -- the crosswalk tables are the PRODUCTION DDL, not a
+   * hand-written echo. They were five-column copies with no UNIQUE, no CHECK
+   * vocabulary and no foreign keys, so a constraint could change in the
+   * migration while this suite stayed green. contactIdentitySchemaSql.ts is the
+   * ONE definition and its header forbids transcribing these statements.
+   */
+  ${CONTACT_SOURCE_LINKS_TABLE_SQL}
+  ${CONTACT_SOURCE_LINKS_INDEX_SQL}
+  ${CONTACT_LINK_PROPOSALS_TABLE_SQL}
+  ${CONTACT_LINK_PROPOSALS_INDEX_SQL}
   CREATE TABLE phone_last_message (phone TEXT, last_message_at TEXT);
 `;
 
@@ -125,6 +151,13 @@ function seedRecord(
   recordId: string,
   opts: { syncedAt?: string; sessionId?: string; userId?: string } = {},
 ): void {
+  // BACKLOG-2614 — the parent row first. Production
+  // `contact_source_links.contact_id` is TEXT NOT NULL behind a real FK to
+  // `contacts(id)`, so the child insert below fails without it. `OR IGNORE`
+  // keeps the helper safe if two records ever share a contact.
+  mockDb!
+    .prepare(`INSERT OR IGNORE INTO contacts (id, user_id) VALUES (?, ?)`)
+    .run(`contact-${id}`, opts.userId ?? USER);
   mockDb!
     .prepare(
       `INSERT INTO external_contacts (id, user_id, name, source, external_record_id, synced_at, sync_session_id)
@@ -145,12 +178,26 @@ function seedRecord(
        VALUES (?, ?, ?, ?, ?, 'source_id')`,
     )
     .run(`link-${id}`, opts.userId ?? USER, `contact-${id}`, source, recordId);
+  // BACKLOG-2614 — production adds four NOT NULLs with CHECK vocabularies:
+  // `reason` (free text), `identity_assessment`, `relationship_assessment` and
+  // `cluster_key`. The values below are inside those vocabularies. `pair_kind`
+  // defaults to 'record_contact', whose shape CHECK requires exactly what this
+  // seed supplies: contact + source columns set, every target_* column NULL.
   mockDb!
     .prepare(
-      `INSERT INTO contact_link_proposals (id, user_id, contact_id, source_type, source_record_id)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO contact_link_proposals
+         (id, user_id, contact_id, source_type, source_record_id,
+          reason, identity_assessment, relationship_assessment, cluster_key)
+       VALUES (?, ?, ?, ?, ?, 'seeded by BACKLOG-2480 suite', 'same_person', 'connected', ?)`,
     )
-    .run(`prop-${id}`, opts.userId ?? USER, `contact-${id}`, source, recordId);
+    .run(
+      `prop-${id}`,
+      opts.userId ?? USER,
+      `contact-${id}`,
+      source,
+      recordId,
+      `cluster-${id}`,
+    );
 }
 
 const linkIds = (): string[] =>
@@ -160,6 +207,22 @@ const linkIds = (): string[] =>
 
 const proposalIds = (): string[] =>
   (mockDb!.prepare("SELECT id FROM contact_link_proposals ORDER BY id").all() as Array<{
+    id: string;
+  }>).map((r) => r.id);
+
+/**
+ * BACKLOG-2614 — the contacts that the crosswalk rows point at.
+ *
+ * Reads the ID SET, never a contacts column, so it stays a statement about the
+ * FK graph rather than about contact data. It exists because the production DDL
+ * brought `ON DELETE CASCADE` into this suite: a cascade is a SECOND mechanism
+ * that could remove exactly the link and proposal rows these tests are about,
+ * and it is inert here only for as long as nothing deletes a contact. Asserting
+ * the contacts survive is what keeps every green below attributable to the
+ * service under test rather than to the cascade.
+ */
+const contactIds = (): string[] =>
+  (mockDb!.prepare("SELECT id FROM contacts ORDER BY id").all() as Array<{
     id: string;
   }>).map((r) => r.id);
 
@@ -184,6 +247,11 @@ describe("every deletion path removes the crosswalk rows it orphans (BACKLOG-248
     expect(recordIds()).toEqual(["a"]);
     expect(linkIds()).toEqual(["link-a"]);
     expect(proposalIds()).toEqual(["prop-a"]);
+    // BACKLOG-2614 — the FK parent is part of the seeded shape now. This pins
+    // WHAT SEEDING PRODUCES; it deletes nothing, so it cannot by itself catch a
+    // cascade regression. The assertion that can is in the
+    // `deleteStaleContactsBySource` case below, where a deletion actually runs.
+    expect(contactIds()).toEqual(["contact-a"]);
   });
 
   /**
@@ -204,6 +272,14 @@ describe("every deletion path removes the crosswalk rows it orphans (BACKLOG-248
     expect(recordIds()).toEqual(["fresh"]);
     expect(linkIds()).toEqual(["link-fresh"]);
     expect(proposalIds()).toEqual(["prop-fresh"]);
+    // BACKLOG-2614 — BOTH contacts survive a deletion that removed the stale
+    // record's link and proposal. The production DDL brought
+    // `ON DELETE CASCADE` into this suite, which could remove those same two
+    // rows for a reason unrelated to the service. This is the assertion that
+    // tells the two apart: if a future change ever deletes a contact, the
+    // cascade takes the crosswalk with it and this goes red instead of the
+    // suite passing for the wrong reason.
+    expect(contactIds()).toEqual(["contact-fresh", "contact-stale"]);
   });
 
   it("deleteByMacOSRecordId — only that record's rows go", () => {
@@ -285,5 +361,49 @@ describe("every deletion path removes the crosswalk rows it orphans (BACKLOG-248
     expect(recordIds()).toEqual(["kept"]);
     expect(linkIds()).toEqual(["link-kept"]);
     expect(proposalIds()).toEqual(["prop-kept"]);
+  });
+});
+
+/**
+ * BACKLOG-2614 — THE GUARD IS BY EXECUTION, NOT BY IMPORT DISCIPLINE.
+ *
+ * Importing the production DDL fixes the drift once; these pins are what stop it
+ * coming back. Paste a hand-written five-column `contact_link_proposals` over
+ * the import and the UNIQUE count here goes 2 -> 0. The header on
+ * `contactIdentitySchemaSql.ts` records the incident this comes from: dropping
+ * the proposals UNIQUE from the REAL migration left a 27-test suite fully green,
+ * because no suite was running the real DDL.
+ *
+ * `origin = 'u'` selects the auto-indexes SQLite creates for TABLE-LEVEL UNIQUE
+ * constraints, so this counts constraints and ignores the plain `CREATE INDEX`
+ * that ships beside each table.
+ */
+describe("the identity tables are the production DDL (BACKLOG-2614)", () => {
+  const uniqueConstraintCount = (table: string): number =>
+    (
+      mockDb!.prepare(`PRAGMA index_list('${table}')`).all() as Array<{ origin: string }>
+    ).filter((r) => r.origin === "u").length;
+
+  it("contact_link_proposals carries BOTH table-level UNIQUEs", () => {
+    // (user_id, contact_id, source_type, source_record_id) and (user_id, pair_key).
+    expect(uniqueConstraintCount("contact_link_proposals")).toBe(2);
+  });
+
+  it("contact_source_links carries its table-level UNIQUE", () => {
+    // (user_id, source_type, source_record_id).
+    expect(uniqueConstraintCount("contact_source_links")).toBe(1);
+  });
+
+  it("contacts stays a bare FK parent: exactly id, user_id", () => {
+    // NO ROW-COUNT PIN HERE, unlike the two sibling suites: this one seeds
+    // contacts on purpose, because production `contact_source_links.contact_id`
+    // is NOT NULL behind the FK. What must not drift is the SHAPE — the moment
+    // `contacts` grows a column a test reads, it has stopped being an FK anchor
+    // and become a second hand-written copy of a production table.
+    expect(
+      (mockDb!.prepare("PRAGMA table_info('contacts')").all() as Array<{ name: string }>).map(
+        (c) => c.name,
+      ),
+    ).toEqual(["id", "user_id"]);
   });
 });

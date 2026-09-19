@@ -60,11 +60,6 @@ export const EXTRACTABLE_MIME_TYPES: readonly string[] = [
   "text/csv",
 ];
 
-/** SQL fragment (for the backfill) listing the extractable MIME types. */
-export const EXTRACTABLE_MIME_SQL_LIST = EXTRACTABLE_MIME_TYPES.map(
-  (m) => `'${m}'`
-).join(", ");
-
 /**
  * Outcome of an extraction attempt on one row:
  *   - "extracted"  → non-empty text was stored (possibly truncated).

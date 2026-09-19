@@ -5,6 +5,13 @@
 // ============================================
 
 import { ipcMain, app, shell, net } from "electron";
+import {
+  EMAILS_MISSING_ATTACHMENTS_FOR_USER_SQL,
+  prepareEmailAttachmentCount,
+  prepareEmailAttachmentSize,
+  prepareTextAttachmentCount,
+  prepareTextAttachmentSize,
+} from "../services/db/attachmentAuditStatsSql";
 import type { BrowserWindow } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import path from "path";
@@ -52,15 +59,9 @@ export async function backfillMissingAttachments(userId: string): Promise<{ proc
 
   try {
     const db = databaseService.getRawDatabase();
-    const emailsMissingAttachments = db.prepare(`
-      SELECT e.id, e.external_id, e.source, e.user_id
-      FROM emails e
-      WHERE e.user_id = ?
-        AND e.has_attachments = 1
-        AND e.external_id IS NOT NULL
-        AND e.source IS NOT NULL
-        AND NOT EXISTS (SELECT 1 FROM attachments a WHERE a.email_id = e.id)
-    `).all(userId) as { id: string; external_id: string; source: string; user_id: string }[];
+    const emailsMissingAttachments = db
+      .prepare(EMAILS_MISSING_ATTACHMENTS_FOR_USER_SQL)
+      .all(userId) as { id: string; external_id: string; source: string; user_id: string }[];
 
     if (emailsMissingAttachments.length === 0) return result;
 
@@ -86,6 +87,10 @@ export async function backfillMissingAttachments(userId: string): Promise<{ proc
                     filename: att.name || "attachment",
                     mimeType: att.contentType || "application/octet-stream",
                     size: att.size || 0,
+                    // BACKLOG-3187: a Graph attachment has no MIME part, so no identity
+                    // beyond its own id. Explicitly null — the field is required so this
+                    // decision cannot be left unmade at a new call site.
+                    partId: null,
                     attachmentId: att.id,
                   })),
                 );
@@ -118,10 +123,13 @@ export async function backfillMissingAttachments(userId: string): Promise<{ proc
               if (fullEmail.attachments && fullEmail.attachments.length > 0) {
                 await emailAttachmentService.downloadEmailAttachments(
                   userId, email.id, email.external_id, "gmail",
-                  fullEmail.attachments.map((att: { filename?: string; name?: string; mimeType?: string; contentType?: string; size?: number; attachmentId?: string; id?: string }) => ({
+                  fullEmail.attachments.map((att: { filename?: string; name?: string; mimeType?: string; contentType?: string; size?: number; partId?: string; attachmentId?: string; id?: string }) => ({
                     filename: att.filename || att.name || "attachment",
                     mimeType: att.mimeType || att.contentType || "application/octet-stream",
                     size: att.size || 0,
+                    // BACKLOG-3187: identity (Gmail's immutable MIME part id) travels
+                    // separately from the fetch token below, which rotates between calls.
+                    partId: att.partId ?? null,
                     attachmentId: att.attachmentId || att.id || "",
                   })),
                 );
@@ -235,6 +243,10 @@ async function downloadEmailAttachmentsOnDemand(
               filename: att.name || "attachment",
               mimeType: att.contentType || "application/octet-stream",
               size: att.size || 0,
+              // BACKLOG-3187: a Graph attachment has no MIME part, so no identity
+              // beyond its own id. Explicitly null — the field is required so this
+              // decision cannot be left unmade at a new call site.
+              partId: null,
               attachmentId: att.id,
             })),
           );
@@ -247,10 +259,13 @@ async function downloadEmailAttachmentsOnDemand(
         if (fullEmail.attachments && fullEmail.attachments.length > 0) {
           await emailAttachmentService.downloadEmailAttachments(
             email.user_id, emailId, email.external_id, "gmail",
-            fullEmail.attachments.map((att: { filename?: string; name?: string; mimeType?: string; contentType?: string; size?: number; attachmentId?: string; id?: string }) => ({
+            fullEmail.attachments.map((att: { filename?: string; name?: string; mimeType?: string; contentType?: string; size?: number; partId?: string; attachmentId?: string; id?: string }) => ({
               filename: att.filename || att.name || "attachment",
               mimeType: att.mimeType || att.contentType || "application/octet-stream",
               size: att.size || 0,
+              // BACKLOG-3187: identity (Gmail's immutable MIME part id) travels
+              // separately from the fetch token below, which rotates between calls.
+              partId: att.partId ?? null,
               attachmentId: att.attachmentId || att.id || "",
             })),
           );
@@ -490,13 +505,15 @@ export function registerAttachmentHandlers(
       const textDateParams: string[] = [validatedTransactionId];
       const emailDateParams: string[] = [validatedTransactionId];
 
-      let textDateFilter = "";
-      let emailDateFilter = "";
+      // The window is described to db/, never spelled: `{ hasStart, hasEnd }`.
+      // A filter STRING crossing this boundary would put SQL composition back
+      // outside the layer while appearing to respect the rule.
+      let hasStart = false;
+      let hasEnd = false;
 
       if (auditStart) {
-        textDateFilter += " AND m.sent_at >= ?";
+        hasStart = true;
         textDateParams.push(auditStart);
-        emailDateFilter += " AND e.sent_at >= ?";
         emailDateParams.push(auditStart);
       }
 
@@ -510,74 +527,31 @@ export function registerAttachmentHandlers(
       const auditEndBound = auditWindowEnd(auditEnd);
       if (auditEndBound) {
         const endDateStr = auditEndBound.toISOString();
-        textDateFilter += " AND m.sent_at <= ?";
+        hasEnd = true;
         textDateParams.push(endDateStr);
-        emailDateFilter += " AND e.sent_at <= ?";
         emailDateParams.push(endDateStr);
       }
 
-      // Count text message attachments (via message_id -> messages -> communications)
-      // Mirrors the query in submissionService.loadTransactionAttachments
-      const textCountSql = `
-        SELECT COUNT(DISTINCT a.id) as count
-        FROM attachments a
-        INNER JOIN messages m ON a.message_id = m.id
-        INNER JOIN communications c ON (
-          (c.message_id IS NOT NULL AND c.message_id = m.id)
-          OR
-          (c.message_id IS NULL AND c.thread_id IS NOT NULL AND c.thread_id = m.thread_id)
-        )
-        WHERE c.transaction_id = ?
-        AND a.message_id IS NOT NULL
-        AND a.storage_path IS NOT NULL
-        ${textDateFilter}
-      `;
+      const auditWindow = { hasStart, hasEnd };
 
-      const textResult = db.prepare(textCountSql).get(...textDateParams) as { count: number };
+      // The four counters' SQL lives in db/attachmentAuditStatsSql.ts. Only the
+      // window SHAPE crosses the boundary; the bound values still travel as
+      // ordinary parameters in textDateParams / emailDateParams.
+      const textResult = prepareTextAttachmentCount(db, auditWindow).get(
+        ...textDateParams,
+      ) as { count: number };
 
-      // Count email attachments (via email_id -> communications -> emails)
-      const emailCountSql = `
-        SELECT COUNT(DISTINCT a.id) as count
-        FROM attachments a
-        INNER JOIN emails e ON a.email_id = e.id
-        INNER JOIN communications c ON c.email_id = e.id
-        WHERE c.transaction_id = ?
-        AND a.email_id IS NOT NULL
-        AND a.storage_path IS NOT NULL
-        ${emailDateFilter}
-      `;
+      const emailResult = prepareEmailAttachmentCount(db, auditWindow).get(
+        ...emailDateParams,
+      ) as { count: number };
 
-      const emailResult = db.prepare(emailCountSql).get(...emailDateParams) as { count: number };
+      const textSizeResult = prepareTextAttachmentSize(db, auditWindow).get(
+        ...textDateParams,
+      ) as { total_size: number };
 
-      // Calculate total size of all attachments (text + email)
-      const textSizeSql = `
-        SELECT COALESCE(SUM(a.file_size_bytes), 0) as total_size
-        FROM attachments a
-        INNER JOIN messages m ON a.message_id = m.id
-        INNER JOIN communications c ON (
-          (c.message_id IS NOT NULL AND c.message_id = m.id)
-          OR
-          (c.message_id IS NULL AND c.thread_id IS NOT NULL AND c.thread_id = m.thread_id)
-        )
-        WHERE c.transaction_id = ?
-        AND a.message_id IS NOT NULL
-        AND a.storage_path IS NOT NULL
-        ${textDateFilter}
-      `;
-
-      const emailSizeSql = `
-        SELECT COALESCE(SUM(a.file_size_bytes), 0) as total_size
-        FROM attachments a
-        INNER JOIN emails e ON a.email_id = e.id
-        INNER JOIN communications c ON c.email_id = e.id
-        WHERE c.transaction_id = ?
-        AND a.email_id IS NOT NULL
-        AND a.storage_path IS NOT NULL
-        ${emailDateFilter}
-      `;
-
-      const textSizeResult = db.prepare(textSizeSql).get(...textDateParams) as { total_size: number };
-      const emailSizeResult = db.prepare(emailSizeSql).get(...emailDateParams) as { total_size: number };
+      const emailSizeResult = prepareEmailAttachmentSize(db, auditWindow).get(
+        ...emailDateParams,
+      ) as { total_size: number };
 
       const textAttachments = textResult?.count || 0;
       const emailAttachments = emailResult?.count || 0;

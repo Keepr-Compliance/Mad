@@ -1,4 +1,17 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "ignoreCommand": "sh ../scripts/vercel-ignore-build.sh broker-portal",
+  "git": {
+    "deploymentEnabled": {
+      "main": true,
+      "develop": true,
+      "*-portal/**": true,
+      "portal/**": true,
+      "dependabot/**": true,
+      "release/**": true,
+      "**": false
+    }
+  },
   "framework": "nextjs",
   "buildCommand": "npm run build",
   "outputDirectory": ".next",

@@ -186,7 +186,7 @@ describe('HybridExtractorService', () => {
     });
 
     // Setup mock LLM settings for API key retrieval
-    mockGetLLMSettings.mockReturnValue({
+    mockGetLLMSettings.mockResolvedValue({
       openai_api_key_encrypted: 'encrypted-key',
       anthropic_api_key_encrypted: null,
       preferred_provider: 'openai',

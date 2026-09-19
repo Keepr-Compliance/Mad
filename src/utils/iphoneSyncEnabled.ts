@@ -5,9 +5,22 @@
  * active, given the user's explicit preference, the current platform, and the
  * effective message import source.
  *
- * Decision rationale (documented for BACKLOG-1706):
- * - An explicit `integrations.iphoneSyncEnabled` preference ALWAYS wins. This is
- *   what the Settings toggle writes, so the user's choice is authoritative.
+ * Decision rationale (documented for BACKLOG-1706, amended by BACKLOG-3423):
+ * - BACKLOG-3423 (founder, 2026-09-17): a KNOWN import source other than iPhone
+ *   disables the integration outright, on every platform. This overrides the
+ *   BACKLOG-1706 rule below, under which an explicit preference always won: a
+ *   macOS Messages user whose stored `iphoneSyncEnabled` was `true` (set at some
+ *   earlier point, and carried into every fresh profile because preferences live
+ *   in Supabase) got USB device detection, a 2s device poll and an "iPhone Sync
+ *   (USB)" toggle reading ON, for hardware his source will never use.
+ *   The gate is on the EFFECTIVE value only — the stored preference is left
+ *   alone, so switching back to iPhone restores whatever the user had chosen.
+ *   An UNKNOWN source (`null`, i.e. preferences not read yet or unreadable) is
+ *   NOT a non-iPhone source: it falls through to the rules below, so a Windows
+ *   iPhone user still gets detection from the first frame as before.
+ * - An explicit `integrations.iphoneSyncEnabled` preference wins over the
+ *   platform/source defaults below. This is what the Settings toggle writes, so
+ *   within an iPhone source the user's choice is authoritative.
  * - When the preference is unset:
  *   - Windows / Linux keep their current behavior (enabled). On these platforms
  *     iPhone cable sync is the primary local import path, and detection has run
@@ -37,17 +50,24 @@ export function resolveIphoneSyncEnabled(
   platform: Platform,
   importSource: ImportSource | null,
 ): boolean {
-  // 1. Explicit opt-in/opt-out always wins.
+  // 1. BACKLOG-3423: a known non-iPhone source switches the integration off,
+  //    whatever the stored preference says. `null` means "not known yet", not
+  //    "not iPhone", so it deliberately falls through to the rules below.
+  if (importSource !== null && importSource !== "iphone-sync") {
+    return false;
+  }
+
+  // 2. Explicit opt-in/opt-out wins over the defaults below.
   if (typeof pref === "boolean") {
     return pref;
   }
 
-  // 2. Non-macOS platforms keep current always-on behavior.
+  // 3. Non-macOS platforms keep current always-on behavior.
   if (platform !== "macos") {
     return true;
   }
 
-  // 3. macOS is opt-in: only when the user selected iPhone sync as their source.
+  // 4. macOS is opt-in: only when the user selected iPhone sync as their source.
   return importSource === "iphone-sync";
 }
 

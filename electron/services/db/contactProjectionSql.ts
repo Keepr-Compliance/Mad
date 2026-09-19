@@ -71,6 +71,7 @@
 
 import { IMPORTED_CONTACT_LAST_COMMUNICATION_SQL } from "./contactRecencySql";
 import { ACTIVE_CONTACTS_CLAUSE_C } from "./contactTombstoneSql";
+import { sql } from "./core/sqlText";
 
 /**
  * Every address a contact has, plus the one that represents it.
@@ -86,7 +87,7 @@ import { ACTIVE_CONTACTS_CLAUSE_C } from "./contactTombstoneSql";
  *
  * NO imports of its own, so the worker thread can use it directly.
  */
-export const IMPORTED_CONTACT_ADDRESSES_SQL = `
+export const IMPORTED_CONTACT_ADDRESSES_SQL = sql`
       COALESCE(
         (SELECT email FROM contact_emails WHERE contact_id = c.id AND is_primary = 1 LIMIT 1),
         (SELECT email FROM contact_emails WHERE contact_id = c.id LIMIT 1)
@@ -108,7 +109,7 @@ export const IMPORTED_CONTACT_ADDRESSES_SQL = `
  *
  * Takes one parameter: `user_id`.
  */
-export const IMPORTED_CONTACTS_SELECT_SQL = `
+export const IMPORTED_CONTACTS_SELECT_SQL = sql`
     SELECT
       c.*,
       c.display_name as name,

@@ -73,9 +73,9 @@ jest.mock("../services/db/core/dbConnection", () => ({
 }));
 
 jest.mock("../services/db/communicationDbService", () => ({
-  getIgnoredEmailIdsForTransaction: jest.fn(() => []),
-  getIgnoredThreadIdsForTransaction: jest.fn(() => []),
-  getIgnoredCommunicationIdsForTransaction: jest.fn(() => []),
+  getIgnoredEmailIdsForTransaction: jest.fn(async () => []),
+  getIgnoredThreadIdsForTransaction: jest.fn(async () => []),
+  getIgnoredCommunicationIdsForTransaction: jest.fn(async () => []),
 }));
 
 // Require the REAL native driver (the default Jest moduleNameMapper rewrites it

@@ -49,7 +49,9 @@ import {
   validateTransactionData,
   validateProvider,
   sanitizeObject,
+  isTransactionStatus,
 } from "../utils/validation";
+import { TransactionStatusSchema } from "../schemas/transaction";
 import type { OAuthProvider } from "../types/models";
 
 /**
@@ -1352,10 +1354,16 @@ export function registerTransactionCrudHandlers(
         );
       }
 
-      // Validate status - allow all 4 transaction statuses
-      if (!status || !["pending", "active", "closed", "rejected"].includes(status)) {
+      // Validate status against the DERIVED domain (BACKLOG-2755).
+      //
+      // This gate does NOT go through `validateTransactionData` and must not
+      // start to: that validator also enforces create-path rules this bulk
+      // payload has no business satisfying. What it shares with the validator
+      // now is the SOURCE of the legal values, so the two cannot disagree
+      // about what a status is.
+      if (!status || !isTransactionStatus(status)) {
         throw new ValidationError(
-          "Status must be 'pending', 'active', 'closed', or 'rejected'",
+          `Status must be one of: ${TransactionStatusSchema.options.join(", ")}`,
           "status",
         );
       }
@@ -1403,9 +1411,10 @@ export function registerTransactionCrudHandlers(
             await transactionService.getTransactionDetails(transactionId);
           const userId = existingTransaction?.user_id || "unknown";
 
-          await transactionService.updateTransaction(transactionId, {
-            status: status as "pending" | "active" | "closed" | "rejected",
-          });
+          // No cast: `isTransactionStatus` above has already narrowed `status`
+          // to the schema-derived union. The literal union that used to sit
+          // here was a fifth restatement of the same domain (BACKLOG-2755).
+          await transactionService.updateTransaction(transactionId, { status });
 
           // Audit log transaction update
           await auditService.log({

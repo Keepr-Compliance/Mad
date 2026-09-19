@@ -3,7 +3,7 @@
  * Handles database maintenance operations (reindex, analyze, etc.)
  */
 
-import * as Sentry from "@sentry/electron/main";
+import { hostErrorReporter } from "../../capabilities/errorReporterProvider";
 import { ensureDb } from "./core/dbConnection";
 import logService from "../logService";
 
@@ -83,7 +83,7 @@ export async function reindexDatabase(): Promise<{
       indexesRebuilt,
       durationMs,
     });
-    Sentry.captureException(error, {
+    hostErrorReporter.captureException(error, {
       tags: { service: "maintenance-db-service", operation: "reindexDatabase" },
     });
 

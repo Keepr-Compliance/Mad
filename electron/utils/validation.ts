@@ -4,6 +4,116 @@
  * Prevents injection attacks, type errors, and invalid data processing
  */
 
+import type { z } from "zod/v4";
+
+import {
+  TransactionTypeSchema,
+  TransactionStatusSchema,
+} from "../schemas/transaction";
+import type { TransactionColumn } from "./sqlFieldWhitelist";
+
+/**
+ * The `transactions` columns this validator accepts over IPC.
+ *
+ * ===========================================================================
+ * BACKLOG-2560 — THE NAMES ARE DERIVED NOW, NOT RESTATED
+ * ===========================================================================
+ * `Extract` is what makes this a derivation rather than a fourth list of
+ * column names. `TransactionColumn` comes from `TABLE_FIELDS.transactions`
+ * (`utils/sqlFieldWhitelist.ts`), which is enumerated from `PRAGMA table_info`
+ * and pinned to a real migrated database by
+ * `utils/__tests__/sqlFieldWhitelist.schemaParity.test.ts` — in both
+ * directions, so it can carry neither a phantom nor an omission.
+ *
+ * WHAT THIS BUYS, STATED PRECISELY, because the weaker claim is the true one:
+ *
+ *  - A name that is NOT a column cannot be USED here. `Extract<TransactionColumn,
+ *    "amount">` is `never`, so any read or write of `data.amount` below is a
+ *    compile error. That is how `amount` and `notes` — validated here for two
+ *    years while belonging to no table — are kept from coming back.
+ *    (A phantom name added to the list and then never referenced anywhere is
+ *    silently dropped rather than flagged. It has no behavioural effect: the
+ *    writer can never see a key nothing assigns.)
+ *  - A column that is REMOVED or renamed in the schema breaks the build here,
+ *    because the name disappears from the union and the assignment below stops
+ *    type-checking.
+ *  - A NEW column is NOT forced into this list, deliberately. This validator
+ *    accepts 18 of 59 columns and should: most of the rest are internal
+ *    bookkeeping the renderer must never set. Which columns the IPC surface
+ *    ought to accept is a policy question with a security dimension, tracked
+ *    as BACKLOG-3180, and it is not settled by a type.
+ */
+type TransactionField = Extract<
+  TransactionColumn,
+  | "property_address"
+  | "property_street"
+  | "property_city"
+  | "property_state"
+  | "property_zip"
+  | "property_coordinates"
+  | "transaction_type"
+  | "status"
+  | "sale_price"
+  | "listing_price"
+  | "closing_date_verified"
+  | "started_at"
+  | "closed_at"
+  | "closing_deadline"
+  | "detection_status"
+  | "reviewed_at"
+  | "rejection_reason"
+  | "suggested_contacts"
+>;
+
+/**
+ * The transaction value domains, DERIVED — not restated.
+ *
+ * ===========================================================================
+ * BACKLOG-2755 — THE VALIDATOR AND THE DATABASE HAD DIFFERENT IDEAS OF LEGAL
+ * ===========================================================================
+ * These two enums used to be hand-written arrays here, and they had drifted
+ * from the `transactions` CHECK constraints in BOTH directions. Measured on
+ * develop before this change:
+ *
+ *   - the validator ACCEPTED `lease`, `refinance` and `cancelled`, which the
+ *     CHECK rejects — so a payload passed validation and then died at the
+ *     database with a raw constraint error instead of a clean message;
+ *   - the validator REJECTED `status: "rejected"`, which the CHECK accepts —
+ *     blocking a legal state transition outright.
+ *
+ * The fix is not "correct the arrays". It is to stop having arrays. These
+ * types and the runtime sets below both come from `schemas/transaction.ts`,
+ * whose enums are pinned to the column's real CHECK list, as exact SETS in
+ * both directions, by `schemas/__tests__/transactionSchemaParity.test.ts`
+ * (`declares enum members that equal the column's CHECK list, as SETS`) —
+ * which reads the domains out of a REAL migrated database, not out of
+ * `schema.sql`. Change the CHECK and that test goes red until the schema
+ * follows; change the schema and every consumer here follows automatically.
+ *
+ * The types come from the SCHEMA, deliberately, and not from the equivalent
+ * unions in `types/models.ts`. Those unions are a separate hand-written copy
+ * of the same domain (BACKLOG-3180 territory); typing the guards from them
+ * would let the declared type and the runtime set drift apart, which is the
+ * defect this item exists to remove.
+ */
+type TransactionTypeValue = z.infer<typeof TransactionTypeSchema>;
+type TransactionStatusValue = z.infer<typeof TransactionStatusSchema>;
+
+/**
+ * `Array.prototype.includes` on a `readonly ["purchase", "sale", "other"]`
+ * tuple rejects a plain `string` argument, so the widening cast lives here,
+ * once, instead of at each call site.
+ */
+function isTransactionType(value: string): value is TransactionTypeValue {
+  return (TransactionTypeSchema.options as readonly string[]).includes(value);
+}
+
+export function isTransactionStatus(
+  value: string,
+): value is TransactionStatusValue {
+  return (TransactionStatusSchema.options as readonly string[]).includes(value);
+}
+
 /**
  * Validation error class
  */
@@ -363,15 +473,41 @@ export interface RawContactData {
 }
 
 /**
+ * The length limits `validateContactData` enforces on contact free-text and
+ * phone fields, stated once.
+ *
+ * BACKLOG-3358: the import path cuts name, company and title to these limits
+ * and treats a phone longer than `phone` as unusable
+ * (`contactImportValues.ts`). Reading the same constant is what keeps "what the
+ * import prepares" and "what this validator accepts" from drifting apart.
+ * Changing a value here changes both.
+ */
+export const CONTACT_FIELD_MAX_LENGTH = {
+  name: 200,
+  phone: 50,
+  company: 200,
+  title: 100,
+} as const;
+
+/**
  * Validate contact data for creation/update
+ *
  * @param contactData - Contact data to validate
- * @param isUpdate - Whether this is an update operation
+ * @param _isUpdate - **ACCEPTED AND IGNORED since BACKLOG-2707.** It had exactly
+ *   one job: make `name` required on create and optional on update. The name
+ *   requirement is gone (see the guard below), and no other field in this
+ *   function has ever consulted it, so create and update now validate
+ *   IDENTICALLY. Underscored rather than deleted to keep this PR inside the
+ *   boundary SR set for it; removing the parameter and its 13 call sites is
+ *   filed separately. Named here rather than left to be discovered, because a
+ *   parameter that silently decides nothing is how the next reader concludes
+ *   the two paths differ when they do not.
  * @returns Validated contact data
  * @throws ValidationError if validation fails
  */
 export function validateContactData(
   contactData: unknown,
-  isUpdate: boolean = false,
+  _isUpdate: boolean = false,
 ): ValidatedContactData {
   if (!contactData || typeof contactData !== "object") {
     throw new ValidationError("Contact data must be an object", "contactData");
@@ -380,13 +516,75 @@ export function validateContactData(
   const data = contactData as RawContactData;
   const validated: ValidatedContactData = {};
 
-  // Name is required for creation, optional for update
-  if (!isUpdate || data.name !== undefined) {
-    validated.name = validateString(data.name, "name", {
-      required: !isUpdate,
-      minLength: 1,
-      maxLength: 200,
-    });
+  /**
+   * ===========================================================================
+   * BACKLOG-2707 — "HAS A NAME" IS NOT THE QUESTION "IS THIS WORTH KEEPING".
+   * ===========================================================================
+   * This guard answered the second question a second time and disagreed with
+   * the answer `hasNothingToImport` (`utils/importableRecord.ts`) gives — the
+   * one BACKLOG-2672 and BACKLOG-2684 established. A record with no name but a
+   * phone IS importable by that rule, and the picker offers it with an enabled
+   * Import button; this guard then refused it at the IPC door, in TWO different
+   * sentences — "name is required" for absent/`null`/`""`, and "name must be at
+   * least 1 characters" for whitespace. Both measured by driving the registered
+   * `contacts:import` handler; both are gone. Deleting `minLength: 1` is what
+   * closes the second one; relaxing `required` alone would not have.
+   *
+   * FOUR SPELLINGS OF "NO NAME" — absent, `null`, `""`, whitespace — now reach
+   * ONE outcome.
+   *
+   * A NON-STRING MOSTLY STILL THROWS, AND THE EXCEPTION IS THE PART WORTH
+   * KNOWING. The `typeof` test below guards only the whitespace case, so a
+   * non-string still reaches `validateString` — but `validateString` returns
+   * early on `!value`, so only the TRUTHY ones raise. Measured, both paths:
+   *
+   *   42 / {} / []        -> THREW "name must be a string"
+   *   0 / false / NaN     -> OK, name = null      <- silently, no error
+   *
+   * That `null` is PRE-EXISTING — the same three values return `null` on the
+   * base validator, so BACKLOG-2707 neither caused it nor fixed it. It is
+   * filed as BACKLOG-3186, where it crashes `contacts:update`: `null` survives
+   * that handler's `undefined`-only filter and fails the NOT NULL column.
+   *
+   * **The create and import paths are safe from it only because of the `?? ""`
+   * at their two `display_name` sites in `contactHandlers.ts`.** A future tidy
+   * turning either `??` back into `||` would look like a cleanup and would be
+   * a break; that is why this paragraph names them.
+   *
+   * Turning the truthy cases into silence would be the direction PR #2563
+   * argued against when it deleted the `amount` check, so they still raise.
+   *
+   * -------------------------------------------------------------------------
+   * THE OUTCOME IS `""`, NOT `null`, AND THAT IS LOAD-BEARING
+   * -------------------------------------------------------------------------
+   * `contacts.display_name` is `TEXT NOT NULL`. A `null` here survives
+   * `contacts:update` — which builds its payload by filtering `undefined` ONLY
+   * — and binds straight into `UPDATE contacts SET display_name = ?`, throwing
+   * `NOT NULL constraint failed: contacts.display_name`. That handler wraps the
+   * contact row and both address syncs in ONE transaction, so the whole edit
+   * rolls back. Measured on the real writer, not read.
+   *
+   * The clear is resolved HERE rather than at each of the three call sites
+   * (`contacts:import`, `contacts:create`, `contacts:update`) because that is
+   * the BACKLOG-2755 rule: a validator must not emit a value its writer cannot
+   * store, and three copies of one coercion is how the fourth handler inherits
+   * the crash.
+   *
+   * `null` is still the clear value for the four NULLABLE contact fields below.
+   * The difference is the column, not the principle.
+   */
+  if (data.name !== undefined) {
+    if (
+      data.name === null ||
+      (typeof data.name === "string" && data.name.trim() === "")
+    ) {
+      validated.name = "";
+    } else {
+      validated.name = validateString(data.name, "name", {
+        required: false,
+        maxLength: CONTACT_FIELD_MAX_LENGTH.name,
+      });
+    }
   }
 
   // Email is optional but must be valid if provided
@@ -398,7 +596,7 @@ export function validateContactData(
   if (data.phone !== undefined && data.phone !== null) {
     validated.phone = validateString(data.phone, "phone", {
       required: false,
-      maxLength: 50,
+      maxLength: CONTACT_FIELD_MAX_LENGTH.phone,
     });
   }
 
@@ -406,7 +604,7 @@ export function validateContactData(
   if (data.company !== undefined && data.company !== null) {
     validated.company = validateString(data.company, "company", {
       required: false,
-      maxLength: 200,
+      maxLength: CONTACT_FIELD_MAX_LENGTH.company,
     });
   }
 
@@ -414,7 +612,7 @@ export function validateContactData(
   if (data.title !== undefined && data.title !== null) {
     validated.title = validateString(data.title, "title", {
       required: false,
-      maxLength: 100,
+      maxLength: CONTACT_FIELD_MAX_LENGTH.title,
     });
   }
 
@@ -458,14 +656,20 @@ export interface ValidatedTransactionData {
   property_state?: string | null;
   property_zip?: string | null;
   property_coordinates?: string | null;
-  transaction_type?: string;
-  status?: string;
-  sale_price?: number;
-  listing_price?: number;
-  closing_date_verified?: number;
-  started_at?: string;
-  closed_at?: string;
-  closing_deadline?: string;
+  transaction_type?: TransactionTypeValue;
+  status?: TransactionStatusValue;
+  /** `null` is meaningful: how a price is cleared (BACKLOG-2759). */
+  sale_price?: number | null;
+  /** `null` is meaningful: how a price is cleared (BACKLOG-2759). */
+  listing_price?: number | null;
+  /** `null` is meaningful: how the flag is cleared (BACKLOG-2759). */
+  closing_date_verified?: number | null;
+  /** `null` is meaningful: how the start date is cleared (BACKLOG-2759). */
+  started_at?: string | null;
+  /** `null` is meaningful: how the closing date is cleared (BACKLOG-2759). */
+  closed_at?: string | null;
+  /** `null` is meaningful: how the deadline is cleared (BACKLOG-2759). */
+  closing_deadline?: string | null;
   // AI detection fields
   detection_status?: string;
   /** `null` is meaningful: the column's "never reviewed" state (BACKLOG-2558). */
@@ -478,6 +682,26 @@ export interface ValidatedTransactionData {
   contact_assignments?: ContactAssignmentData[];
 }
 
+/**
+ * Every key this validator forwards is a real column.
+ *
+ * `ValidatedTransactionData` stays a declared interface rather than a mapped
+ * type because its value types are heterogeneous — `string | null` here, plain
+ * `number` there — and a `Record` would flatten that. So the key set is checked
+ * separately: add a name that is not a `transactions` column and this
+ * assignment stops compiling.
+ */
+type ValidatedKeysAreRealColumns = [
+  Exclude<
+    keyof ValidatedTransactionData,
+    TransactionColumn | "contact_assignments"
+  >,
+] extends [never]
+  ? true
+  : never;
+const _validatedKeysAreRealColumns: ValidatedKeysAreRealColumns = true;
+void _validatedKeysAreRealColumns;
+
 // Contact assignment data for transaction creation
 export interface ContactAssignmentData {
   contact_id: string;
@@ -488,33 +712,21 @@ export interface ContactAssignmentData {
 }
 
 /**
- * Raw transaction data interface
+ * What a caller may send. Every key is a real column, by construction.
+ *
+ * This used to be a hand-written list, and it declared two keys that are
+ * columns of NO table — `amount` and `notes` — which this validator then
+ * checked and threw on while forwarding neither. Keying it off
+ * `TransactionField` is what stops that recurring: those two names are now
+ * unreadable here rather than merely unforwarded.
+ *
+ * `contact_assignments` is deliberately not a column. It is a sibling payload
+ * consumed by `createAuditedTransaction` and written to `transaction_contacts`,
+ * never to `transactions`.
  */
-export interface RawTransactionData {
-  property_address?: unknown;
-  property_street?: unknown;
-  property_city?: unknown;
-  property_state?: unknown;
-  property_zip?: unknown;
-  property_coordinates?: unknown;
-  transaction_type?: unknown;
-  amount?: unknown;
-  status?: unknown;
-  notes?: unknown;
-  sale_price?: unknown;
-  listing_price?: unknown;
-  closing_date_verified?: unknown;
-  started_at?: unknown;
-  closed_at?: unknown;
-  closing_deadline?: unknown;
-  // AI detection fields
-  detection_status?: unknown;
-  reviewed_at?: unknown;
-  rejection_reason?: unknown;
-  suggested_contacts?: unknown;
-  // Contact assignments
+export type RawTransactionData = Partial<Record<TransactionField, unknown>> & {
   contact_assignments?: unknown;
-}
+};
 
 /**
  * Validate transaction data for creation/update
@@ -588,146 +800,194 @@ export function validateTransactionData(
     }
   }
 
-  // Transaction type
+  // Transaction type — domain derived, see TransactionTypeValue above.
   if (data.transaction_type !== undefined) {
-    const validTypes = ["purchase", "sale", "lease", "refinance", "other"];
     const type =
       typeof data.transaction_type === "string"
         ? data.transaction_type.toLowerCase()
         : "";
-    if (!validTypes.includes(type)) {
+    if (!isTransactionType(type)) {
       throw new ValidationError(
-        `Transaction type must be one of: ${validTypes.join(", ")}`,
+        `Transaction type must be one of: ${TransactionTypeSchema.options.join(", ")}`,
         "transaction_type",
       );
     }
     validated.transaction_type = type;
   }
 
-  // Amount (if provided)
-  //
-  // BACKLOG-2558 F6: CHECKED BUT NOT FORWARDED. `transactions` has no `amount`
-  // column — on any path — so forwarding it only handed the writer a key it had
-  // to discard. The check stays: deleting it would turn today's ValidationError
-  // on `amount: -5` into silence, which is the wrong direction for this epic.
-  if (data.amount !== undefined && data.amount !== null) {
-    const amount = Number(data.amount);
-    if (isNaN(amount) || amount < 0) {
-      throw new ValidationError(
-        "Amount must be a non-negative number",
-        "amount",
-      );
-    }
-  }
+  // `amount` was validated here and forwarded nowhere — it is a column of no
+  // table. BACKLOG-2558 kept the check on the argument that deleting it would
+  // turn a ValidationError into silence. That argument held only while the key
+  // was merely unforwarded; `TransactionField` now makes it unreadable, so the
+  // guarantee is stronger than the check it replaces. See the type's comment.
 
-  // Status
+  // Status — domain derived, see TransactionStatusValue above.
   if (data.status !== undefined) {
-    const validStatuses = ["active", "pending", "closed", "cancelled"];
     const status =
       typeof data.status === "string" ? data.status.toLowerCase() : "";
-    if (!validStatuses.includes(status)) {
+    if (!isTransactionStatus(status)) {
       throw new ValidationError(
-        `Status must be one of: ${validStatuses.join(", ")}`,
+        `Status must be one of: ${TransactionStatusSchema.options.join(", ")}`,
         "status",
       );
     }
     validated.status = status;
   }
 
-  // Notes (optional)
+  // `notes` was the same shape as `amount` above, and is gone for the same
+  // reason. (Contact assignments carry their own `notes`, on
+  // `transaction_contacts`; that is a different field, handled under
+  // `contact_assignments` below.)
+
+  // ===========================================================================
+  // BACKLOG-2759 — CLEARING A FIELD IS AN INSTRUCTION, NOT AN ABSENCE.
+  // ===========================================================================
+  // Every guard from here to `closing_deadline` used to read
+  // `!== undefined && !== null`, the shape PR #2326 already removed from
+  // `reviewed_at` and `rejection_reason` below. It collapses "clear this
+  // column" (an explicit `null`) into "say nothing about this column"
+  // (`undefined`) and drops the key, so the writer never learns a clear was
+  // asked for and the caller is told it succeeded. `useAuditSubmission.ts`
+  // sends `closed_at` and `closing_deadline` as `|| null`, so this was live:
+  // blanking a closing date left the old date on the row.
   //
-  // BACKLOG-2558 F6: CHECKED BUT NOT FORWARDED, for the same reason as `amount`
-  // — `transactions` has no `notes` column. (Contact assignments carry their own
-  // `notes`, on `transaction_contacts`; that is a different field and is handled
-  // under `contact_assignments` below.)
-  if (data.notes !== undefined && data.notes !== null) {
-    validateString(data.notes, "notes", {
-      required: false,
-      maxLength: 10000,
-    });
+  // `undefined` still means "not mentioned" and is still skipped.
+  //
+  // The EMPTY STRING is the second half, and it is a separate bug per column:
+  //   - for the three dates, `""` is what a blanked form field produces. The
+  //     writer declares `emptyToNull: true` for these columns, but that rule
+  //     is applied on the INSERT path ONLY (`transactionDbService.ts`, the
+  //     `path === "insert"` condition) — measured, not read: forwarding `""`
+  //     to the update path stored a literal empty string in a DATETIME
+  //     column, which is not NULL and so still reads as "a date is set".
+  //     The clear is therefore resolved HERE, to `null`, for the same reason
+  //     it is for the prices below.
+  //   - for the two prices, `Number("") === 0`, so clearing a price did not
+  //     silently do nothing: it silently wrote `$0` on a nullable column.
+  //     Latent today (no renderer writes either price) but wrong in kind, so
+  //     `""` clears rather than zeroes.
+
+  // Sale price (optional; `null` and `""` both clear it)
+  if (data.sale_price !== undefined) {
+    if (data.sale_price === null || data.sale_price === "") {
+      validated.sale_price = null;
+    } else {
+      const price = Number(data.sale_price);
+      if (isNaN(price) || price < 0) {
+        throw new ValidationError(
+          "Sale price must be a non-negative number",
+          "sale_price",
+        );
+      }
+      validated.sale_price = price;
+    }
   }
 
-  // Sale price (optional)
-  if (data.sale_price !== undefined && data.sale_price !== null) {
-    const price = Number(data.sale_price);
-    if (isNaN(price) || price < 0) {
-      throw new ValidationError(
-        "Sale price must be a non-negative number",
-        "sale_price",
-      );
+  // Listing price (optional; `null` and `""` both clear it)
+  if (data.listing_price !== undefined) {
+    if (data.listing_price === null || data.listing_price === "") {
+      validated.listing_price = null;
+    } else {
+      const price = Number(data.listing_price);
+      if (isNaN(price) || price < 0) {
+        throw new ValidationError(
+          "Listing price must be a non-negative number",
+          "listing_price",
+        );
+      }
+      validated.listing_price = price;
     }
-    validated.sale_price = price;
   }
 
-  // Listing price (optional)
-  if (data.listing_price !== undefined && data.listing_price !== null) {
-    const price = Number(data.listing_price);
-    if (isNaN(price) || price < 0) {
-      throw new ValidationError(
-        "Listing price must be a non-negative number",
-        "listing_price",
-      );
+  // Closing date verified flag (optional, must be 0 or 1).
+  //
+  // `""` is deliberately NOT treated as a clear here, unlike the prices above.
+  // The column is `INTEGER DEFAULT 0` and `0` is its resting "not verified"
+  // state, so `Number("") === 0` lands the right value rather than a wrong one.
+  if (data.closing_date_verified !== undefined) {
+    if (data.closing_date_verified === null) {
+      validated.closing_date_verified = null;
+    } else {
+      const verified = Number(data.closing_date_verified);
+      if (verified !== 0 && verified !== 1) {
+        throw new ValidationError(
+          "Closing date verified must be 0 or 1",
+          "closing_date_verified",
+        );
+      }
+      validated.closing_date_verified = verified;
     }
-    validated.listing_price = price;
-  }
-
-  // Closing date verified flag (optional, must be 0 or 1)
-  if (
-    data.closing_date_verified !== undefined &&
-    data.closing_date_verified !== null
-  ) {
-    const verified = Number(data.closing_date_verified);
-    if (verified !== 0 && verified !== 1) {
-      throw new ValidationError(
-        "Closing date verified must be 0 or 1",
-        "closing_date_verified",
-      );
-    }
-    validated.closing_date_verified = verified;
   }
 
   // Started at date (optional, must be valid date string)
-  if (data.started_at !== undefined && data.started_at !== null) {
-    if (typeof data.started_at === "string" && data.started_at.trim()) {
-      // Validate it's a valid date format (YYYY-MM-DD or ISO date string)
+  if (data.started_at !== undefined) {
+    // BOTH strip layers are opened here. The outer `!== null` dropped an
+    // explicit clear; the inner `.trim()` truthiness dropped `""`, which is
+    // what a blanked form field sends. Leaving either in place leaves the
+    // field unclearable.
+    if (data.started_at === null) {
+      validated.started_at = null;
+    } else if (typeof data.started_at === "string") {
       const dateStr = data.started_at.trim();
-      if (!/^\d{4}-\d{2}-\d{2}/.test(dateStr)) {
-        throw new ValidationError(
-          "Started at date must be in YYYY-MM-DD format",
-          "started_at",
-        );
+      if (dateStr === "") {
+        validated.started_at = null;
+      } else {
+        if (!/^\d{4}-\d{2}-\d{2}/.test(dateStr)) {
+          throw new ValidationError(
+            "Started at date must be in YYYY-MM-DD format",
+            "started_at",
+          );
+        }
+        validated.started_at = dateStr;
       }
-      validated.started_at = dateStr;
     }
   }
 
   // Closed at date (optional, must be valid date string)
-  if (data.closed_at !== undefined && data.closed_at !== null) {
-    if (typeof data.closed_at === "string" && data.closed_at.trim()) {
-      // Validate it's a valid date format (YYYY-MM-DD or ISO date string)
+  if (data.closed_at !== undefined) {
+    // BOTH strip layers are opened here. The outer `!== null` dropped an
+    // explicit clear; the inner `.trim()` truthiness dropped `""`, which is
+    // what a blanked form field sends. Leaving either in place leaves the
+    // field unclearable.
+    if (data.closed_at === null) {
+      validated.closed_at = null;
+    } else if (typeof data.closed_at === "string") {
       const dateStr = data.closed_at.trim();
-      if (!/^\d{4}-\d{2}-\d{2}/.test(dateStr)) {
-        throw new ValidationError(
-          "Closed at date must be in YYYY-MM-DD format",
-          "closed_at",
-        );
+      if (dateStr === "") {
+        validated.closed_at = null;
+      } else {
+        if (!/^\d{4}-\d{2}-\d{2}/.test(dateStr)) {
+          throw new ValidationError(
+            "Closed at date must be in YYYY-MM-DD format",
+            "closed_at",
+          );
+        }
+        validated.closed_at = dateStr;
       }
-      validated.closed_at = dateStr;
     }
   }
 
   // Closing deadline date (optional, must be valid date string)
-  if (data.closing_deadline !== undefined && data.closing_deadline !== null) {
-    if (typeof data.closing_deadline === "string" && data.closing_deadline.trim()) {
-      // Validate it's a valid date format (YYYY-MM-DD or ISO date string)
+  if (data.closing_deadline !== undefined) {
+    // BOTH strip layers are opened here. The outer `!== null` dropped an
+    // explicit clear; the inner `.trim()` truthiness dropped `""`, which is
+    // what a blanked form field sends. Leaving either in place leaves the
+    // field unclearable.
+    if (data.closing_deadline === null) {
+      validated.closing_deadline = null;
+    } else if (typeof data.closing_deadline === "string") {
       const dateStr = data.closing_deadline.trim();
-      if (!/^\d{4}-\d{2}-\d{2}/.test(dateStr)) {
-        throw new ValidationError(
-          "Closing deadline date must be in YYYY-MM-DD format",
-          "closing_deadline",
-        );
+      if (dateStr === "") {
+        validated.closing_deadline = null;
+      } else {
+        if (!/^\d{4}-\d{2}-\d{2}/.test(dateStr)) {
+          throw new ValidationError(
+            "Closing deadline date must be in YYYY-MM-DD format",
+            "closing_deadline",
+          );
+        }
+        validated.closing_deadline = dateStr;
       }
-      validated.closing_deadline = dateStr;
     }
   }
 

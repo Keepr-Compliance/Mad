@@ -4,12 +4,13 @@
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import Settings from "../Settings";
 import { PlatformProvider } from "../../contexts/PlatformContext";
 import { NotificationProvider } from "../../contexts/NotificationContext";
+import { IPhoneSyncProvider } from "../../contexts/IPhoneSyncContext";
 
 // Polyfill Element.scrollTo for jsdom (SettingsTabBar uses it)
 if (typeof Element.prototype.scrollTo !== "function") {
@@ -208,22 +209,42 @@ describe("Settings", () => {
     });
   });
 
-  describe("Email Connections", () => {
+  /**
+   * BACKLOG-3156 stage A: the section heading is now "Emails", and the panel
+   * carries a "Stored on this computer" grid whose cells are labelled Gmail and
+   * Outlook. That makes a bare getByText("Gmail") ambiguous, so these queries
+   * are scoped to the Sources block — which asserts MORE than before: the
+   * provider label is in the sources block specifically, not merely somewhere
+   * on the page.
+   */
+  const sources = () => within(screen.getByTestId("emails-block-sources"));
+
+  describe("Emails", () => {
+    /**
+     * BACKLOG-3156 stage C: the status pill and the action button merged into
+     * ONE control per row, so "Not Connected" is no longer printed beside a
+     * "Connect Gmail" button — the button IS the status. Updated deliberately;
+     * the assertion did not weaken, it moved onto the control that replaced the
+     * words.
+     */
     it("should show Gmail connection status", async () => {
       await renderSettings({ userId: mockUserId, onClose: mockOnClose });
 
       await waitFor(() => {
-        expect(screen.getByText("Gmail")).toBeInTheDocument();
+        expect(sources().getByText("Gmail")).toBeInTheDocument();
       });
 
-      expect(screen.getAllByText("Not Connected").length).toBeGreaterThan(0);
+      expect(
+        sources().getByRole("button", { name: /connect gmail/i }),
+      ).toBeInTheDocument();
+      expect(screen.queryByText("Not Connected")).not.toBeInTheDocument();
     });
 
     it("should show Outlook connection status", async () => {
       await renderSettings({ userId: mockUserId, onClose: mockOnClose });
 
       await waitFor(() => {
-        expect(screen.getByText("Outlook")).toBeInTheDocument();
+        expect(sources().getByText("Outlook")).toBeInTheDocument();
       });
     });
 
@@ -273,7 +294,7 @@ describe("Settings", () => {
       await renderSettings({ userId: mockUserId, onClose: mockOnClose });
 
       await waitFor(() => {
-        expect(screen.getByText("Gmail")).toBeInTheDocument();
+        expect(sources().getByText("Gmail")).toBeInTheDocument();
       });
 
       const connectGmailButton = screen.getByRole("button", {
@@ -290,7 +311,7 @@ describe("Settings", () => {
       await renderSettings({ userId: mockUserId, onClose: mockOnClose });
 
       await waitFor(() => {
-        expect(screen.getByText("Outlook")).toBeInTheDocument();
+        expect(sources().getByText("Outlook")).toBeInTheDocument();
       });
 
       const connectOutlookButton = screen.getByRole("button", {
@@ -303,7 +324,14 @@ describe("Settings", () => {
       );
     });
 
-    it("should show disconnect button when already connected", async () => {
+    /**
+     * BACKLOG-3156 stage C: Disconnect moved OFF the resting page and into the
+     * row's overflow, so that a glance-and-tap on a green row cannot sign you
+     * out. The old test asserted the button was visible while connected; this
+     * asserts the opposite half AND that it is still reachable and enabled, so
+     * "moved" cannot pass as "deleted".
+     */
+    it("keeps Disconnect out of the resting page and behind the row's menu", async () => {
       jest.mocked(window.api.system.checkAllConnections).mockResolvedValue({
         success: true,
         google: { connected: true, email: "user@gmail.com" },
@@ -314,17 +342,28 @@ describe("Settings", () => {
 
       await waitFor(() => {
         expect(
-          screen.getByRole("button", { name: /disconnect gmail/i }),
-        ).toBeInTheDocument();
+          screen.getByTestId("email-connection-google-status"),
+        ).toHaveTextContent("Connected");
       });
+      expect(
+        screen.queryByRole("button", { name: /disconnect gmail/i }),
+      ).not.toBeInTheDocument();
 
-      const disconnectButton = screen.getByRole("button", {
+      await userEvent.click(screen.getByTestId("email-connection-google-trigger"));
+
+      const disconnectItem = screen.getByRole("menuitem", {
         name: /disconnect gmail/i,
       });
-      expect(disconnectButton).toBeEnabled();
+      expect(disconnectItem).toBeEnabled();
     });
 
-    it("should call disconnect Gmail when disconnect button is clicked", async () => {
+    /**
+     * BACKLOG-3156 stage C: choosing Disconnect now opens a confirmation, so
+     * the API call is asserted at the END of menu -> item -> confirm. The
+     * "not yet called" assertion between the two clicks is the part that would
+     * red if the menu item were ever wired straight to the handler again.
+     */
+    it("should call disconnect Gmail after the confirmation is accepted", async () => {
       jest.mocked(window.api.system.checkAllConnections).mockResolvedValue({
         success: true,
         google: { connected: true, email: "user@gmail.com" },
@@ -335,21 +374,25 @@ describe("Settings", () => {
 
       await waitFor(() => {
         expect(
-          screen.getByRole("button", { name: /disconnect gmail/i }),
+          screen.getByTestId("email-connection-google-trigger"),
         ).toBeInTheDocument();
       });
 
-      const disconnectButton = screen.getByRole("button", {
-        name: /disconnect gmail/i,
-      });
-      await userEvent.click(disconnectButton);
+      await userEvent.click(screen.getByTestId("email-connection-google-trigger"));
+      await userEvent.click(
+        screen.getByRole("menuitem", { name: /disconnect gmail/i }),
+      );
+
+      expect(window.api.auth.googleDisconnectMailbox).not.toHaveBeenCalled();
+
+      await userEvent.click(screen.getByTestId("disconnect-confirm"));
 
       expect(window.api.auth.googleDisconnectMailbox).toHaveBeenCalledWith(
         mockUserId,
       );
     });
 
-    it("should call disconnect Outlook when disconnect button is clicked", async () => {
+    it("should call disconnect Outlook after the confirmation is accepted", async () => {
       jest.mocked(window.api.system.checkAllConnections).mockResolvedValue({
         success: true,
         google: { connected: false },
@@ -360,27 +403,48 @@ describe("Settings", () => {
 
       await waitFor(() => {
         expect(
-          screen.getByRole("button", { name: /disconnect outlook/i }),
+          screen.getByTestId("email-connection-microsoft-trigger"),
         ).toBeInTheDocument();
       });
 
-      const disconnectButton = screen.getByRole("button", {
-        name: /disconnect outlook/i,
-      });
-      await userEvent.click(disconnectButton);
+      await userEvent.click(
+        screen.getByTestId("email-connection-microsoft-trigger"),
+      );
+      await userEvent.click(
+        screen.getByRole("menuitem", { name: /disconnect outlook/i }),
+      );
+
+      expect(window.api.auth.microsoftDisconnectMailbox).not.toHaveBeenCalled();
+
+      await userEvent.click(screen.getByTestId("disconnect-confirm"));
 
       expect(window.api.auth.microsoftDisconnectMailbox).toHaveBeenCalledWith(
         mockUserId,
       );
     });
 
-    // BACKLOG-2142: distinguish the THREE states — connected / expired
-    // (broken token) / not-connected — so a broken token is not misread as
-    // "disconnected". The render keys off the typed error.type discriminator
-    // (no message string-matching). Existing mocks above only exercised the
-    // connected/not-connected pair.
+    /**
+     * BACKLOG-2142: distinguish the THREE states — connected / expired (broken
+     * token) / not-connected — so a broken token is not misread as
+     * "disconnected". The render keys off the typed `error.type` discriminator
+     * (no message string-matching).
+     *
+     * BACKLOG-3156 stage C changed WHERE that distinction is legible, and these
+     * three were updated deliberately rather than deleted. The status pill is
+     * gone — one merged control replaced pill-plus-button — so the words
+     * "Session Expired" and "Connection Issue" are no longer printed. What the
+     * user can still tell apart:
+     *
+     *   - broken vs never-linked: the control reads `Reconnect`, not `Connect`
+     *   - expired vs erroring: the provider's own `userMessage` panel, which
+     *     renders in both error states and is asserted below
+     *
+     * Each test therefore asserts the surviving signal AND the absence of the
+     * pill, so a change that quietly reinstates a second status element beside
+     * the control is a red rather than a pass.
+     */
     describe("broken-token state (BACKLOG-2142)", () => {
-      it("shows 'Session Expired' + a Reconnect button for a TOKEN_REFRESH_FAILED Gmail token", async () => {
+      it("offers Reconnect (not Connect) plus the expired message for a TOKEN_REFRESH_FAILED Gmail token", async () => {
         jest.mocked(window.api.system.checkAllConnections).mockResolvedValue({
           success: true,
           google: {
@@ -398,22 +462,27 @@ describe("Settings", () => {
 
         await renderSettings({ userId: mockUserId, onClose: mockOnClose });
 
-        await waitFor(() => {
-          expect(screen.getByText("Session Expired")).toBeInTheDocument();
-        });
         // Distinct from "Connect" — offers Reconnect directly.
+        await waitFor(() => {
+          expect(
+            screen.getByRole("button", { name: "Reconnect Gmail" }),
+          ).toBeInTheDocument();
+        });
         expect(
-          screen.getByRole("button", { name: /reconnect gmail/i }),
-        ).toBeInTheDocument();
-        // The expired-connection userMessage is surfaced.
+          screen.queryByRole("button", { name: "Connect Gmail" }),
+        ).not.toBeInTheDocument();
+        // The expired-connection userMessage is what now separates this state
+        // from a plain connection issue.
         expect(
           screen.getByText(
             "Your Gmail connection expired. Reconnect to keep capturing email.",
           ),
         ).toBeInTheDocument();
+        // The pill the merged control replaced is gone, not sitting beside it.
+        expect(screen.queryByText("Session Expired")).not.toBeInTheDocument();
       });
 
-      it("shows 'Connection Issue' for a CONNECTION_CHECK_FAILED Outlook token", async () => {
+      it("offers Reconnect plus its own message for a CONNECTION_CHECK_FAILED Outlook token", async () => {
         jest.mocked(window.api.system.checkAllConnections).mockResolvedValue({
           success: true,
           google: { connected: false },
@@ -431,14 +500,17 @@ describe("Settings", () => {
         await renderSettings({ userId: mockUserId, onClose: mockOnClose });
 
         await waitFor(() => {
-          expect(screen.getByText("Connection Issue")).toBeInTheDocument();
+          expect(
+            screen.getByRole("button", { name: "Reconnect Outlook" }),
+          ).toBeInTheDocument();
         });
         expect(
-          screen.getByRole("button", { name: /reconnect outlook/i }),
+          screen.getByText("Could not verify Outlook connection"),
         ).toBeInTheDocument();
+        expect(screen.queryByText("Connection Issue")).not.toBeInTheDocument();
       });
 
-      it("still shows 'Not Connected' + Connect for a NOT_CONNECTED provider (no reconnect)", async () => {
+      it("still offers Connect, never Reconnect, for a NOT_CONNECTED provider", async () => {
         jest.mocked(window.api.system.checkAllConnections).mockResolvedValue({
           success: true,
           google: {
@@ -450,19 +522,153 @@ describe("Settings", () => {
 
         await renderSettings({ userId: mockUserId, onClose: mockOnClose });
 
-        await waitFor(() => {
-          expect(screen.getByText("Gmail")).toBeInTheDocument();
-        });
-        expect(screen.getAllByText("Not Connected").length).toBeGreaterThan(0);
-        // A never-connected provider offers Connect, NOT Reconnect.
+        // BACKLOG-2487: gate on the control this test is about, not on the
+        // <h4> beside it. The provider heading renders unconditionally, so a
+        // wait on it opens on the FIRST render — while the row still reads
+        // "Checking..." and carries no button at all, and the synchronous read
+        // that followed then missed a button that was merely not there YET.
+        // Waiting for the button itself makes the wait and the read the same
+        // element.
         expect(
-          screen.getByRole("button", { name: /connect gmail/i }),
+          await screen.findByRole("button", { name: "Connect Gmail" }),
         ).toBeInTheDocument();
+        // ...and it is the Emails Sources block that offers it.
+        expect(sources().getByText("Gmail")).toBeInTheDocument();
+        expect(
+          sources().getByRole("button", { name: "Connect Gmail" }),
+        ).toBeInTheDocument();
+        // A never-connected provider offers Connect, NOT Reconnect — the
+        // NOT_CONNECTED error type must not be read as a broken connection.
         expect(
           screen.queryByRole("button", { name: /reconnect gmail/i }),
         ).not.toBeInTheDocument();
         expect(screen.queryByText("Session Expired")).not.toBeInTheDocument();
+        expect(screen.queryByText("Not Connected")).not.toBeInTheDocument();
       });
+    });
+  });
+
+  /**
+   * BACKLOG-3156 stage C — the Messages section takes the same shape as its two
+   * siblings.
+   *
+   * Emails and Contacts each open with a `Sources` eyebrow above their source
+   * cards; Messages had the card (the import-source picker) and not the
+   * eyebrow, so the "one shape" the redesign promised stopped one section
+   * short. The eyebrow now lives in `ImportSourceSettings`, which
+   * `Settings.tsx` renders above BOTH message panels — the macOS one and the
+   * Android one — so neither has to carry a copy.
+   *
+   * The order is asserted HERE, against the real composition in `Settings.tsx`,
+   * rather than in the panel's own suite: the sources block and the preferences
+   * block live in different components, and a test that assembled them itself
+   * would be asserting the order of its own fixture.
+   */
+  describe("Messages section shape (BACKLOG-3156)", () => {
+    it("runs Sources -> Import Preferences -> actions", async () => {
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+
+      const sourcesBlock = await screen.findByTestId("messages-block-sources");
+      const preferences = await screen.findByTestId("messages-block-preferences");
+      const actions = await screen.findByTestId("messages-block-actions");
+
+      expect(
+        `sources then preferences: ${
+          (sourcesBlock.compareDocumentPosition(preferences) & 4) !== 0
+        }`,
+      ).toBe("sources then preferences: true");
+      expect(
+        `preferences then actions: ${
+          (preferences.compareDocumentPosition(actions) & 4) !== 0
+        }`,
+      ).toBe("preferences then actions: true");
+    });
+
+    /**
+     * The Android branch, asserted separately and for a specific reason.
+     *
+     * `AndroidMessagesSettings.tsx` does NOT render `ImportSourceSettings` —
+     * checked, it contains no reference to it. It does not need to: the picker
+     * is its SIBLING one level up, rendered by `Settings.tsx` above the
+     * `activeImportSource === 'android-companion'` ternary, inside the same
+     * `space-y-4` wrapper. So both branches of that ternary get the same
+     * Sources block from the same element, and neither panel carries a copy.
+     *
+     * A reader cannot verify that from either panel's source, which is exactly
+     * why it is asserted here — with the macOS panel's absence checked too, so
+     * the test cannot pass by silently having rendered the other branch.
+     */
+    it("Android: the same Sources block sits above the Android panel", async () => {
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
+        success: true,
+        preferences: {
+          export: { defaultFormat: "combined-pdf" },
+          messages: { source: "android-companion" },
+        },
+      });
+
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+
+      const sourcesBlock = await screen.findByTestId("messages-block-sources");
+      const preferences = await screen.findByTestId("android-block-preferences");
+      const actions = await screen.findByTestId("android-block-actions");
+
+      // This really is the Android branch, not the macOS one.
+      expect(screen.queryByTestId("macos-messages-import")).not.toBeInTheDocument();
+
+      expect(
+        `sources then android preferences: ${
+          (sourcesBlock.compareDocumentPosition(preferences) & 4) !== 0
+        }`,
+      ).toBe("sources then android preferences: true");
+      expect(
+        `android preferences then actions: ${
+          (preferences.compareDocumentPosition(actions) & 4) !== 0
+        }`,
+      ).toBe("android preferences then actions: true");
+      expect(within(sourcesBlock).getByText("Sources")).toBeInTheDocument();
+    });
+
+    /**
+     * BACKLOG-3156 stage E rewrote what this asserts, because the thing it
+     * reached for is gone.
+     *
+     * It used to pin `Sources` (the eyebrow) above `Import Source` (an `<h4>`
+     * inside the card) — two headings for one block, which is the doubling the
+     * founder reported on the shipped screen. The `<h4>` was deleted, so an
+     * assertion naming it could only be deleted or rewritten; deleting it would
+     * leave the block's shape unasserted, which is how this file has drifted
+     * three times.
+     *
+     * The shape it holds instead is the one the approved artifact draws: the
+     * block IS the card, the eyebrow is that card's FIRST CHILD, and the
+     * description is the line under it — the slot the `<h4>` used to occupy. It
+     * is asserted here rather than in the panel's own suite for the reason the
+     * surrounding describe() gives: this is the real composition from
+     * `Settings.tsx`, not a fixture the test assembled.
+     */
+    it("makes the Sources block one card whose first line is its own label", async () => {
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+
+      const card = await screen.findByTestId("messages-block-sources");
+
+      // The block and the card are the same element — nothing wraps it.
+      expect(card.className).toMatch(/(^|\s)rounded-lg(\s|$)/);
+      expect(card.className).toMatch(/(^|\s)border(\s|$)/);
+
+      // The eyebrow is the card's first child, INSIDE it.
+      const eyebrow = within(card).getByText("Sources");
+      expect(card.firstElementChild).toBe(eyebrow);
+
+      // The description is the next line, still inside the same card.
+      const description = within(card).getByText(
+        "Choose where to import your text messages from.",
+      );
+      expect(eyebrow.nextElementSibling).toBe(description);
+
+      // …and the card opens with the eyebrow, not with a heading repeating it.
+      expect(card.querySelector("h1,h2,h3,h4,h5,h6")).toBeNull();
+      expect(within(card).queryByText("Import Source")).toBeNull();
     });
   });
 
@@ -1053,18 +1259,31 @@ describe("Settings", () => {
 
       // ...but the Messages section + Android device/status management remain.
       expect(container.querySelector("#settings-messages")).toBeInTheDocument();
-      // BACKLOG-2468: scoped to the HEADING, not bare text. "Android Companion" appears TWICE
-      // inside #settings-messages — AndroidMessagesSettings.tsx:174 renders it as the <h4> section
-      // header (what this assertion is about), and ImportSourceSettings.tsx:308 renders it as the
-      // label of the import-source radio. Whether the radio renders depends on `usePlatform()`, so
-      // a bare findByText passed under plain-node jest and threw "Found multiple elements" under
-      // ELECTRON_RUN_AS_NODE — the route the pre-push hook picks when the native module rests on
-      // the Electron ABI. The <h4> is the only heading with this name anywhere in src/, so the
-      // role-scoped query names the device/status section in either runtime. Scoped rather than
-      // widened to getAllByText on purpose: a length assertion would encode a count nobody chose.
+      // BACKLOG-2468 scoped this to the HEADING rather than bare text, because
+      // "Android Companion" appeared TWICE inside #settings-messages: as the
+      // panel's own <h4> (what this assertion is about) and as the label of the
+      // import-source radio. Whether the radio renders depends on
+      // `usePlatform()`, so a bare findByText passed under plain-node jest and
+      // threw "Found multiple elements" under ELECTRON_RUN_AS_NODE — the route
+      // the pre-push hook picks when the native module rests on the Electron
+      // ABI. The <h4> was the only heading with the name, so the role-scoped
+      // query worked in either runtime.
+      //
+      // BACKLOG-3156 stage E deleted that <h4>: Emails and Contacts open
+      // straight onto their first card, and carrying a panel header on Messages
+      // alone was the divergence the shared shape forbids. The words now appear
+      // exactly ONCE on the screen — on the radio — so neither the heading query
+      // nor a text query can name the panel any more.
+      //
+      // The anchor moves to the panel's own testids, which is what the claim was
+      // always about: the Android device/status management rendered. Both are
+      // checked, and both are absent whenever the panel is absent, in either
+      // runtime and regardless of what the radio does.
       expect(
-        await screen.findByRole("heading", { name: "Android Companion" }),
+        await screen.findByTestId("android-block-preferences"),
       ).toBeInTheDocument();
+      expect(screen.getByTestId("android-block-actions")).toBeInTheDocument();
+      expect(container.querySelector("#settings-android-companion")).toBeInTheDocument();
     });
 
     it("does NOT render the wizard for a non-Android import source either", async () => {
@@ -1077,13 +1296,46 @@ describe("Settings", () => {
 
   // BACKLOG-1937: merged iPhone Sync category + gray-out gating
   describe("iPhone Sync Category (BACKLOG-1937)", () => {
-    it("should show an 'iPhone Sync' tab and no longer a 'Sync' tab", async () => {
+    // BACKLOG-3423: the nav entry is gone for every user on every platform; the
+    // SECTION stays on the page, grayed out, so a user can see the feature is
+    // there and currently off.
+    //
+    // The tab and the section <h3> render the SAME literal text, "iPhone Sync",
+    // so a bare `getAllByText("iPhone Sync")` cannot tell them apart. The
+    // previous assertion here (`.length >= 1`) was measured against the tab
+    // deletion and stayed GREEN — it could not see the change at all. Both
+    // assertions below are therefore anchored: one inside the tab strip, one
+    // inside `#settings-iphone-sync`.
+    it("should NOT offer an 'iPhone Sync' nav tab (BACKLOG-3423)", async () => {
       await renderSettings({ userId: mockUserId, onClose: mockOnClose });
 
-      // New tab present (label appears in the tab bar + the category <h3>)
-      expect(screen.getAllByText("iPhone Sync").length).toBeGreaterThanOrEqual(1);
-      // Old standalone "Sync" tab gone
-      expect(screen.queryByText("Sync")).not.toBeInTheDocument();
+      // Anti-vacuity: the strip rendered and has tabs, so a "no iPhone tab"
+      // result cannot come from an empty or missing tab bar.
+      const tabStrip = screen.getByTestId("settings-tabs");
+      expect(within(tabStrip).getAllByRole("tab").length).toBeGreaterThan(0);
+
+      // No iPhone Sync entry among them — checked by testid and by accessible
+      // name, scoped to the strip so the section <h3> cannot satisfy either.
+      expect(screen.queryByTestId("settings-tab-iphone-sync")).not.toBeInTheDocument();
+      expect(
+        within(tabStrip).queryByRole("tab", { name: "iPhone Sync" }),
+      ).not.toBeInTheDocument();
+      // Old standalone "Sync" tab gone as well
+      expect(within(tabStrip).queryByRole("tab", { name: "Sync" })).not.toBeInTheDocument();
+    });
+
+    it("still shows the iPhone Sync section heading on the page (BACKLOG-3423)", async () => {
+      const { container } = await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+
+      const section = container.querySelector<HTMLElement>("#settings-iphone-sync");
+      expect(section).toBeInTheDocument();
+
+      // The section's own heading, scoped inside the section. `name` is an
+      // exact string match, so the <h4>iPhone Sync (USB)</h4> that the toggle
+      // renders inside this same section does NOT satisfy it.
+      expect(
+        within(section as HTMLElement).getByRole("heading", { name: "iPhone Sync" }),
+      ).toBeInTheDocument();
     });
 
     it("should render the iPhone Sync category section anchor", async () => {
@@ -1168,6 +1420,102 @@ describe("Settings", () => {
       expect(
         screen.queryByText(/available when your import source is set to iphone/i),
       ).not.toBeInTheDocument();
+    });
+  });
+
+  // BACKLOG-3423: the source radio must re-gate iPhone USB detection live.
+  // These render Settings inside the REAL IPhoneSyncProvider — the tests above
+  // deliberately do not, and so exercise the provider-less fallback. Without the
+  // provider none of this is observable: it owns the enablement and the single
+  // `useIPhoneSync` instance that talks to `window.api.sync`.
+  describe("iPhone Sync source gate — the Settings wire (BACKLOG-3423)", () => {
+    const syncApi = () =>
+      (window as unknown as {
+        api: { sync: { startDetection: jest.Mock; stopDetection: jest.Mock } };
+      }).api.sync;
+
+    beforeEach(() => {
+      (window as unknown as { api: Record<string, unknown> }).api.sync = {
+        startDetection: jest.fn(),
+        stopDetection: jest.fn(),
+        getUnifiedStatus: jest
+          .fn()
+          .mockResolvedValue({ isAnyOperationRunning: false, currentOperation: null }),
+        start: jest.fn().mockResolvedValue({ success: true }),
+        cancel: jest.fn().mockResolvedValue(undefined),
+        onDeviceConnected: jest.fn(() => jest.fn()),
+        onDeviceDisconnected: jest.fn(() => jest.fn()),
+        onProgress: jest.fn(() => jest.fn()),
+        onPasswordRequired: jest.fn(() => jest.fn()),
+        onError: jest.fn(() => jest.fn()),
+        onComplete: jest.fn(() => jest.fn()),
+        onWaitingForPasscode: jest.fn(() => jest.fn()),
+        onPasscodeEntered: jest.fn(() => jest.fn()),
+        onStorageComplete: jest.fn(() => jest.fn()),
+        onStorageError: jest.fn(() => jest.fn()),
+      };
+
+      // The founder's stored state on 2026-09-17: the USB opt-in is ON and the
+      // source is macOS Messages. Preferences follow the account, which is why a
+      // clean QA profile still showed the toggle ON.
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
+        success: true,
+        preferences: {
+          export: { defaultFormat: "combined-pdf" },
+          integrations: { iphoneSyncEnabled: true },
+          messages: { source: "macos-native" },
+        },
+      });
+    });
+
+    const renderWithSyncProvider = async () => {
+      const result = render(
+        <NotificationProvider>
+          <PlatformProvider>
+            <IPhoneSyncProvider userId={mockUserId}>
+              <Settings userId={mockUserId} onClose={mockOnClose} />
+            </IPhoneSyncProvider>
+          </PlatformProvider>
+        </NotificationProvider>,
+      );
+      await waitFor(() => {
+        expect(screen.queryByText("Loading settings...")).not.toBeInTheDocument();
+      });
+      return result;
+    };
+
+    const usbToggle = () =>
+      screen.getByRole("switch", { name: /enable iphone sync over usb/i });
+
+    it("starts detection when the source changes to iPhone, and stops it on the way back", async () => {
+      await renderWithSyncProvider();
+
+      // macOS Messages + stored ON: nothing may be detecting.
+      await waitFor(() => expect(usbToggle()).toHaveAttribute("aria-checked", "false"));
+      expect(syncApi().startDetection).not.toHaveBeenCalled();
+
+      await userEvent.click(screen.getByRole("radio", { name: /iPhone Sync/i }));
+
+      await waitFor(() => expect(syncApi().startDetection).toHaveBeenCalled());
+      expect(usbToggle()).toHaveAttribute("aria-checked", "true");
+
+      await userEvent.click(screen.getByRole("radio", { name: /macOS Messages/i }));
+
+      await waitFor(() => expect(syncApi().stopDetection).toHaveBeenCalled());
+      expect(usbToggle()).toHaveAttribute("aria-checked", "false");
+    });
+
+    it("writes only the source — the stored iPhone-sync opt-in is left alone", async () => {
+      await renderWithSyncProvider();
+
+      await userEvent.click(screen.getByRole("radio", { name: /iPhone Sync/i }));
+      await userEvent.click(screen.getByRole("radio", { name: /macOS Messages/i }));
+
+      const writtenKeys = jest
+        .mocked(window.api.preferences.update)
+        .mock.calls.flatMap((call) => Object.keys(call[1] ?? {}));
+      expect(writtenKeys).toContain("messages");
+      expect(writtenKeys).not.toContain("integrations");
     });
   });
 

@@ -18,12 +18,14 @@
 
 import Database from "better-sqlite3-multiple-ciphers";
 import type { Database as DatabaseType } from "better-sqlite3";
-import log from "electron-log";
+import { hostLogger } from "../capabilities/loggerProvider";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
-import { app, dialog } from "electron";
-import * as Sentry from "@sentry/electron/main";
+import { hostAppLifecycle } from "../capabilities/appLifecycleProvider";
+import { hostAppPaths } from "../capabilities/appPathsProvider";
+import { hostDialog } from "../capabilities/dialogProvider";
+import { hostErrorReporter } from "../capabilities/errorReporterProvider";
 import logService from "./logService";
 import {
   setDb,
@@ -32,6 +34,33 @@ import {
   closeDb,
   vacuumDb,
 } from "./db/core/dbConnection";
+import { SCHEMA_VERSION_SQL } from "./db/storageDiagnosticsSql";
+// BACKLOG-2551: migration v71's SQL text lives in the db layer and is imported, per
+// the SQL boundary rule. Importing a const string is not a service call — the
+// migration body still uses only the handle the runner passes it.
+import {
+  V71_ATTACHMENTS_TABLE_INFO_SQL,
+  V71_ADD_PROVIDER_COLUMN_SQL,
+  V71_SELECT_DUPLICATE_ATTACHMENTS_SQL,
+  V71_COALESCE_DESCRIPTIVE_COLUMNS_SQL,
+  V71_MERGE_CLASSIFICATION_TRIPLE_SQL,
+  V71_REPOINT_CLASSIFICATION_FEEDBACK_SQL,
+  V71_DELETE_ATTACHMENT_SQL,
+  V71_CREATE_PROVIDER_INDEX_SQL,
+  V71_SELECT_THREAD_NAMES_DDL_SQL,
+  V71_CREATE_THREAD_NAMES_NEW_SQL,
+  V71_COUNT_THREAD_NAMES_SQL,
+  V71_COPY_THREAD_NAMES_SQL,
+  V71_DROP_THREAD_NAMES_SQL,
+  V71_RENAME_THREAD_NAMES_SQL,
+  V71_RECREATE_THREAD_NAME_INDEX_SQL,
+} from "./db/migrationV71Sql";
+import {
+  SCHEMA_VERSION_UPDATE_SQL,
+  SCHEMA_VERSION_TABLE_EXISTS_SQL,
+  CONNECTIVITY_PROBE_SQL,
+} from "./db/databaseLifecycleSql";
+import { LOCAL_USER_ID_AND_EMAIL_SQL } from "./db/localUserSql";
 
 // Import types
 import type {
@@ -173,7 +202,7 @@ class DatabaseService implements IDatabaseService {
     // BACKLOG-1842 (resume-at-step fix round): test-only seam to reproduce
     // the "relaunch reaches auth/onboarding reads before the local DB is
     // ready" race on demand, without depending on real memory pressure.
-    // Double-gated (!app.isPackaged && KEEPR_TEST_DB_DELAY set) so it is DEAD
+    // Double-gated (!hostAppLifecycle.isPackaged() && KEEPR_TEST_DB_DELAY set) so it is DEAD
     // CODE in any packaged/shipped build, mirroring the KEEPR_E2E gates in
     // permissionHandlers.ts. Value is milliseconds to sleep before DB init
     // proceeds -- e.g. `KEEPR_TEST_DB_DELAY=5000 npm run dev` delays DB
@@ -181,7 +210,7 @@ class DatabaseService implements IDatabaseService {
     // get-phone-type, check-email-onboarding, check-all-connections, the
     // onboarding resume-marker flow) can be exercised against a real race
     // instead of only unit-test mocks.
-    if (!app.isPackaged && process.env.KEEPR_TEST_DB_DELAY) {
+    if (!hostAppLifecycle.isPackaged() && process.env.KEEPR_TEST_DB_DELAY) {
       const delayMs = parseInt(process.env.KEEPR_TEST_DB_DELAY, 10);
       if (Number.isFinite(delayMs) && delayMs > 0) {
         await logService.warn(
@@ -193,7 +222,7 @@ class DatabaseService implements IDatabaseService {
     }
 
     try {
-      const userDataPath = app.getPath("userData");
+      const userDataPath = hostAppPaths.userData();
       this.dbPath = path.join(userDataPath, "mad.db");
 
       await logService.info("Initializing database", "DatabaseService", { path: this.dbPath });
@@ -300,7 +329,7 @@ class DatabaseService implements IDatabaseService {
         });
 
         // Migration failed -- attempt auto-restore from pre-migration backup
-        log.error("[DatabaseService] Migration FAILED:", migrationError instanceof Error ? migrationError.message : String(migrationError));
+        hostLogger.error("[DatabaseService] Migration FAILED:", migrationError instanceof Error ? migrationError.message : String(migrationError));
         await logService.error("Migration failed, attempting auto-restore", "DatabaseService", {
           error: migrationError instanceof Error ? migrationError.message : String(migrationError),
         });
@@ -308,7 +337,7 @@ class DatabaseService implements IDatabaseService {
         const restoreResult = await this._attemptAutoRestore(migrationError);
 
         // Report to Sentry with migration failure tags
-        Sentry.captureException(migrationError, {
+        hostErrorReporter.captureException(migrationError, {
           tags: {
             service: "database-service",
             operation: "runMigrations",
@@ -319,8 +348,8 @@ class DatabaseService implements IDatabaseService {
         });
 
         // Ensure app is ready before showing dialog
-        if (!app.isReady()) {
-          await app.whenReady();
+        if (!hostAppLifecycle.isReady()) {
+          await hostAppLifecycle.whenReady();
         }
 
         if (restoreResult.restored) {
@@ -335,7 +364,7 @@ class DatabaseService implements IDatabaseService {
           // 2999 defect behind it, in the same commit. Do not "fix" 2834 by
           // deleting this boundary: the no-quit assertion in
           // databaseService.migration-restore.test.ts pins it.
-          dialog.showMessageBox({
+          hostDialog.showMessageBox({
             type: "warning",
             title: "Database Update Notice",
             message: "A database update failed, but your data has been restored.",
@@ -383,7 +412,7 @@ class DatabaseService implements IDatabaseService {
           // whereas this user's data may well be recoverable and those
           // scripts would destroy it. The path is appended because it is the
           // first thing support asks for.
-          await dialog.showMessageBox({
+          await hostDialog.showMessageBox({
             type: "error",
             title: "Database Update Failed",
             message: "A database update failed and could not be automatically fixed.",
@@ -395,7 +424,7 @@ class DatabaseService implements IDatabaseService {
 
           // Flush before any exit path so the migration_failure event
           // survives it (BACKLOG-1576 precedent).
-          await Sentry.flush(2000);
+          await hostErrorReporter.flush(2000);
 
           // THE FLAG IS NOT THE FIX — THE THROW IS. Quitting is a
           // startup-specific remedy and it defaults OFF. Forgetting the
@@ -409,7 +438,7 @@ class DatabaseService implements IDatabaseService {
           // Destructive beats annoying, so the destructive outcome is the
           // one that has to be opted into.
           if (options?.quitOnUnrecoverableFailure) {
-            app.quit();
+            hostAppLifecycle.quit();
           }
 
           throw new MigrationRecoveryFailedError(
@@ -441,7 +470,8 @@ class DatabaseService implements IDatabaseService {
         // and documents the case as informational), and LoadingOrchestrator
         // reads `retryable` only into a Sentry extra. What actually stops a
         // retry loop on an unfixable database is the sequence below: the user
-        // is TOLD (dialog, awaited), and then the app EXITS (app.quit()) —
+        // is TOLD (dialog, awaited), and then the app EXITS
+        // (hostAppLifecycle.quit()) —
         // quit makes renderer state moot. Do not "fix" a future retry bug by
         // teaching the reducer about retryable; the dialog+quit is the
         // load-bearing surface, by SR ruling on this item.
@@ -454,7 +484,7 @@ class DatabaseService implements IDatabaseService {
           foundVersion: error.foundVersion,
           path: this.dbPath,
         });
-        Sentry.captureException(error, {
+        hostErrorReporter.captureException(error, {
           tags: {
             service: "database-service",
             operation: "initialize",
@@ -463,10 +493,10 @@ class DatabaseService implements IDatabaseService {
         });
         // Flush before the quit path so the event survives the exit
         // (BACKLOG-1576 precedent on the auto-restore path).
-        await Sentry.flush(2000);
+        await hostErrorReporter.flush(2000);
 
-        if (!app.isReady()) {
-          await app.whenReady();
+        if (!hostAppLifecycle.isReady()) {
+          await hostAppLifecycle.whenReady();
         }
         // ORDER IS LOAD-BEARING: the dialog is AWAITED, then quit. Dropping
         // the await would exit mid-dialog — the user would never learn why
@@ -479,7 +509,7 @@ class DatabaseService implements IDatabaseService {
         // hand-deleted folder leaves a stale key behind and produces a
         // different, more confusing failure. No retry is offered — there is
         // nothing to retry.
-        await dialog.showMessageBox({
+        await hostDialog.showMessageBox({
           type: "error",
           title: "Database from an older version",
           message: "This database was created by an older version of Keepr and cannot be opened.",
@@ -496,7 +526,7 @@ class DatabaseService implements IDatabaseService {
             `Database: ${this.dbPath ?? "unknown"}`,
           buttons: ["Quit"],
         });
-        app.quit();
+        hostAppLifecycle.quit();
         throw error;
       }
 
@@ -512,7 +542,7 @@ class DatabaseService implements IDatabaseService {
       await logService.error("Failed to initialize database", "DatabaseService", {
         error: error instanceof Error ? error.message : String(error),
       });
-      Sentry.captureException(error, {
+      hostErrorReporter.captureException(error, {
         tags: { service: "database-service", operation: "initialize" },
       });
       throw error;
@@ -595,7 +625,7 @@ class DatabaseService implements IDatabaseService {
       } catch {
         /* ignore */
       }
-      log.warn(
+      hostLogger.warn(
         "[BaselineFence] readonly open failed — deferring to the read-write open (cannot-open is not pre-reset):",
         openError instanceof Error ? openError.message : String(openError),
       );
@@ -642,9 +672,7 @@ class DatabaseService implements IDatabaseService {
     let foundVersion: number | undefined;
 
     try {
-      const svTable = db
-        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'")
-        .get();
+      const svTable = db.prepare(SCHEMA_VERSION_TABLE_EXISTS_SQL).get();
       if (!svTable) {
         const userObjects = (
           db
@@ -658,7 +686,7 @@ class DatabaseService implements IDatabaseService {
           "This database has user tables but no schema_version table — it predates " +
           `the schema baseline (version ${baseline}) and cannot be upgraded.`;
       } else {
-        const row = db.prepare("SELECT version FROM schema_version WHERE id = 1").get() as
+        const row = db.prepare(SCHEMA_VERSION_SQL).get() as
           | { version: unknown }
           | undefined;
         const version = row?.version;
@@ -673,17 +701,30 @@ class DatabaseService implements IDatabaseService {
             `schema baseline (version ${baseline}). The migration chain that could ` +
             "have upgraded it no longer exists.";
         } else {
-          if (version > baseline) {
-            log.warn(
+          // BACKLOG-2551: compare against the LATEST version this build ships, not
+          // the baseline. The two were the same only while MIGRATIONS was empty.
+          // Once v71 ships, every database sits at 71 with the baseline still 70,
+          // so a `version > baseline` test would fire on EVERY launch for EVERY
+          // user and say something untrue ("written by a newer build") — polluting
+          // the exact support diagnostics this line exists to serve.
+          //
+          // The REFUSAL predicate above (`version < baseline`) is deliberately
+          // untouched: that is the load-bearing half, and it must keep refusing
+          // pre-reset databases. This changes only when the warning speaks, making
+          // the predicate four-way: below baseline refuse, baseline..latest silent,
+          // above latest warn. That is what the warning always meant.
+          const latest = this.getLatestSchemaVersion();
+          if (version > latest) {
+            hostLogger.warn(
               `[BaselineFence] database schema_version ${version} is ABOVE this build's ` +
-                `baseline ${baseline} — written by a newer build; proceeding.`,
+                `latest schema version ${latest} — written by a newer build; proceeding.`,
             );
           }
           return;
         }
       }
     } catch (readError) {
-      log.warn(
+      hostLogger.warn(
         `[BaselineFence] could not evaluate the baseline predicate via ${via} — ` +
           "neither refusing nor accepting; the existing open/migration pipeline decides:",
         readError instanceof Error ? readError.message : String(readError),
@@ -758,10 +799,10 @@ class DatabaseService implements IDatabaseService {
         CREATE INDEX IF NOT EXISTS idx_failure_log_timestamp ON failure_log(timestamp);
         CREATE INDEX IF NOT EXISTS idx_failure_log_acknowledged ON failure_log(acknowledged);
       `);
-      log.info("[DatabaseService] failure_log table safety check passed");
+      hostLogger.info("[DatabaseService] failure_log table safety check passed");
     } catch (err) {
       // Log but do not throw -- this is a safety net, not a hard requirement
-      log.warn(
+      hostLogger.warn(
         "[DatabaseService] failure_log safety check failed:",
         err instanceof Error ? err.message : String(err)
       );
@@ -894,7 +935,7 @@ class DatabaseService implements IDatabaseService {
       await logService.error("Database encryption migration failed", "DatabaseService", {
         error: error instanceof Error ? error.message : String(error),
       });
-      Sentry.captureException(error, {
+      hostErrorReporter.captureException(error, {
         tags: { service: "database-service", operation: "_migrateToEncryptedDatabase" },
       });
 
@@ -992,7 +1033,7 @@ class DatabaseService implements IDatabaseService {
       setEncryptionKey(this.encryptionKey);
 
       try {
-        const probe = newDb.prepare("SELECT 1 AS ok").get() as { ok: number } | undefined;
+        const probe = newDb.prepare(CONNECTIVITY_PROBE_SQL).get() as { ok: number } | undefined;
         if (!probe || probe.ok !== 1) {
           throw new Error("Post-restore connectivity check returned unexpected result");
         }
@@ -1048,10 +1089,10 @@ class DatabaseService implements IDatabaseService {
     try {
       const tables = currentDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users_local'").all();
       if (tables.length > 0) {
-        const user = currentDb.prepare("SELECT id, email FROM users_local LIMIT 1").get() as { id: string; email?: string } | undefined;
+        const user = currentDb.prepare(LOCAL_USER_ID_AND_EMAIL_SQL).get() as { id: string; email?: string } | undefined;
         if (user?.id) {
-          Sentry.setUser({ id: user.id, email: user.email || undefined });
-          Sentry.addBreadcrumb({
+          hostErrorReporter.setUser({ id: user.id, email: user.email || undefined });
+          hostErrorReporter.addBreadcrumb({
             category: "database",
             message: "Pre-migration user context set",
             level: "info",
@@ -1083,13 +1124,11 @@ class DatabaseService implements IDatabaseService {
     let willRunMigration = true;
     if (this.dbPath && fs.existsSync(this.dbPath)) {
       try {
-        const svTableRow = currentDb
-          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'")
-          .get();
+        const svTableRow = currentDb.prepare(SCHEMA_VERSION_TABLE_EXISTS_SQL).get();
         if (svTableRow) {
           const dbVersion = (
             currentDb
-              .prepare("SELECT version FROM schema_version WHERE id = 1")
+              .prepare(SCHEMA_VERSION_SQL)
               .get() as { version: number } | undefined
           )?.version ?? 0;
           willRunMigration = dbVersion < latestMigrationVersion;
@@ -1116,7 +1155,7 @@ class DatabaseService implements IDatabaseService {
         await logService.info(`Pre-migration backup created: ${bkPath}`, "DatabaseService");
       } catch (backupError) {
         await logService.warn("Pre-migration backup failed", "DatabaseService", { error: backupError instanceof Error ? backupError.message : String(backupError) });
-        Sentry.captureException(backupError, {
+        hostErrorReporter.captureException(backupError, {
           tags: { service: "database-service", operation: "runMigrations.backup" },
         });
       }
@@ -1130,13 +1169,11 @@ class DatabaseService implements IDatabaseService {
     // pre-migration state (covers mid-migration crash + retry).
     if (this.dbPath && fs.existsSync(this.dbPath)) {
       try {
-        const svTableRow = currentDb
-          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'")
-          .get();
+        const svTableRow = currentDb.prepare(SCHEMA_VERSION_TABLE_EXISTS_SQL).get();
         if (svTableRow) {
           const dbVersion = (
             currentDb
-              .prepare("SELECT version FROM schema_version WHERE id = 1")
+              .prepare(SCHEMA_VERSION_SQL)
               .get() as { version: number } | undefined
           )?.version ?? 0;
           if (dbVersion < 41) {
@@ -1175,13 +1212,13 @@ class DatabaseService implements IDatabaseService {
       await logService.error("Failed to run migrations", "DatabaseService", {
         error: error instanceof Error ? error.message : String(error),
       });
-      Sentry.captureException(error, {
+      hostErrorReporter.captureException(error, {
         tags: { service: "database-service", operation: "runMigrations" },
       });
       // BACKLOG-1576: Flush Sentry before re-throwing so the event
       // (with user context) is guaranteed to be sent even if the
       // process exits quickly after the auto-restore flow.
-      await Sentry.flush(2000);
+      await hostErrorReporter.flush(2000);
       throw error;
     }
 
@@ -1259,7 +1296,80 @@ class DatabaseService implements IDatabaseService {
    * (databaseService.schema-parity.test.ts) — see BACKLOG-2551 / BACKLOG-2807
    * for the pattern.
    */
-  static readonly MIGRATIONS: MigrationEntry[] = [];
+  static readonly MIGRATIONS: MigrationEntry[] = [
+    {
+      version: 71,
+      description:
+        "BACKLOG-2551 attachments.provider_attachment_id + partial unique index (dedup on storage_path); " +
+        "BACKLOG-2839 message_thread_names non-blank display_name CHECK (table rebuild)",
+      // Runs SYNCHRONOUSLY inside currentDb.transaction(...), so this body uses raw
+      // d.prepare / d.exec only and never calls a db/ service. foreign_keys is OFF
+      // for the whole loop (see _runVersionedMigrations) -- which is why the
+      // classification_feedback re-point below is explicit rather than left to
+      // ON DELETE SET NULL.
+      migrate: (d) => {
+        // ------------------------------------------------------------------
+        // BACKLOG-2551
+        // ------------------------------------------------------------------
+        // Guarded: a FRESH install already has the column from schema.sql and
+        // still runs v71 (schema_version is seeded at BASELINE 70), so this must
+        // be a no-op there. Also makes the whole migration re-runnable.
+        const hasCol = (
+          d.prepare(V71_ATTACHMENTS_TABLE_INFO_SQL).all() as Array<{ name: string }>
+        ).some((c) => c.name === "provider_attachment_id");
+        if (!hasCol) {
+          d.exec(V71_ADD_PROVIDER_COLUMN_SQL);
+        }
+
+        const losers = d
+          .prepare(V71_SELECT_DUPLICATE_ATTACHMENTS_SQL)
+          .all() as Array<{ loser: string; keep: string }>;
+
+        const coalesce = d.prepare(V71_COALESCE_DESCRIPTIVE_COLUMNS_SQL);
+        const triple = d.prepare(V71_MERGE_CLASSIFICATION_TRIPLE_SQL);
+        const repoint = d.prepare(V71_REPOINT_CLASSIFICATION_FEEDBACK_SQL);
+        const drop = d.prepare(V71_DELETE_ATTACHMENT_SQL);
+
+        for (const l of losers) {
+          coalesce.run(l.loser, l.loser, l.loser, l.loser, l.loser, l.keep);
+          triple.run(l.loser, l.loser, l.loser, l.keep, l.loser, l.loser);
+          repoint.run(l.keep, l.loser);
+          drop.run(l.loser);
+        }
+
+        d.exec(V71_CREATE_PROVIDER_INDEX_SQL);
+
+        // ------------------------------------------------------------------
+        // BACKLOG-2839 -- SQLite has no ALTER TABLE ADD CONSTRAINT: rebuild.
+        // ------------------------------------------------------------------
+        const existingSql =
+          (
+            d.prepare(V71_SELECT_THREAD_NAMES_DDL_SQL).get() as
+              | { sql: string }
+              | undefined
+          )?.sql ?? "";
+        let blankNamesDropped = 0;
+        if (!existingSql.includes("trim(display_name")) {
+          d.exec(V71_CREATE_THREAD_NAMES_NEW_SQL);
+          const total = (
+            d.prepare(V71_COUNT_THREAD_NAMES_SQL).get() as { n: number }
+          ).n;
+          const kept = d.prepare(V71_COPY_THREAD_NAMES_SQL).run().changes;
+          d.exec(V71_DROP_THREAD_NAMES_SQL);
+          d.exec(V71_RENAME_THREAD_NAMES_SQL);
+          d.exec(V71_RECREATE_THREAD_NAME_INDEX_SQL);
+          blankNamesDropped = total - kept;
+        }
+
+        // Field evidence: whether the 2551 race has actually fired on a real
+        // machine is learned from this COUNT, never by reading anyone's rows.
+        hostLogger.info(
+          `[v71] deduped ${losers.length} duplicate attachment row(s); ` +
+            `dropped ${blankNamesDropped} blank thread name(s)`,
+        );
+      },
+    },
+  ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {
     const seen = new Set<number>();
@@ -1285,9 +1395,7 @@ class DatabaseService implements IDatabaseService {
   }
 
   _ensureSchemaVersionTable(currentDb: DatabaseType): void {
-    const schemaVersionExists = currentDb.prepare(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'"
-    ).get();
+    const schemaVersionExists = currentDb.prepare(SCHEMA_VERSION_TABLE_EXISTS_SQL).get();
 
     if (!schemaVersionExists) {
       currentDb.exec(`
@@ -1318,7 +1426,7 @@ class DatabaseService implements IDatabaseService {
     this._ensureSchemaVersionTable(currentDb);
 
     const currentVersion = (
-      currentDb.prepare("SELECT version FROM schema_version WHERE id = 1").get() as
+      currentDb.prepare(SCHEMA_VERSION_SQL).get() as
         { version: number } | undefined
     )?.version || 0;
 
@@ -1390,7 +1498,7 @@ class DatabaseService implements IDatabaseService {
           const runInTransaction = currentDb.transaction(() => {
             m.migrate(currentDb);
             currentDb.prepare(
-              "UPDATE schema_version SET version = ?, updated_at = CURRENT_TIMESTAMP, migrated_at = datetime('now') WHERE id = 1"
+              SCHEMA_VERSION_UPDATE_SQL
             ).run(m.version);
           });
           runInTransaction();
@@ -1540,8 +1648,31 @@ class DatabaseService implements IDatabaseService {
     return contactDb.getUnimportedContactsByUserId(userId);
   }
 
-  async markContactAsImported(contactId: string, source?: string): Promise<void> {
+  /** Synchronous: called inside `contacts:import`'s transaction (BACKLOG-3220). */
+  markContactAsImported(contactId: string, source?: string): void {
     return contactDb.markContactAsImported(contactId, source);
+  }
+
+  /**
+   * The synchronous email backfill, for callers inside a `dbTransaction`
+   * callback (BACKLOG-3220). The async `backfillContactEmails` below delegates
+   * to the same core; calling THAT inside a transaction loses its error path.
+   */
+  backfillContactEmailsSync(
+    contactId: string,
+    emails: string[],
+    source?: ContactInfoSource,
+  ): number {
+    return contactDb.backfillContactEmailsSync(contactId, emails, source);
+  }
+
+  /** The synchronous phone backfill — see `backfillContactEmailsSync`. */
+  backfillContactPhonesSync(
+    contactId: string,
+    phones: string[],
+    source?: ContactInfoSource,
+  ): number {
+    return contactDb.backfillContactPhonesSync(contactId, phones, source);
   }
 
   async backfillContactEmails(
@@ -1725,6 +1856,21 @@ class DatabaseService implements IDatabaseService {
    */
   stampFirstExportedAt(transactionId: string, timestamp: string): boolean {
     return transactionDb.stampFirstExportedAt(transactionId, timestamp);
+  }
+
+  /**
+   * BACKLOG-2549 — record an export completion as ONE statement, so
+   * `export_status` and the BACKLOG-2013 freeze marker can never flip
+   * separately. SYNCHRONOUS, mirroring `stampFirstExportedAt` above rather than
+   * the async `updateTransaction`: an async wrapper over a sync primitive turns
+   * a throw into a rejection, which is the shape `syncTwin.guard.test.ts`
+   * forbids.
+   */
+  recordExportCompletion(
+    transactionId: string,
+    params: transactionDb.ExportCompletionParams,
+  ): void {
+    return transactionDb.recordExportCompletion(transactionId, params);
   }
 
   async deleteTransaction(transactionId: string): Promise<void> {
@@ -1996,7 +2142,7 @@ class DatabaseService implements IDatabaseService {
       await logService.error("Failed to re-key database", "DatabaseService", {
         error: error instanceof Error ? error.message : String(error),
       });
-      Sentry.captureException(error, {
+      hostErrorReporter.captureException(error, {
         tags: { service: "database-service", operation: "rekeyDatabase" },
       });
       throw error;
@@ -2079,8 +2225,27 @@ class DatabaseService implements IDatabaseService {
     return attachmentDb.getEmailAttachmentByFilename(emailId, filename);
   }
 
-  setEmailAttachmentStorage(id: string, storagePath: string, fileSizeBytes: number) {
-    return attachmentDb.setEmailAttachmentStorage(id, storagePath, fileSizeBytes);
+  /** BACKLOG-2551: the shared insert-vs-reconcile lookup order. */
+  findEmailAttachmentRow(
+    emailId: string,
+    filename: string,
+    providerAttachmentId: string | null
+  ) {
+    return attachmentDb.findEmailAttachmentRow(emailId, filename, providerAttachmentId);
+  }
+
+  setEmailAttachmentStorage(
+    id: string,
+    storagePath: string,
+    fileSizeBytes: number,
+    providerAttachmentId?: string | null
+  ) {
+    return attachmentDb.setEmailAttachmentStorage(
+      id,
+      storagePath,
+      fileSizeBytes,
+      providerAttachmentId
+    );
   }
 
   // BACKLOG-2257: persist locally-extracted text_content onto an attachment row.

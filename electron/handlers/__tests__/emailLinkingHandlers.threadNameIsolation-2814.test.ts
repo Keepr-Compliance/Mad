@@ -74,6 +74,7 @@ const Database = require(
 ) as typeof import("better-sqlite3-multiple-ciphers");
 
 import { setDb } from "../../services/db/core/dbConnection";
+import { confirmEmailLinksByEmailIds } from "../../services/db/communicationDbService";
 import { registerEmailLinkingHandlers } from "../emailLinkingHandlers";
 
 const SCHEMA = fs.readFileSync(
@@ -191,5 +192,39 @@ describe("BACKLOG-2814 — removed-messages loader, group name isolation", () =>
     const rows = await getRemoved();
     expect(rows).toHaveLength(1);
     expect(rows[0].thread_display_name ?? null).toBeNull();
+  });
+});
+
+/**
+ * BACKLOG-2960 (wave 1, lane B round 4) — the confirm handler's returned count.
+ *
+ * `transactions:confirm-email-links` passes `confirmEmailLinksByEmailIds`'s
+ * return value straight out to the renderer as `confirmedCount`.
+ * `TransactionResponse` carries an index signature (`electron/types/handlerTypes.ts:22`),
+ * so that slot accepts any value and the compiler has nothing to say about what
+ * lands in it. At `c81aabfa9` no test read `confirmedCount` at all.
+ *
+ * The assertion below is the one that tells a number apart from a promise of a
+ * number. It drives the REAL registered handler — the module is already mocked
+ * at the seam here, so the mock's shape is the only thing that changes when the
+ * seam becomes promise-returning.
+ *
+ * Written against the UNCONVERTED, synchronous seam and green there
+ * (PR-SOP §6.2c).
+ */
+describe("BACKLOG-2960 — confirm-email-links reports the seam's count", () => {
+  it("returns the count the seam reported", async () => {
+    (confirmEmailLinksByEmailIds as jest.Mock).mockResolvedValue(3);
+
+    const fn = handlers.get("transactions:confirm-email-links");
+    if (!fn) throw new Error("handler not registered");
+
+    const res = (await fn({}, ["e-1", "e-2", "e-3"], TXN)) as {
+      success: boolean;
+      confirmedCount: unknown;
+    };
+
+    expect(res.success).toBe(true);
+    expect(res.confirmedCount).toBe(3);
   });
 });

@@ -126,13 +126,15 @@ class SubmissionSyncService {
             table: "transaction_submissions",
             filter: `submitted_by=eq.${userId}`,
           },
-          async (payload) => {
-            logService.info(
-              "[SyncService] Realtime update received",
-              "SubmissionSyncService",
-              { submissionId: payload.new?.id }
-            );
-            await this.handleRealtimeUpdate(payload.new as CloudSubmissionStatus);
+          (payload) => {
+            void (async () => {
+              logService.info(
+                "[SyncService] Realtime update received",
+                "SubmissionSyncService",
+                { submissionId: payload.new?.id }
+              );
+              await this.handleRealtimeUpdate(payload.new as CloudSubmissionStatus);
+            })();
           }
         )
         .subscribe((status) => {
@@ -291,7 +293,7 @@ class SubmissionSyncService {
     );
 
     // Start interval - guard each tick against uninitialized DB
-    this.syncInterval = setInterval(async () => {
+    const syncTick = async () => {
       if (!this.isDatabaseReady()) {
         logService.debug(
           "[SyncService] Skipping periodic sync tick - database not initialized",
@@ -310,6 +312,9 @@ class SubmissionSyncService {
           tags: { service: "submission-sync", operation: "periodicSync" },
         });
       }
+    };
+    this.syncInterval = setInterval(() => {
+      void syncTick();
     }, this.syncIntervalMs);
 
     // Also run immediately if DB is ready

@@ -12,6 +12,8 @@ import type {
 // shape without gaining a dependency on main-process code. One definition
 // rather than a hand-copied mirror that drifts the first time a column moves.
 import type { TransactionContactResult } from "../../services/db/transactionContactDbService";
+// The one definition of the pre-cache fetch rounds. TYPE-ONLY, same ruling.
+import type { EmailPrecacheStage } from "./emailPrecacheStage";
 
 
 /** BACKLOG-2791: which store a review item came from. */
@@ -682,6 +684,21 @@ export interface WindowApiTransactions {
     success: boolean;
     error?: string;
   }>;
+  /**
+   * BACKLOG-3366: hide one text from this transaction's export. The text stays
+   * linked and visible. `hidden` is read back from the database.
+   */
+  hideTextFromExport: (transactionId: string, messageId: string) => Promise<{
+    success: boolean;
+    hidden?: boolean;
+    error?: string;
+  }>;
+  /** BACKLOG-3366: put a hidden text back into this transaction's export. Never gated. */
+  unhideTextFromExport: (transactionId: string, messageId: string) => Promise<{
+    success: boolean;
+    hidden?: boolean;
+    error?: string;
+  }>;
   /** BACKLOG-1578: Get removed/unlinked emails for a transaction */
   getRemovedEmails: (transactionId: string) => Promise<{
     success: boolean;
@@ -835,6 +852,12 @@ export interface WindowApiTransactions {
       total: number;
       percent: number;
       outcome?: "success" | "error" | "cancelled";
+      /**
+       * Which fetch round is downloading, when one is. Absent on the boundary
+       * events and on every non-fetching phase, so a consumer has to handle it
+       * missing — `emailPrecacheStageDisplay` in the renderer does.
+       */
+      stage?: EmailPrecacheStage;
     }) => void,
   ) => () => void;
   /** Export transaction to organized folder structure */
@@ -1005,7 +1028,14 @@ export interface WindowApiTransactions {
     submissionId?: string;
     messagesCount?: number;
     attachmentsCount?: number;
+    /** Gathered attachments that failed to UPLOAD. */
     attachmentsFailed?: number;
+    /**
+     * BACKLOG-3389: in-window texts/emails that advertise an attachment and
+     * contributed none — lost before the upload stage, so `attachmentsFailed`
+     * structurally cannot see them.
+     */
+    flaggedWithoutAttachments?: number;
     error?: string;
   }>;
 
@@ -1017,7 +1047,14 @@ export interface WindowApiTransactions {
     submissionId?: string;
     messagesCount?: number;
     attachmentsCount?: number;
+    /** Gathered attachments that failed to UPLOAD. */
     attachmentsFailed?: number;
+    /**
+     * BACKLOG-3389: in-window texts/emails that advertise an attachment and
+     * contributed none — lost before the upload stage, so `attachmentsFailed`
+     * structurally cannot see them.
+     */
+    flaggedWithoutAttachments?: number;
     error?: string;
   }>;
 

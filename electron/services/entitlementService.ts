@@ -161,7 +161,7 @@ class EntitlementService {
       if (server === null) {
         // Read FAILED despite being "online" — fall back to a prior confirmed
         // cache mirror (reading an already-purchased deal), else LOCKED.
-        const cached = getCachedUnlock(localTransactionId, userId);
+        const cached = await getCachedUnlock(localTransactionId, userId);
         if (cached) {
           return { status: "unlocked", fromCache: true };
         }
@@ -171,7 +171,7 @@ class EntitlementService {
       if (server.unlocked) {
         // Positive confirmation → mirror into cache for future offline reads.
         try {
-          upsertUnlock({
+          await upsertUnlock({
             localTransactionId,
             userId,
             unlockedAt: server.unlockedAt,
@@ -189,7 +189,7 @@ class EntitlementService {
       // Server AUTHORITATIVELY says no (non-refunded) unlock. Purge any stale
       // cache mirror so an offline read can't resurrect a refunded/revoked unlock.
       try {
-        removeCachedUnlock(localTransactionId, userId);
+        await removeCachedUnlock(localTransactionId, userId);
       } catch {
         /* best-effort */
       }
@@ -197,7 +197,7 @@ class EntitlementService {
     }
 
     // OFFLINE: a prior confirmed cache mirror is the ONLY way to be unlocked.
-    const cached = getCachedUnlock(localTransactionId, userId);
+    const cached = await getCachedUnlock(localTransactionId, userId);
     if (cached) {
       return { status: "unlocked", fromCache: true };
     }

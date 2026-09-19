@@ -23,6 +23,11 @@ import { generateSummaryHTML } from "../summaryHelpers";
 import type { TransactionWithDetails } from "../../transactionService/types";
 import type { TransactionContactResult } from "../../db/transactionContactDbService";
 
+// BACKLOG-3367: these cases hide nothing, and now have to say so — the
+// omissions argument is required precisely so no caller can leave it unstated.
+import type { ExportOmissions } from "../../exportNotices";
+const NO_OMISSIONS_3367: ExportOmissions = { hiddenTextCount: 0 };
+
 function makeTransaction(
   contacts: Array<Partial<TransactionContactResult>>,
 ): TransactionWithDetails {
@@ -65,6 +70,7 @@ describe("BACKLOG-2804 — the audit summary calls the seller's agent the Listin
         },
       ]),
       [],
+      NO_OMISSIONS_3367,
     );
     const section = contactsSection(html);
 
@@ -81,6 +87,7 @@ describe("BACKLOG-2804 — the audit summary calls the seller's agent the Listin
         { contact_name: "Robin Example", specific_role: "SELLER_AGENT" },
       ]),
       [],
+      NO_OMISSIONS_3367,
     );
     const section = contactsSection(html);
 
@@ -94,6 +101,7 @@ describe("BACKLOG-2804 — the audit summary calls the seller's agent the Listin
         { contact_name: "Omar Example", specific_role: "listing_agent" },
       ]),
       [],
+      NO_OMISSIONS_3367,
     );
 
     expect(contactsSection(html)).toContain("Listing Agent");
@@ -111,6 +119,7 @@ describe("BACKLOG-2804 — the audit summary calls the seller's agent the Listin
         { contact_name: "Sam Example", specific_role: "inspector" },
       ]),
       [],
+      NO_OMISSIONS_3367,
     );
     const section = contactsSection(html);
 

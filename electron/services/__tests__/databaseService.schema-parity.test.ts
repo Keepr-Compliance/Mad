@@ -74,7 +74,51 @@ interface AllowedEvolution {
   ref: string;
 }
 
-const ALLOWED_EVOLUTION: AllowedEvolution[] = [];
+const ALLOWED_EVOLUTION: AllowedEvolution[] = [
+  {
+    key: "COLUMN:attachments.provider_attachment_id",
+    what: "New nullable TEXT column on `attachments`.",
+    why:
+      "BACKLOG-2551: the provider's own attachment id, so a re-sync can identify " +
+      "THIS attachment rather than guessing by filename. Two attachments in one " +
+      "email may legitimately share a filename (image001.png across Outlook " +
+      "signature chains), so filename cannot be an identity key. Migration v71 " +
+      "adds the same column to existing databases and creates the partial unique " +
+      "index; the index is deliberately NOT in schema.sql (a standalone CREATE " +
+      "INDEX naming this column aborts schema.sql's unconditional exec on every " +
+      "pre-v71 database). NOTE: the 2839 CHECK on message_thread_names.display_name " +
+      "produces NO divergence key -- schemaFingerprint reads tables via PRAGMA " +
+      "table_info, which cannot see CHECK. A green run here is not evidence for it.",
+    ref: "BACKLOG-2551",
+  },
+  {
+    key: "TABLE:transaction_hidden_texts",
+    what: "New table recording texts hidden from one transaction's export.",
+    why:
+      "BACKLOG-3366: a user can hide an individual text from a transaction's " +
+      "export without removing it from the transaction. A new table is fully " +
+      "IF NOT EXISTS, so schema.sql's exec on every open creates it on fresh and " +
+      "upgraded databases alike; no migration entry is needed.",
+    ref: "BACKLOG-3366",
+  },
+  {
+    key: "INDEX:idx_hidden_texts_txn_external",
+    what: "Partial index on (transaction_id, message_external_id).",
+    why:
+      "BACKLOG-3366: the shared conversation read matches a hidden row by the " +
+      "message's provider id as well as its row id, so a hide survives a macOS " +
+      "force re-import that re-inserts messages under new ids.",
+    ref: "BACKLOG-3366",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_transaction_hidden_texts_1",
+    what: "SQLite's automatic index for the (transaction_id, message_id) primary key.",
+    why:
+      "BACKLOG-3366: produced by the composite PRIMARY KEY on the new table; it " +
+      "is not declared separately and cannot be omitted.",
+    ref: "BACKLOG-3366",
+  },
+];
 
 const ALLOWED_KEYS = new Set(ALLOWED_EVOLUTION.map((d) => d.key));
 
@@ -220,5 +264,113 @@ describe("schema baseline parity — schema.sql vs frozen chain-v69 transcript (
     }
 
     expect(unexpected).toEqual([]);
+  });
+
+  // -------------------------------------------------------------------------
+  // BACKLOG-2551 — CONTROL 4: the COMPOSITE control, and it lives here on purpose.
+  //
+  // From v71 onward `schema.sql` alone no longer describes the shipped schema:
+  // `schema.sql + MIGRATIONS` does. The unique index is created by the migration
+  // and deliberately not by schema.sql (a standalone CREATE INDEX naming a column
+  // only a migration adds aborts schema.sql's unconditional exec on every existing
+  // database). Nothing else checks that the two delivery paths converge.
+  //
+  // It belongs in the PARITY suite rather than in the v71 suite because as a
+  // one-off it would decay the moment the next migration lands; here it keeps
+  // asserting the invariant for every migration that ever ships.
+  // -------------------------------------------------------------------------
+  describe("fresh install and upgraded database converge (BACKLOG-2551 control 4)", () => {
+    /**
+     * The REAL upgrade sequence, in the real order: runMigrations() execs
+     * schema.sql unconditionally and THEN runs the versioned migrations
+     * (databaseService.ts, `currentDb.exec(schemaSql); await
+     * this._runVersionedMigrations();`).
+     *
+     * Execing schema.sql here is what makes this control able to catch the
+     * hazard it exists for. schema.sql is fully IF NOT EXISTS, so on an existing
+     * database it adds nothing -- which is exactly why a standalone CREATE INDEX
+     * naming a migration-added column throws `no such column` and aborts the
+     * whole file. Without this line the upgraded side never reads schema.sql and
+     * the control would stay green through precisely that mistake.
+     */
+    function execSchemaSqlAsRunMigrationsDoes(db: DatabaseType): void {
+      db.exec(fs.readFileSync(SCHEMA_SQL_PATH, "utf8"));
+    }
+
+    /** Every migration above the on-disk version, run the way the runner runs them. */
+    function applyMigrations(db: DatabaseType, fromVersion: number): void {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const svc = require("../databaseService").default;
+      const chain = (
+        svc.constructor as {
+          MIGRATIONS: Array<{ version: number; migrate: (d: DatabaseType) => void }>;
+        }
+      ).MIGRATIONS;
+      db.pragma("foreign_keys = OFF");
+      try {
+        for (const m of chain.filter((x) => x.version > fromVersion)) {
+          db.transaction(() => m.migrate(db))();
+        }
+      } finally {
+        db.pragma("foreign_keys = ON");
+      }
+    }
+
+    it("PRECONDITION: there is at least one migration to apply, so this cannot pass vacuously", () => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const svc = require("../databaseService").default;
+      const chain = (svc.constructor as { MIGRATIONS: unknown[] }).MIGRATIONS;
+      expect(chain.length).toBeGreaterThan(0);
+    });
+
+    it("a FRESH install and an UPGRADED v70 database end structurally identical", () => {
+      const fresh = buildFresh();
+      applyMigrations(fresh, 70); // fresh seeds schema_version at BASELINE, then migrates
+
+      const upgraded = replayFrozen();
+      execSchemaSqlAsRunMigrationsDoes(upgraded); // the real order: schema.sql first
+      applyMigrations(upgraded, 70);
+
+      const divergences = diffFingerprints(
+        extractFingerprint(fresh),
+        extractFingerprint(upgraded),
+        "FRESH(schema.sql + migrations)",
+        "UPGRADED(v70 + migrations)",
+      );
+      expect(divergences.map((d: Divergence) => `[${d.key}] ${d.detail}`)).toEqual([]);
+    });
+
+    it("both paths carry the migration-only objects that schema.sql cannot deliver", () => {
+      for (const [label, build] of [
+        ["fresh", buildFresh],
+        ["upgraded", replayFrozen],
+      ] as const) {
+        const db = build();
+        if (label === "upgraded") execSchemaSqlAsRunMigrationsDoes(db);
+        applyMigrations(db, 70);
+
+        // The partial unique index exists ONLY because the migration made it.
+        const idx = db
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_attachments_email_provider'",
+          )
+          .get() as { name: string } | undefined;
+        expect(`${label}:${idx?.name}`).toBe(`${label}:idx_attachments_email_provider`);
+
+        // And the CHECK, which the fingerprint above is structurally blind to:
+        // PRAGMA table_info does not expose CHECK, so it must be read from
+        // sqlite_master or it is not checked at all.
+        const ddl = (
+          db
+            .prepare(
+              "SELECT sql FROM sqlite_master WHERE type='table' AND name='message_thread_names'",
+            )
+            .get() as { sql: string }
+        ).sql;
+        expect(`${label}:${/CHECK\s*\(\s*length\s*\(\s*trim\(display_name/.test(ddl)}`).toBe(
+          `${label}:true`,
+        );
+      }
+    });
   });
 });

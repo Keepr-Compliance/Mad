@@ -106,7 +106,12 @@ export class LLMConfigService {
       incrementTokenUsage: incrementTokenUsage,
       resetMonthlyUsage: () => {
         // Monthly reset is handled by the database service
-        // This callback is for the base service's internal use
+        // This callback is for the base service's internal use.
+        // BACKLOG-2960: the interface is promise-returning now, so this no-op
+        // returns a settled promise rather than being assigned `=> void` — an
+        // async function assigned to a `void` slot is a floating promise the
+        // compiler accepts, which is the failure this seam exists to remove.
+        return Promise.resolve();
       },
     };
 
@@ -119,7 +124,7 @@ export class LLMConfigService {
    * Creates default settings if none exist.
    */
   async getUserConfig(userId: string): Promise<LLMUserConfig> {
-    const settings = getOrCreateLLMSettings(userId);
+    const settings = await getOrCreateLLMSettings(userId);
 
     return {
       hasOpenAI: !!settings.openai_api_key_encrypted,
@@ -155,8 +160,8 @@ export class LLMConfigService {
         : { anthropic_api_key_encrypted: encryptedKey };
 
     // Ensure settings exist first
-    getOrCreateLLMSettings(userId);
-    updateLLMSettings(userId, updates);
+    await getOrCreateLLMSettings(userId);
+    await updateLLMSettings(userId, updates);
   }
 
   /**
@@ -180,7 +185,7 @@ export class LLMConfigService {
     // the settings row came back as a success value with the key still in it.
     // Settings > AI > Remove reported success and re-masked the key on reload.
     // Clearing is now its own verb, so the mistake is no longer expressible.
-    clearLLMSettingsField(
+    await clearLLMSettingsField(
       userId,
       provider === 'openai'
         ? 'openai_api_key_encrypted'
@@ -220,8 +225,8 @@ export class LLMConfigService {
     }
 
     // Ensure settings exist first
-    getOrCreateLLMSettings(userId);
-    updateLLMSettings(userId, updates);
+    await getOrCreateLLMSettings(userId);
+    await updateLLMSettings(userId, updates);
   }
 
   /**
@@ -229,8 +234,8 @@ export class LLMConfigService {
    */
   async recordConsent(userId: string, consent: boolean): Promise<void> {
     // Ensure settings exist first
-    getOrCreateLLMSettings(userId);
-    setLLMDataConsent(userId, consent);
+    await getOrCreateLLMSettings(userId);
+    await setLLMDataConsent(userId, consent);
   }
 
   /**
@@ -246,7 +251,7 @@ export class LLMConfigService {
       temperature?: number;
     }
   ): Promise<LLMResponse> {
-    const settings = getLLMSettingsByUserId(userId);
+    const settings = await getLLMSettingsByUserId(userId);
     if (!settings) {
       throw new LLMError(
         'LLM not configured. Please add an API key in settings.',
@@ -287,7 +292,7 @@ export class LLMConfigService {
 
     // Track platform allowance usage if enabled
     if (settings.use_platform_allowance) {
-      incrementPlatformAllowanceUsage(userId, response.tokensUsed.total);
+      await incrementPlatformAllowanceUsage(userId, response.tokensUsed.total);
     }
 
     return response;
@@ -297,7 +302,7 @@ export class LLMConfigService {
    * Get usage statistics.
    */
   async getUsageStats(userId: string): Promise<LLMUsageStats> {
-    const settings = getLLMSettingsByUserId(userId);
+    const settings = await getLLMSettingsByUserId(userId);
     if (!settings) {
       return {
         tokensThisMonth: 0,

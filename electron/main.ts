@@ -4,6 +4,19 @@
 // a log path on first write. tsconfig.electron.json emits CommonJS, which
 // preserves statement order, so import position IS execution position here.
 import "./bootstrap/installAppDataPaths";
+// BACKLOG-2962: Sentry BEFORE the composition root, so a capability missing at
+// launch reaches Sentry before the app exits. It must stay AFTER the import
+// above (its offline queue path is read from `userData` at init) and BEFORE the
+// one below (whose fatal path calls `Sentry.captureException`). The dotenv
+// block that populates SENTRY_DSN moved with it. Both placements are traced in
+// that file's header and pinned by `bootstrap/__tests__/installSentry.test.ts`.
+import "./bootstrap/installSentry";
+// BACKLOG-2962: the Electron shell's composition root for native capabilities.
+// Core services depend on the SecretStore *interface*; this is the one place
+// that says the implementation is Electron's safeStorage. It must run before
+// anything calls the store. Nothing calls it during module construction today,
+// but installing first is what keeps that cheap to stay true.
+import "./bootstrap/installNativeCapabilities";
 import {
   app,
   BrowserWindow,
@@ -19,6 +32,7 @@ import {
   buildFirstRunNotice,
   getAppliedAppDataPaths,
 } from "./bootstrap/appDataPaths";
+import { getStartupFailure } from "./bootstrap/startupFailure";
 import { redactEmail, redactId } from "./utils/redactSensitive";
 
 // ==========================================
@@ -87,7 +101,10 @@ function isE2EServeDistMode(): boolean {
 // This is required for deep link handling on Windows
 const gotTheLock = app.requestSingleInstanceLock();
 
-if (!gotTheLock) {
+// BACKLOG-2962: when the composition root recorded a startup failure, its
+// pending Sentry flush ends in `app.exit(1)`; a graceful `app.quit()` here
+// would end the process first, with exit code 0 and the event unsent.
+if (!gotTheLock && !getStartupFailure()) {
   // Another instance is running, quit this one
   // The other instance will handle the deep link via second-instance event
   app.quit();
@@ -97,7 +114,6 @@ import { autoUpdater } from "electron-updater";
 // extraction + URL sanitization). No Electron/Sentry deps — safe to import here.
 import {
   extractUpdaterDiagnostics,
-  scrubUpdaterEventPII,
   type UpdaterUpdateInfoLike,
 } from "./services/updateDiagnostics";
 import { setLastUpdaterFailure } from "./services/updaterFailureStore";
@@ -109,20 +125,6 @@ import {
   executeRecovery,
   type RetryState,
 } from "./services/updaterRetryPolicy";
-import dotenv from "dotenv";
-
-// Load environment files based on whether app is packaged or in development
-if (app.isPackaged) {
-  // Packaged build: load .env.production from extraResources
-  // extraResources files are copied to process.resourcesPath (NOT inside app.asar)
-  const envPath = path.join(process.resourcesPath, ".env.production");
-  dotenv.config({ path: envPath });
-} else {
-  // Development: load .env.development first (OAuth credentials), then .env.local for overrides
-  dotenv.config({ path: path.join(__dirname, "../.env.development") });
-  dotenv.config({ path: path.join(__dirname, "../.env.local") });
-}
-
 // Import constants
 import {
   WINDOW_CONFIG,
@@ -141,6 +143,7 @@ import { registerEmailSyncHandlers } from "./handlers/emailSyncHandlers";
 import { registerEmailLinkingHandlers } from "./handlers/emailLinkingHandlers";
 import { registerEmailAutoLinkHandlers } from "./handlers/emailAutoLinkHandlers";
 import { registerReviewQueueHandlers } from "./handlers/reviewQueueHandlers";
+import { registerHiddenTextHandlers } from "./handlers/hiddenTextHandlers";
 import { registerAttachmentHandlers } from "./handlers/attachmentHandlers";
 import { registerContactHandlers } from "./handlers/contactHandlers";
 import { registerAddressHandlers } from "./handlers/addressHandlers";
@@ -171,7 +174,7 @@ import { registerPairingHandlers, cleanupPairingHandlers } from "./handlers/pair
 import { LLMConfigService } from "./services/llm/llmConfigService";
 
 // Import license and device services for deep link auth validation (TASK-1507)
-import { validateLicense, createUserLicense } from "./services/licenseService";
+import { validateLicense, createUserLicense, ensurePersonalOrganization } from "./services/licenseService";
 import { registerDevice } from "./services/deviceService";
 import supabaseService from "./services/supabaseService";
 import databaseService from "./services/databaseService";
@@ -210,34 +213,20 @@ applyLogFileConfig(log.transports.file);
 // ==========================================
 // SENTRY ERROR TRACKING (TASK-1967)
 // ==========================================
-// Initialize Sentry as early as possible for error monitoring
+// `Sentry.init` lives in ./bootstrap/installSentry (BACKLOG-2962) and runs
+// from the import near the top of this file, before the composition root.
+// This import only binds the namespace for the calls below.
 import * as Sentry from "@sentry/electron/main";
 import { runStartupHealthChecks } from "./services/startupHealthCheck";
+import { getInstallMode } from "./services/diagnostics/installMode";
 
-Sentry.init({
-  dsn: process.env.SENTRY_DSN,
-  environment: app.isPackaged ? "production" : "development",
-  release: app.getVersion(),
-  // Don't send events in development unless DSN is explicitly set
-  enabled: app.isPackaged || !!process.env.SENTRY_DSN,
-  // BACKLOG-1903: scrub signed-URL tokens + local paths from the exception
-  // VALUE (and top-level message) of auto-updater events before they leave
-  // the process. Sentry derives the issue title/exception value from the
-  // ORIGINAL err.message passed to captureException(), which bypasses the
-  // sanitization already applied to extra.sanitizedMessage — see
-  // scrubUpdaterEventPII() for the full explanation. Scoped to
-  // tags.component === "auto-updater" so non-updater events are untouched,
-  // and never mutates `fingerprint`, so grouping is unaffected. Guarded so a
-  // throwing beforeSend can never silently drop the event.
-  beforeSend(event) {
-    try {
-      return scrubUpdaterEventPII(event);
-    } catch (scrubError) {
-      log.error("[Sentry] beforeSend PII scrub failed, sending event unscrubbed:", scrubError);
-      return event;
-    }
-  },
-});
+// BACKLOG-3432: which installer this build came from, as a derived value only.
+// The Windows one-click installer migrates a prior per-machine install to
+// per-user; a user who declines the elevation prompt stays where they were and
+// is told nothing. This value is what makes that user findable afterwards
+// instead of invisible. NEVER report process.execPath -- a per-user path
+// contains the Windows account name. See services/diagnostics/installMode.ts.
+const installMode = getInstallMode(app.isPackaged);
 
 // TASK-2330: Set auto-updater context immediately after Sentry.init()
 // so all subsequent events/breadcrumbs carry version + platform info
@@ -246,7 +235,15 @@ Sentry.setContext("auto-updater", {
   platform: process.platform,
   arch: process.arch,
   feedRepo: "Keepr-Compliance/keepr-releases",
+  installMode,
 });
+
+// A context field is not searchable in Sentry issue search; a tag is. The tag
+// is what turns "somebody may be stuck" into the list of who.
+Sentry.setTag("install_mode", installMode);
+// Logged as well so the value is observable locally, without waiting for a
+// Sentry event to fire.
+log.info(`[Startup] Install mode: ${installMode}`);
 
 // Global error handlers - must be registered early, before any async operations
 // These catch uncaught exceptions and unhandled promise rejections to prevent silent crashes
@@ -636,6 +633,17 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
         });
         focusMainWindow();
         return;
+      }
+
+      // BACKLOG-3364: Step 4.5 - the personal organization a solo user's plan
+      // is recorded against. Placed after the block check rather than directly
+      // after the licence step so that it fires on exactly the same condition
+      // as the `license:validate` handler does — a licence that is not
+      // blocking. It never throws and never stops sign-in; a failure here
+      // leaves the user exactly as they were before personal organizations
+      // existed, and the next launch asks again.
+      if (licenseStatus.isValid) {
+        await ensurePersonalOrganization(user.id);
       }
 
       // TASK-1507: Step 5 - Register device
@@ -1210,7 +1218,8 @@ let updaterDownloadStarted = false;
 
 /**
  * Whether Sentry is actually reporting in this process. Mirrors the init gate
- * at Sentry.init() (app.isPackaged || SENTRY_DSN present). When disabled,
+ * at Sentry.init() in ./bootstrap/installSentry.ts (app.isPackaged ||
+ * SENTRY_DSN present). When disabled,
  * Sentry.captureException() returns a synthetic id we must NOT treat as a real
  * event_id (BACKLOG-1903 REQUIRED change #4).
  */
@@ -1411,6 +1420,11 @@ function surfaceUpdaterError(
 
 const appStartTime = Date.now();
 app.whenReady().then(async () => {
+  // BACKLOG-2962: a capability is missing and the composition root is about to
+  // show "Keepr cannot start" and exit 1 once its Sentry flush settles. Nothing
+  // below may run meanwhile — `runStartupHealthChecks()` would demand the very
+  // capability that is missing, and `createWindow()` would open a window.
+  if (getStartupFailure()) return;
   log.debug(`[PERF] app.whenReady: ${Date.now() - appStartTime}ms`);
 
   // BACKLOG-2709: on the FIRST launch against a new development directory, say
@@ -1643,7 +1657,8 @@ app.whenReady().then(async () => {
   // Handle renderer process crashes and unresponsive states
   // Uses native dialog (not renderer-based) since the renderer may be dead
   if (mainWindow) {
-    mainWindow.webContents.on("render-process-gone", async (_event, details) => {
+    mainWindow.webContents.on("render-process-gone", (_event, details) => {
+      void (async () => {
       console.error("[Main] Renderer process gone:", details.reason, details.exitCode);
       log.error("[Main] Renderer process gone:", details.reason, details.exitCode);
 
@@ -1673,9 +1688,11 @@ app.whenReady().then(async () => {
       } else {
         app.quit();
       }
+      })();
     });
 
-    mainWindow.on("unresponsive", async () => {
+    mainWindow.on("unresponsive", () => {
+      void (async () => {
       console.warn("[Main] Window became unresponsive");
       log.warn("[Main] Window became unresponsive");
 
@@ -1697,6 +1714,7 @@ app.whenReady().then(async () => {
         app.quit();
       }
       // response === 0: Wait (do nothing)
+      })();
     });
   }
 
@@ -1727,6 +1745,8 @@ app.whenReady().then(async () => {
   registerEmailLinkingHandlers();
   registerEmailAutoLinkHandlers();
   registerReviewQueueHandlers();
+  // BACKLOG-3366: hide / unhide individual texts from a transaction's export.
+  registerHiddenTextHandlers();
   registerAttachmentHandlers(mainWindow!);
   registerContactHandlers(mainWindow!);
   registerAddressHandlers();
@@ -1917,6 +1937,9 @@ app.on("before-quit", () => {
 });
 
 app.on("activate", () => {
+  // BACKLOG-2962: see the guard at the top of `whenReady` — `activate` fires
+  // on first launch on macOS and would open a window during the fatal path.
+  if (getStartupFailure()) return;
   if (BrowserWindow.getAllWindows().length === 0) {
     createWindow();
   }

@@ -62,6 +62,7 @@
 
 import { v4 as uuidv4 } from "uuid";
 import { dbAll, dbGet, dbRun } from "./core/dbConnection";
+import { sql } from "./core/sqlText";
 import type { ExternalContactSource } from "./externalContactDbService";
 // TYPE-ONLY, and deliberately so: `contactIdentityEvidence` imports this module's
 // verdict readers as VALUES, so a value import here would close a runtime require
@@ -245,13 +246,13 @@ export interface RecordVerdictInput {
   decidedBy?: string;
 }
 
-const PROPOSAL_COLUMNS = `
+const PROPOSAL_COLUMNS = sql`
   id, user_id, contact_id, source_type, source_record_id, status, reason,
   matched_on, identity_assessment, relationship_assessment, cluster_key,
   evidence_json, created_at, resolved_at
 `;
 
-const VERDICT_COLUMNS = `
+const VERDICT_COLUMNS = sql`
   id, user_id, contact_id, source_type, source_record_id, identity_verdict,
   relationship_verdict, reason, matched_on, evidence_json, decided_at, decided_by
 `;
@@ -280,7 +281,7 @@ export function proposeLink(input: ProposeLinkInput): { created: boolean; id: st
 
   const id = uuidv4();
   const result = dbRun(
-    `INSERT OR IGNORE INTO contact_link_proposals
+    sql`INSERT OR IGNORE INTO contact_link_proposals
        (id, user_id, contact_id, source_type, source_record_id, status, reason,
         matched_on, identity_assessment, relationship_assessment, cluster_key, evidence_json)
      VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)`,
@@ -305,7 +306,7 @@ export function proposeLink(input: ProposeLinkInput): { created: boolean; id: st
 /** Everything still waiting on a human, oldest cluster first. */
 export function listPendingProposals(userId: string): LinkProposalRow[] {
   return dbAll<LinkProposalRow>(
-    `SELECT ${PROPOSAL_COLUMNS} FROM contact_link_proposals
+    sql`SELECT ${PROPOSAL_COLUMNS} FROM contact_link_proposals
       WHERE user_id = ? AND status = 'pending'
       ORDER BY cluster_key, created_at, id`,
     [userId],
@@ -321,7 +322,7 @@ export function listPendingProposals(userId: string): LinkProposalRow[] {
  */
 export function countPendingProposals(userId: string): number {
   const row = dbGet<{ n: number }>(
-    `SELECT COUNT(*) AS n FROM contact_link_proposals
+    sql`SELECT COUNT(*) AS n FROM contact_link_proposals
       WHERE user_id = ? AND status = 'pending'`,
     [userId],
   );
@@ -330,7 +331,7 @@ export function countPendingProposals(userId: string): number {
 
 export function getProposalById(id: string): LinkProposalRow | null {
   return (
-    dbGet<LinkProposalRow>(`SELECT ${PROPOSAL_COLUMNS} FROM contact_link_proposals WHERE id = ?`, [
+    dbGet<LinkProposalRow>(sql`SELECT ${PROPOSAL_COLUMNS} FROM contact_link_proposals WHERE id = ?`, [
       id,
     ]) ?? null
   );
@@ -342,7 +343,7 @@ export function listPendingProposalsInCluster(
   clusterKey: string,
 ): LinkProposalRow[] {
   return dbAll<LinkProposalRow>(
-    `SELECT ${PROPOSAL_COLUMNS} FROM contact_link_proposals
+    sql`SELECT ${PROPOSAL_COLUMNS} FROM contact_link_proposals
       WHERE user_id = ? AND cluster_key = ? AND status = 'pending'
       ORDER BY created_at, id`,
     [userId, clusterKey],
@@ -360,7 +361,7 @@ export function listPendingProposalsInCluster(
  */
 export function resolveProposal(id: string, status: Exclude<LinkProposalStatus, "pending">): boolean {
   const result = dbRun(
-    `UPDATE contact_link_proposals
+    sql`UPDATE contact_link_proposals
         SET status = ?, resolved_at = CURRENT_TIMESTAMP
       WHERE id = ? AND status = 'pending'`,
     [status, id],
@@ -383,7 +384,7 @@ export function resolveProposal(id: string, status: Exclude<LinkProposalStatus, 
 export function recordVerdict(input: RecordVerdictInput): string {
   const id = uuidv4();
   dbRun(
-    `INSERT INTO contact_link_verdicts
+    sql`INSERT INTO contact_link_verdicts
        (id, user_id, contact_id, source_type, source_record_id, identity_verdict,
         relationship_verdict, reason, matched_on, evidence_json, decided_by)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -435,7 +436,7 @@ export function getLatestVerdict(
 ): LinkVerdictRow | null {
   return (
     dbGet<LinkVerdictRow>(
-      `SELECT ${VERDICT_COLUMNS} FROM contact_link_verdicts
+      sql`SELECT ${VERDICT_COLUMNS} FROM contact_link_verdicts
         WHERE user_id = ? AND contact_id = ? AND source_type = ? AND source_record_id = ?
         ORDER BY decided_at DESC, rowid DESC
         LIMIT 1`,
@@ -484,7 +485,7 @@ export function hasMustLink(
  */
 export function listVerdicts(userId: string): LinkVerdictRow[] {
   return dbAll<LinkVerdictRow>(
-    `SELECT ${VERDICT_COLUMNS} FROM contact_link_verdicts
+    sql`SELECT ${VERDICT_COLUMNS} FROM contact_link_verdicts
       WHERE user_id = ?
       ORDER BY decided_at DESC, rowid DESC`,
     [userId],
@@ -536,7 +537,7 @@ export function listVerdicts(userId: string): LinkVerdictRow[] {
  */
 export function getRejectedSourceKeys(userId: string): Set<string> {
   const rows = dbAll<{ source_type: string; source_record_id: string }>(
-    `SELECT source_type, source_record_id FROM (
+    sql`SELECT source_type, source_record_id FROM (
        SELECT source_type, source_record_id, identity_verdict,
               ROW_NUMBER() OVER (
                 PARTITION BY contact_id, source_type, source_record_id
@@ -553,7 +554,7 @@ export function getRejectedSourceKeys(userId: string): Set<string> {
 
 export function countVerdicts(userId: string): number {
   const row = dbGet<{ n: number }>(
-    `SELECT COUNT(*) AS n FROM contact_link_verdicts WHERE user_id = ?`,
+    sql`SELECT COUNT(*) AS n FROM contact_link_verdicts WHERE user_id = ?`,
     [userId],
   );
   return row?.n ?? 0;

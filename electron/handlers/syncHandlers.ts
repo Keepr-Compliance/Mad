@@ -184,7 +184,11 @@ export function registerSyncHandlers(mainWindow: BrowserWindow, userId?: string)
       const status = orchestrator?.getStatus();
       if (status?.isRunning) {
         log.warn("[SyncHandlers] Sync appears stuck, forcing reset before starting");
-        orchestrator?.forceReset();
+        // BACKLOG-3440: THE "TRY AGAIN" PATH, named. A user who gives up on a hung sync
+        // and clicks Sync (or the literal "Try Again" button) lands here, and the run
+        // they abandoned used to be indistinguishable from one they deliberately
+        // cancelled. The abandoned run's row now says so.
+        orchestrator?.forceReset("restart-while-running");
       }
 
       try {
@@ -221,7 +225,8 @@ export function registerSyncHandlers(mainWindow: BrowserWindow, userId?: string)
   // Force reset sync state (for recovery from stuck state)
   ipcMain.handle("sync:reset", () => {
     log.info("[SyncHandlers] Force resetting sync state");
-    orchestrator?.forceReset();
+    // BACKLOG-3440: the explicit Reset control, as opposed to the restart guard above.
+    orchestrator?.forceReset("user-reset");
     return { success: true };
   });
 
@@ -415,7 +420,7 @@ function setupEventForwarding(): void {
   });
 
   // Forward completion events and persist data
-  orchestrator.on("complete", async (result: SyncResult) => {
+  const onSyncComplete = async (result: SyncResult) => {
     log.info("[SyncHandlers] Sync complete", {
       conversations: result.conversations.length,
       messages: result.messages.length,
@@ -632,6 +637,9 @@ function setupEventForwarding(): void {
       // BACKLOG-2898: still close the timeline.
       syncTimeline.endSync(result.success ? "complete" : "error");
     }
+  };
+  orchestrator.on("complete", (result: SyncResult) => {
+    void onSyncComplete(result);
   });
 }
 

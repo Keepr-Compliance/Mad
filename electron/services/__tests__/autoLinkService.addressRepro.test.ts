@@ -49,9 +49,9 @@ jest.mock("../messageMatchingService", () => ({
 jest.mock("../db/communicationDbService", () => ({
   createThreadCommunicationReference: jest.fn(),
   isThreadLinkedToTransaction: jest.fn().mockResolvedValue(false),
-  getIgnoredEmailIdsForTransaction: jest.fn().mockReturnValue(new Set()),
-  getIgnoredThreadIdsForTransaction: jest.fn().mockReturnValue(new Set()),
-  getIgnoredCommunicationIdsForTransaction: jest.fn().mockReturnValue(new Set()),
+  getIgnoredEmailIdsForTransaction: jest.fn().mockResolvedValue(new Set()),
+  getIgnoredThreadIdsForTransaction: jest.fn().mockResolvedValue(new Set()),
+  getIgnoredCommunicationIdsForTransaction: jest.fn().mockResolvedValue(new Set()),
 }));
 
 // Imported AFTER the mocks are registered.

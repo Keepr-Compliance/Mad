@@ -14,12 +14,14 @@
 
 import React, { useMemo } from "react";
 import { ResponsiveModal } from "../common/ResponsiveModal";
+// BACKLOG-2832: ONE definition of the progress phase (was spelled by hand 4x here).
+import type { ImportPhase } from "@electron/types/ipc/importPhase";
 
 /**
  * Progress state from the import service
  */
 export interface ImportProgressState {
-  phase: "querying" | "deleting" | "importing" | "attachments";
+  phase: ImportPhase;
   current: number;
   total: number;
   percent: number;
@@ -74,7 +76,7 @@ function calculateETA(
  * Get human-readable phase name
  */
 function getPhaseName(
-  phase: "querying" | "deleting" | "importing" | "attachments"
+  phase: ImportPhase
 ): string {
   switch (phase) {
     case "querying":
@@ -85,6 +87,13 @@ function getPhaseName(
       return "Importing messages";
     case "attachments":
       return "Processing attachments";
+    // BACKLOG-3132 / BACKLOG-3131: DEAD-CODE STOPGAP. Nothing imports this
+    // component — it renders to nobody, and BACKLOG-3131 owns deleting the file.
+    // This arm exists only because the switch has no `default`, so a new
+    // ImportPhase member breaks the build here. Do not maintain it as live copy;
+    // the copy users actually see is in `src/utils/importPhaseDisplay.ts`.
+    case "finalizing":
+      return "Saving imported messages";
   }
 }
 
@@ -92,7 +101,7 @@ function getPhaseName(
  * Get phase-specific item label
  */
 function getItemLabel(
-  phase: "querying" | "deleting" | "importing" | "attachments"
+  phase: ImportPhase
 ): string {
   switch (phase) {
     case "querying":
@@ -103,6 +112,9 @@ function getItemLabel(
       return "messages imported";
     case "attachments":
       return "attachments processed";
+    // BACKLOG-3132 / BACKLOG-3131: dead-code stopgap — see getPhaseName above.
+    case "finalizing":
+      return "saved";
   }
 }
 
@@ -110,7 +122,7 @@ function getItemLabel(
  * Get phase-specific progress bar color
  */
 function getPhaseColor(
-  phase: "querying" | "deleting" | "importing" | "attachments"
+  phase: ImportPhase
 ): string {
   switch (phase) {
     case "querying":
@@ -121,6 +133,9 @@ function getPhaseColor(
       return "bg-blue-500";
     case "attachments":
       return "bg-green-500";
+    // BACKLOG-3132 / BACKLOG-3131: dead-code stopgap — see getPhaseName above.
+    case "finalizing":
+      return "bg-indigo-500";
   }
 }
 

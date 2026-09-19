@@ -72,6 +72,22 @@ jest.mock("../../../hooks/useSyncOrchestrator", () => ({
 const mockGetPreferences = jest.fn();
 const mockUpdatePreferences = jest.fn();
 jest.mock("../../../services", () => ({
+  /**
+   * BACKLOG-3208: the panel now asks whether Full Disk Access is usable before
+   * it offers an import, through the same service abstraction it already uses
+   * for preferences. Granted is this suite's premise — every case here is about
+   * what the import does once Keepr CAN read Messages. The denied path has its
+   * own suite (`MacOSMessagesImportSettings.fdaRecovery-3208.test.tsx`).
+   */
+  systemService: {
+    checkMessagesPermission: jest
+      .fn()
+      .mockResolvedValue({ success: true, data: { hasPermission: true } }),
+    openFullDiskAccessSettings: jest.fn().mockResolvedValue({ success: true }),
+    relaunchApp: jest
+      .fn()
+      .mockResolvedValue({ success: true, data: { relaunched: true } }),
+  },
   settingsService: {
     getPreferences: (...args: unknown[]) => mockGetPreferences(...args),
     updatePreferences: (...args: unknown[]) => mockUpdatePreferences(...args),
@@ -600,6 +616,22 @@ describe("BACKLOG-2749 — no surface says 'up to 50,000' while another says 62,
 
     renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
 
+    /*
+     * BACKLOG-2812 — this wait IS the resolved-state gate, not a redundant one.
+     * The anchor /Auto-importing messages back to/ matches the PRE-estimate
+     * fallback and the resolved text alike: the component renders
+     * ", up to ${maxMessages} messages" as the else arm of ONE ternary
+     * (MacOSMessagesImportSettings.tsx:1499), so findByText on its own settles
+     * on the fallback render and this test passed even when the estimate never
+     * resolved (measured: 2 passed under a never-resolving getImportCount).
+     * The Import button stays disabled until estimateStatus === "ready"
+     * (component :722 / :754 / :760 / :1854), so waiting for it to enable is
+     * the only thing that proves the assertions below read the RESOLVED state.
+     * Do not delete this as "a redundant wait" — it is what makes the test
+     * non-vacuous. See also the file's own openDialog() helper, same idiom.
+     */
+    await waitFor(() => expect(importButton()).toBeEnabled());
+
     const indicator = await screen.findByText(/Auto-importing messages back to/);
     expect(indicator).toHaveTextContent("up to 50,000 messages");
     expect(indicator).not.toHaveTextContent(/covering/i);
@@ -620,6 +652,22 @@ describe("BACKLOG-2749 — no surface says 'up to 50,000' while another says 62,
     });
 
     renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
+
+    /*
+     * BACKLOG-2812 — this wait IS the resolved-state gate, not a redundant one.
+     * The anchor /Auto-importing messages back to/ matches the PRE-estimate
+     * fallback and the resolved text alike: the component renders
+     * ", up to ${maxMessages} messages" as the else arm of ONE ternary
+     * (MacOSMessagesImportSettings.tsx:1499), so findByText on its own settles
+     * on the fallback render and this test passed even when the estimate never
+     * resolved (measured: 2 passed under a never-resolving getImportCount).
+     * The Import button stays disabled until estimateStatus === "ready"
+     * (component :722 / :754 / :760 / :1854), so waiting for it to enable is
+     * the only thing that proves the assertions below read the RESOLVED state.
+     * Do not delete this as "a redundant wait" — it is what makes the test
+     * non-vacuous. See also the file's own openDialog() helper, same idiom.
+     */
+    await waitFor(() => expect(importButton()).toBeEnabled());
 
     const indicator = await screen.findByText(/Auto-importing messages back to/);
     expect(indicator).toHaveTextContent("up to 50,000 messages");

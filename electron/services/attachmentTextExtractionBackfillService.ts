@@ -26,9 +26,13 @@ import databaseService from "./databaseService";
 import logService from "./logService";
 import {
   extractTextForAttachment,
-  EXTRACTABLE_MIME_SQL_LIST,
+  EXTRACTABLE_MIME_TYPES,
   type AttachmentTextRow,
 } from "./attachmentTextExtractionService";
+import {
+  preparePendingCount,
+  preparePendingPage,
+} from "./db/attachmentTextExtractionSql";
 
 const SERVICE_NAME = "AttachmentTextExtraction";
 
@@ -58,13 +62,6 @@ export interface AttachmentTextBackfillResult {
 /** A downloaded attachment awaiting text extraction. */
 type PendingRow = { id: string; storage_path: string; mime_type: string };
 
-const PENDING_WHERE = `
-  FROM attachments
-  WHERE storage_path IS NOT NULL
-    AND text_content IS NULL
-    AND mime_type IN (${EXTRACTABLE_MIME_SQL_LIST})
-`;
-
 /**
  * BACKLOG-2257: bounded, idempotent local text-extraction backfill.
  * Populates `attachments.text_content` for already-downloaded rows. Safe to invoke
@@ -86,19 +83,19 @@ export async function backfillAttachmentTextContent(
   try {
     const db = databaseService.getRawDatabase();
 
-    const totalRow = db
-      .prepare(`SELECT COUNT(*) AS n ${PENDING_WHERE}`)
-      .get() as { n: number } | undefined;
+    // The MIME types cross as BOUND VALUES, never as SQL text — see
+    // db/attachmentTextExtractionSql.ts for why this is the one statement in
+    // BACKLOG-2989 that deliberately changes rather than moving byte-identically.
+    const totalRow = preparePendingCount(db, EXTRACTABLE_MIME_TYPES).get(
+      ...EXTRACTABLE_MIME_TYPES,
+    ) as { n: number } | undefined;
     result.totalPending = totalRow?.n ?? 0;
     if (result.totalPending === 0) return result;
 
-    const rows = db
-      .prepare(
-        `SELECT id, storage_path, mime_type ${PENDING_WHERE}
-         ORDER BY created_at DESC
-         LIMIT ?`
-      )
-      .all(maxAttachments) as PendingRow[];
+    const rows = preparePendingPage(db, EXTRACTABLE_MIME_TYPES).all(
+      ...EXTRACTABLE_MIME_TYPES,
+      maxAttachments,
+    ) as PendingRow[];
 
     result.remaining = Math.max(0, result.totalPending - rows.length);
     if (rows.length === 0) return result;

@@ -98,7 +98,7 @@ const returningUserDataMacOS: UserData = {
   hasCompletedEmailOnboarding: true,
   hasEmailConnected: true,
   needsDriverSetup: false,
-  hasPermissions: true,
+  fda: "granted",
 };
 
 const returningUserDataWindows: UserData = {
@@ -106,7 +106,8 @@ const returningUserDataWindows: UserData = {
   hasCompletedEmailOnboarding: true,
   hasEmailConnected: true,
   needsDriverSetup: false,
-  hasPermissions: false, // Windows doesn't need permissions
+  // BACKLOG-3275: Full Disk Access is not a concept on Windows.
+  fda: "not-applicable",
 };
 
 // Initial loading state

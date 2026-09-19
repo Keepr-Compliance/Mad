@@ -104,6 +104,22 @@ jest.mock("../../../hooks/useSyncOrchestrator", () => ({
 const mockGetPreferences = jest.fn();
 const mockUpdatePreferences = jest.fn();
 jest.mock("../../../services", () => ({
+  /**
+   * BACKLOG-3208: the panel now asks whether Full Disk Access is usable before
+   * it offers an import, through the same service abstraction it already uses
+   * for preferences. Granted is this suite's premise — every case here is about
+   * what the import does once Keepr CAN read Messages. The denied path has its
+   * own suite (`MacOSMessagesImportSettings.fdaRecovery-3208.test.tsx`).
+   */
+  systemService: {
+    checkMessagesPermission: jest
+      .fn()
+      .mockResolvedValue({ success: true, data: { hasPermission: true } }),
+    openFullDiskAccessSettings: jest.fn().mockResolvedValue({ success: true }),
+    relaunchApp: jest
+      .fn()
+      .mockResolvedValue({ success: true, data: { relaunched: true } }),
+  },
   settingsService: {
     getPreferences: (...args: unknown[]) => mockGetPreferences(...args),
     updatePreferences: (...args: unknown[]) => mockUpdatePreferences(...args),
@@ -503,12 +519,22 @@ describe("BACKLOG-2775 — what a cancelled FORCE re-import is allowed to say", 
 });
 
 describe("BACKLOG-2776 — the percentage the user is shown while cancelling", () => {
-  it("renders the frozen percentage carried by the queue item", async () => {
-    // The panel renders whatever `progress` the item holds; the freeze itself is
-    // the orchestrator's job (proved in SyncOrchestratorService.cancel-2748.test.ts).
-    // This is the other half of that contract: a cancel-requested item's number
-    // is displayed as-is, so when the orchestrator stops advancing it the user
-    // sees a still number rather than one climbing through their cancel.
+  it("shows the cancelling state from the flag alone — and no percentage at all", async () => {
+    // BACKLOG-2776 originally asserted this panel rendered the item's frozen
+    // "34%", proving a cancel-requested number is displayed as-is rather than
+    // climbing through the user's cancel.
+    //
+    // BACKLOG-3128 removed the percentage from this panel entirely: the macOS
+    // Messages import has no honest single number, so it renders none. That
+    // makes 2776's number-freeze guarantee vacuous HERE (there is no number to
+    // freeze) while leaving it fully in force where it is actually implemented —
+    // the orchestrator drops progress updates for a cancel-requested item, proved
+    // by SyncOrchestratorService.cancel-2748.test.ts.
+    //
+    // What remains load-bearing on this surface, and is still asserted below: the
+    // panel enters its cancelling state from the queue flag alone, with no click.
+    // The percentage assertion is replaced by its inverse, which is now the
+    // contract — a phase label, and nowhere a "%".
     mockQueue = messagesQueue({
       status: "running",
       progress: 34,
@@ -518,7 +544,11 @@ describe("BACKLOG-2776 — the percentage the user is shown while cancelling", (
 
     renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
 
-    await waitFor(() => expect(screen.getByText("34%")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("Clearing existing messages...")).toBeInTheDocument()
+    );
+    expect(screen.queryByText("34%")).not.toBeInTheDocument();
+    expect(screen.queryByText(/%/)).not.toBeInTheDocument();
     // And the panel is already in its cancelling state without any click here —
     // the flag is the single source both surfaces read.
     expect(cancelButton()).toBeDisabled();

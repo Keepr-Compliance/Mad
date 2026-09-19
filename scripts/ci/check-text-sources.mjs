@@ -2,8 +2,8 @@
 /**
  * check-text-sources — BACKLOG-2637 standing rule
  *
- * Asserts that every tracked TypeScript/JavaScript file in the repository can
- * actually be found by a search.
+ * Asserts that every TypeScript/JavaScript file in the working tree — tracked
+ * AND untracked-but-not-ignored — can actually be found by a search.
  *
  * ## The failure this exists to prevent
  *
@@ -84,7 +84,8 @@
  *
  * ## Scope
  *
- * Repository-wide, every tracked TS/JS extension. The narrow original scope
+ * Repository-wide, every TS/JS extension, tracked or not — see the enumeration
+ * note above the call itself. The narrow original scope
  * (`electron/` and `src/`) left 691 of 2,051 tracked .ts/.tsx files unchecked —
  * a third of the TypeScript, including admin-portal, broker-portal,
  * android-companion, e2e, packages, supabase and scripts. A green badge that
@@ -196,15 +197,51 @@ const FIX_ESCAPE =
 
 // ---------------------------------------------------------------------------
 
-const tracked = gitZ(["ls-files", "-z", "--", ...PATHSPECS]);
+// ---------------------------------------------------------------------------
+// THE WORKING TREE, NOT THE INDEX (BACKLOG-3065).
+//
+// This enumeration was a bare `git ls-files -z` — the INDEX — while the read
+// below takes WORKTREE bytes. That hybrid is the bug: the check already
+// believed it was inspecting what the author has on disk, and simply could not
+// see a file that had not been `git add`-ed yet. A brand-new untracked source
+// file holding a raw NUL was never inspected, and the gate printed "none would
+// be silently skipped" over the top of it — this script's own failure mode,
+// reproduced inside the script. A new file is exactly when a raw NUL is most
+// likely to arrive (a paste from a hex dump, a fixture transcribed from a
+// binary source), and it was exactly when this gate was blind.
+//
+// CI never sees the difference: `actions/checkout` is a fresh clone and is
+// fully tracked by definition, so both enumerations agree there. This bites
+// only on a local run — the one place an author is supposed to catch their own
+// mistake. Same shape as BACKLOG-3049 on the SQL gate.
+//
+// `--exclude-standard` is load-bearing, not decoration. Without it `--others`
+// enumerates every untracked file under node_modules — measured at tens of
+// thousands of JS/TS paths in this repository. With it, .gitignore is honoured
+// and the addition on a clean tree is zero. In a worktree node_modules is a
+// symlink, and git never descends into one.
+//
+// The Set de-dupes. `--cached` lists a path once PER STAGE in an unmerged
+// tree, so a merge conflict would otherwise inspect — and COUNT — the same
+// file up to three times, and that count is printed to the user.
+//
+// The `--eol` pass below is deliberately NOT given `--others`: untracked files
+// have no index entry, and that pass exists for the staged-binary case.
+// ---------------------------------------------------------------------------
+
+const files = [
+  ...new Set(
+    gitZ(["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", ...PATHSPECS]),
+  ),
+];
 const failures = [];
 
-for (const path of tracked) {
+for (const path of files) {
   let buf;
   try {
     buf = readFileSync(path);
   } catch {
-    continue; // tracked but not in the worktree; the staged pass below covers it
+    continue; // a cached path with no file on disk; the staged pass below covers it
   }
   const { faults, sites, context } = inspect(buf);
   if (faults.size > 0) failures.push({ path, faults, sites, context });
@@ -303,5 +340,8 @@ if (failures.length > 0 || stagedOnly.length > 0) {
 }
 
 console.log("text-source check passed:");
-console.log(`  - ${tracked.length} tracked TS/JS files, repository-wide, are searchable`);
+console.log(
+  `  - ${files.length} TS/JS files (tracked + untracked, .gitignore respected), ` +
+    `repository-wide, are searchable`,
+);
 console.log("  - no NUL, no invalid UTF-8, no lone CR; none would be silently skipped");

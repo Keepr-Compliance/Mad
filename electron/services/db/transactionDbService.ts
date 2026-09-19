@@ -15,6 +15,7 @@ import { DatabaseError } from "../../types";
 // BACKLOG-3067: a successful read mints the brand — see electron/types/ids.ts.
 import type { TransactionRow } from "../../types/ids";
 import { dbGet, dbAll, dbRun, dbTransaction } from "./core/dbConnection";
+import { sql, type SafeSql } from "./core/sqlText";
 import {
   countLinkedEmailsByTransaction,
   type ScopedEmailRow,
@@ -29,7 +30,6 @@ import {
   validateFields,
   isValidField,
   TABLE_FIELDS,
-  type FieldExpression,
   type TransactionColumn,
 } from "../../utils/sqlFieldWhitelist";
 import {
@@ -38,6 +38,10 @@ import {
   TransactionFrozenError,
   FROZEN_IDENTITY_FIELDS,
 } from "../transactionFreezePolicy";
+import { TransactionStatusSchema } from "../../schemas/transaction";
+import { assignmentList, columnList } from "./core/columnSql";
+import { placeholderList } from "./core/sqlFragments";
+import { joinFragments } from "./core/sqlFragments";
 
 /**
  * BACKLOG-2013: sentinel key callers may set on the `updates` object to bypass
@@ -96,7 +100,9 @@ export const UNFREEZE_OVERRIDE_KEY = "__unfreezeOverride";
 // creation path passes exactly the values the schema already defaults to, so
 // discarding them was invisible. Turning on a write whose caller passes a
 // WRONG value lands that wrong value for the first time. `closing_date_verified`
-// is the worked example; read its `why`.
+// is the worked example — the caller that made it one has since been corrected
+// (BACKLOG-2756), so read its `why` for how the decision was reached rather
+// than as a live hazard.
 // ===========================================================================
 
 /** What happens to a caller-supplied value for one column on one path. */
@@ -215,7 +221,7 @@ export const TRANSACTION_COLUMN_POLICY: Record<TransactionColumn, ColumnPolicy> 
   closing_date_verified: {
     insert: "db-default",
     update: "writable",
-    why: "THE WORKED EXAMPLE. The audited-create path passes `property_coordinates ? true : false` (transactionService.ts:1173) — a fact about the ADDRESS, not about the closing date. Every path stores the schema DEFAULT 0 today because the INSERT dropped it; opening the INSERT would land a semantically wrong 1 for the first time. The update path already accepted it (the IPC validator forwards a 0/1 the user actually set), so that half is unchanged.",
+    why: "THE WORKED EXAMPLE, and the reason this table exists. `createAuditedTransaction` used to pass `property_coordinates ? true : false` — a fact about the ADDRESS, not about the closing date. Because the INSERT dropped the column, every row stored the schema DEFAULT 0 and the wrong value was never observable; opening the INSERT would have landed a semantically wrong 1 for the first time. BACKLOG-2756 corrected that caller, so every creating path now states `false`. The entry stays `db-default` on that basis: opening it would write exactly what the schema already defaults to, and a column gains a writer when something means to write it. The update path is where the real signal arrives — `ExportModal`'s `handleExport` sets it once the user has been shown the closing date and confirmed it, and the IPC validator forwards that 0/1.",
   },
   representation_start_confidence: {
     insert: "writable",
@@ -260,7 +266,7 @@ export const TRANSACTION_COLUMN_POLICY: Record<TransactionColumn, ColumnPolicy> 
   sale_price: {
     insert: "db-default",
     update: "writable",
-    why: "Entered by the user after the deal exists. Already accepted on the update path and forwarded by the IPC validator. NOTE the one creating caller that names it — `_createTransactionFromSummary` (transactionService.ts:530) — is a PRIVATE method with zero callers repo-wide, so opening this would change no live behaviour and would give a dead path its first effect. If that method is ever revived, revisit this entry rather than assuming the drop is still harmless.",
+    why: "Entered by the user after the deal exists. Already accepted on the update path and forwarded by the IPC validator. No creating caller names this column: the one that did — `_createTransactionFromSummary`, a private method with no callers — was deleted by BACKLOG-2756, which is why this entry no longer carries the caveat that opening the column would give a dead path its first effect. If a creating caller ever supplies a sale price, revisit this entry rather than assuming the drop is still harmless.",
   },
   earnest_money_amount: {
     insert: "db-default",
@@ -331,7 +337,7 @@ export const TRANSACTION_COLUMN_POLICY: Record<TransactionColumn, ColumnPolicy> 
   first_exported_at: {
     insert: "db-default",
     update: "writable",
-    why: "BACKLOG-2013 freeze marker. Set write-once at the SQL layer by stampFirstExportedAt and cleared by admin unfreeze — both via the override path below. A brand-new deal has never been exported.",
+    why: "BACKLOG-2013 freeze marker. Set write-once at the SQL layer by TWO writers — `recordExportCompletion` folds it into the export-completion UPDATE (BACKLOG-2549; the enhanced and folder paths) and `stampFirstExportedAt` sets it alone (the PDF path) — and cleared by admin unfreeze via the override path below. Both enforce write-once in SQL, one with COALESCE and one with a NULL predicate. A brand-new deal has never been exported.",
   },
   detection_source: {
     insert: "writable",
@@ -466,9 +472,24 @@ const INSERTABLE_COLUMNS: readonly TransactionColumn[] = TABLE_FIELDS.transactio
  * Prepare one caller value for binding.
  *
  * `better-sqlite3` binds only numbers, strings, bigints, buffers and null — a
- * boolean throws. The creating paths pass `closing_date_verified: false` and
- * `property_coordinates ? true : false`, so this is not hypothetical; it is the
- * first thing that breaks when a hard-coded INSERT becomes a derived one.
+ * boolean throws, so the coercion below is what lets a hard-coded INSERT become
+ * a derived one without every caller being rewritten to pass 0/1.
+ *
+ * The boolean case is reachable BY TYPE on the UPDATE path, though no caller
+ * exercises it today. `updateTransaction` takes `Partial<Transaction>`, and
+ * `Transaction` declares `closing_date_verified` as a `boolean` — the only
+ * boolean-typed column on either payload type — so a main-process caller can
+ * hand this function a boolean and the compiler will accept it. In practice
+ * none does: the one real writer, `ExportModal`'s `handleExport`, sends `1`,
+ * and the IPC validator coerces with `Number()` before the value arrives. The
+ * freeze-override sentinel is the only boolean literal in any update payload,
+ * and it is deleted from the record before the column loop runs.
+ *
+ * On the INSERT path no `writable` column is boolean-typed at all.
+ *
+ * So the coercion is defensive on both paths — deliberately, since which
+ * columns are insertable is derived from the policy table above and changes
+ * when an entry changes.
  */
 function bindValue(
   column: TransactionColumn,
@@ -492,14 +513,26 @@ function bindValue(
 
 /**
  * Valid transaction status values.
- * These are the only values allowed in the database.
+ *
+ * DERIVED, not restated (BACKLOG-2755). This used to be a hand-written array,
+ * and it was one of four copies of the same domain on the transaction path —
+ * the others being two lists in `utils/validation.ts` and a literal in the
+ * bulk-status IPC handler, which had drifted from the column's CHECK in both
+ * directions. `TransactionStatusSchema` is pinned to that CHECK, as exact
+ * sets in both directions, by `schemas/__tests__/transactionSchemaParity.test.ts`,
+ * which reads the domain out of a real migrated database.
+ *
+ * The `readonly TransactionStatus[]` annotation is kept deliberately: it is a
+ * one-direction compile check that the schema's members are all members of the
+ * union in `types/models.ts`. Nothing checks the reverse, which is why that
+ * union is named as a remaining copy in BACKLOG-3180.
+ *
+ * The order is the schema's declaration order and matches the CHECK, so the
+ * order-sensitive assertion in `__tests__/transactionDbService.test.ts` still
+ * describes the same list.
  */
-export const VALID_TRANSACTION_STATUSES: readonly TransactionStatus[] = [
-  "pending",
-  "active",
-  "closed",
-  "rejected",
-] as const;
+export const VALID_TRANSACTION_STATUSES: readonly TransactionStatus[] =
+  TransactionStatusSchema.options;
 
 /**
  * Validate and return a transaction status value.
@@ -549,15 +582,16 @@ export async function createTransaction(
  * The synchronous core of `createTransaction` (BACKLOG-2538).
  *
  * WHY IT HAD TO BE SPLIT OUT — the same reason `updateContactSync` was
- * (BACKLOG-2496). Creating a deal and attaching its parties now run in ONE
- * transaction, and `dbTransaction` takes a SYNCHRONOUS callback. Calling the
- * `async` wrapper inside it would have been a silent atomicity hole: the body
- * is synchronous, but an `async` function turns a throw into a REJECTED
- * PROMISE rather than a synchronous throw, so `dbTransaction` would see the
- * callback return normally and COMMIT — with the failure surfacing later as an
- * unhandled rejection, after the write it was supposed to prevent had landed.
+ * (BACKLOG-2496). Creating a deal and attaching its parties run in ONE
+ * transaction, and `dbTransaction` takes a SYNCHRONOUS callback, so the
+ * composition needs a callee that is synchronous all the way down. What is at
+ * stake if a callee in that position is not synchronous is asserted, by name,
+ * in `db/__tests__/transactionDbService.atomicDealCreate-2538.test.ts`.
  *
- * The async wrapper stays because other callers await it.
+ * This function must stay synchronous. The promise-returning
+ * `createTransaction` above stays because other callers await it; it is NOT
+ * yet the plain shape BACKLOG-2960 rules for a seam export, and this file's
+ * seven seam functions are a later round.
  */
 export function createTransactionSync(
   transactionData: NewTransaction,
@@ -592,12 +626,12 @@ export function createTransactionSync(
   // everything that is not this file (see sqlFieldWhitelist's own header).
   validateFields("transactions", columns);
 
-  const sql = `
-    INSERT INTO transactions (${columns.join(", ")})
-    VALUES (${columns.map(() => "?").join(", ")})
+  const statement = sql`
+    INSERT INTO transactions (${columnList(columns)})
+    VALUES (${placeholderList(columns.length)})
   `;
 
-  dbRun(sql, params);
+  dbRun(statement, params);
   const transaction = getTransactionByIdSync(id);
   if (!transaction) {
     throw new DatabaseError("Failed to create transaction");
@@ -612,7 +646,7 @@ export function createTransactionSync(
  */
 export function getPendingTransactionCount(userId: string): number {
   const result = dbGet<{ count: number }>(
-    "SELECT COUNT(*) as count FROM transactions WHERE user_id = ? AND detection_status = 'pending'",
+    sql`SELECT COUNT(*) as count FROM transactions WHERE user_id = ? AND detection_status = 'pending'`,
     [userId],
   );
   return result?.count ?? 0;
@@ -642,11 +676,11 @@ export function getPendingTransactionCount(userId: string): number {
  *    basis. Changing the order here silently changes which duplicate wins.
  */
 function fetchScopedEmailRows(
-  transactionScope: string,
+  transactionScope: SafeSql,
   params: unknown[],
 ): ScopedEmailRow[] {
   return dbAll<ScopedEmailRow>(
-    `SELECT c.transaction_id  as transaction_id,
+    sql`SELECT c.transaction_id  as transaction_id,
             c.email_id       as email_id,
             c.match_reason   as match_reason,
             e.thread_id      as thread_id,
@@ -675,49 +709,49 @@ export async function getTransactions(
   // the tab, on the same deal. It is now derived below from the rules the tab
   // classifies with. Do not reintroduce a SQL count here: two producers of one
   // number is the shape this item exists to remove.
-  let whereClause = " WHERE 1=1";
+  let whereClause = sql` WHERE 1=1`;
   const params: unknown[] = [];
 
   if (filters?.user_id) {
-    whereClause += " AND t.user_id = ?";
+    whereClause = sql`${whereClause} AND t.user_id = ?`;
     params.push(filters.user_id);
   }
 
   if (filters?.transaction_type) {
-    whereClause += " AND t.transaction_type = ?";
+    whereClause = sql`${whereClause} AND t.transaction_type = ?`;
     params.push(filters.transaction_type);
   }
 
   if (filters?.status) {
-    whereClause += " AND t.status = ?";
+    whereClause = sql`${whereClause} AND t.status = ?`;
     params.push(filters.status);
   }
 
   if (filters?.export_status) {
-    whereClause += " AND t.export_status = ?";
+    whereClause = sql`${whereClause} AND t.export_status = ?`;
     params.push(filters.export_status);
   }
 
   if (filters?.start_date) {
-    whereClause += " AND t.closing_deadline >= ?";
+    whereClause = sql`${whereClause} AND t.closing_deadline >= ?`;
     params.push(filters.start_date);
   }
 
   if (filters?.end_date) {
-    whereClause += " AND t.closing_deadline <= ?";
+    whereClause = sql`${whereClause} AND t.closing_deadline <= ?`;
     params.push(filters.end_date);
   }
 
   if (filters?.property_address) {
-    whereClause += " AND t.property_address LIKE ?";
+    whereClause = sql`${whereClause} AND t.property_address LIKE ?`;
     params.push(`%${filters.property_address}%`);
   }
 
-  const sql = `SELECT t.*,
+  const statement = sql`SELECT t.*,
              (SELECT COUNT(*) FROM communications c WHERE c.transaction_id = t.id) as total_communications_count
              FROM transactions t${whereClause} ORDER BY t.created_at DESC`;
 
-  const transactions = dbAll<Transaction>(sql, params);
+  const transactions = dbAll<Transaction>(statement, params);
   if (transactions.length === 0) return transactions;
 
   // The SAME predicate the rows above were selected by, re-used as a subselect
@@ -725,7 +759,7 @@ export async function getTransactions(
   // SQLite's bound-variable limit, and re-deriving the filter by hand is how
   // the two halves drift apart.
   const counts = countLinkedEmailsByTransaction(
-    fetchScopedEmailRows(`SELECT t.id FROM transactions t${whereClause}`, [
+    fetchScopedEmailRows(sql`SELECT t.id FROM transactions t${whereClause}`, [
       ...params,
     ]),
   );
@@ -755,9 +789,11 @@ export async function getTransactionById(
  * people, and marked nothing. It read as complete. Ranked third by damage in
  * the write-path audit (BACKLOG-2496).
  *
- * Both callees are the SYNC cores, deliberately. `dbTransaction` takes a
- * synchronous callback; calling the `async` facades here would let the
- * transaction commit over a rejected promise — see `createTransactionSync`.
+ * Both callees are the SYNC cores, deliberately: `dbTransaction` takes a
+ * synchronous callback, so this composition needs callees that are synchronous
+ * all the way down. What is at stake if the assign callee is replaced by a
+ * promise-returning facade is asserted, by name, in
+ * `db/__tests__/transactionDbService.atomicDealCreate-2538.test.ts`.
  *
  * Communication auto-linking is NOT in here. It is a long network-and-scan
  * operation, and holding the single SQLite write lock across it would block
@@ -800,13 +836,13 @@ export function getTransactionByIdSync(
   // `TransactionId`, so `linkCommunicationToTransaction` and anything else that
   // demands one can be called from here without a cast (control 3).
   const transaction = dbGet<TransactionRow>(
-    "SELECT t.* FROM transactions t WHERE t.id = ?",
+    sql`SELECT t.* FROM transactions t WHERE t.id = ?`,
     [transactionId],
   );
   if (!transaction) return null;
 
   const counts = countLinkedEmailsByTransaction(
-    fetchScopedEmailRows("SELECT ?", [transactionId]),
+    fetchScopedEmailRows(sql`SELECT ?`, [transactionId]),
   );
   transaction.email_count = counts.get(transactionId) ?? 0;
   return transaction;
@@ -940,10 +976,10 @@ function normalizeFrozenFieldValue(field: string, value: unknown): string {
 /**
  * Update transaction
  */
-export async function updateTransaction(
+export function updateTransactionSync(
   transactionId: string,
   updates: Partial<Transaction>,
-): Promise<void> {
+): void {
   // BACKLOG-2558 — there is no `allowedFields` array here any more.
   //
   // The 46-name array this replaces invented 11 columns that exist in no table
@@ -983,9 +1019,9 @@ export async function updateTransaction(
   // NOT be blocked — only a genuine change to a frozen field's value throws.
   const attemptedFrozen = frozenFieldsInUpdate(Object.keys(updatesRecord));
   if (attemptedFrozen.length > 0 && !hasUnfreezeOverride) {
-    const selectCols = ["first_exported_at", ...FROZEN_IDENTITY_FIELDS].join(", ");
+    const selectCols = columnList(["first_exported_at", ...FROZEN_IDENTITY_FIELDS]);
     const current = dbGet<Record<string, unknown>>(
-      `SELECT ${selectCols} FROM transactions WHERE id = ?`,
+      sql`SELECT ${selectCols} FROM transactions WHERE id = ?`,
       [transactionId],
     );
     if (isTransactionFrozen((current as { first_exported_at: string | null } | undefined) ?? undefined)) {
@@ -1000,7 +1036,7 @@ export async function updateTransaction(
         // it must be HUMAN (no raw snake_case column names). The precise frozen
         // field list stays in the log and on the typed error's `attemptedFields`
         // for developers/support; it is never dumped at the user.
-        logService.info(
+        void logService.info(
           "Blocked edit to frozen identity anchor(s) after export",
           "TransactionDbService",
           { transactionId, attemptedFrozen: changedFrozen },
@@ -1014,7 +1050,7 @@ export async function updateTransaction(
     }
   }
 
-  const fields: FieldExpression<TransactionColumn>[] = [];
+  const columns: TransactionColumn[] = [];
   const values: unknown[] = [];
   /** Keys that will NOT be written, and the recorded reason. */
   const dropped: Array<{ key: string; reason: string }> = [];
@@ -1035,7 +1071,7 @@ export async function updateTransaction(
       continue;
     }
 
-    fields.push(`${key} = ?`);
+    columns.push(key);
     values.push(bindValue(key, updatesRecord[key], "update"));
   }
 
@@ -1043,14 +1079,14 @@ export async function updateTransaction(
   // built. BACKLOG-2558: this call used to run AFTER the local filter had
   // already discarded the drifted keys and after the empty-set throw, so the
   // one check the codebase relies on to catch drift could never see it.
-  validateFields("transactions", fields);
+  validateFields("transactions", columns);
 
-  if (fields.length === 0) {
+  if (columns.length === 0) {
     // BACKLOG-2558: the error now carries the evidence. The old message named
     // nothing, so a caller whose entire payload had been discarded — which is
     // exactly what happened to Reject — was told only that "no valid fields"
     // existed, with no way to see which fields it had sent.
-    logService.warn("Transaction update dropped every field", "TransactionDbService", {
+    void logService.warn("Transaction update dropped every field", "TransactionDbService", {
       transactionId,
       dropped,
     });
@@ -1067,7 +1103,7 @@ export async function updateTransaction(
     // Not silent: a partially-dropped payload says so, with the decision that
     // dropped it, so the next BACKLOG-2558 is visible in a log rather than
     // inferred from a stuck row.
-    logService.debug("Transaction update skipped non-writable keys", "TransactionDbService", {
+    void logService.debug("Transaction update skipped non-writable keys", "TransactionDbService", {
       transactionId,
       dropped,
     });
@@ -1075,22 +1111,40 @@ export async function updateTransaction(
 
   values.push(transactionId);
 
-  const sql = `UPDATE transactions SET ${fields.join(", ")} WHERE id = ?`;
-  const result = dbRun(sql, values);
+  const statement = sql`UPDATE transactions SET ${assignmentList(columns)} WHERE id = ?`;
+  const result = dbRun(statement, values);
 
-  logService.debug("Transaction update result", "TransactionDbService", {
+  void logService.debug("Transaction update result", "TransactionDbService", {
     transactionId,
-    fields,
+    columns,
     rowsChanged: result.changes,
   });
 
   if (result.changes === 0) {
-    logService.warn("Transaction update changed 0 rows", "TransactionDbService", {
+    void logService.warn("Transaction update changed 0 rows", "TransactionDbService", {
       transactionId,
-      fields,
+      columns,
     });
   }
 }
+
+/**
+ * BACKLOG-2547 — promise seam over the primitive.
+ *
+ * PLAIN `Promise.resolve`, NOT `async`, and deliberately a different shape from
+ * `createTransaction` (`async`) ~400 lines above. That is not drift: under an
+ * unawaited call inside a transaction body an `async` wrapper commits partial
+ * work while this one rolls back — measured on the shipping driver. The `async`
+ * anchor disclaims itself in its own comment as "NOT yet the plain shape
+ * BACKLOG-2960 rules for a seam export"; do not converge them backwards.
+ */
+export function updateTransaction(
+  transactionId: string,
+  updates: Partial<Transaction>,
+): Promise<void> {
+  return Promise.resolve(updateTransactionSync(transactionId, updates));
+}
+
 
 /**
  * BACKLOG-2013 — stamp the export-freeze marker (`first_exported_at`) write-once
@@ -1108,18 +1162,103 @@ export function stampFirstExportedAt(
   timestamp: string,
 ): boolean {
   const result = dbRun(
-    "UPDATE transactions SET first_exported_at = ? WHERE id = ? AND first_exported_at IS NULL",
+    sql`UPDATE transactions SET first_exported_at = ? WHERE id = ? AND first_exported_at IS NULL`,
     [timestamp, transactionId],
   );
   return result.changes === 1;
 }
 
 /**
+ * BACKLOG-2549 — parameters of one export completion.
+ *
+ * DECLARED AS A NAMED INTERFACE, NOT INLINE IN THE PARAMETER LIST, AND THAT IS
+ * LOAD-BEARING. `writeAtomicity.guard.test.ts` brace-matches a function body
+ * from its DECLARATION line (BACKLOG-3225), so an inline object type in the
+ * parameter list closes the capture before the body opens and the function
+ * reads as having NO body: zero writes, invisible to `dbLayerWriters()`, and
+ * every caller of it silently loses a counted write. Measured both forms; the
+ * inline one is invisible in every formatting variant. Keep this named.
+ */
+export interface ExportCompletionParams {
+  /** Omitted entirely by the folder path, which leaves any previous format in place. */
+  exportFormat?: string | null;
+  /** ISO timestamp -> `last_exported_on`. */
+  exportedAt: string;
+  /** Caller-computed, unchanged from the pre-BACKLOG-2549 handlers. */
+  exportCount: number;
+  /** ISO timestamp -> `first_exported_at`, applied only when it is still NULL. */
+  firstExportedAt: string;
+}
+
+/**
+ * BACKLOG-2549 — record an export completion as ONE statement.
+ *
+ * The export handlers used to write the tracking columns and the BACKLOG-2013
+ * freeze marker as two separate awaited statements. Between them the row is
+ * `export_status = 'exported'` with `first_exported_at` NULL: an exported
+ * artifact on disk while the deal's identity anchors are still editable. A
+ * crash is not required to reach it — `markFirstExport` is non-throwing, so a
+ * stamp FAILURE produced the same row and returned success to the user.
+ *
+ * The write-once rule moves from a `WHERE` predicate into the `SET`:
+ * `COALESCE(first_exported_at, ?)` keeps the boundary immutable in SQL, exactly
+ * as `stampFirstExportedAt` does, while still permitting the four tracking
+ * columns to be written on EVERY export. `WHERE` is `id = ?` alone and must
+ * stay that way — adding `AND first_exported_at IS NULL` here would silently
+ * stop recording re-exports.
+ *
+ * ONE statement text on purpose: `export_format` is a conditional COLUMN, not
+ * an if/else over two complete UPDATEs, because two statement texts read as two
+ * writes to the atomicity guard and would re-offend the rule this fix clears.
+ *
+ * The freeze guard in `updateTransaction` is not bypassed by this path — none
+ * of these five columns is in `FROZEN_IDENTITY_FIELDS`, so that guard already
+ * takes its early-out on this payload. Pinned behaviourally by case F of
+ * `transactionExportHandlers.exportFreezeAtomic-2549.test.ts`.
+ */
+export function recordExportCompletion(
+  transactionId: string,
+  params: ExportCompletionParams,
+): void {
+  const columns: TransactionColumn[] = [
+    "export_status",
+    "last_exported_on",
+    "export_count",
+  ];
+  const values: unknown[] = ["exported", params.exportedAt, params.exportCount];
+
+  if (params.exportFormat !== undefined && params.exportFormat !== null) {
+    columns.push("export_format");
+    values.push(params.exportFormat);
+  }
+
+  values.push(params.firstExportedAt, transactionId);
+
+  const statement = sql`UPDATE transactions SET ${assignmentList(columns)}, ${columnList([
+    "first_exported_at",
+  ])} = COALESCE(${columnList(["first_exported_at"])}, ?) WHERE id = ?`;
+  const result = dbRun(statement, values);
+
+  void logService.debug("Export completion recorded", "TransactionDbService", {
+    transactionId,
+    columns,
+    rowsChanged: result.changes,
+  });
+
+  if (result.changes === 0) {
+    void logService.warn("Export completion changed 0 rows", "TransactionDbService", {
+      transactionId,
+      columns,
+    });
+  }
+}
+
+/**
  * Delete transaction
  */
 export async function deleteTransaction(transactionId: string): Promise<void> {
-  const sql = "DELETE FROM transactions WHERE id = ?";
-  dbRun(sql, [transactionId]);
+  const statement = sql`DELETE FROM transactions WHERE id = ?`;
+  dbRun(statement, [transactionId]);
 }
 
 /**
@@ -1145,15 +1284,18 @@ export async function findExistingTransactionsByAddresses(
   );
 
   // Build SQL with placeholders for all addresses
-  const placeholders = normalizedAddresses.map(() => "LOWER(TRIM(property_address)) = ?").join(" OR ");
-  const sql = `
+  const placeholders = joinFragments(
+    normalizedAddresses.map(() => sql`LOWER(TRIM(property_address)) = ?`),
+    sql` OR `,
+  );
+  const statement = sql`
     SELECT id, property_address
     FROM transactions
     WHERE user_id = ? AND (${placeholders})
   `;
 
   const params = [userId, ...normalizedAddresses];
-  const results = dbAll<{ id: string; property_address: string }>(sql, params);
+  const results = dbAll<{ id: string; property_address: string }>(statement, params);
 
   // Build map of normalized address -> transaction ID
   const addressMap = new Map<string, string>();

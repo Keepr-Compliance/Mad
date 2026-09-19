@@ -47,21 +47,20 @@ import type { TransactionStatus } from "../types/models";
  */
 export const REJECTED_TRANSACTION_STATUS: TransactionStatus = "rejected";
 
-/**
- * SQL fragment selecting LIVE transactions, for use in a WHERE clause where the
- * `transactions` table is aliased `t`.
+/*
+ * ---------------------------------------------------------------------------
+ * The SQL form of the rule lives in `db/core/transactionEligibilitySql.ts`
+ * (BACKLOG-3103) — `LIVE_TRANSACTION_SQL_PREDICATE`,
+ * `LIVE_TRANSACTION_SQL_PREDICATE_UNALIASED` and `withLiveTransactionParam`.
  *
- * Interpolated as a constant, never built from input — there is no injection
- * surface and no parameter to bind.
- *
- * NULL status is excluded (see the module docblock).
+ * It used to live here, hand-quoting the constant above into SQL text, with a
+ * docblock claiming "there is no injection surface and no parameter to bind".
+ * The first half was true; the second was the defect. A status is a VALUE, so it
+ * binds, and text authored outside `db/**` is what the whole SQL-brand epic
+ * exists to end. The rule is still defined once — this file owns the VALUE and
+ * the JS comparison, `db/core` owns the SQL spelling and its parameter.
+ * ---------------------------------------------------------------------------
  */
-export const LIVE_TRANSACTION_SQL_PREDICATE = `t.status != '${REJECTED_TRANSACTION_STATUS}'`;
-
-/**
- * The same fragment for queries that read `transactions` unaliased.
- */
-export const LIVE_TRANSACTION_SQL_PREDICATE_UNALIASED = `status != '${REJECTED_TRANSACTION_STATUS}'`;
 
 /**
  * JS form of the rule, for readers that already hold the row.

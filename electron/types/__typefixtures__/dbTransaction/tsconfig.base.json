@@ -1,0 +1,33 @@
+{
+  "//": "BACKLOG-2960 PR 0b — the dbTransaction body-type controls' compiler. These fixtures are",
+  "//2": "compiled by electron/services/db/core/__tests__/dbTransaction.typeControls.test.ts, which",
+  "//3": "asserts on tsc's EXIT CODE and DIAGNOSTICS. Three of the four fixtures are SUPPOSED to fail",
+  "//4": "to compile, so this directory is covered by the root configs' and eslint's",
+  "//5": "`electron/types/__typefixtures__/**` exclude (BACKLOG-3067) — otherwise `type-check`,",
+  "//6": "`type-check:tests` and `build:electron` would all go red on files that are working.",
+  "//7": "",
+  "//8": "This config deliberately does NOT `extends` the root tsconfig.json: the root's `exclude`",
+  "//9": "names this directory, and inheriting it would exclude these fixtures from their own",
+  "//10": "compiler. The load-bearing compilerOptions are therefore duplicated, and the suite asserts",
+  "//11": "they still MATCH the root's — a fixture compiled under weaker settings than the real code",
+  "//12": "proves nothing about the real code.",
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "strictFunctionTypes": true,
+    "strictBindCallApply": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "allowSyntheticDefaultImports": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "//include": "Deliberately absent. Each fixture gets a thin config that `extends` this one and names exactly ONE file, so every fixture has its OWN tsc exit code. Compiling them together would let one fixture failure mask another fixture passing."
+}

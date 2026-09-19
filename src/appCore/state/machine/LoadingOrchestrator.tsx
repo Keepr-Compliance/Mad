@@ -24,8 +24,44 @@ import {
 } from "./utils/platformInit";
 import { waitForApi } from "./utils/waitForApi";
 import { useAuth } from "../../../contexts";
+import { fdaFromProbe, unknownFdaFor } from "./fdaState";
 import type { PlatformInfo, User, UserData } from "./types";
 import logger from "../../../utils/logger";
+
+type RecordedPhoneType = "iphone" | "android";
+
+/** Only a successful read of a valid value is an answer. */
+function asRecordedPhoneType(
+  result: { success: boolean; phoneType?: unknown } | null | undefined,
+): RecordedPhoneType | null {
+  if (!result || result.success !== true) return null;
+  return result.phoneType === "iphone" || result.phoneType === "android"
+    ? result.phoneType
+    : null;
+}
+
+/**
+ * BACKLOG-3276: copy a cloud-only phone type into the local database, then
+ * return what the local database now holds.
+ *
+ * - The sync's own result is deliberately ignored: it reports success whether
+ *   it wrote a value, found nothing in the cloud, or found no local user row.
+ *   The local re-read is the record.
+ * - Callers invoke this only after a SUCCESSFUL local read found nothing. That
+ *   read waited for the database, which this sync handler does not do.
+ * - Any failure means "no answer", never an exception into the Phase 4
+ *   fallback, which would also discard the user's email and permission state.
+ */
+async function recoverPhoneTypeFromCloud(
+  userId: string,
+): Promise<RecordedPhoneType | null> {
+  try {
+    await window.api.user.syncPhoneTypeFromCloud(userId);
+    return asRecordedPhoneType(await window.api.user.getPhoneType(userId));
+  } catch {
+    return null;
+  }
+}
 
 interface LoadingOrchestratorProps {
   children: React.ReactNode;
@@ -226,8 +262,10 @@ export function LoadingOrchestrator({
 
     // console.log("[LoadingOrchestrator] PHASE 2: Starting database initialization...");
 
-    // Guard: respect deferredDbInit flag - let onboarding SecureStorageStep handle DB init
-    // This prevents the Keychain prompt from appearing before the login screen on fresh macOS installs
+    // Guard: respect deferredDbInit flag - let onboarding SecureStorageStep handle DB init.
+    // BACKLOG-3253 deleted the only producer of this flag, so this branch is
+    // now unreachable. Kept inert rather than deleted, to keep that PR to one
+    // hunk on a contended file; removal is a tracked follow-up.
     const loadingState = state as import("./types").LoadingState;
     if (loadingState.deferredDbInit) {
       return;
@@ -606,8 +644,13 @@ export function LoadingOrchestrator({
       const userId = user.id;
 
       // Load all user data in parallel for faster loading
-      const [phoneTypeResult, emailOnboardingResult, connectionsResult, permissionsResult] =
-        await Promise.all([
+      const [
+        phoneTypeResult,
+        emailOnboardingResult,
+        connectionsResult,
+        permissionsResult,
+        onboardingPrefsResult,
+      ] = await Promise.all([
           // Get phone type from database
           window.api.user.getPhoneType(userId).catch(() => ({
             success: false,
@@ -636,13 +679,44 @@ export function LoadingOrchestrator({
                 fullDiskAccess: false,
               }))
             : Promise.resolve({ hasPermission: true, fullDiskAccess: true }),
+
+          // BACKLOG-3212: read the persisted "Skip for now" choice for Full
+          // Disk Access (Supabase user_preferences `onboarding.fdaSkipped`,
+          // written by PermissionsStep via preferences:update). macOS only —
+          // the flag has no meaning elsewhere, so Windows pays nothing.
+          //
+          // Cloud-backed, matching phoneType/contactSources/the 1842 resume
+          // marker: readable without local DB init, which matters because this
+          // phase can run while init is still deferred.
+          //
+          // Wrapped in Promise.resolve().then() rather than called bare: this
+          // array is built eagerly, so a `window.api.preferences` that is
+          // absent (older preload, or a test harness that stubs only part of
+          // the bridge) would throw synchronously here and reject the whole
+          // Promise.all — sending an otherwise-fine user down the fallback
+          // path. Optional-chained and defaulted so a missing bridge simply
+          // means "no recorded skip".
+          platform.isMacOS
+            ? Promise.resolve()
+                .then(() => window.api.preferences?.get?.(userId))
+                .catch(() => undefined)
+            : Promise.resolve(undefined),
         ]);
 
-      // Determine phone type
+      // Determine phone type.
+      //
+      // BACKLOG-3276: the local database is the record read here. On a fresh
+      // local profile it is empty while the user's answer is already in
+      // Supabase (usePhoneTypeApi writes the cloud copy first). When, and only
+      // when, the local read SUCCEEDED and found nothing, copy the cloud answer
+      // into the local database and read local again. See
+      // recoverPhoneTypeFromCloud for the rules.
+      const localPhoneType = asRecordedPhoneType(phoneTypeResult);
       const phoneType =
-        phoneTypeResult.success && phoneTypeResult.phoneType
-          ? phoneTypeResult.phoneType
-          : null;
+        localPhoneType ??
+        (phoneTypeResult.success === true
+          ? await recoverPhoneTypeFromCloud(userId)
+          : null);
 
       // Determine if any email provider is connected
       const hasEmailConnected =
@@ -658,10 +732,25 @@ export function LoadingOrchestrator({
         hasEmailConnected;
 
       // Determine permissions status (macOS only)
-      const hasPermissions = platform.isMacOS
-        ? permissionsResult.hasPermission === true ||
-          permissionsResult.fullDiskAccess === true
-        : true; // Windows doesn't require permissions
+      const probeGranted =
+        permissionsResult.hasPermission === true ||
+        permissionsResult.fullDiskAccess === true;
+
+      // BACKLOG-3212: whether the user has already declined Full Disk Access.
+      // Read from the preferences bag written by PermissionsStep's "Skip for
+      // now" (verified shape: preferenceHandlers.onboardingSkip.test.ts).
+      // Strict === true so a malformed/absent value can only ever mean "not
+      // skipped" — the fix must never make the app stop asking by accident.
+      const onboardingPrefs = (
+        onboardingPrefsResult as { preferences?: { onboarding?: { fdaSkipped?: unknown } } } | undefined
+      )?.preferences?.onboarding;
+      const recordedDecline = onboardingPrefs?.fdaSkipped === true;
+
+      // BACKLOG-3275: the ONE place the Full Disk Access union is derived, from
+      // the two inputs that already existed. Neither contract changes — the
+      // probe is still the `check-permissions` IPC call, the decline is still
+      // the `onboarding.fdaSkipped` key in the preferences bag.
+      const fda = fdaFromProbe({ isMacOS: platform.isMacOS, probeGranted, recordedDecline });
 
       // Determine if driver setup is needed (Windows + iPhone only)
       let needsDriverSetup = false;
@@ -688,7 +777,7 @@ export function LoadingOrchestrator({
         hasCompletedEmailOnboarding,
         hasEmailConnected,
         needsDriverSetup,
-        hasPermissions,
+        fda,
       };
     };
 
@@ -721,7 +810,10 @@ export function LoadingOrchestrator({
             hasCompletedEmailOnboarding: false,
             hasEmailConnected: false,
             needsDriverSetup: platform.isWindows,
-            hasPermissions: !platform.isMacOS,
+            // BACKLOG-3212 / BACKLOG-3275: the fallback deliberately claims no
+            // recorded decline. We could not read preferences, so we do not
+            // know — and "ask again" is the safe direction to be wrong in.
+            fda: unknownFdaFor(platform),
           };
 
           dispatch({
@@ -749,15 +841,18 @@ export function LoadingOrchestrator({
     // init still falls through to the reads below, which have their own
     // `.catch()` fallbacks.
     //
-    // BACKLOG-2171: a returning user on a fresh macOS profile routes here with
-    // DB init intentionally DEFERRED to onboarding's secure-storage step
-    // (deferredDbInit) — init hasn't been kicked off and won't be until the
-    // user reaches that step, which is BEHIND this loading screen. Polling
-    // for db-ready in that state burns the full MAX_WAIT_MS for nothing, which
-    // was the launch-blocking "frozen Loading your data" regression. `idle`/
-    // any non-in-progress stage now returns immediately; only a stage that
-    // indicates init is genuinely underway keeps polling (preserves the
-    // BACKLOG-2149 memory-pressure protection).
+    // BACKLOG-2171: this was written for a fresh macOS profile that routed here
+    // with DB init intentionally DEFERRED to onboarding's secure-storage step —
+    // init hadn't been kicked off and wouldn't be until the user reached that
+    // step, which is BEHIND this loading screen. Polling for db-ready in that
+    // state burned the full MAX_WAIT_MS for nothing: the launch-blocking
+    // "frozen Loading your data" regression.
+    //
+    // BACKLOG-3253 removed that deferral, so the stated cause is gone. The
+    // logic stays: `idle`/any non-in-progress stage returns immediately and
+    // only a stage indicating init is genuinely underway keeps polling, which
+    // still bounds a STUCK init and still preserves the BACKLOG-2149
+    // memory-pressure protection.
     const waitForDbReadyBounded = async (): Promise<void> => {
       const getInitStage = window.api?.system?.getInitStage;
       if (!getInitStage) return;

@@ -218,24 +218,24 @@ export function AndroidMessagesSettings({ userId }: AndroidMessagesSettingsProps
        contact re-import. The working control is this panel's Force Re-import;
        the Contacts screen links here rather than duplicating a destructive call
        the desktop cannot undo (see the DECISION on BACKLOG-3001). */
-    <div id="settings-android-companion" className="p-4 bg-gray-50 rounded-lg border border-gray-200">
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2">
-          <svg className="w-5 h-5 text-green-500" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M17.6 9.48l1.84-3.18c.16-.31.04-.69-.26-.85-.29-.15-.65-.06-.83.22l-1.88 3.24a11.463 11.463 0 00-8.94 0L5.65 5.67c-.19-.29-.54-.38-.84-.22-.3.16-.42.54-.26.85L6.4 9.48A10.78 10.78 0 002 18h20a10.78 10.78 0 00-4.4-8.52zM7 15.25a1.25 1.25 0 110-2.5 1.25 1.25 0 010 2.5zm10 0a1.25 1.25 0 110-2.5 1.25 1.25 0 010 2.5z" />
-          </svg>
-          <h4 className="text-sm font-medium text-gray-900">Android Companion</h4>
-        </div>
-      </div>
-      <p className="text-xs text-gray-600 mb-3">
-        Sync SMS messages from your Android phone over WiFi using the Keepr Companion app.
-      </p>
-
+    /* BACKLOG-3156 stage E: THE OUTER PANEL CARD IS GONE — see the same change
+       on `MacOSMessagesImportSettings`. Each block is its own card now, with its
+       eyebrow as that card's first child, so a card wrapping every block would
+       be a card inside a card.
+       The anchor id stays on the root so the Contacts screen's "Go to Android
+       Companion re-import" still scrolls to the whole panel. */
+    <div id="settings-android-companion" className="space-y-4">
+      {/* BACKLOG-3156 stage E: THE PANEL IDENTITY HEADER IS GONE — the icon and
+          `<h4>Android Companion</h4>`. Emails and Contacts carry no such header
+          and the shared shape does not have a slot for one; the import-source
+          radio directly above already says `Android Companion`. It held no
+          state — see the same deletion on `MacOSMessagesImportSettings`. */}
+      <div>
       {/* Sync status display */}
       {loading ? (
-        <div className="mb-3 text-xs text-gray-500">Loading sync status...</div>
+        <div className="mt-1 text-xs text-gray-500">Loading sync status...</div>
       ) : (
-        <div className="mb-3 text-xs text-gray-500">
+        <div className="mt-1 text-xs text-gray-500">
           {syncStatus?.lastSyncTimestamp
             ? `Last synced: ${formatRelativeTime(syncStatus.lastSyncTimestamp)}`
             : "Never synced"}
@@ -245,9 +245,11 @@ export function AndroidMessagesSettings({ userId }: AndroidMessagesSettingsProps
         </div>
       )}
 
+      </div>{/* /panel identity group */}
+
       {/* Clear result display (BACKLOG-1468) */}
       {clearResult && (
-        <div className="mb-3 text-xs text-green-700 bg-green-50 rounded p-2 border border-green-200">
+        <div className="text-xs text-green-700 bg-green-50 rounded p-2 border border-green-200">
           Cleared {clearResult.messagesDeleted.toLocaleString()} messages and{" "}
           {clearResult.contactsDeleted.toLocaleString()} contacts. Open the companion app and
           tap Sync Now to re-import.
@@ -256,18 +258,32 @@ export function AndroidMessagesSettings({ userId }: AndroidMessagesSettingsProps
 
       {/* Sync server status indicator */}
       {syncStatus?.running && (
-        <div className="mb-3 flex items-center gap-2 text-xs text-green-700">
+        <div className="flex items-center gap-2 text-xs text-green-700">
           <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
           Sync server active on {syncStatus.address}:{syncStatus.port}
         </div>
       )}
 
-      {/* Import Filters */}
-      <div className="mb-3 p-3 bg-white rounded border border-gray-200">
-        <h5 className="text-xs font-medium text-gray-700 mb-2">
-          Import Filters
-        </h5>
+      {/* BACKLOG-3156 stage E: block 2 of the shared shape — Import Preferences.
+          Block 1 (Sources) is the import-source picker `Settings.tsx` renders
+          directly above this panel.
 
+          The block and its card are ONE element, eyebrow first. The card's own
+          `<h5>Import Filters</h5>` is gone: it named, in near-identical words,
+          what the eyebrow directly above it already named. */}
+      <div
+        data-testid="android-block-preferences"
+        className="p-4 bg-gray-50 rounded-lg border border-gray-200"
+      >
+      <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
+        Import Preferences
+      </p>
+      {/* BACKLOG-3156 stage E: the panel's description, moved into the block's
+          description slot when the identity header above it was deleted — the
+          same move as on the macOS panel. Sentence unchanged. */}
+      <p className="text-xs text-gray-600 mb-3">
+        Sync SMS messages from your Android phone over WiFi using the Keepr Companion app.
+      </p>
         {/* Date Range Filter */}
         <div className="flex items-center justify-between mb-2">
           <span className="text-xs text-gray-600">Import messages from</span>
@@ -328,28 +344,34 @@ export function AndroidMessagesSettings({ userId }: AndroidMessagesSettingsProps
             {`Importing messages from the last ${lookbackMonths} months`}
           </p>
         )}
-      </div>
+      </div>{/* /BACKLOG-3156 stage E — Import Preferences block (its own card) */}
 
       {/* BACKLOG-2347: sync is automatic once paired — the old "tap Sync Now"
           how-to was misleading (and duplicated the source-picker instructions).
           Replaced with an accurate one-liner; the guided pairing entry point
           lives in the import-source section's "Connect your Android phone" CTA. */}
-      <div className="mb-3 p-3 bg-green-50 rounded text-xs text-green-700 border border-green-200">
+      <div className="p-3 bg-green-50 rounded text-xs text-green-700 border border-green-200">
         <p>
           Messages sync <strong>automatically</strong> over WiFi. Keep both
           devices on the same network with the Keepr Companion app installed.
         </p>
       </div>
 
-      {/* Force Re-import Button */}
-      <button
-        onClick={() => setShowForceWarning(true)}
-        disabled={resetting}
-        className="w-full px-3 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-        title="Reset sync timestamp so the companion app re-sends all messages"
-      >
-        {resetting ? "Resetting..." : "Force Re-import"}
-      </button>
+      {/* BACKLOG-3156 stage A: the actions, BARE — no card and no heading. This
+          panel has no primary: Android sync is automatic once paired, so the
+          re-import is the only action there is. It stops being full-width on a
+          row of its own, which is what made it the odd one out.
+          `disabled={resetting}` is unchanged. */}
+      <div data-testid="android-block-actions" className="flex gap-2">
+        <button
+          onClick={() => setShowForceWarning(true)}
+          disabled={resetting}
+          className="px-3 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+          title="Reset sync timestamp so the companion app re-sends all messages"
+        >
+          {resetting ? "Resetting..." : "Force Re-import"}
+        </button>
+      </div>
 
       {/* Force re-import warning confirmation */}
       {showForceWarning && (

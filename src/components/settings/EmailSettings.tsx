@@ -8,7 +8,15 @@ import { settingsService, authService } from '../../services';
 import logger from '../../utils/logger';
 import { safeErrorMessage } from '../../utils/formatUtils';
 import { ResponsiveModal } from "../common/ResponsiveModal";
-import type { Connections, ConnectionResult, PreferencesResult } from './types';
+import { ImportInfoPopover } from "./ImportInfoPopover";
+import { emailPrecacheStageDisplayFor } from "../../utils/emailPrecacheStageDisplay";
+import { ConnectionMenu } from "./ConnectionMenu";
+import type {
+  Connections,
+  ConnectionStatus,
+  ConnectionResult,
+  PreferencesResult,
+} from './types';
 
 // Refresh interval for connection status (60 seconds)
 const CONNECTION_REFRESH_INTERVAL = 60000;
@@ -110,6 +118,154 @@ export function describeForceRecache(
   return headline;
 }
 
+/**
+ * BACKLOG-3156 stage C — ONE CONNECTION CONTROL PER PROVIDER ROW.
+ *
+ * ===========================================================================
+ * WHAT REPLACED WHAT
+ * ===========================================================================
+ * Each provider card used to carry TWO things that both described the
+ * connection: a status pill in the header row (`Connected` / `Session Expired`
+ * / `Connection Issue` / `Not Connected`, each with a coloured dot on its
+ * RIGHT) and, underneath, a full-width button (`Disconnect Gmail` /
+ * `Reconnect Gmail` / `Connect Gmail`). The approved design merges them into
+ * the single control this component renders, one per row, carrying the five
+ * states the card actually has:
+ *
+ *   not connected   -> `Connect <label>`      (blue button)
+ *   connecting      -> `Connecting...`        (same button, disabled)
+ *   connected       -> green dot + `Connected` LABEL, plus a ⋮ menu
+ *   session expired -> `Reconnect <label>`    (amber button)
+ *   connection issue-> `Reconnect <label>`    (amber button)
+ *
+ * ===========================================================================
+ * THE CONNECTED STATE IS A LABEL, AND THE DOT SITS TO ITS LEFT
+ * ===========================================================================
+ * The green state does not act. A control that reads "Connected" and signs you
+ * out when you tap it turns a thing you glance at into a destructive one, so
+ * disconnecting lives in the row's overflow instead — a deliberate second step,
+ * and one that behaves the same with a mouse and a finger.
+ *
+ * The dot is rendered BEFORE the word, on the founder's explicit call (the
+ * design's own mockup had it after). `settingsConnectionControl-3156` asserts
+ * the document order rather than trusting this sentence.
+ *
+ * ===========================================================================
+ * WHAT THE WORDS `Session Expired` AND `Connection Issue` BECAME
+ * ===========================================================================
+ * They are no longer printed as a pill, because the merged control reads
+ * `Reconnect` in both states. BACKLOG-2142's distinction is NOT lost: the two
+ * states still differ from `Not Connected` in that the control offers
+ * Reconnect rather than Connect, and they still differ from each other in the
+ * amber `userMessage` panel below the header row, which renders in both error
+ * states and carries the provider's own wording. The suite asserts that pair
+ * directly.
+ */
+interface ProviderConnectionControlProps {
+  provider: "google" | "microsoft";
+  /** `Gmail` / `Outlook` — every string in this row is built from it. */
+  label: string;
+  connection: ConnectionStatus | null;
+  loading: boolean;
+  connecting: boolean;
+  disconnecting: boolean;
+  isOnline: boolean;
+  onConnect: () => void;
+  /**
+   * Opens the confirmation. NOT the disconnect itself — the caller owns the
+   * dialog, and `settingsConnectionControl-3156` asserts that choosing
+   * Disconnect from the menu calls no auth API until the dialog is confirmed.
+   */
+  onRequestDisconnect: () => void;
+}
+
+function ProviderConnectionControl({
+  provider,
+  label,
+  connection,
+  loading,
+  connecting,
+  disconnecting,
+  isOnline,
+  onConnect,
+  onRequestDisconnect,
+}: ProviderConnectionControlProps): React.ReactElement {
+  const testIdBase = `email-connection-${provider}`;
+  // BACKLOG-2142 carried this tooltip on the buttons it replaced; `isOnline` is
+  // one of the branches this change had to keep alive, so it moves with them.
+  const offlineTitle = !isOnline ? "You are offline" : undefined;
+
+  if (loading) {
+    return (
+      <div className="text-xs text-gray-500" data-testid={`${testIdBase}-checking`}>
+        Checking...
+      </div>
+    );
+  }
+
+  if (connection?.connected) {
+    return (
+      <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2">
+          <div
+            data-testid={`${testIdBase}-dot`}
+            className="w-2 h-2 bg-green-500 rounded-full"
+          ></div>
+          <span
+            data-testid={`${testIdBase}-status`}
+            className="text-xs text-green-600 font-medium"
+          >
+            {disconnecting ? "Disconnecting..." : "Connected"}
+          </span>
+        </div>
+        <ConnectionMenu
+          testId={testIdBase}
+          triggerAriaLabel={`${label} connection options`}
+          items={[
+            {
+              label: "Disconnect",
+              // Both rows show the same word, so the visible label alone would
+              // not tell a screen reader which account the item acts on.
+              ariaLabel: `Disconnect ${label}`,
+              onSelect: onRequestDisconnect,
+              testId: `${testIdBase}-disconnect`,
+              disabled: disconnecting || !isOnline,
+              title: offlineTitle,
+              tone: "destructive",
+            },
+          ]}
+        />
+      </div>
+    );
+  }
+
+  if (connection?.error && connection.error.type !== "NOT_CONNECTED") {
+    return (
+      <button
+        onClick={onConnect}
+        disabled={connecting || !isOnline}
+        title={offlineTitle}
+        data-testid={`${testIdBase}-reconnect`}
+        className="px-3 py-2 bg-yellow-500 hover:bg-yellow-600 text-white text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        {connecting ? "Reconnecting..." : `Reconnect ${label}`}
+      </button>
+    );
+  }
+
+  return (
+    <button
+      onClick={onConnect}
+      disabled={connecting || !isOnline}
+      title={offlineTitle}
+      data-testid={`${testIdBase}-connect`}
+      className="px-3 py-2 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+    >
+      {connecting ? "Connecting..." : `Connect ${label}`}
+    </button>
+  );
+}
+
 interface EmailSettingsProps {
   userId: string;
   initialPreferences: PreferencesResult['preferences'];
@@ -133,6 +289,14 @@ export function EmailSettings({
   const [loadingConnections, setLoadingConnections] = useState<boolean>(true);
   const [connectingProvider, setConnectingProvider] = useState<string | null>(null);
   const [disconnectingProvider, setDisconnectingProvider] = useState<string | null>(null);
+  /**
+   * BACKLOG-3156 stage C: which provider's disconnect confirmation is open.
+   * Disconnect had NO confirmation before this change, while the far less
+   * destructive Force Re-cache beside it opened a full modal.
+   */
+  const [disconnectConfirm, setDisconnectConfirm] = useState<
+    "google" | "microsoft" | null
+  >(null);
 
   // Email cache duration (TASK-2072)
   const [emailCacheDurationMonths, setEmailCacheDurationMonths] = useState<number>(() => {
@@ -220,6 +384,11 @@ export function EmailSettings({
             if (cleanup) cleanup();
           },
         );
+      } else {
+        // BACKLOG-3281: the pre-flight call failed, so no listener was
+        // registered and no mailbox-connected event will ever arrive to clear
+        // the spinner below.
+        setConnectingProvider(null);
       }
     } catch (error) {
       logger.error("Failed to connect Google:", error);
@@ -249,6 +418,9 @@ export function EmailSettings({
             if (cleanup) cleanup();
           },
         );
+      } else {
+        // BACKLOG-3281: see handleConnectGoogle above.
+        setConnectingProvider(null);
       }
     } catch (error) {
       logger.error("Failed to connect Microsoft:", error);
@@ -328,6 +500,8 @@ export function EmailSettings({
     phase: "repairing" | "fetching" | "swapping" | "done";
     current: number;
     percent: number;
+    /** Which fetch round, when the event names one. See the label below. */
+    stage?: string;
   } | null>(null);
   const [isCancellingRecache, setIsCancellingRecache] = useState(false);
 
@@ -350,6 +524,7 @@ export function EmailSettings({
         phase: progress.phase,
         current: progress.current,
         percent: progress.percent,
+        stage: progress.stage,
       });
     });
   }, []);
@@ -460,14 +635,28 @@ export function EmailSettings({
   return (
     <div id="settings-email" className="mb-8">
       <h3 className="text-lg font-semibold text-gray-900 mb-4">
-        Email Connections
+        Emails
       </h3>
       <div className="space-y-4">
+        {/* BACKLOG-3156 stage E: block 1 of 3 — Sources. The eyebrow is the
+            FIRST CHILD of the block's one card, and the two connections are
+            ROWS inside it. They were cards themselves, which put a card inside
+            a card the moment the eyebrow moved in; `rounded-lg` means card and
+            `rounded` means row throughout these four screens, so the rows drop
+            to `rounded` and take the white-on-gray fill the radio options in
+            `ImportSourceSettings` already use. Each row keeps its own error
+            styling; stage C replaced each one's status pill + full-width button
+            with the single control in ProviderConnectionControl. */}
+        <div data-testid="emails-block-sources" className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+        <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
+          Sources
+        </p>
+        <div className="space-y-2">
         {/* Gmail Connection */}
-        <div className={`p-4 rounded-lg border ${
+        <div className={`p-3 rounded border ${
           connections.google?.error && !connections.google?.connected && connections.google.error.type !== "NOT_CONNECTED"
             ? "bg-yellow-50 border-yellow-200"
-            : "bg-gray-50 border-gray-200"
+            : "bg-white border-gray-200"
         }`}>
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
@@ -482,33 +671,17 @@ export function EmailSettings({
                 Gmail
               </h4>
             </div>
-            {loadingConnections ? (
-              <div className="text-xs text-gray-500">Checking...</div>
-            ) : connections.google?.connected ? (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-green-600 font-medium">
-                  Connected
-                </span>
-                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-              </div>
-            ) : connections.google?.error && connections.google.error.type !== "NOT_CONNECTED" ? (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-yellow-600 font-medium">
-                  {connections.google.error.type === "TOKEN_REFRESH_FAILED" ||
-                   connections.google.error.type === "TOKEN_EXPIRED"
-                    ? "Session Expired"
-                    : "Connection Issue"}
-                </span>
-                <div className="w-2 h-2 bg-yellow-500 rounded-full"></div>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-gray-500">
-                  Not Connected
-                </span>
-                <div className="w-2 h-2 bg-gray-300 rounded-full"></div>
-              </div>
-            )}
+            <ProviderConnectionControl
+              provider="google"
+              label="Gmail"
+              connection={connections.google}
+              loading={loadingConnections}
+              connecting={connectingProvider === "google"}
+              disconnecting={disconnectingProvider === "google"}
+              isOnline={isOnline}
+              onConnect={handleConnectGoogle}
+              onRequestDisconnect={() => setDisconnectConfirm("google")}
+            />
           </div>
           {connections.google?.email && (
             <p className="text-xs text-gray-600 mb-2">
@@ -527,47 +700,13 @@ export function EmailSettings({
               )}
             </div>
           )}
-          {connections.google?.connected ? (
-            <button
-              onClick={handleDisconnectGoogle}
-              disabled={disconnectingProvider === "google" || !isOnline}
-              title={!isOnline ? "You are offline" : undefined}
-              className="w-full mt-2 px-3 py-2 bg-red-500 hover:bg-red-600 text-white text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {disconnectingProvider === "google"
-                ? "Disconnecting..."
-                : "Disconnect Gmail"}
-            </button>
-          ) : connections.google?.error && connections.google.error.type !== "NOT_CONNECTED" ? (
-            <button
-              onClick={handleConnectGoogle}
-              disabled={connectingProvider === "google" || !isOnline}
-              title={!isOnline ? "You are offline" : undefined}
-              className="w-full mt-2 px-3 py-2 bg-yellow-500 hover:bg-yellow-600 text-white text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {connectingProvider === "google"
-                ? "Reconnecting..."
-                : "Reconnect Gmail"}
-            </button>
-          ) : (
-            <button
-              onClick={handleConnectGoogle}
-              disabled={connectingProvider === "google" || !isOnline}
-              title={!isOnline ? "You are offline" : undefined}
-              className="w-full mt-2 px-3 py-2 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {connectingProvider === "google"
-                ? "Connecting..."
-                : "Connect Gmail"}
-            </button>
-          )}
         </div>
 
         {/* Outlook Connection */}
-        <div className={`p-4 rounded-lg border ${
+        <div className={`p-3 rounded border ${
           connections.microsoft?.error && !connections.microsoft?.connected && connections.microsoft.error.type !== "NOT_CONNECTED"
             ? "bg-yellow-50 border-yellow-200"
-            : "bg-gray-50 border-gray-200"
+            : "bg-white border-gray-200"
         }`}>
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
@@ -581,33 +720,17 @@ export function EmailSettings({
                 Outlook
               </h4>
             </div>
-            {loadingConnections ? (
-              <div className="text-xs text-gray-500">Checking...</div>
-            ) : connections.microsoft?.connected ? (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-green-600 font-medium">
-                  Connected
-                </span>
-                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-              </div>
-            ) : connections.microsoft?.error && connections.microsoft.error.type !== "NOT_CONNECTED" ? (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-yellow-600 font-medium">
-                  {connections.microsoft.error.type === "TOKEN_REFRESH_FAILED" ||
-                   connections.microsoft.error.type === "TOKEN_EXPIRED"
-                    ? "Session Expired"
-                    : "Connection Issue"}
-                </span>
-                <div className="w-2 h-2 bg-yellow-500 rounded-full"></div>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-gray-500">
-                  Not Connected
-                </span>
-                <div className="w-2 h-2 bg-gray-300 rounded-full"></div>
-              </div>
-            )}
+            <ProviderConnectionControl
+              provider="microsoft"
+              label="Outlook"
+              connection={connections.microsoft}
+              loading={loadingConnections}
+              connecting={connectingProvider === "microsoft"}
+              disconnecting={disconnectingProvider === "microsoft"}
+              isOnline={isOnline}
+              onConnect={handleConnectMicrosoft}
+              onRequestDisconnect={() => setDisconnectConfirm("microsoft")}
+            />
           </div>
           {connections.microsoft?.email && (
             <p className="text-xs text-gray-600 mb-2">
@@ -626,53 +749,34 @@ export function EmailSettings({
               )}
             </div>
           )}
-          {connections.microsoft?.connected ? (
-            <button
-              onClick={handleDisconnectMicrosoft}
-              disabled={disconnectingProvider === "microsoft" || !isOnline}
-              title={!isOnline ? "You are offline" : undefined}
-              className="w-full mt-2 px-3 py-2 bg-red-500 hover:bg-red-600 text-white text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {disconnectingProvider === "microsoft"
-                ? "Disconnecting..."
-                : "Disconnect Outlook"}
-            </button>
-          ) : connections.microsoft?.error && connections.microsoft.error.type !== "NOT_CONNECTED" ? (
-            <button
-              onClick={handleConnectMicrosoft}
-              disabled={connectingProvider === "microsoft" || !isOnline}
-              title={!isOnline ? "You are offline" : undefined}
-              className="w-full mt-2 px-3 py-2 bg-yellow-500 hover:bg-yellow-600 text-white text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {connectingProvider === "microsoft"
-                ? "Reconnecting..."
-                : "Reconnect Outlook"}
-            </button>
-          ) : (
-            <button
-              onClick={handleConnectMicrosoft}
-              disabled={connectingProvider === "microsoft" || !isOnline}
-              title={!isOnline ? "You are offline" : undefined}
-              className="w-full mt-2 px-3 py-2 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {connectingProvider === "microsoft"
-                ? "Connecting..."
-                : "Connect Outlook"}
-            </button>
-          )}
+        </div>
         </div>
 
-        {/* TASK-2072: Email History (cache duration) */}
-        <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+        </div>
+
+        {/* BACKLOG-3156 stage E: block 2 of 3 — Import Preferences.
+            TASK-2072: Email History (cache duration).
+
+            The card and the block are ONE element: the eyebrow is the card's
+            first child and the description is the line beneath it, in the slot
+            `<h4>Email History</h4>` used to occupy. The heading is gone because
+            it said, one line lower and in different words, what the eyebrow
+            above it already said. */}
+        <div
+          data-testid="emails-block-preferences"
+          className="p-4 bg-gray-50 rounded-lg border border-gray-200"
+        >
+          <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
+            Import Preferences
+          </p>
+          <p className="text-xs text-gray-600 mb-3">
+            How much email to keep cached locally for fast search and auto-linking.
+          </p>
+          {/* BACKLOG-3156 stage A: the label sits OUTSIDE the control, as plain
+              text, so the border wraps only the value — the shape both Messages
+              filters already use. */}
           <div className="flex items-center justify-between">
-            <div className="flex-1">
-              <h4 className="text-sm font-medium text-gray-900">
-                Email History
-              </h4>
-              <p className="text-xs text-gray-600 mt-1">
-                How much email to keep cached locally for fast search and auto-linking.
-              </p>
-            </div>
+            <span className="text-xs text-gray-600">Import emails from</span>
             <select
               value={emailCacheDurationMonths}
               onChange={(e) =>
@@ -680,35 +784,53 @@ export function EmailSettings({
               }
               className="ml-4 text-sm border border-gray-300 rounded px-3 py-2.5 bg-white text-gray-900 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 min-h-[44px]"
             >
-              <option value={1}>1 month</option>
-              <option value={3}>3 months</option>
-              <option value={6}>6 months</option>
-              <option value={12}>1 year</option>
+              <option value={1}>Last 1 month</option>
+              <option value={3}>Last 3 months</option>
+              <option value={6}>Last 6 months</option>
+              <option value={12}>Last 12 months</option>
             </select>
           </div>
         </div>
 
-        {/* BACKLOG-1362: Re-cache Emails */}
-        <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
-          <div className="flex items-center justify-between">
-            <div className="flex-1">
-              <h4 className="text-sm font-medium text-gray-900">
-                Re-cache Emails
-              </h4>
-              {/* BACKLOG-3056: this used to promise "Only downloads emails newer
-                  than what is already cached." That became false when the run
-                  started filling in the older mail a widened Email History
-                  setting opens up — and it was the sentence that made the
-                  founder's "0 new emails" look like correct behaviour. The two
-                  claims it must carry now: older mail arrives too, and nothing
-                  is unlinked (which is what separates this from Force re-cache
-                  below). */}
-              <p className="text-xs text-gray-600 mt-1">
-                Fetches new mail from your connected provider — and older mail too,
-                if you have increased Email History. Your emails stay linked to
-                their transactions.
-              </p>
-            </div>
+        {/* BACKLOG-3156 stage A: THE "STORED ON THIS COMPUTER" BLOCK IS
+            DELIBERATELY ABSENT HERE, and its absence is the decision, not an
+            omission.
+            ────────────────────────────────────────────────────────────────
+            The approved design gives Emails the same three-cell grid Contacts
+            has. It was built, and every cell rendered an em-dash, because no
+            renderer-reachable API returns a cached-email count: there is no
+            count or stats channel for mail in `electron/preload/`, and the only
+            email-count function in the tree (`countEmailsByUser`,
+            `electron/services/db/emailDbService.ts`) is not exposed to the
+            renderer and returns ONE TOTAL with no per-provider split — so it
+            could not fill the Gmail and Outlook cells even if it were.
+            A grid of three em-dashes reads as broken software, which is worse
+            than no grid. FOUNDER DECISION 2026-09-06: ship without it.
+            The block returns WITH ITS DATA under BACKLOG-3158, which owns the
+            per-provider count. `settingsBlockOrder-3156.test.tsx` asserts the
+            block is absent, so it cannot come back unannounced. */}
+        {/* BACKLOG-3156 stage B: THE TWO DESCRIPTIONS MOVED INTO THE `?` POPUP.
+            ────────────────────────────────────────────────────────────────
+            Stage A dropped this card's `<h4>Import Emails</h4>` because the
+            card described TWO actions and the heading named one of them. Stage
+            B takes the next step the approved design asks for: the prose is
+            what the `?` says, so keeping it on the page as well would be the
+            same sentence printed twice.
+
+            The card is gone, not emptied. Both testids the copy suites read —
+            `recache-description` and `force-recache-description` — moved WITH
+            their paragraphs onto the popup, so `recacheCopy-3056` asserts the
+            same four claims about the same words, one `mouseDown` further in.
+            `settingsPopupCopy-3156` additionally asserts the prose is not on
+            the page while the popup is shut, so it cannot come back in both
+            places at once.
+
+            Neither `disabled` expression changed: both buttons still read
+            `isRecaching || !isOnline || !hasAnyConnection`, and both titles
+            still distinguish offline from not-connected. */}
+        {/* BACKLOG-3156 stage A: the actions, bare — no card, no heading. */}
+        <div data-testid="emails-block-actions">
+          <div className="flex gap-2 items-center">
             <button
               onClick={() => void handleRecacheEmails(false)}
               disabled={isRecaching || !isOnline || !hasAnyConnection}
@@ -721,23 +843,10 @@ export function EmailSettings({
                     : undefined
               }
               data-testid="recache-emails"
-              className="ml-4 px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+              className="flex-1 px-3 py-2 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {isRecaching ? "Caching..." : "Re-cache"}
+              {isRecaching ? "Caching..." : "Import Emails"}
             </button>
-          </div>
-
-          {/* BACKLOG-2856: Force Re-cache. Recessive next to the ordinary
-              Re-cache above — the incremental run is the one a user should reach
-              for, and this one destroys links. Same visual weight relationship
-              the messages Force Re-import uses. */}
-          <div className="mt-3 pt-3 border-t border-gray-200 flex items-center justify-between">
-            <p className="text-xs text-gray-600 flex-1">
-              <span className="font-medium text-gray-900">Force re-cache.</span>{" "}
-              Re-downloads every email in your cache window and replaces what is
-              stored — use this after a fix to email importing. It{" "}
-              <strong>unlinks your emails from their transactions</strong>.
-            </p>
             <button
               onClick={() => setShowForceWarning(true)}
               disabled={isRecaching || !isOnline || !hasAnyConnection}
@@ -749,13 +858,43 @@ export function EmailSettings({
                     : undefined
               }
               data-testid="force-recache-emails"
-              className="ml-4 px-4 py-1.5 bg-white border border-red-300 text-red-700 hover:bg-red-50 text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+              className="px-3 py-2 bg-white border border-red-300 text-red-700 hover:bg-red-50 text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
             >
               Force Re-cache
             </button>
+            {/* BACKLOG-3156 stage B: the `?`. Headings are the buttons' own
+                labels, so the destructive one reads `Force Re-cache` — the name
+                on the button TODAY. The approved design renames it to `Force
+                Re-import`; that rename is a later stage because it moves
+                test-pinned strings, and copy that named a button the user
+                cannot see would be a small falsehood of exactly the kind this
+                item exists to stop. `settingsPopupCopy-3156` ties the headings
+                to the rendered labels structurally, so the rename cannot land
+                without this following it.
+
+                Both claims in the force paragraph are true at source: the swap
+                deletes the force set with an ordinary DELETE so every cascade
+                fires — transaction links AND their pending-review siblings
+                (`electron/services/emailForceStaging.ts`, `deleteLiveForceSet`).
+                The confirmation dialog below already says the same thing. */}
+            <ImportInfoPopover
+              testId="emails-import-info"
+              entries={[
+                {
+                  heading: "Import Emails",
+                  bodyTestId: "recache-description",
+                  body: "Fetches new mail from your connected providers, and older mail too if you have increased Email History. Your emails stay linked to their transactions.",
+                },
+                {
+                  heading: "Force Re-cache",
+                  bodyTestId: "force-recache-description",
+                  body: "Re-downloads every email in your cache window and replaces what is stored. This unlinks your emails from their transactions and loses review decisions on them. Use after a fix to email importing.",
+                },
+              ]}
+            />
           </div>
           {/* BACKLOG-2856: the progress indicator, shared by the ordinary
-              Re-cache above and the Force Re-cache above it. The founder's
+              import above and the Force Re-cache beside it. The founder's
               report was that the force run shows nothing after its confirmation
               dialog — for an operation that can take minutes, is destructive,
               and is indistinguishable from a hung app while it runs.
@@ -778,7 +917,14 @@ export function EmailSettings({
                       }...`
                     : recacheProgress.phase === "swapping"
                       ? "Replacing your cached emails..."
-                      : `Downloading emails${
+                      : // Name the round when the event names one. The generic
+                        // sentence is the fallback, not the exception: the
+                        // boundary events and the backfill sweep carry no stage,
+                        // and an older main process carries none at all.
+                        `${
+                          emailPrecacheStageDisplayFor(recacheProgress.stage)
+                            ?.label ?? "Downloading emails"
+                        }${
                           recacheProgress.current > 0
                             ? ` (${recacheProgress.current.toLocaleString()} so far)`
                             : ""
@@ -907,6 +1053,102 @@ export function EmailSettings({
             <button
               onClick={() => setShowForceWarning(false)}
               data-testid="force-recache-cancel"
+              className="px-4 py-2 bg-blue-500 text-white hover:bg-blue-600 rounded-lg font-semibold transition-all"
+            >
+              Cancel
+            </button>
+          </div>
+        </ResponsiveModal>
+      )}
+
+      {/*
+        BACKLOG-3156 stage C — THE DISCONNECT CONFIRMATION, AND WHY ITS WORDS
+        ARE THE WAY THEY ARE.
+
+        Every sentence below was checked against the code before it was
+        written, because this panel's sibling already shipped a wipe warning
+        that had quietly gone false (BACKLOG-3029), and stage B shipped another
+        one (BACKLOG-3161).
+
+        What `auth:google:disconnect-mailbox` / `auth:microsoft:disconnect-mailbox`
+        actually do: `handleDisconnectMailbox` (electron/handlers/sharedAuthHandlers.ts)
+        resolves the user, calls `databaseService.deleteOAuthToken(userId,
+        provider, "mailbox")` — one `DELETE FROM oauth_tokens WHERE user_id = ?
+        AND provider = ? AND purpose = ?` — logs, audits, and tells the renderer.
+        No email, message, contact or transaction-link row is touched anywhere
+        on that path, and no listener of `${provider}:mailbox-disconnected`
+        deletes anything either.
+
+        Why the sentence names Contacts as well as Emails: contact import reads
+        the SAME token row. `GoogleContactProvider.canSync` calls
+        `getOAuthToken(userId, 'google', 'mailbox')`; `OutlookContactProvider.canSync`
+        goes through `outlookFetchService.initialize`, which reads
+        `getOAuthToken(userId, "microsoft", "mailbox")`. Deleting that row stops
+        contact sync for that account as surely as it stops mail.
+
+        The claims are pinned by `settingsConnectionControl-3156` — the two
+        subjects must be named, the keeping must be stated, and a set of
+        loss-words must be ABSENT, so that a future edit cannot quietly turn
+        this into a warning about deletion that does not happen.
+
+        The button pair is the force-re-cache pair above, for the reason given
+        there: the safe way out is the prominent default and the destructive
+        action is recessive while still reading as destructive.
+      */}
+      {disconnectConfirm && (
+        <ResponsiveModal
+          onClose={() => setDisconnectConfirm(null)}
+          zIndex="z-[70]"
+          panelClassName="max-w-md p-6"
+          testId="disconnect-confirm-modal"
+        >
+          <div className="flex items-center gap-3 mb-3">
+            <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+              <svg
+                className="w-6 h-6 text-red-600"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                />
+              </svg>
+            </div>
+            <h3 className="text-lg font-bold text-gray-900">
+              Disconnect {disconnectConfirm === "google" ? "Gmail" : "Outlook"}?
+            </h3>
+          </div>
+          <p className="text-sm text-gray-600 mb-3" data-testid="disconnect-confirm-scope">
+            Emails and Contacts both import from this connection, so
+            disconnecting stops both: Keepr will no longer bring in new mail or
+            new contacts from this account.
+          </p>
+          <p className="text-sm text-gray-600 mb-6" data-testid="disconnect-confirm-kept">
+            Emails and contacts already stored on this computer are kept, along
+            with anything attached to a transaction. Connect the account again
+            to start importing from it once more.
+          </p>
+          <div className="flex items-center gap-3 justify-end">
+            <button
+              onClick={() => {
+                const provider = disconnectConfirm;
+                setDisconnectConfirm(null);
+                void (provider === "google"
+                  ? handleDisconnectGoogle()
+                  : handleDisconnectMicrosoft());
+              }}
+              data-testid="disconnect-confirm"
+              className="px-4 py-2 bg-white border border-red-300 text-red-700 hover:bg-red-50 rounded-lg font-medium transition-all"
+            >
+              Disconnect
+            </button>
+            <button
+              onClick={() => setDisconnectConfirm(null)}
+              data-testid="disconnect-cancel"
               className="px-4 py-2 bg-blue-500 text-white hover:bg-blue-600 rounded-lg font-semibold transition-all"
             >
               Cancel

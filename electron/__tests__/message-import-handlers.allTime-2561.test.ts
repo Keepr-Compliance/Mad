@@ -23,6 +23,7 @@
  */
 
 import fs from "fs";
+import { windowDateFilter } from "../services/db/macosMessageWindowSql";
 import path from "path";
 
 import {
@@ -417,30 +418,44 @@ describe("BACKLOG-2561 · the production date filter has not changed shape", () 
   const source = fs.readFileSync(servicePath, "utf8");
 
   /*
-   * BACKLOG-2772 moved what this guard reads, and the move is why the guard is
-   * now stronger.
+   * BACKLOG-3062 rewrote these three, and the rewrite is why the guard is now
+   * stronger again.
    *
-   * The clause used to be built inline in `doImport`, with the estimate
-   * spelling its own near-copy (`AND date > ...`, no table prefix). Two
-   * spellings meant this guard had to check two places and could only ever
-   * confirm they both still existed — not that they agreed. `buildMessageWindowSql`
-   * is now the single producer for BOTH, so one assertion covers the run and
-   * the preview, and a drift between them has become impossible rather than
-   * watched for.
+   * They used to assert the SPELLING of a literal:
+   * `` `AND message.date > ${plan.cutoffNano}` `` had to appear in the source.
+   * That literal is gone — it was the defect. `buildMessageWindowSql` returned
+   * SQL TEXT with the cutoff SPLICED IN, called no database verb, and was
+   * therefore invisible to the SQL boundary gate; the file passed its
+   * completion criterion at baseline zero while still authoring SQL in six
+   * places.
+   *
+   * A test that asserts a spelling has to be rewritten by whoever changes the
+   * spelling, and it proves nothing about behaviour in the meantime. These now
+   * CALL the producer and assert what it emits, so they survive the next rename
+   * and would catch a change that kept the text and broke the meaning — which
+   * the old form could not.
+   *
+   * BACKLOG-2561's three properties are unchanged and all three are still here:
+   * a strict `>` against `message.date`, NO clause when the cutoff is null, and
+   * ONE producer shared by the run and the preview.
    */
-  it("still filters with a strict `>` against message.date", () => {
-    expect(source).toContain("`AND message.date > ${plan.cutoffNano}`");
+  it("still filters with a strict `>` against message.date — and now BINDS the cutoff", () => {
+    const filter = windowDateFilter({ cutoffNano: 1234, protectedSpans: [] });
+    expect(filter.sql).toBe("AND message.date > ?");
+    expect(filter.params).toEqual([1234]);
+    // The cutoff must not appear in the text. That is the whole of BACKLOG-3062:
+    // a value that travels as text is a value nobody can see going wrong.
+    expect(filter.sql).not.toContain("1234");
   });
 
   it("still emits NO clause when the cutoff is null", () => {
-    expect(source).toContain("plan.cutoffNano !== null");
-    expect(source).toContain(': ""');
+    expect(windowDateFilter({ cutoffNano: null, protectedSpans: [] })).toEqual({
+      sql: "",
+      params: [],
+    });
   });
 
-  it("the preview shares that one clause rather than spelling its own", () => {
-    // The old third assertion checked the estimate's separate `AND date > ...`
-    // literal. There is no separate literal now; what replaces it is the
-    // absence of one — the estimate destructures the same compiled object.
+  it("the preview shares that one producer rather than spelling its own", () => {
     const serviceSource = fs.readFileSync(
       path.join(
         __dirname,
@@ -448,9 +463,16 @@ describe("BACKLOG-2561 · the production date filter has not changed shape", () 
       ),
       "utf8"
     );
+    // No second spelling anywhere: neither the old estimate literal nor a
+    // hand-built date filter of any shape.
     expect(serviceSource).not.toContain("AND date > ${");
-    // Both consumers take their clause from the shared builder.
-    expect(serviceSource.match(/buildMessageWindowSql\(plan\)/g)).toHaveLength(2);
+    expect(serviceSource).not.toContain("AND message.date > ${");
+    // Both consumers — the run and the preview — build the window from the SAME
+    // plan fields and hand it to the same db/ producer. Two constructions, one
+    // producer, so a drift between them is unrepresentable rather than watched
+    // for.
+    expect(serviceSource.match(/cutoffNano: plan\.cutoffNano/g)).toHaveLength(2);
+    expect(serviceSource.match(/protectedSpans: plan\.protectedSpans/g)).toHaveLength(2);
   });
 });
 

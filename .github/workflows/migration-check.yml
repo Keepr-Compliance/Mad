@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - 'supabase/migrations/**'
+      # A change to either checker must itself be checked.
+      - 'scripts/lint-migrations.sh'
+      - 'scripts/check-migration-names.mjs'
 
 jobs:
   validate-migrations:
@@ -22,7 +25,18 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: git fetch origin "$BASE_REF"
 
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '20'
+
       - name: Validate migration files
         env:
           GITHUB_BASE_REF: ${{ github.base_ref }}
         run: bash scripts/lint-migrations.sh
+
+      # Owns naming and duplicate-stamp enforcement. Runs over the WHOLE directory,
+      # not just changed files: a duplicate is a property of the set, so a PR that
+      # adds one file can only be judged against every other file's stamp.
+      - name: Check migration names and version stamps
+        run: node scripts/check-migration-names.mjs

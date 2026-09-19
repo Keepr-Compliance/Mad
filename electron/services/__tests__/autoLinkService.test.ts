@@ -51,9 +51,9 @@ jest.mock("../messageMatchingService", () => ({
 jest.mock("../db/communicationDbService", () => ({
   createThreadCommunicationReference: (...args: unknown[]) => mockCreateThreadCommunicationReference(...args),
   isThreadLinkedToTransaction: (...args: unknown[]) => mockIsThreadLinkedToTransaction(...args),
-  getIgnoredEmailIdsForTransaction: jest.fn().mockReturnValue(new Set()),
-  getIgnoredThreadIdsForTransaction: jest.fn().mockReturnValue(new Set()),
-  getIgnoredCommunicationIdsForTransaction: jest.fn().mockReturnValue(new Set()),
+  getIgnoredEmailIdsForTransaction: jest.fn().mockResolvedValue(new Set()),
+  getIgnoredThreadIdsForTransaction: jest.fn().mockResolvedValue(new Set()),
+  getIgnoredCommunicationIdsForTransaction: jest.fn().mockResolvedValue(new Set()),
 }));
 
 // Note: isContactSourceEnabled was removed from autoLinkService.
@@ -1127,8 +1127,8 @@ describe("autoLinkService", () => {
       });
 
       // Simulate email-2 being previously unlinked
-      getIgnoredEmailIdsForTransaction.mockReturnValue(new Set(["email-2"]));
-      getIgnoredThreadIdsForTransaction.mockReturnValue(new Set());
+      getIgnoredEmailIdsForTransaction.mockResolvedValue(new Set(["email-2"]));
+      getIgnoredThreadIdsForTransaction.mockResolvedValue(new Set());
 
       const result = await autoLinkCommunicationsForContact({
         contactId: mockContactId,
@@ -1180,8 +1180,8 @@ describe("autoLinkService", () => {
       });
 
       // Simulate thread-A being previously unlinked
-      getIgnoredEmailIdsForTransaction.mockReturnValue(new Set());
-      getIgnoredThreadIdsForTransaction.mockReturnValue(new Set(["thread-A"]));
+      getIgnoredEmailIdsForTransaction.mockResolvedValue(new Set());
+      getIgnoredThreadIdsForTransaction.mockResolvedValue(new Set(["thread-A"]));
 
       mockIsThreadLinkedToTransaction.mockResolvedValue(false);
 
@@ -1236,8 +1236,8 @@ describe("autoLinkService", () => {
       });
 
       // No ignored records
-      getIgnoredEmailIdsForTransaction.mockReturnValue(new Set());
-      getIgnoredThreadIdsForTransaction.mockReturnValue(new Set());
+      getIgnoredEmailIdsForTransaction.mockResolvedValue(new Set());
+      getIgnoredThreadIdsForTransaction.mockResolvedValue(new Set());
 
       mockIsThreadLinkedToTransaction.mockResolvedValue(false);
 

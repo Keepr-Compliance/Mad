@@ -8,9 +8,9 @@
  * Replaces polling-based readiness detection with push-based approach.
  */
 
-import { BrowserWindow } from "electron";
-import log from "electron-log";
-import * as Sentry from "@sentry/electron/main";
+import { hostLogger } from "../capabilities/loggerProvider";
+import { hostErrorReporter } from "../capabilities/errorReporterProvider";
+import { hostWindows } from "../capabilities/windowsProvider";
 
 // ============================================
 // TYPE DEFINITIONS
@@ -93,10 +93,31 @@ const DB_IN_PROGRESS_STAGES: ReadonlySet<InitStage> = new Set<InitStage>([
 // INITIALIZATION BROADCASTER
 // ============================================
 
+/**
+ * The window handle {@link InitializationBroadcaster.setWindow} accepts.
+ *
+ * BACKLOG-2962. Deliberately opaque, and deliberately NOT `BrowserWindow`.
+ * This class never READS the handle it is given — `this.window` is assigned at
+ * two places and dereferenced at none — so there is no member to constrain, and
+ * naming Electron's class here would leave a core module needing Electron's
+ * TYPE declarations to compile even after it stopped needing its runtime. A
+ * type-only import emits no `require` and would satisfy both the gate and the
+ * load-time probe, which is exactly why it is worth saying no to: "loads under
+ * another shell" and "compiles under another shell" are different properties,
+ * and epic 9 wants both.
+ *
+ * `BrowserWindow` is assignable to this, so no caller changes.
+ *
+ * That the field is write-only is a finding, not something this PR fixes:
+ * removing a public method is not a seam change and belongs to whoever owns
+ * this class's API.
+ */
+type OpaqueWindowHandle = object;
+
 class InitializationBroadcaster {
   private currentEvent: InitStageEvent = { stage: "idle" };
   private history: StageHistoryEntry[] = [];
-  private window: BrowserWindow | null = null;
+  private window: OpaqueWindowHandle | null = null;
   /** Pending {@link whenDbReady} waiters, resolved from {@link broadcast}. */
   private dbReadyWaiters: Set<(result: DbReadyResult) => void> = new Set();
 
@@ -105,7 +126,7 @@ class InitializationBroadcaster {
    * Must be called after the main window is created.
    * Safe to call with null (clears the window reference).
    */
-  setWindow(win: BrowserWindow | null): void {
+  setWindow(win: OpaqueWindowHandle | null): void {
     this.window = win;
   }
 
@@ -143,7 +164,7 @@ class InitializationBroadcaster {
     };
     this.history.push(historyEntry);
 
-    log.debug(
+    hostLogger.debug(
       `[InitBroadcaster] Stage: ${event.stage}${event.message ? ` — ${event.message}` : ""}`,
     );
 
@@ -162,17 +183,19 @@ class InitializationBroadcaster {
       });
     }
 
-    // Broadcast to all windows (supports multi-window scenarios)
+    // Broadcast to all windows (supports multi-window scenarios).
+    //
+    // BACKLOG-2962: the enumerate-skip-destroyed-send loop moved into the
+    // Windows capability (`electron/capabilities/electron/electronWindows.ts`)
+    // because `reviewStateService.ts` ran the identical five lines. The `try`
+    // stays HERE because the two call sites' handlers differ — that one
+    // swallows, this one logs — and the channel and event are passed through
+    // unchanged, so a renderer cannot tell the difference.
     try {
-      const windows = BrowserWindow.getAllWindows();
-      for (const win of windows) {
-        if (!win.isDestroyed() && win.webContents) {
-          win.webContents.send(INIT_STAGE_CHANNEL, event);
-        }
-      }
+      hostWindows.broadcast(INIT_STAGE_CHANNEL, event);
     } catch (err) {
       // Window may not be ready during early initialization — this is expected
-      log.debug(
+      hostLogger.debug(
         `[InitBroadcaster] Could not broadcast to windows: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
@@ -246,7 +269,7 @@ class InitializationBroadcaster {
           // to its transient/fallback path for this launch — worth knowing
           // about in aggregate, not just per-caller. One event here covers
           // every call site without threading telemetry through each of them.
-          Sentry.captureMessage("db_ready_timeout", {
+          hostErrorReporter.captureMessage("db_ready_timeout", {
             level: "warning",
             tags: { component: "startup", event: "db_ready_timeout" },
             extra: {

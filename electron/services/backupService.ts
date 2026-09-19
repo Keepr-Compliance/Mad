@@ -894,7 +894,13 @@ export class BackupService extends EventEmitter {
         success: false,
         backupPath: null,
         error: error instanceof ValidationError ? error.message : "Invalid device UDID",
-        errorCode: "BACKUP_FAILED" as BackupErrorCode,
+        // BACKLOG-2953: was the string "BACKUP_FAILED" cast to BackupErrorCode — a value
+        // outside the union, smuggled past `tsc` by the cast. `validateDeviceUdid` throws only
+        // `ValidationError` (electron/utils/validation.ts), so the second arm is
+        // unreachable today; it exists so that if anything else ever escapes, the
+        // code says "unknown" rather than claiming a specific cause it cannot vouch
+        // for — the BACKLOG-2913 defect, not repeated here.
+        errorCode: error instanceof ValidationError ? "INVALID_UDID" : "UNKNOWN_ERROR",
         duration: 0,
         deviceUdid: options.udid,
         isIncremental: false,
@@ -915,7 +921,7 @@ export class BackupService extends EventEmitter {
         success: false,
         backupPath: null,
         error: "Backup password required",
-        errorCode: "PASSWORD_REQUIRED" as BackupErrorCode,
+        errorCode: "PASSWORD_REQUIRED",
         duration: 0,
         deviceUdid: options.udid,
         isIncremental: false,
@@ -1155,7 +1161,7 @@ export class BackupService extends EventEmitter {
         this.emit("error", error);
       });
 
-      this.currentProcess.on("close", async (code: number | null) => {
+      const onProcessClose = async (code: number | null) => {
         const duration = Date.now() - this.startTime;
         this.isRunning = false;
         this.currentProcess = null;
@@ -1242,7 +1248,7 @@ export class BackupService extends EventEmitter {
               success: false,
               backupPath: deviceBackupPath,
               error: "Backup password required",
-              errorCode: "PASSWORD_REQUIRED" as BackupErrorCode,
+              errorCode: "PASSWORD_REQUIRED",
               duration: Date.now() - this.startTime,
               deviceUdid: options.udid,
               isIncremental: this.resolveIsIncremental(previousBackupExists, options),
@@ -1287,8 +1293,8 @@ export class BackupService extends EventEmitter {
                 error: decryptionResult.error || "Decryption failed",
                 errorCode:
                   decryptionResult.error === "Incorrect password"
-                    ? ("INCORRECT_PASSWORD" as BackupErrorCode)
-                    : ("DECRYPTION_FAILED" as BackupErrorCode),
+                    ? "INCORRECT_PASSWORD"
+                    : "DECRYPTION_FAILED",
                 duration: Date.now() - this.startTime,
                 deviceUdid: options.udid,
                 isIncremental: this.resolveIsIncremental(previousBackupExists, options),
@@ -1386,6 +1392,9 @@ export class BackupService extends EventEmitter {
         this.emit("complete", result);
 
         resolve(result);
+      };
+      this.currentProcess.on("close", (code: number | null) => {
+        void onProcessClose(code);
       });
     });
   }
@@ -1745,6 +1754,16 @@ export class BackupService extends EventEmitter {
         this.deviceReportedBackupMode = "incremental";
       } else if (lower.includes("full backup mode")) {
         this.deviceReportedBackupMode = "full";
+      }
+      // BACKLOG-3440: EMITTED THE MOMENT IT IS KNOWN, not carried on the result.
+      //
+      // The result only exists when the backup finishes one of its known ways, so every
+      // run that was killed or abandoned lost this — measured: all 5 `cancelled` rows in
+      // the corpus have `incremental` NULL. A first sync and an incremental sync have
+      // completely different expected durations, so the runs that most needed the
+      // distinction were exactly the runs missing it.
+      if (this.deviceReportedBackupMode !== null) {
+        this.emit("backup-mode", this.deviceReportedBackupMode);
       }
       return;
     }

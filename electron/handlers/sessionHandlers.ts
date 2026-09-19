@@ -532,12 +532,34 @@ async function handleCompleteEmailOnboarding(
 /**
  * Check email onboarding status
  *
- * IMPORTANT: This checks for a valid mailbox token FIRST, regardless of the
- * email_onboarding_completed flag. This fixes a state mismatch bug (TASK-1039)
- * where users could have a valid token but the flag not set (race condition,
- * error, or interrupted flow), causing confusing UI states.
+ * ONE QUESTION: has this user answered the email-onboarding step? It is NOT
+ * "is a mailbox connected right now" — that is `system:check-all-connections`,
+ * which the renderer already asks separately (LoadingOrchestrator.tsx:684).
  *
- * If a token exists but the flag is false, we auto-correct the flag.
+ * TWO PIECES OF EVIDENCE, either of which settles it:
+ *   - a valid mailbox token — they answered by connecting one;
+ *   - the persisted flag — they answered by connecting OR by skipping (both
+ *     paths call completeEmailOnboarding: useEmailHandlers.ts:84 and :122).
+ *
+ * BACKLOG-3293: this handler used to return the token alone and discard the
+ * flag, so a user who answered the step but holds no token (a deliberate skip,
+ * or a session-only token that was never persisted) was routed back into
+ * onboarding on EVERY relaunch, permanently. The product had already settled
+ * that question the other way one layer up — userDataSelectors.ts:300-328
+ * ("MUST NOT be treated as incomplete") and useResumeSetup.ts:9-11
+ * ("texts-only is a valid, non-degraded completion") — so this was a third,
+ * stricter private copy of a rule the data-source floor already owns.
+ *
+ * TASK-1039 still applies and its auto-correct below stays: a token with the
+ * flag unset repairs the DATABASE — it writes the row, never the local
+ * `onboardingCompleted`, which is a `const` with no assignments. The four
+ * tests over this handler pin the complete flag x token truth table, so any
+ * implementation that passes all four is exactly the OR above.
+ *
+ * Connection HEALTH (never connected vs. token expired) is NOT answerable
+ * here and must not be guessed: nothing persists the user's decline today
+ * (`emailSkipped` is process memory, OnboardingFlow.tsx:206). That is
+ * BACKLOG-3244's subject, not this handler's.
  */
 async function handleCheckEmailOnboarding(
   _event: IpcMainInvokeEvent,
@@ -615,9 +637,10 @@ async function handleCheckEmailOnboarding(
       );
     }
 
-    // The completed status is based on having a valid token
-    // (token is the source of truth, not the flag)
-    const completed = hasValidMailboxToken;
+    // BACKLOG-3293: "has this user answered?" — and either fact answers it.
+    // The persisted flag is evidence, not a thing to be overruled by a missing
+    // token. See the docblock for why this is an OR and not a bare flag.
+    const completed = onboardingCompleted || hasValidMailboxToken;
 
     await logService.info("Email onboarding check", "AuthHandlers", {
       userId: validatedUserId.substring(0, 8) + "...",
@@ -1354,13 +1377,21 @@ async function handleSignOutAllDevices(): Promise<AuthResponse> {
  * Open broker portal auth page in the default browser
  * TASK-1507: Used for deep-link authentication flow
  * TASK-1510: Redirects to broker portal for provider selection (Google/Microsoft)
+ *
+ * BACKLOG-3394: the URL carries `?from=desktop`. Without it the portal's
+ * callback page has to infer whether the user has the app from a `devices` row
+ * that this app writes only AFTER that page has rendered — so a first-ever
+ * desktop sign-in, the one case where the app is certainly installed, was shown
+ * "It looks like you don't have Keepr installed yet". The portal copies the
+ * parameter into sessionStorage immediately, because it does not survive the
+ * redirect through the provider's consent screen.
  */
 async function handleOpenAuthInBrowser(): Promise<{ success: boolean; error?: string }> {
   try {
     // Use broker portal for provider selection page
     // Production: app.keeprcompliance.com, Dev: localhost:3001 (via .env.development)
     const brokerPortalUrl = process.env.BROKER_PORTAL_URL || 'https://app.keeprcompliance.com';
-    const authUrl = `${brokerPortalUrl}/auth/desktop`;
+    const authUrl = `${brokerPortalUrl}/auth/desktop?from=desktop`;
 
     await logService.info("Opening auth URL in browser", "AuthHandlers", {
       url: authUrl,

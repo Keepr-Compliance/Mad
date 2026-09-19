@@ -1,11 +1,13 @@
 /**
  * Token Encryption Service
- * Uses Electron's safeStorage API to encrypt/decrypt OAuth tokens
- * Stores tokens securely in the OS keychain (macOS Keychain, Windows DPAPI, Linux Secret Service)
+ * Encrypts/decrypts OAuth tokens with the host shell's SecretStore capability
+ * (BACKLOG-2962), which under Electron is `safeStorage` — the OS keychain
+ * (macOS Keychain, Windows DPAPI, Linux Secret Service).
  */
 
-import { safeStorage } from "electron";
 import * as os from "os";
+import type { SecretStore } from "../capabilities/secretStore";
+import { hostSecretStore } from "../capabilities/secretStoreProvider";
 import logService from "./logService";
 
 /**
@@ -46,9 +48,18 @@ If you're seeing this error:
 Please ensure your operating system's credential storage service is running.`,
 };
 
-class TokenEncryptionService {
+export class TokenEncryptionService {
   private _encryptionChecked = false;
   private _encryptionAvailable = false;
+  private readonly secrets: SecretStore;
+
+  /**
+   * @param secrets - The host shell's secret store. Injected so this class can
+   *   be constructed under any shell, and so tests need no Electron mock.
+   */
+  constructor(secrets: SecretStore) {
+    this.secrets = secrets;
+  }
 
   /**
    * Reset internal state (for testing purposes only)
@@ -73,7 +84,7 @@ class TokenEncryptionService {
    */
   isEncryptionAvailable(): boolean {
     try {
-      this._encryptionAvailable = safeStorage.isEncryptionAvailable();
+      this._encryptionAvailable = this.secrets.isEncryptionAvailable();
       this._encryptionChecked = true;
       return this._encryptionAvailable;
     } catch (error) {
@@ -154,7 +165,7 @@ class TokenEncryptionService {
     }
 
     try {
-      const buffer = safeStorage.encryptString(plaintext);
+      const buffer = this.secrets.encryptString(plaintext);
       return buffer.toString("base64");
     } catch (error) {
       logService.error("Encryption operation failed", "TokenEncryption", {
@@ -186,7 +197,7 @@ class TokenEncryptionService {
 
     try {
       const buffer = Buffer.from(encryptedBase64, "base64");
-      return safeStorage.decryptString(buffer);
+      return this.secrets.decryptString(buffer);
     } catch (error) {
       logService.error("Decryption operation failed", "TokenEncryption", {
         error: error instanceof Error ? error.message : String(error),
@@ -220,4 +231,4 @@ class TokenEncryptionService {
 }
 
 // Export singleton instance
-export default new TokenEncryptionService();
+export default new TokenEncryptionService(hostSecretStore);

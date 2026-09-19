@@ -7,13 +7,11 @@ import crypto from "crypto";
 import type { User, NewUser, OAuthProvider } from "../../types";
 import { DatabaseError, NotFoundError } from "../../types";
 import { dbGet, dbRun, ensureDb } from "./core/dbConnection";
-import {
-  validateFields,
-  type ColumnOf,
-  type FieldExpression,
-} from "../../utils/sqlFieldWhitelist";
+import { sql } from "./core/sqlText";
+import { validateFields, type ColumnOf } from "../../utils/sqlFieldWhitelist";
 import { UserSchema, validateResponse } from "../../schemas";
 import logService from "../logService";
+import { assignmentList } from "./core/columnSql";
 
 /**
  * Create a new user
@@ -24,9 +22,20 @@ import logService from "../logService";
  *
  * @param userData - User data including optional ID (Supabase Auth UUID when available)
  */
-export async function createUser(userData: NewUser & { id?: string }): Promise<User> {
+/**
+ * BACKLOG-2546 — SYNC TWIN. The login provisioning chain (create-or-update the
+ * user, stamp last-login, save the token, open the session) has to commit as ONE
+ * unit, and `dbTransaction` takes a SYNCHRONOUS callback by type
+ * (`db/core/dbConnection.ts:287`). So the transaction body needs a callee that is
+ * synchronous all the way down. The primitive is this one; the promise-returning
+ * export below is a one-line wrapper over it — never the reverse, because an
+ * `async` callee lets the transaction COMMIT over an error.
+ * Same shape and same reason as `createTransactionSync` (BACKLOG-2538) and
+ * `updateContactSync` (BACKLOG-2496). Rule derived by `electron/__tests__/syncTwin.guard.test.ts`.
+ */
+export function createUserSync(userData: NewUser & { id?: string }): User {
   const id = userData.id || crypto.randomUUID();
-  const sql = `
+  const statement = sql`
     INSERT INTO users_local (
       id, email, first_name, last_name, display_name, avatar_url,
       oauth_provider, oauth_id, subscription_tier, subscription_status,
@@ -52,54 +61,102 @@ export async function createUser(userData: NewUser & { id?: string }): Promise<U
     userData.job_title || null,
   ];
 
-  dbRun(sql, params);
-  const user = await getUserById(id);
+  dbRun(statement, params);
+  const user = getUserByIdSync(id);
   if (!user) {
     throw new DatabaseError("Failed to create user");
   }
   return user;
 }
 
+export async function createUser(userData: NewUser & { id?: string }): Promise<User> {
+  return createUserSync(userData);
+}
+
 /**
  * Get user by ID
  */
-export async function getUserById(userId: string): Promise<User | null> {
-  const sql = "SELECT * FROM users_local WHERE id = ?";
-  const user = dbGet<User>(sql, [userId]);
+/**
+ * BACKLOG-2546 — SYNC TWIN. The login provisioning chain (create-or-update the
+ * user, stamp last-login, save the token, open the session) has to commit as ONE
+ * unit, and `dbTransaction` takes a SYNCHRONOUS callback by type
+ * (`db/core/dbConnection.ts:287`). So the transaction body needs a callee that is
+ * synchronous all the way down. The primitive is this one; the promise-returning
+ * export below is a one-line wrapper over it — never the reverse, because an
+ * `async` callee lets the transaction COMMIT over an error.
+ * Same shape and same reason as `createTransactionSync` (BACKLOG-2538) and
+ * `updateContactSync` (BACKLOG-2496). Rule derived by `electron/__tests__/syncTwin.guard.test.ts`.
+ */
+export function getUserByIdSync(userId: string): User | null {
+  const statement = sql`SELECT * FROM users_local WHERE id = ?`;
+  const user = dbGet<User>(statement, [userId]);
   if (!user) return null;
   return validateResponse(UserSchema, user, 'userDbService.getUserById') as User;
+}
+
+export async function getUserById(userId: string): Promise<User | null> {
+  return getUserByIdSync(userId);
 }
 
 /**
  * Get user by email
  */
 export async function getUserByEmail(email: string): Promise<User | null> {
-  const sql = "SELECT * FROM users_local WHERE email = ?";
-  const user = dbGet<User>(sql, [email]);
+  const statement = sql`SELECT * FROM users_local WHERE email = ?`;
+  const user = dbGet<User>(statement, [email]);
   return user || null;
 }
 
 /**
  * Get user by OAuth provider and ID
  */
+/**
+ * BACKLOG-2546 — SYNC TWIN. The login provisioning chain (create-or-update the
+ * user, stamp last-login, save the token, open the session) has to commit as ONE
+ * unit, and `dbTransaction` takes a SYNCHRONOUS callback by type
+ * (`db/core/dbConnection.ts:287`). So the transaction body needs a callee that is
+ * synchronous all the way down. The primitive is this one; the promise-returning
+ * export below is a one-line wrapper over it — never the reverse, because an
+ * `async` callee lets the transaction COMMIT over an error.
+ * Same shape and same reason as `createTransactionSync` (BACKLOG-2538) and
+ * `updateContactSync` (BACKLOG-2496). Rule derived by `electron/__tests__/syncTwin.guard.test.ts`.
+ */
+export function getUserByOAuthIdSync(
+  provider: OAuthProvider,
+  oauthId: string,
+): User | null {
+  const statement =
+    sql`SELECT * FROM users_local WHERE oauth_provider = ? AND oauth_id = ?`;
+  const user = dbGet<User>(statement, [provider, oauthId]);
+  return user || null;
+}
+
 export async function getUserByOAuthId(
   provider: OAuthProvider,
   oauthId: string,
 ): Promise<User | null> {
-  const sql =
-    "SELECT * FROM users_local WHERE oauth_provider = ? AND oauth_id = ?";
-  const user = dbGet<User>(sql, [provider, oauthId]);
-  return user || null;
+  return getUserByOAuthIdSync(provider, oauthId);
 }
 
 /**
  * Update user data
  */
-export async function updateUser(
+/**
+ * BACKLOG-2546 — SYNC TWIN. The login provisioning chain (create-or-update the
+ * user, stamp last-login, save the token, open the session) has to commit as ONE
+ * unit, and `dbTransaction` takes a SYNCHRONOUS callback by type
+ * (`db/core/dbConnection.ts:287`). So the transaction body needs a callee that is
+ * synchronous all the way down. The primitive is this one; the promise-returning
+ * export below is a one-line wrapper over it — never the reverse, because an
+ * `async` callee lets the transaction COMMIT over an error.
+ * Same shape and same reason as `createTransactionSync` (BACKLOG-2538) and
+ * `updateContactSync` (BACKLOG-2496). Rule derived by `electron/__tests__/syncTwin.guard.test.ts`.
+ */
+export function updateUserSync(
   userId: string,
   updates: Partial<User>,
-): Promise<void> {
-  const allowedFields = [
+): void {
+  const allowedFields: readonly ColumnOf<"users_local">[] = [
     "email",
     "first_name",
     "last_name",
@@ -126,58 +183,77 @@ export async function updateUser(
     "organization_id",
   ];
 
-  const fields: string[] = [];
+  const columns: ColumnOf<"users_local">[] = [];
   const values: unknown[] = [];
 
   Object.keys(updates).forEach((key) => {
-    if (allowedFields.includes(key)) {
-      fields.push(`${key} = ?`);
+    const column = allowedFields.find((allowed) => allowed === key);
+    if (column) {
+      columns.push(column);
       values.push((updates as Record<string, unknown>)[key]);
     }
   });
 
-  if (fields.length === 0) {
+  if (columns.length === 0) {
     throw new DatabaseError("No valid fields to update");
   }
 
-  // Validate fields against whitelist before SQL construction.
+  // Validate column names against the whitelist before SQL construction.
   //
-  // BACKLOG-2739 PHASE 1 SEAM — the cast is the finding, not the fix.
-  // `fields` is built above as `${column} = ?` from plain strings, so it is
-  // `string[]` and cannot satisfy the column union `validateFields` now takes.
-  // The cast keeps the build green WITHOUT touching this writer's field list,
-  // which is deliberately Phase 2 (BACKLOG-2738): the writer must declare an
-  // exhaustive `Record<Column, Decision>` so an OMITTED column is a build
-  // error. Until then a wrong name here is still only caught at runtime.
-  validateFields(
-    "users_local",
-    fields as ReadonlyArray<FieldExpression<ColumnOf<"users_local">>>,
-  );
+  // BACKLOG-3085 retires the BACKLOG-2739 Phase 1 seam cast that used to sit
+  // here. `columns` is now the column UNION rather than `string[]`, because the
+  // SET clause is built by `assignmentList` from the enumerated column
+  // fragments — so there is nothing left to cast. The runtime check stays: it
+  // is for names that arrive from outside the type system, which the types
+  // cannot see. See `sqlFieldWhitelist.ts`'s own header.
+  validateFields("users_local", columns);
 
   values.push(userId);
 
-  const sql = `UPDATE users_local SET ${fields.join(", ")} WHERE id = ?`;
-  dbRun(sql, values);
+  const statement = sql`UPDATE users_local SET ${assignmentList(columns)} WHERE id = ?`;
+  dbRun(statement, values);
+}
+
+export async function updateUser(
+  userId: string,
+  updates: Partial<User>,
+): Promise<void> {
+  return updateUserSync(userId, updates);
 }
 
 /**
  * Delete user
  */
 export async function deleteUser(userId: string): Promise<void> {
-  const sql = "DELETE FROM users_local WHERE id = ?";
-  dbRun(sql, [userId]);
+  const statement = sql`DELETE FROM users_local WHERE id = ?`;
+  dbRun(statement, [userId]);
 }
 
 /**
  * Update last login timestamp
  */
-export async function updateLastLogin(userId: string): Promise<void> {
-  const sql = `
+/**
+ * BACKLOG-2546 — SYNC TWIN. The login provisioning chain (create-or-update the
+ * user, stamp last-login, save the token, open the session) has to commit as ONE
+ * unit, and `dbTransaction` takes a SYNCHRONOUS callback by type
+ * (`db/core/dbConnection.ts:287`). So the transaction body needs a callee that is
+ * synchronous all the way down. The primitive is this one; the promise-returning
+ * export below is a one-line wrapper over it — never the reverse, because an
+ * `async` callee lets the transaction COMMIT over an error.
+ * Same shape and same reason as `createTransactionSync` (BACKLOG-2538) and
+ * `updateContactSync` (BACKLOG-2496). Rule derived by `electron/__tests__/syncTwin.guard.test.ts`.
+ */
+export function updateLastLoginSync(userId: string): void {
+  const statement = sql`
     UPDATE users_local
     SET last_login_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `;
-  dbRun(sql, [userId]);
+  dbRun(statement, [userId]);
+}
+
+export async function updateLastLogin(userId: string): Promise<void> {
+  return updateLastLoginSync(userId);
 }
 
 /**
@@ -188,7 +264,7 @@ export async function acceptTerms(
   termsVersion: string,
   privacyVersion: string,
 ): Promise<User> {
-  const sql = `
+  const statement = sql`
     UPDATE users_local
     SET terms_accepted_at = CURRENT_TIMESTAMP,
         terms_version_accepted = ?,
@@ -196,7 +272,7 @@ export async function acceptTerms(
         privacy_policy_version_accepted = ?
     WHERE id = ?
   `;
-  dbRun(sql, [termsVersion, privacyVersion, userId]);
+  dbRun(statement, [termsVersion, privacyVersion, userId]);
   const user = await getUserById(userId);
   if (!user) {
     throw new NotFoundError("User not found after accepting terms", "User", userId);
@@ -208,12 +284,12 @@ export async function acceptTerms(
  * Mark email onboarding as completed for a user
  */
 export async function completeEmailOnboarding(userId: string): Promise<void> {
-  const sql = `
+  const statement = sql`
     UPDATE users_local
     SET email_onboarding_completed_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `;
-  dbRun(sql, [userId]);
+  dbRun(statement, [userId]);
 }
 
 /**
@@ -222,12 +298,12 @@ export async function completeEmailOnboarding(userId: string): Promise<void> {
 export async function hasCompletedEmailOnboarding(
   userId: string,
 ): Promise<boolean> {
-  const sql = `
+  const statement = sql`
     SELECT email_onboarding_completed_at
     FROM users_local
     WHERE id = ?
   `;
-  const result = dbGet<{ email_onboarding_completed_at: string | null }>(sql, [
+  const result = dbGet<{ email_onboarding_completed_at: string | null }>(statement, [
     userId,
   ]);
   return (
@@ -261,7 +337,7 @@ export async function migrateUserIdForUnification(oldUserId: string, newUserId: 
       // Update the users_local table FIRST (the primary record)
       // With FK checks off, this won't cause issues
       db.prepare("UPDATE users_local SET id = ? WHERE id = ?").run(newUserId, oldUserId);
-      logService.info("[DB Migration] Updated users_local primary record", "userDbService");
+      void logService.info("[DB Migration] Updated users_local primary record", "userDbService");
 
       // Tables with user_id FK that need to be updated
       const tablesToUpdate = [
@@ -290,24 +366,24 @@ export async function migrateUserIdForUnification(oldUserId: string, newUserId: 
           if (hasUserId) {
             const result = db.prepare(`UPDATE ${table} SET user_id = ? WHERE user_id = ?`).run(newUserId, oldUserId);
             if (result.changes > 0) {
-              logService.info(`[DB Migration] Updated ${result.changes} rows in ${table}`, "userDbService");
+              void logService.info(`[DB Migration] Updated ${result.changes} rows in ${table}`, "userDbService");
             }
           }
         } catch (tableError) {
           // Table might not exist, skip it
-          logService.debug(`[DB Migration] Skipping table ${table}: ${tableError}`, "userDbService");
+          void logService.debug(`[DB Migration] Skipping table ${table}: ${tableError}`, "userDbService");
         }
       }
     });
 
     try {
       migrate();
-      logService.info("[DB Migration] User ID migration completed successfully", "userDbService", {
+      void logService.info("[DB Migration] User ID migration completed successfully", "userDbService", {
         oldId: oldUserId.substring(0, 8) + "...",
         newId: newUserId.substring(0, 8) + "...",
       });
     } catch (error) {
-      logService.error("[DB Migration] User ID migration failed, rolled back", "userDbService", {
+      void logService.error("[DB Migration] User ID migration failed, rolled back", "userDbService", {
         error: error instanceof Error ? error.message : String(error),
       });
       throw error;

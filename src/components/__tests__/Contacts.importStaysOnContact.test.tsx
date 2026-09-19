@@ -150,10 +150,22 @@ describe("Contacts — import keeps the user on the contact (BACKLOG-2459)", () 
     });
   });
 
-  it("still opens the edit form when the record is missing an email and a phone", async () => {
-    // The one deliberate navigation: an incomplete record cannot be imported, so
-    // the form opens to complete it. Unchanged by BACKLOG-2459 and pinned so the
-    // "stay put" fix cannot quietly swallow it.
+  /**
+   * REVERSED by founder ruling `a41a805b` (2026-09-07). It read "still opens the
+   * edit form when the record is missing an email and a phone", and its comment
+   * called that "the one deliberate navigation… unchanged by BACKLOG-2459".
+   *
+   * It was one half of the block deleted from `handlePreviewImport`: a NAMED
+   * record with no email and no phone was diverted to the form. `contacts:create`
+   * and `contacts:import` both accept such a record — measured — so this was a
+   * renderer rule refusing what the handler allows, the same shape as the
+   * `!hasName` half the founder's Step 12a run caught (`a104375f`).
+   *
+   * Rewritten rather than deleted so the BACKLOG-2459 trail stays legible: the
+   * "stay put" guarantee it was protecting still holds, and is now asserted on
+   * the import path this record actually takes.
+   */
+  it("imports a named record with no email and no phone, and stays on the card", async () => {
     const incomplete = {
       ...externalAlice,
       id: "ext-incomplete",
@@ -173,22 +185,16 @@ describe("Contacts — import keeps the user on the contact (BACKLOG-2459)", () 
     await userEvent.click(screen.getByText("Gus Example"));
     await userEvent.click(await screen.findByRole("button", { name: /import/i }));
 
-    // The add/edit form opened, and nothing was imported.
-    //
-    // BACKLOG-2566: this used to assert `contacts-detail-empty` — the MECHANISM
-    // of the bug (the pane was destroyed to open the form), pinned as if it were
-    // the intent. The intent is only that the form opens without importing. The
-    // pane must now survive underneath it, on this call site exactly as on the
-    // Edit button's.
-    await waitFor(() => {
-      // The form's submit button — unique to the modal. (Its two <h3> headers
-      // are both in the DOM under jsdom, which applies no CSS, so a heading
-      // query matches twice.)
-      expect(screen.getByRole("button", { name: /update contact/i })).toBeInTheDocument();
-    });
+    // It imports. The form does not open — and the BACKLOG-2459 guarantee this
+    // file exists for still holds: the pane survives and still shows him.
+    await waitFor(() => expect(window.api.contacts.import).toHaveBeenCalled());
+    expect(
+      screen.queryByRole("button", { name: /update contact/i }),
+    ).not.toBeInTheDocument();
     expect(screen.queryByTestId("contacts-detail-empty")).not.toBeInTheDocument();
-    expect(screen.getByTestId("contacts-detail-pane")).toHaveTextContent("Gus Example");
-    expect(window.api.contacts.import).not.toHaveBeenCalled();
+    expect(screen.getByTestId("contacts-detail-pane")).toBeInTheDocument();
+    // Never through the create door — BACKLOG-2510 routed this path to import
+    // so a crosswalk row is written, and that must not silently revert.
     expect(window.api.contacts.create).not.toHaveBeenCalled();
   });
 });

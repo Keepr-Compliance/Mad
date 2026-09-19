@@ -213,11 +213,39 @@ export function ImportSourceSettings({ userId, onSourceChange, onConnectAndroid 
   }, [refreshAndroidStatus]);
 
   return (
-    <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
-      <h4 className="text-sm font-medium text-gray-900 mb-2">Import Source</h4>
+    /*
+      BACKLOG-3156 stage C — MESSAGES GETS THE `Sources` BLOCK THE OTHER TWO
+      SECTIONS HAVE.
+
+      Emails and Contacts each open with a `Sources` eyebrow above their source
+      cards; the Messages section had the card and not the eyebrow, so the one
+      shape the redesign promised did not reach it. The eyebrow lives HERE
+      rather than inside either message panel because this picker IS the
+      Messages section's source control and `Settings.tsx` renders it above
+      BOTH panels — the macOS one and the Android one — so a copy in each would
+      be the drift this item exists to undo, and would print the word twice
+      whenever the Android panel is showing.
+
+      `Settings.test.tsx` asserts the resulting order (sources -> preferences ->
+      actions) against the real composition in `Settings.tsx`, not against a
+      fixture assembled by the test.
+    */
+    <div
+      data-testid="messages-block-sources"
+      className="p-4 bg-gray-50 rounded-lg border border-gray-200"
+    >
+      {/* BACKLOG-3156 stage E: the block IS the card. The eyebrow is its first
+          child and the description is the line beneath it, in the slot
+          `<h4>Import Source</h4>` used to occupy — that heading said the same
+          thing as the eyebrow one line above it, which is the doubling this
+          stage removes. */}
+      <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
+        Sources
+      </p>
       <p className="text-xs text-gray-600 mb-3">
         Choose where to import your text messages from.
       </p>
+
 
       {loading ? (
         <div className="flex items-center justify-center py-4">
@@ -334,7 +362,7 @@ export function ImportSourceSettings({ userId, onSourceChange, onConnectAndroid 
             <div className="mt-3 space-y-3">
               {/* Sync Server Status Card */}
               {syncStatus?.running && (
-                <div className="bg-green-50 rounded-lg p-3 border border-green-200">
+                <div className="bg-green-50 rounded p-3 border border-green-200">
                   <div className="flex items-center justify-between mb-1">
                     <div className="flex items-center gap-2">
                       <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
@@ -361,11 +389,11 @@ export function ImportSourceSettings({ userId, onSourceChange, onConnectAndroid 
 
               {/* Paired Devices */}
               {androidLoading ? (
-                <div className="bg-white rounded-lg p-3 border border-gray-200">
+                <div className="bg-white rounded p-3 border border-gray-200">
                   <span className="text-xs text-gray-500">Loading devices...</span>
                 </div>
               ) : devices.length > 0 ? (
-                <div className="bg-white rounded-lg border border-gray-200 divide-y divide-gray-200">
+                <div className="bg-white rounded border border-gray-200 divide-y divide-gray-200">
                   {devices.map((device) => (
                     <div key={device.deviceId} className="p-3 flex items-center justify-between">
                       <div>
@@ -390,7 +418,7 @@ export function ImportSourceSettings({ userId, onSourceChange, onConnectAndroid 
                    "Use the guided setup below" copy (setup moved to the guided
                    wizard in BACKLOG-2320) and the misleading "tap Sync Now"
                    how-to — one CTA that opens the wizard. */
-                <div className="bg-white rounded-lg p-3 border border-gray-200">
+                <div className="bg-white rounded p-3 border border-gray-200">
                   <p className="text-xs text-gray-500 mb-2">
                     No devices paired yet.
                   </p>

@@ -578,9 +578,9 @@ describe("iOSContactsParser — real AddressBook schema (BACKLOG-2407)", () => {
   // -------------------------------------------------------------------------
 
   describe("captures the identity columns", () => {
-    it("maps every contact id to its exact ExternalUUID — full set, not a count", () => {
+    it("maps every contact id to its exact ExternalUUID — full set, not a count", async () => {
       const parser = new iOSContactsParser();
-      parser.open(modernBackup);
+      await parser.open(modernBackup);
       try {
         const actual = new Map(
           parser.getAllContacts().map((c) => [c.id, c.externalUuid])
@@ -602,9 +602,9 @@ describe("iOSContactsParser — real AddressBook schema (BACKLOG-2407)", () => {
       }
     });
 
-    it("captures ExternalIdentifier and ExternalModificationTag as exact sets", () => {
+    it("captures ExternalIdentifier and ExternalModificationTag as exact sets", async () => {
       const parser = new iOSContactsParser();
-      parser.open(modernBackup);
+      await parser.open(modernBackup);
       try {
         const contacts = parser.getAllContacts();
 
@@ -631,9 +631,9 @@ describe("iOSContactsParser — real AddressBook schema (BACKLOG-2407)", () => {
       }
     });
 
-    it("converts ModificationDate/CreationDate from CF SECONDS, not nanoseconds", () => {
+    it("converts ModificationDate/CreationDate from CF SECONDS, not nanoseconds", async () => {
       const parser = new iOSContactsParser();
-      parser.open(modernBackup);
+      await parser.open(modernBackup);
       try {
         const byId = new Map(parser.getAllContacts().map((c) => [c.id, c]));
 
@@ -652,9 +652,9 @@ describe("iOSContactsParser — real AddressBook schema (BACKLOG-2407)", () => {
       }
     });
 
-    it("captures StoreID, which is what explains a sparse ExternalUUID", () => {
+    it("captures StoreID, which is what explains a sparse ExternalUUID", async () => {
       const parser = new iOSContactsParser();
-      parser.open(modernBackup);
+      await parser.open(modernBackup);
       try {
         expect(new Map(parser.getAllContacts().map((c) => [c.id, c.storeId]))).toEqual(
           new Map([
@@ -669,15 +669,15 @@ describe("iOSContactsParser — real AddressBook schema (BACKLOG-2407)", () => {
       }
     });
 
-    it("carries the identity through getContactById(), not only the bulk read", () => {
+    it("carries the identity through getContactById(), not only the bulk read", async () => {
       const parser = new iOSContactsParser();
-      parser.open(modernBackup);
+      await parser.open(modernBackup);
       try {
         // Force the cache-miss path, which is served by the SECOND ABPerson
         // statement. Widening only the first would leave this one returning
         // undefined identifiers and nothing else in the suite would notice.
         parser.close();
-        parser.open(modernBackup);
+        await parser.open(modernBackup);
         (parser as unknown as { contactCache: Map<number, unknown> }).contactCache.clear();
 
         const contact = parser.getContactById(1);
@@ -695,10 +695,12 @@ describe("iOSContactsParser — real AddressBook schema (BACKLOG-2407)", () => {
   // RE-IMPORT — the identifiers must be the same values, not merely present
   // -------------------------------------------------------------------------
 
-  it("yields an identical identity set across a simulated re-import", () => {
-    const read = (): Array<[number, string | null, string | null, string | null]> => {
+  it("yields an identical identity set across a simulated re-import", async () => {
+    const read = async (): Promise<
+      Array<[number, string | null, string | null, string | null]>
+    > => {
       const parser = new iOSContactsParser();
-      parser.open(modernBackup);
+      await parser.open(modernBackup);
       try {
         return parser
           .getAllContacts()
@@ -717,8 +719,8 @@ describe("iOSContactsParser — real AddressBook schema (BACKLOG-2407)", () => {
       }
     };
 
-    const first = read();
-    const second = read();
+    const first = await read();
+    const second = await read();
 
     // Exact equality of the whole set, both directions — a re-import must be
     // idempotent in the identifiers, which is the property that makes them
@@ -733,14 +735,14 @@ describe("iOSContactsParser — real AddressBook schema (BACKLOG-2407)", () => {
   // -------------------------------------------------------------------------
 
   describe("an ABPerson without the identity columns", () => {
-    it("does not throw on open() and still parses every contact", () => {
+    it("does not throw on open() and still parses every contact", async () => {
       // THE REGRESSION THIS EXISTS FOR. `db.prepare()` validates column names, so
       // a hardcoded widened SELECT throws inside open() — which rethrows — and
       // kills the ENTIRE iPhone contacts import. iPhone sync is the ungated
       // DEFAULT import source for every Windows user, so that is a total-failure
       // blast radius on the most common configuration.
       const parser = new iOSContactsParser();
-      expect(() => parser.open(legacyBackup)).not.toThrow();
+      await expect(parser.open(legacyBackup)).resolves.toBeUndefined();
 
       try {
         expect(new Set(parser.getAllContacts().map((c) => c.id))).toEqual(
@@ -760,9 +762,9 @@ describe("iOSContactsParser — real AddressBook schema (BACKLOG-2407)", () => {
       }
     });
 
-    it("reports the columns as MISSING, distinct from present-but-empty", () => {
+    it("reports the columns as MISSING, distinct from present-but-empty", async () => {
       const parser = new iOSContactsParser();
-      parser.open(legacyBackup);
+      await parser.open(legacyBackup);
       try {
         const stats = parser.getIdentityStats();
 
@@ -786,9 +788,9 @@ describe("iOSContactsParser — real AddressBook schema (BACKLOG-2407)", () => {
       }
     });
 
-    it("leaves every identity field null rather than undefined", () => {
+    it("leaves every identity field null rather than undefined", async () => {
       const parser = new iOSContactsParser();
-      parser.open(legacyBackup);
+      await parser.open(legacyBackup);
       try {
         for (const c of parser.getAllContacts()) {
           // The declared type says `T | null`. `NULL AS <col>` is what makes
@@ -818,9 +820,9 @@ describe("iOSContactsParser — real AddressBook schema (BACKLOG-2407)", () => {
   // -------------------------------------------------------------------------
 
   describe("an ABPerson with only SOME of the identity columns", () => {
-    it("captures the identifiers it has when the DATE columns are absent", () => {
+    it("captures the identifiers it has when the DATE columns are absent", async () => {
       const parser = new iOSContactsParser();
-      expect(() => parser.open(partialIdentifiersBackup)).not.toThrow();
+      await expect(parser.open(partialIdentifiersBackup)).resolves.toBeUndefined();
       try {
         const contacts = parser.getAllContacts();
 
@@ -856,12 +858,12 @@ describe("iOSContactsParser — real AddressBook schema (BACKLOG-2407)", () => {
       }
     });
 
-    it("captures the dates it has when the IDENTIFIER columns are absent", () => {
+    it("captures the dates it has when the IDENTIFIER columns are absent", async () => {
       // The mirror image of the test above. One partial fixture alone could be
       // satisfied by a probe that happened to guess right for that subset; two
       // disjoint subsets covering all six columns cannot be.
       const parser = new iOSContactsParser();
-      expect(() => parser.open(partialDatesBackup)).not.toThrow();
+      await expect(parser.open(partialDatesBackup)).resolves.toBeUndefined();
       try {
         const contacts = parser.getAllContacts();
 
@@ -901,14 +903,14 @@ describe("iOSContactsParser — real AddressBook schema (BACKLOG-2407)", () => {
       }
     });
 
-    it("counts the population only over the columns that shape actually has", () => {
+    it("counts the population only over the columns that shape actually has", async () => {
       // A partial shape must not report the same numbers as the full one. This
       // is the counter-side of the two tests above: the stats line is what the
       // capture is FOR, and it has to stay readable when a column is absent.
       const identifiers = new iOSContactsParser();
-      identifiers.open(partialIdentifiersBackup);
+      await identifiers.open(partialIdentifiersBackup);
       const dates = new iOSContactsParser();
-      dates.open(partialDatesBackup);
+      await dates.open(partialDatesBackup);
       try {
         const a = identifiers.getIdentityStats();
         const b = dates.getIdentityStats();
@@ -965,9 +967,9 @@ describe("iOSContactsParser — real AddressBook schema (BACKLOG-2407)", () => {
       }
     });
 
-    it("captures the value rather than dropping it on the result key", () => {
+    it("captures the value rather than dropping it on the result key", async () => {
       const parser = new iOSContactsParser();
-      expect(() => parser.open(mixedCaseBackup)).not.toThrow();
+      await expect(parser.open(mixedCaseBackup)).resolves.toBeUndefined();
       try {
         const contacts = parser.getAllContacts();
 
@@ -1089,14 +1091,14 @@ describe("iOSContactsParser — real AddressBook schema (BACKLOG-2407)", () => {
       }
     });
 
-    it("keeps every contact's phones and emails attached to it", () => {
+    it("keeps every contact's phones and emails attached to it", async () => {
       // THE REGRESSION, and the reason this is filed above a cosmetic bug.
       // `row.ROWID` undefined makes `id` undefined, so buildLookupIndexes()
       // misses on multiValuesByContact.get(undefined) and every contact below
       // came back with an EMPTY phone list and an EMPTY email list — an import
       // that reports success and yields contacts that can match nothing.
       const parser = new iOSContactsParser();
-      expect(() => parser.open(implicitRowidBackup)).not.toThrow();
+      await expect(parser.open(implicitRowidBackup)).resolves.toBeUndefined();
       try {
         const contacts = parser.getAllContacts();
 
@@ -1123,14 +1125,14 @@ describe("iOSContactsParser — real AddressBook schema (BACKLOG-2407)", () => {
       }
     });
 
-    it("keeps the four contacts distinct instead of collapsing the address book", () => {
+    it("keeps the four contacts distinct instead of collapsing the address book", async () => {
       // The second half of the same defect. `contactCache` is keyed on the id,
       // so four undefined ids overwrite one another: getAllContacts() returned a
       // SINGLE contact — the last row parsed — for the entire address book.
       // Asserted as the exact id set, because a length of 4 would also pass with
       // the ids permuted.
       const parser = new iOSContactsParser();
-      parser.open(implicitRowidBackup);
+      await parser.open(implicitRowidBackup);
       try {
         expect(new Set(parser.getAllContacts().map((c) => c.id))).toEqual(
           new Set([1, 2, 3, 4])
@@ -1150,12 +1152,12 @@ describe("iOSContactsParser — real AddressBook schema (BACKLOG-2407)", () => {
       }
     });
 
-    it("carries the id through getContactById(), not only the bulk read", () => {
+    it("carries the id through getContactById(), not only the bulk read", async () => {
       // getContactById() falls through to stmtContactById on a cache miss, and
       // that statement is built from the same constant. Fixing only the bulk
       // read would leave this path returning a contact with an undefined id.
       const parser = new iOSContactsParser();
-      parser.open(implicitRowidBackup);
+      await parser.open(implicitRowidBackup);
       try {
         const contact = parser.getContactById(3);
         expect(contact).not.toBeNull();
@@ -1190,9 +1192,9 @@ describe("iOSContactsParser — real AddressBook schema (BACKLOG-2407)", () => {
       }
     });
 
-    it("still reads the id, so handles stay attached to the right contact", () => {
+    it("still reads the id, so handles stay attached to the right contact", async () => {
       const parser = new iOSContactsParser();
-      expect(() => parser.open(lowercaseRowidBackup)).not.toThrow();
+      await expect(parser.open(lowercaseRowidBackup)).resolves.toBeUndefined();
       try {
         const contacts = parser.getAllContacts();
 
@@ -1247,13 +1249,13 @@ describe("iOSContactsParser — real AddressBook schema (BACKLOG-2407)", () => {
       }
     });
 
-    it("reads the names rather than labelling every contact Unknown", () => {
+    it("reads the names rather than labelling every contact Unknown", async () => {
       // The cosmetic half of the same trap. `row.First` undefined makes
       // computeDisplayName optional-chain past all three fields to its "Unknown"
       // fallback — for the whole address book, including the organization-only
       // contact whose fallback name is the one thing it has.
       const parser = new iOSContactsParser();
-      expect(() => parser.open(lowercaseNamesBackup)).not.toThrow();
+      await expect(parser.open(lowercaseNamesBackup)).resolves.toBeUndefined();
       try {
         const contacts = parser.getAllContacts();
 
@@ -1286,12 +1288,12 @@ describe("iOSContactsParser — real AddressBook schema (BACKLOG-2407)", () => {
       }
     });
 
-    it("keeps the handles attached, which the canonical ROWID here preserves", () => {
+    it("keeps the handles attached, which the canonical ROWID here preserves", async () => {
       // The counter-side of the test above: on THIS shape the ids are fine, so a
       // reader can see that the two halves of the defect are separable and that
       // the name columns alone cost only the display name.
       const parser = new iOSContactsParser();
-      parser.open(lowercaseNamesBackup);
+      await parser.open(lowercaseNamesBackup);
       try {
         expect(new Set(parser.getAllContacts().map((c) => c.id))).toEqual(
           new Set([1, 2, 3, 4])
@@ -1307,9 +1309,9 @@ describe("iOSContactsParser — real AddressBook schema (BACKLOG-2407)", () => {
   // POPULATION RATE — the deliverable of the capture
   // -------------------------------------------------------------------------
 
-  it("reports the population rate, and it distinguishes local-store nulls", () => {
+  it("reports the population rate, and it distinguishes local-store nulls", async () => {
     const parser = new iOSContactsParser();
-    parser.open(modernBackup);
+    await parser.open(modernBackup);
     try {
       const stats = parser.getIdentityStats();
 
@@ -1337,17 +1339,17 @@ describe("iOSContactsParser — real AddressBook schema (BACKLOG-2407)", () => {
     }
   });
 
-  it("resets the probe between backups so one shape cannot leak into the next", () => {
+  it("resets the probe between backups so one shape cannot leak into the next", async () => {
     // The exported singleton is reused across imports, so a cached probe would
     // apply the modern backup's column shape to a legacy one — selecting columns
     // that are not there and throwing exactly where the probe exists to prevent.
     const parser = new iOSContactsParser();
 
-    parser.open(modernBackup);
+    await parser.open(modernBackup);
     expect(parser.getIdentityStats().missingColumns).toEqual([]);
     parser.close();
 
-    expect(() => parser.open(legacyBackup)).not.toThrow();
+    await expect(parser.open(legacyBackup)).resolves.toBeUndefined();
     expect(parser.getIdentityStats().missingColumns.length).toBe(6);
     parser.close();
   });

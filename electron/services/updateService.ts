@@ -360,8 +360,8 @@ export class UpdateService {
     await this.checkForUpdates();
 
     // Set up interval
-    this.checkIntervalId = setInterval(async () => {
-      await this.checkForUpdates();
+    this.checkIntervalId = setInterval(() => {
+      void this.checkForUpdates();
     }, this.config.checkInterval);
   }
 

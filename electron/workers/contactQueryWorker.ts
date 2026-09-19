@@ -27,8 +27,18 @@ import {
   type ContactSourceRecordRow,
 } from "../services/db/contactSourceLinkSql";
 import { IMPORTED_CONTACTS_SELECT_SQL } from "../services/db/contactProjectionSql";
+import {
+  IMPORTED_CONTACT_IDS_SQL,
+  CONTACT_EXISTING_EMAILS_SQL,
+  CONTACT_EXISTING_PHONES_SQL,
+} from "../services/db/contactBackfillPlanSql";
+import {
+  EMAIL_DERIVED_PROVIDERS,
+  runEmailDerivedQueryOn,
+  type EmailDerivedProvider,
+} from "../services/db/emailDerivedContactsSql";
 
-type QueryType = "external" | "imported" | "backfill";
+type QueryType = "external" | "imported" | "backfill" | "emailDerived";
 
 interface InitMessage {
   type: "init";
@@ -40,6 +50,18 @@ interface QueryMessage {
   id: string;
   type: QueryType;
   userId: string;
+  /**
+   * BACKLOG-1717 — which mailboxes this read covers.
+   *
+   * The message carried only `{ id, type, userId }` before this. The enabled
+   * provider set cannot be computed here: it needs the user's Settings
+   * switches AND a NETWORK read of the plan feature, neither of which belongs
+   * on a read-only worker thread. So the handler decides and passes the answer
+   * down.
+   *
+   * Only the `emailDerived` query reads it.
+   */
+  providers?: string[];
 }
 
 interface ShutdownMessage {
@@ -100,12 +122,31 @@ function runExternalQuery(userId: string): unknown[] {
  * to add. `is_primary` is deliberately NOT decided here: it depends on what the
  * contact holds at the moment of the write, and only the writer can see that.
  */
+/**
+ * People found in the user's email (BACKLOG-1717).
+ *
+ * Delegates to the db layer's runner, which is the SAME function the
+ * main-thread fallback calls — the BACKLOG-2514 rule, and what keeps every
+ * `prepare` of this text inside `electron/services/db/`. The per-mailbox
+ * fail-closed check lives inside the candidate statement, so it applies here
+ * without this function knowing about it.
+ */
+function runEmailDerivedQuery(userId: string, providers: string[] | undefined): unknown[] {
+  if (!db) throw new Error("Database not initialized");
+  const enabled = (providers ?? []).filter((p): p is EmailDerivedProvider =>
+    (EMAIL_DERIVED_PROVIDERS as readonly string[]).includes(p),
+  );
+  if (enabled.length === 0) return [];
+
+  return runEmailDerivedQueryOn(db, userId, enabled);
+}
+
 function runBackfillQuery(userId: string): unknown[] {
   if (!db) throw new Error("Database not initialized");
 
-  const importedContacts = db.prepare(
-    `SELECT id FROM contacts WHERE user_id = ? AND is_imported = 1`
-  ).all(userId) as Array<{ id: string }>;
+  const importedContacts = db
+    .prepare(IMPORTED_CONTACT_IDS_SQL)
+    .all(userId) as Array<{ id: string }>;
 
   const plan: Array<{ contactId: string; emails: string[]; phones: string[] }> = [];
 
@@ -136,16 +177,16 @@ function runBackfillQuery(userId: string): unknown[] {
     // INSERT OR IGNORE, because this plan is a snapshot and the contact may
     // have changed between the scan and the write.
     const existingEmails = new Set(
-      (db.prepare(
-        `SELECT LOWER(email) as email FROM contact_emails WHERE contact_id = ?`
-      ).all(contact.id) as Array<{ email: string }>).map((r) => r.email)
+      (
+        db.prepare(CONTACT_EXISTING_EMAILS_SQL).all(contact.id) as Array<{ email: string }>
+      ).map((r) => r.email)
     );
     const existingPhoneKeys = new Set(
-      (db.prepare(
-        `SELECT phone_e164 FROM contact_phones WHERE contact_id = ?`
-      ).all(contact.id) as Array<{ phone_e164: string }>).map((r) =>
-        r.phone_e164.replace(/\D/g, "").slice(-10)
-      )
+      (
+        db.prepare(CONTACT_EXISTING_PHONES_SQL).all(contact.id) as Array<{
+          phone_e164: string;
+        }>
+      ).map((r) => r.phone_e164.replace(/\D/g, "").slice(-10))
     );
 
     const missingEmails: string[] = [];
@@ -208,6 +249,8 @@ parentPort?.on("message", (msg: WorkerMessage) => {
       rows = runExternalQuery(queryMsg.userId);
     } else if (queryMsg.type === "backfill") {
       rows = runBackfillQuery(queryMsg.userId);
+    } else if (queryMsg.type === "emailDerived") {
+      rows = runEmailDerivedQuery(queryMsg.userId, queryMsg.providers);
     } else {
       throw new Error(`Unknown query type: ${queryMsg.type}`);
     }

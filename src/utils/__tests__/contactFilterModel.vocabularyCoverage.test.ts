@@ -214,11 +214,13 @@ describe("source-filter vocabulary coverage (BACKLOG-2473, SR ask on #2197)", ()
      * place it is written down.
      *
      * A contact whose source is `email`/`sms`/`inferred` but whose
-     * `is_message_derived` is falsy matches NO leaf and is invisible. Today
-     * nothing writes that combination — those sources are set by the
-     * message-derived paths, which always set the flag. This assertion is what
-     * makes it break loudly if that ever stops being true, instead of quietly
-     * hiding contacts.
+     * `is_message_derived` is falsy matches NO leaf and is invisible. Every
+     * SAVED contact has that falsy flag, so no door may store those three:
+     * `toStorableContactSource` refuses them (BACKLOG-3193), and it reads the
+     * list to refuse from `MESSAGE_DERIVED_ONLY_SOURCES` — the very list this
+     * assertion pins. Add a leaf that finds a saved `sms` contact and this test
+     * forces the list to change, which re-opens the door by construction.
+     * Pinned by execution in `contact-handlers.unfilterableSource-3193.test.ts`.
      */
     it("splits into flag-independent and message-derived-only exactly as documented", () => {
       const needsFlag = ALL_CONTACT_SOURCE_VALUES.filter(
@@ -232,7 +234,8 @@ describe("source-filter vocabulary coverage (BACKLOG-2473, SR ask on #2197)", ()
         [...PERSISTED_CONTACT_SOURCES, ...SYNTHETIC_CONTACT_SOURCES].sort(),
       );
       // A coverage test over an empty list would pass forever. Name the size.
-      expect(ALL_CONTACT_SOURCE_VALUES.length).toBe(10);
+      // 11 since BACKLOG-1717 added the synthetic `email_derived`.
+      expect(ALL_CONTACT_SOURCE_VALUES.length).toBe(11);
     });
   });
 

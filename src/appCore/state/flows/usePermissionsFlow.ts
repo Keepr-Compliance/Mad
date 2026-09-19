@@ -82,8 +82,15 @@ export function usePermissionsFlow({
 
   const handlePermissionsGranted = useCallback((): void => {
     setHasPermissions(true);
-    // Dispatch to state machine to complete the permissions step
+    // Dispatch to state machine to complete the permissions step.
+    //
+    // BACKLOG-3275: FDA_GRANTED first, and it is what records the capability.
+    // The step completion that follows records only where the user is. This
+    // hook is reached from handlePermissionsGranted, i.e. after the permission
+    // check reported the capability is present — so this is the one place
+    // entitled to assert it.
     if (stateMachineDispatch) {
+      stateMachineDispatch({ type: "FDA_GRANTED" });
       stateMachineDispatch({ type: "ONBOARDING_STEP_COMPLETE", step: "permissions" });
     }
     // Legacy fallback (no-op if state machine is enabled)

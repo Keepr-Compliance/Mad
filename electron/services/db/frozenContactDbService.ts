@@ -23,6 +23,7 @@
  */
 
 import { dbGet } from "./core/dbConnection";
+import { sql } from "./core/sqlText";
 import { FROZEN_CONTACT_EXISTS_SQL } from "./frozenContactSql";
 
 /**
@@ -48,7 +49,7 @@ export function isContactOnFrozenTransaction(contactId: string): boolean {
   // better-sqlite3 rejects `?N` numbered placeholders, while six positional `?`
   // would be an ordering hazard on every future edit.
   const row = dbGet<{ hit: number }>(
-    `SELECT 1 AS hit WHERE ${FROZEN_CONTACT_EXISTS_SQL}`,
+    sql`SELECT 1 AS hit WHERE ${FROZEN_CONTACT_EXISTS_SQL}`,
     [{ contactId }],
   );
   return row !== undefined && row !== null;

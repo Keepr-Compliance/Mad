@@ -640,7 +640,18 @@ describe("TransactionService - Additional Coverage", () => {
       expect((result as TransactionWithDetails | null)?.contact_assignments).toHaveLength(2);
     });
 
-    it("should handle transaction with property coordinates", async () => {
+    // BACKLOG-2756. This test previously asserted
+    // `closing_date_verified: true, // Should be true when coordinates present`
+    // and passed — a green test whose own comment stated the defect as intended
+    // behaviour. `closing_date_verified` means "a person confirmed the closing
+    // date"; geocoded coordinates are a fact about the ADDRESS and say nothing
+    // about any date.
+    //
+    // The assertion is on what the writer is HANDED, not on the stored row. The
+    // column is `db-default` on the INSERT path (transactionDbService's policy
+    // table), so the value never reaches SQL and a row-level assertion would
+    // read the schema default and pass against fully defective code.
+    it("does not mark the closing date verified just because the address has coordinates", async () => {
       const auditedData = {
         property_address: "123 Verified St",
         property_coordinates: "37.7749,-122.4194",
@@ -667,7 +678,9 @@ describe("TransactionService - Additional Coverage", () => {
       expect(databaseService.createTransactionWithContactsSync).toHaveBeenCalledWith(
         expect.objectContaining({
           property_coordinates: "37.7749,-122.4194",
-          closing_date_verified: true, // Should be true when coordinates present
+          // Explicit `false`, not merely "not true": this pins the caller to
+          // stating the fact rather than omitting the key.
+          closing_date_verified: false,
         }),
       
         [],

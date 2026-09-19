@@ -70,10 +70,20 @@ Ask the user which increment — patch, minor, major.
    git push -u origin chore/release-X.Y.Z
    ```
 
-9. **Open a PR to main.** This is the flow every recent release actually used (`chore/release-2.32.0` → PR #2430 → main); the direct-merge steps this skill used to describe cannot work under branch protection:
+9. **Open a PR to main.** This is the flow every recent release actually used (`chore/release-2.32.0` → PR #2430 → main); the direct-merge steps this skill used to describe cannot work under branch protection.
+
+   **Build the body from the template — do not hand-write it.** `Validate PR Metrics` runs on release PRs (no skip pattern matches `chore/release-*`), and its fourth check is an exact-string test for the Public Repository Notice. The three release PRs before this template existed (#2496, #2492, #2455) each carried that sentence zero times.
 
    ```bash
-   gh pr create --base main --head chore/release-X.Y.Z --title "release: vX.Y.Z"
+   cp .claude/skills/release/release-pr-body.md /tmp/release-pr-body.md
+   # fill in Summary / What ships / Pre-flight / After merge / Agent ID.
+   # Leave the Public Repository Notice sentence byte-identical.
+
+   # Scan it before it is published — the body is world-readable the moment the PR opens.
+   node scripts/ci/check-message-hygiene.mjs --text-file /tmp/release-pr-body.md --label "release PR body"
+
+   gh pr create --base main --head chore/release-X.Y.Z --title "release: vX.Y.Z" \
+     --body-file /tmp/release-pr-body.md
    ```
 
 10. **Wait for all five required checks.** `strict: true` means the branch must also be current with main; if main moved, merge it in and let CI re-run.

@@ -1,0 +1,18 @@
+{
+  "//": "BACKLOG-3086 — the launder fixtures' compiler.",
+  "//2": "Unlike electron/types/__typefixtures__/sql/, where six of seven fixtures are SUPPOSED to",
+  "//3": "fail, EVERY fixture here is supposed to COMPILE. That is the defect: each one reaches a",
+  "//4": "conduit parameter with an unbranded value and tsc raises nothing. So they share ONE config",
+  "//5": "and one exit code — there is no per-fixture signal to keep separate, and the assertion in",
+  "//6": "sqlText.conduitSeam.test.ts is `[status, output] === [0, \"\"]`, not a diagnostic match.",
+  "//7": "",
+  "//8": "Settings come from ../sql/tsconfig.base.json, which the sibling suite asserts still MATCH",
+  "//9": "the root tsconfig's. A launder compiled under weaker settings than the real code would",
+  "//10": "prove nothing about the real code — strictFunctionTypes in particular is the whole subject",
+  "//11": "of A2_methodBivariance.ts.",
+  "//12": "",
+  "//13": "This directory is covered by the root configs' `electron/types/__typefixtures__/**` exclude",
+  "//14": "(BACKLOG-3067) and by eslint's, so it required ZERO config changes elsewhere.",
+  "extends": "../sql/tsconfig.base.json",
+  "include": ["./*.ts"]
+}

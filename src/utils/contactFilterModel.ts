@@ -136,8 +136,16 @@ export const SOURCE_GROUPS: FilterGroup[] = [
 
 /** Text `source` values treated as message-derived text channels. */
 const TEXT_SOURCES: ReadonlySet<string> = new Set(["sms", "messages"]);
-/** Email-channel `source` values (also the Inferred>From Email backing). */
-const EMAIL_SOURCES: ReadonlySet<string> = new Set(["email", "inferred"]);
+/**
+ * Email-channel `source` values (also the Inferred>From Email backing).
+ *
+ * `email_derived` (BACKLOG-1717) is the unsaved record built from the user's
+ * Outlook and Gmail mail. It sits on this leaf — which is OFF by default in
+ * Clients & Contacts and fully selected in the deal pickers — so email people
+ * are pickable when adding contacts to a deal without flooding the main list.
+ * One value for both providers; see `SYNTHETIC_CONTACT_SOURCES`.
+ */
+const EMAIL_SOURCES: ReadonlySet<string> = new Set(["email", "inferred", "email_derived"]);
 
 /**
  * Normalize the `is_message_derived` field, which may be a number (0/1),

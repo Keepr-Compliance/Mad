@@ -143,6 +143,8 @@ import { setDb, setDbPath, setEncryptionKey } from "../../services/db/core/dbCon
 import { recordContactOrigin } from "../../services/db/contactOriginLink";
 import { createLink } from "../../services/db/contactSourceLinkDbService";
 import { linkExternalContactsForUser } from "../../services/contactSourceLinker";
+import { applyContactBackfillSync } from "../../services/db/contactDbService";
+import { toLookupKey } from "../../utils/phoneNormalization";
 
 const USER = "user-2669";
 /** 32 bytes of hex — the shape `openDatabase` interpolates into `PRAGMA key`. */
@@ -363,5 +365,175 @@ describe("BACKLOG-2669 — the worker twin plans from links only", () => {
         phones: [NEVER_TYPED_PHONE],
       },
     ]);
+  });
+
+  /**
+   * ===========================================================================
+   * BACKLOG-3358 — the worker-planned backfill never moves the primary
+   * ===========================================================================
+   * An address-book import now stores every value the card holds with a
+   * USABLE one first, and `createContactsBatch` marks that one primary. The
+   * worker's plan is what copies card values onto the contact at the next
+   * launch whenever the pool is warm (the packaged default), so it is the copy
+   * most likely to undo that.
+   *
+   * The contact rows below are TRANSCRIBED from what the import handler stored
+   * for the same cards (`contact-handlers.importBadValues-3358.test.ts`, cases
+   * S1, S3, S3r, S1c): values, order, `is_primary`, source `import`. The plan is
+   * then applied by the real `applyContactBackfillSync`, which sets
+   * `is_primary` only when the contact holds no row of that kind.
+   */
+  describe("BACKLOG-3358 — a usable value stored primary at import stays primary", () => {
+    const REC = "AB-3358-W";
+    const LONG = "415-555-0143 office / 415-555-0144 mobile, after 6pm";
+    const CID = "contact-3358-w";
+
+    // Copied from `contactDbService.ts` (not exported): the `phone_e164` key
+    // `createContactsBatch` stores.
+    function normalizeToE164(phone: string): string {
+      const digits = phone.replace(/\D/g, "");
+      if (digits.length === 10) return `+1${digits}`;
+      if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+      if (phone.startsWith("+")) return phone;
+      return `+${digits}`;
+    }
+
+    function seedStoredImport(
+      stored: { emails: string[]; phones: string[] },
+      card: { emails: string[]; phones: string[] },
+    ): void {
+      const seed = new RealDatabase(dbPath) as DatabaseType;
+      seed.pragma(`key = "x'${KEY_HEX}'"`);
+      seed.pragma("cipher_compatibility = 4");
+      seed.pragma("journal_mode = WAL"); // see seedDatabase
+      seed.exec(CONTACT_IDENTITY_SCHEMA);
+      setDb(seed);
+      setDbPath(dbPath);
+      setEncryptionKey(KEY_HEX);
+
+      seed
+        .prepare(
+          "INSERT INTO contacts (id, user_id, display_name, source, is_imported) VALUES (?, ?, 'Pat Riverton', 'contacts_app', 1)",
+        )
+        .run(CID, USER);
+      stored.emails.forEach((email, i) =>
+        seed
+          .prepare(
+            "INSERT INTO contact_emails (id, contact_id, email, is_primary, source) VALUES (?, ?, ?, ?, 'import')",
+          )
+          .run(`${CID}-e${i}`, CID, email, i === 0 ? 1 : 0),
+      );
+      stored.phones.forEach((phone, i) => {
+        const e164 = normalizeToE164(phone);
+        seed
+          .prepare(
+            `INSERT INTO contact_phones (id, contact_id, phone_e164, phone_display, phone_normalized, is_primary, source)
+             VALUES (?, ?, ?, ?, ?, ?, 'import')`,
+          )
+          .run(`${CID}-p${i}`, CID, e164, phone, toLookupKey(e164), i === 0 ? 1 : 0);
+      });
+      seed
+        .prepare(
+          `INSERT INTO external_contacts
+             (id, user_id, name, phones_json, phones_normalized_json, emails_json,
+              external_record_id, source, synced_at, external_uuid)
+           VALUES (?, ?, 'Pat Riverton', ?, ?, ?, ?, 'macos', ?, NULL)`,
+        )
+        .run(
+          `ext-macos-${REC}`,
+          USER,
+          JSON.stringify(card.phones),
+          JSON.stringify(card.phones.map((p) => toLookupKey(p)).filter((k) => k.length > 0)),
+          JSON.stringify(card.emails),
+          REC,
+          CURRENT_SYNC,
+        );
+      createLink({
+        userId: USER,
+        contactId: CID,
+        sourceType: "macos",
+        sourceRecordId: REC,
+        matchMethod: "source_id",
+      });
+
+      setDb(null as unknown as DatabaseType);
+      seed.close();
+    }
+
+    /** Applies the worker's plan through the real writer and reads the result. */
+    function applyAndRead(plan: BackfillPlanRow[]) {
+      const conn = new RealDatabase(dbPath) as DatabaseType;
+      conn.pragma(`key = "x'${KEY_HEX}'"`);
+      conn.pragma("cipher_compatibility = 4");
+      setDb(conn);
+      try {
+        applyContactBackfillSync(plan);
+        const emails = conn
+          .prepare("SELECT email, is_primary FROM contact_emails WHERE contact_id = ? ORDER BY rowid")
+          .all(CID) as Array<{ email: string; is_primary: number }>;
+        const phones = conn
+          .prepare("SELECT phone_display, is_primary FROM contact_phones WHERE contact_id = ? ORDER BY rowid")
+          .all(CID) as Array<{ phone_display: string; is_primary: number }>;
+        return {
+          emails: emails.map((e) => e.email),
+          primaryEmail: emails.filter((e) => e.is_primary === 1).map((e) => e.email),
+          phones: phones.map((p) => p.phone_display),
+          primaryPhone: phones.filter((p) => p.is_primary === 1).map((p) => p.phone_display),
+        };
+      } finally {
+        setDb(null as unknown as DatabaseType);
+        conn.close();
+      }
+    }
+
+    it("W1 card with an unusable first email: nothing missing, nothing planned, the usable primary unchanged", () => {
+      seedStoredImport(
+        { emails: ["avery@example.com", "name@localhost"], phones: [] },
+        { emails: ["name@localhost", "avery@example.com"], phones: [] },
+      );
+      const plan = runWorkerBackfill();
+      shutdownWorker();
+      expect(plan).toEqual([]);
+      expect(applyAndRead(plan).primaryEmail).toEqual(["avery@example.com"]);
+    });
+
+    it("W2 the card later gains an unusable email: planned, applied as non-primary — the positive control", () => {
+      seedStoredImport(
+        { emails: ["avery@example.com"], phones: [] },
+        { emails: ["avery@example.com", "name@localhost"], phones: [] },
+      );
+      const plan = runWorkerBackfill();
+      shutdownWorker();
+      expect(plan).toEqual([{ contactId: CID, emails: ["name@localhost"], phones: [] }]);
+      const after = applyAndRead(plan);
+      expect(after.emails).toEqual(["avery@example.com", "name@localhost"]);
+      expect(after.primaryEmail).toEqual(["avery@example.com"]);
+    });
+
+    it("W3 imported with only an unusable email, the card later gains a usable one: primary does not move (known limit)", () => {
+      seedStoredImport(
+        { emails: ["test@localhost"], phones: [] },
+        { emails: ["test@localhost", "avery@example.com"], phones: [] },
+      );
+      const plan = runWorkerBackfill();
+      shutdownWorker();
+      expect(plan).toEqual([{ contactId: CID, emails: ["avery@example.com"], phones: [] }]);
+      const after = applyAndRead(plan);
+      expect(after.emails).toEqual(["test@localhost", "avery@example.com"]);
+      expect(after.primaryEmail).toEqual(["test@localhost"]);
+    });
+
+    it("W4 overlong phone field stored second: not re-planned, no duplicate, usable primary unchanged", () => {
+      seedStoredImport(
+        { emails: [], phones: ["+14155550142", LONG] },
+        { emails: [], phones: [LONG, "+14155550142"] },
+      );
+      const plan = runWorkerBackfill();
+      shutdownWorker();
+      expect(plan).toEqual([]);
+      const after = applyAndRead(plan);
+      expect(after.primaryPhone).toEqual(["+14155550142"]);
+      expect(after.phones).toEqual(["+14155550142", LONG]);
+    });
   });
 });

@@ -4,11 +4,13 @@
  * Keys are stored securely in the OS keychain (macOS Keychain, Windows DPAPI, Linux Secret Service)
  */
 
-import { safeStorage, app } from "electron";
+import { hostAppPaths } from "../capabilities/appPathsProvider";
+import type { SecretStore } from "../capabilities/secretStore";
+import { hostSecretStore } from "../capabilities/secretStoreProvider";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
-import * as Sentry from "@sentry/electron/main";
+import { hostErrorReporter } from "../capabilities/errorReporterProvider";
 import logService from "./logService";
 
 /**
@@ -33,11 +35,20 @@ interface KeyStore {
  * Database Encryption Service Class
  * Handles encryption key generation, storage, and retrieval for database encryption
  */
-class DatabaseEncryptionService {
+export class DatabaseEncryptionService {
   private readonly KEY_STORE_FILENAME = "db-key-store.json";
   private readonly KEY_VERSION = 1;
   private keyStorePath: string | null = null;
   private cachedKey: string | null = null;
+  private readonly secrets: SecretStore;
+
+  /**
+   * @param secrets - The host shell's secret store (BACKLOG-2962). Injected so
+   *   the key-store paths can be exercised without Electron.
+   */
+  constructor(secrets: SecretStore) {
+    this.secrets = secrets;
+  }
 
   /**
    * Initialize the encryption service
@@ -45,7 +56,7 @@ class DatabaseEncryptionService {
    */
   async initialize(): Promise<void> {
     try {
-      const userDataPath = app.getPath("userData");
+      const userDataPath = hostAppPaths.userData();
       this.keyStorePath = path.join(userDataPath, this.KEY_STORE_FILENAME);
       await logService.info(
         "Database encryption service initialized",
@@ -57,7 +68,7 @@ class DatabaseEncryptionService {
         "DatabaseEncryptionService",
         { error: error instanceof Error ? error.message : String(error) },
       );
-      Sentry.captureException(error, {
+      hostErrorReporter.captureException(error, {
         tags: { service: "database-encryption", operation: "initialize" },
       });
       throw error;
@@ -70,14 +81,14 @@ class DatabaseEncryptionService {
    */
   isEncryptionAvailable(): boolean {
     try {
-      return safeStorage.isEncryptionAvailable();
+      return this.secrets.isEncryptionAvailable();
     } catch (error) {
       logService.error(
         "Error checking encryption availability",
         "DatabaseEncryptionService",
         { error: error instanceof Error ? error.message : String(error) },
       );
-      Sentry.captureException(error, {
+      hostErrorReporter.captureException(error, {
         tags: { service: "database-encryption", operation: "isEncryptionAvailable" },
       });
       return false;
@@ -152,7 +163,7 @@ class DatabaseEncryptionService {
         "DatabaseEncryptionService",
         { error: error instanceof Error ? error.message : String(error) },
       );
-      Sentry.captureException(error, {
+      hostErrorReporter.captureException(error, {
         tags: { service: "database-encryption", operation: "generateNewKey" },
       });
       throw error;
@@ -186,7 +197,7 @@ class DatabaseEncryptionService {
 
       // Decrypt the key using OS keychain
       const encryptedBuffer = Buffer.from(keyStore.encryptedKey, "base64");
-      const decryptedKey = safeStorage.decryptString(encryptedBuffer);
+      const decryptedKey = this.secrets.decryptString(encryptedBuffer);
 
       await logService.debug(
         "Retrieved encryption key from store",
@@ -201,7 +212,7 @@ class DatabaseEncryptionService {
         "DatabaseEncryptionService",
         { error: error instanceof Error ? error.message : String(error) },
       );
-      Sentry.captureException(error, {
+      hostErrorReporter.captureException(error, {
         tags: { service: "database-encryption", operation: "getKeyFromStore" },
       });
       return null;
@@ -219,7 +230,7 @@ class DatabaseEncryptionService {
 
     try {
       // Encrypt the key using OS keychain
-      const encryptedBuffer = safeStorage.encryptString(key);
+      const encryptedBuffer = this.secrets.encryptString(key);
       const encryptedBase64 = encryptedBuffer.toString("base64");
 
       const keyStore: KeyStore = {
@@ -254,7 +265,7 @@ class DatabaseEncryptionService {
         "DatabaseEncryptionService",
         { error: error instanceof Error ? error.message : String(error) },
       );
-      Sentry.captureException(error, {
+      hostErrorReporter.captureException(error, {
         tags: { service: "database-encryption", operation: "saveKeyToStore" },
       });
       throw error;
@@ -301,7 +312,7 @@ class DatabaseEncryptionService {
           error: error instanceof Error ? error.message : String(error),
         },
       );
-      Sentry.captureException(error, {
+      hostErrorReporter.captureException(error, {
         tags: { service: "database-encryption", operation: "isDatabaseEncrypted" },
       });
       return false;
@@ -325,7 +336,7 @@ class DatabaseEncryptionService {
     const newKey = newKeyBuffer.toString("hex");
 
     // Update key store with new key and rotation timestamp
-    const encryptedBuffer = safeStorage.encryptString(newKey);
+    const encryptedBuffer = this.secrets.encryptString(newKey);
     const encryptedBase64 = encryptedBuffer.toString("base64");
 
     const keyStore: KeyStore = {
@@ -372,7 +383,7 @@ class DatabaseEncryptionService {
     if (!this.keyStorePath) {
       // Service not initialized yet, check default path
       try {
-        const userDataPath = app.getPath("userData");
+        const userDataPath = hostAppPaths.userData();
         const defaultKeyStorePath = path.join(
           userDataPath,
           this.KEY_STORE_FILENAME,
@@ -404,7 +415,7 @@ class DatabaseEncryptionService {
         "DatabaseEncryptionService",
         { error: error instanceof Error ? error.message : String(error) },
       );
-      Sentry.captureException(error, {
+      hostErrorReporter.captureException(error, {
         tags: { service: "database-encryption", operation: "getKeyMetadata" },
       });
       return null;
@@ -413,5 +424,5 @@ class DatabaseEncryptionService {
 }
 
 // Export singleton instance
-export const databaseEncryptionService = new DatabaseEncryptionService();
+export const databaseEncryptionService = new DatabaseEncryptionService(hostSecretStore);
 export default databaseEncryptionService;

@@ -1,0 +1,461 @@
+{
+  "source": {
+    "archive": "/Applications/Keepr.app/Contents/Resources/app.asar",
+    "archiveBytes": 466812761,
+    "dataStart": 4486172,
+    "extractedAt": "2026-09-17"
+  },
+  "totals": {
+    "files": 17025,
+    "contentBytes": 525364993,
+    "filesAtOrPast2Gib": 0
+  },
+  "reduction": "/package.json + every file directly under /dist and /dist/assets + the 80 largest files; integrity dropped",
+  "files": [
+    {
+      "path": "/dist/assets/canvas-confetti-CSugLB7T.js",
+      "size": 11138,
+      "offset": "163046433"
+    },
+    {
+      "path": "/dist/assets/dompurify-CIWIcL--.js",
+      "size": 29367,
+      "offset": "163057571"
+    },
+    {
+      "path": "/dist/assets/index-BlXP71Pl.js",
+      "size": 1613410,
+      "offset": "163086938"
+    },
+    {
+      "path": "/dist/assets/index-D7uBlpEL.css",
+      "size": 89816,
+      "offset": "164700348"
+    },
+    {
+      "path": "/dist/assets/index-DSef1bnk.js",
+      "size": 82347,
+      "offset": "164790164"
+    },
+    {
+      "path": "/dist/assets/index-UWFcfL9q.js",
+      "size": 502994,
+      "offset": "164872511"
+    },
+    {
+      "path": "/dist/assets/react-joyride-rGQeLNMb.js",
+      "size": 244032,
+      "offset": "165375505"
+    },
+    {
+      "path": "/dist/index.html",
+      "size": 1289,
+      "offset": "165619537"
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework",
+      "size": 172457008,
+      "offset": "165620826",
+      "executable": true
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Helpers/chrome_crashpad_handler",
+      "size": 1177824,
+      "offset": "338077834",
+      "executable": true
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Libraries/libGLESv2.dylib",
+      "size": 7039936,
+      "offset": "339364250",
+      "executable": true
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Libraries/libffmpeg.dylib",
+      "size": 2160800,
+      "offset": "346404186",
+      "executable": true
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Libraries/libvk_swiftshader.dylib",
+      "size": 16723120,
+      "offset": "348564986",
+      "executable": true
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/am.lproj/locale.pak",
+      "size": 929770,
+      "offset": "365864139"
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/ar.lproj/locale.pak",
+      "size": 1023732,
+      "offset": "366793963"
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/bg.lproj/locale.pak",
+      "size": 1059161,
+      "offset": "367817749"
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/bn.lproj/locale.pak",
+      "size": 1365446,
+      "offset": "368876964"
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/cs.lproj/locale.pak",
+      "size": 666959,
+      "offset": "371188900"
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/el.lproj/locale.pak",
+      "size": 1162872,
+      "offset": "373102833"
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/fa.lproj/locale.pak",
+      "size": 951424,
+      "offset": "377166916"
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/fil.lproj/locale.pak",
+      "size": 668765,
+      "offset": "378708184"
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/fr.lproj/locale.pak",
+      "size": 686749,
+      "offset": "379377003"
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/gu.lproj/locale.pak",
+      "size": 1345173,
+      "offset": "380063806"
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/he.lproj/locale.pak",
+      "size": 833473,
+      "offset": "381409033"
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/hi.lproj/locale.pak",
+      "size": 1423852,
+      "offset": "382242560"
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/hu.lproj/locale.pak",
+      "size": 690585,
+      "offset": "384309780"
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/icudtl.dat",
+      "size": 10467680,
+      "offset": "385000419"
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/ja.lproj/locale.pak",
+      "size": 759269,
+      "offset": "396664972"
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/kn.lproj/locale.pak",
+      "size": 1541193,
+      "offset": "397424295"
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/lt.lproj/locale.pak",
+      "size": 698066,
+      "offset": "399609754"
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/lv.lproj/locale.pak",
+      "size": 696297,
+      "offset": "400307874"
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/ml.lproj/locale.pak",
+      "size": 1597790,
+      "offset": "401004225"
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/mr.lproj/locale.pak",
+      "size": 1319258,
+      "offset": "402602069"
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/pl.lproj/locale.pak",
+      "size": 667979,
+      "offset": "405698322"
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/resources.pak",
+      "size": 6151587,
+      "offset": "407624032"
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/ru.lproj/locale.pak",
+      "size": 1078554,
+      "offset": "414429187"
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/sk.lproj/locale.pak",
+      "size": 678975,
+      "offset": "415507795"
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/sr.lproj/locale.pak",
+      "size": 999327,
+      "offset": "416837070"
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/ta.lproj/locale.pak",
+      "size": 1587546,
+      "offset": "419037018"
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/te.lproj/locale.pak",
+      "size": 1468614,
+      "offset": "420624618"
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/th.lproj/locale.pak",
+      "size": 1231472,
+      "offset": "422093286"
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/uk.lproj/locale.pak",
+      "size": 1082763,
+      "offset": "423952206"
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/ur.lproj/locale.pak",
+      "size": 939434,
+      "offset": "425035023"
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/v8_context_snapshot.arm64.bin",
+      "size": 712173,
+      "offset": "425974511"
+    },
+    {
+      "path": "/dist/mac-arm64/Electron.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Resources/vi.lproj/locale.pak",
+      "size": 742993,
+      "offset": "426686684"
+    },
+    {
+      "path": "/dist/mac-arm64/LICENSES.chromium.html",
+      "size": 15168645,
+      "offset": "430350853"
+    },
+    {
+      "path": "/dist/pdf.worker.min.mjs",
+      "size": 1046214,
+      "offset": "445519498"
+    },
+    {
+      "path": "/node_modules/@azure/msal-node/lib/msal-node.cjs.map",
+      "size": 731778,
+      "offset": "7531619"
+    },
+    {
+      "path": "/node_modules/@napi-rs/canvas-darwin-arm64/skia.darwin-arm64.node",
+      "size": 26297696,
+      "unpacked": true
+    },
+    {
+      "path": "/node_modules/@opentelemetry/semantic-conventions/build/esm/experimental_attributes.js",
+      "size": 664616,
+      "offset": "11492869"
+    },
+    {
+      "path": "/node_modules/@opentelemetry/semantic-conventions/build/src/experimental_attributes.js",
+      "size": 731016,
+      "offset": "13908075"
+    },
+    {
+      "path": "/node_modules/@sentry/conventions/dist/attributes.cjs.map",
+      "size": 909159,
+      "offset": "17961125"
+    },
+    {
+      "path": "/node_modules/@sentry/conventions/dist/attributes.mjs.map",
+      "size": 924841,
+      "offset": "19959091"
+    },
+    {
+      "path": "/node_modules/better-sqlite3-multiple-ciphers/build/Release/better_sqlite3.node",
+      "size": 2217936,
+      "unpacked": true
+    },
+    {
+      "path": "/node_modules/better-sqlite3-multiple-ciphers/build/Release/obj/gen/sqlite3/sqlite3.c",
+      "size": 13355675,
+      "unpacked": true
+    },
+    {
+      "path": "/node_modules/better-sqlite3-multiple-ciphers/build/Release/obj/gen/sqlite3/sqlite3.h",
+      "size": 713595,
+      "unpacked": true
+    },
+    {
+      "path": "/node_modules/better-sqlite3-multiple-ciphers/deps/sqlite3/sqlite3.c",
+      "size": 13355675,
+      "unpacked": true
+    },
+    {
+      "path": "/node_modules/better-sqlite3-multiple-ciphers/deps/sqlite3/sqlite3.h",
+      "size": 713595,
+      "unpacked": true
+    },
+    {
+      "path": "/node_modules/googleapis/build/src/apis/compute/alpha.js",
+      "size": 1254022,
+      "offset": "46049894"
+    },
+    {
+      "path": "/node_modules/googleapis/build/src/apis/compute/beta.js",
+      "size": 1163479,
+      "offset": "47303916"
+    },
+    {
+      "path": "/node_modules/googleapis/build/src/apis/compute/v1.js",
+      "size": 1004909,
+      "offset": "48469304"
+    },
+    {
+      "path": "/node_modules/mammoth/mammoth.browser.js",
+      "size": 884760,
+      "offset": "74586337"
+    },
+    {
+      "path": "/node_modules/pdf-lib/dist/pdf-lib.esm.js",
+      "size": 1587811,
+      "offset": "91834778"
+    },
+    {
+      "path": "/node_modules/pdf-lib/dist/pdf-lib.js",
+      "size": 1743338,
+      "offset": "93946006"
+    },
+    {
+      "path": "/node_modules/pdfjs-dist/build/pdf.mjs",
+      "size": 784780,
+      "offset": "98307334"
+    },
+    {
+      "path": "/node_modules/pdfjs-dist/build/pdf.mjs.map",
+      "size": 2092086,
+      "offset": "99092114"
+    },
+    {
+      "path": "/node_modules/pdfjs-dist/build/pdf.sandbox.min.mjs",
+      "size": 674142,
+      "offset": "101184200"
+    },
+    {
+      "path": "/node_modules/pdfjs-dist/build/pdf.sandbox.mjs",
+      "size": 728534,
+      "offset": "101858342"
+    },
+    {
+      "path": "/node_modules/pdfjs-dist/build/pdf.worker.min.mjs",
+      "size": 1046214,
+      "offset": "103232958"
+    },
+    {
+      "path": "/node_modules/pdfjs-dist/build/pdf.worker.mjs",
+      "size": 1906302,
+      "offset": "104279172"
+    },
+    {
+      "path": "/node_modules/pdfjs-dist/build/pdf.worker.mjs.map",
+      "size": 5057546,
+      "offset": "106185474"
+    },
+    {
+      "path": "/node_modules/pdfjs-dist/image_decoders/pdf.image_decoders.mjs.map",
+      "size": 684664,
+      "offset": "112770090"
+    },
+    {
+      "path": "/node_modules/pdfjs-dist/legacy/build/pdf.mjs",
+      "size": 964809,
+      "offset": "113931277"
+    },
+    {
+      "path": "/node_modules/pdfjs-dist/legacy/build/pdf.mjs.map",
+      "size": 2321242,
+      "offset": "114896086"
+    },
+    {
+      "path": "/node_modules/pdfjs-dist/legacy/build/pdf.sandbox.min.mjs",
+      "size": 743583,
+      "offset": "117217328"
+    },
+    {
+      "path": "/node_modules/pdfjs-dist/legacy/build/pdf.sandbox.mjs",
+      "size": 952546,
+      "offset": "117960911"
+    },
+    {
+      "path": "/node_modules/pdfjs-dist/legacy/build/pdf.sandbox.mjs.map",
+      "size": 799319,
+      "offset": "118913457"
+    },
+    {
+      "path": "/node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs",
+      "size": 1099167,
+      "offset": "119712776"
+    },
+    {
+      "path": "/node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs",
+      "size": 2076112,
+      "offset": "120811943"
+    },
+    {
+      "path": "/node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs.map",
+      "size": 5273301,
+      "offset": "122888055"
+    },
+    {
+      "path": "/node_modules/pdfjs-dist/legacy/image_decoders/pdf.image_decoders.mjs.map",
+      "size": 881837,
+      "offset": "128709375"
+    },
+    {
+      "path": "/node_modules/pdfjs-dist/legacy/web/pdf_viewer.mjs.map",
+      "size": 976154,
+      "offset": "130277661"
+    },
+    {
+      "path": "/node_modules/pdfjs-dist/web/pdf_viewer.mjs.map",
+      "size": 800150,
+      "offset": "133374343"
+    },
+    {
+      "path": "/node_modules/react-dom/cjs/react-dom.development.js",
+      "size": 1029622,
+      "offset": "137904833"
+    },
+    {
+      "path": "/node_modules/react-dom/umd/react-dom.development.js",
+      "size": 1080227,
+      "offset": "139867592"
+    },
+    {
+      "path": "/node_modules/sqlite3/build/Release/node_sqlite3.node",
+      "size": 2037662,
+      "unpacked": true
+    },
+    {
+      "path": "/node_modules/sqlite3/deps/sqlite-autoconf-3440200.tar.gz",
+      "size": 3204841,
+      "unpacked": true
+    },
+    {
+      "path": "/package.json",
+      "size": 1845,
+      "offset": "462324744"
+    }
+  ]
+}

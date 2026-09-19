@@ -57,23 +57,46 @@ const cacheStore = new Map<string, { local_transaction_id: string; user_id: stri
 const key = (tx: string, u: string) => `${tx}::${u}`;
 const mockUpsert = jest.fn();
 const mockRemove = jest.fn();
+
+// BACKLOG-2960. The seam now returns promises, so the mock must return promises
+// — a mock that still returned bare values would keep this suite green against a
+// shape the module no longer has.
+//
+// It settles on a MACROTASK on purpose, and that is a control, not decoration.
+// The real wrappers are eager (the driver call finishes before `Promise.resolve`
+// is applied), so a caller that drops an `await` on a void-returning write leaves
+// nothing observable behind and no runtime instrument can see it. Settling on a
+// macrotask models the asynchronous driver this seam exists to allow, and makes
+// the two write paths (`upsertUnlock`, `removeCachedUnlock`) fail loudly here if
+// their `await` is ever dropped in entitlementService: the store is still
+// un-written when `getUnlockStatus` has already returned. The two "before
+// getUnlockStatus returns" tests below are that control, and both were measured
+// red under exactly that mutation.
+const mockSettle = <T>(work: () => T): Promise<T> =>
+  new Promise((resolve) => setImmediate(() => resolve(work())));
+
 jest.mock("../db/unlockCacheDbService", () => ({
-  getCachedUnlock: (tx: string, u: string) => cacheStore.get(key(tx, u)) ?? null,
+  getCachedUnlock: (tx: string, u: string) =>
+    mockSettle(() => cacheStore.get(key(tx, u)) ?? null),
   upsertUnlock: (p: { localTransactionId: string; userId: string; unlockedAt: string; fundingSource?: string | null }) => {
     mockUpsert(p);
-    cacheStore.set(key(p.localTransactionId, p.userId), {
-      local_transaction_id: p.localTransactionId,
-      user_id: p.userId,
-      unlocked_at: p.unlockedAt,
-      funding_source: p.fundingSource ?? null,
-      cached_at: "now",
+    return mockSettle(() => {
+      cacheStore.set(key(p.localTransactionId, p.userId), {
+        local_transaction_id: p.localTransactionId,
+        user_id: p.userId,
+        unlocked_at: p.unlockedAt,
+        funding_source: p.fundingSource ?? null,
+        cached_at: "now",
+      });
     });
   },
   removeCachedUnlock: (tx: string, u: string) => {
     mockRemove(tx, u);
-    cacheStore.delete(key(tx, u));
+    return mockSettle(() => {
+      cacheStore.delete(key(tx, u));
+    });
   },
-  clearUnlockCache: () => cacheStore.clear(),
+  clearUnlockCache: () => mockSettle(() => cacheStore.clear()),
 }));
 
 import { net } from "electron";
@@ -118,6 +141,29 @@ describe("EntitlementService.getUnlockStatus — FAIL-CLOSED", () => {
     expect(r.status).toBe("locked");
     expect(r.lockReason).toBe("no_unlock");
     expect(mockRemove).toHaveBeenCalledWith(TX, USER);
+  });
+
+  it("BACKLOG-2960 — the confirmed unlock is mirrored INTO the cache BEFORE getUnlockStatus returns", async () => {
+    mockMaybeSingle.mockResolvedValue({
+      data: { unlocked_at: "2026-06-21T11:02:00Z", funding_source: "grant", refunded_at: null },
+      error: null,
+    });
+    const r = await entitlementService.getUnlockStatus(TX);
+    expect(r.status).toBe("unlocked");
+    // The STORE, not the spy: a dropped `await` on upsertUnlock leaves this
+    // un-written at the moment the caller has already decided.
+    expect(cacheStore.get(key(TX, USER))?.unlocked_at).toBe("2026-06-21T11:02:00Z");
+  });
+
+  it("BACKLOG-2960 — the stale mirror is PURGED before getUnlockStatus returns", async () => {
+    cacheStore.set(key(TX, USER), {
+      local_transaction_id: TX, user_id: USER, unlocked_at: "stale", funding_source: null, cached_at: "old",
+    });
+    mockMaybeSingle.mockResolvedValue({ data: null, error: null });
+    const r = await entitlementService.getUnlockStatus(TX);
+    expect(r.status).toBe("locked");
+    // Same shape: the STORE, not the spy.
+    expect(cacheStore.has(key(TX, USER))).toBe(false);
   });
 
   it("online + read ERROR ⇒ LOCKED (error) when no cache (fail-closed)", async () => {

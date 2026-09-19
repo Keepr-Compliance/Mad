@@ -5,6 +5,7 @@
  * or whose trial has expired or transaction limit reached.
  */
 
+import Link from 'next/link';
 import { Mail, Zap } from 'lucide-react';
 import { buttonClasses } from '@keepr/design-system';
 import { Wordmark } from '@keepr/ui';
@@ -36,22 +37,17 @@ export default function BetaPage() {
             </p>
             <p className="text-gray-600">
               If you&apos;d like to join our waitlist, or if your trial license
-              expired or you ran out of transactions, please email us at:
+              expired or you ran out of transactions, please get in touch:
             </p>
 
-            {/* Email Link */}
-            <a
-              href="mailto:support@keeprcompliance.com"
-              className={buttonClasses('primary')}
-            >
+            {/* Support ticket form rather than a mail-client link: opening the
+                reader's mail client is a dead end on a shared or managed
+                machine, and nothing it produces is tracked. /support/new is
+                public and usable with no Keepr account. */}
+            <Link href="/support/new" className={buttonClasses('primary')}>
               <Mail className="h-4 w-4" />
-              support@keeprcompliance.com
-            </a>
-
-            {/* Copy hint */}
-            <p className="text-sm text-gray-500">
-              Click to open your email client, or copy the address above.
-            </p>
+              Contact support
+            </Link>
           </div>
         </div>
 

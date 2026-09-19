@@ -4,6 +4,10 @@ node_modules
 # Build outputs
 dist/
 build/
+# electron-builder's output (build.directories.output). Anchored to the repo root ON
+# PURPOSE: a bare `release/` would also match the tracked .claude/skills/release/
+# (BACKLOG-3425).
+/release/
 !build/entitlements.mac.plist
 !build/icon.icns
 !build/icon.ico
@@ -61,7 +65,6 @@ nul
 
 # Local database and generated artifacts
 mad.db
-backlog-dashboard.html
 erd-diagram.html
 
 # Playwright reports
@@ -74,7 +77,27 @@ test-results/
 
 # Reliable QA driver scratch: isolated profile + screenshots (BACKLOG-1940 pivot)
 .qa-scratch/
+.tmp2990/
 
 # Python bytecode (QA seeder tooling, BACKLOG-1851)
 __pycache__/
 *.pyc
+
+# Supabase local/NAS test stack (BACKLOG-3114)
+# baseline-*.sql is a pg_dump of production's schema. This repo is PUBLIC and the
+# file is one `git add .` from exposure; it lives at ~/.keepr/db-baseline/ instead.
+# `baseline*.sql` covers BOTH the dated name and the plain `supabase/baseline.sql`
+# that an earlier instruction on BACKLOG-3114 told the founder to dump to; the
+# `*.sql` line is the net for any other name (`prod-schema.sql`, ...). Nothing is
+# tracked at this depth -- every committed .sql lives under migrations/, seed/ or
+# tests/ -- so this ignores dumps without hiding anything real.
+supabase/baseline*.sql
+supabase/*.sql
+# `supabase link` writes the linked project ref and version pins here;
+# `supabase start` writes .branches/. Neither belongs in the repo.
+supabase/.temp/
+supabase/.branches/
+
+# BACKLOG-2553: esbuild bundle of the contact worker, built and removed by
+# electron/workers/__tests__/contactWorkerPool.drain-2553.test.ts
+.tmp-2553/

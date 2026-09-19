@@ -19,6 +19,7 @@ import { useCallback, useMemo } from "react";
 import { authService } from "@/services";
 import { emitEmailConnectionChanged } from "@/utils/emailConnectionEvents";
 import { emitEmailAdminConsentBlocked } from "@/utils/emailAdminConsentEvents";
+import { emitEmailConnectFailed } from "@/utils/emailConnectFailedEvents";
 import type { AppStep, PendingOnboardingData } from "../types";
 import type { PendingOAuthData } from "../../../components/Login";
 import { USE_NEW_ONBOARDING } from "../../routing/routeConfig";
@@ -171,6 +172,10 @@ export function useEmailHandlers({
           "[useEmailHandlers] Failed to start Google OAuth:",
           result.error,
         );
+        // BACKLOG-3281: terminal on arrival — the flow never started, so no
+        // mailbox-connected event will ever come and no listener is registered
+        // below. Report it so EmailConnectStep can leave "Connecting...".
+        emitEmailConnectFailed({ provider: "google", error: result.error });
         return;
       }
 
@@ -190,6 +195,26 @@ export function useEmailHandlers({
               connected: true,
               email: connectionResult.email,
               provider: "google",
+            });
+          } else if (!connectionResult.success) {
+            // BACKLOG-3281: the flow terminated without connecting. Google has
+            // no admin-consent classification (`adminConsentRequired` is set in
+            // exactly one place in the tree, microsoftAuthHandlers.ts:703), so
+            // every failure it can emit lands here.
+            //
+            // `!connectionResult.success` rather than a bare `else`: a
+            // `success: true` carrying no email means the token was already
+            // saved with `mailbox_connected: 1`, so calling that a failure
+            // would contradict the database and invite a retry of a connection
+            // that exists. That case is BACKLOG-3286 and is deliberately left
+            // unmatched here.
+            logger.error(
+              "[useEmailHandlers] Google mailbox connect failed",
+              connectionResult.error,
+            );
+            emitEmailConnectFailed({
+              provider: "google",
+              error: connectionResult.error,
             });
           }
           cleanup();
@@ -225,6 +250,11 @@ export function useEmailHandlers({
             "[useEmailHandlers] Failed to start Microsoft OAuth:",
             result.error,
           );
+          // BACKLOG-3281: terminal on arrival — see the Google handler above.
+          emitEmailConnectFailed({
+            provider: "microsoft",
+            error: result.error,
+          });
           return;
         }
 
@@ -254,6 +284,24 @@ export function useEmailHandlers({
                 connectionResult.error,
               );
               emitEmailAdminConsentBlocked({
+                provider: "microsoft",
+                error: connectionResult.error,
+              });
+            } else if (!connectionResult.success) {
+              // BACKLOG-3281: a THIRD branch, ordered strictly after the
+              // BACKLOG-2007 admin-consent branch above — never merged into it.
+              // An `else` on the success `if` would swallow that branch and
+              // silently remove the "Request IT approval" flow; running before
+              // it would show the user a generic failure line AND the
+              // IT-approval panel for the same event.
+              //
+              // `!connectionResult.success` rather than a bare `else`, for the
+              // BACKLOG-3286 reason given in the Google handler above.
+              logger.error(
+                "[useEmailHandlers] Microsoft mailbox connect failed",
+                connectionResult.error,
+              );
+              emitEmailConnectFailed({
                 provider: "microsoft",
                 error: connectionResult.error,
               });

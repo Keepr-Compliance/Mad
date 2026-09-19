@@ -81,6 +81,13 @@
  */
 
 import type { Database as DatabaseType } from "better-sqlite3";
+import {
+  EMAILS_TABLE_EXISTS_SQL,
+  EMAILS_TABLE_INFO_SQL,
+  STAMP_DERIVATION_VERSION_SQL,
+  UPDATE_BODY_AND_VERSION_SQL,
+  prepareStaleEmailSelect,
+} from "./db/emailDerivationSql";
 import { getRawDatabase } from "./db/core/dbConnection";
 import { htmlToPlainText } from "../utils/htmlToPlainText";
 import {
@@ -198,28 +205,14 @@ export async function reprocessEmailDerivations(
   // error worth failing an import over.
   if (!hasDerivedVersionColumn(db)) return result;
 
-  const selectSql = `
-    SELECT id, body_plain, body_html, derived_version
-    FROM emails
-    WHERE derived_version < ?
-    ${options.userId ? "AND user_id = ?" : ""}
-    LIMIT ?
-  `;
-  const selectStmt = db.prepare(selectSql);
+  // Prepared once; the optional user clause and its bound parameter both come
+  // from the single `options.userId` capture inside db/, so they cannot drift.
+  const selectStmt = prepareStaleEmailSelect(db, options.userId);
 
   // Two statements, so a row whose text is unchanged costs a stamp and nothing
   // more. Neither writes `updated_at`.
-  const updateBothStmt = db.prepare(
-    "UPDATE emails SET body_plain = ?, derived_version = ? WHERE id = ?",
-  );
-  const stampOnlyStmt = db.prepare(
-    "UPDATE emails SET derived_version = ? WHERE id = ?",
-  );
-
-  const selectParams = (): unknown[] =>
-    options.userId
-      ? [CURRENT_DERIVATION_VERSION, options.userId, batchSize]
-      : [CURRENT_DERIVATION_VERSION, batchSize];
+  const updateBothStmt = db.prepare(UPDATE_BODY_AND_VERSION_SQL);
+  const stampOnlyStmt = db.prepare(STAMP_DERIVATION_VERSION_SQL);
 
   // One transaction per batch. This is the unit of resumability: an interrupted
   // batch rolls back whole, so no row is left half-repaired — stamped but with
@@ -244,7 +237,7 @@ export async function reprocessEmailDerivations(
       break;
     }
 
-    const rows = selectStmt.all(...selectParams()) as StaleRow[];
+    const rows = selectStmt.all(CURRENT_DERIVATION_VERSION, batchSize) as StaleRow[];
     if (rows.length === 0) break;
 
     const rewritten = applyBatch(rows) as number;
@@ -272,12 +265,12 @@ export async function reprocessEmailDerivations(
 /** True when `emails` exists AND carries `derived_version` (i.e. v67 has run). */
 function hasDerivedVersionColumn(db: DatabaseType): boolean {
   const hasTable = db
-    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'emails'")
+    .prepare(EMAILS_TABLE_EXISTS_SQL)
     .get();
   if (!hasTable) return false;
 
   const cols = (
-    db.prepare("PRAGMA table_info(emails)").all() as Array<{ name: string }>
+    db.prepare(EMAILS_TABLE_INFO_SQL).all() as Array<{ name: string }>
   ).map((c) => c.name);
   return cols.includes("derived_version");
 }

@@ -45,6 +45,7 @@ import type { Database as DatabaseType } from "better-sqlite3";
 
 import { legacyDigitKey, toLookupKey } from "../../utils/phoneNormalization";
 import * as dbConnection from "../db/core/dbConnection";
+import type { SafeSql } from "../db/core/sqlText";
 import { setDb } from "../db/core/dbConnection";
 import { resolveSourceRecord } from "../contactSourceLinker";
 import {
@@ -140,13 +141,13 @@ function captureProductionSql(db: DatabaseType): void {
   const realGet = dbConnection.dbGet;
   const allSpy = jest
     .spyOn(dbConnection, "dbAll")
-    .mockImplementation((sql: string, params?: unknown[]) => {
+    .mockImplementation((sql: SafeSql, params?: unknown[]) => {
       seen.push(sql);
       return realAll(sql, params as unknown[]);
     });
   const getSpy = jest
     .spyOn(dbConnection, "dbGet")
-    .mockImplementation((sql: string, params?: unknown[]) => {
+    .mockImplementation((sql: SafeSql, params?: unknown[]) => {
       seen.push(sql);
       return realGet(sql, params as unknown[]);
     });

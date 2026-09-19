@@ -46,6 +46,15 @@ let messageCount = 0;
 /** Number of attachments the chat.db fake serves for the current test. */
 let attachmentCount = 0;
 
+/**
+ * BACKLOG-3128: how the chat.db fake names attachment n. Default unchanged —
+ * `photo-N.jpg`, a SUPPORTED type — so every existing test in this file is
+ * untouched. The attachments-progress suite overrides it to force the
+ * unsupported-type skip path, which is one of the eight `continue` branches
+ * that used to bypass the progress report.
+ */
+let attachmentTransferName: (n: number) => string = (n) => `photo-${n}.jpg`;
+
 // The import early-returns off darwin, and CI runs a Windows leg. `os.platform`
 // is a non-configurable property so it cannot be spied — mock the module.
 jest.mock("os", () => ({
@@ -207,7 +216,7 @@ function attachmentRows(): RawMacAttachment[] {
       guid: `att-${n}`,
       filename: attachmentSourcePaths.get(n) ?? "",
       mime_type: null,
-      transfer_name: `photo-${n}.jpg`,
+      transfer_name: attachmentTransferName(n),
       total_bytes: 4_000,
       is_outgoing: 0,
     };
@@ -363,6 +372,7 @@ function importToCompletion(): Promise<MacOSImportResult> {
 beforeEach(async () => {
   messageCount = 0;
   attachmentCount = 0;
+  attachmentTransferName = (n) => `photo-${n}.jpg`;
   attachmentSourcePaths.clear();
   writerEvents.length = 0;
   auditSyncRunning = true;
@@ -971,5 +981,176 @@ describe("BACKLOG-2775 — a transaction this run did not open is never rolled b
     expect(writerEvents).toEqual([]);
 
     mockDb.exec("COMMIT");
+  });
+});
+
+/**
+ * BACKLOG-3128 — the attachments phase must REPORT progress, including when it
+ * is skipping.
+ *
+ * THE FOUNDER'S RUN, 2026-09-05 (dev.log 21:11:00.77 -> 21:11:17.11): 69,265
+ * attachments, 2,409 imported, 66,856 skipped, 16 seconds. He reported the panel
+ * "gets to 34,547 out of 34,547 and gets stuck for roughly 10-15 seconds" —
+ * a stale MESSAGES count held for the whole attachments phase, with neither the
+ * attachments count nor an indeterminate bar.
+ *
+ * ROOT CAUSE — established by reading the loop, then pinned here. The progress
+ * report and the `yieldToEventLoop` both lived in the loop TAIL, and eight of
+ * the ten exit paths are `continue` statements that jump straight past it
+ * (unsupported type, no message id, no source path, already-stored, and so on —
+ * each does `processed++; continue;`). Only the stored and catch paths reached
+ * the tail. With 66,856 of 69,265 attachments taking a `continue`, `processed`
+ * raced past every multiple of the 3,463 report interval inside a skipped
+ * iteration, so `processed % attachReportInterval === 0` almost never ran on a
+ * tick where it was true. The renderer was blameless: no event was ever sent.
+ *
+ * WHY NO EXISTING TEST CAUGHT IT: every attachment in this file's fixtures is a
+ * SUPPORTED `.jpg` that gets stored, so the corpus only ever exercised the two
+ * paths that DO reach the tail. The suite could not distinguish a report on
+ * every iteration from a report on the stored ones.
+ *
+ * The corpus below inverts that ratio to match the founder's run.
+ */
+describe("BACKLOG-3128 — the attachments phase reports progress while skipping", () => {
+  /** Every attachments-phase progress event the import emitted. */
+  async function attachmentEvents(): Promise<Array<{ current: number; total: number }>> {
+    const seen: Array<{ current: number; total: number }> = [];
+    await macOSMessagesImportService.importMessages(
+      USER,
+      (progress) => {
+        if (progress.phase === "attachments") {
+          seen.push({ current: progress.current, total: progress.total });
+        }
+      },
+      testImportPlan({
+        mode: "delta",
+        storedFilters: { lookbackMonths: null, maxMessages: null },
+      })
+    );
+    return seen;
+  }
+
+  it("reports ~20 times across a corpus that is almost entirely skipped", async () => {
+    // 200 attachments, ALL unsupported -> all take the `continue` at the
+    // unsupported-type check, exactly as 66,856 of the founder's did.
+    // attachReportInterval = max(1, floor(200/20)) = 10, so ~20 reports are due.
+    messageCount = 200;
+    attachmentCount = 200;
+    attachmentTransferName = (n) => `document-${n}.exe`;
+    await writeAttachmentFixtures(200);
+
+    const events = await attachmentEvents();
+
+    // At head this was 0 or 1: the report sat past eight `continue`s.
+    expect(events.length).toBeGreaterThanOrEqual(15);
+    // Every report describes the real corpus, and the phase finishes at N of N.
+    expect(events[events.length - 1]).toEqual({ current: 200, total: 200 });
+    for (const e of events) {
+      expect(e.total).toBe(200);
+      expect(e.current).toBeGreaterThan(0);
+      expect(e.current).toBeLessThanOrEqual(200);
+    }
+  });
+
+  it("CONTROL: a fully-supported corpus reports too — the fix is not skip-only", async () => {
+    // The distinguishing input. If the report had merely MOVED to the skip
+    // paths, this would go quiet. Both paths must reach it.
+    messageCount = 200;
+    attachmentCount = 200;
+    await writeAttachmentFixtures(200);
+
+    const events = await attachmentEvents();
+
+    expect(events.length).toBeGreaterThanOrEqual(15);
+    expect(events[events.length - 1]).toEqual({ current: 200, total: 200 });
+  });
+});
+
+/**
+ * BACKLOG-3132 — the emitted phase SEQUENCE, asserted by identity.
+ *
+ * The importer used to end every run with a second `importing` event at 100%,
+ * arriving AFTER `attachments`. It was the "rebuild complete, about to save"
+ * signal wearing `importing` because no phase existed to name it. Two things
+ * followed: the Settings panel flipped its label back to "Importing
+ * messages..." at the end of every import, and the audit-coverage bar needed
+ * BACKLOG-2344's monotonic clamp to absorb the reversal.
+ *
+ * What makes this a sequence test rather than a set test: the defect was never
+ * a missing phase, it was an ORDER — `importing` appearing twice, the second
+ * time after `attachments`. A set-equality assertion over the phases would have
+ * passed throughout. The `lastIndexOf("importing") < indexOf("attachments")`
+ * assertion below is the one that reds when `:1043` reverts.
+ */
+describe("BACKLOG-3132 — phases are emitted in order, and saving is its own phase", () => {
+  /** Every phase the import emitted, in order, with adjacent repeats collapsed. */
+  async function emittedPhases(): Promise<{ all: string[]; steps: string[] }> {
+    const all: string[] = [];
+    await macOSMessagesImportService.importMessages(
+      USER,
+      (progress) => all.push(progress.phase),
+      testImportPlan({
+        mode: "delta",
+        storedFilters: { lookbackMonths: null, maxMessages: null },
+      })
+    );
+    const steps = all.filter((p, i) => i === 0 || p !== all[i - 1]);
+    return { all, steps };
+  }
+
+  beforeEach(async () => {
+    messageCount = 12;
+    attachmentCount = 12;
+    await writeAttachmentFixtures(12);
+  });
+
+  it("emits querying -> importing -> attachments -> finalizing, each once", async () => {
+    const { steps } = await emittedPhases();
+
+    expect(steps).toEqual(["querying", "importing", "attachments", "finalizing"]);
+  });
+
+  it("never returns to importing once attachments have started", async () => {
+    // CONTROL (b): revert the `:1043` emit to `phase: "importing"` and this reds.
+    // Stated as an order property rather than a count, because that is the
+    // promise — a phase the user has been shown as finished must not come back.
+    const { all } = await emittedPhases();
+
+    const lastImporting = all.lastIndexOf("importing");
+    const firstAttachments = all.indexOf("attachments");
+    expect(firstAttachments).toBeGreaterThan(-1);
+    expect(lastImporting).toBeGreaterThan(-1);
+    expect(lastImporting).toBeLessThan(firstAttachments);
+  });
+
+  it("ends on finalizing, and emits it exactly once with no count", async () => {
+    const seen: Array<{ phase: string; current: number; total: number }> = [];
+    messageCount = 12;
+    attachmentCount = 12;
+    await writeAttachmentFixtures(12);
+    await macOSMessagesImportService.importMessages(
+      USER,
+      (p) => seen.push({ phase: p.phase, current: p.current, total: p.total }),
+      testImportPlan({
+        mode: "delta",
+        storedFilters: { lookbackMonths: null, maxMessages: null },
+      })
+    );
+
+    const finalizing = seen.filter((e) => e.phase === "finalizing");
+    expect(finalizing).toHaveLength(1);
+    expect(seen[seen.length - 1].phase).toBe("finalizing");
+    // total 0 is what makes every surface render the indeterminate stripe: there
+    // is nothing to count and the duration is not knowable in advance.
+    expect(finalizing[0]).toEqual({ phase: "finalizing", current: 0, total: 0 });
+  });
+
+  it("reports finalizing on the DELTA path too, not only on a force re-import", async () => {
+    // The emit sits outside every staging guard on purpose. The swap it precedes
+    // is force-only, but `syncMacChatThreadNames` runs on both paths — which is
+    // why the copy says "Saving imported messages...", not "Swapping".
+    const { steps } = await emittedPhases();
+
+    expect(steps).toContain("finalizing");
   });
 });

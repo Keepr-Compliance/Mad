@@ -553,10 +553,15 @@ describe("GmailFetchService", () => {
             headers: [],
             parts: [
               {
+                // BACKLOG-3187: Gmail stamps every part with a partId. The fixture
+                // omitted them, which is why nothing noticed the parser dropping
+                // the field for as long as it did.
+                partId: "0",
                 mimeType: "text/plain",
                 body: { data: Buffer.from("Email text").toString("base64") },
               },
               {
+                partId: "1",
                 filename: "document.pdf",
                 mimeType: "application/pdf",
                 body: {
@@ -576,9 +581,74 @@ describe("GmailFetchService", () => {
       expect(results[0].attachments[0]).toMatchObject({
         filename: "document.pdf",
         mimeType: "application/pdf",
+        // BACKLOG-3187: identity and fetch token, both carried, never conflated.
+        partId: "1",
         attachmentId: "att-123",
         size: 1024,
       });
+    });
+
+    it("BACKLOG-3187: two same-named attachments get DIFFERENT partIds from one message", async () => {
+      mockMessagesGet.mockResolvedValue({
+        data: {
+          id: "msg-2",
+          threadId: "thread-1",
+          internalDate: "1700000000000",
+          payload: {
+            mimeType: "multipart/mixed",
+            headers: [],
+            parts: [
+              {
+                partId: "0",
+                filename: "scan.pdf",
+                mimeType: "application/pdf",
+                body: { attachmentId: "token-a", size: 10 },
+              },
+              {
+                partId: "1",
+                filename: "scan.pdf",
+                mimeType: "application/pdf",
+                body: { attachmentId: "token-b", size: 20 },
+              },
+            ],
+          },
+        },
+      });
+
+      const results = await gmailFetchService.searchEmails({});
+
+      // The filename cannot tell these apart; the partId can. Asserted as a SET,
+      // because two parts both reported as "0" would also give a length of 2.
+      expect(new Set(results[0].attachments.map((a) => a.partId))).toEqual(
+        new Set(["0", "1"]),
+      );
+    });
+
+    it("BACKLOG-3187: a part with no partId yields the empty string, which downstream reads as absent", async () => {
+      mockMessagesGet.mockResolvedValue({
+        data: {
+          id: "msg-3",
+          threadId: "thread-1",
+          internalDate: "1700000000000",
+          payload: {
+            mimeType: "multipart/mixed",
+            headers: [],
+            parts: [
+              {
+                filename: "document.pdf",
+                mimeType: "application/pdf",
+                body: { attachmentId: "att-123", size: 1024 },
+              },
+            ],
+          },
+        },
+      });
+
+      const results = await gmailFetchService.searchEmails({});
+
+      // Not a crash and not the fetch token — the gates treat "" as absent and
+      // fall back to the pre-3187 behaviour.
+      expect(results[0].attachments[0].partId).toBe("");
     });
 
     it("should handle missing headers gracefully", async () => {

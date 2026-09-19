@@ -16,19 +16,17 @@
  * write-path audit that produced BACKLOG-2496.
  *
  * ===========================================================================
- * WHY THE SWEEP DID NOT FIX IT, AND WHAT THAT COSTS THIS SUITE
+ * WHY THE FIX NEEDED SYNC CORES, AND WHERE THAT IS ASSERTED
  * ===========================================================================
- * `assignContactToTransaction` is `async` with an entirely synchronous body.
- * `dbTransaction` takes a SYNCHRONOUS callback, and an `async` function turns a
- * throw into a REJECTED PROMISE rather than a synchronous throw — so wrapping
- * the async facade would have produced a transaction that COMMITS OVER THE
- * FAILURE and reports success, which is strictly worse than the bug.
+ * `dbTransaction` takes a SYNCHRONOUS callback, so the composition needs
+ * callees that are synchronous all the way down: `createTransactionSync` and
+ * `assignContactToTransactionSync`, exactly as BACKLOG-2496 needed
+ * `updateContactSync`.
  *
- * So the fix needed sync cores first (`createTransactionSync`,
- * `assignContactToTransactionSync`), exactly as BACKLOG-2496 needed
- * `updateContactSync`. **That is what the `WRAPPING THE ASYNC FACADE` describe
- * below pins: it fails if anyone ever re-points the composition at the async
- * versions.**
+ * The two `describe`s below carry the whole of that argument as assertions
+ * rather than as prose — the first over the shipped composition, the second
+ * over a callee shape deliberately made wrong. Nothing about callback shape is
+ * claimed here that is not asserted there.
  *
  * ===========================================================================
  * WHAT THIS SUITE ASSERTS, AND WHY IT IS SHAPED THIS WAY
@@ -101,7 +99,10 @@ import {
   createTransactionWithContactsSync,
   createTransactionSync,
 } from "../transactionDbService";
-import { assignContactToTransaction } from "../transactionContactDbService";
+import {
+  assignContactToTransaction,
+  assignContactToTransactionSync,
+} from "../transactionContactDbService";
 import { dbTransaction } from "../core/dbConnection";
 import type { NewTransaction } from "../../../types";
 
@@ -322,48 +323,100 @@ describe("creating a deal with its parties is ONE write (BACKLOG-2538)", () => {
     });
   });
 
-  describe("WRAPPING THE ASYNC FACADE would commit over the failure", () => {
+  describe("THE CALLEE'S SHAPE decides whether the transaction rolls back (BACKLOG-2960)", () => {
     /**
-     * This is the trap BACKLOG-2496's engineer refused to walk into, pinned so
-     * nobody walks into it later. It does NOT test production code — it
-     * demonstrates why the sync cores exist, by doing the wrong thing on
-     * purpose and showing the damage.
+     * The two cases below are the same composition, the same forced crash and
+     * the same assertion tuple. The ONLY difference is the shape of the callee
+     * the transaction body reaches:
      *
-     * If a future change re-points `createTransactionWithContactsSync` at the
-     * `async` versions, the production describes above go red. This one
-     * explains why.
+     *   - `assignContactToTransaction`, the shipped seam facade — a PLAIN
+     *     function that calls the sync core and wraps its VALUE;
+     *   - `asyncShim`, a local `async` function over the IDENTICAL sync core,
+     *     written here to be wrong on purpose. It is not production code and is
+     *     not exported.
+     *
+     * Neither case reads production behaviour out of a docblock: each asserts
+     * `{ threw, rejected, deals, attached }` in ONE `expect`, so a failure
+     * prints all four facts together. Ids are asserted as sets, never counts —
+     * except the deal's own uuid, which is generated.
      */
-    it("a rejected promise inside dbTransaction leaves the deal HALF-BUILT", async () => {
-      armCrashOn("c-lender");
-
+    async function outcomeOf(
+      attach: (
+        dealId: string,
+        party: ReturnType<typeof assignmentsFor>[number],
+      ) => unknown,
+    ): Promise<{
+      threw: string | null;
+      rejected: string | null;
+      deals: string[];
+      attached: string[];
+    }> {
       const parties = assignmentsFor(PARTIES);
-      let deferredFailure: Promise<unknown> | null = null;
+      let deferred: Promise<unknown> | null = null;
 
-      // The mistake, made deliberately: an async callee inside a sync
-      // transaction callback. Nothing throws synchronously, so the transaction
-      // commits normally.
-      dbTransaction(() => {
-        const deal = createTransactionSync(DEAL);
-        deferredFailure = Promise.all(
-          parties.map((p) => assignContactToTransaction(deal.id, p)),
-        );
-        return deal;
-      });
+      // The synchronous throw is captured by MESSAGE, not as a flag. A bare
+      // boolean passes on ANY throw from the callee, including one that has
+      // nothing to do with the armed crash — so it could not tell the rollback
+      // it exists for from an unrelated failure on the same path. Read off the
+      // value's own `.message` and asserted as a string, never handed to a
+      // matcher as an Error (BACKLOG-3152).
+      let threw: string | null = null;
 
-      let outcome = "NO REJECTION";
       try {
-        await deferredFailure;
+        dbTransaction(() => {
+          const deal = createTransactionSync(DEAL);
+          deferred = Promise.all(parties.map((p) => attach(deal.id, p)));
+          return deal;
+        });
       } catch (e) {
-        outcome = `REJECTED: ${(e as Error).message}`;
+        threw = (e as Error).message;
       }
 
-      expect(outcome).toMatch(/^REJECTED: .*forced crash attaching c-lender/);
+      // Only the `async` arm reaches this with a pending rejection. Its message
+      // is captured into the tuple rather than left pending, and read off the
+      // value's own `.message` property rather than handed to a matcher
+      // (BACKLOG-3152).
+      let rejected: string | null = null;
+      try {
+        await deferred;
+      } catch (e) {
+        rejected = (e as Error).message;
+      }
 
-      // The damage: a deal exists, carrying SOME of the people, after a
-      // failure that was supposed to prevent all of it.
-      expect(dealIds()).toHaveLength(1);
-      expect(attachedContactIds()).not.toEqual([]);
-      expect(attachedContactIds()).not.toEqual([...PARTIES].sort());
+      return { threw, rejected, deals: dealIds(), attached: attachedContactIds() };
+    }
+
+    it("the PLAIN seam facade: its throw aborts the transaction — no deal, no parties", async () => {
+      armCrashOn("c-lender");
+
+      // Nothing is left pending: the throw happens before a promise exists, so
+      // `rejected` is null rather than carrying the crash message.
+      expect(await outcomeOf(assignContactToTransaction)).toEqual({
+        threw: expect.stringMatching(/forced crash attaching c-lender/),
+        rejected: null,
+        deals: [],
+        attached: [],
+      });
+    });
+
+    it("an ASYNC callee over the same sync core: the transaction commits over the failure and the deal survives HALF-BUILT", async () => {
+      armCrashOn("c-lender");
+
+      const asyncShim = async (
+        dealId: string,
+        party: ReturnType<typeof assignmentsFor>[number],
+      ) => assignContactToTransactionSync(dealId, party);
+
+      // The transaction returned without seeing the failure; the crash message
+      // arrives afterwards, and the four parties written before `c-lender`
+      // survive on a deal that should not exist. The exact surviving set, not
+      // a count.
+      expect(await outcomeOf(asyncShim)).toEqual({
+        threw: null,
+        rejected: expect.stringMatching(/forced crash attaching c-lender/),
+        deals: [expect.any(String)],
+        attached: ["c-buyer", "c-escrow", "c-inspector", "c-seller"],
+      });
     });
   });
 });

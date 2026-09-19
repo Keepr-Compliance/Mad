@@ -63,6 +63,9 @@ describe("EmailAttachmentService", () => {
     filename: "document.pdf",
     mimeType: "application/pdf",
     size: 1024,
+    // BACKLOG-3187: null keeps every assertion in this file on the behaviour it
+    // was written for. The partId cases are their own tests, below.
+    partId: null,
     attachmentId: "att-123",
   };
 
@@ -78,6 +81,12 @@ describe("EmailAttachmentService", () => {
     (databaseService.getAttachmentsByEmailId as jest.Mock).mockReturnValue([]);
     // BACKLOG-1870: reconcile-with-sync methods. Default: no pre-existing row.
     (databaseService.getEmailAttachmentByFilename as jest.Mock).mockReturnValue(
+      undefined
+    );
+    // BACKLOG-2551: the download path now resolves through the SHARED four-step
+    // order (provider id, then legacy adopt, then filename) rather than filename
+    // alone, so this is the seam the reconcile tests below drive.
+    (databaseService.findEmailAttachmentRow as jest.Mock).mockReturnValue(
       undefined
     );
     (databaseService.setEmailAttachmentStorage as jest.Mock).mockReturnValue(
@@ -142,6 +151,162 @@ describe("EmailAttachmentService", () => {
       expect(result.errors).toBe(0);
     });
 
+    it("BACKLOG-2551 CONTROL 1: two SAME-NAMED attachments in one email BOTH download", async () => {
+      // THE defect, at the layer where it actually bites. The download path used to
+      // resolve the existing row by (email_id, filename) alone, so the SECOND
+      // image001.png matched the FIRST one's row, saw storage_path already set, and
+      // returned "already downloaded" — it never fetched its bytes and never got a
+      // row. A test that stops at the DB helper passes while this stands, which is
+      // why this control drives downloadEmailAttachments.
+      // A small faithful store rather than a canned return: BOTH lookups are
+      // implemented, so reverting the production code to the filename-only lookup
+      // makes this control go RED instead of silently still passing.
+      const store = [
+        {
+          id: "row-1",
+          filename: "image001.png",
+          storage_path: "/mock/user/data/attachments/first.png",
+          provider_attachment_id: "att-1",
+        },
+      ];
+      (databaseService.findEmailAttachmentRow as jest.Mock).mockImplementation(
+        (_emailId: string, filename: string, providerId: string | null) =>
+          (providerId
+            ? store.find((r) => r.provider_attachment_id === providerId) ??
+              store.find((r) => r.filename === filename && r.provider_attachment_id === null)
+            : store.find((r) => r.filename === filename)),
+      );
+      (databaseService.getEmailAttachmentByFilename as jest.Mock).mockImplementation(
+        (_emailId: string, filename: string) => store.find((r) => r.filename === filename),
+      );
+
+      const first: EmailAttachmentMeta = { ...mockAttachment, filename: "image001.png", attachmentId: "att-1" };
+      const second: EmailAttachmentMeta = { ...mockAttachment, filename: "image001.png", attachmentId: "att-2" };
+
+      const result = await emailAttachmentService.downloadEmailAttachments(
+        mockUserId,
+        mockEmailId,
+        mockExternalEmailId,
+        "outlook",
+        [first, second]
+      );
+
+      // The first is genuinely already stored, so it is skipped. The SECOND is a
+      // different attachment that merely shares a name: it must download.
+      expect(result.skipped).toBe(1);
+      expect(result.stored).toBe(1);
+      expect(outlookFetchService.getAttachment).toHaveBeenCalledTimes(1);
+      expect(outlookFetchService.getAttachment).toHaveBeenCalledWith(
+        mockExternalEmailId,
+        "att-2"
+      );
+      // ...and it gets its OWN row, carrying its OWN provider id.
+      expect(databaseService.createAttachmentRecord).toHaveBeenCalledTimes(1);
+      expect(
+        (databaseService.createAttachmentRecord as jest.Mock).mock.calls[0][0]
+      ).toMatchObject({ filename: "image001.png", providerAttachmentId: "att-2" });
+    });
+
+    it("BACKLOG-3187: a Gmail attachment with NO partId still passes null — never the fetch token", async () => {
+      await emailAttachmentService.downloadEmailAttachments(
+        mockUserId,
+        mockEmailId,
+        mockExternalEmailId,
+        "gmail",
+        [mockAttachment]
+      );
+      // `mockAttachment` carries partId: null, so this is the FALLBACK branch of
+      // the gate — the one a pre-BACKLOG-3187 caller and an empty payload partId
+      // both take. The fallback is null, exactly as before; it is never the
+      // rotating `attachmentId`, which is what a naive "store something" fix would
+      // have written here.
+      expect(databaseService.findEmailAttachmentRow).toHaveBeenCalledWith(
+        mockEmailId,
+        mockAttachment.filename,
+        null
+      );
+      expect(
+        (databaseService.createAttachmentRecord as jest.Mock).mock.calls[0][0]
+      ).toMatchObject({ providerAttachmentId: null });
+    });
+
+    it("BACKLOG-3187: a Gmail download keyed on partId passes the PART id, not the fetch token", async () => {
+      const withPart: EmailAttachmentMeta = {
+        ...mockAttachment,
+        partId: "1",
+        attachmentId: "fetch-token-run-1",
+      };
+
+      await emailAttachmentService.downloadEmailAttachments(
+        mockUserId,
+        mockEmailId,
+        mockExternalEmailId,
+        "gmail",
+        [withPart]
+      );
+
+      // The row is resolved and written by IDENTITY...
+      expect(databaseService.findEmailAttachmentRow).toHaveBeenCalledWith(
+        mockEmailId,
+        withPart.filename,
+        "1"
+      );
+      expect(
+        (databaseService.createAttachmentRecord as jest.Mock).mock.calls[0][0]
+      ).toMatchObject({ providerAttachmentId: "1" });
+
+      // ...while the FETCH still uses the token, which is the only thing it is for.
+      expect(gmailFetchService.getAttachment).toHaveBeenCalledWith(
+        mockExternalEmailId,
+        "fetch-token-run-1"
+      );
+    });
+
+    it("BACKLOG-3187: the same Gmail attachment on a later fetch keeps its identity when the token has rotated", async () => {
+      const run2: EmailAttachmentMeta = {
+        ...mockAttachment,
+        partId: "1",
+        attachmentId: "fetch-token-run-2",
+      };
+
+      await emailAttachmentService.downloadEmailAttachments(
+        mockUserId,
+        mockEmailId,
+        mockExternalEmailId,
+        "gmail",
+        [run2]
+      );
+
+      const written = (databaseService.createAttachmentRecord as jest.Mock).mock
+        .calls[0][0] as { providerAttachmentId: string | null };
+      expect(written.providerAttachmentId).toBe("1");
+      // The measured hazard, asserted directly: no fetch token is ever the key.
+      expect(written.providerAttachmentId).not.toBe("fetch-token-run-1");
+      expect(written.providerAttachmentId).not.toBe("fetch-token-run-2");
+    });
+
+    it("BACKLOG-3187 CONTROL 2: an OUTLOOK download is untouched — the Graph id still keys the row", async () => {
+      // Outlook shapes carry no partId, so the first term of the gate is always
+      // null for them and the second is the behaviour v71 shipped. If this test
+      // ever needs changing, Outlook has been affected and the change is wrong.
+      await emailAttachmentService.downloadEmailAttachments(
+        mockUserId,
+        mockEmailId,
+        mockExternalEmailId,
+        "outlook",
+        [{ ...mockAttachment, partId: null, attachmentId: "graph-att-1" }]
+      );
+
+      expect(databaseService.findEmailAttachmentRow).toHaveBeenCalledWith(
+        mockEmailId,
+        mockAttachment.filename,
+        "graph-att-1"
+      );
+      expect(
+        (databaseService.createAttachmentRecord as jest.Mock).mock.calls[0][0]
+      ).toMatchObject({ providerAttachmentId: "graph-att-1" });
+    });
+
     it("should skip oversized attachments", async () => {
       const largeAttachment: EmailAttachmentMeta = {
         ...mockAttachment,
@@ -181,9 +346,10 @@ describe("EmailAttachmentService", () => {
 
     it("should skip attachments already downloaded (row has storage_path)", async () => {
       // BACKLOG-1870: a row whose bytes are already stored (storage_path set) is skipped.
-      (databaseService.getEmailAttachmentByFilename as jest.Mock).mockReturnValue({
+      (databaseService.findEmailAttachmentRow as jest.Mock).mockReturnValue({
         id: "att-existing",
         storage_path: "/mock/user/data/attachments/abc.pdf",
+        provider_attachment_id: null,
       });
 
       const result = await emailAttachmentService.downloadEmailAttachments(
@@ -203,9 +369,10 @@ describe("EmailAttachmentService", () => {
 
     it("BACKLOG-1870: reconciles a sync-created metadata row (storage_path NULL) by backfilling the SAME row, not inserting a duplicate", async () => {
       // A metadata-only row exists from sync: same id, storage_path still NULL.
-      (databaseService.getEmailAttachmentByFilename as jest.Mock).mockReturnValue({
+      (databaseService.findEmailAttachmentRow as jest.Mock).mockReturnValue({
         id: "att-sync-meta",
         storage_path: null,
+        provider_attachment_id: null,
       });
 
       const result = await emailAttachmentService.downloadEmailAttachments(
@@ -241,11 +408,13 @@ describe("EmailAttachmentService", () => {
       const rawFilename = "Purchase Agreement (final).pdf";
       const sanitizedFilename = "Purchase_Agreement_final_.pdf"; // what the old code keyed on
 
-      // The sync row exists ONLY under the RAW filename (storage_path NULL).
-      (databaseService.getEmailAttachmentByFilename as jest.Mock).mockImplementation(
+      // The sync row exists ONLY under the RAW filename (storage_path NULL), and
+      // has no provider id yet — it is a legacy/sync row the download must ADOPT
+      // rather than insert beside (BACKLOG-2551 step 2).
+      (databaseService.findEmailAttachmentRow as jest.Mock).mockImplementation(
         (_emailId: string, filename: string) =>
           filename === rawFilename
-            ? { id: "att-sync-row", storage_path: null }
+            ? { id: "att-sync-row", storage_path: null, provider_attachment_id: null }
             : undefined
       );
 
@@ -259,21 +428,29 @@ describe("EmailAttachmentService", () => {
             filename: rawFilename,
             mimeType: "application/pdf",
             size: 2048,
+            partId: null,
             attachmentId: "att-x",
           },
         ]
       );
 
       // The lookup used the RAW display name (matching what sync stored)...
-      expect(databaseService.getEmailAttachmentByFilename).toHaveBeenCalledWith(
+      expect(databaseService.findEmailAttachmentRow).toHaveBeenCalledWith(
         mockEmailId,
-        rawFilename
+        rawFilename,
+        "att-x"
       );
       // ...NOT the sanitized variant (the old bug).
-      expect(databaseService.getEmailAttachmentByFilename).not.toHaveBeenCalledWith(
+      expect(databaseService.findEmailAttachmentRow).not.toHaveBeenCalledWith(
         mockEmailId,
-        sanitizedFilename
+        sanitizedFilename,
+        expect.anything()
       );
+      // BACKLOG-2551: this is an OUTLOOK download, so the provider id is carried
+      // through and stamps the adopted row.
+      expect(
+        (databaseService.setEmailAttachmentStorage as jest.Mock).mock.calls[0][3]
+      ).toBe("att-x");
       // Reconciled the SAME sync row by id — exactly one row, no orphan/duplicate.
       expect(databaseService.setEmailAttachmentStorage).toHaveBeenCalledTimes(1);
       expect(
@@ -299,6 +476,7 @@ describe("EmailAttachmentService", () => {
             filename: rawFilename,
             mimeType: "application/pdf",
             size: 1024,
+            partId: null,
             attachmentId: "att-y",
           },
         ]
@@ -363,6 +541,7 @@ describe("EmailAttachmentService", () => {
         filename: "../../../etc/passwd",
         mimeType: "text/plain",
         size: 100,
+        partId: null,
         attachmentId: "att-malicious",
       };
 
@@ -400,6 +579,7 @@ describe("EmailAttachmentService", () => {
         filename: "file\x00.pdf",
         mimeType: "application/pdf",
         size: 100,
+        partId: null,
         attachmentId: "att-null",
       };
 
@@ -424,6 +604,7 @@ describe("EmailAttachmentService", () => {
         filename: "",
         mimeType: "application/pdf",
         size: 100,
+        partId: null,
         attachmentId: "att-empty",
       };
 

@@ -329,10 +329,27 @@ npm run type-check
 - [ ] No `any` types without justification
 
 ### 5.2 Lint Check
+
+`npm run lint` is `eslint electron src scripts .claude/scripts`. It does **not**
+reach `broker-portal/` or `admin-portal/` — each portal has its own ESLint config
+and its own command (BACKLOG-3099). Run the ones your branch touches:
+
 ```bash
-npm run lint
+npm run lint          # desktop: electron/, src/, scripts/, .claude/scripts/
+npm run portal:lint   # broker-portal/   (run if the branch touches it)
+npm run admin:lint    # admin-portal/    (run if the branch touches it)
 ```
+
 - [ ] No lint errors (warnings acceptable with justification)
+- [ ] Portal command run for every portal the branch touches — a clean `npm run lint`
+      says nothing about portal files, and CI's `Run linter` step runs that identical
+      command, so it will not catch them either
+- [ ] Errors block, warnings do not: the CI jobs (`Broker Portal Lint`, `Admin Portal Lint`)
+      and the pre-push hook both run these commands without `--max-warnings=0`
+
+The pre-push hook runs the portal commands automatically, scoped to which portal the
+pushed files touch. It prints its decision on every run (`portal lint: broker-portal
+RUN|SKIP`), and `PREPUSH_DRYRUN=1 git push …` shows the decision without running anything.
 
 ### 5.3 Performance Check
 Review for:
@@ -457,7 +474,7 @@ and what to establish first.**
       rather than read. **A blind spot under a refactor is worse than under a fix** — a fix at
       least changes behaviour the founder can see.
 - [ ] **Is the code reachable?** Refactoring code no user can reach is work with no upside and a
-      real downside: it makes the dead code look maintained. See ENGINEER-WORKFLOW Step 1a.
+      real downside: it makes the dead code look maintained. See ENGINEER-WORKFLOW Step 1a and §6.2k.
 
 **Sequencing — refactors go last**
 - [ ] **Correctness fixes first, then test-suite integrity, then structure.** A refactor performed
@@ -670,6 +687,85 @@ Rule out what you controlled before you name anything you didn't.
 4. **Before routing anything to the founder, state what you have already ruled out.** If you cannot list it, you have not earned the handoff — see the Tool-First Rule in `CLAUDE.md`. Handing over a console to go check, while holding the file that contains the defect, is the failure this section exists to prevent.
 
 This is distinct from 6.2g. That one is about inheriting a claim without checking it. This one is about **ordering**: even when you check honestly, checking the far end first wastes the founder's attention and often ends in an accusation you have to withdraw.
+
+### 6.2k An unreachability finding is a STOP, not a note (MANDATORY)
+
+**If no user action or app start reaches the code an item changes, the item returns to the founder
+before any code is written** — with a wire / delete / build-anyway question. For code behind an IPC
+channel or preload bridge method, the test is a caller in `src/`; callers inside `electron/` do not
+count. For main-process code that no channel fronts, the root is in `electron/main.ts` or a
+bootstrap — an `app.on(...)` event, a protocol handler, a menu or tray item, a timer — and you cite
+that line instead. Filing a follow-up item is not a disposition. A prior ruling on the item does not
+survive it.
+
+**Attaches to Step 7 (SR plan review) as a blocking exit criterion**, and to the engineer plan at
+Step 6 if it surfaces there first.
+
+- [ ] **Is the code reachable?** For ANY item, not only refactors. Work on code no user can reach
+      has no upside and a real downside: it makes the dead code look maintained. A registered IPC
+      handler is not proof of reachability; for IPC/bridge code the proof is a caller in `src/`, for
+      main-process code a root in `electron/main.ts` or a bootstrap. See ENGINEER-WORKFLOW Step 1a.
+
+**The check, which takes seconds (IPC/bridge code):**
+
+```
+git grep -n '<channel>\|<preloadMethod>\|<exportedSymbol>' -- src
+```
+
+**Before a zero counts, prove the grep can find each name.** Copy the channel and method names from
+`electron/preload/` rather than typing them, run each name on its own against the file that defines
+it (`-- electron/preload` for a channel or bridge method) and show it hits, and check dynamic access
+(ENGINEER-WORKFLOW Step 1a item 2). One hit from the whole alternation proves only that one
+alternative is spelled right. A proven zero shows there is no caller at all; a hit shows nothing
+until the gate walk is done — which is how this squares with `CLAUDE.md`'s *"none of these are
+greppable"* (Derive sets by execution, rule 2).
+
+Zero hits is the finding. Callers inside `electron/` do not count — a handler calling a handler is
+not a user reaching a feature.
+
+**A hit is where the walk starts, not where it ends.** Discard hits in tests, type declarations and
+comments, then walk the remaining call upward to a mounted component or an entry point. If the call
+only runs when a value is set — `if (x)`, `x &&`, an early return, an optional prop or callback —
+enumerate every writer of that value (every `setX(` call, every place the prop is passed and every
+place it is invoked) and cite one writer that is itself reached by the same test. A call whose gate
+has no reachable writer counts as zero hits. Worked example: BACKLOG-2546 — a real call in `src/`
+sat behind a gate whose only non-null writer was never invoked; it was ruled reachable on 2026-09-08
+by citing the call (trace in `pm_comments` on the item).
+
+**After a STOP:** post the grep, its positive control and any gate trace to `pm_comments` on the
+item, headed `STOP — UNREACHABLE`; build nothing. PM sets the item to `waiting_for_user` and puts the
+wire / delete / build-anyway question to the founder in SUMMARY slot 5. Only his answer releases the
+item.
+
+**Why this is a STOP and not a checklist item.** BACKLOG-3234 is the worked example. The orphan
+status of `transactions:export-pdf` was written down **four times** before the PR opened: in
+BACKLOG-2771's own commit (`68becf9b2`, 2026-08-21, *"orphan channel, no renderer caller"*, which
+then added two test cases for it); in the engineer's plan at §9.7; in the SR plan review, which
+verified it independently and wrote *"No user can reach it today"* — and approved; and in the
+founder gate, which recorded *"THE GATE IS NOT UI-REPRODUCIBLE… There is no button."*
+
+**Every gate saw it. Every gate wrote it down and continued.** Detection was never the problem.
+Nothing made STOP the default, so four surfacings became four paragraphs. Earlier precedent,
+different shape: BACKLOG-2515 (2026-08-05) — three PRs merged on an unmounted contact picker before
+anyone noticed. That was a detection miss; 3234 shows that fixing detection alone is not enough.
+
+**A well-evidenced item is MORE dangerous here, not less.** 3234 had a correct mechanism, a
+reproducible defect and pre-registered controls. All of that was true. Only its reachability was never
+asked, and the quality of the rest is what carried it past four reviews.
+
+### 6.2l Establish reachability BEFORE putting a decision to the founder (MANDATORY)
+
+**Before asking the founder a product or design question about a code path, establish the path is
+reachable — and state the result in the same message.** *"Reachable from `ExportModal.tsx:207`"* or
+*"no caller in `src/`"*. If it is not reachable, the question is not "how should this behave" but
+"should this exist".
+
+**A ruling obtained on a reachability the asker did not check does not bind the work that follows.**
+
+This is separate from §6.2k and fires earlier. On BACKLOG-3234 the founder ruled on 2026-09-08;
+SR established unreachability on 2026-09-09 at 07:14 UTC. A Step 7 STOP would have caught the build —
+it could not have caught the decision, which had already been made on a false premise and was then
+treated as settled. §6.2k protects the build; this protects the decision.
 
 ### 6.3 Review Prompt Template
 

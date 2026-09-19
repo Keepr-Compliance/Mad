@@ -117,6 +117,40 @@ class FeatureGateService {
   async getAllFeatures(
     orgId: string
   ): Promise<Record<string, FeatureAccess>> {
+    const features = await this.getAllFeaturesOrNull(orgId);
+    if (features) {
+      return features;
+    }
+
+    // 4. No cache => empty (fail-open means nothing is blocked)
+    logService.info(
+      "[FeatureGate] No cache available, returning empty features (fail-open)",
+      "FeatureGateService",
+      { orgId }
+    );
+    return {};
+  }
+
+  /**
+   * Get all features for an organization, or `null` when there is no answer.
+   *
+   * BACKLOG-3349. Identical to {@link getAllFeatures} except at the end: where
+   * that method's fail-open contract turns "I could not reach the plan and
+   * there is no cache" into `{}` — indistinguishable from "your plan grants
+   * nothing" — this one returns `null` and lets the caller decide.
+   *
+   * A strict (fail-closed) reader needs that difference. `{}` from a failed
+   * fetch and `{}` from a real answer lead to opposite sentences on screen:
+   * "we can't check your plan right now" versus "not in your plan". Only the
+   * second is a claim about the plan, and making it on the strength of a failed
+   * network read tells a paying, offline user that he did not pay.
+   *
+   * Every existing caller keeps its behaviour: `getAllFeatures` still answers
+   * `{}`, with the same log line, at the same point.
+   */
+  async getAllFeaturesOrNull(
+    orgId: string
+  ): Promise<Record<string, FeatureAccess> | null> {
     // 1. Check in-memory cache
     if (this.isCacheFresh(orgId)) {
       return { ...this.cache!.features };
@@ -143,13 +177,8 @@ class FeatureGateService {
       return { ...persisted.features };
     }
 
-    // 4. No cache => empty (fail-open means nothing is blocked)
-    logService.info(
-      "[FeatureGate] No cache available, returning empty features (fail-open)",
-      "FeatureGateService",
-      { orgId }
-    );
-    return {};
+    // 4. No fetch, no cache: no answer. NOT an empty plan.
+    return null;
   }
 
   /**

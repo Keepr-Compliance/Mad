@@ -850,7 +850,13 @@ export class HybridExtractorService {
     const tokenEncryptionService = require('../tokenEncryptionService').default;
 
     try {
-      const settings = getLLMSettingsByUserId(userId);
+      // BACKLOG-2960: `require()` returns `any`, so a missing `await` here is
+      // invisible to tsc AND to no-floating-promises. Without it `settings` is
+      // a Promise, `!settings` is false, the encrypted key reads `undefined`,
+      // and this returns null — the LLM path disables itself silently. Covered
+      // by llmSettingsDbService.realDriver-2960.test.ts, which drives this
+      // method against a real row.
+      const settings = await getLLMSettingsByUserId(userId);
       if (!settings) {
         return null;
       }

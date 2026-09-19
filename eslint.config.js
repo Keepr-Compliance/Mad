@@ -34,6 +34,42 @@ const NODE_SQLITE3_DATABASE_RULE = {
     'Do not construct a node-sqlite3 Database directly (BACKLOG-2403): a failed open emits an unhandled `error` event and kills the main process. Use openSqliteReadOnly() from electron/services/db/readOnlySqlite.',
 };
 
+/**
+ * BACKLOG-2960 PR 0b — an `async` function literal may not be a transaction body.
+ *
+ * `better-sqlite3` commits when the callback RETURNS. An `async` body returns a
+ * Promise at its first `await`, so the transaction commits with the body still
+ * running and a later throw becomes an unhandled rejection after the commit.
+ * `dbTransaction`'s conditional return type already makes this a compile error
+ * (TS2345) at its 18 literal bodies. It does NOT reach the 19 bodies handed to the
+ * raw driver — `db.transaction(async () => …)` compiled clean when measured at
+ * `int/epic9-close` 139913c51, because `Database.transaction<F extends
+ * VariableArgFunction>` accepts any function. This AST rule closes that shape at
+ * both spellings. It sees SYNTAX only: a non-async body that returns a promise
+ * through a raw `.transaction(` is still invisible here, and is caught only at
+ * `dbTransaction` (by the type) — one more reason those sites migrate.
+ *
+ * The `.transaction(` selector is RECEIVER-AGNOSTIC: any object's
+ * `.transaction(async …)` fires, not only a better-sqlite3 handle. Zero matches
+ * at 139913c51 (full lint). If a non-database API named `transaction` ever takes
+ * an async callback legitimately, that is the expected false positive — narrow
+ * the selector then, with the receiver named; do not disable the rule inline.
+ */
+const ASYNC_TRANSACTION_BODY_RULES = [
+  {
+    selector:
+      'CallExpression[callee.type="Identifier"][callee.name="dbTransaction"] > :function[async=true]',
+    message:
+      'A dbTransaction body must be synchronous (BACKLOG-2960): better-sqlite3 commits when the callback returns, so an async body commits at its first await. Call the *Sync twin and drop the async.',
+  },
+  {
+    selector:
+      'CallExpression[callee.type="MemberExpression"][callee.property.name="transaction"] > :function[async=true]',
+    message:
+      'A transaction body must be synchronous (BACKLOG-2960): better-sqlite3 commits when the callback returns, so an async body commits at its first await. Drop the async; call the *Sync twin.',
+  },
+];
+
 module.exports = [
   // Ignore patterns
   {
@@ -144,7 +180,7 @@ module.exports = [
       // BACKLOG-2403: a bare node-sqlite3 handle kills the main process on a
       // failed open. Applied to .js too (electron/main.js) so the crash cannot
       // come back through a file the TypeScript block does not cover.
-      'no-restricted-syntax': ['error', NODE_SQLITE3_DATABASE_RULE],
+      'no-restricted-syntax': ['error', NODE_SQLITE3_DATABASE_RULE, ...ASYNC_TRANSACTION_BODY_RULES],
 
       // React rules
       'react/react-in-jsx-scope': 'off', // Not needed in React 17+
@@ -260,12 +296,65 @@ module.exports = [
         // BACKLOG-2403 — see below. Duplicated in the JS block so a .js file
         // cannot reintroduce the crash.
         NODE_SQLITE3_DATABASE_RULE,
+        // BACKLOG-2960 — see the constant's header. Also in the JS block.
+        ...ASYNC_TRANSACTION_BODY_RULES,
       ],
     },
     settings: {
       react: {
         version: 'detect',
       },
+    },
+  },
+
+  // BACKLOG-2960 PR 0b — the promise-shape rules the async-conversion train relies on.
+  //
+  // Both blocks carry RULES ONLY. Flat config merges every block whose `files`
+  // match, so the parser, `project: './tsconfig.json'` and the plugin come from
+  // the `**/*.ts` block above — these are type-aware rules and need that program.
+  // The `ignores` are load-bearing: the test-file block below is UNTYPED
+  // (`__tests__/**` and `*.test.ts` are outside the typed project), and a typed
+  // rule that reaches an untyped file throws instead of reporting. So test code
+  // is not covered by either rule, and that gap is recorded rather than implied.
+  //
+  // NEITHER RULE HAS A BASELINE OR ALLOW-LIST FILE, by ruling (ffc832ac §6.2):
+  // every conversion PR would edit the same file and the two-lane train would
+  // re-serialise on it. Scope is the allow-list.
+  {
+    // `no-misused-promises` on for ALL of electron/ production code. It catches
+    // the shape that ships a real bug with tsc green: `if (isFrozen(id))` where
+    // `isFrozen` now returns a Promise — always truthy, so every contact reads as
+    // frozen. Measured at 139913c51: 17 findings, 15 fixed in this PR; the two
+    // in electron/main.ts (1652, 1684) are in a file held by another item at the
+    // time of writing and are recorded in the PR body, not carved out here.
+    files: ['electron/**/*.ts'],
+    ignores: ['**/*.test.ts', '**/__tests__/**'],
+    rules: {
+      '@typescript-eslint/no-misused-promises': 'error',
+    },
+  },
+  {
+    // `no-floating-promises` at ZERO for the data layer only. Inside a
+    // synchronous transaction body a floated promise-returning call does not let
+    // writes escape — it loses the ERROR PATH: the body's throw arrives as a
+    // rejection after the commit. `tsc` cannot see it (measured, 79c3aa69 §2b);
+    // this rule can, for every body inside db/**. Measured at 139913c51: 55
+    // findings in 12 files, all `logService.*` calls, all `void`-marked in this PR.
+    //
+    // Scoped by `files`, not by a baseline: the ~1,440 findings elsewhere in
+    // electron/ stay their own item and do NOT fire here — a floated promise
+    // planted in electron/handlers/ lints clean under `npm run lint` (proven by
+    // execution in the PR). Every file a conversion PR touches must leave at zero.
+    // BACKLOG-2546 adds `loginProvisioningService.ts`: it is outside db/** by
+    // design (see its header) but it OWNS a transaction body, so it needs the
+    // same rule — a floated promise inside a body loses the error path.
+    // BACKLOG-3220 adds `contactSourceValues.ts` on the same criterion: its
+    // `applyLinkedSourceValuesOrThrow` owns a transaction body. (`contactHandlers.ts`
+    // owns bodies too; widening it is BACKLOG-3355.)
+    files: ['electron/services/db/**/*.ts', 'electron/services/loginProvisioningService.ts', 'electron/services/contactSourceValues.ts'],
+    ignores: ['**/*.test.ts', '**/__tests__/**'],
+    rules: {
+      '@typescript-eslint/no-floating-promises': 'error',
     },
   },
 
