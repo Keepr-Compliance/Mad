@@ -1,0 +1,611 @@
+/**
+ * Fixture for the iPhone Sync Performance report (BACKLOG-3441).
+ *
+ * SHAPE AND NUMBERS TRANSCRIBED from `public.sync_outcomes` on 2026-09-18 —
+ * all 19 rows that existed in the table, including the 181.7-minute run that
+ * motivated the report and the 79.1-minute success it is compared against.
+ *
+ * IDENTIFIERS ARE NOT REAL. Every `id` and `user_id` is a synthetic UUID and
+ * every display name and email is invented. This repository is public and a
+ * real identifier in a fixture is exactly what BACKLOG-3087 was. The timings,
+ * byte counts, outcomes, phase names, device models and extraction counts are
+ * verbatim, because those are what the report has to render correctly.
+ */
+
+import type { ReportUser, SyncOutcomeRow } from '../iphone-sync';
+
+const U1 = '11111111-1111-4111-8111-111111111111'; // pii-allow-uuid: synthetic fixture id, not a real user
+const U2 = '22222222-2222-4222-8222-222222222222'; // pii-allow-uuid: synthetic fixture id, not a real user
+const U3 = '33333333-3333-4333-8333-333333333333'; // pii-allow-uuid: synthetic fixture id, not a real user
+const U4 = '44444444-4444-4444-8444-444444444444'; // pii-allow-uuid: synthetic fixture id, not a real user
+const U5 = '55555555-5555-4555-8555-555555555555'; // pii-allow-uuid: synthetic fixture id, not a real user
+const U6 = '66666666-6666-4666-8666-666666666666'; // pii-allow-uuid: synthetic fixture id, not a real user
+const U7 = '77777777-7777-4777-8777-777777777777'; // pii-allow-uuid: synthetic fixture id, not a real user
+
+/**
+ * Deliberately not shaped like people's names. The fixture-PII guard reports a
+ * `Firstname Lastname` string on a line with an email, and rightly so — the
+ * cheapest way past that is to not invent a person in the first place.
+ */
+export const FIXTURE_USERS: ReportUser[] = [
+  { id: U1, email: 'sync-user-a@example.test', display_name: 'Sync user A' },
+  { id: U2, email: 'sync-user-b@example.test', display_name: 'Sync user B' },
+  { id: U3, email: 'sync-user-c@example.test', display_name: 'Sync user C' },
+  { id: U4, email: 'sync-user-d@example.test', display_name: 'Sync user D' },
+  { id: U5, email: 'sync-user-e@example.test', display_name: 'Sync user E' },
+  { id: U6, email: 'sync-user-f@example.test', display_name: 'Sync user F' },
+  { id: U7, email: 'sync-user-g@example.test', display_name: 'Sync user G' },
+];
+
+function phase(name: string, ms: number) {
+  return { phase: name, elapsed_ms: ms };
+}
+
+/** Newest first, exactly as `getIphoneSyncRuns` orders them. */
+export const FIXTURE_ROWS: SyncOutcomeRow[] = [
+  {
+    id: 'a0000001-0000-4000-8000-000000000001', // pii-allow-uuid: synthetic fixture id
+    user_id: U3,
+    created_at: '2026-09-17T18:58:04.908279Z',
+    source: 'iphone-backup',
+    outcome: 'error',
+    elapsed_ms: 60069,
+    phases: [],
+    prior_backup: 'none',
+    incremental: null,
+    was_encrypted: null,
+    device_model: 'iPhone17,1',
+    device_ios_version: '26.6.2',
+    device_used_bytes: null,
+    backup_bytes: null,
+    backup_bytes_unmeasured: null,
+    messages_extracted: null,
+    conversations_extracted: null,
+    contacts_extracted: null,
+    app_version: '2.37.0',
+    platform: 'darwin',
+    is_packaged: false,
+  },
+  {
+    id: 'a0000002-0000-4000-8000-000000000002', // pii-allow-uuid: synthetic fixture id
+    user_id: U3,
+    created_at: '2026-09-17T18:54:28.045856Z',
+    source: 'iphone-backup',
+    outcome: 'error',
+    elapsed_ms: 60063,
+    phases: [],
+    prior_backup: 'none',
+    incremental: null,
+    was_encrypted: null,
+    device_model: 'iPhone17,1',
+    device_ios_version: '26.6.2',
+    device_used_bytes: null,
+    backup_bytes: null,
+    backup_bytes_unmeasured: null,
+    messages_extracted: null,
+    conversations_extracted: null,
+    contacts_extracted: null,
+    app_version: '2.37.0',
+    platform: 'darwin',
+    is_packaged: false,
+  },
+  {
+    // THE INCIDENT — 2026-09-16, 181.7 minutes, cancelled, nothing extracted.
+    id: 'a0000003-0000-4000-8000-000000000003', // pii-allow-uuid: synthetic fixture id
+    user_id: U5,
+    created_at: '2026-09-16T20:42:49.550685Z',
+    source: 'iphone-backup',
+    outcome: 'cancelled',
+    elapsed_ms: 10901598,
+    phases: [
+      phase('backup', 26059),
+      phase('backup:waiting-for-device', 719537),
+      phase('backup:transferring', 10145797),
+    ],
+    prior_backup: 'none',
+    incremental: null,
+    was_encrypted: null,
+    device_model: 'iPhone18,2',
+    device_ios_version: '26.6.1',
+    device_used_bytes: 62169464832,
+    backup_bytes: null,
+    backup_bytes_unmeasured: null,
+    messages_extracted: null,
+    conversations_extracted: null,
+    contacts_extracted: null,
+    app_version: '2.37.0',
+    platform: 'win32',
+    is_packaged: true,
+  },
+  {
+    id: 'a0000004-0000-4000-8000-000000000004', // pii-allow-uuid: synthetic fixture id
+    user_id: U2,
+    created_at: '2026-09-15T21:58:54.652712Z',
+    source: 'iphone-backup',
+    outcome: 'error',
+    elapsed_ms: 59297,
+    phases: [phase('backup', 5465), phase('backup:waiting-for-device', 27520)],
+    prior_backup: 'none',
+    incremental: true,
+    was_encrypted: false,
+    device_model: 'iPhone16,1',
+    device_ios_version: '26.6.2',
+    device_used_bytes: 28939374592,
+    backup_bytes: null,
+    backup_bytes_unmeasured: true,
+    messages_extracted: null,
+    conversations_extracted: null,
+    contacts_extracted: null,
+    app_version: '2.37.0',
+    platform: 'win32',
+    is_packaged: true,
+  },
+  {
+    id: 'a0000005-0000-4000-8000-000000000005', // pii-allow-uuid: synthetic fixture id
+    user_id: U2,
+    created_at: '2026-09-15T20:40:08.484463Z',
+    source: 'iphone-backup',
+    outcome: 'cancelled',
+    elapsed_ms: 703776,
+    phases: [
+      phase('backup', 5569),
+      phase('backup:waiting-for-device', 65821),
+      phase('backup:transferring', 628406),
+    ],
+    prior_backup: 'none',
+    incremental: null,
+    was_encrypted: null,
+    device_model: 'iPhone16,1',
+    device_ios_version: '26.6.2',
+    device_used_bytes: 28894154752,
+    backup_bytes: null,
+    backup_bytes_unmeasured: null,
+    messages_extracted: null,
+    conversations_extracted: null,
+    contacts_extracted: null,
+    app_version: '2.37.0',
+    platform: 'win32',
+    is_packaged: true,
+  },
+  {
+    id: 'a0000006-0000-4000-8000-000000000006', // pii-allow-uuid: synthetic fixture id
+    user_id: U4,
+    created_at: '2026-09-15T19:43:48.191269Z',
+    source: 'iphone-backup',
+    outcome: 'complete',
+    elapsed_ms: 3187395,
+    phases: [
+      phase('backup', 5300),
+      phase('backup:waiting-for-device', 58358),
+      phase('backup:transferring', 2641081),
+      phase('parsing-contacts', 92),
+      phase('parsing-messages', 13742),
+      phase('resolving', 62),
+      phase('cleanup', 17),
+      phase('storing:messages', 1355),
+      phase('storing:contacts', 12003),
+      phase('storing:attachments', 383183),
+    ],
+    prior_backup: 'none',
+    incremental: true,
+    was_encrypted: false,
+    device_model: 'iPhone17,1',
+    device_ios_version: '26.3.1',
+    device_used_bytes: 29634072576,
+    backup_bytes: 58549778868,
+    backup_bytes_unmeasured: null,
+    messages_extracted: 127310,
+    conversations_extracted: 1587,
+    contacts_extracted: 3714,
+    app_version: '2.37.0',
+    platform: 'win32',
+    is_packaged: true,
+  },
+  {
+    id: 'a0000007-0000-4000-8000-000000000007', // pii-allow-uuid: synthetic fixture id
+    user_id: U4,
+    created_at: '2026-09-15T18:50:02.641938Z',
+    source: 'iphone-backup',
+    outcome: 'error',
+    elapsed_ms: 40239,
+    phases: [phase('backup', 5325), phase('backup:waiting-for-device', 31793)],
+    prior_backup: 'none',
+    incremental: true,
+    was_encrypted: false,
+    device_model: 'iPhone17,1',
+    device_ios_version: '26.3.1',
+    device_used_bytes: 29638713344,
+    backup_bytes: null,
+    backup_bytes_unmeasured: true,
+    messages_extracted: null,
+    conversations_extracted: null,
+    contacts_extracted: null,
+    app_version: '2.37.0',
+    platform: 'win32',
+    is_packaged: true,
+  },
+  {
+    id: 'a0000008-0000-4000-8000-000000000008', // pii-allow-uuid: synthetic fixture id
+    user_id: U4,
+    created_at: '2026-09-15T18:49:13.050645Z',
+    source: 'iphone-backup',
+    outcome: 'error',
+    elapsed_ms: 34662,
+    phases: [phase('backup', 5439), phase('backup:waiting-for-device', 25749)],
+    prior_backup: 'none',
+    incremental: false,
+    was_encrypted: false,
+    device_model: 'iPhone17,1',
+    device_ios_version: '26.3.1',
+    device_used_bytes: 29567074304,
+    backup_bytes: null,
+    backup_bytes_unmeasured: true,
+    messages_extracted: null,
+    conversations_extracted: null,
+    contacts_extracted: null,
+    app_version: '2.37.0',
+    platform: 'win32',
+    is_packaged: true,
+  },
+  {
+    id: 'a0000009-0000-4000-8000-000000000009', // pii-allow-uuid: synthetic fixture id
+    user_id: U7,
+    created_at: '2026-09-15T18:44:08.829797Z',
+    source: 'iphone-backup',
+    outcome: 'complete',
+    elapsed_ms: 2861341,
+    phases: [
+      phase('backup', 5326),
+      phase('backup:waiting-for-device', 68727),
+      phase('backup:transferring', 2641726),
+      phase('parsing-contacts', 436),
+      phase('parsing-messages', 11177),
+      phase('resolving', 18),
+      phase('cleanup', 25),
+      phase('storing:messages', 682),
+      phase('storing:contacts', 2534),
+      phase('storing:attachments', 112500),
+    ],
+    prior_backup: 'none',
+    incremental: true,
+    was_encrypted: false,
+    device_model: 'iPhone17,2',
+    device_ios_version: '26.6.2',
+    device_used_bytes: 70804455424,
+    backup_bytes: 75814063183,
+    backup_bytes_unmeasured: null,
+    messages_extracted: 77549,
+    conversations_extracted: 2522,
+    contacts_extracted: 10168,
+    app_version: '2.37.0',
+    platform: 'win32',
+    is_packaged: true,
+  },
+  {
+    id: 'a0000010-0000-4000-8000-000000000010', // pii-allow-uuid: synthetic fixture id
+    user_id: U7,
+    created_at: '2026-09-15T17:56:15.922085Z',
+    source: 'iphone-backup',
+    outcome: 'error',
+    elapsed_ms: 311499,
+    phases: [phase('backup', 5340), phase('backup:waiting-for-device', 304479)],
+    prior_backup: 'none',
+    incremental: false,
+    was_encrypted: false,
+    device_model: 'iPhone17,2',
+    device_ios_version: '26.6.2',
+    device_used_bytes: 70785171456,
+    backup_bytes: null,
+    backup_bytes_unmeasured: true,
+    messages_extracted: null,
+    conversations_extracted: null,
+    contacts_extracted: null,
+    app_version: '2.37.0',
+    platform: 'win32',
+    is_packaged: true,
+  },
+  {
+    // The successful reference run — 79.1 minutes, 50.3 GB, 232,940 messages.
+    id: 'a0000011-0000-4000-8000-000000000011', // pii-allow-uuid: synthetic fixture id
+    user_id: U6,
+    created_at: '2026-09-14T21:50:02.296434Z',
+    source: 'iphone-backup',
+    outcome: 'complete',
+    elapsed_ms: 4748916,
+    phases: [
+      phase('backup', 5412),
+      phase('backup:waiting-for-device', 51989),
+      phase('backup:transferring', 4268478),
+      phase('parsing-contacts', 92),
+      phase('parsing-messages', 29946),
+      phase('resolving', 111),
+      phase('cleanup', 11),
+      phase('storing:messages', 680),
+      phase('storing:contacts', 8015),
+      phase('storing:attachments', 271768),
+    ],
+    prior_backup: 'none',
+    incremental: true,
+    was_encrypted: false,
+    device_model: 'iPhone17,1',
+    device_ios_version: '26.6.2',
+    device_used_bytes: 54062673920,
+    backup_bytes: 122131936681,
+    backup_bytes_unmeasured: null,
+    messages_extracted: 232940,
+    conversations_extracted: 2053,
+    contacts_extracted: 3787,
+    app_version: '2.37.0',
+    platform: 'win32',
+    is_packaged: true,
+  },
+  {
+    id: 'a0000012-0000-4000-8000-000000000012', // pii-allow-uuid: synthetic fixture id
+    user_id: U1,
+    created_at: '2026-09-14T20:23:14.574839Z',
+    source: 'iphone-backup',
+    outcome: 'cancelled',
+    elapsed_ms: 55342,
+    phases: [phase('backup', 5344), phase('backup:waiting-for-device', 46465)],
+    prior_backup: 'none',
+    incremental: null,
+    was_encrypted: null,
+    device_model: 'iPhone16,2',
+    device_ios_version: '26.6.2',
+    device_used_bytes: 51599925248,
+    backup_bytes: null,
+    backup_bytes_unmeasured: null,
+    messages_extracted: null,
+    conversations_extracted: null,
+    contacts_extracted: null,
+    app_version: '2.37.0',
+    platform: 'win32',
+    is_packaged: true,
+  },
+  {
+    id: 'a0000013-0000-4000-8000-000000000013', // pii-allow-uuid: synthetic fixture id
+    user_id: U6,
+    created_at: '2026-09-14T20:21:43.803Z',
+    source: 'iphone-backup',
+    outcome: 'error',
+    elapsed_ms: 1834001,
+    phases: [phase('backup', 5398), phase('backup:waiting-for-device', 1825471)],
+    prior_backup: 'none',
+    incremental: true,
+    was_encrypted: false,
+    device_model: 'iPhone17,1',
+    device_ios_version: '26.6.2',
+    device_used_bytes: 54060560384,
+    backup_bytes: 0,
+    backup_bytes_unmeasured: null,
+    messages_extracted: null,
+    conversations_extracted: null,
+    contacts_extracted: null,
+    app_version: '2.37.0',
+    platform: 'win32',
+    is_packaged: true,
+  },
+  {
+    id: 'a0000014-0000-4000-8000-000000000014', // pii-allow-uuid: synthetic fixture id
+    user_id: U1,
+    created_at: '2026-09-14T20:19:36.404862Z',
+    source: 'iphone-backup',
+    outcome: 'error',
+    elapsed_ms: 61243,
+    phases: [phase('backup', 32125), phase('backup:waiting-for-device', 25902)],
+    prior_backup: 'none',
+    incremental: false,
+    was_encrypted: false,
+    device_model: 'iPhone16,2',
+    device_ios_version: '26.6.2',
+    device_used_bytes: 51588210688,
+    backup_bytes: null,
+    backup_bytes_unmeasured: true,
+    messages_extracted: null,
+    conversations_extracted: null,
+    contacts_extracted: null,
+    app_version: '2.37.0',
+    platform: 'win32',
+    is_packaged: true,
+  },
+  {
+    id: 'a0000015-0000-4000-8000-000000000015', // pii-allow-uuid: synthetic fixture id
+    user_id: U6,
+    created_at: '2026-09-14T19:38:35.803672Z',
+    source: 'iphone-backup',
+    outcome: 'error',
+    elapsed_ms: 1833866,
+    phases: [phase('backup', 5352), phase('backup:waiting-for-device', 1825467)],
+    prior_backup: 'none',
+    incremental: true,
+    was_encrypted: false,
+    device_model: 'iPhone17,1',
+    device_ios_version: '26.6.2',
+    device_used_bytes: 54054817792,
+    backup_bytes: 0,
+    backup_bytes_unmeasured: null,
+    messages_extracted: null,
+    conversations_extracted: null,
+    contacts_extracted: null,
+    app_version: '2.37.0',
+    platform: 'win32',
+    is_packaged: true,
+  },
+  {
+    id: 'a0000016-0000-4000-8000-000000000016', // pii-allow-uuid: synthetic fixture id
+    user_id: U6,
+    created_at: '2026-09-14T18:50:01.767115Z',
+    source: 'iphone-backup',
+    outcome: 'cancelled',
+    elapsed_ms: 154212,
+    phases: [phase('backup', 5407), phase('backup:waiting-for-device', 145187)],
+    prior_backup: 'none',
+    incremental: null,
+    was_encrypted: null,
+    device_model: 'iPhone17,1',
+    device_ios_version: '26.6.2',
+    device_used_bytes: 53857484800,
+    backup_bytes: null,
+    backup_bytes_unmeasured: null,
+    messages_extracted: null,
+    conversations_extracted: null,
+    contacts_extracted: null,
+    app_version: '2.37.0',
+    platform: 'win32',
+    is_packaged: true,
+  },
+  {
+    id: 'a0000017-0000-4000-8000-000000000017', // pii-allow-uuid: synthetic fixture id
+    user_id: U6,
+    created_at: '2026-09-14T18:43:43.746486Z',
+    source: 'iphone-backup',
+    outcome: 'cancelled',
+    elapsed_ms: 29695,
+    phases: [phase('backup', 5393), phase('backup:waiting-for-device', 20347)],
+    prior_backup: 'none',
+    incremental: null,
+    was_encrypted: null,
+    device_model: 'iPhone17,1',
+    device_ios_version: '26.6.2',
+    device_used_bytes: 53820116992,
+    backup_bytes: null,
+    backup_bytes_unmeasured: null,
+    messages_extracted: null,
+    conversations_extracted: null,
+    contacts_extracted: null,
+    app_version: '2.37.0',
+    platform: 'win32',
+    is_packaged: true,
+  },
+  {
+    id: 'a0000018-0000-4000-8000-000000000018', // pii-allow-uuid: synthetic fixture id
+    user_id: U6,
+    created_at: '2026-09-14T18:43:03.897384Z',
+    source: 'iphone-backup',
+    outcome: 'error',
+    elapsed_ms: 2227,
+    phases: [],
+    prior_backup: 'none',
+    incremental: null,
+    was_encrypted: null,
+    device_model: 'iPhone17,1',
+    device_ios_version: '26.6.2',
+    device_used_bytes: null,
+    backup_bytes: null,
+    backup_bytes_unmeasured: null,
+    messages_extracted: null,
+    conversations_extracted: null,
+    contacts_extracted: null,
+    app_version: '2.37.0',
+    platform: 'win32',
+    is_packaged: true,
+  },
+  {
+    id: 'a0000019-0000-4000-8000-000000000019', // pii-allow-uuid: synthetic fixture id
+    user_id: U6,
+    created_at: '2026-09-14T18:41:38.432865Z',
+    source: 'iphone-backup',
+    outcome: 'error',
+    elapsed_ms: 5325,
+    phases: [phase('backup', 1839)],
+    prior_backup: 'none',
+    incremental: false,
+    was_encrypted: false,
+    device_model: 'iPhone17,1',
+    device_ios_version: '26.6.2',
+    device_used_bytes: 53827846144,
+    backup_bytes: null,
+    backup_bytes_unmeasured: true,
+    messages_extracted: null,
+    conversations_extracted: null,
+    contacts_extracted: null,
+    app_version: '2.37.0',
+    platform: 'win32',
+    is_packaged: true,
+  },
+];
+
+/** The one run the report exists to make obvious. */
+export const INCIDENT_ROW_ID = FIXTURE_ROWS[2].id;
+
+/**
+ * Two runs still in flight.
+ *
+ * NOT TRANSCRIBED — `sync_outcomes` held no `running` row when this was written
+ * (`select outcome, count(*) ... group by 1` on 2026-09-19 returned only
+ * complete 4 / cancelled 7 / error 13), because BACKLOG-3440's writer had not
+ * yet shipped to a build anyone runs. The shape below is therefore DERIVED from
+ * the producer, not invented:
+ *
+ *   `electron/services/syncTimeline.ts` `beginSync` writes `buildRow("running",
+ *   0, {})` at the start, and `flushHeartbeat` writes `buildRow("running",
+ *   this.now() - this.syncStartedAt, {})` every two minutes after it.
+ *   `buildRow` puts only CLOSED phases in `phases`, and the counts argument is
+ *   `{}` on both paths, so `messages/conversations/contacts_extracted` are
+ *   absent. `syncOutcomeSupabase.buildSyncOutcomeRow` drops undefined keys, so
+ *   absent reads back as null.
+ *
+ * Consequences the report has to survive, both present below: `elapsed_ms` is
+ * time SO FAR rather than a duration, and nothing has been extracted yet
+ * whatever the run's eventual fate.
+ */
+export const IN_PROGRESS_ROWS: SyncOutcomeRow[] = [
+  {
+    // A HEALTHY FIRST SYNC, 47 minutes in and still transferring. Past the
+    // 30-minute threshold with nothing stored, which is the normal shape of a
+    // first sync of a full phone — and precisely what would be flagged as
+    // "burned 30 minutes and extracted nothing" if live runs were counted.
+    id: 'b0000001-0000-4000-8000-000000000001', // pii-allow-uuid: synthetic fixture id
+    user_id: U2,
+    created_at: '2026-09-19T17:05:11.000000Z',
+    source: 'iphone-backup',
+    outcome: 'running',
+    elapsed_ms: 2_820_000,
+    phases: [phase('backup', 24118), phase('backup:waiting-for-device', 61204)],
+    prior_backup: 'none',
+    incremental: false,
+    was_encrypted: true,
+    device_model: 'iPhone17,1',
+    device_ios_version: '26.6.2',
+    device_used_bytes: 53827846144,
+    backup_bytes: null,
+    backup_bytes_unmeasured: null,
+    messages_extracted: null,
+    conversations_extracted: null,
+    contacts_extracted: null,
+    app_version: '2.38.0',
+    platform: 'darwin',
+    is_packaged: false,
+  },
+  {
+    // Two minutes in: one heartbeat after the start write, first phase closed.
+    id: 'b0000002-0000-4000-8000-000000000002', // pii-allow-uuid: synthetic fixture id
+    user_id: U4,
+    created_at: '2026-09-19T17:29:02.000000Z',
+    source: 'iphone-backup',
+    outcome: 'running',
+    elapsed_ms: 121_400,
+    phases: [phase('backup', 22940)],
+    prior_backup: 'none',
+    incremental: null,
+    was_encrypted: null,
+    device_model: 'iPhone18,2',
+    device_ios_version: '26.6.1',
+    device_used_bytes: null,
+    backup_bytes: null,
+    backup_bytes_unmeasured: null,
+    messages_extracted: null,
+    conversations_extracted: null,
+    contacts_extracted: null,
+    app_version: '2.38.0',
+    platform: 'win32',
+    is_packaged: false,
+  },
+];
+
+/** The 19 finished runs with two live ones interleaved, newest first. */
+export const ROWS_WITH_IN_PROGRESS: SyncOutcomeRow[] = [
+  IN_PROGRESS_ROWS[1],
+  IN_PROGRESS_ROWS[0],
+  ...FIXTURE_ROWS,
+];
