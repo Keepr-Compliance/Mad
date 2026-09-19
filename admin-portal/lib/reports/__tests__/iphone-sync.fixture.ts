@@ -575,7 +575,7 @@ export const IN_PROGRESS_ROWS: SyncOutcomeRow[] = [
     contacts_extracted: null,
     app_version: '2.38.0',
     platform: 'darwin',
-    is_packaged: true,
+    is_packaged: false,
   },
   {
     // Two minutes in: one heartbeat after the start write, first phase closed.
@@ -599,7 +599,7 @@ export const IN_PROGRESS_ROWS: SyncOutcomeRow[] = [
     contacts_extracted: null,
     app_version: '2.38.0',
     platform: 'win32',
-    is_packaged: true,
+    is_packaged: false,
   },
 ];
 

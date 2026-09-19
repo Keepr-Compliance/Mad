@@ -216,8 +216,8 @@ function StalledBanner({ report }: { report: IphoneSyncReportModel }) {
             <h2 className="font-semibold text-green-900">No stalled runs on record</h2>
             <p className="mt-1 text-sm text-green-800">
               No recorded run lasted {STALL_THRESHOLD_MINUTES} minutes or longer and extracted
-              nothing. Runs that die without writing a row are not counted here — see the limits
-              below.
+              nothing. Runs that have not reached an end are excluded rather than counted as
+              though they had resolved — see the limits below.
             </p>
           </div>
         </div>
