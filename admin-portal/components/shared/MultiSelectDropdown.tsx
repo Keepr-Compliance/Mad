@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * MultiSelectDropdown - PM Backlog
+ * MultiSelectDropdown — shared
  *
  * A custom dropdown with checkboxes for multi-value selection.
  * Replaces native <select> elements to allow filtering by multiple values
