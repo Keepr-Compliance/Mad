@@ -45,9 +45,9 @@
  *
  * It ships unchanged on purpose. The fix for 2417 is **code** — an Edge
  * Function purge that makes this sentence true without editing a character of
- * it — so no v4 is needed. Softening the wording now would ship a *weaker*
- * promise and then require reverting to this one: two extra hash bumps to
- * arrive where we already are.
+ * it — so it needs no disclosure bump of its own. Softening the wording now
+ * would ship a *weaker* promise and then require reverting to this one: two
+ * extra hash bumps to arrive where we already are.
  *
  * Until 2417 lands, the strongest sentence on the consent screen is the one
  * least true, which is why 2417 is launch-blocking for support access reaching
