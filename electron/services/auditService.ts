@@ -101,12 +101,14 @@ export interface AuditLogDbRow {
 /**
  * BACKLOG-3052: metadata keys that carry someone's identity.
  *
- * Three shapes, each measured in production `audit_logs.metadata`:
+ * Three shapes, each observed in production `audit_logs.metadata`:
  *
- *   `name`             a contact — 468 rows on 2026-09-01
- *   `propertyAddress`  a client's property — 350 rows on 2026-09-01
+ *   `name`             a contact
+ *   `propertyAddress`  a client's property
  *   `email`            the user's OWN connected mailbox address, written on
- *                      MAILBOX_CONNECT — 498 rows, 112 users, on 2026-09-19
+ *                      MAILBOX_CONNECT
+ *
+ * Rationale and measurements: BACKLOG-3052 (tracker).
  *
  * The first two are a third party's identity and were gated first. `email` was
  * deliberately left out of that pass and raised as an adjacent question,

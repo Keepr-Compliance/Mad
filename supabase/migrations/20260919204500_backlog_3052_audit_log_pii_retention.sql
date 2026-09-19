@@ -10,30 +10,11 @@
 -- `auditService.syncToCloud()` ran unconditionally — no tier check, no flag, no
 -- consent — and `sanitizeMetadata` redacts credential-shaped keys only. Contact
 -- names, property addresses and the user's own connected mailbox address went
--- straight through, written by purely LOCAL desktop actions:
+-- straight through, written by purely LOCAL desktop actions: CONTACT_CREATE,
+-- CONTACT_UPDATE, CONTACT_DELETE, TRANSACTION_CREATE, TRANSACTION_DELETE,
+-- TRANSACTION_SUBMIT, DATA_EXPORT and MAILBOX_CONNECT.
 --
---   CONTACT_CREATE      504 rows, 393 carrying a contact's name
---   TRANSACTION_DELETE  215 rows, 215 carrying a property address
---   CONTACT_UPDATE      113 rows,  19 names
---   DATA_EXPORT         106 rows, 106 addresses   (export to a LOCAL folder)
---   CONTACT_DELETE       56 rows,  56 names
---   TRANSACTION_SUBMIT   17 rows,  17 addresses
---   TRANSACTION_CREATE   12 rows,  12 addresses
---   MAILBOX_CONNECT     545 rows, 498 carrying the user's own mailbox address
---
--- The live privacy policy says contacts are "not transmitted to Keepr's
--- servers" (§3.1) and that audit logs hold "action type, affected resource,
--- user identifier, IP address, and user-agent" (§3.2). Neither was true.
---
--- Counts, re-derived on production on 2026-09-19 rather than inherited from the
--- 2026-09-01 measurement — they are stated here as of a date, and this file
--- never asserts them at run time:
---
---   rows carrying `name` or `propertyAddress`         883
---   rows carrying `email`                             498
---   rows carrying any of the three                   1381   (of 3168 total)
---   …of those, older than 14 days                    1282
---   distinct users affected                           115
+-- Rationale and measurements: BACKLOG-3052 (tracker).
 --
 -- ## The design (founder's decisions, 2026-09-01 and 2026-09-19)
 --
@@ -104,7 +85,7 @@
 -- support could ever read them, while the retention promise ("we hold it for
 -- 14 days") would be quietly false in the user's favour and useless in
 -- support's. `created_at` is how long Keepr has actually held the data, which
--- is the thing being limited. Max observed skew on live data: 3h18m.
+-- is the thing being limited.
 --
 -- ## Why this file was re-stamped
 --
@@ -385,16 +366,14 @@ GRANT EXECUTE ON FUNCTION public.purge_audit_log_pii(integer) TO service_role;
 --     WHERE metadata ?| ARRAY['name','propertyAddress','email']
 --   ) SELECT ...
 --
---   rows matched                                              1381
---   …still carrying any of the three keys AFTER blanking          0
---   MAILBOX_CONNECT rows among them                             498
---   …of those, still carrying `provider` after blanking         498
---   rows whose metadata becomes `{}`                            517
---   rows NOT matched, and therefore never touched              1787   (= 3168 - 1381)
---   rows carrying `updatedFields` and no identity key           712   (untouched)
---   eligible at 13d / 14d / 15d                     1282 / 1282 / 1279
+--   No matched row still carried any of the three keys after blanking. Every
+--   matched MAILBOX_CONNECT row kept its `provider`. Rows that did not match —
+--   including every row carrying only `updatedFields` — were never touched.
+--   The 13d / 14d / 15d boundary behaved as section A describes.
 --
---   every metadata key that survives blanking, across all 1381 rows:
+--   Row counts: BACKLOG-3052 (tracker).
+--
+--   every metadata key that survives blanking, across every matched row:
 --     attachmentsCount, bulkOperation, format, hiddenTextCount, messagesCount,
 --     pending, provider, reason, restored_from, transactionId
 --
@@ -428,9 +407,8 @@ GRANT EXECUTE ON FUNCTION public.purge_audit_log_pii(integer) TO service_role;
 -- Order that shortens the window: ship the desktop build first, then apply.
 --
 -- -- 0. BEFORE applying: record the row count, so check 2 has something to
--- --    compare against. It is 3168 at the time of writing (2026-09-19) and
--- --    will have grown by the time this runs — the number to use is the one
--- --    you measure, not the one printed here.
+-- --    compare against. The number to use is the one you measure here, at
+-- --    apply time.
 -- SELECT count(*) FROM audit_logs;
 --
 -- -- 1. No row carries an identity key any more (see the rollout note above
@@ -441,13 +419,12 @@ GRANT EXECUTE ON FUNCTION public.purge_audit_log_pii(integer) TO service_role;
 -- -- 2. NOTHING WAS DELETED. This is the check that distinguishes this version
 -- --    of the migration from the one it replaced:
 -- SELECT count(*) FROM audit_logs;
--- --    expected: exactly the number from check 0. (3168 at the time of
--- --    writing, 2026-09-19.)
+-- --    expected: exactly the number from check 0.
 --
 -- -- 3. The blanked rows are still audit records — they kept their action,
 -- --    their user and their operational metadata:
 -- SELECT count(*) FROM audit_logs WHERE action = 'MAILBOX_CONNECT' AND metadata ? 'provider';
--- --    expected: 498 at the time of writing (2026-09-19), and never fewer
+-- --    expected: the same count you measure before applying, and never fewer
 -- --    afterwards
 -- SELECT count(*) FROM audit_logs WHERE user_id IS NOT NULL;
 -- --    expected: unchanged by this migration
