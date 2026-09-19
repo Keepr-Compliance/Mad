@@ -527,3 +527,85 @@ export const FIXTURE_ROWS: SyncOutcomeRow[] = [
 
 /** The one run the report exists to make obvious. */
 export const INCIDENT_ROW_ID = FIXTURE_ROWS[2].id;
+
+/**
+ * Two runs still in flight.
+ *
+ * NOT TRANSCRIBED — `sync_outcomes` held no `running` row when this was written
+ * (`select outcome, count(*) ... group by 1` on 2026-09-19 returned only
+ * complete 4 / cancelled 7 / error 13), because BACKLOG-3440's writer had not
+ * yet shipped to a build anyone runs. The shape below is therefore DERIVED from
+ * the producer, not invented:
+ *
+ *   `electron/services/syncTimeline.ts` `beginSync` writes `buildRow("running",
+ *   0, {})` at the start, and `flushHeartbeat` writes `buildRow("running",
+ *   this.now() - this.syncStartedAt, {})` every two minutes after it.
+ *   `buildRow` puts only CLOSED phases in `phases`, and the counts argument is
+ *   `{}` on both paths, so `messages/conversations/contacts_extracted` are
+ *   absent. `syncOutcomeSupabase.buildSyncOutcomeRow` drops undefined keys, so
+ *   absent reads back as null.
+ *
+ * Consequences the report has to survive, both present below: `elapsed_ms` is
+ * time SO FAR rather than a duration, and nothing has been extracted yet
+ * whatever the run's eventual fate.
+ */
+export const IN_PROGRESS_ROWS: SyncOutcomeRow[] = [
+  {
+    // A HEALTHY FIRST SYNC, 47 minutes in and still transferring. Past the
+    // 30-minute threshold with nothing stored, which is the normal shape of a
+    // first sync of a full phone — and precisely what would be flagged as
+    // "burned 30 minutes and extracted nothing" if live runs were counted.
+    id: 'b0000001-0000-4000-8000-000000000001', // pii-allow-uuid: synthetic fixture id
+    user_id: U2,
+    created_at: '2026-09-19T17:05:11.000000Z',
+    source: 'iphone-backup',
+    outcome: 'running',
+    elapsed_ms: 2_820_000,
+    phases: [phase('backup', 24118), phase('backup:waiting-for-device', 61204)],
+    prior_backup: 'none',
+    incremental: false,
+    was_encrypted: true,
+    device_model: 'iPhone17,1',
+    device_ios_version: '26.6.2',
+    device_used_bytes: 53827846144,
+    backup_bytes: null,
+    backup_bytes_unmeasured: null,
+    messages_extracted: null,
+    conversations_extracted: null,
+    contacts_extracted: null,
+    app_version: '2.38.0',
+    platform: 'darwin',
+    is_packaged: true,
+  },
+  {
+    // Two minutes in: one heartbeat after the start write, first phase closed.
+    id: 'b0000002-0000-4000-8000-000000000002', // pii-allow-uuid: synthetic fixture id
+    user_id: U4,
+    created_at: '2026-09-19T17:29:02.000000Z',
+    source: 'iphone-backup',
+    outcome: 'running',
+    elapsed_ms: 121_400,
+    phases: [phase('backup', 22940)],
+    prior_backup: 'none',
+    incremental: null,
+    was_encrypted: null,
+    device_model: 'iPhone18,2',
+    device_ios_version: '26.6.1',
+    device_used_bytes: null,
+    backup_bytes: null,
+    backup_bytes_unmeasured: null,
+    messages_extracted: null,
+    conversations_extracted: null,
+    contacts_extracted: null,
+    app_version: '2.38.0',
+    platform: 'win32',
+    is_packaged: true,
+  },
+];
+
+/** The 19 finished runs with two live ones interleaved, newest first. */
+export const ROWS_WITH_IN_PROGRESS: SyncOutcomeRow[] = [
+  IN_PROGRESS_ROWS[1],
+  IN_PROGRESS_ROWS[0],
+  ...FIXTURE_ROWS,
+];

@@ -11,6 +11,7 @@
  */
 
 import { SupabaseClient } from '@supabase/supabase-js';
+import { IN_PROGRESS_OUTCOME } from './iphone-sync';
 import type { ReportUser, SyncOutcomeRow } from './iphone-sync';
 
 /** Columns this report reads. Adding a column is additive — nothing breaks. */
@@ -40,7 +41,7 @@ const RUN_COLUMNS = [
 
 /**
  * The table is tiny today (19 rows). The cap exists so this page cannot become
- * a full-table scan once BACKLOG-3440 starts writing a row per run start.
+ * a full-table scan now that BACKLOG-3440 writes a row per run start.
  */
 export const RUN_LIMIT = 200;
 
@@ -55,10 +56,18 @@ export async function getIphoneSyncRuns(
   supabase: SupabaseClient,
   limit = RUN_LIMIT
 ): Promise<IphoneSyncData> {
+  // The `running` exclusion is here as well as in `buildIphoneSyncReport`, and
+  // the two filters do different jobs. This one keeps the RUN_LIMIT window
+  // meaningful: rows are ordered newest-first, and runs in flight are the
+  // newest rows there are, so without it a burst of live syncs would fill the
+  // window and push finished runs off the page entirely. The one in the
+  // derivation makes the model correct for whatever rows it is handed, and is
+  // the layer the unit tests exercise.
   const { data: rows, error } = await supabase
     .from('sync_outcomes')
     .select(RUN_COLUMNS)
     .eq('source', 'iphone-backup')
+    .neq('outcome', IN_PROGRESS_OUTCOME)
     .order('created_at', { ascending: false })
     .limit(limit);
 

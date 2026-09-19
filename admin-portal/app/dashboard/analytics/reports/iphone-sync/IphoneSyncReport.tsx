@@ -298,9 +298,12 @@ function LimitsCard({ report }: { report: IphoneSyncReportModel }) {
       </h2>
       <ul className="mt-3 space-y-2 text-sm text-gray-700">
         <li>
-          <strong>Runs that die without writing a row do not appear here.</strong> A sync that is
-          killed, crashes, or loses power never reports, so this shows failures that reported — not
-          all failures. BACKLOG-3440 adds a row at run start, which is what will close that gap.
+          <strong>Only runs that reached an end are shown.</strong> Since BACKLOG-3440 a sync writes
+          a row when it starts and keeps it current while it runs, so a sync that is killed, crashes
+          or loses power does leave evidence — but that row stays{' '}
+          <code className="rounded bg-gray-100 px-1 py-0.5 text-xs">running</code> for good, and
+          every number on this page reads a row as a finished run. Runs in flight are excluded here
+          rather than counted as though they had resolved; showing them is separate work.
         </li>
         <li>
           <strong>{totalRuns} runs in total is too few for averages or percentiles.</strong> Counts
@@ -323,11 +326,13 @@ function LimitsCard({ report }: { report: IphoneSyncReportModel }) {
           )}
         </li>
         <li>
-          <strong>A run is flagged when it lasted {STALL_THRESHOLD_MINUTES} minutes or more and
-          extracted no messages.</strong> The rule ignores the reported outcome on purpose: a run
+          <strong>A finished run is flagged when it lasted {STALL_THRESHOLD_MINUTES} minutes or more
+          and extracted no messages.</strong> The rule ignores which end it reached on purpose: a run
           that says <code className="rounded bg-gray-100 px-1 py-0.5 text-xs">complete</code> and
           produces nothing is just as broken as one that says{' '}
-          <code className="rounded bg-gray-100 px-1 py-0.5 text-xs">cancelled</code>.
+          <code className="rounded bg-gray-100 px-1 py-0.5 text-xs">cancelled</code>. A sync still
+          working is not judged by it — half an hour in with nothing stored yet is the normal shape
+          of a first sync.
         </li>
       </ul>
     </div>
@@ -340,7 +345,7 @@ export function IphoneSyncReport({ report }: { report: IphoneSyncReportModel }) 
       <StalledBanner report={report} />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <Stat label="Runs recorded" value={String(report.totalRuns)} />
+        <Stat label="Finished runs" value={String(report.totalRuns)} />
         <Stat label="Completed" value={String(report.counts.complete)} />
         <Stat label="Cancelled" value={String(report.counts.cancelled)} />
         <Stat label="Errored" value={String(report.counts.error)} />
@@ -350,7 +355,7 @@ export function IphoneSyncReport({ report }: { report: IphoneSyncReportModel }) 
 
       <section>
         <h2 className="mb-3 text-base font-semibold text-gray-900">
-          Every recorded run, newest first
+          Every finished run, newest first
         </h2>
         {report.runs.length === 0 ? (
           <div className="rounded-lg border border-gray-200 bg-white p-10 text-center shadow-sm">

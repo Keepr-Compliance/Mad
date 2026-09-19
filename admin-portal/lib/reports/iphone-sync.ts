@@ -13,11 +13,35 @@
 // ─── Constants ───────────────────────────────────────────────────
 
 /**
+ * The `outcome` value a run carries while it is still going.
+ *
+ * BACKLOG-3440 writes a row when a sync STARTS and refreshes it on a heartbeat
+ * every two minutes, so `sync_outcomes` now holds runs that have not finished.
+ * On such a row:
+ *
+ *   - `elapsed_ms` is time spent SO FAR, not a duration
+ *   - the extraction counts are absent, because nothing has been stored yet
+ *   - `backup_bytes` and any min/GB derived from it describe a transfer that is
+ *     still happening
+ *
+ * Every aggregate below assumes a row is a finished run, so
+ * {@link buildIphoneSyncReport} removes these rows before deriving anything.
+ * Left in, they would land hardest on the flag this page exists for: a healthy
+ * first sync past the 30-minute mark has burned the time and stored nothing
+ * yet, which is exactly the shape of {@link isStalled}.
+ */
+export const IN_PROGRESS_OUTCOME = 'running';
+
+/**
  * A run is "stalled" when it burned this long and extracted nothing.
  *
- * Deliberately outcome-agnostic: a run that reports `complete` and produces no
- * messages is just as broken as one that reports `cancelled`, and this catches
- * that the day it happens without a code change.
+ * Deliberately outcome-agnostic ACROSS TERMINAL OUTCOMES: a run that reports
+ * `complete` and produces no messages is just as broken as one that reports
+ * `cancelled`, and this catches that the day it happens without a code change.
+ *
+ * It is not a judgement about runs still in flight, and it must never be handed
+ * one — {@link IN_PROGRESS_OUTCOME} says why, and
+ * {@link buildIphoneSyncReport} is where they are removed.
  */
 export const STALL_THRESHOLD_MINUTES = 30;
 
@@ -136,11 +160,12 @@ export interface Baseline {
 }
 
 export interface IphoneSyncReportModel {
+  /** Finished runs only. A run still in flight is not counted anywhere here. */
   totalRuns: number;
   counts: { complete: number; cancelled: number; error: number; other: number };
   /** Runs meeting the stall rule, longest first. */
   stalled: SyncRun[];
-  /** Every run, newest first. */
+  /** Every finished run, newest first. */
   runs: SyncRun[];
   baseline: Baseline;
 }
@@ -385,19 +410,36 @@ export function longestPhase(run: SyncRun): PhaseRow | null {
   return run.phases.reduce((worst, p) => (p.elapsedMs > worst.elapsedMs ? p : worst));
 }
 
+/** True for a run that has not finished — see {@link IN_PROGRESS_OUTCOME}. */
+export function isInProgress(row: Pick<SyncOutcomeRow, 'outcome'>): boolean {
+  return row.outcome === IN_PROGRESS_OUTCOME;
+}
+
 /**
  * Build the whole view model.
  *
  * `rows` is expected newest-first (that is how the query orders them) but the
  * stalled band re-sorts by duration, so the caller's order only decides the
  * order of the full run list.
+ *
+ * RUNS STILL IN FLIGHT ARE DROPPED FIRST, and nothing below sees them. Every
+ * aggregate here reads a row as a finished run: the outcome counts, the
+ * duration on each card, the min/GB baseline and — the one that matters — the
+ * "burned 30 minutes and extracted nothing" flag, which a healthy first sync
+ * past half an hour matches exactly while it is still working. The rule is
+ * stated once, here, rather than repeated inside each aggregate, so a new
+ * aggregate added later cannot forget it.
+ *
+ * The test is `excludes runs still in flight from every aggregate` in
+ * `__tests__/iphone-sync.test.ts`; deleting this filter reds it.
  */
 export function buildIphoneSyncReport(
   rows: SyncOutcomeRow[],
   users: ReportUser[]
 ): IphoneSyncReportModel {
   const userMap = new Map(users.map((u) => [u.id, u]));
-  const runs = rows.map((row) => buildRun(row, userMap));
+  const finished = rows.filter((row) => !isInProgress(row));
+  const runs = finished.map((row) => buildRun(row, userMap));
 
   const counts = { complete: 0, cancelled: 0, error: 0, other: 0 };
   for (const run of runs) {

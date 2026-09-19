@@ -24,7 +24,13 @@ import {
   STALL_THRESHOLD_MINUTES,
   type SyncOutcomeRow,
 } from '../iphone-sync';
-import { FIXTURE_ROWS, FIXTURE_USERS, INCIDENT_ROW_ID } from './iphone-sync.fixture';
+import {
+  FIXTURE_ROWS,
+  FIXTURE_USERS,
+  INCIDENT_ROW_ID,
+  IN_PROGRESS_ROWS,
+  ROWS_WITH_IN_PROGRESS,
+} from './iphone-sync.fixture';
 
 const report = buildIphoneSyncReport(FIXTURE_ROWS, FIXTURE_USERS);
 
@@ -250,5 +256,59 @@ describe('degenerate inputs', () => {
     );
     expect(odd.counts).toEqual({ complete: 0, cancelled: 0, error: 0, other: 1 });
     expect(odd.runs).toHaveLength(1);
+  });
+});
+
+/**
+ * BACKLOG-3440 added a fourth `outcome`, `running`, written when a sync starts
+ * and refreshed while it is alive. Every aggregate in this report reads a row
+ * as a finished run, so those rows have to be gone before any of it happens.
+ *
+ * The case that matters is the first one: a healthy first sync 47 minutes in
+ * has burned the time and stored nothing, which is character for character the
+ * shape of the stall rule. Counted, the headline flag would fire on a run that
+ * is fine — every day, on the page whose entire job is to say when something is
+ * wrong.
+ */
+describe('runs still in flight are not runs', () => {
+  const withLive = buildIphoneSyncReport(ROWS_WITH_IN_PROGRESS, FIXTURE_USERS);
+
+  it('does not flag a live sync that is past the threshold with nothing extracted', () => {
+    const live = IN_PROGRESS_ROWS[0];
+    // The row really does match the stall rule on its own terms — this is not
+    // a test that passes because the fixture is harmless.
+    expect(live.elapsed_ms).toBeGreaterThan(STALL_THRESHOLD_MINUTES * 60_000);
+    expect(isStalled(live)).toBe(true);
+
+    expect(withLive.stalled.map((r) => r.id)).not.toContain(live.id);
+  });
+
+  it('flags the same three finished runs it would without any live rows', () => {
+    expect(withLive.stalled.map((r) => r.id)).toEqual(report.stalled.map((r) => r.id));
+  });
+
+  it('excludes live runs from the run list, the total and the outcome counts', () => {
+    const liveIds = IN_PROGRESS_ROWS.map((r) => r.id);
+    const listed = withLive.runs.map((r) => r.id);
+    for (const id of liveIds) expect(listed).not.toContain(id);
+
+    expect(withLive.totalRuns).toBe(19);
+    expect(withLive.runs).toHaveLength(19);
+    expect(withLive.counts).toEqual({ complete: 3, cancelled: 5, error: 11, other: 0 });
+    // Not swept into the catch-all bucket either — dropped, not recategorised.
+    expect(withLive.counts.other).toBe(0);
+  });
+
+  it('leaves the min/GB baseline exactly where it was', () => {
+    expect(withLive.baseline).toEqual(report.baseline);
+  });
+
+  it('keeps counting an unknown outcome, because only `running` is excluded', () => {
+    const odd = buildIphoneSyncReport(
+      [{ ...FIXTURE_ROWS[0], outcome: 'interrupted' }, ...IN_PROGRESS_ROWS],
+      FIXTURE_USERS
+    );
+    expect(odd.totalRuns).toBe(1);
+    expect(odd.counts.other).toBe(1);
   });
 });

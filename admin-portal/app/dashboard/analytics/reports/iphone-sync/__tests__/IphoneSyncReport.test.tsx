@@ -16,6 +16,7 @@ import { buildIphoneSyncReport } from '@/lib/reports/iphone-sync';
 import {
   FIXTURE_ROWS,
   FIXTURE_USERS,
+  ROWS_WITH_IN_PROGRESS,
 } from '@/lib/reports/__tests__/iphone-sync.fixture';
 import { IphoneSyncReport } from '../IphoneSyncReport';
 
@@ -25,14 +26,31 @@ function render(rows = FIXTURE_ROWS, users = FIXTURE_USERS): string {
   );
 }
 
+/**
+ * The entities `renderToStaticMarkup` produces, decoded back to the character.
+ *
+ * ONE pass over the string, not a chain of replacements. A chain decodes
+ * `&amp;` to `&` and then keeps going, so `&amp;quot;` — the escaped form of
+ * the literal text `&quot;` — comes out as `"`, a character that was never in
+ * the markup. CodeQL's `js/double-escaping` flagged exactly that here. With a
+ * single regex and a lookup, each entity is consumed once and whatever it
+ * leaves behind is not re-scanned.
+ */
+const HTML_ENTITIES: Record<string, string> = {
+  '&amp;': '&',
+  '&lt;': '<',
+  '&gt;': '>',
+  '&quot;': '"',
+  '&#x27;': "'",
+  '&#39;': "'",
+  '&#x2F;': '/',
+};
+
 /** Strip tags so assertions read against what a person actually sees. */
 function text(html: string): string {
   return html
     .replace(/<[^>]*>/g, ' ')
-    .replace(/&#x27;|&#39;/g, "'")
-    .replace(/&amp;/g, '&')
-    .replace(/&quot;/g, '"')
-    .replace(/&#x2F;/g, '/')
+    .replace(/&(?:amp|lt|gt|quot|#x27|#39|#x2F);/g, (entity) => HTML_ENTITIES[entity] ?? entity)
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -58,7 +76,7 @@ describe('the 2026-09-16 failure is visible without interaction', () => {
 
   it('puts all of that ABOVE the run list, not buried in it', () => {
     const bannerIndex = html.indexOf('burned');
-    const listIndex = html.indexOf('Every recorded run, newest first');
+    const listIndex = html.indexOf('Every finished run, newest first');
     expect(bannerIndex).toBeGreaterThanOrEqual(0);
     expect(listIndex).toBeGreaterThanOrEqual(0);
     expect(bannerIndex).toBeLessThan(listIndex);
@@ -118,8 +136,9 @@ describe('the phase breakdown is rendered for every run that has one', () => {
 describe('the limits are on the page, not in a doc somewhere', () => {
   const body = text(render());
 
-  it('says runs that never report are missing', () => {
-    expect(body).toContain('Runs that die without writing a row do not appear here');
+  it('says which runs are missing from the page and why', () => {
+    expect(body).toContain('Only runs that reached an end are shown');
+    expect(body).toContain('Runs in flight are excluded here rather than counted');
   });
 
   it('says 19 runs is too few for averages', () => {
@@ -158,5 +177,28 @@ describe('degenerate renders', () => {
     // and the sentence must not invent one.
     expect(body).not.toContain('median of the');
     expect(body).toContain('No completed run has both numbers yet');
+  });
+});
+
+/**
+ * The rendered counterpart of `runs still in flight are not runs` in
+ * `lib/reports/__tests__/iphone-sync.test.ts`. The derivation test proves the
+ * model drops them; this proves the page a person reads says the same numbers
+ * it said before a live sync existed — including the banner sentence, which is
+ * the one line this report is for.
+ */
+describe('a sync still running does not change what the page says', () => {
+  const withLive = text(render(ROWS_WITH_IN_PROGRESS));
+
+  it('keeps the flagged-run count at the three finished runs', () => {
+    expect(withLive).toContain('3 runs burned 30 minutes or more and extracted nothing');
+  });
+
+  it('keeps the totals, and never renders a live run as a row', () => {
+    expect(withLive).toContain('Finished runs 19');
+    // Both live runs started on 2026-09-19; no finished run in the fixture did,
+    // so their timestamps appearing anywhere would mean a card was rendered.
+    expect(withLive).not.toContain('2026-09-19');
+    expect(withLive).toBe(text(render()));
   });
 });

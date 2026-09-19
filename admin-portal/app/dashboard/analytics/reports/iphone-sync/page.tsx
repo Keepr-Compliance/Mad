@@ -60,8 +60,8 @@ export default async function IphoneSyncReportPage() {
           <div>
             <h1 className="text-2xl font-bold text-gray-900">iPhone Sync Performance</h1>
             <p className="text-sm text-gray-500">
-              Every iPhone sync that reported an outcome, newest first, with the per-phase timings
-              that show where the time went.
+              Every iPhone sync that finished, newest first, with the per-phase timings that show
+              where the time went. A sync still running is not counted here.
             </p>
           </div>
         </div>
