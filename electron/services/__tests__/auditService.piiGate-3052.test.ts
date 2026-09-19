@@ -1,7 +1,12 @@
 /** @jest-environment node */
 /**
- * BACKLOG-3052 — contact names and property addresses leave this machine only
- * while a support-access window is open.
+ * BACKLOG-3052 — contact names, property addresses and the user's own connected
+ * mailbox address leave this machine only while a support-access window is open.
+ *
+ * The mailbox address was added on 2026-09-19, by the founder's answer to "also
+ * strip the user's own mailbox address?": **"yes (we just need to know the
+ * user)"**. 498 rows carried it. `userId` is what identifies the row instead,
+ * and is asserted below so that "we just need to know the user" stays true.
  *
  * ## What was wrong
  *
@@ -70,6 +75,13 @@ const mockSupabaseService = {
 const CONTACT_NAME = "Wilhelmina Quakenbush";
 /** A property address, as `transactionExportHandlers` writes it on DATA_EXPORT. */
 const PROPERTY_ADDRESS = "742 Evergreen Terrace, Springfield";
+/**
+ * The user's OWN connected mailbox address, in the metadata shape
+ * `googleAuthHandlers` writes on MAILBOX_CONNECT: `{ provider, email }`.
+ * `microsoftAuthHandlers` writes the same two keys; `sharedAuthHandlers` adds
+ * `pending: true`. Those three are the only producers of this key.
+ */
+const MAILBOX_ADDRESS = "wilhelmina.quakenbush@example.com";
 
 const T0 = Date.parse("2026-09-01T09:00:00.000Z");
 
@@ -157,6 +169,17 @@ describe("auditService — third-party PII is gated on support access (BACKLOG-3
     await auditService.syncToCloud();
   };
 
+  const logMailboxConnect = async (): Promise<void> => {
+    await auditService.log({
+      userId: "user-1",
+      action: "MAILBOX_CONNECT" as AuditAction,
+      resourceType: "MAILBOX" as ResourceType,
+      metadata: { provider: "google", email: MAILBOX_ADDRESS },
+      success: true,
+    });
+    await auditService.syncToCloud();
+  };
+
   /**
    * The single uploaded batch. Fails loudly rather than returning undefined —
    * "no upload happened" must not read as "the name was absent".
@@ -234,6 +257,41 @@ describe("auditService — third-party PII is gated on support access (BACKLOG-3
       });
     });
 
+    // Added 2026-09-19 with the mailbox address. Two assertions, not one: the
+    // row must still say WHO connected a mailbox (`userId`) and WHICH provider,
+    // because that is the whole of what the founder's "we just need to know the
+    // user" keeps. An assertion that only checked the address was gone would
+    // pass just as happily if the entire record stopped being uploaded.
+    it("uploads the MAILBOX_CONNECT row but not the user's own mailbox address", async () => {
+      await logMailboxConnect();
+
+      const [entry] = uploadedEntries();
+
+      expect(entry.action).toBe("MAILBOX_CONNECT");
+      expect(entry.resourceType).toBe("MAILBOX");
+      expect(entry.userId).toBe("user-1");
+      expect(entry.metadata).toEqual({ provider: "google" });
+      expect(JSON.stringify(entry)).not.toContain(MAILBOX_ADDRESS);
+    });
+
+    // The control for the most likely WRONG fix: adding "email" to
+    // `sanitizeMetadata`'s credential list, which runs on `log()` and would
+    // therefore strip the address from the LOCAL row too. That passes every
+    // upload-side assertion above and quietly destroys the user's own record of
+    // which mailbox they connected — on their own machine, where no support
+    // grant is involved and nothing left the building.
+    it("keeps the mailbox address in the local audit record", async () => {
+      await logMailboxConnect();
+
+      const localEntry = mockDatabaseService.insertAuditLog.mock
+        .calls[0][0] as AuditLogEntry;
+
+      expect(localEntry.metadata).toEqual({
+        provider: "google",
+        email: MAILBOX_ADDRESS,
+      });
+    });
+
     it("still marks the rows synced, so they are not uploaded again", async () => {
       await logContactCreate();
 
@@ -284,6 +342,20 @@ describe("auditService — third-party PII is gated on support access (BACKLOG-3
       expect(entry.metadata).toEqual({
         propertyAddress: PROPERTY_ADDRESS,
         format: "pdf",
+      });
+    });
+
+    it("uploads the user's own mailbox address", async () => {
+      wireGate(await grant7d());
+
+      await logMailboxConnect();
+
+      const [entry] = uploadedEntries();
+
+      expect(entry.action).toBe("MAILBOX_CONNECT");
+      expect(entry.metadata).toEqual({
+        provider: "google",
+        email: MAILBOX_ADDRESS,
       });
     });
   });

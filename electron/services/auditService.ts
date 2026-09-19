@@ -99,13 +99,34 @@ export interface AuditLogDbRow {
 }
 
 /**
- * BACKLOG-3052: metadata keys that carry a third party's identity.
+ * BACKLOG-3052: metadata keys that carry someone's identity.
  *
- * These are the two shapes measured in production `audit_logs.metadata` on
- * 2026-09-01: `name` (a contact — 468 rows) and `propertyAddress` (a client's
- * property — 350 rows). Both are written by purely LOCAL actions —
- * CONTACT_CREATE, TRANSACTION_DELETE, DATA_EXPORT — none of which involve a
+ * Three shapes, each measured in production `audit_logs.metadata`:
+ *
+ *   `name`             a contact — 468 rows on 2026-09-01
+ *   `propertyAddress`  a client's property — 350 rows on 2026-09-01
+ *   `email`            the user's OWN connected mailbox address, written on
+ *                      MAILBOX_CONNECT — 498 rows, 112 users, on 2026-09-19
+ *
+ * The first two are a third party's identity and were gated first. `email` was
+ * deliberately left out of that pass and raised as an adjacent question,
+ * because it is the user's own address rather than someone else's. The founder
+ * answered on 2026-09-19: **"yes (we just need to know the user)"**. So it is
+ * gated the same way, and `userId` is what says who acted — that column is not
+ * in this list and is never touched by the strip.
+ *
+ * All three are written by purely LOCAL actions — CONTACT_CREATE,
+ * TRANSACTION_DELETE, DATA_EXPORT, MAILBOX_CONNECT — none of which involve a
  * broker, a submission or any other reason for the value to leave the machine.
+ *
+ * The producers of `email` are these three, all MAILBOX_CONNECT. Enumerated by
+ * walking every `auditService.log({ … })` call in `electron/` and `src/` (62
+ * sites) rather than by grepping for the word, which appears in ~40 unrelated
+ * places in the same handlers:
+ *
+ *   handlers/googleAuthHandlers.ts     { provider: "google", email }
+ *   handlers/microsoftAuthHandlers.ts  { provider: "microsoft", email }
+ *   handlers/sharedAuthHandlers.ts     { provider, email, pending: true }
  *
  * Top-level keys only, which is what production carries. A nested walk would
  * cost more than it buys today and would silently change what a future caller
@@ -113,14 +134,17 @@ export interface AuditLogDbRow {
  * allowlist in the follow-up is.
  *
  * Note what is deliberately NOT here:
- *  - `updatedFields` is an array of COLUMN NAMES ("name", "property_address").
- *    The strip is key-based, so `updatedFields: ["name"]` survives intact. That
- *    is the point: the audit log must still say a name was changed.
- *  - `email` on MAILBOX_CONNECT (458 rows) is the user's OWN mailbox address,
- *    not a third party's. Out of this item's stated scope ("names and
- *    addresses"); raised separately rather than expanded into silently.
+ *  - `updatedFields` is an array of COLUMN NAMES ("name", "property_address",
+ *    "email"). The strip is key-based, so `updatedFields: ["name"]` survives
+ *    intact. That is the point: the audit log must still say a name was changed.
+ *  - `userId`. The uploaded record must still say WHO acted; that is the whole
+ *    of what the founder's answer above keeps.
  */
-export const AUDIT_PII_METADATA_KEYS = ["name", "propertyAddress"] as const;
+export const AUDIT_PII_METADATA_KEYS = [
+  "name",
+  "propertyAddress",
+  "email",
+] as const;
 
 /**
  * BACKLOG-3052: the support-access grant, read at cloud-sync time.
