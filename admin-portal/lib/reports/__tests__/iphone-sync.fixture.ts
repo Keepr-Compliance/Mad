@@ -5,6 +5,10 @@
  * all 19 rows that existed in the table, including the 181.7-minute run that
  * motivated the report and the 79.1-minute success it is compared against.
  *
+ * That sentence stays true because this set is FROZEN at those 19 rows. The
+ * five rows written afterwards live in `FIXTURE_ROWS_24` at the foot of this
+ * file, so the derivation suite's expected values do not move underneath it.
+ *
  * IDENTIFIERS ARE NOT REAL. Every `id` and `user_id` is a synthetic UUID and
  * every display name and email is invented. This repository is public and a
  * real identifier in a fixture is exactly what BACKLOG-3087 was. The timings,
@@ -609,3 +613,484 @@ export const ROWS_WITH_IN_PROGRESS: SyncOutcomeRow[] = [
   IN_PROGRESS_ROWS[0],
   ...FIXTURE_ROWS,
 ];
+
+// ─── The 24-row corpus (BACKLOG-3450) ────────────────────────────
+
+/**
+ * A NINTH synthetic user, for the one row above whose real author does not
+ * appear in the 19-row set.
+ */
+const U8 = '88888888-8888-4888-8888-888888888888'; // pii-allow-uuid: synthetic fixture id, not a real user
+
+export const FIXTURE_USERS_24: ReportUser[] = [
+  ...FIXTURE_USERS,
+  { id: U8, email: 'sync-user-h@example.test', display_name: 'Sync user H' },
+];
+
+/**
+ * The FIVE rows written after `FIXTURE_ROWS` was transcribed.
+ *
+ * TRANSCRIBED from `public.sync_outcomes` on 2026-09-19, by:
+ *
+ *   select id, user_id, created_at, source, outcome, elapsed_ms, phases,
+ *          prior_backup, incremental, was_encrypted, device_model,
+ *          device_ios_version, device_used_bytes, backup_bytes,
+ *          backup_bytes_unmeasured, messages_extracted,
+ *          conversations_extracted, contacts_extracted, app_version, platform,
+ *          is_packaged, started_at, bytes_transferred, bytes_last_increased_at,
+ *          last_phase, reason_code, ended_by
+ *   from sync_outcomes where source='iphone-backup' order by created_at desc;
+ *
+ * IDENTIFIERS ARE NOT REAL, on the same rule as `FIXTURE_ROWS`: ids and users
+ * are synthetic, everything the report renders is verbatim.
+ *
+ * `bytes_transferred`, `bytes_last_increased_at`, `last_phase`, `reason_code`
+ * and `ended_by` are NULL on all 24 rows — their writer ships in 2.38.1 and no
+ * shipped build emits them yet. Anything asserting on them uses
+ * {@link DERIVED_ROWS}, not these.
+ */
+const NEWER_ROWS: SyncOutcomeRow[] = [
+  {
+    id: 'a0000020-0000-4000-8000-000000000020', // pii-allow-uuid: synthetic fixture id
+    user_id: U3,
+    created_at: '2026-09-18T21:59:02.241196Z',
+    source: 'iphone-backup',
+    outcome: 'error',
+    elapsed_ms: 380143,
+    phases: [phase('backup', 5385), phase('backup:waiting-for-device', 302022)],
+    prior_backup: 'none',
+    incremental: true,
+    was_encrypted: false,
+    device_model: 'iPhone17,1',
+    device_ios_version: '26.6.2',
+    device_used_bytes: 58430787584,
+    backup_bytes: null,
+    backup_bytes_unmeasured: true,
+    messages_extracted: null,
+    conversations_extracted: null,
+    contacts_extracted: null,
+    app_version: '2.38.0',
+    platform: 'win32',
+    is_packaged: true,
+    started_at: null,
+  },
+  {
+    // 33.3 minutes, nothing extracted — stalled.
+    id: 'a0000021-0000-4000-8000-000000000021', // pii-allow-uuid: synthetic fixture id
+    user_id: U3,
+    created_at: '2026-09-18T20:45:29.188444Z',
+    source: 'iphone-backup',
+    outcome: 'cancelled',
+    elapsed_ms: 1998600,
+    phases: [
+      phase('backup', 5363),
+      phase('backup:waiting-for-device', 362432),
+      phase('backup:transferring', 1587536),
+    ],
+    prior_backup: 'none',
+    incremental: null,
+    was_encrypted: null,
+    device_model: 'iPhone17,1',
+    device_ios_version: '26.6.2',
+    device_used_bytes: 58560253952,
+    backup_bytes: null,
+    backup_bytes_unmeasured: null,
+    messages_extracted: null,
+    conversations_extracted: null,
+    contacts_extracted: null,
+    app_version: '2.38.0',
+    platform: 'win32',
+    is_packaged: true,
+    started_at: null,
+  },
+  {
+    // The fourth row that can produce a Rate: 4 743 199 621 B over a
+    // 198 742 ms transferring phase → 22.76 MB/s (19.68 over whole elapsed).
+    id: 'a0000022-0000-4000-8000-000000000022', // pii-allow-uuid: synthetic fixture id
+    user_id: U8,
+    created_at: '2026-09-18T19:04:23.449284Z',
+    source: 'iphone-backup',
+    outcome: 'complete',
+    elapsed_ms: 229836,
+    phases: [
+      phase('backup', 7286),
+      phase('backup:waiting-for-device', 17147),
+      phase('backup:transferring', 198742),
+      phase('parsing-contacts', 18),
+      phase('parsing-messages', 340),
+      phase('resolving', 3),
+      phase('cleanup', 8),
+      phase('storing:messages', 589),
+      phase('storing:contacts', 2098),
+    ],
+    prior_backup: 'none',
+    incremental: false,
+    was_encrypted: false,
+    device_model: 'iPhone17,2',
+    device_ios_version: '26.6.2',
+    device_used_bytes: 20660166656,
+    backup_bytes: 4743199621,
+    backup_bytes_unmeasured: null,
+    messages_extracted: 2592,
+    conversations_extracted: 88,
+    contacts_extracted: 275,
+    app_version: '2.38.0',
+    platform: 'win32',
+    is_packaged: true,
+    started_at: null,
+  },
+  {
+    id: 'a0000023-0000-4000-8000-000000000023', // pii-allow-uuid: synthetic fixture id
+    user_id: U3,
+    created_at: '2026-09-18T18:05:52.498833Z',
+    source: 'iphone-backup',
+    outcome: 'error',
+    elapsed_ms: 70608,
+    phases: [],
+    prior_backup: 'none',
+    incremental: null,
+    was_encrypted: null,
+    device_model: 'iPhone17,1',
+    device_ios_version: '26.6.2',
+    device_used_bytes: null,
+    backup_bytes: null,
+    backup_bytes_unmeasured: null,
+    messages_extracted: null,
+    conversations_extracted: null,
+    contacts_extracted: null,
+    app_version: '2.38.0',
+    platform: 'win32',
+    is_packaged: true,
+    started_at: '2026-09-18T18:04:41.890833Z',
+  },
+  {
+    // 50.2 minutes, nothing extracted — stalled.
+    id: 'a0000024-0000-4000-8000-000000000024', // pii-allow-uuid: synthetic fixture id
+    user_id: U3,
+    created_at: '2026-09-18T18:04:31.104227Z',
+    source: 'iphone-backup',
+    outcome: 'cancelled',
+    elapsed_ms: 3013672,
+    phases: [
+      phase('backup', 5380),
+      phase('backup:waiting-for-device', 334406),
+      phase('backup:transferring', 2670135),
+    ],
+    prior_backup: 'none',
+    incremental: null,
+    was_encrypted: null,
+    device_model: 'iPhone17,1',
+    device_ios_version: '26.6.2',
+    device_used_bytes: 58503254016,
+    backup_bytes: null,
+    backup_bytes_unmeasured: null,
+    messages_extracted: null,
+    conversations_extracted: null,
+    contacts_extracted: null,
+    app_version: '2.38.0',
+    platform: 'win32',
+    is_packaged: true,
+    started_at: '2026-09-18T17:14:17.432227Z',
+  },
+];
+
+/**
+ * All 24 finished runs on record, newest first.
+ *
+ * Used by the period / chart / table / Rate suites added in BACKLOG-3450.
+ * `FIXTURE_ROWS` deliberately stays at its transcribed 19 so the derivation
+ * suite's expected values — and the sentence in this file's header — stay true.
+ */
+export const FIXTURE_ROWS_24: SyncOutcomeRow[] = [...NEWER_ROWS, ...FIXTURE_ROWS];
+
+// ─── Derived rows (BACKLOG-3450) ─────────────────────────────────
+
+/**
+ * NOT TRANSCRIBED — DERIVED. Each row here stands for a state the code can
+ * produce but the corpus does not contain, and each says which query proved it
+ * absent. Derived from the column meanings in
+ * `electron/services/syncOutcomeSupabase.ts:125-144`.
+ *
+ * Kept in a separate export, never mixed into the transcribed sets, so no
+ * assertion can accidentally treat an invented number as a measured one.
+ */
+export const DERIVED_ROWS: Record<string, SyncOutcomeRow> = {
+  /**
+   * A backup was written but the run recorded NO transferring phase, so the
+   * rate falls back to whole-run elapsed.
+   *
+   *   select count(*) from sync_outcomes
+   *   where source='iphone-backup' and backup_bytes > 0
+   *     and not phases @> '[{"phase":"backup:transferring"}]';   -- 0
+   *
+   * 1 048 576 B over 2 000 ms = 0.5 MB/s.
+   */
+  backupWithoutTransferPhase: {
+    id: 'd0000001-0000-4000-8000-000000000001', // pii-allow-uuid: synthetic fixture id
+    user_id: U1,
+    created_at: '2026-09-18T12:00:00.000000Z',
+    source: 'iphone-backup',
+    outcome: 'complete',
+    elapsed_ms: 2000,
+    phases: [phase('backup', 900)],
+    prior_backup: 'none',
+    incremental: false,
+    was_encrypted: false,
+    device_model: 'iPhone17,1',
+    device_ios_version: '26.6.2',
+    device_used_bytes: 10737418240,
+    backup_bytes: 1048576,
+    backup_bytes_unmeasured: null,
+    messages_extracted: 10,
+    conversations_extracted: 1,
+    contacts_extracted: 1,
+    app_version: '2.38.1',
+    platform: 'darwin',
+    is_packaged: true,
+    started_at: '2026-09-18T11:59:58.000000Z',
+  },
+
+  /**
+   * A cancelled run with NO `backup_bytes` but a live byte counter — the shape
+   * 2.38.1 introduces, and the reason Rate has a second numerator at all.
+   *
+   *   select count(*) from sync_outcomes
+   *   where source='iphone-backup' and bytes_transferred is not null;   -- 0
+   *
+   * 2 097 152 B over a 4 000 ms transferring phase = 0.5 MB/s. Carries all six
+   * run-evidence columns so the detail card's "from 2.38.1" fields have a row
+   * that can exercise them.
+   */
+  bytesTransferredOnly: {
+    id: 'd0000002-0000-4000-8000-000000000002', // pii-allow-uuid: synthetic fixture id
+    user_id: U2,
+    created_at: '2026-09-18T13:00:00.000000Z',
+    source: 'iphone-backup',
+    outcome: 'cancelled',
+    elapsed_ms: 8000,
+    phases: [phase('backup', 1000), phase('backup:transferring', 4000)],
+    prior_backup: 'none',
+    incremental: true,
+    was_encrypted: false,
+    device_model: 'iPhone18,2',
+    device_ios_version: '26.6.1',
+    device_used_bytes: 21474836480,
+    backup_bytes: null,
+    backup_bytes_unmeasured: null,
+    messages_extracted: null,
+    conversations_extracted: null,
+    contacts_extracted: null,
+    app_version: '2.38.1',
+    platform: 'darwin',
+    is_packaged: true,
+    started_at: '2026-09-18T12:59:52.000000Z',
+    bytes_transferred: 2097152,
+    bytes_last_increased_at: '2026-09-18T12:59:56.000000Z',
+    last_phase: 'backup:transferring',
+    reason_code: 'user_cancelled',
+    ended_by: 'user',
+  },
+
+  /**
+   * `backup_bytes` is exactly 0 — a measured nothing, not a missing number.
+   * Two real rows carry it (2026-09-14 19:38 and 20:21), so this one only
+   * makes the case explicit next to its neighbours.
+   */
+  zeroBackupBytes: {
+    id: 'd0000003-0000-4000-8000-000000000003', // pii-allow-uuid: synthetic fixture id
+    user_id: U1,
+    created_at: '2026-09-18T14:00:00.000000Z',
+    source: 'iphone-backup',
+    outcome: 'error',
+    elapsed_ms: 120000,
+    phases: [phase('backup', 5000), phase('backup:transferring', 100000)],
+    prior_backup: 'none',
+    incremental: true,
+    was_encrypted: false,
+    device_model: 'iPhone17,1',
+    device_ios_version: '26.6.2',
+    device_used_bytes: 10737418240,
+    backup_bytes: 0,
+    backup_bytes_unmeasured: null,
+    messages_extracted: null,
+    conversations_extracted: null,
+    contacts_extracted: null,
+    app_version: '2.38.1',
+    platform: 'darwin',
+    is_packaged: true,
+    started_at: null,
+  },
+
+  /**
+   * A WHOLE-SECOND `created_at`.
+   *
+   * Postgres trims a whole-second timestamp's fractional part, so this string
+   * and `2026-09-14T20:21:43.803Z` (a real row) compare the WRONG way round
+   * under `<`: '.' (0x2E) sorts before 'Z' (0x5A), making the .803 row look
+   * older. `Date.parse` gets it right. Every one of the 24 transcribed rows
+   * carries a fraction, so without this row the bug is invisible.
+   *
+   *   select count(*) from sync_outcomes
+   *   where source='iphone-backup' and date_part('microseconds', created_at) = 0;  -- 0
+   */
+  wholeSecondTimestamp: {
+    id: 'd0000004-0000-4000-8000-000000000004', // pii-allow-uuid: synthetic fixture id
+    user_id: U6,
+    created_at: '2026-09-14T20:21:43Z',
+    source: 'iphone-backup',
+    outcome: 'error',
+    elapsed_ms: 30000,
+    phases: [],
+    prior_backup: 'none',
+    incremental: null,
+    was_encrypted: null,
+    device_model: 'iPhone17,1',
+    device_ios_version: '26.6.2',
+    device_used_bytes: null,
+    backup_bytes: null,
+    backup_bytes_unmeasured: null,
+    messages_extracted: null,
+    conversations_extracted: null,
+    contacts_extracted: null,
+    app_version: '2.37.0',
+    platform: 'win32',
+    is_packaged: true,
+    started_at: null,
+  },
+
+  /**
+   * 23:30 UTC on 2026-09-17 — which is 19:30 on 2026-09-17 in New York but
+   * 08:30 on 2026-09-18 in Tokyo. Bucketing on a local-time `Date` puts it in
+   * the wrong day under one of those; slicing the UTC string does not.
+   */
+  lateUtcEvening: {
+    id: 'd0000005-0000-4000-8000-000000000005', // pii-allow-uuid: synthetic fixture id
+    user_id: U1,
+    created_at: '2026-09-17T23:30:00.000000Z',
+    source: 'iphone-backup',
+    outcome: 'complete',
+    elapsed_ms: 60000,
+    phases: [phase('backup', 1000)],
+    prior_backup: 'none',
+    incremental: true,
+    was_encrypted: false,
+    device_model: 'iPhone17,1',
+    device_ios_version: '26.6.2',
+    device_used_bytes: 10737418240,
+    backup_bytes: null,
+    backup_bytes_unmeasured: null,
+    messages_extracted: 5,
+    conversations_extracted: 1,
+    contacts_extracted: 1,
+    app_version: '2.38.0',
+    platform: 'darwin',
+    is_packaged: true,
+    started_at: null,
+  },
+
+  /**
+   * 00:30 UTC on 2026-09-18 — the mirror of the row above. In New York this is
+   * still 2026-09-17.
+   */
+  earlyUtcMorning: {
+    id: 'd0000006-0000-4000-8000-000000000006', // pii-allow-uuid: synthetic fixture id
+    user_id: U1,
+    created_at: '2026-09-18T00:30:00.000000Z',
+    source: 'iphone-backup',
+    outcome: 'complete',
+    elapsed_ms: 120000,
+    phases: [phase('backup', 1000)],
+    prior_backup: 'none',
+    incremental: true,
+    was_encrypted: false,
+    device_model: 'iPhone17,1',
+    device_ios_version: '26.6.2',
+    device_used_bytes: 10737418240,
+    backup_bytes: null,
+    backup_bytes_unmeasured: null,
+    messages_extracted: 7,
+    conversations_extracted: 1,
+    contacts_extracted: 1,
+    app_version: '2.38.0',
+    platform: 'darwin',
+    is_packaged: true,
+    started_at: null,
+  },
+};
+
+/**
+ * DERIVED: `count` runs on one day, for the row-count paths no real corpus
+ * reaches — "Show all" past 50 rows, and the 200-row query cap.
+ *
+ * Every run is distinct in duration and outcome so a sort can be asserted on
+ * identity rather than on length.
+ */
+export function derivedRunRows(count: number, dayIso = '2026-09-16'): SyncOutcomeRow[] {
+  const outcomes = ['complete', 'error', 'cancelled'];
+  return Array.from({ length: count }, (_, i) => ({
+    id: `d1${String(i).padStart(6, '0')}-0000-4000-8000-${String(i).padStart(12, '0')}`, // pii-allow-uuid: generated fixture id
+    user_id: i % 2 === 0 ? U1 : U2,
+    created_at: `${dayIso}T${String(Math.floor(i / 60) % 24).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}:00.000100Z`,
+    source: 'iphone-backup',
+    outcome: outcomes[i % outcomes.length],
+    elapsed_ms: 1000 + i * 137,
+    phases: [phase('backup', 900 + i)],
+    prior_backup: 'none',
+    incremental: i % 2 === 0,
+    was_encrypted: false,
+    device_model: 'iPhone17,1',
+    device_ios_version: '26.6.2',
+    device_used_bytes: 10737418240,
+    backup_bytes: null,
+    backup_bytes_unmeasured: null,
+    messages_extracted: i % 3 === 0 ? 100 + i : null,
+    conversations_extracted: null,
+    contacts_extracted: null,
+    app_version: '2.38.0',
+    platform: i % 2 === 0 ? 'darwin' : 'win32',
+    is_packaged: true,
+    started_at: null,
+  }));
+}
+
+// ─── Named handles for identity assertions ───────────────────────
+
+/**
+ * The rows the BACKLOG-3450 suites assert on BY IDENTITY, looked up by their
+ * (unique) `created_at` rather than by a pasted id.
+ *
+ * Two reasons, and the second is the important one. It keeps every UUID literal
+ * in this file, next to the waiver that says it is invented — a bare UUID in a
+ * test file is a finding in a PUBLIC repo, because nothing about a UUID's shape
+ * separates an invented one from a live customer id (BACKLOG-2871). And it
+ * fails loudly if a row is ever re-transcribed, instead of silently asserting
+ * on an id that no longer exists.
+ */
+function idAt(createdAt: string): string {
+  const row = FIXTURE_ROWS_24.find((r) => r.created_at === createdAt);
+  if (!row) throw new Error(`iphone-sync fixture: no row at ${createdAt}`);
+  return row.id;
+}
+
+export const ROW_IDS = {
+  /** complete, 4.7 GB over a 198 742 ms transfer → 22.76 MB/s */
+  rate0918: idAt('2026-09-18T19:04:23.449284Z'),
+  /** complete, 58.5 GB → 21.14 MB/s */
+  rate0915evening: idAt('2026-09-15T19:43:48.191269Z'),
+  /** complete, 75.8 GB → 27.37 MB/s */
+  rate0915afternoon: idAt('2026-09-15T18:44:08.829797Z'),
+  /** complete, 122.1 GB → 27.29 MB/s */
+  rate0914: idAt('2026-09-14T21:50:02.296434Z'),
+  /** the 181.7-minute cancel that motivated the report */
+  incident0916: idAt('2026-09-16T20:42:49.550685Z'),
+  /** the one real row whose timestamp carries only milliseconds, not micros */
+  fractionalTimestamp: idAt('2026-09-14T20:21:43.803Z'),
+} as const;
+
+/** The four rows that can produce a Rate, fastest last. */
+export const RATE_ROW_IDS = [
+  ROW_IDS.rate0915evening,
+  ROW_IDS.rate0918,
+  ROW_IDS.rate0914,
+  ROW_IDS.rate0915afternoon,
+] as const;
