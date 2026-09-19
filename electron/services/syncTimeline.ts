@@ -22,6 +22,7 @@
  * data into a support log.
  */
 
+import crypto from "crypto";
 import log from "electron-log";
 import { reportSyncOutcome } from "./syncOutcomeReporter";
 
@@ -84,17 +85,43 @@ export function formatPhaseEnd(record: SyncPhaseRecord): string {
  * books, Outlook, Gmail, Google Contacts, the Android companion and email
  * attachments all have to fit the same row.
  *
- * SCOPE, deliberately: THE DURATION AXIS ONLY. No `reason_code`, no failure
- * taxonomy. BACKLOG-2909 (a successful sync reporting "Sync Failed" on disconnect)
- * and BACKLOG-2903 (normal chatter logged as an error pattern) are both open, and
- * a failure rate computed over them would be confidently wrong. Durations are not
- * affected by either.
+ * SCOPE, originally: THE DURATION AXIS ONLY. No `reason_code`, no failure taxonomy,
+ * because BACKLOG-2909 and BACKLOG-2903 were open and a failure rate computed over
+ * them would have been confidently wrong.
+ *
+ * BACKLOG-3440 WIDENS THAT, and only because the machinery already existed. The
+ * backup path parses the device's own error code (`DEVICE_LOCKED` from
+ * MBErrorDomain/208, `CONNECTION_LOST` from a broken usbmuxd pipe, `BACKUP_TIMEOUT`
+ * from the 30-minute watchdog) and the orchestrator then forwarded only the human
+ * sentence, dropping the code. Carrying it is plumbing, not a new taxonomy. What is
+ * still NOT computed here is a failure RATE — that remains 2909/2903's problem.
  *
  * PRIVACY: scalars only, and the same rule as the phase records — model
  * identifiers, versions, byte counts and durations. Never a UDID, never a device
  * NAME (the founder's is a personal nickname), never a path under a user's home.
  */
 export type SyncOutcome = "complete" | "cancelled" | "error";
+
+/**
+ * BACKLOG-3440: what a row can say about a run, INCLUDING one that has not finished.
+ *
+ * `running` is deliberately NOT a member of {@link SyncOutcome}, so `endSync` — whose
+ * parameter is `SyncOutcome` — physically cannot end a sync as `running`. The
+ * distinction is the type system doing the work: only `beginSync` and the heartbeat
+ * produce this state, and only the start write carries it to the row.
+ */
+export type SyncRunState = SyncOutcome | "running";
+
+/**
+ * BACKLOG-3440: how often a live run refreshes its row.
+ *
+ * Two minutes. ~90 writes on a three-hour run, against ~5 sync runs a day across all
+ * users — negligible. The alternative considered was 5 minutes (~36 writes), and the
+ * resolution is worth more than the saved rows when the thing being timed is a stall:
+ * "it stopped somewhere in the last five minutes" is a materially worse answer than
+ * "it stopped at 14:22, give or take two".
+ */
+export const SYNC_RUN_HEARTBEAT_MS = 120_000;
 
 /**
  * The one dimension that separates BACKLOG-2952's other sources from this one.
@@ -122,11 +149,28 @@ export interface SyncOutcomePhase {
  */
 export interface SyncOutcomeRow {
   source: string;
-  outcome: SyncOutcome;
+  outcome: SyncRunState;
   elapsedMs: number;
   phases: SyncOutcomePhase[];
   /** Every dimension established for this run: context + end counts. Scalars only. */
   fields: TimelineMeta;
+  /**
+   * BACKLOG-3440: the identity of THIS run, generated on the client at `beginSync`.
+   *
+   * It is what lets three separate writes — start, heartbeat, terminal — land on one
+   * row. Generated here rather than taken from the database because the first write
+   * can be dropped (offline) and the row must still be amendable when it isn't.
+   */
+  runId: string;
+  /**
+   * BACKLOG-3440: epoch ms at `beginSync`, sent on EVERY write.
+   *
+   * Not derivable from the database's own `created_at`: if the start write is dropped
+   * offline and the terminal write creates the row, `created_at` is the END time. The
+   * one number this instrument exists to produce would then be wrong on exactly the
+   * runs that had a bad network.
+   */
+  startedAt: number;
 }
 
 /**
@@ -135,6 +179,56 @@ export interface SyncOutcomeRow {
  * call. A reporter that needs I/O fires and forgets.
  */
 export type SyncOutcomeReporter = (row: SyncOutcomeRow) => void;
+
+/**
+ * BACKLOG-3440: where a run reports that it has STARTED and that it is STILL ALIVE.
+ *
+ * Separate from {@link SyncOutcomeReporter}, and deliberately not the same function.
+ * The outcome reporter fans out to Sentry as well as Postgres; a `running` event per
+ * sync plus one every two minutes would be both quota and noise against a sink whose
+ * entire value here is that a sync FAILURE stands out. These two writes go to the
+ * durable corpus only.
+ */
+export interface SyncRunReporter {
+  /** Called once, from `beginSync`, before anything else can happen to the run. */
+  start(row: SyncOutcomeRow): void;
+  /** Called on a timer while the run is alive, and once whenever the end reason is known. */
+  heartbeat(row: SyncOutcomeRow): void;
+}
+
+/**
+ * BACKLOG-3440: the production live-run sink, resolved lazily.
+ *
+ * Required at call time rather than imported at module load, exactly as
+ * `syncOutcomeReporter` does for the same module: a static import would drag
+ * `supabaseService` — and with it the Supabase client — into every suite that so much
+ * as touches a phase name. Every failure here is swallowed, because this is telemetry
+ * on the critical path of an operation that can take a user an hour.
+ */
+const defaultRunReporter: SyncRunReporter = {
+  start(row) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const m = require("./syncOutcomeSupabase") as {
+        recordSyncRunStart: (r: SyncOutcomeRow) => void;
+      };
+      m.recordSyncRunStart(row);
+    } catch (error) {
+      log.warn("[SyncTimeline] run-start sink unavailable; sync unaffected:", error);
+    }
+  },
+  heartbeat(row) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const m = require("./syncOutcomeSupabase") as {
+        recordSyncRunProgress: (r: SyncOutcomeRow) => void;
+      };
+      m.recordSyncRunProgress(row);
+    } catch (error) {
+      log.warn("[SyncTimeline] heartbeat sink unavailable; sync unaffected:", error);
+    }
+  },
+};
 
 export class SyncTimeline {
   private phaseRecords: SyncPhaseRecord[] = [];
@@ -159,21 +253,163 @@ export class SyncTimeline {
    */
   private readonly reporter: SyncOutcomeReporter;
 
+  /**
+   * BACKLOG-3440: the live-run state. All of it is per-run and all of it is cleared by
+   * `beginSync`, for the same reason the context is: run N's byte count riding along
+   * into run N+1's row is worse than no byte count, because it looks like data.
+   */
+  private runId: string | null = null;
+  private bytesTransferred: number | null = null;
+  private bytesLastIncreasedAt: number | null = null;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+  private readonly runReporter: SyncRunReporter | null;
+  private readonly heartbeatMs: number;
+  private readonly newRunId: () => string;
+
   constructor(
-    options: { now?: () => number; sink?: TimelineSink; reporter?: SyncOutcomeReporter } = {},
+    options: {
+      now?: () => number;
+      sink?: TimelineSink;
+      reporter?: SyncOutcomeReporter;
+      runReporter?: SyncRunReporter | null;
+      heartbeatMs?: number;
+      newRunId?: () => string;
+    } = {},
   ) {
     this.now = options.now ?? (() => Date.now());
     this.sink = options.sink ?? ((line: string) => log.info(line));
     this.reporter = options.reporter ?? reportSyncOutcome;
+    this.heartbeatMs = options.heartbeatMs ?? SYNC_RUN_HEARTBEAT_MS;
+    this.newRunId = options.newRunId ?? (() => crypto.randomUUID());
+    // A TEST THAT INJECTS `reporter` GETS NO LIVE-RUN SINK UNLESS IT ASKS FOR ONE.
+    //
+    // Injecting a reporter is how ~40 suites say "do not touch the network from this
+    // timeline". Defaulting the live-run sink unconditionally would have re-opened that
+    // door behind their backs — a start write and a heartbeat every two minutes,
+    // reaching for a Supabase client those suites never mock. Production constructs the
+    // singleton with no options at all and is unaffected.
+    this.runReporter =
+      options.runReporter !== undefined
+        ? options.runReporter
+        : options.reporter
+          ? null
+          : defaultRunReporter;
   }
 
   /** Start a sync. Clears any previous run's records AND context. */
   beginSync(meta: TimelineMeta = {}): void {
+    this.stopHeartbeat();
     this.phaseRecords = [];
     this.context = {};
+    this.bytesTransferred = null;
+    this.bytesLastIncreasedAt = null;
     this.syncStartedAt = this.now();
+    this.runId = this.newRunId();
     const fields = formatFields(meta);
     this.sink(`[SyncTimeline] sync-start${fields ? " " + fields : ""}`);
+
+    // BACKLOG-3440: THE ROW EXISTS BEFORE THE RUN DOES.
+    //
+    // This is the whole item. Until now the row was assembled at the end, so a run with
+    // no end had no record: on 2026-09-16 a user lost three hours to a sync that never
+    // finished and left NOTHING behind — not a failure row, no row at all. Every other
+    // improvement to this data only covers runs that already report.
+    if (this.runReporter) {
+      const row = this.buildRow("running", 0, {});
+      try {
+        this.runReporter.start(row);
+      } catch (error) {
+        log.warn("[SyncTimeline] run-start reporter threw; sync unaffected:", error);
+      }
+      this.startHeartbeat();
+    }
+  }
+
+  /**
+   * BACKLOG-3440: the byte count the backup reported, kept as a high-water mark.
+   *
+   * THE FIELD THE INCIDENT NEEDED. A 169-minute transfer was recorded that nobody could
+   * classify, because the record said how long it ran and not whether anything moved:
+   * 57 GB slowly and 2 GB then dead are different defects with different fixes.
+   *
+   * NOT a duplicate of the existing 30-minute no-progress watchdog, which counts STREAM
+   * activity — any stdout chunk plus a curated stderr signal list — and is silent about
+   * bytes. Its NOT firing during those 169 minutes is itself the evidence that the
+   * process was alive and chattering the whole time.
+   *
+   * STRICTLY INCREASING, and `>` rather than `>=` is load-bearing: the timestamp means
+   * "the last time this went UP". With `>=`, a flat run — the exact thing being
+   * detected — would refresh the timestamp on every repeated sample and read as healthy.
+   *
+   * The emitted count can also go DOWN: `backupService` composes it as
+   * `completedFiles + currentFileBytes` and the per-file part resets, which its own
+   * docblock records as a known trap. `Math.max` is why a dip cannot rewind the mark.
+   */
+  recordBytesTransferred(bytes: number): void {
+    if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes < 0) return;
+    const previous = this.bytesTransferred ?? 0;
+    // First reading establishes the mark even when it is zero — "the transfer has
+    // reported in, and it has moved nothing yet" is a fact worth having.
+    if (this.bytesTransferred === null) this.bytesTransferred = bytes;
+    if (bytes > previous) {
+      this.bytesTransferred = bytes;
+      this.bytesLastIncreasedAt = this.now();
+    }
+  }
+
+  /**
+   * BACKLOG-3440: record WHICH ACT is ending this run, and write it out immediately.
+   *
+   * `cancelled` has never meant "the user pressed Cancel". It means the abort signal was
+   * set, and that also happens via `forceReset()` — which fires when a user clicks Sync
+   * or Try Again while a run is already going. "I cancelled it" and "it hung so I hit
+   * Try Again" are different reports from a user and they produced the same row.
+   *
+   * THE IMMEDIATE FLUSH IS THE POINT, not a nicety. A restart-while-running is followed
+   * within milliseconds by a new `beginSync`, which clears this context — and the
+   * abandoned run's own terminal write is suppressed by the orchestrator's `isRunning`
+   * guard, so it may never emit at all. Writing the reason now means the abandoned row
+   * says `outcome=running, ended_by=restart-while-running`, which is exactly what
+   * happened, instead of staying an unexplained open row.
+   */
+  noteEndedBy(reason: string): void {
+    this.setContext({ endedBy: reason });
+    this.flushHeartbeat();
+  }
+
+  /**
+   * Write the current state of a live run to the corpus. NEVER carries `outcome` —
+   * see `syncOutcomeSupabase.buildSyncRunProgressRow` for why that is structural.
+   */
+  private flushHeartbeat(): void {
+    if (!this.runReporter || this.runId === null || this.syncStartedAt === null) return;
+    const row = this.buildRow("running", this.now() - this.syncStartedAt, {});
+    try {
+      this.runReporter.heartbeat(row);
+    } catch (error) {
+      log.warn("[SyncTimeline] heartbeat reporter threw; sync unaffected:", error);
+    }
+  }
+
+  private startHeartbeat(): void {
+    // A REAL TIMER, not a piggyback on the progress stream, and that choice is what
+    // makes the instrument able to answer the question. A heartbeat driven by progress
+    // events stops when the progress events stop — so a process that is alive but
+    // moving nothing and a process that is GONE would leave identical rows. With a
+    // timer: both timestamps advancing = moving data; `updated_at` alone advancing =
+    // alive and stalled; neither advancing = killed or quit.
+    const timer = setInterval(() => this.flushHeartbeat(), this.heartbeatMs);
+    // Node's timer only; jsdom's returns a number. Telemetry must never be the reason
+    // the main process refuses to exit.
+    (timer as unknown as { unref?: () => void }).unref?.();
+    this.heartbeatTimer = timer;
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer === null) return;
+    clearInterval(this.heartbeatTimer);
+    this.heartbeatTimer = null;
   }
 
   /**
@@ -287,14 +523,71 @@ export class SyncTimeline {
     // The `sync-end` line above is deliberately NOT guarded: it is BACKLOG-2898's
     // contract and a duplicate there is still only noise.
     if (wasOpen) this.emitOutcome(outcome, elapsedMs, counts);
+    // BACKLOG-3440: the run is over, so nothing may write to its row again. A heartbeat
+    // still firing after the terminal write is the single most likely way this whole
+    // instrument could produce a NEW false signal — a completed sync left reading
+    // `running` forever. The timer is stopped here; the heartbeat payload also carries
+    // no `outcome` at all, so the two guards are independent.
+    this.stopHeartbeat();
     this.syncStartedAt = null;
+    this.runId = null;
+    this.bytesTransferred = null;
+    this.bytesLastIncreasedAt = null;
     this.context = {};
   }
 
   /**
-   * BACKLOG-2914: the row every consumer reads. One line, one sync, every dimension
-   * that was established, plus the per-phase durations so a regression can be
-   * attributed to a phase rather than to "syncs got slower".
+   * BACKLOG-2914 / BACKLOG-3440: the row every consumer reads, at any point in the run.
+   *
+   * ONE BUILDER, THREE VERBS. The start write, every heartbeat and the terminal write
+   * all describe the same run from the same state, so they are the same shape built by
+   * the same function — which is also why an abandoned run's row carries its phase
+   * breakdown, its device, its prior-backup verdict and its byte counts rather than only
+   * a start time. BACKLOG-2914's own measurement was that 5 of 5 `cancelled` runs had no
+   * `incremental` and no `backup_mode_source`, because the row was assembled at the end;
+   * building it from live state is what fixes that class of gap rather than field by
+   * field.
+   */
+  private buildRow(state: SyncRunState, elapsedMs: number, counts: PhaseCounts): SyncOutcomeRow {
+    const closed = this.phaseRecords.filter(
+      (r): r is SyncPhaseRecord & { elapsedMs: number } => r.elapsedMs !== null,
+    );
+    const phases = closed.map((r) => `${r.phase}:${r.elapsedMs}`).join(",");
+    // WHERE IT GOT TO. On an abandoned row this is the answer to "where did it stop" —
+    // the open phase if one is open, otherwise the last one that closed.
+    const lastPhase = this.phaseRecords[this.phaseRecords.length - 1]?.phase;
+
+    const fields: TimelineMeta = {
+      // 2952 extends this row rather than defining a second one, so the dimension
+      // that separates the sources is present even while there is only one.
+      source: SYNC_OUTCOME_SOURCE,
+      outcome: state,
+      elapsedMs,
+      ...this.context,
+      ...counts,
+      ...(phases ? { phases } : {}),
+      ...(lastPhase ? { lastPhase } : {}),
+      ...(this.bytesTransferred !== null ? { bytesTransferred: this.bytesTransferred } : {}),
+      ...(this.bytesLastIncreasedAt !== null
+        ? { bytesLastIncreasedAt: this.bytesLastIncreasedAt }
+        : {}),
+    };
+
+    return {
+      source: SYNC_OUTCOME_SOURCE,
+      outcome: state,
+      elapsedMs,
+      phases: closed.map((r) => ({ phase: r.phase, elapsedMs: r.elapsedMs })),
+      fields,
+      runId: this.runId ?? "",
+      startedAt: this.syncStartedAt ?? this.now(),
+    };
+  }
+
+  /**
+   * BACKLOG-2914: the terminal row. Every dimension that was established, plus the
+   * per-phase durations so a regression can be attributed to a phase rather than to
+   * "syncs got slower".
    *
    * THREE destinations, and the log line is only the first. PR #2422 shipped the row
    * to `log.info` alone, which meant it never left the user's machine and the
@@ -303,26 +596,12 @@ export class SyncTimeline {
    * duration corpus BACKLOG-2894 will fit a model against). See syncOutcomeReporter.
    */
   private emitOutcome(outcome: SyncOutcome, elapsedMs: number, counts: PhaseCounts): void {
-    const closed = this.phaseRecords.filter(
-      (r): r is SyncPhaseRecord & { elapsedMs: number } => r.elapsedMs !== null,
-    );
-    const phases = closed.map((r) => `${r.phase}:${r.elapsedMs}`).join(",");
-
-    const fields: TimelineMeta = {
-      // 2952 extends this row rather than defining a second one, so the dimension
-      // that separates the sources is present even while there is only one.
-      source: SYNC_OUTCOME_SOURCE,
-      outcome,
-      elapsedMs,
-      ...this.context,
-      ...counts,
-      ...(phases ? { phases } : {}),
-    };
+    const row = this.buildRow(outcome, elapsedMs, counts);
 
     // THE LOG LINE STAYS, AND STAYS FIRST. It is what made the 2026-08-28 diagnosis
     // possible on a machine with no network, and it is the only sink that works when
     // the user is signed out. Byte-identical to what BACKLOG-2898's consumers parse.
-    this.sink(`[SyncTimeline] sync-outcome ${formatFields(fields)}`);
+    this.sink(`[SyncTimeline] sync-outcome ${formatFields(row.fields)}`);
 
     // BACKLOG-2914 (transport): and now it also LEAVES THE MACHINE.
     //
@@ -330,13 +609,6 @@ export class SyncTimeline {
     // A telemetry sink that can fail a user's 52-minute sync is worse than no telemetry
     // sink: the reporters are best-effort internally as well, and this catch is the
     // second wall, not the first.
-    const row: SyncOutcomeRow = {
-      source: SYNC_OUTCOME_SOURCE,
-      outcome,
-      elapsedMs,
-      phases: closed.map((r) => ({ phase: r.phase, elapsedMs: r.elapsedMs })),
-      fields,
-    };
     try {
       this.reporter(row);
     } catch (error) {
@@ -367,8 +639,12 @@ export class SyncTimeline {
 
   /** Drop all state without emitting. */
   reset(): void {
+    this.stopHeartbeat();
     this.phaseRecords = [];
     this.syncStartedAt = null;
+    this.runId = null;
+    this.bytesTransferred = null;
+    this.bytesLastIncreasedAt = null;
     this.context = {};
   }
 
