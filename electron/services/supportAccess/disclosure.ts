@@ -37,7 +37,7 @@
  * ## One sentence below is known NOT to hold yet — do not re-verify it as true
  *
  * "Reports are deleted 30 days after they are captured — from Keepr's servers,
- * and from this Mac — whether or not they were ever sent."
+ * and from this computer — whether or not they were ever sent."
  *
  * True on the app's own retention pass and on a user-initiated Delete. **False
  * on the `pg_cron` SQL backstop**, which unlinks the attachment row and leaves
@@ -61,21 +61,21 @@ import { createHash } from "crypto";
  * Bump the version suffix whenever SUPPORT_ACCESS_DISCLOSURE_TEXT changes.
  * The hash catches an unversioned edit, but the id is what a human reads.
  */
-export const SUPPORT_ACCESS_DISCLOSURE_ID = "support-access-disclosure-v3";
+export const SUPPORT_ACCESS_DISCLOSURE_ID = "support-access-disclosure-v4";
 
 export const SUPPORT_ACCESS_DISCLOSURE_TEXT = [
-  "While support access is on, Keepr collects extra detail about what the app is doing on this Mac and sends it to Keepr support.",
+  "While support access is on, Keepr collects extra detail about what the app is doing on this computer and sends it to Keepr support.",
   "",
   "What gets sent:",
   "• Counts and outcomes from the areas you choose — how many chats and messages were found, how many were skipped and why, how many emails were fetched and linked, and how many phone numbers were matched to a name. Numbers and reasons, not names.",
-  "• Information about this Mac: app version, macOS version, disk space, and whether the permissions Keepr needs are granted.",
+  "• Information about this computer: app version, operating system version, disk space, and whether the permissions Keepr needs are granted.",
   "• The last few error messages Keepr recorded. Those are written by the app for its own log, so one of them can mention a name or an address if that is what the error was about.",
   "",
   "What does not get sent: the contents of your messages and emails, your documents, your contact list, and your password or login details.",
   "",
-  "Reports are encrypted while they wait on this Mac and while they travel to Keepr.",
+  "Reports are encrypted while they wait on this computer and while they travel to Keepr.",
   "",
-  "Reports are deleted 30 days after they are captured — from Keepr's servers, and from this Mac — whether or not they were ever sent.",
+  "Reports are deleted 30 days after they are captured — from Keepr's servers, and from this computer — whether or not they were ever sent.",
   "",
   "Access ends by itself on the date shown. You can end it sooner at any time, and you can see and delete every report from Settings, including ones already sent.",
 ].join("\n");

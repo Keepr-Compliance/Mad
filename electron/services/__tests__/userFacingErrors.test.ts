@@ -14,6 +14,7 @@ import {
   formatDriverServiceStoppedError,
   formatDeviceNotDetectedError,
   formatSyncFailedError,
+  formatUnknownBackupSizeError,
 } from "../diagnostics/userFacingErrors";
 import type { UserFacingError } from "../diagnostics/userFacingErrors";
 
@@ -186,6 +187,34 @@ describe("userFacingErrors", () => {
     it.each(allErrors)("%s does not contain stack traces", (_, error) => {
       expect(error.description).not.toMatch(/at\s+\w+.*\(.*:\d+:\d+\)/);
       expect(error.actionSuggestion).not.toMatch(/at\s+\w+.*\(.*:\d+:\d+\)/);
+    });
+  });
+
+  /**
+   * BACKLOG-3443. This message is shown to every user whose iPhone backup size
+   * could not be read, and 22 of 24 recorded syncs are Windows. Telling a
+   * Windows user their backup may not fit on "this Mac" reads as a message
+   * meant for somebody else.
+   */
+  describe("formatUnknownBackupSizeError", () => {
+    it("returns correct shape and code", () => {
+      const error = formatUnknownBackupSizeError();
+      expectValidUserError(error);
+      expect(error.code).toBe("BACKUP_SIZE_UNKNOWN");
+    });
+
+    it("names no platform the user may not be on", () => {
+      expect(formatUnknownBackupSizeError().description).not.toMatch(
+        /\bmac\b|macos/i,
+      );
+    });
+
+    it("still says what the space is being checked against", () => {
+      // Paired with the negative: dropping the clause would pass "no Mac"
+      // while losing the reason the sync refuses to start.
+      expect(formatUnknownBackupSizeError().description).toContain(
+        "whether it fits on this computer",
+      );
     });
   });
 });

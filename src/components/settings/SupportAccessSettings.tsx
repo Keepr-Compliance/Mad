@@ -194,7 +194,7 @@ export function SupportAccessSettings(): React.ReactElement {
         const outcome = await deleteReport(id);
         await load();
         if (outcome.deleted) {
-          notify.success("Report deleted from this Mac and from Keepr");
+          notify.success("Report deleted from this computer and from Keepr");
         } else {
           // The row stays. Saying "deleted" here while a copy sits in Keepr
           // storage is the failure this whole path exists to prevent.
@@ -316,8 +316,8 @@ export function SupportAccessSettings(): React.ReactElement {
               )}
               <p className="text-xs text-gray-600 mt-1">
                 If Keepr support asks you to turn this on, it lets them see what
-                the app is doing on this Mac for a period you choose. It ends by
-                itself.
+                the app is doing on this computer for a period you choose. It
+                ends by itself.
               </p>
               {!showGrantPanel && (
                 <button
@@ -435,9 +435,10 @@ export function SupportAccessSettings(): React.ReactElement {
                       nothing detecting it, so keep them saying the same thing.
                     */}
                     I understand that Keepr will send a record of what the app
-                    did on this Mac — counts and outcomes, plus error messages
-                    that can occasionally include a name — to Keepr support, and
-                    that reports are deleted after {snapshot.retentionDays} days.
+                    did on this computer — counts and outcomes, plus error
+                    messages that can occasionally include a name — to Keepr
+                    support, and that reports are deleted after{" "}
+                    {snapshot.retentionDays} days.
                   </span>
                 </label>
                 <div className="mt-3 flex gap-2">
@@ -481,9 +482,9 @@ export function SupportAccessSettings(): React.ReactElement {
                 Diagnostic reports
               </h4>
               <p className="text-xs text-gray-600 mb-3">
-                Everything captured on this Mac, waiting to go and already sent.
-                Deleting a report removes it from Keepr&apos;s servers as well
-                as from this Mac.
+                Everything captured on this computer, waiting to go and already
+                sent. Deleting a report removes it from Keepr&apos;s servers as
+                well as from this computer.
               </p>
 
               {reports.length === 0 ? (
@@ -526,7 +527,8 @@ export function SupportAccessSettings(): React.ReactElement {
                         {report.state !== "sent" &&
                           typeof report.localDeleteInDays === "number" && (
                             <p className="text-xs text-gray-500 mt-0.5">
-                              Deleted from this Mac in {report.localDeleteInDays}{" "}
+                              Deleted from this computer in{" "}
+                              {report.localDeleteInDays}{" "}
                               {report.localDeleteInDays === 1 ? "day" : "days"}
                               {report.state === "failed" ? "" : ", sent or not"}
                             </p>

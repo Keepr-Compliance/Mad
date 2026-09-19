@@ -114,11 +114,11 @@ describe("support access handlers", () => {
     expect(result.defaultScopes).toEqual(offered);
   });
 
-  it("serves the v3 disclosure with its own hash", async () => {
+  it("serves the v4 disclosure with its own hash", async () => {
     const result = await getState();
 
     const disclosure = result.disclosure as { id: string; text: string; hash: string };
-    expect(disclosure.id).toBe("support-access-disclosure-v3");
+    expect(disclosure.id).toBe("support-access-disclosure-v4");
     expect(disclosure.hash).toHaveLength(64);
     expect(disclosure.text).not.toMatch(/people who are not Keepr users/i);
   });
