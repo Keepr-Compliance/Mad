@@ -9,197 +9,24 @@
  * breakdown — the field that actually diagnosed the 2026-09-16 incident — is
  * rendered expanded on every run.
  *
- * Chart colors are the validated data-viz steps (single-series blue, status
- * critical red), checked against the white card surface: all six checks pass.
+ * The per-run card and its phase chart live in `./RunCard`.
  */
 
+import { AlertTriangle, ShieldCheck } from 'lucide-react';
 import {
-  AlertTriangle,
-  CheckCircle2,
-  MinusCircle,
-  ShieldCheck,
-  XCircle,
-  type LucideIcon,
-} from 'lucide-react';
-import {
-  formatCount,
   formatMinutes,
-  formatMinutesLabel,
   longestPhase,
   ratioToBaseline,
   STALL_THRESHOLD_MINUTES,
   type IphoneSyncReportModel,
-  type OutcomeTone,
-  type SyncRun,
 } from '@/lib/reports/iphone-sync';
-
-/** Validated against the white card surface — see BACKLOG-3441 notes. */
-const BAR_COLOR = '#2a78d6';
-const BAR_COLOR_CRITICAL = '#d03b3b';
-
-const OUTCOME_ICON: Record<OutcomeTone, LucideIcon> = {
-  good: CheckCircle2,
-  critical: XCircle,
-  warning: MinusCircle,
-  neutral: MinusCircle,
-};
-
-const OUTCOME_CHIP: Record<OutcomeTone, string> = {
-  good: 'text-green-700 bg-green-50 border-green-200',
-  critical: 'text-red-700 bg-red-50 border-red-200',
-  warning: 'text-amber-700 bg-amber-50 border-amber-200',
-  neutral: 'text-gray-700 bg-gray-50 border-gray-200',
-};
-
-function OutcomeChip({ run }: { run: SyncRun }) {
-  const Icon = OUTCOME_ICON[run.outcomeTone];
-  return (
-    <span
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium ${OUTCOME_CHIP[run.outcomeTone]}`}
-    >
-      <Icon className="h-3.5 w-3.5" aria-hidden="true" />
-      {run.outcome}
-    </span>
-  );
-}
+import { RunCard } from './RunCard';
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border border-gray-200 bg-white p-5">
       <p className="text-sm font-medium text-gray-500">{label}</p>
       <p className="mt-1 text-2xl font-semibold tabular-nums text-gray-900">{value}</p>
-    </div>
-  );
-}
-
-/**
- * Horizontal bar chart: one row per phase, one hue, value labelled on every
- * row (the durations are the data). Single series, so no legend — the row
- * label carries identity.
- */
-function PhaseChart({ run }: { run: SyncRun }) {
-  if (run.phases.length === 0) {
-    return (
-      <p className="mt-4 text-sm text-gray-500">
-        No phase timings were recorded for this run — it ended before the first phase reported.
-      </p>
-    );
-  }
-
-  return (
-    <div className="mt-4">
-      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500">
-        Where the time went
-      </p>
-      <div className="space-y-1.5">
-        {run.phases.map((phase) => {
-          const flagged = run.stalled && phase.isLast;
-          return (
-            <div
-              key={`${run.id}-${phase.key}`}
-              className="grid grid-cols-[minmax(0,14rem)_1fr_5.5rem] items-center gap-3"
-            >
-              <span className="truncate text-xs text-gray-700" title={phase.key}>
-                {phase.label}
-              </span>
-              <div className="h-2.5 w-full rounded-sm bg-gray-100">
-                <div
-                  className="h-2.5 rounded-r-[4px]"
-                  style={{
-                    width: `${phase.widthPct}%`,
-                    backgroundColor: flagged ? BAR_COLOR_CRITICAL : BAR_COLOR,
-                  }}
-                />
-              </div>
-              <span className="text-right text-xs tabular-nums text-gray-700">
-                {phase.durationLabel}
-                {phase.sharePct >= 10 ? (
-                  <span className="ml-1 text-gray-400">{Math.round(phase.sharePct)}%</span>
-                ) : null}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-      {run.stalled && run.lastPhaseLabel ? (
-        <p className="mt-2 text-xs font-medium text-red-700">
-          Stopped in: {run.lastPhaseLabel} — nothing after it ran.
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
-function RunCard({ run }: { run: SyncRun }) {
-  return (
-    <div
-      className={`rounded-lg border bg-white p-5 shadow-sm ${
-        run.stalled ? 'border-red-300 border-l-4 border-l-red-500' : 'border-gray-200'
-      }`}
-    >
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-semibold text-gray-900">{run.userLabel}</span>
-            <OutcomeChip run={run} />
-            {run.stalled ? (
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-red-200 bg-red-50 px-2.5 py-0.5 text-xs font-medium text-red-700">
-                <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
-                Stalled
-              </span>
-            ) : null}
-            {run.isDevBuild ? (
-              <span className="rounded-full border border-gray-200 bg-gray-50 px-2.5 py-0.5 text-xs font-medium text-gray-600">
-                dev build
-              </span>
-            ) : null}
-          </div>
-          <p className="mt-1 text-xs text-gray-500">
-            {run.whenUtc} · {run.deviceLabel} · {run.platform} · Keepr {run.appVersion}
-          </p>
-        </div>
-        <div className="text-right">
-          <p className="text-2xl font-semibold tabular-nums text-gray-900">{run.durationLabel}</p>
-          <p className="text-xs tabular-nums text-gray-500">
-            {formatMinutesLabel(run.elapsedMs)}
-          </p>
-        </div>
-      </div>
-
-      <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-4">
-        <div>
-          <dt className="text-xs text-gray-500">Device used</dt>
-          <dd className="tabular-nums text-gray-900">
-            {run.deviceUsedGb == null ? '—' : `${run.deviceUsedGb.toFixed(1)} GB`}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-xs text-gray-500">Minutes per GB</dt>
-          <dd className="tabular-nums text-gray-900">{run.minPerGbLabel}</dd>
-        </div>
-        <div>
-          <dt className="text-xs text-gray-500">Messages extracted</dt>
-          <dd className="tabular-nums text-gray-900">
-            {run.messagesExtracted == null || run.messagesExtracted === 0 ? (
-              <span className={run.stalled ? 'font-medium text-red-700' : 'text-gray-900'}>none</span>
-            ) : (
-              formatCount(run.messagesExtracted)
-            )}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-xs text-gray-500">Backup written</dt>
-          <dd className="tabular-nums text-gray-900">
-            {run.backupUnmeasured
-              ? 'not measured'
-              : run.backupGb == null
-                ? '—'
-                : `${run.backupGb.toFixed(1)} GB`}
-          </dd>
-        </div>
-      </dl>
-
-      <PhaseChart run={run} />
     </div>
   );
 }
