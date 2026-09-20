@@ -70,8 +70,8 @@ function ExportModal({
   const [saveAsDefault, setSaveAsDefault] = useState(false);
 
   // BACKLOG-334: TRUE once the saved export preferences have loaded AND carry a
-  // usable format. Only then does step 1 show the summary + "Export format"
-  // button and send its primary straight into the export.
+  // usable format. Only then does step 1 show the "Export format" button in its
+  // heading row and send its primary straight into the export.
   const [hasSavedDefaults, setHasSavedDefaults] = useState(false);
 
   // BACKLOG-2292 (Layer 3): export completeness gate. Shown when the audit start
@@ -221,47 +221,13 @@ function ExportModal({
   };
 
   /**
-   * BACKLOG-334: "Export format" on step 1. Opens the options step pre-filled
+   * BACKLOG-334: "Export format", in step 1's heading row. Opens the options pre-filled
    * with what this export will use. Back returns to step 1, and the choices
    * apply to this export only unless the save checkbox is ticked.
    */
   const handleOpenExportOptions = () => {
     if (!datesAreValid()) return;
     setStep(2);
-  };
-
-  /**
-   * BACKLOG-334: the export options in words, for the step-1 summary line.
-   * Built from the LIVE state rather than the stored preferences, so after
-   * "Export format" -> change -> Back it describes this export, not the record.
-   */
-  const exportOptionsSummary = (): string => {
-    const formatLabels: Record<string, string> = {
-      "combined-pdf": "One PDF",
-      folder: "Audit Package",
-      pdf: "Summary PDF",
-    };
-    const contentLabels: Record<string, string> = {
-      both: "Texts and emails",
-      emails: "Emails only",
-      texts: "Texts only",
-    };
-    const attachmentLabels: Record<string, string> = {
-      all: "All attachments",
-      email: "Email attachments",
-      text: "Text attachments",
-      none: "No attachments",
-    };
-    const parts = [
-      formatLabels[exportFormat] ?? exportFormat,
-      contentLabels[contentType],
-      attachmentLabels[attachmentType],
-    ];
-    // Threading only says something when emails are part of the export.
-    if (contentType !== "texts") {
-      parts.push(emailExportMode === "individual" ? "Individual emails" : "Threaded emails");
-    }
-    return parts.join(" \u00b7 ");
   };
 
   /**
@@ -586,9 +552,39 @@ function ExportModal({
           {step === 1 && (
             <div className="space-y-6">
               <div>
-                <h4 className="text-lg font-semibold text-gray-900 mb-4">
-                  Verify Transaction Dates
-                </h4>
+                {/* BACKLOG-334 (founder QA 2026-09-19): title left, button right,
+                    the same header row the emails/texts tabs use —
+                    TransactionEmailsTab.tsx:667 (container) and :675 (button
+                    group). The button is shown only with saved defaults. */}
+                <div className="flex justify-between items-center mb-4">
+                  <h4 className="text-lg font-semibold text-gray-900">
+                    Verify Transaction Dates
+                  </h4>
+                  {hasSavedDefaults && (
+                    <div className="flex gap-2">
+                      <button
+                        onClick={handleOpenExportOptions}
+                        className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
+                        data-testid="export-format-button"
+                      >
+                        <svg
+                          className="w-4 h-4"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"
+                          />
+                        </svg>
+                        Export format
+                      </button>
+                    </div>
+                  )}
+                </div>
                 <p className="text-sm text-gray-600 mb-2">
                   Communications will be filtered to only include those between
                   Start Date and End Date.
@@ -686,37 +682,6 @@ function ExportModal({
                   </p>
                 </div>
               </div>
-
-              {/* BACKLOG-334: with defaults saved, say what this export will use
-                  and offer one way to change it. Styled like the attach button
-                  on the emails/texts tabs. */}
-              {hasSavedDefaults && (
-                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
-                  <p className="text-sm text-gray-700" data-testid="export-format-summary">
-                    Export format: {exportOptionsSummary()}
-                  </p>
-                  <button
-                    onClick={handleOpenExportOptions}
-                    className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
-                    data-testid="export-format-button"
-                  >
-                    <svg
-                      className="w-4 h-4"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"
-                      />
-                    </svg>
-                    Export format
-                  </button>
-                </div>
-              )}
 
               {transaction.first_communication_date &&
                 transaction.last_communication_date && (
