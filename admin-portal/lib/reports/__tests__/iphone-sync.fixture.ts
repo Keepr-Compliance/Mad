@@ -1094,3 +1094,31 @@ export const RATE_ROW_IDS = [
   ROW_IDS.rate0914,
   ROW_IDS.rate0915afternoon,
 ] as const;
+
+// ─── Derived users (BACKLOG-3450 PR 2) ───────────────────────────
+
+/**
+ * NOT TRANSCRIBED — DERIVED. A user row with NO display name, so `userLabel`
+ * falls back to the account's email.
+ *
+ * No real user of this report is in that state:
+ *
+ *   select count(*) filter (where display_name is null or display_name = '')
+ *   from users
+ *   where id in (select distinct user_id from sync_outcomes
+ *                where source = 'iphone-backup');   -- 0, of 8
+ *
+ * `display_name` is nullable and `buildRun` falls back to `email` explicitly,
+ * so the state is emittable — it just has no instance today. It exists here so
+ * that "a saved view's stored blob carries no email" is a control that CAN go
+ * red: against {@link FIXTURE_USERS_24}, where every user has a display name,
+ * a leaked user label would carry no `@` and the assertion would be vacuous.
+ *
+ * Kept OUT of `FIXTURE_USERS_24` on purpose: adding it there would put an
+ * email into the serialized model and redden PR 1's `ships NO email to the
+ * browser` control, which is a true statement about that fixture.
+ */
+export const USERS_WITH_A_MISSING_DISPLAY_NAME: ReportUser[] = [
+  { id: U1, email: 'sync-user-a@example.test', display_name: null },
+  ...FIXTURE_USERS.slice(1),
+];

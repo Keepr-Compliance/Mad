@@ -40,7 +40,10 @@ export function HowToUse({ baseline, totalRuns }: { baseline: Baseline; totalRun
         </Para>
         <Para>
           <strong>Cards are all live:</strong> the five default cards, both charts and the table
-          follow the filters.
+          follow the filters. Your own cards come from Views, the same way the PM backlog pins a
+          saved view as a gauge: save the current filters with a name, pick a column and a function
+          (count, average, sum, min, max), and it appears as a dashed card that follows whichever
+          period is selected. Click a card to apply its filters; up to five pinned.
         </Para>
         <Para>
           <strong>Rate</strong> is the backup size divided by the transfer phase, in MB per second.
