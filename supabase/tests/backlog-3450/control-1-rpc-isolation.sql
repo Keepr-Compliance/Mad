@@ -26,6 +26,14 @@
 -- RUN:
 --   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f control-1-rpc-isolation.sql
 --
+-- IT SAVES UNDER ITS OWN `report_key`, not under the report's. Both views here
+-- are pinned, and `report_save_view` refuses a sixth pin PER REPORT KEY — so on
+-- a re-run against a database where five cards are already pinned on the real
+-- report, the save would raise the cap and abort this script BEFORE its
+-- assertions, which reads as a failed control rather than as a full dashboard.
+-- Isolation is between USERS and does not depend on the key. Control 4 already
+-- does the same thing for the same reason.
+--
 -- Ends in ROLLBACK. Nothing it writes survives.
 
 \set ON_ERROR_STOP on
@@ -56,7 +64,7 @@ BEGIN
   PERFORM set_config('request.jwt.claim.sub', k_owner::text, true);
 
   v_owner_view := (public.report_save_view(
-    'iphone-sync',
+    'control-1',
     'CONTROL 1 owner view',
     '{"types":[],"outcomes":["error"],"platforms":[],"search":"","stalledOnly":false}'::jsonb,
     '{"col":"runs","fn":"count"}'::jsonb,
@@ -65,7 +73,7 @@ BEGIN
   )->>'id')::uuid;
   ASSERT v_owner_view IS NOT NULL, 'CONTROL 1: the owner could not save a view';
 
-  v_listed := public.report_list_saved_views('iphone-sync');
+  v_listed := public.report_list_saved_views('control-1');
   ASSERT EXISTS (
     SELECT 1 FROM jsonb_array_elements(v_listed) e WHERE (e->>'id')::uuid = v_owner_view
   ), 'CONTROL 1: the owner cannot see their own view — the RPC is broken';
@@ -76,7 +84,7 @@ BEGIN
   -------------------------------------------------------------------------
   PERFORM set_config('request.jwt.claim.sub', k_other::text, true);
 
-  v_listed := public.report_list_saved_views('iphone-sync');
+  v_listed := public.report_list_saved_views('control-1');
   ASSERT NOT EXISTS (
     SELECT 1 FROM jsonb_array_elements(v_listed) e WHERE (e->>'id')::uuid = v_owner_view
   ), format('CONTROL 1 FAILED: the second internal user can see the owner''s saved view. '
@@ -102,7 +110,7 @@ BEGIN
 
   -- The row is still there, as the owner.
   PERFORM set_config('request.jwt.claim.sub', k_owner::text, true);
-  v_listed := public.report_list_saved_views('iphone-sync');
+  v_listed := public.report_list_saved_views('control-1');
   ASSERT EXISTS (
     SELECT 1 FROM jsonb_array_elements(v_listed) e WHERE (e->>'id')::uuid = v_owner_view
   ), 'CONTROL 1: the owner''s view was deleted after all';

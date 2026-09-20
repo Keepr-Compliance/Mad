@@ -18,6 +18,11 @@
 -- The two users are chosen by the script, as in control 1. NO psql VARIABLES:
 -- psql does not substitute `:name` inside a dollar-quoted block.
 --
+-- It saves under its OWN `report_key` for the reason control 1 gives: the view
+-- it saves is pinned, and a pinned save against the real report key would hit
+-- the server-side cap on a database that already has five cards, aborting the
+-- script before its assertions.
+--
 -- RUN:
 --   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f control-2-mutant-rpc-isolation.sql
 
@@ -95,7 +100,7 @@ BEGIN
 
   PERFORM set_config('request.jwt.claim.sub', k_owner::text, true);
   v_owner_view := (public.report_save_view(
-    'iphone-sync', 'CONTROL 2 owner view',
+    'control-2', 'CONTROL 2 owner view',
     '{"types":[],"outcomes":[],"platforms":[],"search":"","stalledOnly":false}'::jsonb,
     '{"col":"runs","fn":"count"}'::jsonb, true, NULL::uuid
   )->>'id')::uuid;
@@ -103,7 +108,7 @@ BEGIN
   PERFORM set_config('request.jwt.claim.sub', k_other::text, true);
 
   -- Assertion 1 of control 1, against the mutant.
-  v_listed := public.report_list_saved_views('iphone-sync');
+  v_listed := public.report_list_saved_views('control-2');
   v_leaked := EXISTS (
     SELECT 1 FROM jsonb_array_elements(v_listed) e WHERE (e->>'id')::uuid = v_owner_view
   );

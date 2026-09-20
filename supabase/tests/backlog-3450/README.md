@@ -68,6 +68,14 @@ There were two internal users when this was written:
 select count(distinct user_id) from internal_roles;   -- 2
 ```
 
+**Every script that calls `report_save_view` uses its own `report_key`** —
+`control-1`, `control-2`, `control-4` — and never `iphone-sync`. The views they
+save are pinned, and the server refuses a sixth pin per report key, so on a
+database where five cards are already pinned on the real report a script using
+that key would abort on the cap before reaching its assertions and read as a
+failed control. Isolation is between users and does not depend on the key.
+Control 3 seeds its one row with a direct `INSERT`, which no cap applies to.
+
 **Do not pass ids with `-v`.** psql does not substitute a colon-prefixed name
 inside a dollar-quoted block, so `:owner` written in a `DO $$ … $$` body reaches
 Postgres verbatim and fails to parse. The first version of these scripts did
