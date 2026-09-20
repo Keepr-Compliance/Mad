@@ -82,21 +82,57 @@ describe('buildIphoneSyncReport against the real 19 rows', () => {
 });
 
 describe('minutes per GB and the baseline', () => {
+  /**
+   * RE-TRANSCRIBED 2026-09-19 after two changes on the same day: 1 GB became
+   * 1 000 000 000 bytes (founder QA — iOS Settings said 58.1 GB where the card
+   * said 54.1), and a run that wrote no backup now has NO min/GB at all.
+   *
+   *   select created_at, outcome, backup_bytes, device_used_bytes, elapsed_ms,
+   *          round((elapsed_ms/60000.0) / (device_used_bytes/1000000000.0), 4)
+   *   from sync_outcomes
+   *   where source='iphone-backup' and outcome='complete' and backup_bytes > 0
+   *     and created_at < '2026-09-18T12:00:00Z'   -- the 19-row fixture's window
+   *   order by created_at;
+   *   -- 2026-09-14 21:50  1.4640
+   *   -- 2026-09-15 18:44  0.6735
+   *   -- 2026-09-15 19:43  1.7926
+   *
+   * Three rows, so the median is the middle one: 1.4640. The sample did NOT
+   * shrink — all three completed runs wrote a backup — so the new guard moved
+   * the unit here and nothing else.
+   */
   it('derives the baseline from completed runs only', () => {
     expect(report.baseline.sampleSize).toBe(3);
-    expect(report.baseline.medianMinPerGb).toBeCloseTo(1.572, 2);
+    expect(report.baseline.medianMinPerGb).toBeCloseTo(1.464, 2);
   });
 
   it('reports the spread across completed runs, which is wide', () => {
     expect(report.baseline.spread).not.toBeNull();
-    expect(report.baseline.spread!.min).toBeCloseTo(0.723, 2);
-    expect(report.baseline.spread!.max).toBeCloseTo(1.925, 2);
+    expect(report.baseline.spread!.min).toBeCloseTo(0.674, 2);
+    expect(report.baseline.spread!.max).toBeCloseTo(1.793, 2);
   });
 
-  it('puts the incident at twice the baseline', () => {
+  it('gives the incident NO min/GB, because it moved nothing', () => {
+    // It used to read 3.138 min/GB and "2.0x the baseline" — elapsed time
+    // divided by the size of the PHONE, on a run that wrote no backup at all.
+    // Founder QA 2026-09-19 reported the same shape as "0.1 min/GB on a run
+    // that moved nothing". A run with no backup now says nothing, exactly as
+    // its Rate already did.
     const incident = report.stalled[0];
-    expect(incident.minPerGb).toBeCloseTo(3.138, 2);
-    expect(ratioToBaseline(incident, report.baseline)).toBeCloseTo(2.0, 1);
+    expect(incident.backupGb == null || incident.backupGb === 0).toBe(true);
+    expect(incident.minPerGb).toBeNull();
+    expect(incident.minPerGbLabel).toBe('—');
+    expect(ratioToBaseline(incident, report.baseline)).toBeNull();
+  });
+
+  it('still compares a run that DID move something against the baseline', () => {
+    // Otherwise the test above would be the only thing left saying anything
+    // about ratioToBaseline, and a broken ratio would ship green.
+    const measured = report.runs.filter((r) => r.minPerGb != null);
+    expect(measured.length).toBe(3);
+    const slowest = measured.reduce((a, b) => ((a.minPerGb ?? 0) > (b.minPerGb ?? 0) ? a : b));
+    expect(slowest.minPerGb).toBeCloseTo(1.793, 2);
+    expect(ratioToBaseline(slowest, report.baseline)).toBeCloseTo(1.793 / 1.464, 2);
   });
 
   it('returns null rather than Infinity when the device size is missing', () => {

@@ -66,8 +66,8 @@ describe('computeMetric', () => {
    *     where source = 'iphone-backup' and outcome <> 'running'
    *       and created_at < '2026-09-19T00:00:00Z'     -- the fixture's corpus, 24 rows
    *   ), r as (
-   *     select elapsed_ms/60000.0 as minutes, backup_bytes/1073741824.0 as backup_gb,
-   *            device_used_bytes/1073741824.0 as device_gb, messages_extracted,
+   *     select elapsed_ms/60000.0 as minutes, backup_bytes/1000000000.0 as backup_gb,
+   *            device_used_bytes/1000000000.0 as device_gb, messages_extracted,
    *            case when backup_bytes > 0 and transfer_ms > 0
    *                   then (backup_bytes/1048576.0)/(transfer_ms/1000.0)
    *                 when backup_bytes > 0 and elapsed_ms > 0
@@ -77,6 +77,10 @@ describe('computeMetric', () => {
    *   select count(*), count(minutes), avg(minutes), sum(minutes), min(minutes), max(minutes),
    *          count(backup_gb), avg(backup_gb), …  from r;
    *
+   * The GB divisor is 1 000 000 000, not 1 GiB — founder QA 2026-09-19: his
+   * phone reads 58.1 GB in iOS Settings where the card said 54.1. Rate keeps
+   * MiB; see the note on BYTES_PER_MB for why the two differ.
+   *
    * The counts differ per column ON PURPOSE and are the point of the table:
    * 24 rows, but only 6 wrote a backup figure, only 4 measured a rate, only 4
    * extracted messages and only 20 reported device usage. A `count` here is
@@ -85,10 +89,10 @@ describe('computeMetric', () => {
   const EXPECTED: Record<MetricColumn, Partial<Record<MetricFunction, number>>> = {
     runs: { count: 24 },
     duration: { count: 24, average: 22.665, sum: 543.9604, min: 0.0371, max: 181.6933 },
-    backup: { count: 6, average: 40.5496, sum: 243.2978, min: 0, max: 113.7442 },
+    backup: { count: 6, average: 43.5398, sum: 261.239, min: 0, max: 122.1319 },
     rate: { count: 4, average: 24.6397, sum: 98.5586, min: 21.1419, max: 27.3692 },
     messages: { count: 4, average: 110097.75, sum: 440391, min: 2592, max: 232940 },
-    deviceUsed: { count: 20, average: 45.3302, sum: 906.604, min: 19.2413, max: 65.9418 },
+    deviceUsed: { count: 20, average: 48.6729, sum: 973.4586, min: 20.6602, max: 70.8045 },
   };
 
   it('reproduces every column x function against the transcribed 24 rows', () => {
