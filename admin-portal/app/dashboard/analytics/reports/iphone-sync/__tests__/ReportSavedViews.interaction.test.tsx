@@ -25,7 +25,11 @@ import { resolvePeriod } from '@/lib/reports/period';
 import { DEFAULT_CLIENT_STATE } from '@/lib/reports/report-url';
 import { MAX_PINNED, type ReportSavedView } from '@/lib/reports/report-views';
 import type { ReportViewsApi } from '@/lib/reports/report-views-api';
-import { FIXTURE_ROWS_24, FIXTURE_USERS_24 } from '@/lib/reports/__tests__/iphone-sync.fixture';
+import {
+  FIXTURE_ROWS_24,
+  FIXTURE_USERS_24,
+  USERS_WITH_A_MISSING_DISPLAY_NAME,
+} from '@/lib/reports/__tests__/iphone-sync.fixture';
 import { IphoneSyncReport } from '../IphoneSyncReport';
 
 const NOW = new Date('2026-09-19T22:07:00.000Z');
@@ -87,10 +91,16 @@ function mount({
   rows = FIXTURE_ROWS_24,
   period = THIS_WEEK,
   api,
-}: { rows?: typeof FIXTURE_ROWS_24; period?: typeof THIS_WEEK; api?: ReportViewsApi } = {}) {
+  users = FIXTURE_USERS_24,
+}: {
+  rows?: typeof FIXTURE_ROWS_24;
+  period?: typeof THIS_WEEK;
+  api?: ReportViewsApi;
+  users?: typeof FIXTURE_USERS_24;
+} = {}) {
   const result = render(
     <IphoneSyncReport
-      report={buildIphoneSyncReport(rows, FIXTURE_USERS_24)}
+      report={buildIphoneSyncReport(rows, users)}
       period={period}
       rowCap={200}
       initialState={DEFAULT_CLIENT_STATE}
@@ -373,7 +383,16 @@ describe('the views dropdown', () => {
 describe('saving the current view', () => {
   it('sends the page`s CURRENT filters and the chosen column and function, and nothing else', async () => {
     const api = fakeApi([]);
-    mount({ api });
+    // DERIVED users: one of them has no display name, so `userLabel` falls
+    // back to their email. That is what makes the `@` assertion below able to
+    // fail — against FIXTURE_USERS_24, where everyone has a display name, a
+    // leaked user label would carry no `@` at all.
+    mount({ api, users: USERS_WITH_A_MISSING_DISPLAY_NAME });
+    expect(
+      buildIphoneSyncReport(FIXTURE_ROWS_24, USERS_WITH_A_MISSING_DISPLAY_NAME).runs.some((r) =>
+        r.userLabel.includes('@')
+      )
+    ).toBe(true);
 
     // Narrow the page first, so a payload built from defaults would be wrong.
     fireEvent.click(screen.getByRole('button', { name: /Stalled/ }));
