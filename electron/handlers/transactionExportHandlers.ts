@@ -111,7 +111,7 @@ export const cleanupTransactionHandlers = (): void => {
 
 /**
  * Register transaction export and submission IPC handlers
- * @param _mainWindow - Main window instance (BACKLOG-3454: IGNORED — pushes resolve the live window via sendToMainWindow; kept so existing call sites and suites compile)
+ * @param _mainWindow - Main window instance. No push reads it any more (BACKLOG-3454: pushes resolve the live window via sendToMainWindow), but its truthiness still gates the submission sync pollers below.
  */
 export function registerTransactionExportHandlers(
   _mainWindow: BrowserWindow | null,

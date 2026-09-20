@@ -62,7 +62,7 @@ export function setMainWindow(win: BrowserWindow | null): void {
  * A destroyed window reads as absent: Electron throws "Object has been
  * destroyed" on its `webContents`, and after a Dock reopen the previous window
  * is exactly that. This is the single `isDestroyed()` guard that used to be
- * copy-pasted at forty-four call sites.
+ * copy-pasted at each of the sixty-one push sites.
  */
 export function getMainWindow(): BrowserWindow | null {
   if (!mainWindow || mainWindow.isDestroyed()) return null;
