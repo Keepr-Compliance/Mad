@@ -22,6 +22,7 @@ import "@testing-library/jest-dom";
 
 const mockGetSnapshot = jest.fn();
 const mockCaptureNow = jest.fn();
+const mockDeleteReport = jest.fn();
 
 jest.mock("../../../services/supportAccessService", () => {
   const actual = jest.requireActual("../../../services/supportAccessService");
@@ -32,7 +33,7 @@ jest.mock("../../../services/supportAccessService", () => {
     grantAccess: jest.fn(),
     revokeAccess: jest.fn(),
     sendReport: jest.fn(),
-    deleteReport: jest.fn(),
+    deleteReport: (id: string) => mockDeleteReport(id),
   };
 });
 
@@ -293,7 +294,7 @@ describe("SupportAccessSettings", () => {
 
       const confirmation = await screen.findByText(/i understand that/i);
       expect(confirmation).toHaveTextContent(
-        /record of what the app did on this mac/i,
+        /record of what the app did on this computer/i,
       );
       expect(confirmation).toHaveTextContent(
         // Not vague-and-true. This is the sentence a user is guaranteed to
@@ -305,6 +306,122 @@ describe("SupportAccessSettings", () => {
       expect(confirmation).not.toHaveTextContent(
         /names and phone numbers will be sent/i,
       );
+    });
+  });
+
+  /**
+   * BACKLOG-3443. Support access is not Mac-only — the great majority of
+   * recorded syncs come from Windows — and this panel told every user their
+   * reports sat on "this Mac". Six user-visible strings said it, in four
+   * different render states, so one render cannot reach them all: each state
+   * is driven here separately.
+   */
+  describe("the platform word", () => {
+    const UNSENT_REPORT = {
+      id: "report-1",
+      capturedAt: new Date(NOW).toISOString(),
+      reason: "scheduled" as const,
+      byteSize: 2048,
+      rawByteSize: 8192,
+      scopes: ["message-import" as const],
+      covers: "Text message import",
+      state: "pending" as const,
+      truncated: false,
+      truncatedBytes: 0,
+      consentId: "consent-1",
+      localDeleteInDays: 12,
+    };
+
+    function offSnapshot(overrides: Record<string, unknown> = {}) {
+      const base = snapshot();
+      return snapshot({
+        state: { ...base.state, active: false, msRemaining: 0 },
+        ...overrides,
+      });
+    }
+
+    it("says 'this computer' in the off-state explainer", async () => {
+      mockGetSnapshot.mockResolvedValue(offSnapshot());
+
+      render(
+        <StrictMode>
+          <SupportAccessSettings />
+        </StrictMode>,
+      );
+
+      // Positive control: the off-state panel really did render.
+      const explainer = await screen.findByText(/if keepr support asks you/i);
+      expect(explainer).toHaveTextContent(
+        /the app is doing on this computer for a period you choose/i,
+      );
+      expect(explainer).not.toHaveTextContent(/\bmac\b/i);
+    });
+
+    it("says 'this computer' on the line the user has to tick", async () => {
+      mockGetSnapshot.mockResolvedValue(offSnapshot());
+
+      render(
+        <StrictMode>
+          <SupportAccessSettings />
+        </StrictMode>,
+      );
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: /turn on support access/i }),
+      );
+
+      const confirmation = await screen.findByText(/i understand that/i);
+      expect(confirmation).toHaveTextContent(
+        /record of what the app did on this computer/i,
+      );
+      expect(confirmation).not.toHaveTextContent(/\bmac\b/i);
+    });
+
+    it("says 'this computer' where the reports are listed", async () => {
+      mockGetSnapshot.mockResolvedValue(
+        offSnapshot({ reports: [UNSENT_REPORT] }),
+      );
+
+      render(
+        <StrictMode>
+          <SupportAccessSettings />
+        </StrictMode>,
+      );
+
+      const blurb = await screen.findByText(/everything captured on/i);
+      expect(blurb).toHaveTextContent(
+        /everything captured on this computer, waiting to go and already sent/i,
+      );
+      expect(blurb).toHaveTextContent(/as from this computer/i);
+      expect(blurb).not.toHaveTextContent(/\bmac\b/i);
+
+      // The unsent row carries its own local deadline, and said "this Mac".
+      const countdown = screen.getByText(/deleted from this computer in/i);
+      expect(countdown).toHaveTextContent(
+        /deleted from this computer in 12 days/i,
+      );
+    });
+
+    it("says 'this computer' in the toast after a delete", async () => {
+      mockGetSnapshot.mockResolvedValue(
+        offSnapshot({ reports: [UNSENT_REPORT] }),
+      );
+      mockDeleteReport.mockResolvedValue({ deleted: true, reports: [] });
+
+      render(
+        <StrictMode>
+          <SupportAccessSettings />
+        </StrictMode>,
+      );
+
+      fireEvent.click(await screen.findByRole("button", { name: /^delete$/i }));
+
+      await waitFor(() => {
+        expect(mockNotifySuccess).toHaveBeenCalledWith(
+          "Report deleted from this computer and from Keepr",
+        );
+      });
+      expect(mockNotifyError).not.toHaveBeenCalled();
     });
   });
 });

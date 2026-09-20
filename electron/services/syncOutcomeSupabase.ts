@@ -87,6 +87,34 @@ function int(fields: TimelineMeta, key: string): number | undefined {
   return typeof v === "number" && Number.isInteger(v) ? v : undefined;
 }
 
+/**
+ * BACKLOG-3460 — EVERY `bigint` COLUMN GOES THROUGH HERE.
+ *
+ * Postgres does not truncate a fractional literal into a `bigint`; it REJECTS THE
+ * WHOLE WRITE with `invalid input syntax for type bigint: "4142962380.8"`. One
+ * non-integer byte count therefore killed the heartbeat and the terminal write of
+ * every run that reached transfer, leaving it `outcome='running'` forever.
+ *
+ * IT ROUNDS, and that is the whole difference from `int()` above, which DROPS. A byte
+ * count rounded to the nearest byte loses nothing worth having; dropping it would
+ * write a row whose byte counter is absent — the exact figure this column exists to
+ * carry. `int()` keeps its strict semantics for `device_error_code`, where a
+ * fractional value is garbage rather than a rounding artefact and rounding it would
+ * invent an error code the device never reported.
+ *
+ * THE SECOND LAYER, NOT THE FIX. The producer is integerised at `syncTimeline`'s
+ * `recordBytesTransferred`, so the stall comparison sees the same integer the corpus
+ * stores. This exists because the nine other `bigint` columns each rely on a producer
+ * being integer by construction, and a future producer need not be.
+ */
+function roundToBigint(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isFinite(v) ? Math.round(v) : undefined;
+}
+/** `roundToBigint` over a key of the open `fields` map. */
+function bigintNum(fields: TimelineMeta, key: string): number | undefined {
+  return roundToBigint(fields[key]);
+}
+
 /** Drop keys whose value was never established, so absent stays absent in Postgres. */
 function defined(row: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
@@ -121,7 +149,7 @@ export function buildSyncOutcomeRow(
 
     source: row.source,
     outcome: row.outcome,
-    elapsed_ms: row.elapsedMs,
+    elapsed_ms: roundToBigint(row.elapsedMs),
     phases: row.phases.map((p) => ({ phase: p.phase, elapsed_ms: p.elapsedMs })),
 
     // BACKLOG-3440: sent on EVERY write, because `created_at` records whichever write
@@ -132,7 +160,7 @@ export function buildSyncOutcomeRow(
     // BACKLOG-3440: the pair that separates "slow" from "stopped dead". `updated_at`
     // advancing while `bytes_last_increased_at` stands still IS the stall; neither
     // advancing is a process or an app that is gone.
-    bytes_transferred: num(f, "bytesTransferred"),
+    bytes_transferred: bigintNum(f, "bytesTransferred"),
     bytes_last_increased_at: ts(num(f, "bytesLastIncreasedAt")),
     last_phase: str(f, "lastPhase"),
 
@@ -151,21 +179,21 @@ export function buildSyncOutcomeRow(
     // MODEL identifier only. Never `name`, never `udid`, never `serialNumber`.
     device_model: str(f, "deviceModel"),
     device_ios_version: str(f, "deviceIosVersion"),
-    device_used_bytes: num(f, "deviceUsedBytes"),
-    device_free_bytes: num(f, "deviceFreeBytes"),
-    device_capacity_bytes: num(f, "deviceCapacityBytes"),
+    device_used_bytes: bigintNum(f, "deviceUsedBytes"),
+    device_free_bytes: bigintNum(f, "deviceFreeBytes"),
+    device_capacity_bytes: bigintNum(f, "deviceCapacityBytes"),
 
     host_os_release: str(f, "hostOsRelease"),
-    host_total_mem_bytes: num(f, "hostTotalMemBytes"),
-    host_disk_free_bytes: num(f, "hostDiskFreeBytes"),
-    host_disk_total_bytes: num(f, "hostDiskTotalBytes"),
+    host_total_mem_bytes: bigintNum(f, "hostTotalMemBytes"),
+    host_disk_free_bytes: bigintNum(f, "hostDiskFreeBytes"),
+    host_disk_total_bytes: bigintNum(f, "hostDiskTotalBytes"),
 
-    backup_bytes: num(f, "backupBytes"),
+    backup_bytes: bigintNum(f, "backupBytes"),
     backup_bytes_unmeasured: bool(f, "backupBytesUnmeasured"),
     messages_extracted: num(f, "messagesExtracted"),
     conversations_extracted: num(f, "conversationsExtracted"),
     contacts_extracted: num(f, "contactsExtracted"),
-    extraction_ms: num(f, "extractionMs"),
+    extraction_ms: bigintNum(f, "extractionMs"),
 
     app_version: env.appVersion,
     // No `?? str(f, "platform")` fallback: `readEnv()` returns `process.platform` on

@@ -168,6 +168,7 @@ jest.mock("../utils/rateLimit", () => ({
 
 // Import after mocks
 import { registerTransactionHandlers } from "../handlers/transactionHandlers";
+import { setMainWindow } from "../windowRegistry";
 
 // Test constants
 const TEST_USER_ID = "550e8400-e29b-41d4-a716-446655440000";
@@ -190,6 +191,10 @@ describe("Transaction Handlers Integration Tests", () => {
     mockIpcHandle.mockImplementation((channel: string, handler: RegisteredIpcHandler) => {
       registeredHandlers.set(channel, handler);
     });
+    // BACKLOG-3454: the window is no longer captured at registration — every push
+    // resolves the live one through the registry, so the stand-in is registered
+    // there rather than only handed to the register call.
+    setMainWindow(mockMainWindow as any);
     registerTransactionHandlers(mockMainWindow as any);
   });
 

@@ -60,7 +60,7 @@ describe("support access disclosure", () => {
     });
 
     it("carries the version the wording was bumped to", () => {
-      expect(SUPPORT_ACCESS_DISCLOSURE_ID).toBe("support-access-disclosure-v3");
+      expect(SUPPORT_ACCESS_DISCLOSURE_ID).toBe("support-access-disclosure-v4");
       expect(currentDisclosure().id).toBe(SUPPORT_ACCESS_DISCLOSURE_ID);
     });
   });
@@ -97,6 +97,30 @@ describe("support access disclosure", () => {
       expect(text).toContain("encrypted");
       expect(text).toContain("30 days");
       expect(text).toContain("ends by itself");
+    });
+  });
+
+  /**
+   * BACKLOG-3443. Support access is not a Mac feature — most recorded syncs
+   * come from Windows — so the consent screen must not tell a Windows user
+   * that their data sits on "this Mac". Asserted on the exported constant
+   * rather than the file's bytes, so a comment quoting the old wording cannot
+   * mask a text that still says it.
+   */
+  describe("the platform word", () => {
+    it("names no platform the user may not be on", () => {
+      expect(SUPPORT_ACCESS_DISCLOSURE_TEXT).not.toMatch(/\bmac\b|macos/i);
+    });
+
+    it("still tells the user where the data is, in neutral words", () => {
+      // Paired with the negative above: deleting the sentences would satisfy
+      // "no Mac" while removing the promise the disclosure exists to make.
+      const text = SUPPORT_ACCESS_DISCLOSURE_TEXT;
+      expect(text).toContain("what the app is doing on this computer");
+      expect(text).toContain("Information about this computer");
+      expect(text).toContain("operating system version");
+      expect(text).toContain("while they wait on this computer");
+      expect(text).toContain("and from this computer");
     });
   });
 

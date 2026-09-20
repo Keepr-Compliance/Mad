@@ -86,7 +86,7 @@ export function formatUnknownBackupSizeError(): UserFacingError {
   return {
     title: "Couldn't check there's room for this backup",
     description:
-      "Keepr couldn't work out how big this iPhone backup will be, so it can't tell whether it fits on this Mac — and it won't start a sync it can't check. Unlock your iPhone, leave it connected and tap Trust if asked, then try again.",
+      "Keepr couldn't work out how big this iPhone backup will be, so it can't tell whether it fits on this computer — and it won't start a sync it can't check. Unlock your iPhone, leave it connected and tap Trust if asked, then try again.",
     actionSuggestion:
       "Unlock your iPhone and keep it plugged in, then sync again. If it keeps happening, reconnect the cable and free up disk space before retrying.",
     code: "BACKUP_SIZE_UNKNOWN",

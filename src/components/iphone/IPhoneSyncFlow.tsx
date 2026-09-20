@@ -248,14 +248,37 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
             >
               Close
             </button>
-            {isConnected && (
-              <button
-                onClick={() => { logger.info("[IPhoneSyncFlow] Try Again clicked"); startSync(); }}
-                className="px-6 py-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white font-medium rounded-lg hover:from-purple-600 hover:to-indigo-700 transition-all"
-              >
-                Try Again
-              </button>
-            )}
+            {/* BACKLOG-3463: Try Again is ALWAYS rendered. It used to be wrapped
+                in `{isConnected && …}`, and on a cable pull the error frame
+                renders first with isConnected still true, then the detector's
+                device-disconnected lands ~1.8 s later and the button
+                disappeared out from under the user (dev log 2026-09-19
+                20:40:18.500 → 20:40:20.263).
+
+                With no phone present, retrying the sync is not the useful
+                action and would be a dead end anyway: startSync() returns
+                early on `!device` and only swaps the red text
+                (useIPhoneSync.ts:829-881) — it never leaves syncStatus
+                "error", so the user would stay on this same screen. Instead
+                the click resets to the clean idle state via the existing
+                cancelSync (useIPhoneSync.ts:1035-1063), which is exactly what
+                Close beside it already does minus dismissing the modal. `view`
+                then resolves to its `connection` DEFAULT and the user lands on
+                the "Connect Your iPhone" step — no new step, no new state. */}
+            <button
+              onClick={() => {
+                logger.info("[IPhoneSyncFlow] Try Again clicked");
+                if (isConnected) {
+                  startSync();
+                } else {
+                  logger.info("[IPhoneSyncFlow] Try Again with no device — returning to the connect step");
+                  void cancelSync();
+                }
+              }}
+              className="px-6 py-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white font-medium rounded-lg hover:from-purple-600 hover:to-indigo-700 transition-all"
+            >
+              Try Again
+            </button>
           </div>
         </div>
       )}

@@ -41,6 +41,8 @@ import {
   CURRENT_PRIVACY_POLICY_VERSION,
 } from "../constants/legalVersions";
 
+import { sendToMainWindow } from "../windowRegistry";
+
 // Type definitions
 interface AuthResponse {
   success: boolean;
@@ -457,7 +459,7 @@ export async function handleSavePendingMailboxTokens(
  * is a separate fact, reported separately as `revokeOutcome`.
  */
 export async function handleDisconnectMailbox(
-  mainWindow: BrowserWindow | null,
+  _mainWindow: BrowserWindow | null,
   userId: string,
   provider: "google" | "microsoft"
 ): Promise<DisconnectMailboxResult> {
@@ -571,11 +573,9 @@ export async function handleDisconnectMailbox(
       success: true,
     });
 
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send(`${provider}:mailbox-disconnected`, {
-        success: true,
-      });
-    }
+    sendToMainWindow(`${provider}:mailbox-disconnected`, {
+      success: true,
+    });
 
     return { success: true, revokeOutcome, revokeReason };
   } catch (error) {
@@ -612,17 +612,17 @@ export async function handleDisconnectMailbox(
  * Register shared auth handlers
  */
 export function registerSharedAuthHandlers(
-  mainWindow: BrowserWindow | null
+  _mainWindow: BrowserWindow | null
 ): void {
   ipcMain.handle("auth:complete-pending-login", handleCompletePendingLogin);
   ipcMain.handle("auth:save-pending-mailbox-tokens", handleSavePendingMailboxTokens);
 
   ipcMain.handle("auth:google:disconnect-mailbox", (event, userId: string) =>
-    handleDisconnectMailbox(mainWindow, userId, "google")
+    handleDisconnectMailbox(_mainWindow, userId, "google")
   );
 
   ipcMain.handle("auth:microsoft:disconnect-mailbox", (event, userId: string) =>
-    handleDisconnectMailbox(mainWindow, userId, "microsoft")
+    handleDisconnectMailbox(_mainWindow, userId, "microsoft")
   );
 
   // DEV ONLY: Expire a mailbox token for testing Connection Issue state

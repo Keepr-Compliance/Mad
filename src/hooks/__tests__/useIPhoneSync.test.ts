@@ -961,6 +961,50 @@ describe("useIPhoneSync", () => {
       expect(result.current.error).toBeNull();
     });
 
+    // BACKLOG-3463: the anchor for the Try Again route. The failed-sync screen's
+    // Try Again now calls cancelSync when no phone is present, and the flow
+    // relies on that landing back on the "Connect Your iPhone" step — which it
+    // does only if cancelSync clears syncStatus off "error". The test above
+    // cancels from idle, so it cannot see that. This one starts from the
+    // founder's state: sync failed, then the phone went away.
+    // Component side: src/components/iphone/__tests__/IPhoneSyncFlow.tryAgain-3463.test.tsx
+    it("BACKLOG-3463: cancelSync clears a sync error back to idle", async () => {
+      const syncApi = setupSyncApiMock();
+      (window as any).api = { sync: syncApi };
+
+      const { result } = renderHook(() => useIPhoneSync());
+
+      await act(async () => {
+        deviceConnectedCallback?.(mockDevice);
+        await Promise.resolve();
+      });
+
+      // The sync fails...
+      act(() => {
+        syncErrorCallback?.({ message: "Device disconnected during sync" });
+      });
+      expect(result.current.syncStatus).toBe("error");
+      expect(result.current.error).toBe("Device disconnected during sync");
+
+      // ...and then the cable is pulled, so the retry has nothing to run against.
+      act(() => {
+        deviceDisconnectedCallback?.();
+      });
+      expect(result.current.isConnected).toBe(false);
+      expect(result.current.syncStatus).toBe("error");
+
+      await act(async () => {
+        await result.current.cancelSync();
+      });
+
+      // IPhoneSyncFlow's `view` resolves to its `connection` default only when
+      // all four of these hold.
+      expect(result.current.syncStatus).toBe("idle");
+      expect(result.current.error).toBeNull();
+      expect(result.current.progress).toBeNull();
+      expect(result.current.syncLocked).toBe(false);
+    });
+
     it("should handle cancel error gracefully", async () => {
       const syncApi = setupSyncApiMock();
       syncApi.cancel.mockRejectedValue(new Error("Cancel failed"));

@@ -15,17 +15,17 @@ import { registerTransactionSearchHandlers } from "./transactionSearchHandlers";
 
 /**
  * Register all transaction-related IPC handlers (delegates to domain files).
- * @param mainWindow - Main window instance
+ * @param _mainWindow - Main window instance (BACKLOG-3454: IGNORED — pushes resolve the live window via sendToMainWindow; kept so existing call sites and suites compile)
  */
 export function registerTransactionHandlers(
-  mainWindow: BrowserWindow | null,
+  _mainWindow: BrowserWindow | null,
 ): void {
-  registerTransactionCrudHandlers(mainWindow);
-  registerTransactionExportHandlers(mainWindow);
-  registerEmailSyncHandlers(mainWindow);
+  registerTransactionCrudHandlers(_mainWindow);
+  registerTransactionExportHandlers(_mainWindow);
+  registerEmailSyncHandlers(_mainWindow);
   registerEmailLinkingHandlers();
   registerEmailAutoLinkHandlers();
-  registerAttachmentHandlers(mainWindow);
+  registerAttachmentHandlers(_mainWindow);
   registerTransactionSearchHandlers();
 }
 
