@@ -17,6 +17,8 @@ import {
   type GithubPublishConfig,
 } from "../services/updaterAssetUrl";
 
+import { getMainWindow } from "../windowRegistry";
+
 // Track registration to prevent duplicate handlers
 let handlersRegistered = false;
 
@@ -57,7 +59,7 @@ function readGithubPublishConfig(): GithubPublishConfig | undefined {
 /**
  * Register auto-updater IPC handlers
  */
-export function registerUpdaterHandlers(mainWindow: BrowserWindow): void {
+export function registerUpdaterHandlers(_mainWindow: BrowserWindow): void {
   // Prevent double registration
   if (handlersRegistered) {
     logService.warn(
@@ -148,9 +150,12 @@ export function registerUpdaterHandlers(mainWindow: BrowserWindow): void {
     // false = show installer, true = force run after install
     setImmediate(() => {
       app.removeAllListeners("window-all-closed");
-      if (mainWindow) {
-        mainWindow.removeAllListeners("close");
-        mainWindow.close();
+      // BACKLOG-3454: the live window. The captured one may be destroyed after a
+      // macOS Dock reopen, and `close()` on a destroyed window throws.
+      const liveWindow = getMainWindow();
+      if (liveWindow) {
+        liveWindow.removeAllListeners("close");
+        liveWindow.close();
       }
       autoUpdater.quitAndInstall(false, true);
     });

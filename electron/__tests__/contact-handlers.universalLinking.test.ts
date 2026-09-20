@@ -155,6 +155,7 @@ jest.mock("../workers/contactWorkerPool", () => ({
 }));
 
 import { registerContactHandlers } from "../handlers/contactHandlers";
+import { setMainWindow } from "../windowRegistry";
 import * as externalContactDb from "../services/db/externalContactDbService";
 import { createLink } from "../services/db/contactSourceLinkDbService";
 import {
@@ -317,10 +318,12 @@ beforeEach(() => {
   registeredHandlers.clear();
   __resetContactLinkingScheduler();
   // Registering the handlers is what injects the REAL pass into the scheduler.
-  registerContactHandlers({
-    isDestroyed: () => false,
-    webContents: { send },
-  } as any);
+  // BACKLOG-3454: the window is no longer captured at registration — every push
+  // resolves the live one through the registry, so the stand-in is registered
+  // there rather than only handed to the register call.
+  const stubWindow = { isDestroyed: () => false, webContents: { send } };
+  setMainWindow(stubWindow as never);
+  registerContactHandlers(stubWindow as never);
 });
 
 afterEach(() => {

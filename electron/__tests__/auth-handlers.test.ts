@@ -239,6 +239,7 @@ jest.mock("../handlers/syncHandlers", () => ({
 
 // Import after mocks are set up
 import { registerAuthHandlers, initializeDatabase } from "../handlers/authHandlers";
+import { setMainWindow } from "../windowRegistry";
 import databaseService from "../services/databaseService";
 import googleAuthService from "../services/googleAuthService";
 import microsoftAuthService from "../services/microsoftAuthService";
@@ -312,6 +313,11 @@ describe("Auth Handlers", () => {
     });
 
     // Register all handlers
+    // BACKLOG-3454: the window is no longer captured at registration — every
+    // push resolves the live one through the registry, so the stand-in has to
+    // be the registered window rather than an argument.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    setMainWindow(mockMainWindow as any);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     registerAuthHandlers(mockMainWindow as any);
   });

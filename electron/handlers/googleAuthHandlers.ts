@@ -34,6 +34,8 @@ import {
   CURRENT_PRIVACY_POLICY_VERSION,
 } from "../constants/legalVersions";
 
+import { sendToMainWindow, getMainWindow } from "../windowRegistry";
+
 // Module-level storage for PKCE code verifiers between split IPC handlers
 // Key: flow type ("login" | "mailbox" | "mailbox-pending"), Value: codeVerifier
 const pendingCodeVerifiers = new Map<string, string>();
@@ -116,7 +118,7 @@ function needsToAcceptTerms(user: import("../types/models").User): boolean {
  * Google Auth: Start login flow (uses popup window)
  */
 export async function handleGoogleLogin(
-  mainWindow: BrowserWindow | null
+  _mainWindow: BrowserWindow | null
 ): Promise<LoginStartResponse> {
   try {
     await logService.info(
@@ -188,13 +190,11 @@ export async function handleGoogleLogin(
           "AuthHandlers"
         );
         // Notify renderer that auth was cancelled
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send("google:login-cancelled");
-          logService.info(
-            "Sent google:login-cancelled event to renderer",
-            "AuthHandlers"
-          );
-        }
+        sendToMainWindow("google:login-cancelled");
+        logService.info(
+          "Sent google:login-cancelled event to renderer",
+          "AuthHandlers"
+        );
       }
     });
 
@@ -301,24 +301,22 @@ export async function handleGoogleLogin(
           );
           // Validate subscription for pending login
           const pendingSubscription = await supabaseService.validateSubscription(cloudUser.id);
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send("google:login-pending", {
-              success: true,
-              pendingLogin: true,
-              oauthData: {
-                provider: "google" as const,
-                userInfo,
-                tokens: {
-                  access_token: tokens.access_token,
-                  refresh_token: tokens.refresh_token ?? null,
-                  expires_at: tokens.expires_at ?? new Date(Date.now() + 3600 * 1000).toISOString(),
-                  scopes: tokens.scopes ?? [],
-                },
-                cloudUser,
-                subscription: pendingSubscription ?? undefined,
+          sendToMainWindow("google:login-pending", {
+            success: true,
+            pendingLogin: true,
+            oauthData: {
+              provider: "google" as const,
+              userInfo,
+              tokens: {
+                access_token: tokens.access_token,
+                refresh_token: tokens.refresh_token ?? null,
+                expires_at: tokens.expires_at ?? new Date(Date.now() + 3600 * 1000).toISOString(),
+                scopes: tokens.scopes ?? [],
               },
-            });
-          }
+              cloudUser,
+              subscription: pendingSubscription ?? undefined,
+            },
+          });
           return;
         }
 
@@ -377,30 +375,26 @@ export async function handleGoogleLogin(
         });
 
         // Send success event to renderer
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send("google:login-complete", {
-            success: true,
-            user: {
-              id: localUser.id,
-              email: localUser.email,
-              display_name: localUser.display_name,
-              avatar_url: localUser.avatar_url,
-            },
-            sessionToken,
-            subscription,
-            isNewUser: isNewUser || needsTermsUpdate,
-          });
-        }
+        sendToMainWindow("google:login-complete", {
+          success: true,
+          user: {
+            id: localUser.id,
+            email: localUser.email,
+            display_name: localUser.display_name,
+            avatar_url: localUser.avatar_url,
+          },
+          sessionToken,
+          subscription,
+          isNewUser: isNewUser || needsTermsUpdate,
+        });
       } catch (error) {
         await logService.error("Google login completion failed", "AuthHandlers", {
           error: error instanceof Error ? error.message : "Unknown error",
         });
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send("google:login-complete", {
-            success: false,
-            error: error instanceof Error ? error.message : "Login failed",
-          });
-        }
+        sendToMainWindow("google:login-complete", {
+          success: false,
+          error: error instanceof Error ? error.message : "Login failed",
+        });
       }
     };
     setTimeout(() => {
@@ -647,7 +641,7 @@ export async function handleGoogleCompleteLogin(
  * Google Auth: Connect mailbox (Gmail access)
  */
 export async function handleGoogleConnectMailbox(
-  mainWindow: BrowserWindow | null,
+  _mainWindow: BrowserWindow | null,
   userId: string
 ): Promise<MailboxConnectionResponse> {
   try {
@@ -746,12 +740,10 @@ export async function handleGoogleConnectMailbox(
             errorMessage: saveError instanceof Error ? saveError.message : "Failed to save credentials",
           });
 
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send("google:mailbox-connected", {
-              success: false,
-              error: "Failed to save credentials. Please try logging in again.",
-            });
-          }
+          sendToMainWindow("google:mailbox-connected", {
+            success: false,
+            error: "Failed to save credentials. Please try logging in again.",
+          });
           return;
         }
 
@@ -794,15 +786,15 @@ export async function handleGoogleConnectMailbox(
         //
         // Only this branch focuses. A failed connect must not steal the user's
         // browser out from under them.
-        bringAppToFront(mainWindow);
+        // BACKLOG-3454: the live window, not the one captured at registration —
+        // after a Dock reopen the captured one is destroyed and nothing focuses.
+        bringAppToFront(getMainWindow());
 
         // Notify renderer
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send("google:mailbox-connected", {
-            success: true,
-            email: userInfo.email,
-          });
-        }
+        sendToMainWindow("google:mailbox-connected", {
+          success: true,
+          email: userInfo.email,
+        });
 
         // BACKLOG-1759: Now that the Google mailbox is connected, re-fire the
         // Google contact import for users who enabled it but have no Google
@@ -813,9 +805,9 @@ export async function handleGoogleConnectMailbox(
         void importEnabledEmptyContactSources(validatedUserId, ["google_contacts"])
           .then((importResults) => {
             const importedAny = importResults.some((r) => r.imported > 0);
-            if (importedAny && mainWindow && !mainWindow.isDestroyed()) {
+            if (importedAny) {
               // Refresh any open contact picker so the newly imported contacts appear.
-              mainWindow.webContents.send("contacts:external-sync-complete");
+              sendToMainWindow("contacts:external-sync-complete");
             }
           })
           .catch((importError) => {
@@ -851,12 +843,10 @@ export async function handleGoogleConnectMailbox(
             error instanceof Error ? error.message : "Unknown error",
         });
 
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send("google:mailbox-connected", {
-            success: false,
-            error: error instanceof Error ? error.message : "Unknown error",
-          });
-        }
+        sendToMainWindow("google:mailbox-connected", {
+          success: false,
+          error: error instanceof Error ? error.message : "Unknown error",
+        });
       }
     };
     setTimeout(() => {
@@ -894,7 +884,7 @@ export async function handleGoogleConnectMailbox(
  * Returns tokens instead of saving to DB
  */
 export async function handleGoogleConnectMailboxPending(
-  mainWindow: BrowserWindow | null,
+  _mainWindow: BrowserWindow | null,
   emailHint?: string
 ): Promise<PendingMailboxResponse> {
   try {
@@ -953,9 +943,7 @@ export async function handleGoogleConnectMailboxPending(
     authWindow.on("closed", () => {
       if (!authCompleted) {
         googleAuthService.stopLocalServer();
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send("google:mailbox-pending-cancelled");
-        }
+        sendToMainWindow("google:mailbox-pending-cancelled");
       }
     });
 
@@ -1049,21 +1037,21 @@ export async function handleGoogleConnectMailboxPending(
  * Register all Google authentication handlers
  */
 export function registerGoogleAuthHandlers(
-  mainWindow: BrowserWindow | null
+  _mainWindow: BrowserWindow | null
 ): void {
   // Google Auth - Login
-  ipcMain.handle("auth:google:login", () => handleGoogleLogin(mainWindow));
+  ipcMain.handle("auth:google:login", () => handleGoogleLogin(_mainWindow));
   ipcMain.handle("auth:google:complete-login", handleGoogleCompleteLogin);
 
   // Google Auth - Mailbox Connection
   ipcMain.handle("auth:google:connect-mailbox", (_event, userId: string) =>
-    handleGoogleConnectMailbox(mainWindow, userId)
+    handleGoogleConnectMailbox(_mainWindow, userId)
   );
 
   // Google Auth - Mailbox Pending (pre-DB)
   ipcMain.handle(
     "auth:google:connect-mailbox-pending",
     (_event, emailHint?: string) =>
-      handleGoogleConnectMailboxPending(mainWindow, emailHint)
+      handleGoogleConnectMailboxPending(_mainWindow, emailHint)
   );
 }

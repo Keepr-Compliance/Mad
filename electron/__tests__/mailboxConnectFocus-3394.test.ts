@@ -202,6 +202,7 @@ jest.mock("../services/postConnectContactImport", () => ({
 }));
 
 import { registerAuthHandlers } from "../handlers/authHandlers";
+import { setMainWindow } from "../windowRegistry";
 import databaseService from "../services/databaseService";
 import googleAuthService from "../services/googleAuthService";
 import microsoftAuthService from "../services/microsoftAuthService";
@@ -258,6 +259,11 @@ describe("BACKLOG-3394: focusing the app on a mailbox connect", () => {
         registeredHandlers.set(channel, handler);
       },
     );
+    // BACKLOG-3454: the window is no longer captured at registration — every
+    // push resolves the live one through the registry, so the stand-in has to
+    // be the registered window rather than an argument.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    setMainWindow(mockMainWindow as any);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     registerAuthHandlers(mockMainWindow as any);
   });

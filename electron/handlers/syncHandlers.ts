@@ -23,9 +23,9 @@ import type { iOSDevice } from "../types/device";
 import { rateLimiters } from "../utils/rateLimit";
 import { syncStatusService } from "../services/syncStatusService";
 import supabaseService from "../services/supabaseService";
+import { sendToMainWindow } from "../windowRegistry";
 
 let orchestrator: DeviceSyncOrchestrator | null = null;
-let mainWindowRef: BrowserWindow | null = null;
 let currentUserId: string | null = null;
 // Track user ID at sync start to prevent race conditions
 let syncSessionUserId: string | null = null;
@@ -34,15 +34,6 @@ let syncSessionDeviceUdid: string | null = null;
 let syncSessionDeviceName: string | null = null;
 // TASK-2110: Cancellation signal ref shared between sync:cancel and persistence
 const persistCancelSignal = { cancelled: false };
-
-/**
- * Send event to renderer process
- */
-function sendToRenderer(channel: string, data: unknown): void {
-  if (mainWindowRef && !mainWindowRef.isDestroyed()) {
-    mainWindowRef.webContents.send(channel, data);
-  }
-}
 
 /**
  * Get the current user ID, trying multiple sources
@@ -107,11 +98,15 @@ async function getCurrentUserIdForSync(): Promise<string | null> {
 
 /**
  * Register sync-related IPC handlers
- * @param mainWindow - The main BrowserWindow
+ * @param _mainWindow - Ignored since BACKLOG-3454. This module used to hold it in
+ *   `mainWindowRef` and every push read that captured value; after a Dock reopen
+ *   on macOS the window was destroyed and `sendToRenderer` returned silently —
+ *   below a `log.info` that had already claimed the event was sent. Pushes now
+ *   resolve the CURRENT window through `sendToMainWindow`. Kept in the signature
+ *   so existing call sites and suites compile.
  * @param userId - The current user's ID (optional, can be set later via setCurrentUserId)
  */
-export function registerSyncHandlers(mainWindow: BrowserWindow, userId?: string): void {
-  mainWindowRef = mainWindow;
+export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string): void {
   orchestrator = deviceSyncOrchestrator;
   if (userId) {
     currentUserId = userId;
@@ -313,7 +308,7 @@ export function registerSyncHandlers(mainWindow: BrowserWindow, userId?: string)
     // the renderer set up its event listeners
     for (const device of devices) {
       log.info(`[SyncHandlers] Re-emitting device-connected for: ${device.name}`);
-      sendToRenderer("sync:device-connected", device);
+      sendToMainWindow("sync:device-connected", device);
     }
 
     return { success: true, devices };
@@ -361,12 +356,12 @@ function setupEventForwarding(): void {
 
   // Forward progress events
   orchestrator.on("progress", (progress: SyncProgress) => {
-    sendToRenderer("sync:progress", progress);
+    sendToMainWindow("sync:progress", progress);
   });
 
   // Forward phase changes
   orchestrator.on("phase", (phase: string) => {
-    sendToRenderer("sync:phase", phase);
+    sendToMainWindow("sync:phase", phase);
   });
 
   // Forward device events
@@ -377,7 +372,7 @@ function setupEventForwarding(): void {
     });
     // TASK-2121: Capture device name for Supabase persistence
     syncSessionDeviceName = device.name;
-    sendToRenderer("sync:device-connected", device);
+    sendToMainWindow("sync:device-connected", device);
   });
 
   orchestrator.on("device-disconnected", (device: iOSDevice) => {
@@ -385,13 +380,13 @@ function setupEventForwarding(): void {
       name: device.name,
       udid: device.udid,
     });
-    sendToRenderer("sync:device-disconnected", device);
+    sendToMainWindow("sync:device-disconnected", device);
   });
 
   // Forward password required event
   orchestrator.on("password-required", () => {
     log.info("[SyncHandlers] Password required for encrypted backup");
-    sendToRenderer("sync:password-required", {});
+    sendToMainWindow("sync:password-required", {});
   });
 
   // BACKLOG-2911 (FIX 3): both channel names are historical. They mean "the device has
@@ -399,12 +394,12 @@ function setupEventForwarding(): void {
   // of the first, and nothing on this path can establish which.
   orchestrator.on("waiting-for-passcode", () => {
     log.info("[SyncHandlers] Device has not started sending files yet");
-    sendToRenderer("sync:waiting-for-passcode", {});
+    sendToMainWindow("sync:waiting-for-passcode", {});
   });
 
   orchestrator.on("passcode-entered", () => {
     log.info("[SyncHandlers] Device started sending files; transfer beginning");
-    sendToRenderer("sync:passcode-entered", {});
+    sendToMainWindow("sync:passcode-entered", {});
   });
 
   // Forward error events
@@ -416,7 +411,7 @@ function setupEventForwarding(): void {
     const message = error instanceof Error ? error.message : error.message;
     const userError = error instanceof Error ? undefined : (error as { userError?: unknown }).userError;
     log.error("[SyncHandlers] Sync error event", { error: message, hasUserError: !!userError });
-    sendToRenderer("sync:error", { message, ...(userError ? { userError } : {}) });
+    sendToMainWindow("sync:error", { message, ...(userError ? { userError } : {}) });
   });
 
   // Forward completion events and persist data
@@ -428,7 +423,7 @@ function setupEventForwarding(): void {
 
     // Send completion to renderer with counts only (NOT the full message/contact arrays)
     // Sending 627k messages over IPC would freeze the renderer
-    sendToRenderer("sync:complete", {
+    sendToMainWindow("sync:complete", {
       success: result.success,
       error: result.error,
       messageCount: result.messages.length,
@@ -453,7 +448,7 @@ function setupEventForwarding(): void {
         userId: redactId(userIdForPersistence),
         sessionId: result.sessionId || "none",
       });
-      sendToRenderer("sync:progress", {
+      sendToMainWindow("sync:progress", {
         phase: "storing",
         percent: 0,
         message: "Saving messages to database...",
@@ -480,7 +475,7 @@ function setupEventForwarding(): void {
                 : progress.phase === "attachments"
                 ? `Saving attachments... ${progress.current} of ${progress.total}`
                 : `Saving contacts... ${progress.current} of ${progress.total}`;
-            sendToRenderer("sync:progress", {
+            sendToMainWindow("sync:progress", {
               phase: "storing",
               percent: progress.percent,
               message,
@@ -498,7 +493,7 @@ function setupEventForwarding(): void {
           // BACKLOG-2898/2894: a cancelled sync still records the phases that
           // completed — the case an end-of-run write would lose.
           syncTimeline.endSync("cancelled");
-          sendToRenderer("sync:storage-error", {
+          sendToMainWindow("sync:storage-error", {
             error: "Sync cancelled — partial data has been cleaned up.",
           });
           // Still cleanup backup
@@ -546,7 +541,7 @@ function setupEventForwarding(): void {
 
         // Send final completion with storage results
         log.info("[SyncHandlers] Sending sync:storage-complete to renderer");
-        sendToRenderer("sync:storage-complete", {
+        sendToMainWindow("sync:storage-complete", {
           messagesStored: persistResult.messagesStored,
           contactsStored: persistResult.contactsStored,
           attachmentsStored: persistResult.attachmentsStored,
@@ -608,7 +603,7 @@ function setupEventForwarding(): void {
         // BACKLOG-2898: close the timeline so the phases that DID complete are
         // recorded, and the failure is dated.
         syncTimeline.endSync("error");
-        sendToRenderer("sync:storage-error", {
+        sendToMainWindow("sync:storage-error", {
           error: error instanceof Error ? error.message : "Failed to save messages",
         });
         // SPRINT-068: Still cleanup backup even if persistence fails
@@ -661,7 +656,6 @@ export function cleanupSyncHandlers(): void {
     orchestrator.removeAllListeners();
   }
   orchestrator = null;
-  mainWindowRef = null;
   currentUserId = null;
   syncSessionUserId = null;
   syncSessionDeviceUdid = null;

@@ -13,13 +13,14 @@
  * - Offline handling with reconnection
  */
 
-import { BrowserWindow } from "electron";
+
 import { RealtimeChannel } from "@supabase/supabase-js";
 import * as Sentry from "@sentry/electron/main";
 import supabaseService from "./supabaseService";
 import databaseService from "./databaseService";
 import logService from "./logService";
 import type { Transaction, SubmissionStatus } from "../types/models";
+import { sendToMainWindow } from "../windowRegistry";
 
 // ============================================
 // TYPES & INTERFACES
@@ -85,16 +86,8 @@ class SubmissionSyncService {
   private syncInProgress = false;
   private syncIntervalMs: number = DEFAULT_SYNC_INTERVAL_MS;
   private isOnline: boolean = true;
-  private mainWindow: BrowserWindow | null = null;
   private realtimeChannel: RealtimeChannel | null = null;
   private currentUserId: string | null = null;
-
-  /**
-   * Set the main window reference for sending events
-   */
-  setMainWindow(window: BrowserWindow | null): void {
-    this.mainWindow = window;
-  }
 
   /**
    * Start realtime subscription for status changes
@@ -673,14 +666,6 @@ class SubmissionSyncService {
    * Emit status change event to renderer
    */
   private emitStatusChange(detail: StatusChangeDetail): void {
-    if (!this.mainWindow || this.mainWindow.isDestroyed()) {
-      logService.debug(
-        "[SyncService] No main window to send status change event",
-        "SubmissionSyncService"
-      );
-      return;
-    }
-
     const notification = {
       transactionId: detail.transactionId,
       propertyAddress: detail.propertyAddress,
@@ -691,7 +676,16 @@ class SubmissionSyncService {
       message: this.getNotificationMessage(detail.newStatus, detail.propertyAddress, detail.reviewNotes),
     };
 
-    this.mainWindow.webContents.send("submission-status-changed", notification);
+    // BACKLOG-3454: resolve the CURRENT window at send time. This service used
+    // to hold the window handed to it at registration, so after a macOS Dock
+    // reopen every status change went to a destroyed window and was dropped.
+    if (!sendToMainWindow("submission-status-changed", notification)) {
+      logService.debug(
+        "[SyncService] No main window to send status change event",
+        "SubmissionSyncService"
+      );
+      return;
+    }
 
     logService.info(
       `[SyncService] Emitted status change: ${detail.propertyAddress} -> ${detail.newStatus}`,
