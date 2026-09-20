@@ -420,7 +420,22 @@ describe('saving the current view', () => {
       'stalledOnly',
       'types',
     ]);
-    expect(JSON.stringify(payload)).not.toContain('@');
+    // No user reaches the row, under any key. The `@` check alone is not
+    // enough: a leak that picks a user WITH a display name carries no `@`, and
+    // which user it picks is not something a control should depend on.
+    const serialized = JSON.stringify(payload);
+    const labels = [
+      ...new Set(
+        buildIphoneSyncReport(FIXTURE_ROWS_24, USERS_WITH_A_MISSING_DISPLAY_NAME).runs.map(
+          (r) => r.userLabel
+        )
+      ),
+    ];
+    expect(labels.length).toBeGreaterThan(1);
+    for (const label of labels) {
+      expect(serialized, `user label leaked: ${label}`).not.toContain(label);
+    }
+    expect(serialized).not.toContain('@');
   });
 
   it('forces the function back to count when the column offers nothing else', async () => {
