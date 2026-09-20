@@ -69,6 +69,11 @@ function ExportModal({
   const [exportedPath, setExportedPath] = useState<string | null>(null);
   const [saveAsDefault, setSaveAsDefault] = useState(false);
 
+  // BACKLOG-334: TRUE once the saved export preferences have loaded AND carry a
+  // usable format. Only then does step 1 show the summary + "Export format"
+  // button and send its primary straight into the export.
+  const [hasSavedDefaults, setHasSavedDefaults] = useState(false);
+
   // BACKLOG-2292 (Layer 3): export completeness gate. Shown when the audit start
   // predates the imported message history and no targeted import has run yet.
   const {
@@ -130,6 +135,9 @@ function ExportModal({
             // Only use saved preference if it's an implemented format
             if (prefs.export?.defaultFormat && implementedFormats.includes(prefs.export.defaultFormat)) {
               setExportFormat(prefs.export.defaultFormat);
+              // BACKLOG-334: a usable format is what makes this "defaults saved".
+              // A partial or legacy record must NOT make the options step vanish.
+              setHasSavedDefaults(true);
             }
             // Load email export mode preference
             if (prefs.export?.emailExportMode === "thread" || prefs.export?.emailExportMode === "individual") {
@@ -180,18 +188,80 @@ function ExportModal({
     }
   }, [exporting, exportFormat]);
 
-  const handleDateVerification = () => {
+  /**
+   * BACKLOG-334: the step-1 date checks, shared by the primary button and the
+   * "Export format" button. Both routes into the export now run them, so the
+   * new button cannot reach the export with a missing or inverted date range.
+   */
+  const datesAreValid = (): boolean => {
     if (!startDate || !endDate) {
       setError("Please provide Start Date and End Date to continue");
-      return;
+      return false;
     }
     // Validate end date is after start date
     if (startDate > endDate) {
       setError("End Date must be after Start Date");
-      return;
+      return false;
     }
     setError(null);
+    return true;
+  };
+
+  const handleDateVerification = () => {
+    if (!datesAreValid()) return;
+    // BACKLOG-334: with defaults saved the options step has nothing left to ask,
+    // so the primary runs the export directly (and reads "Export", not "Next").
+    // The completeness gate and the paywall are unaffected: both fire from
+    // inside handleExport/proceedWithExport, not from step 2's render.
+    if (hasSavedDefaults) {
+      void handleExport();
+      return;
+    }
     setStep(2);
+  };
+
+  /**
+   * BACKLOG-334: "Export format" on step 1. Opens the options step pre-filled
+   * with what this export will use. Back returns to step 1, and the choices
+   * apply to this export only unless the save checkbox is ticked.
+   */
+  const handleOpenExportOptions = () => {
+    if (!datesAreValid()) return;
+    setStep(2);
+  };
+
+  /**
+   * BACKLOG-334: the export options in words, for the step-1 summary line.
+   * Built from the LIVE state rather than the stored preferences, so after
+   * "Export format" -> change -> Back it describes this export, not the record.
+   */
+  const exportOptionsSummary = (): string => {
+    const formatLabels: Record<string, string> = {
+      "combined-pdf": "One PDF",
+      folder: "Audit Package",
+      pdf: "Summary PDF",
+    };
+    const contentLabels: Record<string, string> = {
+      both: "Texts and emails",
+      emails: "Emails only",
+      texts: "Texts only",
+    };
+    const attachmentLabels: Record<string, string> = {
+      all: "All attachments",
+      email: "Email attachments",
+      text: "Text attachments",
+      none: "No attachments",
+    };
+    const parts = [
+      formatLabels[exportFormat] ?? exportFormat,
+      contentLabels[contentType],
+      attachmentLabels[attachmentType],
+    ];
+    // Threading only says something when emails are part of the export.
+    if (contentType !== "texts") {
+      parts.push(emailExportMode === "individual" ? "Individual emails" : "Threaded emails");
+    }
+    return parts.join(" \u00b7 ");
   };
 
   /**
@@ -617,6 +687,37 @@ function ExportModal({
                 </div>
               </div>
 
+              {/* BACKLOG-334: with defaults saved, say what this export will use
+                  and offer one way to change it. Styled like the attach button
+                  on the emails/texts tabs. */}
+              {hasSavedDefaults && (
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
+                  <p className="text-sm text-gray-700" data-testid="export-format-summary">
+                    Export format: {exportOptionsSummary()}
+                  </p>
+                  <button
+                    onClick={handleOpenExportOptions}
+                    className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
+                    data-testid="export-format-button"
+                  >
+                    <svg
+                      className="w-4 h-4"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"
+                      />
+                    </svg>
+                    Export format
+                  </button>
+                </div>
+              )}
+
               {transaction.first_communication_date &&
                 transaction.last_communication_date && (
                   <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
@@ -863,7 +964,7 @@ function ExportModal({
                     onChange={(e) => setSaveAsDefault(e.target.checked)}
                     className="w-4 h-4 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
                   />
-                  <span className="text-sm text-gray-600">Save these options as my default</span>
+                  <span className="text-sm text-gray-600">Use these options for every export</span>
                 </label>
               </div>
 
@@ -1004,7 +1105,7 @@ function ExportModal({
                     : "bg-gradient-to-r from-purple-500 to-indigo-600 text-white hover:from-purple-600 hover:to-indigo-700 shadow-md hover:shadow-lg"
                 }`}
               >
-                {step === 1 ? "Next" : "Export"}
+                {step === 1 ? (hasSavedDefaults ? "Export" : "Next") : "Export"}
               </button>
             </div>
             {/* Mobile floating button */}
@@ -1017,7 +1118,7 @@ function ExportModal({
                   : "bg-gradient-to-r from-purple-500 to-indigo-600 text-white hover:from-purple-600 hover:to-indigo-700 hover:shadow-xl"
               }`}
             >
-              {step === 1 ? "Next →" : "Export"}
+              {step === 1 ? (hasSavedDefaults ? "Export" : "Next →") : "Export"}
             </button>
           </>
         )}
