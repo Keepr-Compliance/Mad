@@ -29,6 +29,7 @@ import {
   serializeFilters,
   STORED_FILTER_KEYS,
   viewMatchesState,
+  writeFailureMessage,
   type MetricColumn,
   type MetricFunction,
   type ReportSavedView,
@@ -342,5 +343,30 @@ describe('the report key and the column list', () => {
       'messages',
       'deviceUsed',
     ]);
+  });
+});
+
+describe('the sentence a refused write shows', () => {
+  it('carries the DATABASE`s own words, whichever shape the client throws', () => {
+    // PostgrestError extends Error in postgrest-js 2.110.2 — the first shape.
+    // The second is what a bare `{ message }` object gives, which is what an
+    // older client and every hand-rolled fake produce; losing the cap sentence
+    // to a fallback there would be the same silence in a different place.
+    expect(
+      writeFailureMessage(new Error('At most 5 pinned cards per report. Unpin one first.'))
+    ).toBe('At most 5 pinned cards per report. Unpin one first.');
+    expect(writeFailureMessage({ message: 'Only the view owner can delete it' })).toBe(
+      'Only the view owner can delete it'
+    );
+  });
+
+  it('falls back to a sentence rather than an empty red line', () => {
+    // A thrown string, a null, an object with no message, and a message that is
+    // only whitespace all reach the user as SOMETHING. An empty `<p>` in the
+    // dropdown is indistinguishable from the swallow this replaced.
+    expect(writeFailureMessage('boom')).toBe('That change could not be saved.');
+    expect(writeFailureMessage(null)).toBe('That change could not be saved.');
+    expect(writeFailureMessage({ code: 'P0001' })).toBe('That change could not be saved.');
+    expect(writeFailureMessage(new Error('   '))).toBe('That change could not be saved.');
   });
 });

@@ -313,3 +313,28 @@ export function cardValue(runs: SyncRun[], view: ReportSavedView): number | null
   const rows = view.stalledOnly ? narrowed.filter((r) => r.stalled) : narrowed;
   return computeMetric(rows, view.metric);
 }
+
+/**
+ * The sentence a REFUSED write puts in the dropdown.
+ *
+ * The server-side pin cap exists for the case the client cannot see — a second
+ * tab whose count is stale — so its message is the only thing that explains
+ * why a card did not appear. Swallowing it into `console.error` leaves the user
+ * with a card that silently is not there.
+ *
+ * Both shapes are handled on purpose. `PostgrestError extends Error` in
+ * postgrest-js 2.110.2, so `instanceof` catches the real one; a bare
+ * `{ message }` object is what an older client and every hand-rolled fake
+ * produce, and losing the cap sentence to a fallback would be the same silence
+ * in a different place.
+ */
+export function writeFailureMessage(err: unknown): string {
+  const raw =
+    err instanceof Error
+      ? err.message
+      : typeof err === 'object' && err !== null && typeof (err as { message?: unknown }).message === 'string'
+        ? (err as { message: string }).message
+        : '';
+  const message = raw.trim();
+  return message.length > 0 ? message : 'That change could not be saved.';
+}

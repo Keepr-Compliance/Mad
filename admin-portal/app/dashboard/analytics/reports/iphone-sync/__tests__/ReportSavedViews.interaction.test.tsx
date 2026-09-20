@@ -503,3 +503,86 @@ describe('saving the current view', () => {
     expect(cardText(container, 'v-new')).toBe('24');
   });
 });
+
+describe('when the DATABASE refuses the write', () => {
+  /**
+   * The server-side pin cap, exactly as `report_save_view` raises it.
+   *
+   * Transcribed, not invented: the sentence is the migration's own
+   * `RAISE EXCEPTION 'At most 5 pinned cards per report. Unpin one first.'`,
+   * `P0001` is the SQLSTATE a bare plpgsql RAISE carries, and the client wraps
+   * it in `PostgrestError extends Error` (postgrest-js 2.110.2).
+   *
+   * This is the case the CLIENT cap cannot see: five pinned in another tab, a
+   * stale list here, so nothing on this page refuses the sixth before the RPC
+   * does.
+   */
+  const serverCap = Object.assign(
+    new Error('At most 5 pinned cards per report. Unpin one first.'),
+    { code: 'P0001', details: '', hint: '' }
+  );
+
+  it('says what the database said, and adds no card', async () => {
+    const api = fakeApi([]);
+    api.save.mockRejectedValue(serverCap);
+    const { container } = mount({ api });
+    openViews();
+
+    fireEvent.click(await screen.findByRole('button', { name: /Save current view as a card/ }));
+    fireEvent.change(screen.getByLabelText('View name'), { target: { value: 'One too many' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save and pin/ }));
+
+    expect(
+      await screen.findByText('At most 5 pinned cards per report. Unpin one first.')
+    ).toBeTruthy();
+    // The refused card is not on the page. Without the message this is all the
+    // user would have had: a card that silently is not there.
+    expect(cardIds(container)).toEqual([]);
+  });
+
+  it('re-reads the list after a refused write, so the cards match the database', async () => {
+    const api = fakeApi();
+    api.save.mockRejectedValue(serverCap);
+    const { container } = mount({ api });
+    await waitFor(() => expect(cardIds(container)).toEqual(['v-errors']));
+    expect(api.list).toHaveBeenCalledTimes(1);
+
+    openViews();
+    // The other tab pinned five and deleted this one while we were looking at
+    // it, so the reload must be what decides what is on the page.
+    api.list.mockResolvedValue([]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Unpin Errors' }));
+
+    await waitFor(() => expect(api.list).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(cardIds(container)).toEqual([]));
+  });
+
+  it('says so for a refused DELETE too, not only for a refused save', async () => {
+    const api = fakeApi();
+    api.remove.mockRejectedValue(
+      Object.assign(new Error('Only the view owner can delete it'), { code: 'P0001' })
+    );
+    mount({ api });
+    openViews();
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete Errors' }));
+
+    expect(await screen.findByText('Only the view owner can delete it')).toBeTruthy();
+  });
+
+  it('keeps the CLIENT cap sentence when this tab is the one refusing', async () => {
+    // The two messages are different sentences on purpose — "per report" is the
+    // server's. Whichever refuses, the user reads one and only one.
+    const rows = [
+      ...Array.from({ length: 5 }, (_, i) => row({ id: `v${i}`, name: `View ${i}`, pinned: true })),
+      row({ id: 'v-unpinned', name: 'Not pinned', pinned: false }),
+    ];
+    const api = fakeApi(rows);
+    mount({ api });
+    openViews();
+    fireEvent.click(await screen.findByRole('button', { name: 'Pin Not pinned as a card' }));
+
+    expect(screen.getByText('At most 5 pinned cards. Unpin one first.')).toBeTruthy();
+    expect(screen.queryByText(/per report/)).toBeNull();
+    expect(api.save).not.toHaveBeenCalled();
+  });
+});

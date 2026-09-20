@@ -46,6 +46,7 @@ import {
   REPORT_KEY,
   serializeFilters,
   viewMatchesState,
+  writeFailureMessage,
   type ReportSavedView,
   type ViewMetric,
 } from '@/lib/reports/report-views';
@@ -144,6 +145,10 @@ export function IphoneSyncReport({
   const [views, setViews] = useState<ReportSavedView[] | null>(null);
   const [viewsLoading, setViewsLoading] = useState(Boolean(viewsApi));
   const [viewsReloadToken, setViewsReloadToken] = useState(0);
+  // What the DATABASE said when it refused a save, a rename, a pin or a delete.
+  // The client cap has its own message inside the dropdown; this is the one the
+  // client cannot predict — a second tab's pin, or any other rejection.
+  const [writeError, setWriteError] = useState<string | null>(null);
   // What the page was showing before a card was clicked, so clicking the same
   // card again puts it back rather than merely clearing.
   const [restoreState, setRestoreState] = useState<{
@@ -243,10 +248,28 @@ export function IphoneSyncReport({
     setStalledOnly(back.stalledOnly);
   }
 
+  /**
+   * A refused write must SAY SO and must RE-READ.
+   *
+   * Say so: the server-side pin cap guards the two-tab race the client cap
+   * cannot see, so its sentence is the only explanation the user gets for a
+   * card that did not appear.
+   *
+   * Re-read: after a rejection the page's idea of the list is unproven — the
+   * write may have been refused for a reason that also changed what is stored
+   * (the other tab's sixth pin is exactly that). Reloading on the failure path
+   * as well as the success one makes the cards show what the database holds
+   * rather than what this tab hoped for.
+   */
   function runViewMutation(op: () => Promise<unknown>) {
+    setWriteError(null);
     void op()
       .then(() => setViewsReloadToken((t) => t + 1))
-      .catch((err) => console.error('Saved view change failed:', err));
+      .catch((err) => {
+        console.error('Saved view change failed:', err);
+        setWriteError(writeFailureMessage(err));
+        setViewsReloadToken((t) => t + 1);
+      });
   }
 
   function saveCurrentView(name: string, metric: ViewMetric, pinnedFlag: boolean) {
@@ -339,6 +362,7 @@ export function IphoneSyncReport({
             views={views}
             loading={viewsLoading}
             activeViewId={activeViewId}
+            writeError={writeError}
             onApply={applyView}
             onTogglePin={togglePin}
             onDelete={deleteView}

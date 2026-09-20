@@ -38,6 +38,12 @@ export interface ReportViewSelectorProps {
   loading: boolean;
   /** Which view, if any, the page's current filters match. */
   activeViewId: string | null;
+  /**
+   * What the DATABASE said when it refused the last write, or null. REQUIRED,
+   * not optional: a parent that forgets to wire it is a parent that swallows
+   * the refusal again, and that must be a type error rather than a silence.
+   */
+  writeError: string | null;
   onApply: (view: ReportSavedView) => void;
   onTogglePin: (view: ReportSavedView) => void;
   onDelete: (view: ReportSavedView) => void;
@@ -48,6 +54,7 @@ export function ReportViewSelector({
   views,
   loading,
   activeViewId,
+  writeError,
   onApply,
   onTogglePin,
   onDelete,
@@ -64,6 +71,10 @@ export function ReportViewSelector({
   useClickOutside(containerRef, () => setOpen(false), open);
 
   const unavailable = views === null;
+  // One slot, two sources. The local refusal is raised synchronously and is
+  // always the more specific of the two, so it wins; the server's arrives later
+  // and only when this tab never refused the write itself.
+  const message = error ?? writeError;
   const list = views ?? [];
   const pinnedCount = list.filter((v) => v.pinned).length;
   const allowedFunctions = functionsFor(col);
@@ -182,9 +193,9 @@ export function ReportViewSelector({
             </ul>
           )}
 
-          {error ? (
+          {message ? (
             <p role="status" className="px-3 pb-1 text-xs text-red-600">
-              {error}
+              {message}
             </p>
           ) : null}
 
