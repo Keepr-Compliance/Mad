@@ -302,8 +302,10 @@ describe('the pin cap', () => {
 
   it('renders at most five cards even if a sixth row somehow exists', () => {
     const six = [...five, view({ id: 'v5', name: 'View 5', pinned: true })];
-    expect(pinnedViews(six)).toHaveLength(MAX_PINNED);
-    expect(pinnedViews([...five, view({ id: 'u', pinned: false })])).toHaveLength(MAX_PINNED);
+    // The literal 5, not MAX_PINNED: an assertion written against the constant
+    // it is checking cannot notice the constant moving.
+    expect(pinnedViews(six)).toHaveLength(5);
+    expect(pinnedViews([...five, view({ id: 'u', pinned: false })])).toHaveLength(5);
   });
 });
 

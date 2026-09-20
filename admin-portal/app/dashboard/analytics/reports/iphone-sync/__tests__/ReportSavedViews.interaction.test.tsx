@@ -305,7 +305,9 @@ describe('a pinned card', () => {
       row({ id: `v${i}`, name: `View ${i}`, pinned: true })
     );
     const { container } = mount({ api: fakeApi(six) });
-    await waitFor(() => expect(cardIds(container)).toHaveLength(MAX_PINNED));
+    // The literal 5 — see the note in report-views.test.ts.
+    await waitFor(() => expect(cardIds(container)).toHaveLength(5));
+    expect(MAX_PINNED).toBe(5);
   });
 });
 
