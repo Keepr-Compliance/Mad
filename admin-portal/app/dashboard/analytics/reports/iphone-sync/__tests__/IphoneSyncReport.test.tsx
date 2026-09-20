@@ -276,6 +276,11 @@ describe('how to use this report', () => {
     expect(body).toContain('where 1 MB is 1,048,576 bytes');
     expect(body).toContain('count a GB as 1,000,000,000 bytes');
     expect(body).toContain('will not give you the Rate column exactly');
+    // The names must be the ones on the page. "Backup" IS a table column;
+    // "Device" is not — the phone's size reads "Device used", in the run
+    // detail and in the card column picker. A note that sends the reader to a
+    // column that is not there is the same failure as not writing it.
+    expect(body).toContain('The Backup column and the Device used figure');
   });
 
   it('states the Monday/UTC convention and the created_at meaning flip', () => {

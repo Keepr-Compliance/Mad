@@ -47,9 +47,10 @@ export function HowToUse({ baseline, totalRuns }: { baseline: Baseline; totalRun
         </Para>
         <Para>
           <strong>Rate</strong> is the backup size divided by the transfer phase, in MB per second,
-          where 1 MB is 1,048,576 bytes. The Backup and Device columns count a GB as 1,000,000,000
-          bytes, the way the phone does — so dividing one column by the other will not give you the
-          Rate column exactly. Only runs that wrote a backup have one today; from 2.38.1 the byte
+          where 1 MB is 1,048,576 bytes. The Backup column and the Device used figure count a GB as
+          1,000,000,000 bytes, the way the phone does — so dividing one by the other will not give
+          you the Rate column exactly. Only runs that wrote a backup have one today; from 2.38.1 the
+          byte
           counter gives a rate to cancelled and stalled runs too, which is how a slow phone or cable
           will show up.
         </Para>
