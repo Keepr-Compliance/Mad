@@ -22,7 +22,7 @@
     "heic2any": "^0.0.4",
     "html2canvas": "^1.4.1",
     "lucide-react": "^1.7.0",
-    "next": "^15.5.15",
+    "next": "^16.3.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "stripe": "^17.7.0"
@@ -37,7 +37,7 @@
     "autoprefixer": "^10.5.0",
     "eslint": "^8.57.1",
     "eslint-config-next": "15.5.14",
-    "postcss": "^8.5.10",
+    "postcss": "^8.5.28",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.2"
   },
