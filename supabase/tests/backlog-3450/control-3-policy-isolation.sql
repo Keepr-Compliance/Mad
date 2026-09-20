@@ -68,10 +68,32 @@ SELECT set_config(
 
 SET LOCAL ROLE authenticated;
 
--- EXPECT: at least the seeded row, and every row visible belongs to the caller.
-SELECT count(*) AS owner_sees,
-       bool_and(user_id = (select auth.uid())) AS all_rows_are_mine
-FROM public.report_saved_views;
+-- THE OWNER LEG, ASSERTED — not printed.
+--
+-- This was a bare SELECT whose two numbers nobody read. A policy that denied
+-- EVERYONE would have printed `0 / NULL` and the script would still have ended
+-- in `CONTROL 3 PASSED`, because the second-user leg below cannot tell "the
+-- policy hides the owner's rows from another user" from "the policy hides every
+-- row from everyone". The owner seeing their own row is what separates them.
+DO $owner$
+DECLARE
+  v_owner_sees INT;
+  v_all_mine   BOOLEAN;
+BEGIN
+  SELECT count(*), bool_and(user_id = (select auth.uid()))
+  INTO v_owner_sees, v_all_mine
+  FROM public.report_saved_views;
+
+  IF v_owner_sees >= 1 AND v_all_mine THEN
+    RAISE NOTICE 'PASS: the owner sees % row(s) through the policy, all of them their own', v_owner_sees;
+  ELSE
+    RAISE EXCEPTION 'CONTROL 3 RED (owner leg): the owner sees % row(s), all of them mine = % — '
+      'the policy is not returning the owner exactly their own rows, so the '
+      'second-user leg below would pass for the wrong reason',
+      v_owner_sees, coalesce(v_all_mine::text, 'NULL');
+  END IF;
+END
+$owner$;
 
 RESET ROLE;
 

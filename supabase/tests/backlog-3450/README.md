@@ -88,6 +88,6 @@ and raises on failure.
 |---|---|
 | `control-1-rpc-isolation.sql` | a second internal user's `report_list_saved_views` returns `[]`, and their `report_delete_saved_view` on the owner's row is refused |
 | `control-2-mutant-rpc-isolation.sql` | **the mutation.** With the isolation dropped from both RPCs, control 1's assertions fail — so control 1 is not vacuous |
-| `control-3-policy-isolation.sql` | defence in depth: a direct `SELECT` as the second user returns no rows |
+| `control-3-policy-isolation.sql` | defence in depth: the owner's own direct `SELECT` returns their row (asserted, so a policy that denied everyone cannot pass this), and the second user's returns none of it |
 | `control-4-server-side-limits.sql` | the sixth pin is refused by the database, a `p_id` matching no row raises rather than inserting, and another user cannot update the owner's row |
 | `control-5-grants.sql` | `anon` holds no privilege on the table and cannot execute the three functions |
