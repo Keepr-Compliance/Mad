@@ -266,10 +266,37 @@ describe('how to use this report', () => {
     expect(body).toContain('the backup size divided by the transfer phase, in MB per second');
   });
 
+  it('NAMES the base the Rate column uses, and says it differs from the size columns', () => {
+    // Rate is MiB per second while Backup and Device are decimal GB — the two
+    // were deliberately left disagreeing, because the four Rate values the
+    // founder checked were right in MiB and restating them would fix nothing he
+    // reported. What the page owed him was the base, in words: without it he
+    // divides one column by the other, gets a figure ~4.9% off, and has nothing
+    // on the page to explain it.
+    expect(body).toContain('where 1 MB is 1,048,576 bytes');
+    expect(body).toContain('count a GB as 1,000,000,000 bytes');
+    expect(body).toContain('will not give you the Rate column exactly');
+    // The names must be the ones on the page. "Backup" IS a table column;
+    // "Device" is not — the phone's size reads "Device used", in the run
+    // detail and in the card column picker. A note that sends the reader to a
+    // column that is not there is the same failure as not writing it.
+    expect(body).toContain('The Backup column and the Device used figure');
+  });
+
   it('states the Monday/UTC convention and the created_at meaning flip', () => {
     expect(body).toContain('Weeks start Monday, and every time on this page is UTC');
     expect(body).toContain('counted on the day it ended');
     expect(body).toContain('counted on the day they began');
+  });
+
+  it('carries the Views paragraph PR 1 had to drop', () => {
+    // PR 1 removed it because it described a feature that was not on the page.
+    // PR 2 puts the feature there, so the prose goes back — verbatim from the
+    // founder's wording in the PM answers (BACKLOG-3450 Q7).
+    expect(body).toContain('Your own cards come from Views');
+    expect(body).toContain('pick a column and a function (count, average, sum, min, max)');
+    expect(body).toContain('a dashed card that follows whichever period is selected');
+    expect(body).toContain('Click a card to apply its filters; up to five pinned');
   });
 
   it('keeps the runs-in-progress exclusion verbatim', () => {
