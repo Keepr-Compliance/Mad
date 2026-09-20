@@ -1,10 +1,15 @@
 /**
  * BACKLOG-334 — the export format is set once, not on every export.
  *
- * With saved export defaults, "Verify Transaction Dates" says what this export
- * will use and its primary button runs the export directly; the options step is
- * reachable only through the "Export format" button, and what you change there
- * applies to this export alone unless the save checkbox is ticked.
+ * With saved export defaults, "Verify Transaction Dates" carries an "Export
+ * format" button in its heading row (title left, button right) and its primary
+ * button runs the export directly; the options step is reachable only through
+ * that button, and what you change there applies to this export alone unless
+ * the save checkbox is ticked.
+ *
+ * BACKLOG-334 founder QA 2026-09-19: the explanation card that used to state the
+ * saved options in words is gone. C3 and C3b now hold the layout it was replaced
+ * by — the row, and the card's absence.
  *
  * The preference fixture is transcribed from the producer rather than invented:
  * `settingsService.getPreferences` (src/services/settingsService.ts:108-118)
@@ -85,7 +90,15 @@ function primaryButton(): HTMLElement {
 
 /** The prefs load is async; clicking before it resolves is a false red. */
 async function waitForDefaults(): Promise<HTMLElement> {
-  return screen.findByTestId("export-format-summary");
+  return screen.findByTestId("export-format-button");
+}
+
+/** The step-1 heading row: the element the heading and the button must share. */
+function headingRow(): HTMLElement {
+  const heading = screen.getByRole("heading", { name: "Verify Transaction Dates" });
+  const row = heading.parentElement as HTMLElement | null;
+  expect(row).not.toBeNull();
+  return row as HTMLElement;
 }
 
 async function waitForPrefsLoad(): Promise<void> {
@@ -114,8 +127,8 @@ it("C2: with no saved format, the options step renders and nothing is exported",
   renderModal();
   await waitForPrefsLoad();
 
-  // No summary row, and the primary still promises a next screen.
-  expect(screen.queryByTestId("export-format-summary")).toBeNull();
+  // No "Export format" button, and the primary still promises a next screen.
+  expect(screen.queryByTestId("export-format-button")).toBeNull();
   const next = screen.getAllByRole("button", { name: /^next/i })[0];
 
   await act(async () => {
@@ -127,32 +140,33 @@ it("C2: with no saved format, the options step renders and nothing is exported",
   expect(exportEnhancedMock).not.toHaveBeenCalled();
 });
 
-it("C3: the summary reads back the saved values, in words", async () => {
+it("C3: the heading and the \"Export format\" button share one row, title left and button right", async () => {
   renderModal();
-  // Exact text, not toHaveTextContent: that matcher is a SUBSTRING match, so an
-  // extra trailing segment (threading appended to a texts-only export) would
-  // still pass. Mutation M10 was a 0-red until this line changed.
-  expect((await waitForDefaults()).textContent).toBe(
-    "Export format: Audit Package · Texts only · No attachments",
-  );
+  const button = await waitForDefaults();
+
+  // Same row container as the heading — the emails/texts tab idiom
+  // (TransactionEmailsTab.tsx:667). A button rendered anywhere else on step 1
+  // fails here even though it is still clickable.
+  const row = headingRow();
+  expect(row).toContainElement(button);
+
+  // Co-location is not the founder's ask: the row must also push the two apart.
+  // Without this, `justify-start` (heading and button adjacent on the left)
+  // would pass.
+  expect(row.className).toContain("justify-between");
+  expect(row.className).toContain("items-center");
 });
 
-it("C3b: a One-PDF record reads back its own values, threading included", async () => {
-  prefsGetMock.mockResolvedValue({
-    success: true,
-    preferences: {
-      export: {
-        defaultFormat: "combined-pdf",
-        emailExportMode: "thread",
-        contentType: "both",
-        attachmentType: "all",
-      },
-    },
-  });
+it("C3b: the saved-options explanation card is gone", async () => {
   renderModal();
-  expect((await waitForDefaults()).textContent).toBe(
-    "Export format: One PDF · Texts and emails · All attachments · Threaded emails",
-  );
+  await waitForDefaults();
+
+  // Both spellings: the testid the card carried, AND its literal text. The
+  // testid alone is vacuous once the card is deleted — it would pass against a
+  // restored card that used any other testid. The colon excludes the button,
+  // whose own label is "Export format" with nothing after it.
+  expect(screen.queryByTestId("export-format-summary")).toBeNull();
+  expect(screen.queryByText(/^Export format:/)).toBeNull();
 });
 
 it("C4a: \"Export format\" opens the options step with the saved format selected", async () => {
