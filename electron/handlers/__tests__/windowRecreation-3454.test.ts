@@ -206,12 +206,15 @@ describe("a push reaches the window that exists now, not the one registration sa
   it("warns with the channel only — a payload on these channels carries device names", () => {
     setMainWindow(null);
 
-    sendToMainWindow("sync:device-connected", { udid: "SECRET-UDID", name: "Daniel's iPhone" });
+    sendToMainWindow("sync:device-connected", {
+      udid: "INVENTED-UDID-NOT-A-REAL-DEVICE",
+      name: "Invented Owner iPhone",
+    });
 
     const warned = mockWarn.mock.calls.map((c) => String(c[0])).join("\n");
     expect(warned).toContain("sync:device-connected");
-    expect(warned).not.toContain("SECRET-UDID");
-    expect(warned).not.toContain("Daniel");
+    expect(warned).not.toContain("INVENTED-UDID-NOT-A-REAL-DEVICE");
+    expect(warned).not.toContain("Invented Owner");
   });
 
   it("reports whether the push left, so a caller can fall back", () => {
