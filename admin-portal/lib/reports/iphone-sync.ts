@@ -50,6 +50,12 @@ export const BYTES_PER_GB = 1024 * 1024 * 1024;
 
 const MS_PER_MINUTE = 60_000;
 
+/** 1 MB here is 1 MiB, consistent with {@link BYTES_PER_GB}. */
+export const BYTES_PER_MB = 1024 * 1024;
+
+/** The phase whose own duration the transfer rate is measured over. */
+export const TRANSFER_PHASE = 'backup:transferring';
+
 // ─── Row / lookup types ──────────────────────────────────────────
 
 /** One entry of `sync_outcomes.phases` (jsonb array of `{phase, elapsed_ms}`). */
@@ -87,6 +93,16 @@ export interface SyncOutcomeRow {
   app_version?: string | null;
   platform?: string | null;
   is_packaged?: boolean | null;
+
+  // BACKLOG-3440's run-evidence columns. `started_at` is written by a shipped
+  // build (21 of 24 rows on 2026-09-19); the other five are on ZERO rows and
+  // ship in 2.38.1, so everything below renders them only when present.
+  started_at?: string | null;
+  bytes_transferred?: number | null;
+  bytes_last_increased_at?: string | null;
+  last_phase?: string | null;
+  reason_code?: string | null;
+  ended_by?: string | null;
 }
 
 export interface ReportUser {
@@ -114,8 +130,26 @@ export interface PhaseRow {
   isLast: boolean;
 }
 
+/**
+ * Whether the run was a first sync or an incremental one.
+ *
+ * `unknown` is not a failure to read the column — it is the column being NULL,
+ * which is what a run that ended before the backup mode was known looks like
+ * (most cancels in the first minute). The table renders it "not recorded".
+ */
+export type SyncType = 'first' | 'incremental' | 'unknown';
+
 export interface SyncRun {
   id: string;
+  /**
+   * Raw `created_at`. The SORT KEY and the day-bucket key.
+   *
+   * `whenUtc` is a DISPLAY string and must never be sorted on, and this must
+   * never be compared lexicographically — Postgres trims a whole-second
+   * timestamp's fractional part, so "…:43Z" < "…:43.803Z" is false. Use
+   * `Date.parse`.
+   */
+  createdAtIso: string;
   whenUtc: string;
   userLabel: string;
   outcome: string;
@@ -143,9 +177,30 @@ export interface SyncRun {
   appVersion: string;
   isDevBuild: boolean;
 
+  /** Own duration of the `backup:transferring` phase, or null when absent. */
+  transferMs: number | null;
+  /**
+   * Transfer rate in MB/s. Null when nothing measured a numerator — which is
+   * 20 of the 24 rows on record today, and is NOT the same as zero.
+   */
+  rateMbPerSec: number | null;
+  rateLabel: string;
+
+  syncType: SyncType;
+  syncTypeLabel: string;
+
   phases: PhaseRow[];
   /** Label of the last phase reached, or null when no phases were recorded. */
   lastPhaseLabel: string | null;
+
+  // BACKLOG-3440 evidence, passed through unchanged and rendered only when
+  // present. Five of the six are on zero rows until 2.38.1 reaches users.
+  startedAtIso: string | null;
+  bytesTransferred: number | null;
+  bytesLastIncreasedAtIso: string | null;
+  lastPhaseRaw: string | null;
+  reasonCode: string | null;
+  endedBy: string | null;
 
   stalled: boolean;
 }
@@ -338,15 +393,91 @@ function buildPhaseRows(samples: SyncPhaseSample[]): PhaseRow[] {
   }));
 }
 
+/** Own duration of the transferring phase, or null when the run never got there. */
+export function transferMsOf(samples: SyncPhaseSample[]): number | null {
+  const sample = samples.find((s) => s.phase === TRANSFER_PHASE);
+  if (!sample || !Number.isFinite(sample.elapsed_ms) || sample.elapsed_ms <= 0) return null;
+  return sample.elapsed_ms;
+}
+
+/**
+ * Transfer rate in MB/s.
+ *
+ * NUMERATOR: `backup_bytes` when it is above zero, else `bytes_transferred`
+ * when that is above zero (PM ruling on Q2 — from 2.38.1 the byte counter
+ * gives cancelled and stalled runs a rate too). Zero is not a measurement, so
+ * both are tested `> 0` rather than `!= null`: a run that wrote no backup has
+ * NO rate, and rendering it as 0.0 MB/s would claim a measured stall.
+ *
+ * DENOMINATOR: the transferring phase's OWN duration when that phase exists,
+ * else whole-run elapsed. `phases[].elapsed_ms` is a per-phase duration, not a
+ * cumulative elapsed — traced through `syncTimeline.closeOpenPhase` to
+ * `syncOutcomeSupabase.ts:125`, and confirmed against the data (the phase sum
+ * is under `elapsed_ms` on every row that has phases).
+ *
+ * Both fallback branches have ZERO real rows on record, so each is exercised
+ * by a DERIVED fixture row — see `DERIVED_ROWS` in the fixture.
+ */
+export function transferRateMbPerSec(input: {
+  backupBytes: number | null | undefined;
+  bytesTransferred: number | null | undefined;
+  transferMs: number | null;
+  elapsedMs: number | null;
+}): number | null {
+  const backup = input.backupBytes;
+  const moved = input.bytesTransferred;
+  const numerator = backup != null && backup > 0 ? backup : moved != null && moved > 0 ? moved : null;
+  if (numerator == null) return null;
+
+  const ms =
+    input.transferMs != null && input.transferMs > 0
+      ? input.transferMs
+      : input.elapsedMs != null && input.elapsedMs > 0
+        ? input.elapsedMs
+        : null;
+  if (ms == null) return null;
+
+  return numerator / BYTES_PER_MB / (ms / 1000);
+}
+
+/** "21.1 MB/s", one decimal. Null renders as an em dash, never as 0.0. */
+export function formatRate(value: number | null): string {
+  if (value == null) return EM_DASH;
+  if (value > 0 && value < 0.05) return '<0.1 MB/s';
+  return `${value.toFixed(1)} MB/s`;
+}
+
+export function syncTypeOf(incremental: boolean | null | undefined): SyncType {
+  if (incremental === false) return 'first';
+  if (incremental === true) return 'incremental';
+  return 'unknown';
+}
+
+export const SYNC_TYPE_LABELS: Record<SyncType, string> = {
+  first: 'first',
+  incremental: 'incremental',
+  unknown: 'not recorded',
+};
+
 export function buildRun(row: SyncOutcomeRow, users: Map<string, ReportUser>): SyncRun {
-  const phases = buildPhaseRows(parsePhases(row.phases));
+  const samples = parsePhases(row.phases);
+  const phases = buildPhaseRows(samples);
   const minPerGb = minutesPerGb(row);
+  const transferMs = transferMsOf(samples);
+  const rateMbPerSec = transferRateMbPerSec({
+    backupBytes: row.backup_bytes,
+    bytesTransferred: row.bytes_transferred,
+    transferMs,
+    elapsedMs: row.elapsed_ms,
+  });
+  const syncType = syncTypeOf(row.incremental);
   const deviceParts = [row.device_model, row.device_ios_version ? `iOS ${row.device_ios_version}` : null]
     .filter(Boolean)
     .join(' · ');
 
   return {
     id: row.id,
+    createdAtIso: row.created_at,
     whenUtc: formatUtc(row.created_at),
     userLabel: userLabelFor(row.user_id, users),
     outcome: row.outcome,
@@ -372,8 +503,22 @@ export function buildRun(row: SyncOutcomeRow, users: Map<string, ReportUser>): S
     appVersion: row.app_version ?? 'unknown',
     isDevBuild: row.is_packaged === false,
 
+    transferMs,
+    rateMbPerSec,
+    rateLabel: formatRate(rateMbPerSec),
+
+    syncType,
+    syncTypeLabel: SYNC_TYPE_LABELS[syncType],
+
     phases,
     lastPhaseLabel: phases.length > 0 ? phases[phases.length - 1].label : null,
+
+    startedAtIso: row.started_at ?? null,
+    bytesTransferred: row.bytes_transferred ?? null,
+    bytesLastIncreasedAtIso: row.bytes_last_increased_at ?? null,
+    lastPhaseRaw: row.last_phase ?? null,
+    reasonCode: row.reason_code ?? null,
+    endedBy: row.ended_by ?? null,
 
     stalled: isStalled(row),
   };
