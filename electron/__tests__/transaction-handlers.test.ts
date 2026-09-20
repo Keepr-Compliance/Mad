@@ -162,6 +162,7 @@ jest.mock("../handlers/featureGateHandlers", () => ({
 
 // Import after mocks are set up
 import { registerTransactionHandlers } from "../handlers/transactionHandlers";
+import { setMainWindow } from "../windowRegistry";
 import transactionService from "../services/transactionService";
 import auditService from "../services/auditService";
 import logService from "../services/logService";
@@ -213,6 +214,10 @@ describe("Transaction Handlers", () => {
     });
 
     // Register all handlers
+    // BACKLOG-3454: the window is no longer captured at registration — every push
+    // resolves the live one through the registry, so the stand-in is registered
+    // there rather than only handed to the register call.
+    setMainWindow(mockMainWindow as any);
     registerTransactionHandlers(mockMainWindow as any);
   });
 
