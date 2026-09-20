@@ -129,7 +129,10 @@ it("C2: with no saved format, the options step renders and nothing is exported",
 
 it("C3: the summary reads back the saved values, in words", async () => {
   renderModal();
-  expect(await waitForDefaults()).toHaveTextContent(
+  // Exact text, not toHaveTextContent: that matcher is a SUBSTRING match, so an
+  // extra trailing segment (threading appended to a texts-only export) would
+  // still pass. Mutation M10 was a 0-red until this line changed.
+  expect((await waitForDefaults()).textContent).toBe(
     "Export format: Audit Package · Texts only · No attachments",
   );
 });
@@ -147,7 +150,7 @@ it("C3b: a One-PDF record reads back its own values, threading included", async 
     },
   });
   renderModal();
-  expect(await waitForDefaults()).toHaveTextContent(
+  expect((await waitForDefaults()).textContent).toBe(
     "Export format: One PDF · Texts and emails · All attachments · Threaded emails",
   );
 });
