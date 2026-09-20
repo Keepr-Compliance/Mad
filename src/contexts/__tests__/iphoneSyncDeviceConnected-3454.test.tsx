@@ -175,6 +175,9 @@ describe("BACKLOG-3454: an already-plugged-in phone must show as connected", () 
 
     await waitFor(() => expect(prefsApi().get).toHaveBeenCalled());
     await act(async () => { await Promise.resolve(); });
+    // Safe to assert synchronously: "not-connected" is ALSO the pre-preferences
+    // state, so this line cannot discriminate and therefore cannot race. The
+    // same idiom in the second test could, and is waited on there.
     expect(probe()).toBe("not-connected");
 
     // Settings persists messages.source = iphone-sync, then re-gates.
@@ -210,7 +213,23 @@ describe("BACKLOG-3454: an already-plugged-in phone must show as connected", () 
 
     // Exactly one live subscription — a StrictMode double-invoke must not leave
     // the surviving listener unsubscribed, nor two listeners attached.
-    expect(liveSubCount()).toBe(1);
+    //
+    // This WAITS, because the subscription is downstream of the async
+    // preferences read and the line above waits only for `preferences.get` to be
+    // CALLED. RTL's `asyncWrapper` turns the act environment off for the
+    // duration of a `waitFor`, so a state update landing in that window is
+    // scheduled on React's Scheduler (a jsdom `setTimeout`), not on an act
+    // queue — and the `act(async () => …)` hop that follows drains the act queue
+    // only. Whether the Scheduler timer beats that hop is a Node event-loop
+    // accident: it lost on the windows-latest/20.x leg of run 35479224343
+    // (`Expected: 1  Received: 0`, this line) and wins on macOS every time.
+    // Reproduced on macOS by resolving the `preferences.get` mock on a
+    // `setTimeout` instead of a microtask — same failure, same line.
+    //
+    // The assertion keeps its full strength: `waitFor` retries toward EXACTLY
+    // one, so a regression that leaves two listeners attached, or that
+    // unsubscribes the survivor, never reaches 1 and times out red.
+    await waitFor(() => expect(liveSubCount()).toBe(1));
     expect(probe()).toBe("not-connected");
 
     await act(async () => {
