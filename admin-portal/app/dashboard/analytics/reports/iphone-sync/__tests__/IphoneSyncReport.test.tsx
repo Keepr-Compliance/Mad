@@ -272,6 +272,16 @@ describe('how to use this report', () => {
     expect(body).toContain('counted on the day they began');
   });
 
+  it('carries the Views paragraph PR 1 had to drop', () => {
+    // PR 1 removed it because it described a feature that was not on the page.
+    // PR 2 puts the feature there, so the prose goes back — verbatim from the
+    // founder's wording in the PM answers (BACKLOG-3450 Q7).
+    expect(body).toContain('Your own cards come from Views');
+    expect(body).toContain('pick a column and a function (count, average, sum, min, max)');
+    expect(body).toContain('a dashed card that follows whichever period is selected');
+    expect(body).toContain('Click a card to apply its filters; up to five pinned');
+  });
+
   it('keeps the runs-in-progress exclusion verbatim', () => {
     expect(body).toContain(
       'They are excluded rather than counted as though they had resolved'
