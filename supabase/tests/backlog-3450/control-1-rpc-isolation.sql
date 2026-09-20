@@ -8,15 +8,23 @@
 -- proves this one can fail; control 3 keeps the policy check as defence in
 -- depth.
 --
--- Both ids must be users with an `internal_roles` row. The guard raises
--- 'Access denied: internal role required' before the isolation check is ever
--- reached, so a non-internal second user would pass for the wrong reason —
--- which this script asserts against explicitly.
+-- THE TWO USERS ARE CHOSEN BY THE SCRIPT, from `internal_roles`, and both must
+-- have a row there. The `internal_roles` guard raises 'Access denied' before
+-- the isolation check is ever reached, so a non-internal second user would pass
+-- this control for the wrong reason.
+--
+-- NO psql VARIABLES ANYWHERE. psql does not substitute a colon-prefixed name
+-- inside a dollar-quoted block, so one written in here would reach Postgres
+-- verbatim and fail to parse. That is also why the BACKLOG-3096 scripts
+-- hardcode their ids inside the block rather than passing them with -v.
+--
+-- Run as the database owner/superuser, and do NOT `SET ROLE authenticated`:
+-- these functions are SECURITY DEFINER so they run as their owner either way,
+-- and switching role would RLS-filter the asserting reads and fail this for the
+-- wrong reason (the note is BACKLOG-3096 control 1's, and it still holds).
 --
 -- RUN:
---   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
---     -v owner="'<uuid-1>'" -v other="'<uuid-2>'" \
---     -f control-1-rpc-isolation.sql
+--   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f control-1-rpc-isolation.sql
 --
 -- Ends in ROLLBACK. Nothing it writes survives.
 
@@ -25,22 +33,21 @@ BEGIN;
 
 DO $control$
 DECLARE
-  k_owner   CONSTANT UUID := :owner;
-  k_other   CONSTANT UUID := :other;
+  k_owner   UUID;
+  k_other   UUID;
   v_owner_view  UUID;
   v_listed  JSONB;
-  v_sqlstate TEXT;
   v_message TEXT;
 BEGIN
-  ASSERT k_owner IS DISTINCT FROM k_other,
-    'CONTROL 1: the two users must be different';
+  SELECT user_id INTO k_owner FROM internal_roles ORDER BY created_at, user_id LIMIT 1;
+  SELECT user_id INTO k_other
+  FROM internal_roles WHERE user_id IS DISTINCT FROM k_owner
+  ORDER BY created_at, user_id LIMIT 1;
 
-  -- Both must be internal, or the guard fires first and the control is vacuous.
-  ASSERT EXISTS (SELECT 1 FROM internal_roles WHERE user_id = k_owner),
-    'CONTROL 1: :owner has no internal_roles row';
-  ASSERT EXISTS (SELECT 1 FROM internal_roles WHERE user_id = k_other),
-    'CONTROL 1: :other has no internal_roles row — the guard would refuse them '
-    'before the isolation check, which would make this control prove nothing';
+  ASSERT k_owner IS NOT NULL, 'CONTROL 1: no internal users at all';
+  ASSERT k_other IS NOT NULL,
+    'CONTROL 1: only ONE internal user exists, so isolation between two of them '
+    'cannot be observed. Add a second internal_roles row and re-run.';
   RAISE NOTICE 'PASS setup: two distinct internal users';
 
   -------------------------------------------------------------------------
@@ -54,7 +61,7 @@ BEGIN
     '{"types":[],"outcomes":["error"],"platforms":[],"search":"","stalledOnly":false}'::jsonb,
     '{"col":"runs","fn":"count"}'::jsonb,
     true,
-    NULL
+    NULL::uuid
   )->>'id')::uuid;
   ASSERT v_owner_view IS NOT NULL, 'CONTROL 1: the owner could not save a view';
 
@@ -84,7 +91,7 @@ BEGIN
     RAISE EXCEPTION 'CONTROL 1 FAILED: the second internal user deleted the owner''s view';
   EXCEPTION
     WHEN OTHERS THEN
-      GET STACKED DIAGNOSTICS v_sqlstate = RETURNED_SQLSTATE, v_message = MESSAGE_TEXT;
+      GET STACKED DIAGNOSTICS v_message = MESSAGE_TEXT;
       IF v_message LIKE 'CONTROL 1 FAILED%' THEN
         RAISE;
       END IF;

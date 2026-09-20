@@ -30,6 +30,22 @@ every internal user sees every other internal user's saved views.
 Control 1 therefore **calls the RPCs**. Control 3 keeps the policy-level check
 as defence in depth.
 
+## What has and has not been verified
+
+The migration was not applied when these were written, so **none of them has
+been run end to end** — that is the whole reason they are here. What HAS been
+checked, against the live database:
+
+- each `DO` block compiles and executes as far as its first reference to
+  something the migration creates, so the plpgsql is syntactically valid and
+  the two-user lookup works. Control 1 reached its `report_save_view` call,
+  control 3 its first `report_saved_views` read, control 4 its first `ASSERT`
+  over the table — each failing with "does not exist" and writing nothing.
+- control 2's two `CREATE OR REPLACE FUNCTION` bodies are NOT verified. They
+  could only be checked by creating them, which is exactly what must not happen
+  outside the transaction that rolls them back. They are the migration's own
+  bodies with one clause removed from each.
+
 ## Safety
 
 Every script is one transaction ending in `ROLLBACK`. Nothing it inserts
@@ -38,26 +54,35 @@ transactional in Postgres. Run them against production only after reading them.
 
 ## Before you run
 
-Each script needs two **internal** user ids. Both must be internal: the RPCs
-raise `Access denied: internal role required` before they ever reach the
-isolation check, so a non-internal second user would make the control pass for
-the wrong reason.
+Nothing to fill in. **Each script picks its own two users** from
+`internal_roles` — the first two by `(created_at, user_id)` — and refuses to
+continue if there is only one, because isolation between two users cannot be
+observed with one. Both must be internal: the RPCs raise
+`Access denied: internal role required` before they ever reach the isolation
+check, so a non-internal second user would make a control pass for the wrong
+reason.
+
+There were two internal users when this was written:
 
 ```sql
-select user_id from internal_roles order by created_at limit 5;
+select count(distinct user_id) from internal_roles;   -- 2
 ```
 
-Put the first in `:owner` and a different one in `:other`.
+**Do not pass ids with `-v`.** psql does not substitute a colon-prefixed name
+inside a dollar-quoted block, so `:owner` written in a `DO $$ … $$` body reaches
+Postgres verbatim and fails to parse. The first version of these scripts did
+exactly that and could not have run at all; it was caught by reading, before
+they were ever handed over. The BACKLOG-3096 scripts avoid it by hardcoding
+their ids inside the block; these avoid it by looking the ids up.
 
 ## Running
 
 ```bash
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
-  -v owner="'<uuid-1>'" -v other="'<uuid-2>'" \
-  -f control-1-rpc-isolation.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f control-1-rpc-isolation.sql
 ```
 
-Repeat for each script. Every one prints `PASS` lines and raises on failure.
+Repeat for each script, in order. Every one prints `PASS` / `MUTANT RED` notices
+and raises on failure.
 
 | Script | Proves |
 |---|---|

@@ -3,34 +3,72 @@
 -- This is the layer the app does NOT use: every read on the page goes through
 -- `report_list_saved_views`, which is SECURITY DEFINER and bypasses RLS
 -- entirely. Control 1 is the one that guards the running app. This one guards
--- any future direct table read and is kept for that reason alone.
+-- any future direct table read, and is kept for that reason alone.
 --
--- Note the `SET LOCAL ROLE authenticated`: without it the script runs as the
--- table owner, for whom RLS is not enforced, and the whole thing would pass
--- while proving nothing.
+-- IT IS THE ONE SCRIPT HERE THAT *MUST* `SET LOCAL ROLE authenticated`, and the
+-- one where BACKLOG-3096's "do not SET ROLE" note does not apply. That note is
+-- about SECURITY DEFINER functions, which run as their owner either way; this
+-- script tests a POLICY, and the table owner is exempt from RLS. Without the
+-- role switch it would pass while proving nothing.
+--
+-- The role is switched OUTSIDE the assertion block on purpose: plpgsql cannot
+-- run a bare `SET ROLE`, and a DO block runs as whatever the current role is —
+-- so switching first makes the whole block execute under RLS.
+--
+-- The two users are chosen by the script, as in control 1. NO psql VARIABLES:
+-- psql does not substitute `:name` inside a dollar-quoted block, so one written
+-- there would reach Postgres verbatim and fail to parse.
 --
 -- RUN:
---   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
---     -v owner="'<uuid-1>'" -v other="'<uuid-2>'" \
---     -f control-3-policy-isolation.sql
+--   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f control-3-policy-isolation.sql
 
 \set ON_ERROR_STOP on
 BEGIN;
 
--- Seed one row for the owner, as the table owner (RLS not in play yet).
+-- Seed one row for the first internal user, as the table owner (RLS not in
+-- play yet, and `authenticated` holds no INSERT — which control 5 asserts).
 INSERT INTO public.report_saved_views (user_id, report_key, name, filters, metric, pinned)
-VALUES (
-  :owner, 'iphone-sync', 'CONTROL 3 owner view',
+SELECT
+  (SELECT user_id FROM internal_roles ORDER BY created_at, user_id LIMIT 1),
+  'iphone-sync',
+  'CONTROL 3 owner view',
   '{"types":[],"outcomes":[],"platforms":[],"search":"","stalledOnly":false}'::jsonb,
-  '{"col":"runs","fn":"count"}'::jsonb, false
+  '{"col":"runs","fn":"count"}'::jsonb,
+  false;
+
+-- Refuse to continue on a single-user database: with nobody to be isolated
+-- FROM, every assertion below would pass for the wrong reason.
+DO $guard$
+BEGIN
+  ASSERT (SELECT count(DISTINCT user_id) FROM internal_roles) >= 2,
+    'CONTROL 3: only ONE internal user exists, so isolation cannot be observed';
+END
+$guard$;
+
+-- Capture the owner's id into a GUC NOW, as the table owner. The assertion
+-- block below runs as `authenticated`, where `internal_roles` is itself
+-- RLS-filtered: reading the owner's id from there after the role switch could
+-- return NULL, and `WHERE user_id = NULL` matches nothing — a false pass. A
+-- GUC is readable by any role.
+SELECT set_config(
+  'control3.owner',
+  (SELECT user_id::text FROM internal_roles ORDER BY created_at, user_id LIMIT 1),
+  true
 );
 
 -- ── as the OWNER ─────────────────────────────────────────────────
-SELECT set_config('request.jwt.claims',
-  json_build_object('sub', :owner, 'role', 'authenticated')::text, true);
+SELECT set_config(
+  'request.jwt.claims',
+  json_build_object(
+    'sub', (SELECT user_id FROM internal_roles ORDER BY created_at, user_id LIMIT 1),
+    'role', 'authenticated'
+  )::text,
+  true
+);
+
 SET LOCAL ROLE authenticated;
 
--- EXPECT: exactly the owner's own rows, and `CONTROL 3 owner view` among them.
+-- EXPECT: at least the seeded row, and every row visible belongs to the caller.
 SELECT count(*) AS owner_sees,
        bool_and(user_id = (select auth.uid())) AS all_rows_are_mine
 FROM public.report_saved_views;
@@ -38,30 +76,44 @@ FROM public.report_saved_views;
 RESET ROLE;
 
 -- ── as a DIFFERENT internal user ─────────────────────────────────
-SELECT set_config('request.jwt.claims',
-  json_build_object('sub', :other, 'role', 'authenticated')::text, true);
+SELECT set_config(
+  'request.jwt.claims',
+  json_build_object(
+    'sub', (SELECT user_id FROM internal_roles
+            WHERE user_id IS DISTINCT FROM
+                  (SELECT user_id FROM internal_roles ORDER BY created_at, user_id LIMIT 1)
+            ORDER BY created_at, user_id LIMIT 1),
+    'role', 'authenticated'
+  )::text,
+  true
+);
+
 SET LOCAL ROLE authenticated;
 
--- EXPECT: zero rows belonging to the owner. Anything else is a failure.
-SELECT count(*) AS other_sees_owner_rows
-FROM public.report_saved_views
-WHERE user_id = :owner;
-
-RESET ROLE;
-
+-- THE ASSERTION, run as `authenticated` so the policy is actually enforced.
 DO $assert$
 DECLARE
+  v_owner UUID;
   v_leak INT;
+  v_total INT;
 BEGIN
-  PERFORM set_config('request.jwt.claims',
-    json_build_object('sub', :other, 'role', 'authenticated')::text, true);
-  SET LOCAL ROLE authenticated;
-  SELECT count(*) INTO v_leak FROM public.report_saved_views WHERE user_id = :owner;
-  RESET ROLE;
+  -- From the GUC, NOT from internal_roles — see the note above the capture.
+  v_owner := current_setting('control3.owner')::uuid;
+  ASSERT v_owner IS NOT NULL, 'CONTROL 3: the owner id was not captured';
+
+  SELECT count(*) INTO v_leak FROM public.report_saved_views WHERE user_id = v_owner;
   ASSERT v_leak = 0,
     format('CONTROL 3 FAILED: the second user sees %s of the owner''s rows through the policy', v_leak);
+
+  SELECT count(*) INTO v_total FROM public.report_saved_views;
+  ASSERT NOT EXISTS (
+    SELECT 1 FROM public.report_saved_views WHERE user_id IS DISTINCT FROM (select auth.uid())
+  ), 'CONTROL 3 FAILED: a row belonging to someone else is visible';
+
+  RAISE NOTICE 'PASS: the second user sees % row(s), none of them the owner''s', v_total;
   RAISE NOTICE 'CONTROL 3 PASSED — the policy hides the owner''s rows from another internal user';
 END
 $assert$;
 
+RESET ROLE;
 ROLLBACK;

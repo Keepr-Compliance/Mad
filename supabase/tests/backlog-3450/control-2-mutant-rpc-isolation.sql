@@ -15,10 +15,11 @@
 -- If it prints `MUTANT GREEN` for either, control 1 is vacuous and PR 2 must
 -- not merge.
 --
+-- The two users are chosen by the script, as in control 1. NO psql VARIABLES:
+-- psql does not substitute `:name` inside a dollar-quoted block.
+--
 -- RUN:
---   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
---     -v owner="'<uuid-1>'" -v other="'<uuid-2>'" \
---     -f control-2-mutant-rpc-isolation.sql
+--   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f control-2-mutant-rpc-isolation.sql
 
 \set ON_ERROR_STOP on
 BEGIN;
@@ -78,23 +79,25 @@ $$;
 
 DO $control$
 DECLARE
-  k_owner CONSTANT UUID := :owner;
-  k_other CONSTANT UUID := :other;
+  k_owner UUID;
+  k_other UUID;
   v_owner_view UUID;
   v_listed JSONB;
   v_leaked BOOLEAN;
   v_deleted BOOLEAN := false;
 BEGIN
-  ASSERT EXISTS (SELECT 1 FROM internal_roles WHERE user_id = k_owner)
-     AND EXISTS (SELECT 1 FROM internal_roles WHERE user_id = k_other)
-     AND k_owner IS DISTINCT FROM k_other,
+  SELECT user_id INTO k_owner FROM internal_roles ORDER BY created_at, user_id LIMIT 1;
+  SELECT user_id INTO k_other
+  FROM internal_roles WHERE user_id IS DISTINCT FROM k_owner
+  ORDER BY created_at, user_id LIMIT 1;
+  ASSERT k_owner IS NOT NULL AND k_other IS NOT NULL,
     'CONTROL 2: needs two distinct internal users, as control 1 does';
 
   PERFORM set_config('request.jwt.claim.sub', k_owner::text, true);
   v_owner_view := (public.report_save_view(
     'iphone-sync', 'CONTROL 2 owner view',
     '{"types":[],"outcomes":[],"platforms":[],"search":"","stalledOnly":false}'::jsonb,
-    '{"col":"runs","fn":"count"}'::jsonb, true, NULL
+    '{"col":"runs","fn":"count"}'::jsonb, true, NULL::uuid
   )->>'id')::uuid;
 
   PERFORM set_config('request.jwt.claim.sub', k_other::text, true);

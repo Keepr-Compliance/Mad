@@ -6,18 +6,19 @@
 --   c. a `p_id` that matches no row RAISES — it never inserts under an id the
 --      caller chose — and another user cannot update the owner's row.
 --
+-- The two users are chosen by the script, as in control 1. NO psql VARIABLES:
+-- psql does not substitute `:name` inside a dollar-quoted block.
+--
 -- RUN:
---   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
---     -v owner="'<uuid-1>'" -v other="'<uuid-2>'" \
---     -f control-4-server-side-limits.sql
+--   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f control-4-server-side-limits.sql
 
 \set ON_ERROR_STOP on
 BEGIN;
 
 DO $control$
 DECLARE
-  k_owner CONSTANT UUID := :owner;
-  k_other CONSTANT UUID := :other;
+  k_owner UUID;
+  k_other UUID;
   k_filters CONSTANT JSONB :=
     '{"types":[],"outcomes":[],"platforms":[],"search":"","stalledOnly":false}'::jsonb;
   k_metric CONSTANT JSONB := '{"col":"runs","fn":"count"}'::jsonb;
@@ -27,10 +28,13 @@ DECLARE
   v_message TEXT;
   v_refused BOOLEAN;
 BEGIN
-  ASSERT EXISTS (SELECT 1 FROM internal_roles WHERE user_id = k_owner),
-    'CONTROL 4: :owner has no internal_roles row';
-  ASSERT EXISTS (SELECT 1 FROM internal_roles WHERE user_id = k_other),
-    'CONTROL 4: :other has no internal_roles row';
+  SELECT user_id INTO k_owner FROM internal_roles ORDER BY created_at, user_id LIMIT 1;
+  SELECT user_id INTO k_other
+  FROM internal_roles WHERE user_id IS DISTINCT FROM k_owner
+  ORDER BY created_at, user_id LIMIT 1;
+  ASSERT k_owner IS NOT NULL, 'CONTROL 4: no internal users at all';
+  ASSERT k_other IS NOT NULL,
+    'CONTROL 4: only ONE internal user exists, so (c2) cannot be observed';
   ASSERT NOT EXISTS (SELECT 1 FROM report_saved_views WHERE id = k_absent),
     'CONTROL 4: the invented id is not absent after all — pick another';
 
@@ -42,7 +46,7 @@ BEGIN
   -- (a) five pins succeed, the sixth is refused.
   FOR i IN 1..5 LOOP
     v_id := (public.report_save_view(
-      'control-4', format('CONTROL 4 pin %s', i), k_filters, k_metric, true, NULL
+      'control-4', format('CONTROL 4 pin %s', i), k_filters, k_metric, true, NULL::uuid
     )->>'id')::uuid;
     IF i = 1 THEN v_first := v_id; END IF;
   END LOOP;
@@ -50,7 +54,7 @@ BEGIN
 
   v_refused := false;
   BEGIN
-    PERFORM public.report_save_view('control-4', 'CONTROL 4 pin 6', k_filters, k_metric, true, NULL);
+    PERFORM public.report_save_view('control-4', 'CONTROL 4 pin 6', k_filters, k_metric, true, NULL::uuid);
   EXCEPTION WHEN OTHERS THEN
     GET STACKED DIAGNOSTICS v_message = MESSAGE_TEXT;
     v_refused := v_message LIKE 'At most 5 pinned%';
@@ -59,7 +63,7 @@ BEGIN
   RAISE NOTICE 'PASS (a2): the sixth pin was refused — %', v_message;
 
   -- An unpinned sixth view is fine; the cap is on cards, not on views.
-  PERFORM public.report_save_view('control-4', 'CONTROL 4 unpinned', k_filters, k_metric, false, NULL);
+  PERFORM public.report_save_view('control-4', 'CONTROL 4 unpinned', k_filters, k_metric, false, NULL::uuid);
   RAISE NOTICE 'PASS (a3): an UNPINNED sixth view is still accepted';
 
   -- (b) re-saving an already-pinned card must not refuse itself.
