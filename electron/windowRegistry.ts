@@ -46,14 +46,68 @@ import type { BrowserWindow } from "electron";
 let mainWindow: BrowserWindow | null = null;
 
 /**
+ * Channels already warned about, mapped to how many further drops were swallowed
+ * since that warning. The presence of a key IS the "already warned" flag; the
+ * number is what the recovery line reports.
+ *
+ * WHY A THROTTLE RATHER THAN ONE LINE PER DROP
+ * --------------------------------------------
+ * `sync:progress` is emitted once per parsed chunk of `idevicebackup2` stdout,
+ * with no dedupe and no interval — `backupService.ts`'s own comment calls that
+ * output "very spammy" and keeps it out of the log for exactly that reason. Every
+ * one of those is forwarded 1:1 by `deviceSyncOrchestrator` and pushed 1:1 by
+ * `syncHandlers`. Close the window during a sync — macOS does not quit, so that
+ * is one Dock click away from this defect's own scenario — and each becomes a
+ * `log.warn`, which clears the file level (`config/logFileConfig.ts`).
+ *
+ * That file's `maxSize` is 8 MB and it keeps exactly ONE archive, which it
+ * OVERWRITES (BACKLOG-2898). At roughly 120 B a line, ~70,000 drops rotate
+ * `main.log` and destroy `main.old.log` with it: ~47/sec across a 24-minute
+ * backup, ~10/sec across a two-hour first sync. The warning that exists to make
+ * this diagnosable would erase the diagnosis, and the rest of the session's log
+ * with it. 2898's own conclusion was that no capacity survives an unthrottled
+ * per-event log and the fix has to be at the emission point. So: the first drop
+ * on a channel is logged in full, the rest are counted, and the count is
+ * reported when a window comes back.
+ */
+const suppressedDropsByChannel = new Map<string, number>();
+
+/**
+ * Report what was swallowed while there was nowhere to push, and forget it.
+ *
+ * Called only from {@link setMainWindow} when a live window arrives, which is the
+ * only way a dropped channel can become deliverable again: a drop happens solely
+ * when {@link getMainWindow} returns `null`, it keeps returning `null` until a
+ * window is registered, and `setMainWindow` is the sole writer. "This channel can
+ * be reached again" and "a window was just set" are therefore the same event
+ * here — a second flush inside {@link sendToMainWindow} would be unreachable.
+ */
+function flushSuppressedDrops(): void {
+  suppressedDropsByChannel.forEach((suppressed, channel) => {
+    if (suppressed > 0) {
+      log.warn(
+        `[WindowRegistry] A main window is live again; ${suppressed} further main->renderer push(es) had been dropped on channel ${channel}`,
+      );
+    }
+  });
+  suppressedDropsByChannel.clear();
+}
+
+/**
  * Record the window `createWindow()` just built. The sole writer.
  *
  * Passing `null` clears the registry, which is what tests do between cases; the
  * app itself never needs to, because {@link getMainWindow} already treats a
  * destroyed window as absent.
+ *
+ * A non-null window also flushes and clears the per-channel drop state. That is
+ * the moment pushes can land again, so it is where the "n further drops" line
+ * belongs — and it is what stops that state leaking from one test case into the
+ * next, which a bare module-level "already warned" set would do.
  */
 export function setMainWindow(win: BrowserWindow | null): void {
   mainWindow = win;
+  if (win) flushSuppressedDrops();
 }
 
 /**
@@ -76,18 +130,27 @@ export function getMainWindow(): BrowserWindow | null {
  * is sent with no payload and must stay that way — `send(channel, undefined)`
  * delivers an argument, which is not the same thing.
  *
- * **A drop is logged, never silent.** The channel name only: payloads on these
- * channels carry device names, mailbox addresses and file paths, and this line
- * goes to a log file the founder attaches to reports. The silence is precisely
- * what cost BACKLOG-3454 a 70-minute QA session — main's log read as if every
- * event had been sent.
+ * **A drop is logged, never silent — but once per channel.** The first drop on a
+ * channel is warned in full; the rest are counted and reported when a window
+ * returns (see {@link suppressedDropsByChannel} for why the volume is the whole
+ * point). The channel name only, never the payload: payloads on these channels
+ * carry device names, mailbox addresses and file paths, and this line goes to a
+ * log file the founder attaches to reports. The silence is precisely what cost
+ * BACKLOG-3454 a 70-minute QA session — main's log read as if every event had
+ * been sent.
  */
 export function sendToMainWindow(channel: string, ...args: unknown[]): boolean {
   const win = getMainWindow();
   if (!win) {
-    log.warn(
-      `[WindowRegistry] Dropped main->renderer push: no live main window (channel: ${channel})`,
-    );
+    const suppressed = suppressedDropsByChannel.get(channel);
+    if (suppressed === undefined) {
+      suppressedDropsByChannel.set(channel, 0);
+      log.warn(
+        `[WindowRegistry] Dropped main->renderer push: no live main window (channel: ${channel}); further drops on this channel are counted, not logged`,
+      );
+    } else {
+      suppressedDropsByChannel.set(channel, suppressed + 1);
+    }
     return false;
   }
   win.webContents.send(channel, ...args);

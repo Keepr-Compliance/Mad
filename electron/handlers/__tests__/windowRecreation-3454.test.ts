@@ -217,6 +217,63 @@ describe("a push reaches the window that exists now, not the one registration sa
     expect(warned).not.toContain("Invented Owner");
   });
 
+  /**
+   * THE THIRD CONTROL: the warning is throttled per channel, so it cannot eat the
+   * log it exists to write.
+   *
+   * `sync:progress` fires once per parsed chunk of `idevicebackup2` stdout. Close
+   * the window during a sync — one Dock click from this defect's own scenario —
+   * and an unthrottled warn rotates an 8 MB `main.log` and overwrites its single
+   * archive at ~70,000 drops, taking the FIRST lines with it: the ones that say
+   * which channel died and when. `windowRegistry.ts` carries the arithmetic.
+   *
+   * PER CHANNEL, not once globally — hence the second channel below. A lone
+   * `warnedOnce` boolean passes a one-channel version of this test and throws away
+   * the only thing the line is for.
+   *
+   * MUTATIONS: make the first-drop branch unconditional -> RED (one warn per
+   * drop). Delete `if (win) flushSuppressedDrops();` from `setMainWindow` -> RED
+   * (no count on recovery, and the state never resets).
+   */
+  it("warns once per channel through a storm of drops, then reports the count when a window returns", () => {
+    A.destroy();
+
+    for (let i = 0; i < 100; i++) {
+      sendToMainWindow("sync:progress", {
+        phase: "backup",
+        percent: i,
+        device: "Invented Owner iPhone",
+      });
+    }
+    sendToMainWindow("device:connected", DEVICE);
+
+    const duringOutage = mockWarn.mock.calls.map((c) => String(c[0]));
+    expect(duringOutage).toHaveLength(2);
+    expect(duringOutage.filter((l) => l.includes("sync:progress"))).toHaveLength(1);
+    expect(duringOutage.filter((l) => l.includes("device:connected"))).toHaveLength(1);
+    expect(duringOutage.join("\n")).not.toContain("Invented Owner iPhone");
+    expect(duringOutage.join("\n")).not.toContain(DEVICE.name);
+    expect(duringOutage.join("\n")).not.toContain(DEVICE.udid);
+
+    // The Dock reopen. The 99 swallowed pushes are reported once, and the channel
+    // that dropped only the once adds nothing further.
+    mockWarn.mockClear();
+    setMainWindow(B.win as never);
+
+    const onRecovery = mockWarn.mock.calls.map((c) => String(c[0]));
+    expect(onRecovery).toHaveLength(1);
+    expect(onRecovery[0]).toContain("sync:progress");
+    expect(onRecovery[0]).toMatch(/\b99\b/);
+
+    // ...and the count went with it: the next outage is loud again, rather than
+    // silent for the rest of the process's life.
+    mockWarn.mockClear();
+    B.destroy();
+    sendToMainWindow("sync:progress", { phase: "backup", percent: 100 });
+
+    expect(mockWarn.mock.calls.map((c) => String(c[0]))).toHaveLength(1);
+  });
+
   it("reports whether the push left, so a caller can fall back", () => {
     expect(sendToMainWindow("sync:phase", "backup")).toBe(true);
     A.destroy();
