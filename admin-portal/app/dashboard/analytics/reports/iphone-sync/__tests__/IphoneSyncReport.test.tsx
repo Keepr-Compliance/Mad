@@ -266,6 +266,18 @@ describe('how to use this report', () => {
     expect(body).toContain('the backup size divided by the transfer phase, in MB per second');
   });
 
+  it('NAMES the base the Rate column uses, and says it differs from the size columns', () => {
+    // Rate is MiB per second while Backup and Device are decimal GB — the two
+    // were deliberately left disagreeing, because the four Rate values the
+    // founder checked were right in MiB and restating them would fix nothing he
+    // reported. What the page owed him was the base, in words: without it he
+    // divides one column by the other, gets a figure ~4.9% off, and has nothing
+    // on the page to explain it.
+    expect(body).toContain('where 1 MB is 1,048,576 bytes');
+    expect(body).toContain('count a GB as 1,000,000,000 bytes');
+    expect(body).toContain('will not give you the Rate column exactly');
+  });
+
   it('states the Monday/UTC convention and the created_at meaning flip', () => {
     expect(body).toContain('Weeks start Monday, and every time on this page is UTC');
     expect(body).toContain('counted on the day it ended');
