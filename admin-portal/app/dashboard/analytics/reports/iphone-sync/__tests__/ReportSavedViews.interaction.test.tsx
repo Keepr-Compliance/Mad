@@ -198,6 +198,23 @@ describe('a pinned card', () => {
     expect(container.querySelectorAll('[data-run-id]')).toHaveLength(5);
   });
 
+  it('IGNORES the page`s own filters — it counts over the period, not over the page', async () => {
+    const api = fakeApi();
+    const { container } = mount({ api });
+    await waitFor(() => expect(cardIds(container)).toEqual(['v-errors']));
+
+    // Narrow the PAGE to something the card did not save. If the card read the
+    // page's filtered rows it would now show errors AND stalled, which is
+    // fewer — and it would be contradicting its own label.
+    fireEvent.click(screen.getByRole('button', { name: /Stalled/ }));
+    const bothCount = buildIphoneSyncReport(FIXTURE_ROWS_24, FIXTURE_USERS_24).runs.filter(
+      (r) => r.outcome === 'error' && r.stalled
+    ).length;
+    expect(bothCount).not.toBe(ERRORS_IN_FIXTURE);
+
+    expect(cardText(container, 'v-errors')).toBe(String(ERRORS_IN_FIXTURE));
+  });
+
   it('applies its filters on click and puts the page back on a second click', async () => {
     const api = fakeApi();
     const { container } = mount({ api });
