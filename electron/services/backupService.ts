@@ -1755,6 +1755,16 @@ export class BackupService extends EventEmitter {
       } else if (lower.includes("full backup mode")) {
         this.deviceReportedBackupMode = "full";
       }
+      // BACKLOG-3440: EMITTED THE MOMENT IT IS KNOWN, not carried on the result.
+      //
+      // The result only exists when the backup finishes one of its known ways, so every
+      // run that was killed or abandoned lost this — measured: all 5 `cancelled` rows in
+      // the corpus have `incremental` NULL. A first sync and an incremental sync have
+      // completely different expected durations, so the runs that most needed the
+      // distinction were exactly the runs missing it.
+      if (this.deviceReportedBackupMode !== null) {
+        this.emit("backup-mode", this.deviceReportedBackupMode);
+      }
       return;
     }
   }

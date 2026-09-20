@@ -11,7 +11,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
-import { LayoutDashboard, BarChart3, Users, Building2, CreditCard, Headphones, Inbox, UserCheck, Settings, LogOut, ChevronLeft, FileText, ChevronDown, ChevronRight, Shield, KanbanSquare, ListChecks, FolderKanban, Calendar, Filter } from 'lucide-react';
+import { LayoutDashboard, BarChart3, Users, Building2, CreditCard, Headphones, Inbox, UserCheck, Settings, LogOut, ChevronLeft, FileText, ChevronDown, ChevronRight, Shield, KanbanSquare, ListChecks, FolderKanban, Calendar, Filter, FileBarChart2 } from 'lucide-react';
 import { AppMark, Wordmark } from '@keepr/ui';
 import { useAuth } from '@/components/providers/AuthProvider';
 import { usePermissions } from '@/components/providers/PermissionsProvider';
@@ -29,6 +29,7 @@ interface NavItem {
 const mainNavItems: NavItem[] = [
   { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, permission: PERMISSIONS.DASHBOARD_VIEW },
   { label: 'Analytics', href: '/dashboard/analytics', icon: BarChart3, permission: PERMISSIONS.ANALYTICS_VIEW },
+  { label: 'Reports', href: '/dashboard/analytics/reports', icon: FileBarChart2, permission: PERMISSIONS.ANALYTICS_VIEW },
   { label: 'Funnel', href: '/dashboard/funnel', icon: Filter, permission: PERMISSIONS.ANALYTICS_VIEW },
   { label: 'Users', href: '/dashboard/users', icon: Users, permission: PERMISSIONS.USERS_VIEW },
   { label: 'Organizations', href: '/dashboard/organizations', icon: Building2, permission: PERMISSIONS.ORGANIZATIONS_VIEW },
@@ -137,7 +138,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const canSeePm = loading || pmSectionPermissions.some((p) => hasPermission(p));
 
   /** Paths that should use exact-match only (prefix of other routes) */
-  const exactMatchPaths = new Set(['/dashboard', '/dashboard/support', '/dashboard/pm']);
+  const exactMatchPaths = new Set(['/dashboard', '/dashboard/analytics', '/dashboard/support', '/dashboard/pm']);
 
   const renderNavItem = (item: NavItem, isSubItem = false) => {
     // While permissions are loading, show all items to prevent flash

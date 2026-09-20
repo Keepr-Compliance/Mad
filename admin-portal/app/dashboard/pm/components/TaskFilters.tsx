@@ -13,8 +13,8 @@ import { Filter, X } from 'lucide-react';
 import { listSprints, listProjects } from '@/lib/pm-queries';
 import type { PmSprint, PmProject } from '@/lib/pm-types';
 import { STATUS_LABELS, PRIORITY_LABELS, TYPE_LABELS, AREA_LABELS } from '@/lib/pm-types';
-import { MultiSelectDropdown } from './MultiSelectDropdown';
-import type { MultiSelectOption } from './MultiSelectDropdown';
+import { MultiSelectDropdown } from '@/components/shared/MultiSelectDropdown';
+import type { MultiSelectOption } from '@/components/shared/MultiSelectDropdown';
 
 interface TaskFiltersProps {
   statuses: string[];

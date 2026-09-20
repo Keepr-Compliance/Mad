@@ -170,6 +170,8 @@ import type {
   NewContactData,
 } from "../types/handlerTypes";
 
+import { sendToMainWindow } from "../windowRegistry";
+
 // Type definitions
 interface ContactResponse {
   success: boolean;
@@ -423,9 +425,6 @@ function buildMacOSContactsForSync(
   }
   return Array.from(byRecord.values());
 }
-
-/** Reference to mainWindow for emitting progress events */
-let _mainWindow: BrowserWindow | null = null;
 
 /**
  * Backfill emails/phones for all imported contacts from external_contacts.
@@ -1128,10 +1127,9 @@ async function backfillImportedContactsFromExternal(userId: string): Promise<{ u
 
 /**
  * Register all contact-related IPC handlers
- * @param mainWindow - The main browser window for emitting progress events
+ * @param _mainWindow - The main browser window for emitting progress events (BACKLOG-3454: IGNORED — pushes resolve the live window via sendToMainWindow; kept so existing call sites and suites compile)
  */
-export function registerContactHandlers(mainWindow: BrowserWindow): void {
-  _mainWindow = mainWindow;
+export function registerContactHandlers(_mainWindow: BrowserWindow): void {
 
   // TASK-2300: Register contact sync providers
   // TASK-2301: Both providers registered here (not at module load) to avoid side effects during import
@@ -1153,9 +1151,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
       // modal that is open. Repopulating the picker mid-import would invalidate
       // the selection Set against freshly-minted contact ids, which is the
       // id-swap family of bug that has bitten this area repeatedly.
-      if (_mainWindow && !_mainWindow.isDestroyed()) {
-        _mainWindow.webContents.send("contacts:link-review-updated");
-      }
+      sendToMainWindow("contacts:link-review-updated");
     },
   });
 
@@ -1715,9 +1711,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
                   }
 
                   // Notify renderer that sync is complete
-                  if (_mainWindow && !_mainWindow.isDestroyed()) {
-                    _mainWindow.webContents.send("contacts:external-sync-complete");
-                  }
+                  sendToMainWindow("contacts:external-sync-complete");
                 }
               } catch (err) {
                 logService.warn(`[Main] Background external contacts sync failed: ${err}`, "Contacts");
@@ -2488,13 +2482,11 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             }
 
             processed++;
-            if (_mainWindow && !_mainWindow.isDestroyed()) {
-              _mainWindow.webContents.send("contacts:import-progress", {
-                current: processed,
-                total,
-                percent: Math.round((processed / total) * 100),
-              });
-            }
+            sendToMainWindow("contacts:import-progress", {
+              current: processed,
+              total,
+              percent: Math.round((processed / total) * 100),
+            });
           }
 
           /**
@@ -2663,13 +2655,11 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
               unclaimedToCreate,
               (current, _batchTotal) => {
                 const overallCurrent = existingDbContacts.length + current;
-                if (_mainWindow && !_mainWindow.isDestroyed()) {
-                  _mainWindow.webContents.send("contacts:import-progress", {
-                    current: overallCurrent,
-                    total,
-                    percent: Math.round((overallCurrent / total) * 100),
-                  });
-                }
+                sendToMainWindow("contacts:import-progress", {
+                  current: overallCurrent,
+                  total,
+                  percent: Math.round((overallCurrent / total) * 100),
+                });
               }
             );
 

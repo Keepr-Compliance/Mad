@@ -35,6 +35,8 @@ import {
   CURRENT_PRIVACY_POLICY_VERSION,
 } from "../constants/legalVersions";
 
+import { sendToMainWindow, getMainWindow } from "../windowRegistry";
+
 // Type definitions
 interface AuthResponse {
   success: boolean;
@@ -94,7 +96,7 @@ function safeLogUrl(url: string): string {
  * Microsoft Auth: Start login flow (uses popup window)
  */
 export async function handleMicrosoftLogin(
-  mainWindow: BrowserWindow | null
+  _mainWindow: BrowserWindow | null
 ): Promise<LoginStartResponse> {
   try {
     await logService.info(
@@ -160,9 +162,7 @@ export async function handleMicrosoftLogin(
           "Microsoft login auth window closed by user",
           "AuthHandlers"
         );
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send("microsoft:login-cancelled");
-        }
+        sendToMainWindow("microsoft:login-cancelled");
       }
     });
 
@@ -263,14 +263,12 @@ export async function handleMicrosoftLogin(
             "AuthHandlers",
             { email }
           );
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send("microsoft:login-complete", {
-              success: false,
-              error: "Too many login attempts. Please try again later.",
-              rateLimited: true,
-              lockedUntil: rateLimitCheck.lockedUntil,
-            });
-          }
+          sendToMainWindow("microsoft:login-complete", {
+            success: false,
+            error: "Too many login attempts. Please try again later.",
+            rateLimited: true,
+            lockedUntil: rateLimitCheck.lockedUntil,
+          });
           return;
         }
 
@@ -314,26 +312,24 @@ export async function handleMicrosoftLogin(
             "Database not initialized - deferring user creation",
             "AuthHandlers"
           );
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send("microsoft:login-pending", {
-              success: true,
-              pendingLogin: true,
-              oauthData: {
-                provider: "microsoft" as const,
-                userInfo,
-                tokens: {
-                  access_token: accessToken,
-                  refresh_token: refreshToken,
-                  expires_at: tokens.expires_in
-                    ? new Date(Date.now() + tokens.expires_in * 1000).toISOString()
-                    : new Date(Date.now() + 3600 * 1000).toISOString(),
-                  scopes: tokens.scope ? tokens.scope.split(" ") : [],
-                },
-                cloudUser,
-                subscription: subscription ?? undefined,
+          sendToMainWindow("microsoft:login-pending", {
+            success: true,
+            pendingLogin: true,
+            oauthData: {
+              provider: "microsoft" as const,
+              userInfo,
+              tokens: {
+                access_token: accessToken,
+                refresh_token: refreshToken,
+                expires_at: tokens.expires_in
+                  ? new Date(Date.now() + tokens.expires_in * 1000).toISOString()
+                  : new Date(Date.now() + 3600 * 1000).toISOString(),
+                scopes: tokens.scope ? tokens.scope.split(" ") : [],
               },
-            });
-          }
+              cloudUser,
+              subscription: subscription ?? undefined,
+            },
+          });
           return;
         }
 
@@ -477,15 +473,13 @@ export async function handleMicrosoftLogin(
 
         setSyncUserId(localUser.id);
 
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send("microsoft:login-complete", {
-            success: true,
-            user: localUser,
-            sessionToken,
-            subscription,
-            isNewUser,
-          });
-        }
+        sendToMainWindow("microsoft:login-complete", {
+          success: true,
+          user: localUser,
+          sessionToken,
+          subscription,
+          isNewUser,
+        });
       } catch (error) {
         const errorMessage =
           error instanceof Error ? error.message : "Unknown error";
@@ -505,12 +499,10 @@ export async function handleMicrosoftLogin(
           errorMessage: errorMessage,
         });
 
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send("microsoft:login-complete", {
-            success: false,
-            error: errorMessage,
-          });
-        }
+        sendToMainWindow("microsoft:login-complete", {
+          success: false,
+          error: errorMessage,
+        });
       }
     };
     setTimeout(() => {
@@ -533,7 +525,7 @@ export async function handleMicrosoftLogin(
  * Microsoft Auth: Connect mailbox (Outlook/Mail access)
  */
 export async function handleMicrosoftConnectMailbox(
-  mainWindow: BrowserWindow | null,
+  _mainWindow: BrowserWindow | null,
   userId: string
 ): Promise<LoginStartResponse> {
   try {
@@ -627,12 +619,10 @@ export async function handleMicrosoftConnectMailbox(
             errorMessage: saveError instanceof Error ? saveError.message : "Failed to save credentials",
           });
 
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send("microsoft:mailbox-connected", {
-              success: false,
-              error: "Failed to save credentials. Please try logging in again.",
-            });
-          }
+          sendToMainWindow("microsoft:mailbox-connected", {
+            success: false,
+            error: "Failed to save credentials. Please try logging in again.",
+          });
           return;
         }
 
@@ -657,14 +647,14 @@ export async function handleMicrosoftConnectMailbox(
         // because it is free and directionally right, not because it is known
         // to affect delivery. Only this branch focuses: a failed connect must
         // not steal the user's browser out from under them.
-        bringAppToFront(mainWindow);
+        // BACKLOG-3454: the live window, not the one captured at registration —
+        // after a Dock reopen the captured one is destroyed and nothing focuses.
+        bringAppToFront(getMainWindow());
 
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send("microsoft:mailbox-connected", {
-            success: true,
-            email: userInfo.email,
-          });
-        }
+        sendToMainWindow("microsoft:mailbox-connected", {
+          success: true,
+          email: userInfo.email,
+        });
 
         // BACKLOG-1759: Now that the Microsoft mailbox is connected, re-fire the
         // Outlook contact import for users who enabled it (e.g. during onboarding)
@@ -673,9 +663,9 @@ export async function handleMicrosoftConnectMailbox(
         void importEnabledEmptyContactSources(validatedUserId, ["outlook"])
           .then((importResults) => {
             const importedAny = importResults.some((r) => r.imported > 0);
-            if (importedAny && mainWindow && !mainWindow.isDestroyed()) {
+            if (importedAny) {
               // Refresh any open contact picker so the newly imported contacts appear.
-              mainWindow.webContents.send("contacts:external-sync-complete");
+              sendToMainWindow("contacts:external-sync-complete");
             }
           })
           .catch((importError) => {
@@ -719,13 +709,11 @@ export async function handleMicrosoftConnectMailbox(
             error instanceof Error ? error.message : "Unknown error",
         });
 
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send("microsoft:mailbox-connected", {
-            success: false,
-            error: error instanceof Error ? error.message : "Unknown error",
-            adminConsentRequired,
-          });
-        }
+        sendToMainWindow("microsoft:mailbox-connected", {
+          success: false,
+          error: error instanceof Error ? error.message : "Unknown error",
+          adminConsentRequired,
+        });
       }
     };
     setTimeout(() => {
@@ -750,7 +738,7 @@ export async function handleMicrosoftConnectMailbox(
  * Pre-DB Microsoft mailbox connection (returns tokens instead of saving to DB)
  */
 export async function handleMicrosoftConnectMailboxPending(
-  mainWindow: BrowserWindow | null,
+  _mainWindow: BrowserWindow | null,
   emailHint?: string
 ): Promise<LoginStartResponse> {
   try {
@@ -806,9 +794,7 @@ export async function handleMicrosoftConnectMailboxPending(
     authWindow.on("closed", () => {
       if (!authCompleted) {
         microsoftAuthService.stopLocalServer();
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send("microsoft:mailbox-pending-cancelled");
-        }
+        sendToMainWindow("microsoft:mailbox-pending-cancelled");
       }
     });
 
@@ -887,18 +873,16 @@ export async function handleMicrosoftConnectMailboxPending(
           { email: userInfo.email }
         );
 
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send("microsoft:mailbox-pending-connected", {
-            success: true,
-            email: userInfo.email,
-            tokens: {
-              access_token: tokens.access_token,
-              refresh_token: tokens.refresh_token || null,
-              expires_at: expiresAt,
-              scopes: tokens.scope,
-            },
-          });
-        }
+        sendToMainWindow("microsoft:mailbox-pending-connected", {
+          success: true,
+          email: userInfo.email,
+          tokens: {
+            access_token: tokens.access_token,
+            refresh_token: tokens.refresh_token || null,
+            expires_at: expiresAt,
+            scopes: tokens.scope,
+          },
+        });
       } catch (error) {
         await logService.error(
           "Microsoft mailbox connection failed (pre-DB mode)",
@@ -906,12 +890,10 @@ export async function handleMicrosoftConnectMailboxPending(
           { error: error instanceof Error ? error.message : "Unknown error" }
         );
 
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send("microsoft:mailbox-pending-connected", {
-            success: false,
-            error: error instanceof Error ? error.message : "Unknown error",
-          });
-        }
+        sendToMainWindow("microsoft:mailbox-pending-connected", {
+          success: false,
+          error: error instanceof Error ? error.message : "Unknown error",
+        });
       }
     };
     setTimeout(() => {
@@ -936,19 +918,19 @@ export async function handleMicrosoftConnectMailboxPending(
  * Register all Microsoft auth handlers
  */
 export function registerMicrosoftAuthHandlers(
-  mainWindow: BrowserWindow | null
+  _mainWindow: BrowserWindow | null
 ): void {
   ipcMain.handle("auth:microsoft:login", () =>
-    handleMicrosoftLogin(mainWindow)
+    handleMicrosoftLogin(_mainWindow)
   );
 
   ipcMain.handle("auth:microsoft:connect-mailbox", (event, userId: string) =>
-    handleMicrosoftConnectMailbox(mainWindow, userId)
+    handleMicrosoftConnectMailbox(_mainWindow, userId)
   );
 
   ipcMain.handle(
     "auth:microsoft:connect-mailbox-pending",
     (event, emailHint?: string) =>
-      handleMicrosoftConnectMailboxPending(mainWindow, emailHint)
+      handleMicrosoftConnectMailboxPending(_mainWindow, emailHint)
   );
 }

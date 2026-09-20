@@ -40,6 +40,8 @@ import {
   type EmailPrecacheProgressCallback,
 } from "../services/emailPrecacheProgress";
 
+import { sendToMainWindow } from "../windowRegistry";
+
 interface ScanOptions {
   onProgress?: (progress: unknown) => void;
   [key: string]: unknown;
@@ -104,10 +106,10 @@ export { computeEmailFetchSinceDate } from "../utils/emailDateRange";
 
 /**
  * Register email sync IPC handlers (scan + sync-and-fetch)
- * @param mainWindow - Main window instance
+ * @param _mainWindow - Main window instance (BACKLOG-3454: IGNORED — pushes resolve the live window via sendToMainWindow; kept so existing call sites and suites compile)
  */
 export function registerEmailSyncHandlers(
-  mainWindow: BrowserWindow | null,
+  _mainWindow: BrowserWindow | null,
 ): void {
   // Cancel ongoing scan
   ipcMain.handle(
@@ -215,12 +217,10 @@ export function registerEmailSyncHandlers(
           ...sanitizedOptions,
           onProgress: (progress: unknown) => {
             // Send progress updates to renderer
-            if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.webContents.send(
-                "transactions:scan-progress",
-                progress,
-              );
-            }
+            sendToMainWindow(
+              "transactions:scan-progress",
+              progress,
+            );
           },
         },
       );
@@ -488,9 +488,7 @@ export function registerEmailSyncHandlers(
       // service since BACKLOG-1362 and nothing has ever listened, which is why a
       // re-cache looked hung rather than slow.
       const onProgress: EmailPrecacheProgressCallback = (progress) => {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send(EMAIL_PRECACHE_PROGRESS_CHANNEL, progress);
-        }
+        sendToMainWindow(EMAIL_PRECACHE_PROGRESS_CHANNEL, progress);
       };
 
       const result = await emailSyncService.precacheEmails(validatedUserId, onProgress, {

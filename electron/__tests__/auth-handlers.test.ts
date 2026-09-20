@@ -198,7 +198,23 @@ jest.mock("../services/auditService", () => ({
   default: {
     initialize: jest.fn(),
     log: jest.fn().mockResolvedValue(undefined),
+    // BACKLOG-3052: initializeDatabase now wires the support-access gate as
+    // well as initializing the service. A mock that stops at `initialize`
+    // describes an auditService that no longer exists, and the handler dies
+    // on `setSupportAccessGate is not a function` before it reaches anything
+    // this suite is actually asserting.
+    setSupportAccessGate: jest.fn(),
   },
+}));
+
+// BACKLOG-3052: `authHandlers` imports the support-access barrel, which
+// reaches keychainGate, the encryption service and the diagnostics collector.
+// None of that belongs in a handler unit suite, and the gate closure is never
+// invoked here — only handed to the (mocked) audit service.
+jest.mock("../services/supportAccess", () => ({
+  getSupportAccess: jest.fn(() => ({
+    access: { isActive: jest.fn(() => false) },
+  })),
 }));
 
 jest.mock("../services/logService", () => ({
@@ -223,6 +239,7 @@ jest.mock("../handlers/syncHandlers", () => ({
 
 // Import after mocks are set up
 import { registerAuthHandlers, initializeDatabase } from "../handlers/authHandlers";
+import { setMainWindow } from "../windowRegistry";
 import databaseService from "../services/databaseService";
 import googleAuthService from "../services/googleAuthService";
 import microsoftAuthService from "../services/microsoftAuthService";
@@ -296,6 +313,11 @@ describe("Auth Handlers", () => {
     });
 
     // Register all handlers
+    // BACKLOG-3454: the window is no longer captured at registration — every
+    // push resolves the live one through the registry, so the stand-in has to
+    // be the registered window rather than an argument.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    setMainWindow(mockMainWindow as any);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     registerAuthHandlers(mockMainWindow as any);
   });
@@ -313,6 +335,13 @@ describe("Auth Handlers", () => {
         mockDatabaseService,
         mockSupabaseService,
       );
+      // BACKLOG-3052: initializing the audit service is only half the job —
+      // without the gate, `supportAccessGate` stays null, the service reads
+      // "no grant" forever, and contact names are stripped from every upload
+      // even during a live support window. The gate's own behaviour (lazy
+      // read, singleton untouched) is pinned in
+      // handlers/__tests__/authHandlers.initOptions-2999.test.ts.
+      expect(mockAuditService.setSupportAccessGate).toHaveBeenCalledTimes(1);
       expect(mockLogService.debug).toHaveBeenCalledWith(
         "Database initialized",
         "AuthHandlers",

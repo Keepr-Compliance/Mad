@@ -271,10 +271,19 @@ describe("BACKLOG-3423: import source gates iPhone USB detection", () => {
       // path must not wait on an IPC round-trip), so detection does start.
       expect(syncApi().startDetection).toHaveBeenCalled();
 
-      await waitFor(() => expect(syncApi().stopDetection).toHaveBeenCalled());
-      await act(async () => { await Promise.resolve(); });
-
-      expect(toggle()).toHaveAttribute("aria-checked", "false");
+      // BACKLOG-3437: StrictMode mounts the detection effect, tears it down and
+      // remounts it, and that teardown ALREADY calls stopDetection once — so
+      // "stopDetection has been called" is true before the source has resolved
+      // and waiting on it waits for nothing. Wait for the gated state itself,
+      // and require a stop BEYOND the StrictMode one, which is what the Android
+      // source actually produces.
+      const stopsAtMount = syncApi().stopDetection.mock.calls.length;
+      await waitFor(() => {
+        expect(toggle()).toHaveAttribute("aria-checked", "false");
+        expect(syncApi().stopDetection.mock.calls.length).toBeGreaterThan(
+          stopsAtMount,
+        );
+      });
     });
   });
 });
