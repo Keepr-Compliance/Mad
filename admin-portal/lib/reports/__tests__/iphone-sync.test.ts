@@ -136,9 +136,19 @@ describe('minutes per GB and the baseline', () => {
   });
 
   it('returns null rather than Infinity when the device size is missing', () => {
-    expect(minutesPerGb({ elapsed_ms: 60000, device_used_bytes: null })).toBeNull();
-    expect(minutesPerGb({ elapsed_ms: 60000, device_used_bytes: 0 })).toBeNull();
-    expect(minutesPerGb({ elapsed_ms: null, device_used_bytes: 1024 ** 3 })).toBeNull();
+    // `backup_bytes` is set on all three ON PURPOSE. The run that wrote nothing
+    // is refused by the guard ABOVE this one, so a fixture without it never
+    // reaches the device-size guard at all: the test would keep its name and
+    // its green while the line it is named after could be deleted.
+    expect(
+      minutesPerGb({ elapsed_ms: 60000, device_used_bytes: null, backup_bytes: 1_000_000 })
+    ).toBeNull();
+    expect(
+      minutesPerGb({ elapsed_ms: 60000, device_used_bytes: 0, backup_bytes: 1_000_000 })
+    ).toBeNull();
+    expect(
+      minutesPerGb({ elapsed_ms: null, device_used_bytes: 1024 ** 3, backup_bytes: 1_000_000 })
+    ).toBeNull();
   });
 
   it('returns null from ratioToBaseline when there is no baseline', () => {
