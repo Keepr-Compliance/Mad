@@ -203,15 +203,24 @@ describe('a pinned card', () => {
     const { container } = mount({ api });
     await waitFor(() => expect(cardIds(container)).toEqual(['v-errors']));
 
-    // Narrow the PAGE to something the card did not save. If the card read the
-    // page's filtered rows it would now show errors AND stalled, which is
-    // fewer — and it would be contradicting its own label.
-    fireEvent.click(screen.getByRole('button', { name: /Stalled/ }));
-    const bothCount = buildIphoneSyncReport(FIXTURE_ROWS_24, FIXTURE_USERS_24).runs.filter(
-      (r) => r.outcome === 'error' && r.stalled
+    // Narrow the PAGE by something the card did not save, and something that
+    // really goes through `applyFilters` — the Stalled tile does NOT, by
+    // design (it narrows the table alone), so it cannot separate the two here.
+    //
+    // A user whose runs include SOME but not all of the errors. If the card
+    // read the page's filtered rows it would drop to that user's errors, and
+    // contradict its own label.
+    const NEEDLE = 'Sync user C';
+    const narrowedErrors = buildIphoneSyncReport(FIXTURE_ROWS_24, FIXTURE_USERS_24).runs.filter(
+      (r) => r.outcome === 'error' && r.userLabel.includes(NEEDLE)
     ).length;
-    expect(bothCount).not.toBe(ERRORS_IN_FIXTURE);
+    expect(narrowedErrors).toBeGreaterThan(0);
+    expect(narrowedErrors).toBeLessThan(ERRORS_IN_FIXTURE);
 
+    fireEvent.change(screen.getByLabelText('Search by user'), { target: { value: NEEDLE } });
+    expect(tileValue(container, 'Errored')).toBe(String(narrowedErrors));
+
+    // The card has not moved.
     expect(cardText(container, 'v-errors')).toBe(String(ERRORS_IN_FIXTURE));
   });
 
