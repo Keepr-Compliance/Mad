@@ -8,8 +8,8 @@ Proves the three migrations on a real Postgres + PostgREST stack:
 | `20260921101757_backlog_3473_transaction_checklists.sql` | Seven tables, RLS, grants, the seed catalogue and its copy, the `transaction_checklists` feature row, `submission_attachments.local_attachment_id`. |
 | `20260921101758_backlog_3473_retire_unused_org_columns.sql` | Drops three unused `organizations` columns, behind a guard. Never committed on the venue. |
 
-**Status: run in phase (ii), 2026-09-21, at `940efc269`** — every control green, every
-mutant as expected. Results at the end of this file.
+**Status: run in phase (ii), 2026-09-21, at `940efc269`, and re-run after K9 at
+`e93076ea3`** — every control green, every mutant as expected. Results at the end of this file.
 
 CI runs only the text tripwire, `broker-portal/__tests__/migrations/transaction-checklists-3473.test.ts`
 (control C23). Nothing in this directory runs in CI. No file here has a `.test.` or
@@ -139,7 +139,7 @@ Phase (ii), 2026-09-21, NAS test stack (PostgreSQL 17.6), connected as the stack
 | `gate` | matched 252, accepted 0, mismatched 0 |
 | `apply-prod` (C21) | `S1_ROWS=154 ONLY_IN_S1=0 ONLY_IN_S2=0` — GREEN |
 | `apply-prod-mutants` | a01–a05 all RED (a02 by the snapshot diff, 1 row each way; the rest by the second apply's error) |
-| `controls` | 32 green / 32, scope `all` |
+| `controls` | 32 green / 32 |
 | `mutants` | 80 run, 0 not as expected: 74 RED as required; m39, m48 and m10a–d GREEN as required |
 | `probe` (C22 + C1-anon over HTTP) | 9 green / 9; D1 200 with 1 template and 2 items, D2 200 with 0 rows, anon 401 + 42501 on all 7 tables |
 | `probe-mutant` | D1 RED (403, 42501); grant restored |
@@ -154,3 +154,18 @@ Changes phase (ii) made to the harness, each re-run afterwards:
   and m10e–h added as C8's red mutants. Reasons in `mutants/generate.mjs` and the C8 / C9
   headers.
 - 15.5 (C15) and C10b are baseline / observed, not gates, as the plan states.
+
+Re-run after K9 and the removal of the scope option, 2026-09-21, same stack and role,
+measured at `e93076ea3`:
+
+| Step | Result |
+|---|---|
+| `catalogue-seed`, `gate` | re-hashed equal to production; matched 252, accepted 0, mismatched 0 |
+| `apply-prod` (C21) | `S1_ROWS=154 ONLY_IN_S1=0 ONLY_IN_S2=0` — GREEN |
+| `apply-prod-mutants` | a01–a05 all RED |
+| `controls` | 32 green / 32; C25a 3 assertions (was 1) |
+| `mutants` | 81 run, 0 not as expected (mx01 added) |
+| `MATRIX=1 mutants mx01` | RED on C25a only (`rows:1` for T1's `{"sso_login": {}}`); 31 controls green |
+| `probe`, `probe-mutant` | 9 green / 9; D1 RED under the mutant, grant restored |
+| `teardown`, `gate` again | the three read functions re-hash to production's md5s; matched 252, accepted 0, mismatched 0 |
+| `catalogue-teardown` | four catalogue tables empty; stack verify 70 / 132 / 28 / 185 / 64 |
