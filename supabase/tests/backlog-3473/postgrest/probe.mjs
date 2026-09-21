@@ -11,7 +11,8 @@
 //   D1  the desktop read (BACKLOG-3475) as P1's agent: 200, exactly the one
 //       active P1 template, with its 2 items embedded, ordered by sort_order
 //   D2  the same request for P1's organization as P2's agent: 200, 0 rows
-//   A*  anon (no user JWT) on each of the 7 tables: 401, code 42501
+//   A*  anon (no user JWT) on each of the 7 tables: code 42501 "permission
+//       denied for table" (HTTP 401 or 403, recorded)
 // Exit 0 when every case holds. With --expect-red (run.sh probe-mutant): exit
 // 0 only when D1 FAILS -- the mutant revoked SELECT from authenticated.
 //
@@ -129,9 +130,13 @@ for (const table of [
   "submission_checklist_link_members",
 ]) {
   const r = await anon.from(table).select("*").limit(1);
+  // The SQLSTATE is the assertion. PostgREST maps 42501 to 401 or 403 depending
+  // on whether it counts the anon-key request as authenticated -- a PostgREST
+  // detail, not something these migrations decide -- so both are accepted and
+  // the status is recorded.
   record(
     `A anon reads ${table}`,
-    r.status === 401 && r.error?.code === "42501",
+    (r.status === 401 || r.status === 403) && r.error?.code === "42501" && /permission denied for table/.test(r.error?.message ?? ""),
     `status=${r.status} code=${r.error ? r.error.code : "null"}`,
     { status: r.status, error: r.error },
   );
