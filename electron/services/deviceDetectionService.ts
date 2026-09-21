@@ -104,7 +104,12 @@ const IDEVICEPAIR_EXIT_FAILURE = 1;
  * still showing (-19), a denied dialog (-18), a lockdownd/usbmux connection failure,
  * "No device found". Pairing on any of those would make a new host identity and put
  * the Trust dialog up again, which is the defect this item removes. So the exit code
- * alone is never enough.
+ * alone is never enough; the phrase is what decides.
+ *
+ * The exit-code half is not load-bearing today. In `tools/idevicepair.c` 1.3.0 and
+ * 1.4.0 the phrase is printed only by print_error_message, and every call to it also
+ * sets `result = EXIT_FAILURE`, so no binary prints it with another exit code. It is
+ * kept as a guard; no test fails if it is removed.
  */
 function isNotPairedWithThisHost(run: IdevicepairRun): boolean {
   return run.code === IDEVICEPAIR_EXIT_FAILURE && (run.stdout + run.stderr).includes(IDEVICEPAIR_NOT_PAIRED);
@@ -743,10 +748,14 @@ export class DeviceDetectionService extends EventEmitter {
             // BACKLOG-2908: a locked phone (-17) or a Trust dialog already on screen (-19)
             // is waiting on the person holding it, not on a new pairing. ideviceinfo's own
             // handshake has already asked the phone; pairing on top of that only makes a new
-            // host identity. The emit still drives the existing "iPhone is locked" /
-            // "Check your iPhone" guidance (useIPhoneSync mapTrustReasonToGuidance). The
-            // device is deliberately NOT marked in autoPairAttempted, so once it is unlocked
-            // and the probe fails some other way it still gets one validate-first attempt.
+            // host identity. The emit still reaches the renderer: useIPhoneSync's onNeedsTrust
+            // handler stores it in hook state (setNeedsTrust, and setUserError with the
+            // mapTrustReasonToGuidance text). No component renders that state yet, so the
+            // "iPhone is locked" / "Check your iPhone" guidance is not shown; what the person
+            // sees is ConnectionStatus's "Connect Your iPhone" view with TrustComputerHint.
+            // Showing the trust/lock guidance belongs to BACKLOG-3459. The device is
+            // deliberately NOT marked in autoPairAttempted, so once it is unlocked and the
+            // probe fails some other way it still gets one validate-first attempt.
             const waitingOnThePhone = trustReason === "locked" || trustReason === "trust_pending";
 
             if (waitingOnThePhone) {
