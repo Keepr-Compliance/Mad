@@ -22,6 +22,7 @@
 import { useCallback } from "react";
 import { settingsService } from "@/services";
 import type { ImportSource } from "@/services/settingsService";
+import { importSourceForPhoneType } from "@/utils/iphoneSyncEnabled";
 import type { PhoneType } from "../types";
 import {
   useOptionalMachineState,
@@ -177,12 +178,15 @@ export function usePhoneTypeApi({
         // must keep falling through to it.
         //
         // Best-effort: a failure is non-fatal (log-but-continue).
-        const importSource: ImportSource =
-          phoneType === "android"
-            ? "android-companion"
-            : isMacOS
-              ? "macos-native"
-              : "iphone-sync";
+        //
+        // BACKLOG-3418: the mapping is shared with the onboarding flow, which
+        // re-gates iPhone device detection on the same value at the moment of
+        // the answer — one function, so the stored source and the live gate
+        // cannot disagree.
+        const importSource: ImportSource = importSourceForPhoneType(
+          phoneType,
+          isMacOS
+        );
 
         try {
           const prefResult = await settingsService.updatePreferences(

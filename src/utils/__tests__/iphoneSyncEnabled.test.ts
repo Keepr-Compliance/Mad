@@ -8,9 +8,18 @@
  * "an explicit preference always wins" and its Windows/Linux "always on
  * regardless of source" corollary. A known non-iPhone source now wins over
  * both. The cases below carry their old values in the names where they moved.
+ *
+ * BACKLOG-3418 (founder decision 2026-09-21, pm_comments f59ce258) changed two
+ * more, deliberately, as part of that decision: an UNKNOWN source (`null`) on
+ * Windows / Linux was ON under BACKLOG-1706 (as kept by 3423) and is now OFF,
+ * as it already was on macOS. `null` is the signed-out / preferences-loading
+ * state, so the old `true` ran device detection on the login screen.
  */
 
-import { resolveIphoneSyncEnabled } from "../iphoneSyncEnabled";
+import {
+  resolveIphoneSyncEnabled,
+  importSourceForPhoneType,
+} from "../iphoneSyncEnabled";
 
 describe("resolveIphoneSyncEnabled (BACKLOG-1706)", () => {
   describe("explicit preference wins over the platform/source defaults", () => {
@@ -28,6 +37,12 @@ describe("resolveIphoneSyncEnabled (BACKLOG-1706)", () => {
 
     it("returns true when pref=true and the source is not known yet", () => {
       expect(resolveIphoneSyncEnabled(true, "macos", null)).toBe(true);
+      // BACKLOG-3418 keeps rule order: an explicit preference still decides
+      // before the unknown-source default. IPhoneSyncProvider sets the stored
+      // preference and the source in the same batch once preferences are read,
+      // so a known preference beside an unknown source is not a state the
+      // provider produces from a preference read.
+      expect(resolveIphoneSyncEnabled(true, "windows", null)).toBe(true);
     });
   });
 
@@ -77,17 +92,29 @@ describe("resolveIphoneSyncEnabled (BACKLOG-1706)", () => {
     });
   });
 
-  describe("Windows/Linux keep current always-on behavior when unset", () => {
-    it("is ON on Windows for an iPhone source, and while the source is unknown", () => {
+  describe("Windows/Linux when unset: ON for an iPhone source, OFF while unknown", () => {
+    it("is ON on Windows for an iPhone source", () => {
+      // Unchanged by BACKLOG-3418. A signed-in Windows user with no stored
+      // source gets `iphone-sync` derived by IPhoneSyncContext (unless their
+      // phone type is Android), so nobody signed in loses detection.
       expect(resolveIphoneSyncEnabled(undefined, "windows", "iphone-sync")).toBe(true);
-      // `null` = preferences not read yet. Staying ON here is what keeps a
-      // Windows iPhone user's detection running from the first frame, and is
-      // why BACKLOG-3423 gates on a KNOWN source only.
-      expect(resolveIphoneSyncEnabled(undefined, "windows", null)).toBe(true);
     });
 
-    it("is ON on Linux while the source is unknown", () => {
-      expect(resolveIphoneSyncEnabled(undefined, "linux", null)).toBe(true);
+    // BACKLOG-3418: was `true` under BACKLOG-1706 (and kept by 3423: "stay ON
+    // while the source is unknown"). Rewritten as part of the 2026-09-21
+    // decision, not to fit an implementation: `null` is signed out or
+    // preferences still loading, and no detection runs in that state on any
+    // platform.
+    it("is OFF on Windows while the source is unknown (signed out / preferences loading)", () => {
+      expect(resolveIphoneSyncEnabled(undefined, "windows", null)).toBe(false);
+    });
+
+    it("is OFF on Linux while the source is unknown (signed out / preferences loading)", () => {
+      expect(resolveIphoneSyncEnabled(undefined, "linux", null)).toBe(false);
+    });
+
+    it("is ON on Linux for an iPhone source", () => {
+      expect(resolveIphoneSyncEnabled(undefined, "linux", "iphone-sync")).toBe(true);
     });
 
     // BACKLOG-3423: both of these were `true` under BACKLOG-1706's "Windows and
@@ -103,5 +130,18 @@ describe("resolveIphoneSyncEnabled (BACKLOG-1706)", () => {
     it("is OFF on Linux for a known non-iPhone source", () => {
       expect(resolveIphoneSyncEnabled(undefined, "linux", "android-companion")).toBe(false);
     });
+  });
+});
+
+describe("importSourceForPhoneType (BACKLOG-2408 mapping, shared by BACKLOG-3418)", () => {
+  // The values usePhoneTypeApi persisted inline before BACKLOG-3418 extracted
+  // them (usePhoneTypeApi.ts, BACKLOG-2408 block), for every answer x platform.
+  it.each([
+    ["android", true, "android-companion"],
+    ["android", false, "android-companion"],
+    ["iphone", true, "macos-native"],
+    ["iphone", false, "iphone-sync"],
+  ] as const)("%s answer, isMacOS=%s -> %s", (phoneType, isMacOS, expected) => {
+    expect(importSourceForPhoneType(phoneType, isMacOS)).toBe(expected);
   });
 });

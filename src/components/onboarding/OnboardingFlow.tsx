@@ -28,6 +28,8 @@ import logger from '../../utils/logger';
 import * as Sentry from '@sentry/electron/renderer';
 import { reportDriverStillMissingAtCompletion } from './sentryOnboarding';
 import { usePlatform } from '../../contexts/PlatformContext';
+import { useIPhoneSyncEnabled } from '../../contexts/IPhoneSyncContext';
+import { importSourceForPhoneType } from '../../utils/iphoneSyncEnabled';
 
 /**
  * Props for the OnboardingFlow component.
@@ -186,6 +188,12 @@ function OnboardingFlowInner({ app, machineState, resumeBundle }: OnboardingFlow
   // because the renderer runs with nodeIntegration:false/contextIsolation:true.
   const { isMacOS, isWindows } = usePlatform();
 
+  // BACKLOG-3418: the phone-type answer re-gates iPhone device detection live.
+  // IPhoneSyncProvider sits above this flow (App.tsx -> AppRouter), while the
+  // save that persists the answer (usePhoneTypeApi) runs above the provider and
+  // cannot reach it — so the re-gate is issued here, where the answer arrives.
+  const { applyImportSource } = useIPhoneSyncEnabled();
+
   // Track if we're waiting for DB init to complete after clicking Continue on secure-storage.
   // Event-driven: subscribes to onInitStage events instead of polling.
   const [waitingForDbInit, setWaitingForDbInit] = useState(false);
@@ -310,6 +318,14 @@ function OnboardingFlowInner({ app, machineState, resumeBundle }: OnboardingFlow
     (action: StepAction) => {
       switch (action.type) {
         case "SELECT_PHONE":
+          // BACKLOG-3418: re-gate first, synchronously, so an Android answer
+          // stops device detection at once rather than at the next app start.
+          // Both answers are applied: after Android -> back -> iPhone, the
+          // iPhone answer must turn detection back on. The value is the one
+          // usePhoneTypeApi persists (same function), so the two cannot drift.
+          applyImportSource(
+            importSourceForPhoneType(action.payload.phoneType, isMacOS)
+          );
           if (action.payload.phoneType === "iphone") {
             app.handleSelectIPhone();
           } else {
@@ -387,7 +403,7 @@ function OnboardingFlowInner({ app, machineState, resumeBundle }: OnboardingFlow
           break;
       }
     },
-    [app, appState.isDatabaseInitialized, machineState]
+    [app, appState.isDatabaseInitialized, machineState, applyImportSource, isMacOS]
   );
 
   // Handle onboarding completion - dispatches ONBOARDING_QUEUE_DONE

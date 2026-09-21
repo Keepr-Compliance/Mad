@@ -26,6 +26,13 @@
  * live when the source radio changes (before, enablement was resolved once per
  * `[userId, platform]` and a source change did nothing until the next restart).
  *
+ * BACKLOG-3418: no detection until a user is signed in AND their preferences
+ * have been read, on every platform. The source stays unknown (`null`) until
+ * then, and the resolver now reads an unknown source as OFF everywhere — so the
+ * login screen runs no device detection on Windows, where it used to. The
+ * onboarding phone-type answer re-gates through `applyImportSource` (called by
+ * OnboardingFlow), so an Android answer stops detection at once.
+ *
  * @module contexts/IPhoneSyncContext
  */
 
@@ -66,6 +73,9 @@ export interface IPhoneSyncEnabledContextValue {
    * after ImportSourceSettings has persisted `messages.source`, so detection
    * starts/stops with the radio instead of at the next app start. It changes NO
    * stored value — in particular it never writes `integrations`.
+   *
+   * BACKLOG-3418: OnboardingFlow also calls it with the source the phone-type
+   * answer stands for, so an Android answer stops detection immediately.
    */
   applyImportSource: (source: ImportSource) => void;
 }
@@ -84,11 +94,18 @@ export function IPhoneSyncProvider({ userId = null, children }: IPhoneSyncProvid
 
   // BACKLOG-3423: the raw stored preference and the effective import source are
   // held separately, and `enabled` is derived from both. Both start "unknown"
-  // (undefined / null), which resolves to the platform default — macOS OFF (no
-  // detection flash while prefs load), Windows/Linux ON (their primary import
-  // path must not wait on an IPC round-trip).
+  // (undefined / null), which resolves to OFF on every platform (BACKLOG-3418):
+  // no detection while signed out, and none while a signed-in user's
+  // preferences are still loading.
   const [prefEnabled, setPrefEnabled] = useState<boolean | undefined>(undefined);
   const [importSource, setImportSource] = useState<ImportSource | null>(null);
+
+  // BACKLOG-3418: counts live source changes (applyImportSource). A preference
+  // read that was already in flight when the source changed live must not
+  // overwrite the newer value: an onboarding "Android" answer given while the
+  // read is pending would otherwise be replaced by the read's pre-answer
+  // default (`iphone-sync` on Windows) and detection would start again.
+  const liveSourceChangesRef = useRef(0);
 
   // Mirror of `prefEnabled` so the optimistic-write path can restore the exact
   // previous value on failure (which may be `undefined` — "never set" — and is
@@ -107,13 +124,15 @@ export function IPhoneSyncProvider({ userId = null, children }: IPhoneSyncProvid
   // Read the user's stored preference + import source.
   useEffect(() => {
     if (!userId) {
-      // Logged out / pre-onboarding: fall back to the platform default.
+      // Logged out / pre-onboarding: the source is unknown, which is OFF on
+      // every platform (BACKLOG-3418).
       applyPrefEnabled(undefined);
       setImportSource(null);
       return;
     }
 
     let cancelled = false;
+    const liveSourceChangesAtStart = liveSourceChangesRef.current;
 
     (async () => {
       try {
@@ -140,11 +159,14 @@ export function IPhoneSyncProvider({ userId = null, children }: IPhoneSyncProvid
 
         if (cancelled) return;
         applyPrefEnabled(storedPref);
-        setImportSource(source);
+        // A live source change since this read began is newer than the read.
+        if (liveSourceChangesRef.current === liveSourceChangesAtStart) {
+          setImportSource(source);
+        }
       } catch (err) {
         if (!cancelled) {
           logger.warn(
-            "[IPhoneSyncProvider] Failed to resolve iPhone sync enablement; keeping platform default",
+            "[IPhoneSyncProvider] Failed to resolve iPhone sync enablement; source stays unknown (detection off)",
             err,
           );
         }
@@ -180,6 +202,7 @@ export function IPhoneSyncProvider({ userId = null, children }: IPhoneSyncProvid
   // preference is written here, so a user who had the toggle ON as an iPhone
   // user keeps that stored choice while their source is elsewhere.
   const applyImportSource = useCallback((source: ImportSource) => {
+    liveSourceChangesRef.current += 1;
     setImportSource(source);
   }, []);
 
