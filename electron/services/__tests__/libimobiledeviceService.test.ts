@@ -190,7 +190,11 @@ describe("libimobiledeviceService", () => {
       expect(REQUIRED_EXECUTABLES).toContain("idevice_id");
       expect(REQUIRED_EXECUTABLES).toContain("ideviceinfo");
       expect(REQUIRED_EXECUTABLES).toContain("idevicebackup2");
-      expect(REQUIRED_EXECUTABLES).toHaveLength(3);
+      // BACKLOG-2908: pairDevice spawns idevicepair (validate, then pair only when the
+      // phone has forgotten this computer), so a Windows install missing it must show up
+      // in the missing-binaries report. Length rewritten 3 -> 4 deliberately.
+      expect(REQUIRED_EXECUTABLES).toContain("idevicepair");
+      expect(REQUIRED_EXECUTABLES).toHaveLength(4);
     });
   });
 });

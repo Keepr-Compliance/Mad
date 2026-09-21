@@ -65,6 +65,67 @@ function parseTrustError(errorMessage: string): TrustErrorReason | null {
   return null;
 }
 
+/** BACKLOG-2908: what one `idevicepair` run printed and how it exited. */
+interface IdevicepairRun {
+  code: number | null;
+  stdout: string;
+  stderr: string;
+  /** Set only when the process could not be started at all. */
+  spawnError?: string;
+}
+
+/**
+ * BACKLOG-2908: the one `idevicepair validate` result after which `pair` is the right
+ * next step — the phone has forgotten this computer (Apple drops an unused pairing
+ * after 30 days; Reset Location & Privacy does it at once).
+ *
+ * Transcribed, not recalled:
+ * - libimobiledevice 1.4.0 `tools/idevicepair.c:122`
+ *   `printf("ERROR: Device %s is not paired with this host\n", udid);` for
+ *   LOCKDOWN_E_INVALID_CONF (-2) and LOCKDOWN_E_INVALID_HOST_ID (-21), on stdout.
+ * - The bundled Windows build (`resources/win/libimobiledevice/idevicepair.exe`) carries
+ *   the same format string (`strings -a idevicepair.exe`), as does 1.3.0
+ *   `tools/idevicepair.c:51`.
+ * Matched as a substring and never anchored to a line end: the Windows build writes
+ * through the MSVC runtime's text-mode stdout, which ends lines with CRLF.
+ */
+const IDEVICEPAIR_NOT_PAIRED = "is not paired with this host";
+
+/**
+ * EXIT_FAILURE: what `idevicepair` returns for every handled error
+ * (1.4.0 `tools/idevicepair.c:456`, 1.3.0 `:276`).
+ */
+const IDEVICEPAIR_EXIT_FAILURE = 1;
+
+/**
+ * BACKLOG-2908: true only when `validate` says the phone no longer knows this computer.
+ *
+ * Every other `validate` failure also exits 1 — a locked phone (-17), a Trust dialog
+ * still showing (-19), a denied dialog (-18), a lockdownd/usbmux connection failure,
+ * "No device found". Pairing on any of those would make a new host identity and put
+ * the Trust dialog up again, which is the defect this item removes. So the exit code
+ * alone is never enough.
+ */
+function isNotPairedWithThisHost(run: IdevicepairRun): boolean {
+  return run.code === IDEVICEPAIR_EXIT_FAILURE && (run.stdout + run.stderr).includes(IDEVICEPAIR_NOT_PAIRED);
+}
+
+/** BACKLOG-2908: maps a failed `idevicepair` run onto pairDevice's result shape. */
+function describeIdevicepairFailure(
+  run: IdevicepairRun,
+): { success: false; needsTrust: boolean; error?: string } {
+  const output = (run.stdout + run.stderr).toLowerCase();
+  if (output.includes("trust") || output.includes("accept")) {
+    return { success: false, needsTrust: true };
+  }
+  return { success: false, needsTrust: false, error: run.stdout.trim() || run.stderr.trim() };
+}
+
+/** BACKLOG-3422: idevicepair echoes the UDID; logs carry the digest instead. */
+function redactUdid(text: string, udid: string): string {
+  return text.split(udid).join(`<device ${deviceLogTag(udid)}>`);
+}
+
 /** Mock device for development without Windows/iPhone */
 const MOCK_DEVICE: iOSDevice = {
   udid: "00000000-0000000000000000",
@@ -679,10 +740,24 @@ export class DeviceDetectionService extends EventEmitter {
               );
             }
 
-            // BACKLOG-1582: Device visible but not trusted — auto-attempt pairing
-            if (!this.autoPairAttempted.has(udid)) {
+            // BACKLOG-2908: a locked phone (-17) or a Trust dialog already on screen (-19)
+            // is waiting on the person holding it, not on a new pairing. ideviceinfo's own
+            // handshake has already asked the phone; pairing on top of that only makes a new
+            // host identity. The emit still drives the existing "iPhone is locked" /
+            // "Check your iPhone" guidance (useIPhoneSync mapTrustReasonToGuidance). The
+            // device is deliberately NOT marked in autoPairAttempted, so once it is unlocked
+            // and the probe fails some other way it still gets one validate-first attempt.
+            const waitingOnThePhone = trustReason === "locked" || trustReason === "trust_pending";
+
+            if (waitingOnThePhone) {
+              this.emit("device-needs-trust", { udid, reason: trustReason });
+            } else if (!this.autoPairAttempted.has(udid)) {
+              // BACKLOG-1582: Device visible but not usable — check its pairing, and pair
+              // only if the phone has forgotten this computer (pairDevice, BACKLOG-2908)
               this.autoPairAttempted.add(udid);
-              log.info(`[DeviceDetection] Auto-attempting pair for untrusted device: ${udid}`);
+              log.info(
+                `[DeviceDetection] Checking the existing pairing for untrusted device=${deviceLogTag(udid)}`,
+              );
               // BACKLOG-1627: Include trust reason in event so UI can differentiate
               this.emit("device-needs-trust", { udid, reason: trustReason || "unknown" });
               this.pairDevice(udid).catch(() => {
@@ -940,10 +1015,18 @@ export class DeviceDetectionService extends EventEmitter {
   }
 
   /**
-   * BACKLOG-1582: Send a pairing request to a device.
-   * This triggers the "Trust This Computer?" prompt on the iPhone.
+   * BACKLOG-1582: Make sure this computer is paired with a device.
+   *
+   * BACKLOG-2908: the existing pairing is checked FIRST. `idevicepair pair` always makes
+   * a new pairing (a new host identity), so running it against a phone that already
+   * trusts this computer put "Trust This Computer?" up again for nothing. `pair` now runs
+   * only when `validate` reports that the phone has forgotten this computer — Apple
+   * drops an unused pairing after 30 days. On a computer with no pairing record at all,
+   * `validate` pairs by itself (libimobiledevice 1.4.0 lockdownd handshake), so the
+   * first-ever Trust dialog still appears.
+   *
    * @param udid Device UDID
-   * @returns Promise that resolves with the pair result
+   * @returns Promise that resolves with the pairing result
    */
   async pairDevice(udid: string): Promise<{ success: boolean; needsTrust: boolean; error?: string }> {
     // SECURITY: Validate UDID before spawning process
@@ -955,11 +1038,52 @@ export class DeviceDetectionService extends EventEmitter {
       return { success: false, needsTrust: false, error: "Invalid device UDID" };
     }
 
+    const tag = deviceLogTag(validatedUdid);
+
+    const validation = await this.runIdevicepair("validate", validatedUdid);
+    if (validation.spawnError !== undefined) {
+      return { success: false, needsTrust: false, error: validation.spawnError };
+    }
+    if (validation.code === 0) {
+      log.info(`[DeviceDetection] Existing pairing is valid, not pairing again (device=${tag})`);
+      return { success: true, needsTrust: false };
+    }
+    if (!isNotPairedWithThisHost(validation)) {
+      // Locked, Trust dialog pending or denied, or a connection failure: the next step is
+      // on the phone, and a new pairing would only put the Trust dialog up again.
+      log.info(
+        `[DeviceDetection] Pairing not validated, not pairing again (device=${tag}): ` +
+          redactUdid(`${validation.stdout.trim()} ${validation.stderr.trim()}`.trim(), validatedUdid),
+      );
+      return describeIdevicepairFailure(validation);
+    }
+
+    log.info(
+      `[DeviceDetection] Device no longer paired with this computer, requesting a new pairing (device=${tag})`,
+    );
+    const pairing = await this.runIdevicepair("pair", validatedUdid);
+    if (pairing.spawnError !== undefined) {
+      return { success: false, needsTrust: false, error: pairing.spawnError };
+    }
+    if (pairing.code === 0 && (pairing.stdout + pairing.stderr).toLowerCase().includes("success")) {
+      log.info(`[DeviceDetection] Pairing successful (device=${tag})`);
+      return { success: true, needsTrust: false };
+    }
+    log.warn(
+      `[DeviceDetection] Pair did not complete (device=${tag}): ` +
+        redactUdid(`${pairing.stdout.trim()} ${pairing.stderr.trim()}`.trim(), validatedUdid),
+    );
+    return describeIdevicepairFailure(pairing);
+  }
+
+  /**
+   * BACKLOG-2908: runs `idevicepair <op> -u <udid>` once and reports what it printed.
+   * Never rejects: a spawn failure comes back as `spawnError`.
+   */
+  private runIdevicepair(op: "validate" | "pair", validatedUdid: string): Promise<IdevicepairRun> {
     return new Promise((resolve) => {
       const idevicepairCmd = getCommand("idevicepair");
-      log.info(`[DeviceDetection] Requesting pair for device: ${validatedUdid}`);
-
-      const proc = spawn(idevicepairCmd, ["pair", "-u", validatedUdid]);
+      const proc = spawn(idevicepairCmd, [op, "-u", validatedUdid]);
       let stdout = "";
       let stderr = "";
 
@@ -967,22 +1091,12 @@ export class DeviceDetectionService extends EventEmitter {
       proc.stderr.on("data", (data) => { stderr += data.toString(); });
 
       proc.on("close", (code) => {
-        const output = (stdout + stderr).toLowerCase();
-        if (code === 0 && output.includes("success")) {
-          log.info(`[DeviceDetection] Pairing successful for device: ${validatedUdid}`);
-          resolve({ success: true, needsTrust: false });
-        } else if (output.includes("trust") || output.includes("accept")) {
-          log.info(`[DeviceDetection] Trust prompt sent to device: ${validatedUdid}`);
-          resolve({ success: false, needsTrust: true });
-        } else {
-          log.warn(`[DeviceDetection] Pair failed: ${stdout.trim()} ${stderr.trim()}`);
-          resolve({ success: false, needsTrust: false, error: stdout.trim() || stderr.trim() });
-        }
+        resolve({ code, stdout, stderr });
       });
 
       proc.on("error", (err) => {
-        log.error("[DeviceDetection] Failed to spawn idevicepair:", err);
-        resolve({ success: false, needsTrust: false, error: err.message });
+        log.error(`[DeviceDetection] Failed to spawn idevicepair ${op}:`, err);
+        resolve({ code: null, stdout, stderr, spawnError: err.message });
       });
     });
   }
