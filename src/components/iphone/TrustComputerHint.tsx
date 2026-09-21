@@ -2,9 +2,11 @@ import React from "react";
 
 /**
  * TrustComputerHint Component
- * Displays the steps iOS requires on every iPhone sync session.
- * The iPhone re-prompts for unlock/trust/passcode each new pairing — even for
- * returning users who've already trusted the computer before.
+ * Displays the steps to get an iPhone talking to this computer.
+ * "Trust This Computer?" appears when the iPhone has no pairing with this computer
+ * (first connection, or after Apple drops a pairing unused for 30 days). The
+ * passcode is different: iOS asks for it at the start of every backup, which is
+ * Apple's rule and cannot be avoided by any app (BACKLOG-2908).
  */
 export const TrustComputerHint: React.FC = () => {
   return (
@@ -29,13 +31,13 @@ export const TrustComputerHint: React.FC = () => {
         <p className="font-medium text-blue-800 text-left">Don&apos;t see your iPhone? Try these steps:</p>
         <ol className="text-sm text-blue-700 mt-2 space-y-1 text-left list-none p-0 m-0">
           <li>1. Unlock your iPhone</li>
+          <li>2. Tap &quot;Trust&quot; when prompted</li>
           <li>
-            2. Tap &quot;Trust&quot; when prompted
+            3. Enter your iPhone passcode
             <span className="block text-xs text-blue-600 italic mt-0.5 ml-3">
-              iPhone asks every time, even after you&apos;ve trusted before.
+              Your iPhone asks for it at the start of every backup, as Apple requires.
             </span>
           </li>
-          <li>3. Enter your iPhone passcode</li>
         </ol>
       </div>
     </div>

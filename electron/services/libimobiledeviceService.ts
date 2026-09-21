@@ -19,6 +19,8 @@ export const REQUIRED_EXECUTABLES = [
   "idevice_id",
   "ideviceinfo",
   "idevicebackup2",
+  // BACKLOG-2908: pairDevice validates and, when needed, re-pairs through idevicepair
+  "idevicepair",
 ] as const;
 
 export type LibimobiledeviceExecutable = (typeof REQUIRED_EXECUTABLES)[number];

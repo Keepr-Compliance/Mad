@@ -190,7 +190,16 @@ describe("libimobiledeviceService", () => {
       expect(REQUIRED_EXECUTABLES).toContain("idevice_id");
       expect(REQUIRED_EXECUTABLES).toContain("ideviceinfo");
       expect(REQUIRED_EXECUTABLES).toContain("idevicebackup2");
-      expect(REQUIRED_EXECUTABLES).toHaveLength(3);
+      // BACKLOG-2908: pairDevice spawns idevicepair (validate, then pair only when the
+      // phone has forgotten this computer), so it is listed with the other binaries.
+      // The list gates nothing today. Its only reader is the Windows per-binary
+      // diagnostic in canUseLibimobiledevice, which runs only when the directory
+      // existsSync check fails and a second, identical existsSync check then passes,
+      // so in practice it never runs. On macOS/Linux canUseLibimobiledevice returns
+      // true without reading the list. This test pins the list's contents only.
+      // Length rewritten 3 -> 4 deliberately.
+      expect(REQUIRED_EXECUTABLES).toContain("idevicepair");
+      expect(REQUIRED_EXECUTABLES).toHaveLength(4);
     });
   });
 });

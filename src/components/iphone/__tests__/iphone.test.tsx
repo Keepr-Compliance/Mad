@@ -34,11 +34,24 @@ describe("TrustComputerHint", () => {
       screen.getByText(/2. Tap "Trust" when prompted/i),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/iPhone asks every time, even after you've trusted before/i),
-    ).toBeInTheDocument();
-    expect(
       screen.getByText(/3. Enter your iPhone passcode/i),
     ).toBeInTheDocument();
+  });
+
+  // BACKLOG-2908: rewritten deliberately. The app no longer re-pairs a phone that
+  // already trusts this computer, so "asks every time, even after you've trusted
+  // before" became false and is gone. What IS asked every time is the passcode, at
+  // the start of every backup (Apple's rule), and the hint now says so.
+  it("says the passcode is asked at every backup, and no longer says Trust is asked every time", () => {
+    const { container } = render(<TrustComputerHint />);
+
+    expect(
+      screen.getByText(/Your iPhone asks for it at the start of every backup, as Apple requires\./),
+    ).toBeInTheDocument();
+    expect(container.textContent).not.toMatch(/asks every time/i);
+    expect(container.textContent).not.toMatch(/trusted before/i);
+    // Platform-neutral: the same hint renders on Windows.
+    expect(container.textContent).not.toMatch(/\bMac\b/);
   });
 });
 
