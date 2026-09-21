@@ -22,6 +22,16 @@
  *   - `preferences.get` -> `{ success: true, preferences }`, and `{}` for a user
  *     with nothing stored (electron/handlers/preferenceHandlers.ts, the
  *     `preferences:get` handler: `getPreferences(...) ?? {}`).
+ *   - A user who turned the Settings "iPhone Sync (USB)" toggle ON:
+ *     `preferences.get` -> `{ success: true, preferences: { messages: { source:
+ *     "iphone-sync" }, integrations: { iphoneSyncEnabled: true } } }`. The toggle
+ *     (settings/IphoneSyncSettings.tsx, mounted by Settings.tsx and enabled only
+ *     while the source is `iphone-sync`) calls the provider's
+ *     `setIphoneSyncEnabled`, which writes `{ integrations: { iphoneSyncEnabled } }`
+ *     (settingsService.ts `setIphoneSyncEnabled`). The onboarding save writes
+ *     `{ messages: { source } }` (usePhoneTypeApi.ts). `preferences:update`
+ *     deep-merges each write into the stored object (`deepMerge`,
+ *     preferenceHandlers.ts), so `preferences:get` returns both keys together.
  *   - `user.getPhoneType` -> `{ success: true, phoneType: "iphone" | "android" | null }`,
  *     `null` before the onboarding answer is stored
  *     (electron/handlers/userSettingsHandlers.ts, `user:get-phone-type`).
@@ -314,6 +324,46 @@ describe("BACKLOG-3418: no iPhone detection before sign-in; stop it when onboard
       await settle();
       expect(syncApi().startDetection).toHaveBeenCalledTimes(1);
     });
+
+    // The explicit toggle is resolver rule 2 ("an explicit preference wins").
+    // Rule 1 only switches off a KNOWN non-iPhone source, and the signed-out
+    // source is unknown (`null`), so a stored `true` that survived sign-out
+    // would keep detection running on the login screen — on macOS too. The
+    // source must be `iphone-sync` in the fixture: on macOS a missing source
+    // derives `macos-native`, and rule 1 would switch detection off before the
+    // preference is ever consulted.
+    it.each(["windows", "macos"] as const)(
+      "%s: a user who turned the iPhone Sync (USB) toggle ON has detection stopped at sign-out, and it does not start again while signed out",
+      async (platform) => {
+        currentPlatform = platform;
+        api().preferences.get.mockResolvedValue({
+          success: true,
+          preferences: {
+            messages: { source: "iphone-sync" },
+            integrations: { iphoneSyncEnabled: true },
+          },
+        });
+        const { rerender } = render(signedInTree("user-3418"));
+        await settle();
+
+        expect(syncApi().startDetection).toHaveBeenCalledTimes(1);
+        // The stored source was used as-is; the phone-type fallback never ran.
+        expect(api().user.getPhoneType).not.toHaveBeenCalled();
+        const stopsBeforeSignOut = syncApi().stopDetection.mock.calls.length;
+        const readsBeforeSignOut = api().preferences.get.mock.calls.length;
+
+        rerender(signedInTree(null));
+        await settle();
+
+        expect(syncApi().stopDetection.mock.calls.length).toBe(stopsBeforeSignOut + 1);
+        expect(syncApi().startDetection).toHaveBeenCalledTimes(1);
+        expect(api().preferences.get.mock.calls.length).toBe(readsBeforeSignOut);
+
+        // Still signed out: the stored `true` does not start it again.
+        await settle();
+        expect(syncApi().startDetection).toHaveBeenCalledTimes(1);
+      },
+    );
   });
 
   describe("onboarding phone-type answer re-gates live, without a restart", () => {
