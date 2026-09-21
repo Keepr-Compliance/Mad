@@ -32,10 +32,9 @@
 --   override_ignored is an extra key, present only when true. Every other key
 --   of every response is unchanged.
 --
--- Scope of the rule: ALL features that carry a min_tier.
---   To narrow it to transaction_checklists only, un-comment the one marked
---   line in public._override_above_tier below. The three read functions and
---   the trigger all call that one helper, so that one line narrows both.
+-- Scope of the rule: ALL features that carry a min_tier. The three read
+--   functions and the trigger all call public._override_above_tier, so they
+--   apply one rule.
 --
 -- Where the function bodies come from
 -- ---------------------------------------------------------------------------
@@ -74,7 +73,6 @@ AS $$
   SELECT COALESCE((p_override ->> 'enabled')::boolean, true)
      AND p_min_tier IS NOT NULL
      AND public.tier_rank(p_plan_tier) < public.tier_rank(p_min_tier)
-     -- AND p_feature_key = 'transaction_checklists'   -- the narrowing line (see header)
 $$;
 
 REVOKE EXECUTE ON FUNCTION public._override_above_tier(text, text, text, jsonb) FROM PUBLIC, anon, authenticated;

@@ -14,8 +14,6 @@
 //
 // Header lines run.sh reads:
 //   -- targets: c15 c16          controls that must go RED (or stay green, below)
-//   -- targets-narrow: c25e      replaces `targets` when T3473_SCOPE=narrow
-//   -- scopes: all               run only under these scopes
 //   -- expect: green             the named controls must stay GREEN
 //   -- replaces-file: 1|2|3      a whole-file mutant (a*: run.sh apply-prod-mutants;
 //                                f*: substituted for that migration in the controls)
@@ -134,40 +132,30 @@ add("m25-helper-lt-becomes-le.sql", {
 add("m26-helper-pinned-to-individual.sql", {
   what: "the guard is pinned to plan_tier = 'individual' instead of comparing ranks",
   targets: "c15",
-  scopes: "all",
   sql: edit(helper, TIER_TEST, "     AND p_plan_tier = 'individual'", "m26"),
   proof: proof(`${def(HELPER)} NOT LIKE '%tier_rank(p_plan_tier)%'`, `'guard pinned to individual'`),
 });
 add("m27-helper-literal-team.sql", {
   what: "the guard compares against the literal tier_rank('team') instead of the feature's min_tier",
   targets: "c15",
-  scopes: "all",
   sql: edit(helper, "< public.tier_rank(p_min_tier)", "< public.tier_rank('team')", "m27"),
   proof: proof(`${def(HELPER)} LIKE '%< public.tier_rank(''team'')%'`, `'guard uses the team literal'`),
 });
 add("m28-narrowing-line-live.sql", {
-  what: "the narrowing line is live while scope 'all' is declared",
+  what: "the helper is narrowed to transaction_checklists (the rule must cover every feature)",
   targets: "c15 c16",
-  scopes: "all",
-  sql: edit(
-    helper,
-    "     -- AND p_feature_key = 'transaction_checklists'   -- the narrowing line (see header)",
-    "     AND p_feature_key = 'transaction_checklists'",
-    "m28",
-  ),
+  sql: edit(helper, TIER_TEST, TIER_TEST + "\n     AND p_feature_key = 'transaction_checklists'", "m28"),
   proof: proof(`${def(HELPER)} ~ '\\n +AND p_feature_key'`, `'narrowing line live'`),
 });
 add("m29-helper-ignores-min-tier.sql", {
   what: "the guard ignores min_tier: any ON override on an individual plan is blocked",
   targets: "c15",
-  scopes: "all",
   sql: edit(helper, MIN_AND_TIER, "     AND p_plan_tier = 'individual'", "m29"),
   proof: proof(`${def(HELPER)} NOT LIKE '%p_min_tier IS NOT NULL%'`, `'min_tier ignored'`),
 });
 add("m30-helper-blocks-when-plan-row-false.sql", {
   what: "the guard blocks an ON override whenever the plan's own row is false",
   targets: "c15",
-  scopes: "all",
   sql: edit(
     edit(helper, "\nIMMUTABLE\n", "\nSTABLE\n", "m30-volatility"),
     MIN_AND_TIER,
@@ -181,14 +169,18 @@ add("m30-helper-blocks-when-plan-row-false.sql", {
 add("m31-helper-drops-enabled-conjunct.sql", {
   what: "the guard ignores whether the override turns the feature ON or OFF",
   targets: "c15 c25e",
-  "targets-narrow": "c25e",
   sql: edit(helper, "  SELECT COALESCE((p_override ->> 'enabled')::boolean, true)\n     AND p_min_tier IS NOT NULL", "  SELECT p_min_tier IS NOT NULL", "m31"),
   proof: proof(`${def(HELPER)} NOT LIKE '%p_override ->> ''enabled''%'`, `'enabled conjunct dropped'`),
+});
+add("mx01-helper-missing-enabled-is-off.sql", {
+  what: "the helper treats an override with no `enabled` key as OFF (the read functions treat it as ON)",
+  targets: "c25a",
+  sql: edit(helper, "COALESCE((p_override ->> 'enabled')::boolean, true)", "COALESCE((p_override ->> 'enabled')::boolean, false)", "mx01"),
+  proof: proof(`${def(HELPER)} LIKE '%''enabled'')::boolean, false)%'`, `'missing enabled counts as OFF'`),
 });
 add("m32-tier-map-without-custom.sql", {
   what: "the plan tier is ranked by an inline CASE that has no 'custom' (custom ranks 0)",
   targets: "c15",
-  scopes: "all",
   sql: edit(
     helper,
     "public.tier_rank(p_plan_tier) < public.tier_rank(p_min_tier)",
@@ -262,7 +254,6 @@ add("m45-trigger-validates-every-entry.sql", {
 add("m46-trigger-strict.sql", {
   what: "strict variant: fires on every write and validates every entry against NEW.plan_id",
   targets: "c25c",
-  scopes: "all",
   sql:
     edit(edit(reject, CONTINUE_BLOCK, "", "m46-continue"), UNCHANGED_RETURN, "", "m46-unchanged") +
     "\nCREATE OR REPLACE TRIGGER reject_feature_override_above_tier\n  BEFORE INSERT OR UPDATE ON public.organization_plans\n" +
@@ -688,8 +679,6 @@ function render() {
       `-- ${m.what}`,
       `-- targets: ${m.targets}`,
     ];
-    if (m["targets-narrow"]) lines.push(`-- targets-narrow: ${m["targets-narrow"]}`);
-    if (m.scopes) lines.push(`-- scopes: ${m.scopes}`);
     if (m.expect) lines.push(`-- expect: ${m.expect}`);
     lines.push("-- Runs INSIDE a control's transaction, after the prelude; rolled back with it.", "");
     out[file] = `${lines.join("\n")}\n${m.sql}\n${m.proof}`;

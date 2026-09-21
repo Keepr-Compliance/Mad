@@ -45,13 +45,6 @@ const GUARD_FILE = '20260921101756_backlog_3473_feature_reads_honour_min_tier.sq
 const SCHEMA_FILE = '20260921101757_backlog_3473_transaction_checklists.sql';
 const RETIRE_FILE = '20260921101758_backlog_3473_retire_unused_org_columns.sql';
 
-/**
- * Scope of the min-tier rule, as the founder decides it (Ruling 1).
- *   'all'    -- the narrowing line in _override_above_tier stays commented out.
- *   'narrow' -- it is live: the rule applies to transaction_checklists only.
- */
-const EXPECTED_SCOPE: 'all' | 'narrow' = 'all';
-
 const DOCUMENT_TYPES = [
   'offer', 'inspection', 'disclosure', 'contract', 'appraisal',
   'amendment', 'addendum', 'title', 'closing', 'other',
@@ -245,10 +238,9 @@ describe('BACKLOG-3473 migrations (C23)', () => {
       expect(def.body).toMatch(/tier_rank\s*\(/);
     });
 
-    it(`the last definition of _override_above_tier matches the '${EXPECTED_SCOPE}' scope`, () => {
+    it('the last definition of _override_above_tier applies to every feature, not transaction_checklists only', () => {
       const def = lastDefinition('_override_above_tier');
-      const narrowed = /p_feature_key\s*=\s*'transaction_checklists'/.test(def.body);
-      expect(narrowed ? 'narrow' : 'all').toBe(EXPECTED_SCOPE);
+      expect(def.body).not.toMatch(/p_feature_key\s*=\s*'transaction_checklists'/);
     });
 
     it('finds a definition whose schema and name are quoted', () => {

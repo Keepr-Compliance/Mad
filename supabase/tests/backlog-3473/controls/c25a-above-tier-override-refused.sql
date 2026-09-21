@@ -1,29 +1,27 @@
--- C25a (Addendum B section 12 (c), K7): writing an ON override above the
+-- C25a (Addendum B section 12 (c), K7, K9): writing an ON override above the
 -- plan's tier is refused at write time.
---   scope all:    owner adds sso_login ON to personal org I (individual)
---                 : 23514 'feature_override_above_tier: sso_login ...'
---   scope narrow: u_p signs in (personal org, individual); owner adds a NEW
---                 transaction_checklists ON entry to it
---                 : 23514 'feature_override_above_tier: transaction_checklists ...'
--- Mutant: m44 (the trigger dropped -> rows:1).
+--   owner adds sso_login ON to personal org I (individual)
+--     : 23514 'feature_override_above_tier: sso_login requires enterprise ...'
+--   owner sets T1's (team) sso_login entry to {} -- no `enabled` key, which the
+--   three read functions treat as ON
+--     : 23514 'feature_override_above_tier: sso_login requires enterprise ...'
+--   owner-side: _override_above_tier('sso_login', 'enterprise', 'team', '{}')
+--     : true
+-- Mutants: m44 (the trigger dropped -> rows:1), mx01 (the helper treats a
+-- missing `enabled` as OFF -> rows:1, and the owner-side call is false).
 
 SELECT pg_temp.act_owner();
 DO $c25a$
-DECLARE
-  v_org uuid;
 BEGIN
-  IF current_setting('t3473.scope') = 'all' THEN
-    PERFORM pg_temp.expect('C25a I adds sso_login ON',
-      format($q$UPDATE public.organization_plans SET feature_overrides = feature_overrides || '{"sso_login": {"enabled": true}}'::jsonb
-                 WHERE organization_id = %L$q$, pg_temp.id('o_i')),
-      '~^23514:feature_override_above_tier: sso_login requires enterprise; plan tier is individual$');
-  ELSE
-    v_org := (public._ensure_personal_organization_for(pg_temp.id('u_p')) ->> 'organization_id')::uuid;
-    PERFORM pg_temp.check(v_org IS NOT NULL, 'u_p''s personal org created');
-    PERFORM pg_temp.expect('C25a new personal org adds transaction_checklists ON',
-      format($q$UPDATE public.organization_plans SET feature_overrides = '{"transaction_checklists": {"enabled": true}}'::jsonb
-                 WHERE organization_id = %L$q$, v_org),
-      '~^23514:feature_override_above_tier: transaction_checklists requires team; plan tier is individual$');
-  END IF;
+  PERFORM pg_temp.expect('C25a I adds sso_login ON',
+    format($q$UPDATE public.organization_plans SET feature_overrides = feature_overrides || '{"sso_login": {"enabled": true}}'::jsonb
+               WHERE organization_id = %L$q$, pg_temp.id('o_i')),
+    '~^23514:feature_override_above_tier: sso_login requires enterprise; plan tier is individual$');
+  PERFORM pg_temp.expect('C25a T1 sets sso_login to an entry with no enabled key',
+    format($q$UPDATE public.organization_plans SET feature_overrides = feature_overrides || '{"sso_login": {}}'::jsonb
+               WHERE organization_id = %L$q$, pg_temp.id('o_t1')),
+    '~^23514:feature_override_above_tier: sso_login requires enterprise; plan tier is team$');
+  PERFORM pg_temp.check(public._override_above_tier('sso_login', 'enterprise', 'team', '{}'::jsonb) IS TRUE,
+                        'C25a helper: an entry with no enabled key counts as ON');
 END
 $c25a$;

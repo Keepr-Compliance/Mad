@@ -17,7 +17,6 @@ AS $$
   SELECT COALESCE((p_override ->> 'enabled')::boolean, true)
      AND p_min_tier IS NOT NULL
      AND public.tier_rank(p_plan_tier) <= public.tier_rank(p_min_tier)
-     -- AND p_feature_key = 'transaction_checklists'   -- the narrowing line (see header)
 $$;
 
 DO $proof$

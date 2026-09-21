@@ -37,9 +37,8 @@ postgrest/              committed seed, probe (C22 + C1-anon over HTTP), cleanup
 
 ## Run order (phase ii)
 
-`URL` is the venue's postgres URL, connecting as `postgres`. `T3473_SCOPE` is `all`
-unless the founder narrows Ruling 1 (then `narrow`, and the migration's narrowing
-line is un-commented and C23's `EXPECTED_SCOPE` flipped).
+`URL` is the venue's postgres URL, connecting as `postgres`. The min-tier rule covers
+every feature that carries a min_tier; there is no scope setting.
 
 0. On a schema-only venue (no rows — the NAS stack is one): `run.sh "$URL" catalogue-seed`
    first. It refuses unless the four catalogue tables are empty, and re-hashes what it
@@ -106,15 +105,11 @@ line is un-commented and C23's `EXPECTED_SCOPE` flipped).
 | C22 | desktop read over PostgREST (`probe`) | `probe-mutant` |
 | C23 | text tripwire, in CI | see the test file |
 | C24 | catalogue validation | m42, m43 |
-| C25a | above-tier override refused at write | m44 |
+| C25a | above-tier override refused at write, incl. an entry with no `enabled` key (K9) | m44, mx01 |
 | C25b | only changed entries validated | m45 |
 | C25c | a downgrade is never blocked | m46 |
 | C25d | first sign-in unaffected (K4) | m47, m49; m48 stays GREEN |
 | C25e | an OFF override is never refused | m31 |
-
-Scope-dependent: m26–m30, m32 and m46 run only under `all` (under `narrow` they are
-behaviourally identical to the shipped code while transaction_checklists' min_tier is
-team). m31 targets C25e only under `narrow`. C25c is N/A under `narrow` and asserts why.
 
 ## Design decisions (written down, not improvised)
 
@@ -131,8 +126,6 @@ team). m31 targets C25e only under `narrow`. C25c is N/A under `narrow` and asse
   refuses a venue whose three read functions differ from production — never accepted —
   so restoring from the file restores the venue's own bodies, and `teardown.sql`
   re-hashes and raises on any difference.
-- **Scope is declared, never detected.** A control that detected the scope from the
-  migration would change what it expects when the migration is wrong.
 
 ## Results
 

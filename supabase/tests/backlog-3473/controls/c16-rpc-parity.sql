@@ -12,8 +12,7 @@
 --   4 preconditions: the plan rows the expected tuples rest on (K6)
 --   5 proacl / prosecdef / provolatile / proconfig identical
 -- Then the diff (raw cells, not only the pinned fields) must be EXACTLY:
---   scope all:    {T1 x sso_login, I x transaction_checklists, I x call_log}
---   scope narrow: {I x transaction_checklists}
+--   {T1 x sso_login, I x transaction_checklists, I x call_log}
 --   x {check_feature_access member, get_org_features member,
 --      broker_get_org_features member, broker_get_org_features non-member}
 --   each: before {enabled true, source override, value 'false'}
@@ -23,7 +22,7 @@
 -- get_org_features literal -- assertion 3 reds it.
 -- Mutants: m50a (broker gains a membership check), m50b (broker's anon early
 -- return deleted), m50c (a blocked override falls to default, not the plan
--- row), m25 (< -> <=), m28 (narrowing line live under scope all), m24a/b/c.
+-- row), m25 (< -> <=), m28 (helper narrowed to transaction_checklists), m24a/b/c.
 
 SELECT pg_temp.act_owner();
 CREATE TEMP TABLE t3473_rpc_after AS SELECT * FROM pg_temp.rpc_snapshot();
@@ -102,10 +101,9 @@ BEGIN
     SELECT c.rpc || '|' || c.kind || '|' || t.org || '|' || t.key AS x
       FROM (VALUES ('check_feature_access', 'member'), ('get_org_features', 'member'),
                    ('broker_get_org_features', 'member'), ('broker_get_org_features', 'non_member')) c(rpc, kind)
-     CROSS JOIN (VALUES ('T1', 'sso_login', 'all'), ('I', 'transaction_checklists', 'both'), ('I', 'call_log', 'all')) t(org, key, scope)
-     WHERE t.scope = 'both' OR t.scope = current_setting('t3473.scope')) e;
+     CROSS JOIN (VALUES ('T1', 'sso_login'), ('I', 'transaction_checklists'), ('I', 'call_log')) t(org, key)) e;
   PERFORM pg_temp.check(got IS NOT DISTINCT FROM expected,
-                        format('diff set (scope %s): want %s, got %s', current_setting('t3473.scope'), expected, got));
+                        format('diff set: want %s, got %s', expected, got));
 
   FOR r IN
     SELECT b.rpc, b.caller_kind, b.org, b.key, b.cell AS bc, a.cell AS ac

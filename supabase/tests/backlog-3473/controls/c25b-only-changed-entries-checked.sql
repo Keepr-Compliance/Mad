@@ -1,7 +1,7 @@
 -- C25b: only the entries a write adds or changes are validated, so an
 -- existing above-tier entry never blocks an unrelated edit.
--- Personal org I still holds its above-tier call_log ON (scope all) and
--- transaction_checklists ON (both scopes) entries, written before migration 1.
+-- Personal org I still holds its above-tier call_log ON and
+-- transaction_checklists ON entries, written before migration 1.
 --   owner adds desktop_text_export ON (min_tier NULL) to I          : rows:1
 -- Mutant: m45 (validate every entry -> raises on call_log / transaction_checklists).
 

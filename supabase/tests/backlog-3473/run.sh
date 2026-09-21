@@ -9,10 +9,6 @@
 # else is refused, so this can never be aimed at production. It must connect as
 # the venue's `postgres` role; the gate checks that.
 #
-# Scope of the min-tier rule the controls expect: T3473_SCOPE=all (default) or
-# T3473_SCOPE=narrow. Declared, never detected from the migration, so a wrong
-# scope in the migration turns controls red instead of changing what they expect.
-#
 # Commands, in the order the README runs them:
 #   gate          venue gate: role, server >= 14, catalog fingerprint vs production.
 #                 The three read functions must match production exactly (never
@@ -51,15 +47,11 @@ MIG3="$REPO/supabase/migrations/20260921101758_backlog_3473_retire_unused_org_co
 STAMP1="20260921101756"
 STAMP2="20260921101757"
 PSQL="${PSQL:-$(command -v psql || echo /opt/homebrew/opt/libpq/bin/psql)}"
-SCOPE="${T3473_SCOPE:-all}"
 export PGCONNECT_TIMEOUT="${PGCONNECT_TIMEOUT:-15}"
 
 URL="${1:-}"; CMD="${2:-}"; ARG="${3:-}"
 if [ -z "$URL" ] || [ -z "$CMD" ]; then
-  sed -n '2,43p' "${BASH_SOURCE[0]}"; exit 2
-fi
-if [ "$SCOPE" != "all" ] && [ "$SCOPE" != "narrow" ]; then
-  echo "T3473_SCOPE must be 'all' or 'narrow', got '$SCOPE'" >&2; exit 2
+  sed -n '2,39p' "${BASH_SOURCE[0]}"; exit 2
 fi
 
 host="$(sed -E 's#^[a-z]+://([^@/]*@)?(\[[^]]+\]|[^:/?]+).*#\2#' <<<"$URL")"
@@ -90,7 +82,7 @@ run_control() {
       echo "\\i $control"
       echo "SELECT 'ASSERTIONS=' || current_setting('t3473.asserts');"
       echo "ROLLBACK;"
-    } | "$PSQL" "$URL" -v ON_ERROR_STOP=1 -X -tA -v scope="$SCOPE" 2>&1
+    } | "$PSQL" "$URL" -v ON_ERROR_STOP=1 -X -tA 2>&1
   )
   rc=$?
   set -e
@@ -141,7 +133,7 @@ apply_prod() {
 
 case "$CMD" in
   gate)
-    echo "== venue gate (declared scope: $SCOPE) =="
+    echo "== venue gate =="
     q -tA -c "select 'connected_as=' || current_user || ' rolsuper=' || (select rolsuper from pg_roles where rolname = current_user) || ' bypassrls=' || (select rolbypassrls from pg_roles where rolname = current_user) || ' server=' || current_setting('server_version')"
     who=$(q -tA -c "select current_user")
     [ "$who" = "postgres" ] || { echo "GATE FAIL: must connect as postgres, got $who" >&2; exit 1; }
@@ -216,7 +208,7 @@ case "$CMD" in
       printf '%-52s %-5s %s\n' "$(basename "$c")" "$CONTROL_RESULT" "$CONTROL_DETAIL"
       [ "$CONTROL_RESULT" = "GREEN" ] || { fail=$((fail+1)); [ -n "${VERBOSE:-}" ] && echo "$CONTROL_OUT"; }
     done
-    echo "controls: $((n-fail)) green / $n (scope=$SCOPE)"
+    echo "controls: $((n-fail)) green / $n"
     [ $n -gt 0 ] || { echo "controls: 0 controls found -- a failure" >&2; exit 1; }
     [ $fail -eq 0 ] || exit 1
     ;;
@@ -231,14 +223,7 @@ case "$CMD" in
       # Optional header lines: `|| true`, or a missing line exits the script
       # silently under `set -e -o pipefail` (measured: 0 mutants run, exit 1).
       targets="$(grep -m1 '^-- targets:' "$m" | sed 's/^-- targets://' || true)"
-      if [ "$SCOPE" = "narrow" ] && grep -q '^-- targets-narrow:' "$m"; then
-        targets="$(grep -m1 '^-- targets-narrow:' "$m" | sed 's/^-- targets-narrow://')"
-      fi
       want="$(grep -m1 '^-- expect:' "$m" | awk '{print $3}' || true)"; want="${want:-red}"
-      scopes="$(grep -m1 '^-- scopes:' "$m" | sed 's/^-- scopes://' || true)"
-      if [ -n "$scopes" ] && ! grep -qw "$SCOPE" <<<"$scopes"; then
-        echo "$(basename "$m"): skipped (applies to scope(s)$scopes; declared $SCOPE)"; continue
-      fi
       mutant_sql="$m"; mig3="$MIG3"
       if grep -q '^-- replaces-file: 3' "$m"; then
         mutant_sql=""; mig3="$m"
@@ -279,7 +264,7 @@ case "$CMD" in
         "${applied:0:160}" "${reds[*]:-none}" "${greens[*]:-none}"
       [ ${#details[@]} -gt 0 ] && printf '%s\n' "${details[@]}"
     done
-    echo "mutants: $total run, $missed not as expected (scope=$SCOPE)"
+    echo "mutants: $total run, $missed not as expected"
     [ $total -gt 0 ] || { echo "mutants: 0 mutants run -- a failure" >&2; exit 1; }
     [ $missed -eq 0 ] || exit 1
     ;;

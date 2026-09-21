@@ -282,7 +282,6 @@ END
 $$;
 
 SELECT set_config('t3473.asserts', '0', true) IS NOT NULL AS counter_ready;
-SELECT set_config('t3473.scope', :'scope', true) AS declared_scope;
 
 -- ---------------------------------------------------------------------------
 -- Fixtures
@@ -303,7 +302,7 @@ DECLARE
   u_y          uuid := '00000000-0000-4000-8000-00003473000b'; -- pii-allow-uuid: invented fixture id (C7: T1 broker, E broker)
   u_i          uuid := '00000000-0000-4000-8000-00003473000c'; -- pii-allow-uuid: invented fixture id (owner of personal org I)
   u_c_member   uuid := '00000000-0000-4000-8000-00003473000d'; -- pii-allow-uuid: invented fixture id (agent in C)
-  u_p          uuid := '00000000-0000-4000-8000-00003473000e'; -- pii-allow-uuid: invented fixture id (C18, C25a, C25d: no membership)
+  u_p          uuid := '00000000-0000-4000-8000-00003473000e'; -- pii-allow-uuid: invented fixture id (C18, C25d: no membership)
   u_outsider   uuid := '00000000-0000-4000-8000-00003473000f'; -- pii-allow-uuid: invented fixture id (C16 non-member)
   u_staff      uuid := '00000000-0000-4000-8000-000034730010'; -- pii-allow-uuid: invented fixture id (holds plans.manage)
   u_d          uuid := '00000000-0000-4000-8000-000034730011'; -- pii-allow-uuid: invented fixture id (C25c: agent in D, added in-control)
@@ -526,4 +525,4 @@ BEGIN
 END
 $fixtures$;
 
-SELECT 'fixtures loaded: scope=' || current_setting('t3473.scope') AS fixtures;
+SELECT 'fixtures loaded' AS fixtures;

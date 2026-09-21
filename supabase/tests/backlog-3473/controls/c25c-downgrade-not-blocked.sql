@@ -1,13 +1,10 @@
 -- C25c (B.1, K7): a plan downgrade is never blocked by the override trigger.
--- scope all, through the real producer:
+-- Through the real producer:
 --   org D on enterprise (admin_assign_org_plan as u_staff)          : success
 --   owner writes sso_login ON (valid at write: enterprise)           : rows:1
 --   u_d added to D as an agent (the read functions need a member)
 --   admin_assign_org_plan(D, team) as u_staff                        : success true
 --   all three read functions as u_d: sso_login                       : false / plan / ignored
--- scope narrow: N/A -- transaction_checklists' min_tier is team and
---   admin_assign_org_plan refuses every individual plan, so no downgrade can
---   make a transaction_checklists override above tier. Asserted as such.
 -- Mutant: m46 (strict: fires on every write, validates every entry against
 -- NEW.plan_id -> the downgrade raises).
 
@@ -20,17 +17,6 @@ DECLARE
 BEGIN
   INSERT INTO public.organizations (id, name, slug, max_seats)
   VALUES (pg_temp.id('o_d'), 'Fixture Brokerage 3473 D', 'fixture-3473-d', 20);
-
-  IF current_setting('t3473.scope') = 'narrow' THEN
-    PERFORM pg_temp.check((SELECT min_tier FROM public.feature_definitions WHERE key = 'transaction_checklists') = 'team',
-                          'N/A under narrow: transaction_checklists min_tier is team');
-    PERFORM pg_temp.act_as(pg_temp.id('u_staff'));
-    v_res := public.admin_assign_org_plan(pg_temp.id('o_d'), pg_temp.id('p_individual'));
-    PERFORM pg_temp.act_owner();
-    PERFORM pg_temp.check(v_res ->> 'error' = 'individual_plan_cannot_be_assigned_to_org',
-                          format('N/A under narrow: no org can be moved to an individual plan, got %s', v_res));
-    RETURN;
-  END IF;
 
   PERFORM pg_temp.act_as(pg_temp.id('u_staff'));
   v_res := public.admin_assign_org_plan(pg_temp.id('o_d'), pg_temp.id('p_enterprise'));
