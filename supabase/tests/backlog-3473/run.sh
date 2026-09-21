@@ -35,6 +35,12 @@
 #   teardown      lib/teardown.sql: restore the three read functions verbatim,
 #                 drop everything files 1 and 2 add, re-hash, remove history rows
 #   (then `gate` again: it must re-match)
+#
+# On a SCHEMA-ONLY venue (the NAS stack holds no rows), bracket the whole run:
+#   catalogue-seed      FIRST: lib/venue-catalogue.sql commits production's plan /
+#                       feature catalogue (refuses unless the 4 tables are empty;
+#                       re-hashes against production)
+#   catalogue-teardown  LAST, after the re-gate: removes exactly that set again
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -50,7 +56,7 @@ export PGCONNECT_TIMEOUT="${PGCONNECT_TIMEOUT:-15}"
 
 URL="${1:-}"; CMD="${2:-}"; ARG="${3:-}"
 if [ -z "$URL" ] || [ -z "$CMD" ]; then
-  sed -n '2,37p' "${BASH_SOURCE[0]}"; exit 2
+  sed -n '2,43p' "${BASH_SOURCE[0]}"; exit 2
 fi
 if [ "$SCOPE" != "all" ] && [ "$SCOPE" != "narrow" ]; then
   echo "T3473_SCOPE must be 'all' or 'narrow', got '$SCOPE'" >&2; exit 2
@@ -146,7 +152,10 @@ case "$CMD" in
     while IFS='|' read -r key val; do
       [ -z "$key" ] && continue
       [[ "$key" == \#* ]] && continue
-      got="$(grep -F "$key|" <<<"$actual" | head -1 | cut -d'|' -f2-)"
+      # Exact key match. awk exits 0 when the key is absent, so a key missing on
+      # the venue is reported as <missing> instead of killing the script under
+      # `set -e -o pipefail` (a grep here did exactly that, silently).
+      got="$(awk -v k="$key" 'index($0, k "|") == 1 { print substr($0, length(k) + 2); exit }' <<<"$actual")"
       if [ "$got" = "$val" ]; then
         matched=$((matched+1))
       elif [[ "$key" =~ ^fn:(check_feature_access|get_org_features|broker_get_org_features)$ ]]; then
@@ -312,6 +321,16 @@ case "$CMD" in
   teardown)
     q -f "$HERE/lib/teardown.sql"
     echo "teardown: done -- run 'gate' again; it must re-match"
+    ;;
+
+  catalogue-seed)
+    q -f "$HERE/lib/venue-catalogue.sql"
+    echo "catalogue-seed: production's catalogue committed to the venue (re-hashed equal)"
+    ;;
+
+  catalogue-teardown)
+    q -f "$HERE/lib/venue-catalogue-teardown.sql"
+    echo "catalogue-teardown: the four catalogue tables are empty again"
     ;;
 
   *)
