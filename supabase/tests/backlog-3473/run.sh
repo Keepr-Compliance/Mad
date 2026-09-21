@@ -220,6 +220,9 @@ case "$CMD" in
       [ -n "$ARG" ] && [[ "$(basename "$m")" != $ARG* ]] && continue
       total=$((total+1))
       targets="$(grep -m1 '^-- targets:' "$m" | sed 's/^-- targets://')"
+      if [ "$SCOPE" = "narrow" ] && grep -q '^-- targets-narrow:' "$m"; then
+        targets="$(grep -m1 '^-- targets-narrow:' "$m" | sed 's/^-- targets-narrow://')"
+      fi
       want="$(grep -m1 '^-- expect:' "$m" | awk '{print $3}')"; want="${want:-red}"
       scopes="$(grep -m1 '^-- scopes:' "$m" | sed 's/^-- scopes://')"
       if [ -n "$scopes" ] && ! grep -qw "$SCOPE" <<<"$scopes"; then
