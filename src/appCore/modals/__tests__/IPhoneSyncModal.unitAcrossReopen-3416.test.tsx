@@ -28,8 +28,11 @@ jest.mock("../../../utils/logger", () => ({
   default: { info: jest.fn(), debug: jest.fn(), warn: jest.fn(), error: jest.fn() },
 }));
 
-// Linux: iPhone sync is enabled by default with no user preference to load
-// (utils/iphoneSyncEnabled.ts), so the provider needs no settings IPC.
+// Linux, signed in, with a stored iPhone source. BACKLOG-3418 turned off device
+// detection until a user's preferences are loaded (an unknown source is OFF on
+// every platform), so this fixture — which used to render the provider signed
+// out and rely on Linux being always-on — now signs a user in and serves the
+// preference read. Fixture only: nothing these tests assert changed.
 jest.mock("../../../contexts/PlatformContext", () => ({
   usePlatform: () => ({ isWindows: false, isMacOS: false, isLinux: true, platform: "linux" }),
 }));
@@ -70,6 +73,20 @@ function installSyncApi() {
       onStorageError: listen(() => undefined),
     },
     backup: { checkStatus: jest.fn().mockResolvedValue({ success: true, lastSyncTime: null }) },
+    // Shaped as the `preferences:get` handler returns it
+    // (electron/handlers/preferenceHandlers.ts: `{ success: true, preferences }`).
+    preferences: {
+      get: jest.fn().mockResolvedValue({
+        success: true,
+        preferences: { messages: { source: "iphone-sync" } },
+      }),
+      update: jest.fn().mockResolvedValue({ success: true }),
+    },
+    // `user:get-phone-type` (electron/handlers/userSettingsHandlers.ts). Not
+    // reached while a source is stored; present so a change to that is loud.
+    user: {
+      getPhoneType: jest.fn().mockResolvedValue({ success: true, phoneType: "iphone" }),
+    },
   };
 }
 
@@ -77,7 +94,7 @@ function installSyncApi() {
 function Harness() {
   const [showIPhoneSync, setShowIPhoneSync] = useState(true);
   return (
-    <IPhoneSyncProvider userId={null}>
+    <IPhoneSyncProvider userId="user-3416">
       <button onClick={() => setShowIPhoneSync(true)}>Open iPhone sync</button>
       {showIPhoneSync && <IPhoneSyncModal onClose={() => setShowIPhoneSync(false)} />}
     </IPhoneSyncProvider>
@@ -85,6 +102,14 @@ function Harness() {
 }
 
 const flush = () => act(async () => { await Promise.resolve(); });
+
+/** Render, then let the provider's preference read settle so detection (and the device listeners) are up. */
+async function renderHarness() {
+  render(<Harness />);
+  await flush();
+  await flush();
+  await flush();
+}
 
 async function connectPhone() {
   await act(async () => {
@@ -140,7 +165,7 @@ describe("BACKLOG-3416: the unit holds for the whole sync, not for one view of i
   });
 
   it("keeps MB after minimize and reopen, although the count has passed 1 GiB", async () => {
-    render(<Harness />);
+    await renderHarness();
     await connectPhone();
     await clickSync();
 
@@ -162,7 +187,7 @@ describe("BACKLOG-3416: the unit holds for the whole sync, not for one view of i
   });
 
   it("a new sync after Cancel picks its own unit", async () => {
-    render(<Harness />);
+    await renderHarness();
     await connectPhone();
     await clickSync();
 
@@ -182,7 +207,7 @@ describe("BACKLOG-3416: the unit holds for the whole sync, not for one view of i
   });
 
   it("a new sync after Continue picks its own unit", async () => {
-    render(<Harness />);
+    await renderHarness();
     await connectPhone();
     await clickSync();
 
