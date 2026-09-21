@@ -8,8 +8,8 @@ Proves the three migrations on a real Postgres + PostgREST stack:
 | `20260921101757_backlog_3473_transaction_checklists.sql` | Seven tables, RLS, grants, the seed catalogue and its copy, the `transaction_checklists` feature row, `submission_attachments.local_attachment_id`. |
 | `20260921101758_backlog_3473_retire_unused_org_columns.sql` | Drops three unused `organizations` columns, behind a guard. Never committed on the venue. |
 
-**Status: written, not run.** No control below has run against a database yet. The
-results section is filled in when phase (ii) runs on the test venue.
+**Status: run in phase (ii), 2026-09-21, at `940efc269`** — every control green, every
+mutant as expected. Results at the end of this file.
 
 CI runs only the text tripwire, `broker-portal/__tests__/migrations/transaction-checklists-3473.test.ts`
 (control C23). Nothing in this directory runs in CI. No file here has a `.test.` or
@@ -25,6 +25,9 @@ lib/catalog-snapshot.sql  C21's S1 / S2
 lib/gate-catalog.sql    venue fingerprint; gate-expected.txt is production's output (252 rows)
 lib/gate-accepted.txt   accepted venue differences (empty until the first gate run)
 lib/teardown.sql        takes migrations 1 and 2 back off the venue, verified by re-hash
+lib/venue-catalogue*.sql  production's plan / feature catalogue for a schema-only venue:
+                        seed, verify (re-hash vs production), teardown
+fixtures/               the probe's captured desktop read (postgrest-desktop-read.json)
 controls/*.sql          one control per file, each in its own rolled-back transaction
 mutants/generate.mjs    derives every mutant from the shipped migrations
 mutants/m*.sql, f*.sql  run by `run.sh mutants` against the controls on their `targets:` line
@@ -38,6 +41,10 @@ postgrest/              committed seed, probe (C22 + C1-anon over HTTP), cleanup
 unless the founder narrows Ruling 1 (then `narrow`, and the migration's narrowing
 line is un-commented and C23's `EXPECTED_SCOPE` flipped).
 
+0. On a schema-only venue (no rows — the NAS stack is one): `run.sh "$URL" catalogue-seed`
+   first. It refuses unless the four catalogue tables are empty, and re-hashes what it
+   wrote against production. Without it the gate reports 130 missing catalogue rows
+   and the fixtures refuse to load.
 1. `run.sh "$URL" gate` — stop on any MISMATCH not in `gate-accepted.txt`.
 2. `run.sh "$URL" apply-prod` — C21 (K3 order): files 1→2→3, admin toggle, S1, files
    1→2→3 again, S2, S1 = S2 both ways. All in one rolled-back transaction.
@@ -50,7 +57,8 @@ line is un-commented and C23's `EXPECTED_SCOPE` flipped).
 8. `run.sh "$URL" probe-seed`, then `run.sh "$URL" probe` (needs `SUPABASE_URL` and
    `SUPABASE_JWT_SECRET` in the environment), then `run.sh "$URL" probe-mutant`.
 9. `run.sh "$URL" probe-cleanup`, then `run.sh "$URL" teardown`, then `gate` again —
-   it must re-match.
+   it must re-match (with the catalogue still present).
+10. If step 0 ran: `run.sh "$URL" catalogue-teardown` — the venue is schema-only again.
 
 ## What the stack must provide
 
@@ -128,6 +136,28 @@ team). m31 targets C25e only under `narrow`. C25c is N/A under `narrow` and asse
 
 ## Results
 
-Not run. Phase (ii) records here, with the SHA: the gate output, `apply-prod`, every
-control, every mutant with its `MUTATION APPLIED` line and what went red, the probe,
-teardown and the re-gate.
+Phase (ii), 2026-09-21, NAS test stack (PostgreSQL 17.6), connected as the stack's
+`postgres` role (not superuser; BYPASSRLS; owns the tables). Measured at `940efc269`.
+
+| Step | Result |
+|---|---|
+| venue, raw | schema-only: 122 of 252 gate rows match (every function, column, policy, trigger, constraint, grant, RLS row); 130 catalogue rows absent |
+| `catalogue-seed` | 25 features, 4 plans, 100 plan rows, `plans.manage`; re-hashed equal to production |
+| `gate` | matched 252, accepted 0, mismatched 0 |
+| `apply-prod` (C21) | `S1_ROWS=154 ONLY_IN_S1=0 ONLY_IN_S2=0` — GREEN |
+| `apply-prod-mutants` | a01–a05 all RED (a02 by the snapshot diff, 1 row each way; the rest by the second apply's error) |
+| `controls` | 32 green / 32, scope `all` |
+| `mutants` | 80 run, 0 not as expected: 74 RED as required; m39, m48 and m10a–d GREEN as required |
+| `probe` (C22 + C1-anon over HTTP) | 9 green / 9; D1 200 with 1 template and 2 items, D2 200 with 0 rows, anon 401 + 42501 on all 7 tables |
+| `probe-mutant` | D1 RED (403, 42501); grant restored |
+| `teardown` | the three read functions re-hash to production's `pg_get_functiondef` md5s |
+| `gate` again | matched 252, accepted 0, mismatched 0 |
+| `catalogue-teardown` | the four catalogue tables empty; stack verify back to 70 tables / 132 policies / 28 triggers / 185 functions / 64 history rows |
+
+Changes phase (ii) made to the harness, each re-run afterwards:
+- `run.sh gate` and `run.sh mutants` exited silently under `set -e -o pipefail` when a
+  looked-up line was absent; both now report instead.
+- C9 gained a T1-broker case (the only input that can see m12); m10a–d are pinned GREEN
+  and m10e–h added as C8's red mutants. Reasons in `mutants/generate.mjs` and the C8 / C9
+  headers.
+- 15.5 (C15) and C10b are baseline / observed, not gates, as the plan states.
