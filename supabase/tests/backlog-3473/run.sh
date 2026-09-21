@@ -228,12 +228,14 @@ case "$CMD" in
     for m in "$HERE"/mutants/m*.sql "$HERE"/mutants/f*.sql; do
       [ -n "$ARG" ] && [[ "$(basename "$m")" != $ARG* ]] && continue
       total=$((total+1))
-      targets="$(grep -m1 '^-- targets:' "$m" | sed 's/^-- targets://')"
+      # Optional header lines: `|| true`, or a missing line exits the script
+      # silently under `set -e -o pipefail` (measured: 0 mutants run, exit 1).
+      targets="$(grep -m1 '^-- targets:' "$m" | sed 's/^-- targets://' || true)"
       if [ "$SCOPE" = "narrow" ] && grep -q '^-- targets-narrow:' "$m"; then
         targets="$(grep -m1 '^-- targets-narrow:' "$m" | sed 's/^-- targets-narrow://')"
       fi
-      want="$(grep -m1 '^-- expect:' "$m" | awk '{print $3}')"; want="${want:-red}"
-      scopes="$(grep -m1 '^-- scopes:' "$m" | sed 's/^-- scopes://')"
+      want="$(grep -m1 '^-- expect:' "$m" | awk '{print $3}' || true)"; want="${want:-red}"
+      scopes="$(grep -m1 '^-- scopes:' "$m" | sed 's/^-- scopes://' || true)"
       if [ -n "$scopes" ] && ! grep -qw "$SCOPE" <<<"$scopes"; then
         echo "$(basename "$m"): skipped (applies to scope(s)$scopes; declared $SCOPE)"; continue
       fi
