@@ -270,6 +270,52 @@ describe("BACKLOG-3418: no iPhone detection before sign-in; stop it when onboard
     });
   });
 
+  describe("signing out (back to the login screen)", () => {
+    // How sign-out reaches the provider, transcribed from the app:
+    //   - App.tsx:49 renders `<IPhoneSyncProvider userId={app.currentUser?.id ?? null}>`.
+    //   - AuthContext.tsx `logout()` sets `{ ...defaultAuthState }`, so
+    //     `currentUser` becomes null and the provider's `userId` becomes null.
+    //   - LicenseGate.tsx returns `<>{children}</>` once the license has
+    //     initialised, so the provider is NOT unmounted: the same instance
+    //     sees its `userId` prop change. An unmount would stop detection in
+    //     the hook's cleanup whatever the provider does, so this test
+    //     re-renders the same tree instead.
+    const signedInTree = (userId: string | null) => (
+      <React.StrictMode>
+        <IPhoneSyncProvider userId={userId}>
+          <div />
+        </IPhoneSyncProvider>
+      </React.StrictMode>
+    );
+
+    it("a Windows iPhone user who signs out has detection stopped, and it does not start again while signed out", async () => {
+      // A signed-in user whose stored source is iPhone (the onboarding save
+      // writes `{ messages: { source } }`, usePhoneTypeApi.ts).
+      api().preferences.get.mockResolvedValue({
+        success: true,
+        preferences: { messages: { source: "iphone-sync" } },
+      });
+      const { rerender } = render(signedInTree("user-3418"));
+      await settle();
+
+      expect(syncApi().startDetection).toHaveBeenCalledTimes(1);
+      const stopsBeforeSignOut = syncApi().stopDetection.mock.calls.length;
+      const readsBeforeSignOut = api().preferences.get.mock.calls.length;
+
+      rerender(signedInTree(null));
+      await settle();
+
+      expect(syncApi().stopDetection.mock.calls.length).toBe(stopsBeforeSignOut + 1);
+      expect(syncApi().startDetection).toHaveBeenCalledTimes(1);
+      // Signed out there is no user to read preferences for.
+      expect(api().preferences.get.mock.calls.length).toBe(readsBeforeSignOut);
+
+      // Still signed out: nothing starts it again.
+      await settle();
+      expect(syncApi().startDetection).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("onboarding phone-type answer re-gates live, without a restart", () => {
     it("Android stops detection at once; going back and answering iPhone starts it again", async () => {
       const app = makeApp();
