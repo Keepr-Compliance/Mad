@@ -76,7 +76,7 @@ line is un-commented and C23's `EXPECTED_SCOPE` flipped).
 | C5 | template writes need the entitlement | m07 |
 | C6 | templates are never deleted (PRIV) | m08a, m08b |
 | C7 | column grants on seed_key, created_by, organization_id | m09a, m09b |
-| C8 | copy readers: submitter, broker, admin only | m10a–d |
+| C8 | copy readers: submitter, broker, admin only | m10e–h; m10a–d stay GREEN (masked by `transaction_submissions`' own SELECT) |
 | C9 | copy insert only by the submitter while uploading | m11, m12, m13a–c |
 | C9b | copy header needs the entitlement | m14 |
 | C9p | the submitter CAN insert the whole tree (K1) | m15a–d, m51a–d |

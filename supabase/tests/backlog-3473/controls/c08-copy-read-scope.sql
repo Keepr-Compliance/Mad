@@ -3,7 +3,12 @@
 -- admins). S_fin's tree: 1 header, 1 item, 2 links, 2 members.
 --   submitter (u_t1_agent), T1 broker, T1 admin      : all rows, each table
 --   T1 it_admin, second T1 agent, E broker           : rows:0, each table
--- Mutants: m10a..m10d (that table's SELECT admits any member of the org).
+-- Mutants: m10e..m10h (that table's SELECT opened to every signed-in user) must
+-- turn this red. m10a..m10d (SELECT admits any member of the org) must leave it
+-- GREEN: each policy reads transaction_submissions as the caller, and that
+-- table's own SELECT policy admits exactly this reader set, so an it_admin or a
+-- second agent never sees the parent row (measured in phase ii). The copy's own
+-- role term is defence in depth that no caller can observe today.
 
 DO $c8$
 DECLARE

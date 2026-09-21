@@ -196,7 +196,7 @@ case "$CMD" in
       changed="$(diff <(grep -v '^-- ' "$orig") <(grep -v '^-- ' "$m") | grep -c '^[<>]' || true)"
       [ "$changed" -gt 0 ] || { echo "$(basename "$m"): MUTATION NOT APPLIED (identical to file $which)" >&2; exit 1; }
       echo "$(basename "$m")"
-      echo "    MUTATION APPLIED: file $which, $changed line(s) differ: $(diff <(grep -v '^-- ' "$orig") <(grep -v '^-- ' "$m") | grep -m1 '^>' | cut -c1-120)"
+      echo "    MUTATION APPLIED: file $which, $changed line(s) differ: $(diff <(grep -v '^-- ' "$orig") <(grep -v '^-- ' "$m") | grep -m1 '^[<>]' | cut -c1-120)"
       set +e; out="$(apply_prod "$f1" "$f2" "$f3")"; rc=$?; set -e
       line="$(grep -m1 '^S1_ROWS=' <<<"$out" || true)"
       if [ $rc -ne 0 ] || ! [[ "$line" =~ ONLY_IN_S1=0\ ONLY_IN_S2=0 ]]; then

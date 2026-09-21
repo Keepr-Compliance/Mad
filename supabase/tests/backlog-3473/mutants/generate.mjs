@@ -396,10 +396,20 @@ const READERS =
   "       AND (ts.submitted_by = (SELECT auth.uid())\n            OR EXISTS (\n              SELECT 1\n" +
   "                FROM public.organization_members om\n               WHERE om.organization_id = ts.organization_id\n" +
   "                 AND om.user_id = (SELECT auth.uid())\n                 AND om.role IN ('broker', 'admin')\n            ))";
+// m10a-d are EQUIVALENT under production's schema (measured in phase ii): each
+// copy policy's EXISTS reads transaction_submissions as the caller, and that
+// table's own SELECT policy (FORCE RLS) admits exactly the submitter and the
+// org's brokers and admins -- the copy's reader set. An it_admin or a second
+// agent never sees the ts row, so "any member" admits nobody new and C8 stays
+// green. They are pinned GREEN: if transaction_submissions' SELECT ever widens,
+// they turn red and the copy's own role term has become load-bearing.
+// m10e-h are the discriminating mutants for C8: USING (true) has no
+// transaction_submissions reference, so its RLS cannot mask the change.
 COPY.forEach((t, i) => {
   add(`m10${SUFFIX[i]}-${t.replace(/_/g, "-")}-select-any-member.sql`, {
-    what: `${t} SELECT admits any member of the submission's organization`,
+    what: `${t} SELECT admits any member of the submission's organization -- equivalent today (transaction_submissions' own SELECT masks it), so C8 must stay GREEN`,
     targets: "c08",
+    expect: "green",
     sql: edit(
       policy(M2, `${t}_select`),
       READERS,
@@ -407,6 +417,17 @@ COPY.forEach((t, i) => {
       `m10${SUFFIX[i]}`,
     ),
     proof: proof(`${pol(`${t}_select`, "qual")} NOT LIKE '%broker%'`, `'${t} readable by any member'`),
+  });
+});
+COPY.forEach((t, i) => {
+  const shipped = policy(M2, `${t}_select`);
+  const at = shipped.indexOf("  USING (");
+  if (at === -1 || shipped.indexOf("  USING (", at + 1) !== -1) throw new Error(`m10 open ${t}: USING clause not found exactly once`);
+  add(`m10${["e", "f", "g", "h"][i]}-${t.replace(/_/g, "-")}-select-open.sql`, {
+    what: `${t} SELECT open to every signed-in user (USING true: no transaction_submissions reference to mask it)`,
+    targets: "c08",
+    sql: shipped.slice(0, at) + "  USING (true);\n",
+    proof: proof(`${pol(`${t}_select`, "qual")} = 'true'`, `'${t} readable by every signed-in user'`),
   });
 });
 const headerInsert = policy(M2, "submission_checklists_insert");
