@@ -357,6 +357,44 @@ if (typeof window !== 'undefined') {
       strictState: jest.fn().mockResolvedValue('blocked'),
       invalidateCache: jest.fn().mockResolvedValue(undefined),
     },
+    // BACKLOG-3475: transaction checklists. Every default is the REFUSED /
+    // EMPTY answer, for the same reason `strictState` defaults to 'blocked':
+    // the channels are gated by a fail-closed plan check, so a test that
+    // forgets to override must not be handed a working feature. Note
+    // `listTemplates` omits `templates` entirely rather than returning `[]` —
+    // absent means "could not read", `[]` means "your brokerage has none", and
+    // a default that blurred them would let a component ship with the two
+    // confused and still pass.
+    checklists: {
+      listTemplates: jest.fn().mockResolvedValue({
+        success: false,
+        error: 'Transaction checklists are not available.',
+      }),
+      selectTemplate: jest.fn().mockResolvedValue({
+        success: false,
+        error: 'Transaction checklists are not available.',
+      }),
+      get: jest.fn().mockResolvedValue({ success: true, checklist: null }),
+      setItemChecked: jest.fn().mockResolvedValue({
+        success: false,
+        error: 'Transaction checklists are not available.',
+      }),
+      setItemNote: jest.fn().mockResolvedValue({
+        success: false,
+        error: 'Transaction checklists are not available.',
+      }),
+      addLink: jest.fn().mockResolvedValue({
+        success: false,
+        error: 'Transaction checklists are not available.',
+      }),
+      removeLink: jest.fn().mockResolvedValue({
+        success: false,
+        error: 'Transaction checklists are not available.',
+      }),
+      // Never gated in the main process, so the default is the working answer.
+      remove: jest.fn().mockResolvedValue({ success: true, changed: false }),
+      invalidateTemplates: jest.fn().mockResolvedValue({ success: true }),
+    },
     // BACKLOG-2006a: per-transaction paywall entitlement. Default is fail-closed
     // (LOCKED) so any test that forgets to override cannot accidentally reveal content.
     entitlement: {

@@ -87,6 +87,48 @@ export interface ChecklistDetail {
   requiredTotal: number;
 }
 
+// ---------------------------------------------------------------------------
+// Broker templates, as read from the cloud — BACKLOG-3475 PR-B
+// ---------------------------------------------------------------------------
+
+/** One row of a broker template, before it is copied onto a transaction. */
+export interface ChecklistTemplateItem {
+  id: string;
+  title: string;
+  description: string | null;
+  isRequired: boolean;
+  expectedDocumentType: DocumentType | null;
+  sortOrder: number;
+}
+
+/** One broker template the current organization may pick from. */
+export interface ChecklistTemplate {
+  id: string;
+  name: string;
+  description: string | null;
+  sortOrder: number;
+  updatedAt: string | null;
+  /** Sorted by `sortOrder` here, not by the server: a PostgREST embed is unordered. */
+  items: ChecklistTemplateItem[];
+}
+
+/**
+ * Where a listing came from.
+ *
+ * There is deliberately no `"unavailable"` member. A listing that could not be
+ * read is not a listing — it is `null`, and the surface above has to say
+ * something different about it. An empty `templates` array means the
+ * organization HAS no templates, which is a fact about the plan holder; a
+ * failed read is a fact about the network, and the two produce different
+ * sentences in front of a user.
+ */
+export type ChecklistTemplateSource = "live" | "cache";
+
+export interface ChecklistTemplateListing {
+  source: ChecklistTemplateSource;
+  templates: ChecklistTemplate[];
+}
+
 /** A template row as copied in. The cloud read that produces these is BACKLOG-3475 PR-B. */
 export interface ChecklistTemplateItemInput {
   title: string;

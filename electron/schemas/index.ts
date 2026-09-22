@@ -62,3 +62,30 @@ export {
   CreateTransactionInputSchema,
 } from './transaction';
 export type { ValidatedTransaction, CreateTransactionInput } from './transaction';
+
+// Checklist schemas (BACKLOG-3475)
+export {
+  ChecklistDocumentTypeSchema,
+  ChecklistLinkKindSchema,
+  CloudChecklistTemplateSchema,
+  CloudChecklistTemplateItemSchema,
+  ChecklistNoteSchema,
+  SelectChecklistTemplateArgsSchema,
+  GetChecklistArgsSchema,
+  RemoveChecklistArgsSchema,
+  SetChecklistItemCheckedArgsSchema,
+  SetChecklistItemNoteArgsSchema,
+  AddChecklistLinkArgsSchema,
+  RemoveChecklistLinkArgsSchema,
+} from './checklist';
+export type {
+  CloudChecklistTemplate,
+  CloudChecklistTemplateItem,
+  SelectChecklistTemplateArgs,
+  GetChecklistArgs,
+  RemoveChecklistArgs,
+  SetChecklistItemCheckedArgs,
+  SetChecklistItemNoteArgs,
+  AddChecklistLinkArgs,
+  RemoveChecklistLinkArgs,
+} from './checklist';
