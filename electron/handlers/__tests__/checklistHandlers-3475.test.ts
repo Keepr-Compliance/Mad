@@ -121,15 +121,43 @@ jest.mock("../../services/databaseService", () => ({
   },
 }));
 
-// The boundary the REAL gate bottoms out at. Signed out, so `resolveOrgOutcome`
-// answers `no_session`, the strict reader answers `unknown`, and the gate
-// answers false — offline, with no socket opened.
+/**
+ * The boundary the REAL gate bottoms out at. Signed out, so `resolveOrgOutcome`
+ * answers `no_session`, the strict reader answers `unknown`, and the gate
+ * answers false — offline, with no socket opened.
+ *
+ * `from("organization_members")` answers ORG_B, and that is for C12. The two
+ * resolvers this codebase has genuinely disagree: `resolveOrgId` goes through
+ * `getActiveOrganizationMembershipOutcome` (filters `license_status = 'active'`,
+ * accepts a personal organization), while `submissionService`'s private
+ * `getUserOrganizationId` reads `organization_members` directly, EXCLUDES
+ * personal organizations and applies no status filter. Wiring the raw read to a
+ * DIFFERENT organization is what makes C12 able to tell them apart at all — with
+ * both answering ORG_A the control would pass against either resolver and prove
+ * nothing. Nothing reaches this branch in a correct build.
+ */
 jest.mock("../../services/supabaseService", () => ({
   __esModule: true,
   default: {
     getClient: () => ({
       auth: { getSession: async () => ({ data: { session: null }, error: null }) },
+      from: (_table: string) => {
+        const qb: Record<string, any> = {};
+        for (const m of ["select", "eq", "limit"]) qb[m] = (..._a: unknown[]) => qb;
+        qb.order = (..._a: unknown[]) =>
+          Promise.resolve({
+            data: [
+              {
+                organization_id: "00000000-0000-4000-8000-00003475f0b2", // pii-allow-uuid: invented fixture id (ORG_B)
+                organizations: { id: "00000000-0000-4000-8000-00003475f0b2" }, // pii-allow-uuid: invented fixture id (ORG_B)
+              },
+            ],
+            error: null,
+          });
+        return qb;
+      },
     }),
+    getAuthSession: async () => ({ userId: "u-3475", accessToken: "t" }),
   },
 }));
 

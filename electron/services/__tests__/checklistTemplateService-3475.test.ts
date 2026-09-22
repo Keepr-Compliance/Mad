@@ -68,10 +68,30 @@ jest.mock("electron", () => ({
   app: { getPath: jest.fn(() => path.join("/mock", "user", "data")) },
 }));
 
+/**
+ * A REAL (if tiny) in-memory filesystem rather than three independent stubs.
+ *
+ * The difference is load-bearing for C13-H. With stubs, "invalidate removed the
+ * file" can only be asserted by checking that `unlink` was CALLED and then
+ * telling `readFile` to fail — which models the removal instead of observing
+ * it, and passes just as well against an `invalidate` that clears memory only.
+ * Here `unlink` really removes the entry, so a later read finds what is
+ * actually there.
+ */
+const diskFiles = new Map<string, string>();
+const enoent = () => Object.assign(new Error("ENOENT"), { code: "ENOENT" });
 const mockFs = {
-  writeFile: jest.fn(),
-  readFile: jest.fn(),
-  unlink: jest.fn(),
+  writeFile: jest.fn(async (p: string, data: string) => {
+    diskFiles.set(p, data);
+  }),
+  readFile: jest.fn(async (p: string) => {
+    const value = diskFiles.get(p);
+    if (value === undefined) throw enoent();
+    return value;
+  }),
+  unlink: jest.fn(async (p: string) => {
+    if (!diskFiles.delete(p)) throw enoent();
+  }),
 };
 jest.mock("fs", () => ({ promises: mockFs }));
 
@@ -199,9 +219,7 @@ function persisted(): any {
 beforeEach(() => {
   jest.clearAllMocks();
   calls.length = 0;
-  mockFs.writeFile.mockResolvedValue(undefined);
-  mockFs.unlink.mockResolvedValue(undefined);
-  mockFs.readFile.mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+  diskFiles.clear();
   mockGetAuthSession.mockResolvedValue({ userId: "u-3475", accessToken: "t" });
   resolveWith(D1_DATA);
 });
@@ -304,7 +322,8 @@ describe("BACKLOG-3475 C13-C / C13-D — no templates is not the same answer as 
 
 describe("BACKLOG-3475 C13-E / C13-F / C13-G — the disk cache", () => {
   it("C13-E: a failed read falls back to this org's file", async () => {
-    mockFs.readFile.mockResolvedValue(
+    diskFiles.set(
+      CACHE_PATH,
       JSON.stringify({
         orgId: ORG_A,
         fetchedAt: Date.now() - 60_000,
@@ -330,7 +349,8 @@ describe("BACKLOG-3475 C13-E / C13-F / C13-G — the disk cache", () => {
   });
 
   it("C13-F: a file belonging to ANOTHER org is refused, and the answer is null", async () => {
-    mockFs.readFile.mockResolvedValue(
+    diskFiles.set(
+      CACHE_PATH,
       JSON.stringify({
         orgId: ORG_B,
         fetchedAt: Date.now() - 60_000,
@@ -355,7 +375,8 @@ describe("BACKLOG-3475 C13-E / C13-F / C13-G — the disk cache", () => {
   });
 
   it("C13-G: a file older than seven days is discarded and removed", async () => {
-    mockFs.readFile.mockResolvedValue(
+    diskFiles.set(
+      CACHE_PATH,
       JSON.stringify({
         orgId: ORG_A,
         fetchedAt: Date.now() - 8 * DAY_MS,
@@ -365,7 +386,7 @@ describe("BACKLOG-3475 C13-E / C13-F / C13-G — the disk cache", () => {
     resolveWith(null, ANON_REFUSAL);
 
     expect(await loadService().listTemplates(ORG_A)).toBeNull();
-    expect(mockFs.unlink).toHaveBeenCalledWith(CACHE_PATH);
+    expect(diskFiles.has(CACHE_PATH)).toBe(false);
   });
 });
 
@@ -375,18 +396,18 @@ describe("BACKLOG-3475 C13-H — invalidate clears BOTH caches", () => {
 
     // 1. A live read populates memory and writes the file.
     await service.listTemplates(ORG_A);
-    expect(mockFs.writeFile).toHaveBeenCalledTimes(1);
+    expect(diskFiles.has(CACHE_PATH)).toBe(true);
 
-    // 2. Invalidate. The file must be removed, not merely forgotten.
+    // 2. Invalidate.
     await service.invalidate();
-    expect(mockFs.unlink).toHaveBeenCalledWith(CACHE_PATH);
 
-    // 3. Model what removal means: the file is gone. If `invalidate` had only
-    //    cleared memory, the file would still hold the replaced rows and this
-    //    read would serve them as though they were current.
-    mockFs.readFile.mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+    // 3. OBSERVE the file, do not assume it. `unlink` on the in-memory disk
+    //    really removes the entry, so an `invalidate` that cleared memory only
+    //    would leave the entry here and the read below would serve exactly the
+    //    rows the broker replaced.
+    expect(diskFiles.has(CACHE_PATH)).toBe(false);
+
     resolveWith(null, ANON_REFUSAL);
-
     expect(await service.listTemplates(ORG_A)).toBeNull();
   });
 
