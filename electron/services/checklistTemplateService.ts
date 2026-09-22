@@ -95,7 +95,14 @@ function toItem(row: {
 
 class ChecklistTemplateService {
   private cache: TemplateCache | null = null;
-  private fetchInProgress: Promise<ChecklistTemplate[] | null> | null = null;
+  /**
+   * The read currently out, WITH the organization it asked about. The org is
+   * stored rather than implied: see {@link ChecklistTemplateService.fetchOnce}.
+   */
+  private fetchInProgress: {
+    orgId: string;
+    promise: Promise<ChecklistTemplate[] | null>;
+  } | null = null;
 
   /**
    * The templates this organization may pick from.
@@ -164,16 +171,42 @@ class ChecklistTemplateService {
     return Date.now() - this.cache.fetchedAt < CACHE_TTL_MS;
   }
 
-  /** Collapse concurrent reads onto one request, as the feature cache does. */
+  /**
+   * Collapse concurrent reads onto one request — for the SAME organization.
+   *
+   * The organization comparison is the whole reason the in-flight entry stores
+   * one, and it is the same hazard {@link
+   * ChecklistTemplateService.loadPersistedCache} guards on the disk path: a
+   * user who belongs to two brokerages, or who switches accounts, must never be
+   * handed the other organization's templates. Sharing the promise blind would
+   * do exactly that, and `listTemplates` would then label the other
+   * brokerage's rows `source: "live"` — plan-holder data, from a plan they are
+   * not on, presented as freshly confirmed.
+   *
+   * `featureGateService.ensureFresh` shares its promise WITHOUT this check and
+   * is still safe, for a reason that does not carry over here: it returns
+   * `void`, and both of its callers re-read `this.cache` behind
+   * `this.cache.orgId === orgId`, so a foreign result is dropped one line
+   * later. Returning the promise's VALUE is what removes that second line of
+   * defence, which is why the check belongs in this function.
+   */
   private async fetchOnce(orgId: string): Promise<ChecklistTemplate[] | null> {
-    if (this.fetchInProgress) {
-      return this.fetchInProgress;
+    const inFlight = this.fetchInProgress;
+    if (inFlight && inFlight.orgId === orgId) {
+      return inFlight.promise;
     }
-    this.fetchInProgress = this.fetchFromSupabase(orgId);
+
+    const promise = this.fetchFromSupabase(orgId);
+    this.fetchInProgress = { orgId, promise };
     try {
-      return await this.fetchInProgress;
+      return await promise;
     } finally {
-      this.fetchInProgress = null;
+      // Clear only our OWN entry. A read for a second organization may have
+      // replaced it while this one was still out, and clearing unconditionally
+      // would strand that one's collapsing for every later caller.
+      if (this.fetchInProgress?.promise === promise) {
+        this.fetchInProgress = null;
+      }
     }
   }
 

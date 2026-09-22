@@ -52,6 +52,12 @@
  *       another. C13-B.
  *   a malformed row that reaches the cache
  *       One bad row poisoning every later offline read. C13-I.
+ *   an in-flight request shared between two ORGANIZATIONS
+ *       The same plan-holder leak as the disk cache, one layer up and through
+ *       a path the disk check cannot see: a second organization's read, made
+ *       while the first is still out, handed the first's rows and labelled
+ *       `source: "live"`. C13-K. The sequential org test in C13-H passes
+ *       against this bug, which is why C13-K exists.
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -114,6 +120,14 @@ jest.mock("../logService", () => {
 let nextResponse: { data: unknown; error: unknown } = { data: [], error: null };
 const calls: Array<{ table: string; select: string; eq: unknown[][]; is: unknown[][]; order: unknown[][] }> = [];
 
+/**
+ * Opt-in, per-request responses. `nextResponse` is one shared value, which is
+ * all every test but C13-K needs; C13-K has two requests OUT AT ONCE and has to
+ * answer them separately and on its own schedule. Null by default and reset in
+ * `beforeEach`, so no other test's behaviour changes.
+ */
+let responder: ((record: (typeof calls)[number]) => Promise<{ data: unknown; error: unknown }>) | null = null;
+
 const mockFrom = jest.fn((table: string) => {
   const record = { table, select: "", eq: [] as unknown[][], is: [] as unknown[][], order: [] as unknown[][] };
   calls.push(record);
@@ -132,6 +146,7 @@ const mockFrom = jest.fn((table: string) => {
   });
   qb.order = jest.fn((...args: unknown[]) => {
     record.order.push(args);
+    if (responder) return responder(record);
     return Promise.resolve(nextResponse);
   });
   return qb;
@@ -219,6 +234,7 @@ function persisted(): any {
 beforeEach(() => {
   jest.clearAllMocks();
   calls.length = 0;
+  responder = null;
   diskFiles.clear();
   mockGetAuthSession.mockResolvedValue({ userId: "u-3475", accessToken: "t" });
   resolveWith(D1_DATA);
@@ -505,5 +521,88 @@ describe("BACKLOG-3475 C13-J — no session is not an empty listing", () => {
 
     expect(await loadService().listTemplates(ORG_A)).toBeNull();
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe("BACKLOG-3475 C13-K — a concurrent read for ANOTHER org is never served this org's rows", () => {
+  /** The D1 row relabelled, so ORG_B's answer is distinguishable from ORG_A's. */
+  const ORG_B_DATA = [
+    {
+      ...D1_DATA[0],
+      id: "<fixture:template-p2-active>",
+      name: "Other brokerage's template",
+      checklist_template_items: [],
+    },
+  ];
+
+  /** Let every queued microtask run. */
+  const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+  it("two overlapping reads for different organizations each get their own rows", async () => {
+    const pending: Array<() => void> = [];
+    responder = (record) =>
+      new Promise((resolve) => {
+        const org = record.eq[0][1] as string;
+        pending.push(() =>
+          resolve({ data: org === ORG_A ? D1_DATA : ORG_B_DATA, error: null }),
+        );
+      });
+
+    const service = loadService();
+
+    // 1. ORG_A's read is out and has NOT answered.
+    const a = service.listTemplates(ORG_A);
+    await settle();
+    expect(pending).toHaveLength(1);
+
+    // 2. ORG_B reads while it is still out. This is the ONLY state in which
+    //    `fetchOnce` shares a promise at all, so it is the only state in which
+    //    the organization check can matter.
+    const b = service.listTemplates(ORG_B);
+    await settle();
+
+    // 3. Drain whatever is waiting. Deliberately NOT "wait until two requests
+    //    exist": without the organization check ORG_B issues no request of its
+    //    own, and waiting for a second would make this control fail by TIMEOUT
+    //    — a slow red that says nothing about which implementation ran.
+    for (let i = 0; i < 5 && pending.length > 0; i += 1) {
+      for (const resolve of pending.splice(0)) resolve();
+      await settle();
+    }
+
+    const [listingA, listingB] = await Promise.all([a, b]);
+
+    // Identity, not a count: one request per organization, each asking about
+    // its own. Sharing the promise blind leaves this `[ORG_A]`.
+    expect(calls.map((c) => c.eq[0][1])).toEqual([ORG_A, ORG_B]);
+
+    expect(listingA!.templates.map((t) => t.name)).toEqual(["Probe template"]);
+    // The leak: without the check this is ORG_A's list, carried back to a user
+    // of ORG_B under `source: "live"`.
+    expect(listingB!.source).toBe("live");
+    expect(listingB!.templates.map((t) => t.name)).toEqual(["Other brokerage's template"]);
+  });
+
+  it("two overlapping reads for the SAME org still collapse onto one request", async () => {
+    // The control for the control: the check must not cost the collapsing that
+    // `fetchOnce` exists for.
+    const pending: Array<() => void> = [];
+    responder = () =>
+      new Promise((resolve) => {
+        pending.push(() => resolve({ data: D1_DATA, error: null }));
+      });
+
+    const service = loadService();
+    const first = service.listTemplates(ORG_A);
+    await settle();
+    const second = service.listTemplates(ORG_A);
+    await settle();
+
+    for (const resolve of pending.splice(0)) resolve();
+    const [one, two] = await Promise.all([first, second]);
+
+    expect(calls).toHaveLength(1);
+    expect(one!.templates.map((t) => t.name)).toEqual(["Probe template"]);
+    expect(two!.templates.map((t) => t.name)).toEqual(["Probe template"]);
   });
 });
