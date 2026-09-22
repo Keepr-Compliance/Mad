@@ -39,6 +39,13 @@ const Database = require(
 import type { Database as DatabaseType } from "better-sqlite3";
 
 let db: DatabaseType;
+/**
+ * Set by the one test that needs a database ON DISK, and removed in teardown
+ * AFTER the handle is closed. Removing it inside the test body would be skipped
+ * by any earlier assertion failure, and would run while the handle is still
+ * open.
+ */
+let tempDir: string | null = null;
 jest.mock("../core/dbConnection", () => ({
   dbGet: (sql: string, params: unknown[] = []) => db.prepare(sql).get(...(params as never[])),
   dbAll: (sql: string, params: unknown[] = []) => db.prepare(sql).all(...(params as never[])),
@@ -142,7 +149,32 @@ beforeEach(() => {
   seed();
 });
 
-afterEach(() => db.close());
+afterEach(() => {
+  try {
+    db.close();
+    /**
+     * THE CONTROL, and the reason the directory is removed here rather than in
+     * the test body.
+     *
+     * A database handle that is still open when its file is deleted is
+     * INVISIBLE on macOS and Linux, which permit unlinking an open file.
+     * Windows refuses and raises `EBUSY: resource busy or locked, unlink`;
+     * `force: true` suppresses ENOENT, never EBUSY. Asserting the handle is
+     * shut makes the leak fail LOUDLY on a developer's machine instead of only
+     * on a Windows runner: delete the `db.close()` above and this goes red
+     * locally on macOS, which is how it was verified. Same shape as the leaked
+     * worker connection in `contactQueryWorker.backfillPlan-2669.test.ts`.
+     */
+    expect(db.open).toBe(false);
+  } finally {
+    // Cleanup runs even when the assertion above fails, so one leaked handle
+    // cannot strand a temp directory for every later run.
+    if (tempDir) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      tempDir = null;
+    }
+  }
+});
 
 describe("BACKLOG-3475 — picking a template copies it onto the transaction", () => {
   it("copies every item, and the copy is independent of the template", async () => {
@@ -372,8 +404,8 @@ describe("BACKLOG-3475 — evidence is the set of ids the user picked, never a t
 
 describe("BACKLOG-3475 — ticks and notes are in the database, not in a cache", () => {
   it("survive closing and reopening the database file", async () => {
-    const dir = fs.mkdtempSync(nodePath.join(os.tmpdir(), "keepr-3475-"));
-    const file = nodePath.join(dir, "checklist.db");
+    tempDir = fs.mkdtempSync(nodePath.join(os.tmpdir(), "keepr-3475-"));
+    const file = nodePath.join(tempDir, "checklist.db");
     db.close();
     db = openSchema(file);
     seed();
@@ -412,8 +444,6 @@ describe("BACKLOG-3475 — ticks and notes are in the database, not in a cache",
     expect(
       rows(`SELECT is_checked, checked_at FROM transaction_checklist_items WHERE id = '${first}'`),
     ).toEqual([{ is_checked: 0, checked_at: null }]);
-
-    fs.rmSync(dir, { recursive: true, force: true });
   });
 
   it("removing the checklist empties all four tables for that transaction", async () => {
