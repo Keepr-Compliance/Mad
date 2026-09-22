@@ -118,6 +118,164 @@ const ALLOWED_EVOLUTION: AllowedEvolution[] = [
       "is not declared separately and cannot be omitted.",
     ref: "BACKLOG-3366",
   },
+
+  // -------------------------------------------------------------------------
+  // BACKLOG-3475 — transaction checklists (local half). Four new tables, four
+  // declared indexes, nine SQLite autoindexes and one trigger: 17 keys, every
+  // spelling copied from this suite's own failure output, never written from
+  // memory. All are `IF NOT EXISTS` and nothing ALTERs an existing table, so
+  // schema.sql's unconditional exec delivers them to fresh and existing
+  // installs alike and no MIGRATIONS entry is needed — the BACKLOG-3366
+  // delivery, one table further on.
+  //
+  // WHAT THIS SUITE CANNOT SEE, AND THEREFORE IS NOT EVIDENCE FOR: the
+  // fingerprint reads tables through PRAGMA table_info, which does not report
+  // CHECK constraints. The paired `(is_checked = 0) = (checked_at IS NULL)`
+  // rule, the expected_document_type list, the exactly-one-target rule on a
+  // member and every length bound are guarded ONLY by
+  // checklistSchemaConstraints-3475.test.ts. A green run here says nothing
+  // about any of them.
+  // -------------------------------------------------------------------------
+  {
+    key: "TABLE:transaction_checklists",
+    what: "New table: one checklist per transaction, copied from a broker template.",
+    why:
+      "BACKLOG-3475: the user picks a broker template and it is COPIED onto the " +
+      "transaction. `template_id` records which template it came from and is " +
+      "provenance only — no read joins through it — so editing or deleting the " +
+      "broker template never rewrites a checklist already in use.",
+    ref: "BACKLOG-3475",
+  },
+  {
+    key: "TABLE:transaction_checklist_items",
+    what: "New table: the copied checklist rows, with their tick state and note.",
+    why:
+      "BACKLOG-3475: title, required flag and expected document type are copies " +
+      "of the template's, not references to it. `checked_at` is the record of a " +
+      "toggle, paired to `is_checked` by a CHECK this suite cannot see.",
+    ref: "BACKLOG-3475",
+  },
+  {
+    key: "TABLE:transaction_checklist_links",
+    what: "New table: one row per evidence GROUP attached to a checklist item.",
+    why:
+      "BACKLOG-3475: the group id is the stable key a submission snapshot maps " +
+      "through. UNIQUE (id, kind) exists so a member can carry a composite FK " +
+      "and cannot disagree with its group's kind.",
+    ref: "BACKLOG-3475",
+  },
+  {
+    key: "TABLE:transaction_checklist_link_members",
+    what: "New table: the emails or attachments inside one evidence group.",
+    why:
+      "BACKLOG-3475: an email link is the SET of member email_ids and a single " +
+      "email is a group of one. There is deliberately no thread_id column: " +
+      "thread_id is nullable at both producers (Gmail writes `threadId || \"\"`, " +
+      "stored as NULL), so a thread-keyed link would silently miss. Members " +
+      "cascade from `emails` and `attachments` by decision, so a force re-cache " +
+      "drops a checklist link exactly as it drops a transaction link.",
+    ref: "BACKLOG-3475",
+  },
+  {
+    key: "INDEX:idx_checklist_items_checklist",
+    what: "Index on transaction_checklist_items(checklist_id, sort_order).",
+    why:
+      "BACKLOG-3475: every read of a checklist loads its items in display " +
+      "order; this serves both the filter and the sort.",
+    ref: "BACKLOG-3475",
+  },
+  {
+    key: "INDEX:idx_checklist_links_item",
+    what: "Index on transaction_checklist_links(item_id).",
+    why: "BACKLOG-3475: evidence groups are always read per checklist item.",
+    ref: "BACKLOG-3475",
+  },
+  {
+    key: "INDEX:idx_checklist_members_attachment",
+    what: "Partial index on transaction_checklist_link_members(attachment_id).",
+    why:
+      "BACKLOG-3475: serves the attachment FK's cascade and the dangling-member " +
+      "check. Partial because exactly one target column is non-NULL per row.",
+    ref: "BACKLOG-3475",
+  },
+  {
+    key: "INDEX:idx_checklist_members_email",
+    what: "Partial index on transaction_checklist_link_members(email_id).",
+    why:
+      "BACKLOG-3475: serves the email FK's cascade, which is what makes a force " +
+      "re-cache remove a link member rather than leave it dangling.",
+    ref: "BACKLOG-3475",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_transaction_checklists_1",
+    what: "SQLite's automatic index for transaction_checklists' TEXT primary key.",
+    why:
+      "BACKLOG-3475: produced by `id TEXT PRIMARY KEY` on the new table; it is " +
+      "not declared separately and cannot be omitted.",
+    ref: "BACKLOG-3475",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_transaction_checklists_2",
+    what: "SQLite's automatic index for UNIQUE (transaction_id).",
+    why:
+      "BACKLOG-3475: the 1:1 rule — one checklist per transaction. Picking a " +
+      "second template must replace the first, never append, and this index is " +
+      "what refuses the append.",
+    ref: "BACKLOG-3475",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_transaction_checklist_items_1",
+    what: "SQLite's automatic index for transaction_checklist_items' TEXT primary key.",
+    why: "BACKLOG-3475: produced by `id TEXT PRIMARY KEY`; not separately declarable.",
+    ref: "BACKLOG-3475",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_transaction_checklist_links_1",
+    what: "SQLite's automatic index for transaction_checklist_links' TEXT primary key.",
+    why: "BACKLOG-3475: produced by `id TEXT PRIMARY KEY`; not separately declarable.",
+    ref: "BACKLOG-3475",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_transaction_checklist_links_2",
+    what: "SQLite's automatic index for UNIQUE (id, kind) on the group table.",
+    why:
+      "BACKLOG-3475: the parent side of the members' composite FK. Without it " +
+      "SQLite cannot reference (id, kind) at all, so this index is the " +
+      "mechanism that forces a member's kind to equal its group's kind.",
+    ref: "BACKLOG-3475",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_transaction_checklist_link_members_1",
+    what: "SQLite's automatic index for the members table's TEXT primary key.",
+    why: "BACKLOG-3475: produced by `id TEXT PRIMARY KEY`; not separately declarable.",
+    ref: "BACKLOG-3475",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_transaction_checklist_link_members_2",
+    what: "SQLite's automatic index for UNIQUE (link_id, attachment_id).",
+    why:
+      "BACKLOG-3475: one attachment may appear at most once in a group, so " +
+      "adding the same evidence twice is a no-op rather than a duplicate chip.",
+    ref: "BACKLOG-3475",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_transaction_checklist_link_members_3",
+    what: "SQLite's automatic index for UNIQUE (link_id, email_id).",
+    why: "BACKLOG-3475: the email half of the same rule.",
+    ref: "BACKLOG-3475",
+  },
+  {
+    key: "TRIGGER:trg_checklist_link_members_drop_empty_link",
+    what: "AFTER DELETE on members: removes a group whose last member is gone.",
+    why:
+      "BACKLOG-3475: a force re-cache cascades members away. Without this " +
+      "trigger the group row survives with zero members — invisible to a " +
+      "dangling-row check, because it points at nothing — and would render as " +
+      "an empty evidence chip. Measured: with the trigger removed and " +
+      "everything else identical, the group rows persist and " +
+      "checklistForceRecache-3475 / checklistForceReimport-3475 go red.",
+    ref: "BACKLOG-3475",
+  },
 ];
 
 const ALLOWED_KEYS = new Set(ALLOWED_EVOLUTION.map((d) => d.key));

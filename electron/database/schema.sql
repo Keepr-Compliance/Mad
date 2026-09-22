@@ -1487,6 +1487,128 @@ CREATE INDEX IF NOT EXISTS idx_hidden_texts_txn_external
   ON transaction_hidden_texts(transaction_id, message_external_id)
   WHERE message_external_id IS NOT NULL;
 
+-- ===========================================================================
+-- BACKLOG-3475 BEGIN — transaction checklists (local half)
+-- ===========================================================================
+-- A checklist is a broker template copied ONTO one transaction at the moment
+-- the user picks it. Four tables, all new, all IF NOT EXISTS: schema.sql's
+-- unconditional exec on every launch creates them on fresh and existing
+-- installs alike, so no MIGRATIONS entry is needed (the same delivery as
+-- BACKLOG-3366's transaction_hidden_texts). Every divergence key is recorded
+-- in ALLOWED_EVOLUTION in databaseService.schema-parity.test.ts.
+--
+-- The BEGIN/END markers are load-bearing: checklistSchemaUpgrade-3475.test.ts
+-- strips this block to synthesise a pre-3475 database and prove the upgrade
+-- path delivers the tables.
+--
+--   transaction_checklists        one per transaction (UNIQUE transaction_id).
+--                                 `template_id` is the source template's cloud
+--                                 id and is PROVENANCE ONLY — no read joins
+--                                 through it. The titles, required flags and
+--                                 document types below are COPIES, so editing
+--                                 or deleting the broker template never
+--                                 rewrites a checklist already in use.
+--   transaction_checklist_items   the copied rows. `checked_at` is the record
+--                                 of a toggle; the paired CHECK makes it
+--                                 structurally impossible for it to disagree
+--                                 with `is_checked`.
+--   transaction_checklist_links   one row per evidence GROUP; its id is the
+--                                 stable key. UNIQUE (id, kind) exists so a
+--                                 member can carry a composite FK and cannot
+--                                 disagree with its group's kind.
+--   ..._link_members              the emails or attachments in that group. An
+--                                 email link is the SET of member email_ids; a
+--                                 single email is a group of one. There is no
+--                                 thread_id column anywhere — thread_id is
+--                                 nullable at both producers (Gmail writes
+--                                 `threadId || ""` -> NULL), and the UI groups
+--                                 by subject while the DB keys on thread_id,
+--                                 so a thread-keyed link would silently miss.
+--
+-- No user_id and no FK to users_local, on purpose: the legacy user-id
+-- migration re-points a hard-coded table list and then deletes the old
+-- users_local row with FK ON, so a cascading user FK not on that list would be
+-- wiped. Ownership comes through transactions.user_id. Same reasoning as
+-- transaction_hidden_texts.hidden_by above.
+--
+-- Members cascade from `emails` and `attachments` BY DECISION: an email Force
+-- Re-cache and a macOS/Android message re-import delete those rows and
+-- re-insert them under new ids, and a checklist link dies with them exactly as
+-- a transaction link does — one force button, one behaviour. The AFTER DELETE
+-- trigger then removes a group whose last member is gone, so a group never
+-- survives empty and would never render as an evidence chip pointing at
+-- nothing.
+CREATE TABLE IF NOT EXISTS transaction_checklists (
+  id             TEXT PRIMARY KEY,
+  transaction_id TEXT NOT NULL UNIQUE,
+  template_id    TEXT NOT NULL,
+  template_name  TEXT NOT NULL CHECK (length(trim(template_name)) BETWEEN 1 AND 200),
+  selected_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS transaction_checklist_items (
+  id                     TEXT PRIMARY KEY,
+  checklist_id           TEXT NOT NULL,
+  title                  TEXT NOT NULL CHECK (length(trim(title)) BETWEEN 1 AND 300),
+  description            TEXT CHECK (description IS NULL OR length(description) <= 2000),
+  is_required            INTEGER NOT NULL DEFAULT 0 CHECK (is_required IN (0, 1)),
+  expected_document_type TEXT CHECK (expected_document_type IS NULL OR expected_document_type IN
+                           ('offer', 'inspection', 'disclosure', 'contract', 'appraisal',
+                            'amendment', 'addendum', 'title', 'closing', 'other')),
+  is_checked             INTEGER NOT NULL DEFAULT 0 CHECK (is_checked IN (0, 1)),
+  checked_at             DATETIME,
+  note                   TEXT,
+  sort_order             INTEGER NOT NULL DEFAULT 0,
+  created_at             DATETIME DEFAULT CURRENT_TIMESTAMP,
+  CHECK ((is_checked = 0) = (checked_at IS NULL)),
+  FOREIGN KEY (checklist_id) REFERENCES transaction_checklists(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_checklist_items_checklist
+  ON transaction_checklist_items(checklist_id, sort_order);
+
+CREATE TABLE IF NOT EXISTS transaction_checklist_links (
+  id         TEXT PRIMARY KEY,
+  item_id    TEXT NOT NULL,
+  kind       TEXT NOT NULL CHECK (kind IN ('attachment', 'email')),
+  label      TEXT NOT NULL CHECK (length(trim(label)) >= 1),
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (id, kind),
+  FOREIGN KEY (item_id) REFERENCES transaction_checklist_items(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_checklist_links_item
+  ON transaction_checklist_links(item_id);
+
+CREATE TABLE IF NOT EXISTS transaction_checklist_link_members (
+  id            TEXT PRIMARY KEY,
+  link_id       TEXT NOT NULL,
+  kind          TEXT NOT NULL,
+  attachment_id TEXT,
+  email_id      TEXT,
+  CHECK ((kind = 'attachment' AND attachment_id IS NOT NULL AND email_id IS NULL)
+      OR (kind = 'email' AND email_id IS NOT NULL AND attachment_id IS NULL)),
+  UNIQUE (link_id, attachment_id),
+  UNIQUE (link_id, email_id),
+  FOREIGN KEY (link_id, kind) REFERENCES transaction_checklist_links(id, kind) ON DELETE CASCADE,
+  FOREIGN KEY (attachment_id) REFERENCES attachments(id) ON DELETE CASCADE,
+  FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_checklist_members_attachment
+  ON transaction_checklist_link_members(attachment_id) WHERE attachment_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_checklist_members_email
+  ON transaction_checklist_link_members(email_id) WHERE email_id IS NOT NULL;
+
+CREATE TRIGGER IF NOT EXISTS trg_checklist_link_members_drop_empty_link
+AFTER DELETE ON transaction_checklist_link_members
+WHEN NOT EXISTS (SELECT 1 FROM transaction_checklist_link_members m WHERE m.link_id = OLD.link_id)
+BEGIN
+  DELETE FROM transaction_checklist_links WHERE id = OLD.link_id;
+END;
+-- ===========================================================================
+-- BACKLOG-3475 END
+-- ===========================================================================
+
 -- Initialize schema version if not exists.
 -- Version 70: the post-reset baseline (BACKLOG-2993). This file IS the
 -- v69-chain shape, declared as version 70 so that the baseline fence in
