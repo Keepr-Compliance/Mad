@@ -1,5 +1,5 @@
 /**
- * BACKLOG-3498 — form state and validation for the "Verify Transaction Dates"
+ * BACKLOG-3498 — form state and validation for the "Verify Transaction Details"
  * step, shared by ExportModal and SubmitForReviewModal.
  *
  * Moved out of ExportModal unchanged: the initial values (ExportModal.tsx:37-55

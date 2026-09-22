@@ -595,6 +595,9 @@ describe("BACKLOG-2849 §5 — the success screen says it SUCCEEDED", () => {
     // Guards against retitling the wrong branch: a component that simply
     // renamed the header would pass the success case above and fail here.
     renderModal();
+    // BACKLOG-3498: the date screen is titled "Verify Transaction Details"
+    // (pinned in dateStep-3498 E1/E4); the idle title is on the summary screen.
+    goToSummary();
 
     expect(screen.getByText(IDLE_TITLE)).toBeInTheDocument();
     expect(screen.queryAllByText(SUCCESS_TITLE)).toHaveLength(0);
@@ -604,6 +607,7 @@ describe("BACKLOG-2849 §5 — the success screen says it SUCCEEDED", () => {
     // Also the liveness proof for `resubmitTransaction` that §4b handed over:
     // this is the state where the fixture's effect is observable.
     renderModal({ transaction: resubmitTransaction });
+    goToSummary(); // BACKLOG-3498: as above
 
     expect(screen.getByText(RESUBMIT_TITLE)).toBeInTheDocument();
     expect(screen.queryAllByText(SUCCESS_TITLE)).toHaveLength(0);

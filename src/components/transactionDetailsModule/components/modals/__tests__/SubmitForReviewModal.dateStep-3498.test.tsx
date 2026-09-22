@@ -27,7 +27,7 @@
  * RUNNER: npx jest src/components/transactionDetailsModule/components/modals/__tests__/SubmitForReviewModal.dateStep-3498.test.tsx
  */
 import React from "react";
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import { render, screen, fireEvent, act, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { SubmitForReviewModal } from "../SubmitForReviewModal";
 import type { SubmitProgress } from "../SubmitForReviewModal";
@@ -113,6 +113,36 @@ async function press(testId: string): Promise<void> {
   });
 }
 
+/**
+ * BACKLOG-3498 (e): each field's helper sentence, verbatim from the line that
+ * used to sit under its input. Retyped here, not imported, so this is a pin
+ * and not a string compared with itself.
+ */
+const HELP: Array<[label: string, help: string]> = [
+  ["Start Date *", "When did you sign the representation agreement with the client?"],
+  ["Closing Date", "Scheduled closing date (optional)"],
+  ["End Date *", "When did the transaction end? (Used to filter communications)"],
+];
+
+/**
+ * No helper line is on the page; each sentence is in the InfoTooltip that sits
+ * directly after its field's label, and shows on hover.
+ */
+function expectHelpTooltips(): void {
+  for (const [, help] of HELP) {
+    expect(screen.queryByText(help)).not.toBeInTheDocument();
+  }
+  for (const [label, help] of HELP) {
+    const labelEl = screen.getByText(label);
+    const trigger = within(labelEl.parentElement as HTMLElement).getByTestId("info-tooltip-trigger");
+    expect(labelEl.nextElementSibling).toBe(trigger);
+    fireEvent.mouseEnter(trigger);
+    expect(screen.getByRole("tooltip").textContent).toBe(help);
+    fireEvent.mouseLeave(trigger);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  }
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((r) => {
@@ -134,7 +164,7 @@ describe("BACKLOG-3498 C1a — the date step comes first for a deal that can be 
   ])("at %s: Export Step 1's fields, labels and helper text, and no summary yet", (_label, status) => {
     renderModal({ transaction: withStatus(status) });
 
-    expect(screen.getByText("Verify Transaction Dates")).toBeInTheDocument();
+    expect(screen.getByText("Verify Transaction Details")).toBeInTheDocument();
     expect(
       screen.getByText(
         "Communications will be filtered to only include those between Start Date and End Date.",
@@ -143,13 +173,8 @@ describe("BACKLOG-3498 C1a — the date step comes first for a deal that can be 
     expect(screen.getByText("Start Date *")).toBeInTheDocument();
     expect(screen.getByText("Closing Date")).toBeInTheDocument();
     expect(screen.getByText("End Date *")).toBeInTheDocument();
-    expect(
-      screen.getByText("When did you sign the representation agreement with the client?"),
-    ).toBeInTheDocument();
-    expect(screen.getByText("Scheduled closing date (optional)")).toBeInTheDocument();
-    expect(
-      screen.getByText("When did the transaction end? (Used to filter communications)"),
-    ).toBeInTheDocument();
+    // BACKLOG-3498 (e): the helper text moved into a tooltip beside each label.
+    expectHelpTooltips();
 
     // Prefilled from the row, timestamps cut to their date part.
     expect(dateInputs().map((i) => i.value)).toEqual(["2026-01-05", "", "2026-03-14"]);
@@ -171,7 +196,7 @@ describe("BACKLOG-3498 C1a — the date step comes first for a deal that can be 
     );
     expect(screen.getByTestId("submit-review-submit")).toBeEnabled();
     expect(dateInputs()).toHaveLength(0);
-    expect(screen.queryByText("Verify Transaction Dates")).not.toBeInTheDocument();
+    expect(screen.queryByText("Verify Transaction Details")).not.toBeInTheDocument();
   });
 
   it("Back returns to the date step with what was typed, and saves nothing", async () => {
@@ -180,7 +205,7 @@ describe("BACKLOG-3498 C1a — the date step comes first for a deal that can be 
     await press("submit-review-next");
     await press("submit-review-back");
 
-    expect(screen.getByText("Verify Transaction Dates")).toBeInTheDocument();
+    expect(screen.getByText("Verify Transaction Details")).toBeInTheDocument();
     expect(dateInputs().map((i) => i.value)).toEqual(["2026-02-02", "", "2026-03-14"]);
     expect(screen.queryByText("Submission Summary")).not.toBeInTheDocument();
     expect(updateMock).not.toHaveBeenCalled();
@@ -219,7 +244,7 @@ describe("BACKLOG-3498 C1b — the date step enforces Export's rule", () => {
     expect(screen.getByTestId("submit-review-dates-error")).toHaveTextContent(
       "End Date must be after Start Date",
     );
-    expect(screen.getByText("Verify Transaction Dates")).toBeInTheDocument();
+    expect(screen.getByText("Verify Transaction Details")).toBeInTheDocument();
     expect(screen.queryByText("Submission Summary")).not.toBeInTheDocument();
   });
 
@@ -309,7 +334,7 @@ describe("BACKLOG-3498 C2 — Submit saves the confirmed dates first", () => {
     );
     // On the date step, fields still editable — not under a submission failure.
     expect(dateInputs()).toHaveLength(3);
-    expect(screen.getByText("Verify Transaction Dates")).toBeInTheDocument();
+    expect(screen.getByText("Verify Transaction Details")).toBeInTheDocument();
     expect(screen.queryByText("Submission Failed")).not.toBeInTheDocument();
     expect(screen.queryByText("Submission Summary")).not.toBeInTheDocument();
   });
@@ -422,7 +447,7 @@ describe("BACKLOG-3498 C3 — which statuses get the date step", () => {
 
       if (blocked) {
         expect(dateInputs()).toHaveLength(0);
-        expect(screen.queryByText("Verify Transaction Dates")).not.toBeInTheDocument();
+        expect(screen.queryByText("Verify Transaction Details")).not.toBeInTheDocument();
         expect(screen.queryByTestId("submit-review-next")).not.toBeInTheDocument();
         // The blocked screen is today's screen: lead + summary, and no Back.
         expect(screen.getByTestId("submit-review-lead")).toBeInTheDocument();
@@ -460,7 +485,7 @@ describe("BACKLOG-3498 C3 — which statuses get the date step", () => {
 describe("BACKLOG-3498 C4 — Export PDF stays on both screens", () => {
   it("on the date step it is present and exports without saving or submitting", async () => {
     const { props } = renderModal();
-    expect(screen.getByText("Verify Transaction Dates")).toBeInTheDocument();
+    expect(screen.getByText("Verify Transaction Details")).toBeInTheDocument();
 
     await press("submit-review-export");
 
@@ -479,5 +504,69 @@ describe("BACKLOG-3498 C4 — Export PDF stays on both screens", () => {
     expect(props.onExport).toHaveBeenCalledTimes(1);
     expect(updateMock).not.toHaveBeenCalled();
     expect(props.onSubmit).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * BACKLOG-3498 (e) — the founder's design changes of 2026-09-21 (mock draft 3,
+ * "same PR"), on the Submit dialog. Export's half is in
+ * ExportModal.dateSave-3498.
+ */
+describe("BACKLOG-3498 E — Verify Transaction Details in the Submit dialog", () => {
+  test.each([
+    ["no status", undefined, "Submit for Review"],
+    ["needs_changes", "needs_changes", "Resubmit for Review"],
+  ])(
+    "E1/E4 at %s: the date screen is titled 'Verify Transaction Details' once, by the dialog; the summary keeps %s",
+    async (_label, status, summaryTitle) => {
+      renderModal({ transaction: withStatus(status) });
+
+      // ONE occurrence, and it is the dialog's h3 — the block's own heading is
+      // not drawn on this screen.
+      expect(screen.getAllByText("Verify Transaction Details")).toHaveLength(1);
+      expect(
+        screen.getByRole("heading", { level: 3, name: "Verify Transaction Details" }),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(summaryTitle)).not.toBeInTheDocument();
+
+      await press("submit-review-next");
+
+      expect(screen.getByRole("heading", { level: 3, name: summaryTitle })).toBeInTheDocument();
+      expect(screen.queryByText("Verify Transaction Details")).not.toBeInTheDocument();
+    },
+  );
+
+  it("E1: the old heading is gone from the date screen", () => {
+    renderModal();
+    expect(screen.queryByText("Verify Transaction Dates")).not.toBeInTheDocument();
+    expect(screen.getByTestId("submit-review-next")).toBeInTheDocument();
+  });
+
+  it("E2: each helper sentence is a tooltip beside its label, with no helper line under the inputs", () => {
+    renderModal();
+    expect(dateInputs()).toHaveLength(3);
+    expectHelpTooltips();
+  });
+
+  it("E3: no Communication Date Range box, even with both range dates on the row", () => {
+    /**
+     * The range dates in the detection writer's shape — ISO timestamps,
+     * electron/services/transactionService/transactionService.ts:962-963. No
+     * transactions column stores them (electron/database/schema.sql has none,
+     * so createTransaction's INSERTABLE_COLUMNS drops them), so a real row
+     * never carries them. They are set here only so that the removed box
+     * would draw again if it came back.
+     */
+    renderModal({
+      transaction: {
+        ...datedTransaction,
+        first_communication_date: "2026-01-05T15:04:11.000Z",
+        last_communication_date: "2026-03-14T18:22:05.000Z",
+      } as unknown as Transaction,
+    });
+
+    expect(dateInputs()).toHaveLength(3);
+    expect(screen.queryByText("Communication Date Range")).not.toBeInTheDocument();
+    expect(screen.queryByText(/We found communications from/)).not.toBeInTheDocument();
   });
 });

@@ -1,8 +1,11 @@
 /**
- * BACKLOG-3498 — the shared "Verify Transaction Dates" step.
+ * BACKLOG-3498 — the shared "Verify Transaction Details" step.
  * Used by ExportModal (Step 1) and SubmitForReviewModal (its date step).
  */
-export { TransactionDatesFields } from "./TransactionDatesFields";
+export {
+  TransactionDatesFields,
+  VERIFY_TRANSACTION_DETAILS_TITLE,
+} from "./TransactionDatesFields";
 export {
   initialTransactionDates,
   useTransactionDatesForm,

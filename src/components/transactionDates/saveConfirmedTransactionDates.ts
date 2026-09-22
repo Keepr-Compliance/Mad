@@ -12,7 +12,7 @@
 import { transactionService } from "../../services";
 import type { ApiResult } from "../../services/transactionService";
 
-/** The three dates the "Verify Transaction Dates" step collects. */
+/** The three dates the "Verify Transaction Details" step collects. */
 export interface ConfirmedTransactionDates {
   /** Start Date → `started_at`. YYYY-MM-DD. Required. */
   startDate: string;

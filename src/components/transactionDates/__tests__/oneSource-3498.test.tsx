@@ -98,13 +98,17 @@ async function click(el: HTMLElement): Promise<void> {
 describe("BACKLOG-3498 C1c — both routes render the one shared fields component", () => {
   it("Export Step 1 renders it", async () => {
     renderExport();
-    expect(await screen.findByText("Verify Transaction Dates")).toBeInTheDocument();
+    expect(await screen.findByText("Verify Transaction Details")).toBeInTheDocument();
     expect(fieldsSpy).toHaveBeenCalled();
   });
 
   it("the Submit date step renders it", () => {
     renderSubmit();
-    expect(screen.getByText("Verify Transaction Dates")).toBeInTheDocument();
+    // BACKLOG-3498 (e): on this screen the text is the dialog's title (the
+    // block's heading is hidden), so the field labels are the anchor that the
+    // block rendered.
+    expect(screen.getByText("Verify Transaction Details")).toBeInTheDocument();
+    expect(screen.getByText("Start Date *")).toBeInTheDocument();
     expect(fieldsSpy).toHaveBeenCalled();
   });
 });

@@ -7,9 +7,10 @@
  *
  * BACKLOG-3498: for a deal that can still be submitted (no status,
  * `not_submitted`, `needs_changes`) the dialog has two screens. Screen 1 is the
- * shared "Verify Transaction Dates" step (the same component Export's Step 1
- * renders); Next leads to screen 2, the lead and the Submission Summary, with
- * Back. Pressing Submit saves the confirmed dates through the shared writer,
+ * shared date step (the same component Export's Step 1 renders), titled
+ * "Verify Transaction Details" by this dialog's own header; the block's heading
+ * is not drawn, so the title is not said twice. Next leads to screen 2, the
+ * lead and the Submission Summary, with Back. Pressing Submit saves the confirmed dates through the shared writer,
  * waits for the save, and only then submits. The statuses the modal blocks
  * render their single screen unchanged.
  */
@@ -17,6 +18,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { ResponsiveModal } from "../../../common/ResponsiveModal";
 import {
   TransactionDatesFields,
+  VERIFY_TRANSACTION_DETAILS_TITLE,
   saveConfirmedTransactionDates,
   useTransactionDatesForm,
   validateTransactionDates,
@@ -472,6 +474,13 @@ export function SubmitForReviewModal({
           <h3 className="text-lg font-bold text-gray-900">
             {isSuccess
               ? "Successfully Submitted"
+              : /* BACKLOG-3498 — the date screen's title (founder, 2026-09-21:
+                   "I don't think we need both Submit for Review and Verify
+                   Transaction Details"). The shared block's own heading is
+                   not drawn on this screen. The summary screen, blocked
+                   statuses and success keep their titles. */
+              showDateStep
+              ? VERIFY_TRANSACTION_DETAILS_TITLE
               : /* BACKLOG-2853 — the title carried the same lie as the button:
                    a deal already sitting with the broker was asked "Submit for
                    Review?", a question about an act the service will refuse.
@@ -533,6 +542,7 @@ export function SubmitForReviewModal({
               transaction={transaction}
               dates={dates}
               onDateChange={setDate}
+              hideHeading
             />
           </div>
         )}
