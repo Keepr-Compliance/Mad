@@ -72,13 +72,41 @@ import { SubmitForReviewModal } from "../SubmitForReviewModal";
 import type { Transaction } from "@/types";
 import type { SubmitProgress } from "../SubmitForReviewModal";
 
+/**
+ * BACKLOG-3498: dated, so the date step's Next is enabled. With no status the
+ * idle dialog is now two screens — the date step, then (Next) the Submission
+ * Summary with Submit. Date-only start (wizard, useAuditSubmission.ts:140-142)
+ * and ISO-timestamp end (detection path,
+ * electron/services/transactionService/transactionService.ts:958).
+ */
 const transaction = {
   id: "txn-2849",
   user_id: "user-2849",
   property_address: "18 Bellweather Lane",
   transaction_type: "purchase",
   status: "active",
+  started_at: "2026-01-05",
+  closed_at: "2026-03-14T18:22:05.000Z",
 } as unknown as Transaction;
+
+/**
+ * BACKLOG-3498: Next from the date step to the Submission Summary. Asserts it
+ * got there, so a test that reads the summary screen cannot pass on the date
+ * screen by accident.
+ */
+function goToSummary(): void {
+  fireEvent.click(screen.getByTestId("submit-review-next"));
+  expect(screen.getByText("Submission Summary")).toBeInTheDocument();
+}
+
+/** BACKLOG-3498: the two idle screens, for checks that must hold on both. */
+const IDLE_SCREENS = ["date step", "summary"] as const;
+function renderIdleScreen(which: (typeof IDLE_SCREENS)[number]) {
+  const utils = renderModal();
+  if (which === "summary") goToSummary();
+  else expect(screen.getByTestId("submit-review-next")).toBeInTheDocument();
+  return utils;
+}
 
 /**
  * The same deal, in the state that makes the modal take its RESUBMIT branch.
@@ -203,8 +231,9 @@ function renderModal(
 }
 
 describe("BACKLOG-2849 §1 — dismissal is an X, not a Cancel button", () => {
-  it("offers no Cancel button anywhere on the idle screen", () => {
-    renderModal();
+  // BACKLOG-3498: the idle dialog is two screens; the check holds on each.
+  it.each(IDLE_SCREENS)("offers no Cancel button anywhere on the idle screen (%s)", (which) => {
+    renderIdleScreen(which);
 
     // Exact-text role query. "Cancel Anyway" (the mid-upload confirm, which
     // stays) does not satisfy it, so this names the button that was removed
@@ -214,8 +243,10 @@ describe("BACKLOG-2849 §1 — dismissal is an X, not a Cancel button", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("dismisses via the X WITHOUT submitting", () => {
-    const { onCancel, onSubmit } = renderModal();
+  // BACKLOG-3498: on both idle screens — Submit exists only on the summary
+  // screen, so the date step alone would make "not submitted" trivially true.
+  it.each(IDLE_SCREENS)("dismisses via the X WITHOUT submitting (%s)", (which) => {
+    const { onCancel, onSubmit } = renderIdleScreen(which);
 
     fireEvent.click(screen.getByTestId("submit-review-close"));
 
@@ -266,6 +297,7 @@ describe("BACKLOG-2849 §1 — dismissal is an X, not a Cancel button", () => {
 describe("BACKLOG-2849 §2 — a brokerage user gets Submit and Export PDF", () => {
   it("shows both actions on the idle screen", () => {
     renderModal();
+    goToSummary(); // BACKLOG-3498: Submit is on the screen after the date step
 
     expect(screen.getByRole("button", { name: "Submit" })).toBeInTheDocument();
     expect(
@@ -273,8 +305,10 @@ describe("BACKLOG-2849 §2 — a brokerage user gets Submit and Export PDF", () 
     ).toBeInTheDocument();
   });
 
-  it("Export PDF calls the export handler and does not submit", () => {
-    const { onExport, onSubmit } = renderModal();
+  // BACKLOG-3498: on both idle screens — only the summary screen has a Submit
+  // the click could wrongly reach.
+  it.each(IDLE_SCREENS)("Export PDF calls the export handler and does not submit (%s)", (which) => {
+    const { onExport, onSubmit } = renderIdleScreen(which);
 
     fireEvent.click(screen.getByTestId("submit-review-export"));
 
@@ -291,8 +325,10 @@ describe("BACKLOG-2849 §2 — a brokerage user gets Submit and Export PDF", () 
 });
 
 describe("BACKLOG-2849 §3 — the pre-submit export section is gone", () => {
-  it("shows neither the retired copy nor the retired control", () => {
-    renderModal();
+  // BACKLOG-3498: the retired section sat on the pre-submit screen, which is
+  // now two screens; the check holds on each.
+  it.each(IDLE_SCREENS)("shows neither the retired copy nor the retired control (%s)", (which) => {
+    renderIdleScreen(which);
 
     expect(screen.queryByText(RETIRED_PRE_SUBMIT_COPY)).not.toBeInTheDocument();
     expect(
@@ -308,6 +344,7 @@ describe("BACKLOG-2849 §3 — the pre-submit export section is gone", () => {
     // the submit; a component that merely reworded the old callout in place
     // would pass §3's first case and fail this one.
     renderModal();
+    goToSummary(); // BACKLOG-3498: the summary is on the screen after the date step
 
     expect(screen.queryByText(POST_SUBMIT_ASK)).not.toBeInTheDocument();
     // ...and the summary the user is deciding on IS still there, so this is
@@ -626,11 +663,12 @@ describe("BACKLOG-2849 §5 — the success screen says it SUCCEEDED", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it("offers no Done BEFORE the submit", () => {
+  // BACKLOG-3498: "before the submit" is now two screens; the check holds on each.
+  it.each(IDLE_SCREENS)("offers no Done BEFORE the submit (%s)", (which) => {
     // He asked for Done on the success screen. On the idle screen it would sit
     // beside Submit reading like a way to accept the dialog, next to the
     // button that actually does.
-    renderModal();
+    renderIdleScreen(which);
 
     expect(screen.queryByTestId("submit-review-done")).not.toBeInTheDocument();
     expect(
