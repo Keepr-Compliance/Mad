@@ -583,6 +583,54 @@ describe("BACKLOG-3475 C13-K — a concurrent read for ANOTHER org is never serv
     expect(listingB!.templates.map((t) => t.name)).toEqual(["Other brokerage's template"]);
   });
 
+  it("a read that finishes does not strand a SECOND org's request still in flight", async () => {
+    // The `finally` clause clears only its OWN entry. Clearing unconditionally
+    // looks harmless — the leak above is already closed by then — but it drops
+    // the in-flight entry belonging to a request that is still out, so every
+    // later caller for that organization issues a duplicate read.
+    //
+    // Three callers, because two cannot see it: the first has to FINISH while
+    // the second is still out, and only a third can observe what the second's
+    // entry is worth afterwards.
+    const pending: Array<() => void> = [];
+    responder = (record) =>
+      new Promise((resolve) => {
+        const org = record.eq[0][1] as string;
+        pending.push(() =>
+          resolve({ data: org === ORG_A ? D1_DATA : ORG_B_DATA, error: null }),
+        );
+      });
+
+    const service = loadService();
+    const a = service.listTemplates(ORG_A);
+    await settle();
+    const b = service.listTemplates(ORG_B);
+    await settle();
+    expect(pending).toHaveLength(2);
+
+    // ORG_A answers and its `finally` runs. ORG_B's request is still out.
+    pending.shift()!();
+    await settle();
+    expect(await a).not.toBeNull();
+
+    // A third caller for ORG_B. It must ride on the request already out.
+    const c = service.listTemplates(ORG_B);
+    await settle();
+
+    for (let i = 0; i < 5 && pending.length > 0; i += 1) {
+      for (const resolve of pending.splice(0)) resolve();
+      await settle();
+    }
+
+    const [listingB, listingC] = await Promise.all([b, c]);
+
+    // Two requests, not three. Clearing unconditionally makes this
+    // [ORG_A, ORG_B, ORG_B].
+    expect(calls.map((call) => call.eq[0][1])).toEqual([ORG_A, ORG_B]);
+    expect(listingB!.templates.map((t) => t.name)).toEqual(["Other brokerage's template"]);
+    expect(listingC!.templates.map((t) => t.name)).toEqual(["Other brokerage's template"]);
+  });
+
   it("two overlapping reads for the SAME org still collapse onto one request", async () => {
     // The control for the control: the check must not cost the collapsing that
     // `fetchOnce` exists for.
