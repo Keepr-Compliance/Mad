@@ -24,8 +24,16 @@
  * WHEN THE PLAN CANNOT BE READ.
  *
  * **A wrapper does not stop one handler from forgetting to call it**, which is
- * why every gated channel is asserted separately and the two ungated ones are
+ * why every gated channel is asserted separately and the three ungated ones are
  * asserted to keep working in the same state.
+ *
+ * The SPLIT itself is asserted too, by execution rather than by prose: "the
+ * gated and ungated sets, by execution" enumerates every registered
+ * `checklists:` channel, invokes each one with the plan unreadable, and
+ * partitions them by what they answer. Six refuse, three work. A tenth channel
+ * nobody classified, a gate dropped, or a gate added to `get` all red it —
+ * which is what makes the module header's count something other than a
+ * sentence to be trusted.
  *
  * ===========================================================================
  * THE WRONG IMPLEMENTATIONS THIS SUITE EXISTS TO CATCH
@@ -410,7 +418,7 @@ describe("BACKLOG-3475 C9 — every gated channel refuses when the plan cannot b
   });
 });
 
-describe("BACKLOG-3475 C9 — the two ungated channels keep working in the same state", () => {
+describe("BACKLOG-3475 C9 — the three ungated channels keep working in the same state", () => {
   it("get returns the checklist while the plan cannot be read", async () => {
     await seedChecklist();
     mockGate.mockImplementation(() => SHIPPED_GATE.isChecklistsAllowed());
@@ -452,6 +460,88 @@ describe("BACKLOG-3475 C9 — the two ungated channels keep working in the same 
 
     expect(await invoke("checklists:invalidate-templates")).toEqual({ success: true });
     expect(mockInvalidate).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("BACKLOG-3475 C9 — the gated and ungated sets, by execution", () => {
+  /**
+   * The count in the module header, derived rather than described.
+   *
+   * Every registered `checklists:` channel is invoked with a VALID payload and
+   * the plan unreadable, then sorted by what it answered. Nothing here greps
+   * for `isChecklistsAllowed`: a handler that called the gate and ignored its
+   * answer would be indistinguishable from a gated one by grep, and a channel
+   * registered under a name nobody thought to search for would be invisible.
+   *
+   * The enumeration comes from `registeredHandlers`, so a tenth channel that
+   * this list does not classify fails the first assertion instead of quietly
+   * escaping the sweep.
+   */
+  it("exactly six channels refuse when the plan cannot be read, and three answer", async () => {
+    await seedChecklist();
+    const itemId = itemIds()[0];
+    const added = await invoke("checklists:add-link", {
+      itemId,
+      kind: "email",
+      targetIds: ["e-mine"],
+    });
+    expect(added.success).toBe(true);
+    const linkId = added.result.linkId;
+
+    // From here the REAL gate decides, against a signed-out session: false.
+    mockGate.mockImplementation(() => SHIPPED_GATE.isChecklistsAllowed());
+
+    // Valid payloads throughout. A channel that refused because its arguments
+    // were malformed would look exactly like a gated one.
+    const CHANNELS: Array<[string, unknown]> = [
+      ["checklists:list-templates", undefined],
+      [
+        "checklists:select-template",
+        { transactionId: OTHER_TRANSACTION, templateId: TEMPLATE_ID },
+      ],
+      ["checklists:set-item-checked", { itemId, checked: true }],
+      ["checklists:set-item-note", { itemId, note: "signed 3 Mar" }],
+      ["checklists:add-link", { itemId, kind: "email", targetIds: ["e-mine"] }],
+      ["checklists:remove-link", { linkId }],
+      // The ungated three last, and `remove` after `get`: it clears the rows
+      // `get` is asked to return.
+      ["checklists:get", { transactionId: TRANSACTION }],
+      ["checklists:remove", { transactionId: TRANSACTION }],
+      ["checklists:invalidate-templates", undefined],
+    ];
+
+    // The sweep covers every channel this module registers — not a list
+    // somebody remembered to keep up to date.
+    expect([...registeredHandlers.keys()].filter((c) => c.startsWith("checklists:")).sort()).toEqual(
+      CHANNELS.map(([channel]) => channel).sort(),
+    );
+
+    const refused: string[] = [];
+    const answered: string[] = [];
+    for (const [channel, args] of CHANNELS) {
+      const result = args === undefined ? await invoke(channel) : await invoke(channel, args);
+      if (result.error === CHECKLISTS_NOT_ALLOWED_ERROR) {
+        refused.push(channel);
+      } else {
+        // Named in the failure output, so a surprise says WHICH channel.
+        expect([channel, result.success]).toEqual([channel, true]);
+        answered.push(channel);
+      }
+    }
+
+    expect(refused).toEqual([
+      "checklists:list-templates",
+      "checklists:select-template",
+      "checklists:set-item-checked",
+      "checklists:set-item-note",
+      "checklists:add-link",
+      "checklists:remove-link",
+    ]);
+    expect(answered).toEqual([
+      "checklists:get",
+      "checklists:remove",
+      "checklists:invalidate-templates",
+    ]);
   });
 });
 

@@ -353,12 +353,14 @@ export const TRANSACTION_CHECKLISTS_FEATURE_KEY: StrictFeatureKey =
  * reader answers `blocked` for a key the plan does not carry and `unknown` for
  * a read it could not finish; both are false here.
  *
- * Two checklist channels do NOT call this, on purpose, and the reason is the
- * unhide rule recorded in `electron/types/featureGate.ts`: `checklists:get` and
- * `checklists:remove` are a user reading and clearing rows on his own
- * transaction. A user whose plan later loses the feature must still be able to
- * see what is on his transaction and take it off again, or the data is stranded
- * where he can neither use it nor be rid of it.
+ * Three of the nine checklist channels do NOT call this, on purpose. For
+ * `checklists:get` and `checklists:remove` the reason is the unhide rule
+ * recorded in `electron/types/featureGate.ts`: they are a user reading and
+ * clearing rows on his own transaction. A user whose plan later loses the
+ * feature must still be able to see what is on his transaction and take it off
+ * again, or the data is stranded where he can neither use it nor be rid of it.
+ * The third is `checklists:invalidate-templates`, which only discards cached
+ * data and can give no one access to anything.
  */
 export async function isChecklistsAllowed(): Promise<boolean> {
   return isStrictFeatureAllowed(TRANSACTION_CHECKLISTS_FEATURE_KEY);

@@ -4,15 +4,25 @@
  * Nine channels over the local tables PR-A created and the broker templates
  * `checklistTemplateService` reads from the cloud.
  *
- * ## Which channels are gated, and why the other two are not
+ * ## Which channels are gated, and why the other three are not
  *
- * Seven channels call {@link isChecklistsAllowed} before any read or write.
- * `checklists:get` and `checklists:remove` do not, and that is the unhide rule
+ * SIX of the nine call {@link isChecklistsAllowed} before any read or write:
+ * `list-templates`, `select-template`, `set-item-checked`, `set-item-note`,
+ * `add-link`, `remove-link`.
+ *
+ * THREE do not. `checklists:get` and `checklists:remove` are the unhide rule
  * spelled out in `electron/types/featureGate.ts`: a user whose plan later loses
  * the feature must still be able to see what is on his own transaction and take
  * it off again. Gating either would strand rows where he can neither use them
- * nor be rid of them. `checklists:invalidate-templates` is not gated either —
- * it only throws cached data away.
+ * nor be rid of them. `checklists:invalidate-templates` is the third — it only
+ * throws cached data away.
+ *
+ * Do not take that split from this paragraph. It is asserted by execution in
+ * `checklistHandlers-3475.test.ts` ("the gated and ungated sets, by
+ * execution"), which invokes every registered `checklists:` channel with the
+ * plan unreadable and partitions them by what each one answers — so a tenth
+ * channel, or a gate added or dropped, reds a test rather than leaving a
+ * sentence to be trusted.
  *
  * **No handler here names the feature key.** `isChecklistsAllowed()` is the
  * single entry point, which is what gives the control set one place to mutate
