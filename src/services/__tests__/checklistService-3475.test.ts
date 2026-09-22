@@ -8,10 +8,17 @@
  * sequence, in the file closest to the surface, that turns "we could not read
  * your brokerage's checklists" into "your brokerage has not set up any".
  *
- * That is the mutation this suite exists to catch. The rest of it is the
- * ordinary contract: which argument shape each channel receives, and that a
- * thrown bridge becomes a result rather than an exception a component has to
- * handle.
+ * That is the mutation this suite exists to catch, and exactly ONE test here
+ * can catch it: "a success carrying NO templates key is not an empty
+ * brokerage". Every other input in this file is blind to it. Under
+ * `success: false` the shipped code and the `?? []` version both return early
+ * with `data` undefined, so the refusal case below passes against either —
+ * measured, not assumed: with the mutation applied the other ten tests stay
+ * green (SR review `3f57d5e7` on pm_comments, MA4).
+ *
+ * The rest of the suite is the ordinary contract: which argument shape each
+ * channel receives, and that a thrown bridge becomes a result rather than an
+ * exception a component has to handle.
  *
  * `window.api.checklists` comes from `tests/setup.js`, whose defaults are the
  * REFUSED answers — so a test that forgets to arrange the allowed path sees the
@@ -69,7 +76,31 @@ describe("listTemplates — a failed read is not an empty brokerage", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/could not be loaded/);
-    // The line that must never be written: `data: result.templates ?? []`.
+    // What this case does NOT prove: `data: result.templates ?? []`. Under
+    // `success: false` both implementations return early, so `data` is
+    // undefined either way and this assertion cannot separate them. What it
+    // does prove is that the handler's message is carried through and no data
+    // is invented alongside it. The test below is the one that can go red on
+    // the `?? []` line.
+    expect(result.data).toBeUndefined();
+  });
+
+  it("a success carrying NO templates key is not an empty brokerage", async () => {
+    // THE control for `data: result.templates ?? []`, and the only input that
+    // can be: the two implementations differ only when `success` is true and
+    // `templates` is absent.
+    //
+    // No producer emits that shape today — `checklists:list-templates` has a
+    // single `success: true` return and it always carries `listing.templates`.
+    // The shape is what the CONTRACT permits: `templates?:` is optional in
+    // `WindowApiChecklists`, so any later main-process branch that answers
+    // "success" without a listing is type-legal, and this line is what stops
+    // the renderer filling the gap in with an empty brokerage.
+    api().listTemplates.mockResolvedValue({ success: true, source: "live" });
+
+    const result = await checklistService.listTemplates();
+
+    expect(result.success).toBe(false);
     expect(result.data).toBeUndefined();
   });
 
@@ -207,8 +238,13 @@ describe("the shipped test defaults are the refused answers", () => {
       });
     }
 
-    // The two the main process never gates default to the working answer.
+    // The three the main process never gates default to the working answer:
+    // `get`, `remove` and `invalidate-templates` (the unhide rule — a user
+    // whose plan lapses can still read and clear his own rows).
     await expect(SHIPPED_DEFAULTS.get({})).resolves.toMatchObject({ success: true });
     await expect(SHIPPED_DEFAULTS.remove({})).resolves.toMatchObject({ success: true });
+    await expect(SHIPPED_DEFAULTS.invalidateTemplates()).resolves.toMatchObject({
+      success: true,
+    });
   });
 });
