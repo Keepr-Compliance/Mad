@@ -24,6 +24,27 @@ import { checklistService } from "../checklistService";
 
 const api = () => (window as any).api.checklists;
 
+/**
+ * The IMPLEMENTATIONS `tests/setup.js` ships, captured before any test replaces
+ * them.
+ *
+ * `getMockImplementation()`, not a spread of the object. The spread was tried
+ * first and does not work: it copies references to the same `jest.fn`s, so an
+ * earlier `mockResolvedValue` reaches the assertions through it anyway —
+ * measured, and it turned the check below into an "ipc died" rejection left
+ * over from four tests earlier.
+ *
+ * `jest.clearAllMocks()` clears recorded calls but NOT implementations, which
+ * is why nothing in `beforeEach` restores them either. Without this snapshot
+ * the last describe would be order-dependent and prove nothing.
+ */
+const SHIPPED_DEFAULTS = Object.fromEntries(
+  Object.entries((window as any).api.checklists).map(([name, fn]) => [
+    name,
+    (fn as jest.Mock).getMockImplementation() as (...args: unknown[]) => Promise<any>,
+  ]),
+) as Record<string, (...args: unknown[]) => Promise<any>>;
+
 const TEMPLATE = {
   id: "<fixture:template-p1-active>",
   name: "Probe template",
@@ -167,10 +188,27 @@ describe("the write channels pass the shapes the Zod schemas expect", () => {
 });
 
 describe("the shipped test defaults are the refused answers", () => {
-  it("an unarranged listTemplates refuses, and carries no data", async () => {
-    const result = await checklistService.listTemplates();
+  it("every gated default refuses, and listTemplates carries no templates key", async () => {
+    const listing = await SHIPPED_DEFAULTS.listTemplates();
+    expect(listing.success).toBe(false);
+    // Absent, not `[]`: a default that blurred the two would let a component
+    // ship with "could not read" and "none exist" confused and still pass.
+    expect("templates" in listing).toBe(false);
 
-    expect(result.success).toBe(false);
-    expect(result.data).toBeUndefined();
+    for (const method of [
+      "selectTemplate",
+      "setItemChecked",
+      "setItemNote",
+      "addLink",
+      "removeLink",
+    ] as const) {
+      await expect(SHIPPED_DEFAULTS[method]({})).resolves.toMatchObject({
+        success: false,
+      });
+    }
+
+    // The two the main process never gates default to the working answer.
+    await expect(SHIPPED_DEFAULTS.get({})).resolves.toMatchObject({ success: true });
+    await expect(SHIPPED_DEFAULTS.remove({})).resolves.toMatchObject({ success: true });
   });
 });
