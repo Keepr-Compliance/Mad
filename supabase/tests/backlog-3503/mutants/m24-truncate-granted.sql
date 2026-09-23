@@ -1,4 +1,5 @@
--- The one thing eighteen behavioural controls could not see. TRUNCATE is a
+-- The one thing the eighteen behavioural controls of PLAN REVIEW could not see,
+-- which is why C18 exists and why this mutant is its red. TRUNCATE is a
 -- table-level operation; row-level security never evaluates it. `REVOKE ALL` is
 -- what removes it (the `D` in the default ACL's `arwdDxtm`); any narrower
 -- revoke, or a later migration that re-grants, leaves it behind.

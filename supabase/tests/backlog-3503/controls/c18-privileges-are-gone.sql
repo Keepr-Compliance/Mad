@@ -6,8 +6,9 @@
 -- table to anon and authenticated (measured, pg_default_acl, on production and
 -- on this venue). The `D` is TRUNCATE. TRUNCATE is a TABLE-level operation --
 -- row-level security never evaluates it, and no policy can refuse it. Measured
--- on this venue: with TRUNCATE left granted, all eighteen behavioural controls
--- stay green while the lowest-privilege signed-in fixture role empties both
+-- on this venue AT PLAN REVIEW, when the suite had eighteen controls and this
+-- one was not among them: with TRUNCATE left granted, all eighteen of them
+-- stayed green while the lowest-privilege signed-in fixture role emptied both
 -- tables. C05/C06 do not see it (they assert on UPDATE and DELETE); C01/C02/C13
 -- do not see it (they run first). `REVOKE ALL` is what takes it away, and this
 -- control is what proves the REVOKE was wide enough.

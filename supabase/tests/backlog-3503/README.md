@@ -4,14 +4,15 @@ Executes `supabase/migrations/20260922220719_backlog_3503_commission_agreements.
 — **the shipped file itself, not a copy** — on a real Postgres 17.6, and records
 what every control and every mutant did.
 
-**It has been run.** Four times, on 2026-09-22 and 2026-09-23, every time on the
+**It has been run.** Five times, on 2026-09-22 and 2026-09-23, every time on the
 same Postgres 17.6 test venue (the venue is named on the backlog item, not in
 this repository): as first written; again after the agent's own-row read was
 gated on active membership; again after that gate was extended to the broker and
-the admin; and again after SR's implementation review (see *The reversal*, *The
-ruling extended* and *The SR round*). The recorded run is the fourth:
-**26 controls, 176 assertions, all green; 37 mutants × 26 controls = 962 runs,
-170 s wall clock.** Every mutant reddens at least one control and every control
+the admin; again after SR's implementation review; and again after the founder
+ruled that an agreement may only be written FOR an active member (see *The
+reversal*, *The ruling extended*, *The SR round* and *The subject too*). The
+recorded run is the fifth: **26 controls, 176 assertions, all green; 37 mutants ×
+26 controls = 962 runs, 175 s wall clock.** Every mutant reddens at least one control and every control
 is reddened by at least one mutant. Every result below was measured; none was
 predicted. `control-run.txt` and `mutant-run.txt` in this directory are the
 runs' own output, unedited.
@@ -79,7 +80,8 @@ without them.** The venue is not named in this repository — `backlog-3364/run.
 set that precedent by taking its target as input and validating it rather than
 publishing it. Both values are recorded on the backlog item.
 
-A full `mutants` run took **170 s**; `controls` takes about 5 s. An *implausibly
+A full `mutants` run took **170 s** and, on the round after it, **175 s**;
+`controls` takes about 5 s. An *implausibly
 fast* green is a broken harness — if `controls` returns instantly with no
 assertion counts, the stream never reached psql.
 
@@ -143,7 +145,7 @@ matched nothing cannot pass.
 | `c22` | a **removed** agent (membership row DELETEd) reads none of their own rows — table and helper — while their broker still reads all of them. They are still an active member of the *other* org, which is what makes an org-blind rule visible | 7 |
 | `c23` | a **deactivated broker** and a **deactivated admin** read 0 from **both** tables, by table and by helper, while the active broker of the same org reads all 7 agreements and all three franchise fees in the same transaction | 18 |
 | `c24` | neither of them can INSERT into either table — **42501 specifically** — nothing lands, and the active broker of the same org still writes both | 8 |
-| `c25` | what the INSERT policy does about the **subject's** status: a broker CAN write for a **deactivated** agent (the membership row survives) and CANNOT for a **removed** one (no row to find), with an active subject as the third arm so a write rule stuck at false cannot pass | 9 |
+| `c25` | what the INSERT policy does about the **subject's** status: a broker CANNOT write for a **deactivated** agent (the status term refuses the row that survives) and CANNOT for a **removed** one (no row at all to find) — two refusals by two different halves of the same clause — with an **active** subject as the third arm, so a write rule stuck at false cannot satisfy it | 9 |
 
 **Why C18 exists, and why it is late.** C05 and C06 assert a SQLSTATE at the
 moment of a write. They cannot see a privilege that is *granted but never
@@ -236,10 +238,12 @@ policies already on this database use for the same question
 
 ### What the reversal did NOT change, stated
 
-- **The INSERT policy's member-EXISTS has no status term**, so a broker can still
-  write an agreement for an agent who is suspended. Not in the ruling, and there
-  is a reason to want it: back pay for someone deactivated mid-month is a real
-  thing to record. Changing it is a separate decision.
+- **The INSERT policy's member-EXISTS had no status term**, so a broker could
+  still write an agreement for an agent who is suspended. That was outside this
+  round's ruling and stayed true for two rounds. It is **no longer true**: the
+  founder was asked the question directly and ruled that a broker cannot record
+  an agreement for a deactivated agent at all. See *The subject too — an
+  agreement may only be written FOR an active member* below.
 - **`set_by` stays `ON DELETE NO ACTION`.** The broker who writes a split cannot
   afterwards be hard-deleted; the founder accepted that, because the product
   deactivates rather than deletes. C19 and C20 assert it by constraint name.
@@ -302,6 +306,50 @@ only control that reds on it.
 
 ---
 
+## The subject too — an agreement may only be written FOR an active member
+
+The last of the three open questions, and the PR's own summary asked it: **should
+a broker be able to record a commission agreement for a deactivated agent at
+all?** The founder's answer, 2026-09-22, was **no**. So the INSERT policy's
+member-EXISTS — the clause about the AGENT an agreement is written FOR, not about
+the caller — gained the same `AND m.license_status = 'active'` term the other two
+rules carry. It reverses what this migration shipped in the two rounds above.
+
+Both shapes of the loss now refuse, and **they refuse by different mechanisms**,
+which is what makes C25's two denial arms independent rather than redundant:
+
+| Subject | What the EXISTS finds | What refuses the write |
+|---|---|---|
+| **deactivated** | a membership row, at `'suspended'` | the **status term** |
+| **removed** | no membership row at all | the **user_id term**, as before |
+
+A mutant can break one and leave the other standing — `m36` does exactly that,
+and reds on the first arm only.
+
+**What the ruling costs, written down because it is a real loss taken
+knowingly.** An agent deactivated **before any agreement was ever entered** can no
+longer have one entered at all. `commission_agreement_in_force` then returns zero
+rows for every closing they ever worked — control C12 is that shape — and the
+closing cannot be computed. The route is: reactivate the member, record the
+agreement, deactivate again. The founder was told that in those terms before he
+ruled.
+
+**What it does not touch.** Reading is unchanged: an agent who loses membership
+lost the read in the round above (C21/C22), and a deactivated broker or admin
+lost both read and write in the round after (C23/C24). Rows already recorded stay
+readable to the office's active brokers — this gates the INSERT, and the ledger is
+append-only, so nothing already written is withdrawn.
+
+**`m20` was rebased for it.** That mutant re-creates the INSERT policy in order to
+plant an unqualified `organization_id`, so a body copied from before this ruling
+would drop the status term as a side effect. Measured, both ways: the un-rebased
+form reds **c17 c25**, and its c25 red says nothing whatever about the unqualified
+column it names. Rebased — the term carried forward, plus a self-check asserting
+it is still present — `m20` reds **c17 alone**, exactly as before. Same artifact
+class that `m11`, `m16` and `m17` were rebased out of one round earlier.
+
+---
+
 ## Mutants — 37, every one reds at least one control
 
 Each prints `MUTATION APPLIED: <catalog evidence>` inside the transaction before
@@ -346,7 +394,7 @@ never printed one. 37/37 printed it. Full output in `mutant-run.txt`.
 | **`m33` active-membership rule drops the `license_status` filter** | **c21** |
 | **`m34` active-membership rule drops the organization scope** | **c22** |
 | **`m35` the WRITE rule drops the `license_status` filter** | **c23 c24** |
-| **`m36` the INSERT policy requires the SUBJECT to be an active member** | **c25** |
+| **`m36` the INSERT policy's SUBJECT clause drops its `license_status` term** | **c25** |
 | **`m37` `franchise_fee_in_force` ordered by `set_at DESC` before `seq DESC`** | **c14 c16** |
 
 `m21`/`m22` and `m25` are the reason C05 and C06 assert a **specific** SQLSTATE.
@@ -365,7 +413,10 @@ file is the status term, so its RED set is evidence about that term alone. Its
 are still there — because a mutant that emptied the body would red the same two
 controls for a different reason.
 
-### The RED-set diff against the previous run
+### The RED-set diff for the round that added C25 and C14's new arms
+
+*(History. The diff for the round after it — the subject-status ruling — is
+below.)*
 
 Six reds were **removed on purpose** and every other red is byte-identical.
 
@@ -416,25 +467,71 @@ Everything else in the diff is a gain, and every gain is real:
 carried the shipped body — status term included — and it reds neither C23 nor
 C24.
 
+### The RED-set diff for the subject-status round — against `b9480eab9`
+
+**Not one RED set moved.** `diff` over every `^m` and `RED:` line of the
+committed log and this round's returns a single line:
+
+```
+71c71
+< m36-insert-subject-must-be-active
+---
+> m36-insert-subject-ignores-license-status
+```
+
+That is the mutant's **file rename**, not a moved red. `m36` still reds `c25` and
+nothing else — for the opposite reason, which is the whole point: the mutation is
+now the term's REMOVAL. C25's owners are unchanged at six (`m02` `m07` `m19`
+`m26` `m27` `m36`); no mutant gained a control and none lost one. The counts are
+unchanged too: 37 mutants × 26 controls = **962 runs**, 37/37 `MUTATION APPLIED`,
+no `RED WITHOUT PROOF`, no `VOID`, no empty RED set, 176 assertions over 26 green
+controls. The venue gate was re-run afterwards and still reads
+`target_tables_absent=true`.
+
+Seven lines of the **full** log moved, every one of them C25's failure *text*:
+
+| Mutant | was | now |
+|---|---|---|
+| `m02` | `a broker CAN write … for a DEACTIVATED agent, got 42501` | `...and CAN for an ACTIVE agent, got 42501` |
+| `m07` | the same, `got 23502` | `...and CAN for an ACTIVE agent, got 23502` |
+| `m19` `m26` `m27` | the REMOVED arm, `got OK` | the DEACTIVATED arm, `got OK` — arm 1 now fails first |
+| `m36` | `a broker CAN write …, got 42501` | `a broker CANNOT write … for a DEACTIVATED agent, refused with 42501, got OK` |
+
+`m07` settles something worth recording while it is measured: under it, C25's
+arms 1 and 2 **pass** and only arm 3 reds, at `23502`. So Postgres evaluates the
+RLS `WITH CHECK` **before** the NOT NULL constraint — both refusals are reached
+before `set_by`'s missing default is ever noticed.
+
+**`control-run.txt` did not move at all**, and that is a limit rather than a
+reassurance: every control is green before and after and C25 kept its nine
+assertions, so the control log has no power to show this change. Only the mutant
+log does.
+
 ### The SR round — the two places the set was silent, and what closed them
 
-SR's implementation review measured two probes against the 24 controls that
+SR's implementation review measured two probes against the 25 controls that
 existed then. **Both returned RED: NONE.** A probe that reddens nothing is not a
 clean bill of health; it is a dimension the suite cannot see, in either
 direction.
 
 **1. The INSERT policy's subject-status term (`msr01` → `m36`, control C25).**
 Adding `AND m.license_status = 'active'` to the member-EXISTS — the clause about
-the agent an agreement is written FOR — changed nothing any control could see.
-That is the single most likely wrong implementation of this migration right now:
-somebody "completes" the founder's ruling by adding the term there too, and a
-reviewer reading the log sees 25/25 and concludes nothing moved. C25 asserts the
-shipped behaviour in **both** shapes — a broker CAN write for a *deactivated*
-agent, CANNOT for a *removed* one — with an active subject as a third arm so a
-write rule stuck at false cannot satisfy it. `m36` reds **c25 and nothing else**.
-The same rule is pinned in CI by the tripwire's *leaves the INSERT policy subject
-check with no license_status term*, because this harness needs a database and CI
-has none.
+the agent an agreement is written FOR — changed nothing any control could see. A
+reviewer reading that log saw 25/25 and would have concluded nothing moved, on
+the exact question the founder was about to be asked. C25 was written to close
+that silence **whichever way he ruled**, asserting both shapes over the same rows
+in the same transaction, with an active subject as a third arm so a write rule
+stuck at false cannot satisfy it.
+
+**He then ruled the term IN** (2026-09-22; see *The subject too* above), so C25
+now asserts that a deactivated subject and a removed subject are both refused and
+an active one is not, and `m36` is that term **removed** — the direction the
+ruling left open, and the likeliest regression. It reds **c25 and nothing else**,
+which is what a control written for a dimension rather than for an answer buys
+you: the ruling reversed and the control did not have to be rewritten around a
+different set of mutants. The same rule is pinned in CI by the tripwire's
+*requires the INSERT policy subject to be an active member, in the same EXISTS*,
+because this harness needs a database and CI has none.
 
 **2. The franchise fee's same-day tie (`msr02` → `m37`, control C14).** `m03`
 mutates `commission_agreement_in_force` alone, and the fee fixture had no pair
@@ -461,7 +558,10 @@ any of these reverts, so no `git checkout --` could discard it.
 
 Rows reading `n/16` and `n/17` were measured in earlier rounds, when the suite
 had 16 and 17 tests and the text they anchor on was already in its current form;
-they were not re-run. The row reading `n/18` is the SR round's.
+they were not re-run. The row reading `n/18` is this round's — the subject-status
+ruling — and it was applied and reversed by two exact-string replaces, each
+printing the file, the line and the resulting line, with no `git checkout --`
+involved at any point.
 
 | Mutation | Tests | RED `it()` |
 |---|---|---|
@@ -486,7 +586,7 @@ they were not re-run. The row reading `n/18` is the SR round's.
 | split-sum CHECK relaxed to `<= 100` **at the constraint** | 1/16 | carries the split-sum and cadence CHECK constraints |
 | cadence CHECK gains a third value | 1/16 | *(same assertion)* |
 | member check written as a self-comparison | 1/16 | writes the INSERT policy member check against the NEW ROW, not against itself |
-| **`AND m.license_status = 'active'` added to the INSERT policy's member-EXISTS** | **1/18** | leaves the INSERT policy subject check with no license_status term |
+| **`AND m.license_status = 'active'` removed from the INSERT policy's member-EXISTS** | **1/18** | requires the INSERT policy subject to be an active member, in the same EXISTS |
 | the `NOT APPLIED TO PRODUCTION` sentence removed | 1/16 | says in its header that it is not applied to production by this PR |
 | the migration opens its own transaction | 1/16 | opens no transaction of its own |
 | the franchise table renamed | 2/16 | creates both tables; gives set_by a NOT NULL default … |
