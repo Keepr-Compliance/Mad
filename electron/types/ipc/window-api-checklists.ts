@@ -9,10 +9,10 @@
  *
  * Two distinctions the types hold on purpose:
  *
- * - On `listTemplates`, `templates` is **absent** when the read failed and an
- *   **empty array** when the brokerage has no templates. A renderer cannot
- *   accidentally say "your brokerage has not set up any checklists" to someone
- *   whose wifi is off.
+ * - On `listTemplates`, a failed read is the `success: false` arm, which has no
+ *   `templates` at all, and a brokerage with no templates is `success: true`
+ *   with an **empty array**. A renderer cannot accidentally say "your brokerage
+ *   has not set up any checklists" to someone whose wifi is off.
  * - `selectTemplate` and `addLink` answer `success: true` with a `result`
  *   whenever the write ran, including when it declined (`exists`,
  *   `targets_not_in_transaction`). `success: false` means it never ran.
@@ -27,6 +27,21 @@ import type {
   SelectChecklistTemplateResult,
 } from "../checklist";
 
+/**
+ * The one declaration of the `checklists:list-templates` answer (BACKLOG-3476).
+ *
+ * The handler, the preload bridge and {@link WindowApiChecklists} all use THIS
+ * type. They used to carry three hand-kept copies, and the bridge's
+ * `ipcRenderer.invoke` is `any`, so nothing made them agree. With one union a
+ * main-process branch that answers `success: true` without a listing is a
+ * compile error at the handler, not a shape the renderer has to guess about.
+ *
+ * `source` is required on success: every producer branch sets it.
+ */
+export type ListChecklistTemplatesResult =
+  | { success: true; templates: ChecklistTemplate[]; source: ChecklistTemplateSource }
+  | { success: false; error: string };
+
 /** Every write that either changed a row or did not. */
 export interface ChecklistWriteResult {
   success: boolean;
@@ -35,13 +50,8 @@ export interface ChecklistWriteResult {
 }
 
 export interface WindowApiChecklists {
-  /** Broker templates for this organization. Gated; `templates` absent on a failed read. */
-  listTemplates: () => Promise<{
-    success: boolean;
-    templates?: ChecklistTemplate[];
-    source?: ChecklistTemplateSource;
-    error?: string;
-  }>;
+  /** Broker templates for this organization. Gated; a failed read carries no `templates`. */
+  listTemplates: () => Promise<ListChecklistTemplatesResult>;
   /** Copy a template onto a transaction, at most one per transaction. */
   selectTemplate: (args: {
     transactionId: string;

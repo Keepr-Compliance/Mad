@@ -85,26 +85,22 @@ import { isChecklistsAllowed, resolveOrgId } from "./featureGateHandlers";
 import type {
   AddChecklistLinkResult,
   ChecklistDetail,
-  ChecklistTemplate,
-  ChecklistTemplateSource,
   SelectChecklistTemplateResult,
 } from "../types/checklist";
+import type { ListChecklistTemplatesResult } from "../types/ipc/window-api-checklists";
 
 // ---------------------------------------------------------------------------
 // Responses
 // ---------------------------------------------------------------------------
 
-export interface ListChecklistTemplatesResponse {
-  success: boolean;
-  /**
-   * Present exactly when `success` is true. An EMPTY array is a real answer —
-   * this brokerage has not made any templates — and it is why `templates` is
-   * absent rather than `[]` when the read failed.
-   */
-  templates?: ChecklistTemplate[];
-  source?: ChecklistTemplateSource;
-  error?: string;
-}
+/**
+ * The shared union (BACKLOG-3476), not a copy of it: `templates` exists exactly
+ * on the success arm. An EMPTY array is a real answer — this brokerage has not
+ * made any templates — and a failed read has no `templates` to be empty. A
+ * branch below that answered `success: true` without a listing would not
+ * compile.
+ */
+export type ListChecklistTemplatesResponse = ListChecklistTemplatesResult;
 
 export interface GetChecklistResponse {
   success: boolean;

@@ -86,16 +86,20 @@ describe("listTemplates — a failed read is not an empty brokerage", () => {
   });
 
   it("a success carrying NO templates key is not an empty brokerage", async () => {
-    // THE control for `data: result.templates ?? []`, and the only input that
-    // can be: the two implementations differ only when `success` is true and
-    // `templates` is absent.
+    // THE runtime control for `data: result.templates ?? []`, and the only
+    // input that can be: the two implementations differ only when `success`
+    // is true and `templates` is absent.
     //
-    // No producer emits that shape today — `checklists:list-templates` has a
-    // single `success: true` return and it always carries `listing.templates`.
-    // The shape is what the CONTRACT permits: `templates?:` is optional in
-    // `WindowApiChecklists`, so any later main-process branch that answers
-    // "success" without a listing is type-legal, and this line is what stops
-    // the renderer filling the gap in with an empty brokerage.
+    // Since BACKLOG-3476 the handler, the bridge and `WindowApiChecklists`
+    // share ONE union (`ListChecklistTemplatesResult`) in which a success
+    // always carries `templates`. That guards the PRODUCER at compile time: a
+    // handler branch answering `success: true` without a listing fails
+    // `npm run type-check` (TS2322 in `checklistHandlers.ts`) — that is the
+    // compile-time control, and jest cannot run it. What the union cannot see
+    // is the IPC hop: `ipcRenderer.invoke` is `any`, so the renderer receives
+    // whatever main actually sent. This test guards that hop at run time, and
+    // it compiles under any declaration because it mocks through
+    // `(window as any)`. Kept on purpose (SR plan review, condition 4).
     api().listTemplates.mockResolvedValue({ success: true, source: "live" });
 
     const result = await checklistService.listTemplates();

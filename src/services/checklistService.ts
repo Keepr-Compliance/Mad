@@ -17,7 +17,7 @@
  * ## One thing this file is careful NOT to flatten
  *
  * `listTemplates` returns `data: undefined` when the read failed and
- * `data: []` when the brokerage has no templates. A component that renders the
+ * `data.templates: []` when the brokerage has no templates. A component that renders the
  * second as "no checklists have been set up" is right; rendering the first that
  * way tells a user something false about their brokerage's account. The
  * temptation is `data: result.templates ?? []` — one character, and it destroys
@@ -35,9 +35,17 @@ import type {
   SelectChecklistTemplateResult,
 } from "../../electron/types/checklist";
 
+/**
+ * Said when main answered "success" with no listing. Written here rather than
+ * imported: `electron/handlers/` is main-process code and the renderer may not
+ * value-import from it.
+ */
+const TEMPLATES_UNREADABLE_ERROR =
+  "Your brokerage's checklist templates could not be loaded right now.";
+
 export interface ChecklistTemplateListing {
   templates: ChecklistTemplate[];
-  source?: ChecklistTemplateSource;
+  source: ChecklistTemplateSource;
 }
 
 export const checklistService = {
@@ -51,13 +59,21 @@ export const checklistService = {
   async listTemplates(): Promise<ApiResult<ChecklistTemplateListing>> {
     try {
       const result = await window.api.checklists.listTemplates();
-      if (result.success && result.templates) {
-        return {
-          success: true,
-          data: { templates: result.templates, source: result.source },
-        };
+      if (!result.success) {
+        return { success: false, error: result.error };
       }
-      return { success: false, error: result.error };
+      // The shared union says a success always carries `templates`, and the
+      // handler cannot compile without one. This check is for the hop the
+      // type cannot see: `ipcRenderer.invoke` is `any`, so what arrives here
+      // is whatever main actually sent. A success with no listing is a
+      // failure, never an empty brokerage.
+      if (!Array.isArray(result.templates)) {
+        return { success: false, error: TEMPLATES_UNREADABLE_ERROR };
+      }
+      return {
+        success: true,
+        data: { templates: result.templates, source: result.source },
+      };
     } catch (error) {
       return { success: false, error: getErrorMessage(error) };
     }
