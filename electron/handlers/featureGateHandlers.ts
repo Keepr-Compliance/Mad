@@ -306,10 +306,11 @@ export const HIDE_FROM_EXPORT_FEATURE_KEY: StrictFeatureKey =
  * Deliberately NOT routed through `featureGateService.checkFeature`, which
  * answers ALLOWED for a key that is not in the cache and for no cache at all.
  * That is right for an export — a user on a plane must still be able to export
- * — and catastrophic here: the feature row is not applied to production, so
- * every organization would read allowed. The strict reader answers `blocked`
- * for an absent key and `unknown` for a read it could not complete, and both
- * answer false here.
+ * — and catastrophic here: the feature row is live but enabled on no plan, and
+ * the permissive reader would still answer ALLOWED to any user whose cached
+ * plan lacks the key or who has no cache at all. The strict reader answers
+ * `blocked` for an absent key and `unknown` for a read it could not complete,
+ * and both answer false here.
  *
  * There is no three-state wrapper beside this one on purpose. The renderer gets
  * its three-state answer straight off `feature-gate:strict-state`, and main's
