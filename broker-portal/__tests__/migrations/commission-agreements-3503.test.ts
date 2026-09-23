@@ -25,9 +25,11 @@
  *     obviously correct on its own;
  *   - `license_status = 'active'` as the spelling of "an active member" -- not a
  *     `NOT IN (...)` list, which would fail OPEN on a state added later -- in
- *     BOTH rules: the agent's own-row rule and the broker/admin rule, which
- *     fronts all four policies. A deactivated broker is no more entitled to the
- *     office's splits than a deactivated agent is to their own;
+ *     ALL THREE places it is asked: the agent's own-row rule, the broker/admin
+ *     rule which fronts all four policies, and the INSERT policy's clause about
+ *     the SUBJECT an agreement is written for. A deactivated broker is no more
+ *     entitled to the office's splits than a deactivated agent is to their own,
+ *     and neither may an agreement be recorded for a deactivated agent;
  *   - SECURITY DEFINER on BOTH RLS helpers and on NEITHER read helper;
  *   - the absence of GRANT UPDATE / GRANT DELETE, and of set_by / set_at from
  *     the INSERT column lists;
@@ -276,20 +278,28 @@ describe('BACKLOG-3503 commission agreements migration', () => {
     expect(FLAT).not.toMatch(/m\.organization_id = m\.organization_id/i);
   });
 
-  it('leaves the INSERT policy subject check with no license_status term', () => {
-    // The shipped decision, and the ONE place in this migration where the suite
-    // was previously silent in both directions: the member-EXISTS is about the
-    // AGENT the agreement is written FOR, and it carries no status term, so a
-    // broker can still record an agreement for a deactivated agent. A removed
-    // one is already refused -- the membership row is gone, not suspended.
+  it('requires the INSERT policy subject to be an active member, in the same EXISTS', () => {
+    // The founder's ruling of 2026-09-22 (BACKLOG-3503), which reversed what
+    // this file shipped first: a broker may record an agreement only FOR an
+    // ACTIVE member of the organization. A removed agent has no membership row
+    // and was already refused; a deactivated one keeps a row at 'suspended' and
+    // is refused by this term. The cost -- an agent deactivated before any
+    // agreement was entered can no longer have one entered at all -- was taken
+    // knowingly and is recorded on the backlog item.
     //
     // It is pinned here as well as in the executable harness (control C25,
-    // mutant m36) because the harness needs a database and CI has none. If the
-    // founder rules the other way, this assertion is the CI red that says so
-    // instead of the change landing in silence.
+    // mutant m36) because the harness needs a database and CI has none. This
+    // assertion is the CI red if the term is ever dropped again.
     const insert = policyBody('agent_commission_agreements_insert_writer');
     expect(insert).toContain('m.user_id = agent_commission_agreements.agent_user_id');
-    expect(insert).not.toMatch(/license_status/i);
+    // ...and the status term sits in the SAME EXISTS as the subject term, so one
+    // membership row must carry both: two separate EXISTS clauses could be
+    // satisfied by the subject's row and by somebody else's active row.
+    expect(insert).toMatch(
+      /m\.user_id = agent_commission_agreements\.agent_user_id AND m\.license_status = 'active'/i,
+    );
+    // same fail-closed spelling as the other two rules: not an exclusion list
+    expect(insert).not.toMatch(/license_status\s+(NOT\s+IN|<>|!=)/i);
   });
 
   it('says in its header that it is not applied to production by this PR', () => {

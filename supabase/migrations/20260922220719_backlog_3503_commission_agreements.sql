@@ -207,23 +207,25 @@ CREATE INDEX organization_franchise_fees_in_force_idx
 -- ruling covers reading and writing on both tables, and splitting the helper
 -- would mean writing the same rule twice and letting the copies drift.
 --
--- What it does NOT change: the INSERT policy's member-EXISTS, which is about the
--- AGENT the agreement is written FOR, still has no status term. So the shipped
--- behaviour splits by the SHAPE of the loss, not by whether the agent is gone:
--- a DEACTIVATED subject keeps their membership row, so the EXISTS finds it and
--- the write is allowed; a REMOVED subject has no row at all, so the same EXISTS
--- refuses -- without any status term being involved.
+-- AND SO MUST THE SUBJECT OF THE AGREEMENT BE. The INSERT policy's member-EXISTS
+-- -- the clause about the AGENT an agreement is written FOR -- carries the same
+-- status term, so a broker may record an agreement only for an ACTIVE member of
+-- their organization. The founder ruled that on 2026-09-22 (recorded in
+-- pm_comments on BACKLOG-3503), reversing what this file shipped first. Both
+-- shapes of the loss now refuse, by two different mechanisms: a REMOVED subject
+-- has no membership row for the EXISTS to find, and a DEACTIVATED subject has a
+-- row whose status the term rejects.
 --
--- The case that needs the write: an agreement that was NEVER ENTERED before the
--- agent departed. commission_agreement_in_force then returns ZERO rows (control
--- C12 is that shape) and the closing cannot be computed at all, so the broker
--- has no choice but to insert for a suspended agent. A correction of terms
--- entered wrong, and a negotiated final settlement, are the other two.
+-- WHAT THAT COSTS, written down because it is a real loss taken knowingly: an
+-- agent deactivated BEFORE any agreement was ever entered can no longer have one
+-- entered at all. Their past closings then resolve to ZERO ROWS -- control C12
+-- is that shape -- and cannot be computed. The route is to reactivate the
+-- member, record the agreement, and deactivate again.
 --
--- That was not in the founder's ruling and changing it is a separate decision.
--- It is now PINNED IN BOTH DIRECTIONS rather than left silent: control C25
--- asserts both shapes, and mutant m36 is the status term added here. Before C25
--- existed, adding that term reddened nothing at all (measured).
+-- PINNED IN BOTH DIRECTIONS rather than left silent: control C25 asserts that a
+-- deactivated subject and a removed subject are both refused while an active one
+-- is not, and mutant m36 is this status term REMOVED. Before C25 existed, moving
+-- this dimension either way reddened nothing at all (measured).
 --
 -- SECURITY DEFINER so the policy can read organization_members past that table's
 -- own row-level security; SET search_path = public so the definer's search path
@@ -372,12 +374,20 @@ CREATE POLICY agent_commission_agreements_select_own
 -- organization_members alias and Postgres stores `m.organization_id =
 -- m.organization_id` -- vacuously true, and behaviourally invisible today.
 -- Hence the table-qualified spelling and control C17's catalog sweep.
+--
+-- `m.license_status = 'active'` is the founder's ruling of 2026-09-22 (section 3
+-- above, and the cost it carries): the SUBJECT of an agreement must be an active
+-- member, so a deactivated agent cannot be written for any more than a removed
+-- one can. It sits in the SAME EXISTS as the user_id term, for the reason the
+-- write rule gives. Control C25 asserts both refusals and the active case beside
+-- them; mutant m36 is this term removed.
 CREATE POLICY agent_commission_agreements_insert_writer
   ON public.agent_commission_agreements FOR INSERT TO authenticated
   WITH CHECK (public.can_write_commission_agreements(agent_commission_agreements.organization_id)
               AND EXISTS (SELECT 1 FROM public.organization_members m
                            WHERE m.organization_id = agent_commission_agreements.organization_id
-                             AND m.user_id = agent_commission_agreements.agent_user_id));
+                             AND m.user_id = agent_commission_agreements.agent_user_id
+                             AND m.license_status = 'active'));
 
 -- No own-row SELECT policy here: an agent does not read the office's franchise
 -- fee in M1. Adding a policy later is pure addition; revoking one agents have

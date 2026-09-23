@@ -1,3 +1,8 @@
+-- The whole member-EXISTS goes, so the SUBJECT is unchecked in every respect: a
+-- broker can write for a removed agent, for a deactivated one, and for a person
+-- who was never a member. This mutant carries no `license_status` term because it
+-- carries no member check at all -- its C25 reds are that, not a rebase miss.
+-- m36 is the narrow version that drops only the status term.
 DROP POLICY agent_commission_agreements_insert_writer ON public.agent_commission_agreements;
 CREATE POLICY agent_commission_agreements_insert_writer ON public.agent_commission_agreements
   FOR INSERT TO authenticated

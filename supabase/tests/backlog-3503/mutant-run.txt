@@ -26,7 +26,7 @@ m02-write-rule-uses-is-org-admin
       c22: CONTROL FAILED: the broker still reads the removed agent1s row, got 0
       c23: CONTROL FAILED: a deactivated admin reads 0 agreement rows, got 7
       c24: CONTROL FAILED: a deactivated admin INSERTing an agreement is refused with 42501, got OK
-      c25: CONTROL FAILED: a broker CAN write an agreement for a DEACTIVATED agent, got 42501
+      c25: CONTROL FAILED: ...and CAN for an ACTIVE agent, got 42501
 m03-order-by-set-at-before-seq
     MUTATION APPLIED: ORDER BY effective_from DESC, set_at DESC, seq DESC (the accepted-spec ordering)
     RED:   c10 c11 c16
@@ -64,7 +64,7 @@ m07-set-by-has-no-default
       c08: null value in column "set_by" of relation "agent_commission_agreements" violates not-null constraint
       c15: CONTROL FAILED: 70/20 is refused by the sum check, got 23502
       c24: CONTROL FAILED: the active broker still writes an agreement, got 23502
-      c25: CONTROL FAILED: a broker CAN write an agreement for a DEACTIVATED agent, got 23502
+      c25: CONTROL FAILED: ...and CAN for an ACTIVE agent, got 23502
 m08-update-granted-with-a-policy
     MUTATION APPLIED: UPDATE granted AND an UPDATE policy added -- the table becomes mutable
     RED:   c05
@@ -154,7 +154,7 @@ m19-insert-policy-without-the-member-check
     green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c10 c11 c12 c13 c14 c15 c16 c18 c19 c20 c21 c22 c23 c24
       c09: CONTROL FAILED: a non-member subject is refused, got OK
       c17: CONTROL FAILED: the member check compares m.organization_id to the NEW ROW1s org, got: can_write_commission_agreements(organization_id)
-      c25: CONTROL FAILED: a broker CANNOT write an agreement for a REMOVED agent, refused with 42501, got OK
+      c25: CONTROL FAILED: a broker CANNOT write an agreement for a DEACTIVATED agent, refused with 42501, got OK
 m20-insert-policy-unqualified-org-column
     MUTATION APPLIED: the EXISTS clause uses an UNQUALIFIED organization_id (binds to m.organization_id -- vacuously true)
     RED:   c17
@@ -205,7 +205,7 @@ m26-rls-not-enabled-on-agreements
       c22: CONTROL FAILED: a removed agent reads 0 agreement rows anywhere, got 8
       c23: CONTROL FAILED: a deactivated broker reads 0 agreement rows, got 8
       c24: CONTROL FAILED: a deactivated broker INSERTing an agreement is refused with 42501, got OK
-      c25: CONTROL FAILED: a broker CANNOT write an agreement for a REMOVED agent, refused with 42501, got OK
+      c25: CONTROL FAILED: a broker CANNOT write an agreement for a DEACTIVATED agent, refused with 42501, got OK
 m27-rls-not-enabled-on-either-table
     MUTATION APPLIED: ENABLE ROW LEVEL SECURITY missing on BOTH tables
     RED:   c01 c02 c03 c04 c06 c09 c13 c14 c21 c22 c23 c24 c25
@@ -222,7 +222,7 @@ m27-rls-not-enabled-on-either-table
       c22: CONTROL FAILED: a removed agent reads 0 agreement rows anywhere, got 8
       c23: CONTROL FAILED: a deactivated broker reads 0 agreement rows, got 8
       c24: CONTROL FAILED: a deactivated broker INSERTing an agreement is refused with 42501, got OK
-      c25: CONTROL FAILED: a broker CANNOT write an agreement for a REMOVED agent, refused with 42501, got OK
+      c25: CONTROL FAILED: a broker CANNOT write an agreement for a DEACTIVATED agent, refused with 42501, got OK
 m28-write-rule-loses-its-search-path
     MUTATION APPLIED: SET search_path dropped from the SECURITY DEFINER write rule
     RED:   c17
@@ -269,11 +269,11 @@ m35-write-rule-ignores-license-status
     green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c09 c10 c11 c12 c13 c14 c15 c16 c17 c18 c19 c20 c21 c22 c25
       c23: CONTROL FAILED: a deactivated broker reads 0 agreement rows, got 7
       c24: CONTROL FAILED: a deactivated broker INSERTing an agreement is refused with 42501, got OK
-m36-insert-subject-must-be-active
-    MUTATION APPLIED: the INSERT policy now requires the AGENT SUBJECT to be an active member
+m36-insert-subject-ignores-license-status
+    MUTATION APPLIED: the INSERT policy no longer requires the AGENT SUBJECT to be an active member
     RED:   c25
     green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c09 c10 c11 c12 c13 c14 c15 c16 c17 c18 c19 c20 c21 c22 c23 c24
-      c25: CONTROL FAILED: a broker CAN write an agreement for a DEACTIVATED agent, got 42501
+      c25: CONTROL FAILED: a broker CANNOT write an agreement for a DEACTIVATED agent, refused with 42501, got OK
 m37-franchise-order-by-set-at
     MUTATION APPLIED: franchise_fee_in_force orders by set_at DESC before seq DESC
     RED:   c14 c16
