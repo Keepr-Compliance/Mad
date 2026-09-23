@@ -157,6 +157,26 @@ describe("the write channels pass the shapes the Zod schemas expect", () => {
     expect(result.data).toEqual({ status: "selected", checklistId: "c-1" });
   });
 
+  it("selectTemplate forwards replaceExisting as given and never forces it (BACKLOG-3476)", async () => {
+    // A plain pick must reach main WITHOUT replaceExisting, so a second window
+    // that picked first gets `exists` instead of having its checklist wiped.
+    // Forcing `replaceExisting: true` here left every other test green.
+    // Asserted on the argument itself: `toHaveBeenCalledWith({... replaceExisting:
+    // undefined})` also matches an object with the key missing, which would
+    // hide nothing here but reads as a stronger claim than it is.
+    api().selectTemplate.mockResolvedValue({
+      success: true,
+      result: { status: "selected", checklistId: "c-1" },
+    });
+
+    await checklistService.selectTemplate("t-1", "tpl-1");
+    await checklistService.selectTemplate("t-1", "tpl-1", false);
+
+    expect(api().selectTemplate).toHaveBeenCalledTimes(2);
+    expect(api().selectTemplate.mock.calls[0][0].replaceExisting).toBeUndefined();
+    expect(api().selectTemplate.mock.calls[1][0].replaceExisting).toBe(false);
+  });
+
   it("a declined write still arrives as data, because the call ran and answered", async () => {
     api().selectTemplate.mockResolvedValue({
       success: true,
