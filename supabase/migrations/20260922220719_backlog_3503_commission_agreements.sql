@@ -24,8 +24,12 @@
 --   effective_from (or, on the same date, a later seq). Nothing is edited and
 --   nothing is deleted, so the history of what an agent was promised survives.
 --
---   can_write_commission_agreements(uuid)   write RLS helper, SECURITY DEFINER
---   is_active_commission_member(uuid)       read  RLS helper, SECURITY DEFINER
+--   can_write_commission_agreements(uuid)   the broker/admin rule, SECURITY
+--                                  DEFINER. An ACTIVE broker or admin of that
+--                                  organization. Fronts all four policies: the
+--                                  broker/admin SELECT and INSERT on both tables.
+--   is_active_commission_member(uuid)       the agent's own-row rule, SECURITY
+--                                  DEFINER. An ACTIVE member of that organization.
 --   commission_agreement_in_force(uuid, uuid, date)   read helper, INVOKER
 --   franchise_fee_in_force(uuid, date)                read helper, INVOKER
 --
@@ -172,6 +176,28 @@ CREATE INDEX organization_franchise_fees_in_force_idx
 -- admits an IT administrator and excludes the broker. The rule here is the
 -- inverse -- ('broker', 'admin') -- because who may set a person's pay is a
 -- business question, not a systems-administration one.
+--
+-- AND AN ACTIVE MEMBER. A deactivated broker or admin reads nothing and writes
+-- nothing: the person who sets pay is not an exception to the rule that a
+-- deactivated member loses access. The status term sits in the SAME EXISTS as
+-- the role term on purpose -- one membership row must carry both, so a caller
+-- cannot be a broker by one row and active by another. The spelling is
+-- `= 'active'`, for the reasons set out in full in section 3b: the writers of
+-- organization_members.license_status admit fewer values than its CHECK does,
+-- and an exclusion list would fail OPEN on a state added later.
+--
+-- THIS ONE HELPER FRONTS ALL FOUR POLICIES -- both SELECT policies and both
+-- INSERT policies, on both tables -- so the term lands on the broker/admin read
+-- and the broker/admin write together. That is the fit, not a compromise: the
+-- ruling covers reading and writing on both tables, and splitting the helper
+-- would mean writing the same rule twice and letting the copies drift.
+--
+-- What it does NOT change: the INSERT policy's member-EXISTS, which is about the
+-- AGENT the agreement is written FOR, still has no status term. A broker may
+-- still record an agreement for a suspended agent. That was not in the ruling --
+-- back pay for someone deactivated mid-month is a real thing to record -- and
+-- changing it would be a separate decision.
+--
 -- SECURITY DEFINER so the policy can read organization_members past that table's
 -- own row-level security; SET search_path = public so the definer's search path
 -- cannot be chosen by the caller.
@@ -181,7 +207,8 @@ AS $fn$
   SELECT EXISTS (SELECT 1 FROM public.organization_members m
                   WHERE m.organization_id = p_org_id
                     AND m.user_id = (SELECT auth.uid())
-                    AND m.role IN ('broker', 'admin'));
+                    AND m.role IN ('broker', 'admin')
+                    AND m.license_status = 'active');
 $fn$;
 
 -- ============================ 3b. the own-row read rule =========================
@@ -293,6 +320,11 @@ GRANT INSERT (organization_id, amount, effective_from, note)
 -- zero-row no-op instead of an error. Absence of both is what makes the refusal
 -- visible.
 
+-- The broker/admin read. `can_write_commission_agreements` is named for the
+-- write it gates, and it gates this SELECT too -- an ACTIVE broker or admin of
+-- this organization. A deactivated one reads nothing here; controls C23 and C24
+-- in supabase/tests/backlog-3503/ hold that shut on both tables, and mutant m35
+-- is the rule without its status term.
 CREATE POLICY agent_commission_agreements_select_writer
   ON public.agent_commission_agreements FOR SELECT TO authenticated
   USING (public.can_write_commission_agreements(organization_id));

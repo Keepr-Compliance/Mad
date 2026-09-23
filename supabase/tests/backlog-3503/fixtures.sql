@@ -12,6 +12,11 @@
 -- license_status 'suspended') and u_agent_gone is REMOVED (membership row
 -- deleted). Both hold an org-A agreement. Controls C21 and C22.
 --
+-- u_broker_sus and u_admin_sus are the DEACTIVATED shape applied to the people
+-- who SET pay. They hold NO agreement rows of their own -- what they lose is the
+-- office-wide read and the write, not a row about themselves -- so adding them
+-- changes no count anywhere. Controls C23 and C24.
+--
 -- Org A therefore holds 7 agreement rows and the venue 8; C6 and C18 count them.
 
 DO $fixtures$
@@ -26,6 +31,8 @@ DECLARE
   u_nomember   uuid := '00000000-0000-4000-8000-000035030008'; -- pii-allow-uuid: invented fixture id
   u_agent_sus  uuid := '00000000-0000-4000-8000-000035030009'; -- pii-allow-uuid: invented fixture id
   u_agent_gone uuid := '00000000-0000-4000-8000-000035030010'; -- pii-allow-uuid: invented fixture id
+  u_broker_sus uuid := '00000000-0000-4000-8000-000035030011'; -- pii-allow-uuid: invented fixture id
+  u_admin_sus  uuid := '00000000-0000-4000-8000-000035030012'; -- pii-allow-uuid: invented fixture id
   o_a          uuid := '00000000-0000-4000-8000-00003503a0a0'; -- pii-allow-uuid: invented fixture id
   o_b          uuid := '00000000-0000-4000-8000-00003503b0b0'; -- pii-allow-uuid: invented fixture id
   r record;
@@ -41,6 +48,8 @@ BEGIN
   PERFORM set_config('t3503.u_nomember',  u_nomember::text,  true);
   PERFORM set_config('t3503.u_agent_sus',  u_agent_sus::text,  true);
   PERFORM set_config('t3503.u_agent_gone', u_agent_gone::text, true);
+  PERFORM set_config('t3503.u_broker_sus', u_broker_sus::text, true);
+  PERFORM set_config('t3503.u_admin_sus',  u_admin_sus::text,  true);
   PERFORM set_config('t3503.o_a',         o_a::text,         true);
   PERFORM set_config('t3503.o_b',         o_b::text,         true);
 
@@ -48,7 +57,8 @@ BEGIN
       (u_broker_a,'broker-a'), (u_admin_a,'admin-a'), (u_agent_a,'agent-a'),
       (u_agent_a2,'agent-a2'), (u_itadmin_a,'itadmin-a'), (u_broker_b,'broker-b'),
       (u_agent_b,'agent-b'), (u_nomember,'nomember'),
-      (u_agent_sus,'agent-sus'), (u_agent_gone,'agent-gone')) v(id, label)
+      (u_agent_sus,'agent-sus'), (u_agent_gone,'agent-gone'),
+      (u_broker_sus,'broker-sus'), (u_admin_sus,'admin-sus')) v(id, label)
   LOOP
     INSERT INTO auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data)
     VALUES (r.id, r.label || '@fixture-3503.example.test', 'authenticated', 'authenticated',
@@ -73,6 +83,12 @@ BEGIN
     -- place and moves license_status to 'suspended'; so does SCIM, and so does
     -- directory-sync for a member who left the directory.
     (o_a, u_agent_sus, 'agent', 'suspended', now()),
+    -- The same shape applied to the people who SET pay. Deactivating a broker
+    -- or an admin writes exactly the row above with a different role -- the
+    -- product has one deactivate path, not one per role -- and the founder's
+    -- ruling is that it cuts their access too. Controls C23 and C24.
+    (o_a, u_broker_sus, 'broker', 'suspended', now()),
+    (o_a, u_admin_sus,  'admin',  'suspended', now()),
     -- The REMOVED shape, staged in two steps below: this row is inserted the
     -- way any member's is, then DELETEd, because that is what removeUser.ts
     -- does. u_agent_gone is ALSO an active member of org B -- an agent who

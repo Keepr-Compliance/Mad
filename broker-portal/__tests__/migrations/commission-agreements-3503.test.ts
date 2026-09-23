@@ -24,7 +24,10 @@
  *     one an edit is most likely to arrive back at, because it reads as
  *     obviously correct on its own;
  *   - `license_status = 'active'` as the spelling of "an active member" -- not a
- *     `NOT IN (...)` list, which would fail OPEN on a state added later;
+ *     `NOT IN (...)` list, which would fail OPEN on a state added later -- in
+ *     BOTH rules: the agent's own-row rule and the broker/admin rule, which
+ *     fronts all four policies. A deactivated broker is no more entitled to the
+ *     office's splits than a deactivated agent is to their own;
  *   - SECURITY DEFINER on BOTH RLS helpers and on NEITHER read helper;
  *   - the absence of GRANT UPDATE / GRANT DELETE, and of set_by / set_at from
  *     the INSERT column lists;
@@ -245,6 +248,22 @@ describe('BACKLOG-3503 commission agreements migration', () => {
     expect(SQL).not.toMatch(/is_org_admin/i);
     // no other role may appear in the write rule
     expect(body).not.toMatch(/'it_admin'|'agent'|'owner'/i);
+  });
+
+  it('gates the broker and admin read and write on active membership too', () => {
+    // The ruling extended (BACKLOG-3503): a deactivated broker or admin loses
+    // the office-wide read and the write, not only the agent their own row. One
+    // helper fronts all four policies -- both SELECT and both INSERT, on both
+    // tables -- so the term belongs here and nowhere else.
+    const body = flatten(functionBody('can_write_commission_agreements'));
+    expect(body).toMatch(/m\.license_status = 'active'/i);
+    // same fail-closed spelling as the own-row rule: not an exclusion list
+    expect(body).not.toMatch(/license_status\s+(NOT\s+IN|<>|!=)/i);
+    // ...and in the SAME EXISTS as the role term, so one membership row must
+    // carry both. Two separate EXISTS could be satisfied by two different rows:
+    // a broker by one, an active member by another.
+    expect(body).toMatch(/m\.role IN \('broker', 'admin'\) AND m\.license_status = 'active'\)/i);
+    expect(body).toMatch(/m\.organization_id = p_org_id/i);
   });
 
   it('carries the split-sum and cadence CHECK constraints', () => {
