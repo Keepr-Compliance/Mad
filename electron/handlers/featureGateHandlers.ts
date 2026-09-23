@@ -347,9 +347,10 @@ export const TRANSACTION_CHECKLISTS_FEATURE_KEY: StrictFeatureKey =
  * entirely would look identical to one that never needed it.
  *
  * Deliberately NOT `featureGateService.checkFeature`, for the reason spelled
- * out above {@link isHideFromExportAllowed} and which is sharper here: the
- * `transaction_checklists` row is not applied to production, so the permissive
- * reader would answer ALLOWED for every organization on earth. The strict
+ * out above {@link isHideFromExportAllowed}. The `transaction_checklists` row is
+ * live in production and enabled only for some plans (BACKLOG-3473); the
+ * permissive reader would still answer ALLOWED to any user whose cached plan
+ * lacks the key or who has no cache at all, on any plan. The strict
  * reader answers `blocked` for a key the plan does not carry and `unknown` for
  * a read it could not finish; both are false here.
  *

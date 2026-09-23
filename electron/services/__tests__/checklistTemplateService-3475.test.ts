@@ -22,10 +22,11 @@
  *
  * ONE THING THIS SUITE DOES NOT CLAIM. The error object used for "the read
  * failed" is the capture's ANON refusal (401 / 42501). It is a real PostgREST
- * error object, and it exercises the branch — but it is not the error
- * production returns TODAY, which is a missing table, because BACKLOG-3473 is
- * not applied there. That shape was NOT captured: the NAS stack was unreachable
- * from this machine when this was written (the stack was up; the tailnet path
+ * error object, and it exercises the branch — but it is not a capture of every
+ * error production can return. When this was written BACKLOG-3473 was not yet
+ * applied there and production answered with a missing table; the tables are
+ * live now (pm_comments cd873ca3). Neither production shape was captured: the
+ * NAS stack was unreachable from this machine when this was written (the stack was up; the tailnet path
  * from the Mac was down — pm_comments `e8091638`). The service is written so it
  * cannot matter: every non-null error lands in the same branch, and no code
  * here reads `error.code`. A branch written around one uncaptured response

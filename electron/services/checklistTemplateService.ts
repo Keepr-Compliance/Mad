@@ -220,10 +220,10 @@ class ChecklistTemplateService {
    * client, a PostgREST error of any code, a body that is not a list. The
    * desktop has no business telling those apart — the only two things the
    * surface above can say are "here are your templates" and "we could not read
-   * them". In particular this must NOT special-case the error the API returns
-   * today, which is a missing table: 3473 is not applied to production yet, and
-   * an error branch written around that one response would be a guess about a
-   * shape nobody has captured.
+   * them". In particular this must NOT special-case any one error code — for
+   * example the missing-table error the API returned before BACKLOG-3473's
+   * tables were applied to production (they are now). An error branch written
+   * around one response would be a guess about a shape nobody has captured.
    */
   private async fetchFromSupabase(orgId: string): Promise<ChecklistTemplate[] | null> {
     try {
