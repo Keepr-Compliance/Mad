@@ -240,8 +240,8 @@ CREATE INDEX organization_franchise_fees_in_force_idx
 --   2. broker-portal/lib/actions/removeUser.ts:110-112 DELETEs the
 --      organization_members row. Its guards are impersonation, authenticated,
 --      caller is admin/it_admin, not self, it_admin-removes-it_admin and
---      last-admin; no license_status appears anywhere in that file, so a
---      'suspended' row is removable.
+--      last-admin. `grep -nE 'license_status|suspended' removeUser.ts` returns
+--      nothing, so a 'suspended' row is removable.
 --   3. With the row gone, both of inviteUser.ts's refusals -- :109-118 on
 --      invited_email, :128-137 on user_id -- SELECT a row that no longer exists,
 --      so both pass, and :166-178 INSERTs a fresh 'pending' row.
