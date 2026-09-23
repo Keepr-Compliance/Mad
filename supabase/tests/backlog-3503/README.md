@@ -330,19 +330,78 @@ and reds on the first arm only.
 knowingly.** An agent deactivated **before any agreement was ever entered** can no
 longer have one entered at all. `commission_agreement_in_force` then returns zero
 rows for every closing they ever worked — control C12 is that shape — and the
-closing cannot be computed. **There is no workaround in the product today.**
+closing cannot be computed.
 
 An earlier draft of this section, of the migration header and of C25's header all
 said *"the route is: reactivate the member, record the agreement, deactivate
 again"*, and that is the mitigation the founder was shown when he was first asked.
-**That route does not exist.** For the ordinary case — invited through the broker
-portal, deactivated through the broker portal, no directory sync and no IdP — the
-agreement is simply **unrecordable**, and a route back to `license_status =
-'active'` for such a row is **MECHANISM UNTRACED**.
+**That route does not exist.** Nothing in the product sets an **existing**
+`organization_members` row back to `license_status = 'active'`, and a route back
+to `'active'` **for that row** is **MECHANISM UNTRACED**. BACKLOG-3518 tracks a
+real reactivation.
 
-The enumeration, at `074e01cbe`. Three writers set `license_status` to `'active'`
-on an **existing** `organization_members` row, and each is gated away from a
-portal-deactivated one:
+**A destructive route does exist, and it is UI-reachable.** It is not a
+reactivation: it removes the membership outright and rebuilds it. The correction
+that replaced the reactivate/record/deactivate sentence over-corrected into a
+flat *"there is no workaround"*, which is also wrong — this is the traced middle
+ground, measured at `cbc646d4e`, every line read rather than inferred.
+
+| # | hop | file:line | what happens |
+|---|---|---|---|
+| 1 | "Remove" is offered for a deactivated member | `broker-portal/components/users/UserDetailsCard.tsx:212` | it sits **outside** the `!isPending && !isSuspended` conditional that gates "Deactivate" at `:207-211`. `RemoveUserModal.tsx:43` calls through with no gate of its own |
+| 2 | the membership row is deleted | `broker-portal/lib/actions/removeUser.ts:110-112` | `.from('organization_members').delete().eq('id', …)`. Its guards are impersonation, authenticated, caller is admin/it_admin, not self, it_admin-removes-it_admin, last-admin. `grep -n 'license_status\|suspended' removeUser.ts` → no hits, so a `'suspended'` row is removable |
+| 3 | the re-invite is no longer refused | `broker-portal/lib/actions/inviteUser.ts:109-118`, `:128-137` | both refusals SELECT an **existing** row — on `invited_email`, then on `user_id`. The row was deleted at hop 2, so both find nothing and the invite proceeds |
+| 4 | a fresh pending row | `inviteUser.ts:166-178` | INSERT `license_status: 'pending'`, `user_id` absent, `provisioned_by: 'invite'` |
+| 5 | acceptance sets active | `broker-portal/app/auth/callback/route.ts:122-130` | selects on `.eq('invited_email', …).is('user_id', null)` (`:87-93`), then UPDATEs `user_id`, **`license_status: 'active'`**, `joined_at`, and clears the token |
+
+**Row-level security permits every hop** — read from `pg_policies` on production,
+not inferred. `organization_members_all_public` is `FOR ALL` with
+`USING (is_org_admin((SELECT auth.uid()), organization_id) OR auth.role() =
+'service_role')`, which covers the DELETE at hop 2 and the INSERT at hop 4 for an
+admin of that organization; `users_can_accept_invite` is the `UPDATE` policy
+whose `USING` matches `invited_email` against the signed-in user's own email,
+which covers hop 5. Without this, hop 2 would be a silent zero-row no-op and the
+route would not exist — it was the one link in the chain that a source read alone
+could not settle.
+
+**Hop 5 is gated, and the gate is stated rather than glossed.** The pending-invite
+branch runs only when `pickBrokerageMembership(memberships)` returns null
+(`route.ts:57`). A BACKLOG-3364 personal organization is deliberately excluded
+from that pick (`lib/auth/membership.ts:124-132`), so an ordinary
+single-brokerage agent still falls through and reaches it. Someone who holds a
+**second brokerage** membership redirects at `:59-62` or `:64` and never links.
+
+**What it costs and what survives.** It destroys the `organization_members` row
+and the role on it, and it needs the agent to sign in again — so it is a
+data-losing path, not a supported workaround, and it should not be written into a
+runbook as one. What survives: the same `public.users` row, because the callback
+upserts on `id: user.id` and Remove touches only `organization_members`. So
+`agent_user_id` is unchanged and any agreements **already** recorded still
+resolve — neither table in this migration FKs `organization_members`
+(`20260922220719_…:132-136`, `:171-173`; `fixtures.sql:122` says so too).
+`effective_from` is a client-supplied `date NOT NULL` with no default and is in
+the INSERT column grant (`:347-349`), so the new agreement is **backdatable** and
+C12's zero-row shape resolves.
+
+**And the broker's read survives a second deactivation.**
+`agent_commission_agreements_select_writer` (`:366-368`) tests the **reader's**
+status through `can_write_commission_agreements`, never the subject's, and
+`commission_agreement_in_force` is `SECURITY INVOKER` (`:304`) — so a broker or
+admin computing the closing still reads the row after the agent is deactivated
+again. The agent's **own** read does not survive: `select_own` (`:376-379`)
+requires their own active membership. That is the deactivation itself, not this
+route, and C21/C22 hold it shut on purpose.
+
+**The enumeration of writers, re-run at `cbc646d4e`.** Three `.ts`/`.tsx` writers
+that the command below finds set `license_status` to `'active'` on an **existing**
+`organization_members` row, and each is gated away from a portal-deactivated one.
+The count is the command's, not the repo's: SR found two further writers in SQL
+that a `-- '*.ts' '*.tsx'` grep can never reach — `handle_new_user_invitation_link()`
+(`20260122_b2b_broker_portal.sql:548-557`, gated on `user_id IS NULL`) and
+`_ensure_personal_organization_for()`
+(`20260915160637_backlog_3364_personal_organizations.sql:166-169`, personal orgs
+only). Both are gated away from such a row as well, so the conclusion is
+unchanged and only the cardinality was wrong (`pm_comments` `a3ba85e1`).
 
 ```
 git grep -nE "license_status[\"']?[[:space:]]*[:=][[:space:]]*[\"']active[\"']" \
@@ -358,15 +417,18 @@ git grep -nE "license_status[\"']?[[:space:]]*[:=][[:space:]]*[\"']active[\"']" 
 The other four hits — `directory-sync:861`, `:917`, `scim/handlers/users.ts:263`,
 `:364` — are INSERTs for members who have no row yet, not reactivations.
 
-**The re-invite side door is closed too, twice.** A broker cannot route around it
-by re-inviting the same person: `inviteUser.ts:107-116` refuses on a matching
-`invited_email` (the deactivated row keeps its `invited_email`) and `:119-136`
-refuses on a matching `user_id`. Either refusal alone would be enough.
+**The re-invite refusals are closed only while the row exists.** They are
+`inviteUser.ts:109-118` on a matching `invited_email` (the deactivated row keeps
+its `invited_email`) and `:128-137` on a matching `user_id`. Either alone would
+be enough to stop a broker re-inviting a *deactivated* person — and neither
+survives the row being deleted, which is hop 3 of the destructive route above.
 `admin_invite_user` (`supabase/migrations/20260412_fix_cross_table_duplicate_invite_check.sql:125-132`)
 only INSERTs a fresh `'pending'` row and never updates an existing one, and
 `broker-portal/lib/actions/` contains no `reactivateUser.ts` at all.
 
-**And the two-step route is closed, which the grep above would not have shown.**
+**A non-destructive two-step route is closed too, which the grep above would not
+have shown.** This is about a route that would keep the membership row — the
+destructive route above deletes it, and is not what this paragraph rules out.
 A writer that reset a suspended row to `'pending'` and nulled its `user_id` would
 hand it to `auth/callback:126` legitimately, and it would match neither pattern
 in the enumeration. Neither write exists:
@@ -393,10 +455,21 @@ route reached some other way (a console `UPDATE`, a support script, an admin-por
 path added later) is not excluded, so the mechanism is marked untraced rather
 than asserted absent.
 
-**The founder was re-asked on that basis** — knowing the mitigation he was shown
-does not exist and the loss is therefore larger than the one he accepted — **and
-the ruling stands.** Recorded in `pm_comments` on BACKLOG-3503, with SR's
-enumeration in parts `3f345d18` and `0a975373`.
+**And this is exactly how the destructive route was missed.** That command
+enumerates writers that **SET** `license_status`. A `DELETE` sets nothing, so
+`removeUser.ts` is structurally invisible to it, and the whole section reasons
+about *an **existing** membership row* — the frame excludes by construction the
+one case where the row stops existing. The grep reproduces byte-for-byte; its
+**scope** was the defect, not its spelling. It is recorded here because the miss
+is the more useful half of the lesson.
+
+**The founder was re-asked on the basis that the mitigation he was shown does not
+exist — and the ruling stands.** What he was told at the re-ask was in fact worse
+than the truth: he accepted the loss believing nothing could be recorded for such
+an agent at all, and the real position is that a destructive route exists. A
+ruling taken on the worse premise holds *a fortiori* on the better one, so
+nothing here reopens it. Recorded in `pm_comments` on BACKLOG-3503, with SR's
+enumeration in `3f345d18`, `0a975373` and the correction in `a3ba85e1`.
 
 **What it does not touch.** Reading is unchanged: an agent who loses membership
 lost the read in the round above (C21/C22), and a deactivated broker or admin

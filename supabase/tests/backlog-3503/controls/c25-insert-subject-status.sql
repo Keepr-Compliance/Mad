@@ -25,15 +25,28 @@
 -- THE COST OF THE RULING, so a later reader meets it here and not in a support
 -- ticket: an agent deactivated BEFORE any agreement was entered can no longer
 -- have one entered, so their past closings resolve to zero rows (control C12 is
--- that shape). THERE IS NO WORKAROUND IN THE PRODUCT TODAY: for a member invited
--- through the broker portal and deactivated through it, the agreement is simply
--- UNRECORDABLE, and a route back to license_status 'active' for such a row is
--- MECHANISM UNTRACED. An earlier draft of this header named a reactivate,
--- record, deactivate route; it does not exist. The enumeration of the three
--- writers that can set an existing membership row to 'active', and why none
--- reaches such a row, is in this directory README under the subject section.
--- Taken knowingly: the founder was re-asked knowing the mitigation does not
--- exist, and the ruling stands.
+-- that shape). THERE IS NO NON-DESTRUCTIVE WAY OUT: nothing sets an EXISTING
+-- membership row back to license_status 'active', and a route back to 'active'
+-- FOR THAT ROW is MECHANISM UNTRACED. An earlier draft of this header named a
+-- reactivate, record, deactivate route; it does not exist. BACKLOG-3518 tracks a
+-- real reactivation.
+--
+-- THERE IS A DESTRUCTIVE ROUTE, and it is UI-reachable. "Remove" is offered for
+-- a deactivated member (UserDetailsCard.tsx:212, outside the isSuspended gate at
+-- :207-211); removeUser.ts:110-112 DELETEs the membership row with no status
+-- guard; the two re-invite refusals (inviteUser.ts:109-118, :128-137) then match
+-- nothing, because the row they SELECT is gone; and acceptance sets 'active'
+-- (auth/callback/route.ts:122-130). It destroys the membership record and its
+-- role and needs the agent to sign in again, but it preserves agent_user_id, so
+-- agreements already recorded survive, and effective_from is backdatable. IT IS
+-- A DATA-LOSING PATH, NOT A SUPPORTED WORKAROUND. Traced at cbc646d4e; the full
+-- enumeration -- the writers that cannot reach such a row, and the row-level
+-- security behind each hop of this one -- is in this directory README under the
+-- subject section.
+--
+-- Taken knowingly: the founder was re-asked knowing the reactivate / record /
+-- deactivate mitigation does not exist, and the ruling stands. He accepted the
+-- loss on the worse premise -- that nothing at all could be recorded.
 --
 -- BOTH DIRECTIONS ARE ASSERTED, over the same rows in the same transaction. Two
 -- denials on their own cannot tell "the subject terms are doing work" from "this

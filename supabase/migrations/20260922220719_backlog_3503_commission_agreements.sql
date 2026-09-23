@@ -219,17 +219,62 @@ CREATE INDEX organization_franchise_fees_in_force_idx
 -- WHAT THAT COSTS, written down because it is a real loss taken knowingly: an
 -- agent deactivated BEFORE any agreement was ever entered can no longer have one
 -- entered at all. Their past closings then resolve to ZERO ROWS -- control C12
--- is that shape -- and cannot be computed. THERE IS NO WORKAROUND IN THE PRODUCT
--- TODAY. For the ordinary case -- a member invited through the broker portal and
--- deactivated through it, with no directory sync and no IdP -- the agreement is
--- simply UNRECORDABLE, and a route back to license_status 'active' for such a
--- row is MECHANISM UNTRACED. An earlier draft of this paragraph named a
--- reactivate / record / deactivate route; that route does not exist, and nothing
--- should be built on it. The three writers that can set an EXISTING membership
--- row to 'active' are each gated away from such a row; the enumeration, with
--- file:line and the command behind it, is in the harness README at
--- supabase/tests/backlog-3503/README.md. The founder was re-asked knowing the
+-- is that shape -- and cannot be computed.
+--
+-- THERE IS NO NON-DESTRUCTIVE WAY OUT. Nothing in the product sets an EXISTING
+-- membership row back to license_status 'active'. The .ts/.tsx writers that can
+-- write 'active' onto an existing row are each gated away from a
+-- portal-deactivated one, and a route back to 'active' FOR THAT ROW is MECHANISM
+-- UNTRACED. The enumeration, with file:line and the command behind it, is in the
+-- harness README at supabase/tests/backlog-3503/README.md. An earlier draft of
+-- this paragraph named a reactivate / record / deactivate route; that route does
+-- not exist and nothing should be built on it. BACKLOG-3518 tracks a real
+-- reactivation.
+--
+-- THERE IS A DESTRUCTIVE ROUTE, AND IT IS UI-REACHABLE. Traced end to end at
+-- cbc646d4e, every line read rather than inferred:
+--   1. broker-portal/components/users/UserDetailsCard.tsx:212 renders "Remove"
+--      for a deactivated member -- it sits OUTSIDE the `!isPending &&
+--      !isSuspended` conditional that gates "Deactivate" at :207-211.
+--      RemoveUserModal.tsx:43 calls through with no gate of its own.
+--   2. broker-portal/lib/actions/removeUser.ts:110-112 DELETEs the
+--      organization_members row. Its guards are impersonation, authenticated,
+--      caller is admin/it_admin, not self, it_admin-removes-it_admin and
+--      last-admin; no license_status appears anywhere in that file, so a
+--      'suspended' row is removable.
+--   3. With the row gone, both of inviteUser.ts's refusals -- :109-118 on
+--      invited_email, :128-137 on user_id -- SELECT a row that no longer exists,
+--      so both pass, and :166-178 INSERTs a fresh 'pending' row.
+--   4. The agent signs in and accepts: auth/callback/route.ts:122-130 sets
+--      license_status 'active'.
+-- Row-level security permits every hop -- read from pg_policies on production,
+-- not inferred: the FOR ALL policy organization_members_all_public, USING
+-- is_org_admin(...), covers both the DELETE and the re-invite INSERT, and
+-- users_can_accept_invite (UPDATE, matching on invited_email) covers the
+-- acceptance. Step 4 is gated: it runs only when pickBrokerageMembership returns
+-- null (route.ts:57), which a BACKLOG-3364 personal organization does not
+-- satisfy -- so an ordinary single-brokerage agent reaches it, while someone
+-- holding a SECOND brokerage membership redirects at :59-62 or :64 and never
+-- links.
+--
+-- IT IS A DATA-LOSING PATH, NOT A SUPPORTED WORKAROUND. It destroys the
+-- membership record and the role on it, and it needs the agent to sign in again.
+-- What survives: the same public.users row -- the callback upserts on
+-- `id: user.id`, and Remove touches only organization_members -- so
+-- agent_user_id is unchanged and any agreements already recorded still resolve.
+-- Neither table here FKs organization_members (:132-136, :171-173).
+-- effective_from is a client-supplied `date NOT NULL` with no default and is in
+-- the INSERT grant (:347-349), so the new agreement is BACKDATABLE and C12's
+-- zero-row shape resolves. The broker's read survives a second deactivation too:
+-- agent_commission_agreements_select_writer (:366-368) tests the READER's
+-- status, never the subject's. The agent's own read does not -- select_own
+-- (:376-379) requires their own active membership -- but that is the
+-- deactivation itself, not this route.
+--
+-- The founder was re-asked knowing the reactivate / record / deactivate
 -- mitigation does not exist, and the ruling stands (pm_comments, BACKLOG-3503).
+-- He accepted the loss on the worse premise -- that nothing at all could be
+-- recorded; the real loss is smaller, so nothing above reopens that decision.
 --
 -- PINNED IN BOTH DIRECTIONS rather than left silent: control C25 asserts that a
 -- deactivated subject and a removed subject are both refused while an active one
