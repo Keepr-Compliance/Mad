@@ -36,7 +36,10 @@ DO $$
 DECLARE n int;
 BEGIN
   SELECT count(*) INTO n FROM public.agent_commission_agreements;
-  PERFORM pg_temp.check(n = 0, format('a removed agent reads 0 agreement rows, got %s', n));
+  -- unqualified on purpose; see C21. u_agent_gone is an active member of org B,
+  -- so a mutant that makes 'agent' a writer role leaks org B's row through here,
+  -- not their own -- hence "anywhere" rather than a claim about their row.
+  PERFORM pg_temp.check(n = 0, format('a removed agent reads 0 agreement rows anywhere, got %s', n));
   SELECT count(*) INTO n FROM public.commission_agreement_in_force(
     current_setting('t3503.o_a')::uuid, current_setting('t3503.u_agent_gone')::uuid, DATE '2026-09-01');
   PERFORM pg_temp.check(n = 0, format('...and 0 through commission_agreement_in_force, got %s', n));

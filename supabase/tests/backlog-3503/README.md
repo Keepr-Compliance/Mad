@@ -4,15 +4,17 @@ Executes `supabase/migrations/20260922220719_backlog_3503_commission_agreements.
 — **the shipped file itself, not a copy** — on a real Postgres 17.6, and records
 what every control and every mutant did.
 
-**It has been run.** Three times, all on 2026-09-22 and all on the NAS Supabase
-test stack, container `supabase_db_keepr-test`: as first written; again after the
-agent's own-row read was gated on active membership; and again after that gate
-was extended to the broker and the admin (see *The reversal* and *The ruling
-extended*). The recorded run is the third: **25 controls, 164 assertions, all
-green; 35 mutants × 25 controls = 875 runs, 154 s wall clock.** Every mutant
-reddens at least one control and every control is reddened by at least one
-mutant. Every result below was measured; none was predicted. `control-run.txt`
-and `mutant-run.txt` in this directory are the runs' own output, unedited.
+**It has been run.** Four times, on 2026-09-22 and 2026-09-23, every time on the
+same Postgres 17.6 test venue (the venue is named on the backlog item, not in
+this repository): as first written; again after the agent's own-row read was
+gated on active membership; again after that gate was extended to the broker and
+the admin; and again after SR's implementation review (see *The reversal*, *The
+ruling extended* and *The SR round*). The recorded run is the fourth:
+**26 controls, 176 assertions, all green; 37 mutants × 26 controls = 962 runs,
+170 s wall clock.** Every mutant reddens at least one control and every control
+is reddened by at least one mutant. Every result below was measured; none was
+predicted. `control-run.txt` and `mutant-run.txt` in this directory are the
+runs' own output, unedited.
 
 It is not in CI: CI has no database. The text-level tripwire that does run in CI
 is `broker-portal/__tests__/migrations/commission-agreements-3503.test.ts`, and
@@ -26,15 +28,15 @@ its table is at the bottom of this file.
 
 `supabase/tests/backlog-3364/run.sh` and `backlog-3096/`'s scripts take a
 `postgresql://…` URL and run `psql` here, as a client. **That does not work from
-this Mac.** The NAS tailnet address does not answer it: `ping` reports 100%
-packet loss and port 54322 is unreachable. The host is alive over SSH and the
-database is healthy inside its container; only the direct client path is closed.
+the developer machine:** the venue's database port does not answer it. The venue
+is reachable over SSH and the database is healthy inside its container; only the
+direct client path is closed.
 
 So `run.sh` pipes SQL *to* psql running **on the venue, inside the container**:
 
 ```bash
-ssh -o BatchMode=yes ugreen \
-  "docker exec -i supabase_db_keepr-test psql -U postgres -v ON_ERROR_STOP=1 -X -tA -f -"
+ssh -o BatchMode=yes "$SSH_HOST" \
+  "docker exec -i $PG_CONTAINER psql -U postgres -v ON_ERROR_STOP=1 -X -tA -f -"
 ```
 
 Four consequences, all handled in `run.sh` and all worth knowing before editing it:
@@ -44,7 +46,7 @@ Four consequences, all handled in `run.sh` and all worth knowing before editing 
    the fixtures, the control — is concatenated **on the client** into one stream.
 2. **The URL host gate has nothing to check.** 3364's runner refuses any host
    that is not loopback or a Tailscale address; there is no host here. It is
-   replaced by a **literal container name** plus a **refusal unless
+   replaced by a **caller-supplied container name** plus a **refusal unless
    `public.users` is empty**. Production can never satisfy the second, so the
    worst outcome of a mistyped `SSH_HOST` is a refusal.
 3. **The migration must not open its own transaction.** Every control runs
@@ -67,14 +69,19 @@ Four consequences, all handled in `run.sh` and all worth knowing before editing 
 H=supabase/tests/backlog-3503/run.sh
 
 bash $H gate       # venue gate. Stop on any GATE FAIL.
-bash $H controls   # 25 controls, each in its own rolled-back transaction
-bash $H mutants    # 35 mutants x 25 controls
+bash $H controls   # 26 controls, each in its own rolled-back transaction
+bash $H mutants    # 37 mutants x 26 controls
 bash $H mutants m24   # one mutant, by name fragment
 ```
 
-`SSH_HOST` defaults to `ugreen`. A full `mutants` run took **154 s**; `controls`
-takes about 4 s. An *implausibly fast* green is a broken harness — if `controls`
-returns instantly with no assertion counts, the stream never reached psql.
+**`SSH_HOST` and `PG_CONTAINER` have no defaults and the script refuses to start
+without them.** The venue is not named in this repository — `backlog-3364/run.sh`
+set that precedent by taking its target as input and validating it rather than
+publishing it. Both values are recorded on the backlog item.
+
+A full `mutants` run took **170 s**; `controls` takes about 5 s. An *implausibly
+fast* green is a broken harness — if `controls` returns instantly with no
+assertion counts, the stream never reached psql.
 
 **Re-run `gate` after any run.** `target_tables_absent=true` is the proof that
 nothing leaked out of a transaction.
@@ -102,7 +109,7 @@ and both are why the migration is shaped as it is:
 
 ---
 
-## Controls — all 25 GREEN, 164 assertions
+## Controls — all 26 GREEN, 176 assertions
 
 Each runs inside `BEGIN … ROLLBACK` after `fixtures.sql`. Role cases run as
 `authenticated` with `request.jwt.claim.sub`. `pg_temp.check` counts every
@@ -125,17 +132,18 @@ matched nothing cannot pass.
 | `c11` | two rows share `effective_from`; the one written LAST wins although its `set_at` is EARLIER | 4 |
 | `c12` | absent is ZERO ROWS, never a row of zeros | 2 |
 | `c13` | the read helpers are SECURITY INVOKER — an agent asking about a colleague gets the correct non-answer | 4 |
-| `c14` | the franchise fee is effective-dated the same way, and an agent cannot read it in M1 | 3 |
+| `c14` | the franchise fee is effective-dated the same way, **resolves a same-day tie the same way** (the correction wins, not the row with the later `set_at`), and an agent cannot read it in M1 | 6 |
 | `c15` | the constraints that encode the fee model: the split sums to 100, cadence is constrained, no fee is negative | 5 |
 | `c16` | the founder's worked example, computed from what the helpers return | 7 |
 | `c17` | catalog: **both** RLS helpers are DEFINER with `SET search_path = public`; neither read helper is DEFINER; the member check names the NEW ROW's org; the own-row policy carries both of its terms; **and a sweep of every policy for a self-comparison** | 16 |
-| `c18` | **privilege level**: UPDATE / DELETE / TRUNCATE / REFERENCES / TRIGGER absent for `anon` and `authenticated` on both tables; `set_by` and `set_at` not INSERT-grantable; plus the behavioural half — the weakest signed-in role's TRUNCATE is refused and all eleven rows survive | 34 |
+| `c18` | **privilege level**: UPDATE / DELETE / TRUNCATE / REFERENCES / TRIGGER absent for `anon` and `authenticated` on both tables; `set_by` and `set_at` not INSERT-grantable; plus the behavioural half — the weakest signed-in role's TRUNCATE is refused and all twelve rows survive | 34 |
 | `c19` | a user holding agreements cannot be deleted, **asserted by constraint name**, with memberships cleared first; the same for the organization; the broker who *set* the rows is held too; and a user holding nothing IS deletable | 7 |
 | `c20` | catalog: all five foreign keys exist and every one is ON DELETE NO ACTION | 6 |
 | `c21` | a **deactivated** agent (`license_status = 'suspended'`, membership row intact) reads none of their own rows — table and helper — while their broker still reads all of them | 6 |
 | `c22` | a **removed** agent (membership row DELETEd) reads none of their own rows — table and helper — while their broker still reads all of them. They are still an active member of the *other* org, which is what makes an org-blind rule visible | 7 |
-| `c23` | a **deactivated broker** and a **deactivated admin** read 0 from **both** tables, by table and by helper, while the active broker of the same org reads all 7 agreements and both franchise fees in the same transaction | 18 |
+| `c23` | a **deactivated broker** and a **deactivated admin** read 0 from **both** tables, by table and by helper, while the active broker of the same org reads all 7 agreements and all three franchise fees in the same transaction | 18 |
 | `c24` | neither of them can INSERT into either table — **42501 specifically** — nothing lands, and the active broker of the same org still writes both | 8 |
+| `c25` | what the INSERT policy does about the **subject's** status: a broker CAN write for a **deactivated** agent (the membership row survives) and CANNOT for a **removed** one (no row to find), with an active subject as the third arm so a write rule stuck at false cannot pass | 9 |
 
 **Why C18 exists, and why it is late.** C05 and C06 assert a SQLSTATE at the
 moment of a write. They cannot see a privilege that is *granted but never
@@ -294,42 +302,42 @@ only control that reds on it.
 
 ---
 
-## Mutants — 35, every one reds at least one control
+## Mutants — 37, every one reds at least one control
 
 Each prints `MUTATION APPLIED: <catalog evidence>` inside the transaction before
 any control runs, after verifying its own effect from the catalog; `run.sh`
 refuses a red without that line (`RED WITHOUT PROOF`) and refuses a mutant that
-never printed one. 35/35 printed it. Full output in `mutant-run.txt`.
+never printed one. 37/37 printed it. Full output in `mutant-run.txt`.
 
 | Mutant | RED |
 |---|---|
 | `m01` read helpers marked SECURITY DEFINER | c13 c17 c21 c22 c23 |
-| `m02` write rule reuses `is_org_admin` | c01 c04 c04b c05 c06 c08 c10 c11 c14 c15 c16 c21 c22 c23 c24 |
+| `m02` write rule reuses `is_org_admin` | c01 c04 c04b c05 c06 c08 c10 c11 c14 c15 c16 c21 c22 c23 c24 c25 |
 | `m03` `set_at DESC` ordered before `seq DESC` | c10 c11 c16 |
 | `m04` `effective_from ASC` | c10 c11 c16 |
 | `m05` no `effective_from <= p_on_date` filter | c10 c11 c12 c14 c16 |
 | `m06` `set_by` inside the INSERT grant | c08 c18 |
-| `m07` `set_by` has no default | c04b c08 c15 c24 |
+| `m07` `set_by` has no default | c04b c08 c15 c24 c25 |
 | `m08` UPDATE granted, with a policy | c05 |
 | `m09` DELETE granted, with a policy | c06 c18 |
 | `m10` anon can read | c07 c18 |
-| `m11` write rule ignores the org | c01 c06 c09 c13 c23 c24 |
+| `m11` write rule ignores the org *(rebased)* | c01 c06 c09 c13 c23 |
 | `m12` writer SELECT policy `USING (true)` | c01 c02 c04 c06 c13 c14 c21 c22 c23 |
 | `m13` agreements readable org-wide | c02 c04 c13 c17 c21 c22 c23 |
 | `m14` helper ignores the agent | c10 c12 c13 |
 | `m15` no split-sum CHECK | c15 |
-| `m16` `it_admin` added to the writer list | c04 c23 c24 |
-| `m17` `agent` added to the writer list | c02 c03 c13 c14 c21 c22 c23 c24 |
+| `m16` `it_admin` added to the writer list *(rebased)* | c04 |
+| `m17` `agent` added to the writer list *(rebased)* | c02 c03 c13 c14 c22 |
 | `m18` franchise fee readable org-wide | c04 c14 c23 |
-| `m19` INSERT policy without the member check | c09 c17 |
+| `m19` INSERT policy without the member check | c09 c17 c25 |
 | `m20` INSERT policy's unqualified `organization_id` | c17 |
 | `m21` UPDATE granted **without** a policy | c05 |
 | `m22` DELETE granted **without** a policy | c06 c18 |
 | `m23` self-comparison in a *different* policy | c17 |
 | **`m24` TRUNCATE granted** | **c18** |
 | **`m25` `REVOKE ALL` omitted** (the default ACL grant stands) | **c05 c06 c07 c08 c18** |
-| **`m26` RLS not enabled on the agreements table** | **c01 c02 c03 c04 c06 c09 c13 c21 c22 c23 c24** |
-| **`m27` RLS not enabled on either table** | **c01 c02 c03 c04 c06 c09 c13 c14 c21 c22 c23 c24** |
+| **`m26` RLS not enabled on the agreements table** | **c01 c02 c03 c04 c06 c09 c13 c21 c22 c23 c24 c25** |
+| **`m27` RLS not enabled on either table** | **c01 c02 c03 c04 c06 c09 c13 c14 c21 c22 c23 c24 c25** |
 | **`m28` `SET search_path` dropped from the DEFINER write rule** | **c17** |
 | **`m29` agent FK rewritten ON DELETE CASCADE** | **c19 c20** |
 | **`m30` franchise `set_by` FK rewritten ON DELETE CASCADE** | **c19 c20** |
@@ -338,6 +346,8 @@ never printed one. 35/35 printed it. Full output in `mutant-run.txt`.
 | **`m33` active-membership rule drops the `license_status` filter** | **c21** |
 | **`m34` active-membership rule drops the organization scope** | **c22** |
 | **`m35` the WRITE rule drops the `license_status` filter** | **c23 c24** |
+| **`m36` the INSERT policy requires the SUBJECT to be an active member** | **c25** |
+| **`m37` `franchise_fee_in_force` ordered by `set_at DESC` before `seq DESC`** | **c14 c16** |
 
 `m21`/`m22` and `m25` are the reason C05 and C06 assert a **specific** SQLSTATE.
 A grant without a policy makes the write a silent zero-row no-op, and every one
@@ -355,57 +365,103 @@ file is the status term, so its RED set is evidence about that term alone. Its
 are still there — because a mutant that emptied the body would red the same two
 controls for a different reason.
 
-### The RED-set diff against the previous run — no mutant lost a red
+### The RED-set diff against the previous run
 
-All 34 carried-over mutants keep every red they had. Eleven gained one or two,
-all of them C23/C24, and they fall into two kinds:
+Six reds were **removed on purpose** and every other red is byte-identical.
 
-| Gained | Mutant | Kind |
+**`m11`, `m16` and `m17` are REBASED onto the current write-rule body.** Each one
+used to `CREATE OR REPLACE` a body copied from before the founder's ruling, so it
+silently dropped the `license_status` term as well as making its named change —
+and collected C23/C24 reds that said nothing about org-blindness, `it_admin` or
+`agent`. **Six of their twenty recorded reds were that artifact.** Measured, both
+before and after:
+
+| Mutant | before | after | artifact removed |
+|---|---|---|---|
+| `m11` org term dropped | c01 c06 c09 c13 c23 **c24** | c01 c06 c09 c13 c23 | **c24** |
+| `m16` `it_admin` added | c04 **c23 c24** | **c04** | **c23, c24** |
+| `m17` `agent` added | c02 c03 c13 c14 **c21** c22 **c23 c24** | c02 c03 c13 c14 c22 | **c21, c23, c24** |
+
+**No set went empty and no red was lost that another mutant does not already
+own.** `m35` owns the write rule's status term exclusively (c23 c24 and nothing
+else); `m32`/`m33` own the own-row status term. After the rebase c24 is still red
+under m02 m07 m26 m27 m35, c23 under nine mutants and c21 under eight. Each
+rebased mutant now asserts from `prosrc` that the status, role and org terms it
+did **not** mean to touch are still present, so it cannot drift back.
+
+Two reds that SURVIVE the rebase and are worth reading rather than skimming:
+
+- **`m11` still reds c23**, for a real and different reason: with the org term
+  gone the *active* broker over-reads org B's row, so c23's positive arm fails at
+  `got 8`. That is c23 carrying a positive assertion as well as a negative one.
+- **`m17` still reds c22** — but the row leaking through is **org B's**, not the
+  removed agent's own, because `u_agent_gone` is an active org-B member and
+  `agent` has just become a writer role there. C21/C22 open with an unqualified
+  count on purpose (the claim is that they read *nothing*), and the message now
+  says "anywhere" so it cannot be misread as a claim about their own row.
+
+Everything else in the diff is a gain, and every gain is real:
+
+| Gained | Mutant | Why |
 |---|---|---|
-| c23 | `m01` read helpers DEFINER | **real** — the helper runs as owner, so a deactivated broker reads through it (`got 1` where 0 was required) |
-| c23 | `m12` writer SELECT `USING (true)`, `m13` agreements org-wide, `m18` franchise org-wide | **real** — the policy no longer consults the rule at all |
-| c23 c24 | `m26`, `m27` RLS not enabled | **real** — no policy is evaluated |
-| c24 | `m07` `set_by` has no default | **real** — the *active* broker's INSERT fails `23502`, the same reason it reds C04b |
-| c23 c24 | `m02` write rule reuses `is_org_admin` | **real** — `is_org_admin` carries no status term of its own, so the deactivated **admin** reads all 7 rows and writes (`got OK`) |
-| c23 c24 | `m11`, `m16`, `m17` | **an artifact, not evidence** — see below |
+| c25 | `m36` | the new control's whole purpose — see below |
+| c25 | `m02` `is_org_admin` | the broker is not an admin, so every INSERT is refused, including the two that must succeed |
+| c25 | `m07` `set_by` has no default | all three INSERTs fail `23502`, the same reason it reds C04b |
+| c25 | `m19` INSERT policy without the member check | the **removed** subject's write is no longer refused (`got OK`) |
+| c25 | `m26`, `m27` RLS not enabled | no policy is evaluated |
+| c14 c16 | `m37` | the franchise-fee same-day tie — see below |
 
-**`m11`, `m16` and `m17` replace the whole write-rule function with a body copied
-from before this round, so each of them also drops the status term as a side
-effect.** Their C23/C24 reds say nothing about their named mistake —
-org-blindness, `it_admin`, `agent` — and must not be read as if they did.
+`m28` is the counter-example that makes the old artifact's mechanism plain: it
+`ALTER`s the existing function instead of replacing its body, so it always
+carried the shipped body — status term included — and it reds neither C23 nor
+C24.
 
-**They were deliberately not rebased onto the current body.** Giving `m17`'s body
-the status term would make a suspended agent fail the writer path as well as the
-own-row path, and **C21 and C22 would go green on it** — a lost red, which is
-worse than a noisy one. `m11` is the same shape. Left as they are, the diff above
-is apples-to-apples and nothing is weakened.
+### The SR round — the two places the set was silent, and what closed them
 
-*Open, for whoever picks this up next:* rebase `m11`/`m16`/`m17` onto the current
-body and split each one's dropped status term into a mutant of its own, so no
-mutant carries two mutations at once? It costs three more mutants and it is the
-only way to have both the clean attribution and the reds.
+SR's implementation review measured two probes against the 24 controls that
+existed then. **Both returned RED: NONE.** A probe that reddens nothing is not a
+clean bill of health; it is a dimension the suite cannot see, in either
+direction.
 
-`m28` is the counter-example that makes the mechanism plain: it `ALTER`s the
-existing function instead of replacing its body, so it carries the shipped body —
-status term included — and it reds neither C23 nor C24.
+**1. The INSERT policy's subject-status term (`msr01` → `m36`, control C25).**
+Adding `AND m.license_status = 'active'` to the member-EXISTS — the clause about
+the agent an agreement is written FOR — changed nothing any control could see.
+That is the single most likely wrong implementation of this migration right now:
+somebody "completes" the founder's ruling by adding the term there too, and a
+reviewer reading the log sees 25/25 and concludes nothing moved. C25 asserts the
+shipped behaviour in **both** shapes — a broker CAN write for a *deactivated*
+agent, CANNOT for a *removed* one — with an active subject as a third arm so a
+write rule stuck at false cannot satisfy it. `m36` reds **c25 and nothing else**.
+The same rule is pinned in CI by the tripwire's *leaves the INSERT policy subject
+check with no license_status term*, because this harness needs a database and CI
+has none.
+
+**2. The franchise fee's same-day tie (`msr02` → `m37`, control C14).** `m03`
+mutates `commission_agreement_in_force` alone, and the fee fixture had no pair
+sharing an `effective_from` — so ordering the *other* helper by `set_at` reddened
+nothing. The ordering contract is stated for both helpers and was pinned
+behaviourally on one. The fixture now carries F2/F3 in the same long-transaction
+shape as R2/R3 (later `set_at`, earlier `seq` on the mistake), C14 asserts the
+fixture's shape and then that the correction wins, and `m37` reds **c14 and
+c16**. The CI tripwire already pinned the ORDER BY *text* on both helpers; what
+was missing, and is now present, is the behavioural half.
 
 ---
 
 ## Text tripwire (CI) — made to fail before being trusted
 
 `npx jest --config broker-portal/jest.config.js broker-portal/__tests__/migrations/commission-agreements-3503.test.ts --bail=0`
-→ **17 passed, 17 total.** Each mutation below was applied to the committed
+→ **18 passed, 18 total.** Each mutation below was applied to the committed
 file, proved applied by an exact-string replace that refuses to run unless it
 matches exactly once **and prints the file, the line number and the mutated line
 back** — a non-empty `git diff --numstat` proves a mutation applied, not that it
 applied where it was meant to — then run and restored with `git checkout --`.
-The restored run is 17/17 and the tree is clean. The fix was committed **before**
+The restored run is 18/18 and the tree is clean. The fix was committed **before**
 any of these reverts, so no `git checkout --` could discard it.
 
-Rows reading `n/16` were measured in the previous round, when the suite had 16
-tests and the text they anchor on was already in its current form; they were not
-re-run. The rows reading `n/17` are this round's, and the two write-rule rows
-were **re-measured** because that function's body changed.
+Rows reading `n/16` and `n/17` were measured in earlier rounds, when the suite
+had 16 and 17 tests and the text they anchor on was already in its current form;
+they were not re-run. The row reading `n/18` is the SR round's.
 
 | Mutation | Tests | RED `it()` |
 |---|---|---|
@@ -430,6 +486,7 @@ were **re-measured** because that function's body changed.
 | split-sum CHECK relaxed to `<= 100` **at the constraint** | 1/16 | carries the split-sum and cadence CHECK constraints |
 | cadence CHECK gains a third value | 1/16 | *(same assertion)* |
 | member check written as a self-comparison | 1/16 | writes the INSERT policy member check against the NEW ROW, not against itself |
+| **`AND m.license_status = 'active'` added to the INSERT policy's member-EXISTS** | **1/18** | leaves the INSERT policy subject check with no license_status term |
 | the `NOT APPLIED TO PRODUCTION` sentence removed | 1/16 | says in its header that it is not applied to production by this PR |
 | the migration opens its own transaction | 1/16 | opens no transaction of its own |
 | the franchise table renamed | 2/16 | creates both tables; gives set_by a NOT NULL default … |
@@ -469,6 +526,13 @@ fixture cleanup. Those are harness files, not production, and their users hold n
 commission agreements today. **If a future 3096 run ever seeds one, its cleanup
 will fail with `23503`** — that is C19's rule working, not a regression. Delete
 the agreement rows first.
+
+## The venue is not named here
+
+`run.sh` refuses to start unless `SSH_HOST` and `PG_CONTAINER` are set, and has
+no defaults for either. The earlier version hard-coded both. `backlog-3364/run.sh`
+set the precedent: take the target as input, validate it, do not publish it.
+Both values are on the backlog item.
 
 ## Fixture identifiers are invented
 

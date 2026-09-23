@@ -39,7 +39,7 @@ BEGIN
   PERFORM pg_temp.check(n = 7, format('precondition: org A holds 7 agreement rows, got %s', n));
   SELECT count(*) INTO n FROM public.organization_franchise_fees
    WHERE organization_id = current_setting('t3503.o_a')::uuid;
-  PERFORM pg_temp.check(n = 2, format('precondition: org A holds 2 franchise fee rows, got %s', n));
+  PERFORM pg_temp.check(n = 3, format('precondition: org A holds 3 franchise fee rows, got %s', n));
 END $$;
 
 -- the deactivated writers: nothing, on either table, by either path
@@ -76,7 +76,7 @@ BEGIN
   SELECT count(*) INTO n FROM public.agent_commission_agreements;
   PERFORM pg_temp.check(n = 7, format('the active broker still reads all 7 agreement rows, got %s', n));
   SELECT count(*) INTO n FROM public.organization_franchise_fees;
-  PERFORM pg_temp.check(n = 2, format('...and both franchise fee rows, got %s', n));
+  PERFORM pg_temp.check(n = 3, format('...and all three franchise fee rows, got %s', n));
   SELECT count(*) INTO n FROM public.commission_agreement_in_force(
     current_setting('t3503.o_a')::uuid, current_setting('t3503.u_agent_a')::uuid, DATE '2026-09-01');
   PERFORM pg_temp.check(n = 1, format('...and 1 through commission_agreement_in_force, got %s', n));

@@ -276,6 +276,22 @@ describe('BACKLOG-3503 commission agreements migration', () => {
     expect(FLAT).not.toMatch(/m\.organization_id = m\.organization_id/i);
   });
 
+  it('leaves the INSERT policy subject check with no license_status term', () => {
+    // The shipped decision, and the ONE place in this migration where the suite
+    // was previously silent in both directions: the member-EXISTS is about the
+    // AGENT the agreement is written FOR, and it carries no status term, so a
+    // broker can still record an agreement for a deactivated agent. A removed
+    // one is already refused -- the membership row is gone, not suspended.
+    //
+    // It is pinned here as well as in the executable harness (control C25,
+    // mutant m36) because the harness needs a database and CI has none. If the
+    // founder rules the other way, this assertion is the CI red that says so
+    // instead of the change landing in silence.
+    const insert = policyBody('agent_commission_agreements_insert_writer');
+    expect(insert).toContain('m.user_id = agent_commission_agreements.agent_user_id');
+    expect(insert).not.toMatch(/license_status/i);
+  });
+
   it('says in its header that it is not applied to production by this PR', () => {
     expect(RAW).toContain('NOT APPLIED TO PRODUCTION BY THIS PR');
   });

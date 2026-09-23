@@ -3,10 +3,17 @@
 # commission_agreements.sql -- THE SHIPPED FILE, not a copy -- on a real Postgres,
 # and records what every control and every mutant did.
 #
-# Transport differs from backlog-3364/run.sh and backlog-3096's: the NAS tailnet
-# address does not answer from this Mac (ping 100% loss, port 54322 unreachable),
-# so psql cannot be run here as a client. Instead psql runs ON the venue, inside
-# the container, and SQL is piped to it over SSH.
+# Transport differs from backlog-3364/run.sh and backlog-3096's: the venue's
+# database port does not answer from the developer machine, so psql cannot be run
+# here as a client. Instead psql runs ON the venue, inside its container, and SQL
+# is piped to it over SSH.
+#
+# The venue is NOT named in this file. backlog-3364/run.sh sets the precedent:
+# it takes the target as input and validates it rather than publishing it. Set
+# both variables in the environment; their values are recorded on the backlog
+# item, not here.
+#
+#   SSH_HOST=<ssh alias>  PG_CONTAINER=<container name>  ./run.sh gate
 #
 # Four consequences of that transport, all handled here:
 #   1. `\i <path>` would resolve inside the container, where the repo does not
@@ -29,8 +36,12 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
 MIGRATION="$REPO/supabase/migrations/20260922220719_backlog_3503_commission_agreements.sql"
-SSH_HOST="${SSH_HOST:-ugreen}"
-CONTAINER="supabase_db_keepr-test"
+# NOTE: no apostrophe in either message below. Inside ${VAR:?word} bash treats a
+# single quote as a quoting character even within double quotes, so an
+# apostrophe here pairs with the next one -- swallowing the newline and the
+# CONTAINER assignment with it. Measured, not theorised.
+SSH_HOST="${SSH_HOST:?set SSH_HOST to the ssh alias of the test venue -- see the header}"
+CONTAINER="${PG_CONTAINER:?set PG_CONTAINER to the postgres container name on that venue -- see the header}"
 
 [ -f "$MIGRATION" ] || { echo "migration not found: $MIGRATION" >&2; exit 2; }
 
@@ -114,5 +125,5 @@ case "${1:-}" in
       printf '%s\n    %s\n    RED:   %s\n    green: %s\n' "$(basename "$m" .sql)" "${applied:0:140}" "${reds[*]:-NONE}" "${greens[*]:-none}"
       [ ${#details[@]} -gt 0 ] && printf '%s\n' "${details[@]}"
     done ;;
-  *) sed -n '2,30p' "${BASH_SOURCE[0]}"; exit 2 ;;
+  *) sed -n '2,34p' "${BASH_SOURCE[0]}"; exit 2 ;;
 esac

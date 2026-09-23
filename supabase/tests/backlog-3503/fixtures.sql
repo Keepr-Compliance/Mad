@@ -5,7 +5,10 @@
 --
 -- The same-day pair R2/R3 is the long-transaction shape: R3 has an EARLIER set_at
 -- but a LATER seq, because its transaction began earlier and executed its INSERT
--- later. It is the row a broker wrote last, so it must win.
+-- later. It is the row a broker wrote last, so it must win. F2/F3 are the same
+-- shape on the franchise-fee table: without them, ordering that table by set_at
+-- returns the same right answer as ordering it by seq, and the D2 ordering
+-- contract is unpinned on the second table (control C14, mutant m37).
 --
 -- Two agents model losing access to an organization, because the product does it
 -- two different ways: u_agent_sus is DEACTIVATED (membership row survives at
@@ -18,6 +21,7 @@
 -- changes no count anywhere. Controls C23 and C24.
 --
 -- Org A therefore holds 7 agreement rows and the venue 8; C6 and C18 count them.
+-- Org A holds 3 franchise fee rows and the venue 4; C18 and C23 count them.
 
 DO $fixtures$
 DECLARE
@@ -127,10 +131,16 @@ BEGIN
     RAISE EXCEPTION 'FIXTURE FAILED: the removed agent still has an org-A membership row';
   END IF;
 
+  -- F2/F3 repeat R2/R3's shape on this table: they share effective_from, F3 is
+  -- inserted second (higher seq) with an EARLIER set_at, and F3 is the one the
+  -- broker wrote last, so it must win. Without this pair, ordering this helper
+  -- by set_at returns the same answer as ordering it by seq and no control can
+  -- tell the two apart -- which is what mutant m37 exists to show.
   INSERT INTO public.organization_franchise_fees
     (organization_id, amount, effective_from, set_by, set_at) VALUES
-    (o_a, 2000.00, DATE '2026-01-01', u_broker_a, TIMESTAMPTZ '2026-01-01 09:00:00+00'),
-    (o_a, 2500.00, DATE '2026-06-01', u_broker_a, TIMESTAMPTZ '2026-06-01 09:00:00+00'),
+    (o_a, 2000.00, DATE '2026-01-01', u_broker_a, TIMESTAMPTZ '2026-01-01 09:00:00+00'), -- F1
+    (o_a, 2750.00, DATE '2026-06-01', u_broker_a, TIMESTAMPTZ '2026-06-01 10:05:00+00'), -- F2 mistake, later set_at
+    (o_a, 2500.00, DATE '2026-06-01', u_broker_a, TIMESTAMPTZ '2026-06-01 10:00:00+00'), -- F3 correction, earlier set_at, later seq
     (o_b, 9999.00, DATE '2026-01-01', u_broker_b, TIMESTAMPTZ '2026-01-01 09:00:00+00');
 END
 $fixtures$;

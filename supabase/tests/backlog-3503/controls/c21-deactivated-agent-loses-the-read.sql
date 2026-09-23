@@ -31,7 +31,10 @@ DO $$
 DECLARE n int;
 BEGIN
   SELECT count(*) INTO n FROM public.agent_commission_agreements;
-  PERFORM pg_temp.check(n = 0, format('a deactivated agent reads 0 agreement rows, got %s', n));
+  -- unqualified on purpose: the claim is that they read NOTHING, not merely that
+  -- they cannot read their own row. The message says "anywhere" because the row
+  -- a mutant lets through is not always theirs -- under m17r it is another org's.
+  PERFORM pg_temp.check(n = 0, format('a deactivated agent reads 0 agreement rows anywhere, got %s', n));
   -- and through the read path BACKLOG-3504 uses
   SELECT count(*) INTO n FROM public.commission_agreement_in_force(
     current_setting('t3503.o_a')::uuid, current_setting('t3503.u_agent_sus')::uuid, DATE '2026-09-01');
