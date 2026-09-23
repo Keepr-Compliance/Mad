@@ -4,18 +4,19 @@ Executes `supabase/migrations/20260922220719_backlog_3503_commission_agreements.
 — **the shipped file itself, not a copy** — on a real Postgres 17.6, and records
 what every control and every mutant did.
 
-**It has been run.** Five times, on 2026-09-22 and 2026-09-23, every time on the
+**It has been run.** Six times, on 2026-09-22 and 2026-09-23, every time on the
 same Postgres 17.6 test venue (the venue is named on the backlog item, not in
 this repository): as first written; again after the agent's own-row read was
 gated on active membership; again after that gate was extended to the broker and
-the admin; again after SR's implementation review; and again after the founder
-ruled that an agreement may only be written FOR an active member (see *The
-reversal*, *The ruling extended*, *The SR round* and *The subject too*). The
-recorded run is the fifth: **26 controls, 176 assertions, all green; 37 mutants ×
-26 controls = 962 runs, 175 s wall clock.** Every mutant reddens at least one
-control and every control is reddened by at least one mutant. Every result below
-was measured; none was predicted. `control-run.txt` and `mutant-run.txt` in this
-directory are the runs' own output, unedited.
+the admin; again after SR's implementation review; again after the founder ruled
+that an agreement may only be written FOR an active member; and again after he
+**refined** that rule to admit a backdated agreement inside the agent's active
+period (see *The reversal*, *The ruling extended*, *The SR round* and *The
+subject*). The recorded run is the sixth: **30 controls, 210 assertions, all
+green; 41 mutants × 30 controls = 1,230 runs, 230 s wall clock.** Every mutant
+reddens at least one control and every control is reddened by at least one
+mutant. Every result below was measured; none was predicted. `control-run.txt`
+and `mutant-run.txt` in this directory are the runs' own output, unedited.
 
 It is not in CI: CI has no database. The text-level tripwire that does run in CI
 is `broker-portal/__tests__/migrations/commission-agreements-3503.test.ts`, and
@@ -70,8 +71,8 @@ Four consequences, all handled in `run.sh` and all worth knowing before editing 
 H=supabase/tests/backlog-3503/run.sh
 
 bash $H gate       # venue gate. Stop on any GATE FAIL.
-bash $H controls   # 26 controls, each in its own rolled-back transaction
-bash $H mutants    # 37 mutants x 26 controls
+bash $H controls   # 30 controls, each in its own rolled-back transaction
+bash $H mutants    # 41 mutants x 30 controls
 bash $H mutants m24   # one mutant, by name fragment
 ```
 
@@ -88,7 +89,7 @@ psql.
 **Re-run `gate` after any run.** `target_tables_absent=true` is the proof that
 nothing leaked out of a transaction.
 
-## Venue gate — 2026-09-22
+## Venue gate — re-run 2026-09-23, after 1,260 transactions
 
 | Check | Value |
 |---|---|
@@ -111,7 +112,7 @@ and both are why the migration is shaped as it is:
 
 ---
 
-## Controls — all 26 GREEN, 176 assertions
+## Controls — all 30 GREEN, 210 assertions
 
 Each runs inside `BEGIN … ROLLBACK` after `fixtures.sql`. Role cases run as
 `authenticated` with `request.jwt.claim.sub`. `pg_temp.check` counts every
@@ -145,7 +146,11 @@ matched nothing cannot pass.
 | `c22` | a **removed** agent (membership row DELETEd) reads none of their own rows — table and helper — while their broker still reads all of them. They are still an active member of the *other* org, which is what makes an org-blind rule visible | 7 |
 | `c23` | a **deactivated broker** and a **deactivated admin** read 0 from **both** tables, by table and by helper, while the active broker of the same org reads all 7 agreements and all three franchise fees in the same transaction | 18 |
 | `c24` | neither of them can INSERT into either table — **42501 specifically** — nothing lands, and the active broker of the same org still writes both | 8 |
-| `c25` | what the INSERT policy does about the **subject's** status: a broker CANNOT write for a **deactivated** agent (the status term refuses the row that survives) and CANNOT for a **removed** one (no row at all to find) — two refusals by two different halves of the same clause — with an **active** subject as the third arm, so a write rule stuck at false cannot satisfy it | 9 |
+| `c25` | the INSERT policy's **subject** clause, four shapes over the same rows: a **deactivated** agent dated **inside** their active period is **admitted** (the founder's refinement), the same agent dated **after** they left is refused, a **removed** agent is refused by the EXISTS finding no row at all, and an **active** agent is admitted at any date — two admissions so a write rule stuck at false cannot satisfy it | 13 |
+| `c26` | the deactivation trigger records the **transition**: an active member has no date; deactivating stamps one; a write that does not name `license_status` leaves it; **re-deactivating** an already-suspended row does not move it; an unrelated column bump does not move it; reactivating **clears** it; deactivating again re-stamps; expiring leaves it | 8 |
+| `c27` | the date boundary **swept, not sampled**: the day before (allowed), the day **of** (allowed — inclusive), the day after (refused `42501`), rows landed to match, a suspended row with **no recorded date** (refused — fail closed), and the comparison resolving against **UTC** under an explicit `America/Los_Angeles` session | 11 |
+| `c28` | the founder's own case end to end: the agent has already left, the broker records an agreement dated to the March closing, and `commission_agreement_in_force` **resolves it on the day of the closing** instead of returning zero rows — with the refusal that still stands (dated after they left) asserted beside it | 6 |
+| `c29` | the date arm's **status gate**: a subject at `'expired'` still carrying a deactivation date is refused even inside their recorded period, no row survives, and a **suspended** subject at the same offset is admitted | 5 |
 
 **Why C18 exists, and why it is late.** C05 and C06 assert a SQLSTATE at the
 moment of a write. They cannot see a privilege that is *granted but never
@@ -238,12 +243,13 @@ policies already on this database use for the same question
 
 ### What the reversal did NOT change, stated
 
-- **The INSERT policy's member-EXISTS had no status term**, so a broker could
-  still write an agreement for an agent who is suspended. That was outside this
-  round's ruling and stayed true for two rounds. It is **no longer true**: the
-  founder was asked the question directly and ruled that a broker cannot record
-  an agreement for a deactivated agent at all. See *The subject too — an
-  agreement may only be written FOR an active member* below.
+- **The INSERT policy's member-EXISTS had no subject test at all**, so a broker
+  could write an agreement for an agent who is suspended, at any date. That was
+  outside this round's ruling and stayed true for two rounds. It is **no longer
+  true**: the founder ruled the subject must be active (2026-09-22) and then
+  refined that a day later to allow a backdated agreement inside the agent's
+  active period. See *The subject — judged by their ACTIVE PERIOD, not by their
+  status today* below.
 - **`set_by` stays `ON DELETE NO ACTION`.** The broker who writes a split cannot
   afterwards be hard-deleted; the founder accepted that, because the product
   deactivates rather than deletes. C19 and C20 assert it by constraint name.
@@ -306,203 +312,206 @@ only control that reds on it.
 
 ---
 
-## The subject too — an agreement may only be written FOR an active member
+## The subject — judged by their ACTIVE PERIOD, not by their status today
 
-The last of the three open questions, and the PR's own summary asked it: **should
-a broker be able to record a commission agreement for a deactivated agent at
-all?** The founder's answer, 2026-09-22, was **no**. So the INSERT policy's
-member-EXISTS — the clause about the AGENT an agreement is written FOR, not about
-the caller — gained the same `AND m.license_status = 'active'` term the other two
-rules carry. It reverses what this migration shipped in the two rounds above.
+**The founder's rule, refined 2026-09-23** (`pm_comments` `92f46fb4` on
+BACKLOG-3503, refining `dc342335` of 2026-09-22): a broker may record an
+agreement for an agent who has left, **as long as its effective date falls
+inside the period that agent was active**. Nothing new may be dated after they
+left. His driving case, in his words: *an agent closes a deal in March, leaves in
+April, and the broker goes to record their commission agreement in May.*
 
-Both shapes of the loss now refuse, and **they refuse by different mechanisms**,
-which is what makes C25's two denial arms independent rather than redundant:
+The INSERT policy's member-EXISTS therefore distinguishes four shapes:
 
-| Subject | What the EXISTS finds | What refuses the write |
-|---|---|---|
-| **deactivated** | a membership row, at `'suspended'` | the **status term** |
-| **removed** | no membership row at all | the **user_id term**, as before |
-
-A mutant can break one and leave the other standing — `m36` does exactly that,
-and reds on the first arm only.
-
-**What the ruling costs, written down because it is a real loss taken
-knowingly.** An agent deactivated **before any agreement was ever entered** can no
-longer have one entered at all. `commission_agreement_in_force` then returns zero
-rows for every closing they ever worked — control C12 is that shape — and the
-closing cannot be computed.
-
-An earlier draft of this section, of the migration header and of C25's header all
-said *"the route is: reactivate the member, record the agreement, deactivate
-again"*, and that is the mitigation the founder was shown when he was first asked.
-**That route does not exist.** Nothing in the product sets an **existing**
-`organization_members` row back to `license_status = 'active'`, and a route back
-to `'active'` **for that row** is **MECHANISM UNTRACED**. BACKLOG-3518 tracks a
-real reactivation.
-
-**A destructive route does exist, and it is UI-reachable.** It is not a
-reactivation: it removes the membership outright and rebuilds it. The correction
-that replaced the reactivate/record/deactivate sentence over-corrected into a
-flat *"there is no workaround"*, which is also wrong — this is the traced middle
-ground, measured at `cbc646d4e`, every line read rather than inferred.
-
-| # | hop | file:line | what happens |
+| subject | membership row | outcome | refused by |
 |---|---|---|---|
-| 1 | "Remove" is offered for a deactivated member | `broker-portal/components/users/UserDetailsCard.tsx:212` | it sits **outside** the `!isPending && !isSuspended` conditional that gates "Deactivate" at `:207-211`. `RemoveUserModal.tsx:43` calls through with no gate of its own |
-| 2 | the membership row is deleted | `broker-portal/lib/actions/removeUser.ts:110-112` | `.from('organization_members').delete().eq('id', …)`. Its guards are impersonation, authenticated, caller is admin/it_admin, not self, it_admin-removes-it_admin, last-admin. `grep -nE 'license_status\|suspended' removeUser.ts` → no hits, so a `'suspended'` row is removable. That zero is proven, not assumed: the identical command returns 6 hits on `deactivateUser.ts` |
-| 3 | the re-invite is no longer refused | `broker-portal/lib/actions/inviteUser.ts:109-118`, `:128-137` | both refusals SELECT an **existing** row — on `invited_email`, then on `user_id`. The row was deleted at hop 2, so both find nothing and the invite proceeds |
-| 4 | a fresh pending row | `inviteUser.ts:166-178` | INSERT `license_status: 'pending'`, `user_id` absent, `provisioned_by: 'invite'` |
-| 5 | acceptance sets active | `broker-portal/app/auth/callback/route.ts:122-130` | selects on `.eq('invited_email', …).is('user_id', null)` (`:87-93`), then UPDATEs `user_id`, **`license_status: 'active'`**, `joined_at`, and clears the token |
+| **active** | present, `'active'` | **admitted**, no date test at all | — |
+| **deactivated, dated inside the period** | present, `'suspended'`, carries `deactivated_at` | **admitted** — the new case | — |
+| **deactivated, dated after the deactivation** | same row | refused | the date comparison |
+| **removed** | none — `removeUser.ts` DELETEs it | refused | the EXISTS finding nothing |
 
-**Row-level security permits every hop** — read from `pg_policies` on production,
-not inferred. `organization_members_all_public` is `FOR ALL` with
-`USING (is_org_admin((SELECT auth.uid()), organization_id) OR auth.role() =
-'service_role')`, which covers the DELETE at hop 2 and the INSERT at hop 4 for an
-admin of that organization; `users_can_accept_invite` is the `UPDATE` policy
-whose `USING` matches `invited_email` against the signed-in user's own email,
-which covers hop 5. Without this, hop 2 would be a silent zero-row no-op and the
-route would not exist — it was the one link in the chain that a source read alone
-could not settle.
+### What had to be built to ask that question at all
 
-**Hop 5 is gated, and the gate is stated rather than glossed.** The pending-invite
-branch runs only when `pickBrokerageMembership(memberships)` returns null
-(`route.ts:57`). A BACKLOG-3364 personal organization is deliberately excluded
-from that pick (`lib/auth/membership.ts:124-132`), so an ordinary
-single-brokerage agent still falls through and reaches it. Someone who holds a
-**second brokerage** membership redirects at `:59-62` or `:64` and never links.
+**The end of the active period did not exist as data.** `organization_members`
+carries `joined_at` but had no deactivation date, there is no membership-history
+table, and `updated_at` is bumped by `update_org_members_updated_at` on **any**
+update. Measured on production before the column was added: zero columns match
+`%deactiv%`, `license_status = 'suspended'` has **zero rows**, `'active'` has 10
+and `'pending'` 9. No backfill population, no ambiguous history — the cheapest
+moment the column will ever be added.
 
-**What it costs and what survives.** It destroys the `organization_members` row
-and the role on it, and it needs the agent to sign in again — so it is a
-data-losing path, not a supported workaround, and it should not be written into a
-runbook as one. What survives: the same `public.users` row, because the callback
-upserts on `id: user.id` and Remove touches only `organization_members`. So
-`agent_user_id` is unchanged and any agreements **already** recorded still
-resolve — neither table in this migration FKs `organization_members`
-(`20260922220719_…:132-136`, `:171-173`; `fixtures.sql:122` says so too).
-`effective_from` is a client-supplied `date NOT NULL` with no default and is in
-the INSERT column grant (`:392-394`), so the new agreement is **backdatable** and
-C12's zero-row shape resolves.
+So the migration adds `organization_members.deactivated_at timestamptz` and the
+trigger `org_members_track_deactivation`. **A trigger rather than an edit to
+`deactivateUser.ts`**, because four writers across three runtimes move a row to
+`'suspended'`:
 
-**And the broker's read survives a second deactivation.**
-`agent_commission_agreements_select_writer` (`:411-413`) tests the **reader's**
-status through `can_write_commission_agreements`, never the subject's, and
-`commission_agreement_in_force` is `SECURITY INVOKER` (`:349`) — so a broker or
-admin computing the closing still reads the row after the agent is deactivated
-again. The agent's **own** read does not survive: `select_own` (`:421-424`)
-requires their own active membership. That is the deactivation itself, not this
-route, and C21/C22 hold it shut on purpose.
-
-**The enumeration of writers, re-run at `cbc646d4e`.** Three `.ts`/`.tsx` writers
-that the command below finds set `license_status` to `'active'` on an **existing**
-`organization_members` row, and each is gated away from a portal-deactivated one.
-The count is the command's, not the repo's: SR found two further writers in SQL
-that a `-- '*.ts' '*.tsx'` grep can never reach — `handle_new_user_invitation_link()`
-(`20260122_b2b_broker_portal.sql:548-557`, gated on `user_id IS NULL`) and
-`_ensure_personal_organization_for()`
-(`20260915160637_backlog_3364_personal_organizations.sql:166-169`, personal orgs
-only). Both are gated away from such a row as well, so the conclusion is
-unchanged and only the cardinality was wrong (`pm_comments` `a3ba85e1`).
-
-```
-git grep -nE "license_status[\"']?[[:space:]]*[:=][[:space:]]*[\"']active[\"']" \
-  -- '*.ts' '*.tsx' ':!*__tests__*' ':!*.test.ts' ':!*.test.tsx'     ->  7 hits
-```
-
-| writer | why it cannot reach such a row |
+| writer | shape |
 |---|---|
-| `supabase/functions/directory-sync/index.ts:768` | gated on `existingMember.provisioned_by === 'directory_sync'` (`:764-766`). A portal invite carries `provisioned_by: 'invite'` (`broker-portal/lib/actions/inviteUser.ts:177`), and `deactivateUser.ts:114-120` writes only `license_status` and `updated_at`, so it stays `'invite'` |
-| `supabase/functions/scim/handlers/users.ts:650` | a SCIM `PATCH … active:true`; reachable only for an organization provisioned from an IdP, not from any portal action |
-| `broker-portal/app/auth/callback/route.ts:126` | the pending-invite acceptance path. Its row is selected with `.is('user_id', null)` (`:91`); a deactivated member has a `user_id`, so this can only take `pending` → `active`, never `suspended` → `active` |
+| `broker-portal/lib/actions/deactivateUser.ts:115-119` | the portal Deactivate button |
+| `supabase/functions/scim/handlers/users.ts:646` | SCIM PatchOp `active:false` |
+| `supabase/functions/scim/handlers/users.ts:824-831` | SCIM DELETE handler — **unconditional**, never reads the current value |
+| `supabase/functions/directory-sync/index.ts:936-946` | member gone from the directory |
 
-The other four hits — `directory-sync:861`, `:917`, `scim/handlers/users.ts:263`,
-`:364` — are INSERTs for members who have no row yet, not reactivations.
+Derived by execution, not by grep alone: a `pg_proc` scan of every `public`
+function whose definition matches `license_status` or `organization_members`,
+plus a repo-wide TS/TSX/Deno grep. **No writer anywhere INSERTs a row already at
+`'suspended'`** — every INSERT writes `'active'` or `'pending'` — so a row-level
+`BEFORE UPDATE` trigger sees every transition that exists. Three functions that
+matched on `license_status` were ruled out by reading them rather than assuming:
+`admin_update_license`, `suspend_account_for_dispute` and
+`reinstate_suspended_account` all write the account-event table and
+`public.users`, never `organization_members`.
 
-**The re-invite refusals are closed only while the row exists.** They are
-`inviteUser.ts:109-118` on a matching `invited_email` (the deactivated row keeps
-its `invited_email`) and `:128-137` on a matching `user_id`. Either alone would
-be enough to stop a broker re-inviting a *deactivated* person — and neither
-survives the row being deleted, which is hop 3 of the destructive route above.
-`admin_invite_user` (`supabase/migrations/20260412_fix_cross_table_duplicate_invite_check.sql:125-132`)
-only INSERTs a fresh `'pending'` row and never updates an existing one, and
-`broker-portal/lib/actions/` contains no `reactivateUser.ts` at all.
+### The trigger tests the TRANSITION, and that is the load-bearing part
 
-**A non-destructive two-step route is closed too, which the grep above would not
-have shown.** This is about a route that would keep the membership row — the
-destructive route above deletes it, and is not what this paragraph rules out.
-A writer that reset a suspended row to `'pending'` and nulled its `user_id` would
-hand it to `auth/callback:126` legitimately, and it would match neither pattern
-in the enumeration. Neither write exists:
-
-```
-git grep -nE "license_status[\"']?[[:space:]]*[:=][[:space:]]*[\"']pending[\"']|user_id[\"']?[[:space:]]*:[[:space:]]*null" \
-  -- '*.ts' '*.tsx' ':!*__tests__*' ':!*.test.ts' ':!*.test.tsx'
+```sql
+BEFORE UPDATE OF license_status ... FOR EACH ROW
+WHEN (OLD.license_status IS DISTINCT FROM NEW.license_status)
 ```
 
-One hit — `inviteUser.ts:172`, the INSERT of a brand-new row — and **no writer
-anywhere sets `user_id` back to null**. `resendInvite.ts`, the one action that
-looks like it might, refuses outright when the row has a `user_id`
-(`:61-63`) and its UPDATE writes only `invitation_token` and
-`invitation_expires_at` (`:69-76`). `bulkUpdateRole.ts`, `updateUserRole.ts` and
-`scim.ts` write neither field.
+Written the obvious way instead — `IF NEW.license_status = 'suspended' THEN
+stamp` — the SCIM DELETE handler's unconditional write, and every
+`scim_synced_at` bump on an already-suspended row, would push the date
+**forward**. The active period silently widens and the rule re-admits exactly the
+agreement it refuses. `m38` is that trigger; `C26` is its red.
 
-**Why `MECHANISM UNTRACED` rather than a flat "no route exists".** The
-enumeration above is derived by `git grep` over `.ts`/`.tsx`, and a grep finds a
-token, not a property — the repo rule *Derive sets by execution, not by grep*
-applies. Its positive control is that the same command found all three writers,
-so it is not blind to the spelling, and `file` reports all five cited files as
-text, so none is being skipped as binary. That is as far as text can take it; a
-route reached some other way (a console `UPDATE`, a support script, an admin-portal
-path added later) is not excluded, so the mechanism is marked untraced rather
-than asserted absent.
+**`C26` has to defeat a vacuity trap to see it.** `now()` is constant for a whole
+transaction and `run.sh` wraps each control in one `BEGIN … ROLLBACK`, so a
+re-stamp writes the same instant the column already held and a broken trigger is
+indistinguishable from a correct one. C26 seeds an explicit past value first —
+and asserts the seed survived — so the re-stamp has something visibly different
+to overwrite.
 
-**And this is exactly how the destructive route was missed.** That command
-enumerates writers that **SET** `license_status`. A `DELETE` sets nothing, so
-`removeUser.ts` is structurally invisible to it, and the whole section reasons
-about *an **existing** membership row* — the frame excludes by construction the
-one case where the row stops existing. The grep reproduces byte-for-byte; its
-**scope** was the defect, not its spelling. It is recorded here because the miss
-is the more useful half of the lesson.
+### The fixture trap this round nearly shipped
 
-**The founder was re-asked on the basis that the mitigation he was shown does not
-exist — and the ruling stands.** What he was told at the re-ask was in fact worse
-than the truth: he accepted the loss believing nothing could be recorded for such
-an agent at all, and the real position is that a destructive route exists. A
-ruling taken on the worse premise holds *a fortiori* on the better one, so
-nothing here reopens it. Recorded in `pm_comments` on BACKLOG-3503, with SR's
-enumeration in `3f345d18`, `0a975373` and the correction in `a3ba85e1`.
+Before this round, `fixtures.sql` created its suspended subjects by **INSERTing
+them at `'suspended'`**. A `BEFORE UPDATE` trigger never sees an INSERT, so every
+one of them would have carried `deactivated_at` NULL — and every suspended-subject
+assertion in C25, C27 and C28 would have been refused by the `IS NOT NULL` guard
+**without ever reaching the date comparison**. All of them would have reported
+GREEN, the date logic would have been entirely untested, and the mutants that
+move the boundary would have reddened nothing.
 
-**What it does not touch.** Reading is unchanged: an agent who loses membership
-lost the read in the round above (C21/C22), and a deactivated broker or admin
-lost both read and write in the round after (C23/C24). Rows already recorded stay
-readable to the office's active brokers — this gates the INSERT, and the ledger is
-append-only, so nothing already written is withdrawn.
+The fixture now does what production does: INSERT `'active'`, then UPDATE to
+`'suspended'`. The date is written by the real trigger, never by hand — a
+hand-written value would hide the same hole one layer down, by proving the policy
+works on a value no producer had to generate. The fixture **asserts** all four
+rows were stamped, so a broken trigger fails there, loudly, instead of passing
+for the wrong reason. Controls express their dates as **offsets** from
+`t3503.d_sus`, which is read back out of the column.
 
-**`m20` was rebased for it.** That mutant re-creates the INSERT policy in order to
-plant an unqualified `organization_id`, so a body copied from before this ruling
-would drop the status term as a side effect. Measured, both ways: the un-rebased
-form reds **c17 c25**, and its c25 red says nothing whatever about the unqualified
-column it names. Rebased — the term carried forward, plus a self-check asserting
-it is still present — `m20` reds **c17 alone**, exactly as before. Same artifact
-class that `m11`, `m16` and `m17` were rebased out of one round earlier.
+### The measurement that justifies every new control
+
+Each mutation was run **before** its control was written, against the code the
+control would sit beside. RED sets against the **26 controls that existed then**:
+
+| mutant | RED against the pre-existing 26 |
+|---|---|
+| `m36` the subject clause flattened to bare membership | **c25** |
+| `m38` trigger ignores the transition | **NONE** |
+| `m40` comparison loses its UTC pin | **NONE** |
+| `m41` boundary becomes exclusive | **NONE** |
+| `m42` date arm loses its status gate | **NONE** |
+
+**Five of six were invisible.** And `c25` itself, *unmodified*, stayed **GREEN**
+against the new policy — its deactivated-subject INSERT used a fixed future date
+(`2026-10-01`), so the row was refused by the new date arm instead of the old
+status term and the behavioural reversal produced no signal anywhere. All 26
+controls stayed green through a rule reversal. That is why C25 was rewritten to
+offsets and why C26–C29 exist.
+
+### One guard no mutant can hold, and what was done about it
+
+`m39` was written for `m.deactivated_at IS NOT NULL`, run against the whole
+suite, and reddened **NOTHING** — because NULL propagates through the comparison
+to NULL, NULL is not TRUE, and the row is refused either way. It is a genuine
+**equivalent mutant**. It was **removed** rather than shipped as a permanently
+green one, which would have broken this directory's "every mutant reds at least
+one control" invariant and misreported the suite.
+
+The guard itself stays: it states the refusal as the **intent** (a suspended row
+with no recorded date fails closed, deliberately — not a missing guard) and keeps
+that refusal if the comparison is ever rewritten in a form where NULL does not
+propagate. Since no mutant can pin it, **the CI text test does**, and that
+assertion was itself proven to fail (see *Text tripwire*). `C27` still exercises
+the NULL **behaviour**.
+
+### The status gate on the date arm, which looks redundant and is not
+
+The second arm requires `m.license_status = 'suspended'`. Only a suspension
+writes `deactivated_at`, so the gate reads as noise — but the trigger
+deliberately **leaves the column alone** on a move to `'expired'` or `'pending'`,
+because the recorded date is still true. A member deactivated and then expired
+therefore sits at `'expired'` carrying a date, and an ungated arm admits them.
+The same hole opens for any fifth value added to
+`organization_members_license_status_check` later — the exact fail-open this
+migration spells `= 'active'` rather than `NOT IN (…)` everywhere else to avoid.
+`C29` is the refusal, produced through the real transitions
+(active → suspended → expired); `m42` is the gate deleted.
+
+### The UTC pin, and the only condition that reveals it
+
+`deactivated_at` is `timestamptz` and `effective_from` is `date`, so one must be
+converted. A bare `::date` resolves against the **session** TimeZone — a property
+of the connection, not of this rule. Production runs UTC on every role today
+(`pg_db_role_setting` carries no TimeZone for `anon`, `authenticated`,
+`authenticator` or `postgres`), so the spellings agree there **by coincidence of
+configuration**. `C27` sets `America/Los_Angeles` explicitly for one arm, against
+a deactivation pinned at 01:00 UTC whose local date is the previous day; that is
+the only condition under which `m40` reds. Direction of the off-by-one: an
+evening-Pacific deactivation lands on the later UTC date, so the rule is one day
+**more generous** — the safe side, since refusing a genuine March agreement is
+the harm this change exists to prevent.
+
+### What the refinement did NOT change
+
+- **Reading is untouched.** An agent who loses membership lost the read in the
+  C21/C22 round; a deactivated broker or admin lost read and write in the
+  C23/C24 round. The broker's office-wide read tests the **reader's** status,
+  never the subject's, so an active broker still reads a departed agent's rows.
+- **The ledger stays append-only.** This gates the INSERT; nothing already
+  written is withdrawn.
+- **The lower bound is unaddressed.** Nothing tests `effective_from` against
+  `joined_at`, so an agreement may be dated **before** the subject joined —
+  which is what this file already did for an active member and still does. Filed
+  as **BACKLOG-3522**; it would affect active agents too, so it does not belong
+  in this migration.
+- **One active period, not a history.** SCIM PatchOp `active:true`
+  (`users.ts:650`) writes `'active'` onto an existing row, so a member can have
+  more than one active period, and clearing the column on reactivation loses the
+  gap. An agreement dated inside a past suspension gap would be admitted.
+  Modelling it needs the membership-history table this repo does not have. Taken
+  knowingly, and invisible today: `scim_tokens` and
+  `organization_identity_providers` both hold **zero rows**.
+
+**`m20` was rebased for it, and the rebase was not optional.** That mutant
+re-creates the INSERT policy in order to plant an unqualified `organization_id`,
+so a body copied from before this round drops the new date arm as a side effect.
+Measured, both ways: left on the pre-refinement body it reddened
+**c17 c25 c27 c28 c29** — four reds saying nothing whatever about the unqualified
+column it names. Carried forward, with a self-check asserting every term of the
+clause is still present, it reds **c17 alone**, exactly as before. Same artifact
+class that `m11`, `m16` and `m17` were rebased out of, caught the same way: by
+reading the RED set rather than the mutant.
 
 ---
 
-## Mutants — 37, every one reds at least one control
+## Mutants — 41, every one reds at least one control
 
 Each prints `MUTATION APPLIED: <catalog evidence>` inside the transaction before
 any control runs, after verifying its own effect from the catalog; `run.sh`
 refuses a red without that line (`RED WITHOUT PROOF`) and refuses a mutant that
-never printed one. 37/37 printed it. Full output in `mutant-run.txt`.
+never printed one. 41/41 printed it, and no mutant has an empty RED set. Full output in `mutant-run.txt`.
 
 | Mutant | RED |
 |---|---|
 | `m01` read helpers marked SECURITY DEFINER | c13 c17 c21 c22 c23 |
-| `m02` write rule reuses `is_org_admin` | c01 c04 c04b c05 c06 c08 c10 c11 c14 c15 c16 c21 c22 c23 c24 c25 |
+| `m02` write rule reuses `is_org_admin` | c01 c04 c04b c05 c06 c08 c10 c11 c14 c15 c16 c21 c22 c23 c24 c25 c27 c28 c29 |
 | `m03` `set_at DESC` ordered before `seq DESC` | c10 c11 c16 |
-| `m04` `effective_from ASC` | c10 c11 c16 |
+| `m04` `effective_from ASC` | c10 c11 c16 c28 |
 | `m05` no `effective_from <= p_on_date` filter | c10 c11 c12 c14 c16 |
 | `m06` `set_by` inside the INSERT grant | c08 c18 |
-| `m07` `set_by` has no default | c04b c08 c15 c24 c25 |
+| `m07` `set_by` has no default | c04b c08 c15 c24 c25 c27 c28 c29 |
 | `m08` UPDATE granted, with a policy | c05 |
 | `m09` DELETE granted, with a policy | c06 c18 |
 | `m10` anon can read | c07 c18 |
@@ -514,15 +523,15 @@ never printed one. 37/37 printed it. Full output in `mutant-run.txt`.
 | `m16` `it_admin` added to the writer list *(rebased)* | c04 |
 | `m17` `agent` added to the writer list *(rebased)* | c02 c03 c13 c14 c22 |
 | `m18` franchise fee readable org-wide | c04 c14 c23 |
-| `m19` INSERT policy without the member check | c09 c17 c25 |
+| `m19` INSERT policy without the member check | c09 c17 c25 c27 c28 c29 |
 | `m20` INSERT policy's unqualified `organization_id` | c17 |
 | `m21` UPDATE granted **without** a policy | c05 |
 | `m22` DELETE granted **without** a policy | c06 c18 |
 | `m23` self-comparison in a *different* policy | c17 |
 | **`m24` TRUNCATE granted** | **c18** |
 | **`m25` `REVOKE ALL` omitted** (the default ACL grant stands) | **c05 c06 c07 c08 c18** |
-| **`m26` RLS not enabled on the agreements table** | **c01 c02 c03 c04 c06 c09 c13 c21 c22 c23 c24 c25** |
-| **`m27` RLS not enabled on either table** | **c01 c02 c03 c04 c06 c09 c13 c14 c21 c22 c23 c24 c25** |
+| **`m26` RLS not enabled on the agreements table** | **c01 c02 c03 c04 c06 c09 c13 c21 c22 c23 c24 c25 c27 c28 c29** |
+| **`m27` RLS not enabled on either table** | **c01 c02 c03 c04 c06 c09 c13 c14 c21 c22 c23 c24 c25 c27 c28 c29** |
 | **`m28` `SET search_path` dropped from the DEFINER write rule** | **c17** |
 | **`m29` agent FK rewritten ON DELETE CASCADE** | **c19 c20** |
 | **`m30` franchise `set_by` FK rewritten ON DELETE CASCADE** | **c19 c20** |
@@ -531,7 +540,11 @@ never printed one. 37/37 printed it. Full output in `mutant-run.txt`.
 | **`m33` active-membership rule drops the `license_status` filter** | **c21** |
 | **`m34` active-membership rule drops the organization scope** | **c22** |
 | **`m35` the WRITE rule drops the `license_status` filter** | **c23 c24** |
-| **`m36` the INSERT policy's SUBJECT clause drops its `license_status` term** | **c25** |
+| **`m36` the INSERT policy's SUBJECT clause flattened to bare membership** | **c25 c27 c28 c29** |
+| **`m38` the deactivation trigger ignores the TRANSITION** | **c26 c27** |
+| **`m40` the date comparison loses its UTC pin** | **c27** |
+| **`m41` the boundary becomes exclusive (`<`)** | **c27** |
+| **`m42` the date arm loses its status gate** | **c29** |
 | **`m37` `franchise_fee_in_force` ordered by `set_at DESC` before `seq DESC`** | **c14 c16** |
 
 `m21`/`m22` and `m25` are the reason C05 and C06 assert a **specific** SQLSTATE.
@@ -660,7 +673,8 @@ that silence **whichever way he ruled**, asserting both shapes over the same row
 in the same transaction, with an active subject as a third arm so a write rule
 stuck at false cannot satisfy it.
 
-**He then ruled the term IN** (2026-09-22; see *The subject too* above), so C25
+**He then ruled the term IN** (2026-09-22; see *The subject* above, which records
+how he refined it a day later), so C25
 now asserts that a deactivated subject and a removed subject are both refused and
 an active one is not, and `m36` is that term **removed** — the direction the
 ruling left open, and the likeliest regression. It reds **c25 and nothing else**,
@@ -682,23 +696,59 @@ was missing, and is now present, is the behavioural half.
 
 ---
 
+### The RED-set diff for the active-period round
+
+The refinement of 2026-09-23 changed what the INSERT policy DOES, added a column
+and a trigger to a shared table, and rewrote one control. Four movements, all
+measured rather than inferred:
+
+**1. Six pre-existing mutants gained reds, and none lost any.** `m02`, `m07`,
+`m19`, `m26` and `m27` each gained **c27 c28 c29**; `m04` gained **c28**. Every
+one is the expected shape — those mutants break the write rule, the `set_by`
+default, the member check or row-level security outright, so any control that
+performs a successful INSERT reds under them, and the three new controls all do.
+No mutant's RED set shrank.
+
+**2. `m36` was rewritten, not edited.** The old mutant deleted a
+`license_status` term that no longer exists in that form. The new one flattens
+the whole subject clause to bare membership, which is the reversal the
+refinement is most likely to be confused with, and reds **c25 c27 c28 c29**.
+
+**3. `m20` had to be rebased, and the RED set is what caught it.** See the note
+at the end of the subject section: left on the pre-refinement body it reddened
+five controls instead of one.
+
+**4. `m39` was written, measured, and removed.** It is an equivalent mutant —
+the `IS NOT NULL` guard changes no behaviour — so it reddened nothing and was
+deleted rather than shipped always green. The guard is pinned in the CI text
+test instead, and that assertion was proven able to fail.
+
+**The pre-registration table is the important one**, and it is in the subject
+section above: against the 26 controls that existed before this round, five of
+the six mutations this round pins reddened **NOTHING**, and the unmodified `c25`
+stayed **GREEN** through a behavioural reversal. Every control added here is
+load-bearing by measurement, not by argument.
+
+---
+
 ## Text tripwire (CI) — made to fail before being trusted
 
 `npx jest --config broker-portal/jest.config.js broker-portal/__tests__/migrations/commission-agreements-3503.test.ts --bail=0`
-→ **18 passed, 18 total.** Each mutation below was applied to the committed
+→ **20 passed, 20 total.** Each mutation below was applied to the committed
 file, proved applied by an exact-string replace that refuses to run unless it
 matches exactly once **and prints the file, the line number and the mutated line
 back** — a non-empty `git diff --numstat` proves a mutation applied, not that it
 applied where it was meant to — then run and restored with `git checkout --`.
-The restored run is 18/18 and the tree is clean. The fix was committed **before**
+The restored run is 20/20 and the tree is clean. The fix was committed **before**
 any of these reverts, so no `git checkout --` could discard it.
 
-Rows reading `n/16` and `n/17` were measured in earlier rounds, when the suite
-had 16 and 17 tests and the text they anchor on was already in its current form;
-they were not re-run. The row reading `n/18` is this round's — the subject-status
-ruling — and it was applied and reversed by two exact-string replaces, each
-printing the file, the line and the resulting line, with no `git checkout --`
-involved at any point.
+Rows reading `n/16`, `n/17` and `n/18` were measured in earlier rounds, when the
+suite had that many tests and the text they anchor on was already in its current
+form; they were not re-run. The three rows reading `n/20` are this round's — the
+active-period refinement — and each printed `git diff --numstat` (`1 1`) and the
+mutated line before the suite ran. `Tests: 0 total` never appeared; every run
+reported 20 total. The implementation was committed at `09b41d4e3` **before** any
+of these reverts, so no `git checkout --` could discard it.
 
 | Mutation | Tests | RED `it()` |
 |---|---|---|
@@ -723,7 +773,10 @@ involved at any point.
 | split-sum CHECK relaxed to `<= 100` **at the constraint** | 1/16 | carries the split-sum and cadence CHECK constraints |
 | cadence CHECK gains a third value | 1/16 | *(same assertion)* |
 | member check written as a self-comparison | 1/16 | writes the INSERT policy member check against the NEW ROW, not against itself |
-| **`AND m.license_status = 'active'` removed from the INSERT policy's member-EXISTS** | **1/18** | requires the INSERT policy subject to be an active member, in the same EXISTS |
+| `AND m.license_status = 'active'` removed from the INSERT policy's member-EXISTS | 1/18 | *(that round's assertion, since rewritten — see the three rows below)* |
+| **the trigger's `WHEN (OLD… IS DISTINCT FROM NEW…)` replaced by `WHEN (true)`** | **1/20** | records the end of the active period with a TRANSITION-guarded trigger |
+| **`AND m.deactivated_at IS NOT NULL` replaced by `AND true`** | **1/20** | keeps the NULL guard on the date arm, which no mutant can pin |
+| **`(m.deactivated_at AT TIME ZONE 'UTC')::date` reduced to `m.deactivated_at::date`** | **1/20** | judges the INSERT policy subject by their active period, in the same EXISTS |
 | the `NOT APPLIED TO PRODUCTION` sentence removed | 1/16 | says in its header that it is not applied to production by this PR |
 | the migration opens its own transaction | 1/16 | opens no transaction of its own |
 | the franchise table renamed | 2/16 | creates both tables; gives set_by a NOT NULL default … |
