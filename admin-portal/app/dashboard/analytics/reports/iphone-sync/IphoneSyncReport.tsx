@@ -25,6 +25,7 @@ import {
   applyFilters,
   computeCounts,
   defaultDirectionFor,
+  EMPTY_FILTERS,
   hasActiveFilters,
   INITIAL_VISIBLE_ROWS,
   nextVisibleCount,
@@ -39,7 +40,20 @@ import {
   DEFAULT_CLIENT_STATE,
   type ClientState,
 } from '@/lib/reports/report-url';
+import {
+  cardValue,
+  pinnedViews,
+  REPORT_KEY,
+  serializeFilters,
+  viewMatchesState,
+  writeFailureMessage,
+  type ReportSavedView,
+  type ViewMetric,
+} from '@/lib/reports/report-views';
+import type { ReportViewsApi } from '@/lib/reports/report-views-api';
 import { HowToUse } from './HowToUse';
+import { PinnedViewCards } from './PinnedViewCards';
+import { ReportViewSelector } from './ReportViewSelector';
 import { SyncCharts } from './SyncCharts';
 import { SyncFilterBar } from './SyncFilterBar';
 import { SyncRunTable } from './SyncRunTable';
@@ -101,6 +115,13 @@ export interface IphoneSyncReportProps {
   initialState?: ClientState;
   /** Supplied by the wrapper that owns the router. Absent under a static render. */
   onNavigate?: (url: string) => void;
+  /**
+   * The saved-view RPCs, supplied by the wrapper. ABSENT means the same thing
+   * as a rejection: the views list reads null and the dropdown says saved views
+   * are not available yet. That is the state between this PR merging and the
+   * founder applying its migration, and the rest of the page must not care.
+   */
+  viewsApi?: ReportViewsApi;
 }
 
 export function IphoneSyncReport({
@@ -110,6 +131,7 @@ export function IphoneSyncReport({
   rowCap,
   initialState = DEFAULT_CLIENT_STATE,
   onNavigate,
+  viewsApi,
 }: IphoneSyncReportProps) {
   const [filters, setFilters] = useState<RunFilters>(initialState.filters);
   const [sortKey, setSortKey] = useState<SortKey>(initialState.sortKey);
@@ -117,6 +139,22 @@ export function IphoneSyncReport({
   const [stalledOnly, setStalledOnly] = useState(initialState.stalledOnly);
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_ROWS);
   const [openRunId, setOpenRunId] = useState<string | null>(null);
+
+  // null = the list could not be read. [] = there are none. Two different
+  // states with two different sentences, never collapsed into one.
+  const [views, setViews] = useState<ReportSavedView[] | null>(null);
+  const [viewsLoading, setViewsLoading] = useState(Boolean(viewsApi));
+  const [viewsReloadToken, setViewsReloadToken] = useState(0);
+  // What the DATABASE said when it refused a save, a rename, a pin or a delete.
+  // The client cap has its own message inside the dropdown; this is the one the
+  // client cannot predict — a second tab's pin, or any other rejection.
+  const [writeError, setWriteError] = useState<string | null>(null);
+  // What the page was showing before a card was clicked, so clicking the same
+  // card again puts it back rather than merely clearing.
+  const [restoreState, setRestoreState] = useState<{
+    filters: RunFilters;
+    stalledOnly: boolean;
+  } | null>(null);
 
   // Mirror the client state into the URL WITHOUT a navigation. With
   // `force-dynamic` a router.push here would be a database round trip per
@@ -144,6 +182,128 @@ export function IphoneSyncReport({
     const rows = stalledOnly ? filteredRuns.filter((r) => r.stalled) : filteredRuns;
     return sortRuns(rows, sortKey, sortDirection);
   }, [filteredRuns, stalledOnly, sortKey, sortDirection]);
+
+  // ─── Saved views ───────────────────────────────────────────────
+  // Any failure — no api, a migration not yet applied, a network error —
+  // leaves `views` null and logs. The report below keeps rendering.
+  useEffect(() => {
+    if (!viewsApi) {
+      setViews(null);
+      setViewsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setViewsLoading(true);
+    viewsApi
+      .list(REPORT_KEY)
+      .then((rows) => {
+        if (!cancelled) setViews(rows);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.error('Saved views are unavailable:', err);
+          setViews(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setViewsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [viewsApi, viewsReloadToken]);
+
+  const pinned = useMemo(() => pinnedViews(views ?? []), [views]);
+
+  // Card values read `report.runs` — EVERY row of the selected period — with
+  // each card's OWN saved filters. Reading `filteredRuns` here would layer the
+  // page's live filters on top and make a card disagree with its own label.
+  const cardValues = useMemo(
+    () => new Map(pinned.map((view) => [view.id, cardValue(report.runs, view)])),
+    [pinned, report.runs]
+  );
+
+  const cards = pinned.map((view) => ({
+    view,
+    value: cardValues.get(view.id) ?? null,
+    active: viewMatchesState(view, filters, stalledOnly),
+  }));
+
+  const activeViewId = (views ?? []).find((v) => viewMatchesState(v, filters, stalledOnly))?.id ?? null;
+
+  function applyView(view: ReportSavedView) {
+    setRestoreState({ filters, stalledOnly });
+    updateFilters(view.filters);
+    setStalledOnly(view.stalledOnly);
+  }
+
+  function toggleCard(view: ReportSavedView) {
+    if (!viewMatchesState(view, filters, stalledOnly)) {
+      applyView(view);
+      return;
+    }
+    const back = restoreState ?? { filters: EMPTY_FILTERS, stalledOnly: false };
+    setRestoreState(null);
+    updateFilters(back.filters);
+    setStalledOnly(back.stalledOnly);
+  }
+
+  /**
+   * A refused write must SAY SO and must RE-READ.
+   *
+   * Say so: the server-side pin cap guards the two-tab race the client cap
+   * cannot see, so its sentence is the only explanation the user gets for a
+   * card that did not appear.
+   *
+   * Re-read: after a rejection the page's idea of the list is unproven — the
+   * write may have been refused for a reason that also changed what is stored
+   * (the other tab's sixth pin is exactly that). Reloading on the failure path
+   * as well as the success one makes the cards show what the database holds
+   * rather than what this tab hoped for.
+   */
+  function runViewMutation(op: () => Promise<unknown>) {
+    setWriteError(null);
+    void op()
+      .then(() => setViewsReloadToken((t) => t + 1))
+      .catch((err) => {
+        console.error('Saved view change failed:', err);
+        setWriteError(writeFailureMessage(err));
+        setViewsReloadToken((t) => t + 1);
+      });
+  }
+
+  function saveCurrentView(name: string, metric: ViewMetric, pinnedFlag: boolean) {
+    if (!viewsApi) return;
+    runViewMutation(() =>
+      viewsApi.save({
+        reportKey: REPORT_KEY,
+        name,
+        // ONLY the five filter keys. No run data, no user labels, no ids.
+        filters: serializeFilters(filters, stalledOnly),
+        metric,
+        pinned: pinnedFlag,
+      })
+    );
+  }
+
+  function togglePin(view: ReportSavedView) {
+    if (!viewsApi) return;
+    runViewMutation(() =>
+      viewsApi.save({
+        id: view.id,
+        reportKey: REPORT_KEY,
+        name: view.name,
+        filters: serializeFilters(view.filters, view.stalledOnly),
+        metric: view.metric,
+        pinned: !view.pinned,
+      })
+    );
+  }
+
+  function deleteView(view: ReportSavedView) {
+    if (!viewsApi) return;
+    runViewMutation(() => viewsApi.remove(view.id));
+  }
 
   const outcomeOptions = useMemo(
     () => [...new Set(report.runs.map((r) => r.outcome))].sort(),
@@ -197,6 +357,18 @@ export function IphoneSyncReport({
         onPeriodChange={navigateToPeriod}
         onFiltersChange={updateFilters}
         onClear={clearFilters}
+        viewsSlot={
+          <ReportViewSelector
+            views={views}
+            loading={viewsLoading}
+            activeViewId={activeViewId}
+            writeError={writeError}
+            onApply={applyView}
+            onTogglePin={togglePin}
+            onDelete={deleteView}
+            onSave={saveCurrentView}
+          />
+        }
       />
 
       <div>
@@ -219,6 +391,8 @@ export function IphoneSyncReport({
           />
         </div>
       </div>
+
+      <PinnedViewCards cards={cards} periodLabel={period.label} onToggle={toggleCard} />
 
       <SyncCharts buckets={buckets} />
 
