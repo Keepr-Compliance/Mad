@@ -366,6 +366,23 @@ refuses on a matching `user_id`. Either refusal alone would be enough.
 only INSERTs a fresh `'pending'` row and never updates an existing one, and
 `broker-portal/lib/actions/` contains no `reactivateUser.ts` at all.
 
+**And the two-step route is closed, which the grep above would not have shown.**
+A writer that reset a suspended row to `'pending'` and nulled its `user_id` would
+hand it to `auth/callback:126` legitimately, and it would match neither pattern
+in the enumeration. Neither write exists:
+
+```
+git grep -nE "license_status[\"']?[[:space:]]*[:=][[:space:]]*[\"']pending[\"']|user_id[\"']?[[:space:]]*:[[:space:]]*null" \
+  -- '*.ts' '*.tsx' ':!*__tests__*' ':!*.test.ts' ':!*.test.tsx'
+```
+
+One hit — `inviteUser.ts:172`, the INSERT of a brand-new row — and **no writer
+anywhere sets `user_id` back to null**. `resendInvite.ts`, the one action that
+looks like it might, refuses outright when the row has a `user_id`
+(`:61-63`) and its UPDATE writes only `invitation_token` and
+`invitation_expires_at` (`:69-76`). `bulkUpdateRole.ts`, `updateUserRole.ts` and
+`scim.ts` write neither field.
+
 **Why `MECHANISM UNTRACED` rather than a flat "no route exists".** The
 enumeration above is derived by `git grep` over `.ts`/`.tsx`, and a grep finds a
 token, not a property — the repo rule *Derive sets by execution, not by grep*
