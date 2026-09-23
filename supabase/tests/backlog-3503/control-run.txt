@@ -21,4 +21,6 @@ c19-a-holder-cannot-be-deleted                 GREEN 7 assertions
 c20-fk-delete-actions-in-the-catalog           GREEN 6 assertions
 c21-deactivated-agent-loses-the-read           GREEN 6 assertions
 c22-removed-agent-loses-the-read               GREEN 7 assertions
-controls: 23 green / 23
+c23-suspended-writer-loses-the-read            GREEN 18 assertions
+c24-suspended-writer-loses-the-write           GREEN 8 assertions
+controls: 25 green / 25
