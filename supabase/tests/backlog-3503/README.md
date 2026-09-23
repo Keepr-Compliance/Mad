@@ -330,9 +330,56 @@ and reds on the first arm only.
 knowingly.** An agent deactivated **before any agreement was ever entered** can no
 longer have one entered at all. `commission_agreement_in_force` then returns zero
 rows for every closing they ever worked — control C12 is that shape — and the
-closing cannot be computed. The route is: reactivate the member, record the
-agreement, deactivate again. The founder was told that in those terms before he
-ruled.
+closing cannot be computed. **There is no workaround in the product today.**
+
+An earlier draft of this section, of the migration header and of C25's header all
+said *"the route is: reactivate the member, record the agreement, deactivate
+again"*, and that is the mitigation the founder was shown when he was first asked.
+**That route does not exist.** For the ordinary case — invited through the broker
+portal, deactivated through the broker portal, no directory sync and no IdP — the
+agreement is simply **unrecordable**, and a route back to `license_status =
+'active'` for such a row is **MECHANISM UNTRACED**.
+
+The enumeration, at `074e01cbe`. Three writers set `license_status` to `'active'`
+on an **existing** `organization_members` row, and each is gated away from a
+portal-deactivated one:
+
+```
+git grep -nE "license_status[\"']?[[:space:]]*[:=][[:space:]]*[\"']active[\"']" \
+  -- '*.ts' '*.tsx' ':!*__tests__*' ':!*.test.ts' ':!*.test.tsx'     ->  7 hits
+```
+
+| writer | why it cannot reach such a row |
+|---|---|
+| `supabase/functions/directory-sync/index.ts:768` | gated on `existingMember.provisioned_by === 'directory_sync'` (`:764-766`). A portal invite carries `provisioned_by: 'invite'` (`broker-portal/lib/actions/inviteUser.ts:177`), and `deactivateUser.ts:114-120` writes only `license_status` and `updated_at`, so it stays `'invite'` |
+| `supabase/functions/scim/handlers/users.ts:650` | a SCIM `PATCH … active:true`; reachable only for an organization provisioned from an IdP, not from any portal action |
+| `broker-portal/app/auth/callback/route.ts:126` | the pending-invite acceptance path. Its row is selected with `.is('user_id', null)` (`:91`); a deactivated member has a `user_id`, so this can only take `pending` → `active`, never `suspended` → `active` |
+
+The other four hits — `directory-sync:861`, `:917`, `scim/handlers/users.ts:263`,
+`:364` — are INSERTs for members who have no row yet, not reactivations.
+
+**The re-invite side door is closed too, twice.** A broker cannot route around it
+by re-inviting the same person: `inviteUser.ts:107-116` refuses on a matching
+`invited_email` (the deactivated row keeps its `invited_email`) and `:119-136`
+refuses on a matching `user_id`. Either refusal alone would be enough.
+`admin_invite_user` (`supabase/migrations/20260412_fix_cross_table_duplicate_invite_check.sql:125-132`)
+only INSERTs a fresh `'pending'` row and never updates an existing one, and
+`broker-portal/lib/actions/` contains no `reactivateUser.ts` at all.
+
+**Why `MECHANISM UNTRACED` rather than a flat "no route exists".** The
+enumeration above is derived by `git grep` over `.ts`/`.tsx`, and a grep finds a
+token, not a property — the repo rule *Derive sets by execution, not by grep*
+applies. Its positive control is that the same command found all three writers,
+so it is not blind to the spelling, and `file` reports all five cited files as
+text, so none is being skipped as binary. That is as far as text can take it; a
+route reached some other way (a console `UPDATE`, a support script, an admin-portal
+path added later) is not excluded, so the mechanism is marked untraced rather
+than asserted absent.
+
+**The founder was re-asked on that basis** — knowing the mitigation he was shown
+does not exist and the loss is therefore larger than the one he accepted — **and
+the ruling stands.** Recorded in `pm_comments` on BACKLOG-3503, with SR's
+enumeration in parts `3f345d18` and `0a975373`.
 
 **What it does not touch.** Reading is unchanged: an agent who loses membership
 lost the read in the round above (C21/C22), and a deactivated broker or admin
@@ -600,6 +647,17 @@ stayed green — and that green would have been recorded as "the assertion is
 vacuous". It is not: re-anchored on the constraint, it reds. A non-empty
 `numstat` proves a mutation applied; it does **not** prove it applied where you
 meant.
+
+**One false RED, recorded so the next reader does not spend an hour on it.** The
+`1/18` row's assertion — *requires the INSERT policy subject to be an active
+member, in the same EXISTS* — is a regex over the two terms **in that order**, so
+it also reds if the terms are simply **reordered** (`license_status` first,
+`user_id` second): one `EXISTS`, same row, behaviourally identical, and the suite
+goes red anyway. SR measured that from the other side (`1 failed, 17 passed, 18
+total`, same `it()`). It fails **safe** — a correct edit gets a red naming the
+right test, not a silent green — and the migration is immutable once merged, so
+it is left as it stands rather than loosened. Read the assertion's *in the same
+EXISTS* as *in this order, in the same EXISTS*.
 
 ---
 

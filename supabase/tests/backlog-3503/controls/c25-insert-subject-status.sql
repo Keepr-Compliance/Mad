@@ -25,7 +25,15 @@
 -- THE COST OF THE RULING, so a later reader meets it here and not in a support
 -- ticket: an agent deactivated BEFORE any agreement was entered can no longer
 -- have one entered, so their past closings resolve to zero rows (control C12 is
--- that shape). The route is reactivate, record, deactivate. Taken knowingly.
+-- that shape). THERE IS NO WORKAROUND IN THE PRODUCT TODAY: for a member invited
+-- through the broker portal and deactivated through it, the agreement is simply
+-- UNRECORDABLE, and a route back to license_status 'active' for such a row is
+-- MECHANISM UNTRACED. An earlier draft of this header named a reactivate,
+-- record, deactivate route; it does not exist. The enumeration of the three
+-- writers that can set an existing membership row to 'active', and why none
+-- reaches such a row, is in this directory README under the subject section.
+-- Taken knowingly: the founder was re-asked knowing the mitigation does not
+-- exist, and the ruling stands.
 --
 -- BOTH DIRECTIONS ARE ASSERTED, over the same rows in the same transaction. Two
 -- denials on their own cannot tell "the subject terms are doing work" from "this

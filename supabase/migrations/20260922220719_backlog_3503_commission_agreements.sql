@@ -219,8 +219,17 @@ CREATE INDEX organization_franchise_fees_in_force_idx
 -- WHAT THAT COSTS, written down because it is a real loss taken knowingly: an
 -- agent deactivated BEFORE any agreement was ever entered can no longer have one
 -- entered at all. Their past closings then resolve to ZERO ROWS -- control C12
--- is that shape -- and cannot be computed. The route is to reactivate the
--- member, record the agreement, and deactivate again.
+-- is that shape -- and cannot be computed. THERE IS NO WORKAROUND IN THE PRODUCT
+-- TODAY. For the ordinary case -- a member invited through the broker portal and
+-- deactivated through it, with no directory sync and no IdP -- the agreement is
+-- simply UNRECORDABLE, and a route back to license_status 'active' for such a
+-- row is MECHANISM UNTRACED. An earlier draft of this paragraph named a
+-- reactivate / record / deactivate route; that route does not exist, and nothing
+-- should be built on it. The three writers that can set an EXISTING membership
+-- row to 'active' are each gated away from such a row; the enumeration, with
+-- file:line and the command behind it, is in the harness README at
+-- supabase/tests/backlog-3503/README.md. The founder was re-asked knowing the
+-- mitigation does not exist, and the ruling stands (pm_comments, BACKLOG-3503).
 --
 -- PINNED IN BOTH DIRECTIONS rather than left silent: control C25 asserts that a
 -- deactivated subject and a removed subject are both refused while an active one
