@@ -77,8 +77,10 @@ import {
 import { safeValidate } from "../schemas/validate";
 import { wrapHandler } from "../utils/wrapHandler";
 import { ValidationError } from "../utils/validation";
-// The real fail-closed plan check. The two ungated channels below deliberately
-// do not use it; nothing here may name the feature key itself.
+// The real fail-closed plan check. `checklists:get`, `checklists:remove` and
+// `checklists:invalidate-templates` deliberately do not call it — the header
+// says why, and `checklistHandlers-3475.test.ts` ("the gated and ungated sets,
+// by execution") asserts the split. Nothing here may name the feature key.
 import { isChecklistsAllowed, resolveOrgId } from "./featureGateHandlers";
 import type {
   AddChecklistLinkResult,
