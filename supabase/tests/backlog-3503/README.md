@@ -12,10 +12,10 @@ the admin; again after SR's implementation review; and again after the founder
 ruled that an agreement may only be written FOR an active member (see *The
 reversal*, *The ruling extended*, *The SR round* and *The subject too*). The
 recorded run is the fifth: **26 controls, 176 assertions, all green; 37 mutants ×
-26 controls = 962 runs, 175 s wall clock.** Every mutant reddens at least one control and every control
-is reddened by at least one mutant. Every result below was measured; none was
-predicted. `control-run.txt` and `mutant-run.txt` in this directory are the
-runs' own output, unedited.
+26 controls = 962 runs, 175 s wall clock.** Every mutant reddens at least one
+control and every control is reddened by at least one mutant. Every result below
+was measured; none was predicted. `control-run.txt` and `mutant-run.txt` in this
+directory are the runs' own output, unedited.
 
 It is not in CI: CI has no database. The text-level tripwire that does run in CI
 is `broker-portal/__tests__/migrations/commission-agreements-3503.test.ts`, and
@@ -80,10 +80,10 @@ without them.** The venue is not named in this repository — `backlog-3364/run.
 set that precedent by taking its target as input and validating it rather than
 publishing it. Both values are recorded on the backlog item.
 
-A full `mutants` run took **170 s** and, on the round after it, **175 s**;
-`controls` takes about 5 s. An *implausibly
-fast* green is a broken harness — if `controls` returns instantly with no
-assertion counts, the stream never reached psql.
+A full `mutants` run took **170 s**, and **175 s** on the round after it;
+`controls` takes about 5 s. An *implausibly fast* green is a broken harness — if
+`controls` returns instantly with no assertion counts, the stream never reached
+psql.
 
 **Re-run `gate` after any run.** `target_tables_absent=true` is the proof that
 nothing leaked out of a transaction.
