@@ -380,15 +380,15 @@ upserts on `id: user.id` and Remove touches only `organization_members`. So
 resolve — neither table in this migration FKs `organization_members`
 (`20260922220719_…:132-136`, `:171-173`; `fixtures.sql:122` says so too).
 `effective_from` is a client-supplied `date NOT NULL` with no default and is in
-the INSERT column grant (`:347-349`), so the new agreement is **backdatable** and
+the INSERT column grant (`:392-394`), so the new agreement is **backdatable** and
 C12's zero-row shape resolves.
 
 **And the broker's read survives a second deactivation.**
-`agent_commission_agreements_select_writer` (`:366-368`) tests the **reader's**
+`agent_commission_agreements_select_writer` (`:411-413`) tests the **reader's**
 status through `can_write_commission_agreements`, never the subject's, and
-`commission_agreement_in_force` is `SECURITY INVOKER` (`:304`) — so a broker or
+`commission_agreement_in_force` is `SECURITY INVOKER` (`:349`) — so a broker or
 admin computing the closing still reads the row after the agent is deactivated
-again. The agent's **own** read does not survive: `select_own` (`:376-379`)
+again. The agent's **own** read does not survive: `select_own` (`:421-424`)
 requires their own active membership. That is the deactivation itself, not this
 route, and C21/C22 hold it shut on purpose.
 

@@ -264,11 +264,11 @@ CREATE INDEX organization_franchise_fees_in_force_idx
 -- agent_user_id is unchanged and any agreements already recorded still resolve.
 -- Neither table here FKs organization_members (:132-136, :171-173).
 -- effective_from is a client-supplied `date NOT NULL` with no default and is in
--- the INSERT grant (:347-349), so the new agreement is BACKDATABLE and C12's
+-- the INSERT grant (:392-394), so the new agreement is BACKDATABLE and C12's
 -- zero-row shape resolves. The broker's read survives a second deactivation too:
--- agent_commission_agreements_select_writer (:366-368) tests the READER's
+-- agent_commission_agreements_select_writer (:411-413) tests the READER's
 -- status, never the subject's. The agent's own read does not -- select_own
--- (:376-379) requires their own active membership -- but that is the
+-- (:421-424) requires their own active membership -- but that is the
 -- deactivation itself, not this route.
 --
 -- The founder was re-asked knowing the reactivate / record / deactivate
