@@ -18,7 +18,14 @@
  *     reversed on measured evidence and is BACKLOG-3504's read contract;
  *   - the writer role list `('broker', 'admin')`, and that the migration does
  *     not reach for is_org_admin, which is the inverse set;
- *   - SECURITY DEFINER on the write rule and on NEITHER read helper;
+ *   - the own-row SELECT policy's TWO terms -- the caller's own rows AND active
+ *     membership of the organization that wrote them. A bare
+ *     `agent_user_id = auth.uid()` is the shape this pins shut, and it is the
+ *     one an edit is most likely to arrive back at, because it reads as
+ *     obviously correct on its own;
+ *   - `license_status = 'active'` as the spelling of "an active member" -- not a
+ *     `NOT IN (...)` list, which would fail OPEN on a state added later;
+ *   - SECURITY DEFINER on BOTH RLS helpers and on NEITHER read helper;
  *   - the absence of GRANT UPDATE / GRANT DELETE, and of set_by / set_at from
  *     the INSERT column lists;
  *   - the presence of REVOKE ALL and ENABLE ROW LEVEL SECURITY on both tables,
@@ -51,6 +58,7 @@ const SCHEMA_FILE = '20260922220719_backlog_3503_commission_agreements.sql';
 
 const TABLES = ['agent_commission_agreements', 'organization_franchise_fees'] as const;
 const READ_HELPERS = ['commission_agreement_in_force', 'franchise_fee_in_force'] as const;
+const RLS_HELPERS = ['can_write_commission_agreements', 'is_active_commission_member'] as const;
 
 /** Read a migration with CRLF normalised (Windows CI checks out with CRLF). */
 const readMigration = (file: string): string =>
@@ -109,6 +117,21 @@ function functionHeader(name: string): string {
   const open = /\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(rest);
   if (!open) throw new Error(`${SCHEMA_FILE}: ${name} has no opening dollar-quote tag`);
   return flatten(rest.slice(0, open.index));
+}
+
+/**
+ * A named policy's whole statement, whitespace-flattened. Throws rather than
+ * returning empty: a policy renamed or deleted would otherwise make every
+ * assertion about it vacuously true.
+ */
+function policyBody(name: string): string {
+  const start = FLAT.indexOf(`CREATE POLICY ${name} `);
+  if (start === -1) throw new Error(`${SCHEMA_FILE}: no policy named ${name}`);
+  const end = FLAT.indexOf(';', start);
+  if (end === -1) throw new Error(`${SCHEMA_FILE}: policy ${name} is unterminated`);
+  const body = FLAT.slice(start, end);
+  if (!/USING|WITH CHECK/i.test(body)) throw new Error(`${SCHEMA_FILE}: policy ${name} has no predicate`);
+  return body;
 }
 
 /** The parenthesised column list of `GRANT INSERT (...) ON public.<table>`. */
@@ -183,13 +206,37 @@ describe('BACKLOG-3503 commission agreements migration', () => {
     }
   });
 
-  it('marks the write rule SECURITY DEFINER with a pinned search_path, and neither read helper', () => {
-    const writeRule = functionHeader('can_write_commission_agreements');
-    expect(writeRule).toMatch(/SECURITY DEFINER/i);
-    expect(writeRule).toMatch(/SET search_path = public/i);
+  it('marks both RLS helpers SECURITY DEFINER with a pinned search_path, and neither read helper', () => {
+    for (const fn of RLS_HELPERS) {
+      const header = functionHeader(fn);
+      expect(header).toMatch(/SECURITY DEFINER/i);
+      expect(header).toMatch(/SET search_path = public/i);
+    }
     for (const fn of READ_HELPERS) {
       expect(functionHeader(fn)).not.toMatch(/SECURITY DEFINER/i);
     }
+  });
+
+  it('gates the own-row read on active membership, never on auth.uid() alone', () => {
+    // The reversed decision (BACKLOG-3503). A removed agent has no
+    // organization_members row; a deactivated one has a row at
+    // license_status 'suspended'. Neither may read, so the policy needs both
+    // terms and the membership rule needs the status filter.
+    const own = policyBody('agent_commission_agreements_select_own');
+    expect(own).toContain('agent_user_id = (SELECT auth.uid())');
+    expect(own).toContain('public.is_active_commission_member(');
+    // the bare predicate, as the whole USING clause, is what this forbids
+    expect(own).not.toMatch(/USING \(agent_user_id = \(SELECT auth\.uid\(\)\)\)/i);
+  });
+
+  it('spells active membership as license_status = active, and scopes it to the row\'s org', () => {
+    const body = flatten(functionBody('is_active_commission_member'));
+    expect(body).toMatch(/m\.license_status = 'active'/i);
+    // not a fail-open exclusion list: organization_members.license_status also
+    // admits 'pending' and 'expired', and a future fifth state must be denied.
+    expect(body).not.toMatch(/license_status\s+(NOT\s+IN|<>|!=)/i);
+    expect(body).toMatch(/m\.organization_id = p_org_id/i);
+    expect(body).toMatch(/m\.user_id = \(SELECT auth\.uid\(\)\)/i);
   });
 
   it('names exactly broker and admin as writers, and never reaches for is_org_admin', () => {

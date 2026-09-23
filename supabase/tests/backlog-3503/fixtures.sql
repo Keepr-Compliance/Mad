@@ -6,6 +6,13 @@
 -- The same-day pair R2/R3 is the long-transaction shape: R3 has an EARLIER set_at
 -- but a LATER seq, because its transaction began earlier and executed its INSERT
 -- later. It is the row a broker wrote last, so it must win.
+--
+-- Two agents model losing access to an organization, because the product does it
+-- two different ways: u_agent_sus is DEACTIVATED (membership row survives at
+-- license_status 'suspended') and u_agent_gone is REMOVED (membership row
+-- deleted). Both hold an org-A agreement. Controls C21 and C22.
+--
+-- Org A therefore holds 7 agreement rows and the venue 8; C6 and C18 count them.
 
 DO $fixtures$
 DECLARE
@@ -17,9 +24,12 @@ DECLARE
   u_broker_b   uuid := '00000000-0000-4000-8000-000035030006'; -- pii-allow-uuid: invented fixture id
   u_agent_b    uuid := '00000000-0000-4000-8000-000035030007'; -- pii-allow-uuid: invented fixture id
   u_nomember   uuid := '00000000-0000-4000-8000-000035030008'; -- pii-allow-uuid: invented fixture id
+  u_agent_sus  uuid := '00000000-0000-4000-8000-000035030009'; -- pii-allow-uuid: invented fixture id
+  u_agent_gone uuid := '00000000-0000-4000-8000-000035030010'; -- pii-allow-uuid: invented fixture id
   o_a          uuid := '00000000-0000-4000-8000-00003503a0a0'; -- pii-allow-uuid: invented fixture id
   o_b          uuid := '00000000-0000-4000-8000-00003503b0b0'; -- pii-allow-uuid: invented fixture id
   r record;
+  v_left int;
 BEGIN
   PERFORM set_config('t3503.u_broker_a',  u_broker_a::text,  true);
   PERFORM set_config('t3503.u_admin_a',   u_admin_a::text,   true);
@@ -29,13 +39,16 @@ BEGIN
   PERFORM set_config('t3503.u_broker_b',  u_broker_b::text,  true);
   PERFORM set_config('t3503.u_agent_b',   u_agent_b::text,   true);
   PERFORM set_config('t3503.u_nomember',  u_nomember::text,  true);
+  PERFORM set_config('t3503.u_agent_sus',  u_agent_sus::text,  true);
+  PERFORM set_config('t3503.u_agent_gone', u_agent_gone::text, true);
   PERFORM set_config('t3503.o_a',         o_a::text,         true);
   PERFORM set_config('t3503.o_b',         o_b::text,         true);
 
   FOR r IN SELECT * FROM (VALUES
       (u_broker_a,'broker-a'), (u_admin_a,'admin-a'), (u_agent_a,'agent-a'),
       (u_agent_a2,'agent-a2'), (u_itadmin_a,'itadmin-a'), (u_broker_b,'broker-b'),
-      (u_agent_b,'agent-b'), (u_nomember,'nomember')) v(id, label)
+      (u_agent_b,'agent-b'), (u_nomember,'nomember'),
+      (u_agent_sus,'agent-sus'), (u_agent_gone,'agent-gone')) v(id, label)
   LOOP
     INSERT INTO auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data)
     VALUES (r.id, r.label || '@fixture-3503.example.test', 'authenticated', 'authenticated',
@@ -55,7 +68,19 @@ BEGIN
     (o_a, u_agent_a2,  'agent',    'active', now()),
     (o_a, u_itadmin_a, 'it_admin', 'active', now()),
     (o_b, u_broker_b,  'broker',   'active', now()),
-    (o_b, u_agent_b,   'agent',    'active', now());
+    (o_b, u_agent_b,   'agent',    'active', now()),
+    -- The DEACTIVATED shape. deactivateUser.ts leaves the membership row in
+    -- place and moves license_status to 'suspended'; so does SCIM, and so does
+    -- directory-sync for a member who left the directory.
+    (o_a, u_agent_sus, 'agent', 'suspended', now()),
+    -- The REMOVED shape, staged in two steps below: this row is inserted the
+    -- way any member's is, then DELETEd, because that is what removeUser.ts
+    -- does. u_agent_gone is ALSO an active member of org B -- an agent who
+    -- moved brokerages -- so a read rule that checks "is an active member of
+    -- SOME org" rather than "of THIS org" still answers yes for them, and C22
+    -- can see the difference. Mutant m34 is that mistake.
+    (o_a, u_agent_gone, 'agent', 'active', now()),
+    (o_b, u_agent_gone, 'agent', 'active', now());
 
   -- Agreements. set_by is supplied explicitly: fixtures run as postgres, where
   -- auth.uid() is NULL and the column default cannot satisfy NOT NULL (probe P1).
@@ -69,7 +94,22 @@ BEGIN
     (o_a, u_agent_a,  80.00, 20.00, 150.00, 'monthly', DATE '2026-06-01', u_broker_a, TIMESTAMPTZ '2026-06-01 10:00:00+00'), -- R3 correction, earlier set_at, later seq
     (o_a, u_agent_a,  90.00, 10.00, 200.00, 'annual',  DATE '2026-12-01', u_broker_a, TIMESTAMPTZ '2026-11-01 09:00:00+00'), -- R4 future
     (o_a, u_agent_a2, 70.00, 30.00,  75.00, 'monthly', DATE '2026-01-01', u_broker_a, TIMESTAMPTZ '2026-01-01 09:00:00+00'), -- colleague
-    (o_b, u_agent_b,  55.00, 45.00, 999.00, 'annual',  DATE '2026-01-01', u_broker_b, TIMESTAMPTZ '2026-01-01 09:00:00+00'); -- other org
+    (o_b, u_agent_b,  55.00, 45.00, 999.00, 'annual',  DATE '2026-01-01', u_broker_b, TIMESTAMPTZ '2026-01-01 09:00:00+00'), -- other org
+    (o_a, u_agent_sus,  65.00, 35.00, 120.00, 'monthly', DATE '2026-01-01', u_broker_a, TIMESTAMPTZ '2026-01-01 09:00:00+00'), -- deactivated agent
+    (o_a, u_agent_gone, 45.00, 55.00, 130.00, 'monthly', DATE '2026-01-01', u_broker_a, TIMESTAMPTZ '2026-01-01 09:00:00+00'); -- removed agent
+
+  -- The second half of the REMOVED shape. Written after the agreement on
+  -- purpose: nothing in this migration references organization_members, so an
+  -- agreement must not block the membership DELETE that removeUser.ts issues.
+  -- If a later edit adds such a reference, this line raises 23503 and every
+  -- control in the suite turns RED at once, which is the right blast radius.
+  DELETE FROM public.organization_members
+   WHERE organization_id = o_a AND user_id = u_agent_gone;
+  SELECT count(*) INTO v_left FROM public.organization_members
+   WHERE organization_id = o_a AND user_id = u_agent_gone;
+  IF v_left <> 0 THEN
+    RAISE EXCEPTION 'FIXTURE FAILED: the removed agent still has an org-A membership row';
+  END IF;
 
   INSERT INTO public.organization_franchise_fees
     (organization_id, amount, effective_from, set_by, set_at) VALUES

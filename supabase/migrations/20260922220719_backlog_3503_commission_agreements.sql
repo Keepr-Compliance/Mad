@@ -24,7 +24,8 @@
 --   effective_from (or, on the same date, a later seq). Nothing is edited and
 --   nothing is deleted, so the history of what an agent was promised survives.
 --
---   can_write_commission_agreements(uuid)   RLS helper, SECURITY DEFINER
+--   can_write_commission_agreements(uuid)   write RLS helper, SECURITY DEFINER
+--   is_active_commission_member(uuid)       read  RLS helper, SECURITY DEFINER
 --   commission_agreement_in_force(uuid, uuid, date)   read helper, INVOKER
 --   franchise_fee_in_force(uuid, date)                read helper, INVOKER
 --
@@ -183,6 +184,45 @@ AS $fn$
                     AND m.role IN ('broker', 'admin'));
 $fn$;
 
+-- ============================ 3b. the own-row read rule =========================
+-- An agent reads their own agreement rows only while they are an ACTIVE member
+-- of the organization that wrote them. Two states lose the read, and they are
+-- different shapes in the data:
+--   removed     -- broker-portal/lib/actions/removeUser.ts DELETEs the
+--                  organization_members row, so no row matches at all;
+--   deactivated -- broker-portal/lib/actions/deactivateUser.ts sets
+--                  license_status = 'suspended' (a soft delete; the row stays).
+-- SCIM (supabase/functions/scim/handlers/users.ts) and directory-sync write the
+-- same 'suspended'.
+--
+-- WHY `= 'active'` AND NOT `NOT IN ('suspended','expired')`. The CHECK on
+-- organization_members.license_status admits four values -- 'pending', 'active',
+-- 'suspended', 'expired' (20260122_b2b_broker_portal.sql:90) -- but the WRITERS
+-- admit fewer. Every writer that creates a membership row carrying a user_id
+-- writes 'active' (jit_join_organization, auto_provision_it_admin,
+-- _ensure_personal_organization_for, claim_pending_invite,
+-- handle_new_user_invitation_link, the portal's auth callback, SCIM,
+-- directory-sync); the only move away from it is to 'suspended' and back.
+-- 'pending' belongs to INVITE rows, which carry invited_email and a NULL
+-- user_id and so can never match `m.user_id = auth.uid()`. No writer anywhere in
+-- this repo sets organization_members.license_status = 'expired'. So the two
+-- spellings are behaviourally identical today, and `= 'active'` is the one that
+-- fails CLOSED if a fifth state ever appears. It is also the spelling three
+-- policies already shipped on this database use for the same question
+-- (organization_identity_providers, scim_tokens, scim_sync_log).
+--
+-- SECURITY DEFINER for the same reason as the write rule: organization_members
+-- carries its own row-level security, and a policy that read it as the caller
+-- would be answering a different question than the one asked here.
+CREATE OR REPLACE FUNCTION public.is_active_commission_member(p_org_id uuid)
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public
+AS $fn$
+  SELECT EXISTS (SELECT 1 FROM public.organization_members m
+                  WHERE m.organization_id = p_org_id
+                    AND m.user_id = (SELECT auth.uid())
+                    AND m.license_status = 'active');
+$fn$;
+
 -- ============================ 4. the read helpers ===============================
 -- SECURITY INVOKER (the default -- stated here because it is load-bearing, not
 -- incidental): the helpers must see exactly the rows their caller's policies
@@ -226,6 +266,8 @@ REVOKE EXECUTE ON FUNCTION public.franchise_fee_in_force(uuid, date) FROM PUBLIC
 GRANT  EXECUTE ON FUNCTION public.franchise_fee_in_force(uuid, date) TO authenticated;
 REVOKE EXECUTE ON FUNCTION public.can_write_commission_agreements(uuid) FROM PUBLIC, anon;
 GRANT  EXECUTE ON FUNCTION public.can_write_commission_agreements(uuid) TO authenticated;
+REVOKE EXECUTE ON FUNCTION public.is_active_commission_member(uuid) FROM PUBLIC, anon;
+GRANT  EXECUTE ON FUNCTION public.is_active_commission_member(uuid) TO authenticated;
 
 -- ============================ 5. RLS and grants =================================
 ALTER TABLE public.agent_commission_agreements ENABLE ROW LEVEL SECURITY;
@@ -255,11 +297,16 @@ CREATE POLICY agent_commission_agreements_select_writer
   ON public.agent_commission_agreements FOR SELECT TO authenticated
   USING (public.can_write_commission_agreements(organization_id));
 
--- No membership term on purpose: an agent removed from a brokerage keeps the
--- record of what that brokerage paid them. Their own rows only.
+-- Their own rows, and only while they are an active member of the organization
+-- that wrote them. See section 3b for what "active" is and why it is spelled
+-- `= 'active'`. A bare `agent_user_id = auth.uid()` here would let a removed or
+-- deactivated agent keep reading; controls C21 and C22 in
+-- supabase/tests/backlog-3503/ hold that shut, and mutant m32 is that bare
+-- predicate.
 CREATE POLICY agent_commission_agreements_select_own
   ON public.agent_commission_agreements FOR SELECT TO authenticated
-  USING (agent_user_id = (SELECT auth.uid()));
+  USING (agent_user_id = (SELECT auth.uid())
+         AND public.is_active_commission_member(agent_commission_agreements.organization_id));
 
 -- The EXISTS clause must compare m.organization_id to the NEW ROW's
 -- organization_id. Written unqualified, `organization_id` binds to the

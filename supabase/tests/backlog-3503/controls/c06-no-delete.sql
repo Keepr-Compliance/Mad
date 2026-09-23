@@ -8,6 +8,6 @@ BEGIN
   s := pg_temp.sqlstate_of('DELETE FROM public.organization_franchise_fees');
   PERFORM pg_temp.check(s = '42501', format('franchise DELETE refused with 42501, got %s', s));
   SELECT count(*) INTO n FROM public.agent_commission_agreements;
-  PERFORM pg_temp.check(n = 5, format('broker A still sees all 5 org-A agreements, got %s', n));
+  PERFORM pg_temp.check(n = 7, format('broker A still sees all 7 org-A agreements, got %s', n));
 END $$;
 RESET ROLE;

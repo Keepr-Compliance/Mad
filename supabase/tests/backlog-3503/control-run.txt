@@ -15,8 +15,10 @@ c13-helper-runs-as-the-caller                  GREEN 4 assertions
 c14-franchise-fee-in-force                     GREEN 3 assertions
 c15-check-constraints                          GREEN 5 assertions
 c16-acceptance-example                         GREEN 7 assertions
-c17-policy-catalog                             GREEN 11 assertions
+c17-policy-catalog                             GREEN 16 assertions
 c18-privileges-are-gone                        GREEN 34 assertions
 c19-a-holder-cannot-be-deleted                 GREEN 7 assertions
 c20-fk-delete-actions-in-the-catalog           GREEN 6 assertions
-controls: 21 green / 21
+c21-deactivated-agent-loses-the-read           GREEN 6 assertions
+c22-removed-agent-loses-the-read               GREEN 7 assertions
+controls: 23 green / 23

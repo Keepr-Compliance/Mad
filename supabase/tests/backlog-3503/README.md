@@ -4,12 +4,14 @@ Executes `supabase/migrations/20260922220719_backlog_3503_commission_agreements.
 — **the shipped file itself, not a copy** — on a real Postgres 17.6, and records
 what every control and every mutant did.
 
-**It has been run.** 2026-09-22, on the NAS Supabase test stack, container
-`supabase_db_keepr-test`. **21 controls, 120 assertions, all green; 31 mutants
-× 21 controls = 651 runs.** Every mutant reddens at least one control and every
-control is reddened by at least one mutant. Every result below was measured;
-none was predicted. `control-run.txt` and `mutant-run.txt` in this directory are
-the runs' own output, unedited.
+**It has been run.** Twice: 2026-09-22 as first written, and again after the
+own-row read rule was reversed (see *The reversal* below). Both on the NAS
+Supabase test stack, container `supabase_db_keepr-test`. The recorded run is the
+second: **23 controls, 138 assertions, all green; 34 mutants × 23 controls = 782
+runs, 2 min 46 s wall clock.** Every mutant reddens at least one control and
+every control is reddened by at least one mutant. Every result below was
+measured; none was predicted. `control-run.txt` and `mutant-run.txt` in this
+directory are the runs' own output, unedited.
 
 It is not in CI: CI has no database. The text-level tripwire that does run in CI
 is `broker-portal/__tests__/migrations/commission-agreements-3503.test.ts`, and
@@ -99,7 +101,7 @@ and both are why the migration is shaped as it is:
 
 ---
 
-## Controls — all 21 GREEN, 120 assertions
+## Controls — all 23 GREEN, 138 assertions
 
 Each runs inside `BEGIN … ROLLBACK` after `fixtures.sql`. Role cases run as
 `authenticated` with `request.jwt.claim.sub`. `pg_temp.check` counts every
@@ -125,10 +127,12 @@ matched nothing cannot pass.
 | `c14` | the franchise fee is effective-dated the same way, and an agent cannot read it in M1 | 3 |
 | `c15` | the constraints that encode the fee model: the split sums to 100, cadence is constrained, no fee is negative | 5 |
 | `c16` | the founder's worked example, computed from what the helpers return | 7 |
-| `c17` | catalog: the write rule is DEFINER with `SET search_path = public`; neither read helper is DEFINER; the member check names the NEW ROW's org; **and a sweep of every policy for a self-comparison** | 11 |
-| `c18` | **privilege level**: UPDATE / DELETE / TRUNCATE / REFERENCES / TRIGGER absent for `anon` and `authenticated` on both tables; `set_by` and `set_at` not INSERT-grantable; plus the behavioural half — the weakest signed-in role's TRUNCATE is refused and all nine rows survive | 34 |
+| `c17` | catalog: **both** RLS helpers are DEFINER with `SET search_path = public`; neither read helper is DEFINER; the member check names the NEW ROW's org; the own-row policy carries both of its terms; **and a sweep of every policy for a self-comparison** | 16 |
+| `c18` | **privilege level**: UPDATE / DELETE / TRUNCATE / REFERENCES / TRIGGER absent for `anon` and `authenticated` on both tables; `set_by` and `set_at` not INSERT-grantable; plus the behavioural half — the weakest signed-in role's TRUNCATE is refused and all eleven rows survive | 34 |
 | `c19` | a user holding agreements cannot be deleted, **asserted by constraint name**, with memberships cleared first; the same for the organization; the broker who *set* the rows is held too; and a user holding nothing IS deletable | 7 |
 | `c20` | catalog: all five foreign keys exist and every one is ON DELETE NO ACTION | 6 |
+| `c21` | a **deactivated** agent (`license_status = 'suspended'`, membership row intact) reads none of their own rows — table and helper — while their broker still reads all of them | 6 |
+| `c22` | a **removed** agent (membership row DELETEd) reads none of their own rows — table and helper — while their broker still reads all of them. They are still an active member of the *other* org, which is what makes an org-blind rule visible | 7 |
 
 **Why C18 exists, and why it is late.** C05 and C06 assert a SQLSTATE at the
 moment of a write. They cannot see a privilege that is *granted but never
@@ -170,17 +174,88 @@ do, which is measured, and not as a claim about a producer, which is not.
 
 ---
 
-## Mutants — 31, every one reds at least one control
+## The reversal — the own-row read is gated on active membership
+
+The first version of this migration shipped the agent's own-row SELECT policy as
+a bare `agent_user_id = (SELECT auth.uid())`, on the reasoning that an agent who
+leaves a brokerage keeps the record of what that brokerage promised them. **That
+decision was reversed by the founder after the PR was opened.** An agent reads
+their own rows only while they are an active member of the organization that
+wrote them. The reasoning is recorded on BACKLOG-3503; this file records the
+shape.
+
+Losing access has **two different shapes in the data**, and a rule that handles
+one silently misses the other:
+
+| Product action | What it writes | What a read rule must notice |
+|---|---|---|
+| Remove (`broker-portal/lib/actions/removeUser.ts`) | DELETEs the `organization_members` row | no row matches at all |
+| Deactivate (`broker-portal/lib/actions/deactivateUser.ts`) | sets `license_status = 'suspended'`, row stays | the row matches; its **status** does not |
+
+SCIM (`supabase/functions/scim/handlers/users.ts`) and `directory-sync` write the
+same `'suspended'`. So the rule is `public.is_active_commission_member(org)`:
+a member row for this caller, in **this** organization, at
+`license_status = 'active'`.
+
+### Why `= 'active'` and not `NOT IN ('suspended','expired')`
+
+The CHECK on `organization_members.license_status`
+(`20260122_b2b_broker_portal.sql:90`) admits four values — `pending`, `active`,
+`suspended`, `expired`. The **writers** admit fewer, and the writers are what
+decides:
+
+- every writer that creates a membership row carrying a `user_id` writes
+  `'active'` — `jit_join_organization`, `auto_provision_it_admin`,
+  `_ensure_personal_organization_for`, `claim_pending_invite`,
+  `handle_new_user_invitation_link`, the portal's auth callback, SCIM,
+  `directory-sync`;
+- the only move away from it is to `'suspended'`, and back;
+- `'pending'` belongs to **invite** rows, which carry `invited_email` and a NULL
+  `user_id`, so they can never match `m.user_id = auth.uid()`. Measured on
+  production: all 9 `pending` rows have a NULL `user_id`; all 10 rows with a
+  `user_id` are `active`;
+- **no writer anywhere in this repository sets it to `'expired'`.** The value is
+  in the CHECK and rendered by the admin portal, and nothing produces it.
+
+So the two spellings are behaviourally identical **today**, and they differ on
+the state nobody has written yet: `= 'active'` denies it, `NOT IN (…)` admits
+it. Access control fails closed. `= 'active'` is also the spelling three
+policies already on this database use for the same question
+(`organization_identity_providers`, `scim_tokens`, `scim_sync_log`).
+
+### What the reversal did NOT change, stated
+
+- **The broker/admin read is untouched.** `can_write_commission_agreements` has
+  no `license_status` term, so a *suspended broker* still reads and writes. That
+  was not in the ruling and was not changed here.
+- **The INSERT policy's member-EXISTS has no status term either**, so a broker
+  can still write an agreement for an agent who is suspended. Also not in the
+  ruling.
+- **`set_by` stays `ON DELETE NO ACTION`.** The broker who writes a split cannot
+  afterwards be hard-deleted; the founder accepted that, because the product
+  deactivates rather than deletes. C19 and C20 assert it by constraint name.
+
+### The fixture that makes an org-blind rule visible
+
+`u_agent_gone` is removed from org A **and still an active member of org B** —
+an agent who moved brokerages. Without that second membership, a rule asking
+"is the caller an active member of *some* organization" would pass C22 while
+leaking every former office's rows. Mutant `m34` is that rule, and C22 is the
+only control that reds on it.
+
+---
+
+## Mutants — 34, every one reds at least one control
 
 Each prints `MUTATION APPLIED: <catalog evidence>` inside the transaction before
 any control runs, after verifying its own effect from the catalog; `run.sh`
 refuses a red without that line (`RED WITHOUT PROOF`) and refuses a mutant that
-never printed one. 31/31 printed it. Full output in `mutant-run.txt`.
+never printed one. 34/34 printed it. Full output in `mutant-run.txt`.
 
 | Mutant | RED |
 |---|---|
-| `m01` read helpers marked SECURITY DEFINER | c13 c17 |
-| `m02` write rule reuses `is_org_admin` | c01 c04 c04b c05 c06 c08 c10 c11 c14 c15 c16 |
+| `m01` read helpers marked SECURITY DEFINER | c13 c17 c21 c22 |
+| `m02` write rule reuses `is_org_admin` | c01 c04 c04b c05 c06 c08 c10 c11 c14 c15 c16 c21 c22 |
 | `m03` `set_at DESC` ordered before `seq DESC` | c10 c11 c16 |
 | `m04` `effective_from ASC` | c10 c11 c16 |
 | `m05` no `effective_from <= p_on_date` filter | c10 c11 c12 c14 c16 |
@@ -190,12 +265,12 @@ never printed one. 31/31 printed it. Full output in `mutant-run.txt`.
 | `m09` DELETE granted, with a policy | c06 c18 |
 | `m10` anon can read | c07 c18 |
 | `m11` write rule ignores the org | c01 c06 c09 c13 |
-| `m12` writer SELECT policy `USING (true)` | c01 c02 c04 c06 c13 c14 |
-| `m13` agreements readable org-wide | c02 c04 c13 |
+| `m12` writer SELECT policy `USING (true)` | c01 c02 c04 c06 c13 c14 c21 c22 |
+| `m13` agreements readable org-wide | c02 c04 c13 c17 c21 c22 |
 | `m14` helper ignores the agent | c10 c12 c13 |
 | `m15` no split-sum CHECK | c15 |
 | `m16` `it_admin` added to the writer list | c04 |
-| `m17` `agent` added to the writer list | c02 c03 c13 c14 |
+| `m17` `agent` added to the writer list | c02 c03 c13 c14 c21 c22 |
 | `m18` franchise fee readable org-wide | c04 c14 |
 | `m19` INSERT policy without the member check | c09 c17 |
 | `m20` INSERT policy's unqualified `organization_id` | c17 |
@@ -204,12 +279,15 @@ never printed one. 31/31 printed it. Full output in `mutant-run.txt`.
 | `m23` self-comparison in a *different* policy | c17 |
 | **`m24` TRUNCATE granted** | **c18** |
 | **`m25` `REVOKE ALL` omitted** (the default ACL grant stands) | **c05 c06 c07 c08 c18** |
-| **`m26` RLS not enabled on the agreements table** | **c01 c02 c03 c04 c06 c09 c13** |
-| **`m27` RLS not enabled on either table** | **c01 c02 c03 c04 c06 c09 c13 c14** |
+| **`m26` RLS not enabled on the agreements table** | **c01 c02 c03 c04 c06 c09 c13 c21 c22** |
+| **`m27` RLS not enabled on either table** | **c01 c02 c03 c04 c06 c09 c13 c14 c21 c22** |
 | **`m28` `SET search_path` dropped from the DEFINER write rule** | **c17** |
 | **`m29` agent FK rewritten ON DELETE CASCADE** | **c19 c20** |
 | **`m30` franchise `set_by` FK rewritten ON DELETE CASCADE** | **c19 c20** |
 | **`m31` org FK written ON DELETE RESTRICT, not NO ACTION** | **c19 c20** |
+| **`m32` own-row policy reverted to the bare `auth.uid()` predicate** | **c17 c21 c22** |
+| **`m33` active-membership rule drops the `license_status` filter** | **c21** |
+| **`m34` active-membership rule drops the organization scope** | **c22** |
 
 `m21`/`m22` and `m25` are the reason C05 and C06 assert a **specific** SQLSTATE.
 A grant without a policy makes the write a silent zero-row no-op, and every one

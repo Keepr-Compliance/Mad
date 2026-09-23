@@ -52,7 +52,7 @@ DO $$
 DECLARE n bigint;
 BEGIN
   SELECT count(*) INTO n FROM public.agent_commission_agreements;
-  PERFORM pg_temp.check(n = 6, format('all six agreement rows survive, got %s', n));
+  PERFORM pg_temp.check(n = 8, format('all eight agreement rows survive, got %s', n));
   SELECT count(*) INTO n FROM public.organization_franchise_fees;
   PERFORM pg_temp.check(n = 3, format('all three franchise rows survive, got %s', n));
 END $$;
