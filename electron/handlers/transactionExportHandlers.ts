@@ -47,6 +47,8 @@ import {
   type ExportPlanRequest,
 } from "../services/exportPlan";
 
+import { sendToMainWindow } from "../windowRegistry";
+
 interface ExportOptions {
   exportFormat?: string;
   [key: string]: unknown;
@@ -109,10 +111,10 @@ export const cleanupTransactionHandlers = (): void => {
 
 /**
  * Register transaction export and submission IPC handlers
- * @param mainWindow - Main window instance
+ * @param _mainWindow - Main window instance. No push reads it any more (BACKLOG-3454: pushes resolve the live window via sendToMainWindow), but its truthiness still gates the submission sync pollers below.
  */
 export function registerTransactionExportHandlers(
-  mainWindow: BrowserWindow | null,
+  _mainWindow: BrowserWindow | null,
 ): void {
   // Export transaction to PDF
   ipcMain.handle(
@@ -536,12 +538,10 @@ export function registerTransactionExportHandlers(
           transactionId: validatedTransactionId,
           onProgress: (progress: FolderExportProgress) => {
             // Send progress updates to renderer
-            if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.webContents.send(
-                "transactions:export-folder-progress",
-                progress,
-              );
-            }
+            sendToMainWindow(
+              "transactions:export-folder-progress",
+              progress,
+            );
           },
         },
       );
@@ -625,9 +625,7 @@ export function registerTransactionExportHandlers(
       const result = await submissionService.submitTransaction(
         validatedTransactionId,
         (progress: SubmissionProgress) => {
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send("transactions:submit-progress", progress);
-          }
+          sendToMainWindow("transactions:submit-progress", progress);
         }
       );
 
@@ -696,9 +694,7 @@ export function registerTransactionExportHandlers(
       const result = await submissionService.resubmitTransaction(
         validatedTransactionId,
         (progress: SubmissionProgress) => {
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send("transactions:submit-progress", progress);
-          }
+          sendToMainWindow("transactions:submit-progress", progress);
         }
       );
 
@@ -803,9 +799,12 @@ export function registerTransactionExportHandlers(
   // SYNC HANDLERS (BACKLOG-395)
   // ============================================
 
-  // Set main window reference for sync service and start sync
-  if (mainWindow) {
-    submissionSyncService.setMainWindow(mainWindow);
+  // BACKLOG-3454: nothing is handed to the sync service any more -- it resolves
+  // the live window itself. Handing it the window captured at registration is
+  // what killed its status pushes after a macOS Dock reopen. The truthiness gate
+  // below is unchanged: it also gates the pollers, and suites that pass null
+  // rely on those staying off.
+  if (_mainWindow) {
     // Start periodic sync with 1 minute interval (fallback for missed realtime events)
     submissionSyncService.startPeriodicSync(60000);
     // Start realtime subscription for instant status change notifications

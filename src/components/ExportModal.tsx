@@ -69,6 +69,11 @@ function ExportModal({
   const [exportedPath, setExportedPath] = useState<string | null>(null);
   const [saveAsDefault, setSaveAsDefault] = useState(false);
 
+  // BACKLOG-334: TRUE once the saved export preferences have loaded AND carry a
+  // usable format. Only then does step 1 show the "Export format" button in its
+  // heading row and send its primary straight into the export.
+  const [hasSavedDefaults, setHasSavedDefaults] = useState(false);
+
   // BACKLOG-2292 (Layer 3): export completeness gate. Shown when the audit start
   // predates the imported message history and no targeted import has run yet.
   const {
@@ -130,6 +135,9 @@ function ExportModal({
             // Only use saved preference if it's an implemented format
             if (prefs.export?.defaultFormat && implementedFormats.includes(prefs.export.defaultFormat)) {
               setExportFormat(prefs.export.defaultFormat);
+              // BACKLOG-334: a usable format is what makes this "defaults saved".
+              // A partial or legacy record must NOT make the options step vanish.
+              setHasSavedDefaults(true);
             }
             // Load email export mode preference
             if (prefs.export?.emailExportMode === "thread" || prefs.export?.emailExportMode === "individual") {
@@ -180,17 +188,45 @@ function ExportModal({
     }
   }, [exporting, exportFormat]);
 
-  const handleDateVerification = () => {
+  /**
+   * BACKLOG-334: the step-1 date checks, shared by the primary button and the
+   * "Export format" button. Both routes into the export now run them, so the
+   * new button cannot reach the export with a missing or inverted date range.
+   */
+  const datesAreValid = (): boolean => {
     if (!startDate || !endDate) {
       setError("Please provide Start Date and End Date to continue");
-      return;
+      return false;
     }
     // Validate end date is after start date
     if (startDate > endDate) {
       setError("End Date must be after Start Date");
-      return;
+      return false;
     }
     setError(null);
+    return true;
+  };
+
+  const handleDateVerification = () => {
+    if (!datesAreValid()) return;
+    // BACKLOG-334: with defaults saved the options step has nothing left to ask,
+    // so the primary runs the export directly (and reads "Export", not "Next").
+    // The completeness gate and the paywall are unaffected: both fire from
+    // inside handleExport/proceedWithExport, not from step 2's render.
+    if (hasSavedDefaults) {
+      void handleExport();
+      return;
+    }
+    setStep(2);
+  };
+
+  /**
+   * BACKLOG-334: "Export format", in step 1's heading row. Opens the options pre-filled
+   * with what this export will use. Back returns to step 1, and the choices
+   * apply to this export only unless the save checkbox is ticked.
+   */
+  const handleOpenExportOptions = () => {
+    if (!datesAreValid()) return;
     setStep(2);
   };
 
@@ -516,9 +552,39 @@ function ExportModal({
           {step === 1 && (
             <div className="space-y-6">
               <div>
-                <h4 className="text-lg font-semibold text-gray-900 mb-4">
-                  Verify Transaction Dates
-                </h4>
+                {/* BACKLOG-334 (founder QA 2026-09-19): title left, button right,
+                    the same header row the emails/texts tabs use —
+                    TransactionEmailsTab.tsx:667 (container) and :675 (button
+                    group). The button is shown only with saved defaults. */}
+                <div className="flex justify-between items-center mb-4">
+                  <h4 className="text-lg font-semibold text-gray-900">
+                    Verify Transaction Dates
+                  </h4>
+                  {hasSavedDefaults && (
+                    <div className="flex gap-2">
+                      <button
+                        onClick={handleOpenExportOptions}
+                        className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
+                        data-testid="export-format-button"
+                      >
+                        <svg
+                          className="w-4 h-4"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"
+                          />
+                        </svg>
+                        Export format
+                      </button>
+                    </div>
+                  )}
+                </div>
                 <p className="text-sm text-gray-600 mb-2">
                   Communications will be filtered to only include those between
                   Start Date and End Date.
@@ -863,7 +929,7 @@ function ExportModal({
                     onChange={(e) => setSaveAsDefault(e.target.checked)}
                     className="w-4 h-4 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
                   />
-                  <span className="text-sm text-gray-600">Save these options as my default</span>
+                  <span className="text-sm text-gray-600">Use these options for every export</span>
                 </label>
               </div>
 
@@ -1004,7 +1070,7 @@ function ExportModal({
                     : "bg-gradient-to-r from-purple-500 to-indigo-600 text-white hover:from-purple-600 hover:to-indigo-700 shadow-md hover:shadow-lg"
                 }`}
               >
-                {step === 1 ? "Next" : "Export"}
+                {step === 1 ? (hasSavedDefaults ? "Export" : "Next") : "Export"}
               </button>
             </div>
             {/* Mobile floating button */}
@@ -1017,7 +1083,7 @@ function ExportModal({
                   : "bg-gradient-to-r from-purple-500 to-indigo-600 text-white hover:from-purple-600 hover:to-indigo-700 hover:shadow-xl"
               }`}
             >
-              {step === 1 ? "Next →" : "Export"}
+              {step === 1 ? (hasSavedDefaults ? "Export" : "Next →") : "Export"}
             </button>
           </>
         )}

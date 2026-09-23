@@ -40,6 +40,8 @@ import type {
 // BACKLOG-2748: ONE spelling of the cancel channel, shared with the preload bridge.
 import { MESSAGES_IMPORT_CANCEL_CHANNEL } from "../types/ipc/messageChannels";
 
+import { sendToMainWindow } from "../windowRegistry";
+
 /**
  * Attachment info with base64 data for IPC transfer (TASK-1012)
  */
@@ -125,7 +127,7 @@ async function resolveRecommendedRange(
   return null;
 }
 
-export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
+export function registerMessageImportHandlers(_mainWindow: BrowserWindow): void {
   // Prevent double registration
   if (handlersRegistered) {
     logService.warn(
@@ -233,13 +235,11 @@ export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
 
       // Create progress callback that sends updates to renderer with elapsed time
       const onProgress: ImportProgressCallback = (progress) => {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          const elapsedMs = importStartTime ? Date.now() - importStartTime : 0;
-          mainWindow.webContents.send("messages:import-progress", {
-            ...progress,
-            elapsedMs,
-          });
-        }
+        const elapsedMs = importStartTime ? Date.now() - importStartTime : 0;
+        sendToMainWindow("messages:import-progress", {
+          ...progress,
+          elapsedMs,
+        });
       };
 
       try {

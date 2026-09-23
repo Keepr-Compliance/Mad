@@ -54,12 +54,14 @@ import {
 import { TransactionStatusSchema } from "../schemas/transaction";
 import type { OAuthProvider } from "../types/models";
 
+import { sendToMainWindow } from "../windowRegistry";
+
 /**
  * Register transaction CRUD IPC handlers
- * @param mainWindow - Main window instance (used to push auto-sync events to renderer, BACKLOG-1832)
+ * @param _mainWindow - Main window instance (used to push auto-sync events to renderer, BACKLOG-1832) (BACKLOG-3454: IGNORED — pushes resolve the live window via sendToMainWindow; kept so existing call sites and suites compile)
  */
 export function registerTransactionCrudHandlers(
-  mainWindow: BrowserWindow | null,
+  _mainWindow: BrowserWindow | null,
 ): void {
   /**
    * BACKLOG-1832: returns onStart/onComplete callbacks that push IPC events to
@@ -70,22 +72,18 @@ export function registerTransactionCrudHandlers(
   function makeCreateSyncCallbacks(transactionId: string, reason: string) {
     return {
       onStart: () => {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send("transactions:auto-sync-started", {
-            transactionId,
-            reason,
-          });
-        }
+        sendToMainWindow("transactions:auto-sync-started", {
+          transactionId,
+          reason,
+        });
       },
       onComplete: (result: { ran: boolean; reason: string; windowsFetched?: number; skipped?: string; error?: string }) => {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send("transactions:auto-sync-complete", {
-            transactionId,
-            reason: result.reason,
-            ran: result.ran,
-            windowsFetched: result.windowsFetched,
-          });
-        }
+        sendToMainWindow("transactions:auto-sync-complete", {
+          transactionId,
+          reason: result.reason,
+          ran: result.ran,
+          windowsFetched: result.windowsFetched,
+        });
       },
     };
   }
@@ -99,12 +97,10 @@ export function registerTransactionCrudHandlers(
   function makeMessagesProgressCallback(): ImportProgressCallback {
     const startedAt = Date.now();
     return (progress) => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send("messages:import-progress", {
-          ...progress,
-          elapsedMs: Date.now() - startedAt,
-        });
-      }
+      sendToMainWindow("messages:import-progress", {
+        ...progress,
+        elapsedMs: Date.now() - startedAt,
+      });
     };
   }
 
@@ -115,13 +111,11 @@ export function registerTransactionCrudHandlers(
    * "affects all of this user's transactions".
    */
   function emitMessagesSyncComplete(transactionId: string | null, result: EnsureMessagesResult): void {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("transactions:messages-sync-complete", {
-        transactionId,
-        ran: result.ran,
-        imported: result.imported,
-      });
-    }
+    sendToMainWindow("transactions:messages-sync-complete", {
+      transactionId,
+      ran: result.ran,
+      imported: result.imported,
+    });
   }
   // Get all transactions for a user
   ipcMain.handle(

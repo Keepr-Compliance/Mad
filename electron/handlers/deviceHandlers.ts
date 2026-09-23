@@ -8,6 +8,7 @@ import log from "electron-log";
 import * as Sentry from "@sentry/electron/main";
 import { deviceDetectionService } from "../services/deviceDetectionService";
 import type { iOSDevice } from "../types/device";
+import { sendToMainWindow } from "../windowRegistry";
 
 /**
  * Response type for device-related IPC handlers
@@ -28,9 +29,13 @@ interface ListDevicesResponse extends DeviceResponse {
  * Registers all device-related IPC handlers.
  * Sets up event forwarding from device service to renderer process.
  *
- * @param mainWindow The main browser window to send events to
+ * @param _mainWindow Ignored since BACKLOG-3454 — every push below resolves the
+ *   CURRENT window through `sendToMainWindow`. Capturing this one meant that
+ *   after a Dock reopen on macOS the window was destroyed and every device
+ *   event was dropped in silence. The parameter is kept so the ~20 suites that
+ *   pass a stand-in window still compile.
  */
-export function registerDeviceHandlers(mainWindow: BrowserWindow): void {
+export function registerDeviceHandlers(_mainWindow: BrowserWindow): void {
   log.info("[DeviceHandlers] Registering device detection handlers");
 
   // Forward device events to renderer
@@ -38,18 +43,14 @@ export function registerDeviceHandlers(mainWindow: BrowserWindow): void {
     log.info(
       `[DeviceHandlers] Forwarding device-connected event for: ${device.name}`,
     );
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("device:connected", device);
-    }
+    sendToMainWindow("device:connected", device);
   });
 
   deviceDetectionService.on("device-disconnected", (device: iOSDevice) => {
     log.info(
       `[DeviceHandlers] Forwarding device-disconnected event for: ${device.name}`,
     );
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("device:disconnected", device);
-    }
+    sendToMainWindow("device:disconnected", device);
   });
 
   // ===== IPC HANDLERS =====
@@ -182,25 +183,19 @@ export function registerDeviceHandlers(mainWindow: BrowserWindow): void {
   // Forward device-needs-trust events to renderer
   deviceDetectionService.on("device-needs-trust", (data: { udid: string; reason?: "locked" | "trust_pending" | "unknown" }) => {
     log.info(`[DeviceHandlers] Device needs trust: ${data.udid}`);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("device:needs-trust", data);
-    }
+    sendToMainWindow("device:needs-trust", data);
   });
 
   // BACKLOG-1620/1621: Forward tools-missing event to renderer
   deviceDetectionService.on("tools-missing", () => {
     log.warn("[DeviceHandlers] Forwarding tools-missing event to renderer");
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("device:tools-missing");
-    }
+    sendToMainWindow("device:tools-missing");
   });
 
   // BACKLOG-1621: Forward tools-available event when tools are installed mid-session
   deviceDetectionService.on("tools-available", () => {
     log.info("[DeviceHandlers] Forwarding tools-available event to renderer");
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("device:tools-available");
-    }
+    sendToMainWindow("device:tools-available");
   });
 
   /**

@@ -146,7 +146,7 @@ export function createKeychainKeyProvider(
   const resolve = async (): Promise<Buffer> => {
     if (!deps.isEncryptionAvailable()) {
       throw new SupportCipherUnavailableError(
-        "This Mac cannot protect diagnostic data at rest right now (secure storage is unavailable), so support access cannot record anything.",
+        "This computer cannot protect diagnostic data at rest right now (secure storage is unavailable), so support access cannot record anything.",
       );
     }
 

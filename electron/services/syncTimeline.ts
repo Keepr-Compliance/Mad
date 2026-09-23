@@ -348,12 +348,23 @@ export class SyncTimeline {
    */
   recordBytesTransferred(bytes: number): void {
     if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes < 0) return;
+    // BACKLOG-3460: INTEGERISE HERE, AT THE SOURCE. The number arriving routinely has a
+    // fractional part: `backupService.parseProgress` reads the progress bar's
+    // "3951.2 MB" with `parseFloat` and `parseBytes` multiplies by 1024ⁿ, giving
+    // 3951.2 × 1048576 = 4142962380.8. The `bytes_transferred` column is `bigint`, and
+    // Postgres REJECTS a fractional literal outright rather than truncating it — so
+    // every heartbeat AND the terminal write of any run that reached transfer were
+    // dropped, and such a run stayed `outcome='running'` with `bytes_transferred=0`
+    // forever. Rounding here rather than only in the Supabase mapper is the point: the
+    // high-water mark and `bytesLastIncreasedAt` below are what the stall report
+    // compares, and they have to be keyed on the same integer the corpus stores.
+    const value = Math.round(bytes);
     const previous = this.bytesTransferred ?? 0;
     // First reading establishes the mark even when it is zero — "the transfer has
     // reported in, and it has moved nothing yet" is a fact worth having.
-    if (this.bytesTransferred === null) this.bytesTransferred = bytes;
-    if (bytes > previous) {
-      this.bytesTransferred = bytes;
+    if (this.bytesTransferred === null) this.bytesTransferred = value;
+    if (value > previous) {
+      this.bytesTransferred = value;
       this.bytesLastIncreasedAt = this.now();
     }
   }
