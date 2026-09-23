@@ -20,6 +20,16 @@
 -- office-wide read and the write, not a row about themselves -- so adding them
 -- changes no count anywhere. Controls C23 and C24.
 --
+-- u_agent_exp is a member who was deactivated and then EXPIRED, so their row
+-- carries a deactivation date at a status that is neither 'active' nor
+-- 'suspended'. They hold no agreement either, so they change no count. Control
+-- C29 -- the status gate on the INSERT policy's date arm.
+--
+-- ALL FOUR of those rows are created ACTIVE and moved by UPDATE, because that is
+-- how the product moves them and because the trigger that records the date only
+-- fires on an UPDATE. The long note beside that UPDATE says what inserting them
+-- at 'suspended' would have cost.
+--
 -- Org A therefore holds 7 agreement rows and the venue 8; C6 and C18 count them.
 -- Org A holds 3 franchise fee rows and the venue 4; C18 and C23 count them.
 
@@ -37,10 +47,14 @@ DECLARE
   u_agent_gone uuid := '00000000-0000-4000-8000-000035030010'; -- pii-allow-uuid: invented fixture id
   u_broker_sus uuid := '00000000-0000-4000-8000-000035030011'; -- pii-allow-uuid: invented fixture id
   u_admin_sus  uuid := '00000000-0000-4000-8000-000035030012'; -- pii-allow-uuid: invented fixture id
+  u_agent_exp  uuid := '00000000-0000-4000-8000-000035030013'; -- pii-allow-uuid: invented fixture id
   o_a          uuid := '00000000-0000-4000-8000-00003503a0a0'; -- pii-allow-uuid: invented fixture id
   o_b          uuid := '00000000-0000-4000-8000-00003503b0b0'; -- pii-allow-uuid: invented fixture id
   r record;
   v_left int;
+  v_dat  timestamptz;
+  v_n    int;
+  v_st   text;
 BEGIN
   PERFORM set_config('t3503.u_broker_a',  u_broker_a::text,  true);
   PERFORM set_config('t3503.u_admin_a',   u_admin_a::text,   true);
@@ -54,6 +68,7 @@ BEGIN
   PERFORM set_config('t3503.u_agent_gone', u_agent_gone::text, true);
   PERFORM set_config('t3503.u_broker_sus', u_broker_sus::text, true);
   PERFORM set_config('t3503.u_admin_sus',  u_admin_sus::text,  true);
+  PERFORM set_config('t3503.u_agent_exp',  u_agent_exp::text,  true);
   PERFORM set_config('t3503.o_a',         o_a::text,         true);
   PERFORM set_config('t3503.o_b',         o_b::text,         true);
 
@@ -62,7 +77,8 @@ BEGIN
       (u_agent_a2,'agent-a2'), (u_itadmin_a,'itadmin-a'), (u_broker_b,'broker-b'),
       (u_agent_b,'agent-b'), (u_nomember,'nomember'),
       (u_agent_sus,'agent-sus'), (u_agent_gone,'agent-gone'),
-      (u_broker_sus,'broker-sus'), (u_admin_sus,'admin-sus')) v(id, label)
+      (u_broker_sus,'broker-sus'), (u_admin_sus,'admin-sus'),
+      (u_agent_exp,'agent-exp')) v(id, label)
   LOOP
     INSERT INTO auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data)
     VALUES (r.id, r.label || '@fixture-3503.example.test', 'authenticated', 'authenticated',
@@ -83,16 +99,14 @@ BEGIN
     (o_a, u_itadmin_a, 'it_admin', 'active', now()),
     (o_b, u_broker_b,  'broker',   'active', now()),
     (o_b, u_agent_b,   'agent',    'active', now()),
-    -- The DEACTIVATED shape. deactivateUser.ts leaves the membership row in
-    -- place and moves license_status to 'suspended'; so does SCIM, and so does
-    -- directory-sync for a member who left the directory.
-    (o_a, u_agent_sus, 'agent', 'suspended', now()),
-    -- The same shape applied to the people who SET pay. Deactivating a broker
-    -- or an admin writes exactly the row above with a different role -- the
-    -- product has one deactivate path, not one per role -- and the founder's
-    -- ruling is that it cuts their access too. Controls C23 and C24.
-    (o_a, u_broker_sus, 'broker', 'suspended', now()),
-    (o_a, u_admin_sus,  'admin',  'suspended', now()),
+    -- The DEACTIVATED shape, and the EXPIRED one, are BOTH created ACTIVE here
+    -- and moved by UPDATE below. That is not tidiness -- see the block after
+    -- this INSERT for why inserting them at 'suspended' would have made the
+    -- whole boundary sweep vacuous.
+    (o_a, u_agent_sus,  'agent',  'active', now()),
+    (o_a, u_broker_sus, 'broker', 'active', now()),
+    (o_a, u_admin_sus,  'admin',  'active', now()),
+    (o_a, u_agent_exp,  'agent',  'active', now()),
     -- The REMOVED shape, staged in two steps below: this row is inserted the
     -- way any member's is, then DELETEd, because that is what removeUser.ts
     -- does. u_agent_gone is ALSO an active member of org B -- an agent who
@@ -101,6 +115,59 @@ BEGIN
     -- can see the difference. Mutant m34 is that mistake.
     (o_a, u_agent_gone, 'agent', 'active', now()),
     (o_b, u_agent_gone, 'agent', 'active', now());
+
+  -- ---- DEACTIVATION HAPPENS THE WAY PRODUCTION DOES IT: BY UPDATE ------------
+  -- deactivateUser.ts, both SCIM paths and directory-sync all move an EXISTING
+  -- row from 'active' to 'suspended'. None of them inserts a row already
+  -- suspended. So these fixtures do the same, and organization_members.
+  -- deactivated_at is written by the trigger rather than by hand.
+  --
+  -- WHY THAT MATTERS MORE THAN IT LOOKS. Inserting these rows at 'suspended'
+  -- -- which is what this file did before the date rule existed -- fires no
+  -- BEFORE UPDATE trigger, so every one of them would carry deactivated_at
+  -- NULL. Every suspended-subject assertion in C25, C27 and C28 would then be
+  -- refused by the IS NOT NULL guard and NEVER REACH THE DATE COMPARISON. All
+  -- of them would report GREEN, the date logic would be entirely untested, and
+  -- the mutants that move the boundary would red nothing. A hand-written
+  -- deactivated_at would hide the same hole one layer further down, by proving
+  -- the policy works on a value no producer had to generate.
+  UPDATE public.organization_members SET license_status = 'suspended'
+   WHERE organization_id = o_a
+     AND user_id IN (u_agent_sus, u_broker_sus, u_admin_sus, u_agent_exp);
+
+  -- u_agent_exp then EXPIRES. The trigger leaves deactivated_at alone on a move
+  -- to 'expired', so this row ends up at a status that is neither 'active' nor
+  -- 'suspended' while still carrying a date -- the exact shape the status gate
+  -- in the INSERT policy's second arm exists to refuse. Control C29 is that
+  -- refusal; without this row the gate could be deleted and nothing would move.
+  UPDATE public.organization_members SET license_status = 'expired'
+   WHERE organization_id = o_a AND user_id = u_agent_exp;
+
+  -- The fixture PROVES the trigger fired rather than assuming it. If the
+  -- trigger is ever broken or dropped, every control that depends on a
+  -- deactivation date fails HERE, loudly, instead of passing for the wrong
+  -- reason.
+  SELECT count(*) INTO v_n FROM public.organization_members
+   WHERE organization_id = o_a
+     AND user_id IN (u_agent_sus, u_broker_sus, u_admin_sus, u_agent_exp)
+     AND deactivated_at IS NOT NULL;
+  IF v_n <> 4 THEN
+    RAISE EXCEPTION 'FIXTURE FAILED: the deactivation trigger did not stamp all four rows (got % of 4)', v_n;
+  END IF;
+
+  SELECT license_status INTO v_st FROM public.organization_members
+   WHERE organization_id = o_a AND user_id = u_agent_exp;
+  IF v_st IS DISTINCT FROM 'expired' THEN
+    RAISE EXCEPTION 'FIXTURE FAILED: the expired subject is at %, not expired', coalesce(v_st,'NULL');
+  END IF;
+
+  -- Publish the deactivation date so controls can place effective_from on
+  -- either side of it. now() is CONSTANT for the whole transaction, so all four
+  -- rows share one instant -- which is why controls express their dates as
+  -- offsets from this value and never as literals.
+  SELECT deactivated_at INTO v_dat FROM public.organization_members
+   WHERE organization_id = o_a AND user_id = u_agent_sus;
+  PERFORM set_config('t3503.d_sus', ((v_dat AT TIME ZONE 'UTC')::date)::text, true);
 
   -- Agreements. set_by is supplied explicitly: fixtures run as postgres, where
   -- auth.uid() is NULL and the column default cannot satisfy NOT NULL (probe P1).

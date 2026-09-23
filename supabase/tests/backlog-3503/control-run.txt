@@ -23,5 +23,9 @@ c21-deactivated-agent-loses-the-read           GREEN 6 assertions
 c22-removed-agent-loses-the-read               GREEN 7 assertions
 c23-suspended-writer-loses-the-read            GREEN 18 assertions
 c24-suspended-writer-loses-the-write           GREEN 8 assertions
-c25-insert-subject-status                      GREEN 9 assertions
-controls: 26 green / 26
+c25-insert-subject-active-period               GREEN 13 assertions
+c26-deactivation-date-is-the-transition        GREEN 8 assertions
+c27-boundary-is-swept-not-sampled              GREEN 11 assertions
+c28-the-founders-case-end-to-end               GREEN 6 assertions
+c29-date-arm-is-gated-on-suspended             GREEN 5 assertions
+controls: 30 green / 30

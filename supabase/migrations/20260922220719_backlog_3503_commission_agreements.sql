@@ -33,6 +33,14 @@
 --   commission_agreement_in_force(uuid, uuid, date)   read helper, INVOKER
 --   franchise_fee_in_force(uuid, date)                read helper, INVOKER
 --
+-- Alters (the only pre-existing table this migration touches)
+-- ---------------------------------------------------------------------------
+--   organization_members.deactivated_at timestamptz, nullable, plus the trigger
+--   org_members_track_deactivation that maintains it. The agreement INSERT rule
+--   needs the END of a member's active period and nothing recorded it. Section
+--   2b has the full reasoning, including why the trigger tests the TRANSITION
+--   rather than the new value, and what the single column does not model.
+--
 -- Five things a later reader needs, none of them obvious from the statements
 -- ---------------------------------------------------------------------------
 -- (a) WHY `REVOKE ALL` IS HERE. Supabase ships
@@ -182,6 +190,85 @@ COMMENT ON TABLE public.organization_franchise_fees IS
 CREATE INDEX organization_franchise_fees_in_force_idx
   ON public.organization_franchise_fees (organization_id, effective_from DESC, seq DESC);
 
+-- ==================== 2b. when a membership was deactivated =====================
+-- THIS IS THE ONE PLACE THIS MIGRATION TOUCHES A PRE-EXISTING, SHARED TABLE.
+-- organization_members is read by both portals and by the desktop app. The
+-- column is nullable and additive, and nothing reads it but the agreement INSERT
+-- policy in section 5. Measured before adding it: no SELECT * on this table
+-- anywhere in the repo, no PostgREST embed organization_members(*), no view or
+-- materialized view over it, no function RETURNS SETOF organization_members, and
+-- no positional INSERT ... VALUES without a column list. So no existing consumer
+-- changes shape.
+--
+-- WHY THE COLUMN HAS TO EXIST. The rule in section 5 tests an agreement's
+-- effective date against the period its subject was active. The START of that
+-- period is joined_at. The END was not recorded anywhere: there is no
+-- membership-history table, and updated_at is bumped by
+-- update_org_members_updated_at on ANY update, so it cannot carry a deactivation
+-- date. Measured on production before this column was added: zero columns on
+-- organization_members match '%deactiv%', and license_status 'suspended' has
+-- ZERO rows -- so there is no history to backfill and no ambiguity to resolve.
+-- This is the cheapest moment this column will ever be added.
+--
+-- WHY A TRIGGER AND NOT AN EDIT TO deactivateUser.ts. Four writers move a
+-- membership row to 'suspended' and they are spread across three runtimes:
+-- broker-portal/lib/actions/deactivateUser.ts, supabase/functions/scim/handlers/
+-- users.ts (twice -- the PATCH active:false path and the DELETE handler), and
+-- supabase/functions/directory-sync/index.ts. A trigger covers all four, plus
+-- any future writer, and keeps this change SQL-only.
+--
+-- WHY IT TESTS THE TRANSITION AND NOT THE NEW VALUE. This is the load-bearing
+-- part and it is the likeliest thing to be "simplified" later. The SCIM DELETE
+-- handler writes license_status = 'suspended' UNCONDITIONALLY, without reading
+-- the current value, and both SCIM and directory-sync bump scim_synced_at on
+-- rows that may already be suspended. Written the obvious way --
+--
+--     IF NEW.license_status = 'suspended' THEN NEW.deactivated_at := now();
+--
+-- -- every one of those writes would push the deactivation date FORWARD, which
+-- SILENTLY WIDENS the active period and re-admits exactly the agreement the
+-- founder's rule refuses. Hence BOTH guards below: `UPDATE OF license_status`
+-- so an unrelated column bump cannot fire it, and the WHEN clause so a no-op
+-- rewrite of the same status cannot either. Neither is redundant; control C26
+-- holds each of them shut and mutant m38 is this trigger written the obvious way.
+--
+-- WHAT IT DOES NOT MODEL, stated rather than discovered later: ONE period. A
+-- member can be reactivated -- SCIM PatchOp active:true writes 'active' onto an
+-- existing row -- so a member can have more than one active period, and clearing
+-- the column on reactivation loses the gap between them. An agreement dated
+-- inside a past suspension gap would then be admitted. Modelling that needs the
+-- membership-history table this repo does not have. The approximation is taken
+-- knowingly; it is invisible today, because no organization has SCIM or
+-- directory sync configured (scim_tokens and organization_identity_providers
+-- both hold zero rows).
+--
+-- Transitions to 'pending' or 'expired' deliberately leave the column ALONE: an
+-- expiring membership does not un-deactivate anyone, and the date already
+-- recorded stays true. That is what lets section 5's status term do real work --
+-- see the note there.
+ALTER TABLE public.organization_members
+  ADD COLUMN deactivated_at timestamptz;
+
+COMMENT ON COLUMN public.organization_members.deactivated_at IS
+  'When license_status last moved to suspended. NULL while the member is active. Maintained by org_members_track_deactivation; models ONE active period, not a history.';
+
+CREATE OR REPLACE FUNCTION public.set_org_member_deactivated_at()
+RETURNS trigger LANGUAGE plpgsql SET search_path = public AS $fn$
+BEGIN
+  IF NEW.license_status = 'suspended' THEN
+    NEW.deactivated_at := now();
+  ELSIF NEW.license_status = 'active' THEN
+    NEW.deactivated_at := NULL;
+  END IF;
+  RETURN NEW;
+END $fn$;
+
+CREATE TRIGGER org_members_track_deactivation
+  BEFORE UPDATE OF license_status ON public.organization_members
+  FOR EACH ROW
+  WHEN (OLD.license_status IS DISTINCT FROM NEW.license_status)
+  EXECUTE FUNCTION public.set_org_member_deactivated_at();
+
 -- ============================ 3. the write rule =================================
 -- Deliberately NOT is_org_admin(): that helper is ('admin', 'it_admin'), which
 -- admits an IT administrator and excludes the broker. The rule here is the
@@ -207,79 +294,33 @@ CREATE INDEX organization_franchise_fees_in_force_idx
 -- ruling covers reading and writing on both tables, and splitting the helper
 -- would mean writing the same rule twice and letting the copies drift.
 --
--- AND SO MUST THE SUBJECT OF THE AGREEMENT BE. The INSERT policy's member-EXISTS
--- -- the clause about the AGENT an agreement is written FOR -- carries the same
--- status term, so a broker may record an agreement only for an ACTIVE member of
--- their organization. The founder ruled that on 2026-09-22 (recorded in
--- pm_comments on BACKLOG-3503), reversing what this file shipped first. Both
--- shapes of the loss now refuse, by two different mechanisms: a REMOVED subject
--- has no membership row for the EXISTS to find, and a DEACTIVATED subject has a
--- row whose status the term rejects.
+-- THE SUBJECT OF THE AGREEMENT IS JUDGED BY DATE, NOT BY STATUS TODAY. The
+-- INSERT policy's member-EXISTS -- the clause about the AGENT an agreement is
+-- written FOR -- admits an active member, and ALSO admits a deactivated one
+-- whose agreement is dated on or before the day they were deactivated. The full
+-- spelling and the reasoning are at the policy itself, in section 5.
 --
--- WHAT THAT COSTS, written down because it is a real loss taken knowingly: an
--- agent deactivated BEFORE any agreement was ever entered can no longer have one
--- entered at all. Their past closings then resolve to ZERO ROWS -- control C12
--- is that shape -- and cannot be computed.
+-- WHAT IT STILL REFUSES, and what it no longer does. An agreement dated AFTER
+-- the agent left is refused, whatever the broker intends. An agreement dated
+-- inside the period they were active is recorded normally -- so the founder's
+-- driving case (an agent closes in March, leaves in April, the broker records
+-- the agreement in May) works, and the agent's past closings resolve instead of
+-- returning zero rows. An earlier revision of this file refused that case; the
+-- founder refined the rule on 2026-09-23 after being shown the cost, and this
+-- is the refined rule.
 --
--- THERE IS NO NON-DESTRUCTIVE WAY OUT. Nothing in the product sets an EXISTING
--- membership row back to license_status 'active'. The .ts/.tsx writers that can
--- write 'active' onto an existing row are each gated away from a
--- portal-deactivated one, and a route back to 'active' FOR THAT ROW is MECHANISM
--- UNTRACED. The enumeration, with file:line and the command behind it, is in the
--- harness README at supabase/tests/backlog-3503/README.md. An earlier draft of
--- this paragraph named a reactivate / record / deactivate route; that route does
--- not exist and nothing should be built on it. BACKLOG-3518 tracks a real
--- reactivation.
---
--- THERE IS A DESTRUCTIVE ROUTE, AND IT IS UI-REACHABLE. Traced end to end at
--- cbc646d4e, every line read rather than inferred:
---   1. broker-portal/components/users/UserDetailsCard.tsx:212 renders "Remove"
---      for a deactivated member -- it sits OUTSIDE the `!isPending &&
---      !isSuspended` conditional that gates "Deactivate" at :207-211.
---      RemoveUserModal.tsx:43 calls through with no gate of its own.
---   2. broker-portal/lib/actions/removeUser.ts:110-112 DELETEs the
---      organization_members row. Its guards are impersonation, authenticated,
---      caller is admin/it_admin, not self, it_admin-removes-it_admin and
---      last-admin. `grep -nE 'license_status|suspended' removeUser.ts` returns
---      nothing, so a 'suspended' row is removable.
---   3. With the row gone, both of inviteUser.ts's refusals -- :109-118 on
---      invited_email, :128-137 on user_id -- SELECT a row that no longer exists,
---      so both pass, and :166-178 INSERTs a fresh 'pending' row.
---   4. The agent signs in and accepts: auth/callback/route.ts:122-130 sets
---      license_status 'active'.
--- Row-level security permits every hop -- read from pg_policies on production,
--- not inferred: the FOR ALL policy organization_members_all_public, USING
--- is_org_admin(...), covers both the DELETE and the re-invite INSERT, and
--- users_can_accept_invite (UPDATE, matching on invited_email) covers the
--- acceptance. Step 4 is gated: it runs only when pickBrokerageMembership returns
--- null (route.ts:57), which a BACKLOG-3364 personal organization does not
--- satisfy -- so an ordinary single-brokerage agent reaches it, while someone
--- holding a SECOND brokerage membership redirects at :59-62 or :64 and never
--- links.
---
--- IT IS A DATA-LOSING PATH, NOT A SUPPORTED WORKAROUND. It destroys the
--- membership record and the role on it, and it needs the agent to sign in again.
--- What survives: the same public.users row -- the callback upserts on
--- `id: user.id`, and Remove touches only organization_members -- so
--- agent_user_id is unchanged and any agreements already recorded still resolve.
--- Neither table here FKs organization_members (:132-136, :171-173).
--- effective_from is a client-supplied `date NOT NULL` with no default and is in
--- the INSERT grant (:392-394), so the new agreement is BACKDATABLE and C12's
--- zero-row shape resolves. The broker's read survives a second deactivation too:
--- agent_commission_agreements_select_writer (:411-413) tests the READER's
--- status, never the subject's. The agent's own read does not -- select_own
--- (:421-424) requires their own active membership -- but that is the
--- deactivation itself, not this route.
---
--- The founder was re-asked knowing the reactivate / record / deactivate
--- mitigation does not exist, and the ruling stands (pm_comments, BACKLOG-3503).
--- He accepted the loss on the worse premise -- that nothing at all could be
--- recorded; the real loss is smaller, so nothing above reopens that decision.
+-- THE LOWER BOUND IS NOT ADDRESSED HERE. Nothing tests effective_from against
+-- joined_at, so an agreement may be dated BEFORE the subject joined -- which is
+-- what this file already did for an active member, and still does. That is not
+-- an oversight and not a decision either way: it is filed as BACKLOG-3522.
 --
 -- PINNED IN BOTH DIRECTIONS rather than left silent: control C25 asserts that a
--- deactivated subject and a removed subject are both refused while an active one
--- is not, and mutant m36 is this status term REMOVED. Before C25 existed, moving
--- this dimension either way reddened nothing at all (measured).
+-- deactivated subject is admitted inside their active period and refused after
+-- it, while a removed subject is refused outright and an active one is admitted;
+-- C27 sweeps the boundary on both sides and on the NULL case; C29 holds the
+-- status gate shut. Mutants m36, m40, m41 and m42 are the ways this clause can
+-- be got wrong that a mutant can express. Before C25 existed, moving this dimension either way reddened nothing at
+-- all (measured).
 --
 -- SECURITY DEFINER so the policy can read organization_members past that table's
 -- own row-level security; SET search_path = public so the definer's search path
@@ -429,19 +470,79 @@ CREATE POLICY agent_commission_agreements_select_own
 -- m.organization_id` -- vacuously true, and behaviourally invisible today.
 -- Hence the table-qualified spelling and control C17's catalog sweep.
 --
--- `m.license_status = 'active'` is the founder's ruling of 2026-09-22 (section 3
--- above, and the cost it carries): the SUBJECT of an agreement must be an active
--- member, so a deactivated agent cannot be written for any more than a removed
--- one can. It sits in the SAME EXISTS as the user_id term, for the reason the
--- write rule gives. Control C25 asserts both refusals and the active case beside
--- them; mutant m36 is this term removed.
+-- THE SUBJECT CLAUSE. The founder's rule, in his terms: a broker may record an
+-- agreement for an agent who has left, as long as its effective date falls
+-- inside the period that agent was active; nothing new may be dated after they
+-- left. Ruled 2026-09-23, refining the ruling of 2026-09-22; both are recorded
+-- in pm_comments on BACKLOG-3503. It sits in the SAME EXISTS as the user_id
+-- term, for the reason the write rule gives: one membership row must satisfy the
+-- whole test, or a deactivated subject could borrow a colleague's active row.
+--
+-- Read it as three admissions and one refusal:
+--   ACTIVE member                      -> admitted, with no date test at all.
+--   SUSPENDED, dated on or before the
+--     day they were deactivated        -> admitted. This is the new case.
+--   SUSPENDED, dated after that day    -> REFUSED. This is what still holds.
+--   REMOVED (no membership row at all) -> refused, by the EXISTS finding
+--                                         nothing. No term needed.
+--
+-- THREE PIECES OF THIS ARE LOAD-BEARING AND LOOK REDUNDANT. Do not simplify any
+-- of them away; each has a mutant that proves it is doing work.
+--
+--   1. `m.license_status = 'suspended'` GATES THE SECOND ARM. Without it the arm
+--      reads "any status at all, as long as deactivated_at is set", which admits
+--      an 'expired' row -- and any fifth state added to the CHECK later -- that
+--      still carries a date from an earlier suspension. Section 2b's trigger
+--      leaves the column alone on a move to 'expired' precisely so that row can
+--      exist. This is the same fail-closed choice section 3b makes, for the same
+--      reason: an exclusion list fails OPEN on a state nobody has thought of.
+--      Control C29, mutant m42.
+--
+--   2. `m.deactivated_at IS NOT NULL` CHANGES NO BEHAVIOUR TODAY, AND IS KEPT
+--      ANYWAY. MEASURED, not argued: the mutant with this guard deleted was run
+--      against the whole suite and reddened NOTHING, because a NULL makes the
+--      comparison NULL, NULL is not TRUE, and the row is refused either way. It
+--      is therefore an EQUIVALENT mutant and is not shipped in the harness --
+--      an always-green mutant would misreport the suite. The guard stays for two
+--      reasons: it states the refusal as the INTENT (a suspended row with no
+--      recorded date FAILS CLOSED, deliberately -- it is not a missing guard),
+--      and it keeps that refusal if the comparison is ever rewritten in a form
+--      where NULL does not propagate. A suspended row can reach that state
+--      through a writer that bypasses the trigger -- a plain INSERT at
+--      'suspended' fires no BEFORE UPDATE trigger -- or from history predating
+--      the column. Because no mutant can pin it, the CI text test does:
+--      commission-agreements-3503.test.ts asserts the literal is present.
+--      Control C27 exercises the NULL case for its behaviour.
+--
+--   3. `AT TIME ZONE 'UTC'` PINS THE COMPARISON. deactivated_at is timestamptz
+--      and effective_from is date, so one of them must be converted, and both
+--      `deactivated_at::date` and promoting the date to timestamptz resolve
+--      against the SESSION TimeZone -- a property of the connection, not of this
+--      rule. Production happens to run UTC everywhere today (pg_db_role_setting
+--      carries no TimeZone for anon, authenticated, authenticator or postgres),
+--      so all three spellings agree by coincidence of configuration rather than
+--      by construction. Pinned, the answer is the same on any connection.
+--      Mutant m40.
+--      DIRECTION OF THE OFF-BY-ONE, since there is one either way: a
+--      deactivation at 18:00 Pacific is 01:00 the NEXT day in UTC, so it lands
+--      on the later date and the rule is one day MORE generous. That is the safe
+--      side here -- refusing a genuine March agreement is the harm this rule was
+--      changed to prevent; admitting one dated the day they left is not.
+--
+-- The boundary is INCLUSIVE: an agreement dated the day of deactivation is
+-- inside the period. Control C27 sweeps both sides of it and the NULL case
+-- rather than sampling; mutant m41 is `<` in place of `<=`.
 CREATE POLICY agent_commission_agreements_insert_writer
   ON public.agent_commission_agreements FOR INSERT TO authenticated
   WITH CHECK (public.can_write_commission_agreements(agent_commission_agreements.organization_id)
               AND EXISTS (SELECT 1 FROM public.organization_members m
                            WHERE m.organization_id = agent_commission_agreements.organization_id
                              AND m.user_id = agent_commission_agreements.agent_user_id
-                             AND m.license_status = 'active'));
+                             AND (m.license_status = 'active'
+                                  OR (m.license_status = 'suspended'
+                                      AND m.deactivated_at IS NOT NULL
+                                      AND agent_commission_agreements.effective_from
+                                            <= (m.deactivated_at AT TIME ZONE 'UTC')::date))));
 
 -- No own-row SELECT policy here: an agent does not read the office's franchise
 -- fee in M1. Adding a policy later is pure addition; revoking one agents have

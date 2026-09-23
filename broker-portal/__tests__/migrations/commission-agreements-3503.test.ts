@@ -278,28 +278,61 @@ describe('BACKLOG-3503 commission agreements migration', () => {
     expect(FLAT).not.toMatch(/m\.organization_id = m\.organization_id/i);
   });
 
-  it('requires the INSERT policy subject to be an active member, in the same EXISTS', () => {
-    // The founder's ruling of 2026-09-22 (BACKLOG-3503), which reversed what
-    // this file shipped first: a broker may record an agreement only FOR an
-    // ACTIVE member of the organization. A removed agent has no membership row
-    // and was already refused; a deactivated one keeps a row at 'suspended' and
-    // is refused by this term. The cost -- an agent deactivated before any
-    // agreement was entered can no longer have one entered at all -- was taken
-    // knowingly and is recorded on the backlog item.
+  it('judges the INSERT policy subject by their active period, in the same EXISTS', () => {
+    // The founder's rule, refined 2026-09-23 (BACKLOG-3503), which relaxed what
+    // this file shipped first: a broker may record an agreement for an agent who
+    // has left, as long as its effective date falls inside the period that agent
+    // was active. Nothing new may be dated after they left. A REMOVED agent has
+    // no membership row at all and is refused by the EXISTS finding nothing.
     //
-    // It is pinned here as well as in the executable harness (control C25,
-    // mutant m36) because the harness needs a database and CI has none. This
-    // assertion is the CI red if the term is ever dropped again.
+    // It is pinned here as well as in the executable harness (controls C25 and
+    // C27-C29, mutants m36 and m40-m42) because the harness needs a database and
+    // CI has none. This assertion is the CI red if the clause is ever flattened.
     const insert = policyBody('agent_commission_agreements_insert_writer');
     expect(insert).toContain('m.user_id = agent_commission_agreements.agent_user_id');
-    // ...and the status term sits in the SAME EXISTS as the subject term, so one
-    // membership row must carry both: two separate EXISTS clauses could be
-    // satisfied by the subject's row and by somebody else's active row.
+    // Both arms sit in the SAME EXISTS as the subject term, so ONE membership row
+    // must carry the whole test: separate EXISTS clauses could be satisfied by
+    // the subject's row and by somebody else's active row.
     expect(insert).toMatch(
-      /m\.user_id = agent_commission_agreements\.agent_user_id AND m\.license_status = 'active'/i,
+      /m\.user_id = agent_commission_agreements\.agent_user_id AND \(m\.license_status = 'active' OR \(m\.license_status = 'suspended'/i,
+    );
+    // The boundary is INCLUSIVE, and the comparison is pinned to UTC rather than
+    // left to resolve against whatever timezone the connection happens to carry.
+    expect(insert).toMatch(
+      /effective_from\s*<=\s*\(m\.deactivated_at AT TIME ZONE 'UTC'\)::date/i,
     );
     // same fail-closed spelling as the other two rules: not an exclusion list
     expect(insert).not.toMatch(/license_status\s+(NOT\s+IN|<>|!=)/i);
+  });
+
+  it('keeps the NULL guard on the date arm, which no mutant can pin', () => {
+    // `m.deactivated_at IS NOT NULL` is an EQUIVALENT-mutant case: deleting it
+    // changes no behaviour, because NULL propagates through the comparison to
+    // NULL, NULL is not TRUE, and the row is refused either way. That was
+    // measured -- the mutant was written, run against the whole suite, and
+    // reddened NOTHING -- so it was removed from the harness rather than shipped
+    // as a permanently green mutant.
+    //
+    // The guard still earns its place: it states the refusal as the INTENT (a
+    // suspended row with no recorded date fails closed, deliberately) and keeps
+    // that refusal if the comparison is ever rewritten in a form where NULL does
+    // not propagate. Since no mutant can hold it, this assertion does.
+    const insert = policyBody('agent_commission_agreements_insert_writer');
+    expect(insert).toMatch(/m\.deactivated_at IS NOT NULL/i);
+  });
+
+  it('records the end of the active period with a TRANSITION-guarded trigger', () => {
+    // The date rule rests on deactivated_at meaning "the day they left", which
+    // holds only if the column is written once on the move INTO 'suspended'.
+    // The SCIM DELETE handler writes 'suspended' unconditionally and both SCIM
+    // and directory-sync bump scim_synced_at on already-suspended rows, so a
+    // trigger that tested the NEW VALUE would push the date forward on every one
+    // of those and silently widen the period. Control C26 and mutant m38 hold
+    // this in the harness; this is its CI red.
+    expect(FLAT).toContain('ALTER TABLE public.organization_members ADD COLUMN deactivated_at timestamptz');
+    const trg = FLAT.slice(FLAT.indexOf('CREATE TRIGGER org_members_track_deactivation'));
+    expect(trg).toMatch(/BEFORE UPDATE OF license_status ON public\.organization_members/i);
+    expect(trg).toMatch(/WHEN \(OLD\.license_status IS DISTINCT FROM NEW\.license_status\)/i);
   });
 
   it('says in its header that it is not applied to production by this PR', () => {
