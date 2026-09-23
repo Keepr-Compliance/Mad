@@ -631,6 +631,42 @@ describe("BACKLOG-3475 C13-K — a concurrent read for ANOTHER org is never serv
     expect(listingC!.templates.map((t) => t.name)).toEqual(["Other brokerage's template"]);
   });
 
+  it("A, then B, then A again while both are out: the second A rides on A's request (BACKLOG-3476)", async () => {
+    // The single-slot shape this replaced held only the LATEST organization's
+    // read, so B's read displaced A's entry and the second A started a
+    // duplicate request: calls were [ORG_A, ORG_B, ORG_A]. Benign (both
+    // answers are A's own rows) but not what `fetchOnce` promises. Measured
+    // red against the single slot before the map landed.
+    const pending: Array<() => void> = [];
+    responder = (record) =>
+      new Promise((resolve) => {
+        const org = record.eq[0][1] as string;
+        pending.push(() =>
+          resolve({ data: org === ORG_A ? D1_DATA : ORG_B_DATA, error: null }),
+        );
+      });
+
+    const service = loadService();
+    const a1 = service.listTemplates(ORG_A);
+    await settle();
+    const b = service.listTemplates(ORG_B);
+    await settle();
+    const a2 = service.listTemplates(ORG_A);
+    await settle();
+
+    for (let i = 0; i < 5 && pending.length > 0; i += 1) {
+      for (const resolve of pending.splice(0)) resolve();
+      await settle();
+    }
+
+    const [listingA1, listingB, listingA2] = await Promise.all([a1, b, a2]);
+
+    expect(calls.map((call) => call.eq[0][1])).toEqual([ORG_A, ORG_B]);
+    expect(listingA1!.templates.map((t) => t.name)).toEqual(["Probe template"]);
+    expect(listingA2!.templates.map((t) => t.name)).toEqual(["Probe template"]);
+    expect(listingB!.templates.map((t) => t.name)).toEqual(["Other brokerage's template"]);
+  });
+
   it("two overlapping reads for the SAME org still collapse onto one request", async () => {
     // The control for the control: the check must not cost the collapsing that
     // `fetchOnce` exists for.
