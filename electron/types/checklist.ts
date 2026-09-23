@@ -172,6 +172,14 @@ export type AddChecklistLinkResult =
   | { status: "added"; linkId: string; memberCount: number }
   | { status: "no_item" }
   /**
+   * The request named no targets at all (BACKLOG-3476). Nothing is written.
+   * Distinct from `targets_not_in_transaction`, whose `rejectedIds` would be
+   * empty and so say nothing true about the cause. Unreachable over IPC — the
+   * Zod schema refuses an empty list — so this is the db contract for any
+   * in-process caller.
+   */
+  | { status: "no_targets" }
+  /**
    * At least one target is not evidence of this item's transaction. Nothing is
    * written — not even the targets that WOULD have been valid.
    */

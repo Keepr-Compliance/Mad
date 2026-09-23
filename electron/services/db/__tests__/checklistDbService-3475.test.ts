@@ -293,6 +293,30 @@ describe("BACKLOG-3475 — picking a template copies it onto the transaction", (
     expect(ids("transaction_checklist_items")).toEqual([]);
   });
 
+  it("progress counts REQUIRED ticks only: ticking an optional item leaves requiredDone at 0 (BACKLOG-3476)", async () => {
+    // The tab renders `requiredDone of requiredTotal` straight from here, so
+    // counting an optional tick would tell the agent a required document is
+    // done when it is not. Nothing pinned this before 3476: counting every
+    // tick left every checklist suite green.
+    await selectChecklistTemplate({
+      transactionId: "txn-1",
+      templateId: "tpl-1",
+      templateName: "Residential Purchase",
+      items: TEMPLATE_ITEMS,
+    });
+    // By title, not by id: ids are random UUIDs.
+    const seeded = await getChecklistForTransaction("txn-1");
+    const optional = seeded!.items.find((i) => i.title === "Seller disclosure")!;
+    expect(optional.isRequired).toBe(false);
+
+    await setChecklistItemChecked(optional.id, true);
+
+    const detail = await getChecklistForTransaction("txn-1");
+    expect(detail!.items.find((i) => i.id === optional.id)!.isChecked).toBe(true);
+    expect(detail!.requiredDone).toBe(0);
+    expect(detail!.requiredTotal).toBe(2);
+  });
+
   it("a transaction that does not exist is refused, not thrown", async () => {
     const result = await selectChecklistTemplate({
       transactionId: "txn-missing",
@@ -368,6 +392,32 @@ describe("BACKLOG-3475 — evidence is the set of ids the user picked, never a t
     expect(rows(`SELECT kind, label FROM transaction_checklist_links`)).toEqual([
       { kind: "attachment", label: "offer.pdf" },
     ]);
+  });
+
+  it("an EMPTY target list is its own answer, no_targets, and writes nothing (BACKLOG-3476)", async () => {
+    // Unreachable over IPC (Zod `.min(1)`, pinned in the handler suite), so
+    // this is the db contract for an in-process caller. Before 3476 the guard
+    // answered `targets_not_in_transaction` with an empty `rejectedIds`, and
+    // replacing it with `no_item` or deleting it outright left every checklist
+    // suite green. Exact object, so neither of those passes.
+    for (const kind of ["email", "attachment"] as const) {
+      const result = await addChecklistLink({ itemId, kind, targetIds: [] });
+      expect(result).toEqual({ status: "no_targets" });
+    }
+    expect(ids("transaction_checklist_links")).toEqual([]);
+    expect(ids("transaction_checklist_link_members")).toEqual([]);
+  });
+
+  it("a repeated target id is stored once (BACKLOG-3476)", async () => {
+    const result = await addChecklistLink({
+      itemId,
+      kind: "email",
+      targetIds: ["e-solo-1", "e-solo-1"],
+    });
+    expect(result).toMatchObject({ status: "added", memberCount: 1 });
+    expect(
+      rows(`SELECT email_id FROM transaction_checklist_link_members`).map((r) => r.email_id),
+    ).toEqual(["e-solo-1"]);
   });
 
   it("an item that does not exist is refused, not thrown", async () => {

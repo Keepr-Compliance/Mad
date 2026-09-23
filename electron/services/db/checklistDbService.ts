@@ -291,7 +291,7 @@ export function addChecklistLink(input: AddChecklistLinkInput): Promise<AddCheck
 
     const targetIds = [...new Set(input.targetIds)];
     if (targetIds.length === 0) {
-      return { status: "targets_not_in_transaction", rejectedIds: [] };
+      return { status: "no_targets" };
     }
 
     const transactionIdRepeats = input.kind === "email" ? 1 : 2;
