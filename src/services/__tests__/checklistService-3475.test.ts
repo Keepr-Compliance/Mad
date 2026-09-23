@@ -1,0 +1,250 @@
+/**
+ * BACKLOG-3475 — the renderer service, and the one line that could undo the
+ * whole main-process design.
+ *
+ * `checklistTemplateService` answers `null` rather than `[]` when a read fails,
+ * and the handler turns that into `success: false` with `templates` ABSENT. All
+ * of that is thrown away by `data: result.templates ?? []` here — one character
+ * sequence, in the file closest to the surface, that turns "we could not read
+ * your brokerage's checklists" into "your brokerage has not set up any".
+ *
+ * That is the mutation this suite exists to catch, and exactly ONE test here
+ * can catch it: "a success carrying NO templates key is not an empty
+ * brokerage". Every other input in this file is blind to it. Under
+ * `success: false` the shipped code and the `?? []` version both return early
+ * with `data` undefined, so the refusal case below passes against either —
+ * measured, not assumed: with the mutation applied the other ten tests stay
+ * green (SR review `3f57d5e7` on pm_comments, MA4).
+ *
+ * The rest of the suite is the ordinary contract: which argument shape each
+ * channel receives, and that a thrown bridge becomes a result rather than an
+ * exception a component has to handle.
+ *
+ * `window.api.checklists` comes from `tests/setup.js`, whose defaults are the
+ * REFUSED answers — so a test that forgets to arrange the allowed path sees the
+ * same thing a user without the plan sees.
+ */
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
+import { checklistService } from "../checklistService";
+
+const api = () => (window as any).api.checklists;
+
+/**
+ * The IMPLEMENTATIONS `tests/setup.js` ships, captured before any test replaces
+ * them.
+ *
+ * `getMockImplementation()`, not a spread of the object. The spread was tried
+ * first and does not work: it copies references to the same `jest.fn`s, so an
+ * earlier `mockResolvedValue` reaches the assertions through it anyway —
+ * measured, and it turned the check below into an "ipc died" rejection left
+ * over from four tests earlier.
+ *
+ * `jest.clearAllMocks()` clears recorded calls but NOT implementations, which
+ * is why nothing in `beforeEach` restores them either. Without this snapshot
+ * the last describe would be order-dependent and prove nothing.
+ */
+const SHIPPED_DEFAULTS = Object.fromEntries(
+  Object.entries((window as any).api.checklists).map(([name, fn]) => [
+    name,
+    (fn as jest.Mock).getMockImplementation() as (...args: unknown[]) => Promise<any>,
+  ]),
+) as Record<string, (...args: unknown[]) => Promise<any>>;
+
+const TEMPLATE = {
+  id: "<fixture:template-p1-active>",
+  name: "Probe template",
+  description: "shown in the list only",
+  sortOrder: 10,
+  updatedAt: "<timestamp>",
+  items: [],
+};
+
+beforeEach(() => {
+  jest.clearAllMocks();
+});
+
+describe("listTemplates — a failed read is not an empty brokerage", () => {
+  it("a refusal comes back as a failure with NO data, never as an empty list", async () => {
+    api().listTemplates.mockResolvedValue({
+      success: false,
+      error: "Your brokerage's checklist templates could not be loaded right now.",
+    });
+
+    const result = await checklistService.listTemplates();
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/could not be loaded/);
+    // What this case does NOT prove: `data: result.templates ?? []`. Under
+    // `success: false` both implementations return early, so `data` is
+    // undefined either way and this assertion cannot separate them. What it
+    // does prove is that the handler's message is carried through and no data
+    // is invented alongside it. The test below is the one that can go red on
+    // the `?? []` line.
+    expect(result.data).toBeUndefined();
+  });
+
+  it("a success carrying NO templates key is not an empty brokerage", async () => {
+    // THE control for `data: result.templates ?? []`, and the only input that
+    // can be: the two implementations differ only when `success` is true and
+    // `templates` is absent.
+    //
+    // No producer emits that shape today — `checklists:list-templates` has a
+    // single `success: true` return and it always carries `listing.templates`.
+    // The shape is what the CONTRACT permits: `templates?:` is optional in
+    // `WindowApiChecklists`, so any later main-process branch that answers
+    // "success" without a listing is type-legal, and this line is what stops
+    // the renderer filling the gap in with an empty brokerage.
+    api().listTemplates.mockResolvedValue({ success: true, source: "live" });
+
+    const result = await checklistService.listTemplates();
+
+    expect(result.success).toBe(false);
+    expect(result.data).toBeUndefined();
+  });
+
+  it("an organization with no templates IS a success, carrying an empty list", async () => {
+    api().listTemplates.mockResolvedValue({ success: true, templates: [], source: "live" });
+
+    const result = await checklistService.listTemplates();
+
+    expect(result.success).toBe(true);
+    expect(result.data).toEqual({ templates: [], source: "live" });
+  });
+
+  it("templates are passed through with their source", async () => {
+    api().listTemplates.mockResolvedValue({
+      success: true,
+      templates: [TEMPLATE],
+      source: "cache",
+    });
+
+    const result = await checklistService.listTemplates();
+
+    expect(result.data!.templates.map((t) => t.name)).toEqual(["Probe template"]);
+    expect(result.data!.source).toBe("cache");
+  });
+
+  it("a bridge that throws becomes a failure, not an exception", async () => {
+    api().listTemplates.mockRejectedValue(new Error("ipc died"));
+
+    await expect(checklistService.listTemplates()).resolves.toEqual({
+      success: false,
+      error: "ipc died",
+    });
+  });
+});
+
+describe("the write channels pass the shapes the Zod schemas expect", () => {
+  it("selectTemplate", async () => {
+    api().selectTemplate.mockResolvedValue({
+      success: true,
+      result: { status: "selected", checklistId: "c-1" },
+    });
+
+    const result = await checklistService.selectTemplate("t-1", "tpl-1", true);
+
+    expect(api().selectTemplate).toHaveBeenCalledWith({
+      transactionId: "t-1",
+      templateId: "tpl-1",
+      replaceExisting: true,
+    });
+    expect(result.data).toEqual({ status: "selected", checklistId: "c-1" });
+  });
+
+  it("a declined write still arrives as data, because the call ran and answered", async () => {
+    api().selectTemplate.mockResolvedValue({
+      success: true,
+      result: { status: "exists", checklistId: "c-1" },
+    });
+
+    const result = await checklistService.selectTemplate("t-1", "tpl-1");
+
+    expect(result.success).toBe(true);
+    expect(result.data).toEqual({ status: "exists", checklistId: "c-1" });
+  });
+
+  it("get maps an absent checklist to null rather than undefined", async () => {
+    api().get.mockResolvedValue({ success: true, checklist: null });
+
+    await expect(checklistService.get("t-1")).resolves.toEqual({ success: true, data: null });
+    expect(api().get).toHaveBeenCalledWith({ transactionId: "t-1" });
+  });
+
+  it("setItemChecked / setItemNote / removeLink / remove report whether a row changed", async () => {
+    api().setItemChecked.mockResolvedValue({ success: true, changed: true });
+    api().setItemNote.mockResolvedValue({ success: true, changed: false });
+    api().removeLink.mockResolvedValue({ success: true, changed: true });
+    api().remove.mockResolvedValue({ success: true, changed: false });
+
+    await expect(checklistService.setItemChecked("i-1", true)).resolves.toEqual({
+      success: true,
+      data: true,
+    });
+    await expect(checklistService.setItemNote("i-1", null)).resolves.toEqual({
+      success: true,
+      data: false,
+    });
+    await expect(checklistService.removeLink("l-1")).resolves.toEqual({
+      success: true,
+      data: true,
+    });
+    await expect(checklistService.remove("t-1")).resolves.toEqual({
+      success: true,
+      data: false,
+    });
+
+    expect(api().setItemChecked).toHaveBeenCalledWith({ itemId: "i-1", checked: true });
+    expect(api().setItemNote).toHaveBeenCalledWith({ itemId: "i-1", note: null });
+    expect(api().removeLink).toHaveBeenCalledWith({ linkId: "l-1" });
+    expect(api().remove).toHaveBeenCalledWith({ transactionId: "t-1" });
+  });
+
+  it("addLink sends the kind and the target list unchanged", async () => {
+    api().addLink.mockResolvedValue({
+      success: true,
+      result: { status: "added", linkId: "l-1", memberCount: 2 },
+    });
+
+    const result = await checklistService.addLink("i-1", "email", ["e-1", "e-2"]);
+
+    expect(api().addLink).toHaveBeenCalledWith({
+      itemId: "i-1",
+      kind: "email",
+      targetIds: ["e-1", "e-2"],
+    });
+    expect(result.data).toEqual({ status: "added", linkId: "l-1", memberCount: 2 });
+  });
+});
+
+describe("the shipped test defaults are the refused answers", () => {
+  it("every gated default refuses, and listTemplates carries no templates key", async () => {
+    const listing = await SHIPPED_DEFAULTS.listTemplates();
+    expect(listing.success).toBe(false);
+    // Absent, not `[]`: a default that blurred the two would let a component
+    // ship with "could not read" and "none exist" confused and still pass.
+    expect("templates" in listing).toBe(false);
+
+    for (const method of [
+      "selectTemplate",
+      "setItemChecked",
+      "setItemNote",
+      "addLink",
+      "removeLink",
+    ] as const) {
+      await expect(SHIPPED_DEFAULTS[method]({})).resolves.toMatchObject({
+        success: false,
+      });
+    }
+
+    // The three the main process never gates default to the working answer:
+    // `get`, `remove` and `invalidate-templates` (the unhide rule — a user
+    // whose plan lapses can still read and clear his own rows).
+    await expect(SHIPPED_DEFAULTS.get({})).resolves.toMatchObject({ success: true });
+    await expect(SHIPPED_DEFAULTS.remove({})).resolves.toMatchObject({ success: true });
+    await expect(SHIPPED_DEFAULTS.invalidateTemplates()).resolves.toMatchObject({
+      success: true,
+    });
+  });
+});

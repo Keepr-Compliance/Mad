@@ -126,6 +126,7 @@ export async function resolveOrgId(): Promise<string | null> {
 const STRICT_FEATURE_KEYS: Record<StrictFeatureKey, true> = {
   email_contact_inference: true,
   desktop_hide_from_export: true,
+  transaction_checklists: true,
 };
 
 /**
@@ -317,6 +318,52 @@ export const HIDE_FROM_EXPORT_FEATURE_KEY: StrictFeatureKey =
  */
 export async function isHideFromExportAllowed(): Promise<boolean> {
   return isStrictFeatureAllowed(HIDE_FROM_EXPORT_FEATURE_KEY);
+}
+
+// ---------------------------------------------------------------------------
+// Transaction checklists — BACKLOG-3475
+// ---------------------------------------------------------------------------
+
+/**
+ * The plan feature that governs transaction checklists.
+ *
+ * Named for the capability rather than for a surface, the same way
+ * {@link HIDE_FROM_EXPORT_FEATURE_KEY} is: the broker-side template editor and
+ * the desktop's use of those templates are one thing the plan either includes
+ * or does not, and splitting them would leave the founder two switches to keep
+ * in step.
+ */
+export const TRANSACTION_CHECKLISTS_FEATURE_KEY: StrictFeatureKey =
+  "transaction_checklists";
+
+/**
+ * May this user use transaction checklists?
+ *
+ * **The only entry point.** Every gated checklist channel calls this before any
+ * read or write; no checklist handler may name the key itself. That is not
+ * tidiness — it is what gives the control set ONE place to mutate. A handler
+ * calling `isStrictFeatureAllowed("transaction_checklists")` inline would have
+ * to be found by grep to be mutated, and a handler that forgot the call
+ * entirely would look identical to one that never needed it.
+ *
+ * Deliberately NOT `featureGateService.checkFeature`, for the reason spelled
+ * out above {@link isHideFromExportAllowed} and which is sharper here: the
+ * `transaction_checklists` row is not applied to production, so the permissive
+ * reader would answer ALLOWED for every organization on earth. The strict
+ * reader answers `blocked` for a key the plan does not carry and `unknown` for
+ * a read it could not finish; both are false here.
+ *
+ * Three of the nine checklist channels do NOT call this, on purpose. For
+ * `checklists:get` and `checklists:remove` the reason is the unhide rule
+ * recorded in `electron/types/featureGate.ts`: they are a user reading and
+ * clearing rows on his own transaction. A user whose plan later loses the
+ * feature must still be able to see what is on his transaction and take it off
+ * again, or the data is stranded where he can neither use it nor be rid of it.
+ * The third is `checklists:invalidate-templates`, which only discards cached
+ * data and can give no one access to anything.
+ */
+export async function isChecklistsAllowed(): Promise<boolean> {
+  return isStrictFeatureAllowed(TRANSACTION_CHECKLISTS_FEATURE_KEY);
 }
 
 /**

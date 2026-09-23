@@ -24,6 +24,7 @@ import type {
   WindowApiApp,
   WindowApiAppCleanup,
 } from "./window-api-services";
+import type { WindowApiChecklists } from "./window-api-checklists";
 import type { WindowApiEntitlement } from "./window-api-entitlement";
 import type { WindowApiPayment } from "./window-api-payment";
 import type { WindowApiPairing } from "./window-api-pairing";
@@ -85,6 +86,7 @@ export interface WindowApi extends WindowApiEvents {
   privacy: WindowApiPrivacy;
   failureLog: WindowApiFailureLog;
   featureGate: WindowApiFeatureGate;
+  checklists: WindowApiChecklists;
   entitlement: WindowApiEntitlement;
   payment: WindowApiPayment;
   support: WindowApiSupport;

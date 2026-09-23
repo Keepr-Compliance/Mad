@@ -108,6 +108,10 @@ export { outlookService } from "./outlookService";
 export { messageService } from "./messageService";
 export type { MessageImportStatus, MacOSImportServiceResult } from "./messageService";
 
+// Transaction checklists (BACKLOG-3475)
+export { checklistService } from "./checklistService";
+export type { ChecklistTemplateListing } from "./checklistService";
+
 // App cleanup service (reset / uninstall — BACKLOG-2112)
 export { appCleanupService } from "./appCleanupService";
 export type { CleanupResult } from "./appCleanupService";
