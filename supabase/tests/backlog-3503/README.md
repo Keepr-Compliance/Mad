@@ -302,29 +302,37 @@ migration, because they are *omissions* rather than wrong choices.
 ## Text tripwire (CI) — made to fail before being trusted
 
 `npx jest --config broker-portal/jest.config.js broker-portal/__tests__/migrations/commission-agreements-3503.test.ts --bail=0`
-→ **14 passed, 14 total.** Each mutation below was applied to the committed
-file, proved applied by a non-empty `git diff --numstat`, run, then restored
-with `git checkout --`; the restored run is 14/14 and the tree is clean.
+→ **16 passed, 16 total.** Each mutation below was applied to the committed
+file, proved applied by a non-empty `git diff --numstat` and by an exact-string
+replace that refuses to run unless it matches exactly once, run, then restored
+with `git checkout --`; the restored run is 16/16 and the tree is clean. The
+fix was committed **before** any of these reverts, so no `git checkout --` could
+discard it.
 
 | Mutation | Tests | RED `it()` |
 |---|---|---|
-| franchise table's `ENABLE ROW LEVEL SECURITY` line deleted | 1/14 | enables row level security on both tables |
-| `REVOKE ALL` narrowed to `REVOKE INSERT, UPDATE, DELETE` | 1/14 | revokes ALL from anon and authenticated on both tables |
-| `GRANT UPDATE (agent_pct)` added | 1/14 | grants no UPDATE and no DELETE on either table |
-| `set_by` added to the agreements INSERT column list | 1/14 | keeps set_by and set_at out of both INSERT column lists |
-| `set_by` loses its `auth.uid()` default | 1/14 | gives set_by a NOT NULL default of auth.uid() on both tables |
-| `set_at DESC` put back into the helper's ORDER BY | 1/14 | orders the read helpers by seq DESC, and never by set_at |
-| `SET search_path` dropped from the write rule | 1/14 | marks the write rule SECURITY DEFINER with a pinned search_path, and neither read helper |
-| a read helper marked SECURITY DEFINER | 1/14 | *(same assertion)* |
-| `it_admin` added to the writer role list | 1/14 | names exactly broker and admin as writers, and never reaches for is_org_admin |
-| the write rule delegates to `is_org_admin` | 1/14 | *(same assertion)* |
-| split-sum CHECK relaxed to `<= 100` **at the constraint** | 1/14 | carries the split-sum and cadence CHECK constraints |
-| cadence CHECK gains a third value | 1/14 | *(same assertion)* |
-| member check written as a self-comparison | 1/14 | writes the INSERT policy member check against the NEW ROW, not against itself |
-| the `NOT APPLIED TO PRODUCTION` sentence removed | 1/14 | says in its header that it is not applied to production by this PR |
-| the migration opens its own transaction | 1/14 | opens no transaction of its own |
-| the franchise table renamed | 2/14 | creates both tables; gives set_by a NOT NULL default … |
-| `run.sh` pointed at a different migration stamp | 1/14 | the file is not empty and the harness reads the same file CI does |
+| franchise table's `ENABLE ROW LEVEL SECURITY` line deleted | 1/16 | enables row level security on both tables |
+| `REVOKE ALL` narrowed to `REVOKE INSERT, UPDATE, DELETE` | 1/16 | revokes ALL from anon and authenticated on both tables |
+| `GRANT UPDATE (agent_pct)` added | 1/16 | grants no UPDATE and no DELETE on either table |
+| `set_by` added to the agreements INSERT column list | 1/16 | keeps set_by and set_at out of both INSERT column lists |
+| `set_by` loses its `auth.uid()` default | 1/16 | gives set_by a NOT NULL default of auth.uid() on both tables |
+| `set_at DESC` put back into the helper's ORDER BY | 1/16 | orders the read helpers by seq DESC, and never by set_at |
+| `SET search_path` dropped from the write rule | 1/16 | marks both RLS helpers SECURITY DEFINER with a pinned search_path, and neither read helper |
+| a read helper marked SECURITY DEFINER | 1/16 | *(same assertion)* |
+| `SET search_path` dropped from the **own-row read rule** | 1/16 | *(same assertion)* |
+| own-row policy reverted to the bare `auth.uid()` predicate | 1/16 | gates the own-row read on active membership, never on auth.uid() alone |
+| the own-row policy renamed away | 1/16 | *(same assertion — `policyBody` throws rather than matching nothing)* |
+| active membership spelled `NOT IN ('suspended','expired')` | 1/16 | spells active membership as license_status = active, and scopes it to the row's org |
+| the active-membership rule loses `m.organization_id = p_org_id` | 1/16 | *(same assertion)* |
+| `it_admin` added to the writer role list | 1/16 | names exactly broker and admin as writers, and never reaches for is_org_admin |
+| the write rule delegates to `is_org_admin` | 1/16 | *(same assertion)* |
+| split-sum CHECK relaxed to `<= 100` **at the constraint** | 1/16 | carries the split-sum and cadence CHECK constraints |
+| cadence CHECK gains a third value | 1/16 | *(same assertion)* |
+| member check written as a self-comparison | 1/16 | writes the INSERT policy member check against the NEW ROW, not against itself |
+| the `NOT APPLIED TO PRODUCTION` sentence removed | 1/16 | says in its header that it is not applied to production by this PR |
+| the migration opens its own transaction | 1/16 | opens no transaction of its own |
+| the franchise table renamed | 2/16 | creates both tables; gives set_by a NOT NULL default … |
+| `run.sh` pointed at a different migration stamp | 1/16 | the file is not empty and the harness reads the same file CI does |
 
 **One false green, and what it was.** The split-sum mutation was first written as
 a replacement of the *first* occurrence of `CHECK (agent_pct + brokerage_pct =
