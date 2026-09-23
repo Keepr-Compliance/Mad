@@ -60,7 +60,11 @@
 --     cannot be expressed while this CHECK stands. That was decided knowingly;
 --     record it as a foreclosure, not a safety rail. Undoing it is a migration.
 --     Likewise organization_franchise_fees.amount is a FLAT amount: a
---     percentage-based franchise fee would need a new column.
+--     percentage-based franchise fee would need a new column. And
+--     `CHECK (office_fee_cadence IN ('monthly', 'annual'))` forecloses a
+--     PER-TRANSACTION office fee in exactly the same way. All three are the
+--     founder's rulings and all three are right; they are listed here because
+--     the header is where foreclosures get recorded, not because any is in doubt.
 --
 -- (d) `seq` IS A GLOBALLY SHARED IDENTITY AND IT IS CLIENT-VISIBLE. One
 --     sequence serves every organization, and `seq` is returned by SELECT * and
@@ -99,6 +103,13 @@
 --   This file deliberately does NOT open its own transaction: the harness runs
 --   it inside BEGIN ... ROLLBACK, and a COMMIT here would leave the tables on
 --   the venue. Apply it with a wrapping transaction at apply time.
+--
+--   NOT RE-RUNNABLE, DELIBERATELY. Plain CREATE TABLE / CREATE INDEX / CREATE
+--   POLICY, where the recent neighbours use IF NOT EXISTS and DROP POLICY IF
+--   EXISTS. A second apply must fail loudly with 42P07. `IF NOT EXISTS` would
+--   accept a pre-existing table OF A DIFFERENT SHAPE and then land these GRANTs
+--   and POLICIES on it -- which is the failure this file can least afford,
+--   because its whole security rests on the REVOKE landing on the right table.
 -- ============================================================================
 
 -- ============================ 1. the agent agreement ============================
@@ -181,7 +192,11 @@ CREATE INDEX organization_franchise_fees_in_force_idx
 -- nothing: the person who sets pay is not an exception to the rule that a
 -- deactivated member loses access. The status term sits in the SAME EXISTS as
 -- the role term on purpose -- one membership row must carry both, so a caller
--- cannot be a broker by one row and active by another. The spelling is
+-- cannot be a broker by one row and active by another. Today that hazard cannot
+-- arise: organization_members carries UNIQUE (organization_id, user_id), so two
+-- such rows cannot exist for a non-NULL user_id. The spelling costs nothing and
+-- stays correct if that constraint is ever dropped, which is why it is kept --
+-- not because the two-row case is live. The spelling is
 -- `= 'active'`, for the reasons set out in full in section 3b: the writers of
 -- organization_members.license_status admit fewer values than its CHECK does,
 -- and an exclusion list would fail OPEN on a state added later.
@@ -193,10 +208,22 @@ CREATE INDEX organization_franchise_fees_in_force_idx
 -- would mean writing the same rule twice and letting the copies drift.
 --
 -- What it does NOT change: the INSERT policy's member-EXISTS, which is about the
--- AGENT the agreement is written FOR, still has no status term. A broker may
--- still record an agreement for a suspended agent. That was not in the ruling --
--- back pay for someone deactivated mid-month is a real thing to record -- and
--- changing it would be a separate decision.
+-- AGENT the agreement is written FOR, still has no status term. So the shipped
+-- behaviour splits by the SHAPE of the loss, not by whether the agent is gone:
+-- a DEACTIVATED subject keeps their membership row, so the EXISTS finds it and
+-- the write is allowed; a REMOVED subject has no row at all, so the same EXISTS
+-- refuses -- without any status term being involved.
+--
+-- The case that needs the write: an agreement that was NEVER ENTERED before the
+-- agent departed. commission_agreement_in_force then returns ZERO rows (control
+-- C12 is that shape) and the closing cannot be computed at all, so the broker
+-- has no choice but to insert for a suspended agent. A correction of terms
+-- entered wrong, and a negotiated final settlement, are the other two.
+--
+-- That was not in the founder's ruling and changing it is a separate decision.
+-- It is now PINNED IN BOTH DIRECTIONS rather than left silent: control C25
+-- asserts both shapes, and mutant m36 is the status term added here. Before C25
+-- existed, adding that term reddened nothing at all (measured).
 --
 -- SECURITY DEFINER so the policy can read organization_members past that table's
 -- own row-level security; SET search_path = public so the definer's search path
