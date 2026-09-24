@@ -123,7 +123,7 @@ export function ChecklistTemplateChooser({
       )}
 
       {listing.status === "ready" && listing.templates.length === 0 && (
-        <p className="mt-6 text-sm text-gray-500" data-testid="checklist-templates-empty">
+        <p className="text-sm text-gray-500" data-testid="checklist-templates-empty">
           Your brokerage hasn&rsquo;t set up any checklist templates yet.
         </p>
       )}
