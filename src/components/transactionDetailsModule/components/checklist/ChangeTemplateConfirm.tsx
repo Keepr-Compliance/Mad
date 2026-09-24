@@ -1,8 +1,9 @@
 /**
  * ChangeTemplateConfirm — BACKLOG-3476.
  *
- * The only path that passes `replaceExisting`. It names what will be lost,
- * counted from the checklist being replaced, before anything is written. The
+ * The only path that sends `replaceChecklistId`, for the one checklist whose
+ * Change opened it. It names what will be lost, counted from THAT checklist
+ * alone, before anything is written. The
  * same template may be picked again: that is the only way to reset a
  * checklist, and the dialog says so.
  */

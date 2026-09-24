@@ -10,8 +10,9 @@
  * statement about someone else's account.
  *
  * It only reports which template was clicked. Whether that click writes
- * anything — a plain pick, or a replace behind a confirmation — is the tab's
- * decision.
+ * anything — an add, or a replace behind a confirmation — is the tab's
+ * decision. A template already on the transaction renders disabled, marked
+ * "Already added" (BACKLOG-3476: a template may be on a transaction once).
  */
 import React, { useCallback, useEffect, useState } from "react";
 import { checklistService } from "../../../../services/checklistService";
@@ -23,10 +24,17 @@ type ListingState =
   | { status: "failed"; error: string };
 
 interface ChecklistTemplateChooserProps {
-  /** "pick": no checklist yet. "replace": Change template was clicked. */
-  mode: "pick" | "replace";
+  /**
+   * "pick": no checklist yet. "add": Add checklist was clicked. "replace": one
+   * checklist's Change was clicked.
+   */
+  mode: "pick" | "add" | "replace";
+  /** Replace mode: the name of the checklist being replaced. */
+  replacingName?: string;
+  /** Templates that cannot be picked: already on this transaction. */
+  disabledTemplateIds?: ReadonlySet<string>;
   onPick: (template: ChecklistTemplate) => void;
-  /** Replace mode only: back to the checklist, nothing written. */
+  /** Add and replace modes: back to the checklists, nothing written. */
   onCancel?: () => void;
   /** True while a pick is being written; cards are disabled. */
   busy?: boolean;
@@ -41,6 +49,8 @@ const CLIPBOARD_ICON =
 
 export function ChecklistTemplateChooser({
   mode,
+  replacingName,
+  disabledTemplateIds,
   onPick,
   onCancel,
   busy = false,
@@ -85,9 +95,28 @@ export function ChecklistTemplateChooser({
           <p className="text-gray-600 mb-2">No checklist yet</p>
           <p className="text-sm text-gray-500">Choose a template to start this transaction&rsquo;s checklist.</p>
         </>
+      ) : mode === "add" ? (
+        <>
+          <p className="text-gray-600 mb-2">Add a checklist to this transaction</p>
+          <p className="text-sm text-gray-500">The checklists already here are not changed.</p>
+          {onCancel && (
+            <button
+              type="button"
+              onClick={onCancel}
+              className="mt-3 text-sm font-medium text-blue-600 hover:text-blue-800"
+              data-testid="checklist-chooser-cancel"
+            >
+              Cancel
+            </button>
+          )}
+        </>
       ) : (
         <>
-          <p className="text-gray-600 mb-2">Pick a new template for this transaction</p>
+          <p className="text-gray-600 mb-2">
+            {replacingName
+              ? <>Pick a new template for &ldquo;{replacingName}&rdquo;</>
+              : "Pick a new template for this checklist"}
+          </p>
           <p className="text-sm text-gray-500">You&rsquo;ll be asked to confirm before anything is cleared.</p>
           {onCancel && (
             <button
@@ -133,13 +162,15 @@ export function ChecklistTemplateChooser({
           <div className="grid gap-3 grid-cols-1 sm:grid-cols-3 mt-6 text-left">
             {listing.templates.map((template) => {
               const required = template.items.filter((i) => i.isRequired).length;
+              const alreadyAdded = disabledTemplateIds?.has(template.id) ?? false;
               return (
                 <button
                   key={template.id}
                   type="button"
-                  disabled={busy}
+                  disabled={busy || alreadyAdded}
+                  aria-disabled={alreadyAdded || undefined}
                   onClick={() => onPick(template)}
-                  className="bg-white border border-gray-200 rounded-lg p-4 flex flex-col gap-2 text-left hover:border-gray-300 hover:shadow-md transition-all disabled:opacity-60 disabled:cursor-wait"
+                  className="bg-white border border-gray-200 rounded-lg p-4 flex flex-col gap-2 text-left hover:border-gray-300 hover:shadow-md transition-all disabled:opacity-60 disabled:cursor-not-allowed"
                   data-testid={`checklist-template-${template.id}`}
                 >
                   <span className="w-10 h-10 rounded-lg inline-flex items-center justify-center text-indigo-600 bg-indigo-50">
@@ -151,6 +182,14 @@ export function ChecklistTemplateChooser({
                   <span className="text-sm text-gray-500 tabular-nums">
                     {template.items.length} item{template.items.length === 1 ? "" : "s"} · {required} required
                   </span>
+                  {alreadyAdded && (
+                    <span
+                      className="text-xs font-medium text-gray-500"
+                      data-testid={`checklist-template-added-${template.id}`}
+                    >
+                      Already added
+                    </span>
+                  )}
                 </button>
               );
             })}

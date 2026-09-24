@@ -1,22 +1,29 @@
 /**
  * TransactionChecklistTab — BACKLOG-3476.
  *
- * The Checklist tab's panel. TransactionDetails owns the checklist hook and the
- * plan state and passes them in, so the tab, its button and the Overview line
- * all read one answer.
+ * The Checklist tab's panel. A transaction may carry several checklists, each
+ * from a different broker template; each renders as a `ChecklistSection`.
+ * TransactionDetails owns the checklist hook and the plan state and passes them
+ * in, so the tab, its button and the Overview line all read one answer.
  *
- * | plan      | checklist | this panel                                         |
- * |-----------|-----------|----------------------------------------------------|
- * | allowed   | none      | template chooser (mock state 1)                    |
- * | allowed   | exists    | the checklist (mock state 2)                       |
- * | blocked   | exists    | read-only + notice + Remove checklist              |
- * | unknown   | exists    | read-only + notice                                 |
- * | pending / blocked / unknown with none: the tab is not shown at all         |
+ * | plan      | checklists | this panel                                                   |
+ * |-----------|------------|--------------------------------------------------------------|
+ * | allowed   | none       | template chooser                                             |
+ * | allowed   | 1+         | summed progress, Add checklist; each section: Change, Remove |
+ * | blocked   | 1+         | read-only + notice; each section: Remove only                |
+ * | unknown   | 1+         | read-only + notice                                           |
+ * | pending / blocked / unknown with none: the tab is not shown at all                   |
  *
  * Read-only exists because `checklists:get` and `checklists:remove` are
  * deliberately ungated in main: a user whose plan dropped checklists can still
  * see, and take off, what they made. Every other write is refused by main
  * whatever this screen shows; the screen only avoids offering it.
+ *
+ * Sections open by default. A checklist whose items are ALL ticked (optional
+ * ones included, `allItemsChecked` from main) opens collapsed. That initial
+ * state is decided once per checklist id, when its data first arrives, so
+ * ticking the last box does not snap a section shut and a collapsed section
+ * can always be opened. Nothing is remembered between opens.
  *
  * A failed read shows an error and Retry, never the chooser: "no checklist
  * yet" would be a false statement about this transaction.
@@ -24,6 +31,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import type { ApiResult } from "../../../../services";
 import type {
+  ChecklistDetail,
   ChecklistItem,
   ChecklistTemplate,
   SelectChecklistTemplateResult,
@@ -34,12 +42,12 @@ import type { UnifiedAttachment } from "../../hooks/useTransactionAllAttachments
 import type { Communication, HighlightTarget, TransactionTab } from "../../types";
 import { ChecklistTemplateChooser } from "./ChecklistTemplateChooser";
 import { ChecklistProgress } from "./ChecklistProgress";
-import { ChecklistItemRow } from "./ChecklistItemRow";
+import { ChecklistSection } from "./ChecklistSection";
 import { ChangeTemplateConfirm } from "./ChangeTemplateConfirm";
 import { ChecklistLinkPicker } from "./ChecklistLinkPicker";
 import { checklistLoss, linkableThreads } from "../../utils/checklistLinks";
 
-const CHANGE_WARNING = "Changing the template clears every check, note and link on this list.";
+export const ALREADY_ON_TRANSACTION_ERROR = "That checklist is already on this transaction.";
 
 export interface TransactionChecklistTabProps {
   checklist: UseTransactionChecklistResult;
@@ -56,6 +64,9 @@ export interface TransactionChecklistTabProps {
   nameMap?: ReadonlyMap<string, string>;
 }
 
+/** Which chooser is open: adding a checklist, or replacing one named by id. */
+type ChooserState = { mode: "add" } | { mode: "replace"; checklistId: string } | null;
+
 export function TransactionChecklistTab({
   checklist,
   gate,
@@ -70,23 +81,68 @@ export function TransactionChecklistTab({
   userEmail,
   nameMap,
 }: TransactionChecklistTabProps): React.ReactElement | null {
-  const { state, detail } = checklist;
+  const { state, data } = checklist;
   const readOnly = gate !== "allowed";
-  const [mode, setMode] = useState<"view" | "replace">("view");
+  const [chooser, setChooser] = useState<ChooserState>(null);
   const [confirmTemplate, setConfirmTemplate] = useState<ChecklistTemplate | null>(null);
   const [busy, setBusy] = useState(false);
   const [templatesRefreshKey, setTemplatesRefreshKey] = useState(0);
   const [pickerItem, setPickerItem] = useState<ChecklistItem | null>(null);
-  const [confirmingRemove, setConfirmingRemove] = useState(false);
+
+  const details = useMemo(() => data?.checklists ?? [], [data]);
+
+  // Q2: each section's first state, decided ONCE per checklist id when its
+  // data first arrives, then only the user's toggle changes it.
+  const [initialExpanded, setInitialExpanded] = useState<Record<string, boolean>>({});
+  const [toggledExpanded, setToggledExpanded] = useState<Record<string, boolean>>({});
+  const unseen = useMemo(
+    () => details.filter((d) => !(d.checklist.id in initialExpanded)),
+    [details, initialExpanded],
+  );
+  useEffect(() => {
+    if (unseen.length === 0) return;
+    setInitialExpanded((prev) => {
+      const next = { ...prev };
+      for (const d of unseen) {
+        if (!(d.checklist.id in next)) next[d.checklist.id] = !d.allItemsChecked;
+      }
+      return next;
+    });
+  }, [unseen]);
+  const isExpanded = useCallback(
+    (detail: ChecklistDetail): boolean =>
+      toggledExpanded[detail.checklist.id] ??
+      initialExpanded[detail.checklist.id] ??
+      // The first frame before the effect above has recorded it: the same
+      // rule, so the section does not flash open and shut.
+      !detail.allItemsChecked,
+    [toggledExpanded, initialExpanded],
+  );
+  const toggleExpanded = useCallback(
+    (checklistId: string) => {
+      const detail = details.find((d) => d.checklist.id === checklistId);
+      if (!detail) return;
+      const current = isExpanded(detail);
+      setToggledExpanded((prev) => ({ ...prev, [checklistId]: !current }));
+    },
+    [details, isExpanded],
+  );
 
   const attachmentsById = useMemo(() => new Map(attachments.map((a) => [a.id, a])), [attachments]);
   const threads = useMemo(() => linkableThreads(emailCommunications), [emailCommunications]);
+  const templateIdsOnTransaction = useMemo(
+    () => new Set(details.map((d) => d.checklist.templateId)),
+    [details],
+  );
 
   // A thread chip names its participants from the Emails list. Load it
   // (silently) when some chip needs it; otherwise the chip shows the count only.
   const hasEmailLinks = useMemo(
-    () => !!detail && Object.values(detail.linksByItemId).some((ls) => ls.some((l) => l.kind === "email")),
-    [detail],
+    () =>
+      details.some((d) =>
+        Object.values(d.linksByItemId).some((links) => links.some((l) => l.kind === "email")),
+      ),
+    [details],
   );
   useEffect(() => {
     if (hasEmailLinks) void ensureEmailsLoaded();
@@ -101,12 +157,17 @@ export function TransactionChecklistTab({
         return false;
       }
       switch (result.data.status) {
-        case "selected":
+        case "added":
         case "replaced":
-        case "exists":
-          // `exists`: another window picked first. The reload that followed the
-          // write already shows that checklist; nothing was lost.
           return true;
+        case "exists":
+          // Another window added it first, or the listing was stale. The
+          // reload that followed the write already shows it; nothing was lost.
+          onShowError(ALREADY_ON_TRANSACTION_ERROR);
+          return false;
+        case "no_checklist":
+          onShowError("That checklist is no longer on this transaction.");
+          return false;
         case "no_transaction":
           onShowError("This transaction no longer exists.");
           return false;
@@ -121,32 +182,35 @@ export function TransactionChecklistTab({
 
   const handlePick = useCallback(
     async (template: ChecklistTemplate) => {
-      if (mode === "replace") {
+      if (chooser?.mode === "replace") {
         // Nothing is written until the confirmation says so.
         setConfirmTemplate(template);
         return;
       }
       setBusy(true);
       try {
-        handleSelectResult(await checklist.pickTemplate(template.id));
+        // An add: no checklist id is sent, so nothing already here can change.
+        if (handleSelectResult(await checklist.addChecklist(template.id))) setChooser(null);
       } finally {
         setBusy(false);
       }
     },
-    [mode, checklist, handleSelectResult],
+    [chooser, checklist, handleSelectResult],
   );
 
   const handleConfirmReplace = useCallback(async () => {
-    if (!confirmTemplate) return;
+    if (!confirmTemplate || chooser?.mode !== "replace") return;
     setBusy(true);
     try {
-      const ok = handleSelectResult(await checklist.replaceTemplate(confirmTemplate.id));
+      const ok = handleSelectResult(
+        await checklist.replaceChecklist(chooser.checklistId, confirmTemplate.id),
+      );
       setConfirmTemplate(null);
-      if (ok) setMode("view");
+      if (ok) setChooser(null);
     } finally {
       setBusy(false);
     }
-  }, [confirmTemplate, checklist, handleSelectResult]);
+  }, [confirmTemplate, chooser, checklist, handleSelectResult]);
 
   const handleToggle = useCallback(
     async (item: ChecklistItem) => {
@@ -176,17 +240,19 @@ export function TransactionChecklistTab({
     [checklist, onShowError],
   );
 
-  const handleRemoveChecklist = useCallback(async () => {
-    setBusy(true);
-    try {
-      const result = await checklist.remove();
-      if (!result.success) onShowError(result.error ?? "Could not remove the checklist.");
-      else onShowSuccess("Checklist removed");
-    } finally {
-      setBusy(false);
-      setConfirmingRemove(false);
-    }
-  }, [checklist, onShowError, onShowSuccess]);
+  const handleRemoveChecklist = useCallback(
+    async (checklistId: string) => {
+      setBusy(true);
+      try {
+        const result = await checklist.removeChecklist(checklistId);
+        if (!result.success) onShowError(result.error ?? "Could not remove the checklist.");
+        else onShowSuccess("Checklist removed");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [checklist, onShowError, onShowSuccess],
+  );
 
   if (state.status === "loading") {
     return (
@@ -212,7 +278,7 @@ export function TransactionChecklistTab({
     );
   }
 
-  if (!detail) {
+  if (details.length === 0) {
     // Without the plan there is nothing to start; the tab is hidden in that
     // case, so this only guards a render between two answers.
     if (readOnly) return null;
@@ -226,22 +292,36 @@ export function TransactionChecklistTab({
     );
   }
 
-  if (mode === "replace" && !readOnly) {
+  const replaceTarget =
+    chooser?.mode === "replace"
+      ? details.find((d) => d.checklist.id === chooser.checklistId) ?? null
+      : null;
+
+  if (chooser && !readOnly && (chooser.mode === "add" || replaceTarget)) {
+    // Templates already on this transaction cannot be added again. When
+    // replacing, the checklist's own template stays selectable: that resets it.
+    const disabledTemplateIds = new Set(templateIdsOnTransaction);
+    if (replaceTarget) disabledTemplateIds.delete(replaceTarget.checklist.templateId);
     return (
       <>
         <ChecklistTemplateChooser
-          mode="replace"
+          mode={chooser.mode}
+          replacingName={replaceTarget?.checklist.templateName}
+          disabledTemplateIds={disabledTemplateIds}
           onPick={(t) => void handlePick(t)}
-          onCancel={() => setMode("view")}
+          onCancel={() => {
+            setConfirmTemplate(null);
+            setChooser(null);
+          }}
           busy={busy}
           refreshKey={templatesRefreshKey}
         />
-        {confirmTemplate && (
+        {confirmTemplate && replaceTarget && (
           <ChangeTemplateConfirm
-            currentName={detail.checklist.templateName}
+            currentName={replaceTarget.checklist.templateName}
             newName={confirmTemplate.name}
-            isReset={confirmTemplate.id === detail.checklist.templateId}
-            loss={checklistLoss(detail)}
+            isReset={confirmTemplate.id === replaceTarget.checklist.templateId}
+            loss={checklistLoss(replaceTarget)}
             busy={busy}
             onConfirm={() => void handleConfirmReplace()}
             onCancel={() => setConfirmTemplate(null)}
@@ -251,114 +331,80 @@ export function TransactionChecklistTab({
     );
   }
 
+  const pickerDetail = pickerItem
+    ? details.find((d) => d.checklist.id === pickerItem.checklistId) ?? null
+    : null;
+
   return (
     <div data-testid="checklist-panel">
       {readOnly && (
         <div
-          className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800 flex items-start justify-between gap-3 flex-wrap"
+          className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800"
           data-testid="checklist-readonly-notice"
         >
-          <span>
-            {gate === "blocked"
-              ? "Checklists aren’t included in your current plan. You can still view this checklist or remove it."
-              : "We couldn’t confirm your plan just now. You can still view this checklist."}
-          </span>
-          {gate === "blocked" &&
-            (confirmingRemove ? (
-              <span className="flex items-center gap-3">
-                <span>Remove this checklist?</span>
-                <button
-                  type="button"
-                  onClick={() => void handleRemoveChecklist()}
-                  disabled={busy}
-                  className="font-semibold text-red-700 hover:text-red-900"
-                  data-testid="checklist-remove-confirm"
-                >
-                  Remove
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirmingRemove(false)}
-                  disabled={busy}
-                  className="font-medium text-gray-700"
-                >
-                  Cancel
-                </button>
-              </span>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setConfirmingRemove(true)}
-                className="font-semibold text-amber-900 hover:underline"
-                data-testid="checklist-remove"
-              >
-                Remove checklist
-              </button>
-            ))}
+          {gate === "blocked"
+            ? "Checklists aren’t included in your current plan. You can still view these checklists or remove them."
+            : "We couldn’t confirm your plan just now. You can still view these checklists."}
         </div>
       )}
 
-      <div className="flex items-start justify-between gap-3 flex-wrap mb-2">
-        <div>
-          <h4 className="text-lg font-semibold text-gray-900" data-testid="checklist-template-name">
-            {detail.checklist.templateName}
-          </h4>
-          <p className="text-xs text-gray-400 mt-1">
-            From your brokerage &middot; {detail.items.length} item{detail.items.length === 1 ? "" : "s"}
-          </p>
-        </div>
+      <div className="flex items-center justify-between gap-3 flex-wrap mb-2">
+        <h4 className="text-lg font-semibold text-gray-900">Checklists</h4>
         {!readOnly && (
           <button
             type="button"
-            onClick={() => setMode("replace")}
-            title={CHANGE_WARNING}
+            onClick={() => setChooser({ mode: "add" })}
+            disabled={busy}
             className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg"
-            data-testid="checklist-change-template"
+            data-testid="checklist-add"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-              />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
             </svg>
-            Change template
+            Add checklist
           </button>
         )}
       </div>
 
-      <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 mb-6">
-        <ChecklistProgress requiredDone={detail.requiredDone} requiredTotal={detail.requiredTotal} />
-        {!readOnly && <p className="text-xs text-gray-400 mt-1">{CHANGE_WARNING}</p>}
+      {data && (
+        <div
+          className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 mb-6"
+          data-testid="checklist-total-progress"
+        >
+          <ChecklistProgress requiredDone={data.requiredDone} requiredTotal={data.requiredTotal} />
+        </div>
+      )}
+
+      <div className="flex flex-col gap-4">
+        {details.map((detail) => (
+          <ChecklistSection
+            key={detail.checklist.id}
+            detail={detail}
+            expanded={isExpanded(detail)}
+            onToggleExpanded={toggleExpanded}
+            readOnly={readOnly}
+            canChange={gate === "allowed"}
+            canRemove={gate === "allowed" || gate === "blocked"}
+            busy={busy}
+            pendingItemIds={checklist.pendingItemIds}
+            attachmentsById={attachmentsById}
+            threads={threads}
+            onChange={(checklistId) => setChooser({ mode: "replace", checklistId })}
+            onRemove={handleRemoveChecklist}
+            onToggleItem={(i) => void handleToggle(i)}
+            onSaveNote={handleSaveNote}
+            onOpenPicker={setPickerItem}
+            onRemoveLink={handleRemoveLink}
+            onNavigate={onNavigateToTab}
+          />
+        ))}
       </div>
 
-      <div className="flex flex-col gap-3">
-        {[...detail.items]
-          .sort((a, b) => a.sortOrder - b.sortOrder)
-          .map((item) => (
-            <ChecklistItemRow
-              key={item.id}
-              item={item}
-              links={detail.linksByItemId[item.id] ?? []}
-              readOnly={readOnly}
-              pending={checklist.pendingItemIds.has(item.id)}
-              attachmentsById={attachmentsById}
-              threads={threads}
-              onToggle={(i) => void handleToggle(i)}
-              onSaveNote={handleSaveNote}
-              onOpenPicker={setPickerItem}
-              onRemoveLink={handleRemoveLink}
-              onNavigate={onNavigateToTab}
-            />
-          ))}
-      </div>
-
-      {pickerItem && !readOnly && (
+      {pickerItem && pickerDetail && !readOnly && (
         <ChecklistLinkPicker
           item={pickerItem}
-          templateName={detail.checklist.templateName}
-          existingLinks={detail.linksByItemId[pickerItem.id] ?? []}
+          templateName={pickerDetail.checklist.templateName}
+          existingLinks={pickerDetail.linksByItemId[pickerItem.id] ?? []}
           attachments={attachments}
           attachmentsLoading={attachmentsLoading}
           emailCommunications={emailCommunications}

@@ -157,12 +157,13 @@ function TransactionDetails({
   const { activeTab, setActiveTab } = useTransactionTabs(initialTab);
 
   // BACKLOG-3476: the Checklist tab shows when the plan allows checklists, or
-  // when this transaction already has one (read-only then — `get` and `remove`
+  // when this transaction already has at least one (read-only then — `get` and `remove`
   // are ungated in main). Never while the plan is still being read.
   const checklistGate = useStrictFeatureState("transaction_checklists");
   const checklist = useTransactionChecklist(transaction.id);
   const showChecklist =
-    checklistGate === "allowed" || (checklistGate !== "pending" && checklist.detail !== null);
+    checklistGate === "allowed" ||
+    (checklistGate !== "pending" && (checklist.data?.checklists.length ?? 0) > 0);
   // The tab can disappear under the user (checklist removed, plan changed):
   // fall back to Overview rather than render an empty panel.
   useEffect(() => {
@@ -1253,9 +1254,9 @@ function TransactionDetails({
               onRemovedContactsOpenChange={setRemovedContactsOpen}
               removedContactsRefreshKey={removedContactsRefreshKey}
               checklistSection={
-                showChecklist && checklist.detail ? (
+                showChecklist && checklist.data && checklist.data.checklists.length > 0 ? (
                   <ChecklistOverviewSection
-                    detail={checklist.detail}
+                    data={checklist.data}
                     onOpen={() => setActiveTab("checklist")}
                   />
                 ) : null

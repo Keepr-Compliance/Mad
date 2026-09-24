@@ -209,6 +209,7 @@ const SHIPPED_GATE = jest.requireActual("../featureGateHandlers") as {
 const SCHEMA_PATH = path.join(__dirname, "..", "..", "database", "schema.sql");
 
 const TEMPLATE_ID = "<fixture:template-p1-active>";
+const TEMPLATE_ID_2 = "<fixture:template-p2-active>";
 
 /**
  * The listing the template service returns. Its shape is the one
@@ -241,6 +242,34 @@ function templateListing(overrides: Partial<{ name: string; items: any[] }> = {}
             isRequired: false,
             expectedDocumentType: null,
             sortOrder: 20,
+          },
+        ],
+      },
+    ],
+  };
+}
+
+/** BACKLOG-3476: the listing plus a second template, so two checklists can be added. */
+function twoTemplateListing() {
+  const listing = templateListing();
+  return {
+    ...listing,
+    templates: [
+      ...listing.templates,
+      {
+        id: TEMPLATE_ID_2,
+        name: "Disclosures",
+        description: null,
+        sortOrder: 20,
+        updatedAt: "<timestamp>",
+        items: [
+          {
+            id: "<fixture:item-p2-1>",
+            title: "Lead paint disclosure",
+            description: null,
+            isRequired: true,
+            expectedDocumentType: "disclosure",
+            sortOrder: 10,
           },
         ],
       },
@@ -428,21 +457,24 @@ describe("BACKLOG-3475 C9 — the three ungated channels keep working in the sam
     const result = await invoke("checklists:get", { transactionId: TRANSACTION });
 
     expect(result.success).toBe(true);
-    expect(result.checklist.checklist.templateName).toBe("Standard purchase");
-    expect(result.checklist.items.map((i: any) => i.title)).toEqual([
+    expect(result.checklists.checklists).toHaveLength(1);
+    const [only] = result.checklists.checklists;
+    expect(only.checklist.templateName).toBe("Standard purchase");
+    expect(only.items.map((i: any) => i.title)).toEqual([
       "Signed purchase agreement",
       "Inspection report",
     ]);
-    expect(result.checklist.requiredTotal).toBe(1);
-    expect(result.checklist.requiredDone).toBe(0);
+    expect(only.requiredTotal).toBe(1);
+    expect(only.requiredDone).toBe(0);
+    expect([result.checklists.requiredDone, result.checklists.requiredTotal]).toEqual([0, 1]);
   });
 
   it("remove clears the checklist while the plan cannot be read, and audits it", async () => {
-    await seedChecklist();
+    const checklistId = await seedChecklist();
     mockAudit.mockClear();
     mockGate.mockImplementation(() => SHIPPED_GATE.isChecklistsAllowed());
 
-    const result = await invoke("checklists:remove", { transactionId: TRANSACTION });
+    const result = await invoke("checklists:remove", { transactionId: TRANSACTION, checklistId });
 
     expect(result).toEqual({ success: true, changed: true });
     expect(count("transaction_checklists")).toBe(0);
@@ -453,7 +485,7 @@ describe("BACKLOG-3475 C9 — the three ungated channels keep working in the sam
       resourceType: "TRANSACTION",
       resourceId: TRANSACTION,
       userId: USER,
-      metadata: { reason: "checklist_removed" },
+      metadata: { reason: "checklist_removed", checklistId, templateId: TEMPLATE_ID },
     });
   });
 
@@ -480,7 +512,7 @@ describe("BACKLOG-3475 C9 — the gated and ungated sets, by execution", () => {
    * escaping the sweep.
    */
   it("exactly six channels refuse when the plan cannot be read, and three answer", async () => {
-    await seedChecklist();
+    const checklistId = await seedChecklist();
     const itemId = itemIds()[0];
     const added = await invoke("checklists:add-link", {
       itemId,
@@ -508,7 +540,7 @@ describe("BACKLOG-3475 C9 — the gated and ungated sets, by execution", () => {
       // The ungated three last, and `remove` after `get`: it clears the rows
       // `get` is asked to return.
       ["checklists:get", { transactionId: TRANSACTION }],
-      ["checklists:remove", { transactionId: TRANSACTION }],
+      ["checklists:remove", { transactionId: TRANSACTION, checklistId }],
       ["checklists:invalidate-templates", undefined],
     ];
 
@@ -562,7 +594,7 @@ describe("BACKLOG-3475 C9 — the ALLOWED side, so the refusals above are not va
       transactionId: TRANSACTION,
       templateId: TEMPLATE_ID,
     });
-    expect(selected.result.status).toBe("selected");
+    expect(selected.result.status).toBe("added");
     expect(count("transaction_checklist_items")).toBe(2);
 
     const itemId = itemIds()[0];
@@ -591,7 +623,7 @@ describe("BACKLOG-3475 C9 — the ALLOWED side, so the refusals above are not va
   });
 
   it("a tick writes checked_at and NO audit row; select and replace do", async () => {
-    await invoke("checklists:select-template", {
+    const selected = await invoke("checklists:select-template", {
       transactionId: TRANSACTION,
       templateId: TEMPLATE_ID,
     });
@@ -617,13 +649,16 @@ describe("BACKLOG-3475 C9 — the ALLOWED side, so the refusals above are not va
     await invoke("checklists:select-template", {
       transactionId: TRANSACTION,
       templateId: TEMPLATE_ID,
-      replaceExisting: true,
+      replaceChecklistId: selected.result.checklistId,
     });
     expect(mockAudit).toHaveBeenCalledTimes(2);
-    expect(mockAudit.mock.calls[1][0].metadata.reason).toBe("checklist_replaced");
+    expect(mockAudit.mock.calls[1][0].metadata).toMatchObject({
+      reason: "checklist_replaced",
+      previousChecklistId: selected.result.checklistId,
+    });
   });
 
-  it("a second pick without replaceExisting is declined and the original is untouched", async () => {
+  it("the same template added again is declined as exists and the original is untouched", async () => {
     await invoke("checklists:select-template", {
       transactionId: TRANSACTION,
       templateId: TEMPLATE_ID,
@@ -831,19 +866,20 @@ describe("BACKLOG-3475 C6 — editing the broker template never rewrites a check
     expect(after).toEqual(before);
 
     const got = await invoke("checklists:get", { transactionId: TRANSACTION });
-    expect(got.checklist.items.map((i: any) => i.title)).toEqual([
+    const [detail] = got.checklists.checklists;
+    expect(detail.items.map((i: any) => i.title)).toEqual([
       "Signed purchase agreement",
       "Inspection report",
     ]);
-    expect(got.checklist.items.map((i: any) => i.isRequired)).toEqual([true, false]);
-    expect(got.checklist.items.map((i: any) => i.expectedDocumentType)).toEqual([
+    expect(detail.items.map((i: any) => i.isRequired)).toEqual([true, false]);
+    expect(detail.items.map((i: any) => i.expectedDocumentType)).toEqual([
       "contract",
       null,
     ]);
-    expect(got.checklist.requiredTotal).toBe(1);
+    expect(detail.requiredTotal).toBe(1);
     // The NAME is a copy too — the row still says what the user picked.
-    expect(got.checklist.checklist.templateName).toBe("Standard purchase");
-    expect(got.checklist.checklist.templateId).toBe(TEMPLATE_ID);
+    expect(detail.checklist.templateName).toBe("Standard purchase");
+    expect(detail.checklist.templateId).toBe(TEMPLATE_ID);
   });
 
   it("a ticked item survives the template being edited, with its note and evidence", async () => {
@@ -860,20 +896,21 @@ describe("BACKLOG-3475 C6 — editing the broker template never rewrites a check
     await invoke("checklists:invalidate-templates");
 
     const got = await invoke("checklists:get", { transactionId: TRANSACTION });
-    expect(got.checklist.items).toHaveLength(2);
-    const [first] = got.checklist.items;
+    const [detail] = got.checklists.checklists;
+    expect(detail.items).toHaveLength(2);
+    const [first] = detail.items;
     expect(first.isChecked).toBe(true);
     expect(first.checkedAt).not.toBeNull();
     expect(first.note).toBe("signed 3 Mar");
-    expect(got.checklist.linksByItemId[itemId]).toHaveLength(1);
-    expect(got.checklist.linksByItemId[itemId][0].label).toBe("Offer");
-    expect(got.checklist.linksByItemId[itemId][0].members.map((m: any) => m.emailId)).toEqual([
+    expect(detail.linksByItemId[itemId]).toHaveLength(1);
+    expect(detail.linksByItemId[itemId][0].label).toBe("Offer");
+    expect(detail.linksByItemId[itemId][0].members.map((m: any) => m.emailId)).toEqual([
       "e-mine",
     ]);
   });
 
   it("only an explicit replace rewrites the checklist, and it does so in one step", async () => {
-    await invoke("checklists:select-template", {
+    const selected = await invoke("checklists:select-template", {
       transactionId: TRANSACTION,
       templateId: TEMPLATE_ID,
     });
@@ -898,12 +935,12 @@ describe("BACKLOG-3475 C6 — editing the broker template never rewrites a check
     const replaced = await invoke("checklists:select-template", {
       transactionId: TRANSACTION,
       templateId: TEMPLATE_ID,
-      replaceExisting: true,
+      replaceChecklistId: selected.result.checklistId,
     });
 
     expect(replaced.result.status).toBe("replaced");
-    // A transaction is never left with no checklist: the old rows are gone and
-    // the new ones are present in the same read.
+    // The checklist is never left missing: the old rows are gone and the new
+    // ones are present in the same read.
     expect(count("transaction_checklists")).toBe(1);
     const now = itemIds();
     expect(now).toHaveLength(1);
@@ -911,5 +948,95 @@ describe("BACKLOG-3475 C6 — editing the broker template never rewrites a check
     expect(
       rows("SELECT title, template_name FROM transaction_checklist_items JOIN transaction_checklists ON transaction_checklists.id = transaction_checklist_items.checklist_id"),
     ).toEqual([{ title: "RENAMED IN THE PORTAL", template_name: "Standard purchase (v2)" }]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3476 — several checklists per transaction, through the channels
+// ---------------------------------------------------------------------------
+
+describe("BACKLOG-3476 — several checklists, through IPC", () => {
+  beforeEach(() => {
+    mockGate.mockResolvedValue(true);
+    mockResolveOrgId.mockResolvedValue(ORG_A);
+    mockListTemplates.mockResolvedValue(twoTemplateListing());
+  });
+
+  const add = async (templateId: string): Promise<string> => {
+    const result = await invoke("checklists:select-template", { transactionId: TRANSACTION, templateId });
+    expect(result.result.status).toBe("added");
+    return result.result.checklistId;
+  };
+
+  it("A-1: adding a second template leaves the first checklist's tick, note and link rows intact", async () => {
+    const first = await add(TEMPLATE_ID);
+    const itemId = itemIds()[0];
+    await invoke("checklists:set-item-checked", { itemId, checked: true });
+    await invoke("checklists:set-item-note", { itemId, note: "signed 3 Mar" });
+    await invoke("checklists:add-link", { itemId, kind: "email", targetIds: ["e-mine"] });
+    const snapshot = () => ({
+      items: rows("SELECT * FROM transaction_checklist_items WHERE checklist_id = ? ORDER BY id", first),
+      links: rows("SELECT * FROM transaction_checklist_links ORDER BY id"),
+      members: rows("SELECT * FROM transaction_checklist_link_members ORDER BY id"),
+    });
+    const before = snapshot();
+
+    await add(TEMPLATE_ID_2);
+
+    expect(count("transaction_checklists")).toBe(2);
+    expect(snapshot()).toEqual(before);
+    const got = await invoke("checklists:get", { transactionId: TRANSACTION });
+    expect(got.checklists.checklists.map((d: any) => d.checklist.templateName)).toEqual([
+      "Standard purchase",
+      "Disclosures",
+    ]);
+    expect([got.checklists.requiredDone, got.checklists.requiredTotal]).toEqual([1, 2]);
+  });
+
+  it("A-11: remove without a checklistId is refused and deletes nothing", async () => {
+    await add(TEMPLATE_ID);
+    await add(TEMPLATE_ID_2);
+
+    const result = await invoke("checklists:remove", { transactionId: TRANSACTION });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/Validation error/);
+    expect(count("transaction_checklists")).toBe(2);
+  });
+
+  it("remove takes off ONLY the named checklist and audits which one", async () => {
+    const first = await add(TEMPLATE_ID);
+    const second = await add(TEMPLATE_ID_2);
+    mockAudit.mockClear();
+
+    const result = await invoke("checklists:remove", { transactionId: TRANSACTION, checklistId: second });
+
+    expect(result).toEqual({ success: true, changed: true });
+    expect(rows("SELECT id FROM transaction_checklists").map((r) => r.id)).toEqual([first]);
+    expect(mockAudit.mock.calls[0][0].metadata).toEqual({
+      reason: "checklist_removed",
+      transactionId: TRANSACTION,
+      checklistId: second,
+      templateId: TEMPLATE_ID_2,
+    });
+  });
+
+  it("a replace naming another transaction's checklist answers no_checklist and writes nothing", async () => {
+    await add(TEMPLATE_ID);
+    const theirs = await invoke("checklists:select-template", {
+      transactionId: OTHER_TRANSACTION,
+      templateId: TEMPLATE_ID,
+    });
+    mockAudit.mockClear();
+
+    const result = await invoke("checklists:select-template", {
+      transactionId: TRANSACTION,
+      templateId: TEMPLATE_ID_2,
+      replaceChecklistId: theirs.result.checklistId,
+    });
+
+    expect(result).toEqual({ success: true, result: { status: "no_checklist" } });
+    expect(count("transaction_checklists")).toBe(2);
+    expect(mockAudit).not.toHaveBeenCalled();
   });
 });

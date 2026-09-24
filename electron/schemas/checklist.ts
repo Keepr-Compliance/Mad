@@ -116,18 +116,24 @@ export const ChecklistNoteSchema = z
     return trimmed.length === 0 ? null : trimmed;
   });
 
+/**
+ * Absent `replaceChecklistId` ADDS a checklist. Present, it replaces that one
+ * checklist — main still confirms it belongs to `transactionId`.
+ */
 export const SelectChecklistTemplateArgsSchema = z.object({
   transactionId: UuidSchema,
   templateId: UuidSchema,
-  replaceExisting: z.boolean().optional(),
+  replaceChecklistId: UuidSchema.optional(),
 });
 
 export const GetChecklistArgsSchema = z.object({
   transactionId: UuidSchema,
 });
 
+/** Both required: a remove names the one checklist it takes off (BACKLOG-3476). */
 export const RemoveChecklistArgsSchema = z.object({
   transactionId: UuidSchema,
+  checklistId: UuidSchema,
 });
 
 export const SetChecklistItemCheckedArgsSchema = z.object({

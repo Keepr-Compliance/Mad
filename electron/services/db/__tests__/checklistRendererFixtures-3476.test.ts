@@ -10,7 +10,7 @@
  * over the real schema, runs the three producers the tab consumes, and
  * compares the answer with the committed JSON.
  *
- *   ChecklistDetail      getChecklistForTransaction   (checklists:get)
+ *   ChecklistsForTransaction  getChecklistsForTransaction (checklists:get)
  *   UnifiedAttachment[]  getTransactionAllAttachments (transactions:get-all-attachments)
  *   Communication[]      getCommunicationsWithMessages(transactions:getCommunications, "email")
  *
@@ -34,6 +34,14 @@
  *   item 4  optional, not ticked, a link FULLY stale (its only email unlinked)
  * so requiredDone = 1 of 2 while two items are ticked — the case a renderer
  * counting ticks itself gets wrong.
+ *
+ * BACKLOG-3476: the transaction carries THREE checklists, added in this order:
+ *   "Probe template"        the four items above (1 of 2 required)
+ *   "Other probe template"  three required items, the first ticked (1 of 3)
+ *   "Done probe template"   one required and one optional, BOTH ticked, so
+ *                           `allItemsChecked` is true (it opens collapsed)
+ * The envelope therefore sums to 3 of 6 required; counting optional ticks
+ * would give 5 of 9 and counting only the first checklist 1 of 2.
  *
  * The attachment list also carries one LEGACY row reached only through the
  * `external_message_id` fallback arm, with `message_id` and `email_id` both
@@ -66,13 +74,13 @@ jest.mock("../../logService", () => ({
 
 import {
   addChecklistLink,
-  getChecklistForTransaction,
+  getChecklistsForTransaction,
   selectChecklistTemplate,
   setChecklistItemChecked,
   setChecklistItemNote,
 } from "../checklistDbService";
 import { getTransactionAllAttachments } from "../attachmentDbService";
-import type { ChecklistDetail } from "../../../types/checklist";
+import type { ChecklistDetail, ChecklistsForTransaction } from "../../../types/checklist";
 import { getCommunicationsWithMessages } from "../communicationDbService";
 
 const SCHEMA = nodePath.join(__dirname, "..", "..", "..", "database", "schema.sql");
@@ -200,16 +208,32 @@ function stableOrder(detail: ChecklistDetail): ChecklistDetail {
   return { ...detail, linksByItemId };
 }
 
+const OTHER_ITEMS = [
+  { title: "Other item 1", description: null, isRequired: true, sortOrder: 0 },
+  { title: "Other item 2", description: null, isRequired: true, sortOrder: 1 },
+  { title: "Other item 3", description: null, isRequired: true, sortOrder: 2 },
+];
+const DONE_ITEMS = [
+  { title: "Done item 1", description: null, isRequired: true, sortOrder: 0 },
+  { title: "Done item 2", description: null, isRequired: false, sortOrder: 1 },
+];
+
+function stableEnvelope(envelope: ChecklistsForTransaction): ChecklistsForTransaction {
+  return { ...envelope, checklists: envelope.checklists.map(stableOrder) };
+}
+
 async function produce(): Promise<unknown> {
-  const selected = await selectChecklistTemplate({
-    transactionId: "txn-1",
-    templateId: "tpl-probe",
-    templateName: "Probe template",
-    items: TEMPLATE_ITEMS,
-  });
-  expect(selected.status).toBe("selected");
-  const first = await getChecklistForTransaction("txn-1");
-  const [i1, i2, i3, i4] = first!.items;
+  const add = async (templateId: string, templateName: string, items: typeof TEMPLATE_ITEMS) => {
+    const result = await selectChecklistTemplate({ transactionId: "txn-1", templateId, templateName, items });
+    expect(result.status).toBe("added");
+  };
+  await add("tpl-probe", "Probe template", TEMPLATE_ITEMS);
+  await add("tpl-other", "Other probe template", OTHER_ITEMS);
+  await add("tpl-done", "Done probe template", DONE_ITEMS);
+  const [first, second, third] = (await getChecklistsForTransaction("txn-1")).checklists;
+  const [i1, i2, i3, i4] = first.items;
+  await setChecklistItemChecked(second.items[0].id, true);
+  for (const item of third.items) await setChecklistItemChecked(item.id, true);
 
   await setChecklistItemChecked(i1.id, true);
   await setChecklistItemChecked(i3.id, true);
@@ -228,7 +252,7 @@ async function produce(): Promise<unknown> {
   run(`DELETE FROM communications WHERE id IN ('cm-3', 'cm-5')`);
 
   return normalize({
-    checklistDetail: stableOrder((await getChecklistForTransaction("txn-1"))!),
+    checklists: stableEnvelope(await getChecklistsForTransaction("txn-1")),
     attachments: getTransactionAllAttachments("txn-1"),
     emailCommunications: await getCommunicationsWithMessages("txn-1", "email"),
   });

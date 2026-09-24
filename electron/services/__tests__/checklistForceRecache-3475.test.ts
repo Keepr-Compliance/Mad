@@ -201,6 +201,19 @@ beforeEach(() => {
       ('m1', 'L-mixed', 'email', 'live-1', NULL), ('m2', 'L-mixed', 'email', 'keep-1', NULL),
       ('m3', 'L-gone', 'email', 'live-1', NULL),
       ('m4', 'L-att', 'attachment', NULL, 'att-1'), ('m5', 'L-att-keep', 'attachment', NULL, 'att-keep')`).run();
+  // BACKLOG-3476 (F-2, regression cover): a SECOND checklist on the same
+  // transaction. Its links die with the replaced email exactly like the
+  // first's — there is no per-checklist code path; the cascade is per row.
+  db.prepare(
+    `INSERT INTO transaction_checklists (id, transaction_id, template_id, template_name, sort_order) VALUES ('c2', 'txn-1', 'tpl-2', 'Disclosures', 1)`,
+  ).run();
+  db.prepare(
+    `INSERT INTO transaction_checklist_items (id, checklist_id, title, is_required) VALUES ('i2', 'c2', 'Disclosure signed', 1)`,
+  ).run();
+  db.prepare(`INSERT INTO transaction_checklist_links (id, item_id, kind, label) VALUES
+      ('L-c2-gone', 'i2', 'email', 'single'), ('L-c2-keep', 'i2', 'email', 'kept')`).run();
+  db.prepare(`INSERT INTO transaction_checklist_link_members (id, link_id, kind, email_id, attachment_id) VALUES
+      ('m6', 'L-c2-gone', 'email', 'live-1', NULL), ('m7', 'L-c2-keep', 'email', 'keep-1', NULL)`).run();
 });
 
 afterEach(() => db.close());
@@ -223,17 +236,19 @@ describe("BACKLOG-3475 — email Force Re-cache removes checklist link members i
     // L-gone loses its only member and the group goes with it (the trigger).
     // L-att loses its attachment with the replaced email.
     // L-mixed keeps keep-1; L-att-keep keeps its attachment.
-    expect(memberSet()).toEqual(["L-att-keep:att-keep", "L-mixed:keep-1"]);
-    expect(linkSet()).toEqual(["L-att-keep", "L-mixed"]);
+    // The second checklist (BACKLOG-3476): L-c2-gone goes, L-c2-keep stays.
+    expect(memberSet()).toEqual(["L-att-keep:att-keep", "L-c2-keep:keep-1", "L-mixed:keep-1"]);
+    expect(linkSet()).toEqual(["L-att-keep", "L-c2-keep", "L-mixed"]);
     expect(dangling()).toBe(0);
-    // The checklist and its items are untouched: a tick survives a re-cache,
-    // only the evidence under it can go.
-    expect(rows("SELECT id FROM transaction_checklist_items")).toEqual([{ id: "i1" }]);
+    // The checklists and their items are untouched: a tick survives a
+    // re-cache, only the evidence under it can go.
+    expect(rows("SELECT id FROM transaction_checklist_items ORDER BY id")).toEqual([{ id: "i1" }, { id: "i2" }]);
   });
 
   it("removing a group, and deleting the transaction, still work with the trigger present", () => {
     db.prepare(`DELETE FROM transaction_checklist_links WHERE id = 'L-gone'`).run();
-    expect(`${linkSet().length}/${memberSet().length}`).toBe("3/4");
+    // Four groups on the first checklist and two on the second (BACKLOG-3476).
+    expect(`${linkSet().length}/${memberSet().length}`).toBe("5/6");
 
     db.prepare(`DELETE FROM transactions WHERE id = 'txn-1'`).run();
     const counts = [

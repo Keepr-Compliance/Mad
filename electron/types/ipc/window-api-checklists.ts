@@ -20,8 +20,8 @@
 
 import type {
   AddChecklistLinkResult,
-  ChecklistDetail,
   ChecklistLinkKind,
+  ChecklistsForTransaction,
   ChecklistTemplate,
   ChecklistTemplateSource,
   SelectChecklistTemplateResult,
@@ -52,16 +52,16 @@ export interface ChecklistWriteResult {
 export interface WindowApiChecklists {
   /** Broker templates for this organization. Gated; a failed read carries no `templates`. */
   listTemplates: () => Promise<ListChecklistTemplatesResult>;
-  /** Copy a template onto a transaction, at most one per transaction. */
+  /** Add a checklist from a template, or replace the one named by `replaceChecklistId`. */
   selectTemplate: (args: {
     transactionId: string;
     templateId: string;
-    replaceExisting?: boolean;
+    replaceChecklistId?: string;
   }) => Promise<{ success: boolean; result?: SelectChecklistTemplateResult; error?: string }>;
-  /** This transaction's checklist, or `null`. Never gated. */
+  /** Every checklist on this transaction. Never gated. */
   get: (args: {
     transactionId: string;
-  }) => Promise<{ success: boolean; checklist?: ChecklistDetail | null; error?: string }>;
+  }) => Promise<{ success: boolean; checklists?: ChecklistsForTransaction; error?: string }>;
   /** Tick or untick one item. */
   setItemChecked: (args: { itemId: string; checked: boolean }) => Promise<ChecklistWriteResult>;
   /** Set or clear one item's note. */
@@ -74,8 +74,8 @@ export interface WindowApiChecklists {
   }) => Promise<{ success: boolean; result?: AddChecklistLinkResult; error?: string }>;
   /** Remove one evidence group. */
   removeLink: (args: { linkId: string }) => Promise<ChecklistWriteResult>;
-  /** Take the checklist off a transaction. Never gated. */
-  remove: (args: { transactionId: string }) => Promise<ChecklistWriteResult>;
+  /** Take one checklist off a transaction. Never gated. */
+  remove: (args: { transactionId: string; checklistId: string }) => Promise<ChecklistWriteResult>;
   /** Discard the cached templates so the next listing goes to the cloud. */
   invalidateTemplates: () => Promise<{ success: boolean; error?: string }>;
 }

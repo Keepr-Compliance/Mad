@@ -1,158 +1,258 @@
 {
-  "checklistDetail": {
-    "checklist": {
-      "id": "id-1",
-      "transactionId": "txn-1",
-      "templateId": "tpl-probe",
-      "templateName": "Probe template",
-      "selectedAt": "2026-03-10T12:00:00.000Z"
-    },
-    "items": [
+  "checklists": {
+    "checklists": [
       {
-        "id": "id-2",
-        "checklistId": "id-1",
-        "title": "Probe item 1",
-        "description": "What counts for probe item 1.",
-        "isRequired": true,
-        "expectedDocumentType": null,
-        "isChecked": true,
-        "checkedAt": "2026-03-10T12:00:00.000Z",
-        "note": null,
-        "sortOrder": 0
+        "checklist": {
+          "id": "id-1",
+          "transactionId": "txn-1",
+          "templateId": "tpl-probe",
+          "templateName": "Probe template",
+          "sortOrder": 0,
+          "selectedAt": "2026-03-10T12:00:00.000Z"
+        },
+        "items": [
+          {
+            "id": "id-2",
+            "checklistId": "id-1",
+            "title": "Probe item 1",
+            "description": "What counts for probe item 1.",
+            "isRequired": true,
+            "expectedDocumentType": null,
+            "isChecked": true,
+            "checkedAt": "2026-03-10T12:00:00.000Z",
+            "note": null,
+            "sortOrder": 0
+          },
+          {
+            "id": "id-3",
+            "checklistId": "id-1",
+            "title": "Probe item 2",
+            "description": null,
+            "isRequired": true,
+            "expectedDocumentType": null,
+            "isChecked": false,
+            "checkedAt": null,
+            "note": null,
+            "sortOrder": 1
+          },
+          {
+            "id": "id-4",
+            "checklistId": "id-1",
+            "title": "Probe item 3",
+            "description": "What counts for probe item 3.",
+            "isRequired": false,
+            "expectedDocumentType": null,
+            "isChecked": true,
+            "checkedAt": "2026-03-10T12:00:00.000Z",
+            "note": "Probe note text.",
+            "sortOrder": 2
+          },
+          {
+            "id": "id-5",
+            "checklistId": "id-1",
+            "title": "Probe item 4",
+            "description": null,
+            "isRequired": false,
+            "expectedDocumentType": null,
+            "isChecked": false,
+            "checkedAt": null,
+            "note": null,
+            "sortOrder": 3
+          }
+        ],
+        "linksByItemId": {
+          "id-2": [
+            {
+              "id": "id-6",
+              "itemId": "id-2",
+              "kind": "attachment",
+              "label": "probe-document.pdf",
+              "sortOrder": 0,
+              "members": [
+                {
+                  "id": "id-7",
+                  "linkId": "id-6",
+                  "kind": "attachment",
+                  "attachmentId": "att-1",
+                  "emailId": null,
+                  "inTransaction": true
+                }
+              ]
+            }
+          ],
+          "id-3": [
+            {
+              "id": "id-8",
+              "itemId": "id-3",
+              "kind": "email",
+              "label": "Probe thread",
+              "sortOrder": 0,
+              "members": [
+                {
+                  "id": "id-9",
+                  "linkId": "id-8",
+                  "kind": "email",
+                  "attachmentId": null,
+                  "emailId": "e-thread-1",
+                  "inTransaction": true
+                },
+                {
+                  "id": "id-10",
+                  "linkId": "id-8",
+                  "kind": "email",
+                  "attachmentId": null,
+                  "emailId": "e-thread-2",
+                  "inTransaction": true
+                }
+              ]
+            }
+          ],
+          "id-4": [
+            {
+              "id": "id-11",
+              "itemId": "id-4",
+              "kind": "email",
+              "label": "Probe solo",
+              "sortOrder": 0,
+              "members": [
+                {
+                  "id": "id-12",
+                  "linkId": "id-11",
+                  "kind": "email",
+                  "attachmentId": null,
+                  "emailId": "e-solo-1",
+                  "inTransaction": false
+                },
+                {
+                  "id": "id-13",
+                  "linkId": "id-11",
+                  "kind": "email",
+                  "attachmentId": null,
+                  "emailId": "e-solo-2",
+                  "inTransaction": true
+                }
+              ]
+            }
+          ],
+          "id-5": [
+            {
+              "id": "id-14",
+              "itemId": "id-5",
+              "kind": "email",
+              "label": "Probe gone",
+              "sortOrder": 0,
+              "members": [
+                {
+                  "id": "id-15",
+                  "linkId": "id-14",
+                  "kind": "email",
+                  "attachmentId": null,
+                  "emailId": "e-gone",
+                  "inTransaction": false
+                }
+              ]
+            }
+          ]
+        },
+        "requiredDone": 1,
+        "requiredTotal": 2,
+        "allItemsChecked": false
       },
       {
-        "id": "id-3",
-        "checklistId": "id-1",
-        "title": "Probe item 2",
-        "description": null,
-        "isRequired": true,
-        "expectedDocumentType": null,
-        "isChecked": false,
-        "checkedAt": null,
-        "note": null,
-        "sortOrder": 1
+        "checklist": {
+          "id": "id-16",
+          "transactionId": "txn-1",
+          "templateId": "tpl-other",
+          "templateName": "Other probe template",
+          "sortOrder": 1,
+          "selectedAt": "2026-03-10T12:00:00.000Z"
+        },
+        "items": [
+          {
+            "id": "id-17",
+            "checklistId": "id-16",
+            "title": "Other item 1",
+            "description": null,
+            "isRequired": true,
+            "expectedDocumentType": null,
+            "isChecked": true,
+            "checkedAt": "2026-03-10T12:00:00.000Z",
+            "note": null,
+            "sortOrder": 0
+          },
+          {
+            "id": "id-18",
+            "checklistId": "id-16",
+            "title": "Other item 2",
+            "description": null,
+            "isRequired": true,
+            "expectedDocumentType": null,
+            "isChecked": false,
+            "checkedAt": null,
+            "note": null,
+            "sortOrder": 1
+          },
+          {
+            "id": "id-19",
+            "checklistId": "id-16",
+            "title": "Other item 3",
+            "description": null,
+            "isRequired": true,
+            "expectedDocumentType": null,
+            "isChecked": false,
+            "checkedAt": null,
+            "note": null,
+            "sortOrder": 2
+          }
+        ],
+        "linksByItemId": {},
+        "requiredDone": 1,
+        "requiredTotal": 3,
+        "allItemsChecked": false
       },
       {
-        "id": "id-4",
-        "checklistId": "id-1",
-        "title": "Probe item 3",
-        "description": "What counts for probe item 3.",
-        "isRequired": false,
-        "expectedDocumentType": null,
-        "isChecked": true,
-        "checkedAt": "2026-03-10T12:00:00.000Z",
-        "note": "Probe note text.",
-        "sortOrder": 2
-      },
-      {
-        "id": "id-5",
-        "checklistId": "id-1",
-        "title": "Probe item 4",
-        "description": null,
-        "isRequired": false,
-        "expectedDocumentType": null,
-        "isChecked": false,
-        "checkedAt": null,
-        "note": null,
-        "sortOrder": 3
+        "checklist": {
+          "id": "id-20",
+          "transactionId": "txn-1",
+          "templateId": "tpl-done",
+          "templateName": "Done probe template",
+          "sortOrder": 2,
+          "selectedAt": "2026-03-10T12:00:00.000Z"
+        },
+        "items": [
+          {
+            "id": "id-21",
+            "checklistId": "id-20",
+            "title": "Done item 1",
+            "description": null,
+            "isRequired": true,
+            "expectedDocumentType": null,
+            "isChecked": true,
+            "checkedAt": "2026-03-10T12:00:00.000Z",
+            "note": null,
+            "sortOrder": 0
+          },
+          {
+            "id": "id-22",
+            "checklistId": "id-20",
+            "title": "Done item 2",
+            "description": null,
+            "isRequired": false,
+            "expectedDocumentType": null,
+            "isChecked": true,
+            "checkedAt": "2026-03-10T12:00:00.000Z",
+            "note": null,
+            "sortOrder": 1
+          }
+        ],
+        "linksByItemId": {},
+        "requiredDone": 1,
+        "requiredTotal": 1,
+        "allItemsChecked": true
       }
     ],
-    "linksByItemId": {
-      "id-2": [
-        {
-          "id": "id-6",
-          "itemId": "id-2",
-          "kind": "attachment",
-          "label": "probe-document.pdf",
-          "sortOrder": 0,
-          "members": [
-            {
-              "id": "id-7",
-              "linkId": "id-6",
-              "kind": "attachment",
-              "attachmentId": "att-1",
-              "emailId": null,
-              "inTransaction": true
-            }
-          ]
-        }
-      ],
-      "id-3": [
-        {
-          "id": "id-8",
-          "itemId": "id-3",
-          "kind": "email",
-          "label": "Probe thread",
-          "sortOrder": 0,
-          "members": [
-            {
-              "id": "id-9",
-              "linkId": "id-8",
-              "kind": "email",
-              "attachmentId": null,
-              "emailId": "e-thread-1",
-              "inTransaction": true
-            },
-            {
-              "id": "id-10",
-              "linkId": "id-8",
-              "kind": "email",
-              "attachmentId": null,
-              "emailId": "e-thread-2",
-              "inTransaction": true
-            }
-          ]
-        }
-      ],
-      "id-4": [
-        {
-          "id": "id-11",
-          "itemId": "id-4",
-          "kind": "email",
-          "label": "Probe solo",
-          "sortOrder": 0,
-          "members": [
-            {
-              "id": "id-12",
-              "linkId": "id-11",
-              "kind": "email",
-              "attachmentId": null,
-              "emailId": "e-solo-1",
-              "inTransaction": false
-            },
-            {
-              "id": "id-13",
-              "linkId": "id-11",
-              "kind": "email",
-              "attachmentId": null,
-              "emailId": "e-solo-2",
-              "inTransaction": true
-            }
-          ]
-        }
-      ],
-      "id-5": [
-        {
-          "id": "id-14",
-          "itemId": "id-5",
-          "kind": "email",
-          "label": "Probe gone",
-          "sortOrder": 0,
-          "members": [
-            {
-              "id": "id-15",
-              "linkId": "id-14",
-              "kind": "email",
-              "attachmentId": null,
-              "emailId": "e-gone",
-              "inTransaction": false
-            }
-          ]
-        }
-      ]
-    },
-    "requiredDone": 1,
-    "requiredTotal": 2
+    "requiredDone": 3,
+    "requiredTotal": 6
   },
   "attachments": [
     {

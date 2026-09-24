@@ -7,12 +7,7 @@
  * organization lookup, the evidence membership check and the label a link
  * carries all live in the main process.
  *
- * **The consumer is BACKLOG-3476's transaction tab, which does not exist yet.**
- * Nothing in `src/` calls this file — that is the seam the plan set (PR-A local
- * data → PR-B templates and IPC → 3476 UI), recorded in `pm_dependencies` as
- * 3476 depends_on 3475, not an oversight. The `int-portal/transaction-checklists
- * → develop` PR carries the checklist line that refuses to merge this while it
- * is still uncalled.
+ * The consumer is BACKLOG-3476's transaction tab (`useTransactionChecklist`).
  *
  * ## One thing this file is careful NOT to flatten
  *
@@ -28,8 +23,8 @@ import { type ApiResult, getErrorMessage } from "./index";
 
 import type {
   AddChecklistLinkResult,
-  ChecklistDetail,
   ChecklistLinkKind,
+  ChecklistsForTransaction,
   ChecklistTemplate,
   ChecklistTemplateSource,
   SelectChecklistTemplateResult,
@@ -79,17 +74,18 @@ export const checklistService = {
     }
   },
 
-  /** Copy a template onto a transaction. At most one checklist per transaction. */
+  /**
+   * ADD a checklist from a template. Never sends `replaceChecklistId`, so it
+   * cannot touch a checklist already on the transaction.
+   */
   async selectTemplate(
     transactionId: string,
     templateId: string,
-    replaceExisting?: boolean,
   ): Promise<ApiResult<SelectChecklistTemplateResult>> {
     try {
       const result = await window.api.checklists.selectTemplate({
         transactionId,
         templateId,
-        replaceExisting,
       });
       if (result.success && result.result) {
         return { success: true, data: result.result };
@@ -100,12 +96,40 @@ export const checklistService = {
     }
   },
 
-  /** This transaction's checklist, or `null` when it has none. Never gated. */
-  async get(transactionId: string): Promise<ApiResult<ChecklistDetail | null>> {
+  /**
+   * REPLACE one checklist of a transaction with a template: its ticks, notes
+   * and links go; every other checklist stays. The only caller that sends
+   * `replaceChecklistId`.
+   */
+  async replaceChecklist(
+    transactionId: string,
+    checklistId: string,
+    templateId: string,
+  ): Promise<ApiResult<SelectChecklistTemplateResult>> {
+    try {
+      const result = await window.api.checklists.selectTemplate({
+        transactionId,
+        templateId,
+        replaceChecklistId: checklistId,
+      });
+      if (result.success && result.result) {
+        return { success: true, data: result.result };
+      }
+      return { success: false, error: result.error };
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) };
+    }
+  },
+
+  /** Every checklist on this transaction (an empty list when none). Never gated. */
+  async get(transactionId: string): Promise<ApiResult<ChecklistsForTransaction>> {
     try {
       const result = await window.api.checklists.get({ transactionId });
+      if (result.success && result.checklists && Array.isArray(result.checklists.checklists)) {
+        return { success: true, data: result.checklists };
+      }
       if (result.success) {
-        return { success: true, data: result.checklist ?? null };
+        return { success: false, error: "The checklists could not be read." };
       }
       return { success: false, error: result.error };
     } catch (error) {
@@ -172,10 +196,10 @@ export const checklistService = {
     }
   },
 
-  /** Take the checklist off a transaction. Never gated. */
-  async remove(transactionId: string): Promise<ApiResult<boolean>> {
+  /** Take one checklist off a transaction. Never gated. */
+  async remove(transactionId: string, checklistId: string): Promise<ApiResult<boolean>> {
     try {
-      const result = await window.api.checklists.remove({ transactionId });
+      const result = await window.api.checklists.remove({ transactionId, checklistId });
       if (result.success) {
         return { success: true, data: !!result.changed };
       }

@@ -1,14 +1,15 @@
 /**
  * useTransactionChecklist — BACKLOG-3476.
  *
- * One transaction's checklist, and every write the Checklist tab makes to it.
+ * Every checklist on one transaction (BACKLOG-3476: there may be several), and
+ * every write the Checklist tab makes to them.
  * The tab and the Overview line read the SAME instance (TransactionDetails owns
  * it), so the two can never show different progress.
  *
  * ## What this hook refuses to do
  *
- * - **Compute anything.** Progress, labels and membership come from main in
- *   `ChecklistDetail`. After a write it asks main again (`reload`) instead of
+ * - **Compute anything.** Progress (per checklist and summed), labels and
+ *   membership come from main in `ChecklistsForTransaction`. After a write it asks main again (`reload`) instead of
  *   patching counts locally.
  * - **Ask twice.** A write is followed by exactly ONE `get`, called from the
  *   write itself rather than from an effect on a counter — an effect would run
@@ -20,24 +21,24 @@
  * - **Send two ticks for one click.** A checkbox whose write is still in flight
  *   is in `pendingItemIds`; a second click is ignored, so two writes computed
  *   from the same stale `isChecked` cannot race.
- * - **Pass `replaceExisting` on a plain pick.** Only an explicit replace — the
- *   change-template confirmation — passes it. A plain pick onto a transaction
- *   that already has a checklist is then refused by main (`exists`) instead of
- *   silently wiping ticks, notes and links.
+ * - **Replace anything on an add.** `addChecklist` never sends a checklist id;
+ *   only `replaceChecklist(checklistId, …)` — the confirm of that checklist's
+ *   own Change — does, and main deletes only that one checklist of this
+ *   transaction. Nothing else can wipe a checklist's ticks, notes or links.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { checklistService } from "../../../services/checklistService";
 import type { ApiResult } from "../../../services";
 import type {
   AddChecklistLinkResult,
-  ChecklistDetail,
   ChecklistLinkKind,
+  ChecklistsForTransaction,
   SelectChecklistTemplateResult,
 } from "../../../../electron/types/checklist";
 
 export type ChecklistLoadState =
   | { status: "loading" }
-  | { status: "ready"; detail: ChecklistDetail | null }
+  | { status: "ready"; data: ChecklistsForTransaction }
   | { status: "error"; error: string };
 
 /** One group of evidence the picker asks main to link. */
@@ -53,8 +54,8 @@ export interface ChecklistLinkOutcome {
 
 export interface UseTransactionChecklistResult {
   state: ChecklistLoadState;
-  /** `state.detail` when ready, otherwise null. */
-  detail: ChecklistDetail | null;
+  /** `state.data` when ready, otherwise null. */
+  data: ChecklistsForTransaction | null;
   /** Ask main again. One `get`. */
   reload: () => Promise<void>;
   /** Items whose tick is being written right now. */
@@ -62,15 +63,18 @@ export interface UseTransactionChecklistResult {
   /** `null` when refused because the item already has a write in flight. */
   setItemChecked: (itemId: string, checked: boolean) => Promise<ApiResult<boolean> | null>;
   setItemNote: (itemId: string, note: string | null) => Promise<ApiResult<boolean>>;
-  /** A plain pick. Never replaces an existing checklist. */
-  pickTemplate: (templateId: string) => Promise<ApiResult<SelectChecklistTemplateResult>>;
-  /** The change-template confirmation. Clears every tick, note and link. */
-  replaceTemplate: (templateId: string) => Promise<ApiResult<SelectChecklistTemplateResult>>;
+  /** Add a checklist. Never replaces or removes one already there. */
+  addChecklist: (templateId: string) => Promise<ApiResult<SelectChecklistTemplateResult>>;
+  /** One checklist's Change confirmation. Clears that checklist's ticks, notes and links. */
+  replaceChecklist: (
+    checklistId: string,
+    templateId: string,
+  ) => Promise<ApiResult<SelectChecklistTemplateResult>>;
   /** Link each request as its own group, in order, then reload once. */
   addLinks: (itemId: string, requests: ChecklistLinkRequest[]) => Promise<ChecklistLinkOutcome[]>;
   removeLink: (linkId: string) => Promise<ApiResult<boolean>>;
-  /** Take the checklist off the transaction. Never gated in main. */
-  remove: () => Promise<ApiResult<boolean>>;
+  /** Take one checklist off the transaction. Never gated in main. */
+  removeChecklist: (checklistId: string) => Promise<ApiResult<boolean>>;
 }
 
 interface StoredState {
@@ -99,9 +103,10 @@ export function useTransactionChecklist(transactionId: string): UseTransactionCh
     if (seq !== requestSeqRef.current) return;
     setStored({
       forId,
-      value: result.success
-        ? { status: "ready", detail: result.data ?? null }
-        : { status: "error", error: result.error ?? "The checklist could not be loaded." },
+      value:
+        result.success && result.data
+        ? { status: "ready", data: result.data }
+        : { status: "error", error: result.error ?? "The checklists could not be loaded." },
     });
   }, []);
 
@@ -147,19 +152,21 @@ export function useTransactionChecklist(transactionId: string): UseTransactionCh
     [afterWrite],
   );
 
-  const pickTemplate = useCallback(
+  const addChecklist = useCallback(
     (templateId: string) => {
       const forId = currentIdRef.current;
-      // Two arguments, on purpose: see the file header.
+      // Never a checklist id here: see the file header.
       return afterWrite(forId, () => checklistService.selectTemplate(forId, templateId));
     },
     [afterWrite],
   );
 
-  const replaceTemplate = useCallback(
-    (templateId: string) => {
+  const replaceChecklist = useCallback(
+    (checklistId: string, templateId: string) => {
       const forId = currentIdRef.current;
-      return afterWrite(forId, () => checklistService.selectTemplate(forId, templateId, true));
+      return afterWrite(forId, () =>
+        checklistService.replaceChecklist(forId, checklistId, templateId),
+      );
     },
     [afterWrite],
   );
@@ -184,10 +191,13 @@ export function useTransactionChecklist(transactionId: string): UseTransactionCh
     [afterWrite],
   );
 
-  const remove = useCallback(() => {
-    const forId = currentIdRef.current;
-    return afterWrite(forId, () => checklistService.remove(forId));
-  }, [afterWrite]);
+  const removeChecklist = useCallback(
+    (checklistId: string) => {
+      const forId = currentIdRef.current;
+      return afterWrite(forId, () => checklistService.remove(forId, checklistId));
+    },
+    [afterWrite],
+  );
 
   // An answer stored for a different transaction is not an answer for this one.
   // Covers the render between the new id arriving and the effect resetting the
@@ -196,16 +206,16 @@ export function useTransactionChecklist(transactionId: string): UseTransactionCh
 
   return {
     state,
-    detail: state.status === "ready" ? state.detail : null,
+    data: state.status === "ready" ? state.data : null,
     reload,
     pendingItemIds,
     setItemChecked,
     setItemNote,
-    pickTemplate,
-    replaceTemplate,
+    addChecklist,
+    replaceChecklist,
     addLinks,
     removeLink,
-    remove,
+    removeChecklist,
   };
 }
 

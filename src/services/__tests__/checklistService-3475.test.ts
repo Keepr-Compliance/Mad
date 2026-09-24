@@ -141,40 +141,33 @@ describe("listTemplates — a failed read is not an empty brokerage", () => {
 });
 
 describe("the write channels pass the shapes the Zod schemas expect", () => {
-  it("selectTemplate", async () => {
+  it("selectTemplate ADDS: the exact payload carries no replaceChecklistId (BACKLOG-3476, A-10)", async () => {
     api().selectTemplate.mockResolvedValue({
       success: true,
-      result: { status: "selected", checklistId: "c-1" },
+      result: { status: "added", checklistId: "c-1" },
     });
 
-    const result = await checklistService.selectTemplate("t-1", "tpl-1", true);
+    const result = await checklistService.selectTemplate("t-1", "tpl-1");
 
-    expect(api().selectTemplate).toHaveBeenCalledWith({
-      transactionId: "t-1",
-      templateId: "tpl-1",
-      replaceExisting: true,
-    });
-    expect(result.data).toEqual({ status: "selected", checklistId: "c-1" });
+    // Exact object and exact keys: an add that also sent an id would reach
+    // main as a replace and wipe that checklist.
+    expect(api().selectTemplate.mock.calls[0]).toEqual([{ transactionId: "t-1", templateId: "tpl-1" }]);
+    expect(Object.keys(api().selectTemplate.mock.calls[0][0]).sort()).toEqual(["templateId", "transactionId"]);
+    expect(result.data).toEqual({ status: "added", checklistId: "c-1" });
   });
 
-  it("selectTemplate forwards replaceExisting as given and never forces it (BACKLOG-3476)", async () => {
-    // A plain pick must reach main WITHOUT replaceExisting, so a second window
-    // that picked first gets `exists` instead of having its checklist wiped.
-    // Forcing `replaceExisting: true` here left every other test green.
-    // Asserted on the argument itself: `toHaveBeenCalledWith({... replaceExisting:
-    // undefined})` also matches an object with the key missing, which would
-    // hide nothing here but reads as a stronger claim than it is.
+  it("replaceChecklist sends exactly the checklist it was given", async () => {
     api().selectTemplate.mockResolvedValue({
       success: true,
-      result: { status: "selected", checklistId: "c-1" },
+      result: { status: "replaced", checklistId: "c-2", previousChecklistId: "c-1" },
     });
 
-    await checklistService.selectTemplate("t-1", "tpl-1");
-    await checklistService.selectTemplate("t-1", "tpl-1", false);
+    const result = await checklistService.replaceChecklist("t-1", "c-1", "tpl-2");
 
-    expect(api().selectTemplate).toHaveBeenCalledTimes(2);
-    expect(api().selectTemplate.mock.calls[0][0].replaceExisting).toBeUndefined();
-    expect(api().selectTemplate.mock.calls[1][0].replaceExisting).toBe(false);
+    expect(api().selectTemplate.mock.calls[0]).toEqual([
+      { transactionId: "t-1", templateId: "tpl-2", replaceChecklistId: "c-1" },
+    ]);
+    expect(result.data).toEqual({ status: "replaced", checklistId: "c-2", previousChecklistId: "c-1" });
   });
 
   it("a declined write still arrives as data, because the call ran and answered", async () => {
@@ -189,11 +182,14 @@ describe("the write channels pass the shapes the Zod schemas expect", () => {
     expect(result.data).toEqual({ status: "exists", checklistId: "c-1" });
   });
 
-  it("get maps an absent checklist to null rather than undefined", async () => {
-    api().get.mockResolvedValue({ success: true, checklist: null });
-
-    await expect(checklistService.get("t-1")).resolves.toEqual({ success: true, data: null });
+  it("get returns main's envelope; a success with no envelope is a failure, never an empty list", async () => {
+    const envelope = { checklists: [], requiredDone: 0, requiredTotal: 0 };
+    api().get.mockResolvedValue({ success: true, checklists: envelope });
+    await expect(checklistService.get("t-1")).resolves.toEqual({ success: true, data: envelope });
     expect(api().get).toHaveBeenCalledWith({ transactionId: "t-1" });
+
+    api().get.mockResolvedValue({ success: true });
+    await expect(checklistService.get("t-1")).resolves.toMatchObject({ success: false });
   });
 
   it("setItemChecked / setItemNote / removeLink / remove report whether a row changed", async () => {
@@ -214,7 +210,7 @@ describe("the write channels pass the shapes the Zod schemas expect", () => {
       success: true,
       data: true,
     });
-    await expect(checklistService.remove("t-1")).resolves.toEqual({
+    await expect(checklistService.remove("t-1", "c-1")).resolves.toEqual({
       success: true,
       data: false,
     });
@@ -222,7 +218,7 @@ describe("the write channels pass the shapes the Zod schemas expect", () => {
     expect(api().setItemChecked).toHaveBeenCalledWith({ itemId: "i-1", checked: true });
     expect(api().setItemNote).toHaveBeenCalledWith({ itemId: "i-1", note: null });
     expect(api().removeLink).toHaveBeenCalledWith({ linkId: "l-1" });
-    expect(api().remove).toHaveBeenCalledWith({ transactionId: "t-1" });
+    expect(api().remove).toHaveBeenCalledWith({ transactionId: "t-1", checklistId: "c-1" });
   });
 
   it("addLink sends the kind and the target list unchanged", async () => {

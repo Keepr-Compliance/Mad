@@ -10,14 +10,39 @@
  * cannot leak that change into the next test.
  */
 import raw from "./fixtures/checklistFixtures-3476.json";
-import type { ChecklistDetail, ChecklistItem, ChecklistTemplate } from "../../../../../../electron/types/checklist";
+import type {
+  ChecklistDetail,
+  ChecklistItem,
+  ChecklistsForTransaction,
+  ChecklistTemplate,
+} from "../../../../../../electron/types/checklist";
 import type { UnifiedAttachment } from "../../../hooks/useTransactionAllAttachments";
 import type { Communication } from "../../../types";
 
 const clone = <T,>(v: unknown): T => JSON.parse(JSON.stringify(v)) as T;
 
-/** The checklist on `txn-1`: 4 items, 2 required, requiredDone 1 while 2 are ticked. */
-export const fixtureDetail = (): ChecklistDetail => clone<ChecklistDetail>(raw.checklistDetail);
+/**
+ * Every checklist on `txn-1` (BACKLOG-3476), in display order:
+ *   [0] "Probe template"        4 items, 1 of 2 required, 2 ticked (one optional)
+ *   [1] "Other probe template"  3 required items, 1 ticked
+ *   [2] "Done probe template"   every item ticked, `allItemsChecked` true
+ * Summed: 3 of 6 required.
+ */
+export const fixtureChecklists = (): ChecklistsForTransaction =>
+  clone<ChecklistsForTransaction>(raw.checklists);
+
+/** One checklist of the envelope, by position. */
+export const fixtureChecklist = (index: number): ChecklistDetail => fixtureChecklists().checklists[index];
+
+/** An envelope holding only the given checklists, with main's sums recomputed the way main computes them. */
+export const envelopeOf = (checklists: ChecklistDetail[]): ChecklistsForTransaction => ({
+  checklists,
+  requiredDone: checklists.reduce((n, d) => n + d.requiredDone, 0),
+  requiredTotal: checklists.reduce((n, d) => n + d.requiredTotal, 0),
+});
+
+/** The first checklist on `txn-1`: 4 items, 2 required, requiredDone 1 while 2 are ticked. */
+export const fixtureDetail = (): ChecklistDetail => fixtureChecklist(0);
 
 /** Items by position: 0 required+ticked+attachment, 1 required+thread, 2 optional+ticked+note+partly stale, 3 optional+fully stale. */
 export const fixtureItem = (index: number): ChecklistItem => fixtureDetail().items[index];
@@ -64,6 +89,29 @@ export const fixtureTemplates = (): ChecklistTemplate[] => [
     updatedAt: "2026-03-01T00:00:00+00:00",
     items: [
       { id: "tpo-1", title: "Other item 1", description: null, isRequired: true, expectedDocumentType: null, sortOrder: 0 },
+      { id: "tpo-2", title: "Other item 2", description: null, isRequired: true, expectedDocumentType: null, sortOrder: 1 },
+      { id: "tpo-3", title: "Other item 3", description: null, isRequired: true, expectedDocumentType: null, sortOrder: 2 },
+    ],
+  },
+  {
+    id: "tpl-done",
+    name: "Done probe template",
+    description: null,
+    sortOrder: 2,
+    updatedAt: "2026-03-01T00:00:00+00:00",
+    items: [
+      { id: "tpd-1", title: "Done item 1", description: null, isRequired: true, expectedDocumentType: null, sortOrder: 0 },
+      { id: "tpd-2", title: "Done item 2", description: null, isRequired: false, expectedDocumentType: null, sortOrder: 1 },
+    ],
+  },
+  {
+    id: "tpl-fresh",
+    name: "Fresh probe template",
+    description: null,
+    sortOrder: 3,
+    updatedAt: "2026-03-01T00:00:00+00:00",
+    items: [
+      { id: "tpf-1", title: "Fresh item 1", description: null, isRequired: true, expectedDocumentType: null, sortOrder: 0 },
     ],
   },
 ];
