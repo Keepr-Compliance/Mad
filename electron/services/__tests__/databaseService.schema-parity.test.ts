@@ -123,10 +123,13 @@ const ALLOWED_EVOLUTION: AllowedEvolution[] = [
   // BACKLOG-3475 — transaction checklists (local half). Four new tables, four
   // declared indexes, nine SQLite autoindexes and one trigger: 17 keys, every
   // spelling copied from this suite's own failure output, never written from
-  // memory. All are `IF NOT EXISTS` and nothing ALTERs an existing table, so
-  // schema.sql's unconditional exec delivers them to fresh and existing
-  // installs alike and no MIGRATIONS entry is needed — the BACKLOG-3366
-  // delivery, one table further on.
+  // memory. All are `IF NOT EXISTS`, so schema.sql's unconditional exec
+  // delivers them to fresh and existing installs alike — the BACKLOG-3366
+  // delivery, one table further on. BACKLOG-3476 changed
+  // transaction_checklists' shape (several per transaction); migration v72
+  // rebuilds a table that still has the first shape, and
+  // databaseService.migration-v72.test.ts compares the upgraded fingerprint
+  // with this file's.
   //
   // WHAT THIS SUITE CANNOT SEE, AND THEREFORE IS NOT EVIDENCE FOR: the
   // fingerprint reads tables through PRAGMA table_info, which does not report
@@ -138,9 +141,11 @@ const ALLOWED_EVOLUTION: AllowedEvolution[] = [
   // -------------------------------------------------------------------------
   {
     key: "TABLE:transaction_checklists",
-    what: "New table: one checklist per transaction, copied from a broker template.",
+    what:
+      "New table: the checklists on a transaction, each copied from a different " +
+      "broker template, in the user's display order (sort_order).",
     why:
-      "BACKLOG-3475: the user picks a broker template and it is COPIED onto the " +
+      "BACKLOG-3475/3476: the user picks a broker template and it is COPIED onto the " +
       "transaction. `template_id` records which template it came from and is " +
       "provenance only — no read joins through it — so editing or deleting the " +
       "broker template never rewrites a checklist already in use.",
@@ -216,12 +221,12 @@ const ALLOWED_EVOLUTION: AllowedEvolution[] = [
   },
   {
     key: "INDEX:sqlite_autoindex_transaction_checklists_2",
-    what: "SQLite's automatic index for UNIQUE (transaction_id).",
+    what: "SQLite's automatic index for UNIQUE (transaction_id, template_id).",
     why:
-      "BACKLOG-3475: the 1:1 rule — one checklist per transaction. Picking a " +
-      "second template must replace the first, never append, and this index is " +
-      "what refuses the append.",
-    ref: "BACKLOG-3475",
+      "BACKLOG-3476: a transaction may hold several checklists but not the same " +
+      "template twice; this index refuses the duplicate and serves lookups by " +
+      "transaction_id.",
+    ref: "BACKLOG-3476",
   },
   {
     key: "INDEX:sqlite_autoindex_transaction_checklist_items_1",
