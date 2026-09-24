@@ -196,6 +196,10 @@ function TransactionDetails({
   // Overview only needs contacts (loaded by loadOverview on mount).
   // Emails tab loads only email comms; Messages tab loads only text comms.
   const loadedChannelsRef = React.useRef<Set<string>>(new Set());
+  // BACKLOG-3476 (SR B1): the email load in flight (or finished) for this
+  // transaction. Every caller of ensureEmailsLoaded awaits THIS promise, so a
+  // second caller never resolves before the data arrives.
+  const emailLoadRef = React.useRef<Promise<void> | null>(null);
   // BACKLOG-1888: StrictMode-safe highlight reset — compare the previous transaction
   // id rather than counting effect runs. The old boolean guard (didMountRef) flipped
   // to true after StrictMode's first run, so run 2 was misinterpreted as a real
@@ -211,6 +215,7 @@ function TransactionDetails({
   const prevTransactionIdRef = React.useRef<string | null>(null);
   useEffect(() => {
     loadedChannelsRef.current.clear();
+    emailLoadRef.current = null;
     const prev = prevTransactionIdRef.current;
     if (prev !== null && prev !== transaction.id) {
       setHighlightTarget(null);
@@ -221,7 +226,7 @@ function TransactionDetails({
   useEffect(() => {
     if (activeTab === "emails" && !loadedChannelsRef.current.has("email")) {
       loadedChannelsRef.current.add("email");
-      loadCommunications("email");
+      emailLoadRef.current = loadCommunications("email");
     } else if (activeTab === "messages" && !loadedChannelsRef.current.has("text")) {
       loadedChannelsRef.current.add("text");
       loadCommunications("text");
@@ -235,10 +240,23 @@ function TransactionDetails({
   // loadCommunications flips `loading`, and with no contacts the early return
   // below swaps this whole modal for a spinner, unmounting the picker. Marking
   // the channel loaded means opening the Emails tab later does not fetch again.
-  const ensureEmailsLoaded = useCallback(async () => {
-    if (loadedChannelsRef.current.has("email")) return;
+  //
+  // SR B1: a caller that finds the channel already marked awaits the load that
+  // marked it (silent or loud), never an early return; otherwise the picker
+  // says "No email threads" while the emails are still on their way. Under
+  // StrictMode the picker's effect runs twice, and the second run awaits the
+  // first run's fetch.
+  // Known limit: the silent loader logs and swallows a failed fetch, so after a
+  // failure the picker offers no threads. It can only under-offer; main still
+  // decides every link it is asked to write.
+  const ensureEmailsLoaded = useCallback((): Promise<void> => {
+    if (loadedChannelsRef.current.has("email")) {
+      return emailLoadRef.current ?? Promise.resolve();
+    }
     loadedChannelsRef.current.add("email");
-    await refreshCommunicationsSilently("email");
+    const load = refreshCommunicationsSilently("email");
+    emailLoadRef.current = load;
+    return load;
   }, [refreshCommunicationsSilently]);
 
   // Communications hook

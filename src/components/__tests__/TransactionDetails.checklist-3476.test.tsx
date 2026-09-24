@@ -6,6 +6,9 @@
  *        `unknown` with no checklist.
  *   C-J  the Overview line shown while the tab is hidden (SR condition 5).
  *   C-R  the tab left active after it stops being shown — a blank panel.
+ *   SR B1  the link picker says "No email threads on this transaction." while
+ *        the emails are still loading: a second caller of the email load
+ *        returned early instead of awaiting the load already in flight.
  *   SR condition 1  the link picker loads emails with the LOUD loader, which on
  *        a transaction with no contacts swaps the whole modal for a spinner and
  *        unmounts the picker; and a second fetch when the Emails tab opens.
@@ -20,6 +23,7 @@ import TransactionDetails from "../TransactionDetails";
 import type { Transaction } from "../../types";
 import {
   fixtureDetail,
+  fixtureDetailWithoutLinks,
   fixtureEmailCommunications,
 } from "../transactionDetailsModule/components/checklist/__tests__/checklistFixture";
 
@@ -215,6 +219,116 @@ describe("SR condition 1 — the picker loads emails silently", () => {
     fireEvent.click(screen.getByText("Emails"));
     expect(await screen.findByTestId("emails-tab-stub")).toBeInTheDocument();
     await act(async () => {});
+    expect(emailCalls()).toBe(1);
+  });
+});
+
+/**
+ * SR B1. A deferred getCommunications keeps the email load in flight while the
+ * picker is open. The flush after the picker mounts matters: the picker starts
+ * in its loading state, and only its effect's settle can drop it, so without
+ * the flush these would pass on the broken code.
+ */
+describe("SR B1 — the picker never says there are no threads while the emails load", () => {
+  const NO_THREADS = "No email threads on this transaction.";
+  let resolvers: Array<(v: unknown) => void>;
+  const pendingEmails = () => {
+    resolvers = [];
+    tx.getCommunications = jest.fn().mockImplementation(
+      () => new Promise((r) => { resolvers.push(r); }),
+    );
+  };
+  const resolveAll = async (contactAssignments: unknown[] = []) => {
+    await act(async () => {
+      for (const r of resolvers) {
+        r({
+          success: true,
+          transaction: { communications: fixtureEmailCommunications(), contact_assignments: contactAssignments },
+        });
+      }
+    });
+  };
+  const openPicker = async () => {
+    fireEvent.click(await screen.findByTestId("tab-checklist"));
+    const item = fixtureDetail().items[1];
+    fireEvent.click(await screen.findByTestId(`checklist-open-picker-${item.id}`));
+    expect(await screen.findByTestId("checklist-link-picker")).toBeInTheDocument();
+    await act(async () => {});
+  };
+
+  it("(a) the tab's own load is in flight (the checklist has an email link): loading, then the threads", async () => {
+    strictState().mockResolvedValue("allowed");
+    checklists().get.mockResolvedValue({ success: true, checklist: fixtureDetail() });
+    pendingEmails();
+    render(<TransactionDetails transaction={baseTransaction} onClose={jest.fn()} />);
+    await openPicker();
+
+    expect(screen.getByTestId("checklist-picker-emails-loading")).toBeInTheDocument();
+    expect(screen.queryByText(NO_THREADS)).not.toBeInTheDocument();
+
+    await resolveAll();
+    expect(await screen.findByTestId("checklist-picker-thread-thread-thr-probe")).toBeInTheDocument();
+    expect(screen.queryByTestId("checklist-picker-emails-loading")).not.toBeInTheDocument();
+    expect(emailCalls()).toBe(1);
+  });
+
+  it("(b) StrictMode, no email links: the effect's second run awaits the first run's load", async () => {
+    strictState().mockResolvedValue("allowed");
+    // A checklist with no evidence yet: what main emits before any link is added.
+    checklists().get.mockResolvedValue({ success: true, checklist: fixtureDetailWithoutLinks() });
+    pendingEmails();
+    render(
+      <React.StrictMode>
+        <TransactionDetails transaction={baseTransaction} onClose={jest.fn()} />
+      </React.StrictMode>,
+    );
+    await openPicker();
+
+    expect(screen.getByTestId("checklist-picker-emails-loading")).toBeInTheDocument();
+    expect(screen.queryByText(NO_THREADS)).not.toBeInTheDocument();
+
+    await resolveAll();
+    expect(await screen.findByTestId("checklist-picker-thread-thread-thr-probe")).toBeInTheDocument();
+    expect(emailCalls()).toBe(1);
+  });
+
+  it("(c) the Emails tab's load is in flight: the picker awaits it too, still one fetch", async () => {
+    strictState().mockResolvedValue("allowed");
+    checklists().get.mockResolvedValue({ success: true, checklist: fixtureDetailWithoutLinks() });
+    // With contacts, the Emails tab's loading state does not replace the modal,
+    // so the user can reach the Checklist tab while that load is in flight.
+    // Row copied from AuditTransactionModal.test.tsx (TASK-1030).
+    const contactAssignments = [
+      {
+        id: "assign-1",
+        contact_id: "contact-1",
+        contact_name: "John Doe",
+        contact_email: "john@example.com",
+        role: "client",
+        specific_role: "client",
+        is_primary: 1,
+      },
+    ];
+    tx.getOverview = jest.fn().mockResolvedValue({
+      success: true,
+      transaction: { contact_assignments: contactAssignments },
+    });
+    tx.getDetails.mockResolvedValue({
+      success: true,
+      transaction: { ...baseTransaction, communications: [], contact_assignments: contactAssignments },
+    });
+    pendingEmails();
+    render(<TransactionDetails transaction={baseTransaction} onClose={jest.fn()} />);
+    fireEvent.click(await screen.findByText("Emails"));
+    expect(await screen.findByTestId("emails-tab-stub")).toBeInTheDocument();
+    await waitFor(() => expect(emailCalls()).toBe(1));
+    await openPicker();
+
+    expect(screen.getByTestId("checklist-picker-emails-loading")).toBeInTheDocument();
+    expect(screen.queryByText(NO_THREADS)).not.toBeInTheDocument();
+
+    await resolveAll(contactAssignments);
+    expect(await screen.findByTestId("checklist-picker-thread-thread-thr-probe")).toBeInTheDocument();
     expect(emailCalls()).toBe(1);
   });
 });
