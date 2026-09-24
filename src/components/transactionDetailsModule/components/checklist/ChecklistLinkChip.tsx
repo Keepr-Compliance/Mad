@@ -5,16 +5,27 @@
  * thread. The label comes from main (`link.label`); nothing here derives it.
  *
  * Staleness (SR condition 7): a group is stale only when NO member is still on
- * the transaction. A thread with some emails unlinked keeps its jump, aimed at
- * the first email still there, and says how many left.
+ * the transaction. A thread with some emails unlinked keeps its View, which
+ * shows the emails still there, and says how many left.
+ *
+ * View (BACKLOG-3476) opens the linked item where the user is — the
+ * attachment preview, or the linked emails as one thread — instead of jumping
+ * to another tab. A fully stale chip offers no View: the evidence is no longer
+ * on the transaction, so there is nothing here to open.
  */
 import React, { useState } from "react";
 import type { ChecklistLink } from "../../../../../electron/types/checklist";
 import type { UnifiedAttachment } from "../../hooks/useTransactionAllAttachments";
 import type { EmailThread } from "../EmailThreadCard";
-import type { HighlightTarget, TransactionTab } from "../../types";
 import { chipState, plural } from "../../utils/checklistLinks";
 import { formatDate, formatFileSize } from "../../../../utils/formatUtils";
+
+/** What a chip needs to open its evidence; the tab owns the modals. */
+export interface ChecklistLinkViewer {
+  onViewAttachment: (attachment: UnifiedAttachment) => void;
+  downloadingAttachmentId: string | null;
+  onViewThread: (link: ChecklistLink) => Promise<void>;
+}
 
 interface ChecklistLinkChipProps {
   link: ChecklistLink;
@@ -23,7 +34,12 @@ interface ChecklistLinkChipProps {
   /** This transaction's email threads, for participants (empty until loaded). */
   threads: EmailThread[];
   readOnly: boolean;
-  onNavigate: (payload: { tab: TransactionTab; highlight?: HighlightTarget }) => void;
+  /** Preview one attachment (downloads it first when only its metadata is here). */
+  onViewAttachment: (attachment: UnifiedAttachment) => void;
+  /** The attachment whose on-demand download is in flight, if any. */
+  downloadingAttachmentId: string | null;
+  /** Open this email link's live members as one thread. Resolves when it opened. */
+  onViewThread: (link: ChecklistLink) => Promise<void>;
   onRemove: (linkId: string) => Promise<void>;
 }
 
@@ -35,31 +51,48 @@ export function ChecklistLinkChip({
   attachmentsById,
   threads,
   readOnly,
-  onNavigate,
+  onViewAttachment,
+  downloadingAttachmentId,
+  onViewThread,
   onRemove,
 }: ChecklistLinkChipProps): React.ReactElement {
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   const [removing, setRemoving] = useState(false);
-  const { stale, staleCount, jumpTarget } = chipState(link);
+  const [openingThread, setOpeningThread] = useState(false);
+  const { stale, staleCount, viewTarget } = chipState(link);
+  const attachment =
+    link.kind === "attachment" && viewTarget?.attachmentId
+      ? attachmentsById.get(viewTarget.attachmentId)
+      : undefined;
 
   let sub: string;
   if (stale) {
     sub = "No longer on this transaction";
   } else if (link.kind === "attachment") {
-    const a = jumpTarget?.attachmentId ? attachmentsById.get(jumpTarget.attachmentId) : undefined;
-    sub = a ? `${formatFileSize(a.file_size_bytes)} · ${formatDate(a.source_date)}` : "";
+    sub = attachment
+      ? `${formatFileSize(attachment.file_size_bytes)} · ${formatDate(attachment.source_date)}`
+      : "";
   } else {
-    const thread = threads.find((t) => t.emails.some((e) => e.id === jumpTarget?.emailId));
+    const thread = threads.find((t) => t.emails.some((e) => e.id === viewTarget?.emailId));
     const who = thread ? thread.participants.slice(0, 2).join(", ") : "";
     sub = [who, plural(link.members.length, "email")].filter(Boolean).join(" · ");
   }
 
-  const jump = () => {
-    if (!jumpTarget) return;
-    if (link.kind === "attachment" && jumpTarget.attachmentId) {
-      onNavigate({ tab: "attachments", highlight: { type: "attachment", attachmentId: jumpTarget.attachmentId } });
-    } else if (link.kind === "email" && jumpTarget.emailId) {
-      onNavigate({ tab: "emails", highlight: { type: "email", emailId: jumpTarget.emailId } });
+  const downloading = !!attachment && downloadingAttachmentId === attachment.id;
+  const busy = downloading || openingThread;
+  // An attachment chip can only open a row this transaction's list holds.
+  const canView = !stale && (link.kind === "email" || !!attachment);
+
+  const view = async () => {
+    if (link.kind === "attachment") {
+      if (attachment) onViewAttachment(attachment);
+      return;
+    }
+    setOpeningThread(true);
+    try {
+      await onViewThread(link);
+    } finally {
+      setOpeningThread(false);
     }
   };
 
@@ -109,11 +142,14 @@ export function ChecklistLinkChip({
       {!stale && (
         <button
           type="button"
-          onClick={jump}
-          className="text-xs font-medium text-blue-600 hover:text-blue-800 whitespace-nowrap flex-shrink-0"
-          data-testid="checklist-link-jump"
+          onClick={() => void view()}
+          disabled={!canView || busy}
+          aria-busy={busy || undefined}
+          aria-label={`View ${link.label}`}
+          className="text-xs font-medium text-blue-600 hover:text-blue-800 whitespace-nowrap flex-shrink-0 disabled:opacity-60 disabled:cursor-wait"
+          data-testid="checklist-link-view"
         >
-          {link.kind === "attachment" ? "Open in Attachments" : "Open in Emails"}
+          {busy ? "Opening…" : "View"}
         </button>
       )}
       {!readOnly && !confirmingRemove && (

@@ -165,8 +165,20 @@ describe("View opens without selecting", () => {
   it("attachment View opens the preview, selection unchanged", async () => {
     renderPicker();
     await settle();
+    // probe-document.pdf is a metadata-only email attachment (no storage_path
+    // in the fixture), so View downloads it first — the Attachments tab's flow
+    // (BACKLOG-3476, W5). Before 3476 the picker previewed it directly.
+    const att = fixtureAttachments().find((a) => a.id === "att-1")!;
+    expect(att.storage_path).toBeNull();
+    const ensure = jest.fn().mockResolvedValue({
+      success: true,
+      data: [{ ...att, storage_path: "/data/probe-document.pdf" }],
+    });
+    (window.api.transactions as unknown as Record<string, jest.Mock>).ensureEmailAttachmentDownloaded = ensure;
     fireEvent.click(screen.getByLabelText("View probe-document.pdf"));
-    expect(screen.getByTestId("preview-open")).toHaveTextContent("probe-document.pdf");
+    expect(await screen.findByTestId("preview-open")).toHaveTextContent("probe-document.pdf");
+    expect(ensure).toHaveBeenCalledTimes(1);
+    expect(ensure).toHaveBeenCalledWith("e-solo-2");
     expect(screen.getByTestId("checklist-picker-link")).toBeDisabled();
   });
 });

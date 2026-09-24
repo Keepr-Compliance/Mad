@@ -14,6 +14,8 @@ import type {
 import type { UnifiedAttachment } from "../hooks/useTransactionAllAttachments";
 import type { Communication } from "../types";
 import {
+  createEmailThreads,
+  groupEmailsByThread,
   processEmailThreads,
   threadMatchReason,
   type EmailThread,
@@ -69,22 +71,53 @@ export interface ChipState {
   stale: boolean;
   /** Members no longer on the transaction (0 when fully live). */
   staleCount: number;
-  /** Where "Open in …" goes: the first member still on the transaction. */
-  jumpTarget: ChecklistLinkMember | null;
+  /**
+   * The first member still on the transaction: the attachment "View" opens,
+   * and the member whose thread supplies an email chip's participants. Null
+   * when stale.
+   */
+  viewTarget: ChecklistLinkMember | null;
 }
 
 /**
  * A group is stale only when NO member is still on the transaction (SR
  * condition 7). A thread with one of three emails unlinked still has two
- * pieces of evidence, and its jump goes to the first of them.
+ * pieces of evidence, and View shows those two.
  */
 export function chipState(link: ChecklistLink): ChipState {
   const live = link.members.filter((m) => m.inTransaction);
   return {
     stale: live.length === 0,
     staleCount: link.members.length - live.length,
-    jumpTarget: live[0] ?? null,
+    viewTarget: live[0] ?? null,
   };
+}
+
+/**
+ * The ONE thread an email chip's View opens (BACKLOG-3476): exactly the
+ * link's members that are still on the transaction, in date order — "the
+ * linked item", not whatever the Emails tab happens to group with it today.
+ * Members that span two of the tab's groups (thread_id NULL and the subject
+ * drifted) are merged into one. Null when none of them is in `emailCommunications`
+ * (stale, or the emails have not loaded).
+ */
+export function threadForLink(
+  link: ChecklistLink,
+  emailCommunications: Communication[],
+): EmailThread | null {
+  const liveIds = new Set(
+    link.members.filter((m) => m.inTransaction && m.emailId).map((m) => m.emailId as string),
+  );
+  const emails = emailCommunications.filter((c) => liveIds.has(c.email_id ?? c.id));
+  if (emails.length === 0) return null;
+  const sorted = [...groupEmailsByThread(emails).values()]
+    .flat()
+    .sort(
+      (a, b) =>
+        new Date(a.sent_at || a.received_at || 0).getTime() -
+        new Date(b.sent_at || b.received_at || 0).getTime(),
+    );
+  return createEmailThreads(new Map([[`checklist-link-${link.id}`, sorted]]))[0] ?? null;
 }
 
 /** What a change of template would clear, counted from the current detail. */

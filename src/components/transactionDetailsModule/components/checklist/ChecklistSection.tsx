@@ -17,7 +17,7 @@ import React, { useState } from "react";
 import type { ChecklistDetail, ChecklistItem } from "../../../../../electron/types/checklist";
 import type { UnifiedAttachment } from "../../hooks/useTransactionAllAttachments";
 import type { EmailThread } from "../EmailThreadCard";
-import type { HighlightTarget, TransactionTab } from "../../types";
+import type { ChecklistLinkViewer } from "./ChecklistLinkChip";
 import { ChecklistProgress } from "./ChecklistProgress";
 import { ChecklistItemRow } from "./ChecklistItemRow";
 import { checklistLoss, plural } from "../../utils/checklistLinks";
@@ -53,7 +53,7 @@ export interface ChecklistSectionProps {
   onSaveNote: (itemId: string, note: string | null) => Promise<boolean>;
   onOpenPicker: (item: ChecklistItem) => void;
   onRemoveLink: (linkId: string) => Promise<void>;
-  onNavigate: (payload: { tab: TransactionTab; highlight?: HighlightTarget }) => void;
+  viewer: ChecklistLinkViewer;
 }
 
 export function ChecklistSection({
@@ -73,7 +73,7 @@ export function ChecklistSection({
   onSaveNote,
   onOpenPicker,
   onRemoveLink,
-  onNavigate,
+  viewer,
 }: ChecklistSectionProps): React.ReactElement {
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   const id = detail.checklist.id;
@@ -195,7 +195,7 @@ export function ChecklistSection({
                 onSaveNote={onSaveNote}
                 onOpenPicker={onOpenPicker}
                 onRemoveLink={onRemoveLink}
-                onNavigate={onNavigate}
+                viewer={viewer}
               />
             ))}
         </div>

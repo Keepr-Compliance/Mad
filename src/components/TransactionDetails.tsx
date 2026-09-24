@@ -1392,7 +1392,6 @@ function TransactionDetails({
                 refreshAttachments();
                 if (loadedChannelsRef.current.has("email")) void refreshCommunicationsSilently("email");
               }}
-              onNavigateToTab={handleNavigateToTab}
               onShowSuccess={showSuccess}
               onShowError={showError}
               nameMap={emailNameMap}

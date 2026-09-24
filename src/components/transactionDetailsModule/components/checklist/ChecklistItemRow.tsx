@@ -14,7 +14,7 @@ import { InfoTooltip } from "../../../common/InfoTooltip";
 import { ChecklistLinkChip } from "./ChecklistLinkChip";
 import type { UnifiedAttachment } from "../../hooks/useTransactionAllAttachments";
 import type { EmailThread } from "../EmailThreadCard";
-import type { HighlightTarget, TransactionTab } from "../../types";
+import type { ChecklistLinkViewer } from "./ChecklistLinkChip";
 
 /** `ChecklistNoteSchema` (electron/schemas/checklist.ts) refuses longer notes. */
 export const CHECKLIST_NOTE_MAX_LENGTH = 4000;
@@ -35,7 +35,8 @@ interface ChecklistItemRowProps {
   onSaveNote: (itemId: string, note: string | null) => Promise<boolean>;
   onOpenPicker: (item: ChecklistItem) => void;
   onRemoveLink: (linkId: string) => Promise<void>;
-  onNavigate: (payload: { tab: TransactionTab; highlight?: HighlightTarget }) => void;
+  /** How a chip's View opens its evidence. */
+  viewer: ChecklistLinkViewer;
 }
 
 export function ChecklistItemRow({
@@ -49,7 +50,7 @@ export function ChecklistItemRow({
   onSaveNote,
   onOpenPicker,
   onRemoveLink,
-  onNavigate,
+  viewer,
 }: ChecklistItemRowProps): React.ReactElement {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
@@ -158,7 +159,9 @@ export function ChecklistItemRow({
                 attachmentsById={attachmentsById}
                 threads={threads}
                 readOnly={readOnly}
-                onNavigate={onNavigate}
+                onViewAttachment={viewer.onViewAttachment}
+                downloadingAttachmentId={viewer.downloadingAttachmentId}
+                onViewThread={viewer.onViewThread}
                 onRemove={onRemoveLink}
               />
             ))}

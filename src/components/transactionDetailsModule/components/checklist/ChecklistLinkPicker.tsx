@@ -24,10 +24,10 @@
  */
 import React, { useEffect, useMemo, useState } from "react";
 import { ResponsiveModal } from "../../../common/ResponsiveModal";
-import { AttachmentPreviewModal } from "../modals/AttachmentPreviewModal";
 import { EmailThreadViewModal } from "../modals/EmailThreadViewModal";
 import type { EmailThread } from "../EmailThreadCard";
 import type { UnifiedAttachment } from "../../hooks/useTransactionAllAttachments";
+import { AttachmentPreviewHost, useAttachmentPreview } from "../../hooks/useAttachmentPreview";
 import type {
   ChecklistLinkOutcome,
   ChecklistLinkRequest,
@@ -62,14 +62,6 @@ type RowKey = string;
 const attKey = (id: string): RowKey => `a:${id}`;
 const threadKey = (id: string): RowKey => `t:${id}`;
 
-interface PreviewAttachment {
-  id: string;
-  filename: string;
-  mime_type: string | null;
-  file_size_bytes: number | null;
-  storage_path: string | null;
-}
-
 export function ChecklistLinkPicker({
   item,
   templateName,
@@ -91,7 +83,13 @@ export function ChecklistLinkPicker({
   const [selected, setSelected] = useState<Set<RowKey>>(new Set());
   const [refused, setRefused] = useState<Set<RowKey>>(new Set());
   const [linking, setLinking] = useState(false);
-  const [previewing, setPreviewing] = useState<PreviewAttachment | null>(null);
+  // View goes through the shared open flow, so a metadata-only email
+  // attachment is downloaded before it is previewed (BACKLOG-3476).
+  const attachmentPreview = useAttachmentPreview(onRefreshTargets);
+  const { downloadingId, message: previewMessage } = attachmentPreview;
+  useEffect(() => {
+    if (previewMessage) onShowError(previewMessage);
+  }, [previewMessage, onShowError]);
   const [viewingThread, setViewingThread] = useState<EmailThread | null>(null);
 
   useEffect(() => {
@@ -252,15 +250,6 @@ export function ChecklistLinkPicker({
     onClose();
   };
 
-  const openAttachmentWithSystem = async (storagePath: string) => {
-    try {
-      const result = await window.api.transactions.openAttachment(storagePath);
-      if (!result.success) logger.error("Failed to open attachment:", result.error);
-    } catch (err) {
-      logger.error("Error opening attachment:", err);
-    }
-  };
-
   const rowClass = (checked: boolean, disabled: boolean) =>
     `flex items-center gap-3 px-3 py-2.5 rounded-lg border text-left ${
       disabled
@@ -382,18 +371,14 @@ export function ChecklistLinkPicker({
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          setPreviewing({
-                            id: a.id,
-                            filename: a.filename,
-                            mime_type: a.mime_type,
-                            file_size_bytes: a.file_size_bytes,
-                            storage_path: a.storage_path,
-                          });
+                          void attachmentPreview.open(a);
                         }}
-                        className="text-sm font-medium text-blue-600 hover:text-blue-800 flex-shrink-0"
+                        disabled={downloadingId === a.id}
+                        aria-busy={downloadingId === a.id || undefined}
+                        className="text-sm font-medium text-blue-600 hover:text-blue-800 flex-shrink-0 disabled:opacity-60 disabled:cursor-wait"
                         aria-label={`View ${a.filename}`}
                       >
-                        View
+                        {downloadingId === a.id ? "Opening…" : "View"}
                       </button>
                     </div>
                   );
@@ -508,13 +493,7 @@ export function ChecklistLinkPicker({
         </div>
       </ResponsiveModal>
 
-      {previewing && (
-        <AttachmentPreviewModal
-          attachment={previewing}
-          onClose={() => setPreviewing(null)}
-          onOpenWithSystem={(p) => void openAttachmentWithSystem(p)}
-        />
-      )}
+      <AttachmentPreviewHost preview={attachmentPreview} />
       {viewingThread && (
         <EmailThreadViewModal
           thread={viewingThread}

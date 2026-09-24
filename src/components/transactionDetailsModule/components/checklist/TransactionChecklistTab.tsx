@@ -27,25 +27,35 @@
  *
  * A failed read shows an error and Retry, never the chooser: "no checklist
  * yet" would be a false statement about this transaction.
+ *
+ * Each evidence chip's View opens the linked item here, over the tab: an
+ * attachment through the shared `useAttachmentPreview` flow (downloaded on
+ * demand when only its metadata is present), an email link as ONE thread made
+ * of its members still on the transaction (`threadForLink`).
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useAuth } from "../../../../contexts/AuthContext";
 import type { ApiResult } from "../../../../services";
 import type {
   ChecklistDetail,
   ChecklistItem,
+  ChecklistLink,
   ChecklistTemplate,
   SelectChecklistTemplateResult,
 } from "../../../../../electron/types/checklist";
 import type { StrictFeatureStateOrPending } from "../../../../hooks/useStrictFeatureState";
 import type { UseTransactionChecklistResult } from "../../hooks/useTransactionChecklist";
 import type { UnifiedAttachment } from "../../hooks/useTransactionAllAttachments";
-import type { Communication, HighlightTarget, TransactionTab } from "../../types";
+import { AttachmentPreviewHost, useAttachmentPreview } from "../../hooks/useAttachmentPreview";
+import type { Communication } from "../../types";
+import { EmailThreadViewModal } from "../modals/EmailThreadViewModal";
+import type { ChecklistLinkViewer } from "./ChecklistLinkChip";
 import { ChecklistTemplateChooser } from "./ChecklistTemplateChooser";
 import { ChecklistProgress } from "./ChecklistProgress";
 import { ChecklistSection } from "./ChecklistSection";
 import { ChangeTemplateConfirm } from "./ChangeTemplateConfirm";
 import { ChecklistLinkPicker } from "./ChecklistLinkPicker";
-import { checklistLoss, linkableThreads } from "../../utils/checklistLinks";
+import { checklistLoss, linkableThreads, threadForLink } from "../../utils/checklistLinks";
 
 export const ALREADY_ON_TRANSACTION_ERROR = "That checklist is already on this transaction.";
 
@@ -56,11 +66,10 @@ export interface TransactionChecklistTabProps {
   attachmentsLoading: boolean;
   emailCommunications: Communication[];
   ensureEmailsLoaded: () => Promise<void>;
+  /** Refetch attachments (and loaded emails): after a refused link, or an on-demand download. */
   onRefreshLinkTargets: () => void;
-  onNavigateToTab: (payload: { tab: TransactionTab; highlight?: HighlightTarget }) => void;
   onShowSuccess: (message: string) => void;
   onShowError: (message: string) => void;
-  userEmail?: string;
   nameMap?: ReadonlyMap<string, string>;
 }
 
@@ -75,13 +84,14 @@ export function TransactionChecklistTab({
   emailCommunications,
   ensureEmailsLoaded,
   onRefreshLinkTargets,
-  onNavigateToTab,
   onShowSuccess,
   onShowError,
-  userEmail,
   nameMap,
 }: TransactionChecklistTabProps): React.ReactElement | null {
   const { state, data } = checklist;
+  // The Emails tab's source for "You" in a thread (TransactionEmailsTab).
+  const { currentUser } = useAuth();
+  const userEmail = currentUser?.email;
   const readOnly = gate !== "allowed";
   const [chooser, setChooser] = useState<ChooserState>(null);
   const [confirmTemplate, setConfirmTemplate] = useState<ChecklistTemplate | null>(null);
@@ -126,6 +136,32 @@ export function TransactionChecklistTab({
       setToggledExpanded((prev) => ({ ...prev, [checklistId]: !current }));
     },
     [details, isExpanded],
+  );
+
+  // ---- View on a chip ----------------------------------------------------
+  const attachmentPreview = useAttachmentPreview(onRefreshLinkTargets);
+  const { open: openAttachment, downloadingId, message: previewMessage } = attachmentPreview;
+  useEffect(() => {
+    if (previewMessage) onShowError(previewMessage);
+  }, [previewMessage, onShowError]);
+
+  // The thread is built at render from the CURRENT emails, so a View that
+  // first had to load them shows what arrived, not what the click saw.
+  const [viewingLink, setViewingLink] = useState<ChecklistLink | null>(null);
+  const viewingThread = useMemo(
+    () => (viewingLink ? threadForLink(viewingLink, emailCommunications) : null),
+    [viewingLink, emailCommunications],
+  );
+  const viewer = useMemo<ChecklistLinkViewer>(
+    () => ({
+      onViewAttachment: (attachment) => void openAttachment(attachment),
+      downloadingAttachmentId: downloadingId,
+      onViewThread: async (link) => {
+        await ensureEmailsLoaded();
+        setViewingLink(link);
+      },
+    }),
+    [openAttachment, downloadingId, ensureEmailsLoaded],
   );
 
   const attachmentsById = useMemo(() => new Map(attachments.map((a) => [a.id, a])), [attachments]);
@@ -395,10 +431,20 @@ export function TransactionChecklistTab({
             onSaveNote={handleSaveNote}
             onOpenPicker={setPickerItem}
             onRemoveLink={handleRemoveLink}
-            onNavigate={onNavigateToTab}
+            viewer={viewer}
           />
         ))}
       </div>
+
+      <AttachmentPreviewHost preview={attachmentPreview} />
+      {viewingThread && (
+        <EmailThreadViewModal
+          thread={viewingThread}
+          onClose={() => setViewingLink(null)}
+          userEmail={userEmail}
+          nameMap={nameMap}
+        />
+      )}
 
       {pickerItem && pickerDetail && !readOnly && (
         <ChecklistLinkPicker

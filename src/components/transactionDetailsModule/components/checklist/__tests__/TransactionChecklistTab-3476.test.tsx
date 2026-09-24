@@ -17,6 +17,9 @@
  *   Q2   the "open unless every item is ticked" rule implemented as
  *        required-only, as a live derivation, or before the data arrives.
  *   C-J  read-only still offers writes.
+ *   B-1 / B-4  an email chip's View opening "whatever the Emails tab groups
+ *        with it" instead of the link's own live members, or a stale member.
+ *   B-2  an attachment chip's View skipping the on-demand download.
  *   (7.4 SR) a failed `get` rendering "No checklist yet".
  */
 import React from "react";
@@ -41,7 +44,29 @@ import {
   fixtureTemplates,
 } from "./checklistFixture";
 
-jest.mock("../../modals/AttachmentPreviewModal", () => ({ AttachmentPreviewModal: () => null }));
+jest.mock("../../modals/AttachmentPreviewModal", () => ({
+  AttachmentPreviewModal: ({ attachment }: { attachment: { filename: string; storage_path: string | null } }) => (
+    <div data-testid="preview-modal">
+      {attachment.filename}|{attachment.storage_path}
+    </div>
+  ),
+}));
+jest.mock("../../modals/EmailThreadViewModal", () => ({
+  EmailThreadViewModal: ({
+    thread,
+    userEmail,
+  }: {
+    thread: { emails: Array<{ id: string }> };
+    userEmail?: string;
+  }) => (
+    <div data-testid="thread-modal" data-user-email={userEmail}>
+      {thread.emails.map((e) => e.id).join(",")}
+    </div>
+  ),
+}));
+jest.mock("../../../../../contexts/AuthContext", () => ({
+  useAuth: () => ({ currentUser: { id: "user-3476", email: "agent@example.test" } }),
+}));
 
 const api = () => window.api.checklists as unknown as Record<string, jest.Mock>;
 
@@ -64,7 +89,6 @@ function Harness({
       emailCommunications={fixtureEmailCommunications()}
       ensureEmailsLoaded={() => Promise.resolve()}
       onRefreshLinkTargets={jest.fn()}
-      onNavigateToTab={jest.fn()}
       onShowSuccess={jest.fn()}
       onShowError={onShowError}
       {...overrides}
@@ -474,5 +498,76 @@ describe("C-J — read-only offers no writes", () => {
     await waitFor(() =>
       expect(api().remove).toHaveBeenCalledWith({ transactionId: "txn-1", checklistId: idOf(0) }),
     );
+  });
+});
+
+describe("B — View on a chip opens the linked item here", () => {
+  const chipOf = (itemIndex: number) => {
+    const detail = fixtureDetail();
+    const link = detail.linksByItemId[detail.items[itemIndex].id][0];
+    return screen.getByTestId(`checklist-link-${link.id}`);
+  };
+  const tx = () => window.api.transactions as unknown as Record<string, jest.Mock>;
+
+  it("B-1: a thread link opens exactly its own emails, with the signed-in user's address", async () => {
+    api().get.mockResolvedValue(answer([fixtureDetail()]));
+    render(<Harness gate="allowed" />);
+    await screen.findByTestId(`checklist-section-${idOf(0)}`);
+    fireEvent.click(within(chipOf(1)).getByTestId("checklist-link-view"));
+    const modal = await screen.findByTestId("thread-modal");
+    expect(modal).toHaveTextContent(/^e-thread-1,e-thread-2$/);
+    expect(modal).toHaveAttribute("data-user-email", "agent@example.test");
+  });
+
+  it("B-1 / B-4: a partly stale link opens only its live member, not the stale one and not a same-subject email it never held", async () => {
+    // Fixture: the link holds e-solo-1 (unlinked from the transaction, sorts
+    // first) and e-solo-2. The Emails tab groups e-solo-2 with e-solo-3 by
+    // subject; e-solo-3 was never linked.
+    api().get.mockResolvedValue(answer([fixtureDetail()]));
+    render(<Harness gate="allowed" />);
+    await screen.findByTestId(`checklist-section-${idOf(0)}`);
+    fireEvent.click(within(chipOf(2)).getByTestId("checklist-link-view"));
+    expect(await screen.findByTestId("thread-modal")).toHaveTextContent(/^e-solo-2$/);
+  });
+
+  it("View waits for the emails to load before opening", async () => {
+    let loaded!: () => void;
+    const ensureEmailsLoaded = jest.fn(() => new Promise<void>((r) => (loaded = r)));
+    api().get.mockResolvedValue(answer([fixtureDetail()]));
+    render(<Harness gate="allowed" overrides={{ ensureEmailsLoaded }} />);
+    await screen.findByTestId(`checklist-section-${idOf(0)}`);
+    fireEvent.click(within(chipOf(1)).getByTestId("checklist-link-view"));
+    expect(screen.queryByTestId("thread-modal")).not.toBeInTheDocument();
+    expect(within(chipOf(1)).getByTestId("checklist-link-view")).toHaveTextContent("Opening…");
+    await act(async () => loaded());
+    expect(await screen.findByTestId("thread-modal")).toHaveTextContent("e-thread-1,e-thread-2");
+  });
+
+  it("B-2: a metadata-only email attachment is downloaded once, then previewed, then the list refreshes once", async () => {
+    const att = fixtureAttachments().find((a) => a.id === "att-1")!;
+    expect(att.storage_path).toBeNull();
+    tx().ensureEmailAttachmentDownloaded = jest.fn().mockResolvedValue({
+      success: true,
+      data: [{ ...att, storage_path: "/data/probe-document.pdf" }],
+    });
+    const onRefreshLinkTargets = jest.fn();
+    api().get.mockResolvedValue(answer([fixtureDetail()]));
+    render(<Harness gate="allowed" overrides={{ onRefreshLinkTargets }} />);
+    await screen.findByTestId(`checklist-section-${idOf(0)}`);
+    fireEvent.click(within(chipOf(0)).getByTestId("checklist-link-view"));
+    expect(await screen.findByTestId("preview-modal")).toHaveTextContent(
+      "probe-document.pdf|/data/probe-document.pdf",
+    );
+    expect(tx().ensureEmailAttachmentDownloaded).toHaveBeenCalledTimes(1);
+    expect(tx().ensureEmailAttachmentDownloaded).toHaveBeenCalledWith("e-solo-2");
+    expect(onRefreshLinkTargets).toHaveBeenCalledTimes(1);
+  });
+
+  it("View works in the read-only state too (it only reads)", async () => {
+    api().get.mockResolvedValue(answer([fixtureDetail()]));
+    render(<Harness gate="blocked" />);
+    await screen.findByTestId("checklist-readonly-notice");
+    fireEvent.click(within(chipOf(1)).getByTestId("checklist-link-view"));
+    expect(await screen.findByTestId("thread-modal")).toBeInTheDocument();
   });
 });
