@@ -9,8 +9,10 @@
  *   - absent for every role when showChecklists is false;
  *   - absent for every role during impersonation, even when showChecklists is
  *     true — the Sidebar's own guard, which the layout would otherwise mask;
- *   - placed right after Submissions for member-nav roles, and before Users
- *     for it_admin (which never sees the member nav).
+ *   - placed right after Users for admin and it_admin (founder, 2026-09-24,
+ *     superseding the mock's "after Submissions"); a broker has no Users entry,
+ *     so for a broker it closes the member items — after Support, the slot
+ *     Users would take — and before My Account.
  *
  * `agent` with showChecklists=true is not asserted: the gate refuses agent, so
  * the layout cannot produce that input.
@@ -79,34 +81,44 @@ describe('Sidebar — Checklists entry absent', () => {
 });
 
 describe('Sidebar — Checklists placement', () => {
-  it.each(['broker', 'admin'] as const)('sits right after Submissions for %s', (role) => {
+  it.each(['admin', 'it_admin'] as const)('sits right after Users for %s', (role) => {
     renderSidebar({ role, displayRole: role, showChecklists: true });
     const labels = navLabels();
-    expect(labels.indexOf(CHECKLISTS)).toBe(labels.indexOf('Submissions') + 1);
+    expect(labels.indexOf('Users')).toBeGreaterThanOrEqual(0);
+    expect(labels.indexOf(CHECKLISTS)).toBe(labels.indexOf('Users') + 1);
   });
 
-  it('matches the mock order for admin', () => {
+  it('full order for admin: after Users, before Org Settings', () => {
     renderSidebar({ role: 'admin', displayRole: 'admin', showChecklists: true });
     expect(navLabels()).toEqual([
       'Dashboard',
       'Submissions',
-      CHECKLISTS,
       'Support',
       'Users',
+      CHECKLISTS,
       'Org Settings',
       'My Account',
       'Sign Out',
     ]);
   });
 
-  it('comes before Users for it_admin, which has no member nav', () => {
+  it('full order for it_admin, which has no member nav', () => {
     renderSidebar({ role: 'it_admin', displayRole: 'it_admin', showChecklists: true });
-    expect(navLabels()).toEqual([CHECKLISTS, 'Users', 'Org Settings', 'My Account', 'Sign Out']);
+    expect(navLabels()).toEqual(['Users', CHECKLISTS, 'Org Settings', 'My Account', 'Sign Out']);
   });
 
-  it('leaves the member nav untouched when off', () => {
-    renderSidebar({ role: 'broker', displayRole: 'broker', showChecklists: false });
-    expect(navLabels()).toEqual(['Dashboard', 'Submissions', 'Support', 'My Account', 'Sign Out']);
+  it('full order for broker, which has no Users entry: after Support, before My Account', () => {
+    renderSidebar({ role: 'broker', displayRole: 'broker', showChecklists: true });
+    expect(navLabels()).toEqual(['Dashboard', 'Submissions', 'Support', CHECKLISTS, 'My Account', 'Sign Out']);
+  });
+
+  it.each([
+    ['broker', ['Dashboard', 'Submissions', 'Support', 'My Account', 'Sign Out']],
+    ['admin', ['Dashboard', 'Submissions', 'Support', 'Users', 'Org Settings', 'My Account', 'Sign Out']],
+    ['it_admin', ['Users', 'Org Settings', 'My Account', 'Sign Out']],
+  ] as const)('leaves the %s nav untouched when off', (role, expected) => {
+    renderSidebar({ role, displayRole: role, showChecklists: false });
+    expect(navLabels()).toEqual(expected);
   });
 });
 
