@@ -55,7 +55,9 @@ type OrgOutcome =
  * the behaviour of three existing call sites while this item is supposed to
  * change exactly one key. The strict resolver catches for itself.
  */
-async function resolveOrgOutcome(): Promise<OrgOutcome> {
+async function resolveOrgOutcome(
+  options: { useCache?: boolean } = {}
+): Promise<OrgOutcome> {
   // Get session from the Supabase client (in-memory auth), NOT from session file
   const client = supabaseService.getClient();
   const { data: { session } } = await client.auth.getSession();
@@ -66,6 +68,16 @@ async function resolveOrgOutcome(): Promise<OrgOutcome> {
       "FeatureGateHandlers"
     );
     return { status: "no_session" };
+  }
+
+  // BACKLOG-3476: the strict reader reuses the last real answer for THIS user.
+  // The session is still read first, above, so a signed-out client answers
+  // `no_session` without ever consulting the cache.
+  if (options.useCache) {
+    const cached = featureGateService.getCachedOrgOutcome(session.user.id);
+    if (cached) {
+      return cached;
+    }
   }
 
   logService.debug(
@@ -88,7 +100,14 @@ async function resolveOrgOutcome(): Promise<OrgOutcome> {
   );
 
   if (outcome.status === "member") {
-    return { status: "member", organizationId: outcome.organization_id };
+    const member = { status: "member" as const, organizationId: outcome.organization_id };
+    if (options.useCache) {
+      featureGateService.setCachedOrgOutcome(session.user.id, member);
+    }
+    return member;
+  }
+  if (outcome.status === "none" && options.useCache) {
+    featureGateService.setCachedOrgOutcome(session.user.id, { status: "none" });
   }
   return { status: outcome.status };
 }
@@ -166,7 +185,7 @@ export async function resolveStrictFeatureState(
   featureKey: StrictFeatureKey
 ): Promise<StrictFeatureState> {
   try {
-    const outcome = await resolveOrgOutcome();
+    const outcome = await resolveOrgOutcome({ useCache: true });
 
     if (outcome.status === "no_session" || outcome.status === "error") {
       // Could not find out whose plan applies.

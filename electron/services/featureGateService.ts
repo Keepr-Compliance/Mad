@@ -33,6 +33,23 @@ interface FeatureCache {
   orgId: string;
 }
 
+/**
+ * A membership lookup that ANSWERED — BACKLOG-3476.
+ *
+ * Only the two real answers are ever cached. `error` and `no_session` say
+ * nothing about the user's organization, and caching either would turn a
+ * network blip into a stale "unknown" for the rest of the TTL.
+ */
+export type CachedOrgOutcome =
+  | { status: "member"; organizationId: string }
+  | { status: "none" };
+
+interface OrgOutcomeCache {
+  userId: string;
+  outcome: CachedOrgOutcome;
+  fetchedAt: number;
+}
+
 // ============================================
 // Constants
 // ============================================
@@ -54,6 +71,19 @@ const FEATURE_CACHE_FILENAME = "feature-cache.json";
 class FeatureGateService {
   private cache: FeatureCache | null = null;
   private fetchInProgress: Promise<void> | null = null;
+
+  /**
+   * The strict reader's last membership answer — BACKLOG-3476.
+   *
+   * Without it every strict read (every transaction open, for the Checklist
+   * tab) paid a PostgREST round trip for the membership before the plan cache
+   * could even be consulted. It lives HERE, beside the plan cache, so that it
+   * shares that cache's lifetime and is dropped by the same two calls:
+   * `invalidateCache()` (renderer refresh, a personal org created or attached,
+   * logout) and `clearCache()`. It is keyed by user id, so a different user
+   * never reads it.
+   */
+  private orgOutcomeCache: OrgOutcomeCache | null = null;
 
   /**
    * Check access to a specific feature for an organization.
@@ -186,6 +216,7 @@ class FeatureGateService {
    */
   invalidateCache(): void {
     this.cache = null;
+    this.orgOutcomeCache = null;
     logService.debug(
       "[FeatureGate] In-memory cache invalidated",
       "FeatureGateService"
@@ -197,6 +228,7 @@ class FeatureGateService {
    */
   async clearCache(): Promise<void> {
     this.cache = null;
+    this.orgOutcomeCache = null;
     try {
       await fs.unlink(this.getCacheFilePath());
       logService.debug(
@@ -212,6 +244,23 @@ class FeatureGateService {
         );
       }
     }
+  }
+
+  /**
+   * The cached membership answer for this user, or `null` when there is none,
+   * it belongs to another user, or it is older than the plan cache's TTL.
+   */
+  getCachedOrgOutcome(userId: string): CachedOrgOutcome | null {
+    const entry = this.orgOutcomeCache;
+    if (!entry) return null;
+    if (entry.userId !== userId) return null;
+    if (Date.now() - entry.fetchedAt >= CACHE_TTL_MS) return null;
+    return entry.outcome;
+  }
+
+  /** Remember a membership answer for this user. Only real answers are accepted. */
+  setCachedOrgOutcome(userId: string, outcome: CachedOrgOutcome): void {
+    this.orgOutcomeCache = { userId, outcome, fetchedAt: Date.now() };
   }
 
   // ============================================

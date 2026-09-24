@@ -93,6 +93,30 @@ export function resetContactLinkingOnLogout(): void {
     });
 }
 
+/**
+ * BACKLOG-3476: drop the feature-gate answers — the plan map AND the strict
+ * reader's cached membership — on every logout path. Both belong to the
+ * account that just signed out.
+ *
+ * In-memory only (`invalidateCache`, not `clearCache`): the persisted copy is
+ * the offline fallback, keyed by organization, and deleting it is not what
+ * signing out has ever done.
+ *
+ * Dynamic import and fail-closed, mirroring the two resets above — this must
+ * NEVER throw into a logout path.
+ */
+export function resetFeatureGateOnLogout(): void {
+  void import("../services/featureGateService")
+    .then((m) => m.default.invalidateCache())
+    .catch((err) => {
+      logService.warn(
+        "[SessionHandlers] Feature gate cache reset failed (non-fatal)",
+        "SessionHandlers",
+        { error: err instanceof Error ? err.message : "Unknown" },
+      );
+    });
+}
+
 // Type definitions
 interface AuthResponse {
   success: boolean;
@@ -297,6 +321,7 @@ async function handleLogout(
     stopShadowDeltaSyncOnLogout();
 
     resetContactLinkingOnLogout();
+    resetFeatureGateOnLogout();
 
     await auditService.log({
       userId,
@@ -1271,6 +1296,7 @@ async function handleForceLogout(): Promise<AuthResponse> {
     Sentry.setUser(null);
     stopShadowDeltaSyncOnLogout();
     resetContactLinkingOnLogout();
+    resetFeatureGateOnLogout();
 
     await logService.info("Force logout completed successfully", "AuthHandlers");
     return { success: true };
@@ -1351,6 +1377,7 @@ async function handleSignOutAllDevices(): Promise<AuthResponse> {
 
     setSyncUserId(null);
     stopShadowDeltaSyncOnLogout();
+    resetFeatureGateOnLogout();
 
     await logService.info("Global sign-out completed successfully", "SessionHandlers");
     return { success: true };
