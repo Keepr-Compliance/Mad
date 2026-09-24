@@ -562,6 +562,21 @@ jobs:
             release/win-unpacked
           if ($LASTEXITCODE -ne 0) { Write-Error "Package sanity check failed"; exit 1 }
 
+      # BACKLOG-3533. Unpacks the installer, the app archive inside it and the
+      # uninstaller, finds every PE file by header, and requires
+      # Get-AuthenticodeSignature = Valid for each one. Prints one row per file
+      # (status, certificate-table size, path, signer) before failing.
+      - name: Verify every PE file is signed (BACKLOG-3533)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $exe = @(Get-ChildItem -Path release -Filter "*-Setup-*.exe")
+          if ($exe.Count -ne 1) { Write-Error "Expected exactly 1 installer in release/, found $($exe.Count)"; exit 1 }
+          ./scripts/ci/check-pe-signatures.ps1 `
+            -Installer $exe[0].FullName `
+            -WorkDir (Join-Path $env:RUNNER_TEMP "pe-signature-check")
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
       - name: Upload Windows Artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
