@@ -4,7 +4,7 @@
  * save_checklist_template (supabase/migrations/20260924190429_…sql) raises:
  *   42501 not_authorized      caller may not edit this organization's templates
  *   P0001 stale_or_not_found  the template changed since it was read
- *   P0001 item_mismatch       an item id is repeated or not this template's
+ *   P0001 item_mismatch       an item id is repeated, or belongs to a different template
  *   22023 invalid_items       not an array of 1..200 objects
  *   23514 / 23502             a field breaks a table CHECK / NOT NULL
  * and PostgREST answers PGRST202 while the function does not exist yet.
