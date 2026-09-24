@@ -45,12 +45,30 @@ export const IN_PROGRESS_OUTCOME = 'running';
  */
 export const STALL_THRESHOLD_MINUTES = 30;
 
-/** 1 GB in this report means 1 GiB — the unit the OS reports device usage in. */
-export const BYTES_PER_GB = 1024 * 1024 * 1024;
+/**
+ * 1 GB here is 1 000 000 000 bytes — DECIMAL, not 1 GiB.
+ *
+ * Founder QA 2026-09-19: his phone reads 58.1 GB in iOS Settings and the card
+ * said 54.1. Both numbers are the same bytes; only the divisor differed. A
+ * report whose whole job is to be checked against the device has to use the
+ * device's unit, so this follows iOS Settings and macOS Finder rather than the
+ * binary convention.
+ *
+ * {@link BYTES_PER_MB} is deliberately NOT changed with it — see its own note.
+ */
+export const BYTES_PER_GB = 1000 * 1000 * 1000;
 
 const MS_PER_MINUTE = 60_000;
 
-/** 1 MB here is 1 MiB, consistent with {@link BYTES_PER_GB}. */
+/**
+ * 1 MB here is 1 MiB, and is deliberately NOT decimal like {@link BYTES_PER_GB}.
+ *
+ * The GB switch above exists so a size can be checked against what the phone
+ * shows. Rate has no such counterpart on the device, and its four transcribed
+ * values (22.76 / 21.14 / 27.37 / 27.29 MB/s) were verified against the
+ * database in this unit. Moving it would restate four founder-facing numbers
+ * to fix nothing he reported. Revisit only on a request that names the rate.
+ */
 export const BYTES_PER_MB = 1024 * 1024;
 
 /** The phase whose own duration the transfer rate is measured over. */
@@ -306,6 +324,59 @@ export function phaseLabel(key: string): string {
 }
 
 /**
+ * Human labels for the device's own failure codes.
+ *
+ * TRANSCRIBED — all thirteen members of `BackupErrorCode`, in declaration
+ * order, from `electron/types/backupErrorCodes.ts` (the tuple that a
+ * compile-time assert keeps equal to the union). A code not in this map renders
+ * under its own name, so a fourteenth shows up rather than disappearing.
+ */
+const REASON_CODE_LABELS: Record<string, string> = {
+  PASSWORD_REQUIRED: 'The backup is encrypted and needs its password',
+  INCORRECT_PASSWORD: 'The backup password was wrong',
+  DEVICE_NOT_FOUND: 'The phone was not found',
+  DEVICE_LOCKED: 'The phone was locked',
+  BACKUP_CANCELLED: 'The backup was cancelled',
+  BACKUP_TIMEOUT: 'The backup ran out of time',
+  INSUFFICIENT_SPACE: 'Not enough free space on the computer',
+  DECRYPTION_FAILED: 'The backup could not be decrypted',
+  CONNECTION_LOST: 'The connection to the phone was lost',
+  SERVICE_UNAVAILABLE: 'The device service was unavailable',
+  BACKUP_FILE_MISSING: 'The backup file was missing',
+  INVALID_UDID: 'The device identifier was not valid',
+  UNKNOWN_ERROR: 'The device reported an error it could not name',
+};
+
+export function reasonCodeLabel(code: string): string {
+  return REASON_CODE_LABELS[code] ?? code;
+}
+
+/**
+ * Human labels for what stopped the run.
+ *
+ * TRANSCRIBED by tracing every writer, not by grep on the column:
+ *   host-guard            electron/services/deviceSyncOrchestrator.ts:1423
+ *   watchdog, device-error                                          :1485
+ *   user-cancel                                                     :1755
+ *   restart-while-running electron/handlers/syncHandlers.ts:191
+ *   user-reset                                              :229
+ *   reset                 the `forceReset()` default, :200 / :275 / :283
+ */
+const ENDED_BY_LABELS: Record<string, string> = {
+  'host-guard': 'Stopped by the app to protect the computer',
+  watchdog: 'Stopped by the watchdog after no progress',
+  'device-error': 'Stopped by an error from the phone',
+  'user-cancel': 'Cancelled by the user',
+  'restart-while-running': 'Abandoned when a new sync was started',
+  'user-reset': 'Reset by the user',
+  reset: 'Reset',
+};
+
+export function endedByLabel(value: string): string {
+  return ENDED_BY_LABELS[value] ?? value;
+}
+
+/**
  * Read `phases` defensively.
  *
  * Accepts the array-of-samples form the column holds today. Anything else —
@@ -346,9 +417,24 @@ export function isStalled(row: Pick<SyncOutcomeRow, 'elapsed_ms' | 'messages_ext
   return extractedNothing(row);
 }
 
+/**
+ * Whole-run minutes per GB of device-reported usage — and NULL for a run that
+ * wrote no backup.
+ *
+ * Founder QA 2026-09-19: a run that failed having moved nothing read
+ * "0.1 min/GB", because the figure divides elapsed time by the size of the
+ * PHONE rather than by anything the run actually moved. A run that moved
+ * nothing has no throughput to state, so it says nothing — exactly as Rate
+ * already does for the same rows.
+ */
 export function minutesPerGb(
-  row: Pick<SyncOutcomeRow, 'elapsed_ms' | 'device_used_bytes'>
+  row: Pick<
+    SyncOutcomeRow,
+    'elapsed_ms' | 'device_used_bytes' | 'backup_bytes' | 'backup_bytes_unmeasured'
+  >
 ): number | null {
+  if (row.backup_bytes_unmeasured === true) return null;
+  if (row.backup_bytes == null || row.backup_bytes <= 0) return null;
   const bytes = row.device_used_bytes;
   if (row.elapsed_ms == null || bytes == null || bytes <= 0) return null;
   return row.elapsed_ms / MS_PER_MINUTE / (bytes / BYTES_PER_GB);
