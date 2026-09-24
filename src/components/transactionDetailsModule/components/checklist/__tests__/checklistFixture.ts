@@ -1,0 +1,64 @@
+/**
+ * BACKLOG-3476 — typed access to the producer-generated fixture.
+ *
+ * `fixtures/checklistFixtures-3476.json` is written by
+ * `electron/services/db/__tests__/checklistRendererFixtures-3476.test.ts`,
+ * which runs the real main-process producers over the real schema and fails if
+ * this file drifts from them. Do not edit the JSON by hand; regenerate it.
+ *
+ * Every accessor returns a deep copy, so a test that mutates its fixture
+ * cannot leak that change into the next test.
+ */
+import raw from "./fixtures/checklistFixtures-3476.json";
+import type { ChecklistDetail, ChecklistItem, ChecklistTemplate } from "../../../../../../electron/types/checklist";
+import type { UnifiedAttachment } from "../../../hooks/useTransactionAllAttachments";
+import type { Communication } from "../../../types";
+
+const clone = <T,>(v: unknown): T => JSON.parse(JSON.stringify(v)) as T;
+
+/** The checklist on `txn-1`: 4 items, 2 required, requiredDone 1 while 2 are ticked. */
+export const fixtureDetail = (): ChecklistDetail => clone<ChecklistDetail>(raw.checklistDetail);
+
+/** Items by position: 0 required+ticked+attachment, 1 required+thread, 2 optional+ticked+note+partly stale, 3 optional+fully stale. */
+export const fixtureItem = (index: number): ChecklistItem => fixtureDetail().items[index];
+
+/** `transactions:get-all-attachments` for the same transaction, incl. one legacy fallback row. */
+export const fixtureAttachments = (): UnifiedAttachment[] => clone<UnifiedAttachment[]>(raw.attachments);
+
+/** `transactions:getCommunications(txn, "email")` for the same transaction. */
+export const fixtureEmailCommunications = (): Communication[] =>
+  clone<Communication[]>(raw.emailCommunications);
+
+/** A detail with no links at all, derived from the fixture by deleting them. */
+export const fixtureDetailWithoutLinks = (): ChecklistDetail => ({ ...fixtureDetail(), linksByItemId: {} });
+
+/**
+ * Two templates in the shape `checklists:list-templates` answers — transcribed
+ * from the D1 capture already pinned in `checklistTemplateService-3475.test.ts`
+ * (field set and ordering), with generic names.
+ */
+export const fixtureTemplates = (): ChecklistTemplate[] => [
+  {
+    id: "tpl-probe",
+    name: "Probe template",
+    description: null,
+    sortOrder: 0,
+    updatedAt: "2026-03-01T00:00:00+00:00",
+    items: [
+      { id: "tpi-1", title: "Probe item 1", description: "What counts for probe item 1.", isRequired: true, expectedDocumentType: null, sortOrder: 0 },
+      { id: "tpi-2", title: "Probe item 2", description: null, isRequired: true, expectedDocumentType: null, sortOrder: 1 },
+      { id: "tpi-3", title: "Probe item 3", description: "What counts for probe item 3.", isRequired: false, expectedDocumentType: null, sortOrder: 2 },
+      { id: "tpi-4", title: "Probe item 4", description: null, isRequired: false, expectedDocumentType: null, sortOrder: 3 },
+    ],
+  },
+  {
+    id: "tpl-other",
+    name: "Other probe template",
+    description: null,
+    sortOrder: 1,
+    updatedAt: "2026-03-01T00:00:00+00:00",
+    items: [
+      { id: "tpo-1", title: "Other item 1", description: null, isRequired: true, expectedDocumentType: null, sortOrder: 0 },
+    ],
+  },
+];
