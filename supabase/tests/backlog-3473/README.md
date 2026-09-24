@@ -208,7 +208,8 @@ measured at `e93076ea3`:
 ### BACKLOG-3474 run — 2026-09-24, NAS stack over SSH (`lib/ssh-psql.sh`)
 
 Same stack (PostgreSQL 17.6, `postgres`: not superuser, BYPASSRLS). Measured at
-`8fdb20bc5` (branch `feature-portal/BACKLOG-3474-checklists-save`).
+`eea3d2e55` (branch `feature-portal/BACKLOG-3474-checklists-save`); an earlier
+run of the same migration and controls gave the same results.
 
 | Step | Result |
 |---|---|
