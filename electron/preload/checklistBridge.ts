@@ -20,24 +20,19 @@ import type {
   AddChecklistLinkResult,
   ChecklistDetail,
   ChecklistLinkKind,
-  ChecklistTemplate,
-  ChecklistTemplateSource,
   SelectChecklistTemplateResult,
 } from "../types/checklist";
+import type { ListChecklistTemplatesResult } from "../types/ipc/window-api-checklists";
 
 export const checklistBridge = {
   /**
    * The broker templates this organization may pick from.
    * Gated: refused with `success: false` when the plan does not carry checklists.
-   * `templates` is ABSENT (not `[]`) when the read failed — an empty array means
-   * the brokerage genuinely has none.
+   * A failed read is the `success: false` arm, with no `templates` at all — an
+   * empty array means the brokerage genuinely has none.
    */
-  listTemplates: (): Promise<{
-    success: boolean;
-    templates?: ChecklistTemplate[];
-    source?: ChecklistTemplateSource;
-    error?: string;
-  }> => ipcRenderer.invoke("checklists:list-templates"),
+  listTemplates: (): Promise<ListChecklistTemplatesResult> =>
+    ipcRenderer.invoke("checklists:list-templates"),
 
   /**
    * Copy a template onto a transaction. A transaction holds at most one

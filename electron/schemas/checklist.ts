@@ -144,14 +144,11 @@ export const SetChecklistItemNoteArgsSchema = z.object({
  * `targetIds` is 1..200 and distinct.
  *
  * **`.min(1)` makes the db service's empty-`targetIds` branch unreachable over
- * IPC, on purpose.** `addChecklistLink` answers an empty request with
- * `targets_not_in_transaction` and an empty `rejectedIds`, which is the wrong
- * sentence for the cause — nothing was rejected because nothing was supplied.
- * Telling the two apart needs a distinct status, and a new member of
- * `AddChecklistLinkResult` is a surface decision that belongs with the surface
- * (BACKLOG-3476). Refusing the empty request at the boundary means no user can
- * reach the wrong sentence in the meantime, and the db service keeps its own
- * guard for any future caller that is not this channel.
+ * IPC, on purpose.** An empty request is refused here, at the boundary, with a
+ * validation error. `addChecklistLink` keeps its own guard for any caller that
+ * is not this channel, and since BACKLOG-3476 that guard answers its own
+ * status, `no_targets`, rather than `targets_not_in_transaction` with an empty
+ * `rejectedIds` — nothing was rejected, because nothing was supplied.
  *
  * 200 is the same bound the plan set for one group. It is a bound on a single
  * request, not on how much evidence an item may carry.

@@ -43,9 +43,11 @@
  *       see this: the strict READER is guarded by the 3349 and 3365 suites, but
  *       no existing test knows a handler is supposed to call it.
  *   a fail-OPEN gate (`featureGateService.checkFeature`)
- *       Answers ALLOWED for a key that is not in the cache — and the
- *       `transaction_checklists` row is not applied to production, so every
- *       organization on earth would read allowed.
+ *       Answers ALLOWED for a key that is not in the cache and for no cache
+ *       at all, so a user offline or on a cache that lacks the key would read
+ *       allowed whatever the plan says. The `transaction_checklists` row is
+ *       live in production (BACKLOG-3473, pm_comments cd873ca3) and on only
+ *       for some plans; fail-open would hand it to the rest.
  *   `get` or `remove` gated by mistake
  *       A user whose plan lapses can neither see what is on his transaction nor
  *       take it off. The rows are stranded.
