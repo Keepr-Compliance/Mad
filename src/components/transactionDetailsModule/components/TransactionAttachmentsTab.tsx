@@ -16,12 +16,11 @@
  * on demand (reconciling the metadata row in place — BACKLOG-1870), then the
  * refreshed row is previewed.
  */
-import React, { useMemo, useState, useCallback, useEffect, useRef } from "react";
+import React, { useMemo, useState, useCallback } from "react";
 import { AttachmentCard } from "./AttachmentCard";
 import { GroupedMultiSelect, type OptionGroup } from "../../shared/GroupedMultiSelect";
 import type { UnifiedAttachment } from "../hooks/useTransactionAllAttachments";
 import { AttachmentPreviewHost, useAttachmentPreview } from "../hooks/useAttachmentPreview";
-import type { HighlightTarget } from "../types";
 import {
   getAttachmentTypeBucket,
   ATTACHMENT_TYPE_LABELS,
@@ -40,17 +39,7 @@ interface TransactionAttachmentsTabProps {
   error: string | null;
   /** Reload the list after an on-demand download reconciles a row. */
   refresh?: () => void;
-  /**
-   * BACKLOG-3476: "Open in Attachments" from a checklist chip. The tab clears
-   * any filter that would hide the card, scrolls to it, rings it for 2s, then
-   * calls `onHighlightConsumed`. Other highlight types are ignored.
-   */
-  highlightTarget?: HighlightTarget | null;
-  onHighlightConsumed?: () => void;
 }
-
-/** How long the ring stays, matching the Emails tab. */
-const HIGHLIGHT_MS = 2000;
 
 const SORT_OPTIONS: { value: SortKey; label: string }[] = [
   { value: "date", label: "Date (newest)" },
@@ -89,8 +78,6 @@ export function TransactionAttachmentsTab({
   loading,
   error,
   refresh,
-  highlightTarget = null,
-  onHighlightConsumed,
 }: TransactionAttachmentsTabProps): React.ReactElement {
   // Empty Set == "All" (see file header). Robust to the available buckets
   // changing after a refetch.
@@ -167,45 +154,6 @@ export function TransactionAttachmentsTab({
     }
     return sorted;
   }, [attachments, selectedSources, selectedTypes, sortBy]);
-
-  // ---- BACKLOG-3476: highlight from a checklist chip ----------------------
-  const [highlightedId, setHighlightedId] = useState<string | null>(null);
-  const consumedRef = useRef(onHighlightConsumed);
-  consumedRef.current = onHighlightConsumed;
-  const targetAttachmentId =
-    highlightTarget?.type === "attachment" ? (highlightTarget.attachmentId ?? null) : null;
-
-  useEffect(() => {
-    if (!targetAttachmentId || loading) return;
-    const target = attachments.find((a) => a.id === targetAttachmentId);
-    if (!target) {
-      // Not on this transaction any more: nothing to show, but let go.
-      consumedRef.current?.();
-      return;
-    }
-    // A filter that would hide the card is cleared; one that shows it stays.
-    if (selectedSources.size > 0 && !selectedSources.has(target.source)) {
-      setSelectedSources(new Set());
-    }
-    if (selectedTypes.size > 0 && !selectedTypes.has(getAttachmentTypeBucket(target.mime_type))) {
-      setSelectedTypes(new Set());
-    }
-    setHighlightedId(targetAttachmentId);
-    const scroll = setTimeout(() => {
-      const el = document.querySelector(`[data-testid="attachment-card-${targetAttachmentId}"]`);
-      (el as HTMLElement | null)?.scrollIntoView?.({ behavior: "smooth", block: "center" });
-    }, 0);
-    const clear = setTimeout(() => {
-      setHighlightedId(null);
-      consumedRef.current?.();
-    }, HIGHLIGHT_MS);
-    return () => {
-      clearTimeout(scroll);
-      clearTimeout(clear);
-    };
-    // Filters are read, not followed: re-running when they change would
-    // restart the timer the moment this effect clears them.
-  }, [targetAttachmentId, loading, attachments]);
 
   const emailCount = useMemo(
     () => filteredSorted.filter((a) => a.source === "email").length,
@@ -328,7 +276,6 @@ export function TransactionAttachmentsTab({
               attachment={attachment}
               onOpen={handleOpen}
               downloading={downloadingId === attachment.id}
-              isHighlighted={highlightedId === attachment.id}
             />
           ))}
         </div>

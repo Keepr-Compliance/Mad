@@ -96,16 +96,11 @@ export type TransactionTab = "overview" | "messages" | "emails" | "attachments" 
  * the matching conversation card, scrolls to it, and applies a brief highlight.
  */
 export interface HighlightTarget {
-  type: "email" | "text" | "attachment";
+  type: "email" | "text";
   /** For email: the communication/email id from LinkedContentEmailHit.id */
   emailId?: string;
   /** For text: the communication id from LinkedContentTextHit.id */
   communicationId?: string;
-  /**
-   * For attachment: `attachments.id`, the id a checklist chip carries
-   * (BACKLOG-3476). Consumed by the Attachments tab.
-   */
-  attachmentId?: string;
 }
 
 /**

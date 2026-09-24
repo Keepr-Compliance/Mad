@@ -1375,8 +1375,6 @@ function TransactionDetails({
               loading={attachmentsLoading}
               error={attachmentsError}
               refresh={refreshAttachments}
-              highlightTarget={highlightTarget}
-              onHighlightConsumed={clearHighlightTarget}
             />
           )}
 
