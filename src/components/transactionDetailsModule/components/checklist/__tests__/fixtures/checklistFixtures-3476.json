@@ -1,0 +1,365 @@
+{
+  "checklistDetail": {
+    "checklist": {
+      "id": "id-1",
+      "transactionId": "txn-1",
+      "templateId": "tpl-probe",
+      "templateName": "Probe template",
+      "selectedAt": "2026-03-10T12:00:00.000Z"
+    },
+    "items": [
+      {
+        "id": "id-2",
+        "checklistId": "id-1",
+        "title": "Probe item 1",
+        "description": "What counts for probe item 1.",
+        "isRequired": true,
+        "expectedDocumentType": null,
+        "isChecked": true,
+        "checkedAt": "2026-03-10T12:00:00.000Z",
+        "note": null,
+        "sortOrder": 0
+      },
+      {
+        "id": "id-3",
+        "checklistId": "id-1",
+        "title": "Probe item 2",
+        "description": null,
+        "isRequired": true,
+        "expectedDocumentType": null,
+        "isChecked": false,
+        "checkedAt": null,
+        "note": null,
+        "sortOrder": 1
+      },
+      {
+        "id": "id-4",
+        "checklistId": "id-1",
+        "title": "Probe item 3",
+        "description": "What counts for probe item 3.",
+        "isRequired": false,
+        "expectedDocumentType": null,
+        "isChecked": true,
+        "checkedAt": "2026-03-10T12:00:00.000Z",
+        "note": "Probe note text.",
+        "sortOrder": 2
+      },
+      {
+        "id": "id-5",
+        "checklistId": "id-1",
+        "title": "Probe item 4",
+        "description": null,
+        "isRequired": false,
+        "expectedDocumentType": null,
+        "isChecked": false,
+        "checkedAt": null,
+        "note": null,
+        "sortOrder": 3
+      }
+    ],
+    "linksByItemId": {
+      "id-2": [
+        {
+          "id": "id-6",
+          "itemId": "id-2",
+          "kind": "attachment",
+          "label": "probe-document.pdf",
+          "sortOrder": 0,
+          "members": [
+            {
+              "id": "id-7",
+              "linkId": "id-6",
+              "kind": "attachment",
+              "attachmentId": "att-1",
+              "emailId": null,
+              "inTransaction": true
+            }
+          ]
+        }
+      ],
+      "id-3": [
+        {
+          "id": "id-8",
+          "itemId": "id-3",
+          "kind": "email",
+          "label": "Probe thread",
+          "sortOrder": 0,
+          "members": [
+            {
+              "id": "id-9",
+              "linkId": "id-8",
+              "kind": "email",
+              "attachmentId": null,
+              "emailId": "e-thread-1",
+              "inTransaction": true
+            },
+            {
+              "id": "id-10",
+              "linkId": "id-8",
+              "kind": "email",
+              "attachmentId": null,
+              "emailId": "e-thread-2",
+              "inTransaction": true
+            }
+          ]
+        }
+      ],
+      "id-4": [
+        {
+          "id": "id-11",
+          "itemId": "id-4",
+          "kind": "email",
+          "label": "Probe solo",
+          "sortOrder": 0,
+          "members": [
+            {
+              "id": "id-12",
+              "linkId": "id-11",
+              "kind": "email",
+              "attachmentId": null,
+              "emailId": "e-solo-1",
+              "inTransaction": true
+            },
+            {
+              "id": "id-13",
+              "linkId": "id-11",
+              "kind": "email",
+              "attachmentId": null,
+              "emailId": "e-solo-2",
+              "inTransaction": false
+            }
+          ]
+        }
+      ],
+      "id-5": [
+        {
+          "id": "id-14",
+          "itemId": "id-5",
+          "kind": "email",
+          "label": "Probe gone",
+          "sortOrder": 0,
+          "members": [
+            {
+              "id": "id-15",
+              "linkId": "id-14",
+              "kind": "email",
+              "attachmentId": null,
+              "emailId": "e-gone",
+              "inTransaction": false
+            }
+          ]
+        }
+      ]
+    },
+    "requiredDone": 1,
+    "requiredTotal": 2
+  },
+  "attachments": [
+    {
+      "id": "att-text",
+      "filename": "probe-text-photo.heic",
+      "mime_type": "image/heic",
+      "file_size_bytes": 102400,
+      "storage_path": null,
+      "created_at": "2026-03-10T12:00:00.000Z",
+      "email_id": null,
+      "message_id": "m-1",
+      "source_date": "2026-03-06T10:00:00Z",
+      "direction": "inbound",
+      "context_subject": null,
+      "context_sender": null,
+      "source": "text"
+    },
+    {
+      "id": "att-legacy",
+      "filename": "probe-legacy.png",
+      "mime_type": "image/png",
+      "file_size_bytes": 51200,
+      "storage_path": null,
+      "created_at": "2026-03-10T12:00:00.000Z",
+      "email_id": null,
+      "message_id": null,
+      "source_date": "2026-03-06T10:00:00Z",
+      "direction": "inbound",
+      "context_subject": null,
+      "context_sender": null,
+      "source": "text"
+    },
+    {
+      "id": "att-1",
+      "filename": "probe-document.pdf",
+      "mime_type": "application/pdf",
+      "file_size_bytes": 1258291,
+      "storage_path": null,
+      "created_at": "2026-03-10T12:00:00.000Z",
+      "email_id": "e-solo-1",
+      "message_id": null,
+      "source_date": "2026-03-03T10:00:00Z",
+      "direction": null,
+      "context_subject": "Probe solo",
+      "context_sender": "sender-a@example.test",
+      "source": "email"
+    },
+    {
+      "id": "att-2",
+      "filename": "probe-photo.jpg",
+      "mime_type": "image/jpeg",
+      "file_size_bytes": 204800,
+      "storage_path": null,
+      "created_at": "2026-03-10T12:00:00.000Z",
+      "email_id": "e-thread-1",
+      "message_id": null,
+      "source_date": "2026-03-01T10:00:00Z",
+      "direction": null,
+      "context_subject": "Probe thread",
+      "context_sender": "Probe Sender <sender-a@example.test>",
+      "source": "email"
+    }
+  ],
+  "emailCommunications": [
+    {
+      "id": "e-solo-3",
+      "communication_id": "cm-7",
+      "user_id": "user-3476",
+      "transaction_id": "txn-1",
+      "message_id": null,
+      "email_id": "e-solo-3",
+      "link_source": "manual",
+      "link_confidence": null,
+      "match_reason": null,
+      "linked_at": "2026-03-10T12:00:00.000Z",
+      "created_at": "2026-03-10T12:00:00.000Z",
+      "channel": "email",
+      "communication_type": "email",
+      "body_text": null,
+      "body_plain": null,
+      "body": null,
+      "subject": "Fwd: Probe solo",
+      "sender": "sender-a@example.test",
+      "recipients": "agent@example.test",
+      "sent_at": "2026-03-05T11:00:00Z",
+      "received_at": null,
+      "has_attachments": 0,
+      "thread_id": null,
+      "participants": null,
+      "thread_display_name": null,
+      "direction": null,
+      "external_id": "ext-e-solo-3",
+      "associated_message_type": null,
+      "associated_message_guid": null,
+      "hidden_from_export": 0,
+      "source": "gmail",
+      "cc": null,
+      "bcc": null,
+      "attachment_count": 0
+    },
+    {
+      "id": "e-solo-1",
+      "communication_id": "cm-3",
+      "user_id": "user-3476",
+      "transaction_id": "txn-1",
+      "message_id": null,
+      "email_id": "e-solo-1",
+      "link_source": "manual",
+      "link_confidence": null,
+      "match_reason": null,
+      "linked_at": "2026-03-10T12:00:00.000Z",
+      "created_at": "2026-03-10T12:00:00.000Z",
+      "channel": "email",
+      "communication_type": "email",
+      "body_text": null,
+      "body_plain": null,
+      "body": null,
+      "subject": "Probe solo",
+      "sender": "sender-a@example.test",
+      "recipients": "agent@example.test",
+      "sent_at": "2026-03-03T10:00:00Z",
+      "received_at": null,
+      "has_attachments": 0,
+      "thread_id": null,
+      "participants": null,
+      "thread_display_name": null,
+      "direction": null,
+      "external_id": "ext-e-solo-1",
+      "associated_message_type": null,
+      "associated_message_guid": null,
+      "hidden_from_export": 0,
+      "source": "gmail",
+      "cc": null,
+      "bcc": null,
+      "attachment_count": 0
+    },
+    {
+      "id": "e-thread-2",
+      "communication_id": "cm-2",
+      "user_id": "user-3476",
+      "transaction_id": "txn-1",
+      "message_id": null,
+      "email_id": "e-thread-2",
+      "link_source": "manual",
+      "link_confidence": null,
+      "match_reason": null,
+      "linked_at": "2026-03-10T12:00:00.000Z",
+      "created_at": "2026-03-10T12:00:00.000Z",
+      "channel": "email",
+      "communication_type": "email",
+      "body_text": null,
+      "body_plain": null,
+      "body": null,
+      "subject": "Re: Probe thread",
+      "sender": "sender-b@example.test",
+      "recipients": "agent@example.test",
+      "sent_at": "2026-03-02T10:00:00Z",
+      "received_at": null,
+      "has_attachments": 0,
+      "thread_id": "thr-probe",
+      "participants": null,
+      "thread_display_name": null,
+      "direction": null,
+      "external_id": "ext-e-thread-2",
+      "associated_message_type": null,
+      "associated_message_guid": null,
+      "hidden_from_export": 0,
+      "source": "gmail",
+      "cc": null,
+      "bcc": null,
+      "attachment_count": 0
+    },
+    {
+      "id": "e-thread-1",
+      "communication_id": "cm-1",
+      "user_id": "user-3476",
+      "transaction_id": "txn-1",
+      "message_id": null,
+      "email_id": "e-thread-1",
+      "link_source": "manual",
+      "link_confidence": null,
+      "match_reason": null,
+      "linked_at": "2026-03-10T12:00:00.000Z",
+      "created_at": "2026-03-10T12:00:00.000Z",
+      "channel": "email",
+      "communication_type": "email",
+      "body_text": null,
+      "body_plain": null,
+      "body": null,
+      "subject": "Probe thread",
+      "sender": "Probe Sender <sender-a@example.test>",
+      "recipients": "agent@example.test",
+      "sent_at": "2026-03-01T10:00:00Z",
+      "received_at": null,
+      "has_attachments": 0,
+      "thread_id": "thr-probe",
+      "participants": null,
+      "thread_display_name": null,
+      "direction": null,
+      "external_id": "ext-e-thread-1",
+      "associated_message_type": null,
+      "associated_message_guid": null,
+      "hidden_from_export": 0,
+      "source": "gmail",
+      "cc": null,
+      "bcc": null,
+      "attachment_count": 0
+    }
+  ]
+}
