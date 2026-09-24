@@ -20,6 +20,8 @@ interface AttachmentCardProps {
   onOpen: (attachment: UnifiedAttachment) => void;
   /** True while an on-demand download for this attachment is in flight. */
   downloading?: boolean;
+  /** BACKLOG-3476: ringed briefly after a jump from a checklist chip. */
+  isHighlighted?: boolean;
 }
 
 /**
@@ -120,6 +122,7 @@ export function AttachmentCard({
   attachment,
   onOpen,
   downloading = false,
+  isHighlighted = false,
 }: AttachmentCardProps): React.ReactElement {
   const bucket = getAttachmentTypeBucket(attachment.mime_type);
   const { icon, colorClass } = getBucketIcon(bucket);
@@ -132,7 +135,12 @@ export function AttachmentCard({
       onClick={() => onOpen(attachment)}
       disabled={downloading}
       data-testid={`attachment-card-${attachment.id}`}
-      className="w-full text-left bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md hover:border-gray-300 transition-all disabled:opacity-60 disabled:cursor-wait"
+      data-highlighted={isHighlighted ? "true" : undefined}
+      className={`w-full text-left border rounded-lg p-4 hover:shadow-md transition-all disabled:opacity-60 disabled:cursor-wait ${
+        isHighlighted
+          ? "ring-4 ring-inset ring-blue-600 bg-blue-100 border-blue-500"
+          : "bg-white border-gray-200 hover:border-gray-300"
+      }`}
     >
       <div className="flex items-start gap-4">
         {/* File type icon */}

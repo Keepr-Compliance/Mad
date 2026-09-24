@@ -21,7 +21,7 @@
  * A failed read shows an error and Retry, never the chooser: "no checklist
  * yet" would be a false statement about this transaction.
  */
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import type { ApiResult } from "../../../../services";
 import type {
   ChecklistItem,
@@ -81,6 +81,16 @@ export function TransactionChecklistTab({
 
   const attachmentsById = useMemo(() => new Map(attachments.map((a) => [a.id, a])), [attachments]);
   const threads = useMemo(() => linkableThreads(emailCommunications), [emailCommunications]);
+
+  // A thread chip names its participants from the Emails list. Load it
+  // (silently) when some chip needs it; otherwise the chip shows the count only.
+  const hasEmailLinks = useMemo(
+    () => !!detail && Object.values(detail.linksByItemId).some((ls) => ls.some((l) => l.kind === "email")),
+    [detail],
+  );
+  useEffect(() => {
+    if (hasEmailLinks) void ensureEmailsLoaded();
+  }, [hasEmailLinks, ensureEmailsLoaded]);
 
   const handleSelectResult = useCallback(
     (result: ApiResult<SelectChecklistTemplateResult>): boolean => {
