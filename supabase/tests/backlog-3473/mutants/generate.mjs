@@ -34,6 +34,9 @@ const M1 = read(M1_PATH);
 const M2 = read(M2_PATH);
 const M3 = read(M3_PATH);
 const BEFORE = read("supabase/tests/backlog-3473/lib/rpc-before.sql");
+// BACKLOG-3474: save_checklist_template, loaded by run.sh after file 3.
+const M4_PATH = "supabase/migrations/20260924190429_backlog_3474_save_checklist_template.sql";
+const M4 = read(M4_PATH);
 
 /** Exact replacement; throws if `from` does not occur exactly once in `text`. */
 function edit(text, from, to, label) {
@@ -632,6 +635,123 @@ add("m43-catalogue-name-check-dropped.sql", {
 });
 
 // ---------------------------------------------------------------- whole-file mutants
+// ---------------------------------------------------------------- BACKLOG-3474: save_checklist_template
+// Each mutant is the likely wrong implementation named in the SR plan review
+// (pm_comments 527926ff, ruling 6). The function is re-created from the shipped
+// text with one exact edit; the proof reads the definition back.
+const SAVE = "public.save_checklist_template(uuid,uuid,text,text,text,jsonb)";
+const save = fn(M4, "save_checklist_template");
+const AUTH_CHECK =
+  "  IF NOT public.can_edit_checklist_templates(p_org_id) THEN\n    RAISE EXCEPTION 'not_authorized' USING ERRCODE = '42501';\n  END IF;\n\n";
+const STALE_PRED = "       AND t.updated_at = p_expected_updated_at::timestamptz\n";
+const TPL_UPDATE =
+  "    UPDATE public.checklist_templates AS t\n" +
+  "       SET name = btrim(p_name),\n" +
+  "           description = NULLIF(btrim(p_description), '')\n" +
+  "     WHERE t.id = p_template_id\n" +
+  "       AND t.organization_id = p_org_id\n" +
+  STALE_PRED +
+  "    RETURNING t.id, t.updated_at INTO v_template_id, v_updated_at;\n";
+const noAuth = edit(save, AUTH_CHECK, "", "m52");
+
+add("m52-save-without-authority-check.sql", {
+  what: "BACKLOG-3474 A9: save_checklist_template without its up-front can_edit_checklist_templates check",
+  targets: "c35",
+  sql: noAuth,
+  proof: proof(`${def(SAVE)} NOT LIKE '%can_edit_checklist_templates%'`, `'no authority check'`),
+});
+add("m53-save-definer-without-authority-check.sql", {
+  what: "BACKLOG-3474 M15b: no authority check AND SECURITY DEFINER (RLS no longer applies to the writes)",
+  targets: "c35",
+  sql: edit(noAuth, "SECURITY INVOKER", "SECURITY DEFINER", "m53"),
+  proof: proof(`${def(SAVE)} NOT LIKE '%can_edit_checklist_templates%' AND (SELECT prosecdef FROM pg_proc WHERE oid = '${SAVE}'::regprocedure)`,
+               `'no authority check, security definer'`),
+});
+add("m54-save-security-definer.sql", {
+  what: "BACKLOG-3474 M15: save_checklist_template made SECURITY DEFINER (authority check kept)",
+  targets: "c34",
+  sql: edit(save, "SECURITY INVOKER", "SECURITY DEFINER", "m54"),
+  proof: proof(`(SELECT prosecdef FROM pg_proc WHERE oid = '${SAVE}'::regprocedure)`, `'security definer'`),
+});
+add("m55-save-anon-not-revoked.sql", {
+  what: "BACKLOG-3474 A7: the file replayed on a fresh function with `anon` dropped from the REVOKE",
+  targets: "c34",
+  sql:
+    "DROP FUNCTION public.save_checklist_template(uuid, uuid, text, text, text, jsonb);\n" +
+    edit(M4, "FROM PUBLIC, anon;", "FROM PUBLIC;", "m55"),
+  proof: proof(`has_function_privilege('anon', '${SAVE}', 'EXECUTE')`, `'anon can execute'`),
+});
+add("m56-save-item-insert-swallows-errors.sql", {
+  what: "BACKLOG-3474 A4: the new-item INSERT wrapped in EXCEPTION WHEN OTHERS THEN RETURN",
+  targets: "c27 c28",
+  sql: edit(
+    edit(save, "  INSERT INTO public.checklist_template_items\n", "  BEGIN\n  INSERT INTO public.checklist_template_items\n", "m56a"),
+    "   WHERE e.value->>'id' IS NULL;\n",
+    "   WHERE e.value->>'id' IS NULL;\n  EXCEPTION WHEN OTHERS THEN RETURN;\n  END;\n",
+    "m56b",
+  ),
+  proof: proof(`${def(SAVE)} LIKE '%EXCEPTION WHEN OTHERS THEN RETURN%'`, `'item insert swallows errors'`),
+});
+add("m57-save-without-stale-predicate.sql", {
+  what: "BACKLOG-3474 M17: the template UPDATE no longer compares updated_at with the caller's token",
+  targets: "c29 c30",
+  sql: edit(save, STALE_PRED, "", "m57"),
+  proof: proof(`${def(SAVE)} NOT LIKE '%p_expected_updated_at::timestamptz%'`, `'no stale predicate'`),
+});
+add("m58-save-stale-at-milliseconds.sql", {
+  what: "BACKLOG-3474 M17: the stale check compares at millisecond precision",
+  targets: "c29",
+  sql: edit(save, STALE_PRED,
+    "       AND date_trunc('milliseconds', t.updated_at) = date_trunc('milliseconds', p_expected_updated_at::timestamptz)\n", "m58"),
+  proof: proof(`${def(SAVE)} LIKE '%date_trunc(''milliseconds''%'`, `'stale check at ms'`),
+});
+add("m59-save-skips-update-when-header-unchanged.sql", {
+  what: "BACKLOG-3474 A2: the template UPDATE is skipped when name and description are unchanged",
+  targets: "c30",
+  sql: edit(save, TPL_UPDATE,
+    "    SELECT t.id, t.updated_at INTO v_template_id, v_updated_at\n" +
+    "      FROM public.checklist_templates AS t\n" +
+    "     WHERE t.id = p_template_id AND t.organization_id = p_org_id\n" +
+    "       AND t.updated_at = p_expected_updated_at::timestamptz\n" +
+    "       AND t.name = btrim(p_name)\n" +
+    "       AND t.description IS NOT DISTINCT FROM NULLIF(btrim(p_description), '');\n" +
+    "    IF v_template_id IS NULL THEN\n" + TPL_UPDATE + "    END IF;\n", "m59"),
+  proof: proof(`${def(SAVE)} LIKE '%IS NOT DISTINCT FROM NULLIF(btrim(p_description)%'`, `'update skipped when header unchanged'`),
+});
+add("m60-save-returns-callers-token.sql", {
+  what: "BACKLOG-3474 A3: the function hands back the caller's token instead of the new updated_at",
+  targets: "c31",
+  sql: edit(save, "RETURN QUERY SELECT v_template_id, to_json(v_updated_at) #>> '{}';",
+    "RETURN QUERY SELECT v_template_id, coalesce(p_expected_updated_at, to_json(v_updated_at) #>> '{}');", "m60"),
+  proof: proof(`${def(SAVE)} LIKE '%coalesce(p_expected_updated_at%'`, `'returns the caller token'`),
+});
+add("m61-save-item-update-any-template.sql", {
+  what: "BACKLOG-3474 M16: the item UPDATE drops `i.template_id = v_template_id`",
+  targets: "c32",
+  sql: edit(save, "     AND i.id = (e.value->>'id')::uuid\n     AND i.template_id = v_template_id;",
+    "     AND i.id = (e.value->>'id')::uuid;", "m61"),
+  proof: proof(`${def(SAVE)} NOT LIKE '%AND i.template_id = v_template_id%'`, `'item update not scoped to the template'`),
+});
+add("m62-save-counts-distinct-ids.sql", {
+  what: "BACKLOG-3474 A5: the id count is DISTINCT, so a repeated id matches the updated-row count",
+  targets: "c32",
+  sql: edit(save, "  SELECT count(*) INTO v_id_elems", "  SELECT count(DISTINCT e.value->>'id') INTO v_id_elems", "m62"),
+  proof: proof(`${def(SAVE)} LIKE '%count(DISTINCT%'`, `'distinct id count'`),
+});
+add("m63-save-without-item-cap.sql", {
+  what: "BACKLOG-3474 A6: the 1..200 item bound removed from the function (portal-only cap)",
+  targets: "c33",
+  sql: edit(save, "     OR jsonb_array_length(p_items) NOT BETWEEN 1 AND 200\n", "", "m63"),
+  proof: proof(`${def(SAVE)} NOT LIKE '%NOT BETWEEN 1 AND 200%'`, `'no item cap'`),
+});
+add("m64-save-kept-ids-include-nulls.sql", {
+  what: "BACKLOG-3474 M18: the kept-id array is built from every element, NULL ids included",
+  targets: "c36",
+  sql: edit(save, "            FROM jsonb_array_elements(p_items) AS e(value)\n            WHERE e.value->>'id' IS NOT NULL));",
+    "            FROM jsonb_array_elements(p_items) AS e(value)));", "m64"),
+  proof: proof(`${def(SAVE)} LIKE '%AS e(value)));%'`, `'kept ids include NULLs'`),
+});
+
 const fileMutants = {
   "f01-retire-without-guard.sql": {
     what: "migration 3 without its guard block",
