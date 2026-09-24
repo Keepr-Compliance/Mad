@@ -1,0 +1,322 @@
+m01-read-helpers-security-definer
+    MUTATION APPLIED: both read helpers marked SECURITY DEFINER
+    RED:   c13 c17 c21 c22 c23
+    green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c09 c10 c11 c12 c14 c15 c16 c18 c19 c20 c24 c25 c26 c27 c28 c29
+      c13: CONTROL FAILED: an agent asking about a colleague gets 0 rows, got 1
+      c17: CONTROL FAILED: neither read helper is SECURITY DEFINER
+      c21: CONTROL FAILED: ...and 0 through commission_agreement_in_force, got 1
+      c22: CONTROL FAILED: ...and 0 through commission_agreement_in_force, got 1
+      c23: CONTROL FAILED: ...and 0 through commission_agreement_in_force, got 1
+m02-write-rule-uses-is-org-admin
+    MUTATION APPLIED: the write rule delegates to is_org_admin() (admits it_admin, excludes broker)
+    RED:   c01 c04 c04b c05 c06 c08 c10 c11 c14 c15 c16 c21 c22 c23 c24 c25 c27 c28 c29
+    green: c02 c03 c07 c09 c12 c13 c17 c18 c19 c20 c26
+      c01: CONTROL FAILED: broker B sees exactly his own org1s 1 agreement
+      c04: CONTROL FAILED: it_admin reads 0 agreements
+      c04b: CONTROL FAILED: agreement INSERT permitted for the org broker, got 42501
+      c05: CONTROL FAILED: the row is unchanged at 60, got 
+      c06: CONTROL FAILED: broker A still sees all 7 org-A agreements, got 0
+      c08: new row violates row-level security policy for table "agent_commission_agreements"
+      c10: CONTROL FAILED: on 2026-03-01 the January row is in force (60), got 
+      c11: CONTROL FAILED: the broker can read both same-day rows at all (0 rows here means the SELECT was refused, not that the fixture is wrong)
+      c14: CONTROL FAILED: on 2026-03-01 the fee is 2000, got 
+      c15: CONTROL FAILED: 70/20 is refused by the sum check, got 42501
+      c16: CONTROL FAILED: franchise fee 2500, got 
+      c21: CONTROL FAILED: the broker still reads the deactivated agent1s row, got 0
+      c22: CONTROL FAILED: the broker still reads the removed agent1s row, got 0
+      c23: CONTROL FAILED: a deactivated admin reads 0 agreement rows, got 7
+      c24: CONTROL FAILED: a deactivated admin INSERTing an agreement is refused with 42501, got OK
+      c25: CONTROL FAILED: a broker CAN record an agreement for a DEACTIVATED agent dated INSIDE their active period, got 42501
+      c27: CONTROL FAILED: the day BEFORE the deactivation is allowed, got 42501
+      c28: CONTROL FAILED: the broker records a departed agent's agreement, dated to the closing, got 42501
+      c29: CONTROL FAILED: ...while a SUSPENDED subject at the same offset is allowed, got 42501
+m03-order-by-set-at-before-seq
+    MUTATION APPLIED: ORDER BY effective_from DESC, set_at DESC, seq DESC (the accepted-spec ordering)
+    RED:   c10 c11 c16
+    green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c09 c12 c13 c14 c15 c17 c18 c19 c20 c21 c22 c23 c24 c25 c26 c27 c28 c29
+      c10: CONTROL FAILED: on 2026-09-01 the June correction is in force (80), got 50.00
+      c11: CONTROL FAILED: the correction wins the same-day tie, got 50.00
+      c16: CONTROL FAILED: split 20/80, got 50.00/50.00
+m04-order-by-effective-from-asc
+    MUTATION APPLIED: ORDER BY effective_from ASC -- the OLDEST agreement wins
+    RED:   c10 c11 c16 c28
+    green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c09 c12 c13 c14 c15 c17 c18 c19 c20 c21 c22 c23 c24 c25 c26 c27 c29
+      c10: CONTROL FAILED: on 2026-09-01 the June correction is in force (80), got 60.00
+      c11: CONTROL FAILED: the correction wins the same-day tie, got 60.00
+      c16: CONTROL FAILED: split 20/80, got 40.00/60.00
+      c28: CONTROL FAILED: and it is the agreement just recorded, got 65.00/35.00
+m05-no-effective-from-filter
+    MUTATION APPLIED: the effective_from <= p_on_date filter removed from both helpers
+    RED:   c10 c11 c12 c14 c16
+    green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c09 c13 c15 c17 c18 c19 c20 c21 c22 c23 c24 c25 c26 c27 c28 c29
+      c10: CONTROL FAILED: on 2026-03-01 the January row is in force (60), got 90.00
+      c11: CONTROL FAILED: the correction wins the same-day tie, got 90.00
+      c12: CONTROL FAILED: before the first franchise fee, 0 rows, got 1
+      c14: CONTROL FAILED: on 2026-03-01 the fee is 2000, got 2500.00
+      c16: CONTROL FAILED: split 20/80, got 10.00/90.00
+m06-set-by-inside-the-insert-grant
+    MUTATION APPLIED: set_by added to the INSERT grant on both tables
+    RED:   c08 c18
+    green: c01 c02 c03 c04 c04b c05 c06 c07 c09 c10 c11 c12 c13 c14 c15 c16 c17 c19 c20 c21 c22 c23 c24 c25 c26 c27 c28 c29
+      c08: CONTROL FAILED: naming set_by is refused with 42501, got OK
+      c18: CONTROL FAILED: authenticated cannot name set_by on an INSERT into public.agent_commission_agreements
+m07-set-by-has-no-default
+    MUTATION APPLIED: set_by DEFAULT auth.uid() dropped on both tables
+    RED:   c04b c08 c15 c24 c25 c27 c28 c29
+    green: c01 c02 c03 c04 c05 c06 c07 c09 c10 c11 c12 c13 c14 c16 c17 c18 c19 c20 c21 c22 c23 c26
+      c04b: CONTROL FAILED: agreement INSERT permitted for the org broker, got 23502
+      c08: null value in column "set_by" of relation "agent_commission_agreements" violates not-null constraint
+      c15: CONTROL FAILED: 70/20 is refused by the sum check, got 23502
+      c24: CONTROL FAILED: the active broker still writes an agreement, got 23502
+      c25: CONTROL FAILED: a broker CAN record an agreement for a DEACTIVATED agent dated INSIDE their active period, got 23502
+      c27: CONTROL FAILED: the day BEFORE the deactivation is allowed, got 23502
+      c28: CONTROL FAILED: the broker records a departed agent's agreement, dated to the closing, got 23502
+      c29: CONTROL FAILED: ...while a SUSPENDED subject at the same offset is allowed, got 23502
+m08-update-granted-with-a-policy
+    MUTATION APPLIED: UPDATE granted AND an UPDATE policy added -- the table becomes mutable
+    RED:   c05
+    green: c01 c02 c03 c04 c04b c06 c07 c08 c09 c10 c11 c12 c13 c14 c15 c16 c17 c18 c19 c20 c21 c22 c23 c24 c25 c26 c27 c28 c29
+      c05: CONTROL FAILED: agreement UPDATE refused with 42501, got 23514
+m09-delete-granted-with-a-policy
+    MUTATION APPLIED: DELETE granted AND a DELETE policy added -- history becomes erasable
+    RED:   c06 c18
+    green: c01 c02 c03 c04 c04b c05 c07 c08 c09 c10 c11 c12 c13 c14 c15 c16 c17 c19 c20 c21 c22 c23 c24 c25 c26 c27 c28 c29
+      c06: CONTROL FAILED: agreement DELETE refused with 42501, got OK
+      c18: CONTROL FAILED: authenticated holds no DELETE on public.agent_commission_agreements
+m10-anon-can-read
+    MUTATION APPLIED: anon granted SELECT + EXECUTE and given a USING (true) policy
+    RED:   c07 c18
+    green: c01 c02 c03 c04 c04b c05 c06 c08 c09 c10 c11 c12 c13 c14 c15 c16 c17 c19 c20 c21 c22 c23 c24 c25 c26 c27 c28 c29
+      c07: CONTROL FAILED: anon SELECT on agreements refused, got OK
+      c18: CONTROL FAILED: anon SELECT on agreements is f
+m11-write-rule-ignores-the-org
+    MUTATION APPLIED: the write rule no longer checks WHICH org the caller is a broker of
+    RED:   c01 c06 c09 c13 c23
+    green: c02 c03 c04 c04b c05 c07 c08 c10 c11 c12 c14 c15 c16 c17 c18 c19 c20 c21 c22 c24 c25 c26 c27 c28 c29
+      c01: CONTROL FAILED: broker B sees 0 of org A agreements
+      c06: CONTROL FAILED: broker A still sees all 7 org-A agreements, got 8
+      c09: CONTROL FAILED: broker A writing org B franchise fee refused, got OK
+      c13: CONTROL FAILED: a broker of another org gets 0 rows, got 1
+      c23: CONTROL FAILED: the active broker still reads all 7 agreement rows, got 8
+m12-writer-select-policy-using-true
+    MUTATION APPLIED: both writer SELECT policies are USING (true)
+    RED:   c01 c02 c04 c06 c13 c14 c21 c22 c23
+    green: c03 c04b c05 c07 c08 c09 c10 c11 c12 c15 c16 c17 c18 c19 c20 c24 c25 c26 c27 c28 c29
+      c01: CONTROL FAILED: broker B sees 0 of org A agreements
+      c02: CONTROL FAILED: agent A sees exactly their own 4 rows
+      c04: CONTROL FAILED: it_admin reads 0 agreements
+      c06: CONTROL FAILED: broker A still sees all 7 org-A agreements, got 8
+      c13: CONTROL FAILED: an agent asking about a colleague gets 0 rows, got 1
+      c14: CONTROL FAILED: an agent reads 0 franchise fees in M1, got 4
+      c21: CONTROL FAILED: a deactivated agent reads 0 agreement rows anywhere, got 8
+      c22: CONTROL FAILED: a removed agent reads 0 agreement rows anywhere, got 8
+      c23: CONTROL FAILED: a deactivated broker reads 0 agreement rows, got 8
+m13-agreements-readable-org-wide
+    MUTATION APPLIED: the own-row policy widened to any member of the org
+    RED:   c02 c04 c13 c17 c21 c22 c23
+    green: c01 c03 c04b c05 c06 c07 c08 c09 c10 c11 c12 c14 c15 c16 c18 c19 c20 c24 c25 c26 c27 c28 c29
+      c02: CONTROL FAILED: agent A sees exactly their own 4 rows
+      c04: CONTROL FAILED: it_admin reads 0 agreements
+      c13: CONTROL FAILED: an agent asking about a colleague gets 0 rows, got 1
+      c17: CONTROL FAILED: the own-row policy calls the active-membership rule, got: (EXISTS ( SELECT 1
+      c21: CONTROL FAILED: a deactivated agent reads 0 agreement rows anywhere, got 7
+      c22: CONTROL FAILED: a removed agent reads 0 agreement rows anywhere, got 1
+      c23: CONTROL FAILED: a deactivated broker reads 0 agreement rows, got 7
+m14-helper-ignores-the-agent
+    MUTATION APPLIED: the agreement helper no longer filters by agent
+    RED:   c10 c12 c13
+    green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c09 c11 c14 c15 c16 c17 c18 c19 c20 c21 c22 c23 c24 c25 c26 c27 c28 c29
+      c10: CONTROL FAILED: on 2026-03-01 the January row is in force (60), got 45.00
+      c12: CONTROL FAILED: a user with no agreement returns 0 rows, got 1
+      c13: CONTROL FAILED: an agent asking about a colleague gets 0 rows, got 1
+m15-no-split-sum-check
+    MUTATION APPLIED: split-sum, cadence and both non-negative CHECKs dropped
+    RED:   c15
+    green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c09 c10 c11 c12 c13 c14 c16 c17 c18 c19 c20 c21 c22 c23 c24 c25 c26 c27 c28 c29
+      c15: CONTROL FAILED: 70/20 is refused by the sum check, got OK
+m16-it-admin-is-a-writer
+    MUTATION APPLIED: it_admin added to the writer role list (3473s list, copied by mistake)
+    RED:   c04
+    green: c01 c02 c03 c04b c05 c06 c07 c08 c09 c10 c11 c12 c13 c14 c15 c16 c17 c18 c19 c20 c21 c22 c23 c24 c25 c26 c27 c28 c29
+      c04: CONTROL FAILED: it_admin reads 0 agreements
+m17-agent-is-a-writer
+    MUTATION APPLIED: agent added to the writer role list -- an agent can set their own split
+    RED:   c02 c03 c13 c14 c22
+    green: c01 c04 c04b c05 c06 c07 c08 c09 c10 c11 c12 c15 c16 c17 c18 c19 c20 c21 c23 c24 c25 c26 c27 c28 c29
+      c02: CONTROL FAILED: agent A sees exactly their own 4 rows
+      c03: CONTROL FAILED: agent INSERT refused with 42501, got OK
+      c13: CONTROL FAILED: an agent asking about a colleague gets 0 rows, got 1
+      c14: CONTROL FAILED: an agent reads 0 franchise fees in M1, got 3
+      c22: CONTROL FAILED: a removed agent reads 0 agreement rows anywhere, got 1
+m18-franchise-fee-readable-org-wide
+    MUTATION APPLIED: every member of the org can read the franchise fee (the deferred M1 decision, turned ON)
+    RED:   c04 c14 c23
+    green: c01 c02 c03 c04b c05 c06 c07 c08 c09 c10 c11 c12 c13 c15 c16 c17 c18 c19 c20 c21 c22 c24 c25 c26 c27 c28 c29
+      c04: CONTROL FAILED: it_admin reads 0 franchise fees
+      c14: CONTROL FAILED: an agent reads 0 franchise fees in M1, got 3
+      c23: CONTROL FAILED: a deactivated broker reads 0 franchise fee rows, got 3
+m19-insert-policy-without-the-member-check
+    MUTATION APPLIED: the INSERT policy no longer requires the subject to be a member of the org
+    RED:   c09 c17 c25 c27 c28 c29
+    green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c10 c11 c12 c13 c14 c15 c16 c18 c19 c20 c21 c22 c23 c24 c26
+      c09: CONTROL FAILED: a non-member subject is refused, got OK
+      c17: CONTROL FAILED: the member check compares m.organization_id to the NEW ROW1s org, got: can_write_commission_agreements(organization_id)
+      c25: CONTROL FAILED: ...and CANNOT date one AFTER they left, refused with 42501, got OK
+      c27: CONTROL FAILED: the day AFTER the deactivation is refused with 42501, got OK
+      c28: CONTROL FAILED: but a new agreement dated after they left is still refused, got OK
+      c29: CONTROL FAILED: a subject at EXPIRED is refused even inside their recorded period, got OK
+m20-insert-policy-unqualified-org-column
+    MUTATION APPLIED: the EXISTS clause uses an UNQUALIFIED organization_id (binds to m.organization_id -- vacuously true)
+    RED:   c17
+    green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c09 c10 c11 c12 c13 c14 c15 c16 c18 c19 c20 c21 c22 c23 c24 c25 c26 c27 c28 c29
+      c17: CONTROL FAILED: the member check compares m.organization_id to the NEW ROW1s org, got: (can_write_commission_agreements(organization_id) AND (EXISTS (
+m21-update-granted-without-a-policy
+    MUTATION APPLIED: UPDATE granted, NO update policy added
+    RED:   c05
+    green: c01 c02 c03 c04 c04b c06 c07 c08 c09 c10 c11 c12 c13 c14 c15 c16 c17 c18 c19 c20 c21 c22 c23 c24 c25 c26 c27 c28 c29
+      c05: CONTROL FAILED: agreement UPDATE refused with 42501, got OK
+m22-delete-granted-without-a-policy
+    MUTATION APPLIED: DELETE granted, NO delete policy added
+    RED:   c06 c18
+    green: c01 c02 c03 c04 c04b c05 c07 c08 c09 c10 c11 c12 c13 c14 c15 c16 c17 c19 c20 c21 c22 c23 c24 c25 c26 c27 c28 c29
+      c06: CONTROL FAILED: agreement DELETE refused with 42501, got OK
+      c18: CONTROL FAILED: authenticated holds no DELETE on public.agent_commission_agreements
+m23-self-comparison-in-a-different-policy
+    MUTATION APPLIED: a self-comparison planted in the franchise SELECT policy (a DIFFERENT site from C17 assertion 2)
+    RED:   c17
+    green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c09 c10 c11 c12 c13 c14 c15 c16 c18 c19 c20 c21 c22 c23 c24 c25 c26 c27 c28 c29
+      c17: CONTROL FAILED: no policy contains a self-comparison: (can_write_commission_agreements(organization_id) AND (EXISTS ( SELECT 1
+m24-truncate-granted
+    MUTATION APPLIED: TRUNCATE granted to authenticated on both tables
+    RED:   c18
+    green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c09 c10 c11 c12 c13 c14 c15 c16 c17 c19 c20 c21 c22 c23 c24 c25 c26 c27 c28 c29
+      c18: CONTROL FAILED: authenticated holds no TRUNCATE on public.agent_commission_agreements
+m25-revoke-all-omitted
+    MUTATION APPLIED: REVOKE ALL omitted -- the default ACL grant stands on both tables
+    RED:   c05 c06 c07 c08 c18
+    green: c01 c02 c03 c04 c04b c09 c10 c11 c12 c13 c14 c15 c16 c17 c19 c20 c21 c22 c23 c24 c25 c26 c27 c28 c29
+      c05: CONTROL FAILED: agreement UPDATE refused with 42501, got OK
+      c06: CONTROL FAILED: agreement DELETE refused with 42501, got OK
+      c07: CONTROL FAILED: anon SELECT on agreements refused, got OK
+      c08: CONTROL FAILED: naming set_by is refused with 42501, got OK
+      c18: CONTROL FAILED: anon holds no UPDATE on public.agent_commission_agreements
+m26-rls-not-enabled-on-agreements
+    MUTATION APPLIED: ENABLE ROW LEVEL SECURITY missing on agent_commission_agreements
+    RED:   c01 c02 c03 c04 c06 c09 c13 c21 c22 c23 c24 c25 c27 c28 c29
+    green: c04b c05 c07 c08 c10 c11 c12 c14 c15 c16 c17 c18 c19 c20 c26
+      c01: CONTROL FAILED: broker B sees 0 of org A agreements
+      c02: CONTROL FAILED: agent A sees exactly their own 4 rows
+      c03: CONTROL FAILED: agent INSERT refused with 42501, got OK
+      c04: CONTROL FAILED: it_admin reads 0 agreements
+      c06: CONTROL FAILED: broker A still sees all 7 org-A agreements, got 8
+      c09: CONTROL FAILED: broker A writing org B agreement refused, got OK
+      c13: CONTROL FAILED: an agent asking about a colleague gets 0 rows, got 1
+      c21: CONTROL FAILED: a deactivated agent reads 0 agreement rows anywhere, got 8
+      c22: CONTROL FAILED: a removed agent reads 0 agreement rows anywhere, got 8
+      c23: CONTROL FAILED: a deactivated broker reads 0 agreement rows, got 8
+      c24: CONTROL FAILED: a deactivated broker INSERTing an agreement is refused with 42501, got OK
+      c25: CONTROL FAILED: ...and CANNOT date one AFTER they left, refused with 42501, got OK
+      c27: CONTROL FAILED: the day AFTER the deactivation is refused with 42501, got OK
+      c28: CONTROL FAILED: but a new agreement dated after they left is still refused, got OK
+      c29: CONTROL FAILED: a subject at EXPIRED is refused even inside their recorded period, got OK
+m27-rls-not-enabled-on-either-table
+    MUTATION APPLIED: ENABLE ROW LEVEL SECURITY missing on BOTH tables
+    RED:   c01 c02 c03 c04 c06 c09 c13 c14 c21 c22 c23 c24 c25 c27 c28 c29
+    green: c04b c05 c07 c08 c10 c11 c12 c15 c16 c17 c18 c19 c20 c26
+      c01: CONTROL FAILED: broker B sees 0 of org A agreements
+      c02: CONTROL FAILED: agent A sees exactly their own 4 rows
+      c03: CONTROL FAILED: agent INSERT refused with 42501, got OK
+      c04: CONTROL FAILED: it_admin reads 0 agreements
+      c06: CONTROL FAILED: broker A still sees all 7 org-A agreements, got 8
+      c09: CONTROL FAILED: broker A writing org B agreement refused, got OK
+      c13: CONTROL FAILED: an agent asking about a colleague gets 0 rows, got 1
+      c14: CONTROL FAILED: an agent reads 0 franchise fees in M1, got 4
+      c21: CONTROL FAILED: a deactivated agent reads 0 agreement rows anywhere, got 8
+      c22: CONTROL FAILED: a removed agent reads 0 agreement rows anywhere, got 8
+      c23: CONTROL FAILED: a deactivated broker reads 0 agreement rows, got 8
+      c24: CONTROL FAILED: a deactivated broker INSERTing an agreement is refused with 42501, got OK
+      c25: CONTROL FAILED: ...and CANNOT date one AFTER they left, refused with 42501, got OK
+      c27: CONTROL FAILED: the day AFTER the deactivation is refused with 42501, got OK
+      c28: CONTROL FAILED: but a new agreement dated after they left is still refused, got OK
+      c29: CONTROL FAILED: a subject at EXPIRED is refused even inside their recorded period, got OK
+m28-write-rule-loses-its-search-path
+    MUTATION APPLIED: SET search_path dropped from the SECURITY DEFINER write rule
+    RED:   c17
+    green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c09 c10 c11 c12 c13 c14 c15 c16 c18 c19 c20 c21 c22 c23 c24 c25 c26 c27 c28 c29
+      c17: CONTROL FAILED: the write rule pins SET search_path = public, got NULL
+m29-agent-fkey-on-delete-cascade
+    MUTATION APPLIED: agent foreign key rewritten ON DELETE CASCADE
+    RED:   c19 c20
+    green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c09 c10 c11 c12 c13 c14 c15 c16 c17 c18 c21 c22 c23 c24 c25 c26 c27 c28 c29
+      c19: CONTROL FAILED: deleting the agent is blocked by the agent key, got OK
+      c20: CONTROL FAILED: agent_commission_agreements_agent_fkey is a foreign key ON DELETE NO ACTION, got c
+m30-franchise-set-by-fkey-on-delete-cascade
+    MUTATION APPLIED: franchise set_by foreign key rewritten ON DELETE CASCADE
+    RED:   c19 c20
+    green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c09 c10 c11 c12 c13 c14 c15 c16 c17 c18 c21 c22 c23 c24 c25 c26 c27 c28 c29
+      c19: CONTROL FAILED: the broker is still held by the franchise fees he set, got OK
+      c20: CONTROL FAILED: organization_franchise_fees_set_by_fkey is a foreign key ON DELETE NO ACTION, got c
+m31-org-fkey-restrict-not-no-action
+    MUTATION APPLIED: organization foreign key written ON DELETE RESTRICT, not NO ACTION
+    RED:   c19 c20
+    green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c09 c10 c11 c12 c13 c14 c15 c16 c17 c18 c21 c22 c23 c24 c25 c26 c27 c28 c29
+      c19: CONTROL FAILED: deleting the organization is blocked by the org key, got organization_franchise_fees_org_fkey
+      c20: CONTROL FAILED: agent_commission_agreements_org_fkey is a foreign key ON DELETE NO ACTION, got r
+m32-own-row-policy-is-the-bare-uid
+    MUTATION APPLIED: the own-row policy reverted to the bare auth.uid() predicate
+    RED:   c17 c21 c22
+    green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c09 c10 c11 c12 c13 c14 c15 c16 c18 c19 c20 c23 c24 c25 c26 c27 c28 c29
+      c17: CONTROL FAILED: the own-row policy calls the active-membership rule, got: (agent_user_id = ( SELECT auth.uid() AS uid))
+      c21: CONTROL FAILED: a deactivated agent reads 0 agreement rows anywhere, got 1
+      c22: CONTROL FAILED: a removed agent reads 0 agreement rows anywhere, got 1
+m33-active-rule-ignores-license-status
+    MUTATION APPLIED: the active-membership rule no longer checks license_status
+    RED:   c21
+    green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c09 c10 c11 c12 c13 c14 c15 c16 c17 c18 c19 c20 c22 c23 c24 c25 c26 c27 c28 c29
+      c21: CONTROL FAILED: a deactivated agent reads 0 agreement rows anywhere, got 1
+m34-active-rule-ignores-the-org
+    MUTATION APPLIED: the active-membership rule no longer checks the organization
+    RED:   c22
+    green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c09 c10 c11 c12 c13 c14 c15 c16 c17 c18 c19 c20 c21 c23 c24 c25 c26 c27 c28 c29
+      c22: CONTROL FAILED: a removed agent reads 0 agreement rows anywhere, got 1
+m35-write-rule-ignores-license-status
+    MUTATION APPLIED: the write rule no longer checks license_status (a deactivated broker keeps reading and writing)
+    RED:   c23 c24
+    green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c09 c10 c11 c12 c13 c14 c15 c16 c17 c18 c19 c20 c21 c22 c25 c26 c27 c28 c29
+      c23: CONTROL FAILED: a deactivated broker reads 0 agreement rows, got 7
+      c24: CONTROL FAILED: a deactivated broker INSERTing an agreement is refused with 42501, got OK
+m36-insert-subject-ignores-the-active-period
+    MUTATION APPLIED: the INSERT policy no longer tests the AGENT SUBJECT beyond bare membership
+    RED:   c25 c27 c28 c29
+    green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c09 c10 c11 c12 c13 c14 c15 c16 c17 c18 c19 c20 c21 c22 c23 c24 c26
+      c25: CONTROL FAILED: ...and CANNOT date one AFTER they left, refused with 42501, got OK
+      c27: CONTROL FAILED: the day AFTER the deactivation is refused with 42501, got OK
+      c28: CONTROL FAILED: but a new agreement dated after they left is still refused, got OK
+      c29: CONTROL FAILED: a subject at EXPIRED is refused even inside their recorded period, got OK
+m37-franchise-order-by-set-at
+    MUTATION APPLIED: franchise_fee_in_force orders by set_at DESC before seq DESC
+    RED:   c14 c16
+    green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c09 c10 c11 c12 c13 c15 c17 c18 c19 c20 c21 c22 c23 c24 c25 c26 c27 c28 c29
+      c14: CONTROL FAILED: the same-day fee correction wins on 2026-09-01 (2500, not the 2750 with the later set_at), got 2750.00
+      c16: CONTROL FAILED: franchise fee 2500, got 2750.00
+m38-trigger-ignores-the-transition
+    MUTATION APPLIED: the deactivation trigger no longer tests the TRANSITION -- any update leaving a row suspended re-stamps the date
+    RED:   c26 c27
+    green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c09 c10 c11 c12 c13 c14 c15 c16 c17 c18 c19 c20 c21 c22 c23 c24 c25 c28 c29
+      c26: CONTROL FAILED: a write that does not name license_status leaves the date alone, got 2026-09-23 18:06:19.643564+00
+      c27: CONTROL FAILED: precondition: a suspended row with no recorded date exists
+m40-comparison-loses-its-utc-pin
+    MUTATION APPLIED: the date comparison resolves against the SESSION timezone, not UTC
+    RED:   c27
+    green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c09 c10 c11 c12 c13 c14 c15 c16 c17 c18 c19 c20 c21 c22 c23 c24 c25 c26 c28 c29
+      c27: CONTROL FAILED: the comparison resolves against UTC, not the session timezone, got 42501
+m41-boundary-is-exclusive
+    MUTATION APPLIED: an agreement dated ON the day of deactivation is now refused
+    RED:   c27
+    green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c09 c10 c11 c12 c13 c14 c15 c16 c17 c18 c19 c20 c21 c22 c23 c24 c25 c26 c28 c29
+      c27: CONTROL FAILED: the day OF the deactivation is allowed -- the boundary is inclusive, got 42501
+m42-date-arm-loses-its-status-gate
+    MUTATION APPLIED: the date arm admits any status that carries a deactivation date
+    RED:   c29
+    green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c09 c10 c11 c12 c13 c14 c15 c16 c17 c18 c19 c20 c21 c22 c23 c24 c25 c26 c27 c28
+      c29: CONTROL FAILED: a subject at EXPIRED is refused even inside their recorded period, got OK
