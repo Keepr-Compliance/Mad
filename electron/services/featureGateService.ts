@@ -258,6 +258,28 @@ class FeatureGateService {
     return entry.outcome;
   }
 
+  /**
+   * Another reader just looked the membership up — BACKLOG-3476.
+   *
+   * `license:get` / `license:refresh` read the same `organization_members`
+   * rows on every call. When what they found is not what the strict reader has
+   * cached for this user, the organization changed under it, and both caches
+   * (the membership AND the plan read for the old org) are dropped.
+   *
+   * `organizationId` is `null` for "no membership" AND for a failed lookup —
+   * the licence reader cannot tell them apart. Treating a failure as a
+   * difference only costs one extra query on the next strict read.
+   */
+  noteMembership(userId: string, organizationId: string | null): void {
+    const entry = this.orgOutcomeCache;
+    if (!entry || entry.userId !== userId) return;
+    const cachedOrgId =
+      entry.outcome.status === "member" ? entry.outcome.organizationId : null;
+    if (cachedOrgId !== organizationId) {
+      this.invalidateCache();
+    }
+  }
+
   /** Remember a membership answer for this user. Only real answers are accepted. */
   setCachedOrgOutcome(userId: string, outcome: CachedOrgOutcome): void {
     this.orgOutcomeCache = { userId, outcome, fetchedAt: Date.now() };

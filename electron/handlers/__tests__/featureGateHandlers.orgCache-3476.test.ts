@@ -307,3 +307,37 @@ describe("K6 — resolveOrgId keeps looking the membership up every time", () =>
     expect(membershipQueries()).toBe(2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// K8 — an organization change seen by the licence reader drops the cache
+// ---------------------------------------------------------------------------
+
+describe("K8 — noteMembership drops the cache when the organization changed", () => {
+  it("K8: a different org reported for this user -> the next strict read looks up again", async () => {
+    rpcAnswer = (orgId) => planAnswer({ [KEY]: orgId === FIXTURE_BROKERAGE_ORG_ID_2 });
+    await expect(invokeStrictState()).resolves.toBe("blocked");
+
+    emulator.set({
+      rows: {
+        organization_members: [brokerageMembership({ orgId: FIXTURE_BROKERAGE_ORG_ID_2 })],
+      },
+    });
+    featureGateService.noteMembership(FIXTURE_USER_ID, FIXTURE_BROKERAGE_ORG_ID_2);
+    await expect(invokeStrictState()).resolves.toBe("allowed");
+    expect(membershipQueries()).toBe(2);
+  });
+
+  it("K8b: the same org reported -> the cache is kept", async () => {
+    await expect(invokeStrictState()).resolves.toBe("allowed");
+    featureGateService.noteMembership(FIXTURE_USER_ID, FIXTURE_BROKERAGE_ORG_ID);
+    await expect(invokeStrictState()).resolves.toBe("allowed");
+    expect(membershipQueries()).toBe(1);
+  });
+
+  it("K8c: a report about another user leaves this user's cache alone", async () => {
+    await expect(invokeStrictState()).resolves.toBe("allowed");
+    featureGateService.noteMembership(OTHER_USER_ID, null);
+    await expect(invokeStrictState()).resolves.toBe("allowed");
+    expect(membershipQueries()).toBe(1);
+  });
+});
