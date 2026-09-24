@@ -788,6 +788,13 @@ add("m68-audit-archiver-recomputed.sql", {
   sql: edit(audit, "  ELSIF OLD.archived_at IS NULL THEN\n", "  ELSIF NEW.archived_at IS NOT NULL THEN\n", "m68"),
   proof: proof(`${def(AUDIT)} LIKE '%ELSIF NEW.archived_at IS NOT NULL%'`, `'no transition guard'`),
 });
+add("m70-audit-archiver-written-back.sql", {
+  what: "BACKLOG-3474 PR 3 (SR B1): archived_by written back from OLD while archived, undoing the FK's ON DELETE SET NULL",
+  targets: "c40",
+  sql: edit(audit, "  ELSIF OLD.archived_at IS NULL THEN\n    NEW.archived_by := auth.uid();\n  END IF;\n",
+    "  ELSIF OLD.archived_at IS NULL THEN\n    NEW.archived_by := auth.uid();\n  ELSE\n    NEW.archived_by := OLD.archived_by;\n  END IF;\n", "m70"),
+  proof: proof(`${def(AUDIT)} LIKE '%NEW.archived_by := OLD.archived_by%'`, `'archived_by written back from OLD'`),
+});
 add("m69-audit-columns-granted.sql", {
   what: "BACKLOG-3474 PR 3: UPDATE and INSERT granted on updated_by and archived_by",
   targets: "c39",

@@ -10,14 +10,18 @@
 --                has no last editor. NULL after an UPDATE with no signed-in
 --                user (service role, SQL).
 --   archived_by  the user who archived the template. Set when archived_at goes
---                from NULL to a value, kept while it stays archived, cleared
---                when archived_at goes back to NULL (restore).
+--                from NULL to a value, cleared when archived_at goes back to
+--                NULL (restore). While the template stays archived the column
+--                is left as the UPDATE has it: clients cannot write it, so it
+--                keeps the archiver; the foreign key's ON DELETE SET NULL
+--                (deleting that user) is honoured, not overwritten.
 --
 -- created_by / created_at / updated_at / archived_at already exist.
 --
 -- Clients cannot write either column: neither is in the table's INSERT or
 -- UPDATE column grants, so a request naming one is refused with 42501. The
--- trigger ignores whatever a privileged writer sends and uses auth.uid().
+-- trigger overwrites updated_by with auth.uid() on every UPDATE; a privileged
+-- writer's archived_by is kept while the template stays archived.
 -- The trigger decides no authority: who may update the row is still RLS
 -- (can_edit_checklist_templates) and save_checklist_template's own check.
 --
@@ -47,8 +51,6 @@ BEGIN
     NEW.archived_by := NULL;
   ELSIF OLD.archived_at IS NULL THEN
     NEW.archived_by := auth.uid();
-  ELSE
-    NEW.archived_by := OLD.archived_by;
   END IF;
   RETURN NEW;
 END

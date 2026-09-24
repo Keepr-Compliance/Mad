@@ -104,12 +104,15 @@ describe('BACKLOG-3474 template audit fields migration', () => {
     expect(SQL).not.toMatch(/GRANT EXECUTE/i);
   });
 
-  it('sets updated_by from auth.uid() always; archived_by on archive, cleared on restore, kept otherwise', () => {
+  it('sets updated_by from auth.uid() always; archived_by on archive, cleared on restore, never written back from OLD', () => {
     const b = body(SQL);
     expect(b).toContain('NEW.updated_by := auth.uid();');
     expect(b).toMatch(/IF NEW\.archived_at IS NULL THEN\s+NEW\.archived_by := NULL;/);
     expect(b).toMatch(/ELSIF OLD\.archived_at IS NULL THEN\s+NEW\.archived_by := auth\.uid\(\);/);
-    expect(b).toMatch(/ELSE\s+NEW\.archived_by := OLD\.archived_by;/);
+    // Writing OLD.archived_by back would undo the foreign key's ON DELETE SET
+    // NULL, so deleting a user who archived a still-archived template fails.
+    expect(b).not.toMatch(/OLD\.archived_by/);
+    expect(b).not.toMatch(/\bELSE\b/);
   });
 
   it('names no role and no tier: authority stays with RLS and save_checklist_template', () => {

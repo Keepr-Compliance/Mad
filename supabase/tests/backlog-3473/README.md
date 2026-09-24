@@ -149,6 +149,7 @@ supabase/tests/backlog-3473/run.sh "$URL" gate                # every command as
 | C37 | PR 3: every save (order-only included) records the caller as `updated_by`; a new template has none; create sets `created_by` | m65, m67 |
 | C38 | PR 3: archive records `archived_by`; a save while archived keeps it; restore clears it; a second archive records its own archiver | m65, m66, m67, m68 |
 | C39 | PR 3: `updated_by` / `archived_by` are never client-writable (PRIV on UPDATE and INSERT) | m69 |
+| C40 | PR 3: deleting the archiver / the last editor succeeds and NULLs `archived_by` / `updated_by` (the FK's SET NULL is not written back) | m70 |
 
 ## Design decisions (written down, not improvised)
 
@@ -237,3 +238,13 @@ BACKLOG-3474 PR 3 (audit fields), 2026-09-24, same stack and role, reached throu
 | `mutants m65`–`m69` | each RED on its targets, as expected |
 | `mutants m5`, `m60`–`m64` (PR 2 regression) | 20 run, 0 not as expected |
 | `catalogue-teardown`, `sync-clean` | catalogue tables empty again; copied files removed |
+
+Re-run after SR review (archived_by no longer written back from OLD, so the FK's
+ON DELETE SET NULL holds), 2026-09-24, same stack:
+
+| Step | Result |
+|---|---|
+| `gate`, `apply-prod` | matched 252 / 0 / 0; `S1_ROWS=156 ONLY_IN_S1=0 ONLY_IN_S2=0` — GREEN |
+| `controls` | 47 green / 47 (c40 8 assertions) |
+| `mutants m65`–`m70` | each RED on its targets; m70 reds c40 with 23503 |
+| `mutants m5`, `m60`–`m64` | 20 run, 0 not as expected |

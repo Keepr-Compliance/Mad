@@ -15,8 +15,6 @@ BEGIN
     NEW.archived_by := OLD.archived_by;
   ELSIF OLD.archived_at IS NULL THEN
     NEW.archived_by := auth.uid();
-  ELSE
-    NEW.archived_by := OLD.archived_by;
   END IF;
   RETURN NEW;
 END
