@@ -87,6 +87,29 @@ describe("useTransactionChecklist (BACKLOG-3476)", () => {
     expect(result.current.detail).toBeNull();
   });
 
+  it("(b) no render ever pairs transaction B with A's checklist", async () => {
+    const detailFor = (id: string): ChecklistDetail => ({
+      ...fixtureDetail(),
+      checklist: { ...fixtureDetail().checklist, transactionId: id },
+    });
+    api().get.mockImplementation(({ transactionId }: { transactionId: string }) =>
+      Promise.resolve({ success: true, checklist: detailFor(transactionId) }),
+    );
+    const seen: Array<[string, string | undefined]> = [];
+    const { result, rerender } = renderHook(({ id }) => {
+      const r = useTransactionChecklist(id);
+      seen.push([id, r.detail?.checklist.transactionId]);
+      return r;
+    }, { initialProps: { id: "txn-A" } });
+    await waitFor(() => expect(result.current.detail?.checklist.transactionId).toBe("txn-A"));
+
+    rerender({ id: "txn-B" });
+    await waitFor(() => expect(result.current.detail?.checklist.transactionId).toBe("txn-B"));
+
+    const mismatched = seen.filter(([id, shown]) => shown !== undefined && shown !== id);
+    expect(mismatched).toEqual([]);
+  });
+
   it("(c) a second click on a pending checkbox makes no second write", async () => {
     const write = deferred<unknown>();
     api().setItemChecked.mockReturnValue(write.promise);

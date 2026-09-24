@@ -88,14 +88,15 @@ export function useTransactionChecklist(transactionId: string): UseTransactionCh
   // against it before it is allowed to render.
   const currentIdRef = useRef(transactionId);
   currentIdRef.current = transactionId;
-  // A newer `get` for the same transaction supersedes an older one.
+  // Every `get` takes a number; only the newest may store its answer. Switching
+  // transactions starts a new `get`, so this also drops A's late answer on B.
   const requestSeqRef = useRef(0);
   const pendingRef = useRef<Set<string>>(new Set());
 
   const load = useCallback(async (forId: string): Promise<void> => {
     const seq = ++requestSeqRef.current;
     const result = await checklistService.get(forId);
-    if (seq !== requestSeqRef.current || currentIdRef.current !== forId) return;
+    if (seq !== requestSeqRef.current) return;
     setStored({
       forId,
       value: result.success
@@ -189,6 +190,8 @@ export function useTransactionChecklist(transactionId: string): UseTransactionCh
   }, [afterWrite]);
 
   // An answer stored for a different transaction is not an answer for this one.
+  // Covers the render between the new id arriving and the effect resetting the
+  // store — without it that frame paints A's checklist under B's header.
   const state = stored.forId === transactionId ? stored.value : LOADING;
 
   return {
