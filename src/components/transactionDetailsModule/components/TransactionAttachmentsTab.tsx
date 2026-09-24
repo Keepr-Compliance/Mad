@@ -11,15 +11,16 @@
  * selection means "all" (robust when the available file-type buckets change
  * after a refetch).
  *
- * Preview reuses AttachmentPreviewModal. For a not-yet-downloaded EMAIL
- * attachment the tab first forces an on-demand download (reconciling the
- * metadata row in place — BACKLOG-1870) and then previews the refreshed row.
+ * Preview goes through `useAttachmentPreview` (shared with every other "View"
+ * on an attachment): a not-yet-downloaded EMAIL attachment is first downloaded
+ * on demand (reconciling the metadata row in place — BACKLOG-1870), then the
+ * refreshed row is previewed.
  */
 import React, { useMemo, useState, useCallback, useEffect, useRef } from "react";
 import { AttachmentCard } from "./AttachmentCard";
-import { AttachmentPreviewModal } from "./modals/AttachmentPreviewModal";
 import { GroupedMultiSelect, type OptionGroup } from "../../shared/GroupedMultiSelect";
 import type { UnifiedAttachment } from "../hooks/useTransactionAllAttachments";
+import { AttachmentPreviewHost, useAttachmentPreview } from "../hooks/useAttachmentPreview";
 import type { HighlightTarget } from "../types";
 import {
   getAttachmentTypeBucket,
@@ -27,18 +28,8 @@ import {
   ATTACHMENT_TYPE_ORDER,
   type AttachmentTypeBucket,
 } from "../utils/attachmentType";
-import logger from "../../../utils/logger";
 
 type SortKey = "date" | "name" | "size" | "type" | "source";
-
-/** Shape AttachmentPreviewModal expects (a subset of the unified row). */
-interface PreviewAttachment {
-  id: string;
-  filename: string;
-  mime_type: string | null;
-  file_size_bytes: number | null;
-  storage_path: string | null;
-}
 
 interface TransactionAttachmentsTabProps {
   /** Unified attachments linked to the transaction. */
@@ -82,16 +73,6 @@ const SOURCE_GROUPS: OptionGroup[] = SOURCE_OPTIONS.map((o) => ({
   children: [{ id: o.id, label: o.label }],
 }));
 
-function toPreview(a: UnifiedAttachment | PreviewAttachment): PreviewAttachment {
-  return {
-    id: a.id,
-    filename: a.filename,
-    mime_type: a.mime_type,
-    file_size_bytes: a.file_size_bytes,
-    storage_path: a.storage_path,
-  };
-}
-
 /**
  * Summary text for a filter trigger: "All" when nothing (or everything) is
  * selected, otherwise "N selected". Empty selection == no filter applied.
@@ -116,9 +97,10 @@ export function TransactionAttachmentsTab({
   const [selectedSources, setSelectedSources] = useState<Set<string>>(new Set());
   const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set());
   const [sortBy, setSortBy] = useState<SortKey>("date");
-  const [previewAttachment, setPreviewAttachment] = useState<PreviewAttachment | null>(null);
-  const [downloadingId, setDownloadingId] = useState<string | null>(null);
-  const [downloadMessage, setDownloadMessage] = useState<string | null>(null);
+  // The open flow (direct preview, or on-demand download first) is shared
+  // with every other "View" on an attachment.
+  const attachmentPreview = useAttachmentPreview(refresh);
+  const { open: handleOpen, downloadingId, message: downloadMessage } = attachmentPreview;
 
   // Which type buckets are actually present (drives which type options render).
   const presentBuckets = useMemo(() => {
@@ -230,65 +212,6 @@ export function TransactionAttachmentsTab({
     [filteredSorted],
   );
   const textCount = filteredSorted.length - emailCount;
-
-  const handleOpen = useCallback(
-    async (attachment: UnifiedAttachment) => {
-      setDownloadMessage(null);
-
-      // Already downloaded → preview directly.
-      if (attachment.storage_path) {
-        setPreviewAttachment(toPreview(attachment));
-        return;
-      }
-
-      // Text attachments get their bytes at sync time; if missing there is no
-      // on-demand path, so open the modal (it shows a "not downloaded" fallback).
-      if (attachment.source === "text" || !attachment.email_id) {
-        setPreviewAttachment(toPreview(attachment));
-        return;
-      }
-
-      // Email metadata-only row → force an on-demand download, then preview.
-      setDownloadingId(attachment.id);
-      try {
-        const result = await window.api.transactions.ensureEmailAttachmentDownloaded(
-          attachment.email_id,
-        );
-
-        if (result.downloadBlocked || result.offline) {
-          setDownloadMessage(
-            result.reason || "This attachment could not be downloaded.",
-          );
-          return;
-        }
-
-        const refreshed = (result.data || []).find((r) => r.id === attachment.id);
-        if (refreshed?.storage_path) {
-          setPreviewAttachment(toPreview(refreshed));
-          refresh?.();
-        } else {
-          setDownloadMessage("This attachment could not be downloaded.");
-        }
-      } catch (err) {
-        logger.error("On-demand attachment download failed:", err);
-        setDownloadMessage("This attachment could not be downloaded.");
-      } finally {
-        setDownloadingId(null);
-      }
-    },
-    [refresh],
-  );
-
-  const handleOpenWithSystem = useCallback(async (storagePath: string) => {
-    try {
-      const result = await window.api.transactions.openAttachment(storagePath);
-      if (!result.success) {
-        logger.error("Failed to open attachment:", result.error);
-      }
-    } catch (err) {
-      logger.error("Error opening attachment:", err);
-    }
-  }, []);
 
   // ---- Loading / error / empty states -----------------------------------
   if (loading) {
@@ -412,13 +335,7 @@ export function TransactionAttachmentsTab({
       )}
 
       {/* Preview modal */}
-      {previewAttachment && (
-        <AttachmentPreviewModal
-          attachment={previewAttachment}
-          onClose={() => setPreviewAttachment(null)}
-          onOpenWithSystem={handleOpenWithSystem}
-        />
-      )}
+      <AttachmentPreviewHost preview={attachmentPreview} />
     </div>
   );
 }
