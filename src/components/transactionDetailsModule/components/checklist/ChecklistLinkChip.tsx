@@ -1,0 +1,158 @@
+/**
+ * ChecklistLinkChip — BACKLOG-3476.
+ *
+ * One evidence group under a checklist item: an attachment, or an email
+ * thread. The label comes from main (`link.label`); nothing here derives it.
+ *
+ * Staleness (SR condition 7): a group is stale only when NO member is still on
+ * the transaction. A thread with some emails unlinked keeps its jump, aimed at
+ * the first email still there, and says how many left.
+ */
+import React, { useState } from "react";
+import type { ChecklistLink } from "../../../../../electron/types/checklist";
+import type { UnifiedAttachment } from "../../hooks/useTransactionAllAttachments";
+import type { EmailThread } from "../EmailThreadCard";
+import type { HighlightTarget, TransactionTab } from "../../types";
+import { chipState, plural } from "../../utils/checklistLinks";
+import { formatDate, formatFileSize } from "../../../../utils/formatUtils";
+
+interface ChecklistLinkChipProps {
+  link: ChecklistLink;
+  /** This transaction's attachments, for size and date. */
+  attachmentsById: ReadonlyMap<string, UnifiedAttachment>;
+  /** This transaction's email threads, for participants (empty until loaded). */
+  threads: EmailThread[];
+  readOnly: boolean;
+  onNavigate: (payload: { tab: TransactionTab; highlight?: HighlightTarget }) => void;
+  onRemove: (linkId: string) => Promise<void>;
+}
+
+const FILE_ICON =
+  "M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z";
+
+export function ChecklistLinkChip({
+  link,
+  attachmentsById,
+  threads,
+  readOnly,
+  onNavigate,
+  onRemove,
+}: ChecklistLinkChipProps): React.ReactElement {
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const { stale, staleCount, jumpTarget } = chipState(link);
+
+  let sub: string;
+  if (stale) {
+    sub = "No longer on this transaction";
+  } else if (link.kind === "attachment") {
+    const a = jumpTarget?.attachmentId ? attachmentsById.get(jumpTarget.attachmentId) : undefined;
+    sub = a ? `${formatFileSize(a.file_size_bytes)} · ${formatDate(a.source_date)}` : "";
+  } else {
+    const thread = threads.find((t) => t.emails.some((e) => e.id === jumpTarget?.emailId));
+    const who = thread ? thread.participants.slice(0, 2).join(", ") : "";
+    sub = [who, plural(link.members.length, "email")].filter(Boolean).join(" · ");
+  }
+
+  const jump = () => {
+    if (!jumpTarget) return;
+    if (link.kind === "attachment" && jumpTarget.attachmentId) {
+      onNavigate({ tab: "attachments", highlight: { type: "attachment", attachmentId: jumpTarget.attachmentId } });
+    } else if (link.kind === "email" && jumpTarget.emailId) {
+      onNavigate({ tab: "emails", highlight: { type: "email", emailId: jumpTarget.emailId } });
+    }
+  };
+
+  const remove = async () => {
+    setRemoving(true);
+    try {
+      await onRemove(link.id);
+    } finally {
+      setRemoving(false);
+      setConfirmingRemove(false);
+    }
+  };
+
+  return (
+    <div
+      className={`flex items-center gap-2.5 rounded-lg border px-2.5 py-2 ${
+        stale ? "bg-gray-50 border-gray-200 opacity-70" : "bg-white border-gray-200 hover:border-gray-300"
+      }`}
+      data-testid={`checklist-link-${link.id}`}
+      data-stale={stale ? "true" : "false"}
+    >
+      {link.kind === "attachment" ? (
+        <span className="w-8 h-8 rounded-lg inline-flex items-center justify-center flex-shrink-0 text-red-500 bg-red-50">
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={FILE_ICON} />
+          </svg>
+        </span>
+      ) : (
+        <span className="w-8 h-8 rounded-full inline-flex items-center justify-center flex-shrink-0 text-white font-semibold text-sm bg-gradient-to-br from-blue-500 to-indigo-600">
+          {(link.label.trim()[0] ?? "?").toUpperCase()}
+        </span>
+      )}
+      <span className="flex-1 min-w-0">
+        <span className="block text-sm font-medium text-gray-900 truncate">{link.label}</span>
+        {sub && <span className="block text-xs text-gray-400 truncate">{sub}</span>}
+        {!stale && staleCount > 0 && (
+          <span className="block text-xs text-gray-400 truncate" data-testid="checklist-link-partly-stale">
+            {staleCount} of {plural(link.members.length, "email")} no longer on this transaction
+          </span>
+        )}
+      </span>
+      {link.kind === "email" && (
+        <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-indigo-50 text-indigo-600 flex-shrink-0">
+          Thread
+        </span>
+      )}
+      {!stale && (
+        <button
+          type="button"
+          onClick={jump}
+          className="text-xs font-medium text-blue-600 hover:text-blue-800 whitespace-nowrap flex-shrink-0"
+          data-testid="checklist-link-jump"
+        >
+          {link.kind === "attachment" ? "Open in Attachments" : "Open in Emails"}
+        </button>
+      )}
+      {!readOnly && !confirmingRemove && (
+        <button
+          type="button"
+          onClick={() => setConfirmingRemove(true)}
+          aria-label={`Remove link ${link.label}`}
+          className="text-gray-400 hover:text-gray-600 flex-shrink-0 p-1"
+          data-testid="checklist-link-remove"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      )}
+      {!readOnly && confirmingRemove && (
+        <span className="flex items-center gap-2 flex-shrink-0 text-xs">
+          <span className="text-gray-500">Remove link?</span>
+          <button
+            type="button"
+            onClick={() => void remove()}
+            disabled={removing}
+            className="font-medium text-red-600 hover:text-red-800"
+            data-testid="checklist-link-remove-confirm"
+          >
+            Remove
+          </button>
+          <button
+            type="button"
+            onClick={() => setConfirmingRemove(false)}
+            disabled={removing}
+            className="font-medium text-gray-600 hover:text-gray-800"
+          >
+            Cancel
+          </button>
+        </span>
+      )}
+    </div>
+  );
+}
+
+export default ChecklistLinkChip;
