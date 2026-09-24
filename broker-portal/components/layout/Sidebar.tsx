@@ -18,10 +18,12 @@
  * bucket: it_admin never sees memberNavItems, and a broker never sees
  * adminNavItems, so either home would hide it from somebody who owns the data.
  *
- * BACKLOG-3474 adds Checklists for broker/admin/it_admin, after Submissions.
- * The layout decides `showChecklists` from lib/checklist-access.ts. it_admin
- * never sees memberNavItems, so it gets the entry through a second branch,
- * placed before the admin bucket. Hidden during impersonation.
+ * BACKLOG-3474 adds Checklists for broker/admin/it_admin, after Users (founder,
+ * 2026-09-24). The layout decides `showChecklists` from lib/checklist-access.ts.
+ * Users is in the admin bucket, which only admin and it_admin see, so the entry
+ * is inserted right after Users there. A broker has no admin bucket; it gets the
+ * entry through a second branch at the end of the member items — the slot Users
+ * would take. Hidden during impersonation.
  */
 
 import Link from 'next/link';
@@ -110,9 +112,9 @@ export function Sidebar({
   const showMemberNav = isImpersonating || role !== 'it_admin';
   const showAdminNav = !isImpersonating && (role === 'admin' || role === 'it_admin');
   const showChecklistsEntry = showChecklists && !isImpersonating;
-  const memberItems = showChecklistsEntry
-    ? insertAfter(memberNavItems, '/dashboard/submissions', checklistsNavItem)
-    : memberNavItems;
+  const adminItems = showChecklistsEntry
+    ? insertAfter(adminNavItems, '/dashboard/users', checklistsNavItem)
+    : adminNavItems;
 
   // BACKLOG-3077: shared resolution — the dashboard header names the same person.
   const name = resolveViewerName({ displayName, displayEmail }) || 'User';
@@ -180,9 +182,9 @@ export function Sidebar({
 
       {/* Navigation */}
       <nav className={`flex-1 py-4 space-y-1 overflow-y-auto scrollbar-hide ${collapsed ? 'px-2' : 'px-3'}`}>
-        {showMemberNav && memberItems.map(renderNavItem)}
-        {!showMemberNav && showChecklistsEntry && renderNavItem(checklistsNavItem)}
-        {showAdminNav && adminNavItems.map(renderNavItem)}
+        {showMemberNav && memberNavItems.map(renderNavItem)}
+        {!showAdminNav && showChecklistsEntry && renderNavItem(checklistsNavItem)}
+        {showAdminNav && adminItems.map(renderNavItem)}
         {personalNavItems.map(renderNavItem)}
       </nav>
 

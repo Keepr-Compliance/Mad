@@ -27,10 +27,17 @@ jest.mock('next/navigation', () => ({
   notFound: () => {
     throw new Error(NOT_FOUND);
   },
+  useRouter: () => ({ refresh: jest.fn(), push: jest.fn(), replace: jest.fn() }),
+}));
+// The list's client actions are never invoked here; the module is 'use server'.
+jest.mock('@/lib/actions/checklists', () => ({
+  archiveChecklistTemplate: jest.fn(),
+  restoreChecklistTemplate: jest.fn(),
 }));
 
 import ChecklistsPage from '@/app/dashboard/checklists/page';
-import { CHECKLIST_FEATURE_KEY } from '@/lib/checklist-access';
+import { CHECKLIST_EDITOR_ROLES, CHECKLIST_FEATURE_KEY } from '@/lib/checklist-access';
+import { CHECKLIST_LIST_SELECT } from '@/lib/checklists/listRows';
 import { ORG_WITHOUT_PLAN_FEATURES, withFeature } from '../../../fixtures/orgFeatures';
 import {
   FIXTURE_BROKERAGE_ORG_ID,
@@ -46,7 +53,23 @@ const FEATURE_OFF = withFeature(ORG_WITHOUT_PLAN_FEATURES, CHECKLIST_FEATURE_KEY
 /** pii-allow-uuid: invented fixture id */
 const OTHER_ORG_ID = '00000000-0000-4000-8000-0000003474ff';
 
-const template = (id: string, organization_id: string): Row => ({ id, organization_id });
+/**
+ * A checklist_templates row with its items embed, in the column set
+ * CHECKLIST_LIST_SELECT names. The emulator does not project, so the row
+ * carries organization_id for the `.eq` filter as the table does.
+ */
+const template = (id: string, organization_id: string, over: Partial<Row> = {}): Row => ({
+  id,
+  organization_id,
+  name: `Template ${id}`,
+  description: null,
+  seed_key: null,
+  archived_at: null,
+  updated_at: '2026-09-24T18:57:37.552806+00:00',
+  sort_order: 10,
+  checklist_template_items: [{ is_required: true }, { is_required: false }],
+  ...over,
+});
 
 interface Setup {
   role?: string;
@@ -115,7 +138,7 @@ describe('/dashboard/checklists — refuses with 404', () => {
 });
 
 describe('/dashboard/checklists — renders', () => {
-  it.each(['broker', 'admin', 'it_admin'])('the empty state for a %s with no templates', async (role) => {
+  it.each([...CHECKLIST_EDITOR_ROLES])('the empty state for a %s with no templates', async (role) => {
     setup({ role });
     render(await ChecklistsPage());
     expect(screen.getByRole('heading', { name: 'Checklists' })).toBeInTheDocument();
@@ -123,19 +146,51 @@ describe('/dashboard/checklists — renders', () => {
     expect(
       screen.getByText(/A template is the list of items an agent ticks off on a transaction/)
     ).toBeInTheDocument();
-    // No dead button in this cut.
-    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    // The one way forward from an empty list.
+    expect(screen.getByRole('link', { name: 'New template' })).toHaveAttribute('href', '/dashboard/checklists/new');
   });
 
   // A13: one row in the caller's org, one in another org.
-  it("counts only the caller's organization's templates [A13]", async () => {
+  it("lists only the caller's organization's templates [A13]", async () => {
     const { emu } = setup({
       templates: [template('t1', FIXTURE_BROKERAGE_ORG_ID), template('t2', OTHER_ORG_ID)],
     });
     render(await ChecklistsPage());
-    expect(screen.getByText('1 template')).toBeInTheDocument();
-    expect(screen.queryByText('No checklist templates yet')).not.toBeInTheDocument();
-    expect(emu.state.selects).toContainEqual({ table: 'checklist_templates', columns: 'id' });
+    expect(screen.getByRole('link', { name: 'Template t1' })).toHaveAttribute('href', '/dashboard/checklists/t1');
+    expect(screen.queryByText('Template t2')).not.toBeInTheDocument();
+    expect(screen.getByText('Showing 1 template · 1 active')).toBeInTheDocument();
+    expect(emu.state.selects).toContainEqual({ table: 'checklist_templates', columns: CHECKLIST_LIST_SELECT });
+  });
+
+  it('shows item and required counts, Seeded only for seeded rows, and Archived with Restore', async () => {
+    setup({
+      templates: [
+        template('a', FIXTURE_BROKERAGE_ORG_ID, { name: 'Seeded one', seed_key: 'residential', sort_order: 10 }),
+        template('b', FIXTURE_BROKERAGE_ORG_ID, {
+          name: 'Old one',
+          archived_at: '2026-09-01T00:00:00+00:00',
+          sort_order: 5,
+          checklist_template_items: [{ is_required: true }, { is_required: true }, { is_required: false }],
+        }),
+        template('c', FIXTURE_BROKERAGE_ORG_ID, { name: 'Own one', sort_order: 20, checklist_template_items: [] }),
+      ],
+    });
+    render(await ChecklistsPage());
+    const rows = screen.getAllByTestId('checklist-row');
+    // Active first (by sort_order), archived last even with a lower sort_order.
+    expect(rows.map((r) => r.querySelector('a')?.textContent)).toEqual(['Seeded one', 'Own one', 'Old one']);
+    const cells = (r: HTMLElement) => [...r.querySelectorAll('td')].map((td) => td.textContent);
+    expect(cells(rows[0]).slice(1, 3)).toEqual(['2', '1']);
+    expect(cells(rows[1]).slice(1, 3)).toEqual(['0', '0']);
+    expect(cells(rows[2]).slice(1, 3)).toEqual(['3', '2']);
+    expect(rows[0]).toHaveTextContent('Seeded');
+    expect(rows[1]).not.toHaveTextContent('Seeded');
+    expect(rows[2]).toHaveTextContent('Archived');
+    expect(screen.getByRole('button', { name: 'Restore Old one' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Archive Seeded one' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Archive Old one' })).not.toBeInTheDocument();
+    expect(screen.getByText('Showing 3 templates · 2 active')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'New template' })).toBeInTheDocument();
   });
 
   it('does not claim "no templates" when the read fails', async () => {
