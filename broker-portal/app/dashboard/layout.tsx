@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 import { getImpersonationSession } from '@/lib/impersonation';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { resolveViewerIdentity } from '@/lib/utils/userDisplay';
+import { isChecklistEditorEnabled } from '@/lib/checklist-access';
 
 async function getUserWithRole() {
   const supabase = await createClient();
@@ -43,6 +44,8 @@ export default async function DashboardLayout({
   // BACKLOG-3077: one resolution, shared with the dashboard header.
   const { displayName, displayEmail } = resolveViewerIdentity(impersonation, user);
   const displayRole = isImpersonating ? undefined : user?.role;
+  // BACKLOG-3474: the same gate the route and its actions use.
+  const showChecklists = !isImpersonating && (await isChecklistEditorEnabled());
 
   return (
     <DashboardShell
@@ -51,6 +54,7 @@ export default async function DashboardLayout({
       displayName={displayName}
       displayEmail={displayEmail}
       displayRole={displayRole}
+      showChecklists={showChecklists}
     >
       {children}
     </DashboardShell>

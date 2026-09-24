@@ -22,6 +22,7 @@ export interface DashboardShellProps {
   displayName?: string;
   displayEmail: string;
   displayRole?: string;
+  showChecklists?: boolean;
 }
 
 export function DashboardShell({
@@ -31,6 +32,7 @@ export function DashboardShell({
   displayName,
   displayEmail,
   displayRole,
+  showChecklists,
 }: DashboardShellProps) {
   const [collapsed, setCollapsed] = useState(false);
 
@@ -56,6 +58,7 @@ export function DashboardShell({
         displayName={displayName}
         displayEmail={displayEmail}
         displayRole={displayRole}
+        showChecklists={showChecklists}
       />
       <div className="flex-1 flex flex-col min-w-0">
         {/* Impersonation banner spans the content column so it never covers the sidebar */}

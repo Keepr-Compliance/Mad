@@ -17,6 +17,11 @@
  * account page through that flow. It could not be added to either existing
  * bucket: it_admin never sees memberNavItems, and a broker never sees
  * adminNavItems, so either home would hide it from somebody who owns the data.
+ *
+ * BACKLOG-3474 adds Checklists for broker/admin/it_admin, after Submissions.
+ * The layout decides `showChecklists` from lib/checklist-access.ts. it_admin
+ * never sees memberNavItems, so it gets the entry through a second branch,
+ * placed before the admin bucket. Hidden during impersonation.
  */
 
 import Link from 'next/link';
@@ -24,6 +29,7 @@ import { usePathname } from 'next/navigation';
 import {
   ChevronLeft,
   ChevronRight,
+  ClipboardCheck,
   Files,
   Headphones,
   LayoutDashboard,
@@ -56,6 +62,14 @@ const adminNavItems: NavItem[] = [
   { label: 'Org Settings', href: '/dashboard/settings', icon: Settings },
 ];
 
+const checklistsNavItem: NavItem = { label: 'Checklists', href: '/dashboard/checklists', icon: ClipboardCheck };
+
+/** A copy of `items` with `item` placed right after the entry with `href`. */
+export function insertAfter(items: NavItem[], href: string, item: NavItem): NavItem[] {
+  const i = items.findIndex((x) => x.href === href);
+  return i < 0 ? [...items, item] : [...items.slice(0, i + 1), item, ...items.slice(i + 1)];
+}
+
 /** Personal, not org policy. Shown to every role, impersonation included. */
 const personalNavItems: NavItem[] = [
   { label: 'My Account', href: '/dashboard/account', icon: UserCircle },
@@ -76,6 +90,8 @@ export interface SidebarProps {
   displayEmail: string;
   /** Role label shown in the footer; hidden during impersonation. */
   displayRole?: string;
+  /** BACKLOG-3474: the caller passes lib/checklist-access.ts (layout.tsx). */
+  showChecklists?: boolean;
 }
 
 export function Sidebar({
@@ -86,12 +102,17 @@ export function Sidebar({
   displayName,
   displayEmail,
   displayRole,
+  showChecklists = false,
 }: SidebarProps) {
   const pathname = usePathname();
 
   // BACKLOG-907: preserve the exact nav gating of the previous top-nav.
   const showMemberNav = isImpersonating || role !== 'it_admin';
   const showAdminNav = !isImpersonating && (role === 'admin' || role === 'it_admin');
+  const showChecklistsEntry = showChecklists && !isImpersonating;
+  const memberItems = showChecklistsEntry
+    ? insertAfter(memberNavItems, '/dashboard/submissions', checklistsNavItem)
+    : memberNavItems;
 
   // BACKLOG-3077: shared resolution — the dashboard header names the same person.
   const name = resolveViewerName({ displayName, displayEmail }) || 'User';
@@ -159,7 +180,8 @@ export function Sidebar({
 
       {/* Navigation */}
       <nav className={`flex-1 py-4 space-y-1 overflow-y-auto scrollbar-hide ${collapsed ? 'px-2' : 'px-3'}`}>
-        {showMemberNav && memberNavItems.map(renderNavItem)}
+        {showMemberNav && memberItems.map(renderNavItem)}
+        {!showMemberNav && showChecklistsEntry && renderNavItem(checklistsNavItem)}
         {showAdminNav && adminNavItems.map(renderNavItem)}
         {personalNavItems.map(renderNavItem)}
       </nav>
