@@ -26,6 +26,24 @@ describe("TransactionTabs (BACKLOG-322)", () => {
     expect(onTabChange).toHaveBeenCalledWith("attachments");
   });
 
+  // BACKLOG-3476: the Checklist tab is the caller's decision. Hidden unless
+  // told otherwise, so a caller that forgets the gate shows nothing.
+  it("hides the Checklist tab unless showChecklist is set", () => {
+    render(<TransactionTabs {...baseProps} />);
+    expect(screen.queryByTestId("tab-checklist")).not.toBeInTheDocument();
+  });
+
+  it("renders the Checklist tab after Attachments and fires onTabChange", () => {
+    const onTabChange = jest.fn();
+    render(<TransactionTabs {...baseProps} onTabChange={onTabChange} showChecklist />);
+    const tab = screen.getByTestId("tab-checklist");
+    expect(tab).toHaveTextContent("Checklist");
+    const buttons = screen.getAllByRole("button");
+    expect(buttons[buttons.length - 1]).toBe(tab);
+    fireEvent.click(tab);
+    expect(onTabChange).toHaveBeenCalledWith("checklist");
+  });
+
   it("does NOT render a count badge on the Attachments tab", () => {
     render(<TransactionTabs {...baseProps} />);
     expect(screen.queryByTestId("tab-attachments-badge")).not.toBeInTheDocument();

@@ -84,9 +84,11 @@ export interface TransactionDetailsProps {
  * - overview: Audit dates, AI suggestions, and contacts summary (default)
  * - messages: Text conversations
  * - emails: Email threads
- * - attachments: File attachments (hidden)
+ * - attachments: File attachments
+ * - checklist: the broker checklist (BACKLOG-3476). Only rendered when the
+ *   plan allows checklists, or when this transaction already has one.
  */
-export type TransactionTab = "overview" | "messages" | "emails" | "attachments";
+export type TransactionTab = "overview" | "messages" | "emails" | "attachments" | "checklist";
 
 /**
  * BACKLOG-1869: Transient deep-navigate target produced when the user clicks an
@@ -94,11 +96,16 @@ export type TransactionTab = "overview" | "messages" | "emails" | "attachments";
  * the matching conversation card, scrolls to it, and applies a brief highlight.
  */
 export interface HighlightTarget {
-  type: "email" | "text";
+  type: "email" | "text" | "attachment";
   /** For email: the communication/email id from LinkedContentEmailHit.id */
   emailId?: string;
   /** For text: the communication id from LinkedContentTextHit.id */
   communicationId?: string;
+  /**
+   * For attachment: `attachments.id`, the id a checklist chip carries
+   * (BACKLOG-3476). Consumed by the Attachments tab.
+   */
+  attachmentId?: string;
 }
 
 /**
