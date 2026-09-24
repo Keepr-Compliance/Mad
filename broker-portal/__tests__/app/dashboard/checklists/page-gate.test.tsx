@@ -38,6 +38,7 @@ jest.mock('@/lib/actions/checklists', () => ({
 import ChecklistsPage from '@/app/dashboard/checklists/page';
 import { CHECKLIST_EDITOR_ROLES, CHECKLIST_FEATURE_KEY } from '@/lib/checklist-access';
 import { CHECKLIST_LIST_SELECT } from '@/lib/checklists/listRows';
+import { AUDIT_USER_SELECT } from '@/lib/checklists/audit';
 import { ORG_WITHOUT_PLAN_FEATURES, withFeature } from '../../../fixtures/orgFeatures';
 import {
   FIXTURE_BROKERAGE_ORG_ID,
@@ -52,6 +53,8 @@ const FEATURE_OFF = withFeature(ORG_WITHOUT_PLAN_FEATURES, CHECKLIST_FEATURE_KEY
 
 /** pii-allow-uuid: invented fixture id */
 const OTHER_ORG_ID = '00000000-0000-4000-8000-0000003474ff';
+/** pii-allow-uuid: invented fixture id, a user the viewer cannot read */
+const GONE_USER_ID = '00000000-0000-4000-8000-0000003474ee';
 
 /**
  * A checklist_templates row with its items embed, in the column set
@@ -66,6 +69,7 @@ const template = (id: string, organization_id: string, over: Partial<Row> = {}):
   seed_key: null,
   archived_at: null,
   updated_at: '2026-09-24T18:57:37.552806+00:00',
+  updated_by: null,
   sort_order: 10,
   checklist_template_items: [{ is_required: true }, { is_required: false }],
   ...over,
@@ -77,6 +81,7 @@ interface Setup {
   templates?: Row[];
   impersonating?: boolean;
   templatesError?: boolean;
+  users?: Row[];
 }
 
 function setup(opts: Setup = {}) {
@@ -84,6 +89,7 @@ function setup(opts: Setup = {}) {
     rows: {
       organization_members: [brokerageMembership(opts.role ?? 'broker')],
       checklist_templates: opts.templates ?? [],
+      users: opts.users ?? [],
     },
   });
   const from = jest.fn((t: string) => {
@@ -191,6 +197,29 @@ describe('/dashboard/checklists — renders', () => {
     expect(screen.queryByRole('button', { name: 'Archive Old one' })).not.toBeInTheDocument();
     expect(screen.getByText('Showing 3 templates · 2 active')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'New template' })).toBeInTheDocument();
+  });
+
+  // BACKLOG-3474 PR 3: who last edited each template. The users row is in the
+  // column set AUDIT_USER_SELECT names (public.users: id, email, display_name,
+  // first_name, last_name); values are invented.
+  it('names the last editor, "a former member" for an unresolvable one, and no one for a null updated_by', async () => {
+    const { emu } = setup({
+      templates: [
+        template('a', FIXTURE_BROKERAGE_ORG_ID, { name: 'Edited by a member', sort_order: 10, updated_by: FIXTURE_USER_ID }),
+        template('b', FIXTURE_BROKERAGE_ORG_ID, { name: 'Edited by someone gone', sort_order: 20, updated_by: GONE_USER_ID }),
+        template('c', FIXTURE_BROKERAGE_ORG_ID, { name: 'Never edited', sort_order: 30 }),
+      ],
+      users: [{ id: FIXTURE_USER_ID, email: 'broker@example.test', display_name: 'Jane Doe', first_name: 'Jane', last_name: 'Doe' }],
+    });
+    render(await ChecklistsPage());
+    const rows = screen.getAllByTestId('checklist-row');
+    const lastEdited = (r: HTMLElement) => r.querySelectorAll('td')[3].textContent;
+    expect(lastEdited(rows[0])).toBe('Sep 24, 2026by Jane Doe');
+    expect(lastEdited(rows[1])).toBe('Sep 24, 2026by a former member');
+    expect(lastEdited(rows[2])).toBe('Sep 24, 2026');
+    expect(document.body.textContent).not.toContain(GONE_USER_ID);
+    expect(document.body.textContent).not.toContain(FIXTURE_USER_ID);
+    expect(emu.state.selects).toContainEqual({ table: 'users', columns: AUDIT_USER_SELECT });
   });
 
   it('does not claim "no templates" when the read fails', async () => {

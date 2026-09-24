@@ -49,6 +49,9 @@ MIG3="$REPO/supabase/migrations/20260921101758_backlog_3473_retire_unused_org_co
 # BACKLOG-3474: save_checklist_template. Loaded after file 3 in every control and
 # applied twice by apply-prod; never committed by `apply`.
 MIG4="$REPO/supabase/migrations/20260924190429_backlog_3474_save_checklist_template.sql"
+# BACKLOG-3474 PR 3: updated_by / archived_by and their trigger. Loaded right
+# after file 4 wherever file 4 is; never committed by `apply`.
+MIG5="$REPO/supabase/migrations/20260924224113_backlog_3474_template_audit_fields.sql"
 STAMP1="20260921101756"
 STAMP2="20260921101757"
 PSQL="${PSQL:-$(command -v psql || echo /opt/homebrew/opt/libpq/bin/psql)}"
@@ -83,6 +86,7 @@ run_control() {
       echo "\\i $MIG1"
       [ -z "$skip3" ] && echo "\\i $mig3"
       echo "\\i $MIG4"
+      echo "\\i $MIG5"
       echo "\\i $HERE/lib/fixtures-3474.sql"
       [ -n "$mutant" ] && echo "\\i $mutant"
       [ -n "$skip3" ] && echo "\\set mig3_sql \`cat '$mig3'\`"
@@ -116,6 +120,7 @@ apply_prod() {
     echo "\\i $f2"
     echo "\\i $f3"
     echo "\\i $MIG4"
+    echo "\\i $MIG5"
     # K3: the admin toggle lands AFTER apply 1 and BEFORE S1.
     echo "DO \$toggle\$ DECLARE n integer; BEGIN"
     echo "  UPDATE public.plan_features SET enabled = true"
@@ -129,6 +134,7 @@ apply_prod() {
     echo "\\i $f2"
     echo "\\i $f3"
     echo "\\i $MIG4"
+    echo "\\i $MIG5"
     echo "CREATE TEMP TABLE t3473_s2 AS SELECT * FROM pg_temp.catalog_snapshot();"
     echo "SELECT 'S1_ROWS=' || (SELECT count(*) FROM t3473_s1)"
     echo "    || ' ONLY_IN_S1=' || (SELECT count(*) FROM (SELECT * FROM t3473_s1 EXCEPT SELECT * FROM t3473_s2) d)"

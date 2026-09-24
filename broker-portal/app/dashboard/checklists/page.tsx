@@ -25,6 +25,7 @@ import {
   toListRows,
   type TemplateListRecord,
 } from '@/lib/checklists/listRows';
+import { auditUserIds, resolveAuditNames } from '@/lib/checklists/audit';
 import ChecklistsListClient from './ChecklistsListClient';
 
 function NewTemplateLink() {
@@ -50,7 +51,9 @@ export default async function ChecklistsPage() {
     .eq('organization_id', access.organizationId);
 
   const failed = Boolean(error) || !Array.isArray(templates);
-  const rows = failed ? [] : toListRows(templates as unknown as TemplateListRecord[]);
+  const records = failed ? [] : (templates as unknown as TemplateListRecord[]);
+  const names = await resolveAuditNames(access.supabase, auditUserIds(...records.map((r) => r.updated_by)));
+  const rows = toListRows(records, names);
 
   return (
     <div className="space-y-6">

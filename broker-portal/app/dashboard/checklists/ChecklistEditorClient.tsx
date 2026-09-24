@@ -39,6 +39,7 @@ import {
   FieldHelp,
 } from '@keepr/design-system';
 import { saveChecklistTemplate } from '@/lib/actions/checklists';
+import { auditText, type TemplateAudit } from '@/lib/checklists/audit';
 import {
   ANY_DOCUMENT_TYPE_LABEL,
   CHECKLIST_DOCUMENT_TYPES,
@@ -69,6 +70,8 @@ export interface ChecklistEditorClientProps {
   archived: boolean;
   template: { name: string; description: string | null } | null;
   items: TemplateItemRow[];
+  /** Created / last edited / archived, names already resolved. Absent for a new template. */
+  audit?: TemplateAudit | null;
 }
 
 const LIST_PATH = '/dashboard/checklists';
@@ -93,6 +96,7 @@ export default function ChecklistEditorClient({
   archived,
   template,
   items: itemRows,
+  audit = null,
 }: ChecklistEditorClientProps) {
   const router = useRouter();
   const [initial, setInitial] = useState<EditorState>(() => initialState(template, itemRows));
@@ -105,8 +109,9 @@ export default function ChecklistEditorClient({
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [overIndex, setOverIndex] = useState<number | null>(null);
   const keySeq = useRef(1);
-  const focusKey = useRef<string | null>(null);
+  const focusTarget = useRef<{ key: string; field: 'grip' | 'title' } | null>(null);
   const gripRefs = useRef(new Map<string, HTMLButtonElement>());
+  const titleRefs = useRef(new Map<string, HTMLTableCellElement>());
 
   const dirty = isDirty(initial, state);
   const payload = useMemo(() => toSavePayload(state), [state]);
@@ -125,12 +130,15 @@ export default function ChecklistEditorClient({
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [dirty]);
 
-  // Keep keyboard focus on the grip of the item that just moved.
+  // Keep keyboard focus on the grip of the item that just moved, and put it in
+  // the title of an item just added (otherwise it stays on "Add item", and a
+  // space typed next presses the button again).
   useEffect(() => {
-    if (focusKey.current) {
-      gripRefs.current.get(focusKey.current)?.focus();
-      focusKey.current = null;
-    }
+    const target = focusTarget.current;
+    if (!target) return;
+    focusTarget.current = null;
+    if (target.field === 'grip') gripRefs.current.get(target.key)?.focus();
+    else titleRefs.current.get(target.key)?.querySelector('input')?.focus();
   }, [state.items]);
 
   function edit(next: EditorState) {
@@ -139,7 +147,7 @@ export default function ChecklistEditorClient({
   }
 
   function move(from: number, to: number, key?: string) {
-    if (key) focusKey.current = key;
+    if (key) focusTarget.current = { key, field: 'grip' };
     edit(moveItem(state, from, to));
   }
 
@@ -194,6 +202,15 @@ export default function ChecklistEditorClient({
   }
 
   const saveDisabled = !dirty || saving;
+  const auditLine = audit
+    ? [
+        auditText('Created', audit.created),
+        auditText('Last edited', audit.edited),
+        audit.archived ? auditText('Archived', audit.archived) : '',
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : '';
   const title = state.name.trim() || (templateId === null ? 'New template' : 'Untitled template');
 
   const actions = (
@@ -217,6 +234,11 @@ export default function ChecklistEditorClient({
           <p className="mt-1 text-sm text-gray-500">
             Checklist template · {state.items.length} {state.items.length === 1 ? 'item' : 'items'}, {requiredCount} required
           </p>
+          {auditLine && (
+            <p data-testid="checklist-audit" className="mt-1 text-xs text-gray-500">
+              {auditLine}
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-3">{actions}</div>
       </div>
@@ -343,7 +365,13 @@ export default function ChecklistEditorClient({
                           <GripVertical className="h-4 w-4" aria-hidden="true" />
                         </button>
                       </td>
-                      <td className="block md:table-cell md:px-4 md:py-2 md:align-top">
+                      <td
+                        className="block md:table-cell md:px-4 md:py-2 md:align-top"
+                        ref={(el) => {
+                          if (el) titleRefs.current.set(item.key, el);
+                          else titleRefs.current.delete(item.key);
+                        }}
+                      >
                         <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-gray-500 md:hidden">
                           Item
                         </span>
@@ -424,7 +452,11 @@ export default function ChecklistEditorClient({
               <Button
                 variant="secondary"
                 size="xs"
-                onClick={() => edit(addItem(state, `new-${keySeq.current++}`))}
+                onClick={() => {
+                  const key = `new-${keySeq.current++}`;
+                  focusTarget.current = { key, field: 'title' };
+                  edit(addItem(state, key));
+                }}
               >
                 <Plus className="h-3 w-3" aria-hidden="true" />
                 Add item
