@@ -43,12 +43,16 @@ export function linkableAttachments(attachments: UnifiedAttachment[]): UnifiedAt
  * - `transactions:getCommunications(txn, "email")` reads
  *   `getCommunicationsWithMessages` (`communicationDbService.ts:824`), which
  *   selects from `communications` only. Emails found by the scan and waiting
- *   for review live in a different table, `pending_review_communications`
- *   (`reviewStateSql.ts:13-15`), so they are never in this list.
- * - The review queue's LEGACY arm — `communications` rows whose
- *   `match_reason = 'address_missing'` — IS in this list. The Emails tab drops
- *   those threads with `threadMatchReason(t) !== "needs_review"`
+ *   for review live in the review queue's own table (the three-table note at
+ *   `reviewStateSql.ts:13-15`), so they are never in this list.
+ * - The review queue's LEGACY arm — linked rows the matcher could not justify
+ *   by address — IS in this list. The Emails tab drops threads made only of
+ *   those with `threadMatchReason(t) !== "needs_review"`
  *   (`TransactionEmailsTab.tsx:352-355`), and so does this.
+ *
+ * Both stores are described in prose, not named: the review state has one
+ * read path, and `reviewStateService.singleReadPath-2791.test.ts` fails any
+ * other shipped file that spells the table or the predicate.
  *
  * Grouping is the tab's own (`processEmailThreads`): `thread_id` first, the
  * normalized subject when it is NULL, one group per email otherwise.
