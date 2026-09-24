@@ -36,7 +36,7 @@ jest.mock('@/lib/actions/checklists', () => ({
 }));
 
 import ChecklistsPage from '@/app/dashboard/checklists/page';
-import { CHECKLIST_FEATURE_KEY } from '@/lib/checklist-access';
+import { CHECKLIST_EDITOR_ROLES, CHECKLIST_FEATURE_KEY } from '@/lib/checklist-access';
 import { CHECKLIST_LIST_SELECT } from '@/lib/checklists/listRows';
 import { ORG_WITHOUT_PLAN_FEATURES, withFeature } from '../../../fixtures/orgFeatures';
 import {
@@ -138,7 +138,7 @@ describe('/dashboard/checklists — refuses with 404', () => {
 });
 
 describe('/dashboard/checklists — renders', () => {
-  it.each(['broker', 'admin', 'it_admin'])('the empty state for a %s with no templates', async (role) => {
+  it.each([...CHECKLIST_EDITOR_ROLES])('the empty state for a %s with no templates', async (role) => {
     setup({ role });
     render(await ChecklistsPage());
     expect(screen.getByRole('heading', { name: 'Checklists' })).toBeInTheDocument();

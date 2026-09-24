@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# A `psql` stand-in for run.sh when the NAS test stack answers SSH but not its
-# tailnet Postgres port (BACKLOG-3474 PR 2, 2026-09-24: `nc -z <tailnet> 54322`
-# fails from the Mac, and the NAS sshd has AllowTcpForwarding no, so no tunnel).
+# A `psql` stand-in for run.sh when the NAS test stack answers SSH only
+# (BACKLOG-3474 PR 2, 2026-09-24).
 #
-#   export KEEPR_NAS_VENUE_URL="$NAS_URL"
+#   export KEEPR_NAS_VENUE_URL="$NAS_URL" KEEPR_NAS_SSH_HOST=<ssh alias> KEEPR_NAS_DB_CONTAINER=<db container>
 #   PSQL="$PWD/supabase/tests/backlog-3473/lib/ssh-psql.sh" \
 #     supabase/tests/backlog-3473/run.sh "$NAS_URL" controls
 #
@@ -24,8 +23,13 @@ set -euo pipefail
 # The one URL this wrapper will serve. Set it to the venue's real postgres URL
 # (the same value passed to run.sh); there is no default.
 VENUE_URL="${KEEPR_NAS_VENUE_URL:-}"
-SSH_HOST="${KEEPR_NAS_SSH_HOST:-ugreen}"
-CONTAINER="${KEEPR_NAS_DB_CONTAINER:-supabase_db_keepr-test}"
+# The SSH host alias and the DB container name, from the environment; no defaults.
+SSH_HOST="${KEEPR_NAS_SSH_HOST:-}"
+CONTAINER="${KEEPR_NAS_DB_CONTAINER:-}"
+if [ -z "$SSH_HOST" ] || [ -z "$CONTAINER" ]; then
+  echo "ssh-psql: set KEEPR_NAS_SSH_HOST and KEEPR_NAS_DB_CONTAINER" >&2
+  exit 2
+fi
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../../../.." && pwd)"
 SSH=(ssh -o BatchMode=yes -o ConnectTimeout=8 "$SSH_HOST")

@@ -26,9 +26,10 @@ jest.mock('next/navigation', () => ({
 }));
 
 import { Sidebar, insertAfter } from '@/components/layout/Sidebar';
+import { CHECKLIST_EDITOR_ROLES } from '@/lib/checklist-access';
 
 const ALL_ROLES = ['agent', 'broker', 'admin', 'it_admin', undefined] as const;
-const EDITOR_ROLES = ['broker', 'admin', 'it_admin'] as const;
+const EDITOR_ROLES = [...CHECKLIST_EDITOR_ROLES];
 const CHECKLISTS = 'Checklists';
 const HREF = '/dashboard/checklists';
 

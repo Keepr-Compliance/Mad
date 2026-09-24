@@ -64,13 +64,12 @@ every feature that carries a min_tier; there is no scope setting.
 
 ## Reaching the NAS venue over SSH (BACKLOG-3474, 2026-09-24)
 
-On 2026-09-24 the NAS stack's tailnet Postgres port did not answer from the Mac
-(`nc -z <tailnet ip> 54322` exit 1) and its sshd refuses port forwarding, so no
-tunnel either. `lib/ssh-psql.sh` stands in for `psql`:
+On 2026-09-24 the NAS stack answered SSH only. `lib/ssh-psql.sh` stands in for `psql`:
 
 ```bash
-URL='postgresql://postgres@<nas tailnet ip>:54322/postgres'   # the venue's real URL
+URL='postgresql://postgres@<venue host>:<port>/postgres'       # the venue's real URL
 export KEEPR_NAS_VENUE_URL="$URL"                             # the only URL the wrapper serves
+export KEEPR_NAS_SSH_HOST=<ssh alias> KEEPR_NAS_DB_CONTAINER=<db container>
 export PSQL="$PWD/supabase/tests/backlog-3473/lib/ssh-psql.sh"
 supabase/tests/backlog-3473/run.sh "$URL" gate                # every command as before
 "$PSQL" sync-clean                                            # last: remove the copied files
