@@ -375,6 +375,110 @@ jobs:
           echo ".env.production created with $($content.Split("`n").Count) lines"
         shell: pwsh
 
+      # BACKLOG-3533. makensis embeds its plugin DLLs into the installer and the
+      # uninstaller verbatim, and electron-builder has no option to sign them. This
+      # step resolves the same two NSIS bundles electron-builder would use (through
+      # its own downloader, which verifies the pinned sha256), copies them to
+      # RUNNER_TEMP, signs the plugin DLLs the installer uses, and points
+      # electron-builder at the copies via ELECTRON_BUILDER_NSIS_DIR and
+      # ELECTRON_BUILDER_NSIS_RESOURCES_DIR. The PE signature check after packaging
+      # fails if any plugin DLL in the installer or uninstaller is left unsigned.
+      - name: Sign NSIS plugin DLLs (BACKLOG-3533)
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_ENDPOINT: ${{ secrets.AZURE_ENDPOINT }}
+          AZURE_CODE_SIGNING_ACCOUNT: ${{ secrets.AZURE_CODE_SIGNING_ACCOUNT }}
+          AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          foreach ($v in "AZURE_TENANT_ID","AZURE_CLIENT_ID","AZURE_CLIENT_SECRET","AZURE_ENDPOINT","AZURE_CODE_SIGNING_ACCOUNT","AZURE_CERT_PROFILE") {
+            if (-not (Test-Path "env:$v") -or [string]::IsNullOrEmpty((Get-Item "env:$v").Value)) {
+              echo "::error::Missing required Azure Trusted Signing secret: $v"
+              exit 1
+            }
+          }
+
+          # The bundles this step signs must be the ones electron-builder is pinned
+          # to. If an upgrade changes a pin, stop here instead of signing stale copies.
+          $pins = @(
+            "9877df902530f96357d13a7a31ae2b9df67f48b11ffc9a1700a7c961574ec5fa",  # nsis-3.0.4.1.7z
+            "593a9a92ef958321293ac6a2ee61e64bf1bd543142a5bd6b3d310709cc924103"   # nsis-resources-3.4.1.7z
+          )
+          $toolset = Get-Content -Raw node_modules/app-builder-lib/out/toolsets/windows.js
+          foreach ($p in $pins) {
+            if (-not $toolset.Contains($p)) {
+              echo "::error::electron-builder's NSIS pin $p is gone from toolsets/windows.js -- update this step"
+              exit 1
+            }
+          }
+
+          # Resolve (download + checksum-verify) both bundles with electron-builder's
+          # own code, exactly as the packaging step would.
+          $json = node -e "require('app-builder-lib'); const w = require('app-builder-lib/out/toolsets/windows.js'); (async () => { const m = await w.getMakeNsisPath(undefined, undefined); const p = await w.getNsisPluginsPath(undefined, undefined); console.log('NSIS_PATHS=' + JSON.stringify({ nsisDir: m.env.NSISDIR, pluginsDir: p })); })().catch(e => { console.error(e); process.exit(1); })"
+          if ($LASTEXITCODE -ne 0) { Write-Error "Could not resolve the NSIS bundles"; exit 1 }
+          $line = @($json | Where-Object { $_ -like "NSIS_PATHS=*" })
+          if ($line.Count -ne 1) { Write-Error "NSIS path resolution printed no result"; exit 1 }
+          $paths = $line[0].Substring("NSIS_PATHS=".Length) | ConvertFrom-Json
+          $srcNsis = $paths.nsisDir
+          $srcRes = Split-Path -Parent $paths.pluginsDir
+          echo "NSIS bundle:           $srcNsis"
+          echo "NSIS resources bundle: $srcRes"
+
+          $root = Join-Path $env:RUNNER_TEMP "nsis-signed"
+          $dstNsis = Join-Path $root "nsis"
+          $dstRes = Join-Path $root "nsis-resources"
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          Copy-Item -LiteralPath $srcNsis -Destination $dstNsis -Recurse
+          Copy-Item -LiteralPath $srcRes -Destination $dstRes -Recurse
+          if (-not (Test-Path -LiteralPath (Join-Path $dstNsis "Bin/makensis.exe"))) { Write-Error "Bin/makensis.exe missing from the copied NSIS bundle"; exit 1 }
+
+          # The plugins the installer and uninstaller embed (measured on v2.38.1).
+          $targets = @(
+            (Join-Path $dstNsis "Plugins/x86-unicode/nsExec.dll"),
+            (Join-Path $dstNsis "Plugins/x86-unicode/System.dll"),
+            (Join-Path $dstRes "plugins/x86-unicode/nsis7z.dll"),
+            (Join-Path $dstRes "plugins/x86-unicode/SpiderBanner.dll"),
+            (Join-Path $dstRes "plugins/x86-unicode/StdUtils.dll"),
+            (Join-Path $dstRes "plugins/x86-unicode/WinShell.dll")
+          )
+          foreach ($t in $targets) {
+            if (-not (Test-Path -LiteralPath $t -PathType Leaf)) { Write-Error "Plugin not found: $t"; exit 1 }
+          }
+
+          try {
+            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser | Out-Null
+          } catch {
+            echo "NuGet provider install skipped: $($_.Exception.Message)"
+          }
+          Install-Module -Name TrustedSigning -MinimumVersion 0.5.0 -Force -Repository PSGallery -Scope CurrentUser
+
+          Invoke-TrustedSigning `
+            -Endpoint $env:AZURE_ENDPOINT `
+            -CodeSigningAccountName $env:AZURE_CODE_SIGNING_ACCOUNT `
+            -CertificateProfileName $env:AZURE_CERT_PROFILE `
+            -FileDigest SHA256 `
+            -TimestampRfc3161 "http://timestamp.acs.microsoft.com" `
+            -TimestampDigest SHA256 `
+            -Files ($targets -join ",")
+
+          # Invoke-TrustedSigning can report a failure without throwing; check here.
+          $failed = 0
+          foreach ($t in $targets) {
+            $sig = Get-AuthenticodeSignature -LiteralPath $t
+            $signer = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { "" }
+            echo ("{0,-10} {1}  | {2}" -f $sig.Status, $t, $signer)
+            if ($sig.Status -ne "Valid") { $failed++ }
+          }
+          if ($failed -gt 0) { Write-Error "$failed NSIS plugin DLL(s) are not Valid after signing"; exit 1 }
+
+          "ELECTRON_BUILDER_NSIS_DIR=$dstNsis" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ELECTRON_BUILDER_NSIS_RESOURCES_DIR=$dstRes" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          echo "electron-builder will use the signed NSIS bundles in $root"
+
       # BACKLOG-1921: full-chain Windows signing DURING the electron-builder build.
       # Previously we packaged UNSIGNED here and signed only the outer installer in a
       # separate post-build `azure/trusted-signing-action` step. That left the app's
