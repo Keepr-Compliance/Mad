@@ -36,6 +36,11 @@ export const fixtureDetailWithoutLinks = (): ChecklistDetail => ({ ...fixtureDet
  * Two templates in the shape `checklists:list-templates` answers — transcribed
  * from the D1 capture already pinned in `checklistTemplateService-3475.test.ts`
  * (field set and ordering), with generic names.
+ *
+ * Producer proof: that suite's C13-A ("the D1 capture, read live",
+ * `checklistTemplateService-3475.test.ts:244-267`) runs the real cloud mapper
+ * over the capture and pins its output field by field. The fields below are
+ * exactly those fields.
  */
 export const fixtureTemplates = (): ChecklistTemplate[] => [
   {

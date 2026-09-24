@@ -61,7 +61,9 @@ describe("ChecklistLinkChip (BACKLOG-3476)", () => {
   });
 
   it("partly stale thread: still live, jumps to the member still on the transaction, says how many left", () => {
-    // Fixture: e-solo-2 was unlinked from the transaction, e-solo-1 was not.
+    // Fixture: e-solo-1 was unlinked from the transaction, e-solo-2 was not.
+    // Members sort by id, so the stale one is members[0]: a jump aimed at
+    // members[0] instead of the first live member goes red here.
     const { chip, onNavigate } = renderChip(2);
     expect(chip).toHaveAttribute("data-stale", "false");
     expect(screen.getByTestId("checklist-link-partly-stale")).toHaveTextContent(
@@ -70,7 +72,7 @@ describe("ChecklistLinkChip (BACKLOG-3476)", () => {
     fireEvent.click(screen.getByText("Open in Emails"));
     expect(onNavigate).toHaveBeenCalledWith({
       tab: "emails",
-      highlight: { type: "email", emailId: "e-solo-1" },
+      highlight: { type: "email", emailId: "e-solo-2" },
     });
   });
 

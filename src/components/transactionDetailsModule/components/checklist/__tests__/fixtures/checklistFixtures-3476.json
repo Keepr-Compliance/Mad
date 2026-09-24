@@ -118,7 +118,7 @@
               "kind": "email",
               "attachmentId": null,
               "emailId": "e-solo-1",
-              "inTransaction": true
+              "inTransaction": false
             },
             {
               "id": "id-13",
@@ -126,7 +126,7 @@
               "kind": "email",
               "attachmentId": null,
               "emailId": "e-solo-2",
-              "inTransaction": false
+              "inTransaction": true
             }
           ]
         }
@@ -192,12 +192,12 @@
       "file_size_bytes": 1258291,
       "storage_path": null,
       "created_at": "2026-03-10T12:00:00.000Z",
-      "email_id": "e-solo-1",
+      "email_id": "e-solo-2",
       "message_id": null,
-      "source_date": "2026-03-03T10:00:00Z",
+      "source_date": "2026-03-04T10:00:00Z",
       "direction": null,
-      "context_subject": "Probe solo",
-      "context_sender": "sender-a@example.test",
+      "context_subject": "Re: Probe solo",
+      "context_sender": "sender-b@example.test",
       "source": "email"
     },
     {
@@ -254,12 +254,12 @@
       "attachment_count": 0
     },
     {
-      "id": "e-solo-1",
-      "communication_id": "cm-3",
+      "id": "e-solo-2",
+      "communication_id": "cm-4",
       "user_id": "user-3476",
       "transaction_id": "txn-1",
       "message_id": null,
-      "email_id": "e-solo-1",
+      "email_id": "e-solo-2",
       "link_source": "manual",
       "link_confidence": null,
       "match_reason": null,
@@ -270,17 +270,17 @@
       "body_text": null,
       "body_plain": null,
       "body": null,
-      "subject": "Probe solo",
-      "sender": "sender-a@example.test",
+      "subject": "Re: Probe solo",
+      "sender": "sender-b@example.test",
       "recipients": "agent@example.test",
-      "sent_at": "2026-03-03T10:00:00Z",
+      "sent_at": "2026-03-04T10:00:00Z",
       "received_at": null,
       "has_attachments": 0,
       "thread_id": null,
       "participants": null,
       "thread_display_name": null,
       "direction": null,
-      "external_id": "ext-e-solo-1",
+      "external_id": "ext-e-solo-2",
       "associated_message_type": null,
       "associated_message_guid": null,
       "hidden_from_export": 0,

@@ -110,14 +110,14 @@ describe("C-M — a conversation is linked whole, grouped as the Emails tab grou
     expect([...req.targetIds].sort()).toEqual(["e-thread-1", "e-thread-2"]);
   });
 
-  it("NULL thread_id, subjects differing by Fwd: → one group by normalized subject", async () => {
+  it("NULL thread_id, subjects differing by Re:/Fwd: → one group by normalized subject", async () => {
     const { onLink } = renderPicker();
     await settle();
     const row = screen.getByTestId(/^checklist-picker-thread-subject-/);
     fireEvent.click(row);
     fireEvent.click(screen.getByTestId("checklist-picker-link"));
     await waitFor(() => expect(onLink).toHaveBeenCalledTimes(1));
-    expect([...onLink.mock.calls[0][0][0].targetIds].sort()).toEqual(["e-solo-1", "e-solo-3"]);
+    expect([...onLink.mock.calls[0][0][0].targetIds].sort()).toEqual(["e-solo-2", "e-solo-3"]);
   });
 
   it("an attachment is its own group of one", async () => {

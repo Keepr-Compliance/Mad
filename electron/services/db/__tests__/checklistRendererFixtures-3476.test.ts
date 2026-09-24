@@ -29,7 +29,8 @@
  *   item 1  required, ticked, one attachment link
  *   item 2  required, not ticked, a thread link whose members share a thread_id
  *   item 3  optional, ticked, a note, a thread link PARTLY stale (one of two
- *           emails was unlinked from the transaction afterwards)
+ *           emails, e-solo-1, the first by id, was unlinked from the
+ *           transaction afterwards)
  *   item 4  optional, not ticked, a link FULLY stale (its only email unlinked)
  * so requiredDone = 1 of 2 while two items are ticked — the case a renderer
  * counting ticks itself gets wrong.
@@ -116,7 +117,7 @@ function seed(): void {
 
   run(
     `INSERT INTO attachments (id, email_id, filename, mime_type, file_size_bytes)
-     VALUES ('att-1', 'e-solo-1', 'probe-document.pdf', 'application/pdf', 1258291),
+     VALUES ('att-1', 'e-solo-2', 'probe-document.pdf', 'application/pdf', 1258291),
             ('att-2', 'e-thread-1', 'probe-photo.jpg', 'image/jpeg', 204800)`,
   );
 
@@ -220,7 +221,11 @@ async function produce(): Promise<unknown> {
 
   // Unlinked from the transaction AFTER being linked to the checklist: the
   // evidence survives, so the members go stale rather than vanishing.
-  run(`DELETE FROM communications WHERE id IN ('cm-4', 'cm-5')`);
+  // cm-3 (e-solo-1), not cm-4: members sort by id, so the STALE member of
+  // item 3's link comes first. A chip that jumps to members[0] then aims at an
+  // email no longer on the transaction, and the chip control sees it (SR B2).
+  // att-1 hangs off e-solo-2 so it stays on the transaction.
+  run(`DELETE FROM communications WHERE id IN ('cm-3', 'cm-5')`);
 
   return normalize({
     checklistDetail: stableOrder((await getChecklistForTransaction("txn-1"))!),
