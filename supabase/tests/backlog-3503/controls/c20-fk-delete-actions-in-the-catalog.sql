@@ -1,4 +1,4 @@
--- C20: the five foreign keys exist and every one is ON DELETE NO ACTION, read
+-- C20: the three foreign keys exist and every one is ON DELETE NO ACTION, read
 -- off the catalog rather than inferred from a refusal.
 --
 -- Why it is a separate file from C19. It started life as C19's last assertion.
@@ -22,9 +22,7 @@ DECLARE k text; d char;
 BEGIN
   FOREACH k IN ARRAY ARRAY['agent_split_agreements_org_fkey',
                            'agent_split_agreements_agent_fkey',
-                           'agent_split_agreements_set_by_fkey',
-                           'organization_franchise_fees_org_fkey',
-                           'organization_franchise_fees_set_by_fkey'] LOOP
+                           'agent_split_agreements_set_by_fkey'] LOOP
     SELECT confdeltype INTO d FROM pg_constraint WHERE conname = k AND contype = 'f';
     PERFORM pg_temp.check(d = 'a',
       format('%s is a foreign key ON DELETE NO ACTION, got %s', k, coalesce(d::text, 'no such constraint')));
@@ -32,7 +30,7 @@ BEGIN
   -- and nothing else in this migration carries a delete action at all
   PERFORM pg_temp.check(
     (SELECT count(*) FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid
-      WHERE t.relname IN ('agent_split_agreements','organization_franchise_fees')
-        AND c.contype = 'f') = 5,
-    'the two tables carry exactly five foreign keys between them');
+      WHERE t.relname = 'agent_split_agreements'
+        AND c.contype = 'f') = 3,
+    'the table carries exactly three foreign keys');
 END $$;

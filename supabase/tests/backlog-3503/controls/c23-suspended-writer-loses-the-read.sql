@@ -1,5 +1,5 @@
--- C23: a DEACTIVATED broker, and a DEACTIVATED admin, read nothing on EITHER
--- table -- while the ACTIVE broker of the same organization reads everything.
+-- C23: a DEACTIVATED broker, and a DEACTIVATED admin, read nothing --
+-- while the ACTIVE broker of the same organization reads everything.
 --
 -- The founder's ruling, applied to the people who set pay: "no no accese if they
 -- are deactivted" was said about agents, and the person who decides an agent's
@@ -37,12 +37,9 @@ BEGIN
   SELECT count(*) INTO n FROM public.agent_split_agreements
    WHERE organization_id = current_setting('t3503.o_a')::uuid;
   PERFORM pg_temp.check(n = 7, format('precondition: org A holds 7 agreement rows, got %s', n));
-  SELECT count(*) INTO n FROM public.organization_franchise_fees
-   WHERE organization_id = current_setting('t3503.o_a')::uuid;
-  PERFORM pg_temp.check(n = 3, format('precondition: org A holds 3 franchise fee rows, got %s', n));
 END $$;
 
--- the deactivated writers: nothing, on either table, by either path
+-- the deactivated writers: nothing, by either path
 DO $$
 DECLARE who text; n int;
 BEGIN
@@ -51,17 +48,12 @@ BEGIN
 
     SELECT count(*) INTO n FROM public.agent_split_agreements;
     PERFORM pg_temp.check(n = 0, format('a deactivated %s reads 0 agreement rows, got %s', who, n));
-    SELECT count(*) INTO n FROM public.organization_franchise_fees;
-    PERFORM pg_temp.check(n = 0, format('a deactivated %s reads 0 franchise fee rows, got %s', who, n));
 
-    -- and through the read paths BACKLOG-3504 uses
+    -- and through the read path BACKLOG-3504 uses
     SELECT count(*) INTO n FROM public.split_agreement_in_force(
       current_setting('t3503.o_a')::uuid, current_setting('t3503.u_agent_a')::uuid, DATE '2026-09-01');
     PERFORM pg_temp.check(n = 0,
       format('...and 0 through split_agreement_in_force, got %s', n));
-    SELECT count(*) INTO n FROM public.franchise_fee_in_force(
-      current_setting('t3503.o_a')::uuid, DATE '2026-09-01');
-    PERFORM pg_temp.check(n = 0, format('...and 0 through franchise_fee_in_force, got %s', n));
 
     RESET ROLE;
   END LOOP;
@@ -75,13 +67,8 @@ DECLARE n int;
 BEGIN
   SELECT count(*) INTO n FROM public.agent_split_agreements;
   PERFORM pg_temp.check(n = 7, format('the active broker still reads all 7 agreement rows, got %s', n));
-  SELECT count(*) INTO n FROM public.organization_franchise_fees;
-  PERFORM pg_temp.check(n = 3, format('...and all three franchise fee rows, got %s', n));
   SELECT count(*) INTO n FROM public.split_agreement_in_force(
     current_setting('t3503.o_a')::uuid, current_setting('t3503.u_agent_a')::uuid, DATE '2026-09-01');
   PERFORM pg_temp.check(n = 1, format('...and 1 through split_agreement_in_force, got %s', n));
-  SELECT count(*) INTO n FROM public.franchise_fee_in_force(
-    current_setting('t3503.o_a')::uuid, DATE '2026-09-01');
-  PERFORM pg_temp.check(n = 1, format('...and 1 through franchise_fee_in_force, got %s', n));
 END $$;
 RESET ROLE;

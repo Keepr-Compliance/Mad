@@ -45,8 +45,8 @@ BEGIN
               AND user_id = current_setting('t3503.u_agent_exp')::uuid);
 
   s := pg_temp.sqlstate_of(format(
-    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, office_fee_amount, office_fee_cadence, effective_from) VALUES (%L,%L,50,50,100,%L,%L::date)',
-    current_setting('t3503.o_a'), current_setting('t3503.u_agent_exp'), 'monthly', d_in));
+    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, effective_from) VALUES (%L,%L,50,50,%L::date)',
+    current_setting('t3503.o_a'), current_setting('t3503.u_agent_exp'), d_in));
   PERFORM pg_temp.check(s = '42501',
     format('a subject at EXPIRED is refused even inside their recorded period, got %s', s));
 
@@ -57,8 +57,8 @@ BEGIN
   -- the separating arm: the SAME date, for a SUSPENDED subject, is allowed. Two
   -- refusals cannot tell a working gate from a write rule stuck at false.
   s := pg_temp.sqlstate_of(format(
-    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, office_fee_amount, office_fee_cadence, effective_from) VALUES (%L,%L,50,50,100,%L,%L::date)',
-    current_setting('t3503.o_a'), current_setting('t3503.u_agent_sus'), 'monthly',
+    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, effective_from) VALUES (%L,%L,50,50,%L::date)',
+    current_setting('t3503.o_a'), current_setting('t3503.u_agent_sus'),
     current_setting('t3503.d_sus')::date - 10));
   PERFORM pg_temp.check(s = 'OK',
     format('...while a SUSPENDED subject at the same offset is allowed, got %s', s));
