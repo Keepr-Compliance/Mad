@@ -44,7 +44,8 @@ ROLLBACK
 ```
 
 This is production's applied order (`supabase_migrations.schema_migrations`,
-read 2026-09-25). 3473 file 3 is not in production's history and is not
+read 2026-09-25), minus `backlog_3535_solo_checklists`, which production holds
+but this base does not. 3473 file 3 is not in production's history and is not
 loaded. The BACKLOG-3535 solo-checklists migration (open PR, not in this base)
 touches only `can_edit_checklist_templates` and the seed trigger; nothing here
 depends on either. The catalogue is loaded inside the transaction, so the

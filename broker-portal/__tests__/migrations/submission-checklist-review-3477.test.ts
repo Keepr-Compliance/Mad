@@ -3,7 +3,7 @@
  *
  * WHAT THIS CAN PROVE: what the migration file says. CI has no database. The
  * behaviour is proved on a real Postgres by supabase/tests/backlog-3477
- * (controls c00-c15, 35 mutants); this file pins the statements a later edit
+ * (controls c00-c16, 41 mutants); this file pins the statements a later edit
  * is most likely to drop, so that a change to them fails in CI too.
  */
 
