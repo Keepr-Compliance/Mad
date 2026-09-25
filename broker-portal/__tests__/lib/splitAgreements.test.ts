@@ -7,15 +7,6 @@
  * means a real change here shows up as a real test result.
  */
 
-// Forced BEFORE any Date/Intl object in this file is constructed. Node reads
-// TZ per-process at Date-construction time (not cached at startup), so this
-// is safe as long as nothing above it touched a Date. Picked specifically
-// because it is a NEGATIVE UTC offset — the shape of bug formatEffectiveDate
-// exists to avoid: `new Date("2026-01-01")` parses as UTC midnight, which a
-// negative-offset zone renders as the PREVIOUS calendar day. Uses this repo's
-// own tzdata (jest's Node runtime), not a hardcoded offset.
-process.env.TZ = 'America/Los_Angeles';
-
 import {
   splitAppliesToRole,
   canViewSplit,
@@ -133,22 +124,74 @@ describe('deriveCurrentSplit', () => {
 // ============================================================================
 
 describe('formatEffectiveDate', () => {
-  it('renders the calendar date, not the naive new Date(string) reading', () => {
-    // The bug this guards against, demonstrated: parsing a date-only ISO
-    // string with new Date() reads it as UTC midnight, which this file's
-    // forced America/Los_Angeles (a NEGATIVE offset) then renders as the
-    // PREVIOUS day.
+  it('illustrates the bug this guards against, deterministically on any host', () => {
+    // Parsing a date-only ISO string with new Date() reads it as UTC
+    // midnight, which a negative-UTC-offset zone then renders as the
+    // PREVIOUS calendar day.
+    //
+    // `timeZone` is passed explicitly to Intl.DateTimeFormat rather than
+    // relying on process.env.TZ (an earlier version of this test set
+    // process.env.TZ = 'America/Los_Angeles' at module load and asserted the
+    // shift). THAT WAS ITSELF TIMEZONE-DEPENDENT AND WRONG: it passed
+    // wherever the host happened to already sit behind UTC (it did, by
+    // coincidence, on the two machines that ran it locally) and reproduced
+    // the exact false-red-against-correct-code shape this repo's own
+    // doctrine warns about the moment CI (UTC) ran it — under UTC, the naive
+    // reading IS "Jan 1, 2026", not "Dec 31, 2025", so the old assertion
+    // failed even though the product code was, and is, correct. Root cause:
+    // process.env.TZ mutated inside a test file is not reliably honored by
+    // V8/ICU once ANY Date/Intl object has been constructed earlier in that
+    // same jest worker process (by an unrelated test file sharing the
+    // worker) — exactly the kind of cross-environment hazard a control must
+    // not carry. `timeZone` as an explicit Intl option has no such
+    // dependency: it is read per call, not from process-wide state, so this
+    // now produces the same answer on every runner (empirically checked
+    // under TZ=UTC, America/Los_Angeles, Pacific/Kiritimati and Asia/Kolkata).
     const naive = new Intl.DateTimeFormat('en-US', {
       year: 'numeric',
       month: 'short',
       day: 'numeric',
+      timeZone: 'America/Los_Angeles',
     }).format(new Date('2026-01-01'));
-    expect(naive).toBe('Dec 31, 2025'); // the bug, reproduced — proves TZ took effect
-    expect(formatEffectiveDate('2026-01-01')).toBe('Jan 1, 2026'); // the fix
+    expect(naive).toBe('Dec 31, 2025'); // the bug, reproduced — deterministic on any host
   });
 
   it('is correct at a month boundary too', () => {
     expect(formatEffectiveDate('2026-03-01')).toBe('Mar 1, 2026');
+  });
+
+  it('CONTROL: builds the Date from calendar components, never from the raw ISO string', () => {
+    // The black-box output assertions above (and formatEffectiveDate's own
+    // fix) are, on a UTC host, BYTE-IDENTICAL to what the naive
+    // `new Date(isoDate)` implementation would produce: UTC midnight IS the
+    // local calendar day when the local zone IS UTC, so there is no offset
+    // for the bug to manifest across. That means no assertion on
+    // formatEffectiveDate's OUTPUT can distinguish the naive implementation
+    // from the fixed one when this suite runs on a UTC CI runner — the
+    // literal-comparison tests above pass under either implementation there,
+    // which is exactly the false-confidence shape this whole fix exists to
+    // avoid repeating. This test does not compare output: it inspects HOW
+    // the Date is constructed, which is where the fix actually lives and
+    // the one thing that differs regardless of host timezone.
+    const OriginalDate = global.Date;
+    const calls: unknown[][] = [];
+    class SpyDate extends OriginalDate {
+      constructor(...args: ConstructorParameters<typeof Date>) {
+        super(...args);
+        calls.push(args);
+      }
+    }
+    // @ts-expect-error -- stubbing the global constructor for this test only
+    global.Date = SpyDate;
+    try {
+      formatEffectiveDate('2026-01-01');
+    } finally {
+      global.Date = OriginalDate;
+    }
+
+    expect(calls).toHaveLength(1);
+    // y, m - 1, d as separate numbers — NEVER the raw "2026-01-01" string.
+    expect(calls[0]).toEqual([2026, 0, 1]);
   });
 });
 
