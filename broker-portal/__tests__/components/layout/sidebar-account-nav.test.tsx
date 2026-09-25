@@ -1,11 +1,17 @@
 /**
  * My Account appears in the sidebar for every role — BACKLOG-3078.
  *
- * The nav has two role-gated buckets and neither could host this link:
- * `it_admin` never sees memberNavItems, and a broker never sees adminNavItems,
- * so either home would hide a person's own account page from somebody who owns
- * the data. Enumerated over every role the portal knows rather than sampled —
- * a nav item that appears for three roles out of four is the failure mode.
+ * Neither role-gated bucket could host this link on its own: `it_admin` never
+ * sees memberNavItems, and (before BACKLOG-3504/3541 split the old single
+ * admin bucket into Users/Org Settings) a broker saw neither bucket at all —
+ * so either home would have hidden a person's own account page from somebody
+ * who owns the data. Enumerated over every role the portal knows rather than
+ * sampled — a nav item that appears for three roles out of four is the
+ * failure mode.
+ *
+ * "Org Settings stays admin-only" below is unchanged by BACKLOG-3504: it is
+ * the control that a broker's new Users-nav visibility (sidebar-users-nav.test.tsx)
+ * does not also widen Org Settings.
  */
 
 import { render, screen } from '@testing-library/react';
