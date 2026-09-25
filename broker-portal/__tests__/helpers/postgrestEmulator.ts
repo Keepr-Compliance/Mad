@@ -199,6 +199,11 @@ function buildChain(table: string, state: EmulatorState) {
       filters.push((rows) => rows.filter((r) => r[column] === value));
       return chain;
     },
+    neq(column: string, value: unknown) {
+      note(column);
+      filters.push((rows) => rows.filter((r) => r[column] !== value));
+      return chain;
+    },
     in(column: string, values: unknown[]) {
       note(column);
       filters.push((rows) => rows.filter((r) => values.includes(r[column])));
@@ -238,6 +243,12 @@ function buildChain(table: string, state: EmulatorState) {
     },
     limit(n: number) {
       limit = n;
+      return chain;
+    },
+    range(from: number, to: number) {
+      // Pagination only; fixtures are small, so a window from 0 is the whole
+      // answer. Kept as a limit so an out-of-range page still returns rows.
+      limit = to - from + 1;
       return chain;
     },
     insert(values: unknown) {
@@ -356,6 +367,25 @@ export function personalMembership(userId: string = FIXTURE_USER_ID): Row {
       personal_owner_user_id: userId,
     },
   };
+}
+
+/** BACKLOG-3080: a second person, the OWNER of a personal org the fixture user merely belongs to. */
+export const FIXTURE_OTHER_USER_ID = '00000000-0000-4000-8000-000000308002'; // pii-allow-uuid: invented fixture id
+
+/**
+ * A membership in a personal organization OWNED BY SOMEBODY ELSE — BACKLOG-3080.
+ *
+ * The same transcribed R7-solo-after-ensure embed as {@link personalMembership},
+ * with the owner column naming `ownerId` rather than the member. Production has
+ * no such row today (the owner's role is `agent`, so nobody can invite into a
+ * personal org); it is kept as a routing rule: a member who is not the owner
+ * must not get the floor.
+ */
+export function personalMembershipOwnedBy(
+  ownerId: string = FIXTURE_OTHER_USER_ID,
+  memberId: string = FIXTURE_USER_ID
+): Row {
+  return { ...personalMembership(ownerId), user_id: memberId };
 }
 
 /** An unclaimed brokerage invite waiting on an email address. */

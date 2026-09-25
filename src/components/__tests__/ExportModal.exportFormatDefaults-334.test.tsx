@@ -1,7 +1,8 @@
 /**
  * BACKLOG-334 — the export format is set once, not on every export.
  *
- * With saved export defaults, "Verify Transaction Dates" carries an "Export
+ * With saved export defaults, "Verify Transaction Details" (named "Verify
+ * Transaction Dates" until BACKLOG-3498) carries an "Export
  * format" button in its heading row (title left, button right) and its primary
  * button runs the export directly; the options step is reachable only through
  * that button, and what you change there applies to this export alone unless
@@ -95,7 +96,7 @@ async function waitForDefaults(): Promise<HTMLElement> {
 
 /** The step-1 heading row: the element the heading and the button must share. */
 function headingRow(): HTMLElement {
-  const heading = screen.getByRole("heading", { name: "Verify Transaction Dates" });
+  const heading = screen.getByRole("heading", { name: "Verify Transaction Details" });
   const row = heading.parentElement as HTMLElement | null;
   expect(row).not.toBeNull();
   return row as HTMLElement;

@@ -137,8 +137,9 @@ jest.mock("../../services/databaseService", () => ({
  * answers false — offline, with no socket opened.
  *
  * `from("organization_members")` answers ORG_B, and that is for C12. The two
- * resolvers this codebase has genuinely disagree: `resolveOrgId` goes through
- * `getActiveOrganizationMembershipOutcome` (filters `license_status = 'active'`,
+ * resolvers this codebase has genuinely disagree: `resolveOrgIdOrRefusal` goes
+ * through `getActiveOrganizationMembershipOutcome` (filters `license_status =
+ * 'active'`,
  * accepts a personal organization), while `submissionService`'s private
  * `getUserOrganizationId` reads `organization_members` directly, EXCLUDES
  * personal organizations and applies no status filter. Wiring the raw read to a
@@ -178,10 +179,10 @@ jest.mock("../../services/auditService", () => ({
 }));
 
 const mockGate = jest.fn();
-const mockResolveOrgId = jest.fn();
+const mockResolveOrg = jest.fn();
 jest.mock("../featureGateHandlers", () => ({
   isChecklistsAllowed: (...args: unknown[]) => mockGate(...args),
-  resolveOrgId: (...args: unknown[]) => mockResolveOrgId(...args),
+  resolveOrgIdOrRefusal: (...args: unknown[]) => mockResolveOrg(...args),
 }));
 
 const mockListTemplates = jest.fn();
@@ -320,7 +321,7 @@ const invoke = (channel: string, ...args: unknown[]) => {
 /** Put a checklist on TRANSACTION with the gate open, and return its id. */
 async function seedChecklist(): Promise<string> {
   mockGate.mockResolvedValue(true);
-  mockResolveOrgId.mockResolvedValue(ORG_A);
+  mockResolveOrg.mockResolvedValue({ status: "member", organizationId: ORG_A });
   mockListTemplates.mockResolvedValue(templateListing());
   const result = await invoke("checklists:select-template", {
     transactionId: TRANSACTION,
@@ -342,13 +343,13 @@ beforeAll(() => {
 beforeEach(() => {
   mockDb = buildDb();
   mockGate.mockReset();
-  mockResolveOrgId.mockReset();
+  mockResolveOrg.mockReset();
   mockListTemplates.mockReset();
   mockInvalidate.mockClear();
   mockAudit.mockClear();
   // Default: the REAL, SHIPPED gate decides, against a signed-out session.
   mockGate.mockImplementation(() => SHIPPED_GATE.isChecklistsAllowed());
-  mockResolveOrgId.mockResolvedValue(ORG_A);
+  mockResolveOrg.mockResolvedValue({ status: "member", organizationId: ORG_A });
   mockListTemplates.mockResolvedValue(templateListing());
 });
 
@@ -724,14 +725,14 @@ describe("BACKLOG-3475 C12 — the org comes from the feature gate's resolver", 
     mockGate.mockResolvedValue(true);
   });
 
-  it("list-templates asks for the organization resolveOrgId returned", async () => {
-    // The two resolvers genuinely disagree: `resolveOrgId` filters on
+  it("list-templates asks for the organization resolveOrgIdOrRefusal returned", async () => {
+    // The two resolvers genuinely disagree: `resolveOrgIdOrRefusal` filters on
     // `license_status = 'active'` and accepts a personal organization, while
     // `submissionService.getUserOrganizationId()` excludes personal
     // organizations and applies no status filter. ORG_A is what the GATE just
     // used; anything else means the gate answered about one brokerage and the
     // read asked about another.
-    mockResolveOrgId.mockResolvedValue(ORG_A);
+    mockResolveOrg.mockResolvedValue({ status: "member", organizationId: ORG_A });
 
     await invoke("checklists:list-templates");
 
@@ -741,7 +742,7 @@ describe("BACKLOG-3475 C12 — the org comes from the feature gate's resolver", 
   });
 
   it("select-template asks for the same organization, not a second opinion", async () => {
-    mockResolveOrgId.mockResolvedValue(ORG_A);
+    mockResolveOrg.mockResolvedValue({ status: "member", organizationId: ORG_A });
 
     await invoke("checklists:select-template", {
       transactionId: TRANSACTION,
@@ -752,13 +753,57 @@ describe("BACKLOG-3475 C12 — the org comes from the feature gate's resolver", 
   });
 
   it("no organization is its own refusal, distinct from the plan's", async () => {
-    mockResolveOrgId.mockResolvedValue(null);
+    mockResolveOrg.mockResolvedValue({ status: "none" });
 
     const result = await invoke("checklists:list-templates");
 
     expect(result).toEqual({ success: false, error: CHECKLISTS_NO_ORGANIZATION_ERROR });
     expect(result.error).not.toBe(CHECKLISTS_NOT_ALLOWED_ERROR);
     expect(mockListTemplates).not.toHaveBeenCalled();
+  });
+
+  it("select-template also answers no-organization for a confirmed none, not unavailable", async () => {
+    mockResolveOrg.mockResolvedValue({ status: "none" });
+
+    const result = await invoke("checklists:select-template", {
+      transactionId: TRANSACTION,
+      templateId: TEMPLATE_ID,
+    });
+
+    expect(result).toEqual({ success: false, error: CHECKLISTS_NO_ORGANIZATION_ERROR });
+    expect(mockListTemplates).not.toHaveBeenCalled();
+    expect(count("transaction_checklists")).toBe(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // BACKLOG-3539 — a failed org lookup must read as unavailable, not as
+  // no-organization. The gate answered "allowed" from its own cached
+  // membership read; the handler's OWN (uncached) lookup then fails — a
+  // network blip, not a confirmed absence of any organization.
+  // -------------------------------------------------------------------------
+
+  it("BACKLOG-3539: list-templates reads a failed org lookup as unavailable, not no-organization", async () => {
+    mockResolveOrg.mockResolvedValue({ status: "unavailable" });
+
+    const result = await invoke("checklists:list-templates");
+
+    expect(result).toEqual({ success: false, error: CHECKLIST_TEMPLATES_UNAVAILABLE_ERROR });
+    expect(result.error).not.toBe(CHECKLISTS_NO_ORGANIZATION_ERROR);
+    expect(mockListTemplates).not.toHaveBeenCalled();
+  });
+
+  it("BACKLOG-3539: select-template reads a failed org lookup as unavailable, and writes nothing", async () => {
+    mockResolveOrg.mockResolvedValue({ status: "unavailable" });
+
+    const result = await invoke("checklists:select-template", {
+      transactionId: TRANSACTION,
+      templateId: TEMPLATE_ID,
+    });
+
+    expect(result).toEqual({ success: false, error: CHECKLIST_TEMPLATES_UNAVAILABLE_ERROR });
+    expect(result.error).not.toBe(CHECKLISTS_NO_ORGANIZATION_ERROR);
+    expect(mockListTemplates).not.toHaveBeenCalled();
+    expect(count("transaction_checklists")).toBe(0);
   });
 
   it("templates that could not be READ are their own refusal, not an empty list", async () => {
@@ -808,7 +853,7 @@ describe("BACKLOG-3475 C12 — the org comes from the feature gate's resolver", 
 describe("BACKLOG-3475 C6 — editing the broker template never rewrites a checklist in use", () => {
   beforeEach(() => {
     mockGate.mockResolvedValue(true);
-    mockResolveOrgId.mockResolvedValue(ORG_A);
+    mockResolveOrg.mockResolvedValue({ status: "member", organizationId: ORG_A });
   });
 
   it("renaming and deleting template items leaves the selected checklist exactly as it was", async () => {
@@ -907,7 +952,7 @@ describe("BACKLOG-3475 C6 — editing the broker template never rewrites a check
 describe("BACKLOG-3476 — several checklists, through IPC", () => {
   beforeEach(() => {
     mockGate.mockResolvedValue(true);
-    mockResolveOrgId.mockResolvedValue(ORG_A);
+    mockResolveOrg.mockResolvedValue({ status: "member", organizationId: ORG_A });
     mockListTemplates.mockResolvedValue(twoTemplateListing());
   });
 

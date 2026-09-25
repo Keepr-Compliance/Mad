@@ -36,6 +36,8 @@ export interface SyncFilterBarProps {
   onPeriodChange: (period: string, from?: string, to?: string) => void;
   onFiltersChange: (filters: RunFilters) => void;
   onClear: () => void;
+  /** The Views dropdown. A slot, so this bar stays free of saved-view state. */
+  viewsSlot?: React.ReactNode;
 }
 
 export function SyncFilterBar({
@@ -47,6 +49,7 @@ export function SyncFilterBar({
   onPeriodChange,
   onFiltersChange,
   onClear,
+  viewsSlot,
 }: SyncFilterBarProps) {
   const custom = period.key === 'custom';
 
@@ -134,6 +137,8 @@ export function SyncFilterBar({
           Clear filters
         </button>
       ) : null}
+
+      {viewsSlot ? <div className="ml-auto">{viewsSlot}</div> : null}
     </div>
   );
 }

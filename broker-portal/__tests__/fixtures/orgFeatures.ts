@@ -34,6 +34,7 @@
  */
 
 import type { OrgFeatures, OrgFeatureDetail } from '@/lib/feature-gate';
+import { BROKERAGE_ORG_POST } from '../helpers/postgrestEmulator';
 
 /** Stand-in org id. pii-allow-uuid: invented, not from any live row. */
 export const TEST_ORG_ID = '00000000-3087-4000-8000-000000000001';
@@ -211,11 +212,31 @@ export interface StubOptions {
   tables?: Record<string, TableResult>;
 }
 
+/**
+ * The organization_members read, in both of the shapes the portal asks for.
+ *
+ * `.single()` / `.maybeSingle()` (the SQL-filtered admin gates) resolve the one
+ * row, as before. Awaiting the chain itself is a MANY read — the shared portal
+ * membership query (BACKLOG-3080, lib/auth/portalAccess.ts) — and PostgREST
+ * answers a many read with an array, never a bare object: `[row]`, or `[]` when
+ * nothing matched. The row carries the brokerage embed transcribed in
+ * helpers/postgrestEmulator.ts, because that query selects `organizations(*)`.
+ */
+function membershipQuery(membership: StubOptions['membership']) {
+  const q = makeQuery({ data: membership ?? null, error: null });
+  const rows = membership
+    ? [{ ...membership, organizations: { ...BROKERAGE_ORG_POST, id: membership.organization_id } }]
+    : [];
+  q.then = (res: (v: TableResult) => unknown, rej?: (e: unknown) => unknown) =>
+    Promise.resolve({ data: rows, error: null }).then(res, rej);
+  return q;
+}
+
 export function makeSupabaseStub(opts: StubOptions = {}) {
   const rpc = jest.fn(async () => opts.rpc ?? { data: null, error: null });
   const from = jest.fn((table: string) => {
     if (table === 'organization_members') {
-      return makeQuery({ data: opts.membership ?? null, error: null });
+      return membershipQuery(opts.membership);
     }
     // BACKLOG-3098: default to the transcribed 23 rows rather than the empty
     // array below. Prod has 23 rows; an empty table would make every gated

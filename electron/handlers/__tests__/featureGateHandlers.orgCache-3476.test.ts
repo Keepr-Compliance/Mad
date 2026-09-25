@@ -309,6 +309,39 @@ describe("K6 — resolveOrgId keeps looking the membership up every time", () =>
 });
 
 // ---------------------------------------------------------------------------
+// K7 — a failed refresh is never reported as no-organization — BACKLOG-3539
+// ---------------------------------------------------------------------------
+
+describe("K7 — resolveOrgIdOrRefusal keeps a failed lookup apart from none", () => {
+  it("K7: cached allowed, then the uncached refresh fails -> unavailable, not none", async () => {
+    // The gate answers allowed from its own cached membership read — the
+    // state checklistHandlers.ts sees right before it re-resolves the org
+    // itself, uncached.
+    await expect(invokeStrictState()).resolves.toBe("allowed");
+
+    // Break the network for that fresh, uncached lookup only.
+    fromThrows = true;
+    await expect(handlers.resolveOrgIdOrRefusal()).resolves.toEqual({ status: "unavailable" });
+    expect(membershipQueries()).toBe(2);
+  });
+
+  it("K7b: cached allowed, then the uncached refresh finds a genuine none -> none, not unavailable", async () => {
+    await expect(invokeStrictState()).resolves.toBe("allowed");
+
+    emulator.set({ rows: { organization_members: [] } });
+    await expect(handlers.resolveOrgIdOrRefusal()).resolves.toEqual({ status: "none" });
+    expect(membershipQueries()).toBe(2);
+  });
+
+  it("K7c: a real membership resolves to member, with the organization id", async () => {
+    await expect(handlers.resolveOrgIdOrRefusal()).resolves.toEqual({
+      status: "member",
+      organizationId: FIXTURE_BROKERAGE_ORG_ID,
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // K8 — an organization change seen by the licence reader drops the cache
 // ---------------------------------------------------------------------------
 

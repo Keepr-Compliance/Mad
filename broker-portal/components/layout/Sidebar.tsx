@@ -24,6 +24,11 @@
  * is inserted right after Users there. A broker has no admin bucket; it gets the
  * entry through a second branch at the end of the member items — the slot Users
  * would take. Hidden during impersonation.
+ *
+ * BACKLOG-3080 adds the floor bucket for everyone who is not a full-portal user
+ * (a brokerage agent, the owner of a personal organization): Dashboard and
+ * Support, then My Account. The layout decides `floorOnly` from the shared
+ * portal classifier. The other buckets are unchanged.
  */
 
 import Link from 'next/link';
@@ -64,6 +69,12 @@ const adminNavItems: NavItem[] = [
   { label: 'Org Settings', href: '/dashboard/settings', icon: Settings },
 ];
 
+/** BACKLOG-3080: the floor. No brokerage data, so no Submissions. */
+const floorNavItems: NavItem[] = [
+  { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
+  { label: 'Support', href: '/dashboard/support', icon: Headphones },
+];
+
 const checklistsNavItem: NavItem = { label: 'Checklists', href: '/dashboard/checklists', icon: ClipboardCheck };
 
 /** A copy of `items` with `item` placed right after the entry with `href`. */
@@ -94,6 +105,8 @@ export interface SidebarProps {
   displayRole?: string;
   /** BACKLOG-3474: the caller passes lib/checklist-access.ts (layout.tsx). */
   showChecklists?: boolean;
+  /** BACKLOG-3080: not a full-portal user; show the floor bucket only. */
+  floorOnly?: boolean;
 }
 
 export function Sidebar({
@@ -105,12 +118,17 @@ export function Sidebar({
   displayEmail,
   displayRole,
   showChecklists = false,
+  floorOnly = false,
 }: SidebarProps) {
   const pathname = usePathname();
 
+  // BACKLOG-3080: the floor replaces the member and admin buckets entirely.
+  const showFloorNav = floorOnly && !isImpersonating;
+
   // BACKLOG-907: preserve the exact nav gating of the previous top-nav.
-  const showMemberNav = isImpersonating || role !== 'it_admin';
-  const showAdminNav = !isImpersonating && (role === 'admin' || role === 'it_admin');
+  const showMemberNav = !showFloorNav && (isImpersonating || role !== 'it_admin');
+  const showAdminNav =
+    !showFloorNav && !isImpersonating && (role === 'admin' || role === 'it_admin');
   const showChecklistsEntry = showChecklists && !isImpersonating;
   const adminItems = showChecklistsEntry
     ? insertAfter(adminNavItems, '/dashboard/users', checklistsNavItem)
@@ -182,6 +200,7 @@ export function Sidebar({
 
       {/* Navigation */}
       <nav className={`flex-1 py-4 space-y-1 overflow-y-auto scrollbar-hide ${collapsed ? 'px-2' : 'px-3'}`}>
+        {showFloorNav && floorNavItems.map(renderNavItem)}
         {showMemberNav && memberNavItems.map(renderNavItem)}
         {!showAdminNav && showChecklistsEntry && renderNavItem(checklistsNavItem)}
         {showAdminNav && adminItems.map(renderNavItem)}

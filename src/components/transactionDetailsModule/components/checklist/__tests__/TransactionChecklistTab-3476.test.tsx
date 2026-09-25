@@ -7,7 +7,7 @@
  * progress line — only the tab header and Overview sum across every checklist.
  *
  * Wrong implementations this suite is here to catch:
- *   C-K  "your brokerage has no templates" said when the read FAILED.
+ *   C-K  "no templates have been set up" said when the read FAILED.
  *   C-H / A-5 / A-6  progress recomputed in the renderer (counting optional
  *        ticks, or only the first checklist) instead of main's sums, or a
  *        per-section progress line reappearing.
@@ -139,21 +139,21 @@ describe("C-K — three sentences for three facts", () => {
   it("a failed read shows main's sentence and Retry, never 'hasn't set up'", async () => {
     api().listTemplates.mockResolvedValue({
       success: false,
-      error: "Your brokerage's checklist templates could not be loaded right now.",
+      error: "Checklist templates couldn't be loaded right now.",
     });
     render(<Harness gate="allowed" />);
     expect(await screen.findByTestId("checklist-templates-failed")).toHaveTextContent(
-      "could not be loaded right now",
+      "couldn't be loaded right now",
     );
     expect(screen.getByTestId("checklist-templates-retry")).toBeInTheDocument();
-    expect(screen.queryByText(/hasn.t set up any checklist templates/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/checklist templates have been set up yet/)).not.toBeInTheDocument();
   });
 
   it("an empty catalogue says so, with no Retry", async () => {
     api().listTemplates.mockResolvedValue({ success: true, templates: [], source: "live" });
     render(<Harness gate="allowed" />);
     expect(await screen.findByTestId("checklist-templates-empty")).toHaveTextContent(
-      "Your brokerage hasn’t set up any checklist templates yet.",
+      "No checklist templates have been set up yet.",
     );
     expect(screen.queryByTestId("checklist-templates-retry")).not.toBeInTheDocument();
   });

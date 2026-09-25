@@ -378,6 +378,17 @@ function TransactionDetails({
     loadAttachmentCounts();
     setShowSubmitModal(true);
   }, [transaction.id]);
+  // BACKLOG-3498: the submit dialog has saved the confirmed dates. Re-read the
+  // row now — not on submit success — so the tabs and the Edit form (which
+  // prefills from `transaction`) hold the saved dates even if the submit fails.
+  const rereadAfterDatesSaved = useCallback(async () => {
+    try {
+      const refreshed = await transactionService.getDetails(transaction.id);
+      if (refreshed.success && refreshed.data) setTransaction(refreshed.data);
+    } catch (err) {
+      logger.error("Failed to refresh transaction after saving dates:", err);
+    }
+  }, [transaction.id]);
   // T1 — the sync runs on EVERY open. The renderer owns this call because it is
   // the one that advances the watermark, which is what makes `added` mean "new
   // since you last looked" rather than "inserted by this particular call": the
@@ -1607,6 +1618,9 @@ function TransactionDetails({
             resetSubmit();
           }}
           onSubmit={handleSubmitForReview}
+          onDatesSaved={() => {
+            void rereadAfterDatesSaved();
+          }}
           // BACKLOG-2792: S4's Export option — the founder's "the confirmation
           // window includes an Export option that triggers the same S3 export
           // flow an individual gets", literally the same modal, not a parallel

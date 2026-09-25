@@ -4,9 +4,9 @@
  * Three different sentences for three different facts, which is the whole
  * point of 3475 keeping "no templates" and "could not read" apart:
  *   templates listed      → one card per template
- *   empty list            → "Your brokerage hasn't set up any checklist templates yet."
+ *   empty list            → "No checklist templates have been set up yet."
  *   the read failed       → main's own sentence, and Retry
- * A failed read never says the brokerage has none. That would be a false
+ * A failed read never says there are none. That would be a false
  * statement about someone else's account.
  *
  * It only reports which template was clicked; whether that click writes is
@@ -64,7 +64,7 @@ export function ChecklistTemplateChooser({
       } else {
         setListing({
           status: "failed",
-          error: result.error ?? "Your brokerage's checklist templates could not be loaded right now.",
+          error: result.error ?? "Checklist templates couldn't be loaded right now.",
         });
       }
     })();
@@ -74,7 +74,7 @@ export function ChecklistTemplateChooser({
   }, [refreshKey, retryKey]);
 
   const retry = useCallback(async () => {
-    // Drop the cache first, so Retry really goes back to the brokerage.
+    // Drop the cache first, so Retry really reads again instead of replaying the cache.
     await checklistService.invalidateTemplates();
     setRetryKey((k) => k + 1);
   }, []);
@@ -128,7 +128,7 @@ export function ChecklistTemplateChooser({
 
       {listing.status === "ready" && listing.templates.length === 0 && (
         <p className="text-sm text-gray-500" data-testid="checklist-templates-empty">
-          Your brokerage hasn&rsquo;t set up any checklist templates yet.
+          No checklist templates have been set up yet.
         </p>
       )}
 
@@ -169,10 +169,10 @@ export function ChecklistTemplateChooser({
               );
             })}
           </div>
-          <p className="mt-3 text-xs text-gray-400 text-left">Templates come from your brokerage.</p>
+          <p className="mt-3 text-xs text-gray-400 text-left">Templates come from your organization&rsquo;s checklist settings.</p>
           {listing.source === "cache" && (
             <p className="mt-1 text-xs text-gray-400 text-left" data-testid="checklist-templates-cached">
-              Showing saved templates &mdash; couldn&rsquo;t reach your brokerage just now.
+              Showing saved templates &mdash; couldn&rsquo;t connect just now.
             </p>
           )}
         </>

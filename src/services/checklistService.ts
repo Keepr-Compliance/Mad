@@ -36,7 +36,7 @@ import type {
  * value-import from it.
  */
 const TEMPLATES_UNREADABLE_ERROR =
-  "Your brokerage's checklist templates could not be loaded right now.";
+  "Checklist templates couldn't be loaded right now.";
 
 export interface ChecklistTemplateListing {
   templates: ChecklistTemplate[];

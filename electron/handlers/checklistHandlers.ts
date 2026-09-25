@@ -32,21 +32,27 @@
  * ## Refusals are returned, not thrown
  *
  * "Your plan does not include this", "that template is gone" and "we could not
- * read your brokerage's templates" are answers a surface has to render, not
+ * read your organization's templates" are answers a surface has to render, not
  * errors to report. They come back as `{ success: false, error }`, the same way
  * `hiddenTextHandlers` does it. Only a malformed payload throws, through
  * `ValidationError`, which `wrapHandler` turns into the same shape.
  *
  * ## The organization is resolved in ONE place
  *
- * `resolveOrgId()` — the feature gate's resolver, the same membership lookup
- * the gate itself used one line earlier. Deliberately NOT
- * `submissionService.getUserOrganizationId()`, which answers a different
+ * `resolveOrgIdOrRefusal()` — the feature gate's resolver, the same membership
+ * lookup the gate itself used one line earlier, wrapped so this file can tell
+ * "no organization" apart from "the lookup failed" (BACKLOG-3539). Deliberately
+ * NOT `submissionService.getUserOrganizationId()`, which answers a different
  * question: it excludes personal organizations (so every solo user would read
  * as having none) and does not filter on `license_status`. Two resolvers is how
  * two halves of an app come to disagree about who the user is, and here it
  * would mean the gate said yes about one organization while the read asked
  * about another.
+ *
+ * A lookup that could not complete must not be reported as "no organization"
+ * — a false statement about an account that actually has one. Both channels
+ * below return `CHECKLIST_TEMPLATES_UNAVAILABLE_ERROR` for that case and
+ * reserve `CHECKLISTS_NO_ORGANIZATION_ERROR` for a confirmed `none`.
  */
 
 import { ipcMain } from "electron";
@@ -81,7 +87,7 @@ import { ValidationError } from "../utils/validation";
 // `checklists:invalidate-templates` deliberately do not call it — the header
 // says why, and `checklistHandlers-3475.test.ts` ("the gated and ungated sets,
 // by execution") asserts the split. Nothing here may name the feature key.
-import { isChecklistsAllowed, resolveOrgId } from "./featureGateHandlers";
+import { isChecklistsAllowed, resolveOrgIdOrRefusal } from "./featureGateHandlers";
 import type {
   AddChecklistLinkResult,
   ChecklistsForTransaction,
@@ -143,19 +149,22 @@ export const CHECKLISTS_NOT_ALLOWED_ERROR =
 
 /**
  * No organization answered for this account. Distinct from the gate's refusal:
- * the gate can say no for a plan reason, this is "we do not know whose
- * templates to ask for".
+ * the gate can say no for a plan reason, this is "you have no organization at
+ * all". Reserved for a CONFIRMED `none` (BACKLOG-3539) — an org lookup that
+ * could not complete is `CHECKLIST_TEMPLATES_UNAVAILABLE_ERROR`, never this.
  */
 export const CHECKLISTS_NO_ORGANIZATION_ERROR =
-  "No brokerage is associated with this account.";
+  "No organization is associated with this account.";
 
 /**
- * The templates could not be READ. Deliberately not the same sentence as an
- * empty list — telling a user their brokerage has no checklists when the truth
- * is that the network failed is a false statement about someone else's account.
+ * The templates could not be READ — including when the organization lookup
+ * itself failed (BACKLOG-3539), before there was anything to read. Deliberately
+ * not the same sentence as an empty list — telling a user their brokerage has
+ * no checklists when the truth is that the network failed is a false statement
+ * about someone else's account.
  */
 export const CHECKLIST_TEMPLATES_UNAVAILABLE_ERROR =
-  "Your brokerage's checklist templates could not be loaded right now.";
+  "Checklist templates couldn't be loaded right now.";
 
 /** The requested template is not in the listing (archived, deleted, or renamed away). */
 export const CHECKLIST_TEMPLATE_NOT_FOUND_ERROR =
@@ -221,12 +230,15 @@ export function registerChecklistHandlers(): void {
           return { success: false, error: CHECKLISTS_NOT_ALLOWED_ERROR };
         }
 
-        const orgId = await resolveOrgId();
-        if (!orgId) {
+        const org = await resolveOrgIdOrRefusal();
+        if (org.status === "unavailable") {
+          return { success: false, error: CHECKLIST_TEMPLATES_UNAVAILABLE_ERROR };
+        }
+        if (org.status === "none") {
           return { success: false, error: CHECKLISTS_NO_ORGANIZATION_ERROR };
         }
 
-        const listing = await checklistTemplateService.listTemplates(orgId);
+        const listing = await checklistTemplateService.listTemplates(org.organizationId);
         if (!listing) {
           return { success: false, error: CHECKLIST_TEMPLATES_UNAVAILABLE_ERROR };
         }
@@ -258,12 +270,15 @@ export function registerChecklistHandlers(): void {
           return { success: false, error: CHECKLISTS_NOT_ALLOWED_ERROR };
         }
 
-        const orgId = await resolveOrgId();
-        if (!orgId) {
+        const org = await resolveOrgIdOrRefusal();
+        if (org.status === "unavailable") {
+          return { success: false, error: CHECKLIST_TEMPLATES_UNAVAILABLE_ERROR };
+        }
+        if (org.status === "none") {
           return { success: false, error: CHECKLISTS_NO_ORGANIZATION_ERROR };
         }
 
-        const listing = await checklistTemplateService.listTemplates(orgId);
+        const listing = await checklistTemplateService.listTemplates(org.organizationId);
         if (!listing) {
           return { success: false, error: CHECKLIST_TEMPLATES_UNAVAILABLE_ERROR };
         }

@@ -1,28 +1,9 @@
-import { createClient } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
 import { getImpersonationSession } from '@/lib/impersonation';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { resolveViewerIdentity } from '@/lib/utils/userDisplay';
 import { isChecklistEditorEnabled } from '@/lib/checklist-access';
-
-async function getUserWithRole() {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) return null;
-
-  // Get user's role from organization_members
-  const { data: membership } = await supabase
-    .from('organization_members')
-    .select('role')
-    .eq('user_id', user.id)
-    .maybeSingle();
-
-  return {
-    ...user,
-    role: membership?.role || undefined,
-  };
-}
+import { getPortalAccess } from '@/lib/auth/portalAccess';
 
 export default async function DashboardLayout({
   children,
@@ -34,22 +15,34 @@ export default async function DashboardLayout({
 
   // During impersonation, we don't need a real auth session
   // The impersonation cookie provides the identity
-  const user = await getUserWithRole();
+  const portal = isImpersonating ? null : await getPortalAccess();
 
-  if (!user && !isImpersonating) {
+  if (!portal && !isImpersonating) {
     redirect('/login');
   }
 
+  // BACKLOG-3080: the same classifier middleware uses. Someone who is not a
+  // portal user at all has this browser's portal session ended.
+  if (portal?.access.kind === 'none') {
+    redirect('/auth/logout?error=not_authorized');
+  }
+
+  const access = portal?.access;
+  const role = access && (access.kind === 'full' || access.kind === 'floor') ? access.role : undefined;
+  // Anyone who is not a full-portal user sees the floor navigation.
+  const floorOnly = !isImpersonating && access?.kind !== 'full';
+
   // During impersonation, use target user info from the session.
   // BACKLOG-3077: one resolution, shared with the dashboard header.
-  const { displayName, displayEmail } = resolveViewerIdentity(impersonation, user);
-  const displayRole = isImpersonating ? undefined : user?.role;
+  const { displayName, displayEmail } = resolveViewerIdentity(impersonation, portal?.user ?? null);
+  const displayRole = isImpersonating ? undefined : role;
   // BACKLOG-3474: the same gate the route and its actions use.
   const showChecklists = !isImpersonating && (await isChecklistEditorEnabled());
 
   return (
     <DashboardShell
-      role={user?.role}
+      role={role}
+      floorOnly={floorOnly}
       isImpersonating={isImpersonating}
       displayName={displayName}
       displayEmail={displayEmail}
