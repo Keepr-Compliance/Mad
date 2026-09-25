@@ -13,9 +13,11 @@ AS $$
   SELECT EXISTS (
            SELECT 1
              FROM public.organization_members m
+             JOIN public.organizations o ON o.id = m.organization_id
             WHERE m.organization_id = p_org_id
               AND m.user_id = (SELECT auth.uid())
-              AND m.role IN ('broker', 'it_admin')
+              AND (m.role IN ('broker', 'it_admin')
+                   OR o.personal_owner_user_id = m.user_id)
          )
      AND COALESCE((public.check_feature_access(p_org_id, 'transaction_checklists') ->> 'allowed')::boolean, false);
 $$;
