@@ -53,19 +53,48 @@ its index, `organization_members.deactivated_at`, its trigger, and
 everything 3519 needs. `setup` checks for `agent_split_agreements` and fails
 loudly if it is somehow missing rather than silently continuing.
 
-## What was actually run and found (2026-09-25)
+**`setup: OK` means "the table exists", not "3503 applied cleanly".**
+(SR review addendum, `pm_comments` on BACKLOG-3519.) `run.sh` applies 3503
+with `|| true` specifically because the role error above is expected in this
+stub environment — that is correct, not a defect being hidden — but it means
+a 3503 that failed for a genuinely different reason would still produce
+`setup: OK` here. This harness proves 3519's DDL against whatever of 3503
+got created before the expected role error; it does not re-prove 3503 itself
+(`supabase/tests/backlog-3503/` does that, against the real Supabase roles).
 
-18 probes: the acceptance case, the nullable-snapshot case (never blocks),
-rate boundaries at 0/100/100.001/-0.001, a 3-decimal rate (2.375, the reason
-`commission_offered_rate`/`commission_actual_rate` are `numeric(6,3)` and not
-`numeric(5,2)`), the split-sum boundary at 99.99/100/100.01, an asymmetric
-split fill, reason length at 0/1/2000/2001 chars, a negative gross amount, a
-bogus FK, a real FK, and the index's presence.
+**This harness resolves `MIGRATION_3503` by globbing the working tree**
+(`ls supabase/migrations/*_backlog_3503_commission_agreements.sql`), so it
+runs whatever shape of 3503 your current branch happens to have — pre-trim
+or post-trim (BACKLOG-3503's fee-trim PR #2718). A result is only as current
+as the branch it was run on; re-run after syncing with `develop` before
+trusting it, and note which SHA you ran at (see "What was actually run"
+below).
 
-All 18 passed on the migration as shipped. The first draft of
-`transaction_submissions_split_sum_check` did **not** — probe 10 (asymmetric
-split) was wrongly accepted, because `agent_pct + brokerage_pct = 100`
-evaluates to `NULL` (not `FALSE`) when one side is `NULL`, and a CHECK only
-rejects `FALSE`. The migration's CHECK was corrected to test
-`IS NOT NULL` on both columns explicitly before the sum comparison; see that
-constraint's own comment in the migration file.
+## What was actually run and found
+
+**First run — 2026-09-25, this branch @ `979b5029d`, BEFORE the develop
+sync.** 18 probes, against the branch's own (then pre-trim) copy of 3503 —
+see the stamped-SHA warning above; this run's 3503 shape no longer exists on
+`develop`. The first draft of `transaction_submissions_split_sum_check` did
+**not** pass — probe 10 (asymmetric split) was wrongly accepted, because
+`agent_pct + brokerage_pct = 100` evaluates to `NULL` (not `FALSE`) when one
+side is `NULL`, and a CHECK only rejects `FALSE`. The migration's CHECK was
+corrected to test `IS NOT NULL` on both columns explicitly before the sum
+comparison; see that constraint's own comment in the migration file.
+
+**Second run — 2026-09-25, this branch @ `6ab46dbb` (synced with
+`origin/develop`), against develop's real POST-TRIM 3503** (confirmed:
+`grep -c 'office_fee\|franchise_fee'` on the resolved `MIGRATION_3503` file
+returns `1`, not the `35` the pre-sync branch had). 19 probes — the original
+18 (acceptance case, the nullable-snapshot case which never blocks, rate
+boundaries at 0/100/100.001/-0.001, a 3-decimal rate at 2.375 — the reason
+`commission_offered_rate`/`commission_actual_rate` are `numeric(6,3)` and
+not `numeric(5,2)` — the split-sum boundary at 99.99/100/100.01, the
+asymmetric split fill, reason length at 0/1/2000/2001 chars, a negative
+gross amount, a bogus FK, a real FK, and the index's presence) plus a new
+19th (SR review addendum A5, `pm_comments` on BACKLOG-3519): the FK's
+`ON DELETE` action, read from `pg_constraint.confdeltype` rather than
+inferred from probes 16-17's accept/reject behaviour — confirmed `a`
+(NO ACTION), the correct semantics for a frozen compliance snapshot.
+
+All 19 passed.

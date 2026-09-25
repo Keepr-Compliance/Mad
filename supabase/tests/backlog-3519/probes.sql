@@ -232,4 +232,18 @@ SELECT 'P18 index present: ' || (EXISTS (
     AND indexname = 'idx_transaction_submissions_split_agreement_id'
 ))::text AS probe_p18;
 
+-- 19. FK delete action, read from the catalog rather than inferred from a
+-- refusal -- SR review addendum A4 on BACKLOG-3519 (pm_comments 9d652b50):
+-- probes 16-17 only proved a bogus id is rejected and a real one accepted,
+-- never that the delete BEHAVIOUR is what the design intends (a compliance
+-- snapshot must not silently un-freeze when its source agreement is
+-- deleted). 3503's own c20 control is the pattern.
+-- confdeltype: 'a' NO ACTION, 'r' RESTRICT, 'c' CASCADE, 'n' SET NULL,
+-- 'd' SET DEFAULT.
+SELECT 'P19 split_agreement_id FK delete action: ' || confdeltype::text
+       || CASE WHEN confdeltype = 'a' THEN ' (NO ACTION, correct)' ELSE ' -- WRONG, expected a' END
+       AS probe_p19
+FROM pg_constraint
+WHERE conname = 'transaction_submissions_split_agreement_fkey' AND contype = 'f';
+
 ROLLBACK;

@@ -10,8 +10,12 @@
 -- time (split_*), never a computed dollar split.
 --
 -- APPLY-ORDERING CONSTRAINT (cannot be enforced by SQL, must be held by
--- whoever applies these): this migration MUST be applied no later than
--- BACKLOG-3503's, ideally back-to-back in the same maintenance window.
+-- whoever applies these -- see the durable copy on BACKLOG-3503 in
+-- pm_comments, not just this comment): this migration MUST be applied
+-- together with BACKLOG-3503's, in stamp order, in the same maintenance
+-- window -- NOT relying on filename/version order to sequence them
+-- automatically; see the correction further down this file for why that
+-- reliance would be wrong.
 --   - It cannot apply BEFORE 3503: split_agreement_id's FK target
 --     (agent_split_agreements) does not exist until 3503 runs.
 --   - It must not apply AFTER 3503 by more than the time it takes to run this
@@ -56,13 +60,27 @@
 --   a record this table exists to keep honest.
 --
 -- split_agreement_id IS A REAL FK, NOT A BARE UUID (founder decision,
--- superseding the engineer's checkpoint recommendation of a bare uuid). The
--- ordering worry a bare uuid would avoid does not bite: migrations apply in
--- filename/version order, 3503 is stamped earlier than this file, so the
--- referenced table always exists by the time this one runs. A dangling id
--- pointing at nothing is a worse failure on a compliance record than the
--- ordering constraint above, which is enforceable by discipline (see the
--- APPLY-ORDERING note) where a dangling FK is not.
+-- superseding the engineer's checkpoint recommendation of a bare uuid). A
+-- dangling id pointing at nothing is a worse failure on a compliance record
+-- than the ordering constraint above, which is enforceable by discipline
+-- (see the APPLY-ORDERING note) where a dangling FK is not.
+--
+-- CORRECTION (SR review, pm_comments 701d1100 on BACKLOG-3519): an earlier
+-- draft of this note claimed "migrations apply in filename/version order,
+-- 3503 is stamped earlier than this file, so the referenced table always
+-- exists by the time this one runs." That is FALSE for this project as
+-- measured against the live `supabase_migrations.schema_migrations` table on
+-- 2026-09-25: 3503 (`20260922220719`) is an OUT-OF-ORDER pending migration --
+-- seven later-stamped files are already applied (highest `20260925053321`),
+-- and `supabase db push` refuses to apply an out-of-order file without
+-- `--include-all`. Filename order therefore guarantees NOTHING here; 3503
+-- could be skipped entirely on a routine push, and this migration would then
+-- fail on its FK target at apply time. That failure is LOUD (missing
+-- relation, the whole file rolls back inside its own BEGIN/COMMIT), not a
+-- silent-corruption risk -- but do not rely on ordering to avoid it. Apply
+-- 3503 and this file together, explicitly, in stamp order, in the same
+-- window (`supabase db push --include-all`, or two explicit applies) -- see
+-- the apply-ordering constraint recorded on BACKLOG-3503 in pm_comments.
 --
 -- NO CHECK TIES commission_adjustment_reason TO A RATE MISMATCH. The scope
 -- note ("recordable when actual differs from offered, in either direction")
