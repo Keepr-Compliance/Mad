@@ -20,11 +20,12 @@ constraint, index and policy name (BACKLOG-3503, the founder's terminology
 correction: a deal pays a *commission*; the brokerage/agent division of it is a
 *split*). The recorded run is the seventh: **30 controls, 210 assertions, all
 green; 41 mutants × 30 controls = 1,230 runs, 3:43.90 wall clock (`time`,
-real).** Every
-RED set is byte-identical to the pre-rename round modulo one `now()` timestamp in
-a single assertion message (C26) — the rename changed no behaviour. Every mutant
-reddens at least one control and every control is reddened by at least one
-mutant. Every result below was measured; none was predicted. `control-run.txt`
+real).** Every `RED:`/`green:` line is identical to the pre-rename round with
+zero exceptions — the rename changed no behaviour. (One `CONTROL FAILED` detail
+message, C26's, differs only in its `now()` timestamp; that is message text, not
+a RED set.) Every mutant reddens at least one control and every control is
+reddened by at least one mutant. Every result below was measured; none was
+predicted. `control-run.txt`
 and `mutant-run.txt` in this directory are the runs' own output, unedited.
 
 It is not in CI: CI has no database. The text-level tripwire that does run in CI
