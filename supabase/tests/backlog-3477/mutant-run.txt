@@ -1,0 +1,250 @@
+# Recorded 2026-09-25 at 476ae1609 on the test venue (Postgres 17.6, role postgres; values on the backlog item). gate OK before and after.
+m01-helper-without-it-admin  [as expected]
+    MUTATION APPLIED: 2 line(s) differ; first: AND om.role IN ('broker', 'admin')
+    RED:   c05 c08 c11
+    green: none
+      c05: CONTROL FAILED: C05 it_admin ticks I_rev (under_review): expected rows:1, got 42501:not_authorized
+      c08: not_authorized
+      c11: CONTROL FAILED: C11 it_admin reads transaction_submissions: got 0, want 1
+m02-helper-any-member  [as expected]
+    MUTATION APPLIED: 1 line(s) differ; first: removed: AND om.role IN ('broker', 'admin', 'it_admin')
+    RED:   c06 c11
+    green: none
+      c06: CONTROL FAILED: C06 submitter: expected ~^42501:not_authorized$, got rows:1
+      c11: CONTROL FAILED: C11 other T1 agent reads transaction_submissions: got 1, want 0
+m03-helper-anon-revoked  [as expected]
+    MUTATION APPLIED: 3 line(s) differ; first: GRANT EXECUTE ON FUNCTION public.can_review_submission(uuid) TO authenticated;
+    RED:   c11 c15
+    green: none
+      c11: CONTROL FAILED: C11 anon transaction_submissions: expected ~^(rows:0|42501:permission denied for table ), got 42501:permission denied for function can_review_su
+      c15: CONTROL FAILED: C15 can_review_submission anon EXECUTE = true
+m04a-submissions-read-old-roles  [as expected]
+    MUTATION APPLIED: 3 line(s) differ; first: OR organization_id IN (SELECT organization_members.organization_id FROM public.organization_members
+    RED:   c11 c12
+    green: none
+      c11: CONTROL FAILED: C11 it_admin reads transaction_submissions: got 0, want 1
+      c12: CONTROL FAILED: C12 transaction_submissions.transaction_submissions_select_public uses the helper and names no role: ((submitted_by = ( SELECT auth.uid() AS uid
+m04b-messages-read-old-roles  [as expected]
+    MUTATION APPLIED: 8 line(s) differ; first: OR EXISTS (
+    RED:   c11 c12
+    green: none
+      c11: CONTROL FAILED: C11 it_admin reads submission_messages: got 0, want 1
+      c12: CONTROL FAILED: C12 submission_messages.message_access_via_submission uses the helper and names no role: (EXISTS ( SELECT 1
+m04c-attachments-read-old-roles  [as expected]
+    MUTATION APPLIED: 8 line(s) differ; first: OR EXISTS (
+    RED:   c11 c12
+    green: none
+      c11: CONTROL FAILED: C11 it_admin reads submission_attachments: got 0, want 1
+      c12: CONTROL FAILED: C12 submission_attachments.attachment_access_via_submission uses the helper and names no role: (EXISTS ( SELECT 1
+m04d-checklists-read-old-roles  [as expected]
+    MUTATION APPLIED: 8 line(s) differ; first: OR EXISTS (
+    RED:   c11 c12
+    green: none
+      c11: CONTROL FAILED: C11 it_admin reads submission_checklists: got 0, want 1
+      c12: CONTROL FAILED: C12 submission_checklists.submission_checklists_select uses the helper and names no role: (EXISTS ( SELECT 1
+m04e-items-read-old-roles  [as expected]
+    MUTATION APPLIED: 8 line(s) differ; first: OR EXISTS (
+    RED:   c11 c12
+    green: none
+      c11: CONTROL FAILED: C11 it_admin reads submission_checklist_items: got 0, want 1
+      c12: CONTROL FAILED: C12 submission_checklist_items.submission_checklist_items_select uses the helper and names no role: (EXISTS ( SELECT 1
+m04f-links-read-old-roles  [as expected]
+    MUTATION APPLIED: 8 line(s) differ; first: OR EXISTS (
+    RED:   c11 c12
+    green: none
+      c11: CONTROL FAILED: C11 it_admin reads submission_checklist_links: got 0, want 2
+      c12: CONTROL FAILED: C12 submission_checklist_links.submission_checklist_links_select uses the helper and names no role: (EXISTS ( SELECT 1
+m04g-members-read-old-roles  [as expected]
+    MUTATION APPLIED: 8 line(s) differ; first: OR EXISTS (
+    RED:   c11 c12
+    green: none
+      c11: CONTROL FAILED: C11 it_admin reads submission_checklist_link_members: got 0, want 2
+      c12: CONTROL FAILED: C12 submission_checklist_link_members.submission_checklist_link_members_select uses the helper and names no role: (EXISTS ( SELECT 1
+m05-header-insert-allows-added-at-review  [as expected]
+    MUTATION APPLIED: 4 line(s) differ; first: EXISTS (
+    RED:   c08
+    green: none
+      c08: CONTROL FAILED: C08 submitter header with added-at-review values: expected RLS, got rows:1
+m06-item-insert-allows-reviewer-values  [as expected]
+    MUTATION APPLIED: 5 line(s) differ; first: EXISTS (
+    RED:   c10
+    green: none
+      c10: CONTROL FAILED: C10 pre-ticked item: expected RLS, got rows:1
+m07-header-insert-without-feature  [as expected]
+    MUTATION APPLIED: 1 line(s) differ; first: removed: AND COALESCE((public.check_feature_access(ts.organization_id, 'transaction_checklists') ->> 'allowed'
+    RED:   c03
+    green: none
+      c03: CONTROL FAILED: C03 snapshot refused: expected RLS, got rows:1
+m08-header-insert-without-status  [as expected]
+    MUTATION APPLIED: 1 line(s) differ; first: removed: AND ts.status = 'uploading'
+    RED:   c04
+    green: none
+      c04: CONTROL FAILED: C04 direct header refused: expected RLS, got rows:1
+m09-snapshot-first-attachment-only  [as expected]
+    MUTATION APPLIED: 2 line(s) differ; first: SELECT COALESCE((array_agg(a.id))[1:1], '{}'), v_asked - count(DISTINCT a.local_attachment_id)::integer
+    RED:   c01
+    green: none
+      c01: CONTROL FAILED: C01 counts: got {"items": 3, "links": 3, "members": 3, "checklists": 2, "dropped_links": 1, "dropped_members": 3}
+m10-snapshot-writes-empty-links  [as expected]
+    MUTATION APPLIED: 4 line(s) differ; first: removed: IF COALESCE(cardinality(v_targets), 0) = 0 THEN
+    RED:   c01
+    green: none
+      c01: CONTROL FAILED: C01 counts: got {"items": 3, "links": 4, "members": 4, "checklists": 2, "dropped_links": 0, "dropped_members": 3}
+m11-snapshot-unknown-kind-skipped  [as expected]
+    MUTATION APPLIED: 1 line(s) differ; first: removed: OR v_kind IS NULL OR v_kind NOT IN ('attachment', 'email')
+    RED:   c02
+    green: none
+      c02: CONTROL FAILED: C02a bad kind: expected ~^22023:invalid_payload, got rows:1
+m12-snapshot-security-definer  [as expected]
+    MUTATION APPLIED: 2 line(s) differ; first: SECURITY DEFINER
+    RED:   c03 c04 c15
+    green: none
+      c03: CONTROL FAILED: C03 snapshot refused: expected RLS, got rows:1
+      c04: CONTROL FAILED: C04 snapshot refused: expected RLS, got rows:1
+      c15: CONTROL FAILED: C15 snapshot_submission_checklists security invoker
+m13-snapshot-passes-reviewer-values  [as expected]
+    MUTATION APPLIED: 5 line(s) differ; first: expected_document_type, is_checked, note, sort_order, reviewer_checked, reviewer_checked_by, reviewer_checked_
+    RED:   c10
+    green: none
+      c10: new row violates row-level security policy for table "submission_checklist_items"
+m14-tick-writes-is-checked  [as expected]
+    MUTATION APPLIED: 1 line(s) differ; first: is_checked          = p_checked,
+    RED:   c05
+    green: none
+      c05: CONTROL FAILED: C05 untick clears the reviewer columns; is_checked still true
+m15-tick-appends-on-no-op  [as expected]
+    MUTATION APPLIED: 3 line(s) differ; first: removed: IF v_row.reviewer_checked = p_checked THEN
+    RED:   c05
+    green: none
+      c05: CONTROL FAILED: C05 repeat: changed false
+m16-tick-without-status-gate  [as expected]
+    MUTATION APPLIED: 2 line(s) differ; first: THEN
+    RED:   c06
+    green: none
+      c06: CONTROL FAILED: C06 approved: expected ~^42501:not_open_for_review$, got rows:1
+m17-tick-without-feature-check  [as expected]
+    MUTATION APPLIED: 3 line(s) differ; first: removed: IF NOT COALESCE((public.check_feature_access(v_row.organization_id, 'transaction_checklists') ->> 'al
+    RED:   c06
+    green: none
+      c06: CONTROL FAILED: C06 feature off (T2): expected ~^42501:not_authorized$, got rows:1
+m18-tick-allows-added-at-review  [as expected]
+    MUTATION APPLIED: 3 line(s) differ; first: removed: IF v_row.added_at_review_by IS NOT NULL THEN
+    RED:   c05
+    green: none
+      c05: CONTROL FAILED: C05 added-at-review item refused: expected ~^42501:added_at_review$, got rows:1
+m19-tick-entry-with-status-key  [as expected]
+    MUTATION APPLIED: 1 line(s) differ; first: 'status', v_row.status,
+    RED:   c05 c09
+    green: none
+      c05: CONTROL FAILED: C05 entry shape: {"to": true, "from": false, "type": "checklist_review", "field": "reviewer_checked", "status": "submitted", "item_id": "0000000
+      c09: CONTROL FAILED: C09 no status key
+m20-tick-reads-history-into-variable  [as expected]
+    MUTATION APPLIED: 1 line(s) differ; first: SELECT status_history INTO v_row.status FROM public.transaction_submissions WHERE id = v_row.submission_id;
+    RED:   c07
+    green: none
+      c07: CONTROL FAILED: set_submission_checklist_reviewer_check: never reads status_history into a variable
+m21-tick-without-helper  [as expected]
+    MUTATION APPLIED: 2 line(s) differ; first: IF NOT FOUND THEN
+    RED:   c06
+    green: none
+      c06: CONTROL FAILED: C06 submitter: expected ~^42501:not_authorized$, got rows:1
+m22-add-allows-needs-changes  [as expected]
+    MUTATION APPLIED: 2 line(s) differ; first: IF v_sub.status IS NULL OR v_sub.status NOT IN ('submitted', 'resubmitted', 'under_review', 'needs_changes') T
+    RED:   c08
+    green: none
+      c08: CONTROL FAILED: C08 needs_changes: expected ~^42501:not_open_for_review$, got rows:1
+m23-add-accepts-archived  [as expected]
+    MUTATION APPLIED: 3 line(s) differ; first: AND t.organization_id = v_sub.organization_id;
+    RED:   c08
+    green: none
+      c08: CONTROL FAILED: C08 archived template -> template_not_found
+m24-add-accepts-other-org  [as expected]
+    MUTATION APPLIED: 1 line(s) differ; first: removed: AND t.organization_id = v_sub.organization_id
+    RED:   c08
+    green: none
+      c08: CONTROL FAILED: C08 other org template -> template_not_found
+m25-add-without-exists-check  [as expected]
+    MUTATION APPLIED: 3 line(s) differ; first: removed: IF FOUND THEN
+    RED:   c08
+    green: none
+      c08: duplicate key value violates unique constraint "submission_checklists_submission_template_key"
+m26-add-without-status-gate  [as expected]
+    MUTATION APPLIED: 2 line(s) differ; first: IF false THEN
+    RED:   c08
+    green: none
+      c08: CONTROL FAILED: C08 needs_changes: expected ~^42501:not_open_for_review$, got rows:1
+m27-add-without-helper  [as expected]
+    MUTATION APPLIED: 2 line(s) differ; first: IF NOT FOUND THEN
+    RED:   c08
+    green: none
+      c08: CONTROL FAILED: C08 submitter: expected ~^42501:not_authorized$, got rows:1
+m28-guard-without-prefix-test  [as expected]
+    MUTATION APPLIED: 5 line(s) differ; first: removed: FOR i IN 0 .. v_old_len - 1 LOOP
+    RED:   c13 c16
+    green: none
+      c13: CONTROL FAILED: C13 set []: expected ~^42501:status_history_append_only$, got rows:1
+      c16: CONTROL FAILED: C16 edit entry 0: expected ~^42501:status_history_append_only$, got rows:1
+m29-guard-without-changed-by-test  [as expected]
+    MUTATION APPLIED: 3 line(s) differ; first: OR NOT (v_elem ? 'type') THEN
+    RED:   c13
+    green: none
+      c13: CONTROL FAILED: C13 typed entry naming someone else: expected ~^42501:status_history_append_only$, got rows:1
+m30-guard-without-array-test  [as expected]
+    MUTATION APPLIED: 3 line(s) differ; first: removed: IF v_new IS NULL OR jsonb_typeof(v_new) <> 'array' THEN
+    RED:   c13
+    green: none
+      c13: CONTROL FAILED: C13 set object: expected ~^42501:status_history_append_only$, got 22023:cannot get array length of a non-array
+m31-guard-exempts-every-caller  [as expected]
+    MUTATION APPLIED: 2 line(s) differ; first: IF v_role IS NULL OR v_role IN ('service_role', 'authenticated') THEN
+    RED:   c13
+    green: none
+      c13: CONTROL FAILED: C13 set []: expected ~^42501:status_history_append_only$, got rows:1
+m32-guard-not-attached  [as expected]
+    MUTATION APPLIED: 3 line(s) differ; first: removed: CREATE TRIGGER status_history_append_only
+    RED:   c13 c15
+    green: none
+      c13: CONTROL FAILED: C13 set []: expected ~^42501:status_history_append_only$, got rows:1
+      c15: CONTROL FAILED: C15 guard is a BEFORE INSERT OR UPDATE row trigger
+m33-guard-no-service-exemption  [as expected]
+    MUTATION APPLIED: 2 line(s) differ; first: IF v_role IS NULL THEN
+    RED:   c13
+    green: none
+      c13: CONTROL FAILED: C13 service role rewrite: expected rows:1, got 42501:status_history_append_only
+m34-tick-anon-not-revoked  [as expected]
+    MUTATION APPLIED: 3 line(s) differ; first: REVOKE EXECUTE ON FUNCTION public.set_submission_checklist_reviewer_check(uuid, boolean) FROM PUBLIC;
+    RED:   c06 c15
+    green: none
+      c06: CONTROL FAILED: C06 anon: expected PRIV, got 42501:not_authorized
+      c15: CONTROL FAILED: C15 set_submission_checklist_reviewer_check anon EXECUTE = false
+m35-constraint-added-unguarded  [as expected]
+    MUTATION APPLIED: 2 line(s) differ; first: IF true OR NOT EXISTS (SELECT 1 FROM pg_constraint
+    RED:   c14
+    green: none
+      c14: constraint "submission_checklists_added_at_review_pair_check" for relation "submission_checklists" already exists
+m36-guard-checks-typed-entries-only  [as expected]
+    MUTATION APPLIED: 5 line(s) differ; first: IF jsonb_typeof(v_elem) = 'object' AND v_elem ? 'type'
+    RED:   c13
+    green: none
+      c13: CONTROL FAILED: C13 untyped entry naming someone else: expected ~^42501:status_history_append_only$, got rows:1
+m37-guard-update-only  [as expected]
+    MUTATION APPLIED: 2 line(s) differ; first: BEFORE UPDATE ON public.transaction_submissions
+    RED:   c15 c17
+    green: none
+      c15: CONTROL FAILED: C15 guard is a BEFORE INSERT OR UPDATE row trigger
+      c17: CONTROL FAILED: C17 typed entry naming the broker: expected ~^42501:status_history_append_only$, got rows:1
+m38-guard-insert-uses-append-test  [as expected]
+    MUTATION APPLIED: 6 line(s) differ; first: removed: IF TG_OP = 'INSERT' THEN
+    RED:   c17
+    green: none
+      c17: CONTROL FAILED: C17 typed entry naming the submitter: expected ~^42501:status_history_append_only$, got rows:1
+m39-guard-fires-after-status-trigger  [as expected]
+    MUTATION APPLIED: 2 line(s) differ; first: CREATE TRIGGER zz_status_history_append_only
+    RED:   c13
+    green: none
+      c13: CONTROL FAILED: C13 ReviewActions shape: expected rows:1, got 42501:status_history_append_only
+m40-guard-no-type-requirement  [as expected]
+    MUTATION APPLIED: 1 line(s) differ; first: removed: OR NOT (v_elem ? 'type')
+    RED:   c13
+    green: none
+      c13: CONTROL FAILED: C13 untyped entry naming the caller: expected ~^42501:status_history_append_only$, got rows:1
+mutants: 46 run, 0 not as expected
