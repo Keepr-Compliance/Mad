@@ -151,12 +151,12 @@ beforeEach(() => {
 
 describe('DashboardLayout', () => {
   it.each([
-    ['[agent, broker] (two brokerage rows)', [brokerageMembership('agent'), second(brokerageMembership('broker'))], 'agent', true],
-    ['[broker, agent] (two brokerage rows)', [brokerageMembership('broker'), second(brokerageMembership('agent'))], 'broker', false],
-    ['[personal, brokerage agent]', [personalMembership(), brokerageMembership('agent')], 'agent', true],
-    ['personal-org owner', [personalMembership()], 'agent', true],
-    ['brokerage admin', [brokerageMembership('admin')], 'admin', false],
-  ] as [string, Row[], string, boolean][])('%s -> role %s, floorOnly %s', async (_n, rows, role, floorOnly) => {
+    ['[agent, broker] (two brokerage rows)', 'agent', true, [brokerageMembership('agent'), second(brokerageMembership('broker'))]],
+    ['[broker, agent] (two brokerage rows)', 'broker', false, [brokerageMembership('broker'), second(brokerageMembership('agent'))]],
+    ['[personal, brokerage agent]', 'agent', true, [personalMembership(), brokerageMembership('agent')]],
+    ['personal-org owner', 'agent', true, [personalMembership()]],
+    ['brokerage admin', 'admin', false, [brokerageMembership('admin')]],
+  ] as [string, string, boolean, Row[]][])('%s -> role %s, floorOnly %s', async (_n, role, floorOnly, rows) => {
     given(rows);
     const { props, redirect } = await layoutOutcome();
     expect(redirect).toBeUndefined();
