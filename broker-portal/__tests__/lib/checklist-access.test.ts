@@ -204,6 +204,16 @@ describe('BACKLOG-3535 — brokerage wins, no fall-through', () => {
     expect(rpc).not.toHaveBeenCalledWith('can_edit_checklist_templates', { p_org_id: P });
   });
 
+  it('P3b an agent in the first brokerage and a broker in a second is refused, asking only the first', async () => {
+    const { rpc } = setup({
+      memberships: [brokerageMembership('agent'), secondBrokerageMembership('broker')],
+      canEdit: { [B]: false, [SECOND_BROKERAGE_ORG_ID]: true },
+    });
+    await expect(requireChecklistEditorAccess()).rejects.toThrow('Not authorized');
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(rpc).toHaveBeenCalledWith('can_edit_checklist_templates', { p_org_id: B });
+  });
+
   it('P4 a brokerage broker who owns a personal org edits the brokerage', async () => {
     setup({ memberships: [personalMembership(), brokerageMembership('broker')], canEdit: { [B]: true, [P]: true } });
     await expect(requireChecklistEditorAccess()).resolves.toMatchObject({ organizationId: B });

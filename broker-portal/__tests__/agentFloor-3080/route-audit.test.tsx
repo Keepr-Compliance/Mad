@@ -718,7 +718,9 @@ describe('own-gate pages (D4)', () => {
 
   it.each(cases)('%s refuses the %s', async (_page, persona, entry) => {
     given(OWN_GATE_PERSONAS[persona]);
-    expect(await run(entry.invoke)).toEqual(entry.refused);
+    // A persona who owns a personal org opens that org's template, so a 404 here is the gate, not the org filter.
+    const invoke = persona === '[brokerage agent, personal-org owner]' ? (entry.invokeAsOwner ?? entry.invoke) : entry.invoke;
+    expect(await run(invoke)).toEqual(entry.refused);
     expect(mockEmulator.state.writes).toEqual([]);
   });
 
