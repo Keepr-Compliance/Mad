@@ -88,7 +88,7 @@ export async function handlePreAuthValidation(): Promise<PreAuthResult> {
         "PreAuthValidation",
         { error: setSessionError.message }
       );
-      return rejectAfterClearingSession("token_invalid");
+      return await rejectAfterClearingSession("token_invalid");
     }
 
     // Server-side validation
@@ -101,7 +101,7 @@ export async function handlePreAuthValidation(): Promise<PreAuthResult> {
         "PreAuthValidation",
         { error: getUserError?.message }
       );
-      return rejectAfterClearingSession("session_revoked");
+      return await rejectAfterClearingSession("session_revoked");
     }
 
     // Valid! Update lastServerValidatedAt
@@ -133,20 +133,35 @@ export async function handlePreAuthValidation(): Promise<PreAuthResult> {
  * the DB after "token_invalid" / "session_revoked" on the understanding that
  * session.json is gone, so if the delete did not succeed the result must carry
  * a reason the renderer does NOT route to DB init.
+ *
+ * Total: never rejects. A throw from the clear (or from the warning log) must
+ * not escape as an IPC rejection, which the renderer would treat as valid.
  */
 async function rejectAfterClearingSession(
   reason: "token_invalid" | "session_revoked"
 ): Promise<PreAuthResult> {
-  const cleared = await sessionService.clearSession();
-  if (cleared !== true) {
+  let cleared: unknown = false;
+  let clearError: string | undefined;
+  try {
+    cleared = await sessionService.clearSession();
+  } catch (error: unknown) {
+    clearError = error instanceof Error ? error.message : String(error);
+  }
+
+  if (cleared === true) {
+    return { valid: false, reason };
+  }
+
+  try {
     await logService.warn(
       "Pre-auth: could not clear rejected session, keeping DB closed",
       "PreAuthValidation",
-      { rejectedReason: reason }
+      { rejectedReason: reason, error: clearError }
     );
-    return { valid: false, reason: "session_clear_failed" };
+  } catch {
+    // Logging must not change the outcome: the DB stays closed either way.
   }
-  return { valid: false, reason };
+  return { valid: false, reason: "session_clear_failed" };
 }
 
 /**

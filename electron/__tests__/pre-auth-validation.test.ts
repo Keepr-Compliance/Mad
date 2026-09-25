@@ -9,6 +9,7 @@
 
 import { AuthApiError } from "@supabase/auth-js";
 import { handlePreAuthValidation } from "../handlers/preAuthValidationHandler";
+import logService from "../services/logService";
 
 // ============================================
 // MOCKS
@@ -241,6 +242,53 @@ describe("handlePreAuthValidation", () => {
       mockSetSession.mockResolvedValue({ error: null });
       mockGetUser.mockResolvedValue({ data: { user: null }, error: { message: "User not found" } });
       mockClearSession.mockResolvedValue(false);
+
+      const result = await handlePreAuthValidation();
+
+      expect(result).toEqual({ valid: false, reason: "session_clear_failed" });
+    });
+
+    // A clear that THROWS must not escape the handler: an IPC rejection is
+    // treated by the renderer as valid:true, which would open the DB with the
+    // rejected session still on disk. Grace expired, so no fallback can
+    // mask the outcome.
+    const graceExpiredSession = {
+      ...mockSession,
+      lastServerValidatedAt: Date.now() - 25 * 60 * 60 * 1000,
+    };
+
+    it("setSession rejected + clear throws -> session_clear_failed", async () => {
+      mockLoadSession.mockResolvedValue(graceExpiredSession);
+      mockSetSession.mockResolvedValue({
+        data: { user: null, session: null },
+        error: refreshTokenNotFound(),
+      });
+      mockClearSession.mockRejectedValue(new Error("ENOSPC: log write failed"));
+
+      const result = await handlePreAuthValidation();
+
+      expect(result).toEqual({ valid: false, reason: "session_clear_failed" });
+    });
+
+    it("getUser rejected + clear throws -> session_clear_failed", async () => {
+      mockLoadSession.mockResolvedValue(graceExpiredSession);
+      mockSetSession.mockResolvedValue({ error: null });
+      mockGetUser.mockResolvedValue({ data: { user: null }, error: { message: "User not found" } });
+      mockClearSession.mockRejectedValue(new Error("ENOSPC: log write failed"));
+
+      const result = await handlePreAuthValidation();
+
+      expect(result).toEqual({ valid: false, reason: "session_clear_failed" });
+    });
+
+    it("clear fails + its warning log throws -> session_clear_failed", async () => {
+      mockLoadSession.mockResolvedValue(graceExpiredSession);
+      mockSetSession.mockResolvedValue({ error: null });
+      mockGetUser.mockResolvedValue({ data: { user: null }, error: { message: "User not found" } });
+      mockClearSession.mockResolvedValue(false);
+      (logService.warn as jest.Mock).mockRejectedValueOnce(
+        new Error("ENOSPC: log write failed")
+      );
 
       const result = await handlePreAuthValidation();
 
