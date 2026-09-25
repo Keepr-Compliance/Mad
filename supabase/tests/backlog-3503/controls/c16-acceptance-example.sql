@@ -10,7 +10,7 @@ DECLARE price numeric := 100000; rate numeric := 10;
         a_pct numeric; b_pct numeric; agent_amt numeric; brok_amt numeric;
 BEGIN
   SELECT amount INTO fee FROM public.franchise_fee_in_force(current_setting('t3503.o_a')::uuid, DATE '2026-09-01');
-  SELECT agent_pct, brokerage_pct INTO a_pct, b_pct FROM public.commission_agreement_in_force(
+  SELECT agent_pct, brokerage_pct INTO a_pct, b_pct FROM public.split_agreement_in_force(
     current_setting('t3503.o_a')::uuid, current_setting('t3503.u_agent_a')::uuid, DATE '2026-09-01');
   commission := price * rate / 100;
   remainder  := commission - fee;

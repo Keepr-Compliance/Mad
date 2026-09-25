@@ -4,9 +4,9 @@ m01-read-helpers-security-definer
     green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c09 c10 c11 c12 c14 c15 c16 c18 c19 c20 c24 c25 c26 c27 c28 c29
       c13: CONTROL FAILED: an agent asking about a colleague gets 0 rows, got 1
       c17: CONTROL FAILED: neither read helper is SECURITY DEFINER
-      c21: CONTROL FAILED: ...and 0 through commission_agreement_in_force, got 1
-      c22: CONTROL FAILED: ...and 0 through commission_agreement_in_force, got 1
-      c23: CONTROL FAILED: ...and 0 through commission_agreement_in_force, got 1
+      c21: CONTROL FAILED: ...and 0 through split_agreement_in_force, got 1
+      c22: CONTROL FAILED: ...and 0 through split_agreement_in_force, got 1
+      c23: CONTROL FAILED: ...and 0 through split_agreement_in_force, got 1
 m02-write-rule-uses-is-org-admin
     MUTATION APPLIED: the write rule delegates to is_org_admin() (admits it_admin, excludes broker)
     RED:   c01 c04 c04b c05 c06 c08 c10 c11 c14 c15 c16 c21 c22 c23 c24 c25 c27 c28 c29
@@ -16,7 +16,7 @@ m02-write-rule-uses-is-org-admin
       c04b: CONTROL FAILED: agreement INSERT permitted for the org broker, got 42501
       c05: CONTROL FAILED: the row is unchanged at 60, got 
       c06: CONTROL FAILED: broker A still sees all 7 org-A agreements, got 0
-      c08: new row violates row-level security policy for table "agent_commission_agreements"
+      c08: new row violates row-level security policy for table "agent_split_agreements"
       c10: CONTROL FAILED: on 2026-03-01 the January row is in force (60), got 
       c11: CONTROL FAILED: the broker can read both same-day rows at all (0 rows here means the SELECT was refused, not that the fixture is wrong)
       c14: CONTROL FAILED: on 2026-03-01 the fee is 2000, got 
@@ -59,13 +59,13 @@ m06-set-by-inside-the-insert-grant
     RED:   c08 c18
     green: c01 c02 c03 c04 c04b c05 c06 c07 c09 c10 c11 c12 c13 c14 c15 c16 c17 c19 c20 c21 c22 c23 c24 c25 c26 c27 c28 c29
       c08: CONTROL FAILED: naming set_by is refused with 42501, got OK
-      c18: CONTROL FAILED: authenticated cannot name set_by on an INSERT into public.agent_commission_agreements
+      c18: CONTROL FAILED: authenticated cannot name set_by on an INSERT into public.agent_split_agreements
 m07-set-by-has-no-default
     MUTATION APPLIED: set_by DEFAULT auth.uid() dropped on both tables
     RED:   c04b c08 c15 c24 c25 c27 c28 c29
     green: c01 c02 c03 c04 c05 c06 c07 c09 c10 c11 c12 c13 c14 c16 c17 c18 c19 c20 c21 c22 c23 c26
       c04b: CONTROL FAILED: agreement INSERT permitted for the org broker, got 23502
-      c08: null value in column "set_by" of relation "agent_commission_agreements" violates not-null constraint
+      c08: null value in column "set_by" of relation "agent_split_agreements" violates not-null constraint
       c15: CONTROL FAILED: 70/20 is refused by the sum check, got 23502
       c24: CONTROL FAILED: the active broker still writes an agreement, got 23502
       c25: CONTROL FAILED: a broker CAN record an agreement for a DEACTIVATED agent dated INSIDE their active period, got 23502
@@ -82,7 +82,7 @@ m09-delete-granted-with-a-policy
     RED:   c06 c18
     green: c01 c02 c03 c04 c04b c05 c07 c08 c09 c10 c11 c12 c13 c14 c15 c16 c17 c19 c20 c21 c22 c23 c24 c25 c26 c27 c28 c29
       c06: CONTROL FAILED: agreement DELETE refused with 42501, got OK
-      c18: CONTROL FAILED: authenticated holds no DELETE on public.agent_commission_agreements
+      c18: CONTROL FAILED: authenticated holds no DELETE on public.agent_split_agreements
 m10-anon-can-read
     MUTATION APPLIED: anon granted SELECT + EXECUTE and given a USING (true) policy
     RED:   c07 c18
@@ -160,7 +160,7 @@ m19-insert-policy-without-the-member-check
     RED:   c09 c17 c25 c27 c28 c29
     green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c10 c11 c12 c13 c14 c15 c16 c18 c19 c20 c21 c22 c23 c24 c26
       c09: CONTROL FAILED: a non-member subject is refused, got OK
-      c17: CONTROL FAILED: the member check compares m.organization_id to the NEW ROW1s org, got: can_write_commission_agreements(organization_id)
+      c17: CONTROL FAILED: the member check compares m.organization_id to the NEW ROW1s org, got: can_write_split_agreements(organization_id)
       c25: CONTROL FAILED: ...and CANNOT date one AFTER they left, refused with 42501, got OK
       c27: CONTROL FAILED: the day AFTER the deactivation is refused with 42501, got OK
       c28: CONTROL FAILED: but a new agreement dated after they left is still refused, got OK
@@ -169,7 +169,7 @@ m20-insert-policy-unqualified-org-column
     MUTATION APPLIED: the EXISTS clause uses an UNQUALIFIED organization_id (binds to m.organization_id -- vacuously true)
     RED:   c17
     green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c09 c10 c11 c12 c13 c14 c15 c16 c18 c19 c20 c21 c22 c23 c24 c25 c26 c27 c28 c29
-      c17: CONTROL FAILED: the member check compares m.organization_id to the NEW ROW1s org, got: (can_write_commission_agreements(organization_id) AND (EXISTS (
+      c17: CONTROL FAILED: the member check compares m.organization_id to the NEW ROW1s org, got: (can_write_split_agreements(organization_id) AND (EXISTS ( SELE
 m21-update-granted-without-a-policy
     MUTATION APPLIED: UPDATE granted, NO update policy added
     RED:   c05
@@ -180,17 +180,17 @@ m22-delete-granted-without-a-policy
     RED:   c06 c18
     green: c01 c02 c03 c04 c04b c05 c07 c08 c09 c10 c11 c12 c13 c14 c15 c16 c17 c19 c20 c21 c22 c23 c24 c25 c26 c27 c28 c29
       c06: CONTROL FAILED: agreement DELETE refused with 42501, got OK
-      c18: CONTROL FAILED: authenticated holds no DELETE on public.agent_commission_agreements
+      c18: CONTROL FAILED: authenticated holds no DELETE on public.agent_split_agreements
 m23-self-comparison-in-a-different-policy
     MUTATION APPLIED: a self-comparison planted in the franchise SELECT policy (a DIFFERENT site from C17 assertion 2)
     RED:   c17
     green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c09 c10 c11 c12 c13 c14 c15 c16 c18 c19 c20 c21 c22 c23 c24 c25 c26 c27 c28 c29
-      c17: CONTROL FAILED: no policy contains a self-comparison: (can_write_commission_agreements(organization_id) AND (EXISTS ( SELECT 1
+      c17: CONTROL FAILED: no policy contains a self-comparison: (can_write_split_agreements(organization_id) AND (EXISTS ( SELECT 1
 m24-truncate-granted
     MUTATION APPLIED: TRUNCATE granted to authenticated on both tables
     RED:   c18
     green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c09 c10 c11 c12 c13 c14 c15 c16 c17 c19 c20 c21 c22 c23 c24 c25 c26 c27 c28 c29
-      c18: CONTROL FAILED: authenticated holds no TRUNCATE on public.agent_commission_agreements
+      c18: CONTROL FAILED: authenticated holds no TRUNCATE on public.agent_split_agreements
 m25-revoke-all-omitted
     MUTATION APPLIED: REVOKE ALL omitted -- the default ACL grant stands on both tables
     RED:   c05 c06 c07 c08 c18
@@ -199,9 +199,9 @@ m25-revoke-all-omitted
       c06: CONTROL FAILED: agreement DELETE refused with 42501, got OK
       c07: CONTROL FAILED: anon SELECT on agreements refused, got OK
       c08: CONTROL FAILED: naming set_by is refused with 42501, got OK
-      c18: CONTROL FAILED: anon holds no UPDATE on public.agent_commission_agreements
+      c18: CONTROL FAILED: anon holds no UPDATE on public.agent_split_agreements
 m26-rls-not-enabled-on-agreements
-    MUTATION APPLIED: ENABLE ROW LEVEL SECURITY missing on agent_commission_agreements
+    MUTATION APPLIED: ENABLE ROW LEVEL SECURITY missing on agent_split_agreements
     RED:   c01 c02 c03 c04 c06 c09 c13 c21 c22 c23 c24 c25 c27 c28 c29
     green: c04b c05 c07 c08 c10 c11 c12 c14 c15 c16 c17 c18 c19 c20 c26
       c01: CONTROL FAILED: broker B sees 0 of org A agreements
@@ -249,7 +249,7 @@ m29-agent-fkey-on-delete-cascade
     RED:   c19 c20
     green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c09 c10 c11 c12 c13 c14 c15 c16 c17 c18 c21 c22 c23 c24 c25 c26 c27 c28 c29
       c19: CONTROL FAILED: deleting the agent is blocked by the agent key, got OK
-      c20: CONTROL FAILED: agent_commission_agreements_agent_fkey is a foreign key ON DELETE NO ACTION, got c
+      c20: CONTROL FAILED: agent_split_agreements_agent_fkey is a foreign key ON DELETE NO ACTION, got c
 m30-franchise-set-by-fkey-on-delete-cascade
     MUTATION APPLIED: franchise set_by foreign key rewritten ON DELETE CASCADE
     RED:   c19 c20
@@ -261,7 +261,7 @@ m31-org-fkey-restrict-not-no-action
     RED:   c19 c20
     green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c09 c10 c11 c12 c13 c14 c15 c16 c17 c18 c21 c22 c23 c24 c25 c26 c27 c28 c29
       c19: CONTROL FAILED: deleting the organization is blocked by the org key, got organization_franchise_fees_org_fkey
-      c20: CONTROL FAILED: agent_commission_agreements_org_fkey is a foreign key ON DELETE NO ACTION, got r
+      c20: CONTROL FAILED: agent_split_agreements_org_fkey is a foreign key ON DELETE NO ACTION, got r
 m32-own-row-policy-is-the-bare-uid
     MUTATION APPLIED: the own-row policy reverted to the bare auth.uid() predicate
     RED:   c17 c21 c22
@@ -303,7 +303,7 @@ m38-trigger-ignores-the-transition
     MUTATION APPLIED: the deactivation trigger no longer tests the TRANSITION -- any update leaving a row suspended re-stamps the date
     RED:   c26 c27
     green: c01 c02 c03 c04 c04b c05 c06 c07 c08 c09 c10 c11 c12 c13 c14 c15 c16 c17 c18 c19 c20 c21 c22 c23 c24 c25 c28 c29
-      c26: CONTROL FAILED: a write that does not name license_status leaves the date alone, got 2026-09-23 18:06:19.643564+00
+      c26: CONTROL FAILED: a write that does not name license_status leaves the date alone, got 2026-09-25 03:16:51.152216+00
       c27: CONTROL FAILED: precondition: a suspended row with no recorded date exists
 m40-comparison-loses-its-utc-pin
     MUTATION APPLIED: the date comparison resolves against the SESSION timezone, not UTC

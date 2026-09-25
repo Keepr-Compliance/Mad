@@ -8,7 +8,7 @@
 -- becomes a writer there and so reads org B's agreement row. C22's first
 -- assertion is an unqualified count, so it sees that. The row read is not their
 -- own; the control's message says "anywhere" for exactly this reason.
-CREATE OR REPLACE FUNCTION public.can_write_commission_agreements(p_org_id uuid)
+CREATE OR REPLACE FUNCTION public.can_write_split_agreements(p_org_id uuid)
 RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public
 AS $fn$ SELECT EXISTS (SELECT 1 FROM public.organization_members m
                         WHERE m.organization_id = p_org_id AND m.user_id = (SELECT auth.uid())
@@ -17,7 +17,7 @@ AS $fn$ SELECT EXISTS (SELECT 1 FROM public.organization_members m
 DO $m$
 DECLARE src text;
 BEGIN
-  SELECT prosrc INTO src FROM pg_proc WHERE oid='public.can_write_commission_agreements(uuid)'::regprocedure;
+  SELECT prosrc INTO src FROM pg_proc WHERE oid='public.can_write_split_agreements(uuid)'::regprocedure;
   IF position('''agent''' in src) = 0 THEN RAISE EXCEPTION 'MUTATION NOT APPLIED'; END IF;
   IF position('license_status' in src) = 0
   THEN RAISE EXCEPTION 'MUTATION NOT APPLIED: the status term went with it'; END IF;

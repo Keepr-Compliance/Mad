@@ -20,9 +20,9 @@
 DO $$
 DECLARE k text; d char;
 BEGIN
-  FOREACH k IN ARRAY ARRAY['agent_commission_agreements_org_fkey',
-                           'agent_commission_agreements_agent_fkey',
-                           'agent_commission_agreements_set_by_fkey',
+  FOREACH k IN ARRAY ARRAY['agent_split_agreements_org_fkey',
+                           'agent_split_agreements_agent_fkey',
+                           'agent_split_agreements_set_by_fkey',
                            'organization_franchise_fees_org_fkey',
                            'organization_franchise_fees_set_by_fkey'] LOOP
     SELECT confdeltype INTO d FROM pg_constraint WHERE conname = k AND contype = 'f';
@@ -32,7 +32,7 @@ BEGIN
   -- and nothing else in this migration carries a delete action at all
   PERFORM pg_temp.check(
     (SELECT count(*) FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid
-      WHERE t.relname IN ('agent_commission_agreements','organization_franchise_fees')
+      WHERE t.relname IN ('agent_split_agreements','organization_franchise_fees')
         AND c.contype = 'f') = 5,
     'the two tables carry exactly five foreign keys between them');
 END $$;

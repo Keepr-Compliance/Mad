@@ -1,5 +1,5 @@
 /**
- * BACKLOG-3503 — the CI tripwire for the commission-agreements migration.
+ * BACKLOG-3503 — the CI tripwire for the split-agreements migration.
  *
  * WHAT THIS CAN PROVE: what the migration file says.
  *
@@ -61,9 +61,9 @@ const REPO = join(__dirname, '../../..');
 const MIGRATIONS_DIR = join(REPO, 'supabase/migrations');
 const SCHEMA_FILE = '20260922220719_backlog_3503_commission_agreements.sql';
 
-const TABLES = ['agent_commission_agreements', 'organization_franchise_fees'] as const;
-const READ_HELPERS = ['commission_agreement_in_force', 'franchise_fee_in_force'] as const;
-const RLS_HELPERS = ['can_write_commission_agreements', 'is_active_commission_member'] as const;
+const TABLES = ['agent_split_agreements', 'organization_franchise_fees'] as const;
+const READ_HELPERS = ['split_agreement_in_force', 'franchise_fee_in_force'] as const;
+const RLS_HELPERS = ['can_write_split_agreements', 'is_active_split_member'] as const;
 
 /** Read a migration with CRLF normalised (Windows CI checks out with CRLF). */
 const readMigration = (file: string): string =>
@@ -147,10 +147,10 @@ function insertGrantColumns(table: string): string[] {
   return m[1].split(',').map((c) => c.trim()).filter(Boolean);
 }
 
-describe('BACKLOG-3503 commission agreements migration', () => {
+describe('BACKLOG-3503 split agreements migration', () => {
   it('the file is not empty and the harness reads the same file CI does', () => {
     expect(RAW.length).toBeGreaterThan(2000);
-    expect(SQL).toContain('CREATE TABLE public.agent_commission_agreements');
+    expect(SQL).toContain('CREATE TABLE public.agent_split_agreements');
     // the executable harness points at this exact stamp
     const runner = readFileSync(join(REPO, 'supabase/tests/backlog-3503/run.sh'), 'utf8');
     expect(runner).toContain(SCHEMA_FILE);
@@ -175,13 +175,13 @@ describe('BACKLOG-3503 commission agreements migration', () => {
     for (const t of TABLES) {
       expect(FLAT).toMatch(new RegExp(`REVOKE ALL ON public\\.${t} FROM anon, authenticated`, 'i'));
     }
-    expect(FLAT).not.toMatch(/REVOKE (INSERT|UPDATE|DELETE|SELECT)[^;]*ON public\.(agent_commission_agreements|organization_franchise_fees)/i);
+    expect(FLAT).not.toMatch(/REVOKE (INSERT|UPDATE|DELETE|SELECT)[^;]*ON public\.(agent_split_agreements|organization_franchise_fees)/i);
   });
 
   it('grants no UPDATE and no DELETE on either table', () => {
-    expect(FLAT).not.toMatch(/GRANT[^;]*\bUPDATE\b[^;]*ON public\.(agent_commission_agreements|organization_franchise_fees)/i);
-    expect(FLAT).not.toMatch(/GRANT[^;]*\bDELETE\b[^;]*ON public\.(agent_commission_agreements|organization_franchise_fees)/i);
-    expect(FLAT).not.toMatch(/GRANT ALL[^;]*ON public\.(agent_commission_agreements|organization_franchise_fees)/i);
+    expect(FLAT).not.toMatch(/GRANT[^;]*\bUPDATE\b[^;]*ON public\.(agent_split_agreements|organization_franchise_fees)/i);
+    expect(FLAT).not.toMatch(/GRANT[^;]*\bDELETE\b[^;]*ON public\.(agent_split_agreements|organization_franchise_fees)/i);
+    expect(FLAT).not.toMatch(/GRANT ALL[^;]*ON public\.(agent_split_agreements|organization_franchise_fees)/i);
     expect(FLAT).not.toMatch(/FOR (UPDATE|DELETE)\b/i); // no UPDATE/DELETE policy either
   });
 
@@ -227,15 +227,15 @@ describe('BACKLOG-3503 commission agreements migration', () => {
     // organization_members row; a deactivated one has a row at
     // license_status 'suspended'. Neither may read, so the policy needs both
     // terms and the membership rule needs the status filter.
-    const own = policyBody('agent_commission_agreements_select_own');
+    const own = policyBody('agent_split_agreements_select_own');
     expect(own).toContain('agent_user_id = (SELECT auth.uid())');
-    expect(own).toContain('public.is_active_commission_member(');
+    expect(own).toContain('public.is_active_split_member(');
     // the bare predicate, as the whole USING clause, is what this forbids
     expect(own).not.toMatch(/USING \(agent_user_id = \(SELECT auth\.uid\(\)\)\)/i);
   });
 
   it('spells active membership as license_status = active, and scopes it to the row\'s org', () => {
-    const body = flatten(functionBody('is_active_commission_member'));
+    const body = flatten(functionBody('is_active_split_member'));
     expect(body).toMatch(/m\.license_status = 'active'/i);
     // not a fail-open exclusion list: organization_members.license_status also
     // admits 'pending' and 'expired', and a future fifth state must be denied.
@@ -245,7 +245,7 @@ describe('BACKLOG-3503 commission agreements migration', () => {
   });
 
   it('names exactly broker and admin as writers, and never reaches for is_org_admin', () => {
-    const body = flatten(functionBody('can_write_commission_agreements'));
+    const body = flatten(functionBody('can_write_split_agreements'));
     expect(body).toMatch(/m\.role IN \('broker', 'admin'\)/i);
     expect(SQL).not.toMatch(/is_org_admin/i);
     // no other role may appear in the write rule
@@ -257,7 +257,7 @@ describe('BACKLOG-3503 commission agreements migration', () => {
     // the office-wide read and the write, not only the agent their own row. One
     // helper fronts all four policies -- both SELECT and both INSERT, on both
     // tables -- so the term belongs here and nowhere else.
-    const body = flatten(functionBody('can_write_commission_agreements'));
+    const body = flatten(functionBody('can_write_split_agreements'));
     expect(body).toMatch(/m\.license_status = 'active'/i);
     // same fail-closed spelling as the own-row rule: not an exclusion list
     expect(body).not.toMatch(/license_status\s+(NOT\s+IN|<>|!=)/i);
@@ -274,7 +274,7 @@ describe('BACKLOG-3503 commission agreements migration', () => {
   });
 
   it('writes the INSERT policy member check against the NEW ROW, not against itself', () => {
-    expect(FLAT).toContain('m.organization_id = agent_commission_agreements.organization_id');
+    expect(FLAT).toContain('m.organization_id = agent_split_agreements.organization_id');
     expect(FLAT).not.toMatch(/m\.organization_id = m\.organization_id/i);
   });
 
@@ -288,13 +288,13 @@ describe('BACKLOG-3503 commission agreements migration', () => {
     // It is pinned here as well as in the executable harness (controls C25 and
     // C27-C29, mutants m36 and m40-m42) because the harness needs a database and
     // CI has none. This assertion is the CI red if the clause is ever flattened.
-    const insert = policyBody('agent_commission_agreements_insert_writer');
-    expect(insert).toContain('m.user_id = agent_commission_agreements.agent_user_id');
+    const insert = policyBody('agent_split_agreements_insert_writer');
+    expect(insert).toContain('m.user_id = agent_split_agreements.agent_user_id');
     // Both arms sit in the SAME EXISTS as the subject term, so ONE membership row
     // must carry the whole test: separate EXISTS clauses could be satisfied by
     // the subject's row and by somebody else's active row.
     expect(insert).toMatch(
-      /m\.user_id = agent_commission_agreements\.agent_user_id AND \(m\.license_status = 'active' OR \(m\.license_status = 'suspended'/i,
+      /m\.user_id = agent_split_agreements\.agent_user_id AND \(m\.license_status = 'active' OR \(m\.license_status = 'suspended'/i,
     );
     // The boundary is INCLUSIVE, and the comparison is pinned to UTC rather than
     // left to resolve against whatever timezone the connection happens to carry.
@@ -317,7 +317,7 @@ describe('BACKLOG-3503 commission agreements migration', () => {
     // suspended row with no recorded date fails closed, deliberately) and keeps
     // that refusal if the comparison is ever rewritten in a form where NULL does
     // not propagate. Since no mutant can hold it, this assertion does.
-    const insert = policyBody('agent_commission_agreements_insert_writer');
+    const insert = policyBody('agent_split_agreements_insert_writer');
     expect(insert).toMatch(/m\.deactivated_at IS NOT NULL/i);
   });
 

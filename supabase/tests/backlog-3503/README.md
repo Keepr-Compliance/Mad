@@ -1,21 +1,31 @@
-# BACKLOG-3503 harness — commission agreements, migration 1
+# BACKLOG-3503 harness — split agreements, migration 1
 
 Executes `supabase/migrations/20260922220719_backlog_3503_commission_agreements.sql`
 — **the shipped file itself, not a copy** — on a real Postgres 17.6, and records
 what every control and every mutant did.
 
-**It has been run.** Six times, on 2026-09-22 and 2026-09-23, every time on the
-same Postgres 17.6 test venue (the venue is named on the backlog item, not in
-this repository): as first written; again after the agent's own-row read was
-gated on active membership; again after that gate was extended to the broker and
-the admin; again after SR's implementation review; again after the founder ruled
-that an agreement may only be written FOR an active member; and again after he
-**refined** that rule to admit a backdated agreement inside the agent's active
-period (see *The reversal*, *The ruling extended*, *The SR round* and *The
-subject*). The recorded run is the sixth: **30 controls, 210 assertions, all
-green; 41 mutants × 30 controls = 1,230 runs, 230 s wall clock.** Every mutant
-reddens at least one control and every control is reddened by at least one
-mutant. Every result below was measured; none was predicted. `control-run.txt`
+**It has been run.** Seven times, on 2026-09-22, 2026-09-23 and 2026-09-24, every
+time on the same Postgres 17.6 test venue (the venue is named on the backlog
+item, not in this repository): as first written; again after the agent's own-row
+read was gated on active membership; again after that gate was extended to the
+broker and the admin; again after SR's implementation review; again after the
+founder ruled that an agreement may only be written FOR an active member; again
+after he **refined** that rule to admit a backdated agreement inside the agent's
+active period (see *The reversal*, *The ruling extended*, *The SR round* and *The
+subject*); and again after the table, both RLS helpers and the agreement read
+helper were renamed to replace "commission" with "split" throughout their
+identifiers — `agent_split_agreements`, `split_agreement_in_force`,
+`can_write_split_agreements`, `is_active_split_member` — plus every derived
+constraint, index and policy name (BACKLOG-3503, the founder's terminology
+correction: a deal pays a *commission*; the brokerage/agent division of it is a
+*split*). The recorded run is the seventh: **30 controls, 210 assertions, all
+green; 41 mutants × 30 controls = 1,230 runs, 3:43.90 wall clock (`time`,
+real).** Every `RED:`/`green:` line is identical to the pre-rename round with
+zero exceptions — the rename changed no behaviour. (One `CONTROL FAILED` detail
+message, C26's, differs only in its `now()` timestamp; that is message text, not
+a RED set.) Every mutant reddens at least one control and every control is
+reddened by at least one mutant. Every result below was measured; none was
+predicted. `control-run.txt`
 and `mutant-run.txt` in this directory are the runs' own output, unedited.
 
 It is not in CI: CI has no database. The text-level tripwire that does run in CI
@@ -96,7 +106,7 @@ nothing leaked out of a transaction.
 | database / connected role / server | `postgres` / `postgres` / 17.6 |
 | `public.users` rows | **0** |
 | `public.organizations` rows | **0** |
-| `agent_commission_agreements` / `organization_franchise_fees` exist | **no** |
+| `agent_split_agreements` / `organization_franchise_fees` exist | **no** |
 
 The gate refuses unless all four hold. The empty-`users` check is the one that
 makes production unreachable by construction.
@@ -149,7 +159,7 @@ matched nothing cannot pass.
 | `c25` | the INSERT policy's **subject** clause, four shapes over the same rows: a **deactivated** agent dated **inside** their active period is **admitted** (the founder's refinement), the same agent dated **after** they left is refused, a **removed** agent is refused by the EXISTS finding no row at all, and an **active** agent is admitted at any date — two admissions so a write rule stuck at false cannot satisfy it | 13 |
 | `c26` | the deactivation trigger records the **transition**: an active member has no date; deactivating stamps one; a write that does not name `license_status` leaves it; **re-deactivating** an already-suspended row does not move it; an unrelated column bump does not move it; reactivating **clears** it; deactivating again re-stamps; expiring leaves it | 8 |
 | `c27` | the date boundary **swept, not sampled**: the day before (allowed), the day **of** (allowed — inclusive), the day after (refused `42501`), rows landed to match, a suspended row with **no recorded date** (refused — fail closed), and the comparison resolving against **UTC** under an explicit `America/Los_Angeles` session | 11 |
-| `c28` | the founder's own case end to end: the agent has already left, the broker records an agreement dated to the March closing, and `commission_agreement_in_force` **resolves it on the day of the closing** instead of returning zero rows — with the refusal that still stands (dated after they left) asserted beside it | 6 |
+| `c28` | the founder's own case end to end: the agent has already left, the broker records an agreement dated to the March closing, and `split_agreement_in_force` **resolves it on the day of the closing** instead of returning zero rows — with the refusal that still stands (dated after they left) asserted beside it | 6 |
 | `c29` | the date arm's **status gate**: a subject at `'expired'` still carrying a deactivation date is refused even inside their recorded period, no row survives, and a **suspended** subject at the same offset is admitted | 5 |
 
 **Why C18 exists, and why it is late.** C05 and C06 assert a SQLSTATE at the
@@ -211,7 +221,7 @@ one silently misses the other:
 | Deactivate (`broker-portal/lib/actions/deactivateUser.ts`) | sets `license_status = 'suspended'`, row stays | the row matches; its **status** does not |
 
 SCIM (`supabase/functions/scim/handlers/users.ts`) and `directory-sync` write the
-same `'suspended'`. So the rule is `public.is_active_commission_member(org)`:
+same `'suspended'`. So the rule is `public.is_active_split_member(org)`:
 a member row for this caller, in **this** organization, at
 `license_status = 'active'`.
 
@@ -263,7 +273,7 @@ deactivation cut a suspended **broker or admin's** read and write as well? The
 founder's answer is yes. "No no accese if they are deactivted" was said about
 agents, and the person who sets an agent's pay is not the exception to it.
 
-So `can_write_commission_agreements` gained the same term, in the **same
+So `can_write_split_agreements` gained the same term, in the **same
 EXISTS** as the role term:
 
 ```sql
@@ -274,12 +284,12 @@ EXISTS** as the role term:
                     AND m.license_status = 'active');
 ```
 
-One EXISTS, not two, and not a call to `is_active_commission_member` beside a
+One EXISTS, not two, and not a call to `is_active_split_member` beside a
 role test: with two clauses a caller could satisfy one by one membership row and
 the other by a different row. One row must carry both.
 
 **One helper fronts all four policies** — the broker/admin SELECT and INSERT on
-`agent_commission_agreements`, and the same pair on
+`agent_split_agreements`, and the same pair on
 `organization_franchise_fees` — so the term lands on the read and the write, on
 both tables, from one edit. That is the fit rather than a compromise: the ruling
 covers reading and writing on both tables, so there is no half of it that wants
@@ -685,7 +695,7 @@ different set of mutants. The same rule is pinned in CI by the tripwire's
 because this harness needs a database and CI has none.
 
 **2. The franchise fee's same-day tie (`msr02` → `m37`, control C14).** `m03`
-mutates `commission_agreement_in_force` alone, and the fee fixture had no pair
+mutates `split_agreement_in_force` alone, and the fee fixture had no pair
 sharing an `effective_from` — so ordering the *other* helper by `set_at` reddened
 nothing. The ordering contract is stated for both helpers and was pinned
 behaviourally on one. The fixture now carries F2/F3 in the same long-transaction
@@ -731,6 +741,52 @@ load-bearing by measurement, not by argument.
 
 ---
 
+### The rename round — BACKLOG-3503, 2026-09-24
+
+The founder corrected the terminology: the *commission* is what a deal pays; the
+*split* is how the brokerage and agent divide it. The table, both RLS helpers
+and the agreement read helper had "commission" in their identifiers where they
+now say "split" — `agent_split_agreements`, `split_agreement_in_force`,
+`can_write_split_agreements`, `is_active_split_member` — with every derived
+constraint, index and policy name following mechanically (a `_pkey`, an
+`_org_fkey`, a `_select_writer`, and so on, each inheriting the table's new
+name). **Migration edited in place, not a follow-on `ALTER … RENAME`**: verified
+against production before the edit — the migration is merged to `develop` but
+applied nowhere (`schema_migrations` has no `20260922220719` row; the split
+table, `organization_franchise_fees` and `organization_members.deactivated_at`
+are all absent from production) — so renaming at the source means the old
+identifiers never existed in applied history. The migration's own filename
+keeps its pre-rename spelling on purpose; renaming a merged migration's
+filename is a separate hazard this round does not take on.
+
+**Diffed against the pre-rename run, not assumed identical.** `control-run.txt`
+is byte-for-byte identical before and after — no control's message happens to
+name any of the four renamed identifiers. `mutant-run.txt` differs on 17 of 322
+lines (`diff`, 17 line-groups), and every one is accounted for: the old
+identifiers appearing inside `MUTATION APPLIED` and `CONTROL FAILED` message
+text, now reading with their new names, plus one `now()` timestamp in a single
+C26 message. Restricting the diff to the `RED:` and `green:` lines alone — the
+sets that decide whether a mutant is proven — gives **zero difference**: every
+mutant reddens exactly the same controls it did before the rename, and the
+`m01`…`m42` header sequence is unchanged. That is the expected shape for a pure
+identifier rename, measured rather than assumed. This round: 30 green / 30, 210
+assertions; 41/41 `MUTATION APPLIED`, 0 `RED WITHOUT PROOF`, 0 `VOID`, every one
+of the 30 controls reddened by at least one mutant, 3:43.90 wall clock (`time`,
+real).
+
+**Straggler check after the rename:** a repo-wide search for all four
+pre-rename identifiers, run against committed HEAD, returned nothing — recorded
+on the backlog item rather than reproduced here, because pasting the search
+pattern into this file would make it match its own search. Prose describing the
+table's concept ("commission agreements" as a noun phrase) was swapped to
+"split agreements" in this file, the migration header and two control/mutant
+comments; the founder's own worked example is quoted verbatim in *The subject*
+section above and in `c28`, and is left exactly as he said it; the
+commission-tracking epic name (real money, not this table) and every filename
+are unchanged.
+
+---
+
 ## Text tripwire (CI) — made to fail before being trusted
 
 `npx jest --config broker-portal/jest.config.js broker-portal/__tests__/migrations/commission-agreements-3503.test.ts --bail=0`
@@ -769,7 +825,7 @@ of these reverts, so no `git checkout --` could discard it.
 | the write rule delegates to `is_org_admin` | **2/17** | *(the same two)* |
 | **the WRITE rule loses `AND m.license_status = 'active'`** | **1/17** | gates the broker and admin read and write on active membership too |
 | **the WRITE rule spells it `NOT IN ('suspended','expired')`** | **1/17** | *(same assertion)* |
-| **the write rule's two terms split into separate `EXISTS`** — role in one, `is_active_commission_member(p_org_id)` beside it | **1/17** | *(same assertion — one membership row must carry both)* |
+| **the write rule's two terms split into separate `EXISTS`** — role in one, `is_active_split_member(p_org_id)` beside it | **1/17** | *(same assertion — one membership row must carry both)* |
 | split-sum CHECK relaxed to `<= 100` **at the constraint** | 1/16 | carries the split-sum and cadence CHECK constraints |
 | cadence CHECK gains a third value | 1/16 | *(same assertion)* |
 | member check written as a self-comparison | 1/16 | writes the INSERT policy member check against the NEW ROW, not against itself |
@@ -824,7 +880,7 @@ EXISTS* as *in this order, in the same EXISTS*.
 
 `supabase/tests/backlog-3096/control-*.sql` run `DELETE FROM public.users` as
 fixture cleanup. Those are harness files, not production, and their users hold no
-commission agreements today. **If a future 3096 run ever seeds one, its cleanup
+split agreements today. **If a future 3096 run ever seeds one, its cleanup
 will fail with `23503`** — that is C19's rule working, not a regression. Delete
 the agreement rows first.
 

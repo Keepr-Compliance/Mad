@@ -1,4 +1,4 @@
--- C19: the founder's rule -- a user who holds commission agreements cannot be
+-- C19: the founder's rule -- a user who holds split agreements cannot be
 -- deleted, and neither can their organization. Plus the half nobody asked for
 -- and everybody gets: the BROKER WHO SET the agreement is named by set_by, so
 -- they are undeletable for as long as any row they wrote survives.
@@ -25,19 +25,19 @@ BEGIN
   DELETE FROM public.organization_members;
 
   c := pg_temp.constraint_of(format('DELETE FROM public.users WHERE id = %L', current_setting('t3503.u_agent_a')));
-  PERFORM pg_temp.check(c = 'agent_commission_agreements_agent_fkey',
+  PERFORM pg_temp.check(c = 'agent_split_agreements_agent_fkey',
     format('deleting the agent is blocked by the agent key, got %s', c));
 
   c := pg_temp.constraint_of(format('DELETE FROM public.users WHERE id = %L', current_setting('t3503.u_agent_a2')));
-  PERFORM pg_temp.check(c = 'agent_commission_agreements_agent_fkey',
+  PERFORM pg_temp.check(c = 'agent_split_agreements_agent_fkey',
     format('the colleague, who holds one agreement and no membership, is blocked too, got %s', c));
 
   c := pg_temp.constraint_of(format('DELETE FROM public.users WHERE id = %L', current_setting('t3503.u_broker_a')));
-  PERFORM pg_temp.check(c = 'agent_commission_agreements_set_by_fkey',
+  PERFORM pg_temp.check(c = 'agent_split_agreements_set_by_fkey',
     format('deleting the BROKER WHO WROTE the agreements is blocked by set_by, got %s', c));
 
   c := pg_temp.constraint_of(format('DELETE FROM public.organizations WHERE id = %L', o_a));
-  PERFORM pg_temp.check(c = 'agent_commission_agreements_org_fkey',
+  PERFORM pg_temp.check(c = 'agent_split_agreements_org_fkey',
     format('deleting the organization is blocked by the org key, got %s', c));
 
   -- a user holding nothing is deletable: the rule is about holdings, not a
@@ -48,7 +48,7 @@ BEGIN
     format('a user holding no agreement and no membership IS deletable, got %s', c));
 
   -- now take the agreements away and the franchise table's own two keys surface
-  DELETE FROM public.agent_commission_agreements;
+  DELETE FROM public.agent_split_agreements;
 
   c := pg_temp.constraint_of(format('DELETE FROM public.users WHERE id = %L', current_setting('t3503.u_broker_a')));
   PERFORM pg_temp.check(c = 'organization_franchise_fees_set_by_fkey',

@@ -1,4 +1,4 @@
--- m03's mistake, on the OTHER table. m03 mutates commission_agreement_in_force
+-- m03's mistake, on the OTHER table. m03 mutates split_agreement_in_force
 -- alone; until F2/F3 existed in the fixture, this mutation reddened NOTHING
 -- (SR's `msr02` probe, pm_comments 48fb9e71) -- the fee fixture had no
 -- same-effective_from pair, so both orderings returned the same row.
@@ -17,7 +17,7 @@ DO $m$ BEGIN
   IF position('set_at DESC' in (SELECT prosrc FROM pg_proc WHERE oid='public.franchise_fee_in_force(uuid,date)'::regprocedure)) = 0
   THEN RAISE EXCEPTION 'MUTATION NOT APPLIED'; END IF;
   -- the sibling helper is untouched, so a red here is about this table
-  IF position('set_at' in (SELECT prosrc FROM pg_proc WHERE oid='public.commission_agreement_in_force(uuid,uuid,date)'::regprocedure)) > 0
+  IF position('set_at' in (SELECT prosrc FROM pg_proc WHERE oid='public.split_agreement_in_force(uuid,uuid,date)'::regprocedure)) > 0
   THEN RAISE EXCEPTION 'MUTATION NOT APPLIED: the agreement helper changed too'; END IF;
 END $m$;
 SELECT 'MUTATION APPLIED: franchise_fee_in_force orders by set_at DESC before seq DESC';
