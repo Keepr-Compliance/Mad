@@ -23,6 +23,8 @@ export interface DashboardShellProps {
   displayEmail: string;
   displayRole?: string;
   showChecklists?: boolean;
+  /** BACKLOG-3080: not a full-portal user; the Sidebar shows the floor only. */
+  floorOnly?: boolean;
 }
 
 export function DashboardShell({
@@ -33,6 +35,7 @@ export function DashboardShell({
   displayEmail,
   displayRole,
   showChecklists,
+  floorOnly,
 }: DashboardShellProps) {
   const [collapsed, setCollapsed] = useState(false);
 
@@ -59,6 +62,7 @@ export function DashboardShell({
         displayEmail={displayEmail}
         displayRole={displayRole}
         showChecklists={showChecklists}
+        floorOnly={floorOnly}
       />
       <div className="flex-1 flex flex-col min-w-0">
         {/* Impersonation banner spans the content column so it never covers the sidebar */}

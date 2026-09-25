@@ -10,11 +10,12 @@
  * a JIT toggle defaulted to on — all of which are org policy — and only found
  * out it was refused when a save failed. A missing nav link is not a gate.
  *
- * BACKLOG-3080 lets a non-admin role into the portal. Once that lands, this
- * page must refuse `agent` on the server, before any org-policy markup exists.
+ * BACKLOG-3080 lets a non-admin role into the portal (the floor). This page
+ * refuses `agent` on the server, before any org-policy markup exists, and reads
+ * role and organization from the same classifier middleware uses.
  */
 
-import { createClient } from '@/lib/supabase/server';
+import { getPortalAccess } from '@/lib/auth/portalAccess';
 import { isFeatureEnabledFailClosed } from '@/lib/feature-gate';
 import { SCIM_FEATURE_KEY } from '@/lib/scim-access';
 import { JIT_FEATURE_KEY } from '@/lib/jit-access';
@@ -56,22 +57,13 @@ export type OrgSettingsAccess = OrgSettingsAccessGranted | OrgSettingsAccessDeni
  * client, exactly as /dashboard/users does.
  */
 export async function checkOrgSettingsAccess(): Promise<OrgSettingsAccess> {
-  const supabase = await createClient();
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { allowed: false, reason: 'unauthenticated' };
-
-  const { data: membership } = await supabase
-    .from('organization_members')
-    .select('organization_id, role')
-    .eq('user_id', user.id)
-    .maybeSingle();
+  const portal = await getPortalAccess();
+  if (!portal) return { allowed: false, reason: 'unauthenticated' };
+  const { access, user } = portal;
 
   if (
-    !membership ||
-    !(ORG_SETTINGS_ROLES as readonly string[]).includes(membership.role)
+    access.kind !== 'full' ||
+    !(ORG_SETTINGS_ROLES as readonly string[]).includes(access.role)
   ) {
     return { allowed: false, reason: 'unauthorized' };
   }
@@ -79,8 +71,8 @@ export async function checkOrgSettingsAccess(): Promise<OrgSettingsAccess> {
   return {
     allowed: true,
     userId: user.id,
-    organizationId: membership.organization_id,
-    role: membership.role,
+    organizationId: access.organizationId,
+    role: access.role,
   };
 }
 

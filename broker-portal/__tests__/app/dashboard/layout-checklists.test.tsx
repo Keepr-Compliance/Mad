@@ -7,22 +7,22 @@
  * has the feature off must not see the entry.
  */
 
+import {
+  brokerageMembership,
+  createPostgrestEmulator,
+} from '../../helpers/postgrestEmulator';
+
 const mockGetUser = jest.fn();
-const mockMaybeSingle = jest.fn();
+// BACKLOG-3080: the layout reads membership through the shared portal query
+// (an ordered many-read), so the stub is the PostgREST emulator.
+const mockEmulator = createPostgrestEmulator();
 const mockGetImpersonationSession = jest.fn();
 const mockIsChecklistEditorEnabled = jest.fn();
 
 jest.mock('@/lib/supabase/server', () => ({
   createClient: async () => ({
     auth: { getUser: () => mockGetUser() },
-    from: () => {
-      const chain = {
-        select: () => chain,
-        eq: () => chain,
-        maybeSingle: () => mockMaybeSingle(),
-      };
-      return chain;
-    },
+    from: (table: string) => mockEmulator.from(table),
   }),
 }));
 jest.mock('@/lib/impersonation', () => ({
@@ -49,7 +49,8 @@ async function shellProps(): Promise<Record<string, unknown>> {
 beforeEach(() => {
   jest.resetAllMocks();
   mockGetUser.mockResolvedValue({ data: { user: { id: 'u1', email: 'admin@example.test' } } });
-  mockMaybeSingle.mockResolvedValue({ data: { role: 'admin' }, error: null });
+  mockEmulator.reset();
+  mockEmulator.set({ rows: { organization_members: [brokerageMembership('admin', 'post', 'u1')] } });
   mockGetImpersonationSession.mockResolvedValue(null);
 });
 

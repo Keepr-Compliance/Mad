@@ -11,15 +11,12 @@ import { type NextRequest, NextResponse } from 'next/server';
 import { createServerClient, type CookieOptions } from '@supabase/ssr';
 import { IMPERSONATION_COOKIE_NAME } from '@/lib/constants';
 import { isBareAuthTokenCookie, safeAuthErrorInfo } from '@/lib/supabase/cookie-guard';
-import { PORTAL_MEMBERSHIP_SELECT, pickBrokerageMembership } from '@/lib/auth/membership';
-
-/**
- * Roles admitted to /dashboard. Everything else is bounced to /download.
- *
- * Named rather than inline because BACKLOG-3364 adds a second condition to the
- * same decision below and the list must stay one thing, not two.
- */
-const PORTAL_ROLES = ['admin', 'it_admin', 'broker'];
+import {
+  PORTAL_MEMBERSHIP_SELECT,
+  classifyPortalAccess,
+  mayOpenDashboardPath,
+  type PortalMembershipRow,
+} from '@/lib/auth/membership';
 
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({
@@ -123,13 +120,12 @@ export async function middleware(request: NextRequest) {
       return NextResponse.redirect(loginUrl);
     }
 
-    // Redirect agent-role users away from dashboard to download page
+    // BACKLOG-3080: what this person may open, from the one shared classifier
+    // (lib/auth/membership.ts). The dashboard layout and each page ask the same
+    // question again on the server; this is not the only gate.
     if (isProtectedRoute && user) {
-      // BACKLOG-3364: a personal organization is not a placement. The row this
-      // decision is about is a BROKERAGE membership; a solo user's own
-      // organization must leave them exactly where a user with no row is left —
-      // admitted here, and refused by each page's own role gate. See
-      // lib/auth/membership.ts for why the new column is never named.
+      // See lib/auth/membership.ts for why the personal-organization column is
+      // never named in this query.
       const { data: memberships } = await supabase
         .from('organization_members')
         .select(PORTAL_MEMBERSHIP_SELECT)
@@ -137,10 +133,16 @@ export async function middleware(request: NextRequest) {
         .order('created_at', { ascending: true })
         .order('id', { ascending: true });
 
-      const membership = pickBrokerageMembership(memberships);
+      const access = classifyPortalAccess(memberships as PortalMembershipRow[] | null, user.id);
 
-      if (membership && !PORTAL_ROLES.includes(membership.role)) {
-        return NextResponse.redirect(new URL('/download', request.url));
+      // Not a portal user at all: end this browser's portal session.
+      if (access.kind === 'none') {
+        return NextResponse.redirect(new URL('/auth/logout?error=not_authorized', request.url));
+      }
+
+      // A path above this person's access goes back to the dashboard.
+      if (!mayOpenDashboardPath(access, pathname)) {
+        return NextResponse.redirect(new URL('/dashboard', request.url));
       }
     }
 

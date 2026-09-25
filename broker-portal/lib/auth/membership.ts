@@ -130,3 +130,124 @@ export function pickBrokerageMembership(
   }
   return null;
 }
+
+// ===========================================================================
+// Portal access — BACKLOG-3080.
+// ===========================================================================
+//
+// ONE classifier, used by every place that decides what a signed-in person may
+// open: the OAuth callback, middleware, the dashboard layout, each page and the
+// settings/users gates. They cannot drift apart because there is only one rule.
+//
+// Every gate calls it on the session it is handed. A portal session is not only
+// created by /auth/callback, so the callback alone cannot decide who gets in.
+//
+// Still zero imports: middleware (Edge) calls these two functions directly.
+
+/** Roles that open the whole portal. Everything else gets the floor. */
+export const FULL_PORTAL_ROLES = ['broker', 'admin', 'it_admin'] as const;
+
+/**
+ * What a signed-in person may open.
+ *
+ *   full    - a brokerage broker / admin / it_admin: the whole portal.
+ *   floor   - a brokerage member with any other role (agent, or a role this
+ *             file has never heard of), or the OWNER of a personal
+ *             organization: welcome dashboard, own support tickets, My Account.
+ *   unknown - the membership read failed. Floor for this request, and never a
+ *             sign-out: a transient read error must not sign every broker out.
+ *   none    - no brokerage membership and no personal organization of their
+ *             own. Not a portal user.
+ */
+export type PortalAccess =
+  | { kind: 'full'; role: string; organizationId: string }
+  | {
+      kind: 'floor';
+      via: 'brokerage' | 'personal_owner';
+      role: string;
+      organizationId: string;
+    }
+  | { kind: 'unknown' }
+  | { kind: 'none' };
+
+/**
+ * Classify the rows of {@link PORTAL_MEMBERSHIP_SELECT} for `userId`.
+ *
+ * In order:
+ *   1. Not an array (an error result) -> unknown.
+ *   2. The first brokerage row decides: a full role -> full; ANY other role ->
+ *      floor. An unrecognised role therefore fails closed to the floor.
+ *   3. Otherwise a personal organization whose owner IS this user -> floor.
+ *      Equality with the session user, never mere presence of the owner key:
+ *      a member of somebody else's personal organization is not its owner.
+ *   4. Otherwise -> none.
+ */
+export function classifyPortalAccess(
+  rows: PortalMembershipRow[] | null | undefined,
+  userId: string
+): PortalAccess {
+  if (!Array.isArray(rows)) return { kind: 'unknown' };
+
+  const brokerage = pickBrokerageMembership(rows);
+  if (brokerage) {
+    if ((FULL_PORTAL_ROLES as readonly string[]).includes(brokerage.role)) {
+      return { kind: 'full', role: brokerage.role, organizationId: brokerage.organization_id };
+    }
+    return {
+      kind: 'floor',
+      via: 'brokerage',
+      role: brokerage.role,
+      organizationId: brokerage.organization_id,
+    };
+  }
+
+  for (const row of rows) {
+    const owner = embeddedOrganization(row)?.personal_owner_user_id;
+    if (owner && owner === userId) {
+      return {
+        kind: 'floor',
+        via: 'personal_owner',
+        role: row.role,
+        organizationId: row.organization_id,
+      };
+    }
+  }
+
+  return { kind: 'none' };
+}
+
+/** The dashboard paths the floor opens. Each also opens its sub-paths. */
+export const FLOOR_PATHS = ['/dashboard', '/dashboard/account', '/dashboard/support'] as const;
+
+/**
+ * Paths that carry their own server gate and are NOT decided here.
+ *
+ * Checklists are refused to every non-editor by lib/checklist-access.ts; that
+ * gate, not this list, decides who may open them.
+ */
+export const OWN_GATE_PATHS = ['/dashboard/checklists'] as const;
+
+/** `path` is `base` itself or a sub-path of it. Never a bare prefix match. */
+function isUnder(path: string, base: string): boolean {
+  return path === base || path.startsWith(`${base}/`);
+}
+
+/**
+ * May this access open this dashboard path?
+ *
+ * `/dashboard` itself is matched exactly: every dashboard route starts with it,
+ * so treating it as a prefix would open everything.
+ */
+export function mayOpenDashboardPath(access: PortalAccess, pathname: string): boolean {
+  if (access.kind === 'full') return true;
+  if (access.kind === 'none') return false;
+
+  if (pathname === '/dashboard') return true;
+  for (const base of FLOOR_PATHS) {
+    if (base !== '/dashboard' && isUnder(pathname, base)) return true;
+  }
+  for (const base of OWN_GATE_PATHS) {
+    if (isUnder(pathname, base)) return true;
+  }
+  return false;
+}

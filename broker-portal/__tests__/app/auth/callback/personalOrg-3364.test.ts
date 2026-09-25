@@ -132,9 +132,10 @@ describe('a solo user holding only a personal organization', () => {
       license_status: 'active',
       invitation_token: null,
     });
-    // An invited agent belongs on the desktop download page — but only AFTER
-    // the invite was claimed, which is the whole difference.
-    expect(location).toBe(`${ORIGIN}/download`);
+    // BACKLOG-3080 (fb4699c8, D2): every linked member lands on the
+    // dashboard; middleware gives an agent the floor. Only AFTER the invite
+    // was claimed, which is the whole difference.
+    expect(location).toBe(`${ORIGIN}/dashboard`);
     expect(mockSignOut).not.toHaveBeenCalled();
   });
 
@@ -168,7 +169,9 @@ describe('a solo user holding only a personal organization', () => {
     expect(location).toBe(`${ORIGIN}/dashboard`);
   });
 
-  it('with no invite and no JIT path, ends exactly where a user with no row ends', async () => {
+  it('with no invite and no JIT path: the owner gets the floor, a user with no row is signed out', async () => {
+    // BACKLOG-3080 (4c4eb90e, 893f1660 / 181aaa59): the personal-org OWNER is
+    // admitted to the floor. A user with no membership is still signed out.
     signedIn();
     given([personalMembership()]);
     const withPersonalRow = await callbackRedirect();
@@ -178,11 +181,12 @@ describe('a solo user holding only a personal organization', () => {
     signedIn();
     given([]);
     const withNoRowAtAll = await callbackRedirect();
+    const signOutCallsWithNoRow = mockSignOut.mock.calls.length;
 
-    // BACKLOG-3080 owns changing this destination. This item must not move it.
-    expect(withPersonalRow).toBe(`${ORIGIN}/login?error=not_authorized`);
-    expect(withPersonalRow).toBe(withNoRowAtAll);
-    expect(signOutCallsWithPersonalRow).toBe(1);
+    expect(withPersonalRow).toBe(`${ORIGIN}/dashboard`);
+    expect(signOutCallsWithPersonalRow).toBe(0);
+    expect(withNoRowAtAll).toBe(`${ORIGIN}/login?error=not_authorized`);
+    expect(signOutCallsWithNoRow).toBe(1);
   });
 });
 
@@ -191,11 +195,12 @@ describe('a solo user holding only a personal organization', () => {
 // ---------------------------------------------------------------------------
 
 describe('brokerage membership still decides the destination', () => {
-  it('sends a brokerage agent to /download without touching the invite branch', async () => {
+  it('sends a brokerage agent to the dashboard without touching the invite branch', async () => {
+    // BACKLOG-3080 (fb4699c8, D2): /dashboard, where middleware floors them.
     signedIn();
     given([brokerageMembership('agent'), pendingInvite(EMAIL, 'broker')]);
 
-    expect(await callbackRedirect()).toBe(`${ORIGIN}/download`);
+    expect(await callbackRedirect()).toBe(`${ORIGIN}/dashboard`);
     // The invite must NOT be claimed: this user is already placed.
     expect(mockEmulator.state.writes).toHaveLength(0);
   });
@@ -247,11 +252,12 @@ describe('against a database without the column', () => {
     expect(mockSignOut).not.toHaveBeenCalled();
   });
 
-  it('still sends a brokerage agent to /download and claims no invite', async () => {
+  it('still sends a brokerage agent to the dashboard and claims no invite', async () => {
+    // BACKLOG-3080 (fb4699c8, D2): the destination moved from /download.
     signedIn();
     given([brokerageMembership('agent', 'pre'), pendingInvite(EMAIL, 'broker')], false);
 
-    expect(await callbackRedirect()).toBe(`${ORIGIN}/download`);
+    expect(await callbackRedirect()).toBe(`${ORIGIN}/dashboard`);
     expect(mockEmulator.state.writes).toHaveLength(0);
   });
 

@@ -1,5 +1,5 @@
 import { createClient } from '@/lib/supabase/server';
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
 import { formatCurrency, formatDate, getStatusColor, formatStatus } from '@/lib/utils';
@@ -10,6 +10,7 @@ import { StatusHistory } from '@/components/submission/StatusHistory';
 import { getDataClient } from '@/lib/impersonation-guards';
 import { getOrgFeatures, isFeatureEnabled } from '@/lib/feature-gate';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { requireFullPortalAccess } from '@/lib/auth/portalAccess';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -203,6 +204,12 @@ export default async function SubmissionDetailPage({ params }: PageProps) {
   const { id } = await params;
   const { client, impersonation } = await getDataClient();
   const isImpersonating = !!impersonation;
+
+  // BACKLOG-3080: the review surface is for the full portal only. Refused
+  // before the submission is read and before it is marked under review.
+  if (!isImpersonating && !(await requireFullPortalAccess())) {
+    redirect('/dashboard');
+  }
 
   const [submission, messages, attachments] = await Promise.all([
     getSubmission(id, client),
