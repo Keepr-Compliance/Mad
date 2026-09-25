@@ -29,6 +29,10 @@
  * (a brokerage agent, the owner of a personal organization): Dashboard and
  * Support, then My Account. The layout decides `floorOnly` from the shared
  * portal classifier. The other buckets are unchanged.
+ *
+ * BACKLOG-3080 (My Transactions): a floor entry after Support, shown only when
+ * the layout's `showMyTransactions` (lib/my-transactions-access.ts) says so.
+ * The pages refuse on their own; a hidden entry is not the gate.
  */
 
 import Link from 'next/link';
@@ -37,6 +41,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ClipboardCheck,
+  FileText,
   Files,
   Headphones,
   LayoutDashboard,
@@ -75,6 +80,12 @@ const floorNavItems: NavItem[] = [
   { label: 'Support', href: '/dashboard/support', icon: Headphones },
 ];
 
+const myTransactionsNavItem: NavItem = {
+  label: 'My Transactions',
+  href: '/dashboard/my-transactions',
+  icon: FileText,
+};
+
 const checklistsNavItem: NavItem = { label: 'Checklists', href: '/dashboard/checklists', icon: ClipboardCheck };
 
 /** A copy of `items` with `item` placed right after the entry with `href`. */
@@ -105,6 +116,8 @@ export interface SidebarProps {
   displayRole?: string;
   /** BACKLOG-3474: the caller passes lib/checklist-access.ts (layout.tsx). */
   showChecklists?: boolean;
+  /** BACKLOG-3080: the layout passes lib/my-transactions-access.ts. Floor bucket only. */
+  showMyTransactions?: boolean;
   /** BACKLOG-3080: not a full-portal user; show the floor bucket only. */
   floorOnly?: boolean;
 }
@@ -118,6 +131,7 @@ export function Sidebar({
   displayEmail,
   displayRole,
   showChecklists = false,
+  showMyTransactions = false,
   floorOnly = false,
 }: SidebarProps) {
   const pathname = usePathname();
@@ -130,6 +144,7 @@ export function Sidebar({
   const showAdminNav =
     !showFloorNav && !isImpersonating && (role === 'admin' || role === 'it_admin');
   const showChecklistsEntry = showChecklists && !isImpersonating;
+  const floorItems = showMyTransactions ? [...floorNavItems, myTransactionsNavItem] : floorNavItems;
   const adminItems = showChecklistsEntry
     ? insertAfter(adminNavItems, '/dashboard/users', checklistsNavItem)
     : adminNavItems;
@@ -200,7 +215,7 @@ export function Sidebar({
 
       {/* Navigation */}
       <nav className={`flex-1 py-4 space-y-1 overflow-y-auto scrollbar-hide ${collapsed ? 'px-2' : 'px-3'}`}>
-        {showFloorNav && floorNavItems.map(renderNavItem)}
+        {showFloorNav && floorItems.map(renderNavItem)}
         {showMemberNav && memberNavItems.map(renderNavItem)}
         {!showAdminNav && showChecklistsEntry && renderNavItem(checklistsNavItem)}
         {showAdminNav && adminItems.map(renderNavItem)}

@@ -20,6 +20,7 @@ import {
   personalMembershipOwnedBy,
   type Row,
 } from '../helpers/postgrestEmulator';
+import { ORG_WITHOUT_PLAN_FEATURES } from '../fixtures/orgFeatures';
 
 const mockEmulator = createPostgrestEmulator();
 const mockGetUser = jest.fn();
@@ -36,6 +37,8 @@ jest.mock('@/lib/supabase/server', () => ({
       }
       return chain;
     },
+    // BACKLOG-3080 (My Transactions): the transcribed payload, key absent.
+    rpc: jest.fn(async () => ({ data: ORG_WITHOUT_PLAN_FEATURES, error: null })),
   })),
 }));
 jest.mock('@/lib/impersonation', () => ({
@@ -150,22 +153,28 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('DashboardLayout', () => {
+  // showMyTransactions (BACKLOG-3080): a floor user routed on a brokerage row
+  // gets the entry (key absent here -> the plan message); nobody else does.
   it.each([
-    ['[agent, broker] (two brokerage rows)', 'agent', true, [brokerageMembership('agent'), second(brokerageMembership('broker'))]],
-    ['[broker, agent] (two brokerage rows)', 'broker', false, [brokerageMembership('broker'), second(brokerageMembership('agent'))]],
-    ['[personal, brokerage agent]', 'agent', true, [personalMembership(), brokerageMembership('agent')]],
-    ['personal-org owner', 'agent', true, [personalMembership()]],
-    ['brokerage admin', 'admin', false, [brokerageMembership('admin')]],
-  ] as [string, string, boolean, Row[]][])('%s -> role %s, floorOnly %s', async (_n, role, floorOnly, rows) => {
-    given(rows);
-    const { props, redirect } = await layoutOutcome();
-    expect(redirect).toBeUndefined();
-    expect({ role: props!.role, floorOnly: props!.floorOnly, displayRole: props!.displayRole }).toEqual({
-      role,
-      floorOnly,
-      displayRole: role,
-    });
-  });
+    ['[agent, broker] (two brokerage rows)', 'agent', true, true, [brokerageMembership('agent'), second(brokerageMembership('broker'))]],
+    ['[broker, agent] (two brokerage rows)', 'broker', false, false, [brokerageMembership('broker'), second(brokerageMembership('agent'))]],
+    ['[personal, brokerage agent]', 'agent', true, true, [personalMembership(), brokerageMembership('agent')]],
+    ['personal-org owner', 'agent', true, false, [personalMembership()]],
+    ['brokerage admin', 'admin', false, false, [brokerageMembership('admin')]],
+  ] as [string, string, boolean, boolean, Row[]][])(
+    '%s -> role %s, floorOnly %s, showMyTransactions %s',
+    async (_n, role, floorOnly, showMyTransactions, rows) => {
+      given(rows);
+      const { props, redirect } = await layoutOutcome();
+      expect(redirect).toBeUndefined();
+      expect({
+        role: props!.role,
+        floorOnly: props!.floorOnly,
+        displayRole: props!.displayRole,
+        showMyTransactions: props!.showMyTransactions,
+      }).toEqual({ role, floorOnly, displayRole: role, showMyTransactions });
+    }
+  );
 
   it.each([
     ['no membership', [] as Row[]],

@@ -23,6 +23,8 @@ export interface DashboardShellProps {
   displayEmail: string;
   displayRole?: string;
   showChecklists?: boolean;
+  /** BACKLOG-3080: lib/my-transactions-access.ts, via the layout. */
+  showMyTransactions?: boolean;
   /** BACKLOG-3080: not a full-portal user; the Sidebar shows the floor only. */
   floorOnly?: boolean;
 }
@@ -35,6 +37,7 @@ export function DashboardShell({
   displayEmail,
   displayRole,
   showChecklists,
+  showMyTransactions,
   floorOnly,
 }: DashboardShellProps) {
   const [collapsed, setCollapsed] = useState(false);
@@ -62,6 +65,7 @@ export function DashboardShell({
         displayEmail={displayEmail}
         displayRole={displayRole}
         showChecklists={showChecklists}
+        showMyTransactions={showMyTransactions}
         floorOnly={floorOnly}
       />
       <div className="flex-1 flex flex-col min-w-0">

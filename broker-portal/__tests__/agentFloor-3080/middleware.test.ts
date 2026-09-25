@@ -93,6 +93,9 @@ const PATHS = [
   '/dashboard/settings/scim',
   '/dashboard/checklists',
   '/dashboard/checklists/new',
+  '/dashboard/my-transactions',
+  '/dashboard/my-transactions/abc-123',
+  '/dashboard/my-transactionsx',
   '/dashboard/supportx',
   '/dashboard/accounts',
 ] as const;
@@ -113,9 +116,21 @@ const FLOOR_VERDICTS: Record<(typeof PATHS)[number], Verdict> = {
   // D4: checklists pass to their own page gate.
   '/dashboard/checklists': ADMIT,
   '/dashboard/checklists/new': ADMIT,
+  // BACKLOG-3080: My Transactions is for a floor user routed on a BROKERAGE row
+  // only; see BROKERAGE_FLOOR_VERDICTS. Everyone else on the floor goes back.
+  '/dashboard/my-transactions': TO_DASHBOARD,
+  '/dashboard/my-transactions/abc-123': TO_DASHBOARD,
+  '/dashboard/my-transactionsx': TO_DASHBOARD,
   // Boundary: shared prefix, not a sub-path.
   '/dashboard/supportx': TO_DASHBOARD,
   '/dashboard/accounts': TO_DASHBOARD,
+};
+
+/** A floor user routed on a brokerage row: the floor, plus My Transactions (the page decides the plan). */
+const BROKERAGE_FLOOR_VERDICTS: Record<(typeof PATHS)[number], Verdict> = {
+  ...FLOOR_VERDICTS,
+  '/dashboard/my-transactions': ADMIT,
+  '/dashboard/my-transactions/abc-123': ADMIT,
 };
 
 const everywhere = (v: Verdict) =>
@@ -131,15 +146,15 @@ const PERSONAS: [string, () => void, Record<(typeof PATHS)[number], Verdict>][] 
     everywhere(TO_LOGOUT),
   ],
   ['membership read failed (broker rows)', () => given([brokerageMembership('broker')], { readFails: true }), FLOOR_VERDICTS],
-  ['brokerage agent', () => given([brokerageMembership('agent')]), FLOOR_VERDICTS],
-  ['brokerage agent, pre-migration', () => given([brokerageMembership('agent', 'pre')], { columnPresent: false }), FLOOR_VERDICTS],
-  ['unrecognised brokerage role', () => given([brokerageMembership('viewer')]), FLOOR_VERDICTS],
+  ['brokerage agent', () => given([brokerageMembership('agent')]), BROKERAGE_FLOOR_VERDICTS],
+  ['brokerage agent, pre-migration', () => given([brokerageMembership('agent', 'pre')], { columnPresent: false }), BROKERAGE_FLOOR_VERDICTS],
+  ['unrecognised brokerage role', () => given([brokerageMembership('viewer')]), BROKERAGE_FLOOR_VERDICTS],
   ['personal-org owner', () => given([personalMembership()]), FLOOR_VERDICTS],
-  ['personal row then brokerage agent', () => given([personalMembership(), brokerageMembership('agent')]), FLOOR_VERDICTS],
+  ['personal row then brokerage agent', () => given([personalMembership(), brokerageMembership('agent')]), BROKERAGE_FLOOR_VERDICTS],
   [
     'two brokerage rows [agent, broker]',
     () => given([brokerageMembership('agent'), second(brokerageMembership('broker'))]),
-    FLOOR_VERDICTS,
+    BROKERAGE_FLOOR_VERDICTS,
   ],
   [
     'two brokerage rows [broker, agent]',

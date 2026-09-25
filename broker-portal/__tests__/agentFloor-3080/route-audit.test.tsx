@@ -13,9 +13,10 @@
  * The emulator is the client behind `createClient`, `getDataClient` and the
  * service client, so every table read before a refusal is recorded.
  *
- * Set completeness: every page under app/dashboard and every export of every
- * 'use server' module is discovered from disk and must be classified below.
- * A new page or action nobody classified turns this file red.
+ * Set completeness: every page under app/dashboard, every export of every
+ * 'use server' module, and every route handler under app/ is discovered from
+ * disk and must be classified below. A new page, action or handler nobody
+ * classified turns this file red.
  */
 
 import { readdirSync, readFileSync, statSync } from 'fs';
@@ -139,6 +140,9 @@ const TEMPLATE_ID = '00000000-0000-4000-8000-000000308020'; // pii-allow-uuid: i
 /** A checklist template in the personal organization, for the admitted-owner control only (BACKLOG-3535). */
 const PERSONAL_TEMPLATE_ID = '00000000-0000-4000-8000-000000353520'; // pii-allow-uuid: invented fixture id
 
+/** BACKLOG-3080 (My Transactions): the fixture user's OWN submission in the brokerage. */
+const OWN_SUBMISSION_ID = '00000000-0000-4000-8000-000000308031'; // pii-allow-uuid: invented fixture id
+
 const second = (row: Row): Row => ({ ...row, id: `${row.id as string}-second` });
 
 const PERSONAS = {
@@ -192,6 +196,17 @@ function given(memberships: readonly Row[]): void {
           // Integer counters (default 0 in public.transaction_submissions) the detail page prints.
           message_count: 0,
           attachment_count: 0,
+        },
+        {
+          id: OWN_SUBMISSION_ID,
+          organization_id: FIXTURE_BROKERAGE_ORG_ID,
+          submitted_by: FIXTURE_USER_ID,
+          status: 'submitted',
+          property_address: 'Own Audit Fixture Street',
+          created_at: '2026-09-01T00:00:00Z',
+          message_count: 0,
+          attachment_count: 0,
+          status_history: [],
         },
       ],
     },
@@ -316,6 +331,38 @@ const OWN_GATE_PERSONAS = {
   '[brokerage agent, personal-org owner]': [brokerageMembership('agent'), personalMembership()],
 } as const;
 const ownGatePersonaNames = Object.keys(OWN_GATE_PERSONAS) as (keyof typeof OWN_GATE_PERSONAS)[];
+
+/**
+ * BACKLOG-3080 (My Transactions): gated by lib/my-transactions-access.ts. Only a
+ * floor user routed on a BROKERAGE row is admitted (feature checks are forced
+ * ON in this file, so the admitted persona gets the real page, not the plan
+ * message; key-off, key-absent and key-error are covered in
+ * my-transactions.test.tsx with the feature gate unmocked). Everyone else gets
+ * notFound() before any submission is read, including broker/admin/it_admin
+ * (their own rows are in the review queue). '[agent, broker] (two brokerage
+ * rows)' is not used: UNIQUE (organization_id, user_id) rules it out.
+ */
+const PLAN_GATED_PAGES: Record<string, PageEntry> = {
+  'app/dashboard/my-transactions/page.tsx': {
+    invoke: async () =>
+      (await import('@/app/dashboard/my-transactions/page')).default({ searchParams: Promise.resolve({}) }),
+    refused: { notFound: true },
+  },
+  'app/dashboard/my-transactions/[id]/page.tsx': {
+    invoke: async () => (await import('@/app/dashboard/my-transactions/[id]/page')).default(idParams(OWN_SUBMISSION_ID)),
+    refused: { notFound: true },
+  },
+};
+const PLAN_GATED_ADMITTED = {
+  'brokerage agent': [brokerageMembership('agent')],
+  '[brokerage agent, personal-org owner]': [brokerageMembership('agent'), personalMembership()],
+} as const;
+const PLAN_GATED_REFUSED = {
+  'personal-org owner': [personalMembership()],
+  'brokerage broker': [brokerageMembership('broker')],
+  'brokerage admin': ADMIN,
+  'brokerage it_admin': [brokerageMembership('it_admin')],
+} as const;
 
 // ---------------------------------------------------------------------------
 // Server actions
@@ -476,6 +523,36 @@ const HELPER_ACTIONS = [
  */
 const RLS_GUARDED_HANDLERS = ['app/setup/consent/callback/route.ts'];
 
+/**
+ * BACKLOG-3080 (R8): every route handler under app/, discovered from disk. The
+ * 21 handlers that exist when My Transactions ships; it adds none. A new
+ * handler (for example one that signs a storage path from the request) must be
+ * added here on purpose, where review sees it.
+ */
+const KNOWN_ROUTE_HANDLERS = [
+  'app/api/cron/email-retry/route.ts',
+  'app/api/cron/payment-reconcile/route.ts',
+  'app/api/download/route.ts',
+  'app/api/email/internal-invite/route.ts',
+  'app/api/email/send-download-invite/route.ts',
+  'app/api/email/send-invite/route.ts',
+  'app/api/email/ticket-confirmation/route.ts',
+  'app/api/email/ticket-notification/route.ts',
+  'app/api/email/ticket-resolved/route.ts',
+  'app/api/impersonation/end/route.ts',
+  'app/api/invite/validate/route.ts',
+  'app/api/payments/charge/route.ts',
+  'app/api/payments/checkout-session/route.ts',
+  'app/api/payments/status/route.ts',
+  'app/api/payments/webhook/route.ts',
+  'app/api/send-download-link/route.ts',
+  'app/auth/callback/route.ts',
+  'app/auth/impersonate/route.ts',
+  'app/auth/logout/route.ts',
+  'app/auth/setup/callback/route.ts',
+  'app/setup/consent/callback/route.ts',
+];
+
 // ---------------------------------------------------------------------------
 // Discovery from disk (R3)
 // ---------------------------------------------------------------------------
@@ -520,6 +597,21 @@ function dashboardPageKeys(
 
 function discoverDashboardPages(): string[] {
   return dashboardPageKeys(walk(join(ROOT, 'app/dashboard')));
+}
+
+function routeHandlerKeys(
+  files: string[],
+  root: string = ROOT,
+  rel: (from: string, to: string) => string = relative
+): string[] {
+  return files
+    .map((f) => repoKey(f, root, rel))
+    .filter((k) => /\/route\.(tsx|ts|jsx|js)$/.test(k))
+    .sort();
+}
+
+function discoverRouteHandlers(): string[] {
+  return routeHandlerKeys(walk(join(ROOT, 'app')));
 }
 
 const DIRECTIVE = /^\s*(['"])use server\1\s*;?\s*$/;
@@ -608,7 +700,26 @@ describe('discovery can see what it claims to see', () => {
     const pages = discoverDashboardPages();
     expect(pages).toContain('app/dashboard/page.tsx');
     expect(pages).toContain('app/dashboard/users/[id]/page.tsx');
-    expect(pages.length).toBe(14);
+    expect(pages.length).toBe(16);
+  });
+
+  it('finds route handlers, keyed POSIX on any OS (R8)', () => {
+    const root = 'C:\\repo\\broker-portal';
+    expect(
+      routeHandlerKeys(
+        [
+          'C:\\repo\\broker-portal\\app\\api\\download\\route.ts',
+          'C:\\repo\\broker-portal\\app\\auth\\callback\\route.tsx',
+          'C:\\repo\\broker-portal\\app\\auth\\callback\\helpers.ts',
+          'C:\\repo\\broker-portal\\app\\dashboard\\page.tsx',
+        ],
+        root,
+        win32.relative
+      )
+    ).toEqual(['app/api/download/route.ts', 'app/auth/callback/route.tsx']);
+    const handlers = discoverRouteHandlers();
+    expect(handlers).toContain('app/setup/consent/callback/route.ts');
+    expect(handlers.length).toBe(21);
   });
 
   it('recognises both directive quote styles, every export form, and function-level directives', () => {
@@ -634,7 +745,12 @@ describe('discovery can see what it claims to see', () => {
 
 describe('set completeness', () => {
   it('every dashboard page is classified exactly once', () => {
-    const classified = [...Object.keys(REFUSED_PAGES), ...FLOOR_PAGES, ...Object.keys(OWN_GATE_PAGES)];
+    const classified = [
+      ...Object.keys(REFUSED_PAGES),
+      ...FLOOR_PAGES,
+      ...Object.keys(OWN_GATE_PAGES),
+      ...Object.keys(PLAN_GATED_PAGES),
+    ];
     expect(new Set(classified).size).toBe(classified.length);
     expect(discoverDashboardPages()).toEqual([...classified].sort());
   });
@@ -652,6 +768,12 @@ describe('set completeness', () => {
     expect(Object.keys(OWN_GATE_REFUSALS).sort()).toEqual(Object.keys(OWN_GATE_ACTIONS).sort());
     for (const name of Object.keys(READS_BEFORE_REFUSAL)) expect(REFUSED_ACTIONS).toHaveProperty([name]);
     expect(discoverServerActions()).toEqual([...classified].sort());
+  });
+
+  it('every route handler is known (R8)', () => {
+    expect(new Set(KNOWN_ROUTE_HANDLERS).size).toBe(KNOWN_ROUTE_HANDLERS.length);
+    for (const rel of RLS_GUARDED_HANDLERS) expect(KNOWN_ROUTE_HANDLERS).toContain(rel);
+    expect(discoverRouteHandlers()).toEqual([...KNOWN_ROUTE_HANDLERS].sort());
   });
 
   it('records the RLS-guarded handler, which PR 1 leaves unedited', () => {
@@ -776,4 +898,43 @@ describe('refused server actions', () => {
     const outcome = await run(REFUSED_ACTIONS[name]);
     for (const persona of personaNames) expect(outcome).not.toEqual(refusalFor(name, persona));
   });
+});
+
+describe('plan-gated pages: My Transactions (BACKLOG-3080, R7)', () => {
+  it('this harness reads the My Transactions key as ON, so refusals below are not the plan', async () => {
+    const { isFeatureEnabledFailClosed } = await import('@/lib/feature-gate');
+    expect(await isFeatureEnabledFailClosed(FIXTURE_BROKERAGE_ORG_ID, 'portal_my_transactions')).toBe(true);
+  });
+
+  const refusedCases = Object.entries(PLAN_GATED_PAGES).flatMap(([page, entry]) =>
+    (Object.keys(PLAN_GATED_REFUSED) as (keyof typeof PLAN_GATED_REFUSED)[]).map((p) => [page, p, entry] as const)
+  );
+  it.each(refusedCases)('%s refuses the %s before reading anything else', async (_page, persona, entry) => {
+    given(PLAN_GATED_REFUSED[persona]);
+    expect(await run(entry.invoke)).toEqual(entry.refused);
+    expect(tablesRead()).toEqual(['organization_members']);
+    expect(mockEmulator.state.writes).toEqual([]);
+  });
+
+  const admittedCases = Object.entries(PLAN_GATED_PAGES).flatMap(([page, entry]) =>
+    (Object.keys(PLAN_GATED_ADMITTED) as (keyof typeof PLAN_GATED_ADMITTED)[]).map((p) => [page, p, entry] as const)
+  );
+  it.each(admittedCases)('%s admits the %s, reads its submissions and writes nothing', async (_page, persona, entry) => {
+    given(PLAN_GATED_ADMITTED[persona]);
+    const outcome = await run(entry.invoke);
+    expect(outcome).not.toEqual(entry.refused);
+    expect(outcome).not.toHaveProperty('threw');
+    expect(outcome).not.toHaveProperty('redirect');
+    expect(tablesRead()).toContain('transaction_submissions');
+    expect(mockEmulator.state.writes).toEqual([]);
+  });
+
+  it.each(['app/dashboard/submissions/page.tsx', 'app/dashboard/submissions/[id]/page.tsx'])(
+    'C3: %s still refuses a brokerage agent whose plan has My Transactions on',
+    async (page) => {
+      given(PLAN_GATED_ADMITTED['brokerage agent']);
+      expect(await run(REFUSED_PAGES[page].invoke)).toEqual({ redirect: '/dashboard' });
+      expect(tablesRead()).toEqual(['organization_members']);
+    }
+  );
 });
