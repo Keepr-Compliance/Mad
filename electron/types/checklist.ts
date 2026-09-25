@@ -164,26 +164,22 @@ export interface SelectChecklistTemplateInput {
   templateId: string;
   templateName: string;
   items: ChecklistTemplateItemInput[];
-  /**
-   * Absent: ADD a checklist; nothing already on the transaction is touched.
-   * Present: REPLACE this one checklist of this transaction (its ticks, notes
-   * and links go with it) in the same database transaction; every other
-   * checklist is untouched.
-   */
-  replaceChecklistId?: string;
 }
 
 /**
  * Why a write did nothing, or what it did. A refusal is a RESULT, never a
  * throw: the caller has to render the reason.
+ *
+ * ADD only (BACKLOG-3476 round 2: Change is gone, and with it the only route
+ * that could delete a checklist's own ticks, notes and links out from under
+ * it — the sole way to remove a checklist is `checklists:remove`, which
+ * removes ONE named checklist and nothing else). There is no `"replaced"` or
+ * `"no_checklist"` arm: this call never deletes.
  */
 export type SelectChecklistTemplateResult =
   | { status: "added"; checklistId: string }
-  | { status: "replaced"; checklistId: string; previousChecklistId: string }
   /** This template is already on this transaction (as `checklistId`). Nothing written. */
   | { status: "exists"; checklistId: string }
-  /** `replaceChecklistId` is not a checklist of this transaction. Nothing written. */
-  | { status: "no_checklist" }
   | { status: "no_transaction" };
 
 export interface AddChecklistLinkInput {

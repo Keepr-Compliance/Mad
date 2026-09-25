@@ -10,8 +10,7 @@
  *
  * ## Two functions write more than once, and each is ONE `dbTransaction`
  *
- * `selectChecklistTemplate` writes a checklist with its items (and, when
- * replacing, first deletes the one checklist it replaces);
+ * `selectChecklistTemplate` writes a checklist with its items;
  * `addChecklistLink` writes a group and its members. Both are a
  * single wrapped body of raw statements.
  *
@@ -50,7 +49,6 @@ import {
   GET_CHECKLIST_LINKS_SQL,
   GET_CHECKLISTS_BY_TRANSACTION_SQL,
   GET_ITEM_CONTEXT_SQL,
-  GET_OTHER_CHECKLIST_BY_TEMPLATE_SQL,
   INSERT_ATTACHMENT_MEMBER_SQL,
   INSERT_CHECKLIST_ITEM_SQL,
   INSERT_CHECKLIST_LINK_SQL,
@@ -149,12 +147,10 @@ function toItem(row: ItemRow): ChecklistItem {
 /**
  * Copy a broker template onto a transaction (BACKLOG-3476: one of several).
  *
- * Without `replaceChecklistId` this ADDS a checklist and never deletes
- * anything; a template already on the transaction is refused as `exists`. With
- * it, exactly that checklist of THIS transaction is deleted (items, groups and
- * members follow by cascade) and the new one written at its position, in the
- * SAME database transaction; every other checklist is untouched. Replacing a
- * checklist with its own template resets it.
+ * ADDS a checklist and never deletes anything; a template already on the
+ * transaction is refused as `exists`. (BACKLOG-3476 round 2: Change is gone,
+ * so this no longer takes a checklist id to replace — the only way to remove
+ * a checklist is `removeChecklist` below, which names the one it takes off.)
  */
 export function selectChecklistTemplate(
   input: SelectChecklistTemplateInput,
@@ -163,32 +159,14 @@ export function selectChecklistTemplate(
     const transaction = dbGet<{ id: string }>(TRANSACTION_EXISTS_SQL, [input.transactionId]);
     if (!transaction) return { status: "no_transaction" };
 
-    let sortOrder: number;
-    let replaced: ChecklistRow | undefined;
-    if (input.replaceChecklistId === undefined) {
-      const existing = dbGet<{ id: string }>(GET_CHECKLIST_BY_TEMPLATE_SQL, [
-        input.transactionId,
-        input.templateId,
-      ]);
-      if (existing) return { status: "exists", checklistId: existing.id };
-      sortOrder =
-        dbGet<{ next_sort_order: number }>(NEXT_CHECKLIST_SORT_ORDER_SQL, [input.transactionId])
-          ?.next_sort_order ?? 0;
-    } else {
-      replaced = dbGet<ChecklistRow>(GET_CHECKLIST_IN_TRANSACTION_SQL, [
-        input.replaceChecklistId,
-        input.transactionId,
-      ]);
-      if (!replaced) return { status: "no_checklist" };
-      const other = dbGet<{ id: string }>(GET_OTHER_CHECKLIST_BY_TEMPLATE_SQL, [
-        input.transactionId,
-        input.templateId,
-        replaced.id,
-      ]);
-      if (other) return { status: "exists", checklistId: other.id };
-      dbRun(DELETE_CHECKLIST_IN_TRANSACTION_SQL, [replaced.id, input.transactionId]);
-      sortOrder = replaced.sort_order;
-    }
+    const existing = dbGet<{ id: string }>(GET_CHECKLIST_BY_TEMPLATE_SQL, [
+      input.transactionId,
+      input.templateId,
+    ]);
+    if (existing) return { status: "exists", checklistId: existing.id };
+    const sortOrder =
+      dbGet<{ next_sort_order: number }>(NEXT_CHECKLIST_SORT_ORDER_SQL, [input.transactionId])
+        ?.next_sort_order ?? 0;
 
     const checklistId = randomUUID();
     dbRun(INSERT_CHECKLIST_SQL, [
@@ -210,9 +188,7 @@ export function selectChecklistTemplate(
       ]);
     });
 
-    return replaced
-      ? { status: "replaced", checklistId, previousChecklistId: replaced.id }
-      : { status: "added", checklistId };
+    return { status: "added", checklistId };
   });
   return Promise.resolve(result);
 }

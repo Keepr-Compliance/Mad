@@ -1,19 +1,21 @@
 /**
  * BACKLOG-3476 — the Checklist tab panel: several checklists, each a section,
- * with a chooser, rows, Change, Remove and a read-only state.
+ * with a chooser, rows, Remove and a read-only state.
+ *
+ * BACKLOG-3476 round 2: there is no Change. Add + Remove is the only route by
+ * which a checklist's template can be swapped, and there is no per-section
+ * progress line — only the tab header and Overview sum across every checklist.
  *
  * Wrong implementations this suite is here to catch:
  *   C-K  "your brokerage has no templates" said when the read FAILED.
- *   C-F  a section's Change writes before the confirmation, or replaces a
- *        different checklist.
- *   C-G / A-7  the confirmation does not say what is lost, or counts the loss
- *        across every checklist instead of the one being replaced.
  *   C-H / A-5 / A-6  progress recomputed in the renderer (counting optional
- *        ticks, or only the first checklist) instead of main's sums.
+ *        ticks, or only the first checklist) instead of main's sums, or a
+ *        per-section progress line reappearing.
  *   A-8  a section's Remove or collapse acting on another section.
  *   A-9  a template already on the transaction offered again.
- *   A-10 an add sending `replaceChecklistId` (SVC1).
- *   G-1  Add/Change offered without the plan, or Remove missing where it is due.
+ *   A-10 an add sending a checklist id (SVC1).
+ *   G-1  Add offered without the plan, Remove missing where it is due, or
+ *        Change offered at all.
  *   Q2   the "open unless every item is ticked" rule implemented as
  *        required-only, as a live derivation, or before the data arrives.
  *   C-J  read-only still offers writes.
@@ -225,60 +227,6 @@ describe("A-10 / A-9 — adding a checklist", () => {
   });
 });
 
-describe("C-F — a section's Change replaces that section, and only after the confirmation", () => {
-  it("a pick writes nothing; Go back writes nothing; Replace sends that section's id", async () => {
-    api().get.mockResolvedValue(answerAll());
-    render(<Harness gate="allowed" />);
-    fireEvent.click(await screen.findByTestId(`checklist-change-${idOf(1)}`));
-    fireEvent.click(await screen.findByTestId("checklist-template-tpl-fresh"));
-    expect(await screen.findByTestId("checklist-replace-confirm")).toBeInTheDocument();
-    expect(api().selectTemplate).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByTestId("checklist-replace-cancel"));
-    expect(screen.queryByTestId("checklist-replace-confirm")).not.toBeInTheDocument();
-    expect(api().selectTemplate).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByTestId("checklist-template-tpl-fresh"));
-    fireEvent.click(await screen.findByTestId("checklist-replace-confirm-button"));
-    await waitFor(() => expect(api().selectTemplate).toHaveBeenCalledTimes(1));
-    expect(api().selectTemplate.mock.calls[0]).toEqual([
-      { transactionId: "txn-1", templateId: "tpl-fresh", replaceChecklistId: idOf(1) },
-    ]);
-  });
-
-  it("the section's own template is a reset, and says so; the others' are disabled", async () => {
-    api().get.mockResolvedValue(answerAll());
-    render(<Harness gate="allowed" />);
-    fireEvent.click(await screen.findByTestId(`checklist-change-${idOf(0)}`));
-    expect(await screen.findByTestId("checklist-template-tpl-other")).toBeDisabled();
-    fireEvent.click(screen.getByTestId("checklist-template-tpl-probe"));
-    expect(await screen.findByText("Reset this checklist?")).toBeInTheDocument();
-  });
-});
-
-describe("C-G / A-7 — the confirmation names what THAT checklist loses", () => {
-  it("counts ticks, notes and links from the first checklist", async () => {
-    // Fixture: items 1 and 3 ticked, item 3 has a note, four link groups.
-    api().get.mockResolvedValue(answerAll());
-    render(<Harness gate="allowed" />);
-    fireEvent.click(await screen.findByTestId(`checklist-change-${idOf(0)}`));
-    fireEvent.click(await screen.findByTestId("checklist-template-tpl-fresh"));
-    expect(await screen.findByTestId("checklist-replace-loss")).toHaveTextContent(
-      "2 ticked items, 1 note and 4 links on “Probe template” will be cleared.",
-    );
-  });
-
-  it("A-7: Change on the second checklist counts only the second checklist", async () => {
-    api().get.mockResolvedValue(answerAll());
-    render(<Harness gate="allowed" />);
-    fireEvent.click(await screen.findByTestId(`checklist-change-${idOf(1)}`));
-    fireEvent.click(await screen.findByTestId("checklist-template-tpl-fresh"));
-    expect(await screen.findByTestId("checklist-replace-loss")).toHaveTextContent(
-      "1 ticked item, 0 notes and 0 links on “Other probe template” will be cleared.",
-    );
-  });
-});
-
 describe("C-H / A-5 / A-6 — progress is main's, not a tick count", () => {
   it("one checklist: an optional tick does not count, 1 of 2 with two items ticked", async () => {
     api().get.mockResolvedValue(answer([fixtureDetail()]));
@@ -287,19 +235,16 @@ describe("C-H / A-5 / A-6 — progress is main's, not a tick count", () => {
     expect(within(total).getByTestId("checklist-progress-text")).toHaveTextContent(/^1 of 2 required done$/);
   });
 
-  it("A-5: the tab header shows main's sum across every checklist, and each section its own", async () => {
+  it("A-5: the tab header shows main's sum across every checklist, and no section shows its own (round 2: the per-section line is gone)", async () => {
     api().get.mockResolvedValue(answerAll());
     render(<Harness gate="allowed" />);
     const total = await screen.findByTestId("checklist-total-progress");
     expect(within(total).getByTestId("checklist-progress-text")).toHaveTextContent(/^3 of 6 required done$/);
-    const own = (i: number) =>
-      within(screen.getByTestId(`checklist-section-progress-${idOf(i)}`)).getByTestId("checklist-progress-text")
-        .textContent;
-    expect([own(0), own(1), own(2)]).toEqual([
-      "1 of 2 required done",
-      "1 of 3 required done",
-      "1 of 1 required done",
-    ]);
+    for (const i of [0, 1, 2]) {
+      const section = screen.getByTestId(`checklist-section-${idOf(i)}`);
+      expect(within(section).queryByTestId(`checklist-section-progress-${idOf(i)}`)).not.toBeInTheDocument();
+      expect(within(section).queryByTestId("checklist-progress-text")).not.toBeInTheDocument();
+    }
   });
 
   it("A-6: when main's envelope differs from a sum of the items, the header follows main", async () => {
@@ -346,17 +291,17 @@ describe("A-8 — each section acts on itself", () => {
 describe("G-1 — what each plan state offers with two checklists", () => {
   const two = () => answer([fixtureChecklist(0), fixtureChecklist(1)]);
 
-  it("allowed: Add checklist, and Change and Remove on each section", async () => {
+  it("allowed: Add checklist, Remove on each section, and no Change anywhere (round 2: Change is gone)", async () => {
     api().get.mockResolvedValue(two());
     render(<Harness gate="allowed" />);
     expect(await screen.findByTestId("checklist-add")).toBeInTheDocument();
     for (const i of [0, 1]) {
-      expect(screen.getByTestId(`checklist-change-${idOf(i)}`)).toBeInTheDocument();
       expect(screen.getByTestId(`checklist-remove-${idOf(i)}`)).toBeInTheDocument();
+      expect(screen.queryByTestId(`checklist-change-${idOf(i)}`)).not.toBeInTheDocument();
     }
   });
 
-  it("blocked: no Add, no Change on either section, Remove on each", async () => {
+  it("blocked: no Add, Remove on each section, no Change", async () => {
     api().get.mockResolvedValue(two());
     render(<Harness gate="blocked" />);
     await screen.findByTestId("checklist-readonly-notice");

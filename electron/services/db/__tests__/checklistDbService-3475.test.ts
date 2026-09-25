@@ -16,13 +16,11 @@
  *       The fixture below is transcribed from that producer chain, not invented:
  *       two NULL-thread emails plus a third that shares a non-null thread_id
  *       with a linked one and must NOT appear.
- *   an add that replaces, or a replace/remove that reaches past its checklist
+ *   an add that deletes, or a remove that reaches past its checklist
  *       (BACKLOG-3476: a transaction holds several checklists). Adding never
- *       deletes; replace and remove act on ONE checklist of ONE transaction.
- *   remove-then-instantiate as two database transactions
- *       A failure between them leaves the checklist destroyed and not
- *       replaced. The replace test forces a failure mid-copy and asserts the
- *       OLD checklist is still whole.
+ *       deletes anything (BACKLOG-3476 round 2: Change is gone, so this is
+ *       now the ONLY thing `selectChecklistTemplate` can do); remove acts on
+ *       ONE checklist of ONE transaction.
  *   trusting renderer-supplied evidence ids
  *       Evidence from another transaction, or evidence that was unlinked,
  *       silently attached to this one.
@@ -202,44 +200,6 @@ describe("BACKLOG-3475 — picking a template copies it onto the transaction", (
     expect(detail?.requiredDone).toBe(0);
     // `template_id` is provenance: it is stored, and nothing reads through it.
     expect(detail?.checklist.templateId).toBe("tpl-1");
-  });
-
-  it("a replace that fails mid-copy leaves the OLD checklist whole", async () => {
-    const first = await selectChecklistTemplate({
-      transactionId: "txn-1",
-      templateId: "tpl-1",
-      templateName: "Residential Purchase",
-      items: TEMPLATE_ITEMS,
-    });
-    if (first.status !== "added") throw new Error("seed failed");
-    const originalChecklistIds = ids("transaction_checklists");
-    const originalItemIds = ids("transaction_checklist_items");
-
-    // The second item's title is blank, which the column's CHECK refuses. The
-    // delete of the old checklist has ALREADY run by then, inside the same
-    // database transaction.
-    //
-    // `toThrow`, not `rejects.toThrow`: these are plain functions returning
-    // `Promise<T>` rather than `async` ones (BACKLOG-2960), so the driver call
-    // is evaluated before `Promise.resolve` wraps it and a failure throws
-    // before the promise exists. `rejects` would pass vacuously on a function
-    // that never rejected at all.
-    expect(() =>
-      selectChecklistTemplate({
-        transactionId: "txn-1",
-        templateId: "tpl-2",
-        templateName: "Commercial",
-        items: [
-          { title: "Lease", isRequired: true, sortOrder: 0 },
-          { title: "   ", isRequired: true, sortOrder: 1 },
-        ],
-        replaceChecklistId: first.checklistId,
-      }),
-    ).toThrow(/CHECK constraint failed/);
-
-    // Rolled back whole: the user still has the checklist they had before.
-    expect(ids("transaction_checklists")).toEqual(originalChecklistIds);
-    expect(ids("transaction_checklist_items")).toEqual(originalItemIds);
   });
 
   it("a first pick that fails mid-copy leaves no checklist and no items", async () => {
@@ -498,7 +458,6 @@ describe("BACKLOG-3475 — ticks and notes are in the database, not in a cache",
 
 const TPL_A = "tpl-a";
 const TPL_B = "tpl-b";
-const TPL_C = "tpl-c";
 
 async function addTemplate(
   transactionId: string,
@@ -578,41 +537,22 @@ describe("BACKLOG-3476 — several checklists per transaction", () => {
     expect(reordered.checklists.map((d) => d.checklist.id)).toEqual([b, a]);
   });
 
-  it("A-3: replacing or removing one checklist leaves the other's rows intact", async () => {
+  it("A-3: removing one checklist leaves the other's rows intact", async () => {
     const a = await addTemplate("txn-1", TPL_A, "Listing");
     const b = await addTemplate("txn-1", TPL_B, "Buyer");
     await dirty(a);
     const aBefore = rowsUnder(a);
 
-    const replaced = await selectChecklistTemplate({
-      transactionId: "txn-1",
-      templateId: TPL_C,
-      templateName: "Commercial",
-      items: TEMPLATE_ITEMS,
-      replaceChecklistId: b,
-    });
-    expect(replaced).toMatchObject({ status: "replaced", previousChecklistId: b });
-    expect(rowsUnder(a)).toEqual(aBefore);
-
-    const c = replaced.status === "replaced" ? replaced.checklistId : "";
-    expect(await removeChecklist("txn-1", c)).not.toBeNull();
+    expect(await removeChecklist("txn-1", b)).not.toBeNull();
     expect(rowsUnder(a)).toEqual(aBefore);
     expect(ids("transaction_checklists")).toEqual([a]);
   });
 
-  it("A-4: a replace or remove naming another transaction's checklist is refused and changes no row anywhere", async () => {
+  it("A-4: a remove naming another transaction's checklist is refused and changes no row anywhere", async () => {
     await addTemplate("txn-1", TPL_A, "Listing");
     const other = await addTemplate("txn-2", TPL_A, "Listing");
     const before = everyRow();
 
-    const result = await selectChecklistTemplate({
-      transactionId: "txn-1",
-      templateId: TPL_B,
-      templateName: "Buyer",
-      items: TEMPLATE_ITEMS,
-      replaceChecklistId: other,
-    });
-    expect(result).toEqual({ status: "no_checklist" });
     expect(await removeChecklist("txn-1", other)).toBeNull();
     expect(everyRow()).toEqual(before);
   });
@@ -654,63 +594,6 @@ describe("BACKLOG-3476 — several checklists per transaction", () => {
     });
     expect(again).toEqual({ status: "exists", checklistId: a });
     expect(ids("transaction_checklists")).toEqual([a]);
-  });
-
-  it("A-9 (replace): replacing with a template another checklist already carries is refused, nothing written", async () => {
-    const a = await addTemplate("txn-1", TPL_A, "Listing");
-    const b = await addTemplate("txn-1", TPL_B, "Buyer");
-    const before = everyRow();
-    const result = await selectChecklistTemplate({
-      transactionId: "txn-1",
-      templateId: TPL_A,
-      templateName: "Listing",
-      items: TEMPLATE_ITEMS,
-      replaceChecklistId: b,
-    });
-    expect(result).toEqual({ status: "exists", checklistId: a });
-    expect(everyRow()).toEqual(before);
-  });
-
-  it("A-13: replacing the middle of three checklists keeps its position", async () => {
-    const a = await addTemplate("txn-1", TPL_A, "Listing");
-    const b = await addTemplate("txn-1", TPL_B, "Buyer");
-    const c = await addTemplate("txn-1", TPL_C, "Commercial");
-    expect((await getChecklistsForTransaction("txn-1")).checklists.map((d) => d.checklist.id)).toEqual([a, b, c]);
-
-    const replaced = await selectChecklistTemplate({
-      transactionId: "txn-1",
-      templateId: "tpl-d",
-      templateName: "Disclosure",
-      items: TEMPLATE_ITEMS,
-      replaceChecklistId: b,
-    });
-    if (replaced.status !== "replaced") throw new Error(replaced.status);
-    const names = (await getChecklistsForTransaction("txn-1")).checklists.map(
-      (d) => d.checklist.templateName,
-    );
-    expect(names).toEqual(["Listing", "Disclosure", "Commercial"]);
-  });
-
-  it("A-14: replacing a checklist with its OWN template resets it and leaves the other intact", async () => {
-    const a = await addTemplate("txn-1", TPL_A, "Listing");
-    const b = await addTemplate("txn-1", TPL_B, "Buyer");
-    await dirty(a);
-    await dirty(b);
-    const bBefore = rowsUnder(b);
-
-    const reset = await selectChecklistTemplate({
-      transactionId: "txn-1",
-      templateId: TPL_A,
-      templateName: "Listing",
-      items: TEMPLATE_ITEMS,
-      replaceChecklistId: a,
-    });
-    expect(reset).toMatchObject({ status: "replaced", previousChecklistId: a });
-    const fresh = reset.status === "replaced" ? reset.checklistId : "";
-    const after = rowsUnder(fresh);
-    expect(after.items.every((i) => i.is_checked === 0 && i.note === null)).toBe(true);
-    expect(after.links).toEqual([]);
-    expect(rowsUnder(b)).toEqual(bBefore);
   });
 
   it("Q2: allItemsChecked is true only when every item, optional included, is ticked; never for zero items", async () => {

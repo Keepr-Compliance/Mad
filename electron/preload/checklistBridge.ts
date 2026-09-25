@@ -34,14 +34,13 @@ export const checklistBridge = {
     ipcRenderer.invoke("checklists:list-templates"),
 
   /**
-   * Copy a template onto a transaction. Without `replaceChecklistId` it adds a
-   * checklist (a template already on the transaction answers `exists`); with
-   * it, that one checklist is replaced and the others are untouched.
+   * Copy a template onto a transaction: ADD a checklist (a template already on
+   * the transaction answers `exists`). BACKLOG-3476 round 2: Change is gone,
+   * so this never replaces one already there.
    */
   selectTemplate: (args: {
     transactionId: string;
     templateId: string;
-    replaceChecklistId?: string;
   }): Promise<{ success: boolean; result?: SelectChecklistTemplateResult; error?: string }> =>
     ipcRenderer.invoke("checklists:select-template", args),
 

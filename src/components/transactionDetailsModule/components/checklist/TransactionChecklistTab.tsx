@@ -6,13 +6,17 @@
  * TransactionDetails owns the checklist hook and the plan state and passes them
  * in, so the tab, its button and the Overview line all read one answer.
  *
- * | plan      | checklists | this panel                                                   |
- * |-----------|------------|--------------------------------------------------------------|
- * | allowed   | none       | template chooser                                             |
- * | allowed   | 1+         | summed progress, Add checklist; each section: Change, Remove |
- * | blocked   | 1+         | read-only + notice; each section: Remove only                |
- * | unknown   | 1+         | read-only + notice                                           |
- * | pending / blocked / unknown with none: the tab is not shown at all                   |
+ * | plan      | checklists | this panel                                           |
+ * |-----------|------------|-------------------------------------------------------|
+ * | allowed   | none       | template chooser                                     |
+ * | allowed   | 1+         | summed progress, Add checklist; each section: Remove |
+ * | blocked   | 1+         | read-only + notice; each section: Remove only        |
+ * | unknown   | 1+         | read-only + notice                                   |
+ * | pending / blocked / unknown with none: the tab is not shown at all                  |
+ *
+ * BACKLOG-3476 round 2: there is no Change. A checklist already on the
+ * transaction can only be taken off with Remove; Add and Remove together do
+ * what Change did.
  *
  * Read-only exists because `checklists:get` and `checklists:remove` are
  * deliberately ungated in main: a user whose plan dropped checklists can still
@@ -53,9 +57,8 @@ import type { ChecklistLinkViewer } from "./ChecklistLinkChip";
 import { ChecklistTemplateChooser } from "./ChecklistTemplateChooser";
 import { ChecklistProgress } from "./ChecklistProgress";
 import { ChecklistSection } from "./ChecklistSection";
-import { ChangeTemplateConfirm } from "./ChangeTemplateConfirm";
 import { ChecklistLinkPicker } from "./ChecklistLinkPicker";
-import { checklistLoss, linkableThreads, threadForLink } from "../../utils/checklistLinks";
+import { linkableThreads, threadForLink } from "../../utils/checklistLinks";
 
 export const ALREADY_ON_TRANSACTION_ERROR = "That checklist is already on this transaction.";
 
@@ -73,8 +76,8 @@ export interface TransactionChecklistTabProps {
   nameMap?: ReadonlyMap<string, string>;
 }
 
-/** Which chooser is open: adding a checklist, or replacing one named by id. */
-type ChooserState = { mode: "add" } | { mode: "replace"; checklistId: string } | null;
+/** Whether the "add a checklist" chooser is open. */
+type ChooserState = { mode: "add" } | null;
 
 export function TransactionChecklistTab({
   checklist,
@@ -94,7 +97,6 @@ export function TransactionChecklistTab({
   const userEmail = currentUser?.email;
   const readOnly = gate !== "allowed";
   const [chooser, setChooser] = useState<ChooserState>(null);
-  const [confirmTemplate, setConfirmTemplate] = useState<ChecklistTemplate | null>(null);
   const [busy, setBusy] = useState(false);
   const [templatesRefreshKey, setTemplatesRefreshKey] = useState(0);
   const [pickerItem, setPickerItem] = useState<ChecklistItem | null>(null);
@@ -194,15 +196,11 @@ export function TransactionChecklistTab({
       }
       switch (result.data.status) {
         case "added":
-        case "replaced":
           return true;
         case "exists":
           // Another window added it first, or the listing was stale. The
           // reload that followed the write already shows it; nothing was lost.
           onShowError(ALREADY_ON_TRANSACTION_ERROR);
-          return false;
-        case "no_checklist":
-          onShowError("That checklist is no longer on this transaction.");
           return false;
         case "no_transaction":
           onShowError("This transaction no longer exists.");
@@ -218,35 +216,17 @@ export function TransactionChecklistTab({
 
   const handlePick = useCallback(
     async (template: ChecklistTemplate) => {
-      if (chooser?.mode === "replace") {
-        // Nothing is written until the confirmation says so.
-        setConfirmTemplate(template);
-        return;
-      }
       setBusy(true);
       try {
-        // An add: no checklist id is sent, so nothing already here can change.
+        // Always an add: no checklist id is sent, so nothing already here can
+        // change (BACKLOG-3476 round 2: Change is gone).
         if (handleSelectResult(await checklist.addChecklist(template.id))) setChooser(null);
       } finally {
         setBusy(false);
       }
     },
-    [chooser, checklist, handleSelectResult],
+    [checklist, handleSelectResult],
   );
-
-  const handleConfirmReplace = useCallback(async () => {
-    if (!confirmTemplate || chooser?.mode !== "replace") return;
-    setBusy(true);
-    try {
-      const ok = handleSelectResult(
-        await checklist.replaceChecklist(chooser.checklistId, confirmTemplate.id),
-      );
-      setConfirmTemplate(null);
-      if (ok) setChooser(null);
-    } finally {
-      setBusy(false);
-    }
-  }, [confirmTemplate, chooser, checklist, handleSelectResult]);
 
   const handleToggle = useCallback(
     async (item: ChecklistItem) => {
@@ -328,42 +308,17 @@ export function TransactionChecklistTab({
     );
   }
 
-  const replaceTarget =
-    chooser?.mode === "replace"
-      ? details.find((d) => d.checklist.id === chooser.checklistId) ?? null
-      : null;
-
-  if (chooser && !readOnly && (chooser.mode === "add" || replaceTarget)) {
-    // Templates already on this transaction cannot be added again. When
-    // replacing, the checklist's own template stays selectable: that resets it.
-    const disabledTemplateIds = new Set(templateIdsOnTransaction);
-    if (replaceTarget) disabledTemplateIds.delete(replaceTarget.checklist.templateId);
+  if (chooser && !readOnly) {
+    // Templates already on this transaction cannot be added again.
     return (
-      <>
-        <ChecklistTemplateChooser
-          mode={chooser.mode}
-          replacingName={replaceTarget?.checklist.templateName}
-          disabledTemplateIds={disabledTemplateIds}
-          onPick={(t) => void handlePick(t)}
-          onCancel={() => {
-            setConfirmTemplate(null);
-            setChooser(null);
-          }}
-          busy={busy}
-          refreshKey={templatesRefreshKey}
-        />
-        {confirmTemplate && replaceTarget && (
-          <ChangeTemplateConfirm
-            currentName={replaceTarget.checklist.templateName}
-            newName={confirmTemplate.name}
-            isReset={confirmTemplate.id === replaceTarget.checklist.templateId}
-            loss={checklistLoss(replaceTarget)}
-            busy={busy}
-            onConfirm={() => void handleConfirmReplace()}
-            onCancel={() => setConfirmTemplate(null)}
-          />
-        )}
-      </>
+      <ChecklistTemplateChooser
+        mode={chooser.mode}
+        disabledTemplateIds={templateIdsOnTransaction}
+        onPick={(t) => void handlePick(t)}
+        onCancel={() => setChooser(null)}
+        busy={busy}
+        refreshKey={templatesRefreshKey}
+      />
     );
   }
 
@@ -419,13 +374,11 @@ export function TransactionChecklistTab({
             expanded={isExpanded(detail)}
             onToggleExpanded={toggleExpanded}
             readOnly={readOnly}
-            canChange={gate === "allowed"}
             canRemove={gate === "allowed" || gate === "blocked"}
             busy={busy}
             pendingItemIds={checklist.pendingItemIds}
             attachmentsById={attachmentsById}
             threads={threads}
-            onChange={(checklistId) => setChooser({ mode: "replace", checklistId })}
             onRemove={handleRemoveChecklist}
             onToggleItem={(i) => void handleToggle(i)}
             onSaveNote={handleSaveNote}

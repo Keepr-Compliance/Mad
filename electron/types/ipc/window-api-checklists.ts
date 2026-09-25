@@ -52,11 +52,13 @@ export interface ChecklistWriteResult {
 export interface WindowApiChecklists {
   /** Broker templates for this organization. Gated; a failed read carries no `templates`. */
   listTemplates: () => Promise<ListChecklistTemplatesResult>;
-  /** Add a checklist from a template, or replace the one named by `replaceChecklistId`. */
+  /**
+   * Add a checklist from a template (BACKLOG-3476 round 2: Change is gone, so
+   * this never replaces one already there).
+   */
   selectTemplate: (args: {
     transactionId: string;
     templateId: string;
-    replaceChecklistId?: string;
   }) => Promise<{ success: boolean; result?: SelectChecklistTemplateResult; error?: string }>;
   /** Every checklist on this transaction. Never gated. */
   get: (args: {

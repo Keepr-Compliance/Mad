@@ -9,10 +9,10 @@
  * A failed read never says the brokerage has none. That would be a false
  * statement about someone else's account.
  *
- * It only reports which template was clicked. Whether that click writes
- * anything — an add, or a replace behind a confirmation — is the tab's
- * decision. A template already on the transaction renders disabled, marked
- * "Already added" (BACKLOG-3476: a template may be on a transaction once).
+ * It only reports which template was clicked; whether that click writes is
+ * the tab's decision (BACKLOG-3476 round 2: always an add — Change is gone).
+ * A template already on the transaction renders disabled, marked "Already
+ * added" (BACKLOG-3476: a template may be on a transaction once).
  */
 import React, { useCallback, useEffect, useState } from "react";
 import { checklistService } from "../../../../services/checklistService";
@@ -24,17 +24,12 @@ type ListingState =
   | { status: "failed"; error: string };
 
 interface ChecklistTemplateChooserProps {
-  /**
-   * "pick": no checklist yet. "add": Add checklist was clicked. "replace": one
-   * checklist's Change was clicked.
-   */
-  mode: "pick" | "add" | "replace";
-  /** Replace mode: the name of the checklist being replaced. */
-  replacingName?: string;
+  /** "pick": no checklist yet. "add": Add checklist was clicked. */
+  mode: "pick" | "add";
   /** Templates that cannot be picked: already on this transaction. */
   disabledTemplateIds?: ReadonlySet<string>;
   onPick: (template: ChecklistTemplate) => void;
-  /** Add and replace modes: back to the checklists, nothing written. */
+  /** Add mode: back to the checklists, nothing written. */
   onCancel?: () => void;
   /** True while a pick is being written; cards are disabled. */
   busy?: boolean;
@@ -49,7 +44,6 @@ const CLIPBOARD_ICON =
 
 export function ChecklistTemplateChooser({
   mode,
-  replacingName,
   disabledTemplateIds,
   onPick,
   onCancel,
@@ -95,7 +89,7 @@ export function ChecklistTemplateChooser({
           <p className="text-gray-600 mb-2">No checklist yet</p>
           <p className="text-sm text-gray-500">Choose a template to start this transaction&rsquo;s checklist.</p>
         </>
-      ) : mode === "add" ? (
+      ) : (
         <>
           <p className="text-gray-600 mb-2">Add a checklist to this transaction</p>
           <p className="text-sm text-gray-500">The checklists already here are not changed.</p>
@@ -107,25 +101,6 @@ export function ChecklistTemplateChooser({
               data-testid="checklist-chooser-cancel"
             >
               Cancel
-            </button>
-          )}
-        </>
-      ) : (
-        <>
-          <p className="text-gray-600 mb-2">
-            {replacingName
-              ? <>Pick a new template for &ldquo;{replacingName}&rdquo;</>
-              : "Pick a new template for this checklist"}
-          </p>
-          <p className="text-sm text-gray-500">You&rsquo;ll be asked to confirm before anything is cleared.</p>
-          {onCancel && (
-            <button
-              type="button"
-              onClick={onCancel}
-              className="mt-3 text-sm font-medium text-blue-600 hover:text-blue-800"
-              data-testid="checklist-chooser-cancel"
-            >
-              Keep the current checklist
             </button>
           )}
         </>

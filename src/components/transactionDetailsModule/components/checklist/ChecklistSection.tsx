@@ -1,14 +1,15 @@
 /**
  * ChecklistSection — BACKLOG-3476, one checklist inside the Checklist tab.
  *
- * A transaction may carry several checklists. Each renders as one section:
- * a header row (collapse toggle, template name, its own progress, Change,
- * Remove) and, when expanded, its rows.
+ * A transaction may carry several checklists. Each renders as one section: a
+ * header row (collapse toggle and template name on the left, Remove on the
+ * right) and, when expanded, its rows. BACKLOG-3476 round 2: there is no
+ * Change, and no per-section progress line — only the tab header and the
+ * Overview line show progress now, both summed across every checklist.
  *
  * Every action names THIS checklist by id. The section never acts on another
- * section, and its Change is the only route by which this checklist can be
- * replaced (the tab sends `replaceChecklistId` only from this section's own
- * confirmation).
+ * section, and the only write that can ever delete this checklist's ticks,
+ * notes or links is its OWN Remove.
  *
  * Whether it is expanded is the tab's state, keyed by checklist id; the
  * section only reports a toggle.
@@ -18,7 +19,6 @@ import type { ChecklistDetail, ChecklistItem } from "../../../../../electron/typ
 import type { UnifiedAttachment } from "../../hooks/useTransactionAllAttachments";
 import type { EmailThread } from "../EmailThreadCard";
 import type { ChecklistLinkViewer } from "./ChecklistLinkChip";
-import { ChecklistProgress } from "./ChecklistProgress";
 import { ChecklistItemRow } from "./ChecklistItemRow";
 import { checklistLoss, plural } from "../../utils/checklistLinks";
 
@@ -39,15 +39,12 @@ export interface ChecklistSectionProps {
   onToggleExpanded: (checklistId: string) => void;
   /** Rows are read-only (plan not confirmed as allowing checklists). */
   readOnly: boolean;
-  /** Offer Change (allowed only). */
-  canChange: boolean;
   /** Offer Remove (allowed, or blocked: the unhide rule). */
   canRemove: boolean;
   busy: boolean;
   pendingItemIds: ReadonlySet<string>;
   attachmentsById: ReadonlyMap<string, UnifiedAttachment>;
   threads: EmailThread[];
-  onChange: (checklistId: string) => void;
   onRemove: (checklistId: string) => Promise<void>;
   onToggleItem: (item: ChecklistItem) => void;
   onSaveNote: (itemId: string, note: string | null) => Promise<boolean>;
@@ -61,13 +58,11 @@ export function ChecklistSection({
   expanded,
   onToggleExpanded,
   readOnly,
-  canChange,
   canRemove,
   busy,
   pendingItemIds,
   attachmentsById,
   threads,
-  onChange,
   onRemove,
   onToggleItem,
   onSaveNote,
@@ -115,22 +110,7 @@ export function ChecklistSection({
             </span>
           </span>
         </button>
-        <div className="flex-1 basis-48" data-testid={`checklist-section-progress-${id}`}>
-          <ChecklistProgress requiredDone={detail.requiredDone} requiredTotal={detail.requiredTotal} />
-        </div>
         <div className="flex items-center gap-1">
-          {canChange && (
-            <button
-              type="button"
-              onClick={() => onChange(id)}
-              disabled={busy}
-              title="Changing the template clears every check, note and link on this checklist."
-              className="px-3 py-1.5 text-sm font-medium text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg"
-              data-testid={`checklist-change-${id}`}
-            >
-              Change
-            </button>
-          )}
           {canRemove && !confirmingRemove && (
             <button
               type="button"

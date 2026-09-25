@@ -622,8 +622,8 @@ describe("BACKLOG-3475 C9 — the ALLOWED side, so the refusals above are not va
     expect(count("transaction_checklist_link_members")).toBe(0);
   });
 
-  it("a tick writes checked_at and NO audit row; select and replace do", async () => {
-    const selected = await invoke("checklists:select-template", {
+  it("a tick writes checked_at and NO audit row; select does", async () => {
+    await invoke("checklists:select-template", {
       transactionId: TRANSACTION,
       templateId: TEMPLATE_ID,
     });
@@ -645,17 +645,6 @@ describe("BACKLOG-3475 C9 — the ALLOWED side, so the refusals above are not va
       rows("SELECT checked_at FROM transaction_checklist_items WHERE id = ?", itemId),
     ).toEqual([{ checked_at: null }]);
     expect(mockAudit).toHaveBeenCalledTimes(1);
-
-    await invoke("checklists:select-template", {
-      transactionId: TRANSACTION,
-      templateId: TEMPLATE_ID,
-      replaceChecklistId: selected.result.checklistId,
-    });
-    expect(mockAudit).toHaveBeenCalledTimes(2);
-    expect(mockAudit.mock.calls[1][0].metadata).toMatchObject({
-      reason: "checklist_replaced",
-      previousChecklistId: selected.result.checklistId,
-    });
   });
 
   it("the same template added again is declined as exists and the original is untouched", async () => {
@@ -909,46 +898,6 @@ describe("BACKLOG-3475 C6 — editing the broker template never rewrites a check
     ]);
   });
 
-  it("only an explicit replace rewrites the checklist, and it does so in one step", async () => {
-    const selected = await invoke("checklists:select-template", {
-      transactionId: TRANSACTION,
-      templateId: TEMPLATE_ID,
-    });
-    const original = itemIds();
-
-    mockListTemplates.mockResolvedValue(
-      templateListing({
-        name: "Standard purchase (v2)",
-        items: [
-          {
-            id: "<fixture:item-p1-1>",
-            title: "RENAMED IN THE PORTAL",
-            description: null,
-            isRequired: true,
-            expectedDocumentType: "offer",
-            sortOrder: 10,
-          },
-        ],
-      }),
-    );
-
-    const replaced = await invoke("checklists:select-template", {
-      transactionId: TRANSACTION,
-      templateId: TEMPLATE_ID,
-      replaceChecklistId: selected.result.checklistId,
-    });
-
-    expect(replaced.result.status).toBe("replaced");
-    // The checklist is never left missing: the old rows are gone and the new
-    // ones are present in the same read.
-    expect(count("transaction_checklists")).toBe(1);
-    const now = itemIds();
-    expect(now).toHaveLength(1);
-    expect(original).not.toContain(now[0]);
-    expect(
-      rows("SELECT title, template_name FROM transaction_checklist_items JOIN transaction_checklists ON transaction_checklists.id = transaction_checklist_items.checklist_id"),
-    ).toEqual([{ title: "RENAMED IN THE PORTAL", template_name: "Standard purchase (v2)" }]);
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1021,22 +970,4 @@ describe("BACKLOG-3476 — several checklists, through IPC", () => {
     });
   });
 
-  it("a replace naming another transaction's checklist answers no_checklist and writes nothing", async () => {
-    await add(TEMPLATE_ID);
-    const theirs = await invoke("checklists:select-template", {
-      transactionId: OTHER_TRANSACTION,
-      templateId: TEMPLATE_ID,
-    });
-    mockAudit.mockClear();
-
-    const result = await invoke("checklists:select-template", {
-      transactionId: TRANSACTION,
-      templateId: TEMPLATE_ID_2,
-      replaceChecklistId: theirs.result.checklistId,
-    });
-
-    expect(result).toEqual({ success: true, result: { status: "no_checklist" } });
-    expect(count("transaction_checklists")).toBe(2);
-    expect(mockAudit).not.toHaveBeenCalled();
-  });
 });

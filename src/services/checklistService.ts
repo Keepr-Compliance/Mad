@@ -75,8 +75,8 @@ export const checklistService = {
   },
 
   /**
-   * ADD a checklist from a template. Never sends `replaceChecklistId`, so it
-   * cannot touch a checklist already on the transaction.
+   * ADD a checklist from a template. BACKLOG-3476 round 2: Change is gone, so
+   * this never touches a checklist already on the transaction.
    */
   async selectTemplate(
     transactionId: string,
@@ -86,31 +86,6 @@ export const checklistService = {
       const result = await window.api.checklists.selectTemplate({
         transactionId,
         templateId,
-      });
-      if (result.success && result.result) {
-        return { success: true, data: result.result };
-      }
-      return { success: false, error: result.error };
-    } catch (error) {
-      return { success: false, error: getErrorMessage(error) };
-    }
-  },
-
-  /**
-   * REPLACE one checklist of a transaction with a template: its ticks, notes
-   * and links go; every other checklist stays. The only caller that sends
-   * `replaceChecklistId`.
-   */
-  async replaceChecklist(
-    transactionId: string,
-    checklistId: string,
-    templateId: string,
-  ): Promise<ApiResult<SelectChecklistTemplateResult>> {
-    try {
-      const result = await window.api.checklists.selectTemplate({
-        transactionId,
-        templateId,
-        replaceChecklistId: checklistId,
       });
       if (result.success && result.result) {
         return { success: true, data: result.result };

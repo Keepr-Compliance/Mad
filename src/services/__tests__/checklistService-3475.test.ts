@@ -156,20 +156,6 @@ describe("the write channels pass the shapes the Zod schemas expect", () => {
     expect(result.data).toEqual({ status: "added", checklistId: "c-1" });
   });
 
-  it("replaceChecklist sends exactly the checklist it was given", async () => {
-    api().selectTemplate.mockResolvedValue({
-      success: true,
-      result: { status: "replaced", checklistId: "c-2", previousChecklistId: "c-1" },
-    });
-
-    const result = await checklistService.replaceChecklist("t-1", "c-1", "tpl-2");
-
-    expect(api().selectTemplate.mock.calls[0]).toEqual([
-      { transactionId: "t-1", templateId: "tpl-2", replaceChecklistId: "c-1" },
-    ]);
-    expect(result.data).toEqual({ status: "replaced", checklistId: "c-2", previousChecklistId: "c-1" });
-  });
-
   it("a declined write still arrives as data, because the call ran and answered", async () => {
     api().selectTemplate.mockResolvedValue({
       success: true,

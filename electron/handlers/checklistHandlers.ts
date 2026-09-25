@@ -187,7 +187,7 @@ function parseArgs<T>(
  */
 async function auditChecklistAct(
   transactionId: string,
-  reason: "checklist_selected" | "checklist_replaced" | "checklist_removed",
+  reason: "checklist_selected" | "checklist_removed",
   extra: Record<string, unknown> = {},
 ): Promise<void> {
   const transaction = await databaseService.getTransactionById(transactionId);
@@ -237,15 +237,13 @@ export function registerChecklistHandlers(): void {
   );
 
   /**
-   * Copy a template onto a transaction: add a checklist, or replace the one
-   * named by `replaceChecklistId`.
+   * Copy a template onto a transaction: ADD a checklist (BACKLOG-3476 round 2:
+   * Change is gone, so this channel never replaces or deletes one).
    *
    * The items come from the template listing, not from the renderer: a caller
    * that supplied its own items could write any title it liked into a row the
    * export renders. The whole copy is one database transaction inside
-   * `selectChecklistTemplate` — this handler never removes and then
-   * instantiates, which would leave a failure between the two with the
-   * checklist destroyed and not replaced.
+   * `selectChecklistTemplate`.
    */
   ipcMain.handle(
     "checklists:select-template",
@@ -285,19 +283,12 @@ export function registerChecklistHandlers(): void {
             expectedDocumentType: item.expectedDocumentType,
             sortOrder: item.sortOrder,
           })),
-          replaceChecklistId: args.replaceChecklistId,
         });
 
         if (result.status === "added") {
           await auditChecklistAct(args.transactionId, "checklist_selected", {
             templateId: template.id,
             checklistId: result.checklistId,
-          });
-        } else if (result.status === "replaced") {
-          await auditChecklistAct(args.transactionId, "checklist_replaced", {
-            templateId: template.id,
-            checklistId: result.checklistId,
-            previousChecklistId: result.previousChecklistId,
           });
         }
 

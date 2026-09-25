@@ -117,13 +117,12 @@ export const ChecklistNoteSchema = z
   });
 
 /**
- * Absent `replaceChecklistId` ADDS a checklist. Present, it replaces that one
- * checklist — main still confirms it belongs to `transactionId`.
+ * ADDS a checklist from a template (BACKLOG-3476 round 2: Change is gone,
+ * so this channel never replaces or deletes one).
  */
 export const SelectChecklistTemplateArgsSchema = z.object({
   transactionId: UuidSchema,
   templateId: UuidSchema,
-  replaceChecklistId: UuidSchema.optional(),
 });
 
 export const GetChecklistArgsSchema = z.object({

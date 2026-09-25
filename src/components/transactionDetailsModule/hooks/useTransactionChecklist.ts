@@ -21,10 +21,11 @@
  * - **Send two ticks for one click.** A checkbox whose write is still in flight
  *   is in `pendingItemIds`; a second click is ignored, so two writes computed
  *   from the same stale `isChecked` cannot race.
- * - **Replace anything on an add.** `addChecklist` never sends a checklist id;
- *   only `replaceChecklist(checklistId, …)` — the confirm of that checklist's
- *   own Change — does, and main deletes only that one checklist of this
- *   transaction. Nothing else can wipe a checklist's ticks, notes or links.
+ * - **Delete anything but the checklist the user named.** `addChecklist` never
+ *   sends a checklist id and never deletes (BACKLOG-3476 round 2: Change is
+ *   gone). `removeChecklist(checklistId)` is the only write that deletes a
+ *   checklist, and main deletes only the one named. Nothing else can wipe a
+ *   checklist's ticks, notes or links.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { checklistService } from "../../../services/checklistService";
@@ -65,11 +66,6 @@ export interface UseTransactionChecklistResult {
   setItemNote: (itemId: string, note: string | null) => Promise<ApiResult<boolean>>;
   /** Add a checklist. Never replaces or removes one already there. */
   addChecklist: (templateId: string) => Promise<ApiResult<SelectChecklistTemplateResult>>;
-  /** One checklist's Change confirmation. Clears that checklist's ticks, notes and links. */
-  replaceChecklist: (
-    checklistId: string,
-    templateId: string,
-  ) => Promise<ApiResult<SelectChecklistTemplateResult>>;
   /** Link each request as its own group, in order, then reload once. */
   addLinks: (itemId: string, requests: ChecklistLinkRequest[]) => Promise<ChecklistLinkOutcome[]>;
   removeLink: (linkId: string) => Promise<ApiResult<boolean>>;
@@ -161,16 +157,6 @@ export function useTransactionChecklist(transactionId: string): UseTransactionCh
     [afterWrite],
   );
 
-  const replaceChecklist = useCallback(
-    (checklistId: string, templateId: string) => {
-      const forId = currentIdRef.current;
-      return afterWrite(forId, () =>
-        checklistService.replaceChecklist(forId, checklistId, templateId),
-      );
-    },
-    [afterWrite],
-  );
-
   const addLinks = useCallback(
     (itemId: string, requests: ChecklistLinkRequest[]) =>
       afterWrite(currentIdRef.current, async () => {
@@ -212,7 +198,6 @@ export function useTransactionChecklist(transactionId: string): UseTransactionCh
     setItemChecked,
     setItemNote,
     addChecklist,
-    replaceChecklist,
     addLinks,
     removeLink,
     removeChecklist,

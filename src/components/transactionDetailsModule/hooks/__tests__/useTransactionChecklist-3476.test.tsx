@@ -8,8 +8,9 @@
  *       writes one of A's item ids.
  *   (c) no pending guard — a double-click sends two writes computed from the
  *       same stale `isChecked`.
- *   (d) an add sends a checklist id, or a replace/remove names the wrong one
- *       (SVC1, BACKLOG-3476 several checklists).
+ *   (d) an add sends a checklist id, or a remove names the wrong one (SVC1,
+ *       BACKLOG-3476 several checklists; round 2: Change is gone, so add is
+ *       the only write besides remove that touches which checklists exist).
  */
 import React from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
@@ -143,16 +144,15 @@ describe("useTransactionChecklist (BACKLOG-3476)", () => {
     expect(result.current.pendingItemIds.has(itemId)).toBe(false);
   });
 
-  it("(d) addChecklist sends no checklist id; replace and remove send exactly the one they were given", async () => {
+  it("(d) addChecklist sends no checklist id; remove sends exactly the one it was given", async () => {
     const { result } = renderHook(() => useTransactionChecklist("txn-1"));
     await waitFor(() => expect(result.current.state.status).toBe("ready"));
 
     await act(async () => { await result.current.addChecklist("tpl-fresh"); });
     expect(api().selectTemplate.mock.calls[0]).toEqual([{ transactionId: "txn-1", templateId: "tpl-fresh" }]);
-
-    await act(async () => { await result.current.replaceChecklist("id-2", "tpl-fresh"); });
-    expect(api().selectTemplate.mock.calls[1]).toEqual([
-      { transactionId: "txn-1", templateId: "tpl-fresh", replaceChecklistId: "id-2" },
+    expect(Object.keys(api().selectTemplate.mock.calls[0][0]).sort()).toEqual([
+      "templateId",
+      "transactionId",
     ]);
 
     api().remove.mockResolvedValue({ success: true, changed: true });

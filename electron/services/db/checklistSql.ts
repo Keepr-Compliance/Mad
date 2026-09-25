@@ -60,8 +60,8 @@ export const GET_CHECKLISTS_BY_TRANSACTION_SQL = sql`
 
 /**
  * One checklist, only if it belongs to this transaction. Two bound
- * parameters, in order: checklist id, transaction id. The replace and remove
- * paths go through this, so an id from another transaction is never acted on.
+ * parameters, in order: checklist id, transaction id. The remove path goes
+ * through this, so an id from another transaction is never acted on.
  */
 export const GET_CHECKLIST_IN_TRANSACTION_SQL = sql`
   SELECT id, transaction_id, template_id, template_name, sort_order, selected_at
@@ -77,17 +77,6 @@ export const GET_CHECKLIST_IN_TRANSACTION_SQL = sql`
 export const GET_CHECKLIST_BY_TEMPLATE_SQL = sql`
   SELECT id FROM transaction_checklists
   WHERE transaction_id = ? AND template_id = ?
-`;
-
-/**
- * Another checklist on this transaction from this template, excluding the one
- * being replaced — replacing a checklist with its own template resets it.
- * Three bound parameters, in order: transaction id, template id, the id being
- * replaced.
- */
-export const GET_OTHER_CHECKLIST_BY_TEMPLATE_SQL = sql`
-  SELECT id FROM transaction_checklists
-  WHERE transaction_id = ? AND template_id = ? AND id <> ?
 `;
 
 /** Next free display position on one transaction. One bound parameter. */
@@ -123,7 +112,10 @@ export const INSERT_CHECKLIST_ITEM_SQL = sql`
  * Delete ONE checklist of one transaction; its items, links and members follow
  * by cascade. Two bound parameters, in order: checklist id, transaction id.
  * There is deliberately no statement that deletes by transaction alone: every
- * other checklist on the transaction must survive a remove or a replace.
+ * other checklist on the transaction must survive a remove. This is the ONLY
+ * statement in this file that deletes a `transaction_checklists` row
+ * (BACKLOG-3476 round 2: Change is gone, so `selectChecklistTemplate` never
+ * deletes).
  */
 export const DELETE_CHECKLIST_IN_TRANSACTION_SQL = sql`
   DELETE FROM transaction_checklists WHERE id = ? AND transaction_id = ?
