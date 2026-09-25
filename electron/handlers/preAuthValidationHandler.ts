@@ -88,8 +88,7 @@ export async function handlePreAuthValidation(): Promise<PreAuthResult> {
         "PreAuthValidation",
         { error: setSessionError.message }
       );
-      await sessionService.clearSession();
-      return { valid: false, reason: "token_invalid" };
+      return rejectAfterClearingSession("token_invalid");
     }
 
     // Server-side validation
@@ -102,8 +101,7 @@ export async function handlePreAuthValidation(): Promise<PreAuthResult> {
         "PreAuthValidation",
         { error: getUserError?.message }
       );
-      await sessionService.clearSession();
-      return { valid: false, reason: "session_revoked" };
+      return rejectAfterClearingSession("session_revoked");
     }
 
     // Valid! Update lastServerValidatedAt
@@ -128,6 +126,27 @@ export async function handlePreAuthValidation(): Promise<PreAuthResult> {
     );
     return handleOfflineGracePeriod(session.lastServerValidatedAt);
   }
+}
+
+/**
+ * BACKLOG-3410: clear the rejected session and report why. The renderer opens
+ * the DB after "token_invalid" / "session_revoked" on the understanding that
+ * session.json is gone, so if the delete did not succeed the result must carry
+ * a reason the renderer does NOT route to DB init.
+ */
+async function rejectAfterClearingSession(
+  reason: "token_invalid" | "session_revoked"
+): Promise<PreAuthResult> {
+  const cleared = await sessionService.clearSession();
+  if (cleared !== true) {
+    await logService.warn(
+      "Pre-auth: could not clear rejected session, keeping DB closed",
+      "PreAuthValidation",
+      { rejectedReason: reason }
+    );
+    return { valid: false, reason: "session_clear_failed" };
+  }
+  return { valid: false, reason };
 }
 
 /**
