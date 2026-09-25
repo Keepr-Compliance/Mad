@@ -864,10 +864,21 @@ class SubmissionService {
       // Stage 5: Insert attachment metadata (10%)
       const successfulUploads = attachmentUploadResults.filter((r) => r.success);
       if (successfulUploads.length > 0) {
-        const attachmentRecords = successfulUploads.map((upload, idx) => {
-          const originalAttachment = attachments.find(
-            (a) => a.storage_path === upload.localId || a.id === upload.localId
-          );
+        const attachmentRecords = successfulUploads.map((upload) => {
+          // BACKLOG-3477: `upload.localId` is the local FILE PATH, and local
+          // attachment files are content-addressed — two attachment rows with
+          // the same bytes share one path, so a find() by path names the first
+          // row for both. `uploadAttachments` returns one result per input, in
+          // input order, so the row this upload came from is the one at the
+          // same index. The find() stays as the fallback.
+          const paired = attachments[attachmentUploadResults.indexOf(upload)];
+          const originalAttachment =
+            paired &&
+            (paired.storage_path === upload.localId || paired.id === upload.localId)
+              ? paired
+              : attachments.find(
+                  (a) => a.storage_path === upload.localId || a.id === upload.localId
+                );
           return this.mapToSubmissionAttachment(
             upload,
             submissionId,
