@@ -9,13 +9,19 @@
  * flow) stay gated separately by `canManage` (`['admin', 'it_admin']`),
  * unchanged by this file — this only controls who can VIEW the list and a
  * member's detail page.
+ *
+ * `USERS_PAGE_ROLES` itself lives in the import-free `./users-access-roles`
+ * and is re-exported here so existing call sites (`import { USERS_PAGE_ROLES }
+ * from '@/lib/users-access'`) are unchanged. This file imports
+ * `@/lib/supabase/server` (`next/headers`), so a `'use client'` component
+ * cannot import anything from here — see `users-access-roles.ts`'s header.
  */
 
 import { createClient } from '@/lib/supabase/server';
 import type { Role } from '@/lib/types/users';
+import { USERS_PAGE_ROLES } from './users-access-roles';
 
-/** Roles that may view the Users list and a member's detail page. */
-export const USERS_PAGE_ROLES = ['admin', 'it_admin', 'broker'] as const;
+export { USERS_PAGE_ROLES } from './users-access-roles';
 
 export interface UsersPageAccessGranted {
   allowed: true;
