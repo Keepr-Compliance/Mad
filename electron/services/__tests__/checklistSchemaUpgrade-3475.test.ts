@@ -1,14 +1,17 @@
 /**
  * @jest-environment node
  *
- * BACKLOG-3475 — THE FOUR CHECKLIST TABLES REACH AN EXISTING INSTALL, WITH NO
- * MIGRATION ENTRY.
+ * BACKLOG-3475 — THE FOUR CHECKLIST TABLES REACH AN EXISTING INSTALL THROUGH
+ * schema.sql.
  *
  * ===========================================================================
  * THE CLAIM UNDER TEST, AND WHY IT NEEDS A TEST AT ALL
  * ===========================================================================
- * This epic adds four tables to `schema.sql` and NO entry to `MIGRATIONS`. That
- * is only safe because `runMigrations()` re-execs the whole of `schema.sql` on
+ * BACKLOG-3475 added four tables to `schema.sql` without a `MIGRATIONS` entry
+ * (BACKLOG-3476's v72 later rebuilds `transaction_checklists` where it still
+ * has its first shape; a database with no checklist tables at all never needs
+ * it, because schema.sql creates the new shape directly). The delivery of the
+ * tables themselves is only safe because `runMigrations()` re-execs the whole of `schema.sql` on
  * every launch that clears the baseline fence, unconditionally — so a
  * `CREATE TABLE IF NOT EXISTS` lands on a database that already exists.
  *

@@ -16,12 +16,11 @@
  *       The fixture below is transcribed from that producer chain, not invented:
  *       two NULL-thread emails plus a third that shares a non-null thread_id
  *       with a linked one and must NOT appear.
- *   a second template appended instead of replacing
- *       The user picks a different template and ends up with two checklists.
- *   remove-then-instantiate as two database transactions
- *       A failure between them leaves the transaction with NO checklist — the
- *       user's plan destroyed and not replaced. The replace test forces a
- *       failure mid-copy and asserts the OLD checklist is still whole.
+ *   an add that deletes, or a remove that reaches past its checklist
+ *       (BACKLOG-3476: a transaction holds several checklists). Adding never
+ *       deletes anything (BACKLOG-3476 round 2: Change is gone, so this is
+ *       now the ONLY thing `selectChecklistTemplate` can do); remove acts on
+ *       ONE checklist of ONE transaction.
  *   trusting renderer-supplied evidence ids
  *       Evidence from another transaction, or evidence that was unlinked,
  *       silently attached to this one.
@@ -57,7 +56,7 @@ jest.mock("../core/dbConnection", () => ({
 
 import {
   addChecklistLink,
-  getChecklistForTransaction,
+  getChecklistsForTransaction,
   removeChecklist,
   removeChecklistLink,
   selectChecklistTemplate,
@@ -71,6 +70,11 @@ const USER = "user-3475-svc";
 const rows = (q: string) => db.prepare(q).all() as Array<Record<string, unknown>>;
 const ids = (table: string) => rows(`SELECT id FROM ${table} ORDER BY id`).map((r) => r.id as string);
 const run = (q: string, ...p: unknown[]) => db.prepare(q).run(...(p as never[]));
+
+/** The first (by display order) checklist on a transaction, or undefined. */
+async function getChecklistForTransaction(transactionId: string) {
+  return (await getChecklistsForTransaction(transactionId)).checklists[0];
+}
 
 const TEMPLATE_ITEMS = [
   { title: "Signed purchase agreement", isRequired: true, sortOrder: 0 },
@@ -185,7 +189,7 @@ describe("BACKLOG-3475 — picking a template copies it onto the transaction", (
       items: TEMPLATE_ITEMS,
     });
 
-    expect(result.status).toBe("selected");
+    expect(result.status).toBe("added");
     const detail = await getChecklistForTransaction("txn-1");
     expect(detail?.items.map((i) => i.title)).toEqual([
       "Signed purchase agreement",
@@ -196,84 +200,6 @@ describe("BACKLOG-3475 — picking a template copies it onto the transaction", (
     expect(detail?.requiredDone).toBe(0);
     // `template_id` is provenance: it is stored, and nothing reads through it.
     expect(detail?.checklist.templateId).toBe("tpl-1");
-  });
-
-  it("a second pick is REFUSED and changes nothing, unless replaceExisting is set", async () => {
-    await selectChecklistTemplate({
-      transactionId: "txn-1",
-      templateId: "tpl-1",
-      templateName: "Residential Purchase",
-      items: TEMPLATE_ITEMS,
-    });
-    const firstItemIds = ids("transaction_checklist_items");
-    await setChecklistItemChecked(firstItemIds[0], true);
-
-    const refused = await selectChecklistTemplate({
-      transactionId: "txn-1",
-      templateId: "tpl-2",
-      templateName: "Commercial",
-      items: [{ title: "Lease", isRequired: true, sortOrder: 0 }],
-    });
-
-    expect(refused.status).toBe("exists");
-    // Not one row changed — including the tick the user had already made.
-    expect(ids("transaction_checklist_items")).toEqual(firstItemIds);
-    expect(ids("transaction_checklists").length).toBe(1);
-    expect(rows(`SELECT is_checked FROM transaction_checklist_items WHERE id = '${firstItemIds[0]}'`)).toEqual([
-      { is_checked: 1 },
-    ]);
-
-    const replaced = await selectChecklistTemplate({
-      transactionId: "txn-1",
-      templateId: "tpl-2",
-      templateName: "Commercial",
-      items: [{ title: "Lease", isRequired: true, sortOrder: 0 }],
-      replaceExisting: true,
-    });
-
-    expect(replaced.status).toBe("replaced");
-    // Still exactly one checklist, and every old item id is gone.
-    expect(ids("transaction_checklists").length).toBe(1);
-    expect(ids("transaction_checklist_items").some((id) => firstItemIds.includes(id))).toBe(false);
-    const detail = await getChecklistForTransaction("txn-1");
-    expect(detail?.items.map((i) => i.title)).toEqual(["Lease"]);
-  });
-
-  it("a replace that fails mid-copy leaves the OLD checklist whole", async () => {
-    await selectChecklistTemplate({
-      transactionId: "txn-1",
-      templateId: "tpl-1",
-      templateName: "Residential Purchase",
-      items: TEMPLATE_ITEMS,
-    });
-    const originalChecklistIds = ids("transaction_checklists");
-    const originalItemIds = ids("transaction_checklist_items");
-
-    // The second item's title is blank, which the column's CHECK refuses. The
-    // delete of the old checklist has ALREADY run by then, inside the same
-    // database transaction.
-    //
-    // `toThrow`, not `rejects.toThrow`: these are plain functions returning
-    // `Promise<T>` rather than `async` ones (BACKLOG-2960), so the driver call
-    // is evaluated before `Promise.resolve` wraps it and a failure throws
-    // before the promise exists. `rejects` would pass vacuously on a function
-    // that never rejected at all.
-    expect(() =>
-      selectChecklistTemplate({
-        transactionId: "txn-1",
-        templateId: "tpl-2",
-        templateName: "Commercial",
-        items: [
-          { title: "Lease", isRequired: true, sortOrder: 0 },
-          { title: "   ", isRequired: true, sortOrder: 1 },
-        ],
-        replaceExisting: true,
-      }),
-    ).toThrow(/CHECK constraint failed/);
-
-    // Rolled back whole: the user still has the checklist they had before.
-    expect(ids("transaction_checklists")).toEqual(originalChecklistIds);
-    expect(ids("transaction_checklist_items")).toEqual(originalItemIds);
   });
 
   it("a first pick that fails mid-copy leaves no checklist and no items", async () => {
@@ -497,23 +423,194 @@ describe("BACKLOG-3475 — ticks and notes are in the database, not in a cache",
   });
 
   it("removing the checklist empties all four tables for that transaction", async () => {
-    await selectChecklistTemplate({
+    const added = await selectChecklistTemplate({
       transactionId: "txn-1",
       templateId: "tpl-1",
       templateName: "Residential Purchase",
       items: TEMPLATE_ITEMS,
     });
+    if (added.status !== "added") throw new Error("seed failed");
     const itemId = ids("transaction_checklist_items")[0];
     await addChecklistLink({ itemId, kind: "email", targetIds: ["e-solo-1"] });
 
-    expect(await removeChecklist("txn-1")).toBe(true);
+    expect(await removeChecklist("txn-1", added.checklistId)).toMatchObject({
+      id: added.checklistId,
+      templateId: "tpl-1",
+    });
 
     expect(ids("transaction_checklists")).toEqual([]);
     expect(ids("transaction_checklist_items")).toEqual([]);
     expect(ids("transaction_checklist_links")).toEqual([]);
     expect(ids("transaction_checklist_link_members")).toEqual([]);
-    expect(await getChecklistForTransaction("txn-1")).toBeNull();
+    expect(await getChecklistsForTransaction("txn-1")).toEqual({
+      checklists: [],
+      requiredDone: 0,
+      requiredTotal: 0,
+    });
     // Removing a checklist twice is a no-op, not an error.
-    expect(await removeChecklist("txn-1")).toBe(false);
+    expect(await removeChecklist("txn-1", added.checklistId)).toBeNull();
+  });
+});
+
+// ===========================================================================
+// BACKLOG-3476 — several checklists per transaction
+// ===========================================================================
+
+const TPL_A = "tpl-a";
+const TPL_B = "tpl-b";
+
+async function addTemplate(
+  transactionId: string,
+  templateId: string,
+  templateName: string,
+  items = TEMPLATE_ITEMS,
+): Promise<string> {
+  const result = await selectChecklistTemplate({ transactionId, templateId, templateName, items });
+  if (result.status !== "added") throw new Error(`add ${templateId} answered ${result.status}`);
+  return result.checklistId;
+}
+
+/** Every row under one checklist, by table, so "intact" can be asserted row for row. */
+function rowsUnder(checklistId: string) {
+  return {
+    checklist: rows(`SELECT * FROM transaction_checklists WHERE id = '${checklistId}'`),
+    items: rows(
+      `SELECT * FROM transaction_checklist_items WHERE checklist_id = '${checklistId}' ORDER BY id`,
+    ),
+    links: rows(
+      `SELECT l.* FROM transaction_checklist_links l JOIN transaction_checklist_items i ON i.id = l.item_id
+       WHERE i.checklist_id = '${checklistId}' ORDER BY l.id`,
+    ),
+    members: rows(
+      `SELECT m.* FROM transaction_checklist_link_members m
+       JOIN transaction_checklist_links l ON l.id = m.link_id
+       JOIN transaction_checklist_items i ON i.id = l.item_id
+       WHERE i.checklist_id = '${checklistId}' ORDER BY m.id`,
+    ),
+  };
+}
+
+/** Tick, note and link the first item of a checklist, so it has something to lose. */
+async function dirty(checklistId: string): Promise<void> {
+  const detail = (await getChecklistsForTransaction("txn-1")).checklists.find(
+    (d) => d.checklist.id === checklistId,
+  )!;
+  const first = detail.items[0].id;
+  await setChecklistItemChecked(first, true);
+  await setChecklistItemNote(first, "Received");
+  const linked = await addChecklistLink({ itemId: first, kind: "email", targetIds: ["e-solo-1"] });
+  expect(linked.status).toBe("added");
+}
+
+function everyRow() {
+  return [
+    "transaction_checklists",
+    "transaction_checklist_items",
+    "transaction_checklist_links",
+    "transaction_checklist_link_members",
+  ].map((t) => rows(`SELECT * FROM ${t} ORDER BY id`));
+}
+
+describe("BACKLOG-3476 — several checklists per transaction", () => {
+  it("A-1: adding a second template never touches the first (its tick, note and link rows are intact)", async () => {
+    const a = await addTemplate("txn-1", TPL_A, "Listing");
+    await dirty(a);
+    const before = rowsUnder(a);
+    expect(before.links).toHaveLength(1);
+
+    await addTemplate("txn-1", TPL_B, "Buyer");
+
+    expect(ids("transaction_checklists")).toHaveLength(2);
+    expect(rowsUnder(a)).toEqual(before);
+  });
+
+  it("A-2: get returns every checklist, in sort_order", async () => {
+    const a = await addTemplate("txn-1", TPL_A, "Listing");
+    const b = await addTemplate("txn-1", TPL_B, "Buyer");
+    const got = await getChecklistsForTransaction("txn-1");
+    expect(got.checklists.map((d) => d.checklist.id)).toEqual([a, b]);
+    expect(got.checklists.map((d) => d.checklist.sortOrder)).toEqual([0, 1]);
+
+    // Order is the stored position, not insertion order.
+    run(`UPDATE transaction_checklists SET sort_order = 5 WHERE id = ?`, a);
+    const reordered = await getChecklistsForTransaction("txn-1");
+    expect(reordered.checklists.map((d) => d.checklist.id)).toEqual([b, a]);
+  });
+
+  it("A-3: removing one checklist leaves the other's rows intact", async () => {
+    const a = await addTemplate("txn-1", TPL_A, "Listing");
+    const b = await addTemplate("txn-1", TPL_B, "Buyer");
+    await dirty(a);
+    const aBefore = rowsUnder(a);
+
+    expect(await removeChecklist("txn-1", b)).not.toBeNull();
+    expect(rowsUnder(a)).toEqual(aBefore);
+    expect(ids("transaction_checklists")).toEqual([a]);
+  });
+
+  it("A-4: a remove naming another transaction's checklist is refused and changes no row anywhere", async () => {
+    await addTemplate("txn-1", TPL_A, "Listing");
+    const other = await addTemplate("txn-2", TPL_A, "Listing");
+    const before = everyRow();
+
+    expect(await removeChecklist("txn-1", other)).toBeNull();
+    expect(everyRow()).toEqual(before);
+  });
+
+  it("A-5 (main half): the envelope sums REQUIRED progress across checklists", async () => {
+    const a = await addTemplate("txn-1", TPL_A, "Listing", [
+      { title: "A1", isRequired: true, sortOrder: 0 },
+      { title: "A2", isRequired: true, sortOrder: 1 },
+      { title: "A3 optional", isRequired: false, sortOrder: 2 },
+    ]);
+    const b = await addTemplate("txn-1", TPL_B, "Buyer", [
+      { title: "B1", isRequired: true, sortOrder: 0 },
+      { title: "B2", isRequired: true, sortOrder: 1 },
+      { title: "B3", isRequired: true, sortOrder: 2 },
+    ]);
+    const tick = (title: string) =>
+      setChecklistItemChecked(
+        (rows(`SELECT id FROM transaction_checklist_items WHERE title = '${title}'`)[0].id as string),
+        true,
+      );
+    await tick("A1");
+    await tick("A3 optional");
+    await tick("B1");
+
+    const got = await getChecklistsForTransaction("txn-1");
+    const byId = Object.fromEntries(got.checklists.map((d) => [d.checklist.id, d]));
+    expect([byId[a].requiredDone, byId[a].requiredTotal]).toEqual([1, 2]);
+    expect([byId[b].requiredDone, byId[b].requiredTotal]).toEqual([1, 3]);
+    expect([got.requiredDone, got.requiredTotal]).toEqual([2, 5]);
+  });
+
+  it("A-9: the same template twice is refused as exists, with one row", async () => {
+    const a = await addTemplate("txn-1", TPL_A, "Listing");
+    const again = await selectChecklistTemplate({
+      transactionId: "txn-1",
+      templateId: TPL_A,
+      templateName: "Listing",
+      items: TEMPLATE_ITEMS,
+    });
+    expect(again).toEqual({ status: "exists", checklistId: a });
+    expect(ids("transaction_checklists")).toEqual([a]);
+  });
+
+  it("Q2: allItemsChecked is true only when every item, optional included, is ticked; never for zero items", async () => {
+    const a = await addTemplate("txn-1", TPL_A, "Listing");
+    const empty = await addTemplate("txn-1", TPL_B, "Empty", []);
+    const itemsOf = (id: string) =>
+      rows(`SELECT id, is_required FROM transaction_checklist_items WHERE checklist_id = '${id}' ORDER BY sort_order`);
+    for (const item of itemsOf(a).filter((i) => i.is_required === 1)) {
+      await setChecklistItemChecked(item.id as string, true);
+    }
+    const flag = async (id: string) =>
+      (await getChecklistsForTransaction("txn-1")).checklists.find((d) => d.checklist.id === id)!
+        .allItemsChecked;
+    // All required ticked, the optional one not.
+    expect(await flag(a)).toBe(false);
+    for (const item of itemsOf(a)) await setChecklistItemChecked(item.id as string, true);
+    expect(await flag(a)).toBe(true);
+    expect(await flag(empty)).toBe(false);
   });
 });

@@ -116,18 +116,23 @@ export const ChecklistNoteSchema = z
     return trimmed.length === 0 ? null : trimmed;
   });
 
+/**
+ * ADDS a checklist from a template (BACKLOG-3476 round 2: Change is gone,
+ * so this channel never replaces or deletes one).
+ */
 export const SelectChecklistTemplateArgsSchema = z.object({
   transactionId: UuidSchema,
   templateId: UuidSchema,
-  replaceExisting: z.boolean().optional(),
 });
 
 export const GetChecklistArgsSchema = z.object({
   transactionId: UuidSchema,
 });
 
+/** Both required: a remove names the one checklist it takes off (BACKLOG-3476). */
 export const RemoveChecklistArgsSchema = z.object({
   transactionId: UuidSchema,
+  checklistId: UuidSchema,
 });
 
 export const SetChecklistItemCheckedArgsSchema = z.object({

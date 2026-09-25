@@ -84,9 +84,11 @@ export interface TransactionDetailsProps {
  * - overview: Audit dates, AI suggestions, and contacts summary (default)
  * - messages: Text conversations
  * - emails: Email threads
- * - attachments: File attachments (hidden)
+ * - attachments: File attachments
+ * - checklist: the broker checklist (BACKLOG-3476). Only rendered when the
+ *   plan allows checklists, or when this transaction already has one.
  */
-export type TransactionTab = "overview" | "messages" | "emails" | "attachments";
+export type TransactionTab = "overview" | "messages" | "emails" | "attachments" | "checklist";
 
 /**
  * BACKLOG-1869: Transient deep-navigate target produced when the user clicks an

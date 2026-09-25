@@ -10,16 +10,15 @@
  * the Zod schema in `electron/schemas/checklist.ts` has exactly one shape to
  * validate and a caller cannot transpose two ids of the same type.
  *
- * The consumer is BACKLOG-3476's transaction tab. Nothing in `src/` calls these
- * yet — that is the PR-A/PR-B/3476 seam the plan set, not an oversight.
+ * The consumer is BACKLOG-3476's transaction tab, through `checklistService`.
  */
 
 import { ipcRenderer } from "electron";
 
 import type {
   AddChecklistLinkResult,
-  ChecklistDetail,
   ChecklistLinkKind,
+  ChecklistsForTransaction,
   SelectChecklistTemplateResult,
 } from "../types/checklist";
 import type { ListChecklistTemplatesResult } from "../types/ipc/window-api-checklists";
@@ -35,21 +34,20 @@ export const checklistBridge = {
     ipcRenderer.invoke("checklists:list-templates"),
 
   /**
-   * Copy a template onto a transaction. A transaction holds at most one
-   * checklist; a second pick without `replaceExisting` answers `exists` and
-   * writes nothing.
+   * Copy a template onto a transaction: ADD a checklist (a template already on
+   * the transaction answers `exists`). BACKLOG-3476 round 2: Change is gone,
+   * so this never replaces one already there.
    */
   selectTemplate: (args: {
     transactionId: string;
     templateId: string;
-    replaceExisting?: boolean;
   }): Promise<{ success: boolean; result?: SelectChecklistTemplateResult; error?: string }> =>
     ipcRenderer.invoke("checklists:select-template", args),
 
-  /** This transaction's checklist, or `null`. Never gated — a local read of the user's own rows. */
+  /** Every checklist on this transaction. Never gated — a local read of the user's own rows. */
   get: (args: {
     transactionId: string;
-  }): Promise<{ success: boolean; checklist?: ChecklistDetail | null; error?: string }> =>
+  }): Promise<{ success: boolean; checklists?: ChecklistsForTransaction; error?: string }> =>
     ipcRenderer.invoke("checklists:get", args),
 
   /** Tick or untick one item. `checked_at` is written by the same statement. */
@@ -85,11 +83,12 @@ export const checklistBridge = {
     ipcRenderer.invoke("checklists:remove-link", args),
 
   /**
-   * Take the checklist off a transaction. Never gated: a user whose plan later
+   * Take one checklist off a transaction. Never gated: a user whose plan later
    * loses the feature must still be able to clear his own rows.
    */
   remove: (args: {
     transactionId: string;
+    checklistId: string;
   }): Promise<{ success: boolean; changed?: boolean; error?: string }> =>
     ipcRenderer.invoke("checklists:remove", args),
 

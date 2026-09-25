@@ -1,0 +1,418 @@
+/**
+ * BACKLOG-3476 — the Checklist tab inside TransactionDetails.
+ *
+ * Wrong implementations this suite is here to catch:
+ *   C-I  the gate read fail-open: the tab shows while the plan is `pending` or
+ *        `unknown` with no checklist.
+ *   C-J  the Overview line shown while the tab is hidden (SR condition 5).
+ *   C-R  the tab left active after it stops being shown — a blank panel.
+ *   SR B1  the link picker says "No email threads on this transaction." while
+ *        the emails are still loading: a second caller of the email load
+ *        returned early instead of awaiting the load already in flight.
+ *   SR condition 1  the link picker loads emails with the LOUD loader, which on
+ *        a transaction with no contacts swaps the whole modal for a spinner and
+ *        unmounts the picker; and a second fetch when the Emails tab opens.
+ *   C-9  the session store's TTL expiry resetting the answer to `pending`
+ *        while its re-ask is in flight: the panel unmounts and a half-typed
+ *        note is lost (SR delta review, PR #2708).
+ *
+ * Fixtures: `checklistFixture.ts` (generated from the real producers).
+ */
+import React from "react";
+import { render as rtlRender, screen, waitFor, fireEvent, act } from "@testing-library/react";
+import "@testing-library/jest-dom";
+import { NotificationProvider } from "../../contexts/NotificationContext";
+import TransactionDetails from "../TransactionDetails";
+import { StrictFeatureProvider, STRICT_ANSWER_TTL_MS } from "../../contexts/StrictFeatureContext";
+import type { Transaction } from "../../types";
+import {
+  envelopeOf,
+  fixtureChecklists,
+  fixtureDetail,
+  fixtureDetailWithoutLinks,
+  fixtureEmailCommunications,
+} from "../transactionDetailsModule/components/checklist/__tests__/checklistFixture";
+
+const render = (ui: React.ReactElement) => rtlRender(ui, { wrapper: NotificationProvider });
+
+jest.mock("../../contexts/LicenseContext", () => ({
+  useLicense: () => ({
+    licenseType: "team" as const,
+    hasAIAddon: true,
+    organizationId: "org-123",
+    canExport: false,
+    canSubmit: true,
+    canAutoDetect: true,
+    isLoading: false,
+    refresh: jest.fn(),
+  }),
+}));
+
+jest.mock("../../contexts/AuthContext", () => ({
+  useAuth: () => ({ currentUser: { id: "user-456", email: "test@test.com" }, isAuthenticated: true }),
+  useIsAuthenticated: () => true,
+  useCurrentUser: () => ({ id: "user-456", email: "test@test.com" }),
+  AuthProvider: ({ children }: { children: React.ReactNode }) => children,
+}));
+
+jest.mock("../../contexts/NetworkContext", () => ({
+  useNetwork: () => ({ isOnline: true }),
+}));
+
+jest.mock("../../hooks/useSyncOrchestrator", () => ({
+  useSyncOrchestrator: () => ({ isRunning: false }),
+}));
+
+// The Emails tab is not under test; a stub keeps its IPC out of the counts.
+jest.mock("../transactionDetailsModule/components/TransactionEmailsTab", () => ({
+  TransactionEmailsTab: () => <div data-testid="emails-tab-stub" />,
+}));
+jest.mock("../transactionDetailsModule/components/modals/AttachmentPreviewModal", () => ({
+  AttachmentPreviewModal: () => null,
+}));
+
+const tx = window.api.transactions as unknown as Record<string, jest.Mock>;
+const checklists = () => window.api.checklists as unknown as Record<string, jest.Mock>;
+const strictState = () => window.api.featureGate.strictState as jest.Mock;
+
+const baseTransaction = {
+  id: "txn-1",
+  user_id: "user-456",
+  property_address: "1 Probe Way",
+  transaction_type: "purchase",
+  status: "active" as const,
+  created_at: "2026-01-01T00:00:00Z",
+  updated_at: "2026-01-01T00:00:00Z",
+} as unknown as Transaction;
+
+const emailCalls = () =>
+  tx.getCommunications.mock.calls.filter((c: unknown[]) => c[1] === "email").length;
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  // No contacts: the case where the loud loader's spinner replaces the modal.
+  tx.getOverview = jest.fn().mockResolvedValue({ success: true, transaction: { contact_assignments: [] } });
+  tx.getDetails.mockResolvedValue({
+    success: true,
+    transaction: { ...baseTransaction, communications: [], contact_assignments: [] },
+  });
+  tx.getCommunications = jest.fn().mockResolvedValue({
+    success: true,
+    transaction: { communications: fixtureEmailCommunications(), contact_assignments: [] },
+  });
+  checklists().get.mockResolvedValue({ success: true, checklists: envelopeOf([]) });
+});
+
+describe("C-I — the tab follows the plan, never fail-open", () => {
+  it("allowed + no checklist → tab shown", async () => {
+    strictState().mockResolvedValue("allowed");
+    render(<TransactionDetails transaction={baseTransaction} onClose={jest.fn()} />);
+    expect(await screen.findByTestId("tab-checklist")).toBeInTheDocument();
+  });
+
+  it("unknown + no checklist → no tab and no Overview line", async () => {
+    strictState().mockResolvedValue("unknown");
+    render(<TransactionDetails transaction={baseTransaction} onClose={jest.fn()} />);
+    await waitFor(() => expect(strictState()).toHaveBeenCalled());
+    await waitFor(() => expect(checklists().get).toHaveBeenCalled());
+    await act(async () => {});
+    expect(screen.queryByTestId("tab-checklist")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("overview-checklist")).not.toBeInTheDocument();
+  });
+
+  it("pending (never answers) + a checklist → no tab and no Overview line", async () => {
+    strictState().mockReturnValue(new Promise(() => {}));
+    checklists().get.mockResolvedValue({ success: true, checklists: envelopeOf([fixtureDetail()]) });
+    render(<TransactionDetails transaction={baseTransaction} onClose={jest.fn()} />);
+    await waitFor(() => expect(checklists().get).toHaveBeenCalled());
+    await act(async () => {});
+    expect(screen.queryByTestId("tab-checklist")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("overview-checklist")).not.toBeInTheDocument();
+  });
+});
+
+describe("C-J — the Overview line appears exactly when the tab does", () => {
+  it("allowed + a checklist → tab and Overview line, progress from main", async () => {
+    strictState().mockResolvedValue("allowed");
+    checklists().get.mockResolvedValue({ success: true, checklists: envelopeOf([fixtureDetail()]) });
+    render(<TransactionDetails transaction={baseTransaction} onClose={jest.fn()} />);
+    const section = await screen.findByTestId("overview-checklist");
+    expect(screen.getByTestId("tab-checklist")).toBeInTheDocument();
+    // requiredDone 1 of 2 while two items (one optional) are ticked.
+    expect(section).toHaveTextContent("1 of 2 required done");
+    fireEvent.click(screen.getByTestId("overview-open-checklist"));
+    expect(await screen.findByTestId("checklist-panel")).toBeInTheDocument();
+  });
+
+  it("blocked + a checklist → tab read-only, Overview line shown", async () => {
+    strictState().mockResolvedValue("blocked");
+    checklists().get.mockResolvedValue({ success: true, checklists: envelopeOf([fixtureDetail()]) });
+    render(<TransactionDetails transaction={baseTransaction} onClose={jest.fn()} />);
+    expect(await screen.findByTestId("overview-checklist")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("tab-checklist"));
+    expect(await screen.findByTestId("checklist-readonly-notice")).toBeInTheDocument();
+    expect(screen.getByTestId(`checklist-remove-${fixtureDetail().checklist.id}`)).toBeInTheDocument();
+  });
+
+  it("A-5 (Overview): several checklists → main's summed progress and the count", async () => {
+    strictState().mockResolvedValue("allowed");
+    checklists().get.mockResolvedValue({ success: true, checklists: fixtureChecklists() });
+    render(<TransactionDetails transaction={baseTransaction} onClose={jest.fn()} />);
+    const section = await screen.findByTestId("overview-checklist");
+    expect(section).toHaveTextContent("3 of 6 required done");
+    expect(screen.getByTestId("overview-checklist-caption")).toHaveTextContent(/^3 checklists$/);
+  });
+
+  it("one checklist → the Overview caption names it", async () => {
+    strictState().mockResolvedValue("allowed");
+    checklists().get.mockResolvedValue({ success: true, checklists: envelopeOf([fixtureDetail()]) });
+    render(<TransactionDetails transaction={baseTransaction} onClose={jest.fn()} />);
+    expect(await screen.findByTestId("overview-checklist-caption")).toHaveTextContent("Probe template · 4 items");
+  });
+
+  it("blocked + no checklist → neither", async () => {
+    strictState().mockResolvedValue("blocked");
+    render(<TransactionDetails transaction={baseTransaction} onClose={jest.fn()} />);
+    await waitFor(() => expect(checklists().get).toHaveBeenCalled());
+    await act(async () => {});
+    expect(screen.queryByTestId("tab-checklist")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("overview-checklist")).not.toBeInTheDocument();
+  });
+});
+
+describe("C-R — the active tab falls back to Overview when the Checklist tab goes", () => {
+  it("opened on the Checklist tab, and the plan answers blocked with no checklist", async () => {
+    strictState().mockResolvedValue("blocked");
+    render(<TransactionDetails transaction={baseTransaction} onClose={jest.fn()} initialTab="checklist" />);
+    // Overview content (the search box it opens with) is back.
+    await waitFor(() => expect(screen.queryByTestId("checklist-panel")).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("Overview").className).toContain("border-green-500"),
+    );
+  });
+
+  it("Remove (read-only) takes the tab away and lands on Overview", async () => {
+    strictState().mockResolvedValue("blocked");
+    checklists().get.mockResolvedValue({ success: true, checklists: envelopeOf([fixtureDetail()]) });
+    checklists().remove.mockImplementation(async () => {
+      checklists().get.mockResolvedValue({ success: true, checklists: envelopeOf([]) });
+      return { success: true, changed: true };
+    });
+    render(<TransactionDetails transaction={baseTransaction} onClose={jest.fn()} />);
+    fireEvent.click(await screen.findByTestId("tab-checklist"));
+    const id = fixtureDetail().checklist.id;
+    fireEvent.click(await screen.findByTestId(`checklist-remove-${id}`));
+    fireEvent.click(await screen.findByTestId(`checklist-remove-confirm-${id}`));
+    await waitFor(() => expect(screen.queryByTestId("tab-checklist")).not.toBeInTheDocument());
+    expect(screen.getByText("Overview").className).toContain("border-green-500");
+    expect(screen.queryByTestId("overview-checklist")).not.toBeInTheDocument();
+  });
+});
+
+describe("SR condition 1 — the picker loads emails silently", () => {
+  it("no contacts: the picker stays mounted, no spinner, and the Emails tab does not fetch again", async () => {
+    strictState().mockResolvedValue("allowed");
+    checklists().get.mockResolvedValue({ success: true, checklists: envelopeOf([fixtureDetail()]) });
+    let resolveEmails!: (v: unknown) => void;
+    tx.getCommunications = jest.fn().mockImplementation(
+      () => new Promise((r) => { resolveEmails = r; }),
+    );
+
+    render(<TransactionDetails transaction={baseTransaction} onClose={jest.fn()} />);
+    fireEvent.click(await screen.findByTestId("tab-checklist"));
+    const item = fixtureDetail().items[1];
+    fireEvent.click(await screen.findByTestId(`checklist-open-picker-${item.id}`));
+    expect(await screen.findByTestId("checklist-link-picker")).toBeInTheDocument();
+    expect(screen.queryByText("Loading transaction...")).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveEmails({
+        success: true,
+        transaction: { communications: fixtureEmailCommunications(), contact_assignments: [] },
+      });
+    });
+
+    expect(screen.getByTestId("checklist-link-picker")).toBeInTheDocument();
+    expect(screen.queryByText("Loading transaction...")).not.toBeInTheDocument();
+    // The thread list arrived in the still-mounted picker.
+    expect(await screen.findByTestId("checklist-picker-thread-thread-thr-probe")).toBeInTheDocument();
+    expect(emailCalls()).toBe(1);
+
+    fireEvent.click(screen.getByText("Cancel"));
+    fireEvent.click(screen.getByText("Emails"));
+    expect(await screen.findByTestId("emails-tab-stub")).toBeInTheDocument();
+    await act(async () => {});
+    expect(emailCalls()).toBe(1);
+  });
+});
+
+/**
+ * SR B1. A deferred getCommunications keeps the email load in flight while the
+ * picker is open. The flush after the picker mounts matters: the picker starts
+ * in its loading state, and only its effect's settle can drop it, so without
+ * the flush these would pass on the broken code.
+ */
+describe("SR B1 — the picker never says there are no threads while the emails load", () => {
+  const NO_THREADS = "No email threads on this transaction.";
+  let resolvers: Array<(v: unknown) => void>;
+  const pendingEmails = () => {
+    resolvers = [];
+    tx.getCommunications = jest.fn().mockImplementation(
+      () => new Promise((r) => { resolvers.push(r); }),
+    );
+  };
+  const resolveAll = async (contactAssignments: unknown[] = []) => {
+    await act(async () => {
+      for (const r of resolvers) {
+        r({
+          success: true,
+          transaction: { communications: fixtureEmailCommunications(), contact_assignments: contactAssignments },
+        });
+      }
+    });
+  };
+  const openPicker = async () => {
+    fireEvent.click(await screen.findByTestId("tab-checklist"));
+    const item = fixtureDetail().items[1];
+    fireEvent.click(await screen.findByTestId(`checklist-open-picker-${item.id}`));
+    expect(await screen.findByTestId("checklist-link-picker")).toBeInTheDocument();
+    await act(async () => {});
+  };
+
+  it("(a) the tab's own load is in flight (the checklist has an email link): loading, then the threads", async () => {
+    strictState().mockResolvedValue("allowed");
+    checklists().get.mockResolvedValue({ success: true, checklists: envelopeOf([fixtureDetail()]) });
+    pendingEmails();
+    render(<TransactionDetails transaction={baseTransaction} onClose={jest.fn()} />);
+    await openPicker();
+
+    expect(screen.getByTestId("checklist-picker-emails-loading")).toBeInTheDocument();
+    expect(screen.queryByText(NO_THREADS)).not.toBeInTheDocument();
+
+    await resolveAll();
+    expect(await screen.findByTestId("checklist-picker-thread-thread-thr-probe")).toBeInTheDocument();
+    expect(screen.queryByTestId("checklist-picker-emails-loading")).not.toBeInTheDocument();
+    expect(emailCalls()).toBe(1);
+  });
+
+  it("(b) StrictMode, no email links: the effect's second run awaits the first run's load", async () => {
+    strictState().mockResolvedValue("allowed");
+    // A checklist with no evidence yet: what main emits before any link is added.
+    checklists().get.mockResolvedValue({ success: true, checklists: envelopeOf([fixtureDetailWithoutLinks()]) });
+    pendingEmails();
+    render(
+      <React.StrictMode>
+        <TransactionDetails transaction={baseTransaction} onClose={jest.fn()} />
+      </React.StrictMode>,
+    );
+    await openPicker();
+
+    expect(screen.getByTestId("checklist-picker-emails-loading")).toBeInTheDocument();
+    expect(screen.queryByText(NO_THREADS)).not.toBeInTheDocument();
+
+    await resolveAll();
+    expect(await screen.findByTestId("checklist-picker-thread-thread-thr-probe")).toBeInTheDocument();
+    expect(emailCalls()).toBe(1);
+  });
+
+  it("(c) the Emails tab's load is in flight: the picker awaits it too, still one fetch", async () => {
+    strictState().mockResolvedValue("allowed");
+    checklists().get.mockResolvedValue({ success: true, checklists: envelopeOf([fixtureDetailWithoutLinks()]) });
+    // With contacts, the Emails tab's loading state does not replace the modal,
+    // so the user can reach the Checklist tab while that load is in flight.
+    // Row copied from AuditTransactionModal.test.tsx (TASK-1030).
+    const contactAssignments = [
+      {
+        id: "assign-1",
+        contact_id: "contact-1",
+        contact_name: "John Doe",
+        contact_email: "john@example.com",
+        role: "client",
+        specific_role: "client",
+        is_primary: 1,
+      },
+    ];
+    tx.getOverview = jest.fn().mockResolvedValue({
+      success: true,
+      transaction: { contact_assignments: contactAssignments },
+    });
+    tx.getDetails.mockResolvedValue({
+      success: true,
+      transaction: { ...baseTransaction, communications: [], contact_assignments: contactAssignments },
+    });
+    pendingEmails();
+    render(<TransactionDetails transaction={baseTransaction} onClose={jest.fn()} />);
+    fireEvent.click(await screen.findByText("Emails"));
+    expect(await screen.findByTestId("emails-tab-stub")).toBeInTheDocument();
+    await waitFor(() => expect(emailCalls()).toBe(1));
+    await openPicker();
+
+    expect(screen.getByTestId("checklist-picker-emails-loading")).toBeInTheDocument();
+    expect(screen.queryByText(NO_THREADS)).not.toBeInTheDocument();
+
+    await resolveAll(contactAssignments);
+    expect(await screen.findByTestId("checklist-picker-thread-thread-thr-probe")).toBeInTheDocument();
+    expect(emailCalls()).toBe(1);
+  });
+});
+
+describe("C-9 — the TTL re-ask never unmounts the open Checklist panel", () => {
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it("a draft note survives TTL + 1 ms with the re-ask still in flight, and after it answers", async () => {
+    let asked = 0;
+    let release: (v: string) => void = () => {};
+    // The session's first question and the open's re-ask answer at once; the
+    // TTL re-ask is held in flight, as a real IPC round trip would be.
+    strictState().mockImplementation(() => {
+      asked += 1;
+      return asked <= 2
+        ? Promise.resolve("allowed")
+        : new Promise((res) => {
+            release = res as (v: string) => void;
+          });
+    });
+    checklists().get.mockResolvedValue({ success: true, checklists: envelopeOf([fixtureDetail()]) });
+    jest.useFakeTimers();
+    render(
+      <StrictFeatureProvider userId="user-456" organizationId="org-123">
+        <TransactionDetails transaction={baseTransaction} onClose={jest.fn()} initialTab="checklist" />
+      </StrictFeatureProvider>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(10);
+    });
+    const itemId = fixtureDetail().items[0].id;
+    expect(screen.getByTestId("checklist-panel")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId(`checklist-add-note-${itemId}`));
+    const draft = () =>
+      screen.queryByTestId(`checklist-note-editor-${itemId}`)?.querySelector("textarea") as
+        | HTMLTextAreaElement
+        | null
+        | undefined;
+    fireEvent.change(draft()!, { target: { value: "half-typed note" } });
+    expect(draft()!.value).toBe("half-typed note");
+    const before = strictState().mock.calls.length;
+
+    await act(async () => {
+      jest.advanceTimersByTime(STRICT_ANSWER_TTL_MS + 1);
+    });
+    // The TTL re-ask went and is still in flight.
+    expect(strictState().mock.calls.length - before).toBe(1);
+    expect(screen.getByTestId("tab-checklist")).toBeInTheDocument();
+    expect(screen.getByTestId("checklist-panel")).toBeInTheDocument();
+    expect(draft()?.value).toBe("half-typed note");
+
+    await act(async () => {
+      release("allowed");
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("checklist-panel")).toBeInTheDocument();
+    expect(draft()?.value).toBe("half-typed note");
+  });
+});

@@ -105,6 +105,18 @@ beforeEach(() => {
   db.prepare(
     `INSERT INTO transaction_checklist_link_members (id, link_id, kind, attachment_id) VALUES ('mm1', 'L-mac', 'attachment', 'a-mac'), ('mm2', 'L-android', 'attachment', 'a-android')`,
   ).run();
+  // BACKLOG-3476 (F-2, regression cover): a SECOND checklist on the same
+  // transaction, linking the same two attachments. Its links go the same way.
+  db.prepare(
+    "INSERT INTO transaction_checklists (id, transaction_id, template_id, template_name, sort_order) VALUES ('c2', 'txn-1', 'tpl-2', 'Disclosures', 1)",
+  ).run();
+  db.prepare("INSERT INTO transaction_checklist_items (id, checklist_id, title) VALUES ('i2', 'c2', 'Disclosure photo')").run();
+  db.prepare(
+    `INSERT INTO transaction_checklist_links (id, item_id, kind, label) VALUES ('L2-mac', 'i2', 'attachment', 'photo.jpg'), ('L2-android', 'i2', 'attachment', 'scan.pdf')`,
+  ).run();
+  db.prepare(
+    `INSERT INTO transaction_checklist_link_members (id, link_id, kind, attachment_id) VALUES ('mm3', 'L2-mac', 'attachment', 'a-mac'), ('mm4', 'L2-android', 'attachment', 'a-android')`,
+  ).run();
   setDb(db);
 });
 
@@ -128,8 +140,8 @@ describe("BACKLOG-3475 — message force paths remove checklist attachment membe
     expect(swapError).toBeNull();
     expect(rows("SELECT id FROM messages WHERE id='m1'").length).toBe(0);
     // The macOS attachment went with its message; the Android one is untouched.
-    expect(memberSet()).toEqual(["L-android:a-android"]);
-    expect(linkSet()).toEqual(["L-android"]);
+    expect(memberSet()).toEqual(["L-android:a-android", "L2-android:a-android"]);
+    expect(linkSet()).toEqual(["L-android", "L2-android"]);
     expect(dangling()).toBe(0);
 
     let androidError: string | null = null;

@@ -1491,19 +1491,25 @@ CREATE INDEX IF NOT EXISTS idx_hidden_texts_txn_external
 -- BACKLOG-3475 BEGIN — transaction checklists (local half)
 -- ===========================================================================
 -- A checklist is a broker template copied ONTO one transaction at the moment
--- the user picks it. Four tables, all new, all IF NOT EXISTS: schema.sql's
+-- the user picks it. Four tables, all IF NOT EXISTS: schema.sql's
 -- unconditional exec on every launch creates them on fresh and existing
--- installs alike, so no MIGRATIONS entry is needed (the same delivery as
--- BACKLOG-3366's transaction_hidden_texts). Every divergence key is recorded
--- in ALLOWED_EVOLUTION in databaseService.schema-parity.test.ts.
+-- installs alike (the same delivery as BACKLOG-3366's transaction_hidden_texts).
+-- BACKLOG-3476 changed transaction_checklists' shape after it had reached dev
+-- databases, so migration v72 rebuilds a table that still has the old shape;
+-- any later change to these four tables' DDL needs its own migration. Every
+-- divergence key is recorded in ALLOWED_EVOLUTION in
+-- databaseService.schema-parity.test.ts.
 --
 -- The BEGIN/END markers are load-bearing: checklistSchemaUpgrade-3475.test.ts
 -- strips this block to synthesise a pre-3475 database and prove the upgrade
 -- path delivers the tables.
 --
---   transaction_checklists        one per transaction (UNIQUE transaction_id).
---                                 `template_id` is the source template's cloud
---                                 id and is PROVENANCE ONLY — no read joins
+--   transaction_checklists        several per transaction, each from a
+--                                 different template (UNIQUE (transaction_id,
+--                                 template_id)); `sort_order` is the display
+--                                 order the user built. `template_id` is the
+--                                 source template's cloud id and is
+--                                 PROVENANCE ONLY — no read joins
 --                                 through it. The titles, required flags and
 --                                 document types below are COPIES, so editing
 --                                 or deleting the broker template never
@@ -1538,12 +1544,18 @@ CREATE INDEX IF NOT EXISTS idx_hidden_texts_txn_external
 -- trigger then removes a group whose last member is gone, so a group never
 -- survives empty and would never render as an evidence chip pointing at
 -- nothing.
+-- No standalone CREATE INDEX may name `sort_order` (or any column the pre-v72
+-- shape lacks) here: this file runs BEFORE the versioned migrations, against
+-- the old table, and such an index throws and stops every upgraded open. The
+-- composite UNIQUE's autoindex already serves lookups by transaction_id.
 CREATE TABLE IF NOT EXISTS transaction_checklists (
   id             TEXT PRIMARY KEY,
-  transaction_id TEXT NOT NULL UNIQUE,
+  transaction_id TEXT NOT NULL,
   template_id    TEXT NOT NULL,
   template_name  TEXT NOT NULL CHECK (length(trim(template_name)) BETWEEN 1 AND 200),
+  sort_order     INTEGER NOT NULL DEFAULT 0,
   selected_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (transaction_id, template_id),
   FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE
 );
 
