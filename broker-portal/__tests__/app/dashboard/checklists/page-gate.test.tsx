@@ -56,6 +56,8 @@ const OTHER_ORG_ID = '00000000-0000-4000-8000-0000003474ff';
 /** pii-allow-uuid: invented fixture id, a user the viewer cannot read */
 const GONE_USER_ID = '00000000-0000-4000-8000-0000003474ee';
 
+const DEFAULT_UPDATED_AT = '2026-09-24T18:57:37.552806+00:00';
+
 /**
  * A checklist_templates row with its items embed, in the column set
  * CHECKLIST_LIST_SELECT names. The emulator does not project, so the row
@@ -68,12 +70,26 @@ const template = (id: string, organization_id: string, over: Partial<Row> = {}):
   description: null,
   seed_key: null,
   archived_at: null,
-  updated_at: '2026-09-24T18:57:37.552806+00:00',
+  updated_at: DEFAULT_UPDATED_AT,
   updated_by: null,
   sort_order: 10,
   checklist_template_items: [{ is_required: true }, { is_required: false }],
   ...over,
 });
+
+/** Same recipe as formatAuditDateTime (lib/checklists/audit.ts), recomputed
+ *  independently so this also catches a bug inside the formatter itself
+ *  (BACKLOG-3474 PR 4 — the list shows date + time once mounted). */
+function dt(iso: string): string {
+  return new Date(iso).toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+}
 
 interface Setup {
   role?: string;
@@ -202,6 +218,10 @@ describe('/dashboard/checklists — renders', () => {
   // BACKLOG-3474 PR 3: who last edited each template. The users row is in the
   // column set AUDIT_USER_SELECT names (public.users: id, email, display_name,
   // first_name, last_name); values are invented.
+  // jest.config.js pins process.env.TZ to a non-UTC zone for the whole suite
+  // (a per-test assignment here would have no effect — see editor.test.tsx),
+  // so this proves a real local-time conversion happened, not just "some
+  // time string is present".
   it('names the last editor, "a former member" for an unresolvable one, and no one for a null updated_by', async () => {
     const { emu } = setup({
       templates: [
@@ -214,9 +234,10 @@ describe('/dashboard/checklists — renders', () => {
     render(await ChecklistsPage());
     const rows = screen.getAllByTestId('checklist-row');
     const lastEdited = (r: HTMLElement) => r.querySelectorAll('td')[3].textContent;
-    expect(lastEdited(rows[0])).toBe('Sep 24, 2026by Jane Doe');
-    expect(lastEdited(rows[1])).toBe('Sep 24, 2026by a former member');
-    expect(lastEdited(rows[2])).toBe('Sep 24, 2026');
+    const editedAt = dt(DEFAULT_UPDATED_AT);
+    expect(lastEdited(rows[0])).toBe(`${editedAt}by Jane Doe`);
+    expect(lastEdited(rows[1])).toBe(`${editedAt}by a former member`);
+    expect(lastEdited(rows[2])).toBe(editedAt);
     expect(document.body.textContent).not.toContain(GONE_USER_ID);
     expect(document.body.textContent).not.toContain(FIXTURE_USER_ID);
     expect(emu.state.selects).toContainEqual({ table: 'users', columns: AUDIT_USER_SELECT });

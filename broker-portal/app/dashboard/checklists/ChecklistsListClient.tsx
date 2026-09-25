@@ -8,9 +8,14 @@
  * catalogue, Active/Archived status, Edit + Archive (or Restore) per row.
  * Archiving asks first with a non-destructive dialog: transactions that already
  * use a template keep their own copy.
+ *
+ * "Last edited" shows date + time once mounted in the browser (PR 4):
+ * TableContainer already scrolls horizontally, so the wider text costs
+ * nothing, and it matches the editor header rather than needing a
+ * separate tooltip for the time.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -26,13 +31,17 @@ import {
 } from '@keepr/design-system';
 import { archiveChecklistTemplate, restoreChecklistTemplate } from '@/lib/actions/checklists';
 import type { ChecklistListRow } from '@/lib/checklists/listRows';
-import { formatAuditDate } from '@/lib/checklists/audit';
+import { formatAuditDate, formatAuditDateTime } from '@/lib/checklists/audit';
 
 export default function ChecklistsListClient({ rows }: { rows: ChecklistListRow[] }) {
   const router = useRouter();
   const [archiveTarget, setArchiveTarget] = useState<ChecklistListRow | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Same reasoning as ChecklistEditorClient: local time needs the browser's
+  // timezone, so show the date alone until mounted, then date + time.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   const active = rows.filter((r) => !r.archived).length;
 
@@ -91,7 +100,7 @@ export default function ChecklistsListClient({ rows }: { rows: ChecklistListRow[
                 <Td className="text-right tabular-nums">{row.itemCount}</Td>
                 <Td className="text-right tabular-nums">{row.requiredCount}</Td>
                 <Td>
-                  {formatAuditDate(row.updatedAt)}
+                  {mounted ? formatAuditDateTime(row.updatedAt) : formatAuditDate(row.updatedAt)}
                   {row.updatedBy && <p className="mt-0.5 text-xs text-gray-500">by {row.updatedBy}</p>}
                 </Td>
                 <Td>

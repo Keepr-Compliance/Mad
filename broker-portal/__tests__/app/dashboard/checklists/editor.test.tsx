@@ -16,6 +16,7 @@
 
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { renderToStaticMarkup } from 'react-dom/server';
 import '@testing-library/jest-dom';
 
 const mockCreateClient = jest.fn();
@@ -177,18 +178,50 @@ describe('/dashboard/checklists/[id] — renders', () => {
 });
 
 // BACKLOG-3474 PR 3: created / last edited / archived, who and when.
+// PR 4: the editor header shows time too, once mounted in the browser (the
+// mounted gate — ChecklistEditorClient.tsx — is what makes this safe: the
+// server can't know the viewer's timezone, so it renders date-only first and
+// switches to date+time on mount; RTL's render() flushes that effect, so
+// these assertions see the final, timed state).
+//
+// jest.config.js pins process.env.TZ to a non-UTC zone (America/Los_Angeles)
+// so this proves a real local-time conversion happened, not just "some time
+// string is present" — if CI's default TZ (UTC) were left in place, a
+// regression that hardcoded `timeZone: 'UTC'` in the formatter could slip
+// through undetected. It MUST be set in jest.config.js, not in a test file's
+// beforeAll — a process.env.TZ assignment inside the test file has no
+// effect: verified empirically (it silently fell back to the host machine's
+// real timezone), but the mechanism inside jest is NOT traced — a plausible
+// cause is that each test file runs against its own copy of process.env
+// rather than the real one; caught in SR review of this PR.
 describe('/dashboard/checklists/[id] — audit line', () => {
   const audit = () => screen.getByTestId('checklist-audit').textContent;
 
+  /** Same recipe as formatAuditDateTime (lib/checklists/audit.ts), recomputed
+   *  independently here rather than imported, so this test also catches a
+   *  bug inside the formatter itself, not only a wiring bug. */
+  function dt(iso: string): string {
+    return new Date(iso).toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    });
+  }
+
   it('names a resolvable user, shows "a former member" for one that is not, and never an id', async () => {
+    const editedAt = '2026-09-24T22:08:43.723274+00:00';
+    const archivedAt = '2026-09-24T22:10:00.000001+00:00';
     setupRoute({
       templates: [
         {
           ...templateRow(TEMPLATE_ID, FIXTURE_BROKERAGE_ORG_ID),
           created_by: FIXTURE_USER_ID,
           updated_by: GONE_USER_ID,
-          updated_at: '2026-09-24T22:08:43.723274+00:00',
-          archived_at: '2026-09-24T22:10:00.000001+00:00',
+          updated_at: editedAt,
+          archived_at: archivedAt,
           archived_by: FIXTURE_USER_ID,
         },
       ],
@@ -196,16 +229,36 @@ describe('/dashboard/checklists/[id] — audit line', () => {
     });
     render(await EditChecklistTemplatePage(params(TEMPLATE_ID)));
     expect(audit()).toBe(
-      'Created Sep 24, 2026 by Jane Doe · Last edited Sep 24, 2026 by a former member · Archived Sep 24, 2026 by Jane Doe'
+      `Created ${dt(TOKEN)} by Jane Doe · Last edited ${dt(editedAt)} by a former member · Archived ${dt(archivedAt)} by Jane Doe`
     );
     expect(document.body.textContent).not.toContain(GONE_USER_ID);
     expect(document.body.textContent).not.toContain(FIXTURE_USER_ID);
   });
 
-  it('shows dates alone when no one is recorded (seeded, or not edited since the columns existed)', async () => {
+  it('shows dates and times alone when no one is recorded (seeded, or not edited since the columns existed)', async () => {
     setupRoute();
     render(await EditChecklistTemplatePage(params(TEMPLATE_ID)));
-    expect(audit()).toBe('Created Sep 24, 2026 · Last edited Sep 24, 2026');
+    expect(audit()).toBe(`Created ${dt(TOKEN)} · Last edited ${dt(TOKEN)}`);
+  });
+
+  // Pins the mount gate itself: renderToStaticMarkup never runs effects, so
+  // this is exactly what the server sends before the browser mounts. If the
+  // `mounted` state were ever initialized to true (or the gate removed), the
+  // server markup would already contain a time computed in the SERVER's
+  // timezone (UTC on Vercel) — the bug the mount gate exists to prevent.
+  it('renders date-only server-side, before the mount effect can run', () => {
+    const html = renderToStaticMarkup(
+      <ChecklistEditorClient
+        templateId={TEMPLATE_ID}
+        updatedAt={TOKEN}
+        archived={false}
+        template={{ name: 'Residential purchase', description: null }}
+        items={ITEMS}
+        audit={{ created: { at: TOKEN, by: 'Jane Doe' }, edited: { at: TOKEN, by: 'Jane Doe' }, archived: null }}
+      />
+    );
+    expect(html).toContain('Created Sep 24, 2026 by Jane Doe');
+    expect(html).not.toContain(dt(TOKEN));
   });
 });
 
