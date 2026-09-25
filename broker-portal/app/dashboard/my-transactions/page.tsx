@@ -11,9 +11,8 @@
  *   - null     -> notFound().
  *
  * Every read is scoped in the query itself to `submitted_by = the agent` AND
- * `organization_id = the brokerage the key was checked on`. RLS also limits an
- * agent to their own rows, but it has no organization term, so the portal
- * narrows to the current brokerage explicitly.
+ * `organization_id = the brokerage the key was checked on`: the portal narrows
+ * to the current brokerage explicitly.
  */
 
 import Link from 'next/link';

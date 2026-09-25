@@ -18,8 +18,8 @@
  *   4. The previous versions (parent_submission_id), each hop scoped the same
  *      way as step 2. A parent outside that scope ends the walk and gets no link.
  *
- * Session client only (the gate's). Status history names are not resolved: the
- * reviewer's profile is not readable to an agent, so entries show no name.
+ * Session client only (the gate's). Reviewer names are not resolved on this
+ * page, so status history entries show no name.
  */
 
 import Link from 'next/link';
