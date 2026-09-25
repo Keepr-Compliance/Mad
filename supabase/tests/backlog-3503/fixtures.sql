@@ -5,10 +5,12 @@
 --
 -- The same-day pair R2/R3 is the long-transaction shape: R3 has an EARLIER set_at
 -- but a LATER seq, because its transaction began earlier and executed its INSERT
--- later. It is the row a broker wrote last, so it must win. F2/F3 are the same
--- shape on the franchise-fee table: without them, ordering that table by set_at
--- returns the same right answer as ordering it by seq, and the D2 ordering
--- contract is unpinned on the second table (control C14, mutant m37).
+-- later. It is the row a broker wrote last, so it must win.
+--
+-- BACKLOG-3503 (founder decision, pm_comments 95992a3e): the office fee columns
+-- and the organization_franchise_fees table (and its own same-day pair, F2/F3,
+-- and control C14 and mutant m37 that tested it) were REMOVED from this
+-- migration before it was ever applied. That work moves to BACKLOG-3534.
 --
 -- Two agents model losing access to an organization, because the product does it
 -- two different ways: u_agent_sus is DEACTIVATED (membership row survives at
@@ -31,7 +33,6 @@
 -- at 'suspended' would have cost.
 --
 -- Org A therefore holds 7 agreement rows and the venue 8; C6 and C18 count them.
--- Org A holds 3 franchise fee rows and the venue 4; C18 and C23 count them.
 
 DO $fixtures$
 DECLARE
@@ -174,16 +175,16 @@ BEGIN
   -- R2 then R3 share effective_from; R3 is inserted second (higher seq) with an
   -- EARLIER set_at.
   INSERT INTO public.agent_split_agreements
-    (organization_id, agent_user_id, agent_pct, brokerage_pct, office_fee_amount,
-     office_fee_cadence, effective_from, set_by, set_at) VALUES
-    (o_a, u_agent_a,  60.00, 40.00, 100.00, 'monthly', DATE '2026-01-01', u_broker_a, TIMESTAMPTZ '2026-01-01 09:00:00+00'), -- R1
-    (o_a, u_agent_a,  50.00, 50.00, 150.00, 'monthly', DATE '2026-06-01', u_broker_a, TIMESTAMPTZ '2026-06-01 10:05:00+00'), -- R2 mistake, later set_at
-    (o_a, u_agent_a,  80.00, 20.00, 150.00, 'monthly', DATE '2026-06-01', u_broker_a, TIMESTAMPTZ '2026-06-01 10:00:00+00'), -- R3 correction, earlier set_at, later seq
-    (o_a, u_agent_a,  90.00, 10.00, 200.00, 'annual',  DATE '2026-12-01', u_broker_a, TIMESTAMPTZ '2026-11-01 09:00:00+00'), -- R4 future
-    (o_a, u_agent_a2, 70.00, 30.00,  75.00, 'monthly', DATE '2026-01-01', u_broker_a, TIMESTAMPTZ '2026-01-01 09:00:00+00'), -- colleague
-    (o_b, u_agent_b,  55.00, 45.00, 999.00, 'annual',  DATE '2026-01-01', u_broker_b, TIMESTAMPTZ '2026-01-01 09:00:00+00'), -- other org
-    (o_a, u_agent_sus,  65.00, 35.00, 120.00, 'monthly', DATE '2026-01-01', u_broker_a, TIMESTAMPTZ '2026-01-01 09:00:00+00'), -- deactivated agent
-    (o_a, u_agent_gone, 45.00, 55.00, 130.00, 'monthly', DATE '2026-01-01', u_broker_a, TIMESTAMPTZ '2026-01-01 09:00:00+00'); -- removed agent
+    (organization_id, agent_user_id, agent_pct, brokerage_pct,
+     effective_from, set_by, set_at) VALUES
+    (o_a, u_agent_a,  60.00, 40.00, DATE '2026-01-01', u_broker_a, TIMESTAMPTZ '2026-01-01 09:00:00+00'), -- R1
+    (o_a, u_agent_a,  50.00, 50.00, DATE '2026-06-01', u_broker_a, TIMESTAMPTZ '2026-06-01 10:05:00+00'), -- R2 mistake, later set_at
+    (o_a, u_agent_a,  80.00, 20.00, DATE '2026-06-01', u_broker_a, TIMESTAMPTZ '2026-06-01 10:00:00+00'), -- R3 correction, earlier set_at, later seq
+    (o_a, u_agent_a,  90.00, 10.00, DATE '2026-12-01', u_broker_a, TIMESTAMPTZ '2026-11-01 09:00:00+00'), -- R4 future
+    (o_a, u_agent_a2, 70.00, 30.00, DATE '2026-01-01', u_broker_a, TIMESTAMPTZ '2026-01-01 09:00:00+00'), -- colleague
+    (o_b, u_agent_b,  55.00, 45.00, DATE '2026-01-01', u_broker_b, TIMESTAMPTZ '2026-01-01 09:00:00+00'), -- other org
+    (o_a, u_agent_sus,  65.00, 35.00, DATE '2026-01-01', u_broker_a, TIMESTAMPTZ '2026-01-01 09:00:00+00'), -- deactivated agent
+    (o_a, u_agent_gone, 45.00, 55.00, DATE '2026-01-01', u_broker_a, TIMESTAMPTZ '2026-01-01 09:00:00+00'); -- removed agent
 
   -- The second half of the REMOVED shape. Written after the agreement on
   -- purpose: nothing in this migration references organization_members, so an
@@ -197,18 +198,6 @@ BEGIN
   IF v_left <> 0 THEN
     RAISE EXCEPTION 'FIXTURE FAILED: the removed agent still has an org-A membership row';
   END IF;
-
-  -- F2/F3 repeat R2/R3's shape on this table: they share effective_from, F3 is
-  -- inserted second (higher seq) with an EARLIER set_at, and F3 is the one the
-  -- broker wrote last, so it must win. Without this pair, ordering this helper
-  -- by set_at returns the same answer as ordering it by seq and no control can
-  -- tell the two apart -- which is what mutant m37 exists to show.
-  INSERT INTO public.organization_franchise_fees
-    (organization_id, amount, effective_from, set_by, set_at) VALUES
-    (o_a, 2000.00, DATE '2026-01-01', u_broker_a, TIMESTAMPTZ '2026-01-01 09:00:00+00'), -- F1
-    (o_a, 2750.00, DATE '2026-06-01', u_broker_a, TIMESTAMPTZ '2026-06-01 10:05:00+00'), -- F2 mistake, later set_at
-    (o_a, 2500.00, DATE '2026-06-01', u_broker_a, TIMESTAMPTZ '2026-06-01 10:00:00+00'), -- F3 correction, earlier set_at, later seq
-    (o_b, 9999.00, DATE '2026-01-01', u_broker_b, TIMESTAMPTZ '2026-01-01 09:00:00+00');
 END
 $fixtures$;
 

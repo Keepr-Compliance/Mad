@@ -30,10 +30,9 @@ BEGIN
   PERFORM pg_temp.check(cfg @> ARRAY['search_path=public'],
     format('the own-row read rule pins SET search_path = public, got %s', coalesce(cfg::text, 'NULL')));
   PERFORM pg_temp.check(
-    (SELECT bool_and(NOT prosecdef) FROM pg_proc
-      WHERE oid IN ('public.split_agreement_in_force(uuid,uuid,date)'::regprocedure,
-                    'public.franchise_fee_in_force(uuid,date)'::regprocedure)),
-    'neither read helper is SECURITY DEFINER');
+    (SELECT NOT prosecdef FROM pg_proc
+      WHERE oid = 'public.split_agreement_in_force(uuid,uuid,date)'::regprocedure),
+    'the read helper is not SECURITY DEFINER');
 
   -- The own-row policy must carry BOTH terms. A policy that lost the membership
   -- term would read as correct in every summary and serve a deactivated agent.
@@ -54,7 +53,7 @@ BEGIN
                         'the member check is not a self-comparison');
   -- the same class, swept over every policy this migration creates
   FOR q IN SELECT coalesce(qual,'') || ' ' || coalesce(with_check,'') FROM pg_policies
-            WHERE tablename IN ('agent_split_agreements','organization_franchise_fees')
+            WHERE tablename = 'agent_split_agreements'
   LOOP
     PERFORM pg_temp.check(q !~ '(\m[a-z_]+\.[a-z_]+) = \1', format('no policy contains a self-comparison: %s', q));
   END LOOP;

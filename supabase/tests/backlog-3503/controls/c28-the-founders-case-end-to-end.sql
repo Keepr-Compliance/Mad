@@ -34,8 +34,8 @@ BEGIN
     'precondition: the agent has already left when the broker records this');
 
   s := pg_temp.sqlstate_of(format(
-    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, office_fee_amount, office_fee_cadence, effective_from, note) VALUES (%L,%L,70,30,125,%L,%L::date,%L)',
-    current_setting('t3503.o_a'), current_setting('t3503.u_agent_sus'), 'monthly', closed,
+    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, effective_from, note) VALUES (%L,%L,70,30,%L::date,%L)',
+    current_setting('t3503.o_a'), current_setting('t3503.u_agent_sus'), closed,
     'recorded after the agent left, effective from the closing'));
   PERFORM pg_temp.check(s = 'OK',
     format('the broker records a departed agent''s agreement, dated to the closing, got %s', s));
@@ -59,8 +59,8 @@ BEGIN
   -- cannot be satisfied by a policy that simply permits everything: nothing NEW
   -- may be dated after they left.
   s := pg_temp.sqlstate_of(format(
-    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, office_fee_amount, office_fee_cadence, effective_from) VALUES (%L,%L,70,30,125,%L,%L::date)',
-    current_setting('t3503.o_a'), current_setting('t3503.u_agent_sus'), 'monthly', left_on + 1));
+    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, effective_from) VALUES (%L,%L,70,30,%L::date)',
+    current_setting('t3503.o_a'), current_setting('t3503.u_agent_sus'), left_on + 1));
   PERFORM pg_temp.check(s = '42501',
     format('but a new agreement dated after they left is still refused, got %s', s));
 END $$;

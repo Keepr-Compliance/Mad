@@ -1,5 +1,5 @@
--- C24: a DEACTIVATED broker, and a DEACTIVATED admin, cannot INSERT into EITHER
--- table -- while the ACTIVE broker of the same organization can.
+-- C24: a DEACTIVATED broker, and a DEACTIVATED admin, cannot INSERT --
+-- while the ACTIVE broker of the same organization can.
 --
 -- The write half of the same ruling C23 reads. Split into its own file rather
 -- than appended to C23 for the reason C20 was split out of C19: under a mutant
@@ -29,16 +29,10 @@ BEGIN
     PERFORM pg_temp.act_as(current_setting('t3503.u_' || who || '_sus')::uuid);
 
     s := pg_temp.sqlstate_of(format(
-      'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, office_fee_amount, office_fee_cadence, effective_from) VALUES (%L,%L,55,45,110,%L,DATE ''2026-08-01'')',
-      current_setting('t3503.o_a'), current_setting('t3503.u_agent_a'), 'monthly'));
+      'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, effective_from) VALUES (%L,%L,55,45,DATE ''2026-08-01'')',
+      current_setting('t3503.o_a'), current_setting('t3503.u_agent_a')));
     PERFORM pg_temp.check(s = '42501',
       format('a deactivated %s INSERTing an agreement is refused with 42501, got %s', who, s));
-
-    s := pg_temp.sqlstate_of(format(
-      'INSERT INTO public.organization_franchise_fees (organization_id, amount, effective_from) VALUES (%L,3100,DATE ''2026-08-01'')',
-      current_setting('t3503.o_a')));
-    PERFORM pg_temp.check(s = '42501',
-      format('a deactivated %s INSERTing a franchise fee is refused with 42501, got %s', who, s));
 
     RESET ROLE;
   END LOOP;
@@ -52,9 +46,6 @@ BEGIN
   SELECT count(*) INTO n FROM public.agent_split_agreements
    WHERE effective_from = DATE '2026-08-01';
   PERFORM pg_temp.check(n = 0, format('no agreement row from a deactivated writer survives, got %s', n));
-  SELECT count(*) INTO n FROM public.organization_franchise_fees
-   WHERE effective_from = DATE '2026-08-01';
-  PERFORM pg_temp.check(n = 0, format('no franchise fee row from a deactivated writer survives, got %s', n));
 END $$;
 
 -- the ACTIVE broker of the same organization writes both, in the same
@@ -65,12 +56,8 @@ DO $$
 DECLARE s text;
 BEGIN
   s := pg_temp.sqlstate_of(format(
-    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, office_fee_amount, office_fee_cadence, effective_from) VALUES (%L,%L,55,45,110,%L,DATE ''2026-08-02'')',
-    current_setting('t3503.o_a'), current_setting('t3503.u_agent_a'), 'monthly'));
+    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, effective_from) VALUES (%L,%L,55,45,DATE ''2026-08-02'')',
+    current_setting('t3503.o_a'), current_setting('t3503.u_agent_a')));
   PERFORM pg_temp.check(s = 'OK', format('the active broker still writes an agreement, got %s', s));
-  s := pg_temp.sqlstate_of(format(
-    'INSERT INTO public.organization_franchise_fees (organization_id, amount, effective_from) VALUES (%L,3100,DATE ''2026-08-02'')',
-    current_setting('t3503.o_a')));
-  PERFORM pg_temp.check(s = 'OK', format('...and still writes a franchise fee, got %s', s));
 END $$;
 RESET ROLE;
