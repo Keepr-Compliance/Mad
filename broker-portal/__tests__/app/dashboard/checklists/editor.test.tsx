@@ -61,6 +61,22 @@ import {
 const FEATURE_ON = withFeature(ORG_WITHOUT_PLAN_FEATURES, CHECKLIST_FEATURE_KEY, true);
 const FEATURE_OFF = withFeature(ORG_WITHOUT_PLAN_FEATURES, CHECKLIST_FEATURE_KEY, false);
 
+/**
+ * What can_edit_checklist_templates answers for a brokerage member (harness
+ * C4, C5, C41): an editor role on that membership AND the feature on. Since
+ * BACKLOG-3535 the portal holds no copy of this rule; this stub stands in for
+ * the database it asks.
+ */
+const DB_EDITOR_ROLES = ['broker', 'admin', 'it_admin'];
+const canEditAnswer = (role: string, features: unknown): boolean =>
+  DB_EDITOR_ROLES.includes(role) && features !== FEATURE_OFF;
+const canEditRpc = (role: string, features: unknown) =>
+  jest.fn(async (fn: string) =>
+    fn === 'can_edit_checklist_templates'
+      ? { data: canEditAnswer(role, features), error: null }
+      : { data: null, error: { code: 'PGRST202', message: `unexpected rpc ${fn}` } }
+  );
+
 /** Transcribed PostgREST text of a real checklist_templates.updated_at (pm_comments 6501344d). */
 const TOKEN = '2026-09-24T18:57:37.552806+00:00';
 /** pii-allow-uuid: invented fixture id */
@@ -106,7 +122,7 @@ function setupRoute(
   mockCreateClient.mockResolvedValue({
     auth: { getUser: async () => ({ data: { user: { id: FIXTURE_USER_ID } } }) },
     from,
-    rpc: jest.fn(async () => ({ data: opts.features ?? FEATURE_ON, error: null })),
+    rpc: canEditRpc(opts.role ?? 'broker', opts.features ?? FEATURE_ON),
   });
   mockGetImpersonationSession.mockResolvedValue(opts.impersonating ? { session_id: 's', target_user_id: 't' } : null);
   return { emu, from };

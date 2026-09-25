@@ -36,7 +36,7 @@ jest.mock('@/lib/actions/checklists', () => ({
 }));
 
 import ChecklistsPage from '@/app/dashboard/checklists/page';
-import { CHECKLIST_EDITOR_ROLES, CHECKLIST_FEATURE_KEY } from '@/lib/checklist-access';
+import { CHECKLIST_FEATURE_KEY } from '@/lib/checklist-access';
 import { CHECKLIST_LIST_SELECT } from '@/lib/checklists/listRows';
 import { AUDIT_USER_SELECT } from '@/lib/checklists/audit';
 import { ORG_WITHOUT_PLAN_FEATURES, withFeature } from '../../../fixtures/orgFeatures';
@@ -50,6 +50,22 @@ import {
 
 const FEATURE_ON = withFeature(ORG_WITHOUT_PLAN_FEATURES, CHECKLIST_FEATURE_KEY, true);
 const FEATURE_OFF = withFeature(ORG_WITHOUT_PLAN_FEATURES, CHECKLIST_FEATURE_KEY, false);
+
+/**
+ * What can_edit_checklist_templates answers for a brokerage member (harness
+ * C4, C5, C41): an editor role on that membership AND the feature on. Since
+ * BACKLOG-3535 the portal holds no copy of this rule; this stub stands in for
+ * the database it asks.
+ */
+const DB_EDITOR_ROLES = ['broker', 'admin', 'it_admin'];
+const canEditAnswer = (role: string, features: unknown): boolean =>
+  DB_EDITOR_ROLES.includes(role) && features !== FEATURE_OFF;
+const canEditRpc = (role: string, features: unknown) =>
+  jest.fn(async (fn: string) =>
+    fn === 'can_edit_checklist_templates'
+      ? { data: canEditAnswer(role, features), error: null }
+      : { data: null, error: { code: 'PGRST202', message: `unexpected rpc ${fn}` } }
+  );
 
 /** pii-allow-uuid: invented fixture id */
 const OTHER_ORG_ID = '00000000-0000-4000-8000-0000003474ff';
@@ -123,7 +139,7 @@ function setup(opts: Setup = {}) {
   mockCreateClient.mockResolvedValue({
     auth: { getUser: async () => ({ data: { user: { id: FIXTURE_USER_ID } } }) },
     from,
-    rpc: jest.fn(async () => ({ data: opts.features ?? FEATURE_ON, error: null })),
+    rpc: canEditRpc(opts.role ?? 'broker', opts.features ?? FEATURE_ON),
   });
   mockGetImpersonationSession.mockResolvedValue(
     opts.impersonating ? { session_id: 's', target_user_id: 't' } : null
@@ -160,7 +176,7 @@ describe('/dashboard/checklists — refuses with 404', () => {
 });
 
 describe('/dashboard/checklists — renders', () => {
-  it.each([...CHECKLIST_EDITOR_ROLES])('the empty state for a %s with no templates', async (role) => {
+  it.each(DB_EDITOR_ROLES)('the empty state for a %s with no templates', async (role) => {
     setup({ role });
     render(await ChecklistsPage());
     expect(screen.getByRole('heading', { name: 'Checklists' })).toBeInTheDocument();
