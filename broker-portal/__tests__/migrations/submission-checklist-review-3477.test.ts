@@ -154,7 +154,7 @@ describe('BACKLOG-3477 — submission checklist review migration', () => {
     );
     const guard = functionBody(sql, 'guard_status_history_append_only');
     expect(guard).toContain("IF v_role IS NULL OR v_role = 'service_role' THEN");
-    expect(guard).toContain('IF (v_new -> i) IS DISTINCT FROM (v_old -> i) THEN');
+    expect(guard).toContain('FOR i IN 0 .. v_old_len - 1 LOOP IF (v_new -> i) IS DISTINCT FROM (v_old -> i) THEN');
     expect(guard).toContain("jsonb_typeof(v_new) <> 'array'");
   });
 });
