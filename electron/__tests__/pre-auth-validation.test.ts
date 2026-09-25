@@ -87,6 +87,8 @@ describe("handlePreAuthValidation", () => {
     mockIsOnline.mockReturnValue(true);
     // sessionService.clearSession() resolves true on success (and on ENOENT).
     mockClearSession.mockResolvedValue(true);
+    // Drop any unconsumed mockRejectedValueOnce so it cannot leak across tests.
+    (logService.warn as jest.Mock).mockReset().mockResolvedValue(undefined);
   });
 
   // ------------------------------------------
