@@ -11,13 +11,14 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { MoreVertical } from 'lucide-react';
+import { getInvitationLink } from '@/lib/actions/getInvitationLink';
 
 interface UserActionsDropdownProps {
   memberId: string;
   memberName: string;
   isPending: boolean; // No user_id yet (pending invite)
   isCurrentUser: boolean;
-  invitationToken?: string | null;
+  organizationId: string;
   onEditRole?: () => void;
   onResendInvite?: () => void;
   onDeactivate: () => void;
@@ -29,7 +30,7 @@ export default function UserActionsDropdown({
   memberName,
   isPending,
   isCurrentUser,
-  invitationToken,
+  organizationId,
   onEditRole,
   onResendInvite,
   onDeactivate,
@@ -39,19 +40,21 @@ export default function UserActionsDropdown({
   const [linkCopied, setLinkCopied] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
+  // The invite token is fetched on demand rather than shipped with every row
+  // (BACKLOG-3541) — this is a live invite-acceptance URL, not an inert id.
   const handleCopyInviteLink = useCallback(async () => {
-    if (!invitationToken) return;
-    const baseUrl = window.location.origin;
-    const link = `${baseUrl}/invite/${invitationToken}`;
     try {
-      await navigator.clipboard.writeText(link);
-      setLinkCopied(true);
-      setTimeout(() => setLinkCopied(false), 2000);
+      const result = await getInvitationLink({ memberId, organizationId });
+      if (result.success && result.inviteLink) {
+        await navigator.clipboard.writeText(result.inviteLink);
+        setLinkCopied(true);
+        setTimeout(() => setLinkCopied(false), 2000);
+      }
     } catch {
       // silent fail
     }
     setIsOpen(false);
-  }, [invitationToken]);
+  }, [memberId, organizationId]);
 
   // Close on click outside
   useEffect(() => {
@@ -98,8 +101,10 @@ export default function UserActionsDropdown({
           role="menu"
           aria-orientation="vertical"
         >
-          {/* Copy Invite Link - for pending invites */}
-          {isPending && invitationToken && (
+          {/* Copy Invite Link - for pending invites. Every pending row has a
+              token (inviteUser.ts always sets one on creation); fetched via
+              getInvitationLink on click rather than checked here. */}
+          {isPending && (
             <button
               onClick={handleCopyInviteLink}
               className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 focus:bg-gray-50 focus:outline-none"

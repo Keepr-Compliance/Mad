@@ -13,15 +13,17 @@ import { Badge, Checkbox } from '@keepr/design-system';
 import type { BadgeHue } from '@keepr/design-system';
 import UserActionsDropdown from './UserActionsDropdown';
 import { ROLE_LABELS, LICENSE_STATUS_LABELS } from '@/lib/types/users';
-import type { MemberLicenseStatus, OrganizationMember, Role } from '@/lib/types/users';
+import type { MemberLicenseStatus, Role } from '@/lib/types/users';
+import type { ListMember } from '@/lib/queries/userQueries';
 import { formatUserDisplayName, getUserInitials } from '@/lib/utils/userDisplay';
 import { formatDate } from '@/lib/utils';
 
 interface UserTableRowProps {
-  member: OrganizationMember;
+  member: ListMember;
   isSelected: boolean;
   isCurrentUser: boolean;
   canManage: boolean;
+  organizationId: string;
   onToggleSelect: () => void;
   onEditRole: () => void;
   onResendInvite: () => void;
@@ -48,6 +50,7 @@ export default function UserTableRow({
   isSelected,
   isCurrentUser,
   canManage,
+  organizationId,
   onToggleSelect,
   onEditRole,
   onResendInvite,
@@ -119,7 +122,7 @@ export default function UserTableRow({
               memberName={displayName}
               isPending={isPending}
               isCurrentUser={isCurrentUser}
-              invitationToken={member.invitation_token}
+              organizationId={organizationId}
               onEditRole={onEditRole}
               onResendInvite={onResendInvite}
               onDeactivate={onDeactivate}

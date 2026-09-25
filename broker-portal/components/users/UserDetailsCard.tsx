@@ -18,8 +18,9 @@ import { Card } from '@/components/ui/Card';
 import EditRoleModal from './EditRoleModal';
 import DeactivateUserModal from './DeactivateUserModal';
 import RemoveUserModal from './RemoveUserModal';
-import type { Role, MemberLicenseStatus, ProvisioningSource } from '@/lib/types/users';
+import type { Role, MemberLicenseStatus } from '@/lib/types/users';
 import { ROLE_LABELS, LICENSE_STATUS_LABELS, PROVISIONING_SOURCE_LABELS } from '@/lib/types/users';
+import type { DetailMember } from '@/lib/queries/userQueries';
 import { formatUserDisplayName, getUserInitials } from '@/lib/utils/userDisplay';
 import { formatDate } from '@/lib/utils';
 
@@ -28,55 +29,12 @@ import { formatDate } from '@/lib/utils';
 // ============================================================================
 
 /**
- * User data from the users table (joined)
+ * Full member data this card reads — the exact shape lib/queries/userQueries.ts
+ * projects onto the client (BACKLOG-3541). Not the full organization_members
+ * row: fields the card never renders (e.g. provisioning_metadata, invited_by,
+ * last_invited_at, updated_at) are dropped before this prop is built, not here.
  */
-interface UserData {
-  id: string;
-  email: string;
-  first_name: string | null;
-  last_name: string | null;
-  display_name: string | null;
-  avatar_url: string | null;
-  last_login_at: string | null;
-  created_at: string;
-  last_sso_login_at: string | null;
-  last_sso_provider: string | null;
-  is_managed: boolean;
-}
-
-/**
- * Inviter data (nested join)
- */
-interface InviterData {
-  user?: {
-    email: string;
-    display_name: string | null;
-  };
-}
-
-/**
- * Full member data with joins
- */
-export interface MemberDetailsData {
-  id: string;
-  user_id: string | null;
-  role: Role;
-  license_status: MemberLicenseStatus;
-  invited_email: string | null;
-  invited_at: string | null;
-  joined_at: string | null;
-  provisioned_by: ProvisioningSource | null;
-  provisioned_at: string | null;
-  scim_synced_at: string | null;
-  provisioning_metadata: Record<string, unknown> | null;
-  idp_groups: string[] | null;
-  invited_by: string | null;
-  last_invited_at: string | null;
-  created_at: string;
-  updated_at: string;
-  user?: UserData;
-  inviter?: InviterData;
-}
+export type MemberDetailsData = DetailMember;
 
 interface UserDetailsCardProps {
   member: MemberDetailsData;
