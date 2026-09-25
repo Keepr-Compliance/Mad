@@ -302,9 +302,19 @@ describe("appStateReducer - Loading Phase Transitions", () => {
       });
     });
 
-    it("transitions to unauthenticated when valid is false", () => {
+    it("transitions to initializing-db when the server rejected the session and main cleared it (BACKLOG-3410)", () => {
       const state: LoadingState = { status: "loading", phase: "validating-auth" };
       const action: AppAction = { type: "AUTH_PRE_VALIDATED", valid: false, reason: "session_revoked" };
+
+      const result = appStateReducer(state, action);
+
+      // Session already deleted by main -> same as a no-session start.
+      expect(result).toEqual({ status: "loading", phase: "initializing-db" });
+    });
+
+    it("transitions to unauthenticated when offline past the grace period (session still on disk)", () => {
+      const state: LoadingState = { status: "loading", phase: "validating-auth" };
+      const action: AppAction = { type: "AUTH_PRE_VALIDATED", valid: false, reason: "offline_grace_expired" };
 
       const result = appStateReducer(state, action);
 
