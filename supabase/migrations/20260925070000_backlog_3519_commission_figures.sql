@@ -1,5 +1,9 @@
 -- Migration: commission figures on transaction_submissions (BACKLOG-3519, M2)
 --
+-- NOT APPLIED TO ANY ENVIRONMENT BY THIS PR. The apply is a separate step
+-- taken on the founder's word, together with BACKLOG-3503's (see the
+-- APPLY-ORDERING CONSTRAINT below).
+--
 -- Follows BACKLOG-3503 (M1: agent_split_agreements, the standing split table).
 -- FIGURES ONLY. No charge (franchise/office/E&O/marketing) and no computed
 -- brokerage/agent dollar amount is added here — that is BACKLOG-3537, waiting
