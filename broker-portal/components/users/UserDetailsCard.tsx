@@ -18,6 +18,8 @@ import { Card } from '@/components/ui/Card';
 import EditRoleModal from './EditRoleModal';
 import DeactivateUserModal from './DeactivateUserModal';
 import RemoveUserModal from './RemoveUserModal';
+import CommissionSplitSection from './CommissionSplitSection';
+import type { SplitAgreementHistoryRow } from '@/lib/splitAgreements';
 import type { Role, MemberLicenseStatus, ProvisioningSource } from '@/lib/types/users';
 import { ROLE_LABELS, LICENSE_STATUS_LABELS, PROVISIONING_SOURCE_LABELS } from '@/lib/types/users';
 import { formatUserDisplayName, getUserInitials } from '@/lib/utils/userDisplay';
@@ -82,6 +84,14 @@ interface UserDetailsCardProps {
   member: MemberDetailsData;
   currentUserId: string;
   currentUserRole: Role;
+  /**
+   * null when the split section should not render at all — either the
+   * viewer's role can't see it (`canViewSplit`, admin/broker only — it_admin
+   * excluded per founder ruling) or the subject's role doesn't take a split
+   * (`splitAppliesToRole`, admin/it_admin excluded). Computed by the page,
+   * not derived here, because it also decides whether the read even happens.
+   */
+  splitSection: { history: SplitAgreementHistoryRow[]; canEdit: boolean } | null;
 }
 
 // ============================================================================
@@ -128,6 +138,7 @@ export default function UserDetailsCard({
   member,
   currentUserId,
   currentUserRole,
+  splitSection,
 }: UserDetailsCardProps) {
   const router = useRouter();
   const [showEditRole, setShowEditRole] = useState(false);
@@ -330,6 +341,18 @@ export default function UserDetailsCard({
               ))}
             </div>
           </div>
+        )}
+
+        {/* Commission split — BACKLOG-3504. Own gate, independent of
+            `canManage` above: Change Role/Deactivate/Remove stay
+            admin/it_admin; this is admin/broker, it_admin excluded. */}
+        {splitSection && (
+          <CommissionSplitSection
+            memberId={member.id}
+            memberName={displayName}
+            history={splitSection.history}
+            canEdit={splitSection.canEdit}
+          />
         )}
       </Card>
 

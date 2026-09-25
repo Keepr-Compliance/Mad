@@ -18,9 +18,22 @@ import type { OrganizationMember, Role } from '@/lib/types/users';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getImpersonationSession } from '@/lib/impersonation';
 import { getDataClient } from '@/lib/impersonation-guards';
+import { getCurrentSplitsForOrg, canViewSplit, type SplitAgreementRow } from '@/lib/splitAgreements';
 // PageHeader is Tier-2 (no @keepr/ui equivalent yet).
 import { PageHeader } from '@keepr/design-system';
 import { AlertBanner } from '@keepr/ui';
+
+/** Map -> plain object: Next.js can only serialize plain data across the
+ *  server/client boundary as props, not a Map. */
+function splitsToPlainRecord(
+  splits: Map<string, SplitAgreementRow>
+): Record<string, { agent_pct: number; brokerage_pct: number }> {
+  const record: Record<string, { agent_pct: number; brokerage_pct: number }> = {};
+  for (const [agentUserId, row] of splits) {
+    record[agentUserId] = { agent_pct: row.agent_pct, brokerage_pct: row.brokerage_pct };
+  }
+  return record;
+}
 
 interface AccessCheckResult {
   allowed: true;
@@ -219,6 +232,16 @@ export default async function UsersPage() {
     }
 
     const members = await getImpersonationMembers(organizationId, client);
+    // NOT fetched during impersonation, full stop — `agent_split_agreements`
+    // is not in lib/scoped-client.ts's ALLOWED_TABLES, and a table missing
+    // from that allowlist does not read as empty: createBlockedQueryBuilder
+    // throws on every method, which took down getAccountView() the same way
+    // before this exact guard was added there (caught by
+    // account-impersonation.test.tsx, not inferred — see that file's git
+    // history and BACKLOG-3540). Same fix here: no query, no column, no
+    // crash. Whether a support session should see the split at all is
+    // BACKLOG-3540's open question, not answered by this omission.
+    const splitsByAgent: Record<string, { agent_pct: number; brokerage_pct: number }> = {};
 
     return (
       <div className="max-w-7xl mx-auto space-y-6">
@@ -238,6 +261,12 @@ export default async function UsersPage() {
           currentUserRole="admin"
           organizationId={organizationId}
           readOnly
+          // Hidden, not shown-with-a-false-"no agreement" — see the comment
+          // on splitsByAgent above. A wrongly-blank column would read as "no
+          // agent here has a split on file," which is not something we
+          // checked.
+          showSplitColumn={false}
+          splitsByAgent={splitsByAgent}
         />
       </div>
     );
@@ -251,6 +280,14 @@ export default async function UsersPage() {
   }
 
   const members = await getOrganizationMembers(access.organizationId);
+  // Split column: admin/broker only, it_admin excluded — see splitAgreements.ts.
+  // Only queried when the viewer can see it, not fetched-then-hidden.
+  const showSplitColumn = canViewSplit(access.role);
+  const splitsByAgent = showSplitColumn
+    ? splitsToPlainRecord(
+        await getCurrentSplitsForOrg(await createClient(), access.organizationId)
+      )
+    : {};
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
@@ -266,6 +303,8 @@ export default async function UsersPage() {
         currentUserId={access.userId}
         currentUserRole={access.role}
         organizationId={access.organizationId}
+        showSplitColumn={showSplitColumn}
+        splitsByAgent={splitsByAgent}
       />
     </div>
   );
