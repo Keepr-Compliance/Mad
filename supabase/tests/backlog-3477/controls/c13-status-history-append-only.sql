@@ -3,18 +3,22 @@
 --   refused (42501 status_history_append_only), as T1's broker:
 --     set to []; set to NULL; set to an object (on S_sub and on empty S_rev);
 --     edit entry 0; append a typed entry naming the admin;
---     a rewrite sent together with a status change
+--     a rewrite sent together with a status change;
+--     append an untyped entry naming someone else; append an untyped entry
+--     naming the caller; append a non-object entry
 --   allowed:
 --     append a typed entry naming the caller            (residual, recorded)
---     append an untyped entry naming someone else       (residual, recorded)
 --     ReviewActions-shaped update (status, reviewed_by, reviewed_at, notes)
 --     markAsUnderReview-shaped update (status only)
 --     the submitter's needs_changes -> uploading (BACKLOG-3497 shape)
 --     the reviewer tick
 --     a rewrite by the service role; a rewrite with no request JWT
 -- Wrong implementations this catches: the prefix test dropped; the typed
--- entry's changed_by not checked; non-array values let through; exemption
--- for every caller; the trigger never created.
+-- entry's changed_by not checked; untyped appends let through; non-array
+-- values let through; exemption for every caller; the trigger never created.
+-- The ReviewActions, markAsUnderReview and reopen probes are real status
+-- changes: the status trigger appends an untyped entry after this guard has
+-- run, so they also catch a guard that fires after it (m39).
 DO $c13$
 DECLARE
   broker uuid := pg_temp.id('u_t1_broker');
@@ -34,6 +38,15 @@ BEGIN
     '~^42501:status_history_append_only$');
   PERFORM pg_temp.expect('C13 rewrite with a status change',
     format(upd, 'status = ''under_review'', status_history = ''[]''::jsonb', s), '~^42501:status_history_append_only$');
+  PERFORM pg_temp.expect('C13 untyped entry naming someone else',
+    format(upd, format('status_history = status_history || jsonb_build_array(jsonb_build_object(''status'', ''approved'', ''changed_at'', now(), ''changed_by'', %L::uuid))', admin), s),
+    '~^42501:status_history_append_only$');
+  PERFORM pg_temp.expect('C13 untyped entry naming the caller',
+    format(upd, format('status_history = status_history || jsonb_build_array(jsonb_build_object(''status'', ''approved'', ''changed_at'', now(), ''changed_by'', %L::uuid))', broker), s),
+    '~^42501:status_history_append_only$');
+  PERFORM pg_temp.expect('C13 non-object entry',
+    format(upd, 'status_history = status_history || ''["approved"]''::jsonb', s),
+    '~^42501:status_history_append_only$');
   PERFORM pg_temp.act_owner();
   PERFORM pg_temp.check(jsonb_array_length(pg_temp.hist(s)) = 1 AND (SELECT status FROM public.transaction_submissions WHERE id = s) = 'submitted',
                         'C13 S_sub unchanged after the refusals');
@@ -41,9 +54,6 @@ BEGIN
   PERFORM pg_temp.act_as(broker);
   PERFORM pg_temp.expect('C13 typed entry naming the caller (residual)',
     format(upd, format('status_history = status_history || jsonb_build_array(jsonb_build_object(''type'', ''note'', ''changed_at'', now(), ''changed_by'', %L::uuid))', broker), s),
-    'rows:1');
-  PERFORM pg_temp.expect('C13 untyped entry naming someone else (residual)',
-    format(upd, format('status_history = status_history || jsonb_build_array(jsonb_build_object(''status'', ''approved'', ''changed_at'', now(), ''changed_by'', %L::uuid))', admin), s),
     'rows:1');
   PERFORM pg_temp.expect('C13 ReviewActions shape',
     format(upd, format('status = ''approved'', reviewed_by = %L, reviewed_at = now(), review_notes = ''ok''', broker), pg_temp.id('s_rev')), 'rows:1');
@@ -58,7 +68,7 @@ BEGIN
                         AND (pg_temp.hist(pg_temp.id('s_rev')) -> 0 ->> 'changed_by')::uuid = broker, 'C13 ReviewActions: one status entry');
   PERFORM pg_temp.check(jsonb_array_length(pg_temp.hist(pg_temp.id('s_resub'))) = 1, 'C13 markAsUnderReview: one status entry');
   PERFORM pg_temp.check(jsonb_array_length(pg_temp.hist(pg_temp.id('s_nc'))) = 1, 'C13 reopen: one status entry');
-  PERFORM pg_temp.check(jsonb_array_length(pg_temp.hist(s)) = 4, 'C13 S_sub: 1 + 2 residual appends + 1 tick');
+  PERFORM pg_temp.check(jsonb_array_length(pg_temp.hist(s)) = 3, 'C13 S_sub: 1 + 1 residual append + 1 tick');
 
   PERFORM pg_temp.act_service();
   PERFORM pg_temp.expect('C13 service role rewrite', format(upd, 'status_history = ''[]''::jsonb', s), 'rows:1');

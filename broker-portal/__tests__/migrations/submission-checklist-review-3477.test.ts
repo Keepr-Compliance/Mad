@@ -3,7 +3,7 @@
  *
  * WHAT THIS CAN PROVE: what the migration file says. CI has no database. The
  * behaviour is proved on a real Postgres by supabase/tests/backlog-3477
- * (controls c00-c16, 41 mutants); this file pins the statements a later edit
+ * (controls c00-c17, 46 mutants); this file pins the statements a later edit
  * is most likely to drop, so that a change to them fails in CI too.
  */
 
@@ -147,14 +147,45 @@ describe('BACKLOG-3477 — submission checklist review migration', () => {
     }
   });
 
-  it('attaches the append-only guard to transaction_submissions', () => {
+  it('attaches the append-only guard to transaction_submissions, on INSERT and UPDATE', () => {
     const sql = migrationSql();
     expect(sql).toContain(
-      'CREATE TRIGGER status_history_append_only BEFORE UPDATE ON public.transaction_submissions FOR EACH ROW EXECUTE FUNCTION public.guard_status_history_append_only();',
+      'CREATE TRIGGER status_history_append_only BEFORE INSERT OR UPDATE ON public.transaction_submissions FOR EACH ROW EXECUTE FUNCTION public.guard_status_history_append_only();',
     );
+    // BEFORE triggers fire in name order: the guard must sort before the status trigger.
+    expect('status_history_append_only' < 'track_status_changes').toBe(true);
     const guard = functionBody(sql, 'guard_status_history_append_only');
     expect(guard).toContain("IF v_role IS NULL OR v_role = 'service_role' THEN");
     expect(guard).toContain('FOR i IN 0 .. v_old_len - 1 LOOP IF (v_new -> i) IS DISTINCT FROM (v_old -> i) THEN');
     expect(guard).toContain("jsonb_typeof(v_new) <> 'array'");
+  });
+
+  it('refuses a new row that already carries history', () => {
+    const guard = functionBody(migrationSql(), 'guard_status_history_append_only');
+    expect(guard).toContain(
+      "IF TG_OP = 'INSERT' THEN IF v_new IS NOT NULL AND v_new <> '[]'::jsonb THEN RAISE EXCEPTION 'status_history_append_only' USING ERRCODE = '42501'; END IF; RETURN NEW; END IF;",
+    );
+  });
+
+  it('requires every appended entry to be typed and to name the caller', () => {
+    const guard = functionBody(migrationSql(), 'guard_status_history_append_only');
+    expect(guard).toContain(
+      "IF jsonb_typeof(v_elem) <> 'object' OR NOT (v_elem ? 'type') OR lower(COALESCE(v_elem ->> 'changed_by', '')) IS DISTINCT FROM COALESCE(auth.uid()::text, '-') THEN RAISE EXCEPTION 'status_history_append_only'",
+    );
+  });
+
+  it('refuses a tick on a checklist added at review', () => {
+    const body = functionBody(migrationSql(), 'set_submission_checklist_reviewer_check');
+    expect(body).toContain(
+      "IF v_row.added_at_review_by IS NOT NULL THEN RAISE EXCEPTION 'added_at_review' USING ERRCODE = '42501'; END IF;",
+    );
+  });
+
+  it('adds a checklist at review only while the submission is open for review, never in needs_changes', () => {
+    const body = functionBody(migrationSql(), 'add_submission_checklist_at_review');
+    expect(body).toContain(
+      "IF v_sub.status IS NULL OR v_sub.status NOT IN ('submitted', 'resubmitted', 'under_review') THEN RAISE EXCEPTION 'not_open_for_review'",
+    );
+    expect(body).not.toMatch(/'needs_changes'/);
   });
 });

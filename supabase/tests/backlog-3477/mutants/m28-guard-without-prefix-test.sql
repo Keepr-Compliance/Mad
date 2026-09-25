@@ -29,10 +29,11 @@
 --   8. public.add_submission_checklist_at_review(submission, template): add one
 --      of the organization's own templates to a submission under review, with
 --      one Status History entry.
---   9. transaction_submissions.status_history accepts appends only: existing
---      entries cannot be changed or removed, and an appended typed entry must
---      name the caller as changed_by. The service role and sessions with no
---      request JWT are exempt.
+--   9. transaction_submissions.status_history accepts appends only: a new row
+--      starts with an empty history, existing entries cannot be changed or
+--      removed, and every appended entry must be typed and name the caller as
+--      changed_by. The service role and sessions with no request JWT are
+--      exempt.
 --
 -- Status History entry shape written here (typed, append-only):
 --   required  type, changed_at, changed_by (raw user id)
@@ -45,8 +46,9 @@
 --                             submission, or the feature is off
 --   42501 not_open_for_review the submission's status does not allow the change
 --   42501 added_at_review     the item belongs to a checklist added at review
---   42501 status_history_append_only  a rewrite or removal of an entry, or a
---                             typed entry naming someone else
+--   42501 status_history_append_only  a new row with a non-empty history, a
+--                             rewrite or removal of an entry, or an appended
+--                             entry without a type or naming someone else
 --   22023 invalid_payload / invalid_argument
 --
 -- Rollback (reverse order):
@@ -581,10 +583,14 @@ GRANT EXECUTE ON FUNCTION public.add_submission_checklist_at_review(uuid, uuid) 
 --    through the API still carries the caller's JWT, so it is NOT exempt and
 --    its appends must pass the same test.
 --
---    BEFORE UPDATE triggers fire in name order. This one
---    ("status_history_append_only") fires before "track_status_changes"; the
---    test holds in either order: a status-only update reaches it with the
---    history unchanged, and the status entry is an append.
+--    INSERT: a new row must start with a NULL or empty history.
+--
+--    UPDATE: every appended entry must be a typed object naming the caller.
+--    BEFORE UPDATE triggers fire in name order, so this one
+--    ("status_history_append_only") fires before "track_status_changes" and
+--    never sees the untyped status entry that trigger appends. The test
+--    depends on that order: if it were reversed, every status change by a
+--    non-exempt caller would be refused.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.guard_status_history_append_only()
 RETURNS trigger
@@ -601,6 +607,12 @@ DECLARE
   i         integer;
 BEGIN
   IF v_role IS NULL OR v_role = 'service_role' THEN
+    RETURN NEW;
+  END IF;
+  IF TG_OP = 'INSERT' THEN
+    IF v_new IS NOT NULL AND v_new <> '[]'::jsonb THEN
+      RAISE EXCEPTION 'status_history_append_only' USING ERRCODE = '42501';
+    END IF;
     RETURN NEW;
   END IF;
   IF NEW.status_history IS NOT DISTINCT FROM OLD.status_history THEN
@@ -621,11 +633,12 @@ BEGIN
   -- Every existing entry must still be there, unchanged, at the same index.
   -- (A shorter array fails here too: the missing index reads as NULL.)
 
-  -- An appended entry that carries a type must name the caller.
+  -- Every appended entry must be a typed object naming the caller.
   FOR i IN v_old_len .. v_new_len - 1 LOOP
     v_elem := v_new -> i;
-    IF jsonb_typeof(v_elem) = 'object' AND v_elem ? 'type'
-       AND lower(COALESCE(v_elem ->> 'changed_by', '')) IS DISTINCT FROM COALESCE(auth.uid()::text, '-') THEN
+    IF jsonb_typeof(v_elem) <> 'object'
+       OR NOT (v_elem ? 'type')
+       OR lower(COALESCE(v_elem ->> 'changed_by', '')) IS DISTINCT FROM COALESCE(auth.uid()::text, '-') THEN
       RAISE EXCEPTION 'status_history_append_only' USING ERRCODE = '42501';
     END IF;
   END LOOP;
@@ -638,5 +651,5 @@ REVOKE EXECUTE ON FUNCTION public.guard_status_history_append_only() FROM PUBLIC
 
 DROP TRIGGER IF EXISTS status_history_append_only ON public.transaction_submissions;
 CREATE TRIGGER status_history_append_only
-  BEFORE UPDATE ON public.transaction_submissions
+  BEFORE INSERT OR UPDATE ON public.transaction_submissions
   FOR EACH ROW EXECUTE FUNCTION public.guard_status_history_append_only();
