@@ -284,6 +284,26 @@ describe("BACKLOG-3519 — resolveSplitSnapshot", () => {
     ).resolves.toEqual({});
   });
 
+  it("resolves to {} -- never throws -- on a closed_at that produces an Invalid Date", async () => {
+    // BACKLOG-3519 SR review (pm_comments 701d1100 on this item): the IPC
+    // validator's date check (electron/utils/validation.ts:959) is an
+    // unanchored prefix regex that admits "2026-13-45" and "2026-00-00" --
+    // both pass the gate and both make `new Date(...)` produce an Invalid
+    // Date, whose `.toISOString()` throws RangeError. The docblock above
+    // promises this function "NEVER THROWS, NEVER BLOCKS", so an escaping
+    // RangeError here would make that promise false -- not a new failure mode
+    // for the SUBMISSION (three earlier call sites hit the same shape first,
+    // per the SR review's A1), but a false guarantee on THIS function
+    // specifically, which is the thing worth being correct about.
+    const client: SupabaseClient = {
+      rpc: async () => ({ data: [], error: null }),
+    } as unknown as SupabaseClient;
+
+    await expect(
+      resolveSplitSnapshot(client, ORG_ID, AGENT_ID, "2026-13-45")
+    ).resolves.toEqual({});
+  });
+
   it("resolves to {split_resolved_on} only -- zero rows is a clean SUCCESS, not an error", async () => {
     // Stands in for a deactivated agent: agent_split_agreements_select_writer /
     // _select_own (BACKLOG-3503) make a suspended member's own row invisible

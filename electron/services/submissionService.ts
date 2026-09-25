@@ -1447,13 +1447,25 @@ class SubmissionService {
     agentUserId: string,
     closedAt: string | undefined
   ): Promise<SplitSnapshot> {
-    const resolvedOn = (closedAt ? new Date(closedAt) : new Date())
-      .toISOString()
-      .slice(0, 10);
-
+    // Computed INSIDE the try, not before it (BACKLOG-3519 SR review,
+    // pm_comments 701d1100/a75ac7d7 on this item). `validation.ts:959`'s date
+    // check is an unanchored prefix regex that admits "2026-13-45" and
+    // "2026-00-00" -- both pass the IPC gate and both make `new Date(...)`
+    // produce an Invalid Date, whose `.toISOString()` throws RangeError. A
+    // throw here must land in the same `{}`-and-log path as an RPC failure,
+    // not escape past this docblock's "NEVER THROWS" promise. The rejected
+    // alternative (substitute today's date and proceed) was proposed and then
+    // retracted during review: silently resolving the split against a date
+    // the deal did not close on, and writing `split_resolved_on = <today>` as
+    // if that were the answer, is the exact false-compliance statement this
+    // design exists to prevent -- worse than the RangeError it would hide.
+    let resolvedOn = "";
     let data: unknown;
     let error: { code?: string; message?: string } | null;
     try {
+      resolvedOn = (closedAt ? new Date(closedAt) : new Date())
+        .toISOString()
+        .slice(0, 10);
       const result = await client.rpc("split_agreement_in_force", {
         p_organization_id: orgId,
         p_agent_user_id: agentUserId,
