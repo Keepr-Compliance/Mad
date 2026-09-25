@@ -32,7 +32,7 @@
  * ## Refusals are returned, not thrown
  *
  * "Your plan does not include this", "that template is gone" and "we could not
- * read your brokerage's templates" are answers a surface has to render, not
+ * read your organization's templates" are answers a surface has to render, not
  * errors to report. They come back as `{ success: false, error }`, the same way
  * `hiddenTextHandlers` does it. Only a malformed payload throws, through
  * `ValidationError`, which `wrapHandler` turns into the same shape.
@@ -147,7 +147,7 @@ export const CHECKLISTS_NOT_ALLOWED_ERROR =
  * templates to ask for".
  */
 export const CHECKLISTS_NO_ORGANIZATION_ERROR =
-  "No brokerage is associated with this account.";
+  "No organization is associated with this account.";
 
 /**
  * The templates could not be READ. Deliberately not the same sentence as an
@@ -155,7 +155,7 @@ export const CHECKLISTS_NO_ORGANIZATION_ERROR =
  * is that the network failed is a false statement about someone else's account.
  */
 export const CHECKLIST_TEMPLATES_UNAVAILABLE_ERROR =
-  "Your brokerage's checklist templates could not be loaded right now.";
+  "Checklist templates couldn't be loaded right now.";
 
 /** The requested template is not in the listing (archived, deleted, or renamed away). */
 export const CHECKLIST_TEMPLATE_NOT_FOUND_ERROR =
