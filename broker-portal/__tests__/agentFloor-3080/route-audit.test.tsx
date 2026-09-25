@@ -24,6 +24,7 @@ import {
   FIXTURE_BROKERAGE_ORG_ID,
   FIXTURE_INVITE_ID,
   FIXTURE_OTHER_USER_ID,
+  FIXTURE_PERSONAL_ORG_ID,
   FIXTURE_USER_ID,
   brokerageMembership,
   createPostgrestEmulator,
@@ -34,7 +35,31 @@ import {
 
 const mockEmulator = createPostgrestEmulator();
 const mockGetUser = jest.fn();
-const mockRpc = jest.fn(async () => ({ data: null, error: null }));
+/**
+ * can_edit_checklist_templates, transcribed from
+ * supabase/migrations/20260925044046_backlog_3535_solo_checklists.sql: the
+ * caller is a member of p_org_id AND (role is broker / admin / it_admin OR the
+ * caller is that organization's personal owner) AND the feature is allowed.
+ * The feature half is taken as ON, the same convention as the forced-ON
+ * feature-gate mock below. Reads the fixture rows directly so the read log the
+ * refusal rows assert on is unchanged. Every other RPC answers null.
+ */
+const CHECKLIST_EDITOR_ROLES = ['broker', 'admin', 'it_admin'];
+function canEditChecklistTemplates(orgId: unknown): boolean {
+  return (mockEmulator.state.rows.organization_members ?? []).some((m) => {
+    const org = m.organizations as { personal_owner_user_id?: string | null } | undefined;
+    return (
+      m.organization_id === orgId &&
+      m.user_id === FIXTURE_USER_ID &&
+      (CHECKLIST_EDITOR_ROLES.includes(m.role as string) || org?.personal_owner_user_id === m.user_id)
+    );
+  });
+}
+const mockRpc = jest.fn(async (name: string, args?: Record<string, unknown>) =>
+  name === 'can_edit_checklist_templates'
+    ? { data: canEditChecklistTemplates(args?.p_org_id), error: null }
+    : { data: null, error: null }
+);
 
 jest.mock('@/lib/supabase/server', () => ({
   createClient: jest.fn(async () => ({
@@ -111,6 +136,8 @@ const TARGET_MEMBER: Row = {
 const INVITE = pendingInvite('invitee-3080@fixture.example.test', 'agent');
 /** A checklist template in the brokerage, for the admitted-admin control only. */
 const TEMPLATE_ID = '00000000-0000-4000-8000-000000308020'; // pii-allow-uuid: invented fixture id
+/** A checklist template in the personal organization, for the admitted-owner control only (BACKLOG-3535). */
+const PERSONAL_TEMPLATE_ID = '00000000-0000-4000-8000-000000353520'; // pii-allow-uuid: invented fixture id
 
 const second = (row: Row): Row => ({ ...row, id: `${row.id as string}-second` });
 
@@ -135,6 +162,17 @@ function given(memberships: readonly Row[]): void {
           id: TEMPLATE_ID,
           organization_id: FIXTURE_BROKERAGE_ORG_ID,
           name: 'Fixture template',
+          created_by: null,
+          updated_by: null,
+          archived_by: null,
+          archived_at: null,
+          updated_at: '2026-09-01T00:00:00Z',
+          checklist_template_items: [],
+        },
+        {
+          id: PERSONAL_TEMPLATE_ID,
+          organization_id: FIXTURE_PERSONAL_ORG_ID,
+          name: 'Fixture personal template',
           created_by: null,
           updated_by: null,
           archived_by: null,
@@ -192,6 +230,8 @@ const idParams = (id: string) => ({ params: Promise.resolve({ id }) });
 
 interface PageEntry {
   invoke: () => Promise<unknown>;
+  /** The same page as the personal-org owner would open it, where the id differs. */
+  invokeAsOwner?: () => Promise<unknown>;
   /** The refusal every floor persona must get. */
   refused: Outcome;
 }
@@ -239,9 +279,9 @@ const FLOOR_PAGES = [
 ];
 
 /**
- * D4: these carry their own gate (lib/checklist-access.ts), unchanged here.
- * Refused today to every brokerage agent. The personal-org owner row is owned
- * by BACKLOG-3535 (#2716), which decides whether the owner may open them.
+ * D4: these carry their own gate (lib/checklist-access.ts). Refused to every
+ * brokerage agent. BACKLOG-3535 admits the owner of a personal organization
+ * (feature on), so the owner is asserted admitted, not refused.
  */
 const OWN_GATE_PAGES: Record<string, PageEntry> = {
   'app/dashboard/checklists/page.tsx': {
@@ -254,10 +294,28 @@ const OWN_GATE_PAGES: Record<string, PageEntry> = {
   },
   'app/dashboard/checklists/[id]/page.tsx': {
     invoke: async () => (await import('@/app/dashboard/checklists/[id]/page')).default(idParams(TEMPLATE_ID)),
+    invokeAsOwner: async () =>
+      (await import('@/app/dashboard/checklists/[id]/page')).default(idParams(PERSONAL_TEMPLATE_ID)),
     refused: { notFound: true },
   },
 };
-const OWN_GATE_PERSONAS = ['brokerage agent', '[agent, broker] (two brokerage rows)'] as const;
+/**
+ * Who the own gate refuses. The gate asks the database one question per
+ * organization, can_edit_checklist_templates(org), so the refusing personas are
+ * those whose chosen organization holds no editor row for them:
+ * - a brokerage agent;
+ * - a brokerage agent who also owns a personal organization: the brokerage row
+ *   wins and there is no fall-through to the personal organization.
+ * The shared '[agent, broker] (two brokerage rows)' persona is not used here:
+ * both rows sit in ONE organization, a state UNIQUE (organization_id, user_id)
+ * on organization_members rules out, and the database rule admits any editor
+ * row in the organization.
+ */
+const OWN_GATE_PERSONAS = {
+  'brokerage agent': PERSONAS['brokerage agent'],
+  '[brokerage agent, personal-org owner]': [brokerageMembership('agent'), personalMembership()],
+} as const;
+const ownGatePersonaNames = Object.keys(OWN_GATE_PERSONAS) as (keyof typeof OWN_GATE_PERSONAS)[];
 
 // ---------------------------------------------------------------------------
 // Server actions
@@ -271,7 +329,7 @@ const users = () => import('@/lib/actions/bulkUpdateRole');
 const scim = () => import('@/lib/actions/scim');
 const checklists = () => import('@/lib/actions/checklists');
 
-/** Everything above the floor. 6 user-admin + 11 in scim.ts + 3 checklist. */
+/** Everything above the floor. 6 user-admin + 11 in scim.ts. */
 const REFUSED_ACTIONS: Record<string, ActionEntry> = {
   'lib/actions/bulkUpdateRole.ts#bulkUpdateRole': act(users, 'bulkUpdateRole', {
     memberIds: [TARGET_MEMBER_ID],
@@ -307,6 +365,14 @@ const REFUSED_ACTIONS: Record<string, ActionEntry> = {
   'lib/actions/scim.ts#getJitStatus': act(scim, 'getJitStatus'),
   'lib/actions/scim.ts#updateJitStatus': act(scim, 'updateJitStatus', true),
   'lib/actions/scim.ts#listScimSyncLogs': act(scim, 'listScimSyncLogs'),
+};
+
+/**
+ * D4 for actions: the checklist writes carry the same own gate as the checklist
+ * pages (lib/checklist-access.ts). Refused to every brokerage agent; admitted
+ * to a brokerage admin and to the personal-org owner (BACKLOG-3535).
+ */
+const OWN_GATE_ACTIONS: Record<string, ActionEntry> = {
   'lib/actions/checklists.ts#saveChecklistTemplate': act(checklists, 'saveChecklistTemplate', {}),
   'lib/actions/checklists.ts#archiveChecklistTemplate': act(checklists, 'archiveChecklistTemplate', 'tpl-3080'),
   'lib/actions/checklists.ts#restoreChecklistTemplate': act(checklists, 'restoreChecklistTemplate', 'tpl-3080'),
@@ -352,6 +418,8 @@ const REFUSALS: Record<string, Outcome | Record<Persona, Outcome>> = {
   'lib/actions/scim.ts#getJitStatus': NOT_AUTHORIZED_THROW,
   'lib/actions/scim.ts#updateJitStatus': NOT_AUTHORIZED_THROW,
   'lib/actions/scim.ts#listScimSyncLogs': NOT_AUTHORIZED_THROW,
+};
+const OWN_GATE_REFUSALS: Record<string, Outcome> = {
   'lib/actions/checklists.ts#saveChecklistTemplate': {
     returned: { ok: false, reason: 'not_authorized', message: "You don't have permission to edit checklist templates." },
   },
@@ -574,12 +642,14 @@ describe('set completeness', () => {
   it('every server action is classified exactly once', () => {
     const classified = [
       ...Object.keys(REFUSED_ACTIONS),
+      ...Object.keys(OWN_GATE_ACTIONS),
       ...FLOOR_ACTIONS,
       ...UNAUTHENTICATED_PREEXISTING_ACTIONS,
       ...HELPER_ACTIONS,
     ];
     expect(new Set(classified).size).toBe(classified.length);
     expect(Object.keys(REFUSALS).sort()).toEqual(Object.keys(REFUSED_ACTIONS).sort());
+    expect(Object.keys(OWN_GATE_REFUSALS).sort()).toEqual(Object.keys(OWN_GATE_ACTIONS).sort());
     for (const name of Object.keys(READS_BEFORE_REFUSAL)) expect(REFUSED_ACTIONS).toHaveProperty([name]);
     expect(discoverServerActions()).toEqual([...classified].sort());
   });
@@ -643,18 +713,48 @@ describe('refused pages', () => {
 
 describe('own-gate pages (D4)', () => {
   const cases = Object.entries(OWN_GATE_PAGES).flatMap(([page, entry]) =>
-    OWN_GATE_PERSONAS.map((persona) => [page, persona, entry] as const)
+    ownGatePersonaNames.map((persona) => [page, persona, entry] as const)
   );
 
   it.each(cases)('%s refuses the %s', async (_page, persona, entry) => {
-    given(PERSONAS[persona]);
-    expect(await run(entry.invoke)).toEqual(entry.refused);
+    given(OWN_GATE_PERSONAS[persona]);
+    // A persona who owns a personal org opens that org's template, so a 404 here is the gate, not the org filter.
+    const invoke = persona === '[brokerage agent, personal-org owner]' ? (entry.invokeAsOwner ?? entry.invoke) : entry.invoke;
+    expect(await run(invoke)).toEqual(entry.refused);
     expect(mockEmulator.state.writes).toEqual([]);
   });
 
   it.each(Object.entries(OWN_GATE_PAGES))('%s admits a brokerage admin', async (_page, entry) => {
     given(ADMIN);
     expect(await run(entry.invoke)).not.toEqual(entry.refused);
+  });
+
+  it.each(Object.entries(OWN_GATE_PAGES))('%s admits the personal-org owner', async (_page, entry) => {
+    given(PERSONAS['personal-org owner']);
+    expect(await run(entry.invokeAsOwner ?? entry.invoke)).not.toEqual(entry.refused);
+  });
+});
+
+describe('own-gate server actions (D4)', () => {
+  const cases = Object.keys(OWN_GATE_ACTIONS).flatMap((name) =>
+    ownGatePersonaNames.map((persona) => [name, persona] as const)
+  );
+
+  it.each(cases)('%s refuses the %s, and writes nothing', async (name, persona) => {
+    given(OWN_GATE_PERSONAS[persona]);
+    expect(await run(OWN_GATE_ACTIONS[name])).toEqual(OWN_GATE_REFUSALS[name]);
+    expect(mockEmulator.state.writes).toEqual([]);
+    for (const table of tablesRead()) expect(['organization_members']).toContain(table);
+  });
+
+  it.each(Object.keys(OWN_GATE_ACTIONS))('%s admits a brokerage admin', async (name) => {
+    given(ADMIN);
+    expect(await run(OWN_GATE_ACTIONS[name])).not.toEqual(OWN_GATE_REFUSALS[name]);
+  });
+
+  it.each(Object.keys(OWN_GATE_ACTIONS))('%s admits the personal-org owner', async (name) => {
+    given(PERSONAS['personal-org owner']);
+    expect(await run(OWN_GATE_ACTIONS[name])).not.toEqual(OWN_GATE_REFUSALS[name]);
   });
 });
 

@@ -103,7 +103,11 @@ function setup(opts: Setup = {}) {
     },
     rpc: async (fn: string, args: Record<string, unknown>) => {
       rpcLog.push({ fn, args });
-      if (fn === 'broker_get_org_features') return { data: opts.features ?? FEATURE_ON, error: null };
+      if (fn === 'can_edit_checklist_templates') {
+        // Stands in for the database (harness C4, C5, C41): editor role AND feature on.
+        const role = opts.role ?? 'broker';
+        return { data: ['broker', 'admin', 'it_admin'].includes(role) && (opts.features ?? FEATURE_ON) !== FEATURE_OFF, error: null };
+      }
       if (fn === 'save_checklist_template') {
         return { data: [{ id: TEMPLATE_ID, updated_at: '2026-09-24T19:21:08.951159+00:00' }], error: null, ...opts.save };
       }
@@ -156,7 +160,7 @@ describe('saveChecklistTemplate — one database call', () => {
     expect(result).toEqual({ ok: true, id: TEMPLATE_ID, updatedAt: '2026-09-24T19:21:08.951159+00:00' });
     // The recorder is live: it saw the save and the gate's own calls.
     expect(saves()).toHaveLength(1);
-    expect(rpcLog.map((r) => r.fn)).toContain('broker_get_org_features');
+    expect(rpcLog.map((r) => r.fn)).toContain('can_edit_checklist_templates');
     expect(fromLog).toContain('organization_members');
     // ...and nothing else touched a table.
     expect(fromLog.filter((t) => t !== 'organization_members')).toEqual([]);

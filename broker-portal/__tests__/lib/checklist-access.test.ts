@@ -1,19 +1,25 @@
 /**
- * The Checklists gate, end to end — BACKLOG-3474.
+ * The Checklists gate, end to end — BACKLOG-3474, BACKLOG-3535.
  *
  * Nothing below the gate is mocked: requireChecklistEditorAccess calls the real
- * pickBrokerageMembership and the real isFeatureEnabledFailClosed. Only the
- * Supabase client and the impersonation cookie reader are stand-ins.
+ * pickBrokerageMembership / isPersonalMembership. Only the Supabase client and
+ * the impersonation cookie reader are stand-ins.
  *
  * The membership table is served by the BACKLOG-3364 PostgREST emulator, which
  * applies `eq` / `in` as filters and answers `.single()` with PGRST116 when
- * more than one row matches — so a gate that narrows by role and calls
- * `.single()` (the SCIM pattern) is measured, not assumed. Its organization
- * records are transcribed from a real PostgREST.
+ * more than one row matches. Its organization records are transcribed from a
+ * real PostgREST.
  *
- * The feature payloads are DERIVED, not transcribed: transaction_checklists is
- * layered on the transcribed 21-key base with the shape jsonb_build_object
- * emits.
+ * BACKLOG-3535: the portal no longer carries a role list or a feature read. It
+ * asks can_edit_checklist_templates(p_org_id) — the function RLS and
+ * save_checklist_template use — for the org it picked. The RPC stub below
+ * answers per org id from an explicit map, so each case states what the
+ * database said; the database rule itself is measured by harness C41
+ * (supabase/tests/backlog-3473).
+ *
+ * The A12 fixtures (a brokerage row AND a personal row) describe a state no
+ * sanctioned writer produces (_retire_personal_membership deletes the personal
+ * row when a brokerage row is written). They are kept as defence in depth.
  *
  * @jest-environment node
  */
@@ -29,16 +35,11 @@ jest.mock('@/lib/impersonation', () => ({
 }));
 
 import {
-  CHECKLIST_EDITOR_ROLES,
   CHECKLIST_FEATURE_KEY,
   isChecklistEditorEnabled,
+  pickChecklistMembership,
   requireChecklistEditorAccess,
 } from '@/lib/checklist-access';
-import {
-  NOT_AUTHENTICATED_PAYLOAD,
-  ORG_WITHOUT_PLAN_FEATURES,
-  withFeature,
-} from '../fixtures/orgFeatures';
 import {
   FIXTURE_BROKERAGE_ORG_ID,
   FIXTURE_PERSONAL_ORG_ID,
@@ -49,8 +50,8 @@ import {
   type Row,
 } from '../helpers/postgrestEmulator';
 
-const FEATURE_ON = withFeature(ORG_WITHOUT_PLAN_FEATURES, CHECKLIST_FEATURE_KEY, true, 'Transaction checklists');
-const FEATURE_OFF = withFeature(ORG_WITHOUT_PLAN_FEATURES, CHECKLIST_FEATURE_KEY, false, 'Transaction checklists');
+const B = FIXTURE_BROKERAGE_ORG_ID;
+const P = FIXTURE_PERSONAL_ORG_ID;
 
 /** pii-allow-uuid: invented fixture id */
 const SECOND_BROKERAGE_ORG_ID = '00000000-0000-4000-8000-0000003474b2';
@@ -69,7 +70,10 @@ function secondBrokerageMembership(role: string): Row {
 interface Setup {
   user?: { id: string } | null;
   memberships?: Row[];
-  rpc?: { data?: unknown; error?: unknown };
+  /** What can_edit_checklist_templates answers, per p_org_id. Unlisted = false. */
+  canEdit?: Record<string, unknown>;
+  /** A PostgREST error on the rpc call. */
+  rpcError?: unknown;
   impersonating?: boolean;
 }
 
@@ -77,7 +81,13 @@ function setup(opts: Setup = {}) {
   const emu = createPostgrestEmulator({
     rows: { organization_members: opts.memberships ?? [brokerageMembership('broker')] },
   });
-  const rpc = jest.fn(async () => opts.rpc ?? { data: FEATURE_ON, error: null });
+  const canEdit = opts.canEdit ?? { [B]: true };
+  const rpc = jest.fn(async (fn: string, args: { p_org_id: string }) => {
+    if (opts.rpcError) return { data: null, error: opts.rpcError };
+    if (fn !== 'can_edit_checklist_templates') return { data: null, error: { message: `unexpected rpc ${fn}` } };
+    // `in`, not `??`: a null answer must reach the gate as null.
+    return { data: args.p_org_id in canEdit ? canEdit[args.p_org_id] : false, error: null };
+  });
   const from = jest.fn((t: string) => emu.from(t));
   const client = {
     auth: {
@@ -109,35 +119,32 @@ describe('constants', () => {
   it('uses the key the 3473 migration seeds', () => {
     expect(CHECKLIST_FEATURE_KEY).toBe('transaction_checklists');
   });
-
-  it('mirrors can_edit_checklist_templates() roles exactly', () => {
-    expect([...CHECKLIST_EDITOR_ROLES].sort()).toEqual(['admin', 'broker', 'it_admin']);
-  });
 });
 
 describe('requireChecklistEditorAccess — allows', () => {
-  it.each(['broker', 'admin', 'it_admin'])('a %s with the feature on', async (role) => {
+  it.each(['broker', 'admin', 'it_admin'])('a %s the database admits', async (role) => {
     setup({ memberships: [brokerageMembership(role)] });
     await expect(requireChecklistEditorAccess()).resolves.toMatchObject({
       userId: FIXTURE_USER_ID,
-      organizationId: FIXTURE_BROKERAGE_ORG_ID,
+      organizationId: B,
       role,
     });
   });
 
-  it('checks the feature for the brokerage org', async () => {
+  it('asks can_edit_checklist_templates for the brokerage org, once', async () => {
     const { rpc } = setup();
     await requireChecklistEditorAccess();
-    expect(rpc).toHaveBeenCalledWith('broker_get_org_features', { p_org_id: FIXTURE_BROKERAGE_ORG_ID });
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(rpc).toHaveBeenCalledWith('can_edit_checklist_templates', { p_org_id: B });
   });
 
   // A12: a personal-org agent row first, then the brokerage row.
   it('skips the personal organization row and routes on the brokerage [A12]', async () => {
-    const { rpc } = setup({ memberships: [personalMembership(), brokerageMembership('broker')] });
+    const { rpc } = setup({ memberships: [personalMembership(), brokerageMembership('broker')], canEdit: { [B]: true, [P]: true } });
     const access = await requireChecklistEditorAccess();
-    expect(access.organizationId).toBe(FIXTURE_BROKERAGE_ORG_ID);
-    expect(access.organizationId).not.toBe(FIXTURE_PERSONAL_ORG_ID);
-    expect(rpc).toHaveBeenCalledWith('broker_get_org_features', { p_org_id: FIXTURE_BROKERAGE_ORG_ID });
+    expect(access.organizationId).toBe(B);
+    expect(rpc).toHaveBeenCalledWith('can_edit_checklist_templates', { p_org_id: B });
+    expect(rpc).not.toHaveBeenCalledWith('can_edit_checklist_templates', { p_org_id: P });
   });
 
   // A12: two brokerage rows. `.single()` on a role-narrowed read returns
@@ -147,7 +154,7 @@ describe('requireChecklistEditorAccess — allows', () => {
       memberships: [personalMembership(), brokerageMembership('broker'), secondBrokerageMembership('admin')],
     });
     await expect(requireChecklistEditorAccess()).resolves.toMatchObject({
-      organizationId: FIXTURE_BROKERAGE_ORG_ID,
+      organizationId: B,
       role: 'broker',
     });
   });
@@ -166,20 +173,84 @@ describe('requireChecklistEditorAccess — allows', () => {
   });
 });
 
-describe('requireChecklistEditorAccess — refuses', () => {
-  it('an agent of the brokerage', async () => {
-    const { rpc } = setup({ memberships: [brokerageMembership('agent')] });
+describe('BACKLOG-3535 — solo owner (personal organization only)', () => {
+  it('P1 edits the personal org when the database says yes', async () => {
+    const { rpc } = setup({ memberships: [personalMembership()], canEdit: { [P]: true } });
+    await expect(requireChecklistEditorAccess()).resolves.toMatchObject({ organizationId: P, role: 'agent' });
+    expect(rpc).toHaveBeenCalledWith('can_edit_checklist_templates', { p_org_id: P });
+  });
+
+  it('P2 is refused when the database says no (feature off for the personal org)', async () => {
+    setup({ memberships: [personalMembership()], canEdit: { [P]: false } });
+    await expect(requireChecklistEditorAccess()).rejects.toThrow('Not authorized');
+  });
+
+  it('pickChecklistMembership: brokerage row wins, else the personal row, else null', () => {
+    expect(pickChecklistMembership([personalMembership(), brokerageMembership('agent')] as never)?.organization_id).toBe(B);
+    expect(pickChecklistMembership([personalMembership()] as never)?.organization_id).toBe(P);
+    expect(pickChecklistMembership([] as never)).toBeNull();
+    expect(pickChecklistMembership(null)).toBeNull();
+  });
+});
+
+describe('BACKLOG-3535 — brokerage wins, no fall-through', () => {
+  it.each([
+    ['personal row first', () => [personalMembership(), brokerageMembership('agent')]],
+    ['brokerage row first', () => [brokerageMembership('agent'), personalMembership()]],
+  ])('P3 a brokerage agent who owns a personal org is refused (%s)', async (_label, rows) => {
+    const { rpc } = setup({ memberships: rows(), canEdit: { [B]: false, [P]: true } });
+    await expect(requireChecklistEditorAccess()).rejects.toThrow('Not authorized');
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(rpc).not.toHaveBeenCalledWith('can_edit_checklist_templates', { p_org_id: P });
+  });
+
+  it('P3b an agent in the first brokerage and a broker in a second is refused, asking only the first', async () => {
+    const { rpc } = setup({
+      memberships: [brokerageMembership('agent'), secondBrokerageMembership('broker')],
+      canEdit: { [B]: false, [SECOND_BROKERAGE_ORG_ID]: true },
+    });
+    await expect(requireChecklistEditorAccess()).rejects.toThrow('Not authorized');
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(rpc).toHaveBeenCalledWith('can_edit_checklist_templates', { p_org_id: B });
+  });
+
+  it('P4 a brokerage broker who owns a personal org edits the brokerage', async () => {
+    setup({ memberships: [personalMembership(), brokerageMembership('broker')], canEdit: { [B]: true, [P]: true } });
+    await expect(requireChecklistEditorAccess()).resolves.toMatchObject({ organizationId: B });
+  });
+});
+
+describe('BACKLOG-3535 — the database is the only rule', () => {
+  it('P5a no role list in the portal: an agent the database admits is admitted', async () => {
+    setup({ memberships: [brokerageMembership('agent')], canEdit: { [B]: true } });
+    await expect(requireChecklistEditorAccess()).resolves.toMatchObject({ organizationId: B, role: 'agent' });
+  });
+
+  it('P5b a broker the database refuses is refused', async () => {
+    setup({ memberships: [brokerageMembership('broker')], canEdit: { [B]: false } });
+    await expect(requireChecklistEditorAccess()).rejects.toThrow('Not authorized');
+  });
+
+  it.each<[string, Setup]>([
+    ['an rpc error', { rpcError: { message: 'RPC exploded' } }],
+    ['a null answer', { canEdit: { [B]: null } }],
+    ['the string "true"', { canEdit: { [B]: 'true' } }],
+    ['an object answer', { canEdit: { [B]: { allowed: true } } }],
+  ])('P6 fails closed on %s', async (_label, opts) => {
+    setup({ memberships: [brokerageMembership('broker')], ...opts });
+    await expect(requireChecklistEditorAccess()).rejects.toThrow('Not authorized');
+  });
+
+  it('P7 no membership: refused without asking the database', async () => {
+    const { rpc } = setup({ memberships: [] });
     await expect(requireChecklistEditorAccess()).rejects.toThrow('Not authorized');
     expect(rpc).not.toHaveBeenCalled();
   });
+});
 
-  it('a user with only a personal organization', async () => {
-    setup({ memberships: [personalMembership()] });
-    await expect(requireChecklistEditorAccess()).rejects.toThrow('Not authorized');
-  });
-
-  it('a user with no membership', async () => {
-    setup({ memberships: [] });
+describe('requireChecklistEditorAccess — refuses', () => {
+  it('an agent of the brokerage when the database refuses', async () => {
+    setup({ memberships: [brokerageMembership('agent')], canEdit: { [B]: false } });
     await expect(requireChecklistEditorAccess()).rejects.toThrow('Not authorized');
   });
 
@@ -188,26 +259,6 @@ describe('requireChecklistEditorAccess — refuses', () => {
     await expect(requireChecklistEditorAccess()).rejects.toThrow('Not authenticated');
     expect(from).not.toHaveBeenCalled();
     expect(rpc).not.toHaveBeenCalled();
-  });
-
-  it('a broker when the feature is off', async () => {
-    setup({ rpc: { data: FEATURE_OFF, error: null } });
-    await expect(requireChecklistEditorAccess()).rejects.toThrow('Not authorized');
-  });
-
-  it('a broker when the feature key is missing', async () => {
-    setup({ rpc: { data: ORG_WITHOUT_PLAN_FEATURES, error: null } });
-    await expect(requireChecklistEditorAccess()).rejects.toThrow('Not authorized');
-  });
-
-  it('a broker when broker_get_org_features errors', async () => {
-    setup({ rpc: { data: null, error: { message: 'RPC exploded' } } });
-    await expect(requireChecklistEditorAccess()).rejects.toThrow('Not authorized');
-  });
-
-  it("a broker on the RPC's own error payload", async () => {
-    setup({ rpc: { data: NOT_AUTHENTICATED_PAYLOAD, error: null } });
-    await expect(requireChecklistEditorAccess()).rejects.toThrow('Not authorized');
   });
 
   // A10: an editor-role auth user exists AND a support session is active.
@@ -225,11 +276,10 @@ describe('isChecklistEditorEnabled', () => {
   });
 
   it.each<[string, Setup]>([
-    ['agent', { memberships: [brokerageMembership('agent')] }],
+    ['the database refuses an agent', { memberships: [brokerageMembership('agent')], canEdit: { [B]: false } }],
     ['unauthenticated', { user: null }],
-    ['feature off', { rpc: { data: FEATURE_OFF, error: null } }],
-    ['feature key missing', { rpc: { data: ORG_WITHOUT_PLAN_FEATURES, error: null } }],
-    ['rpc error', { rpc: { data: null, error: { message: 'x' } } }],
+    ['the database refuses (feature off)', { canEdit: { [B]: false } }],
+    ['rpc error', { rpcError: { message: 'x' } }],
     ['impersonating [A10]', { impersonating: true, memberships: [brokerageMembership('admin')] }],
   ])('is false when %s', async (_label, opts) => {
     setup(opts);
