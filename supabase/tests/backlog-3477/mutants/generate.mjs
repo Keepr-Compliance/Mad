@@ -142,7 +142,7 @@ const MUTANTS = [
   ["m27-add-helper-bypassed", "c08",
     (t) => editIn(t, ADD[0], ADD[1], "  IF NOT FOUND OR NOT public.can_review_submission(v_sub.organization_id) THEN", "  IF NOT FOUND THEN", "m27")],
   // --- append-only guard -----------------------------------------------------
-  ["m28-guard-without-prefix-test", "c13",
+  ["m28-guard-without-prefix-test", "c13 c16",
     (t) => editIn(t, GUARD[0], GUARD[1],
       "  FOR i IN 0 .. v_old_len - 1 LOOP\n    IF (v_new -> i) IS DISTINCT FROM (v_old -> i) THEN\n      RAISE EXCEPTION 'status_history_append_only' USING ERRCODE = '42501';\n    END IF;\n  END LOOP;\n",
       "", "m28")],

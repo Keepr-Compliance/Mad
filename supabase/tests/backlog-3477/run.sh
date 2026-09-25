@@ -143,7 +143,7 @@ case "${1:-}" in
       changed="$(diff <(grep -v '^-- ' "$MIGRATION") <(grep -v '^-- ' "$m") | grep -c '^[<>]' || true)"
       [ "$changed" -gt 0 ] || { echo "$(basename "$m"): MUTATION NOT APPLIED (identical to the shipped file)" >&2; exit 1; }
       first="$(diff <(grep -v '^-- ' "$MIGRATION") <(grep -v '^-- ' "$m") | grep -m1 '^>' | sed 's/^> *//' | cut -c1-110 || true)"
-      [ -n "$first" ] || first="$(diff <(grep -v '^-- ' "$MIGRATION") <(grep -v '^-- ' "$m") | grep -m1 '^<' | sed 's/^< */removed: /' | cut -c1-110)"
+      [ -n "$first" ] || first="$(diff <(grep -v '^-- ' "$MIGRATION") <(grep -v '^-- ' "$m") | grep -m1 '^<' | sed 's/^< */removed: /' | cut -c1-110 || true)"
       if [ -n "${MATRIX:-}" ]; then run=( "$HERE"/controls/*.sql ); else
         run=(); for t in $targets; do for c in "$HERE"/controls/"$t"-*.sql; do run+=( "$c" ); done; done
       fi
