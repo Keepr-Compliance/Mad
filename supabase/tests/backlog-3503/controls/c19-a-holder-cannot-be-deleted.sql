@@ -3,6 +3,10 @@
 -- and everybody gets: the BROKER WHO SET the agreement is named by set_by, so
 -- they are undeletable for as long as any row they wrote survives.
 --
+-- The two organization_franchise_fees FKs this control used to exercise (the
+-- broker and the org held by the franchise table's own set_by/org keys) were
+-- removed with that table (BACKLOG-3503, pm_comments 95992a3e).
+--
 -- IT ASSERTS THE CONSTRAINT NAME, NOT THE SQLSTATE, and it clears
 -- organization_members first. Both matter, and the second is why the first is
 -- possible: every fixture subject also has a membership row, and
@@ -46,16 +50,4 @@ BEGIN
   c := pg_temp.constraint_of(format('DELETE FROM public.users WHERE id = %L', current_setting('t3503.u_itadmin_a')));
   PERFORM pg_temp.check(c = 'OK',
     format('a user holding no agreement and no membership IS deletable, got %s', c));
-
-  -- now take the agreements away and the franchise table's own two keys surface
-  DELETE FROM public.agent_split_agreements;
-
-  c := pg_temp.constraint_of(format('DELETE FROM public.users WHERE id = %L', current_setting('t3503.u_broker_a')));
-  PERFORM pg_temp.check(c = 'organization_franchise_fees_set_by_fkey',
-    format('the broker is still held by the franchise fees he set, got %s', c));
-
-  c := pg_temp.constraint_of(format('DELETE FROM public.organizations WHERE id = %L', o_a));
-  PERFORM pg_temp.check(c = 'organization_franchise_fees_org_fkey',
-    format('the organization is still held by its franchise fees, got %s', c));
-
 END $$;

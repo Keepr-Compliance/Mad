@@ -26,14 +26,14 @@
  *   - `license_status = 'active'` as the spelling of "an active member" -- not a
  *     `NOT IN (...)` list, which would fail OPEN on a state added later -- in
  *     ALL THREE places it is asked: the agent's own-row rule, the broker/admin
- *     rule which fronts all four policies, and the INSERT policy's clause about
+ *     rule which fronts both policies, and the INSERT policy's clause about
  *     the SUBJECT an agreement is written for. A deactivated broker is no more
  *     entitled to the office's splits than a deactivated agent is to their own,
  *     and neither may an agreement be recorded for a deactivated agent;
- *   - SECURITY DEFINER on BOTH RLS helpers and on NEITHER read helper;
+ *   - SECURITY DEFINER on BOTH RLS helpers and on NOT the read helper;
  *   - the absence of GRANT UPDATE / GRANT DELETE, and of set_by / set_at from
- *     the INSERT column lists;
- *   - the presence of REVOKE ALL and ENABLE ROW LEVEL SECURITY on both tables,
+ *     the INSERT column list;
+ *   - the presence of REVOKE ALL and ENABLE ROW LEVEL SECURITY on the table,
  *     which are the two omissions with the largest blast radius and which no
  *     other CI check can see at all.
  *
@@ -61,8 +61,8 @@ const REPO = join(__dirname, '../../..');
 const MIGRATIONS_DIR = join(REPO, 'supabase/migrations');
 const SCHEMA_FILE = '20260922220719_backlog_3503_commission_agreements.sql';
 
-const TABLES = ['agent_split_agreements', 'organization_franchise_fees'] as const;
-const READ_HELPERS = ['split_agreement_in_force', 'franchise_fee_in_force'] as const;
+const TABLES = ['agent_split_agreements'] as const;
+const READ_HELPERS = ['split_agreement_in_force'] as const;
 const RLS_HELPERS = ['can_write_split_agreements', 'is_active_split_member'] as const;
 
 /** Read a migration with CRLF normalised (Windows CI checks out with CRLF). */
@@ -156,36 +156,36 @@ describe('BACKLOG-3503 split agreements migration', () => {
     expect(runner).toContain(SCHEMA_FILE);
   });
 
-  it('creates both tables', () => {
+  it('creates the table', () => {
     for (const t of TABLES) {
       expect(FLAT).toContain(`CREATE TABLE public.${t} (`);
     }
   });
 
-  it('enables row level security on both tables', () => {
+  it('enables row level security on the table', () => {
     for (const t of TABLES) {
       expect(FLAT).toContain(`ALTER TABLE public.${t} ENABLE ROW LEVEL SECURITY`);
     }
     expect(FLAT).not.toMatch(/DISABLE ROW LEVEL SECURITY/i);
   });
 
-  it('revokes ALL from anon and authenticated on both tables', () => {
+  it('revokes ALL from anon and authenticated on the table', () => {
     // Not a narrower revoke: the default ACL grants arwdDxtm, and the D is
     // TRUNCATE, which row-level security never evaluates.
     for (const t of TABLES) {
       expect(FLAT).toMatch(new RegExp(`REVOKE ALL ON public\\.${t} FROM anon, authenticated`, 'i'));
     }
-    expect(FLAT).not.toMatch(/REVOKE (INSERT|UPDATE|DELETE|SELECT)[^;]*ON public\.(agent_split_agreements|organization_franchise_fees)/i);
+    expect(FLAT).not.toMatch(/REVOKE (INSERT|UPDATE|DELETE|SELECT)[^;]*ON public\.agent_split_agreements/i);
   });
 
-  it('grants no UPDATE and no DELETE on either table', () => {
-    expect(FLAT).not.toMatch(/GRANT[^;]*\bUPDATE\b[^;]*ON public\.(agent_split_agreements|organization_franchise_fees)/i);
-    expect(FLAT).not.toMatch(/GRANT[^;]*\bDELETE\b[^;]*ON public\.(agent_split_agreements|organization_franchise_fees)/i);
-    expect(FLAT).not.toMatch(/GRANT ALL[^;]*ON public\.(agent_split_agreements|organization_franchise_fees)/i);
+  it('grants no UPDATE and no DELETE on the table', () => {
+    expect(FLAT).not.toMatch(/GRANT[^;]*\bUPDATE\b[^;]*ON public\.agent_split_agreements/i);
+    expect(FLAT).not.toMatch(/GRANT[^;]*\bDELETE\b[^;]*ON public\.agent_split_agreements/i);
+    expect(FLAT).not.toMatch(/GRANT ALL[^;]*ON public\.agent_split_agreements/i);
     expect(FLAT).not.toMatch(/FOR (UPDATE|DELETE)\b/i); // no UPDATE/DELETE policy either
   });
 
-  it('keeps set_by and set_at out of both INSERT column lists', () => {
+  it('keeps set_by and set_at out of the INSERT column list', () => {
     for (const t of TABLES) {
       const cols = insertGrantColumns(t);
       expect(cols.length).toBeGreaterThan(2);
@@ -195,14 +195,14 @@ describe('BACKLOG-3503 split agreements migration', () => {
     }
   });
 
-  it('gives set_by a NOT NULL default of auth.uid() on both tables', () => {
+  it('gives set_by a NOT NULL default of auth.uid() on the table', () => {
     for (const t of TABLES) {
       const create = FLAT.slice(FLAT.indexOf(`CREATE TABLE public.${t} (`));
       expect(create.slice(0, create.indexOf(');'))).toContain('set_by uuid NOT NULL DEFAULT auth.uid()');
     }
   });
 
-  it('orders the read helpers by seq DESC, and never by set_at', () => {
+  it('orders the read helper by seq DESC, and never by set_at', () => {
     for (const fn of READ_HELPERS) {
       const body = flatten(functionBody(fn));
       expect(body).toMatch(/ORDER BY [a-z]\.effective_from DESC, [a-z]\.seq DESC/i);
@@ -268,9 +268,8 @@ describe('BACKLOG-3503 split agreements migration', () => {
     expect(body).toMatch(/m\.organization_id = p_org_id/i);
   });
 
-  it('carries the split-sum and cadence CHECK constraints', () => {
+  it('carries the split-sum CHECK constraint', () => {
     expect(FLAT).toContain('CHECK (agent_pct + brokerage_pct = 100)');
-    expect(FLAT).toContain("CHECK (office_fee_cadence IN ('monthly', 'annual'))");
   });
 
   it('writes the INSERT policy member check against the NEW ROW, not against itself', () => {

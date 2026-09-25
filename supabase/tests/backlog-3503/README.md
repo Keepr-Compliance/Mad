@@ -4,28 +4,24 @@ Executes `supabase/migrations/20260922220719_backlog_3503_commission_agreements.
 — **the shipped file itself, not a copy** — on a real Postgres 17.6, and records
 what every control and every mutant did.
 
-**It has been run.** Seven times, on 2026-09-22, 2026-09-23 and 2026-09-24, every
-time on the same Postgres 17.6 test venue (the venue is named on the backlog
-item, not in this repository): as first written; again after the agent's own-row
-read was gated on active membership; again after that gate was extended to the
-broker and the admin; again after SR's implementation review; again after the
-founder ruled that an agreement may only be written FOR an active member; again
-after he **refined** that rule to admit a backdated agreement inside the agent's
-active period (see *The reversal*, *The ruling extended*, *The SR round* and *The
-subject*); and again after the table, both RLS helpers and the agreement read
-helper were renamed to replace "commission" with "split" throughout their
-identifiers — `agent_split_agreements`, `split_agreement_in_force`,
-`can_write_split_agreements`, `is_active_split_member` — plus every derived
-constraint, index and policy name (BACKLOG-3503, the founder's terminology
-correction: a deal pays a *commission*; the brokerage/agent division of it is a
-*split*). The recorded run is the seventh: **30 controls, 210 assertions, all
-green; 41 mutants × 30 controls = 1,230 runs, 3:43.90 wall clock (`time`,
-real).** Every `RED:`/`green:` line is identical to the pre-rename round with
-zero exceptions — the rename changed no behaviour. (One `CONTROL FAILED` detail
-message, C26's, differs only in its `now()` timestamp; that is message text, not
-a RED set.) Every mutant reddens at least one control and every control is
-reddened by at least one mutant. Every result below was measured; none was
-predicted. `control-run.txt`
+**It has been run.** Eight times, on 2026-09-22, 2026-09-23, 2026-09-24 and
+2026-09-25, every time on the same Postgres 17.6 test venue (the venue is named
+on the backlog item, not in this repository): as first written; again after the
+agent's own-row read was gated on active membership; again after that gate was
+extended to the broker and the admin; again after SR's implementation review;
+again after the founder ruled that an agreement may only be written FOR an
+active member; again after he **refined** that rule to admit a backdated
+agreement inside the agent's active period (see *The reversal*, *The ruling
+extended*, *The SR round* and *The subject*); again after the table, both RLS
+helpers and the agreement read helper were renamed to replace "commission" with
+"split" throughout their identifiers; and again after the office fee and the
+franchise fee were **removed** from the migration before it was ever applied
+(see *The fee-trim round*, below — founder decision, pm_comments `95992a3e` on
+BACKLOG-3503; the work moves to BACKLOG-3534). The recorded run is the eighth:
+**28 controls, 147 assertions, all green; 37 mutants × 28 controls = 1,036
+runs, 3:01.33 wall clock (`time`, real).** Every mutant reddens at least one
+control and every control is reddened by at least one mutant. Every result
+below was measured; none was predicted. `control-run.txt`
 and `mutant-run.txt` in this directory are the runs' own output, unedited.
 
 It is not in CI: CI has no database. The text-level tripwire that does run in CI
@@ -81,8 +77,8 @@ Four consequences, all handled in `run.sh` and all worth knowing before editing 
 H=supabase/tests/backlog-3503/run.sh
 
 bash $H gate       # venue gate. Stop on any GATE FAIL.
-bash $H controls   # 30 controls, each in its own rolled-back transaction
-bash $H mutants    # 41 mutants x 30 controls
+bash $H controls   # 28 controls, each in its own rolled-back transaction
+bash $H mutants    # 37 mutants x 28 controls
 bash $H mutants m24   # one mutant, by name fragment
 ```
 
@@ -91,7 +87,8 @@ without them.** The venue is not named in this repository — `backlog-3364/run.
 set that precedent by taking its target as input and validating it rather than
 publishing it. Both values are recorded on the backlog item.
 
-A full `mutants` run took **170 s**, and **175 s** on the round after it;
+A full `mutants` run took **170 s**, and **175 s** on the round after it; after
+the fee trim (37 mutants × 28 controls) it took **3:01.33** (`time`, real).
 `controls` takes about 5 s. An *implausibly fast* green is a broken harness — if
 `controls` returns instantly with no assertion counts, the stream never reached
 psql.
@@ -106,7 +103,7 @@ nothing leaked out of a transaction.
 | database / connected role / server | `postgres` / `postgres` / 17.6 |
 | `public.users` rows | **0** |
 | `public.organizations` rows | **0** |
-| `agent_split_agreements` / `organization_franchise_fees` exist | **no** |
+| `agent_split_agreements` exists | **no** |
 
 The gate refuses unless all four hold. The empty-`users` check is the one that
 makes production unreachable by construction.
@@ -122,7 +119,7 @@ and both are why the migration is shaped as it is:
 
 ---
 
-## Controls — all 30 GREEN, 210 assertions
+## Controls — all 28 GREEN, 147 assertions
 
 Each runs inside `BEGIN … ROLLBACK` after `fixtures.sql`. Role cases run as
 `authenticated` with `request.jwt.claim.sub`. `pg_temp.check` counts every
@@ -131,36 +128,39 @@ matched nothing cannot pass.
 
 | Control | Proves | Assertions |
 |---|---|---|
-| `c01` | a broker of org B sees none of org A's agreements or franchise fees | 4 |
+| `c01` | a broker of org B sees none of org A's agreements | 2 |
 | `c02` | an agent sees their own agreement rows and no colleague's | 2 |
 | `c03` | an agent cannot insert an agreement, not even their own | 1 |
-| `c04` | `it_admin` can neither write nor read either table (founder ruling) | 4 |
-| `c04b` | broker **and** admin can insert on both tables — the pair that makes an `is_org_admin` write rule turn both C4 and C4b red | 4 |
-| `c05` | no UPDATE: **42501 specifically**, and the row unchanged. A grant without a policy would be a silent 0-row no-op instead | 3 |
-| `c06` | no DELETE, and nothing disappears | 3 |
-| `c07` | signed out, nothing is reachable — not the tables, not the helpers | 4 |
-| `c08` | a client cannot name `set_by`; a plain broker INSERT lands `set_by = auth.uid()`, `set_at = now()` | 4 |
-| `c09` | a broker of A cannot write into org B, on **either** table (the franchise half has no member clause, so the org check is all that stops it) | 4 |
+| `c04` | `it_admin` can neither write nor read the table (founder ruling) | 2 |
+| `c04b` | broker **and** admin can insert — the pair that makes an `is_org_admin` write rule turn both C4 and C4b red | 2 |
+| `c05` | no UPDATE: **42501 specifically**, and the row unchanged. A grant without a policy would be a silent 0-row no-op instead | 2 |
+| `c06` | no DELETE, and nothing disappears | 2 |
+| `c07` | signed out, nothing is reachable — not the table, not the helper | 2 |
+| `c08` | a client cannot name `set_by`; a plain broker INSERT lands `set_by = auth.uid()`, `set_at = now()` | 3 |
+| `c09` | a broker of A cannot write into org B | 3 |
 | `c10` | the helper answers "in force ON DATE D", not "today", and never returns a row dated after D | 4 |
 | `c11` | two rows share `effective_from`; the one written LAST wins although its `set_at` is EARLIER | 4 |
-| `c12` | absent is ZERO ROWS, never a row of zeros | 2 |
-| `c13` | the read helpers are SECURITY INVOKER — an agent asking about a colleague gets the correct non-answer | 4 |
-| `c14` | the franchise fee is effective-dated the same way, **resolves a same-day tie the same way** (the correction wins, not the row with the later `set_at`), and an agent cannot read it in M1 | 6 |
-| `c15` | the constraints that encode the fee model: the split sums to 100, cadence is constrained, no fee is negative | 5 |
-| `c16` | the founder's worked example, computed from what the helpers return | 7 |
-| `c17` | catalog: **both** RLS helpers are DEFINER with `SET search_path = public`; neither read helper is DEFINER; the member check names the NEW ROW's org; the own-row policy carries both of its terms; **and a sweep of every policy for a self-comparison** | 16 |
-| `c18` | **privilege level**: UPDATE / DELETE / TRUNCATE / REFERENCES / TRIGGER absent for `anon` and `authenticated` on both tables; `set_by` and `set_at` not INSERT-grantable; plus the behavioural half — the weakest signed-in role's TRUNCATE is refused and all twelve rows survive | 34 |
-| `c19` | a user holding agreements cannot be deleted, **asserted by constraint name**, with memberships cleared first; the same for the organization; the broker who *set* the rows is held too; and a user holding nothing IS deletable | 7 |
-| `c20` | catalog: all five foreign keys exist and every one is ON DELETE NO ACTION | 6 |
+| `c12` | absent is ZERO ROWS, never a row of zeros | 1 |
+| `c13` | the read helper is SECURITY INVOKER — an agent asking about a colleague gets the correct non-answer | 3 |
+| `c15` | the constraint that encodes the split model: the split sums to 100 | 2 |
+| `c17` | catalog: **both** RLS helpers are DEFINER with `SET search_path = public`; the read helper is not DEFINER; the member check names the NEW ROW's org; the own-row policy carries both of its terms; **and a sweep of every policy for a self-comparison** | 14 |
+| `c18` | **privilege level**: UPDATE / DELETE / TRUNCATE / REFERENCES / TRIGGER absent for `anon` and `authenticated`; `set_by` and `set_at` not INSERT-grantable; plus the behavioural half — the weakest signed-in role's TRUNCATE is refused and all eight rows survive | 18 |
+| `c19` | a user holding agreements cannot be deleted, **asserted by constraint name**, with memberships cleared first; the same for the organization; the broker who *set* the rows is held too; and a user holding nothing IS deletable | 5 |
+| `c20` | catalog: all three foreign keys exist and every one is ON DELETE NO ACTION | 4 |
 | `c21` | a **deactivated** agent (`license_status = 'suspended'`, membership row intact) reads none of their own rows — table and helper — while their broker still reads all of them | 6 |
 | `c22` | a **removed** agent (membership row DELETEd) reads none of their own rows — table and helper — while their broker still reads all of them. They are still an active member of the *other* org, which is what makes an org-blind rule visible | 7 |
-| `c23` | a **deactivated broker** and a **deactivated admin** read 0 from **both** tables, by table and by helper, while the active broker of the same org reads all 7 agreements and all three franchise fees in the same transaction | 18 |
-| `c24` | neither of them can INSERT into either table — **42501 specifically** — nothing lands, and the active broker of the same org still writes both | 8 |
+| `c23` | a **deactivated broker** and a **deactivated admin** read 0, by table and by helper, while the active broker of the same org reads all 7 agreements in the same transaction | 11 |
+| `c24` | neither of them can INSERT — **42501 specifically** — nothing lands, and the active broker of the same org still writes | 4 |
 | `c25` | the INSERT policy's **subject** clause, four shapes over the same rows: a **deactivated** agent dated **inside** their active period is **admitted** (the founder's refinement), the same agent dated **after** they left is refused, a **removed** agent is refused by the EXISTS finding no row at all, and an **active** agent is admitted at any date — two admissions so a write rule stuck at false cannot satisfy it | 13 |
 | `c26` | the deactivation trigger records the **transition**: an active member has no date; deactivating stamps one; a write that does not name `license_status` leaves it; **re-deactivating** an already-suspended row does not move it; an unrelated column bump does not move it; reactivating **clears** it; deactivating again re-stamps; expiring leaves it | 8 |
 | `c27` | the date boundary **swept, not sampled**: the day before (allowed), the day **of** (allowed — inclusive), the day after (refused `42501`), rows landed to match, a suspended row with **no recorded date** (refused — fail closed), and the comparison resolving against **UTC** under an explicit `America/Los_Angeles` session | 11 |
 | `c28` | the founder's own case end to end: the agent has already left, the broker records an agreement dated to the March closing, and `split_agreement_in_force` **resolves it on the day of the closing** instead of returning zero rows — with the refusal that still stands (dated after they left) asserted beside it | 6 |
 | `c29` | the date arm's **status gate**: a subject at `'expired'` still carrying a deactivation date is refused even inside their recorded period, no row survives, and a **suspended** subject at the same offset is admitted | 5 |
+
+**`c14` (the franchise fee's same-day ordering) and `c16` (the founder's worked
+example, which computed a commission net of the franchise fee) were REMOVED in
+the fee-trim round below.** Numbering is left with the gap rather than
+renumbered — see *The fee-trim round*.
 
 **Why C18 exists, and why it is late.** C05 and C06 assert a SQLSTATE at the
 moment of a write. They cannot see a privilege that is *granted but never
@@ -288,13 +288,15 @@ One EXISTS, not two, and not a call to `is_active_split_member` beside a
 role test: with two clauses a caller could satisfy one by one membership row and
 the other by a different row. One row must carry both.
 
-**One helper fronts all four policies** — the broker/admin SELECT and INSERT on
-`agent_split_agreements`, and the same pair on
-`organization_franchise_fees` — so the term lands on the read and the write, on
-both tables, from one edit. That is the fit rather than a compromise: the ruling
-covers reading and writing on both tables, so there is no half of it that wants
-a different rule, and splitting the helper would mean writing the same sentence
-twice and letting the copies drift.
+**One helper fronts both policies** — the broker/admin SELECT and INSERT on
+`agent_split_agreements` — so the term lands on the read and the write from one
+edit. (At the time this round was written, the same helper also fronted the
+pair of policies on `organization_franchise_fees`; that table was removed in
+*The fee-trim round*, below, and the sentence here is corrected to the table
+that remains rather than left describing one that no longer exists.) That is
+the fit rather than a compromise: the ruling covers reading and writing, so
+there is no half of it that wants a different rule, and splitting the helper
+would mean writing the same sentence twice and letting the copies drift.
 
 **The spelling is `= 'active'` for the reasons already set out above** — the
 writers admit fewer values than the CHECK does, and an exclusion list fails OPEN
@@ -506,46 +508,54 @@ reading the RED set rather than the mutant.
 
 ---
 
-## Mutants — 41, every one reds at least one control
+## Mutants — 37, every one reds at least one control
 
 Each prints `MUTATION APPLIED: <catalog evidence>` inside the transaction before
 any control runs, after verifying its own effect from the catalog; `run.sh`
 refuses a red without that line (`RED WITHOUT PROOF`) and refuses a mutant that
-never printed one. 41/41 printed it, and no mutant has an empty RED set. Full output in `mutant-run.txt`.
+never printed one. 37/37 printed it, and no mutant has an empty RED set. Full
+output in `mutant-run.txt`.
+
+**`m18`, `m27`, `m30` and `m37` were REMOVED in the fee-trim round** (below):
+`m18` and `m30` mutated `organization_franchise_fees` objects that no longer
+exist; `m37` mutated `franchise_fee_in_force`, also removed; `m27` mutated RLS
+on both tables and, with the franchise table gone, its body and RED set became
+byte-identical to `m26`'s — a duplicate mutant misreports the suite (the same
+reasoning that removed `m39` in an earlier round), so it was removed rather than
+kept as a copy. No control lost its only red owner: `m18`'s c04/c23 keep other
+owners below, `m30`'s c19/c20 keep `m29`/`m31`, and `m27`'s full set was already
+a subset of `m26`'s.
 
 | Mutant | RED |
 |---|---|
-| `m01` read helpers marked SECURITY DEFINER | c13 c17 c21 c22 c23 |
-| `m02` write rule reuses `is_org_admin` | c01 c04 c04b c05 c06 c08 c10 c11 c14 c15 c16 c21 c22 c23 c24 c25 c27 c28 c29 |
-| `m03` `set_at DESC` ordered before `seq DESC` | c10 c11 c16 |
-| `m04` `effective_from ASC` | c10 c11 c16 c28 |
-| `m05` no `effective_from <= p_on_date` filter | c10 c11 c12 c14 c16 |
+| `m01` read helper marked SECURITY DEFINER | c13 c17 c21 c22 c23 |
+| `m02` write rule reuses `is_org_admin` | c01 c04 c04b c05 c06 c08 c10 c11 c15 c21 c22 c23 c24 c25 c27 c28 c29 |
+| `m03` `set_at DESC` ordered before `seq DESC` | c10 c11 |
+| `m04` `effective_from ASC` | c10 c11 c28 |
+| `m05` no `effective_from <= p_on_date` filter | c10 c11 |
 | `m06` `set_by` inside the INSERT grant | c08 c18 |
 | `m07` `set_by` has no default | c04b c08 c15 c24 c25 c27 c28 c29 |
 | `m08` UPDATE granted, with a policy | c05 |
 | `m09` DELETE granted, with a policy | c06 c18 |
 | `m10` anon can read | c07 c18 |
-| `m11` write rule ignores the org *(rebased)* | c01 c06 c09 c13 c23 |
-| `m12` writer SELECT policy `USING (true)` | c01 c02 c04 c06 c13 c14 c21 c22 c23 |
+| `m11` write rule ignores the org *(rebased)* | c01 c06 c13 c23 |
+| `m12` writer SELECT policy `USING (true)` | c01 c02 c04 c06 c13 c21 c22 c23 |
 | `m13` agreements readable org-wide | c02 c04 c13 c17 c21 c22 c23 |
 | `m14` helper ignores the agent | c10 c12 c13 |
 | `m15` no split-sum CHECK | c15 |
 | `m16` `it_admin` added to the writer list *(rebased)* | c04 |
-| `m17` `agent` added to the writer list *(rebased)* | c02 c03 c13 c14 c22 |
-| `m18` franchise fee readable org-wide | c04 c14 c23 |
+| `m17` `agent` added to the writer list *(rebased)* | c02 c03 c13 c22 |
 | `m19` INSERT policy without the member check | c09 c17 c25 c27 c28 c29 |
 | `m20` INSERT policy's unqualified `organization_id` | c17 |
 | `m21` UPDATE granted **without** a policy | c05 |
 | `m22` DELETE granted **without** a policy | c06 c18 |
-| `m23` self-comparison in a *different* policy | c17 |
+| `m23` self-comparison in a *different* policy — RETARGETED (fee trim) onto the broker/admin SELECT policy; C17's named assertions never inspect that policy, so only its sweep can catch it | c17 |
 | **`m24` TRUNCATE granted** | **c18** |
 | **`m25` `REVOKE ALL` omitted** (the default ACL grant stands) | **c05 c06 c07 c08 c18** |
 | **`m26` RLS not enabled on the agreements table** | **c01 c02 c03 c04 c06 c09 c13 c21 c22 c23 c24 c25 c27 c28 c29** |
-| **`m27` RLS not enabled on either table** | **c01 c02 c03 c04 c06 c09 c13 c14 c21 c22 c23 c24 c25 c27 c28 c29** |
 | **`m28` `SET search_path` dropped from the DEFINER write rule** | **c17** |
 | **`m29` agent FK rewritten ON DELETE CASCADE** | **c19 c20** |
-| **`m30` franchise `set_by` FK rewritten ON DELETE CASCADE** | **c19 c20** |
-| **`m31` org FK written ON DELETE RESTRICT, not NO ACTION** | **c19 c20** |
+| **`m31` org FK written ON DELETE RESTRICT, not NO ACTION** | **c20** |
 | **`m32` own-row policy reverted to the bare `auth.uid()` predicate** | **c17 c21 c22** |
 | **`m33` active-membership rule drops the `license_status` filter** | **c21** |
 | **`m34` active-membership rule drops the organization scope** | **c22** |
@@ -555,7 +565,21 @@ never printed one. 41/41 printed it, and no mutant has an empty RED set. Full ou
 | **`m40` the date comparison loses its UTC pin** | **c27** |
 | **`m41` the boundary becomes exclusive (`<`)** | **c27** |
 | **`m42` the date arm loses its status gate** | **c29** |
-| **`m37` `franchise_fee_in_force` ordered by `set_at DESC` before `seq DESC`** | **c14 c16** |
+
+**Measured, not carried forward:** removing `organization_franchise_fees` from
+`c01`, `c04`, `c04b`, `c05`, `c06`, `c07`, `c08`, `c09`, `c12`, `c13` and `c18`
+also removed the franchise-half assertion each of those controls used to carry,
+which is why several RED sets above lost a member relative to the pre-trim
+table (e.g. `m11` no longer reds `c09` — `c09`'s own header note says the
+franchise-fee half was "load-bearing on its own" because that policy had no
+member-EXISTS clause; the agreement-cross-org half is still `c09`'s point and
+is unaffected). **`m31` similarly lost `c19`** (pre-trim it reddened `c19 c20`;
+this round only `c20`): C19's own two tail assertions, removed with the
+franchise table, were where that red came from, for the same DROP/re-ADD
+trigger-reordering reason the "Why C20 is a separate file" note above
+describes — not verified against the pre-trim file by this round, so read it
+as the measured delta, not a re-derived mechanism. Every number in this table
+is this round's own `mutant-run.txt`, not inherited.
 
 `m21`/`m22` and `m25` are the reason C05 and C06 assert a **specific** SQLSTATE.
 A grant without a policy makes the write a silent zero-row no-op, and every one
@@ -787,6 +811,123 @@ are unchanged.
 
 ---
 
+### The fee-trim round — BACKLOG-3503, 2026-09-24 / 25
+
+The founder, shown exactly what each fee piece cost structurally (the office
+fee: two columns and two CHECKs; the franchise fee: its own table, index, read
+helper, RLS, grants and two policies), ruled to remove both before the
+migration was ever applied: *"the issues with fees is that every brokrage does
+it differently... some brokrages clen feees before split some do it after the
+split etc."* Decision recorded in `pm_comments` `95992a3e` on BACKLOG-3503.
+That supersedes his 2026-09-22 ruling that the franchise fee applies "off the
+top, before the split" — that was one brokerage's arrangement, not a rule the
+schema may hard-code. The removed structure moves to **BACKLOG-3534**, a
+closing-charges model where each brokerage defines its own arithmetic,
+including deduction order.
+
+**Pre-flight, re-verified before editing:** `schema_migrations` has no
+`20260922220719` row; `agent_split_agreements`, `organization_franchise_fees`
+and `organization_members.deactivated_at` are all still absent from
+production. Edited in place, not a follow-on migration, for the same reason
+the rename round gives.
+
+**Removed:** `office_fee_amount` / `office_fee_cadence` (columns + 2 CHECKs +
+their mention in the INSERT grant) from `agent_split_agreements`;
+`organization_franchise_fees` in full (table, comment, index,
+`franchise_fee_in_force()`, its RLS enable/revoke/grants, and its two
+policies). **Kept:** the split itself (`agent_pct`/`brokerage_pct`, the sum-100
+CHECK, `effective_from`, `seq`, `note`, `set_by`/`set_at`, all three remaining
+FKs, the in-force index) and `organization_members.deactivated_at` plus
+`org_members_track_deactivation` in full — not a fee, and the machinery behind
+the founder's departed-agent rule (`92f46fb4`).
+
+**Harness, measured this round:**
+
+| | before | after | accounted for by |
+|---|---|---|---|
+| controls | 30 | 28 | `c14` (franchise same-day ordering) and `c16` (the founder's worked example, which computed a commission net of the franchise fee) removed whole |
+| assertions | 210 | 147 | every one of the 63 removed traced to a removed object — table below |
+| mutants | 41 | 37 | `m18`, `m30`, `m37` removed with their targets; `m27` removed as a post-trim duplicate of `m26` |
+| mutant × control runs | 1,230 | 1,036 | 37 × 28 |
+| wall clock (`time`, real) | 3:43.90 | 3:01.33 | fewer runs |
+
+**Assertion delta, by control, all measured against the actual run
+(`control-run.txt`), not estimated:**
+
+| Control | before → after | Δ | why |
+|---|---|---|---|
+| c01 | 4 → 2 | −2 | franchise cross-org SELECT assertions removed |
+| c04 | 4 → 2 | −2 | franchise read + franchise INSERT-refused removed |
+| c04b | 4 → 2 | −2 | franchise INSERT-permitted removed (×2 roles ÷2, net −2) |
+| c05 | 3 → 2 | −1 | franchise UPDATE-refused removed |
+| c06 | 3 → 2 | −1 | franchise DELETE-refused removed |
+| c07 | 4 → 2 | −2 | franchise SELECT + franchise helper EXECUTE removed |
+| c08 | 4 → 3 | −1 | franchise set_by-not-settable removed |
+| c09 | 4 → 3 | −1 | franchise cross-org INSERT-refused removed |
+| c12 | 2 → 1 | −1 | `franchise_fee_in_force` absent-is-zero removed |
+| c13 | 4 → 3 | −1 | franchise helper SECURITY INVOKER assertion removed |
+| c15 | 5 → 2 | −3 | cadence CHECK, negative-office-fee, negative-franchise-fee removed; split-sum kept |
+| c17 | 16 → 14 | −2 | policy-catalog sweep loop: 5 policies → 3 |
+| c18 | 34 → 18 | −16 | every `FOREACH t` loop iteration over `organization_franchise_fees` removed (privileges × 2 roles × 7 checks = 14, TRUNCATE behavioural −1, survival-count −1) |
+| c19 | 7 → 5 | −2 | the two franchise-table FK tail assertions removed |
+| c20 | 6 → 4 | −2 | 2 of 5 FK catalog entries removed (org/set_by on the franchise table); count assertion 5→3 |
+| c23 | 18 → 11 | −7 | franchise precondition (−1), franchise reads in the deactivated-writer loop (−4), franchise reads in the active-broker block (−2) |
+| c24 | 8 → 4 | −4 | franchise INSERT-refused in the deactivated-writer loop (−2), franchise nothing-landed (−1), franchise active-broker-writes (−1) |
+| c14 (removed whole) | 6 → 0 | −6 | control deleted |
+| c16 (removed whole) | 7 → 0 | −7 | control deleted |
+| **total** | **210 → 147** | **−63** | fully accounted, zero unexplained |
+
+Every other control (`c02 c03 c10 c11 c21 c22 c25 c26 c27 c28 c29`) was
+untouched in assertion count — office-fee columns were stripped from their
+INSERT literals where present, but that changes no assertion, only the
+statement text.
+
+**Judgment calls, made and recorded:**
+
+1. **`c16` removed whole rather than kept partial.** Its 7 assertions computed
+   one worked example — commission minus the franchise fee minus the split —
+   and none of the intermediate values (`commission`, `remainder`,
+   `brok_amt`, `agent_amt`) exist without a fee to subtract. The split-only
+   values it touched (`a_pct`/`b_pct` in force on a date) are already `c10`'s
+   point. No mutant lost its only red: `m02`, `m03`, `m04`, `m05`, `m07` all
+   owned `c16` alongside other controls that remain.
+2. **`m23` retargeted, not removed.** Its purpose — proving C17's *sweep*
+   assertion fires on a site the *named* assertions never inspect — needed a
+   policy outside `agent_split_agreements_select_own` and
+   `_insert_writer`. Pre-trim that was
+   `organization_franchise_fees_select_writer`; post-trim the only such policy
+   left is `agent_split_agreements_select_writer` (the broker/admin read),
+   which C17's named assertions likewise never inspect. Re-measured: still
+   reds `c17` alone.
+3. **`m27` removed as a duplicate, not merely redundant.** Pre-trim it dropped
+   RLS on both tables; with `organization_franchise_fees` gone, its second
+   `ALTER TABLE` would fail against a table that no longer exists, and its
+   remaining effect is byte-identical to `m26`'s. Shipping a duplicate mutant
+   misreports the suite's size — the same reasoning `m39` was removed for in
+   an earlier round.
+
+**CI tripwire, re-run at this round:** `commission-agreements-3503.test.ts` —
+`TABLES` and `READ_HELPERS` narrowed to one element each, the cadence-CHECK
+assertion removed, six `it()` descriptions and their regexes de-pluralized
+from "both tables"/"either table" to the singular. **20 passed, 20 total**,
+both before and after. Proved non-vacuous the same way the original suite was:
+`REVOKE ALL ON public.agent_split_agreements FROM anon, authenticated;`
+narrowed to `REVOKE INSERT, UPDATE, DELETE ...` (a single exact-string
+replace, confirmed matching exactly once), suite re-run — **1 failed, 19
+passed, 20 total**, the failing test naming exactly *"revokes ALL from anon
+and authenticated on the table"* — then restored byte-for-byte (`diff` against
+the pre-mutation copy, empty) and re-run — **20 passed, 20 total**.
+
+**Harness re-run in full at this round, all on the same venue as every prior
+round:** `gate` → `target_tables_absent=true` before and after; `controls` →
+28/28 green, 147 assertions; `mutants` → 37/37 printed `MUTATION APPLIED`,
+zero `RED WITHOUT PROOF`, zero `VOID`, zero empty RED sets, every one of the 28
+controls reddened by at least one mutant. `control-run.txt` and
+`mutant-run.txt` in this directory are this round's own unedited output,
+superseding the pre-trim logs.
+
+---
+
 ## Text tripwire (CI) — made to fail before being trusted
 
 `npx jest --config broker-portal/jest.config.js broker-portal/__tests__/migrations/commission-agreements-3503.test.ts --bail=0`
@@ -800,11 +941,18 @@ any of these reverts, so no `git checkout --` could discard it.
 
 Rows reading `n/16`, `n/17` and `n/18` were measured in earlier rounds, when the
 suite had that many tests and the text they anchor on was already in its current
-form; they were not re-run. The three rows reading `n/20` are this round's — the
-active-period refinement — and each printed `git diff --numstat` (`1 1`) and the
-mutated line before the suite ran. `Tests: 0 total` never appeared; every run
-reported 20 total. The implementation was committed at `09b41d4e3` **before** any
-of these reverts, so no `git checkout --` could discard it.
+form; they were not re-run. The three rows below them reading `n/20` are the
+active-period-refinement round's, and each printed `git diff --numstat` (`1 1`)
+and the mutated line before the suite ran. `Tests: 0 total` never appeared;
+every run reported 20 total. The implementation was committed at `09b41d4e3`
+**before** any of these reverts, so no `git checkout --` could discard it.
+
+**Two rows below are now historical only.** "franchise table's `ENABLE ROW
+LEVEL SECURITY` line deleted" and "the franchise table renamed" both mutate
+`organization_franchise_fees` objects, which the fee-trim round below removed
+from the file; neither mutation can be reproduced against the current file.
+They are left in the table as the record of what was proved at the time. The
+fee-trim round's own proof is the last row.
 
 | Mutation | Tests | RED `it()` |
 |---|---|---|
@@ -837,6 +985,7 @@ of these reverts, so no `git checkout --` could discard it.
 | the migration opens its own transaction | 1/16 | opens no transaction of its own |
 | the franchise table renamed | 2/16 | creates both tables; gives set_by a NOT NULL default … |
 | `run.sh` pointed at a different migration stamp | 1/16 | the file is not empty and the harness reads the same file CI does |
+| **`REVOKE ALL` narrowed to `REVOKE INSERT, UPDATE, DELETE`** (fee-trim round, post-trim file, single-table assertion) | **1/20** | revokes ALL from anon and authenticated on the table |
 
 **One false green, and what it was.** The split-sum mutation was first written as
 a replacement of the *first* occurrence of `CHECK (agent_pct + brokerage_pct =

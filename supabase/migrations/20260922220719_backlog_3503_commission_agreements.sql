@@ -1,5 +1,5 @@
 -- ============================================================================
--- Migration: split agreements -- the agent split and the office franchise fee
+-- Migration: split agreements -- the agent/brokerage split
 -- Backlog: BACKLOG-3503 (M1 of the commission-tracking epic; BACKLOG-3504 reads it)
 --
 -- NOT APPLIED TO PRODUCTION BY THIS PR. The apply is a separate step taken on
@@ -14,24 +14,31 @@
 --
 -- Creates
 -- ---------------------------------------------------------------------------
---   agent_split_agreements    one row = the whole agreement in force for
---                                  one agent from one date: the split, the
---                                  office fee and its cadence.
---   organization_franchise_fees    one row = the flat franchise fee the office
---                                  pays per closing, from one date.
+--   agent_split_agreements    one row = the whole split agreement in force
+--                                  for one agent from one date: agent_pct and
+--                                  brokerage_pct.
 --
---   Both are APPEND-ONLY LEDGERS. A change is a new row with a later
+--   It is an APPEND-ONLY LEDGER. A change is a new row with a later
 --   effective_from (or, on the same date, a later seq). Nothing is edited and
 --   nothing is deleted, so the history of what an agent was promised survives.
 --
+--   BACKLOG-3503 originally shipped this table with an office fee (two
+--   columns) and a sibling table, organization_franchise_fees, for a flat
+--   per-closing franchise fee. Both were REMOVED before this migration was
+--   ever applied (founder decision, pm_comments 95992a3e on BACKLOG-3503):
+--   every brokerage reconciles a closing differently -- some deduct fees
+--   before the split, some after -- so no fee model belongs in the schema
+--   yet. That work moves to BACKLOG-3534, a closing-charges model where each
+--   brokerage defines its own arithmetic. This migration stores the standing
+--   split agreement only.
+--
 --   can_write_split_agreements(uuid)   the broker/admin rule, SECURITY
 --                                  DEFINER. An ACTIVE broker or admin of that
---                                  organization. Fronts all four policies: the
---                                  broker/admin SELECT and INSERT on both tables.
+--                                  organization. Fronts both policies: the
+--                                  broker/admin SELECT and INSERT.
 --   is_active_split_member(uuid)       the agent's own-row rule, SECURITY
 --                                  DEFINER. An ACTIVE member of that organization.
 --   split_agreement_in_force(uuid, uuid, date)   read helper, INVOKER
---   franchise_fee_in_force(uuid, date)                read helper, INVOKER
 --
 -- Alters (the only pre-existing table this migration touches)
 -- ---------------------------------------------------------------------------
@@ -67,29 +74,26 @@
 --     A team lead's cut, or a referral fee paid out of the same remainder,
 --     cannot be expressed while this CHECK stands. That was decided knowingly;
 --     record it as a foreclosure, not a safety rail. Undoing it is a migration.
---     Likewise organization_franchise_fees.amount is a FLAT amount: a
---     percentage-based franchise fee would need a new column. And
---     `CHECK (office_fee_cadence IN ('monthly', 'annual'))` forecloses a
---     PER-TRANSACTION office fee in exactly the same way. All three are the
---     founder's rulings and all three are right; they are listed here because
---     the header is where foreclosures get recorded, not because any is in doubt.
+--     (The office-fee and franchise-fee CHECKs this note used to discuss here
+--     were removed with those columns/table before this migration was ever
+--     applied -- see the Creates section above and BACKLOG-3534.)
 --
 -- (d) `seq` IS A GLOBALLY SHARED IDENTITY AND IT IS CLIENT-VISIBLE. One
 --     sequence serves every organization, and `seq` is returned by SELECT * and
---     by both read helpers (RETURNS SETOF <table>). It must stay -- it is the
+--     by the read helper (RETURNS SETOF <table>). It must stay -- it is the
 --     tie-breaker the same-day ordering rests on -- but BACKLOG-3504 selects
 --     explicit columns rather than *, and does not render or ship `seq`.
 --
 -- (e) A USER WHO HOLDS AN AGREEMENT CANNOT BE DELETED, AND SO CANNOT THE
---     BROKER WHO WROTE IT. All four foreign keys are ON DELETE NO ACTION, so
---     deleting a user or an organization that appears in either table fails
+--     BROKER WHO WROTE IT. All three foreign keys are ON DELETE NO ACTION, so
+--     deleting a user or an organization that appears in the table fails
 --     with 23503. That is the intent for `agent_user_id`. The wider,
 --     less obvious half is `set_by`: the broker or admin who SET an agreement
 --     is named by that FK, so they become undeletable too, for as long as any
 --     row they wrote survives -- which, in an append-only ledger, is forever.
 --     No production path hard-deletes a `public.users` or `public.organizations`
 --     row today (measured; SCIM's delete is a soft suspend), so this changes
---     nothing that exists. Control C19 asserts all four constraints BY NAME.
+--     nothing that exists. Control C19 asserts all three constraints BY NAME.
 --
 -- Ordering contract (BACKLOG-3504 depends on it)
 -- ---------------------------------------------------------------------------
@@ -128,8 +132,6 @@ CREATE TABLE public.agent_split_agreements (
   agent_user_id      uuid          NOT NULL,
   agent_pct          numeric(5,2)  NOT NULL,
   brokerage_pct      numeric(5,2)  NOT NULL,
-  office_fee_amount  numeric(12,2) NOT NULL,
-  office_fee_cadence text          NOT NULL,
   effective_from     date          NOT NULL,
   note               text          NULL,
   set_by             uuid          NOT NULL DEFAULT auth.uid(),
@@ -148,10 +150,6 @@ CREATE TABLE public.agent_split_agreements (
     CHECK (brokerage_pct >= 0 AND brokerage_pct <= 100),
   CONSTRAINT agent_split_agreements_split_sum_check
     CHECK (agent_pct + brokerage_pct = 100),
-  CONSTRAINT agent_split_agreements_office_fee_amount_check
-    CHECK (office_fee_amount >= 0),
-  CONSTRAINT agent_split_agreements_office_fee_cadence_check
-    CHECK (office_fee_cadence IN ('monthly', 'annual')),
   CONSTRAINT agent_split_agreements_note_check
     CHECK (note IS NULL OR char_length(btrim(note)) BETWEEN 1 AND 2000)
 );
@@ -162,33 +160,6 @@ COMMENT ON TABLE public.agent_split_agreements IS
 CREATE INDEX agent_split_agreements_in_force_idx
   ON public.agent_split_agreements
      (organization_id, agent_user_id, effective_from DESC, seq DESC);
-
--- ============================ 2. the org franchise fee ==========================
-CREATE TABLE public.organization_franchise_fees (
-  id              uuid          NOT NULL DEFAULT gen_random_uuid(),
-  seq             bigint        GENERATED ALWAYS AS IDENTITY,
-  organization_id uuid          NOT NULL,
-  amount          numeric(12,2) NOT NULL,
-  effective_from  date          NOT NULL,
-  note            text          NULL,
-  set_by          uuid          NOT NULL DEFAULT auth.uid(),
-  set_at          timestamptz   NOT NULL DEFAULT now(),
-  CONSTRAINT organization_franchise_fees_pkey PRIMARY KEY (id),
-  CONSTRAINT organization_franchise_fees_seq_key UNIQUE (seq),
-  CONSTRAINT organization_franchise_fees_org_fkey
-    FOREIGN KEY (organization_id) REFERENCES public.organizations(id),
-  CONSTRAINT organization_franchise_fees_set_by_fkey
-    FOREIGN KEY (set_by) REFERENCES public.users(id),
-  CONSTRAINT organization_franchise_fees_amount_check CHECK (amount >= 0),
-  CONSTRAINT organization_franchise_fees_note_check
-    CHECK (note IS NULL OR char_length(btrim(note)) BETWEEN 1 AND 2000)
-);
-
-COMMENT ON TABLE public.organization_franchise_fees IS
-  'Append-only. One row is the flat franchise fee in force for an office from one date. Order by effective_from DESC, seq DESC -- never set_at.';
-
-CREATE INDEX organization_franchise_fees_in_force_idx
-  ON public.organization_franchise_fees (organization_id, effective_from DESC, seq DESC);
 
 -- ==================== 2b. when a membership was deactivated =====================
 -- THIS IS THE ONE PLACE THIS MIGRATION TOUCHES A PRE-EXISTING, SHARED TABLE.
@@ -288,11 +259,11 @@ CREATE TRIGGER org_members_track_deactivation
 -- organization_members.license_status admit fewer values than its CHECK does,
 -- and an exclusion list would fail OPEN on a state added later.
 --
--- THIS ONE HELPER FRONTS ALL FOUR POLICIES -- both SELECT policies and both
--- INSERT policies, on both tables -- so the term lands on the broker/admin read
--- and the broker/admin write together. That is the fit, not a compromise: the
--- ruling covers reading and writing on both tables, and splitting the helper
--- would mean writing the same rule twice and letting the copies drift.
+-- THIS ONE HELPER FRONTS BOTH POLICIES -- the broker/admin SELECT and the
+-- broker/admin INSERT -- so the term lands on the read and the write together.
+-- That is the fit, not a compromise: the ruling covers reading and writing,
+-- and splitting the helper would mean writing the same rule twice and letting
+-- the copies drift.
 --
 -- THE SUBJECT OF THE AGREEMENT IS JUDGED BY DATE, NOT BY STATUS TODAY. The
 -- INSERT policy's member-EXISTS -- the clause about the AGENT an agreement is
@@ -374,16 +345,10 @@ AS $fn$
                     AND m.license_status = 'active');
 $fn$;
 
--- ============================ 4. the read helpers ===============================
+-- ============================ 4. the read helper ================================
 -- SECURITY INVOKER (the default -- stated here because it is load-bearing, not
--- incidental): the helpers must see exactly the rows their caller's policies
--- allow. Marked DEFINER they would hand an agent a colleague's split.
---
--- Two helpers, never one combined helper. An inner join would render "this
--- office has no franchise fee on record" as "this agent has no split on
--- record"; a left join would make "no record" indistinguishable from 0.00.
--- Two independent zero-row answers is the only shape that keeps ABSENT
--- distinguishable from ZERO, and that distinction is the caller's to make.
+-- incidental): the helper must see exactly the rows its caller's policies
+-- allow. Marked DEFINER it would hand an agent a colleague's split.
 CREATE OR REPLACE FUNCTION public.split_agreement_in_force(
   p_organization_id uuid, p_agent_user_id uuid, p_on_date date DEFAULT current_date
 ) RETURNS SETOF public.agent_split_agreements
@@ -397,24 +362,10 @@ AS $fn$
    LIMIT 1;
 $fn$;
 
-CREATE OR REPLACE FUNCTION public.franchise_fee_in_force(
-  p_organization_id uuid, p_on_date date DEFAULT current_date
-) RETURNS SETOF public.organization_franchise_fees
-LANGUAGE sql STABLE SET search_path = public   -- SECURITY INVOKER on purpose
-AS $fn$
-  SELECT f.* FROM public.organization_franchise_fees f
-   WHERE f.organization_id = p_organization_id
-     AND f.effective_from  <= p_on_date
-   ORDER BY f.effective_from DESC, f.seq DESC
-   LIMIT 1;
-$fn$;
-
 -- The default ACL grants EXECUTE on a new function to PUBLIC and to anon
 -- explicitly, so each grant below needs its own revoke first.
 REVOKE EXECUTE ON FUNCTION public.split_agreement_in_force(uuid, uuid, date) FROM PUBLIC, anon;
 GRANT  EXECUTE ON FUNCTION public.split_agreement_in_force(uuid, uuid, date) TO authenticated;
-REVOKE EXECUTE ON FUNCTION public.franchise_fee_in_force(uuid, date) FROM PUBLIC, anon;
-GRANT  EXECUTE ON FUNCTION public.franchise_fee_in_force(uuid, date) TO authenticated;
 REVOKE EXECUTE ON FUNCTION public.can_write_split_agreements(uuid) FROM PUBLIC, anon;
 GRANT  EXECUTE ON FUNCTION public.can_write_split_agreements(uuid) TO authenticated;
 REVOKE EXECUTE ON FUNCTION public.is_active_split_member(uuid) FROM PUBLIC, anon;
@@ -422,33 +373,26 @@ GRANT  EXECUTE ON FUNCTION public.is_active_split_member(uuid) TO authenticated;
 
 -- ============================ 5. RLS and grants =================================
 ALTER TABLE public.agent_split_agreements ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.organization_franchise_fees  ENABLE ROW LEVEL SECURITY;
 
 -- See header note (a). REVOKE ALL, not a narrower revoke: it is what takes back
 -- TRUNCATE, which row-level security never evaluates.
 REVOKE ALL ON public.agent_split_agreements FROM anon, authenticated;
-REVOKE ALL ON public.organization_franchise_fees  FROM anon, authenticated;
 
 GRANT SELECT ON public.agent_split_agreements TO authenticated;
 GRANT INSERT (organization_id, agent_user_id, agent_pct, brokerage_pct,
-              office_fee_amount, office_fee_cadence, effective_from, note)
+              effective_from, note)
   ON public.agent_split_agreements TO authenticated;
-
-GRANT SELECT ON public.organization_franchise_fees TO authenticated;
-GRANT INSERT (organization_id, amount, effective_from, note)
-  ON public.organization_franchise_fees TO authenticated;
--- set_by and set_at are absent from both column lists on purpose: they are the
+-- set_by and set_at are absent from the column list on purpose: they are the
 -- audit pair, and a client that could name them could name someone else.
--- No UPDATE grant, no DELETE grant, no UPDATE/DELETE policy, on either table.
--- A grant without a policy is NOT equivalent: it turns the write into a silent
--- zero-row no-op instead of an error. Absence of both is what makes the refusal
--- visible.
+-- No UPDATE grant, no DELETE grant, no UPDATE/DELETE policy. A grant without a
+-- policy is NOT equivalent: it turns the write into a silent zero-row no-op
+-- instead of an error. Absence of both is what makes the refusal visible.
 
 -- The broker/admin read. `can_write_split_agreements` is named for the
 -- write it gates, and it gates this SELECT too -- an ACTIVE broker or admin of
 -- this organization. A deactivated one reads nothing here; controls C23 and C24
--- in supabase/tests/backlog-3503/ hold that shut on both tables, and mutant m35
--- is the rule without its status term.
+-- in supabase/tests/backlog-3503/ hold that shut, and mutant m35 is the rule
+-- without its status term.
 CREATE POLICY agent_split_agreements_select_writer
   ON public.agent_split_agreements FOR SELECT TO authenticated
   USING (public.can_write_split_agreements(organization_id));
@@ -543,14 +487,3 @@ CREATE POLICY agent_split_agreements_insert_writer
                                       AND m.deactivated_at IS NOT NULL
                                       AND agent_split_agreements.effective_from
                                             <= (m.deactivated_at AT TIME ZONE 'UTC')::date))));
-
--- No own-row SELECT policy here: an agent does not read the office's franchise
--- fee in M1. Adding a policy later is pure addition; revoking one agents have
--- already used is a regression.
-CREATE POLICY organization_franchise_fees_select_writer
-  ON public.organization_franchise_fees FOR SELECT TO authenticated
-  USING (public.can_write_split_agreements(organization_id));
-
-CREATE POLICY organization_franchise_fees_insert_writer
-  ON public.organization_franchise_fees FOR INSERT TO authenticated
-  WITH CHECK (public.can_write_split_agreements(organization_franchise_fees.organization_id));

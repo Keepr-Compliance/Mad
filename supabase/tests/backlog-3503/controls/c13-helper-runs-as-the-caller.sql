@@ -16,8 +16,6 @@ BEGIN
   SELECT count(*) INTO n FROM public.split_agreement_in_force(
     current_setting('t3503.o_a')::uuid, current_setting('t3503.u_agent_a')::uuid, DATE '2026-09-01');
   PERFORM pg_temp.check(n = 0, format('a broker of another org gets 0 rows, got %s', n));
-  SELECT count(*) INTO n FROM public.franchise_fee_in_force(current_setting('t3503.o_a')::uuid, DATE '2026-09-01');
-  PERFORM pg_temp.check(n = 0, format('...and 0 franchise-fee rows, got %s', n));
   RESET ROLE;
 END $$;
 RESET ROLE;
