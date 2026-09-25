@@ -10,6 +10,12 @@ import { isPaywallLockedError } from "../services/entitlementService";
 import { ExportUnlockPrompt } from "./paywall/ExportUnlockPrompt";
 import { formatLastExported } from "../utils/formatUtils";
 import { useAuditCoverageCheck } from "../hooks/useAuditCoverageCheck";
+import {
+  TransactionDatesFields,
+  saveConfirmedTransactionDates,
+  useTransactionDatesForm,
+  validateTransactionDates,
+} from "./transactionDates";
 
 interface ExportModalProps {
   transaction: Transaction;
@@ -33,26 +39,11 @@ function ExportModal({
   // BACKLOG-2075: shown when an export attempt hits the per-transaction paywall.
   const [showUnlockPrompt, setShowUnlockPrompt] = useState(false);
 
-  // Start Date (started_at) - when agent began working on transaction
-  const [startDate, setStartDate] = useState(
-    transaction.started_at
-      ? transaction.started_at.split("T")[0]
-      : "",
-  );
-
-  // Closing Date (closing_deadline) - scheduled/expected closing date
-  const [closingDate, setClosingDate] = useState(
-    transaction.closing_deadline
-      ? transaction.closing_deadline.split("T")[0]
-      : "",
-  );
-
-  // End Date (closed_at) - when transaction actually ended (for filtering)
-  const [endDate, setEndDate] = useState(
-    transaction.closed_at
-      ? transaction.closed_at.split("T")[0]
-      : "",
-  );
+  // BACKLOG-3498: Step 1's dates live in the shared transactionDates module —
+  // Start Date (started_at), Closing Date (closing_deadline, optional) and
+  // End Date (closed_at, used to filter communications).
+  const { dates, setDate } = useTransactionDatesForm(transaction);
+  const { startDate, endDate } = dates;
 
   const [contentType, setContentType] = useState<"both" | "emails" | "texts">("both");
   const [attachmentType, setAttachmentType] = useState<"all" | "email" | "text" | "none">("all");
@@ -194,17 +185,9 @@ function ExportModal({
    * new button cannot reach the export with a missing or inverted date range.
    */
   const datesAreValid = (): boolean => {
-    if (!startDate || !endDate) {
-      setError("Please provide Start Date and End Date to continue");
-      return false;
-    }
-    // Validate end date is after start date
-    if (startDate > endDate) {
-      setError("End Date must be after Start Date");
-      return false;
-    }
-    setError(null);
-    return true;
+    const dateError = validateTransactionDates(dates);
+    setError(dateError);
+    return dateError === null;
   };
 
   const handleDateVerification = () => {
@@ -320,13 +303,8 @@ function ExportModal({
     // Update transaction dates FIRST so the audit window is current for the
     // completeness check below. (Do NOT jump to the exporting screen yet — the
     // Layer-3 gate may intercept.)
-    const updateData = {
-      started_at: startDate,
-      closing_deadline: closingDate || null,
-      closed_at: endDate,
-      closing_date_verified: 1,
-    };
-    const updateResult = await transactionService.update(transaction.id, updateData);
+    // BACKLOG-3498: the one shared writer of the confirmed dates.
+    const updateResult = await saveConfirmedTransactionDates(transaction.id, dates);
     if (!updateResult.success) {
       setError(`Failed to save dates: ${updateResult.error}`);
       setStep(1);
@@ -431,15 +409,6 @@ function ExportModal({
     } else {
       setStep(4);
     }
-  };
-
-  const formatConfidence = (confidence?: number) => {
-    if (!confidence) return null;
-    if (confidence >= 80)
-      return { text: "High", color: "text-green-600 bg-green-50" };
-    if (confidence >= 50)
-      return { text: "Medium", color: "text-yellow-600 bg-yellow-50" };
-    return { text: "Low", color: "text-red-600 bg-red-50" };
   };
 
   // C6: When feature is gated, render ONLY UpgradePrompt with title and close button
@@ -550,162 +519,46 @@ function ExportModal({
 
           {/* Step 1: Date Verification */}
           {step === 1 && (
-            <div className="space-y-6">
-              <div>
-                {/* BACKLOG-334 (founder QA 2026-09-19): title left, button right,
-                    the same header row the emails/texts tabs use —
-                    TransactionEmailsTab.tsx:667 (container) and :675 (button
-                    group). The button is shown only with saved defaults. */}
-                <div className="flex justify-between items-center mb-4">
-                  <h4 className="text-lg font-semibold text-gray-900">
-                    Verify Transaction Dates
-                  </h4>
-                  {hasSavedDefaults && (
-                    <div className="flex gap-2">
-                      <button
-                        onClick={handleOpenExportOptions}
-                        className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
-                        data-testid="export-format-button"
+            <TransactionDatesFields
+              transaction={transaction}
+              dates={dates}
+              onDateChange={setDate}
+              headerAction={
+                hasSavedDefaults ? (
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleOpenExportOptions}
+                      className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
+                      data-testid="export-format-button"
+                    >
+                      <svg
+                        className="w-4 h-4"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
                       >
-                        <svg
-                          className="w-4 h-4"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"
-                          />
-                        </svg>
-                        Export format
-                      </button>
-                    </div>
-                  )}
-                </div>
-                <p className="text-sm text-gray-600 mb-2">
-                  Communications will be filtered to only include those between
-                  Start Date and End Date.
-                </p>
-                {/* BACKLOG-2109: surface when this transaction was last exported */}
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"
+                        />
+                      </svg>
+                      Export format
+                    </button>
+                  </div>
+                ) : undefined
+              }
+              meta={
+                /* BACKLOG-2109: surface when this transaction was last exported */
                 <p
                   className="text-sm text-gray-500 mb-6"
                   data-testid="export-last-exported"
                 >
                   {formatLastExported(transaction) ?? "Never exported"}
                 </p>
-              </div>
-
-              <div className="space-y-4">
-                {/* Start Date */}
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="block text-sm font-medium text-gray-700">
-                      Start Date *
-                    </label>
-                    {transaction.representation_start_confidence &&
-                      formatConfidence(
-                        transaction.representation_start_confidence,
-                      ) && (
-                        <span
-                          className={`text-xs px-2 py-1 rounded ${formatConfidence(transaction.representation_start_confidence)!.color}`}
-                        >
-                          Confidence:{" "}
-                          {
-                            formatConfidence(
-                              transaction.representation_start_confidence,
-                            )!.text
-                          }
-                        </span>
-                      )}
-                  </div>
-                  <input
-                    type="date"
-                    value={startDate}
-                    onChange={(e) => setStartDate(e.target.value)}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-gray-900 bg-white min-h-[44px]"
-                  />
-                  <p className="mt-1 text-xs text-gray-500">
-                    When did you sign the representation agreement with the
-                    client?
-                  </p>
-                </div>
-
-                {/* Closing Date (optional) */}
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="block text-sm font-medium text-gray-700">
-                      Closing Date
-                    </label>
-                    {transaction.closing_date_confidence &&
-                      formatConfidence(transaction.closing_date_confidence) && (
-                        <span
-                          className={`text-xs px-2 py-1 rounded ${formatConfidence(transaction.closing_date_confidence)!.color}`}
-                        >
-                          Confidence:{" "}
-                          {
-                            formatConfidence(
-                              transaction.closing_date_confidence,
-                            )!.text
-                          }
-                        </span>
-                      )}
-                  </div>
-                  <input
-                    type="date"
-                    value={closingDate}
-                    onChange={(e) => setClosingDate(e.target.value)}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-gray-900 bg-white min-h-[44px]"
-                  />
-                  <p className="mt-1 text-xs text-gray-500">
-                    Scheduled closing date (optional)
-                  </p>
-                </div>
-
-                {/* End Date */}
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="block text-sm font-medium text-gray-700">
-                      End Date *
-                    </label>
-                  </div>
-                  <input
-                    type="date"
-                    value={endDate}
-                    onChange={(e) => setEndDate(e.target.value)}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-gray-900 bg-white min-h-[44px]"
-                  />
-                  <p className="mt-1 text-xs text-gray-500">
-                    When did the transaction end? (Used to filter communications)
-                  </p>
-                </div>
-              </div>
-
-              {transaction.first_communication_date &&
-                transaction.last_communication_date && (
-                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                    <p className="text-sm font-medium text-blue-900 mb-2">
-                      Communication Date Range
-                    </p>
-                    <p className="text-xs text-blue-700">
-                      We found communications from{" "}
-                      <span className="font-semibold">
-                        {new Date(
-                          transaction.first_communication_date,
-                        ).toLocaleDateString()}
-                      </span>{" "}
-                      to{" "}
-                      <span className="font-semibold">
-                        {new Date(
-                          transaction.last_communication_date,
-                        ).toLocaleDateString()}
-                      </span>
-                    </p>
-                  </div>
-                )}
-            </div>
+              }
+            />
           )}
 
           {/* Step 2: Export Options */}

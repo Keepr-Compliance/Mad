@@ -41,7 +41,7 @@
  * RUNNER: npx jest src/components/transactionDetailsModule/components/modals/__tests__/SubmitForReviewModal.blockedStatusCopy-2868.test.tsx
  */
 import React from "react";
-import { render, screen, cleanup } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { SubmitForReviewModal } from "../SubmitForReviewModal";
 import {
@@ -50,13 +50,27 @@ import {
 } from "../../../../../../electron/services/submissionStatusMessages";
 import type { Transaction } from "@/types";
 
+/**
+ * BACKLOG-3498: dated, so the date step's Next is enabled. A deal that can
+ * still be submitted (not_submitted, needs_changes) opens on the date step and
+ * its lead and action are on the next screen. Blocked statuses are unaffected.
+ * Date-only start (wizard, useAuditSubmission.ts:140-142) and ISO-timestamp end
+ * (detection path, electron/services/transactionService/transactionService.ts:958).
+ */
 const baseTransaction = {
   id: "txn-2868",
   user_id: "user-2868",
   property_address: "18 Bellweather Lane",
   transaction_type: "purchase",
   status: "active",
+  started_at: "2026-01-05",
+  closed_at: "2026-03-14T18:22:05.000Z",
 } as unknown as Transaction;
+
+/** BACKLOG-3498: Next from the date step to the lead and the action. */
+function goToSummary(): void {
+  fireEvent.click(screen.getByTestId("submit-review-next"));
+}
 
 function renderAt(submissionStatus: string) {
   return render(
@@ -225,6 +239,9 @@ describe("BACKLOG-2868 — per-status copy on a blocked deal", () => {
         "rejected",
       ]) {
         renderAt(status);
+        // BACKLOG-3498: pass the date step wherever it is offered, to reach the
+        // action. WHICH statuses get the step is dateStep-3498's C3a.
+        if (screen.queryByTestId("submit-review-next")) goToSummary();
         if ((screen.getByTestId("submit-review-submit") as HTMLButtonElement).disabled) {
           rendered.add(status);
         }
@@ -356,11 +373,13 @@ describe("BACKLOG-2868 — per-status copy on a blocked deal", () => {
    */
   test("'needs_changes' and 'not_submitted' keep their live, non-blocked screens", () => {
     renderAt("needs_changes");
+    goToSummary(); // BACKLOG-3498: the lead is on the screen after the date step
     expect(lead()).toMatch(/You are about to resubmit this transaction/);
     expect(screen.getByTestId("submit-review-submit")).toBeEnabled();
     cleanup();
 
     renderAt("not_submitted");
+    goToSummary();
     expect(lead()).toMatch(/The following data will be sent to your broker/);
     expect(screen.getByTestId("submit-review-submit")).toBeEnabled();
   });
