@@ -153,7 +153,9 @@ describe('BACKLOG-3477 — submission checklist review migration', () => {
       'CREATE TRIGGER status_history_append_only BEFORE INSERT OR UPDATE ON public.transaction_submissions FOR EACH ROW EXECUTE FUNCTION public.guard_status_history_append_only();',
     );
     // BEFORE triggers fire in name order: the guard must sort before the status trigger.
-    expect('status_history_append_only' < 'track_status_changes').toBe(true);
+    const trigger = sql.match(/CREATE TRIGGER (\w+) BEFORE INSERT OR UPDATE ON public\.transaction_submissions/);
+    expect(trigger).not.toBeNull();
+    expect(trigger![1] < 'track_status_changes').toBe(true);
     const guard = functionBody(sql, 'guard_status_history_append_only');
     expect(guard).toContain("IF v_role IS NULL OR v_role = 'service_role' THEN");
     expect(guard).toContain('FOR i IN 0 .. v_old_len - 1 LOOP IF (v_new -> i) IS DISTINCT FROM (v_old -> i) THEN');
