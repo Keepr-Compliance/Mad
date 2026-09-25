@@ -26,12 +26,7 @@ import {
 } from '@keepr/design-system';
 import { archiveChecklistTemplate, restoreChecklistTemplate } from '@/lib/actions/checklists';
 import type { ChecklistListRow } from '@/lib/checklists/listRows';
-
-function formatDate(value: string): string {
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-}
+import { formatAuditDate } from '@/lib/checklists/audit';
 
 export default function ChecklistsListClient({ rows }: { rows: ChecklistListRow[] }) {
   const router = useRouter();
@@ -95,7 +90,10 @@ export default function ChecklistsListClient({ rows }: { rows: ChecklistListRow[
                 </Td>
                 <Td className="text-right tabular-nums">{row.itemCount}</Td>
                 <Td className="text-right tabular-nums">{row.requiredCount}</Td>
-                <Td>{formatDate(row.updatedAt)}</Td>
+                <Td>
+                  {formatAuditDate(row.updatedAt)}
+                  {row.updatedBy && <p className="mt-0.5 text-xs text-gray-500">by {row.updatedBy}</p>}
+                </Td>
                 <Td>
                   {row.archived ? <Badge hue="gray">Archived</Badge> : <Badge hue="green">Active</Badge>}
                 </Td>

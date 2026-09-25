@@ -6,8 +6,10 @@
  * NULL`); required means `is_required` and nothing else.
  */
 
+import { auditName } from '@/lib/checklists/audit';
+
 export const CHECKLIST_LIST_SELECT =
-  'id, name, description, seed_key, archived_at, updated_at, sort_order, checklist_template_items(is_required)';
+  'id, name, description, seed_key, archived_at, updated_at, updated_by, sort_order, checklist_template_items(is_required)';
 
 export interface TemplateListRecord {
   id: string;
@@ -16,6 +18,7 @@ export interface TemplateListRecord {
   seed_key: string | null;
   archived_at: string | null;
   updated_at: string;
+  updated_by: string | null;
   sort_order: number;
   checklist_template_items: { is_required: boolean }[] | null;
 }
@@ -28,12 +31,17 @@ export interface ChecklistListRow {
   archived: boolean;
   /** PostgREST text, display only. */
   updatedAt: string;
+  /** Who last edited it: a display name, "a former member", or null (no recorded editor). */
+  updatedBy: string | null;
   itemCount: number;
   requiredCount: number;
 }
 
 /** Active before archived, then the organization's own order, then name. */
-export function toListRows(records: TemplateListRecord[]): ChecklistListRow[] {
+export function toListRows(
+  records: TemplateListRecord[],
+  names: Map<string, string> = new Map()
+): ChecklistListRow[] {
   return [...records]
     .sort(
       (a, b) =>
@@ -50,6 +58,7 @@ export function toListRows(records: TemplateListRecord[]): ChecklistListRow[] {
         seeded: r.seed_key !== null,
         archived: r.archived_at !== null,
         updatedAt: r.updated_at,
+        updatedBy: auditName(r.updated_by, names),
         itemCount: items.length,
         requiredCount: items.filter((i) => i.is_required === true).length,
       };

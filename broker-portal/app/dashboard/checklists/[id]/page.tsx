@@ -15,6 +15,7 @@ import {
   type ChecklistEditorAccess,
 } from '@/lib/checklist-access';
 import type { TemplateItemRow } from '@/lib/checklists/editorState';
+import { auditName, auditUserIds, resolveAuditNames } from '@/lib/checklists/audit';
 import ChecklistEditorClient from '../ChecklistEditorClient';
 
 interface PageProps {
@@ -22,7 +23,7 @@ interface PageProps {
 }
 
 const EDITOR_SELECT =
-  'id, name, description, updated_at, archived_at, checklist_template_items(id, title, description, is_required, expected_document_type, sort_order)';
+  'id, name, description, created_at, created_by, updated_at, updated_by, archived_at, archived_by, checklist_template_items(id, title, description, is_required, expected_document_type, sort_order)';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -30,8 +31,12 @@ interface TemplateRecord {
   id: string;
   name: string;
   description: string | null;
+  created_at: string;
+  created_by: string | null;
   updated_at: string;
+  updated_by: string | null;
   archived_at: string | null;
+  archived_by: string | null;
   checklist_template_items: TemplateItemRow[] | null;
 }
 
@@ -64,12 +69,24 @@ export default async function EditChecklistTemplatePage({ params }: PageProps) {
   if (!data) notFound();
 
   const template = data as unknown as TemplateRecord;
+  const names = await resolveAuditNames(
+    access.supabase,
+    auditUserIds(template.created_by, template.updated_by, template.archived_by)
+  );
   return (
     <ChecklistEditorClient
       key={template.updated_at}
       templateId={template.id}
       updatedAt={template.updated_at}
       archived={template.archived_at !== null}
+      audit={{
+        created: { at: template.created_at, by: auditName(template.created_by, names) },
+        edited: { at: template.updated_at, by: auditName(template.updated_by, names) },
+        archived:
+          template.archived_at !== null
+            ? { at: template.archived_at, by: auditName(template.archived_by, names) }
+            : null,
+      }}
       template={{ name: template.name, description: template.description }}
       items={Array.isArray(template.checklist_template_items) ? template.checklist_template_items : []}
     />

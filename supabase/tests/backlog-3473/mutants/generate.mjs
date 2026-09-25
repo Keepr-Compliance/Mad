@@ -37,6 +37,9 @@ const BEFORE = read("supabase/tests/backlog-3473/lib/rpc-before.sql");
 // BACKLOG-3474: save_checklist_template, loaded by run.sh after file 3.
 const M4_PATH = "supabase/migrations/20260924190429_backlog_3474_save_checklist_template.sql";
 const M4 = read(M4_PATH);
+// BACKLOG-3474 PR 3: updated_by / archived_by trigger, loaded by run.sh after file 4.
+const M5_PATH = "supabase/migrations/20260924224113_backlog_3474_template_audit_fields.sql";
+const M5 = read(M5_PATH);
 
 /** Exact replacement; throws if `from` does not occur exactly once in `text`. */
 function edit(text, from, to, label) {
@@ -750,6 +753,53 @@ add("m64-save-kept-ids-include-nulls.sql", {
   sql: edit(save, "            FROM jsonb_array_elements(p_items) AS e(value)\n            WHERE e.value->>'id' IS NOT NULL));",
     "            FROM jsonb_array_elements(p_items) AS e(value)));", "m64"),
   proof: proof(`${def(SAVE)} LIKE '%AS e(value)));%'`, `'kept ids include NULLs'`),
+});
+
+// ---------------------------------------------------------------- BACKLOG-3474 PR 3: audit fields
+// The likely wrong implementations of the updated_by / archived_by trigger.
+const AUDIT = "public._checklist_templates_audit()";
+const audit = fn(M5, "_checklist_templates_audit");
+const AUDIT_TRG = M5.slice(M5.indexOf("CREATE OR REPLACE TRIGGER checklist_templates_audit"));
+mustContain(AUDIT_TRG, "BEFORE UPDATE ON public.checklist_templates", "audit trigger");
+const trgdef = `(SELECT pg_get_triggerdef(t.oid) FROM pg_trigger t WHERE t.tgname = 'checklist_templates_audit' AND t.tgrelid = 'public.checklist_templates'::regclass)`;
+
+add("m65-audit-updated-by-never-set.sql", {
+  what: "BACKLOG-3474 PR 3: the trigger never sets updated_by",
+  targets: "c37 c38",
+  sql: edit(audit, "  NEW.updated_by := auth.uid();\n", "", "m65"),
+  proof: proof(`${def(AUDIT)} NOT LIKE '%NEW.updated_by := auth.uid()%'`, `'updated_by never set'`),
+});
+add("m66-audit-restore-keeps-archiver.sql", {
+  what: "BACKLOG-3474 PR 3: restore keeps the stale archived_by",
+  targets: "c38",
+  sql: edit(audit, "  IF NEW.archived_at IS NULL THEN\n    NEW.archived_by := NULL;\n",
+    "  IF NEW.archived_at IS NULL THEN\n    NEW.archived_by := OLD.archived_by;\n", "m66"),
+  proof: proof(`${def(AUDIT)} NOT LIKE '%NEW.archived_by := NULL%'`, `'restore keeps archived_by'`),
+});
+add("m67-audit-trigger-archive-path-only.sql", {
+  what: "BACKLOG-3474 PR 3: the trigger fires only when archived_at is in the UPDATE (archive path only)",
+  targets: "c37 c38",
+  sql: edit(AUDIT_TRG, "BEFORE UPDATE ON public.checklist_templates", "BEFORE UPDATE OF archived_at ON public.checklist_templates", "m67"),
+  proof: proof(`${trgdef} LIKE '%UPDATE OF archived_at%'`, `'trigger on archived_at only'`),
+});
+add("m68-audit-archiver-recomputed.sql", {
+  what: "BACKLOG-3474 PR 3: archived_by recomputed on every update while archived (no transition guard)",
+  targets: "c38",
+  sql: edit(audit, "  ELSIF OLD.archived_at IS NULL THEN\n", "  ELSIF NEW.archived_at IS NOT NULL THEN\n", "m68"),
+  proof: proof(`${def(AUDIT)} LIKE '%ELSIF NEW.archived_at IS NOT NULL%'`, `'no transition guard'`),
+});
+add("m70-audit-archiver-written-back.sql", {
+  what: "BACKLOG-3474 PR 3 (SR B1): archived_by written back from OLD while archived, undoing the FK's ON DELETE SET NULL",
+  targets: "c40",
+  sql: edit(audit, "  ELSIF OLD.archived_at IS NULL THEN\n    NEW.archived_by := auth.uid();\n  END IF;\n",
+    "  ELSIF OLD.archived_at IS NULL THEN\n    NEW.archived_by := auth.uid();\n  ELSE\n    NEW.archived_by := OLD.archived_by;\n  END IF;\n", "m70"),
+  proof: proof(`${def(AUDIT)} LIKE '%NEW.archived_by := OLD.archived_by%'`, `'archived_by written back from OLD'`),
+});
+add("m69-audit-columns-granted.sql", {
+  what: "BACKLOG-3474 PR 3: UPDATE and INSERT granted on updated_by and archived_by",
+  targets: "c39",
+  sql: "GRANT UPDATE (updated_by, archived_by), INSERT (updated_by, archived_by) ON public.checklist_templates TO authenticated;",
+  proof: proof(`has_column_privilege('authenticated', 'public.checklist_templates', 'updated_by', 'UPDATE')`, `'updated_by updatable'`),
 });
 
 const fileMutants = {

@@ -8,6 +8,7 @@ Proves the three migrations on a real Postgres + PostgREST stack:
 | `20260921101757_backlog_3473_transaction_checklists.sql` | Seven tables, RLS, grants, the seed catalogue and its copy, the `transaction_checklists` feature row, `submission_attachments.local_attachment_id`. |
 | `20260921101758_backlog_3473_retire_unused_org_columns.sql` | Drops three unused `organizations` columns, behind a guard. Never committed on the venue. |
 | `20260924190429_backlog_3474_save_checklist_template.sql` | BACKLOG-3474: `save_checklist_template`, the broker portal's one-call template save. Loaded after file 3 in every control (c26-c36, m52-m64); applied twice by `apply-prod`; never committed by `apply`. |
+| `20260924224113_backlog_3474_template_audit_fields.sql` | BACKLOG-3474 PR 3: `updated_by` / `archived_by` and the BEFORE UPDATE trigger that fills them. Loaded right after file 4 everywhere file 4 is (c37-c39, m65-m69). |
 
 **Status: run in phase (ii), 2026-09-21, at `940efc269`, and re-run after K9 at
 `e93076ea3`** — every control green, every mutant as expected. Results at the end of this file.
@@ -145,6 +146,10 @@ supabase/tests/backlog-3473/run.sh "$URL" gate                # every command as
 | C34 | EXECUTE: anon no, authenticated yes, no PUBLIC; SECURITY INVOKER; search_path pinned | m54, m55 |
 | C35 | only an editor of p_org_id with the feature saves: 42501 not_authorized otherwise; other org's template → stale | m52, m53 (m54 stays GREEN here, see results) |
 | C36 | items missing from the payload are deleted, also beside a new (NULL-id) item | m64 |
+| C37 | PR 3: every save (order-only included) records the caller as `updated_by`; a new template has none; create sets `created_by` | m65, m67 |
+| C38 | PR 3: archive records `archived_by`; a save while archived keeps it; restore clears it; a second archive records its own archiver | m65, m66, m67, m68 |
+| C39 | PR 3: `updated_by` / `archived_by` are never client-writable (PRIV on UPDATE and INSERT) | m69 |
+| C40 | PR 3: deleting the archiver / the last editor succeeds and NULLs `archived_by` / `updated_by` (the FK's SET NULL is not written back) | m70 |
 
 ## Design decisions (written down, not improvised)
 
@@ -222,3 +227,24 @@ run of the same migration and controls gave the same results.
 | `MATRIX=1 mutants m54` | SECURITY DEFINER alone reds C34 only: the up-front authority check still refuses every caller C35 tries, so INVOKER is the second layer. m53 (DEFINER **and** no check) is the case where it holds the line: the agent's save then commits |
 | `catalogue-teardown`, `sync-clean` | catalogue tables empty; copied files removed; stack back to 70 / 132 / 185 / 28 / 64, no `save_checklist_template` |
 
+BACKLOG-3474 PR 3 (audit fields), 2026-09-24, same stack and role, reached through
+`lib/ssh-psql.sh`:
+
+| Step | Result |
+|---|---|
+| `catalogue-seed`, `gate` | re-hashed equal to production; matched 252, accepted 0, mismatched 0 |
+| `apply-prod` (C21, now files 1→2→3→4→5 twice) | `S1_ROWS=156 ONLY_IN_S1=0 ONLY_IN_S2=0` — GREEN |
+| `controls` | 46 green / 46 (c37 8, c38 8, c39 6 assertions) |
+| `mutants m65`–`m69` | each RED on its targets, as expected |
+| `mutants m5`, `m60`–`m64` (PR 2 regression) | 20 run, 0 not as expected |
+| `catalogue-teardown`, `sync-clean` | catalogue tables empty again; copied files removed |
+
+Re-run after SR review (archived_by no longer written back from OLD, so the FK's
+ON DELETE SET NULL holds), 2026-09-24, same stack:
+
+| Step | Result |
+|---|---|
+| `gate`, `apply-prod` | matched 252 / 0 / 0; `S1_ROWS=156 ONLY_IN_S1=0 ONLY_IN_S2=0` — GREEN |
+| `controls` | 47 green / 47 (c40 8 assertions) |
+| `mutants m65`–`m70` | each RED on its targets; m70 reds c40 with 23503 |
+| `mutants m5`, `m60`–`m64` | 20 run, 0 not as expected |

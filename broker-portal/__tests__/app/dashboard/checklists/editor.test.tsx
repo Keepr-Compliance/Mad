@@ -15,6 +15,7 @@
  */
 
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom';
 
 const mockCreateClient = jest.fn();
@@ -67,6 +68,8 @@ const TEMPLATE_ID = '00000000-0000-4000-8000-0000003474a1';
 const OTHER_TEMPLATE_ID = '00000000-0000-4000-8000-0000003474a2';
 /** pii-allow-uuid: invented fixture id */
 const OTHER_ORG_ID = '00000000-0000-4000-8000-0000003474ff';
+/** pii-allow-uuid: invented fixture id, a user the viewer cannot read */
+const GONE_USER_ID = '00000000-0000-4000-8000-0000003474ee';
 
 const ITEMS: TemplateItemRow[] = [
   { id: 'item-a', title: 'Executed purchase contract', sort_order: 10, description: null, is_required: true, expected_document_type: 'contract' },
@@ -79,16 +82,23 @@ const templateRow = (id: string, organization_id: string): Row => ({
   organization_id,
   name: 'Residential purchase',
   description: null,
+  created_at: TOKEN,
+  created_by: null,
   updated_at: TOKEN,
+  updated_by: null,
   archived_at: null,
+  archived_by: null,
   checklist_template_items: ITEMS,
 });
 
-function setupRoute(opts: { role?: string; features?: unknown; impersonating?: boolean; templates?: Row[] } = {}) {
+function setupRoute(
+  opts: { role?: string; features?: unknown; impersonating?: boolean; templates?: Row[]; users?: Row[] } = {}
+) {
   const emu = createPostgrestEmulator({
     rows: {
       organization_members: [brokerageMembership(opts.role ?? 'broker')],
       checklist_templates: opts.templates ?? [templateRow(TEMPLATE_ID, FIXTURE_BROKERAGE_ORG_ID)],
+      users: opts.users ?? [],
     },
   });
   const from = jest.fn((t: string) => emu.from(t));
@@ -163,6 +173,39 @@ describe('/dashboard/checklists/[id] — renders', () => {
     fireEvent.click(saveButtons()[0]);
     await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
     expect(mockSave.mock.calls[0][0]).toMatchObject({ templateId: TEMPLATE_ID, expectedUpdatedAt: TOKEN });
+  });
+});
+
+// BACKLOG-3474 PR 3: created / last edited / archived, who and when.
+describe('/dashboard/checklists/[id] — audit line', () => {
+  const audit = () => screen.getByTestId('checklist-audit').textContent;
+
+  it('names a resolvable user, shows "a former member" for one that is not, and never an id', async () => {
+    setupRoute({
+      templates: [
+        {
+          ...templateRow(TEMPLATE_ID, FIXTURE_BROKERAGE_ORG_ID),
+          created_by: FIXTURE_USER_ID,
+          updated_by: GONE_USER_ID,
+          updated_at: '2026-09-24T22:08:43.723274+00:00',
+          archived_at: '2026-09-24T22:10:00.000001+00:00',
+          archived_by: FIXTURE_USER_ID,
+        },
+      ],
+      users: [{ id: FIXTURE_USER_ID, email: 'broker@example.test', display_name: null, first_name: 'Jane', last_name: 'Doe' }],
+    });
+    render(await EditChecklistTemplatePage(params(TEMPLATE_ID)));
+    expect(audit()).toBe(
+      'Created Sep 24, 2026 by Jane Doe · Last edited Sep 24, 2026 by a former member · Archived Sep 24, 2026 by Jane Doe'
+    );
+    expect(document.body.textContent).not.toContain(GONE_USER_ID);
+    expect(document.body.textContent).not.toContain(FIXTURE_USER_ID);
+  });
+
+  it('shows dates alone when no one is recorded (seeded, or not edited since the columns existed)', async () => {
+    setupRoute();
+    render(await EditChecklistTemplatePage(params(TEMPLATE_ID)));
+    expect(audit()).toBe('Created Sep 24, 2026 · Last edited Sep 24, 2026');
   });
 });
 
@@ -274,6 +317,20 @@ describe('editor — validation and create', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add item' }));
     expect(itemTitles()).toEqual(['Executed purchase contract', 'Closing disclosure', '']);
     expect(screen.getByText('3 items · 2 required')).toBeInTheDocument();
+  });
+
+  // BACKLOG-3474 PR 3: focus used to stay on "Add item", so typing went nowhere
+  // and every space pressed the button again (an empty row each time).
+  it('Add item puts focus in the new row\'s title, and typing a title with spaces adds no rows', async () => {
+    const user = userEvent.setup();
+    renderEditor();
+    await user.click(screen.getByRole('button', { name: 'Add item' }));
+    const titles = screen.getAllByLabelText('Item title');
+    expect(titles).toHaveLength(4);
+    expect(titles[3]).toHaveFocus();
+    await user.keyboard('Item B inspection report');
+    expect(itemTitles()).toEqual(['Executed purchase contract', 'Inspection report', 'Closing disclosure', 'Item B inspection report']);
+    expect(screen.getAllByTestId('checklist-item-row')).toHaveLength(4);
   });
 
   it('a new template saves with no id and no token, then opens the saved template', async () => {
