@@ -63,12 +63,12 @@ m05-header-insert-allows-added-at-review  [as expected]
     MUTATION APPLIED: 4 line(s) differ; first: EXISTS (
     RED:   c08
     green: none
-      c08: CONTROL FAILED: C08 forged added-at-review header: expected RLS, got rows:1
+      c08: CONTROL FAILED: C08 submitter header with added-at-review values: expected RLS, got rows:1
 m06-item-insert-allows-reviewer-values  [as expected]
     MUTATION APPLIED: 5 line(s) differ; first: EXISTS (
     RED:   c10
     green: none
-      c10: CONTROL FAILED: C10 forged tick: expected RLS, got rows:1
+      c10: CONTROL FAILED: C10 pre-ticked item: expected RLS, got rows:1
 m07-header-insert-without-feature  [as expected]
     MUTATION APPLIED: 1 line(s) differ; first: removed: AND COALESCE((public.check_feature_access(ts.organization_id, 'transaction_checklists') ->> 'allowed'
     RED:   c03
@@ -142,7 +142,7 @@ m20-tick-reads-history-into-variable  [as expected]
     RED:   c07
     green: none
       c07: CONTROL FAILED: set_submission_checklist_reviewer_check: never reads status_history into a variable
-m21-tick-helper-bypassed  [as expected]
+m21-tick-without-helper  [as expected]
     MUTATION APPLIED: 2 line(s) differ; first: IF NOT FOUND THEN
     RED:   c06
     green: none
@@ -172,7 +172,7 @@ m26-add-without-status-gate  [as expected]
     RED:   c08
     green: none
       c08: CONTROL FAILED: C08 needs_changes: expected ~^42501:not_open_for_review$, got rows:1
-m27-add-helper-bypassed  [as expected]
+m27-add-without-helper  [as expected]
     MUTATION APPLIED: 2 line(s) differ; first: IF NOT FOUND THEN
     RED:   c08
     green: none

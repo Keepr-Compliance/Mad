@@ -8,10 +8,11 @@ c06-reviewer-tick-refusals                     GREEN 15 assertions
 c07-append-reads-the-row                       GREEN 6 assertions
 c08-add-at-review                              GREEN 20 assertions
 c09-status-unchanged                           GREEN 4 assertions
-c10-submitter-cannot-forge-review              GREEN 5 assertions
+c10-submitter-insert-has-no-reviewer-values    GREEN 5 assertions
 c11-review-readers                             GREEN 52 assertions
 c12-one-role-list                              GREEN 18 assertions
 c13-status-history-append-only                 GREEN 22 assertions
 c14-apply-twice                                GREEN 2 assertions
 c15-function-properties                        GREEN 26 assertions
 c16-edit-entry-refused                         GREEN 3 assertions
+controls: 17 green / 17
