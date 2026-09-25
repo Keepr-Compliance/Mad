@@ -15,9 +15,9 @@ DECLARE
   payload jsonb;
 BEGIN
   PERFORM pg_temp.act_as(pg_temp.id('u_t1_agent'));
-  PERFORM pg_temp.expect('C10 forged tick',
+  PERFORM pg_temp.expect('C10 pre-ticked item',
     format('INSERT INTO public.submission_checklist_items (submission_id, submission_checklist_id, title, is_required, reviewer_checked, reviewer_checked_by, reviewer_checked_at) VALUES (%L, %L, %L, true, true, %L, now())',
-           s, pg_temp.id('h_up'), 'Forged', broker), 'RLS');
+           s, pg_temp.id('h_up'), 'Preticked', broker), 'RLS');
   PERFORM pg_temp.expect('C10 half a tick',
     format('INSERT INTO public.submission_checklist_items (submission_id, submission_checklist_id, title, is_required, reviewer_checked_by) VALUES (%L, %L, %L, true, %L)',
            s, pg_temp.id('h_up'), 'Half', broker), '~^(23514|42501):');
@@ -32,7 +32,7 @@ BEGIN
   PERFORM pg_temp.check((SELECT NOT reviewer_checked AND reviewer_checked_by IS NULL AND reviewer_checked_at IS NULL
                            FROM public.submission_checklist_items WHERE submission_id = s AND title = 'Payload item'),
                         'C10 payload reviewer keys ignored');
-  PERFORM pg_temp.check(NOT EXISTS (SELECT 1 FROM public.submission_checklist_items WHERE submission_id = s AND title IN ('Forged', 'Half')),
-                        'C10 no forged row');
+  PERFORM pg_temp.check(NOT EXISTS (SELECT 1 FROM public.submission_checklist_items WHERE submission_id = s AND title IN ('Preticked', 'Half')),
+                        'C10 no pre-ticked row');
 END
 $c10$;

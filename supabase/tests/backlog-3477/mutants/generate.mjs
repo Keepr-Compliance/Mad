@@ -125,7 +125,7 @@ const MUTANTS = [
       "  UPDATE public.transaction_submissions\n     SET status_history = COALESCE(status_history, '[]'::jsonb) || jsonb_build_array(",
       "  SELECT status_history INTO v_row.status FROM public.transaction_submissions WHERE id = v_row.submission_id;\n  UPDATE public.transaction_submissions\n     SET status_history = COALESCE(status_history, '[]'::jsonb) || jsonb_build_array(",
       "m20")],
-  ["m21-tick-helper-bypassed", "c06",
+  ["m21-tick-without-helper", "c06",
     (t) => editIn(t, TICK[0], TICK[1], "  IF NOT FOUND OR NOT public.can_review_submission(v_row.organization_id) THEN", "  IF NOT FOUND THEN", "m21")],
   // --- add -------------------------------------------------------------------
   ["m22-add-allows-needs-changes", "c08",
@@ -139,7 +139,7 @@ const MUTANTS = [
       "  IF FOUND THEN\n    RETURN jsonb_build_object('status', 'exists', 'checklist_id', v_header_id);\n  END IF;\n", "", "m25")],
   ["m26-add-without-status-gate", "c08",
     (t) => editIn(t, ADD[0], ADD[1], "  IF v_sub.status IS NULL OR v_sub.status NOT IN ('submitted', 'resubmitted', 'under_review') THEN", "  IF false THEN", "m26")],
-  ["m27-add-helper-bypassed", "c08",
+  ["m27-add-without-helper", "c08",
     (t) => editIn(t, ADD[0], ADD[1], "  IF NOT FOUND OR NOT public.can_review_submission(v_sub.organization_id) THEN", "  IF NOT FOUND THEN", "m27")],
   // --- append-only guard -----------------------------------------------------
   ["m28-guard-without-prefix-test", "c13 c16",

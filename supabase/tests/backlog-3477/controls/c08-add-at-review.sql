@@ -12,7 +12,7 @@
 --     (positive control: the same insert without them -> rows:1)
 -- Wrong implementations this catches: needs_changes admitted; archived or
 -- other-org templates accepted; the duplicate check dropped; the header rule
--- left open to a forged "added at review".
+-- left open to an "added at review" value from the submitter.
 DO $c08$
 DECLARE
   broker uuid := pg_temp.id('u_t1_broker');
@@ -73,9 +73,9 @@ BEGIN
   PERFORM pg_temp.expect('C08 feature off (T2)', format(add_q, pg_temp.id('s_t2sub'), pg_temp.id('tpl_t1_a')), '~^42501:not_authorized$');
 
   PERFORM pg_temp.act_as(pg_temp.id('u_t1_agent'));
-  PERFORM pg_temp.expect('C08 forged added-at-review header',
+  PERFORM pg_temp.expect('C08 submitter header with added-at-review values',
     format('INSERT INTO public.submission_checklists (submission_id, template_name, added_at_review_by, added_at_review_at) VALUES (%L, %L, %L, now())',
-           pg_temp.id('s_up'), 'Forged', broker), 'RLS');
+           pg_temp.id('s_up'), 'Submitter added', broker), 'RLS');
   PERFORM pg_temp.expect('C08 positive: plain header',
     format('INSERT INTO public.submission_checklists (submission_id, template_name) VALUES (%L, %L)', pg_temp.id('s_up'), 'Plain'), 'rows:1');
   PERFORM pg_temp.act_owner();
