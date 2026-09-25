@@ -127,7 +127,7 @@ function Probe({ onUnauth }: { onUnauth: (d: (a: AppAction) => void) => void }) 
   latest = ctx.state;
   useEffect(() => {
     if (ctx.state.status === "unauthenticated") onUnauth(ctx.dispatch);
-  }, [ctx.state.status]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ctx.state.status]);
   return null;
 }
 
