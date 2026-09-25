@@ -24,6 +24,13 @@ interface StatusHistoryProps {
   history: StatusHistoryEntry[];
   currentStatus: string;
   submittedAt?: string;
+  /**
+   * BACKLOG-3080: the route "View previous version" links under, or null for
+   * no link. A path, not a function: server pages render this client
+   * component, and a function prop cannot cross that boundary. Defaults to the
+   * broker review page, so the broker view is unchanged.
+   */
+  previousVersionBasePath?: string | null;
 }
 
 function getStatusInfo(status: string): { label: string; color: string; bgColor: string; icon: string } {
@@ -78,6 +85,7 @@ export function StatusHistory({
   history,
   currentStatus,
   submittedAt,
+  previousVersionBasePath = '/dashboard/submissions',
 }: StatusHistoryProps) {
   // Build full timeline
   const timelineEntries: StatusHistoryEntry[] = [];
@@ -110,6 +118,8 @@ export function StatusHistory({
   // Get the parent submission ID from the resubmitted entry for linking
   const resubmitEntry = hasPreviousHistory ? timelineEntries[lastResubmitIdx] : null;
   const parentSubmissionId = resubmitEntry?.parentSubmissionId;
+  const previousHref =
+    parentSubmissionId && previousVersionBasePath ? `${previousVersionBasePath}/${parentSubmissionId}` : null;
 
   const [showPrevious, setShowPrevious] = useState(false);
 
@@ -144,9 +154,9 @@ export function StatusHistory({
                     </svg>
                     {showPrevious ? 'Hide' : 'Show'} previous review ({previousEntries.length} steps)
                   </button>
-                  {parentSubmissionId && (
+                  {previousHref && (
                     <Link
-                      href={`/dashboard/submissions/${parentSubmissionId}`}
+                      href={previousHref}
                       className="text-sm text-primary-600 hover:text-primary-700 underline"
                     >
                       View previous version

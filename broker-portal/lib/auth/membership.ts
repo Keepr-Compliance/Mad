@@ -227,6 +227,14 @@ export const FLOOR_PATHS = ['/dashboard', '/dashboard/account', '/dashboard/supp
  */
 export const OWN_GATE_PATHS = ['/dashboard/checklists'] as const;
 
+/**
+ * My Transactions (BACKLOG-3080): passed through for a floor user routed on a
+ * BROKERAGE row only. The owner of a personal organization never gets it. The
+ * plan key is not read here (no feature call at the edge);
+ * lib/my-transactions-access.ts decides on the server.
+ */
+export const MY_TRANSACTIONS_PATHS = ['/dashboard/my-transactions'] as const;
+
 /** `path` is `base` itself or a sub-path of it. Never a bare prefix match. */
 function isUnder(path: string, base: string): boolean {
   return path === base || path.startsWith(`${base}/`);
@@ -248,6 +256,11 @@ export function mayOpenDashboardPath(access: PortalAccess, pathname: string): bo
   }
   for (const base of OWN_GATE_PATHS) {
     if (isUnder(pathname, base)) return true;
+  }
+  if (access.kind === 'floor' && access.via === 'brokerage') {
+    for (const base of MY_TRANSACTIONS_PATHS) {
+      if (isUnder(pathname, base)) return true;
+    }
   }
   return false;
 }

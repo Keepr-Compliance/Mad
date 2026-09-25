@@ -20,8 +20,17 @@ import { PRIORITY_LABELS } from '@/lib/support-types';
 import { FileUpload } from './FileUpload';
 import type { PendingFile } from './FileUpload';
 import { useBrowserDiagnostics, BrowserDiagnostics } from './BrowserDiagnostics';
+import { presetCategoryIds, type TicketPreset } from '@/lib/support/ticketPresets';
 
-export function TicketForm() {
+export interface TicketFormProps {
+  /**
+   * BACKLOG-3080: open pre-filled from a fixed preset (lib/support/ticketPresets.ts).
+   * Only the dashboard's New Ticket page passes one. Every field stays editable.
+   */
+  preset?: TicketPreset | null;
+}
+
+export function TicketForm({ preset = null }: TicketFormProps = {}) {
   const router = useRouter();
   const [categories, setCategories] = useState<SupportCategory[]>([]);
   const [submitting, setSubmitting] = useState(false);
@@ -36,18 +45,30 @@ export function TicketForm() {
   // Form state
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
-  const [subject, setSubject] = useState('');
-  const [description, setDescription] = useState('');
+  const [subject, setSubject] = useState(preset?.subject ?? '');
+  const [description, setDescription] = useState(preset?.description ?? '');
   const [priority, setPriority] = useState<TicketPriority>('normal');
   const [categoryId, setCategoryId] = useState('');
   const [subcategoryId, setSubcategoryId] = useState('');
   const [files, setFiles] = useState<PendingFile[]>([]);
 
   const validFiles = files.filter((f) => !f.error);
+  // The preset as first rendered; it seeds the selects once, when categories load.
+  const initialPreset = useRef(preset);
 
   // Load categories and check auth
   useEffect(() => {
-    getCategories().then((cats) => setCategories(buildCategoryTree(cats)));
+    getCategories().then((cats) => {
+      const tree = buildCategoryTree(cats);
+      setCategories(tree);
+      const seed = initialPreset.current;
+      if (seed) {
+        // Only while still blank: never overwrite a choice the user made.
+        const ids = presetCategoryIds(seed, tree);
+        setCategoryId((current) => current || ids.categoryId);
+        setSubcategoryId((current) => current || ids.subcategoryId);
+      }
+    });
 
     const supabase = createClient();
     supabase.auth.getUser().then(({ data: { user } }) => {

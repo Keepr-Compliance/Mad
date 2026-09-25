@@ -4,6 +4,7 @@ import { DashboardShell } from '@/components/layout/DashboardShell';
 import { resolveViewerIdentity } from '@/lib/utils/userDisplay';
 import { isChecklistEditorEnabled } from '@/lib/checklist-access';
 import { getPortalAccess } from '@/lib/auth/portalAccess';
+import { getMyTransactionsGate } from '@/lib/my-transactions-access';
 
 export default async function DashboardLayout({
   children,
@@ -38,6 +39,9 @@ export default async function DashboardLayout({
   const displayRole = isImpersonating ? undefined : role;
   // BACKLOG-3474: the same gate the route and its actions use.
   const showChecklists = !isImpersonating && (await isChecklistEditorEnabled());
+  // BACKLOG-3080: the same gate the My Transactions pages use. Shown when the
+  // pages would render (the list, or the plan message), hidden when they 404.
+  const showMyTransactions = !isImpersonating && (await getMyTransactionsGate()) !== null;
 
   return (
     <DashboardShell
@@ -48,6 +52,7 @@ export default async function DashboardLayout({
       displayEmail={displayEmail}
       displayRole={displayRole}
       showChecklists={showChecklists}
+      showMyTransactions={showMyTransactions}
     >
       {children}
     </DashboardShell>
