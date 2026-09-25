@@ -152,14 +152,16 @@ describe('BACKLOG-3477 — submission checklist review migration', () => {
     expect(sql).toContain(
       'CREATE TRIGGER status_history_append_only BEFORE INSERT OR UPDATE ON public.transaction_submissions FOR EACH ROW EXECUTE FUNCTION public.guard_status_history_append_only();',
     );
-    // BEFORE triggers fire in name order: the guard must sort before the status trigger.
-    const trigger = sql.match(/CREATE TRIGGER (\w+) BEFORE INSERT OR UPDATE ON public\.transaction_submissions/);
-    expect(trigger).not.toBeNull();
-    expect(trigger![1] < 'track_status_changes').toBe(true);
     const guard = functionBody(sql, 'guard_status_history_append_only');
     expect(guard).toContain("IF v_role IS NULL OR v_role = 'service_role' THEN");
     expect(guard).toContain('FOR i IN 0 .. v_old_len - 1 LOOP IF (v_new -> i) IS DISTINCT FROM (v_old -> i) THEN');
     expect(guard).toContain("jsonb_typeof(v_new) <> 'array'");
+  });
+
+  it('fires the guard before the status trigger (BEFORE triggers run in name order)', () => {
+    const trigger = migrationSql().match(/CREATE TRIGGER (\w+) BEFORE INSERT OR UPDATE ON public\.transaction_submissions/);
+    expect(trigger).not.toBeNull();
+    expect(trigger![1] < 'track_status_changes').toBe(true);
   });
 
   it('refuses a new row that already carries history', () => {
