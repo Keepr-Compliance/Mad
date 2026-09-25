@@ -27,7 +27,15 @@ jest.mock('@/lib/supabase/client', () => ({
   createClient: () => ({
     auth: {
       getUser: async () => ({
-        data: { user: { id: 'u', email: 'agent-3080@fixture.example.test', user_metadata: { full_name: 'Robin Fixture' } } },
+        data: {
+          user: {
+            id: 'u',
+            email: 'agent-3080@fixture.example.test',
+            user_metadata: {
+              full_name: 'Robin Fixture',
+            },
+          },
+        },
       }),
     },
   }),

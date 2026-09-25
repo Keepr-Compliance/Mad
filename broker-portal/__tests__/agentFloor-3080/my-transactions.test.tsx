@@ -259,12 +259,25 @@ function given(
   options: { impersonating?: boolean; membershipReadFails?: boolean } = {}
 ): void {
   mockGetUser.mockResolvedValue({
-    data: { user: { id: A, email: 'agent-3080@fixture.example.test', user_metadata: { full_name: 'Robin Fixture' } } },
+    data: {
+      user: {
+        id: A,
+        email: 'agent-3080@fixture.example.test',
+        user_metadata: {
+          full_name: 'Robin Fixture',
+        },
+      },
+    },
   });
   mockFeatures = features;
   mockMembershipReadFails = options.membershipReadFails ?? false;
   (getImpersonationSession as jest.Mock).mockResolvedValue(
-    options.impersonating ? { target_email: 'target@fixture.example.test', target_name: 'Target Fixture' } : null
+    options.impersonating
+      ? {
+          target_email: 'target@fixture.example.test',
+          target_name: 'Target Fixture',
+        }
+      : null
   );
   mockEmulator.reset();
   mockEmulator.set({
