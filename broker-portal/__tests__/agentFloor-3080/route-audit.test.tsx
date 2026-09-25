@@ -19,7 +19,7 @@
  */
 
 import { readdirSync, readFileSync, statSync } from 'fs';
-import { join, relative } from 'path';
+import { join, relative, win32 } from 'path';
 import {
   FIXTURE_BROKERAGE_ORG_ID,
   FIXTURE_INVITE_ID,
@@ -424,11 +424,34 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-function discoverDashboardPages(): string[] {
-  return walk(join(ROOT, 'app/dashboard'))
-    .filter((f) => f.endsWith('/page.tsx') || f.endsWith('/page.ts') || f.endsWith('/page.jsx') || f.endsWith('/page.js'))
-    .map((f) => relative(ROOT, f))
+/** Separator-independent: every backslash becomes `/`, on whatever platform runs the test. */
+function toPosix(p: string): string {
+  return p.replace(/\\/g, '/');
+}
+
+/**
+ * The one point where a discovered file becomes a classification key. Every
+ * key is POSIX (`app/dashboard/...`), because the tables above are written that
+ * way and Windows' `relative()` returns backslash-separated paths. `rel` is
+ * injectable so the Windows shape can be exercised on any OS with `path.win32`.
+ */
+function repoKey(file: string, root: string = ROOT, rel: (from: string, to: string) => string = relative): string {
+  return toPosix(rel(root, file));
+}
+
+function dashboardPageKeys(
+  files: string[],
+  root: string = ROOT,
+  rel: (from: string, to: string) => string = relative
+): string[] {
+  return files
+    .map((f) => repoKey(f, root, rel))
+    .filter((k) => /\/page\.(tsx|ts|jsx|js)$/.test(k))
     .sort();
+}
+
+function discoverDashboardPages(): string[] {
+  return dashboardPageKeys(walk(join(ROOT, 'app/dashboard')));
 }
 
 const DIRECTIVE = /^\s*(['"])use server\1\s*;?\s*$/;
@@ -473,7 +496,7 @@ function discoverServerActions(): string[] {
   const found: string[] = [];
   for (const file of files) {
     const source = readFileSync(file, 'utf8');
-    const rel = relative(ROOT, file);
+    const rel = repoKey(file);
     if (isUseServerModule(source)) {
       for (const name of runtimeExports(source)) found.push(`${rel}#${name}`);
     }
@@ -483,6 +506,36 @@ function discoverServerActions(): string[] {
 }
 
 describe('discovery can see what it claims to see', () => {
+  it('keys Windows-shaped paths the same as POSIX ones', () => {
+    const root = 'C:\\repo\\broker-portal';
+    expect(
+      dashboardPageKeys(
+        [
+          'C:\\repo\\broker-portal\\app\\dashboard\\page.tsx',
+          'C:\\repo\\broker-portal\\app\\dashboard\\users\\[id]\\page.tsx',
+          'C:\\repo\\broker-portal\\app\\dashboard\\layout.tsx',
+        ],
+        root,
+        win32.relative
+      )
+    ).toEqual(['app/dashboard/page.tsx', 'app/dashboard/users/[id]/page.tsx']);
+    expect(repoKey('C:\\repo\\broker-portal\\lib\\actions\\scim.ts', root, win32.relative)).toBe(
+      'lib/actions/scim.ts'
+    );
+    expect(toPosix('app\\dashboard\\users\\[id]\\page.tsx')).toBe('app/dashboard/users/[id]/page.tsx');
+    expect(toPosix('app/dashboard/page.tsx')).toBe('app/dashboard/page.tsx');
+  });
+
+  it('reads CRLF sources (Windows checkout) the same as LF', () => {
+    expect(isUseServerModule(`/** c */\r\n'use server';\r\nexport async function a() {}\r\n`)).toBe(true);
+    expect(isUseServerModule(`// c\r\n"use server"\r\nexport const b = 1;\r\n`)).toBe(true);
+    expect(isUseServerModule(`import x from 'y';\r\n'use server';\r\n`)).toBe(false);
+    expect(
+      runtimeExports(`export async function a() {}\r\nexport const c = 1;\r\nexport { d, e as f };\r\nexport default 1;\r\n`).sort()
+    ).toEqual(['a', 'c', 'd', 'default', 'f']);
+    expect(inlineServerFunctions(`async function save(x) {\r\n  'use server';\r\n}`)).toEqual(['save']);
+  });
+
   it('finds the root dashboard page and a dynamic route (the 13-vs-14 glob trap)', () => {
     const pages = discoverDashboardPages();
     expect(pages).toContain('app/dashboard/page.tsx');
