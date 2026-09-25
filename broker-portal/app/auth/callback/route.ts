@@ -3,20 +3,25 @@
  *
  * Handles the OAuth redirect from Supabase Auth:
  * 1. Exchanges authorization code for session
- * 2. Verifies user has broker/admin/it_admin role
- * 3. JIT-joins users to their existing org (Azure AD by tenant, Google by domain)
- * 4. Redirects to dashboard or login with error
+ * 2. Routes a brokerage member (full portal or floor) to `next`
+ * 3. Links a pending invite
+ * 4. JIT-joins users to their existing org (Azure AD by tenant, Google by domain)
+ * 5. Admits the OWNER of a personal organization to the floor
+ * 6. Otherwise signs this browser out and returns to login with an error
+ *
+ * BACKLOG-3080: every portal user now lands on `next`; middleware and the
+ * dashboard decide what each of them may open. The desktop download page is no
+ * longer a destination here.
  */
 
 import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
 import { extractEmail } from '@/lib/auth/helpers';
-import { PORTAL_MEMBERSHIP_SELECT, pickBrokerageMembership } from '@/lib/auth/membership';
-
-// Allowed roles for broker portal access (dashboard)
-const PORTAL_ROLES = ['broker', 'admin', 'it_admin'];
-// Roles that should be redirected to the desktop app download page
-const DESKTOP_ROLES = ['agent'];
+import {
+  PORTAL_MEMBERSHIP_SELECT,
+  classifyPortalAccess,
+  type PortalMembershipRow,
+} from '@/lib/auth/membership';
 
 export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url);
@@ -41,12 +46,11 @@ export async function GET(request: Request) {
     if (user) {
       // Check for an existing BROKERAGE membership.
       //
-      // BACKLOG-3364: a solo user's own personal organization is not one. Read
-      // as a placement it would return /download two lines below — before the
-      // pending-invite branch has run — and a solo user could never accept a
-      // brokerage invite through the portal again. Skipping it leaves them
-      // where they were before personal organizations existed: no membership,
-      // so invite linking and JIT both get their turn.
+      // BACKLOG-3364: a solo user's own personal organization is not one. It
+      // must not decide the destination before the pending-invite branch and
+      // JIT have had their turn, or a solo user could never accept a brokerage
+      // invite through the portal. The personal-owner check is therefore LAST
+      // (BACKLOG-3080), after invite linking and JIT.
       const { data: memberships } = await supabase
         .from('organization_members')
         .select(PORTAL_MEMBERSHIP_SELECT)
@@ -54,30 +58,30 @@ export async function GET(request: Request) {
         .order('created_at', { ascending: true })
         .order('id', { ascending: true });
 
-      const membership = pickBrokerageMembership(memberships);
+      const access = classifyPortalAccess(memberships as PortalMembershipRow[] | null, user.id);
 
-      if (membership && DESKTOP_ROLES.includes(membership.role)) {
-        // Agent role - redirect to desktop app download
-        return NextResponse.redirect(`${origin}/download`);
-      }
-
-      if (membership && PORTAL_ROLES.includes(membership.role)) {
+      if (access.kind === 'full') {
         // If IT admin, check if org needs admin consent for desktop app permissions
-        if (membership.role === 'it_admin' || membership.role === 'admin') {
+        if (access.role === 'it_admin' || access.role === 'admin') {
           const { data: org } = await supabase
             .from('organizations')
             .select('graph_admin_consent_granted, microsoft_tenant_id')
-            .eq('id', membership.organization_id)
+            .eq('id', access.organizationId)
             .single();
 
           if (org && !org.graph_admin_consent_granted && org.microsoft_tenant_id) {
             return NextResponse.redirect(
-              `${origin}/setup/consent?tenant=${encodeURIComponent(org.microsoft_tenant_id)}&org=${encodeURIComponent(membership.organization_id)}`
+              `${origin}/setup/consent?tenant=${encodeURIComponent(org.microsoft_tenant_id)}&org=${encodeURIComponent(access.organizationId)}`
             );
           }
         }
 
         // User has valid role - redirect to dashboard
+        return NextResponse.redirect(`${origin}${next}`);
+      }
+
+      if (access.kind === 'floor' && access.via === 'brokerage') {
+        // A brokerage agent (or any non-full role): the portal floor.
         return NextResponse.redirect(`${origin}${next}`);
       }
 
@@ -135,10 +139,7 @@ export async function GET(request: Request) {
             if (process.env.NODE_ENV === 'development') {
               console.log('Successfully linked invite to user');
             }
-            // Redirect agents to download page, portal users to dashboard
-            if (DESKTOP_ROLES.includes(pendingInvite.role)) {
-              return NextResponse.redirect(`${origin}/download`);
-            }
+            // Every linked member lands on `next`; middleware floors an agent.
             return NextResponse.redirect(`${origin}${next}`);
           }
         }
@@ -177,6 +178,11 @@ export async function GET(request: Request) {
         }
       }
 
+      // A failed JIT join does not sign out yet: the owner of a personal
+      // organization still gets the floor below. Its error code is kept for
+      // everyone else.
+      let jitErrorCode: string | null = null;
+
       if (jitProviderType && jitIdentifier) {
         const { data: jitResult, error: jitError } = await supabase.rpc('jit_join_organization', {
           p_provider_type: jitProviderType,
@@ -192,15 +198,24 @@ export async function GET(request: Request) {
           console.error('JIT join RPC failed:', jitError);
         }
         // Determine appropriate error for user
-        const jitErrorCode = jitResult?.error === 'jit_disabled' ? 'jit_disabled' : 'org_not_setup';
-        await supabase.auth.signOut();
-        return NextResponse.redirect(`${origin}/login?error=${jitErrorCode}`);
+        jitErrorCode = jitResult?.error === 'jit_disabled' ? 'jit_disabled' : 'org_not_setup';
       }
 
-      // User not authorized - sign them out
-      console.warn('User attempted portal access without valid role');
-      await supabase.auth.signOut();
-      return NextResponse.redirect(`${origin}/login?error=not_authorized`);
+      // BACKLOG-3080: the owner of a personal organization gets the floor.
+      // `floor` here can only come from a personal organization this user
+      // OWNS — a brokerage floor returned above. A failed membership read is
+      // `unknown`, not `floor`, and is signed out below as before.
+      if (access.kind === 'floor') {
+        return NextResponse.redirect(`${origin}${next}`);
+      }
+
+      // User not authorized - sign this browser out. `local` ends only the
+      // portal session; the user's other sessions are theirs to keep.
+      if (!jitErrorCode) {
+        console.warn('User attempted portal access without valid role');
+      }
+      await supabase.auth.signOut({ scope: 'local' });
+      return NextResponse.redirect(`${origin}/login?error=${jitErrorCode ?? 'not_authorized'}`);
     }
   }
 

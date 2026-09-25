@@ -8,6 +8,8 @@ import { SubmissionPagination } from '@/components/submission/SubmissionPaginati
 import { getDataClient, getTargetOrganizationId } from '@/lib/impersonation-guards';
 import { getOrgFeatures, isFeatureEnabled } from '@/lib/feature-gate';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { redirect } from 'next/navigation';
+import { requireFullPortalAccess } from '@/lib/auth/portalAccess';
 
 interface Submission {
   id: string;
@@ -171,7 +173,13 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
   const currentPage = Math.max(1, Number(pageParam) || 1);
   const currentStatus = status || 'all';
 
-  const { client, organizationId } = await getDataClient();
+  const { client, impersonation, organizationId } = await getDataClient();
+
+  // BACKLOG-3080: brokerage submissions are for the full portal only. Refused
+  // before any submission is read. A support session keeps its read-only view.
+  if (!impersonation && !(await requireFullPortalAccess())) {
+    redirect('/dashboard');
+  }
 
   // BACKLOG-908: Use deduped helper for org ID resolution
   const orgId = getTargetOrganizationId(organizationId);

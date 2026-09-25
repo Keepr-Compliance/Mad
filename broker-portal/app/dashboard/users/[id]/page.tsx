@@ -7,7 +7,7 @@
  * TASK-1813: Full user details view implementation
  */
 
-import { createClient } from '@/lib/supabase/server';
+import { getPortalAccess } from '@/lib/auth/portalAccess';
 import { redirect, notFound } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
@@ -42,23 +42,19 @@ interface NotFoundResult {
  * Fetch user details with access control checks
  */
 async function getUserDetails(memberId: string): Promise<UserDetailsResult | NotFoundResult | null> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  // BACKLOG-3080: the shared portal classifier, so this page reads the same
+  // role and organization as middleware and the layout.
+  const portal = await getPortalAccess();
 
   // Not authenticated
-  if (!user) return null;
+  if (!portal) return null;
+  const { supabase, access, user } = portal;
 
-  // Get current user's membership
-  const { data: currentMembership } = await supabase
-    .from('organization_members')
-    .select('role, organization_id')
-    .eq('user_id', user.id)
-    .maybeSingle();
-
-  // No membership or unauthorized role
-  if (!currentMembership || !['admin', 'it_admin'].includes(currentMembership.role)) {
+  // Not a full-portal admin or it_admin
+  if (access.kind !== 'full' || !['admin', 'it_admin'].includes(access.role)) {
     return null;
   }
+  const currentMembership = { role: access.role, organization_id: access.organizationId };
 
   // Get target member with full details
   // Note: We fetch all fields including SSO/SCIM columns from SPRINT-070

@@ -6,9 +6,9 @@
  * beyond "is this a person with a session".
  *
  * Two callers this gate has to admit:
- *   - an ordinary member, including `agent` once BACKLOG-3080 opens the portal
- *     to them (middleware.ts still redirects `agent` away from every
- *     /dashboard/* route today; that route audit is 3080's, not this item's).
+ *   - an ordinary member, including `agent` and the owner of a personal
+ *     organization: BACKLOG-3080 opens this page to them as part of the
+ *     portal floor (lib/auth/membership.ts FLOOR_PATHS).
  *   - Keepr support, through the existing impersonation flow. RLS on
  *     user_preferences is own-rows plus service_role with no internal-role read
  *     policy, so impersonation is the ONLY way support can see this page, and
