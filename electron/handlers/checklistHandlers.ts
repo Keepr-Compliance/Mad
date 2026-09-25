@@ -112,8 +112,8 @@ export interface GetChecklistResponse {
 export interface SelectChecklistTemplateResponse {
   success: boolean;
   /**
-   * The db layer's own outcome, carried through unchanged. `exists`,
-   * `no_checklist` and `no_transaction` arrive here with `success: true` because the call ran and
+   * The db layer's own outcome, carried through unchanged. `added`,
+   * `exists` and `no_transaction` arrive here with `success: true` because the call ran and
    * answered; what it answered is the surface's to render.
    */
   result?: SelectChecklistTemplateResult;
