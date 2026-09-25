@@ -16,6 +16,7 @@ import { ROLE_LABELS, LICENSE_STATUS_LABELS } from '@/lib/types/users';
 import type { MemberLicenseStatus, OrganizationMember, Role } from '@/lib/types/users';
 import { formatUserDisplayName, getUserInitials } from '@/lib/utils/userDisplay';
 import { formatDate } from '@/lib/utils';
+import type { SplitListDisplay } from '@/lib/splitAgreements';
 
 interface UserTableRowProps {
   member: OrganizationMember;
@@ -27,6 +28,9 @@ interface UserTableRowProps {
   onResendInvite: () => void;
   onDeactivate: () => void;
   onRemove: () => void;
+  /** undefined = column not shown at all (UserListClient's showSplitColumn
+   *  is false); present = one of the three states below. */
+  splitDisplay?: SplitListDisplay;
 }
 
 const ROLE_HUES: Record<Role, BadgeHue> = {
@@ -53,6 +57,7 @@ export default function UserTableRow({
   onResendInvite,
   onDeactivate,
   onRemove,
+  splitDisplay,
 }: UserTableRowProps) {
   const userOrNull = member.user ?? null;
   const displayName = formatUserDisplayName(userOrNull, member.invited_email);
@@ -102,6 +107,31 @@ export default function UserTableRow({
           {isPending ? 'Invited' : LICENSE_STATUS_LABELS[member.license_status]}
         </Badge>
       </td>
+      {splitDisplay && (
+        <td className="px-4 py-3">
+          {splitDisplay.kind === 'split' ? (
+            <div className="flex flex-col leading-tight">
+              <span className="text-sm font-medium text-gray-900">
+                {splitDisplay.agentPct}% / {splitDisplay.brokeragePct}%
+              </span>
+              <span className="text-xs text-gray-500">agent / brokerage</span>
+            </div>
+          ) : splitDisplay.kind === 'no-agreement' ? (
+            <Badge size="sm" hue="gray">No agreement</Badge>
+          ) : (
+            <span
+              className="text-sm text-gray-400"
+              title={
+                splitDisplay.reason === 'pending'
+                  ? 'Not set until the invite is accepted'
+                  : 'Splits apply to agent and broker agreements only'
+              }
+            >
+              &ndash;
+            </span>
+          )}
+        </td>
+      )}
       <td className="px-4 py-3 text-sm text-gray-500">
         {member.joined_at
           ? formatDate(member.joined_at)

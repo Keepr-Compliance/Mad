@@ -97,6 +97,12 @@ export function makeAccount(overrides: Partial<AccountView> = {}): AccountView {
     preferencesUpdatedAt: '2026-08-30T12:00:00.000Z',
     orgRetentionYears: null,
     isImpersonating: false,
+    // BACKLOG-3504. Defaults match identity.role: 'agent' above
+    // (splitAppliesToRole('agent') === true) with no agreement on file —
+    // tests that don't care about the split card get its honest empty state
+    // rather than an invented figure; tests that do override both.
+    splitApplies: true,
+    currentSplit: null,
     ...overrides,
   };
 }

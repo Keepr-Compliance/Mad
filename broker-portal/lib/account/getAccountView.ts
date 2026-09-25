@@ -26,6 +26,8 @@ import { createClient } from '@/lib/supabase/server';
 import { getDataClient } from '@/lib/impersonation-guards';
 import { isFeatureEnabledFailClosed } from '@/lib/feature-gate';
 import { impersonationFeatureView } from '@/lib/org-settings-access';
+import { getSplitHistory, deriveCurrentSplit, splitAppliesToRole } from '@/lib/splitAgreements';
+import type { Role } from '@/lib/types/users';
 
 /**
  * The types and the pure provider-name helper live in ./accountView so a CLIENT
@@ -203,6 +205,36 @@ export async function getAccountView(): Promise<AccountView | null> {
     | { preferences: Record<string, unknown> | null; updated_at: string | null }
     | null) ?? null;
 
+  // Commission split — BACKLOG-3504, read-only, own row only. Reuses the
+  // SAME query getSplitHistory() uses for the broker/admin detail-page read:
+  // agent_split_agreements has two OR'd SELECT policies (broker/admin read,
+  // own-row read), so this plain query correctly returns nothing for a role
+  // splits don't apply to, and nothing for a suspended agent's own row
+  // (RLS's is_active_split_member requires license_status = 'active') — both
+  // collapse to the same `currentSplit: null` the client renders identically.
+  //
+  // NOT during impersonation. Measured, not guessed: `agent_split_agreements`
+  // is not in scoped-client.ts's ALLOWED_TABLES, and that allowlist's own
+  // comment says why that matters — a missing table does not read as empty,
+  // createBlockedQueryBuilder THROWS on every method, which took down this
+  // whole page for every support session before this guard was added (caught
+  // by account-impersonation.test.tsx, not inferred). Even adding the table
+  // wouldn't be enough: USER_SCOPED_TABLES hardcodes an
+  // `.eq('user_id', targetUserId)` filter, and this table's column is
+  // `agent_user_id` — a real scoping mismatch, not a one-line allowlist add.
+  // Whether a support session should see the customer's split at all, and
+  // how the client would need to scope it, is BACKLOG-3540's question, not
+  // answered here.
+  const splitApplies = !impersonation && splitAppliesToRole((membership?.role ?? '') as Role);
+  let currentSplit: { agentPct: number; brokeragePct: number; effectiveFrom: string } | null = null;
+  if (splitApplies && membership?.organization_id) {
+    const history = await getSplitHistory(client, membership.organization_id, userId);
+    const current = deriveCurrentSplit(history);
+    currentSplit = current
+      ? { agentPct: current.agent_pct, brokeragePct: current.brokerage_pct, effectiveFrom: current.effective_from }
+      : null;
+  }
+
   return {
     identity: {
       userId,
@@ -219,5 +251,7 @@ export async function getAccountView(): Promise<AccountView | null> {
     preferencesUpdatedAt: prefsRow?.updated_at ?? null,
     orgRetentionYears,
     isImpersonating: Boolean(impersonation),
+    splitApplies,
+    currentSplit,
   };
 }
