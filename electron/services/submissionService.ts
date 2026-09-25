@@ -40,6 +40,7 @@ import emailAttachmentService from "./emailAttachmentService";
 import gmailFetchService from "./gmailFetchService";
 import outlookFetchService from "./outlookFetchService";
 import { TRANSACTION_EMAILS_MISSING_ATTACHMENTS_SQL } from "./db/submissionEmailSql";
+import { snapshotSubmissionChecklists } from "./submissionChecklistSnapshot";
 // BACKLOG-2758 finding 3: party names come from the SAME resolver the exported
 // PDF uses, not from a second read of the macOS AddressBook. The AddressBook is
 // still consulted — as tier 3 inside that resolver — so no name previously
@@ -204,6 +205,11 @@ interface SubmissionAttachmentRecord {
   file_size_bytes?: number;
   storage_path: string;
   document_type?: string;
+  /**
+   * BACKLOG-3477: the LOCAL `attachments.id` this row was uploaded from. The
+   * checklist snapshot matches evidence links on it. Not unique in the cloud.
+   */
+  local_attachment_id: string | null;
 }
 
 /** Cloud submission status response */
@@ -858,10 +864,21 @@ class SubmissionService {
       // Stage 5: Insert attachment metadata (10%)
       const successfulUploads = attachmentUploadResults.filter((r) => r.success);
       if (successfulUploads.length > 0) {
-        const attachmentRecords = successfulUploads.map((upload, idx) => {
-          const originalAttachment = attachments.find(
-            (a) => a.storage_path === upload.localId || a.id === upload.localId
-          );
+        const attachmentRecords = successfulUploads.map((upload) => {
+          // BACKLOG-3477: `upload.localId` is the local FILE PATH, and local
+          // attachment files are content-addressed — two attachment rows with
+          // the same bytes share one path, so a find() by path names the first
+          // row for both. `uploadAttachments` returns one result per input, in
+          // input order, so the row this upload came from is the one at the
+          // same index. The find() stays as the fallback.
+          const paired = attachments[attachmentUploadResults.indexOf(upload)];
+          const originalAttachment =
+            paired &&
+            (paired.storage_path === upload.localId || paired.id === upload.localId)
+              ? paired
+              : attachments.find(
+                  (a) => a.storage_path === upload.localId || a.id === upload.localId
+                );
           return this.mapToSubmissionAttachment(
             upload,
             submissionId,
@@ -880,6 +897,11 @@ class SubmissionService {
           );
         }
       }
+
+      // Stage 5b (BACKLOG-3477): copy every checklist while the submission is
+      // still 'uploading' — the copy tables refuse inserts after finalize.
+      // Never throws; a refusal is logged and the submission continues.
+      await snapshotSubmissionChecklists(client, submissionId, transactionId);
 
       // Stage 6: Finalize submission — all data written, mark as 'submitted'
       // This is the commit point: only now does the submission become visible to brokers
@@ -1541,6 +1563,7 @@ class SubmissionService {
         uploadResult.fileSizeBytes || originalAttachment?.file_size_bytes,
       storage_path: uploadResult.storagePath,
       document_type: originalAttachment?.document_type,
+      local_attachment_id: originalAttachment?.id ?? null,
     };
   }
 
