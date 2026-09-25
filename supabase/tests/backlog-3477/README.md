@@ -19,7 +19,7 @@ H=supabase/tests/backlog-3477/run.sh
 export SSH_HOST=<ssh alias> PG_CONTAINER=<container name>   # values on the backlog item
 
 bash $H gate                  # refuses unless the venue is schema-only and 3477-free
-bash $H controls              # 17 controls, each in its own rolled-back transaction
+bash $H controls              # 18 controls, each in its own rolled-back transaction
 node supabase/tests/backlog-3477/mutants/generate.mjs --check
 bash $H mutants               # every mutant against the controls on its targets line
 MATRIX=1 bash $H mutants m05  # one mutant against every control
@@ -72,14 +72,14 @@ Role switching is simulated with `set_config('role', …)` plus the
 | c10 | submitter item insert with reviewer values refused, directly and through the snapshot | m06, m13 |
 | c11 | submitter, broker, admin, it_admin read the submission and all six child tables; others read nothing; anon gets no rows | m01–m03, m04a–g |
 | c12 | the role list exists only in `can_review_submission` | m04a–g |
-| c13 | `status_history`: rewrites, removals, non-arrays and typed entries naming someone else refused; status updates, the tick, the service role and no-JWT sessions allowed | m28–m33 |
+| c13 | `status_history`: rewrites, removals, non-arrays, untyped or non-object appends and entries naming someone else refused; status updates (the guard must fire before the status trigger), the tick, the service role and no-JWT sessions allowed | m28–m33, m36, m39, m40 |
 | c14 | applying the file twice changes nothing | m35 |
-| c15 | security, `search_path` and EXECUTE grants of the five functions; the trigger | m03, m12, m32, m34 |
+| c15 | security, `search_path` and EXECUTE grants of the five functions; the trigger (BEFORE INSERT OR UPDATE) | m03, m12, m32, m34, m37 |
 | c16 | editing an existing entry in place is refused | m28 |
+| c17 | a new submission starts with an empty history: the desktop's insert and finalize shapes pass; a submitter insert carrying any entry (typed naming the broker, untyped, typed naming the submitter) is refused; the service role may | m37, m38 |
 
-Two behaviours are recorded as observed, not gated (c13): a caller may append
-a typed entry naming themself, and an untyped entry is not checked for
-`changed_by`.
+One behaviour is recorded as observed, not gated (c13): a caller may append a
+typed entry naming themself.
 
 Concurrency (two sessions ticking at once) cannot be raced in a
 one-session-per-control harness; c07 reads the function bodies for the
@@ -88,5 +88,5 @@ single-statement append instead.
 ## Results
 
 Recorded 2026-09-25, Postgres 17.6, connected as the venue's `postgres` role.
-See `control-run.txt` (17 green / 17) and `mutant-run.txt` (41 run, 0 not as
+See `control-run.txt` (18 green / 18) and `mutant-run.txt` (46 run, 0 not as
 expected). `gate` re-run afterwards: OK.

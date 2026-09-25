@@ -1,3 +1,4 @@
+# Recorded 2026-09-25 at 476ae1609 on the test venue (Postgres 17.6, role postgres; values on the backlog item). gate OK before and after.
 m01-helper-without-it-admin  [as expected]
     MUTATION APPLIED: 2 line(s) differ; first: AND om.role IN ('broker', 'admin')
     RED:   c05 c08 c11
@@ -184,7 +185,7 @@ m28-guard-without-prefix-test  [as expected]
       c13: CONTROL FAILED: C13 set []: expected ~^42501:status_history_append_only$, got rows:1
       c16: CONTROL FAILED: C16 edit entry 0: expected ~^42501:status_history_append_only$, got rows:1
 m29-guard-without-changed-by-test  [as expected]
-    MUTATION APPLIED: 3 line(s) differ; first: IF false THEN
+    MUTATION APPLIED: 3 line(s) differ; first: OR NOT (v_elem ? 'type') THEN
     RED:   c13
     green: none
       c13: CONTROL FAILED: C13 typed entry naming someone else: expected ~^42501:status_history_append_only$, got rows:1
@@ -203,7 +204,7 @@ m32-guard-not-attached  [as expected]
     RED:   c13 c15
     green: none
       c13: CONTROL FAILED: C13 set []: expected ~^42501:status_history_append_only$, got rows:1
-      c15: CONTROL FAILED: C15 guard is a BEFORE UPDATE row trigger
+      c15: CONTROL FAILED: C15 guard is a BEFORE INSERT OR UPDATE row trigger
 m33-guard-no-service-exemption  [as expected]
     MUTATION APPLIED: 2 line(s) differ; first: IF v_role IS NULL THEN
     RED:   c13
@@ -220,4 +221,30 @@ m35-constraint-added-unguarded  [as expected]
     RED:   c14
     green: none
       c14: constraint "submission_checklists_added_at_review_pair_check" for relation "submission_checklists" already exists
-mutants: 41 run, 0 not as expected
+m36-guard-checks-typed-entries-only  [as expected]
+    MUTATION APPLIED: 5 line(s) differ; first: IF jsonb_typeof(v_elem) = 'object' AND v_elem ? 'type'
+    RED:   c13
+    green: none
+      c13: CONTROL FAILED: C13 untyped entry naming someone else: expected ~^42501:status_history_append_only$, got rows:1
+m37-guard-update-only  [as expected]
+    MUTATION APPLIED: 2 line(s) differ; first: BEFORE UPDATE ON public.transaction_submissions
+    RED:   c15 c17
+    green: none
+      c15: CONTROL FAILED: C15 guard is a BEFORE INSERT OR UPDATE row trigger
+      c17: CONTROL FAILED: C17 typed entry naming the broker: expected ~^42501:status_history_append_only$, got rows:1
+m38-guard-insert-uses-append-test  [as expected]
+    MUTATION APPLIED: 6 line(s) differ; first: removed: IF TG_OP = 'INSERT' THEN
+    RED:   c17
+    green: none
+      c17: CONTROL FAILED: C17 typed entry naming the submitter: expected ~^42501:status_history_append_only$, got rows:1
+m39-guard-fires-after-status-trigger  [as expected]
+    MUTATION APPLIED: 2 line(s) differ; first: CREATE TRIGGER zz_status_history_append_only
+    RED:   c13
+    green: none
+      c13: CONTROL FAILED: C13 ReviewActions shape: expected rows:1, got 42501:status_history_append_only
+m40-guard-no-type-requirement  [as expected]
+    MUTATION APPLIED: 1 line(s) differ; first: removed: OR NOT (v_elem ? 'type')
+    RED:   c13
+    green: none
+      c13: CONTROL FAILED: C13 untyped entry naming the caller: expected ~^42501:status_history_append_only$, got rows:1
+mutants: 46 run, 0 not as expected
