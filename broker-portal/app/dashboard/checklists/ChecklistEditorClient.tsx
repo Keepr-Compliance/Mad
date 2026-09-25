@@ -18,6 +18,9 @@
  * - After a save of an existing template the page is refreshed; the server
  *   page keys this component on updated_at, so it re-mounts with the stored
  *   rows (and the ids of items added in this session).
+ * - The audit line's time-of-day needs the viewer's local timezone (PR 4),
+ *   which the server can't know when it renders the initial HTML — see the
+ *   `mounted` gate below.
  */
 
 import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent } from 'react';
@@ -108,6 +111,12 @@ export default function ChecklistEditorClient({
   const [confirmLeave, setConfirmLeave] = useState(false);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [overIndex, setOverIndex] = useState<number | null>(null);
+  // The audit line's time-of-day depends on the viewer's local timezone,
+  // which the server (UTC on Vercel) can't know when it renders the initial
+  // HTML. Show the date alone until mounted in the browser, then switch to
+  // date + time — this never displays a wrong time (BACKLOG-3474 PR 4).
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
   const keySeq = useRef(1);
   const focusTarget = useRef<{ key: string; field: 'grip' | 'title' } | null>(null);
   const gripRefs = useRef(new Map<string, HTMLButtonElement>());
@@ -204,9 +213,9 @@ export default function ChecklistEditorClient({
   const saveDisabled = !dirty || saving;
   const auditLine = audit
     ? [
-        auditText('Created', audit.created),
-        auditText('Last edited', audit.edited),
-        audit.archived ? auditText('Archived', audit.archived) : '',
+        auditText('Created', audit.created, mounted),
+        auditText('Last edited', audit.edited, mounted),
+        audit.archived ? auditText('Archived', audit.archived, mounted) : '',
       ]
         .filter(Boolean)
         .join(' · ')

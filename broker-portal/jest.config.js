@@ -7,6 +7,8 @@
  * TASK-2199: Support Ticket Notification Emails
  */
 
+process.env.TZ = 'America/Los_Angeles';
+
 const rootConfig = require('../jest.config');
 
 module.exports = {

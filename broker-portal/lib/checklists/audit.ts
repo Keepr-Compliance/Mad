@@ -72,16 +72,56 @@ export function auditName(id: string | null | undefined, names: Map<string, stri
   return names.get(id) ?? FORMER_MEMBER;
 }
 
+/**
+ * Date only, always in UTC. This is the pre-mount render for both
+ * ChecklistEditorClient and ChecklistsListClient — the state that must match
+ * what the server sends (Vercel runs UTC), before the `mounted` gate can flip
+ * to the viewer's real local time. Using the viewer's local zone here instead
+ * (as an earlier version of this function did, unconditionally, in PR 3)
+ * makes the DATE itself drift near midnight UTC — a template last touched at
+ * 02:00 UTC reads "Sep 25" on the server and "Sep 24" for a US-Pacific
+ * viewer, a hydration mismatch even before any time-of-day is shown (caught
+ * in SR review of PR 4; see audit.test.ts for the boundary case).
+ */
 export function formatAuditDate(value: string | null | undefined): string {
   if (!value) return '';
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
 }
 
-/** "Created Sep 24, 2026 by Jane Doe", "Created Sep 24, 2026", or "" with no date. */
-export function auditText(label: string, entry: AuditEntry): string {
-  const date = formatAuditDate(entry.at);
+/**
+ * Date + time in the viewer's local timezone, e.g. "Sep 24, 2026, 4:23 PM".
+ * Same option set already used for timestamps elsewhere in the portal (see
+ * app/support/components/CustomerTicketSidebar.tsx and CustomerConversation.tsx)
+ * — reused here rather than inventing a second format (BACKLOG-3474 PR 4).
+ */
+export function formatAuditDateTime(value: string | null | undefined): string {
+  if (!value) return '';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+}
+
+/**
+ * "Created Sep 24, 2026, 4:23 PM by Jane Doe" (withTime), "Created Sep 24,
+ * 2026 by Jane Doe" (date only), or "" with no date at all.
+ *
+ * `withTime` defaults to false so this stays hydration-safe: local time
+ * depends on the viewer's timezone, which the server (UTC on Vercel) cannot
+ * know at render time. A caller that shows live local time passes
+ * `withTime` only once mounted in the browser — see ChecklistEditorClient's
+ * `mounted` gate.
+ */
+export function auditText(label: string, entry: AuditEntry, withTime = false): string {
+  const date = withTime ? formatAuditDateTime(entry.at) : formatAuditDate(entry.at);
   if (!date) return '';
   return entry.by ? `${label} ${date} by ${entry.by}` : `${label} ${date}`;
 }
