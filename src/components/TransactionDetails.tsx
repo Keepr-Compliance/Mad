@@ -70,7 +70,7 @@ import { isEmailMessage } from '@/utils/channelHelpers';
 import logger from '../utils/logger';
 import { OfflineNotice } from './common/OfflineNotice';
 // BACKLOG-3476: the Checklist tab.
-import { useStrictFeatureState } from "../hooks/useStrictFeatureState";
+import { useSessionStrictFeatureState } from "../contexts/StrictFeatureContext";
 import { useTransactionChecklist } from "./transactionDetailsModule/hooks/useTransactionChecklist";
 import { TransactionChecklistTab } from "./transactionDetailsModule/components/checklist/TransactionChecklistTab";
 import { ChecklistOverviewSection } from "./transactionDetailsModule/components/checklist/ChecklistOverviewSection";
@@ -159,7 +159,10 @@ function TransactionDetails({
   // BACKLOG-3476: the Checklist tab shows when the plan allows checklists, or
   // when this transaction already has at least one (read-only then — `get` and `remove`
   // are ungated in main). Never while the plan is still being read.
-  const checklistGate = useStrictFeatureState("transaction_checklists");
+  // Resolved once per session above this modal (StrictFeatureProvider), so the
+  // tab renders on the first frame with the others; each open re-asks main in
+  // the background.
+  const checklistGate = useSessionStrictFeatureState("transaction_checklists");
   const checklist = useTransactionChecklist(transaction.id);
   const showChecklist =
     checklistGate === "allowed" ||
