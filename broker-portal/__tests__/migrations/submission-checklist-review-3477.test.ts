@@ -120,7 +120,10 @@ describe('BACKLOG-3477 — submission checklist review migration', () => {
       expect(body).toContain('public.can_review_submission(');
       // The history append is one statement on the row's own value.
       expect(body).toContain("SET status_history = COALESCE(status_history, '[]'::jsonb) || jsonb_build_array(");
-      expect(body).not.toMatch(/'status',/);
+      // The appended entry carries no status key (status entries belong to the status trigger).
+      const append = body.slice(body.indexOf('SET status_history'), body.indexOf(' WHERE id =', body.indexOf('SET status_history')));
+      expect(append).toContain("'type', ");
+      expect(append).not.toMatch(/'status',/);
     }
     for (const name of ['snapshot_submission_checklists', 'guard_status_history_append_only']) {
       expect(functionBody(sql, name)).toContain("SET search_path = ''");
