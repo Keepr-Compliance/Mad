@@ -2539,7 +2539,8 @@ export function MacOSMessagesImportSettings({
           <p className="text-sm text-gray-600 mb-6">
             This re-imports your entire message history from scratch and will{" "}
             <strong>unlink your attached conversations</strong> from their
-            transactions — you&rsquo;ll need to re-attach them afterward. This
+            transactions — you&rsquo;ll need to re-attach them afterward. Links
+            from checklist items to their attachments are removed too. This
             can take a while.
           </p>
           {/* BACKLOG-2749 / founder `c2300351`: "switch the design of the

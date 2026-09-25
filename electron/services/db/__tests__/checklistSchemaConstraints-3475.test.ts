@@ -234,13 +234,25 @@ describe("BACKLOG-3475 — the value lists and bounds parity cannot see", () => 
     ).toThrow(/CHECK constraint failed/);
   });
 
-  it("a transaction holds at most one checklist", () => {
+  it("BACKLOG-3476: a transaction holds several checklists, each from a different template", () => {
     seedChecklist("a", "email-a");
+    run(
+      `INSERT INTO transaction_checklists (id, transaction_id, template_id, template_name, sort_order) VALUES ('c-a2', 'txn-a', 'tpl2', 'Commercial', 1)`,
+    );
+    expect(ids("transaction_checklists")).toEqual(["c-a", "c-a2"]);
+  });
+
+  it("BACKLOG-3476: the same template twice on one transaction is refused", () => {
+    seedChecklist("a", "email-a");
+    const templateId = (
+      db.prepare(`SELECT template_id FROM transaction_checklists WHERE id = 'c-a'`).get() as { template_id: string }
+    ).template_id;
     expect(() =>
       run(
-        `INSERT INTO transaction_checklists (id, transaction_id, template_id, template_name) VALUES ('c-a2', 'txn-a', 'tpl2', 'Commercial')`,
+        `INSERT INTO transaction_checklists (id, transaction_id, template_id, template_name) VALUES ('c-a2', 'txn-a', ?, 'Again')`,
+        templateId,
       ),
-    ).toThrow(/UNIQUE constraint failed/);
+    ).toThrow(/UNIQUE constraint failed: transaction_checklists.transaction_id, transaction_checklists.template_id/);
     expect(ids("transaction_checklists")).toEqual(["c-a"]);
   });
 

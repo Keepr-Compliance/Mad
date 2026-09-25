@@ -69,6 +69,11 @@ import { restoreRemovedEmailsByContentIds, type EmailUndoOutcome } from "./trans
 import { isEmailMessage } from '@/utils/channelHelpers';
 import logger from '../utils/logger';
 import { OfflineNotice } from './common/OfflineNotice';
+// BACKLOG-3476: the Checklist tab.
+import { useSessionStrictFeatureState } from "../contexts/StrictFeatureContext";
+import { useTransactionChecklist } from "./transactionDetailsModule/hooks/useTransactionChecklist";
+import { TransactionChecklistTab } from "./transactionDetailsModule/components/checklist/TransactionChecklistTab";
+import { ChecklistOverviewSection } from "./transactionDetailsModule/components/checklist/ChecklistOverviewSection";
 
 interface TransactionDetailsComponentProps {
   transaction: Transaction;
@@ -151,6 +156,30 @@ function TransactionDetails({
   // Tab state hook - use initialTab prop
   const { activeTab, setActiveTab } = useTransactionTabs(initialTab);
 
+  // BACKLOG-3476: the Checklist tab shows when the plan allows checklists, or
+  // when this transaction already has at least one (read-only then — `get` and `remove`
+  // are ungated in main). Never while the plan is still being read.
+  // Resolved once per session above this modal (StrictFeatureProvider), so the
+  // tab renders on the first frame with the others; each open re-asks main in
+  // the background.
+  const checklistGate = useSessionStrictFeatureState("transaction_checklists");
+  const checklist = useTransactionChecklist(transaction.id);
+  const showChecklist =
+    checklistGate === "allowed" ||
+    (checklistGate !== "pending" && (checklist.data?.checklists.length ?? 0) > 0);
+  // The tab can disappear under the user (checklist removed, plan changed):
+  // fall back to Overview rather than render an empty panel.
+  useEffect(() => {
+    if (
+      activeTab === "checklist" &&
+      !showChecklist &&
+      checklistGate !== "pending" &&
+      checklist.state.status !== "loading"
+    ) {
+      setActiveTab("overview");
+    }
+  }, [activeTab, showChecklist, checklistGate, checklist.state.status, setActiveTab]);
+
   // BACKLOG-1869: highlight target produced by the linked-content search; consumed
   // by the Emails or Messages tab to scroll+highlight the matching conversation card.
   // BACKLOG-1876: seeded from `initialHighlight` when opened from a global search hit.
@@ -171,6 +200,10 @@ function TransactionDetails({
   // Overview only needs contacts (loaded by loadOverview on mount).
   // Emails tab loads only email comms; Messages tab loads only text comms.
   const loadedChannelsRef = React.useRef<Set<string>>(new Set());
+  // BACKLOG-3476 (SR B1): the email load in flight (or finished) for this
+  // transaction. Every caller of ensureEmailsLoaded awaits THIS promise, so a
+  // second caller never resolves before the data arrives.
+  const emailLoadRef = React.useRef<Promise<void> | null>(null);
   // BACKLOG-1888: StrictMode-safe highlight reset — compare the previous transaction
   // id rather than counting effect runs. The old boolean guard (didMountRef) flipped
   // to true after StrictMode's first run, so run 2 was misinterpreted as a real
@@ -186,6 +219,7 @@ function TransactionDetails({
   const prevTransactionIdRef = React.useRef<string | null>(null);
   useEffect(() => {
     loadedChannelsRef.current.clear();
+    emailLoadRef.current = null;
     const prev = prevTransactionIdRef.current;
     if (prev !== null && prev !== transaction.id) {
       setHighlightTarget(null);
@@ -196,7 +230,7 @@ function TransactionDetails({
   useEffect(() => {
     if (activeTab === "emails" && !loadedChannelsRef.current.has("email")) {
       loadedChannelsRef.current.add("email");
-      loadCommunications("email");
+      emailLoadRef.current = loadCommunications("email");
     } else if (activeTab === "messages" && !loadedChannelsRef.current.has("text")) {
       loadedChannelsRef.current.add("text");
       loadCommunications("text");
@@ -204,6 +238,30 @@ function TransactionDetails({
     // BACKLOG-322: the Attachments tab no longer piggybacks on email
     // communications — useTransactionAllAttachments loads its own unified data.
   }, [activeTab, loadCommunications]);
+
+  // BACKLOG-3476 (SR condition 1): the checklist link picker needs the emails
+  // even when the Emails tab was never opened. SILENT on purpose:
+  // loadCommunications flips `loading`, and with no contacts the early return
+  // below swaps this whole modal for a spinner, unmounting the picker. Marking
+  // the channel loaded means opening the Emails tab later does not fetch again.
+  //
+  // SR B1: a caller that finds the channel already marked awaits the load that
+  // marked it (silent or loud), never an early return; otherwise the picker
+  // says "No email threads" while the emails are still on their way. Under
+  // StrictMode the picker's effect runs twice, and the second run awaits the
+  // first run's fetch.
+  // Known limit: the silent loader logs and swallows a failed fetch, so after a
+  // failure the picker offers no threads. It can only under-offer; main still
+  // decides every link it is asked to write.
+  const ensureEmailsLoaded = useCallback((): Promise<void> => {
+    if (loadedChannelsRef.current.has("email")) {
+      return emailLoadRef.current ?? Promise.resolve();
+    }
+    loadedChannelsRef.current.add("email");
+    const load = refreshCommunicationsSilently("email");
+    emailLoadRef.current = load;
+    return load;
+  }, [refreshCommunicationsSilently]);
 
   // Communications hook
   const {
@@ -1157,6 +1215,7 @@ function TransactionDetails({
           conversationCount={transaction.text_thread_count || 0}
           emailCount={transaction.email_count || 0}
           onTabChange={setActiveTab}
+          showChecklist={showChecklist}
         />
 
         <OfflineNotice />
@@ -1197,6 +1256,14 @@ function TransactionDetails({
               removedContactsOpen={removedContactsOpen}
               onRemovedContactsOpenChange={setRemovedContactsOpen}
               removedContactsRefreshKey={removedContactsRefreshKey}
+              checklistSection={
+                showChecklist && checklist.data && checklist.data.checklists.length > 0 ? (
+                  <ChecklistOverviewSection
+                    data={checklist.data}
+                    onOpen={() => setActiveTab("checklist")}
+                  />
+                ) : null
+              }
             />
           )}
 
@@ -1311,6 +1378,24 @@ function TransactionDetails({
               loading={attachmentsLoading}
               error={attachmentsError}
               refresh={refreshAttachments}
+            />
+          )}
+
+          {activeTab === "checklist" && showChecklist && (
+            <TransactionChecklistTab
+              checklist={checklist}
+              gate={checklistGate}
+              attachments={attachments}
+              attachmentsLoading={attachmentsLoading}
+              emailCommunications={emailCommunications}
+              ensureEmailsLoaded={ensureEmailsLoaded}
+              onRefreshLinkTargets={() => {
+                refreshAttachments();
+                if (loadedChannelsRef.current.has("email")) void refreshCommunicationsSilently("email");
+              }}
+              onShowSuccess={showSuccess}
+              onShowError={showError}
+              nameMap={emailNameMap}
             />
           )}
         </div>

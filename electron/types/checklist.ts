@@ -6,7 +6,8 @@
  * holding VALUES drags main-process code into the Vite bundle).
  *
  * A checklist is a broker template COPIED onto one transaction at the moment
- * the user picks it. Every field below that came from a template is a copy:
+ * the user picks it. A transaction may hold several, each from a different
+ * template (BACKLOG-3476). Every field below that came from a template is a copy:
  * `templateId` records which template it came from and nothing reads through
  * it, so editing or deleting the broker template never rewrites a checklist
  * already in use.
@@ -24,6 +25,8 @@ export interface TransactionChecklist {
   /** The source template's cloud id. Provenance only — no read joins through it. */
   templateId: string;
   templateName: string;
+  /** Display position among this transaction's checklists (BACKLOG-3476). */
+  sortOrder: number;
   selectedAt: string | null;
 }
 
@@ -76,7 +79,7 @@ export interface ChecklistLink {
   members: ChecklistLinkMember[];
 }
 
-/** Everything one transaction's checklist tab needs, in one read. */
+/** One checklist with everything its section of the tab needs. */
 export interface ChecklistDetail {
   checklist: TransactionChecklist;
   items: ChecklistItem[];
@@ -84,6 +87,24 @@ export interface ChecklistDetail {
   linksByItemId: Record<string, ChecklistLink[]>;
   /** Required items ticked / required items total. Optional items are not counted. */
   requiredDone: number;
+  requiredTotal: number;
+  /**
+   * Every item ticked, optional ones included (BACKLOG-3476: such a section
+   * opens collapsed). False for a checklist with no items.
+   */
+  allItemsChecked: boolean;
+}
+
+/**
+ * Every checklist on one transaction, in display order, in one read
+ * (BACKLOG-3476). The sums are computed in main so the renderer never derives
+ * progress from items. An empty list when the transaction has none.
+ */
+export interface ChecklistsForTransaction {
+  checklists: ChecklistDetail[];
+  /** Sum of each checklist's `requiredDone`. */
+  requiredDone: number;
+  /** Sum of each checklist's `requiredTotal`. */
   requiredTotal: number;
 }
 
@@ -143,21 +164,21 @@ export interface SelectChecklistTemplateInput {
   templateId: string;
   templateName: string;
   items: ChecklistTemplateItemInput[];
-  /**
-   * A transaction holds at most one checklist. Picking a second template
-   * without this flag is REFUSED and writes nothing; with it, the existing
-   * checklist and everything under it is replaced in the same transaction.
-   */
-  replaceExisting?: boolean;
 }
 
 /**
  * Why a write did nothing, or what it did. A refusal is a RESULT, never a
  * throw: the caller has to render the reason.
+ *
+ * ADD only (BACKLOG-3476 round 2: Change is gone, and with it the only route
+ * that could delete a checklist's own ticks, notes and links out from under
+ * it — the sole way to remove a checklist is `checklists:remove`, which
+ * removes ONE named checklist and nothing else). There is no `"replaced"` or
+ * `"no_checklist"` arm: this call never deletes.
  */
 export type SelectChecklistTemplateResult =
-  | { status: "selected"; checklistId: string }
-  | { status: "replaced"; checklistId: string; previousChecklistId: string }
+  | { status: "added"; checklistId: string }
+  /** This template is already on this transaction (as `checklistId`). Nothing written. */
   | { status: "exists"; checklistId: string }
   | { status: "no_transaction" };
 

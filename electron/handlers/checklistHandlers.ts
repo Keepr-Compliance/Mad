@@ -57,7 +57,7 @@ import checklistTemplateService from "../services/checklistTemplateService";
 import databaseService from "../services/databaseService";
 import {
   addChecklistLink,
-  getChecklistForTransaction,
+  getChecklistsForTransaction,
   removeChecklist,
   removeChecklistLink,
   selectChecklistTemplate,
@@ -84,7 +84,7 @@ import { ValidationError } from "../utils/validation";
 import { isChecklistsAllowed, resolveOrgId } from "./featureGateHandlers";
 import type {
   AddChecklistLinkResult,
-  ChecklistDetail,
+  ChecklistsForTransaction,
   SelectChecklistTemplateResult,
 } from "../types/checklist";
 import type { ListChecklistTemplatesResult } from "../types/ipc/window-api-checklists";
@@ -104,16 +104,16 @@ export type ListChecklistTemplatesResponse = ListChecklistTemplatesResult;
 
 export interface GetChecklistResponse {
   success: boolean;
-  /** `null` when this transaction has no checklist yet. */
-  checklist?: ChecklistDetail | null;
+  /** Every checklist on the transaction; an empty list when it has none. */
+  checklists?: ChecklistsForTransaction;
   error?: string;
 }
 
 export interface SelectChecklistTemplateResponse {
   success: boolean;
   /**
-   * The db layer's own outcome, carried through unchanged. `exists` and
-   * `no_transaction` arrive here with `success: true` because the call ran and
+   * The db layer's own outcome, carried through unchanged. `added`,
+   * `exists` and `no_transaction` arrive here with `success: true` because the call ran and
    * answered; what it answered is the surface's to render.
    */
   result?: SelectChecklistTemplateResult;
@@ -187,7 +187,7 @@ function parseArgs<T>(
  */
 async function auditChecklistAct(
   transactionId: string,
-  reason: "checklist_selected" | "checklist_replaced" | "checklist_removed",
+  reason: "checklist_selected" | "checklist_removed",
   extra: Record<string, unknown> = {},
 ): Promise<void> {
   const transaction = await databaseService.getTransactionById(transactionId);
@@ -237,14 +237,13 @@ export function registerChecklistHandlers(): void {
   );
 
   /**
-   * Copy a template onto a transaction.
+   * Copy a template onto a transaction: ADD a checklist (BACKLOG-3476 round 2:
+   * Change is gone, so this channel never replaces or deletes one).
    *
    * The items come from the template listing, not from the renderer: a caller
    * that supplied its own items could write any title it liked into a row the
    * export renders. The whole copy is one database transaction inside
-   * `selectChecklistTemplate` — this handler never removes and then
-   * instantiates, which would leave a failure between the two with the user's
-   * plan destroyed and not replaced.
+   * `selectChecklistTemplate`.
    */
   ipcMain.handle(
     "checklists:select-template",
@@ -284,15 +283,13 @@ export function registerChecklistHandlers(): void {
             expectedDocumentType: item.expectedDocumentType,
             sortOrder: item.sortOrder,
           })),
-          replaceExisting: args.replaceExisting,
         });
 
-        if (result.status === "selected" || result.status === "replaced") {
-          await auditChecklistAct(
-            args.transactionId,
-            result.status === "replaced" ? "checklist_replaced" : "checklist_selected",
-            { templateId: template.id, checklistId: result.checklistId },
-          );
+        if (result.status === "added") {
+          await auditChecklistAct(args.transactionId, "checklist_selected", {
+            templateId: template.id,
+            checklistId: result.checklistId,
+          });
         }
 
         logService.info("Checklist template selected", "Checklists", {
@@ -307,7 +304,7 @@ export function registerChecklistHandlers(): void {
   );
 
   /**
-   * Everything one transaction's checklist needs, in one read.
+   * Every checklist on one transaction and everything each needs, in one read.
    *
    * **Not gated.** A local read of the user's own rows, and 3476 has to be able
    * to render a checklist in order to explain why it is stale to someone whose
@@ -318,8 +315,8 @@ export function registerChecklistHandlers(): void {
     wrapHandler(
       async (_event: IpcMainInvokeEvent, payload: unknown): Promise<GetChecklistResponse> => {
         const args = parseArgs(GetChecklistArgsSchema, payload, "payload");
-        const checklist = await getChecklistForTransaction(args.transactionId);
-        return { success: true, checklist };
+        const checklists = await getChecklistsForTransaction(args.transactionId);
+        return { success: true, checklists };
       },
       { module: "Checklists" },
     ),
@@ -397,8 +394,8 @@ export function registerChecklistHandlers(): void {
   );
 
   /**
-   * Take the checklist off a transaction. Items, groups and members follow by
-   * cascade.
+   * Take ONE checklist off a transaction. Its items, groups and members follow
+   * by cascade; every other checklist on the transaction is untouched.
    *
    * **Not gated, on the unhide rule.** A user whose plan stops including
    * checklists must still be able to clear one off his own transaction.
@@ -408,11 +405,14 @@ export function registerChecklistHandlers(): void {
     wrapHandler(
       async (_event: IpcMainInvokeEvent, payload: unknown): Promise<ChecklistWriteResponse> => {
         const args = parseArgs(RemoveChecklistArgsSchema, payload, "payload");
-        const changed = await removeChecklist(args.transactionId);
-        if (changed) {
-          await auditChecklistAct(args.transactionId, "checklist_removed");
+        const removed = await removeChecklist(args.transactionId, args.checklistId);
+        if (removed) {
+          await auditChecklistAct(args.transactionId, "checklist_removed", {
+            checklistId: removed.id,
+            templateId: removed.templateId,
+          });
         }
-        return { success: true, changed };
+        return { success: true, changed: removed !== null };
       },
       { module: "Checklists" },
     ),

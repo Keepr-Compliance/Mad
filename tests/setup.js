@@ -374,7 +374,11 @@ if (typeof window !== 'undefined') {
         success: false,
         error: 'Transaction checklists are not available.',
       }),
-      get: jest.fn().mockResolvedValue({ success: true, checklist: null }),
+      // BACKLOG-3476: every checklist on the transaction; none by default.
+      get: jest.fn().mockResolvedValue({
+        success: true,
+        checklists: { checklists: [], requiredDone: 0, requiredTotal: 0 },
+      }),
       setItemChecked: jest.fn().mockResolvedValue({
         success: false,
         error: 'Transaction checklists are not available.',

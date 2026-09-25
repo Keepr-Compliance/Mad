@@ -47,17 +47,52 @@ export const TRANSACTION_EXISTS_SQL = sql`
   SELECT id FROM transactions WHERE id = ?
 `;
 
-/** The checklist on one transaction, if any. One bound parameter. */
-export const GET_CHECKLIST_BY_TRANSACTION_SQL = sql`
-  SELECT id, transaction_id, template_id, template_name, selected_at
+/**
+ * Every checklist on one transaction, in display order (BACKLOG-3476). One
+ * bound parameter.
+ */
+export const GET_CHECKLISTS_BY_TRANSACTION_SQL = sql`
+  SELECT id, transaction_id, template_id, template_name, sort_order, selected_at
+  FROM transaction_checklists
+  WHERE transaction_id = ?
+  ORDER BY sort_order, selected_at, id
+`;
+
+/**
+ * One checklist, only if it belongs to this transaction. Two bound
+ * parameters, in order: checklist id, transaction id. The remove path goes
+ * through this, so an id from another transaction is never acted on.
+ */
+export const GET_CHECKLIST_IN_TRANSACTION_SQL = sql`
+  SELECT id, transaction_id, template_id, template_name, sort_order, selected_at
+  FROM transaction_checklists
+  WHERE id = ? AND transaction_id = ?
+`;
+
+/**
+ * The checklist on this transaction that came from this template, if any. Two
+ * bound parameters, in order: transaction id, template id. A template may be
+ * on a transaction once.
+ */
+export const GET_CHECKLIST_BY_TEMPLATE_SQL = sql`
+  SELECT id FROM transaction_checklists
+  WHERE transaction_id = ? AND template_id = ?
+`;
+
+/** Next free display position on one transaction. One bound parameter. */
+export const NEXT_CHECKLIST_SORT_ORDER_SQL = sql`
+  SELECT COALESCE(MAX(sort_order) + 1, 0) AS next_sort_order
   FROM transaction_checklists
   WHERE transaction_id = ?
 `;
 
-/** Insert one checklist. Four bound parameters: id, transaction id, template id, template name. */
+/**
+ * Insert one checklist. Five bound parameters: id, transaction id, template id,
+ * template name, sort_order.
+ */
 export const INSERT_CHECKLIST_SQL = sql`
-  INSERT INTO transaction_checklists (id, transaction_id, template_id, template_name)
-  VALUES (?, ?, ?, ?)
+  INSERT INTO transaction_checklists (id, transaction_id, template_id, template_name, sort_order)
+  VALUES (?, ?, ?, ?, ?)
 `;
 
 /**
@@ -73,14 +108,17 @@ export const INSERT_CHECKLIST_ITEM_SQL = sql`
   VALUES (?, ?, ?, ?, ?, ?, ?)
 `;
 
-/** Delete one checklist by id; items, links and members follow by cascade. One bound parameter. */
-export const DELETE_CHECKLIST_BY_ID_SQL = sql`
-  DELETE FROM transaction_checklists WHERE id = ?
-`;
-
-/** Delete the checklist on one transaction. One bound parameter. */
-export const DELETE_CHECKLIST_BY_TRANSACTION_SQL = sql`
-  DELETE FROM transaction_checklists WHERE transaction_id = ?
+/**
+ * Delete ONE checklist of one transaction; its items, links and members follow
+ * by cascade. Two bound parameters, in order: checklist id, transaction id.
+ * There is deliberately no statement that deletes by transaction alone: every
+ * other checklist on the transaction must survive a remove. This is the ONLY
+ * statement in this file that deletes a `transaction_checklists` row
+ * (BACKLOG-3476 round 2: Change is gone, so `selectChecklistTemplate` never
+ * deletes).
+ */
+export const DELETE_CHECKLIST_IN_TRANSACTION_SQL = sql`
+  DELETE FROM transaction_checklists WHERE id = ? AND transaction_id = ?
 `;
 
 /** Every item of one checklist, in display order. One bound parameter. */

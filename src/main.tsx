@@ -2,7 +2,8 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import * as Sentry from "@sentry/electron/renderer";
 import App from "./App";
-import { AuthProvider, NetworkProvider, PlatformProvider, useAuth, LicenseProvider } from "./contexts";
+import { AuthProvider, NetworkProvider, PlatformProvider, useAuth, LicenseProvider, useLicense } from "./contexts";
+import { StrictFeatureProvider } from "./contexts/StrictFeatureContext";
 import ErrorBoundary from "./components/ErrorBoundary";
 import {
   FeatureFlaggedProvider,
@@ -66,8 +67,22 @@ function LicenseProviderWithAuth({ children }: { children: React.ReactNode }) {
   const { currentUser } = useAuth();
   return (
     <LicenseProvider userId={currentUser?.id ?? null}>
-      {children}
+      <StrictFeatureProviderWithSession>{children}</StrictFeatureProviderWithSession>
     </LicenseProvider>
+  );
+}
+
+/**
+ * BACKLOG-3476: the session's strict plan answer for checklists, resolved once
+ * above the transaction modal. Must be rendered inside LicenseProvider.
+ */
+function StrictFeatureProviderWithSession({ children }: { children: React.ReactNode }) {
+  const { currentUser } = useAuth();
+  const { organizationId } = useLicense();
+  return (
+    <StrictFeatureProvider userId={currentUser?.id ?? null} organizationId={organizationId}>
+      {children}
+    </StrictFeatureProvider>
   );
 }
 
