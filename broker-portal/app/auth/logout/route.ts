@@ -3,10 +3,11 @@
  *
  * Signs out the user and redirects to login page.
  *
- * BACKLOG-3080: middleware and the dashboard layout send a signed-in person who
- * is not a portal user here with `?error=not_authorized`. That branch ends ONLY
- * this browser's portal session (`scope: 'local'`) and shows the login error.
- * The bare Sign Out link is unchanged.
+ * BACKLOG-3080: every path ends ONLY this browser's portal session
+ * (`scope: 'local'`) and clears the Supabase auth cookies on the response.
+ * Middleware and the dashboard layout send a signed-in person who is not a
+ * portal user here with `?error=not_authorized`; that value is passed on to
+ * /login. The explicit sign-out-everywhere action is `signOutAllDevices`.
  */
 
 import { createClient } from '@/lib/supabase/server';
@@ -29,19 +30,17 @@ async function logout(request: Request): Promise<NextResponse> {
   const error = requestUrl.searchParams.get('error');
   const supabase = await createClient();
 
-  if (error && PASS_THROUGH_ERRORS.has(error)) {
-    await supabase.auth.signOut({ scope: 'local' });
-    const response = NextResponse.redirect(
-      `${requestUrl.origin}/login?error=${encodeURIComponent(error)}`
-    );
-    // Clear the cookies here too, so a sign-out that fails cannot leave a
-    // session that middleware would send straight back to this route.
-    for (const name of authCookieNames(request)) response.cookies.delete(name);
-    return response;
-  }
+  const target =
+    error && PASS_THROUGH_ERRORS.has(error)
+      ? `${requestUrl.origin}/login?error=${encodeURIComponent(error)}`
+      : `${requestUrl.origin}/login`;
 
-  await supabase.auth.signOut();
-  return NextResponse.redirect(`${requestUrl.origin}/login`);
+  await supabase.auth.signOut({ scope: 'local' });
+  const response = NextResponse.redirect(target);
+  // Clear the cookies here too, so a sign-out that fails cannot leave a
+  // session that middleware would send straight back to this route.
+  for (const name of authCookieNames(request)) response.cookies.delete(name);
+  return response;
 }
 
 export async function POST(request: Request) {
