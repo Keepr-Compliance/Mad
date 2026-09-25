@@ -40,6 +40,23 @@ const M4 = read(M4_PATH);
 // BACKLOG-3474 PR 3: updated_by / archived_by trigger, loaded by run.sh after file 4.
 const M5_PATH = "supabase/migrations/20260924224113_backlog_3474_template_audit_fields.sql";
 const M5 = read(M5_PATH);
+// BACKLOG-3535: min_tier individual (M6) and the solo-owner / seed-floor file (M7),
+// loaded by run.sh after file 5. M7 is the LAST definer of can_edit_checklist_templates
+// and _seed_checklists_on_plan_write, so every mutant of those two starts from M7.
+const M6_PATH = "supabase/migrations/20260924183422_backlog_3535_checklists_min_tier_individual.sql";
+mustExist(M6_PATH);
+const M7_FILE = readdirSync(join(REPO, "supabase/migrations")).filter((f) => f.endsWith("_backlog_3535_solo_checklists.sql"));
+if (M7_FILE.length !== 1) throw new Error(`expected one *_backlog_3535_solo_checklists.sql, found ${M7_FILE.length}`);
+// Whole-line comments dropped: M7's header quotes the ROLLBACK bodies, which
+// would otherwise be the first "CREATE OR REPLACE FUNCTION" fn() finds.
+const M7 = read(`supabase/migrations/${M7_FILE[0]}`)
+  .split("\n")
+  .filter((line) => !/^\s*--/.test(line))
+  .join("\n");
+
+function mustExist(p) {
+  readFileSync(join(REPO, p));
+}
 
 /** Exact replacement; throws if `from` does not occur exactly once in `text`. */
 function edit(text, from, to, label) {
@@ -108,9 +125,9 @@ const SUFFIX = ["a", "b", "c", "d"];
 
 const helper = fn(M1, "_override_above_tier");
 const reject = fn(M1, "_reject_feature_override_above_tier");
-const canEdit = fn(M2, "can_edit_checklist_templates");
+const canEdit = fn(M7, "can_edit_checklist_templates");
 const seed = fn(M2, "_seed_org_checklist_templates");
-const seedTrg = fn(M2, "_seed_checklists_on_plan_write");
+const seedTrg = fn(M7, "_seed_checklists_on_plan_write");
 const TIER_TEST = "     AND public.tier_rank(p_plan_tier) < public.tier_rank(p_min_tier)";
 const MIN_AND_TIER = "     AND p_min_tier IS NOT NULL\n" + TIER_TEST;
 
@@ -320,7 +337,7 @@ add("m03-anon-select-templates.sql", {
 const ROLES = "m.role IN ('broker', 'admin', 'it_admin')";
 add("m04-helper-admits-agent.sql", {
   what: "can_edit_checklist_templates admits the agent role",
-  targets: "c02",
+  targets: "c02 c41",
   sql: edit(canEdit, ROLES, "m.role IN ('broker', 'admin', 'it_admin', 'agent')", "m04"),
   proof: proof(`${def(CAN_EDIT)} LIKE '%''agent''%'`, `'agent admitted'`),
 });
@@ -329,8 +346,8 @@ add("m05-helper-role-anywhere.sql", {
   targets: "c03",
   sql: edit(
     canEdit,
-    "            WHERE m.organization_id = p_org_id\n              AND m.user_id = (SELECT auth.uid())\n              AND m.role IN ('broker', 'admin', 'it_admin')\n         )",
-    "            WHERE m.user_id = (SELECT auth.uid())\n              AND m.role IN ('broker', 'admin', 'it_admin')\n         )\n" +
+    "            WHERE m.organization_id = p_org_id\n              AND m.user_id = (SELECT auth.uid())\n              AND (m.role IN ('broker', 'admin', 'it_admin')\n                   OR o.personal_owner_user_id = m.user_id)\n         )",
+    "            WHERE m.user_id = (SELECT auth.uid())\n              AND (m.role IN ('broker', 'admin', 'it_admin')\n                   OR o.personal_owner_user_id = m.user_id)\n         )\n" +
       "     AND EXISTS (\n           SELECT 1\n             FROM public.organization_members m2\n            WHERE m2.organization_id = p_org_id\n" +
       "              AND m2.user_id = (SELECT auth.uid())\n         )",
     "m05",
@@ -351,7 +368,7 @@ for (const [suffix, role, list] of [
 }
 add("m07-helper-without-entitlement.sql", {
   what: "can_edit_checklist_templates does not check the organization's entitlement",
-  targets: "c05",
+  targets: "c05 c41",
   sql: edit(
     canEdit,
     "\n     AND COALESCE((public.check_feature_access(p_org_id, 'transaction_checklists') ->> 'allowed')::boolean, false);",
@@ -583,32 +600,29 @@ add("m35-seed-unique-index-dropped.sql", {
   sql: "DROP INDEX public.checklist_templates_org_seed_key_key;",
   proof: proof(`to_regclass('public.checklist_templates_org_seed_key_key') IS NULL`, `'seed idempotency index absent'`),
 });
+// BACKLOG-3535: the trigger now comes from M7 (floor = feature_definitions.min_tier).
+// m36 retargeted to c42 (C42.1 is the input that separates "no floor" from the
+// min_tier floor; C18 now expects u_p seeded either way). m37 (`< 1`) retired: on
+// every real tier it equals a hard-coded 'individual' floor, which is m75 below.
+// m39 retired: with min_tier individual no real tier sits below the floor at first
+// sign-in, so "a failure after the floor leaves sign-in untouched" no longer has an
+// input -- a seed failure now DOES roll back ensure_personal_organization (m38 and
+// the migration header say so).
+const SEED_FLOOR =
+  "     < public.tier_rank((SELECT fd.min_tier FROM public.feature_definitions fd\n                          WHERE fd.key = 'transaction_checklists')) THEN";
 const SEED_EARLY =
-  "  IF public.tier_rank((SELECT p.tier FROM public.plans p WHERE p.id = NEW.plan_id))\n     < public.tier_rank('team') THEN\n    RETURN NULL;\n  END IF;\n";
+  "  IF public.tier_rank((SELECT p.tier FROM public.plans p WHERE p.id = NEW.plan_id))\n" + SEED_FLOOR + "\n    RETURN NULL;\n  END IF;\n";
 add("m36-seed-trigger-without-tier-test.sql", {
   what: "the seed trigger seeds every plan write (tier early return removed)",
-  targets: "c18",
+  targets: "c42",
   sql: edit(seedTrg, SEED_EARLY, "", "m36"),
   proof: proof(`${def(SEED_TRG)} NOT LIKE '%tier_rank%'`, `'no tier test'`),
-});
-add("m37-seed-trigger-threshold-individual.sql", {
-  what: "the seed trigger threshold admits the individual tier (`< 1`)",
-  targets: "c18",
-  sql: edit(seedTrg, "     < public.tier_rank('team') THEN", "     < 1 THEN", "m37"),
-  proof: proof(`${def(SEED_TRG)} LIKE '%< 1 THEN%'`, `'threshold < 1'`),
 });
 add("m38-seed-trigger-fails-before-tier-test.sql", {
   what: "the seed trigger raises (1/0) BEFORE its tier early return",
   targets: "c18",
   sql: edit(seedTrg, "BEGIN\n" + SEED_EARLY, "BEGIN\n  PERFORM 1/0;\n" + SEED_EARLY, "m38"),
   proof: proof(`position('PERFORM 1/0' in ${def(SEED_TRG)}) BETWEEN 1 AND position('tier_rank' in ${def(SEED_TRG)})`, `'1/0 before the tier test'`),
-});
-add("m39-seed-trigger-fails-after-tier-test.sql", {
-  what: "the seed trigger raises (1/0) AFTER its tier early return -- first sign-in must stay unaffected",
-  targets: "c18",
-  expect: "green",
-  sql: edit(seedTrg, SEED_EARLY, SEED_EARLY + "  PERFORM 1/0;\n", "m39"),
-  proof: proof(`position('PERFORM 1/0' in ${def(SEED_TRG)}) > position('tier_rank' in ${def(SEED_TRG)})`, `'1/0 after the tier test'`),
 });
 add("m40-seed-function-granted.sql", {
   what: "EXECUTE on _seed_org_checklist_templates granted to authenticated",
@@ -635,6 +649,62 @@ add("m43-catalogue-name-check-dropped.sql", {
   targets: "c24",
   sql: "ALTER TABLE public.checklist_seed_templates DROP CONSTRAINT checklist_seed_templates_name_check;",
   proof: proof(`NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'checklist_seed_templates_name_check')`, `'name CHECK absent'`),
+});
+
+// ---------------------------------------------------------------- BACKLOG-3535: solo owner, seed floor
+// The likely wrong implementations named in the plan (pm_comments 2dd91e1a) and
+// SR review (pm_comments 1ff927e5). "Owner clause outside the membership EXISTS"
+// is NOT here: check_feature_access refuses a non-member first, so no database
+// input separates it from the shipped rule (SR ruling); the CI text tripwire
+// solo-checklists-3535.test.ts is its control.
+const OWNER = "                   OR o.personal_owner_user_id = m.user_id)";
+add("m71-helper-owner-of-any-org.sql", {
+  what: "can_edit_checklist_templates admits a member of p_org_id who owns ANY personal organization",
+  targets: "c41",
+  sql: edit(canEdit, OWNER, "                   OR EXISTS (SELECT 1 FROM public.organizations x WHERE x.personal_owner_user_id = (SELECT auth.uid())))", "m71"),
+  proof: proof(`${def(CAN_EDIT)} LIKE '%x.personal_owner_user_id = (SELECT auth.uid())%'`, `'owner of any org'`),
+});
+add("m72-helper-any-member-of-personal.sql", {
+  what: "can_edit_checklist_templates admits any member of a personal organization, owner or not",
+  targets: "c41",
+  sql: edit(canEdit, OWNER, "                   OR o.personal_owner_user_id IS NOT NULL)", "m72"),
+  proof: proof(`${def(CAN_EDIT)} LIKE '%personal_owner_user_id IS NOT NULL%'`, `'any member of a personal org'`),
+});
+add("m73-helper-member-of-some-personal-org.sql", {
+  what: "can_edit_checklist_templates admits a member of p_org_id who belongs to SOME personal organization",
+  targets: "c41",
+  sql: edit(
+    canEdit,
+    OWNER,
+    "                   OR EXISTS (SELECT 1 FROM public.organization_members pm JOIN public.organizations po ON po.id = pm.organization_id\n" +
+      "                               WHERE pm.user_id = (SELECT auth.uid()) AND po.personal_owner_user_id IS NOT NULL))",
+    "m73",
+  ),
+  proof: proof(`${def(CAN_EDIT)} LIKE '%po.personal_owner_user_id IS NOT NULL%'`, `'member of some personal org'`),
+});
+add("m74-helper-owner-clause-removed.sql", {
+  what: "can_edit_checklist_templates without the owner clause (the item not implemented)",
+  targets: "c41",
+  sql: edit(canEdit, "              AND (m.role IN ('broker', 'admin', 'it_admin')\n" + OWNER, "              AND (m.role IN ('broker', 'admin', 'it_admin'))", "m74"),
+  proof: proof(`${def(CAN_EDIT)} NOT LIKE '%personal_owner_user_id%'`, `'owner clause absent'`),
+});
+add("m75-seed-floor-hardcoded-individual.sql", {
+  what: "the seed floor is the literal tier_rank('individual') instead of the feature's min_tier",
+  targets: "c42",
+  sql: edit(seedTrg, SEED_FLOOR, "     < public.tier_rank('individual') THEN", "m75"),
+  proof: proof(`${def(SEED_TRG)} LIKE '%tier_rank(''individual'')%'`, `'floor literal individual'`),
+});
+add("m76-seed-floor-left-at-team.sql", {
+  what: "the seed floor left at the literal tier_rank('team')",
+  targets: "c42",
+  sql: edit(seedTrg, SEED_FLOOR, "     < public.tier_rank('team') THEN", "m76"),
+  proof: proof(`${def(SEED_TRG)} LIKE '%tier_rank(''team'')%'`, `'floor literal team'`),
+});
+add("m77-seed-floor-le-instead-of-lt.sql", {
+  what: "the seed floor uses <= (an org exactly at min_tier is not seeded)",
+  targets: "c42",
+  sql: edit(seedTrg, SEED_FLOOR, SEED_FLOOR.replace("     < public", "     <= public"), "m77"),
+  proof: proof(`${def(SEED_TRG)} LIKE '%<= public.tier_rank((SELECT fd.min_tier%'`, `'floor <='`),
 });
 
 // ---------------------------------------------------------------- whole-file mutants

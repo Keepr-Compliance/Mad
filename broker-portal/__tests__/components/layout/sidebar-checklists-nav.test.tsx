@@ -14,8 +14,9 @@
  *     so for a broker it closes the member items — after Support, the slot
  *     Users would take — and before My Account.
  *
- * `agent` with showChecklists=true is not asserted: the gate refuses agent, so
- * the layout cannot produce that input.
+ * BACKLOG-3535: `agent` with showChecklists=true IS a real input now — the
+ * owner of a personal organization holds role `agent` there, and the gate
+ * admits them when the database does. The entry must render for them (P8).
  */
 
 import { render, screen } from '@testing-library/react';
@@ -26,10 +27,10 @@ jest.mock('next/navigation', () => ({
 }));
 
 import { Sidebar, insertAfter } from '@/components/layout/Sidebar';
-import { CHECKLIST_EDITOR_ROLES } from '@/lib/checklist-access';
 
 const ALL_ROLES = ['agent', 'broker', 'admin', 'it_admin', undefined] as const;
-const EDITOR_ROLES = [...CHECKLIST_EDITOR_ROLES];
+// The roles a brokerage editor holds; the gate itself carries no list (BACKLOG-3535).
+const EDITOR_ROLES = ['broker', 'admin', 'it_admin'];
 const CHECKLISTS = 'Checklists';
 const HREF = '/dashboard/checklists';
 
@@ -52,6 +53,13 @@ function navLabels(): string[] {
 describe('Sidebar — Checklists entry present', () => {
   it.each(EDITOR_ROLES)('for %s when showChecklists is true', (role) => {
     renderSidebar({ role, displayRole: role, showChecklists: true });
+    const links = screen.getAllByRole('link', { name: CHECKLISTS });
+    expect(links).toHaveLength(1);
+    expect(links[0]).toHaveAttribute('href', HREF);
+  });
+
+  it('P8 for a solo owner (role agent) when showChecklists is true [BACKLOG-3535]', () => {
+    renderSidebar({ role: 'agent', displayRole: 'agent', showChecklists: true });
     const links = screen.getAllByRole('link', { name: CHECKLISTS });
     expect(links).toHaveLength(1);
     expect(links[0]).toHaveAttribute('href', HREF);

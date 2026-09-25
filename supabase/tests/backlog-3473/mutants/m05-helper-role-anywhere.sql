@@ -13,8 +13,10 @@ AS $$
   SELECT EXISTS (
            SELECT 1
              FROM public.organization_members m
+             JOIN public.organizations o ON o.id = m.organization_id
             WHERE m.user_id = (SELECT auth.uid())
-              AND m.role IN ('broker', 'admin', 'it_admin')
+              AND (m.role IN ('broker', 'admin', 'it_admin')
+                   OR o.personal_owner_user_id = m.user_id)
          )
      AND EXISTS (
            SELECT 1

@@ -12,11 +12,15 @@
 --   4 preconditions: the plan rows the expected tuples rest on (K6)
 --   5 proacl / prosecdef / provolatile / proconfig identical
 -- Then the diff (raw cells, not only the pinned fields) must be EXACTLY:
---   {T1 x sso_login, I x transaction_checklists, I x call_log}
+--   {T1 x sso_login, I x call_log}
 --   x {check_feature_access member, get_org_features member,
 --      broker_get_org_features member, broker_get_org_features non-member}
 --   each: before {enabled true, source override, value 'false'}
 --         after  {enabled false, source plan, value 'false', override_ignored true}
+-- and I x transaction_checklists must be UNCHANGED in all four, reading
+-- {enabled true, source override} after (BACKLOG-3535: min_tier individual,
+-- 20260924183422, so I's override sits at min_tier and is honoured; before that
+-- file it was the third member of the diff set).
 -- Named wrong implementation: building migration 1 from the repo's
 -- 20260311224054 body instead of live changes the non-member
 -- get_org_features literal -- assertion 3 reds it.
@@ -101,9 +105,29 @@ BEGIN
     SELECT c.rpc || '|' || c.kind || '|' || t.org || '|' || t.key AS x
       FROM (VALUES ('check_feature_access', 'member'), ('get_org_features', 'member'),
                    ('broker_get_org_features', 'member'), ('broker_get_org_features', 'non_member')) c(rpc, kind)
-     CROSS JOIN (VALUES ('T1', 'sso_login'), ('I', 'transaction_checklists'), ('I', 'call_log')) t(org, key)) e;
+     CROSS JOIN (VALUES ('T1', 'sso_login'), ('I', 'call_log')) t(org, key)) e;
   PERFORM pg_temp.check(got IS NOT DISTINCT FROM expected,
                         format('diff set: want %s, got %s', expected, got));
+
+  -- BACKLOG-3535: I x transaction_checklists honoured, identical before and after.
+  FOR r IN
+    SELECT a.rpc, a.caller_kind, a.cell AS ac, b.cell AS bc
+      FROM t3473_rpc_after a JOIN t3473_rpc_before b USING (rpc, caller_kind, org, key)
+     WHERE a.org = 'I' AND a.key = 'transaction_checklists'
+       AND (a.rpc, a.caller_kind) IN (('check_feature_access', 'member'), ('get_org_features', 'member'),
+                                      ('broker_get_org_features', 'member'), ('broker_get_org_features', 'non_member'))
+  LOOP
+    PERFORM pg_temp.check(
+      coalesce(r.ac -> 'enabled', r.ac -> 'allowed') = 'true'::jsonb AND r.ac ->> 'source' = 'override'
+      AND NOT r.ac ? 'override_ignored' AND r.ac = r.bc,
+      format('I x transaction_checklists %s %s: want enabled true / override / unchanged, got %s (before %s)',
+             r.rpc, r.caller_kind, r.ac, r.bc));
+  END LOOP;
+  PERFORM pg_temp.check(
+    (SELECT count(*) FROM t3473_rpc_after WHERE org = 'I' AND key = 'transaction_checklists'
+       AND (rpc, caller_kind) IN (('check_feature_access', 'member'), ('get_org_features', 'member'),
+                                  ('broker_get_org_features', 'member'), ('broker_get_org_features', 'non_member'))) = 4,
+    'I x transaction_checklists: all four cells present');
 
   FOR r IN
     SELECT b.rpc, b.caller_kind, b.org, b.key, b.cell AS bc, a.cell AS ac

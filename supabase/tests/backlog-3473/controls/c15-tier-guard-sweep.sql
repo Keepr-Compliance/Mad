@@ -4,7 +4,10 @@
 -- decision. Pinned per case: enabled, source, override_ignored; no `error`.
 --
 --   case  org x key (override)                   expected
---   15.1  I  x transaction_checklists (ON)        false plan ignored
+--   15.1  I  x transaction_checklists (ON)        true override
+--         (BACKLOG-3535: min_tier is individual, so I's override sits AT
+--         min_tier and is honoured. Before 20260924183422 it read
+--         false plan ignored. Now the input for m25 (<=) and m27 (literal team).)
 --   15.2  T1 x transaction_checklists (ON)        true override
 --   15.3  T2 x transaction_checklists (none)      false plan             (baseline)
 --   15.4  E  x transaction_checklists (none)      true plan              (baseline)
@@ -27,7 +30,7 @@
 
 CREATE TEMP TABLE t3473_c15 (c text, org text, member text, key text, expected jsonb) ON COMMIT DROP;
 INSERT INTO t3473_c15 VALUES
-  ('15.1',  'o_i',  'u_i',        'transaction_checklists',   '{"enabled": false, "source": "plan", "override_ignored": true}'),
+  ('15.1',  'o_i',  'u_i',        'transaction_checklists',   '{"enabled": true, "source": "override"}'),
   ('15.2',  'o_t1', 'u_t1_agent', 'transaction_checklists',   '{"enabled": true, "source": "override"}'),
   ('15.3',  'o_t2', 'u_t2_agent', 'transaction_checklists',   '{"enabled": false, "source": "plan"}'),
   ('15.4',  'o_e',  'u_e_agent',  'transaction_checklists',   '{"enabled": true, "source": "plan"}'),

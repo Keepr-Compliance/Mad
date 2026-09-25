@@ -1,35 +1,39 @@
 /**
- * Checklist template editor access gate — BACKLOG-3474.
+ * Checklist template editor access gate — BACKLOG-3474, BACKLOG-3535.
  *
  * One place decides whether the Checklists surfaces exist for the caller: the
  * sidebar entry (via app/dashboard/layout.tsx), the /dashboard/checklists route
  * and every checklist server action route through here, so the link, the page
  * and the writes cannot disagree.
  *
- * Refusal order: impersonation, identity, brokerage membership, role, feature.
+ * The portal picks WHICH organization; the database decides WHETHER.
  *
  * - Impersonation is checked explicitly. A staff member can hold their own
  *   portal session in the same browser as a support session, so "no auth user
  *   while impersonating" is not something to rely on.
- * - The membership read uses PORTAL_MEMBERSHIP_SELECT + pickBrokerageMembership
- *   (lib/auth/membership.ts), never `.single()`: a user's personal organization
- *   row is not a brokerage placement, and two rows must not read as none.
- * - CHECKLIST_EDITOR_ROLES mirrors the role list inside the database's
- *   can_edit_checklist_templates(), which RLS enforces independently.
- * - The feature check is FAIL-CLOSED (isFeatureEnabledFailClosed): an RPC
- *   error, an error payload or a missing key all refuse.
+ * - Which organization: a brokerage row wins whatever its role
+ *   (pickBrokerageMembership, lib/auth/membership.ts). Only a user with no
+ *   brokerage row is routed on their personal organization. There is no
+ *   fall-through: a brokerage agent the database refuses is refused, even if
+ *   they also own a personal organization.
+ * - Whether: one call to can_edit_checklist_templates(p_org_id), the same
+ *   function RLS and save_checklist_template use. The role list, the
+ *   personal-owner rule and the feature check live there only; the portal
+ *   carries no copy of them. FAIL-CLOSED: an RPC error or anything other than a
+ *   literal `true` refuses.
  */
 
 import { createClient } from '@/lib/supabase/server';
-import { isFeatureEnabledFailClosed } from '@/lib/feature-gate';
 import { getImpersonationSession } from '@/lib/impersonation';
-import { PORTAL_MEMBERSHIP_SELECT, pickBrokerageMembership } from '@/lib/auth/membership';
+import {
+  PORTAL_MEMBERSHIP_SELECT,
+  isPersonalMembership,
+  pickBrokerageMembership,
+  type PortalMembershipRow,
+} from '@/lib/auth/membership';
 
 /** feature_definitions.key seeded by 20260921101757_backlog_3473_transaction_checklists.sql */
 export const CHECKLIST_FEATURE_KEY = 'transaction_checklists';
-
-/** Roles that may edit checklist templates. Same list as can_edit_checklist_templates(). */
-export const CHECKLIST_EDITOR_ROLES = ['broker', 'admin', 'it_admin'] as const;
 
 type ServerClient = Awaited<ReturnType<typeof createClient>>;
 
@@ -38,6 +42,20 @@ export interface ChecklistEditorAccess {
   userId: string;
   organizationId: string;
   role: string;
+}
+
+/**
+ * The membership a user edits checklists through. A brokerage row wins
+ * whatever its role; only a user with no brokerage row is routed on their
+ * personal organization.
+ */
+export function pickChecklistMembership(
+  rows: PortalMembershipRow[] | null | undefined
+): PortalMembershipRow | null {
+  const brokerage = pickBrokerageMembership(rows);
+  if (brokerage) return brokerage;
+  if (!Array.isArray(rows)) return null;
+  return rows.find((row) => row && isPersonalMembership(row)) ?? null;
 }
 
 /**
@@ -61,23 +79,17 @@ export async function requireChecklistEditorAccess(): Promise<ChecklistEditorAcc
     .order('created_at', { ascending: true })
     .order('id', { ascending: true });
 
-  const membership = pickBrokerageMembership(memberships);
-  if (
-    !membership ||
-    !(CHECKLIST_EDITOR_ROLES as readonly string[]).includes(membership.role)
-  ) {
-    throw new Error('Not authorized');
-  }
+  const membership = pickChecklistMembership(memberships);
+  if (!membership) throw new Error('Not authorized');
 
   // Boolean only, no featureRenderPolicy: the entry and the route are hidden
-  // (404) when the feature is off, with no grayed state. Whether an OFF org
+  // (404) when the database refuses, with no grayed state. Whether an OFF org
   // should see a grayed entry once feature_definitions.is_built flips true is
   // an open product question recorded on BACKLOG-3477.
-  const enabled = await isFeatureEnabledFailClosed(
-    membership.organization_id,
-    CHECKLIST_FEATURE_KEY
-  );
-  if (!enabled) throw new Error('Not authorized');
+  const { data: allowed, error } = await supabase.rpc('can_edit_checklist_templates', {
+    p_org_id: membership.organization_id,
+  });
+  if (error || allowed !== true) throw new Error('Not authorized');
 
   return {
     supabase,

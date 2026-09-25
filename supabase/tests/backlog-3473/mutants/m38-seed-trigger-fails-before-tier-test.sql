@@ -12,7 +12,8 @@ AS $$
 BEGIN
   PERFORM 1/0;
   IF public.tier_rank((SELECT p.tier FROM public.plans p WHERE p.id = NEW.plan_id))
-     < public.tier_rank('team') THEN
+     < public.tier_rank((SELECT fd.min_tier FROM public.feature_definitions fd
+                          WHERE fd.key = 'transaction_checklists')) THEN
     RETURN NULL;
   END IF;
   PERFORM public._seed_org_checklist_templates(NEW.organization_id);

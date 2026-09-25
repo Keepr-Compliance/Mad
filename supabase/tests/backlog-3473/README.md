@@ -9,6 +9,8 @@ Proves the three migrations on a real Postgres + PostgREST stack:
 | `20260921101758_backlog_3473_retire_unused_org_columns.sql` | Drops three unused `organizations` columns, behind a guard. Never committed on the venue. |
 | `20260924190429_backlog_3474_save_checklist_template.sql` | BACKLOG-3474: `save_checklist_template`, the broker portal's one-call template save. Loaded after file 3 in every control (c26-c36, m52-m64); applied twice by `apply-prod`; never committed by `apply`. |
 | `20260924224113_backlog_3474_template_audit_fields.sql` | BACKLOG-3474 PR 3: `updated_by` / `archived_by` and the BEFORE UPDATE trigger that fills them. Loaded right after file 4 everywhere file 4 is (c37-c39, m65-m69). |
+| `20260924183422_backlog_3535_checklists_min_tier_individual.sql` | BACKLOG-3535: `transaction_checklists` min_tier `team` -> `individual`. File 6, loaded right after file 5 everywhere. |
+| `20260925044046_backlog_3535_solo_checklists.sql` | BACKLOG-3535: `can_edit_checklist_templates` admits the owner-member of a personal organization; the seed trigger's floor follows min_tier. File 7, loaded right after file 6. Every mutant of those two functions is derived from this file (c41, c42, m71-m77). |
 
 **Status: run in phase (ii), 2026-09-21, at `940efc269`, and re-run after K9 at
 `e93076ea3`** — every control green, every mutant as expected. Results at the end of this file.
@@ -120,10 +122,10 @@ supabase/tests/backlog-3473/run.sh "$URL" gate                # every command as
 | C12b | member kind = link kind (FK) | m21 |
 | C13 | child submission_id = parent's (FK) | m22a–c |
 | C14 | submission delete cascades the copy | m23 |
-| C15 | tier-guard sweep, 11 cases × 3 functions | m24a–c, m25–m32 |
-| C16 | read-function parity before / after | m24a–c, m25, m28, m50a–c |
+| C15 | tier-guard sweep, 11 cases × 3 functions (15.1 re-baselined by BACKLOG-3535: I's override is honoured at min_tier individual) | m24a–c, m25–m32 |
+| C16 | read-function parity before / after (BACKLOG-3535: diff set is {T1 x sso_login, I x call_log}; I x transaction_checklists pinned unchanged, honoured) | m24a–c, m25, m28, m50a–c |
 | C17 | seed idempotency (templates and items) | m33, m34, m35 |
-| C18 | seed scope; first sign-in keeps its plan row | m36, m37, m38, m49; m39 stays GREEN |
+| C18 | seed scope; first sign-in keeps its plan row and (BACKLOG-3535) gets both starters | m38, m49 (m37, m39 retired by BACKLOG-3535; see generate.mjs) |
 | C19 | seeding and catalogue not client-reachable | m40, m41 |
 | C20 | migration 3's guard | f01 |
 | C21 | apply twice is a no-op (`apply-prod`) | a01–a05 |
@@ -150,6 +152,8 @@ supabase/tests/backlog-3473/run.sh "$URL" gate                # every command as
 | C38 | PR 3: archive records `archived_by`; a save while archived keeps it; restore clears it; a second archive records its own archiver | m65, m66, m67, m68 |
 | C39 | PR 3: `updated_by` / `archived_by` are never client-writable (PRIV on UPDATE and INSERT) | m69 |
 | C40 | PR 3: deleting the archiver / the last editor succeeds and NULLs `archived_by` / `updated_by` (the FK's SET NULL is not written back) | m70 |
+| C41 | BACKLOG-3535: the owner-member of personal org I edits I (function, save, insert policy) and nothing else; brokerage agents refused; a non-owner member of I refused [synthetic]; feature off refuses; the real "solo user joins a brokerage" path is refused in T1 and on I | m74, m71, m72, m73, m04, m07. The owner clause moved outside the membership EXISTS is masked (non-member refused by check_feature_access first); its control is the CI tripwire `solo-checklists-3535.test.ts` |
+| C42 | BACKLOG-3535: the seed floor is min_tier, swept at the individual and team boundaries, NULL min_tier = no floor, and the real first sign-in seeds both starters | m36, m75, m76, m77 |
 
 ## Design decisions (written down, not improvised)
 
@@ -248,3 +252,18 @@ ON DELETE SET NULL holds), 2026-09-24, same stack:
 | `controls` | 47 green / 47 (c40 8 assertions) |
 | `mutants m65`–`m70` | each RED on its targets; m70 reds c40 with 23503 |
 | `mutants m5`, `m60`–`m64` | 20 run, 0 not as expected |
+
+### BACKLOG-3535 run — 2026-09-25, NAS stack over SSH (`lib/ssh-psql.sh`)
+
+Same stack and role. Files 6 and 7 loaded after file 5 in every control and
+applied twice by `apply-prod`.
+
+| Step | Result |
+|---|---|
+| `catalogue-seed`, `gate` | re-hashed equal to production; matched 252, accepted 0, mismatched 0 |
+| `apply-prod` (C21, files 1→7 twice) | `S1_ROWS=156 ONLY_IN_S1=0 ONLY_IN_S2=0` — GREEN |
+| `apply-prod-mutants` | a01–a05 all RED |
+| `controls` | 49 green / 49 (c41 21, c42 8; c15 67, c16 55, c18 16 assertions) |
+| `mutants` | 105 run, 0 not as expected; m71–m77 each RED on its target; m04 and m07 also red c41 |
+| file 6 dropped from `run_control` (applied proof: `git diff --numstat` 0/1) | c15 RED (15.1), c16 RED (diff set), c18 RED (u_p starters), c41 RED (41.1); 45 green / 49. Restored: 49 / 49 |
+| `gate` again, `catalogue-teardown`, `sync-clean` | matched 252 / 0 / 0; catalogue tables empty; copied files removed |

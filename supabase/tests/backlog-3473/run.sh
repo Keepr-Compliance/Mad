@@ -52,6 +52,11 @@ MIG4="$REPO/supabase/migrations/20260924190429_backlog_3474_save_checklist_templ
 # BACKLOG-3474 PR 3: updated_by / archived_by and their trigger. Loaded right
 # after file 4 wherever file 4 is; never committed by `apply`.
 MIG5="$REPO/supabase/migrations/20260924224113_backlog_3474_template_audit_fields.sql"
+# BACKLOG-3535: min_tier individual (6), then the solo-owner rule and the seed
+# floor that follows min_tier (7). Loaded right after file 5 wherever file 5 is;
+# never committed by `apply`.
+MIG6="$REPO/supabase/migrations/20260924183422_backlog_3535_checklists_min_tier_individual.sql"
+MIG7="$REPO/supabase/migrations/20260925044046_backlog_3535_solo_checklists.sql"
 STAMP1="20260921101756"
 STAMP2="20260921101757"
 PSQL="${PSQL:-$(command -v psql || echo /opt/homebrew/opt/libpq/bin/psql)}"
@@ -87,6 +92,8 @@ run_control() {
       [ -z "$skip3" ] && echo "\\i $mig3"
       echo "\\i $MIG4"
       echo "\\i $MIG5"
+      echo "\\i $MIG6"
+      echo "\\i $MIG7"
       echo "\\i $HERE/lib/fixtures-3474.sql"
       [ -n "$mutant" ] && echo "\\i $mutant"
       [ -n "$skip3" ] && echo "\\set mig3_sql \`cat '$mig3'\`"
@@ -121,6 +128,8 @@ apply_prod() {
     echo "\\i $f3"
     echo "\\i $MIG4"
     echo "\\i $MIG5"
+    echo "\\i $MIG6"
+    echo "\\i $MIG7"
     # K3: the admin toggle lands AFTER apply 1 and BEFORE S1.
     echo "DO \$toggle\$ DECLARE n integer; BEGIN"
     echo "  UPDATE public.plan_features SET enabled = true"
@@ -135,6 +144,8 @@ apply_prod() {
     echo "\\i $f3"
     echo "\\i $MIG4"
     echo "\\i $MIG5"
+    echo "\\i $MIG6"
+    echo "\\i $MIG7"
     echo "CREATE TEMP TABLE t3473_s2 AS SELECT * FROM pg_temp.catalog_snapshot();"
     echo "SELECT 'S1_ROWS=' || (SELECT count(*) FROM t3473_s1)"
     echo "    || ' ONLY_IN_S1=' || (SELECT count(*) FROM (SELECT * FROM t3473_s1 EXCEPT SELECT * FROM t3473_s2) d)"
