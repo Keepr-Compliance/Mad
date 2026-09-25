@@ -12,6 +12,9 @@
  *   SR condition 1  the link picker loads emails with the LOUD loader, which on
  *        a transaction with no contacts swaps the whole modal for a spinner and
  *        unmounts the picker; and a second fetch when the Emails tab opens.
+ *   C-9  the session store's TTL expiry resetting the answer to `pending`
+ *        while its re-ask is in flight: the panel unmounts and a half-typed
+ *        note is lost (SR delta review, PR #2708).
  *
  * Fixtures: `checklistFixture.ts` (generated from the real producers).
  */
@@ -20,6 +23,7 @@ import { render as rtlRender, screen, waitFor, fireEvent, act } from "@testing-l
 import "@testing-library/jest-dom";
 import { NotificationProvider } from "../../contexts/NotificationContext";
 import TransactionDetails from "../TransactionDetails";
+import { StrictFeatureProvider, STRICT_ANSWER_TTL_MS } from "../../contexts/StrictFeatureContext";
 import type { Transaction } from "../../types";
 import {
   envelopeOf,
@@ -349,5 +353,66 @@ describe("SR B1 — the picker never says there are no threads while the emails 
     await resolveAll(contactAssignments);
     expect(await screen.findByTestId("checklist-picker-thread-thread-thr-probe")).toBeInTheDocument();
     expect(emailCalls()).toBe(1);
+  });
+});
+
+describe("C-9 — the TTL re-ask never unmounts the open Checklist panel", () => {
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it("a draft note survives TTL + 1 ms with the re-ask still in flight, and after it answers", async () => {
+    let asked = 0;
+    let release: (v: string) => void = () => {};
+    // The session's first question and the open's re-ask answer at once; the
+    // TTL re-ask is held in flight, as a real IPC round trip would be.
+    strictState().mockImplementation(() => {
+      asked += 1;
+      return asked <= 2
+        ? Promise.resolve("allowed")
+        : new Promise((res) => {
+            release = res as (v: string) => void;
+          });
+    });
+    checklists().get.mockResolvedValue({ success: true, checklists: envelopeOf([fixtureDetail()]) });
+    jest.useFakeTimers();
+    render(
+      <StrictFeatureProvider userId="user-456" organizationId="org-123">
+        <TransactionDetails transaction={baseTransaction} onClose={jest.fn()} initialTab="checklist" />
+      </StrictFeatureProvider>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(10);
+    });
+    const itemId = fixtureDetail().items[0].id;
+    expect(screen.getByTestId("checklist-panel")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId(`checklist-add-note-${itemId}`));
+    const draft = () =>
+      screen.queryByTestId(`checklist-note-editor-${itemId}`)?.querySelector("textarea") as
+        | HTMLTextAreaElement
+        | null
+        | undefined;
+    fireEvent.change(draft()!, { target: { value: "half-typed note" } });
+    expect(draft()!.value).toBe("half-typed note");
+    const before = strictState().mock.calls.length;
+
+    await act(async () => {
+      jest.advanceTimersByTime(STRICT_ANSWER_TTL_MS + 1);
+    });
+    // The TTL re-ask went and is still in flight.
+    expect(strictState().mock.calls.length - before).toBe(1);
+    expect(screen.getByTestId("tab-checklist")).toBeInTheDocument();
+    expect(screen.getByTestId("checklist-panel")).toBeInTheDocument();
+    expect(draft()?.value).toBe("half-typed note");
+
+    await act(async () => {
+      release("allowed");
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("checklist-panel")).toBeInTheDocument();
+    expect(draft()?.value).toBe("half-typed note");
   });
 });

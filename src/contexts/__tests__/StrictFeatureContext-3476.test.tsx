@@ -4,7 +4,9 @@
  * Wrong implementations this suite is here to catch (plan v2 §D, SR condition 9):
  *   C-1  serving an answer before main has given one.
  *   C-2  an answer surviving sign-out or a user switch; an org change not re-asked.
- *   C-3  an answer served past main's 5-minute TTL.
+ *   C-3  an answer not re-asked past main's 5-minute TTL, or the stored answer
+ *        dropped to `pending` while that re-ask is in flight (it unmounts an
+ *        open Checklist panel; C-9 in the TransactionDetails suite).
  *   C-4  no focus re-ask, or one on every focus.
  *   C-5  an open still waiting on the IPC when the session already knows.
  *   C-7  the background re-ask's answer dropped once an answer exists.
@@ -168,25 +170,48 @@ describe("C-8 — an answer lands for the user it was asked FOR", () => {
   });
 });
 
-describe("C-3 — never older than main's TTL", () => {
-  it("at TTL + 1 ms the answer reads pending and exactly one new question goes", async () => {
+describe("C-3 — past main's TTL the answer is re-asked in the background", () => {
+  it("at TTL + 1 ms exactly one new question goes, the stored answer keeps showing until it lands, then the new answer replaces it", async () => {
     jest.useFakeTimers();
     strictState().mockResolvedValue("allowed");
     render(<App userId="user-a" />);
     await flush();
     expect(screen.getByTestId("tab-checklist")).toBeInTheDocument();
     const before = strictState().mock.calls.length;
-    strictState().mockReturnValue(new Promise(() => {}));
+    const reask = deferred();
+    strictState().mockReturnValue(reask.promise);
+    frames = [];
     await act(async () => {
       jest.advanceTimersByTime(STRICT_ANSWER_TTL_MS);
     });
     expect(strictState().mock.calls.length - before).toBe(0);
-    expect(screen.getByTestId("tab-checklist")).toBeInTheDocument();
     await act(async () => {
       jest.advanceTimersByTime(1);
     });
     expect(strictState().mock.calls.length - before).toBe(1);
-    expect(screen.getByTestId("no-tab")).toHaveTextContent("pending");
+    // In flight: still the stored answer, no pending frame.
+    expect(screen.getByTestId("tab-checklist")).toBeInTheDocument();
+    expect(frames).not.toContain("pending");
+    await act(async () => reask.resolve("blocked"));
+    expect(screen.getByTestId("no-tab")).toHaveTextContent("blocked");
+    expect(frames).not.toContain("pending");
+  });
+
+  it("the new answer restarts the clock: one more question one TTL after it lands", async () => {
+    jest.useFakeTimers();
+    strictState().mockResolvedValue("allowed");
+    render(<App userId="user-a" />);
+    await flush();
+    const before = strictState().mock.calls.length;
+    await act(async () => {
+      jest.advanceTimersByTime(STRICT_ANSWER_TTL_MS + 1);
+    });
+    expect(strictState().mock.calls.length - before).toBe(1);
+    await act(async () => {
+      jest.advanceTimersByTime(STRICT_ANSWER_TTL_MS + 1);
+    });
+    expect(strictState().mock.calls.length - before).toBe(2);
+    expect(screen.getByTestId("tab-checklist")).toBeInTheDocument();
   });
 });
 

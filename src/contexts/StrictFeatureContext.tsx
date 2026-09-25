@@ -20,8 +20,12 @@
  *   for its own session and org, and the licence read can briefly report no
  *   organization for a signed-in user, which would otherwise hide the tab. An
  *   organization change is a background re-ask instead.
- * - **Never older than 5 minutes.** An answer older than main's own plan-cache
- *   TTL reads `pending` and is asked again.
+ * - **Re-asked once it is 5 minutes old.** At main's own plan-cache TTL the
+ *   answer is asked again IN THE BACKGROUND: the stored answer keeps showing
+ *   until the new one lands, so an open Checklist panel is never unmounted by
+ *   the expiry. The age bound is therefore 5 minutes plus one IPC round trip;
+ *   if main never answers, the old answer stays up (every write is still
+ *   re-checked in main). Only sign-out or a different user reads `pending`.
  * - **Re-asked in the background** — the stored answer keeps showing while the
  *   question is in flight — on every transaction open, on window focus (only
  *   when nothing was asked in the last minute), and on an organization change.
@@ -55,7 +59,6 @@ interface StoredAnswer {
   /** The user the question was sent for. */
   forUserId: string;
   state: StrictFeatureState;
-  expired: boolean;
 }
 
 interface StrictFeatureContextValue {
@@ -103,7 +106,7 @@ export function StrictFeatureProvider({
       // question has already been answered.
       if (userIdRef.current !== forUserId || seq < appliedSeqRef.current) return;
       appliedSeqRef.current = seq;
-      setAnswer({ forUserId, state, expired: false });
+      setAnswer({ forUserId, state });
     };
     // Awaited inside the try: a bridge without the method throws synchronously,
     // and the honest answer then is that the plan could not be read.
@@ -141,18 +144,19 @@ export function StrictFeatureProvider({
     return () => window.removeEventListener("focus", onFocus);
   }, [ask]);
 
-  // Past the TTL the answer reads pending, and is asked again.
+  // Past the TTL the answer is asked again in the background. It keeps showing
+  // until the new answer lands (which restarts this timer): resetting it to
+  // pending here would unmount an open Checklist panel mid-edit.
   useEffect(() => {
-    if (!answer || answer.expired) return;
+    if (!answer) return;
     const timer = setTimeout(() => {
-      setAnswer((current) => (current === answer ? { ...current, expired: true } : current));
       ask();
     }, STRICT_ANSWER_TTL_MS + 1);
     return () => clearTimeout(timer);
   }, [answer, ask]);
 
   const state: StrictFeatureStateOrPending =
-    answer && userId && answer.forUserId === userId && !answer.expired ? answer.state : "pending";
+    answer && userId && answer.forUserId === userId ? answer.state : "pending";
 
   const value = useMemo<StrictFeatureContextValue>(
     () => ({ state, reask: ask }),
