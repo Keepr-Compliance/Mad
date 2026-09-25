@@ -4,9 +4,25 @@
  * Confirmation modal for submitting a transaction to the broker portal.
  * Shows summary of what will be submitted and progress during submission.
  * Part of BACKLOG-391: Submit for Review UI.
+ *
+ * BACKLOG-3498: for a deal that can still be submitted (no status,
+ * `not_submitted`, `needs_changes`) the dialog has two screens. Screen 1 is the
+ * shared date step (the same component Export's Step 1 renders), titled
+ * "Verify Transaction Details" by this dialog's own header; the block's heading
+ * is not drawn, so the title is not said twice. Next leads to screen 2, the
+ * lead and the Submission Summary, with Back. Pressing Submit saves the confirmed dates through the shared writer,
+ * waits for the save, and only then submits. The statuses the modal blocks
+ * render their single screen unchanged.
  */
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { ResponsiveModal } from "../../../common/ResponsiveModal";
+import {
+  TransactionDatesFields,
+  VERIFY_TRANSACTION_DETAILS_TITLE,
+  saveConfirmedTransactionDates,
+  useTransactionDatesForm,
+  validateTransactionDates,
+} from "../../../transactionDates";
 import type { Transaction } from "@/types";
 
 export interface SubmitProgress {
@@ -64,6 +80,13 @@ interface SubmitForReviewModalProps {
    * test pins the two entry points to one component by identity.
    */
   onExport?: () => void;
+  /**
+   * BACKLOG-3498: called once the confirmed dates have been SAVED, before the
+   * submit runs and whatever the submit then does. TransactionDetails re-reads
+   * the row here, so its tabs and the Edit form show the saved dates even when
+   * the submit fails.
+   */
+  onDatesSaved?: () => void;
 }
 
 const STAGE_LABELS: Record<string, string> = {
@@ -99,6 +122,7 @@ export function SubmitForReviewModal({
   onCancel,
   onSubmit,
   onExport,
+  onDatesSaved,
 }: SubmitForReviewModalProps): React.ReactElement {
   /**
    * BACKLOG-2853 — THE DEAL ALREADY HAS A SUBMISSION SITTING WITH THE BROKER.
@@ -285,12 +309,92 @@ export function SubmitForReviewModal({
    */
   const isSuccess = progress?.stage === "complete" && !error;
 
+  /**
+   * BACKLOG-3498 — the date step.
+   *
+   * It applies exactly when the deal is not blocked. `blockedCopy` is the ONLY
+   * gate: `screen` starts at "dates" for every status, so a blocked deal is
+   * kept off the step by this term alone.
+   *
+   * `datesError` holds both the date-rule message and a failed save
+   * ("Failed to save dates: …"). It is local, not the hook's `error`: routing a
+   * failed save through `error` would hide the date fields under a
+   * "Submission Failed" heading. A save that fails on a RETRY after a failed
+   * submit (when the hook's `error` is still set) must also land on the date
+   * step, hence the `datesError !== null` escape in `showDateStep`.
+   */
+  const dateStepApplies = blockedCopy === undefined;
+  const [screen, setScreen] = useState<"dates" | "summary">("dates");
+  const { dates, setDate } = useTransactionDatesForm(transaction);
+  const [datesError, setDatesError] = useState<string | null>(null);
+  const [savingDates, setSavingDates] = useState(false);
+  const showDateStep =
+    dateStepApplies &&
+    screen === "dates" &&
+    !isSubmitting &&
+    !isSuccess &&
+    (!error || datesError !== null);
+
+  /**
+   * Set once the dialog is dismissed or unmounted. A save still in flight must
+   * not go on to submit a dialog the user has closed: while the save runs,
+   * `isSubmitting` is false, so the X closes immediately (no confirm) and the
+   * awaited continuation would otherwise fire `onSubmit`.
+   */
+  const dismissedRef = useRef(false);
+  useEffect(() => {
+    dismissedRef.current = false;
+    return () => {
+      dismissedRef.current = true;
+    };
+  }, []);
+
   const handleCancelClick = () => {
     if (isActivelySubmitting) {
       setShowCancelConfirm(true);
     } else {
+      dismissedRef.current = true;
       onCancel();
     }
+  };
+
+  const handleNext = () => {
+    const message = validateTransactionDates(dates);
+    setDatesError(message);
+    if (message !== null) return;
+    setScreen("summary");
+  };
+
+  const handleBack = () => {
+    setDatesError(null);
+    setScreen("dates");
+  };
+
+  /**
+   * Submit: save the confirmed dates, WAIT for the save, then submit. The
+   * submission reads its audit period from the stored row, so submitting
+   * before the save lands would send the old dates.
+   *
+   * Re-entry is prevented by `savingDates` in the button's `disabled`
+   * expression, not by a check in here.
+   */
+  const handleSubmitPress = async () => {
+    if (!dateStepApplies) {
+      onSubmit();
+      return;
+    }
+    setDatesError(null);
+    setSavingDates(true);
+    const saved = await saveConfirmedTransactionDates(transaction.id, dates);
+    if (saved.success) onDatesSaved?.();
+    if (dismissedRef.current) return;
+    setSavingDates(false);
+    if (!saved.success) {
+      setDatesError(`Failed to save dates: ${saved.error}`);
+      setScreen("dates");
+      return;
+    }
+    onSubmit();
   };
 
   return (
@@ -370,6 +474,13 @@ export function SubmitForReviewModal({
           <h3 className="text-lg font-bold text-gray-900">
             {isSuccess
               ? "Successfully Submitted"
+              : /* BACKLOG-3498 — the date screen's title (founder, 2026-09-21:
+                   "I don't think we need both Submit for Review and Verify
+                   Transaction Details"). The shared block's own heading is
+                   not drawn on this screen. The summary screen, blocked
+                   statuses and success keep their titles. */
+              showDateStep
+              ? VERIFY_TRANSACTION_DETAILS_TITLE
               : /* BACKLOG-2853 — the title carried the same lie as the button:
                    a deal already sitting with the broker was asked "Submit for
                    Review?", a question about an act the service will refuse.
@@ -412,8 +523,32 @@ export function SubmitForReviewModal({
           </button>
         </div>
 
-        {/* Content - not submitting, not yet submitted */}
-        {!isSubmitting && !error && !isSuccess && (
+        {/*
+          BACKLOG-3498 — screen 1, the date step. The date fields ONLY; the
+          lead ("…The following data will be sent to your broker:") stays with
+          the Submission Summary on screen 2.
+        */}
+        {showDateStep && (
+          <div className="mb-4" data-testid="submit-review-dates">
+            {datesError && (
+              <div
+                className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg"
+                data-testid="submit-review-dates-error"
+              >
+                <p className="text-sm text-red-800">{datesError}</p>
+              </div>
+            )}
+            <TransactionDatesFields
+              transaction={transaction}
+              dates={dates}
+              onDateChange={setDate}
+              hideHeading
+            />
+          </div>
+        )}
+
+        {/* Content - not submitting, not yet submitted (screen 2 when the date step applies) */}
+        {!isSubmitting && !error && !isSuccess && !showDateStep && (
           <>
             <p className="text-sm text-gray-600 mb-4" data-testid="submit-review-lead">
               {/* BACKLOG-2853 — "The following data will be sent to your
@@ -654,8 +789,8 @@ export function SubmitForReviewModal({
           </div>
         )}
 
-        {/* Error display */}
-        {error && (
+        {/* Error display. Not over the date step: a failed date save shows its own message there (BACKLOG-3498). */}
+        {error && !showDateStep && (
           <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
             <div className="flex items-start gap-2">
               <svg
@@ -730,6 +865,17 @@ export function SubmitForReviewModal({
           the founder's pair: Export and Submit.
         */}
         <div className="flex items-center gap-3 justify-end">
+          {/* BACKLOG-3498 — Back to the date step, on screen 2 only. */}
+          {dateStepApplies && !isSubmitting && !error && !isSuccess && !showDateStep && (
+            <button
+              onClick={handleBack}
+              disabled={savingDates}
+              data-testid="submit-review-back"
+              className="mr-auto px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Back
+            </button>
+          )}
           {/*
             EXPORT PDF — one button, one label, one handler, in both of the
             places the founder asked for it: beside Submit before the decision,
@@ -764,16 +910,32 @@ export function SubmitForReviewModal({
               Export PDF
             </button>
           )}
-          {!progress?.stage || progress.stage === "failed" ? (
+          {showDateStep ? (
+            /* BACKLOG-3498 — screen 1's primary. Disabled until Start and End
+               are filled, as Export's Step 1 primary is. */
             <button
-              onClick={onSubmit}
+              onClick={handleNext}
+              disabled={!dates.startDate || !dates.endDate}
+              data-testid="submit-review-next"
+              className="px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-lg font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
+          ) : !progress?.stage || progress.stage === "failed" ? (
+            <button
+              onClick={() => {
+                void handleSubmitPress();
+              }}
               /* BACKLOG-2853 — disabled in the four states the service
                  refuses. The click could be left live and allowed to surface
                  the service's error, but that spends a multi-minute attachment
                  upload before the refusal in the shape this code had, and it
                  asks the user to discover by failure what the screen can just
-                 say. */
-              disabled={isSubmitting || submissionIsWithBroker}
+                 say.
+                 BACKLOG-3498 — and while the date save runs, so a second press
+                 cannot save and submit twice (useSubmitForReview.submit has no
+                 re-entry guard). */
+              disabled={isSubmitting || submissionIsWithBroker || savingDates}
               data-testid="submit-review-submit"
               className="px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-lg font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
             >
