@@ -182,6 +182,13 @@ export const TABLE_FIELDS = {
     "listing_price",
     "sale_price",
     "earnest_money_amount",
+    // BACKLOG-3519 (Commission M2, figures only). No writer today -- see
+    // TRANSACTION_COLUMN_POLICY in transactionDbService.ts for why these are
+    // "db-default" on both paths until BACKLOG-3520 (desktop capture) exists.
+    "commission_offered_rate",
+    "commission_actual_rate",
+    "commission_gross_amount",
+    "commission_adjustment_reason",
     "mutual_acceptance_date",
     "inspection_deadline",
     "financing_deadline",

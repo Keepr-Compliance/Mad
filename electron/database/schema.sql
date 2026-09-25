@@ -1013,6 +1013,20 @@ CREATE TABLE IF NOT EXISTS transactions (
   sale_price REAL,
   earnest_money_amount REAL,
 
+  -- Commission Figures (BACKLOG-3519, M2 -- figures only, no charges/split
+  -- amount; see the v72 migration entry for the full design note). Percentage
+  -- as entered (2.50), not a fraction (0.025). commission_gross_amount is
+  -- computed and rounded to cents once by the writer, not derived on read.
+  -- No local column mirrors the cloud split snapshot (split_agent_pct etc. on
+  -- transaction_submissions): the split is cloud-resolved at submission time
+  -- from agent_split_agreements, a concept this local schema has no
+  -- equivalent of, and a resubmission re-resolving into a local copy would
+  -- overwrite the very freeze the cloud-side snapshot exists to provide.
+  commission_offered_rate REAL,
+  commission_actual_rate REAL,
+  commission_gross_amount REAL,
+  commission_adjustment_reason TEXT,
+
   -- Key Dates (auto-extracted)
   mutual_acceptance_date DATE,
   inspection_deadline DATE,
