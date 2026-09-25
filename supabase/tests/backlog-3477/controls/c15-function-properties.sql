@@ -6,7 +6,7 @@
 --     call it); none on the snapshot, tick, add, guard
 --   authenticated: EXECUTE on the helper, snapshot, tick, add; not the guard
 --   no PUBLIC grant on any
---   the guard is a BEFORE UPDATE row trigger on transaction_submissions
+--   the guard is a BEFORE INSERT OR UPDATE row trigger on transaction_submissions
 DO $c15$
 DECLARE
   r record;
@@ -33,7 +33,7 @@ BEGIN
                                  WHERE t.tgrelid = 'public.transaction_submissions'::regclass
                                    AND t.tgname = 'status_history_append_only' AND t.tgenabled = 'O'
                                    AND t.tgfoid = 'public.guard_status_history_append_only()'::regprocedure
-                                   AND (t.tgtype & 1) = 1 AND (t.tgtype & 2) = 2 AND (t.tgtype & 16) = 16),
-                        'C15 guard is a BEFORE UPDATE row trigger');
+                                   AND (t.tgtype & 1) = 1 AND (t.tgtype & 2) = 2 AND (t.tgtype & 4) = 4 AND (t.tgtype & 16) = 16),
+                        'C15 guard is a BEFORE INSERT OR UPDATE row trigger');
 END
 $c15$;

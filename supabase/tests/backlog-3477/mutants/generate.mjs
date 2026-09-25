@@ -164,7 +164,7 @@ const MUTANTS = [
     (t) => editIn(t, GUARD[0], GUARD[1],
       "    IF jsonb_typeof(v_elem) <> 'object'\n       OR NOT (v_elem ? 'type')\n       OR lower(",
       "    IF jsonb_typeof(v_elem) = 'object' AND v_elem ? 'type'\n       AND lower(", "m36")],
-  ["m37-guard-update-only", "c17",
+  ["m37-guard-update-only", "c15 c17",
     (t) => edit(t, "  BEFORE INSERT OR UPDATE ON public.transaction_submissions", "  BEFORE UPDATE ON public.transaction_submissions", "m37")],
   ["m38-guard-insert-uses-append-test", "c17",
     (t) => editIn(t, GUARD[0], GUARD[1],
