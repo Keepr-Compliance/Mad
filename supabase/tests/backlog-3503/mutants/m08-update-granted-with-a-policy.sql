@@ -1,9 +1,5 @@
 GRANT UPDATE (agent_pct, brokerage_pct) ON public.agent_split_agreements TO authenticated;
-GRANT UPDATE (amount) ON public.organization_franchise_fees TO authenticated;
 CREATE POLICY agent_split_agreements_update_writer ON public.agent_split_agreements
-  FOR UPDATE TO authenticated USING (public.can_write_split_agreements(organization_id))
-  WITH CHECK (public.can_write_split_agreements(organization_id));
-CREATE POLICY organization_franchise_fees_update_writer ON public.organization_franchise_fees
   FOR UPDATE TO authenticated USING (public.can_write_split_agreements(organization_id))
   WITH CHECK (public.can_write_split_agreements(organization_id));
 DO $m$ BEGIN

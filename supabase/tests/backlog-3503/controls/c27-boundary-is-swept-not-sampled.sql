@@ -28,20 +28,20 @@ BEGIN
 
   -- the day BEFORE the deactivation: inside the period, allowed.
   s := pg_temp.sqlstate_of(format(
-    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, office_fee_amount, office_fee_cadence, effective_from) VALUES (%L,%L,50,50,100,%L,%L::date)',
-    org, sus, 'monthly', d - 1));
+    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, effective_from) VALUES (%L,%L,50,50,%L::date)',
+    org, sus, d - 1));
   PERFORM pg_temp.check(s = 'OK', format('the day BEFORE the deactivation is allowed, got %s', s));
 
   -- the day OF the deactivation: still inside. They worked that morning.
   s := pg_temp.sqlstate_of(format(
-    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, office_fee_amount, office_fee_cadence, effective_from) VALUES (%L,%L,51,49,100,%L,%L::date)',
-    org, sus, 'monthly', d));
+    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, effective_from) VALUES (%L,%L,51,49,%L::date)',
+    org, sus, d));
   PERFORM pg_temp.check(s = 'OK', format('the day OF the deactivation is allowed -- the boundary is inclusive, got %s', s));
 
   -- the day AFTER: outside. Refused by the WITH CHECK, so 42501 specifically.
   s := pg_temp.sqlstate_of(format(
-    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, office_fee_amount, office_fee_cadence, effective_from) VALUES (%L,%L,52,48,100,%L,%L::date)',
-    org, sus, 'monthly', d + 1));
+    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, effective_from) VALUES (%L,%L,52,48,%L::date)',
+    org, sus, d + 1));
   PERFORM pg_temp.check(s = '42501', format('the day AFTER the deactivation is refused with 42501, got %s', s));
 
   -- and the rows landed, or did not, to match -- an arm that only inspects the
@@ -89,8 +89,8 @@ DO $$
 DECLARE s text;
 BEGIN
   s := pg_temp.sqlstate_of(format(
-    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, office_fee_amount, office_fee_cadence, effective_from) VALUES (%L,%L,50,50,100,%L,%L::date)',
-    current_setting('t3503.o_a'), current_setting('t3503.u_admin_sus'), 'monthly',
+    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, effective_from) VALUES (%L,%L,50,50,%L::date)',
+    current_setting('t3503.o_a'), current_setting('t3503.u_admin_sus'),
     current_setting('t3503.d_sus')::date - 1));
   PERFORM pg_temp.check(s = '42501',
     format('a suspended member with NO recorded date is refused, whatever the agreement is dated, got %s', s));
@@ -140,8 +140,8 @@ BEGIN
   -- that is the boundary day and is allowed. Under a session-dependent ::date
   -- the deactivation reads as 2026-05-14 and this is refused.
   s := pg_temp.sqlstate_of(format(
-    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, office_fee_amount, office_fee_cadence, effective_from) VALUES (%L,%L,50,50,100,%L,DATE ''2026-05-15'')',
-    current_setting('t3503.o_a'), current_setting('t3503.u_broker_sus'), 'monthly'));
+    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, effective_from) VALUES (%L,%L,50,50,DATE ''2026-05-15'')',
+    current_setting('t3503.o_a'), current_setting('t3503.u_broker_sus')));
   PERFORM pg_temp.check(s = 'OK',
     format('the comparison resolves against UTC, not the session timezone, got %s', s));
 END $$;

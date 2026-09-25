@@ -74,8 +74,8 @@ BEGIN
   -- 1. a DEACTIVATED subject, dated INSIDE the active period: ALLOWED. This is
   --    the assertion m36 and m41 and m42 push against from three directions.
   s := pg_temp.sqlstate_of(format(
-    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, office_fee_amount, office_fee_cadence, effective_from) VALUES (%L,%L,55,45,110,%L,%L::date)',
-    current_setting('t3503.o_a'), current_setting('t3503.u_agent_sus'), 'monthly', d_in));
+    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, effective_from) VALUES (%L,%L,55,45,%L::date)',
+    current_setting('t3503.o_a'), current_setting('t3503.u_agent_sus'), d_in));
   PERFORM pg_temp.check(s = 'OK',
     format('a broker CAN record an agreement for a DEACTIVATED agent dated INSIDE their active period, got %s', s));
 
@@ -83,8 +83,8 @@ BEGIN
   --    specifically, because the refusal comes from the WITH CHECK. A silent
   --    zero-row no-op would raise nothing and "it raised" would pass.
   s := pg_temp.sqlstate_of(format(
-    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, office_fee_amount, office_fee_cadence, effective_from) VALUES (%L,%L,55,45,110,%L,%L::date)',
-    current_setting('t3503.o_a'), current_setting('t3503.u_agent_sus'), 'monthly', d_out));
+    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, effective_from) VALUES (%L,%L,55,45,%L::date)',
+    current_setting('t3503.o_a'), current_setting('t3503.u_agent_sus'), d_out));
   PERFORM pg_temp.check(s = '42501',
     format('...and CANNOT date one AFTER they left, refused with 42501, got %s', s));
 
@@ -92,16 +92,16 @@ BEGIN
   --    row at all. Dated INSIDE the period on purpose -- if it were dated after,
   --    this arm could not tell "no membership row" from "date too late".
   s := pg_temp.sqlstate_of(format(
-    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, office_fee_amount, office_fee_cadence, effective_from) VALUES (%L,%L,55,45,110,%L,%L::date)',
-    current_setting('t3503.o_a'), current_setting('t3503.u_agent_gone'), 'monthly', d_in));
+    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, effective_from) VALUES (%L,%L,55,45,%L::date)',
+    current_setting('t3503.o_a'), current_setting('t3503.u_agent_gone'), d_in));
   PERFORM pg_temp.check(s = '42501',
     format('a broker CANNOT write for a REMOVED agent even inside the period, refused with 42501, got %s', s));
 
   -- 4. an ACTIVE subject: allowed, and the date is not tested for them --
   --    d_out is after the OTHER subject's deactivation and must not matter here.
   s := pg_temp.sqlstate_of(format(
-    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, office_fee_amount, office_fee_cadence, effective_from) VALUES (%L,%L,55,45,110,%L,%L::date)',
-    current_setting('t3503.o_a'), current_setting('t3503.u_agent_a'), 'monthly', d_out));
+    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, effective_from) VALUES (%L,%L,55,45,%L::date)',
+    current_setting('t3503.o_a'), current_setting('t3503.u_agent_a'), d_out));
   PERFORM pg_temp.check(s = 'OK',
     format('...and CAN for an ACTIVE agent at any date, got %s', s));
 
