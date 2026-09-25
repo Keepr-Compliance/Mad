@@ -131,6 +131,47 @@ export async function resolveOrgId(): Promise<string | null> {
   return outcome.status === "member" ? outcome.organizationId : null;
 }
 
+/**
+ * What {@link resolveOrgIdOrRefusal} found — BACKLOG-3539. Distinguishes a
+ * confirmed "no organization" from "the lookup could not complete", which
+ * `resolveOrgId`'s `null` deliberately does not.
+ */
+export type OrgLookupOutcome =
+  | { status: "member"; organizationId: string }
+  | { status: "none" }
+  | { status: "unavailable" };
+
+/**
+ * The organization ID for the current user, keeping "no organization" apart
+ * from "the lookup failed" — BACKLOG-3539.
+ *
+ * Same resolution as {@link resolveOrgId} (uncached, so it does not read a
+ * value the strict gate cached a moment earlier — a stale org id would be
+ * worse here than one extra round trip), and every existing caller of
+ * `resolveOrgId` keeps collapsing both failures to `null` on purpose: a
+ * fail-OPEN reader has nothing to say about the difference. This is for a
+ * caller that has to report WHICH ONE happened, and must not assert "no
+ * organization" — a false statement about an account that actually has one —
+ * on the strength of a lookup that merely could not run.
+ *
+ * Deliberately does not catch a throw out of `resolveOrgOutcome` (the session
+ * read can throw). That is not the mechanism this item fixes — a throw already
+ * reaches the caller as a refusal via `wrapHandler`, unchanged by this
+ * function — and swallowing it here would be a second, unrelated behaviour
+ * change.
+ */
+export async function resolveOrgIdOrRefusal(): Promise<OrgLookupOutcome> {
+  const outcome = await resolveOrgOutcome();
+  if (outcome.status === "member") {
+    return { status: "member", organizationId: outcome.organizationId };
+  }
+  if (outcome.status === "none") {
+    return { status: "none" };
+  }
+  // no_session / error: could not find out — never a confirmed "none".
+  return { status: "unavailable" };
+}
+
 // ---------------------------------------------------------------------------
 // Strict (fail-closed) feature reads — BACKLOG-3349
 // ---------------------------------------------------------------------------
