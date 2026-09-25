@@ -9,7 +9,7 @@
 -- Deactivation is the SAME shape here as it is for an agent -- deactivateUser.ts
 -- has one path, not one per role: the organization_members row stays and
 -- license_status moves to 'suspended'. So the role term in
--- can_write_commission_agreements still matches and the organization term still
+-- can_write_split_agreements still matches and the organization term still
 -- matches; only the status term refuses. Mutant m35 is that rule without its
 -- status term, and this control is one of its two reds.
 --
@@ -34,7 +34,7 @@ BEGIN
     PERFORM pg_temp.check(rl = who,
       format('precondition: ...and still carries the %s role, got %s', who, coalesce(rl, 'NO MEMBERSHIP ROW')));
   END LOOP;
-  SELECT count(*) INTO n FROM public.agent_commission_agreements
+  SELECT count(*) INTO n FROM public.agent_split_agreements
    WHERE organization_id = current_setting('t3503.o_a')::uuid;
   PERFORM pg_temp.check(n = 7, format('precondition: org A holds 7 agreement rows, got %s', n));
   SELECT count(*) INTO n FROM public.organization_franchise_fees
@@ -49,16 +49,16 @@ BEGIN
   FOREACH who IN ARRAY ARRAY['broker', 'admin'] LOOP
     PERFORM pg_temp.act_as(current_setting('t3503.u_' || who || '_sus')::uuid);
 
-    SELECT count(*) INTO n FROM public.agent_commission_agreements;
+    SELECT count(*) INTO n FROM public.agent_split_agreements;
     PERFORM pg_temp.check(n = 0, format('a deactivated %s reads 0 agreement rows, got %s', who, n));
     SELECT count(*) INTO n FROM public.organization_franchise_fees;
     PERFORM pg_temp.check(n = 0, format('a deactivated %s reads 0 franchise fee rows, got %s', who, n));
 
     -- and through the read paths BACKLOG-3504 uses
-    SELECT count(*) INTO n FROM public.commission_agreement_in_force(
+    SELECT count(*) INTO n FROM public.split_agreement_in_force(
       current_setting('t3503.o_a')::uuid, current_setting('t3503.u_agent_a')::uuid, DATE '2026-09-01');
     PERFORM pg_temp.check(n = 0,
-      format('...and 0 through commission_agreement_in_force, got %s', n));
+      format('...and 0 through split_agreement_in_force, got %s', n));
     SELECT count(*) INTO n FROM public.franchise_fee_in_force(
       current_setting('t3503.o_a')::uuid, DATE '2026-09-01');
     PERFORM pg_temp.check(n = 0, format('...and 0 through franchise_fee_in_force, got %s', n));
@@ -73,13 +73,13 @@ SELECT pg_temp.act_as(current_setting('t3503.u_broker_a')::uuid);
 DO $$
 DECLARE n int;
 BEGIN
-  SELECT count(*) INTO n FROM public.agent_commission_agreements;
+  SELECT count(*) INTO n FROM public.agent_split_agreements;
   PERFORM pg_temp.check(n = 7, format('the active broker still reads all 7 agreement rows, got %s', n));
   SELECT count(*) INTO n FROM public.organization_franchise_fees;
   PERFORM pg_temp.check(n = 3, format('...and all three franchise fee rows, got %s', n));
-  SELECT count(*) INTO n FROM public.commission_agreement_in_force(
+  SELECT count(*) INTO n FROM public.split_agreement_in_force(
     current_setting('t3503.o_a')::uuid, current_setting('t3503.u_agent_a')::uuid, DATE '2026-09-01');
-  PERFORM pg_temp.check(n = 1, format('...and 1 through commission_agreement_in_force, got %s', n));
+  PERFORM pg_temp.check(n = 1, format('...and 1 through split_agreement_in_force, got %s', n));
   SELECT count(*) INTO n FROM public.franchise_fee_in_force(
     current_setting('t3503.o_a')::uuid, DATE '2026-09-01');
   PERFORM pg_temp.check(n = 1, format('...and 1 through franchise_fee_in_force, got %s', n));

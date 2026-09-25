@@ -34,7 +34,7 @@ BEGIN
     'precondition: the agent has already left when the broker records this');
 
   s := pg_temp.sqlstate_of(format(
-    'INSERT INTO public.agent_commission_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, office_fee_amount, office_fee_cadence, effective_from, note) VALUES (%L,%L,70,30,125,%L,%L::date,%L)',
+    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, office_fee_amount, office_fee_cadence, effective_from, note) VALUES (%L,%L,70,30,125,%L,%L::date,%L)',
     current_setting('t3503.o_a'), current_setting('t3503.u_agent_sus'), 'monthly', closed,
     'recorded after the agent left, effective from the closing'));
   PERFORM pg_temp.check(s = 'OK',
@@ -43,12 +43,12 @@ BEGIN
   -- ...and it is the agreement IN FORCE on the day of the closing. This is the
   -- half that matters to BACKLOG-3504 and the half C12's zero-row shape used to
   -- return instead.
-  SELECT count(*) INTO n FROM public.commission_agreement_in_force(
+  SELECT count(*) INTO n FROM public.split_agreement_in_force(
     current_setting('t3503.o_a')::uuid, current_setting('t3503.u_agent_sus')::uuid, closed);
   PERFORM pg_temp.check(n = 1,
     format('the agreement resolves on the day of the closing instead of zero rows, got %s', n));
 
-  SELECT * INTO rec FROM public.commission_agreement_in_force(
+  SELECT * INTO rec FROM public.split_agreement_in_force(
     current_setting('t3503.o_a')::uuid, current_setting('t3503.u_agent_sus')::uuid, closed);
   PERFORM pg_temp.check(rec.agent_pct = 70.00 AND rec.brokerage_pct = 30.00,
     format('and it is the agreement just recorded, got %s/%s', rec.agent_pct, rec.brokerage_pct));
@@ -59,7 +59,7 @@ BEGIN
   -- cannot be satisfied by a policy that simply permits everything: nothing NEW
   -- may be dated after they left.
   s := pg_temp.sqlstate_of(format(
-    'INSERT INTO public.agent_commission_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, office_fee_amount, office_fee_cadence, effective_from) VALUES (%L,%L,70,30,125,%L,%L::date)',
+    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, office_fee_amount, office_fee_cadence, effective_from) VALUES (%L,%L,70,30,125,%L,%L::date)',
     current_setting('t3503.o_a'), current_setting('t3503.u_agent_sus'), 'monthly', left_on + 1));
   PERFORM pg_temp.check(s = '42501',
     format('but a new agreement dated after they left is still refused, got %s', s));

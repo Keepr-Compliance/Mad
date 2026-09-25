@@ -20,7 +20,7 @@ BEGIN
      AND user_id = current_setting('t3503.u_agent_sus')::uuid;
   PERFORM pg_temp.check(st = 'suspended',
     format('precondition: the deactivated agent is suspended, got %s', coalesce(st, 'NO MEMBERSHIP ROW')));
-  SELECT count(*) INTO n FROM public.agent_commission_agreements
+  SELECT count(*) INTO n FROM public.agent_split_agreements
    WHERE agent_user_id = current_setting('t3503.u_agent_sus')::uuid;
   PERFORM pg_temp.check(n = 1, format('precondition: they hold exactly 1 agreement row, got %s', n));
 END $$;
@@ -30,15 +30,15 @@ SELECT pg_temp.act_as(current_setting('t3503.u_agent_sus')::uuid);
 DO $$
 DECLARE n int;
 BEGIN
-  SELECT count(*) INTO n FROM public.agent_commission_agreements;
+  SELECT count(*) INTO n FROM public.agent_split_agreements;
   -- unqualified on purpose: the claim is that they read NOTHING, not merely that
   -- they cannot read their own row. The message says "anywhere" because the row
   -- a mutant lets through is not always theirs -- under m17r it is another org's.
   PERFORM pg_temp.check(n = 0, format('a deactivated agent reads 0 agreement rows anywhere, got %s', n));
   -- and through the read path BACKLOG-3504 uses
-  SELECT count(*) INTO n FROM public.commission_agreement_in_force(
+  SELECT count(*) INTO n FROM public.split_agreement_in_force(
     current_setting('t3503.o_a')::uuid, current_setting('t3503.u_agent_sus')::uuid, DATE '2026-09-01');
-  PERFORM pg_temp.check(n = 0, format('...and 0 through commission_agreement_in_force, got %s', n));
+  PERFORM pg_temp.check(n = 0, format('...and 0 through split_agreement_in_force, got %s', n));
 END $$;
 RESET ROLE;
 
@@ -47,11 +47,11 @@ SELECT pg_temp.act_as(current_setting('t3503.u_broker_a')::uuid);
 DO $$
 DECLARE n int;
 BEGIN
-  SELECT count(*) INTO n FROM public.agent_commission_agreements
+  SELECT count(*) INTO n FROM public.agent_split_agreements
    WHERE agent_user_id = current_setting('t3503.u_agent_sus')::uuid;
   PERFORM pg_temp.check(n = 1, format('the broker still reads the deactivated agent1s row, got %s', n));
-  SELECT count(*) INTO n FROM public.commission_agreement_in_force(
+  SELECT count(*) INTO n FROM public.split_agreement_in_force(
     current_setting('t3503.o_a')::uuid, current_setting('t3503.u_agent_sus')::uuid, DATE '2026-09-01');
-  PERFORM pg_temp.check(n = 1, format('...and 1 through commission_agreement_in_force, got %s', n));
+  PERFORM pg_temp.check(n = 1, format('...and 1 through split_agreement_in_force, got %s', n));
 END $$;
 RESET ROLE;

@@ -19,7 +19,7 @@ DO $$
 DECLARE r text; t text; p text;
 BEGIN
   FOREACH r IN ARRAY ARRAY['anon','authenticated'] LOOP
-    FOREACH t IN ARRAY ARRAY['public.agent_commission_agreements','public.organization_franchise_fees'] LOOP
+    FOREACH t IN ARRAY ARRAY['public.agent_split_agreements','public.organization_franchise_fees'] LOOP
       FOREACH p IN ARRAY ARRAY['UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER'] LOOP
         PERFORM pg_temp.check(has_table_privilege(r, t, p) = false,
           format('%s holds no %s on %s', r, p, t));
@@ -30,7 +30,7 @@ BEGIN
         format('%s cannot name set_at on an INSERT into %s', r, t));
     END LOOP;
     -- anon holds no SELECT either; authenticated does, filtered by policy (C01/C02).
-    PERFORM pg_temp.check(has_table_privilege(r, 'public.agent_commission_agreements', 'SELECT')
+    PERFORM pg_temp.check(has_table_privilege(r, 'public.agent_split_agreements', 'SELECT')
                           = (r = 'authenticated'),
       format('%s SELECT on agreements is %s', r, (r = 'authenticated')));
   END LOOP;
@@ -43,7 +43,7 @@ SELECT pg_temp.act_as(current_setting('t3503.u_agent_a')::uuid);
 DO $$
 DECLARE s text; n bigint;
 BEGIN
-  s := pg_temp.sqlstate_of('TRUNCATE public.agent_commission_agreements');
+  s := pg_temp.sqlstate_of('TRUNCATE public.agent_split_agreements');
   PERFORM pg_temp.check(s = '42501', format('agent TRUNCATE of agreements refused with 42501, got %s', s));
   s := pg_temp.sqlstate_of('TRUNCATE public.organization_franchise_fees');
   PERFORM pg_temp.check(s = '42501', format('agent TRUNCATE of franchise fees refused with 42501, got %s', s));
@@ -52,7 +52,7 @@ RESET ROLE;
 DO $$
 DECLARE n bigint;
 BEGIN
-  SELECT count(*) INTO n FROM public.agent_commission_agreements;
+  SELECT count(*) INTO n FROM public.agent_split_agreements;
   PERFORM pg_temp.check(n = 8, format('all eight agreement rows survive, got %s', n));
   SELECT count(*) INTO n FROM public.organization_franchise_fees;
   PERFORM pg_temp.check(n = 4, format('all four franchise rows survive, got %s', n));

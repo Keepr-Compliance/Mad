@@ -5,7 +5,7 @@
 -- THE SAME-DAY HALF IS WHY THIS CONTROL WAS EXTENDED. The ordering contract --
 -- `effective_from DESC, seq DESC`, never `set_at DESC` -- is stated for BOTH
 -- read helpers, but until F2/F3 existed only the agreement table had a pair that
--- could tell the two orderings apart: m03 mutates commission_agreement_in_force
+-- could tell the two orderings apart: m03 mutates split_agreement_in_force
 -- alone, and ordering franchise_fee_in_force by set_at reddened NOTHING.
 -- Mutant m37 is that mistake on this table, and these assertions are its red.
 SELECT pg_temp.act_as(current_setting('t3503.u_broker_a')::uuid);

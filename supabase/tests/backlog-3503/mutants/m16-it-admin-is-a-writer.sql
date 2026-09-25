@@ -3,7 +3,7 @@
 -- c24) were about the license_status term it silently dropped rather than about
 -- it_admin. Rebased it reds c04 alone -- the right signature for a role-list
 -- mistake, and the one that shows the rebase does not leave this mutant vacuous.
-CREATE OR REPLACE FUNCTION public.can_write_commission_agreements(p_org_id uuid)
+CREATE OR REPLACE FUNCTION public.can_write_split_agreements(p_org_id uuid)
 RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public
 AS $fn$ SELECT EXISTS (SELECT 1 FROM public.organization_members m
                         WHERE m.organization_id = p_org_id AND m.user_id = (SELECT auth.uid())
@@ -12,7 +12,7 @@ AS $fn$ SELECT EXISTS (SELECT 1 FROM public.organization_members m
 DO $m$
 DECLARE src text;
 BEGIN
-  SELECT prosrc INTO src FROM pg_proc WHERE oid='public.can_write_commission_agreements(uuid)'::regprocedure;
+  SELECT prosrc INTO src FROM pg_proc WHERE oid='public.can_write_split_agreements(uuid)'::regprocedure;
   IF position('it_admin' in src) = 0 THEN RAISE EXCEPTION 'MUTATION NOT APPLIED'; END IF;
   IF position('license_status' in src) = 0
   THEN RAISE EXCEPTION 'MUTATION NOT APPLIED: the status term went with it'; END IF;

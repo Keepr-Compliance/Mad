@@ -28,30 +28,30 @@ BEGIN
 
   -- the day BEFORE the deactivation: inside the period, allowed.
   s := pg_temp.sqlstate_of(format(
-    'INSERT INTO public.agent_commission_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, office_fee_amount, office_fee_cadence, effective_from) VALUES (%L,%L,50,50,100,%L,%L::date)',
+    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, office_fee_amount, office_fee_cadence, effective_from) VALUES (%L,%L,50,50,100,%L,%L::date)',
     org, sus, 'monthly', d - 1));
   PERFORM pg_temp.check(s = 'OK', format('the day BEFORE the deactivation is allowed, got %s', s));
 
   -- the day OF the deactivation: still inside. They worked that morning.
   s := pg_temp.sqlstate_of(format(
-    'INSERT INTO public.agent_commission_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, office_fee_amount, office_fee_cadence, effective_from) VALUES (%L,%L,51,49,100,%L,%L::date)',
+    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, office_fee_amount, office_fee_cadence, effective_from) VALUES (%L,%L,51,49,100,%L,%L::date)',
     org, sus, 'monthly', d));
   PERFORM pg_temp.check(s = 'OK', format('the day OF the deactivation is allowed -- the boundary is inclusive, got %s', s));
 
   -- the day AFTER: outside. Refused by the WITH CHECK, so 42501 specifically.
   s := pg_temp.sqlstate_of(format(
-    'INSERT INTO public.agent_commission_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, office_fee_amount, office_fee_cadence, effective_from) VALUES (%L,%L,52,48,100,%L,%L::date)',
+    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, office_fee_amount, office_fee_cadence, effective_from) VALUES (%L,%L,52,48,100,%L,%L::date)',
     org, sus, 'monthly', d + 1));
   PERFORM pg_temp.check(s = '42501', format('the day AFTER the deactivation is refused with 42501, got %s', s));
 
   -- and the rows landed, or did not, to match -- an arm that only inspects the
   -- SQLSTATE cannot see a policy that permits the write and drops the row.
   PERFORM pg_temp.check(
-    (SELECT count(*) FROM public.agent_commission_agreements
+    (SELECT count(*) FROM public.agent_split_agreements
       WHERE agent_user_id = sus AND effective_from IN (d - 1, d)) = 2,
     'both in-period rows landed');
   PERFORM pg_temp.check(
-    (SELECT count(*) FROM public.agent_commission_agreements
+    (SELECT count(*) FROM public.agent_split_agreements
       WHERE agent_user_id = sus AND effective_from = d + 1) = 0,
     'the out-of-period row did not land');
 END $$;
@@ -89,7 +89,7 @@ DO $$
 DECLARE s text;
 BEGIN
   s := pg_temp.sqlstate_of(format(
-    'INSERT INTO public.agent_commission_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, office_fee_amount, office_fee_cadence, effective_from) VALUES (%L,%L,50,50,100,%L,%L::date)',
+    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, office_fee_amount, office_fee_cadence, effective_from) VALUES (%L,%L,50,50,100,%L,%L::date)',
     current_setting('t3503.o_a'), current_setting('t3503.u_admin_sus'), 'monthly',
     current_setting('t3503.d_sus')::date - 1));
   PERFORM pg_temp.check(s = '42501',
@@ -140,7 +140,7 @@ BEGIN
   -- that is the boundary day and is allowed. Under a session-dependent ::date
   -- the deactivation reads as 2026-05-14 and this is refused.
   s := pg_temp.sqlstate_of(format(
-    'INSERT INTO public.agent_commission_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, office_fee_amount, office_fee_cadence, effective_from) VALUES (%L,%L,50,50,100,%L,DATE ''2026-05-15'')',
+    'INSERT INTO public.agent_split_agreements (organization_id, agent_user_id, agent_pct, brokerage_pct, office_fee_amount, office_fee_cadence, effective_from) VALUES (%L,%L,50,50,100,%L,DATE ''2026-05-15'')',
     current_setting('t3503.o_a'), current_setting('t3503.u_broker_sus'), 'monthly'));
   PERFORM pg_temp.check(s = 'OK',
     format('the comparison resolves against UTC, not the session timezone, got %s', s));

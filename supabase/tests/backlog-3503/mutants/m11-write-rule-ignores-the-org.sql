@@ -8,7 +8,7 @@
 -- ACTIVE broker of org A over-reads org B's row, so c23's positive arm -- "the
 -- active broker still reads all 7" -- fails at 8. That is a real finding about
 -- the org term, not an artifact.
-CREATE OR REPLACE FUNCTION public.can_write_commission_agreements(p_org_id uuid)
+CREATE OR REPLACE FUNCTION public.can_write_split_agreements(p_org_id uuid)
 RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public
 AS $fn$ SELECT EXISTS (SELECT 1 FROM public.organization_members m
                         WHERE m.user_id = (SELECT auth.uid())
@@ -17,7 +17,7 @@ AS $fn$ SELECT EXISTS (SELECT 1 FROM public.organization_members m
 DO $m$
 DECLARE src text;
 BEGIN
-  SELECT prosrc INTO src FROM pg_proc WHERE oid='public.can_write_commission_agreements(uuid)'::regprocedure;
+  SELECT prosrc INTO src FROM pg_proc WHERE oid='public.can_write_split_agreements(uuid)'::regprocedure;
   IF position('m.organization_id' in src) > 0 THEN RAISE EXCEPTION 'MUTATION NOT APPLIED'; END IF;
   -- everything else is still there, so the reds are about the org term alone
   IF position('license_status' in src) = 0

@@ -173,7 +173,7 @@ BEGIN
   -- auth.uid() is NULL and the column default cannot satisfy NOT NULL (probe P1).
   -- R2 then R3 share effective_from; R3 is inserted second (higher seq) with an
   -- EARLIER set_at.
-  INSERT INTO public.agent_commission_agreements
+  INSERT INTO public.agent_split_agreements
     (organization_id, agent_user_id, agent_pct, brokerage_pct, office_fee_amount,
      office_fee_cadence, effective_from, set_by, set_at) VALUES
     (o_a, u_agent_a,  60.00, 40.00, 100.00, 'monthly', DATE '2026-01-01', u_broker_a, TIMESTAMPTZ '2026-01-01 09:00:00+00'), -- R1

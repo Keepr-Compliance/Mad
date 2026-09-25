@@ -4,7 +4,7 @@
 DROP POLICY organization_franchise_fees_select_writer ON public.organization_franchise_fees;
 CREATE POLICY organization_franchise_fees_select_writer ON public.organization_franchise_fees
   FOR SELECT TO authenticated
-  USING (public.can_write_commission_agreements(organization_id)
+  USING (public.can_write_split_agreements(organization_id)
          AND EXISTS (SELECT 1 FROM public.organization_members m
                       WHERE m.organization_id = m.organization_id
                         AND m.user_id = (SELECT auth.uid())));

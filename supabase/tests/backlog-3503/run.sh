@@ -58,7 +58,7 @@ gate() {
     "select 'db=' || current_database() || ' user=' || current_user || ' server=' || current_setting('server_version');" \
     "select 'users_rows=' || count(*) from public.users;" \
     "select 'orgs_rows=' || count(*) from public.organizations;" \
-    "select 'target_tables_absent=' || (not exists (select 1 from information_schema.tables where table_schema='public' and table_name in ('agent_commission_agreements','organization_franchise_fees')));" \
+    "select 'target_tables_absent=' || (not exists (select 1 from information_schema.tables where table_schema='public' and table_name in ('agent_split_agreements','organization_franchise_fees')));" \
     | psql_in)
   echo "$out"
   grep -q '^users_rows=0$' <<<"$out" || { echo "GATE FAIL: public.users is not empty -- refusing." >&2; exit 1; }

@@ -1,13 +1,13 @@
-GRANT UPDATE (agent_pct, brokerage_pct) ON public.agent_commission_agreements TO authenticated;
+GRANT UPDATE (agent_pct, brokerage_pct) ON public.agent_split_agreements TO authenticated;
 GRANT UPDATE (amount) ON public.organization_franchise_fees TO authenticated;
-CREATE POLICY agent_commission_agreements_update_writer ON public.agent_commission_agreements
-  FOR UPDATE TO authenticated USING (public.can_write_commission_agreements(organization_id))
-  WITH CHECK (public.can_write_commission_agreements(organization_id));
+CREATE POLICY agent_split_agreements_update_writer ON public.agent_split_agreements
+  FOR UPDATE TO authenticated USING (public.can_write_split_agreements(organization_id))
+  WITH CHECK (public.can_write_split_agreements(organization_id));
 CREATE POLICY organization_franchise_fees_update_writer ON public.organization_franchise_fees
-  FOR UPDATE TO authenticated USING (public.can_write_commission_agreements(organization_id))
-  WITH CHECK (public.can_write_commission_agreements(organization_id));
+  FOR UPDATE TO authenticated USING (public.can_write_split_agreements(organization_id))
+  WITH CHECK (public.can_write_split_agreements(organization_id));
 DO $m$ BEGIN
-  IF NOT has_column_privilege('authenticated','public.agent_commission_agreements','agent_pct','UPDATE')
-     OR NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname='agent_commission_agreements_update_writer')
+  IF NOT has_column_privilege('authenticated','public.agent_split_agreements','agent_pct','UPDATE')
+     OR NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname='agent_split_agreements_update_writer')
   THEN RAISE EXCEPTION 'MUTATION NOT APPLIED'; END IF; END $m$;
 SELECT 'MUTATION APPLIED: UPDATE granted AND an UPDATE policy added -- the table becomes mutable';
