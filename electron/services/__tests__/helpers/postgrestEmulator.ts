@@ -83,6 +83,27 @@ export const ABSENT_COLUMN_ERROR = caseByLabel(PRE_MIGRATION_CASES, "A").error!;
 /** The exact error a pre-migration database returns for the ensure call. */
 export const ABSENT_FUNCTION_ERROR = caseByLabel(PRE_MIGRATION_CASES, "RPC-ensure").error!;
 
+/**
+ * BACKLOG-3519 — the exact PostgREST error `split_agreement_in_force` answers
+ * with today (BACKLOG-3503 applied nowhere). TRANSCRIBED, not invented:
+ * captured via `curl -X POST .../rest/v1/rpc/split_agreement_in_force` against
+ * the real project on 2026-09-25, read-only, no side effects (the table and
+ * function genuinely do not exist there). Not loaded from a JSON fixture file
+ * like the BACKLOG-3364 cases above -- one literal object, transcribed
+ * verbatim, is proportionate here; a whole fixture-file mechanism is not.
+ */
+export const ABSENT_SPLIT_FUNCTION_ERROR = {
+  code: "PGRST202",
+  details:
+    "Searched for the function public.split_agreement_in_force with parameters " +
+    "p_agent_user_id, p_on_date, p_organization_id or with a single unnamed " +
+    "json/jsonb parameter, but no matches were found in the schema cache.",
+  hint: "Perhaps you meant to call the function public.support_agent_analytics",
+  message:
+    "Could not find the function public.split_agreement_in_force" +
+    "(p_agent_user_id, p_on_date, p_organization_id) in the schema cache",
+};
+
 /** The column this whole emulator is about. */
 export const PERSONAL_COLUMN = "personal_owner_user_id";
 
@@ -120,6 +141,14 @@ export interface EmulatorState {
    * applies migration 1, and the state in which naming the column is fatal.
    */
   columnPresent: boolean;
+  /**
+   * BACKLOG-3519 — has BACKLOG-3503's migration (agent_split_agreements +
+   * split_agreement_in_force()) been applied? `false` is the state every
+   * environment is actually in as of 2026-09-25 -- see
+   * ABSENT_SPLIT_FUNCTION_ERROR's comment. Defaults to `true` so existing
+   * BACKLOG-3364 tests, which never mention this, are unaffected.
+   */
+  splitFunctionPresent: boolean;
   /** Rows per table. A table with no entry is empty, as an empty table is. */
   rows: Record<string, Row[]>;
   /** Every select string issued, per table, for assertions. */
@@ -295,15 +324,18 @@ export interface Emulator {
   from: (table: string) => ReturnType<typeof buildChain>;
   rpc: (fn: string, args?: unknown) => Promise<ChainResult>;
   /** Replace part of the fixture between cases. */
-  set: (next: Partial<Pick<EmulatorState, "columnPresent" | "rows">>) => void;
+  set: (
+    next: Partial<Pick<EmulatorState, "columnPresent" | "splitFunctionPresent" | "rows">>
+  ) => void;
   reset: () => void;
 }
 
 export function createPostgrestEmulator(
-  initial: Partial<Pick<EmulatorState, "columnPresent" | "rows">> = {}
+  initial: Partial<Pick<EmulatorState, "columnPresent" | "splitFunctionPresent" | "rows">> = {}
 ): Emulator {
   const state: EmulatorState = {
     columnPresent: initial.columnPresent ?? true,
+    splitFunctionPresent: initial.splitFunctionPresent ?? true,
     rows: initial.rows ?? {},
     selects: [],
     orders: [],
@@ -318,27 +350,69 @@ export function createPostgrestEmulator(
      * `ensure_personal_organization` answers from PR 1's captured responses: a
      * pre-migration database returns 404 / PGRST202 ("no such function"), and a
      * post-migration one returns `created` the first time and `exists` after.
+     *
+     * `split_agreement_in_force` (BACKLOG-3519) answers PGRST202 when
+     * `!state.splitFunctionPresent`, matching `ABSENT_SPLIT_FUNCTION_ERROR`'s
+     * measured shape, or filters `state.rows.agent_split_agreements` by
+     * organization/agent/effective_from and returns the row this repo's real
+     * function would (`effective_from DESC, seq DESC`, `LIMIT 1`, as an array
+     * -- `RETURNS SETOF` -- never an error for "no row matched"; that is a
+     * legitimate empty result, not a failure).
+     *
      * Any other function name is an unmocked call and says so loudly, rather
      * than resolving something plausible.
      */
     async rpc(fn: string, args?: unknown) {
       state.rpcs.push({ fn, args });
-      if (fn !== "ensure_personal_organization") {
-        throw new Error(`postgrestEmulator: unmocked rpc("${fn}")`);
+
+      if (fn === "ensure_personal_organization") {
+        if (!state.columnPresent) {
+          return { data: null, error: { ...ABSENT_FUNCTION_ERROR }, status: 404 };
+        }
+        const first =
+          state.rpcs.filter((c) => c.fn === "ensure_personal_organization").length === 1;
+        return { data: first ? ENSURE_CREATED : ENSURE_EXISTS, error: null, status: 200 };
       }
-      if (!state.columnPresent) {
-        return { data: null, error: { ...ABSENT_FUNCTION_ERROR }, status: 404 };
+
+      if (fn === "split_agreement_in_force") {
+        if (!state.splitFunctionPresent) {
+          return { data: null, error: { ...ABSENT_SPLIT_FUNCTION_ERROR }, status: 404 };
+        }
+        const { p_organization_id, p_agent_user_id, p_on_date } = (args ?? {}) as {
+          p_organization_id?: string;
+          p_agent_user_id?: string;
+          p_on_date?: string;
+        };
+        const rows = (state.rows.agent_split_agreements ?? [])
+          .filter(
+            (r) =>
+              r.organization_id === p_organization_id &&
+              r.agent_user_id === p_agent_user_id &&
+              typeof r.effective_from === "string" &&
+              p_on_date !== undefined &&
+              r.effective_from <= p_on_date
+          )
+          .sort((a, b) => {
+            const byDate = String(b.effective_from).localeCompare(String(a.effective_from));
+            if (byDate !== 0) return byDate;
+            return Number(b.seq ?? 0) - Number(a.seq ?? 0);
+          })
+          .slice(0, 1);
+        return { data: rows, error: null, status: 200 };
       }
-      const first =
-        state.rpcs.filter((c) => c.fn === "ensure_personal_organization").length === 1;
-      return { data: first ? ENSURE_CREATED : ENSURE_EXISTS, error: null, status: 200 };
+
+      throw new Error(`postgrestEmulator: unmocked rpc("${fn}")`);
     },
     set(next) {
       if (next.columnPresent !== undefined) state.columnPresent = next.columnPresent;
+      if (next.splitFunctionPresent !== undefined) {
+        state.splitFunctionPresent = next.splitFunctionPresent;
+      }
       if (next.rows !== undefined) state.rows = next.rows;
     },
     reset() {
       state.columnPresent = true;
+      state.splitFunctionPresent = true;
       state.rows = {};
       state.selects = [];
       state.orders = [];

@@ -828,6 +828,14 @@ export interface Transaction {
   sale_price?: number;
   earnest_money_amount?: number;
 
+  // Commission Figures (BACKLOG-3519, M2 -- figures only). Percentage as
+  // entered (2.50), not a fraction. No local field for the cloud-side split
+  // snapshot (agent_split_agreements is a cloud-only concept).
+  commission_offered_rate?: number;
+  commission_actual_rate?: number;
+  commission_gross_amount?: number;
+  commission_adjustment_reason?: string;
+
   // Key Dates (auto-extracted)
   mutual_acceptance_date?: string;
   inspection_deadline?: string;

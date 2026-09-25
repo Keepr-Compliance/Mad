@@ -273,6 +273,26 @@ export const TRANSACTION_COLUMN_POLICY: Record<TransactionColumn, ColumnPolicy> 
     update: "writable",
     why: "Entered by the user after the deal exists; no creating caller supplies it. Already accepted on the update path.",
   },
+  commission_offered_rate: {
+    insert: "db-default",
+    update: "db-default",
+    why: "BACKLOG-3519 (Commission M2, figures only): no caller writes this yet on either path. Left closed rather than opened speculatively, same reasoning as `inspection_deadline` below -- BACKLOG-3520 (desktop capture) is the intended future writer, and whether it reuses this generic update path or a dedicated one is its decision to make, not this item's (BACKLOG-3180 governs whether/how the IPC surface opens a column, see utils/validation.ts's TransactionField).",
+  },
+  commission_actual_rate: {
+    insert: "db-default",
+    update: "db-default",
+    why: "Companion of `commission_offered_rate`; same decision.",
+  },
+  commission_gross_amount: {
+    insert: "db-default",
+    update: "db-default",
+    why: "Companion of `commission_offered_rate`; same decision. Computed and rounded to cents once by whichever writer eventually sets it -- never derived here.",
+  },
+  commission_adjustment_reason: {
+    insert: "db-default",
+    update: "db-default",
+    why: "Companion of `commission_offered_rate`; same decision.",
+  },
   mutual_acceptance_date: {
     insert: "db-default",
     update: "writable",

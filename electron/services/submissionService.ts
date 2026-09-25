@@ -18,6 +18,7 @@
 import * as crypto from "crypto";
 import * as os from "os";
 import { app, net } from "electron";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import supabaseService from "./supabaseService";
 /**
  * BACKLOG-2868 — the refusal copy is CANONICAL in its own module because the
@@ -177,6 +178,41 @@ interface SubmissionRecord {
   message_count: number;
   attachment_count: number;
   submission_metadata?: Record<string, unknown>;
+  // BACKLOG-3519 (Commission M2, figures only). Every field here MUST be
+  // `undefined`, never `null`, when there is no value — see
+  // `resolveSplitSnapshot`'s header comment for why: today, with BACKLOG-3503
+  // unapplied in every environment, an explicit `null` would still reach the
+  // INSERT body as a real JSON key and fail with PGRST204 (unknown column) on
+  // every submission, for every user. `undefined` is dropped by
+  // `JSON.stringify` before the request body is built (verified against the
+  // installed `@supabase/postgrest-js` — `PostgrestBuilder.ts`'s fetch call —
+  // not assumed), so the key never reaches the wire until the migration is
+  // live. `.insert()` is called with a single object, not an array, so
+  // postgrest-js never derives a `columns=` query param from `Object.keys()`
+  // either (that path only fires for a bulk array insert).
+  commission_offered_rate?: number;
+  commission_actual_rate?: number;
+  commission_gross_amount?: number;
+  commission_adjustment_reason?: string;
+  split_agreement_id?: string;
+  split_agent_pct?: number;
+  split_brokerage_pct?: number;
+  split_effective_from?: string;
+  split_resolved_on?: string;
+}
+
+/**
+ * What `resolveSplitSnapshot` hands back. Every field optional and,
+ * critically, `undefined` (never `null`) in every "did not resolve to a
+ * value" case -- see `SubmissionRecord`'s comment on why that distinction is
+ * load-bearing today.
+ */
+interface SplitSnapshot {
+  split_agreement_id?: string;
+  split_agent_pct?: number;
+  split_brokerage_pct?: number;
+  split_effective_from?: string;
+  split_resolved_on?: string;
 }
 
 /** Record structure for submission_messages table */
@@ -729,6 +765,20 @@ class SubmissionService {
         currentItem: "Creating submission record...",
       });
 
+      // BACKLOG-3519: resolve the split AFTER orgId/currentUserId are known and
+      // BEFORE mapToSubmission builds the record, so the snapshot can be merged
+      // in rather than requiring mapToSubmission itself to become async. Runs on
+      // every (re)submission -- a resubmission re-resolves fresh, which is
+      // correct: the FROZEN copy lives on the transaction_submissions row this
+      // call is about to create, not anywhere local, so there is nothing to
+      // preserve from the prior version.
+      const splitSnapshot = await this.resolveSplitSnapshot(
+        client,
+        orgId,
+        currentUserId,
+        transaction.closed_at
+      );
+
       const submissionRecord = this.mapToSubmission(
         transaction,
         orgId,
@@ -736,7 +786,8 @@ class SubmissionService {
         submissionId,
         totalMessageCount,
         attachmentUploadResults.filter((r) => r.success).length,
-        options
+        options,
+        splitSnapshot
       );
 
       // Two-phase commit: insert as 'uploading' first, then finalize to 'submitted'
@@ -1353,6 +1404,121 @@ class SubmissionService {
     throw new Error("No authenticated user — cannot submit");
   }
 
+  /**
+   * BACKLOG-3519 — resolve the split agreement in force and the exact date
+   * used to resolve it, or resolve to nothing at all.
+   *
+   * THE DATE: the founder's backdating ruling (pm_comments 92f46fb4 on
+   * BACKLOG-3503) judges a deal by the terms in force on its CLOSING date, not
+   * the date it happens to be recorded -- so this resolves against
+   * `transaction.closed_at`, UTC-truncated exactly the way BACKLOG-3503's own
+   * INSERT policy truncates `deactivated_at`
+   * (`(closed_at AT TIME ZONE 'UTC')::date`), so the two dates are compared
+   * the same way everywhere in this system. `.toISOString().slice(0, 10)` on a
+   * JS `Date` IS that truncation: `toISOString()` always renders UTC,
+   * regardless of the machine's local timezone. When `closed_at` is NULL --
+   * `submitTransactionInternal` already handles that as a live state
+   * (`auditEndDate` above) -- the fallback is today's date, also computed in
+   * UTC for the same reason.
+   *
+   * NEVER THROWS, NEVER BLOCKS. A missing split, a missing table/function
+   * (BACKLOG-3503 not yet applied anywhere: measured 2026-09-25 against
+   * production, `split_agreement_in_force` answers PGRST202 -- "function ...
+   * not found in the schema cache"), or any other RPC failure all resolve to
+   * `{}`: nothing is added to the submission record, and the submission
+   * proceeds. This is the founder's explicit rule (never block on a missing
+   * split), and it is also the only safe behaviour while BACKLOG-3503 remains
+   * unapplied -- see `SubmissionRecord`'s comment on why every key here must
+   * stay `undefined` rather than `null` for that same reason.
+   *
+   * `split_resolved_on` IS SET ON A SUCCESSFUL CALL EVEN WHEN NO ROW IS
+   * FOUND, AND ONLY THEN. Setting it on every attempt, including an RPC
+   * error, would write "resolved on <date>, no agreement found" when the true
+   * state is "resolution was not available at all" -- a false compliance
+   * statement on a record this table exists to keep honest. Distinguishing
+   * "no split configured yet" (RPC succeeded, zero rows) from "resolution
+   * unavailable" (RPC failed) is the entire reason this returns `{}` in one
+   * case and `{ split_resolved_on }` in the other, rather than collapsing
+   * both to the same empty result.
+   */
+  private async resolveSplitSnapshot(
+    client: SupabaseClient,
+    orgId: string,
+    agentUserId: string,
+    closedAt: string | undefined
+  ): Promise<SplitSnapshot> {
+    // Computed INSIDE the try, not before it (BACKLOG-3519 SR review,
+    // pm_comments 701d1100/a75ac7d7 on this item). `validation.ts:959`'s date
+    // check is an unanchored prefix regex that admits "2026-13-45" and
+    // "2026-00-00" -- both pass the IPC gate and both make `new Date(...)`
+    // produce an Invalid Date, whose `.toISOString()` throws RangeError. A
+    // throw here must land in the same `{}`-and-log path as an RPC failure,
+    // not escape past this docblock's "NEVER THROWS" promise. The rejected
+    // alternative (substitute today's date and proceed) was proposed and then
+    // retracted during review: silently resolving the split against a date
+    // the deal did not close on, and writing `split_resolved_on = <today>` as
+    // if that were the answer, is the exact false-compliance statement this
+    // design exists to prevent -- worse than the RangeError it would hide.
+    let resolvedOn = "";
+    let data: unknown;
+    let error: { code?: string; message?: string } | null;
+    try {
+      resolvedOn = (closedAt ? new Date(closedAt) : new Date())
+        .toISOString()
+        .slice(0, 10);
+      const result = await client.rpc("split_agreement_in_force", {
+        p_organization_id: orgId,
+        p_agent_user_id: agentUserId,
+        p_on_date: resolvedOn,
+      });
+      data = result.data;
+      error = result.error;
+    } catch (err) {
+      error = { message: err instanceof Error ? err.message : "Unknown error" };
+      data = null;
+    }
+
+    if (error) {
+      // PGRST202 ("function ... not found in the schema cache") is BACKLOG-3503
+      // not yet applied -- expected today, logged quietly. Anything else is
+      // unexpected and logged louder, but the outcome is identical either way:
+      // never block a submission on this.
+      const isMissingFunction = error.code === "PGRST202" || error.code === "PGRST205";
+      const message = `[Submission] Split resolution unavailable (${error.code ?? "no code"}): ${
+        error.message ?? "unknown error"
+      }`;
+      // Called through the object, never a detached reference: logService's
+      // methods use `this.log(...)` internally, and `const f = logService.info`
+      // loses that binding.
+      if (isMissingFunction) {
+        logService.info(message, "SubmissionService");
+      } else {
+        logService.warn(message, "SubmissionService");
+      }
+      return {};
+    }
+
+    const rows = (Array.isArray(data) ? data : data ? [data] : []) as Array<{
+      id: string;
+      agent_pct: number;
+      brokerage_pct: number;
+      effective_from: string;
+    }>;
+    const row = rows[0];
+
+    if (!row) {
+      return { split_resolved_on: resolvedOn };
+    }
+
+    return {
+      split_resolved_on: resolvedOn,
+      split_agreement_id: row.id,
+      split_agent_pct: row.agent_pct,
+      split_brokerage_pct: row.brokerage_pct,
+      split_effective_from: row.effective_from,
+    };
+  }
+
   // ============================================
   // DATA MAPPING
   // ============================================
@@ -1367,7 +1533,8 @@ class SubmissionService {
     options?: {
       version?: number;
       parentSubmissionId?: string;
-    }
+    },
+    splitSnapshot?: SplitSnapshot
   ): SubmissionRecord {
     // Parse address parts if available
     let city = "";
@@ -1406,6 +1573,23 @@ class SubmissionService {
         detection_source: transaction.detection_source,
         detection_confidence: transaction.detection_confidence,
       },
+      // BACKLOG-3519 (Commission M2, figures only). `??`, NOT `||`: a rate of
+      // exactly 0 is a legal, CHECK-permitted value (a referral rebate, for
+      // instance) and must survive -- `0 || undefined` would silently drop it,
+      // which `sale_price`/`listing_price` above get away with only because a
+      // real-world price is never legitimately 0. `commission_adjustment_reason`
+      // is the one field that keeps `||`, deliberately: an empty string IS
+      // absent here, because the migration's CHECK rejects a zero-length
+      // (post-trim) reason and a blanked form field produces "" the same way it
+      // does for the date fields elsewhere in this function.
+      commission_offered_rate: transaction.commission_offered_rate ?? undefined,
+      commission_actual_rate: transaction.commission_actual_rate ?? undefined,
+      commission_gross_amount: transaction.commission_gross_amount ?? undefined,
+      commission_adjustment_reason: transaction.commission_adjustment_reason || undefined,
+      // See resolveSplitSnapshot's header comment: every key here is already
+      // `undefined` throughout when resolution did not happen or found nothing,
+      // never `null` -- spreading it here does not need its own guard.
+      ...splitSnapshot,
     };
   }
 
