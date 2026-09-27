@@ -60,7 +60,7 @@ const CLIPBOARD_ICON =
 
 /** "A", "A and B", "A, B and C" — each name quoted. */
 function quotedList(names: string[]): string {
-  const quoted = names.map((n) => `\u201c${n}\u201d`);
+  const quoted = names.map((n) => `"${n}"`);
   if (quoted.length <= 1) return quoted.join("");
   return `${quoted.slice(0, -1).join(", ")} and ${quoted[quoted.length - 1]}`;
 }
@@ -73,10 +73,10 @@ export function batchResultMessage(attempted: number, notAdded: string[]): strin
   const added = attempted - notAdded.length;
   if (added === 0) {
     return attempted === 1
-      ? `Couldn\u2019t add ${quotedList(notAdded)} \u2014 try again.`
-      : `Couldn\u2019t add any of the ${attempted} checklists \u2014 try again.`;
+      ? `Couldn't add ${quotedList(notAdded)} \u2014 try again.`
+      : `Couldn't add any of the ${attempted} checklists \u2014 try again.`;
   }
-  return `Added ${added} of ${attempted} checklists. Couldn\u2019t add ${quotedList(notAdded)} \u2014 try again.`;
+  return `Added ${added} of ${attempted} checklists. Couldn't add ${quotedList(notAdded)} \u2014 try again.`;
 }
 
 export function addButtonLabel(count: number): string {
