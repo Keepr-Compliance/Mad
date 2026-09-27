@@ -353,7 +353,7 @@ export function ChecklistReview({
                           data-testid="checklist-item"
                           className={`flex flex-wrap items-start gap-3.5 px-6 py-4 sm:flex-nowrap ${
                             itemIdx > 0 || section.addedAtReviewBy ? 'border-t border-gray-200' : ''
-                          } ${gap ? 'bg-amber-50' : ''}`}
+                          }`}
                         >
                           <ItemIcon item={item} />
                           <div className="min-w-0 flex-1">

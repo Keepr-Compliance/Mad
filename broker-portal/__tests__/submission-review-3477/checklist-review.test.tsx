@@ -181,6 +181,18 @@ describe('required counts (the agent’s ticks)', () => {
   });
 });
 
+describe('an unchecked required item (founder QA: pill only, no yellow row)', () => {
+  it('keeps the Not yet checked pill but the row has no amber/yellow background', () => {
+    renderReview();
+    fireEvent.click(sectionToggle('Asbestos'));
+    const row = screen.getByText('AHERA inspection report').closest('[data-testid="checklist-item"]') as HTMLElement;
+    expect(row).not.toBeNull();
+    expect(within(row).getByText('Not yet checked')).toBeInTheDocument();
+    expect(row.className).not.toMatch(/\bbg-(amber|yellow)-/);
+    expect(row.className).not.toMatch(/\bborder-(amber|yellow)-/);
+  });
+});
+
 describe('reviewer pill (Q7)', () => {
   it('shows only on required and agent-checked rows, never in a checklist added at review', () => {
     renderReview();
