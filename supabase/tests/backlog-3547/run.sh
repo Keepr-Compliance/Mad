@@ -150,7 +150,7 @@ PY
       changed="$(diff "$MIGRATION" "$m" | grep -c '^[<>]' || true)"
       [ "$changed" -gt 0 ] || { echo "$name: MUTATION NOT APPLIED (identical to the shipped file)" >&2; exit 1; }
       first="$(diff "$MIGRATION" "$m" | grep -m1 '^>' | sed 's/^> *//' | cut -c1-110 || true)"
-      [ -n "$first" ] || first="removed: $(diff "$MIGRATION" "$m" | grep -m1 '^<' | sed 's/^< *//' | cut -c1-100)"
+      [ -n "$first" ] || first="removed: $(diff "$MIGRATION" "$m" | grep -m1 '^<' | sed 's/^< *//' | cut -c1-100 || true)"
       reds=(); greens=(); details=()
       for c in "$HERE"/controls/*.sql; do
         run_control "$c" "$m"

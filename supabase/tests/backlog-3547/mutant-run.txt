@@ -1,0 +1,76 @@
+# recorded at 1162466c5 + working tree, 2026-09-27T17:11:13Z
+m01-no-status-clause  [as expected]
+    MUTATION APPLIED: 1 line(s) differ; first: removed: AND ((status)::text = ANY (ARRAY['uploading'::text, 'submitted'::text]))
+    RED:   c00 c02
+    green: c01 c03 c04 c05 c06 c07 c08
+      c00: CONTROL FAILED: C00 WITH CHECK text, got ((submitted_by = ( SELECT auth.uid() AS uid)) AND (organization_id IN ( SELECT om.organization_id
+      c02: CONTROL FAILED: C02 status 'under_review': expected RLS, got rows:1
+m02-admits-resubmitted  [as expected]
+    MUTATION APPLIED: 2 line(s) differ; first: AND ((status)::text = ANY (ARRAY['uploading'::text, 'submitted'::text, 'resubmitted'::text]))
+    RED:   c02
+    green: c00 c01 c03 c04 c05 c06 c07 c08
+      c02: CONTROL FAILED: C02 status 'resubmitted': expected RLS, got rows:1
+m03-uploading-only  [as expected]
+    MUTATION APPLIED: 2 line(s) differ; first: AND ((status)::text = ANY (ARRAY['uploading'::text]))
+    RED:   c00 c01
+    green: c02 c03 c04 c05 c06 c07 c08
+      c00: CONTROL FAILED: C00 WITH CHECK text, got ((submitted_by = ( SELECT auth.uid() AS uid)) AND (organization_id IN ( SELECT om.organization_id
+      c01: CONTROL FAILED: C01 no status (column default): expected rows:1, got 42501:new row violates row-level security policy for table "transaction_submissions"
+m04-deny-list-status  [as expected]
+    MUTATION APPLIED: 2 line(s) differ; first: AND ((status)::text <> ALL (ARRAY['approved'::text, 'rejected'::text]))
+    RED:   c00 c02
+    green: c01 c03 c04 c05 c06 c07 c08
+      c00: CONTROL FAILED: C00 WITH CHECK text, got ((submitted_by = ( SELECT auth.uid() AS uid)) AND (organization_id IN ( SELECT om.organization_id
+      c02: CONTROL FAILED: C02 status 'under_review': expected RLS, got rows:1
+m05-no-reviewed-by  [as expected]
+    MUTATION APPLIED: 1 line(s) differ; first: removed: AND (reviewed_by IS NULL)
+    RED:   c00 c03 c04
+    green: c01 c02 c05 c06 c07 c08
+      c00: CONTROL FAILED: C00 WITH CHECK text, got ((submitted_by = ( SELECT auth.uid() AS uid)) AND (organization_id IN ( SELECT om.organization_id
+      c03: CONTROL FAILED: C03 reviewed_by: expected RLS, got rows:1
+      c04: CONTROL FAILED: C04 same plus reviewed_by: expected RLS, got rows:1
+m06-no-reviewed-at  [as expected]
+    MUTATION APPLIED: 1 line(s) differ; first: removed: AND (reviewed_at IS NULL)
+    RED:   c00 c03
+    green: c01 c02 c04 c05 c06 c07 c08
+      c00: CONTROL FAILED: C00 WITH CHECK text, got ((submitted_by = ( SELECT auth.uid() AS uid)) AND (organization_id IN ( SELECT om.organization_id
+      c03: CONTROL FAILED: C03 reviewed_at: expected RLS, got rows:1
+m07-no-review-notes  [as expected]
+    MUTATION APPLIED: 1 line(s) differ; first: removed: AND (review_notes IS NULL)
+    RED:   c00 c03
+    green: c01 c02 c04 c05 c06 c07 c08
+      c00: CONTROL FAILED: C00 WITH CHECK text, got ((submitted_by = ( SELECT auth.uid() AS uid)) AND (organization_id IN ( SELECT om.organization_id
+      c03: CONTROL FAILED: C03 review_notes: expected RLS, got rows:1
+m08-or-reviewer  [as expected]
+    MUTATION APPLIED: 2 line(s) differ; first: OR (reviewed_by IS NULL)
+    RED:   c02 c03 c04 c06
+    green: c00 c01 c05 c07 c08
+      c02: CONTROL FAILED: C02 status 'under_review': expected RLS, got rows:1
+      c03: CONTROL FAILED: C03 reviewed_by: expected RLS, got rows:1
+      c04: CONTROL FAILED: C04 same plus reviewed_by: expected RLS, got rows:1
+      c06: CONTROL FAILED: C06 submitted_by another user: expected RLS, got rows:1
+m09-no-submitter-check  [as expected]
+    MUTATION APPLIED: 3 line(s) differ; first: (organization_id IN ( SELECT om.organization_id
+    RED:   c06
+    green: c00 c01 c02 c03 c04 c05 c07 c08
+      c06: CONTROL FAILED: C06 submitted_by another user: expected RLS, got rows:1
+m10-no-personal-org-check  [as expected]
+    MUTATION APPLIED: 2 line(s) differ; first: WHERE ((om.user_id = ( SELECT auth.uid() AS uid)))))
+    RED:   c00 c06
+    green: c01 c02 c03 c04 c05 c07 c08
+      c00: CONTROL FAILED: C00 WITH CHECK text, got ((submitted_by = ( SELECT auth.uid() AS uid)) AND (organization_id IN ( SELECT om.organization_id
+      c06: CONTROL FAILED: C06 personal organization: expected RLS, got rows:1
+m11-added-beside-old-policy  [as expected]
+    MUTATION APPLIED: 4 line(s) differ; first: DROP POLICY IF EXISTS agents_can_create_submissions_pre_review ON public.transaction_submissions;
+    RED:   c00 c02 c03 c04
+    green: c01 c05 c06 c07 c08
+      c00: CONTROL FAILED: C00 INSERT-capable policies, got agents_can_create_submissions,agents_can_create_submissions_pre_review,service_role_full_access_submissions
+      c02: CONTROL FAILED: C02 status 'under_review': expected RLS, got rows:1
+      c03: CONTROL FAILED: C03 reviewed_by: expected RLS, got rows:1
+      c04: CONTROL FAILED: C04 same plus reviewed_by: expected RLS, got rows:1
+m12-null-status-coalesced  [as expected]
+    MUTATION APPLIED: 2 line(s) differ; first: AND ((COALESCE(status, 'uploading'))::text = ANY (ARRAY['uploading'::text, 'submitted'::text]))
+    RED:   c02
+    green: c00 c01 c03 c04 c05 c06 c07 c08
+      c02: CONTROL FAILED: C02 status NULL: expected RLS, got rows:1
+mutants: 12 run, 0 not as expected

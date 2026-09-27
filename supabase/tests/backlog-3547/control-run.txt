@@ -1,0 +1,11 @@
+# recorded at 1162466c5 + working tree (harness edits after commit), 2026-09-27T17:11:08Z
+c00-one-insert-rule                            GREEN 3 assertions
+c01-allowed-shapes                             GREEN 8 assertions
+c02-review-statuses-refused                    GREEN 8 assertions
+c03-reviewer-fields-refused                    GREEN 4 assertions
+c04-commission-columns-unconstrained           GREEN 3 assertions
+c05-status-history-empty                       GREEN 3 assertions
+c06-existing-conditions-kept                   GREEN 4 assertions
+c07-service-role-unaffected                    GREEN 1 assertions
+c08-apply-twice                                GREEN 2 assertions
+controls: 9 green / 9

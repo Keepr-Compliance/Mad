@@ -18,3 +18,4 @@ m11-added-beside-old-policy	c00 c02 c03	DROP POLICY IF EXISTS agents_can_create_
 CREATE POLICY agents_can_create_submissions ON	DROP POLICY IF EXISTS agents_can_create_submissions_pre_review ON public.transaction_submissions;
 
 CREATE POLICY agents_can_create_submissions_pre_review ON
+m12-null-status-coalesced	c02	((status)::text = ANY	((COALESCE(status, 'uploading'))::text = ANY
