@@ -290,6 +290,33 @@ describe('Add checklist', () => {
     expect(mockRefresh).toHaveBeenCalled();
   });
 
+  it('a checklist that arrives after an add is shown open, others keep their state', () => {
+    const { rerender } = renderReview();
+    const fresh: ChecklistSectionView = {
+      id: 'hdr-flood',
+      templateId: 'tpl-flood',
+      name: 'Flood Zone Disclosure',
+      addedAtReviewBy: VIEWER,
+      addedAtReviewAt: '2026-09-21T09:00:00.000000+00:00',
+      items: [item('i-flood1', 'Flood zone determination')],
+    };
+    rerender(
+      <ChecklistReview
+        submissionId="sub-1"
+        status="under_review"
+        sections={[...SECTIONS, fresh]}
+        names={{ [VIEWER]: 'Viewer Fixture', [COLLEAGUE]: 'Colleague Fixture' }}
+        canTick
+        templates={[]}
+        messages={MESSAGES}
+        attachments={ATTACHMENTS}
+      />
+    );
+    expect(sectionToggle('Flood Zone Disclosure')).toHaveAttribute('aria-expanded', 'true');
+    expect(sectionToggle('Asbestos')).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByText(/Added by Viewer Fixture at review/)).toBeInTheDocument();
+  });
+
   it('a checklist added at review names who added it and when it applies', () => {
     renderReview();
     expect(screen.getByText(/at review, for the agent’s next version\./)).toHaveTextContent(

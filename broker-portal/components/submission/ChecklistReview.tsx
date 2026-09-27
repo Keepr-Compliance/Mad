@@ -125,7 +125,6 @@ export function ChecklistReview({
 }: ChecklistReviewProps) {
   const router = useRouter();
   const [sections, setSections] = useState<ChecklistSectionView[]>(initialSections);
-  useEffect(() => setSections(initialSections), [initialSections]);
 
   const nameMap = useMemo(() => (names ? new Map(Object.entries(names)) : null), [names]);
 
@@ -136,6 +135,19 @@ export function ChecklistReview({
         initialSections.filter((s, idx) => idx === 0 || s.addedAtReviewBy).map((s) => s.id)
       )
   );
+
+  // Fresh server data (router.refresh after a tick or an add). A checklist
+  // that was just added at review arrives open, as in mock v4 state 4.
+  const [knownIds, setKnownIds] = useState<Set<string>>(() => new Set(initialSections.map((s) => s.id)));
+  useEffect(() => {
+    setSections(initialSections);
+    const arrived = initialSections.filter((s) => !knownIds.has(s.id));
+    if (arrived.length === 0) return;
+    setKnownIds(new Set(initialSections.map((s) => s.id)));
+    const addedNow = arrived.filter((s) => s.addedAtReviewBy).map((s) => s.id);
+    if (addedNow.length > 0) setOpen((prev) => new Set([...Array.from(prev), ...addedNow]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- knownIds is bookkeeping for this effect only
+  }, [initialSections]);
   const allOpen = sections.length > 0 && sections.every((s) => open.has(s.id));
   const allClosed = sections.every((s) => !open.has(s.id));
   const toggle = (id: string) =>
