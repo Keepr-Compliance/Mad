@@ -1,4 +1,4 @@
-# recorded at 1162466c5 + working tree (harness edits after commit), 2026-09-27T17:11:08Z
+# bash run.sh controls, recorded at 10012aaed (clean tree), 2026-09-27T17:12:52Z
 c00-one-insert-rule                            GREEN 3 assertions
 c01-allowed-shapes                             GREEN 8 assertions
 c02-review-statuses-refused                    GREEN 8 assertions

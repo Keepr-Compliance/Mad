@@ -1,4 +1,4 @@
-# recorded at 1162466c5 + working tree, 2026-09-27T17:11:13Z
+# bash run.sh mutants, recorded at 10012aaed (clean tree), 2026-09-27T17:12:57Z
 m01-no-status-clause  [as expected]
     MUTATION APPLIED: 1 line(s) differ; first: removed: AND ((status)::text = ANY (ARRAY['uploading'::text, 'submitted'::text]))
     RED:   c00 c02
