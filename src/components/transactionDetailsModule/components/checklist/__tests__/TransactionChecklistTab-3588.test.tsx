@@ -30,6 +30,8 @@ import {
   fixtureTemplates,
 } from "./checklistFixture";
 import { ChecklistItemRow } from "../ChecklistItemRow";
+import { ChecklistTemplateChooser } from "../ChecklistTemplateChooser";
+import type { ChecklistTemplate } from "../../../../../../electron/types/checklist";
 
 jest.mock("../../../../../contexts/AuthContext", () => ({
   useAuth: () => ({ currentUser: { id: "user-3588", email: "agent@example.test" } }),
@@ -148,6 +150,28 @@ describe("ticking", () => {
     api().get.mockResolvedValue(answer([fixtureChecklist(0)]));
     render(<Harness />);
     expect(await screen.findByTestId("checklist-add")).toHaveTextContent(/^Add checklist$/);
+  });
+});
+
+describe("CNT — a ticked template that becomes already-added drops out", () => {
+  // In the tab today nothing reloads the list while the chooser is open, so
+  // this is driven through the chooser's own contract: `disabledTemplateIds`
+  // changing under a ticked row.
+  it("the count, the label and the batch all leave it out", async () => {
+    const onAdd = jest.fn((_t: ChecklistTemplate) => Promise.resolve(true));
+    const props = { mode: "add" as const, onAdd, onAllAdded: jest.fn(), onCancel: jest.fn() };
+    const { rerender } = render(<ChecklistTemplateChooser {...props} disabledTemplateIds={new Set<string>()} />);
+    await screen.findByTestId("checklist-template-tpl-fresh");
+    fireEvent.click(check("tpl-probe"));
+    fireEvent.click(check("tpl-fresh"));
+    expect(count()).toHaveTextContent("2 selected");
+    rerender(<ChecklistTemplateChooser {...props} disabledTemplateIds={new Set(["tpl-probe"])} />);
+    expect(count()).toHaveTextContent("1 selected");
+    expect(addButton()).toHaveTextContent(/^Add checklist$/);
+    expect(check("tpl-probe")).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(addButton());
+    await waitFor(() => expect(props.onAllAdded).toHaveBeenCalledTimes(1));
+    expect(onAdd.mock.calls.map((c) => c[0].id)).toEqual(["tpl-fresh"]);
   });
 });
 
