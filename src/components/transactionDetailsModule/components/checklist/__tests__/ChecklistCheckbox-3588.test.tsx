@@ -23,10 +23,10 @@ const BEFORE: Array<[string, string, boolean, boolean, boolean]> = [
 ];
 
 describe("BACKLOG-3588 — the item row's checkbox is unchanged by the extraction", () => {
-  it.each(BEFORE.map(([name, html, checked, readOnly, pending]) => [name, html, checked, readOnly, pending]))(
+  it.each(BEFORE)(
     "%s: byte-identical to the pre-extraction row",
     (_name, html, checked, readOnly, pending) => {
-      const item = { ...fixtureItem(0), isChecked: checked as boolean };
+      const item = { ...fixtureItem(0), isChecked: checked };
       render(
         <ChecklistItemRow
           item={item}
