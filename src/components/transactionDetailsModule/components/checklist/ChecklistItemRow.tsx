@@ -12,6 +12,7 @@ import React, { useState } from "react";
 import type { ChecklistItem, ChecklistLink } from "../../../../../electron/types/checklist";
 import { InfoTooltip } from "../../../common/InfoTooltip";
 import { ChecklistLinkChip } from "./ChecklistLinkChip";
+import { ChecklistCheckbox } from "./ChecklistCheckbox";
 import type { UnifiedAttachment } from "../../hooks/useTransactionAllAttachments";
 import type { EmailThread } from "../EmailThreadCard";
 import type { ChecklistLinkViewer } from "./ChecklistLinkChip";
@@ -80,28 +81,14 @@ export function ChecklistItemRow({
       }`}
       data-testid={`checklist-item-${item.id}`}
     >
-      <button
-        type="button"
-        role="checkbox"
-        aria-checked={item.isChecked}
-        aria-label={item.title}
+      <ChecklistCheckbox
+        checked={item.isChecked}
+        label={item.title}
         disabled={readOnly || pending}
+        dimmed={pending}
         onClick={() => onToggle(item)}
-        className={`w-6 h-6 rounded-md border-2 inline-flex items-center justify-center flex-shrink-0 mt-0.5 transition-colors disabled:cursor-not-allowed ${
-          item.isChecked ? "bg-blue-500 border-blue-500" : "bg-white border-gray-300 hover:border-blue-300"
-        } ${pending ? "opacity-60" : ""}`}
-        data-testid={`checklist-check-${item.id}`}
-      >
-        <svg
-          className={`w-4 h-4 text-white ${item.isChecked ? "opacity-100" : "opacity-0"}`}
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-        </svg>
-      </button>
+        testId={`checklist-check-${item.id}`}
+      />
 
       <div className="flex-1 min-w-0">
         <div className="flex items-center flex-wrap gap-x-3 gap-y-1.5">

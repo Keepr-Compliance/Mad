@@ -27,11 +27,7 @@
 import React from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
-import {
-  ALREADY_ON_TRANSACTION_ERROR,
-  TransactionChecklistTab,
-  type TransactionChecklistTabProps,
-} from "../TransactionChecklistTab";
+import { TransactionChecklistTab, type TransactionChecklistTabProps } from "../TransactionChecklistTab";
 import { useTransactionChecklist } from "../../../hooks/useTransactionChecklist";
 import type { StrictFeatureStateOrPending } from "../../../../../hooks/useStrictFeatureState";
 import type { ChecklistDetail } from "../../../../../../electron/types/checklist";
@@ -186,9 +182,15 @@ describe("C-K — three sentences for three facts", () => {
 });
 
 describe("A-10 / A-9 — adding a checklist", () => {
+  // BACKLOG-3588: a template is ticked, then added with the footer's Add.
+  const tickAndAdd = async (templateId: string) => {
+    fireEvent.click(await screen.findByTestId(`checklist-template-check-${templateId}`));
+    fireEvent.click(screen.getByTestId("checklist-chooser-add"));
+  };
+
   it("A-10: the first pick sends exactly {transactionId, templateId}", async () => {
     render(<Harness gate="allowed" />);
-    fireEvent.click(await screen.findByTestId("checklist-template-tpl-probe"));
+    await tickAndAdd("tpl-probe");
     await waitFor(() => expect(api().selectTemplate).toHaveBeenCalledTimes(1));
     expect(api().selectTemplate.mock.calls[0]).toEqual([{ transactionId: "txn-1", templateId: "tpl-probe" }]);
   });
@@ -197,7 +199,7 @@ describe("A-10 / A-9 — adding a checklist", () => {
     api().get.mockResolvedValue(answerAll());
     render(<Harness gate="allowed" />);
     fireEvent.click(await screen.findByTestId("checklist-add"));
-    fireEvent.click(await screen.findByTestId("checklist-template-tpl-fresh"));
+    await tickAndAdd("tpl-fresh");
     await waitFor(() => expect(api().selectTemplate).toHaveBeenCalledTimes(1));
     expect(api().selectTemplate.mock.calls[0]).toEqual([{ transactionId: "txn-1", templateId: "tpl-fresh" }]);
   });
@@ -208,22 +210,30 @@ describe("A-10 / A-9 — adding a checklist", () => {
     fireEvent.click(await screen.findByTestId("checklist-add"));
     await screen.findByTestId("checklist-template-tpl-fresh");
     for (const id of ["tpl-probe", "tpl-other", "tpl-done"]) {
-      expect(screen.getByTestId(`checklist-template-${id}`)).toBeDisabled();
+      expect(screen.getByTestId(`checklist-template-check-${id}`)).toBeDisabled();
       expect(screen.getByTestId(`checklist-template-added-${id}`)).toHaveTextContent("Already added");
+      fireEvent.click(screen.getByTestId(`checklist-template-check-${id}`));
       fireEvent.click(screen.getByTestId(`checklist-template-${id}`));
     }
-    expect(screen.getByTestId("checklist-template-tpl-fresh")).toBeEnabled();
+    expect(screen.getByTestId("checklist-template-check-tpl-fresh")).toBeEnabled();
     expect(screen.queryByTestId("checklist-template-added-tpl-fresh")).not.toBeInTheDocument();
+    expect(screen.getByTestId("checklist-chooser-add")).toBeDisabled();
+    fireEvent.click(screen.getByTestId("checklist-chooser-add"));
     expect(api().selectTemplate).not.toHaveBeenCalled();
   });
 
-  it("an `exists` answer tells the user the checklist is already there", async () => {
-    api().get.mockResolvedValue(answer([fixtureChecklist(0)]));
+  it("an `exists` answer counts as added: no error, the chooser closes (BACKLOG-3588 D1)", async () => {
+    // Main answers `exists` because the template IS on the transaction; the
+    // reload after the write shows it.
+    api().get.mockResolvedValueOnce(answer([fixtureChecklist(0)]));
+    api().get.mockResolvedValue(answer([fixtureChecklist(0), fixtureChecklist(1)]));
     api().selectTemplate.mockResolvedValue({ success: true, result: { status: "exists", checklistId: "x" } });
     render(<Harness gate="allowed" />);
     fireEvent.click(await screen.findByTestId("checklist-add"));
-    fireEvent.click(await screen.findByTestId("checklist-template-tpl-other"));
-    await waitFor(() => expect(onShowError).toHaveBeenCalledWith(ALREADY_ON_TRANSACTION_ERROR));
+    await tickAndAdd("tpl-other");
+    expect(await screen.findByTestId("checklist-panel")).toBeInTheDocument();
+    expect(screen.queryByTestId("checklist-chooser")).not.toBeInTheDocument();
+    expect(onShowError).not.toHaveBeenCalled();
   });
 });
 
