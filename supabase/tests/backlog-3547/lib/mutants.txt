@@ -1,0 +1,20 @@
+m01-no-status-clause	c02	    AND ((status)::text = ANY (ARRAY['uploading'::text, 'submitted'::text]))
+	
+m02-admits-resubmitted	c02	ARRAY['uploading'::text, 'submitted'::text]	ARRAY['uploading'::text, 'submitted'::text, 'resubmitted'::text]
+m03-uploading-only	c01	ARRAY['uploading'::text, 'submitted'::text]	ARRAY['uploading'::text]
+m04-deny-list-status	c02	((status)::text = ANY (ARRAY['uploading'::text, 'submitted'::text]))	((status)::text <> ALL (ARRAY['approved'::text, 'rejected'::text]))
+m05-no-reviewed-by	c03 c04	    AND (reviewed_by IS NULL)
+	
+m06-no-reviewed-at	c03	    AND (reviewed_at IS NULL)
+	
+m07-no-review-notes	c03	    AND (review_notes IS NULL)
+	
+m08-or-reviewer	c02	    AND (reviewed_by IS NULL)	    OR (reviewed_by IS NULL)
+m09-no-submitter-check	c06	    (submitted_by = ( SELECT auth.uid() AS uid))
+    AND (organization_id	    (organization_id
+m10-no-personal-org-check	c06	 AND (o.personal_owner_user_id IS NULL)	
+m11-added-beside-old-policy	c00 c02 c03	DROP POLICY IF EXISTS agents_can_create_submissions ON public.transaction_submissions;
+
+CREATE POLICY agents_can_create_submissions ON	DROP POLICY IF EXISTS agents_can_create_submissions_pre_review ON public.transaction_submissions;
+
+CREATE POLICY agents_can_create_submissions_pre_review ON
