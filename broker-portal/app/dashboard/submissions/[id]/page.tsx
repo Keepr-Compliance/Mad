@@ -344,6 +344,7 @@ export default async function SubmissionDetailPage({ params }: PageProps) {
           loaded={checklistsLoaded}
           names={names ? Object.fromEntries(names) : null}
           canTick={capabilities.canTick}
+          canDecide={!isImpersonating && capabilities.canDecide}
           templates={addableTemplates}
           messages={showMessages ? gatedMessages : []}
           attachments={showAttachments ? attachments : []}

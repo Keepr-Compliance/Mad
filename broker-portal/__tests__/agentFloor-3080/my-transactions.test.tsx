@@ -36,9 +36,12 @@ import {
   SUBMISSION_COLUMNS,
   SUBMISSION_METADATA_KEYS,
   attachmentRow,
+  checklistAddedEntry,
+  checklistReviewEntry,
   historyEntry,
   messageRow,
   submissionRow,
+  userNameRow,
 } from '../helpers/submissionRows';
 import { ORG_WITHOUT_PLAN_FEATURES, withFeature } from '../fixtures/orgFeatures';
 
@@ -49,6 +52,7 @@ import { ORG_WITHOUT_PLAN_FEATURES, withFeature } from '../fixtures/orgFeatures'
 const mockEmulator = createPostgrestEmulator();
 const mockGetUser = jest.fn();
 let mockMembershipReadFails = false;
+let mockUsersReadFails = false;
 
 type FeatureState = 'absent' | 'on' | 'off' | 'rpc_error' | 'payload_error';
 let mockFeatures: Record<string, FeatureState> = {};
@@ -68,6 +72,10 @@ function mockServerFrom(table: string) {
   if (mockMembershipReadFails && table === 'organization_members') {
     (chain as { then: unknown }).then = (ok: (r: unknown) => unknown, ko?: (e: unknown) => unknown) =>
       Promise.resolve({ data: null, error: { ...ABSENT_COLUMN_ERROR }, status: 400 }).then(ok, ko);
+  }
+  if (mockUsersReadFails && table === 'users') {
+    (chain as { then: unknown }).then = (ok: (r: unknown) => unknown, ko?: (e: unknown) => unknown) =>
+      Promise.resolve({ data: null, error: { code: '42501', message: 'fixture: users read failed' }, status: 403 }).then(ok, ko);
   }
   return chain;
 }
@@ -168,6 +176,7 @@ import { mayOpenDashboardPath, classifyPortalAccess } from '@/lib/auth/membershi
 import { getImpersonationSession } from '@/lib/impersonation';
 import { getDataClient } from '@/lib/impersonation-guards';
 import { createServiceClient } from '@/lib/supabase/service';
+import { FORMER_MEMBER } from '@/lib/submissions/history';
 
 // ---------------------------------------------------------------------------
 // Fixture (every id invented)
@@ -188,6 +197,27 @@ const S_B = '00000000-0000-4000-8000-000000308b01'; // pii-allow-uuid: invented 
 const PARENT_NOTE = 'Parent round: please add the disclosure';
 const OTHER_ORG_NOTE = 'Other brokerage review note';
 const REVIEWER = '00000000-0000-4000-8000-0000003080c1'; // pii-allow-uuid: invented fixture id
+const REVIEWER_NAME = 'Reviewer Fixture';
+/** An actor id no longer returned by users_select_public (see the F2 block). */
+const REMOVED = '00000000-0000-4000-8000-0000003080c2'; // pii-allow-uuid: invented fixture id
+const S_A_REVIEWED = '00000000-0000-4000-8000-000000308a04'; // pii-allow-uuid: invented fixture id
+const ITEM_REVIEWED = '00000000-0000-4000-8000-000000308d01'; // pii-allow-uuid: invented fixture id
+const CHECKLIST_ADDED = '00000000-0000-4000-8000-000000308d02'; // pii-allow-uuid: invented fixture id
+const TEMPLATE_ADDED = '00000000-0000-4000-8000-000000308d03'; // pii-allow-uuid: invented fixture id
+
+/**
+ * users_select_public returns every member of an organization the viewer
+ * belongs to (policy text quoted in SR review pm_comments f4d13187 §3). The
+ * emulator runs no RLS, so these rows ARE what that policy returns to agent A:
+ * A, colleague B and the reviewer. REMOVED is absent.
+ */
+const AGENT_NAME = 'Agent Fixture';
+const COLLEAGUE_B_NAME = 'Colleague B Fixture';
+const USERS: Row[] = [
+  userNameRow(A, AGENT_NAME, 'agent@fixture.example.test'),
+  userNameRow(B, COLLEAGUE_B_NAME, 'colleague@fixture.example.test'),
+  userNameRow(REVIEWER, REVIEWER_NAME, 'reviewer@fixture.example.test'),
+];
 
 const SUBMISSIONS: Row[] = [
   submissionRow({
@@ -271,6 +301,7 @@ function given(
   });
   mockFeatures = features;
   mockMembershipReadFails = options.membershipReadFails ?? false;
+  mockUsersReadFails = false;
   (getImpersonationSession as jest.Mock).mockResolvedValue(
     options.impersonating
       ? {
@@ -287,6 +318,7 @@ function given(
       transaction_submissions: SUBMISSIONS,
       submission_messages: MESSAGES,
       submission_attachments: ATTACHMENTS,
+      users: USERS,
     },
   });
 }
@@ -566,6 +598,7 @@ describe('detail page', () => {
       'submission_attachments',
       'submission_messages',
       'transaction_submissions',
+      'users',
     ]);
   });
 
@@ -574,7 +607,8 @@ describe('detail page', () => {
     const element = elementOf(await run(detail(S_A)));
     const props = findProps<StatusHistoryProps>(element, StatusHistory)!;
     expect(props.history.map((h) => h.notes).filter(Boolean)).toEqual([PARENT_NOTE]);
-    expect(props.history.every((h) => h.changed_by === undefined)).toBe(true);
+    // BACKLOG-3477 (f868fae2): the reviewer is named, never shown as an id.
+    expect(props.history.map((h) => h.changed_by)).toEqual([REVIEWER_NAME, REVIEWER_NAME, undefined]);
     const { container } = render(element);
     expect(container.innerHTML).not.toContain(REVIEWER);
     const hrefs = Array.from(container.querySelectorAll('a[href]')).map((a) => a.getAttribute('href') as string);
@@ -681,6 +715,113 @@ describe('detail page', () => {
     render(<MessageList messages={props.messages as never} />);
     expect(mockStorageOps).toEqual([]);
     expect(mockBrowserTables).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3477 F2/F3: reviewer names on the agent's own timeline
+// ---------------------------------------------------------------------------
+
+/**
+ * One submission of A's with the reviewer RPCs' typed entries.
+ *
+ * REMOVED stands for BOTH "membership row deleted" and "membership user_id set
+ * NULL": the emulator runs no RLS, so each comes out as the same fixture, an id
+ * absent from the users rows. The NULL case rests on the live policy text
+ * `om.user_id IS NOT NULL` in users_select_public, not on a second test.
+ */
+type StoredHistory = NonNullable<Parameters<typeof submissionRow>[0]['statusHistory']>;
+function reviewedSubmission(history: StoredHistory): Row {
+  return submissionRow({
+    id: S_A_REVIEWED,
+    organizationId: BROKERAGE,
+    submittedBy: A,
+    status: 'under_review',
+    statusHistory: history,
+    createdAt: '2026-09-02T00:00:00Z',
+  });
+}
+const REVIEW_TICK = checklistReviewEntry({
+  changedBy: REVIEWER,
+  itemId: ITEM_REVIEWED,
+  itemTitle: 'Title commitment',
+  checklistName: 'Contract',
+  from: false,
+  to: true,
+});
+const ADDED_BY_REMOVED = checklistAddedEntry({
+  changedBy: REMOVED,
+  checklistId: CHECKLIST_ADDED,
+  checklistName: 'Lead-Based Paint',
+  templateId: TEMPLATE_ADDED,
+});
+
+function givenReviewed(history: StoredHistory): void {
+  given('brokerage agent', ON);
+  mockEmulator.set({
+    rows: {
+      ...mockEmulator.state.rows,
+      transaction_submissions: [...SUBMISSIONS, reviewedSubmission(history)],
+    },
+  });
+}
+
+describe('F2: the agent sees who reviewed, by name (BACKLOG-3477)', () => {
+  const HISTORY: StoredHistory = [historyEntry('submitted'), historyEntry('under_review', null, REVIEWER), REVIEW_TICK, ADDED_BY_REMOVED];
+
+  it('(i) an entry without `status` renders as its own labelled line, not a status row', async () => {
+    givenReviewed(HISTORY);
+    const { container } = render(elementOf(await run(detail(S_A_REVIEWED))));
+    const typed = Array.from(container.querySelectorAll('[data-testid="typed-history-entry"]'));
+    expect(typed.map((li) => li.getAttribute('data-entry-type'))).toEqual(['checklist_review', 'checklist_added']);
+    expect(typed[0].textContent).toContain('Title commitment — unchecked → checked');
+    expect(typed[1].textContent).toContain('Checklist added: Lead-Based Paint');
+  });
+
+  it('(iv) a live colleague renders by name', async () => {
+    givenReviewed(HISTORY);
+    const { container } = render(elementOf(await run(detail(S_A_REVIEWED))));
+    const typed = Array.from(container.querySelectorAll('[data-testid="typed-history-entry"]'));
+    expect(typed[0].textContent).toContain(`by ${REVIEWER_NAME}`);
+    expect(container.textContent).toContain(`by ${REVIEWER_NAME}`);
+  });
+
+  it('(iii) a removed member reads "a former member" and no raw id is anywhere on the page', async () => {
+    givenReviewed(HISTORY);
+    const { container } = render(elementOf(await run(detail(S_A_REVIEWED))));
+    const typed = Array.from(container.querySelectorAll('[data-testid="typed-history-entry"]'));
+    expect(typed[1].textContent).toContain(`by ${FORMER_MEMBER}`);
+    for (const id of [REMOVED, REVIEWER]) {
+      expect(container.innerHTML).not.toContain(id);
+    }
+  });
+
+  it('(ii) an entry without changed_at does not throw', async () => {
+    // Robustness only: both producers always set changed_at (SR §4).
+    const noDate = { ...REVIEW_TICK };
+    delete noDate.changed_at;
+    givenReviewed([historyEntry('submitted'), noDate]);
+    const { container } = render(elementOf(await run(detail(S_A_REVIEWED))));
+    expect(container.textContent).toContain('Title commitment — unchecked → checked');
+    expect(container.textContent).toContain(`by ${REVIEWER_NAME}`);
+  });
+
+  it('F3: when the users read fails, nobody is named and nobody is "a former member"', async () => {
+    givenReviewed(HISTORY);
+    mockUsersReadFails = true;
+    const { container } = render(elementOf(await run(detail(S_A_REVIEWED))));
+    expect(container.querySelectorAll('[data-testid="typed-history-entry"]')).toHaveLength(2);
+    expect(container.textContent).not.toContain(FORMER_MEMBER);
+    expect(container.textContent).not.toContain(REVIEWER_NAME);
+    expect(container.textContent).not.toMatch(/\bby /);
+    for (const id of [REMOVED, REVIEWER]) expect(container.innerHTML).not.toContain(id);
+  });
+
+  it('names are read from users, never profiles', async () => {
+    givenReviewed(HISTORY);
+    await run(detail(S_A_REVIEWED));
+    expect(tablesRead()).toContain('users');
+    expect(tablesRead()).not.toContain('profiles');
   });
 });
 

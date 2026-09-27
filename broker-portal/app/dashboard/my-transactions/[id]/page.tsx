@@ -18,8 +18,11 @@
  *   4. The previous versions (parent_submission_id), each hop scoped the same
  *      way as step 2. A parent outside that scope ends the walk and gets no link.
  *
- * Session client only (the gate's). Reviewer names are not resolved on this
- * page, so status history entries show no name.
+ * Session client only (the gate's). Actor names come from public.users under
+ * the agent's own session (BACKLOG-3477, pm_comments f868fae2): the same
+ * resolution as the broker page. An actor id that no longer resolves reads
+ * "a former member"; a failed lookup shows no names at all; a raw id is never
+ * handed to StatusHistory.
  */
 
 import Link from 'next/link';
@@ -31,6 +34,8 @@ import { AttachmentList } from '@/components/submission/AttachmentList';
 import { StatusHistory } from '@/components/submission/StatusHistory';
 import { UpsellPanel } from '@/components/my-transactions/UpsellPanel';
 import { agentChannelVisibility, getMyTransactionsGate } from '@/lib/my-transactions-access';
+import { resolveHistoryActors, type StatusHistoryEntry } from '@/lib/submissions/history';
+import { resolveUserNames } from '@/lib/submissions/names';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -38,13 +43,8 @@ interface PageProps {
 
 type SessionClient = Extract<Awaited<ReturnType<typeof getMyTransactionsGate>>, { kind: 'admitted' }>['supabase'];
 
-interface HistoryEntry {
-  status: string;
-  changed_at: string;
-  changed_by?: string;
-  notes?: string;
-  parentSubmissionId?: string;
-}
+/** A status_history element as stored: a status entry or a typed entry (BACKLOG-3477). */
+type HistoryEntry = StatusHistoryEntry;
 
 interface OwnSubmission {
   id: string;
@@ -201,8 +201,8 @@ async function getOwnStatusHistory(
     entries.push(entry.status === 'resubmitted' && parentLink ? { ...entry, parentSubmissionId: parentLink } : entry);
   }
 
-  // No reviewer names: `changed_by` is a user id the agent cannot resolve.
-  const history = entries.map((entry) => ({ ...entry, changed_by: undefined }));
+  const names = await resolveUserNames(supabase, entries.map((entry) => entry.changed_by));
+  const history = resolveHistoryActors(entries, names);
   return { history, rootCreatedAt, verifiedParentIds };
 }
 

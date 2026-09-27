@@ -82,6 +82,22 @@ export function formatRequired(count: RequiredCount): string {
 export const TICK_OPEN_STATUSES: readonly string[] = ['submitted', 'resubmitted', 'under_review', 'needs_changes'];
 /** Statuses in which the add RPC accepts a checklist (§8 of the migration). */
 export const ADD_OPEN_STATUSES: readonly string[] = ['submitted', 'resubmitted', 'under_review'];
+/**
+ * Statuses in which sending the submission back is still a live choice: it has
+ * not been sent back already (needs_changes) and is not decided (approved,
+ * rejected).
+ */
+export const REQUEST_CHANGES_OPEN_STATUSES: readonly string[] = ['submitted', 'resubmitted', 'under_review'];
+
+/**
+ * Whether this viewer is actually offered Request Changes on this submission
+ * (coordinator ruling on the added-at-review banner, BACKLOG-3477 fix round).
+ * `canDecide` is false for a tick-only reviewer (it_admin) and during support
+ * impersonation.
+ */
+export function requestChangesAvailable(status: string, canDecide: boolean): boolean {
+  return canDecide && REQUEST_CHANGES_OPEN_STATUSES.includes(status);
+}
 
 /**
  * Whether a row carries the reviewer pill (ruling bf8c39b4, Q7): required

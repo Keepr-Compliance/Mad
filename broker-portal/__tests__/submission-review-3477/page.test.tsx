@@ -44,9 +44,15 @@ const mockGetUser = jest.fn();
 let mockFeaturePayload: { data: unknown; error: unknown } = { data: null, error: null };
 
 const REVIEWER_ROLES = ['broker', 'admin', 'it_admin'];
+/** F4: how can_review_submission answers. 'live' evaluates the membership. */
+let mockReviewRpc: 'live' | 'error' | 'null' = 'live';
+/** F3: the users read fails (a PostgREST error). */
+let mockUsersReadFails = false;
 const mockRpc = jest.fn(async (name: string, args?: Record<string, unknown>) => {
   if (name === 'broker_get_org_features') return mockFeaturePayload;
   if (name === 'can_review_submission') {
+    if (mockReviewRpc === 'error') return { data: null, error: { code: 'XX000', message: 'fixture: rpc failed' } };
+    if (mockReviewRpc === 'null') return { data: null, error: null };
     const ok = (mockEmulator.state.rows.organization_members ?? []).some(
       (m) =>
         m.organization_id === args?.p_org_id &&
@@ -58,10 +64,19 @@ const mockRpc = jest.fn(async (name: string, args?: Record<string, unknown>) => 
   return { data: null, error: null };
 });
 
+function mockServerFrom(table: string) {
+  const chain = mockEmulator.from(table);
+  if (mockUsersReadFails && table === 'users') {
+    (chain as { then: unknown }).then = (ok: (r: unknown) => unknown, ko?: (e: unknown) => unknown) =>
+      Promise.resolve({ data: null, error: { code: '42501', message: 'fixture: users read failed' }, status: 403 }).then(ok, ko);
+  }
+  return chain;
+}
+
 jest.mock('@/lib/supabase/server', () => ({
   createClient: jest.fn(async () => ({
     auth: { getUser: mockGetUser },
-    from: (table: string) => mockEmulator.from(table),
+    from: (table: string) => mockServerFrom(table),
     rpc: mockRpc,
   })),
 }));
@@ -76,14 +91,28 @@ jest.mock('next/navigation', () => ({
   notFound: () => {
     throw new Error('notFound');
   },
+  // For the real ChecklistReview rendered by the F4 controls.
+  useRouter: () => ({ refresh: jest.fn(), push: jest.fn() }),
 }));
+// The real ChecklistReview imports these server actions; F4 never calls them.
+jest.mock('@/lib/actions/submissionChecklists', () => ({
+  setReviewerCheck: jest.fn(),
+  addChecklistAtReview: jest.fn(),
+}));
+jest.mock('@/components/submission/AttachmentViewerModal', () => ({ AttachmentViewerModal: () => null }));
 jest.mock('next/link', () => ({ __esModule: true, default: () => null }));
-jest.mock('@/components/submission/MessageList', () => ({ MessageList: function MessageList() { return null; } }));
+jest.mock('@/components/submission/MessageList', () => ({
+  ...jest.requireActual('@/components/submission/MessageList'),
+  MessageList: function MessageList() {
+    return null;
+  },
+}));
 jest.mock('@/components/submission/AttachmentList', () => ({ AttachmentList: function AttachmentList() { return null; } }));
 jest.mock('@/components/submission/ReviewActions', () => ({ ReviewActions: function ReviewActions() { return null; } }));
 jest.mock('@/components/submission/StatusHistory', () => ({ StatusHistory: function StatusHistory() { return null; } }));
 jest.mock('@/components/submission/ChecklistReview', () => ({ ChecklistReview: function ChecklistReview() { return null; } }));
 
+import { render as renderDom } from '@testing-library/react';
 import SubmissionDetailPage from '@/app/dashboard/submissions/[id]/page';
 import { ReviewActions } from '@/components/submission/ReviewActions';
 import { StatusHistory } from '@/components/submission/StatusHistory';
@@ -237,6 +266,8 @@ let quiet: jest.SpyInstance[] = [];
 beforeEach(() => {
   jest.clearAllMocks();
   mockFeaturePayload = { data: CHECKLISTS_ON, error: null };
+  mockReviewRpc = 'live';
+  mockUsersReadFails = false;
   quiet = [jest.spyOn(console, 'error').mockImplementation(() => {}), jest.spyOn(console, 'log').mockImplementation(() => {})];
 });
 afterEach(() => quiet.forEach((s) => s.mockRestore()));
@@ -251,6 +282,30 @@ describe('Status History actor names (C5)', () => {
     expect(props.history.find((e) => e.type === 'checklist_added')!.changed_by).toBe(COLLEAGUE_NAME);
     // Status entries with no actor stay unattributed, never "former".
     expect(props.history.filter((e) => e.status).map((e) => e.changed_by)).toEqual([undefined, undefined]);
+  });
+
+  it('the rendered timeline shows names and never a raw actor id', async () => {
+    given('admin');
+    const props = findProps<React.ComponentProps<typeof StatusHistory>>(await render(), StatusHistory)!;
+    const { StatusHistory: RealStatusHistory } = jest.requireActual('@/components/submission/StatusHistory');
+    const { container } = renderDom(<RealStatusHistory {...props} />);
+    expect(container.textContent).toContain(`by ${COLLEAGUE_NAME}`);
+    expect(container.textContent).toContain(`by ${FORMER_MEMBER}`);
+    for (const id of [COLLEAGUE_ID, REMOVED_ID]) expect(container.innerHTML).not.toContain(id);
+  });
+
+  it('F3: when the users read fails, nobody is named and nobody is "a former member"', async () => {
+    given('admin');
+    mockUsersReadFails = true;
+    const el = await render();
+    const props = findProps<React.ComponentProps<typeof StatusHistory>>(el, StatusHistory)!;
+    expect(props.history.map((e) => e.changed_by)).toEqual([undefined, undefined, undefined, undefined, undefined]);
+    const { StatusHistory: RealStatusHistory } = jest.requireActual('@/components/submission/StatusHistory');
+    const { container } = renderDom(<RealStatusHistory {...props} />);
+    expect(container.textContent).not.toContain(FORMER_MEMBER);
+    expect(container.textContent).not.toMatch(/\bby /);
+    for (const id of [COLLEAGUE_ID, REMOVED_ID]) expect(container.innerHTML).not.toContain(id);
+    expect(findProps<ChecklistReviewProps>(el, ChecklistReview)!.names).toBeNull();
   });
 
   it('names are read from users, never profiles', async () => {
@@ -289,6 +344,42 @@ describe('Checklists area gate (fail-closed)', () => {
   });
 });
 
+describe('F4: can_review_submission fails closed', () => {
+  it.each([
+    ['errors', 'error'],
+    ['returns null', 'null'],
+  ] as const)('when it %s, the checklists render with no ticking and no Add', async (_name, mode) => {
+    given('admin');
+    mockReviewRpc = mode;
+    const props = findProps<ChecklistReviewProps>(await render(), ChecklistReview)!;
+    expect(props.canTick).toBe(false);
+    const { ChecklistReview: RealChecklistReview } = jest.requireActual('@/components/submission/ChecklistReview');
+    const { container, getByRole } = renderDom(<RealChecklistReview {...props} />);
+    getByRole('button', { name: 'Expand all' }).click();
+    expect(container.querySelectorAll('[data-testid="checklist-item"]').length).toBeGreaterThan(0);
+    const buttons = Array.from(container.querySelectorAll('button'));
+    const labels = buttons.map((b) => b.textContent?.trim());
+    // No actionable reviewer pill: nothing to tick, and an item already reviewed
+    // by someone else shows only as a disabled, read-only "Reviewed" record
+    // (the designed non-reviewer view, checklist-review.test.tsx).
+    expect(labels).not.toContain('Mark reviewed');
+    const pills = buttons.filter((b) => ['Reviewed', 'Mark reviewed'].includes(b.textContent?.trim() ?? ''));
+    expect(pills.every((b) => b.disabled)).toBe(true);
+    expect(labels).not.toContain('Add checklist');
+  });
+
+  it('control: the live answer for an admin does show ticking and Add', async () => {
+    given('admin');
+    const props = findProps<ChecklistReviewProps>(await render(), ChecklistReview)!;
+    const { ChecklistReview: RealChecklistReview } = jest.requireActual('@/components/submission/ChecklistReview');
+    const { container, getByRole } = renderDom(<RealChecklistReview {...props} />);
+    getByRole('button', { name: 'Expand all' }).click();
+    const labels = Array.from(container.querySelectorAll('button')).map((b) => b.textContent?.trim());
+    expect(labels).toContain('Add checklist');
+    expect(labels).toContain('Mark reviewed');
+  });
+});
+
 describe('Roles (C7)', () => {
   it('a broker gets review decisions, with the checklist hint', async () => {
     given('broker');
@@ -302,6 +393,13 @@ describe('Roles (C7)', () => {
     const el = await render();
     expect(findProps(el, ReviewActions)).toBeNull();
     expect(findProps<ChecklistReviewProps>(el, ChecklistReview)!.canTick).toBe(true);
+    // The added-at-review banner must not point an it_admin at Request Changes.
+    expect(findProps<ChecklistReviewProps>(el, ChecklistReview)!.canDecide).toBe(false);
+  });
+
+  it('a broker is told the banner may point at Request Changes', async () => {
+    given('broker');
+    expect(findProps<ChecklistReviewProps>(await render(), ChecklistReview)!.canDecide).toBe(true);
   });
 
   it('an it_admin opening a submitted submission does not mark it under review', async () => {

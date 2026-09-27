@@ -267,6 +267,11 @@ describe('Add checklist', () => {
     renderReview({ status: 'needs_changes' });
     expect(screen.getByRole('button', { name: 'Add checklist' })).toBeDisabled();
     expect(screen.getByText(ADD_DISABLED_REASON)).toBeInTheDocument();
+    // The ruled copy, as a literal (pm_comments 4b1b1ce8 #1): the constant alone
+    // would pass whatever it says.
+    expect(
+      screen.getByText('Changes were requested, so this version is closed. You can add a checklist to the next submission.')
+    ).toBeInTheDocument();
   });
 
   it('is absent for a viewer who cannot review; Expand/Collapse all stay', () => {
@@ -324,6 +329,35 @@ describe('Add checklist', () => {
       'Added by Colleague Fixture at review, for the agent’s next version.'
     );
   });
+});
+
+describe('added-at-review banner: the Request Changes sentence (coordinator ruling, fix round)', () => {
+  const SENTENCE = 'Use Request Changes below to send this submission back.';
+  const banner = () => screen.getByText(/at review, for the agent’s next version\./);
+
+  it.each(['submitted', 'resubmitted', 'under_review'])(
+    'a broker/admin (may decide) on %s sees the sentence',
+    (status) => {
+      renderReview({ status, canDecide: true });
+      expect(banner()).toHaveTextContent(
+        `Added by Colleague Fixture at review, for the agent’s next version. ${SENTENCE}`
+      );
+    }
+  );
+
+  it('an it_admin (may tick, may not decide) never sees it', () => {
+    renderReview({ status: 'under_review', canDecide: false });
+    expect(banner()).toHaveTextContent('Added by Colleague Fixture at review, for the agent’s next version.');
+    expect(banner()).not.toHaveTextContent('Request Changes');
+  });
+
+  it.each(['needs_changes', 'approved', 'rejected'])(
+    'on %s (Request Changes is not offered) nobody sees it',
+    (status) => {
+      renderReview({ status, canDecide: true });
+      expect(banner()).not.toHaveTextContent('Request Changes');
+    }
+  );
 });
 
 describe('Expand all / Collapse all', () => {

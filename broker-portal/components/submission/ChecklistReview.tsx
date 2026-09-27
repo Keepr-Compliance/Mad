@@ -37,6 +37,7 @@ import { formatDate } from '@/lib/utils';
 import {
   ADD_OPEN_STATUSES,
   TICK_OPEN_STATUSES,
+  requestChangesAvailable,
   formatRequired,
   overallRequiredCount,
   requiredCount,
@@ -75,6 +76,11 @@ export interface ChecklistReviewProps {
   names: Record<string, string> | null;
   /** May tick and add (can_review_submission). */
   canTick: boolean;
+  /**
+   * May approve / request changes / reject: false for it_admin and during
+   * impersonation. Only decides whether the banner points at Request Changes.
+   */
+  canDecide?: boolean;
   /** The organization's non-archived templates. */
   templates: TemplateOption[];
   /** Messages the page is allowed to show (already feature-gated). */
@@ -85,7 +91,7 @@ export interface ChecklistReviewProps {
 
 /** Copy owned by the coordinator (pm_comments dcc91c87, ruling 2). */
 export const ADD_DISABLED_REASON =
-  'Changes have been requested, so checklists can no longer be added to this version.';
+  'Changes were requested, so this version is closed. You can add a checklist to the next submission.';
 
 function RequiredPill({ count }: { count: RequiredCount }) {
   const done = count.done === count.total;
@@ -119,6 +125,7 @@ export function ChecklistReview({
   loaded = true,
   names,
   canTick,
+  canDecide = false,
   templates,
   messages,
   attachments,
@@ -185,6 +192,7 @@ export function ChecklistReview({
   const tickOpen = canTick && TICK_OPEN_STATUSES.includes(status);
   const addOpen = ADD_OPEN_STATUSES.includes(status);
   const showAdd = canTick && (addOpen || status === 'needs_changes');
+  const pointAtRequestChanges = requestChangesAvailable(status, canDecide);
   const overall = overallRequiredCount(sections);
 
   const onTick = async (item: ChecklistItemView) => {
@@ -322,6 +330,13 @@ export function ChecklistReview({
                           </>
                         ) : (
                           <>Added at review, for the agent’s next version.</>
+                        )}
+                        {pointAtRequestChanges && (
+                          <span data-testid="added-banner-request-changes">
+                            {' Use '}
+                            <strong className="font-bold">Request Changes</strong>
+                            {' below to send this submission back.'}
+                          </span>
                         )}
                       </p>
                     )}

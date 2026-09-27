@@ -100,6 +100,64 @@ export function historyEntry(status: string, notes: string | null = null, change
   return { status, changed_at: '2026-09-02T00:00:00Z', changed_by: changedBy, notes };
 }
 
+/**
+ * Typed status_history elements — BACKLOG-3477. Keys and order from the
+ * jsonb_build_object calls in
+ * supabase/migrations/20260925073000_backlog_3477_submission_checklist_review.sql
+ * §7 (checklist_review) and §8 (checklist_added). No `status` key, ever.
+ * Production holds none yet (the copy tables have 0 rows, 2026-09-27).
+ */
+export function checklistReviewEntry(input: {
+  changedBy: string;
+  itemId: string;
+  itemTitle: string;
+  checklistName: string;
+  from: boolean;
+  to: boolean;
+  changedAt?: string;
+}): Record<string, unknown> {
+  return {
+    type: 'checklist_review',
+    changed_at: input.changedAt ?? '2026-09-02T01:00:00Z',
+    changed_by: input.changedBy,
+    field: 'reviewer_checked',
+    from: input.from,
+    to: input.to,
+    item_id: input.itemId,
+    item_title: input.itemTitle,
+    checklist_name: input.checklistName,
+  };
+}
+
+export function checklistAddedEntry(input: {
+  changedBy: string;
+  checklistId: string;
+  checklistName: string;
+  templateId: string;
+  changedAt?: string;
+}): Record<string, unknown> {
+  return {
+    type: 'checklist_added',
+    changed_at: input.changedAt ?? '2026-09-02T02:00:00Z',
+    changed_by: input.changedBy,
+    checklist_id: input.checklistId,
+    checklist_name: input.checklistName,
+    template_id: input.templateId,
+  };
+}
+
+/**
+ * A public.users row as the name lookup reads it (lib/submissions/names.ts
+ * selects id, display_name, first_name, last_name, email). Column names and
+ * nullability from information_schema.columns (users has 39 columns; these
+ * five are the ones read). Value pattern from an aggregate over production
+ * (read-only, 2026-09-27): every row has display_name set and first_name /
+ * last_name NULL. Values invented.
+ */
+export function userNameRow(id: string, displayName: string, email: string): Row {
+  return { id, email, first_name: null, last_name: null, display_name: displayName };
+}
+
 export function submissionRow(input: {
   id: string;
   organizationId: string;
@@ -107,7 +165,7 @@ export function submissionRow(input: {
   status?: string;
   address?: string;
   parentSubmissionId?: string | null;
-  statusHistory?: HistoryEntry[];
+  statusHistory?: (HistoryEntry | Record<string, unknown>)[];
   createdAt?: string;
 }): Row {
   return {
