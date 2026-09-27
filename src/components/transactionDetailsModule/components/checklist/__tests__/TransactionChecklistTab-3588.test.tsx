@@ -14,6 +14,11 @@
  *   UNM   the chooser swapped for the panel after the first add when the
  *         transaction had no checklist, losing the result sentence.
  *   CNT   the button counting a ticked template that is already added.
+ *   EXI   an `exists` answer counted as a failure, or shown as an error toast
+ *         (founder decision D1: it counts as added, no toast).
+ *   RRD   a batch with a failure not reading the templates again.
+ *   STK   every add failing on a transaction with no checklist, and the
+ *         chooser the batch opened staying open after a checklist arrives.
  */
 import React from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -60,6 +65,8 @@ function Harness() {
 const answer = (checklists: ChecklistDetail[]) => ({ success: true, checklists: envelopeOf(checklists) });
 const added = { success: true, result: { status: "added", checklistId: "c" } };
 const refused = { success: false, error: "The checklist could not be started." };
+const exists = { success: true, result: { status: "exists", checklistId: "x" } };
+const ALREADY_ON_TRANSACTION = "That checklist is already on this transaction.";
 
 function deferred<T>() {
   let resolve!: (v: T) => void;
@@ -336,6 +343,122 @@ describe("partial failure", () => {
     expect(await screen.findByTestId("checklist-add-result")).toHaveTextContent(
       'Couldn\'t add "Probe template" — try again.',
     );
+  });
+});
+
+describe("EXI — an `exists` answer in a batch counts as added (D1)", () => {
+  it("second of two answers exists: the chooser closes, no result line, no toast", async () => {
+    // `exists` means main found it on the transaction, so the reload shows it.
+    const db = databaseLike();
+    api().selectTemplate.mockImplementation(({ templateId }: { templateId: string }) => {
+      db.record(templateId);
+      return Promise.resolve(templateId === "tpl-other" ? exists : added);
+    });
+    render(<Harness />);
+    await screen.findByTestId("checklist-template-tpl-other");
+    fireEvent.click(check("tpl-probe"));
+    fireEvent.click(check("tpl-other"));
+    fireEvent.click(addButton());
+    expect(await screen.findByTestId("checklist-panel")).toBeInTheDocument();
+    expect(screen.queryByTestId("checklist-chooser")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("checklist-add-result")).not.toBeInTheDocument();
+    expect(sentTemplateIds()).toEqual(["tpl-probe", "tpl-other"]);
+    expect(onShowError).not.toHaveBeenCalled();
+  });
+
+  it("with a failure beside it: the exists row reads Already added and is not named as failed", async () => {
+    const db = databaseLike();
+    api().selectTemplate.mockImplementation(({ templateId }: { templateId: string }) => {
+      if (templateId === "tpl-other") return Promise.resolve(refused);
+      db.record(templateId);
+      return Promise.resolve(exists);
+    });
+    render(<Harness />);
+    await screen.findByTestId("checklist-template-tpl-other");
+    fireEvent.click(check("tpl-probe"));
+    fireEvent.click(check("tpl-other"));
+    fireEvent.click(addButton());
+    expect(await screen.findByTestId("checklist-add-result")).toHaveTextContent(
+      'Added 1 of 2 checklists. Couldn\'t add "Other probe template" — try again.',
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("checklist-template-added-tpl-probe")).toHaveTextContent("Already added"),
+    );
+    expect(onShowError).not.toHaveBeenCalledWith(ALREADY_ON_TRANSACTION);
+    expect(onShowError).toHaveBeenCalledTimes(1);
+    expect(onShowError).toHaveBeenCalledWith("The checklist could not be started.");
+  });
+});
+
+describe("RRD — a batch with a failure reads the templates again", () => {
+  it("listTemplates is called once more after the batch, not before", async () => {
+    api().selectTemplate.mockResolvedValue(refused);
+    render(<Harness />);
+    await screen.findByTestId("checklist-template-tpl-probe");
+    expect(api().listTemplates).toHaveBeenCalledTimes(1);
+    fireEvent.click(check("tpl-probe"));
+    fireEvent.click(addButton());
+    await screen.findByTestId("checklist-add-result");
+    await waitFor(() => expect(api().listTemplates).toHaveBeenCalledTimes(2));
+    expect(api().listTemplates.mock.invocationCallOrder[1]).toBeGreaterThan(
+      api().selectTemplate.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("an all-added batch does not read them again", async () => {
+    const db = databaseLike();
+    api().selectTemplate.mockImplementation(({ templateId }: { templateId: string }) => {
+      db.record(templateId);
+      return Promise.resolve(added);
+    });
+    render(<Harness />);
+    await screen.findByTestId("checklist-template-tpl-probe");
+    fireEvent.click(check("tpl-probe"));
+    fireEvent.click(addButton());
+    await screen.findByTestId("checklist-panel");
+    expect(api().listTemplates).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("STK — every add fails on a transaction with no checklist", () => {
+  function ReloadableHarness() {
+    const checklist = useTransactionChecklist("txn-1");
+    return (
+      <>
+        <button type="button" data-testid="test-reload" onClick={() => void checklist.reload()} />
+        <TransactionChecklistTab
+          checklist={checklist}
+          gate="allowed"
+          attachments={fixtureAttachments()}
+          attachmentsLoading={false}
+          emailCommunications={fixtureEmailCommunications()}
+          ensureEmailsLoaded={() => Promise.resolve()}
+          onRefreshLinkTargets={jest.fn()}
+          onShowSuccess={jest.fn()}
+          onShowError={onShowError}
+        />
+      </>
+    );
+  }
+
+  it("the result line stays; a checklist arriving later shows the checklists, not the chooser", async () => {
+    api().selectTemplate.mockResolvedValue(refused);
+    render(<ReloadableHarness />);
+    await screen.findByTestId("checklist-template-tpl-probe");
+    fireEvent.click(check("tpl-probe"));
+    fireEvent.click(addButton());
+    expect(await screen.findByTestId("checklist-add-result")).toHaveTextContent(
+      'Couldn\'t add "Probe template" — try again.',
+    );
+    // Still the "No checklist yet" chooser, with its sentence.
+    expect(screen.getByText("No checklist yet")).toBeInTheDocument();
+    await waitFor(() => expect(api().listTemplates).toHaveBeenCalledTimes(2));
+
+    // A checklist lands from elsewhere (another window), then the tab re-reads.
+    api().get.mockResolvedValue(answer([fixtureChecklist(0)]));
+    fireEvent.click(screen.getByTestId("test-reload"));
+    expect(await screen.findByTestId("checklist-panel")).toBeInTheDocument();
+    expect(screen.queryByTestId("checklist-chooser")).not.toBeInTheDocument();
   });
 });
 

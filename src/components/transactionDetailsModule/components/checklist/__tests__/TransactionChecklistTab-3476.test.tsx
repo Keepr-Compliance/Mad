@@ -27,11 +27,7 @@
 import React from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
-import {
-  ALREADY_ON_TRANSACTION_ERROR,
-  TransactionChecklistTab,
-  type TransactionChecklistTabProps,
-} from "../TransactionChecklistTab";
+import { TransactionChecklistTab, type TransactionChecklistTabProps } from "../TransactionChecklistTab";
 import { useTransactionChecklist } from "../../../hooks/useTransactionChecklist";
 import type { StrictFeatureStateOrPending } from "../../../../../hooks/useStrictFeatureState";
 import type { ChecklistDetail } from "../../../../../../electron/types/checklist";
@@ -226,13 +222,18 @@ describe("A-10 / A-9 — adding a checklist", () => {
     expect(api().selectTemplate).not.toHaveBeenCalled();
   });
 
-  it("an `exists` answer tells the user the checklist is already there", async () => {
-    api().get.mockResolvedValue(answer([fixtureChecklist(0)]));
+  it("an `exists` answer counts as added: no error, the chooser closes (BACKLOG-3588 D1)", async () => {
+    // Main answers `exists` because the template IS on the transaction; the
+    // reload after the write shows it.
+    api().get.mockResolvedValueOnce(answer([fixtureChecklist(0)]));
+    api().get.mockResolvedValue(answer([fixtureChecklist(0), fixtureChecklist(1)]));
     api().selectTemplate.mockResolvedValue({ success: true, result: { status: "exists", checklistId: "x" } });
     render(<Harness gate="allowed" />);
     fireEvent.click(await screen.findByTestId("checklist-add"));
     await tickAndAdd("tpl-other");
-    await waitFor(() => expect(onShowError).toHaveBeenCalledWith(ALREADY_ON_TRANSACTION_ERROR));
+    expect(await screen.findByTestId("checklist-panel")).toBeInTheDocument();
+    expect(screen.queryByTestId("checklist-chooser")).not.toBeInTheDocument();
+    expect(onShowError).not.toHaveBeenCalled();
   });
 });
 

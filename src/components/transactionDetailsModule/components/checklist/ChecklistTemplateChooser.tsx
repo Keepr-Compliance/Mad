@@ -45,8 +45,8 @@ interface ChecklistTemplateChooserProps {
   onAdd: (template: ChecklistTemplate) => Promise<boolean>;
   /** Every ticked template was added. */
   onAllAdded: () => void;
-  /** A batch finished with at least one template not added. */
-  onSomeNotAdded?: () => void;
+  /** A batch finished with at least one template not added; `addedCount` of it were added. */
+  onSomeNotAdded?: (addedCount: number) => void;
   /** Back to the checklists, nothing written. Absent: there is nowhere to go back to. */
   onCancel?: () => void;
   /** True while something else is writing; nothing can be ticked or added. */
@@ -186,7 +186,7 @@ export function ChecklistTemplateChooser({
       return;
     }
     setMessage(batchResultMessage(batch.length, notAdded.map((t) => t.name)));
-    onSomeNotAdded?.();
+    onSomeNotAdded?.(batch.length - notAdded.length);
   }, [locked, toAdd, onAdd, onAllAdded, onSomeNotAdded]);
 
   const hasList = listing.status === "ready" && listing.templates.length > 0;

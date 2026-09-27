@@ -60,8 +60,6 @@ import { ChecklistSection } from "./ChecklistSection";
 import { ChecklistLinkPicker } from "./ChecklistLinkPicker";
 import { linkableThreads, threadForLink } from "../../utils/checklistLinks";
 
-export const ALREADY_ON_TRANSACTION_ERROR = "That checklist is already on this transaction.";
-
 export interface TransactionChecklistTabProps {
   checklist: UseTransactionChecklistResult;
   gate: StrictFeatureStateOrPending;
@@ -76,8 +74,12 @@ export interface TransactionChecklistTabProps {
   nameMap?: ReadonlyMap<string, string>;
 }
 
-/** Whether the "add a checklist" chooser is open. */
-type ChooserState = { mode: "add" } | null;
+/**
+ * Whether the "add a checklist" chooser is open. `openedForBatch`: opened by
+ * the first add of a batch started from "No checklist yet" (to keep the
+ * chooser mounted), not by the user's Add checklist.
+ */
+type ChooserState = { mode: "add"; openedForBatch?: boolean } | null;
 
 export function TransactionChecklistTab({
   checklist,
@@ -189,6 +191,8 @@ export function TransactionChecklistTab({
   /**
    * One template's answer: is it on the transaction now? Main's reason for a
    * refusal is still shown; the chooser adds the batch's summary under it.
+   * BACKLOG-3588 D1: `exists` is not an error. It counts as added and shows
+   * no toast; its row reads "Already added" after the reload.
    */
   const handleSelectResult = useCallback(
     (result: ApiResult<SelectChecklistTemplateResult>): boolean => {
@@ -203,7 +207,6 @@ export function TransactionChecklistTab({
           // Another window added it first, or the listing was stale. The
           // reload that followed the write already shows it; nothing was lost,
           // and it IS on the transaction, which is what the user asked for.
-          onShowError(ALREADY_ON_TRANSACTION_ERROR);
           return true;
         case "no_transaction":
           onShowError("This transaction no longer exists.");
@@ -227,15 +230,20 @@ export function TransactionChecklistTab({
       // Keep the chooser open for the whole batch: the first add makes the
       // transaction's list non-empty, which would otherwise swap the chooser
       // for the panel mid-batch and lose its result.
-      setChooser((c) => c ?? { mode: "add" });
+      setChooser((c) => c ?? { mode: "add", openedForBatch: true });
       return handleSelectResult(await checklist.addChecklist(template.id));
     },
     [checklist, handleSelectResult],
   );
 
-  const handleSomeNotAdded = useCallback(() => {
+  const handleSomeNotAdded = useCallback((addedCount: number) => {
     // A template may have been archived since it was listed: read them again.
     setTemplatesRefreshKey((k) => k + 1);
+    // Nothing was added to a transaction that had none: the chooser the batch
+    // opened is not the user's, so drop it. The tab still shows the chooser
+    // (no checklist yet) at the same render site, with its result sentence;
+    // a checklist arriving later then shows the checklists, not this chooser.
+    if (addedCount === 0) setChooser((c) => (c?.openedForBatch ? null : c));
   }, []);
 
   const handleToggle = useCallback(
