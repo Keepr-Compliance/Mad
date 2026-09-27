@@ -11,14 +11,14 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { formatDate } from '@/lib/utils';
+import {
+  describeTypedEntry,
+  isStatusEntry,
+  isTypedEntry,
+  type StatusHistoryEntry,
+} from '@/lib/submissions/history';
 
-interface StatusHistoryEntry {
-  status: string;
-  changed_at: string;
-  changed_by?: string;
-  notes?: string;
-  parentSubmissionId?: string;
-}
+export type { StatusHistoryEntry };
 
 interface StatusHistoryProps {
   history: StatusHistoryEntry[];
@@ -105,6 +105,11 @@ export function StatusHistory({
     timelineEntries.push(entry);
   }
 
+  // BACKLOG-3477: typed entries (a reviewer tick, a checklist added) sit in
+  // the same timeline but never become "Current" — only a status entry can.
+  const lastStatusIdxOf = (entries: StatusHistoryEntry[]) =>
+    entries.reduce((acc, entry, idx) => (isStatusEntry(entry) ? idx : acc), -1);
+
   // Find the last "resubmitted" entry to split previous vs current round
   const lastResubmitIdx = timelineEntries.reduce(
     (acc, entry, idx) => (entry.status === 'resubmitted' ? idx : acc),
@@ -186,7 +191,8 @@ export function StatusHistory({
             <ul className="-mb-8">
               {currentEntries.map((entry, idx) => {
                 const isLast = idx === currentEntries.length - 1;
-                const isCurrent = isLast && entry.status === currentStatus;
+                const isCurrent =
+                  idx === lastStatusIdxOf(currentEntries) && entry.status === currentStatus;
 
                 return (
                   <TimelineEntry
@@ -216,7 +222,10 @@ function TimelineEntry({
   isCurrent: boolean;
   dimmed?: boolean;
 }) {
-  const statusInfo = getStatusInfo(entry.status);
+  if (isTypedEntry(entry)) {
+    return <TypedTimelineEntry entry={entry} isLast={isLast} dimmed={dimmed} />;
+  }
+  const statusInfo = getStatusInfo(entry.status ?? '');
 
   return (
     <li className={dimmed ? 'opacity-60' : ''}>
@@ -274,6 +283,51 @@ function TimelineEntry({
             {entry.notes && (
               <CollapsibleNote note={entry.notes} defaultOpen={isCurrent} />
             )}
+          </div>
+        </div>
+      </div>
+    </li>
+  );
+}
+
+/**
+ * A non-status line (BACKLOG-3477, ruling 3767e481): muted icon, the change,
+ * who, when. Smaller than a status entry and never marked "Current".
+ */
+function TypedTimelineEntry({
+  entry,
+  isLast,
+  dimmed = false,
+}: {
+  entry: StatusHistoryEntry;
+  isLast: boolean;
+  dimmed?: boolean;
+}) {
+  return (
+    <li className={dimmed ? 'opacity-60' : ''} data-testid="typed-history-entry" data-entry-type={entry.type}>
+      <div className="relative pb-8">
+        {!isLast && (
+          <span className="absolute left-4 top-4 -ml-px h-full w-0.5 bg-gray-200" aria-hidden="true" />
+        )}
+        <div className="relative flex items-start space-x-3">
+          <div className="flex h-8 w-8 items-center justify-center">
+            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-gray-100 ring-8 ring-white">
+              <svg className="h-3 w-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            </span>
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                <p className="text-sm text-gray-600">{describeTypedEntry(entry)}</p>
+                {entry.checklist_name && entry.type === 'checklist_review' && (
+                  <p className="mt-0.5 text-xs text-gray-400">{entry.checklist_name}</p>
+                )}
+                {entry.changed_by && <p className="mt-0.5 text-xs text-gray-500">by {entry.changed_by}</p>}
+              </div>
+              <time className="whitespace-nowrap text-sm text-gray-400">{formatDate(entry.changed_at)}</time>
+            </div>
           </div>
         </div>
       </div>

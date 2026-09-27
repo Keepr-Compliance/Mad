@@ -16,7 +16,7 @@ import { ChevronRight, MapPin, Mic, Paperclip, Users, X } from 'lucide-react';
 /** Message type values matching desktop app */
 type MessageType = 'text' | 'voice_message' | 'location' | 'attachment_only' | 'system' | 'unknown';
 
-interface Message {
+export interface Message {
   id: string;
   channel: string;
   direction: string;
@@ -47,7 +47,7 @@ interface MessageListProps {
 
 type FilterType = 'all' | 'email' | 'text';
 
-interface Thread {
+export interface Thread {
   id: string;
   messages: Message[];
   channel: string;
@@ -267,7 +267,7 @@ function formatDateRange(firstDate: string, lastDate: string): string {
 /**
  * Group messages into threads
  */
-function groupMessagesIntoThreads(messages: Message[]): Thread[] {
+export function groupMessagesIntoThreads(messages: Message[]): Thread[] {
   const threadMap = new Map<string, Message[]>();
 
   // Group messages by thread key
@@ -361,9 +361,10 @@ function MessageTypeIcon({ icon, className }: { icon: 'mic' | 'map-pin' | 'paper
 }
 
 /**
- * Phone-style conversation modal
+ * Phone-style conversation modal. Exported for the checklist chips'
+ * View action (BACKLOG-3477), which opens the same viewer as View Full.
  */
-function ConversationModal({
+export function ConversationModal({
   thread,
   onClose,
 }: {

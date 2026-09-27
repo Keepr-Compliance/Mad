@@ -31,6 +31,12 @@ import {
   pickBrokerageMembership,
   type PortalMembershipRow,
 } from '@/lib/auth/membership';
+import {
+  featureRenderPolicy,
+  fetchFeatureBuildStates,
+  isFeatureBuilt,
+  type FeatureRenderPolicy,
+} from '@/lib/feature-availability';
 
 /** feature_definitions.key seeded by 20260921101757_backlog_3473_transaction_checklists.sql */
 export const CHECKLIST_FEATURE_KEY = 'transaction_checklists';
@@ -82,10 +88,9 @@ export async function requireChecklistEditorAccess(): Promise<ChecklistEditorAcc
   const membership = pickChecklistMembership(memberships);
   if (!membership) throw new Error('Not authorized');
 
-  // Boolean only, no featureRenderPolicy: the entry and the route are hidden
-  // (404) when the database refuses, with no grayed state. Whether an OFF org
-  // should see a grayed entry once feature_definitions.is_built flips true is
-  // an open product question recorded on BACKLOG-3477.
+  // Boolean only: the route and every action refuse when the database
+  // refuses. The sidebar's grayed entry (getChecklistNavPolicy below) is
+  // presentation only and never makes the route reachable.
   const { data: allowed, error } = await supabase.rpc('can_edit_checklist_templates', {
     p_org_id: membership.organization_id,
   });
@@ -111,4 +116,31 @@ export async function isChecklistEditorEnabled(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * The sidebar entry's render policy — BACKLOG-3477 (ruling 9af9ffbd on
+ * b152ee0a): a full-portal member of an organization whose plan does not
+ * include checklists sees the entry GRAYED with one neutral line, not hidden.
+ *
+ * - enabled  the same gate as the route (isChecklistEditorEnabled).
+ * - grayed   refused by that gate, the caller is a full-portal user (broker,
+ *            admin, it_admin of a brokerage; the layout passes that in from
+ *            classifyPortalAccess), and feature_definitions.is_built is true
+ *            for the feature. featureRenderPolicy is the portal's one rule
+ *            for this (BACKLOG-3098).
+ * - hidden   everything else: impersonation, floor users (agents), personal
+ *            organizations, an unbuilt feature, an unreadable build state.
+ *
+ * Grayed is presentation only. The route, the actions and RLS still refuse.
+ */
+export async function getChecklistNavPolicy(options: {
+  isImpersonating: boolean;
+  isFullPortalUser: boolean;
+}): Promise<FeatureRenderPolicy> {
+  if (options.isImpersonating) return 'hidden';
+  if (await isChecklistEditorEnabled()) return 'enabled';
+  if (!options.isFullPortalUser) return 'hidden';
+  const built = await fetchFeatureBuildStates();
+  return featureRenderPolicy(false, isFeatureBuilt(built, CHECKLIST_FEATURE_KEY));
 }
