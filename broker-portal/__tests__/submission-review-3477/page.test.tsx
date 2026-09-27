@@ -186,7 +186,16 @@ function given(role: string, status = 'under_review'): void {
       profiles: [{ id: FIXTURE_USER_ID, display_name: VIEWER_NAME }],
       submission_checklists: [
         { id: HEADER_ID, submission_id: SUBMISSION_ID, template_name: 'Contract', created_at: '2026-09-20T15:00:00+00:00', sort_order: 0, template_id: TEMPLATE_A, added_at_review_by: null, added_at_review_at: null },
-        { id: ADDED_HEADER_ID, submission_id: SUBMISSION_ID, template_name: 'Lead-Based Paint', created_at: '2026-09-20T15:12:00+00:00', sort_order: 1, template_id: TEMPLATE_B, added_at_review_by: COLLEAGUE_ID, added_at_review_at: '2026-09-20T15:12:00+00:00' },
+        {
+          id: ADDED_HEADER_ID,
+          submission_id: SUBMISSION_ID,
+          template_name: 'Lead-Based Paint',
+          created_at: '2026-09-20T15:12:00+00:00',
+          sort_order: 1,
+          template_id: TEMPLATE_B,
+          added_at_review_by: COLLEAGUE_ID,
+          added_at_review_at: '2026-09-20T15:12:00+00:00',
+        },
       ],
       submission_checklist_items: [
         { id: ITEM_A, submission_id: SUBMISSION_ID, submission_checklist_id: HEADER_ID, title: 'Title commitment', is_required: true, is_checked: true, note: 'Signed copy attached', sort_order: 0, created_at: '2026-09-20T15:00:00+00:00', reviewer_checked: true, reviewer_checked_by: COLLEAGUE_ID, reviewer_checked_at: '2026-09-20T15:10:00+00:00', description: null, expected_document_type: null },
