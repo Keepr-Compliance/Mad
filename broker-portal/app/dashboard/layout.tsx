@@ -2,7 +2,8 @@ import { redirect } from 'next/navigation';
 import { getImpersonationSession } from '@/lib/impersonation';
 import { DashboardShell } from '@/components/layout/DashboardShell';
 import { resolveViewerIdentity } from '@/lib/utils/userDisplay';
-import { CHECKLIST_FEATURE_KEY, getChecklistNavPolicy } from '@/lib/checklist-access';
+import { CHECKLIST_FEATURE_KEY, isChecklistEditorEnabled } from '@/lib/checklist-access';
+import { getChecklistNavPolicy } from '@/lib/checklist-nav';
 import { featureUnlockLabel } from '@/lib/feature-availability';
 import { getPortalAccess } from '@/lib/auth/portalAccess';
 import { getMyTransactionsGate } from '@/lib/my-transactions-access';
@@ -42,6 +43,7 @@ export default async function DashboardLayout({
   // BACKLOG-3477: a full-portal user whose plan lacks the feature sees the
   // entry grayed (presentation only; the route still 404s).
   const checklistsPolicy = await getChecklistNavPolicy({
+    editorEnabled: !isImpersonating && (await isChecklistEditorEnabled()),
     isImpersonating,
     isFullPortalUser: access?.kind === 'full',
   });

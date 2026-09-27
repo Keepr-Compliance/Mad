@@ -93,10 +93,7 @@ jest.mock('@/lib/impersonation-guards', () => {
   return { ...actual, getDataClient: jest.fn(actual.getDataClient) };
 });
 jest.mock('@/lib/checklist-access', () => ({
-  CHECKLIST_FEATURE_KEY: 'transaction_checklists',
   isChecklistEditorEnabled: jest.fn(async () => false),
-  // BACKLOG-3477: the layout reads the entry's render policy through this.
-  getChecklistNavPolicy: jest.fn(async () => 'hidden'),
 }));
 
 /** Browser Supabase client: records every Storage call and every table read. */
