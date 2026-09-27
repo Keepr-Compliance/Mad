@@ -186,12 +186,14 @@ export function TransactionChecklistTab({
     if (hasEmailLinks) void ensureEmailsLoaded();
   }, [hasEmailLinks, ensureEmailsLoaded]);
 
+  /**
+   * One template's answer: is it on the transaction now? Main's reason for a
+   * refusal is still shown; the chooser adds the batch's summary under it.
+   */
   const handleSelectResult = useCallback(
     (result: ApiResult<SelectChecklistTemplateResult>): boolean => {
       if (!result.success || !result.data) {
         onShowError(result.error ?? "The checklist could not be started.");
-        // The template may have been archived since it was listed.
-        setTemplatesRefreshKey((k) => k + 1);
         return false;
       }
       switch (result.data.status) {
@@ -199,9 +201,10 @@ export function TransactionChecklistTab({
           return true;
         case "exists":
           // Another window added it first, or the listing was stale. The
-          // reload that followed the write already shows it; nothing was lost.
+          // reload that followed the write already shows it; nothing was lost,
+          // and it IS on the transaction, which is what the user asked for.
           onShowError(ALREADY_ON_TRANSACTION_ERROR);
-          return false;
+          return true;
         case "no_transaction":
           onShowError("This transaction no longer exists.");
           return false;
@@ -214,19 +217,26 @@ export function TransactionChecklistTab({
     [onShowError],
   );
 
-  const handlePick = useCallback(
-    async (template: ChecklistTemplate) => {
-      setBusy(true);
-      try {
-        // Always an add: no checklist id is sent, so nothing already here can
-        // change (BACKLOG-3476 round 2: Change is gone).
-        if (handleSelectResult(await checklist.addChecklist(template.id))) setChooser(null);
-      } finally {
-        setBusy(false);
-      }
+  /**
+   * Add ONE template (BACKLOG-3588: the chooser calls this once per ticked
+   * template, in order, awaiting each). Always an add: no checklist id is
+   * sent, so nothing already here can change (BACKLOG-3476 round 2).
+   */
+  const handleAddOne = useCallback(
+    async (template: ChecklistTemplate): Promise<boolean> => {
+      // Keep the chooser open for the whole batch: the first add makes the
+      // transaction's list non-empty, which would otherwise swap the chooser
+      // for the panel mid-batch and lose its result.
+      setChooser((c) => c ?? { mode: "add" });
+      return handleSelectResult(await checklist.addChecklist(template.id));
     },
     [checklist, handleSelectResult],
   );
+
+  const handleSomeNotAdded = useCallback(() => {
+    // A template may have been archived since it was listed: read them again.
+    setTemplatesRefreshKey((k) => k + 1);
+  }, []);
 
   const handleToggle = useCallback(
     async (item: ChecklistItem) => {
@@ -294,28 +304,23 @@ export function TransactionChecklistTab({
     );
   }
 
-  if (details.length === 0) {
-    // Without the plan there is nothing to start; the tab is hidden in that
-    // case, so this only guards a render between two answers.
-    if (readOnly) return null;
-    return (
-      <ChecklistTemplateChooser
-        mode="pick"
-        onPick={(t) => void handlePick(t)}
-        busy={busy}
-        refreshKey={templatesRefreshKey}
-      />
-    );
-  }
+  // Without the plan there is nothing to start; with none on the transaction
+  // the tab is hidden in that case, so this only guards a render between two
+  // answers.
+  if (details.length === 0 && readOnly) return null;
 
-  if (chooser && !readOnly) {
-    // Templates already on this transaction cannot be added again.
+  if (!readOnly && (chooser || details.length === 0)) {
+    // ONE render site, so the chooser is never remounted mid-batch when the
+    // first add turns "pick" into "add". Templates already on this
+    // transaction cannot be added again.
     return (
       <ChecklistTemplateChooser
-        mode={chooser.mode}
+        mode={details.length === 0 ? "pick" : "add"}
         disabledTemplateIds={templateIdsOnTransaction}
-        onPick={(t) => void handlePick(t)}
-        onCancel={() => setChooser(null)}
+        onAdd={handleAddOne}
+        onAllAdded={() => setChooser(null)}
+        onSomeNotAdded={handleSomeNotAdded}
+        onCancel={details.length > 0 ? () => setChooser(null) : undefined}
         busy={busy}
         refreshKey={templatesRefreshKey}
       />

@@ -3,18 +3,27 @@
  *
  * Three different sentences for three different facts, which is the whole
  * point of 3475 keeping "no templates" and "could not read" apart:
- *   templates listed      → one card per template
+ *   templates listed      → one checkbox row per template
  *   empty list            → "No checklist templates have been set up yet."
  *   the read failed       → main's own sentence, and Retry
  * A failed read never says there are none. That would be a false
  * statement about someone else's account.
  *
- * It only reports which template was clicked; whether that click writes is
- * the tab's decision (BACKLOG-3476 round 2: always an add — Change is gone).
- * A template already on the transaction renders disabled, marked "Already
- * added" (BACKLOG-3476: a template may be on a transaction once).
+ * BACKLOG-3588: a checkbox list, not one card per click. The user ticks
+ * several templates and one "Add N checklists" adds them, in the order shown,
+ * ONE AT A TIME through the tab's single-template add (`onAdd`). Sequential
+ * on purpose: each add is its own write followed by its own reload, so a
+ * template that succeeded is on the transaction (its row turns "Already
+ * added") whatever happens to the next one. Nothing is rolled back.
+ *   all added         → `onAllAdded` (the tab closes the chooser)
+ *   some or all fail  → the failed rows stay ticked, and one sentence says
+ *                       what was added and what was not
+ * A template already on the transaction renders a disabled checkbox, marked
+ * "Already added" (BACKLOG-3476: a template may be on a transaction once).
+ * The checkbox is the checklist item row's own (`ChecklistCheckbox`).
  */
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChecklistCheckbox } from "./ChecklistCheckbox";
 import { checklistService } from "../../../../services/checklistService";
 import type { ChecklistTemplate, ChecklistTemplateSource } from "../../../../../electron/types/checklist";
 
@@ -24,34 +33,78 @@ type ListingState =
   | { status: "failed"; error: string };
 
 interface ChecklistTemplateChooserProps {
-  /** "pick": no checklist yet. "add": Add checklist was clicked. */
+  /** "pick": no checklist yet. "add": the transaction already has some. */
   mode: "pick" | "add";
-  /** Templates that cannot be picked: already on this transaction. */
+  /** Templates that cannot be ticked: already on this transaction. */
   disabledTemplateIds?: ReadonlySet<string>;
-  onPick: (template: ChecklistTemplate) => void;
-  /** Add mode: back to the checklists, nothing written. */
+  /**
+   * Add ONE template. Resolves true when that template is on the transaction
+   * afterwards, false when it is not. Called once per ticked template, in
+   * list order, each call awaited before the next starts.
+   */
+  onAdd: (template: ChecklistTemplate) => Promise<boolean>;
+  /** Every ticked template was added. */
+  onAllAdded: () => void;
+  /** A batch finished with at least one template not added. */
+  onSomeNotAdded?: () => void;
+  /** Back to the checklists, nothing written. Absent: there is nowhere to go back to. */
   onCancel?: () => void;
-  /** True while a pick is being written; cards are disabled. */
+  /** True while something else is writing; nothing can be ticked or added. */
   busy?: boolean;
   /** Bump to make the chooser read the templates again. */
   refreshKey?: number;
 }
 
-const HOUSE_ICON =
-  "M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6";
 const CLIPBOARD_ICON =
   "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4";
+
+/** "A", "A and B", "A, B and C" — each name quoted. */
+function quotedList(names: string[]): string {
+  const quoted = names.map((n) => `\u201c${n}\u201d`);
+  if (quoted.length <= 1) return quoted.join("");
+  return `${quoted.slice(0, -1).join(", ")} and ${quoted[quoted.length - 1]}`;
+}
+
+/**
+ * The sentence after a batch in which something was not added.
+ * `attempted` is how many were sent; `notAdded` names the ones that failed.
+ */
+export function batchResultMessage(attempted: number, notAdded: string[]): string {
+  const added = attempted - notAdded.length;
+  if (added === 0) {
+    return attempted === 1
+      ? `Couldn\u2019t add ${quotedList(notAdded)} \u2014 try again.`
+      : `Couldn\u2019t add any of the ${attempted} checklists \u2014 try again.`;
+  }
+  return `Added ${added} of ${attempted} checklists. Couldn\u2019t add ${quotedList(notAdded)} \u2014 try again.`;
+}
+
+export function addButtonLabel(count: number): string {
+  return count === 1 ? "Add checklist" : `Add ${count} checklists`;
+}
 
 export function ChecklistTemplateChooser({
   mode,
   disabledTemplateIds,
-  onPick,
+  onAdd,
+  onAllAdded,
+  onSomeNotAdded,
   onCancel,
   busy = false,
   refreshKey = 0,
 }: ChecklistTemplateChooserProps): React.ReactElement {
   const [listing, setListing] = useState<ListingState>({ status: "loading" });
   const [retryKey, setRetryKey] = useState(0);
+  const [ticked, setTicked] = useState<ReadonlySet<string>>(new Set());
+  const [adding, setAdding] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -79,30 +132,79 @@ export function ChecklistTemplateChooser({
     setRetryKey((k) => k + 1);
   }, []);
 
+  // What Add would send: ticked, still listed, not already on the transaction,
+  // in list order. The button's count reads the same list, so the label can
+  // never promise a template the batch would skip.
+  const toAdd = useMemo(
+    () =>
+      listing.status === "ready"
+        ? listing.templates.filter((t) => ticked.has(t.id) && !(disabledTemplateIds?.has(t.id) ?? false))
+        : [],
+    [listing, ticked, disabledTemplateIds],
+  );
+
+  const locked = busy || adding;
+
+  const toggle = useCallback(
+    (templateId: string) => {
+      if (locked || (disabledTemplateIds?.has(templateId) ?? false)) return;
+      setTicked((prev) => {
+        const next = new Set(prev);
+        if (next.has(templateId)) next.delete(templateId);
+        else next.add(templateId);
+        return next;
+      });
+    },
+    [locked, disabledTemplateIds],
+  );
+
+  const addTicked = useCallback(async () => {
+    if (locked || toAdd.length === 0) return;
+    const batch = toAdd;
+    setAdding(true);
+    setMessage(null);
+    const notAdded: ChecklistTemplate[] = [];
+    try {
+      // One at a time, in list order: each add is its own write and reload.
+      for (const template of batch) {
+        let ok = false;
+        try {
+          ok = await onAdd(template);
+        } catch {
+          ok = false;
+        }
+        if (!ok) notAdded.push(template);
+      }
+    } finally {
+      if (mountedRef.current) setAdding(false);
+    }
+    if (!mountedRef.current) return;
+    // The ones that failed stay ticked, ready for another try.
+    setTicked(new Set(notAdded.map((t) => t.id)));
+    if (notAdded.length === 0) {
+      onAllAdded();
+      return;
+    }
+    setMessage(batchResultMessage(batch.length, notAdded.map((t) => t.name)));
+    onSomeNotAdded?.();
+  }, [locked, toAdd, onAdd, onAllAdded, onSomeNotAdded]);
+
+  const hasList = listing.status === "ready" && listing.templates.length > 0;
+
   return (
-    <div className="text-center pt-12 pb-6" data-testid="checklist-chooser">
+    <div className="text-center pt-12" data-testid="checklist-chooser">
       <svg className="w-16 h-16 text-gray-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={CLIPBOARD_ICON} />
       </svg>
       {mode === "pick" ? (
         <>
           <p className="text-gray-600 mb-2">No checklist yet</p>
-          <p className="text-sm text-gray-500">Choose a template to start this transaction&rsquo;s checklist.</p>
+          <p className="text-sm text-gray-500">Choose the templates to start this transaction&rsquo;s checklists.</p>
         </>
       ) : (
         <>
-          <p className="text-gray-600 mb-2">Add a checklist to this transaction</p>
+          <p className="text-gray-600 mb-2">Add checklists to this transaction</p>
           <p className="text-sm text-gray-500">The checklists already here are not changed.</p>
-          {onCancel && (
-            <button
-              type="button"
-              onClick={onCancel}
-              className="mt-3 text-sm font-medium text-blue-600 hover:text-blue-800"
-              data-testid="checklist-chooser-cancel"
-            >
-              Cancel
-            </button>
-          )}
         </>
       )}
 
@@ -134,38 +236,42 @@ export function ChecklistTemplateChooser({
 
       {listing.status === "ready" && listing.templates.length > 0 && (
         <>
-          <div className="grid gap-3 grid-cols-1 sm:grid-cols-3 mt-6 text-left">
+          <div className="flex flex-col gap-2 mt-6 text-left" data-testid="checklist-template-list">
             {listing.templates.map((template) => {
               const required = template.items.filter((i) => i.isRequired).length;
               const alreadyAdded = disabledTemplateIds?.has(template.id) ?? false;
+              const isTicked = !alreadyAdded && ticked.has(template.id);
+              const disabled = locked || alreadyAdded;
               return (
-                <button
+                <label
                   key={template.id}
-                  type="button"
-                  disabled={busy || alreadyAdded}
-                  aria-disabled={alreadyAdded || undefined}
-                  onClick={() => onPick(template)}
-                  className="bg-white border border-gray-200 rounded-lg p-4 flex flex-col gap-2 text-left hover:border-gray-300 hover:shadow-md transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+                  className={`border rounded-lg px-4 py-3 flex items-start gap-3 transition-colors ${
+                    isTicked ? "border-blue-500 bg-blue-50" : "border-gray-200 bg-white"
+                  } ${disabled ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:border-gray-300"}`}
                   data-testid={`checklist-template-${template.id}`}
                 >
-                  <span className="w-10 h-10 rounded-lg inline-flex items-center justify-center text-indigo-600 bg-indigo-50">
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={HOUSE_ICON} />
-                    </svg>
-                  </span>
-                  <span className="text-base font-medium text-gray-900">{template.name}</span>
-                  <span className="text-sm text-gray-500 tabular-nums">
-                    {template.items.length} item{template.items.length === 1 ? "" : "s"} · {required} required
+                  <ChecklistCheckbox
+                    checked={isTicked}
+                    label={template.name}
+                    disabled={disabled}
+                    onClick={() => toggle(template.id)}
+                    testId={`checklist-template-check-${template.id}`}
+                  />
+                  <span className="flex-1 min-w-0 flex flex-col">
+                    <span className="text-base font-medium text-gray-900">{template.name}</span>
+                    <span className="text-sm text-gray-500 tabular-nums">
+                      {template.items.length} item{template.items.length === 1 ? "" : "s"} · {required} required
+                    </span>
                   </span>
                   {alreadyAdded && (
                     <span
-                      className="text-xs font-medium text-gray-500"
+                      className="text-xs font-medium text-gray-500 flex-shrink-0 whitespace-nowrap mt-1"
                       data-testid={`checklist-template-added-${template.id}`}
                     >
                       Already added
                     </span>
                   )}
-                </button>
+                </label>
               );
             })}
           </div>
@@ -176,6 +282,50 @@ export function ChecklistTemplateChooser({
             </p>
           )}
         </>
+      )}
+
+      {message && (
+        <p className="mt-4 text-sm text-red-600 text-left" role="alert" data-testid="checklist-add-result">
+          {message}
+        </p>
+      )}
+
+      {(hasList || message || onCancel) && (
+        // Pinned to the bottom of the tab's scroll area while the list scrolls.
+        // The negative offsets cancel the scroll area's own p-3 / sm:p-6, so the
+        // bar reaches its edges instead of floating above a strip of list.
+        <div
+          className="sticky -bottom-3 sm:-bottom-6 -mx-3 sm:-mx-6 mt-6 px-3 sm:px-6 pt-4 pb-6 sm:pb-9 bg-gray-50 border-t border-gray-200 flex items-center justify-between gap-3 flex-wrap text-left"
+          data-testid="checklist-chooser-footer"
+        >
+          <span className="text-sm text-gray-600 tabular-nums" data-testid="checklist-chooser-count">
+            {toAdd.length} selected
+          </span>
+          <div className="flex items-center gap-3 flex-shrink-0">
+            {onCancel && (
+              <button
+                type="button"
+                onClick={onCancel}
+                disabled={adding}
+                className="rounded-lg px-4 py-2 font-medium text-gray-700 transition-all hover:bg-gray-100 disabled:opacity-60 disabled:cursor-not-allowed"
+                data-testid="checklist-chooser-cancel"
+              >
+                Cancel
+              </button>
+            )}
+            {hasList && (
+              <button
+                type="button"
+                onClick={() => void addTicked()}
+                disabled={locked || toAdd.length === 0}
+                className="rounded-lg bg-blue-600 px-4 py-2 font-semibold text-white shadow-md transition-all hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:bg-blue-600"
+                data-testid="checklist-chooser-add"
+              >
+                {adding ? "Adding\u2026" : addButtonLabel(Math.max(toAdd.length, 1))}
+              </button>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );
