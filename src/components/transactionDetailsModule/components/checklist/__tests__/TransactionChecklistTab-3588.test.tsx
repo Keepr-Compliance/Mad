@@ -462,6 +462,23 @@ describe("STK — every add fails on a transaction with no checklist", () => {
   });
 });
 
+describe("STK — every add fails from Add checklist (the user opened the chooser)", () => {
+  it("the chooser stays open with its sentence", async () => {
+    api().get.mockResolvedValue(answer([fixtureChecklist(0)]));
+    api().selectTemplate.mockResolvedValue(refused);
+    render(<Harness />);
+    fireEvent.click(await screen.findByTestId("checklist-add"));
+    fireEvent.click(await screen.findByTestId("checklist-template-check-tpl-fresh"));
+    fireEvent.click(addButton());
+    expect(await screen.findByTestId("checklist-add-result")).toHaveTextContent(
+      'Couldn\'t add "Fresh probe template" — try again.',
+    );
+    await waitFor(() => expect(api().listTemplates).toHaveBeenCalledTimes(2));
+    expect(screen.getByTestId("checklist-chooser")).toBeInTheDocument();
+    expect(screen.queryByTestId("checklist-panel")).not.toBeInTheDocument();
+  });
+});
+
 describe("the chooser's checkbox is the item row's checkbox", () => {
   it("ticked and unticked render the same markup as a checklist item's box", async () => {
     render(<Harness />);
