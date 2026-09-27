@@ -146,7 +146,6 @@ export function ChecklistReview({
     setKnownIds(new Set(initialSections.map((s) => s.id)));
     const addedNow = arrived.filter((s) => s.addedAtReviewBy).map((s) => s.id);
     if (addedNow.length > 0) setOpen((prev) => new Set([...Array.from(prev), ...addedNow]));
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- knownIds is bookkeeping for this effect only
   }, [initialSections]);
   const allOpen = sections.length > 0 && sections.every((s) => open.has(s.id));
   const allClosed = sections.every((s) => !open.has(s.id));

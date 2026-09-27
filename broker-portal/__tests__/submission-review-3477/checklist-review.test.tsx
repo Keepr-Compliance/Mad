@@ -314,7 +314,8 @@ describe('Add checklist', () => {
     );
     expect(sectionToggle('Flood Zone Disclosure')).toHaveAttribute('aria-expanded', 'true');
     expect(sectionToggle('Asbestos')).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.getByText(/Added by Viewer Fixture at review/)).toBeInTheDocument();
+    const banners = screen.getAllByText(/at review, for the agent’s next version\./).map((el) => el.textContent);
+    expect(banners).toContain('Added by Viewer Fixture at review, for the agent’s next version.');
   });
 
   it('a checklist added at review names who added it and when it applies', () => {
