@@ -1,0 +1,350 @@
+/**
+ * ChecklistReview — BACKLOG-3477, mock 3481 v4.
+ *
+ * Sections are what lib/submissions/checklists.ts assembles from the copy
+ * tables (see page.test.tsx for the row provenance). Server action results
+ * are the shapes lib/actions/submissionChecklists.ts returns, which mirror the
+ * RPC returns in §7/§8 of 20260925073000_backlog_3477_submission_checklist_review.sql.
+ * Messages/attachments carry the page's Message/Attachment columns.
+ */
+
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import '@testing-library/jest-dom';
+
+const mockRefresh = jest.fn();
+jest.mock('next/navigation', () => ({ useRouter: () => ({ refresh: mockRefresh }) }));
+
+const mockSetReviewerCheck = jest.fn();
+const mockAddChecklist = jest.fn();
+jest.mock('@/lib/actions/submissionChecklists', () => ({
+  setReviewerCheck: (...a: unknown[]) => mockSetReviewerCheck(...a),
+  addChecklistAtReview: (...a: unknown[]) => mockAddChecklist(...a),
+}));
+
+// The attachment viewer pulls heic2any (a Worker) at import; the chip only
+// has to hand it the right attachment.
+jest.mock('@/components/submission/AttachmentViewerModal', () => ({
+  AttachmentViewerModal: ({ attachment, open }: { attachment: { filename: string } | null; open: boolean }) =>
+    open && attachment ? <div data-testid="attachment-viewer">{attachment.filename}</div> : null,
+}));
+
+import { ChecklistReview, ADD_DISABLED_REASON, type ChecklistReviewProps } from '@/components/submission/ChecklistReview';
+import type { ChecklistSectionView, ChecklistItemView } from '@/lib/submissions/checklistModel';
+import { REVIEW_MESSAGES } from '@/lib/submissions/reviewMessages';
+
+const VIEWER = 'viewer-id';
+const COLLEAGUE = 'colleague-id';
+
+const item = (id: string, title: string, over: Partial<ChecklistItemView> = {}): ChecklistItemView => ({
+  id,
+  title,
+  description: null,
+  isRequired: true,
+  isChecked: false,
+  note: null,
+  reviewerChecked: false,
+  reviewerCheckedBy: null,
+  reviewerCheckedAt: null,
+  links: [],
+  ...over,
+});
+
+const SECTIONS: ChecklistSectionView[] = [
+  {
+    id: 'hdr-contract',
+    templateId: 'tpl-contract',
+    name: 'Contract',
+    addedAtReviewBy: null,
+    addedAtReviewAt: null,
+    items: [
+      item('i-buyer', 'Buyer representation agreement', { isChecked: true }),
+      item('i-contract', 'Executed purchase contract', {
+        isChecked: true,
+        reviewerChecked: true,
+        reviewerCheckedBy: COLLEAGUE,
+        reviewerCheckedAt: '2026-09-20T15:10:00.000000+00:00',
+        links: [
+          {
+            id: 'l-att',
+            kind: 'attachment',
+            label: 'Purchase_Contract_signed.pdf',
+            members: [{ kind: 'attachment', submissionAttachmentId: 'att-1', submissionMessageId: null }],
+          },
+        ],
+      }),
+      item('i-appraisal', 'Appraisal', { isRequired: false }),
+      item('i-title', 'Title commitment', {
+        links: [
+          {
+            id: 'l-mail',
+            kind: 'email',
+            label: 'Title commitment attached',
+            members: [{ kind: 'email', submissionAttachmentId: null, submissionMessageId: 'msg-1' }],
+          },
+          {
+            id: 'l-gone',
+            kind: 'email',
+            label: 'Email not shown on this plan',
+            members: [{ kind: 'email', submissionAttachmentId: null, submissionMessageId: 'msg-gated' }],
+          },
+        ],
+      }),
+      item('i-amend', 'Amendments and addenda', { isRequired: false, isChecked: true, note: 'Two addenda' }),
+    ],
+  },
+  {
+    id: 'hdr-asbestos',
+    templateId: 'tpl-asbestos',
+    name: 'Asbestos',
+    addedAtReviewBy: null,
+    addedAtReviewAt: null,
+    items: [item('i-asb1', 'Asbestos disclosure', { isChecked: true }), item('i-asb2', 'AHERA inspection report')],
+  },
+  {
+    id: 'hdr-lead',
+    templateId: 'tpl-lead',
+    name: 'Lead-Based Paint',
+    addedAtReviewBy: COLLEAGUE,
+    addedAtReviewAt: '2026-09-20T15:12:00.000000+00:00',
+    items: [item('i-lead1', 'Lead-Based Paint Disclosure'), item('i-lead2', 'EPA pamphlet acknowledgment')],
+  },
+];
+
+const MESSAGES = [
+  {
+    id: 'msg-1',
+    channel: 'email',
+    direction: 'inbound',
+    subject: 'Title commitment attached',
+    body_text: 'Please find the commitment attached.',
+    sent_at: '2026-09-18T10:00:00.000Z',
+    has_attachments: false,
+    attachment_count: 0,
+    thread_id: null,
+    message_type: null,
+    participants: { from: 'title@fixture.example.test', from_name: 'Title Fixture Co' },
+  },
+  {
+    id: 'msg-2',
+    channel: 'email',
+    direction: 'outbound',
+    subject: 'Re: Title commitment attached',
+    body_text: 'Thanks.',
+    sent_at: '2026-09-18T11:00:00.000Z',
+    has_attachments: false,
+    attachment_count: 0,
+    thread_id: null,
+    message_type: null,
+    participants: { from: 'agent@fixture.example.test', to: ['title@fixture.example.test'] },
+  },
+];
+
+const ATTACHMENTS = [
+  { id: 'att-1', filename: 'Purchase_Contract_signed.pdf', mime_type: 'application/pdf', file_size_bytes: 1200000, storage_path: 'org/sub/a.pdf' },
+];
+
+function renderReview(over: Partial<ChecklistReviewProps> = {}) {
+  return render(
+    <ChecklistReview
+      submissionId="sub-1"
+      status="under_review"
+      sections={SECTIONS}
+      names={{ [VIEWER]: 'Viewer Fixture', [COLLEAGUE]: 'Colleague Fixture' }}
+      canTick
+      templates={[
+        { id: 'tpl-contract', name: 'Contract' },
+        { id: 'tpl-lead', name: 'Lead-Based Paint' },
+        { id: 'tpl-flood', name: 'Flood Zone Disclosure' },
+      ]}
+      messages={MESSAGES}
+      attachments={ATTACHMENTS}
+      {...over}
+    />
+  );
+}
+
+const sectionToggle = (name: string) => screen.getByRole('button', { name: new RegExp(`^${name}`) });
+const pills = () => screen.queryAllByRole('button', { name: /^(Mark reviewed|Reviewed)$/ });
+
+beforeEach(() => {
+  jest.clearAllMocks();
+});
+
+describe('required counts (the agent’s ticks)', () => {
+  it('shows x of y required per section and overall', () => {
+    renderReview();
+    expect(sectionToggle('Contract')).toHaveTextContent('2 of 3 required');
+    expect(sectionToggle('Asbestos')).toHaveTextContent('1 of 2 required');
+    expect(sectionToggle('Lead-Based Paint')).toHaveTextContent('0 of 2 required');
+    const header = screen.getByRole('heading', { name: 'Checklists' }).parentElement!;
+    expect(header).toHaveTextContent('3 of 7 required');
+  });
+});
+
+describe('reviewer pill (Q7)', () => {
+  it('shows only on required and agent-checked rows, never in a checklist added at review', () => {
+    renderReview();
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
+    const rows = screen.getAllByTestId('checklist-item');
+    const withPill = rows
+      .filter((r) => within(r).queryByRole('button', { name: /^(Mark reviewed|Reviewed)$/ }))
+      .map((r) => r.querySelector('span')!.textContent);
+    expect(withPill).toEqual([
+      'Buyer representation agreement',
+      'Executed purchase contract',
+      'Title commitment',
+      'Amendments and addenda',
+      'Asbestos disclosure',
+      'AHERA inspection report',
+    ]);
+  });
+
+  it('a reviewed row reads Reviewed · who · when', () => {
+    renderReview();
+    expect(screen.getByRole('button', { name: 'Reviewed' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('reviewer-meta')).toHaveTextContent('Colleague Fixture · Sep 20, 2026');
+  });
+
+  it('ticking calls the action and shows the returned reviewer', async () => {
+    mockSetReviewerCheck.mockResolvedValue({
+      ok: true,
+      changed: true,
+      reviewerChecked: true,
+      reviewerCheckedBy: VIEWER,
+      reviewerCheckedAt: '2026-09-21T09:00:00.000000+00:00',
+    });
+    renderReview();
+    const row = screen.getByText('Buyer representation agreement').closest('[data-testid="checklist-item"]') as HTMLElement;
+    fireEvent.click(within(row).getByRole('button', { name: 'Mark reviewed' }));
+    await waitFor(() => expect(within(row).getByRole('button', { name: 'Reviewed' })).toBeInTheDocument());
+    expect(mockSetReviewerCheck).toHaveBeenCalledWith('sub-1', 'i-buyer', true);
+    expect(within(row).getByTestId('reviewer-meta')).toHaveTextContent('Viewer Fixture · Sep 21, 2026');
+    expect(mockRefresh).toHaveBeenCalled();
+  });
+
+  it('unticking is allowed', async () => {
+    mockSetReviewerCheck.mockResolvedValue({
+      ok: true,
+      changed: true,
+      reviewerChecked: false,
+      reviewerCheckedBy: null,
+      reviewerCheckedAt: null,
+    });
+    renderReview();
+    fireEvent.click(screen.getByRole('button', { name: 'Reviewed' }));
+    await waitFor(() => expect(mockSetReviewerCheck).toHaveBeenCalledWith('sub-1', 'i-contract', false));
+    await waitFor(() => expect(screen.queryByTestId('reviewer-meta')).not.toBeInTheDocument());
+  });
+
+  it('a refused tick shows plain copy, never a code', async () => {
+    mockSetReviewerCheck.mockResolvedValue({
+      ok: false,
+      reason: 'not_open_for_review',
+      message: REVIEW_MESSAGES.not_open_for_review,
+    });
+    renderReview();
+    fireEvent.click(pills()[0]);
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(REVIEW_MESSAGES.not_open_for_review);
+    expect(alert.textContent).not.toMatch(/42501|not_open_for_review/);
+  });
+
+  it('pills are read-only once the review is complete', () => {
+    renderReview({ status: 'approved' });
+    expect(screen.queryByRole('button', { name: 'Mark reviewed' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reviewed' })).toBeDisabled();
+  });
+});
+
+describe('Add checklist', () => {
+  it('is enabled while under review', () => {
+    renderReview();
+    expect(screen.getByRole('button', { name: 'Add checklist' })).toBeEnabled();
+    expect(screen.queryByText(ADD_DISABLED_REASON)).not.toBeInTheDocument();
+  });
+
+  it('is disabled with a plain reason once changes are requested', () => {
+    renderReview({ status: 'needs_changes' });
+    expect(screen.getByRole('button', { name: 'Add checklist' })).toBeDisabled();
+    expect(screen.getByText(ADD_DISABLED_REASON)).toBeInTheDocument();
+  });
+
+  it('is absent for a viewer who cannot review; Expand/Collapse all stay', () => {
+    renderReview({ canTick: false });
+    expect(screen.queryByRole('button', { name: 'Add checklist' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Expand all' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Collapse all' })).toBeInTheDocument();
+  });
+
+  it('the picker disables checklists already on the submission and adds a new one', async () => {
+    mockAddChecklist.mockResolvedValue({ ok: true, status: 'added', checklistId: 'hdr-new' });
+    renderReview();
+    fireEvent.click(screen.getByRole('button', { name: 'Add checklist' }));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).queryByRole('button', { name: 'Add Contract' })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Add Lead-Based Paint' })).not.toBeInTheDocument();
+    expect(within(dialog).getAllByText('Added')).toHaveLength(2);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add Flood Zone Disclosure' }));
+    await waitFor(() => expect(mockAddChecklist).toHaveBeenCalledWith('sub-1', 'tpl-flood'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(mockRefresh).toHaveBeenCalled();
+  });
+
+  it('a checklist added at review names who added it and when it applies', () => {
+    renderReview();
+    expect(screen.getByText(/at review, for the agent’s next version\./)).toHaveTextContent(
+      'Added by Colleague Fixture at review, for the agent’s next version.'
+    );
+  });
+});
+
+describe('Expand all / Collapse all', () => {
+  const expand = () => screen.getByRole('button', { name: 'Expand all' });
+  const collapse = () => screen.getByRole('button', { name: 'Collapse all' });
+  const openStates = () => SECTIONS.map((s) => sectionToggle(s.name).getAttribute('aria-expanded'));
+
+  it('opens and closes every section, disabling the one that would change nothing', () => {
+    renderReview();
+    // Default: the first checklist and the one added at review are open.
+    expect(openStates()).toEqual(['true', 'false', 'true']);
+    expect(expand()).toBeEnabled();
+    expect(collapse()).toBeEnabled();
+
+    fireEvent.click(collapse());
+    expect(openStates()).toEqual(['false', 'false', 'false']);
+    expect(collapse()).toBeDisabled();
+    expect(expand()).toBeEnabled();
+
+    fireEvent.click(expand());
+    expect(openStates()).toEqual(['true', 'true', 'true']);
+    expect(expand()).toBeDisabled();
+    expect(collapse()).toBeEnabled();
+
+    // Each section's own toggle still works.
+    fireEvent.click(sectionToggle('Asbestos'));
+    expect(openStates()).toEqual(['true', 'false', 'true']);
+    expect(expand()).toBeEnabled();
+  });
+});
+
+describe('View on chips', () => {
+  it('an attachment chip opens the attachment viewer with that attachment', () => {
+    renderReview();
+    fireEvent.click(screen.getByRole('button', { name: 'View Purchase_Contract_signed.pdf' }));
+    expect(screen.getByTestId('attachment-viewer')).toHaveTextContent('Purchase_Contract_signed.pdf');
+  });
+
+  it('an email chip opens the conversation viewer on the whole thread', () => {
+    renderReview();
+    fireEvent.click(screen.getByRole('button', { name: 'View Title commitment attached' }));
+    expect(screen.getByText('2 messages')).toBeInTheDocument();
+    expect(screen.getByText('Please find the commitment attached.')).toBeInTheDocument();
+  });
+
+  it('a chip whose message is not shown on this plan has no View', () => {
+    renderReview();
+    const chip = screen.getByRole('button', { name: 'Email not shown on this plan (not available to view)' });
+    expect(chip).toBeDisabled();
+    expect(chip).toHaveTextContent('Not available');
+  });
+});
