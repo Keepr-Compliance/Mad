@@ -513,6 +513,53 @@ describe("BACKLOG-3477 — submit copies the transaction's checklists", () => {
     expect(fake.tables.submission_checklist_links).toHaveLength(3);
   });
 
+  it("a FAILED upload ahead of a same-bytes pair does not shift the pairing", async () => {
+    // A file whose bytes are gone from disk, attached earlier than the pair, so
+    // it is uploaded (and fails) first.
+    run(
+      `INSERT INTO attachments (id, email_id, filename, mime_type, storage_path, created_at) VALUES
+         ('att-gone', 'e-offer', 'gone.pdf', 'application/pdf', '/attachments/gone.pdf', '2026-02-28T10:00:00Z')`,
+    );
+    const uploaderInputs: string[] = [];
+    (supabaseStorageService.uploadAttachments as jest.Mock).mockImplementation(
+      async (org: string, sub: string, list: { id: string; localPath: string; filename: string }[]) => {
+        uploaderInputs.push(...list.map((a) => a.id));
+        const results = list.map((a, i) =>
+          a.localPath === "/attachments/gone.pdf"
+            ? // Transcribed from the real failure return,
+              // electron/services/supabaseStorageService.ts:177-182 (ENOENT branch):
+              //   { localId: localPath, storagePath: "", success: false, error }
+              //   with error = `File not found: ${absolutePath}`.
+              { localId: a.localPath, storagePath: "", success: false, error: `File not found: ${a.localPath}` }
+            : {
+                localId: a.localPath,
+                storagePath: `${org}/${sub}/${i}-${a.filename}`,
+                success: true,
+                mimeType: "application/pdf",
+                fileSizeBytes: 2048,
+              },
+        );
+        const ok = results.filter((r) => r.success).length;
+        return { totalCount: list.length, successCount: ok, failedCount: list.length - ok, results };
+      },
+    );
+    await seedChecklists();
+
+    const result = await submissionService.submitTransaction(TX);
+    expect(result.success).toBe(true);
+
+    // Premise: the failed upload precedes both halves of the same-bytes pair.
+    const gone = uploaderInputs.indexOf("att-gone");
+    expect(gone).toBeGreaterThanOrEqual(0);
+    expect(gone).toBeLessThan(uploaderInputs.indexOf("att-offer"));
+    expect(gone).toBeLessThan(uploaderInputs.indexOf("att-fwd"));
+
+    // The failed upload writes no row; each of the pair keeps its own id.
+    expect(fake.tables.submission_attachments.map((a) => a.local_attachment_id).sort()).toEqual(["att-fwd", "att-offer"]);
+    expect(memberLocalIds("Signed purchase agreement")).toEqual(["att-offer"]);
+    expect(memberLocalIds("Earnest money receipt")).toEqual(["att-fwd"]);
+  });
+
   it("sends exactly the contract's keys, and no reviewer values", async () => {
     await seedChecklists();
     await submissionService.submitTransaction(TX);
