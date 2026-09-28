@@ -121,7 +121,7 @@ export interface ChecklistReviewProps {
 export const VERSION_CLOSED_REASONS = {
   needs_changes:
     'Changes were requested, so this version is closed. You can check items and add a checklist on the next submission.',
-  newer: 'A newer version of this submission has been sent, so this version is closed. Check items on the newest version.',
+  newer: 'A newer version of this submission has been sent, so this version is closed. Check items and add checklists on the newest version.',
   uploading: 'A newer version of this submission is being sent, so this version is closed.',
 } as const;
 

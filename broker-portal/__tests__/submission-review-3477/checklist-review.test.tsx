@@ -358,11 +358,11 @@ describe('broker checkbox (BACKLOG-3596)', () => {
 describe('tick and Add closed on needs_changes and on a superseded version (P-C9, C-A, C-F)', () => {
   it.each([
     ['needs_changes', null, VERSION_CLOSED_REASONS.needs_changes, 'Changes were requested, so this version is closed. You can check items and add a checklist on the next submission.'],
-    ['needs_changes', 'newer', VERSION_CLOSED_REASONS.newer, 'A newer version of this submission has been sent, so this version is closed. Check items on the newest version.'],
+    ['needs_changes', 'newer', VERSION_CLOSED_REASONS.newer, 'A newer version of this submission has been sent, so this version is closed. Check items and add checklists on the newest version.'],
     ['needs_changes', 'uploading', VERSION_CLOSED_REASONS.uploading, 'A newer version of this submission is being sent, so this version is closed.'],
-    ['under_review', 'newer', VERSION_CLOSED_REASONS.newer, 'A newer version of this submission has been sent, so this version is closed. Check items on the newest version.'],
+    ['under_review', 'newer', VERSION_CLOSED_REASONS.newer, 'A newer version of this submission has been sent, so this version is closed. Check items and add checklists on the newest version.'],
     ['under_review', 'uploading', VERSION_CLOSED_REASONS.uploading, 'A newer version of this submission is being sent, so this version is closed.'],
-    ['submitted', 'newer', VERSION_CLOSED_REASONS.newer, 'A newer version of this submission has been sent, so this version is closed. Check items on the newest version.'],
+    ['submitted', 'newer', VERSION_CLOSED_REASONS.newer, 'A newer version of this submission has been sent, so this version is closed. Check items and add checklists on the newest version.'],
   ] as const)('status %s, newer version %s: disabled with one notice', (status, supersededBy, reason, literal) => {
     renderReview({ status, supersededBy });
     fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
