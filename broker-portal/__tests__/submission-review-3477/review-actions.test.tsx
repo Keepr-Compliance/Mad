@@ -21,7 +21,7 @@ jest.mock('@/lib/supabase/client', () => ({
     from: (table: string) => ({
       update: (values: unknown) => {
         mockUpdate(table, values);
-        return { eq: () => ({ select: async () => mockUpdateResult }) };
+        return { eq: () => ({ in: () => ({ select: async () => mockUpdateResult }) }) };
       },
       insert: mockInsert,
     }),
