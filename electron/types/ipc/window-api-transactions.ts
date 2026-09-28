@@ -1198,4 +1198,13 @@ export interface WindowApiTransactions {
       message: string;
     }) => void,
   ) => () => void;
+
+  /**
+   * BACKLOG-3595: fires after main has added a broker checklist to this
+   * transaction's local checklists with no status change (an owed pull
+   * landed). Never raises a notification. Returns an unsubscribe.
+   */
+  onChecklistsChanged: (
+    callback: (data: { transactionId: string }) => void,
+  ) => () => void;
 }

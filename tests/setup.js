@@ -78,6 +78,7 @@ if (typeof window !== 'undefined') {
       bulkUpdateStatus: jest.fn(),
       batchUpdateContacts: jest.fn(),
       onSubmissionStatusChanged: jest.fn().mockReturnValue(() => {}),
+      onChecklistsChanged: jest.fn().mockReturnValue(() => {}),
       getEarliestCommunicationDate: jest.fn().mockResolvedValue({ success: true, date: null }),
       // BACKLOG-322: unified transaction Attachments tab query + on-demand download.
       // Default empty so the tab/hook loads cleanly in every test environment.
