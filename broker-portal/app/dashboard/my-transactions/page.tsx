@@ -24,6 +24,7 @@ import { EmptySubmissions } from '@/components/ui/EmptyState';
 import { SubmissionPagination } from '@/components/submission/SubmissionPagination';
 import { UpsellPanel } from '@/components/my-transactions/UpsellPanel';
 import { getMyTransactionsGate } from '@/lib/my-transactions-access';
+import { LINK_COLUMNS, loadDealPage } from '@/lib/submissions/dealList';
 
 interface MyTransaction {
   id: string;
@@ -72,43 +73,39 @@ export default async function MyTransactionsPage({ searchParams }: PageProps) {
   const { status, page: pageParam } = await searchParams;
   const currentStatus = STATUSES.some((s) => s.value === status) ? (status as string) : 'all';
   const currentPage = Math.max(1, Number(pageParam) || 1);
+  // BACKLOG-3597: the "submitted" filter now covers submitted AND resubmitted
+  // deals (STATUSES labels it "Pending"), so the caption uses that tab label
+  // instead of formatStatus, which still reports a single submission's own
+  // "Submitted" status elsewhere on this page.
+  const currentStatusLabel = STATUSES.find((s) => s.value === currentStatus)?.label ?? formatStatus(currentStatus);
 
-  async function load(page: number): Promise<{ rows: MyTransaction[]; total: number }> {
-    const from = (page - 1) * PAGE_SIZE;
-    let rowsQuery = supabase
+  /** The agent's own rows in this brokerage, identical for both reads. */
+  function own(columns: string) {
+    return supabase
       .from('transaction_submissions')
-      .select(LIST_COLUMNS)
-      .eq('submitted_by', userId)
-      .eq('organization_id', organizationId)
-      .neq('status', 'uploading')
-      .order('created_at', { ascending: false })
-      .range(from, from + PAGE_SIZE - 1);
-    let countQuery = supabase
-      .from('transaction_submissions')
-      .select('id', { count: 'exact', head: true })
+      .select(columns)
       .eq('submitted_by', userId)
       .eq('organization_id', organizationId)
       .neq('status', 'uploading');
-    if (currentStatus !== 'all') {
-      rowsQuery = rowsQuery.eq('status', currentStatus);
-      countQuery = countQuery.eq('status', currentStatus);
-    }
-
-    const [{ data, error }, { count }] = await Promise.all([rowsQuery, countQuery]);
-    if (error) {
-      console.error('Error fetching my transactions:', error.message);
-      return { rows: [], total: 0 };
-    }
-    const rows = (data ?? []) as unknown as MyTransaction[];
-    return { rows, total: count ?? rows.length };
   }
 
-  const first = await load(currentPage);
-  const total = first.total;
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  // A page past the end (rows removed while it was open) shows the last page.
-  const effectivePage = currentPage > totalPages ? totalPages : currentPage;
-  const rows = effectivePage !== currentPage && total > 0 ? (await load(effectivePage)).rows : first.rows;
+  // BACKLOG-3597: one row per deal, its latest version (lib/submissions/dealList.ts).
+  // Count, status filter and pagination apply to deals. A page past the end
+  // (rows removed while it was open) shows the last page.
+  const result = await loadDealPage<MyTransaction>({
+    readLinks: (from, to) => own(LINK_COLUMNS).order('id').range(from, to),
+    readRows: (ids) => own(LIST_COLUMNS).in('id', ids),
+    status: currentStatus !== 'all' ? currentStatus : null,
+    page: currentPage,
+    pageSize: PAGE_SIZE,
+  });
+  if (result.error) {
+    const message = (result.error as { message?: string }).message ?? String(result.error);
+    console.error('Error fetching my transactions:', message);
+  }
+  const { rows, total, totalPages, page: effectivePage } = result.error
+    ? { rows: [] as MyTransaction[], total: 0, totalPages: 1, page: 1 }
+    : result;
 
   return (
     <div className="max-w-7xl mx-auto">
@@ -117,7 +114,7 @@ export default async function MyTransactionsPage({ searchParams }: PageProps) {
         subtitle={
           <>
             {total} submission{total !== 1 ? 's' : ''}
-            {currentStatus !== 'all' && ` with status "${formatStatus(currentStatus)}"`}
+            {currentStatus !== 'all' && ` with status "${currentStatusLabel}"`}
           </>
         }
       />

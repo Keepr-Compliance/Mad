@@ -18,6 +18,8 @@ import { loadAddableTemplates, loadSubmissionChecklists } from '@/lib/submission
 import { markAsUnderReview } from '@/lib/submissions/markUnderReview';
 import { NO_CAPABILITIES, getReviewCapabilities } from '@/lib/submissions/reviewAccess';
 import type { ChecklistSectionView, TemplateOption } from '@/lib/submissions/checklistModel';
+import { loadVersionChain } from '@/lib/submissions/versions';
+import { SubmissionVersions } from '@/components/submission/SubmissionVersions';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -177,6 +179,10 @@ export default async function SubmissionDetailPage({ params }: PageProps) {
   // Build full status history by walking the parent submission chain
   const { history: rawHistory, rootCreatedAt } = await getFullStatusHistory(submission, client);
 
+  // BACKLOG-3597: the deal's other versions (previous ones, and the newest when
+  // this is not it). The list shows only the newest; older ones are reached here.
+  const versions = await loadVersionChain(client, submission);
+
   // BACKLOG-3477: what this viewer may do (lib/submissions/reviewAccess.ts is
   // the one place). Support sessions are read-only and get nothing.
   const capabilities = isImpersonating
@@ -311,6 +317,9 @@ export default async function SubmissionDetailPage({ params }: PageProps) {
         </div>
 
       </div>
+
+      {/* BACKLOG-3597: newer-version notice and previous versions */}
+      <SubmissionVersions previous={versions.previous} newest={versions.newest} />
 
       {/* Review Actions - hidden during impersonation (read-only) */}
       {/* BACKLOG-899: isImpersonating prop provides defense-in-depth write guard */}
