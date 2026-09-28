@@ -50,7 +50,6 @@ import {
   changedSinceChecked,
   requestChangesAvailable,
   formatRequired,
-  hasReviewerCheckbox,
   overallRequiredCount,
   requiredCount,
   tickOpenFor,
@@ -403,7 +402,10 @@ export function ChecklistReview({
                     )}
                     {section.items.map((item, itemIdx) => {
                       const reviewedBy = item.reviewerCheckedBy ? actorName(item.reviewerCheckedBy, nameMap) : undefined;
-                      const checkbox = !isAgent && hasReviewerCheckbox(section);
+                      // Every item carries the broker's checkbox, including a
+                      // checklist added at review (BACKLOG-3596 follow-up): the
+                      // tick RPC accepts those items and the carry-over keeps them.
+                      const checkbox = !isAgent;
                       const changed = !isAgent && checkbox && changedSinceChecked(item);
                       return (
                         <div
@@ -429,10 +431,8 @@ export function ChecklistReview({
                                 />
                               )}
                             </span>
-                          ) : isAgent ? (
-                            <ItemIcon item={item} />
                           ) : (
-                            <Circle className="mt-0.5 h-[22px] w-[22px] shrink-0 text-gray-300" aria-hidden />
+                            <ItemIcon item={item} />
                           )}
                           <div className="min-w-0 flex-1">
                             <div className="flex flex-wrap items-center gap-2">
