@@ -36,6 +36,7 @@
  */
 import * as nodePath from "path";
 import * as fs from "fs";
+import { randomUUID } from "crypto";
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const Database = require(
   nodePath.join(__dirname, "..", "..", "..", "node_modules", "better-sqlite3-multiple-ciphers"),
@@ -122,8 +123,16 @@ const checklistFetches: string[] = [];
 function query(table: string) {
   const filters: Array<(row: Record<string, unknown>) => boolean> = [];
   let orderKey: string | null = null;
+  // BACKLOG-3596 (SR C-6): project ONLY the selected columns, as PostgREST
+  // does. A fake that returned whole rows would hand the pull a column it
+  // never asked for (the item id), and a control on it could not go red.
+  let columns: string[] | null = null;
   const builder = {
-    select: () => builder,
+    select: (list?: string) => {
+      const cols = (list ?? "*").split(",").map((c) => c.trim()).filter(Boolean);
+      columns = cols.includes("*") ? null : cols;
+      return builder;
+    },
     eq: (col: string, value: unknown) => {
       filters.push((row) => row[col] === value);
       return builder;
@@ -180,6 +189,12 @@ function query(table: string) {
           const key = orderKey;
           rows = [...rows].sort((a, b) => (a[key] as number) - (b[key] as number));
         }
+        if (columns) {
+          const cols = columns;
+          rows = rows.map((row) =>
+            Object.fromEntries(cols.filter((c) => c in row).map((c) => [c, row[c]])),
+          );
+        }
         return Promise.resolve({ data: rows, error: null }).then(resolve, reject);
       } catch (error) {
         return Promise.reject(error).then(resolve, reject);
@@ -210,7 +225,13 @@ jest.mock("../supabaseService", () => ({
 }));
 
 import { submissionSyncService } from "../submissionSyncService";
-import { removeChecklist, selectChecklistTemplate, setChecklistItemChecked } from "../db/checklistDbService";
+import {
+  getChecklistsForTransaction,
+  removeChecklist,
+  selectChecklistTemplate,
+  setChecklistItemChecked,
+} from "../db/checklistDbService";
+import { buildChecklistSnapshotPayload } from "../submissionChecklistSnapshot";
 import { clearReviewChecklistPullOwed, markReviewChecklistPullOwed } from "../db/submissionDbService";
 
 const SCHEMA = nodePath.join(__dirname, "..", "..", "database", "schema.sql");
@@ -254,6 +275,8 @@ function seedCloud(status: string, expectedTypeForB: string | null = null): void
     },
   ];
   const item = (title: string, sort: number, required: boolean, type: string | null) => ({
+    // BACKLOG-3596: every cloud row has a uuid id; generated per run.
+    id: randomUUID(),
     submission_id: SUB,
     submission_checklist_id: HEADER,
     title,
@@ -850,5 +873,68 @@ describe("BACKLOG-3595 — events reach the window after the checklist rows comm
     // The pass went on past the retry and read the cloud statuses.
     expect(calls).toBeGreaterThan(1);
     expect(localChecklists()).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3596: a pulled broker checklist keeps the cloud item ids, so the next
+// version sends them as local_item_id and the broker's ticks carry.
+// ---------------------------------------------------------------------------
+describe("BACKLOG-3596 pulled items keep the cloud item id", () => {
+  const cloudIdsByTitle = () =>
+    new Map(
+      cloud.submission_checklist_items
+        .filter((row) => row.submission_checklist_id === HEADER)
+        .map((row) => [row.title as string, row.id as string]),
+    );
+
+  it("D1: after a pull every local item id equals its cloud item id", async () => {
+    seedLocal();
+    seedCloud("needs_changes");
+    await submissionSyncService.manualSync();
+
+    const lists = localChecklists();
+    expect(lists).toHaveLength(1);
+    const local = db
+      .prepare("SELECT id, title FROM transaction_checklist_items WHERE checklist_id = ?")
+      .all(lists[0].id) as Array<{ id: string; title: string }>;
+    expect(local).toHaveLength(3);
+    expect(new Map(local.map((r) => [r.title, r.id]))).toEqual(cloudIdsByTitle());
+  });
+
+  it("D2: the next version's snapshot payload sends the cloud item id as local_item_id", async () => {
+    seedLocal();
+    seedCloud("needs_changes");
+    await submissionSyncService.manualSync();
+
+    const payload = buildChecklistSnapshotPayload(await getChecklistsForTransaction(TXN));
+    const pulled = payload.find((c) => c.template_id === TEMPLATE);
+    expect(pulled).toBeDefined();
+    expect(new Map(pulled!.items.map((i) => [i.title, i.local_item_id]))).toEqual(cloudIdsByTitle());
+  });
+
+  it("D3: a template picked on the desktop (no id given) still gets new, distinct random ids", async () => {
+    seedLocal();
+    const picked = await selectChecklistTemplate({
+      transactionId: TXN,
+      templateId: "tpl-picked-3596",
+      templateName: "Picked template",
+      // The shape the select-template IPC handler builds: no id field.
+      items: [
+        { title: "Picked one", isRequired: true, sortOrder: 0 },
+        { title: "Picked two", isRequired: false, sortOrder: 1 },
+      ],
+    });
+    if (picked.status !== "added") throw new Error("seed failed");
+    const ids = (
+      db
+        .prepare("SELECT id FROM transaction_checklist_items WHERE checklist_id = ?")
+        .all(picked.checklistId) as Array<{ id: string | null }>
+    ).map((r) => r.id);
+    expect(ids).toHaveLength(2);
+    for (const id of ids) {
+      expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    }
+    expect(new Set(ids).size).toBe(2);
   });
 });

@@ -52,6 +52,7 @@ interface CloudChecklistHeader {
 }
 
 interface CloudChecklistItem {
+  id: string;
   submission_checklist_id: string;
   title: string;
   description: string | null;
@@ -124,7 +125,7 @@ export async function pullReviewChecklists(
     client
       .from("submission_checklist_items")
       .select(
-        "submission_checklist_id, title, description, is_required, expected_document_type, sort_order",
+        "id, submission_checklist_id, title, description, is_required, expected_document_type, sort_order",
       )
       .in(
         "submission_checklist_id",
@@ -151,6 +152,10 @@ export async function pullReviewChecklists(
     const localItems: ChecklistTemplateItemInput[] = items
       .filter((item) => item.submission_checklist_id === header.id)
       .map((item) => ({
+        // BACKLOG-3596: the cloud item id becomes the local item id, so the
+        // next version sends it as local_item_id and the carry matches it to
+        // the item the broker ticked on this version.
+        id: item.id,
         title: item.title,
         description: item.description ?? null,
         isRequired: item.is_required === true,

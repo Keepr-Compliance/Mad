@@ -178,7 +178,10 @@ export function selectChecklistTemplate(
     ]);
     input.items.forEach((item, index) => {
       dbRun(INSERT_CHECKLIST_ITEM_SQL, [
-        randomUUID(),
+        // BACKLOG-3596: a pulled broker checklist keeps the cloud item id. A
+        // PK clash throws and rolls back this whole checklist; there is no
+        // fallback to a random id, which would lose the broker's ticks silently.
+        item.id ?? randomUUID(),
         checklistId,
         item.title,
         item.description ?? null,

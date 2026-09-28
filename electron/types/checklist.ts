@@ -152,6 +152,13 @@ export interface ChecklistTemplateListing {
 
 /** A template row as copied in. The cloud read that produces these is BACKLOG-3475 PR-B. */
 export interface ChecklistTemplateItemInput {
+  /**
+   * BACKLOG-3596: the local item id to use. Set only by the broker-checklist
+   * pull, which passes the cloud item id so the next version's snapshot sends
+   * that id as `local_item_id` and the broker's ticks carry. Absent -> a new
+   * random id (every template picked from the IPC handler).
+   */
+  id?: string;
   title: string;
   description?: string | null;
   isRequired: boolean;
