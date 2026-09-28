@@ -67,9 +67,16 @@ jest.mock("../transactionDetailsModule", () => {
 });
 
 jest.mock("../transactionDetailsModule/components/modals/SubmitForReviewModal", () => ({
-  SubmitForReviewModal: (props: { checklistsEnabled?: boolean }) => (
+  SubmitForReviewModal: (props: {
+    checklistsEnabled?: boolean;
+    checklistsNotSent?: string | null;
+    onSubmit: () => void;
+  }) => (
     <div data-testid="submit-modal">
       <span data-testid="checklists-enabled">{String(props.checklistsEnabled)}</span>
+      {/* BACKLOG-3600 */}
+      <span data-testid="checklists-not-sent">{String(props.checklistsNotSent)}</span>
+      <button data-testid="modal-submit" onClick={() => props.onSubmit()} />
     </div>
   ),
 }));
@@ -161,4 +168,26 @@ it.each<[StrictFeatureStateOrPending, string]>([
 ])("gate %s → checklistsEnabled %s", async (gate, expected) => {
   mockGate.value = gate;
   expect(await openSubmit()).toBe(expected);
+});
+
+/**
+ * BACKLOG-3600 (D5, the last link): the REAL useSubmitForReview holds the IPC
+ * result's `checklistsNotSent`, and TransactionDetails hands it to the modal.
+ */
+it("BACKLOG-3600: a submit result's checklistsNotSent reaches the modal", async () => {
+  mockGate.value = "allowed";
+  /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+  (window.api.transactions as any).submit = jest.fn().mockResolvedValue({
+    success: true,
+    submissionId: "sub-3600-0001",
+    checklistsNotSent: "not_in_plan",
+  });
+  await openSubmit();
+  expect(screen.getByTestId("checklists-not-sent").textContent).toBe("null");
+  await act(async () => {
+    fireEvent.click(screen.getByTestId("modal-submit"));
+  });
+  await waitFor(() =>
+    expect(screen.getByTestId("checklists-not-sent").textContent).toBe("not_in_plan"),
+  );
 });
