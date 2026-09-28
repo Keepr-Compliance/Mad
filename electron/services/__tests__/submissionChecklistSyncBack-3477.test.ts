@@ -563,20 +563,29 @@ describe("BACKLOG-3599 — owed broker checklist pulls", () => {
       .get(TXN) as { o: string | null };
     return row.o === null ? null : JSON.parse(row.o);
   };
-  /** A restart: every in-memory Map/Set on the service is emptied. */
+  /**
+   * The service under test. `restart()` replaces it with a fresh load of every
+   * module (same SQLite database), so NO in-memory state survives — not the
+   * service's fields and not any module-level variable.
+   */
+  let svc = submissionSyncService;
+  beforeEach(() => {
+    svc = submissionSyncService;
+  });
   const restart = (): void => {
-    for (const value of Object.values(submissionSyncService as unknown as Record<string, unknown>)) {
-      if (value instanceof Map || value instanceof Set) value.clear();
-    }
+    jest.resetModules();
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    svc = (require("../submissionSyncService") as typeof import("../submissionSyncService"))
+      .submissionSyncService;
   };
   /** Three failed passes: status written, pull owed. */
   async function failOut(): Promise<void> {
     seedLocal();
     seedCloud("needs_changes");
     cloud.checklistFetchFailures = 3;
-    await submissionSyncService.manualSync();
-    await submissionSyncService.manualSync();
-    await submissionSyncService.manualSync();
+    await svc.manualSync();
+    await svc.manualSync();
+    await svc.manualSync();
     expect(localStatus()).toBe("needs_changes");
     expect(localChecklists()).toEqual([]);
     expect(owed()).toEqual([SUB]);
@@ -584,7 +593,7 @@ describe("BACKLOG-3599 — owed broker checklist pulls", () => {
 
   it("C1: fail x3 -> status written and the pull owed; the next pass lands it and clears the marker", async () => {
     await failOut();
-    await submissionSyncService.manualSync();
+    await svc.manualSync();
     expectPulled();
     expect(owed()).toBeNull();
     expect(localStatus()).toBe("needs_changes");
@@ -593,7 +602,7 @@ describe("BACKLOG-3599 — owed broker checklist pulls", () => {
   it("C2: a restart between the failure-out and the next pass still lands it", async () => {
     await failOut();
     restart();
-    await submissionSyncService.manualSync();
+    await svc.manualSync();
     expectPulled();
     expect(owed()).toBeNull();
   });
@@ -601,11 +610,11 @@ describe("BACKLOG-3599 — owed broker checklist pulls", () => {
   it("C2 (signed out): every read is 42501 -> marker kept, nothing written; signed in again -> lands", async () => {
     await failOut();
     cloud.signedOut = true;
-    await submissionSyncService.manualSync();
+    await svc.manualSync();
     expect(owed()).toEqual([SUB]);
     expect(localChecklists()).toEqual([]);
     cloud.signedOut = false;
-    await submissionSyncService.manualSync();
+    await svc.manualSync();
     expectPulled();
     expect(owed()).toBeNull();
   });
@@ -614,13 +623,13 @@ describe("BACKLOG-3599 — owed broker checklist pulls", () => {
     await failOut();
     cloud.hiddenSubmissions.add(SUB);
     const before = checklistFetches.length;
-    await submissionSyncService.manualSync();
+    await svc.manualSync();
     expect(owed()).toEqual([SUB]);
     expect(localChecklists()).toEqual([]);
     // Nothing was pulled on no proof.
     expect(checklistFetches.length).toBe(before);
     cloud.hiddenSubmissions.clear();
-    await submissionSyncService.manualSync();
+    await svc.manualSync();
     expectPulled();
     expect(owed()).toBeNull();
   });
@@ -628,30 +637,30 @@ describe("BACKLOG-3599 — owed broker checklist pulls", () => {
   it("C3: the owed retry fails again -> marker still set; a later success lands", async () => {
     await failOut();
     cloud.checklistFetchFailures = 2;
-    await submissionSyncService.manualSync();
+    await svc.manualSync();
     expect(owed()).toEqual([SUB]);
     restart();
-    await submissionSyncService.manualSync();
+    await svc.manualSync();
     expect(owed()).toEqual([SUB]);
     expect(localChecklists()).toEqual([]);
-    await submissionSyncService.manualSync();
+    await svc.manualSync();
     expectPulled();
     expect(owed()).toBeNull();
   });
 
   it("C4: once the owed pull lands, a checklist the agent removes is never re-added (any path, restart included)", async () => {
     await failOut();
-    await submissionSyncService.manualSync();
+    await svc.manualSync();
     expectPulled();
     const [pulled] = localChecklists();
     await removeChecklist(TXN, pulled.id);
     const fetches = checklistFetches.length;
 
-    await submissionSyncService.manualSync();
-    await submissionSyncService.syncSubmission(TXN);
+    await svc.manualSync();
+    await svc.syncSubmission(TXN);
     await deliverRealtime();
     restart();
-    await submissionSyncService.manualSync();
+    await svc.manualSync();
 
     expect(localChecklists()).toEqual([]);
     expect(checklistFetches.length).toBe(fetches);
@@ -662,7 +671,7 @@ describe("BACKLOG-3599 — owed broker checklist pulls", () => {
     await failOut();
     cloud.submissions[0].status = "approved";
     const fetches = checklistFetches.length;
-    await submissionSyncService.manualSync();
+    await svc.manualSync();
     expect(owed()).toBeNull();
     expect(checklistFetches.length).toBe(fetches);
     expect(localChecklists()).toEqual([]);
@@ -673,7 +682,7 @@ describe("BACKLOG-3599 — owed broker checklist pulls", () => {
     // Local status final: the poller's active list excludes it and returns early.
     db.prepare("UPDATE transactions SET submission_status = 'approved' WHERE id = ?").run(TXN);
     cloud.submissions[0].status = "approved";
-    await submissionSyncService.manualSync();
+    await svc.manualSync();
     expect(owed()).toBeNull();
   });
 
@@ -694,7 +703,7 @@ describe("BACKLOG-3599 — owed broker checklist pulls", () => {
     cloud.hiddenSubmissions.add(S2);
     markReviewChecklistPullOwed(TXN, S2);
 
-    await submissionSyncService.manualSync();
+    await svc.manualSync();
 
     expectPulled();
     expect(owed()).toEqual([S2]);
@@ -704,11 +713,11 @@ describe("BACKLOG-3599 — owed broker checklist pulls", () => {
     seedLocal();
     seedCloud("needs_changes");
     cloud.checklistFetchFailures = 3;
-    await submissionSyncService.manualSync();
-    await submissionSyncService.manualSync();
+    await svc.manualSync();
+    await svc.manualSync();
     // The 3rd failure cannot record the marker: a trigger refuses the metadata write.
     db.exec(`CREATE TRIGGER block_meta BEFORE UPDATE OF metadata ON transactions BEGIN SELECT RAISE(ABORT, 'blocked'); END;`);
-    await submissionSyncService.manualSync();
+    await svc.manualSync();
     expect(localStatus()).toBe("under_review");
     db.exec("DROP TRIGGER block_meta");
   });
