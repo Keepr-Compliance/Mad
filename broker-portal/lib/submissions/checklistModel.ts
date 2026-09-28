@@ -83,11 +83,18 @@ export const TICK_OPEN_STATUSES: readonly string[] = ['submitted', 'resubmitted'
 /** Statuses in which the add RPC accepts a checklist (§8 of the migration). */
 export const ADD_OPEN_STATUSES: readonly string[] = ['submitted', 'resubmitted', 'under_review'];
 /**
- * Statuses in which sending the submission back is still a live choice: it has
- * not been sent back already (needs_changes) and is not decided (approved,
- * rejected).
+ * Statuses in which a review decision (Approve, Request Changes, Reject) is
+ * still a live choice: the version has not been sent back already
+ * (needs_changes) and is not decided (approved, rejected). BACKLOG-3592: the
+ * one source of truth for the review bar, the Request Changes hint, the
+ * checklist banner, and the WHERE on the decision write.
  */
-export const REQUEST_CHANGES_OPEN_STATUSES: readonly string[] = ['submitted', 'resubmitted', 'under_review'];
+export const DECISION_OPEN_STATUSES: readonly string[] = ['submitted', 'resubmitted', 'under_review'];
+
+/** Whether a version in this status is open for a review decision. */
+export function isOpenForDecision(status: string): boolean {
+  return DECISION_OPEN_STATUSES.includes(status);
+}
 
 /**
  * Whether this viewer is actually offered Request Changes on this submission
@@ -96,7 +103,7 @@ export const REQUEST_CHANGES_OPEN_STATUSES: readonly string[] = ['submitted', 'r
  * impersonation.
  */
 export function requestChangesAvailable(status: string, canDecide: boolean): boolean {
-  return canDecide && REQUEST_CHANGES_OPEN_STATUSES.includes(status);
+  return canDecide && isOpenForDecision(status);
 }
 
 /**
