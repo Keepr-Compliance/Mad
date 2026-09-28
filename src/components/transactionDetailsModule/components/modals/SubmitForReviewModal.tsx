@@ -104,6 +104,12 @@ interface SubmitForReviewModalProps {
 export interface UncheckedRequiredItem {
   id: string;
   title: string;
+  /**
+   * The checklist the item belongs to, shown muted beside the title — only
+   * when the transaction has two or more checklists. `null` with exactly one:
+   * the row is the title alone (mock state 4).
+   */
+  checklistName: string | null;
 }
 
 /**
@@ -115,9 +121,19 @@ export function listUncheckedRequiredItems(
   data: ChecklistsForTransaction,
 ): UncheckedRequiredItem[] {
   const out: UncheckedRequiredItem[] = [];
-  for (const detail of data.checklists) {
-    for (const item of detail.items) {
-      if (item.isRequired && !item.isChecked) out.push({ id: item.id, title: item.title });
+  // Missing arrays read as empty: malformed data must never throw here, or the
+  // press would end with Submit disabled and nothing on screen.
+  const checklists = data.checklists ?? [];
+  const named = checklists.length >= 2;
+  for (const detail of checklists) {
+    for (const item of detail.items ?? []) {
+      if (item.isRequired && !item.isChecked) {
+        out.push({
+          id: item.id,
+          title: item.title,
+          checklistName: named ? detail.checklist.templateName : null,
+        });
+      }
     }
   }
   return out;
@@ -433,21 +449,31 @@ export function SubmitForReviewModal({
    */
   const handleSubmitPress = async () => {
     if (checklistsEnabled) {
+      let unchecked: UncheckedRequiredItem[] = [];
       setCheckingChecklists(true);
-      const result = await checklistService.get(transaction.id);
-      if (dismissedRef.current) return;
-      setCheckingChecklists(false);
-      if (result.success && result.data) {
-        const unchecked = listUncheckedRequiredItems(result.data);
-        if (unchecked.length > 0) {
-          setUncheckedRequired(unchecked);
-          return;
+      try {
+        const result = await checklistService.get(transaction.id);
+        if (dismissedRef.current) return;
+        if (result.success && result.data) {
+          unchecked = listUncheckedRequiredItems(result.data);
+        } else {
+          logger.warn(
+            "[SubmitForReview] checklist read failed; submitting without the warning:",
+            result.error,
+          );
         }
-      } else {
+      } catch (err) {
+        // Same direction as a failed read: no warning, submit.
         logger.warn(
-          "[SubmitForReview] checklist read failed; submitting without the warning:",
-          result.error,
+          "[SubmitForReview] checklist check failed; submitting without the warning:",
+          err instanceof Error ? err.message : String(err),
         );
+      } finally {
+        setCheckingChecklists(false);
+      }
+      if (unchecked.length > 0) {
+        setUncheckedRequired(unchecked);
+        return;
       }
     }
     await proceed();
@@ -1145,7 +1171,17 @@ export function SubmitForReviewModal({
                         <svg className="h-3.5 w-3.5 flex-shrink-0 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                         </svg>
-                        {item.title}
+                        <span className="min-w-0 flex-1" data-testid="submit-review-checklist-warning-item-title">
+                          {item.title}
+                        </span>
+                        {item.checklistName && (
+                          <span
+                            className="flex-shrink-0 text-xs text-gray-500"
+                            data-testid="submit-review-checklist-warning-item-checklist"
+                          >
+                            {item.checklistName}
+                          </span>
+                        )}
                       </li>
                     ))}
                   </ul>

@@ -123,7 +123,9 @@ describe("BACKLOG-3477 E-C1 — required items unticked across two checklists ar
       "You can still submit. The checklist goes with the transaction as it stands.",
     );
     const rows = within(screen.getByTestId("submit-review-checklist-warning-list")).getAllByRole("listitem");
-    expect(rows.map((r) => r.textContent?.trim())).toEqual(EXPECTED_TITLES);
+    expect(
+      rows.map((r) => within(r).getByTestId("submit-review-checklist-warning-item-title").textContent),
+    ).toEqual(EXPECTED_TITLES);
     expect(dialog).not.toHaveTextContent("Probe item 4");
     expect(getMock()).toHaveBeenCalledTimes(1);
     expect(getMock()).toHaveBeenCalledWith({ transactionId: TX });
@@ -142,6 +144,62 @@ describe("BACKLOG-3477 E-C1 — required items unticked across two checklists ar
     expect(within(warning() as HTMLElement).getByRole("heading")).toHaveTextContent(
       "1 required item is not checked",
     );
+  });
+});
+
+describe("BACKLOG-3477 E-1 — rows name their checklist only when there are two or more", () => {
+  it("with 2+ checklists, each row shows its own checklist's name beside the title", async () => {
+    renderModal();
+    await pressSubmit();
+    const rows = within(screen.getByTestId("submit-review-checklist-warning-list")).getAllByRole("listitem");
+    expect(
+      rows.map((r) => [
+        within(r).getByTestId("submit-review-checklist-warning-item-title").textContent,
+        within(r).queryByTestId("submit-review-checklist-warning-item-checklist")?.textContent ?? null,
+      ]),
+    ).toEqual([
+      ["Probe item 2", "Probe template"],
+      ["Other item 2", "Other probe template"],
+      ["Other item 3", "Other probe template"],
+    ]);
+  });
+
+  it("with exactly 1 checklist, rows are the title alone", async () => {
+    const probeOnly = REAL.checklists.filter((c) => c.checklist.templateName === "Probe template");
+    getMock().mockResolvedValue({
+      success: true,
+      checklists: { checklists: probeOnly, requiredDone: 1, requiredTotal: 2 },
+    });
+    renderModal();
+    await pressSubmit();
+    const dialog = warning() as HTMLElement;
+    const rows = within(screen.getByTestId("submit-review-checklist-warning-list")).getAllByRole("listitem");
+    expect(rows.map((r) => r.textContent?.trim())).toEqual(["Probe item 2"]);
+    expect(within(dialog).queryByTestId("submit-review-checklist-warning-item-checklist")).toBeNull();
+    expect(dialog).not.toHaveTextContent("Probe template");
+  });
+});
+
+describe("BACKLOG-3477 — malformed checklist data never leaves Submit stuck", () => {
+  it("a checklist with no items array reads as empty; the others are still listed and Submit is released", async () => {
+    const broken = REAL.checklists.map((c) =>
+      c.checklist.templateName === "Probe template"
+        ? ({ ...c, items: undefined } as unknown as (typeof REAL.checklists)[number])
+        : c,
+    );
+    getMock().mockResolvedValue({
+      success: true,
+      checklists: { ...REAL, checklists: broken },
+    });
+    const { props } = renderModal();
+    await pressSubmit();
+    const rows = within(screen.getByTestId("submit-review-checklist-warning-list")).getAllByRole("listitem");
+    expect(
+      rows.map((r) => within(r).getByTestId("submit-review-checklist-warning-item-title").textContent),
+    ).toEqual(["Other item 2", "Other item 3"]);
+    await press("submit-review-checklist-go-back");
+    expect(screen.getByTestId("submit-review-submit")).toBeEnabled();
+    expect(props.onSubmit).not.toHaveBeenCalled();
   });
 });
 
