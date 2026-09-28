@@ -486,6 +486,38 @@ function TransactionDetails({
   // active affordance so it reads "working" instead of a dead disabled gray.
   const [messagesSyncInFlight, setMessagesSyncInFlight] = useState<boolean>(false);
 
+  // BACKLOG-3595: a broker review changed this deal's submission status while
+  // the details are open. `transaction` is local state seeded from the list
+  // row at open, so a list re-read never reaches it — the header needs its own
+  // subscriber. Re-read via getOverview (get-details would start a background
+  // sync) and patch only the two fields the status sync writes.
+  useEffect(() => {
+    const subscribe = window.api?.transactions?.onSubmissionStatusChanged;
+    if (typeof subscribe !== "function") return;
+    const transactionId = transaction.id;
+    return subscribe((data) => {
+      if (data.transactionId !== transactionId) return;
+      void window.api.transactions
+        .getOverview(transactionId)
+        .then((result) => {
+          if (!result.success || !result.transaction) return;
+          const fresh = result.transaction;
+          setTransaction((prev) =>
+            prev.id === transactionId
+              ? {
+                  ...prev,
+                  submission_status: fresh.submission_status,
+                  last_review_notes: fresh.last_review_notes,
+                }
+              : prev
+          );
+        })
+        .catch(() => {
+          /* non-critical: the next event or open re-reads it */
+        });
+    });
+  }, [transaction.id]);
+
   // BACKLOG-1832: Subscribe to background auto-sync lifecycle events so the UI
   // reflects the in-flight fetch state and auto-refreshes when emails arrive.
   useEffect(() => {
