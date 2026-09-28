@@ -459,10 +459,13 @@ function TypedTimelineEntry({
             <div className="flex items-center justify-between gap-4">
               <div className="min-w-0">
                 <p className="text-sm text-gray-600">{describeTypedEntry(entry)}</p>
-                {entry.checklist_name && entry.type === 'checklist_review' && (
+                {entry.checklist_name && (entry.type === 'checklist_review' || entry.type === 'checklist_review_cleared') && (
                   <p className="mt-0.5 text-xs text-gray-400">{entry.checklist_name}</p>
                 )}
-                {entry.changed_by && <p className="mt-0.5 text-xs text-gray-500">by {entry.changed_by}</p>}
+                {/* A cleared line already names the agent in its sentence. */}
+                {entry.changed_by && entry.type !== 'checklist_review_cleared' && (
+                  <p className="mt-0.5 text-xs text-gray-500">by {entry.changed_by}</p>
+                )}
               </div>
               <time className="whitespace-nowrap text-sm text-gray-400">{formatDate(entry.changed_at)}</time>
             </div>

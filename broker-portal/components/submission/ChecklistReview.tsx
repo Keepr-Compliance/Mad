@@ -6,20 +6,23 @@
  * The Checklists area of the submission review page, between Status History
  * and Messages/Attachments. One card, one collapsible section per checklist.
  *
- * - The agent's ticks and notes are frozen and read-only.
- * - "x of y required" counts the AGENT's ticks on required items
- *   (lib/submissions/checklistModel.ts), per section and overall.
- * - A reviewer (can_review_submission) marks items reviewed through
- *   set_submission_checklist_reviewer_check; the pill shows only on required
- *   and agent-checked rows, never in a checklist added at review.
+ * - BACKLOG-3596 (founder design): on the broker page the item's checkbox IS
+ *   the broker's tick (set_submission_checklist_reviewer_check), with who and
+ *   when under the check mark. The agent's ticks are never shown to a broker,
+ *   and "x of y required" counts the broker's ticks. Every item carries the
+ *   checkbox except in a checklist added at review. Ticking is closed, with a
+ *   plain reason, once changes are requested or a newer version exists.
+ *   "Changed since you checked" marks an item whose tick did not carry over
+ *   from the previous version because the agent changed it.
+ * - The agent's notes and links are frozen and read-only.
  * - "Add checklist" adds one of the organization's templates through
  *   add_submission_checklist_at_review. Disabled once changes are requested.
  * - Every attachment / email chip has one View action that opens the
  *   existing viewers: AttachmentViewerModal and MessageList's
  *   ConversationModal (the "View Full" viewer).
  * - viewer="agent" (BACKLOG-3593, My Transactions): the same section, read
- *   only. No tick, no Add, no Request Changes sentence; the reviewer pill is
- *   plain text shown only on rows a reviewer marked.
+ *   only, showing the agent's OWN ticks and counts. No broker tick, no Add,
+ *   no Request Changes sentence.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -39,16 +42,19 @@ import { Button } from '@keepr/design-system';
 import { formatDate } from '@/lib/utils';
 import {
   ADD_OPEN_STATUSES,
-  TICK_OPEN_STATUSES,
+  changedSinceChecked,
   requestChangesAvailable,
   formatRequired,
+  hasReviewerCheckbox,
   overallRequiredCount,
   requiredCount,
-  showsReviewerPill,
+  tickFor,
+  tickOpenFor,
   type ChecklistItemView,
   type ChecklistLink,
   type ChecklistSectionView,
   type RequiredCount,
+  type SupersededBy,
   type TemplateOption,
 } from '@/lib/submissions/checklistModel';
 import { actorName } from '@/lib/submissions/history';
@@ -95,11 +101,30 @@ export interface ChecklistReviewProps {
    * whatever canTick / canDecide say. Default 'reviewer' (the broker page).
    */
   viewer?: 'reviewer' | 'agent';
+  /**
+   * BACKLOG-3596: whether a newer version of this submission exists ('newer')
+   * or is being sent ('uploading'). Ticking is closed on such a version.
+   */
+  supersededBy?: SupersededBy;
 }
 
 /** Copy owned by the coordinator (pm_comments dcc91c87, ruling 2). */
 export const ADD_DISABLED_REASON =
   'Changes were requested, so this version is closed. You can add a checklist to the next submission.';
+
+/** BACKLOG-3596: why the broker's checkboxes are closed on this version. */
+export const TICK_CLOSED_REASONS = {
+  needs_changes: 'Changes were requested, so this version is closed. You can check items on the next submission.',
+  newer: 'A newer version of this submission has been sent, so this version is closed. Check items on the newest version.',
+  uploading: 'A newer version of this submission is being sent, so this version is closed.',
+} as const;
+
+/** The reason shown beside closed checkboxes, or null when none is shown. */
+function tickClosedReason(status: string, supersededBy: SupersededBy): string | null {
+  if (supersededBy) return TICK_CLOSED_REASONS[supersededBy];
+  if (status === 'needs_changes') return TICK_CLOSED_REASONS.needs_changes;
+  return null;
+}
 
 function RequiredPill({ count }: { count: RequiredCount }) {
   const done = count.done === count.total;
@@ -138,6 +163,7 @@ export function ChecklistReview({
   messages,
   attachments,
   viewer: viewerRole = 'reviewer',
+  supersededBy = null,
 }: ChecklistReviewProps) {
   const isAgent = viewerRole === 'agent';
   const router = useRouter();
@@ -199,13 +225,17 @@ export function ChecklistReview({
     [attachmentsById, threads]
   );
 
-  const tickOpen = !isAgent && canTick && TICK_OPEN_STATUSES.includes(status);
+  const tickOpen = !isAgent && canTick && tickOpenFor(status, supersededBy);
+  const tickReason = !isAgent && canTick ? tickClosedReason(status, supersededBy) : null;
   const addOpen = ADD_OPEN_STATUSES.includes(status);
   const showAdd = !isAgent && canTick && (addOpen || status === 'needs_changes');
   const pointAtRequestChanges = !isAgent && requestChangesAvailable(status, canDecide);
-  const overall = overallRequiredCount(sections);
+  const overall = overallRequiredCount(sections, viewerRole);
 
   const onTick = async (item: ChecklistItemView) => {
+    // A disabled checkbox can still deliver a change event (jsdom does); a
+    // closed version never calls the RPC from here.
+    if (!tickOpen || pendingItem !== null) return;
     setPendingItem(item.id);
     setError(null);
     try {
@@ -291,6 +321,11 @@ export function ChecklistReview({
             {ADD_DISABLED_REASON}
           </p>
         )}
+        {loaded && sections.length > 0 && tickReason && (
+          <p id="checklist-tick-disabled-reason" className="basis-full text-sm text-gray-500">
+            {tickReason}
+          </p>
+        )}
       </div>
 
       {error && (
@@ -328,7 +363,7 @@ export function ChecklistReview({
                       <span className="rounded-full bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-800">Added</span>
                     )}
                   </span>
-                  <RequiredPill count={requiredCount(section.items)} />
+                  <RequiredPill count={requiredCount(section.items, viewerRole)} />
                 </button>
                 {isOpen && (
                   <div id={bodyId}>
@@ -362,9 +397,10 @@ export function ChecklistReview({
                       <p className="px-6 py-4 text-sm text-gray-500">This checklist has no items.</p>
                     )}
                     {section.items.map((item, itemIdx) => {
-                      const gap = item.isRequired && !item.isChecked && !section.addedAtReviewBy;
+                      const gap = item.isRequired && !tickFor(item, viewerRole) && !section.addedAtReviewBy;
                       const reviewedBy = item.reviewerCheckedBy ? actorName(item.reviewerCheckedBy, nameMap) : undefined;
-                      const pill = showsReviewerPill(section, item);
+                      const checkbox = !isAgent && hasReviewerCheckbox(section);
+                      const changed = !isAgent && checkbox && changedSinceChecked(item);
                       return (
                         <div
                           key={item.id}
@@ -373,7 +409,36 @@ export function ChecklistReview({
                             itemIdx > 0 || section.addedAtReviewBy ? 'border-t border-gray-200' : ''
                           }`}
                         >
-                          <ItemIcon item={item} />
+                          {checkbox ? (
+                            <div className="flex w-24 shrink-0 flex-col items-start gap-1">
+                              <span className="flex h-[22px] items-center">
+                                {pendingItem === item.id ? (
+                                  <Loader2 className="h-[18px] w-[18px] animate-spin text-primary-600" aria-hidden />
+                                ) : (
+                                  <input
+                                    type="checkbox"
+                                    checked={item.reviewerChecked}
+                                    disabled={!tickOpen || pendingItem !== null}
+                                    onChange={() => onTick(item)}
+                                    aria-label={`Checked: ${item.title}`}
+                                    aria-describedby={tickReason ? 'checklist-tick-disabled-reason' : undefined}
+                                    className="h-[18px] w-[18px] rounded border-gray-300 text-primary-600 focus:ring-2 focus:ring-primary-500 disabled:cursor-default"
+                                  />
+                                )}
+                              </span>
+                              {item.reviewerChecked && (reviewedBy || item.reviewerCheckedAt) && (
+                                <p className="text-[11px] leading-tight text-gray-500" data-testid="reviewer-meta">
+                                  {[reviewedBy, item.reviewerCheckedAt ? formatDate(item.reviewerCheckedAt) : null]
+                                    .filter(Boolean)
+                                    .join(' · ')}
+                                </p>
+                              )}
+                            </div>
+                          ) : isAgent ? (
+                            <ItemIcon item={item} />
+                          ) : (
+                            <Circle className="mt-0.5 h-[22px] w-[22px] shrink-0 text-gray-300" aria-hidden />
+                          )}
                           <div className="min-w-0 flex-1">
                             <div className="flex flex-wrap items-center gap-2">
                               <span className="text-sm font-medium text-gray-900">{item.title}</span>
@@ -385,6 +450,14 @@ export function ChecklistReview({
                                 {item.isRequired ? 'Required' : 'Optional'}
                               </span>
                               {gap && <span className="text-xs font-medium text-amber-700">Not yet checked</span>}
+                              {changed && (
+                                <span
+                                  className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700"
+                                  data-testid="changed-since-checked"
+                                >
+                                  Changed since you checked
+                                </span>
+                              )}
                             </div>
                             {item.description && <p className="mt-1 text-[13px] text-gray-500">{item.description}</p>}
                             {item.note && (
@@ -421,53 +494,6 @@ export function ChecklistReview({
                               </div>
                             )}
                           </div>
-                          {isAgent && pill && item.reviewerChecked && (
-                            <div
-                              className="flex w-full shrink-0 flex-row items-center gap-2 sm:w-auto sm:flex-col sm:items-end sm:gap-1.5"
-                              data-testid="reviewer-status"
-                            >
-                              <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-primary-500 bg-primary-100 px-[11px] py-[5px] text-xs font-semibold text-primary-800">
-                                <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
-                                Reviewed
-                              </span>
-                              {(reviewedBy || item.reviewerCheckedAt) && (
-                                <p className="text-[11px] text-gray-400 sm:text-right" data-testid="reviewer-meta">
-                                  {[reviewedBy, item.reviewerCheckedAt ? formatDate(item.reviewerCheckedAt) : null]
-                                    .filter(Boolean)
-                                    .join(' · ')}
-                                </p>
-                              )}
-                            </div>
-                          )}
-                          {!isAgent && pill && (item.reviewerChecked || tickOpen) && (
-                            <div className="flex w-full shrink-0 flex-row items-center gap-2 sm:w-auto sm:flex-col sm:items-end sm:gap-1.5">
-                              <button
-                                type="button"
-                                aria-pressed={item.reviewerChecked}
-                                disabled={!tickOpen || pendingItem !== null}
-                                onClick={() => onTick(item)}
-                                className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-[11px] py-[5px] text-xs font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 disabled:cursor-default ${
-                                  item.reviewerChecked
-                                    ? 'border-primary-500 bg-primary-100 text-primary-800'
-                                    : 'border-gray-300 bg-white text-gray-500 hover:border-primary-500 hover:text-primary-700'
-                                }`}
-                              >
-                                {pendingItem === item.id ? (
-                                  <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
-                                ) : (
-                                  <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
-                                )}
-                                {item.reviewerChecked ? 'Reviewed' : 'Mark reviewed'}
-                              </button>
-                              {item.reviewerChecked && (reviewedBy || item.reviewerCheckedAt) && (
-                                <p className="text-[11px] text-gray-400 sm:text-right" data-testid="reviewer-meta">
-                                  {[reviewedBy, item.reviewerCheckedAt ? formatDate(item.reviewerCheckedAt) : null]
-                                    .filter(Boolean)
-                                    .join(' · ')}
-                                </p>
-                              )}
-                            </div>
-                          )}
                         </div>
                       );
                     })}

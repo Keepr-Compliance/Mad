@@ -6,6 +6,12 @@
  * are the shapes lib/actions/submissionChecklists.ts returns, which mirror the
  * RPC returns in §7/§8 of 20260925073000_backlog_3477_submission_checklist_review.sql.
  * Messages/attachments carry the page's Message/Attachment columns.
+ *
+ * BACKLOG-3596 (founder design): on the broker page the item checkbox is the
+ * broker's tick; the agent's ticks are not shown; counts are broker ticks.
+ * The fixture makes the two layers disagree on purpose (agent-ticked items the
+ * broker has not ticked, and one item the broker ticked that the agent did
+ * not), so a build that reads the wrong layer reds.
  */
 
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -28,7 +34,12 @@ jest.mock('@/components/submission/AttachmentViewerModal', () => ({
     open && attachment ? <div data-testid="attachment-viewer">{attachment.filename}</div> : null,
 }));
 
-import { ChecklistReview, ADD_DISABLED_REASON, type ChecklistReviewProps } from '@/components/submission/ChecklistReview';
+import {
+  ChecklistReview,
+  ADD_DISABLED_REASON,
+  TICK_CLOSED_REASONS,
+  type ChecklistReviewProps,
+} from '@/components/submission/ChecklistReview';
 import type { ChecklistSectionView, ChecklistItemView } from '@/lib/submissions/checklistModel';
 import { REVIEW_MESSAGES } from '@/lib/submissions/reviewMessages';
 
@@ -45,6 +56,8 @@ const item = (id: string, title: string, over: Partial<ChecklistItemView> = {}):
   reviewerChecked: false,
   reviewerCheckedBy: null,
   reviewerCheckedAt: null,
+  clearedReviewerId: null,
+  clearedAt: null,
   links: [],
   ...over,
 });
@@ -98,7 +111,15 @@ const SECTIONS: ChecklistSectionView[] = [
     name: 'Asbestos',
     addedAtReviewBy: null,
     addedAtReviewAt: null,
-    items: [item('i-asb1', 'Asbestos disclosure', { isChecked: true }), item('i-asb2', 'AHERA inspection report')],
+    items: [
+      item('i-asb1', 'Asbestos disclosure', { isChecked: true }),
+      // Broker-ticked, NOT agent-ticked: the other disagreement.
+      item('i-asb2', 'AHERA inspection report', {
+        reviewerChecked: true,
+        reviewerCheckedBy: VIEWER,
+        reviewerCheckedAt: '2026-09-21T08:00:00.000000+00:00',
+      }),
+    ],
   },
   {
     id: 'hdr-lead',
@@ -164,57 +185,80 @@ function renderReview(over: Partial<ChecklistReviewProps> = {}) {
 }
 
 const sectionToggle = (name: string) => screen.getByRole('button', { name: new RegExp(`^${name}`) });
-const pills = () => screen.queryAllByRole('button', { name: /^(Mark reviewed|Reviewed)$/ });
+const boxes = () => screen.queryAllByRole('checkbox') as HTMLInputElement[];
+const rowOf = (title: string) => screen.getByText(title).closest('[data-testid="checklist-item"]') as HTMLElement;
+const boxOf = (title: string) => within(rowOf(title)).getByRole('checkbox') as HTMLInputElement;
 
 beforeEach(() => {
   jest.clearAllMocks();
 });
 
-describe('required counts (the agent’s ticks)', () => {
-  it('shows x of y required per section and overall', () => {
+describe('required counts (the broker’s ticks, BACKLOG-3596 P-C3)', () => {
+  it('broker view: x of y required counts the broker’s ticks, per section and overall', () => {
     renderReview();
-    expect(sectionToggle('Contract')).toHaveTextContent('2 of 3 required');
+    // Agent ticks would give 2 of 3 / 1 of 2 / 3 of 7.
+    expect(sectionToggle('Contract')).toHaveTextContent('1 of 3 required');
     expect(sectionToggle('Asbestos')).toHaveTextContent('1 of 2 required');
     expect(sectionToggle('Lead-Based Paint')).toHaveTextContent('0 of 2 required');
     const header = screen.getByRole('heading', { name: 'Checklists' }).parentElement!;
-    expect(header).toHaveTextContent('3 of 7 required');
+    expect(header).toHaveTextContent('2 of 7 required');
   });
 });
 
 describe('an unchecked required item (founder QA: pill only, no yellow row)', () => {
   it('keeps the Not yet checked pill but the row has no amber/yellow background', () => {
     renderReview();
-    fireEvent.click(sectionToggle('Asbestos'));
-    const row = screen.getByText('AHERA inspection report').closest('[data-testid="checklist-item"]') as HTMLElement;
-    expect(row).not.toBeNull();
+    const row = rowOf('Title commitment');
     expect(within(row).getByText('Not yet checked')).toBeInTheDocument();
     expect(row.className).not.toMatch(/\bbg-(amber|yellow)-/);
     expect(row.className).not.toMatch(/\bborder-(amber|yellow)-/);
   });
 });
 
-describe('reviewer pill (Q7)', () => {
-  it('shows only on required and agent-checked rows, never in a checklist added at review', () => {
+describe('broker checkbox (BACKLOG-3596)', () => {
+  it('P-C1: every item of a submitted checklist has the checkbox; a checklist added at review has none', () => {
     renderReview();
     fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
     const rows = screen.getAllByTestId('checklist-item');
-    const withPill = rows
-      .filter((r) => within(r).queryByRole('button', { name: /^(Mark reviewed|Reviewed)$/ }))
-      .map((r) => r.querySelector('span')!.textContent);
-    expect(withPill).toEqual([
-      'Buyer representation agreement',
-      'Executed purchase contract',
-      'Title commitment',
-      'Amendments and addenda',
-      'Asbestos disclosure',
-      'AHERA inspection report',
+    const withBox = rows.filter((r) => within(r).queryByRole('checkbox')).map((r) => within(r).getByRole('checkbox').getAttribute('aria-label'));
+    expect(withBox).toEqual([
+      'Checked: Buyer representation agreement',
+      'Checked: Executed purchase contract',
+      'Checked: Appraisal',
+      'Checked: Title commitment',
+      'Checked: Amendments and addenda',
+      'Checked: Asbestos disclosure',
+      'Checked: AHERA inspection report',
+    ]);
+    expect(rows).toHaveLength(9);
+  });
+
+  it('P-C2: the agent’s ticks are never shown to the broker', () => {
+    renderReview();
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
+    // Agent-ticked, broker-unticked: an empty checkbox and the broker's gap.
+    expect(boxOf('Buyer representation agreement').checked).toBe(false);
+    expect(within(rowOf('Buyer representation agreement')).getByText('Not yet checked')).toBeInTheDocument();
+    expect(boxOf('Asbestos disclosure').checked).toBe(false);
+    expect(boxOf('Amendments and addenda').checked).toBe(false);
+    // Broker-ticked, agent-unticked: checked, no gap.
+    expect(boxOf('AHERA inspection report').checked).toBe(true);
+    expect(within(rowOf('AHERA inspection report')).queryByText('Not yet checked')).toBeNull();
+    // No agent mark anywhere, including in the added-at-review section.
+    expect(document.querySelector('[aria-label="Checked by agent"]')).toBeNull();
+    expect(boxes().filter((b) => b.checked).map((b) => b.getAttribute('aria-label'))).toEqual([
+      'Checked: Executed purchase contract',
+      'Checked: AHERA inspection report',
     ]);
   });
 
-  it('a reviewed row reads Reviewed · who · when', () => {
+  it('P-C6: a checked item shows who and when under the check mark (a carried tick keeps its original reviewer)', () => {
     renderReview();
-    expect(screen.getByRole('button', { name: 'Reviewed' })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByTestId('reviewer-meta')).toHaveTextContent('Colleague Fixture · Sep 20, 2026');
+    const meta = within(rowOf('Executed purchase contract')).getByTestId('reviewer-meta');
+    expect(meta).toHaveTextContent('Colleague Fixture · Sep 20, 2026');
+    // Under the check mark: same column as the checkbox.
+    expect(meta.parentElement!.contains(boxOf('Executed purchase contract'))).toBe(true);
+    expect(within(rowOf('Title commitment')).queryByTestId('reviewer-meta')).toBeNull();
   });
 
   it('ticking calls the action and shows the returned reviewer', async () => {
@@ -226,11 +270,12 @@ describe('reviewer pill (Q7)', () => {
       reviewerCheckedAt: '2026-09-21T09:00:00.000000+00:00',
     });
     renderReview();
-    const row = screen.getByText('Buyer representation agreement').closest('[data-testid="checklist-item"]') as HTMLElement;
-    fireEvent.click(within(row).getByRole('button', { name: 'Mark reviewed' }));
-    await waitFor(() => expect(within(row).getByRole('button', { name: 'Reviewed' })).toBeInTheDocument());
+    fireEvent.click(boxOf('Buyer representation agreement'));
+    await waitFor(() => expect(boxOf('Buyer representation agreement').checked).toBe(true));
     expect(mockSetReviewerCheck).toHaveBeenCalledWith('sub-1', 'i-buyer', true);
-    expect(within(row).getByTestId('reviewer-meta')).toHaveTextContent('Viewer Fixture · Sep 21, 2026');
+    expect(within(rowOf('Buyer representation agreement')).getByTestId('reviewer-meta')).toHaveTextContent(
+      'Viewer Fixture · Sep 21, 2026'
+    );
     expect(mockRefresh).toHaveBeenCalled();
   });
 
@@ -243,28 +288,103 @@ describe('reviewer pill (Q7)', () => {
       reviewerCheckedAt: null,
     });
     renderReview();
-    fireEvent.click(screen.getByRole('button', { name: 'Reviewed' }));
+    fireEvent.click(boxOf('Executed purchase contract'));
     await waitFor(() => expect(mockSetReviewerCheck).toHaveBeenCalledWith('sub-1', 'i-contract', false));
-    await waitFor(() => expect(screen.queryByTestId('reviewer-meta')).not.toBeInTheDocument());
+    await waitFor(() => expect(within(rowOf('Executed purchase contract')).queryByTestId('reviewer-meta')).toBeNull());
   });
 
   it('a refused tick shows plain copy, never a code', async () => {
-    mockSetReviewerCheck.mockResolvedValue({
-      ok: false,
-      reason: 'not_open_for_review',
-      message: REVIEW_MESSAGES.not_open_for_review,
-    });
+    mockSetReviewerCheck.mockResolvedValue({ ok: false, reason: 'superseded', message: REVIEW_MESSAGES.superseded });
     renderReview();
-    fireEvent.click(pills()[0]);
+    fireEvent.click(boxOf('Title commitment'));
     const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent(REVIEW_MESSAGES.not_open_for_review);
-    expect(alert.textContent).not.toMatch(/42501|not_open_for_review/);
+    expect(alert).toHaveTextContent(
+      'A newer version of this submission has been sent, so this version is closed. Check items on the newest version.'
+    );
+    expect(alert.textContent).not.toMatch(/42501|superseded/);
   });
 
-  it('pills are read-only once the review is complete', () => {
+  it('checkboxes are read-only once the review is complete, with no reason line', () => {
     renderReview({ status: 'approved' });
-    expect(screen.queryByRole('button', { name: 'Mark reviewed' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Reviewed' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
+    expect(boxes().length).toBe(7);
+    expect(boxes().every((b) => b.disabled)).toBe(true);
+    expect(boxOf('Executed purchase contract').checked).toBe(true);
+    expect(document.getElementById('checklist-tick-disabled-reason')).toBeNull();
+  });
+
+  it('a viewer who cannot review sees the checkboxes read-only, with no reason line', () => {
+    renderReview({ canTick: false });
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
+    expect(boxes().length).toBe(7);
+    expect(boxes().every((b) => b.disabled)).toBe(true);
+    expect(document.getElementById('checklist-tick-disabled-reason')).toBeNull();
+  });
+});
+
+/**
+ * P-C9 (SR plan review 4e620109): the tick is closed, with a plain reason, on
+ * a version that has a newer version (arrived or still being sent) and once
+ * changes are requested — the same shape as the Add disable.
+ */
+describe('tick closed on needs_changes and on a superseded version (P-C9)', () => {
+  it.each([
+    ['needs_changes', null, TICK_CLOSED_REASONS.needs_changes, 'Changes were requested, so this version is closed. You can check items on the next submission.'],
+    ['needs_changes', 'newer', TICK_CLOSED_REASONS.newer, 'A newer version of this submission has been sent, so this version is closed. Check items on the newest version.'],
+    ['needs_changes', 'uploading', TICK_CLOSED_REASONS.uploading, 'A newer version of this submission is being sent, so this version is closed.'],
+    ['under_review', 'newer', TICK_CLOSED_REASONS.newer, 'A newer version of this submission has been sent, so this version is closed. Check items on the newest version.'],
+    ['under_review', 'uploading', TICK_CLOSED_REASONS.uploading, 'A newer version of this submission is being sent, so this version is closed.'],
+  ] as const)('status %s, newer version %s: disabled with the reason', (status, supersededBy, reason, literal) => {
+    renderReview({ status, supersededBy });
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
+    expect(reason).toBe(literal);
+    expect(boxes().length).toBe(7);
+    for (const b of boxes()) {
+      expect(b).toBeDisabled();
+      expect(b).toHaveAttribute('aria-describedby', 'checklist-tick-disabled-reason');
+    }
+    expect(document.getElementById('checklist-tick-disabled-reason')).toHaveTextContent(literal);
+    fireEvent.click(boxOf('Title commitment'));
+    expect(mockSetReviewerCheck).not.toHaveBeenCalled();
+  });
+
+  it.each(['submitted', 'resubmitted', 'under_review'])('control: %s with no newer version is open, no reason', (status) => {
+    renderReview({ status, supersededBy: null });
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
+    expect(boxes().length).toBe(7);
+    expect(boxes().every((b) => !b.disabled)).toBe(true);
+    expect(document.getElementById('checklist-tick-disabled-reason')).toBeNull();
+  });
+});
+
+describe('"Changed since you checked" (BACKLOG-3596 P-C4)', () => {
+  const cleared = { clearedReviewerId: COLLEAGUE, clearedAt: '2026-09-22T10:00:00.000000+00:00' };
+  const withItems = (over: Partial<ChecklistItemView>): ChecklistSectionView[] => [
+    { ...SECTIONS[0], items: [item('i-x', 'Inspection report', over)] },
+  ];
+
+  it('shows on an item whose tick did not carry over', () => {
+    renderReview({ sections: withItems(cleared) });
+    expect(within(rowOf('Inspection report')).getByTestId('changed-since-checked')).toHaveTextContent('Changed since you checked');
+    expect(boxOf('Inspection report').checked).toBe(false);
+  });
+
+  it('is gone once the broker checks it again', () => {
+    renderReview({
+      sections: withItems({ ...cleared, reviewerChecked: true, reviewerCheckedBy: VIEWER, reviewerCheckedAt: '2026-09-22T11:00:00.000000+00:00' }),
+    });
+    expect(screen.queryByTestId('changed-since-checked')).toBeNull();
+  });
+
+  it('is absent on an item that was never cleared (the 3596 columns absent read as null)', () => {
+    renderReview({ sections: withItems({ isChecked: true }) });
+    expect(screen.queryByTestId('changed-since-checked')).toBeNull();
+  });
+
+  it('never shows to the agent', () => {
+    renderReview({ sections: withItems(cleared), viewer: 'agent' });
+    expect(screen.queryByTestId('changed-since-checked')).toBeNull();
+    expect(document.body.textContent).not.toContain('Changed since you checked');
   });
 });
 
@@ -504,16 +624,23 @@ describe('agent viewer (BACKLOG-3593)', () => {
     }
   );
 
-  it('the reviewer pill is display-only text, with who and when, on reviewed rows only', () => {
+  it('P-C7: shows the agent’s own ticks and never the broker’s', () => {
     renderAgent();
     fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
-    const status = screen.getAllByTestId('reviewer-status');
-    expect(status).toHaveLength(1);
-    const row = status[0].closest('[data-testid="checklist-item"]') as HTMLElement;
-    expect(within(row).getByText('Executed purchase contract')).toBeInTheDocument();
-    expect(within(status[0]).getByText('Reviewed').tagName).toBe('SPAN');
-    expect(within(status[0]).queryByRole('button')).toBeNull();
-    expect(within(status[0]).getByTestId('reviewer-meta').textContent).toMatch(/^Colleague Fixture · /);
+    // No broker tick, name or time anywhere.
+    expect(screen.queryAllByTestId('reviewer-meta')).toHaveLength(0);
+    expect(screen.queryAllByTestId('reviewer-status')).toHaveLength(0);
+    expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
+    expect(screen.queryByText('Reviewed')).toBeNull();
+    // Broker-ticked, agent-unticked: the agent sees it unchecked.
+    const ahera = rowOf('AHERA inspection report');
+    expect(within(ahera).getByLabelText('Not checked')).toBeInTheDocument();
+    expect(within(ahera).getByText('Not yet checked')).toBeInTheDocument();
+    // Agent-ticked, broker-unticked: the agent sees their own tick.
+    expect(within(rowOf('Buyer representation agreement')).getByLabelText('Checked by agent')).toBeInTheDocument();
+    expect(screen.getAllByLabelText('Checked by agent')).toHaveLength(4);
+    // Only the banner names a colleague (who added a checklist), never a tick.
+    expect(document.body.textContent).not.toMatch(/Colleague Fixture ·|Viewer Fixture/);
   });
 
   it('an added-at-review section says who added it, with no call to act', () => {

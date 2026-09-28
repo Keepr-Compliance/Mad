@@ -17,7 +17,7 @@ import { resolveUserNames } from '@/lib/submissions/names';
 import { loadAddableTemplates, loadSubmissionChecklists } from '@/lib/submissions/checklists';
 import { markAsUnderReview } from '@/lib/submissions/markUnderReview';
 import { NO_CAPABILITIES, getReviewCapabilities } from '@/lib/submissions/reviewAccess';
-import type { ChecklistSectionView, TemplateOption } from '@/lib/submissions/checklistModel';
+import type { ChecklistSectionView, SupersededBy, TemplateOption } from '@/lib/submissions/checklistModel';
 import { loadVersionChain } from '@/lib/submissions/versions';
 import { SubmissionVersions } from '@/components/submission/SubmissionVersions';
 
@@ -155,6 +155,22 @@ async function getFullStatusHistory(
   return { history: allEntries, rootCreatedAt };
 }
 
+/**
+ * BACKLOG-3596: whether a newer version of this submission exists, in ANY
+ * status. Unlike loadVersionChain (which skips a version still uploading),
+ * a version being sent counts: the tick RPC refuses this version as soon as a
+ * child row exists, so the checkboxes close then too. A failed read answers
+ * null (the RPC still refuses, and the refusal is shown in plain words).
+ */
+async function getSupersededBy(submissionId: string, client: SupabaseClient): Promise<SupersededBy> {
+  const { data, error } = await client
+    .from('transaction_submissions')
+    .select('status')
+    .eq('parent_submission_id', submissionId);
+  if (error || !Array.isArray(data) || data.length === 0) return null;
+  return (data as { status: string | null }[]).some((r) => r.status !== 'uploading') ? 'newer' : 'uploading';
+}
+
 export default async function SubmissionDetailPage({ params }: PageProps) {
   const { id } = await params;
   const { client, impersonation } = await getDataClient();
@@ -250,14 +266,17 @@ export default async function SubmissionDetailPage({ params }: PageProps) {
   let checklistSections: ChecklistSectionView[] = [];
   let checklistsLoaded = false;
   let addableTemplates: TemplateOption[] = [];
+  let supersededBy: SupersededBy = null;
   if (showChecklists) {
-    const [loaded, templates] = await Promise.all([
+    const [loaded, templates, superseded] = await Promise.all([
       loadSubmissionChecklists(client, submission.id),
       capabilities.canTick ? loadAddableTemplates(client, submission.organization_id) : Promise.resolve([]),
+      getSupersededBy(submission.id, client),
     ]);
     checklistsLoaded = loaded.ok;
     checklistSections = loaded.ok ? loaded.sections : [];
     addableTemplates = templates;
+    supersededBy = superseded;
   }
 
   // BACKLOG-3477: names from public.users (same-org members), not profiles
@@ -357,6 +376,7 @@ export default async function SubmissionDetailPage({ params }: PageProps) {
           templates={addableTemplates}
           messages={showMessages ? gatedMessages : []}
           attachments={showAttachments ? attachments : []}
+          supersededBy={supersededBy}
         />
       )}
 

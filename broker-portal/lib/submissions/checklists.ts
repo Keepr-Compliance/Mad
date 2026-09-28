@@ -37,6 +37,9 @@ interface ItemRow {
   reviewer_checked: boolean;
   reviewer_checked_by: string | null;
   reviewer_checked_at: string | null;
+  /** BACKLOG-3596 columns; absent until that migration is applied. */
+  cleared_reviewer_id?: string | null;
+  cleared_at?: string | null;
 }
 
 interface LinkRow {
@@ -100,6 +103,8 @@ export function assembleSections(
       reviewerChecked: i.reviewer_checked,
       reviewerCheckedBy: i.reviewer_checked_by,
       reviewerCheckedAt: i.reviewer_checked_at,
+      clearedReviewerId: i.cleared_reviewer_id ?? null,
+      clearedAt: i.cleared_at ?? null,
       links: linksByItem.get(i.id) ?? [],
     });
     itemsByHeader.set(i.submission_checklist_id, list);
@@ -117,6 +122,36 @@ export function assembleSections(
     }));
 }
 
+const ITEM_COLUMNS =
+  'id, submission_checklist_id, title, description, is_required, is_checked, note, sort_order, reviewer_checked, reviewer_checked_by, reviewer_checked_at';
+/** BACKLOG-3596: read when the migration is live. */
+const CLEARED_COLUMNS = ', cleared_reviewer_id, cleared_at';
+
+/**
+ * PostgREST's answer to a select naming a column the table does not have
+ * (transcribed 2026-09-28 from the live API, before the 3596 migration):
+ * {"code":"42703","message":"column submission_checklist_items.cleared_reviewer_id does not exist"}
+ */
+function isMissingClearedColumn(error: { code?: string; message?: string } | null): boolean {
+  return !!error && error.code === '42703' && /cleared_(reviewer_id|at)/.test(error.message ?? '');
+}
+
+/**
+ * The items, with the 3596 cleared columns when the database has them. The
+ * portal ships before the 3596 migration is applied (release order, SR
+ * condition C-11), so a missing column falls back to the columns every
+ * version has: no "Changed since you checked" marker, everything else as
+ * before. Any other error is returned as is.
+ */
+async function loadItems(client: SupabaseClient, submissionId: string) {
+  const full = await client
+    .from('submission_checklist_items')
+    .select(ITEM_COLUMNS + CLEARED_COLUMNS)
+    .eq('submission_id', submissionId);
+  if (!isMissingClearedColumn(full.error)) return full;
+  return client.from('submission_checklist_items').select(ITEM_COLUMNS).eq('submission_id', submissionId);
+}
+
 export async function loadSubmissionChecklists(
   client: SupabaseClient,
   submissionId: string
@@ -126,12 +161,7 @@ export async function loadSubmissionChecklists(
       .from('submission_checklists')
       .select('id, template_id, template_name, sort_order, added_at_review_by, added_at_review_at')
       .eq('submission_id', submissionId),
-    client
-      .from('submission_checklist_items')
-      .select(
-        'id, submission_checklist_id, title, description, is_required, is_checked, note, sort_order, reviewer_checked, reviewer_checked_by, reviewer_checked_at'
-      )
-      .eq('submission_id', submissionId),
+    loadItems(client, submissionId),
     client
       .from('submission_checklist_links')
       .select('id, submission_checklist_item_id, kind, label, sort_order')
@@ -153,7 +183,7 @@ export async function loadSubmissionChecklists(
     ok: true,
     sections: assembleSections(
       headers.data as HeaderRow[],
-      items.data as ItemRow[],
+      items.data as unknown as ItemRow[],
       links.data as LinkRow[],
       members.data as MemberRow[]
     ),

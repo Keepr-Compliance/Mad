@@ -5,10 +5,14 @@
  * tables written by snapshot_submission_checklists (desktop, at submit) and
  * add_submission_checklist_at_review (portal, at review).
  *
- * COUNTS ARE THE AGENT'S TICKS. "x of y required" counts `is_checked` on
- * `is_required` items — what the agent submitted — not the reviewer's layer
- * (mock v4: Contract "4 of 6 required"; an added section "0 of 2").
+ * WHOSE TICKS COUNT DEPENDS ON WHO IS LOOKING (BACKLOG-3596, founder design):
+ * the broker page counts and shows the BROKER's ticks (`reviewer_checked`);
+ * the agent's own view (My Transactions, BACKLOG-3593) counts and shows the
+ * AGENT's ticks (`is_checked`). Neither side sees the other's ticks.
  */
+
+/** Who is looking: the broker review page, or the agent's own view. */
+export type ChecklistViewer = 'reviewer' | 'agent';
 
 export interface ChecklistLinkMember {
   kind: 'attachment' | 'email' | string;
@@ -28,13 +32,20 @@ export interface ChecklistItemView {
   title: string;
   description: string | null;
   isRequired: boolean;
-  /** The agent's tick, frozen at submit. Read-only here. */
+  /** The agent's tick, frozen at submit. Shown only to the agent. */
   isChecked: boolean;
   /** The agent's note, frozen at submit. Read-only here. */
   note: string | null;
   reviewerChecked: boolean;
   reviewerCheckedBy: string | null;
   reviewerCheckedAt: string | null;
+  /**
+   * BACKLOG-3596: set when a reviewer's tick on the previous version did not
+   * carry over because the agent changed the item. null before the 3596
+   * migration is applied.
+   */
+  clearedReviewerId: string | null;
+  clearedAt: string | null;
   links: ChecklistLink[];
 }
 
@@ -53,21 +64,26 @@ export interface RequiredCount {
   total: number;
 }
 
-export function requiredCount(items: ChecklistItemView[]): RequiredCount {
+/** The tick this viewer sees on an item: the broker's, or the agent's own. */
+export function tickFor(item: ChecklistItemView, viewer: ChecklistViewer): boolean {
+  return viewer === 'agent' ? item.isChecked : item.reviewerChecked;
+}
+
+export function requiredCount(items: ChecklistItemView[], viewer: ChecklistViewer): RequiredCount {
   let done = 0;
   let total = 0;
   for (const item of items) {
     if (!item.isRequired) continue;
     total += 1;
-    if (item.isChecked) done += 1;
+    if (tickFor(item, viewer)) done += 1;
   }
   return { done, total };
 }
 
-export function overallRequiredCount(sections: ChecklistSectionView[]): RequiredCount {
+export function overallRequiredCount(sections: ChecklistSectionView[], viewer: ChecklistViewer): RequiredCount {
   return sections.reduce<RequiredCount>(
     (acc, section) => {
-      const c = requiredCount(section.items);
+      const c = requiredCount(section.items, viewer);
       return { done: acc.done + c.done, total: acc.total + c.total };
     },
     { done: 0, total: 0 }
@@ -78,8 +94,6 @@ export function formatRequired(count: RequiredCount): string {
   return `${count.done} of ${count.total} required`;
 }
 
-/** Statuses in which the tick RPC accepts a change (§7 of the migration). */
-export const TICK_OPEN_STATUSES: readonly string[] = ['submitted', 'resubmitted', 'under_review', 'needs_changes'];
 /** Statuses in which the add RPC accepts a checklist (§8 of the migration). */
 export const ADD_OPEN_STATUSES: readonly string[] = ['submitted', 'resubmitted', 'under_review'];
 /**
@@ -107,13 +121,35 @@ export function requestChangesAvailable(status: string, canDecide: boolean): boo
 }
 
 /**
- * Whether a row carries the reviewer pill (ruling bf8c39b4, Q7): required
- * rows and rows the agent checked. Never in a checklist added at review — its
- * items are for the agent's next version and the tick RPC refuses them.
+ * Whether a section's items carry the broker's checkbox (BACKLOG-3596): every
+ * item, except in a checklist added at review — its items are for the agent's
+ * next version and the tick RPC refuses them.
  */
-export function showsReviewerPill(section: ChecklistSectionView, item: ChecklistItemView): boolean {
-  if (section.addedAtReviewBy) return false;
-  return item.isRequired || item.isChecked;
+export function hasReviewerCheckbox(section: ChecklistSectionView): boolean {
+  return !section.addedAtReviewBy;
+}
+
+/**
+ * Whether the broker can tick on this version (BACKLOG-3596). Only while it is
+ * open for a decision, and never once a newer version exists: the tick RPC
+ * refuses a superseded version (42501 superseded), and a tick there would never
+ * reach the newer version. On needs_changes the version is closed, the same
+ * as Add checklist.
+ */
+export function tickOpenFor(status: string, supersededBy: SupersededBy): boolean {
+  return isOpenForDecision(status) && supersededBy === null;
+}
+
+/**
+ * Whether a newer version of this submission exists: 'newer' when one has
+ * arrived, 'uploading' when one is still being sent, null when this is the
+ * newest.
+ */
+export type SupersededBy = 'newer' | 'uploading' | null;
+
+/** Whether an item shows "Changed since you checked" (broker view only). */
+export function changedSinceChecked(item: ChecklistItemView): boolean {
+  return item.clearedReviewerId !== null && !item.reviewerChecked;
 }
 
 export interface TemplateOption {

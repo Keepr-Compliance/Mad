@@ -9,6 +9,14 @@
  *                   20260925073000_backlog_3477_submission_checklist_review.sql:
  *                   {type, changed_at, changed_by (uuid), ...}, never a `status`
  *                   key (the shared shape ruled in pm_comments bf8c39b4, Q1).
+ *                   BACKLOG-3596 adds two, written by the carry-over when a
+ *                   new version arrives (changed_by = the resubmitting agent):
+ *                     checklist_review_cleared      {reason 'edited'|'removed',
+ *                       item_id, cleared_from_item_id, item_title,
+ *                       checklist_name, cleared_reviewer_id,
+ *                       cleared_reviewer_checked_at}
+ *                     checklist_review_unavailable  {reason 'unmatched_client'
+ *                       | 'no_previous_copy'}
  *
  * A typed entry is a muted line in the timeline. It never becomes the
  * "Current" status and never moves the status pill: only status entries do.
@@ -30,6 +38,9 @@ export interface StatusHistoryEntry {
   checklist_name?: string;
   checklist_id?: string;
   template_id?: string;
+  cleared_from_item_id?: string;
+  cleared_reviewer_id?: string;
+  cleared_reviewer_checked_at?: string;
   parentSubmissionId?: string;
 }
 
@@ -49,7 +60,17 @@ function tickWord(value: unknown): string {
   return value === true ? 'checked' : 'unchecked';
 }
 
-/** The one-line text of a typed entry, e.g. "Title commitment — unchecked → checked". */
+/** Optional cause on a checklist_review_unavailable entry, in plain words. */
+const UNAVAILABLE_CAUSES: Record<string, string> = {
+  unmatched_client: 'the agent sent it from an older version of Keepr',
+  no_previous_copy: 'the previous version’s checklists were not saved',
+};
+
+/**
+ * The one-line text of a typed entry, e.g. "Title commitment — unchecked → checked".
+ * Call it on entries whose changed_by is already a display name
+ * (resolveHistoryActors): the carry-over lines name the agent in the sentence.
+ */
 export function describeTypedEntry(entry: StatusHistoryEntry): string {
   switch (entry.type) {
     case 'checklist_review': {
@@ -58,6 +79,18 @@ export function describeTypedEntry(entry: StatusHistoryEntry): string {
     }
     case 'checklist_added':
       return `Checklist added: ${entry.checklist_name || 'Checklist'}`;
+    case 'checklist_review_cleared': {
+      const title = entry.item_title || 'Checklist item';
+      const who = entry.changed_by || 'the agent';
+      const verb = entry.reason === 'removed' ? 'removed' : 'changed';
+      return `${title} — unticked automatically: ${verb} by ${who} since your check`;
+    }
+    case 'checklist_review_unavailable': {
+      const cause = entry.reason ? UNAVAILABLE_CAUSES[entry.reason] : undefined;
+      return cause
+        ? `Previous review marks could not be carried over (${cause})`
+        : 'Previous review marks could not be carried over';
+    }
     default:
       return 'Submission updated';
   }
@@ -129,6 +162,23 @@ export function checklistChangesLabel(count: number): string {
 
 /** How many top-level items the timeline shows before "Show full history". */
 export const VISIBLE_HISTORY_ITEMS = 4;
+
+/**
+ * The broker's review marks on the checklist: the broker's own ticks and the
+ * carry-over lines about them. BACKLOG-3596 decision 2 / D4: the agent does not
+ * see the broker's ticks, so the agent's timeline leaves these out, on every
+ * version of the deal.
+ */
+export const BROKER_REVIEW_ENTRY_TYPES: readonly string[] = [
+  'checklist_review',
+  'checklist_review_cleared',
+  'checklist_review_unavailable',
+];
+
+/** The timeline the agent sees: everything except the broker's review marks. */
+export function withoutBrokerReviewEntries(entries: StatusHistoryEntry[]): StatusHistoryEntry[] {
+  return entries.filter((entry) => !(isTypedEntry(entry) && BROKER_REVIEW_ENTRY_TYPES.includes(entry.type as string)));
+}
 
 /** Replace raw changed_by ids with display names. */
 export function resolveHistoryActors(entries: StatusHistoryEntry[], names: NameMap): StatusHistoryEntry[] {

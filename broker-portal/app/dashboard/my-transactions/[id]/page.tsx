@@ -25,7 +25,10 @@
  * handed to StatusHistory.
  *
  * Checklists (BACKLOG-3593): the submission's checklists, read-only
- * (ChecklistReview viewer="agent"), between Status History and Messages. Read
+ * (ChecklistReview viewer="agent"), between Status History and Messages. The
+ * agent sees their OWN ticks and counts, never the broker's (BACKLOG-3596
+ * decision 2); the timeline leaves out the broker's review marks on every
+ * version (withoutBrokerReviewEntries, D4). Read
  * through the same session client (the copy tables' SELECT policies admit
  * `submitted_by = auth.uid()`). Fail-closed on transaction_checklists, read
  * from the feature set the gate already fetched for the brokerage (no second
@@ -43,7 +46,7 @@ import { StatusHistory } from '@/components/submission/StatusHistory';
 import { ChecklistReview } from '@/components/submission/ChecklistReview';
 import { UpsellPanel } from '@/components/my-transactions/UpsellPanel';
 import { agentChannelVisibility, getMyTransactionsGate } from '@/lib/my-transactions-access';
-import { resolveHistoryActors, type StatusHistoryEntry } from '@/lib/submissions/history';
+import { resolveHistoryActors, withoutBrokerReviewEntries, type StatusHistoryEntry } from '@/lib/submissions/history';
 import { resolveUserNames } from '@/lib/submissions/names';
 import { loadSubmissionChecklists } from '@/lib/submissions/checklists';
 import type { ChecklistSectionView } from '@/lib/submissions/checklistModel';
@@ -245,7 +248,7 @@ export default async function MyTransactionDetailPage({ params }: PageProps) {
   const submission = await getOwnSubmission(supabase, id, userId, organizationId);
   if (!submission) notFound();
 
-  const [visibility, messages, attachments, { history: rawHistory, rootCreatedAt }, checklists] = await Promise.all([
+  const [visibility, messages, attachments, { history: chainHistory, rootCreatedAt }, checklists] = await Promise.all([
     agentChannelVisibility(organizationId),
     getMessages(supabase, submission.id),
     getAttachments(supabase, submission.id),
@@ -253,9 +256,10 @@ export default async function MyTransactionDetailPage({ params }: PageProps) {
     getOwnChecklists(supabase, submission.id, features),
   ]);
 
+  const rawHistory = withoutBrokerReviewEntries(chainHistory);
   const names = await resolveUserNames(supabase, [
     ...rawHistory.map((entry) => entry.changed_by),
-    ...(checklists ?? []).flatMap((s) => [s.addedAtReviewBy, ...s.items.map((i) => i.reviewerCheckedBy)]),
+    ...(checklists ?? []).map((s) => s.addedAtReviewBy),
   ]);
   const history = resolveHistoryActors(rawHistory, names);
 
