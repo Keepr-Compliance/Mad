@@ -457,3 +457,83 @@ describe('broker output pin (BACKLOG-3593)', () => {
     expect(container.innerHTML).toMatchSnapshot();
   });
 });
+
+/**
+ * BACKLOG-3593: the agent's My Transactions page. Same sections, read only,
+ * whatever canTick / canDecide the page passes.
+ */
+describe('agent viewer (BACKLOG-3593)', () => {
+  const renderAgent = (over: Partial<ChecklistReviewProps> = {}) =>
+    renderReview({ viewer: 'agent', canTick: true, canDecide: true, ...over });
+
+  it('shows the sections, required counts, notes and Expand/Collapse all', () => {
+    renderAgent();
+    expect(sectionToggle('Contract')).toHaveTextContent('2 of 3 required');
+    expect(sectionToggle('Lead-Based Paint')).toHaveTextContent('0 of 2 required');
+    const header = screen.getByRole('heading', { name: 'Checklists' }).parentElement!;
+    expect(header).toHaveTextContent('3 of 7 required');
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
+    expect(screen.getAllByTestId('checklist-item')).toHaveLength(9);
+    expect(screen.getByText('Two addenda')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse all' }));
+    expect(screen.queryAllByTestId('checklist-item')).toHaveLength(0);
+  });
+
+  it.each(['submitted', 'under_review', 'needs_changes', 'approved'])(
+    'status %s: the only controls are section toggles, Expand/Collapse all and View chips',
+    (status) => {
+      renderAgent({ status });
+      fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
+      const names = screen.getAllByRole('button').map((b) => b.getAttribute('aria-label') ?? b.textContent?.trim());
+      expect(names.sort()).toEqual(
+        [
+          'Asbestos1 of 2 required',
+          'Collapse all',
+          'Contract2 of 3 required',
+          'Email not shown on this plan (not available to view)',
+          'Expand all',
+          'Lead-Based PaintAdded0 of 2 required',
+          'View Purchase_Contract_signed.pdf',
+          'View Title commitment attached',
+        ].sort()
+      );
+      expect(screen.queryByText('Mark reviewed')).toBeNull();
+      expect(screen.queryByText(/Add checklist/)).toBeNull();
+      expect(screen.queryByText(ADD_DISABLED_REASON)).toBeNull();
+      expect(document.querySelector('[aria-pressed]')).toBeNull();
+    }
+  );
+
+  it('the reviewer pill is display-only text, with who and when, on reviewed rows only', () => {
+    renderAgent();
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
+    const status = screen.getAllByTestId('reviewer-status');
+    expect(status).toHaveLength(1);
+    const row = status[0].closest('[data-testid="checklist-item"]') as HTMLElement;
+    expect(within(row).getByText('Executed purchase contract')).toBeInTheDocument();
+    expect(within(status[0]).getByText('Reviewed').tagName).toBe('SPAN');
+    expect(within(status[0]).queryByRole('button')).toBeNull();
+    expect(within(status[0]).getByTestId('reviewer-meta').textContent).toMatch(/^Colleague Fixture · /);
+  });
+
+  it('an added-at-review section says who added it, with no call to act', () => {
+    renderAgent();
+    const banner = screen.getByText(/at review\./).closest('p') as HTMLElement;
+    expect(banner.textContent).toBe('Added by Colleague Fixture at review.');
+    expect(screen.queryByTestId('added-banner-request-changes')).toBeNull();
+    expect(document.body.textContent).not.toMatch(/Request Changes|next version/);
+  });
+
+  it('names unavailable: the banner names nobody and nobody is a former member', () => {
+    renderAgent({ names: null });
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
+    expect(screen.getByText('Added at review.')).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/former member|colleague-id|viewer-id/);
+  });
+
+  it('View on a chip opens the existing viewer', () => {
+    renderAgent();
+    fireEvent.click(screen.getByRole('button', { name: 'View Purchase_Contract_signed.pdf' }));
+    expect(screen.getByTestId('attachment-viewer')).toHaveTextContent('Purchase_Contract_signed.pdf');
+  });
+});
