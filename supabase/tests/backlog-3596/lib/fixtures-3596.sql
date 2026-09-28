@@ -294,6 +294,69 @@ LANGUAGE sql AS $$
       || 'L-item-5:broker:2026-09-01 10:05,L-item-6:admin:2026-09-01 10:06'
 $$;
 
+-- add_as(uid, sub, template): a checklist added at review through the REAL
+-- add RPC as that user. Returns the new header id; any other result aborts.
+CREATE FUNCTION pg_temp.add_as(p_uid uuid, p_sub uuid, p_tpl uuid) RETURNS uuid
+LANGUAGE plpgsql AS $$
+DECLARE
+  res jsonb;
+BEGIN
+  PERFORM pg_temp.act_as(p_uid);
+  res := public.add_submission_checklist_at_review(p_sub, p_tpl);
+  PERFORM pg_temp.act_owner();
+  IF res ->> 'status' IS DISTINCT FROM 'added' THEN
+    RAISE EXCEPTION 'fixture: add_submission_checklist_at_review returned %', res;
+  END IF;
+  RETURN (res ->> 'checklist_id')::uuid;
+END
+$$;
+
+-- pulled(header[, sort]): a checklist added at review, as the desktop sends
+-- it in the next version's snapshot after pulling it (PR 2 of this change:
+-- each pulled local item takes the cloud item's id). One section, the field
+-- list of buildChecklistSnapshotPayload (electron/services/
+-- submissionChecklistSnapshot.ts:103-124): local_item_id = the cloud item
+-- id, the template's description / is_required / expected_document_type,
+-- is_checked and note as the pull leaves them (false, none), no links.
+CREATE FUNCTION pg_temp.pulled(p_hdr uuid, p_sort integer DEFAULT 2) RETURNS jsonb
+LANGUAGE sql AS $$
+  SELECT jsonb_build_array(jsonb_build_object(
+           'template_id', h.template_id::text,
+           'template_name', h.template_name,
+           'sort_order', p_sort,
+           'items', (SELECT jsonb_agg(jsonb_build_object(
+                              'title', i.title,
+                              'local_item_id', i.id::text,
+                              'description', i.description,
+                              'is_required', i.is_required,
+                              'expected_document_type', i.expected_document_type,
+                              'is_checked', false,
+                              'note', NULL,
+                              'sort_order', i.sort_order,
+                              'links', '[]'::jsonb) ORDER BY i.sort_order, i.title, i.id)
+                       FROM public.submission_checklist_items i
+                      WHERE i.submission_checklist_id = h.id)))
+    FROM public.submission_checklists h
+   WHERE h.id = p_hdr
+$$;
+
+-- added_v1(txn): version 1 of a deal whose agent sent only checklist B (so
+-- the fixture template tpl_t1_a is free to add), under_review, no ticks.
+CREATE FUNCTION pg_temp.added_v1(p_txn text) RETURNS uuid
+LANGUAGE plpgsql AS $$
+DECLARE
+  v1 uuid;
+BEGIN
+  v1 := pg_temp.build_v1(p_txn, jsonb_build_array(pg_temp.base_payload() -> 1), false);
+  PERFORM pg_temp.set_status(v1, 'under_review');
+  RETURN v1;
+END
+$$;
+
+-- pB(): the agent's own section of an added_v1 deal (checklist B).
+CREATE FUNCTION pg_temp.pb() RETURNS jsonb
+LANGUAGE sql AS $$ SELECT jsonb_build_array(pg_temp.base_payload() -> 1) $$;
+
 SET LOCAL check_function_bodies = on;
 
 SELECT 'fixtures-3596 loaded' AS fixtures;

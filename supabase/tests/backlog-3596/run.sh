@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# BACKLOG-3596 harness. Runs the SHIPPED migration
+# BACKLOG-3596 harness. Runs the SHIPPED migrations
 #   supabase/migrations/20260928120000_backlog_3596_broker_checklist_ticks.sql
+#   supabase/migrations/20260928130000_backlog_3596_review_refusals.sql
+#   supabase/migrations/20260928170000_backlog_3596_added_checklist_ticks.sql
 # on a real Postgres, on top of the migrations production holds for these
 # tables (the BACKLOG-3477 prelude, then BACKLOG-3547), and records what every
 # control and every mutant did.
@@ -25,10 +27,21 @@
 #   -> 3596 (or its mutant)
 #   -> [rollback-refusals controls: snapshot t3596_r0]
 #   -> the refusals file (or its mutant)
-#   -> [apply-twice controls: snapshot t3596_s1, 3596 and the refusals file again]
-#   -> [rollback controls: snapshot t3596_s2, rollback-refusals.sql, rollback.sql]
-#   -> [rollback-refusals controls: rollback-refusals.sql (or its mutant)]
+#   -> [rollback-refusals controls: snapshot t3596_r1]
+#   -> [rollback-added controls: snapshot t3596_a0]
+#   -> the added-ticks file (or its mutant)
+#   -> [apply-twice controls: snapshot t3596_s1, all three files again]
+#   -> [rollback controls: snapshot t3596_s2, rollback-added.sql,
+#       rollback-refusals.sql, rollback.sql]
+#   -> [rollback-refusals controls: rollback-added.sql, then
+#       rollback-refusals.sql (or its mutant)]
+#   -> [rollback-added controls: snapshot t3596_a1, rollback-added.sql (or
+#       its mutant)]
 #   -> control
+#
+# SR C-5: t3596_r0 / t3596_r1 bracket the refusals file ONLY, so c25's "the
+# refusals file changed exactly two rows" does not count the added-ticks
+# file; c25 then runs rollback-added.sql first, as a real rollback would.
 #
 #   bash run.sh gate | controls [name-fragment] | mutants [name-fragment]
 #   MATRIX=1 bash run.sh mutants [name-fragment]   every control, not just targets
@@ -57,11 +70,15 @@ ROLLBACK="$HERE/rollback.sql"
 # (run before ROLLBACK).
 REFUSALS="$MIGDIR/20260928130000_backlog_3596_review_refusals.sql"
 REFUSALS_RB="$HERE/rollback-refusals.sql"
+# The second follow-up file (ticks on checklists added at review), applied
+# after REFUSALS, and its rollback (run before REFUSALS_RB).
+ADDED="$MIGDIR/20260928170000_backlog_3596_added_checklist_ticks.sql"
+ADDED_RB="$HERE/rollback-added.sql"
 SSH_HOST="${SSH_HOST:?set SSH_HOST to the ssh alias of the test venue -- see the header}"
 CONTAINER="${PG_CONTAINER:?set PG_CONTAINER to the postgres container name on that venue -- see the header}"
 
 for f in "$MIG3473_1" "$MIG3473_2" "$MIG3535" "$MIG3474_1" "$MIG3474_2" "$MIG3476" "$MIG3477" "$MIG3547" \
-         "$MIGRATION" "$ROLLBACK" "$REFUSALS" "$REFUSALS_RB" "$LIB3473/fixtures.sql" "$LIB3473/venue-catalogue.sql" \
+         "$MIGRATION" "$ROLLBACK" "$REFUSALS" "$REFUSALS_RB" "$ADDED" "$ADDED_RB" "$LIB3473/fixtures.sql" "$LIB3473/venue-catalogue.sql" \
          "$LIB3473/venue-catalogue-verify.sql" "$T3477/lib/fixtures-3477.sql" "$HERE/lib/fixtures-3596.sql"; do
   [ -f "$f" ] || { echo "missing: $f" >&2; exit 2; }
 done
@@ -80,8 +97,10 @@ catalogue() {
 }
 
 # run_control <control> [migration] [rollback] [refusals] [refusals rollback]
+#             [added] [added rollback]
 run_control() {
-  local control="$1" mig="${2:-$MIGRATION}" rb="${3:-$ROLLBACK}" mig2="${4:-$REFUSALS}" rb2="${5:-$REFUSALS_RB}" out rc
+  local control="$1" mig="${2:-$MIGRATION}" rb="${3:-$ROLLBACK}" mig2="${4:-$REFUSALS}" rb2="${5:-$REFUSALS_RB}"
+  local mig3="${6:-$ADDED}" rb3="${7:-$ADDED_RB}" out rc
   set +e
   out=$( { echo "BEGIN;"
            catalogue
@@ -99,17 +118,27 @@ run_control() {
              echo "CREATE TEMP TABLE t3596_r0 AS SELECT * FROM pg_temp.snap3596();"
            fi
            cat "$mig2"
+           if grep -q '^-- harness: rollback-refusals' "$control"; then
+             echo "CREATE TEMP TABLE t3596_r1 AS SELECT * FROM pg_temp.snap3596();"
+           fi
+           if grep -q '^-- harness: rollback-added' "$control"; then
+             echo "CREATE TEMP TABLE t3596_a0 AS SELECT * FROM pg_temp.snap3596();"
+           fi
+           cat "$mig3"
            if grep -q '^-- harness: apply-twice' "$control"; then
              echo "CREATE TEMP TABLE t3596_s1 AS SELECT * FROM pg_temp.snap3596();"
-             cat "$mig" "$mig2"
+             cat "$mig" "$mig2" "$mig3"
            fi
            if grep -q '^-- harness: rollback$' "$control"; then
              echo "CREATE TEMP TABLE t3596_s2 AS SELECT * FROM pg_temp.snap3596();"
-             cat "$rb2" "$rb"
+             cat "$rb3" "$rb2" "$rb"
            fi
            if grep -q '^-- harness: rollback-refusals' "$control"; then
-             echo "CREATE TEMP TABLE t3596_r1 AS SELECT * FROM pg_temp.snap3596();"
-             cat "$rb2"
+             cat "$rb3" "$rb2"
+           fi
+           if grep -q '^-- harness: rollback-added' "$control"; then
+             echo "CREATE TEMP TABLE t3596_a1 AS SELECT * FROM pg_temp.snap3596();"
+             cat "$rb3"
            fi
            cat "$control"
            echo "SELECT 'ASSERTIONS=' || current_setting('t3473.asserts');"
@@ -167,19 +196,21 @@ case "${1:-}" in
   mutants)
     only="${2:-}"; total=0; missed=0
     tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-    python3 "$HERE/lib/mutants.py" "$MIGRATION" "$ROLLBACK" "$REFUSALS" "$REFUSALS_RB" "$tmp"
+    python3 "$HERE/lib/mutants.py" "$MIGRATION" "$ROLLBACK" "$REFUSALS" "$REFUSALS_RB" "$ADDED" "$ADDED_RB" "$tmp"
     for m in "$tmp"/m*.sql; do
       name="$(basename "$m" .sql)"
       [ -n "$only" ] && [[ "$name" != *"$only"* ]] && continue
       total=$((total+1))
       targets="$(cat "$tmp/$name.targets")"
       kind="$(cat "$tmp/$name.file")"
-      mig="$MIGRATION"; rb="$ROLLBACK"; mig2="$REFUSALS"; rb2="$REFUSALS_RB"
+      mig="$MIGRATION"; rb="$ROLLBACK"; mig2="$REFUSALS"; rb2="$REFUSALS_RB"; mig3="$ADDED"; rb3="$ADDED_RB"
       case "$kind" in
         migration)         base="$MIGRATION";   mig="$m" ;;
         rollback)          base="$ROLLBACK";    rb="$m" ;;
         refusals)          base="$REFUSALS";    mig2="$m" ;;
         refusals-rollback) base="$REFUSALS_RB"; rb2="$m" ;;
+        added)             base="$ADDED";       mig3="$m" ;;
+        added-rollback)    base="$ADDED_RB";    rb3="$m" ;;
         *) echo "$name: unknown kind '$kind'" >&2; exit 1 ;;
       esac
       changed="$(diff "$base" "$m" | grep -c '^[<>]' || true)"
@@ -192,7 +223,7 @@ case "${1:-}" in
       [ ${#run[@]} -gt 0 ] || { echo "$name: no control matches '$targets'" >&2; exit 1; }
       reds=(); greens=(); details=()
       for c in "${run[@]}"; do
-        run_control "$c" "$mig" "$rb" "$mig2" "$rb2"
+        run_control "$c" "$mig" "$rb" "$mig2" "$rb2" "$mig3" "$rb3"
         cn="$(basename "$c" .sql | cut -d- -f1)"
         case "$CONTROL_RESULT" in
           RED)  reds+=("$cn"); details+=("      $cn: $CONTROL_DETAIL") ;;
@@ -213,5 +244,5 @@ case "${1:-}" in
     [ $total -gt 0 ] || { echo "mutants: 0 mutants run -- a failure" >&2; exit 1; }
     [ $missed -eq 0 ] || exit 1 ;;
 
-  *) sed -n '2,39p' "${BASH_SOURCE[0]}"; exit 2 ;;
+  *) sed -n '2,50p' "${BASH_SOURCE[0]}"; exit 2 ;;
 esac

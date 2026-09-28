@@ -3,7 +3,7 @@
  *
  * WHAT THIS CAN PROVE: what the migration file (and its rollback) says. CI has
  * no database. The behaviour is proved on a real Postgres by
- * supabase/tests/backlog-3596 (controls c00-c25, 50 mutants); this file pins
+ * supabase/tests/backlog-3596 (controls c00-c31, 62 mutants); this file pins
  * the lines a later edit is most likely to drop or loosen, so that such a
  * change fails in CI too.
  */
@@ -18,6 +18,8 @@ const MIG_3477 = '20260925073000_backlog_3477_submission_checklist_review.sql';
 const ROLLBACK = join(REPO, 'supabase/tests/backlog-3596/rollback.sql');
 const REFUSALS = '20260928130000_backlog_3596_review_refusals.sql';
 const REFUSALS_RB = join(REPO, 'supabase/tests/backlog-3596/rollback-refusals.sql');
+const ADDED = '20260928170000_backlog_3596_added_checklist_ticks.sql';
+const ADDED_RB = join(REPO, 'supabase/tests/backlog-3596/rollback-added.sql');
 
 function read(path: string): string {
   return readFileSync(path, 'utf8').replace(/\r\n?/g, '\n');
@@ -290,6 +292,91 @@ describe('BACKLOG-3596 — the refusals file (add on a superseded version; new t
     );
     expect(rawBody(rb, 'set_submission_checklist_reviewer_check')).toBe(
       rawBody(read(join(MIGRATIONS_DIR, migrationFile())), 'set_submission_checklist_reviewer_check'),
+    );
+  });
+});
+
+describe('BACKLOG-3596 — the added-ticks file (ticks on a checklist added at review)', () => {
+  const raw = () => read(join(MIGRATIONS_DIR, ADDED));
+  const s = () => statements(raw());
+  const tk = () => block(s(), 'CREATE OR REPLACE FUNCTION public.set_submission_checklist_reviewer_check(', '$$;');
+  const cr = () => block(s(), 'CREATE OR REPLACE FUNCTION public.carry_submission_checklist_reviews(', '$$;');
+  const ADDED_REFUSAL =
+    "  IF v_row.added_at_review_by IS NOT NULL THEN\n    RAISE EXCEPTION 'added_at_review' USING ERRCODE = '42501';\n  END IF;\n";
+  const CARRY_EDITS: Array<[string, string]> = [
+    [
+      '               pi.reviewer_checked_by, pi.reviewer_checked_at, pi.note AS parent_note,\n',
+      '               pi.reviewer_checked_by, pi.reviewer_checked_at, pi.note AS parent_note,\n               ph.added_at_review_by AS added_by,\n',
+    ],
+    [
+      '           AND ni.local_item_id = pi.local_item_id\n',
+      '           AND ni.local_item_id = COALESCE(pi.local_item_id, CASE WHEN ph.added_at_review_by IS NOT NULL THEN pi.id::text END)\n',
+    ],
+    [
+      '           AND pi.local_item_id IS NOT NULL\n',
+      '           AND (pi.local_item_id IS NOT NULL OR ph.added_at_review_by IS NOT NULL)\n',
+    ],
+    [
+      "          'reason', 'removed',\n",
+      "          'reason', CASE WHEN r.added_by IS NOT NULL THEN 'not_carried' ELSE 'removed' END,\n",
+    ],
+  ];
+
+  it('sorts after the refusals file, opens no transaction, and touches only the tick and the carry', () => {
+    expect(ADDED.slice(0, 14) > REFUSALS.slice(0, 14)).toBe(true);
+    expect(s()).not.toMatch(/(^|;)\s*(BEGIN|COMMIT)\s*;/i);
+    expect(s().match(/CREATE OR REPLACE FUNCTION/g)).toHaveLength(2);
+    expect(s()).not.toMatch(/CREATE (POLICY|TRIGGER)|DROP |ALTER TABLE|service_role|SET ROLE/i);
+  });
+
+  it('the tick is the refusals-file body minus the added_at_review refusal; every other refusal stays, in order', () => {
+    const before = rawBody(read(join(MIGRATIONS_DIR, REFUSALS)), 'set_submission_checklist_reviewer_check');
+    expect(before.split(ADDED_REFUSAL)).toHaveLength(2);
+    expect(rawBody(raw(), 'set_submission_checklist_reviewer_check')).toBe(before.replace(ADDED_REFUSAL, ''));
+    const t = tk();
+    expect(t).not.toContain("'added_at_review'");
+    const auth = t.lastIndexOf("RAISE EXCEPTION 'not_authorized'");
+    const open = t.indexOf("RAISE EXCEPTION 'not_open_for_review'");
+    const sup = t.indexOf("RAISE EXCEPTION 'superseded'");
+    const nc = t.indexOf("IF v_row.status = 'needs_changes' THEN RAISE EXCEPTION 'not_open_for_review'");
+    expect(auth).toBeGreaterThan(0);
+    expect(open).toBeGreaterThan(auth);
+    expect(sup).toBeGreaterThan(open);
+    expect(nc).toBeGreaterThan(sup);
+    expect(nc).toBeLessThan(t.indexOf('UPDATE public.submission_checklist_items'));
+  });
+
+  it('the carry is the 3596 body plus exactly the four added-item edits', () => {
+    let expected = rawBody(read(join(MIGRATIONS_DIR, migrationFile())), 'carry_submission_checklist_reviews');
+    for (const [from, to] of CARRY_EDITS) {
+      expect(expected.split(from)).toHaveLength(2);
+      expected = expected.replace(from, to);
+    }
+    expect(rawBody(raw(), 'carry_submission_checklist_reviews')).toBe(expected);
+  });
+
+  it('the carry still requires the same title and template for an added item', () => {
+    const c = cr();
+    expect(c).toContain('AND ni.title = pi.title AND nh.template_id IS NOT DISTINCT FROM ph.template_id');
+  });
+
+  it('keeps both grants (definer, empty search_path, authenticated only)', () => {
+    for (const fn of ['set_submission_checklist_reviewer_check(uuid, boolean)', 'carry_submission_checklist_reviews(uuid)']) {
+      expect(s()).toContain(`REVOKE EXECUTE ON FUNCTION public.${fn} FROM PUBLIC, anon;`);
+      expect(s()).toContain(`GRANT EXECUTE ON FUNCTION public.${fn} TO authenticated;`);
+      expect(s()).not.toMatch(new RegExp(`GRANT EXECUTE ON FUNCTION public\\.${fn.replace(/[()]/g, '\\$&')} TO [^;]*anon`));
+    }
+    expect(tk()).toContain("RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = ''");
+    expect(cr()).toContain("RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = ''");
+  });
+
+  it('rollback-added.sql restores the tick from the refusals file and the carry from 3596, verbatim', () => {
+    const rb = read(ADDED_RB);
+    expect(rawBody(rb, 'set_submission_checklist_reviewer_check')).toBe(
+      rawBody(read(join(MIGRATIONS_DIR, REFUSALS)), 'set_submission_checklist_reviewer_check'),
+    );
+    expect(rawBody(rb, 'carry_submission_checklist_reviews')).toBe(
+      rawBody(read(join(MIGRATIONS_DIR, migrationFile())), 'carry_submission_checklist_reviews'),
     );
   });
 });
