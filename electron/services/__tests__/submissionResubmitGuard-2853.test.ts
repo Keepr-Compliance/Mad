@@ -121,6 +121,19 @@
  */
 
 jest.mock("../supabaseService");
+// BACKLOG-3600 / BACKLOG-3599: this suite has no local database (databaseService
+// is automocked and dbConnection is real, so ensureDb() throws). The checklist
+// snapshot's local read and the resubmit's owed-pull read go straight to the
+// db modules, not through databaseService; before BACKLOG-3600 the throw was
+// swallowed, now a failed local checklist read fails the submit. The deal
+// here has no checklists and no owed pull, stated as such.
+jest.mock("../db/checklistDbService", () => ({
+  getChecklistsForTransaction: async () => ({ checklists: [], requiredDone: 0, requiredTotal: 0 }),
+}));
+jest.mock("../db/submissionDbService", () => ({
+  ...jest.requireActual("../db/submissionDbService"),
+  getOwedReviewChecklistPullsFor: () => [],
+}));
 jest.mock("../supabaseStorageService");
 jest.mock("../databaseService");
 jest.mock("../logService");

@@ -434,7 +434,7 @@ export const TRANSACTION_COLUMN_POLICY: Record<TransactionColumn, ColumnPolicy> 
   metadata: {
     insert: "db-default",
     update: "db-default",
-    why: "No caller passes the JSON blob on either path today, and it has no reader on the write paths. Left closed rather than opened speculatively.",
+    why: "Closed to the generic insert/update: no caller passes the JSON blob on either path. Its one writer is dedicated — BACKLOG-3599's owed broker-checklist pull set ($.reviewChecklistPullOwed, submissionDbService.markReviewChecklistPullOwed / clearReviewChecklistPullOwed). Opening this to 'writable' would let a spread of a whole transaction row overwrite that set.",
   },
   created_at: {
     insert: "db-default",

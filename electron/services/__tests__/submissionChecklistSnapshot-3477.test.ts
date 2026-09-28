@@ -105,10 +105,14 @@ import databaseService from "../databaseService";
 import logService from "../logService";
 import { addChecklistLink, selectChecklistTemplate } from "../db/checklistDbService";
 import {
+  SNAPSHOT_RETRY,
   SNAPSHOT_RPC,
   buildChecklistSnapshotPayload,
   type SnapshotChecklistPayload,
 } from "../submissionChecklistSnapshot";
+import { CHECKLISTS_NOT_SENT_ERROR } from "../submissionService";
+import { getOwedReviewChecklistPullsFor, markReviewChecklistPullOwed } from "../db/submissionDbService";
+import * as Sentry from "@sentry/electron/main";
 import { getChecklistsForTransaction } from "../db/checklistDbService";
 
 const submissionDb = jest.requireActual("../db/submissionDbService") as typeof import("../db/submissionDbService");
@@ -147,6 +151,23 @@ class FakeSupabase {
   /** `check_feature_access(org, 'transaction_checklists') ->> 'allowed'`. */
   checklistsFeatureAllowed = true;
   rpcCalls: { fn: string; args: Row; parentStatusAtCall: unknown }[] = [];
+  /**
+   * BACKLOG-3600: what the Nth snapshot call does, in order; past the end of
+   * the script every call runs normally. Shapes, from supabase-js:
+   *   "network"  a fetch failure: `{ code: "", message: "TypeError: fetch failed" }`
+   *              (transcribed from @supabase/postgrest-js dist/index.cjs:328-367:
+   *              the fetch catch returns `code: ""`, `message: "<name>: <message>"`)
+   *   "lost"     the call COMMITS, then the response is lost as a fetch failure
+   *   "hang"     never settles (bounded only by the caller's timeout)
+   *   PgError    returned as the error, nothing written
+   */
+  rpcScript: Array<"network" | "lost" | "hang" | PgError | undefined> = [];
+  /** Insert calls per table (one `.insert(...)` = one call, however many rows). */
+  insertCalls: Record<string, number> = {};
+  /** BACKLOG-3599: tables whose SELECTs return an error (a failed pull). */
+  failReadsOf = new Set<string>();
+  /** BACKLOG-3599: `uploading` submissions present at each checklist-header read. */
+  uploadingAtChecklistRead: number[] = [];
   private seq = 0;
   private id(prefix: string): string {
     this.seq += 1;
@@ -166,6 +187,14 @@ class FakeSupabase {
     const matched = () => all().filter((r) => filters.every((f) => f(r)));
 
     const run = (): { data: unknown; error: PgError | null } => {
+      if (mode === "select" && this.failReadsOf.has(tableName)) {
+        return { data: null, error: { code: "", message: "TypeError: fetch failed" } };
+      }
+      if (mode === "select" && tableName === "submission_checklists") {
+        this.uploadingAtChecklistRead.push(
+          this.tables.transaction_submissions.filter((t) => t.status === "uploading").length,
+        );
+      }
       if (mode === "select") {
         const out = matched();
         return { data: limitN === null ? out : out.slice(0, limitN), error: null };
@@ -180,6 +209,7 @@ class FakeSupabase {
         return { data: null, error: null };
       }
       const incoming = Array.isArray(payload) ? payload : [payload as Row];
+      this.insertCalls[tableName] = (this.insertCalls[tableName] ?? 0) + 1;
       for (const rec of incoming) all().push({ id: rec.id ?? this.id(tableName), ...rec });
       return { data: incoming, error: null };
     };
@@ -191,6 +221,11 @@ class FakeSupabase {
       delete: () => ((mode = "delete"), builder),
       eq: (c: string, v: unknown) => (filters.push((r) => r[c] === v), builder),
       in: (c: string, vs: unknown[]) => (filters.push((r) => vs.includes(r[c])), builder),
+      not: (c: string, op: string, v: unknown) => {
+        if (op !== "is" || v !== null) throw new Error("FakeSupabase: unsupported not()");
+        filters.push((r) => r[c] !== null && r[c] !== undefined);
+        return builder;
+      },
       order: () => builder,
       limit: (n: number) => ((limitN = n), builder),
       maybeSingle: () => {
@@ -220,6 +255,16 @@ class FakeSupabase {
   rpc(fn: string, args: Row): Promise<{ data: unknown; error: PgError | null }> {
     const parent = this.tables.transaction_submissions.find((s) => s.id === args.p_submission_id);
     this.rpcCalls.push({ fn, args, parentStatusAtCall: parent?.status });
+    const scripted = fn === SNAPSHOT_RPC ? this.rpcScript[this.rpcCalls.length - 1] : undefined;
+    const networkError = { data: null, error: { code: "", message: "TypeError: fetch failed" } };
+    if (scripted === "network") return Promise.resolve(networkError);
+    if (scripted === "hang") return new Promise(() => undefined);
+    if (scripted === "lost") return this.runSnapshot(args).then(() => networkError);
+    if (scripted) return Promise.resolve({ data: null, error: scripted });
+    return this.runSnapshot(args, fn);
+  }
+
+  private runSnapshot(args: Row, fn: string = SNAPSHOT_RPC): Promise<{ data: unknown; error: PgError | null }> {
     if (fn !== SNAPSHOT_RPC) {
       return Promise.resolve({ data: null, error: { code: "42883", message: `function ${fn} does not exist` } });
     }
@@ -249,10 +294,21 @@ class FakeSupabase {
         });
       }
       if (!this.submitterMayInsert(sid, true)) return Promise.resolve(refuse("submission_checklists"));
+      // supabase/migrations/20260925073000_backlog_3477_submission_checklist_review.sql:101-103
+      //   CREATE UNIQUE INDEX IF NOT EXISTS submission_checklists_submission_template_key
+      //     ON public.submission_checklists (submission_id, template_id) WHERE template_id IS NOT NULL;
       const clash = [...this.tables.submission_checklists, ...staged.submission_checklists].some(
         (h) => templateId !== null && h.submission_id === sid && h.template_id === templateId,
       );
-      if (clash) return Promise.resolve({ data: null, error: { code: "23505", message: "duplicate key" } });
+      if (clash) {
+        return Promise.resolve({
+          data: null,
+          error: {
+            code: "23505",
+            message: 'duplicate key value violates unique constraint "submission_checklists_submission_template_key"',
+          },
+        });
+      }
       const headerId = this.id("scl");
       staged.submission_checklists.push({
         id: headerId,
@@ -266,6 +322,24 @@ class FakeSupabase {
       n.checklists += 1;
       for (const it of (c.items as Row[]) ?? []) {
         if (!this.submitterMayInsert(sid, false)) return Promise.resolve(refuse("submission_checklist_items"));
+        // supabase/migrations/20260928120000_backlog_3596_broker_checklist_ticks.sql:96
+        //   submission_checklist_items_submission_local_item_key
+        //     ON (submission_id, local_item_id) WHERE local_item_id IS NOT NULL
+        const localItemId = it.local_item_id == null || it.local_item_id === "" ? null : String(it.local_item_id);
+        const itemClash =
+          localItemId !== null &&
+          [...this.tables.submission_checklist_items, ...staged.submission_checklist_items].some(
+            (x) => x.submission_id === sid && x.local_item_id === localItemId,
+          );
+        if (itemClash) {
+          return Promise.resolve({
+            data: null,
+            error: {
+              code: "23505",
+              message: 'duplicate key value violates unique constraint "submission_checklist_items_submission_local_item_key"',
+            },
+          });
+        }
         const itemId = this.id("sci");
         staged.submission_checklist_items.push({
           id: itemId,
@@ -274,8 +348,7 @@ class FakeSupabase {
           title: it.title,
           // BACKLOG-3596 migration 20260928120000 §4: NULLIF(it ->> 'local_item_id', '').
           // A payload without the key (an older desktop) stores NULL.
-          local_item_id:
-            it.local_item_id == null || it.local_item_id === "" ? null : String(it.local_item_id),
+          local_item_id: localItemId,
           description: it.description ?? null,
           is_required: it.is_required ?? false,
           expected_document_type: it.expected_document_type ?? null,
@@ -765,5 +838,231 @@ describe("BACKLOG-3596 — the snapshot sends each item's local id", () => {
     const stored = fake.tables.submission_checklist_items.filter((i) => i.submission_id === sid);
     expect(stored).toHaveLength(4);
     expect(stored.every((i) => i.local_item_id === null)).toBe(true);
+  });
+});
+
+// ============================================================================
+// BACKLOG-3600 — a checklist copy that fails on the network fails the submit
+// ============================================================================
+/**
+ * Wrong implementations these catch (plan 62c658e1, SR conditions 486eefd9):
+ *   warning shown on a network failure (submits anyway)   -> D1
+ *   the retry re-runs the attachment upload / insert      -> D2
+ *   a 23505 after a lost response treated as a failure    -> D3
+ *   42501 (plan without checklists) retried or blocking   -> D4
+ *   a 23505 on the FIRST call treated as written          -> D7
+ *   an attempt that hangs forever                         -> D6
+ */
+describe("BACKLOG-3600 — the checklist copy is retried, then fails the submit", () => {
+  const saved = { ...SNAPSHOT_RETRY, backoffMs: [...SNAPSHOT_RETRY.backoffMs] };
+  beforeEach(() => {
+    SNAPSHOT_RETRY.attempts = 3;
+    SNAPSHOT_RETRY.attemptTimeoutMs = 2000;
+    SNAPSHOT_RETRY.backoffMs = [1, 1];
+  });
+  afterAll(() => {
+    Object.assign(SNAPSHOT_RETRY, saved);
+  });
+
+  const copyRows = () =>
+    ["submission_checklists", "submission_checklist_items", "submission_checklist_links", "submission_checklist_link_members"].map(
+      (t) => [t, fake.tables[t].length],
+    );
+  const localStatus = () =>
+    (db.prepare(`SELECT submission_status, submission_id FROM transactions WHERE id = ?`).get(TX) as Row);
+
+  it("D1: network failure on every attempt -> nothing submitted, the agent is told why, no warning field", async () => {
+    await seedChecklists();
+    fake.rpcScript = ["network", "network", "network"];
+    const before = localStatus();
+
+    const result = await submissionService.submitTransaction(TX);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe(CHECKLISTS_NOT_SENT_ERROR);
+    expect("checklistsNotSent" in result).toBe(false);
+    expect(fake.rpcCalls).toHaveLength(3);
+    // The uploading row is gone: the broker never sees a version.
+    expect(fake.tables.transaction_submissions).toHaveLength(0);
+    expect(copyRows()).toEqual(copyRows().map(([t]) => [t, 0]));
+    expect(localStatus()).toEqual(before);
+    // The failure text is what the modal shows and what error_logs records.
+    expect(fake.tables.error_logs.map((e) => e.error_message)).toEqual([CHECKLISTS_NOT_SENT_ERROR]);
+  });
+
+  it("D2: one network failure, then success -> submitted with one copy; the attachments were uploaded once", async () => {
+    await seedChecklists();
+    fake.rpcScript = ["network"];
+
+    const result = await submissionService.submitTransaction(TX);
+
+    expect(result.success).toBe(true);
+    expect("checklistsNotSent" in result).toBe(false);
+    expect(fake.rpcCalls).toHaveLength(2);
+    // The SAME payload object on both attempts: no second local read.
+    expect(fake.rpcCalls[1].args.p_checklists).toBe(fake.rpcCalls[0].args.p_checklists);
+    expect(fake.tables.submission_checklists).toHaveLength(2);
+    expect(fake.tables.transaction_submissions.map((s) => s.status)).toEqual(["submitted"]);
+    // The retry did not re-run anything upstream of it.
+    expect(supabaseStorageService.uploadAttachments as jest.Mock).toHaveBeenCalledTimes(1);
+    expect(fake.insertCalls.submission_attachments).toBe(1);
+    expect(fake.tables.submission_attachments).toHaveLength(2);
+  });
+
+  it("D3: the first call commits and its answer is lost -> the retry's 23505 counts as written", async () => {
+    await seedChecklists();
+    fake.rpcScript = ["lost"];
+
+    const result = await submissionService.submitTransaction(TX);
+
+    expect(result.success).toBe(true);
+    expect("checklistsNotSent" in result).toBe(false);
+    expect(fake.rpcCalls).toHaveLength(2);
+    // Exactly one copy: the first call's.
+    expect(fake.tables.submission_checklists).toHaveLength(2);
+    expect(fake.tables.submission_checklist_items).toHaveLength(4);
+    expect(fake.tables.transaction_submissions.map((s) => s.status)).toEqual(["submitted"]);
+  });
+
+  it("D4: plan without checklists -> submitted with not_in_plan, not retried", async () => {
+    await seedChecklists();
+    fake.checklistsFeatureAllowed = false;
+
+    const result = await submissionService.submitTransaction(TX);
+
+    expect(result.success).toBe(true);
+    expect(result.checklistsNotSent).toBe("not_in_plan");
+    expect(fake.rpcCalls).toHaveLength(1);
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
+
+  it("D7: a 23505 on the FIRST call is drift -> submitted with refused, reported, not retried", async () => {
+    await seedChecklists();
+    fake.rpcScript = [{ code: "23505", message: "duplicate key value violates unique constraint" }];
+
+    const result = await submissionService.submitTransaction(TX);
+
+    expect(result.success).toBe(true);
+    expect(result.checklistsNotSent).toBe("refused");
+    expect(fake.rpcCalls).toHaveLength(1);
+    expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+  });
+
+  it("D6: an attempt that never answers is cut off, and the submit fails within the bound", async () => {
+    await seedChecklists();
+    SNAPSHOT_RETRY.attemptTimeoutMs = 50;
+    fake.rpcScript = ["hang", "hang", "hang"];
+
+    const started = Date.now();
+    const result = await submissionService.submitTransaction(TX);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe(CHECKLISTS_NOT_SENT_ERROR);
+    expect(fake.rpcCalls).toHaveLength(3);
+    expect(fake.tables.transaction_submissions).toHaveLength(0);
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
+
+  it("a resubmit that loses the network on every attempt leaves the earlier version and local state alone", async () => {
+    await seedChecklists();
+    const first = await submissionService.submitTransaction(TX);
+    expect(first.success).toBe(true);
+    fake.tables.transaction_submissions.find((s) => s.id === first.submissionId)!.status = "needs_changes";
+    run(`UPDATE transactions SET submission_status = 'needs_changes' WHERE id = ?`, TX);
+    // The script is indexed by call number; call 1 was the first submit.
+    fake.rpcScript = [undefined, "network", "network", "network"];
+
+    const second = await submissionService.resubmitTransaction(TX);
+
+    expect(second.success).toBe(false);
+    expect(second.error).toBe(CHECKLISTS_NOT_SENT_ERROR);
+    expect(fake.tables.transaction_submissions.map((s) => [s.id, s.status])).toEqual([
+      [first.submissionId, "needs_changes"],
+    ]);
+    expect(localStatus()).toEqual({ submission_status: "needs_changes", submission_id: first.submissionId });
+  });
+});
+
+// ============================================================================
+// BACKLOG-3599 — a resubmit first tries a broker checklist pull that is owed
+// ============================================================================
+describe("BACKLOG-3599 — resubmit with an owed broker checklist pull", () => {
+  const TPL_BROKER = randomUUID();
+
+  /** v1 submitted, the broker added a checklist at review, the pull is owed. */
+  async function submittedWithOwedPull(): Promise<string> {
+    await seedChecklists();
+    const first = await submissionService.submitTransaction(TX);
+    expect(first.success).toBe(true);
+    const sid = first.submissionId!;
+    fake.tables.transaction_submissions.find((s) => s.id === sid)!.status = "needs_changes";
+    run(`UPDATE transactions SET submission_status = 'needs_changes' WHERE id = ?`, TX);
+    // Shape transcribed from the sync-back suite's fixture (one live
+    // broker-added header + items, read 2026-09-27).
+    fake.tables.submission_checklists.push({
+      id: "hdr-broker-3599",
+      submission_id: sid,
+      template_id: TPL_BROKER,
+      template_name: "Broker review add",
+      sort_order: 2,
+      added_at_review_by: "broker-3599",
+      added_at_review_at: "2026-09-27 23:04:54.012711+00",
+    });
+    fake.tables.submission_checklist_items.push({
+      id: "item-broker-3599",
+      submission_id: sid,
+      submission_checklist_id: "hdr-broker-3599",
+      title: "HOA estoppel letter",
+      description: null,
+      is_required: true,
+      expected_document_type: null,
+      sort_order: 10,
+    });
+    expect(markReviewChecklistPullOwed(TX, sid)).toBe(true);
+    return sid;
+  }
+
+  it("C8: the owed pull lands first, so the new version's snapshot carries the broker checklist", async () => {
+    const v1 = await submittedWithOwedPull();
+
+    const second = await submissionService.resubmitTransaction(TX);
+
+    expect(second.success).toBe(true);
+    expect("checklistsNotSent" in second).toBe(false);
+    const payload = fake.rpcCalls[fake.rpcCalls.length - 1].args.p_checklists as Row[];
+    expect(payload.map((c) => c.template_id)).toContain(TPL_BROKER);
+    expect(getOwedReviewChecklistPullsFor(TX)).toEqual([]);
+    // Before Stage 1: no uploading row existed while the pull read the cloud.
+    expect(fake.uploadingAtChecklistRead).toEqual([0]);
+    expect(fake.tables.transaction_submissions.map((s) => [s.id === v1, s.status])).toEqual([
+      [true, "needs_changes"],
+      [false, "resubmitted"],
+    ]);
+  });
+
+  it("the owed pull fails -> the resubmit still succeeds, says so, and keeps the pull owed", async () => {
+    const v1 = await submittedWithOwedPull();
+    fake.failReadsOf.add("submission_checklists");
+
+    const second = await submissionService.resubmitTransaction(TX);
+
+    expect(second.success).toBe(true);
+    expect(second.checklistsNotSent).toBe("brokerChecklistsNotDownloaded");
+    const payload = fake.rpcCalls[fake.rpcCalls.length - 1].args.p_checklists as Row[];
+    expect(payload.map((c) => c.template_id)).not.toContain(TPL_BROKER);
+    expect(getOwedReviewChecklistPullsFor(TX)).toEqual([v1]);
+  });
+
+  it("nothing owed -> no pull, no field", async () => {
+    await seedChecklists();
+    const first = await submissionService.submitTransaction(TX);
+    fake.tables.transaction_submissions.find((s) => s.id === first.submissionId)!.status = "needs_changes";
+    run(`UPDATE transactions SET submission_status = 'needs_changes' WHERE id = ?`, TX);
+
+    const second = await submissionService.resubmitTransaction(TX);
+
+    expect(second.success).toBe(true);
+    expect("checklistsNotSent" in second).toBe(false);
+    expect(fake.uploadingAtChecklistRead).toEqual([]);
   });
 });

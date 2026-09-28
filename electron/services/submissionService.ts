@@ -41,6 +41,9 @@ import gmailFetchService from "./gmailFetchService";
 import outlookFetchService from "./outlookFetchService";
 import { TRANSACTION_EMAILS_MISSING_ATTACHMENTS_SQL } from "./db/submissionEmailSql";
 import { snapshotSubmissionChecklists } from "./submissionChecklistSnapshot";
+import { retryOwedReviewChecklistPull } from "./submissionChecklistPull";
+// BACKLOG-3599: direct, not through the databaseService facade.
+import { getOwedReviewChecklistPullsFor } from "./db/submissionDbService";
 // BACKLOG-2758 finding 3: party names come from the SAME resolver the exported
 // PDF uses, not from a second read of the macOS AddressBook. The AddressBook is
 // still consulted — as tier 3 inside that resolver — so no name previously
@@ -96,7 +99,33 @@ export interface SubmissionResult {
    * send these", and the two are now distinguishable.
    */
   flaggedWithoutAttachments: number;
+  /**
+   * BACKLOG-3600: set only on a SUCCESSFUL submission whose checklists did not
+   * all reach the broker. Absent means nothing to say.
+   *   not_in_plan  the org's plan does not include checklists (RLS 42501)
+   *   refused      the cloud refused the copy for any other reason
+   * A transient failure never sets this — it fails the submission instead.
+   *   brokerChecklistsNotDownloaded  (BACKLOG-3599, resubmit only) the
+   *               checklists the broker added at review were still owed and
+   *               could not be downloaded first, so this version lacks them.
+   *               The 3600 reasons take precedence when both apply.
+   */
+  checklistsNotSent?: ChecklistsNotSentReason;
 }
+
+/** Why a submitted version lacks checklists (BACKLOG-3600, BACKLOG-3599). */
+export type ChecklistsNotSentReason =
+  | "not_in_plan"
+  | "refused"
+  | "brokerChecklistsNotDownloaded";
+
+/**
+ * BACKLOG-3600 — the agent-facing sentence when the checklist copy failed on
+ * every attempt. It is thrown while the submission is still `uploading`, so the
+ * catch below deletes it and the modal shows this text as the failure.
+ */
+export const CHECKLISTS_NOT_SENT_ERROR =
+  "Your checklists could not be sent to your broker, so nothing was submitted. Check your connection and try again.";
 
 /** Progress stages for submission flow */
 export type SubmissionStage =
@@ -286,7 +315,15 @@ class SubmissionService {
 
     const newVersion = (existingSubmission?.version || 1) + 1;
 
-    return this.submitTransactionInternal(
+    // BACKLOG-3599 (SR condition 3): a broker checklist still owed from an
+    // earlier review would be missing from this version's snapshot. Try the
+    // owed pull once, BEFORE Stage 1 — no 'uploading' row exists yet, so the
+    // pull's timeouts never hold one open. Never blocks the resubmit.
+    const owedPullsLanded = await this.pullOwedReviewChecklistsBeforeResubmit(
+      transactionId
+    );
+
+    const result = await this.submitTransactionInternal(
       transactionId,
       {
         version: newVersion,
@@ -294,6 +331,61 @@ class SubmissionService {
       },
       onProgress
     );
+    if (result.success && !owedPullsLanded && !result.checklistsNotSent) {
+      result.checklistsNotSent = "brokerChecklistsNotDownloaded";
+    }
+    return result;
+  }
+
+  /**
+   * BACKLOG-3599: attempt every owed broker-checklist pull of this transaction.
+   * Returns true when nothing is owed afterwards (or nothing was owed). A
+   * success clears the marker (inside `retryOwedReviewChecklistPull`); a
+   * failure keeps it for the sync pass. Never throws.
+   *
+   * If the local owed set cannot be READ, it returns true (logged): with no
+   * evidence anything is owed, the agent is not told something is missing.
+   * The sync pass still retries any marker that exists.
+   */
+  private async pullOwedReviewChecklistsBeforeResubmit(
+    transactionId: string
+  ): Promise<boolean> {
+    let owed: string[];
+    try {
+      owed = getOwedReviewChecklistPullsFor(transactionId);
+    } catch (error) {
+      logService.warn(
+        `[Submission] Could not read owed broker checklist pulls before resubmit: ${error instanceof Error ? error.message : "Unknown error"}`,
+        "SubmissionService"
+      );
+      return true;
+    }
+    if (owed.length === 0) return true;
+    try {
+      const client = supabaseService.getClient();
+      let allLanded = true;
+      for (const submissionId of owed) {
+        const outcome = await retryOwedReviewChecklistPull(
+          client,
+          transactionId,
+          submissionId
+        );
+        if (outcome.status === "kept") {
+          allLanded = false;
+          logService.warn(
+            `[Submission] Owed broker checklists for submission ${submissionId} could not be downloaded before resubmit: ${outcome.reason}`,
+            "SubmissionService"
+          );
+        }
+      }
+      return allLanded;
+    } catch (error) {
+      logService.warn(
+        `[Submission] Owed broker checklist check failed before resubmit: ${error instanceof Error ? error.message : "Unknown error"}`,
+        "SubmissionService"
+      );
+      return false;
+    }
   }
 
   /**
@@ -900,8 +992,23 @@ class SubmissionService {
 
       // Stage 5b (BACKLOG-3477): copy every checklist while the submission is
       // still 'uploading' — the copy tables refuse inserts after finalize.
-      // Never throws; a refusal is logged and the submission continues.
-      await snapshotSubmissionChecklists(client, submissionId, transactionId);
+      // BACKLOG-3600: a transient failure (retries exhausted) FAILS the
+      // submission here, before finalize, so the catch removes the uploading
+      // row and the broker never sees a version without its checklists. A
+      // permanent refusal (plan without checklists, or drift) submits and
+      // reports `checklistsNotSent` so the agent is told.
+      const checklistOutcome = await snapshotSubmissionChecklists(
+        client,
+        submissionId,
+        transactionId
+      );
+      let checklistsNotSent: ChecklistsNotSentReason | undefined;
+      if (checklistOutcome.status === "failed") {
+        if (checklistOutcome.kind === "transient") {
+          throw new Error(CHECKLISTS_NOT_SENT_ERROR);
+        }
+        checklistsNotSent = checklistOutcome.kind;
+      }
 
       // Stage 6: Finalize submission — all data written, mark as 'submitted'
       // This is the commit point: only now does the submission become visible to brokers
@@ -959,6 +1066,7 @@ class SubmissionService {
         attachmentsFailed: attachmentUploadResults.filter((r) => !r.success)
           .length,
         flaggedWithoutAttachments,
+        ...(checklistsNotSent ? { checklistsNotSent } : {}),
       };
     } catch (error) {
       const errorMessage =

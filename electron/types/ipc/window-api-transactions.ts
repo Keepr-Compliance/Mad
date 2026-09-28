@@ -1036,6 +1036,11 @@ export interface WindowApiTransactions {
      * structurally cannot see them.
      */
     flaggedWithoutAttachments?: number;
+    /**
+     * BACKLOG-3600: set only when the submission succeeded but its checklists
+     * did not all reach the broker. Mirrors `SubmissionResult.checklistsNotSent`.
+     */
+    checklistsNotSent?: "not_in_plan" | "refused" | "brokerChecklistsNotDownloaded";
     error?: string;
   }>;
 
@@ -1055,6 +1060,11 @@ export interface WindowApiTransactions {
      * structurally cannot see them.
      */
     flaggedWithoutAttachments?: number;
+    /**
+     * BACKLOG-3600: set only when the submission succeeded but its checklists
+     * did not all reach the broker. Mirrors `SubmissionResult.checklistsNotSent`.
+     */
+    checklistsNotSent?: "not_in_plan" | "refused" | "brokerChecklistsNotDownloaded";
     error?: string;
   }>;
 

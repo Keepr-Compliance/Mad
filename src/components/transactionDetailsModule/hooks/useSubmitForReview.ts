@@ -5,7 +5,10 @@
  * Part of BACKLOG-391: Submit for Review UI.
  */
 import { useState, useCallback, useEffect, useRef } from "react";
-import type { SubmitProgress } from "../components/modals/SubmitForReviewModal";
+import type {
+  ChecklistsNotSentReason,
+  SubmitProgress,
+} from "../components/modals/SubmitForReviewModal";
 
 interface UseSubmitForReviewOptions {
   transactionId: string;
@@ -18,6 +21,12 @@ interface UseSubmitForReviewReturn {
   isSubmitting: boolean;
   progress: SubmitProgress | null;
   error: string | null;
+  /**
+   * BACKLOG-3600: why a SUCCESSFUL submission's checklists did not reach the
+   * broker, as the main process reported it. `null` when there is nothing to
+   * say — including after any failed submit.
+   */
+  checklistsNotSent: ChecklistsNotSentReason | null;
   submit: () => Promise<void>;
   reset: () => void;
 }
@@ -31,6 +40,8 @@ export function useSubmitForReview({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [progress, setProgress] = useState<SubmitProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [checklistsNotSent, setChecklistsNotSent] =
+    useState<ChecklistsNotSentReason | null>(null);
 
   // Track cleanup function for progress listener
   const cleanupRef = useRef<(() => void) | null>(null);
@@ -63,6 +74,7 @@ export function useSubmitForReview({
 
     setIsSubmitting(true);
     setError(null);
+    setChecklistsNotSent(null);
     setProgress({
       stage: "preparing",
       stageProgress: 0,
@@ -81,6 +93,7 @@ export function useSubmitForReview({
         : await api.submit(transactionId);
 
       if (result.success) {
+        setChecklistsNotSent(result.checklistsNotSent ?? null);
         setProgress({
           stage: "complete",
           stageProgress: 100,
@@ -128,12 +141,14 @@ export function useSubmitForReview({
     setIsSubmitting(false);
     setProgress(null);
     setError(null);
+    setChecklistsNotSent(null);
   }, []);
 
   return {
     isSubmitting,
     progress,
     error,
+    checklistsNotSent,
     submit,
     reset,
   };
