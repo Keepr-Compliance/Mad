@@ -238,9 +238,15 @@ describe("BACKLOG-3595: open list and header refresh on submission status change
     renderList();
     await waitFor(() => expect(screen.getAllByText(ADDR_A).length).toBeGreaterThan(0));
     await openDetails(ADDR_A);
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
 
     // Both surfaces are subscribed: the list and the open header.
     expect(listeners.size).toBe(2);
+    // Details' own mount reads call getOverview too, so count from here.
+    const overviewBefore = api().transactions.getOverview.mock.calls.length;
+    const detailsBefore = api().transactions.getDetails.mock.calls.length;
 
     const chipsBefore = screen.getAllByTestId("submission-status-chip");
     const modalBefore = screen.getByTestId("transaction-details-modal");
@@ -276,8 +282,10 @@ describe("BACKLOG-3595: open list and header refresh on submission status change
     });
     expect(headerBadge()).toHaveTextContent("Changes Requested");
 
-    // The header re-read uses getOverview; get-details would start a sync.
-    expect(api().transactions.getOverview).toHaveBeenCalledWith(TXN_A);
+    // The header re-read is ONE getOverview for this deal; get-details would
+    // start a background sync, so it must not be called.
+    expect(api().transactions.getOverview.mock.calls.slice(overviewBefore)).toEqual([[TXN_A]]);
+    expect(api().transactions.getDetails.mock.calls.length).toBe(detailsBefore);
   });
 
   // List hop on its own (details closed).
@@ -375,11 +383,15 @@ describe("BACKLOG-3595: open list and header refresh on submission status change
     await act(async () => {
       await new Promise((r) => setTimeout(r, 50));
     });
+    // The swap itself re-reads B on mount-effects; count from here.
+    const overviewBefore = api().transactions.getOverview.mock.calls.length;
 
     brokerRequestsChanges(TXN_B);
     await fire(event(TXN_B, ADDR_B));
 
-    await waitFor(() => expect(api().transactions.getOverview).toHaveBeenCalledWith(TXN_B));
+    await waitFor(() =>
+      expect(api().transactions.getOverview.mock.calls.slice(overviewBefore)).toEqual([[TXN_B]]),
+    );
     await waitFor(() => expect(headerBadge()).toHaveTextContent("Changes Requested"));
   });
 
