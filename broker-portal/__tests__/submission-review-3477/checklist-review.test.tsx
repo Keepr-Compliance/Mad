@@ -252,6 +252,16 @@ describe('broker checkbox (BACKLOG-3596)', () => {
     ]);
   });
 
+  it('P-C2: a checklist added at review shows no agent mark either (no checkbox, no agent tick)', () => {
+    renderReview({
+      sections: [{ ...SECTIONS[2], items: [item('i-lead-agent', 'Lead disclosure', { isChecked: true })] }],
+    });
+    const row = rowOf('Lead disclosure');
+    expect(within(row).queryByRole('checkbox')).toBeNull();
+    expect(within(row).queryByLabelText('Checked by agent')).toBeNull();
+    expect(row.querySelector('.text-green-600')).toBeNull();
+  });
+
   it('P-C6: a checked item shows who and when under the check mark (a carried tick keeps its original reviewer)', () => {
     renderReview();
     const meta = within(rowOf('Executed purchase contract')).getByTestId('reviewer-meta');
