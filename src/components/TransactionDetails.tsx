@@ -56,6 +56,11 @@ import { useResolvedContactNames } from "./transactionDetailsModule/hooks/useRes
 import { useCompleteTransaction } from "./transactionDetailsModule/hooks/useCompleteTransaction";
 import { NeedsReviewScreen } from "./transactionDetailsModule/components/NeedsReviewScreen";
 import { ReviewPromptDialog } from "./transactionDetailsModule/components/ReviewPromptDialog";
+import { ChecklistWarningDialog } from "./transactionDetailsModule/components/ChecklistWarningDialog";
+import {
+  readUncheckedRequiredItems,
+  type UncheckedRequiredItem,
+} from "../services/checklistWarningGate";
 import { ReviewQueueSection } from "./transactionDetailsModule/components/ReviewQueueSection";
 import { useSubmitForReview } from "./transactionDetailsModule/hooks/useSubmitForReview";
 import type {
@@ -368,16 +373,62 @@ function TransactionDetails({
   // One review-state read feeds the badge, S2, P2 and the Complete gate.
   const [showNeedsReview, setShowNeedsReview] = useState<boolean>(false);
   const reviewQueue = useReviewQueue(transaction.id);
+  // BACKLOG-3477: the unticked-required-items warning, shown BEFORE the Submit
+  // for Review window opens. `null` = not showing.
+  const [checklistWarning, setChecklistWarning] = useState<UncheckedRequiredItem[] | null>(null);
+  // Every openSubmitFlow run takes a number; only the newest may act on its
+  // reads. Go back / Continue anyway bump it too, so a read still in flight
+  // from an earlier click can never re-raise the warning or open the window.
+  const submitFlowSeqRef = useRef(0);
   const openSubmitFlow = useCallback(async () => {
+    const seq = ++submitFlowSeqRef.current;
     try {
       const refreshed = await transactionService.getDetails(transaction.id);
       if (refreshed.success && refreshed.data) setTransaction(refreshed.data);
     } catch (err) {
       logger.error("Failed to refresh transaction before submit:", err);
     }
+    if (seq !== submitFlowSeqRef.current) return;
     loadAttachmentCounts();
+    // BACKLOG-3477 — warn, never block. Only when the plan allows checklists:
+    // for any other gate value the Checklist tab is read-only, so the agent
+    // could not act on the warning.
+    //
+    // The read is fresh, at click time — not `checklist.data`, which is only
+    // as current as the last event the tab's hook handled.
+    //
+    // The warning reflects the checklist at the moment Complete is pressed.
+    // Main can still write checklists after this read, and nothing re-checks:
+    //  - a status sync moving the deal to needs_changes pulls the broker's
+    //    added checklists (submissionSyncService `beforeStatusWrite`);
+    //  - every sync pass retries a broker checklist pull that failed earlier
+    //    (`retryOwedReviewChecklistPulls`);
+    //  - the resubmit itself pulls owed broker checklists before its snapshot
+    //    (submissionService `pullOwedReviewChecklistsBeforeResubmit`).
+    // The Submit for Review window no longer warns a second time (PM ruling,
+    // BACKLOG-3477): the warning never blocks, and the resubmit-time pull lands
+    // after every point the app could read anyway.
+    if (checklistGate === "allowed") {
+      const unchecked = await readUncheckedRequiredItems(transaction.id);
+      if (seq !== submitFlowSeqRef.current) return;
+      if (unchecked.length > 0) {
+        setChecklistWarning(unchecked);
+        return;
+      }
+    }
     setShowSubmitModal(true);
-  }, [transaction.id]);
+  }, [transaction.id, checklistGate]);
+  /** Warning "Go back": close it, open nothing. */
+  const handleChecklistWarningGoBack = useCallback(() => {
+    submitFlowSeqRef.current++;
+    setChecklistWarning(null);
+  }, []);
+  /** Warning "Continue anyway": open the Submit for Review window. */
+  const handleChecklistWarningContinue = useCallback(() => {
+    submitFlowSeqRef.current++;
+    setChecklistWarning(null);
+    setShowSubmitModal(true);
+  }, []);
   // BACKLOG-3498: the submit dialog has saved the confirmed dates. Re-read the
   // row now — not on submit success — so the tabs and the Edit form (which
   // prefills from `transaction`) hold the saved dates even if the submit fails.
@@ -1654,6 +1705,16 @@ function TransactionDetails({
         />
       )}
 
+      {/* BACKLOG-3477 — unticked required checklist items. Warns before the
+          Submit for Review window opens; never blocks. */}
+      {checklistWarning !== null && (
+        <ChecklistWarningDialog
+          items={checklistWarning}
+          onGoBack={handleChecklistWarningGoBack}
+          onContinue={handleChecklistWarningContinue}
+        />
+      )}
+
       {/* Submit for Review Modal (BACKLOG-391) */}
       {showSubmitModal && (
         <SubmitForReviewModal
@@ -1675,10 +1736,6 @@ function TransactionDetails({
           onDatesSaved={() => {
             void rereadAfterDatesSaved();
           }}
-          // BACKLOG-3477: the unticked-required-items warning. Only when the
-          // plan allows checklists — for any other gate value the Checklist
-          // tab is read-only, so the agent could not act on the warning.
-          checklistsEnabled={checklistGate === "allowed"}
           // BACKLOG-2792: S4's Export option — the founder's "the confirmation
           // window includes an Export option that triggers the same S3 export
           // flow an individual gets", literally the same modal, not a parallel
