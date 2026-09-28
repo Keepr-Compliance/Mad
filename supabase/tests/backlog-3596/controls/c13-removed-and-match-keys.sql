@@ -37,7 +37,7 @@ BEGIN
                             AND NOT reviewer_checked AND cleared_reviewer_id IS NULL) = 2,
                         'C13 renamed / moved rows neither ticked nor marked');
   PERFORM pg_temp.check(pg_temp.tick_state(v2) =
-                          'L-item-3:' || pg_temp.id('u_t1_broker') || ':2026-09-01 10:03,L-item-6:' || pg_temp.id('u_t1_admin') || ':2026-09-01 10:06',
+                          'L-item-3:broker:2026-09-01 10:03,L-item-6:admin:2026-09-01 10:06',
                         'C13 I3, I6 carried: ' || pg_temp.tick_state(v2));
 END
 $c13$;

@@ -201,10 +201,19 @@ LANGUAGE sql AS $$
   SELECT id FROM public.submission_checklist_items WHERE submission_id = p_sub AND title = p_title
 $$;
 
--- tick_state(sub): 'local:by:at' for every reviewer-ticked item, sorted.
+-- who(uid): the fixture user's name ('broker', 'admin', 'agent', ...), so
+-- recorded output carries names, never ids.
+CREATE FUNCTION pg_temp.who(p_uid uuid) RETURNS text
+LANGUAGE sql AS $$
+  SELECT COALESCE((SELECT v.name FROM (VALUES ('broker', 'u_t1_broker'), ('admin', 'u_t1_admin'), ('itadmin', 'u_t1_itadmin'),
+                                              ('agent', 'u_t1_agent'), ('agent2', 'u_t1_agent2')) v(name, key)
+                    WHERE pg_temp.id(v.key) = p_uid), CASE WHEN p_uid IS NULL THEN 'null' ELSE 'other' END)
+$$;
+
+-- tick_state(sub): 'local:who:at' for every reviewer-ticked item, sorted.
 CREATE FUNCTION pg_temp.tick_state(p_sub uuid) RETURNS text
 LANGUAGE sql AS $$
-  SELECT COALESCE(string_agg(COALESCE(local_item_id, title) || ':' || reviewer_checked_by || ':'
+  SELECT COALESCE(string_agg(COALESCE(local_item_id, title) || ':' || pg_temp.who(reviewer_checked_by) || ':'
                              || to_char(reviewer_checked_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI'), ',' ORDER BY COALESCE(local_item_id, title)), '')
     FROM public.submission_checklist_items WHERE submission_id = p_sub AND reviewer_checked
 $$;
@@ -281,11 +290,8 @@ $$;
 -- and time for every broker/admin tick).
 CREATE FUNCTION pg_temp.base_ticks() RETURNS text
 LANGUAGE sql AS $$
-  SELECT 'L-item-1:' || pg_temp.id('u_t1_broker') || ':2026-09-01 10:01,'
-      || 'L-item-2:' || pg_temp.id('u_t1_broker') || ':2026-09-01 10:02,'
-      || 'L-item-3:' || pg_temp.id('u_t1_broker') || ':2026-09-01 10:03,'
-      || 'L-item-5:' || pg_temp.id('u_t1_broker') || ':2026-09-01 10:05,'
-      || 'L-item-6:' || pg_temp.id('u_t1_admin') || ':2026-09-01 10:06'
+  SELECT 'L-item-1:broker:2026-09-01 10:01,L-item-2:broker:2026-09-01 10:02,L-item-3:broker:2026-09-01 10:03,'
+      || 'L-item-5:broker:2026-09-01 10:05,L-item-6:admin:2026-09-01 10:06'
 $$;
 
 SET LOCAL check_function_bodies = on;

@@ -114,6 +114,9 @@ run_control() {
     CONTROL_DETAIL="$(grep -m1 -E 'ERROR|FATAL' <<<"$out" | sed -E 's/^.*(ERROR|FATAL):[[:space:]]*//' | cut -c1-160 || true)"
     [ -n "$CONTROL_DETAIL" ] || CONTROL_DETAIL="exit $rc, no ERROR line: $(tail -1 <<<"$out" | cut -c1-140)"
   fi
+  # Recorded output is committed to a PUBLIC repo: no record id in it, even an
+  # invented one or one a control generated.
+  CONTROL_DETAIL="$(sed -E 's/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/<id>/g' <<<"$CONTROL_DETAIL")"
 }
 
 case "${1:-}" in

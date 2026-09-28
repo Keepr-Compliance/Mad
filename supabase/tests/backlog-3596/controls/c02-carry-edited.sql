@@ -24,7 +24,7 @@ BEGIN
   PERFORM pg_temp.check((res -> 'carry' ->> 'carried')::int = 2 AND (res -> 'carry' ->> 'cleared')::int = 3
                         AND (res -> 'carry' ->> 'removed')::int = 0, 'C02 carry result: ' || res::text);
   PERFORM pg_temp.check(pg_temp.tick_state(v2) =
-                          'L-item-5:' || broker || ':2026-09-01 10:05,L-item-6:' || pg_temp.id('u_t1_admin') || ':2026-09-01 10:06',
+                          'L-item-5:broker:2026-09-01 10:05,L-item-6:admin:2026-09-01 10:06',
                         'C02 only I5, I6 carried: ' || pg_temp.tick_state(v2));
   FOR r IN SELECT * FROM (VALUES ('L-item-1', 'Item one', 1), ('L-item-2', 'Item two', 2), ('L-item-3', 'Item three', 3)) v(loc, title, n) LOOP
     PERFORM pg_temp.check((SELECT NOT reviewer_checked AND reviewer_checked_by IS NULL AND cleared_reviewer_id = broker AND cleared_at IS NOT NULL
