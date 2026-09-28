@@ -129,6 +129,12 @@ jest.mock('@/lib/supabase/client', () => ({
   }),
 }));
 jest.mock('heic2any', () => jest.fn());
+// BACKLOG-3593: the page now renders ChecklistReview (viewer="agent"), which
+// imports the reviewer server actions. The agent page never calls them.
+jest.mock('@/lib/actions/submissionChecklists', () => ({
+  setReviewerCheck: jest.fn(),
+  addChecklistAtReview: jest.fn(),
+}));
 jest.mock('next/link', () => ({
   __esModule: true,
   default: ({ children, href, ...rest }: { children: React.ReactNode; href: string }) => (

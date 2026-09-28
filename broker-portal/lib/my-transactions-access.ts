@@ -19,13 +19,17 @@
  *
  * Order matters and is fixed: impersonation, then the shared portal classifier,
  * then floor via a BROKERAGE row, then the plan key on that brokerage.
- * The key is read FAIL-CLOSED (isFeatureEnabledFailClosed) and only ever on
- * the brokerage organization the classifier chose, never on a personal one.
+ * The key is read FAIL-CLOSED (getOrgFeatures + isFeatureEnabledStrict: a
+ * failed fetch has an empty feature map, which refuses) and only ever on the
+ * brokerage organization the classifier chose, never on a personal one.
+ *
+ * BACKLOG-3593: `admitted` carries that one feature set, so the detail page
+ * answers transaction_checklists from it in memory. One feature RPC per render.
  */
 
 import { getImpersonationSession } from '@/lib/impersonation';
 import { getPortalAccess, type PortalAccessResult } from '@/lib/auth/portalAccess';
-import { isFeatureEnabledFailClosed } from '@/lib/feature-gate';
+import { getOrgFeatures, isFeatureEnabledFailClosed, isFeatureEnabledStrict, type OrgFeatures } from '@/lib/feature-gate';
 
 /** feature_definitions.key seeded by the BACKLOG-3080 My Transactions migration. */
 export const MY_TRANSACTIONS_FEATURE_KEY = 'portal_my_transactions';
@@ -36,6 +40,8 @@ export type MyTransactionsGate =
       supabase: PortalAccessResult['supabase'];
       userId: string;
       organizationId: string;
+      /** The brokerage's feature set, as fetched for the gate. Empty on a failed fetch. */
+      features: OrgFeatures;
     }
   | { kind: 'upsell' }
   | null;
@@ -49,14 +55,15 @@ export async function getMyTransactionsGate(): Promise<MyTransactionsGate> {
   const { access } = portal;
   if (access.kind !== 'floor' || access.via !== 'brokerage') return null;
 
-  const enabled = await isFeatureEnabledFailClosed(access.organizationId, MY_TRANSACTIONS_FEATURE_KEY);
-  if (!enabled) return { kind: 'upsell' };
+  const features = await getOrgFeatures(access.organizationId);
+  if (!isFeatureEnabledStrict(features, MY_TRANSACTIONS_FEATURE_KEY)) return { kind: 'upsell' };
 
   return {
     kind: 'admitted',
     supabase: portal.supabase,
     userId: portal.user.id,
     organizationId: access.organizationId,
+    features,
   };
 }
 
