@@ -446,14 +446,14 @@ class SubmissionSyncService {
     this.syncInProgress = true;
 
     try {
-      // 0. BACKLOG-3599: retry owed broker-checklist pulls. Placed after the
-      // DB guard and BEFORE the early returns below, so a marker on a
+      // 1. Get all local transactions with submission_id that are not in terminal states
+      const submittedTransactions = await this.getLocalSubmittedTransactions();
+
+      // BACKLOG-3599: retry owed broker-checklist pulls. Placed after the DB
+      // guard and BEFORE the early returns below, so a marker on a
       // transaction that is no longer active (or with no cloud status this
       // pass) is still visited. Runs on the immediate pass at startup too.
       await this.retryOwedReviewChecklistPulls();
-
-      // 1. Get all local transactions with submission_id that are not in terminal states
-      const submittedTransactions = await this.getLocalSubmittedTransactions();
 
       if (submittedTransactions.length === 0) {
         logService.debug("[SyncService] No pending submissions to sync", "SubmissionSyncService");
