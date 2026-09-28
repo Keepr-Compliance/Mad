@@ -116,6 +116,7 @@ import { CHECKLISTS_NOT_SENT_ERROR } from "../submissionService";
 import { getOwedReviewChecklistPullsFor, markReviewChecklistPullOwed } from "../db/submissionDbService";
 import * as Sentry from "@sentry/electron/main";
 import { getChecklistsForTransaction } from "../db/checklistDbService";
+import * as checklistDbModule from "../db/checklistDbService";
 import { sendToMainWindow } from "../../windowRegistry";
 
 const submissionDb = jest.requireActual("../db/submissionDbService") as typeof import("../db/submissionDbService");
@@ -966,6 +967,63 @@ describe("BACKLOG-3600 — the checklist copy is retried, then fails the submit"
     expect(Date.now() - started).toBeLessThan(3000);
   });
 
+  // BACKLOG-3599 item 1: each transient class, one failure then success. The
+  // shape `{ code, message }` is the fake's PgError, as in D7; the texts are
+  // the standard PostgREST / Postgres messages for each code.
+  it.each([
+    ["PGRST003", "Timed out acquiring connection from connection pool."],
+    ["08006", "connection failure"],
+    ["40001", "could not serialize access due to concurrent update"],
+    ["57014", "canceling statement due to statement timeout"],
+    ["53300", "sorry, too many clients already"],
+  ])("G1: %s once, then success -> retried and submitted with the copy", async (code, message) => {
+    await seedChecklists();
+    fake.rpcScript = [{ code, message }];
+
+    const result = await submissionService.submitTransaction(TX);
+
+    expect(result.success).toBe(true);
+    expect("checklistsNotSent" in result).toBe(false);
+    expect(fake.rpcCalls).toHaveLength(2);
+    expect(fake.tables.submission_checklists).toHaveLength(2);
+  });
+
+  // BACKLOG-3599 item 2: schema drift no retry can fix -> refused on the first
+  // call, reported once, the submit goes through with the notice.
+  it.each([
+    ["PGRST202", "Could not find the function public.snapshot_submission_checklists(p_checklists, p_submission_id) in the schema cache"],
+    ["PGRST203", "Could not choose the best candidate function between: public.snapshot_submission_checklists(p_submission_id => uuid, p_checklists => jsonb), public.snapshot_submission_checklists(p_submission_id => text, p_checklists => jsonb)"],
+  ])("G1b: %s -> submitted with refused, one call, one Sentry event", async (code, message) => {
+    await seedChecklists();
+    fake.rpcScript = [{ code, message }];
+
+    const result = await submissionService.submitTransaction(TX);
+
+    expect(result.success).toBe(true);
+    expect(result.checklistsNotSent).toBe("refused");
+    expect(fake.rpcCalls).toHaveLength(1);
+    expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+    expect(fake.tables.transaction_submissions.map((s) => s.status)).toEqual(["submitted"]);
+  });
+
+  it("G2: the local checklist read fails -> nothing submitted, the agent is told why, no call", async () => {
+    await seedChecklists();
+    const spy = jest
+      .spyOn(checklistDbModule, "getChecklistsForTransaction")
+      .mockRejectedValue(new Error("SQLITE_BUSY: database is locked"));
+    try {
+      const result = await submissionService.submitTransaction(TX);
+
+      expect(spy).toHaveBeenCalled();
+      expect(result.success).toBe(false);
+      expect(result.error).toBe(CHECKLISTS_NOT_SENT_ERROR);
+      expect(fake.rpcCalls).toHaveLength(0);
+      expect(fake.tables.transaction_submissions).toHaveLength(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("a resubmit that loses the network on every attempt leaves the earlier version and local state alone", async () => {
     await seedChecklists();
     const first = await submissionService.submitTransaction(TX);
@@ -1054,6 +1112,17 @@ describe("BACKLOG-3599 — resubmit with an owed broker checklist pull", () => {
     const payload = fake.rpcCalls[fake.rpcCalls.length - 1].args.p_checklists as Row[];
     expect(payload.map((c) => c.template_id)).not.toContain(TPL_BROKER);
     expect(getOwedReviewChecklistPullsFor(TX)).toEqual([v1]);
+  });
+
+  it("G3: the owed pull fails AND the plan refuses the copy -> the plan's reason is kept", async () => {
+    await submittedWithOwedPull();
+    fake.failReadsOf.add("submission_checklists");
+    fake.checklistsFeatureAllowed = false;
+
+    const second = await submissionService.resubmitTransaction(TX);
+
+    expect(second.success).toBe(true);
+    expect(second.checklistsNotSent).toBe("not_in_plan");
   });
 
   describe("BACKLOG-3595 — an open window is told after the pre-pull commits", () => {

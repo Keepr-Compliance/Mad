@@ -16,8 +16,8 @@
  *
  *   2. (BACKLOG-3600) A failure is classified before anything acts on it:
  *
- *      - TRANSIENT (no SQLSTATE, PGRST*, 08*, 40001, 57014, 53*, a timeout, a
- *        thrown error): the call is retried with the SAME payload, up to
+ *      - TRANSIENT (no SQLSTATE, PGRST* except PGRST202 and PGRST203, 08*,
+ *        40001, 57014, 53*, a timeout, a thrown error): the call is retried with the SAME payload, up to
  *        `SNAPSHOT_RETRY.attempts` calls, each bounded by
  *        `SNAPSHOT_RETRY.attemptTimeoutMs`. Still failing -> `failed` with
  *        kind `transient`, and the caller FAILS the submission while it is
@@ -31,8 +31,10 @@
  *        contract drift and takes the permanent path.
  *      - PERMANENT: 42501 (the org's plan does not include checklists — the
  *        only term of the insert policy that can fail for the submitter's own
- *        `uploading` row) -> kind `not_in_plan`; any other code -> kind
- *        `refused`, reported to Sentry. The caller finalizes the submission and
+ *        `uploading` row) -> kind `not_in_plan`; any other code, including
+ *        PGRST202 (function not in the schema cache) and PGRST203 (more than
+ *        one matching signature), which fail on the first call without a
+ *        retry -> kind `refused`, reported to Sentry. The caller finalizes the submission and
  *        tells the agent the checklists were not sent. A plan never locks
  *        submission.
  *
@@ -132,9 +134,20 @@ export const SNAPSHOT_RETRY: {
   backoffMs: [1000, 3000],
 };
 
-/** A thrown or timed-out call carries no SQLSTATE; it is transient. */
+/**
+ * PostgREST codes that no retry can fix (BACKLOG-3599): the function is not in
+ * the schema cache (PGRST202) or more than one signature matches the call
+ * (PGRST203). Both are schema drift, so they take the permanent `refused` path.
+ */
+const PERMANENT_PGRST_CODES: ReadonlySet<string> = new Set(["PGRST202", "PGRST203"]);
+
+/**
+ * A thrown or timed-out call carries no SQLSTATE; it is transient. Every
+ * PGRST* code is transient EXCEPT PGRST202 and PGRST203, which are permanent.
+ */
 function isTransientCode(code: string | null): boolean {
   if (!code) return true;
+  if (PERMANENT_PGRST_CODES.has(code)) return false;
   return (
     code.startsWith("PGRST") ||
     code.startsWith("08") ||
