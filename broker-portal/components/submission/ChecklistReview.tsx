@@ -1,7 +1,11 @@
 'use client';
 
 /**
- * ChecklistReview — BACKLOG-3477, mock 3481 v4.
+ * ChecklistReview — BACKLOG-3477, mock 3481 v4, with the tick model of BACKLOG-3596.
+ *
+ * Mock v4's "Mark reviewed" pill, agent-tick icons in the broker view and
+ * counts from agent ticks are SUPERSEDED by BACKLOG-3596 (pm_comments b250c7fa).
+ * Do not build to those parts of the mock.
  *
  * The Checklists area of the submission review page, between Status History
  * and Messages/Attachments. One card, one collapsible section per checklist.

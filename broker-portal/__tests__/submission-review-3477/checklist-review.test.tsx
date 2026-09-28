@@ -1,5 +1,9 @@
 /**
- * ChecklistReview — BACKLOG-3477, mock 3481 v4.
+ * ChecklistReview — BACKLOG-3477, mock 3481 v4, with the tick model of BACKLOG-3596.
+ *
+ * Mock v4's "Mark reviewed" pill, agent-tick icons in the broker view and
+ * counts from agent ticks are SUPERSEDED by BACKLOG-3596 (pm_comments b250c7fa).
+ * Do not build to those parts of the mock.
  *
  * Sections are what lib/submissions/checklists.ts assembles from the copy
  * tables (see page.test.tsx for the row provenance). Server action results
@@ -555,8 +559,9 @@ describe('View on chips', () => {
 
 /**
  * BACKLOG-3593: the broker page's rendered output is pinned byte for byte.
- * The snapshots were written from the component BEFORE the agent viewer was
- * added (827a4f005), so any change to the default (reviewer) output reds here.
+ * First written before the agent viewer was added (827a4f005); re-pinned for
+ * the BACKLOG-3596 tick model (broker checkbox, broker counts), so any change
+ * to the default (reviewer) output reds here.
  */
 describe('broker output pin (BACKLOG-3593)', () => {
   const statuses = ['under_review', 'needs_changes', 'approved'];
