@@ -486,4 +486,36 @@ describe('agent timeline hides the broker’s review marks (D4)', () => {
     expect(typed).toEqual(['checklist_added']);
     expect(container.textContent).not.toMatch(/unticked automatically|could not be carried over|unchecked → checked/);
   });
+
+  /**
+   * C-E (SR 30bcd311): names are looked up AFTER the broker's review marks are
+   * dropped, so a broker whose only trace on the agent's chain is a tick is
+   * never resolved and never sent to the agent's browser. SECOND_BROKER is a
+   * colleague of REVIEWER who ticked one item on the current version and did
+   * nothing else — the realistic carrier (checklist_review's changed_by is the
+   * ticking broker; _cleared / _unavailable carry the agent, so they cannot
+   * carry a broker-only id).
+   */
+  it('a broker who only ticked is never looked up: absent from the names sent to the page', async () => {
+    const SECOND_BROKER = '00000000-0000-4000-8000-0000003596a6'; // pii-allow-uuid: invented fixture id
+    givenChain();
+    const rows = mockEmulator.state.rows;
+    const current = rows.transaction_submissions![0] as Row;
+    current.status_history = [
+      ...(current.status_history as unknown[]),
+      checklistReviewEntry({ changedBy: SECOND_BROKER, itemId: ITEM, itemTitle: 'Earnest money receipt', checklistName: CONTRACT, from: false, to: true, changedAt: '2026-09-02T02:00:00Z' }),
+    ];
+    rows.users = [...(rows.users ?? []), userNameRow(SECOND_BROKER, 'Second Broker Fixture', 'second-broker@fixture.example.test')];
+
+    const element = await page();
+    const review = findProps<ChecklistReviewProps>(element, ChecklistReview)!;
+    // Positive control: the lookup ran and resolved the actors that stay.
+    expect(review.names).not.toBeNull();
+    expect(review.names![REVIEWER]).toBe(REVIEWER_NAME);
+    // The tick-only broker was never requested, so neither id nor name is here.
+    expect(Object.keys(review.names!)).not.toContain(SECOND_BROKER);
+    expect(Object.values(review.names!)).not.toContain('Second Broker Fixture');
+    const { container } = render(element);
+    expect(container.textContent).not.toContain('Second Broker Fixture');
+  });
 });

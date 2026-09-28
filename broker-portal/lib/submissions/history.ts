@@ -92,8 +92,20 @@ export function describeTypedEntry(entry: StatusHistoryEntry): string {
         : 'Previous review marks could not be carried over';
     }
     default:
-      return 'Submission updated';
+      return humaniseTypeKey(entry.type);
   }
+}
+
+/**
+ * A typed entry this portal does not know yet (e.g. a later release's
+ * `commission_edit`) reads as its own type, "Commission edit" — never as
+ * "Submission updated", which would claim the submission itself changed
+ * (coordinator C-D, pm_comments b43086bd).
+ */
+export function humaniseTypeKey(type: string | undefined): string {
+  const words = (type ?? '').replace(/[_-]+/g, ' ').trim().replace(/\s+/g, ' ');
+  if (!words) return 'Updated';
+  return words.charAt(0).toUpperCase() + words.slice(1).toLowerCase();
 }
 
 /**

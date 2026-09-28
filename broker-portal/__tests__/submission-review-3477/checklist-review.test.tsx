@@ -40,8 +40,7 @@ jest.mock('@/components/submission/AttachmentViewerModal', () => ({
 
 import {
   ChecklistReview,
-  ADD_DISABLED_REASON,
-  TICK_CLOSED_REASONS,
+  VERSION_CLOSED_REASONS,
   type ChecklistReviewProps,
 } from '@/components/submission/ChecklistReview';
 import type { ChecklistSectionView, ChecklistItemView } from '@/lib/submissions/checklistModel';
@@ -209,11 +208,13 @@ describe('required counts (the broker’s ticks, BACKLOG-3596 P-C3)', () => {
   });
 });
 
-describe('an unchecked required item (founder QA: pill only, no yellow row)', () => {
-  it('keeps the Not yet checked pill but the row has no amber/yellow background', () => {
+describe('an unchecked required item (coordinator C-B: no pill, no yellow row)', () => {
+  it('carries no "Not yet checked" pill and no amber/yellow background: the empty checkbox says it', () => {
     renderReview();
     const row = rowOf('Title commitment');
-    expect(within(row).getByText('Not yet checked')).toBeInTheDocument();
+    expect(boxOf('Title commitment').checked).toBe(false);
+    expect(within(row).queryByText('Not yet checked')).toBeNull();
+    expect(document.body.textContent).not.toContain('Not yet checked');
     expect(row.className).not.toMatch(/\bbg-(amber|yellow)-/);
     expect(row.className).not.toMatch(/\bborder-(amber|yellow)-/);
   });
@@ -240,12 +241,12 @@ describe('broker checkbox (BACKLOG-3596)', () => {
   it('P-C2: the agent’s ticks are never shown to the broker', () => {
     renderReview();
     fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
-    // Agent-ticked, broker-unticked: an empty checkbox and the broker's gap.
+    // Agent-ticked, broker-unticked: an empty checkbox and no pill (C-B).
     expect(boxOf('Buyer representation agreement').checked).toBe(false);
-    expect(within(rowOf('Buyer representation agreement')).getByText('Not yet checked')).toBeInTheDocument();
+    expect(within(rowOf('Buyer representation agreement')).queryByText('Not yet checked')).toBeNull();
     expect(boxOf('Asbestos disclosure').checked).toBe(false);
     expect(boxOf('Amendments and addenda').checked).toBe(false);
-    // Broker-ticked, agent-unticked: checked, no gap.
+    // Broker-ticked, agent-unticked: checked, no pill.
     expect(boxOf('AHERA inspection report').checked).toBe(true);
     expect(within(rowOf('AHERA inspection report')).queryByText('Not yet checked')).toBeNull();
     // No agent mark anywhere, including in the added-at-review section.
@@ -266,12 +267,18 @@ describe('broker checkbox (BACKLOG-3596)', () => {
     expect(row.querySelector('.text-green-600')).toBeNull();
   });
 
-  it('P-C6: a checked item shows who and when under the check mark (a carried tick keeps its original reviewer)', () => {
+  it('P-C6 / C-C: a checked item shows who and when under the item title, full width (a carried tick keeps its original reviewer)', () => {
     renderReview();
     const meta = within(rowOf('Executed purchase contract')).getByTestId('reviewer-meta');
     expect(meta).toHaveTextContent('Colleague Fixture · Sep 20, 2026');
-    // Under the check mark: same column as the checkbox.
-    expect(meta.parentElement!.contains(boxOf('Executed purchase contract'))).toBe(true);
+    // Under the title, in the title's column — not in a fixed column under the checkbox.
+    const titleColumn = screen.getByText('Executed purchase contract').closest('.flex-1') as HTMLElement;
+    expect(titleColumn.contains(meta)).toBe(true);
+    expect(titleColumn.contains(boxOf('Executed purchase contract'))).toBe(false);
+    expect(meta.parentElement!.contains(boxOf('Executed purchase contract'))).toBe(false);
+    expect(rowOf('Executed purchase contract').querySelector('.w-24')).toBeNull();
+    // Below the title line, not before it.
+    expect(screen.getByText('Executed purchase contract').compareDocumentPosition(meta) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(within(rowOf('Title commitment')).queryByTestId('reviewer-meta')).toBeNull();
   });
 
@@ -324,7 +331,7 @@ describe('broker checkbox (BACKLOG-3596)', () => {
     expect(boxes().length).toBe(7);
     expect(boxes().every((b) => b.disabled)).toBe(true);
     expect(boxOf('Executed purchase contract').checked).toBe(true);
-    expect(document.getElementById('checklist-tick-disabled-reason')).toBeNull();
+    expect(document.getElementById('checklist-closed-reason')).toBeNull();
   });
 
   it('a viewer who cannot review sees the checkboxes read-only, with no reason line', () => {
@@ -332,32 +339,49 @@ describe('broker checkbox (BACKLOG-3596)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
     expect(boxes().length).toBe(7);
     expect(boxes().every((b) => b.disabled)).toBe(true);
-    expect(document.getElementById('checklist-tick-disabled-reason')).toBeNull();
+    expect(document.getElementById('checklist-closed-reason')).toBeNull();
   });
 });
 
 /**
- * P-C9 (SR plan review 4e620109): the tick is closed, with a plain reason, on
- * a version that has a newer version (arrived or still being sent) and once
- * changes are requested — the same shape as the Add disable.
+ * P-C9 (SR plan review 4e620109) + C-A / C-F: the tick AND Add checklist are
+ * closed, with ONE plain notice in the header, on a version that has a newer
+ * version (arrived or still being sent) and once changes are requested.
+ *
+ * FIXTURE HONESTY (SR addendum 80f5ae11): the rows with an open status
+ * (under_review, submitted) AND a newer version describe a state shipped code
+ * cannot produce — the desktop creates a new version only once the latest one
+ * is needs_changes, and nothing shipped reopens it. Only a hand-crafted request
+ * by the agent reaches it. These rows prove the UI closes both controls if it
+ * ever happens; they are NOT evidence of a reachable bug.
  */
-describe('tick closed on needs_changes and on a superseded version (P-C9)', () => {
+describe('tick and Add closed on needs_changes and on a superseded version (P-C9, C-A, C-F)', () => {
   it.each([
-    ['needs_changes', null, TICK_CLOSED_REASONS.needs_changes, 'Changes were requested, so this version is closed. You can check items on the next submission.'],
-    ['needs_changes', 'newer', TICK_CLOSED_REASONS.newer, 'A newer version of this submission has been sent, so this version is closed. Check items on the newest version.'],
-    ['needs_changes', 'uploading', TICK_CLOSED_REASONS.uploading, 'A newer version of this submission is being sent, so this version is closed.'],
-    ['under_review', 'newer', TICK_CLOSED_REASONS.newer, 'A newer version of this submission has been sent, so this version is closed. Check items on the newest version.'],
-    ['under_review', 'uploading', TICK_CLOSED_REASONS.uploading, 'A newer version of this submission is being sent, so this version is closed.'],
-  ] as const)('status %s, newer version %s: disabled with the reason', (status, supersededBy, reason, literal) => {
+    ['needs_changes', null, VERSION_CLOSED_REASONS.needs_changes, 'Changes were requested, so this version is closed. You can check items and add a checklist on the next submission.'],
+    ['needs_changes', 'newer', VERSION_CLOSED_REASONS.newer, 'A newer version of this submission has been sent, so this version is closed. Check items on the newest version.'],
+    ['needs_changes', 'uploading', VERSION_CLOSED_REASONS.uploading, 'A newer version of this submission is being sent, so this version is closed.'],
+    ['under_review', 'newer', VERSION_CLOSED_REASONS.newer, 'A newer version of this submission has been sent, so this version is closed. Check items on the newest version.'],
+    ['under_review', 'uploading', VERSION_CLOSED_REASONS.uploading, 'A newer version of this submission is being sent, so this version is closed.'],
+    ['submitted', 'newer', VERSION_CLOSED_REASONS.newer, 'A newer version of this submission has been sent, so this version is closed. Check items on the newest version.'],
+  ] as const)('status %s, newer version %s: disabled with one notice', (status, supersededBy, reason, literal) => {
     renderReview({ status, supersededBy });
     fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
     expect(reason).toBe(literal);
     expect(boxes().length).toBe(7);
     for (const b of boxes()) {
       expect(b).toBeDisabled();
-      expect(b).toHaveAttribute('aria-describedby', 'checklist-tick-disabled-reason');
+      expect(b).toHaveAttribute('aria-describedby', 'checklist-closed-reason');
     }
-    expect(document.getElementById('checklist-tick-disabled-reason')).toHaveTextContent(literal);
+    // Add checklist: closed, pointing at the same notice (C-A, C-F).
+    const add = screen.getByRole('button', { name: 'Add checklist' });
+    expect(add).toBeDisabled();
+    expect(add).toHaveAttribute('aria-describedby', 'checklist-closed-reason');
+    fireEvent.click(add);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    // One notice, not one per control.
+    expect(screen.getAllByText(literal)).toHaveLength(1);
+    expect(document.querySelectorAll('.basis-full')).toHaveLength(1);
+    expect(document.getElementById('checklist-closed-reason')).toHaveTextContent(literal);
     fireEvent.click(boxOf('Title commitment'));
     expect(mockSetReviewerCheck).not.toHaveBeenCalled();
   });
@@ -367,7 +391,9 @@ describe('tick closed on needs_changes and on a superseded version (P-C9)', () =
     fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
     expect(boxes().length).toBe(7);
     expect(boxes().every((b) => !b.disabled)).toBe(true);
-    expect(document.getElementById('checklist-tick-disabled-reason')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Add checklist' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Add checklist' })).not.toHaveAttribute('aria-describedby');
+    expect(document.getElementById('checklist-closed-reason')).toBeNull();
   });
 });
 
@@ -406,18 +432,36 @@ describe('Add checklist', () => {
   it('is enabled while under review', () => {
     renderReview();
     expect(screen.getByRole('button', { name: 'Add checklist' })).toBeEnabled();
-    expect(screen.queryByText(ADD_DISABLED_REASON)).not.toBeInTheDocument();
+    expect(document.getElementById('checklist-closed-reason')).toBeNull();
   });
 
-  it('is disabled with a plain reason once changes are requested', () => {
+  it('is disabled once changes are requested, under the one combined notice (C-A)', () => {
     renderReview({ status: 'needs_changes' });
     expect(screen.getByRole('button', { name: 'Add checklist' })).toBeDisabled();
-    expect(screen.getByText(ADD_DISABLED_REASON)).toBeInTheDocument();
-    // The ruled copy, as a literal (pm_comments 4b1b1ce8 #1): the constant alone
+    // The ruled copy, as a literal (coordinator b43086bd): the constant alone
     // would pass whatever it says.
     expect(
-      screen.getByText('Changes were requested, so this version is closed. You can add a checklist to the next submission.')
+      screen.getByText('Changes were requested, so this version is closed. You can check items and add a checklist on the next submission.')
     ).toBeInTheDocument();
+    // The two separate notices it replaces are gone.
+    expect(document.body.textContent).not.toContain('You can add a checklist to the next submission.');
+    expect(document.body.textContent).not.toContain('You can check items on the next submission.');
+  });
+
+  it('with no checklists on a needs_changes version, the notice still explains the closed Add', () => {
+    renderReview({ status: 'needs_changes', sections: [] });
+    expect(screen.getByRole('button', { name: 'Add checklist' })).toBeDisabled();
+    expect(document.getElementById('checklist-closed-reason')).toHaveTextContent(VERSION_CLOSED_REASONS.needs_changes);
+  });
+
+  it('a refused add on a superseded version shows the newer-version words, not the permission words (C-F)', async () => {
+    mockAddChecklist.mockResolvedValue({ ok: false, reason: 'superseded', message: REVIEW_MESSAGES.superseded });
+    renderReview();
+    fireEvent.click(screen.getByRole('button', { name: 'Add checklist' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Add Flood Zone Disclosure' }));
+    const alert = await within(screen.getByRole('dialog')).findByRole('alert');
+    expect(alert).toHaveTextContent('A newer version of this submission has been sent, so this version is closed.');
+    expect(alert.textContent).not.toMatch(/permission|42501|superseded/);
   });
 
   it('is absent for a viewer who cannot review; Expand/Collapse all stay', () => {
@@ -634,7 +678,8 @@ describe('agent viewer (BACKLOG-3593)', () => {
       );
       expect(screen.queryByText('Mark reviewed')).toBeNull();
       expect(screen.queryByText(/Add checklist/)).toBeNull();
-      expect(screen.queryByText(ADD_DISABLED_REASON)).toBeNull();
+      expect(document.getElementById('checklist-closed-reason')).toBeNull();
+      expect(document.body.textContent).not.toMatch(/this version is closed/);
       expect(document.querySelector('[aria-pressed]')).toBeNull();
     }
   );
@@ -650,7 +695,8 @@ describe('agent viewer (BACKLOG-3593)', () => {
     // Broker-ticked, agent-unticked: the agent sees it unchecked.
     const ahera = rowOf('AHERA inspection report');
     expect(within(ahera).getByLabelText('Not checked')).toBeInTheDocument();
-    expect(within(ahera).getByText('Not yet checked')).toBeInTheDocument();
+    // C-B: no "Not yet checked" pill in the agent view either; the icon says it.
+    expect(within(ahera).queryByText('Not yet checked')).toBeNull();
     // Agent-ticked, broker-unticked: the agent sees their own tick.
     expect(within(rowOf('Buyer representation agreement')).getByLabelText('Checked by agent')).toBeInTheDocument();
     expect(screen.getAllByLabelText('Checked by agent')).toHaveLength(4);

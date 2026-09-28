@@ -110,6 +110,34 @@ describe('Status History labels (BACKLOG-3596, P-C5)', () => {
     ];
     for (const e of all) expect(describeTypedEntry(e)).not.toBe('Submission updated');
   });
+
+  /**
+   * C-D (coordinator b43086bd): a typed entry this portal has never seen —
+   * `commission_edit` stands in for a type a later release writes — names its
+   * own type, never "Submission updated". The entry shape is the typed-entry
+   * shape every writer uses ({type, changed_at, changed_by}); the type is
+   * hypothetical by design: no writer of it exists yet.
+   */
+  it.each([
+    ['commission_edit', 'Commission edit'],
+    ['checklist_something_new', 'Checklist something new'],
+    ['', 'Updated'],
+  ])('an unknown type %p reads as %p', (type, text) => {
+    expect(describeTypedEntry({ type, changed_at: '2026-09-03T00:00:00Z', changed_by: BROKER } as StatusHistoryEntry)).toBe(text);
+  });
+
+  it('an unknown type renders in the timeline under its own name', () => {
+    const history: StatusHistoryEntry[] = [
+      { status: 'under_review', changed_at: '2026-09-01T00:30:00Z', changed_by: undefined, notes: null },
+      { type: 'commission_edit', changed_at: '2026-09-01T01:00:00Z', changed_by: BROKER } as StatusHistoryEntry,
+    ];
+    const { container } = render(<StatusHistory history={history} currentStatus="under_review" submittedAt="2026-09-01T00:00:00Z" />);
+    for (const b of Array.from(container.querySelectorAll('[data-testid="checklist-changes-group"] > button'))) fireEvent.click(b);
+    const lines = Array.from(container.querySelectorAll('[data-testid="typed-history-entry"]'));
+    expect(lines.map((l) => l.getAttribute('data-entry-type'))).toEqual(['commission_edit']);
+    expect(lines[0]).toHaveTextContent('Commission edit');
+    expect(container.textContent).not.toContain('Submission updated');
+  });
 });
 
 describe('carry-over lines in the broker timeline (P-C5)', () => {
