@@ -30,6 +30,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { checklistService } from "../../../services/checklistService";
 import type { ApiResult } from "../../../services";
+import logger from "../../../utils/logger";
 import type {
   AddChecklistLinkResult,
   ChecklistLinkKind,
@@ -59,6 +60,12 @@ export interface UseTransactionChecklistResult {
   data: ChecklistsForTransaction | null;
   /** Ask main again. One `get`. */
   reload: () => Promise<void>;
+  /**
+   * BACKLOG-3595: ask main again because something OUTSIDE this screen changed
+   * the checklists (a broker review, an owed pull landing). Never shows
+   * `loading`, and a failed read keeps the checklist already shown.
+   */
+  refresh: () => Promise<void>;
   /** Items whose tick is being written right now. */
   pendingItemIds: ReadonlySet<string>;
   /** `null` when refused because the item already has a write in flight. */
@@ -93,18 +100,35 @@ export function useTransactionChecklist(transactionId: string): UseTransactionCh
   const requestSeqRef = useRef(0);
   const pendingRef = useRef<Set<string>>(new Set());
 
-  const load = useCallback(async (forId: string): Promise<void> => {
-    const seq = ++requestSeqRef.current;
-    const result = await checklistService.get(forId);
-    if (seq !== requestSeqRef.current) return;
-    setStored({
-      forId,
-      value:
-        result.success && result.data
-        ? { status: "ready", data: result.data }
-        : { status: "error", error: result.error ?? "The checklists could not be loaded." },
-    });
-  }, []);
+  const load = useCallback(
+    async (forId: string, options?: { keepOnError?: boolean }): Promise<void> => {
+      const seq = ++requestSeqRef.current;
+      const result = await checklistService.get(forId);
+      if (seq !== requestSeqRef.current) return;
+      if (result.success && result.data) {
+        setStored({ forId, value: { status: "ready", data: result.data } });
+        return;
+      }
+      const error = result.error ?? "The checklists could not be loaded.";
+      if (options?.keepOnError) {
+        // BACKLOG-3595: a background re-read that fails keeps the checklist
+        // already on screen. Replacing it with the error would hide the tab
+        // (or empty it) and remount the rows, losing an unsaved note. Only
+        // when nothing good is stored for this transaction does the error
+        // show — otherwise a refresh that overtook the first load would leave
+        // the tab on "loading" for good.
+        logger.debug("[useTransactionChecklist] background re-read failed; kept the last checklist", error);
+        setStored((prev) =>
+          prev.forId === forId && prev.value.status === "ready"
+            ? prev
+            : { forId, value: { status: "error", error } },
+        );
+        return;
+      }
+      setStored({ forId, value: { status: "error", error } });
+    },
+    [],
+  );
 
   useEffect(() => {
     setStored({ forId: transactionId, value: LOADING });
@@ -114,6 +138,10 @@ export function useTransactionChecklist(transactionId: string): UseTransactionCh
   }, [transactionId, load]);
 
   const reload = useCallback(() => load(currentIdRef.current), [load]);
+  const refresh = useCallback(
+    () => load(currentIdRef.current, { keepOnError: true }),
+    [load],
+  );
 
   /** Run one write for `forId`, then one `get` if the screen still shows it. */
   const afterWrite = useCallback(
@@ -194,6 +222,7 @@ export function useTransactionChecklist(transactionId: string): UseTransactionCh
     state,
     data: state.status === "ready" ? state.data : null,
     reload,
+    refresh,
     pendingItemIds,
     setItemChecked,
     setItemNote,

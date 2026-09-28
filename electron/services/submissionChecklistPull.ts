@@ -24,6 +24,7 @@ import { selectChecklistTemplate } from "./db/checklistDbService";
 // the real SQL runs wherever this module does.
 import { clearReviewChecklistPullOwed } from "./db/submissionDbService";
 import logService from "./logService";
+import { sendToMainWindow } from "../windowRegistry";
 import type { ChecklistTemplateItemInput } from "../types/checklist";
 import type { DocumentType } from "../types/models";
 
@@ -229,5 +230,25 @@ export async function retryOwedReviewChecklistPull(
     return { status: "pulled", added: pulled.added };
   } catch (error) {
     return { status: "kept", reason: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * BACKLOG-3595 — tell an open transaction window that an owed pull added a
+ * broker checklist. Call only AFTER `retryOwedReviewChecklistPull` returned
+ * `pulled` with `added.length > 0`: the rows are written by one synchronous
+ * `dbTransaction` inside the pull, so they are committed by then, and the
+ * renderer re-read that this event triggers finds them.
+ *
+ * Its own channel, never `submission-status-changed`: every event on that
+ * channel raises a notification (useSubmissionSync), and nothing about the
+ * submission status changed here.
+ */
+export function notifyChecklistsChanged(transactionId: string): void {
+  if (!sendToMainWindow("transaction-checklists-changed", { transactionId })) {
+    logService.debug(
+      "[ChecklistPull] No main window to send the checklists-changed event",
+      "SubmissionChecklistPull",
+    );
   }
 }

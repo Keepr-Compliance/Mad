@@ -722,3 +722,133 @@ describe("BACKLOG-3599 — owed broker checklist pulls", () => {
     db.exec("DROP TRIGGER block_meta");
   });
 });
+
+// ===========================================================================
+// BACKLOG-3595 — what an open transaction window is told, and when
+// ===========================================================================
+// The renderer re-reads an open transaction's checklists on two events. That
+// re-read is right only if the rows are committed when the event is sent, so
+// every emit below records the local checklist count AT THE MOMENT OF SENDING.
+import { sendToMainWindow } from "../../windowRegistry";
+// Imported at load, so it is the instance the service holds even after the
+// 3599 block resets the module registry.
+import supabaseForRetry from "../supabaseService";
+
+describe("BACKLOG-3595 — events reach the window after the checklist rows commit", () => {
+  let sent: Array<{ channel: string; rowsAtSend: number; payload: unknown }>;
+  beforeEach(() => {
+    sent = [];
+    jest.mocked(sendToMainWindow).mockImplementation((channel: string, payload?: unknown) => {
+      sent.push({ channel, rowsAtSend: localChecklists().length, payload });
+      return true;
+    });
+  });
+  const on = (channel: string) => sent.filter((s) => s.channel === channel);
+
+  /** Three failed passes: status written with no checklist, the pull owed. */
+  async function failOut(): Promise<void> {
+    seedLocal();
+    seedCloud("needs_changes");
+    cloud.checklistFetchFailures = 3;
+    await submissionSyncService.manualSync();
+    await submissionSyncService.manualSync();
+    await submissionSyncService.manualSync();
+    expect(localStatus()).toBe("needs_changes");
+    expect(localChecklists()).toEqual([]);
+  }
+
+  it("realtime path: submission-status-changed is sent with the broker checklist already written", async () => {
+    seedLocal();
+    seedCloud("needs_changes");
+    await deliverRealtime();
+    expect(on("submission-status-changed").map((s) => s.rowsAtSend)).toEqual([1]);
+  });
+
+  it("poller path: submission-status-changed is sent with the broker checklist already written", async () => {
+    seedLocal();
+    seedCloud("needs_changes");
+    await submissionSyncService.manualSync();
+    expect(on("submission-status-changed").map((s) => s.rowsAtSend)).toEqual([1]);
+  });
+
+  it("single-submission path: submission-status-changed is sent with the broker checklist already written", async () => {
+    seedLocal();
+    seedCloud("needs_changes");
+    await submissionSyncService.syncSubmission(TXN);
+    expect(on("submission-status-changed").map((s) => s.rowsAtSend)).toEqual([1]);
+  });
+
+  it("an owed pull that lands sends transaction-checklists-changed once, after the write, and no status event", async () => {
+    await failOut();
+    sent = [];
+
+    await submissionSyncService.manualSync();
+
+    expectPulled();
+    expect(on("transaction-checklists-changed")).toEqual([
+      { channel: "transaction-checklists-changed", rowsAtSend: 1, payload: { transactionId: TXN } },
+    ]);
+    // No status transition on this pass: a status event here would raise a
+    // second "changes requested" notification (useSubmissionSync).
+    expect(on("submission-status-changed")).toEqual([]);
+    expect(sent).toHaveLength(1);
+  });
+
+  it("an owed pull that adds nothing (the template is already there) sends nothing", async () => {
+    await failOut();
+    const own = await selectChecklistTemplate({
+      transactionId: TXN,
+      templateId: TEMPLATE,
+      templateName: TEMPLATE_NAME,
+      items: [{ title: "Own item", isRequired: true, sortOrder: 0 }],
+    });
+    if (own.status !== "added") throw new Error("seed failed");
+    sent = [];
+
+    await submissionSyncService.manualSync();
+
+    expect(sent).toEqual([]);
+  });
+
+  it("an owed pull dropped because the submission is final sends nothing", async () => {
+    await failOut();
+    cloud.submissions[0].status = "approved";
+    sent = [];
+
+    await submissionSyncService.manualSync();
+
+    expect(on("transaction-checklists-changed")).toEqual([]);
+  });
+
+  it("an owed pull that fails again sends nothing", async () => {
+    await failOut();
+    cloud.checklistFetchFailures = 1;
+    sent = [];
+
+    await submissionSyncService.manualSync();
+
+    expect(localChecklists()).toEqual([]);
+    expect(on("transaction-checklists-changed")).toEqual([]);
+  });
+
+  it("a Supabase client that cannot be created does not abort the pass (the retry never throws)", async () => {
+    await failOut();
+    const supabase = supabaseForRetry as unknown as { getClient: () => unknown };
+    const real = supabase.getClient;
+    let calls = 0;
+    supabase.getClient = () => {
+      calls++;
+      // The owed retry asks first in the pass; every later caller gets the client.
+      if (calls === 1) throw new Error("Supabase is not configured");
+      return real();
+    };
+    try {
+      await submissionSyncService.manualSync();
+    } finally {
+      supabase.getClient = real;
+    }
+    // The pass went on past the retry and read the cloud statuses.
+    expect(calls).toBeGreaterThan(1);
+    expect(localChecklists()).toEqual([]);
+  });
+});

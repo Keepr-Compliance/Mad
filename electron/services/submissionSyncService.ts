@@ -21,7 +21,11 @@ import databaseService from "./databaseService";
 import logService from "./logService";
 import type { Transaction, SubmissionStatus } from "../types/models";
 import { sendToMainWindow } from "../windowRegistry";
-import { pullReviewChecklists, retryOwedReviewChecklistPull } from "./submissionChecklistPull";
+import {
+  notifyChecklistsChanged,
+  pullReviewChecklists,
+  retryOwedReviewChecklistPull,
+} from "./submissionChecklistPull";
 // BACKLOG-3599: the owed-pull marker, imported directly (not through the
 // databaseService facade) so the real SQL runs in every harness.
 import {
@@ -746,7 +750,14 @@ class SubmissionSyncService {
   }
 
   /**
-   * BACKLOG-3599 — retry every owed broker-checklist pull. Never throws.
+   * BACKLOG-3599 — retry every owed broker-checklist pull. Never throws: the
+   * owed-set read and `getClient()` (which can throw while Supabase cannot
+   * initialize) are caught and logged, and `retryOwedReviewChecklistPull`
+   * catches everything itself. It runs before any status work in the pass, so
+   * a throw here would skip the whole pass.
+   *
+   * BACKLOG-3595: a pull that added a checklist tells an open window, after
+   * the rows are committed (`notifyChecklistsChanged`).
    *
    * A marker is cleared only by `retryOwedReviewChecklistPull` on positive
    * proof (the pull succeeded, or the cloud row is approved/rejected). Any
@@ -766,10 +777,22 @@ class SubmissionSyncService {
     }
     if (owed.length === 0) return;
 
-    const client = supabaseService.getClient();
+    let client: ReturnType<typeof supabaseService.getClient>;
+    try {
+      client = supabaseService.getClient();
+    } catch (error) {
+      logService.warn(
+        `[SyncService] Could not retry owed broker checklist pulls, no Supabase client: ${error instanceof Error ? error.message : "Unknown error"}`,
+        "SubmissionSyncService",
+      );
+      return;
+    }
     for (const { transactionId, submissionIds } of owed) {
       for (const submissionId of submissionIds) {
         const outcome = await retryOwedReviewChecklistPull(client, transactionId, submissionId);
+        if (outcome.status === "pulled" && outcome.added.length > 0) {
+          notifyChecklistsChanged(transactionId);
+        }
         if (outcome.status === "kept") {
           logService.warn(
             `[SyncService] Owed broker checklist pull for submission ${submissionId} still pending: ${outcome.reason}`,

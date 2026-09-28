@@ -41,7 +41,10 @@ import gmailFetchService from "./gmailFetchService";
 import outlookFetchService from "./outlookFetchService";
 import { TRANSACTION_EMAILS_MISSING_ATTACHMENTS_SQL } from "./db/submissionEmailSql";
 import { snapshotSubmissionChecklists } from "./submissionChecklistSnapshot";
-import { retryOwedReviewChecklistPull } from "./submissionChecklistPull";
+import {
+  notifyChecklistsChanged,
+  retryOwedReviewChecklistPull,
+} from "./submissionChecklistPull";
 // BACKLOG-3599: direct, not through the databaseService facade.
 import { getOwedReviewChecklistPullsFor } from "./db/submissionDbService";
 // BACKLOG-2758 finding 3: party names come from the SAME resolver the exported
@@ -370,6 +373,10 @@ class SubmissionService {
           transactionId,
           submissionId
         );
+        // BACKLOG-3595: the rows are committed; an open Checklist tab re-reads.
+        if (outcome.status === "pulled" && outcome.added.length > 0) {
+          notifyChecklistsChanged(transactionId);
+        }
         if (outcome.status === "kept") {
           allLanded = false;
           logService.warn(

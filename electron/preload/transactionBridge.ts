@@ -686,6 +686,21 @@ export const transactionBridge = {
     };
   },
 
+  /**
+   * BACKLOG-3595: main added a broker checklist to this transaction with no
+   * status change (an owed pull landed). Sent after the local write commits.
+   * Deliberately a separate channel: every `submission-status-changed` raises
+   * a notification (useSubmissionSync).
+   * @returns Cleanup function
+   */
+  onChecklistsChanged: (callback: (data: { transactionId: string }) => void) => {
+    const handler = (_event: unknown, data: { transactionId: string }) => callback(data);
+    ipcRenderer.on("transaction-checklists-changed", handler);
+    return () => {
+      ipcRenderer.removeListener("transaction-checklists-changed", handler);
+    };
+  },
+
   // ============================================
   // EMAIL ATTACHMENT METHODS (TASK-1776)
   // ============================================

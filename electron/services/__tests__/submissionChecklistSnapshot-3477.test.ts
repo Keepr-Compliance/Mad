@@ -93,6 +93,8 @@ jest.mock("../contactResolutionService", () => ({
   extractParticipantHandles: jest.fn(() => []),
   nameForHandle: jest.fn(),
 }));
+// BACKLOG-3595: the resubmit pre-pull tells an open window when it adds a checklist.
+jest.mock("../../windowRegistry", () => ({ sendToMainWindow: jest.fn(() => true) }));
 jest.mock("electron", () => ({
   app: { getVersion: jest.fn().mockReturnValue("2.38.1") },
   net: { isOnline: () => false },
@@ -114,6 +116,7 @@ import { CHECKLISTS_NOT_SENT_ERROR } from "../submissionService";
 import { getOwedReviewChecklistPullsFor, markReviewChecklistPullOwed } from "../db/submissionDbService";
 import * as Sentry from "@sentry/electron/main";
 import { getChecklistsForTransaction } from "../db/checklistDbService";
+import { sendToMainWindow } from "../../windowRegistry";
 
 const submissionDb = jest.requireActual("../db/submissionDbService") as typeof import("../db/submissionDbService");
 
@@ -1051,6 +1054,42 @@ describe("BACKLOG-3599 — resubmit with an owed broker checklist pull", () => {
     const payload = fake.rpcCalls[fake.rpcCalls.length - 1].args.p_checklists as Row[];
     expect(payload.map((c) => c.template_id)).not.toContain(TPL_BROKER);
     expect(getOwedReviewChecklistPullsFor(TX)).toEqual([v1]);
+  });
+
+  describe("BACKLOG-3595 — an open window is told after the pre-pull commits", () => {
+    let sent: Array<{ channel: string; rowsAtSend: number; payload: unknown }>;
+    const localChecklistCount = () =>
+      (db.prepare("SELECT COUNT(*) AS n FROM transaction_checklists WHERE transaction_id = ?").get(TX) as {
+        n: number;
+      }).n;
+    beforeEach(() => {
+      sent = [];
+      jest.mocked(sendToMainWindow).mockImplementation((channel: string, payload?: unknown) => {
+        sent.push({ channel, rowsAtSend: localChecklistCount(), payload });
+        return true;
+      });
+    });
+
+    it("the pre-pull adds the broker checklist -> transaction-checklists-changed once, after the write, no status event", async () => {
+      await submittedWithOwedPull();
+      const before = localChecklistCount();
+
+      const second = await submissionService.resubmitTransaction(TX);
+
+      expect(second.success).toBe(true);
+      expect(sent).toEqual([
+        { channel: "transaction-checklists-changed", rowsAtSend: before + 1, payload: { transactionId: TX } },
+      ]);
+    });
+
+    it("the pre-pull fails -> nothing is sent", async () => {
+      await submittedWithOwedPull();
+      fake.failReadsOf.add("submission_checklists");
+
+      await submissionService.resubmitTransaction(TX);
+
+      expect(sent).toEqual([]);
+    });
   });
 
   it("nothing owed -> no pull, no field", async () => {

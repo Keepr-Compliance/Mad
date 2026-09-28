@@ -491,12 +491,19 @@ function TransactionDetails({
   // row at open, so a list re-read never reaches it — the header needs its own
   // subscriber. Re-read via getOverview (get-details would start a background
   // sync) and patch only the two fields the status sync writes.
+  // BACKLOG-3595 follow-up: the same event also re-reads the checklists — main
+  // pulls a broker-added checklist and commits it before it emits. Beside the
+  // header re-read, not inside it, so a failed header read cannot skip it.
+  // `refresh` never shows loading and keeps the last good checklist on a
+  // failed read, so an open tab and an unsaved note survive.
+  const refreshChecklist = checklist.refresh;
   useEffect(() => {
     const subscribe = window.api?.transactions?.onSubmissionStatusChanged;
     if (typeof subscribe !== "function") return;
     const transactionId = transaction.id;
     return subscribe((data) => {
       if (data.transactionId !== transactionId) return;
+      void refreshChecklist();
       void window.api.transactions
         .getOverview(transactionId)
         .then((result) => {
@@ -516,7 +523,20 @@ function TransactionDetails({
           /* non-critical: the next event or open re-reads it */
         });
     });
-  }, [transaction.id]);
+  }, [transaction.id, refreshChecklist]);
+
+  // BACKLOG-3595 follow-up: main landed a broker checklist with no status
+  // change (an owed pull retried by the sync pass, or pulled before a
+  // resubmit). Same re-read, same transaction guard; no header re-read.
+  useEffect(() => {
+    const subscribe = window.api?.transactions?.onChecklistsChanged;
+    if (typeof subscribe !== "function") return;
+    const transactionId = transaction.id;
+    return subscribe((data) => {
+      if (data.transactionId !== transactionId) return;
+      void refreshChecklist();
+    });
+  }, [transaction.id, refreshChecklist]);
 
   // BACKLOG-1832: Subscribe to background auto-sync lifecycle events so the UI
   // reflects the in-flight fetch state and auto-refreshes when emails arrive.
