@@ -24,8 +24,26 @@ export const LINK_COLUMNS = 'id, parent_submission_id, status, created_at';
 /** PostgREST caps an unranged read at max_rows (supabase/config.toml: 1000). */
 export const READ_BLOCK = 1000;
 
-/** Guard against a reader that never returns a short block. */
+/**
+ * Guard against a reader that never returns a short block. NOTE: this silently
+ * caps the read at MAX_BLOCKS × READ_BLOCK = 100,000 visible rows per list
+ * (broker and agent lists alike); rows past that are never seen, with no error.
+ */
 const MAX_BLOCKS = 100;
+
+/**
+ * The "Pending" tab (value `submitted`) means "waiting for the broker", which a
+ * resubmitted deal is too. Every other filter value matches its status exactly.
+ */
+export const PENDING_FILTER = 'submitted';
+export const PENDING_STATUSES: readonly string[] = ['submitted', 'resubmitted'];
+
+/** Whether a head's status matches a list's status filter (null = every deal). */
+export function headMatchesFilter(headStatus: string | null, filter: string | null): boolean {
+  if (filter === null) return true;
+  if (filter === PENDING_FILTER) return headStatus !== null && PENDING_STATUSES.includes(headStatus);
+  return headStatus === filter;
+}
 
 export interface ChainLink {
   id: string;
@@ -72,7 +90,7 @@ export async function loadDealPage<T extends { id: string }>(args: {
   readLinks: (_from: number, _to: number) => PromiseLike<ReadResult>;
   /** Full rows for these ids, scoped as the list is. Never called with []. */
   readRows: (_ids: string[]) => PromiseLike<ReadResult>;
-  /** A status to keep, matched on the head; null keeps every deal. */
+  /** A status filter, matched on the head (see headMatchesFilter); null keeps every deal. */
   status: string | null;
   page: number;
   pageSize: number;
@@ -88,7 +106,7 @@ export async function loadDealPage<T extends { id: string }>(args: {
   }
 
   const heads = selectDealHeads(links)
-    .filter((h) => args.status === null || h.status === args.status)
+    .filter((h) => headMatchesFilter(h.status, args.status))
     .sort(compareNewestFirst);
 
   const total = heads.length;

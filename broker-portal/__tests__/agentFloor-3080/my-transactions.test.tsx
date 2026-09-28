@@ -483,6 +483,14 @@ describe('list page', () => {
     expect(renderedDetailIds(container)).toEqual([]);
   });
 
+  it('BACKLOG-3597: "Pending" lists the agent\'s resubmitted deals (submitted OR resubmitted)', async () => {
+    given('brokerage agent', ON);
+    const { container } = render(elementOf(await run(list({ status: 'submitted' }))));
+    // Both of A's deals in this brokerage are resubmitted at their head.
+    expect(renderedDetailIds(container)).toEqual([S_A, S_A_CHILD_OF_OTHER_ORG].sort());
+    expect(container.innerHTML).not.toContain(S_B);
+  });
+
   it('an unknown status value is ignored, not passed to the query', async () => {
     given('brokerage agent', ON);
     const { container } = render(elementOf(await run(list({ status: 'uploading' }))));

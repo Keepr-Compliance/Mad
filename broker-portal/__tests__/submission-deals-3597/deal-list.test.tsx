@@ -154,6 +154,37 @@ describe('broker Submissions list: one row per deal', () => {
     expect(listedIds((await renderList({ status: 'needs_changes' })).container)).toEqual([V2]);
   });
 
+  it('D2b: "Pending" lists submitted AND resubmitted deals, on the head, and nothing else', async () => {
+    // One single-version deal per status, plus the fixture chains. Heads:
+    // V2 needs_changes, SOLO submitted, W4 resubmitted, and one each below.
+    const extra = (id: string, status: string, day: string) => version(id, 1, status, null, `2026-09-${day}T00:00:00Z`);
+    const P_UR = '00000000-0000-4000-8000-000000359741'; // pii-allow-uuid: invented fixture id
+    const P_NC = '00000000-0000-4000-8000-000000359742'; // pii-allow-uuid: invented fixture id
+    const P_AP = '00000000-0000-4000-8000-000000359743'; // pii-allow-uuid: invented fixture id
+    const P_RJ = '00000000-0000-4000-8000-000000359744'; // pii-allow-uuid: invented fixture id
+    given([
+      ...ROWS,
+      extra(P_UR, 'under_review', '10'),
+      extra(P_NC, 'needs_changes', '11'),
+      extra(P_AP, 'approved', '12'),
+      extra(P_RJ, 'rejected', '13'),
+    ]);
+    const pending = await renderList({ status: 'submitted' });
+    // SOLO (submitted, 09-05) and W4 (resubmitted, 09-04). W4's superseded
+    // parent W3 is needs_changes and must not pull the deal in or out.
+    expect(listedIds(pending.container)).toEqual([SOLO, W4]);
+    expect(pending.container).toHaveTextContent('2 submissions with status');
+    // The tab's label is still "Pending".
+    expect(pending.container.querySelector('a[href="/dashboard/submissions?status=submitted"]')).toHaveTextContent(
+      /^Pending$/
+    );
+    // Every other tab is unchanged: an exact match on the head's status.
+    expect(listedIds((await renderList({ status: 'needs_changes' })).container)).toEqual([P_NC, V2]);
+    expect(listedIds((await renderList({ status: 'approved' })).container)).toEqual([P_AP]);
+    expect(listedIds((await renderList({ status: 'rejected' })).container)).toEqual([P_RJ]);
+    expect(listedIds((await renderList({ status: 'under_review' })).container)).toEqual([P_UR]);
+  });
+
   it('D3: the count is of deals, not rows', async () => {
     const { container } = await renderList();
     expect(container).toHaveTextContent('3 submissions');
