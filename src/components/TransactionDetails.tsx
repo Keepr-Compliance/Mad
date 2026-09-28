@@ -1621,6 +1621,10 @@ function TransactionDetails({
           onDatesSaved={() => {
             void rereadAfterDatesSaved();
           }}
+          // BACKLOG-3477: the unticked-required-items warning. Only when the
+          // plan allows checklists — for any other gate value the Checklist
+          // tab is read-only, so the agent could not act on the warning.
+          checklistsEnabled={checklistGate === "allowed"}
           // BACKLOG-2792: S4's Export option — the founder's "the confirmation
           // window includes an Export option that triggers the same S3 export
           // flow an individual gets", literally the same modal, not a parallel
