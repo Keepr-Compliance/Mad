@@ -16,11 +16,11 @@ No file here has a `.test.` or `.spec.` infix.
 
 ```bash
 H=supabase/tests/backlog-3596/run.sh
-export SSH_HOST=<ssh alias> PG_CONTAINER=<container name>   # values on the backlog item
+export SSH_HOST=<ssh alias> PG_CONTAINER=<container name>   # values: a private pm_comment on BACKLOG-3596 (no host names in the repo)
 
 bash $H gate                  # refuses unless the venue is schema-only and checklist-free
 bash $H controls              # 23 controls, each in its own rolled-back transaction
-bash $H mutants               # 42 mutants from lib/mutants.py against their target controls
+bash $H mutants               # 43 mutants from lib/mutants.py against their target controls
 MATRIX=1 bash $H mutants m03  # one mutant against every control
 bash $H gate                  # again: proves nothing leaked out of a transaction
 ```
@@ -68,7 +68,7 @@ otherwise pass.
 | c11 | agent finalize after the carry: cleared entries precede the status entry | — |
 | c12 | submitter cannot insert an item with a cleared marker; pair CHECK holds | m33 |
 | c13 | removed item, renamed item (same id), item moved to another template → one `removed` entry each; renamed/moved rows unmarked | m12 m13 m25 |
-| c14 / c14b | tick refused on a version with a newer version — uploading and resubmitted; outsiders still `not_authorized`; v2 and a lone needs_changes version tick | m05 m06 m34 |
+| c14 / c14b | tick refused on a version with a newer version — uploading and resubmitted; outsiders still `not_authorized`; v2 and a lone needs_changes version tick, and that tick writes exactly one `checklist_review` entry by the broker | m05 m06 m34 m43 |
 | c15 | function security / search_path / grants; carry signature; authenticated has no UPDATE/DELETE on items | m29 m30 m31 |
 | c16 | parent only: v2 unticked by the broker → v3 unticked (no jump from v1) | m04 |
 | c17 | parent must be same submitter, deal, version − 1 → otherwise 42501 and the snapshot rolls back | m09 m10 m11 |
@@ -85,5 +85,5 @@ Not observable in a one-session harness: the parent items' `FOR SHARE` lock
 
 Recorded 2026-09-28 on the NAS test venue, Postgres 17.6, connected as the
 venue's `postgres` role, branch `feature-portal/BACKLOG-3596-cloud`. See
-`control-run.txt` (23 green / 23, 136 assertions) and `mutant-run.txt`
-(42 run, 0 not as expected). `gate` re-run afterwards: OK.
+`control-run.txt` (23 green / 23, 140 assertions) and `mutant-run.txt`
+(43 run, 0 not as expected). `gate` re-run afterwards: OK.

@@ -1,4 +1,4 @@
-mutants.py: 42 mutants written
+mutants.py: 43 mutants written
 m01-restamp-by-with-caller  [as expected]  (migration)
     MUTATION APPLIED: 2 line(s) differ; first: reviewer_checked_by = v_uid,
     RED:   c01 c09
@@ -9,8 +9,8 @@ m02-restamp-at-with-now  [as expected]  (migration)
     MUTATION APPLIED: 2 line(s) differ; first: reviewer_checked_at = v_now
     RED:   c01 c09
     green: none
-      c01: CONTROL FAILED: C01 original reviewer and time: L-item-1:broker:2026-09-28 07:02,L-item-2:broker:2026-09-28 07:02,L-item-3:broker:2026-09-28 07:02,L-item-5:brok
-      c09: CONTROL FAILED: C09 v3 ticks: L-item-1:broker:2026-09-28 07:02,L-item-2:broker:2026-09-28 07:02,L-item-3:broker:2026-09-28 07:02,L-item-5:broker:2026-09-28 07:0
+      c01: CONTROL FAILED: C01 original reviewer and time: L-item-1:broker:2026-09-28 07:16,L-item-2:broker:2026-09-28 07:16,L-item-3:broker:2026-09-28 07:16,L-item-5:brok
+      c09: CONTROL FAILED: C09 v3 ticks: L-item-1:broker:2026-09-28 07:16,L-item-2:broker:2026-09-28 07:16,L-item-3:broker:2026-09-28 07:16,L-item-5:broker:2026-09-28 07:1
 m03-compare-cloud-row-ids  [as expected]  (migration)
     MUTATION APPLIED: 2 line(s) differ; first: COALESCE(lm.submission_attachment_id, lm.submission_message_id)::text AS local_id
     RED:   c01 c04
@@ -101,7 +101,7 @@ m20-no-old-client-branch  [as expected]  (migration)
     MUTATION APPLIED: 2 line(s) differ; first: ELSIF false THEN
     RED:   c18
     green: none
-      c18: CONTROL FAILED: C18a one unavailable entry: [{"type": "checklist_review_cleared", "reason": "removed", "item_id": null, "changed_at": "2026-09-28T07:02:41.19006
+      c18: CONTROL FAILED: C18a one unavailable entry: [{"type": "checklist_review_cleared", "reason": "removed", "item_id": null, "changed_at": "2026-09-28T07:16:39.50439
 m21-no-copy-without-ancestor-term  [as expected]  (migration)
     MUTATION APPLIED: 5 line(s) differ; first: WHERE true
     RED:   c19
@@ -214,4 +214,9 @@ m42-rollback-keeps-carry  [as expected]  (rollback)
     RED:   c22
     green: none
       c22: CONTROL FAILED: C22 rollback restores everything: only-before 0, only-after 1
-mutants: 42 run, 0 not as expected
+m43-tick-drops-history-on-needs-changes  [as expected]  (migration)
+    MUTATION APPLIED: 2 line(s) differ; first: WHERE id = v_row.submission_id AND status <> 'needs_changes';
+    RED:   c14
+    green: none
+      c14: CONTROL FAILED: C14 lone: status_history grew by exactly one
+mutants: 43 run, 0 not as expected

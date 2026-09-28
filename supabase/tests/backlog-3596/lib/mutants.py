@@ -109,6 +109,11 @@ MUTANTS = [
     ("m34-superseded-before-authorization", "c14", "migration",
      "  IF NOT FOUND OR NOT public.can_review_submission(v_row.organization_id) THEN\n    RAISE EXCEPTION 'not_authorized' USING ERRCODE = '42501';\n  END IF;\n  IF NOT COALESCE((public.check_feature_access(v_row.organization_id",
      "  IF FOUND AND EXISTS (SELECT 1 FROM public.transaction_submissions c WHERE c.parent_submission_id = v_row.submission_id) THEN\n    RAISE EXCEPTION 'superseded' USING ERRCODE = '42501';\n  END IF;\n  IF NOT FOUND OR NOT public.can_review_submission(v_row.organization_id) THEN\n    RAISE EXCEPTION 'not_authorized' USING ERRCODE = '42501';\n  END IF;\n  IF NOT COALESCE((public.check_feature_access(v_row.organization_id"),
+    # SR mS6 (C-12): the tick lands but its history append skips a
+    # needs_changes row -- what an RLS-bound append would do under 3592.
+    ("m43-tick-drops-history-on-needs-changes", "c14", "migration",
+     "           'checklist_name', v_row.template_name))\n   WHERE id = v_row.submission_id;",
+     "           'checklist_name', v_row.template_name))\n   WHERE id = v_row.submission_id AND status <> 'needs_changes';"),
     # --- BACKLOG-3592 UPDATE rule ---------------------------------------------
     ("m35-update-rule-unchanged", "c20", "migration",
      "    OR (((status)::text = ANY (ARRAY['submitted'::text, 'resubmitted'::text, 'under_review'::text]))\n        AND (organization_id IN",
