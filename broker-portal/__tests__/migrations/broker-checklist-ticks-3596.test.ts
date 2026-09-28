@@ -1,0 +1,226 @@
+/**
+ * BACKLOG-3596 — the CI tripwire for the broker-tick carry-over migration.
+ *
+ * WHAT THIS CAN PROVE: what the migration file (and its rollback) says. CI has
+ * no database. The behaviour is proved on a real Postgres by
+ * supabase/tests/backlog-3596 (controls c00-c22, 42 mutants); this file pins
+ * the lines a later edit is most likely to drop or loosen, so that such a
+ * change fails in CI too.
+ */
+
+import { readdirSync, readFileSync } from 'fs';
+import { join } from 'path';
+
+const REPO = join(__dirname, '../../..');
+const MIGRATIONS_DIR = join(REPO, 'supabase/migrations');
+const SUFFIX = '_backlog_3596_broker_checklist_ticks.sql';
+const MIG_3477 = '20260925073000_backlog_3477_submission_checklist_review.sql';
+const ROLLBACK = join(REPO, 'supabase/tests/backlog-3596/rollback.sql');
+
+function read(path: string): string {
+  return readFileSync(path, 'utf8').replace(/\r\n?/g, '\n');
+}
+
+function migrationFile(): string {
+  const files = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(SUFFIX));
+  expect(files).toHaveLength(1);
+  return files[0];
+}
+
+/** Comments out, whitespace collapsed: the checks read statements only. */
+function statements(raw: string): string {
+  return raw
+    .split('\n')
+    .map((line) => line.replace(/--.*$/, ''))
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function sql(): string {
+  return statements(read(join(MIGRATIONS_DIR, migrationFile())));
+}
+
+/** One CREATE FUNCTION / CREATE POLICY statement, through its end marker. */
+function block(text: string, start: string, end: string): string {
+  const s = text.indexOf(start);
+  expect(s).toBeGreaterThanOrEqual(0);
+  expect(text.indexOf(start, s + 1)).toBe(-1);
+  const e = text.indexOf(end, s);
+  expect(e).toBeGreaterThan(s);
+  return text.slice(s, e + end.length);
+}
+
+const carry = () => block(sql(), 'CREATE OR REPLACE FUNCTION public.carry_submission_checklist_reviews(', '$$;');
+const snapshot = () => block(sql(), 'CREATE OR REPLACE FUNCTION public.snapshot_submission_checklists(', '$$;');
+const tick = () => block(sql(), 'CREATE OR REPLACE FUNCTION public.set_submission_checklist_reviewer_check(', '$$;');
+const updateRule = () =>
+  block(sql(), 'CREATE POLICY transaction_submissions_update_public ON public.transaction_submissions', ' );');
+
+/** A function's body as written (not collapsed), for verbatim comparison. */
+function rawBody(text: string, name: string): string {
+  const s = text.indexOf(`CREATE OR REPLACE FUNCTION public.${name}(`);
+  expect(s).toBeGreaterThanOrEqual(0);
+  const e = text.indexOf('$$;', text.indexOf('AS $$', s) + 5);
+  return text.slice(s, e + 3);
+}
+
+const REVIEWER_ROLES =
+  "(organization_id IN ( SELECT organization_members.organization_id FROM organization_members WHERE ((organization_members.user_id = ( SELECT auth.uid() AS uid)) AND ((organization_members.role)::text = ANY (ARRAY[('broker'::character varying)::text, ('admin'::character varying)::text])))))";
+
+describe('BACKLOG-3596 — broker checklist ticks migration', () => {
+  it('sorts after the BACKLOG-3547 migration and opens no transaction', () => {
+    expect(migrationFile().slice(0, 14) > '20260927120000').toBe(true);
+    expect(sql()).not.toMatch(/(^|;)\s*(BEGIN|COMMIT)\s*;/i);
+  });
+
+  it('adds no actor, no exemption and no role switch (ruling f581efb4)', () => {
+    const s = sql();
+    expect(s).not.toContain('guard_status_history_append_only');
+    expect(s).not.toMatch(/service_role/i);
+    expect(s).not.toMatch(/set_config|SET ROLE|SET LOCAL ROLE/i);
+    expect(s).not.toContain('00000000-0000-0000-0000-000000000000');
+    expect(s).not.toMatch(/DROP TRIGGER/i);
+  });
+
+  it('the carry takes only the submission id, runs as definer with an empty search_path, and only authenticated may call it', () => {
+    const c = carry();
+    expect(c).toContain('carry_submission_checklist_reviews( p_submission_id uuid ) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = \'\'');
+    expect(sql()).toContain('REVOKE EXECUTE ON FUNCTION public.carry_submission_checklist_reviews(uuid) FROM PUBLIC, anon;');
+    expect(sql()).toContain('GRANT EXECUTE ON FUNCTION public.carry_submission_checklist_reviews(uuid) TO authenticated;');
+  });
+
+  it('the carry checks the caller before anything else', () => {
+    const c = carry();
+    expect(c).toContain(
+      "IF NOT FOUND OR v_sub.submitted_by IS DISTINCT FROM v_uid OR v_sub.status IS DISTINCT FROM 'uploading' THEN RAISE EXCEPTION 'not_authorized'",
+    );
+    expect(c).toContain(
+      "IF NOT COALESCE((public.check_feature_access(v_sub.organization_id, 'transaction_checklists') ->> 'allowed')::boolean, false) THEN RAISE EXCEPTION 'not_authorized'",
+    );
+  });
+
+  it('the parent must be the same organization, deal and submitter, one version back (SR C-2)', () => {
+    const c = carry();
+    for (const term of [
+      'OR v_parent.organization_id IS DISTINCT FROM v_sub.organization_id',
+      'OR v_parent.local_transaction_id IS DISTINCT FROM v_sub.local_transaction_id',
+      'OR v_parent.submitted_by IS DISTINCT FROM v_sub.submitted_by',
+      'OR v_parent.version <> v_sub.version - 1 THEN',
+    ]) {
+      expect(c).toContain(term);
+    }
+  });
+
+  it('matches on local item id AND title AND template, parent only (SR C-3)', () => {
+    const c = carry();
+    expect(c).toContain('AND ni.local_item_id = pi.local_item_id AND ni.title = pi.title AND nh.template_id IS NOT DISTINCT FROM ph.template_id');
+    expect(c).toContain('WHERE pi.submission_id = v_parent.id AND pi.reviewer_checked AND pi.local_item_id IS NOT NULL');
+  });
+
+  it('carries the ORIGINAL reviewer and time, never the caller or now()', () => {
+    const c = carry();
+    expect(c).toContain(
+      'SET reviewer_checked = true, reviewer_checked_by = r.reviewer_checked_by, reviewer_checked_at = r.reviewer_checked_at WHERE id = r.new_item_id;',
+    );
+    expect(c).not.toMatch(/reviewer_checked_by\s*=\s*v_uid/);
+    expect(c).not.toMatch(/reviewer_checked_at\s*=\s*(v_now|now\(\))/);
+  });
+
+  it('compares the desktop ids of the evidence, never cloud row ids, and the note after trimming', () => {
+    const c = carry();
+    expect(c).toContain('COALESCE(a.local_attachment_id, m.local_message_id) AS local_id');
+    expect(c).not.toMatch(/COALESCE\(lm\.submission_attachment_id/);
+    expect(c).toContain("NULLIF(btrim(p.new_note), '') IS DISTINCT FROM NULLIF(btrim(p.parent_note), '')");
+    // both directions of the set difference
+    expect(c.match(/EXCEPT SELECT e\.kind, e\.local_id FROM evidence e/g)).toHaveLength(2);
+  });
+
+  it('locks the parent items and appends every entry in one statement', () => {
+    const c = carry();
+    expect(c).toMatch(/PERFORM 1 FROM public\.submission_checklist_items pi WHERE pi\.submission_id = v_parent\.id FOR SHARE;/);
+    expect(c).toContain("SET status_history = COALESCE(status_history, '[]'::jsonb) || v_entries WHERE id = v_sub.id;");
+    expect(c.match(/UPDATE public\.transaction_submissions/g)).toHaveLength(1);
+  });
+
+  it('writes the two typed entry kinds, each naming the caller', () => {
+    const c = carry();
+    expect(c.match(/'type', 'checklist_review_cleared', 'changed_at', v_now, 'changed_by', v_uid,/g)).toHaveLength(2);
+    expect(c).toContain("'type', 'checklist_review_unavailable', 'changed_at', v_now, 'changed_by', v_uid, 'reason', v_unavailable");
+    expect(c).toContain("v_unavailable := 'no_previous_copy';");
+    expect(c).toContain("v_unavailable := 'unmatched_client';");
+    expect(c).not.toMatch(/'changed_by', (?!v_uid)/);
+  });
+
+  it('the snapshot stays SECURITY INVOKER, stores local_item_id, and calls the carry after every insert', () => {
+    const s = snapshot();
+    expect(s).toContain("RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = ''");
+    expect(s).toContain("NULLIF(it ->> 'local_item_id', ''),");
+    const call = s.indexOf('v_carry := public.carry_submission_checklist_reviews(p_submission_id);');
+    expect(call).toBeGreaterThan(s.lastIndexOf('INSERT INTO public.submission_checklist_link_members'));
+    expect(call).toBeLessThan(s.indexOf('RETURN jsonb_build_object('));
+    expect(s.match(/carry_submission_checklist_reviews/g)).toHaveLength(1);
+  });
+
+  it('the tick refuses a superseded version, any child status, after the authorization checks', () => {
+    const t = tick();
+    const sup = t.indexOf(
+      "IF EXISTS (SELECT 1 FROM public.transaction_submissions c WHERE c.parent_submission_id = v_row.submission_id) THEN RAISE EXCEPTION 'superseded' USING ERRCODE = '42501';",
+    );
+    expect(sup).toBeGreaterThan(t.indexOf("RAISE EXCEPTION 'added_at_review'"));
+    expect(sup).toBeGreaterThan(t.lastIndexOf("RAISE EXCEPTION 'not_authorized'"));
+  });
+
+  it('the submitter still inserts no reviewer or cleared value', () => {
+    const p = block(sql(), 'CREATE POLICY submission_checklist_items_insert ON', ' );');
+    for (const term of [
+      'submission_checklist_items.reviewer_checked = false',
+      'AND submission_checklist_items.reviewer_checked_by IS NULL',
+      'AND submission_checklist_items.reviewer_checked_at IS NULL',
+      'AND submission_checklist_items.cleared_reviewer_id IS NULL',
+      'AND submission_checklist_items.cleared_at IS NULL',
+      "AND ts.status = 'uploading'",
+    ]) {
+      expect(p).toContain(term);
+    }
+  });
+
+  it('BACKLOG-3592: the reviewer UPDATE branch admits only open statuses; the rest is unchanged', () => {
+    const u = updateRule();
+    expect(u).toContain('FOR UPDATE TO public');
+    expect(u).toContain(
+      "USING ( ((submitted_by = ( SELECT auth.uid() AS uid)) AND ((status)::text = ANY (ARRAY['needs_changes'::text, 'uploading'::text]))) OR (((status)::text = ANY (ARRAY['submitted'::text, 'resubmitted'::text, 'under_review'::text])) AND " +
+        REVIEWER_ROLES +
+        ') )',
+    );
+    expect(u).toContain(
+      "WITH CHECK ( ((submitted_by = ( SELECT auth.uid() AS uid)) AND ((status)::text = ANY (ARRAY['needs_changes'::text, 'resubmitted'::text, 'uploading'::text, 'submitted'::text]))) OR " +
+        REVIEWER_ROLES +
+        ' );',
+    );
+  });
+});
+
+describe('BACKLOG-3596 — rollback.sql', () => {
+  const rb = () => read(ROLLBACK);
+  const m3477 = () => read(join(MIGRATIONS_DIR, MIG_3477));
+
+  it('restores the snapshot and tick bodies verbatim from BACKLOG-3477', () => {
+    for (const name of ['snapshot_submission_checklists', 'set_submission_checklist_reviewer_check']) {
+      expect(rawBody(rb(), name)).toBe(rawBody(m3477(), name));
+    }
+  });
+
+  it('drops the carry and the new columns, and restores both rules', () => {
+    const s = statements(rb());
+    expect(s).toContain('DROP FUNCTION IF EXISTS public.carry_submission_checklist_reviews(uuid);');
+    for (const col of ['cleared_at', 'cleared_reviewer_id', 'local_item_id']) {
+      expect(s).toContain(`DROP COLUMN IF EXISTS ${col}`);
+    }
+    expect(s).toContain(
+      "USING ( ((submitted_by = ( SELECT auth.uid() AS uid)) AND ((status)::text = ANY (ARRAY['needs_changes'::text, 'uploading'::text]))) OR " + REVIEWER_ROLES + ' )',
+    );
+    const ins = block(s, 'CREATE POLICY submission_checklist_items_insert ON', ' );');
+    expect(ins).not.toContain('cleared');
+  });
+});
