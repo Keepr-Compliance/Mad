@@ -342,13 +342,26 @@ class SubmissionService {
    * Returns true when nothing is owed afterwards (or nothing was owed). A
    * success clears the marker (inside `retryOwedReviewChecklistPull`); a
    * failure keeps it for the sync pass. Never throws.
+   *
+   * If the local owed set cannot be READ, it returns true (logged): with no
+   * evidence anything is owed, the agent is not told something is missing.
+   * The sync pass still retries any marker that exists.
    */
   private async pullOwedReviewChecklistsBeforeResubmit(
     transactionId: string
   ): Promise<boolean> {
+    let owed: string[];
     try {
-      const owed = getOwedReviewChecklistPullsFor(transactionId);
-      if (owed.length === 0) return true;
+      owed = getOwedReviewChecklistPullsFor(transactionId);
+    } catch (error) {
+      logService.warn(
+        `[Submission] Could not read owed broker checklist pulls before resubmit: ${error instanceof Error ? error.message : "Unknown error"}`,
+        "SubmissionService"
+      );
+      return true;
+    }
+    if (owed.length === 0) return true;
+    try {
       const client = supabaseService.getClient();
       let allLanded = true;
       for (const submissionId of owed) {

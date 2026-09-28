@@ -70,8 +70,16 @@ let emulator: Emulator;
 
 // The real statement modules read their handle through `ensureDb()`; point it
 // at the test database so the SHIPPED SQL text is what runs.
+// BACKLOG-3600: the checklist snapshot reads through dbAll/dbGet (not
+// ensureDb). With only ensureDb here that read threw and the submit used to
+// swallow it; a failed local checklist read now fails the submit, so the
+// helpers are provided — the transaction simply has no checklists.
 jest.mock("../db/core/dbConnection", () => ({
   ensureDb: () => db,
+  dbGet: (sql: string, params: unknown[] = []) => db.prepare(sql).get(...(params as never[])),
+  dbAll: (sql: string, params: unknown[] = []) => db.prepare(sql).all(...(params as never[])),
+  dbRun: (sql: string, params: unknown[] = []) => db.prepare(sql).run(...(params as never[])),
+  dbTransaction: (fn: () => unknown) => db.transaction(fn)(),
 }));
 
 const mockGetAuthSession = jest.fn();
