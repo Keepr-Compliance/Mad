@@ -976,6 +976,7 @@ describe("BACKLOG-3600 — the checklist copy is retried, then fails the submit"
     ["40001", "could not serialize access due to concurrent update"],
     ["57014", "canceling statement due to statement timeout"],
     ["53300", "sorry, too many clients already"],
+    ["PGRST204", "Could not find the 'notes' column of 'submission_checklists' in the schema cache"],
   ])("G1: %s once, then success -> retried and submitted with the copy", async (code, message) => {
     await seedChecklists();
     fake.rpcScript = [{ code, message }];

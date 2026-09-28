@@ -106,6 +106,7 @@ describe("useTransactionChecklist.refresh (BACKLOG-3595)", () => {
  *   no store-time transaction guard, or a stale-closure one  -> T4
  *   `storedRef` mirrored from render, not written with each
  *   `setStored` (two answers landing in one batch)           -> S2
+ *   failure stored by a non-newest read                      -> P10
  */
 describe("useTransactionChecklist — overlapping reads (BACKLOG-3599)", () => {
   /** A distinct checklist object per read, so `toBe` tells them apart. */
@@ -271,5 +272,35 @@ describe("useTransactionChecklist — overlapping reads (BACKLOG-3599)", () => {
 
     expect(result.current.state).toEqual({ status: "error", error: "read failed" });
     expect(result.current.data).not.toBe(aShown);
+  });
+
+  it("P10: a write's re-read fails while a newer refresh is in flight -> nothing changes", async () => {
+    const { result } = renderHook(() => useTransactionChecklist("txn-1"));
+    await waitFor(() => expect(result.current.state.status).toBe("ready"));
+    const preSave = result.current.data;
+    const reRead = deferred<unknown>();
+    const refreshRead = deferred<unknown>();
+    api().get.mockReturnValueOnce(reRead.promise).mockReturnValueOnce(refreshRead.promise);
+    let saving!: Promise<unknown>;
+    act(() => {
+      saving = result.current.setItemNote("item-1", "after save");
+    });
+    await waitFor(() => expect(api().get).toHaveBeenCalledTimes(2));
+    let refreshing!: Promise<void>;
+    act(() => {
+      refreshing = result.current.refresh();
+    });
+    await act(async () => {
+      reRead.resolve(FAILED);
+      await saving;
+    });
+    expect(result.current.state.status).toBe("ready");
+    expect(result.current.data).toBe(preSave);
+    const fresh = { success: true, checklists: fixtureChecklists() };
+    await act(async () => {
+      refreshRead.resolve(fresh);
+      await refreshing;
+    });
+    expect(result.current.data).toBe(fresh.checklists);
   });
 });
