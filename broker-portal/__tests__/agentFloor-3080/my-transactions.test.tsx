@@ -467,7 +467,8 @@ describe('list page', () => {
   it('C1/R2: agent A sees exactly their own rows in THIS brokerage', async () => {
     given('brokerage agent', ON);
     const { container } = render(elementOf(await run(list())));
-    expect(renderedDetailIds(container)).toEqual([S_A_PARENT, S_A, S_A_CHILD_OF_OTHER_ORG].sort());
+    // BACKLOG-3597: one row per deal — S_A_PARENT is superseded by its newer version S_A.
+    expect(renderedDetailIds(container)).toEqual([S_A, S_A_CHILD_OF_OTHER_ORG].sort());
     expect(container.innerHTML).not.toContain(S_B);
     expect(container.innerHTML).not.toContain(S_A_OTHER_ORG);
     expect(container.innerHTML).not.toContain(S_A_UPLOADING);
@@ -477,13 +478,16 @@ describe('list page', () => {
   it('the status filter narrows the own set', async () => {
     given('brokerage agent', ON);
     const { container } = render(elementOf(await run(list({ status: 'needs_changes' }))));
-    expect(renderedDetailIds(container)).toEqual([S_A_PARENT]);
+    // BACKLOG-3597: the filter matches a deal's LATEST version. S_A_PARENT is
+    // needs_changes but superseded by S_A (resubmitted), so no deal matches.
+    expect(renderedDetailIds(container)).toEqual([]);
   });
 
   it('an unknown status value is ignored, not passed to the query', async () => {
     given('brokerage agent', ON);
     const { container } = render(elementOf(await run(list({ status: 'uploading' }))));
-    expect(renderedDetailIds(container)).toEqual([S_A_PARENT, S_A, S_A_CHILD_OF_OTHER_ORG].sort());
+    // BACKLOG-3597: one row per deal — S_A_PARENT is superseded by its newer version S_A.
+    expect(renderedDetailIds(container)).toEqual([S_A, S_A_CHILD_OF_OTHER_ORG].sort());
   });
 
   it('colleague B sees exactly B\'s row (the owner filter is the session user)', async () => {
@@ -663,7 +667,8 @@ describe('detail page', () => {
     expect(elementOf(await run(detail(S_A))).type).toBe(UpsellPanel);
     given('[brokerage agent, personal-org owner]', ON);
     const { container } = render(elementOf(await run(list())));
-    expect(renderedDetailIds(container)).toEqual([S_A_PARENT, S_A, S_A_CHILD_OF_OTHER_ORG].sort());
+    // BACKLOG-3597: one row per deal — S_A_PARENT is superseded by its newer version S_A.
+    expect(renderedDetailIds(container)).toEqual([S_A, S_A_CHILD_OF_OTHER_ORG].sort());
   });
 
   it('R5b: impersonating -> notFound, zero table reads', async () => {
