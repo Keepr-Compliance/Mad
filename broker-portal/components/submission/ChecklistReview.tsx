@@ -17,6 +17,9 @@
  * - Every attachment / email chip has one View action that opens the
  *   existing viewers: AttachmentViewerModal and MessageList's
  *   ConversationModal (the "View Full" viewer).
+ * - viewer="agent" (BACKLOG-3593, My Transactions): the same section, read
+ *   only. No tick, no Add, no Request Changes sentence; the reviewer pill is
+ *   plain text shown only on rows a reviewer marked.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -87,6 +90,11 @@ export interface ChecklistReviewProps {
   messages: Message[];
   /** Attachments the page is allowed to show (already feature-gated). */
   attachments: ChecklistAttachment[];
+  /**
+   * Who is looking. 'agent' (My Transactions, BACKLOG-3593) is read-only
+   * whatever canTick / canDecide say. Default 'reviewer' (the broker page).
+   */
+  viewer?: 'reviewer' | 'agent';
 }
 
 /** Copy owned by the coordinator (pm_comments dcc91c87, ruling 2). */
@@ -129,7 +137,9 @@ export function ChecklistReview({
   templates,
   messages,
   attachments,
+  viewer: viewerRole = 'reviewer',
 }: ChecklistReviewProps) {
+  const isAgent = viewerRole === 'agent';
   const router = useRouter();
   const [sections, setSections] = useState<ChecklistSectionView[]>(initialSections);
 
@@ -189,10 +199,10 @@ export function ChecklistReview({
     [attachmentsById, threads]
   );
 
-  const tickOpen = canTick && TICK_OPEN_STATUSES.includes(status);
+  const tickOpen = !isAgent && canTick && TICK_OPEN_STATUSES.includes(status);
   const addOpen = ADD_OPEN_STATUSES.includes(status);
-  const showAdd = canTick && (addOpen || status === 'needs_changes');
-  const pointAtRequestChanges = requestChangesAvailable(status, canDecide);
+  const showAdd = !isAgent && canTick && (addOpen || status === 'needs_changes');
+  const pointAtRequestChanges = !isAgent && requestChangesAvailable(status, canDecide);
   const overall = overallRequiredCount(sections);
 
   const onTick = async (item: ChecklistItemView) => {
@@ -324,7 +334,15 @@ export function ChecklistReview({
                   <div id={bodyId}>
                     {section.addedAtReviewBy && (
                       <p className="bg-purple-100 px-6 py-3 text-[13px] text-purple-800">
-                        {addedBy ? (
+                        {isAgent ? (
+                          addedBy ? (
+                            <>
+                              Added by <strong className="font-bold">{addedBy}</strong> at review.
+                            </>
+                          ) : (
+                            <>Added at review.</>
+                          )
+                        ) : addedBy ? (
                           <>
                             Added by <strong className="font-bold">{addedBy}</strong> at review, for the agent’s next version.
                           </>
@@ -403,7 +421,25 @@ export function ChecklistReview({
                               </div>
                             )}
                           </div>
-                          {pill && (item.reviewerChecked || tickOpen) && (
+                          {isAgent && pill && item.reviewerChecked && (
+                            <div
+                              className="flex w-full shrink-0 flex-row items-center gap-2 sm:w-auto sm:flex-col sm:items-end sm:gap-1.5"
+                              data-testid="reviewer-status"
+                            >
+                              <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-primary-500 bg-primary-100 px-[11px] py-[5px] text-xs font-semibold text-primary-800">
+                                <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
+                                Reviewed
+                              </span>
+                              {(reviewedBy || item.reviewerCheckedAt) && (
+                                <p className="text-[11px] text-gray-400 sm:text-right" data-testid="reviewer-meta">
+                                  {[reviewedBy, item.reviewerCheckedAt ? formatDate(item.reviewerCheckedAt) : null]
+                                    .filter(Boolean)
+                                    .join(' · ')}
+                                </p>
+                              )}
+                            </div>
+                          )}
+                          {!isAgent && pill && (item.reviewerChecked || tickOpen) && (
                             <div className="flex w-full shrink-0 flex-row items-center gap-2 sm:w-auto sm:flex-col sm:items-end sm:gap-1.5">
                               <button
                                 type="button"

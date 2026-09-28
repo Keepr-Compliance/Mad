@@ -23,6 +23,14 @@
  * resolution as the broker page. An actor id that no longer resolves reads
  * "a former member"; a failed lookup shows no names at all; a raw id is never
  * handed to StatusHistory.
+ *
+ * Checklists (BACKLOG-3593): the submission's checklists, read-only
+ * (ChecklistReview viewer="agent"), between Status History and Messages. Read
+ * through the same session client (the copy tables' SELECT policies admit
+ * `submitted_by = auth.uid()`). Fail-closed on transaction_checklists, read
+ * from the feature set the gate already fetched for the brokerage (no second
+ * feature RPC); a failed checklist read shows no section. Impersonation never reaches here:
+ * the gate returns null and the page is notFound().
  */
 
 import Link from 'next/link';
@@ -32,10 +40,15 @@ import { formatCurrency, formatDate, getStatusColor, formatStatus } from '@/lib/
 import { MessageList } from '@/components/submission/MessageList';
 import { AttachmentList } from '@/components/submission/AttachmentList';
 import { StatusHistory } from '@/components/submission/StatusHistory';
+import { ChecklistReview } from '@/components/submission/ChecklistReview';
 import { UpsellPanel } from '@/components/my-transactions/UpsellPanel';
 import { agentChannelVisibility, getMyTransactionsGate } from '@/lib/my-transactions-access';
 import { resolveHistoryActors, type StatusHistoryEntry } from '@/lib/submissions/history';
 import { resolveUserNames } from '@/lib/submissions/names';
+import { loadSubmissionChecklists } from '@/lib/submissions/checklists';
+import type { ChecklistSectionView } from '@/lib/submissions/checklistModel';
+import { isFeatureEnabledStrict, type OrgFeatures } from '@/lib/feature-gate';
+import { CHECKLIST_FEATURE_KEY } from '@/lib/checklist-access';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -155,7 +168,9 @@ async function getAttachments(supabase: SessionClient, submissionId: string): Pr
 /**
  * The status history across previous versions, walking parent_submission_id
  * with the same owner + brokerage scope as the submission itself. Returns the
- * set of parents that passed that scope; only those get a link.
+ * set of parents that passed that scope; only those get a link. changed_by
+ * stays a raw id here; the page resolves names once, for the history and the
+ * checklists together.
  */
 async function getOwnStatusHistory(
   submission: OwnSubmission,
@@ -201,9 +216,22 @@ async function getOwnStatusHistory(
     entries.push(entry.status === 'resubmitted' && parentLink ? { ...entry, parentSubmissionId: parentLink } : entry);
   }
 
-  const names = await resolveUserNames(supabase, entries.map((entry) => entry.changed_by));
-  const history = resolveHistoryActors(entries, names);
-  return { history, rootCreatedAt, verifiedParentIds };
+  return { history: entries, rootCreatedAt, verifiedParentIds };
+}
+
+/**
+ * The submission's checklists, or null when the section is not shown: the
+ * feature is off, absent or unreadable for the brokerage, or a checklist read
+ * failed.
+ */
+async function getOwnChecklists(
+  supabase: SessionClient,
+  submissionId: string,
+  features: OrgFeatures
+): Promise<ChecklistSectionView[] | null> {
+  if (!isFeatureEnabledStrict(features, CHECKLIST_FEATURE_KEY)) return null;
+  const loaded = await loadSubmissionChecklists(supabase, submissionId);
+  return loaded.ok ? loaded.sections : null;
 }
 
 export default async function MyTransactionDetailPage({ params }: PageProps) {
@@ -211,18 +239,25 @@ export default async function MyTransactionDetailPage({ params }: PageProps) {
   if (!gate) notFound();
   if (gate.kind === 'upsell') return <UpsellPanel />;
 
-  const { supabase, userId, organizationId } = gate;
+  const { supabase, userId, organizationId, features } = gate;
   const { id } = await params;
 
   const submission = await getOwnSubmission(supabase, id, userId, organizationId);
   if (!submission) notFound();
 
-  const [visibility, messages, attachments, { history, rootCreatedAt }] = await Promise.all([
+  const [visibility, messages, attachments, { history: rawHistory, rootCreatedAt }, checklists] = await Promise.all([
     agentChannelVisibility(organizationId),
     getMessages(supabase, submission.id),
     getAttachments(supabase, submission.id),
     getOwnStatusHistory(submission, supabase, userId, organizationId),
+    getOwnChecklists(supabase, submission.id, features),
   ]);
+
+  const names = await resolveUserNames(supabase, [
+    ...rawHistory.map((entry) => entry.changed_by),
+    ...(checklists ?? []).flatMap((s) => [s.addedAtReviewBy, ...s.items.map((i) => i.reviewerCheckedBy)]),
+  ]);
+  const history = resolveHistoryActors(rawHistory, names);
 
   const shownMessages = messages.filter((m) => (m.channel === 'email' ? visibility.email : visibility.text));
   const showMessages = visibility.text || visibility.email;
@@ -271,6 +306,21 @@ export default async function MyTransactionDetailPage({ params }: PageProps) {
         submittedAt={rootCreatedAt}
         previousVersionBasePath={BASE_PATH}
       />
+
+      {checklists && (
+        <ChecklistReview
+          viewer="agent"
+          submissionId={submission.id}
+          status={submission.status}
+          sections={checklists}
+          names={names ? Object.fromEntries(names) : null}
+          canTick={false}
+          canDecide={false}
+          templates={[]}
+          messages={showMessages ? shownMessages : []}
+          attachments={visibility.attachments ? attachments : []}
+        />
+      )}
 
       {showMessages && <MessageList messages={shownMessages} />}
 
