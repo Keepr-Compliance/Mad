@@ -121,15 +121,6 @@ export function requestChangesAvailable(status: string, canDecide: boolean): boo
 }
 
 /**
- * Whether a section's items carry the broker's checkbox (BACKLOG-3596): every
- * item, except in a checklist added at review — its items are for the agent's
- * next version and the tick RPC refuses them.
- */
-export function hasReviewerCheckbox(section: ChecklistSectionView): boolean {
-  return !section.addedAtReviewBy;
-}
-
-/**
  * Whether the broker can tick on this version (BACKLOG-3596). Only while it is
  * open for a decision, and never once a newer version exists: the tick RPC
  * refuses a superseded version (42501 superseded), and a tick there would never

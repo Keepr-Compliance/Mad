@@ -151,11 +151,13 @@ export function checklistAddedEntry(input: {
  * calls in carry_submission_checklist_reviews,
  * supabase/migrations/20260928120000_backlog_3596_broker_checklist_ticks.sql
  * (branch feature-portal/BACKLOG-3596-cloud @ b3d0b912d). changed_by is the
- * resubmitting agent. item_id is null when the reason is 'removed'.
+ * resubmitting agent. item_id is null when the reason is 'removed' or
+ * 'not_carried' (the not_carried reason is from
+ * 20260928170000_backlog_3596_added_checklist_ticks.sql).
  */
 export function checklistReviewClearedEntry(input: {
   changedBy: string;
-  reason: 'edited' | 'removed';
+  reason: 'edited' | 'removed' | 'not_carried';
   itemId: string | null;
   clearedFromItemId: string;
   itemTitle: string;

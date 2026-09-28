@@ -46,12 +46,12 @@ const AGENT = 'Agent Fixture';
 const CONTRACT = 'Purchase Contract';
 const BROKER = 'Broker Fixture';
 
-const cleared = (reason: 'edited' | 'removed', title: string, at: string, changedBy: string | null = AGENT) =>
+const cleared = (reason: 'edited' | 'removed' | 'not_carried', title: string, at: string, changedBy: string | null = AGENT) =>
   ({
     ...checklistReviewClearedEntry({
       changedBy: 'x',
       reason,
-      itemId: reason === 'removed' ? null : 'item-v2',
+      itemId: reason === 'edited' ? 'item-v2' : null,
       clearedFromItemId: 'item-v1',
       itemTitle: title,
       checklistName: CONTRACT,
@@ -85,6 +85,23 @@ describe('Status History labels (BACKLOG-3596, P-C5)', () => {
     );
   });
 
+  /**
+   * P5 (BACKLOG-3596 follow-up): reason 'not_carried' is written by the carry in
+   * 20260928170000_backlog_3596_added_checklist_ticks.sql for a ticked item of a
+   * checklist added at review that has no match on the new version. It must not
+   * read as the agent having removed or changed it.
+   */
+  it('a tick on an added checklist that did not carry says so, not "removed" or "changed"', () => {
+    const text = describeTypedEntry(cleared('not_carried', 'EPA pamphlet', '2026-09-02T00:00:00Z'));
+    expect(text).toBe('EPA pamphlet — unticked automatically: not on Agent Fixture’s new version');
+  });
+
+  it('not_carried with no agent name reads "the agent"', () => {
+    expect(describeTypedEntry(cleared('not_carried', 'EPA pamphlet', '2026-09-02T00:00:00Z', null))).toBe(
+      'EPA pamphlet — unticked automatically: not on the agent’s new version'
+    );
+  });
+
   it('names unavailable: "the agent", never a raw id', () => {
     expect(describeTypedEntry(cleared('edited', 'Executed contract', '2026-09-02T00:00:00Z', null))).toBe(
       'Executed contract — unticked automatically: changed by the agent since your check'
@@ -105,6 +122,7 @@ describe('Status History labels (BACKLOG-3596, P-C5)', () => {
       checklistAddedEntry({ changedBy: BROKER, checklistId: 'h', checklistName: 'C', templateId: 't' }) as unknown as StatusHistoryEntry,
       cleared('edited', 'A', '2026-09-02T00:00:00Z'),
       cleared('removed', 'A', '2026-09-02T00:00:00Z'),
+      cleared('not_carried', 'A', '2026-09-02T00:00:00Z'),
       unavailable('unmatched_client'),
       unavailable('no_previous_copy'),
     ];

@@ -11,7 +11,9 @@
  *                   key (the shared shape ruled in pm_comments bf8c39b4, Q1).
  *                   BACKLOG-3596 adds two, written by the carry-over when a
  *                   new version arrives (changed_by = the resubmitting agent):
- *                     checklist_review_cleared      {reason 'edited'|'removed',
+ *                     checklist_review_cleared      {reason 'edited'|'removed'
+ *                       |'not_carried' (a ticked item of a checklist added at
+ *                       review that has no match on the new version),
  *                       item_id, cleared_from_item_id, item_title,
  *                       checklist_name, cleared_reviewer_id,
  *                       cleared_reviewer_checked_at}
@@ -82,6 +84,9 @@ export function describeTypedEntry(entry: StatusHistoryEntry): string {
     case 'checklist_review_cleared': {
       const title = entry.item_title || 'Checklist item';
       const who = entry.changed_by || 'the agent';
+      if (entry.reason === 'not_carried') {
+        return `${title} — unticked automatically: not on ${who}’s new version`;
+      }
       const verb = entry.reason === 'removed' ? 'removed' : 'changed';
       return `${title} — unticked automatically: ${verb} by ${who} since your check`;
     }

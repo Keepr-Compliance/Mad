@@ -221,7 +221,7 @@ describe('an unchecked required item (coordinator C-B: no pill, no yellow row)',
 });
 
 describe('broker checkbox (BACKLOG-3596)', () => {
-  it('P-C1: every item of a submitted checklist has the checkbox; a checklist added at review has none', () => {
+  it('P-C1: every item has the checkbox, including a checklist added at review (BACKLOG-3596 follow-up)', () => {
     renderReview();
     fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
     const rows = screen.getAllByTestId('checklist-item');
@@ -234,6 +234,8 @@ describe('broker checkbox (BACKLOG-3596)', () => {
       'Checked: Amendments and addenda',
       'Checked: Asbestos disclosure',
       'Checked: AHERA inspection report',
+      'Checked: Lead-Based Paint Disclosure',
+      'Checked: EPA pamphlet acknowledgment',
     ]);
     expect(rows).toHaveLength(9);
   });
@@ -257,12 +259,13 @@ describe('broker checkbox (BACKLOG-3596)', () => {
     ]);
   });
 
-  it('P-C2: a checklist added at review shows no agent mark either (no checkbox, no agent tick)', () => {
+  it('P-C2: a checklist added at review shows the broker checkbox, never the agent mark', () => {
     renderReview({
       sections: [{ ...SECTIONS[2], items: [item('i-lead-agent', 'Lead disclosure', { isChecked: true })] }],
     });
     const row = rowOf('Lead disclosure');
-    expect(within(row).queryByRole('checkbox')).toBeNull();
+    // Agent-ticked, broker-unticked: the broker's empty checkbox.
+    expect(boxOf('Lead disclosure').checked).toBe(false);
     expect(within(row).queryByLabelText('Checked by agent')).toBeNull();
     expect(row.querySelector('.text-green-600')).toBeNull();
   });
@@ -328,7 +331,7 @@ describe('broker checkbox (BACKLOG-3596)', () => {
   it('checkboxes are read-only once the review is complete, with no reason line', () => {
     renderReview({ status: 'approved' });
     fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
-    expect(boxes().length).toBe(7);
+    expect(boxes().length).toBe(9);
     expect(boxes().every((b) => b.disabled)).toBe(true);
     expect(boxOf('Executed purchase contract').checked).toBe(true);
     expect(document.getElementById('checklist-closed-reason')).toBeNull();
@@ -337,9 +340,106 @@ describe('broker checkbox (BACKLOG-3596)', () => {
   it('a viewer who cannot review sees the checkboxes read-only, with no reason line', () => {
     renderReview({ canTick: false });
     fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
-    expect(boxes().length).toBe(7);
+    expect(boxes().length).toBe(9);
     expect(boxes().every((b) => b.disabled)).toBe(true);
     expect(document.getElementById('checklist-closed-reason')).toBeNull();
+  });
+});
+
+/**
+ * BACKLOG-3596 follow-up (plan pm_comments f2544ab6, PR 3): the broker ticks
+ * the items of a checklist added at review, on the same checkbox and the same
+ * action as template items. The fixture's added section is SECTIONS[2]
+ * (Lead-Based Paint, added by COLLEAGUE).
+ */
+describe('broker checkbox on a checklist added at review (BACKLOG-3596 follow-up)', () => {
+  const addedTicked = (): ChecklistSectionView[] => [
+    SECTIONS[0],
+    SECTIONS[1],
+    {
+      ...SECTIONS[2],
+      items: [
+        item('i-lead1', 'Lead-Based Paint Disclosure', {
+          reviewerChecked: true,
+          reviewerCheckedBy: VIEWER,
+          reviewerCheckedAt: '2026-09-21T10:09:00.000000+00:00',
+        }),
+        item('i-lead2', 'EPA pamphlet acknowledgment', {
+          clearedReviewerId: VIEWER,
+          clearedAt: '2026-09-22T09:00:00.000000+00:00',
+        }),
+      ],
+    },
+  ];
+
+  it('P1: an open version gives the added items an enabled checkbox that calls the tick action with that item', async () => {
+    mockSetReviewerCheck.mockResolvedValue({
+      ok: true,
+      changed: true,
+      reviewerChecked: true,
+      reviewerCheckedBy: VIEWER,
+      reviewerCheckedAt: '2026-09-21T09:00:00.000000+00:00',
+    });
+    renderReview();
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
+    const box = boxOf('Lead-Based Paint Disclosure');
+    expect(box).toBeEnabled();
+    expect(box.checked).toBe(false);
+    fireEvent.click(box);
+    await waitFor(() => expect(boxOf('Lead-Based Paint Disclosure').checked).toBe(true));
+    expect(mockSetReviewerCheck).toHaveBeenCalledWith('sub-1', 'i-lead1', true);
+    expect(within(rowOf('Lead-Based Paint Disclosure')).getByTestId('reviewer-meta')).toHaveTextContent(
+      'Viewer Fixture · Sep 21, 2026'
+    );
+  });
+
+  it.each([
+    ['needs_changes', null],
+    ['under_review', 'newer'],
+    ['under_review', 'uploading'],
+  ] as const)('P2: status %s, newer version %s: the added items are disabled', (status, supersededBy) => {
+    renderReview({ status, supersededBy, sections: addedTicked() });
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
+    for (const title of ['Lead-Based Paint Disclosure', 'EPA pamphlet acknowledgment']) {
+      expect(boxOf(title)).toBeDisabled();
+      fireEvent.click(boxOf(title));
+    }
+    expect(mockSetReviewerCheck).not.toHaveBeenCalled();
+  });
+
+  it('P3: a ticked added item shows who and when; a cleared one shows "Changed since you checked"', () => {
+    renderReview({ sections: addedTicked() });
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
+    expect(boxOf('Lead-Based Paint Disclosure').checked).toBe(true);
+    expect(within(rowOf('Lead-Based Paint Disclosure')).getByTestId('reviewer-meta')).toHaveTextContent(
+      'Viewer Fixture · Sep 21, 2026'
+    );
+    expect(within(rowOf('EPA pamphlet acknowledgment')).getByTestId('changed-since-checked')).toHaveTextContent(
+      'Changed since you checked'
+    );
+    // The added section counts the broker's ticks like any other.
+    expect(sectionToggle('Lead-Based Paint')).toHaveTextContent('1 of 2 required');
+  });
+
+  it('P4: the agent view of an added section has no checkbox, whatever the page passes', () => {
+    renderReview({ viewer: 'agent', canTick: true, canDecide: true, sections: addedTicked() });
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
+    expect(boxes()).toHaveLength(0);
+    expect(within(rowOf('Lead-Based Paint Disclosure')).queryByTestId('reviewer-meta')).toBeNull();
+    expect(within(rowOf('EPA pamphlet acknowledgment')).queryByTestId('changed-since-checked')).toBeNull();
+  });
+
+  it('a server that still refuses added items (migration not yet applied) shows the plain added_at_review copy', async () => {
+    mockSetReviewerCheck.mockResolvedValue({ ok: false, reason: 'added_at_review', message: REVIEW_MESSAGES.added_at_review });
+    renderReview();
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
+    fireEvent.click(boxOf('EPA pamphlet acknowledgment'));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(
+      'This checklist was added at review for the agent’s next version, so its items can’t be checked.'
+    );
+    expect(alert.textContent).not.toMatch(/added_at_review/);
+    expect(boxOf('EPA pamphlet acknowledgment').checked).toBe(false);
   });
 });
 
@@ -367,7 +467,7 @@ describe('tick and Add closed on needs_changes and on a superseded version (P-C9
     renderReview({ status, supersededBy });
     fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
     expect(reason).toBe(literal);
-    expect(boxes().length).toBe(7);
+    expect(boxes().length).toBe(9);
     for (const b of boxes()) {
       expect(b).toBeDisabled();
       expect(b).toHaveAttribute('aria-describedby', 'checklist-closed-reason');
@@ -382,14 +482,18 @@ describe('tick and Add closed on needs_changes and on a superseded version (P-C9
     expect(screen.getAllByText(literal)).toHaveLength(1);
     expect(document.querySelectorAll('.basis-full')).toHaveLength(1);
     expect(document.getElementById('checklist-closed-reason')).toHaveTextContent(literal);
+    // The added-at-review checklist closes with the rest (BACKLOG-3596 follow-up).
+    expect(boxOf('Lead-Based Paint Disclosure')).toBeDisabled();
+    expect(boxOf('EPA pamphlet acknowledgment')).toBeDisabled();
     fireEvent.click(boxOf('Title commitment'));
+    fireEvent.click(boxOf('Lead-Based Paint Disclosure'));
     expect(mockSetReviewerCheck).not.toHaveBeenCalled();
   });
 
   it.each(['submitted', 'resubmitted', 'under_review'])('control: %s with no newer version is open, no reason', (status) => {
     renderReview({ status, supersededBy: null });
     fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
-    expect(boxes().length).toBe(7);
+    expect(boxes().length).toBe(9);
     expect(boxes().every((b) => !b.disabled)).toBe(true);
     expect(screen.getByRole('button', { name: 'Add checklist' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Add checklist' })).not.toHaveAttribute('aria-describedby');
