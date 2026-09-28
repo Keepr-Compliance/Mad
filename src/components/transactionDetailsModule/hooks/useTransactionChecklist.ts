@@ -64,6 +64,9 @@ export interface UseTransactionChecklistResult {
    * BACKLOG-3595: ask main again because something OUTSIDE this screen changed
    * the checklists (a broker review, an owed pull landing). Never shows
    * `loading`, and a failed read keeps the checklist already shown.
+   * BACKLOG-3599: an older answer never overwrites a newer one, and a kept
+   * failure changes nothing — so a refresh that overtakes a post-save re-read
+   * and then fails leaves the re-read's checklist on screen.
    */
   refresh: () => Promise<void>;
   /** Items whose tick is being written right now. */
@@ -88,54 +91,73 @@ interface StoredState {
 const LOADING: ChecklistLoadState = { status: "loading" };
 
 export function useTransactionChecklist(transactionId: string): UseTransactionChecklistResult {
-  const [stored, setStored] = useState<StoredState>({ forId: transactionId, value: LOADING });
+  const [stored, setStored] = useState<StoredState>(() => ({ forId: transactionId, value: LOADING }));
   const [pendingItemIds, setPendingItemIds] = useState<ReadonlySet<string>>(new Set());
+
+  // BACKLOG-3599: the last value handed to `setStored`, written in the SAME
+  // statement as every `setStored` — never mirrored from render. Two IPC
+  // answers can land before React renders (createRoot batches them); a mirror
+  // would then show keep-last-good the pre-batch state.
+  const storedRef = useRef<StoredState>(stored);
+  const store = useCallback((next: StoredState) => {
+    storedRef.current = next;
+    setStored(next);
+  }, []);
 
   // The transaction the screen shows NOW. Every async answer is checked
   // against it before it is allowed to render.
   const currentIdRef = useRef(transactionId);
   currentIdRef.current = transactionId;
-  // Every `get` takes a number; only the newest may store its answer. Switching
-  // transactions starts a new `get`, so this also drops A's late answer on B.
+  // Every `get` takes a number, in the order it was asked.
   const requestSeqRef = useRef(0);
+  // BACKLOG-3599: the number of the answer on screen. An answer asked before
+  // it is older than what is shown and is dropped.
+  const appliedSeqRef = useRef(0);
   const pendingRef = useRef<Set<string>>(new Set());
 
+  /**
+   * BACKLOG-3599 — the rule: an older answer never overwrites a newer one, and
+   * a kept failure changes nothing.
+   *   - An answer for a transaction the screen no longer shows is dropped (the
+   *     ONE place that stops A's answer rendering on B).
+   *   - A success is stored even while a newer `get` is still in flight — a
+   *     post-save re-read overtaken by a background refresh still lands.
+   *   - A failure is stored only by the newest `get`.
+   */
   const load = useCallback(
     async (forId: string, options?: { keepOnError?: boolean }): Promise<void> => {
       const seq = ++requestSeqRef.current;
       const result = await checklistService.get(forId);
-      if (seq !== requestSeqRef.current) return;
+      if (forId !== currentIdRef.current || seq <= appliedSeqRef.current) return;
       if (result.success && result.data) {
-        setStored({ forId, value: { status: "ready", data: result.data } });
+        appliedSeqRef.current = seq;
+        store({ forId, value: { status: "ready", data: result.data } });
         return;
       }
+      if (seq !== requestSeqRef.current) return;
       const error = result.error ?? "The checklists could not be loaded.";
-      if (options?.keepOnError) {
+      if (options?.keepOnError && storedRef.current.value.status === "ready") {
         // BACKLOG-3595: a background re-read that fails keeps the checklist
         // already on screen. Replacing it with the error would hide the tab
         // (or empty it) and remount the rows, losing an unsaved note. Only
-        // when nothing good is stored for this transaction does the error
-        // show — otherwise a refresh that overtook the first load would leave
-        // the tab on "loading" for good.
+        // when nothing good is shown does the error show — otherwise a
+        // refresh that overtook the first load would leave the tab on
+        // "loading" for good. A kept failure does not advance `appliedSeqRef`.
         logger.debug("[useTransactionChecklist] background re-read failed; kept the last checklist", error);
-        setStored((prev) =>
-          prev.forId === forId && prev.value.status === "ready"
-            ? prev
-            : { forId, value: { status: "error", error } },
-        );
         return;
       }
-      setStored({ forId, value: { status: "error", error } });
+      appliedSeqRef.current = seq;
+      store({ forId, value: { status: "error", error } });
     },
-    [],
+    [store],
   );
 
   useEffect(() => {
-    setStored({ forId: transactionId, value: LOADING });
+    store({ forId: transactionId, value: LOADING });
     pendingRef.current = new Set();
     setPendingItemIds(new Set());
     void load(transactionId);
-  }, [transactionId, load]);
+  }, [transactionId, load, store]);
 
   const reload = useCallback(() => load(currentIdRef.current), [load]);
   const refresh = useCallback(

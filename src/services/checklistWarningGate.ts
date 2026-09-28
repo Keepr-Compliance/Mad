@@ -56,6 +56,9 @@ export function listUncheckedRequiredItems(
 /**
  * Read the transaction's checklists NOW and list the unticked required items.
  * A refused read or a throw returns `[]` — no warning, the flow continues.
+ * An IPC rejection arrives as a refusal (`checklistService.get` catches it).
+ * The catch below is defensive: only `listUncheckedRequiredItems` throwing on
+ * a shape main never emits reaches it (BACKLOG-3599).
  */
 export async function readUncheckedRequiredItems(
   transactionId: string,

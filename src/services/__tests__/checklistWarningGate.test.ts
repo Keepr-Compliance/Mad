@@ -99,9 +99,22 @@ describe("BACKLOG-3477 E-C5 — readUncheckedRequiredItems fails open", () => {
 
   it.each([
     ["the read is refused", () => getMock().mockResolvedValue({ success: false, error: "boom" })],
-    ["the IPC throws", () => getMock().mockRejectedValue(new Error("ipc down"))],
+    // checklistService.get catches the rejection and returns a refusal, so this
+    // reaches the refused branch, not the catch (BACKLOG-3599).
+    ["the IPC rejects (checklistService turns it into a refusal)", () => getMock().mockRejectedValue(new Error("ipc down"))],
   ])("%s → [] (no warning)", async (_label, arrange) => {
     arrange();
+    await expect(readUncheckedRequiredItems("txn-3477")).resolves.toEqual([]);
+  });
+
+  it("defensive: a shape main never emits (null checklist entry) makes the lister throw -> the catch returns [] (fail open)", async () => {
+    // Deliberately NOT a transcribed fixture: main never emits a null entry.
+    // It is the only way to reach the catch, which is kept as a defensive
+    // fail-open (BACKLOG-3599).
+    getMock().mockResolvedValue({
+      success: true,
+      checklists: { checklists: [null], requiredDone: 0, requiredTotal: 0 },
+    });
     await expect(readUncheckedRequiredItems("txn-3477")).resolves.toEqual([]);
   });
 });
