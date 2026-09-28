@@ -14,6 +14,10 @@
  *     4 + 2 + 3 items; required 2 / 1 / 1; agent ticks 2 / 1 / 0; 3 reviewer
  *     ticks, all in the first checklist; 1 note. It has no links; one link per
  *     kind is added here so the View chips have something to open.
+ *   - BACKLOG-3596: the agent sees their OWN ticks and never the broker's; the
+ *     timeline drops the broker's review marks (checklist_review,
+ *     checklist_review_cleared, checklist_review_unavailable) on every version.
+ *     Carry-over entries: keys from the PR 1 migration (helpers/submissionRows).
  *   - RLS: the four SELECT policies admit `ts.submitted_by = auth.uid()`
  *     (policy text in pm_comments on BACKLOG-3593); the page reads through the
  *     gate's session client only.
@@ -23,7 +27,17 @@ import { render, screen, fireEvent, within } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import React from 'react';
 import { FIXTURE_BROKERAGE_ORG_ID, FIXTURE_USER_ID, brokerageMembership, createPostgrestEmulator, type Row } from '../helpers/postgrestEmulator';
-import { attachmentRow, historyEntry, messageRow, submissionRow, userNameRow } from '../helpers/submissionRows';
+import {
+  attachmentRow,
+  checklistAddedEntry,
+  checklistReviewClearedEntry,
+  checklistReviewEntry,
+  checklistReviewUnavailableEntry,
+  historyEntry,
+  messageRow,
+  submissionRow,
+  userNameRow,
+} from '../helpers/submissionRows';
 import { ORG_WITHOUT_PLAN_FEATURES, withFeature } from '../fixtures/orgFeatures';
 
 const mockEmulator = createPostgrestEmulator();
@@ -107,7 +121,8 @@ import { ChecklistReview, type ChecklistReviewProps } from '@/components/submiss
 import { getImpersonationSession } from '@/lib/impersonation';
 import { getDataClient } from '@/lib/impersonation-guards';
 import { createServiceClient } from '@/lib/supabase/service';
-import { FORMER_MEMBER } from '@/lib/submissions/history';
+import { StatusHistory } from '@/components/submission/StatusHistory';
+import { FORMER_MEMBER, type StatusHistoryEntry } from '@/lib/submissions/history';
 
 // ---------------------------------------------------------------------------
 // Fixture (every id invented)
@@ -319,18 +334,23 @@ describe('the section renders for the agent', () => {
     expect(card.querySelector('[aria-pressed]')).toBeNull();
   });
 
-  it('reviewer pills are display-only: who and when, on the two reviewed pill rows', async () => {
+  it('P-C7 (BACKLOG-3596): the agent sees their own ticks, never the broker’s tick, name or time', async () => {
     given();
     renderExpanded(await page());
-    const pills = screen.getAllByTestId('reviewer-status');
-    expect(pills).toHaveLength(2);
-    for (const p of pills) {
-      expect(within(p).queryByRole('button')).toBeNull();
-      expect(within(p).getByText('Reviewed').tagName).toBe('SPAN');
-    }
-    const meta = pills.map((p) => within(p).getByTestId('reviewer-meta').textContent);
-    expect(meta[0]).toMatch(new RegExp(`^${REVIEWER_NAME} · `));
-    expect(meta[1]).toMatch(new RegExp(`^${FORMER_MEMBER} · `));
+    expect(screen.queryAllByTestId('reviewer-status')).toHaveLength(0);
+    expect(screen.queryAllByTestId('reviewer-meta')).toHaveLength(0);
+    expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
+    expect(screen.queryByText('Reviewed')).toBeNull();
+    const row = (title: string) => screen.getByText(title).closest('[data-testid="checklist-item"]') as HTMLElement;
+    // Broker-ticked, agent-unticked: unchecked for the agent.
+    expect(within(row('Counter offers')).getByLabelText('Not checked')).toBeInTheDocument();
+    // Agent-ticked: the agent's own tick.
+    expect(within(row('Executed contract')).getByLabelText('Checked by agent')).toBeInTheDocument();
+    expect(screen.getAllByLabelText('Checked by agent')).toHaveLength(3);
+    // The reviewer is named only by the added-at-review banner; the removed
+    // reviewer, who only ticked, is never shown at all.
+    expect(document.body.textContent!.split(REVIEWER_NAME)).toHaveLength(2);
+    expect(document.body.textContent).not.toContain(FORMER_MEMBER);
   });
 
   it('no raw ids anywhere in the rendered page', async () => {
@@ -397,5 +417,73 @@ describe('fail closed', () => {
     given({ impersonating: true });
     await expect(page()).rejects.toBeInstanceOf(NotFound);
     expect(mockEmulator.state.selects).toEqual([]);
+  });
+});
+
+/**
+ * D4 / P-C8 (BACKLOG-3596): the agent's timeline never shows the broker's
+ * review marks, on the current version or any previous one. Status lines and
+ * other typed lines (a checklist added) are unchanged.
+ */
+describe('agent timeline hides the broker’s review marks (D4)', () => {
+  const PARENT = '00000000-0000-4000-8000-0000003596a1'; // pii-allow-uuid: invented fixture id
+  const ITEM = '00000000-0000-4000-8000-0000003596a2'; // pii-allow-uuid: invented fixture id
+  const ITEM_V1 = '00000000-0000-4000-8000-0000003596a3'; // pii-allow-uuid: invented fixture id
+  const HDR = '00000000-0000-4000-8000-0000003596a4'; // pii-allow-uuid: invented fixture id
+  const TPL = '00000000-0000-4000-8000-0000003596a5'; // pii-allow-uuid: invented fixture id
+
+  const CONTRACT = 'Purchase Contract';
+  const LEAD = 'Lead-Based Paint';
+
+  function givenChain(): void {
+    given();
+    const rows = mockEmulator.state.rows;
+    const tickOn = checklistReviewEntry({ changedBy: REVIEWER, itemId: ITEM_V1, itemTitle: 'Executed contract', checklistName: CONTRACT, from: false, to: true, changedAt: '2026-09-01T01:00:00Z' });
+    const added = checklistAddedEntry({ changedBy: REVIEWER, checklistId: HDR, checklistName: LEAD, templateId: TPL, changedAt: '2026-09-01T01:30:00Z' });
+    const parent = submissionRow({
+      id: PARENT,
+      organizationId: BROKERAGE,
+      submittedBy: AGENT,
+      status: 'needs_changes',
+      createdAt: '2026-09-01T00:00:00Z',
+      statusHistory: [
+        { status: 'under_review', changed_at: '2026-09-01T00:30:00Z', changed_by: null, notes: null },
+        tickOn,
+        added,
+        { status: 'needs_changes', changed_at: '2026-09-01T02:00:00Z', changed_by: REVIEWER, notes: 'Please fix' },
+      ],
+    });
+    const current = {
+      ...(rows.transaction_submissions![0] as Row),
+      parent_submission_id: PARENT,
+      status: 'resubmitted',
+      status_history: [
+        checklistReviewClearedEntry({ changedBy: AGENT, reason: 'edited', itemId: ITEM, clearedFromItemId: ITEM_V1, itemTitle: 'Executed contract', checklistName: CONTRACT, clearedReviewerId: REVIEWER, clearedReviewerCheckedAt: '2026-09-01T01:00:00Z', changedAt: '2026-09-02T00:00:00Z' }),
+        checklistReviewClearedEntry({ changedBy: AGENT, reason: 'removed', itemId: null, clearedFromItemId: ITEM_V1, itemTitle: 'Addenda', checklistName: CONTRACT, clearedReviewerId: REVIEWER, clearedReviewerCheckedAt: '2026-09-01T01:00:00Z', changedAt: '2026-09-02T00:00:01Z' }),
+        checklistReviewUnavailableEntry({ changedBy: AGENT, reason: 'unmatched_client', changedAt: '2026-09-02T00:00:02Z' }),
+        { status: 'resubmitted', changed_at: '2026-09-02T00:01:00Z', changed_by: null, notes: null },
+        checklistReviewEntry({ changedBy: REVIEWER, itemId: ITEM, itemTitle: 'Executed contract', checklistName: CONTRACT, from: false, to: true, changedAt: '2026-09-02T01:00:00Z' }),
+      ],
+    };
+    rows.transaction_submissions = [current, parent];
+  }
+
+  it('P-C8: none of the three types reaches StatusHistory; status lines and checklist_added are unchanged', async () => {
+    givenChain();
+    const props = findProps<{ history: StatusHistoryEntry[] }>(await page(), StatusHistory)!;
+    const types = props.history.map((e) => e.type ?? `status:${e.status}`);
+    expect(types).toEqual(['status:under_review', 'checklist_added', 'status:needs_changes', 'status:resubmitted']);
+  });
+
+  it('the rendered timeline has no broker review line, fully expanded', async () => {
+    givenChain();
+    const { container } = render(await page());
+    for (const b of Array.from(container.querySelectorAll('button'))) {
+      if (/Show (previous|full)|checklist change/.test(b.textContent ?? '')) fireEvent.click(b);
+    }
+    for (const b of Array.from(container.querySelectorAll('[data-testid="checklist-changes-group"] > button'))) fireEvent.click(b);
+    const typed = Array.from(container.querySelectorAll('[data-testid="typed-history-entry"]')).map((e) => e.getAttribute('data-entry-type'));
+    expect(typed).toEqual(['checklist_added']);
+    expect(container.textContent).not.toMatch(/unticked automatically|could not be carried over|unchecked → checked/);
   });
 });

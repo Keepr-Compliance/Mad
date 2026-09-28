@@ -147,6 +147,51 @@ export function checklistAddedEntry(input: {
 }
 
 /**
+ * BACKLOG-3596 carry-over entries. Keys and order from the jsonb_build_object
+ * calls in carry_submission_checklist_reviews,
+ * supabase/migrations/20260928120000_backlog_3596_broker_checklist_ticks.sql
+ * (branch feature-portal/BACKLOG-3596-cloud @ b3d0b912d). changed_by is the
+ * resubmitting agent. item_id is null when the reason is 'removed'.
+ */
+export function checklistReviewClearedEntry(input: {
+  changedBy: string;
+  reason: 'edited' | 'removed';
+  itemId: string | null;
+  clearedFromItemId: string;
+  itemTitle: string;
+  checklistName: string;
+  clearedReviewerId: string;
+  clearedReviewerCheckedAt: string;
+  changedAt?: string;
+}): Record<string, unknown> {
+  return {
+    type: 'checklist_review_cleared',
+    changed_at: input.changedAt ?? '2026-09-03T00:00:00Z',
+    changed_by: input.changedBy,
+    reason: input.reason,
+    item_id: input.itemId,
+    cleared_from_item_id: input.clearedFromItemId,
+    item_title: input.itemTitle,
+    checklist_name: input.checklistName,
+    cleared_reviewer_id: input.clearedReviewerId,
+    cleared_reviewer_checked_at: input.clearedReviewerCheckedAt,
+  };
+}
+
+export function checklistReviewUnavailableEntry(input: {
+  changedBy: string;
+  reason: 'unmatched_client' | 'no_previous_copy';
+  changedAt?: string;
+}): Record<string, unknown> {
+  return {
+    type: 'checklist_review_unavailable',
+    changed_at: input.changedAt ?? '2026-09-03T00:00:00Z',
+    changed_by: input.changedBy,
+    reason: input.reason,
+  };
+}
+
+/**
  * A public.users row as the name lookup reads it (lib/submissions/names.ts
  * selects id, display_name, first_name, last_name, email). Column names and
  * nullability from information_schema.columns (users has 39 columns; these

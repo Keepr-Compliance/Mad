@@ -798,6 +798,11 @@ function givenReviewed(history: StoredHistory): void {
   });
 }
 
+/**
+ * BACKLOG-3596 D4: the agent's timeline leaves out the broker's review marks
+ * (checklist_review and the carry-over lines), so REVIEW_TICK never renders
+ * here; checklist_added and status lines still name their actor.
+ */
 describe('F2: the agent sees who reviewed, by name (BACKLOG-3477)', () => {
   const HISTORY: StoredHistory = [historyEntry('submitted'), historyEntry('under_review', null, REVIEWER), REVIEW_TICK, ADDED_BY_REMOVED];
 
@@ -806,22 +811,22 @@ describe('F2: the agent sees who reviewed, by name (BACKLOG-3477)', () => {
     const { container } = render(elementOf(await run(detail(S_A_REVIEWED))));
     expandGroups(container);
     const typed = Array.from(container.querySelectorAll('[data-testid="typed-history-entry"]'));
-    expect(typed.map((li) => li.getAttribute('data-entry-type'))).toEqual(['checklist_review', 'checklist_added']);
-    // Grouped (founder decision 795ff7c5): both follow the latest status change.
+    expect(typed.map((li) => li.getAttribute('data-entry-type'))).toEqual(['checklist_added']);
+    // Grouped (founder decision 795ff7c5): it follows the latest status change.
     const group = container.querySelector('[data-testid="pending-history-group"]')!;
-    expect(group.textContent).toContain('2 checklist changes since the last review');
+    expect(group.textContent).toContain('1 checklist change since the last review');
     expect(Array.from(group.querySelectorAll('[data-testid="typed-history-entry"]'))).toEqual(typed);
-    expect(typed[0].textContent).toContain('Title commitment — unchecked → checked');
-    expect(typed[1].textContent).toContain('Checklist added: Lead-Based Paint');
+    expect(typed[0].textContent).toContain('Checklist added: Lead-Based Paint');
+    // D4: the broker's tick is not on the agent's timeline.
+    expect(container.textContent).not.toContain('Title commitment — unchecked → checked');
   });
 
   it('(iv) a live colleague renders by name', async () => {
     givenReviewed(HISTORY);
     const { container } = render(elementOf(await run(detail(S_A_REVIEWED))));
     expandGroups(container);
-    const typed = Array.from(container.querySelectorAll('[data-testid="typed-history-entry"]'));
-    expect(typed[0].textContent).toContain(`by ${REVIEWER_NAME}`);
-    expect(container.textContent).toContain(`by ${REVIEWER_NAME}`);
+    // The reviewer is named on the status line they caused (Review Started).
+    expect(screen.getByText('Review Started').closest('li')!.textContent).toContain(`by ${REVIEWER_NAME}`);
   });
 
   it('(iii) a removed member reads "a former member" and no raw id is anywhere on the page', async () => {
@@ -829,7 +834,7 @@ describe('F2: the agent sees who reviewed, by name (BACKLOG-3477)', () => {
     const { container } = render(elementOf(await run(detail(S_A_REVIEWED))));
     expandGroups(container);
     const typed = Array.from(container.querySelectorAll('[data-testid="typed-history-entry"]'));
-    expect(typed[1].textContent).toContain(`by ${FORMER_MEMBER}`);
+    expect(typed[0].textContent).toContain(`by ${FORMER_MEMBER}`);
     for (const id of [REMOVED, REVIEWER, ITEM_REVIEWED, CHECKLIST_ADDED, TEMPLATE_ADDED]) {
       expect(container.innerHTML).not.toContain(id);
     }
@@ -837,13 +842,13 @@ describe('F2: the agent sees who reviewed, by name (BACKLOG-3477)', () => {
 
   it('(ii) an entry without changed_at does not throw', async () => {
     // Robustness only: both producers always set changed_at (SR §4).
-    const noDate = { ...REVIEW_TICK };
+    const noDate = { ...ADDED_BY_REMOVED };
     delete noDate.changed_at;
     givenReviewed([historyEntry('submitted'), noDate]);
     const { container } = render(elementOf(await run(detail(S_A_REVIEWED))));
     expandGroups(container);
-    expect(container.textContent).toContain('Title commitment — unchecked → checked');
-    expect(container.textContent).toContain(`by ${REVIEWER_NAME}`);
+    expect(container.textContent).toContain('Checklist added: Lead-Based Paint');
+    expect(container.textContent).toContain(`by ${FORMER_MEMBER}`);
   });
 
   it('F3: when the users read fails, nobody is named and nobody is "a former member"', async () => {
@@ -851,7 +856,7 @@ describe('F2: the agent sees who reviewed, by name (BACKLOG-3477)', () => {
     mockUsersReadFails = true;
     const { container } = render(elementOf(await run(detail(S_A_REVIEWED))));
     expandGroups(container);
-    expect(container.querySelectorAll('[data-testid="typed-history-entry"]')).toHaveLength(2);
+    expect(container.querySelectorAll('[data-testid="typed-history-entry"]')).toHaveLength(1);
     expect(container.textContent).not.toContain(FORMER_MEMBER);
     expect(container.textContent).not.toContain(REVIEWER_NAME);
     expect(container.textContent).not.toMatch(/\bby /);
