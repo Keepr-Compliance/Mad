@@ -422,3 +422,38 @@ describe('View on chips', () => {
     expect(chip).toHaveTextContent('Not available');
   });
 });
+
+/**
+ * BACKLOG-3593: the broker page's rendered output is pinned byte for byte.
+ * The snapshots were written from the component BEFORE the agent viewer was
+ * added (827a4f005), so any change to the default (reviewer) output reds here.
+ */
+describe('broker output pin (BACKLOG-3593)', () => {
+  const statuses = ['under_review', 'needs_changes', 'approved'];
+  const matrix: [string, boolean, boolean, boolean][] = [];
+  for (const status of statuses)
+    for (const canTick of [true, false])
+      for (const canDecide of [true, false])
+        for (const withNames of [true, false]) matrix.push([status, canTick, canDecide, withNames]);
+
+  it.each(matrix)('status %s, canTick %s, canDecide %s, names %s', (status, canTick, canDecide, withNames) => {
+    const { container } = renderReview({
+      status,
+      canTick,
+      canDecide,
+      names: withNames ? { [VIEWER]: 'Viewer Fixture', [COLLEAGUE]: 'Colleague Fixture' } : null,
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
+    expect(container.innerHTML).toMatchSnapshot();
+  });
+
+  it('not loaded', () => {
+    const { container } = renderReview({ loaded: false });
+    expect(container.innerHTML).toMatchSnapshot();
+  });
+
+  it('no checklists', () => {
+    const { container } = renderReview({ sections: [] });
+    expect(container.innerHTML).toMatchSnapshot();
+  });
+});
