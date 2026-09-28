@@ -23,6 +23,8 @@ export interface DashboardShellProps {
   displayEmail: string;
   displayRole?: string;
   showChecklists?: boolean;
+  /** BACKLOG-3477: set when the Checklists entry is grayed; the neutral line shown. */
+  checklistsUnavailableLabel?: string | null;
   /** BACKLOG-3080: lib/my-transactions-access.ts, via the layout. */
   showMyTransactions?: boolean;
   /** BACKLOG-3080: not a full-portal user; the Sidebar shows the floor only. */
@@ -37,6 +39,7 @@ export function DashboardShell({
   displayEmail,
   displayRole,
   showChecklists,
+  checklistsUnavailableLabel,
   showMyTransactions,
   floorOnly,
 }: DashboardShellProps) {
@@ -65,6 +68,7 @@ export function DashboardShell({
         displayEmail={displayEmail}
         displayRole={displayRole}
         showChecklists={showChecklists}
+        checklistsUnavailableLabel={checklistsUnavailableLabel}
         showMyTransactions={showMyTransactions}
         floorOnly={floorOnly}
       />

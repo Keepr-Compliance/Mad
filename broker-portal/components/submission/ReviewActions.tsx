@@ -13,6 +13,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { AlertTriangle, Check, Loader2, X } from 'lucide-react';
 import { Button } from '@keepr/design-system';
+import { REVIEW_MESSAGES, updatedNoRows } from '@/lib/submissions/reviewMessages';
 
 interface ReviewActionsProps {
   submission: {
@@ -25,11 +26,30 @@ interface ReviewActionsProps {
    *  The parent page already hides this component when impersonating,
    *  but this prop provides a code-level guard inside the write handler. */
   isImpersonating?: boolean;
+  /**
+   * BACKLOG-3477: false for a reviewer who may tick but not decide (it_admin;
+   * lib/submissions/reviewAccess.ts). The whole bar is hidden for them.
+   */
+  canDecide?: boolean;
+  /**
+   * BACKLOG-3477: show the hint beside Request Changes. On when the
+   * Checklists area is shown for this submission.
+   */
+  showChecklistHint?: boolean;
 }
+
+/** Copy owned by the coordinator (pm_comments dcc91c87, ruling 2). */
+export const REQUEST_CHANGES_HINT = 'Add any missing checklist before requesting changes';
 
 type ReviewAction = 'approve' | 'reject' | 'changes' | null;
 
-export function ReviewActions({ submission, disabled, isImpersonating }: ReviewActionsProps) {
+export function ReviewActions({
+  submission,
+  disabled,
+  isImpersonating,
+  canDecide = true,
+  showChecklistHint = false,
+}: ReviewActionsProps) {
   const [action, setAction] = useState<ReviewAction>(null);
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
@@ -104,7 +124,7 @@ export function ReviewActions({ submission, disabled, isImpersonating }: ReviewA
           review_notes: notes || null,
         })
         .eq('id', submission.id)
-        .select();
+        .select('id');
 
       if (updateError) {
         console.error('Supabase update error:', updateError);
@@ -113,6 +133,13 @@ export function ReviewActions({ submission, disabled, isImpersonating }: ReviewA
           throw new Error('Permission denied. You may not have broker access for this organization.');
         }
         throw updateError;
+      }
+
+      // BACKLOG-3477: RLS refuses an UPDATE by matching zero rows, with no
+      // error. That is a failure, never a success.
+      if (updatedNoRows(updateData)) {
+        console.error('Review update matched no rows', { submissionId: submission.id });
+        throw new Error(REVIEW_MESSAGES.no_rows);
       }
 
       // Log success for debugging (dev only)
@@ -152,6 +179,9 @@ export function ReviewActions({ submission, disabled, isImpersonating }: ReviewA
     setError(null);
     setShowConfirm(false);
   };
+
+  // BACKLOG-3477: a tick-only reviewer (it_admin) gets no review decisions.
+  if (!canDecide) return null;
 
   // Terminal states - review is complete (show minimal floating bar)
   if (disabled || submission.status === 'approved' || submission.status === 'rejected') {
@@ -305,6 +335,11 @@ export function ReviewActions({ submission, disabled, isImpersonating }: ReviewA
                   <AlertTriangle className="w-4 h-4" />
                   Request Changes
                 </Button>
+                {showChecklistHint && (
+                  <span className="text-xs text-gray-500" data-testid="request-changes-hint">
+                    {REQUEST_CHANGES_HINT}
+                  </span>
+                )}
                 <Button variant="danger" onClick={() => setAction('reject')}>
                   <X className="w-4 h-4" />
                   Reject

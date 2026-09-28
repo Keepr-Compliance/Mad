@@ -82,10 +82,9 @@ export async function requireChecklistEditorAccess(): Promise<ChecklistEditorAcc
   const membership = pickChecklistMembership(memberships);
   if (!membership) throw new Error('Not authorized');
 
-  // Boolean only, no featureRenderPolicy: the entry and the route are hidden
-  // (404) when the database refuses, with no grayed state. Whether an OFF org
-  // should see a grayed entry once feature_definitions.is_built flips true is
-  // an open product question recorded on BACKLOG-3477.
+  // Boolean only: the route and every action refuse when the database
+  // refuses. The sidebar's grayed entry (lib/checklist-nav.ts, BACKLOG-3477)
+  // is presentation only and never makes the route reachable.
   const { data: allowed, error } = await supabase.rpc('can_edit_checklist_templates', {
     p_org_id: membership.organization_id,
   });

@@ -56,10 +56,27 @@ function canEditChecklistTemplates(orgId: unknown): boolean {
     );
   });
 }
+/**
+ * can_review_submission, transcribed from
+ * supabase/migrations/20260925073000_backlog_3477_submission_checklist_review.sql
+ * §3: the caller is a member of p_org_id with role broker / admin / it_admin.
+ * No feature term (the reviewer RPCs check the feature themselves).
+ */
+const SUBMISSION_REVIEWER_ROLES = ['broker', 'admin', 'it_admin'];
+function canReviewSubmission(orgId: unknown): boolean {
+  return (mockEmulator.state.rows.organization_members ?? []).some(
+    (m) =>
+      m.organization_id === orgId &&
+      m.user_id === FIXTURE_USER_ID &&
+      SUBMISSION_REVIEWER_ROLES.includes(m.role as string)
+  );
+}
 const mockRpc = jest.fn(async (name: string, args?: Record<string, unknown>) =>
   name === 'can_edit_checklist_templates'
     ? { data: canEditChecklistTemplates(args?.p_org_id), error: null }
-    : { data: null, error: null }
+    : name === 'can_review_submission'
+      ? { data: canReviewSubmission(args?.p_org_id), error: null }
+      : { data: null, error: null }
 );
 
 jest.mock('@/lib/supabase/server', () => ({
@@ -99,6 +116,7 @@ jest.mock('@/components/submission/MessageList', () => ({ MessageList: () => nul
 jest.mock('@/components/submission/ReviewActions', () => ({ ReviewActions: () => null }));
 jest.mock('@/components/submission/AttachmentList', () => ({ AttachmentList: () => null }));
 jest.mock('@/components/submission/StatusHistory', () => ({ StatusHistory: () => null }));
+jest.mock('@/components/submission/ChecklistReview', () => ({ ChecklistReview: () => null }));
 
 class Redirect extends Error {
   constructor(public readonly to: string) {
@@ -375,6 +393,7 @@ const act = <M, K extends keyof M>(load: () => Promise<M>, name: K, ...args: unk
 const users = () => import('@/lib/actions/bulkUpdateRole');
 const scim = () => import('@/lib/actions/scim');
 const checklists = () => import('@/lib/actions/checklists');
+const submissionChecklists = () => import('@/lib/actions/submissionChecklists');
 
 /** Everything above the floor. 6 user-admin + 11 in scim.ts. */
 const REFUSED_ACTIONS: Record<string, ActionEntry> = {
@@ -424,6 +443,43 @@ const OWN_GATE_ACTIONS: Record<string, ActionEntry> = {
   'lib/actions/checklists.ts#archiveChecklistTemplate': act(checklists, 'archiveChecklistTemplate', 'tpl-3080'),
   'lib/actions/checklists.ts#restoreChecklistTemplate': act(checklists, 'restoreChecklistTemplate', 'tpl-3080'),
 };
+
+/**
+ * BACKLOG-3477: the submission review writes carry their own gate,
+ * lib/submissions/reviewAccess.ts (requireSubmissionReviewer): the submission
+ * is read under RLS, then can_review_submission(its org) decides. Refused to a
+ * brokerage agent and to the personal-org owner (no reviewer row in the
+ * submission's organization); admitted to a brokerage admin. The only table
+ * read before refusal is transaction_submissions (the RLS-scoped lookup of the
+ * submission's organization). '[agent, broker] (two brokerage rows)' is not
+ * used: UNIQUE (organization_id, user_id) rules it out.
+ */
+const REVIEWER_ACTIONS: Record<string, ActionEntry> = {
+  'lib/actions/submissionChecklists.ts#setReviewerCheck': act(
+    submissionChecklists,
+    'setReviewerCheck',
+    'sub-3080-audit',
+    'item-3477-audit',
+    true
+  ),
+  'lib/actions/submissionChecklists.ts#addChecklistAtReview': act(
+    submissionChecklists,
+    'addChecklistAtReview',
+    'sub-3080-audit',
+    TEMPLATE_ID
+  ),
+};
+const REVIEWER_REFUSED: Outcome = {
+  returned: {
+    ok: false,
+    reason: 'not_authorized',
+    message: "You don't have permission to review this submission's checklists.",
+  },
+};
+const REVIEWER_REFUSED_PERSONAS = {
+  'brokerage agent': PERSONAS['brokerage agent'],
+  'personal-org owner': PERSONAS['personal-org owner'],
+} as const;
 
 /**
  * The exact refusal each action gives a floor persona. Where the brokerage
@@ -739,7 +795,7 @@ describe('discovery can see what it claims to see', () => {
     const actions = discoverServerActions();
     expect(actions).toContain('lib/actions/bulkUpdateRole.ts#bulkUpdateRole');
     expect(actions).toContain('lib/actions/scim.ts#listScimSyncLogs');
-    expect(actions.length).toBe(32);
+    expect(actions.length).toBe(34);
   });
 });
 
@@ -759,6 +815,7 @@ describe('set completeness', () => {
     const classified = [
       ...Object.keys(REFUSED_ACTIONS),
       ...Object.keys(OWN_GATE_ACTIONS),
+      ...Object.keys(REVIEWER_ACTIONS),
       ...FLOOR_ACTIONS,
       ...UNAUTHENTICATED_PREEXISTING_ACTIONS,
       ...HELPER_ACTIONS,
@@ -877,6 +934,29 @@ describe('own-gate server actions (D4)', () => {
   it.each(Object.keys(OWN_GATE_ACTIONS))('%s admits the personal-org owner', async (name) => {
     given(PERSONAS['personal-org owner']);
     expect(await run(OWN_GATE_ACTIONS[name])).not.toEqual(OWN_GATE_REFUSALS[name]);
+  });
+});
+
+describe('reviewer server actions (BACKLOG-3477)', () => {
+  const cases = Object.keys(REVIEWER_ACTIONS).flatMap((name) =>
+    (Object.keys(REVIEWER_REFUSED_PERSONAS) as (keyof typeof REVIEWER_REFUSED_PERSONAS)[]).map(
+      (persona) => [name, persona] as const
+    )
+  );
+
+  it.each(cases)('%s refuses the %s, and writes nothing', async (name, persona) => {
+    given(REVIEWER_REFUSED_PERSONAS[persona]);
+    expect(await run(REVIEWER_ACTIONS[name])).toEqual(REVIEWER_REFUSED);
+    expect(mockEmulator.state.writes).toEqual([]);
+    for (const table of tablesRead()) expect(['transaction_submissions']).toContain(table);
+    expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('set_submission_checklist_reviewer_check');
+    expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('add_submission_checklist_at_review');
+  });
+
+  it.each(Object.keys(REVIEWER_ACTIONS))('%s admits a brokerage admin', async (name) => {
+    given(ADMIN);
+    expect(await run(REVIEWER_ACTIONS[name])).not.toEqual(REVIEWER_REFUSED);
+    expect(mockRpc.mock.calls.map((c) => c[0])).toContain('can_review_submission');
   });
 });
 

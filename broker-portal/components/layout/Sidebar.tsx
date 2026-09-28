@@ -116,6 +116,12 @@ export interface SidebarProps {
   displayRole?: string;
   /** BACKLOG-3474: the caller passes lib/checklist-access.ts (layout.tsx). */
   showChecklists?: boolean;
+  /**
+   * BACKLOG-3477: when set (and showChecklists is false), the Checklists entry
+   * renders GRAYED, not as a link, with this one neutral line. Presentation
+   * only; the route still refuses.
+   */
+  checklistsUnavailableLabel?: string | null;
   /** BACKLOG-3080: the layout passes lib/my-transactions-access.ts. Floor bucket only. */
   showMyTransactions?: boolean;
   /** BACKLOG-3080: not a full-portal user; show the floor bucket only. */
@@ -131,6 +137,7 @@ export function Sidebar({
   displayEmail,
   displayRole,
   showChecklists = false,
+  checklistsUnavailableLabel = null,
   showMyTransactions = false,
   floorOnly = false,
 }: SidebarProps) {
@@ -144,8 +151,11 @@ export function Sidebar({
   const showAdminNav =
     !showFloorNav && !isImpersonating && (role === 'admin' || role === 'it_admin');
   const showChecklistsEntry = showChecklists && !isImpersonating;
+  const showChecklistsGrayed =
+    !showChecklistsEntry && !!checklistsUnavailableLabel && !isImpersonating && !showFloorNav;
+  const checklistsSlot = showChecklistsEntry || showChecklistsGrayed;
   const floorItems = showMyTransactions ? [...floorNavItems, myTransactionsNavItem] : floorNavItems;
-  const adminItems = showChecklistsEntry
+  const adminItems = checklistsSlot
     ? insertAfter(adminNavItems, '/dashboard/users', checklistsNavItem)
     : adminNavItems;
 
@@ -157,6 +167,28 @@ export function Sidebar({
   const exactMatchPaths = new Set(['/dashboard']);
 
   const renderNavItem = (item: NavItem) => {
+    if (item === checklistsNavItem && showChecklistsGrayed) {
+      const GrayedIcon = item.icon;
+      return (
+        <div
+          key={item.href}
+          aria-disabled="true"
+          data-testid="checklists-nav-grayed"
+          className={`flex cursor-not-allowed items-center rounded-md text-sm font-medium text-gray-500 ${
+            collapsed ? 'justify-center px-2 py-2' : 'gap-3 px-3 py-2'
+          }`}
+          title={collapsed ? `${item.label}: ${checklistsUnavailableLabel}` : checklistsUnavailableLabel ?? undefined}
+        >
+          <GrayedIcon className="h-5 w-5 shrink-0" aria-hidden="true" />
+          {!collapsed && (
+            <span className="flex min-w-0 flex-col leading-tight">
+              <span>{item.label}</span>
+              <span className="mt-0.5 text-xs font-normal text-gray-500">{checklistsUnavailableLabel}</span>
+            </span>
+          )}
+        </div>
+      );
+    }
     const isActive = exactMatchPaths.has(item.href)
       ? pathname === item.href
       : pathname === item.href || pathname.startsWith(`${item.href}/`);
@@ -217,7 +249,7 @@ export function Sidebar({
       <nav className={`flex-1 py-4 space-y-1 overflow-y-auto scrollbar-hide ${collapsed ? 'px-2' : 'px-3'}`}>
         {showFloorNav && floorItems.map(renderNavItem)}
         {showMemberNav && memberNavItems.map(renderNavItem)}
-        {!showAdminNav && showChecklistsEntry && renderNavItem(checklistsNavItem)}
+        {!showAdminNav && checklistsSlot && renderNavItem(checklistsNavItem)}
         {showAdminNav && adminItems.map(renderNavItem)}
         {personalNavItems.map(renderNavItem)}
       </nav>

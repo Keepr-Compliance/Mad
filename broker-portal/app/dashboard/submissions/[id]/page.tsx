@@ -1,4 +1,3 @@
-import { createClient } from '@/lib/supabase/server';
 import { notFound, redirect } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
@@ -7,10 +6,18 @@ import { MessageList } from '@/components/submission/MessageList';
 import { ReviewActions } from '@/components/submission/ReviewActions';
 import { AttachmentList } from '@/components/submission/AttachmentList';
 import { StatusHistory } from '@/components/submission/StatusHistory';
+import { ChecklistReview } from '@/components/submission/ChecklistReview';
 import { getDataClient } from '@/lib/impersonation-guards';
-import { getOrgFeatures, isFeatureEnabled } from '@/lib/feature-gate';
+import { getOrgFeatures, isFeatureEnabled, isFeatureEnabledFailClosed } from '@/lib/feature-gate';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { requireFullPortalAccess } from '@/lib/auth/portalAccess';
+import { CHECKLIST_FEATURE_KEY } from '@/lib/checklist-access';
+import { resolveHistoryActors, type StatusHistoryEntry } from '@/lib/submissions/history';
+import { resolveUserNames } from '@/lib/submissions/names';
+import { loadAddableTemplates, loadSubmissionChecklists } from '@/lib/submissions/checklists';
+import { markAsUnderReview } from '@/lib/submissions/markUnderReview';
+import { NO_CAPABILITIES, getReviewCapabilities } from '@/lib/submissions/reviewAccess';
+import type { ChecklistSectionView, TemplateOption } from '@/lib/submissions/checklistModel';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -64,34 +71,6 @@ async function getSubmission(id: string, client: SupabaseClient) {
   return data;
 }
 
-/**
- * Mark submission as under_review when broker first opens it.
- * This prevents agent from resubmitting while broker is reviewing.
- * Skipped during impersonation sessions (read-only).
- */
-async function markAsUnderReview(submission: { id: string; status: string }, isImpersonating: boolean) {
-  // Never write during impersonation
-  if (isImpersonating) return;
-
-  // Only transition from 'submitted' or 'resubmitted' to 'under_review'
-  if (submission.status !== 'submitted' && submission.status !== 'resubmitted') {
-    return;
-  }
-
-  const supabase = await createClient();
-
-  const { error } = await supabase
-    .from('transaction_submissions')
-    .update({
-      status: 'under_review',
-    })
-    .eq('id', submission.id);
-
-  if (error) {
-    console.error('Failed to mark submission as under_review:', error.message, { submissionId: submission.id });
-  }
-}
-
 async function getMessages(submissionId: string, client: SupabaseClient): Promise<Message[]> {
   const { data, error } = await client
     .from('submission_messages')
@@ -121,18 +100,14 @@ async function getAttachments(submissionId: string, client: SupabaseClient): Pro
   return data || [];
 }
 
-type HistoryEntry = {
-  status: string;
-  changed_at: string;
-  changed_by?: string;
-  notes?: string;
-  parentSubmissionId?: string; // links to older submission version
-};
+type HistoryEntry = StatusHistoryEntry;
 
 /**
  * Walk the parent_submission_id chain to collect the full status history
- * across all versions, then resolve UUIDs to display names.
- * Tags "resubmitted" entries with the parent submission ID for linking.
+ * across all versions. Tags "resubmitted" entries with the parent submission
+ * ID for linking. changed_by stays a raw id; the page resolves names once,
+ * through public.users, for the history and the checklists together
+ * (BACKLOG-3477).
  */
 async function getFullStatusHistory(
   submission: { id: string; parent_submission_id?: string | null; status_history?: HistoryEntry[]; created_at: string },
@@ -175,28 +150,6 @@ async function getFullStatusHistory(
     }
   }
 
-  // Resolve UUIDs to display names
-  const userIds = Array.from(new Set(allEntries.map((e) => e.changed_by).filter(Boolean))) as string[];
-  if (userIds.length > 0) {
-    const { data: profiles } = await supabase
-      .from('profiles')
-      .select('id, display_name')
-      .in('id', userIds);
-
-    const nameMap = new Map<string, string>();
-    for (const p of profiles || []) {
-      if (p.display_name) nameMap.set(p.id, p.display_name);
-    }
-
-    return {
-      history: allEntries.map((entry) => ({
-        ...entry,
-        changed_by: entry.changed_by ? nameMap.get(entry.changed_by) || undefined : undefined,
-      })),
-      rootCreatedAt,
-    };
-  }
-
   return { history: allEntries, rootCreatedAt };
 }
 
@@ -222,12 +175,18 @@ export default async function SubmissionDetailPage({ params }: PageProps) {
   }
 
   // Build full status history by walking the parent submission chain
-  const { history: fullHistory, rootCreatedAt } = await getFullStatusHistory(submission, client);
+  const { history: rawHistory, rootCreatedAt } = await getFullStatusHistory(submission, client);
+
+  // BACKLOG-3477: what this viewer may do (lib/submissions/reviewAccess.ts is
+  // the one place). Support sessions are read-only and get nothing.
+  const capabilities = isImpersonating
+    ? NO_CAPABILITIES
+    : await getReviewCapabilities(submission.organization_id);
 
   // Mark as under_review when broker first opens (don't await - fire and forget)
   // This prevents agent from resubmitting while broker is reviewing
-  // Skipped during impersonation (read-only)
-  markAsUnderReview(submission, isImpersonating).catch((e) => {
+  // Skipped during impersonation (read-only) and for a tick-only reviewer.
+  markAsUnderReview(submission, { isImpersonating, canDecide: capabilities.canDecide }).catch((e) => {
     console.error('Unhandled error in markAsUnderReview:', e);
   });
 
@@ -277,6 +236,37 @@ export default async function SubmissionDetailPage({ params }: PageProps) {
   // Determine if messages section should be shown at all
   const showMessages = textEnabled || emailEnabled;
 
+  // BACKLOG-3477: the Checklists area, fail-closed on the submission's org.
+  // Not shown during impersonation: the scoped support client does not admit
+  // the checklist copy tables.
+  const showChecklists =
+    !isImpersonating && (await isFeatureEnabledFailClosed(submission.organization_id, CHECKLIST_FEATURE_KEY));
+  let checklistSections: ChecklistSectionView[] = [];
+  let checklistsLoaded = false;
+  let addableTemplates: TemplateOption[] = [];
+  if (showChecklists) {
+    const [loaded, templates] = await Promise.all([
+      loadSubmissionChecklists(client, submission.id),
+      capabilities.canTick ? loadAddableTemplates(client, submission.organization_id) : Promise.resolve([]),
+    ]);
+    checklistsLoaded = loaded.ok;
+    checklistSections = loaded.ok ? loaded.sections : [];
+    addableTemplates = templates;
+  }
+
+  // BACKLOG-3477: names from public.users (same-org members), not profiles
+  // (self-read only). Unresolved = no longer a member = "a former member".
+  // During impersonation names are not looked up at all, so nobody is
+  // mislabelled a former member.
+  const viewerId = isImpersonating ? null : (await client.auth.getUser()).data.user?.id ?? null;
+  const actorIds = [
+    ...rawHistory.map((e) => e.changed_by),
+    ...checklistSections.flatMap((s) => [s.addedAtReviewBy, ...s.items.map((i) => i.reviewerCheckedBy)]),
+    viewerId,
+  ];
+  const names = isImpersonating ? null : await resolveUserNames(client, actorIds);
+  const fullHistory = resolveHistoryActors(rawHistory, names);
+
   return (
     <div className="max-w-7xl mx-auto space-y-6 pb-24">
       {/* Back Link */}
@@ -324,7 +314,7 @@ export default async function SubmissionDetailPage({ params }: PageProps) {
 
       {/* Review Actions - hidden during impersonation (read-only) */}
       {/* BACKLOG-899: isImpersonating prop provides defense-in-depth write guard */}
-      {!isImpersonating && (
+      {!isImpersonating && capabilities.canDecide && (
         <ReviewActions
           submission={{
             id: submission.id,
@@ -333,6 +323,8 @@ export default async function SubmissionDetailPage({ params }: PageProps) {
           }}
           disabled={submission.status === 'approved' || submission.status === 'rejected'}
           isImpersonating={isImpersonating}
+          canDecide={capabilities.canDecide}
+          showChecklistHint={showChecklists && capabilities.canTick}
         />
       )}
 
@@ -342,6 +334,22 @@ export default async function SubmissionDetailPage({ params }: PageProps) {
         currentStatus={submission.status}
         submittedAt={rootCreatedAt}
       />
+
+      {/* BACKLOG-3477: Checklists, between Status History and Messages/Attachments */}
+      {showChecklists && (
+        <ChecklistReview
+          submissionId={submission.id}
+          status={submission.status}
+          sections={checklistSections}
+          loaded={checklistsLoaded}
+          names={names ? Object.fromEntries(names) : null}
+          canTick={capabilities.canTick}
+          canDecide={!isImpersonating && capabilities.canDecide}
+          templates={addableTemplates}
+          messages={showMessages ? gatedMessages : []}
+          attachments={showAttachments ? attachments : []}
+        />
+      )}
 
       {/* Messages with filter tabs - gated by broker_text_view / broker_email_view (TASK-2158) */}
       {showMessages && (
