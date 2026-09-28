@@ -24,6 +24,9 @@ import {
   validateTransactionDates,
 } from "../../../transactionDates";
 import type { Transaction } from "@/types";
+import { checklistService } from "../../../../services/checklistService";
+import type { ChecklistsForTransaction } from "../../../../../electron/types/checklist";
+import logger from "../../../../utils/logger";
 
 export interface SubmitProgress {
   stage: "preparing" | "attachments" | "transaction" | "messages" | "complete" | "failed";
@@ -87,6 +90,37 @@ interface SubmitForReviewModalProps {
    * the submit fails.
    */
   onDatesSaved?: () => void;
+  /**
+   * BACKLOG-3477: warn before submitting when required checklist items are
+   * not ticked. TransactionDetails passes `true` only when the plan allows
+   * checklists — for every other gate value the Checklist tab is read-only,
+   * and a warning would name items the agent cannot tick. Omitted or false,
+   * the press takes exactly the path it took before this prop existed.
+   */
+  checklistsEnabled?: boolean;
+}
+
+/** One required item the agent has not ticked, as the warning lists it. */
+export interface UncheckedRequiredItem {
+  id: string;
+  title: string;
+}
+
+/**
+ * BACKLOG-3477: every required, unticked item across ALL checklists on the
+ * transaction, in display order. Optional items never count. The warning's
+ * title is this array's length, so the number and the list cannot disagree.
+ */
+export function listUncheckedRequiredItems(
+  data: ChecklistsForTransaction,
+): UncheckedRequiredItem[] {
+  const out: UncheckedRequiredItem[] = [];
+  for (const detail of data.checklists) {
+    for (const item of detail.items) {
+      if (item.isRequired && !item.isChecked) out.push({ id: item.id, title: item.title });
+    }
+  }
+  return out;
 }
 
 const STAGE_LABELS: Record<string, string> = {
@@ -123,6 +157,7 @@ export function SubmitForReviewModal({
   onSubmit,
   onExport,
   onDatesSaved,
+  checklistsEnabled = false,
 }: SubmitForReviewModalProps): React.ReactElement {
   /**
    * BACKLOG-2853 — THE DEAL ALREADY HAS A SUBMISSION SITTING WITH THE BROKER.
@@ -378,7 +413,58 @@ export function SubmitForReviewModal({
    * Re-entry is prevented by `savingDates` in the button's `disabled`
    * expression, not by a check in here.
    */
+  const [checkingChecklists, setCheckingChecklists] = useState(false);
+  const [uncheckedRequired, setUncheckedRequired] = useState<UncheckedRequiredItem[] | null>(null);
+
+  /**
+   * BACKLOG-3477 — the pre-submit checklist warning. Warn and allow (founder,
+   * round 2): it never blocks. It runs before BOTH `onSubmit()` calls in
+   * `proceed`, and on submit and resubmit alike.
+   *
+   * The read is `checklistService.get`, the same call the Checklist tab's hook
+   * makes, done fresh here rather than taken from the tab's copy: a checklist
+   * the broker added at review is instantiated in main when the deal moves to
+   * needs_changes, and the tab's copy only refreshes after its own writes — so
+   * on a resubmit it can be missing exactly that checklist.
+   *
+   * A failed read shows no warning and submits. The warning has no power to
+   * stop a submission when it CAN read the checklist; a read failure must not
+   * give it that power.
+   */
   const handleSubmitPress = async () => {
+    if (checklistsEnabled) {
+      setCheckingChecklists(true);
+      const result = await checklistService.get(transaction.id);
+      if (dismissedRef.current) return;
+      setCheckingChecklists(false);
+      if (result.success && result.data) {
+        const unchecked = listUncheckedRequiredItems(result.data);
+        if (unchecked.length > 0) {
+          setUncheckedRequired(unchecked);
+          return;
+        }
+      } else {
+        logger.warn(
+          "[SubmitForReview] checklist read failed; submitting without the warning:",
+          result.error,
+        );
+      }
+    }
+    await proceed();
+  };
+
+  /** "Go back" on the warning: close it, stay on the summary. Nothing is saved. */
+  const handleWarningGoBack = () => {
+    setUncheckedRequired(null);
+  };
+
+  /** "Submit anyway": continue exactly as a press with nothing unticked would. */
+  const handleWarningSubmitAnyway = () => {
+    setUncheckedRequired(null);
+    void proceed();
+  };
+
+  const proceed = async () => {
     if (!dateStepApplies) {
       onSubmit();
       return;
@@ -869,7 +955,7 @@ export function SubmitForReviewModal({
           {dateStepApplies && !isSubmitting && !error && !isSuccess && !showDateStep && (
             <button
               onClick={handleBack}
-              disabled={savingDates}
+              disabled={savingDates || checkingChecklists}
               data-testid="submit-review-back"
               className="mr-auto px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -935,7 +1021,7 @@ export function SubmitForReviewModal({
                  BACKLOG-3498 — and while the date save runs, so a second press
                  cannot save and submit twice (useSubmitForReview.submit has no
                  re-entry guard). */
-              disabled={isSubmitting || submissionIsWithBroker || savingDates}
+              disabled={isSubmitting || submissionIsWithBroker || savingDates || checkingChecklists}
               data-testid="submit-review-submit"
               className="px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-lg font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
             >
@@ -1014,6 +1100,78 @@ export function SubmitForReviewModal({
             </button>
           )}
         </div>
+
+        {/*
+          BACKLOG-3477 — the pre-submit warning, state 4 of the signed-off
+          Checklist tab mock. The shell is ReviewPromptDialog's, class for
+          class (the mock names it as the source); z-[80] sits above this
+          dialog's z-[70].
+        */}
+        {uncheckedRequired !== null && (
+          <div
+            className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="checklist-warning-title"
+            data-testid="submit-review-checklist-warning"
+          >
+            <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-2xl">
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-amber-100">
+                  <svg className="h-5 w-5 text-amber-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M12 9v2m0 4h.01M5 19h14a2 2 0 001.84-2.75L13.74 4a2 2 0 00-3.48 0L3.16 16.25A2 2 0 005 19z"
+                    />
+                  </svg>
+                </div>
+                <div className="min-w-0">
+                  <h2 id="checklist-warning-title" className="text-lg font-semibold text-gray-900">
+                    {uncheckedRequired.length === 1
+                      ? "1 required item is not checked"
+                      : `${uncheckedRequired.length} required items are not checked`}
+                  </h2>
+                  <p className="mt-1 text-sm text-gray-600">
+                    You can still submit. The checklist goes with the transaction as it stands.
+                  </p>
+                  <ul className="mt-3 flex flex-col gap-1.5" data-testid="submit-review-checklist-warning-list">
+                    {uncheckedRequired.map((item) => (
+                      <li
+                        key={item.id}
+                        className="flex items-center gap-2 rounded-md bg-amber-50 px-2 py-1.5 text-sm text-gray-700"
+                      >
+                        <svg className="h-3.5 w-3.5 flex-shrink-0 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                        {item.title}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+              <div className="mt-6 flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={handleWarningGoBack}
+                  data-testid="submit-review-checklist-go-back"
+                  className="rounded-lg px-4 py-2 font-medium text-gray-700 transition-all hover:bg-gray-100"
+                >
+                  Go back
+                </button>
+                <button
+                  type="button"
+                  onClick={handleWarningSubmitAnyway}
+                  data-testid="submit-review-checklist-submit-anyway"
+                  className="rounded-lg bg-blue-600 px-4 py-2 font-semibold text-white shadow-md transition-all hover:bg-blue-700"
+                >
+                  Submit anyway
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
     </ResponsiveModal>
   );
 }
