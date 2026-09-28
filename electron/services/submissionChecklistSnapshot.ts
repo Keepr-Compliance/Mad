@@ -48,6 +48,13 @@ export interface SnapshotLinkPayload {
 /** One checklist row, as the function reads it (migration §6). */
 export interface SnapshotItemPayload {
   title: string;
+  /**
+   * The local `transaction_checklist_items.id` (BACKLOG-3596). Created once by
+   * `selectChecklistTemplate` and never rewritten, so every version of one
+   * transaction sends the same id for the same item. The server matches it
+   * against the previous version to carry the broker's review marks forward.
+   */
+  local_item_id: string;
   description: string | null;
   is_required: boolean;
   expected_document_type: string | null;
@@ -101,6 +108,7 @@ export function buildChecklistSnapshotPayload(
     sort_order: detail.checklist.sortOrder,
     items: detail.items.map((item) => ({
       title: item.title,
+      local_item_id: item.id,
       description: item.description,
       is_required: item.isRequired,
       expected_document_type: item.expectedDocumentType,
