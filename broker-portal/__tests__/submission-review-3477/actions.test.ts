@@ -140,7 +140,7 @@ describe('addChecklistAtReview', () => {
     expect(result).toEqual({ ok: false, reason: 'superseded', message: REVIEW_MESSAGES.superseded });
     if (!result.ok) {
       expect(result.message).toBe(
-        'A newer version of this submission has been sent, so this version is closed. Check items on the newest version.'
+        'A newer version of this submission has been sent, so this version is closed. Check items and add checklists on the newest version.'
       );
       expect(result.message).not.toBe(REVIEW_MESSAGES.not_authorized);
     }

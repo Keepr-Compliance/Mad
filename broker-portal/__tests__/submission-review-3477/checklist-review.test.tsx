@@ -320,7 +320,7 @@ describe('broker checkbox (BACKLOG-3596)', () => {
     fireEvent.click(boxOf('Title commitment'));
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent(
-      'A newer version of this submission has been sent, so this version is closed. Check items on the newest version.'
+      'A newer version of this submission has been sent, so this version is closed. Check items and add checklists on the newest version.'
     );
     expect(alert.textContent).not.toMatch(/42501|superseded/);
   });

@@ -194,7 +194,7 @@ describe('superseded refusal copy', () => {
     const reason = reasonForReviewRpcError({ code: '42501', message: 'superseded' });
     expect(reason).toBe('superseded');
     expect(reviewFailure(reason).message).toBe(
-      'A newer version of this submission has been sent, so this version is closed. Check items on the newest version.'
+      'A newer version of this submission has been sent, so this version is closed. Check items and add checklists on the newest version.'
     );
     expect(REVIEW_MESSAGES.superseded).not.toBe(REVIEW_MESSAGES.not_authorized);
   });

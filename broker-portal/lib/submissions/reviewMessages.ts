@@ -27,7 +27,7 @@ export const REVIEW_MESSAGES: Record<ReviewFailureReason, string> = {
   added_at_review:
     'This checklist was added at review for the agent’s next version, so its items can’t be checked.',
   superseded:
-    'A newer version of this submission has been sent, so this version is closed. Check items on the newest version.',
+    'A newer version of this submission has been sent, so this version is closed. Check items and add checklists on the newest version.',
   template_not_found: 'That checklist is no longer available. It may have been archived.',
   invalid: 'Something about that request was not valid. Refresh the page and try again.',
   no_rows: 'Nothing was saved. You may not have permission to make this change. Refresh the page and try again.',
