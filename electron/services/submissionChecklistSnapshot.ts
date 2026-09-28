@@ -14,9 +14,27 @@
  *      insert is refused. `submitTransactionInternal` calls this between the
  *      attachment insert and the finalize UPDATE.
  *
- *   2. A refused or failed snapshot never fails the submission. The function
- *      is all-or-nothing (one statement), so continuing never leaves a partial
- *      copy. The failure is logged and recorded as a breadcrumb.
+ *   2. (BACKLOG-3600) A failure is classified before anything acts on it:
+ *
+ *      - TRANSIENT (no SQLSTATE, PGRST*, 08*, 40001, 57014, 53*, a timeout, a
+ *        thrown error): the call is retried with the SAME payload, up to
+ *        `SNAPSHOT_RETRY.attempts` calls, each bounded by
+ *        `SNAPSHOT_RETRY.attemptTimeoutMs`. Still failing -> `failed` with
+ *        kind `transient`, and the caller FAILS the submission while it is
+ *        still `uploading`, so the broker never sees a version without its
+ *        checklists and the agent can simply try again.
+ *      - 23505 on a retry that follows a transient failure: the earlier call
+ *        committed and its response was lost. The function is one statement
+ *        (all or nothing) and the header index
+ *        `submission_checklists_submission_template_key` fires on any repeat,
+ *        so the copy is complete -> `written`. A 23505 on the FIRST call is
+ *        contract drift and takes the permanent path.
+ *      - PERMANENT: 42501 (the org's plan does not include checklists — the
+ *        only term of the insert policy that can fail for the submitter's own
+ *        `uploading` row) -> kind `not_in_plan`; any other code -> kind
+ *        `refused`, reported to Sentry. The caller finalizes the submission and
+ *        tells the agent the checklists were not sent. A plan never locks
+ *        submission.
  *
  * Evidence links are sent as LOCAL ids and matched server-side:
  *   attachment -> submission_attachments.local_attachment_id (written by
@@ -82,10 +100,70 @@ export interface SnapshotResultCounts {
   dropped_links: number;
 }
 
+/**
+ * How a failed snapshot is treated (BACKLOG-3600).
+ *   transient    -> the caller fails the submission (nothing reaches the broker)
+ *   not_in_plan  -> the caller submits and tells the agent (plan has no checklists)
+ *   refused      -> the caller submits and tells the agent (any other refusal)
+ */
+export type SnapshotFailureKind = "transient" | "not_in_plan" | "refused";
+
 export type SnapshotOutcome =
   | { status: "none" }
   | { status: "written"; counts: SnapshotResultCounts | null }
-  | { status: "failed"; code: string | null; message: string };
+  | {
+      status: "failed";
+      kind: SnapshotFailureKind;
+      code: string | null;
+      message: string;
+    };
+
+/**
+ * Retry budget (BACKLOG-3600). Mutable so tests can shorten the waits; the
+ * production values give a worst case under 50 s (3 x 15 s + 1 s + 3 s).
+ */
+export const SNAPSHOT_RETRY: {
+  attempts: number;
+  attemptTimeoutMs: number;
+  backoffMs: number[];
+} = {
+  attempts: 3,
+  attemptTimeoutMs: 15000,
+  backoffMs: [1000, 3000],
+};
+
+/** A thrown or timed-out call carries no SQLSTATE; it is transient. */
+function isTransientCode(code: string | null): boolean {
+  if (!code) return true;
+  return (
+    code.startsWith("PGRST") ||
+    code.startsWith("08") ||
+    code.startsWith("53") ||
+    code === "40001" ||
+    code === "57014"
+  );
+}
+
+async function callWithTimeout<T>(call: PromiseLike<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      Promise.resolve(call),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`Checklist copy timed out after ${ms / 1000}s`)),
+          ms,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /** The one method of the Supabase client this module uses. */
 export interface SnapshotRpcClient {
@@ -129,60 +207,124 @@ export function buildChecklistSnapshotPayload(
 
 /**
  * Copy every checklist of `transactionId` onto the cloud submission. Never
- * throws: a refusal or failure is logged and returned as `failed`.
+ * throws: every failure is classified (header rule 2) and returned as
+ * `failed` with its kind; the caller decides what the kind means.
  */
 export async function snapshotSubmissionChecklists(
   client: SnapshotRpcClient,
   submissionId: string,
   transactionId: string
 ): Promise<SnapshotOutcome> {
+  let payload: SnapshotChecklistPayload[];
   try {
     const local = await getChecklistsForTransaction(transactionId);
     if (local.checklists.length === 0) return { status: "none" };
-
-    const payload = buildChecklistSnapshotPayload(local);
-    const { data, error } = await client.rpc(SNAPSHOT_RPC, {
-      p_submission_id: submissionId,
-      p_checklists: payload,
-    });
-
-    if (error) {
-      return recordFailure(submissionId, transactionId, error.code ?? null, error.message);
-    }
-
-    const counts = (data as SnapshotResultCounts | null) ?? null;
-    logService.info(
-      `[Submission] Checklists copied to submission ${submissionId}`,
-      LOG_CONTEXT,
-      { transactionId, sent: payload.length, counts }
-    );
-    return { status: "written", counts };
+    payload = buildChecklistSnapshotPayload(local);
   } catch (err) {
+    // The local read is not retried: the rest of the submit reads the same DB.
     return recordFailure(
       submissionId,
       transactionId,
+      "transient",
       null,
       err instanceof Error ? err.message : String(err)
     );
   }
+
+  // One payload object for every attempt — never a second local read.
+  const args = { p_submission_id: submissionId, p_checklists: payload };
+  let lastCode: string | null = null;
+  let lastMessage = "";
+
+  for (let attempt = 1; attempt <= SNAPSHOT_RETRY.attempts; attempt++) {
+    if (attempt > 1) {
+      const wait = SNAPSHOT_RETRY.backoffMs[attempt - 2] ?? 0;
+      if (wait > 0) await sleep(wait);
+    }
+
+    let code: string | null;
+    let message: string;
+    try {
+      const { data, error } = await callWithTimeout(
+        client.rpc(SNAPSHOT_RPC, args),
+        SNAPSHOT_RETRY.attemptTimeoutMs
+      );
+      if (!error) {
+        const counts = (data as SnapshotResultCounts | null) ?? null;
+        logService.info(
+          `[Submission] Checklists copied to submission ${submissionId}`,
+          LOG_CONTEXT,
+          { transactionId, sent: payload.length, counts, attempt }
+        );
+        return { status: "written", counts };
+      }
+      code = error.code ? error.code : null;
+      message = error.message;
+    } catch (err) {
+      code = null;
+      message = err instanceof Error ? err.message : String(err);
+    }
+
+    // Every earlier attempt was transient (a permanent code returns below), so
+    // a 23505 here means an earlier call committed and its answer was lost.
+    if (code === "23505" && attempt > 1) {
+      logService.info(
+        `[Submission] Checklists already on submission ${submissionId} (an earlier attempt committed)`,
+        LOG_CONTEXT,
+        { transactionId, attempt }
+      );
+      return { status: "written", counts: null };
+    }
+
+    if (!isTransientCode(code)) {
+      return recordFailure(
+        submissionId,
+        transactionId,
+        code === "42501" ? "not_in_plan" : "refused",
+        code,
+        message
+      );
+    }
+
+    lastCode = code;
+    lastMessage = message;
+    logService.warn(
+      `[Submission] Checklist copy attempt ${attempt} of ${SNAPSHOT_RETRY.attempts} failed for submission ${submissionId}`,
+      LOG_CONTEXT,
+      { transactionId, code, message }
+    );
+  }
+
+  return recordFailure(submissionId, transactionId, "transient", lastCode, lastMessage);
 }
 
 function recordFailure(
   submissionId: string,
   transactionId: string,
+  kind: SnapshotFailureKind,
   code: string | null,
   message: string
 ): SnapshotOutcome {
   logService.warn(
-    `[Submission] Checklists were not copied to submission ${submissionId}; the submission continues without them`,
+    kind === "transient"
+      ? `[Submission] Checklists were not copied to submission ${submissionId}; the submission will fail`
+      : `[Submission] Checklists were not copied to submission ${submissionId}; the submission continues without them`,
     LOG_CONTEXT,
-    { transactionId, code, message }
+    { transactionId, kind, code, message }
   );
   Sentry.addBreadcrumb({
     category: "submission",
     message: "checklist snapshot failed",
     level: "warning",
-    data: { submissionId, code },
+    data: { submissionId, kind, code },
   });
-  return { status: "failed", code, message };
+  if (kind === "refused") {
+    // Unreachable by construction (the payload is built to the contract), so
+    // any refusal other than the plan's is drift worth an event, not a crumb.
+    Sentry.captureException(
+      new Error(`Checklist snapshot refused with ${code ?? "no code"}: ${message}`),
+      { tags: { area: "submission_checklist_snapshot", code: code ?? "none" } }
+    );
+  }
+  return { status: "failed", kind, code, message };
 }

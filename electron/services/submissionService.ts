@@ -96,7 +96,26 @@ export interface SubmissionResult {
    * send these", and the two are now distinguishable.
    */
   flaggedWithoutAttachments: number;
+  /**
+   * BACKLOG-3600: set only on a SUCCESSFUL submission whose checklists did not
+   * all reach the broker. Absent means nothing to say.
+   *   not_in_plan  the org's plan does not include checklists (RLS 42501)
+   *   refused      the cloud refused the copy for any other reason
+   * A transient failure never sets this — it fails the submission instead.
+   */
+  checklistsNotSent?: ChecklistsNotSentReason;
 }
+
+/** Why a submitted version lacks checklists (BACKLOG-3600). */
+export type ChecklistsNotSentReason = "not_in_plan" | "refused";
+
+/**
+ * BACKLOG-3600 — the agent-facing sentence when the checklist copy failed on
+ * every attempt. It is thrown while the submission is still `uploading`, so the
+ * catch below deletes it and the modal shows this text as the failure.
+ */
+export const CHECKLISTS_NOT_SENT_ERROR =
+  "Your checklists could not be sent to your broker, so nothing was submitted. Check your connection and try again.";
 
 /** Progress stages for submission flow */
 export type SubmissionStage =
@@ -900,8 +919,23 @@ class SubmissionService {
 
       // Stage 5b (BACKLOG-3477): copy every checklist while the submission is
       // still 'uploading' — the copy tables refuse inserts after finalize.
-      // Never throws; a refusal is logged and the submission continues.
-      await snapshotSubmissionChecklists(client, submissionId, transactionId);
+      // BACKLOG-3600: a transient failure (retries exhausted) FAILS the
+      // submission here, before finalize, so the catch removes the uploading
+      // row and the broker never sees a version without its checklists. A
+      // permanent refusal (plan without checklists, or drift) submits and
+      // reports `checklistsNotSent` so the agent is told.
+      const checklistOutcome = await snapshotSubmissionChecklists(
+        client,
+        submissionId,
+        transactionId
+      );
+      let checklistsNotSent: ChecklistsNotSentReason | undefined;
+      if (checklistOutcome.status === "failed") {
+        if (checklistOutcome.kind === "transient") {
+          throw new Error(CHECKLISTS_NOT_SENT_ERROR);
+        }
+        checklistsNotSent = checklistOutcome.kind;
+      }
 
       // Stage 6: Finalize submission — all data written, mark as 'submitted'
       // This is the commit point: only now does the submission become visible to brokers
@@ -959,6 +993,7 @@ class SubmissionService {
         attachmentsFailed: attachmentUploadResults.filter((r) => !r.success)
           .length,
         flaggedWithoutAttachments,
+        ...(checklistsNotSent ? { checklistsNotSent } : {}),
       };
     } catch (error) {
       const errorMessage =

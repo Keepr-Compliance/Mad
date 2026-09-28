@@ -665,6 +665,9 @@ export function registerTransactionExportHandlers(
         // contributed none. Carried across the boundary because a number the
         // renderer cannot read is a number no one will ever act on.
         flaggedWithoutAttachments: result.flaggedWithoutAttachments,
+        // BACKLOG-3600: the checklists did not reach the broker on a submission
+        // that otherwise succeeded. Absent when there is nothing to say.
+        checklistsNotSent: result.checklistsNotSent,
         error: result.error,
       };
     }, { module: "Transactions" }),
@@ -757,6 +760,9 @@ export function registerTransactionExportHandlers(
         // contributed none. Carried across the boundary because a number the
         // renderer cannot read is a number no one will ever act on.
         flaggedWithoutAttachments: result.flaggedWithoutAttachments,
+        // BACKLOG-3600: the checklists did not reach the broker on a submission
+        // that otherwise succeeded. Absent when there is nothing to say.
+        checklistsNotSent: result.checklistsNotSent,
         error: result.error,
       };
     }, { module: "Transactions" }),

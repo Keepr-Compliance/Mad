@@ -645,6 +645,7 @@ function TransactionDetails({
     isSubmitting,
     progress: submitProgress,
     error: submitError,
+    checklistsNotSent: submitChecklistsNotSent,
     submit: handleSubmitForReview,
     reset: resetSubmit,
   } = useSubmitForReview({
@@ -1645,6 +1646,7 @@ function TransactionDetails({
           isSubmitting={isSubmitting}
           progress={submitProgress}
           error={submitError}
+          checklistsNotSent={submitChecklistsNotSent}
           onCancel={() => {
             setShowSubmitModal(false);
             resetSubmit();
