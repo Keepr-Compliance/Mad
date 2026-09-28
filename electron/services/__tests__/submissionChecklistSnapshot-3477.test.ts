@@ -104,7 +104,12 @@ import supabaseStorageService from "../supabaseStorageService";
 import databaseService from "../databaseService";
 import logService from "../logService";
 import { addChecklistLink, selectChecklistTemplate } from "../db/checklistDbService";
-import { SNAPSHOT_RPC } from "../submissionChecklistSnapshot";
+import {
+  SNAPSHOT_RPC,
+  buildChecklistSnapshotPayload,
+  type SnapshotChecklistPayload,
+} from "../submissionChecklistSnapshot";
+import { getChecklistsForTransaction } from "../db/checklistDbService";
 
 const submissionDb = jest.requireActual("../db/submissionDbService") as typeof import("../db/submissionDbService");
 
@@ -267,6 +272,10 @@ class FakeSupabase {
           submission_id: sid,
           submission_checklist_id: headerId,
           title: it.title,
+          // BACKLOG-3596 migration 20260928120000 §4: NULLIF(it ->> 'local_item_id', '').
+          // A payload without the key (an older desktop) stores NULL.
+          local_item_id:
+            it.local_item_id == null || it.local_item_id === "" ? null : String(it.local_item_id),
           description: it.description ?? null,
           is_required: it.is_required ?? false,
           expected_document_type: it.expected_document_type ?? null,
@@ -568,7 +577,17 @@ describe("BACKLOG-3477 — submit copies the transaction's checklists", () => {
     expect(Object.keys(payload[0]).sort()).toEqual(["items", "sort_order", "template_id", "template_name"]);
     const item = (payload[0].items as Row[])[0];
     expect(Object.keys(item).sort()).toEqual(
-      ["description", "expected_document_type", "is_checked", "is_required", "links", "note", "sort_order", "title"],
+      [
+        "description",
+        "expected_document_type",
+        "is_checked",
+        "is_required",
+        "links",
+        "local_item_id",
+        "note",
+        "sort_order",
+        "title",
+      ],
     );
     expect(Object.keys((item.links as Row[])[0]).sort()).toEqual(["kind", "label", "local_ids", "sort_order"]);
   });
@@ -610,5 +629,141 @@ describe("BACKLOG-3477 — submit copies the transaction's checklists", () => {
     const result = await submissionService.submitTransaction(TX);
     expect(result.success).toBe(true);
     expect(fake.rpcCalls).toHaveLength(0);
+  });
+});
+
+// ============================================================================
+// BACKLOG-3596 (PR 2) — each item carries its stable LOCAL id
+// ============================================================================
+/**
+ * Contract: supabase/migrations/20260928120000_backlog_3596_broker_checklist_ticks.sql
+ * (PR 1, branch feature-portal/BACKLOG-3596-cloud @ b3d0b912d) §4 reads
+ * `items[].local_item_id` as `NULLIF(it ->> 'local_item_id', '')`. The carry
+ * (§3) matches an item to the parent version's item on local_item_id AND title
+ * AND the header's template_id. A version whose items carry no local_item_id
+ * at all takes the branch `ELSIF v_items > 0 AND v_with_ids = 0` and gets one
+ * 'checklist_review_unavailable' entry, reason 'unmatched_client'; nothing is
+ * carried and nothing is refused.
+ *
+ * Wrong implementations these catch:
+ *   id dropped                       -> nothing ever matches; every tick lost
+ *   a fresh id per snapshot          -> v2 never matches v1; every tick lost
+ *   the checklist or template id sent in its place
+ *                                    -> items of one checklist collide
+ */
+describe("BACKLOG-3596 — the snapshot sends each item's local id", () => {
+  /** Local truth: (template_id, title) -> local item id, read from SQLite. */
+  function localItemIds(): Map<string, string> {
+    const rows = db
+      .prepare(
+        `SELECT i.id, i.title, c.template_id FROM transaction_checklist_items i
+           JOIN transaction_checklists c ON c.id = i.checklist_id
+          WHERE c.transaction_id = ?`,
+      )
+      .all(TX) as { id: string; title: string; template_id: string }[];
+    return new Map(rows.map((r) => [`${r.template_id}|${r.title}`, r.id]));
+  }
+
+  function payloadItemIds(payload: Row[]): Map<string, unknown> {
+    const out = new Map<string, unknown>();
+    for (const c of payload) {
+      for (const it of c.items as Row[]) out.set(`${c.template_id}|${it.title}`, it.local_item_id);
+    }
+    return out;
+  }
+
+  /** A third checklist whose one item has the SAME title as an item on the first. */
+  async function seedSameTitleChecklist(): Promise<string> {
+    const tpl = randomUUID();
+    const r = await selectChecklistTemplate({
+      transactionId: TX,
+      templateId: tpl,
+      templateName: "Broker Addendum",
+      items: [{ title: "Signed purchase agreement", isRequired: true, sortOrder: 0 }],
+    });
+    if (r.status !== "added") throw new Error("seed: template not added");
+    return tpl;
+  }
+
+  it("every item on every checklist carries its own local item id", async () => {
+    await seedChecklists();
+    const tplSame = await seedSameTitleChecklist();
+    const result = await submissionService.submitTransaction(TX);
+    expect(result.success).toBe(true);
+
+    const payload = fake.rpcCalls[0].args.p_checklists as Row[];
+    const local = localItemIds();
+    expect(local.size).toBe(5);
+    // Same key set, same ids — every item, every checklist.
+    expect(payloadItemIds(payload)).toEqual(local);
+
+    // The same title on two checklists: two different ids, each its own row.
+    const a = local.get(`${TPL_PURCHASE}|Signed purchase agreement`);
+    const b = local.get(`${tplSame}|Signed purchase agreement`);
+    expect(a).toBeDefined();
+    expect(b).toBeDefined();
+    expect(a).not.toBe(b);
+
+    // Never a checklist id or a template id in its place.
+    const notItemIds = new Set(
+      (db.prepare(`SELECT id, template_id FROM transaction_checklists`).all() as Row[]).flatMap((r) => [
+        r.id,
+        r.template_id,
+      ]),
+    );
+    const sent = [...payloadItemIds(payload).values()];
+    expect(new Set(sent).size).toBe(5);
+    for (const id of sent) expect(notItemIds.has(id)).toBe(false);
+
+    // What the server stored: one local_item_id per copied item.
+    expect(
+      fake.tables.submission_checklist_items.map((i) => i.local_item_id).sort(),
+    ).toEqual([...local.values()].sort());
+  });
+
+  it("the ids are the same on the resubmitted version (stable across snapshots)", async () => {
+    await seedChecklists();
+    const first = await submissionService.submitTransaction(TX);
+    expect(first.success).toBe(true);
+    fake.tables.transaction_submissions.find((s) => s.id === first.submissionId)!.status = "needs_changes";
+    const second = await submissionService.resubmitTransaction(TX);
+    expect(second.success).toBe(true);
+
+    expect(fake.rpcCalls).toHaveLength(2);
+    const v1 = payloadItemIds(fake.rpcCalls[0].args.p_checklists as Row[]);
+    const v2 = payloadItemIds(fake.rpcCalls[1].args.p_checklists as Row[]);
+    expect(v1.size).toBe(4);
+    expect(v2).toEqual(v1);
+    expect(v1).toEqual(localItemIds());
+
+    const stored = (sid: unknown) =>
+      fake.tables.submission_checklist_items
+        .filter((i) => i.submission_id === sid)
+        .map((i) => [i.title, i.local_item_id]);
+    expect(stored(second.submissionId)).toEqual(stored(first.submissionId));
+  });
+
+  it("an older-app payload without local_item_id is still accepted, stored as NULL", async () => {
+    await seedChecklists();
+    // Premise: today's builder sends a non-empty id on every item.
+    const built = buildChecklistSnapshotPayload(await getChecklistsForTransaction(TX));
+    const builtItems = built.flatMap((c) => c.items);
+    expect(builtItems).toHaveLength(4);
+    for (const it of builtItems) expect(typeof it.local_item_id === "string" && it.local_item_id.length > 0).toBe(true);
+
+    // The pre-3596 shape: the same payload with the key removed.
+    const older = built.map((c) => ({
+      ...c,
+      items: c.items.map(({ local_item_id: _drop, ...rest }) => rest),
+    })) as unknown as SnapshotChecklistPayload[];
+    expect(older.flatMap((c) => c.items).some((it) => "local_item_id" in it)).toBe(false);
+
+    const sid = "sub-older-app";
+    fake.tables.transaction_submissions.push({ id: sid, submitted_by: USER, status: "uploading" });
+    const { error } = await fake.rpc(SNAPSHOT_RPC, { p_submission_id: sid, p_checklists: older });
+    expect(error).toBeNull();
+    const stored = fake.tables.submission_checklist_items.filter((i) => i.submission_id === sid);
+    expect(stored).toHaveLength(4);
+    expect(stored.every((i) => i.local_item_id === null)).toBe(true);
   });
 });
