@@ -100,6 +100,9 @@ jest.mock('@/lib/impersonation', () => ({
 jest.mock('@/lib/feature-gate', () => ({
   ...jest.requireActual('@/lib/feature-gate'),
   isFeatureEnabledFailClosed: jest.fn(async () => true),
+  // BACKLOG-3593: the My Transactions gate answers from one fetched feature set
+  // with isFeatureEnabledStrict (fail-closed); forced ON for the same reason.
+  isFeatureEnabledStrict: jest.fn(() => true),
 }));
 jest.mock('@/lib/email', () => ({
   sendInviteEmail: jest.fn(async () => ({ success: true, outcome: 'sent' })),
@@ -984,6 +987,8 @@ describe('plan-gated pages: My Transactions (BACKLOG-3080, R7)', () => {
   it('this harness reads the My Transactions key as ON, so refusals below are not the plan', async () => {
     const { isFeatureEnabledFailClosed } = await import('@/lib/feature-gate');
     expect(await isFeatureEnabledFailClosed(FIXTURE_BROKERAGE_ORG_ID, 'portal_my_transactions')).toBe(true);
+    const { isFeatureEnabledStrict } = await import('@/lib/feature-gate');
+    expect(isFeatureEnabledStrict(null, 'portal_my_transactions')).toBe(true);
   });
 
   const refusedCases = Object.entries(PLAN_GATED_PAGES).flatMap(([page, entry]) =>

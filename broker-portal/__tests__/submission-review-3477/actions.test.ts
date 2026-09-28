@@ -125,6 +125,26 @@ describe('addChecklistAtReview', () => {
       message: REVIEW_MESSAGES.not_open_for_review,
     });
   });
+
+  /**
+   * C-F (SR addendum 80f5ae11): the add RPC will refuse a version that has a
+   * newer version with `RAISE EXCEPTION 'superseded' USING ERRCODE = '42501'`
+   * (the tick RPC's exact shape, 20260928120000…sql §5; the add refusal is a
+   * separate cloud migration, not applied). supabase-js surfaces it as
+   * {code, message}. The broker reads the newer-version words, not the
+   * permission words.
+   */
+  it('maps 42501 superseded to the newer-version words, not the permission words', async () => {
+    rpcAnswers({ ...REVIEWER, add_submission_checklist_at_review: { data: null, error: { code: '42501', message: 'superseded' } } });
+    const result = await addChecklistAtReview('sub-1', 'tpl-1');
+    expect(result).toEqual({ ok: false, reason: 'superseded', message: REVIEW_MESSAGES.superseded });
+    if (!result.ok) {
+      expect(result.message).toBe(
+        'A newer version of this submission has been sent, so this version is closed. Check items and add checklists on the newest version.'
+      );
+      expect(result.message).not.toBe(REVIEW_MESSAGES.not_authorized);
+    }
+  });
 });
 
 describe('markAsUnderReview', () => {

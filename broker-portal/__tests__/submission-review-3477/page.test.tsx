@@ -368,14 +368,13 @@ describe('F4: can_review_submission fails closed', () => {
     const { container, getByRole } = renderDom(<RealChecklistReview {...props} />);
     getByRole('button', { name: 'Expand all' }).click();
     expect(container.querySelectorAll('[data-testid="checklist-item"]').length).toBeGreaterThan(0);
-    const buttons = Array.from(container.querySelectorAll('button'));
-    const labels = buttons.map((b) => b.textContent?.trim());
-    // No actionable reviewer pill: nothing to tick, and an item already reviewed
-    // by someone else shows only as a disabled, read-only "Reviewed" record
-    // (the designed non-reviewer view, checklist-review.test.tsx).
-    expect(labels).not.toContain('Mark reviewed');
-    const pills = buttons.filter((b) => ['Reviewed', 'Mark reviewed'].includes(b.textContent?.trim() ?? ''));
-    expect(pills.every((b) => b.disabled)).toBe(true);
+    const labels = Array.from(container.querySelectorAll('button')).map((b) => b.textContent?.trim());
+    // BACKLOG-3596: nothing to tick. Every broker checkbox is a disabled,
+    // read-only record (an item already checked by someone else stays checked).
+    const boxes = Array.from(container.querySelectorAll('input[type="checkbox"]')) as HTMLInputElement[];
+    expect(boxes.length).toBe(2);
+    expect(boxes.every((b) => b.disabled)).toBe(true);
+    expect(boxes.map((b) => b.checked)).toEqual([true, false]);
     expect(labels).not.toContain('Add checklist');
   });
 
@@ -387,7 +386,50 @@ describe('F4: can_review_submission fails closed', () => {
     getByRole('button', { name: 'Expand all' }).click();
     const labels = Array.from(container.querySelectorAll('button')).map((b) => b.textContent?.trim());
     expect(labels).toContain('Add checklist');
-    expect(labels).toContain('Mark reviewed');
+    const boxes = Array.from(container.querySelectorAll('input[type="checkbox"]')) as HTMLInputElement[];
+    expect(boxes.length).toBe(2);
+    expect(boxes.every((b) => !b.disabled)).toBe(true);
+  });
+});
+
+/**
+ * BACKLOG-3596: whether a newer version exists, in ANY status. Child rows
+ * carry the live transaction_submissions columns the page reads
+ * (parent_submission_id, status); a version still uploading counts, because
+ * the tick RPC refuses as soon as the child row exists (PR 1 migration §5).
+ */
+describe('superseded version (BACKLOG-3596)', () => {
+  const CHILD_ID = '00000000-0000-4000-8000-000000359601'; // pii-allow-uuid: invented fixture id
+  function withChild(status: string | null): void {
+    given('broker', 'needs_changes');
+    const rows = mockEmulator.state.rows;
+    if (status) {
+      rows.transaction_submissions = [
+        ...(rows.transaction_submissions ?? []),
+        { ...submissionRow(status), id: CHILD_ID, parent_submission_id: SUBMISSION_ID, status_history: [] },
+      ];
+    }
+  }
+
+  it.each([
+    [null, null],
+    ['resubmitted', 'newer'],
+    ['under_review', 'newer'],
+    ['uploading', 'uploading'],
+  ] as const)('child %s -> supersededBy %s', async (child, expected) => {
+    withChild(child);
+    expect(findProps<ChecklistReviewProps>(await render(), ChecklistReview)!.supersededBy).toBe(expected);
+  });
+
+  it('the real component closes every checkbox on a superseded version, with the reason', async () => {
+    withChild('uploading');
+    const props = findProps<ChecklistReviewProps>(await render(), ChecklistReview)!;
+    const { ChecklistReview: RealChecklistReview } = jest.requireActual('@/components/submission/ChecklistReview');
+    const { container, getByText } = renderDom(<RealChecklistReview {...props} />);
+    const boxes = Array.from(container.querySelectorAll('input[type="checkbox"]')) as HTMLInputElement[];
+    expect(boxes.length).toBeGreaterThan(0);
+    expect(boxes.every((b) => b.disabled)).toBe(true);
+    expect(getByText('A newer version of this submission is being sent, so this version is closed.')).toBeTruthy();
   });
 });
 
