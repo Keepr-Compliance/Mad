@@ -21,6 +21,7 @@ import databaseService from "./databaseService";
 import logService from "./logService";
 import type { Transaction, SubmissionStatus } from "../types/models";
 import { sendToMainWindow } from "../windowRegistry";
+import { pullReviewChecklists } from "./submissionChecklistPull";
 
 // ============================================
 // TYPES & INTERFACES
@@ -67,6 +68,13 @@ interface LocalSubmittedTransaction {
 const DEFAULT_SYNC_INTERVAL_MS = 60000; // 1 minute (fallback polling)
 const MIN_SYNC_INTERVAL_MS = 10000; // 10 seconds minimum
 const REALTIME_ENABLED = true; // Feature flag for realtime subscriptions
+/**
+ * BACKLOG-3477: after this many consecutive failed pulls of broker-added
+ * checklists, the status is written anyway so the agent still sees "Changes
+ * requested". The pull is edge-triggered, so that submission is not pulled
+ * again after that.
+ */
+const REVIEW_CHECKLIST_PULL_MAX_FAILURES = 3;
 
 // ============================================
 // SERVICE CLASS
@@ -88,6 +96,8 @@ class SubmissionSyncService {
   private isOnline: boolean = true;
   private realtimeChannel: RealtimeChannel | null = null;
   private currentUserId: string | null = null;
+  /** BACKLOG-3477: consecutive failed checklist pulls, per submission id, shared by all apply paths. */
+  private reviewChecklistPullFailures = new Map<string, number>();
 
   /**
    * Start realtime subscription for status changes
@@ -228,6 +238,8 @@ class SubmissionSyncService {
       const notesChanged = cloudStatus.review_notes !== localTransaction.last_review_notes;
 
       if (statusChanged || notesChanged) {
+        const gate = await this.beforeStatusWrite(localTransaction, cloudStatus.status);
+        if (!gate.write) return;
         await this.updateLocalTransaction(localTransaction.id, {
           submission_status: cloudStatus.status as SubmissionStatus,
           last_review_notes: cloudStatus.review_notes || null,
@@ -459,6 +471,11 @@ class SubmissionSyncService {
 
         if (statusChanged || notesChanged) {
           try {
+            const gate = await this.beforeStatusWrite(local, cloud.status);
+            if (!gate.write) {
+              result.failed++;
+              continue;
+            }
             await this.updateLocalTransaction(local.id, {
               submission_status: cloud.status as SubmissionStatus,
               last_review_notes: cloud.review_notes || null,
@@ -545,6 +562,8 @@ class SubmissionSyncService {
       const notesChanged = cloud.review_notes !== transaction.last_review_notes;
 
       if (statusChanged || notesChanged) {
+        const gate = await this.beforeStatusWrite(transaction, cloud.status);
+        if (!gate.write) return false;
         await this.updateLocalTransaction(transaction.id, {
           submission_status: cloud.status as SubmissionStatus,
           last_review_notes: cloud.review_notes || null,
@@ -634,6 +653,64 @@ class SubmissionSyncService {
         tags: { service: "submission-sync", operation: "fetchCloudStatuses" },
       });
       return null;
+    }
+  }
+
+  /**
+   * BACKLOG-3477 (SR condition C8): the ONE gate every status-apply path runs
+   * immediately before it writes the status — realtime, the poller and the
+   * single-submission check. Realtime usually lands first, so a hook on only
+   * one path would leave the others seeing no transition and nothing pulled.
+   *
+   * When the status turns `needs_changes`, pull the checklists the broker added
+   * at review onto the local transaction first. Returns `write: false` when the
+   * pull failed, so the status stays unwritten and the next pass (any path)
+   * sees the transition again and retries. After
+   * REVIEW_CHECKLIST_PULL_MAX_FAILURES consecutive failures the status is
+   * written anyway. Never throws.
+   */
+  private async beforeStatusWrite(
+    local: LocalSubmittedTransaction,
+    cloudStatus: string,
+  ): Promise<{ write: boolean; added: string[] }> {
+    if (cloudStatus !== "needs_changes" || local.submission_status === "needs_changes") {
+      return { write: true, added: [] };
+    }
+
+    try {
+      const pulled = await pullReviewChecklists(
+        supabaseService.getClient(),
+        local.submission_id,
+        local.id,
+      );
+      this.reviewChecklistPullFailures.delete(local.submission_id);
+      if (pulled.added.length > 0) {
+        logService.info(
+          `[SyncService] Added ${pulled.added.length} broker checklist(s) to ${local.id}`,
+          "SubmissionSyncService",
+        );
+      }
+      return { write: true, added: pulled.added };
+    } catch (error) {
+      const failures = (this.reviewChecklistPullFailures.get(local.submission_id) ?? 0) + 1;
+      const message = error instanceof Error ? error.message : "Unknown error";
+      if (failures >= REVIEW_CHECKLIST_PULL_MAX_FAILURES) {
+        this.reviewChecklistPullFailures.delete(local.submission_id);
+        logService.error(
+          `[SyncService] Broker checklist pull failed ${failures} times for submission ${local.submission_id}; writing status without it: ${message}`,
+          "SubmissionSyncService",
+        );
+        Sentry.captureException(error, {
+          tags: { service: "submission-sync", operation: "pullReviewChecklists" },
+        });
+        return { write: true, added: [] };
+      }
+      this.reviewChecklistPullFailures.set(local.submission_id, failures);
+      logService.warn(
+        `[SyncService] Broker checklist pull failed (${failures}/${REVIEW_CHECKLIST_PULL_MAX_FAILURES}) for submission ${local.submission_id}; status held for retry: ${message}`,
+        "SubmissionSyncService",
+      );
+      return { write: false, added: [] };
     }
   }
 
