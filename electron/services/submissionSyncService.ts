@@ -21,7 +21,14 @@ import databaseService from "./databaseService";
 import logService from "./logService";
 import type { Transaction, SubmissionStatus } from "../types/models";
 import { sendToMainWindow } from "../windowRegistry";
-import { pullReviewChecklists } from "./submissionChecklistPull";
+import { pullReviewChecklists, retryOwedReviewChecklistPull } from "./submissionChecklistPull";
+// BACKLOG-3599: the owed-pull marker, imported directly (not through the
+// databaseService facade) so the real SQL runs in every harness.
+import {
+  clearReviewChecklistPullOwed,
+  getOwedReviewChecklistPulls,
+  markReviewChecklistPullOwed,
+} from "./db/submissionDbService";
 
 // ============================================
 // TYPES & INTERFACES
@@ -71,8 +78,9 @@ const REALTIME_ENABLED = true; // Feature flag for realtime subscriptions
 /**
  * BACKLOG-3477: after this many consecutive failed pulls of broker-added
  * checklists, the status is written anyway so the agent still sees "Changes
- * requested". The pull is edge-triggered, so that submission is not pulled
- * again after that.
+ * requested". The edge-triggered pull does not see that submission again, so
+ * BACKLOG-3599 records the pull as OWED in the database first, and every sync
+ * pass retries it until it lands (`retryOwedReviewChecklistPulls`).
  */
 const REVIEW_CHECKLIST_PULL_MAX_FAILURES = 3;
 
@@ -438,6 +446,12 @@ class SubmissionSyncService {
     this.syncInProgress = true;
 
     try {
+      // 0. BACKLOG-3599: retry owed broker-checklist pulls. Placed after the
+      // DB guard and BEFORE the early returns below, so a marker on a
+      // transaction that is no longer active (or with no cloud status this
+      // pass) is still visited. Runs on the immediate pass at startup too.
+      await this.retryOwedReviewChecklistPulls();
+
       // 1. Get all local transactions with submission_id that are not in terminal states
       const submittedTransactions = await this.getLocalSubmittedTransactions();
 
@@ -667,7 +681,8 @@ class SubmissionSyncService {
    * pull failed, so the status stays unwritten and the next pass (any path)
    * sees the transition again and retries. After
    * REVIEW_CHECKLIST_PULL_MAX_FAILURES consecutive failures the status is
-   * written anyway. Never throws.
+   * written anyway, after the pull is recorded as owed (BACKLOG-3599) so every
+   * later pass retries it. Never throws.
    */
   private async beforeStatusWrite(
     local: LocalSubmittedTransaction,
@@ -684,6 +699,9 @@ class SubmissionSyncService {
         local.id,
       );
       this.reviewChecklistPullFailures.delete(local.submission_id);
+      // BACKLOG-3599: a successful pull for this submission settles any owed
+      // pull for it, so a marker never outlives a success.
+      this.clearOwedQuietly(local.id, local.submission_id);
       if (pulled.added.length > 0) {
         logService.info(
           `[SyncService] Added ${pulled.added.length} broker checklist(s) to ${local.id}`,
@@ -695,9 +713,22 @@ class SubmissionSyncService {
       const failures = (this.reviewChecklistPullFailures.get(local.submission_id) ?? 0) + 1;
       const message = error instanceof Error ? error.message : "Unknown error";
       if (failures >= REVIEW_CHECKLIST_PULL_MAX_FAILURES) {
+        // BACKLOG-3599: record the pull as owed BEFORE the status is written.
+        // Marker without status -> the next pass re-sees the edge and pulls;
+        // the status never lands without the marker. If the marker cannot be
+        // written, hold the status instead.
+        try {
+          markReviewChecklistPullOwed(local.id, local.submission_id);
+        } catch (markError) {
+          logService.error(
+            `[SyncService] Could not record the owed broker checklist pull for submission ${local.submission_id}; status held: ${markError instanceof Error ? markError.message : "Unknown error"}`,
+            "SubmissionSyncService",
+          );
+          return { write: false, added: [] };
+        }
         this.reviewChecklistPullFailures.delete(local.submission_id);
         logService.error(
-          `[SyncService] Broker checklist pull failed ${failures} times for submission ${local.submission_id}; writing status without it: ${message}`,
+          `[SyncService] Broker checklist pull failed ${failures} times for submission ${local.submission_id}; writing status now, pull owed and retried every pass: ${message}`,
           "SubmissionSyncService",
         );
         Sentry.captureException(error, {
@@ -711,6 +742,60 @@ class SubmissionSyncService {
         "SubmissionSyncService",
       );
       return { write: false, added: [] };
+    }
+  }
+
+  /**
+   * BACKLOG-3599 — retry every owed broker-checklist pull. Never throws.
+   *
+   * A marker is cleared only by `retryOwedReviewChecklistPull` on positive
+   * proof (the pull succeeded, or the cloud row is approved/rejected). Any
+   * other outcome keeps it for the next pass; the failure was already reported
+   * to Sentry once, at the failure-out, so a retry that fails only logs.
+   */
+  private async retryOwedReviewChecklistPulls(): Promise<void> {
+    let owed: ReturnType<typeof getOwedReviewChecklistPulls>;
+    try {
+      owed = getOwedReviewChecklistPulls();
+    } catch (error) {
+      logService.warn(
+        `[SyncService] Could not read owed broker checklist pulls: ${error instanceof Error ? error.message : "Unknown error"}`,
+        "SubmissionSyncService",
+      );
+      return;
+    }
+    if (owed.length === 0) return;
+
+    const client = supabaseService.getClient();
+    for (const { transactionId, submissionIds } of owed) {
+      for (const submissionId of submissionIds) {
+        const outcome = await retryOwedReviewChecklistPull(client, transactionId, submissionId);
+        if (outcome.status === "kept") {
+          logService.warn(
+            `[SyncService] Owed broker checklist pull for submission ${submissionId} still pending: ${outcome.reason}`,
+            "SubmissionSyncService",
+          );
+        } else {
+          logService.info(
+            outcome.status === "pulled"
+              ? `[SyncService] Owed broker checklist pull landed for submission ${submissionId} (${outcome.added.length} added)`
+              : `[SyncService] Owed broker checklist pull dropped: submission ${submissionId} is final`,
+            "SubmissionSyncService",
+          );
+        }
+      }
+    }
+  }
+
+  /** BACKLOG-3599: clear one owed id; a failure to clear only logs (the retry is idempotent). */
+  private clearOwedQuietly(transactionId: string, submissionId: string): void {
+    try {
+      clearReviewChecklistPullOwed(transactionId, submissionId);
+    } catch (error) {
+      logService.warn(
+        `[SyncService] Could not clear the owed broker checklist pull for submission ${submissionId}: ${error instanceof Error ? error.message : "Unknown error"}`,
+        "SubmissionSyncService",
+      );
     }
   }
 

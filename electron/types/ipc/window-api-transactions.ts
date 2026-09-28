@@ -1040,7 +1040,7 @@ export interface WindowApiTransactions {
      * BACKLOG-3600: set only when the submission succeeded but its checklists
      * did not all reach the broker. Mirrors `SubmissionResult.checklistsNotSent`.
      */
-    checklistsNotSent?: "not_in_plan" | "refused";
+    checklistsNotSent?: "not_in_plan" | "refused" | "brokerChecklistsNotDownloaded";
     error?: string;
   }>;
 
@@ -1064,7 +1064,7 @@ export interface WindowApiTransactions {
      * BACKLOG-3600: set only when the submission succeeded but its checklists
      * did not all reach the broker. Mirrors `SubmissionResult.checklistsNotSent`.
      */
-    checklistsNotSent?: "not_in_plan" | "refused";
+    checklistsNotSent?: "not_in_plan" | "refused" | "brokerChecklistsNotDownloaded";
     error?: string;
   }>;
 

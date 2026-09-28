@@ -40,13 +40,20 @@ export interface SubmitProgress {
  * broker. Mirrors `SubmissionResult.checklistsNotSent` in the main process
  * (a type cannot be value-imported across the boundary, so it is restated).
  */
-export type ChecklistsNotSentReason = "not_in_plan" | "refused";
+export type ChecklistsNotSentReason =
+  | "not_in_plan"
+  | "refused"
+  // BACKLOG-3599 (resubmit only): the broker's review checklists were still
+  // owed and could not be downloaded first.
+  | "brokerChecklistsNotDownloaded";
 
 /** The one amber line the success screen shows for each reason. */
 export const CHECKLISTS_NOT_SENT_COPY: Record<ChecklistsNotSentReason, string> = {
   not_in_plan:
     "Submitted, but your checklists were not sent: checklists are not included in your current plan.",
   refused: "Submitted, but your checklists could not be sent to your broker.",
+  brokerChecklistsNotDownloaded:
+    "Submitted, but the checklists your broker added could not be downloaded first, so this version does not include them.",
 };
 
 interface SubmitForReviewModalProps {
@@ -848,6 +855,8 @@ export function SubmitForReviewModal({
           BACKLOG-3600 — the submission succeeded but the broker did not get
           its checklists (a plan without checklists, or a refused copy). A
           network failure never lands here: it fails the submission instead.
+          BACKLOG-3599 — or a resubmit could not first download the
+          checklists the broker added at review.
         */}
         {isSuccess && checklistsNotSent && (
           <p

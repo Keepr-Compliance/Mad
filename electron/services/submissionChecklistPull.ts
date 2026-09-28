@@ -20,6 +20,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { selectChecklistTemplate } from "./db/checklistDbService";
+// BACKLOG-3599: imported directly, not through the databaseService facade, so
+// the real SQL runs wherever this module does.
+import { clearReviewChecklistPullOwed } from "./db/submissionDbService";
 import logService from "./logService";
 import type { ChecklistTemplateItemInput } from "../types/checklist";
 import type { DocumentType } from "../types/models";
@@ -172,4 +175,59 @@ export async function pullReviewChecklists(
   }
 
   return result;
+}
+
+/** Statuses after which nothing more can be added at review. */
+const FINAL_SUBMISSION_STATUSES: ReadonlySet<string> = new Set(["approved", "rejected"]);
+
+/**
+ * What one owed-pull attempt did (BACKLOG-3599).
+ *   pulled    the pull succeeded (or the transaction is gone); marker cleared
+ *   final     the cloud says approved/rejected; marker cleared, nothing pulled
+ *   kept      no positive proof the pull is done; marker kept for the next pass
+ */
+export type OwedPullOutcome =
+  | { status: "pulled"; added: string[] }
+  | { status: "final" }
+  | { status: "kept"; reason: string };
+
+/**
+ * BACKLOG-3599 — retry one owed broker-checklist pull.
+ *
+ * The marker is cleared only after POSITIVE proof (SR condition 2): the owed
+ * `transaction_submissions` row is read by id first. A read error (signed out
+ * is RLS 42501) or a row that is not visible (another user signed in on the
+ * same local database: RLS returns nothing) keeps the marker — an empty
+ * checklist read in that state would otherwise look like "nothing to pull"
+ * and clear it for good. The cloud status decides finality, not the local one.
+ */
+export async function retryOwedReviewChecklistPull(
+  client: SupabaseClient,
+  transactionId: string,
+  submissionId: string,
+): Promise<OwedPullOutcome> {
+  try {
+    const statusResponse = await withTimeout(
+      client.from("transaction_submissions").select("id, status").eq("id", submissionId),
+      "Owed submission status read",
+    );
+    if (statusResponse.error) {
+      return { status: "kept", reason: `status read failed: ${statusResponse.error.message}` };
+    }
+    const row = ((statusResponse.data ?? []) as Array<{ id: string; status: string }>).find(
+      (r) => r.id === submissionId,
+    );
+    if (!row) return { status: "kept", reason: "submission not visible" };
+
+    if (FINAL_SUBMISSION_STATUSES.has(row.status)) {
+      clearReviewChecklistPullOwed(transactionId, submissionId);
+      return { status: "final" };
+    }
+
+    const pulled = await pullReviewChecklists(client, submissionId, transactionId);
+    clearReviewChecklistPullOwed(transactionId, submissionId);
+    return { status: "pulled", added: pulled.added };
+  } catch (error) {
+    return { status: "kept", reason: error instanceof Error ? error.message : String(error) };
+  }
 }

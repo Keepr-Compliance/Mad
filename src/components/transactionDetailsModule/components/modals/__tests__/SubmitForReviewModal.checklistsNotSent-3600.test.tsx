@@ -69,7 +69,7 @@ function renderModal(
 }
 
 describe("BACKLOG-3600 — the success screen names checklists that were not sent", () => {
-  it.each(["not_in_plan", "refused"] as ChecklistsNotSentReason[])(
+  it.each(["not_in_plan", "refused", "brokerChecklistsNotDownloaded"] as ChecklistsNotSentReason[])(
     "success + %s -> one line, in full",
     (reason) => {
       renderModal({ progress: COMPLETE, checklistsNotSent: reason });
@@ -80,12 +80,15 @@ describe("BACKLOG-3600 — the success screen names checklists that were not sen
     },
   );
 
-  it("the two reasons read differently", () => {
+  it("each reason reads differently (BACKLOG-3599 adds the third)", () => {
     expect(CHECKLISTS_NOT_SENT_COPY.not_in_plan).toBe(
       "Submitted, but your checklists were not sent: checklists are not included in your current plan.",
     );
     expect(CHECKLISTS_NOT_SENT_COPY.refused).toBe(
       "Submitted, but your checklists could not be sent to your broker.",
+    );
+    expect(CHECKLISTS_NOT_SENT_COPY.brokerChecklistsNotDownloaded).toBe(
+      "Submitted, but the checklists your broker added could not be downloaded first, so this version does not include them.",
     );
   });
 

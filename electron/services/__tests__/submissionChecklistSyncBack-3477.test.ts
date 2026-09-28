@@ -92,6 +92,19 @@ interface CloudState {
   checklistFetchFailures: number;
   /** Number of upcoming reads of submission_checklist_items that fail. */
   itemFetchFailures: number;
+  /**
+   * BACKLOG-3599 (SR condition 5): no session. Measured in production:
+   * `SET ROLE anon; SELECT ... FROM submission_checklists` -> 42501 permission
+   * denied (the policies are `authenticated` only). Every read is an ERROR,
+   * never an empty success.
+   */
+  signedOut: boolean;
+  /**
+   * BACKLOG-3599: submissions RLS hides from the signed-in user (another user
+   * on the same local database). Reads SUCCEED and return no row for them —
+   * nor any of their checklists.
+   */
+  hiddenSubmissions: Set<string>;
 }
 
 const cloud: CloudState = {
@@ -100,6 +113,8 @@ const cloud: CloudState = {
   submission_checklist_items: [],
   checklistFetchFailures: 0,
   itemFetchFailures: 0,
+  signedOut: false,
+  hiddenSubmissions: new Set(),
 };
 let realtimeCallback: ((payload: { new: unknown }) => void) | null = null;
 const checklistFetches: string[] = [];
@@ -128,8 +143,14 @@ function query(table: string) {
     },
     then: (resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) => {
       try {
+        if (table === "submission_checklists") checklistFetches.push(table);
+        if (cloud.signedOut) {
+          return Promise.resolve({
+            data: null,
+            error: { code: "42501", message: `permission denied for table ${table}` },
+          }).then(resolve, reject);
+        }
         if (table === "submission_checklists") {
-          checklistFetches.push(table);
           if (cloud.checklistFetchFailures > 0) {
             cloud.checklistFetchFailures--;
             return Promise.resolve({ data: null, error: { message: "fake network error" } }).then(
@@ -150,6 +171,11 @@ function query(table: string) {
             ? (cloud.submissions as Array<Record<string, unknown>>)
             : (cloud[table as "submission_checklists" | "submission_checklist_items"] ?? []);
         let rows = source.filter((row) => filters.every((f) => f(row)));
+        const hidden = (row: Record<string, unknown>) =>
+          cloud.hiddenSubmissions.has(
+            String(table === "transaction_submissions" ? row.id : row.submission_id),
+          );
+        rows = rows.filter((row) => !hidden(row));
         if (orderKey) {
           const key = orderKey;
           rows = [...rows].sort((a, b) => (a[key] as number) - (b[key] as number));
@@ -185,6 +211,7 @@ jest.mock("../supabaseService", () => ({
 
 import { submissionSyncService } from "../submissionSyncService";
 import { removeChecklist, selectChecklistTemplate, setChecklistItemChecked } from "../db/checklistDbService";
+import { clearReviewChecklistPullOwed, markReviewChecklistPullOwed } from "../db/submissionDbService";
 
 const SCHEMA = nodePath.join(__dirname, "..", "..", "database", "schema.sql");
 const USER = "user-3477-d";
@@ -296,6 +323,8 @@ beforeEach(() => {
   db.pragma("foreign_keys = ON");
   cloud.checklistFetchFailures = 0;
   cloud.itemFetchFailures = 0;
+  cloud.signedOut = false;
+  cloud.hiddenSubmissions = new Set();
   checklistFetches.length = 0;
   realtimeCallback = null;
   (submissionSyncService as unknown as { reviewChecklistPullFailures: Map<string, number> })
@@ -510,5 +539,177 @@ describe("BACKLOG-3477 sync-back: idempotence and edges", () => {
     await submissionSyncService.manualSync(); // failure 3: written
     expect(localStatus()).toBe("needs_changes");
     expectPulled();
+  });
+});
+
+// ===========================================================================
+// BACKLOG-3599 — a pull that fails three times is OWED, and retried until it
+// lands. The owed set lives in `transactions.metadata` ($.reviewChecklistPullOwed).
+// ===========================================================================
+/**
+ * Wrong implementations these catch (plan 1540520d, SR conditions 944ab6bf):
+ *   an in-memory owed set                 -> C2 (restart clears it)
+ *   a marker cleared before the pull      -> C3
+ *   a marker never cleared (level retry)  -> C4
+ *   a single-slot marker                  -> C7
+ *   clearing on an RLS-empty read         -> C2 (hidden) / signed-out case
+ */
+describe("BACKLOG-3599 — owed broker checklist pulls", () => {
+  const S2 = "sub-3599-second";
+  /** The owed set, read RAW from SQLite — never through the code under test. */
+  const owed = (): unknown => {
+    const row = db
+      .prepare("SELECT json_extract(metadata, '$.reviewChecklistPullOwed') AS o FROM transactions WHERE id = ?")
+      .get(TXN) as { o: string | null };
+    return row.o === null ? null : JSON.parse(row.o);
+  };
+  /** A restart: every in-memory Map/Set on the service is emptied. */
+  const restart = (): void => {
+    for (const value of Object.values(submissionSyncService as unknown as Record<string, unknown>)) {
+      if (value instanceof Map || value instanceof Set) value.clear();
+    }
+  };
+  /** Three failed passes: status written, pull owed. */
+  async function failOut(): Promise<void> {
+    seedLocal();
+    seedCloud("needs_changes");
+    cloud.checklistFetchFailures = 3;
+    await submissionSyncService.manualSync();
+    await submissionSyncService.manualSync();
+    await submissionSyncService.manualSync();
+    expect(localStatus()).toBe("needs_changes");
+    expect(localChecklists()).toEqual([]);
+    expect(owed()).toEqual([SUB]);
+  }
+
+  it("C1: fail x3 -> status written and the pull owed; the next pass lands it and clears the marker", async () => {
+    await failOut();
+    await submissionSyncService.manualSync();
+    expectPulled();
+    expect(owed()).toBeNull();
+    expect(localStatus()).toBe("needs_changes");
+  });
+
+  it("C2: a restart between the failure-out and the next pass still lands it", async () => {
+    await failOut();
+    restart();
+    await submissionSyncService.manualSync();
+    expectPulled();
+    expect(owed()).toBeNull();
+  });
+
+  it("C2 (signed out): every read is 42501 -> marker kept, nothing written; signed in again -> lands", async () => {
+    await failOut();
+    cloud.signedOut = true;
+    await submissionSyncService.manualSync();
+    expect(owed()).toEqual([SUB]);
+    expect(localChecklists()).toEqual([]);
+    cloud.signedOut = false;
+    await submissionSyncService.manualSync();
+    expectPulled();
+    expect(owed()).toBeNull();
+  });
+
+  it("C2 (RLS-empty): the owed submission is not visible -> marker kept though every read succeeds", async () => {
+    await failOut();
+    cloud.hiddenSubmissions.add(SUB);
+    const before = checklistFetches.length;
+    await submissionSyncService.manualSync();
+    expect(owed()).toEqual([SUB]);
+    expect(localChecklists()).toEqual([]);
+    // Nothing was pulled on no proof.
+    expect(checklistFetches.length).toBe(before);
+    cloud.hiddenSubmissions.clear();
+    await submissionSyncService.manualSync();
+    expectPulled();
+    expect(owed()).toBeNull();
+  });
+
+  it("C3: the owed retry fails again -> marker still set; a later success lands", async () => {
+    await failOut();
+    cloud.checklistFetchFailures = 2;
+    await submissionSyncService.manualSync();
+    expect(owed()).toEqual([SUB]);
+    restart();
+    await submissionSyncService.manualSync();
+    expect(owed()).toEqual([SUB]);
+    expect(localChecklists()).toEqual([]);
+    await submissionSyncService.manualSync();
+    expectPulled();
+    expect(owed()).toBeNull();
+  });
+
+  it("C4: once the owed pull lands, a checklist the agent removes is never re-added (any path, restart included)", async () => {
+    await failOut();
+    await submissionSyncService.manualSync();
+    expectPulled();
+    const [pulled] = localChecklists();
+    await removeChecklist(TXN, pulled.id);
+    const fetches = checklistFetches.length;
+
+    await submissionSyncService.manualSync();
+    await submissionSyncService.syncSubmission(TXN);
+    await deliverRealtime();
+    restart();
+    await submissionSyncService.manualSync();
+
+    expect(localChecklists()).toEqual([]);
+    expect(checklistFetches.length).toBe(fetches);
+    expect(owed()).toBeNull();
+  });
+
+  it("C5: the submission is approved while the pull is owed -> marker cleared, nothing pulled", async () => {
+    await failOut();
+    cloud.submissions[0].status = "approved";
+    const fetches = checklistFetches.length;
+    await submissionSyncService.manualSync();
+    expect(owed()).toBeNull();
+    expect(checklistFetches.length).toBe(fetches);
+    expect(localChecklists()).toEqual([]);
+  });
+
+  it("C5 (not active locally): a marker on a transaction the poller no longer lists is still visited", async () => {
+    await failOut();
+    // Local status final: the poller's active list excludes it and returns early.
+    db.prepare("UPDATE transactions SET submission_status = 'approved' WHERE id = ?").run(TXN);
+    cloud.submissions[0].status = "approved";
+    await submissionSyncService.manualSync();
+    expect(owed()).toBeNull();
+  });
+
+  it("C6: clearing one id leaves a newer id alone (compare-and-clear)", async () => {
+    await failOut();
+    markReviewChecklistPullOwed(TXN, S2);
+    expect(owed()).toEqual([SUB, S2]);
+    clearReviewChecklistPullOwed(TXN, SUB);
+    expect(owed()).toEqual([S2]);
+    clearReviewChecklistPullOwed(TXN, SUB);
+    expect(owed()).toEqual([S2]);
+  });
+
+  it("C7: two owed ids on one transaction; one lands, the other stays owed", async () => {
+    await failOut();
+    // A later version is owed too (its row not visible this pass).
+    cloud.submissions.push({ id: S2, status: "needs_changes", review_notes: null });
+    cloud.hiddenSubmissions.add(S2);
+    markReviewChecklistPullOwed(TXN, S2);
+
+    await submissionSyncService.manualSync();
+
+    expectPulled();
+    expect(owed()).toEqual([S2]);
+  });
+
+  it("the marker is written before the status (a failed marker write holds the status)", async () => {
+    seedLocal();
+    seedCloud("needs_changes");
+    cloud.checklistFetchFailures = 3;
+    await submissionSyncService.manualSync();
+    await submissionSyncService.manualSync();
+    // The 3rd failure cannot record the marker: a trigger refuses the metadata write.
+    db.exec(`CREATE TRIGGER block_meta BEFORE UPDATE OF metadata ON transactions BEGIN SELECT RAISE(ABORT, 'blocked'); END;`);
+    await submissionSyncService.manualSync();
+    expect(localStatus()).toBe("under_review");
+    db.exec("DROP TRIGGER block_meta");
   });
 });

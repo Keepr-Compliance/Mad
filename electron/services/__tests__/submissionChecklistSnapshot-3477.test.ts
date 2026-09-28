@@ -111,6 +111,7 @@ import {
   type SnapshotChecklistPayload,
 } from "../submissionChecklistSnapshot";
 import { CHECKLISTS_NOT_SENT_ERROR } from "../submissionService";
+import { getOwedReviewChecklistPullsFor, markReviewChecklistPullOwed } from "../db/submissionDbService";
 import * as Sentry from "@sentry/electron/main";
 import { getChecklistsForTransaction } from "../db/checklistDbService";
 
@@ -163,6 +164,10 @@ class FakeSupabase {
   rpcScript: Array<"network" | "lost" | "hang" | PgError | undefined> = [];
   /** Insert calls per table (one `.insert(...)` = one call, however many rows). */
   insertCalls: Record<string, number> = {};
+  /** BACKLOG-3599: tables whose SELECTs return an error (a failed pull). */
+  failReadsOf = new Set<string>();
+  /** BACKLOG-3599: `uploading` submissions present at each checklist-header read. */
+  uploadingAtChecklistRead: number[] = [];
   private seq = 0;
   private id(prefix: string): string {
     this.seq += 1;
@@ -182,6 +187,14 @@ class FakeSupabase {
     const matched = () => all().filter((r) => filters.every((f) => f(r)));
 
     const run = (): { data: unknown; error: PgError | null } => {
+      if (mode === "select" && this.failReadsOf.has(tableName)) {
+        return { data: null, error: { code: "", message: "TypeError: fetch failed" } };
+      }
+      if (mode === "select" && tableName === "submission_checklists") {
+        this.uploadingAtChecklistRead.push(
+          this.tables.transaction_submissions.filter((t) => t.status === "uploading").length,
+        );
+      }
       if (mode === "select") {
         const out = matched();
         return { data: limitN === null ? out : out.slice(0, limitN), error: null };
@@ -208,6 +221,11 @@ class FakeSupabase {
       delete: () => ((mode = "delete"), builder),
       eq: (c: string, v: unknown) => (filters.push((r) => r[c] === v), builder),
       in: (c: string, vs: unknown[]) => (filters.push((r) => vs.includes(r[c])), builder),
+      not: (c: string, op: string, v: unknown) => {
+        if (op !== "is" || v !== null) throw new Error("FakeSupabase: unsupported not()");
+        filters.push((r) => r[c] !== null && r[c] !== undefined);
+        return builder;
+      },
       order: () => builder,
       limit: (n: number) => ((limitN = n), builder),
       maybeSingle: () => {
@@ -962,5 +980,89 @@ describe("BACKLOG-3600 — the checklist copy is retried, then fails the submit"
       [first.submissionId, "needs_changes"],
     ]);
     expect(localStatus()).toEqual({ submission_status: "needs_changes", submission_id: first.submissionId });
+  });
+});
+
+// ============================================================================
+// BACKLOG-3599 — a resubmit first tries a broker checklist pull that is owed
+// ============================================================================
+describe("BACKLOG-3599 — resubmit with an owed broker checklist pull", () => {
+  const TPL_BROKER = randomUUID();
+
+  /** v1 submitted, the broker added a checklist at review, the pull is owed. */
+  async function submittedWithOwedPull(): Promise<string> {
+    await seedChecklists();
+    const first = await submissionService.submitTransaction(TX);
+    expect(first.success).toBe(true);
+    const sid = first.submissionId!;
+    fake.tables.transaction_submissions.find((s) => s.id === sid)!.status = "needs_changes";
+    run(`UPDATE transactions SET submission_status = 'needs_changes' WHERE id = ?`, TX);
+    // Shape transcribed from the sync-back suite's fixture (one live
+    // broker-added header + items, read 2026-09-27).
+    fake.tables.submission_checklists.push({
+      id: "hdr-broker-3599",
+      submission_id: sid,
+      template_id: TPL_BROKER,
+      template_name: "Broker review add",
+      sort_order: 2,
+      added_at_review_by: "broker-3599",
+      added_at_review_at: "2026-09-27 23:04:54.012711+00",
+    });
+    fake.tables.submission_checklist_items.push({
+      id: "item-broker-3599",
+      submission_id: sid,
+      submission_checklist_id: "hdr-broker-3599",
+      title: "HOA estoppel letter",
+      description: null,
+      is_required: true,
+      expected_document_type: null,
+      sort_order: 10,
+    });
+    expect(markReviewChecklistPullOwed(TX, sid)).toBe(true);
+    return sid;
+  }
+
+  it("C8: the owed pull lands first, so the new version's snapshot carries the broker checklist", async () => {
+    const v1 = await submittedWithOwedPull();
+
+    const second = await submissionService.resubmitTransaction(TX);
+
+    expect(second.success).toBe(true);
+    expect("checklistsNotSent" in second).toBe(false);
+    const payload = fake.rpcCalls[fake.rpcCalls.length - 1].args.p_checklists as Row[];
+    expect(payload.map((c) => c.template_id)).toContain(TPL_BROKER);
+    expect(getOwedReviewChecklistPullsFor(TX)).toEqual([]);
+    // Before Stage 1: no uploading row existed while the pull read the cloud.
+    expect(fake.uploadingAtChecklistRead).toEqual([0]);
+    expect(fake.tables.transaction_submissions.map((s) => [s.id === v1, s.status])).toEqual([
+      [true, "needs_changes"],
+      [false, "resubmitted"],
+    ]);
+  });
+
+  it("the owed pull fails -> the resubmit still succeeds, says so, and keeps the pull owed", async () => {
+    const v1 = await submittedWithOwedPull();
+    fake.failReadsOf.add("submission_checklists");
+
+    const second = await submissionService.resubmitTransaction(TX);
+
+    expect(second.success).toBe(true);
+    expect(second.checklistsNotSent).toBe("brokerChecklistsNotDownloaded");
+    const payload = fake.rpcCalls[fake.rpcCalls.length - 1].args.p_checklists as Row[];
+    expect(payload.map((c) => c.template_id)).not.toContain(TPL_BROKER);
+    expect(getOwedReviewChecklistPullsFor(TX)).toEqual([v1]);
+  });
+
+  it("nothing owed -> no pull, no field", async () => {
+    await seedChecklists();
+    const first = await submissionService.submitTransaction(TX);
+    fake.tables.transaction_submissions.find((s) => s.id === first.submissionId)!.status = "needs_changes";
+    run(`UPDATE transactions SET submission_status = 'needs_changes' WHERE id = ?`, TX);
+
+    const second = await submissionService.resubmitTransaction(TX);
+
+    expect(second.success).toBe(true);
+    expect("checklistsNotSent" in second).toBe(false);
+    expect(fake.uploadingAtChecklistRead).toEqual([]);
   });
 });
