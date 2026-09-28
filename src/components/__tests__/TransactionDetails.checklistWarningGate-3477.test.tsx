@@ -331,7 +331,7 @@ describe("BACKLOG-3477 E-C4 / E-C5 — no warning when there is nothing to warn 
     ["every required item ticked", () => getMock().mockResolvedValue({ success: true, checklists: ALL_TICKED })],
     ["no checklists on the transaction", () => getMock().mockResolvedValue({ success: true, checklists: EMPTY })],
     ["the read is refused", () => getMock().mockResolvedValue({ success: false, error: "boom" })],
-    ["the IPC throws", () => getMock().mockRejectedValue(new Error("ipc down"))],
+    ["the IPC rejects (checklistService turns it into a refusal)", () => getMock().mockRejectedValue(new Error("ipc down"))],
   ])("%s → read once, no warning, the window opens", async (_label, arrange) => {
     await mount();
     const before = getMock().mock.calls.length;
