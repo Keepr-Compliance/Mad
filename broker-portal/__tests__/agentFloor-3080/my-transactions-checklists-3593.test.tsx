@@ -128,6 +128,8 @@ const ATT = '00000000-0000-4000-8000-0000003593f1'; // pii-allow-uuid: invented 
 const MSG = '00000000-0000-4000-8000-0000003593f2'; // pii-allow-uuid: invented fixture id
 
 const REVIEWER_NAME = 'Reviewer Fixture';
+const AGENT_NAME = 'Agent Fixture';
+const TARGET_NAME = 'Target Fixture';
 const USER_IDS = [AGENT, REVIEWER, REMOVED];
 
 const header = (id: string, name: string, sort: number, tpl: string, addedBy: string | null = null): Row => ({
@@ -189,7 +191,7 @@ const CHECKLIST_TABLES = ['submission_checklist_items', 'submission_checklist_li
 function given(opts: { checklists?: Row[]; items?: Row[]; impersonating?: boolean } = {}): void {
   mockGetUser.mockResolvedValue({ data: { user: { id: AGENT, email: 'agent-3593@fixture.example.test' } } });
   (getImpersonationSession as jest.Mock).mockResolvedValue(
-    opts.impersonating ? { target_email: 'target@fixture.example.test', target_name: 'Target Fixture' } : null
+    opts.impersonating ? { target_email: 'target@fixture.example.test', target_name: TARGET_NAME } : null
   );
   mockEmulator.reset();
   mockEmulator.set({
@@ -210,7 +212,7 @@ function given(opts: { checklists?: Row[]; items?: Row[]; impersonating?: boolea
       ],
       submission_messages: [{ ...messageRow({ id: MSG, submissionId: SUB, subject: 'Disclosure email' }) }],
       submission_attachments: [attachmentRow({ id: ATT, submissionId: SUB, organizationId: BROKERAGE, filename: 'contract-signed.pdf', mimeType: 'application/pdf' })],
-      users: [userNameRow(AGENT, 'Agent Fixture', 'agent@fixture.example.test'), userNameRow(REVIEWER, REVIEWER_NAME, 'reviewer@fixture.example.test')],
+      users: [userNameRow(AGENT, AGENT_NAME, 'agent@fixture.example.test'), userNameRow(REVIEWER, REVIEWER_NAME, 'reviewer@fixture.example.test')],
       submission_checklists: opts.checklists ?? CHECKLISTS,
       submission_checklist_items: opts.items ?? ITEMS,
       submission_checklist_links: LINKS,
