@@ -3,7 +3,7 @@
  *
  * WHAT THIS CAN PROVE: what the migration file (and its rollback) says. CI has
  * no database. The behaviour is proved on a real Postgres by
- * supabase/tests/backlog-3596 (controls c00-c22, 42 mutants); this file pins
+ * supabase/tests/backlog-3596 (controls c00-c25, 50 mutants); this file pins
  * the lines a later edit is most likely to drop or loosen, so that such a
  * change fails in CI too.
  */
@@ -16,6 +16,8 @@ const MIGRATIONS_DIR = join(REPO, 'supabase/migrations');
 const SUFFIX = '_backlog_3596_broker_checklist_ticks.sql';
 const MIG_3477 = '20260925073000_backlog_3477_submission_checklist_review.sql';
 const ROLLBACK = join(REPO, 'supabase/tests/backlog-3596/rollback.sql');
+const REFUSALS = '20260928130000_backlog_3596_review_refusals.sql';
+const REFUSALS_RB = join(REPO, 'supabase/tests/backlog-3596/rollback-refusals.sql');
 
 function read(path: string): string {
   return readFileSync(path, 'utf8').replace(/\r\n?/g, '\n');
@@ -222,5 +224,72 @@ describe('BACKLOG-3596 — rollback.sql', () => {
     );
     const ins = block(s, 'CREATE POLICY submission_checklist_items_insert ON', ' );');
     expect(ins).not.toContain('cleared');
+  });
+});
+
+describe('BACKLOG-3596 — the refusals file (add on a superseded version; new ticks on needs_changes)', () => {
+  const raw = () => read(join(MIGRATIONS_DIR, REFUSALS));
+  const s = () => statements(raw());
+  const add = () => block(s(), 'CREATE OR REPLACE FUNCTION public.add_submission_checklist_at_review(', '$$;');
+  const tk = () => block(s(), 'CREATE OR REPLACE FUNCTION public.set_submission_checklist_reviewer_check(', '$$;');
+  const SUPERSEDED_ADD =
+    "IF EXISTS (SELECT 1 FROM public.transaction_submissions c WHERE c.parent_submission_id = p_submission_id) THEN RAISE EXCEPTION 'superseded' USING ERRCODE = '42501';";
+  const NEEDS_CHANGES =
+    "IF v_row.status = 'needs_changes' THEN RAISE EXCEPTION 'not_open_for_review' USING ERRCODE = '42501';";
+
+  it('sorts after the 3596 migration, opens no transaction, and touches only the two functions', () => {
+    expect(REFUSALS.slice(0, 14) > migrationFile().slice(0, 14)).toBe(true);
+    expect(s()).not.toMatch(/(^|;)\s*(BEGIN|COMMIT)\s*;/i);
+    expect(s().match(/CREATE OR REPLACE FUNCTION/g)).toHaveLength(2);
+    expect(s()).not.toMatch(/CREATE (POLICY|TRIGGER)|DROP |ALTER TABLE|service_role|SET ROLE/i);
+  });
+
+  it('add refuses a superseded version, any child status, after the authorization, feature and status checks', () => {
+    const a = add();
+    const sup = a.indexOf(SUPERSEDED_ADD);
+    expect(sup).toBeGreaterThan(a.lastIndexOf("RAISE EXCEPTION 'not_authorized'"));
+    expect(sup).toBeGreaterThan(a.indexOf("RAISE EXCEPTION 'not_open_for_review'"));
+    expect(sup).toBeLessThan(a.indexOf('INSERT INTO public.submission_checklists'));
+  });
+
+  it('the tick refuses a needs_changes version AFTER the superseded refusal', () => {
+    const t = tk();
+    const sup = t.indexOf("RAISE EXCEPTION 'superseded' USING ERRCODE = '42501';");
+    const nc = t.indexOf(NEEDS_CHANGES);
+    expect(sup).toBeGreaterThan(t.lastIndexOf("RAISE EXCEPTION 'not_authorized'"));
+    expect(nc).toBeGreaterThan(sup);
+    expect(nc).toBeLessThan(t.indexOf('UPDATE public.submission_checklist_items'));
+  });
+
+  it('the refusals are the only changes: bodies otherwise verbatim from their sources', () => {
+    const m3477 = read(join(MIGRATIONS_DIR, MIG_3477));
+    const m3596 = read(join(MIGRATIONS_DIR, migrationFile()));
+    const strip = (body: string, lines: RegExp) => body.replace(lines, '');
+    const addExtra = /  -- BACKLOG-3596: a newer version exists[\s\S]*?RAISE EXCEPTION 'superseded' USING ERRCODE = '42501';\n  END IF;\n/;
+    const tickExtra = /  -- BACKLOG-3596: changes were requested[\s\S]*?RAISE EXCEPTION 'not_open_for_review' USING ERRCODE = '42501';\n  END IF;\n/;
+    expect(rawBody(raw(), 'add_submission_checklist_at_review')).not.toBe(rawBody(m3477, 'add_submission_checklist_at_review'));
+    expect(strip(rawBody(raw(), 'add_submission_checklist_at_review'), addExtra)).toBe(rawBody(m3477, 'add_submission_checklist_at_review'));
+    expect(strip(rawBody(raw(), 'set_submission_checklist_reviewer_check'), tickExtra)).toBe(
+      rawBody(m3596, 'set_submission_checklist_reviewer_check'),
+    );
+  });
+
+  it('keeps both grants (definer, authenticated only)', () => {
+    for (const fn of ['add_submission_checklist_at_review(uuid, uuid)', 'set_submission_checklist_reviewer_check(uuid, boolean)']) {
+      expect(s()).toContain(`REVOKE EXECUTE ON FUNCTION public.${fn} FROM PUBLIC, anon;`);
+      expect(s()).toContain(`GRANT EXECUTE ON FUNCTION public.${fn} TO authenticated;`);
+    }
+    expect(add()).toContain("RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = ''");
+    expect(tk()).toContain("RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = ''");
+  });
+
+  it('rollback-refusals.sql restores the add body from BACKLOG-3477 and the tick body from 3596, verbatim', () => {
+    const rb = read(REFUSALS_RB);
+    expect(rawBody(rb, 'add_submission_checklist_at_review')).toBe(
+      rawBody(read(join(MIGRATIONS_DIR, MIG_3477)), 'add_submission_checklist_at_review'),
+    );
+    expect(rawBody(rb, 'set_submission_checklist_reviewer_check')).toBe(
+      rawBody(read(join(MIGRATIONS_DIR, migrationFile())), 'set_submission_checklist_reviewer_check'),
+    );
   });
 });

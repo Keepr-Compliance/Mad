@@ -1,4 +1,4 @@
-mutants.py: 43 mutants written
+mutants.py: 50 mutants written
 m01-restamp-by-with-caller  [as expected]  (migration)
     MUTATION APPLIED: 2 line(s) differ; first: reviewer_checked_by = v_uid,
     RED:   c01 c09
@@ -9,8 +9,8 @@ m02-restamp-at-with-now  [as expected]  (migration)
     MUTATION APPLIED: 2 line(s) differ; first: reviewer_checked_at = v_now
     RED:   c01 c09
     green: none
-      c01: CONTROL FAILED: C01 original reviewer and time: L-item-1:broker:2026-09-28 07:16,L-item-2:broker:2026-09-28 07:16,L-item-3:broker:2026-09-28 07:16,L-item-5:brok
-      c09: CONTROL FAILED: C09 v3 ticks: L-item-1:broker:2026-09-28 07:16,L-item-2:broker:2026-09-28 07:16,L-item-3:broker:2026-09-28 07:16,L-item-5:broker:2026-09-28 07:1
+      c01: CONTROL FAILED: C01 original reviewer and time: L-item-1:broker:2026-09-28 08:02,L-item-2:broker:2026-09-28 08:02,L-item-3:broker:2026-09-28 08:02,L-item-5:brok
+      c09: CONTROL FAILED: C09 v3 ticks: L-item-1:broker:2026-09-28 08:02,L-item-2:broker:2026-09-28 08:02,L-item-3:broker:2026-09-28 08:02,L-item-5:broker:2026-09-28 08:0
 m03-compare-cloud-row-ids  [as expected]  (migration)
     MUTATION APPLIED: 2 line(s) differ; first: COALESCE(lm.submission_attachment_id, lm.submission_message_id)::text AS local_id
     RED:   c01 c04
@@ -22,16 +22,16 @@ m04-carry-from-grandparent  [as expected]  (migration)
     RED:   c16
     green: none
       c16: CONTROL FAILED: C16 I1 unticked on v3: {"carry": {"status": "done", "carried": 1, "cleared": 4, "removed": 0, "unavailable": null}, "items": 6, "links": 5, "mem
-m05-tick-no-superseded-check  [as expected]  (migration)
+m05-tick-no-superseded-check  [as expected]  (refusals)
     MUTATION APPLIED: 3 line(s) differ; first: IF false THEN
     RED:   c14
     green: none
-      c14: CONTROL FAILED: C14b tick on v1 while v2 uploads: expected ~^42501:superseded$, got rows:1
-m06-superseded-ignores-uploading  [as expected]  (migration)
+      c14: CONTROL FAILED: C14b tick on v1 while v2 uploads: expected ~^42501:superseded$, got 42501:not_open_for_review
+m06-superseded-ignores-uploading  [as expected]  (refusals)
     MUTATION APPLIED: 2 line(s) differ; first: WHERE c.parent_submission_id = v_row.submission_id AND c.status <> 'uploading') THEN
     RED:   c14
     green: none
-      c14: CONTROL FAILED: C14b tick on v1 while v2 uploads: expected ~^42501:superseded$, got rows:1
+      c14: CONTROL FAILED: C14b tick on v1 while v2 uploads: expected ~^42501:superseded$, got 42501:not_open_for_review
 m07-system-actor  [as expected]  (migration)
     MUTATION APPLIED: 2 line(s) differ; first: 'system', true,
     RED:   c02
@@ -101,7 +101,7 @@ m20-no-old-client-branch  [as expected]  (migration)
     MUTATION APPLIED: 2 line(s) differ; first: ELSIF false THEN
     RED:   c18
     green: none
-      c18: CONTROL FAILED: C18a one unavailable entry: [{"type": "checklist_review_cleared", "reason": "removed", "item_id": null, "changed_at": "2026-09-28T07:16:39.50439
+      c18: CONTROL FAILED: C18a one unavailable entry: [{"type": "checklist_review_cleared", "reason": "removed", "item_id": null, "changed_at": "2026-09-28T08:02:48.23775
 m21-no-copy-without-ancestor-term  [as expected]  (migration)
     MUTATION APPLIED: 5 line(s) differ; first: WHERE true
     RED:   c19
@@ -169,7 +169,7 @@ m33-insert-allows-cleared  [as expected]  (migration)
     RED:   c12
     green: none
       c12: CONTROL FAILED: C12 item with cleared marker: expected RLS, got rows:1
-m34-superseded-before-authorization  [as expected]  (migration)
+m34-superseded-before-authorization  [as expected]  (refusals)
     MUTATION APPLIED: 3 line(s) differ; first: IF FOUND AND EXISTS (SELECT 1 FROM public.transaction_submissions c WHERE c.parent_submission_id = v_row.submi
     RED:   c14
     green: none
@@ -214,9 +214,45 @@ m42-rollback-keeps-carry  [as expected]  (rollback)
     RED:   c22
     green: none
       c22: CONTROL FAILED: C22 rollback restores everything: only-before 0, only-after 1
-m43-tick-drops-history-on-needs-changes  [as expected]  (migration)
-    MUTATION APPLIED: 2 line(s) differ; first: WHERE id = v_row.submission_id AND status <> 'needs_changes';
+m44-tick-allows-needs-changes  [as expected]  (refusals)
+    MUTATION APPLIED: 2 line(s) differ; first: IF false THEN
+    RED:   c14 c23
+    green: none
+      c14: CONTROL FAILED: C14 lone needs_changes refuses a new tick: expected ~^42501:not_open_for_review$, got rows:1
+      c23: CONTROL FAILED: C23 new tick on needs_changes: expected ~^42501:not_open_for_review$, got rows:1
+m45-blanket-clears-needs-changes-ticks  [as expected]  (refusals)
+    MUTATION APPLIED: 13 line(s) differ; first: CREATE OR REPLACE FUNCTION public.m45_no_ticks_on_needs_changes() RETURNS trigger
+    RED:   c23
+    green: none
+      c23: CONTROL FAILED: C23 v1 keeps the ticks made before Request Changes: 
+m46-add-no-superseded-check  [as expected]  (refusals)
+    MUTATION APPLIED: 3 line(s) differ; first: IF false THEN
+    RED:   c24
+    green: none
+      c24: CONTROL FAILED: C24 add on v1 while v2 uploads: expected ~^42501:superseded$, got rows:1
+m47-add-superseded-ignores-uploading  [as expected]  (refusals)
+    MUTATION APPLIED: 2 line(s) differ; first: WHERE c.parent_submission_id = p_submission_id AND c.status <> 'uploading') THEN
+    RED:   c24
+    green: none
+      c24: CONTROL FAILED: C24 add on v1 while v2 uploads: expected ~^42501:superseded$, got rows:1
+m48-add-superseded-before-authorization  [as expected]  (refusals)
+    MUTATION APPLIED: 3 line(s) differ; first: IF FOUND AND EXISTS (SELECT 1 FROM public.transaction_submissions c WHERE c.parent_submission_id = p_submissio
+    RED:   c24
+    green: none
+      c24: CONTROL FAILED: C24 other org broker on superseded v1: expected ~^42501:not_authorized$, got 42501:superseded
+m49-needs-changes-before-superseded  [as expected]  (refusals)
+    MUTATION APPLIED: 3 line(s) differ; first: IF v_row.status = 'needs_changes' THEN
     RED:   c14
     green: none
-      c14: CONTROL FAILED: C14 lone: status_history grew by exactly one
-mutants: 43 run, 0 not as expected
+      c14: CONTROL FAILED: C14b tick on v1 while v2 uploads: expected ~^42501:superseded$, got 42501:not_open_for_review
+m50-rollback-refusals-keeps-needs-changes  [as expected]  (refusals-rollback)
+    MUTATION APPLIED: 3 line(s) differ; first: IF v_row.status = 'needs_changes' THEN
+    RED:   c25
+    green: none
+      c25: CONTROL FAILED: C25 rollback-refusals restores everything: only-before 1, only-after 1
+m51-rollback-refusals-keeps-add-superseded  [as expected]  (refusals-rollback)
+    MUTATION APPLIED: 3 line(s) differ; first: IF EXISTS (SELECT 1 FROM public.transaction_submissions c WHERE c.parent_submission_id = p_submission_id) THEN
+    RED:   c25
+    green: none
+      c25: CONTROL FAILED: C25 rollback-refusals restores everything: only-before 1, only-after 1
+mutants: 50 run, 0 not as expected

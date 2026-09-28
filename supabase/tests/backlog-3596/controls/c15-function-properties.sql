@@ -7,7 +7,8 @@ BEGIN
   FOR r IN SELECT * FROM (VALUES
       ('carry_submission_checklist_reviews(uuid)',                 true,  false, true),
       ('snapshot_submission_checklists(uuid, jsonb)',               false, false, true),
-      ('set_submission_checklist_reviewer_check(uuid, boolean)',    true,  false, true)) v(fn, definer, anon_x, auth_x) LOOP
+      ('set_submission_checklist_reviewer_check(uuid, boolean)',    true,  false, true),
+      ('add_submission_checklist_at_review(uuid, uuid)',            true,  false, true)) v(fn, definer, anon_x, auth_x) LOOP
     PERFORM pg_temp.check((SELECT p.proconfig = ARRAY['search_path=""'] FROM pg_proc p WHERE p.oid = ('public.' || r.fn)::regprocedure),
                           'C15 ' || r.fn || ' search_path pinned empty');
     PERFORM pg_temp.check((SELECT p.prosecdef = r.definer FROM pg_proc p WHERE p.oid = ('public.' || r.fn)::regprocedure),

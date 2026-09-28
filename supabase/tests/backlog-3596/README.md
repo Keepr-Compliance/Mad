@@ -1,10 +1,20 @@
 # BACKLOG-3596 harness — broker checklist ticks carried across versions
 
 Runs `supabase/migrations/20260928120000_backlog_3596_broker_checklist_ticks.sql`
-— **the shipped file itself** — on a real Postgres 17.6, on top of the
+and then `supabase/migrations/20260928130000_backlog_3596_review_refusals.sql`
+— **the shipped files themselves** — on a real Postgres 17.6, on top of the
 migrations production holds for these tables, and records what every control
 and every mutant did. `control-run.txt` and `mutant-run.txt` are the recorded
-runs' own output, unedited. `rollback.sql` is the tested rollback.
+runs' own output, unedited. `rollback.sql` and `rollback-refusals.sql` are the
+tested rollbacks; `rollback-refusals.sql` runs first.
+
+The refusals file re-creates two functions: `add_submission_checklist_at_review`
+(refuses a version that has a newer version, `superseded`) and
+`set_submission_checklist_reviewer_check` (refuses new ticks and unticks on a
+`needs_changes` version, `not_open_for_review`; ticks made before Request
+Changes still carry). The superseded-add state is reachable only through a
+hand-crafted request (an agent moving its own `needs_changes` row back to an
+open status); shipped code cannot produce it, and c24's fixture says so.
 
 It is not in CI: CI has no database. The text tripwire that runs in CI is
 `broker-portal/__tests__/migrations/broker-checklist-ticks-3596.test.ts`.
@@ -19,8 +29,8 @@ H=supabase/tests/backlog-3596/run.sh
 export SSH_HOST=<ssh alias> PG_CONTAINER=<container name>   # values: a private pm_comment on BACKLOG-3596 (no host names in the repo)
 
 bash $H gate                  # refuses unless the venue is schema-only and checklist-free
-bash $H controls              # 23 controls, each in its own rolled-back transaction
-bash $H mutants               # 43 mutants from lib/mutants.py against their target controls
+bash $H controls              # 26 controls, each in its own rolled-back transaction
+bash $H mutants               # 50 mutants from lib/mutants.py against their target controls
 MATRIX=1 bash $H mutants m03  # one mutant against every control
 bash $H gate                  # again: proves nothing leaked out of a transaction
 ```
@@ -37,7 +47,10 @@ BEGIN
   -> backlog-3477/lib/fixtures-3477.sql -> 3547
   -> lib/fixtures-3596.sql (helpers only; loaded BEFORE 3596)
   -> [c22: catalogue snapshot] -> 3596 (or a mutant)
-  -> [c21: snapshot, 3596 again] -> [c22: snapshot, rollback.sql (or a mutant)]
+  -> [c25: snapshot] -> the refusals file (or a mutant)
+  -> [c21: snapshot, 3596 and the refusals file again]
+  -> [c22: snapshot, rollback-refusals.sql, rollback.sql (or a mutant)]
+  -> [c25: snapshot, rollback-refusals.sql (or a mutant)]
   -> control
 ROLLBACK
 ```
@@ -68,15 +81,24 @@ otherwise pass.
 | c11 | agent finalize after the carry: cleared entries precede the status entry | — |
 | c12 | submitter cannot insert an item with a cleared marker; pair CHECK holds | m33 |
 | c13 | removed item, renamed item (same id), item moved to another template → one `removed` entry each; renamed/moved rows unmarked | m12 m13 m25 |
-| c14 / c14b | tick refused on a version with a newer version — uploading and resubmitted; outsiders still `not_authorized`; v2 and a lone needs_changes version tick, and that tick writes exactly one `checklist_review` entry by the broker | m05 m06 m34 m43 |
-| c15 | function security / search_path / grants; carry signature; authenticated has no UPDATE/DELETE on items | m29 m30 m31 |
+| c14 / c14b | tick refused on a version with a newer version — uploading and resubmitted; outsiders still `not_authorized`; v2 ticks; a lone needs_changes version refuses a new tick and an untick (`not_open_for_review`), no tick, no history growth | m05 m06 m34 m44 m49 |
+| c15 | function security / search_path / grants (add-at-review included); carry signature; authenticated has no UPDATE/DELETE on items | m29 m30 m31 |
 | c16 | parent only: v2 unticked by the broker → v3 unticked (no jump from v1) | m04 |
 | c17 | parent must be same submitter, deal, version − 1 → otherwise 42501 and the snapshot rolls back | m09 m10 m11 |
 | c18 | older desktop → one `unavailable` (`unmatched_client`); pre-migration parent → nothing; older desktop, never ticked → nothing | m19 m20 |
 | c19 | parent without a copy → one `unavailable` (`no_previous_copy`) only if an earlier version was ticked | m21 m22 |
 | c20 | BACKLOG-3592: reviewer UPDATE refused on needs_changes/approved/rejected; allowed on open statuses; submitter transitions and status trigger unchanged; it_admin not in this rule (unchanged) | m35 m36 m37 m38 |
 | c21 | applying the file twice changes nothing | m39 |
-| c22 | rollback.sql restores the catalogue exactly; the restored snapshot accepts `local_item_id` | m40 m41 m42 |
+| c22 | rollback-refusals.sql then rollback.sql restore the catalogue exactly; the restored snapshot accepts `local_item_id` | m40 m41 m42 |
+| c23 | needs_changes, both ways: new tick / untick / admin untick refused with no writes; ticks made before Request Changes carry to v2 with their original reviewer and time | m44 m45 |
+| c24 | add-at-review refused (`superseded`) while the newer version uploads and after it lands, no checklist and no entry written; outsiders still `not_authorized`; add allowed on an open version with no newer one. Crafted-request fixture | m46 m47 m48 |
+| c25 | rollback-refusals.sql restores the catalogue as 20260928120000 left it; a lone needs_changes version ticks again | m50 m51 |
+
+Mutants of the tick body target the refusals file: it re-creates the
+function after 20260928120000, so an edit to the older body is overwritten
+before any control runs. m43 (SR mS6: the tick's history append skipped on a
+needs_changes row) is retired: the refusal stops every new tick on a
+needs_changes version before that append, so nothing can observe it.
 
 Not observable in a one-session harness: the parent items' `FOR SHARE` lock
 (the CI text test pins the line).
@@ -84,6 +106,6 @@ Not observable in a one-session harness: the parent items' `FOR SHARE` lock
 ## Results
 
 Recorded 2026-09-28 on the NAS test venue, Postgres 17.6, connected as the
-venue's `postgres` role, branch `feature-portal/BACKLOG-3596-cloud`. See
-`control-run.txt` (23 green / 23, 140 assertions) and `mutant-run.txt`
-(43 run, 0 not as expected). `gate` re-run afterwards: OK.
+venue's `postgres` role, branch `feature-portal/BACKLOG-3596-cloud-refusals`.
+See `control-run.txt` (26 green / 26, 171 assertions) and `mutant-run.txt`
+(50 run, 0 not as expected). `gate` re-run afterwards: OK.
