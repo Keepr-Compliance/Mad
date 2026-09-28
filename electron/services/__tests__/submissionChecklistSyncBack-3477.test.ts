@@ -90,6 +90,8 @@ interface CloudState {
   submission_checklist_items: Array<Record<string, unknown>>;
   /** Number of upcoming reads of submission_checklists that fail. */
   checklistFetchFailures: number;
+  /** Number of upcoming reads of submission_checklist_items that fail. */
+  itemFetchFailures: number;
 }
 
 const cloud: CloudState = {
@@ -97,6 +99,7 @@ const cloud: CloudState = {
   submission_checklists: [],
   submission_checklist_items: [],
   checklistFetchFailures: 0,
+  itemFetchFailures: 0,
 };
 let realtimeCallback: ((payload: { new: unknown }) => void) | null = null;
 const checklistFetches: string[] = [];
@@ -134,6 +137,13 @@ function query(table: string) {
               reject,
             );
           }
+        }
+        if (table === "submission_checklist_items" && cloud.itemFetchFailures > 0) {
+          cloud.itemFetchFailures--;
+          return Promise.resolve({ data: null, error: { message: "fake items read error" } }).then(
+            resolve,
+            reject,
+          );
         }
         const source =
           table === "transaction_submissions"
@@ -285,6 +295,7 @@ beforeEach(() => {
   db.exec(fs.readFileSync(SCHEMA, "utf8"));
   db.pragma("foreign_keys = ON");
   cloud.checklistFetchFailures = 0;
+  cloud.itemFetchFailures = 0;
   checklistFetches.length = 0;
   realtimeCallback = null;
   (submissionSyncService as unknown as { reviewChecklistPullFailures: Map<string, number> })
@@ -439,5 +450,65 @@ describe("BACKLOG-3477 sync-back: idempotence and edges", () => {
     await submissionSyncService.manualSync();
     expectPulled();
     expect(localStatus()).toBe("needs_changes");
+  });
+
+  // SR condition D1: the wrong implementation ignores the items-read error,
+  // writes an EMPTY checklist, and the `exists` guard then makes it permanent.
+  it("an items-read error fails the pull: no checklist written, status held, then converges", async () => {
+    seedLocal();
+    seedCloud("needs_changes");
+    cloud.itemFetchFailures = 1;
+
+    const poll = await submissionSyncService.manualSync();
+    expect(poll.failed).toBe(1);
+    expect(localChecklists()).toEqual([]);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM transaction_checklist_items").get()).toEqual({ n: 0 });
+    expect(localStatus()).toBe("under_review");
+
+    await submissionSyncService.manualSync();
+    expectPulled();
+    expect(localStatus()).toBe("needs_changes");
+  });
+
+  it("an items-read error counts toward the failure limit; the 3rd writes the status without an empty checklist", async () => {
+    seedLocal();
+    seedCloud("needs_changes");
+    cloud.itemFetchFailures = 3;
+
+    await submissionSyncService.manualSync();
+    expect(localStatus()).toBe("under_review");
+    await submissionSyncService.manualSync();
+    expect(localStatus()).toBe("under_review");
+    await submissionSyncService.manualSync();
+    expect(localStatus()).toBe("needs_changes");
+    expect(localChecklists()).toEqual([]);
+  });
+
+  // A success resets the failure counter, so a later failure streak on the
+  // same submission starts again from 1 and gets its full retries.
+  it("a success after a failure resets the counter for a later needs_changes on the same submission", async () => {
+    seedLocal();
+    seedCloud("needs_changes");
+    cloud.checklistFetchFailures = 1;
+    await submissionSyncService.manualSync(); // failure 1, held
+    expect(localStatus()).toBe("under_review");
+    await submissionSyncService.manualSync(); // success, written
+    expectPulled();
+    expect(localStatus()).toBe("needs_changes");
+
+    // The broker moves it back to review, then requests changes again.
+    cloud.submissions[0].status = "under_review";
+    await submissionSyncService.manualSync();
+    expect(localStatus()).toBe("under_review");
+    cloud.submissions[0].status = "needs_changes";
+    cloud.checklistFetchFailures = 2;
+
+    await submissionSyncService.manualSync(); // failure 1 again (2 if never reset)
+    expect(localStatus()).toBe("under_review");
+    await submissionSyncService.manualSync(); // failure 2 (3 if never reset: would write)
+    expect(localStatus()).toBe("under_review");
+    await submissionSyncService.manualSync(); // failure 3: written
+    expect(localStatus()).toBe("needs_changes");
+    expectPulled();
   });
 });
