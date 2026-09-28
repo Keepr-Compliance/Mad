@@ -69,9 +69,9 @@ export interface DealPage<T> {
 
 export async function loadDealPage<T extends { id: string }>(args: {
   /** Chain links of every visible row, scoped as the list is, WITHOUT the status filter. */
-  readLinks: (from: number, to: number) => PromiseLike<ReadResult>;
+  readLinks: (_from: number, _to: number) => PromiseLike<ReadResult>;
   /** Full rows for these ids, scoped as the list is. Never called with []. */
-  readRows: (ids: string[]) => PromiseLike<ReadResult>;
+  readRows: (_ids: string[]) => PromiseLike<ReadResult>;
   /** A status to keep, matched on the head; null keeps every deal. */
   status: string | null;
   page: number;
