@@ -73,6 +73,11 @@ export default async function MyTransactionsPage({ searchParams }: PageProps) {
   const { status, page: pageParam } = await searchParams;
   const currentStatus = STATUSES.some((s) => s.value === status) ? (status as string) : 'all';
   const currentPage = Math.max(1, Number(pageParam) || 1);
+  // BACKLOG-3597: the "submitted" filter now covers submitted AND resubmitted
+  // deals (STATUSES labels it "Pending"), so the caption uses that tab label
+  // instead of formatStatus, which still reports a single submission's own
+  // "Submitted" status elsewhere on this page.
+  const currentStatusLabel = STATUSES.find((s) => s.value === currentStatus)?.label ?? formatStatus(currentStatus);
 
   /** The agent's own rows in this brokerage, identical for both reads. */
   function own(columns: string) {
@@ -109,7 +114,7 @@ export default async function MyTransactionsPage({ searchParams }: PageProps) {
         subtitle={
           <>
             {total} submission{total !== 1 ? 's' : ''}
-            {currentStatus !== 'all' && ` with status "${formatStatus(currentStatus)}"`}
+            {currentStatus !== 'all' && ` with status "${currentStatusLabel}"`}
           </>
         }
       />

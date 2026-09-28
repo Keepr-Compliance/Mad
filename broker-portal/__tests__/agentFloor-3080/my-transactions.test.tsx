@@ -489,6 +489,9 @@ describe('list page', () => {
     // Both of A's deals in this brokerage are resubmitted at their head.
     expect(renderedDetailIds(container)).toEqual([S_A, S_A_CHILD_OF_OTHER_ORG].sort());
     expect(container.innerHTML).not.toContain(S_B);
+    // The caption reads "Pending", not the raw filter value's own
+    // formatStatus label ("Submitted").
+    expect(container).toHaveTextContent('with status "Pending"');
   });
 
   it('an unknown status value is ignored, not passed to the query', async () => {

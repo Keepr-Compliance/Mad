@@ -160,6 +160,11 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
   const { status, page: pageParam } = await searchParams;
   const currentPage = Math.max(1, Number(pageParam) || 1);
   const currentStatus = status || 'all';
+  // BACKLOG-3597: the "submitted" filter now covers submitted AND resubmitted
+  // deals (STATUSES labels it "Pending"), so the caption uses that tab label
+  // instead of formatStatus, which still reports a single submission's own
+  // "Submitted" status elsewhere on this page.
+  const currentStatusLabel = STATUSES.find((s) => s.value === currentStatus)?.label ?? formatStatus(currentStatus);
 
   const { client, impersonation, organizationId } = await getDataClient();
 
@@ -194,7 +199,7 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
         subtitle={
           <>
             {totalCount} submission{totalCount !== 1 ? 's' : ''}
-            {currentStatus !== 'all' && ` with status "${formatStatus(currentStatus)}"`}
+            {currentStatus !== 'all' && ` with status "${currentStatusLabel}"`}
           </>
         }
       />

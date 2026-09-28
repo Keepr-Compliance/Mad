@@ -173,7 +173,9 @@ describe('broker Submissions list: one row per deal', () => {
     // SOLO (submitted, 09-05) and W4 (resubmitted, 09-04). W4's superseded
     // parent W3 is needs_changes and must not pull the deal in or out.
     expect(listedIds(pending.container)).toEqual([SOLO, W4]);
-    expect(pending.container).toHaveTextContent('2 submissions with status');
+    // The caption reads "Pending", not the raw filter value's own formatStatus
+    // label ("Submitted") — BACKLOG-3597.
+    expect(pending.container).toHaveTextContent('2 submissions with status "Pending"');
     // The tab's label is still "Pending".
     expect(pending.container.querySelector('a[href="/dashboard/submissions?status=submitted"]')).toHaveTextContent(
       /^Pending$/
