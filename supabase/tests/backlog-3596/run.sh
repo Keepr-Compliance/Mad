@@ -213,5 +213,5 @@ case "${1:-}" in
     [ $total -gt 0 ] || { echo "mutants: 0 mutants run -- a failure" >&2; exit 1; }
     [ $missed -eq 0 ] || exit 1 ;;
 
-  *) sed -n '2,38p' "${BASH_SOURCE[0]}"; exit 2 ;;
+  *) sed -n '2,39p' "${BASH_SOURCE[0]}"; exit 2 ;;
 esac
