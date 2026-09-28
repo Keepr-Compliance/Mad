@@ -308,7 +308,10 @@ describe("BACKLOG-2838: the card's counters refresh in place", () => {
     expect(emailNode).toHaveTextContent("3");
   });
 
-  it("subscribes to both signals on mount and releases both on unmount", async () => {
+  // BACKLOG-3595 added a third signal (submission status) to the same effect.
+  it("subscribes to all three signals on mount and releases all three on unmount", async () => {
+    const unsubscribeStatus = jest.fn();
+    api().transactions.onSubmissionStatusChanged.mockReturnValue(unsubscribeStatus);
     serveThenChange();
     const { unmount } = renderList();
 
@@ -317,9 +320,11 @@ describe("BACKLOG-2838: the card's counters refresh in place", () => {
     });
     expect(api().transactions.onReviewQueueChanged).toHaveBeenCalled();
     expect(api().onTransactionAutoSyncComplete).toHaveBeenCalled();
+    expect(api().transactions.onSubmissionStatusChanged).toHaveBeenCalled();
 
     unmount();
     expect(unsubscribeReview).toHaveBeenCalled();
     expect(unsubscribeAutoSync).toHaveBeenCalled();
+    expect(unsubscribeStatus).toHaveBeenCalled();
   });
 });

@@ -1171,4 +1171,21 @@ export interface WindowApiTransactions {
   onReviewQueueChanged: (
     callback: (data: ReviewQueueChangedDto) => void,
   ) => () => void;
+
+  /**
+   * BACKLOG-3595: fires after main has written a new submission_status (and
+   * review notes) to the local row. Shape matches the preload bridge
+   * (transactionBridge.ts). Returns an unsubscribe.
+   */
+  onSubmissionStatusChanged: (
+    callback: (data: {
+      transactionId: string;
+      propertyAddress: string;
+      oldStatus: string;
+      newStatus: string;
+      reviewNotes?: string;
+      title: string;
+      message: string;
+    }) => void,
+  ) => () => void;
 }
