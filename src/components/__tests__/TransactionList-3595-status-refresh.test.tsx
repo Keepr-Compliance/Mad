@@ -330,6 +330,8 @@ describe("BACKLOG-3595: open list and header refresh on submission status change
     renderList();
     await waitFor(() => expect(screen.getAllByText(ADDR_A).length).toBeGreaterThan(0));
     await openDetails(ADDR_A);
+    // The header IS listening — otherwise "nothing happened" below is vacuous.
+    expect(listeners.size).toBe(2);
     await act(async () => {
       await new Promise((r) => setTimeout(r, 50));
     });
