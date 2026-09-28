@@ -756,6 +756,16 @@ const ADDED_BY_REMOVED = checklistAddedEntry({
   templateId: TEMPLATE_ADDED,
 });
 
+/** Open every collapsed checklist-changes group (BACKLOG-3477 grouping). */
+function expandGroups(container: HTMLElement): HTMLElement {
+  for (const b of Array.from(
+    container.querySelectorAll('[data-testid="checklist-changes-group"] > button[aria-expanded="false"]')
+  )) {
+    fireEvent.click(b);
+  }
+  return container;
+}
+
 function givenReviewed(history: StoredHistory): void {
   given('brokerage agent', ON);
   mockEmulator.set({
@@ -772,8 +782,13 @@ describe('F2: the agent sees who reviewed, by name (BACKLOG-3477)', () => {
   it('(i) an entry without `status` renders as its own labelled line, not a status row', async () => {
     givenReviewed(HISTORY);
     const { container } = render(elementOf(await run(detail(S_A_REVIEWED))));
+    expandGroups(container);
     const typed = Array.from(container.querySelectorAll('[data-testid="typed-history-entry"]'));
     expect(typed.map((li) => li.getAttribute('data-entry-type'))).toEqual(['checklist_review', 'checklist_added']);
+    // Grouped (founder decision 795ff7c5): both follow the latest status change.
+    const group = container.querySelector('[data-testid="pending-history-group"]')!;
+    expect(group.textContent).toContain('2 checklist changes since the last review');
+    expect(Array.from(group.querySelectorAll('[data-testid="typed-history-entry"]'))).toEqual(typed);
     expect(typed[0].textContent).toContain('Title commitment — unchecked → checked');
     expect(typed[1].textContent).toContain('Checklist added: Lead-Based Paint');
   });
@@ -781,6 +796,7 @@ describe('F2: the agent sees who reviewed, by name (BACKLOG-3477)', () => {
   it('(iv) a live colleague renders by name', async () => {
     givenReviewed(HISTORY);
     const { container } = render(elementOf(await run(detail(S_A_REVIEWED))));
+    expandGroups(container);
     const typed = Array.from(container.querySelectorAll('[data-testid="typed-history-entry"]'));
     expect(typed[0].textContent).toContain(`by ${REVIEWER_NAME}`);
     expect(container.textContent).toContain(`by ${REVIEWER_NAME}`);
@@ -789,9 +805,10 @@ describe('F2: the agent sees who reviewed, by name (BACKLOG-3477)', () => {
   it('(iii) a removed member reads "a former member" and no raw id is anywhere on the page', async () => {
     givenReviewed(HISTORY);
     const { container } = render(elementOf(await run(detail(S_A_REVIEWED))));
+    expandGroups(container);
     const typed = Array.from(container.querySelectorAll('[data-testid="typed-history-entry"]'));
     expect(typed[1].textContent).toContain(`by ${FORMER_MEMBER}`);
-    for (const id of [REMOVED, REVIEWER]) {
+    for (const id of [REMOVED, REVIEWER, ITEM_REVIEWED, CHECKLIST_ADDED, TEMPLATE_ADDED]) {
       expect(container.innerHTML).not.toContain(id);
     }
   });
@@ -802,6 +819,7 @@ describe('F2: the agent sees who reviewed, by name (BACKLOG-3477)', () => {
     delete noDate.changed_at;
     givenReviewed([historyEntry('submitted'), noDate]);
     const { container } = render(elementOf(await run(detail(S_A_REVIEWED))));
+    expandGroups(container);
     expect(container.textContent).toContain('Title commitment — unchecked → checked');
     expect(container.textContent).toContain(`by ${REVIEWER_NAME}`);
   });
@@ -810,6 +828,7 @@ describe('F2: the agent sees who reviewed, by name (BACKLOG-3477)', () => {
     givenReviewed(HISTORY);
     mockUsersReadFails = true;
     const { container } = render(elementOf(await run(detail(S_A_REVIEWED))));
+    expandGroups(container);
     expect(container.querySelectorAll('[data-testid="typed-history-entry"]')).toHaveLength(2);
     expect(container.textContent).not.toContain(FORMER_MEMBER);
     expect(container.textContent).not.toContain(REVIEWER_NAME);

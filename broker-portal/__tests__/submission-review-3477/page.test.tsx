@@ -112,7 +112,7 @@ jest.mock('@/components/submission/ReviewActions', () => ({ ReviewActions: funct
 jest.mock('@/components/submission/StatusHistory', () => ({ StatusHistory: function StatusHistory() { return null; } }));
 jest.mock('@/components/submission/ChecklistReview', () => ({ ChecklistReview: function ChecklistReview() { return null; } }));
 
-import { render as renderDom } from '@testing-library/react';
+import { fireEvent, render as renderDom } from '@testing-library/react';
 import SubmissionDetailPage from '@/app/dashboard/submissions/[id]/page';
 import { ReviewActions } from '@/components/submission/ReviewActions';
 import { StatusHistory } from '@/components/submission/StatusHistory';
@@ -289,9 +289,18 @@ describe('Status History actor names (C5)', () => {
     const props = findProps<React.ComponentProps<typeof StatusHistory>>(await render(), StatusHistory)!;
     const { StatusHistory: RealStatusHistory } = jest.requireActual('@/components/submission/StatusHistory');
     const { container } = renderDom(<RealStatusHistory {...props} />);
+    // Grouped (founder decision 795ff7c5): the three typed entries follow the
+    // latest status change, collapsed until opened.
+    const group = container.querySelector('[data-testid="pending-history-group"]')!;
+    expect(group.textContent).toContain('3 checklist changes since the last review');
+    expect(container.textContent).not.toContain(`by ${COLLEAGUE_NAME}`);
+    fireEvent.click(group.querySelector('button[aria-expanded="false"]')!);
+    expect(group.querySelectorAll('[data-testid="typed-history-entry"]')).toHaveLength(3);
     expect(container.textContent).toContain(`by ${COLLEAGUE_NAME}`);
     expect(container.textContent).toContain(`by ${FORMER_MEMBER}`);
     for (const id of [COLLEAGUE_ID, REMOVED_ID]) expect(container.innerHTML).not.toContain(id);
+    // No raw id of any kind (actor, item, checklist, template) with the group open.
+    expect(container.innerHTML).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
   });
 
   it('F3: when the users read fails, nobody is named and nobody is "a former member"', async () => {
@@ -302,6 +311,8 @@ describe('Status History actor names (C5)', () => {
     expect(props.history.map((e) => e.changed_by)).toEqual([undefined, undefined, undefined, undefined, undefined]);
     const { StatusHistory: RealStatusHistory } = jest.requireActual('@/components/submission/StatusHistory');
     const { container } = renderDom(<RealStatusHistory {...props} />);
+    for (const b of Array.from(container.querySelectorAll('[data-testid="checklist-changes-group"] > button'))) fireEvent.click(b);
+    expect(container.querySelectorAll('[data-testid="typed-history-entry"]')).toHaveLength(3);
     expect(container.textContent).not.toContain(FORMER_MEMBER);
     expect(container.textContent).not.toMatch(/\bby /);
     for (const id of [COLLEAGUE_ID, REMOVED_ID]) expect(container.innerHTML).not.toContain(id);

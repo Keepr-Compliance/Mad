@@ -91,6 +91,45 @@ export function actorLabel(id: string | null | undefined, names: NameMap): strin
   return name;
 }
 
+/**
+ * One top-level line of the timeline (BACKLOG-3477, founder decision in
+ * pm_comments 795ff7c5): a status entry carrying the typed entries that
+ * preceded it, or the trailing group of typed entries made after the latest
+ * status change.
+ */
+export type HistoryItem =
+  | { kind: 'status'; entry: StatusHistoryEntry; changes: StatusHistoryEntry[] }
+  | { kind: 'pending'; changes: StatusHistoryEntry[] };
+
+/**
+ * Fold a chronologically sorted timeline into top-level items. Display only:
+ * nothing is dropped or reordered. Each typed entry attaches to the NEXT
+ * non-typed entry after it; typed entries after the last one form a trailing
+ * 'pending' item. A non-typed entry (status or legacy) is its own item.
+ */
+export function groupHistory(sorted: StatusHistoryEntry[]): HistoryItem[] {
+  const items: HistoryItem[] = [];
+  let buffer: StatusHistoryEntry[] = [];
+  for (const entry of sorted) {
+    if (isTypedEntry(entry)) {
+      buffer.push(entry);
+      continue;
+    }
+    items.push({ kind: 'status', entry, changes: buffer });
+    buffer = [];
+  }
+  if (buffer.length > 0) items.push({ kind: 'pending', changes: buffer });
+  return items;
+}
+
+/** "1 checklist change" / "N checklist changes". */
+export function checklistChangesLabel(count: number): string {
+  return `${count} checklist ${count === 1 ? 'change' : 'changes'}`;
+}
+
+/** How many top-level items the timeline shows before "Show full history". */
+export const VISIBLE_HISTORY_ITEMS = 4;
+
 /** Replace raw changed_by ids with display names. */
 export function resolveHistoryActors(entries: StatusHistoryEntry[], names: NameMap): StatusHistoryEntry[] {
   return entries.map((entry) => ({ ...entry, changed_by: actorName(entry.changed_by, names) }));
