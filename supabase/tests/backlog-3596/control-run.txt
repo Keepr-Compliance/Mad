@@ -24,4 +24,10 @@ c22-rollback                                 GREEN 3 assertions
 c23-needs-changes-carry                      GREEN 11 assertions
 c24-add-superseded                           GREEN 11 assertions
 c25-rollback-refusals                        GREEN 3 assertions
-controls: 26 green / 26
+c26-added-tick                               GREEN 17 assertions
+c27-added-carry                              GREEN 12 assertions
+c28-added-same-title                         GREEN 6 assertions
+c29-added-changed                            GREEN 9 assertions
+c30-rollback-added                           GREEN 6 assertions
+c31-added-chain                              GREEN 9 assertions
+controls: 32 green / 32
