@@ -3,10 +3,17 @@
 ONE targeted change, made by an exact string replacement that must match
 exactly once -- otherwise the run aborts (MUTATION NOT APPLIED).
 
-    python3 mutants.py <migration> <rollback> <outdir>
+    python3 mutants.py <migration> <rollback> <refusals> <refusals-rollback> <outdir>
 
 writes <outdir>/<name>.sql, .targets (controls that must go RED) and .file
-('migration' or 'rollback'). run.sh does the rest.
+('migration', 'rollback', 'refusals' or 'refusals-rollback'). run.sh does
+the rest.
+
+The tick RPC's live body comes from the refusals file
+(20260928130000_backlog_3596_review_refusals.sql), which re-creates it after
+20260928120000. A mutant of the tick body inside 20260928120000 is therefore
+overwritten before any control runs; m05, m06 and m34 target the refusals
+file instead (the strings are verbatim there).
 """
 import pathlib
 import sys
@@ -25,10 +32,10 @@ MUTANTS = [
     ("m04-carry-from-grandparent", "c16", "migration",
      "         WHERE pi.submission_id = v_parent.id\n           AND pi.reviewer_checked\n           AND pi.local_item_id IS NOT NULL",
      "         WHERE pi.submission_id = COALESCE((SELECT g.parent_submission_id FROM public.transaction_submissions g WHERE g.id = v_parent.id), v_parent.id)\n           AND pi.reviewer_checked\n           AND pi.local_item_id IS NOT NULL"),
-    ("m05-tick-no-superseded-check", "c14", "migration",
+    ("m05-tick-no-superseded-check", "c14", "refusals",
      "  IF EXISTS (SELECT 1 FROM public.transaction_submissions c\n              WHERE c.parent_submission_id = v_row.submission_id) THEN",
      "  IF false THEN"),
-    ("m06-superseded-ignores-uploading", "c14", "migration",
+    ("m06-superseded-ignores-uploading", "c14", "refusals",
      "              WHERE c.parent_submission_id = v_row.submission_id) THEN",
      "              WHERE c.parent_submission_id = v_row.submission_id AND c.status <> 'uploading') THEN"),
     ("m07-system-actor", "c02", "migration",
@@ -106,14 +113,13 @@ MUTANTS = [
     ("m33-insert-allows-cleared", "c12", "migration",
      "    AND submission_checklist_items.cleared_reviewer_id IS NULL\n    AND submission_checklist_items.cleared_at IS NULL\n",
      ""),
-    ("m34-superseded-before-authorization", "c14", "migration",
+    ("m34-superseded-before-authorization", "c14", "refusals",
      "  IF NOT FOUND OR NOT public.can_review_submission(v_row.organization_id) THEN\n    RAISE EXCEPTION 'not_authorized' USING ERRCODE = '42501';\n  END IF;\n  IF NOT COALESCE((public.check_feature_access(v_row.organization_id",
      "  IF FOUND AND EXISTS (SELECT 1 FROM public.transaction_submissions c WHERE c.parent_submission_id = v_row.submission_id) THEN\n    RAISE EXCEPTION 'superseded' USING ERRCODE = '42501';\n  END IF;\n  IF NOT FOUND OR NOT public.can_review_submission(v_row.organization_id) THEN\n    RAISE EXCEPTION 'not_authorized' USING ERRCODE = '42501';\n  END IF;\n  IF NOT COALESCE((public.check_feature_access(v_row.organization_id"),
-    # SR mS6 (C-12): the tick lands but its history append skips a
-    # needs_changes row -- what an RLS-bound append would do under 3592.
-    ("m43-tick-drops-history-on-needs-changes", "c14", "migration",
-     "           'checklist_name', v_row.template_name))\n   WHERE id = v_row.submission_id;",
-     "           'checklist_name', v_row.template_name))\n   WHERE id = v_row.submission_id AND status <> 'needs_changes';"),
+    # m43 (SR mS6, C-12) is RETIRED. It dropped the tick's history append on
+    # a needs_changes row. The refusals file refuses every new tick on a
+    # needs_changes version before that append, so no control can observe
+    # it, and the BYPASSRLS dependency it guarded no longer exists.
     # --- BACKLOG-3592 UPDATE rule ---------------------------------------------
     ("m35-update-rule-unchanged", "c20", "migration",
      "    OR (((status)::text = ANY (ARRAY['submitted'::text, 'resubmitted'::text, 'under_review'::text]))\n        AND (organization_id IN",
@@ -131,6 +137,53 @@ MUTANTS = [
     ("m39-constraint-added-unguarded", "c21", "migration",
      "DO $constraints$\nBEGIN\n  IF NOT EXISTS (SELECT 1 FROM pg_constraint\n                  WHERE conname = 'submission_checklist_items_cleared_pair_check'\n                    AND conrelid = 'public.submission_checklist_items'::regclass) THEN\n    ALTER TABLE public.submission_checklist_items\n      ADD CONSTRAINT submission_checklist_items_cleared_pair_check\n      CHECK ((cleared_reviewer_id IS NULL) = (cleared_at IS NULL));\n  END IF;\nEND\n$constraints$;",
      "ALTER TABLE public.submission_checklist_items\n  ADD CONSTRAINT submission_checklist_items_cleared_pair_check\n  CHECK ((cleared_reviewer_id IS NULL) = (cleared_at IS NULL));"),
+    # --- the refusals file (20260928130000) ----------------------------------
+    ("m44-tick-allows-needs-changes", "c14 c23", "refusals",
+     "  IF v_row.status = 'needs_changes' THEN\n    RAISE EXCEPTION 'not_open_for_review'",
+     "  IF false THEN\n    RAISE EXCEPTION 'not_open_for_review'"),
+    # The wrong form of the needs_changes rule: "no reviewer values on a
+    # needs_changes row". It clears the ticks made before Request Changes, so
+    # nothing carries to the next version.
+    ("m45-blanket-clears-needs-changes-ticks", "c23", "refusals",
+     "GRANT EXECUTE ON FUNCTION public.set_submission_checklist_reviewer_check(uuid, boolean) TO authenticated;\n",
+     "GRANT EXECUTE ON FUNCTION public.set_submission_checklist_reviewer_check(uuid, boolean) TO authenticated;\n"
+     "CREATE OR REPLACE FUNCTION public.m45_no_ticks_on_needs_changes() RETURNS trigger\n"
+     "LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $m45$\n"
+     "BEGIN\n"
+     "  IF NEW.status = 'needs_changes' AND OLD.status IS DISTINCT FROM 'needs_changes' THEN\n"
+     "    UPDATE public.submission_checklist_items\n"
+     "       SET reviewer_checked = false, reviewer_checked_by = NULL, reviewer_checked_at = NULL\n"
+     "     WHERE submission_id = NEW.id;\n"
+     "  END IF;\n"
+     "  RETURN NEW;\n"
+     "END\n$m45$;\n"
+     "CREATE TRIGGER m45_no_ticks_on_needs_changes AFTER UPDATE OF status ON public.transaction_submissions\n"
+     "  FOR EACH ROW EXECUTE FUNCTION public.m45_no_ticks_on_needs_changes();\n"),
+    ("m46-add-no-superseded-check", "c24", "refusals",
+     "  IF EXISTS (SELECT 1 FROM public.transaction_submissions c\n              WHERE c.parent_submission_id = p_submission_id) THEN",
+     "  IF false THEN"),
+    ("m47-add-superseded-ignores-uploading", "c24", "refusals",
+     "              WHERE c.parent_submission_id = p_submission_id) THEN",
+     "              WHERE c.parent_submission_id = p_submission_id AND c.status <> 'uploading') THEN"),
+    ("m48-add-superseded-before-authorization", "c24", "refusals",
+     "  IF NOT FOUND OR NOT public.can_review_submission(v_sub.organization_id) THEN",
+     "  IF FOUND AND EXISTS (SELECT 1 FROM public.transaction_submissions c WHERE c.parent_submission_id = p_submission_id) THEN\n"
+     "    RAISE EXCEPTION 'superseded' USING ERRCODE = '42501';\n  END IF;\n"
+     "  IF NOT FOUND OR NOT public.can_review_submission(v_sub.organization_id) THEN"),
+    ("m49-needs-changes-before-superseded", "c14", "refusals",
+     "  -- A newer version exists, in any status (uploading included): its copy",
+     "  IF v_row.status = 'needs_changes' THEN\n    RAISE EXCEPTION 'not_open_for_review' USING ERRCODE = '42501';\n  END IF;\n"
+     "  -- A newer version exists, in any status (uploading included): its copy"),
+    # --- rollback-refusals.sql -------------------------------------------------
+    ("m50-rollback-refusals-keeps-needs-changes", "c25", "refusals-rollback",
+     "    RAISE EXCEPTION 'superseded' USING ERRCODE = '42501';\n  END IF;\n",
+     "    RAISE EXCEPTION 'superseded' USING ERRCODE = '42501';\n  END IF;\n"
+     "  IF v_row.status = 'needs_changes' THEN\n    RAISE EXCEPTION 'not_open_for_review' USING ERRCODE = '42501';\n  END IF;\n"),
+    ("m51-rollback-refusals-keeps-add-superseded", "c25", "refusals-rollback",
+     "    RAISE EXCEPTION 'not_open_for_review' USING ERRCODE = '42501';\n  END IF;\n\n  SELECT t.id, t.name",
+     "    RAISE EXCEPTION 'not_open_for_review' USING ERRCODE = '42501';\n  END IF;\n"
+     "  IF EXISTS (SELECT 1 FROM public.transaction_submissions c WHERE c.parent_submission_id = p_submission_id) THEN\n"
+     "    RAISE EXCEPTION 'superseded' USING ERRCODE = '42501';\n  END IF;\n\n  SELECT t.id, t.name"),
     # --- rollback.sql ---------------------------------------------------------
     ("m40-rollback-keeps-superseded-tick", "c22", "rollback",
      "  IF v_row.added_at_review_by IS NOT NULL THEN\n    RAISE EXCEPTION 'added_at_review' USING ERRCODE = '42501';\n  END IF;\n",
@@ -171,14 +224,18 @@ def once(text, old, new, label):
 
 
 def main():
-    mig = pathlib.Path(sys.argv[1]).read_text()
-    rb = pathlib.Path(sys.argv[2]).read_text()
-    out = pathlib.Path(sys.argv[3])
+    srcs = {
+        "migration": pathlib.Path(sys.argv[1]).read_text(),
+        "rollback": pathlib.Path(sys.argv[2]).read_text(),
+        "refusals": pathlib.Path(sys.argv[3]).read_text(),
+        "refusals-rollback": pathlib.Path(sys.argv[4]).read_text(),
+    }
+    out = pathlib.Path(sys.argv[5])
     names = [m[0] for m in MUTANTS]
     if len(set(names)) != len(names):
         sys.exit("duplicate mutant name")
     for name, targets, kind, old, new in MUTANTS:
-        src = mig if kind == "migration" else rb
+        src = srcs[kind]
         text = once(src, old, new, name)
         if name in MOVES:
             text = once(text, *MOVES[name], label=name + " (move)")
