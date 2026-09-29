@@ -811,7 +811,9 @@ class SubmissionSyncService {
           logService.info(
             outcome.status === "pulled"
               ? `[SyncService] Owed broker checklist pull landed for submission ${submissionId} (${outcome.added.length} added, ${outcome.removed.length} removed)`
-              : `[SyncService] Owed broker checklist pull dropped: submission ${submissionId} is final`,
+              : outcome.status === "superseded"
+                ? `[SyncService] Owed broker checklist pull dropped: submission ${submissionId} has a newer version`
+                : `[SyncService] Owed broker checklist pull dropped: submission ${submissionId} is final`,
             "SubmissionSyncService",
           );
         }

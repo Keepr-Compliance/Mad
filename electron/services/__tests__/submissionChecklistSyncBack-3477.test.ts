@@ -86,7 +86,17 @@ jest.mock("../../windowRegistry", () => ({ sendToMainWindow: jest.fn(() => true)
 // Fake cloud: three tables served from arrays, plus the realtime channel.
 // ---------------------------------------------------------------------------
 interface CloudState {
-  submissions: Array<{ id: string; status: string; review_notes: string | null }>;
+  /**
+   * `parent_submission_id` is always present on a cloud row (NULL on a first
+   * version; the previous version's id on a resubmit - submissionService
+   * `parent_submission_id: options?.parentSubmissionId`).
+   */
+  submissions: Array<{
+    id: string;
+    status: string;
+    review_notes: string | null;
+    parent_submission_id: string | null;
+  }>;
   submission_checklists: Array<Record<string, unknown>>;
   submission_checklist_items: Array<Record<string, unknown>>;
   /** Number of upcoming reads of submission_checklists that fail. */
@@ -98,6 +108,11 @@ interface CloudState {
    * REMOVED at review (`removed_at_review_by` not null) that fail.
    */
   removedFetchFailures: number;
+  /**
+   * BACKLOG-3607: number of upcoming reads of `transaction_submissions` by
+   * `parent_submission_id` (the "does a newer version exist" read) that fail.
+   */
+  newerVersionReadFailures: number;
   /**
    * BACKLOG-3599 (SR condition 5): no session. Measured in production:
    * `SET ROLE anon; SELECT ... FROM submission_checklists` -> 42501 permission
@@ -120,6 +135,7 @@ const cloud: CloudState = {
   checklistFetchFailures: 0,
   itemFetchFailures: 0,
   removedFetchFailures: 0,
+  newerVersionReadFailures: 0,
   signedOut: false,
   hiddenSubmissions: new Set(),
 };
@@ -139,6 +155,7 @@ function query(table: string) {
   // never asked for (the item id), and a control on it could not go red.
   let columns: string[] | null = null;
   const notNullCols: string[] = [];
+  const eqCols: string[] = [];
   const builder = {
     select: (list?: string) => {
       const cols = (list ?? "*").split(",").map((c) => c.trim()).filter(Boolean);
@@ -146,6 +163,7 @@ function query(table: string) {
       return builder;
     },
     eq: (col: string, value: unknown) => {
+      eqCols.push(col);
       filters.push((row) => row[col] === value);
       return builder;
     },
@@ -193,6 +211,17 @@ function query(table: string) {
               reject,
             );
           }
+        }
+        if (
+          table === "transaction_submissions" &&
+          eqCols.includes("parent_submission_id") &&
+          cloud.newerVersionReadFailures > 0
+        ) {
+          cloud.newerVersionReadFailures--;
+          return Promise.resolve({ data: null, error: { message: "fake newer version read error" } }).then(
+            resolve,
+            reject,
+          );
         }
         if (table === "submission_checklist_items" && cloud.itemFetchFailures > 0) {
           cloud.itemFetchFailures--;
@@ -279,7 +308,14 @@ function seedLocal(status = "under_review"): void {
 }
 
 function seedCloud(status: string, expectedTypeForB: string | null = null): void {
-  cloud.submissions = [{ id: SUB, status, review_notes: status === "needs_changes" ? "Please add docs" : null }];
+  cloud.submissions = [
+    {
+      id: SUB,
+      status,
+      review_notes: status === "needs_changes" ? "Please add docs" : null,
+      parent_submission_id: null,
+    },
+  ];
   cloud.submission_checklists = [
     {
       id: HEADER,
@@ -383,6 +419,7 @@ beforeEach(() => {
   cloud.checklistFetchFailures = 0;
   cloud.itemFetchFailures = 0;
   cloud.removedFetchFailures = 0;
+  cloud.newerVersionReadFailures = 0;
   cloud.signedOut = false;
   cloud.hiddenSubmissions = new Set();
   checklistFetches.length = 0;
@@ -759,7 +796,7 @@ describe("BACKLOG-3599 — owed broker checklist pulls", () => {
   it("C7: two owed ids on one transaction; one lands, the other stays owed", async () => {
     await failOut();
     // A later version is owed too (its row not visible this pass).
-    cloud.submissions.push({ id: S2, status: "needs_changes", review_notes: null });
+    cloud.submissions.push({ id: S2, status: "needs_changes", review_notes: null, parent_submission_id: null });
     cloud.hiddenSubmissions.add(S2);
     markReviewChecklistPullOwed(TXN, S2);
 
@@ -1084,7 +1121,7 @@ describe("BACKLOG-3607 — broker removals and restores reach the desktop", () =
 
   /** The submitted version's headers: REMOVED_TPL removed at review by the broker. */
   function seedCloudRemoval(status = "needs_changes"): void {
-    cloud.submissions = [{ id: SUB, status, review_notes: "Please fix" }];
+    cloud.submissions = [{ id: SUB, status, review_notes: "Please fix", parent_submission_id: null }];
     cloud.submission_checklists = [
       {
         id: "hdr-3607-removed",
@@ -1330,7 +1367,9 @@ describe("BACKLOG-3607 — broker removals and restores reach the desktop", () =
     // The agent removed REMOVED_TPL before this version; the broker restored
     // it onto this version (restore_submission_checklist_at_review).
     seedLocal();
-    cloud.submissions = [{ id: SUB, status: "needs_changes", review_notes: "Added back" }];
+    cloud.submissions = [
+      { id: SUB, status: "needs_changes", review_notes: "Added back", parent_submission_id: null },
+    ];
     cloud.submission_checklists = [
       {
         id: "hdr-3607-restored",
@@ -1385,5 +1424,94 @@ describe("BACKLOG-3607 — broker removals and restores reach the desktop", () =
       cloud.submission_checklist_items.map((row) => row.id),
     );
     expect(count("transaction_checklist_links")).toBe(0);
+  });
+  // ---- BACKLOG-3607 (SR B-1): an owed pull for version N after N+1 exists ----
+  const SUB3 = "sub-3607-v3";
+  /**
+   * What a resubmit leaves behind: a cloud row for the next version whose
+   * parent is SUB (status "resubmitted", submissionService finalStatus), and
+   * the local transaction pointing at it.
+   */
+  function resubmitLocallyAndInCloud(): void {
+    cloud.submissions.push({
+      id: SUB3,
+      status: "resubmitted",
+      review_notes: null,
+      parent_submission_id: SUB,
+    });
+    db.prepare(
+      "UPDATE transactions SET submission_id = ?, submission_status = 'resubmitted' WHERE id = ?",
+    ).run(SUB3, TXN);
+  }
+  /** Three failed passes: the status is written and the pull is owed for SUB. */
+  async function owePullForSub(): Promise<void> {
+    await submissionSyncService.manualSync();
+    await submissionSyncService.manualSync();
+    await submissionSyncService.manualSync();
+    expect(owed()).toEqual([SUB]);
+  }
+  const localTemplates = (): string[] => localChecklists().map((c) => c.template_id).sort();
+
+  it("C-B1a: an owed REMOVAL for v2 that lands after v3 exists leaves the local checklist alone", async () => {
+    await seedAgentChecklists();
+    seedCloudRemoval();
+    cloud.removedFetchFailures = 3;
+    await owePullForSub();
+    resubmitLocallyAndInCloud();
+
+    await submissionSyncService.manualSync();
+
+    expect(localTemplates()).toEqual([KEEP_TPL, REMOVED_TPL].sort());
+    expect(owed()).toBeNull();
+  });
+
+  it("C-B1b: an owed ADD for v2 (the 3599 retry) that lands after v3 exists writes nothing", async () => {
+    seedLocal();
+    seedCloud("needs_changes");
+    cloud.checklistFetchFailures = 3;
+    await owePullForSub();
+    resubmitLocallyAndInCloud();
+
+    await submissionSyncService.manualSync();
+
+    expect(localChecklists()).toEqual([]);
+    expect(owed()).toBeNull();
+  });
+
+  it("C-B1c: v3 exists in the cloud but the local pointer never moved -> still not applied", async () => {
+    await seedAgentChecklists();
+    seedCloudRemoval();
+    cloud.removedFetchFailures = 3;
+    await owePullForSub();
+    resubmitLocallyAndInCloud();
+    // The resubmit's local status write failed: the pointer is still SUB.
+    db.prepare(
+      "UPDATE transactions SET submission_id = ?, submission_status = 'needs_changes' WHERE id = ?",
+    ).run(SUB, TXN);
+
+    await submissionSyncService.manualSync();
+
+    expect(localTemplates()).toEqual([KEEP_TPL, REMOVED_TPL].sort());
+    expect(owed()).toBeNull();
+  });
+
+  it("C-B1d: the newer-version read fails -> nothing written, marker kept; next pass drops it", async () => {
+    await seedAgentChecklists();
+    seedCloudRemoval();
+    cloud.removedFetchFailures = 3;
+    await owePullForSub();
+    resubmitLocallyAndInCloud();
+    cloud.newerVersionReadFailures = 1;
+
+    await submissionSyncService.manualSync();
+
+    expect(cloud.newerVersionReadFailures).toBe(0); // the failing read was reached
+    expect(localTemplates()).toEqual([KEEP_TPL, REMOVED_TPL].sort());
+    expect(owed()).toEqual([SUB]);
+
+    await submissionSyncService.manualSync();
+
+    expect(localTemplates()).toEqual([KEEP_TPL, REMOVED_TPL].sort());
+    expect(owed()).toBeNull();
   });
 });

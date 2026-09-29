@@ -1181,6 +1181,45 @@ describe("BACKLOG-3599 — resubmit with an owed broker checklist pull", () => {
     expect(second.checklistsNotSent).toBe("not_in_plan");
   });
 
+  // BACKLOG-3607 (SR B-1): the owed pull is for v1, but v2 already exists in
+  // the cloud. v1's broker removal must not reach the local set behind v2.
+  it("C-B1e: an owed pull for v1 after v2 exists is dropped at the next resubmit; v3 still carries the checklist", async () => {
+    await seedChecklists();
+    const first = await submissionService.submitTransaction(TX);
+    expect(first.success).toBe(true);
+    const v1 = first.submissionId!;
+    fake.tables.transaction_submissions.find((s) => s.id === v1)!.status = "needs_changes";
+    run(`UPDATE transactions SET submission_status = 'needs_changes' WHERE id = ?`, TX);
+    const disclosure = fake.tables.submission_checklists.find(
+      (h) => h.submission_id === v1 && h.template_id === TPL_DISCLOSURE,
+    )!;
+    disclosure.removed_at_review_by = "broker-3607";
+    disclosure.removed_at_review_at = "2026-09-29 10:15:00+00";
+    expect(markReviewChecklistPullOwed(TX, v1)).toBe(true);
+
+    // v2: the pre-pull fails, so v2 is sent WITH the checklist and v1 stays owed.
+    fake.failReadsOf.add("submission_checklists");
+    const second = await submissionService.resubmitTransaction(TX);
+    expect(second.success).toBe(true);
+    expect(second.checklistsNotSent).toBe("brokerChecklistsNotDownloaded");
+    expect(getOwedReviewChecklistPullsFor(TX)).toEqual([v1]);
+    const v2Row = fake.tables.transaction_submissions.find((s) => s.id === second.submissionId)!;
+    expect(v2Row.parent_submission_id).toBe(v1);
+    fake.failReadsOf.delete("submission_checklists");
+    v2Row.status = "needs_changes";
+    run(`UPDATE transactions SET submission_status = 'needs_changes' WHERE id = ?`, TX);
+    const callsBefore = fake.rpcCalls.length;
+
+    const third = await submissionService.resubmitTransaction(TX);
+
+    expect(third.success).toBe(true);
+    expect("checklistsNotSent" in third).toBe(false);
+    expect(fake.rpcCalls.length).toBe(callsBefore + 1);
+    const payload = fake.rpcCalls[fake.rpcCalls.length - 1].args.p_checklists as Row[];
+    expect(payload.map((c) => c.template_id).sort()).toEqual([TPL_DISCLOSURE, TPL_PURCHASE].sort());
+    expect(getOwedReviewChecklistPullsFor(TX)).toEqual([]);
+  });
+
   describe("BACKLOG-3595 — an open window is told after the pre-pull commits", () => {
     let sent: Array<{ channel: string; rowsAtSend: number; payload: unknown }>;
     const localChecklistCount = () =>

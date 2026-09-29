@@ -90,15 +90,16 @@ jest.mock("../supabaseService", () => ({
       from: (table: string) => emulator.from(table),
       // BACKLOG-3607: a transaction with no checklist sends `[]` to
       // snapshot_submission_checklists; answered as migration 20260929120000
-      // does for an empty set. Every other rpc goes to the emulator, which
-      // refuses unmocked calls loudly.
+      // does for an empty set on a first submission (the carry returns
+      // `no_parent`: every submit in this suite is a first submission). Every
+      // other rpc goes to the emulator, which refuses unmocked calls loudly.
       rpc: (fn: string, args?: unknown) => {
         const list = (args as { p_checklists?: unknown } | undefined)?.p_checklists;
         if (fn === "snapshot_submission_checklists" && Array.isArray(list) && list.length === 0) {
           return Promise.resolve({
             data: {
               checklists: 0, items: 0, links: 0, members: 0, dropped_members: 0, dropped_links: 0,
-              carry: { status: "no_checklists" },
+              carry: { status: "no_parent" },
             },
             error: null,
           });

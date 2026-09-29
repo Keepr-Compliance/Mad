@@ -275,8 +275,11 @@ class FakeSupabase {
   /**
    * BACKLOG-3607: a transaction with no checklist sends `[]` to
    * snapshot_submission_checklists. Answered as migration 20260929120000 does
-   * for an empty set: zero counts and the carry's status. Any other call, or a
-   * non-empty set, is unmocked here and says so.
+   * for an empty set with the feature on: zero counts, and the carry's status
+   * from carry_submission_checklist_reviews - `no_parent` when the submission
+   * has no parent (a first submission), else `no_checklists` (no headers on
+   * this version). Any other call, or a non-empty set, is unmocked here and
+   * says so.
    */
   snapshotCalls: Row[] = [];
   rpc(fn: string, args: Row): Promise<{ data: unknown; error: { code: string; message: string } | null }> {
@@ -285,10 +288,12 @@ class FakeSupabase {
       throw new Error(`FakeSupabase: unmocked rpc("${fn}")`);
     }
     this.snapshotCalls.push(args);
+    const sub = this.submissions.find((s) => s.id === args.p_submission_id);
+    const carryStatus = sub?.parent_submission_id ? "no_checklists" : "no_parent";
     return Promise.resolve({
       data: {
         checklists: 0, items: 0, links: 0, members: 0, dropped_members: 0, dropped_links: 0,
-        carry: { status: "no_checklists" },
+        carry: { status: carryStatus },
       },
       error: null,
     });

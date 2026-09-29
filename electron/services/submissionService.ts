@@ -380,6 +380,9 @@ class SubmissionService {
         ) {
           notifyChecklistsChanged(transactionId);
         }
+        // BACKLOG-3607: "superseded" counts as landed - the version that pull
+        // would have fed already exists, and the agent was told when it was
+        // submitted. Only "kept" means something is still missing.
         if (outcome.status === "kept") {
           allLanded = false;
           logService.warn(

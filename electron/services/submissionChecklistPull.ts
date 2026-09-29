@@ -256,11 +256,14 @@ const FINAL_SUBMISSION_STATUSES: ReadonlySet<string> = new Set(["approved", "rej
  * What one owed-pull attempt did (BACKLOG-3599).
  *   pulled    the pull succeeded (or the transaction is gone); marker cleared
  *   final     the cloud says approved/rejected; marker cleared, nothing pulled
+ *   superseded  a newer version of the submission exists in the cloud
+ *             (BACKLOG-3607); marker cleared, nothing pulled
  *   kept      no positive proof the pull is done; marker kept for the next pass
  */
 export type OwedPullOutcome =
   | { status: "pulled"; added: string[]; removed: string[] }
   | { status: "final" }
+  | { status: "superseded" }
   | { status: "kept"; reason: string };
 
 /**
@@ -294,6 +297,26 @@ export async function retryOwedReviewChecklistPull(
     if (FINAL_SUBMISSION_STATUSES.has(row.status)) {
       clearReviewChecklistPullOwed(transactionId, submissionId);
       return { status: "final" };
+    }
+
+    // BACKLOG-3607: a version is superseded once ANY newer version names it
+    // as its parent, in any status including `uploading` - the same rule the
+    // server uses to refuse every broker action on it. Its checklist changes
+    // are frozen from then on, and the newer version was built from the local
+    // set as it stood; applying the old version's pull now would change the
+    // local set behind that newer version. Checked in the cloud, not against
+    // the local pointer: the local pointer can lag the cloud after a resubmit.
+    // A failed read keeps the marker and writes nothing.
+    const newerResponse = await withTimeout(
+      client.from("transaction_submissions").select("id").eq("parent_submission_id", submissionId),
+      "Owed submission newer version read",
+    );
+    if (newerResponse.error) {
+      return { status: "kept", reason: `newer version read failed: ${newerResponse.error.message}` };
+    }
+    if (((newerResponse.data ?? []) as unknown[]).length > 0) {
+      clearReviewChecklistPullOwed(transactionId, submissionId);
+      return { status: "superseded" };
     }
 
     const pulled = await pullReviewChecklists(client, submissionId, transactionId);
