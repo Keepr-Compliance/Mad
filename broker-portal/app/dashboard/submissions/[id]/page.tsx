@@ -26,6 +26,7 @@ import {
 import { loadVersionChain } from '@/lib/submissions/versions';
 import { readAllRows } from '@/lib/supabase/readAllRows';
 import { SubmissionVersions } from '@/components/submission/SubmissionVersions';
+import { actualCell, offeredCell, readCommission } from '@/lib/submissions/commission';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -325,6 +326,10 @@ export default async function SubmissionDetailPage({ params }: PageProps) {
   const names = isImpersonating ? null : await resolveUserNames(client, actorIds);
   const fullHistory = resolveHistoryActors(rawHistory, names);
 
+  // BACKLOG-3521: commission figures the agent entered, shown in the header
+  // (read-only). Every submission before 2026-09-29 has none.
+  const commission = readCommission(submission);
+
   return (
     <div className="max-w-7xl mx-auto space-y-6 pb-24">
       {/* Back Link */}
@@ -363,8 +368,10 @@ export default async function SubmissionDetailPage({ params }: PageProps) {
           <DetailItem label="Sale Price" value={formatCurrency(submission.sale_price)} />
           <DetailItem label="Started" value={formatDate(submission.started_at)} />
           <DetailItem label="Closed" value={formatDate(submission.closed_at)} />
-          <DetailItem label="Messages" value={submission.message_count.toString()} />
-          <DetailItem label="Attachments" value={submission.attachment_count.toString()} />
+          {/* BACKLOG-3521: commission replaces the Messages/Attachments counts,
+              which the Messages/Attachments section titles still show. */}
+          <DetailItem label="Commission Offered" value={offeredCell(commission)} />
+          <DetailItem label="Commission Actual" value={actualCell(commission)} />
           <DetailItem label="Submitted" value={formatDate(submission.created_at)} />
         </div>
 
