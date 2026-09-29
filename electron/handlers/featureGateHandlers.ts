@@ -55,7 +55,9 @@ type OrgOutcome =
  * the behaviour of three existing call sites while this item is supposed to
  * change exactly one key. The strict resolver catches for itself.
  */
-async function resolveOrgOutcome(): Promise<OrgOutcome> {
+async function resolveOrgOutcome(
+  options: { useCache?: boolean } = {}
+): Promise<OrgOutcome> {
   // Get session from the Supabase client (in-memory auth), NOT from session file
   const client = supabaseService.getClient();
   const { data: { session } } = await client.auth.getSession();
@@ -66,6 +68,16 @@ async function resolveOrgOutcome(): Promise<OrgOutcome> {
       "FeatureGateHandlers"
     );
     return { status: "no_session" };
+  }
+
+  // BACKLOG-3476: the strict reader reuses the last real answer for THIS user.
+  // The session is still read first, above, so a signed-out client answers
+  // `no_session` without ever consulting the cache.
+  if (options.useCache) {
+    const cached = featureGateService.getCachedOrgOutcome(session.user.id);
+    if (cached) {
+      return cached;
+    }
   }
 
   logService.debug(
@@ -88,7 +100,14 @@ async function resolveOrgOutcome(): Promise<OrgOutcome> {
   );
 
   if (outcome.status === "member") {
-    return { status: "member", organizationId: outcome.organization_id };
+    const member = { status: "member" as const, organizationId: outcome.organization_id };
+    if (options.useCache) {
+      featureGateService.setCachedOrgOutcome(session.user.id, member);
+    }
+    return member;
+  }
+  if (outcome.status === "none" && options.useCache) {
+    featureGateService.setCachedOrgOutcome(session.user.id, { status: "none" });
   }
   return { status: outcome.status };
 }
@@ -112,6 +131,47 @@ export async function resolveOrgId(): Promise<string | null> {
   return outcome.status === "member" ? outcome.organizationId : null;
 }
 
+/**
+ * What {@link resolveOrgIdOrRefusal} found — BACKLOG-3539. Distinguishes a
+ * confirmed "no organization" from "the lookup could not complete", which
+ * `resolveOrgId`'s `null` deliberately does not.
+ */
+export type OrgLookupOutcome =
+  | { status: "member"; organizationId: string }
+  | { status: "none" }
+  | { status: "unavailable" };
+
+/**
+ * The organization ID for the current user, keeping "no organization" apart
+ * from "the lookup failed" — BACKLOG-3539.
+ *
+ * Same resolution as {@link resolveOrgId} (uncached, so it does not read a
+ * value the strict gate cached a moment earlier — a stale org id would be
+ * worse here than one extra round trip), and every existing caller of
+ * `resolveOrgId` keeps collapsing both failures to `null` on purpose: a
+ * fail-OPEN reader has nothing to say about the difference. This is for a
+ * caller that has to report WHICH ONE happened, and must not assert "no
+ * organization" — a false statement about an account that actually has one —
+ * on the strength of a lookup that merely could not run.
+ *
+ * Deliberately does not catch a throw out of `resolveOrgOutcome` (the session
+ * read can throw). That is not the mechanism this item fixes — a throw already
+ * reaches the caller as a refusal via `wrapHandler`, unchanged by this
+ * function — and swallowing it here would be a second, unrelated behaviour
+ * change.
+ */
+export async function resolveOrgIdOrRefusal(): Promise<OrgLookupOutcome> {
+  const outcome = await resolveOrgOutcome();
+  if (outcome.status === "member") {
+    return { status: "member", organizationId: outcome.organizationId };
+  }
+  if (outcome.status === "none") {
+    return { status: "none" };
+  }
+  // no_session / error: could not find out — never a confirmed "none".
+  return { status: "unavailable" };
+}
+
 // ---------------------------------------------------------------------------
 // Strict (fail-closed) feature reads — BACKLOG-3349
 // ---------------------------------------------------------------------------
@@ -126,6 +186,7 @@ export async function resolveOrgId(): Promise<string | null> {
 const STRICT_FEATURE_KEYS: Record<StrictFeatureKey, true> = {
   email_contact_inference: true,
   desktop_hide_from_export: true,
+  transaction_checklists: true,
 };
 
 /**
@@ -165,7 +226,7 @@ export async function resolveStrictFeatureState(
   featureKey: StrictFeatureKey
 ): Promise<StrictFeatureState> {
   try {
-    const outcome = await resolveOrgOutcome();
+    const outcome = await resolveOrgOutcome({ useCache: true });
 
     if (outcome.status === "no_session" || outcome.status === "error") {
       // Could not find out whose plan applies.
@@ -305,10 +366,11 @@ export const HIDE_FROM_EXPORT_FEATURE_KEY: StrictFeatureKey =
  * Deliberately NOT routed through `featureGateService.checkFeature`, which
  * answers ALLOWED for a key that is not in the cache and for no cache at all.
  * That is right for an export — a user on a plane must still be able to export
- * — and catastrophic here: the feature row is not applied to production, so
- * every organization would read allowed. The strict reader answers `blocked`
- * for an absent key and `unknown` for a read it could not complete, and both
- * answer false here.
+ * — and catastrophic here: the feature row is live but enabled on no plan, and
+ * the permissive reader would still answer ALLOWED to any user whose cached
+ * plan lacks the key or who has no cache at all. The strict reader answers
+ * `blocked` for an absent key and `unknown` for a read it could not complete,
+ * and both answer false here.
  *
  * There is no three-state wrapper beside this one on purpose. The renderer gets
  * its three-state answer straight off `feature-gate:strict-state`, and main's
@@ -317,6 +379,53 @@ export const HIDE_FROM_EXPORT_FEATURE_KEY: StrictFeatureKey =
  */
 export async function isHideFromExportAllowed(): Promise<boolean> {
   return isStrictFeatureAllowed(HIDE_FROM_EXPORT_FEATURE_KEY);
+}
+
+// ---------------------------------------------------------------------------
+// Transaction checklists — BACKLOG-3475
+// ---------------------------------------------------------------------------
+
+/**
+ * The plan feature that governs transaction checklists.
+ *
+ * Named for the capability rather than for a surface, the same way
+ * {@link HIDE_FROM_EXPORT_FEATURE_KEY} is: the broker-side template editor and
+ * the desktop's use of those templates are one thing the plan either includes
+ * or does not, and splitting them would leave the founder two switches to keep
+ * in step.
+ */
+export const TRANSACTION_CHECKLISTS_FEATURE_KEY: StrictFeatureKey =
+  "transaction_checklists";
+
+/**
+ * May this user use transaction checklists?
+ *
+ * **The only entry point.** Every gated checklist channel calls this before any
+ * read or write; no checklist handler may name the key itself. That is not
+ * tidiness — it is what gives the control set ONE place to mutate. A handler
+ * calling `isStrictFeatureAllowed("transaction_checklists")` inline would have
+ * to be found by grep to be mutated, and a handler that forgot the call
+ * entirely would look identical to one that never needed it.
+ *
+ * Deliberately NOT `featureGateService.checkFeature`, for the reason spelled
+ * out above {@link isHideFromExportAllowed}. The `transaction_checklists` row is
+ * live in production and enabled only for some plans (BACKLOG-3473); the
+ * permissive reader would still answer ALLOWED to any user whose cached plan
+ * lacks the key or who has no cache at all, on any plan. The strict
+ * reader answers `blocked` for a key the plan does not carry and `unknown` for
+ * a read it could not finish; both are false here.
+ *
+ * Three of the nine checklist channels do NOT call this, on purpose. For
+ * `checklists:get` and `checklists:remove` the reason is the unhide rule
+ * recorded in `electron/types/featureGate.ts`: they are a user reading and
+ * clearing rows on his own transaction. A user whose plan later loses the
+ * feature must still be able to see what is on his transaction and take it off
+ * again, or the data is stranded where he can neither use it nor be rid of it.
+ * The third is `checklists:invalidate-templates`, which only discards cached
+ * data and can give no one access to anything.
+ */
+export async function isChecklistsAllowed(): Promise<boolean> {
+  return isStrictFeatureAllowed(TRANSACTION_CHECKLISTS_FEATURE_KEY);
 }
 
 /**

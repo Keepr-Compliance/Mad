@@ -1,0 +1,10 @@
+# bash run.sh baseline, recorded at 10012aaed (clean tree), 2026-09-27T17:12:55Z
+c00-one-insert-rule                            RED   CONTROL FAILED: C00 WITH CHECK text, got ((submitted_by = ( SELECT auth.uid() AS uid)) AND (organization_id IN ( SELECT om.organization_id
+c01-allowed-shapes                             GREEN 8 assertions
+c02-review-statuses-refused                    RED   CONTROL FAILED: C02 status 'under_review': expected RLS, got rows:1
+c03-reviewer-fields-refused                    RED   CONTROL FAILED: C03 reviewed_by: expected RLS, got rows:1
+c04-commission-columns-unconstrained           RED   CONTROL FAILED: C04 same plus reviewed_by: expected RLS, got rows:1
+c05-status-history-empty                       GREEN 3 assertions
+c06-existing-conditions-kept                   GREEN 4 assertions
+c07-service-role-unaffected                    GREEN 1 assertions
+c08-apply-twice                                GREEN 2 assertions

@@ -70,8 +70,16 @@ let emulator: Emulator;
 
 // The real statement modules read their handle through `ensureDb()`; point it
 // at the test database so the SHIPPED SQL text is what runs.
+// BACKLOG-3600: the checklist snapshot reads through dbAll/dbGet (not
+// ensureDb). With only ensureDb here that read threw and the submit used to
+// swallow it; a failed local checklist read now fails the submit, so the
+// helpers are provided — the transaction simply has no checklists.
 jest.mock("../db/core/dbConnection", () => ({
   ensureDb: () => db,
+  dbGet: (sql: string, params: unknown[] = []) => db.prepare(sql).get(...(params as never[])),
+  dbAll: (sql: string, params: unknown[] = []) => db.prepare(sql).all(...(params as never[])),
+  dbRun: (sql: string, params: unknown[] = []) => db.prepare(sql).run(...(params as never[])),
+  dbTransaction: (fn: () => unknown) => db.transaction(fn)(),
 }));
 
 const mockGetAuthSession = jest.fn();
@@ -80,7 +88,24 @@ jest.mock("../supabaseService", () => ({
   default: {
     getClient: () => ({
       from: (table: string) => emulator.from(table),
-      rpc: (fn: string, args?: unknown) => emulator.rpc(fn, args),
+      // BACKLOG-3607: a transaction with no checklist sends `[]` to
+      // snapshot_submission_checklists; answered as migration 20260929120000
+      // does for an empty set on a first submission (the carry returns
+      // `no_parent`: every submit in this suite is a first submission). Every
+      // other rpc goes to the emulator, which refuses unmocked calls loudly.
+      rpc: (fn: string, args?: unknown) => {
+        const list = (args as { p_checklists?: unknown } | undefined)?.p_checklists;
+        if (fn === "snapshot_submission_checklists" && Array.isArray(list) && list.length === 0) {
+          return Promise.resolve({
+            data: {
+              checklists: 0, items: 0, links: 0, members: 0, dropped_members: 0, dropped_links: 0,
+              carry: { status: "no_parent" },
+            },
+            error: null,
+          });
+        }
+        return emulator.rpc(fn, args);
+      },
     }),
     getAuthSession: (...args: unknown[]) => mockGetAuthSession(...args),
   },

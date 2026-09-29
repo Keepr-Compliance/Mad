@@ -13,6 +13,8 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { AlertTriangle, Check, Loader2, X } from 'lucide-react';
 import { Button } from '@keepr/design-system';
+import { REVIEW_MESSAGES, updatedNoRows } from '@/lib/submissions/reviewMessages';
+import { DECISION_OPEN_STATUSES, isOpenForDecision } from '@/lib/submissions/checklistModel';
 
 interface ReviewActionsProps {
   submission: {
@@ -25,11 +27,33 @@ interface ReviewActionsProps {
    *  The parent page already hides this component when impersonating,
    *  but this prop provides a code-level guard inside the write handler. */
   isImpersonating?: boolean;
+  /**
+   * BACKLOG-3477: false for a reviewer who may tick but not decide (it_admin;
+   * lib/submissions/reviewAccess.ts). The whole bar is hidden for them.
+   */
+  canDecide?: boolean;
+  /**
+   * BACKLOG-3477: show the hint beside Request Changes. On when the
+   * Checklists area is shown for this submission.
+   */
+  showChecklistHint?: boolean;
 }
+
+/** Copy owned by the coordinator (pm_comments dcc91c87, ruling 2). */
+export const REQUEST_CHANGES_HINT = 'Add any missing checklist before requesting changes';
+
+/** BACKLOG-3592: shown in place of the decision buttons on a needs_changes version. */
+export const WAITING_FOR_RESUBMIT = 'Changes requested — waiting for the agent to resubmit.';
 
 type ReviewAction = 'approve' | 'reject' | 'changes' | null;
 
-export function ReviewActions({ submission, disabled, isImpersonating }: ReviewActionsProps) {
+export function ReviewActions({
+  submission,
+  disabled,
+  isImpersonating,
+  canDecide = true,
+  showChecklistHint = false,
+}: ReviewActionsProps) {
   const [action, setAction] = useState<ReviewAction>(null);
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
@@ -104,7 +128,12 @@ export function ReviewActions({ submission, disabled, isImpersonating }: ReviewA
           review_notes: notes || null,
         })
         .eq('id', submission.id)
-        .select();
+        // BACKLOG-3592: the database refuses a decision on a version that is
+        // no longer open (already sent back, approved or rejected) — a stale
+        // tab or a repeat click matches zero rows instead of overwriting the
+        // earlier review. Zero rows is reported below as a failure.
+        .in('status', [...DECISION_OPEN_STATUSES])
+        .select('id');
 
       if (updateError) {
         console.error('Supabase update error:', updateError);
@@ -113,6 +142,13 @@ export function ReviewActions({ submission, disabled, isImpersonating }: ReviewA
           throw new Error('Permission denied. You may not have broker access for this organization.');
         }
         throw updateError;
+      }
+
+      // BACKLOG-3477: RLS refuses an UPDATE by matching zero rows, with no
+      // error. That is a failure, never a success.
+      if (updatedNoRows(updateData)) {
+        console.error('Review update matched no rows', { submissionId: submission.id });
+        throw new Error(REVIEW_MESSAGES.no_rows);
       }
 
       // Log success for debugging (dev only)
@@ -153,6 +189,9 @@ export function ReviewActions({ submission, disabled, isImpersonating }: ReviewA
     setShowConfirm(false);
   };
 
+  // BACKLOG-3477: a tick-only reviewer (it_admin) gets no review decisions.
+  if (!canDecide) return null;
+
   // Terminal states - review is complete (show minimal floating bar)
   if (disabled || submission.status === 'approved' || submission.status === 'rejected') {
     return (
@@ -182,6 +221,29 @@ export function ReviewActions({ submission, disabled, isImpersonating }: ReviewA
     );
   }
 
+  // BACKLOG-3592: sent back to the agent — no decision is open until they
+  // resubmit, so no buttons and no hint.
+  if (submission.status === 'needs_changes') {
+    return (
+      <div className="fixed bottom-0 left-[var(--sidebar-w,0px)] right-0 z-30">
+        <div className="bg-white border-t border-gray-200 shadow-lg">
+          <div className="max-w-6xl mx-auto px-4 py-3">
+            <div className="flex items-center justify-center gap-2">
+              <div className="w-3 h-3 rounded-full bg-amber-500" />
+              <span className="text-sm text-gray-600" data-testid="waiting-for-resubmit">
+                {WAITING_FOR_RESUBMIT}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Any other status that is not open for a decision (e.g. uploading): the
+  // decision write would be refused, so offer nothing.
+  if (!isOpenForDecision(submission.status)) return null;
+
   // Rejection confirmation overlay
   if (showConfirm) {
     return (
@@ -207,6 +269,13 @@ export function ReviewActions({ submission, disabled, isImpersonating }: ReviewA
                 <p className="text-xs text-gray-500 mb-1">Rejection reason:</p>
                 <p className="text-sm text-gray-700">{notes}</p>
               </div>
+
+              {/* BACKLOG-3592: a refused rejection must be visible here too. */}
+              {error && (
+                <div className="bg-red-50 border border-red-200 rounded-md px-3 py-2 mb-4">
+                  <p className="text-sm text-red-700">{error}</p>
+                </div>
+              )}
 
               <div className="flex gap-2">
                 <Button
@@ -305,6 +374,11 @@ export function ReviewActions({ submission, disabled, isImpersonating }: ReviewA
                   <AlertTriangle className="w-4 h-4" />
                   Request Changes
                 </Button>
+                {showChecklistHint && (
+                  <span className="text-xs text-gray-500" data-testid="request-changes-hint">
+                    {REQUEST_CHANGES_HINT}
+                  </span>
+                )}
                 <Button variant="danger" onClick={() => setAction('reject')}>
                   <X className="w-4 h-4" />
                   Reject

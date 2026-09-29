@@ -78,6 +78,7 @@ if (typeof window !== 'undefined') {
       bulkUpdateStatus: jest.fn(),
       batchUpdateContacts: jest.fn(),
       onSubmissionStatusChanged: jest.fn().mockReturnValue(() => {}),
+      onChecklistsChanged: jest.fn().mockReturnValue(() => {}),
       getEarliestCommunicationDate: jest.fn().mockResolvedValue({ success: true, date: null }),
       // BACKLOG-322: unified transaction Attachments tab query + on-demand download.
       // Default empty so the tab/hook loads cleanly in every test environment.
@@ -356,6 +357,48 @@ if (typeof window !== 'undefined') {
       // keys they answer for are.
       strictState: jest.fn().mockResolvedValue('blocked'),
       invalidateCache: jest.fn().mockResolvedValue(undefined),
+    },
+    // BACKLOG-3475: transaction checklists. Every default is the REFUSED /
+    // EMPTY answer, for the same reason `strictState` defaults to 'blocked':
+    // the channels are gated by a fail-closed plan check, so a test that
+    // forgets to override must not be handed a working feature. Note
+    // `listTemplates` omits `templates` entirely rather than returning `[]` —
+    // absent means "could not read", `[]` means "your brokerage has none", and
+    // a default that blurred them would let a component ship with the two
+    // confused and still pass.
+    checklists: {
+      listTemplates: jest.fn().mockResolvedValue({
+        success: false,
+        error: 'Transaction checklists are not available.',
+      }),
+      selectTemplate: jest.fn().mockResolvedValue({
+        success: false,
+        error: 'Transaction checklists are not available.',
+      }),
+      // BACKLOG-3476: every checklist on the transaction; none by default.
+      get: jest.fn().mockResolvedValue({
+        success: true,
+        checklists: { checklists: [], requiredDone: 0, requiredTotal: 0 },
+      }),
+      setItemChecked: jest.fn().mockResolvedValue({
+        success: false,
+        error: 'Transaction checklists are not available.',
+      }),
+      setItemNote: jest.fn().mockResolvedValue({
+        success: false,
+        error: 'Transaction checklists are not available.',
+      }),
+      addLink: jest.fn().mockResolvedValue({
+        success: false,
+        error: 'Transaction checklists are not available.',
+      }),
+      removeLink: jest.fn().mockResolvedValue({
+        success: false,
+        error: 'Transaction checklists are not available.',
+      }),
+      // Never gated in the main process, so the default is the working answer.
+      remove: jest.fn().mockResolvedValue({ success: true, changed: false }),
+      invalidateTemplates: jest.fn().mockResolvedValue({ success: true }),
     },
     // BACKLOG-2006a: per-transaction paywall entitlement. Default is fail-closed
     // (LOCKED) so any test that forgets to override cannot accidentally reveal content.

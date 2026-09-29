@@ -1035,9 +1035,11 @@ export function EmailSettings({
           <p className="text-sm text-gray-600 mb-6">
             This re-downloads every email in your cache window from scratch and
             will <strong>unlink your emails from their transactions</strong> —
-            you&rsquo;ll need to re-attach them afterward. Any review decisions on
-            those emails are lost, and attachments are re-downloaded when you next
-            open or export them. This can take a while.
+            you&rsquo;ll need to re-attach them afterward. Links from checklist
+            items to those emails and their attachments are removed too. Any
+            review decisions on those emails are lost, and attachments are
+            re-downloaded when you next open or export them. This can take a
+            while.
           </p>
           <div className="flex items-center gap-3 justify-end">
             <button

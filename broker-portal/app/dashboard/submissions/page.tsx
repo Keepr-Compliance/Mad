@@ -5,9 +5,13 @@ import { formatCurrency, formatRelativeTime, getStatusColor, formatStatus } from
 import { SubmissionListClient } from '@/components/submission/SubmissionListClient';
 import { EmptySubmissions } from '@/components/ui/EmptyState';
 import { SubmissionPagination } from '@/components/submission/SubmissionPagination';
+import { SubmissionRow } from '@/components/submission/SubmissionRow';
 import { getDataClient, getTargetOrganizationId } from '@/lib/impersonation-guards';
 import { getOrgFeatures, isFeatureEnabled } from '@/lib/feature-gate';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { redirect } from 'next/navigation';
+import { requireFullPortalAccess } from '@/lib/auth/portalAccess';
+import { LINK_COLUMNS, loadDealPage } from '@/lib/submissions/dealList';
 
 interface Submission {
   id: string;
@@ -89,69 +93,56 @@ async function getAllowedOrgIds(
   return featureResults.filter((r) => r.hasAccess).map((r) => r.id);
 }
 
+/**
+ * BACKLOG-3597: one row per deal — the latest version of each resubmission
+ * chain (lib/submissions/dealList.ts). Count, status filter and pagination all
+ * apply to deals.
+ */
 async function getSubmissions(
   client: SupabaseClient,
   status?: string,
   page: number = 1,
   orgId?: string,
   allowedOrgIds?: string[] | null,
-): Promise<{ submissions: Submission[]; totalCount: number }> {
-  const from = (page - 1) * PAGE_SIZE;
-  const to = from + PAGE_SIZE - 1;
-
-  // Data query with pagination range
-  let query = client
-    .from('transaction_submissions')
-    .select('*')
-    .neq('status', 'uploading')  // Hide incomplete uploads (two-phase commit)
-    .order('created_at', { ascending: false })
-    .range(from, to);
-
-  // Count query (separate for total)
-  let countQuery = client
-    .from('transaction_submissions')
-    .select('*', { count: 'exact', head: true })
-    .neq('status', 'uploading');
-
-  // During impersonation, filter by organization
-  if (orgId) {
-    query = query.eq('organization_id', orgId);
-    countQuery = countQuery.eq('organization_id', orgId);
-  }
+): Promise<{ submissions: Submission[]; totalCount: number; page: number; totalPages: number }> {
+  const restrictToOrgs = allowedOrgIds !== null && allowedOrgIds !== undefined && !orgId;
 
   // TASK-2158: Filter to only orgs with broker_portal_access enabled
-  if (allowedOrgIds !== null && allowedOrgIds !== undefined && !orgId) {
-    if (allowedOrgIds.length === 0) {
-      // No orgs have access — return empty immediately
-      return { submissions: [], totalCount: 0 };
-    }
-    query = query.in('organization_id', allowedOrgIds);
-    countQuery = countQuery.in('organization_id', allowedOrgIds);
+  if (restrictToOrgs && allowedOrgIds.length === 0) {
+    // No orgs have access — return empty immediately
+    return { submissions: [], totalCount: 0, page: 1, totalPages: 1 };
   }
 
-  // Apply status filter if provided and not 'all'
-  if (status && status !== 'all') {
-    query = query.eq('status', status);
-    countQuery = countQuery.eq('status', status);
+  /** The list's scope, identical for both reads. */
+  function scoped(columns: string) {
+    let query = client
+      .from('transaction_submissions')
+      .select(columns)
+      .neq('status', 'uploading'); // Hide incomplete uploads (two-phase commit)
+    // During impersonation, filter by organization
+    if (orgId) query = query.eq('organization_id', orgId);
+    if (restrictToOrgs) query = query.in('organization_id', allowedOrgIds);
+    return query;
   }
 
-  const [{ data, error }, { count, error: countError }] = await Promise.all([
-    query,
-    countQuery,
-  ]);
+  const result = await loadDealPage<Submission>({
+    readLinks: (from, to) => scoped(LINK_COLUMNS).order('id').range(from, to),
+    readRows: (ids) => scoped('*').in('id', ids),
+    status: status && status !== 'all' ? status : null,
+    page,
+    pageSize: PAGE_SIZE,
+  });
 
-  if (error) {
-    console.error('Error fetching submissions:', error);
-    return { submissions: [], totalCount: 0 };
-  }
-
-  if (countError) {
-    console.error('Error fetching submission count:', countError);
+  if (result.error) {
+    console.error('Error fetching submissions:', result.error);
+    return { submissions: [], totalCount: 0, page: 1, totalPages: 1 };
   }
 
   return {
-    submissions: data || [],
-    totalCount: count || 0,
+    submissions: result.rows,
+    totalCount: result.total,
+    page: result.page,
+    totalPages: result.totalPages,
   };
 }
 
@@ -170,8 +161,19 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
   const { status, page: pageParam } = await searchParams;
   const currentPage = Math.max(1, Number(pageParam) || 1);
   const currentStatus = status || 'all';
+  // BACKLOG-3597: the "submitted" filter now covers submitted AND resubmitted
+  // deals (STATUSES labels it "Pending"), so the caption uses that tab label
+  // instead of formatStatus, which still reports a single submission's own
+  // "Submitted" status elsewhere on this page.
+  const currentStatusLabel = STATUSES.find((s) => s.value === currentStatus)?.label ?? formatStatus(currentStatus);
 
-  const { client, organizationId } = await getDataClient();
+  const { client, impersonation, organizationId } = await getDataClient();
+
+  // BACKLOG-3080: brokerage submissions are for the full portal only. Refused
+  // before any submission is read. A support session keeps its read-only view.
+  if (!impersonation && !(await requireFullPortalAccess())) {
+    redirect('/dashboard');
+  }
 
   // BACKLOG-908: Use deduped helper for org ID resolution
   const orgId = getTargetOrganizationId(organizationId);
@@ -179,18 +181,13 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
   // TASK-2158: Resolve which orgs have broker_portal_access enabled
   const allowedOrgIds = await getAllowedOrgIds(client, orgId);
 
-  const { submissions, totalCount } = await getSubmissions(client, status, currentPage, orgId, allowedOrgIds);
-  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
-
-  // If requested page exceeds total pages (and there are results), clamp to last page
-  const effectivePage = totalPages > 0 && currentPage > totalPages ? totalPages : currentPage;
-
-  // Re-fetch if we clamped the page (edge case: items deleted while on last page)
-  let displaySubmissions = submissions;
-  if (effectivePage !== currentPage && totalCount > 0) {
-    const refetch = await getSubmissions(client, status, effectivePage, orgId, allowedOrgIds);
-    displaySubmissions = refetch.submissions;
-  }
+  // A requested page past the end shows the last page (clamped in getSubmissions).
+  const {
+    submissions: displaySubmissions,
+    totalCount,
+    page: effectivePage,
+    totalPages,
+  } = await getSubmissions(client, status, currentPage, orgId, allowedOrgIds);
 
   const baseUrl = buildBaseUrl(currentStatus);
 
@@ -203,7 +200,7 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
         subtitle={
           <>
             {totalCount} submission{totalCount !== 1 ? 's' : ''}
-            {currentStatus !== 'all' && ` with status "${formatStatus(currentStatus)}"`}
+            {currentStatus !== 'all' && ` with status "${currentStatusLabel}"`}
           </>
         }
       />
@@ -265,7 +262,11 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {displaySubmissions.map((submission) => (
-                  <tr key={submission.id} className="hover:bg-gray-50 transition-colors cursor-pointer group">
+                  <SubmissionRow
+                    key={submission.id}
+                    href={`/dashboard/submissions/${submission.id}`}
+                    className="hover:bg-gray-50 transition-colors cursor-pointer group"
+                  >
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm font-medium text-gray-900">
                         {submission.property_address}
@@ -310,7 +311,7 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
                         <ChevronRight className="h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity" />
                       </Link>
                     </td>
-                  </tr>
+                  </SubmissionRow>
                 ))}
               </tbody>
             </table>

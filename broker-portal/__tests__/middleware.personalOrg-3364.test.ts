@@ -138,9 +138,11 @@ describe('against a database that has not had the migration applied', () => {
     expect(await verdict()).toBeNull();
   });
 
-  it('still bounces a brokerage agent to /download', async () => {
+  it('still refuses a brokerage agent a path above the floor', async () => {
+    // BACKLOG-3080 (fb4699c8, 893f1660 / 181aaa59): an agent is admitted to
+    // /dashboard now, so the pre-migration witness moves to a refused path.
     given([brokerageMembership('agent', 'pre')], false);
-    expect(await verdict()).toBe(`${ORIGIN}/download`);
+    expect(await verdict('/dashboard/users')).toBe(`${ORIGIN}/dashboard`);
   });
 
   it('never names the column in the query it sends', async () => {
@@ -185,7 +187,9 @@ describe('against a database that has not had the migration applied', () => {
 // ---------------------------------------------------------------------------
 
 describe('a solo user holding only a personal organization', () => {
-  it('is admitted to /dashboard, exactly as a user with no membership row is', async () => {
+  it('is admitted to /dashboard; a user with no membership row is signed out', async () => {
+    // BACKLOG-3080 (D1, 4c4eb90e; SR R9): the owner gets the floor, and a
+    // user with no membership at all has this browser's session ended.
     given([personalMembership()]);
     const withPersonalRow = await verdict();
 
@@ -193,21 +197,27 @@ describe('a solo user holding only a personal organization', () => {
     const withNoRowAtAll = await verdict();
 
     expect(withPersonalRow).toBeNull();
-    expect(withPersonalRow).toBe(withNoRowAtAll);
+    expect(withNoRowAtAll).toBe(`${ORIGIN}/auth/logout?error=not_authorized`);
   });
 
-  it('is admitted on every protected path, not just the dashboard root', async () => {
-    for (const path of ['/dashboard', '/dashboard/account', '/dashboard/settings']) {
+  it('is admitted on the floor paths and refused org settings', async () => {
+    // BACKLOG-3080 (893f1660 / 181aaa59): settings is above the floor.
+    for (const path of ['/dashboard', '/dashboard/account']) {
       given([personalMembership()]);
       expect(await verdict(path)).toBeNull();
     }
+    given([personalMembership()]);
+    expect(await verdict('/dashboard/settings')).toBe(`${ORIGIN}/dashboard`);
   });
 });
 
 describe('brokerage membership still decides the route', () => {
-  it('bounces a brokerage agent to /download', async () => {
+  it('gives a brokerage agent the floor: /dashboard admitted, /dashboard/users refused', async () => {
+    // BACKLOG-3080 (fb4699c8, 893f1660 / 181aaa59).
     given([brokerageMembership('agent')]);
-    expect(await verdict()).toBe(`${ORIGIN}/download`);
+    expect(await verdict()).toBeNull();
+    given([brokerageMembership('agent')]);
+    expect(await verdict('/dashboard/users')).toBe(`${ORIGIN}/dashboard`);
   });
 
   it.each(['broker', 'admin', 'it_admin'])('admits a brokerage %s', async (role) => {
@@ -224,9 +234,10 @@ describe('brokerage membership still decides the route', () => {
     expect(await verdict()).toBeNull();
   });
 
-  it('still bounces when the only brokerage row is an agent and a personal row sorts first', async () => {
+  it('still refuses when the only brokerage row is an agent and a personal row sorts first', async () => {
+    // BACKLOG-3080: refusal is now on a path above the floor.
     given([personalMembership(), brokerageMembership('agent')]);
-    expect(await verdict()).toBe(`${ORIGIN}/download`);
+    expect(await verdict('/dashboard/users')).toBe(`${ORIGIN}/dashboard`);
   });
 
   it('resolves two brokerage rows in the order the query returned them, not arbitrarily', async () => {
@@ -234,13 +245,14 @@ describe('brokerage membership still decides the route', () => {
     // rows are reachable. `.limit(1).single()` used to make this an error
     // result — read as "no membership" — which admitted the user whatever their
     // roles were.
+    // BACKLOG-3080: decided on a path above the floor.
     const first = brokerageMembership('agent');
     const second = { ...brokerageMembership('broker'), id: 'second-row' };
     given([first, second]);
-    expect(await verdict()).toBe(`${ORIGIN}/download`);
+    expect(await verdict('/dashboard/users')).toBe(`${ORIGIN}/dashboard`);
 
     given([second, first]);
-    expect(await verdict()).toBeNull();
+    expect(await verdict('/dashboard/users')).toBeNull();
   });
 });
 

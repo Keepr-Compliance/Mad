@@ -21,6 +21,7 @@ import { getDataClient } from '@/lib/impersonation-guards';
 // PageHeader is Tier-2 (no @keepr/ui equivalent yet).
 import { PageHeader } from '@keepr/design-system';
 import { AlertBanner } from '@keepr/ui';
+import { getPortalAccess } from '@/lib/auth/portalAccess';
 
 interface AccessCheckResult {
   allowed: true;
@@ -37,29 +38,22 @@ interface AccessDeniedResult {
 type AccessCheck = AccessCheckResult | AccessDeniedResult;
 
 async function checkUserAccess(): Promise<AccessCheck> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) return { allowed: false, reason: 'unauthenticated' };
-
-  const { data: membership } = await supabase
-    .from('organization_members')
-    .select('role, organization_id')
-    .eq('user_id', user.id)
-    .maybeSingle();
+  // BACKLOG-3080: the shared portal classifier, so this page reads the same
+  // role and organization as middleware and the layout.
+  const portal = await getPortalAccess();
+  if (!portal) return { allowed: false, reason: 'unauthenticated' };
+  const { access, user } = portal;
 
   // Only admin and it_admin can access users management
   const allowedRoles: Role[] = ['admin', 'it_admin'];
-  if (!membership || !allowedRoles.includes(membership.role as Role)) {
+  if (access.kind !== 'full' || !allowedRoles.includes(access.role as Role)) {
     return { allowed: false, reason: 'unauthorized' };
   }
 
   return {
     allowed: true,
-    organizationId: membership.organization_id,
-    role: membership.role as Role,
+    organizationId: access.organizationId,
+    role: access.role as Role,
     userId: user.id,
   };
 }

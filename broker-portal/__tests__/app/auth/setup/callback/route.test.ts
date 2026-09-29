@@ -253,7 +253,9 @@ describe('/auth/setup/callback — hop 1: the callback names one destination', (
 });
 
 describe('hop 2: middleware is the only role → destination authority', () => {
-  it('bounces a provisioned agent from /dashboard to /download', async () => {
+  it('gives a provisioned agent the floor: /dashboard admitted, an admin path refused', async () => {
+    // BACKLOG-3080 (rulings fb4699c8, 893f1660 / 181aaa59): an agent gets the
+    // portal floor, not /download. The refusal moves to paths above the floor.
     signedInAzureUser();
     noExistingMembership();
     provisionedAs('agent');
@@ -262,8 +264,8 @@ describe('hop 2: middleware is the only role → destination authority', () => {
     expect(fromCallback).toBe(`${ORIGIN}/dashboard`);
 
     // Real middleware.ts, real NextRequest, same membership role.
-    const final = await middlewareVerdict('/dashboard', 'agent');
-    expect(final).toBe(`${ORIGIN}/download`);
+    expect(await middlewareVerdict('/dashboard', 'agent')).toBeNull();
+    expect(await middlewareVerdict('/dashboard/users', 'agent')).toBe(`${ORIGIN}/dashboard`);
   });
 
   it('admits a provisioned broker to /dashboard', async () => {
