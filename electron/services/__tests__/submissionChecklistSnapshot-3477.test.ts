@@ -1241,6 +1241,41 @@ describe("BACKLOG-3599 — resubmit with an owed broker checklist pull", () => {
     expect(getOwedReviewChecklistPullsFor(TX)).toEqual([]);
   });
 
+  it("C-R1a (via resubmit): a sync-pass pull during the resubmit writes nothing and stays owed", async () => {
+    const v1 = await submittedWithOwedPull();
+    fake.failReadsOf.add("submission_checklists");
+    type Internal = { submitTransactionInternal: (...args: unknown[]) => Promise<unknown> };
+    const internal = submissionService as unknown as Internal;
+    const original = internal.submitTransactionInternal.bind(submissionService);
+    let during: unknown = null;
+    const spy = jest
+      .spyOn(internal, "submitTransactionInternal")
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        // The pre-pull has failed; the network is back while the resubmit
+        // runs, and the periodic sync pass retries the owed pull.
+        fake.failReadsOf.delete("submission_checklists");
+        during = await retryOwedReviewChecklistPull(supabaseService.getClient(), TX, v1);
+        return original(...args);
+      });
+    let second: Awaited<ReturnType<typeof submissionService.resubmitTransaction>>;
+    try {
+      second = await submissionService.resubmitTransaction(TX);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(during).toEqual({ status: "kept", reason: `resubmit in progress for ${TX}; nothing written` });
+    expect(second.success).toBe(true);
+    const payload = fake.rpcCalls[fake.rpcCalls.length - 1].args.p_checklists as Row[];
+    expect(payload.map((c) => c.template_id)).not.toContain(TPL_BROKER);
+    const local = db
+      .prepare("SELECT template_id FROM transaction_checklists WHERE transaction_id = ?")
+      .all(TX) as Array<{ template_id: string }>;
+    expect(local.length).toBeGreaterThan(0);
+    expect(local.map((c) => c.template_id)).not.toContain(TPL_BROKER);
+    expect(getOwedReviewChecklistPullsFor(TX)).toEqual([v1]);
+  });
+
   it("C-R1c: a resubmit that THROWS releases the guard -> the next sync-pass pull lands", async () => {
     const v1 = await submittedWithOwedPull();
     fake.failReadsOf.add("submission_checklists");
