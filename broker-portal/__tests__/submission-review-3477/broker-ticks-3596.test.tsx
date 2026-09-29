@@ -246,13 +246,14 @@ describe('loadSubmissionChecklists with and without the 3596 columns', () => {
         return {
           select(columns: string) {
             if (table === 'submission_checklist_items') itemSelects.push(columns);
-            return {
-              eq: async () => {
-                if (table === 'submission_checklists') return { data: [HEADER], error: null };
-                if (table === 'submission_checklist_items') return itemsAnswer(columns);
-                return { data: [], error: null };
-              },
+            const answer = async () => {
+              if (table === 'submission_checklists') return { data: [HEADER], error: null };
+              if (table === 'submission_checklist_items') return itemsAnswer(columns);
+              return { data: [], error: null };
             };
+            // The loader reads in blocks: .eq().order().range() (BACKLOG-3607 N-3).
+            const q = { order: () => q, range: answer };
+            return { eq: () => q };
           },
         };
       },

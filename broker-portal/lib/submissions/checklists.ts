@@ -15,6 +15,7 @@ import type {
   ChecklistSectionView,
   TemplateOption,
 } from './checklistModel';
+import { readAllRows } from '@/lib/supabase/readAllRows';
 
 interface HeaderRow {
   id: string;
@@ -23,6 +24,10 @@ interface HeaderRow {
   sort_order: number;
   added_at_review_by: string | null;
   added_at_review_at: string | null;
+  /** BACKLOG-3607 columns; absent until that migration is applied. */
+  removed_at_review_by?: string | null;
+  removed_at_review_at?: string | null;
+  restored_from_checklist_id?: string | null;
 }
 
 interface ItemRow {
@@ -40,6 +45,8 @@ interface ItemRow {
   /** BACKLOG-3596 columns; absent until that migration is applied. */
   cleared_reviewer_id?: string | null;
   cleared_at?: string | null;
+  /** BACKLOG-3607 column; absent until that migration is applied. */
+  restored_from_item_id?: string | null;
 }
 
 interface LinkRow {
@@ -106,6 +113,8 @@ export function assembleSections(
       clearedReviewerId: i.cleared_reviewer_id ?? null,
       clearedAt: i.cleared_at ?? null,
       links: linksByItem.get(i.id) ?? [],
+      // BACKLOG-3607: only when the column was read.
+      ...(i.restored_from_item_id !== undefined ? { restoredFromItemId: i.restored_from_item_id } : {}),
     });
     itemsByHeader.set(i.submission_checklist_id, list);
   }
@@ -119,6 +128,14 @@ export function assembleSections(
       addedAtReviewBy: h.added_at_review_by,
       addedAtReviewAt: h.added_at_review_at,
       items: itemsByHeader.get(h.id) ?? [],
+      // BACKLOG-3607: only when the columns were read.
+      ...(h.removed_at_review_by !== undefined
+        ? {
+            removedAtReviewBy: h.removed_at_review_by,
+            removedAtReviewAt: h.removed_at_review_at ?? null,
+            restoredFromChecklistId: h.restored_from_checklist_id ?? null,
+          }
+        : {}),
     }));
 }
 
@@ -132,24 +149,72 @@ const CLEARED_COLUMNS = ', cleared_reviewer_id, cleared_at';
  * (transcribed 2026-09-28 from the live API, before the 3596 migration):
  * {"code":"42703","message":"column submission_checklist_items.cleared_reviewer_id does not exist"}
  */
-function isMissingClearedColumn(error: { code?: string; message?: string } | null): boolean {
+type PgError = { code?: string; message?: string } | null;
+
+function isMissingClearedColumn(raw: unknown): boolean {
+  const error = raw as PgError;
   return !!error && error.code === '42703' && /cleared_(reviewer_id|at)/.test(error.message ?? '');
 }
 
+/** BACKLOG-3607: read when that migration is live. */
+const RESTORED_ITEM_COLUMNS = ', restored_from_item_id';
+const HEADER_COLUMNS = 'id, template_id, template_name, sort_order, added_at_review_by, added_at_review_at';
+const REMOVED_HEADER_COLUMNS = ', removed_at_review_by, removed_at_review_at, restored_from_checklist_id';
+
+/** The same PostgREST 42703 answer, for a 3607 column (named in the message). */
+function isMissing3607Column(raw: unknown): boolean {
+  const error = raw as PgError;
+  return (
+    !!error &&
+    error.code === '42703' &&
+    /removed_at_review_(by|at)|restored_from_(checklist|item)_id/.test(error.message ?? '')
+  );
+}
+
 /**
- * The items, with the 3596 cleared columns when the database has them. The
- * portal ships before the 3596 migration is applied (release order, SR
- * condition C-11), so a missing column falls back to the columns every
- * version has: no "Changed since you checked" marker, everything else as
- * before. Any other error is returned as is.
+ * The items, with the 3596 cleared columns and the 3607 restored column when
+ * the database has them. The portal ships before those migrations are applied
+ * (release order, SR condition C-11), so a missing column falls back to the
+ * columns the database has: no "Changed since you checked" marker without
+ * 3596, no "restored" label without 3607, everything else as before. Any
+ * other error is returned as is.
  */
 async function loadItems(client: SupabaseClient, submissionId: string) {
-  const full = await client
-    .from('submission_checklist_items')
-    .select(ITEM_COLUMNS + CLEARED_COLUMNS)
-    .eq('submission_id', submissionId);
-  if (!isMissingClearedColumn(full.error)) return full;
-  return client.from('submission_checklist_items').select(ITEM_COLUMNS).eq('submission_id', submissionId);
+  const items = (columns: string) => readSubmissionRows(client, 'submission_checklist_items', columns, submissionId, ['id']);
+  const full = await items(ITEM_COLUMNS + CLEARED_COLUMNS + RESTORED_ITEM_COLUMNS);
+  if (!isMissing3607Column(full.error) && !isMissingClearedColumn(full.error)) return full;
+  if (isMissing3607Column(full.error)) {
+    const cleared = await items(ITEM_COLUMNS + CLEARED_COLUMNS);
+    if (!isMissingClearedColumn(cleared.error)) return cleared;
+  }
+  return items(ITEM_COLUMNS);
+}
+
+/** The headers, with the 3607 removal / restore columns when the database has them. */
+async function loadHeaders(client: SupabaseClient, submissionId: string) {
+  const headers = (columns: string) => readSubmissionRows(client, 'submission_checklists', columns, submissionId, ['id']);
+  const full = await headers(HEADER_COLUMNS + REMOVED_HEADER_COLUMNS);
+  if (!isMissing3607Column(full.error)) return full;
+  return headers(HEADER_COLUMNS);
+}
+
+/**
+ * Every row of one copy table for this submission, in blocks (BACKLOG-3607
+ * N-3): a single select stops at PostgREST's max-rows, and the Remove
+ * confirmation counts from these rows. `orderBy` must make the order total.
+ */
+function readSubmissionRows(
+  client: SupabaseClient,
+  table: string,
+  columns: string,
+  submissionId: string,
+  orderBy: string[]
+) {
+  return readAllRows<unknown>((from, to) => {
+    let q = client.from(table).select(columns, { count: 'exact' }).eq('submission_id', submissionId);
+    for (const column of orderBy) q = q.order(column);
+    return q.range(from, to);
+  });
 }
 
 export async function loadSubmissionChecklists(
@@ -157,24 +222,21 @@ export async function loadSubmissionChecklists(
   submissionId: string
 ): Promise<SubmissionChecklistsResult> {
   const [headers, items, links, members] = await Promise.all([
-    client
-      .from('submission_checklists')
-      .select('id, template_id, template_name, sort_order, added_at_review_by, added_at_review_at')
-      .eq('submission_id', submissionId),
+    loadHeaders(client, submissionId),
     loadItems(client, submissionId),
-    client
-      .from('submission_checklist_links')
-      .select('id, submission_checklist_item_id, kind, label, sort_order')
-      .eq('submission_id', submissionId),
-    client
-      .from('submission_checklist_link_members')
-      .select('link_id, kind, submission_attachment_id, submission_message_id')
-      .eq('submission_id', submissionId),
+    readSubmissionRows(client, 'submission_checklist_links', 'id, submission_checklist_item_id, kind, label, sort_order', submissionId, ['id']),
+    readSubmissionRows(
+      client,
+      'submission_checklist_link_members',
+      'link_id, kind, submission_attachment_id, submission_message_id',
+      submissionId,
+      ['id']
+    ),
   ]);
 
   for (const r of [headers, items, links, members]) {
     if (r.error || !Array.isArray(r.data)) {
-      console.error('[submissions] checklist read failed:', r.error?.message);
+      console.error('[submissions] checklist read failed:', (r.error as PgError)?.message);
       return { ok: false };
     }
   }
@@ -183,7 +245,7 @@ export async function loadSubmissionChecklists(
     ok: true,
     sections: assembleSections(
       headers.data as HeaderRow[],
-      items.data as unknown as ItemRow[],
+      items.data as ItemRow[],
       links.data as LinkRow[],
       members.data as MemberRow[]
     ),

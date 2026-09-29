@@ -471,6 +471,19 @@ const REVIEWER_ACTIONS: Record<string, ActionEntry> = {
     'sub-3080-audit',
     TEMPLATE_ID
   ),
+  // BACKLOG-3607: same gate (requireSubmissionReviewer) before one RPC.
+  'lib/actions/submissionChecklists.ts#removeChecklistAtReview': act(
+    submissionChecklists,
+    'removeChecklistAtReview',
+    'sub-3080-audit',
+    'hdr-3607-audit'
+  ),
+  'lib/actions/submissionChecklists.ts#restoreChecklistAtReview': act(
+    submissionChecklists,
+    'restoreChecklistAtReview',
+    'sub-3080-audit',
+    'hdr-3607-audit'
+  ),
 };
 const REVIEWER_REFUSED: Outcome = {
   returned: {
@@ -798,7 +811,7 @@ describe('discovery can see what it claims to see', () => {
     const actions = discoverServerActions();
     expect(actions).toContain('lib/actions/bulkUpdateRole.ts#bulkUpdateRole');
     expect(actions).toContain('lib/actions/scim.ts#listScimSyncLogs');
-    expect(actions.length).toBe(34);
+    expect(actions.length).toBe(36); // BACKLOG-3607: + removeChecklistAtReview, restoreChecklistAtReview
   });
 });
 

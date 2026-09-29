@@ -44,6 +44,25 @@ export interface StatusHistoryEntry {
   cleared_reviewer_id?: string;
   cleared_reviewer_checked_at?: string;
   parentSubmissionId?: string;
+  /**
+   * BACKLOG-3607 fields on checklist_added / checklist_removed. History is
+   * written by the agent too (the carry runs as the agent), so every value
+   * is checked before use; none is trusted to have the type written here.
+   */
+  source?: unknown;
+  checklist_key?: unknown;
+  from_version?: unknown;
+  removed_checklist_id?: unknown;
+  added_at_review?: unknown;
+  after_broker_removal?: unknown;
+  replaced?: unknown;
+  parent_had_none?: unknown;
+  readded?: unknown;
+  restored?: unknown;
+  restored_from_version?: unknown;
+  ticks_restored?: unknown;
+  linked_documents?: unknown;
+  linked_emails?: unknown;
 }
 
 /** The fallback for an actor who no longer resolves (ruling bf8c39b4, Q4). */
@@ -80,7 +99,9 @@ export function describeTypedEntry(entry: StatusHistoryEntry): string {
       return `${title} — ${tickWord(entry.from)} → ${tickWord(entry.to)}`;
     }
     case 'checklist_added':
-      return `Checklist added: ${entry.checklist_name || 'Checklist'}`;
+      return describeChecklistAdded(entry);
+    case 'checklist_removed':
+      return describeChecklistRemoved(entry);
     case 'checklist_review_cleared': {
       const title = entry.item_title || 'Checklist item';
       const who = entry.changed_by || 'the agent';
@@ -99,6 +120,94 @@ export function describeTypedEntry(entry: StatusHistoryEntry): string {
     default:
       return humaniseTypeKey(entry.type);
   }
+}
+
+/** A whole count from an entry, or null when absent or not a count. */
+function countField(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+/** The previous version's number on a version entry, or null. */
+function fromVersion(entry: StatusHistoryEntry): number | null {
+  const n = countField(entry.from_version);
+  return n !== null && n >= 1 ? n : null;
+}
+
+function plural(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/** "3 documents and 2 emails", "1 document", "2 emails", or null for none. */
+export function linkedPhrase(documents: number, emails: number): string | null {
+  const parts: string[] = [];
+  if (documents > 0) parts.push(plural(documents, 'document', 'documents'));
+  if (emails > 0) parts.push(plural(emails, 'email', 'emails'));
+  return parts.length > 0 ? parts.join(' and ') : null;
+}
+
+/**
+ * BACKLOG-3607, checklist_added:
+ *   source 'version'  written by the carry as the agent: the checklist is on
+ *                     the new version and was not on the previous one
+ *   restored          the broker added back a checklist the agent removed
+ *   readded           the broker undid their own removal on this version
+ *   otherwise         the broker added one at review (BACKLOG-3477, unchanged)
+ */
+function describeChecklistAdded(entry: StatusHistoryEntry): string {
+  const name = entry.checklist_name || 'Checklist';
+  if (entry.source === 'version') {
+    const from = fromVersion(entry);
+    const onNew = from !== null ? `version ${from + 1}` : 'the new version';
+    if (entry.parent_had_none === true) {
+      // The previous version had no checklist at all: an older desktop may
+      // not have sent any, so this makes no claim that the agent added it.
+      return from !== null
+        ? `${name} — on version ${from + 1}, not on version ${from}`
+        : `${name} — on this version, not on the previous one`;
+    }
+    if (entry.after_broker_removal === true) return `${name} is on ${onNew} although it was removed at review`;
+    if (entry.replaced === true) return `Checklist added again in ${onNew}, with different items: ${name}`;
+    return `Checklist added in ${onNew}: ${name}`;
+  }
+  if (entry.restored === true) {
+    // ticks_restored is absent on the agent's timeline (withoutBrokerReviewEntries).
+    const ticks = countField(entry.ticks_restored);
+    if (ticks === null) return `Checklist added back: ${name}`;
+    if (ticks === 0) return `Checklist added back: ${name} (no earlier checks to restore)`;
+    return `Checklist added back: ${name} (${plural(ticks, 'earlier check', 'earlier checks')} restored)`;
+  }
+  if (entry.readded === true) return `Checklist removal undone: ${name}`;
+  return `Checklist added: ${name}`;
+}
+
+/**
+ * BACKLOG-3607, checklist_removed:
+ *   source 'version'  written by the carry as the agent: the checklist was on
+ *                     the previous version and is not on the new one
+ *   source 'review'   the broker removed it at review
+ */
+function describeChecklistRemoved(entry: StatusHistoryEntry): string {
+  const name = entry.checklist_name || 'Checklist';
+  if (entry.source === 'version') {
+    const from = fromVersion(entry);
+    const onNew = from !== null ? `version ${from + 1}` : 'the new version';
+    if (entry.added_at_review === true) return `${name}, added at review, is not on ${onNew}`;
+    if (entry.replaced === true) return `Checklist removed in ${onNew}, then added again with different items: ${name}`;
+    return `Checklist removed in ${onNew}: ${name}`;
+  }
+  const linked = linkedPhrase(countField(entry.linked_documents) ?? 0, countField(entry.linked_emails) ?? 0);
+  return linked ? `Checklist removed: ${name} (${linked} linked)` : `Checklist removed: ${name}`;
+}
+
+/**
+ * Whether the timeline names who wrote this entry ("by <name>"). A cleared
+ * line names the agent in its sentence; a neutral "not on version N" line
+ * (parent_had_none) makes no claim about who added the checklist.
+ */
+export function showsActor(entry: StatusHistoryEntry): boolean {
+  if (entry.type === 'checklist_review_cleared') return false;
+  if (entry.type === 'checklist_added' && entry.source === 'version' && entry.parent_had_none === true) return false;
+  return true;
 }
 
 /**
@@ -192,9 +301,20 @@ export const BROKER_REVIEW_ENTRY_TYPES: readonly string[] = [
   'checklist_review_unavailable',
 ];
 
-/** The timeline the agent sees: everything except the broker's review marks. */
+/**
+ * The timeline the agent sees: everything except the broker's review marks.
+ * BACKLOG-3607: an "added back" entry keeps its line but loses its count of
+ * the broker's restored ticks, which the agent does not see (D4).
+ */
 export function withoutBrokerReviewEntries(entries: StatusHistoryEntry[]): StatusHistoryEntry[] {
-  return entries.filter((entry) => !(isTypedEntry(entry) && BROKER_REVIEW_ENTRY_TYPES.includes(entry.type as string)));
+  return entries
+    .filter((entry) => !(isTypedEntry(entry) && BROKER_REVIEW_ENTRY_TYPES.includes(entry.type as string)))
+    .map((entry) => {
+      if (!('ticks_restored' in entry)) return entry;
+      const { ticks_restored: _hidden, ...rest } = entry;
+      void _hidden;
+      return rest;
+    });
 }
 
 /** Replace raw changed_by ids with display names. */

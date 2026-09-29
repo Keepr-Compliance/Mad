@@ -5,7 +5,10 @@
  * (20260925073000_backlog_3477_submission_checklist_review.sql, header and
  * §7/§8): not_authorized, not_open_for_review, added_at_review; BACKLOG-3596
  * adds superseded (a tick on a version that already has a newer version,
- * including one still being sent). They raise
+ * including one still being sent). BACKLOG-3607 adds checklist_removed (a
+ * tick on an item of a checklist removed at review) and the restore
+ * statuses not_removed / already_present / removed_here, which the restore
+ * RPC returns as a result, not an error. They raise
  * 22023 invalid_argument / invalid_payload for a malformed call. supabase-js
  * surfaces these as `error.code` and `error.message`. No raw code ever
  * reaches the screen.
@@ -17,6 +20,10 @@ export type ReviewFailureReason =
   | 'added_at_review'
   | 'superseded'
   | 'template_not_found'
+  | 'checklist_removed'
+  | 'not_removed'
+  | 'already_present'
+  | 'removed_here'
   | 'invalid'
   | 'no_rows'
   | 'failed';
@@ -29,6 +36,11 @@ export const REVIEW_MESSAGES: Record<ReviewFailureReason, string> = {
   superseded:
     'A newer version of this submission has been sent, so this version is closed. Check items and add checklists on the newest version.',
   template_not_found: 'That checklist is no longer available. It may have been archived.',
+  checklist_removed:
+    'This checklist was removed at review, so its items can’t be checked. Undo the removal to check them.',
+  not_removed: 'That checklist can’t be added back: this version does not record the agent removing it.',
+  already_present: 'That checklist is already on this version.',
+  removed_here: 'You removed that checklist on this version. Use Undo on it to put it back.',
   invalid: 'Something about that request was not valid. Refresh the page and try again.',
   no_rows: 'Nothing was saved. You may not have permission to make this change. Refresh the page and try again.',
   failed: 'Something went wrong. Please try again.',
@@ -51,6 +63,7 @@ export function reasonForReviewRpcError(error: { code?: string | null; message?:
     if (message === 'not_open_for_review') return 'not_open_for_review';
     if (message === 'added_at_review') return 'added_at_review';
     if (message === 'superseded') return 'superseded';
+    if (message === 'checklist_removed') return 'checklist_removed';
     return 'not_authorized';
   }
   if (error.code === '22023') return 'invalid';

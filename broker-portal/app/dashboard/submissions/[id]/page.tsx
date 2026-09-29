@@ -17,8 +17,14 @@ import { resolveUserNames } from '@/lib/submissions/names';
 import { loadAddableTemplates, loadSubmissionChecklists } from '@/lib/submissions/checklists';
 import { markAsUnderReview } from '@/lib/submissions/markUnderReview';
 import { NO_CAPABILITIES, getReviewCapabilities } from '@/lib/submissions/reviewAccess';
-import type { ChecklistSectionView, SupersededBy, TemplateOption } from '@/lib/submissions/checklistModel';
+import {
+  linkedEvidenceCounts,
+  type ChecklistSectionView,
+  type SupersededBy,
+  type TemplateOption,
+} from '@/lib/submissions/checklistModel';
 import { loadVersionChain } from '@/lib/submissions/versions';
+import { readAllRows } from '@/lib/supabase/readAllRows';
 import { SubmissionVersions } from '@/components/submission/SubmissionVersions';
 
 interface PageProps {
@@ -37,6 +43,8 @@ interface Message {
   thread_id: string | null;
   /** Message type: text, voice_message, location, attachment_only, system, unknown */
   message_type: string | null;
+  /** The desktop's id for the message (BACKLOG-3607 counts). */
+  local_message_id?: string | null;
   participants: {
     from?: string;
     to?: string | string[];
@@ -57,6 +65,8 @@ interface Attachment {
   file_size_bytes: number | null;
   storage_path: string | null;
   document_type: string | null;
+  /** The desktop's id for the file (BACKLOG-3607 counts: one file, one document). */
+  local_attachment_id?: string | null;
 }
 
 async function getSubmission(id: string, client: SupabaseClient) {
@@ -74,32 +84,42 @@ async function getSubmission(id: string, client: SupabaseClient) {
 }
 
 async function getMessages(submissionId: string, client: SupabaseClient): Promise<Message[]> {
-  const { data, error } = await client
-    .from('submission_messages')
-    .select('*')
-    .eq('submission_id', submissionId)
-    .order('sent_at', { ascending: false });
+  // BACKLOG-3607 N-3: every row, not the first PostgREST block — the Remove
+  // confirmation counts linked emails from these rows.
+  const { data, error } = await readAllRows<Message>((from, to) =>
+    client
+      .from('submission_messages')
+      .select('*', { count: 'exact' })
+      .eq('submission_id', submissionId)
+      .order('sent_at', { ascending: false })
+      .order('id')
+      .range(from, to)
+  );
 
   if (error) {
     console.error('Error fetching messages:', error);
     return [];
   }
 
-  return data || [];
+  return data;
 }
 
 async function getAttachments(submissionId: string, client: SupabaseClient): Promise<Attachment[]> {
-  const { data, error } = await client
-    .from('submission_attachments')
-    .select('*')
-    .eq('submission_id', submissionId);
+  const { data, error } = await readAllRows<Attachment>((from, to) =>
+    client
+      .from('submission_attachments')
+      .select('*', { count: 'exact' })
+      .eq('submission_id', submissionId)
+      .order('id')
+      .range(from, to)
+  );
 
   if (error) {
     console.error('Error fetching attachments:', error);
     return [];
   }
 
-  return data || [];
+  return data;
 }
 
 type HistoryEntry = StatusHistoryEntry;
@@ -279,6 +299,15 @@ export default async function SubmissionDetailPage({ params }: PageProps) {
     supersededBy = superseded;
   }
 
+  // BACKLOG-3607: what the Remove confirmation states per checklist, counted by
+  // the remove RPC's rule from the UNGATED rows (a plan that hides emails does
+  // not make them any less linked).
+  const localIdByAttachment = new Map(attachments.map((a) => [a.id, a.local_attachment_id ?? null]));
+  const localIdByMessage = new Map(messages.map((m) => [m.id, m.local_message_id ?? null]));
+  const linkedCounts = Object.fromEntries(
+    checklistSections.map((s) => [s.id, linkedEvidenceCounts(s, localIdByAttachment, localIdByMessage)])
+  );
+
   // BACKLOG-3477: names from public.users (same-org members), not profiles
   // (self-read only). Unresolved = no longer a member = "a former member".
   // During impersonation names are not looked up at all, so nobody is
@@ -286,7 +315,11 @@ export default async function SubmissionDetailPage({ params }: PageProps) {
   const viewerId = isImpersonating ? null : (await client.auth.getUser()).data.user?.id ?? null;
   const actorIds = [
     ...rawHistory.map((e) => e.changed_by),
-    ...checklistSections.flatMap((s) => [s.addedAtReviewBy, ...s.items.map((i) => i.reviewerCheckedBy)]),
+    ...checklistSections.flatMap((s) => [
+      s.addedAtReviewBy,
+      s.removedAtReviewBy ?? null,
+      ...s.items.map((i) => i.reviewerCheckedBy),
+    ]),
     viewerId,
   ];
   const names = isImpersonating ? null : await resolveUserNames(client, actorIds);
@@ -386,6 +419,9 @@ export default async function SubmissionDetailPage({ params }: PageProps) {
           messages={showMessages ? gatedMessages : []}
           attachments={showAttachments ? attachments : []}
           supersededBy={supersededBy}
+          versionHistory={submission.status_history}
+          version={typeof submission.version === 'number' ? submission.version : null}
+          linkedCounts={linkedCounts}
         />
       )}
 
