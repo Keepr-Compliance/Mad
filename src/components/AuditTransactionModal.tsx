@@ -3,8 +3,6 @@ import { ResponsiveModal, MODAL_PANEL } from "./common/ResponsiveModal";
 import {
   FloatingActionBar,
   FLOATING_ACTION_BAR_CONTENT_PADDING,
-  FLOATING_SECONDARY_BUTTON_CLASS,
-  floatingPrimaryButtonClass,
 } from "./common/FloatingActionBar";
 import AddressVerificationStep from "./audit/AddressVerificationStep";
 import ContactAssignmentStep from "./audit/ContactAssignmentStep";
@@ -367,43 +365,33 @@ function AuditTransactionModal({
             desktop bar plus a separate <640px pill that had no Cancel and skipped
             the coverage gate). BACKLOG-1654: hidden while the contact form is open. */}
         {!isContactFormOpen && (
-          <FloatingActionBar testId="audit-floating-actions">
-            <button
-              onClick={onClose}
-              className={FLOATING_SECONDARY_BUTTON_CLASS}
-            >
-              Cancel
-            </button>
-            {step > 1 && (
-              <button
-                onClick={handlePreviousStep}
-                disabled={loading}
-                className={FLOATING_SECONDARY_BUTTON_CLASS}
-                data-testid="create-audit-back"
-              >
-                &larr; Back
-              </button>
-            )}
-            <button
-              onClick={handleGatedNext}
-              disabled={loading}
-              className={floatingPrimaryButtonClass(loading)}
-              data-testid="create-audit-submit"
-            >
-              {loading ? (
-                <span className="flex items-center gap-2">
-                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                  {isEditing ? "Saving..." : "Creating..."}
-                </span>
-              ) : isEditing ? (
-                "Save Changes"
-              ) : step === 3 ? (
-                "Create Transaction"
-              ) : (
-                "Continue \u2192"
-              )}
-            </button>
-          </FloatingActionBar>
+          <FloatingActionBar
+            testId="audit-floating-actions"
+            actions={[
+              { key: "cancel", label: "Cancel", onClick: onClose, variant: "secondary" },
+              step > 1 && {
+                key: "back",
+                label: "\u2190 Back",
+                onClick: handlePreviousStep,
+                variant: "secondary",
+                disabled: loading,
+                testId: "create-audit-back",
+              },
+              {
+                key: "primary",
+                label: isEditing
+                  ? "Save Changes"
+                  : step === 3
+                    ? "Create Transaction"
+                    : "Continue \u2192",
+                onClick: handleGatedNext,
+                variant: "primary",
+                loading,
+                loadingLabel: isEditing ? "Saving..." : "Creating...",
+                testId: "create-audit-submit",
+              },
+            ]}
+          />
         )}
 
         {/* BACKLOG-2292 (Layer 1): audit-window coverage prompt. */}
