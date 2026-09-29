@@ -4,62 +4,24 @@
  * WHAT THIS CAN PROVE: what the migration file says.
  *
  * WHAT IT CANNOT: behaviour, or what a database actually runs. CI has no
- * database. The most consequential mistake this migration could make — the
- * split-sum CHECK admitting an asymmetric fill because a Postgres CHECK is
- * satisfied on NULL, not just on TRUE — is about CONSTRAINT EVALUATION, and no
- * assertion over file text can see that happening. It is proved by the
- * executable probes in supabase/tests/backlog-3519/, run against a real
- * Postgres (see that harness's README for the measured before/after).
+ * database. Constraint evaluation is proved by the executable probes in
+ * supabase/tests/backlog-3519/ (run against a real Postgres).
  *
- * Its job is narrower and worth doing: it pins the decisions a later edit to
- * this file is most likely to undo quietly —
+ * FIGURES ONLY (founder decision, pm_comments 4d2e15df on BACKLOG-3519): the
+ * split_* columns, the FK into agent_split_agreements and the split RPC were
+ * removed. This suite pins the decisions a later edit is most likely to undo
+ * quietly:
  *
- *   - the split-sum CHECK requires BOTH `split_agent_pct` and
- *     `split_brokerage_pct` to be explicitly `IS NOT NULL` before comparing
- *     their sum. This is the actual shipped fix for a real bug found by
- *     executing the migration: `agent_pct + brokerage_pct = 100` alone
- *     evaluates to NULL (not FALSE) when one side is NULL, and a CHECK only
- *     REJECTS an expression that is FALSE — so the "obviously equivalent"
- *     simplification back to a bare sum comparison would silently reopen the
- *     defect;
- *   - the rate precision split: `commission_offered_rate` /
- *     `commission_actual_rate` are `numeric(6,3)`, while
- *     `split_agent_pct` / `split_brokerage_pct` are `numeric(5,2)` — a
- *     deliberate asymmetry (the former can carry a real 3-decimal market
- *     rate like 2.375%; the latter mirrors what they are copied from), and
- *     exactly the kind of "inconsistency" a later cleanup pass would merge
- *     without reading why;
- *   - `split_agreement_id`'s FK carries no `ON DELETE` clause, i.e. Postgres
- *     default `NO ACTION` — the correct semantics for a frozen compliance
- *     snapshot (deleting a referenced agreement must be refused, not cascade
- *     or null out the frozen split), easy to lose if someone adds
- *     `ON DELETE CASCADE` thinking it tidies up orphan prevention;
- *   - the reason CHECK's bounds are `BETWEEN 1 AND 2000` — a zero-length
- *     (post-`btrim`) string is REJECTED, not accepted, matching
- *     `agent_split_agreements.note`'s own convention;
- *   - the migration wraps itself in its own `BEGIN`/`COMMIT` (unlike
- *     BACKLOG-3503's file, which deliberately opens none because ITS harness
- *     supplies the transaction) — this file has no such harness at apply
- *     time, so losing the wrapper would mean a mid-file failure leaves a
- *     partial column/constraint set on a real table;
- *   - the apply-ordering note survives in the header, in some form — it is
- *     the only place a human applying migrations by hand will read it (see
- *     pm_comments on BACKLOG-3503 for the durable, mechanically-findable
- *     copy).
+ *   - the file references NO other table (no REFERENCES clause), so it
+ *     depends on nothing unapplied and 3503 is not a prerequisite;
+ *   - no split_* column or split_agreement_in_force reference creeps back;
+ *   - rates are numeric(6,3) percentages, gross numeric(12,2);
+ *   - the reason CHECK is BETWEEN 1 AND 2000 (zero-length rejected);
+ *   - the file wraps itself in BEGIN/COMMIT with a bounded lock_timeout;
+ *   - section 5 (the commission lock) is marked as reserved, not forgotten.
  *
- * Every assertion below was made to FAIL before it was trusted: each mutation
- * was applied to the committed file, this suite run, the failing `it()`
- * recorded, and the file restored.
- *
- * Limits, stated (same as commission-agreements-3503.test.ts, which this
- * mirrors):
- *   - It reads repo text only. Whether production matches the repo is the
- *     harness's job (supabase/tests/backlog-3519/run.sh).
- *   - Comments are stripped before matching, so a rule written only in a
- *     comment cannot satisfy any assertion here.
- *   - Comment removal is line-based and quote-aware for single-quoted
- *     strings; a string literal spanning lines and containing `--` would
- *     confuse it. This file has none.
+ * Limits, stated: it reads repo text only; comments are stripped before
+ * matching, so a rule written only in a comment cannot satisfy an assertion.
  */
 
 import { readFileSync } from 'fs';
@@ -128,42 +90,23 @@ describe('BACKLOG-3519 commission figures migration', () => {
     expect(FLAT).toMatch(/ADD COLUMN IF NOT EXISTS commission_adjustment_reason\s+text/i);
   });
 
-  it('adds all five split_* snapshot columns, with the split percentages at numeric(5,2) -- NOT numeric(6,3)', () => {
-    // The deliberate asymmetry: these mirror agent_split_agreements' own
-    // precision, unlike the commission_* rates above.
-    expect(FLAT).toMatch(/ADD COLUMN IF NOT EXISTS split_agent_pct\s+numeric\(5,2\)/i);
-    expect(FLAT).toMatch(/ADD COLUMN IF NOT EXISTS split_brokerage_pct\s+numeric\(5,2\)/i);
-    expect(FLAT).toMatch(/ADD COLUMN IF NOT EXISTS split_effective_from\s+date/i);
-    expect(FLAT).toMatch(/ADD COLUMN IF NOT EXISTS split_resolved_on\s+date/i);
-    expect(FLAT).not.toMatch(/split_agent_pct\s+numeric\(6,3\)/i);
-    expect(FLAT).not.toMatch(/split_brokerage_pct\s+numeric\(6,3\)/i);
+  it('references NO other table: no REFERENCES clause, so it depends on nothing unapplied', () => {
+    expect(SQL).not.toMatch(/REFERENCES/i);
+    expect(SQL).not.toMatch(/agent_split_agreements/i);
+    expect(SQL).not.toMatch(/split_agreement_in_force/i);
   });
 
-  it('the split_agreement_id FK targets agent_split_agreements(id) with NO ON DELETE clause (default NO ACTION)', () => {
-    const col = FLAT.slice(FLAT.indexOf('split_agreement_id uuid'));
-    const clause = col.slice(0, col.indexOf(','));
-    expect(clause).toContain('REFERENCES public.agent_split_agreements(id)');
-    expect(clause).not.toMatch(/ON DELETE/i);
+  it('creates no split_* column, constraint or index', () => {
+    expect(SQL).not.toMatch(/split_/i);
+    expect(SQL).not.toMatch(/CREATE INDEX/i);
   });
 
-  it('creates an index on the FK column', () => {
-    expect(FLAT).toMatch(
-      /CREATE INDEX IF NOT EXISTS idx_transaction_submissions_split_agreement_id\s+ON public\.transaction_submissions \(split_agreement_id\)/i,
-    );
-  });
-
-  it('bounds both commission rates to 0-100 and the split percentages to 0-100', () => {
+  it('bounds both commission rates to 0-100', () => {
     expect(checkConstraint('transaction_submissions_offered_rate_check')).toMatch(
       /commission_offered_rate >= 0 AND commission_offered_rate <= 100/i,
     );
     expect(checkConstraint('transaction_submissions_actual_rate_check')).toMatch(
       /commission_actual_rate >= 0 AND commission_actual_rate <= 100/i,
-    );
-    expect(checkConstraint('transaction_submissions_split_agent_pct_check')).toMatch(
-      /split_agent_pct >= 0 AND split_agent_pct <= 100/i,
-    );
-    expect(checkConstraint('transaction_submissions_split_brokerage_pct_check')).toMatch(
-      /split_brokerage_pct >= 0 AND split_brokerage_pct <= 100/i,
     );
   });
 
@@ -178,20 +121,6 @@ describe('BACKLOG-3519 commission figures migration', () => {
     expect(clause).toMatch(/char_length\(btrim\(commission_adjustment_reason\)\) BETWEEN 1 AND 2000/i);
   });
 
-  it('THE FIX: the split-sum CHECK requires BOTH columns IS NOT NULL before comparing their sum', () => {
-    // This is the actual bug: `agent_pct + brokerage_pct = 100` alone is
-    // satisfied (not rejected) when one side is NULL, because a Postgres
-    // CHECK only rejects FALSE, and NULL is not FALSE. A later "simplify
-    // this" edit that drops the explicit IS NOT NULL pair would silently
-    // reopen an asymmetric split fill. Measured against a real Postgres:
-    // supabase/tests/backlog-3519/README.md, "What was actually run and found".
-    const clause = checkConstraint('transaction_submissions_split_sum_check');
-    expect(clause).toMatch(/split_agent_pct IS NOT NULL AND split_brokerage_pct IS NOT NULL/i);
-    expect(clause).toMatch(/split_agent_pct \+ split_brokerage_pct = 100/i);
-    // and the both-null "nothing resolved" case is admitted separately
-    expect(clause).toMatch(/split_agent_pct IS NULL AND split_brokerage_pct IS NULL/i);
-  });
-
   it('opens and closes its own transaction, with a bounded lock_timeout', () => {
     // Unlike BACKLOG-3503's file, which deliberately opens none because that
     // migration's own harness supplies the transaction: this file has no such
@@ -202,13 +131,18 @@ describe('BACKLOG-3519 commission figures migration', () => {
     expect(FLAT).toMatch(/SET LOCAL lock_timeout = '5s'/i);
   });
 
-  it('the header states the apply-ordering constraint with BACKLOG-3503', () => {
-    expect(RAW).toMatch(/APPLY-ORDERING CONSTRAINT/);
-    expect(RAW).toContain('BACKLOG-3503');
-    // The corrected mechanism (SR review, pm_comments 701d1100 on BACKLOG-3519):
-    // filename/stamp order does NOT guarantee sequencing on this project, so
-    // the header must not claim that it does.
-    expect(RAW).not.toMatch(/filename\/version order,\s*3503 is stamped earlier.*so the referenced table always exists/i);
+  it('the header says the split is gone and that the submit needs this applied first', () => {
+    expect(RAW).toContain('FIGURES ONLY');
+    expect(RAW).toContain('PGRST204');
+    expect(RAW).toContain('depends on NOTHING unapplied');
+  });
+
+  it('marks section 5 (the commission lock) as reserved, with its spec, so its absence is not read as an oversight', () => {
+    expect(RAW).toContain('COMMISSION LOCK -- INTENTIONALLY NOT WRITTEN IN THIS COMMIT');
+    expect(RAW).toContain('42501');
+    expect(RAW).toContain('SECURITY INVOKER');
+    // The lock is not present yet: no trigger, no function in the executable SQL.
+    expect(SQL).not.toMatch(/CREATE (OR REPLACE )?(FUNCTION|TRIGGER)/i);
   });
 
   it('says this migration is not applied to any environment by this PR', () => {
