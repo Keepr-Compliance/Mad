@@ -196,7 +196,7 @@ describe("commission figures persist through the IPC write path (BACKLOG-3520)",
   const FIGURES = {
     commission_offered_rate: 2.5,
     commission_actual_rate: 2.375,
-    commission_gross_amount: 9796.88,
+    commission_gross_amount: 9797,
     commission_adjustment_reason: "Reduced to close the deal",
   };
 
@@ -210,7 +210,7 @@ describe("commission figures persist through the IPC write path (BACKLOG-3520)",
       const r = row();
       expect(r.commission_offered_rate).toBe(2.5);
       expect(r.commission_actual_rate).toBe(2.375);
-      expect(r.commission_gross_amount).toBe(9796.88);
+      expect(r.commission_gross_amount).toBe(9797);
       expect(r.commission_adjustment_reason).toBe("Reduced to close the deal");
       // the rest of the payload landed too, so a partial drop is visible
       expect(r.closing_date_verified).toBe(1);

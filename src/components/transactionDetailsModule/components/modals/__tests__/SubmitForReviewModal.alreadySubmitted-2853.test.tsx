@@ -54,8 +54,6 @@ const baseTransaction = {
 /** BACKLOG-3498: Next from the date step to the screen that carries the action. */
 function goToSummary(): void {
   fireEvent.click(screen.getByTestId("submit-review-next"));
-  // BACKLOG-3520: no commission in these fixtures, so Next warns first.
-  fireEvent.click(screen.getByTestId("commission-continue-anyway"));
 }
 
 function renderAt(submissionStatus?: string) {

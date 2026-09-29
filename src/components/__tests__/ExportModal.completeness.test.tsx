@@ -46,14 +46,6 @@ async function driveToExport(): Promise<void> {
   await act(async () => {
     fireEvent.click(nextButtons[0]);
   });
-  // BACKLOG-3520: no commission in this fixture, so Next raises the "not
-  // entered" warning; "Continue anyway" is what carries on.
-  const carryOn = screen.queryByTestId("commission-continue-anyway");
-  if (carryOn) {
-    await act(async () => {
-      fireEvent.click(carryOn);
-    });
-  }
   const exportButtons = await screen.findAllByRole("button", { name: /^export$/i });
   await act(async () => {
     fireEvent.click(exportButtons[0]);

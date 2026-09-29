@@ -1016,7 +1016,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   -- Commission Figures (BACKLOG-3519, M2 -- figures only, no charges/split
   -- amount; see the v73 migration entry for the full design note). Percentage
   -- as entered (2.50), not a fraction (0.025). commission_gross_amount is
-  -- computed and rounded to cents once by the writer, not derived on read.
+  -- computed and rounded to whole dollars once by the writer, not derived on read.
   -- No local column mirrors the cloud split snapshot (split_agent_pct etc. on
   -- transaction_submissions): the split is cloud-resolved at submission time
   -- from agent_split_agreements, a concept this local schema has no

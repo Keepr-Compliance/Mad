@@ -67,14 +67,9 @@ const baseTransaction = {
   closed_at: "2026-03-14T18:22:05.000Z",
 } as unknown as Transaction;
 
-/**
- * BACKLOG-3498: Next from the date step to the lead and the action.
- * BACKLOG-3520: these fixtures carry no commission, so Next raises the "not
- * entered" warning first; "Continue anyway" is what carries on to the summary.
- */
+/** BACKLOG-3498: Next from the date step to the lead and the action. */
 function goToSummary(): void {
   fireEvent.click(screen.getByTestId("submit-review-next"));
-  fireEvent.click(screen.getByTestId("commission-continue-anyway"));
 }
 
 function renderAt(submissionStatus: string) {

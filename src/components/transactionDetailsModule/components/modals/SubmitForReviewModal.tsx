@@ -17,7 +17,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { ResponsiveModal } from "../../../common/ResponsiveModal";
 import {
-  CommissionNotEnteredDialog,
   TransactionDatesFields,
   VERIFY_TRANSACTION_DETAILS_TITLE,
   saveConfirmedTransactionDates,
@@ -390,7 +389,6 @@ export function SubmitForReviewModal({
   const { dates, setDate } = useTransactionDatesForm(transaction);
   // BACKLOG-3520 — the commission block of the same step.
   const commission = useCommissionForm(transaction);
-  const [showCommissionWarning, setShowCommissionWarning] = useState(false);
   const [datesError, setDatesError] = useState<string | null>(null);
   const [savingDates, setSavingDates] = useState(false);
   const showDateStep =
@@ -428,12 +426,9 @@ export function SubmitForReviewModal({
     setDatesError(message);
     if (message !== null) return;
     // An unparseable figure blocks Next — its message is already shown inline
-    // by the commission block. An EMPTY commission only warns.
+    // by the commission block. An EMPTY commission never does: the block shows
+    // an inline warning and Next proceeds.
     if (!commission.parsed.ok) return;
-    if (!commission.complete) {
-      setShowCommissionWarning(true);
-      return;
-    }
     setScreen("summary");
   };
 
@@ -459,7 +454,11 @@ export function SubmitForReviewModal({
     }
     setDatesError(null);
     setSavingDates(true);
-    const saved = await saveConfirmedTransactionDates(transaction.id, dates, commission.update);
+    // With nothing to say about commission the call is exactly the two-argument
+    // call it was before BACKLOG-3520.
+    const saved = commission.update
+      ? await saveConfirmedTransactionDates(transaction.id, dates, commission.update)
+      : await saveConfirmedTransactionDates(transaction.id, dates);
     if (saved.success) onDatesSaved?.();
     if (dismissedRef.current) return;
     setSavingDates(false);
@@ -618,6 +617,7 @@ export function SubmitForReviewModal({
               onDateChange={setDate}
               hideHeading
               commission={commission}
+              commissionRoute="submit"
             />
           </div>
         )}
@@ -1128,21 +1128,6 @@ export function SubmitForReviewModal({
             </button>
           )}
         </div>
-
-        {/* BACKLOG-3520 — an empty commission warns; Continue anyway always proceeds. */}
-        {showCommissionWarning && (
-          <CommissionNotEnteredDialog
-            route="submit"
-            onContinue={() => {
-              setShowCommissionWarning(false);
-              setScreen("summary");
-            }}
-            onEnter={() => {
-              setShowCommissionWarning(false);
-              commission.focusFirstEmpty();
-            }}
-          />
-        )}
     </ResponsiveModal>
   );
 }

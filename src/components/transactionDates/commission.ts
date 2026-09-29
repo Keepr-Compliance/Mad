@@ -5,13 +5,12 @@
  *
  * Units. Rates are PERCENTAGES as an agent types them (2.5 means 2.5%, never
  * 0.025), 0..100, at most 3 decimals — the cloud column is numeric(6,3) and the
- * IPC validator rounds to the same. Money is dollars, stored to cents.
+ * IPC validator rounds to the same. Money is dollars; the gross is whole dollars.
  *
- * Money rounds BEFORE it is formatted or stored. `formatCurrency`
- * (src/utils/formatUtils.ts) uses minimumFractionDigits 0, so an unrounded
- * 10312.5 renders as "$10,312.5"; `formatCommissionAmount` here always shows
- * cents. The gross is computed in integer cents and thousandths of a percent:
- * `412500 * 2.5 / 100` and similar are exact only by luck in floating point.
+ * The gross commission is WHOLE DOLLARS: it rounds (half up) in the
+ * computation, before it is stored or formatted, so what is stored is what is
+ * shown. `formatCurrency` (src/utils/formatUtils.ts) renders an unrounded value
+ * as "$10,312.5"; that cannot happen here because the value is already whole.
  */
 
 /** Every value the form holds, exactly as typed. */
@@ -60,30 +59,34 @@ export function parseMoney(text: string): ParsedNumber {
 }
 
 /**
- * Gross commission in dollars, rounded to cents once (half up), or `null` when
- * either input is missing. Integer arithmetic: sale in cents times the rate in
- * thousandths of a percent, then a single divide-and-round.
+ * Gross commission in WHOLE DOLLARS, half up: `Math.round(sale x rate%)` — the
+ * recorded money rule (412,500 x 2.5% = 10,312.5 -> 10,313). `null` when either
+ * input is missing. Done in integer arithmetic: sale in cents times the rate in
+ * thousandths of a percent is dollars x 10^7, so one add-half-and-floor rounds
+ * exactly, with none of the float drift `sale * rate / 100` has near a half.
+ * The result is what is STORED and what is SHOWN; nothing is rounded again.
  */
 export function computeGross(sale: number | null, actualRate: number | null): number | null {
   if (sale === null || actualRate === null) return null;
   const saleCents = Math.round(sale * 100);
   const rateMilli = Math.round(actualRate * 1000);
-  // cents = saleCents * (rateMilli / 1000) / 100
-  const cents = Math.floor((saleCents * rateMilli + 50_000) / 100_000);
-  return cents / 100;
+  return Math.floor((saleCents * rateMilli + 5_000_000) / 10_000_000);
 }
 
 const MONEY = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 0,
 });
 
-/** "$10,312.50", or an em dash when there is no amount yet. */
+/** "$10,313", or an em dash when there is no amount yet. The amount is already whole dollars. */
 export function formatCommissionAmount(gross: number | null): string {
   return gross === null ? "—" : MONEY.format(gross);
 }
+
+/** The longest reason the validator and the cloud CHECK accept. The input's cap is this, not less. */
+export const COMMISSION_REASON_MAX_LENGTH = 2000;
 
 /** The sale price as prefilled into its field: grouped digits, cents only when present. */
 export function formatSaleInput(price: number | null | undefined): string {

@@ -7,10 +7,13 @@
  * draft 5): field help lives in InfoTooltips beside the labels (no helper lines
  * under the inputs), labels carry no "(%)" — the input has a % suffix — and the
  * amount shows alone, an em dash while Actual is empty.
+ *
+ * An empty commission WARNS and never blocks: the warning is an inline notice
+ * on this screen (below), not a dialog and not a click the agent must make.
  */
 import React from "react";
 import { InfoTooltip } from "../common/InfoTooltip";
-import { formatCommissionAmount } from "./commission";
+import { COMMISSION_REASON_MAX_LENGTH, formatCommissionAmount } from "./commission";
 import type { CommissionForm } from "./useCommissionForm";
 import { formatCurrency } from "@/utils/formatUtils";
 
@@ -36,8 +39,21 @@ function Label({
   );
 }
 
-export function CommissionFields({ commission }: { commission: CommissionForm }): React.ReactElement {
+/** What an empty commission means on each route. Nothing here gates Next. */
+const NOT_ENTERED_WARNING = {
+  submit: "Commission not entered. Your broker will see this submission without a commission figure.",
+  export: "Commission not entered. This export will not include a commission figure.",
+} as const;
+
+export function CommissionFields({
+  commission,
+  route,
+}: {
+  commission: CommissionForm;
+  route: keyof typeof NOT_ENTERED_WARNING;
+}): React.ReactElement {
   const { inputs, parsed } = commission;
+  const parsedOk = parsed.ok;
   const rateDiffers = parsed.ok && parsed.value.rateDiffers;
   const gross = parsed.ok ? parsed.value.gross : null;
   const saleHelp =
@@ -91,7 +107,6 @@ export function CommissionFields({ commission }: { commission: CommissionForm })
               <input
                 id="commission-offered"
                 data-testid="commission-offered"
-                ref={commission.offeredRef}
                 type="number"
                 step="0.1"
                 min="0"
@@ -109,7 +124,6 @@ export function CommissionFields({ commission }: { commission: CommissionForm })
               <input
                 id="commission-actual"
                 data-testid="commission-actual"
-                ref={commission.actualRef}
                 type="number"
                 step="0.1"
                 min="0"
@@ -122,6 +136,16 @@ export function CommissionFields({ commission }: { commission: CommissionForm })
             </div>
           </div>
         </div>
+
+        {parsedOk && !commission.complete && (
+          <div
+            className="p-3 bg-amber-50 border border-amber-200 rounded-lg"
+            data-testid="commission-warning"
+            role="status"
+          >
+            <p className="text-sm text-amber-800">{NOT_ENTERED_WARNING[route]}</p>
+          </div>
+        )}
 
         <div className="flex items-baseline justify-between gap-3 flex-wrap">
           <span className="text-sm font-medium text-gray-700">Commission Amount</span>
@@ -140,7 +164,7 @@ export function CommissionFields({ commission }: { commission: CommissionForm })
               id="commission-reason"
               data-testid="commission-reason"
               type="text"
-              maxLength={500}
+              maxLength={COMMISSION_REASON_MAX_LENGTH}
               value={inputs.reasonText}
               onChange={(e) => commission.setReasonText(e.target.value)}
               placeholder="e.g. Reduced to close the deal"

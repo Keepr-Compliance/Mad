@@ -99,14 +99,6 @@ async function pressNext(): Promise<void> {
   await act(async () => {
     fireEvent.click(next[0]);
   });
-  // BACKLOG-3520: no commission in this fixture, so Next raises the "not
-  // entered" warning; "Continue anyway" is what carries on.
-  const carryOn = screen.queryByTestId("commission-continue-anyway");
-  if (carryOn) {
-    await act(async () => {
-      fireEvent.click(carryOn);
-    });
-  }
 }
 
 async function pressExport(): Promise<void> {

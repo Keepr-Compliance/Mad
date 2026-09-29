@@ -286,7 +286,7 @@ export const TRANSACTION_COLUMN_POLICY: Record<TransactionColumn, ColumnPolicy> 
   commission_gross_amount: {
     insert: "db-default",
     update: "writable",
-    why: "Companion of `commission_offered_rate`; same decision. Rounded to cents once by the renderer before it is sent, and again by the validator as a backstop -- never derived here or on read.",
+    why: "Companion of `commission_offered_rate`; same decision. Rounded to WHOLE DOLLARS (half up) once by the renderer before it is sent; the validator rounds to cents as a backstop only -- never derived here or on read.",
   },
   commission_adjustment_reason: {
     insert: "db-default",

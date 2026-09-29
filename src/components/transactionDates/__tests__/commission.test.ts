@@ -14,16 +14,17 @@ import {
   roundHalfUp,
 } from "../commission";
 
-describe("computeGross — integer cents, one round half up", () => {
+describe("computeGross — whole dollars, half up: Math.round(sale x rate%)", () => {
   it.each([
-    [412500, 2.5, 10312.5],
+    [412500, 2.5, 10313], // the mock's worked example: 10312.5 -> 10313, NOT 10312.50
     [412500, 3, 12375],
     [100000, 10, 10000], // the founder's worked example
-    [412500, 2.375, 9796.88], // 9796.875 -> half up
-    [333.33, 1.005, 3.35], // 3.3499665
-    [1, 0.5, 0.01], // 0.005 -> half up
-    [0.1, 0.5, 0], // 0.0005
-    [999999.99, 100, 999999.99],
+    [412500, 2.375, 9797], // 9796.875
+    [333.33, 1.005, 3], // 3.3499665
+    [200, 0.25, 1], // exactly 0.5 -> 1
+    [199, 0.25, 0], // 0.4975
+    [1000001, 0.5, 5000], // 5000.005
+    [999999.99, 100, 1000000], // 999999.99
     [412500, 0, 0],
     [0, 3, 0],
   ])("sale %p at %p%% -> %p", (sale, rate, expected) => {
@@ -35,25 +36,30 @@ describe("computeGross — integer cents, one round half up", () => {
     expect(computeGross(412500, null)).toBeNull();
   });
 
-  it("SWEEP: 3,650 sale x rate pairs equal the integer-cents answer", () => {
+  it("is always a whole number of dollars", () => {
     for (const sale of [0.01, 1, 99.99, 250000.5, 412500, 987654.32]) {
       for (let milli = 0; milli <= 100000; milli += 137) {
-        const rate = milli / 1000;
-        const got = computeGross(sale, rate) as number;
-        // The same integer formula, restated: this sweep guards against a
-        // refactor to float arithmetic (the fixed rows above are the oracle).
-        const exactCents = Math.floor((Math.round(sale * 100) * milli + 50000) / 100000);
-        expect(Math.round(got * 100)).toBe(exactCents);
+        expect(Number.isInteger(computeGross(sale, milli / 1000))).toBe(true);
       }
+    }
+  });
+
+  it("BOUNDARY SWEEP: at sale 200 every exact .5 rounds UP, one milli-percent below rounds down, one above rounds up", () => {
+    // 200 x rate% = rate x 2 dollars, so rate = 0.25 x (2k+1) lands exactly on k + 0.5.
+    for (let k = 0; k < 200; k++) {
+      const half = 0.25 * (2 * k + 1);
+      expect(computeGross(200, half)).toBe(k + 1);
+      expect(computeGross(200, Math.round((half - 0.001) * 1000) / 1000)).toBe(k);
+      expect(computeGross(200, Math.round((half + 0.001) * 1000) / 1000)).toBe(k + 1);
     }
   });
 });
 
 describe("formatCommissionAmount", () => {
-  it("always shows cents, so a rounded half never renders as $10,312.5", () => {
-    expect(formatCommissionAmount(10312.5)).toBe("$10,312.50");
-    expect(formatCommissionAmount(12375)).toBe("$12,375.00");
-    expect(formatCommissionAmount(0)).toBe("$0.00");
+  it("shows whole dollars, matching what is stored", () => {
+    expect(formatCommissionAmount(10313)).toBe("$10,313");
+    expect(formatCommissionAmount(12375)).toBe("$12,375");
+    expect(formatCommissionAmount(0)).toBe("$0");
   });
   it("is an em dash with no amount", () => {
     expect(formatCommissionAmount(null)).toBe("—");

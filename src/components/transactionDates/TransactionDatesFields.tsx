@@ -60,6 +60,8 @@ interface TransactionDatesFieldsProps {
    * the dates. Omitted by a host that does not capture commission.
    */
   commission?: CommissionForm;
+  /** Which route hosts the block; selects the wording of the empty-commission warning. */
+  commissionRoute?: "submit" | "export";
 }
 
 /**
@@ -94,6 +96,7 @@ export function TransactionDatesFields({
   meta,
   hideHeading = false,
   commission,
+  commissionRoute = "submit",
 }: TransactionDatesFieldsProps): React.ReactElement {
   return (
     <div className="space-y-6">
@@ -188,7 +191,7 @@ export function TransactionDatesFields({
         </div>
       </div>
 
-      {commission && <CommissionFields commission={commission} />}
+      {commission && <CommissionFields commission={commission} route={commissionRoute} />}
     </div>
   );
 }

@@ -11,7 +11,6 @@ import { ExportUnlockPrompt } from "./paywall/ExportUnlockPrompt";
 import { formatLastExported } from "../utils/formatUtils";
 import { useAuditCoverageCheck } from "../hooks/useAuditCoverageCheck";
 import {
-  CommissionNotEnteredDialog,
   TransactionDatesFields,
   saveConfirmedTransactionDates,
   useCommissionForm,
@@ -47,19 +46,8 @@ function ExportModal({
   const { dates, setDate } = useTransactionDatesForm(transaction);
   const { startDate, endDate } = dates;
   // BACKLOG-3520: the commission block of the same step. An empty commission
-  // WARNS (the dialog below) and never blocks; `pendingAdvance` is what
-  // "Continue anyway" runs.
+  // shows an inline warning and never blocks; an unparseable figure does.
   const commission = useCommissionForm(transaction);
-  const [pendingAdvance, setPendingAdvance] = useState<(() => void) | null>(null);
-  const gateCommission = (proceed: () => void): void => {
-    // An unparseable figure blocks — its message is shown inline by the block.
-    if (!commission.parsed.ok) return;
-    if (!commission.complete) {
-      setPendingAdvance(() => proceed);
-      return;
-    }
-    proceed();
-  };
 
   const [contentType, setContentType] = useState<"both" | "emails" | "texts">("both");
   const [attachmentType, setAttachmentType] = useState<"all" | "email" | "text" | "none">("all");
@@ -212,13 +200,12 @@ function ExportModal({
     // so the primary runs the export directly (and reads "Export", not "Next").
     // The completeness gate and the paywall are unaffected: both fire from
     // inside handleExport/proceedWithExport, not from step 2's render.
-    gateCommission(() => {
-      if (hasSavedDefaults) {
-        void handleExport();
-        return;
-      }
-      setStep(2);
-    });
+    if (!commission.parsed.ok) return;
+    if (hasSavedDefaults) {
+      void handleExport();
+      return;
+    }
+    setStep(2);
   };
 
   /**
@@ -228,7 +215,8 @@ function ExportModal({
    */
   const handleOpenExportOptions = () => {
     if (!datesAreValid()) return;
-    gateCommission(() => setStep(2));
+    if (!commission.parsed.ok) return;
+    setStep(2);
   };
 
   /**
@@ -322,7 +310,11 @@ function ExportModal({
     // completeness check below. (Do NOT jump to the exporting screen yet — the
     // Layer-3 gate may intercept.)
     // BACKLOG-3498: the one shared writer of the confirmed dates.
-    const updateResult = await saveConfirmedTransactionDates(transaction.id, dates, commission.update);
+    // With nothing to say about commission the call is exactly the two-argument
+    // call it was before BACKLOG-3520.
+    const updateResult = commission.update
+      ? await saveConfirmedTransactionDates(transaction.id, dates, commission.update)
+      : await saveConfirmedTransactionDates(transaction.id, dates);
     if (!updateResult.success) {
       setError(`Failed to save dates: ${updateResult.error}`);
       setStep(1);
@@ -542,6 +534,7 @@ function ExportModal({
               dates={dates}
               onDateChange={setDate}
               commission={commission}
+              commissionRoute="export"
               headerAction={
                 hasSavedDefaults ? (
                   <div className="flex gap-2">
@@ -1034,22 +1027,6 @@ function ExportModal({
               </div>
             </div>
           </ResponsiveModal>
-        )}
-
-        {/* BACKLOG-3520 — an empty commission warns; Continue anyway always proceeds. */}
-        {pendingAdvance && (
-          <CommissionNotEnteredDialog
-            route="export"
-            onContinue={() => {
-              const proceed = pendingAdvance;
-              setPendingAdvance(null);
-              proceed();
-            }}
-            onEnter={() => {
-              setPendingAdvance(null);
-              commission.focusFirstEmpty();
-            }}
-          />
         )}
     </ResponsiveModal>
   );

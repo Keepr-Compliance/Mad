@@ -104,7 +104,8 @@ describe("the block (Submit route)", () => {
       expect(within(block).getByText(label)).toBeInTheDocument();
     }
     expect(block.textContent).not.toMatch(/\(%\)/);
-    expect(block.querySelectorAll("p")).toHaveLength(0);
+    // (the inline empty-commission warning is a notice, not a helper line)
+    expect(Array.from(block.querySelectorAll("p")).filter((p) => !p.closest('[data-testid="commission-warning"]'))).toHaveLength(0);
   });
 
   it("Actual COPIES Offered as it is typed, until the agent edits Actual — then they are independent", () => {
@@ -120,14 +121,13 @@ describe("the block (Submit route)", () => {
     expect(field("commission-offered").value).toBe("3.5");
   });
 
-  it("computes the amount from Actual, rounded to cents BEFORE it is shown", () => {
+  it("computes the amount from Actual in WHOLE DOLLARS, rounded before it is shown", () => {
     renderSubmit();
-    type("commission-offered", "2.5"); // 412500 x 2.5% = 10312.5
-    expect(screen.getByTestId("commission-amount")).toHaveTextContent("$10,312.50");
-    expect(screen.getByTestId("commission-amount").textContent).not.toBe("$10,312.5");
+    type("commission-offered", "2.5"); // 412500 x 2.5% = 10312.5 -> $10,313
+    expect(screen.getByTestId("commission-amount").textContent).toBe("$10,313");
     type("commission-sale", "333.33");
-    type("commission-actual", "1.005"); // 333.33 x 1.005% = 3.3499665 -> 3.35
-    expect(screen.getByTestId("commission-amount")).toHaveTextContent("$3.35");
+    type("commission-actual", "1.005"); // 333.33 x 1.005% = 3.3499665 -> $3
+    expect(screen.getByTestId("commission-amount").textContent).toBe("$3");
   });
 
   it("asks for a reason whenever Actual differs from Offered, in EITHER direction, and hides it when they match again", () => {
@@ -143,25 +143,20 @@ describe("the block (Submit route)", () => {
   });
 });
 
-describe("Next and the empty-commission warning (Submit route)", () => {
-  it("an EMPTY commission warns on Next; Enter commission closes it and focuses Offered; nothing advances", async () => {
+describe("an empty commission WARNS inline and never gates Next (Submit route)", () => {
+  it("shows an inline warning on the screen, no dialog, and Next goes straight to the summary in ONE click", async () => {
     renderSubmit();
+    expect(screen.getByTestId("commission-warning")).toHaveTextContent(
+      /Your broker will see this submission without a commission figure/,
+    );
     await click("submit-review-next");
-    expect(screen.getByTestId("commission-not-entered-dialog")).toBeInTheDocument();
-    expect(screen.getByText(/Your broker will see this submission without a commission figure/)).toBeInTheDocument();
-    expect(screen.queryByText("Submission Summary")).not.toBeInTheDocument();
-
-    await click("commission-enter");
-    expect(has("commission-not-entered-dialog")).toBe(false);
-    expect(document.activeElement).toBe(field("commission-offered"));
-    expect(screen.queryByText("Submission Summary")).not.toBeInTheDocument();
+    expect(screen.getByText("Submission Summary")).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
-  it("Continue anyway NEVER blocks: it advances to the summary and Submit saves with NO commission key", async () => {
+  it("an empty commission Submit saves with NO commission key and submits", async () => {
     const { onSubmit } = renderSubmit();
     await click("submit-review-next");
-    await click("commission-continue-anyway");
-    expect(screen.getByText("Submission Summary")).toBeInTheDocument();
     await click("submit-review-submit");
     const sent = sentUpdate();
     expect(sent).toEqual(DATES);
@@ -169,33 +164,32 @@ describe("Next and the empty-commission warning (Submit route)", () => {
     expect(onSubmit).toHaveBeenCalledTimes(1);
   });
 
-  it("a commission that is ENTERED goes straight to the summary, no warning", async () => {
+  it("the warning goes away once both rates are entered", () => {
     renderSubmit();
     type("commission-offered", "3");
-    await click("submit-review-next");
-    expect(has("commission-not-entered-dialog")).toBe(false);
-    expect(screen.getByText("Submission Summary")).toBeInTheDocument();
+    expect(has("commission-warning")).toBe(false);
+    type("commission-offered", "");
+    expect(has("commission-warning")).toBe(true);
   });
 
-  it("with only Offered blanked after Actual was edited, the commission is still incomplete and warns", async () => {
+  it("with only Actual entered the commission is still incomplete and warns", () => {
     renderSubmit();
     type("commission-actual", "2");
-    await click("submit-review-next");
-    expect(has("commission-not-entered-dialog")).toBe(true);
+    expect(has("commission-warning")).toBe(true);
   });
 
-  it("an out-of-range rate BLOCKS Next with an inline error and no warning dialog", async () => {
+  it("an out-of-range rate BLOCKS Next with an inline error, and shows no warning on top of it", async () => {
     renderSubmit();
     type("commission-offered", "101");
     expect(screen.getByTestId("commission-error")).toHaveTextContent(/between 0 and 100/);
+    expect(has("commission-warning")).toBe(false);
     await click("submit-review-next");
-    expect(has("commission-not-entered-dialog")).toBe(false);
     expect(screen.queryByText("Submission Summary")).not.toBeInTheDocument();
   });
 });
 
 describe("what Submit saves", () => {
-  it("saves rates as percentages, the gross rounded to cents, the reason, and the sale price — with the dates, in ONE update", async () => {
+  it("saves rates as percentages, the gross in whole dollars, the reason, and the sale price — with the dates, in ONE update", async () => {
     renderSubmit();
     type("commission-offered", "3");
     type("commission-actual", "2.5");
@@ -208,7 +202,7 @@ describe("what Submit saves", () => {
       sale_price: 412500,
       commission_offered_rate: 3,
       commission_actual_rate: 2.5,
-      commission_gross_amount: 10312.5,
+      commission_gross_amount: 10313,
       commission_adjustment_reason: "Reduced to close the deal",
     });
   });
@@ -245,7 +239,7 @@ describe("what Submit saves", () => {
     expect(sentUpdate().commission_gross_amount).toBe(0);
   });
 
-  it("an edited sale price is saved (the gross is computed from it) and the gross rounds half up", async () => {
+  it("an edited sale price is saved (the gross is computed from it) and the gross rounds half up to whole dollars", async () => {
     renderSubmit();
     type("commission-sale", "$333.33");
     type("commission-offered", "1.005");
@@ -253,12 +247,12 @@ describe("what Submit saves", () => {
     await click("submit-review-submit");
     expect(sentUpdate().sale_price).toBe(333.33);
     expect(sentUpdate().commission_actual_rate).toBe(1.005);
-    expect(sentUpdate().commission_gross_amount).toBe(3.35);
+    expect(sentUpdate().commission_gross_amount).toBe(3);
   });
 });
 
 describe("a transaction that already has figures", () => {
-  const saved = { ...base, commission_offered_rate: 3, commission_actual_rate: 2.5, commission_gross_amount: 10312.5, commission_adjustment_reason: "Reduced to close the deal" } as unknown as Transaction;
+  const saved = { ...base, commission_offered_rate: 3, commission_actual_rate: 2.5, commission_gross_amount: 10313, commission_adjustment_reason: "Reduced to close the deal" } as unknown as Transaction;
 
   it("opens with them, and editing Offered does NOT overwrite a recorded reduction", () => {
     renderSubmit(saved);
@@ -274,7 +268,6 @@ describe("a transaction that already has figures", () => {
     type("commission-offered", "");
     type("commission-actual", "");
     await click("submit-review-next");
-    await click("commission-continue-anyway");
     await click("submit-review-submit");
     const sent = sentUpdate();
     expect(sent.commission_offered_rate).toBeNull();
@@ -285,13 +278,14 @@ describe("a transaction that already has figures", () => {
 });
 
 describe("the Export route shares the block and the writer", () => {
-  it("an empty commission warns with the export wording; Continue anyway proceeds to step 2", async () => {
+  it("an empty commission shows the export-worded inline warning; Next goes to step 2 in one click", async () => {
     renderExport();
+    expect(screen.getByTestId("commission-warning")).toHaveTextContent(
+      /This export will not include a commission figure/,
+    );
     fireEvent.click((await screen.findAllByRole("button", { name: /next/i }))[0]);
-    expect(await screen.findByTestId("commission-not-entered-dialog")).toBeInTheDocument();
-    expect(screen.getByText(/This export will not include a commission figure/)).toBeInTheDocument();
-    await click("commission-continue-anyway");
     expect(await screen.findByText("Export Options")).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
   it("an entered commission is saved with the dates when Export is pressed", async () => {
@@ -299,7 +293,6 @@ describe("the Export route shares the block and the writer", () => {
     type("commission-offered", "3");
     type("commission-actual", "2.5");
     fireEvent.click((await screen.findAllByRole("button", { name: /next/i }))[0]);
-    expect(has("commission-not-entered-dialog")).toBe(false);
     const exportButton = (await screen.findAllByRole("button", { name: /^export$/i }))[0];
     await act(async () => {
       fireEvent.click(exportButton);
@@ -309,8 +302,23 @@ describe("the Export route shares the block and the writer", () => {
       sale_price: 412500,
       commission_offered_rate: 3,
       commission_actual_rate: 2.5,
-      commission_gross_amount: 10312.5,
+      commission_gross_amount: 10313,
       commission_adjustment_reason: null,
     });
+  });
+});
+
+describe("the reason cap agrees with the validator and the cloud (2000)", () => {
+  it("the input accepts 2000 characters, and a 2000-character reason reaches the writer intact", async () => {
+    renderSubmit();
+    type("commission-offered", "3");
+    type("commission-actual", "2");
+    expect(field("commission-reason").maxLength).toBe(2000);
+    const reason = "r".repeat(2000);
+    type("commission-reason", reason);
+    expect(field("commission-reason").value.length).toBe(2000);
+    await click("submit-review-next");
+    await click("submit-review-submit");
+    expect(sentUpdate().commission_adjustment_reason).toBe(reason);
   });
 });

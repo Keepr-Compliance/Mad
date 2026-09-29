@@ -8,7 +8,7 @@
  * offered rate opens in the independent state, so reopening the dialog does not
  * overwrite a recorded reduction with the offered rate.
  */
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { Transaction } from "@/types";
 import {
   buildCommissionUpdate,
@@ -51,10 +51,6 @@ export interface CommissionForm {
    */
   update: CommissionUpdate | null;
   listingPrice: number | null;
-  offeredRef: React.RefObject<HTMLInputElement | null>;
-  actualRef: React.RefObject<HTMLInputElement | null>;
-  /** Focus Offered if empty, else Actual — "Enter commission" in the warning. */
-  focusFirstEmpty: () => void;
 }
 
 export function initialCommissionInputs(transaction: CommissionSource): CommissionInputs {
@@ -76,8 +72,6 @@ export function useCommissionForm(transaction: CommissionSource): CommissionForm
       transaction.commission_actual_rate !== undefined &&
       transaction.commission_actual_rate !== transaction.commission_offered_rate,
   );
-  const offeredRef = useRef<HTMLInputElement | null>(null);
-  const actualRef = useRef<HTMLInputElement | null>(null);
 
   const setSaleText = useCallback((saleText: string) => setInputs((p) => ({ ...p, saleText })), []);
   const setReasonText = useCallback((reasonText: string) => setInputs((p) => ({ ...p, reasonText })), []);
@@ -104,11 +98,6 @@ export function useCommissionForm(transaction: CommissionSource): CommissionForm
     return touched || hasFigure ? buildCommissionUpdate(parsed.value) : null;
   }, [parsed, inputs, initial]);
 
-  const focusFirstEmpty = useCallback(() => {
-    const offeredEmpty = inputs.offeredText.trim() === "";
-    (offeredEmpty ? offeredRef.current : actualRef.current)?.focus();
-  }, [inputs.offeredText]);
-
   return {
     inputs,
     actualFollowsOffered: !actualEdited,
@@ -120,8 +109,5 @@ export function useCommissionForm(transaction: CommissionSource): CommissionForm
     complete,
     update,
     listingPrice: transaction.listing_price ?? null,
-    offeredRef,
-    actualRef,
-    focusFirstEmpty,
   };
 }
