@@ -7,7 +7,9 @@
  * @module __tests__/pre-auth-validation.test
  */
 
+import { AuthApiError } from "@supabase/auth-js";
 import { handlePreAuthValidation } from "../handlers/preAuthValidationHandler";
+import logService from "../services/logService";
 
 // ============================================
 // MOCKS
@@ -83,6 +85,10 @@ describe("handlePreAuthValidation", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockIsOnline.mockReturnValue(true);
+    // sessionService.clearSession() resolves true on success (and on ENOENT).
+    mockClearSession.mockResolvedValue(true);
+    // Drop any unconsumed mockRejectedValueOnce so it cannot leak across tests.
+    (logService.warn as jest.Mock).mockReset().mockResolvedValue(undefined);
   });
 
   // ------------------------------------------
@@ -176,6 +182,119 @@ describe("handlePreAuthValidation", () => {
       expect(result).toEqual({ valid: false, reason: "token_invalid" });
       expect(mockClearSession).toHaveBeenCalled();
       expect(mockGetUser).not.toHaveBeenCalled();
+    });
+  });
+
+  // ------------------------------------------
+  // BACKLOG-3410: the renderer opens the DB after token_invalid /
+  // session_revoked because the session was deleted. If the delete fails, the
+  // reason must be one the renderer does not route to DB init.
+  // ------------------------------------------
+
+  describe("rejected session: clear outcome (BACKLOG-3410)", () => {
+    // Real shape of the server rejection: auth-js 2.110.2 builds it in
+    // lib/fetch.js handleError -> new AuthApiError(message, status, code);
+    // message text as seen verbatim in the desktop app's main.log.
+    const refreshTokenNotFound = () =>
+      new AuthApiError(
+        "Invalid Refresh Token: Refresh Token Not Found",
+        400,
+        "refresh_token_not_found"
+      );
+
+    it("setSession rejected + clear succeeds -> token_invalid", async () => {
+      mockLoadSession.mockResolvedValue(mockSession);
+      mockSetSession.mockResolvedValue({
+        data: { user: null, session: null },
+        error: refreshTokenNotFound(),
+      });
+
+      const result = await handlePreAuthValidation();
+
+      expect(result).toEqual({ valid: false, reason: "token_invalid" });
+      expect(mockClearSession).toHaveBeenCalledTimes(1);
+    });
+
+    it("setSession rejected + clear fails -> session_clear_failed", async () => {
+      mockLoadSession.mockResolvedValue(mockSession);
+      mockSetSession.mockResolvedValue({
+        data: { user: null, session: null },
+        error: refreshTokenNotFound(),
+      });
+      mockClearSession.mockResolvedValue(false);
+
+      const result = await handlePreAuthValidation();
+
+      expect(result).toEqual({ valid: false, reason: "session_clear_failed" });
+    });
+
+    it("getUser rejected + clear succeeds -> session_revoked", async () => {
+      mockLoadSession.mockResolvedValue(mockSession);
+      mockSetSession.mockResolvedValue({ error: null });
+      mockGetUser.mockResolvedValue({ data: { user: null }, error: { message: "User not found" } });
+
+      const result = await handlePreAuthValidation();
+
+      expect(result).toEqual({ valid: false, reason: "session_revoked" });
+      expect(mockClearSession).toHaveBeenCalledTimes(1);
+    });
+
+    it("getUser rejected + clear fails -> session_clear_failed", async () => {
+      mockLoadSession.mockResolvedValue(mockSession);
+      mockSetSession.mockResolvedValue({ error: null });
+      mockGetUser.mockResolvedValue({ data: { user: null }, error: { message: "User not found" } });
+      mockClearSession.mockResolvedValue(false);
+
+      const result = await handlePreAuthValidation();
+
+      expect(result).toEqual({ valid: false, reason: "session_clear_failed" });
+    });
+
+    // A clear that THROWS must not escape the handler: an IPC rejection is
+    // treated by the renderer as valid:true, which would open the DB with the
+    // rejected session still on disk. Grace expired, so no fallback can
+    // mask the outcome.
+    const graceExpiredSession = {
+      ...mockSession,
+      lastServerValidatedAt: Date.now() - 25 * 60 * 60 * 1000,
+    };
+
+    it("setSession rejected + clear throws -> session_clear_failed", async () => {
+      mockLoadSession.mockResolvedValue(graceExpiredSession);
+      mockSetSession.mockResolvedValue({
+        data: { user: null, session: null },
+        error: refreshTokenNotFound(),
+      });
+      mockClearSession.mockRejectedValue(new Error("ENOSPC: log write failed"));
+
+      const result = await handlePreAuthValidation();
+
+      expect(result).toEqual({ valid: false, reason: "session_clear_failed" });
+    });
+
+    it("getUser rejected + clear throws -> session_clear_failed", async () => {
+      mockLoadSession.mockResolvedValue(graceExpiredSession);
+      mockSetSession.mockResolvedValue({ error: null });
+      mockGetUser.mockResolvedValue({ data: { user: null }, error: { message: "User not found" } });
+      mockClearSession.mockRejectedValue(new Error("ENOSPC: log write failed"));
+
+      const result = await handlePreAuthValidation();
+
+      expect(result).toEqual({ valid: false, reason: "session_clear_failed" });
+    });
+
+    it("clear fails + its warning log throws -> session_clear_failed", async () => {
+      mockLoadSession.mockResolvedValue(graceExpiredSession);
+      mockSetSession.mockResolvedValue({ error: null });
+      mockGetUser.mockResolvedValue({ data: { user: null }, error: { message: "User not found" } });
+      mockClearSession.mockResolvedValue(false);
+      (logService.warn as jest.Mock).mockRejectedValueOnce(
+        new Error("ENOSPC: log write failed")
+      );
+
+      const result = await handlePreAuthValidation();
+
+      expect(result).toEqual({ valid: false, reason: "session_clear_failed" });
     });
   });
 

@@ -155,7 +155,15 @@ class FakeSupabase {
   };
   /** `check_feature_access(org, 'transaction_checklists') ->> 'allowed'`. */
   checklistsFeatureAllowed = true;
+  /**
+   * SNAPSHOT_RPC calls only. Every call-count assert in this file counts
+   * snapshot calls, and `rpcScript` is indexed by this array's length, so any
+   * other RPC the submit path makes (BACKLOG-3519's split resolution, for one)
+   * goes to `otherRpcCalls` instead and cannot shift either.
+   */
   rpcCalls: { fn: string; args: Row; parentStatusAtCall: unknown }[] = [];
+  /** Every non-SNAPSHOT_RPC call, in order. */
+  otherRpcCalls: { fn: string; args: Row }[] = [];
   /**
    * BACKLOG-3600: what the Nth snapshot call does, in order; past the end of
    * the script every call runs normally. Shapes, from supabase-js:
@@ -267,9 +275,13 @@ class FakeSupabase {
   }
 
   rpc(fn: string, args: Row): Promise<{ data: unknown; error: PgError | null }> {
+    if (fn !== SNAPSHOT_RPC) {
+      this.otherRpcCalls.push({ fn, args });
+      return this.runSnapshot(args, fn);
+    }
     const parent = this.tables.transaction_submissions.find((s) => s.id === args.p_submission_id);
     this.rpcCalls.push({ fn, args, parentStatusAtCall: parent?.status });
-    const scripted = fn === SNAPSHOT_RPC ? this.rpcScript[this.rpcCalls.length - 1] : undefined;
+    const scripted = this.rpcScript[this.rpcCalls.length - 1];
     const networkError = { data: null, error: { code: "", message: "TypeError: fetch failed" } };
     if (scripted === "network") return Promise.resolve(networkError);
     if (scripted === "hang") return new Promise(() => undefined);
@@ -1309,7 +1321,9 @@ describe("BACKLOG-3599 — resubmit with an owed broker checklist pull", () => {
     let during: unknown = null;
     let ran = false;
     const spy = jest.spyOn(fake, "rpc").mockImplementation(async (fn: string, args: Row) => {
-      if (!ran) {
+      // The snapshot call is the one inside Stages 3-6; any other RPC the
+      // submit path makes (BACKLOG-3519's split resolution) is not.
+      if (!ran && fn === SNAPSHOT_RPC) {
         ran = true;
         expect(fake.tables.transaction_submissions.filter((s) => s.status === "uploading")).toHaveLength(1);
         fake.failReadsOf.delete("submission_checklists");
