@@ -17,6 +17,7 @@
 import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
 import { extractEmail } from '@/lib/auth/helpers';
+import { signOutLocal } from '@/lib/auth/signOutLocal';
 import {
   PORTAL_MEMBERSHIP_SELECT,
   classifyPortalAccess,
@@ -214,7 +215,7 @@ export async function GET(request: Request) {
       if (!jitErrorCode) {
         console.warn('User attempted portal access without valid role');
       }
-      await supabase.auth.signOut({ scope: 'local' });
+      await signOutLocal(supabase);
       return NextResponse.redirect(`${origin}/login?error=${jitErrorCode ?? 'not_authorized'}`);
     }
   }

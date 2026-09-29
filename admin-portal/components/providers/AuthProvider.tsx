@@ -12,6 +12,7 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { createClient } from '@/lib/supabase/client';
+import { signOutLocal } from '@/lib/auth/signOutLocal';
 
 interface AuthContextType {
   user: User | null;
@@ -58,8 +59,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Use server-side logout route to capture auth.logout audit event
       await fetch('/api/auth/logout', { method: 'POST' });
     } catch {
-      // If the API route fails, still sign out client-side
-      await supabase.auth.signOut();
+      // If the API route fails, still sign this browser out client-side
+      await signOutLocal(supabase);
     }
     window.location.href = '/login';
   };
