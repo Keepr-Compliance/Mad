@@ -1409,6 +1409,7 @@ describe("AuditTransactionModal", () => {
         Array.from(bar.querySelectorAll("button")).filter((b) =>
           name.test(b.textContent ?? ""),
         );
+      expect(bar.querySelectorAll("button")).toHaveLength(expected.back ? 3 : 2);
       expect(inBar(/^cancel$/i)).toHaveLength(1);
       expect(inBar(/back/i)).toHaveLength(expected.back ? 1 : 0);
       expect(inBar(expected.primary)).toHaveLength(1);
