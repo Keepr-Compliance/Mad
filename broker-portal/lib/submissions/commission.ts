@@ -1,11 +1,11 @@
 /**
- * Commission figures on a submission (BACKLOG-3521, read-only display).
+ * Commission figures in the submission review page header (BACKLOG-3521,
+ * read-only display).
  *
- * The four columns come from supabase/migrations/20260925070000_backlog_3519_commission_figures.sql:
- *   commission_offered_rate      numeric(6,3)  a PERCENTAGE (2.5, not 0.025)
- *   commission_actual_rate       numeric(6,3)
- *   commission_gross_amount      numeric(12,2) stored already rounded to whole dollars
- *   commission_adjustment_reason text
+ * The columns come from supabase/migrations/20260925070000_backlog_3519_commission_figures.sql:
+ *   commission_offered_rate  numeric(6,3)  a PERCENTAGE (2.5, not 0.025)
+ *   commission_actual_rate   numeric(6,3)
+ *   commission_gross_amount  numeric(12,2) stored already rounded to whole dollars
  * PostgREST sends numeric as a JSON number; a string is accepted too so a
  * text-typed read ("3.000") formats the same way.
  */
@@ -14,14 +14,12 @@ export interface CommissionColumns {
   commission_offered_rate?: number | string | null;
   commission_actual_rate?: number | string | null;
   commission_gross_amount?: number | string | null;
-  commission_adjustment_reason?: string | null;
 }
 
 export interface CommissionFigures {
   offeredRate: number | null;
   actualRate: number | null;
   grossAmount: number | null;
-  reason: string | null;
 }
 
 /** Shown in a header cell that has no figure. */
@@ -34,17 +32,11 @@ function toNumber(value: number | string | null | undefined): number | null {
 }
 
 export function readCommission(row: CommissionColumns): CommissionFigures {
-  const reason = typeof row.commission_adjustment_reason === 'string' ? row.commission_adjustment_reason.trim() : '';
   return {
     offeredRate: toNumber(row.commission_offered_rate),
     actualRate: toNumber(row.commission_actual_rate),
     grossAmount: toNumber(row.commission_gross_amount),
-    reason: reason.length > 0 ? reason : null,
   };
-}
-
-export function hasCommissionFigures(f: CommissionFigures): boolean {
-  return f.offeredRate !== null || f.actualRate !== null || f.grossAmount !== null || f.reason !== null;
 }
 
 /** 3 -> "3%", 2.5 -> "2.5%", 2.375 -> "2.375%" (trailing zeros trimmed, at most 3 decimals). */
@@ -62,39 +54,15 @@ export function formatGross(amount: number): string {
   }).format(amount);
 }
 
-/**
- * offered − actual in percentage points, only when actual is LOWER than
- * offered; null otherwise. Compared in thousandths so 3.000 vs 2.500 never
- * suffers float drift.
- */
-export function reductionRate(f: CommissionFigures): number | null {
-  if (f.offeredRate === null || f.actualRate === null) return null;
-  const diff = Math.round(f.offeredRate * 1000) - Math.round(f.actualRate * 1000);
-  return diff > 0 ? diff / 1000 : null;
-}
-
 /** Header cell "Commission Offered": "3%" or "–". */
 export function offeredCell(f: CommissionFigures): string {
   return f.offeredRate === null ? NO_FIGURE : formatRate(f.offeredRate);
 }
 
-/** Header cell "Final Commission": "2.5% · $12,500", either half alone, or "–". */
-export function finalCell(f: CommissionFigures): string {
+/** Header cell "Commission Actual": "2.5% · $12,500", either half alone, or "–". */
+export function actualCell(f: CommissionFigures): string {
   const parts: string[] = [];
   if (f.actualRate !== null) parts.push(formatRate(f.actualRate));
   if (f.grossAmount !== null) parts.push(formatGross(f.grossAmount));
   return parts.length > 0 ? parts.join(' · ') : NO_FIGURE;
-}
-
-/**
- * Submissions list cell (BACKLOG-3615): offered and actual rates.
- * "3% → 2.5%" when they differ, "3%" when equal, either rate alone when only
- * one was entered, "–" when neither.
- */
-export function listCell(f: CommissionFigures): string {
-  const { offeredRate: o, actualRate: a } = f;
-  if (o === null && a === null) return NO_FIGURE;
-  if (o === null) return formatRate(a as number);
-  if (a === null) return formatRate(o);
-  return Math.round(o * 1000) === Math.round(a * 1000) ? formatRate(o) : `${formatRate(o)} → ${formatRate(a)}`;
 }

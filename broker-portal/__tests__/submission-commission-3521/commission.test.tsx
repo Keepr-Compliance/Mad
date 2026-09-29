@@ -1,22 +1,22 @@
 /**
- * Commission on the submission review page — BACKLOG-3521 (read-only display).
+ * Commission in the submission review page header — BACKLOG-3521.
  *
- * The page test runs the real server page with the real loaders against the
- * BACKLOG-3364 PostgREST emulator (plumbing copied from
- * __tests__/submission-review-3607/page.test.tsx); the Commission card and the
- * header cells render for real, every other section is stubbed.
+ * The Messages and Attachments count cells are replaced by Commission Offered
+ * and Commission Actual. The test runs the real server page with the real
+ * loaders against the BACKLOG-3364 PostgREST emulator (plumbing copied from
+ * __tests__/submission-review-3607/page.test.tsx); every section below the
+ * header is stubbed.
  *
  * FIXTURE PROVENANCE. The figure shapes are transcribed from production on
  * 2026-09-29 (`select commission_offered_rate::text, commission_actual_rate::text,
- * commission_gross_amount::text, length(commission_adjustment_reason) from
- * transaction_submissions where commission_offered_rate is not null`, MCP):
- *   row A: '3.000', '2.500', '12500.00', reason of 26 characters
- *   row B: '3.000', '3.000', '36000.00', reason NULL
- * The other 11 production rows have all four columns NULL (pre-2026-09-29).
+ * commission_gross_amount::text from transaction_submissions where
+ * commission_offered_rate is not null`, MCP):
+ *   row A: '3.000', '2.500', '12500.00'
+ *   row B: '3.000', '3.000', '36000.00'
+ * The other 11 production rows have all columns NULL (pre-2026-09-29).
  * PostgREST sends numeric as a JSON number, so the page fixtures carry
- * 3 / 2.5 / 12500; the text form is covered in the formatter tests. The
- * reason TEXT is invented (26 characters, like row A's); ids, names and
- * addresses are invented.
+ * 3 / 2.5 / 12500; the text form is covered in the formatter tests. Ids,
+ * names and addresses are invented.
  */
 
 import type React from 'react';
@@ -84,41 +84,23 @@ jest.mock('@/components/submission/StatusHistory', () => ({ StatusHistory: funct
 jest.mock('@/components/submission/ChecklistReview', () => ({ ChecklistReview: function ChecklistReview() { return null; } }));
 jest.mock('@/components/submission/SubmissionVersions', () => ({ SubmissionVersions: function SubmissionVersions() { return null; } }));
 
-import { render, screen, within } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import SubmissionDetailPage from '@/app/dashboard/submissions/[id]/page';
-import { CommissionSummary } from '@/components/submission/CommissionSummary';
 import {
-  finalCell,
+  actualCell,
   formatGross,
   formatRate,
   offeredCell,
   readCommission,
-  reductionRate,
   type CommissionColumns,
 } from '@/lib/submissions/commission';
 
 const SUB = '00000000-0000-4000-8000-000000352101'; // pii-allow-uuid: invented fixture id
 const AGENT_ID = '00000000-0000-4000-8000-000000352102'; // pii-allow-uuid: invented fixture id
 
-const REASON = 'Seller asked for reduction'; // invented, 26 chars like production row A
-const ROW_A: CommissionColumns = {
-  commission_offered_rate: 3,
-  commission_actual_rate: 2.5,
-  commission_gross_amount: 12500,
-  commission_adjustment_reason: REASON,
-};
-const ROW_B: CommissionColumns = {
-  commission_offered_rate: 3,
-  commission_actual_rate: 3,
-  commission_gross_amount: 36000,
-  commission_adjustment_reason: null,
-};
-const NO_FIGURES: CommissionColumns = {
-  commission_offered_rate: null,
-  commission_actual_rate: null,
-  commission_gross_amount: null,
-  commission_adjustment_reason: null,
-};
+const ROW_A: CommissionColumns = { commission_offered_rate: 3, commission_actual_rate: 2.5, commission_gross_amount: 12500 };
+const ROW_B: CommissionColumns = { commission_offered_rate: 3, commission_actual_rate: 3, commission_gross_amount: 36000 };
+const NO_FIGURES: CommissionColumns = { commission_offered_rate: null, commission_actual_rate: null, commission_gross_amount: null };
 
 function subRow(figures: CommissionColumns): Row {
   return {
@@ -142,6 +124,7 @@ function subRow(figures: CommissionColumns): Row {
     parent_submission_id: null,
     created_at: '2026-09-29T09:00:00+00:00',
     status_history: [],
+    commission_adjustment_reason: null,
     ...figures,
   };
 }
@@ -186,77 +169,35 @@ beforeEach(() => {
 afterEach(() => quiet.forEach((s) => s.mockRestore()));
 
 describe('header cells (BACKLOG-3521)', () => {
-  it('(a) show Commission Offered and Final Commission in place of the counts', async () => {
+  it('replace the Messages and Attachments counts with Commission Offered and Commission Actual (row A)', async () => {
     await renderPage(ROW_A);
     expect(headerCell('Commission Offered')).toBe('3%');
-    expect(headerCell('Final Commission')).toBe('2.5% · $12,500');
+    expect(headerCell('Commission Actual')).toBe('2.5% · $12,500');
     expect(screen.queryByText('Messages', { selector: 'dt' })).toBeNull();
     expect(screen.queryByText('Attachments', { selector: 'dt' })).toBeNull();
   });
 
-  it('(b) show "–" in both cells when the submission has no figures', async () => {
-    await renderPage(NO_FIGURES);
-    expect(headerCell('Commission Offered')).toBe('–');
-    expect(headerCell('Final Commission')).toBe('–');
+  it('equal rates (row B)', async () => {
+    await renderPage(ROW_B);
+    expect(headerCell('Commission Offered')).toBe('3%');
+    expect(headerCell('Commission Actual')).toBe('3% · $36,000');
   });
 
-  it('Final Commission shows either half alone', () => {
-    expect(finalCell(readCommission({ ...NO_FIGURES, commission_actual_rate: 2.5 }))).toBe('2.5%');
-    expect(finalCell(readCommission({ ...NO_FIGURES, commission_gross_amount: 12500 }))).toBe('$12,500');
+  it('show "–" in both cells when the submission has no figures', async () => {
+    await renderPage(NO_FIGURES);
+    expect(headerCell('Commission Offered')).toBe('–');
+    expect(headerCell('Commission Actual')).toBe('–');
+  });
+
+  it('Commission Actual shows either half alone', () => {
+    expect(actualCell(readCommission({ ...NO_FIGURES, commission_actual_rate: 2.5 }))).toBe('2.5%');
+    expect(actualCell(readCommission({ ...NO_FIGURES, commission_gross_amount: 12500 }))).toBe('$12,500');
     expect(offeredCell(readCommission(NO_FIGURES))).toBe('–');
   });
 });
 
-describe('Commission card (BACKLOG-3521)', () => {
-  it('renders on the page with every figure (production row A shape)', async () => {
-    await renderPage(ROW_A);
-    const card = within(screen.getByTestId('commission-card'));
-    expect(card.getByText('Commission offered', { selector: 'dt' }).nextElementSibling?.textContent).toBe('3%');
-    expect(card.getByText('Commission actual', { selector: 'dt' }).nextElementSibling?.textContent).toBe('2.5%');
-    expect(card.getByText('Gross commission', { selector: 'dt' }).nextElementSibling?.textContent).toBe('$12,500');
-    expect(card.getByTestId('commission-reduction').textContent).toBe('0.5%');
-    expect(card.getByTestId('commission-reason').textContent).toBe(`“${REASON}”`);
-  });
-
-  it('(c) the reduction pill shows only when actual < offered', () => {
-    const { unmount } = render(<CommissionSummary figures={readCommission(ROW_A)} />);
-    expect(screen.getByTestId('commission-reduction').textContent).toBe('0.5%');
-    unmount();
-
-    // production row B: actual == offered
-    const b = render(<CommissionSummary figures={readCommission(ROW_B)} />);
-    expect(screen.queryByTestId('commission-reduction')).toBeNull();
-    expect(screen.queryByText('Reduction')).toBeNull();
-    expect(screen.queryByTestId('commission-reason')).toBeNull();
-    b.unmount();
-
-    // actual above offered: no reduction either
-    render(<CommissionSummary figures={readCommission({ ...ROW_B, commission_actual_rate: 3.25 })} />);
-    expect(screen.queryByTestId('commission-reduction')).toBeNull();
-  });
-
-  it('reduction boundary sweep in thousandths', () => {
-    const r = (o: number | string, a: number | string) =>
-      reductionRate(readCommission({ ...NO_FIGURES, commission_offered_rate: o, commission_actual_rate: a }));
-    expect(r(3, 3.001)).toBeNull();
-    expect(r(3, 3)).toBeNull();
-    expect(r(3, 2.999)).toBe(0.001);
-    expect(r('3.000', '2.500')).toBe(0.5);
-    expect(r(2.9, 2.6)).toBe(0.3); // float drift would give 0.2999…
-    expect(r(3, null as unknown as number)).toBeNull();
-  });
-
-  it('(d) shows the empty state when every figure is null', async () => {
-    await renderPage(NO_FIGURES);
-    const card = within(screen.getByTestId('commission-card'));
-    expect(card.getByTestId('commission-empty').textContent).toBe('No commission figures were entered for this submission.');
-    expect(card.queryByText('Commission offered')).toBeNull();
-    expect(card.queryByTestId('commission-reduction')).toBeNull();
-  });
-});
-
 describe('formatting (BACKLOG-3521)', () => {
-  it('(e) rates trim trailing zeros', () => {
+  it('rates trim trailing zeros', () => {
     const rate = (v: string) => formatRate(readCommission({ ...NO_FIGURES, commission_offered_rate: v }).offeredRate!);
     expect(rate('3.000')).toBe('3%');
     expect(rate('2.500')).toBe('2.5%');
@@ -265,14 +206,10 @@ describe('formatting (BACKLOG-3521)', () => {
     expect(formatRate(2.5)).toBe('2.5%');
   });
 
-  it('(f) gross is whole dollars with no cents', () => {
+  it('gross is whole dollars with no cents', () => {
     const gross = (v: string | number) => formatGross(readCommission({ ...NO_FIGURES, commission_gross_amount: v }).grossAmount!);
     expect(gross('12500.00')).toBe('$12,500');
     expect(gross('36000.00')).toBe('$36,000');
     expect(gross(12500)).toBe('$12,500');
-  });
-
-  it('a blank reason counts as none', () => {
-    expect(readCommission({ ...ROW_B, commission_adjustment_reason: '   ' }).reason).toBeNull();
   });
 });

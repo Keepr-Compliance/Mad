@@ -26,8 +26,7 @@ import {
 import { loadVersionChain } from '@/lib/submissions/versions';
 import { readAllRows } from '@/lib/supabase/readAllRows';
 import { SubmissionVersions } from '@/components/submission/SubmissionVersions';
-import { CommissionSummary } from '@/components/submission/CommissionSummary';
-import { finalCell, offeredCell, readCommission } from '@/lib/submissions/commission';
+import { actualCell, offeredCell, readCommission } from '@/lib/submissions/commission';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -327,8 +326,8 @@ export default async function SubmissionDetailPage({ params }: PageProps) {
   const names = isImpersonating ? null : await resolveUserNames(client, actorIds);
   const fullHistory = resolveHistoryActors(rawHistory, names);
 
-  // BACKLOG-3521: commission figures the agent entered (read-only). No plan
-  // feature gates them; every submission before 2026-09-29 has none.
+  // BACKLOG-3521: commission figures the agent entered, shown in the header
+  // (read-only). Every submission before 2026-09-29 has none.
   const commission = readCommission(submission);
 
   return (
@@ -370,9 +369,9 @@ export default async function SubmissionDetailPage({ params }: PageProps) {
           <DetailItem label="Started" value={formatDate(submission.started_at)} />
           <DetailItem label="Closed" value={formatDate(submission.closed_at)} />
           {/* BACKLOG-3521: commission replaces the Messages/Attachments counts,
-              which stay in those sections' own titles below. */}
+              which the Messages/Attachments section titles still show. */}
           <DetailItem label="Commission Offered" value={offeredCell(commission)} />
-          <DetailItem label="Final Commission" value={finalCell(commission)} />
+          <DetailItem label="Commission Actual" value={actualCell(commission)} />
           <DetailItem label="Submitted" value={formatDate(submission.created_at)} />
         </div>
 
@@ -432,9 +431,6 @@ export default async function SubmissionDetailPage({ params }: PageProps) {
           linkedCounts={linkedCounts}
         />
       )}
-
-      {/* BACKLOG-3521: Commission, after the Checklists, read-only */}
-      <CommissionSummary figures={commission} />
 
       {/* Messages with filter tabs - gated by broker_text_view / broker_email_view (TASK-2158) */}
       {showMessages && (

@@ -12,9 +12,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { redirect } from 'next/navigation';
 import { requireFullPortalAccess } from '@/lib/auth/portalAccess';
 import { LINK_COLUMNS, loadDealPage } from '@/lib/submissions/dealList';
-import { listCell, readCommission, type CommissionColumns } from '@/lib/submissions/commission';
 
-interface Submission extends CommissionColumns {
+interface Submission {
   id: string;
   organization_id: string;
   property_address: string;
@@ -251,7 +250,7 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
                     Status
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Msgs · Commission
+                    Docs
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Submitted
@@ -297,10 +296,7 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
                       <div className="flex items-center gap-2">
                         <span title="Messages">{submission.message_count} msgs</span>
                         <span className="text-gray-300">|</span>
-                        {/* BACKLOG-3615: commission offered → actual in place of the attachments count */}
-                        <span title="Commission offered → actual" data-testid="list-commission">
-                          {listCell(readCommission(submission))}
-                        </span>
+                        <span title="Attachments">{submission.attachment_count} files</span>
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
