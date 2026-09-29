@@ -9,14 +9,35 @@
  * Navigation is role-gated exactly as the previous top-nav was (BACKLOG-907):
  * - During impersonation, only the target-user nav (Dashboard/Submissions/
  *   Support) is shown so the admin sees what the target user sees.
- * - Users/Settings appear for admin and it_admin only, never during
- *   impersonation. it_admin sees ONLY Users/Settings.
+ * - Org Settings is admin/it_admin only, never during impersonation.
  *
  * BACKLOG-3078 adds a third bucket. My Account is personal, not org policy, so
  * it shows for EVERY role and during impersonation — support reads a customer's
  * account page through that flow. It could not be added to either existing
- * bucket: it_admin never sees memberNavItems, and a broker never sees
- * adminNavItems, so either home would hide it from somebody who owns the data.
+ * bucket: it_admin never sees memberNavItems, and (before BACKLOG-3504) a
+ * broker never saw the admin bucket at all, so either home would hide it from
+ * somebody who owns the data.
+ *
+ * BACKLOG-3504 splits what was one "Users + Org Settings" bucket behind one
+ * `showAdminNav` boolean into two independent gates. The split editor
+ * (BACKLOG-3504) and the narrowed Users/detail page access
+ * (BACKLOG-3541, `broker-portal/lib/users-access.ts`'s `USERS_PAGE_ROLES`)
+ * both admit broker; Org Settings does not, and never has. Grant exactly
+ * what was approved for each: a broker gets a click path to the Users pages
+ * their new access already opens, not to org-wide SSO/SCIM/retention policy.
+ *
+ * NOT importing USERS_PAGE_ROLES from lib/users-access.ts here, even though
+ * it is the authoritative list and the obvious way to avoid two roles arrays
+ * drifting apart. Tried it, and it breaks `next build`: that module imports
+ * `@/lib/supabase/server` (for `checkUsersPageAccess()`), which pulls in
+ * `next/headers`, and this component is `'use client'` — the exact hazard
+ * `lib/account/accountView.ts`'s header already documents for the identical
+ * shape (`getAccountView.ts` vs `accountView.ts`), invisible to tsc and jest
+ * and only caught by `next build`. `lib/users-access.ts` has not had that
+ * split applied (it is not merged yet — BACKLOG-3541). Until it is, or a
+ * client-safe sibling constant exists, this file spells the same three roles
+ * inline, matching how `showMemberNav`/`showAdminNav` above were already
+ * plain inline booleans rather than imports from a shared list.
  */
 
 import Link from 'next/link';
@@ -47,8 +68,15 @@ const memberNavItems: NavItem[] = [
   { label: 'Support', href: '/dashboard/support', icon: Headphones },
 ];
 
-const adminNavItems: NavItem[] = [
+/** admin, it_admin, broker (BACKLOG-3504/3541) — gated by showUsersNav. */
+const usersNavItems: NavItem[] = [
   { label: 'Users', href: '/dashboard/users', icon: Users },
+];
+
+/** admin, it_admin ONLY — gated by showOrgSettingsNav. Never widened
+ *  alongside Users: org-wide SSO/SCIM/retention policy is a different grant
+ *  than viewing/editing one person's commission split. */
+const orgSettingsNavItems: NavItem[] = [
   // Founder, 2026-09-04: the tab named setting should say Org Settings.
   // Since BACKLOG-3078 this route holds ONLY org policy — a person's own
   // settings live at /dashboard/account — so the bare word named the wrong
@@ -91,7 +119,13 @@ export function Sidebar({
 
   // BACKLOG-907: preserve the exact nav gating of the previous top-nav.
   const showMemberNav = isImpersonating || role !== 'it_admin';
-  const showAdminNav = !isImpersonating && (role === 'admin' || role === 'it_admin');
+  // BACKLOG-3504/3541: split from the single showAdminNav boolean. Users
+  // admits broker (matches USERS_PAGE_ROLES in lib/users-access.ts — see the
+  // file header for why that is not imported directly here); Org Settings
+  // does not, and is otherwise unchanged from before this split.
+  const showUsersNav =
+    !isImpersonating && (role === 'admin' || role === 'it_admin' || role === 'broker');
+  const showOrgSettingsNav = !isImpersonating && (role === 'admin' || role === 'it_admin');
 
   // BACKLOG-3077: shared resolution — the dashboard header names the same person.
   const name = resolveViewerName({ displayName, displayEmail }) || 'User';
@@ -160,7 +194,8 @@ export function Sidebar({
       {/* Navigation */}
       <nav className={`flex-1 py-4 space-y-1 overflow-y-auto scrollbar-hide ${collapsed ? 'px-2' : 'px-3'}`}>
         {showMemberNav && memberNavItems.map(renderNavItem)}
-        {showAdminNav && adminNavItems.map(renderNavItem)}
+        {showUsersNav && usersNavItems.map(renderNavItem)}
+        {showOrgSettingsNav && orgSettingsNavItems.map(renderNavItem)}
         {personalNavItems.map(renderNavItem)}
       </nav>
 

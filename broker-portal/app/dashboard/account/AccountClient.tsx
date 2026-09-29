@@ -17,6 +17,9 @@ import { groupPreferences } from '@/lib/account/preferenceLabels';
 // From accountView, NOT getAccountView: that module imports the server-only
 // Supabase client, and pulling it into a client component fails `next build`.
 import { providerDisplayName, type AccountView } from '@/lib/account/accountView';
+// splitAgreements.ts has no server-only imports (no next/headers) — safe from
+// a client component, same rule as the accountView-vs-getAccountView split above.
+import { formatEffectiveDate } from '@/lib/splitAgreements';
 // Badge/Card family/PageHeader are Tier-2 (no @keepr/ui equivalent yet).
 import { Badge, Card, CardContent, CardHeader, PageHeader } from '@keepr/design-system';
 import { AlertBanner } from '@keepr/ui';
@@ -118,6 +121,56 @@ export default function AccountClient({ account }: AccountClientProps) {
           </div>
         </CardContent>
       </Card>
+
+      {/* Commission split — BACKLOG-3504, read-only. Rendered only when the
+          signed-in role is one splits apply to (agent/broker); admin/it_admin
+          get no card, same as the detail-page section's own gate. */}
+      {account?.splitApplies && (
+        <Card padding="none">
+          <CardHeader>
+            <h2 className="text-lg font-semibold text-gray-900">Commission split</h2>
+          </CardHeader>
+          <CardContent>
+            {account.currentSplit ? (
+              <>
+                <div className="flex flex-wrap items-baseline gap-x-8 gap-y-3">
+                  <div className="flex flex-col">
+                    <span className="text-xl font-semibold text-gray-900">
+                      {account.currentSplit.agentPct}%
+                    </span>
+                    <span className="text-xs font-semibold uppercase tracking-wide text-gray-500 mt-1">
+                      Agent
+                    </span>
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-xl font-semibold text-gray-900">
+                      {account.currentSplit.brokeragePct}%
+                    </span>
+                    <span className="text-xs font-semibold uppercase tracking-wide text-gray-500 mt-1">
+                      Brokerage
+                    </span>
+                  </div>
+                  <p className="basis-full text-sm text-gray-500">
+                    Effective from{' '}
+                    <strong className="text-gray-900 font-medium">
+                      {formatEffectiveDate(account.currentSplit.effectiveFrom)}
+                    </strong>
+                  </p>
+                </div>
+                <p className="mt-3 text-sm text-gray-500">
+                  Set by your brokerage. Contact your broker or admin to request a change — this
+                  page is read-only.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-gray-700">No split agreement on record.</p>
+                <p className="mt-1 text-sm text-gray-500">Your broker sets this.</p>
+              </>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Email retention policy set by the brokerage.
           Stated as a fact about the organization and NOTHING MORE. The org

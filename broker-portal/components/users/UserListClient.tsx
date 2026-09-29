@@ -28,6 +28,7 @@ import RemoveUserModal from './RemoveUserModal';
 import { EmptyState, SearchIcon } from '@/components/ui/EmptyState';
 import { formatUserDisplayName } from '@/lib/utils/userDisplay';
 import { resendInvite } from '@/lib/actions/resendInvite';
+import { resolveSplitListDisplay } from '@/lib/splitAgreements';
 import type { OrganizationMember, Role } from '@/lib/types/users';
 
 type ViewMode = 'cards' | 'list';
@@ -38,6 +39,12 @@ interface UserListClientProps {
   currentUserRole: Role;
   organizationId: string;
   readOnly?: boolean;
+  /** Admin/broker only, it_admin excluded — see splitAgreements.ts canViewSplit.
+   *  Hides the whole Split column, not just its cells, when false. */
+  showSplitColumn?: boolean;
+  /** Keyed by organization_members.user_id. A plain object, not a Map — the
+   *  page passes this as a prop across the server/client boundary. */
+  splitsByAgent?: Record<string, { agent_pct: number; brokerage_pct: number }>;
 }
 
 export default function UserListClient({
@@ -46,6 +53,8 @@ export default function UserListClient({
   currentUserRole,
   organizationId,
   readOnly = false,
+  showSplitColumn = false,
+  splitsByAgent = {},
 }: UserListClientProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState<string>('all');
@@ -240,6 +249,9 @@ export default function UserListClient({
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">User</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                    {showSplitColumn && (
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Split</th>
+                    )}
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Joined</th>
                     {canManage && <th className="w-12 px-4 py-3" />}
                   </tr>
@@ -257,6 +269,11 @@ export default function UserListClient({
                       onResendInvite={() => handleResendInvite(member)}
                       onDeactivate={() => setDeactivateMember(member)}
                       onRemove={() => setRemoveMember(member)}
+                      splitDisplay={
+                        showSplitColumn
+                          ? resolveSplitListDisplay(member, splitsByAgent[member.user_id ?? ''])
+                          : undefined
+                      }
                     />
                   ))}
                 </tbody>

@@ -26,6 +26,16 @@ export interface AccountIdentity {
   createdAt: string | null;
 }
 
+/** The signed-in person's own current commission split — BACKLOG-3504,
+ *  read-only here (the desktop-settings rationale applies just as much: a
+ *  second writer would be a second source of truth, and this page has no
+ *  edit control for anything). */
+export interface AccountSplit {
+  agentPct: number;
+  brokeragePct: number;
+  effectiveFrom: string;
+}
+
 export interface AccountView {
   identity: AccountIdentity;
   /** The raw blob. null when the person has no user_preferences row at all. */
@@ -36,6 +46,16 @@ export interface AccountView {
   orgRetentionYears: number | null;
   /** True while a support session is reading somebody else's account. */
   isImpersonating: boolean;
+  /**
+   * null renders NO card at all (identity.role is admin/it_admin — splits
+   * don't apply); undefined is not a state this ever takes. A present object
+   * with no agreement on record, OR a suspended agent's own read refused by
+   * RLS, are DELIBERATELY the same case here: `currentSplit: null` with
+   * `splitApplies: true` renders one honest empty-state string for both
+   * (PM ruling 2026-09-25) rather than disclosing which one happened.
+   */
+  splitApplies: boolean;
+  currentSplit: AccountSplit | null;
 }
 
 /**

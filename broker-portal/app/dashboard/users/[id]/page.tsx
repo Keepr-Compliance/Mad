@@ -14,6 +14,8 @@ import { ArrowLeft } from 'lucide-react';
 import UserDetailsCard, { type MemberDetailsData } from '@/components/users/UserDetailsCard';
 import type { Role } from '@/lib/types/users';
 import { getImpersonationSession } from '@/lib/impersonation';
+import { getSplitHistory, canViewSplit, canEditSplit, splitAppliesToRole } from '@/lib/splitAgreements';
+import type { SplitAgreementHistoryRow } from '@/lib/splitAgreements';
 
 // ============================================================================
 // Types
@@ -28,6 +30,8 @@ interface UserDetailsResult {
   currentUserId: string;
   currentUserRole: Role;
   organizationId: string;
+  /** See UserDetailsCard's own prop doc — null means don't render the section. */
+  splitSection: { history: SplitAgreementHistoryRow[]; canEdit: boolean } | null;
 }
 
 interface NotFoundResult {
@@ -132,6 +136,22 @@ async function getUserDetails(memberId: string): Promise<UserDetailsResult | Not
   // Supabase returns joined relations as arrays, extract first element
   const userData = Array.isArray(member.user) ? member.user[0] : member.user;
 
+  // Commission split — BACKLOG-3504. Own gate, independent of the
+  // admin/it_admin check above: broker+admin may view/edit, it_admin may not
+  // even read (founder, 2026-09-22). Only fetched when both the viewer and
+  // the subject qualify, so an it_admin viewer or an admin/it_admin subject
+  // never triggers the read at all — not just a hidden section.
+  const viewerRole = currentMembership.role as Role;
+  let splitSection: UserDetailsResult['splitSection'] = null;
+  if (canViewSplit(viewerRole) && splitAppliesToRole(member.role as Role) && member.user_id) {
+    const history = await getSplitHistory(
+      supabase,
+      currentMembership.organization_id,
+      member.user_id
+    );
+    splitSection = { history, canEdit: canEditSplit(viewerRole) };
+  }
+
   return {
     member: {
       ...member,
@@ -141,6 +161,7 @@ async function getUserDetails(memberId: string): Promise<UserDetailsResult | Not
     currentUserId: user.id,
     currentUserRole: currentMembership.role as Role,
     organizationId: currentMembership.organization_id,
+    splitSection,
   };
 }
 
@@ -238,6 +259,7 @@ export default async function UserDetailsPage({ params }: PageProps) {
         member={data.member}
         currentUserId={data.currentUserId}
         currentUserRole={data.currentUserRole}
+        splitSection={data.splitSection}
       />
     </div>
   );
