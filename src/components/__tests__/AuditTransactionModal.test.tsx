@@ -1251,16 +1251,37 @@ describe("AuditTransactionModal", () => {
       expect(payload).not.toHaveProperty("listing_price_text");
     });
 
-    it("L3: text that is not an amount stops step 1 with an error", async () => {
+    it("L3: letters typed into the Listing Price are dropped, so step 1 still continues", async () => {
       renderCreate();
       await userEvent.type(
         screen.getByPlaceholderText(/enter property address/i),
         "123 Main Street",
       );
-      await userEvent.type(screen.getByTestId("create-audit-listing-price-input"), "abc");
+      const input = screen.getByTestId("create-audit-listing-price-input");
+      await userEvent.type(input, "abc");
+      // Live formatting (BACKLOG-3614 QA) keeps only digits and one dot, so a
+      // non-amount can no longer be typed; the step-1 check stays as a guard.
+      expect(input).toHaveValue("");
       await userEvent.click(getButton(/continue/i));
-      expect(await screen.findByText("Listing Price must be a valid amount")).toBeInTheDocument();
-      expect(screen.queryByTestId("contact-assignment-step-2")).toBeNull();
+      expect(screen.queryByText("Listing Price must be a valid amount")).toBeNull();
+    });
+
+    it("L5: typing 1000000 shows 1,000,000 and sends the plain number 1000000", async () => {
+      const payload = await createThroughTheWizard("1000000");
+      expect(payload.listing_price).toBe(1000000);
+      expect(typeof payload.listing_price).toBe("number");
+      expect(payload).not.toHaveProperty("listing_price_text");
+    });
+
+    it("L6: the Listing Price field shows commas while typing on step 1", async () => {
+      renderCreate();
+      const input = screen.getByTestId("create-audit-listing-price-input");
+      await userEvent.type(input, "100");
+      expect(input).toHaveValue("100");
+      await userEvent.type(input, "0");
+      expect(input).toHaveValue("1,000");
+      await userEvent.type(input, "000");
+      expect(input).toHaveValue("1,000,000");
     });
 
     it("L4: Edit Transaction Details prefills the Listing Price and saves a change", async () => {

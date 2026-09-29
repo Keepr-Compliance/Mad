@@ -76,20 +76,25 @@ describe("AddressVerificationStep — dates section (edit mode, showEndDate)", (
     expect(screen.queryByText(/Scheduled closing date/i)).toBeNull();
   });
 
-  it("puts Representation Start Date and End Date in one responsive grid row", () => {
+  it("puts Representation Start Date, End Date and Listing Price in one responsive grid row", () => {
     renderStep();
     const start = screen.getByTestId("create-audit-start-date-input");
     const end = screen.getByTestId("create-audit-end-date-input");
+    const listing = screen.getByTestId("create-audit-listing-price-input");
 
-    // Each input sits in its own cell <div>; both cells must share one parent,
+    // Each input sits in its own cell <div>; the cells must share one parent,
     // and that parent is the grid. A revert to a full-width Start Date block
-    // above the row gives them different parents.
-    const startCell = start.closest("div")!.parentElement!;
-    const endCell = end.closest("div")!.parentElement!;
-    expect(startCell).toBe(endCell);
-    expect(startCell.className).toContain("grid");
-    expect(startCell.className).toContain("grid-cols-1");
-    expect(startCell.className).toContain("sm:grid-cols-2");
+    // above the row gives them different parents. BACKLOG-3614 added the
+    // Listing Price as the row's third cell (its input sits one level deeper,
+    // inside the dollar-sign wrapper).
+    const row = screen.getByTestId("create-audit-dates-row");
+    expect(start.closest("div")!.parentElement).toBe(row);
+    expect(end.closest("div")!.parentElement).toBe(row);
+    expect(listing.closest("div")!.parentElement!.parentElement).toBe(row);
+    expect(row.children).toHaveLength(3);
+    expect(row.className).toContain("grid");
+    expect(row.className).toContain("grid-cols-1");
+    expect(row.className).toContain("sm:grid-cols-3");
   });
 
   it("puts the one InfoTooltip on the Transaction Dates heading, not on the start-date label", () => {
@@ -229,15 +234,21 @@ describe("AddressVerificationStep — dates section (create mode, BACKLOG-3613)"
     expect(container.querySelectorAll('input[type="date"]')).toHaveLength(1);
   });
 
-  it("keeps Representation Start Date in the same responsive grid, required and alone", () => {
+  it("puts Representation Start Date and Listing Price side by side, start date required", () => {
     renderCreate();
     const start = screen.getByTestId("create-audit-start-date-input");
     const grid = start.closest("div")!.parentElement!;
+    expect(grid).toBe(screen.getByTestId("create-audit-dates-row"));
     expect(grid.className).toContain("grid");
+    // One column below sm: (stacked), two from sm: up: start date left,
+    // Listing Price right (founder, 2026-09-29, BACKLOG-3614).
     expect(grid.className).toContain("grid-cols-1");
-    // Same two-column grid as the edit screen, so the start date keeps its width.
     expect(grid.className).toContain("sm:grid-cols-2");
-    expect(grid.children).toHaveLength(1);
+    expect(grid.children).toHaveLength(2);
+    expect(grid.children[0]).toBe(start.parentElement);
+    expect(
+      grid.children[1].contains(screen.getByTestId("create-audit-listing-price-input")),
+    ).toBe(true);
 
     const label = start.parentElement!.querySelector("label")!;
     expect(label.textContent).toContain("Representation Start Date *");
@@ -304,7 +315,7 @@ describe("AddressVerificationStep — Listing Price (BACKLOG-3614)", () => {
     expect(input).toHaveValue("");
   });
 
-  it("shows the typed text and reports every change", async () => {
+  it("shows the given text and reports each change with commas added", async () => {
     const onListingPriceChange = jest.fn();
     render(
       <AddressVerificationStep
@@ -316,6 +327,7 @@ describe("AddressVerificationStep — Listing Price (BACKLOG-3614)", () => {
     const input = screen.getByTestId("create-audit-listing-price-input");
     expect(input).toHaveValue("525,000");
     await userEvent.type(input, "1");
-    expect(onListingPriceChange).toHaveBeenLastCalledWith("525,0001");
+    // regrouped as it is typed, not "525,0001"
+    expect(onListingPriceChange).toHaveBeenLastCalledWith("5,250,001");
   });
 });

@@ -18,6 +18,7 @@ import type { AddressData, AddressSuggestion } from "../../hooks/useAuditTransac
 // stored enum and are spelled out below, unchanged.
 import { TRANSACTION_TYPE_LABELS } from "../../constants/transactionTypes";
 import { InfoTooltip } from "../common/InfoTooltip";
+import LiveMoneyInput from "../common/LiveMoneyInput";
 
 interface AddressVerificationStepProps {
   addressData: AddressData;
@@ -207,38 +208,6 @@ function AddressVerificationStep({
         </div>
       </div>
 
-      {/* BACKLOG-3614: Listing Price, OPTIONAL (founder, 2026-09-29) — no
-          asterisk, no `required`, no red-when-empty border; blank never blocks
-          Continue or create. Typed the same way as the Sale Price on the
-          commission step: "$", commas and spaces allowed, parsed by
-          `parseMoney`. Shown on create and on Edit Transaction Details. */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div>
-          <label
-            htmlFor="create-audit-listing-price"
-            className="block text-sm font-medium text-gray-700 mb-2"
-          >
-            Listing Price
-          </label>
-          <div className="relative">
-            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-gray-500 pointer-events-none">
-              $
-            </span>
-            <input
-              id="create-audit-listing-price"
-              type="text"
-              inputMode="decimal"
-              value={addressData.listing_price_text ?? ""}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                onListingPriceChange?.(e.target.value)
-              }
-              className="w-full pl-7 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-gray-900 bg-white min-h-[44px]"
-              data-testid="create-audit-listing-price-input"
-            />
-          </div>
-        </div>
-      </div>
-
       <div>
         <div className="flex items-center justify-between mb-3">
           <label className="flex items-center text-sm font-medium text-gray-700">
@@ -272,14 +241,18 @@ function AddressVerificationStep({
           </label>
         </div>
 
-        {/* Creating a deal: the representation start date only, in the left
-            half of the grid from sm: up (same width as before BACKLOG-3613).
-            The end date stays empty — an ongoing deal — and is entered at
-            Submit for review or Export.
-            Editing a deal: start date and end date side by side from sm: up.
+        {/* Creating a deal: Representation Start Date and Listing Price side
+            by side from sm: up (founder, 2026-09-29, BACKLOG-3614). The end
+            date stays empty — an ongoing deal — and is entered at Submit for
+            review or Export (BACKLOG-3613).
+            Editing a deal: start date, end date and Listing Price on one row
+            from sm: up. Below sm: every field stacks, full width.
             The closing date is not asked for here — it is optional in the data
             model and is set later from the Export modal. */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div
+          className={`grid grid-cols-1 gap-4 ${showEndDate ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}
+          data-testid="create-audit-dates-row"
+        >
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">
               Representation Start Date *
@@ -323,6 +296,33 @@ function AddressVerificationStep({
               />
             </div>
           )}
+          {/* BACKLOG-3614: Listing Price, OPTIONAL (founder, 2026-09-29) — no
+              asterisk, no `required`, no red-when-empty border; blank never
+              blocks Continue or create. Commas are added as you type
+              (LiveMoneyInput); the text is parsed by `parseMoney` on save, so
+              the stored value is a plain number. Shown on create and on Edit
+              Transaction Details. */}
+          <div>
+            <label
+              htmlFor="create-audit-listing-price"
+              className="block text-xs font-medium text-gray-600 mb-1"
+            >
+              Listing Price
+            </label>
+            <div className="relative">
+              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-gray-500 pointer-events-none">
+                $
+              </span>
+              <LiveMoneyInput
+                id="create-audit-listing-price"
+                inputMode="decimal"
+                value={addressData.listing_price_text ?? ""}
+                onValueChange={(text) => onListingPriceChange?.(text)}
+                className="w-full pl-7 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-gray-900 bg-white min-h-[44px]"
+                data-testid="create-audit-listing-price-input"
+              />
+            </div>
+          </div>
         </div>
       </div>
 

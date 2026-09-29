@@ -252,7 +252,7 @@ function Dashboard({
         </div>
 
         {/* Action Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-8">
           {/* Start New Audit Card */}
           <button
             onClick={handleStartNewAuditClick}
@@ -286,7 +286,7 @@ function Dashboard({
                 </svg>
               </div>
               <div className="flex-1">
-                <h2 className="text-xl font-bold text-gray-900">
+                <h2 className="text-xl font-bold text-gray-900 whitespace-nowrap">
                   New Transaction
                 </h2>
               </div>
