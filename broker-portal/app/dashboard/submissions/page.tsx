@@ -5,6 +5,7 @@ import { formatCurrency, formatRelativeTime, getStatusColor, formatStatus } from
 import { SubmissionListClient } from '@/components/submission/SubmissionListClient';
 import { EmptySubmissions } from '@/components/ui/EmptyState';
 import { SubmissionPagination } from '@/components/submission/SubmissionPagination';
+import { SubmissionRow } from '@/components/submission/SubmissionRow';
 import { getDataClient, getTargetOrganizationId } from '@/lib/impersonation-guards';
 import { getOrgFeatures, isFeatureEnabled } from '@/lib/feature-gate';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -261,7 +262,11 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {displaySubmissions.map((submission) => (
-                  <tr key={submission.id} className="hover:bg-gray-50 transition-colors cursor-pointer group">
+                  <SubmissionRow
+                    key={submission.id}
+                    href={`/dashboard/submissions/${submission.id}`}
+                    className="hover:bg-gray-50 transition-colors cursor-pointer group"
+                  >
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm font-medium text-gray-900">
                         {submission.property_address}
@@ -306,7 +311,7 @@ export default async function SubmissionsPage({ searchParams }: PageProps) {
                         <ChevronRight className="h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity" />
                       </Link>
                     </td>
-                  </tr>
+                  </SubmissionRow>
                 ))}
               </tbody>
             </table>
