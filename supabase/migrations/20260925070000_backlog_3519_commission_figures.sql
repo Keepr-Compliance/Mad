@@ -62,7 +62,8 @@ ALTER TABLE public.transaction_submissions
   -- example: 100,000 x 10% -> 10,000.
   ADD COLUMN IF NOT EXISTS commission_offered_rate      numeric(6,3),
   ADD COLUMN IF NOT EXISTS commission_actual_rate       numeric(6,3),
-  -- Computed and rounded to cents ONCE by the writer (BACKLOG-3520), stored
+  -- Computed and rounded to WHOLE DOLLARS (half up) ONCE by the writer
+  -- (BACKLOG-3520): Math.round(sale x rate%), so 412,500 x 2.5% = 10,313. Stored
   -- rather than derived on read -- so a later correction to sale_price
   -- cannot silently change a submission's historical gross commission.
   ADD COLUMN IF NOT EXISTS commission_gross_amount      numeric(12,2),
@@ -93,7 +94,7 @@ COMMENT ON COLUMN public.transaction_submissions.commission_offered_rate IS
 COMMENT ON COLUMN public.transaction_submissions.commission_actual_rate IS
   'BACKLOG-3519: percentage. What actually applied; may differ from offered.';
 COMMENT ON COLUMN public.transaction_submissions.commission_gross_amount IS
-  'BACKLOG-3519: sale_price x commission_actual_rate, rounded to cents once by the writer. Stored, never derived on read.';
+  'BACKLOG-3519: sale_price x commission_actual_rate, rounded to whole dollars (half up) once by the writer. Stored, never derived on read.';
 COMMENT ON COLUMN public.transaction_submissions.commission_adjustment_reason IS
   'BACKLOG-3519: optional free text. Recordable when actual differs from offered, in either direction; empty never blocks.';
 

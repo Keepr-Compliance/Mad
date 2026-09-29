@@ -7,11 +7,10 @@
  *
  * Adds four nullable columns to `transactions`: the commission rate the agent
  * was offered, the rate that actually applied, the gross commission computed
- * from them (rounded to whole dollars once by the writer, never derived on read), and
- * an optional free-text reason for a rate change. No index — nothing queries
- * by these values. No local column mirrors the cloud-side split snapshot
- * (agent_split_agreements is a cloud-only concept); see schema.sql's comment
- * on this section and pm_comments on BACKLOG-3519 for the full reasoning.
+ * from them (whole dollars, rounded half up, once by the writer; never derived
+ * on read), and an optional free-text reason for a rate change. No index — nothing queries
+ * by these values. Figures only: no split is stored or resolved; see
+ * schema.sql's comment on this section and pm_comments on BACKLOG-3519.
  *
  * Every statement here is fully static; nothing is built by interpolating a
  * caller's value.

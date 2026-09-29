@@ -1017,11 +1017,8 @@ CREATE TABLE IF NOT EXISTS transactions (
   -- amount; see the v73 migration entry for the full design note). Percentage
   -- as entered (2.50), not a fraction (0.025). commission_gross_amount is
   -- computed and rounded to whole dollars once by the writer, not derived on read.
-  -- No local column mirrors the cloud split snapshot (split_agent_pct etc. on
-  -- transaction_submissions): the split is cloud-resolved at submission time
-  -- from agent_split_agreements, a concept this local schema has no
-  -- equivalent of, and a resubmission re-resolving into a local copy would
-  -- overwrite the very freeze the cloud-side snapshot exists to provide.
+  -- Figures only: no split is stored or resolved by this feature, locally or
+  -- in the cloud submission record.
   commission_offered_rate REAL,
   commission_actual_rate REAL,
   commission_gross_amount REAL,

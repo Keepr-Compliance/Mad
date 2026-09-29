@@ -829,8 +829,8 @@ export interface Transaction {
   earnest_money_amount?: number;
 
   // Commission Figures (BACKLOG-3519, M2 -- figures only). Percentage as
-  // entered (2.50), not a fraction. No local field for the cloud-side split
-  // snapshot (agent_split_agreements is a cloud-only concept).
+  // entered (2.50), not a fraction. commission_gross_amount is whole dollars
+  // (half up). Figures only: no split is stored.
   commission_offered_rate?: number;
   commission_actual_rate?: number;
   commission_gross_amount?: number;

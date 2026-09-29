@@ -128,8 +128,8 @@ export const TransactionSchema = z.object({
   earnest_money_amount: z.number().nullable().optional(),
 
   // Commission Figures (BACKLOG-3519, M2 -- figures only). Percentage as
-  // entered (2.50), not a fraction. No local column for the cloud-side split
-  // snapshot -- see schema.sql's comment on this section.
+  // entered (2.50), not a fraction. commission_gross_amount is whole dollars
+  // (half up). Figures only: no split is stored.
   commission_offered_rate: z.number().nullable().optional(),
   commission_actual_rate: z.number().nullable().optional(),
   commission_gross_amount: z.number().nullable().optional(),
