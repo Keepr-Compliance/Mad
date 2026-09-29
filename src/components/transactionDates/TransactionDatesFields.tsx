@@ -15,7 +15,7 @@
  * skip the duplicate heading. Export keeps it.
  *
  * It sets no panel width, so it fits both Export's MODAL_PANEL.lg frame and the
- * Submit dialog's `max-w-md`.
+ * Submit dialog's `max-w-xl`.
  */
 import React from "react";
 import type { Transaction } from "@/types";
@@ -99,7 +99,7 @@ export function TransactionDatesFields({
   commissionRoute = "submit",
 }: TransactionDatesFieldsProps): React.ReactElement {
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div>
         {/* BACKLOG-334 (founder QA 2026-09-19): title left, button right,
             the same header row the emails/texts tabs use —
@@ -122,10 +122,10 @@ export function TransactionDatesFields({
         {meta}
       </div>
 
-      <div className="space-y-4">
+      <div className="space-y-3">
         {/* Start Date */}
         <div>
-          <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center justify-between mb-1">
             <FieldLabel text="Start Date *" help={TRANSACTION_DATE_HELP.startDate} />
             {transaction.representation_start_confidence &&
               formatConfidence(
@@ -147,13 +147,13 @@ export function TransactionDatesFields({
             type="date"
             value={dates.startDate}
             onChange={(e) => onDateChange("startDate", e.target.value)}
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-gray-900 bg-white min-h-[44px]"
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-gray-900 bg-white min-h-[44px]"
           />
         </div>
 
         {/* Closing Date (optional) */}
         <div>
-          <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center justify-between mb-1">
             <FieldLabel text="Closing Date" help={TRANSACTION_DATE_HELP.closingDate} />
             {transaction.closing_date_confidence &&
               formatConfidence(transaction.closing_date_confidence) && (
@@ -173,20 +173,20 @@ export function TransactionDatesFields({
             type="date"
             value={dates.closingDate}
             onChange={(e) => onDateChange("closingDate", e.target.value)}
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-gray-900 bg-white min-h-[44px]"
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-gray-900 bg-white min-h-[44px]"
           />
         </div>
 
         {/* End Date */}
         <div>
-          <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center justify-between mb-1">
             <FieldLabel text="End Date *" help={TRANSACTION_DATE_HELP.endDate} />
           </div>
           <input
             type="date"
             value={dates.endDate}
             onChange={(e) => onDateChange("endDate", e.target.value)}
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-gray-900 bg-white min-h-[44px]"
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-gray-900 bg-white min-h-[44px]"
           />
         </div>
       </div>
