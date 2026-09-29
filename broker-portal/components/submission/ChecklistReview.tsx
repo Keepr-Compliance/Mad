@@ -47,21 +47,31 @@ import { Button } from '@keepr/design-system';
 import { formatDate } from '@/lib/utils';
 import {
   ADD_OPEN_STATUSES,
+  agentRemovals,
   changedSinceChecked,
+  isRemovedSection,
   requestChangesAvailable,
   formatRequired,
   overallRequiredCount,
   requiredCount,
+  sectionKey,
   tickOpenFor,
+  type AgentRemoval,
   type ChecklistItemView,
   type ChecklistLink,
   type ChecklistSectionView,
+  type LinkedCounts,
   type RequiredCount,
   type SupersededBy,
   type TemplateOption,
 } from '@/lib/submissions/checklistModel';
-import { actorName } from '@/lib/submissions/history';
-import { addChecklistAtReview, setReviewerCheck } from '@/lib/actions/submissionChecklists';
+import { actorLabel, actorName, linkedPhrase } from '@/lib/submissions/history';
+import {
+  addChecklistAtReview,
+  removeChecklistAtReview,
+  restoreChecklistAtReview,
+  setReviewerCheck,
+} from '@/lib/actions/submissionChecklists';
 import { AttachmentViewerModal } from './AttachmentViewerModal';
 import {
   ConversationModal,
@@ -109,6 +119,30 @@ export interface ChecklistReviewProps {
    * or is being sent ('uploading'). Ticking is closed on such a version.
    */
   supersededBy?: SupersededBy;
+  /**
+   * BACKLOG-3607: THIS version's own status_history (raw, not the chain), for
+   * the agent's removals and "Add it back". Broker page only.
+   */
+  versionHistory?: unknown;
+  /** BACKLOG-3607: this version's number, for "restored from version N". */
+  version?: number | null;
+  /**
+   * BACKLOG-3607: section id -> documents and emails linked to it on this
+   * version, counted server-side by the remove RPC's rule, for the confirmation.
+   */
+  linkedCounts?: Record<string, LinkedCounts>;
+}
+
+/**
+ * BACKLOG-3607: the Remove confirmation's sentence about linked evidence.
+ * Documents and emails stay on the deal; only the checklist and its links go.
+ */
+export function removeConfirmText(counts: LinkedCounts | undefined): string {
+  if (!counts) return 'Documents and emails linked to it stay on the deal; the checklist and its links are removed.';
+  const linked = linkedPhrase(counts.documents, counts.emails);
+  if (!linked) return 'No documents or emails are linked to it. The checklist is removed.';
+  const verb = counts.documents + counts.emails === 1 ? 'is' : 'are';
+  return `${linked} ${verb} linked to it. They stay on the deal; the checklist and its links are removed.`;
 }
 
 /**
@@ -171,6 +205,9 @@ export function ChecklistReview({
   attachments,
   viewer: viewerRole = 'reviewer',
   supersededBy = null,
+  versionHistory,
+  version = null,
+  linkedCounts,
 }: ChecklistReviewProps) {
   const isAgent = viewerRole === 'agent';
   const router = useRouter();
@@ -182,7 +219,9 @@ export function ChecklistReview({
   const [open, setOpen] = useState<Set<string>>(
     () =>
       new Set(
-        initialSections.filter((s, idx) => idx === 0 || s.addedAtReviewBy).map((s) => s.id)
+        initialSections
+          .filter((s, idx) => (idx === 0 || s.addedAtReviewBy) && !isRemovedSection(s))
+          .map((s) => s.id)
       )
   );
 
@@ -194,7 +233,7 @@ export function ChecklistReview({
     const arrived = initialSections.filter((s) => !knownIds.has(s.id));
     if (arrived.length === 0) return;
     setKnownIds(new Set(initialSections.map((s) => s.id)));
-    const addedNow = arrived.filter((s) => s.addedAtReviewBy).map((s) => s.id);
+    const addedNow = arrived.filter((s) => s.addedAtReviewBy && !isRemovedSection(s)).map((s) => s.id);
     if (addedNow.length > 0) setOpen((prev) => new Set([...Array.from(prev), ...addedNow]));
   }, [initialSections]);
   const allOpen = sections.length > 0 && sections.every((s) => open.has(s.id));
@@ -240,6 +279,49 @@ export function ChecklistReview({
   const showAdd = !isAgent && canTick && (addStatusOpen || status === 'needs_changes');
   const pointAtRequestChanges = !isAgent && requestChangesAvailable(status, canDecide);
   const overall = overallRequiredCount(sections, viewerRole);
+  const liveSections = sections.filter((s) => !isRemovedSection(s));
+  // BACKLOG-3607: remove, undo a removal, and add back what the agent removed
+  // are open exactly when Add is (same statuses, not superseded).
+  const actOpen = !isAgent && canTick && addOpen;
+  const removals = useMemo(() => (isAgent ? [] : agentRemovals(versionHistory)), [isAgent, versionHistory]);
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<ChecklistSectionView | null>(null);
+
+  const onUndoRemove = async (section: ChecklistSectionView) => {
+    if (!actOpen || !section.templateId || pendingAction !== null) return;
+    setPendingAction(`undo:${section.id}`);
+    setError(null);
+    try {
+      const result = await addChecklistAtReview(submissionId, section.templateId);
+      if (!result.ok) {
+        setError(result.message);
+        return;
+      }
+      router.refresh();
+    } catch {
+      setError('Something went wrong. Please try again.');
+    } finally {
+      setPendingAction(null);
+    }
+  };
+
+  const onAddBack = async (removal: AgentRemoval) => {
+    if (!actOpen || !removal.removedChecklistId || pendingAction !== null) return;
+    setPendingAction(`restore:${removal.key}`);
+    setError(null);
+    try {
+      const result = await restoreChecklistAtReview(submissionId, removal.removedChecklistId);
+      if (!result.ok) {
+        setError(result.message);
+        return;
+      }
+      router.refresh();
+    } catch {
+      setError('Something went wrong. Please try again.');
+    } finally {
+      setPendingAction(null);
+    }
+  };
 
   const onTick = async (item: ChecklistItemView) => {
     // A disabled checkbox can still deliver a change event (jsdom does); a
@@ -282,11 +364,12 @@ export function ChecklistReview({
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-3">
             <h2 className="text-lg font-semibold text-gray-900">Checklists</h2>
-            {loaded && sections.length > 0 && <RequiredPill count={overall} />}
+            {loaded && liveSections.length > 0 && <RequiredPill count={overall} />}
           </div>
           {loaded && (
             <p className="mt-1 text-sm text-gray-500">
-              {sections.length} checklist{sections.length === 1 ? '' : 's'}
+              {liveSections.length} checklist{liveSections.length === 1 ? '' : 's'}
+              {liveSections.length !== sections.length && ` · ${sections.length - liveSections.length} removed at review`}
             </p>
           )}
         </div>
@@ -338,6 +421,57 @@ export function ChecklistReview({
         </div>
       )}
 
+      {loaded && removals.length > 0 && (
+        <ul className="border-b border-gray-200 bg-amber-50 px-6 py-3 text-sm text-amber-900" data-testid="agent-removals">
+          {removals.map((r) => {
+            const live = sections.find((s) => !isRemovedSection(s) && sectionKey(s) === r.key);
+            const removedHere = sections.find((s) => isRemovedSection(s) && sectionKey(s) === r.key);
+            const who = actorLabel(r.changedBy, nameMap) ?? 'The agent';
+            let after: string | null = null;
+            if (live) {
+              const by = live.restoredFromChecklistId && live.addedAtReviewBy ? actorName(live.addedAtReviewBy, nameMap) : undefined;
+              after = live.restoredFromChecklistId ? (by ? `Added back by ${by}.` : 'Added back.') : 'It is on this version again.';
+            } else if (removedHere) {
+              after = 'It was added back, then removed at review.';
+            }
+            const offer = !after && actOpen && r.removedChecklistId !== null;
+            return (
+              <li key={r.key} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-0.5" data-testid="agent-removal">
+                <span>
+                  {r.addedAtReview ? (
+                    <>
+                      <strong className="font-semibold">{r.name}</strong>, which was added at review, is not on this version.
+                    </>
+                  ) : (
+                    <>
+                      {who} removed <strong className="font-semibold">{r.name}</strong> from this version.
+                    </>
+                  )}
+                  {after && <span className="ml-1 text-amber-800">{after}</span>}
+                </span>
+                {offer && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={pendingAction !== null}
+                    onClick={() => onAddBack(r)}
+                    aria-label={`${r.addedAtReview ? 'Add it again' : 'Add it back'}: ${r.name}`}
+                  >
+                    {pendingAction === `restore:${r.key}` ? (
+                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                    ) : r.addedAtReview ? (
+                      'Add it again'
+                    ) : (
+                      'Add it back'
+                    )}
+                  </Button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
       {!loaded ? (
         <p className="px-6 py-6 text-sm text-gray-500">The checklists for this submission could not be loaded. Refresh the page to try again.</p>
       ) : sections.length === 0 ? (
@@ -348,6 +482,9 @@ export function ChecklistReview({
             const isOpen = open.has(section.id);
             const bodyId = `checklist-section-${section.id}`;
             const addedBy = section.addedAtReviewBy ? actorName(section.addedAtReviewBy, nameMap) : undefined;
+            const removed = isRemovedSection(section);
+            const removedBy = removed ? actorName(section.removedAtReviewBy, nameMap) : undefined;
+            const sectionTickOpen = tickOpen && !removed;
             return (
               <section key={section.id} className={idx > 0 ? 'border-t border-gray-200' : ''}>
                 <button
@@ -363,15 +500,52 @@ export function ChecklistReview({
                       aria-hidden
                     />
                     <span className="text-[15px] font-semibold text-gray-900">{section.name}</span>
-                    {section.addedAtReviewBy && (
+                    {section.addedAtReviewBy && !removed && (
                       <span className="rounded-full bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-800">Added</span>
                     )}
+                    {removed && (
+                      <span className="rounded-full bg-gray-200 px-2 py-0.5 text-xs font-medium text-gray-700">
+                        Removed at review
+                      </span>
+                    )}
                   </span>
-                  <RequiredPill count={requiredCount(section.items, viewerRole)} />
+                  {!removed && <RequiredPill count={requiredCount(section.items, viewerRole)} />}
                 </button>
                 {isOpen && (
                   <div id={bodyId}>
-                    {section.addedAtReviewBy && (
+                    {removed && (
+                      <div
+                        className="flex flex-wrap items-center justify-between gap-3 bg-gray-100 px-6 py-3 text-[13px] text-gray-700"
+                        data-testid="removed-banner"
+                      >
+                        <p>
+                          {removedBy ? (
+                            <>
+                              Removed by <strong className="font-bold">{removedBy}</strong> at review
+                            </>
+                          ) : (
+                            <>Removed at review</>
+                          )}
+                          {section.removedAtReviewAt ? ` · ${formatDate(section.removedAtReviewAt)}` : ''}.
+                          {isAgent ? ' It is not on your next version.' : ' It is not on the agent’s next version.'}
+                        </p>
+                        {/* Undo = the add RPC's un-remove ('readded'); it keys on
+                            the template, so a checklist with none has no Undo. */}
+                        {showAdd && section.templateId && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            disabled={!actOpen || pendingAction !== null}
+                            onClick={() => onUndoRemove(section)}
+                            aria-label={`Undo removal: ${section.name}`}
+                            aria-describedby={!actOpen && closedReason ? CLOSED_REASON_ID : undefined}
+                          >
+                            {pendingAction === `undo:${section.id}` ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : 'Undo'}
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                    {section.addedAtReviewBy && !removed && (
                       <p className="bg-purple-100 px-6 py-3 text-[13px] text-purple-800">
                         {isAgent ? (
                           addedBy ? (
@@ -423,8 +597,10 @@ export function ChecklistReview({
                                 <input
                                   type="checkbox"
                                   checked={item.reviewerChecked}
-                                  disabled={!tickOpen || pendingItem !== null}
-                                  onChange={() => onTick(item)}
+                                  disabled={!sectionTickOpen || pendingItem !== null}
+                                  onChange={() => {
+                                    if (sectionTickOpen) void onTick(item);
+                                  }}
                                   aria-label={`Checked: ${item.title}`}
                                   aria-describedby={closedReason ? CLOSED_REASON_ID : undefined}
                                   className="h-[18px] w-[18px] rounded border-gray-300 text-primary-600 focus:ring-2 focus:ring-primary-500 disabled:cursor-default"
@@ -455,7 +631,16 @@ export function ChecklistReview({
                             </div>
                             {checkbox && item.reviewerChecked && (reviewedBy || item.reviewerCheckedAt) && (
                               <p className="mt-0.5 text-xs text-gray-500" data-testid="reviewer-meta">
-                                {[reviewedBy, item.reviewerCheckedAt ? formatDate(item.reviewerCheckedAt) : null]
+                                {[
+                                  reviewedBy,
+                                  item.reviewerCheckedAt ? formatDate(item.reviewerCheckedAt) : null,
+                                  // BACKLOG-3607: a tick carried back with "Add it back".
+                                  item.restoredFromItemId
+                                    ? typeof version === 'number' && version > 1
+                                      ? `restored from version ${version - 1}`
+                                      : 'restored from the previous version'
+                                    : null,
+                                ]
                                   .filter(Boolean)
                                   .join(' · ')}
                               </p>
@@ -498,6 +683,21 @@ export function ChecklistReview({
                         </div>
                       );
                     })}
+                    {/* BACKLOG-3607: the broker removes a checklist at review. */}
+                    {!removed && showAdd && (
+                      <div className="flex justify-end border-t border-gray-200 px-6 py-2.5" data-testid="remove-row">
+                        <button
+                          type="button"
+                          onClick={() => setRemoveTarget(section)}
+                          disabled={!actOpen || pendingAction !== null}
+                          aria-label={`Remove checklist: ${section.name}`}
+                          aria-describedby={!actOpen && closedReason ? CLOSED_REASON_ID : undefined}
+                          className="rounded-md px-2 py-1 text-sm font-medium text-red-600 hover:text-red-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 disabled:cursor-not-allowed disabled:text-gray-400"
+                        >
+                          Remove checklist
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </section>
@@ -510,10 +710,23 @@ export function ChecklistReview({
         <AddChecklistPicker
           submissionId={submissionId}
           templates={templates}
-          addedTemplateIds={new Set(sections.map((s) => s.templateId).filter((id): id is string => !!id))}
+          addedTemplateIds={new Set(liveSections.map((s) => s.templateId).filter((id): id is string => !!id))}
           onClose={() => setPickerOpen(false)}
           onAdded={() => {
             setPickerOpen(false);
+            router.refresh();
+          }}
+        />
+      )}
+
+      {removeTarget && (
+        <RemoveChecklistDialog
+          submissionId={submissionId}
+          section={removeTarget}
+          counts={linkedCounts?.[removeTarget.id]}
+          onClose={() => setRemoveTarget(null)}
+          onRemoved={() => {
+            setRemoveTarget(null);
             router.refresh();
           }}
         />
@@ -599,7 +812,7 @@ function AddChecklistPicker({
         </div>
         <div className="overflow-y-auto px-6 pb-6 pt-5">
           <p className="mb-3.5 text-[13px] text-gray-500">
-            Checklists already on this submission are marked. An added checklist can’t be removed.
+            Checklists already on this submission are marked.
           </p>
           {error && (
             <p role="alert" className="mb-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
@@ -641,6 +854,88 @@ function AddChecklistPicker({
               })}
             </ul>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * BACKLOG-3607: confirm before removing a checklist at review, with the
+ * documents and emails linked to it (founder Q2).
+ */
+function RemoveChecklistDialog({
+  submissionId,
+  section,
+  counts,
+  onClose,
+  onRemoved,
+}: {
+  submissionId: string;
+  section: ChecklistSectionView;
+  counts: LinkedCounts | undefined;
+  onClose: () => void;
+  onRemoved: () => void;
+}) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !pending) onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose, pending]);
+
+  const confirm = async () => {
+    setPending(true);
+    setError(null);
+    try {
+      const result = await removeChecklistAtReview(submissionId, section.id);
+      if (!result.ok) {
+        setError(result.message);
+        return;
+      }
+      onRemoved();
+    } catch {
+      setError('Something went wrong. Please try again.');
+    } finally {
+      setPending(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={pending ? undefined : onClose}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="remove-checklist-title"
+        aria-describedby="remove-checklist-text"
+        className="w-full max-w-[27rem] overflow-hidden rounded-lg bg-white shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-6 pb-4 pt-5">
+          <h3 id="remove-checklist-title" className="text-lg font-semibold text-gray-900">
+            Remove {section.name}?
+          </h3>
+          <p id="remove-checklist-text" className="mt-2 text-sm text-gray-600">
+            {removeConfirmText(counts)}
+          </p>
+          <p className="mt-2 text-sm text-gray-500">It will not be on the agent’s next version. You can undo this while the version is open.</p>
+          {error && (
+            <p role="alert" className="mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+              {error}
+            </p>
+          )}
+        </div>
+        <div className="flex justify-end gap-2 border-t border-gray-200 bg-gray-50 px-6 py-3">
+          <Button variant="secondary" size="sm" onClick={onClose} disabled={pending}>
+            Cancel
+          </Button>
+          <Button variant="danger" size="sm" onClick={confirm} disabled={pending}>
+            {pending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : 'Remove'}
+          </Button>
         </div>
       </div>
     </div>

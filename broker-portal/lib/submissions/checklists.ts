@@ -23,6 +23,10 @@ interface HeaderRow {
   sort_order: number;
   added_at_review_by: string | null;
   added_at_review_at: string | null;
+  /** BACKLOG-3607 columns; absent until that migration is applied. */
+  removed_at_review_by?: string | null;
+  removed_at_review_at?: string | null;
+  restored_from_checklist_id?: string | null;
 }
 
 interface ItemRow {
@@ -40,6 +44,8 @@ interface ItemRow {
   /** BACKLOG-3596 columns; absent until that migration is applied. */
   cleared_reviewer_id?: string | null;
   cleared_at?: string | null;
+  /** BACKLOG-3607 column; absent until that migration is applied. */
+  restored_from_item_id?: string | null;
 }
 
 interface LinkRow {
@@ -106,6 +112,8 @@ export function assembleSections(
       clearedReviewerId: i.cleared_reviewer_id ?? null,
       clearedAt: i.cleared_at ?? null,
       links: linksByItem.get(i.id) ?? [],
+      // BACKLOG-3607: only when the column was read.
+      ...(i.restored_from_item_id !== undefined ? { restoredFromItemId: i.restored_from_item_id } : {}),
     });
     itemsByHeader.set(i.submission_checklist_id, list);
   }
@@ -119,6 +127,14 @@ export function assembleSections(
       addedAtReviewBy: h.added_at_review_by,
       addedAtReviewAt: h.added_at_review_at,
       items: itemsByHeader.get(h.id) ?? [],
+      // BACKLOG-3607: only when the columns were read.
+      ...(h.removed_at_review_by !== undefined
+        ? {
+            removedAtReviewBy: h.removed_at_review_by,
+            removedAtReviewAt: h.removed_at_review_at ?? null,
+            restoredFromChecklistId: h.restored_from_checklist_id ?? null,
+          }
+        : {}),
     }));
 }
 
@@ -136,20 +152,52 @@ function isMissingClearedColumn(error: { code?: string; message?: string } | nul
   return !!error && error.code === '42703' && /cleared_(reviewer_id|at)/.test(error.message ?? '');
 }
 
+/** BACKLOG-3607: read when that migration is live. */
+const RESTORED_ITEM_COLUMNS = ', restored_from_item_id';
+const HEADER_COLUMNS = 'id, template_id, template_name, sort_order, added_at_review_by, added_at_review_at';
+const REMOVED_HEADER_COLUMNS = ', removed_at_review_by, removed_at_review_at, restored_from_checklist_id';
+
+/** The same PostgREST 42703 answer, for a 3607 column (named in the message). */
+function isMissing3607Column(error: { code?: string; message?: string } | null): boolean {
+  return (
+    !!error &&
+    error.code === '42703' &&
+    /removed_at_review_(by|at)|restored_from_(checklist|item)_id/.test(error.message ?? '')
+  );
+}
+
 /**
- * The items, with the 3596 cleared columns when the database has them. The
- * portal ships before the 3596 migration is applied (release order, SR
- * condition C-11), so a missing column falls back to the columns every
- * version has: no "Changed since you checked" marker, everything else as
- * before. Any other error is returned as is.
+ * The items, with the 3596 cleared columns and the 3607 restored column when
+ * the database has them. The portal ships before those migrations are applied
+ * (release order, SR condition C-11), so a missing column falls back to the
+ * columns the database has: no "Changed since you checked" marker without
+ * 3596, no "restored" label without 3607, everything else as before. Any
+ * other error is returned as is.
  */
 async function loadItems(client: SupabaseClient, submissionId: string) {
   const full = await client
     .from('submission_checklist_items')
-    .select(ITEM_COLUMNS + CLEARED_COLUMNS)
+    .select(ITEM_COLUMNS + CLEARED_COLUMNS + RESTORED_ITEM_COLUMNS)
     .eq('submission_id', submissionId);
-  if (!isMissingClearedColumn(full.error)) return full;
+  if (!isMissing3607Column(full.error) && !isMissingClearedColumn(full.error)) return full;
+  if (isMissing3607Column(full.error)) {
+    const cleared = await client
+      .from('submission_checklist_items')
+      .select(ITEM_COLUMNS + CLEARED_COLUMNS)
+      .eq('submission_id', submissionId);
+    if (!isMissingClearedColumn(cleared.error)) return cleared;
+  }
   return client.from('submission_checklist_items').select(ITEM_COLUMNS).eq('submission_id', submissionId);
+}
+
+/** The headers, with the 3607 removal / restore columns when the database has them. */
+async function loadHeaders(client: SupabaseClient, submissionId: string) {
+  const full = await client
+    .from('submission_checklists')
+    .select(HEADER_COLUMNS + REMOVED_HEADER_COLUMNS)
+    .eq('submission_id', submissionId);
+  if (!isMissing3607Column(full.error)) return full;
+  return client.from('submission_checklists').select(HEADER_COLUMNS).eq('submission_id', submissionId);
 }
 
 export async function loadSubmissionChecklists(
@@ -157,10 +205,7 @@ export async function loadSubmissionChecklists(
   submissionId: string
 ): Promise<SubmissionChecklistsResult> {
   const [headers, items, links, members] = await Promise.all([
-    client
-      .from('submission_checklists')
-      .select('id, template_id, template_name, sort_order, added_at_review_by, added_at_review_at')
-      .eq('submission_id', submissionId),
+    loadHeaders(client, submissionId),
     loadItems(client, submissionId),
     client
       .from('submission_checklist_links')

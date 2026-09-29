@@ -47,6 +47,11 @@ export interface ChecklistItemView {
   clearedReviewerId: string | null;
   clearedAt: string | null;
   links: ChecklistLink[];
+  /**
+   * BACKLOG-3607: set on an item of a checklist the broker added back; its
+   * reviewer tick (if any) was restored from the previous version.
+   */
+  restoredFromItemId?: string | null;
 }
 
 export interface ChecklistSectionView {
@@ -57,6 +62,28 @@ export interface ChecklistSectionView {
   addedAtReviewBy: string | null;
   addedAtReviewAt: string | null;
   items: ChecklistItemView[];
+  /**
+   * BACKLOG-3607: set when a reviewer removed this checklist at review. The
+   * rows stay (the record of what the agent sent); the section is shown as
+   * removed and counts toward nothing. Absent before the 3607 migration.
+   */
+  removedAtReviewBy?: string | null;
+  removedAtReviewAt?: string | null;
+  /** BACKLOG-3607: the previous version's checklist this one was added back from. */
+  restoredFromChecklistId?: string | null;
+}
+
+/** Whether a section was removed at review (BACKLOG-3607). */
+export function isRemovedSection(section: ChecklistSectionView): boolean {
+  return !!section.removedAtReviewBy;
+}
+
+/**
+ * The key the server matches checklists on across versions (the carry's and
+ * the restore's): the template id, or the name for a checklist with no template.
+ */
+export function sectionKey(section: ChecklistSectionView): string {
+  return section.templateId ?? `name:${section.name}`;
 }
 
 export interface RequiredCount {
@@ -80,9 +107,11 @@ export function requiredCount(items: ChecklistItemView[], viewer: ChecklistViewe
   return { done, total };
 }
 
+/** The overall count. A checklist removed at review counts toward nothing (BACKLOG-3607). */
 export function overallRequiredCount(sections: ChecklistSectionView[], viewer: ChecklistViewer): RequiredCount {
   return sections.reduce<RequiredCount>(
     (acc, section) => {
+      if (isRemovedSection(section)) return acc;
       const c = requiredCount(section.items, viewer);
       return { done: acc.done + c.done, total: acc.total + c.total };
     },
@@ -146,4 +175,86 @@ export function changedSinceChecked(item: ChecklistItemView): boolean {
 export interface TemplateOption {
   id: string;
   name: string;
+}
+
+/** Documents and emails linked to one checklist on this version (BACKLOG-3607). */
+export interface LinkedCounts {
+  documents: number;
+  emails: number;
+}
+
+/**
+ * What the broker's Remove confirmation states, counted by the same rule as
+ * remove_submission_checklist_at_review (migration 20260929120000 §6): per
+ * link member, the local id of its upload or message; a member with no local
+ * id is not counted; distinct ids per member kind. One file uploaded twice is
+ * one document. The maps are id -> local id from the page's UNGATED
+ * submission_attachments / submission_messages rows.
+ */
+export function linkedEvidenceCounts(
+  section: ChecklistSectionView,
+  localIdByAttachment: ReadonlyMap<string, string | null>,
+  localIdByMessage: ReadonlyMap<string, string | null>
+): LinkedCounts {
+  const documents = new Set<string>();
+  const emails = new Set<string>();
+  for (const item of section.items) {
+    for (const link of item.links) {
+      for (const m of link.members) {
+        const key =
+          (m.submissionAttachmentId ? localIdByAttachment.get(m.submissionAttachmentId) : null) ??
+          (m.submissionMessageId ? localIdByMessage.get(m.submissionMessageId) : null) ??
+          null;
+        if (!key) continue;
+        if (m.kind === 'attachment') documents.add(key);
+        else if (m.kind === 'email') emails.add(key);
+      }
+    }
+  }
+  return { documents: documents.size, emails: emails.size };
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** One checklist the agent removed between versions, read from THIS version's history. */
+export interface AgentRemoval {
+  key: string;
+  name: string;
+  /** Raw id of who wrote the entry (the agent); resolve to a name before showing. */
+  changedBy: string | null;
+  /** The removed checklist had been added at review on the previous version. */
+  addedAtReview: boolean;
+  /**
+   * The previous version's checklist id, passed to the restore RPC. Read from
+   * history the agent can write (SR R-5): untrusted; the RPC re-validates it.
+   * null when absent or not an id: the page offers no "Add it back".
+   */
+  removedChecklistId: string | null;
+}
+
+/**
+ * The agent's removals recorded on THIS version (entries checklist_removed,
+ * source 'version', written by the carry). Only this version's own
+ * status_history: the parent chain's entries are earlier versions' removals.
+ * A 'replaced' removal is not listed: the checklist is on this version again.
+ */
+export function agentRemovals(history: unknown): AgentRemoval[] {
+  if (!Array.isArray(history)) return [];
+  const out: AgentRemoval[] = [];
+  const seen = new Set<string>();
+  for (const e of history as Record<string, unknown>[]) {
+    if (!e || typeof e !== 'object') continue;
+    if (e.type !== 'checklist_removed' || e.source !== 'version' || e.replaced === true) continue;
+    if (typeof e.checklist_key !== 'string' || e.checklist_key === '' || seen.has(e.checklist_key)) continue;
+    seen.add(e.checklist_key);
+    out.push({
+      key: e.checklist_key,
+      name: typeof e.checklist_name === 'string' && e.checklist_name !== '' ? e.checklist_name : 'Checklist',
+      changedBy: typeof e.changed_by === 'string' ? e.changed_by : null,
+      addedAtReview: e.added_at_review === true,
+      removedChecklistId:
+        typeof e.removed_checklist_id === 'string' && UUID_RE.test(e.removed_checklist_id) ? e.removed_checklist_id : null,
+    });
+  }
+  return out;
 }
