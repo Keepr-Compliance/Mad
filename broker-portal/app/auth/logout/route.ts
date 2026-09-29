@@ -12,18 +12,10 @@
 
 import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
+import { clearAuthCookies, signOutLocal } from '@/lib/auth/signOutLocal';
 
 /** The only error values passed through to /login. Anything else is dropped. */
 const PASS_THROUGH_ERRORS = new Set(['not_authorized']);
-
-/** Names of the Supabase auth cookies on this request. */
-function authCookieNames(request: Request): string[] {
-  const header = request.headers.get('cookie') ?? '';
-  return header
-    .split(';')
-    .map((part) => part.split('=')[0]?.trim() ?? '')
-    .filter((name) => name.startsWith('sb-') || name.includes('supabase'));
-}
 
 async function logout(request: Request): Promise<NextResponse> {
   const requestUrl = new URL(request.url);
@@ -35,11 +27,11 @@ async function logout(request: Request): Promise<NextResponse> {
       ? `${requestUrl.origin}/login?error=${encodeURIComponent(error)}`
       : `${requestUrl.origin}/login`;
 
-  await supabase.auth.signOut({ scope: 'local' });
+  await signOutLocal(supabase);
   const response = NextResponse.redirect(target);
   // Clear the cookies here too, so a sign-out that fails cannot leave a
   // session that middleware would send straight back to this route.
-  for (const name of authCookieNames(request)) response.cookies.delete(name);
+  clearAuthCookies(request, response);
   return response;
 }
 
