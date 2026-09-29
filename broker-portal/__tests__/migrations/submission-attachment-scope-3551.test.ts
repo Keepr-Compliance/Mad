@@ -18,7 +18,7 @@ import { join } from 'path';
 
 const REPO = join(__dirname, '../../..');
 const MIGRATIONS_DIR = join(REPO, 'supabase/migrations');
-const MIGRATION_NAME = '20260925222910_backlog_3551_submission_attachment_scope.sql';
+const MIGRATION_NAME = '20260925225347_backlog_3551_submission_attachment_scope.sql';
 const BUCKET = "'submission-attachments'";
 const NEW_SELECT = 'Submission attachments follow their submission';
 const OLD_POLICIES = [

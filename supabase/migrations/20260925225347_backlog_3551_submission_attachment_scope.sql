@@ -26,10 +26,8 @@
 --   createObject (bare INSERT), completion as superuser. Re-check this if the
 --   storage-api version changes.
 --
--- STATUS AT AUTHORING
---   NOT APPLIED to production. Production apply requires the founder's
---   explicit yes. The rollback script is kept outside the repository
---   (see BACKLOG-3551 in pm_comments).
+-- STATUS
+--   Applied to production 2026-09-25 as version 20260925225347.
 
 BEGIN;
 
