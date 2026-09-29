@@ -1,0 +1,41 @@
+k01 [as expected]
+    MUTATION APPLIED: 4 line(s); first: removed: -- A client statement may not change the history at all.
+    RED: e01 e02  green: none
+      e01: CONTROL FAILED: E01 agent appends checklist_review (-) on needs_changes v1: expected ~^42501:status_history_append_only$, got rows:1
+      e02: CONTROL FAILED: E02 reviewer appends checklist_review naming self: expected ~^42501:status_history_append_only$, got rows:1
+k02 [as expected]
+    MUTATION APPLIED: 2 line(s); first: IF session_user IN ('authenticated', 'anon') THEN
+    RED: e01 e02  green: none
+      e01: CONTROL FAILED: E01 agent appends checklist_review (-) on needs_changes v1: expected ~^42501:status_history_append_only$, got rows:1
+      e02: CONTROL FAILED: E02 reviewer appends checklist_review naming self: expected ~^42501:status_history_append_only$, got rows:1
+k03 [as expected]
+    MUTATION APPLIED: 2 line(s); first: IF auth.role() IN ('authenticated', 'anon') THEN
+    RED: e04 e05  green: none
+      e04: status_history_append_only
+      e05: status_history_append_only
+k04 [as expected]
+    MUTATION APPLIED: 7 line(s); first: IF NEW.status_history IS NOT DISTINCT FROM OLD.status_history THEN
+    RED: e03  green: none
+      e03: CONTROL FAILED: E03 desktop finalize v1: expected rows:1, got 42501:status_history_append_only
+k05 [as expected]
+    MUTATION APPLIED: 2 line(s); first: IF current_user IN ('authenticated', 'anon') AND EXISTS (SELECT 1 FROM jsonb_array_elements(v_new) WITH ORDINA
+    RED: e01  green: none
+      e01: CONTROL FAILED: E01 agent appends checklist_added (-) on needs_changes v1: expected ~^42501:status_history_append_only$, got rows:1
+k06 [as expected]
+    MUTATION APPLIED: 2 line(s); first: IF current_user IN ('authenticated', 'anon') AND EXISTS (SELECT 1 FROM jsonb_array_elements(v_new) AS x(e) WHE
+    RED: e01  green: none
+      e01: CONTROL FAILED: E01 agent appends checklist_added (-) on uploading v2: expected ~^42501:status_history_append_only$, got rows:1
+k07 [as expected]
+    MUTATION APPLIED: 2 line(s); first: IF current_user IN ('authenticated', 'anon') AND (v_new -> -1 ->> 'type') = 'checklist_review' THEN
+    RED: e01  green: none
+      e01: CONTROL FAILED: E01 agent appends checklist_added (-) on needs_changes v1: expected ~^42501:status_history_append_only$, got rows:1
+k08 [as expected]
+    MUTATION APPLIED: 1 line(s); first: ALTER TRIGGER status_history_append_only ON public.transaction_submissions RENAME TO zz_status_history_append_
+    RED: e03 e05  green: none
+      e03: CONTROL FAILED: E03 desktop finalize v1: expected rows:1, got 42501:status_history_append_only
+      e05: CONTROL FAILED: E05 guard attached and sorts before track_status_changes
+k09 [as expected]
+    MUTATION APPLIED: 2 line(s); first: IF current_user IN ('authenticated', 'anon') AND NEW.submitted_by = auth.uid() THEN
+    RED: e02  green: none
+      e02: CONTROL FAILED: E02 reviewer appends checklist_review naming self: expected ~^42501:status_history_append_only$, got rows:1
+mutants: 9 run, 0 not as expected
