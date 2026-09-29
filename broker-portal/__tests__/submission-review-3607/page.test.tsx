@@ -296,5 +296,20 @@ describe('review page wiring (BACKLOG-3607)', () => {
     });
     // The page shows every message, not the first block.
     expect(props.messages.map((m) => m.id).sort()).toEqual(['msg-1', 'msg-2', 'msg-3', 'msg-4']);
+    // Blocks need a total order (the emulator does not sort; Postgres does, and
+    // ties across a block boundary would repeat or skip rows): each paged read
+    // ends on its primary key.
+    const lastOrder = (table: string) =>
+      mockEmulator.state.orders.filter((o) => o.table === table).map((o) => o.column).slice(-1)[0];
+    for (const table of [
+      'submission_messages',
+      'submission_attachments',
+      'submission_checklists',
+      'submission_checklist_items',
+      'submission_checklist_links',
+      'submission_checklist_link_members',
+    ]) {
+      expect([table, lastOrder(table)]).toEqual([table, 'id']);
+    }
   });
 });

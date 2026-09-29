@@ -230,7 +230,7 @@ export async function loadSubmissionChecklists(
       'submission_checklist_link_members',
       'link_id, kind, submission_attachment_id, submission_message_id',
       submissionId,
-      ['link_id', 'submission_attachment_id', 'submission_message_id']
+      ['id']
     ),
   ]);
 
