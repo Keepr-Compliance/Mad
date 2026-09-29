@@ -272,6 +272,28 @@ class FakeSupabase {
     );
   }
 
+  /**
+   * BACKLOG-3607: a transaction with no checklist sends `[]` to
+   * snapshot_submission_checklists. Answered as migration 20260929120000 does
+   * for an empty set: zero counts and the carry's status. Any other call, or a
+   * non-empty set, is unmocked here and says so.
+   */
+  snapshotCalls: Row[] = [];
+  rpc(fn: string, args: Row): Promise<{ data: unknown; error: { code: string; message: string } | null }> {
+    const list = args?.p_checklists;
+    if (fn !== "snapshot_submission_checklists" || !Array.isArray(list) || list.length !== 0) {
+      throw new Error(`FakeSupabase: unmocked rpc("${fn}")`);
+    }
+    this.snapshotCalls.push(args);
+    return Promise.resolve({
+      data: {
+        checklists: 0, items: 0, links: 0, members: 0, dropped_members: 0, dropped_links: 0,
+        carry: { status: "no_checklists" },
+      },
+      error: null,
+    });
+  }
+
   from(tableName: string) {
     const rows = () => this.table(tableName);
     const filters: Array<(r: Row) => boolean> = [];
