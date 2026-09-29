@@ -153,7 +153,7 @@ interface SubmitForReviewModalProps {
  * frame instead of on the panel's outer edge. Padding lives on the header,
  * body and footer rows (not here) so the scrollbar is not inset by it.
  */
-const SUBMIT_PANEL = "max-w-lg sm:h-auto sm:max-h-[90vh] sm:overflow-hidden";
+const SUBMIT_PANEL = "max-w-xl sm:h-auto sm:max-h-[90vh] sm:overflow-hidden";
 
 const STAGE_LABELS: Record<string, string> = {
   preparing: "Preparing submission...",

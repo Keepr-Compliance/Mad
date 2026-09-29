@@ -66,7 +66,7 @@ export function CommissionFields({
 
   return (
     <div data-testid="commission-fields">
-      <h4 className="mt-4 pt-4 border-t border-gray-200 text-sm font-semibold text-gray-900">
+      <h4 className="mt-3 pt-3 border-t border-gray-200 text-sm font-semibold text-gray-900">
         Closing Financials
       </h4>
       <div className="mt-3 space-y-3">
