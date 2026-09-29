@@ -96,6 +96,9 @@ const transaction = {
  */
 function goToSummary(): void {
   fireEvent.click(screen.getByTestId("submit-review-next"));
+  // BACKLOG-3520: no commission in these fixtures, so Next raises the warning;
+  // "Continue anyway" is what proceeds to the summary.
+  fireEvent.click(screen.getByTestId("commission-continue-anyway"));
   expect(screen.getByText("Submission Summary")).toBeInTheDocument();
 }
 

@@ -111,6 +111,16 @@ async function press(testId: string): Promise<void> {
   await act(async () => {
     fireEvent.click(screen.getByTestId(testId));
   });
+  // BACKLOG-3520: these fixtures carry no commission, so Next raises the "not
+  // entered" warning; "Continue anyway" is what carries on to the summary.
+  if (testId === "submit-review-next") {
+    const carryOn = screen.queryByTestId("commission-continue-anyway");
+    if (carryOn) {
+      await act(async () => {
+        fireEvent.click(carryOn);
+      });
+    }
+  }
 }
 
 /**

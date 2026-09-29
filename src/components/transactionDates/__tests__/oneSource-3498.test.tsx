@@ -118,21 +118,27 @@ describe("BACKLOG-3498 C1d — both presses save through the one shared writer",
     renderExport();
     const next = await screen.findAllByRole("button", { name: /next/i });
     await click(next[0]);
+    // BACKLOG-3520: no commission in this fixture, so Next warns first.
+    await click(screen.getByTestId("commission-continue-anyway"));
     const exportButtons = await screen.findAllByRole("button", { name: /^export$/i });
     await click(exportButtons[0]);
 
     expect(writerMock).toHaveBeenCalledTimes(1);
-    expect(writerMock).toHaveBeenCalledWith(TX, CONFIRMED);
+    // BACKLOG-3520: the third argument is the commission update, null here (nothing entered).
+    expect(writerMock).toHaveBeenCalledWith(TX, CONFIRMED, null);
     expect(updateMock).not.toHaveBeenCalled();
   });
 
   it("the Submit press calls the writer, and nothing else writes the dates", async () => {
     const { onSubmit } = renderSubmit();
     await click(screen.getByTestId("submit-review-next"));
+    // BACKLOG-3520: no commission in this fixture, so Next warns first.
+    await click(screen.getByTestId("commission-continue-anyway"));
     await click(screen.getByTestId("submit-review-submit"));
 
     expect(writerMock).toHaveBeenCalledTimes(1);
-    expect(writerMock).toHaveBeenCalledWith(TX, CONFIRMED);
+    // BACKLOG-3520: the third argument is the commission update, null here (nothing entered).
+    expect(writerMock).toHaveBeenCalledWith(TX, CONFIRMED, null);
     expect(updateMock).not.toHaveBeenCalled();
     expect(onSubmit).toHaveBeenCalledTimes(1);
   });

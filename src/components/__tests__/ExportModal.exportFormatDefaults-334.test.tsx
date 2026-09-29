@@ -89,6 +89,19 @@ function primaryButton(): HTMLElement {
   return screen.getAllByRole("button", { name: /^export$/i })[0];
 }
 
+/**
+ * BACKLOG-3520: these fixtures carry no commission, so leaving step 1 raises the
+ * "not entered" warning; "Continue anyway" is what carries on.
+ */
+async function carryOnPastCommissionWarning(): Promise<void> {
+  const carryOn = screen.queryByTestId("commission-continue-anyway");
+  if (carryOn) {
+    await act(async () => {
+      fireEvent.click(carryOn);
+    });
+  }
+}
+
 /** The prefs load is async; clicking before it resolves is a false red. */
 async function waitForDefaults(): Promise<HTMLElement> {
   return screen.findByTestId("export-format-button");
@@ -118,6 +131,7 @@ it("C1: with saved defaults, the primary exports and the options step is never r
   await act(async () => {
     fireEvent.click(primaryButton());
   });
+  await carryOnPastCommissionWarning();
 
   await waitFor(() => expect(exportFolderMock).toHaveBeenCalledTimes(1));
   expect(screen.queryByText("Export Options")).toBeNull();
@@ -135,6 +149,7 @@ it("C2: with no saved format, the options step renders and nothing is exported",
   await act(async () => {
     fireEvent.click(next);
   });
+  await carryOnPastCommissionWarning();
 
   expect(await screen.findByText("Export Options")).toBeInTheDocument();
   expect(exportFolderMock).not.toHaveBeenCalled();
@@ -177,6 +192,7 @@ it("C4a: \"Export format\" opens the options step with the saved format selected
   await act(async () => {
     fireEvent.click(screen.getByTestId("export-format-button"));
   });
+  await carryOnPastCommissionWarning();
 
   expect(await screen.findByText("Export Options")).toBeInTheDocument();
   // Selected format buttons carry the filled purple style.
@@ -191,6 +207,7 @@ it("C4b: a change made there applies to this export only, with the box unticked"
   await act(async () => {
     fireEvent.click(screen.getByTestId("export-format-button"));
   });
+  await carryOnPastCommissionWarning();
   await screen.findByText("Export Options");
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: /One PDF/ }));
@@ -217,6 +234,7 @@ it("C5: ticking the box saves the options as the new defaults", async () => {
   await act(async () => {
     fireEvent.click(screen.getByTestId("export-format-button"));
   });
+  await carryOnPastCommissionWarning();
   await screen.findByText("Export Options");
   await act(async () => {
     fireEvent.click(screen.getByRole("checkbox"));
@@ -243,6 +261,7 @@ it("C6: \"Export format\" cannot reach the export with the dates unfilled", asyn
   await act(async () => {
     fireEvent.click(screen.getByTestId("export-format-button"));
   });
+  await carryOnPastCommissionWarning();
 
   expect(
     await screen.findByText("Please provide Start Date and End Date to continue"),

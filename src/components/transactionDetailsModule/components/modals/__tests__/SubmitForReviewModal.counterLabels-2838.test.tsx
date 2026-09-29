@@ -52,6 +52,8 @@ describe("BACKLOG-2838: the submit summary names what it counts", () => {
   const renderModal = () => {
     const utils = renderUnadvanced();
     fireEvent.click(screen.getByTestId("submit-review-next"));
+    // BACKLOG-3520: no commission in this fixture, so Next warns first.
+    fireEvent.click(screen.getByTestId("commission-continue-anyway"));
     expect(screen.getByText("Submission Summary")).toBeInTheDocument();
     return utils;
   };
