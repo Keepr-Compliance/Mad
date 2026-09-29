@@ -13,6 +13,7 @@ import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import type { Transaction } from "@/types";
+import ExportModal from "../../ExportModal";
 import { SubmitForReviewModal } from "../../transactionDetailsModule/components/modals/SubmitForReviewModal";
 
 const base = {
@@ -96,5 +97,22 @@ describe("the commission rates row", () => {
     fireEvent.change(screen.getByTestId("commission-actual"), { target: { value: "2.5" } });
     const reason = screen.getByTestId("commission-reason");
     expect(screen.getByTestId("commission-rates-row").contains(reason)).toBe(false);
+  });
+});
+
+describe("Export step 1: the footer is outside the scrolling body", () => {
+  it("Cancel and the primary sit in a sibling of the scroller, not inside it", () => {
+    window.api.featureGate.check = jest.fn().mockResolvedValue({ allowed: true, value: "", source: "default" });
+    render(<ExportModal transaction={base} userId="user-3520" onClose={jest.fn()} onExportComplete={jest.fn()} />);
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    const dates = screen.getByTestId("commission-fields");
+    const scroller = dates.closest<HTMLElement>(".overflow-y-auto") as HTMLElement;
+    expect(scroller).not.toBeNull();
+    expect(scroller.contains(cancel)).toBe(false);
+    expect(scroller.parentElement!.contains(cancel)).toBe(true);
+    // the footer carries the primary as well, and flex-shrink-0 keeps it from being squeezed out
+    const footer = cancel.parentElement as HTMLElement;
+    expect(footer.className).toMatch(/flex-shrink-0/);
+    expect(scroller.contains(footer)).toBe(false);
   });
 });
