@@ -23,6 +23,7 @@ import {
   groupHistory,
   isStatusEntry,
   isTypedEntry,
+  showsActor,
   VISIBLE_HISTORY_ITEMS,
   type HistoryItem,
   type StatusHistoryEntry,
@@ -462,8 +463,9 @@ function TypedTimelineEntry({
                 {entry.checklist_name && (entry.type === 'checklist_review' || entry.type === 'checklist_review_cleared') && (
                   <p className="mt-0.5 text-xs text-gray-400">{entry.checklist_name}</p>
                 )}
-                {/* A cleared line already names the agent in its sentence. */}
-                {entry.changed_by && entry.type !== 'checklist_review_cleared' && (
+                {/* A cleared line already names the agent in its sentence; a
+                    neutral "not on version N" line names nobody (BACKLOG-3607). */}
+                {entry.changed_by && showsActor(entry) && (
                   <p className="mt-0.5 text-xs text-gray-500">by {entry.changed_by}</p>
                 )}
               </div>

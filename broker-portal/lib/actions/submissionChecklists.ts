@@ -35,7 +35,15 @@ export type SetReviewerCheckResult =
   | ReviewFailure;
 
 export type AddChecklistResult =
-  | { ok: true; status: 'added' | 'exists'; checklistId: string }
+  | { ok: true; status: 'added' | 'exists' | 'readded'; checklistId: string }
+  | ReviewFailure;
+
+export type RemoveChecklistResult =
+  | { ok: true; status: 'removed' | 'already_removed'; checklistId: string }
+  | ReviewFailure;
+
+export type RestoreChecklistResult =
+  | { ok: true; checklistId: string; ticksRestored: number }
   | ReviewFailure;
 
 function reviewPath(submissionId: string): string {
@@ -102,12 +110,90 @@ export async function addChecklistAtReview(
     return reviewFailure(reason);
   }
 
-  // §8 returns {status: 'added'|'exists'|'template_not_found', checklist_id?, items?}.
+  // §8 returns {status: 'added'|'exists'|'template_not_found', checklist_id?, items?};
+  // BACKLOG-3607 adds 'readded' (a checklist of that template removed at
+  // review on this version is put back: the Undo).
   const row = (data ?? null) as { status?: unknown; checklist_id?: unknown } | null;
   if (row?.status === 'template_not_found') return reviewFailure('template_not_found');
-  if ((row?.status === 'added' || row?.status === 'exists') && typeof row.checklist_id === 'string') {
+  if (
+    (row?.status === 'added' || row?.status === 'exists' || row?.status === 'readded') &&
+    typeof row.checklist_id === 'string'
+  ) {
     revalidatePath(reviewPath(submissionId));
     return { ok: true, status: row.status, checklistId: row.checklist_id };
+  }
+  return reviewFailure('failed');
+}
+
+/**
+ * BACKLOG-3607: remove a checklist at review (remove_submission_checklist_at_review).
+ * Soft on the server: the rows stay as the record of what the agent sent.
+ * The RPC re-checks the caller against the checklist's OWN submission.
+ */
+export async function removeChecklistAtReview(
+  submissionId: string,
+  checklistId: string
+): Promise<RemoveChecklistResult> {
+  if (typeof checklistId !== 'string' || checklistId === '') return reviewFailure('invalid');
+  const reviewer = await requireSubmissionReviewer(submissionId);
+  if (!reviewer) return reviewFailure('not_authorized');
+
+  const { data, error } = await reviewer.supabase.rpc('remove_submission_checklist_at_review', {
+    p_checklist_id: checklistId,
+  });
+  if (error) {
+    const reason = reasonForReviewRpcError(error);
+    if (reason === 'failed') console.warn('[submissions] remove checklist failed', error.code, error.message);
+    return reviewFailure(reason);
+  }
+
+  // Returns {status: 'removed'|'already_removed', checklist_id, linked_documents?, linked_emails?}.
+  const row = (data ?? null) as { status?: unknown; checklist_id?: unknown } | null;
+  if ((row?.status === 'removed' || row?.status === 'already_removed') && typeof row.checklist_id === 'string') {
+    revalidatePath(reviewPath(submissionId));
+    return { ok: true, status: row.status, checklistId: row.checklist_id };
+  }
+  return reviewFailure('failed');
+}
+
+/**
+ * BACKLOG-3607: add back, onto this version, a checklist the agent removed
+ * (restore_submission_checklist_at_review): the removed checklist's items with
+ * the broker's earlier ticks. `sourceChecklistId` comes from a history entry,
+ * which the agent can write (SR R-5): the RPC re-validates it against this
+ * version's direct parent and refuses anything else as not_authorized.
+ */
+export async function restoreChecklistAtReview(
+  submissionId: string,
+  sourceChecklistId: string
+): Promise<RestoreChecklistResult> {
+  if (typeof sourceChecklistId !== 'string' || sourceChecklistId === '') return reviewFailure('invalid');
+  const reviewer = await requireSubmissionReviewer(submissionId);
+  if (!reviewer) return reviewFailure('not_authorized');
+
+  const { data, error } = await reviewer.supabase.rpc('restore_submission_checklist_at_review', {
+    p_submission_id: submissionId,
+    p_source_checklist_id: sourceChecklistId,
+  });
+  if (error) {
+    const reason = reasonForReviewRpcError(error);
+    if (reason === 'failed') console.warn('[submissions] restore checklist failed', error.code, error.message);
+    return reviewFailure(reason);
+  }
+
+  // Returns {status: 'restored', checklist_id, items, ticks_restored} or
+  // {status: 'not_removed'|'already_present'|'removed_here', checklist_id?}.
+  const row = (data ?? null) as { status?: unknown; checklist_id?: unknown; ticks_restored?: unknown } | null;
+  if (row?.status === 'not_removed') return reviewFailure('not_removed');
+  if (row?.status === 'already_present') return reviewFailure('already_present');
+  if (row?.status === 'removed_here') return reviewFailure('removed_here');
+  if (row?.status === 'restored' && typeof row.checklist_id === 'string') {
+    revalidatePath(reviewPath(submissionId));
+    return {
+      ok: true,
+      checklistId: row.checklist_id,
+      ticksRestored: typeof row.ticks_restored === 'number' ? row.ticks_restored : 0,
+    };
   }
   return reviewFailure('failed');
 }
