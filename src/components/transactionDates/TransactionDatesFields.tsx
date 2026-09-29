@@ -15,7 +15,7 @@
  * skip the duplicate heading. Export keeps it.
  *
  * It sets no panel width, so it fits both Export's MODAL_PANEL.lg frame and the
- * Submit dialog's `max-w-lg`.
+ * Submit dialog's `max-w-xl`.
  */
 import React from "react";
 import type { Transaction } from "@/types";
