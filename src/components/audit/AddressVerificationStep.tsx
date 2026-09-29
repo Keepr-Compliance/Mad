@@ -30,6 +30,13 @@ interface AddressVerificationStepProps {
   suggestions: AddressSuggestion[];
   onSelectSuggestion: (suggestion: AddressSuggestion) => void;
   startDateMode?: "manual";
+  /**
+   * BACKLOG-3613: render the End Date input. Only the Edit Transaction Details
+   * screen passes true. Creating a deal asks for the start date only — the
+   * end date stays empty (an ongoing deal) and is entered later, at Submit
+   * for review or Export.
+   */
+  showEndDate?: boolean;
 }
 
 function AddressVerificationStep({
@@ -44,6 +51,7 @@ function AddressVerificationStep({
   showAutocomplete,
   suggestions,
   onSelectSuggestion,
+  showEndDate = false,
 }: AddressVerificationStepProps): React.ReactElement {
   // Local flag that lets the user dismiss the dropdown without the parent hook
   // needing to know about it. Resets automatically when fresh suggestions arrive.
@@ -200,14 +208,15 @@ function AddressVerificationStep({
         <div className="flex items-center justify-between mb-3">
           <label className="flex items-center text-sm font-medium text-gray-700">
             Transaction Dates
-            {/* One (i) for both dates (founder, 2026-09-17, BACKLOG-3415). It
-                replaced the tooltip on the start-date label and the two helper
-                lines that sat under the inputs, so this is now the only place
-                either date is explained. The End Date wording is the founder's
-                own definition. */}
+            {/* One (i) for the dates shown (founder, 2026-09-17, BACKLOG-3415).
+                It replaced the tooltip on the start-date label and the helper
+                lines that sat under the inputs, so this is the only place the
+                dates are explained. Creating a deal shows the start date only,
+                so the (i) explains the start date only (BACKLOG-3613). Editing
+                a deal shows both dates and the (i) explains both; the End Date
+                wording is the founder's own definition. */}
             {/* BACKLOG-3415: each date's name bold on its own line, its
-                definition beneath, a blank line between the two entries. The
-                wording is unchanged; only the layout is. */}
+                definition beneath, a blank line between entries. */}
             <InfoTooltip
               wide
               text={
@@ -216,17 +225,23 @@ function AddressVerificationStep({
                     <strong className="block font-semibold">Representation Start Date</strong>
                     when you started representing this client on this deal.
                   </span>
-                  <span className="block">
-                    <strong className="block font-semibold">End Date</strong>
-                    the last date you communicated with the client about this transaction, by text or email.
-                  </span>
+                  {showEndDate && (
+                    <span className="block">
+                      <strong className="block font-semibold">End Date</strong>
+                      the last date you communicated with the client about this transaction, by text or email.
+                    </span>
+                  )}
                 </span>
               }
             />
           </label>
         </div>
 
-        {/* Representation start date and end date, side by side from sm: up.
+        {/* Creating a deal: the representation start date only, in the left
+            half of the grid from sm: up (same width as before BACKLOG-3613).
+            The end date stays empty — an ongoing deal — and is entered at
+            Submit for review or Export.
+            Editing a deal: start date and end date side by side from sm: up.
             The closing date is not asked for here — it is optional in the data
             model and is set later from the Export modal. */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -249,28 +264,30 @@ function AddressVerificationStep({
               data-testid="create-audit-start-date-input"
             />
           </div>
-          <div>
-            {/* Deliberately optional, and deliberately NOT marked required: an
-                empty end date is how an ongoing deal is represented. The audit
-                window then rolls forward to today (emailDateRange.ts) and the
-                transaction reads as "<start> - Ongoing" in the details tab. An
-                asterisk was tried here and reverted (founder, 2026-09-16) —
-                requiring it would make an open deal impossible to create or to
-                re-save, and would cap message capture at an invented date. */}
-            <label className="block text-xs font-medium text-gray-600 mb-1">
-              End Date
-            </label>
-            <input
-              type="date"
-              value={addressData.closed_at || ""}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                onEndDateChange(e.target.value || undefined)
-              }
-              min={addressData.started_at}
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-gray-900 bg-white min-h-[44px]"
-              data-testid="create-audit-end-date-input"
-            />
-          </div>
+          {showEndDate && (
+            <div>
+              {/* Deliberately optional, and deliberately NOT marked required: an
+                  empty end date is how an ongoing deal is represented. The audit
+                  window then rolls forward to today (emailDateRange.ts) and the
+                  transaction reads as "<start> - Ongoing" in the details tab. An
+                  asterisk was tried here and reverted (founder, 2026-09-16) —
+                  requiring it would make an open deal impossible to create or to
+                  re-save, and would cap message capture at an invented date. */}
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                End Date
+              </label>
+              <input
+                type="date"
+                value={addressData.closed_at || ""}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                  onEndDateChange(e.target.value || undefined)
+                }
+                min={addressData.started_at}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-gray-900 bg-white min-h-[44px]"
+                data-testid="create-audit-end-date-input"
+              />
+            </div>
+          )}
         </div>
       </div>
 

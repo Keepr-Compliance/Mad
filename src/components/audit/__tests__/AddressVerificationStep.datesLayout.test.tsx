@@ -20,6 +20,11 @@
  *     red-when-empty border. An empty end date is how an ongoing deal is
  *     represented (founder, 2026-09-16). Representation Start Date keeps all
  *     three, and that asymmetry is the point.
+ *
+ * BACKLOG-3613: End Date is on the EDIT screen only (`showEndDate`). Creating a
+ * deal shows the start date alone — same grid, same width — and the tooltip
+ * explains the start date only. The bullets above describe the edit layout;
+ * the "create mode" block at the bottom pins the new-deal layout.
  */
 
 import React from "react";
@@ -54,15 +59,16 @@ const baseProps = {
   suggestions: [],
 };
 
-const renderStep = (overrides: Partial<AddressData> = {}) =>
+const renderStep = (overrides: Partial<AddressData> = {}, showEndDate = true) =>
   render(
     <AddressVerificationStep
       {...baseProps}
       addressData={{ ...addressData, ...overrides }}
+      showEndDate={showEndDate}
     />,
   );
 
-describe("AddressVerificationStep — dates section", () => {
+describe("AddressVerificationStep — dates section (edit mode, showEndDate)", () => {
   it("does not render a Closing Date field", () => {
     renderStep();
     expect(screen.queryByTestId("create-audit-closing-date-input")).toBeNull();
@@ -203,5 +209,75 @@ describe("AddressVerificationStep — dates section", () => {
     expect(
       screen.getByTestId("create-audit-start-date-input").className,
     ).toContain("border-gray-300");
+  });
+});
+
+describe("AddressVerificationStep — dates section (create mode, BACKLOG-3613)", () => {
+  // No showEndDate prop at all: create mode is the default.
+  const renderCreate = (overrides: Partial<AddressData> = {}) =>
+    render(
+      <AddressVerificationStep
+        {...baseProps}
+        addressData={{ ...addressData, ...overrides }}
+      />,
+    );
+
+  it("does not render an End Date field", () => {
+    const { container } = renderCreate();
+    expect(screen.queryByTestId("create-audit-end-date-input")).toBeNull();
+    expect(screen.queryByText("End Date")).toBeNull();
+    expect(container.querySelectorAll('input[type="date"]')).toHaveLength(1);
+  });
+
+  it("keeps Representation Start Date in the same responsive grid, required and alone", () => {
+    renderCreate();
+    const start = screen.getByTestId("create-audit-start-date-input");
+    const grid = start.closest("div")!.parentElement!;
+    expect(grid.className).toContain("grid");
+    expect(grid.className).toContain("grid-cols-1");
+    // Same two-column grid as the edit screen, so the start date keeps its width.
+    expect(grid.className).toContain("sm:grid-cols-2");
+    expect(grid.children).toHaveLength(1);
+
+    const label = start.parentElement!.querySelector("label")!;
+    expect(label.textContent).toContain("Representation Start Date *");
+    expect(start).toBeRequired();
+    expect(Array.from(start.parentElement!.children).map((el) => el.tagName)).toEqual([
+      "LABEL",
+      "INPUT",
+    ]);
+  });
+
+  it("explains the start date only in the one tooltip", async () => {
+    const user = userEvent.setup();
+    const { container } = renderCreate();
+    const icons = container.querySelectorAll('[data-testid="info-tooltip-trigger"]');
+    expect(icons).toHaveLength(1);
+    const heading = screen.getByText("Transaction Dates");
+    expect(heading.contains(icons[0])).toBe(true);
+
+    await user.hover(icons[0]);
+    const bubble = screen.getByRole("tooltip");
+    expect(bubble).toHaveTextContent(
+      "when you started representing this client on this deal.",
+    );
+    expect(bubble.textContent).not.toMatch(/End Date/);
+    expect(bubble.textContent).not.toMatch(/the last date you communicated/);
+
+    const names = Array.from(bubble.querySelectorAll("strong"));
+    expect(names.map((el) => el.textContent)).toEqual(["Representation Start Date"]);
+    expect(names[0].className).toContain("block");
+    expect(names[0].className).toContain("font-semibold");
+    const list = bubble.firstElementChild!;
+    expect(list.className).toContain("space-y-3");
+    expect(list.children).toHaveLength(1);
+    expect(list.children[0].firstElementChild).toBe(names[0]);
+  });
+
+  it("still flags an empty Representation Start Date in red", () => {
+    renderCreate({ started_at: "" });
+    expect(
+      screen.getByTestId("create-audit-start-date-input").className,
+    ).toContain("border-red-300");
   });
 });

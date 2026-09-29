@@ -454,4 +454,37 @@ describe("BACKLOG-1862: open-trigger past-window policy", () => {
     expect(r.ran).toBe(true);
     expect(mockSyncTransactionEmails).toHaveBeenCalledTimes(1);
   });
+
+  // BACKLOG-3613: new deals are created with no end date, so their window ends
+  // at "now". The gate once read the clock twice — once inside
+  // computeTransactionDateRange, once for the comparison — and any tick between
+  // the two skipped an ONGOING deal as past_window. The clock here moves 5 ms
+  // on every Date.now() read, starting 5 ms ahead of the real clock.
+  describe("ongoing deal with no usable end date, clock ticking (BACKLOG-3613)", () => {
+    let nowSpy: jest.SpyInstance<number, []>;
+    beforeEach(() => {
+      const realNow = Date.now.bind(Date);
+      let t = realNow();
+      nowSpy = jest.spyOn(Date, "now").mockImplementation(() => (t += 5));
+    });
+    afterEach(() => nowSpy.mockRestore());
+
+    it.each([
+      ["no end date (null)", null],
+      ["an unparseable end date", "not-a-date"],
+    ])("open with %s → syncs, never skipped as past_window", async (_label, closedAt) => {
+      mockGetTxn.mockResolvedValueOnce({ ...pastWindowTxn, closed_at: closedAt });
+      const r = await ensureTransactionEmailsSynced({ transactionId: "tx-1", reason: "open" });
+      expect(r.skipped).toBeUndefined();
+      expect(r.ran).toBe(true);
+      expect(mockSyncTransactionEmails).toHaveBeenCalledTimes(1);
+    });
+
+    it("a closed deal is still skipped on open with the same ticking clock", async () => {
+      mockGetTxn.mockResolvedValueOnce(pastWindowTxn);
+      const r = await ensureTransactionEmailsSynced({ transactionId: "tx-1", reason: "open" });
+      expect(r.skipped).toBe("past_window");
+      expect(mockSyncTransactionEmails).not.toHaveBeenCalled();
+    });
+  });
 });

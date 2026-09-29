@@ -231,6 +231,8 @@ export const CreateAudit = {
   startDateInputTestId: 'create-audit-start-date-input',
   // No closingDateInputTestId: step 1 no longer renders a Closing Date field.
   // A closing date is set from the Export modal instead.
+  // Rendered on Edit Transaction Details only; the create wizard has no End
+  // Date field (BACKLOG-3613).
   endDateInputTestId: 'create-audit-end-date-input',
   typePurchaseTestId: 'create-audit-type-purchase',
   typeSaleTestId: 'create-audit-type-sale',

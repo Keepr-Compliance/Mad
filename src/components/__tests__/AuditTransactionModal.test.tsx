@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import AuditTransactionModal from "../AuditTransactionModal";
@@ -31,6 +31,22 @@ jest.mock("../../appCore", () => ({
   ...jest.requireActual("../../appCore"),
   useAppStateMachine: () => ({
     isDatabaseInitialized: true,
+  }),
+}));
+
+// BACKLOG-3613: the step-1 "Continue" goes through handleGatedNext, which asks
+// the coverage hook before advancing. It is mocked here so a test can control
+// that answer; null means "no gap, proceed", which is what every older test in
+// this file already got from the unconfigured window.api mock.
+const mockCheckCoverage = jest.fn();
+jest.mock("../../hooks/useAuditCoverageCheck", () => ({
+  useAuditCoverageCheck: () => ({
+    checkCoverage: mockCheckCoverage,
+    checkExportCompleteness: jest.fn().mockResolvedValue(null),
+    runMessagesImport: jest.fn().mockResolvedValue({ ok: true }),
+    importing: false,
+    progress: null,
+    indeterminate: false,
   }),
 }));
 
@@ -74,6 +90,7 @@ describe("AuditTransactionModal", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockCheckCoverage.mockResolvedValue(null);
 
     // Default mocks
     jest.mocked(window.api.address.initialize).mockResolvedValue({ success: true });
@@ -1069,6 +1086,143 @@ describe("AuditTransactionModal", () => {
       // Should have attempted to call getDetails
       await waitFor(() => {
         expect(window.api.transactions.getDetails).toHaveBeenCalled();
+      });
+    });
+  });
+
+  describe("End Date — create vs edit (BACKLOG-3613)", () => {
+    const renderCreate = () =>
+      renderWithProvider(
+        <AuditTransactionModal
+          userId={mockUserId}
+          provider={mockProvider}
+          onClose={mockOnClose}
+          onSuccess={mockOnSuccess}
+        />,
+      );
+
+    // Walks the create wizard to the createAudited call: address, Continue,
+    // pick a contact, Continue (the first contact defaults to Client), Create.
+    // The file-level fixtures carry no source, so step 2's Source filter hides
+    // them. A manual contact is listed under the Manual leaf.
+    const manualContact = {
+      id: "contact-manual-3613",
+      user_id: "123",
+      name: "Casey Manual",
+      display_name: "Casey Manual",
+      email: "casey@example.com",
+      source: "manual",
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+    } as unknown as Contact;
+
+    const createThroughTheWizard = async () => {
+      jest.mocked(window.api.contacts.getAll).mockResolvedValue({
+        success: true,
+        contacts: [manualContact],
+      });
+      jest.mocked(window.api.contacts.getSortedByActivity).mockResolvedValue({
+        success: true,
+        contacts: [manualContact],
+      });
+      renderCreate();
+      await userEvent.type(
+        screen.getByPlaceholderText(/enter property address/i),
+        "123 Main Street",
+      );
+      await userEvent.click(getButton(/continue/i));
+      await waitFor(() => {
+        expect(screen.getByTestId("contact-assignment-step-2")).toBeInTheDocument();
+      });
+      await userEvent.click(await screen.findByText("Casey Manual"));
+      await waitFor(() => {
+        expect(screen.getByTestId("added-count")).toHaveTextContent("1");
+      });
+      await userEvent.click(getButton(/continue/i));
+      await waitFor(() => {
+        expect(screen.getByTestId("contact-assignment-step-3")).toBeInTheDocument();
+      });
+      await userEvent.click(getButton(/create transaction/i));
+      await waitFor(() => {
+        expect(window.api.transactions.createAudited).toHaveBeenCalledTimes(1);
+      });
+      return jest.mocked(window.api.transactions.createAudited).mock.calls[0][1] as Record<
+        string,
+        unknown
+      >;
+    };
+
+    it("C1: a new deal is created with no end date (ongoing)", async () => {
+      const payload = await createThroughTheWizard();
+      expect(payload.property_address).toBe("123 Main Street");
+      expect(payload.started_at).toEqual(expect.any(String));
+      // Absent or undefined — never a date. Until BACKLOG-3613 this was today.
+      expect(payload.closed_at ?? null).toBeNull();
+    });
+
+    it("C2: a start date after today still reaches step 2 — no error about a hidden end date", async () => {
+      renderCreate();
+      expect(screen.queryByTestId("create-audit-end-date-input")).toBeNull();
+
+      const future = new Date();
+      future.setFullYear(future.getFullYear() + 1);
+      const futureISO = future.toISOString().split("T")[0];
+
+      await userEvent.type(
+        screen.getByPlaceholderText(/enter property address/i),
+        "123 Main Street",
+      );
+      fireEvent.change(screen.getByTestId("create-audit-start-date-input"), {
+        target: { value: futureISO },
+      });
+      await userEvent.click(getButton(/continue/i));
+
+      await waitFor(() => {
+        expect(screen.getByTestId("contact-assignment-step-2")).toBeInTheDocument();
+      });
+      // The gated path ran (the start date passed basic validation) ...
+      expect(mockCheckCoverage).toHaveBeenCalledWith(futureISO);
+      // ... and nothing complained about an end date the user cannot see.
+      expect(screen.queryByText(/End date must be after start date/i)).toBeNull();
+    });
+
+    it("C3: Edit Transaction Details still shows End Date, prefilled, and saves it", async () => {
+      renderWithProvider(
+        <AuditTransactionModal
+          userId={mockUserId}
+          provider={mockProvider}
+          onClose={mockOnClose}
+          onSuccess={mockOnSuccess}
+          editTransaction={{
+            id: "txn-edit-3613",
+            user_id: "123",
+            property_address: "456 Oak Street, City, ST 67890",
+            property_street: "456 Oak Street",
+            property_city: "City",
+            property_state: "ST",
+            property_zip: "67890",
+            transaction_type: "sale",
+            status: "active",
+            started_at: "2024-01-01",
+            closed_at: "2024-03-01",
+            created_at: "2024-01-01T00:00:00Z",
+            updated_at: "2024-01-01T00:00:00Z",
+          } as unknown as Transaction}
+        />,
+      );
+      jest.mocked(window.api.transactions.update).mockResolvedValue({ success: true });
+
+      const end = await screen.findByTestId("create-audit-end-date-input");
+      await waitFor(() => expect(end).toHaveValue("2024-03-01"));
+
+      fireEvent.change(end, { target: { value: "2024-04-15" } });
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(window.api.transactions.update).toHaveBeenCalledWith(
+          "txn-edit-3613",
+          expect.objectContaining({ closed_at: "2024-04-15" }),
+        );
       });
     });
   });

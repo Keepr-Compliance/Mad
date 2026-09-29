@@ -218,8 +218,8 @@ function communicationDate(comm: Communication): Date {
  *
  * The calendar day is read from the leading `YYYY-MM-DD` of a string value, or
  * from the UTC components of a `Date` — because every writer of `closed_at` in
- * this app produces a DATE-ONLY value (`useAuditAddressForm.ts` `getTodayDate()`,
- * the AddressVerificationStep date input, `ExportModal.tsx` `.split("T")[0]`),
+ * this app produces a DATE-ONLY value (the AddressVerificationStep date input on
+ * Edit Transaction Details, `ExportModal.tsx` `.split("T")[0]`),
  * and the `Date` callers get theirs from `new Date(<that date string>)`, which
  * is UTC midnight. Reading LOCAL components off such a Date would name the
  * PREVIOUS day for every user west of UTC. A time-bearing `closed_at` is

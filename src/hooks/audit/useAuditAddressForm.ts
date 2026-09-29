@@ -18,10 +18,6 @@ function getDefaultStartDate(): string {
   return date.toISOString().split("T")[0]; // YYYY-MM-DD format
 }
 
-function getTodayDate(): string {
-  return new Date().toISOString().split("T")[0];
-}
-
 export const initialAddressData: AddressData = {
   property_address: "",
   property_street: "",
@@ -32,7 +28,11 @@ export const initialAddressData: AddressData = {
   transaction_type: "purchase",
   started_at: getDefaultStartDate(),
   closing_deadline: undefined,
-  closed_at: getTodayDate(),
+  // BACKLOG-3613: a new deal has no end date — it is ongoing, so its audit
+  // window rolls forward to today. The agent enters the end date at Submit for
+  // review or Export. (Until 3613 this pre-filled today and every new deal was
+  // saved with its creation day as the end date.)
+  closed_at: undefined,
 };
 
 interface UseAuditAddressFormProps {

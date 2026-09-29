@@ -302,6 +302,9 @@ function AuditTransactionModal({
               suggestions={addressSuggestions}
               onSelectSuggestion={selectAddress}
               startDateMode="manual"
+              // BACKLOG-3613: End Date is on the Edit screen only. A new deal
+              // starts ongoing (no end date); it is entered at Submit / Export.
+              showEndDate={isEditing}
             />
           )}
 
