@@ -22,6 +22,8 @@ import type { Transaction } from "@/types";
 import { InfoTooltip } from "../common/InfoTooltip";
 import type { ConfirmedTransactionDates } from "./saveConfirmedTransactionDates";
 import type { TransactionDateField } from "./useTransactionDatesForm";
+import { CommissionFields } from "./CommissionFields";
+import type { CommissionForm } from "./useCommissionForm";
 
 /** The block's heading, and the Submit dialog's title on its date screen. One literal for both. */
 export const VERIFY_TRANSACTION_DETAILS_TITLE = "Verify Transaction Details";
@@ -53,6 +55,13 @@ interface TransactionDatesFieldsProps {
    * renders.
    */
   hideHeading?: boolean;
+  /**
+   * BACKLOG-3520 — the commission block ("Closing Financials"), rendered under
+   * the dates. Omitted by a host that does not capture commission.
+   */
+  commission?: CommissionForm;
+  /** Which route hosts the block; selects the wording of the empty-commission warning. */
+  commissionRoute?: "submit" | "export";
 }
 
 /**
@@ -86,6 +95,8 @@ export function TransactionDatesFields({
   headerAction,
   meta,
   hideHeading = false,
+  commission,
+  commissionRoute = "submit",
 }: TransactionDatesFieldsProps): React.ReactElement {
   return (
     <div className="space-y-6">
@@ -179,6 +190,8 @@ export function TransactionDatesFields({
           />
         </div>
       </div>
+
+      {commission && <CommissionFields commission={commission} route={commissionRoute} />}
     </div>
   );
 }

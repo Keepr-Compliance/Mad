@@ -64,6 +64,11 @@ import {
   V72_DROP_CHECKLISTS_SQL,
   V72_RENAME_CHECKLISTS_SQL,
 } from "./db/migrationV72Sql";
+// BACKLOG-3519: migration v73's SQL text, same boundary rule.
+import {
+  V73_TRANSACTIONS_TABLE_INFO_SQL,
+  V73_ADD_COMMISSION_COLUMNS_SQL,
+} from "./db/migrationV73Sql";
 import {
   SCHEMA_VERSION_UPDATE_SQL,
   SCHEMA_VERSION_TABLE_EXISTS_SQL,
@@ -1411,6 +1416,25 @@ class DatabaseService implements IDatabaseService {
         d.exec(V72_RENAME_CHECKLISTS_SQL);
 
         hostLogger.info(`[v72] rebuilt transaction_checklists, copied ${copied} row(s)`);
+      },
+    },
+    {
+      version: 73,
+      description:
+        "BACKLOG-3519 commission figures on transactions: commission_offered_rate, " +
+        "commission_actual_rate, commission_gross_amount, commission_adjustment_reason",
+      // Guarded like v71's provider_attachment_id: a FRESH install already has all
+      // four columns from schema.sql (schema_version seeds at BASELINE 70, then this
+      // migration still runs), so checking one column's presence is enough to make
+      // the ALTER TABLE block a no-op there and keep this migration re-runnable.
+      // No index: nothing queries transactions by these columns.
+      migrate: (d) => {
+        const hasCol = (
+          d.prepare(V73_TRANSACTIONS_TABLE_INFO_SQL).all() as Array<{ name: string }>
+        ).some((c) => c.name === "commission_offered_rate");
+        if (!hasCol) {
+          d.exec(V73_ADD_COMMISSION_COLUMNS_SQL);
+        }
       },
     },
   ];
