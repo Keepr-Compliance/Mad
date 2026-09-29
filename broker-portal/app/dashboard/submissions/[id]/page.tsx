@@ -24,6 +24,7 @@ import {
   type TemplateOption,
 } from '@/lib/submissions/checklistModel';
 import { loadVersionChain } from '@/lib/submissions/versions';
+import { readAllRows } from '@/lib/supabase/readAllRows';
 import { SubmissionVersions } from '@/components/submission/SubmissionVersions';
 
 interface PageProps {
@@ -83,32 +84,42 @@ async function getSubmission(id: string, client: SupabaseClient) {
 }
 
 async function getMessages(submissionId: string, client: SupabaseClient): Promise<Message[]> {
-  const { data, error } = await client
-    .from('submission_messages')
-    .select('*')
-    .eq('submission_id', submissionId)
-    .order('sent_at', { ascending: false });
+  // BACKLOG-3607 N-3: every row, not the first PostgREST block — the Remove
+  // confirmation counts linked emails from these rows.
+  const { data, error } = await readAllRows<Message>((from, to) =>
+    client
+      .from('submission_messages')
+      .select('*', { count: 'exact' })
+      .eq('submission_id', submissionId)
+      .order('sent_at', { ascending: false })
+      .order('id')
+      .range(from, to)
+  );
 
   if (error) {
     console.error('Error fetching messages:', error);
     return [];
   }
 
-  return data || [];
+  return data;
 }
 
 async function getAttachments(submissionId: string, client: SupabaseClient): Promise<Attachment[]> {
-  const { data, error } = await client
-    .from('submission_attachments')
-    .select('*')
-    .eq('submission_id', submissionId);
+  const { data, error } = await readAllRows<Attachment>((from, to) =>
+    client
+      .from('submission_attachments')
+      .select('*', { count: 'exact' })
+      .eq('submission_id', submissionId)
+      .order('id')
+      .range(from, to)
+  );
 
   if (error) {
     console.error('Error fetching attachments:', error);
     return [];
   }
 
-  return data || [];
+  return data;
 }
 
 type HistoryEntry = StatusHistoryEntry;

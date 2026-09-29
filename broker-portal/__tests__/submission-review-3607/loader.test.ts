@@ -37,11 +37,20 @@ const ITEM = {
   reviewer_checked_at: null,
 };
 
+/** The loader reads in blocks: `.eq(...).order(...).range(from, to)` (BACKLOG-3607 N-3). */
+function paged<R>(answer: () => Promise<R>) {
+  const q = {
+    order: () => q,
+    range: () => answer(),
+  };
+  return q;
+}
+
 function client(db: Db, selects: string[]): SupabaseClient {
   return {
     from: (table: string) => ({
       select: (cols: string) => ({
-        eq: async () => {
+        eq: () => paged(async () => {
           selects.push(`${table}: ${cols}`);
           const missing = (col: string) => ({
             data: null,
@@ -61,7 +70,7 @@ function client(db: Db, selects: string[]): SupabaseClient {
             return { data: [ITEM], error: null };
           }
           return { data: [], error: null };
-        },
+        }),
       }),
     }),
   } as unknown as SupabaseClient;

@@ -141,8 +141,8 @@ export function removeConfirmText(counts: LinkedCounts | undefined): string {
   if (!counts) return 'Documents and emails linked to it stay on the deal; the checklist and its links are removed.';
   const linked = linkedPhrase(counts.documents, counts.emails);
   if (!linked) return 'No documents or emails are linked to it. The checklist is removed.';
-  const verb = counts.documents + counts.emails === 1 ? 'is' : 'are';
-  return `${linked} ${verb} linked to it. They stay on the deal; the checklist and its links are removed.`;
+  const one = counts.documents + counts.emails === 1;
+  return `${linked} ${one ? 'is' : 'are'} linked to it. ${one ? 'It stays' : 'They stay'} on the deal; the checklist and its links are removed.`;
 }
 
 /**

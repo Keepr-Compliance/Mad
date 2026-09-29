@@ -123,6 +123,13 @@ export interface EmulatorState {
    * would then consume in an order the caller never asked for.
    */
   orders: { table: string; column: string; options: unknown }[];
+  /**
+   * BACKLOG-3607 N-3: the server's max-rows cap, or null (no cap, the default).
+   * When set, `.range(from, to)` honours `from` and every response is cut to
+   * this many rows, as PostgREST does; `{ count: 'exact' }` still reports the
+   * full match count. Null keeps the older behaviour (range = a limit from 0).
+   */
+  maxRows: number | null;
 }
 
 const PGRST116 = {
@@ -151,6 +158,7 @@ interface ChainResult {
   data: unknown;
   error: unknown;
   status: number;
+  count?: number | null;
 }
 
 /**
@@ -161,6 +169,8 @@ interface ChainResult {
 function buildChain(table: string, state: EmulatorState) {
   const filters: Filter[] = [];
   let limit: number | null = null;
+  let offset = 0;
+  let wantCount = false;
   let columnNamed = false;
   let shape: 'many' | 'single' | 'maybeSingle' = 'many';
   let write: 'insert' | 'update' | 'upsert' | 'delete' | null = null;
@@ -178,9 +188,16 @@ function buildChain(table: string, state: EmulatorState) {
 
     let rows = [...(state.rows[table] ?? [])];
     for (const f of filters) rows = f(rows);
+    const matched = rows.length;
+    if (state.maxRows !== null) rows = rows.slice(offset);
     if (limit !== null) rows = rows.slice(0, limit);
+    if (state.maxRows !== null) rows = rows.slice(0, state.maxRows);
 
-    if (shape === 'many') return { data: rows, error: null, status: 200 };
+    if (shape === 'many') {
+      return wantCount
+        ? { data: rows, error: null, status: 200, count: matched }
+        : { data: rows, error: null, status: 200 };
+    }
     if (rows.length === 1) return { data: rows[0], error: null, status: 200 };
     if (shape === 'maybeSingle' && rows.length === 0) {
       return { data: null, error: null, status: 200 };
@@ -189,8 +206,10 @@ function buildChain(table: string, state: EmulatorState) {
   }
 
   const chain = {
-    select(columns?: string, ..._rest: unknown[]) {
+    select(columns?: string, ...rest: unknown[]) {
       note(columns);
+      const opts = rest[0] as { count?: string } | undefined;
+      if (opts && opts.count === 'exact') wantCount = true;
       if (typeof columns === 'string') state.selects.push({ table, columns });
       return chain;
     },
@@ -249,6 +268,7 @@ function buildChain(table: string, state: EmulatorState) {
       // Pagination only; fixtures are small, so a window from 0 is the whole
       // answer. Kept as a limit so an out-of-range page still returns rows.
       limit = to - from + 1;
+      offset = from;
       return chain;
     },
     insert(values: unknown) {
@@ -291,7 +311,7 @@ export interface Emulator {
   state: EmulatorState;
   from: (table: string) => ReturnType<typeof buildChain>;
   /** Replace part of the fixture between cases. */
-  set: (next: Partial<Pick<EmulatorState, 'columnPresent' | 'rows'>>) => void;
+  set: (next: Partial<Pick<EmulatorState, 'columnPresent' | 'rows' | 'maxRows'>>) => void;
   reset: () => void;
 }
 
@@ -304,6 +324,7 @@ export function createPostgrestEmulator(
     writes: [],
     selects: [],
     orders: [],
+    maxRows: null,
   };
   return {
     state,
@@ -311,6 +332,7 @@ export function createPostgrestEmulator(
     set(next) {
       if (next.columnPresent !== undefined) state.columnPresent = next.columnPresent;
       if (next.rows !== undefined) state.rows = next.rows;
+      if (next.maxRows !== undefined) state.maxRows = next.maxRows;
     },
     reset() {
       state.columnPresent = true;
@@ -318,6 +340,7 @@ export function createPostgrestEmulator(
       state.writes = [];
       state.selects = [];
       state.orders = [];
+      state.maxRows = null;
     },
   };
 }

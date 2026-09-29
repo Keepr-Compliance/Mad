@@ -291,8 +291,11 @@ describe('linked counts (remove RPC rule, migration §6)', () => {
 
   it.each([
     [{ documents: 3, emails: 2 }, '3 documents and 2 emails are linked to it. They stay on the deal; the checklist and its links are removed.'],
-    [{ documents: 1, emails: 0 }, '1 document is linked to it. They stay on the deal; the checklist and its links are removed.'],
+    [{ documents: 1, emails: 1 }, '1 document and 1 email are linked to it. They stay on the deal; the checklist and its links are removed.'],
+    [{ documents: 1, emails: 0 }, '1 document is linked to it. It stays on the deal; the checklist and its links are removed.'],
+    [{ documents: 0, emails: 1 }, '1 email is linked to it. It stays on the deal; the checklist and its links are removed.'],
     [{ documents: 0, emails: 2 }, '2 emails are linked to it. They stay on the deal; the checklist and its links are removed.'],
+    [{ documents: 2, emails: 0 }, '2 documents are linked to it. They stay on the deal; the checklist and its links are removed.'],
     [{ documents: 0, emails: 0 }, 'No documents or emails are linked to it. The checklist is removed.'],
   ])('confirm copy for %j', (counts, text) => {
     expect(removeConfirmText(counts)).toBe(text);
@@ -401,7 +404,8 @@ describe('a checklist removed at review', () => {
     expect(overallRequiredCount([CONTRACT, DISCLOSURES_REMOVED], 'reviewer')).toEqual({ done: 0, total: 3 });
     expect(screen.getAllByText('0 of 3 required')).toHaveLength(2); // overall + Purchase Contract
     expect(screen.queryByText(/of 1 required/)).not.toBeInTheDocument();
-    expect(screen.getByText(/1 removed at review/)).toBeInTheDocument();
+    // N-1: the leading number counts live checklists only (the removed one is not one of them).
+    expect(screen.getByText('1 checklist · 1 removed at review')).toBeInTheDocument();
     fireEvent.click(screen.getByText('Expand all'));
     expect(screen.getByTestId('removed-banner')).toHaveTextContent('Removed by Broker Fixture at review');
     expect(screen.getByTestId('removed-banner')).toHaveTextContent('It is not on the agent’s next version.');

@@ -15,6 +15,7 @@ import type {
   ChecklistSectionView,
   TemplateOption,
 } from './checklistModel';
+import { readAllRows } from '@/lib/supabase/readAllRows';
 
 interface HeaderRow {
   id: string;
@@ -148,7 +149,10 @@ const CLEARED_COLUMNS = ', cleared_reviewer_id, cleared_at';
  * (transcribed 2026-09-28 from the live API, before the 3596 migration):
  * {"code":"42703","message":"column submission_checklist_items.cleared_reviewer_id does not exist"}
  */
-function isMissingClearedColumn(error: { code?: string; message?: string } | null): boolean {
+type PgError = { code?: string; message?: string } | null;
+
+function isMissingClearedColumn(raw: unknown): boolean {
+  const error = raw as PgError;
   return !!error && error.code === '42703' && /cleared_(reviewer_id|at)/.test(error.message ?? '');
 }
 
@@ -158,7 +162,8 @@ const HEADER_COLUMNS = 'id, template_id, template_name, sort_order, added_at_rev
 const REMOVED_HEADER_COLUMNS = ', removed_at_review_by, removed_at_review_at, restored_from_checklist_id';
 
 /** The same PostgREST 42703 answer, for a 3607 column (named in the message). */
-function isMissing3607Column(error: { code?: string; message?: string } | null): boolean {
+function isMissing3607Column(raw: unknown): boolean {
+  const error = raw as PgError;
   return (
     !!error &&
     error.code === '42703' &&
@@ -175,29 +180,41 @@ function isMissing3607Column(error: { code?: string; message?: string } | null):
  * other error is returned as is.
  */
 async function loadItems(client: SupabaseClient, submissionId: string) {
-  const full = await client
-    .from('submission_checklist_items')
-    .select(ITEM_COLUMNS + CLEARED_COLUMNS + RESTORED_ITEM_COLUMNS)
-    .eq('submission_id', submissionId);
+  const items = (columns: string) => readSubmissionRows(client, 'submission_checklist_items', columns, submissionId, ['id']);
+  const full = await items(ITEM_COLUMNS + CLEARED_COLUMNS + RESTORED_ITEM_COLUMNS);
   if (!isMissing3607Column(full.error) && !isMissingClearedColumn(full.error)) return full;
   if (isMissing3607Column(full.error)) {
-    const cleared = await client
-      .from('submission_checklist_items')
-      .select(ITEM_COLUMNS + CLEARED_COLUMNS)
-      .eq('submission_id', submissionId);
+    const cleared = await items(ITEM_COLUMNS + CLEARED_COLUMNS);
     if (!isMissingClearedColumn(cleared.error)) return cleared;
   }
-  return client.from('submission_checklist_items').select(ITEM_COLUMNS).eq('submission_id', submissionId);
+  return items(ITEM_COLUMNS);
 }
 
 /** The headers, with the 3607 removal / restore columns when the database has them. */
 async function loadHeaders(client: SupabaseClient, submissionId: string) {
-  const full = await client
-    .from('submission_checklists')
-    .select(HEADER_COLUMNS + REMOVED_HEADER_COLUMNS)
-    .eq('submission_id', submissionId);
+  const headers = (columns: string) => readSubmissionRows(client, 'submission_checklists', columns, submissionId, ['id']);
+  const full = await headers(HEADER_COLUMNS + REMOVED_HEADER_COLUMNS);
   if (!isMissing3607Column(full.error)) return full;
-  return client.from('submission_checklists').select(HEADER_COLUMNS).eq('submission_id', submissionId);
+  return headers(HEADER_COLUMNS);
+}
+
+/**
+ * Every row of one copy table for this submission, in blocks (BACKLOG-3607
+ * N-3): a single select stops at PostgREST's max-rows, and the Remove
+ * confirmation counts from these rows. `orderBy` must make the order total.
+ */
+function readSubmissionRows(
+  client: SupabaseClient,
+  table: string,
+  columns: string,
+  submissionId: string,
+  orderBy: string[]
+) {
+  return readAllRows<unknown>((from, to) => {
+    let q = client.from(table).select(columns, { count: 'exact' }).eq('submission_id', submissionId);
+    for (const column of orderBy) q = q.order(column);
+    return q.range(from, to);
+  });
 }
 
 export async function loadSubmissionChecklists(
@@ -207,19 +224,19 @@ export async function loadSubmissionChecklists(
   const [headers, items, links, members] = await Promise.all([
     loadHeaders(client, submissionId),
     loadItems(client, submissionId),
-    client
-      .from('submission_checklist_links')
-      .select('id, submission_checklist_item_id, kind, label, sort_order')
-      .eq('submission_id', submissionId),
-    client
-      .from('submission_checklist_link_members')
-      .select('link_id, kind, submission_attachment_id, submission_message_id')
-      .eq('submission_id', submissionId),
+    readSubmissionRows(client, 'submission_checklist_links', 'id, submission_checklist_item_id, kind, label, sort_order', submissionId, ['id']),
+    readSubmissionRows(
+      client,
+      'submission_checklist_link_members',
+      'link_id, kind, submission_attachment_id, submission_message_id',
+      submissionId,
+      ['link_id', 'submission_attachment_id', 'submission_message_id']
+    ),
   ]);
 
   for (const r of [headers, items, links, members]) {
     if (r.error || !Array.isArray(r.data)) {
-      console.error('[submissions] checklist read failed:', r.error?.message);
+      console.error('[submissions] checklist read failed:', (r.error as PgError)?.message);
       return { ok: false };
     }
   }
@@ -228,7 +245,7 @@ export async function loadSubmissionChecklists(
     ok: true,
     sections: assembleSections(
       headers.data as HeaderRow[],
-      items.data as unknown as ItemRow[],
+      items.data as ItemRow[],
       links.data as LinkRow[],
       members.data as MemberRow[]
     ),

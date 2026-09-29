@@ -273,4 +273,28 @@ describe('review page wiring (BACKLOG-3607)', () => {
       [HDR_REMOVED]: { documents: 1, emails: 0 },
     });
   });
+
+  it('N-3: counts are not cut by the server row cap (every block is read)', async () => {
+    // Four emails linked to Purchase Contract; the emulated server returns at
+    // most 2 rows per response, as PostgREST's max-rows does at 1000.
+    const rows = mockEmulator.state.rows;
+    for (const n of [2, 3, 4]) {
+      rows.submission_messages.push({
+        ...rows.submission_messages[0],
+        id: `msg-${n}`,
+        sent_at: `2026-09-28T0${n}:00:00+00:00`,
+        local_message_id: `M-${n}`,
+      });
+      rows.submission_checklist_link_members.push(member('l3', 'email', null, `msg-${n}`));
+    }
+    mockEmulator.set({ maxRows: 2 });
+    const el = await renderPage();
+    const props = findProps<ChecklistReviewProps>(el, ChecklistReview)!;
+    expect(props.linkedCounts).toEqual({
+      [HDR_LIVE]: { documents: 1, emails: 4 },
+      [HDR_REMOVED]: { documents: 1, emails: 0 },
+    });
+    // The page shows every message, not the first block.
+    expect(props.messages.map((m) => m.id).sort()).toEqual(['msg-1', 'msg-2', 'msg-3', 'msg-4']);
+  });
 });
