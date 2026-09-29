@@ -1,10 +1,8 @@
 -- D17 (SR R-1): restore qualifies the DIRECT parent, not just its id.
--- An agent can append a typed history entry to its own uploading version
--- (the append-only guard admits it; SR probe d99 measured rows=1), so a
--- forged checklist_removed {source: 'version'} entry passes the removal-
--- record check. Only the parent qualification (same organization, deal,
--- submitter, version n - 1) then stands between the forged version and a
--- restore. Four versions, each differing from the reviewed v1 in ONE of
+-- The control places a removal entry for the source header's key on each
+-- version, so only the parent qualification (same organization, deal,
+-- submitter, version n - 1) separates refusal from restore. Four versions,
+-- each differing from the reviewed v1 in ONE of
 -- those four, each pointing parent_submission_id at a parent that holds the
 -- source header, each with a forged removal entry for that header's key:
 --   (a) a colleague's version 2 (another submitter),
@@ -33,7 +31,7 @@ BEGIN
   PERFORM pg_temp.act_owner();
   IF how IS NULL OR NOT EXISTS (SELECT 1 FROM jsonb_array_elements(pg_temp.hist(p_sub)) e
                                  WHERE e ->> 'type' = 'checklist_removed' AND e ->> 'checklist_key' = p_key) THEN
-    -- keep the restore's history check exercised even if agents lose this
+    -- fall back to an owner write so the restore's history check still runs
     UPDATE public.transaction_submissions
        SET status_history = COALESCE(status_history, '[]'::jsonb) || jsonb_build_array(jsonb_build_object(
              'type', 'checklist_removed', 'source', 'version', 'changed_by', p_uid, 'checklist_key', p_key))
