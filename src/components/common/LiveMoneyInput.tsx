@@ -10,7 +10,11 @@
  */
 
 import React, { useLayoutEffect, useRef } from "react";
-import { deleteAcrossSeparator, formatMoneyLive } from "../../utils/liveMoneyFormat";
+import {
+  deleteAcrossSeparator,
+  formatMoneyEdit,
+  trimLeadingZeros,
+} from "../../utils/liveMoneyFormat";
 
 type NativeInputProps = Omit<
   React.InputHTMLAttributes<HTMLInputElement>,
@@ -26,6 +30,8 @@ function LiveMoneyInput({
   value,
   onValueChange,
   onKeyDown,
+  onKeyUp,
+  onBlur,
   ...rest
 }: LiveMoneyInputProps): React.ReactElement {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -48,6 +54,23 @@ function LiveMoneyInput({
     onKeyDown?.(e);
   };
 
+  // SR review 3008b20f: a Backspace that deletes nothing fires no change event,
+  // so the key is forgotten when it is released — otherwise a later key-less
+  // edit (a cut) would be treated as that Backspace.
+  const handleKeyUp = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    lastDeleteKey.current = null;
+    onKeyUp?.(e);
+  };
+
+  // Leading zeros are kept while typing (so 500,000 -> 00,000 -> 600,000 works)
+  // and removed when the field loses focus.
+  const handleBlur = (e: React.FocusEvent<HTMLInputElement>) => {
+    lastDeleteKey.current = null;
+    const trimmed = trimLeadingZeros(value);
+    if (trimmed !== value) onValueChange(trimmed);
+    onBlur?.(e);
+  };
+
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const el = e.target;
     const raw = el.value;
@@ -57,10 +80,12 @@ function LiveMoneyInput({
 
     const result =
       (key && deleteAcrossSeparator(value, raw, rawCaret, key)) ||
-      formatMoneyLive(raw, rawCaret);
+      formatMoneyEdit(value, raw, rawCaret);
 
-    if (result.text === value) {
-      // Nothing changed (a letter, a second "."): no re-render will follow, so
+    if (!result || result.text === value) {
+      // Nothing changed (a letter, a third decimal), or the edit was rejected
+      // because it would drop characters already in the field (a "." typed
+      // before existing decimals): no re-render will follow, so
       // put the text back here and the caret where it was before the edit —
       // otherwise it is left wherever the browser put it.
       const before = Math.min(
@@ -82,6 +107,8 @@ function LiveMoneyInput({
       type="text"
       value={value}
       onKeyDown={handleKeyDown}
+      onKeyUp={handleKeyUp}
+      onBlur={handleBlur}
       onChange={handleChange}
     />
   );

@@ -7,7 +7,7 @@
  */
 
 import React, { useState } from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import LiveMoneyInput from "../LiveMoneyInput";
@@ -139,5 +139,70 @@ describe("LiveMoneyInput — caret position", () => {
       seen.push(input.value);
     }
     expect(seen).toEqual(["100,000", "10,000", "1,000", "100", "10", "1", ""]);
+  });
+});
+
+// SR review (pm_comments 3008b20f on BACKLOG-3614): three defects in the first cut.
+describe("LiveMoneyInput — SR fixes", () => {
+  it("R1: 500,000 -> Backspace the 5 -> type 6 -> 600,000 (leading zeros kept while typing)", async () => {
+    const { input, user } = setup("500,000");
+    await typeAt(user, input, "{Backspace}", 1);
+    expect(input.value).toBe("00,000");
+    expect(input.selectionStart).toBe(0);
+    await typeAt(user, input, "6", 0);
+    expect(input.value).toBe("600,000");
+    expect(input.selectionStart).toBe(1);
+  });
+
+  it("R1b: Backspace over the comma in 1,|000,000 keeps the zeros", async () => {
+    const { input, user } = setup("1,000,000");
+    await typeAt(user, input, "{Backspace}", 2);
+    expect(input.value).toBe("000,000");
+    await typeAt(user, input, "2", 0);
+    expect(input.value).toBe("2,000,000");
+  });
+
+  it("R1c: leading zeros are trimmed when the field loses focus", async () => {
+    const { input, user, onText } = setup("500,000");
+    await typeAt(user, input, "{Backspace}", 1);
+    fireEvent.blur(input);
+    expect(input.value).toBe("0");
+    expect(onText).toHaveBeenLastCalledWith("0");
+  });
+
+  it("R2: a second . typed mid-number is ignored; no digits are lost", async () => {
+    const { input, user } = setup("1,234.5");
+    await typeAt(user, input, ".", 1);
+    expect(input.value).toBe("1,234.5");
+    expect(input.selectionStart).toBe(1);
+  });
+
+  it("R2b: a . typed where it would push digits past two decimals is ignored", async () => {
+    const { input, user } = setup("1,234");
+    await typeAt(user, input, ".", 1);
+    expect(input.value).toBe("1,234");
+  });
+
+  it("R2c: a digit typed inside full cents is ignored; the existing cent is kept", async () => {
+    const { input, user } = setup("1.23");
+    await typeAt(user, input, "5", 3);
+    expect(input.value).toBe("1.23");
+  });
+
+  it("R2d: a . typed where it leaves at most two decimals is accepted", async () => {
+    const { input, user } = setup("1,234");
+    await typeAt(user, input, ".", 3);
+    expect(input.value).toBe("12.34");
+  });
+
+  it("R3: a Backspace that deletes nothing does not make a later cut delete a digit", async () => {
+    const { input, user } = setup("1,234");
+    // Backspace at the very start: nothing to delete, no change event.
+    await typeAt(user, input, "{Backspace}", 0);
+    expect(input.value).toBe("1,234");
+    // Cut only the comma (no key press involved).
+    input.setSelectionRange(1, 2);
+    await user.cut();
+    expect(input.value).toBe("1,234");
   });
 });

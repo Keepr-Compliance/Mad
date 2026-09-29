@@ -30,15 +30,24 @@ export interface LiveMoneyResult {
 
 /**
  * Normalise a run of significant characters (digits and dots) to an amount:
- * one dot at most, at most two decimals, no leading zeros on the whole part.
- * `keep` is how many of the input's significant characters sit left of the
- * caret; the result says how many of the OUTPUT's characters do.
+ * one dot at most, at most two decimals. `keep` is how many of the input's
+ * significant characters sit left of the caret; the result says how many of the
+ * OUTPUT's characters do. `dropped[i]` is true when input character i was
+ * discarded.
+ *
+ * Leading zeros are NOT stripped here (SR review 3008b20f): deleting the 5 in
+ * 500,000 must leave 00,000 so typing 6 gives 600,000. `trimLeadingZeros`
+ * removes them when the field loses focus, and `parseMoney` ignores them.
  */
-function normalise(sig: string, keep: number): { sig: string; keep: number } {
+function normalise(
+  sig: string,
+  keep: number,
+): { sig: string; keep: number; dropped: boolean[] } {
   let out = "";
   let outKeep = 0;
   let seenDot = false;
   let decimals = 0;
+  const dropped: boolean[] = [];
   for (let i = 0; i < sig.length; i++) {
     const ch = sig[i];
     let take: boolean;
@@ -51,22 +60,13 @@ function normalise(sig: string, keep: number): { sig: string; keep: number } {
     } else {
       take = true;
     }
+    dropped.push(!take);
     if (take) {
       out += ch;
       if (i < keep) outKeep++;
     }
   }
-
-  // Leading zeros on the whole part: "007" -> "7", "000" -> "0", ".5" stays.
-  const dot = out.indexOf(".");
-  const whole = dot === -1 ? out : out.slice(0, dot);
-  let strip = 0;
-  while (strip < whole.length - 1 && whole[strip] === "0") strip++;
-  if (strip > 0) {
-    out = out.slice(strip);
-    outKeep = Math.max(0, outKeep - strip);
-  }
-  return { sig: out, keep: outKeep };
+  return { sig: out, keep: outKeep, dropped };
 }
 
 /** Format a run of significant characters and place the caret after `keep` of them. */
@@ -84,20 +84,89 @@ function render(sig: string, keep: number): LiveMoneyResult {
   return { text, caret };
 }
 
+/** The significant characters of `raw`, how many sit left of `rawCaret`, and where each came from. */
+function significant(
+  raw: string,
+  rawCaret: number,
+): { sig: string; keep: number; index: number[] } {
+  let sig = "";
+  let keep = 0;
+  const index: number[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    if (!isSignificant(raw[i])) continue;
+    sig += raw[i];
+    index.push(i);
+    if (i < rawCaret) keep++;
+  }
+  return { sig, keep, index };
+}
+
 /**
  * Format `raw` (the input's value right after an edit) with the caret at
  * `rawCaret`. Keeps the caret beside the same digit it was beside.
  */
 export function formatMoneyLive(raw: string, rawCaret: number): LiveMoneyResult {
-  let sig = "";
-  let keep = 0;
-  for (let i = 0; i < raw.length; i++) {
-    if (!isSignificant(raw[i])) continue;
-    sig += raw[i];
-    if (i < rawCaret) keep++;
-  }
+  const { sig, keep } = significant(raw, rawCaret);
   const n = normalise(sig, keep);
   return render(n.sig, n.keep);
+}
+
+/**
+ * Like `formatMoneyLive`, but for an edit to an existing value `previous`.
+ * Returns null — reject the edit, keep `previous` — when formatting would throw
+ * away a character that was already in the field: a "." typed before existing
+ * decimals (1,234.5 -> 1.23), or a digit typed inside full cents
+ * (1.2|3 + 5 -> 1.25). Characters the edit itself added may still be dropped,
+ * so pasting $1,234.567 into an empty field gives 1,234.56.
+ */
+export function formatMoneyEdit(
+  previous: string,
+  raw: string,
+  rawCaret: number,
+): LiveMoneyResult | null {
+  // The inserted span lies between the longest common prefix and suffix of
+  // `previous` and `raw`; everything outside it was already in the field.
+  let prefix = 0;
+  while (
+    prefix < previous.length &&
+    prefix < raw.length &&
+    previous[prefix] === raw[prefix]
+  ) {
+    prefix++;
+  }
+  let suffix = 0;
+  while (
+    suffix < previous.length - prefix &&
+    suffix < raw.length - prefix &&
+    previous[previous.length - 1 - suffix] === raw[raw.length - 1 - suffix]
+  ) {
+    suffix++;
+  }
+  const insertedEnd = raw.length - suffix;
+
+  const { sig, keep, index } = significant(raw, rawCaret);
+  const n = normalise(sig, keep);
+  for (let i = 0; i < n.dropped.length; i++) {
+    if (!n.dropped[i]) continue;
+    const at = index[i];
+    if (at < prefix || at >= insertedEnd) return null;
+  }
+  return render(n.sig, n.keep);
+}
+
+/**
+ * Remove leading zeros from the whole part, for when the field loses focus:
+ * "00,000" -> "0", "007" -> "7", "00.5" -> "0.5". ".5" and "" are unchanged.
+ */
+export function trimLeadingZeros(text: string): string {
+  const { sig } = significant(text, text.length);
+  const dot = sig.indexOf(".");
+  const whole = dot === -1 ? sig : sig.slice(0, dot);
+  let strip = 0;
+  while (strip < whole.length - 1 && whole[strip] === "0") strip++;
+  if (strip === 0) return text;
+  const trimmed = sig.slice(strip);
+  return render(trimmed, trimmed.length).text;
 }
 
 /**
