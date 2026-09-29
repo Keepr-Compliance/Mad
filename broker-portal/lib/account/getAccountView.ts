@@ -26,6 +26,11 @@ import { createClient } from '@/lib/supabase/server';
 import { getDataClient } from '@/lib/impersonation-guards';
 import { isFeatureEnabledFailClosed } from '@/lib/feature-gate';
 import { impersonationFeatureView } from '@/lib/org-settings-access';
+import {
+  PORTAL_MEMBERSHIP_SELECT,
+  classifyPortalAccess,
+  type PortalMembershipRow,
+} from '@/lib/auth/membership';
 
 /**
  * The types and the pure provider-name helper live in ./accountView so a CLIENT
@@ -154,11 +159,16 @@ export async function getAccountView(): Promise<AccountView | null> {
       .select('id, email, display_name, first_name, last_name, oauth_provider, created_at')
       .eq('id', userId)
       .maybeSingle(),
+    // BACKLOG-3552: the same membership query getPortalAccess() sends
+    // (lib/auth/portalAccess.ts) — every row, ordered on base columns — so a
+    // user with more than one row gets the organization the portal routes on
+    // rather than PGRST116 and a blank page.
     client
       .from('organization_members')
-      .select('role, organization_id')
+      .select(PORTAL_MEMBERSHIP_SELECT)
       .eq('user_id', userId)
-      .maybeSingle(),
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true }),
     client
       .from('user_preferences')
       .select('preferences, updated_at')
@@ -167,9 +177,16 @@ export async function getAccountView(): Promise<AccountView | null> {
   ]);
 
   const userRow = (userResult.data as UserRow | null) ?? null;
-  const membership = (membershipResult.data as
-    | { role: string | null; organization_id: string | null }
-    | null) ?? null;
+  // Resolved by the classifier middleware and the layout use; no rule of its
+  // own. `unknown` (a read error) and `none` both mean "no organization shown".
+  const access = classifyPortalAccess(
+    membershipResult.data as PortalMembershipRow[] | null,
+    userId
+  );
+  const membership =
+    access.kind === 'full' || access.kind === 'floor'
+      ? { role: access.role, organization_id: access.organizationId }
+      : null;
 
   let organizationName: string | null = null;
   let orgRetentionYears: number | null = null;
