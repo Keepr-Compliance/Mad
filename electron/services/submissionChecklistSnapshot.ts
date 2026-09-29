@@ -36,7 +36,9 @@
  *        one matching signature), which fail on the first call without a
  *        retry -> kind `refused`, reported to Sentry. The caller finalizes the submission and
  *        tells the agent the checklists were not sent. A plan never locks
- *        submission.
+ *        submission. (BACKLOG-3607) This applies to a non-empty payload only:
+ *        a permanent refusal of `[]` left nothing out, so it returns `none`
+ *        (logged, not reported) and the agent is told nothing.
  *
  * Evidence links are sent as LOCAL ids and matched server-side:
  *   attachment -> submission_attachments.local_attachment_id (written by
