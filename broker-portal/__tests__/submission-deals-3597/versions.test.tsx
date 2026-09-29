@@ -45,6 +45,10 @@ jest.mock('@/lib/supabase/server', () => ({
     rpc: mockRpc,
   })),
 }));
+// BACKLOG-3605: the notice polls with the browser client; same emulator.
+jest.mock('@/lib/supabase/client', () => ({
+  createClient: jest.fn(() => ({ from: (t: string) => mockEmulator.from(t) })),
+}));
 jest.mock('@/lib/supabase/service', () => ({
   createServiceClient: jest.fn(() => ({ from: (t: string) => mockEmulator.from(t), rpc: mockRpc })),
 }));
@@ -75,6 +79,7 @@ jest.mock('@/components/submission/StatusHistory', () => ({ StatusHistory: funct
 jest.mock('@/components/submission/ChecklistReview', () => ({ ChecklistReview: function ChecklistReview() { return null; } }));
 
 import SubmissionDetailPage from '@/app/dashboard/submissions/[id]/page';
+import { getImpersonationSession } from '@/lib/impersonation';
 import { StatusHistory } from '@/components/submission/StatusHistory';
 import { SubmissionVersions } from '@/components/submission/SubmissionVersions';
 
@@ -128,6 +133,21 @@ function findProps<P>(node: unknown, type: unknown): P | null {
 
 type VersionsProps = React.ComponentProps<typeof SubmissionVersions>;
 
+/** The element itself (props AND key), for what findProps cannot see. */
+function findElement(node: unknown, type: unknown): React.ReactElement | null {
+  if (!node || typeof node !== 'object') return null;
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const hit = findElement(child, type);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  const el = node as React.ReactElement<{ children?: unknown }>;
+  if (el.type === type) return el;
+  return findElement(el.props?.children, type);
+}
+
 /** Run the page for `id` and render the real SubmissionVersions it produced. */
 async function open(id: string) {
   const element = (await SubmissionDetailPage({ params: Promise.resolve({ id }) })) as React.ReactElement;
@@ -180,7 +200,7 @@ describe('Newer version on an older version', () => {
   it('V4: v1 links to the newest version (v3), and lists no previous versions', async () => {
     const { container } = await open(V1);
     const notice = container.querySelector('[data-testid="newer-version-notice"]');
-    expect(notice).toHaveTextContent('Newer version available: v3');
+    expect(notice).toHaveTextContent('A newer version was submitted — View v3');
     expect(hrefs(notice)).toEqual([`/dashboard/submissions/${V3}`]);
     expect(container.querySelector('[data-testid="previous-versions"]')).toBeNull();
   });
@@ -204,12 +224,34 @@ describe('Newer version on an older version', () => {
       version(V2, null, 'needs_changes', V1, '2026-09-02T00:00:00Z'),
     ]);
     const { container } = await open(V1);
-    expect(container.querySelector('[data-testid="newer-version-notice"]')).toHaveTextContent('v2');
+    expect(container.querySelector('[data-testid="newer-version-notice"]')).toHaveTextContent('View v2');
   });
 
   it('V8: opening an older version writes nothing (it is not marked under review)', async () => {
     await open(V1);
     await open(V2);
     expect(mockEmulator.state.writes).toEqual([]);
+  });
+});
+
+describe('BACKLOG-3605: the page wires the polling notice', () => {
+  it('V9: the versions block is keyed by the submission id, polls, and polls from this version', async () => {
+    const { element, props } = await open(V3);
+    expect(findElement(element, SubmissionVersions)?.key).toBe(V3);
+    expect(props).toMatchObject({ currentId: V3, poll: true });
+  });
+
+  it('V10: a support session does not poll', async () => {
+    (getImpersonationSession as jest.Mock).mockResolvedValueOnce({
+      session_id: 's',
+      target_user_id: FIXTURE_USER_ID,
+      admin_user_id: 'a',
+      target_email: 'target@fixture.example.test',
+      target_name: 'Target',
+      expires_at: '2999-01-01T00:00:00Z',
+      started_at: '2026-09-01T00:00:00Z',
+    });
+    const { props } = await open(V3);
+    expect(props).toMatchObject({ currentId: V3, poll: false });
   });
 });

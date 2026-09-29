@@ -337,8 +337,17 @@ export default async function SubmissionDetailPage({ params }: PageProps) {
 
       </div>
 
-      {/* BACKLOG-3597: newer-version notice and previous versions */}
-      <SubmissionVersions previous={versions.previous} newest={versions.newest} />
+      {/* BACKLOG-3597: newer-version notice and previous versions.
+          BACKLOG-3605: while the page is open the notice polls for a newer
+          version (not in a support session). Keyed by id so moving to another
+          version never carries one page's notice onto the next. */}
+      <SubmissionVersions
+        key={submission.id}
+        previous={versions.previous}
+        newest={versions.newest}
+        currentId={submission.id}
+        poll={!isImpersonating}
+      />
 
       {/* Review Actions - hidden during impersonation (read-only) */}
       {/* BACKLOG-899: isImpersonating prop provides defense-in-depth write guard */}

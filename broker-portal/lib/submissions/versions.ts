@@ -37,6 +37,39 @@ export interface VersionChain {
   newest: VersionLink | null;
 }
 
+/**
+ * The versions newer than `fromId`, oldest first, bounded by MAX_DEPTH.
+ *
+ * The ONE rule for "is there a newer version": a child row that is not still
+ * uploading, newest first. Used by loadVersionChain (the server page) and by
+ * the review page's poll (hooks/useNewerVersionPoll.ts, BACKLOG-3605), so the
+ * two can never disagree. An id already in `seen` ends the walk (a cycle, or a
+ * row the older walk already placed). A failed or empty read ends it too.
+ */
+export async function walkNewer(
+  client: Pick<SupabaseClient, 'from'>,
+  fromId: string,
+  seen: Set<string> = new Set([fromId]),
+): Promise<VersionRow[]> {
+  const newer: VersionRow[] = [];
+  let tipId = fromId;
+  while (newer.length < MAX_DEPTH) {
+    const { data } = await client
+      .from('transaction_submissions')
+      .select(VERSION_COLUMNS)
+      .eq('parent_submission_id', tipId)
+      .neq('status', 'uploading')
+      .order('created_at', { ascending: false })
+      .limit(1);
+    const row = ((data ?? []) as VersionRow[])[0];
+    if (!row || seen.has(row.id)) break;
+    seen.add(row.id);
+    newer.push(row);
+    tipId = row.id;
+  }
+  return newer;
+}
+
 export async function loadVersionChain(
   client: SupabaseClient,
   current: VersionRow,
@@ -57,22 +90,7 @@ export async function loadVersionChain(
     parentId = row.parent_submission_id;
   }
 
-  const newer: VersionRow[] = [];
-  let tipId = current.id;
-  while (newer.length < MAX_DEPTH) {
-    const { data } = await client
-      .from('transaction_submissions')
-      .select(VERSION_COLUMNS)
-      .eq('parent_submission_id', tipId)
-      .neq('status', 'uploading')
-      .order('created_at', { ascending: false })
-      .limit(1);
-    const row = ((data ?? []) as VersionRow[])[0];
-    if (!row || seen.has(row.id)) break;
-    seen.add(row.id);
-    newer.push(row);
-    tipId = row.id;
-  }
+  const newer = await walkNewer(client, current.id, seen);
 
   const chain = [...older, current, ...newer];
   const links = chain.map((r, i) => ({
