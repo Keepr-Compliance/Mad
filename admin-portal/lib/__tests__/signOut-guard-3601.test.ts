@@ -140,7 +140,8 @@ describe('BACKLOG-3601 sign-out guard (admin-portal)', () => {
 
   it('no test replaces the real helper with a mock', () => {
     const MOCKS_HELPER = [
-      /[mM]ock\w*\s*\(\s*['"`][^'"`]*signOutLocal/,
+      // `jest.mock('…')`, `vi.mock('…')`, `vi.doMock(…)`, and vitest's typed `vi.mock(import('…'))`
+      /[mM]ock\w*\s*\(\s*(?:import\s*\(\s*)?['"`][^'"`]*signOutLocal/,
       /spyOn\s*\([^)]*['"`]signOutLocal['"`]/,
     ];
     const offenders = testFiles
