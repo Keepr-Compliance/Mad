@@ -76,7 +76,12 @@ NEW = [
         ("count(DISTINCT COALESCE(a.local_attachment_id, m.local_message_id)) FILTER (WHERE lm.kind = 'attachment')",
          "count(DISTINCT lm.id) FILTER (WHERE lm.kind = 'attachment')")]),
     # R-4: documents and emails are two numbers; a member with no local id is not counted
+    # dropping the IS NOT NULL guard ALONE is equivalent: count(DISTINCT x)
+    # skips a NULL x (measured green, recorded). The shape SR flagged counts
+    # a (kind, local id) row, which is never NULL: that plus no guard.
     ("n42-remove-counts-null-local-id", "d06", [
+        ("count(DISTINCT COALESCE(a.local_attachment_id, m.local_message_id)) FILTER (WHERE lm.kind = 'attachment')",
+         "count(DISTINCT (lm.kind, COALESCE(a.local_attachment_id, m.local_message_id))) FILTER (WHERE lm.kind = 'attachment')"),
         ("   WHERE i.submission_checklist_id = v_hdr.id\n     AND COALESCE(a.local_attachment_id, m.local_message_id) IS NOT NULL;",
          "   WHERE i.submission_checklist_id = v_hdr.id;")]),
     ("n43-remove-emails-counted-as-documents", "d06", [
@@ -139,16 +144,16 @@ NEW = [
     ("n28-restore-allows-broker-removed-source", "d16", [
         ("  IF v_src.removed_at_review_by IS NOT NULL\n     OR", "  IF false\n     OR")]),
     # --- the restored-item baseline (C-4.5) ---------------------------------------
-    ("s1-restore-source-any-org-submission", "d09", [
+    ("n49-s1-restore-source-any-org-submission", "d09", [
         ("   WHERE h.id = p_source_checklist_id\n     AND h.submission_id = v_par.id;",
          "   WHERE h.id = p_source_checklist_id\n     AND h.submission_id IN (SELECT x.id FROM public.transaction_submissions x WHERE x.organization_id = v_rs.organization_id);")]),
-    ("s2-restore-history-from-parent", "d09 d10 d16", [
+    ("n50-s2-restore-history-from-parent", "d09 d10 d16", [
         ("     OR NOT EXISTS (SELECT 1 FROM jsonb_array_elements(v_rs.history) AS h(e)",
          "     OR NOT EXISTS (SELECT 1 FROM jsonb_array_elements((SELECT COALESCE(x.status_history, '[]'::jsonb) FROM public.transaction_submissions x WHERE x.id = v_par.id)) AS h(e)")]),
-    ("s3-restore-parent-not-qualified", "d17", [
+    ("n51-s3-restore-parent-not-qualified", "d17", [
         ("   WHERE p.id = v_rs.parent_submission_id\n     AND p.organization_id = v_rs.organization_id\n     AND p.local_transaction_id = v_rs.local_transaction_id\n     AND p.submitted_by = v_rs.submitted_by\n     AND v_rs.version IS NOT NULL AND p.version = v_rs.version - 1;",
          "   WHERE p.id = v_rs.parent_submission_id;")]),
-    ("s4-restore-copies-agent-note", "d09", [
+    ("n52-s4-restore-copies-agent-note", "d09", [
         ("     reviewer_checked, reviewer_checked_by, reviewer_checked_at, restored_from_item_id)\n  SELECT v_rs.rs_id, v_new_id, si.title, si.description, si.is_required,\n         si.expected_document_type, false, si.sort_order,",
          "     reviewer_checked, reviewer_checked_by, reviewer_checked_at, restored_from_item_id, note)\n  SELECT v_rs.rs_id, v_new_id, si.title, si.description, si.is_required,\n         si.expected_document_type, false, si.sort_order,"),
         ("         si.reviewer_checked, si.reviewer_checked_by, si.reviewer_checked_at, si.id\n",
