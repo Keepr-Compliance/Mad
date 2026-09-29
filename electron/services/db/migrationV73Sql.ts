@@ -1,5 +1,5 @@
 /**
- * SQL for migration v72 — BACKLOG-3519 (Commission M2, figures only).
+ * SQL for migration v73 — BACKLOG-3519 (Commission M2, figures only).
  *
  * Moved out of `electron/services/databaseService.ts` for the same SQL
  * boundary rule migrationV71Sql.ts documents: SQL text is DEFINED under
@@ -17,10 +17,10 @@
  * caller's value.
  */
 
-/** Does `transactions` already carry the v72 columns? A fresh install does. */
-export const V72_TRANSACTIONS_TABLE_INFO_SQL = "PRAGMA table_info(transactions)";
+/** Does `transactions` already carry the v73 columns? A fresh install does. */
+export const V73_TRANSACTIONS_TABLE_INFO_SQL = "PRAGMA table_info(transactions)";
 
-export const V72_ADD_COMMISSION_COLUMNS_SQL = `ALTER TABLE transactions ADD COLUMN commission_offered_rate REAL;
+export const V73_ADD_COMMISSION_COLUMNS_SQL = `ALTER TABLE transactions ADD COLUMN commission_offered_rate REAL;
 ALTER TABLE transactions ADD COLUMN commission_actual_rate REAL;
 ALTER TABLE transactions ADD COLUMN commission_gross_amount REAL;
 ALTER TABLE transactions ADD COLUMN commission_adjustment_reason TEXT;`;

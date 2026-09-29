@@ -1,16 +1,16 @@
 /**
  * @jest-environment node
  *
- * BACKLOG-3519 — migration v72, against the REAL driver.
+ * BACKLOG-3519 — migration v73, against the REAL driver.
  *
- * SR review (pm_comments 9d652b50 on BACKLOG-3519, addendum A3): v72's
+ * SR review (pm_comments 9d652b50 on BACKLOG-3519, addendum A3): v73's
  * `!hasCol` branch -- the path every existing installed database takes -- was
  * exercised by no test at all. The schema-parity suite's own "fresh vs
  * upgraded converge" control only ever builds a FRESH database (`schema.sql`
  * already carries the columns, so `hasCol` is always true there) and cannot
  * see the ALTER TABLE branch fail or diverge. This file follows
  * `databaseService.migration-v71.test.ts`'s pattern: the frozen chain-v69
- * transcript, stamped at baseline 70, is a real pre-v72 database (v71 never
+ * transcript, stamped at baseline 70, is a real pre-v73 database (v71 never
  * touches `transactions`, so the transcript needs no v71 pass first).
  *
  * WHY THE REAL DRIVER. The claim under test is about SQLite's own behaviour --
@@ -26,7 +26,7 @@
 import fs from "fs";
 import path from "path";
 import type { Database as DatabaseType } from "better-sqlite3";
-import { V72_ADD_COMMISSION_COLUMNS_SQL } from "../db/migrationV72Sql";
+import { V73_ADD_COMMISSION_COLUMNS_SQL } from "../db/migrationV73Sql";
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const RealDatabase = require(
@@ -38,8 +38,8 @@ const FROZEN = fs.readFileSync(
   "utf8",
 );
 
-/** The v72 entry, read from the shipped chain rather than re-typed here. */
-function v72(): { version: number; migrate: (d: DatabaseType) => void } {
+/** The v73 entry, read from the shipped chain rather than re-typed here. */
+function v73(): { version: number; migrate: (d: DatabaseType) => void } {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const svc = require("../databaseService").default;
   const chain = (
@@ -47,12 +47,12 @@ function v72(): { version: number; migrate: (d: DatabaseType) => void } {
       MIGRATIONS: Array<{ version: number; migrate: (d: DatabaseType) => void }>;
     }
   ).MIGRATIONS;
-  const entry = chain.find((m) => m.version === 72);
-  if (!entry) throw new Error("v72 is not in DatabaseService.MIGRATIONS");
+  const entry = chain.find((m) => m.version === 73);
+  if (!entry) throw new Error("v73 is not in DatabaseService.MIGRATIONS");
   return entry;
 }
 
-/** A pre-v72 database: the frozen transcript, stamped at the baseline. */
+/** A pre-v73 database: the frozen transcript, stamped at the baseline. */
 function v70Fixture(): DatabaseType {
   const db = new RealDatabase(":memory:") as DatabaseType;
   db.exec(FROZEN);
@@ -67,11 +67,11 @@ function v70Fixture(): DatabaseType {
   return db;
 }
 
-/** Run v72 exactly as the runner does: one transaction, foreign_keys OFF for the loop. */
-function runV72(db: DatabaseType): void {
+/** Run v73 exactly as the runner does: one transaction, foreign_keys OFF for the loop. */
+function runV73(db: DatabaseType): void {
   db.pragma("foreign_keys = OFF");
   try {
-    db.transaction(() => v72().migrate(db))();
+    db.transaction(() => v73().migrate(db))();
   } finally {
     db.pragma("foreign_keys = ON");
   }
@@ -84,7 +84,7 @@ function transactionsColumns(db: DatabaseType): Array<{ name: string; type: stri
   }>).map((c) => ({ name: c.name, type: c.type }));
 }
 
-describe("migration v72 — BACKLOG-3519 commission figure columns", () => {
+describe("migration v73 — BACKLOG-3519 commission figure columns", () => {
   let db: DatabaseType;
   afterEach(() => {
     try {
@@ -109,7 +109,7 @@ describe("migration v72 — BACKLOG-3519 commission figure columns", () => {
 
   it("CONTROL: the upgrade path adds all four columns with the declared types", () => {
     db = v70Fixture();
-    runV72(db);
+    runV73(db);
     const cols = transactionsColumns(db);
     expect(cols).toEqual(
       expect.arrayContaining([
@@ -123,7 +123,7 @@ describe("migration v72 — BACKLOG-3519 commission figure columns", () => {
 
   it("the columns are usable immediately after the upgrade — insert and read back", () => {
     db = v70Fixture();
-    runV72(db);
+    runV73(db);
     db.exec(`INSERT INTO transactions
                (id, user_id, property_address, commission_offered_rate,
                 commission_actual_rate, commission_gross_amount, commission_adjustment_reason)
@@ -150,7 +150,7 @@ describe("migration v72 — BACKLOG-3519 commission figure columns", () => {
              ALTER TABLE transactions ADD COLUMN commission_actual_rate REAL;
              ALTER TABLE transactions ADD COLUMN commission_gross_amount REAL;
              ALTER TABLE transactions ADD COLUMN commission_adjustment_reason TEXT;`);
-    expect(() => runV72(db)).not.toThrow();
+    expect(() => runV73(db)).not.toThrow();
     const names = transactionsColumns(db).map((c) => c.name);
     // Exactly one of each -- a re-run would throw "duplicate column name" if the
     // hasCol guard failed to skip it.
@@ -164,10 +164,10 @@ describe("migration v72 — BACKLOG-3519 commission figure columns", () => {
     }
   });
 
-  it("CONTROL: running v72 twice on an UPGRADED database does not throw and adds nothing twice", () => {
+  it("CONTROL: running v73 twice on an UPGRADED database does not throw and adds nothing twice", () => {
     db = v70Fixture();
-    runV72(db);
-    expect(() => runV72(db)).not.toThrow();
+    runV73(db);
+    expect(() => runV73(db)).not.toThrow();
     const names = transactionsColumns(db).map((c) => c.name);
     expect(names.filter((n) => n === "commission_offered_rate")).toHaveLength(1);
   });
@@ -175,10 +175,10 @@ describe("migration v72 — BACKLOG-3519 commission figure columns", () => {
   it("the ALTER text is fully static -- nothing here is built by interpolating a caller's value", () => {
     // Mirrors migration-v71.test.ts's SQL-text control: determinism/safety of a
     // named exported constant is a property of the STATEMENT, not of one run.
-    expect(V72_ADD_COMMISSION_COLUMNS_SQL).toMatch(
+    expect(V73_ADD_COMMISSION_COLUMNS_SQL).toMatch(
       /ALTER TABLE transactions ADD COLUMN commission_offered_rate REAL/,
     );
-    expect(V72_ADD_COMMISSION_COLUMNS_SQL).toMatch(
+    expect(V73_ADD_COMMISSION_COLUMNS_SQL).toMatch(
       /ALTER TABLE transactions ADD COLUMN commission_adjustment_reason TEXT/,
     );
   });

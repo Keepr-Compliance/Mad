@@ -123,7 +123,7 @@ const ALLOWED_EVOLUTION: AllowedEvolution[] = [
     what: "New nullable REAL column on `transactions`.",
     why:
       "BACKLOG-3519 (Commission M2, figures only): the commission rate the agent " +
-      "was offered, entered as a percentage (2.50, not a fraction). Migration v72 " +
+      "was offered, entered as a percentage (2.50, not a fraction). Migration v73 " +
       "adds the same column to existing databases; no index (nothing queries by it).",
     ref: "BACKLOG-3519",
   },

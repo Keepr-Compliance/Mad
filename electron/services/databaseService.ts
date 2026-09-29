@@ -55,11 +55,11 @@ import {
   V71_RENAME_THREAD_NAMES_SQL,
   V71_RECREATE_THREAD_NAME_INDEX_SQL,
 } from "./db/migrationV71Sql";
-// BACKLOG-3519: migration v72's SQL text, same boundary rule.
+// BACKLOG-3519: migration v73's SQL text, same boundary rule.
 import {
-  V72_TRANSACTIONS_TABLE_INFO_SQL,
-  V72_ADD_COMMISSION_COLUMNS_SQL,
-} from "./db/migrationV72Sql";
+  V73_TRANSACTIONS_TABLE_INFO_SQL,
+  V73_ADD_COMMISSION_COLUMNS_SQL,
+} from "./db/migrationV73Sql";
 import {
   SCHEMA_VERSION_UPDATE_SQL,
   SCHEMA_VERSION_TABLE_EXISTS_SQL,
@@ -1375,7 +1375,7 @@ class DatabaseService implements IDatabaseService {
       },
     },
     {
-      version: 72,
+      version: 73,
       description:
         "BACKLOG-3519 commission figures on transactions: commission_offered_rate, " +
         "commission_actual_rate, commission_gross_amount, commission_adjustment_reason",
@@ -1386,10 +1386,10 @@ class DatabaseService implements IDatabaseService {
       // No index: nothing queries transactions by these columns.
       migrate: (d) => {
         const hasCol = (
-          d.prepare(V72_TRANSACTIONS_TABLE_INFO_SQL).all() as Array<{ name: string }>
+          d.prepare(V73_TRANSACTIONS_TABLE_INFO_SQL).all() as Array<{ name: string }>
         ).some((c) => c.name === "commission_offered_rate");
         if (!hasCol) {
-          d.exec(V72_ADD_COMMISSION_COLUMNS_SQL);
+          d.exec(V73_ADD_COMMISSION_COLUMNS_SQL);
         }
       },
     },
