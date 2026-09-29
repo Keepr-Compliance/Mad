@@ -113,6 +113,7 @@ import {
   type SnapshotChecklistPayload,
 } from "../submissionChecklistSnapshot";
 import { CHECKLISTS_NOT_SENT_ERROR } from "../submissionService";
+import { retryOwedReviewChecklistPull } from "../submissionChecklistPull";
 import { getOwedReviewChecklistPullsFor, markReviewChecklistPullOwed } from "../db/submissionDbService";
 import * as Sentry from "@sentry/electron/main";
 import { getChecklistsForTransaction } from "../db/checklistDbService";
@@ -1217,6 +1218,48 @@ describe("BACKLOG-3599 — resubmit with an owed broker checklist pull", () => {
     expect(fake.rpcCalls.length).toBe(callsBefore + 1);
     const payload = fake.rpcCalls[fake.rpcCalls.length - 1].args.p_checklists as Row[];
     expect(payload.map((c) => c.template_id).sort()).toEqual([TPL_DISCLOSURE, TPL_PURCHASE].sort());
+    expect(getOwedReviewChecklistPullsFor(TX)).toEqual([]);
+  });
+
+  // BACKLOG-3607 (SR R-1): the resubmit guard is released however the
+  // resubmit ends, so the next sync pass pulls normally.
+  it("C-R1c: a resubmit that FAILS releases the guard -> the next sync-pass pull lands", async () => {
+    const v1 = await submittedWithOwedPull();
+    fake.failReadsOf.add("submission_checklists");
+    // The script is indexed by call number; call 1 was the first submit.
+    fake.rpcScript = [undefined, "network", "network", "network"];
+
+    const second = await submissionService.resubmitTransaction(TX);
+
+    expect(second.success).toBe(false);
+    expect(getOwedReviewChecklistPullsFor(TX)).toEqual([v1]);
+    fake.failReadsOf.delete("submission_checklists");
+
+    const outcome = await retryOwedReviewChecklistPull(supabaseService.getClient(), TX, v1);
+
+    expect(outcome).toEqual({ status: "pulled", added: ["Broker review add"], removed: [] });
+    expect(getOwedReviewChecklistPullsFor(TX)).toEqual([]);
+  });
+
+  it("C-R1c: a resubmit that THROWS releases the guard -> the next sync-pass pull lands", async () => {
+    const v1 = await submittedWithOwedPull();
+    fake.failReadsOf.add("submission_checklists");
+    const spy = jest
+      .spyOn(
+        submissionService as unknown as { submitTransactionInternal: () => Promise<unknown> },
+        "submitTransactionInternal",
+      )
+      .mockRejectedValueOnce(new Error("boom"));
+    try {
+      await expect(submissionService.resubmitTransaction(TX)).rejects.toThrow("boom");
+    } finally {
+      spy.mockRestore();
+    }
+    fake.failReadsOf.delete("submission_checklists");
+
+    const outcome = await retryOwedReviewChecklistPull(supabaseService.getClient(), TX, v1);
+
+    expect(outcome).toEqual({ status: "pulled", added: ["Broker review add"], removed: [] });
     expect(getOwedReviewChecklistPullsFor(TX)).toEqual([]);
   });
 

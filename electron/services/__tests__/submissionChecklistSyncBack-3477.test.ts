@@ -126,6 +126,13 @@ interface CloudState {
    * nor any of their checklists.
    */
   hiddenSubmissions: Set<string>;
+  /**
+   * BACKLOG-3607 (SR R-1): park the next read of the checklists the broker
+   * REMOVED at review until `gate` resolves; `reached` is called when the
+   * read arrives. Lets a test start a resubmit while a sync-pass pull is in
+   * flight.
+   */
+  parkRemovedRead: { reached: () => void; gate: Promise<void> } | null;
 }
 
 const cloud: CloudState = {
@@ -138,6 +145,7 @@ const cloud: CloudState = {
   newerVersionReadFailures: 0,
   signedOut: false,
   hiddenSubmissions: new Set(),
+  parkRemovedRead: null,
 };
 let realtimeCallback: ((payload: { new: unknown }) => void) | null = null;
 const checklistFetches: string[] = [];
@@ -187,7 +195,17 @@ function query(table: string) {
       orderKey = col;
       return builder;
     },
-    then: (resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) => {
+    then: (resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown): unknown => {
+      if (
+        cloud.parkRemovedRead &&
+        table === "submission_checklists" &&
+        notNullCols.includes("removed_at_review_by")
+      ) {
+        const park = cloud.parkRemovedRead;
+        cloud.parkRemovedRead = null;
+        park.reached();
+        return park.gate.then(() => builder.then(resolve, reject));
+      }
       try {
         if (table === "submission_checklists") checklistFetches.push(table);
         if (cloud.signedOut) {
@@ -289,6 +307,10 @@ import {
 } from "../db/checklistDbService";
 import { buildChecklistSnapshotPayload } from "../submissionChecklistSnapshot";
 import { clearReviewChecklistPullOwed, markReviewChecklistPullOwed } from "../db/submissionDbService";
+import {
+  beginResubmitChecklistGuard,
+  endResubmitChecklistGuard,
+} from "../submissionChecklistPull";
 
 const SCHEMA = nodePath.join(__dirname, "..", "..", "database", "schema.sql");
 const USER = "user-3477-d";
@@ -422,6 +444,7 @@ beforeEach(() => {
   cloud.newerVersionReadFailures = 0;
   cloud.signedOut = false;
   cloud.hiddenSubmissions = new Set();
+  cloud.parkRemovedRead = null;
   checklistFetches.length = 0;
   realtimeCallback = null;
   (submissionSyncService as unknown as { reviewChecklistPullFailures: Map<string, number> })
@@ -1513,5 +1536,118 @@ describe("BACKLOG-3607 — broker removals and restores reach the desktop", () =
 
     expect(localTemplates()).toEqual([KEEP_TPL, REMOVED_TPL].sort());
     expect(owed()).toBeNull();
+  });
+
+  // ---- BACKLOG-3607 (SR R-1): a sync-pass pull in flight when a resubmit starts ----
+  /** Park the next removed-checklists read; resolves `reached` when the pull gets there. */
+  function parkRemovedRead(): { reached: Promise<void>; release: () => void } {
+    let release!: () => void;
+    let reachedResolve!: () => void;
+    const reached = new Promise<void>((r) => (reachedResolve = r));
+    const gate = new Promise<void>((r) => (release = r));
+    cloud.parkRemovedRead = { reached: reachedResolve, gate };
+    return { reached, release };
+  }
+
+  it("C-R1a: a resubmit that starts while a sync-pass pull is in flight -> nothing written, still owed; next pass drops it", async () => {
+    await seedAgentChecklists();
+    seedCloudRemoval();
+    cloud.removedFetchFailures = 3;
+    await owePullForSub();
+    const park = parkRemovedRead();
+
+    const pass = submissionSyncService.manualSync();
+    await park.reached;
+    beginResubmitChecklistGuard(TXN);
+    try {
+      park.release();
+      await pass;
+
+      expect(localTemplates()).toEqual([KEEP_TPL, REMOVED_TPL].sort());
+      expect(count("transaction_checklist_links")).toBe(1);
+      expect(owed()).toEqual([SUB]);
+      // The resubmit created v3 in the cloud and pointed the transaction at it.
+      resubmitLocallyAndInCloud();
+    } finally {
+      endResubmitChecklistGuard(TXN);
+    }
+
+    await submissionSyncService.manualSync();
+
+    expect(localTemplates()).toEqual([KEEP_TPL, REMOVED_TPL].sort());
+    expect(owed()).toBeNull();
+  });
+
+  it("C-R1a (control): with no resubmit the same parked pull removes the checklist", async () => {
+    await seedAgentChecklists();
+    seedCloudRemoval();
+    cloud.removedFetchFailures = 3;
+    await owePullForSub();
+    const park = parkRemovedRead();
+
+    const pass = submissionSyncService.manualSync();
+    await park.reached;
+    park.release();
+    await pass;
+
+    expect(localTemplates()).toEqual([KEEP_TPL]);
+    expect(owed()).toBeNull();
+  });
+
+  // Sweep the moment the resubmit starts across every microtask hop between
+  // the parked read and the write. Invariant: once the resubmit has started,
+  // the local checklists never change. Both outcomes (written before the
+  // start, skipped after it) must occur, or the sweep missed the boundary.
+  const sweepOutcomes = new Set<string>();
+  it.each(Array.from({ length: 24 }, (_, hops) => hops))(
+    "C-R1a sweep: resubmit starts %i microtask hops after the read is released -> no write after it starts",
+    async (hops) => {
+      await seedAgentChecklists();
+      seedCloudRemoval();
+      cloud.removedFetchFailures = 3;
+      await owePullForSub();
+      const park = parkRemovedRead();
+
+      const pass = submissionSyncService.manualSync();
+      await park.reached;
+      park.release();
+      for (let i = 0; i < hops; i++) await Promise.resolve();
+      beginResubmitChecklistGuard(TXN);
+      try {
+        const atStart = localTemplates();
+        await pass;
+        expect(localTemplates()).toEqual(atStart);
+        sweepOutcomes.add(atStart.includes(REMOVED_TPL) ? "skipped" : "written-before-start");
+      } finally {
+        endResubmitChecklistGuard(TXN);
+      }
+    },
+  );
+  it("C-R1a sweep covered both sides of the boundary", () => {
+    expect([...sweepOutcomes].sort()).toEqual(["skipped", "written-before-start"]);
+  });
+
+  // ---- BACKLOG-3607 (SR R-2): a newer version still 'uploading' counts ----
+  it("C-B1f: the newer version is still 'uploading' -> superseded: nothing written, marker cleared", async () => {
+    await seedAgentChecklists();
+    seedCloudRemoval();
+    cloud.removedFetchFailures = 3;
+    await owePullForSub();
+    // Stage 3 of a resubmit: the child row exists as 'uploading'; the local
+    // pointer has not moved yet (that is Stage 7).
+    cloud.submissions.push({
+      id: SUB3,
+      status: "uploading",
+      review_notes: null,
+      parent_submission_id: SUB,
+    });
+    const readsBefore = checklistFetches.length;
+
+    await submissionSyncService.manualSync();
+
+    expect(localTemplates()).toEqual([KEEP_TPL, REMOVED_TPL].sort());
+    expect(count("transaction_checklist_links")).toBe(1);
+    expect(owed()).toBeNull();
+    expect(checklistFetches.length).toBe(readsBefore); // superseded before any checklist read
   });
 });

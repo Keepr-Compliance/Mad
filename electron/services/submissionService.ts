@@ -44,6 +44,8 @@ import { snapshotSubmissionChecklists } from "./submissionChecklistSnapshot";
 import {
   notifyChecklistsChanged,
   retryOwedReviewChecklistPull,
+  beginResubmitChecklistGuard,
+  endResubmitChecklistGuard,
 } from "./submissionChecklistPull";
 // BACKLOG-3599: direct, not through the databaseService facade.
 import { getOwedReviewChecklistPullsFor } from "./db/submissionDbService";
@@ -322,18 +324,28 @@ class SubmissionService {
     // earlier review would be missing from this version's snapshot. Try the
     // owed pull once, BEFORE Stage 1 — no 'uploading' row exists yet, so the
     // pull's timeouts never hold one open. Never blocks the resubmit.
-    const owedPullsLanded = await this.pullOwedReviewChecklistsBeforeResubmit(
-      transactionId
-    );
+    //
+    // BACKLOG-3607 (SR R-1): from here until the submit returns, no other pull
+    // writes onto this transaction's checklists (the sync pass returns kept).
+    beginResubmitChecklistGuard(transactionId);
+    let owedPullsLanded: boolean;
+    let result: SubmissionResult;
+    try {
+      owedPullsLanded = await this.pullOwedReviewChecklistsBeforeResubmit(
+        transactionId
+      );
 
-    const result = await this.submitTransactionInternal(
-      transactionId,
-      {
-        version: newVersion,
-        parentSubmissionId: transaction.submission_id,
-      },
-      onProgress
-    );
+      result = await this.submitTransactionInternal(
+        transactionId,
+        {
+          version: newVersion,
+          parentSubmissionId: transaction.submission_id,
+        },
+        onProgress
+      );
+    } finally {
+      endResubmitChecklistGuard(transactionId);
+    }
     if (result.success && !owedPullsLanded && !result.checklistsNotSent) {
       result.checklistsNotSent = "brokerChecklistsNotDownloaded";
     }
@@ -368,10 +380,13 @@ class SubmissionService {
       const client = supabaseService.getClient();
       let allLanded = true;
       for (const submissionId of owed) {
+        // The resubmit's own pull: it runs inside the guard, before the new
+        // version reads the local set.
         const outcome = await retryOwedReviewChecklistPull(
           client,
           transactionId,
-          submissionId
+          submissionId,
+          { ownResubmit: true }
         );
         // BACKLOG-3595: the rows are committed; an open Checklist tab re-reads.
         if (

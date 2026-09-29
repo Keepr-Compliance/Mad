@@ -88,6 +88,47 @@ export function toLocalDocumentType(value: string | null | undefined): DocumentT
   return value && LOCAL_DOCUMENT_TYPES.has(value) ? (value as DocumentType) : null;
 }
 
+/**
+ * BACKLOG-3607 (SR R-1): transactions with a resubmit in progress in this
+ * process, counted so two overlapping resubmits of one transaction do not
+ * clear each other. While a resubmit runs, a pull that is not the resubmit's
+ * own pre-pull writes nothing: the new version is built from the local set as
+ * it stands, and a pull applied after that read would change the local set
+ * behind the version being sent.
+ *
+ * In memory on purpose: both paths run in the one main process, and a restart
+ * ends any resubmit that was running, so there is nothing to protect after it.
+ */
+const resubmitsInProgress = new Map<string, number>();
+
+/** Mark a resubmit of this transaction as started. Pair with `endResubmitChecklistGuard` in a finally. */
+export function beginResubmitChecklistGuard(transactionId: string): void {
+  resubmitsInProgress.set(transactionId, (resubmitsInProgress.get(transactionId) ?? 0) + 1);
+}
+
+/** Mark one resubmit of this transaction as finished (success, failure or throw). */
+export function endResubmitChecklistGuard(transactionId: string): void {
+  const remaining = (resubmitsInProgress.get(transactionId) ?? 0) - 1;
+  if (remaining > 0) resubmitsInProgress.set(transactionId, remaining);
+  else resubmitsInProgress.delete(transactionId);
+}
+
+/** Thrown by a pull that reached its local write while a resubmit of the transaction runs. */
+export class ResubmitInProgressError extends Error {
+  constructor(transactionId: string) {
+    super(`resubmit in progress for ${transactionId}; nothing written`);
+    this.name = "ResubmitInProgressError";
+  }
+}
+
+export interface ReviewChecklistPullOptions {
+  /**
+   * True only for the resubmit's own pre-pull, which runs inside the guard and
+   * before the new version reads the local set.
+   */
+  ownResubmit?: boolean;
+}
+
 async function withTimeout<T>(query: PromiseLike<T>, what: string): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   try {
@@ -109,6 +150,7 @@ export async function pullReviewChecklists(
   client: SupabaseClient,
   submissionId: string,
   transactionId: string,
+  options: ReviewChecklistPullOptions = {},
 ): Promise<ReviewChecklistPullResult> {
   const result: ReviewChecklistPullResult = {
     added: [],
@@ -213,6 +255,14 @@ export async function pullReviewChecklists(
 
   if (removeTemplateIds.length === 0 && adds.length === 0) return result;
 
+  // BACKLOG-3607 (SR R-1): checked immediately before the write, with no
+  // await between: applyReviewChecklistPull runs its dbTransaction
+  // synchronously on call, so the check and the write are one synchronous
+  // segment. Either the write ran before the resubmit started (and the
+  // resubmit reads a set that includes it) or it is skipped here.
+  if (!options.ownResubmit && resubmitsInProgress.has(transactionId)) {
+    throw new ResubmitInProgressError(transactionId);
+  }
   // BACKLOG-3607: every local write of this pull is ONE dbTransaction.
   const applied = await applyReviewChecklistPull(transactionId, removeTemplateIds, adds);
   if (applied.noTransaction) {
@@ -280,6 +330,7 @@ export async function retryOwedReviewChecklistPull(
   client: SupabaseClient,
   transactionId: string,
   submissionId: string,
+  options: ReviewChecklistPullOptions = {},
 ): Promise<OwedPullOutcome> {
   try {
     const statusResponse = await withTimeout(
@@ -319,7 +370,9 @@ export async function retryOwedReviewChecklistPull(
       return { status: "superseded" };
     }
 
-    const pulled = await pullReviewChecklists(client, submissionId, transactionId);
+    // A resubmit in progress throws ResubmitInProgressError before any write;
+    // the catch below keeps the marker for the next pass.
+    const pulled = await pullReviewChecklists(client, submissionId, transactionId, options);
     clearReviewChecklistPullOwed(transactionId, submissionId);
     return { status: "pulled", added: pulled.added, removed: pulled.removed };
   } catch (error) {
