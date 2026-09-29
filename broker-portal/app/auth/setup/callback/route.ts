@@ -10,6 +10,7 @@ import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
 import { extractEmail, orgNameFromEmail } from '@/lib/auth/helpers';
 import { PORTAL_MEMBERSHIP_SELECT, pickBrokerageMembership } from '@/lib/auth/membership';
+import { clearAuthCookies, signOutLocal } from '@/lib/auth/signOutLocal';
 
 // Microsoft consumer tenant ID (personal Outlook/Hotmail accounts)
 const CONSUMER_TENANT_ID = '9188040d-6c67-4c5b-b112-36a304b66dad';
@@ -26,6 +27,31 @@ const CONSUMER_TENANT_ID = '9188040d-6c67-4c5b-b112-36a304b66dad';
  */
 function canGrantAdminConsent(role: string | null | undefined): boolean {
   return role === 'admin' || role === 'it_admin';
+}
+
+/** The /setup error codes that end the session this callback just created. */
+type SetupRejection =
+  | 'azure_only'
+  | 'no_tenant'
+  | 'consumer_account'
+  | 'no_email'
+  | 'provision_failed';
+
+/**
+ * BACKLOG-3601: signs this browser out (local scope only), then sends the
+ * caller back to /setup with `code`. Not used for `auth_failed`: those exits
+ * never had a session to end.
+ */
+async function rejectSetup(
+  request: Request,
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  origin: string,
+  code: SetupRejection
+): Promise<NextResponse> {
+  await signOutLocal(supabase);
+  const response = NextResponse.redirect(`${origin}/setup?error=${code}`);
+  clearAuthCookies(request, response);
+  return response;
 }
 
 export async function GET(request: Request) {
@@ -55,8 +81,7 @@ export async function GET(request: Request) {
   // Validate Azure provider (reject Google or other providers)
   const provider = user.app_metadata?.provider;
   if (provider !== 'azure') {
-    await supabase.auth.signOut();
-    return NextResponse.redirect(`${origin}/setup?error=azure_only`);
+    return rejectSetup(request, supabase, origin, 'azure_only');
   }
 
   // Extract tenant ID from Microsoft claims
@@ -64,21 +89,18 @@ export async function GET(request: Request) {
   const tenantId = customClaims?.tid;
 
   if (!tenantId) {
-    await supabase.auth.signOut();
-    return NextResponse.redirect(`${origin}/setup?error=no_tenant`);
+    return rejectSetup(request, supabase, origin, 'no_tenant');
   }
 
   // Block consumer tenant (personal Microsoft accounts)
   if (tenantId === CONSUMER_TENANT_ID) {
-    await supabase.auth.signOut();
-    return NextResponse.redirect(`${origin}/setup?error=consumer_account`);
+    return rejectSetup(request, supabase, origin, 'consumer_account');
   }
 
   // Extract email with fallback chain
   const email = extractEmail(user);
   if (!email) {
-    await supabase.auth.signOut();
-    return NextResponse.redirect(`${origin}/setup?error=no_email`);
+    return rejectSetup(request, supabase, origin, 'no_email');
   }
 
   // Check if the user already belongs to a BROKERAGE (redirect to dashboard).
@@ -133,14 +155,12 @@ export async function GET(request: Request) {
 
   if (rpcError) {
     console.error('Setup provision RPC failed:', rpcError.message);
-    await supabase.auth.signOut();
-    return NextResponse.redirect(`${origin}/setup?error=provision_failed`);
+    return rejectSetup(request, supabase, origin, 'provision_failed');
   }
 
   if (!data?.success) {
     console.error('Setup provision failed:', data?.error);
-    await supabase.auth.signOut();
-    return NextResponse.redirect(`${origin}/setup?error=provision_failed`);
+    return rejectSetup(request, supabase, origin, 'provision_failed');
   }
 
   if (process.env.NODE_ENV === 'development') {

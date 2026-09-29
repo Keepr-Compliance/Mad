@@ -19,6 +19,7 @@ import { mintDesktopSession } from '@/lib/actions/mintDesktopSession';
 import { Spinner } from '@keepr/design-system';
 import { CheckCircle2, Loader2, XCircle } from 'lucide-react';
 import { arrivedFromDesktop } from '@/lib/desktop-handoff';
+import { signOutLocal } from '@/lib/auth/signOutLocal';
 
 type Status = 'loading' | 'redirecting' | 'success' | 'error';
 
@@ -83,7 +84,7 @@ function DesktopCallbackContent() {
         // The default 'global' scope would revoke every other session for the
         // user (e.g. a paired phone), which broke companion pairing. This is a
         // "clear the stale local session and retry" call, not a revoke-all.
-        await supabase.auth.signOut({ scope: 'local' });
+        await signOutLocal(supabase);
         window.location.href = '/auth/desktop?error=session_expired';
         return;
       }

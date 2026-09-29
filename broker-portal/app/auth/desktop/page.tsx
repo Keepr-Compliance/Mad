@@ -17,6 +17,7 @@ import {
   FROM_DESKTOP_PARAM,
   markArrivedFromDesktop,
 } from '@/lib/desktop-handoff';
+import { signOutLocal } from '@/lib/auth/signOutLocal';
 
 // Error messages for auth failure states
 const ERROR_MESSAGES: Record<string, string> = {
@@ -116,7 +117,7 @@ function DesktopLoginForm() {
     // pre-login "clear stale cookies" call, never a deliberate revoke-all; the
     // user-initiated "Sign Out All Devices" flow lives in signOutAllDevices.ts
     // and intentionally keeps scope 'global'.
-    await supabase.auth.signOut({ scope: 'local' });
+    await signOutLocal(supabase);
 
     const { error: authError } = await supabase.auth.signInWithOAuth({
       provider,
