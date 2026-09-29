@@ -1321,7 +1321,9 @@ describe("BACKLOG-3599 — resubmit with an owed broker checklist pull", () => {
     let during: unknown = null;
     let ran = false;
     const spy = jest.spyOn(fake, "rpc").mockImplementation(async (fn: string, args: Row) => {
-      if (!ran) {
+      // The snapshot call is the one inside Stages 3-6; any other RPC the
+      // submit path makes (BACKLOG-3519's split resolution) is not.
+      if (!ran && fn === SNAPSHOT_RPC) {
         ran = true;
         expect(fake.tables.transaction_submissions.filter((s) => s.status === "uploading")).toHaveLength(1);
         fake.failReadsOf.delete("submission_checklists");
