@@ -18,7 +18,6 @@
 import * as crypto from "crypto";
 import * as os from "os";
 import { app, net } from "electron";
-import type { SupabaseClient } from "@supabase/supabase-js";
 import supabaseService from "./supabaseService";
 /**
  * BACKLOG-2868 — the refusal copy is CANONICAL in its own module because the
