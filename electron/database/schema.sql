@@ -1013,6 +1013,17 @@ CREATE TABLE IF NOT EXISTS transactions (
   sale_price REAL,
   earnest_money_amount REAL,
 
+  -- Commission Figures (BACKLOG-3519, M2 -- figures only, no charges/split
+  -- amount; see the v73 migration entry for the full design note). Percentage
+  -- as entered (2.50), not a fraction (0.025). commission_gross_amount is
+  -- computed and rounded to whole dollars once by the writer, not derived on read.
+  -- Figures only: no split is stored or resolved by this feature, locally or
+  -- in the cloud submission record.
+  commission_offered_rate REAL,
+  commission_actual_rate REAL,
+  commission_gross_amount REAL,
+  commission_adjustment_reason TEXT,
+
   -- Key Dates (auto-extracted)
   mutual_acceptance_date DATE,
   inspection_deadline DATE,

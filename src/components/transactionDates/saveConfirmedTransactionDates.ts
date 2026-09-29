@@ -11,6 +11,7 @@
  */
 import { transactionService } from "../../services";
 import type { ApiResult } from "../../services/transactionService";
+import type { CommissionUpdate } from "./commission";
 
 /** The three dates the "Verify Transaction Details" step collects. */
 export interface ConfirmedTransactionDates {
@@ -33,17 +34,24 @@ type ConfirmedDatesUpdate = {
   closing_deadline: string | null;
   closed_at: string;
   closing_date_verified: 1;
-};
+} & Partial<CommissionUpdate>;
 
 export async function saveConfirmedTransactionDates(
   transactionId: string,
   dates: ConfirmedTransactionDates,
+  /**
+   * BACKLOG-3520 — the commission figures from the same step, saved in the SAME
+   * update so the dates and the figures land together or not at all. Omit for a
+   * host that captures no commission (the payload is then unchanged).
+   */
+  commission?: CommissionUpdate | null,
 ): Promise<ApiResult> {
   const update: ConfirmedDatesUpdate = {
     started_at: dates.startDate,
     closing_deadline: dates.closingDate || null,
     closed_at: dates.endDate,
     closing_date_verified: 1,
+    ...(commission ?? {}),
   };
   return transactionService.update(transactionId, update);
 }

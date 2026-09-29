@@ -281,6 +281,40 @@ const ALLOWED_EVOLUTION: AllowedEvolution[] = [
       "checklistForceRecache-3475 / checklistForceReimport-3475 go red.",
     ref: "BACKLOG-3475",
   },
+  {
+    key: "COLUMN:transactions.commission_offered_rate",
+    what: "New nullable REAL column on `transactions`.",
+    why:
+      "BACKLOG-3519 (Commission M2, figures only): the commission rate the agent " +
+      "was offered, entered as a percentage (2.50, not a fraction). Migration v73 " +
+      "adds the same column to existing databases; no index (nothing queries by it).",
+    ref: "BACKLOG-3519",
+  },
+  {
+    key: "COLUMN:transactions.commission_actual_rate",
+    what: "New nullable REAL column on `transactions`.",
+    why:
+      "BACKLOG-3519: the commission rate that actually applied, which may differ " +
+      "from commission_offered_rate. Same migration and reasoning as that column.",
+    ref: "BACKLOG-3519",
+  },
+  {
+    key: "COLUMN:transactions.commission_gross_amount",
+    what: "New nullable REAL column on `transactions`.",
+    why:
+      "BACKLOG-3519: sale_price x commission_actual_rate, rounded to cents once by " +
+      "the writer and stored -- never derived on read, so a later correction to " +
+      "sale_price cannot silently change a historical figure.",
+    ref: "BACKLOG-3519",
+  },
+  {
+    key: "COLUMN:transactions.commission_adjustment_reason",
+    what: "New nullable TEXT column on `transactions`.",
+    why:
+      "BACKLOG-3519: optional free text explaining a difference between offered " +
+      "and actual rate, in either direction. Empty/absent never blocks anything.",
+    ref: "BACKLOG-3519",
+  },
 ];
 
 const ALLOWED_KEYS = new Set(ALLOWED_EVOLUTION.map((d) => d.key));

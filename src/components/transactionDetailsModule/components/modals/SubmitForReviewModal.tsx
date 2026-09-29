@@ -20,6 +20,7 @@ import {
   TransactionDatesFields,
   VERIFY_TRANSACTION_DETAILS_TITLE,
   saveConfirmedTransactionDates,
+  useCommissionForm,
   useTransactionDatesForm,
   validateTransactionDates,
 } from "../../../transactionDates";
@@ -386,6 +387,8 @@ export function SubmitForReviewModal({
   const dateStepApplies = blockedCopy === undefined;
   const [screen, setScreen] = useState<"dates" | "summary">("dates");
   const { dates, setDate } = useTransactionDatesForm(transaction);
+  // BACKLOG-3520 — the commission block of the same step.
+  const commission = useCommissionForm(transaction);
   const [datesError, setDatesError] = useState<string | null>(null);
   const [savingDates, setSavingDates] = useState(false);
   const showDateStep =
@@ -422,6 +425,10 @@ export function SubmitForReviewModal({
     const message = validateTransactionDates(dates);
     setDatesError(message);
     if (message !== null) return;
+    // An unparseable figure blocks Next — its message is already shown inline
+    // by the commission block. An EMPTY commission never does: the block shows
+    // an inline warning and Next proceeds.
+    if (!commission.parsed.ok) return;
     setScreen("summary");
   };
 
@@ -447,7 +454,11 @@ export function SubmitForReviewModal({
     }
     setDatesError(null);
     setSavingDates(true);
-    const saved = await saveConfirmedTransactionDates(transaction.id, dates);
+    // With nothing to say about commission the call is exactly the two-argument
+    // call it was before BACKLOG-3520.
+    const saved = commission.update
+      ? await saveConfirmedTransactionDates(transaction.id, dates, commission.update)
+      : await saveConfirmedTransactionDates(transaction.id, dates);
     if (saved.success) onDatesSaved?.();
     if (dismissedRef.current) return;
     setSavingDates(false);
@@ -605,6 +616,8 @@ export function SubmitForReviewModal({
               dates={dates}
               onDateChange={setDate}
               hideHeading
+              commission={commission}
+              commissionRoute="submit"
             />
           </div>
         )}

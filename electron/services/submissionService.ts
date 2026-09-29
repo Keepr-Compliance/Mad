@@ -212,6 +212,21 @@ interface SubmissionRecord {
   message_count: number;
   attachment_count: number;
   submission_metadata?: Record<string, unknown>;
+  // BACKLOG-3519 / BACKLOG-3520 (commission figures only; the split is NOT
+  // part of this record). A field is `undefined` -- never `null` -- when the
+  // agent entered no figure, so its key is dropped by `JSON.stringify` and the
+  // INSERT body carries nothing new (`.insert()` takes a single object, so
+  // postgrest-js derives no `columns=` from `Object.keys()`).
+  //
+  // WHEN A FIGURE IS ENTERED these keys DO reach the wire. Against a database
+  // where the 3519 migration has not been applied, PostgREST answers PGRST204
+  // (unknown column) and the submission fails. That is deliberate: stripping
+  // the keys on failure would submit a record that silently lacks what the
+  // agent typed. The migration must be applied first.
+  commission_offered_rate?: number;
+  commission_actual_rate?: number;
+  commission_gross_amount?: number;
+  commission_adjustment_reason?: string;
 }
 
 /** Record structure for submission_messages table */
@@ -1564,6 +1579,19 @@ class SubmissionService {
         detection_source: transaction.detection_source,
         detection_confidence: transaction.detection_confidence,
       },
+      // BACKLOG-3519 (Commission M2, figures only). `??`, NOT `||`: a rate of
+      // exactly 0 is a legal, CHECK-permitted value (a referral rebate, for
+      // instance) and must survive -- `0 || undefined` would silently drop it,
+      // which `sale_price`/`listing_price` above get away with only because a
+      // real-world price is never legitimately 0. `commission_adjustment_reason`
+      // is the one field that keeps `||`, deliberately: an empty string IS
+      // absent here, because the migration's CHECK rejects a zero-length
+      // (post-trim) reason and a blanked form field produces "" the same way it
+      // does for the date fields elsewhere in this function.
+      commission_offered_rate: transaction.commission_offered_rate ?? undefined,
+      commission_actual_rate: transaction.commission_actual_rate ?? undefined,
+      commission_gross_amount: transaction.commission_gross_amount ?? undefined,
+      commission_adjustment_reason: transaction.commission_adjustment_reason || undefined,
     };
   }
 

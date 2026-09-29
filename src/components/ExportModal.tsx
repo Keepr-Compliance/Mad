@@ -13,6 +13,7 @@ import { useAuditCoverageCheck } from "../hooks/useAuditCoverageCheck";
 import {
   TransactionDatesFields,
   saveConfirmedTransactionDates,
+  useCommissionForm,
   useTransactionDatesForm,
   validateTransactionDates,
 } from "./transactionDates";
@@ -44,6 +45,9 @@ function ExportModal({
   // End Date (closed_at, used to filter communications).
   const { dates, setDate } = useTransactionDatesForm(transaction);
   const { startDate, endDate } = dates;
+  // BACKLOG-3520: the commission block of the same step. An empty commission
+  // shows an inline warning and never blocks; an unparseable figure does.
+  const commission = useCommissionForm(transaction);
 
   const [contentType, setContentType] = useState<"both" | "emails" | "texts">("both");
   const [attachmentType, setAttachmentType] = useState<"all" | "email" | "text" | "none">("all");
@@ -196,6 +200,7 @@ function ExportModal({
     // so the primary runs the export directly (and reads "Export", not "Next").
     // The completeness gate and the paywall are unaffected: both fire from
     // inside handleExport/proceedWithExport, not from step 2's render.
+    if (!commission.parsed.ok) return;
     if (hasSavedDefaults) {
       void handleExport();
       return;
@@ -210,6 +215,7 @@ function ExportModal({
    */
   const handleOpenExportOptions = () => {
     if (!datesAreValid()) return;
+    if (!commission.parsed.ok) return;
     setStep(2);
   };
 
@@ -304,7 +310,11 @@ function ExportModal({
     // completeness check below. (Do NOT jump to the exporting screen yet — the
     // Layer-3 gate may intercept.)
     // BACKLOG-3498: the one shared writer of the confirmed dates.
-    const updateResult = await saveConfirmedTransactionDates(transaction.id, dates);
+    // With nothing to say about commission the call is exactly the two-argument
+    // call it was before BACKLOG-3520.
+    const updateResult = commission.update
+      ? await saveConfirmedTransactionDates(transaction.id, dates, commission.update)
+      : await saveConfirmedTransactionDates(transaction.id, dates);
     if (!updateResult.success) {
       setError(`Failed to save dates: ${updateResult.error}`);
       setStep(1);
@@ -523,6 +533,8 @@ function ExportModal({
               transaction={transaction}
               dates={dates}
               onDateChange={setDate}
+              commission={commission}
+              commissionRoute="export"
               headerAction={
                 hasSavedDefaults ? (
                   <div className="flex gap-2">
