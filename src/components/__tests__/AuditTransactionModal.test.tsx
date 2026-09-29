@@ -4,10 +4,11 @@
  */
 
 import React from "react";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import AuditTransactionModal from "../AuditTransactionModal";
+import { FLOATING_ACTION_BAR_CONTENT_PADDING } from "../common/FloatingActionBar";
 import { PlatformProvider } from "../../contexts/PlatformContext";
 import type { Contact, Transaction } from "../../../electron/types/models";
 
@@ -723,7 +724,7 @@ describe("AuditTransactionModal", () => {
       expect(
         screen.getAllByRole("button", { name: /continue/i }).length,
       ).toBeGreaterThan(0);
-      // Cancel only in desktop footer
+      // BACKLOG-3614: one floating group, so exactly one Cancel at every width
       expect(
         screen.getByRole("button", { name: /cancel/i }),
       ).toBeInTheDocument();
@@ -1319,6 +1320,154 @@ describe("AuditTransactionModal", () => {
           expect.objectContaining({ listing_price: 399950 }),
         );
       });
+    });
+  });
+
+  // BACKLOG-3614: Cancel / Back / primary float over the content at every width,
+  // on every step of New Transaction and on Edit Transaction. jsdom applies no
+  // CSS, so "floating" is asserted at class level: the group is `absolute`
+  // inside a `relative` panel, and is not an in-flow flex-shrink-0 footer.
+  describe("Floating action group (BACKLOG-3614)", () => {
+    const manualContact = {
+      id: "contact-manual-3614",
+      user_id: "123",
+      name: "Casey Manual",
+      display_name: "Casey Manual",
+      email: "casey@example.com",
+      source: "manual",
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+    } as unknown as Contact;
+
+    const editTransaction = {
+      id: "txn-3614",
+      user_id: "123",
+      property_address: "456 Oak Street, City, ST 67890",
+      transaction_type: "sale" as const,
+      status: "active" as const,
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+    } as unknown as Transaction;
+
+    const renderModal = (edit = false) =>
+      renderWithProvider(
+        <AuditTransactionModal
+          userId={mockUserId}
+          provider={mockProvider}
+          onClose={mockOnClose}
+          onSuccess={mockOnSuccess}
+          {...(edit ? { editTransaction } : {})}
+        />,
+      );
+
+    const goToStep = async (target: 1 | 2 | 3) => {
+      jest.mocked(window.api.contacts.getAll).mockResolvedValue({
+        success: true,
+        contacts: [manualContact],
+      });
+      jest.mocked(window.api.contacts.getSortedByActivity).mockResolvedValue({
+        success: true,
+        contacts: [manualContact],
+      });
+      renderModal();
+      if (target === 1) return;
+      await userEvent.type(
+        screen.getByPlaceholderText(/enter property address/i),
+        "123 Main Street",
+      );
+      await userEvent.click(screen.getByTestId("create-audit-submit"));
+      await waitFor(() => {
+        expect(screen.getByTestId("contact-assignment-step-2")).toBeInTheDocument();
+      });
+      if (target === 2) return;
+      await userEvent.click(await screen.findByText("Casey Manual"));
+      await waitFor(() => {
+        expect(screen.getByTestId("added-count")).toHaveTextContent("1");
+      });
+      await userEvent.click(screen.getByTestId("create-audit-submit"));
+      await waitFor(() => {
+        expect(screen.getByTestId("contact-assignment-step-3")).toBeInTheDocument();
+      });
+    };
+
+    const expectFloatingGroup = (expected: {
+      back: boolean;
+      primary: RegExp;
+    }) => {
+      const bar = screen.getByTestId("audit-floating-actions");
+      // Floating: absolutely positioned at the bottom-right of the panel...
+      expect(bar.className).toEqual(expect.stringContaining("absolute"));
+      expect(bar.className).toEqual(expect.stringContaining("bottom-4"));
+      expect(bar.className).not.toEqual(expect.stringContaining("flex-shrink-0"));
+      // ...and not hidden at any width (no sm:hidden / hidden sm:flex split).
+      expect(bar.className).not.toMatch(/(^|\s)(sm:)?hidden(\s|$)/);
+      // ...inside a panel that is its containing block.
+      expect(bar.parentElement?.className).toEqual(expect.stringContaining("relative"));
+
+      // Exactly one set of buttons, all inside the group.
+      const inBar = (name: RegExp) =>
+        Array.from(bar.querySelectorAll("button")).filter((b) =>
+          name.test(b.textContent ?? ""),
+        );
+      expect(inBar(/^cancel$/i)).toHaveLength(1);
+      expect(inBar(/back/i)).toHaveLength(expected.back ? 1 : 0);
+      expect(inBar(expected.primary)).toHaveLength(1);
+      expect(screen.getAllByTestId("create-audit-submit")).toHaveLength(1);
+      expect(bar).toContainElement(screen.getByTestId("create-audit-submit"));
+
+      // Content keeps its last row clear of the group.
+      expect(screen.getByTestId("audit-modal-content").className).toEqual(
+        expect.stringContaining(FLOATING_ACTION_BAR_CONTENT_PADDING),
+      );
+    };
+
+    it("F1: step 1 — Cancel + Continue float, no Back, content padded", async () => {
+      await goToStep(1);
+      expectFloatingGroup({ back: false, primary: /continue/i });
+    });
+
+    it("F2: step 2 — Cancel + Back + Continue float, content padded", async () => {
+      await goToStep(2);
+      expectFloatingGroup({ back: true, primary: /continue/i });
+    });
+
+    it("F3: step 3 — Cancel + Back + Create Transaction float, content padded", async () => {
+      await goToStep(3);
+      expectFloatingGroup({ back: true, primary: /create transaction/i });
+    });
+
+    it("F4: Edit Transaction — Cancel + Save Changes float, content padded", () => {
+      renderModal(true);
+      expectFloatingGroup({ back: false, primary: /save changes/i });
+    });
+
+    it.each([1, 2, 3] as const)("F5: Cancel closes the modal on step %i", async (target) => {
+      await goToStep(target);
+      await userEvent.click(
+        within(screen.getByTestId("audit-floating-actions")).getByRole("button", {
+          name: /^cancel$/i,
+        }),
+      );
+      expect(mockOnClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("F6: Cancel closes the modal in Edit Transaction", async () => {
+      renderModal(true);
+      await userEvent.click(
+        within(screen.getByTestId("audit-floating-actions")).getByRole("button", {
+          name: /^cancel$/i,
+        }),
+      );
+      expect(mockOnClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("F7: Back on the floating group returns from step 2 to step 1", async () => {
+      await goToStep(2);
+      await userEvent.click(screen.getByTestId("create-audit-back"));
+      await waitFor(() => {
+        expect(screen.queryByTestId("contact-assignment-step-2")).toBeNull();
+      });
+      expect(screen.getByPlaceholderText(/enter property address/i)).toBeInTheDocument();
     });
   });
 });

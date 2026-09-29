@@ -1,5 +1,11 @@
 import React, { useState, useCallback } from "react";
 import { ResponsiveModal, MODAL_PANEL } from "./common/ResponsiveModal";
+import {
+  FloatingActionBar,
+  FLOATING_ACTION_BAR_CONTENT_PADDING,
+  FLOATING_SECONDARY_BUTTON_CLASS,
+  floatingPrimaryButtonClass,
+} from "./common/FloatingActionBar";
 import AddressVerificationStep from "./audit/AddressVerificationStep";
 import ContactAssignmentStep from "./audit/ContactAssignmentStep";
 import type { Transaction } from "../../electron/types/models";
@@ -193,7 +199,7 @@ function AuditTransactionModal({
   const displayStep = isEditing ? 1 : Math.min(step, 3);
 
   return (
-    <ResponsiveModal onClose={onClose} panelClassName={MODAL_PANEL.lg}>
+    <ResponsiveModal onClose={onClose} panelClassName={`${MODAL_PANEL.lg} relative`}>
         {/* Header */}
         <div className="flex-shrink-0 bg-gradient-to-r from-indigo-500 to-purple-600 px-3 sm:px-6 pt-6 sm:pt-4 pb-3 sm:pb-4 sm:rounded-t-xl shadow-lg">
           {/* Mobile layout */}
@@ -285,7 +291,13 @@ function AuditTransactionModal({
         )}
 
         {/* Content */}
-        <div className={`flex-1 min-h-0 ${step === 1 ? "overflow-y-auto p-6" : "flex flex-col overflow-hidden pt-0 px-2 pb-2"}`}>
+        {/* BACKLOG-3614: bottom padding keeps the last field clear of the floating
+            action group. Steps 2/3 scroll inside nested lists, so the padding sits
+            on this outer container and the group floats over the padding band. */}
+        <div
+          className={`flex-1 min-h-0 ${FLOATING_ACTION_BAR_CONTENT_PADDING} ${step === 1 ? "overflow-y-auto px-6 pt-6" : "flex flex-col overflow-hidden pt-0 px-2"}`}
+          data-testid="audit-modal-content"
+        >
           {step === 1 && (
             <AddressVerificationStep
               addressData={addressData}
@@ -351,22 +363,22 @@ function AuditTransactionModal({
           )}
         </div>
 
-        {/* Footer — desktop: sticky bar, mobile: floating button */}
-        {/* BACKLOG-1654: Hide nav buttons when contact form modal is open to prevent overlap */}
-        {/* Desktop footer */}
-        {!isContactFormOpen && <div className="hidden sm:flex flex-shrink-0 px-6 py-4 bg-gray-50 rounded-b-xl items-center gap-3 justify-between">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-gray-700 hover:bg-gray-200 rounded-lg font-medium transition-all"
-          >
-            Cancel
-          </button>
-          <div className="flex items-center gap-3">
+        {/* BACKLOG-3614: one floating action group at every width (was a pinned
+            desktop bar plus a separate <640px pill that had no Cancel and skipped
+            the coverage gate). BACKLOG-1654: hidden while the contact form is open. */}
+        {!isContactFormOpen && (
+          <FloatingActionBar testId="audit-floating-actions">
+            <button
+              onClick={onClose}
+              className={FLOATING_SECONDARY_BUTTON_CLASS}
+            >
+              Cancel
+            </button>
             {step > 1 && (
               <button
                 onClick={handlePreviousStep}
                 disabled={loading}
-                className="px-4 py-2 text-gray-700 hover:bg-gray-200 rounded-lg font-medium transition-all"
+                className={FLOATING_SECONDARY_BUTTON_CLASS}
                 data-testid="create-audit-back"
               >
                 &larr; Back
@@ -375,11 +387,7 @@ function AuditTransactionModal({
             <button
               onClick={handleGatedNext}
               disabled={loading}
-              className={`px-6 py-2 rounded-lg font-semibold transition-all ${
-                loading
-                  ? "bg-gray-300 text-gray-500 cursor-not-allowed"
-                  : "bg-gradient-to-r from-indigo-500 to-purple-600 text-white hover:from-indigo-600 hover:to-purple-700 shadow-md hover:shadow-lg"
-              }`}
+              className={floatingPrimaryButtonClass(loading)}
               data-testid="create-audit-submit"
             >
               {loading ? (
@@ -395,44 +403,8 @@ function AuditTransactionModal({
                 "Continue \u2192"
               )}
             </button>
-          </div>
-        </div>}
-        {/* Mobile floating button */}
-        {!isContactFormOpen && <div className="sm:hidden fixed bottom-4 right-4 z-[71] flex items-center gap-2">
-          {step > 1 && (
-            <button
-              onClick={handlePreviousStep}
-              disabled={loading}
-              className="px-4 py-3 rounded-full font-medium text-sm bg-white text-gray-700 shadow-lg hover:shadow-xl transition-all"
-              data-testid="create-audit-back"
-            >
-              &larr;
-            </button>
-          )}
-          <button
-            onClick={handleNextStep}
-            disabled={loading}
-            className={`px-6 py-3 rounded-full font-semibold text-sm shadow-lg transition-all ${
-              loading
-                ? "bg-gray-300 text-gray-500 cursor-not-allowed"
-                : "bg-gradient-to-r from-indigo-500 to-purple-600 text-white hover:from-indigo-600 hover:to-purple-700 hover:shadow-xl"
-            }`}
-            data-testid="create-audit-submit"
-          >
-            {loading ? (
-              <span className="flex items-center gap-2">
-                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                {isEditing ? "Saving..." : "Creating..."}
-              </span>
-            ) : isEditing ? (
-              "Save"
-            ) : step === 3 ? (
-              "Create"
-            ) : (
-              "Continue →"
-            )}
-          </button>
-        </div>}
+          </FloatingActionBar>
+        )}
 
         {/* BACKLOG-2292 (Layer 1): audit-window coverage prompt. */}
         {coveragePrompt && (
