@@ -275,23 +275,23 @@ export const TRANSACTION_COLUMN_POLICY: Record<TransactionColumn, ColumnPolicy> 
   },
   commission_offered_rate: {
     insert: "db-default",
-    update: "db-default",
-    why: "BACKLOG-3519 (Commission M2, figures only): no caller writes this yet on either path. Left closed rather than opened speculatively, same reasoning as `inspection_deadline` below -- BACKLOG-3520 (desktop capture) is the intended future writer, and whether it reuses this generic update path or a dedicated one is its decision to make, not this item's (BACKLOG-3180 governs whether/how the IPC surface opens a column, see utils/validation.ts's TransactionField).",
+    update: "writable",
+    why: "BACKLOG-3520 (desktop capture at close): entered on the Verify Transaction Details step and written through the update path (the same one as `sale_price`). Opened for UPDATE only: no creating caller supplies commission figures, and a figure has no meaning before the deal exists. The IPC validator bounds it to 0..100 (BACKLOG-3180 rule: one branch per admitted field).",
   },
   commission_actual_rate: {
     insert: "db-default",
-    update: "db-default",
+    update: "writable",
     why: "Companion of `commission_offered_rate`; same decision.",
   },
   commission_gross_amount: {
     insert: "db-default",
-    update: "db-default",
-    why: "Companion of `commission_offered_rate`; same decision. Computed and rounded to cents once by whichever writer eventually sets it -- never derived here.",
+    update: "writable",
+    why: "Companion of `commission_offered_rate`; same decision. Rounded to cents once by the renderer before it is sent, and again by the validator as a backstop -- never derived here or on read.",
   },
   commission_adjustment_reason: {
     insert: "db-default",
-    update: "db-default",
-    why: "Companion of `commission_offered_rate`; same decision.",
+    update: "writable",
+    why: "Companion of `commission_offered_rate`; same decision. Blank is stored as NULL by the validator.",
   },
   mutual_acceptance_date: {
     insert: "db-default",

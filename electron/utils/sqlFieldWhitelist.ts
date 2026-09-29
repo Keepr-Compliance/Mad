@@ -182,9 +182,9 @@ export const TABLE_FIELDS = {
     "listing_price",
     "sale_price",
     "earnest_money_amount",
-    // BACKLOG-3519 (Commission M2, figures only). No writer today -- see
-    // TRANSACTION_COLUMN_POLICY in transactionDbService.ts for why these are
-    // "db-default" on both paths until BACKLOG-3520 (desktop capture) exists.
+    // BACKLOG-3519 (Commission M2, figures only). Written by BACKLOG-3520's
+    // capture on the update path only -- see TRANSACTION_COLUMN_POLICY in
+    // transactionDbService.ts ("writable" on update, "db-default" on insert).
     "commission_offered_rate",
     "commission_actual_rate",
     "commission_gross_amount",
