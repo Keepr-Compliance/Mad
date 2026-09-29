@@ -58,7 +58,7 @@ def client_block(src):
 
 MUTANTS = [
     # ---- history refusal (1a) ----
-    # the new refusal absent: today's behaviour
+    # the new refusal absent entirely
     ("k01", "e01 e02", [(CHECK, "")]),
     # session_user: in production the session user is the PostgREST login
     # role, in the harness postgres -- never a client role, so nothing refused
@@ -105,6 +105,10 @@ MUTANTS = [
     ("k23", "e06", [(REVIEW_WATCH, "    IF NEW.reviewed_by     IS DISTINCT FROM OLD.reviewed_by THEN")]),
     # SR mS1g: the reviewer check on the NEW organization
     ("k24", "e07", [("public.can_review_submission(OLD.organization_id)", "public.can_review_submission(NEW.organization_id)")]),
+    # SR sB: the self-id check is NULL-blind (a reviewer clearing reviewed_by
+    # to NULL on a row a colleague set is not refused)
+    ("sB", "e06", [("AND NEW.reviewed_by IS DISTINCT FROM auth.uid() THEN",
+                     "AND NEW.reviewed_by <> auth.uid() THEN")]),
 
     # ---- ownership columns (1c) ----
     # the block absent
@@ -120,6 +124,10 @@ MUTANTS = [
     ("k40", "e08 e06 c20", [(USING_SUBMITTER, USING_3596)]),
     # both submitter lists back to 3596
     ("k41", "e08 e13", [(USING_SUBMITTER, USING_3596), (CHECK_SUBMITTER, CHECK_3596)]),
+    # SR sD: the submitter USING loosened to also match its own 'submitted'
+    # rows (the agent "re-finalizes" a row already awaiting review)
+    ("sD", "e08", [(USING_SUBMITTER,
+                     "((submitted_by = ( SELECT auth.uid() AS uid)) AND ((status)::text = ANY (ARRAY['uploading'::text, 'submitted'::text])))")]),
     # needs_changes back in the submitter WITH CHECK
     ("k43", "e13", [(CHECK_SUBMITTER, CHECK_3596)]),
     # needs_changes removed from the whole WITH CHECK by narrowing the

@@ -1,4 +1,4 @@
-# BACKLOG-3608 mutants, NAS test DB, tree 13130e2b9
+# BACKLOG-3608 mutants, NAS test DB, migration unchanged (md5 ee52a2e6…) at d2702e7d1; sB/sD added per SR review 28982c7c (C-A, C-B)
 k01 [as expected]
     MUTATION APPLIED: 4 line(s); first: removed: -- A client statement may not change the history at all.
     RED: e01 e02  green: none
@@ -106,7 +106,15 @@ k44 [as expected]
     RED: e13 e03  green: none
       e13: CONTROL FAILED: E13 reviewer sets an open row to needs_changes (broker): expected rows:1, got 42501:new row violates row-level security policy for table "transaction_submissions"
       e03: CONTROL FAILED: E03 portal markUnderReview: expected rows:1, got 42501:new row violates row-level security policy for table "transaction_submissions"
-mutants: 24 run, 0 not as expected
+sB [as expected]
+    MUTATION APPLIED: 2 line(s); first: AND NEW.reviewed_by <> auth.uid() THEN
+    RED: e06  green: none
+      e06: CONTROL FAILED: E06-D2 colleague reviewer clears reviewed_by to NULL: expected ~^42501:review_fields_reviewer_only$, got rows:1
+sD [as expected]
+    MUTATION APPLIED: 2 line(s); first: ((submitted_by = ( SELECT auth.uid() AS uid)) AND ((status)::text = ANY (ARRAY['uploading'::text, 'submitted':
+    RED: e08  green: none
+      e08: CONTROL FAILED: E08 agent updates its own submitted row: expected rows:0, got rows:1
+mutants: 26 run, 0 not as expected
 
 # 3607 mutant set with the 3608 file loaded after the 3607 file
 mutants.py: 46 ported to the draft, 0 kept on their 3596 file, 54 new

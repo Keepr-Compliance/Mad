@@ -3,7 +3,8 @@
 --     uploading -> resubmitted (desktop finalize, v1 and v2).
 --   no row (rows:0), row unchanged: the submitter's status move on its own
 --     needs_changes version (to resubmitted, to submitted, to uploading),
---     and on approved / rejected versions.
+--     on approved / rejected versions, and on its own submitted, resubmitted
+--     or under_review versions (already open for review).
 DO $e08$
 DECLARE
   agent  uuid := pg_temp.id('u_t1_agent');
@@ -41,6 +42,13 @@ BEGIN
     PERFORM pg_temp.act_as(agent);
     PERFORM pg_temp.expect('E08 agent moves its ' || r.st || ' row to resubmitted',
       format($q$UPDATE public.transaction_submissions SET status='resubmitted' WHERE id=%L$q$, v2), 'rows:0');
+    PERFORM pg_temp.act_owner();
+  END LOOP;
+  FOREACH st IN ARRAY ARRAY['submitted', 'resubmitted', 'under_review'] LOOP
+    v2 := pg_temp.mk_sub('fixture-3608-e08-own-' || st, 1, NULL, st);
+    PERFORM pg_temp.act_as(agent);
+    PERFORM pg_temp.expect('E08 agent updates its own ' || st || ' row',
+      format($q$UPDATE public.transaction_submissions SET status='uploading' WHERE id=%L$q$, v2), 'rows:0');
     PERFORM pg_temp.act_owner();
   END LOOP;
 END

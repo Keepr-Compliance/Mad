@@ -105,7 +105,7 @@ case "${1:-}" in
   mutants)
     only="${2:-}"; total=0; missed=0; tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
     python3 "$HERE/lib/mutants.py" "$GUARD" "$tmp"
-    for m in "$tmp"/k*.sql; do
+    for m in "$tmp"/*.sql; do
       name="$(basename "$m" .sql)"; [ -n "$only" ] && [[ "$name" != *"$only"* ]] && continue
       total=$((total+1)); targets="$(cat "$tmp/$name.targets")"
       changed="$(diff "$GUARD" "$m" | grep -c '^[<>]' || true)"
