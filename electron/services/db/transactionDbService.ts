@@ -259,9 +259,9 @@ export const TRANSACTION_COLUMN_POLICY: Record<TransactionColumn, ColumnPolicy> 
     why: "Companion of `stage`; same decision.",
   },
   listing_price: {
-    insert: "db-default",
+    insert: "writable",
     update: "writable",
-    why: "Entered by the user after the deal exists; no creating caller supplies it. Already accepted on the update path and forwarded by the IPC validator.",
+    why: "Entered by the user, optionally, on step 1 of creating a deal (BACKLOG-3614) and editable afterwards. The IPC validator forwards it on both paths; createAuditedTransaction passes it through.",
   },
   sale_price: {
     insert: "db-default",

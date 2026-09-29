@@ -4,10 +4,11 @@
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import AuditTransactionModal from "../AuditTransactionModal";
+import { FLOATING_ACTION_BAR_CONTENT_PADDING } from "../common/FloatingActionBar";
 import { PlatformProvider } from "../../contexts/PlatformContext";
 import type { Contact, Transaction } from "../../../electron/types/models";
 
@@ -31,6 +32,24 @@ jest.mock("../../appCore", () => ({
   ...jest.requireActual("../../appCore"),
   useAppStateMachine: () => ({
     isDatabaseInitialized: true,
+  }),
+}));
+
+// BACKLOG-3613: the step-1 "Continue" goes through handleGatedNext, which asks
+// the coverage hook before advancing. It is mocked here so a test can control
+// that answer; null means "no gap, proceed", which is what every older test in
+// this file already got from the unconfigured window.api mock.
+const mockCheckCoverage = jest.fn();
+jest.mock("../../hooks/useAuditCoverageCheck", () => ({
+  useAuditCoverageCheck: () => ({
+    checkCoverage: mockCheckCoverage,
+    checkExportCompleteness: jest.fn().mockResolvedValue(null),
+    runMessagesImport: jest
+      .fn()
+      .mockResolvedValue({ ran: false, importRan: false, floorISO: null }),
+    importing: false,
+    progress: null,
+    indeterminate: false,
   }),
 }));
 
@@ -74,6 +93,7 @@ describe("AuditTransactionModal", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockCheckCoverage.mockResolvedValue(null);
 
     // Default mocks
     jest.mocked(window.api.address.initialize).mockResolvedValue({ success: true });
@@ -704,7 +724,7 @@ describe("AuditTransactionModal", () => {
       expect(
         screen.getAllByRole("button", { name: /continue/i }).length,
       ).toBeGreaterThan(0);
-      // Cancel only in desktop footer
+      // BACKLOG-3614: one floating group, so exactly one Cancel at every width
       expect(
         screen.getByRole("button", { name: /cancel/i }),
       ).toBeInTheDocument();
@@ -1070,6 +1090,404 @@ describe("AuditTransactionModal", () => {
       await waitFor(() => {
         expect(window.api.transactions.getDetails).toHaveBeenCalled();
       });
+    });
+  });
+
+  describe("End Date — create vs edit (BACKLOG-3613)", () => {
+    const renderCreate = () =>
+      renderWithProvider(
+        <AuditTransactionModal
+          userId={mockUserId}
+          provider={mockProvider}
+          onClose={mockOnClose}
+          onSuccess={mockOnSuccess}
+        />,
+      );
+
+    // Walks the create wizard to the createAudited call: address, Continue,
+    // pick a contact, Continue (the first contact defaults to Client), Create.
+    // The file-level fixtures carry no source, so step 2's Source filter hides
+    // them. A manual contact is listed under the Manual leaf.
+    const manualContact = {
+      id: "contact-manual-3613",
+      user_id: "123",
+      name: "Casey Manual",
+      display_name: "Casey Manual",
+      email: "casey@example.com",
+      source: "manual",
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+    } as unknown as Contact;
+
+    const createThroughTheWizard = async (listingPriceText?: string) => {
+      jest.mocked(window.api.contacts.getAll).mockResolvedValue({
+        success: true,
+        contacts: [manualContact],
+      });
+      jest.mocked(window.api.contacts.getSortedByActivity).mockResolvedValue({
+        success: true,
+        contacts: [manualContact],
+      });
+      renderCreate();
+      await userEvent.type(
+        screen.getByPlaceholderText(/enter property address/i),
+        "123 Main Street",
+      );
+      if (listingPriceText !== undefined) {
+        await userEvent.type(
+          screen.getByTestId("create-audit-listing-price-input"),
+          listingPriceText,
+        );
+      }
+      await userEvent.click(getButton(/continue/i));
+      await waitFor(() => {
+        expect(screen.getByTestId("contact-assignment-step-2")).toBeInTheDocument();
+      });
+      await userEvent.click(await screen.findByText("Casey Manual"));
+      await waitFor(() => {
+        expect(screen.getByTestId("added-count")).toHaveTextContent("1");
+      });
+      await userEvent.click(getButton(/continue/i));
+      await waitFor(() => {
+        expect(screen.getByTestId("contact-assignment-step-3")).toBeInTheDocument();
+      });
+      await userEvent.click(getButton(/create transaction/i));
+      await waitFor(() => {
+        expect(window.api.transactions.createAudited).toHaveBeenCalledTimes(1);
+      });
+      return jest.mocked(window.api.transactions.createAudited).mock.calls[0][1] as Record<
+        string,
+        unknown
+      >;
+    };
+
+    it("C1: a new deal is created with no end date (ongoing)", async () => {
+      const payload = await createThroughTheWizard();
+      expect(payload.property_address).toBe("123 Main Street");
+      expect(payload.started_at).toEqual(expect.any(String));
+      // Undefined — never a date (and not an explicit null either). Until
+      // BACKLOG-3613 this was today.
+      expect(payload.closed_at).toBeUndefined();
+    });
+
+    it("C2: a start date after today still reaches step 2 — no error about a hidden end date", async () => {
+      renderCreate();
+      expect(screen.queryByTestId("create-audit-end-date-input")).toBeNull();
+
+      const future = new Date();
+      future.setFullYear(future.getFullYear() + 1);
+      const futureISO = future.toISOString().split("T")[0];
+
+      await userEvent.type(
+        screen.getByPlaceholderText(/enter property address/i),
+        "123 Main Street",
+      );
+      fireEvent.change(screen.getByTestId("create-audit-start-date-input"), {
+        target: { value: futureISO },
+      });
+      await userEvent.click(getButton(/continue/i));
+
+      await waitFor(() => {
+        expect(screen.getByTestId("contact-assignment-step-2")).toBeInTheDocument();
+      });
+      // The gated path ran (the start date passed basic validation) ...
+      expect(mockCheckCoverage).toHaveBeenCalledWith(futureISO);
+      // ... and nothing complained about an end date the user cannot see.
+      expect(screen.queryByText(/End date must be after start date/i)).toBeNull();
+    });
+
+    it("C3: Edit Transaction Details still shows End Date, prefilled, and saves it", async () => {
+      renderWithProvider(
+        <AuditTransactionModal
+          userId={mockUserId}
+          provider={mockProvider}
+          onClose={mockOnClose}
+          onSuccess={mockOnSuccess}
+          editTransaction={{
+            id: "txn-edit-3613",
+            user_id: "123",
+            property_address: "456 Oak Street, City, ST 67890",
+            property_street: "456 Oak Street",
+            property_city: "City",
+            property_state: "ST",
+            property_zip: "67890",
+            transaction_type: "sale",
+            status: "active",
+            started_at: "2024-01-01",
+            closed_at: "2024-03-01",
+            created_at: "2024-01-01T00:00:00Z",
+            updated_at: "2024-01-01T00:00:00Z",
+          } as unknown as Transaction}
+        />,
+      );
+      jest.mocked(window.api.transactions.update).mockResolvedValue({ success: true });
+
+      const end = await screen.findByTestId("create-audit-end-date-input");
+      await waitFor(() => expect(end).toHaveValue("2024-03-01"));
+
+      fireEvent.change(end, { target: { value: "2024-04-15" } });
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(window.api.transactions.update).toHaveBeenCalledWith(
+          "txn-edit-3613",
+          expect.objectContaining({ closed_at: "2024-04-15" }),
+        );
+      });
+    });
+
+    // ---- BACKLOG-3614: optional Listing Price on step 1 ----
+
+    it("L1: a Listing Price typed as $525,000 is sent on create as 525000", async () => {
+      const payload = await createThroughTheWizard("$525,000");
+      expect(payload.listing_price).toBe(525000);
+      // the raw text never leaves the renderer
+      expect(payload).not.toHaveProperty("listing_price_text");
+    });
+
+    it("L2: a blank Listing Price still creates the transaction, with no listing price sent", async () => {
+      const payload = await createThroughTheWizard();
+      expect(window.api.transactions.createAudited).toHaveBeenCalledTimes(1);
+      expect(payload).not.toHaveProperty("listing_price");
+      expect(payload).not.toHaveProperty("listing_price_text");
+    });
+
+    it("L3: letters typed into the Listing Price are dropped, so step 1 still continues", async () => {
+      renderCreate();
+      await userEvent.type(
+        screen.getByPlaceholderText(/enter property address/i),
+        "123 Main Street",
+      );
+      const input = screen.getByTestId("create-audit-listing-price-input");
+      await userEvent.type(input, "abc");
+      // Live formatting (BACKLOG-3614 QA) keeps only digits and one dot, so a
+      // non-amount can no longer be typed; the step-1 check stays as a guard.
+      expect(input).toHaveValue("");
+      await userEvent.click(getButton(/continue/i));
+      expect(screen.queryByText("Listing Price must be a valid amount")).toBeNull();
+    });
+
+    it("L5: typing 1000000 shows 1,000,000 and sends the plain number 1000000", async () => {
+      const payload = await createThroughTheWizard("1000000");
+      expect(payload.listing_price).toBe(1000000);
+      expect(typeof payload.listing_price).toBe("number");
+      expect(payload).not.toHaveProperty("listing_price_text");
+    });
+
+    it("L6: the Listing Price field shows commas while typing on step 1", async () => {
+      renderCreate();
+      const input = screen.getByTestId("create-audit-listing-price-input");
+      await userEvent.type(input, "100");
+      expect(input).toHaveValue("100");
+      await userEvent.type(input, "0");
+      expect(input).toHaveValue("1,000");
+      await userEvent.type(input, "000");
+      expect(input).toHaveValue("1,000,000");
+    });
+
+    it("L4: Edit Transaction Details prefills the Listing Price and saves a change", async () => {
+      renderWithProvider(
+        <AuditTransactionModal
+          userId={mockUserId}
+          provider={mockProvider}
+          onClose={mockOnClose}
+          onSuccess={mockOnSuccess}
+          editTransaction={{
+            id: "txn-edit-3614",
+            user_id: "123",
+            property_address: "456 Oak Street, City, ST 67890",
+            transaction_type: "sale",
+            status: "active",
+            started_at: "2024-01-01",
+            listing_price: 412500,
+            created_at: "2024-01-01T00:00:00Z",
+            updated_at: "2024-01-01T00:00:00Z",
+          } as unknown as Transaction}
+        />,
+      );
+      jest.mocked(window.api.transactions.update).mockResolvedValue({ success: true });
+
+      const input = screen.getByTestId("create-audit-listing-price-input");
+      await waitFor(() => expect(input).toHaveValue("412,500"));
+
+      await userEvent.clear(input);
+      await userEvent.type(input, "399,950");
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(window.api.transactions.update).toHaveBeenCalledWith(
+          "txn-edit-3614",
+          expect.objectContaining({ listing_price: 399950 }),
+        );
+      });
+    });
+  });
+
+  // BACKLOG-3614: Cancel / Back / primary float over the content at every width,
+  // on every step of New Transaction and on Edit Transaction. jsdom applies no
+  // CSS, so "floating" is asserted at class level: the group is `absolute`
+  // inside a `relative` panel, and is not an in-flow flex-shrink-0 footer.
+  describe("Floating action group (BACKLOG-3614)", () => {
+    const manualContact = {
+      id: "contact-manual-3614",
+      user_id: "123",
+      name: "Casey Manual",
+      display_name: "Casey Manual",
+      email: "casey@example.com",
+      source: "manual",
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+    } as unknown as Contact;
+
+    const editTransaction = {
+      id: "txn-3614",
+      user_id: "123",
+      property_address: "456 Oak Street, City, ST 67890",
+      transaction_type: "sale" as const,
+      status: "active" as const,
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+    } as unknown as Transaction;
+
+    // Each test gets its own onClose: the shared mockOnClose can receive a late
+    // call from an earlier test's async path, which made an exact-count
+    // assertion here intermittently see 2 calls.
+    let onClose = jest.fn();
+    beforeEach(() => {
+      onClose = jest.fn();
+    });
+
+    const renderModal = (edit = false) =>
+      renderWithProvider(
+        <AuditTransactionModal
+          userId={mockUserId}
+          provider={mockProvider}
+          onClose={onClose}
+          onSuccess={mockOnSuccess}
+          {...(edit ? { editTransaction } : {})}
+        />,
+      );
+
+    const goToStep = async (target: 1 | 2 | 3) => {
+      jest.mocked(window.api.contacts.getAll).mockResolvedValue({
+        success: true,
+        contacts: [manualContact],
+      });
+      jest.mocked(window.api.contacts.getSortedByActivity).mockResolvedValue({
+        success: true,
+        contacts: [manualContact],
+      });
+      renderModal();
+      if (target === 1) return;
+      await userEvent.type(
+        screen.getByPlaceholderText(/enter property address/i),
+        "123 Main Street",
+      );
+      await userEvent.click(screen.getByTestId("create-audit-submit"));
+      await waitFor(() => {
+        expect(screen.getByTestId("contact-assignment-step-2")).toBeInTheDocument();
+      });
+      if (target === 2) return;
+      await userEvent.click(await screen.findByText("Casey Manual"));
+      await waitFor(() => {
+        expect(screen.getByTestId("added-count")).toHaveTextContent("1");
+      });
+      await userEvent.click(screen.getByTestId("create-audit-submit"));
+      await waitFor(() => {
+        expect(screen.getByTestId("contact-assignment-step-3")).toBeInTheDocument();
+      });
+    };
+
+    const expectFloatingGroup = (expected: {
+      back: boolean;
+      primary: RegExp;
+    }) => {
+      const bar = screen.getByTestId("audit-floating-actions");
+      // Floating: absolutely positioned at the bottom-right of the panel...
+      expect(bar.className).toEqual(expect.stringContaining("absolute"));
+      expect(bar.className).toEqual(expect.stringContaining("bottom-4"));
+      expect(bar.className).not.toEqual(expect.stringContaining("flex-shrink-0"));
+      // ...and not hidden at any width (no sm:hidden / hidden sm:flex split).
+      expect(bar.className).not.toMatch(/(^|\s)(sm:)?hidden(\s|$)/);
+      // ...inside a panel that is its containing block.
+      expect(bar.parentElement?.className).toEqual(expect.stringContaining("relative"));
+
+      // Exactly one set of buttons, all inside the group.
+      const inBar = (name: RegExp) =>
+        Array.from(bar.querySelectorAll("button")).filter((b) =>
+          name.test(b.textContent ?? ""),
+        );
+      expect(bar.querySelectorAll("button")).toHaveLength(expected.back ? 3 : 2);
+      expect(inBar(/^cancel$/i)).toHaveLength(1);
+      expect(inBar(/back/i)).toHaveLength(expected.back ? 1 : 0);
+      expect(inBar(expected.primary)).toHaveLength(1);
+      expect(screen.getAllByTestId("create-audit-submit")).toHaveLength(1);
+      expect(bar).toContainElement(screen.getByTestId("create-audit-submit"));
+
+      // Content keeps its last row clear of the group.
+      expect(screen.getByTestId("audit-modal-content").className).toEqual(
+        expect.stringContaining(FLOATING_ACTION_BAR_CONTENT_PADDING),
+      );
+    };
+
+    it("F1: step 1 — Cancel + Continue float, no Back, content padded", async () => {
+      await goToStep(1);
+      expectFloatingGroup({ back: false, primary: /continue/i });
+    });
+
+    it("F2: step 2 — Cancel + Back + Continue float, content padded", async () => {
+      await goToStep(2);
+      expectFloatingGroup({ back: true, primary: /continue/i });
+    });
+
+    it("F3: step 3 — Cancel + Back + Create Transaction float, content padded", async () => {
+      await goToStep(3);
+      expectFloatingGroup({ back: true, primary: /create transaction/i });
+      // Narrow windows get short labels so the three pills fit (class level).
+      const submit = screen.getByTestId("create-audit-submit");
+      expect(within(submit).getByText("Create")).toHaveClass("sm:hidden");
+      expect(within(submit).getByText("Create Transaction")).toHaveClass("hidden", "sm:inline");
+      expect(within(screen.getByTestId("create-audit-back")).getByText("Back")).toHaveClass(
+        "hidden",
+        "sm:inline",
+      );
+    });
+
+    it("F4: Edit Transaction — Cancel + Save Changes float, content padded", () => {
+      renderModal(true);
+      expectFloatingGroup({ back: false, primary: /save changes/i });
+      const submit = screen.getByTestId("create-audit-submit");
+      expect(within(submit).getByText("Save")).toHaveClass("sm:hidden");
+      expect(within(submit).getByText("Save Changes")).toHaveClass("hidden", "sm:inline");
+    });
+
+    it.each([1, 2, 3] as const)("F5: Cancel closes the modal on step %i", async (target) => {
+      await goToStep(target);
+      await userEvent.click(
+        within(screen.getByTestId("audit-floating-actions")).getByRole("button", {
+          name: /^cancel$/i,
+        }),
+      );
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("F6: Cancel closes the modal in Edit Transaction", async () => {
+      renderModal(true);
+      await userEvent.click(
+        within(screen.getByTestId("audit-floating-actions")).getByRole("button", {
+          name: /^cancel$/i,
+        }),
+      );
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("F7: Back on the floating group returns from step 2 to step 1", async () => {
+      await goToStep(2);
+      await userEvent.click(screen.getByTestId("create-audit-back"));
+      await waitFor(() => {
+        expect(screen.queryByTestId("contact-assignment-step-2")).toBeNull();
+      });
+      expect(screen.getByPlaceholderText(/enter property address/i)).toBeInTheDocument();
     });
   });
 });

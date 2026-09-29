@@ -127,7 +127,7 @@ export interface ExportResult {
  * seed contact ids to real UUIDs): pass a `contactName` to select the step-2 row by its visible
  * display name (e.g. 'Alice Buyer'); omit it to select the FIRST available contact row. The step-3
  * role is assigned to whichever single contact was selected (defaults to 'client', which satisfies
- * the Client gate). closedAt is optional and default-filled by the app when omitted.
+ * the Client gate). Step 1 has no End Date field (BACKLOG-3613): a new deal is created ongoing.
  */
 export interface CreateAuditInput {
   address: string;
@@ -141,8 +141,6 @@ export interface CreateAuditInput {
   contactName?: string;
   /** Step-3 role value (default 'client'). */
   role?: string;
-  /** Optional ISO date (YYYY-MM-DD) for the End Date input. */
-  closedAt?: string;
   /** Transaction type — 'purchase' (default) or 'sale'. */
   transactionType?: 'purchase' | 'sale';
 }

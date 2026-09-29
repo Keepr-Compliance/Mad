@@ -1123,6 +1123,7 @@ class TransactionService {
         started_at,
         closed_at,
         closing_deadline,
+        listing_price,
       } = data;
 
       // BACKLOG-2538: the deal and every party on it are written in ONE
@@ -1148,6 +1149,9 @@ class TransactionService {
         started_at,
         closed_at,
         closing_deadline,
+        // BACKLOG-3614: optional; undefined (not entered) is skipped by the
+        // writer, so the column keeps its NULL default.
+        listing_price: listing_price ?? undefined,
         // BACKLOG-2756: `false`, not `property_coordinates ? true : false`.
         // Coordinates are a fact about the ADDRESS. This column means "a person
         // confirmed the closing date", and the only thing that legitimately

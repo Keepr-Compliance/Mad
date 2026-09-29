@@ -56,6 +56,20 @@ describe("PDFExportService", () => {
     pdfExportService = module.default;
   });
 
+  describe("Listing Price reaches the PDF (BACKLOG-3614)", () => {
+    it("renders the stored listing price in the Listing Price card", () => {
+      const html: string = (
+        pdfExportService as unknown as {
+          _generateHTML: (t: unknown, c: unknown[]) => string;
+        }
+      )._generateHTML(
+        { id: "txn-3614", property_address: "742 Invented Terrace", listing_price: 525000 },
+        [],
+      );
+      expect(html).toMatch(/Listing Price<\/div>\s*<div class="value">\$525,000/);
+    });
+  });
+
   describe("getDefaultExportPath", () => {
     it("should generate path in downloads folder", () => {
       const transaction = {
