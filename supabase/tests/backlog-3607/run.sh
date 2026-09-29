@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# BACKLOG-3607 harness (DRAFT, plan rev 2 pre-runs). Runs the backlog-3596
+# BACKLOG-3607 harness. Runs the backlog-3596
 # prelude and its three shipped files, then the 3607 file (or a mutant of
 # it), then one control, in ONE transaction that ends with ROLLBACK.
 #

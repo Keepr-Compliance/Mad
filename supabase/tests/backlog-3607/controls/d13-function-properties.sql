@@ -1,5 +1,6 @@
 -- D13: both new RPCs are SECURITY DEFINER with search_path='', executable by
--- authenticated only (not PUBLIC, not anon).
+-- authenticated only (not PUBLIC, not anon). The removed-pair CHECK exists
+-- with its exact definition (SR R-2).
 DO $d13$
 DECLARE r record;
 BEGIN
@@ -14,5 +15,13 @@ BEGIN
   END LOOP;
   PERFORM pg_temp.check((SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace
                            AND proname IN ('remove_submission_checklist_at_review', 'restore_submission_checklist_at_review')) = 2, 'D13 both exist');
+  -- R-2: the pair CHECK is what makes dropping ONE removed predicate from the
+  -- insert policy unobservable (n11b). Pin its definition, not only its name.
+  PERFORM pg_temp.check((SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c
+                          WHERE c.conname = 'submission_checklists_removed_pair_check'
+                            AND c.conrelid = 'public.submission_checklists'::regclass)
+                        = 'CHECK (((removed_at_review_by IS NULL) = (removed_at_review_at IS NULL)))',
+                        'D13 removed pair CHECK: ' || COALESCE((SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c
+                          WHERE c.conname = 'submission_checklists_removed_pair_check'), 'missing'));
 END
 $d13$;

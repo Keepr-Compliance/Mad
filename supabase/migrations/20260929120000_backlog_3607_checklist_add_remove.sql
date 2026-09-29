@@ -1,22 +1,77 @@
--- BACKLOG-3607 (DRAFT, plan rev 2 pre-runs only; not the PR 1 file yet):
--- checklists removed and added at review, and between versions, recorded.
+-- BACKLOG-3607: checklists removed and added at review, and between the
+-- agent's versions, are recorded; the broker can remove a checklist at review
+-- and add back one the agent removed, with the broker's earlier ticks.
 --
--- Applied AFTER the three 3596 files. Apply as ONE transaction. Safe to run
--- twice.
+-- Applied AFTER 20260928120000_backlog_3596_broker_checklist_ticks.sql,
+-- 20260928130000_backlog_3596_review_refusals.sql and
+-- 20260928170000_backlog_3596_added_checklist_ticks.sql. Apply as ONE
+-- transaction (`psql -1 -f <file>`, or the whole file in one SQL editor run).
+-- It opens none of its own, and every statement is safe to run twice.
 --
---   1. Columns: submission_checklists.removed_at_review_by/_at (both or
---      neither), submission_checklists.restored_from_checklist_id,
---      submission_checklist_items.restored_from_item_id.
---   2. The submitter's INSERT rules refuse all four (SR C-1).
---   3. set_submission_checklist_reviewer_check: + 'checklist_removed'.
---   4. add_submission_checklist_at_review: a template removed at review on
---      this version is un-removed ('readded').
---   5. carry_submission_checklist_reviews: + version diff (added / removed /
---      replaced), broker-removed checklists skipped, restored items compared
---      against their source, quiet empty snapshot for an org without the
---      feature.
---   6. remove_submission_checklist_at_review(checklist).
---   7. restore_submission_checklist_at_review(submission, source checklist).
+--   1. Columns (all nullable, no default, no backfill):
+--        submission_checklists.removed_at_review_by / removed_at_review_at
+--          (CHECK submission_checklists_removed_pair_check: both or neither),
+--        submission_checklists.restored_from_checklist_id,
+--        submission_checklist_items.restored_from_item_id
+--          (self-references, ON DELETE SET NULL).
+--
+--   2. The submitter's INSERT policies (submission_checklists_insert,
+--      submission_checklist_items_insert): the live texts plus "IS NULL" on
+--      every new column, so an agent can never write a review-only value.
+--
+--   3. public.set_submission_checklist_reviewer_check(item, checked): the
+--      20260928170000 body verbatim, plus a refusal for an item of a
+--      checklist removed at review ('checklist_removed').
+--
+--   4. public.add_submission_checklist_at_review(submission, template): the
+--      20260928130000 body verbatim, plus: a checklist of that template
+--      removed at review on this version is un-removed ('readded'), its rows
+--      untouched.
+--
+--   5. public.carry_submission_checklist_reviews(submission): the
+--      20260928170000 body verbatim, plus:
+--        - the version diff: one checklist_added / checklist_removed entry
+--          {source: 'version'} per checklist key (template id, or name for a
+--          checklist with no template) the agent added or removed since the
+--          previous version; 'replaced' when the same template comes back
+--          with none of the same items (item keys needed on both sides);
+--          'parent_had_none' when the previous version had no checklist; a
+--          removal carries the removed header's id (removed_checklist_id).
+--          Written once per key and type, also for a version with none;
+--        - checklists the broker removed at review are neither carried nor
+--          counted as the agent's removal;
+--        - a restored item (restored_from_item_id set) is compared against
+--          its SOURCE item's note and evidence;
+--        - an organization without the feature and a version with no
+--          checklist -> {status: 'not_in_plan'}, not a refusal.
+--
+--   6. public.remove_submission_checklist_at_review(checklist): the broker
+--      (or admin) marks a checklist of an open, not superseded version
+--      removed at review. Soft: rows, ticks and links stay. Returns and
+--      records linked_documents and linked_emails (distinct local ids; a
+--      member with no local id is not counted, as in the carry).
+--
+--   7. public.restore_submission_checklist_at_review(submission, source
+--      checklist): the broker (or admin) adds back, onto the version under
+--      review, a checklist of the DIRECT parent (same organization, deal,
+--      submitter, version n - 1) that this version's history records the
+--      agent removed. Copies titles, descriptions, required flags, document
+--      types and order, and the broker's ticks with their original reviewer
+--      and time; never the agent's tick, note, links or local ids; never
+--      reads the template.
+--
+--   6 and 7 lock the submission row FOR UPDATE, are SECURITY DEFINER with
+--   search_path = '', and are executable by authenticated only.
+--
+-- Errors raised (all existing codes): 'not_authorized' (42501),
+-- 'invalid_argument' (22023), 'not_open_for_review' (42501), 'superseded'
+-- (42501), and new: 'checklist_removed' (42501, section 3).
+--
+-- Rollback: supabase/tests/backlog-3607/rollback-3607.sql (tested by the
+-- harness), run BEFORE the three 3596 rollbacks. It drops both functions and
+-- the four columns and re-creates the two policies and the add, tick and
+-- carry bodies as the 3596 files left them. Removal and restore markers are
+-- lost with their columns; history entries stay.
 
 -- ---------------------------------------------------------------------------
 -- 1. Columns
@@ -663,8 +718,9 @@ DECLARE
   v_uid   uuid := auth.uid();
   v_now   timestamptz := now();
   v_hdr   record;
-  v_rm    record;
-  v_links integer;
+  v_rm     record;
+  v_docs   integer;
+  v_emails integer;
 BEGIN
   IF v_uid IS NULL THEN
     RAISE EXCEPTION 'not_authorized' USING ERRCODE = '42501';
@@ -711,15 +767,19 @@ BEGIN
     RETURN jsonb_build_object('status', 'already_removed', 'checklist_id', v_hdr.id);
   END IF;
 
-  -- Documents, not upload rows: one local file uploaded twice is one
-  -- document (the carry's evidence identity).
-  SELECT count(DISTINCT (lm.kind, COALESCE(a.local_attachment_id, m.local_message_id))) INTO v_links
+  -- Documents and emails, not upload rows: one local file uploaded twice is
+  -- one document. The carry's evidence identity, so a member with no local
+  -- id is not counted (the carry skips it too).
+  SELECT count(DISTINCT COALESCE(a.local_attachment_id, m.local_message_id)) FILTER (WHERE lm.kind = 'attachment'),
+         count(DISTINCT COALESCE(a.local_attachment_id, m.local_message_id)) FILTER (WHERE lm.kind = 'email')
+    INTO v_docs, v_emails
     FROM public.submission_checklist_items i
     JOIN public.submission_checklist_links l ON l.submission_checklist_item_id = i.id
     JOIN public.submission_checklist_link_members lm ON lm.link_id = l.id
     LEFT JOIN public.submission_attachments a ON a.id = lm.submission_attachment_id
     LEFT JOIN public.submission_messages m ON m.id = lm.submission_message_id
-   WHERE i.submission_checklist_id = v_hdr.id;
+   WHERE i.submission_checklist_id = v_hdr.id
+     AND COALESCE(a.local_attachment_id, m.local_message_id) IS NOT NULL;
 
   UPDATE public.submission_checklists
      SET removed_at_review_by = v_uid,
@@ -736,10 +796,12 @@ BEGIN
            'checklist_key', COALESCE(v_hdr.template_id::text, 'name:' || v_hdr.template_name),
            'template_id', v_hdr.template_id,
            'checklist_name', v_hdr.template_name,
-           'linked_documents', v_links))
+           'linked_documents', v_docs,
+           'linked_emails', v_emails))
    WHERE id = v_rm.rm_sub_id;
 
-  RETURN jsonb_build_object('status', 'removed', 'checklist_id', v_hdr.id, 'linked_documents', v_links);
+  RETURN jsonb_build_object('status', 'removed', 'checklist_id', v_hdr.id,
+                            'linked_documents', v_docs, 'linked_emails', v_emails);
 END
 $$;
 

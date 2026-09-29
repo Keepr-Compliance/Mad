@@ -48,8 +48,10 @@ BEGIN
   t2p := pg_temp.mk_sub('fixture-3596-c05-t2', 1, NULL, 'needs_changes', pg_temp.id('u_t2_agent'), pg_temp.id('o_t2'));
   t2v := pg_temp.mk_sub('fixture-3596-c05-t2', 2, t2p, 'uploading', pg_temp.id('u_t2_agent'), pg_temp.id('o_t2'));
   PERFORM pg_temp.act_as(pg_temp.id('u_t2_agent'));
-  PERFORM pg_temp.expect('C05 feature off, no copy -> quiet', format('SELECT public.carry_submission_checklist_reviews(%L)', t2v), 'rows:1');
+  res := public.carry_submission_checklist_reviews(t2v);
   PERFORM pg_temp.act_owner();
+  PERFORM pg_temp.check(res = '{"status": "not_in_plan"}'::jsonb AND jsonb_array_length(pg_temp.hist(t2v)) = 0,
+                        'C05 feature off, no copy -> not_in_plan: ' || res::text);
 
   -- no parent
   np := pg_temp.mk_sub('fixture-3596-c05-np', 1, NULL, 'uploading');

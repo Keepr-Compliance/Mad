@@ -1,4 +1,4 @@
--- BACKLOG-3607 rollback (DRAFT). Run as ONE transaction, before any 3596
+-- BACKLOG-3607 rollback of 20260929120000. Run as ONE transaction, before any 3596
 -- rollback. Restores the catalogue exactly as the three 3596 files left it.
 -- Rows keep nothing 3607-specific once the columns are dropped: a checklist
 -- removed at review shows again, restored checklists stay as ordinary

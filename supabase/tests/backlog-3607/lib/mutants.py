@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BACKLOG-3607 mutants (DRAFT, plan rev 2 pre-runs).
+"""BACKLOG-3607 mutants.
 
     python3 mutants.py <draft> <draft-rollback> <3596 refusals> <3596 added> <outdir>
 
@@ -37,7 +37,7 @@ REWRITES = {
         ""),
 }
 
-TARGETS = {"m28-carry-no-feature-check": "d02"}
+TARGETS = {"m28-carry-no-feature-check": "d02 c05"}
 
 NEW = [
     # --- version diff (plan §1, C-2, C-3, C-6) --------------------------------
@@ -73,12 +73,25 @@ NEW = [
     ("n40-removed-entry-no-header-id", "d01 d16", [
         ("      || CASE WHEN r.src_id IS NOT NULL THEN jsonb_build_object('removed_checklist_id', r.src_id) ELSE '{}'::jsonb END\n", "")]),
     ("n41-remove-counts-upload-rows", "d06", [
-        ("count(DISTINCT (lm.kind, COALESCE(a.local_attachment_id, m.local_message_id)))", "count(DISTINCT lm.id)")]),
+        ("count(DISTINCT COALESCE(a.local_attachment_id, m.local_message_id)) FILTER (WHERE lm.kind = 'attachment')",
+         "count(DISTINCT lm.id) FILTER (WHERE lm.kind = 'attachment')")]),
+    # R-4: documents and emails are two numbers; a member with no local id is not counted
+    ("n42-remove-counts-null-local-id", "d06", [
+        ("   WHERE i.submission_checklist_id = v_hdr.id\n     AND COALESCE(a.local_attachment_id, m.local_message_id) IS NOT NULL;",
+         "   WHERE i.submission_checklist_id = v_hdr.id;")]),
+    ("n43-remove-emails-counted-as-documents", "d06", [
+        ("count(DISTINCT COALESCE(a.local_attachment_id, m.local_message_id)) FILTER (WHERE lm.kind = 'attachment')",
+         "count(DISTINCT (lm.kind, COALESCE(a.local_attachment_id, m.local_message_id)))")]),
+    ("n43b-remove-emails-not-recorded", "d06", [
+        ("           'linked_emails', v_emails))", "           'linked_emails', NULL))")]),
     # --- insert policies (C-1) -----------------------------------------------
     ("n11-hdr-policy-no-removed", "d05", [
         ("    AND submission_checklists.removed_at_review_by IS NULL\n    AND submission_checklists.removed_at_review_at IS NULL\n", "")]),
     ("n12-hdr-policy-no-restored-from", "d05", [
         ("    AND submission_checklists.restored_from_checklist_id IS NULL\n", "")]),
+    ("n44-pair-check-true", "d13", [
+        ("      CHECK ((removed_at_review_by IS NULL) = (removed_at_review_at IS NULL));",
+         "      CHECK (true);")]),
     ("n13-item-policy-no-restored-from", "d05", [
         ("    AND submission_checklist_items.restored_from_item_id IS NULL\n", "")]),
     # --- broker remove (plan §2) ----------------------------------------------
@@ -126,6 +139,31 @@ NEW = [
     ("n28-restore-allows-broker-removed-source", "d16", [
         ("  IF v_src.removed_at_review_by IS NOT NULL\n     OR", "  IF false\n     OR")]),
     # --- the restored-item baseline (C-4.5) ---------------------------------------
+    ("s1-restore-source-any-org-submission", "d09", [
+        ("   WHERE h.id = p_source_checklist_id\n     AND h.submission_id = v_par.id;",
+         "   WHERE h.id = p_source_checklist_id\n     AND h.submission_id IN (SELECT x.id FROM public.transaction_submissions x WHERE x.organization_id = v_rs.organization_id);")]),
+    ("s2-restore-history-from-parent", "d09 d10 d16", [
+        ("     OR NOT EXISTS (SELECT 1 FROM jsonb_array_elements(v_rs.history) AS h(e)",
+         "     OR NOT EXISTS (SELECT 1 FROM jsonb_array_elements((SELECT COALESCE(x.status_history, '[]'::jsonb) FROM public.transaction_submissions x WHERE x.id = v_par.id)) AS h(e)")]),
+    ("s3-restore-parent-not-qualified", "d17", [
+        ("   WHERE p.id = v_rs.parent_submission_id\n     AND p.organization_id = v_rs.organization_id\n     AND p.local_transaction_id = v_rs.local_transaction_id\n     AND p.submitted_by = v_rs.submitted_by\n     AND v_rs.version IS NOT NULL AND p.version = v_rs.version - 1;",
+         "   WHERE p.id = v_rs.parent_submission_id;")]),
+    ("s4-restore-copies-agent-note", "d09", [
+        ("     reviewer_checked, reviewer_checked_by, reviewer_checked_at, restored_from_item_id)\n  SELECT v_rs.rs_id, v_new_id, si.title, si.description, si.is_required,\n         si.expected_document_type, false, si.sort_order,",
+         "     reviewer_checked, reviewer_checked_by, reviewer_checked_at, restored_from_item_id, note)\n  SELECT v_rs.rs_id, v_new_id, si.title, si.description, si.is_required,\n         si.expected_document_type, false, si.sort_order,"),
+        ("         si.reviewer_checked, si.reviewer_checked_by, si.reviewer_checked_at, si.id\n",
+         "         si.reviewer_checked, si.reviewer_checked_by, si.reviewer_checked_at, si.id, si.note\n")]),
+    ("n45-restore-parent-any-org", "d17", [
+        ("   WHERE p.id = v_rs.parent_submission_id\n     AND p.organization_id = v_rs.organization_id\n", "   WHERE p.id = v_rs.parent_submission_id\n")]),
+    ("n46-restore-parent-any-deal", "d17", [
+        ("     AND p.local_transaction_id = v_rs.local_transaction_id\n     AND p.submitted_by = v_rs.submitted_by\n     AND v_rs.version IS NOT NULL",
+         "     AND p.submitted_by = v_rs.submitted_by\n     AND v_rs.version IS NOT NULL")]),
+    ("n47-restore-parent-any-submitter", "d17", [
+        ("     AND p.submitted_by = v_rs.submitted_by\n     AND v_rs.version IS NOT NULL AND p.version = v_rs.version - 1;",
+         "     AND v_rs.version IS NOT NULL AND p.version = v_rs.version - 1;")]),
+    ("n48-restore-parent-any-version", "d17", [
+        ("     AND v_rs.version IS NOT NULL AND p.version = v_rs.version - 1;\n  IF NOT FOUND THEN\n    RAISE EXCEPTION 'not_authorized' USING ERRCODE = '42501';\n  END IF;\n  SELECT h.id, h.template_id",
+         "     ;\n  IF NOT FOUND THEN\n    RAISE EXCEPTION 'not_authorized' USING ERRCODE = '42501';\n  END IF;\n  SELECT h.id, h.template_id")]),
     ("n29-baseline-note-restored-row", "d10", [
         ("               CASE WHEN si.id IS NOT NULL THEN si.note ELSE pi.note END AS parent_note,", "               pi.note AS parent_note,")]),
     ("n30-baseline-evidence-restored-row", "d10", [
