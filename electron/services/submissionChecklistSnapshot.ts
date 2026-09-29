@@ -36,7 +36,9 @@
  *        one matching signature), which fail on the first call without a
  *        retry -> kind `refused`, reported to Sentry. The caller finalizes the submission and
  *        tells the agent the checklists were not sent. A plan never locks
- *        submission.
+ *        submission. (BACKLOG-3607) This applies to a non-empty payload only:
+ *        a permanent refusal of `[]` left nothing out, so it returns `none`
+ *        (logged, not reported) and the agent is told nothing.
  *
  * Evidence links are sent as LOCAL ids and matched server-side:
  *   attachment -> submission_attachments.local_attachment_id (written by
@@ -219,7 +221,8 @@ export function buildChecklistSnapshotPayload(
 }
 
 /**
- * Copy every checklist of `transactionId` onto the cloud submission. Never
+ * Copy every checklist of `transactionId` onto the cloud submission - an
+ * empty list when it has none (BACKLOG-3607). Never
  * throws: every failure is classified (header rule 2) and returned as
  * `failed` with its kind; the caller decides what the kind means.
  */
@@ -231,7 +234,9 @@ export async function snapshotSubmissionChecklists(
   let payload: SnapshotChecklistPayload[];
   try {
     const local = await getChecklistsForTransaction(transactionId);
-    if (local.checklists.length === 0) return { status: "none" };
+    // BACKLOG-3607: a transaction with no checklist still sends [] - the
+    // snapshot is the agent's whole set, and the server records a checklist
+    // the agent removed since the previous version only when it is told.
     payload = buildChecklistSnapshotPayload(local);
   } catch (err) {
     // The local read is not retried: the rest of the submit reads the same DB.
@@ -290,6 +295,17 @@ export async function snapshotSubmissionChecklists(
     }
 
     if (!isTransientCode(code)) {
+      if (payload.length === 0) {
+        // BACKLOG-3607: nothing was left out, so there is nothing to tell the
+        // agent. A server without the 3607 migration refuses [] from an org
+        // whose plan has no checklists (42501); after it, [] is accepted.
+        logService.info(
+          `[Submission] Empty checklist set not recorded on submission ${submissionId}`,
+          LOG_CONTEXT,
+          { transactionId, code, message }
+        );
+        return { status: "none" };
+      }
       return recordFailure(
         submissionId,
         transactionId,

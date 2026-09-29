@@ -13,19 +13,25 @@
  * written, so the existing section's ticks are never touched and a re-delivered
  * event adds nothing twice.
  *
- * Throws when the cloud read fails; the caller decides what that means for the
- * status write.
+ * BACKLOG-3607: a checklist the broker REMOVED at review on this version is
+ * deleted from the transaction (keyed on its template; absent -> no-op, so a
+ * re-delivered event or an owed retry is idempotent), and a checklist the
+ * broker added and then removed is not added. A checklist the broker added
+ * back (restored) is an ordinary added checklist here.
+ *
+ * Throws when a cloud read fails, before anything is written; the caller
+ * decides what that means for the status write.
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { selectChecklistTemplate } from "./db/checklistDbService";
+import { applyReviewChecklistPull } from "./db/checklistDbService";
 // BACKLOG-3599: imported directly, not through the databaseService facade, so
 // the real SQL runs wherever this module does.
 import { clearReviewChecklistPullOwed } from "./db/submissionDbService";
 import logService from "./logService";
 import { sendToMainWindow } from "../windowRegistry";
-import type { ChecklistTemplateItemInput } from "../types/checklist";
+import type { ChecklistTemplateItemInput, SelectChecklistTemplateInput } from "../types/checklist";
 import type { DocumentType } from "../types/models";
 
 /** Mirrors the local CHECK on `transaction_checklist_items.expected_document_type`. */
@@ -64,6 +70,11 @@ interface CloudChecklistItem {
 export interface ReviewChecklistPullResult {
   /** Template names written onto the transaction by this call. */
   added: string[];
+  /**
+   * BACKLOG-3607: template names of checklists the broker removed at review
+   * that this call deleted from the transaction.
+   */
+  removed: string[];
   /** Headers already on the transaction (same template) — nothing written. */
   existing: number;
   /** Headers with no template id, which cannot be keyed locally. */
@@ -75,6 +86,50 @@ export interface ReviewChecklistPullResult {
 /** A cloud document type the desktop does not know is stored as empty. */
 export function toLocalDocumentType(value: string | null | undefined): DocumentType | null {
   return value && LOCAL_DOCUMENT_TYPES.has(value) ? (value as DocumentType) : null;
+}
+
+/**
+ * BACKLOG-3607 (SR R-1): transactions with a resubmit in progress in this
+ * process, counted so two overlapping resubmits of one transaction do not
+ * clear each other. While a resubmit runs, a pull that is not the resubmit's
+ * own pre-pull writes nothing: the new version is built from the local set as
+ * it stands, and a pull applied after that read would change the local set
+ * behind the version being sent.
+ *
+ * In memory on purpose: both paths run in the one main process, and a restart
+ * ends any resubmit that was running, so there is nothing to protect after it.
+ * A crashed or failed resubmit can leave its `uploading` row in the cloud;
+ * that is why the newer-version check in `retryOwedReviewChecklistPull`
+ * ignores `uploading` children instead of relying on this guard.
+ */
+const resubmitsInProgress = new Map<string, number>();
+
+/** Mark a resubmit of this transaction as started. Pair with `endResubmitChecklistGuard` in a finally. */
+export function beginResubmitChecklistGuard(transactionId: string): void {
+  resubmitsInProgress.set(transactionId, (resubmitsInProgress.get(transactionId) ?? 0) + 1);
+}
+
+/** Mark one resubmit of this transaction as finished (success, failure or throw). */
+export function endResubmitChecklistGuard(transactionId: string): void {
+  const remaining = (resubmitsInProgress.get(transactionId) ?? 0) - 1;
+  if (remaining > 0) resubmitsInProgress.set(transactionId, remaining);
+  else resubmitsInProgress.delete(transactionId);
+}
+
+/** Thrown by a pull that reached its local write while a resubmit of the transaction runs. */
+export class ResubmitInProgressError extends Error {
+  constructor(transactionId: string) {
+    super(`resubmit in progress for ${transactionId}; nothing written`);
+    this.name = "ResubmitInProgressError";
+  }
+}
+
+export interface ReviewChecklistPullOptions {
+  /**
+   * True only for the resubmit's own pre-pull, which runs inside the guard and
+   * before the new version reads the local set.
+   */
+  ownResubmit?: boolean;
 }
 
 async function withTimeout<T>(query: PromiseLike<T>, what: string): Promise<T> {
@@ -98,20 +153,27 @@ export async function pullReviewChecklists(
   client: SupabaseClient,
   submissionId: string,
   transactionId: string,
+  options: ReviewChecklistPullOptions = {},
 ): Promise<ReviewChecklistPullResult> {
   const result: ReviewChecklistPullResult = {
     added: [],
+    removed: [],
     existing: 0,
     skipped: 0,
     noTransaction: false,
   };
 
+  // Every read happens before any local write, so a failed read throws with
+  // nothing written and the caller retries the whole pull.
   const headersResponse = await withTimeout(
     client
       .from("submission_checklists")
       .select("id, template_id, template_name, sort_order")
       .eq("submission_id", submissionId)
       .not("added_at_review_by", "is", null)
+      // BACKLOG-3607: a checklist the broker added and then removed at review
+      // on this version is not added.
+      .is("removed_at_review_by", null)
       .order("sort_order", { ascending: true }),
     "Review checklist fetch",
   );
@@ -119,8 +181,108 @@ export async function pullReviewChecklists(
     throw new Error(`Review checklist fetch failed: ${headersResponse.error.message}`);
   }
   const headers = (headersResponse.data ?? []) as CloudChecklistHeader[];
-  if (headers.length === 0) return result;
 
+  // BACKLOG-3607: checklists the broker removed at review on this version.
+  // Founder ruling 6563bab2: each one disappears from the desktop, also when
+  // the agent linked documents to it; the documents stay on the transaction.
+  const removedResponse = await withTimeout(
+    client
+      .from("submission_checklists")
+      .select("id, template_id, template_name")
+      .eq("submission_id", submissionId)
+      .not("removed_at_review_by", "is", null),
+    "Removed review checklist fetch",
+  );
+  if (removedResponse.error) {
+    throw new Error(`Removed review checklist fetch failed: ${removedResponse.error.message}`);
+  }
+  const removedHeaders = (removedResponse.data ?? []) as Array<
+    Pick<CloudChecklistHeader, "id" | "template_id" | "template_name">
+  >;
+
+  let items: CloudChecklistItem[] = [];
+  if (headers.length > 0) {
+    items = await fetchItems(client, headers);
+  }
+
+  const removeTemplateIds: string[] = [];
+  const nameByTemplate = new Map<string, string>();
+  for (const header of removedHeaders) {
+    if (!header.template_id) {
+      // Local checklists always carry a template id, so a checklist with none
+      // was never on the desktop.
+      logService.warn(
+        `[ChecklistPull] Removed checklist ${header.id} has no template id; nothing to remove`,
+        "SubmissionChecklistPull",
+      );
+      continue;
+    }
+    removeTemplateIds.push(header.template_id);
+    nameByTemplate.set(header.template_id, header.template_name);
+  }
+
+  const adds: SelectChecklistTemplateInput[] = [];
+  for (const header of headers) {
+    if (!header.template_id) {
+      result.skipped++;
+      logService.warn(
+        `[ChecklistPull] Broker-added checklist ${header.id} has no template id; skipped`,
+        "SubmissionChecklistPull",
+      );
+      continue;
+    }
+
+    const localItems: ChecklistTemplateItemInput[] = items
+      .filter((item) => item.submission_checklist_id === header.id)
+      .map((item) => ({
+        // BACKLOG-3596: the cloud item id becomes the local item id, so the
+        // next version sends it as local_item_id and the carry matches it to
+        // the item the broker ticked on this version. BACKLOG-3607: a
+        // checklist the broker added back (restored) arrives here too, with
+        // its restored rows' ids.
+        id: item.id,
+        title: item.title,
+        description: item.description ?? null,
+        isRequired: item.is_required === true,
+        expectedDocumentType: toLocalDocumentType(item.expected_document_type),
+        sortOrder: item.sort_order,
+      }));
+    adds.push({
+      transactionId,
+      templateId: header.template_id,
+      templateName: header.template_name,
+      items: localItems,
+    });
+    nameByTemplate.set(header.template_id, header.template_name);
+  }
+
+  if (removeTemplateIds.length === 0 && adds.length === 0) return result;
+
+  // BACKLOG-3607 (SR R-1): checked immediately before the write, with no
+  // await between: applyReviewChecklistPull runs its dbTransaction
+  // synchronously on call, so the check and the write are one synchronous
+  // segment. Either the write ran before the resubmit started (and the
+  // resubmit reads a set that includes it) or it is skipped here.
+  if (!options.ownResubmit && resubmitsInProgress.has(transactionId)) {
+    throw new ResubmitInProgressError(transactionId);
+  }
+  // BACKLOG-3607: every local write of this pull is ONE dbTransaction.
+  const applied = await applyReviewChecklistPull(transactionId, removeTemplateIds, adds);
+  if (applied.noTransaction) {
+    result.noTransaction = true;
+    return result;
+  }
+  const nameOf = (templateId: string): string => nameByTemplate.get(templateId) ?? templateId;
+  result.removed = applied.removedTemplateIds.map(nameOf);
+  result.added = applied.addedTemplateIds.map(nameOf);
+  result.existing = applied.existing;
+  return result;
+}
+
+async function fetchItems(
+  client: SupabaseClient,
+  headers: CloudChecklistHeader[],
+): Promise<CloudChecklistItem[]> {
   const itemsResponse = await withTimeout(
     client
       .from("submission_checklist_items")
@@ -137,50 +299,7 @@ export async function pullReviewChecklists(
   if (itemsResponse.error) {
     throw new Error(`Review checklist items fetch failed: ${itemsResponse.error.message}`);
   }
-  const items = (itemsResponse.data ?? []) as CloudChecklistItem[];
-
-  for (const header of headers) {
-    if (!header.template_id) {
-      result.skipped++;
-      logService.warn(
-        `[ChecklistPull] Broker-added checklist ${header.id} has no template id; skipped`,
-        "SubmissionChecklistPull",
-      );
-      continue;
-    }
-
-    const localItems: ChecklistTemplateItemInput[] = items
-      .filter((item) => item.submission_checklist_id === header.id)
-      .map((item) => ({
-        // BACKLOG-3596: the cloud item id becomes the local item id, so the
-        // next version sends it as local_item_id and the carry matches it to
-        // the item the broker ticked on this version.
-        id: item.id,
-        title: item.title,
-        description: item.description ?? null,
-        isRequired: item.is_required === true,
-        expectedDocumentType: toLocalDocumentType(item.expected_document_type),
-        sortOrder: item.sort_order,
-      }));
-
-    const outcome = await selectChecklistTemplate({
-      transactionId,
-      templateId: header.template_id,
-      templateName: header.template_name,
-      items: localItems,
-    });
-
-    if (outcome.status === "added") {
-      result.added.push(header.template_name);
-    } else if (outcome.status === "exists") {
-      result.existing++;
-    } else if (outcome.status === "no_transaction") {
-      result.noTransaction = true;
-      return result;
-    }
-  }
-
-  return result;
+  return (itemsResponse.data ?? []) as CloudChecklistItem[];
 }
 
 /** Statuses after which nothing more can be added at review. */
@@ -190,11 +309,14 @@ const FINAL_SUBMISSION_STATUSES: ReadonlySet<string> = new Set(["approved", "rej
  * What one owed-pull attempt did (BACKLOG-3599).
  *   pulled    the pull succeeded (or the transaction is gone); marker cleared
  *   final     the cloud says approved/rejected; marker cleared, nothing pulled
+ *   superseded  a newer version of the submission exists in the cloud
+ *             (BACKLOG-3607); marker cleared, nothing pulled
  *   kept      no positive proof the pull is done; marker kept for the next pass
  */
 export type OwedPullOutcome =
-  | { status: "pulled"; added: string[] }
+  | { status: "pulled"; added: string[]; removed: string[] }
   | { status: "final" }
+  | { status: "superseded" }
   | { status: "kept"; reason: string };
 
 /**
@@ -211,6 +333,7 @@ export async function retryOwedReviewChecklistPull(
   client: SupabaseClient,
   transactionId: string,
   submissionId: string,
+  options: ReviewChecklistPullOptions = {},
 ): Promise<OwedPullOutcome> {
   try {
     const statusResponse = await withTimeout(
@@ -230,9 +353,43 @@ export async function retryOwedReviewChecklistPull(
       return { status: "final" };
     }
 
-    const pulled = await pullReviewChecklists(client, submissionId, transactionId);
+    // BACKLOG-3607: a version is superseded once a newer version that has
+    // finished uploading names it as its parent. Its checklist changes are
+    // frozen from then on, and the newer version was built from the local set
+    // as it stood; applying the old version's pull now would change the local
+    // set behind that newer version. Checked in the cloud, not against the
+    // local pointer: the local pointer can lag the cloud after a resubmit.
+    //
+    // An `uploading` child does NOT count. It exists either while a resubmit
+    // in this process is between Stage 3 and Stage 6 (the resubmit guard
+    // holds the pull as `kept` then, so a resubmit that fails still owes it),
+    // or because a resubmit crashed or its cleanup failed and left the row
+    // behind (no newer version exists, so the old version's changes still
+    // belong on the local set). Counting it would clear the marker and lose
+    // the pull if that resubmit never finishes. `.neq`, not an allow-list: a
+    // status added later still counts as a newer version.
+    // A failed read keeps the marker and writes nothing.
+    const newerResponse = await withTimeout(
+      client
+        .from("transaction_submissions")
+        .select("id")
+        .eq("parent_submission_id", submissionId)
+        .neq("status", "uploading"),
+      "Owed submission newer version read",
+    );
+    if (newerResponse.error) {
+      return { status: "kept", reason: `newer version read failed: ${newerResponse.error.message}` };
+    }
+    if (((newerResponse.data ?? []) as unknown[]).length > 0) {
+      clearReviewChecklistPullOwed(transactionId, submissionId);
+      return { status: "superseded" };
+    }
+
+    // A resubmit in progress throws ResubmitInProgressError before any write;
+    // the catch below keeps the marker for the next pass.
+    const pulled = await pullReviewChecklists(client, submissionId, transactionId, options);
     clearReviewChecklistPullOwed(transactionId, submissionId);
-    return { status: "pulled", added: pulled.added };
+    return { status: "pulled", added: pulled.added, removed: pulled.removed };
   } catch (error) {
     return { status: "kept", reason: error instanceof Error ? error.message : String(error) };
   }
@@ -240,8 +397,9 @@ export async function retryOwedReviewChecklistPull(
 
 /**
  * BACKLOG-3595 — tell an open transaction window that an owed pull added a
- * broker checklist. Call only AFTER `retryOwedReviewChecklistPull` returned
- * `pulled` with `added.length > 0`: the rows are written by one synchronous
+ * broker checklist (BACKLOG-3607: or removed one). Call only AFTER
+ * `retryOwedReviewChecklistPull` returned `pulled` with `added` or `removed`
+ * non-empty: the rows are written by one synchronous
  * `dbTransaction` inside the pull, so they are committed by then, and the
  * renderer re-read that this event triggers finds them.
  *

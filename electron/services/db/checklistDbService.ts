@@ -158,42 +158,52 @@ export function selectChecklistTemplate(
   const result = dbTransaction<SelectChecklistTemplateResult>(() => {
     const transaction = dbGet<{ id: string }>(TRANSACTION_EXISTS_SQL, [input.transactionId]);
     if (!transaction) return { status: "no_transaction" };
-
-    const existing = dbGet<{ id: string }>(GET_CHECKLIST_BY_TEMPLATE_SQL, [
-      input.transactionId,
-      input.templateId,
-    ]);
-    if (existing) return { status: "exists", checklistId: existing.id };
-    const sortOrder =
-      dbGet<{ next_sort_order: number }>(NEXT_CHECKLIST_SORT_ORDER_SQL, [input.transactionId])
-        ?.next_sort_order ?? 0;
-
-    const checklistId = randomUUID();
-    dbRun(INSERT_CHECKLIST_SQL, [
-      checklistId,
-      input.transactionId,
-      input.templateId,
-      input.templateName,
-      sortOrder,
-    ]);
-    input.items.forEach((item, index) => {
-      dbRun(INSERT_CHECKLIST_ITEM_SQL, [
-        // BACKLOG-3596: a pulled broker checklist keeps the cloud item id. A
-        // PK clash throws and rolls back this whole checklist; there is no
-        // fallback to a random id, which would lose the broker's ticks silently.
-        item.id ?? randomUUID(),
-        checklistId,
-        item.title,
-        item.description ?? null,
-        item.isRequired ? 1 : 0,
-        item.expectedDocumentType ?? null,
-        item.sortOrder ?? index,
-      ]);
-    });
-
-    return { status: "added", checklistId };
+    return insertTemplateChecklist(input);
   });
   return Promise.resolve(result);
+}
+
+/**
+ * The body of `selectChecklistTemplate` once the transaction is known to
+ * exist. Raw statements only; every caller runs it inside its own
+ * `dbTransaction`.
+ */
+function insertTemplateChecklist(
+  input: SelectChecklistTemplateInput,
+): SelectChecklistTemplateResult {
+  const existing = dbGet<{ id: string }>(GET_CHECKLIST_BY_TEMPLATE_SQL, [
+    input.transactionId,
+    input.templateId,
+  ]);
+  if (existing) return { status: "exists", checklistId: existing.id };
+  const sortOrder =
+    dbGet<{ next_sort_order: number }>(NEXT_CHECKLIST_SORT_ORDER_SQL, [input.transactionId])
+      ?.next_sort_order ?? 0;
+
+  const checklistId = randomUUID();
+  dbRun(INSERT_CHECKLIST_SQL, [
+    checklistId,
+    input.transactionId,
+    input.templateId,
+    input.templateName,
+    sortOrder,
+  ]);
+  input.items.forEach((item, index) => {
+    dbRun(INSERT_CHECKLIST_ITEM_SQL, [
+      // BACKLOG-3596: a pulled broker checklist keeps the cloud item id. A
+      // PK clash throws and rolls back this whole checklist; there is no
+      // fallback to a random id, which would lose the broker's ticks silently.
+      item.id ?? randomUUID(),
+      checklistId,
+      item.title,
+      item.description ?? null,
+      item.isRequired ? 1 : 0,
+      item.expectedDocumentType ?? null,
+      item.sortOrder ?? index,
+    ]);
+  });
+
+  return { status: "added", checklistId };
 }
 
 /**
@@ -210,6 +220,63 @@ export function removeChecklist(
     if (!row) return null;
     dbRun(DELETE_CHECKLIST_IN_TRANSACTION_SQL, [row.id, transactionId]);
     return toChecklist(row);
+  });
+  return Promise.resolve(result);
+}
+
+/** What `applyReviewChecklistPull` did (BACKLOG-3607). */
+export interface ReviewChecklistPullApplied {
+  /** The local transaction no longer exists; nothing was written. */
+  noTransaction: boolean;
+  /** Template ids of the checklists deleted. */
+  removedTemplateIds: string[];
+  /** Template ids of the checklists written. */
+  addedTemplateIds: string[];
+  /** Adds skipped because the transaction already carries that template. */
+  existing: number;
+}
+
+/**
+ * BACKLOG-3607 — apply one review pull to one transaction in ONE
+ * `dbTransaction`: delete the checklists the broker removed at review, then
+ * add the checklists the broker added (or added back). Either all of it lands
+ * or none of it does.
+ *
+ * A removal is keyed on the template (local `UNIQUE (transaction_id,
+ * template_id)`), never on an id: the cloud header id is not a local id. The
+ * checklist's items, ticks, notes and evidence links go with it (ON DELETE
+ * CASCADE); the attachments and emails stay on the transaction. A template the
+ * transaction does not carry is a no-op, so a re-delivered pull or an owed
+ * retry removes nothing twice. An add behaves exactly as
+ * `selectChecklistTemplate` (an existing template is `exists`, untouched).
+ */
+export function applyReviewChecklistPull(
+  transactionId: string,
+  removeTemplateIds: string[],
+  adds: SelectChecklistTemplateInput[],
+): Promise<ReviewChecklistPullApplied> {
+  const result = dbTransaction<ReviewChecklistPullApplied>(() => {
+    const applied: ReviewChecklistPullApplied = {
+      noTransaction: false,
+      removedTemplateIds: [],
+      addedTemplateIds: [],
+      existing: 0,
+    };
+    const transaction = dbGet<{ id: string }>(TRANSACTION_EXISTS_SQL, [transactionId]);
+    if (!transaction) return { ...applied, noTransaction: true };
+
+    for (const templateId of removeTemplateIds) {
+      const existing = dbGet<{ id: string }>(GET_CHECKLIST_BY_TEMPLATE_SQL, [transactionId, templateId]);
+      if (!existing) continue;
+      dbRun(DELETE_CHECKLIST_IN_TRANSACTION_SQL, [existing.id, transactionId]);
+      applied.removedTemplateIds.push(templateId);
+    }
+    for (const add of adds) {
+      const outcome = insertTemplateChecklist({ ...add, transactionId });
+      if (outcome.status === "added") applied.addedTemplateIds.push(add.templateId);
+      else if (outcome.status === "exists") applied.existing++;
+    }
+    return applied;
   });
   return Promise.resolve(result);
 }
