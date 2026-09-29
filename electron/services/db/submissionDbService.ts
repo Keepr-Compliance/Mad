@@ -244,3 +244,120 @@ export function updateTransactionSubmissionStatus(
      WHERE id = ?`
   ).run(submissionStatus, lastReviewNotes, new Date().toISOString(), transactionId);
 }
+
+// ============================================
+// OWED BROKER-CHECKLIST PULLS (BACKLOG-3599)
+// ============================================
+
+/**
+ * Key in `transactions.metadata` (local-only JSON; no other writer or reader)
+ * holding the submission ids whose broker-added checklists are still owed.
+ *
+ * A SET, not a slot: marking adds an id if absent, clearing removes exactly
+ * one id, and nothing overwrites. With a single slot, a resubmit while S1 is
+ * owed followed by three failed pulls for S2 would replace S1 and lose S1's
+ * checklist for good.
+ *
+ * It lives in the database so it survives a restart, a crash and a sign-out.
+ */
+const OWED_PULLS_KEY = "reviewChecklistPullOwed";
+
+/** One transaction with at least one owed pull. */
+export interface OwedReviewChecklistPulls {
+  transactionId: string;
+  submissionIds: string[];
+}
+
+function readMetadataObject(raw: unknown): Record<string, unknown> {
+  if (typeof raw !== "string" || raw.length === 0) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function owedIdsOf(meta: Record<string, unknown>): string[] {
+  const value = meta[OWED_PULLS_KEY];
+  return Array.isArray(value)
+    ? value.filter((id): id is string => typeof id === "string" && id.length > 0)
+    : [];
+}
+
+/**
+ * Apply `change` to the owed set of one transaction, atomically. Returns false
+ * when the transaction does not exist.
+ */
+function updateOwedSet(
+  transactionId: string,
+  change: (ids: string[]) => string[]
+): boolean {
+  const db = ensureDb();
+  return db.transaction((): boolean => {
+    const row = db
+      .prepare(`SELECT metadata FROM transactions WHERE id = ?`)
+      .get(transactionId) as { metadata: unknown } | undefined;
+    if (!row) return false;
+    const meta = readMetadataObject(row.metadata);
+    const before = owedIdsOf(meta);
+    const after = change(before);
+    if (after.length === before.length && after.every((id, i) => id === before[i])) {
+      return true;
+    }
+    if (after.length > 0) meta[OWED_PULLS_KEY] = after;
+    else delete meta[OWED_PULLS_KEY];
+    db.prepare(`UPDATE transactions SET metadata = ? WHERE id = ?`).run(
+      Object.keys(meta).length > 0 ? JSON.stringify(meta) : null,
+      transactionId
+    );
+    return true;
+  })();
+}
+
+/** Record that `submissionId`'s broker-added checklists are owed. Adds if absent. */
+export function markReviewChecklistPullOwed(
+  transactionId: string,
+  submissionId: string
+): boolean {
+  return updateOwedSet(transactionId, (ids) =>
+    ids.includes(submissionId) ? ids : [...ids, submissionId]
+  );
+}
+
+/** Remove exactly `submissionId` from the owed set; other ids stay. */
+export function clearReviewChecklistPullOwed(
+  transactionId: string,
+  submissionId: string
+): void {
+  updateOwedSet(transactionId, (ids) => ids.filter((id) => id !== submissionId));
+}
+
+/** The owed ids of one transaction (empty when none). */
+export function getOwedReviewChecklistPullsFor(transactionId: string): string[] {
+  const db = ensureDb();
+  const row = db
+    .prepare(`SELECT metadata FROM transactions WHERE id = ?`)
+    .get(transactionId) as { metadata: unknown } | undefined;
+  return row ? owedIdsOf(readMetadataObject(row.metadata)) : [];
+}
+
+/** Every transaction with at least one owed pull. */
+export function getOwedReviewChecklistPulls(): OwedReviewChecklistPulls[] {
+  const db = ensureDb();
+  const rows = db
+    .prepare(
+      `SELECT id, metadata FROM transactions
+        WHERE json_valid(metadata)
+          AND json_type(metadata, '$.${OWED_PULLS_KEY}') = 'array'`
+    )
+    .all() as Array<{ id: string; metadata: unknown }>;
+  return rows
+    .map((row) => ({
+      transactionId: row.id,
+      submissionIds: owedIdsOf(readMetadataObject(row.metadata)),
+    }))
+    .filter((row) => row.submissionIds.length > 0);
+}

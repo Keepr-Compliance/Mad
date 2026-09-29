@@ -23,22 +23,39 @@
  * because an assertion that both say the same thing would be asserting the bug.
  */
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { SubmitForReviewModal } from "../SubmitForReviewModal";
 import type { Transaction } from "@/types";
 
+/**
+ * Partial fixture: this suite reads the summary block only.
+ *
+ * BACKLOG-3498: dated, so the date step's Next is enabled. A deal that can
+ * still be submitted opens on the date step and the summary is on the next
+ * screen. Date-only start (wizard, useAuditSubmission.ts:140-142) and
+ * ISO-timestamp end (detection path,
+ * electron/services/transactionService/transactionService.ts:958).
+ */
 const transaction = {
   id: "txn-2838",
   user_id: "user-2838",
   property_address: "18 Bellweather Lane",
   transaction_type: "purchase",
   status: "active",
-  // Partial fixture: this suite renders the summary block only.
+  started_at: "2026-01-05",
+  closed_at: "2026-03-14T18:22:05.000Z",
 } as unknown as Transaction;
 
 describe("BACKLOG-2838: the submit summary names what it counts", () => {
-  const renderModal = () =>
+  /** Renders, then Next from the date step to the Submission Summary (BACKLOG-3498). */
+  const renderModal = () => {
+    const utils = renderUnadvanced();
+    fireEvent.click(screen.getByTestId("submit-review-next"));
+    expect(screen.getByText("Submission Summary")).toBeInTheDocument();
+    return utils;
+  };
+  const renderUnadvanced = () =>
     render(
       <SubmitForReviewModal
         transaction={transaction}

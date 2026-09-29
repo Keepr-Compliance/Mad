@@ -4,9 +4,26 @@
  * Confirmation modal for submitting a transaction to the broker portal.
  * Shows summary of what will be submitted and progress during submission.
  * Part of BACKLOG-391: Submit for Review UI.
+ *
+ * BACKLOG-3498: for a deal that can still be submitted (no status,
+ * `not_submitted`, `needs_changes`) the dialog has two screens. Screen 1 is the
+ * shared date step (the same component Export's Step 1 renders), titled
+ * "Verify Transaction Details" by this dialog's own header; the block's heading
+ * is not drawn, so the title is not said twice. Next leads to screen 2, the
+ * lead and the Submission Summary, with Back. Pressing Submit saves the confirmed dates through the shared writer,
+ * waits for the save, and only then submits. The statuses the modal blocks
+ * render their single screen unchanged.
  */
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { ResponsiveModal } from "../../../common/ResponsiveModal";
+import {
+  TransactionDatesFields,
+  VERIFY_TRANSACTION_DETAILS_TITLE,
+  saveConfirmedTransactionDates,
+  useCommissionForm,
+  useTransactionDatesForm,
+  validateTransactionDates,
+} from "../../../transactionDates";
 import type { Transaction } from "@/types";
 
 export interface SubmitProgress {
@@ -14,6 +31,48 @@ export interface SubmitProgress {
   stageProgress: number;
   overallProgress: number;
   currentItem?: string;
+}
+
+/**
+ * BACKLOG-3600: why a successful submission's checklists did not reach the
+ * broker. Mirrors `SubmissionResult.checklistsNotSent` in the main process
+ * (a type cannot be value-imported across the boundary, so it is restated).
+ */
+export type ChecklistsNotSentReason =
+  | "not_in_plan"
+  | "refused"
+  // BACKLOG-3599 (resubmit only): the broker's review checklists were still
+  // owed and could not be downloaded first.
+  | "brokerChecklistsNotDownloaded";
+
+/** The one amber line the success screen shows for each reason. */
+export const CHECKLISTS_NOT_SENT_COPY: Record<ChecklistsNotSentReason, string> = {
+  not_in_plan:
+    "Submitted, but your checklists were not sent: checklists are not included in your current plan.",
+  refused: "Submitted, but your checklists could not be sent to your broker.",
+  brokerChecklistsNotDownloaded:
+    "Submitted, but the checklists your broker added could not be downloaded first, so this version does not include them.",
+};
+
+/**
+ * BACKLOG-3399: the amber line for gathered attachments that failed to upload.
+ * No retry is offered: once submitted, a new version is only allowed after the
+ * broker sends the deal back (see BLOCKED_SUBMISSION_STATUSES).
+ */
+export function attachmentsFailedCopy(count: number): string {
+  return count === 1
+    ? "Submitted, but 1 attachment couldn't be uploaded, so your broker won't see it."
+    : `Submitted, but ${count} attachments couldn't be uploaded, so your broker won't see them.`;
+}
+
+/**
+ * BACKLOG-3399: the amber line for texts/emails that advertise an attachment
+ * and contributed none. The count is of texts/emails, not of attachments.
+ */
+export function flaggedWithoutAttachmentsCopy(count: number): string {
+  return count === 1
+    ? "Submitted, but the attachments from 1 text or email weren't included, so your broker won't see them."
+    : `Submitted, but the attachments from ${count} texts or emails weren't included, so your broker won't see them.`;
 }
 
 interface SubmitForReviewModalProps {
@@ -64,7 +123,37 @@ interface SubmitForReviewModalProps {
    * test pins the two entry points to one component by identity.
    */
   onExport?: () => void;
+  /**
+   * BACKLOG-3498: called once the confirmed dates have been SAVED, before the
+   * submit runs and whatever the submit then does. TransactionDetails re-reads
+   * the row here, so its tabs and the Edit form show the saved dates even when
+   * the submit fails.
+   */
+  onDatesSaved?: () => void;
+  /**
+   * BACKLOG-3600: set when the submission succeeded but its checklists did not
+   * reach the broker. Rendered only on the success screen.
+   */
+  checklistsNotSent?: ChecklistsNotSentReason | null;
+  /**
+   * BACKLOG-3399: gathered attachments that failed to upload on a successful
+   * submission. Rendered only on the success screen, only when > 0.
+   */
+  attachmentsFailed?: number;
+  /**
+   * BACKLOG-3399: texts/emails whose attachments were not included in a
+   * successful submission. Rendered only on the success screen, only when > 0.
+   */
+  flaggedWithoutAttachments?: number;
 }
+
+/**
+ * BACKLOG-3520 — the panel owns its height and clips (`sm:overflow-hidden`);
+ * the body region inside scrolls, so the scrollbar sits inside the rounded
+ * frame instead of on the panel's outer edge. Padding lives on the header,
+ * body and footer rows (not here) so the scrollbar is not inset by it.
+ */
+const SUBMIT_PANEL = "max-w-xl sm:h-auto sm:max-h-[90vh] sm:overflow-hidden";
 
 const STAGE_LABELS: Record<string, string> = {
   preparing: "Preparing submission...",
@@ -99,6 +188,10 @@ export function SubmitForReviewModal({
   onCancel,
   onSubmit,
   onExport,
+  onDatesSaved,
+  checklistsNotSent = null,
+  attachmentsFailed = 0,
+  flaggedWithoutAttachments = 0,
 }: SubmitForReviewModalProps): React.ReactElement {
   /**
    * BACKLOG-2853 — THE DEAL ALREADY HAS A SUBMISSION SITTING WITH THE BROKER.
@@ -285,12 +378,104 @@ export function SubmitForReviewModal({
    */
   const isSuccess = progress?.stage === "complete" && !error;
 
+  /**
+   * BACKLOG-3498 — the date step.
+   *
+   * It applies exactly when the deal is not blocked. `blockedCopy` is the ONLY
+   * gate: `screen` starts at "dates" for every status, so a blocked deal is
+   * kept off the step by this term alone.
+   *
+   * `datesError` holds both the date-rule message and a failed save
+   * ("Failed to save dates: …"). It is local, not the hook's `error`: routing a
+   * failed save through `error` would hide the date fields under a
+   * "Submission Failed" heading. A save that fails on a RETRY after a failed
+   * submit (when the hook's `error` is still set) must also land on the date
+   * step, hence the `datesError !== null` escape in `showDateStep`.
+   */
+  const dateStepApplies = blockedCopy === undefined;
+  const [screen, setScreen] = useState<"dates" | "summary">("dates");
+  const { dates, setDate } = useTransactionDatesForm(transaction);
+  // BACKLOG-3520 — the commission block of the same step.
+  const commission = useCommissionForm(transaction);
+  const [datesError, setDatesError] = useState<string | null>(null);
+  const [savingDates, setSavingDates] = useState(false);
+  const showDateStep =
+    dateStepApplies &&
+    screen === "dates" &&
+    !isSubmitting &&
+    !isSuccess &&
+    (!error || datesError !== null);
+
+  /**
+   * Set once the dialog is dismissed or unmounted. A save still in flight must
+   * not go on to submit a dialog the user has closed: while the save runs,
+   * `isSubmitting` is false, so the X closes immediately (no confirm) and the
+   * awaited continuation would otherwise fire `onSubmit`.
+   */
+  const dismissedRef = useRef(false);
+  useEffect(() => {
+    dismissedRef.current = false;
+    return () => {
+      dismissedRef.current = true;
+    };
+  }, []);
+
   const handleCancelClick = () => {
     if (isActivelySubmitting) {
       setShowCancelConfirm(true);
     } else {
+      dismissedRef.current = true;
       onCancel();
     }
+  };
+
+  const handleNext = () => {
+    const message = validateTransactionDates(dates);
+    setDatesError(message);
+    if (message !== null) return;
+    // An unparseable figure blocks Next — its message is already shown inline
+    // by the commission block. An EMPTY commission never does: the block shows
+    // an inline warning and Next proceeds.
+    if (!commission.parsed.ok) return;
+    setScreen("summary");
+  };
+
+  const handleBack = () => {
+    setDatesError(null);
+    setScreen("dates");
+  };
+
+  /**
+   * Submit: save the confirmed dates, WAIT for the save, then submit. The
+   * submission reads its audit period from the stored row, so submitting
+   * before the save lands would send the old dates.
+   *
+   * Re-entry is prevented by `savingDates` in the button's `disabled`
+   * expression, not by a check in here.
+   */
+  // BACKLOG-3477: the unticked-required-items warning no longer lives here.
+  // TransactionDetails shows it before this window opens (ChecklistWarningDialog).
+  const proceed = async () => {
+    if (!dateStepApplies) {
+      onSubmit();
+      return;
+    }
+    setDatesError(null);
+    setSavingDates(true);
+    // With nothing to say about commission the call is exactly the two-argument
+    // call it was before BACKLOG-3520.
+    const saved = commission.update
+      ? await saveConfirmedTransactionDates(transaction.id, dates, commission.update)
+      : await saveConfirmedTransactionDates(transaction.id, dates);
+    if (saved.success) onDatesSaved?.();
+    if (dismissedRef.current) return;
+    setSavingDates(false);
+    if (!saved.success) {
+      setDatesError(`Failed to save dates: ${saved.error}`);
+      setScreen("dates");
+      return;
+    }
+    onSubmit();
   };
 
   return (
@@ -307,7 +492,7 @@ export function SubmitForReviewModal({
     <ResponsiveModal
       onClose={handleCancelClick}
       zIndex="z-[70]"
-      panelClassName="max-w-md p-6"
+      panelClassName={SUBMIT_PANEL}
       testId="submit-review-modal"
     >
         {/*
@@ -330,7 +515,7 @@ export function SubmitForReviewModal({
           which is what lets the suite keep asserting `.text-green-600` at zero
           as a guard against that callout returning.
         */}
-        <div className="flex items-center gap-3 mb-4">
+        <div className="flex items-center gap-3 mb-4 flex-shrink-0 px-6 pt-6" data-testid="submit-review-header">
           <div
             className={`w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0 ${
               isSuccess ? "bg-green-100 text-green-700" : "bg-blue-100"
@@ -370,6 +555,13 @@ export function SubmitForReviewModal({
           <h3 className="text-lg font-bold text-gray-900">
             {isSuccess
               ? "Successfully Submitted"
+              : /* BACKLOG-3498 — the date screen's title (founder, 2026-09-21:
+                   "I don't think we need both Submit for Review and Verify
+                   Transaction Details"). The shared block's own heading is
+                   not drawn on this screen. The summary screen, blocked
+                   statuses and success keep their titles. */
+              showDateStep
+              ? VERIFY_TRANSACTION_DETAILS_TITLE
               : /* BACKLOG-2853 — the title carried the same lie as the button:
                    a deal already sitting with the broker was asked "Submit for
                    Review?", a question about an act the service will refuse.
@@ -412,8 +604,41 @@ export function SubmitForReviewModal({
           </button>
         </div>
 
-        {/* Content - not submitting, not yet submitted */}
-        {!isSubmitting && !error && !isSuccess && (
+        {/*
+          BACKLOG-3520 — the scrolling region. The panel owns its height and
+          clips (SUBMIT_PANEL), so a scrollbar can only appear here, inside the
+          rounded frame; the header above and the action row below stay fixed
+          and the buttons never scroll out of view.
+        */}
+        <div className="flex-1 min-h-0 overflow-y-auto px-6" data-testid="submit-review-body">
+        {/*
+          BACKLOG-3498 — screen 1, the date step. The date fields ONLY; the
+          lead ("…The following data will be sent to your broker:") stays with
+          the Submission Summary on screen 2.
+        */}
+        {showDateStep && (
+          <div className="mb-4" data-testid="submit-review-dates">
+            {datesError && (
+              <div
+                className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg"
+                data-testid="submit-review-dates-error"
+              >
+                <p className="text-sm text-red-800">{datesError}</p>
+              </div>
+            )}
+            <TransactionDatesFields
+              transaction={transaction}
+              dates={dates}
+              onDateChange={setDate}
+              hideHeading
+              commission={commission}
+              commissionRoute="submit"
+            />
+          </div>
+        )}
+
+        {/* Content - not submitting, not yet submitted (screen 2 when the date step applies) */}
+        {!isSubmitting && !error && !isSuccess && !showDateStep && (
           <>
             <p className="text-sm text-gray-600 mb-4" data-testid="submit-review-lead">
               {/* BACKLOG-2853 — "The following data will be sent to your
@@ -577,6 +802,45 @@ export function SubmitForReviewModal({
           dismissibility, so this takes the conservative reading (the X and the
           backdrop both close it). See the BACKLOG-2849 report.
         */}
+        {/*
+          BACKLOG-3600 — the submission succeeded but the broker did not get
+          its checklists (a plan without checklists, or a refused copy). A
+          network failure never lands here: it fails the submission instead.
+          BACKLOG-3599 — or a resubmit could not first download the
+          checklists the broker added at review.
+        */}
+        {isSuccess && checklistsNotSent && (
+          <p
+            data-testid="submit-review-checklists-not-sent"
+            role="status"
+            className="text-sm text-amber-700 mb-4"
+          >
+            {CHECKLISTS_NOT_SENT_COPY[checklistsNotSent]}
+          </p>
+        )}
+        {/*
+          BACKLOG-3399 — the submission succeeded but some attachments did not
+          reach the broker: uploads that failed, and texts/emails whose
+          attachments were never gathered. Same amber line as above.
+        */}
+        {isSuccess && attachmentsFailed > 0 && (
+          <p
+            data-testid="submit-review-attachments-failed"
+            role="status"
+            className="text-sm text-amber-700 mb-4"
+          >
+            {attachmentsFailedCopy(attachmentsFailed)}
+          </p>
+        )}
+        {isSuccess && flaggedWithoutAttachments > 0 && (
+          <p
+            data-testid="submit-review-flagged-without-attachments"
+            role="status"
+            className="text-sm text-amber-700 mb-4"
+          >
+            {flaggedWithoutAttachmentsCopy(flaggedWithoutAttachments)}
+          </p>
+        )}
         {isSuccess && (
           <p
             data-testid="submit-review-success-ask"
@@ -654,8 +918,8 @@ export function SubmitForReviewModal({
           </div>
         )}
 
-        {/* Error display */}
-        {error && (
+        {/* Error display. Not over the date step: a failed date save shows its own message there (BACKLOG-3498). */}
+        {error && !showDateStep && (
           <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
             <div className="flex items-start gap-2">
               <svg
@@ -724,12 +988,25 @@ export function SubmitForReviewModal({
           </div>
         )}
 
+        </div>
+
         {/*
           Actions. BACKLOG-2849 removed the Cancel/Close row button entirely —
           dismissal is the X in the header (and the backdrop). What is left is
           the founder's pair: Export and Submit.
         */}
-        <div className="flex items-center gap-3 justify-end">
+        <div className="flex items-center gap-3 justify-end flex-shrink-0 px-6 pb-6 pt-4" data-testid="submit-review-footer">
+          {/* BACKLOG-3498 — Back to the date step, on screen 2 only. */}
+          {dateStepApplies && !isSubmitting && !error && !isSuccess && !showDateStep && (
+            <button
+              onClick={handleBack}
+              disabled={savingDates}
+              data-testid="submit-review-back"
+              className="mr-auto px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Back
+            </button>
+          )}
           {/*
             EXPORT PDF — one button, one label, one handler, in both of the
             places the founder asked for it: beside Submit before the decision,
@@ -764,16 +1041,32 @@ export function SubmitForReviewModal({
               Export PDF
             </button>
           )}
-          {!progress?.stage || progress.stage === "failed" ? (
+          {showDateStep ? (
+            /* BACKLOG-3498 — screen 1's primary. Disabled until Start and End
+               are filled, as Export's Step 1 primary is. */
             <button
-              onClick={onSubmit}
+              onClick={handleNext}
+              disabled={!dates.startDate || !dates.endDate}
+              data-testid="submit-review-next"
+              className="px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-lg font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
+          ) : !progress?.stage || progress.stage === "failed" ? (
+            <button
+              onClick={() => {
+                void proceed();
+              }}
               /* BACKLOG-2853 — disabled in the four states the service
                  refuses. The click could be left live and allowed to surface
                  the service's error, but that spends a multi-minute attachment
                  upload before the refusal in the shape this code had, and it
                  asks the user to discover by failure what the screen can just
-                 say. */
-              disabled={isSubmitting || submissionIsWithBroker}
+                 say.
+                 BACKLOG-3498 — and while the date save runs, so a second press
+                 cannot save and submit twice (useSubmitForReview.submit has no
+                 re-entry guard). */
+              disabled={isSubmitting || submissionIsWithBroker || savingDates}
               data-testid="submit-review-submit"
               className="px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-lg font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
             >

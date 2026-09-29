@@ -1,0 +1,8 @@
+# BACKLOG-3473 venue gate: differences between the venue and production that are
+# accepted, one per line: key|venue value|reason. A venue value not listed here
+# fails the gate. The three read functions (fn:check_feature_access,
+# fn:get_org_features, fn:broker_get_org_features) can never be accepted here:
+# run.sh refuses them, because teardown restores production's bodies.
+#
+# EMPTY until the gate first runs against the venue (phase ii). Each line added
+# must name what was measured and why the difference cannot change a control.

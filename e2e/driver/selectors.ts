@@ -218,8 +218,9 @@ export const Contacts = {
  *   - AuditTransactionModal step 1 (AddressVerificationStep): the address input, the purchase/sale type
  *     buttons, and the three date inputs (create-audit-* below).
  *   - The wizard footer primary button (create-audit-submit) — SAME testid across all steps (its text
- *     changes "Continue →" → "Create Transaction" but the id is stable). Rendered TWICE (mobile +
- *     desktop), so the driver resolves the VISIBLE one (matching the address-toggle pattern).
+ *     changes "Continue →" → "Create Transaction" but the id is stable). Rendered ONCE since
+ *     BACKLOG-3614 (one floating action group at every width); the driver still resolves the
+ *     VISIBLE one (matching the address-toggle pattern), which is harmless with a single match.
  *   - Step 2 (ContactSearchList → ContactRow): the seeded contact row carries data-contact-id, so it is
  *     selected via `[data-testid="contact-row"][data-contact-id="<id>"]` (contactRow() below).
  *   - Step 3 (ContactRoleRow): the role <select> (role-select-<id>, pre-existing).
@@ -231,6 +232,8 @@ export const CreateAudit = {
   startDateInputTestId: 'create-audit-start-date-input',
   // No closingDateInputTestId: step 1 no longer renders a Closing Date field.
   // A closing date is set from the Export modal instead.
+  // Rendered on Edit Transaction Details only; the create wizard has no End
+  // Date field (BACKLOG-3613).
   endDateInputTestId: 'create-audit-end-date-input',
   typePurchaseTestId: 'create-audit-type-purchase',
   typeSaleTestId: 'create-audit-type-sale',

@@ -20,6 +20,11 @@
  *     red-when-empty border. An empty end date is how an ongoing deal is
  *     represented (founder, 2026-09-16). Representation Start Date keeps all
  *     three, and that asymmetry is the point.
+ *
+ * BACKLOG-3613: End Date is on the EDIT screen only (`showEndDate`). Creating a
+ * deal shows the start date alone — same grid, same width — and the tooltip
+ * explains the start date only. The bullets above describe the edit layout;
+ * the "create mode" block at the bottom pins the new-deal layout.
  */
 
 import React from "react";
@@ -54,15 +59,16 @@ const baseProps = {
   suggestions: [],
 };
 
-const renderStep = (overrides: Partial<AddressData> = {}) =>
+const renderStep = (overrides: Partial<AddressData> = {}, showEndDate = true) =>
   render(
     <AddressVerificationStep
       {...baseProps}
       addressData={{ ...addressData, ...overrides }}
+      showEndDate={showEndDate}
     />,
   );
 
-describe("AddressVerificationStep — dates section", () => {
+describe("AddressVerificationStep — dates section (edit mode, showEndDate)", () => {
   it("does not render a Closing Date field", () => {
     renderStep();
     expect(screen.queryByTestId("create-audit-closing-date-input")).toBeNull();
@@ -70,20 +76,25 @@ describe("AddressVerificationStep — dates section", () => {
     expect(screen.queryByText(/Scheduled closing date/i)).toBeNull();
   });
 
-  it("puts Representation Start Date and End Date in one responsive grid row", () => {
+  it("puts Representation Start Date, End Date and Listing Price in one responsive grid row", () => {
     renderStep();
     const start = screen.getByTestId("create-audit-start-date-input");
     const end = screen.getByTestId("create-audit-end-date-input");
+    const listing = screen.getByTestId("create-audit-listing-price-input");
 
-    // Each input sits in its own cell <div>; both cells must share one parent,
+    // Each input sits in its own cell <div>; the cells must share one parent,
     // and that parent is the grid. A revert to a full-width Start Date block
-    // above the row gives them different parents.
-    const startCell = start.closest("div")!.parentElement!;
-    const endCell = end.closest("div")!.parentElement!;
-    expect(startCell).toBe(endCell);
-    expect(startCell.className).toContain("grid");
-    expect(startCell.className).toContain("grid-cols-1");
-    expect(startCell.className).toContain("sm:grid-cols-2");
+    // above the row gives them different parents. BACKLOG-3614 added the
+    // Listing Price as the row's third cell (its input sits one level deeper,
+    // inside the dollar-sign wrapper).
+    const row = screen.getByTestId("create-audit-dates-row");
+    expect(start.closest("div")!.parentElement).toBe(row);
+    expect(end.closest("div")!.parentElement).toBe(row);
+    expect(listing.closest("div")!.parentElement!.parentElement).toBe(row);
+    expect(row.children).toHaveLength(3);
+    expect(row.className).toContain("grid");
+    expect(row.className).toContain("grid-cols-1");
+    expect(row.className).toContain("sm:grid-cols-3");
   });
 
   it("puts the one InfoTooltip on the Transaction Dates heading, not on the start-date label", () => {
@@ -203,5 +214,120 @@ describe("AddressVerificationStep — dates section", () => {
     expect(
       screen.getByTestId("create-audit-start-date-input").className,
     ).toContain("border-gray-300");
+  });
+});
+
+describe("AddressVerificationStep — dates section (create mode, BACKLOG-3613)", () => {
+  // No showEndDate prop at all: create mode is the default.
+  const renderCreate = (overrides: Partial<AddressData> = {}) =>
+    render(
+      <AddressVerificationStep
+        {...baseProps}
+        addressData={{ ...addressData, ...overrides }}
+      />,
+    );
+
+  it("does not render an End Date field", () => {
+    const { container } = renderCreate();
+    expect(screen.queryByTestId("create-audit-end-date-input")).toBeNull();
+    expect(screen.queryByText("End Date")).toBeNull();
+    expect(container.querySelectorAll('input[type="date"]')).toHaveLength(1);
+  });
+
+  it("puts Representation Start Date and Listing Price side by side, start date required", () => {
+    renderCreate();
+    const start = screen.getByTestId("create-audit-start-date-input");
+    const grid = start.closest("div")!.parentElement!;
+    expect(grid).toBe(screen.getByTestId("create-audit-dates-row"));
+    expect(grid.className).toContain("grid");
+    // One column below sm: (stacked), two from sm: up: start date left,
+    // Listing Price right (founder, 2026-09-29, BACKLOG-3614).
+    expect(grid.className).toContain("grid-cols-1");
+    expect(grid.className).toContain("sm:grid-cols-2");
+    expect(grid.children).toHaveLength(2);
+    expect(grid.children[0]).toBe(start.parentElement);
+    expect(
+      grid.children[1].contains(screen.getByTestId("create-audit-listing-price-input")),
+    ).toBe(true);
+
+    const label = start.parentElement!.querySelector("label")!;
+    expect(label.textContent).toContain("Representation Start Date *");
+    expect(start).toBeRequired();
+    expect(Array.from(start.parentElement!.children).map((el) => el.tagName)).toEqual([
+      "LABEL",
+      "INPUT",
+    ]);
+  });
+
+  it("explains the start date only in the one tooltip", async () => {
+    const user = userEvent.setup();
+    const { container } = renderCreate();
+    const icons = container.querySelectorAll('[data-testid="info-tooltip-trigger"]');
+    expect(icons).toHaveLength(1);
+    const heading = screen.getByText("Transaction Dates");
+    expect(heading.contains(icons[0])).toBe(true);
+
+    await user.hover(icons[0]);
+    const bubble = screen.getByRole("tooltip");
+    expect(bubble).toHaveTextContent(
+      "when you started representing this client on this deal.",
+    );
+    expect(bubble.textContent).not.toMatch(/End Date/);
+    expect(bubble.textContent).not.toMatch(/the last date you communicated/);
+
+    const names = Array.from(bubble.querySelectorAll("strong"));
+    expect(names.map((el) => el.textContent)).toEqual(["Representation Start Date"]);
+    expect(names[0].className).toContain("block");
+    expect(names[0].className).toContain("font-semibold");
+    const list = bubble.firstElementChild!;
+    expect(list.className).toContain("space-y-3");
+    expect(list.children).toHaveLength(1);
+    expect(list.children[0].firstElementChild).toBe(names[0]);
+  });
+
+  it("still flags an empty Representation Start Date in red", () => {
+    renderCreate({ started_at: "" });
+    expect(
+      screen.getByTestId("create-audit-start-date-input").className,
+    ).toContain("border-red-300");
+  });
+});
+
+describe("AddressVerificationStep — Listing Price (BACKLOG-3614)", () => {
+  it.each([
+    ["create", false],
+    ["edit", true],
+  ])("%s: optional — no asterisk, not required, no red border when blank", (_mode, showEndDate) => {
+    render(
+      <AddressVerificationStep
+        {...baseProps}
+        addressData={{ ...addressData, listing_price_text: "" }}
+        showEndDate={showEndDate}
+      />,
+    );
+    const input = screen.getByTestId("create-audit-listing-price-input");
+    const label = screen.getByText("Listing Price");
+    expect(label.textContent!.trim()).toBe("Listing Price");
+    expect(label.textContent).not.toContain("*");
+    expect(input).not.toBeRequired();
+    expect(input.className).not.toMatch(/red/);
+    expect(input).toHaveAttribute("inputmode", "decimal");
+    expect(input).toHaveValue("");
+  });
+
+  it("shows the given text and reports each change with commas added", async () => {
+    const onListingPriceChange = jest.fn();
+    render(
+      <AddressVerificationStep
+        {...baseProps}
+        addressData={{ ...addressData, listing_price_text: "525,000" }}
+        onListingPriceChange={onListingPriceChange}
+      />,
+    );
+    const input = screen.getByTestId("create-audit-listing-price-input");
+    expect(input).toHaveValue("525,000");
+    await userEvent.type(input, "1");
+    // regrouped as it is typed, not "525,0001"
+    expect(onListingPriceChange).toHaveBeenLastCalledWith("5,250,001");
   });
 });

@@ -23,6 +23,7 @@ export { databaseBackupBridge } from "./databaseBackupBridge";
 export { privacyBridge } from "./privacyBridge";
 export { failureLogBridge } from "./failureLogBridge";
 export { featureGateBridge } from "./featureGateBridge";
+export { checklistBridge } from "./checklistBridge";
 export { entitlementBridge } from "./entitlementBridge";
 export { paymentBridge, paymentEventBridge } from "./paymentBridge";
 export { supportBridge } from "./supportBridge";

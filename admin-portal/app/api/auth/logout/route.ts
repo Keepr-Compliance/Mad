@@ -3,14 +3,20 @@
  *
  * Server-side logout handler that:
  * 1. Logs the auth.logout event to admin_audit_logs (SOC 2 CC6.2)
- * 2. Signs the user out of Supabase
- * 3. Returns success/failure status
+ * 2. Ends this browser's session only (BACKLOG-3601: `signOutLocal`)
+ * 3. Clears the Supabase auth cookies on the response, on success AND failure
+ * 4. Returns success/failure status
  *
- * Called from AuthProvider.signOut() on the client side.
+ * Called by the sign-out function in components/providers/AuthProvider.tsx.
  */
 
 import { createClient } from '@/lib/supabase/server';
 import { NextRequest, NextResponse } from 'next/server';
+import { isAuthError } from '@supabase/supabase-js';
+import { clearAuthCookies, signOutLocal } from '@/lib/auth/signOutLocal';
+
+/** Body text for a sign-out failure that is not a Supabase auth error. */
+const SIGN_OUT_FAILED = 'Sign-out failed';
 
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
@@ -47,11 +53,15 @@ export async function POST(request: NextRequest) {
   }
 
   // Sign out regardless of audit log success
-  const { error } = await supabase.auth.signOut();
+  const { error } = await signOutLocal(supabase);
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
-
-  return NextResponse.json({ success: true });
+  const response = error
+    ? NextResponse.json(
+        { error: isAuthError(error) ? error.message : SIGN_OUT_FAILED },
+        { status: 500 }
+      )
+    : NextResponse.json({ success: true });
+  // Cleared on both paths, so a failed sign-out cannot leave this browser signed in.
+  clearAuthCookies(request, response);
+  return response;
 }

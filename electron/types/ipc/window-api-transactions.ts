@@ -1036,6 +1036,11 @@ export interface WindowApiTransactions {
      * structurally cannot see them.
      */
     flaggedWithoutAttachments?: number;
+    /**
+     * BACKLOG-3600: set only when the submission succeeded but its checklists
+     * did not all reach the broker. Mirrors `SubmissionResult.checklistsNotSent`.
+     */
+    checklistsNotSent?: "not_in_plan" | "refused" | "brokerChecklistsNotDownloaded";
     error?: string;
   }>;
 
@@ -1055,6 +1060,11 @@ export interface WindowApiTransactions {
      * structurally cannot see them.
      */
     flaggedWithoutAttachments?: number;
+    /**
+     * BACKLOG-3600: set only when the submission succeeded but its checklists
+     * did not all reach the broker. Mirrors `SubmissionResult.checklistsNotSent`.
+     */
+    checklistsNotSent?: "not_in_plan" | "refused" | "brokerChecklistsNotDownloaded";
     error?: string;
   }>;
 
@@ -1170,5 +1180,31 @@ export interface WindowApiTransactions {
    */
   onReviewQueueChanged: (
     callback: (data: ReviewQueueChangedDto) => void,
+  ) => () => void;
+
+  /**
+   * BACKLOG-3595: fires after main has written a new submission_status (and
+   * review notes) to the local row. Shape matches the preload bridge
+   * (transactionBridge.ts). Returns an unsubscribe.
+   */
+  onSubmissionStatusChanged: (
+    callback: (data: {
+      transactionId: string;
+      propertyAddress: string;
+      oldStatus: string;
+      newStatus: string;
+      reviewNotes?: string;
+      title: string;
+      message: string;
+    }) => void,
+  ) => () => void;
+
+  /**
+   * BACKLOG-3595: fires after main has added a broker checklist to this
+   * transaction's local checklists with no status change (an owed pull
+   * landed). Never raises a notification. Returns an unsubscribe.
+   */
+  onChecklistsChanged: (
+    callback: (data: { transactionId: string }) => void,
   ) => () => void;
 }

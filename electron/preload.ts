@@ -58,6 +58,7 @@ import {
   privacyBridge,
   failureLogBridge,
   featureGateBridge,
+  checklistBridge,
   entitlementBridge,
   paymentBridge,
   paymentEventBridge,
@@ -153,6 +154,9 @@ contextBridge.exposeInMainWorld("api", {
 
   // Feature gate enforcement (SPRINT-122)
   featureGate: featureGateBridge,
+
+  // Transaction checklists (BACKLOG-3475)
+  checklists: checklistBridge,
 
   // Per-transaction paywall entitlement (BACKLOG-2006a)
   entitlement: entitlementBridge,

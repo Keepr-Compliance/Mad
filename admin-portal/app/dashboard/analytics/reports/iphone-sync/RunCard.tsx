@@ -8,10 +8,13 @@
 
 import { AlertTriangle, CheckCircle2, MinusCircle, XCircle, type LucideIcon } from 'lucide-react';
 import {
+  endedByLabel,
   formatCount,
   formatGb,
   formatMinutesLabel,
   formatUtc,
+  phaseLabel,
+  reasonCodeLabel,
   type OutcomeTone,
   type SyncRun,
 } from '@/lib/reports/iphone-sync';
@@ -199,7 +202,7 @@ export function RunCard({ run }: { run: SyncRun }) {
  * "this build does not report it yet".
  */
 function RunEvidence({ run }: { run: SyncRun }) {
-  const items: { label: string; value: string }[] = [];
+  const items: { label: string; value: string; raw?: string }[] = [];
   if (run.startedAtIso) items.push({ label: 'Started', value: formatUtc(run.startedAtIso) });
   if (run.bytesTransferred != null) {
     items.push({ label: 'Bytes moved', value: formatGb(run.bytesTransferred) });
@@ -207,9 +210,24 @@ function RunEvidence({ run }: { run: SyncRun }) {
   if (run.bytesLastIncreasedAtIso) {
     items.push({ label: 'Bytes last increased', value: formatUtc(run.bytesLastIncreasedAtIso) });
   }
-  if (run.lastPhaseRaw) items.push({ label: 'Last phase', value: run.lastPhaseRaw });
-  if (run.endedBy) items.push({ label: 'Ended by', value: run.endedBy });
-  if (run.reasonCode) items.push({ label: 'Reason', value: run.reasonCode });
+  // Founder QA 2026-09-19: these three arrived as raw codes —
+  // `backup:waiting-for-device`, `INSUFFICIENT_SPACE` — beside a phase chart
+  // already saying "Waiting for device". They are read by people, so they are
+  // written for people; the raw code stays in `title` for anyone matching this
+  // against a log or a database row.
+  if (run.lastPhaseRaw) {
+    items.push({
+      label: 'Last phase',
+      value: phaseLabel(run.lastPhaseRaw),
+      raw: run.lastPhaseRaw,
+    });
+  }
+  if (run.endedBy) {
+    items.push({ label: 'Ended by', value: endedByLabel(run.endedBy), raw: run.endedBy });
+  }
+  if (run.reasonCode) {
+    items.push({ label: 'Reason', value: reasonCodeLabel(run.reasonCode), raw: run.reasonCode });
+  }
 
   if (items.length === 0) return null;
 
@@ -218,7 +236,12 @@ function RunEvidence({ run }: { run: SyncRun }) {
       {items.map((item) => (
         <div key={item.label}>
           <dt className="text-xs text-gray-500">{item.label}</dt>
-          <dd className="tabular-nums text-gray-900">{item.value}</dd>
+          <dd
+            className={item.raw ? 'text-gray-900' : 'tabular-nums text-gray-900'}
+            title={item.raw}
+          >
+            {item.value}
+          </dd>
         </div>
       ))}
     </dl>

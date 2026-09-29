@@ -145,6 +145,7 @@ import { registerEmailLinkingHandlers } from "./handlers/emailLinkingHandlers";
 import { registerEmailAutoLinkHandlers } from "./handlers/emailAutoLinkHandlers";
 import { registerReviewQueueHandlers } from "./handlers/reviewQueueHandlers";
 import { registerHiddenTextHandlers } from "./handlers/hiddenTextHandlers";
+import { registerChecklistHandlers } from "./handlers/checklistHandlers";
 import { registerAttachmentHandlers } from "./handlers/attachmentHandlers";
 import { registerContactHandlers } from "./handlers/contactHandlers";
 import { registerAddressHandlers } from "./handlers/addressHandlers";
@@ -1756,6 +1757,8 @@ app.whenReady().then(async () => {
   registerReviewQueueHandlers();
   // BACKLOG-3366: hide / unhide individual texts from a transaction's export.
   registerHiddenTextHandlers();
+  // BACKLOG-3475: transaction checklists — broker templates, items, evidence links.
+  registerChecklistHandlers();
   registerAttachmentHandlers(mainWindow!);
   registerContactHandlers(mainWindow!);
   registerAddressHandlers();

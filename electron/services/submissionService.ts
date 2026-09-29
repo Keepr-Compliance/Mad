@@ -40,6 +40,15 @@ import emailAttachmentService from "./emailAttachmentService";
 import gmailFetchService from "./gmailFetchService";
 import outlookFetchService from "./outlookFetchService";
 import { TRANSACTION_EMAILS_MISSING_ATTACHMENTS_SQL } from "./db/submissionEmailSql";
+import { snapshotSubmissionChecklists } from "./submissionChecklistSnapshot";
+import {
+  notifyChecklistsChanged,
+  retryOwedReviewChecklistPull,
+  beginResubmitChecklistGuard,
+  endResubmitChecklistGuard,
+} from "./submissionChecklistPull";
+// BACKLOG-3599: direct, not through the databaseService facade.
+import { getOwedReviewChecklistPullsFor } from "./db/submissionDbService";
 // BACKLOG-2758 finding 3: party names come from the SAME resolver the exported
 // PDF uses, not from a second read of the macOS AddressBook. The AddressBook is
 // still consulted — as tier 3 inside that resolver — so no name previously
@@ -95,7 +104,33 @@ export interface SubmissionResult {
    * send these", and the two are now distinguishable.
    */
   flaggedWithoutAttachments: number;
+  /**
+   * BACKLOG-3600: set only on a SUCCESSFUL submission whose checklists did not
+   * all reach the broker. Absent means nothing to say.
+   *   not_in_plan  the org's plan does not include checklists (RLS 42501)
+   *   refused      the cloud refused the copy for any other reason
+   * A transient failure never sets this — it fails the submission instead.
+   *   brokerChecklistsNotDownloaded  (BACKLOG-3599, resubmit only) the
+   *               checklists the broker added at review were still owed and
+   *               could not be downloaded first, so this version lacks them.
+   *               The 3600 reasons take precedence when both apply.
+   */
+  checklistsNotSent?: ChecklistsNotSentReason;
 }
+
+/** Why a submitted version lacks checklists (BACKLOG-3600, BACKLOG-3599). */
+export type ChecklistsNotSentReason =
+  | "not_in_plan"
+  | "refused"
+  | "brokerChecklistsNotDownloaded";
+
+/**
+ * BACKLOG-3600 — the agent-facing sentence when the checklist copy failed on
+ * every attempt. It is thrown while the submission is still `uploading`, so the
+ * catch below deletes it and the modal shows this text as the failure.
+ */
+export const CHECKLISTS_NOT_SENT_ERROR =
+  "Your checklists could not be sent to your broker, so nothing was submitted. Check your connection and try again.";
 
 /** Progress stages for submission flow */
 export type SubmissionStage =
@@ -177,6 +212,21 @@ interface SubmissionRecord {
   message_count: number;
   attachment_count: number;
   submission_metadata?: Record<string, unknown>;
+  // BACKLOG-3519 / BACKLOG-3520 (commission figures only; the split is NOT
+  // part of this record). A field is `undefined` -- never `null` -- when the
+  // agent entered no figure, so its key is dropped by `JSON.stringify` and the
+  // INSERT body carries nothing new (`.insert()` takes a single object, so
+  // postgrest-js derives no `columns=` from `Object.keys()`).
+  //
+  // WHEN A FIGURE IS ENTERED these keys DO reach the wire. Against a database
+  // where the 3519 migration has not been applied, PostgREST answers PGRST204
+  // (unknown column) and the submission fails. That is deliberate: stripping
+  // the keys on failure would submit a record that silently lacks what the
+  // agent typed. The migration must be applied first.
+  commission_offered_rate?: number;
+  commission_actual_rate?: number;
+  commission_gross_amount?: number;
+  commission_adjustment_reason?: string;
 }
 
 /** Record structure for submission_messages table */
@@ -204,6 +254,11 @@ interface SubmissionAttachmentRecord {
   file_size_bytes?: number;
   storage_path: string;
   document_type?: string;
+  /**
+   * BACKLOG-3477: the LOCAL `attachments.id` this row was uploaded from. The
+   * checklist snapshot matches evidence links on it. Not unique in the cloud.
+   */
+  local_attachment_id: string | null;
 }
 
 /** Cloud submission status response */
@@ -280,14 +335,100 @@ class SubmissionService {
 
     const newVersion = (existingSubmission?.version || 1) + 1;
 
-    return this.submitTransactionInternal(
-      transactionId,
-      {
-        version: newVersion,
-        parentSubmissionId: transaction.submission_id,
-      },
-      onProgress
-    );
+    // BACKLOG-3599 (SR condition 3): a broker checklist still owed from an
+    // earlier review would be missing from this version's snapshot. Try the
+    // owed pull once, BEFORE Stage 1 — no 'uploading' row exists yet, so the
+    // pull's timeouts never hold one open. Never blocks the resubmit.
+    //
+    // BACKLOG-3607 (SR R-1): from here until the submit returns, no other pull
+    // writes onto this transaction's checklists (the sync pass returns kept).
+    beginResubmitChecklistGuard(transactionId);
+    let owedPullsLanded: boolean;
+    let result: SubmissionResult;
+    try {
+      owedPullsLanded = await this.pullOwedReviewChecklistsBeforeResubmit(
+        transactionId
+      );
+
+      result = await this.submitTransactionInternal(
+        transactionId,
+        {
+          version: newVersion,
+          parentSubmissionId: transaction.submission_id,
+        },
+        onProgress
+      );
+    } finally {
+      endResubmitChecklistGuard(transactionId);
+    }
+    if (result.success && !owedPullsLanded && !result.checklistsNotSent) {
+      result.checklistsNotSent = "brokerChecklistsNotDownloaded";
+    }
+    return result;
+  }
+
+  /**
+   * BACKLOG-3599: attempt every owed broker-checklist pull of this transaction.
+   * Returns true when nothing is owed afterwards (or nothing was owed). A
+   * success clears the marker (inside `retryOwedReviewChecklistPull`); a
+   * failure keeps it for the sync pass. Never throws.
+   *
+   * If the local owed set cannot be READ, it returns true (logged): with no
+   * evidence anything is owed, the agent is not told something is missing.
+   * The sync pass still retries any marker that exists.
+   */
+  private async pullOwedReviewChecklistsBeforeResubmit(
+    transactionId: string
+  ): Promise<boolean> {
+    let owed: string[];
+    try {
+      owed = getOwedReviewChecklistPullsFor(transactionId);
+    } catch (error) {
+      logService.warn(
+        `[Submission] Could not read owed broker checklist pulls before resubmit: ${error instanceof Error ? error.message : "Unknown error"}`,
+        "SubmissionService"
+      );
+      return true;
+    }
+    if (owed.length === 0) return true;
+    try {
+      const client = supabaseService.getClient();
+      let allLanded = true;
+      for (const submissionId of owed) {
+        // The resubmit's own pull: it runs inside the guard, before the new
+        // version reads the local set.
+        const outcome = await retryOwedReviewChecklistPull(
+          client,
+          transactionId,
+          submissionId,
+          { ownResubmit: true }
+        );
+        // BACKLOG-3595: the rows are committed; an open Checklist tab re-reads.
+        if (
+          outcome.status === "pulled" &&
+          (outcome.added.length > 0 || outcome.removed.length > 0)
+        ) {
+          notifyChecklistsChanged(transactionId);
+        }
+        // BACKLOG-3607: "superseded" counts as landed - the version that pull
+        // would have fed already exists, and the agent was told when it was
+        // submitted. Only "kept" means something is still missing.
+        if (outcome.status === "kept") {
+          allLanded = false;
+          logService.warn(
+            `[Submission] Owed broker checklists for submission ${submissionId} could not be downloaded before resubmit: ${outcome.reason}`,
+            "SubmissionService"
+          );
+        }
+      }
+      return allLanded;
+    } catch (error) {
+      logService.warn(
+        `[Submission] Owed broker checklist check failed before resubmit: ${error instanceof Error ? error.message : "Unknown error"}`,
+        "SubmissionService"
+      );
+      return false;
+    }
   }
 
   /**
@@ -858,10 +999,21 @@ class SubmissionService {
       // Stage 5: Insert attachment metadata (10%)
       const successfulUploads = attachmentUploadResults.filter((r) => r.success);
       if (successfulUploads.length > 0) {
-        const attachmentRecords = successfulUploads.map((upload, idx) => {
-          const originalAttachment = attachments.find(
-            (a) => a.storage_path === upload.localId || a.id === upload.localId
-          );
+        const attachmentRecords = successfulUploads.map((upload) => {
+          // BACKLOG-3477: `upload.localId` is the local FILE PATH, and local
+          // attachment files are content-addressed — two attachment rows with
+          // the same bytes share one path, so a find() by path names the first
+          // row for both. `uploadAttachments` returns one result per input, in
+          // input order, so the row this upload came from is the one at the
+          // same index. The find() stays as the fallback.
+          const paired = attachments[attachmentUploadResults.indexOf(upload)];
+          const originalAttachment =
+            paired &&
+            (paired.storage_path === upload.localId || paired.id === upload.localId)
+              ? paired
+              : attachments.find(
+                  (a) => a.storage_path === upload.localId || a.id === upload.localId
+                );
           return this.mapToSubmissionAttachment(
             upload,
             submissionId,
@@ -879,6 +1031,26 @@ class SubmissionService {
             "SubmissionService"
           );
         }
+      }
+
+      // Stage 5b (BACKLOG-3477): copy every checklist while the submission is
+      // still 'uploading' — the copy tables refuse inserts after finalize.
+      // BACKLOG-3600: a transient failure (retries exhausted) FAILS the
+      // submission here, before finalize, so the catch removes the uploading
+      // row and the broker never sees a version without its checklists. A
+      // permanent refusal (plan without checklists, or drift) submits and
+      // reports `checklistsNotSent` so the agent is told.
+      const checklistOutcome = await snapshotSubmissionChecklists(
+        client,
+        submissionId,
+        transactionId
+      );
+      let checklistsNotSent: ChecklistsNotSentReason | undefined;
+      if (checklistOutcome.status === "failed") {
+        if (checklistOutcome.kind === "transient") {
+          throw new Error(CHECKLISTS_NOT_SENT_ERROR);
+        }
+        checklistsNotSent = checklistOutcome.kind;
       }
 
       // Stage 6: Finalize submission — all data written, mark as 'submitted'
@@ -937,6 +1109,7 @@ class SubmissionService {
         attachmentsFailed: attachmentUploadResults.filter((r) => !r.success)
           .length,
         flaggedWithoutAttachments,
+        ...(checklistsNotSent ? { checklistsNotSent } : {}),
       };
     } catch (error) {
       const errorMessage =
@@ -1406,6 +1579,19 @@ class SubmissionService {
         detection_source: transaction.detection_source,
         detection_confidence: transaction.detection_confidence,
       },
+      // BACKLOG-3519 (Commission M2, figures only). `??`, NOT `||`: a rate of
+      // exactly 0 is a legal, CHECK-permitted value (a referral rebate, for
+      // instance) and must survive -- `0 || undefined` would silently drop it,
+      // which `sale_price`/`listing_price` above get away with only because a
+      // real-world price is never legitimately 0. `commission_adjustment_reason`
+      // is the one field that keeps `||`, deliberately: an empty string IS
+      // absent here, because the migration's CHECK rejects a zero-length
+      // (post-trim) reason and a blanked form field produces "" the same way it
+      // does for the date fields elsewhere in this function.
+      commission_offered_rate: transaction.commission_offered_rate ?? undefined,
+      commission_actual_rate: transaction.commission_actual_rate ?? undefined,
+      commission_gross_amount: transaction.commission_gross_amount ?? undefined,
+      commission_adjustment_reason: transaction.commission_adjustment_reason || undefined,
     };
   }
 
@@ -1541,6 +1727,7 @@ class SubmissionService {
         uploadResult.fileSizeBytes || originalAttachment?.file_size_bytes,
       storage_path: uploadResult.storagePath,
       document_type: originalAttachment?.document_type,
+      local_attachment_id: originalAttachment?.id ?? null,
     };
   }
 

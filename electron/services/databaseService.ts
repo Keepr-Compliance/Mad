@@ -55,6 +55,20 @@ import {
   V71_RENAME_THREAD_NAMES_SQL,
   V71_RECREATE_THREAD_NAME_INDEX_SQL,
 } from "./db/migrationV71Sql";
+// BACKLOG-3476: migration v72's SQL, same rule as v71's.
+import {
+  V72_CHECKLIST_INDEX_LIST_SQL,
+  V72_INDEX_COLUMNS_SQL,
+  V72_CREATE_CHECKLISTS_NEW_SQL,
+  V72_COPY_CHECKLISTS_SQL,
+  V72_DROP_CHECKLISTS_SQL,
+  V72_RENAME_CHECKLISTS_SQL,
+} from "./db/migrationV72Sql";
+// BACKLOG-3519: migration v73's SQL text, same boundary rule.
+import {
+  V73_TRANSACTIONS_TABLE_INFO_SQL,
+  V73_ADD_COMMISSION_COLUMNS_SQL,
+} from "./db/migrationV73Sql";
 import {
   SCHEMA_VERSION_UPDATE_SQL,
   SCHEMA_VERSION_TABLE_EXISTS_SQL,
@@ -1367,6 +1381,60 @@ class DatabaseService implements IDatabaseService {
           `[v71] deduped ${losers.length} duplicate attachment row(s); ` +
             `dropped ${blankNamesDropped} blank thread name(s)`,
         );
+      },
+    },
+    {
+      version: 72,
+      description:
+        "BACKLOG-3476 transaction_checklists: several per transaction " +
+        "(UNIQUE (transaction_id, template_id) + sort_order; table rebuild)",
+      // Same runner conditions as v71: synchronous, raw d.prepare / d.exec on the
+      // handle passed in, foreign_keys OFF for the whole body.
+      migrate: (d) => {
+        // Guarded: only the old shape carries a UNIQUE index on exactly
+        // (transaction_id). A fresh install builds the new shape from schema.sql
+        // and still runs v72 (schema_version is seeded at BASELINE 70), so this
+        // is a no-op there, and the migration is re-runnable.
+        const uniqueIndexes = (
+          d.prepare(V72_CHECKLIST_INDEX_LIST_SQL).all() as Array<{ name: string; origin: string }>
+        ).filter((index) => index.origin === "u");
+        const hasOldShape = uniqueIndexes.some((index) => {
+          const columns = (
+            d.prepare(V72_INDEX_COLUMNS_SQL).all(index.name) as Array<{ name: string }>
+          ).map((column) => column.name);
+          return columns.length === 1 && columns[0] === "transaction_id";
+        });
+        if (!hasOldShape) {
+          return;
+        }
+
+        // Order: create new, copy, drop old, rename new. See migrationV72Sql.ts
+        // for why renaming the old table aside first would kill the cascades.
+        d.exec(V72_CREATE_CHECKLISTS_NEW_SQL);
+        const copied = d.prepare(V72_COPY_CHECKLISTS_SQL).run().changes;
+        d.exec(V72_DROP_CHECKLISTS_SQL);
+        d.exec(V72_RENAME_CHECKLISTS_SQL);
+
+        hostLogger.info(`[v72] rebuilt transaction_checklists, copied ${copied} row(s)`);
+      },
+    },
+    {
+      version: 73,
+      description:
+        "BACKLOG-3519 commission figures on transactions: commission_offered_rate, " +
+        "commission_actual_rate, commission_gross_amount, commission_adjustment_reason",
+      // Guarded like v71's provider_attachment_id: a FRESH install already has all
+      // four columns from schema.sql (schema_version seeds at BASELINE 70, then this
+      // migration still runs), so checking one column's presence is enough to make
+      // the ALTER TABLE block a no-op there and keep this migration re-runnable.
+      // No index: nothing queries transactions by these columns.
+      migrate: (d) => {
+        const hasCol = (
+          d.prepare(V73_TRANSACTIONS_TABLE_INFO_SQL).all() as Array<{ name: string }>
+        ).some((c) => c.name === "commission_offered_rate");
+        if (!hasCol) {
+          d.exec(V73_ADD_COMMISSION_COLUMNS_SQL);
+        }
       },
     },
   ];

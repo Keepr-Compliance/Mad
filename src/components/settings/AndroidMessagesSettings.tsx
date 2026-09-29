@@ -387,7 +387,8 @@ export function AndroidMessagesSettings({ userId }: AndroidMessagesSettingsProps
               <p className="text-xs text-amber-700 mt-1">
                 This deletes all synced messages and contacts from the local database,
                 then stops the sync server. Open the companion app and tap Sync Now to
-                re-import everything from scratch.
+                re-import everything from scratch. Links from checklist items to
+                those messages&rsquo; attachments are removed too.
               </p>
               <div className="flex gap-2 mt-2">
                 <button

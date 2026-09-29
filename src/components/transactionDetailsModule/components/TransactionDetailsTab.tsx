@@ -67,6 +67,11 @@ interface TransactionDetailsTabProps {
    * the matching conversation card.
    */
   onNavigateToTab?: (payload: { tab: TransactionTab; highlight?: HighlightTarget }) => void;
+  /**
+   * BACKLOG-3476: the checklist progress line, rendered directly after Summary.
+   * The caller decides whether there is one; this tab only places it.
+   */
+  checklistSection?: React.ReactNode;
 
   // BACKLOG-2367 — removed-contacts restore section under Key Contacts.
   /**
@@ -136,6 +141,7 @@ export function TransactionDetailsTab({
   isOnline = true,
   onContactUpdated,
   onNavigateToTab,
+  checklistSection,
   onContactRestoreComplete,
   onShowSuccess,
   onShowError,
@@ -468,6 +474,8 @@ export function TransactionDetailsTab({
           )}
         </div>
       </div>
+
+      {checklistSection}
 
       {/* AI Suggested Contacts Section - only show if there are suggestions */}
       {resolvedSuggestions.length > 0 && onAcceptSuggestion && onRejectSuggestion && onAcceptAll && (

@@ -26,6 +26,16 @@ import type {
 } from "./types";
 import { INITIAL_APP_STATE } from "./types";
 
+/**
+ * BACKLOG-3410: pre-auth rejection reasons after which main has already
+ * deleted session.json (preAuthValidationHandler.ts returns these only when
+ * clearSession() succeeded). Only these may proceed to open the DB.
+ */
+const PRE_AUTH_REJECTIONS_WITH_SESSION_CLEARED: ReadonlySet<string> = new Set([
+  "token_invalid",
+  "session_revoked",
+]);
+
 // ============================================
 // EXTENDED ACTION TYPES (for reducer context)
 // ============================================
@@ -241,6 +251,21 @@ export function appStateReducer(
       }
 
       if (!action.valid) {
+        // BACKLOG-3410: main has already DELETED the rejected session for these
+        // reasons (preAuthValidationHandler.ts), so opening the DB now is the
+        // same as a no-session start: Phase 3 finds no user and shows Login with
+        // the DB open, and a later sign-in can use it. Explicit allow-list —
+        // any other reason (offline_grace_expired, session_clear_failed, missing
+        // or unknown) leaves the session on disk and must keep the DB closed.
+        if (
+          action.reason !== undefined &&
+          PRE_AUTH_REJECTIONS_WITH_SESSION_CLEARED.has(action.reason)
+        ) {
+          return {
+            status: "loading",
+            phase: "initializing-db",
+          };
+        }
         // Auth failed pre-DB -- go to unauthenticated WITHOUT ever opening DB
         return {
           status: "unauthenticated",
