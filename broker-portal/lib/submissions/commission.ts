@@ -85,3 +85,16 @@ export function finalCell(f: CommissionFigures): string {
   if (f.grossAmount !== null) parts.push(formatGross(f.grossAmount));
   return parts.length > 0 ? parts.join(' · ') : NO_FIGURE;
 }
+
+/**
+ * Submissions list cell (BACKLOG-3615): offered and actual rates.
+ * "3% → 2.5%" when they differ, "3%" when equal, either rate alone when only
+ * one was entered, "–" when neither.
+ */
+export function listCell(f: CommissionFigures): string {
+  const { offeredRate: o, actualRate: a } = f;
+  if (o === null && a === null) return NO_FIGURE;
+  if (o === null) return formatRate(a as number);
+  if (a === null) return formatRate(o);
+  return Math.round(o * 1000) === Math.round(a * 1000) ? formatRate(o) : `${formatRate(o)} → ${formatRate(a)}`;
+}
