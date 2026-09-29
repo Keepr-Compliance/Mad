@@ -230,6 +230,12 @@ class FakeSupabase {
         filters.push((r) => r[c] !== null && r[c] !== undefined);
         return builder;
       },
+      // BACKLOG-3607: `.is(col, null)`.
+      is: (c: string, v: unknown) => {
+        if (v !== null) throw new Error("FakeSupabase: unsupported is()");
+        filters.push((r) => r[c] === null || r[c] === undefined);
+        return builder;
+      },
       order: () => builder,
       limit: (n: number) => ((limitN = n), builder),
       maybeSingle: () => {
@@ -322,6 +328,8 @@ class FakeSupabase {
         sort_order: c.sort_order ?? 0,
         added_at_review_by: null,
         added_at_review_at: null,
+        removed_at_review_by: null,
+        removed_at_review_at: null,
       });
       n.checklists += 1;
       for (const it of (c.items as Row[]) ?? []) {
@@ -702,10 +710,44 @@ describe("BACKLOG-3477 — submit copies the transaction's checklists", () => {
     expect(warned?.[2]).toMatchObject({ code: "42501" });
   });
 
-  it("no checklist on the transaction: no call at all", async () => {
+  // BACKLOG-3607 (SR C-9): rewritten on purpose from "no checklist on the
+  // transaction: no call at all". The snapshot is the agent's whole set, so a
+  // transaction with none sends [] and the server records any checklist the
+  // agent removed since the previous version.
+  it("C9a: no checklist on the transaction -> [] is sent, written, and the agent is told nothing", async () => {
     const result = await submissionService.submitTransaction(TX);
     expect(result.success).toBe(true);
-    expect(fake.rpcCalls).toHaveLength(0);
+    expect("checklistsNotSent" in result).toBe(false);
+    expect(fake.rpcCalls).toHaveLength(1);
+    expect(fake.rpcCalls[0].fn).toBe(SNAPSHOT_RPC);
+    expect(fake.rpcCalls[0].args.p_checklists).toEqual([]);
+    expect(fake.rpcCalls[0].parentStatusAtCall).toBe("uploading");
+    expect(fake.tables.submission_checklists).toHaveLength(0);
+    expect(fake.tables.transaction_submissions.map((s) => s.status)).toEqual(["submitted"]);
+  });
+
+  it("C9a: the same with the plan off -> the 3607 server accepts [] and the agent is told nothing", async () => {
+    // Migration 20260929120000 section 5: no feature and no checklist on the
+    // version -> the carry returns {status: 'not_in_plan'}; the snapshot call
+    // succeeds with zero counts.
+    fake.checklistsFeatureAllowed = false;
+    const result = await submissionService.submitTransaction(TX);
+    expect(result.success).toBe(true);
+    expect("checklistsNotSent" in result).toBe(false);
+    expect(fake.rpcCalls).toHaveLength(1);
+    expect(fake.rpcCalls[0].args.p_checklists).toEqual([]);
+  });
+
+  it("C9b: a server without the 3607 migration refuses [] with 42501 -> submitted, not retried, no warning, no Sentry", async () => {
+    // Before 20260929120000 the carry (20260928170000) checks the feature
+    // before anything else: RAISE EXCEPTION 'not_authorized' USING ERRCODE '42501'.
+    fake.rpcScript = [{ code: "42501", message: "not_authorized" }];
+    const result = await submissionService.submitTransaction(TX);
+    expect(result.success).toBe(true);
+    expect("checklistsNotSent" in result).toBe(false);
+    expect(fake.rpcCalls).toHaveLength(1);
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+    expect(fake.tables.transaction_submissions.map((s) => s.status)).toEqual(["submitted"]);
   });
 });
 
@@ -1007,6 +1049,16 @@ describe("BACKLOG-3600 — the checklist copy is retried, then fails the submit"
     expect(fake.tables.transaction_submissions.map((s) => s.status)).toEqual(["submitted"]);
   });
 
+  it("C9b: a transient failure on [] still fails the submit (nothing reaches the broker)", async () => {
+    fake.rpcScript = ["network", "network", "network"];
+    const result = await submissionService.submitTransaction(TX);
+    expect(result.success).toBe(false);
+    expect(result.error).toBe(CHECKLISTS_NOT_SENT_ERROR);
+    expect(fake.rpcCalls).toHaveLength(3);
+    expect(fake.rpcCalls.every((c) => Array.isArray(c.args.p_checklists) && (c.args.p_checklists as unknown[]).length === 0)).toBe(true);
+    expect(fake.tables.transaction_submissions).toHaveLength(0);
+  });
+
   it("G2: the local checklist read fails -> nothing submitted, the agent is told why, no call", async () => {
     await seedChecklists();
     const spy = jest
@@ -1069,6 +1121,8 @@ describe("BACKLOG-3599 — resubmit with an owed broker checklist pull", () => {
       sort_order: 2,
       added_at_review_by: "broker-3599",
       added_at_review_at: "2026-09-27 23:04:54.012711+00",
+      removed_at_review_by: null,
+      removed_at_review_at: null,
     });
     fake.tables.submission_checklist_items.push({
       id: "item-broker-3599",
@@ -1094,8 +1148,9 @@ describe("BACKLOG-3599 — resubmit with an owed broker checklist pull", () => {
     const payload = fake.rpcCalls[fake.rpcCalls.length - 1].args.p_checklists as Row[];
     expect(payload.map((c) => c.template_id)).toContain(TPL_BROKER);
     expect(getOwedReviewChecklistPullsFor(TX)).toEqual([]);
-    // Before Stage 1: no uploading row existed while the pull read the cloud.
-    expect(fake.uploadingAtChecklistRead).toEqual([0]);
+    // Before Stage 1: no uploading row existed while the pull read the cloud
+    // (BACKLOG-3607: two header reads per pull, added and removed).
+    expect(fake.uploadingAtChecklistRead).toEqual([0, 0]);
     expect(fake.tables.transaction_submissions.map((s) => [s.id === v1, s.status])).toEqual([
       [true, "needs_changes"],
       [false, "resubmitted"],
@@ -1150,6 +1205,35 @@ describe("BACKLOG-3599 — resubmit with an owed broker checklist pull", () => {
       expect(sent).toEqual([
         { channel: "transaction-checklists-changed", rowsAtSend: before + 1, payload: { transactionId: TX } },
       ]);
+    });
+
+    // BACKLOG-3607: the broker removed the agent's Seller Disclosures checklist
+    // at review (migration 20260929120000 section 6 sets both markers).
+    it("the pre-pull only REMOVES a checklist -> transaction-checklists-changed once, after the delete; the new version omits it", async () => {
+      await seedChecklists();
+      const first = await submissionService.submitTransaction(TX);
+      expect(first.success).toBe(true);
+      const sid = first.submissionId!;
+      fake.tables.transaction_submissions.find((s) => s.id === sid)!.status = "needs_changes";
+      run(`UPDATE transactions SET submission_status = 'needs_changes' WHERE id = ?`, TX);
+      const disclosure = fake.tables.submission_checklists.find(
+        (h) => h.submission_id === sid && h.template_id === TPL_DISCLOSURE,
+      )!;
+      disclosure.removed_at_review_by = "broker-3607";
+      disclosure.removed_at_review_at = "2026-09-29 10:15:00+00";
+      expect(markReviewChecklistPullOwed(TX, sid)).toBe(true);
+      const before = localChecklistCount();
+
+      const second = await submissionService.resubmitTransaction(TX);
+
+      expect(second.success).toBe(true);
+      expect("checklistsNotSent" in second).toBe(false);
+      expect(sent).toEqual([
+        { channel: "transaction-checklists-changed", rowsAtSend: before - 1, payload: { transactionId: TX } },
+      ]);
+      const payload = fake.rpcCalls[fake.rpcCalls.length - 1].args.p_checklists as Row[];
+      expect(payload.map((c) => c.template_id)).toEqual([TPL_PURCHASE]);
+      expect(getOwedReviewChecklistPullsFor(TX)).toEqual([]);
     });
 
     it("the pre-pull fails -> nothing is sent", async () => {

@@ -712,6 +712,12 @@ class SubmissionSyncService {
           "SubmissionSyncService",
         );
       }
+      if (pulled.removed.length > 0) {
+        logService.info(
+          `[SyncService] Removed ${pulled.removed.length} checklist(s) the broker removed at review from ${local.id}`,
+          "SubmissionSyncService",
+        );
+      }
       return { write: true, added: pulled.added };
     } catch (error) {
       const failures = (this.reviewChecklistPullFailures.get(local.submission_id) ?? 0) + 1;
@@ -790,7 +796,10 @@ class SubmissionSyncService {
     for (const { transactionId, submissionIds } of owed) {
       for (const submissionId of submissionIds) {
         const outcome = await retryOwedReviewChecklistPull(client, transactionId, submissionId);
-        if (outcome.status === "pulled" && outcome.added.length > 0) {
+        if (
+          outcome.status === "pulled" &&
+          (outcome.added.length > 0 || outcome.removed.length > 0)
+        ) {
           notifyChecklistsChanged(transactionId);
         }
         if (outcome.status === "kept") {
@@ -801,7 +810,7 @@ class SubmissionSyncService {
         } else {
           logService.info(
             outcome.status === "pulled"
-              ? `[SyncService] Owed broker checklist pull landed for submission ${submissionId} (${outcome.added.length} added)`
+              ? `[SyncService] Owed broker checklist pull landed for submission ${submissionId} (${outcome.added.length} added, ${outcome.removed.length} removed)`
               : `[SyncService] Owed broker checklist pull dropped: submission ${submissionId} is final`,
             "SubmissionSyncService",
           );

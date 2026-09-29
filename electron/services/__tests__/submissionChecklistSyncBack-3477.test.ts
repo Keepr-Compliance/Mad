@@ -94,6 +94,11 @@ interface CloudState {
   /** Number of upcoming reads of submission_checklist_items that fail. */
   itemFetchFailures: number;
   /**
+   * BACKLOG-3607: number of upcoming reads of the checklists the broker
+   * REMOVED at review (`removed_at_review_by` not null) that fail.
+   */
+  removedFetchFailures: number;
+  /**
    * BACKLOG-3599 (SR condition 5): no session. Measured in production:
    * `SET ROLE anon; SELECT ... FROM submission_checklists` -> 42501 permission
    * denied (the policies are `authenticated` only). Every read is an ERROR,
@@ -114,11 +119,17 @@ const cloud: CloudState = {
   submission_checklist_items: [],
   checklistFetchFailures: 0,
   itemFetchFailures: 0,
+  removedFetchFailures: 0,
   signedOut: false,
   hiddenSubmissions: new Set(),
 };
 let realtimeCallback: ((payload: { new: unknown }) => void) | null = null;
 const checklistFetches: string[] = [];
+/**
+ * BACKLOG-3607: one pull reads `submission_checklists` twice - the checklists
+ * the broker added (not removed) and the ones the broker removed at review.
+ */
+const HEADER_READS_PER_PULL = 2;
 
 function query(table: string) {
   const filters: Array<(row: Record<string, unknown>) => boolean> = [];
@@ -127,6 +138,7 @@ function query(table: string) {
   // does. A fake that returned whole rows would hand the pull a column it
   // never asked for (the item id), and a control on it could not go red.
   let columns: string[] | null = null;
+  const notNullCols: string[] = [];
   const builder = {
     select: (list?: string) => {
       const cols = (list ?? "*").split(",").map((c) => c.trim()).filter(Boolean);
@@ -143,7 +155,14 @@ function query(table: string) {
     },
     not: (col: string, op: string, value: unknown) => {
       if (op !== "is" || value !== null) throw new Error("fake: unsupported not()");
+      notNullCols.push(col);
       filters.push((row) => row[col] !== null && row[col] !== undefined);
+      return builder;
+    },
+    // BACKLOG-3607: `.is(col, null)`, as PostgREST: the column is NULL.
+    is: (col: string, value: unknown) => {
+      if (value !== null) throw new Error("fake: unsupported is()");
+      filters.push((row) => row[col] === null || row[col] === undefined);
       return builder;
     },
     order: (col: string) => {
@@ -163,6 +182,13 @@ function query(table: string) {
           if (cloud.checklistFetchFailures > 0) {
             cloud.checklistFetchFailures--;
             return Promise.resolve({ data: null, error: { message: "fake network error" } }).then(
+              resolve,
+              reject,
+            );
+          }
+          if (notNullCols.includes("removed_at_review_by") && cloud.removedFetchFailures > 0) {
+            cloud.removedFetchFailures--;
+            return Promise.resolve({ data: null, error: { message: "fake removed read error" } }).then(
               resolve,
               reject,
             );
@@ -226,6 +252,7 @@ jest.mock("../supabaseService", () => ({
 
 import { submissionSyncService } from "../submissionSyncService";
 import {
+  addChecklistLink,
   getChecklistsForTransaction,
   removeChecklist,
   selectChecklistTemplate,
@@ -262,6 +289,11 @@ function seedCloud(status: string, expectedTypeForB: string | null = null): void
       sort_order: 2,
       added_at_review_by: "broker-3477-d",
       added_at_review_at: "2026-09-27 23:04:54.012711+00",
+      // BACKLOG-3607 migration 20260929120000 section 1: always present, NULL
+      // unless the broker removed the checklist at review.
+      removed_at_review_by: null,
+      removed_at_review_at: null,
+      restored_from_checklist_id: null,
     },
     // An agent-snapshot header on the same submission: never pulled.
     {
@@ -272,6 +304,9 @@ function seedCloud(status: string, expectedTypeForB: string | null = null): void
       sort_order: 0,
       added_at_review_by: null,
       added_at_review_at: null,
+      removed_at_review_by: null,
+      removed_at_review_at: null,
+      restored_from_checklist_id: null,
     },
   ];
   const item = (title: string, sort: number, required: boolean, type: string | null) => ({
@@ -289,6 +324,7 @@ function seedCloud(status: string, expectedTypeForB: string | null = null): void
     reviewer_checked_at: null,
     description: null,
     expected_document_type: type,
+    restored_from_item_id: null,
   });
   cloud.submission_checklist_items = [
     item("Item C closing disclosure", 10, false, null),
@@ -346,6 +382,7 @@ beforeEach(() => {
   db.pragma("foreign_keys = ON");
   cloud.checklistFetchFailures = 0;
   cloud.itemFetchFailures = 0;
+  cloud.removedFetchFailures = 0;
   cloud.signedOut = false;
   cloud.hiddenSubmissions = new Set();
   checklistFetches.length = 0;
@@ -425,8 +462,8 @@ describe("BACKLOG-3477 sync-back: idempotence and edges", () => {
     await submissionSyncService.manualSync();
     await submissionSyncService.syncSubmission(TXN);
     expectPulled();
-    // Only the first transition read the cloud checklists.
-    expect(checklistFetches).toHaveLength(1);
+    // Only the first transition read the cloud checklists (one pull).
+    expect(checklistFetches).toHaveLength(HEADER_READS_PER_PULL);
   });
 
   it("realtime and poller racing on the same transition still add one checklist", async () => {
@@ -455,7 +492,7 @@ describe("BACKLOG-3477 sync-back: idempotence and edges", () => {
     await deliverRealtime();
     await submissionSyncService.manualSync();
     expect(localChecklists()).toEqual([]);
-    expect(checklistFetches).toHaveLength(1);
+    expect(checklistFetches).toHaveLength(HEADER_READS_PER_PULL);
   });
 
   it.each(["approved", "under_review", "rejected"])(
@@ -936,5 +973,417 @@ describe("BACKLOG-3596 pulled items keep the cloud item id", () => {
       expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     }
     expect(new Set(ids).size).toBe(2);
+  });
+});
+
+
+// ===========================================================================
+// BACKLOG-3607 PR 2 — a checklist the broker REMOVED at review disappears from
+// the desktop (founder ruling 6563bab2 [pm_comments] Q2: also when the agent
+// linked documents to it; the documents stay on the transaction), and a
+// checklist the broker added back (restored) arrives through the same pull.
+// ===========================================================================
+/**
+ * Cloud rows transcribed from migration 20260929120000 section 1: a header the
+ * broker removed carries removed_at_review_by / removed_at_review_at (both or
+ * neither, CHECK submission_checklists_removed_pair_check); a restored header
+ * carries added_at_review_by and restored_from_checklist_id, and its items
+ * restored_from_item_id (section 7: never local_item_id, never the agent's
+ * tick, note or links). Ids are synthetic.
+ *
+ * Wrong implementations these catch:
+ *   removal keyed on the cloud header id      -> nothing is ever deleted (R1)
+ *   removal skipped when the agent edited it  -> the ruling is not applied (R1)
+ *   the adds read keeps removed headers       -> an added-then-removed
+ *                                                checklist lands (R2)
+ *   a failed removal read treated as "none"   -> the marker is cleared and the
+ *                                                removal is lost for good (R3)
+ *   a write before the last read              -> a failed pull leaves a
+ *                                                partial result (R3)
+ *   the owed-pull event only on "added"       -> an open window keeps showing
+ *                                                the removed checklist (R3)
+ *   restored items given fresh ids            -> the broker's restored ticks
+ *                                                never carry (R4)
+ */
+describe("BACKLOG-3607 — broker removals and restores reach the desktop", () => {
+  const REMOVED_TPL = "tpl-3607-removed";
+  const REMOVED_NAME = "Removed at review";
+  const KEEP_TPL = "tpl-3607-keep";
+  const BROKER = "broker-3607";
+  let sent: Array<{ channel: string; rowsAtSend: number }>;
+
+  beforeEach(() => {
+    sent = [];
+    jest.mocked(sendToMainWindow).mockImplementation((channel: string) => {
+      sent.push({ channel, rowsAtSend: localChecklists().length });
+      return true;
+    });
+  });
+
+  const owed = (): unknown => {
+    const row = db
+      .prepare("SELECT json_extract(metadata, '$.reviewChecklistPullOwed') AS o FROM transactions WHERE id = ?")
+      .get(TXN) as { o: string | null };
+    return row.o === null ? null : JSON.parse(row.o);
+  };
+  const count = (table: string): number =>
+    (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
+
+  /**
+   * The agent's own checklists as submitted (REMOVED_TPL and KEEP_TPL), then
+   * EDITED locally after the submit: a tick, a note and an attachment linked
+   * on the checklist the broker is about to remove.
+   */
+  async function seedAgentChecklists(): Promise<{ removedItemIds: string[] }> {
+    seedLocal("under_review");
+    db.prepare(
+      `INSERT INTO emails (id, user_id, external_id, source, account_id, subject, sender, recipients, sent_at, has_attachments)
+       VALUES ('e-3607', ?, 'ext-e-3607', 'gmail', 'acct', 'Signed offer', 'l@example.com', 'agent@example.test', '2026-09-01T10:00:00Z', 1)`,
+    ).run(USER);
+    db.prepare(
+      `INSERT INTO communications (id, user_id, transaction_id, email_id, link_source) VALUES ('c-3607', ?, ?, 'e-3607', 'manual')`,
+    ).run(USER, TXN);
+    db.prepare(
+      `INSERT INTO attachments (id, email_id, filename, mime_type, storage_path, created_at)
+       VALUES ('att-3607', 'e-3607', 'offer.pdf', 'application/pdf', '/attachments/3607.pdf', '2026-09-01T10:00:00Z')`,
+    ).run();
+
+    const removed = await selectChecklistTemplate({
+      transactionId: TXN,
+      templateId: REMOVED_TPL,
+      templateName: REMOVED_NAME,
+      items: [
+        { title: "Removed one", isRequired: true, sortOrder: 0 },
+        { title: "Removed two", isRequired: false, sortOrder: 1 },
+      ],
+    });
+    const keep = await selectChecklistTemplate({
+      transactionId: TXN,
+      templateId: KEEP_TPL,
+      templateName: "Kept checklist",
+      items: [{ title: "Kept one", isRequired: true, sortOrder: 0 }],
+    });
+    if (removed.status !== "added" || keep.status !== "added") throw new Error("seed failed");
+    const removedItemIds = (
+      db
+        .prepare("SELECT id FROM transaction_checklist_items WHERE checklist_id = ? ORDER BY sort_order")
+        .all(removed.checklistId) as Array<{ id: string }>
+    ).map((r) => r.id);
+
+    // Edited since the submit.
+    await setChecklistItemChecked(removedItemIds[0], true);
+    db.prepare("UPDATE transaction_checklist_items SET note = 'Signed copy attached' WHERE id = ?").run(
+      removedItemIds[0],
+    );
+    const link = await addChecklistLink({ itemId: removedItemIds[0], kind: "attachment", targetIds: ["att-3607"] });
+    if (link.status !== "added") throw new Error(`seed: link not added (${link.status})`);
+    expect(count("transaction_checklist_links")).toBe(1);
+    expect(count("transaction_checklist_link_members")).toBe(1);
+    return { removedItemIds };
+  }
+
+  /** The submitted version's headers: REMOVED_TPL removed at review by the broker. */
+  function seedCloudRemoval(status = "needs_changes"): void {
+    cloud.submissions = [{ id: SUB, status, review_notes: "Please fix" }];
+    cloud.submission_checklists = [
+      {
+        id: "hdr-3607-removed",
+        submission_id: SUB,
+        template_id: REMOVED_TPL,
+        template_name: REMOVED_NAME,
+        sort_order: 0,
+        added_at_review_by: null,
+        added_at_review_at: null,
+        removed_at_review_by: BROKER,
+        removed_at_review_at: "2026-09-29 10:15:00+00",
+        restored_from_checklist_id: null,
+      },
+      {
+        id: "hdr-3607-keep",
+        submission_id: SUB,
+        template_id: KEEP_TPL,
+        template_name: "Kept checklist",
+        sort_order: 1,
+        added_at_review_by: null,
+        added_at_review_at: null,
+        removed_at_review_by: null,
+        removed_at_review_at: null,
+        restored_from_checklist_id: null,
+      },
+    ];
+    cloud.submission_checklist_items = [];
+  }
+
+  function expectRemovalApplied(): void {
+    expect(localChecklists().map((c) => c.template_id)).toEqual([KEEP_TPL]);
+    // The removed checklist's items, links and members went with it...
+    expect(count("transaction_checklist_items")).toBe(1);
+    expect(count("transaction_checklist_links")).toBe(0);
+    expect(count("transaction_checklist_link_members")).toBe(0);
+    // ...the documents stay on the transaction.
+    expect(count("attachments")).toBe(1);
+    expect(count("emails")).toBe(1);
+    expect(count("communications")).toBe(1);
+  }
+
+  it("R1: a removal applies although the agent ticked, noted and linked a document since submitting", async () => {
+    await seedAgentChecklists();
+    seedCloudRemoval();
+
+    await submissionSyncService.manualSync();
+
+    expectRemovalApplied();
+    expect(localStatus()).toBe("needs_changes");
+    expect(owed()).toBeNull();
+  });
+
+  it("R1b: re-delivered (realtime after the poller) and the agent re-picks the template -> it is not removed again", async () => {
+    await seedAgentChecklists();
+    seedCloudRemoval();
+    await submissionSyncService.manualSync();
+    expectRemovalApplied();
+    await deliverRealtime();
+    expectRemovalApplied();
+
+    const again = await selectChecklistTemplate({
+      transactionId: TXN,
+      templateId: REMOVED_TPL,
+      templateName: REMOVED_NAME,
+      items: [{ title: "Removed one", isRequired: true, sortOrder: 0 }],
+    });
+    expect(again.status).toBe("added");
+    await submissionSyncService.manualSync();
+    await submissionSyncService.syncSubmission(TXN);
+    await deliverRealtime();
+    expect(localChecklists().map((c) => c.template_id).sort()).toEqual([KEEP_TPL, REMOVED_TPL].sort());
+  });
+
+  it("R2: a checklist the broker added and then removed on the same version is not added", async () => {
+    seedLocal();
+    seedCloud("needs_changes");
+    cloud.submission_checklists.push({
+      id: "hdr-3607-added-removed",
+      submission_id: SUB,
+      template_id: "tpl-3607-added-removed",
+      template_name: "Added then removed",
+      sort_order: 3,
+      added_at_review_by: BROKER,
+      added_at_review_at: "2026-09-29 10:00:00+00",
+      removed_at_review_by: BROKER,
+      removed_at_review_at: "2026-09-29 10:05:00+00",
+      restored_from_checklist_id: null,
+    });
+    cloud.submission_checklist_items.push({
+      id: randomUUID(),
+      submission_id: SUB,
+      submission_checklist_id: "hdr-3607-added-removed",
+      title: "Never on the desktop",
+      is_required: true,
+      is_checked: false,
+      note: null,
+      sort_order: 0,
+      reviewer_checked: false,
+      reviewer_checked_by: null,
+      reviewer_checked_at: null,
+      description: null,
+      expected_document_type: null,
+      restored_from_item_id: null,
+    });
+
+    await submissionSyncService.manualSync();
+
+    // The broker-added checklist that is still on the version arrives; the
+    // one removed at review does not.
+    expectPulled();
+    expect(localStatus()).toBe("needs_changes");
+  });
+
+  it("R3: a failed removal read writes nothing and is retried; after the failure-out it is owed and lands", async () => {
+    await seedAgentChecklists();
+    seedCloudRemoval();
+    // A broker-added checklist on the same version: a pull that writes before
+    // its last read would land it while the removal read fails.
+    cloud.submission_checklists.push({
+      id: HEADER,
+      submission_id: SUB,
+      template_id: TEMPLATE,
+      template_name: TEMPLATE_NAME,
+      sort_order: 2,
+      added_at_review_by: BROKER,
+      added_at_review_at: "2026-09-29 10:00:00+00",
+      removed_at_review_by: null,
+      removed_at_review_at: null,
+      restored_from_checklist_id: null,
+    });
+    cloud.submission_checklist_items.push({
+      id: randomUUID(),
+      submission_id: SUB,
+      submission_checklist_id: HEADER,
+      title: "Broker item",
+      is_required: true,
+      is_checked: false,
+      note: null,
+      sort_order: 0,
+      reviewer_checked: false,
+      reviewer_checked_by: null,
+      reviewer_checked_at: null,
+      description: null,
+      expected_document_type: null,
+      restored_from_item_id: null,
+    });
+    cloud.removedFetchFailures = 3;
+
+    await submissionSyncService.manualSync();
+    // Held: nothing written, status unwritten.
+    expect(localChecklists().map((c) => c.template_id).sort()).toEqual([KEEP_TPL, REMOVED_TPL].sort());
+    expect(localStatus()).toBe("under_review");
+
+    await submissionSyncService.manualSync();
+    await submissionSyncService.manualSync();
+    // Third failure: status written, pull owed, still nothing written.
+    expect(localStatus()).toBe("needs_changes");
+    expect(owed()).toEqual([SUB]);
+    expect(localChecklists().map((c) => c.template_id).sort()).toEqual([KEEP_TPL, REMOVED_TPL].sort());
+    expect(sent.filter((s) => s.channel === "transaction-checklists-changed")).toEqual([]);
+
+    // Next pass: the owed pull lands the removal (and the add), clears the
+    // marker, and tells an open window after the rows are committed.
+    await submissionSyncService.manualSync();
+    expect(localChecklists().map((c) => c.template_id).sort()).toEqual([KEEP_TPL, TEMPLATE].sort());
+    expect(count("transaction_checklist_links")).toBe(0);
+    expect(count("attachments")).toBe(1);
+    expect(owed()).toBeNull();
+    expect(sent.filter((s) => s.channel === "transaction-checklists-changed")).toEqual([
+      { channel: "transaction-checklists-changed", rowsAtSend: 2 },
+    ]);
+  });
+
+  it("R3b: an owed pull that only REMOVES still tells an open window", async () => {
+    await seedAgentChecklists();
+    seedCloudRemoval();
+    cloud.removedFetchFailures = 3;
+    await submissionSyncService.manualSync();
+    await submissionSyncService.manualSync();
+    await submissionSyncService.manualSync();
+    expect(owed()).toEqual([SUB]);
+
+    await submissionSyncService.manualSync();
+
+    expectRemovalApplied();
+    expect(owed()).toBeNull();
+    expect(sent.filter((s) => s.channel === "transaction-checklists-changed")).toEqual([
+      { channel: "transaction-checklists-changed", rowsAtSend: 1 },
+    ]);
+  });
+
+  it("R5: one local transaction - an add that fails rolls the removal back too; the status is held for retry", async () => {
+    await seedAgentChecklists();
+    seedCloudRemoval();
+    // A broker-added item whose id is already a local item id: the insert
+    // hits the primary key (checklistDbService: "A PK clash throws and rolls
+    // back"). Not producible by the server; it is the fault injected here.
+    const keptItemId = (
+      db.prepare(
+        "SELECT i.id FROM transaction_checklist_items i JOIN transaction_checklists c ON c.id = i.checklist_id WHERE c.template_id = ?",
+      ).get(KEEP_TPL) as { id: string }
+    ).id;
+    cloud.submission_checklists.push({
+      id: HEADER,
+      submission_id: SUB,
+      template_id: TEMPLATE,
+      template_name: TEMPLATE_NAME,
+      sort_order: 2,
+      added_at_review_by: BROKER,
+      added_at_review_at: "2026-09-29 10:00:00+00",
+      removed_at_review_by: null,
+      removed_at_review_at: null,
+      restored_from_checklist_id: null,
+    });
+    cloud.submission_checklist_items.push({
+      id: keptItemId,
+      submission_id: SUB,
+      submission_checklist_id: HEADER,
+      title: "Clashing item",
+      is_required: true,
+      is_checked: false,
+      note: null,
+      sort_order: 0,
+      reviewer_checked: false,
+      reviewer_checked_by: null,
+      reviewer_checked_at: null,
+      description: null,
+      expected_document_type: null,
+      restored_from_item_id: null,
+    });
+
+    await submissionSyncService.manualSync();
+
+    // Nothing of the pull landed: the removed checklist and its evidence are
+    // still there, and the status waits for the retry.
+    expect(localChecklists().map((c) => c.template_id).sort()).toEqual([KEEP_TPL, REMOVED_TPL].sort());
+    expect(count("transaction_checklist_links")).toBe(1);
+    expect(count("transaction_checklist_link_members")).toBe(1);
+    expect(localStatus()).toBe("under_review");
+  });
+
+  it("R4: a checklist the broker added back (restored) arrives with the restored rows' cloud ids, unticked", async () => {
+    // The agent removed REMOVED_TPL before this version; the broker restored
+    // it onto this version (restore_submission_checklist_at_review).
+    seedLocal();
+    cloud.submissions = [{ id: SUB, status: "needs_changes", review_notes: "Added back" }];
+    cloud.submission_checklists = [
+      {
+        id: "hdr-3607-restored",
+        submission_id: SUB,
+        template_id: REMOVED_TPL,
+        template_name: REMOVED_NAME,
+        sort_order: 0,
+        added_at_review_by: BROKER,
+        added_at_review_at: "2026-09-29 11:00:00+00",
+        removed_at_review_by: null,
+        removed_at_review_at: null,
+        restored_from_checklist_id: "hdr-3607-v1-source",
+      },
+    ];
+    const restoredItem = (title: string, sort: number, ticked: boolean) => ({
+      id: randomUUID(),
+      submission_id: SUB,
+      submission_checklist_id: "hdr-3607-restored",
+      title,
+      local_item_id: null,
+      is_required: true,
+      is_checked: false,
+      note: null,
+      sort_order: sort,
+      reviewer_checked: ticked,
+      reviewer_checked_by: ticked ? BROKER : null,
+      reviewer_checked_at: ticked ? "2026-09-20 10:01:00+00" : null,
+      description: null,
+      expected_document_type: null,
+      restored_from_item_id: randomUUID(),
+    });
+    cloud.submission_checklist_items = [
+      restoredItem("Removed one", 0, true),
+      restoredItem("Removed two", 1, false),
+    ];
+
+    await submissionSyncService.manualSync();
+
+    const lists = localChecklists();
+    expect(lists).toHaveLength(1);
+    expect(lists[0]).toMatchObject({ template_id: REMOVED_TPL, template_name: REMOVED_NAME });
+    const local = db
+      .prepare("SELECT id, title, is_checked, note FROM transaction_checklist_items WHERE checklist_id = ? ORDER BY sort_order")
+      .all(lists[0].id);
+    expect(local).toEqual(
+      cloud.submission_checklist_items.map((row) => ({ id: row.id, title: row.title, is_checked: 0, note: null })),
+    );
+    // The next version sends those ids as local_item_id, so the carry matches
+    // the restored items and the restored ticks carry.
+    const payload = buildChecklistSnapshotPayload(await getChecklistsForTransaction(TXN));
+    expect(payload[0].items.map((i) => i.local_item_id)).toEqual(
+      cloud.submission_checklist_items.map((row) => row.id),
+    );
+    expect(count("transaction_checklist_links")).toBe(0);
   });
 });

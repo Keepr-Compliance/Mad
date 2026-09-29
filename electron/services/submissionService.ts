@@ -374,7 +374,10 @@ class SubmissionService {
           submissionId
         );
         // BACKLOG-3595: the rows are committed; an open Checklist tab re-reads.
-        if (outcome.status === "pulled" && outcome.added.length > 0) {
+        if (
+          outcome.status === "pulled" &&
+          (outcome.added.length > 0 || outcome.removed.length > 0)
+        ) {
           notifyChecklistsChanged(transactionId);
         }
         if (outcome.status === "kept") {
