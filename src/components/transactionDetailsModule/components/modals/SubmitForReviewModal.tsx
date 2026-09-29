@@ -53,6 +53,27 @@ export const CHECKLISTS_NOT_SENT_COPY: Record<ChecklistsNotSentReason, string> =
     "Submitted, but the checklists your broker added could not be downloaded first, so this version does not include them.",
 };
 
+/**
+ * BACKLOG-3399: the amber line for gathered attachments that failed to upload.
+ * No retry is offered: once submitted, a new version is only allowed after the
+ * broker sends the deal back (see BLOCKED_SUBMISSION_STATUSES).
+ */
+export function attachmentsFailedCopy(count: number): string {
+  return count === 1
+    ? "Submitted, but 1 attachment couldn't be uploaded, so your broker won't see it."
+    : `Submitted, but ${count} attachments couldn't be uploaded, so your broker won't see them.`;
+}
+
+/**
+ * BACKLOG-3399: the amber line for texts/emails that advertise an attachment
+ * and contributed none. The count is of texts/emails, not of attachments.
+ */
+export function flaggedWithoutAttachmentsCopy(count: number): string {
+  return count === 1
+    ? "Submitted, but the attachments from 1 text or email weren't included, so your broker won't see them."
+    : `Submitted, but the attachments from ${count} texts or emails weren't included, so your broker won't see them.`;
+}
+
 interface SubmitForReviewModalProps {
   transaction: Transaction;
   /** @deprecated Use emailCount and textThreadCount instead */
@@ -113,6 +134,16 @@ interface SubmitForReviewModalProps {
    * reach the broker. Rendered only on the success screen.
    */
   checklistsNotSent?: ChecklistsNotSentReason | null;
+  /**
+   * BACKLOG-3399: gathered attachments that failed to upload on a successful
+   * submission. Rendered only on the success screen, only when > 0.
+   */
+  attachmentsFailed?: number;
+  /**
+   * BACKLOG-3399: texts/emails whose attachments were not included in a
+   * successful submission. Rendered only on the success screen, only when > 0.
+   */
+  flaggedWithoutAttachments?: number;
 }
 
 const STAGE_LABELS: Record<string, string> = {
@@ -150,6 +181,8 @@ export function SubmitForReviewModal({
   onExport,
   onDatesSaved,
   checklistsNotSent = null,
+  attachmentsFailed = 0,
+  flaggedWithoutAttachments = 0,
 }: SubmitForReviewModalProps): React.ReactElement {
   /**
    * BACKLOG-2853 — THE DEAL ALREADY HAS A SUBMISSION SITTING WITH THE BROKER.
@@ -755,6 +788,29 @@ export function SubmitForReviewModal({
             className="text-sm text-amber-700 mb-4"
           >
             {CHECKLISTS_NOT_SENT_COPY[checklistsNotSent]}
+          </p>
+        )}
+        {/*
+          BACKLOG-3399 — the submission succeeded but some attachments did not
+          reach the broker: uploads that failed, and texts/emails whose
+          attachments were never gathered. Same amber line as above.
+        */}
+        {isSuccess && attachmentsFailed > 0 && (
+          <p
+            data-testid="submit-review-attachments-failed"
+            role="status"
+            className="text-sm text-amber-700 mb-4"
+          >
+            {attachmentsFailedCopy(attachmentsFailed)}
+          </p>
+        )}
+        {isSuccess && flaggedWithoutAttachments > 0 && (
+          <p
+            data-testid="submit-review-flagged-without-attachments"
+            role="status"
+            className="text-sm text-amber-700 mb-4"
+          >
+            {flaggedWithoutAttachmentsCopy(flaggedWithoutAttachments)}
           </p>
         )}
         {isSuccess && (

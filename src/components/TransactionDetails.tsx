@@ -717,6 +717,8 @@ function TransactionDetails({
     progress: submitProgress,
     error: submitError,
     checklistsNotSent: submitChecklistsNotSent,
+    attachmentsFailed: submitAttachmentsFailed,
+    flaggedWithoutAttachments: submitFlaggedWithoutAttachments,
     submit: handleSubmitForReview,
     reset: resetSubmit,
   } = useSubmitForReview({
@@ -1728,6 +1730,8 @@ function TransactionDetails({
           progress={submitProgress}
           error={submitError}
           checklistsNotSent={submitChecklistsNotSent}
+          attachmentsFailed={submitAttachmentsFailed}
+          flaggedWithoutAttachments={submitFlaggedWithoutAttachments}
           onCancel={() => {
             setShowSubmitModal(false);
             resetSubmit();
