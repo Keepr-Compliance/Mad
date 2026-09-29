@@ -1443,11 +1443,22 @@ describe("AuditTransactionModal", () => {
     it("F3: step 3 — Cancel + Back + Create Transaction float, content padded", async () => {
       await goToStep(3);
       expectFloatingGroup({ back: true, primary: /create transaction/i });
+      // Narrow windows get short labels so the three pills fit (class level).
+      const submit = screen.getByTestId("create-audit-submit");
+      expect(within(submit).getByText("Create")).toHaveClass("sm:hidden");
+      expect(within(submit).getByText("Create Transaction")).toHaveClass("hidden", "sm:inline");
+      expect(within(screen.getByTestId("create-audit-back")).getByText("Back")).toHaveClass(
+        "hidden",
+        "sm:inline",
+      );
     });
 
     it("F4: Edit Transaction — Cancel + Save Changes float, content padded", () => {
       renderModal(true);
       expectFloatingGroup({ back: false, primary: /save changes/i });
+      const submit = screen.getByTestId("create-audit-submit");
+      expect(within(submit).getByText("Save")).toHaveClass("sm:hidden");
+      expect(within(submit).getByText("Save Changes")).toHaveClass("hidden", "sm:inline");
     });
 
     it.each([1, 2, 3] as const)("F5: Cancel closes the modal on step %i", async (target) => {

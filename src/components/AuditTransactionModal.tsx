@@ -369,9 +369,16 @@ function AuditTransactionModal({
             testId="audit-floating-actions"
             actions={[
               { key: "cancel", label: "Cancel", onClick: onClose, variant: "secondary" },
+              // Below 640px the labels shorten (as the old narrow pill's did) so
+              // Cancel + Back + Create fit a ~360px-wide window without clipping.
               step > 1 && {
                 key: "back",
-                label: "\u2190 Back",
+                label: (
+                  <>
+                    {"\u2190"}
+                    <span className="hidden sm:inline"> Back</span>
+                  </>
+                ),
                 onClick: handlePreviousStep,
                 variant: "secondary",
                 disabled: loading,
@@ -379,11 +386,13 @@ function AuditTransactionModal({
               },
               {
                 key: "primary",
-                label: isEditing
-                  ? "Save Changes"
-                  : step === 3
-                    ? "Create Transaction"
-                    : "Continue \u2192",
+                label: isEditing ? (
+                  <ResponsiveLabel short="Save" full="Save Changes" />
+                ) : step === 3 ? (
+                  <ResponsiveLabel short="Create" full="Create Transaction" />
+                ) : (
+                  "Continue \u2192"
+                ),
                 onClick: handleGatedNext,
                 variant: "primary",
                 loading,
@@ -409,6 +418,16 @@ function AuditTransactionModal({
           />
         )}
     </ResponsiveModal>
+  );
+}
+
+/** A short label below 640px, the full one from 640px up (BACKLOG-3614). */
+function ResponsiveLabel({ short, full }: { short: string; full: string }): React.ReactElement {
+  return (
+    <>
+      <span className="sm:hidden">{short}</span>
+      <span className="hidden sm:inline">{full}</span>
+    </>
   );
 }
 
