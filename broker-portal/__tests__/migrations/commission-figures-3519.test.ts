@@ -18,7 +18,11 @@
  *   - rates are numeric(6,3) percentages, gross numeric(12,2);
  *   - the reason CHECK is BETWEEN 1 AND 2000 (zero-length rejected);
  *   - the file wraps itself in BEGIN/COMMIT with a bounded lock_timeout;
- *   - section 5 (the commission lock) is marked as reserved, not forgotten.
+ *   - section 5 (the commission lock): a SECURITY INVOKER function with a
+ *     pinned search_path, the auth.role()-first allowlist, one 42501 test per
+ *     figure, bound BEFORE UPDATE OF exactly the four figures (not closed_at,
+ *     not INSERT). Its behaviour is proved by supabase/tests/backlog-3519/
+ *     lock-probes.sql against a real Postgres; this file only pins the text.
  *
  * Limits, stated: it reads repo text only; comments are stripped before
  * matching, so a rule written only in a comment cannot satisfy an assertion.
@@ -137,12 +141,43 @@ describe('BACKLOG-3519 commission figures migration', () => {
     expect(RAW).toContain('depends on NOTHING unapplied');
   });
 
-  it('marks section 5 (the commission lock) as reserved, with its spec, so its absence is not read as an oversight', () => {
-    expect(RAW).toContain('COMMISSION LOCK -- INTENTIONALLY NOT WRITTEN IN THIS COMMIT');
-    expect(RAW).toContain('42501');
-    expect(RAW).toContain('SECURITY INVOKER');
-    // The lock is not present yet: no trigger, no function in the executable SQL.
-    expect(SQL).not.toMatch(/CREATE (OR REPLACE )?(FUNCTION|TRIGGER)/i);
+  it('section 5: the commission lock is a SECURITY INVOKER function with a pinned search_path', () => {
+    const fn = FLAT.match(
+      /CREATE OR REPLACE FUNCTION public\.guard_commission_figures_locked\(\) RETURNS trigger LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS \$fn\$.*?\$fn\$;/,
+    );
+    expect(fn).not.toBeNull();
+    const body = fn![0];
+    // Allowlist, auth.role() first (R1 of the SR ruling pm_comments 768e6b93).
+    expect(body).toContain("v_role text := auth.role();");
+    expect(body).toContain("IF v_role = 'service_role' THEN RETURN NEW; END IF;");
+    expect(body).toContain(
+      "IF v_role IS NULL AND current_user NOT IN ('authenticated', 'anon') THEN RETURN NEW; END IF;",
+    );
+    expect(body).not.toMatch(/SECURITY DEFINER/i);
+    // One IS DISTINCT FROM test per figure, each raising 42501; no shared OR.
+    for (const col of [
+      'commission_offered_rate',
+      'commission_actual_rate',
+      'commission_gross_amount',
+      'commission_adjustment_reason',
+    ]) {
+      expect(body).toContain(
+        `IF NEW.${col} IS DISTINCT FROM OLD.${col} THEN RAISE EXCEPTION 'commission_figures_locked: ${col}' USING ERRCODE = '42501'; END IF;`,
+      );
+    }
+    expect(body).not.toMatch(/ OR NEW\./);
+    expect(body).not.toMatch(/closed_at/);
+  });
+
+  it('section 5: the trigger binds the function BEFORE UPDATE OF exactly the four figures, and not closed_at', () => {
+    expect(FLAT).toContain(
+      'CREATE TRIGGER commission_figures_locked BEFORE UPDATE OF commission_offered_rate, commission_actual_rate, commission_gross_amount, commission_adjustment_reason ON public.transaction_submissions FOR EACH ROW EXECUTE FUNCTION public.guard_commission_figures_locked();',
+    );
+    // UPDATE only: the submit writes the figures with the INSERT.
+    expect(FLAT).not.toMatch(/BEFORE INSERT/i);
+    expect(SQL).not.toMatch(/closed_at/);
+    // The executable probes against a real Postgres live beside the CHECK sweep.
+    expect(readFileSync(join(REPO, 'supabase/tests/backlog-3519/run-venue.sh'), 'utf8')).toContain(SCHEMA_FILE);
   });
 
   it('says this migration is not applied to any environment by this PR', () => {

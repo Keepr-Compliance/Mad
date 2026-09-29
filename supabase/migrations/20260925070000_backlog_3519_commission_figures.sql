@@ -31,7 +31,9 @@
 -- when actual differs from offered, in either direction" is UI guidance for
 -- BACKLOG-3520, not a data-integrity rule. Only a length bound is enforced.
 --
--- ROLLBACK:
+-- ROLLBACK (the trigger first: it names the columns in its OF list):
+--   DROP TRIGGER IF EXISTS commission_figures_locked ON public.transaction_submissions;
+--   DROP FUNCTION IF EXISTS public.guard_commission_figures_locked();
 --   ALTER TABLE public.transaction_submissions
 --     DROP CONSTRAINT IF EXISTS transaction_submissions_offered_rate_check,
 --     DROP CONSTRAINT IF EXISTS transaction_submissions_actual_rate_check,
@@ -42,10 +44,11 @@
 --     DROP COLUMN IF EXISTS commission_actual_rate,
 --     DROP COLUMN IF EXISTS commission_gross_amount,
 --     DROP COLUMN IF EXISTS commission_adjustment_reason;
---   (Section 5, when it exists, adds its own trigger + function to drop.)
 --
--- Tested by supabase/tests/backlog-3519/ (acceptance case + CHECK boundary
--- sweep) against a disposable local Postgres; not in CI (CI has no database).
+-- Tested by supabase/tests/backlog-3519/: probes.sql (CHECK boundary sweep,
+-- disposable local Postgres) and lock-probes.sql (section 5, run inside a
+-- rolled-back transaction against a Supabase-shaped Postgres). Not in CI (CI
+-- has no database).
 
 BEGIN;
 
@@ -99,28 +102,83 @@ COMMENT ON COLUMN public.transaction_submissions.commission_adjustment_reason IS
 -- ============================================================================
 
 -- ============================================================================
--- 5. >>> COMMISSION LOCK -- INTENTIONALLY NOT WRITTEN IN THIS COMMIT <<<
+-- 5. Commission lock: the figures cannot be edited after the INSERT
 -- ============================================================================
--- A BEFORE UPDATE OF (commission_offered_rate, commission_actual_rate,
--- commission_gross_amount, commission_adjustment_reason) guard belongs HERE,
--- in THIS migration, so the columns never exist unguarded. Its ABSENCE FROM
--- THIS COMMIT IS NOT AN OVERSIGHT: it is access-control, and its build and
--- review are a separate Opus step (coordinator instruction, 2026-09-29).
+-- Specification: SR ruling pm_comments 768e6b93 on BACKLOG-3610, R1; founder
+-- decision pm_comments 4d2e15df on BACKLOG-3519.
 --
--- Specification (SR ruling pm_comments 768e6b93 on BACKLOG-3610, R1):
---   * SECURITY INVOKER (it reads no table; INVOKER keeps current_user
---     meaningful).
---   * Raise 42501 UNLESS
+--   * Permits a change to one of the four figures only when
 --       auth.role() = 'service_role'
---       OR (auth.role() IS NULL AND current_user NOT IN ('authenticated','anon')).
---     Allowlist form: fails closed, including on any unknown role value.
---   * Fires ONLY when one of the four columns is named in the UPDATE's SET
---     list, so the submit pipeline's own finalize -- which updates `status`
---     alone (submissionService.ts, .update({ status: finalStatus })) -- must
---     NOT trip it. That is a required control.
---   * The closing date stays editable. Do NOT lock it.
---   * INSERT stays unlocked: the submit writes the figures with the INSERT.
--- DO NOT APPLY THIS FILE TO PRODUCTION BEFORE SECTION 5 EXISTS: without it a
--- client can UPDATE a submitted record's figures.
+--       OR (auth.role() IS NULL AND current_user NOT IN ('authenticated','anon'))
+--     and raises 42501 in every other case, including any unknown role value
+--     (allowlist; fails closed).
+--   * auth.role() is the primary discriminator. It reads the request's JWT
+--     claims, so it stays 'authenticated' inside a SECURITY DEFINER function a
+--     client calls, while current_user becomes that function's owner. The
+--     current_user term only decides the NULL-claims case: migrations, pg_cron
+--     and direct connections stay permitted; a client role with no claims
+--     does not.
+--   * SECURITY INVOKER: it reads no table, and INVOKER keeps current_user
+--     meaningful. search_path is pinned to '' and every name is qualified.
+--   * BEFORE UPDATE OF <the four columns>: fires only when one of them is in
+--     the UPDATE's SET list. The submit pipeline's finalize sets `status`
+--     alone and never fires it. Each column has its own IS DISTINCT FROM
+--     test, so a SET that repeats the stored value is not a change.
+--   * INSERT is not locked: the submit writes the figures with the INSERT.
+--   * closed_at is NOT locked (founder decision 4d2e15df).
+--   * A later change to the figures is its own correction record
+--     (BACKLOG-3521), never an edit of this row.
+--
+-- Proved against a real Postgres by supabase/tests/backlog-3519/lock-probes.sql.
+CREATE OR REPLACE FUNCTION public.guard_commission_figures_locked()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = ''
+AS $fn$
+DECLARE
+  v_role text := auth.role();
+BEGIN
+  IF v_role = 'service_role' THEN
+    RETURN NEW;
+  END IF;
+  IF v_role IS NULL AND current_user NOT IN ('authenticated', 'anon') THEN
+    RETURN NEW;
+  END IF;
+
+  IF NEW.commission_offered_rate IS DISTINCT FROM OLD.commission_offered_rate THEN
+    RAISE EXCEPTION 'commission_figures_locked: commission_offered_rate'
+      USING ERRCODE = '42501';
+  END IF;
+  IF NEW.commission_actual_rate IS DISTINCT FROM OLD.commission_actual_rate THEN
+    RAISE EXCEPTION 'commission_figures_locked: commission_actual_rate'
+      USING ERRCODE = '42501';
+  END IF;
+  IF NEW.commission_gross_amount IS DISTINCT FROM OLD.commission_gross_amount THEN
+    RAISE EXCEPTION 'commission_figures_locked: commission_gross_amount'
+      USING ERRCODE = '42501';
+  END IF;
+  IF NEW.commission_adjustment_reason IS DISTINCT FROM OLD.commission_adjustment_reason THEN
+    RAISE EXCEPTION 'commission_figures_locked: commission_adjustment_reason'
+      USING ERRCODE = '42501';
+  END IF;
+
+  RETURN NEW;
+END
+$fn$;
+
+COMMENT ON FUNCTION public.guard_commission_figures_locked() IS
+  'BACKLOG-3519: refuses a client UPDATE of the four commission_* figures (42501). Bound by trigger commission_figures_locked.';
+
+-- A trigger function is never called directly; firing does not need EXECUTE.
+REVOKE ALL ON FUNCTION public.guard_commission_figures_locked() FROM PUBLIC, anon, authenticated;
+
+DROP TRIGGER IF EXISTS commission_figures_locked ON public.transaction_submissions;
+CREATE TRIGGER commission_figures_locked
+  BEFORE UPDATE OF commission_offered_rate, commission_actual_rate,
+                   commission_gross_amount, commission_adjustment_reason
+  ON public.transaction_submissions
+  FOR EACH ROW
+  EXECUTE FUNCTION public.guard_commission_figures_locked();
 
 COMMIT;
