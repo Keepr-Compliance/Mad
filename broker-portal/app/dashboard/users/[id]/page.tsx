@@ -2,9 +2,12 @@
  * User Details Page
  *
  * Shows detailed information about a specific organization member.
- * Only accessible to admin and it_admin roles.
+ * Viewable by the roles in USERS_PAGE_ROLES (lib/users-access.ts); member
+ * management actions stay gated separately by canManage (admin/it_admin).
  *
  * TASK-1813: Full user details view implementation
+ * BACKLOG-3541: narrowed the SELECT to rendered fields; opened the page to
+ * USERS_PAGE_ROLES
  */
 
 import { createClient } from '@/lib/supabase/server';
@@ -14,6 +17,13 @@ import { ArrowLeft } from 'lucide-react';
 import UserDetailsCard, { type MemberDetailsData } from '@/components/users/UserDetailsCard';
 import type { Role } from '@/lib/types/users';
 import { getImpersonationSession } from '@/lib/impersonation';
+import { checkUsersPageAccess } from '@/lib/users-access';
+import {
+  USER_DETAIL_SELECT,
+  projectDetailMember,
+  type DetailMemberInviter,
+  type RawDetailMemberRow,
+} from '@/lib/queries/userQueries';
 
 // ============================================================================
 // Types
@@ -43,70 +53,31 @@ interface NotFoundResult {
  */
 async function getUserDetails(memberId: string): Promise<UserDetailsResult | NotFoundResult | null> {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
 
-  // Not authenticated
-  if (!user) return null;
-
-  // Get current user's membership
-  const { data: currentMembership } = await supabase
-    .from('organization_members')
-    .select('role, organization_id')
-    .eq('user_id', user.id)
-    .maybeSingle();
-
-  // No membership or unauthorized role
-  if (!currentMembership || !['admin', 'it_admin'].includes(currentMembership.role)) {
-    return null;
-  }
+  const access = await checkUsersPageAccess();
+  if (!access.allowed) return null;
 
   // Get target member with full details
   // Note: We fetch all fields including SSO/SCIM columns from SPRINT-070
   const { data: member, error } = await supabase
     .from('organization_members')
-    .select(`
-      id,
-      user_id,
-      role,
-      license_status,
-      invited_email,
-      invited_at,
-      joined_at,
-      provisioned_by,
-      provisioned_at,
-      scim_synced_at,
-      provisioning_metadata,
-      idp_groups,
-      invited_by,
-      last_invited_at,
-      created_at,
-      updated_at,
-      user:users!organization_members_user_id_public_users_fkey (
-        id,
-        email,
-        first_name,
-        last_name,
-        display_name,
-        avatar_url,
-        last_login_at,
-        created_at,
-        last_sso_login_at,
-        last_sso_provider,
-        is_managed
-      )
-    `)
+    .select(USER_DETAIL_SELECT)
     .eq('id', memberId)
-    .eq('organization_id', currentMembership.organization_id)
+    .eq('organization_id', access.organizationId)
     .single();
 
   if (error || !member) {
     return { notFound: true };
   }
 
-  // Try to get inviter information if invited_by is set
-  let inviterData: { user?: { email: string; display_name: string | null } } | undefined;
+  const row = member as unknown as RawDetailMemberRow;
 
-  if (member.invited_by) {
+  // Try to get inviter information if invited_by is set. Never part of the
+  // client payload itself (see projectDetailMember) — only the resolved
+  // name/email below are.
+  let inviterData: DetailMemberInviter | undefined;
+
+  if (row.invited_by) {
     const { data: inviterMember } = await supabase
       .from('organization_members')
       .select(`
@@ -115,7 +86,7 @@ async function getUserDetails(memberId: string): Promise<UserDetailsResult | Not
           display_name
         )
       `)
-      .eq('id', member.invited_by)
+      .eq('id', row.invited_by)
       .single();
 
     if (inviterMember?.user) {
@@ -129,18 +100,11 @@ async function getUserDetails(memberId: string): Promise<UserDetailsResult | Not
     }
   }
 
-  // Supabase returns joined relations as arrays, extract first element
-  const userData = Array.isArray(member.user) ? member.user[0] : member.user;
-
   return {
-    member: {
-      ...member,
-      user: userData,
-      inviter: inviterData,
-    } as MemberDetailsData,
-    currentUserId: user.id,
-    currentUserRole: currentMembership.role as Role,
-    organizationId: currentMembership.organization_id,
+    member: projectDetailMember(row, inviterData) as MemberDetailsData,
+    currentUserId: access.userId,
+    currentUserRole: access.role,
+    organizationId: access.organizationId,
   };
 }
 

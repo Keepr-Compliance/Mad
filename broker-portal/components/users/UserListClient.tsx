@@ -28,12 +28,13 @@ import RemoveUserModal from './RemoveUserModal';
 import { EmptyState, SearchIcon } from '@/components/ui/EmptyState';
 import { formatUserDisplayName } from '@/lib/utils/userDisplay';
 import { resendInvite } from '@/lib/actions/resendInvite';
-import type { OrganizationMember, Role } from '@/lib/types/users';
+import type { Role } from '@/lib/types/users';
+import type { ListMember } from '@/lib/queries/userQueries';
 
 type ViewMode = 'cards' | 'list';
 
 interface UserListClientProps {
-  initialMembers: OrganizationMember[];
+  initialMembers: ListMember[];
   currentUserId: string;
   currentUserRole: Role;
   organizationId: string;
@@ -53,14 +54,14 @@ export default function UserListClient({
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
-  const [editRoleMember, setEditRoleMember] = useState<OrganizationMember | null>(null);
+  const [editRoleMember, setEditRoleMember] = useState<ListMember | null>(null);
   const [isBulkEditOpen, setIsBulkEditOpen] = useState(false);
-  const [deactivateMember, setDeactivateMember] = useState<OrganizationMember | null>(null);
-  const [removeMember, setRemoveMember] = useState<OrganizationMember | null>(null);
+  const [deactivateMember, setDeactivateMember] = useState<ListMember | null>(null);
+  const [removeMember, setRemoveMember] = useState<ListMember | null>(null);
   const [, setResendingId] = useState<string | null>(null);
   const [resendResult, setResendResult] = useState<{ memberId: string; success: boolean; error?: string } | null>(null);
 
-  const handleResendInvite = useCallback(async (member: OrganizationMember) => {
+  const handleResendInvite = useCallback(async (member: ListMember) => {
     setResendingId(member.id);
     setResendResult(null);
     try {
@@ -219,6 +220,7 @@ export default function UserListClient({
                   member={member}
                   isCurrentUser={member.user_id === currentUserId}
                   canManage={canManage}
+                  organizationId={organizationId}
                   onEditRole={setEditRoleMember}
                   onResendInvite={handleResendInvite}
                   onDeactivate={setDeactivateMember}
@@ -252,6 +254,7 @@ export default function UserListClient({
                       isSelected={selectedIds.has(member.id)}
                       isCurrentUser={member.user_id === currentUserId}
                       canManage={canManage}
+                      organizationId={organizationId}
                       onToggleSelect={() => toggleSelect(member.id)}
                       onEditRole={() => setEditRoleMember(member)}
                       onResendInvite={() => handleResendInvite(member)}

@@ -17,19 +17,21 @@ import { Badge } from '@keepr/design-system';
 import type { BadgeHue } from '@keepr/design-system';
 import { Card } from '@/components/ui/Card';
 import UserActionsDropdown from './UserActionsDropdown';
-import type { OrganizationMember, Role, MemberLicenseStatus } from '@/lib/types/users';
+import type { Role, MemberLicenseStatus } from '@/lib/types/users';
 import { ROLE_LABELS, LICENSE_STATUS_LABELS } from '@/lib/types/users';
+import type { ListMember } from '@/lib/queries/userQueries';
 import { formatUserDisplayName, getUserInitials } from '@/lib/utils/userDisplay';
 import { formatDate } from '@/lib/utils';
 
 interface UserCardProps {
-  member: OrganizationMember;
+  member: ListMember;
   isCurrentUser: boolean;
   canManage: boolean;
-  onEditRole?: (member: OrganizationMember) => void;
-  onResendInvite?: (member: OrganizationMember) => void;
-  onDeactivate?: (member: OrganizationMember) => void;
-  onRemove?: (member: OrganizationMember) => void;
+  organizationId: string;
+  onEditRole?: (member: ListMember) => void;
+  onResendInvite?: (member: ListMember) => void;
+  onDeactivate?: (member: ListMember) => void;
+  onRemove?: (member: ListMember) => void;
 }
 
 const ROLE_HUES: Record<Role, BadgeHue> = {
@@ -50,6 +52,7 @@ export default function UserCard({
   member,
   isCurrentUser,
   canManage,
+  organizationId,
   onEditRole,
   onResendInvite,
   onDeactivate,
@@ -106,7 +109,7 @@ export default function UserCard({
             memberName={displayName}
             isPending={isPending}
             isCurrentUser={isCurrentUser}
-            invitationToken={member.invitation_token}
+            organizationId={organizationId}
             onEditRole={() => onEditRole?.(member)}
             onResendInvite={() => onResendInvite?.(member)}
             onDeactivate={() => onDeactivate?.(member)}
