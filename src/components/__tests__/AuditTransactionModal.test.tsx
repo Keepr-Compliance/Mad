@@ -43,7 +43,9 @@ jest.mock("../../hooks/useAuditCoverageCheck", () => ({
   useAuditCoverageCheck: () => ({
     checkCoverage: mockCheckCoverage,
     checkExportCompleteness: jest.fn().mockResolvedValue(null),
-    runMessagesImport: jest.fn().mockResolvedValue({ ok: true }),
+    runMessagesImport: jest
+      .fn()
+      .mockResolvedValue({ ran: false, importRan: false, floorISO: null }),
     importing: false,
     progress: null,
     indeterminate: false,
@@ -1156,8 +1158,9 @@ describe("AuditTransactionModal", () => {
       const payload = await createThroughTheWizard();
       expect(payload.property_address).toBe("123 Main Street");
       expect(payload.started_at).toEqual(expect.any(String));
-      // Absent or undefined — never a date. Until BACKLOG-3613 this was today.
-      expect(payload.closed_at ?? null).toBeNull();
+      // Undefined — never a date (and not an explicit null either). Until
+      // BACKLOG-3613 this was today.
+      expect(payload.closed_at).toBeUndefined();
     });
 
     it("C2: a start date after today still reaches step 2 — no error about a hidden end date", async () => {
