@@ -23,8 +23,9 @@
 --
 -- 2. transaction_submissions_update_public: the submitter branch's USING
 --    matches only the submitter's own 'uploading' rows (was 'needs_changes'
---    or 'uploading'). The reviewer branch, the WITH CHECK and the role list
---    are unchanged from BACKLOG-3596.
+--    or 'uploading'), and the submitter branch's WITH CHECK admits
+--    'resubmitted', 'uploading' or 'submitted' (was also 'needs_changes').
+--    The reviewer branch and the role list are unchanged from BACKLOG-3596.
 --
 -- No table, grant or row changes. Apply as ONE transaction: the policy is
 -- dropped and re-created.
@@ -122,7 +123,8 @@ $$;
 
 -- ---------------------------------------------------------------------------
 -- 2. UPDATE rule. Copied from BACKLOG-3596 (20260928120000, section 6); the
---    only change is the submitter branch's USING status list.
+--    only changes are the submitter branch's status lists (USING and
+--    WITH CHECK).
 -- ---------------------------------------------------------------------------
 DROP POLICY IF EXISTS transaction_submissions_update_public ON public.transaction_submissions;
 CREATE POLICY transaction_submissions_update_public ON public.transaction_submissions
@@ -135,7 +137,7 @@ CREATE POLICY transaction_submissions_update_public ON public.transaction_submis
           WHERE ((organization_members.user_id = ( SELECT auth.uid() AS uid)) AND ((organization_members.role)::text = ANY (ARRAY[('broker'::character varying)::text, ('admin'::character varying)::text]))))))
   )
   WITH CHECK (
-    ((submitted_by = ( SELECT auth.uid() AS uid)) AND ((status)::text = ANY (ARRAY['needs_changes'::text, 'resubmitted'::text, 'uploading'::text, 'submitted'::text])))
+    ((submitted_by = ( SELECT auth.uid() AS uid)) AND ((status)::text = ANY (ARRAY['resubmitted'::text, 'uploading'::text, 'submitted'::text])))
     OR (organization_id IN ( SELECT organization_members.organization_id
        FROM organization_members
       WHERE ((organization_members.user_id = ( SELECT auth.uid() AS uid)) AND ((organization_members.role)::text = ANY (ARRAY[('broker'::character varying)::text, ('admin'::character varying)::text])))))

@@ -48,7 +48,8 @@ OWNER_BLOCK = """    -- Ownership columns are fixed for a client statement.
 # the UPDATE rule (section 2)
 USING_SUBMITTER = "((submitted_by = ( SELECT auth.uid() AS uid)) AND ((status)::text = 'uploading'::text))"
 USING_3596 = "((submitted_by = ( SELECT auth.uid() AS uid)) AND ((status)::text = ANY (ARRAY['needs_changes'::text, 'uploading'::text])))"
-CHECK_SUBMITTER = "ARRAY['needs_changes'::text, 'resubmitted'::text, 'uploading'::text, 'submitted'::text]"
+CHECK_SUBMITTER = "ARRAY['resubmitted'::text, 'uploading'::text, 'submitted'::text]"
+CHECK_3596 = "ARRAY['needs_changes'::text, 'resubmitted'::text, 'uploading'::text, 'submitted'::text]"
 
 
 def client_block(src):
@@ -117,9 +118,16 @@ MUTANTS = [
     # ---- UPDATE rule (2) ----
     # the 3596 submitter USING kept (needs_changes still reachable)
     ("k40", "e08 e06 c20", [(USING_SUBMITTER, USING_3596)]),
-    # needs_changes dropped from the WITH CHECK instead of the USING
-    ("k41", "e08", [(USING_SUBMITTER, USING_3596),
-                    (CHECK_SUBMITTER, "ARRAY['resubmitted'::text, 'uploading'::text, 'submitted'::text]")]),
+    # both submitter lists back to 3596
+    ("k41", "e08 e13", [(USING_SUBMITTER, USING_3596), (CHECK_SUBMITTER, CHECK_3596)]),
+    # needs_changes back in the submitter WITH CHECK
+    ("k43", "e13", [(CHECK_SUBMITTER, CHECK_3596)]),
+    # needs_changes removed from the whole WITH CHECK by narrowing the
+    # reviewer branch too (reviewers limited to their own submissions)
+    ("k44", "e13 e03", [("    OR (organization_id IN ( SELECT organization_members.organization_id\n       FROM organization_members\n"
+                         "      WHERE ((organization_members.user_id = ( SELECT auth.uid() AS uid))",
+                         "    OR (submitted_by = ( SELECT auth.uid() AS uid) AND organization_id IN ( SELECT organization_members.organization_id\n       FROM organization_members\n"
+                         "      WHERE ((organization_members.user_id = ( SELECT auth.uid() AS uid))")]),
     # the submitter branch narrowed too far: 'uploading' dropped from USING
     ("k42", "e03 e12", [(USING_SUBMITTER, "((submitted_by = ( SELECT auth.uid() AS uid)) AND ((status)::text = 'needs_changes'::text))")]),
 ]

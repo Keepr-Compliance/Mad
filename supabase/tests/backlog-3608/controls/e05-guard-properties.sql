@@ -15,7 +15,7 @@ BEGIN
   PERFORM pg_temp.check((SELECT md5(COALESCE(pg_get_expr(polqual, polrelid), '') || '|' || COALESCE(pg_get_expr(polwithcheck, polrelid), ''))
                            FROM pg_policy WHERE polrelid = 'public.transaction_submissions'::regclass
                             AND polname = 'transaction_submissions_update_public')
-                          = 'f143d925e3ccb06eb74e07f30aba844f', 'E05 UPDATE rule text is the 3608 text');
+                          = '80e689b0c48a379821ee08d0415d62f3', 'E05 UPDATE rule text is the 3608 text');
   PERFORM pg_temp.check((SELECT md5(prosrc) FROM pg_proc WHERE proname = 'track_submission_status_changes')
                           = '61a29cd512ecfab789db6a8d2bf90f49', 'E05 status trigger function unchanged');
   PERFORM pg_temp.check((SELECT NOT prosecdef AND proconfig = ARRAY['search_path=""']

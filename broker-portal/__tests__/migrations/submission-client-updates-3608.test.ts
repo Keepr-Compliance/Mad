@@ -81,13 +81,15 @@ describe('BACKLOG-3608 migration', () => {
     expect(g).toContain("RAISE EXCEPTION 'submission_owner_fields_locked' USING ERRCODE = '42501'");
   });
 
-  it('UPDATE rule: submitter USING is uploading only; WITH CHECK unchanged', () => {
+  it('UPDATE rule: submitter USING is uploading only; submitter WITH CHECK has no needs_changes', () => {
     const s = statements(migrationRaw());
     expect(s).toContain(
       "USING ( ((submitted_by = ( SELECT auth.uid() AS uid)) AND ((status)::text = 'uploading'::text)) OR",
     );
-    expect(s).not.toContain("ARRAY['needs_changes'::text, 'uploading'::text]");
-    expect(s).toContain("ARRAY['needs_changes'::text, 'resubmitted'::text, 'uploading'::text, 'submitted'::text]");
+    expect(s).toContain(
+      "WITH CHECK ( ((submitted_by = ( SELECT auth.uid() AS uid)) AND ((status)::text = ANY (ARRAY['resubmitted'::text, 'uploading'::text, 'submitted'::text]))) OR (organization_id IN",
+    );
+    expect(s).not.toContain("'needs_changes'::text");
   });
 
   it('no SECURITY DEFINER, no BEGIN/COMMIT', () => {

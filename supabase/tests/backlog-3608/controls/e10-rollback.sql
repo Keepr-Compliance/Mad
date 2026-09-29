@@ -6,6 +6,7 @@
 --   agent sets review fields on its uploading row -> rows:1
 --   agent moves its needs_changes row to resubmitted -> rows:1
 --   agent changes organization_id on its uploading row -> rows:1
+--   agent sets its uploading row to needs_changes -> rows:1
 -- and the legitimate paths (finalize, broker decision) still work.
 DO $e10$
 DECLARE
@@ -47,6 +48,11 @@ BEGIN
   PERFORM pg_temp.act_as(agent);
   PERFORM pg_temp.expect('E10 agent changes organization_id (restored)',
     format($q$UPDATE public.transaction_submissions SET organization_id = %L WHERE id = %L$q$, pg_temp.id('o_t2'), v2), 'rows:1');
+  PERFORM pg_temp.act_owner();
+  v3 := pg_temp.mk_sub('fixture-3608-e10c', 1, NULL, 'uploading');
+  PERFORM pg_temp.act_as(agent);
+  PERFORM pg_temp.expect('E10 agent sets its uploading row to needs_changes (restored)',
+    format($q$UPDATE public.transaction_submissions SET status = 'needs_changes' WHERE id = %L$q$, v3), 'rows:1');
   PERFORM pg_temp.act_owner();
 END
 $e10$;
