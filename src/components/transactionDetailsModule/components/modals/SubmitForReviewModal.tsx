@@ -147,6 +147,14 @@ interface SubmitForReviewModalProps {
   flaggedWithoutAttachments?: number;
 }
 
+/**
+ * BACKLOG-3520 — the panel owns its height and clips (`sm:overflow-hidden`);
+ * the body region inside scrolls, so the scrollbar sits inside the rounded
+ * frame instead of on the panel's outer edge. Padding lives on the header,
+ * body and footer rows (not here) so the scrollbar is not inset by it.
+ */
+const SUBMIT_PANEL = "max-w-lg sm:h-auto sm:max-h-[90vh] sm:overflow-hidden";
+
 const STAGE_LABELS: Record<string, string> = {
   preparing: "Preparing submission...",
   attachments: "Uploading attachments...",
@@ -484,7 +492,7 @@ export function SubmitForReviewModal({
     <ResponsiveModal
       onClose={handleCancelClick}
       zIndex="z-[70]"
-      panelClassName="max-w-md p-6"
+      panelClassName={SUBMIT_PANEL}
       testId="submit-review-modal"
     >
         {/*
@@ -507,7 +515,7 @@ export function SubmitForReviewModal({
           which is what lets the suite keep asserting `.text-green-600` at zero
           as a guard against that callout returning.
         */}
-        <div className="flex items-center gap-3 mb-4">
+        <div className="flex items-center gap-3 mb-4 flex-shrink-0 px-6 pt-6" data-testid="submit-review-header">
           <div
             className={`w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0 ${
               isSuccess ? "bg-green-100 text-green-700" : "bg-blue-100"
@@ -596,6 +604,13 @@ export function SubmitForReviewModal({
           </button>
         </div>
 
+        {/*
+          BACKLOG-3520 — the scrolling region. The panel owns its height and
+          clips (SUBMIT_PANEL), so a scrollbar can only appear here, inside the
+          rounded frame; the header above and the action row below stay fixed
+          and the buttons never scroll out of view.
+        */}
+        <div className="flex-1 min-h-0 overflow-y-auto px-6" data-testid="submit-review-body">
         {/*
           BACKLOG-3498 — screen 1, the date step. The date fields ONLY; the
           lead ("…The following data will be sent to your broker:") stays with
@@ -973,12 +988,14 @@ export function SubmitForReviewModal({
           </div>
         )}
 
+        </div>
+
         {/*
           Actions. BACKLOG-2849 removed the Cancel/Close row button entirely —
           dismissal is the X in the header (and the backdrop). What is left is
           the founder's pair: Export and Submit.
         */}
-        <div className="flex items-center gap-3 justify-end">
+        <div className="flex items-center gap-3 justify-end flex-shrink-0 px-6 pb-6 pt-4" data-testid="submit-review-footer">
           {/* BACKLOG-3498 — Back to the date step, on screen 2 only. */}
           {dateStepApplies && !isSubmitting && !error && !isSuccess && !showDateStep && (
             <button

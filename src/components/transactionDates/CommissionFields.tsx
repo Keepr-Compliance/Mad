@@ -18,7 +18,7 @@ import type { CommissionForm } from "./useCommissionForm";
 import { formatCurrency } from "@/utils/formatUtils";
 
 const INPUT_CLASS =
-  "w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-gray-900 bg-white min-h-[44px]";
+  "w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-gray-900 bg-white min-h-[44px]";
 
 function Label({
   htmlFor,
@@ -30,8 +30,8 @@ function Label({
   help?: string;
 }): React.ReactElement {
   return (
-    <div className="flex items-center mb-2">
-      <label htmlFor={htmlFor} className="block text-sm font-medium text-gray-700">
+    <div className="flex items-center mb-1">
+      <label htmlFor={htmlFor} className="block text-sm font-medium text-gray-700 whitespace-nowrap">
         {text}
       </label>
       {help && <InfoTooltip text={help} />}
@@ -66,10 +66,10 @@ export function CommissionFields({
 
   return (
     <div data-testid="commission-fields">
-      <h4 className="mt-5 pt-5 border-t border-gray-200 text-sm font-semibold text-gray-900">
+      <h4 className="mt-4 pt-4 border-t border-gray-200 text-sm font-semibold text-gray-900">
         Closing Financials
       </h4>
-      <div className="mt-4 space-y-4">
+      <div className="mt-3 space-y-3">
         {!parsed.ok && (
           <div
             className="p-3 bg-red-50 border border-red-200 rounded-lg"
@@ -96,7 +96,7 @@ export function CommissionFields({
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-3" data-testid="commission-rates-row">
           <div>
             <Label
               htmlFor="commission-offered"
@@ -135,6 +135,19 @@ export function CommissionFields({
               <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm text-gray-500 pointer-events-none">%</span>
             </div>
           </div>
+          <div>
+            <div className="flex items-center mb-1">
+              <span className="block text-sm font-medium text-gray-700 whitespace-nowrap">Commission Amount</span>
+            </div>
+            <div className="flex items-center min-h-[44px]">
+              <span
+                className="text-lg font-semibold text-gray-900 tabular-nums"
+                data-testid="commission-amount"
+              >
+                {formatCommissionAmount(gross)}
+              </span>
+            </div>
+          </div>
         </div>
 
         {parsedOk && !commission.complete && (
@@ -146,16 +159,6 @@ export function CommissionFields({
             <p className="text-sm text-amber-800">{NOT_ENTERED_WARNING[route]}</p>
           </div>
         )}
-
-        <div className="flex items-baseline justify-between gap-3 flex-wrap">
-          <span className="text-sm font-medium text-gray-700">Commission Amount</span>
-          <span
-            className="text-lg font-semibold text-gray-900 tabular-nums"
-            data-testid="commission-amount"
-          >
-            {formatCommissionAmount(gross)}
-          </span>
-        </div>
 
         {rateDiffers && (
           <div>
