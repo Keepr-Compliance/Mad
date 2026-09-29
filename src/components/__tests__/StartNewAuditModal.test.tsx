@@ -130,7 +130,9 @@ describe("StartNewAuditModal", () => {
     it("should render the modal with correct title", async () => {
       renderModal();
 
-      expect(screen.getByText("Start New Audit")).toBeInTheDocument();
+      // BACKLOG-3614: renamed from "Start New Audit".
+      expect(screen.getByRole("heading", { name: "New Transaction" })).toBeInTheDocument();
+      expect(screen.queryByText(/new audit/i)).toBeNull();
       expect(
         screen.getByText(/review ai-detected transactions or create one manually/i)
       ).toBeInTheDocument();

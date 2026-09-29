@@ -1118,7 +1118,7 @@ describe("AuditTransactionModal", () => {
       updated_at: "2024-01-01T00:00:00Z",
     } as unknown as Contact;
 
-    const createThroughTheWizard = async () => {
+    const createThroughTheWizard = async (listingPriceText?: string) => {
       jest.mocked(window.api.contacts.getAll).mockResolvedValue({
         success: true,
         contacts: [manualContact],
@@ -1132,6 +1132,12 @@ describe("AuditTransactionModal", () => {
         screen.getByPlaceholderText(/enter property address/i),
         "123 Main Street",
       );
+      if (listingPriceText !== undefined) {
+        await userEvent.type(
+          screen.getByTestId("create-audit-listing-price-input"),
+          listingPriceText,
+        );
+      }
       await userEvent.click(getButton(/continue/i));
       await waitFor(() => {
         expect(screen.getByTestId("contact-assignment-step-2")).toBeInTheDocument();
@@ -1225,6 +1231,71 @@ describe("AuditTransactionModal", () => {
         expect(window.api.transactions.update).toHaveBeenCalledWith(
           "txn-edit-3613",
           expect.objectContaining({ closed_at: "2024-04-15" }),
+        );
+      });
+    });
+
+    // ---- BACKLOG-3614: optional Listing Price on step 1 ----
+
+    it("L1: a Listing Price typed as $525,000 is sent on create as 525000", async () => {
+      const payload = await createThroughTheWizard("$525,000");
+      expect(payload.listing_price).toBe(525000);
+      // the raw text never leaves the renderer
+      expect(payload).not.toHaveProperty("listing_price_text");
+    });
+
+    it("L2: a blank Listing Price still creates the transaction, with no listing price sent", async () => {
+      const payload = await createThroughTheWizard();
+      expect(window.api.transactions.createAudited).toHaveBeenCalledTimes(1);
+      expect(payload).not.toHaveProperty("listing_price");
+      expect(payload).not.toHaveProperty("listing_price_text");
+    });
+
+    it("L3: text that is not an amount stops step 1 with an error", async () => {
+      renderCreate();
+      await userEvent.type(
+        screen.getByPlaceholderText(/enter property address/i),
+        "123 Main Street",
+      );
+      await userEvent.type(screen.getByTestId("create-audit-listing-price-input"), "abc");
+      await userEvent.click(getButton(/continue/i));
+      expect(await screen.findByText("Listing Price must be a valid amount")).toBeInTheDocument();
+      expect(screen.queryByTestId("contact-assignment-step-2")).toBeNull();
+    });
+
+    it("L4: Edit Transaction Details prefills the Listing Price and saves a change", async () => {
+      renderWithProvider(
+        <AuditTransactionModal
+          userId={mockUserId}
+          provider={mockProvider}
+          onClose={mockOnClose}
+          onSuccess={mockOnSuccess}
+          editTransaction={{
+            id: "txn-edit-3614",
+            user_id: "123",
+            property_address: "456 Oak Street, City, ST 67890",
+            transaction_type: "sale",
+            status: "active",
+            started_at: "2024-01-01",
+            listing_price: 412500,
+            created_at: "2024-01-01T00:00:00Z",
+            updated_at: "2024-01-01T00:00:00Z",
+          } as unknown as Transaction}
+        />,
+      );
+      jest.mocked(window.api.transactions.update).mockResolvedValue({ success: true });
+
+      const input = screen.getByTestId("create-audit-listing-price-input");
+      await waitFor(() => expect(input).toHaveValue("412,500"));
+
+      await userEvent.clear(input);
+      await userEvent.type(input, "399,950");
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(window.api.transactions.update).toHaveBeenCalledWith(
+          "txn-edit-3614",
+          expect.objectContaining({ listing_price: 399950 }),
         );
       });
     });

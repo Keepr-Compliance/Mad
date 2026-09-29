@@ -26,6 +26,8 @@ interface AddressVerificationStepProps {
   onStartDateChange: (date: string) => void;
   onClosingDateChange: (date: string | undefined) => void;
   onEndDateChange: (date: string | undefined) => void;
+  /** BACKLOG-3614: the optional Listing Price, as typed. */
+  onListingPriceChange?: (text: string) => void;
   showAutocomplete: boolean;
   suggestions: AddressSuggestion[];
   onSelectSuggestion: (suggestion: AddressSuggestion) => void;
@@ -48,6 +50,7 @@ function AddressVerificationStep({
   // the Export modal still sets a closing date) but this step no longer renders
   // a Closing Date field, so it is deliberately not destructured here.
   onEndDateChange,
+  onListingPriceChange,
   showAutocomplete,
   suggestions,
   onSelectSuggestion,
@@ -201,6 +204,38 @@ function AddressVerificationStep({
           >
             {TRANSACTION_TYPE_LABELS.sale}
           </button>
+        </div>
+      </div>
+
+      {/* BACKLOG-3614: Listing Price, OPTIONAL (founder, 2026-09-29) — no
+          asterisk, no `required`, no red-when-empty border; blank never blocks
+          Continue or create. Typed the same way as the Sale Price on the
+          commission step: "$", commas and spaces allowed, parsed by
+          `parseMoney`. Shown on create and on Edit Transaction Details. */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <label
+            htmlFor="create-audit-listing-price"
+            className="block text-sm font-medium text-gray-700 mb-2"
+          >
+            Listing Price
+          </label>
+          <div className="relative">
+            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-gray-500 pointer-events-none">
+              $
+            </span>
+            <input
+              id="create-audit-listing-price"
+              type="text"
+              inputMode="decimal"
+              value={addressData.listing_price_text ?? ""}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                onListingPriceChange?.(e.target.value)
+              }
+              className="w-full pl-7 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-gray-900 bg-white min-h-[44px]"
+              data-testid="create-audit-listing-price-input"
+            />
+          </div>
         </div>
       </div>
 

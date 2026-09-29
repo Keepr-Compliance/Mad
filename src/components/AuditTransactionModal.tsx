@@ -8,6 +8,7 @@ import { useAuditTransaction } from "../hooks/useAuditTransaction";
 import { OfflineNotice } from "./common/OfflineNotice";
 import { useAuditCoverageCheck } from "../hooks/useAuditCoverageCheck";
 import { AuditCoveragePrompt } from "./transactionDetailsModule/components/AuditCoveragePrompt";
+import { parseMoney } from "./transactionDates/commission";
 
 // Type definitions
 interface AuditTransactionModalProps {
@@ -100,7 +101,10 @@ function AuditTransactionModal({
       step === 1 &&
       !!proposed &&
       addressData.property_address.trim().length > 0 &&
-      !(addressData.closed_at && proposed > addressData.closed_at);
+      !(addressData.closed_at && proposed > addressData.closed_at) &&
+      // BACKLOG-3614: an unparseable Listing Price defers to handleNextStep,
+      // which shows the error.
+      parseMoney(addressData.listing_price_text ?? "").ok;
     if (!basicValid) {
       handleNextStep();
       return;
@@ -218,7 +222,7 @@ function AuditTransactionModal({
           <div className="hidden sm:flex items-center justify-between">
             <div>
               <h2 className="text-xl font-bold text-white">
-                {isEditing ? "Edit Transaction Details" : "Audit New Transaction"}
+                {isEditing ? "Edit Transaction Details" : "New Transaction"}
               </h2>
               <p className="text-indigo-100 text-sm">
                 {isEditing ? (
@@ -297,6 +301,9 @@ function AuditTransactionModal({
               }
               onEndDateChange={(date) =>
                 setAddressData(prev => ({ ...prev, closed_at: date }))
+              }
+              onListingPriceChange={(text) =>
+                setAddressData(prev => ({ ...prev, listing_price_text: text }))
               }
               showAutocomplete={showAddressAutocomplete}
               suggestions={addressSuggestions}

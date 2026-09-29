@@ -7,6 +7,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import type { Transaction } from "../../../electron/types/models";
 import type { AddressData, AddressSuggestion, AddressDetails, AddressDetailsResult, Coordinates } from "./types";
 import logger from "../../utils/logger";
+import { formatSaleInput } from "../../components/transactionDates/commission";
 
 /**
  * Get default start date (3 months ago from today)
@@ -33,6 +34,8 @@ export const initialAddressData: AddressData = {
   // review or Export. (Until 3613 this pre-filled today and every new deal was
   // saved with its creation day as the end date.)
   closed_at: undefined,
+  // BACKLOG-3614: optional, blank by default.
+  listing_price_text: "",
 };
 
 interface UseAuditAddressFormProps {
@@ -221,6 +224,8 @@ export function useAuditAddressForm({
         closed_at: txn.closed_at
           ? txn.closed_at.split("T")[0]
           : undefined,
+        // BACKLOG-3614: same display as the sale price on the commission step.
+        listing_price_text: formatSaleInput(txn.listing_price),
       };
 
       setAddressData(prefillData);

@@ -14,6 +14,12 @@ export interface AddressData {
   started_at: string;  // ISO8601 date string - when representation began
   closing_deadline?: string;  // ISO8601 date string - scheduled closing date
   closed_at?: string;  // ISO8601 date string - when transaction ended (optional, null = ongoing)
+  /**
+   * BACKLOG-3614: the optional Listing Price field exactly as typed ("$525,000").
+   * Never sent as-is: the submission parses it with `parseMoney` into
+   * `listing_price`. Blank means not entered.
+   */
+  listing_price_text?: string;
 }
 
 export interface Coordinates {

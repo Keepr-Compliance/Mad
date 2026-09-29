@@ -281,3 +281,41 @@ describe("AddressVerificationStep — dates section (create mode, BACKLOG-3613)"
     ).toContain("border-red-300");
   });
 });
+
+describe("AddressVerificationStep — Listing Price (BACKLOG-3614)", () => {
+  it.each([
+    ["create", false],
+    ["edit", true],
+  ])("%s: optional — no asterisk, not required, no red border when blank", (_mode, showEndDate) => {
+    render(
+      <AddressVerificationStep
+        {...baseProps}
+        addressData={{ ...addressData, listing_price_text: "" }}
+        showEndDate={showEndDate}
+      />,
+    );
+    const input = screen.getByTestId("create-audit-listing-price-input");
+    const label = screen.getByText("Listing Price");
+    expect(label.textContent!.trim()).toBe("Listing Price");
+    expect(label.textContent).not.toContain("*");
+    expect(input).not.toBeRequired();
+    expect(input.className).not.toMatch(/red/);
+    expect(input).toHaveAttribute("inputmode", "decimal");
+    expect(input).toHaveValue("");
+  });
+
+  it("shows the typed text and reports every change", async () => {
+    const onListingPriceChange = jest.fn();
+    render(
+      <AddressVerificationStep
+        {...baseProps}
+        addressData={{ ...addressData, listing_price_text: "525,000" }}
+        onListingPriceChange={onListingPriceChange}
+      />,
+    );
+    const input = screen.getByTestId("create-audit-listing-price-input");
+    expect(input).toHaveValue("525,000");
+    await userEvent.type(input, "1");
+    expect(onListingPriceChange).toHaveBeenLastCalledWith("525,0001");
+  });
+});

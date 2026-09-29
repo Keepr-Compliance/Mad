@@ -287,7 +287,7 @@ function Dashboard({
               </div>
               <div className="flex-1">
                 <h2 className="text-xl font-bold text-gray-900">
-                  New Audit
+                  New Transaction
                 </h2>
               </div>
               {/* Pending count badge - AI add-on only */}

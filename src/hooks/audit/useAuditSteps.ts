@@ -16,6 +16,7 @@ import {
   toRoleContactIds,
 } from "../../utils/transactionContactRules";
 import type { AddressData, ContactAssignments } from "./types";
+import { parseMoney } from "../../components/transactionDates/commission";
 
 interface UseAuditStepsProps {
   isEditing: boolean;
@@ -57,6 +58,13 @@ export function useAuditSteps({
       }
       if (addressData.closed_at && addressData.started_at > addressData.closed_at) {
         setError("End date must be after start date");
+        return;
+      }
+      // BACKLOG-3614: Listing Price is optional — blank passes. Only text that
+      // is not an amount stops the step (same rule as the commission step's
+      // Sale Price), so a typo is never silently dropped.
+      if (!parseMoney(addressData.listing_price_text ?? "").ok) {
+        setError("Listing Price must be a valid amount");
         return;
       }
       setError(null);

@@ -173,3 +173,11 @@ describe("Dashboard sync cards", () => {
     });
   });
 });
+
+describe("Dashboard primary action label (BACKLOG-3614)", () => {
+  it("reads New Transaction, not New Audit", () => {
+    render(<Dashboard {...baseProps} />);
+    expect(screen.getByRole("heading", { name: "New Transaction" })).toBeInTheDocument();
+    expect(screen.queryByText(/new audit/i)).toBeNull();
+  });
+});
