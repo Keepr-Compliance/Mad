@@ -5,7 +5,10 @@
  * Part of BACKLOG-391: Submit for Review UI.
  */
 import { useState, useCallback, useEffect, useRef } from "react";
-import type { SubmitProgress } from "../components/modals/SubmitForReviewModal";
+import type {
+  ChecklistsNotSentReason,
+  SubmitProgress,
+} from "../components/modals/SubmitForReviewModal";
 
 interface UseSubmitForReviewOptions {
   transactionId: string;
@@ -18,8 +21,33 @@ interface UseSubmitForReviewReturn {
   isSubmitting: boolean;
   progress: SubmitProgress | null;
   error: string | null;
+  /**
+   * BACKLOG-3600: why a SUCCESSFUL submission's checklists did not reach the
+   * broker, as the main process reported it. `null` when there is nothing to
+   * say — including after any failed submit.
+   */
+  checklistsNotSent: ChecklistsNotSentReason | null;
+  /**
+   * BACKLOG-3399: on a SUCCESSFUL submission, gathered attachments that failed
+   * to upload (IPC `attachmentsFailed`). 0 when there is nothing to say —
+   * including after any failed submit.
+   */
+  attachmentsFailed: number;
+  /**
+   * BACKLOG-3399: on a SUCCESSFUL submission, texts/emails that advertise an
+   * attachment and contributed none (IPC `flaggedWithoutAttachments`). 0 when
+   * there is nothing to say — including after any failed submit.
+   */
+  flaggedWithoutAttachments: number;
   submit: () => Promise<void>;
   reset: () => void;
+}
+
+/** An IPC count as a safe non-negative integer; anything else reads as 0. */
+function toCount(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : 0;
 }
 
 export function useSubmitForReview({
@@ -31,6 +59,10 @@ export function useSubmitForReview({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [progress, setProgress] = useState<SubmitProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [checklistsNotSent, setChecklistsNotSent] =
+    useState<ChecklistsNotSentReason | null>(null);
+  const [attachmentsFailed, setAttachmentsFailed] = useState(0);
+  const [flaggedWithoutAttachments, setFlaggedWithoutAttachments] = useState(0);
 
   // Track cleanup function for progress listener
   const cleanupRef = useRef<(() => void) | null>(null);
@@ -63,6 +95,9 @@ export function useSubmitForReview({
 
     setIsSubmitting(true);
     setError(null);
+    setChecklistsNotSent(null);
+    setAttachmentsFailed(0);
+    setFlaggedWithoutAttachments(0);
     setProgress({
       stage: "preparing",
       stageProgress: 0,
@@ -81,6 +116,9 @@ export function useSubmitForReview({
         : await api.submit(transactionId);
 
       if (result.success) {
+        setChecklistsNotSent(result.checklistsNotSent ?? null);
+        setAttachmentsFailed(toCount(result.attachmentsFailed));
+        setFlaggedWithoutAttachments(toCount(result.flaggedWithoutAttachments));
         setProgress({
           stage: "complete",
           stageProgress: 100,
@@ -128,12 +166,18 @@ export function useSubmitForReview({
     setIsSubmitting(false);
     setProgress(null);
     setError(null);
+    setChecklistsNotSent(null);
+    setAttachmentsFailed(0);
+    setFlaggedWithoutAttachments(0);
   }, []);
 
   return {
     isSubmitting,
     progress,
     error,
+    checklistsNotSent,
+    attachmentsFailed,
+    flaggedWithoutAttachments,
     submit,
     reset,
   };

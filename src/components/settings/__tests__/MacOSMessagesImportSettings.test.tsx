@@ -200,6 +200,20 @@ describe("MacOSMessagesImportSettings — Force Re-import confirm dialog (BACKLO
     expect(mockRequestSync).not.toHaveBeenCalled();
   });
 
+  // BACKLOG-3476: a re-import deletes the attachments checklist items link to,
+  // and the links cascade with them. The warning says so, unconditionally.
+  it("warns that checklist links to those attachments are removed too", async () => {
+    renderStrict(<MacOSMessagesImportSettings userId={userId} />);
+    await awaitEstimateSettled();
+
+    fireEvent.click(screen.getByRole("button", { name: /force re-import/i }));
+
+    const modal = await screen.findByTestId("force-reimport-confirm-modal");
+    expect(modal).toHaveTextContent(
+      /Links from checklist items to their attachments are removed too\./,
+    );
+  });
+
   it("starts a FORCE import once the destructive confirm is clicked", async () => {
     renderStrict(<MacOSMessagesImportSettings userId={userId} />);
     await awaitEstimateSettled();

@@ -32,6 +32,48 @@ export interface SubmitProgress {
   currentItem?: string;
 }
 
+/**
+ * BACKLOG-3600: why a successful submission's checklists did not reach the
+ * broker. Mirrors `SubmissionResult.checklistsNotSent` in the main process
+ * (a type cannot be value-imported across the boundary, so it is restated).
+ */
+export type ChecklistsNotSentReason =
+  | "not_in_plan"
+  | "refused"
+  // BACKLOG-3599 (resubmit only): the broker's review checklists were still
+  // owed and could not be downloaded first.
+  | "brokerChecklistsNotDownloaded";
+
+/** The one amber line the success screen shows for each reason. */
+export const CHECKLISTS_NOT_SENT_COPY: Record<ChecklistsNotSentReason, string> = {
+  not_in_plan:
+    "Submitted, but your checklists were not sent: checklists are not included in your current plan.",
+  refused: "Submitted, but your checklists could not be sent to your broker.",
+  brokerChecklistsNotDownloaded:
+    "Submitted, but the checklists your broker added could not be downloaded first, so this version does not include them.",
+};
+
+/**
+ * BACKLOG-3399: the amber line for gathered attachments that failed to upload.
+ * No retry is offered: once submitted, a new version is only allowed after the
+ * broker sends the deal back (see BLOCKED_SUBMISSION_STATUSES).
+ */
+export function attachmentsFailedCopy(count: number): string {
+  return count === 1
+    ? "Submitted, but 1 attachment couldn't be uploaded, so your broker won't see it."
+    : `Submitted, but ${count} attachments couldn't be uploaded, so your broker won't see them.`;
+}
+
+/**
+ * BACKLOG-3399: the amber line for texts/emails that advertise an attachment
+ * and contributed none. The count is of texts/emails, not of attachments.
+ */
+export function flaggedWithoutAttachmentsCopy(count: number): string {
+  return count === 1
+    ? "Submitted, but the attachments from 1 text or email weren't included, so your broker won't see them."
+    : `Submitted, but the attachments from ${count} texts or emails weren't included, so your broker won't see them.`;
+}
+
 interface SubmitForReviewModalProps {
   transaction: Transaction;
   /** @deprecated Use emailCount and textThreadCount instead */
@@ -87,6 +129,21 @@ interface SubmitForReviewModalProps {
    * the submit fails.
    */
   onDatesSaved?: () => void;
+  /**
+   * BACKLOG-3600: set when the submission succeeded but its checklists did not
+   * reach the broker. Rendered only on the success screen.
+   */
+  checklistsNotSent?: ChecklistsNotSentReason | null;
+  /**
+   * BACKLOG-3399: gathered attachments that failed to upload on a successful
+   * submission. Rendered only on the success screen, only when > 0.
+   */
+  attachmentsFailed?: number;
+  /**
+   * BACKLOG-3399: texts/emails whose attachments were not included in a
+   * successful submission. Rendered only on the success screen, only when > 0.
+   */
+  flaggedWithoutAttachments?: number;
 }
 
 const STAGE_LABELS: Record<string, string> = {
@@ -123,6 +180,9 @@ export function SubmitForReviewModal({
   onSubmit,
   onExport,
   onDatesSaved,
+  checklistsNotSent = null,
+  attachmentsFailed = 0,
+  flaggedWithoutAttachments = 0,
 }: SubmitForReviewModalProps): React.ReactElement {
   /**
    * BACKLOG-2853 — THE DEAL ALREADY HAS A SUBMISSION SITTING WITH THE BROKER.
@@ -378,7 +438,9 @@ export function SubmitForReviewModal({
    * Re-entry is prevented by `savingDates` in the button's `disabled`
    * expression, not by a check in here.
    */
-  const handleSubmitPress = async () => {
+  // BACKLOG-3477: the unticked-required-items warning no longer lives here.
+  // TransactionDetails shows it before this window opens (ChecklistWarningDialog).
+  const proceed = async () => {
     if (!dateStepApplies) {
       onSubmit();
       return;
@@ -712,6 +774,45 @@ export function SubmitForReviewModal({
           dismissibility, so this takes the conservative reading (the X and the
           backdrop both close it). See the BACKLOG-2849 report.
         */}
+        {/*
+          BACKLOG-3600 — the submission succeeded but the broker did not get
+          its checklists (a plan without checklists, or a refused copy). A
+          network failure never lands here: it fails the submission instead.
+          BACKLOG-3599 — or a resubmit could not first download the
+          checklists the broker added at review.
+        */}
+        {isSuccess && checklistsNotSent && (
+          <p
+            data-testid="submit-review-checklists-not-sent"
+            role="status"
+            className="text-sm text-amber-700 mb-4"
+          >
+            {CHECKLISTS_NOT_SENT_COPY[checklistsNotSent]}
+          </p>
+        )}
+        {/*
+          BACKLOG-3399 — the submission succeeded but some attachments did not
+          reach the broker: uploads that failed, and texts/emails whose
+          attachments were never gathered. Same amber line as above.
+        */}
+        {isSuccess && attachmentsFailed > 0 && (
+          <p
+            data-testid="submit-review-attachments-failed"
+            role="status"
+            className="text-sm text-amber-700 mb-4"
+          >
+            {attachmentsFailedCopy(attachmentsFailed)}
+          </p>
+        )}
+        {isSuccess && flaggedWithoutAttachments > 0 && (
+          <p
+            data-testid="submit-review-flagged-without-attachments"
+            role="status"
+            className="text-sm text-amber-700 mb-4"
+          >
+            {flaggedWithoutAttachmentsCopy(flaggedWithoutAttachments)}
+          </p>
+        )}
         {isSuccess && (
           <p
             data-testid="submit-review-success-ask"
@@ -924,7 +1025,7 @@ export function SubmitForReviewModal({
           ) : !progress?.stage || progress.stage === "failed" ? (
             <button
               onClick={() => {
-                void handleSubmitPress();
+                void proceed();
               }}
               /* BACKLOG-2853 — disabled in the four states the service
                  refuses. The click could be left live and allowed to surface

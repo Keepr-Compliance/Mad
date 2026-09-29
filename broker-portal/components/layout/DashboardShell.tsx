@@ -22,6 +22,13 @@ export interface DashboardShellProps {
   displayName?: string;
   displayEmail: string;
   displayRole?: string;
+  showChecklists?: boolean;
+  /** BACKLOG-3477: set when the Checklists entry is grayed; the neutral line shown. */
+  checklistsUnavailableLabel?: string | null;
+  /** BACKLOG-3080: lib/my-transactions-access.ts, via the layout. */
+  showMyTransactions?: boolean;
+  /** BACKLOG-3080: not a full-portal user; the Sidebar shows the floor only. */
+  floorOnly?: boolean;
 }
 
 export function DashboardShell({
@@ -31,6 +38,10 @@ export function DashboardShell({
   displayName,
   displayEmail,
   displayRole,
+  showChecklists,
+  checklistsUnavailableLabel,
+  showMyTransactions,
+  floorOnly,
 }: DashboardShellProps) {
   const [collapsed, setCollapsed] = useState(false);
 
@@ -56,6 +67,10 @@ export function DashboardShell({
         displayName={displayName}
         displayEmail={displayEmail}
         displayRole={displayRole}
+        showChecklists={showChecklists}
+        checklistsUnavailableLabel={checklistsUnavailableLabel}
+        showMyTransactions={showMyTransactions}
+        floorOnly={floorOnly}
       />
       <div className="flex-1 flex flex-col min-w-0">
         {/* Impersonation banner spans the content column so it never covers the sidebar */}

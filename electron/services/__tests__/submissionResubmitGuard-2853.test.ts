@@ -121,6 +121,19 @@
  */
 
 jest.mock("../supabaseService");
+// BACKLOG-3600 / BACKLOG-3599: this suite has no local database (databaseService
+// is automocked and dbConnection is real, so ensureDb() throws). The checklist
+// snapshot's local read and the resubmit's owed-pull read go straight to the
+// db modules, not through databaseService; before BACKLOG-3600 the throw was
+// swallowed, now a failed local checklist read fails the submit. The deal
+// here has no checklists and no owed pull, stated as such.
+jest.mock("../db/checklistDbService", () => ({
+  getChecklistsForTransaction: async () => ({ checklists: [], requiredDone: 0, requiredTotal: 0 }),
+}));
+jest.mock("../db/submissionDbService", () => ({
+  ...jest.requireActual("../db/submissionDbService"),
+  getOwedReviewChecklistPullsFor: () => [],
+}));
 jest.mock("../supabaseStorageService");
 jest.mock("../databaseService");
 jest.mock("../logService");
@@ -257,6 +270,33 @@ class FakeSupabase {
     this.attachments = this.attachments.filter(
       (a) => !submissionIds.includes(a.submission_id)
     );
+  }
+
+  /**
+   * BACKLOG-3607: a transaction with no checklist sends `[]` to
+   * snapshot_submission_checklists. Answered as migration 20260929120000 does
+   * for an empty set with the feature on: zero counts, and the carry's status
+   * from carry_submission_checklist_reviews - `no_parent` when the submission
+   * has no parent (a first submission), else `no_checklists` (no headers on
+   * this version). Any other call, or a non-empty set, is unmocked here and
+   * says so.
+   */
+  snapshotCalls: Row[] = [];
+  rpc(fn: string, args: Row): Promise<{ data: unknown; error: { code: string; message: string } | null }> {
+    const list = args?.p_checklists;
+    if (fn !== "snapshot_submission_checklists" || !Array.isArray(list) || list.length !== 0) {
+      throw new Error(`FakeSupabase: unmocked rpc("${fn}")`);
+    }
+    this.snapshotCalls.push(args);
+    const sub = this.submissions.find((s) => s.id === args.p_submission_id);
+    const carryStatus = sub?.parent_submission_id ? "no_checklists" : "no_parent";
+    return Promise.resolve({
+      data: {
+        checklists: 0, items: 0, links: 0, members: 0, dropped_members: 0, dropped_links: 0,
+        carry: { status: carryStatus },
+      },
+      error: null,
+    });
   }
 
   from(tableName: string) {

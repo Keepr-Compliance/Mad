@@ -1,0 +1,421 @@
+mutants.py: 46 ported to the draft, 0 kept on their 3596 file, 54 new
+m01-restamp-by-with-caller [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: reviewer_checked_by = v_uid,
+    RED: c01 c09  green: none
+      c01: CONTROL FAILED: C01 original reviewer and time: L-item-1:agent:2026-09-01 10:01,L-item-2:agent:2026-09-01 10:02,L-item-3:agent:2026-09-01 10:03,L-item-5:agent:2026-09-01 10:05,L-item-6:agent:2026-09-01 10:06
+      c09: CONTROL FAILED: C09 v3 ticks: L-item-1:agent:2026-09-01 10:01,L-item-2:agent:2026-09-01 10:02,L-item-3:agent:2026-09-01 10:03,L-item-5:agent:2026-09-01 10:05,L-item-6:agent:2026-09-01 10:06
+m02-restamp-at-with-now [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: reviewer_checked_at = v_now
+    RED: c01 c09  green: none
+      c01: CONTROL FAILED: C01 original reviewer and time: L-item-1:broker:2026-09-29 00:35,L-item-2:broker:2026-09-29 00:35,L-item-3:broker:2026-09-29 00:35,L-item-5:broker:2026-09-29 00:35,L-item-6:admin:2026-09-29 00:35
+      c09: CONTROL FAILED: C09 v3 ticks: L-item-1:broker:2026-09-29 00:35,L-item-2:broker:2026-09-29 00:35,L-item-3:broker:2026-09-29 00:35,L-item-5:broker:2026-09-29 00:35,L-item-6:admin:2026-09-29 00:35
+m03-compare-cloud-row-ids [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: COALESCE(lm.submission_attachment_id, lm.submission_message_id)::text AS local_id
+    RED: c01 c04  green: none
+      c01: CONTROL FAILED: C01 carry result: {"carry": {"status": "done", "carried": 1, "cleared": 4, "removed": 0, "unavailable": null}, "items": 6, "links": 5, "members": 5, "checklists": 2, "dropped_links": 0, "dropped_members": 0}
+      c04: CONTROL FAILED: C04a relabel/regroup carries: {"carry": {"status": "done", "carried": 1, "cleared": 4, "removed": 0, "unavailable": null}, "items": 6, "links": 6, "members": 6, "checklists": 2, "dropped_links": 0, "dropped_members": 0}
+m04-carry-from-grandparent [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: WHERE pi.submission_id = COALESCE((SELECT g.parent_submission_id FROM public.transaction_submissions
+    RED: c16  green: none
+      c16: CONTROL FAILED: C16 I1 unticked on v3: {"carry": {"status": "done", "carried": 1, "cleared": 4, "removed": 0, "unavailable": null}, "items": 6, "links": 5, "members": 5, "checklists": 2, "dropped_links": 0, "dropped_members": 0}
+m05-tick-no-superseded-check [as expected] (draft)
+    MUTATION APPLIED: 3 line(s); first: IF false THEN
+    RED: c14  green: none
+      c14: CONTROL FAILED: C14b tick on v1 while v2 uploads: expected ~^42501:superseded$, got 42501:not_open_for_review
+m06-superseded-ignores-uploading [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: WHERE c.parent_submission_id = v_row.submission_id AND c.status <> 'uploading') THEN
+    RED: c14  green: none
+      c14: CONTROL FAILED: C14b tick on v1 while v2 uploads: expected ~^42501:superseded$, got 42501:not_open_for_review
+m07-system-actor [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: 'system', true,
+    RED: c02  green: none
+      c02: status_history_append_only
+m09-parent-any-submitter [as expected] (draft)
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: c17  green: none
+      c17: CONTROL FAILED: C17 another submitter: expected ~^42501:not_authorized$, got rows:1
+m10-parent-any-version [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: THEN
+    RED: c17  green: none
+      c17: CONTROL FAILED: C17 a skipped version: expected ~^42501:not_authorized$, got rows:1
+m11-parent-any-deal [as expected] (draft)
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: c17  green: none
+      c17: CONTROL FAILED: C17 another deal: expected ~^42501:not_authorized$, got rows:1
+m12-match-ignores-title [as expected] (draft)
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: c13  green: none
+      c13: CONTROL FAILED: C13 carry result: {"carry": {"status": "done", "carried": 3, "cleared": 0, "removed": 2, "unavailable": null}, "items": 5, "links": 4, "members": 4, "checklists": 2, "dropped_links": 0, "dropped_members": 0}
+m13-match-ignores-template [as expected] (draft)
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: c13  green: none
+      c13: CONTROL FAILED: C13 carry result: {"carry": {"status": "done", "carried": 3, "cleared": 0, "removed": 2, "unavailable": null}, "items": 5, "links": 4, "members": 4, "checklists": 2, "dropped_links": 0, "dropped_members": 0}
+m14-note-compared-raw [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: p.new_note IS DISTINCT FROM p.parent_note
+    RED: c04  green: none
+      c04: CONTROL FAILED: C04b blank notes and outer spaces are equal: {"carry": {"status": "done", "carried": 2, "cleared": 3, "removed": 0, "unavailable": null}, "items": 6, "links": 5, "members": 5, "checklists": 2, "dropped_links": 0, "dropped_members": 0
+m15-changed-still-carries [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: ELSIF true THEN
+    RED: c02  green: none
+      c02: CONTROL FAILED: C02 carry result: {"carry": {"status": "done", "carried": 5, "cleared": 0, "removed": 0, "unavailable": null}, "items": 6, "links": 4, "members": 4, "checklists": 2, "dropped_links": 0, "dropped_members": 0}
+m16-changed-no-marker [as expected] (draft)
+    MUTATION APPLIED: 4 line(s); first: SET cleared_reviewer_id = NULL,
+    RED: c02  green: none
+      c02: CONTROL FAILED: C02 L-item-1 unticked and marked
+m17-marker-on-unticked-items [as expected] (draft)
+    MUTATION APPLIED: 3 line(s); first: SET cleared_reviewer_id = COALESCE(r.reviewer_checked_by, v_uid),
+    RED: c03  green: none
+      c03: CONTROL FAILED: C03 carry result: {"carry": {"status": "done", "carried": 5, "cleared": 1, "removed": 0, "unavailable": null}, "items": 6, "links": 6, "members": 6, "checklists": 2, "dropped_links": 0, "dropped_members": 0}
+m18-evidence-one-direction [as expected] (draft)
+    MUTATION APPLIED: 3 line(s); first: 
+    RED: c04  green: none
+      c04: CONTROL FAILED: C04e an added file clears I1: {"carry": {"status": "done", "carried": 5, "cleared": 0, "removed": 0, "unavailable": null}, "items": 6, "links": 5, "members": 6, "checklists": 2, "dropped_links": 0, "dropped_members": 0}
+m19-legacy-rows-get-lines [as expected] (draft)
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: c18  green: none
+      c18: CONTROL FAILED: C18b legacy parent: no carry, no entry: {"carry": {"status": "done", "carried": 0, "cleared": 0, "removed": 5, "unavailable": null}, "items": 6, "links": 5, "members": 5, "checklists": 2, "dropped_links": 0, "dropped_members": 0}
+m20-no-old-client-branch [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: ELSIF false THEN
+    RED: c18  green: none
+      c18: CONTROL FAILED: C18a one unavailable entry: [{"type": "checklist_review_cleared", "reason": "removed", "item_id": null, "changed_at": "2026-09-29T00:35:15.98676+00:00", "changed_by": "<id>", "item_title": "Item six", "checklist_name": "Fixture custo
+m21-no-copy-without-ancestor-term [as expected] (draft)
+    MUTATION APPLIED: 5 line(s); first: WHERE true
+    RED: c19  green: none
+      c19: CONTROL FAILED: C19b never ticked: no review entry: {"carry": {"status": "done", "carried": 0, "cleared": 0, "removed": 0, "unavailable": "no_previous_copy"}, "items": 6, "links": 5, "members": 5, "checklists": 2, "dropped_links": 0, "dropped_member
+m22-no-copy-silent [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: NULL;
+    RED: c19  green: none
+      c19: CONTROL FAILED: C19a one entry: [{"type": "checklist_added", "source": "version", "changed_at": "2026-09-29T00:35:16.82642+00:00", "changed_by": "<id>", "template_id": null, "from_version": 2, "checklist_key": "name:Fixture custom B", "checklist_nam
+m23-unavailable-twice [as expected] (draft)
+    MUTATION APPLIED: 4 line(s); first: IF v_unavailable IS NOT NULL THEN
+    RED: c06  green: none
+      c06: CONTROL FAILED: C06b one unavailable entry after two calls: {"status": "done", "carried": 0, "cleared": 0, "removed": 0, "unavailable": "unmatched_client"}
+m24-removed-twice [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: CONTINUE WHEN false AND EXISTS (
+    RED: c06  green: none
+      c06: CONTROL FAILED: C06a second call: {"status": "done", "carried": 0, "cleared": 0, "removed": 1, "unavailable": null}
+m25-removed-silent [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: IF r.new_item_id IS NULL AND false THEN
+    RED: c13  green: none
+      c13: CONTROL FAILED: C13 carry result: {"carry": {"status": "done", "carried": 5, "cleared": 0, "removed": 0, "unavailable": null}, "items": 5, "links": 4, "members": 4, "checklists": 2, "dropped_links": 0, "dropped_members": 0}
+m26-carry-any-caller [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: IF NOT FOUND OR v_sub.status IS DISTINCT FROM 'uploading' THEN
+    RED: c05  green: none
+      c05: CONTROL FAILED: C05 another agent: expected ~^42501:not_authorized$, got rows:1
+m27-carry-any-status [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: IF NOT FOUND OR v_sub.submitted_by IS DISTINCT FROM v_uid THEN
+    RED: c05  green: none
+      c05: CONTROL FAILED: C05 the parent (needs_changes): expected ~^42501:not_authorized$, got rows:1
+m28-carry-no-feature-check [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: IF false THEN
+    RED: d02 c05  green: none
+      d02: CONTROL FAILED: D02 feature off, [] -> quiet: {"carry": {"status": "no_parent"}, "items": 0, "links": 0, "members": 0, "checklists": 0, "dropped_links": 0, "dropped_members": 0}
+      c05: CONTROL FAILED: C05 feature off, no copy -> not_in_plan: {"status": "no_checklists"}
+m29-carry-anon-grant [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: GRANT EXECUTE ON FUNCTION public.carry_submission_checklist_reviews(uuid) TO anon, authenticated;
+    RED: c05 c15  green: none
+      c05: CONTROL FAILED: C05 anon: expected PRIV, got 42501:not_authorized
+      c15: CONTROL FAILED: C15 carry_submission_checklist_reviews(uuid) anon EXECUTE
+m31-carry-invoker [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: SECURITY INVOKER
+    RED: c01 c15  green: none
+      c01: permission denied for table submission_checklist_items
+      c15: CONTROL FAILED: C15 carry_submission_checklist_reviews(uuid) security definer
+m34-superseded-before-authorization [as expected] (draft)
+    MUTATION APPLIED: 3 line(s); first: IF FOUND AND EXISTS (SELECT 1 FROM public.transaction_submissions c WHERE c.parent_submission_id = v
+    RED: c14  green: none
+      c14: CONTROL FAILED: C14 other org broker: expected ~^42501:not_authorized$, got 42501:superseded
+m44-tick-allows-needs-changes [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: IF false THEN
+    RED: c14 c23  green: none
+      c14: CONTROL FAILED: C14 lone needs_changes refuses a new tick: expected ~^42501:not_open_for_review$, got rows:1
+      c23: CONTROL FAILED: C23 new tick on needs_changes: expected ~^42501:not_open_for_review$, got rows:1
+m45-blanket-clears-needs-changes-ticks [as expected] (draft)
+    MUTATION APPLIED: 13 line(s); first: CREATE OR REPLACE FUNCTION public.m45_no_ticks_on_needs_changes() RETURNS trigger
+    RED: c23  green: none
+      c23: CONTROL FAILED: C23 v1 keeps the ticks made before Request Changes: 
+m46-add-no-superseded-check [as expected] (draft)
+    MUTATION APPLIED: 3 line(s); first: IF false THEN
+    RED: c24  green: none
+      c24: CONTROL FAILED: C24 add on v1 while v2 uploads: expected ~^42501:superseded$, got rows:1
+m47-add-superseded-ignores-uploading [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: WHERE c.parent_submission_id = p_submission_id AND c.status <> 'uploading') THEN
+    RED: c24  green: none
+      c24: CONTROL FAILED: C24 add on v1 while v2 uploads: expected ~^42501:superseded$, got rows:1
+m48-add-superseded-before-authorization [as expected] (draft)
+    MUTATION APPLIED: 3 line(s); first: IF FOUND AND EXISTS (SELECT 1 FROM public.transaction_submissions c WHERE c.parent_submission_id = p
+    RED: c24  green: none
+      c24: CONTROL FAILED: C24 other org broker on superseded v1: expected ~^42501:not_authorized$, got 42501:superseded
+m49-needs-changes-before-superseded [as expected] (draft)
+    MUTATION APPLIED: 3 line(s); first: IF v_row.status = 'needs_changes' THEN
+    RED: c14  green: none
+      c14: CONTROL FAILED: C14b tick on v1 while v2 uploads: expected ~^42501:superseded$, got 42501:not_open_for_review
+m52-tick-keeps-added-refusal [as expected] (draft)
+    MUTATION APPLIED: 3 line(s); first: IF v_row.added_at_review_by IS NOT NULL THEN
+    RED: c26  green: none
+      c26: added_at_review
+m53-tick-drops-every-refusal [as expected] (draft)
+    MUTATION APPLIED: 5 line(s); first: IF false THEN
+    RED: c14 c23 c26  green: none
+      c14: CONTROL FAILED: C14b tick on v1 while v2 uploads: expected ~^42501:superseded$, got rows:1
+      c23: CONTROL FAILED: C23 new tick on needs_changes: expected ~^42501:not_open_for_review$, got rows:1
+      c26: CONTROL FAILED: C26 needs_changes refuses a new tick on an added item: expected ~^42501:not_open_for_review$, got rows:1
+m54-cloud-id-key-for-every-parent [as expected] (draft)
+    MUTATION APPLIED: 4 line(s); first: AND ni.local_item_id = COALESCE(pi.local_item_id, pi.id::text)
+    RED: c18  green: none
+      c18: CONTROL FAILED: C18b legacy parent: no carry, no entry: {"carry": {"status": "done", "carried": 0, "cleared": 0, "removed": 5, "unavailable": null}, "items": 6, "links": 5, "members": 5, "checklists": 2, "dropped_links": 0, "dropped_members": 0}
+m55-carry-old-key [as expected] (draft)
+    MUTATION APPLIED: 4 line(s); first: AND ni.local_item_id = pi.local_item_id
+    RED: c27 c28 c29 c31  green: none
+      c27: CONTROL FAILED: C27 v2 carry: {"status": "done", "carried": 0, "cleared": 0, "removed": 1, "unavailable": null}
+      c28: CONTROL FAILED: C28 v2 carry: {"status": "done", "carried": 0, "cleared": 0, "removed": 0, "unavailable": null}
+      c29: CONTROL FAILED: C29 v2 carry: {"status": "done", "carried": 0, "cleared": 0, "removed": 0, "unavailable": null}
+      c31: CONTROL FAILED: C31 v2 carry: {"status": "done", "carried": 0, "cleared": 0, "removed": 0, "unavailable": null}
+m56-added-ignores-title [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: AND (ni.title = pi.title OR ph.added_at_review_by IS NOT NULL)
+    RED: c27  green: none
+      c27: CONTROL FAILED: C27 v2 carry: {"status": "done", "carried": 2, "cleared": 0, "removed": 1, "unavailable": null}
+m57-added-unmatched-reads-removed [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: 'reason', 'removed',
+    RED: c27 c31  green: none
+      c27: CONTROL FAILED: C27 A2 entry: not_carried, names the broker and time: removed
+      c31: CONTROL FAILED: C31 never pulled: exactly one not_carried entry naming the v1 item, after a second carry
+m58-not-carried-twice [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: CONTINUE WHEN r.added_by IS NULL AND EXISTS (
+    RED: c27 c31  green: none
+      c27: CONTROL FAILED: C27 second carry: {"status": "done", "carried": 0, "cleared": 0, "removed": 1, "unavailable": null}
+      c31: CONTROL FAILED: C31 never pulled: exactly one not_carried entry naming the v1 item, after a second carry
+m60-added-exempt-from-change [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: (p.new_item_id IS NOT NULL AND p.added_by IS NULL AND (
+    RED: c29  green: none
+      c29: CONTROL FAILED: C29 v2 carry: {"status": "done", "carried": 2, "cleared": 0, "removed": 0, "unavailable": null}
+m61-not-carried-for-every-unmatched [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: 'reason', 'not_carried',
+    RED: c13  green: none
+      c13: CONTROL FAILED: C13 removed entry for L-item-1: {"type": "checklist_review_cleared", "reason": "not_carried", "item_id": null, "changed_at": "2026-09-29T00:35:29.47989+00:00", "changed_by": "<id>", "item_title": "Item one", "checklist_name": "Fixtur
+m62-tick-anon-grant [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: GRANT EXECUTE ON FUNCTION public.set_submission_checklist_reviewer_check(uuid, boolean) TO anon, aut
+    RED: c15  green: none
+      c15: CONTROL FAILED: C15 set_submission_checklist_reviewer_check(uuid, boolean) anon EXECUTE
+n01-diff-header-id-key [as expected] (draft)
+    MUTATION APPLIED: 4 line(s); first: h.id::text AS k
+    RED: d01  green: none
+      d01: CONTROL FAILED: D01a identical set -> no entry: checklist_removed:Fixture custom B,checklist_removed:Fixture starter A,checklist_added:Fixture custom B,checklist_added:Fixture starter A
+n02-zero-checklists-not-written [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: IF false THEN
+    RED: d02  green: none
+      d02: CONTROL FAILED: D02 both removed: 
+n03-diff-not-idempotent [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: CONTINUE WHEN false AND EXISTS (
+    RED: d02  green: none
+      d02: CONTROL FAILED: D02 retry adds nothing: 4
+n04-empty-feature-off-raises [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: RAISE EXCEPTION 'not_authorized' USING ERRCODE = '42501';
+    RED: d02  green: none
+      d02: not_authorized
+n05-replaced-no-new-side-guard [as expected] (draft)
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: d03  green: none
+      d03: CONTROL FAILED: D03b older desktop, same set -> no entry: checklist_removed:Fixture custom B:replaced,checklist_removed:Fixture starter A:replaced,checklist_added:Fixture custom B:replaced,checklist_added:Fixture starter A:replaced
+n06-replaced-rule-absent [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: AND false AND p.added_at_review_by IS NULL
+    RED: d03  green: none
+      d03: CONTROL FAILED: D03a replaced: 
+n07-zero-header-parent-plain-add [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: || CASE WHEN false THEN jsonb_build_object('parent_had_none', true) ELSE '{}'::jsonb END);
+    RED: d04  green: none
+      d04: CONTROL FAILED: D04 neutral adds: checklist_added:Fixture custom B,checklist_added:Fixture starter A
+n08-removed-flag-for-added-lost [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: || CASE WHEN false THEN jsonb_build_object('added_at_review', true) ELSE '{}'::jsonb END
+    RED: d08  green: none
+      d08: CONTROL FAILED: D08b vd=checklist_removed:Fixture starter A
+n09-diff-counts-broker-removed-as-agent [as expected] (draft)
+    MUTATION APPLIED: 3 line(s); first: WHERE NOT EXISTS (SELECT 1 FROM nh n WHERE n.k = p.k)
+    RED: d07  green: none
+      d07: CONTROL FAILED: D07a: {"status": "done", "carried": 4, "cleared": 0, "removed": 0, "unavailable": null} vd=checklist_removed:Fixture custom B
+n10-diff-no-after-broker-removal [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: WHERE NOT EXISTS (SELECT 1 FROM ph p WHERE p.k = n.k)
+    RED: d08  green: none
+      d08: CONTROL FAILED: D08 vd=
+n11-hdr-policy-no-removed [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: 
+    RED: d05  green: none
+      d05: CONTROL FAILED: D05 forged removed_at_review_by: expected RLS, got rows:1
+n12-hdr-policy-no-restored-from [as expected] (draft)
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: d05  green: none
+      d05: CONTROL FAILED: D05 forged restored_from_checklist_id: expected RLS, got rows:1
+n13-item-policy-no-restored-from [as expected] (draft)
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: d05  green: none
+      d05: CONTROL FAILED: D05 forged restored_from_item_id: expected RLS, got rows:1
+n14-remove-hard-delete [as expected] (draft)
+    MUTATION APPLIED: 5 line(s); first: DELETE FROM public.submission_checklists WHERE id = v_hdr.id;
+    RED: d06  green: none
+      d06: CONTROL FAILED: D06 marker names the broker
+n15-remove-allows-needs-changes [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: IF v_rm.status IS NULL OR v_rm.status NOT IN ('submitted', 'resubmitted', 'under_review', 'needs_cha
+    RED: d06  green: none
+      d06: CONTROL FAILED: D06 needs_changes: expected ~^42501:not_open_for_review$, got rows:1
+n16-remove-no-superseded [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: WHERE false) THEN
+    RED: d06  green: none
+      d06: CONTROL FAILED: D06 superseded: expected ~^42501:superseded$, got rows:1
+n17-tick-ignores-removed [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: IF false THEN
+    RED: d06  green: none
+      d06: CONTROL FAILED: D06 tick on a removed checklist: expected ~^42501:checklist_removed$, got rows:1
+n18-add-no-unremove [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: IF FOUND THEN
+    RED: d06  green: none
+      d06: CONTROL FAILED: D06 add again un-removes: {"status": "exists", "checklist_id": "<id>"} missing
+n19-remove-not-idempotent [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: IF false THEN
+    RED: d06  green: none
+      d06: CONTROL FAILED: D06 repeat: {"status": "removed", "checklist_id": "<id>", "linked_emails": 2, "linked_documents": 3}
+n20-carry-no-broker-removed-filter [as expected] (draft)
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: d07  green: none
+      d07: CONTROL FAILED: D07a: {"status": "done", "carried": 4, "cleared": 0, "removed": 1, "unavailable": null} vd=
+n21-restore-restamp-caller-now [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: si.reviewer_checked, CASE WHEN si.reviewer_checked THEN v_uid END, CASE WHEN si.reviewer_checked THE
+    RED: d09  green: none
+      d09: CONTROL FAILED: D09 items copied, ticks original, no agent state: 4 bad rows
+n21b-restore-restamp-caller-only [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: si.reviewer_checked, CASE WHEN si.reviewer_checked THEN v_uid END, si.reviewer_checked_at, si.id
+    RED: d09  green: none
+      d09: CONTROL FAILED: D09 items copied, ticks original, no agent state: 4 bad rows
+n22-restore-no-removal-record [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: OR false AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(v_rs.history) AS h(e)
+    RED: d09  green: none
+      d09: CONTROL FAILED: D09 B was not removed: {"status": "already_present", "checklist_id": "<id>"}
+n23-restore-any-ancestor [as expected] (draft)
+    MUTATION APPLIED: 4 line(s); first: WHERE p.id = (SELECT h0.submission_id FROM public.submission_checklists h0 WHERE h0.id = p_source_ch
+    RED: d09  green: none
+      d09: CONTROL FAILED: D09 grandparent source: expected ~^42501:not_authorized$, got rows:1
+n24-restore-copies-agent-tick [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: si.expected_document_type, si.is_checked, si.sort_order,
+    RED: d09  green: none
+      d09: CONTROL FAILED: D09 items copied, ticks original, no agent state: 1 bad rows
+n25-restore-reads-template [as expected] (draft)
+    MUTATION APPLIED: 3 line(s); first: IF v_src.template_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.checklist_templates t WHERE t.
+    RED: d09  green: none
+      d09: CONTROL FAILED: D09 archived template restores: {"status": "template_not_found"}
+n26-restore-not-idempotent [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: IF false THEN
+    RED: d09  green: none
+      d09: CONTROL FAILED: D09 repeat: {"status": "removed_here", "checklist_id": "<id>"}
+n27-restore-not-added-at-review [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: VALUES (v_rs.rs_id, v_src.template_id, v_src.template_name, v_src.sort_order, NULL, NULL, v_src.id)
+    RED: d09 d10  green: none
+      d09: CONTROL FAILED: D09 header: added at review, restored from A
+      d10: CONTROL FAILED: D10a same evidence as the source -> carried: {"status": "done", "carried": 1, "cleared": 0, "removed": 0, "unavailable": null}
+n28-restore-allows-broker-removed-source [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: IF false
+    RED: d16  green: none
+      d16: CONTROL FAILED: D16 broker-removed source refused: {"items": 1, "status": "restored", "checklist_id": "<id>", "ticks_restored": 0}
+n29-baseline-note-restored-row [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: pi.note AS parent_note,
+    RED: d10  green: none
+      d10: CONTROL FAILED: D10a same evidence as the source -> carried: {"status": "done", "carried": 3, "cleared": 2, "removed": 0, "unavailable": null}
+n30-baseline-evidence-restored-row [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: pi.id AS base_item_id,
+    RED: d10  green: none
+      d10: CONTROL FAILED: D10a same evidence as the source -> carried: {"status": "done", "carried": 1, "cleared": 4, "removed": 0, "unavailable": null}
+n31-evidence-not-widened [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: OR false AND l.submission_checklist_item_id IN (
+    RED: d10  green: none
+      d10: CONTROL FAILED: D10a same evidence as the source -> carried: {"status": "done", "carried": 1, "cleared": 4, "removed": 0, "unavailable": null}
+n32-replaced-for-added-headers [as expected] (draft)
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: d11  green: none
+      d11: CONTROL FAILED: D11: {"status": "done", "carried": 1, "cleared": 0, "removed": 4, "unavailable": null} vd=checklist_removed:Fixture starter A:replaced,checklist_added:Fixture starter A:replaced
+n33-remove-no-key-lock [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: FOR NO KEY UPDATE;
+    RED: d12  green: none
+      d12: CONTROL FAILED: D12 remove locks the submission FOR UPDATE
+n34-restore-no-key-lock [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: FOR NO KEY UPDATE;
+    RED: d12  green: none
+      d12: CONTROL FAILED: D12 restore locks the submission FOR UPDATE
+n35-remove-invoker [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: SECURITY INVOKER
+    RED: d13  green: none
+      d13: CONTROL FAILED: D13 definer + search_path: remove_submission_checklist_at_review {"search_path=\"\""}
+n36-restore-grant-public [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: 
+    RED: d13  green: none
+      d13: CONTROL FAILED: D13 anon cannot execute restore_submission_checklist_at_review
+n37-apply-not-idempotent [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: ADD COLUMN removed_at_review_by uuid NULL,
+    RED: d15  green: none
+      d15: column "removed_at_review_by" of relation "submission_checklists" already exists
+n38-rollback-keeps-column [as expected] (draft-rollback)
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: d14  green: none
+      d14: CONTROL FAILED: D14 rollback restores everything: only-before 0, only-after 2
+n39-rollback-keeps-remove-fn [as expected] (draft-rollback)
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: d14  green: none
+      d14: CONTROL FAILED: D14 rollback restores everything: only-before 0, only-after 1
+n40-removed-entry-no-header-id [as expected] (draft)
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: d01 d16  green: none
+      d01: CONTROL FAILED: D01b entry fields: {"type": "checklist_removed", "source": "version", "changed_at": "2026-09-29T00:35:45.445994+00:00", "changed_by": "<id>", "template_id": null, "from_version": 1, "checklist_key": "name:Fixture custom B", "checklis
+      d16: CONTROL FAILED: D16 removed_checklist_id is the agent-removed copy: {"type": "checklist_removed", "source": "version", "changed_at": "2026-09-29T00:35:45.955257+00:00", "changed_by": "<id>", "template_id": null, "from_version": 1, "checklist_key": "
+n41-remove-counts-upload-rows [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: SELECT count(DISTINCT lm.id) FILTER (WHERE lm.kind = 'attachment'),
+    RED: d06  green: none
+      d06: CONTROL FAILED: D06 removed: {"status": "removed", "checklist_id": "<id>", "linked_emails": 2, "linked_documents": 4}
+n42-remove-counts-null-local-id [as expected] (draft)
+    MUTATION APPLIED: 5 line(s); first: SELECT count(DISTINCT (lm.kind, COALESCE(a.local_attachment_id, m.local_message_id))) FILTER (WHERE 
+    RED: d06  green: none
+      d06: CONTROL FAILED: D06 removed: {"status": "removed", "checklist_id": "<id>", "linked_emails": 2, "linked_documents": 4}
+n43-remove-emails-counted-as-documents [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: SELECT count(DISTINCT (lm.kind, COALESCE(a.local_attachment_id, m.local_message_id))),
+    RED: d06  green: none
+      d06: CONTROL FAILED: D06 removed: {"status": "removed", "checklist_id": "<id>", "linked_emails": 2, "linked_documents": 5}
+n43b-remove-emails-not-recorded [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: 'linked_emails', NULL))
+    RED: d06  green: none
+      d06: CONTROL FAILED: D06 one review entry: {"type": "checklist_removed", "source": "review", "changed_at": "2026-09-29T00:35:47.440037+00:00", "changed_by": "<id>", "template_id": "<id>", "checklist_id": "<id>", "checklist_key": "<id>", "linked_emails": 
+n44-pair-check-true [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: CHECK (true);
+    RED: d13  green: none
+      d13: CONTROL FAILED: D13 removed pair CHECK: CHECK (true)
+n45-restore-parent-any-org [as expected] (draft)
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: d17  green: none
+      d17: CONTROL FAILED: D17 (b) parent in another organization: expected ~^42501:not_authorized$, got rows:1
+n46-restore-parent-any-deal [as expected] (draft)
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: d17  green: none
+      d17: CONTROL FAILED: D17 (d) another deal: expected ~^42501:not_authorized$, got rows:1
+n47-restore-parent-any-submitter [as expected] (draft)
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: d17  green: none
+      d17: CONTROL FAILED: D17 (a) another submitter: expected ~^42501:not_authorized$, got rows:1
+n48-restore-parent-any-version [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: ;
+    RED: d17  green: none
+      d17: CONTROL FAILED: D17 (c) a version skipped: expected ~^42501:not_authorized$, got rows:1
+n49-s1-restore-source-any-org-submission [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: AND h.submission_id IN (SELECT x.id FROM public.transaction_submissions x WHERE x.organization_id = 
+    RED: d09  green: none
+      d09: CONTROL FAILED: D09 source of another deal: expected ~^42501:not_authorized$, got rows:1
+n50-s2-restore-history-from-parent [as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: OR NOT EXISTS (SELECT 1 FROM jsonb_array_elements((SELECT COALESCE(x.status_history, '[]'::jsonb) FR
+    RED: d09 d10 d16  green: none
+      d09: CONTROL FAILED: D09 restored: {"status": "not_removed"}
+      d10: invalid_payload
+      d16: CONTROL FAILED: D16 the agent-removed copy restores: {"status": "not_removed"}
+n51-s3-restore-parent-not-qualified [as expected] (draft)
+    MUTATION APPLIED: 6 line(s); first: WHERE p.id = v_rs.parent_submission_id;
+    RED: d17  green: none
+      d17: CONTROL FAILED: D17 (a) another submitter: expected ~^42501:not_authorized$, got rows:1
+n52-s4-restore-copies-agent-note [as expected] (draft)
+    MUTATION APPLIED: 4 line(s); first: reviewer_checked, reviewer_checked_by, reviewer_checked_at, restored_from_item_id, note)
+    RED: d09  green: none
+      d09: CONTROL FAILED: D09 items copied, ticks original, no agent state: 2 bad rows
+mutants: 100 run, 0 not as expected
+exit 0

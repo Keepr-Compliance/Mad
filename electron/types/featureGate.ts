@@ -48,7 +48,8 @@ export interface FeatureAccess {
  */
 export type StrictFeatureKey =
   | "email_contact_inference"
-  | "desktop_hide_from_export";
+  | "desktop_hide_from_export"
+  | "transaction_checklists";
 
 /**
  * What a strict read concluded.

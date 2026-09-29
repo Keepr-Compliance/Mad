@@ -162,15 +162,13 @@ export async function GET(request: Request) {
     //
     // This callback deliberately does not own a role -> destination table.
     // middleware.ts already owns that decision and applies it to every
-    // protected request: it admits broker and it_admin, and bounces agent to
-    // /download. If this file also decided, the two would drift the moment
-    // either changed -- and they already would have: an earlier version of
-    // this branch sent every non-admin to /download, which is right for an
-    // agent and wrong for a broker, whom middleware admits to /dashboard.
+    // protected request: since BACKLOG-3080 it gives broker, admin and
+    // it_admin the whole portal and an agent the floor (lib/auth/membership.ts).
+    // If this file also decided, the two would drift the moment either
+    // changed -- and they already had once: an earlier version of this branch
+    // sent every non-admin to /download, which was wrong for a broker.
     //
-    // So there is ONE destination here and ONE routing authority. When
-    // BACKLOG-3080 changes where agents land, it changes middleware.ts and
-    // this file needs no edit.
+    // So there is ONE destination here and ONE routing authority.
     return NextResponse.redirect(`${origin}/dashboard`);
   }
 
