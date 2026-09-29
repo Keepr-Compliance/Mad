@@ -179,6 +179,12 @@ function query(table: string) {
       filters.push((row) => values.includes(row[col]));
       return builder;
     },
+    // BACKLOG-3607 (SR R-3): `.neq(col, v)`, as PostgREST: `col <> v`, so a
+    // NULL column does not match either.
+    neq: (col: string, value: unknown) => {
+      filters.push((row) => row[col] !== null && row[col] !== undefined && row[col] !== value);
+      return builder;
+    },
     not: (col: string, op: string, value: unknown) => {
       if (op !== "is" || value !== null) throw new Error("fake: unsupported not()");
       notNullCols.push(col);
@@ -1627,14 +1633,14 @@ describe("BACKLOG-3607 — broker removals and restores reach the desktop", () =
     expect([...sweepOutcomes].sort()).toEqual(["skipped", "written-before-start"]);
   });
 
-  // ---- BACKLOG-3607 (SR R-2): a newer version still 'uploading' counts ----
-  it("C-B1f: the newer version is still 'uploading' -> superseded: nothing written, marker cleared", async () => {
+  // ---- BACKLOG-3607 (SR R-3): a newer version still 'uploading' does NOT count ----
+  it("C-B1f: the newer version is still 'uploading', no resubmit running -> pulled: broker change written, marker cleared", async () => {
     await seedAgentChecklists();
     seedCloudRemoval();
     cloud.removedFetchFailures = 3;
     await owePullForSub();
-    // Stage 3 of a resubmit: the child row exists as 'uploading'; the local
-    // pointer has not moved yet (that is Stage 7).
+    // A child row left 'uploading' (a crashed resubmit, or one whose cleanup
+    // failed). No resubmit is running in this process, so no guard is held.
     cloud.submissions.push({
       id: SUB3,
       status: "uploading",
@@ -1645,9 +1651,8 @@ describe("BACKLOG-3607 — broker removals and restores reach the desktop", () =
 
     await submissionSyncService.manualSync();
 
-    expect(localTemplates()).toEqual([KEEP_TPL, REMOVED_TPL].sort());
-    expect(count("transaction_checklist_links")).toBe(1);
+    expect(localTemplates()).toEqual([KEEP_TPL]);
     expect(owed()).toBeNull();
-    expect(checklistFetches.length).toBe(readsBefore); // superseded before any checklist read
+    expect(checklistFetches.length).toBeGreaterThan(readsBefore); // the pull read the checklists
   });
 });

@@ -98,6 +98,9 @@ export function toLocalDocumentType(value: string | null | undefined): DocumentT
  *
  * In memory on purpose: both paths run in the one main process, and a restart
  * ends any resubmit that was running, so there is nothing to protect after it.
+ * A crashed or failed resubmit can leave its `uploading` row in the cloud;
+ * that is why the newer-version check in `retryOwedReviewChecklistPull`
+ * ignores `uploading` children instead of relying on this guard.
  */
 const resubmitsInProgress = new Map<string, number>();
 
@@ -350,16 +353,28 @@ export async function retryOwedReviewChecklistPull(
       return { status: "final" };
     }
 
-    // BACKLOG-3607: a version is superseded once ANY newer version names it
-    // as its parent, in any status including `uploading` - the same rule the
-    // server uses to refuse every broker action on it. Its checklist changes
-    // are frozen from then on, and the newer version was built from the local
-    // set as it stood; applying the old version's pull now would change the
-    // local set behind that newer version. Checked in the cloud, not against
-    // the local pointer: the local pointer can lag the cloud after a resubmit.
+    // BACKLOG-3607: a version is superseded once a newer version that has
+    // finished uploading names it as its parent. Its checklist changes are
+    // frozen from then on, and the newer version was built from the local set
+    // as it stood; applying the old version's pull now would change the local
+    // set behind that newer version. Checked in the cloud, not against the
+    // local pointer: the local pointer can lag the cloud after a resubmit.
+    //
+    // An `uploading` child does NOT count. It exists either while a resubmit
+    // in this process is between Stage 3 and Stage 6 (the resubmit guard
+    // holds the pull as `kept` then, so a resubmit that fails still owes it),
+    // or because a resubmit crashed or its cleanup failed and left the row
+    // behind (no newer version exists, so the old version's changes still
+    // belong on the local set). Counting it would clear the marker and lose
+    // the pull if that resubmit never finishes. `.neq`, not an allow-list: a
+    // status added later still counts as a newer version.
     // A failed read keeps the marker and writes nothing.
     const newerResponse = await withTimeout(
-      client.from("transaction_submissions").select("id").eq("parent_submission_id", submissionId),
+      client
+        .from("transaction_submissions")
+        .select("id")
+        .eq("parent_submission_id", submissionId)
+        .neq("status", "uploading"),
       "Owed submission newer version read",
     );
     if (newerResponse.error) {

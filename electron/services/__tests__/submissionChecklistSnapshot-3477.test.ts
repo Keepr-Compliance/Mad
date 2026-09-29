@@ -226,6 +226,9 @@ class FakeSupabase {
       delete: () => ((mode = "delete"), builder),
       eq: (c: string, v: unknown) => (filters.push((r) => r[c] === v), builder),
       in: (c: string, vs: unknown[]) => (filters.push((r) => vs.includes(r[c])), builder),
+      // BACKLOG-3607 (SR R-3): `.neq(col, v)`, as PostgREST: `col <> v`, so a
+      // NULL column does not match either.
+      neq: (c: string, v: unknown) => (filters.push((r) => r[c] !== null && r[c] !== undefined && r[c] !== v), builder),
       not: (c: string, op: string, v: unknown) => {
         if (op !== "is" || v !== null) throw new Error("FakeSupabase: unsupported not()");
         filters.push((r) => r[c] !== null && r[c] !== undefined);
@@ -1296,6 +1299,59 @@ describe("BACKLOG-3599 — resubmit with an owed broker checklist pull", () => {
 
     expect(outcome).toEqual({ status: "pulled", added: ["Broker review add"], removed: [] });
     expect(getOwedReviewChecklistPullsFor(TX)).toEqual([]);
+  });
+
+  it("SR-X1: sync pass during Stages 3-6, then the resubmit FAILS -> v1's pull is still owed", async () => {
+    const v1 = await submittedWithOwedPull();
+    fake.failReadsOf.add("submission_checklists");
+    fake.rpcScript = [undefined, "network", "network", "network"];
+    const realRpc = fake.rpc.bind(fake);
+    let during: unknown = null;
+    let ran = false;
+    const spy = jest.spyOn(fake, "rpc").mockImplementation(async (fn: string, args: Row) => {
+      if (!ran) {
+        ran = true;
+        expect(fake.tables.transaction_submissions.filter((s) => s.status === "uploading")).toHaveLength(1);
+        fake.failReadsOf.delete("submission_checklists");
+        during = await retryOwedReviewChecklistPull(supabaseService.getClient(), TX, v1);
+      }
+      return realRpc(fn, args);
+    });
+    let second: Awaited<ReturnType<typeof submissionService.resubmitTransaction>>;
+    try {
+      second = await submissionService.resubmitTransaction(TX);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(ran).toBe(true);
+    expect(second.success).toBe(false);
+    expect(fake.tables.transaction_submissions.filter((s) => s.status === "uploading")).toHaveLength(0);
+    expect(during).toEqual({ status: "kept", reason: `resubmit in progress for ${TX}; nothing written` });
+    expect(getOwedReviewChecklistPullsFor(TX)).toEqual([v1]);
+  });
+
+  function leaveStaleUploading(v1: string): void {
+    const v1row = fake.tables.transaction_submissions.find((s) => s.id === v1)!;
+    fake.tables.transaction_submissions.push({ ...v1row, id: "stale-uploading-v2", status: "uploading", parent_submission_id: v1, version: 2 });
+  }
+
+  it("SR-X2: a leftover `uploading` child (crash / failed cleanup), next sync pass -> v1's changes are pulled", async () => {
+    const v1 = await submittedWithOwedPull();
+    leaveStaleUploading(v1);
+    const outcome = await retryOwedReviewChecklistPull(supabaseService.getClient(), TX, v1);
+    expect(outcome).toEqual({ status: "pulled", added: ["Broker review add"], removed: [] });
+    expect(getOwedReviewChecklistPullsFor(TX)).toEqual([]);
+  });
+
+  it("SR-X3: a leftover `uploading` child, then resubmit -> v2 carries v1's broker checklist, no warning", async () => {
+    const v1 = await submittedWithOwedPull();
+    leaveStaleUploading(v1);
+    const second = await submissionService.resubmitTransaction(TX);
+    expect(second.success).toBe(true);
+    expect("checklistsNotSent" in second).toBe(false);
+    const payload = fake.rpcCalls[fake.rpcCalls.length - 1].args.p_checklists as Row[];
+    expect(payload.map((c) => c.template_id)).toContain(TPL_BROKER);
+    expect(fake.tables.transaction_submissions.some((s) => s.id === "stale-uploading-v2")).toBe(false);
   });
 
   describe("BACKLOG-3595 — an open window is told after the pre-pull commits", () => {
