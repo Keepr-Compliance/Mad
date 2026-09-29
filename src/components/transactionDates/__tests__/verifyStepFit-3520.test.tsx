@@ -58,6 +58,8 @@ describe("Submit dialog, Verify Transaction Details step: where it scrolls", () 
     expect(panel().className).toMatch(/(^|\s)overflow-hidden(\s|$)/);
     expect(panel().className).toMatch(/sm:overflow-hidden/);
     expect(panel().className).not.toMatch(/overflow-y-auto/);
+    // The height cap: without it a short window pushes header and buttons off-screen and nothing scrolls.
+    expect(panel().className).toMatch(/(^|\s)sm:max-h-\[/);
     expect(scrollers(panel())).toEqual([screen.getByTestId("submit-review-body")]);
   });
 
