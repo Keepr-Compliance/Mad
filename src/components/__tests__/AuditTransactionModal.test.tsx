@@ -1349,12 +1349,20 @@ describe("AuditTransactionModal", () => {
       updated_at: "2024-01-01T00:00:00Z",
     } as unknown as Transaction;
 
+    // Each test gets its own onClose: the shared mockOnClose can receive a late
+    // call from an earlier test's async path, which made an exact-count
+    // assertion here intermittently see 2 calls.
+    let onClose = jest.fn();
+    beforeEach(() => {
+      onClose = jest.fn();
+    });
+
     const renderModal = (edit = false) =>
       renderWithProvider(
         <AuditTransactionModal
           userId={mockUserId}
           provider={mockProvider}
-          onClose={mockOnClose}
+          onClose={onClose}
           onSuccess={mockOnSuccess}
           {...(edit ? { editTransaction } : {})}
         />,
@@ -1449,7 +1457,7 @@ describe("AuditTransactionModal", () => {
           name: /^cancel$/i,
         }),
       );
-      expect(mockOnClose).toHaveBeenCalledTimes(1);
+      expect(onClose).toHaveBeenCalledTimes(1);
     });
 
     it("F6: Cancel closes the modal in Edit Transaction", async () => {
@@ -1459,7 +1467,7 @@ describe("AuditTransactionModal", () => {
           name: /^cancel$/i,
         }),
       );
-      expect(mockOnClose).toHaveBeenCalledTimes(1);
+      expect(onClose).toHaveBeenCalledTimes(1);
     });
 
     it("F7: Back on the floating group returns from step 2 to step 1", async () => {
