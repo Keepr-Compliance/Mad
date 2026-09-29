@@ -1,12 +1,13 @@
+# BACKLOG-3608 mutants, NAS test DB, tree 0143528f9
 k01 [as expected]
     MUTATION APPLIED: 4 line(s); first: removed: -- A client statement may not change the history at all.
     RED: e01 e02  green: none
-      e01: CONTROL FAILED: E01 agent appends checklist_review (-) on needs_changes v1: expected ~^42501:status_history_append_only$, got rows:1
+      e01: CONTROL FAILED: E01 agent appends checklist_review (-) on uploading v2: expected ~^42501:status_history_append_only$, got rows:1
       e02: CONTROL FAILED: E02 reviewer appends checklist_review naming self: expected ~^42501:status_history_append_only$, got rows:1
 k02 [as expected]
     MUTATION APPLIED: 2 line(s); first: IF session_user IN ('authenticated', 'anon') THEN
     RED: e01 e02  green: none
-      e01: CONTROL FAILED: E01 agent appends checklist_review (-) on needs_changes v1: expected ~^42501:status_history_append_only$, got rows:1
+      e01: CONTROL FAILED: E01 agent appends checklist_review (-) on uploading v2: expected ~^42501:status_history_append_only$, got rows:1
       e02: CONTROL FAILED: E02 reviewer appends checklist_review naming self: expected ~^42501:status_history_append_only$, got rows:1
 k03 [as expected]
     MUTATION APPLIED: 2 line(s); first: IF auth.role() IN ('authenticated', 'anon') THEN
@@ -20,7 +21,7 @@ k04 [as expected]
 k05 [as expected]
     MUTATION APPLIED: 2 line(s); first: IF current_user IN ('authenticated', 'anon') AND EXISTS (SELECT 1 FROM jsonb_array_elements(v_new) WITH ORDINA
     RED: e01  green: none
-      e01: CONTROL FAILED: E01 agent appends checklist_added (-) on needs_changes v1: expected ~^42501:status_history_append_only$, got rows:1
+      e01: CONTROL FAILED: E01 agent appends checklist_added (-) on uploading v2: expected ~^42501:status_history_append_only$, got rows:1
 k06 [as expected]
     MUTATION APPLIED: 2 line(s); first: IF current_user IN ('authenticated', 'anon') AND EXISTS (SELECT 1 FROM jsonb_array_elements(v_new) AS x(e) WHE
     RED: e01  green: none
@@ -28,7 +29,7 @@ k06 [as expected]
 k07 [as expected]
     MUTATION APPLIED: 2 line(s); first: IF current_user IN ('authenticated', 'anon') AND (v_new -> -1 ->> 'type') = 'checklist_review' THEN
     RED: e01  green: none
-      e01: CONTROL FAILED: E01 agent appends checklist_added (-) on needs_changes v1: expected ~^42501:status_history_append_only$, got rows:1
+      e01: CONTROL FAILED: E01 agent appends checklist_added (-) on uploading v2: expected ~^42501:status_history_append_only$, got rows:1
 k08 [as expected]
     MUTATION APPLIED: 1 line(s); first: ALTER TRIGGER status_history_append_only ON public.transaction_submissions RENAME TO zz_status_history_append_
     RED: e03 e05  green: none
@@ -38,4 +39,61 @@ k09 [as expected]
     MUTATION APPLIED: 2 line(s); first: IF current_user IN ('authenticated', 'anon') AND NEW.submitted_by = auth.uid() THEN
     RED: e02  green: none
       e02: CONTROL FAILED: E02 reviewer appends checklist_review naming self: expected ~^42501:status_history_append_only$, got rows:1
-mutants: 9 run, 0 not as expected
+k10 [as expected]
+    MUTATION APPLIED: 2 line(s); first: IF current_setting('role') IN ('authenticated', 'anon') THEN
+    RED: e04  green: none
+      e04: status_history_append_only
+k11 [as expected]
+    MUTATION APPLIED: 2 line(s); first: IF current_user IN ('anon') THEN
+    RED: e01 e02  green: none
+      e01: CONTROL FAILED: E01 agent appends checklist_review (-) on uploading v2: expected ~^42501:status_history_append_only$, got rows:1
+      e02: CONTROL FAILED: E02 reviewer appends checklist_review naming self: expected ~^42501:status_history_append_only$, got rows:1
+k20 [as expected]
+    MUTATION APPLIED: 7 line(s); first: IF NEW.status_history IS NOT DISTINCT FROM OLD.status_history THEN
+    RED: e06 e09  green: none
+      e06: CONTROL FAILED: E06-F1 agent finalize + reviewed_by broker + notes: expected ~^42501:review_fields_reviewer_only$, got rows:1
+      e09: CONTROL FAILED: E09 submitter changes id: expected ~^42501:submission_owner_fields_locked$, got rows:1
+k21 [as expected]
+    MUTATION APPLIED: 3 line(s); first: IF false THEN
+    RED: e06  green: none
+      e06: CONTROL FAILED: E06-R1 broker decides naming the admin: expected ~^42501:review_fields_reviewer_only$, got rows:1
+k22 [as expected]
+    MUTATION APPLIED: 3 line(s); first: removed: IF NOT public.can_review_submission(OLD.organization_id) THEN
+    RED: e06  green: none
+      e06: CONTROL FAILED: E06-F2 agent sets review_notes only: expected ~^42501:review_fields_reviewer_only$, got rows:1
+k23 [as expected]
+    MUTATION APPLIED: 4 line(s); first: IF NEW.reviewed_by     IS DISTINCT FROM OLD.reviewed_by THEN
+    RED: e06  green: none
+      e06: CONTROL FAILED: E06-F2 agent sets review_notes only: expected ~^42501:review_fields_reviewer_only$, got rows:1
+k24 [as expected]
+    MUTATION APPLIED: 2 line(s); first: IF NOT public.can_review_submission(NEW.organization_id) THEN
+    RED: e07  green: none
+      e07: CONTROL FAILED: E07-G1 submitter moves row to an org it reviews and names itself: expected ~^42501:review_fields_reviewer_only$, got 42501:submission_owner_fields_locked
+k30 [as expected]
+    MUTATION APPLIED: 9 line(s); first: removed: -- Ownership columns are fixed for a client statement.
+    RED: e09  green: none
+      e09: CONTROL FAILED: E09 submitter changes id: expected ~^42501:submission_owner_fields_locked$, got rows:1
+k31 [as expected]
+    MUTATION APPLIED: 7 line(s); first: IF NEW.organization_id IS DISTINCT FROM OLD.organization_id THEN
+    RED: e09  green: none
+      e09: CONTROL FAILED: E09 submitter changes id: expected ~^42501:submission_owner_fields_locked$, got rows:1
+k32 [as expected]
+    MUTATION APPLIED: 4 line(s); first: IF NEW.submitted_by = auth.uid() AND (NEW.id IS DISTINCT FROM OLD.id
+    RED: e09  green: none
+      e09: CONTROL FAILED: E09 broker changes id: expected ~^42501:submission_owner_fields_locked$, got rows:1
+k40 [as expected]
+    MUTATION APPLIED: 2 line(s); first: ((submitted_by = ( SELECT auth.uid() AS uid)) AND ((status)::text = ANY (ARRAY['needs_changes'::text, 'uploadi
+    RED: e08 e06 c20  green: none
+      e08: CONTROL FAILED: E08 agent moves its needs_changes v1 to resubmitted: expected rows:0, got rows:1
+      e06: CONTROL FAILED: E06-L4 agent status move on its decided needs_changes row: expected rows:0, got rows:1
+      c20: CONTROL FAILED: C20 submitter needs_changes -> resubmitted: expected rows:0, got rows:1
+k41 [as expected]
+    MUTATION APPLIED: 4 line(s); first: ((submitted_by = ( SELECT auth.uid() AS uid)) AND ((status)::text = ANY (ARRAY['needs_changes'::text, 'uploadi
+    RED: e08  green: none
+      e08: CONTROL FAILED: E08 agent moves its needs_changes v1 to resubmitted: expected rows:0, got rows:1
+k42 [as expected]
+    MUTATION APPLIED: 2 line(s); first: ((submitted_by = ( SELECT auth.uid() AS uid)) AND ((status)::text = 'needs_changes'::text))
+    RED: e03 e12  green: none
+      e03: CONTROL FAILED: E03 desktop finalize v1: expected rows:1, got rows:0
+      e12: CONTROL FAILED: E12 finalize v1 -> submitted: expected rows:1, got rows:0
+mutants: 22 run, 0 not as expected

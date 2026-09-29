@@ -1,8 +1,17 @@
+# BACKLOG-3608 controls, NAS test DB, tree 0143528f9 (3608 on 3607 PR 1 @ da1b43459)
+## with the 3608 file
 e01-submitter-appends                    GREEN 20 assertions
 e02-reviewer-appends                     GREEN 9 assertions
 e03-client-status-moves                  GREEN 8 assertions
 e04-definer-writers                      GREEN 6 assertions
-e05-guard-properties                     GREEN 6 assertions
+e05-guard-properties                     GREEN 8 assertions
+e06-review-fields                        GREEN 15 assertions
+e07-review-fields-org                    GREEN 2 assertions
+e08-submitter-decided-rows               GREEN 11 assertions
+e09-ownership-fields                     GREEN 16 assertions
+e10-rollback                             GREEN 9 assertions
+e11-apply-twice                          GREEN 5 assertions
+e12-released-desktop                     GREEN 13 assertions
 d01-version-diff                         GREEN 5 assertions
 d02-zero-checklists                      GREEN 5 assertions
 d03-replaced                             GREEN 2 assertions
@@ -45,4 +54,23 @@ c27-added-carry                          GREEN 12 assertions
 c28-added-same-title                     GREEN 6 assertions
 c29-added-changed                        GREEN 9 assertions
 c31-added-chain                          GREEN 9 assertions
-controls: 47 green / 47
+controls: 54 green / 54
+
+## without the 3608 file (G=/dev/null, ONLY_E=1)
+e01-submitter-appends                    RED   CONTROL FAILED: E01 agent appends checklist_review (-) on uploading v2: expected ~^42501:status_history_append_only$, got rows:1
+e02-reviewer-appends                     RED   CONTROL FAILED: E02 reviewer appends checklist_review naming self: expected ~^42501:status_history_append_only$, got rows:1
+e03-client-status-moves                  GREEN 8 assertions
+e04-definer-writers                      GREEN 6 assertions
+e05-guard-properties                     RED   CONTROL FAILED: E05 guard body is the 3608 body
+e06-review-fields                        RED   CONTROL FAILED: E06-F1 agent finalize + reviewed_by broker + notes: expected ~^42501:review_fields_reviewer_only$, got rows:1
+e07-review-fields-org                    RED   CONTROL FAILED: E07-G1 submitter moves row to an org it reviews and names itself: expected ~^42501:review_fields_reviewer_only$, got rows:1
+e08-submitter-decided-rows               RED   CONTROL FAILED: E08 agent moves its needs_changes v1 to resubmitted: expected rows:0, got rows:1
+e09-ownership-fields                     RED   CONTROL FAILED: E09 submitter changes id: expected ~^42501:submission_owner_fields_locked$, got rows:1
+e10-rollback                             GREEN 9 assertions
+e11-apply-twice                          RED   CONTROL FAILED: E11 agent sets review_notes: expected ~^42501:review_fields_reviewer_only$, got rows:1
+e12-released-desktop                     GREEN 13 assertions
+controls: 4 green / 12
+
+## rollback-3608.sql mutants against e10
+rollback without the UPDATE rule section -> e10 RED: E10 UPDATE rule text is the 3596 text
+rollback without the guard section       -> e10 RED: E10 guard body is the 3477 body

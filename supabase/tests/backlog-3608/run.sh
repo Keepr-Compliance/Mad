@@ -36,7 +36,7 @@ M96C="$MIGDIR/20260928170000_backlog_3596_added_checklist_ticks.sql"
 M07="$MIGDIR/20260929120000_backlog_3607_checklist_add_remove.sql"
 GUARD="$MIGDIR/20260929130000_backlog_3608_status_history_client_appends.sql"
 G="${G:-$GUARD}"
-RB="$HERE/rollback-3608.sql"
+RB="${RB:-$HERE/rollback-3608.sql}"
 SSH_HOST="${SSH_HOST:?set SSH_HOST}"; CONTAINER="${PG_CONTAINER:?set PG_CONTAINER}"
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=20)
 psql_in() { ssh "${SSH_OPTS[@]}" "$SSH_HOST" "docker exec -i $CONTAINER psql -U postgres -v ON_ERROR_STOP=1 -X -tA -f -"; }
@@ -92,7 +92,6 @@ all_controls() {
 }
 case "${1:-}" in
   gate) bash "$T96/run.sh" gate ;;
-  probe) run_control "$HERE/probes/p90-probe.sql"; echo "$CONTROL_DETAIL" ;;
   one) run_control "$2" "${3:-$G}"; echo "$CONTROL_RESULT $CONTROL_DETAIL"; grep -E 'NOTICE' <<<"$CONTROL_OUT" | tail -40 || true ;;
   controls)
     only="${2:-}"; fail=0; n=0
