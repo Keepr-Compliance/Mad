@@ -18,7 +18,7 @@ type SignOutOptions = { scope?: 'global' | 'local' | 'others' };
 
 /** The one method this helper needs from a Supabase client (browser or server). */
 interface AuthWithSignOut {
-  signOut(options?: SignOutOptions): Promise<{ error: unknown }>;
+  signOut(_options?: SignOutOptions): Promise<{ error: unknown }>;
 }
 
 export interface SignOutCapableClient {
