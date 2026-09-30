@@ -211,13 +211,20 @@ export const checklistService = {
     }
   },
 
-  /** BACKLOG-3617: open the portal Checklists page (main builds the URL). */
-  async openTemplatesPortal(): Promise<ApiResult> {
+  /**
+   * BACKLOG-3617: open the portal Checklists page (main builds the URL).
+   * `portalAddress` comes back only when main allowed the address but the
+   * browser did not open; the renderer never chooses one.
+   */
+  async openTemplatesPortal(): Promise<{ success: boolean; portalAddress?: string }> {
     try {
       const result = await window.api.checklists.openTemplatesPortal();
-      return { success: result.success, error: result.error };
-    } catch (error) {
-      return { success: false, error: getErrorMessage(error) };
+      if (result.success) return { success: true };
+      return typeof result.portalAddress === "string"
+        ? { success: false, portalAddress: result.portalAddress }
+        : { success: false };
+    } catch {
+      return { success: false };
     }
   },
 };

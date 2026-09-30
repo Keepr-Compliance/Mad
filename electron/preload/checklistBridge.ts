@@ -24,6 +24,7 @@ import type {
 import type {
   CanEditChecklistTemplatesResult,
   ListChecklistTemplatesResult,
+  OpenChecklistsPortalResult,
 } from "../types/ipc/window-api-checklists";
 
 export const checklistBridge = {
@@ -104,6 +105,6 @@ export const checklistBridge = {
     ipcRenderer.invoke("checklists:can-edit-templates"),
 
   /** BACKLOG-3617: open the portal Checklists page. No URL crosses the bridge. */
-  openTemplatesPortal: (): Promise<{ success: boolean; error?: string }> =>
+  openTemplatesPortal: (): Promise<OpenChecklistsPortalResult> =>
     ipcRenderer.invoke("checklists:open-templates-portal"),
 };

@@ -101,6 +101,13 @@ export function addButtonLabel(count: number): string {
   return count === 1 ? "Add checklist" : `Add ${count} checklists`;
 }
 
+/** BACKLOG-3617: the line shown when "Checklists" did not open. */
+export function portalOpenFailedMessage(portalAddress?: string): string {
+  return portalAddress
+    ? `Couldn't open the portal. Go to ${portalAddress} \u2192 Checklists.`
+    : "Couldn't open the portal Checklists page.";
+}
+
 export function ChecklistTemplateChooser({
   mode,
   disabledTemplateIds,
@@ -118,6 +125,7 @@ export function ChecklistTemplateChooser({
   const [message, setMessage] = useState<string | null>(null);
   // BACKLOG-3617: null = unknown (still asking, refused, offline).
   const [canEditTemplates, setCanEditTemplates] = useState<boolean | null>(null);
+  const [linkError, setLinkError] = useState<string | null>(null);
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
@@ -223,10 +231,23 @@ export function ChecklistTemplateChooser({
   const listIsEmpty = listing.status === "ready" && listing.templates.length === 0;
   const canCreate = canCreateChecklists(canEditTemplates);
 
+  const openPortal = async () => {
+    setLinkError(null);
+    const result = await checklistService.openTemplatesPortal();
+    if (!mountedRef.current) return;
+    if (!result.success) setLinkError(portalOpenFailedMessage(result.portalAddress));
+  };
+
+  const linkErrorLine = linkError ? (
+    <p className="mt-1 text-xs text-red-600" role="alert" data-testid="checklist-create-link-error">
+      {linkError}
+    </p>
+  ) : null;
+
   const checklistsLink = (
     <button
       type="button"
-      onClick={() => void checklistService.openTemplatesPortal()}
+      onClick={() => void openPortal()}
       className="font-medium text-blue-600 hover:underline"
       data-testid="checklist-create-link"
     >
@@ -271,6 +292,7 @@ export function ChecklistTemplateChooser({
               {pickHint}
             </p>
           )}
+          {linkErrorLine}
         </>
       ) : (
         <>
@@ -306,9 +328,12 @@ export function ChecklistTemplateChooser({
       )}
 
       {mode === "add" && listIsEmpty && addHint && (
-        <p className="mt-2 text-sm text-gray-500" data-testid="checklist-chooser-hint">
-          {addHint}
-        </p>
+        <>
+          <p className="mt-2 text-sm text-gray-500" data-testid="checklist-chooser-hint">
+            {addHint}
+          </p>
+          {linkErrorLine}
+        </>
       )}
 
       {listing.status === "ready" && listing.templates.length > 0 && (
@@ -353,9 +378,12 @@ export function ChecklistTemplateChooser({
             })}
           </div>
           {mode === "add" && addHint && (
-            <p className="mt-3 text-xs text-gray-400 text-left" data-testid="checklist-chooser-hint">
-              {addHint}
-            </p>
+            <>
+              <p className="mt-3 text-xs text-gray-400 text-left" data-testid="checklist-chooser-hint">
+                {addHint}
+              </p>
+              <div className="text-left">{linkErrorLine}</div>
+            </>
           )}
           {listing.source === "cache" && (
             <p className="mt-1 text-xs text-gray-400 text-left" data-testid="checklist-templates-cached">

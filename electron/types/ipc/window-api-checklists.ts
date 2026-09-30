@@ -55,6 +55,16 @@ export type CanEditChecklistTemplatesResult =
   | { success: true; canEdit: boolean }
   | { success: false; error: string };
 
+/**
+ * BACKLOG-3617: the answer of `checklists:open-templates-portal`.
+ * `portalAddress` (an origin main built and allowed) is present only when the
+ * address was fine but the browser could not be opened; a refused address is
+ * never sent back.
+ */
+export type OpenChecklistsPortalResult =
+  | { success: true }
+  | { success: false; error: string; portalAddress?: string };
+
 /** Every write that either changed a row or did not. */
 export interface ChecklistWriteResult {
   success: boolean;
@@ -99,5 +109,5 @@ export interface WindowApiChecklists {
    * BACKLOG-3617: open the portal's Checklists page in the browser. Takes no
    * URL — main builds it and refuses anything that is not the portal origin.
    */
-  openTemplatesPortal: () => Promise<{ success: boolean; error?: string }>;
+  openTemplatesPortal: () => Promise<OpenChecklistsPortalResult>;
 }

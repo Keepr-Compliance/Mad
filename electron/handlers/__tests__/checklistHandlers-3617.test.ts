@@ -80,6 +80,7 @@ jest.mock("../featureGateHandlers", () => ({
 import {
   CHECKLISTS_NOT_ALLOWED_ERROR,
   CHECKLISTS_NO_ORGANIZATION_ERROR,
+  CHECKLISTS_PORTAL_OPEN_FAILED_ERROR,
   CHECKLISTS_PORTAL_URL_REFUSED_ERROR,
   CHECKLIST_TEMPLATE_ROLE_UNKNOWN_ERROR,
   checklistsPortalUrl,
@@ -171,6 +172,16 @@ describe("BACKLOG-3617 — checklists:can-edit-templates", () => {
 describe("BACKLOG-3617 — checklists:open-templates-portal", () => {
   it("opens exactly the production Checklists page by default", async () => {
     expect(await invoke("checklists:open-templates-portal")).toEqual({ success: true });
+    expect(mockOpenExternal.mock.calls).toEqual([["https://app.keeprcompliance.com/dashboard/checklists"]]);
+  });
+
+  it("the browser failing to open answers with the allowed portal address, not success", async () => {
+    mockOpenExternal.mockRejectedValueOnce(new Error("no handler"));
+    expect(await invoke("checklists:open-templates-portal")).toEqual({
+      success: false,
+      error: CHECKLISTS_PORTAL_OPEN_FAILED_ERROR,
+      portalAddress: "https://app.keeprcompliance.com",
+    });
     expect(mockOpenExternal.mock.calls).toEqual([["https://app.keeprcompliance.com/dashboard/checklists"]]);
   });
 

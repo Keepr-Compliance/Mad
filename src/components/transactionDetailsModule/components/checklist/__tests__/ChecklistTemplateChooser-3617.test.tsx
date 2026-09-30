@@ -168,6 +168,63 @@ describe("BACKLOG-3617 — no templates at all", () => {
   });
 });
 
+describe("BACKLOG-3617 — the Checklists link failing to open", () => {
+  const linkError = () => screen.queryByTestId("checklist-create-link-error");
+
+  it("opened: no message", async () => {
+    setRole("creator");
+    renderChooser("add");
+    await settle("creator");
+    fireEvent.click(screen.getByTestId("checklist-create-link"));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(linkError()).not.toBeInTheDocument();
+  });
+
+  it("browser did not open: the message names the portal address main sent", async () => {
+    api().openTemplatesPortal.mockResolvedValue({
+      success: false,
+      error: "The browser couldn't be opened.",
+      portalAddress: "https://app.keeprcompliance.com",
+    });
+    setRole("creator");
+    renderChooser("add");
+    await settle("creator");
+    fireEvent.click(screen.getByTestId("checklist-create-link"));
+    expect(await screen.findByTestId("checklist-create-link-error")).toHaveTextContent(
+      /^Couldn't open the portal\. Go to https:\/\/app\.keeprcompliance\.com \u2192 Checklists\.$/,
+    );
+  });
+
+  it("address refused: the message names no address", async () => {
+    api().openTemplatesPortal.mockResolvedValue({
+      success: false,
+      error: "The checklist settings page couldn't be opened.",
+    });
+    setRole("creator");
+    renderChooser("pick");
+    await settle("creator");
+    fireEvent.click(screen.getByTestId("checklist-create-link"));
+    expect(await screen.findByTestId("checklist-create-link-error")).toHaveTextContent(
+      /^Couldn't open the portal Checklists page\.$/,
+    );
+  });
+});
+
+describe("BACKLOG-3617 — Retry asks the role again", () => {
+  it("unknown on the first read, creator after Retry: the link appears", async () => {
+    api().listTemplates.mockResolvedValueOnce({ success: false, error: "Checklist templates couldn't be loaded right now." });
+    api().canEditTemplates.mockResolvedValueOnce(ROLE_ANSWER.unknown);
+    renderChooser("add");
+    fireEvent.click(await screen.findByTestId("checklist-templates-retry"));
+    setRole("creator");
+    await settle("creator");
+    expect(api().canEditTemplates).toHaveBeenCalledTimes(2);
+    expect(hints()).toEqual([CREATOR_ADD]);
+  });
+});
+
 describe("BACKLOG-3617 — one role check", () => {
   it("canCreateChecklists is true only for the database's literal true", () => {
     expect(canCreateChecklists(true)).toBe(true);

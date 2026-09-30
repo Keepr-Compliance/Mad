@@ -12,8 +12,9 @@
  * `add-link`, `remove-link`, `can-edit-templates`.
  *
  * FOUR do not. `checklists:open-templates-portal` (BACKLOG-3617) reads and
- * writes nothing; the portal gates its own page. The other three: `checklists:get` and `checklists:remove` are the unhide rule
- * spelled out in `electron/types/featureGate.ts`: a user whose plan later loses
+ * writes nothing; the portal gates its own page. The other three:
+ * `checklists:get` and `checklists:remove` are the unhide rule spelled out
+ * in `electron/types/featureGate.ts`: a user whose plan later loses
  * the feature must still be able to see what is on his own transaction and take
  * it off again. Gating either would strand rows where he can neither use them
  * nor be rid of them. `checklists:invalidate-templates` is the third — it only
@@ -22,7 +23,7 @@
  * Do not take that split from this paragraph. It is asserted by execution in
  * `checklistHandlers-3475.test.ts` ("the gated and ungated sets, by
  * execution"), which invokes every registered `checklists:` channel with the
- * plan unreadable and partitions them by what each one answers — so a tenth
+ * plan unreadable and partitions them by what each one answers — so a twelfth
  * channel, or a gate added or dropped, reds a test rather than leaving a
  * sentence to be trusted.
  *
@@ -100,6 +101,7 @@ import type {
 import type {
   CanEditChecklistTemplatesResult,
   ListChecklistTemplatesResult,
+  OpenChecklistsPortalResult,
 } from "../types/ipc/window-api-checklists";
 
 // ---------------------------------------------------------------------------
@@ -183,6 +185,10 @@ export const CHECKLIST_TEMPLATE_ROLE_UNKNOWN_ERROR =
 /** BACKLOG-3617: the portal address is not one this app will open. */
 export const CHECKLISTS_PORTAL_URL_REFUSED_ERROR =
   "The checklist settings page couldn't be opened.";
+
+/** BACKLOG-3617: the address was allowed, but the browser could not be opened. */
+export const CHECKLISTS_PORTAL_OPEN_FAILED_ERROR =
+  "The browser couldn't be opened.";
 
 /** The requested template is not in the listing (archived, deleted, or renamed away). */
 export const CHECKLIST_TEMPLATE_NOT_FOUND_ERROR =
@@ -553,13 +559,26 @@ export function registerChecklistHandlers(): void {
   ipcMain.handle(
     "checklists:open-templates-portal",
     wrapHandler(
-      async (_event: IpcMainInvokeEvent): Promise<ChecklistWriteResponse> => {
+      async (_event: IpcMainInvokeEvent): Promise<OpenChecklistsPortalResult> => {
         const url = checklistsPortalUrl();
         if (!url) {
+          // No address in the answer: a refused address is not one to show.
           logService.warn("[Checklists] Portal address refused", "Checklists");
           return { success: false, error: CHECKLISTS_PORTAL_URL_REFUSED_ERROR };
         }
-        await shell.openExternal(url);
+        try {
+          await shell.openExternal(url);
+        } catch (error) {
+          logService.warn("[Checklists] Could not open the portal page", "Checklists", {
+            error: error instanceof Error ? error.message : "Unknown error",
+          });
+          // The address passed the allow-list, so the user can be told where to go.
+          return {
+            success: false,
+            error: CHECKLISTS_PORTAL_OPEN_FAILED_ERROR,
+            portalAddress: new URL(url).origin,
+          };
+        }
         return { success: true };
       },
       { module: "Checklists" },
