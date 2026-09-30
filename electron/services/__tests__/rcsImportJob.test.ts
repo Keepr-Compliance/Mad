@@ -1,0 +1,124 @@
+/**
+ * @jest-environment node
+ */
+/**
+ * BACKLOG-3620 — the Sync job's state and the phone gate.
+ *
+ * Control 2: the gate is exact E.164 equality; a foreign number that shares the
+ *            last ten digits with a contact's US number does NOT match.
+ */
+
+import {
+  phonesMatchExactly,
+  RCS_JOB_NOT_OPENED_MESSAGE,
+  RCS_JOB_UNCLAIMED_MS,
+  RcsJobRegistry,
+  type RcsJobContact,
+} from "../rcsImportJob";
+
+const CONTACTS: RcsJobContact[] = [
+  { contactId: "c-1", displayName: "Test Contact A", phonesE164: ["+15555550199"] },
+  { contactId: "c-2", displayName: "Test Contact B", phonesE164: ["+15555550100", "+15555550101"] },
+  { contactId: "c-3", displayName: "Test Contact C", phonesE164: [] },
+];
+
+function registry(start = 1_000_000) {
+  const clock = { now: start };
+  return { clock, jobs: new RcsJobRegistry(() => clock.now) };
+}
+
+describe("phonesMatchExactly (control 2)", () => {
+  it.each([
+    ["(555) 555-0199", "+15555550199", true],
+    ["+1 555-555-0199", "+15555550199", true],
+    ["555.555.0199", "+15555550199", true],
+    ["(555) 555-0198", "+15555550199", false],
+    // Same last ten digits, different country: must NOT match.
+    ["+44 555 555 0199", "+15555550199", false],
+    ["+445555550199", "+15555550199", false],
+    ["", "+15555550199", false],
+    ["someone@example.com", "someone@example.com", false],
+  ])("%s vs %s -> %s", (shown, own, expected) => {
+    expect(phonesMatchExactly(shown, own)).toBe(expected);
+  });
+
+  it("a job does not match a chat whose only number is foreign with the same ten digits", () => {
+    const { jobs } = registry();
+    const job = jobs.create("tx-1", CONTACTS);
+    job.claim(jobs.nowMs());
+    expect(job.match("conv-x", ["+445555550199"])).toEqual([]);
+    expect(job.isMatched("conv-x")).toBe(false);
+  });
+});
+
+describe("RcsImportJob / RcsJobRegistry", () => {
+  it("claims once, returning names only (never numbers), and skips contacts with no phone", () => {
+    const { jobs } = registry();
+    const job = jobs.create("tx-1", CONTACTS);
+    const claim = job.claim(jobs.nowMs());
+    expect(claim).toEqual({
+      jobId: job.jobId,
+      contacts: [
+        { contactId: "c-1", displayName: "Test Contact A" },
+        { contactId: "c-2", displayName: "Test Contact B" },
+      ],
+      startDate: null,
+    });
+    expect(JSON.stringify(claim)).not.toContain("+1");
+    expect(job.claim(jobs.nowMs())).toMatchObject({ status: 409, error: "already_running" });
+  });
+
+  it("the claim carries the transaction's start date; a missing or unparseable one is null (no date floor)", () => {
+    const { jobs } = registry();
+    expect(jobs.create("tx-1", CONTACTS, "2026-03-01").claim(jobs.nowMs())).toMatchObject({ startDate: "2026-03-01" });
+    expect(jobs.create("tx-1", CONTACTS, "2026-03-01T00:00:00.000Z").claim(jobs.nowMs())).toMatchObject({
+      startDate: "2026-03-01T00:00:00.000Z",
+    });
+    expect(jobs.create("tx-1", CONTACTS, null).claim(jobs.nowMs())).toMatchObject({ startDate: null });
+    expect(jobs.create("tx-1", CONTACTS, "").claim(jobs.nowMs())).toMatchObject({ startDate: null });
+    expect(jobs.create("tx-1", CONTACTS, "not a date").claim(jobs.nowMs())).toMatchObject({ startDate: null });
+  });
+
+  it("reports contacts that have no phone number", () => {
+    const { jobs } = registry();
+    expect(jobs.create("tx-1", CONTACTS).snapshot().contactsWithoutPhone).toEqual(["Test Contact C"]);
+  });
+
+  it("matches a group chat when ANY participant matches, and records the conversation", () => {
+    const { jobs } = registry();
+    const job = jobs.create("tx-1", CONTACTS);
+    job.claim(jobs.nowMs());
+    expect(job.match("conv-1", ["(555) 555-0150", "(555) 555-0101"])).toEqual(["c-2"]);
+    expect(job.isMatched("conv-1")).toBe(true);
+    expect(job.progress).toMatchObject({ checked: 1, matched: 1 });
+  });
+
+  it("an unclaimed job fails after the time limit with an explicit message", () => {
+    const { clock, jobs } = registry();
+    const job = jobs.create("tx-1", CONTACTS);
+    clock.now += RCS_JOB_UNCLAIMED_MS - 1;
+    expect(jobs.pending()?.jobId).toBe(job.jobId);
+    clock.now += 1;
+    expect(jobs.pending()).toBeNull();
+    expect(job.snapshot()).toMatchObject({ state: "failed", error: { code: "not_opened", message: RCS_JOB_NOT_OPENED_MESSAGE } });
+    expect(job.claim(clock.now)).toMatchObject({ status: 410 });
+  });
+
+  it("check() refuses a wrong id (404) and an ended job (410)", () => {
+    const { jobs } = registry();
+    const job = jobs.create("tx-1", CONTACTS);
+    expect(jobs.check("00000000-0000-4000-8000-000000000000")).toMatchObject({ ok: false, status: 404 }); // pii-allow-uuid: invented, not from any live row
+    expect(jobs.check(job.jobId)).toMatchObject({ ok: true });
+    job.finish(jobs.nowMs());
+    expect(jobs.check(job.jobId)).toMatchObject({ ok: false, status: 410 });
+  });
+
+  it("a new job cancels the previous one", () => {
+    const { jobs } = registry();
+    const first = jobs.create("tx-1", CONTACTS);
+    const second = jobs.create("tx-2", CONTACTS);
+    expect(first.state).toBe("cancelled");
+    expect(jobs.check(first.jobId)).toMatchObject({ ok: false, status: 404 });
+    expect(jobs.check(second.jobId)).toMatchObject({ ok: true });
+  });
+});

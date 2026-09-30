@@ -2416,6 +2416,19 @@ class DatabaseService implements IDatabaseService {
     return syncDb.insertAttachment(params);
   }
 
+  // BACKLOG-3620: RCS import job
+  getRcsImportContacts(transactionId: string) {
+    return syncDb.getRcsImportContacts(transactionId);
+  }
+
+  markMessageHasAttachments(messageId: string) {
+    return syncDb.markMessageHasAttachments(messageId);
+  }
+
+  insertReactionRows(rows: Parameters<typeof syncDb.insertReactionRows>[0]) {
+    return syncDb.insertReactionRows(rows);
+  }
+
   // ============================================
   // SYNC SESSION ROLLBACK (Delegate to syncDbService)
   // ============================================

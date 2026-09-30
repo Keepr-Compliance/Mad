@@ -15,7 +15,8 @@ import {
   partitionReactions,
   aggregateReactions,
   isReactionRow,
-  REACTION_EMOJI,
+  reactionEmojiFromBody,
+  reactionGlyph,
 } from "../../utils/reactionUtils";
 import {
   threadContactLabel,
@@ -68,6 +69,8 @@ function renderReactionsLine(
       actor: actorKey,
       sentAt: (r.sent_at || r.received_at || "") as string,
       associatedType: r.associated_message_type,
+      // BACKLOG-3620: a reaction row that stores its own emoji exports it.
+      emoji: reactionEmojiFromBody(r.body_text),
     };
   });
 
@@ -76,7 +79,7 @@ function renderReactionsLine(
 
   const parts = aggregated.map((agg) => {
     const names = agg.actors.map((a) => nameByActorKey.get(a) || a);
-    return `${REACTION_EMOJI[agg.kind]} ${escapeHtml(names.join(", "))}`;
+    return `${escapeHtml(reactionGlyph(agg))} ${escapeHtml(names.join(", "))}`;
   });
 
   return `<div class="reactions" style="margin-top: 4px; font-size: 12px; color: #718096;">Reactions: ${parts.join(" · ")}</div>`;

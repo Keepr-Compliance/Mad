@@ -5,6 +5,11 @@
 
 import { ensureDb } from "./core/dbConnection";
 import logService from "../logService";
+import {
+  RCS_IMPORT_TRANSACTION_CONTACTS_SQL,
+  RCS_INSERT_REACTION_SQL,
+  RCS_MARK_MESSAGE_HAS_ATTACHMENTS_SQL,
+} from "./rcsImportSql";
 
 // ============================================
 // iPHONE SYNC QUERIES (TASK-2100)
@@ -171,6 +176,80 @@ export function insertAttachment(params: {
     params.storagePath,
     params.sessionId || null
   );
+}
+
+// ============================================
+// RCS IMPORT (BACKLOG-3620)
+// ============================================
+
+/** A transaction's contacts with every phone number, including contacts with none. */
+export function getRcsImportContacts(
+  transactionId: string
+): { contactId: string; displayName: string; phoneE164: string | null }[] {
+  const db = ensureDb();
+  return db.prepare(RCS_IMPORT_TRANSACTION_CONTACTS_SQL).all(transactionId) as {
+    contactId: string;
+    displayName: string;
+    phoneE164: string | null;
+  }[];
+}
+
+/**
+ * Set has_attachments = 1 on a message stored earlier without it.
+ * `batchInsertMessages` is INSERT OR IGNORE, so a row first stored text-only
+ * never gets the flag from a later insert. Returns rows changed.
+ */
+export function markMessageHasAttachments(messageId: string): number {
+  const db = ensureDb();
+  return db.prepare(RCS_MARK_MESSAGE_HAS_ATTACHMENTS_SQL).run(messageId).changes;
+}
+
+/**
+ * Insert reaction rows (INSERT OR IGNORE on the (user_id, external_id) index).
+ * `batchInsertMessages` does not write the two reaction columns, and the
+ * Android/iPhone path shares it, so reactions get their own statement.
+ */
+export function insertReactionRows(
+  rows: {
+    id: string;
+    userId: string;
+    externalId: string;
+    direction: string;
+    bodyText: string;
+    participants: string;
+    participantsFlat: string;
+    threadId: string | null;
+    sentAt: string;
+    metadata: string | null;
+    associatedMessageType: number;
+    associatedMessageGuid: string;
+  }[]
+): { stored: number; skipped: number } {
+  const db = ensureDb();
+  const stmt = db.prepare(RCS_INSERT_REACTION_SQL);
+  let stored = 0;
+  let skipped = 0;
+  db.transaction(() => {
+    for (const r of rows) {
+      const result = stmt.run(
+        r.id,
+        r.userId,
+        r.externalId,
+        r.direction,
+        r.bodyText,
+        r.participants,
+        r.participantsFlat,
+        r.threadId,
+        r.sentAt,
+        r.metadata,
+        r.associatedMessageType,
+        r.associatedMessageGuid
+      );
+      if (result.changes > 0) stored++;
+      else skipped++;
+    }
+  })();
+  return { stored, skipped };
 }
 
 // ============================================

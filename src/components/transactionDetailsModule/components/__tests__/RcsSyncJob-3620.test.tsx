@@ -1,0 +1,124 @@
+/**
+ * BACKLOG-3620 — the Messages tab's Sync button and job status.
+ */
+
+import React from "react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+
+import {
+  RcsImportPanel,
+  useRcsImportSession,
+  useRcsSyncJob,
+} from "../RcsImportPanel";
+import type { RcsJobInfo } from "../../../../services/rcsImportService";
+
+type JobListener = (job: RcsJobInfo) => void;
+let jobListener: JobListener | null = null;
+
+const mockStartJob = jest.fn();
+const mockCancelJob = jest.fn();
+const mockGetJob = jest.fn();
+
+jest.mock("../../../../services/rcsImportService", () => ({
+  rcsImportService: {
+    startSession: jest.fn(),
+    endSession: jest.fn(),
+    getStatus: jest.fn(),
+    onChatReceived: () => () => {},
+    startJob: (...a: unknown[]) => mockStartJob(...a),
+    cancelJob: (...a: unknown[]) => mockCancelJob(...a),
+    getJob: (...a: unknown[]) => mockGetJob(...a),
+    onJobProgress: (cb: JobListener) => {
+      jobListener = cb;
+      return () => {
+        jobListener = null;
+      };
+    },
+  },
+}));
+
+function job(over: Partial<RcsJobInfo> = {}): RcsJobInfo {
+  return {
+    jobId: "11111111-2222-4333-8444-555555555555", // pii-allow-uuid: invented, not from any live row
+    transactionId: "tx-1",
+    state: "created",
+    stage: "Waiting for Messages for Web to open in Chrome",
+    progress: { listed: 0, candidates: 0, checked: 0, matched: 0, imported: 0, messages: 0, images: 0, reactions: 0, skipped: 0 },
+    contactsWithoutPhone: [],
+    createdAt: "2026-09-29T00:00:00.000Z",
+    ...over,
+  };
+}
+
+function Harness({ transactionId, onImported }: { transactionId: string; onImported?: () => void }) {
+  const controller = useRcsImportSession(transactionId);
+  const sync = useRcsSyncJob(transactionId, onImported);
+  return <RcsImportPanel controller={controller} sync={sync} />;
+}
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  jobListener = null;
+  mockGetJob.mockResolvedValue({ success: true, data: null });
+  mockCancelJob.mockResolvedValue({ success: true, data: null });
+});
+
+describe("Sync job (BACKLOG-3620)", () => {
+  it("Sync starts a job for this transaction and shows its progress; a new import refreshes the messages", async () => {
+    const onImported = jest.fn();
+    mockStartJob.mockResolvedValue({ success: true, data: job() });
+    render(<Harness transactionId="tx-1" onImported={onImported} />);
+
+    fireEvent.click(screen.getByTestId("rcs-sync-button"));
+    await waitFor(() => expect(mockStartJob).toHaveBeenCalledWith("tx-1"));
+    expect(await screen.findByTestId("rcs-sync-job-status")).toHaveTextContent("Opening Messages for Web in Chrome");
+    expect(screen.getByTestId("rcs-sync-button")).toBeDisabled();
+
+    act(() => {
+      jobListener?.(job({ state: "running", stage: "Checked 1 of 2 chats", progress: { ...job().progress, candidates: 2, checked: 1, imported: 1, messages: 5, images: 1 } }));
+    });
+    expect(screen.getByTestId("rcs-sync-job-status")).toHaveTextContent("imported 1 chat, 5 messages, 1 images");
+    expect(onImported).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the not-signed-in message from the page", async () => {
+    mockStartJob.mockResolvedValue({ success: true, data: job() });
+    render(<Harness transactionId="tx-1" />);
+    fireEvent.click(screen.getByTestId("rcs-sync-button"));
+    await screen.findByTestId("rcs-sync-job");
+    act(() => {
+      jobListener?.(job({ state: "failed", error: { code: "not_signed_in", message: "Sign in to Google Messages, then click Sync in Keepr again" } }));
+    });
+    expect(screen.getByTestId("rcs-sync-job-status")).toHaveTextContent("Sign in to Google Messages, then click Sync in Keepr again");
+    expect(screen.getByTestId("rcs-sync-job")).toHaveAttribute("data-state", "failed");
+  });
+
+  it("ignores a job for another transaction", async () => {
+    render(<Harness transactionId="tx-1" />);
+    await waitFor(() => expect(mockGetJob).toHaveBeenCalled());
+    act(() => {
+      jobListener?.(job({ transactionId: "tx-2", state: "running" }));
+    });
+    expect(screen.queryByTestId("rcs-sync-job")).toBeNull();
+  });
+
+  it("leaving the tab does not cancel the job; coming back shows it again", async () => {
+    mockStartJob.mockResolvedValue({ success: true, data: job() });
+    const { unmount } = render(<Harness transactionId="tx-1" />);
+    fireEvent.click(screen.getByTestId("rcs-sync-button"));
+    await screen.findByTestId("rcs-sync-job");
+    unmount();
+    expect(mockCancelJob).not.toHaveBeenCalled();
+
+    mockGetJob.mockResolvedValue({ success: true, data: job({ state: "running", stage: "Checked 0 of 1 chats" }) });
+    render(<Harness transactionId="tx-1" />);
+    expect(await screen.findByTestId("rcs-sync-job")).toHaveAttribute("data-state", "running");
+  });
+
+  it("shows the start error", async () => {
+    mockStartJob.mockResolvedValue({ success: false, error: "This transaction has no contacts to look for." });
+    render(<Harness transactionId="tx-1" />);
+    fireEvent.click(screen.getByTestId("rcs-sync-button"));
+    expect(await screen.findByTestId("rcs-sync-error")).toHaveTextContent("This transaction has no contacts to look for.");
+  });
+});
