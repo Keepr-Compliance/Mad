@@ -35,6 +35,10 @@
  * call is made unconditionally rather than behind a `process.platform` branch
  * that nothing could exercise on the other side.
  *
+ * On Windows the foreground lock turns a background `focus()` into a taskbar
+ * flash; see {@link raiseOnWindows} (BACKLOG-3636). Callers: mailbox connect
+ * (BACKLOG-3394) and the end of an RCS Sync job (BACKLOG-3636).
+ *
  * ============================================================================
  * WHY IT NEVER THROWS
  * ============================================================================
@@ -51,6 +55,22 @@ import { app, BrowserWindow } from "electron";
 import logService from "../services/logService";
 
 /**
+ * Windows (BACKLOG-3636): the foreground lock lets `focus()` from a background
+ * app only flash the taskbar button. Briefly making the window always-on-top
+ * puts it in front; the flag is ALWAYS cleared again (finally), so a throw
+ * from show/focus can never leave Keepr pinned above every other window.
+ */
+function raiseOnWindows(win: BrowserWindow): void {
+  win.setAlwaysOnTop(true);
+  try {
+    win.show();
+    win.focus();
+  } finally {
+    win.setAlwaysOnTop(false);
+  }
+}
+
+/**
  * Activate the application and raise its main window.
  *
  * @param win The main window, or null when the app has no window (the focus
@@ -62,8 +82,12 @@ export function bringAppToFront(win: BrowserWindow | null): void {
 
     if (win && !win.isDestroyed()) {
       if (win.isMinimized()) win.restore();
-      if (!win.isVisible()) win.show();
-      win.focus();
+      if (process.platform === "win32") {
+        raiseOnWindows(win);
+      } else {
+        if (!win.isVisible()) win.show();
+        win.focus();
+      }
     }
   } catch (error) {
     // Cosmetic only — see the header. Never rethrow.

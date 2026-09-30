@@ -24,7 +24,7 @@
 import * as fs from "fs";
 import * as path from "path";
 
-import { app, BrowserWindow, ipcMain, shell } from "electron";
+import { app, ipcMain, shell } from "electron";
 
 import { hostWindows } from "../capabilities/windowsProvider";
 import { dbTransaction } from "../services/db/core/dbConnection";
@@ -36,7 +36,9 @@ import type { RcsJobContact, RcsJobSnapshot } from "../services/rcsImportJob";
 import { storeImage, type RcsMediaDeps } from "../services/rcsImportMedia";
 import { importChat, type RcsImportDeps } from "../services/rcsImportStore";
 import transactionService from "../services/transactionService";
+import { bringAppToFront } from "../utils/bringAppToFront";
 import { wrapHandler } from "../utils/wrapHandler";
+import { getMainWindow } from "../windowRegistry";
 import { ValidationError } from "../utils/validation";
 import type {
   RcsChatReceivedEvent,
@@ -88,18 +90,6 @@ const mediaDeps: RcsMediaDeps = {
   },
 };
 
-/** Bring Keepr's window forward (the job finished in the browser). */
-function focusKeepr(): void {
-  const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
-  if (!win) return;
-  if (win.isMinimized()) win.restore();
-  win.show();
-  win.focus();
-  // macOS: focusing a window does not activate the app when another app is
-  // frontmost; `steal` does.
-  if (process.platform === "darwin") app.focus({ steal: true });
-}
-
 function broadcastJob(job: RcsJobSnapshot): void {
   hostWindows.broadcast(RCS_JOB_PROGRESS_CHANNEL, job);
 }
@@ -128,7 +118,9 @@ const bridge = new RcsExtensionBridge({
     return storeImage(image, userId, mediaDeps);
   },
   onJobChanged: broadcastJob,
-  onJobFinished: () => focusKeepr(),
+  // The job finished in the browser: bring Keepr's main window forward
+  // (BACKLOG-3636: shared with mailbox connect, incl. the Windows workaround).
+  onJobFinished: () => bringAppToFront(getMainWindow()),
   logger: {
     info: (m) => void logService.info(m, LOG_TAG),
     warn: (m) => void logService.warn(m, LOG_TAG),
