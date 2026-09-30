@@ -89,6 +89,8 @@ jest.mock("electron", () => ({
   },
   BrowserWindow: jest.fn(),
   app: { isPackaged: false, getPath: jest.fn(() => "/mock/user/data") },
+  // BACKLOG-3617: `checklists:open-templates-portal` opens the portal page.
+  shell: { openExternal: jest.fn().mockResolvedValue(undefined) },
 }));
 
 jest.mock("@sentry/electron/main", () => ({
@@ -512,7 +514,7 @@ describe("BACKLOG-3475 C9 — the gated and ungated sets, by execution", () => {
    * this list does not classify fails the first assertion instead of quietly
    * escaping the sweep.
    */
-  it("exactly six channels refuse when the plan cannot be read, and three answer", async () => {
+  it("exactly seven channels refuse when the plan cannot be read, and four answer", async () => {
     const checklistId = await seedChecklist();
     const itemId = itemIds()[0];
     const added = await invoke("checklists:add-link", {
@@ -538,11 +540,15 @@ describe("BACKLOG-3475 C9 — the gated and ungated sets, by execution", () => {
       ["checklists:set-item-note", { itemId, note: "signed 3 Mar" }],
       ["checklists:add-link", { itemId, kind: "email", targetIds: ["e-mine"] }],
       ["checklists:remove-link", { linkId }],
-      // The ungated three last, and `remove` after `get`: it clears the rows
+      // BACKLOG-3617: asks the cloud about the organization, so gated.
+      ["checklists:can-edit-templates", undefined],
+      // The ungated ones last, and `remove` after `get`: it clears the rows
       // `get` is asked to return.
       ["checklists:get", { transactionId: TRANSACTION }],
       ["checklists:remove", { transactionId: TRANSACTION, checklistId }],
       ["checklists:invalidate-templates", undefined],
+      // BACKLOG-3617: opens the portal page; reads and writes nothing.
+      ["checklists:open-templates-portal", undefined],
     ];
 
     // The sweep covers every channel this module registers — not a list
@@ -571,11 +577,13 @@ describe("BACKLOG-3475 C9 — the gated and ungated sets, by execution", () => {
       "checklists:set-item-note",
       "checklists:add-link",
       "checklists:remove-link",
+      "checklists:can-edit-templates",
     ]);
     expect(answered).toEqual([
       "checklists:get",
       "checklists:remove",
       "checklists:invalidate-templates",
+      "checklists:open-templates-portal",
     ]);
   });
 });

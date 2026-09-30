@@ -21,7 +21,10 @@ import type {
   ChecklistsForTransaction,
   SelectChecklistTemplateResult,
 } from "../types/checklist";
-import type { ListChecklistTemplatesResult } from "../types/ipc/window-api-checklists";
+import type {
+  CanEditChecklistTemplatesResult,
+  ListChecklistTemplatesResult,
+} from "../types/ipc/window-api-checklists";
 
 export const checklistBridge = {
   /**
@@ -95,4 +98,12 @@ export const checklistBridge = {
   /** Discard the cached templates so the next listing goes to the cloud. */
   invalidateTemplates: (): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke("checklists:invalidate-templates"),
+
+  /** BACKLOG-3617: may this user create templates? `success: false` = unknown. */
+  canEditTemplates: (): Promise<CanEditChecklistTemplatesResult> =>
+    ipcRenderer.invoke("checklists:can-edit-templates"),
+
+  /** BACKLOG-3617: open the portal Checklists page. No URL crosses the bridge. */
+  openTemplatesPortal: (): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke("checklists:open-templates-portal"),
 };

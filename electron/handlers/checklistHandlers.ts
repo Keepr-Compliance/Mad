@@ -1,16 +1,18 @@
 /**
  * Transaction checklist IPC — BACKLOG-3475.
  *
- * Nine channels over the local tables PR-A created and the broker templates
- * `checklistTemplateService` reads from the cloud.
+ * Eleven channels over the local tables PR-A created and the broker templates
+ * `checklistTemplateService` reads from the cloud (nine from BACKLOG-3475, two
+ * from BACKLOG-3617: `can-edit-templates`, `open-templates-portal`).
  *
- * ## Which channels are gated, and why the other three are not
+ * ## Which channels are gated, and why the other four are not
  *
- * SIX of the nine call {@link isChecklistsAllowed} before any read or write:
+ * SEVEN of the eleven call {@link isChecklistsAllowed} before any read or write:
  * `list-templates`, `select-template`, `set-item-checked`, `set-item-note`,
- * `add-link`, `remove-link`.
+ * `add-link`, `remove-link`, `can-edit-templates`.
  *
- * THREE do not. `checklists:get` and `checklists:remove` are the unhide rule
+ * FOUR do not. `checklists:open-templates-portal` (BACKLOG-3617) reads and
+ * writes nothing; the portal gates its own page. The other three: `checklists:get` and `checklists:remove` are the unhide rule
  * spelled out in `electron/types/featureGate.ts`: a user whose plan later loses
  * the feature must still be able to see what is on his own transaction and take
  * it off again. Gating either would strand rows where he can neither use them
@@ -55,7 +57,7 @@
  * reserve `CHECKLISTS_NO_ORGANIZATION_ERROR` for a confirmed `none`.
  */
 
-import { ipcMain } from "electron";
+import { ipcMain, shell } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 
 import auditService from "../services/auditService";
@@ -71,6 +73,7 @@ import {
   setChecklistItemNote,
 } from "../services/db/checklistDbService";
 import logService from "../services/logService";
+import supabaseService from "../services/supabaseService";
 import {
   AddChecklistLinkArgsSchema,
   GetChecklistArgsSchema,
@@ -93,7 +96,10 @@ import type {
   ChecklistsForTransaction,
   SelectChecklistTemplateResult,
 } from "../types/checklist";
-import type { ListChecklistTemplatesResult } from "../types/ipc/window-api-checklists";
+import type {
+  CanEditChecklistTemplatesResult,
+  ListChecklistTemplatesResult,
+} from "../types/ipc/window-api-checklists";
 
 // ---------------------------------------------------------------------------
 // Responses
@@ -166,6 +172,17 @@ export const CHECKLISTS_NO_ORGANIZATION_ERROR =
 export const CHECKLIST_TEMPLATES_UNAVAILABLE_ERROR =
   "Checklist templates couldn't be loaded right now.";
 
+/**
+ * BACKLOG-3617: whether this user may create templates could not be
+ * established. The chooser reads this as "unknown", never as "cannot".
+ */
+export const CHECKLIST_TEMPLATE_ROLE_UNKNOWN_ERROR =
+  "Couldn't check checklist permissions right now.";
+
+/** BACKLOG-3617: the portal address is not one this app will open. */
+export const CHECKLISTS_PORTAL_URL_REFUSED_ERROR =
+  "The checklist settings page couldn't be opened.";
+
 /** The requested template is not in the listing (archived, deleted, or renamed away). */
 export const CHECKLIST_TEMPLATE_NOT_FOUND_ERROR =
   "That checklist template is no longer available.";
@@ -173,6 +190,70 @@ export const CHECKLIST_TEMPLATE_NOT_FOUND_ERROR =
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/** BACKLOG-3617: the portal page where checklist templates are created. */
+export const CHECKLISTS_PORTAL_PATH = "/dashboard/checklists";
+const DEFAULT_BROKER_PORTAL_URL = "https://app.keeprcompliance.com";
+
+/**
+ * The portal Checklists URL, or null when the configured portal address is not
+ * one this app will hand to the browser. The renderer never supplies a URL;
+ * this is the only place one is built, and only these origins pass:
+ *   https://keeprcompliance.com and its subdomains (production)
+ *   http(s)://localhost or 127.0.0.1 (the dev portal, .env.example)
+ * Anything else — another host, another scheme, credentials in the address, a
+ * string that does not parse — is refused, so `BROKER_PORTAL_URL` cannot turn
+ * this channel into "open any URL".
+ */
+export function checklistsPortalUrl(
+  configured: string | undefined = process.env.BROKER_PORTAL_URL,
+): string | null {
+  const base = configured || DEFAULT_BROKER_PORTAL_URL;
+  let parsed: URL;
+  try {
+    parsed = new URL(base);
+  } catch {
+    return null;
+  }
+  if (parsed.username || parsed.password) return null;
+  const host = parsed.hostname.toLowerCase();
+  const isLocal = host === "localhost" || host === "127.0.0.1";
+  const isKeepr = host === "keeprcompliance.com" || host.endsWith(".keeprcompliance.com");
+  const schemeOk =
+    parsed.protocol === "https:" ? isKeepr || isLocal : parsed.protocol === "http:" && isLocal;
+  if (!schemeOk) return null;
+  // Built from the ORIGIN alone: a path, query or fragment in the configured
+  // address never reaches the browser.
+  return `${parsed.origin}${CHECKLISTS_PORTAL_PATH}`;
+}
+
+/**
+ * BACKLOG-3617: `can_edit_checklist_templates(p_org_id)` — the function the
+ * portal Checklists page gate (`broker-portal/lib/checklist-access.ts`) and the
+ * template RLS use. Nothing about roles is copied into the desktop.
+ * Returns null for every answer that is not a literal boolean.
+ */
+async function readCanEditTemplates(orgId: string): Promise<boolean | null> {
+  try {
+    const session = await supabaseService.getAuthSession();
+    if (!session) return null;
+    const { data, error } = await supabaseService
+      .getClient()
+      .rpc("can_edit_checklist_templates", { p_org_id: orgId });
+    if (error) {
+      logService.warn("[Checklists] can_edit_checklist_templates failed", "Checklists", {
+        code: error.code,
+      });
+      return null;
+    }
+    return typeof data === "boolean" ? data : null;
+  } catch (error) {
+    logService.warn("[Checklists] can_edit_checklist_templates threw", "Checklists", {
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+    return null;
+  }
+}
 
 function parseArgs<T>(
   schema: Parameters<typeof safeValidate<T>>[0],
@@ -428,6 +509,57 @@ export function registerChecklistHandlers(): void {
           });
         }
         return { success: true, changed: removed !== null };
+      },
+      { module: "Checklists" },
+    ),
+  );
+
+  /**
+   * BACKLOG-3617: may this user create templates? Gated like `list-templates`
+   * (it asks the cloud about the plan holder's organization). Every answer that
+   * is not the database's boolean is `success: false` — unknown.
+   */
+  ipcMain.handle(
+    "checklists:can-edit-templates",
+    wrapHandler(
+      async (_event: IpcMainInvokeEvent): Promise<CanEditChecklistTemplatesResult> => {
+        if (!(await isChecklistsAllowed())) {
+          return { success: false, error: CHECKLISTS_NOT_ALLOWED_ERROR };
+        }
+        const org = await resolveOrgIdOrRefusal();
+        if (org.status === "unavailable") {
+          return { success: false, error: CHECKLIST_TEMPLATE_ROLE_UNKNOWN_ERROR };
+        }
+        if (org.status === "none") {
+          return { success: false, error: CHECKLISTS_NO_ORGANIZATION_ERROR };
+        }
+        const canEdit = await readCanEditTemplates(org.organizationId);
+        if (canEdit === null) {
+          return { success: false, error: CHECKLIST_TEMPLATE_ROLE_UNKNOWN_ERROR };
+        }
+        return { success: true, canEdit };
+      },
+      { module: "Checklists" },
+    ),
+  );
+
+  /**
+   * BACKLOG-3617: open the portal Checklists page in the user's browser.
+   * Takes NO argument — anything the renderer sends is ignored — and opens
+   * only the URL {@link checklistsPortalUrl} builds. Not gated: it reads and
+   * writes nothing, and the portal applies its own gate on arrival.
+   */
+  ipcMain.handle(
+    "checklists:open-templates-portal",
+    wrapHandler(
+      async (_event: IpcMainInvokeEvent): Promise<ChecklistWriteResponse> => {
+        const url = checklistsPortalUrl();
+        if (!url) {
+          logService.warn("[Checklists] Portal address refused", "Checklists");
+          return { success: false, error: CHECKLISTS_PORTAL_URL_REFUSED_ERROR };
+        }
+        await shell.openExternal(url);
+        return { success: true };
       },
       { module: "Checklists" },
     ),

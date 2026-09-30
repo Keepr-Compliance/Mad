@@ -399,6 +399,13 @@ if (typeof window !== 'undefined') {
       // Never gated in the main process, so the default is the working answer.
       remove: jest.fn().mockResolvedValue({ success: true, changed: false }),
       invalidateTemplates: jest.fn().mockResolvedValue({ success: true }),
+      // BACKLOG-3617: gated like listTemplates, so the default is the refusal
+      // — which the chooser reads as "unknown", never as a creator.
+      canEditTemplates: jest.fn().mockResolvedValue({
+        success: false,
+        error: 'Transaction checklists are not available.',
+      }),
+      openTemplatesPortal: jest.fn().mockResolvedValue({ success: true }),
     },
     // BACKLOG-2006a: per-transaction paywall entitlement. Default is fail-closed
     // (LOCKED) so any test that forgets to override cannot accidentally reveal content.

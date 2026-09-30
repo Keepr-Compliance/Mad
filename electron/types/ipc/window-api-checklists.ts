@@ -42,6 +42,19 @@ export type ListChecklistTemplatesResult =
   | { success: true; templates: ChecklistTemplate[]; source: ChecklistTemplateSource }
   | { success: false; error: string };
 
+/**
+ * BACKLOG-3617: may this user create checklist templates (the portal
+ * Checklists page)? Asked of the database — `can_edit_checklist_templates`,
+ * the same function the portal page's gate and the template RLS use.
+ *
+ * Three answers, never two: `canEdit: true` (creator), `canEdit: false`
+ * (cannot create), and `success: false` (the answer is unknown — plan refused,
+ * no organization, offline, or a reply that was not a boolean).
+ */
+export type CanEditChecklistTemplatesResult =
+  | { success: true; canEdit: boolean }
+  | { success: false; error: string };
+
 /** Every write that either changed a row or did not. */
 export interface ChecklistWriteResult {
   success: boolean;
@@ -80,4 +93,11 @@ export interface WindowApiChecklists {
   remove: (args: { transactionId: string; checklistId: string }) => Promise<ChecklistWriteResult>;
   /** Discard the cached templates so the next listing goes to the cloud. */
   invalidateTemplates: () => Promise<{ success: boolean; error?: string }>;
+  /** BACKLOG-3617: may this user create templates? Gated; unknown is `success: false`. */
+  canEditTemplates: () => Promise<CanEditChecklistTemplatesResult>;
+  /**
+   * BACKLOG-3617: open the portal's Checklists page in the browser. Takes no
+   * URL — main builds it and refuses anything that is not the portal origin.
+   */
+  openTemplatesPortal: () => Promise<{ success: boolean; error?: string }>;
 }

@@ -176,7 +176,7 @@ describe("C-K — three sentences for three facts", () => {
     api().get.mockResolvedValue({ success: false, error: "The checklist could not be read." });
     render(<Harness gate="allowed" />);
     expect(await screen.findByTestId("checklist-error")).toHaveTextContent("could not be read");
-    expect(screen.queryByText("No checklist yet")).not.toBeInTheDocument();
+    expect(screen.queryByText("No checklist added yet.")).not.toBeInTheDocument();
     expect(api().listTemplates).not.toHaveBeenCalled();
   });
 });
