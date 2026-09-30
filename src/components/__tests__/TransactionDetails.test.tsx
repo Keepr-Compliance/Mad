@@ -858,7 +858,7 @@ describe("TransactionDetails", () => {
       });
     });
 
-    it("should disable Sync button on Messages tab when offline", async () => {
+    it("Import on the Messages tab stays enabled when offline (import is local, loopback only)", async () => {
       render(
         <TransactionDetails
           transaction={transactionWithContacts}
@@ -874,10 +874,11 @@ describe("TransactionDetails", () => {
         expect(screen.getByText(/no text messages linked/i)).toBeInTheDocument();
       });
 
-      // The Sync Messages button should be disabled
-      const syncButton = screen.getByTestId("sync-messages-button");
-      expect(syncButton).toBeDisabled();
-      expect(syncButton).toHaveAttribute("title", "You are offline");
+      // Import never leaves the machine, so going offline does not disable it
+      const importButton = screen.getByTestId("rcs-import-button");
+      expect(importButton).toBeEnabled();
+      expect(importButton).not.toHaveAttribute("title", "You are offline");
+      expect(screen.queryByTestId("sync-messages-button")).toBeNull();
     });
 
     it("should re-enable sync buttons when back online", async () => {

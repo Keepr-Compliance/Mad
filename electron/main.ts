@@ -146,6 +146,11 @@ import { registerEmailAutoLinkHandlers } from "./handlers/emailAutoLinkHandlers"
 import { registerReviewQueueHandlers } from "./handlers/reviewQueueHandlers";
 import { registerHiddenTextHandlers } from "./handlers/hiddenTextHandlers";
 import { registerChecklistHandlers } from "./handlers/checklistHandlers";
+import {
+  registerRcsImportHandlers,
+  startRcsExtensionBridge,
+  stopRcsExtensionBridge,
+} from "./handlers/rcsImportHandlers";
 import { registerAttachmentHandlers } from "./handlers/attachmentHandlers";
 import { registerContactHandlers } from "./handlers/contactHandlers";
 import { registerAddressHandlers } from "./handlers/addressHandlers";
@@ -1759,6 +1764,10 @@ app.whenReady().then(async () => {
   registerHiddenTextHandlers();
   // BACKLOG-3475: transaction checklists — broker templates, items, evidence links.
   registerChecklistHandlers();
+  // BACKLOG-3619 POC: RCS import from the Chrome extension. The loopback bridge
+  // never throws; a taken port leaves it "unavailable" and the app runs on.
+  registerRcsImportHandlers();
+  void startRcsExtensionBridge();
   registerAttachmentHandlers(mainWindow!);
   registerContactHandlers(mainWindow!);
   registerAddressHandlers();
@@ -1934,6 +1943,8 @@ app.on("before-quit", () => {
   cleanupLocalSyncHandlers();
   // Clean up pairing sessions (TASK-1428)
   cleanupPairingHandlers();
+  // BACKLOG-3619 POC: close the RCS import bridge.
+  void stopRcsExtensionBridge();
   // BACKLOG-1831: stop the shadow delta sync poller timers (interval hygiene)
   try {
     const { default: shadowDeltaSyncService } = require("./services/shadowDeltaSyncService");

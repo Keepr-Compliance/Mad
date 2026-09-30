@@ -62,17 +62,27 @@ const threadMessages: Partial<Communication>[] = [
   },
 ];
 
-/** Read the sync button and whether it currently shows a spinner. */
-function readSyncButton(): { button: HTMLElement; spinning: boolean } {
-  const button = screen.getByTestId("sync-messages-button");
+/** Read the Import button and whether it currently shows a spinner. */
+function readImportButton(): { button: HTMLElement; spinning: boolean } {
+  const button = screen.getByTestId("rcs-import-button");
   return { button, spinning: button.querySelector(".animate-spin") !== null };
 }
 
-describe("TransactionMessagesTab — background-sync affordance (BACKLOG-2294)", () => {
-  describe("header sync button (messages present)", () => {
-    it("shows the active spinner + 'Syncing…' + disabled when a BACKGROUND messages sync is in flight (no user click)", () => {
+/** Import stands in for Sync on this branch: it is enabled, plain "Import", and Sync is gone. */
+function expectImportIdle(): void {
+  const { button, spinning } = readImportButton();
+  expect(button).not.toBeDisabled();
+  expect(button).toHaveTextContent("Import");
+  expect(spinning).toBe(false);
+  expect(screen.queryByTestId("sync-messages-button")).toBeNull();
+}
+
+describe("TransactionMessagesTab — Import replaces Sync on this branch (BACKLOG-3619); background-sync props do not affect it", () => {
+  describe("header (messages present)", () => {
+    it("shows Import (enabled, no spinner, no Sync button) while a BACKGROUND messages sync is in flight", () => {
       render(
         <TransactionMessagesTab
+          transactionId="tx-1"
           messages={threadMessages as Communication[]}
           loading={false}
           error={null}
@@ -83,15 +93,13 @@ describe("TransactionMessagesTab — background-sync affordance (BACKLOG-2294)",
         />
       );
 
-      const { button, spinning } = readSyncButton();
-      expect(button).toBeDisabled();
-      expect(button).toHaveTextContent("Syncing");
-      expect(spinning).toBe(true);
+      expectImportIdle();
     });
 
-    it("shows the active affordance when the orchestrator's global sync is running (no user click)", () => {
+    it("shows Import (enabled, no spinner, no Sync button) while the orchestrator's global sync is running", () => {
       render(
         <TransactionMessagesTab
+          transactionId="tx-1"
           messages={threadMessages as Communication[]}
           loading={false}
           error={null}
@@ -102,15 +110,13 @@ describe("TransactionMessagesTab — background-sync affordance (BACKLOG-2294)",
         />
       );
 
-      const { button, spinning } = readSyncButton();
-      expect(button).toBeDisabled();
-      expect(button).toHaveTextContent("Syncing");
-      expect(spinning).toBe(true);
+      expectImportIdle();
     });
 
-    it("still shows the active affordance for a user-initiated sync (no regression)", () => {
+    it("shows Import (enabled, no spinner, no Sync button) while a user-initiated sync runs", () => {
       render(
         <TransactionMessagesTab
+          transactionId="tx-1"
           messages={threadMessages as Communication[]}
           loading={false}
           error={null}
@@ -120,15 +126,13 @@ describe("TransactionMessagesTab — background-sync affordance (BACKLOG-2294)",
         />
       );
 
-      const { button, spinning } = readSyncButton();
-      expect(button).toBeDisabled();
-      expect(button).toHaveTextContent("Syncing");
-      expect(spinning).toBe(true);
+      expectImportIdle();
     });
 
-    it("is idle and enabled when nothing is syncing", () => {
+    it("shows Import (enabled, no spinner, no Sync button) when nothing is syncing", () => {
       render(
         <TransactionMessagesTab
+          transactionId="tx-1"
           messages={threadMessages as Communication[]}
           loading={false}
           error={null}
@@ -140,37 +144,32 @@ describe("TransactionMessagesTab — background-sync affordance (BACKLOG-2294)",
         />
       );
 
-      const { button, spinning } = readSyncButton();
-      expect(button).not.toBeDisabled();
-      expect(button).toHaveTextContent("Sync Messages");
-      expect(button).not.toHaveTextContent("Syncing");
-      expect(spinning).toBe(false);
+      expectImportIdle();
     });
   });
 
-  describe("empty-state sync button (no messages linked yet)", () => {
-    it("shows the active spinner + 'Syncing…' + disabled when a BACKGROUND messages sync is in flight", () => {
+  describe("empty state (no messages linked yet)", () => {
+    it("shows Import (enabled, no spinner, no Sync button) while a BACKGROUND messages sync is in flight, without contacts", () => {
       render(
         <TransactionMessagesTab
+          transactionId="tx-1"
           messages={[]}
           loading={false}
           error={null}
-          hasContacts
+          hasContacts={false}
           onSyncMessages={jest.fn()}
           syncingMessages={false}
           messagesSyncInFlight
         />
       );
 
-      const { button, spinning } = readSyncButton();
-      expect(button).toBeDisabled();
-      expect(button).toHaveTextContent("Syncing");
-      expect(spinning).toBe(true);
+      expectImportIdle();
     });
 
-    it("is idle and enabled when nothing is syncing", () => {
+    it("shows Import (enabled, no spinner, no Sync button) when nothing is syncing", () => {
       render(
         <TransactionMessagesTab
+          transactionId="tx-1"
           messages={[]}
           loading={false}
           error={null}
@@ -180,10 +179,7 @@ describe("TransactionMessagesTab — background-sync affordance (BACKLOG-2294)",
         />
       );
 
-      const { button, spinning } = readSyncButton();
-      expect(button).not.toBeDisabled();
-      expect(button).not.toHaveTextContent("Syncing");
-      expect(spinning).toBe(false);
+      expectImportIdle();
     });
   });
 });

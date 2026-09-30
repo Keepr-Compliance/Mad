@@ -1,0 +1,92 @@
+/**
+ * WindowApi RCS import sub-interface — BACKLOG-3619 (proof of concept).
+ *
+ * The renderer's view of `window.api.rcsImport`: open / close the one import
+ * session the Chrome extension posts chats into, read the bridge's state, and
+ * hear about each chat as it lands.
+ */
+
+export type RcsBridgeState = "stopped" | "listening" | "unavailable";
+
+export interface RcsImportSessionInfo {
+  sessionId: string;
+  transactionId: string;
+  chatsReceived: number;
+  messagesReceived: number;
+  messagesStored: number;
+  startedAt: string;
+}
+
+export interface RcsImportStatus {
+  bridge: RcsBridgeState;
+  port: number;
+  reason?: string;
+  session: RcsImportSessionInfo | null;
+}
+
+export type RcsImportStatusResult =
+  | { success: true; status: RcsImportStatus }
+  | { success: false; error: string };
+
+export interface RcsChatReceivedEvent {
+  sessionId: string;
+  transactionId: string;
+  conversationTitle: string;
+  received: number;
+  stored: number;
+  alreadyPresent: number;
+  linked: number;
+  reactions: number;
+  reactionsStored: number;
+  session: RcsImportSessionInfo;
+}
+
+export type RcsJobState = "created" | "running" | "finished" | "failed" | "cancelled";
+
+export interface RcsJobProgressCounts {
+  listed: number;
+  candidates: number;
+  checked: number;
+  matched: number;
+  imported: number;
+  messages: number;
+  images: number;
+  reactions: number;
+  skipped: number;
+}
+
+/** BACKLOG-3620: one sync job, as main reports it. */
+export interface RcsJobInfo {
+  jobId: string;
+  transactionId: string;
+  state: RcsJobState;
+  stage: string;
+  progress: RcsJobProgressCounts;
+  contactsWithoutPhone: string[];
+  error?: { code: string; message: string };
+  createdAt: string;
+  finishedAt?: string;
+}
+
+export type RcsImportJobResult =
+  | { success: true; job: RcsJobInfo | null }
+  | { success: false; error: string };
+
+export interface WindowApiRcsImport {
+  /** Bridge + session state. */
+  getStatus: () => Promise<RcsImportStatusResult>;
+  /** Open the import session for a transaction (replaces any open session). */
+  startSession: (args: { transactionId: string }) => Promise<RcsImportStatusResult>;
+  /** Close the import session, if it is still the one named. */
+  endSession: (args: { sessionId: string }) => Promise<RcsImportStatusResult>;
+  /** One call per chat received. Returns an unsubscribe. */
+  onChatReceived: (callback: (event: RcsChatReceivedEvent) => void) => () => void;
+  /** BACKLOG-3620: start a sync job (opens Messages for Web in the browser). */
+  startJob: (args: { transactionId: string }) => Promise<RcsImportJobResult>;
+  /** BACKLOG-3620: cancel the job, if it is still the one named. */
+  cancelJob: (args: { jobId: string }) => Promise<RcsImportJobResult>;
+  /** BACKLOG-3620: the current job, if any. */
+  getJob: () => Promise<RcsImportJobResult>;
+  /** BACKLOG-3620: every job change. Returns an unsubscribe. */
+  onJobProgress: (callback: (job: RcsJobInfo) => void) => () => void;
+}

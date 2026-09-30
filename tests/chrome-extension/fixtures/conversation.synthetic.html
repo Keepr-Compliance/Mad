@@ -1,0 +1,139 @@
+<!--
+  Fixture for chrome-extension/extract.js (BACKLOG-3619). SYNTHETIC VALUES:
+  every name, number, id and message text below is invented.
+
+  STRUCTURE: messages 1, 2, 4 and the tombstone follow the structure observed on
+  the live page (2026-09-29, one SMS conversation, en-US): mws-message-wrapper
+  with a numeric msg-id and is-outgoing; the data-e2e-message-wrapper-core div
+  carrying data-e2e-message-outgoing / data-e2e-message-rcs; the text part
+  mws-text-message-part.msg-focus-element whose aria-label reads
+  "<Sender> said: <text>. Received on <Month D, YYYY> at <h:mm> <AM|PM>." or
+  "You said: <text>. Sent on … . SMS."; the content element
+  mws-message-part-content[data-e2e-message-content]; the header title
+  [data-e2e-header-title] h2.
+
+  BACKLOG-3620, observed on the live page (2026-09-29): the image-only
+  message 5 (mws-image-message-part with aria-label "<Name> sent an image. …"
+  → [data-e2e-message-image] → img[src="blob:…"]); the file message 9
+  (mws-file-message-part[data-e2e-file], aria-label "You sent a file: <name>. …",
+  visible text = name + size); reactions on message 1
+  (mw-message-reactions-display → span.reaction[data-e2e-reaction] whose text is
+  the emoji, and the label tail "<Name> reacted with <word>.").
+
+  STRUCTURE UNVERIFIED — to be replaced with a structure transcribed from the
+  live page: message 3 (quoted-reply container .embed-msg-part-container), the
+  "Today" / "Yesterday" date forms in messages 3 and 5, the TWO reactions with
+  two tails on message 1 (only single reactions were observed; pairing tails
+  to pills in order is assumed), the exact position of
+  mw-message-reactions-display inside the wrapper, and the file size markup.
+-->
+<mws-header>
+  <mw-conversation-header>
+    <div data-e2e-header-title><h2>Test Contact A</h2></div>
+  </mw-conversation-header>
+</mws-header>
+
+<mws-messages-list>
+  <mws-tombstone-message-wrapper>
+    <div>Test Contact A is using RCS chat</div>
+  </mws-tombstone-message-wrapper>
+
+  <!-- 1. Incoming, observed shape. The text contains "on" and a period on purpose. Two reactions (see header). -->
+  <mws-message-wrapper data-e2e-message-wrapper class="incoming" is-outgoing="false" msg-id="101">
+    <div data-e2e-message-wrapper-core class="msg-row incoming" data-e2e-message-outgoing="false" data-e2e-message-rcs="false" data-e2e-message-id="101">
+      <mws-text-message-part class="msg-focus-element" aria-label="Test Contact A said: It was sent on Monday at 3:00 PM. Thanks. Received on September 20, 2026 at 9:05 AM. Test Contact A reacted with angry. You reacted with sad.">
+        <div data-e2e-text-message-content class="text-msg-container incoming">
+          <mws-message-part-content data-e2e-message-content>It was sent on Monday at 3:00 PM. Thanks.</mws-message-part-content>
+        </div>
+      </mws-text-message-part>
+      <mw-message-reactions-display>
+        <span class="reaction" data-e2e-reaction data-e2e-reaction-emoji="😡">😡</span>
+        <span class="reaction" data-e2e-reaction data-e2e-reaction-emoji="😢">😢</span>
+      </mw-message-reactions-display>
+    </div>
+  </mws-message-wrapper>
+
+  <!-- 2. Outgoing, observed shape, RCS flag true -->
+  <mws-message-wrapper data-e2e-message-wrapper class="outgoing" is-outgoing="true" msg-id="102">
+    <div data-e2e-message-wrapper-core class="msg-row outgoing" data-e2e-message-outgoing="true" data-e2e-message-rcs="true" data-e2e-message-id="102">
+      <mws-text-message-part class="msg-focus-element" aria-label="You said: Reply number two. Sent on September 28, 2026 at 4:30 PM. SMS.">
+        <div data-e2e-text-message-content class="text-msg-container outgoing">
+          <mws-message-part-content data-e2e-message-content>Reply number two</mws-message-part-content>
+        </div>
+      </mws-text-message-part>
+    </div>
+  </mws-message-wrapper>
+
+  <!-- 3. UNVERIFIED: incoming reply quoting message 2 ("Today"); only its own text counts -->
+  <mws-message-wrapper data-e2e-message-wrapper class="incoming" is-outgoing="false" msg-id="103">
+    <div data-e2e-message-wrapper-core class="msg-row incoming" data-e2e-message-outgoing="false" data-e2e-message-rcs="false" data-e2e-message-id="103">
+      <div class="embed-msg-part-container">
+        <mws-text-message-part class="msg-focus-element" aria-label="You said: Reply number two. Sent on September 28, 2026 at 4:30 PM.">
+          <mws-message-part-content data-e2e-message-content>Reply number two</mws-message-part-content>
+        </mws-text-message-part>
+      </div>
+      <mws-text-message-part class="msg-focus-element" aria-label="Test Contact A said: Answer three. Received on Today at 8:15 AM.">
+        <div data-e2e-text-message-content class="text-msg-container incoming">
+          <mws-message-part-content data-e2e-message-content>Answer three</mws-message-part-content>
+        </div>
+      </mws-text-message-part>
+    </div>
+  </mws-message-wrapper>
+
+  <!-- 4. Outgoing, observed shape, two-digit hour PM -->
+  <mws-message-wrapper data-e2e-message-wrapper class="outgoing" is-outgoing="true" msg-id="104">
+    <div data-e2e-message-wrapper-core class="msg-row outgoing" data-e2e-message-outgoing="true" data-e2e-message-rcs="false" data-e2e-message-id="104">
+      <mws-text-message-part class="msg-focus-element" aria-label="You said: Fourth line. Sent on September 29, 2026 at 12:01 PM. SMS.">
+        <div data-e2e-text-message-content class="text-msg-container outgoing">
+          <mws-message-part-content data-e2e-message-content>Fourth line</mws-message-part-content>
+        </div>
+      </mws-text-message-part>
+    </div>
+  </mws-message-wrapper>
+
+  <!-- 5. Image-only, observed shape (BACKLOG-3620): kept, sender from "sent an image" -->
+  <mws-message-wrapper data-e2e-message-wrapper class="incoming" is-outgoing="false" msg-id="105">
+    <div data-e2e-message-wrapper-core class="msg-row incoming" data-e2e-message-outgoing="false" data-e2e-message-rcs="false" data-e2e-message-id="105">
+      <mws-image-message-part class="msg-focus-element" aria-label="Test Contact B sent an image. Received on Yesterday at 12:30 PM.">
+        <div data-e2e-message-image>
+          <img src="blob:https://messages.google.com/synthetic-image-0105" alt="" />
+        </div>
+      </mws-image-message-part>
+    </div>
+  </mws-message-wrapper>
+
+  <!-- 6. No date phrase anywhere → skipped as noDate -->
+  <mws-message-wrapper data-e2e-message-wrapper class="incoming" is-outgoing="false" msg-id="106">
+    <div data-e2e-message-wrapper-core class="msg-row incoming" data-e2e-message-outgoing="false" data-e2e-message-rcs="false" data-e2e-message-id="106">
+      <mws-text-message-part class="msg-focus-element" aria-label="Test Contact A said: Undated text.">
+        <mws-message-part-content data-e2e-message-content>Undated text</mws-message-part-content>
+      </mws-text-message-part>
+    </div>
+  </mws-message-wrapper>
+
+  <!-- 7. Same msg-id as message 1 rendered twice → skipped as duplicate -->
+  <mws-message-wrapper data-e2e-message-wrapper class="incoming" is-outgoing="false" msg-id="101">
+    <div data-e2e-message-wrapper-core class="msg-row incoming" data-e2e-message-outgoing="false" data-e2e-message-rcs="false" data-e2e-message-id="101">
+      <mws-text-message-part class="msg-focus-element" aria-label="Test Contact A said: It was sent on Monday at 3:00 PM. Thanks. Received on September 20, 2026 at 9:05 AM.">
+        <mws-message-part-content data-e2e-message-content>It was sent on Monday at 3:00 PM. Thanks.</mws-message-part-content>
+      </mws-text-message-part>
+    </div>
+  </mws-message-wrapper>
+  <!-- 8. Incoming whose label names a DIFFERENT person than the header title (a group chat): the sender comes from the label -->
+  <mws-message-wrapper data-e2e-message-wrapper class="incoming" is-outgoing="false" msg-id="107">
+    <div data-e2e-message-wrapper-core class="msg-row incoming" data-e2e-message-outgoing="false" data-e2e-message-rcs="false" data-e2e-message-id="107">
+      <mws-text-message-part class="msg-focus-element" aria-label="Test Contact B said: Group reply seven. Received on September 27, 2026 at 10:00 AM.">
+        <mws-message-part-content data-e2e-message-content>Group reply seven</mws-message-part-content>
+      </mws-text-message-part>
+    </div>
+  </mws-message-wrapper>
+  <!-- 9. Outgoing file (PDF), observed shape: recorded by name and size, not imported -->
+  <mws-message-wrapper data-e2e-message-wrapper class="outgoing" is-outgoing="true" msg-id="108">
+    <div data-e2e-message-wrapper-core class="msg-row outgoing" data-e2e-message-outgoing="true" data-e2e-message-rcs="false" data-e2e-message-id="108">
+      <mws-file-message-part data-e2e-file class="msg-focus-element" aria-label="You sent a file: test-document.pdf. Sent on September 29, 2026 at 12:30 PM. SMS.">
+        <span>test-document.pdf</span> <span>1.3 MB</span>
+        <mws-file-download><button aria-label="Download file attachment"></button></mws-file-download>
+      </mws-file-message-part>
+    </div>
+  </mws-message-wrapper>
+</mws-messages-list>
