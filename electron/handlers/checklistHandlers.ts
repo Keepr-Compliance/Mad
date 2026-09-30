@@ -52,8 +52,9 @@
  * about another.
  *
  * A lookup that could not complete must not be reported as "no organization"
- * — a false statement about an account that actually has one. Both channels
- * below return `CHECKLIST_TEMPLATES_UNAVAILABLE_ERROR` for that case and
+ * — a false statement about an account that actually has one. The template
+ * channels return `CHECKLIST_TEMPLATES_UNAVAILABLE_ERROR` for that case (and
+ * `can-edit-templates` returns `CHECKLIST_TEMPLATE_ROLE_UNKNOWN_ERROR`); all
  * reserve `CHECKLISTS_NO_ORGANIZATION_ERROR` for a confirmed `none`.
  */
 

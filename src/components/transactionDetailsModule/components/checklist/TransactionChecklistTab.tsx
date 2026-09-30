@@ -76,7 +76,7 @@ export interface TransactionChecklistTabProps {
 
 /**
  * Whether the "add a checklist" chooser is open. `openedForBatch`: opened by
- * the first add of a batch started from "No checklist yet" (to keep the
+ * the first add of a batch started from "No checklist added yet." (to keep the
  * chooser mounted), not by the user's Add checklist.
  */
 type ChooserState = { mode: "add"; openedForBatch?: boolean } | null;

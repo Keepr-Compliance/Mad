@@ -1,7 +1,8 @@
 /**
  * @jest-environment node
  *
- * BACKLOG-3475 C6 / C9 / C12 — the nine checklist channels, over the real
+ * BACKLOG-3475 C6 / C9 / C12 — the checklist channels (nine from 3475, two
+ * from BACKLOG-3617), over the real
  * `schema.sql` on a real SQLite engine.
  *
  * ===========================================================================
@@ -30,7 +31,7 @@
  * The SPLIT itself is asserted too, by execution rather than by prose: "the
  * gated and ungated sets, by execution" enumerates every registered
  * `checklists:` channel, invokes each one with the plan unreadable, and
- * partitions them by what they answer. Six refuse, three work. A tenth channel
+ * partitions them by what they answer. Seven refuse, four work. A twelfth channel
  * nobody classified, a gate dropped, or a gate added to `get` all red it —
  * which is what makes the module header's count something other than a
  * sentence to be trusted.
@@ -510,7 +511,7 @@ describe("BACKLOG-3475 C9 — the gated and ungated sets, by execution", () => {
    * answer would be indistinguishable from a gated one by grep, and a channel
    * registered under a name nobody thought to search for would be invisible.
    *
-   * The enumeration comes from `registeredHandlers`, so a tenth channel that
+   * The enumeration comes from `registeredHandlers`, so a twelfth channel that
    * this list does not classify fails the first assertion instead of quietly
    * escaping the sweep.
    */
