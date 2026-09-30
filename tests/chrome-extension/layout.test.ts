@@ -1,0 +1,464 @@
+/**
+ * BACKLOG-3629 — Sync in both Messages for Web layouts, and no silent skips.
+ * BACKLOG-3628 — the claim is a POST. BACKLOG-3636 — the finished overlay
+ * says how to get back to Keepr.
+ *
+ * Layouts (founder observation, 2026-09-30): a wide window shows the
+ * conversation list and the open chat side by side (two-pane); a narrow one
+ * shows the list OR the chat (single-pane), with a back button in the chat
+ * header. The fixture below is SYNTHETIC: the header back button's selector and
+ * whether the hidden list leaves the DOM (or is only display:none) are
+ * UNTRACED on the live page, so both variants are exercised.
+ *
+ * Mutation controls (each turns at least one test here red):
+ *   M1 remove `returnToList` from `openFromList` (scan.js)        → "single-pane: clicks back…"
+ *   M2 remove the back-button click (history.back only)           → "…header back button"
+ *   M3 remove the `io.back()` fallback                            → "no back button: history.back()"
+ *   M4 remove the per-chat `returnToList` in runJob's finally     → "single-pane job … ends on the list"
+ *   M5 remove the `returnToList` before the list scan             → "single-pane job starting inside a chat"
+ *   M6 drop any one leaveOut(...) reason in runJob                → "every way a chat is left out"
+ *   M7 drop the cap / "+N more"                                   → "caps the named list at 20"
+ *   M8 claim back to GET, or no "/claim"                          → "claims with POST /claim"
+ *   M9 drop RETURN_TO_KEEPR from the done text                    → the overlay assertions
+ */
+
+import * as fs from "fs";
+import * as path from "path";
+
+interface Conv {
+  conversationId: string;
+  name: string;
+  href: string;
+}
+
+interface LayoutIo {
+  click: (el: Element) => void;
+  sleep: (ms: number) => Promise<void>;
+  back?: () => void;
+  getPathname: () => string;
+  timeoutMs?: number;
+}
+
+interface ScanModule {
+  listShown: (doc: Document) => boolean;
+  isShown: (el: Element) => boolean;
+  returnToList: (doc: Document, io: LayoutIo) => Promise<boolean>;
+  openFromList: (doc: Document, conv: { conversationId: string }, io: LayoutIo) => Promise<void>;
+  [key: string]: unknown;
+}
+
+interface ApiReply {
+  ok: boolean;
+  status: number;
+  body: Record<string, unknown> | null;
+}
+
+interface NotReached {
+  name: string;
+  reason: string;
+  count?: number;
+}
+
+interface JobModule {
+  RETURN_TO_KEEPR: string;
+  runJob: (
+    jobId: string,
+    env: Record<string, unknown>,
+  ) => Promise<{ outcome: string; notReached?: NotReached[] }>;
+}
+
+/* eslint-disable @typescript-eslint/no-require-imports */
+const scan = require("../../chrome-extension/scan.js") as ScanModule;
+const job = require("../../chrome-extension/job.js") as JobModule;
+/* eslint-enable @typescript-eslint/no-require-imports */
+
+const LIST = fs.readFileSync(path.join(__dirname, "fixtures", "conversation-list.synthetic.html"), "utf8");
+const JOB = "11111111-2222-4333-8444-555555555555"; // pii-allow-uuid: invented, not from any live row
+const CONTACTS = [
+  { contactId: "c-1", displayName: "Test Contact A" },
+  { contactId: "c-2", displayName: "Test Contact" },
+];
+
+let sleeps = 0;
+beforeEach(() => {
+  sleeps = 0;
+});
+const noSleep = (): Promise<void> => {
+  sleeps += 1;
+  if (sleeps > 20_000) throw new Error("test harness: runaway loop");
+  return Promise.resolve();
+};
+jest.setTimeout(10_000);
+
+type Layout = "two" | "single";
+
+/**
+ * A synthetic Messages page. Clicking a list link opens that chat; in the
+ * single-pane layout the list then leaves the screen (removed, or
+ * display:none) and the header shows a back button.
+ */
+function messagesPage(opts: {
+  layout: Layout;
+  hideListBy?: "remove" | "display";
+  backButton?: boolean;
+  startInChat?: string;
+}) {
+  const log: string[] = [];
+  let open = "";
+  document.body.innerHTML = `<div id="list-wrap"></div><div id="chat"></div>`;
+  const listWrap = document.getElementById("list-wrap") as HTMLElement;
+  const chat = document.getElementById("chat") as HTMLElement;
+
+  function render(): void {
+    const listOnScreen = opts.layout === "two" || open === "";
+    if (opts.hideListBy === "display") {
+      if (!listWrap.innerHTML) listWrap.innerHTML = LIST;
+      listWrap.style.display = listOnScreen ? "" : "none";
+    } else {
+      listWrap.innerHTML = listOnScreen ? LIST : "";
+    }
+    const back = opts.layout === "single" && opts.backButton !== false
+      ? `<button aria-label="Back" id="back">Back</button>`
+      : "";
+    chat.innerHTML = open
+      ? `<mws-header><div class="left-content">${back}<h2 data-e2e-header-title>${open}</h2></div></mws-header>`
+      : "";
+  }
+
+  function goBack(): void {
+    log.push("back");
+    open = "";
+    render();
+  }
+
+  document.body.addEventListener("click", (e) => {
+    const target = e.target as Element;
+    if (target.id === "back") {
+      e.preventDefault();
+      goBack();
+      return;
+    }
+    const link = target.closest("a[data-e2e-conversation]");
+    if (link) {
+      e.preventDefault();
+      open = (link.getAttribute("href") ?? "").split("/").pop() ?? "";
+      log.push(`open:${open}`);
+      render();
+    }
+  });
+
+  if (opts.startInChat) open = opts.startInChat;
+  render();
+
+  const io: LayoutIo = {
+    click: (el) => (el as HTMLElement).click(),
+    sleep: noSleep,
+    back: () => {
+      log.push("history.back");
+      open = "";
+      render();
+    },
+    getPathname: () => `/web/conversations/${open}`,
+    timeoutMs: 1000,
+  };
+  return { log, io, isOpen: () => open };
+}
+
+describe("layout detection and returning to the list (scan.js)", () => {
+  it("two-pane: the list stays on screen with a chat open, and nothing is clicked", async () => {
+    const page = messagesPage({ layout: "two", startInChat: "aaaaaaaaaaaaaaaaaaa" });
+    expect(scan.listShown(document)).toBe(true);
+    expect(await scan.returnToList(document, page.io)).toBe(true);
+    expect(page.log).toEqual([]);
+    expect(page.isOpen()).toBe("aaaaaaaaaaaaaaaaaaa");
+  });
+
+  it("two-pane: openFromList opens a chat straight from the list", async () => {
+    const page = messagesPage({ layout: "two", startInChat: "aaaaaaaaaaaaaaaaaaa" });
+    await scan.openFromList(document, { conversationId: "ccccccccccccccccccc" }, page.io);
+    expect(page.log).toEqual(["open:ccccccccccccccccccc"]);
+  });
+
+  it.each(["remove", "display"] as const)(
+    "single-pane (list %s): a chat open hides the list; clicks back, then opens the next chat (M1)",
+    async (hideListBy) => {
+      const page = messagesPage({ layout: "single", hideListBy, startInChat: "aaaaaaaaaaaaaaaaaaa" });
+      expect(scan.listShown(document)).toBe(false);
+      await scan.openFromList(document, { conversationId: "ccccccccccccccccccc" }, page.io);
+      expect(page.log).toEqual(["back", "open:ccccccccccccccccccc"]);
+    },
+  );
+
+  it("single-pane: returnToList uses the header back button, not history.back() (M2)", async () => {
+    const page = messagesPage({ layout: "single", startInChat: "aaaaaaaaaaaaaaaaaaa" });
+    expect(await scan.returnToList(document, page.io)).toBe(true);
+    expect(page.log).toEqual(["back"]);
+    expect(scan.listShown(document)).toBe(true);
+  });
+
+  it("single-pane with no back button: history.back() brings the list back (M3)", async () => {
+    const page = messagesPage({ layout: "single", backButton: false, startInChat: "aaaaaaaaaaaaaaaaaaa" });
+    expect(await scan.returnToList(document, page.io)).toBe(true);
+    expect(page.log).toEqual(["history.back"]);
+  });
+
+  it("the list cannot be brought back: returnToList is false (never throws) and openFromList rejects not_reachable", async () => {
+    const page = messagesPage({ layout: "single", backButton: false, startInChat: "aaaaaaaaaaaaaaaaaaa" });
+    const stuck: LayoutIo = { ...page.io, back: () => page.log.push("history.back (no effect)") };
+    expect(await scan.returnToList(document, stuck)).toBe(false);
+    const err = await scan
+      .openFromList(document, { conversationId: "ccccccccccccccccccc" }, stuck)
+      .then(() => null, (e: Error & { code?: string }) => e);
+    expect(err?.code).toBe("not_reachable");
+  });
+});
+
+/** Stubbed scan steps around the REAL layout functions and list scan. */
+function layoutJob(page: ReturnType<typeof messagesPage>) {
+  const calls: Array<[string, string, Record<string, unknown> | undefined]> = [];
+  const shown: string[] = [];
+  const env = {
+    doc: document,
+    getLocation: () => ({
+      pathname: `/web/conversations/${page.isOpen()}`,
+      href: `https://messages.google.com/web/conversations/${page.isOpen()}`,
+    }),
+    api: async (method: string, p: string, body?: Record<string, unknown>): Promise<ApiReply> => {
+      calls.push([method, p, body]);
+      if (p.endsWith("/claim")) return { ok: true, status: 200, body: { jobId: JOB, contacts: CONTACTS } };
+      if (p.endsWith("/match")) {
+        const matched = body?.conversationId === "aaaaaaaaaaaaaaaaaaa" || body?.conversationId === "eeeeeeeeeeeeeeeeeee";
+        return { ok: true, status: 200, body: { matched, contactIds: matched ? ["c-1"] : [] } };
+      }
+      return { ok: true, status: 200, body: { ok: true } };
+    },
+    overlay: { show: (text: string) => shown.push(text) },
+    sleep: noSleep,
+    click: page.io.click,
+    scroll: () => {},
+    openConversation: (conv: Conv) => scan.openFromList(document, conv, page.io),
+    returnToList: () => scan.returnToList(document, page.io),
+    readImage: async () => null,
+    extract: () => ({
+      title: page.isOpen(),
+      messages: [{ msgId: "1", direction: "inbound", sender: "x", text: "hi", sentAt: "2026-09-20T13:05:00.000Z", transport: "rcs" }],
+    }),
+    scan: {
+      ...scan,
+      // Details and message loading have their own suites (scan.test.ts).
+      readParticipantsAndClose: async () => ["(555) 555-0199"],
+      waitForMessageSwap: async () => true,
+      loadHistory: async () => ({ stopReason: "no_more", count: 1 }),
+      messageIdSet: () => "",
+    },
+  };
+  return { env, calls, shown };
+}
+
+describe("the Sync job in both layouts", () => {
+  const CANDIDATES = ["aaaaaaaaaaaaaaaaaaa", "ccccccccccccccccccc", "ddddddddddddddddddd", "eeeeeeeeeeeeeeeeeee"];
+
+  it("two-pane: every candidate is opened, the back button is never used, nothing is left out", async () => {
+    const page = messagesPage({ layout: "two" });
+    const t = layoutJob(page);
+    const outcome = await job.runJob(JOB, t.env);
+    expect(outcome.outcome).toBe("finished");
+    expect(page.log).toEqual(CANDIDATES.map((id) => `open:${id}`));
+    expect(t.calls.filter(([, p]) => p.endsWith("/chat")).map(([, , b]) => b?.conversationId)).toEqual([
+      "aaaaaaaaaaaaaaaaaaa", "eeeeeeeeeeeeeeeeeee",
+    ]);
+    expect(outcome.notReached).toEqual([]);
+  });
+
+  it.each(["remove", "display"] as const)(
+    "single-pane (list %s): back to the list after every chat, every candidate is reached, and the job ends on the list (M4)",
+    async (hideListBy) => {
+      const page = messagesPage({ layout: "single", hideListBy });
+      const t = layoutJob(page);
+      const outcome = await job.runJob(JOB, t.env);
+      expect(outcome.outcome).toBe("finished");
+      expect(page.log).toEqual(CANDIDATES.flatMap((id) => [`open:${id}`, "back"]));
+      expect(t.calls.filter(([, p]) => p.endsWith("/chat")).map(([, , b]) => b?.conversationId)).toEqual([
+        "aaaaaaaaaaaaaaaaaaa", "eeeeeeeeeeeeeeeeeee",
+      ]);
+      expect(outcome.notReached).toEqual([]);
+      expect(scan.listShown(document)).toBe(true);
+    },
+  );
+
+  it("single-pane job starting inside a chat: goes back to the list before scanning it (M5)", async () => {
+    const page = messagesPage({ layout: "single", startInChat: "bbbbbbbbbbbbbbbbbbb" });
+    const t = layoutJob(page);
+    const outcome = await job.runJob(JOB, t.env);
+    expect(outcome.outcome).toBe("finished");
+    expect(page.log[0]).toBe("back");
+    const progress = t.calls.find(([, p, b]) => p.endsWith("/progress") && String(b?.stage).startsWith("Checking"));
+    expect(progress?.[2]).toMatchObject({ candidates: 4 });
+  });
+
+  it("claims with POST /claim, never a GET (M8)", async () => {
+    const page = messagesPage({ layout: "two" });
+    const t = layoutJob(page);
+    await job.runJob(JOB, t.env);
+    expect(t.calls[0]).toEqual(["POST", `/job/${JOB}/claim`, undefined]);
+    expect(t.calls.some(([m]) => m !== "POST")).toBe(false);
+  });
+});
+
+describe("no chat is ever silently left out (BACKLOG-3629)", () => {
+  interface Plan {
+    name: string;
+    open?: "throws";
+    numbers?: string[];
+    matched?: boolean;
+    swap1?: boolean;
+    swap2?: boolean;
+    messages?: number;
+    images?: Array<"ok" | "unreadable" | "refused">;
+    stopReason?: string;
+    chat?: "fails";
+  }
+
+  function planJob(plans: Plan[]) {
+    const convs: Conv[] = plans.map((p, i) => ({
+      conversationId: `conv${String(i).padStart(15, "0")}`,
+      name: p.name,
+      href: `/web/conversations/conv${String(i).padStart(15, "0")}`,
+    }));
+    const byId = new Map(convs.map((c, i) => [c.conversationId, plans[i]]));
+    let open = "";
+    let swaps = 0;
+    const calls: Array<[string, string, Record<string, unknown> | undefined]> = [];
+    const shown: string[] = [];
+    const current = (): Plan => byId.get(open) as Plan;
+    document.body.innerHTML = "<mws-conversation-list-item></mws-conversation-list-item>";
+    const env = {
+      doc: document,
+      getLocation: () => ({ pathname: `/web/conversations/${open}`, href: `https://messages.google.com/web/conversations/${open}` }),
+      api: async (method: string, p: string, body?: Record<string, unknown>): Promise<ApiReply> => {
+        calls.push([method, p, body]);
+        if (p.endsWith("/claim")) return { ok: true, status: 200, body: { jobId: JOB, contacts: CONTACTS } };
+        if (p.endsWith("/match")) {
+          const matched = !!byId.get(String(body?.conversationId))?.matched;
+          return { ok: true, status: 200, body: { matched, contactIds: matched ? ["c-1"] : [] } };
+        }
+        if (p.endsWith("/chat") && current().chat === "fails") {
+          return { ok: false, status: 500, body: { message: "Keepr could not save this chat." } };
+        }
+        if (p.endsWith("/attachment") && body?.base64 === "REFUSED") {
+          return { ok: false, status: 400, body: { message: "Image not stored" } };
+        }
+        return { ok: true, status: 200, body: { ok: true } };
+      },
+      overlay: { show: (text: string) => shown.push(text) },
+      sleep: noSleep,
+      click: () => {},
+      scroll: () => {},
+      openConversation: async (conv: Conv) => {
+        if (byId.get(conv.conversationId)?.open === "throws") throw new Error("Timed out waiting for the chat to open");
+        open = conv.conversationId;
+        swaps = 0;
+      },
+      returnToList: async () => true,
+      readImage: async (src: string) => {
+        if (src.endsWith("unreadable")) return null;
+        return { mimeType: "image/png", base64: src.endsWith("refused") ? "REFUSED" : "AAAA" };
+      },
+      extract: () => {
+        const plan = current();
+        const count = plan.messages ?? 1;
+        const images = plan.images ?? [];
+        return {
+          title: plan.name,
+          messages: Array.from({ length: count }, (_, i) => ({
+            msgId: String(i + 1),
+            direction: "inbound",
+            sender: plan.name,
+            text: `m${i}`,
+            sentAt: "2026-09-20T13:05:00.000Z",
+            transport: "rcs",
+            ...(i === 0 ? { imageSrcs: images.map((kind, n) => `blob:x-${n}-${kind}`) } : {}),
+          })),
+        };
+      },
+      scan: {
+        ...scan,
+        collectConversations: async () => ({ conversations: convs, stopReason: "stable" }),
+        pickCandidates: () => convs.map((c) => ({ conversation: c, reason: "name" })),
+        messageIdSet: () => "",
+        readParticipantsAndClose: async () => current().numbers ?? ["(555) 555-0199"],
+        waitForMessageSwap: async () => {
+          swaps += 1;
+          const plan = current();
+          return swaps === 1 ? plan.swap1 !== false : plan.swap2 !== false;
+        },
+        loadHistory: async () => ({ stopReason: current().stopReason ?? "no_more", count: current().messages ?? 1 }),
+      },
+    };
+    const finish = (): Record<string, unknown> | undefined => calls.find(([, p]) => p.endsWith("/finish"))?.[2];
+    return { env, calls, shown, finish };
+  }
+
+  it("every way a chat is left out, or imported only in part, is named in /finish and on the page (M6, M9)", async () => {
+    const t = planJob([
+      { name: "Chat Not Opened", open: "throws" },
+      { name: "Chat No Numbers", numbers: [] },
+      { name: "Chat Not Theirs", matched: false },
+      { name: "Chat Not Loaded", matched: true, swap1: false },
+      { name: "Chat Unsettled", matched: true, swap2: false },
+      { name: "Chat Empty", matched: true, messages: 0 },
+      { name: "Chat Truncated", matched: true, stopReason: "cap", images: ["ok", "unreadable", "refused"] },
+      { name: "Chat Save Failed", matched: true, chat: "fails" },
+      { name: "Chat Fine", matched: true, images: ["ok"] },
+    ]);
+    const outcome = await job.runJob(JOB, t.env);
+    expect(outcome.outcome).toBe("finished");
+    const expected: NotReached[] = [
+      { name: "Chat Not Opened", reason: "not_opened" },
+      { name: "Chat No Numbers", reason: "no_numbers" },
+      { name: "Chat Not Loaded", reason: "messages_not_loaded" },
+      { name: "Chat Unsettled", reason: "history_not_settled" },
+      { name: "Chat Empty", reason: "no_messages" },
+      { name: "Chat Truncated", reason: "history_truncated" },
+      { name: "Chat Truncated", reason: "images_failed", count: 2 },
+      { name: "Chat Save Failed", reason: "error" },
+    ];
+    expect(t.finish()).toMatchObject({ notReached: expected, notReachedMore: 0 });
+    expect(outcome.notReached).toEqual(expected);
+    // "Chat No Numbers" is reported without asking Keepr (it cannot be checked).
+    const matched = t.calls.filter(([, p]) => p.endsWith("/match")).length;
+    expect(matched).toBe(7);
+
+    const done = t.shown[t.shown.length - 1];
+    expect(done).toContain("Done — imported 2 chats");
+    for (const e of expected) expect(done).toContain(e.name);
+    expect(done).toContain("images not imported: 2");
+    expect(done).toContain("only the newest messages imported");
+    expect(done).not.toContain("Chat Not Theirs");
+    expect(done).not.toContain("Chat Fine");
+    expect(done.endsWith(job.RETURN_TO_KEEPR)).toBe(true);
+    expect(job.RETURN_TO_KEEPR).toBe("Switch back to Keepr to see the imported messages.");
+  });
+
+  it("nothing left out: the done text has no list, and still says how to get back to Keepr", async () => {
+    const t = planJob([{ name: "Chat Fine", matched: true }]);
+    await job.runJob(JOB, t.env);
+    expect(t.finish()).toMatchObject({ notReached: [], notReachedMore: 0 });
+    const done = t.shown[t.shown.length - 1];
+    expect(done).not.toContain("Not fully imported");
+    expect(done).toBe(`Done — imported 1 chats, 1 messages, 0 images.\n${job.RETURN_TO_KEEPR}`);
+  });
+
+  it("caps the named list at 20 and counts the rest as '+N more' (M7)", async () => {
+    const plans: Plan[] = Array.from({ length: 25 }, (_, i) => ({ name: `Chat ${i}`, open: "throws" as const }));
+    const t = planJob(plans);
+    await job.runJob(JOB, t.env);
+    const body = t.finish() as { notReached: NotReached[]; notReachedMore: number };
+    expect(body.notReached).toHaveLength(20);
+    expect(body.notReachedMore).toBe(5);
+    const done = t.shown[t.shown.length - 1];
+    expect(done).toContain("Chat 19 (could not be opened)");
+    expect(done).not.toContain("Chat 20 ");
+    expect(done).toContain("+5 more");
+  });
+});

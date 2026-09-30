@@ -120,12 +120,12 @@ describe("RcsExtensionBridge", () => {
     });
 
     it("refuses GET /status without the pinned Origin", async () => {
-      const reply = await request(port, "GET", "/status", {});
+      const reply = await request(port, "POST", "/status", {});
       expect(reply.status).toBe(403);
     });
 
     it("accepts the pinned extension Origin", async () => {
-      const reply = await request(port, "GET", "/status", { Origin: RCS_EXTENSION_ORIGIN });
+      const reply = await request(port, "POST", "/status", { Origin: RCS_EXTENSION_ORIGIN });
       expect(reply.status).toBe(200);
       expect(reply.body).toEqual({ bridge: "listening", session: null });
     });
@@ -193,7 +193,7 @@ describe("RcsExtensionBridge", () => {
     expect(second.getStatus()).toMatchObject({ bridge: "unavailable", reason: `Port ${port} is already in use` });
     await second.stop();
     // The first bridge is unaffected.
-    const reply = await request(port, "GET", "/status", { Origin: RCS_EXTENSION_ORIGIN });
+    const reply = await request(port, "POST", "/status", { Origin: RCS_EXTENSION_ORIGIN });
     expect(reply.status).toBe(200);
   });
 });
@@ -244,7 +244,7 @@ describe("RcsExtensionBridge sync jobs", () => {
   });
 
   async function claimAndMatch(numbers: string[]): Promise<Reply> {
-    expect((await request(port, "GET", `/job/${jobId}`, EXT)).status).toBe(200);
+    expect((await request(port, "POST", `/job/${jobId}/claim`, EXT)).status).toBe(200);
     return request(port, "POST", `/job/${jobId}/match`, EXT, JSON.stringify({
       conversationId: CHAT.conversationId,
       numbers,
@@ -282,13 +282,13 @@ describe("RcsExtensionBridge sync jobs", () => {
     });
 
     it("claim returns names only, never the contacts' numbers", async () => {
-      const claim = await request(port, "GET", `/job/${jobId}`, EXT);
+      const claim = await request(port, "POST", `/job/${jobId}/claim`, EXT);
       expect(claim.body).toEqual({ jobId, contacts: [{ contactId: "c-1", displayName: "Test Contact A" }], startDate: null });
     });
 
     it("claim carries the transaction's start date when the job has one", async () => {
       jobId = bridge.createJob("tx-job", JOB_CONTACTS, { startDate: "2026-03-01" }).jobId;
-      const claim = await request(port, "GET", `/job/${jobId}`, EXT);
+      const claim = await request(port, "POST", `/job/${jobId}/claim`, EXT);
       expect(claim.body).toMatchObject({ jobId, startDate: "2026-03-01" });
     });
   });
@@ -310,7 +310,7 @@ describe("RcsExtensionBridge sync jobs", () => {
   describe("control 4: job id", () => {
     it("a wrong job id is refused (404) on every route", async () => {
       const wrong = "00000000-0000-4000-8000-000000000000"; // pii-allow-uuid: invented, not from any live row
-      expect((await request(port, "GET", `/job/${wrong}`, EXT)).status).toBe(404);
+      expect((await request(port, "POST", `/job/${wrong}/claim`, EXT)).status).toBe(404);
       expect((await request(port, "POST", `/job/${wrong}/match`, EXT, JSON.stringify({
         conversationId: CHAT.conversationId, numbers: ["(555) 555-0199"],
       }))).status).toBe(404);
@@ -319,21 +319,112 @@ describe("RcsExtensionBridge sync jobs", () => {
     });
 
     it("a second claim is refused with 409", async () => {
-      expect((await request(port, "GET", `/job/${jobId}`, EXT)).status).toBe(200);
-      const second = await request(port, "GET", `/job/${jobId}`, EXT);
+      expect((await request(port, "POST", `/job/${jobId}/claim`, EXT)).status).toBe(200);
+      const second = await request(port, "POST", `/job/${jobId}/claim`, EXT);
       expect(second.status).toBe(409);
       expect(second.body.error).toBe("already_running");
     });
 
     it("the Origin pin applies to job routes too", async () => {
-      const reply = await request(port, "GET", `/job/${jobId}`, { Origin: "https://messages.google.com" });
+      const reply = await request(port, "POST", `/job/${jobId}/claim`, { Origin: "https://messages.google.com" });
       expect(reply.status).toBe(403);
     });
 
     it("/job/pending returns an unclaimed job, and nothing once it is claimed", async () => {
-      expect((await request(port, "GET", "/job/pending", EXT)).body).toEqual({ jobId });
-      await request(port, "GET", `/job/${jobId}`, EXT);
-      expect((await request(port, "GET", "/job/pending", EXT)).status).toBe(404);
+      expect((await request(port, "POST", "/job/pending", EXT)).body).toEqual({ jobId });
+      await request(port, "POST", `/job/${jobId}/claim`, EXT);
+      expect((await request(port, "POST", "/job/pending", EXT)).status).toBe(404);
+    });
+  });
+
+  // Chrome on Windows sends a service-worker GET WITHOUT Origin, so the claim
+  // and the pending check are POSTs, and the bridge answers every GET 405.
+  // Mutations that turn these red: re-accepting GET for the claim / pending /
+  // status; loosening the Origin check to `origin && origin !== …`; deleting
+  // the Host check, or comparing it with the fixed 38619 instead of the bound
+  // port (this bridge runs on a random port).
+  describe("BACKLOG-3628: POST only, strict Origin, exact Host", () => {
+    it("GET on the claim, the pending check and status answers 405 and claims nothing", async () => {
+      for (const p of [`/job/${jobId}/claim`, `/job/${jobId}`, "/job/pending", "/status"]) {
+        const reply = await request(port, "GET", p, EXT);
+        expect([p, reply.status, reply.body.error]).toEqual([p, 405, "method_not_allowed"]);
+      }
+      expect(bridge.getJob()?.state).toBe("created");
+    });
+
+    it("the old bare claim URL claims nothing on POST either", async () => {
+      expect((await request(port, "POST", `/job/${jobId}`, EXT)).status).toBe(404);
+      expect(bridge.getJob()?.state).toBe("created");
+    });
+
+    it("a POST claim with NO Origin is refused, even with the right job id", async () => {
+      const reply = await request(port, "POST", `/job/${jobId}/claim`, JSON_HEADERS);
+      expect(reply.status).toBe(403);
+      expect(reply.body.error).toBe("forbidden_origin");
+      expect(bridge.getJob()?.state).toBe("created");
+    });
+
+    it("a Host other than 127.0.0.1:<bound port> is refused before anything else", async () => {
+      for (const host of [`localhost:${port}`, "evil.test", `127.0.0.1:${port + 1}`, "127.0.0.1"]) {
+        const reply = await request(port, "POST", `/job/${jobId}/claim`, { ...EXT, Host: host });
+        expect([host, reply.status, reply.body.error]).toEqual([host, 403, "forbidden_host"]);
+      }
+      expect(bridge.getJob()?.state).toBe("created");
+      // The exact Host (what http.request sends by default) is accepted.
+      const ok = await request(port, "POST", `/job/${jobId}/claim`, { ...EXT, Host: `127.0.0.1:${port}` });
+      expect(ok.status).toBe(200);
+    });
+
+    it("the CORS preflight offers POST only", async () => {
+      const res = await new Promise<http.IncomingMessage>((resolve, reject) => {
+        const req = http.request({ host: "127.0.0.1", port, method: "OPTIONS", path: "/job/pending", headers: EXT }, resolve);
+        req.on("error", reject);
+        req.end();
+      });
+      res.resume();
+      expect(res.statusCode).toBe(204);
+      expect(res.headers["access-control-allow-methods"]).toBe("POST");
+    });
+  });
+
+  // BACKLOG-3629. Mutation that turns this red: drop the parseNotReached
+  // argument from job.finish in the /finish case.
+  describe("BACKLOG-3629: /finish carries the chats the page left out", () => {
+    it("stores the named entries (capped at 20, the rest counted) and logs the count only", async () => {
+      const logged: string[] = [];
+      const own = new RcsExtensionBridge({
+        importChat,
+        onJobFinished: (j) => finished.push(j),
+        jobs: new RcsJobRegistry(),
+        logger: { info: (m) => logged.push(m), warn: (m) => logged.push(m), error: (m) => logged.push(m) },
+      });
+      expect(await own.start(0)).toBe("listening");
+      try {
+        const ownPort = own.getStatus().port;
+        const id = own.createJob("tx-job", JOB_CONTACTS).jobId;
+        expect((await request(ownPort, "POST", `/job/${id}/claim`, EXT)).status).toBe(200);
+        const list = Array.from({ length: 22 }, (_, i) => ({ name: `Chat Name ${i}`, reason: "not_opened" }));
+        list[1] = { name: "Chat Name 1", reason: "images_failed", count: 2 } as (typeof list)[number];
+        const reply = await request(ownPort, "POST", `/job/${id}/finish`, EXT, JSON.stringify({
+          chats: 0, messages: 0, images: 0, notReached: list, notReachedMore: 3,
+        }));
+        expect(reply.status).toBe(200);
+        const snap = finished[finished.length - 1];
+        expect(snap.notReached).toHaveLength(20);
+        expect(snap.notReached?.[1]).toEqual({ name: "Chat Name 1", reason: "images_failed", count: 2 });
+        expect(snap.notReachedMore).toBe(5); // 3 from the page + 2 over the cap
+        const line = logged.find((m) => m.includes("Sync job finished")) ?? "";
+        expect(line).toContain("25 not fully imported");
+        expect(logged.join("\n")).not.toContain("Chat Name");
+      } finally {
+        await own.stop();
+      }
+    });
+
+    it("a /finish with nothing left out adds no notReached fields", async () => {
+      expect((await request(port, "POST", `/job/${jobId}/claim`, EXT)).status).toBe(200);
+      await request(port, "POST", `/job/${jobId}/finish`, EXT, JSON.stringify({ chats: 1, messages: 2, images: 0, notReached: [], notReachedMore: 0 }));
+      expect(finished[finished.length - 1]).not.toHaveProperty("notReached");
     });
   });
 

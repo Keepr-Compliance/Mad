@@ -17,6 +17,10 @@
  * UNVERIFIED: which element scrolls the list (see findListScroller).
  * UNTRACED: which element scrolls a chat's messages (see findMessageScroller),
  *   and whether scrolling up removes the newest wrappers from the page.
+ * NARROW WINDOW (BACKLOG-3629, founder observation 2026-09-30): the page shows
+ *   the list OR the open chat, not both. UNTRACED: whether the hidden list
+ *   leaves the DOM or is only hidden, and the header back button's selector
+ *   (see BACK_BUTTON_SELECTORS; history.back() is the fallback).
  */
 (function (root) {
   "use strict";
@@ -382,8 +386,152 @@
     }
   }
 
+  // -------------------------------------------------------------------------
+  // BACKLOG-3629: two-pane and single-pane layouts
+  // -------------------------------------------------------------------------
+
+  /**
+   * The header's back button in the single-pane layout, most specific first.
+   * UNTRACED on the live page; the header is `mws-header` with `.left-content`
+   * holding the back button and the title (observed 2026-09-30).
+   */
+  var BACK_BUTTON_SELECTORS = [
+    "mws-header [data-e2e-back-button]",
+    'mws-header button[aria-label="Back"]',
+    "mws-header .left-content button",
+    'button[aria-label="Back"]',
+  ];
+
+  /**
+   * True unless the element or an ancestor is hidden by `hidden`, display:none
+   * or visibility:hidden. Computed style, not a width constant: it reads the
+   * layout the page chose, at any window size or zoom.
+   */
+  function isShown(el) {
+    var view = el.ownerDocument && el.ownerDocument.defaultView;
+    for (var cur = el; cur && cur.nodeType === 1; cur = cur.parentElement) {
+      if (cur.hasAttribute("hidden")) return false;
+      if (view) {
+        var style = view.getComputedStyle(cur);
+        if (style.display === "none" || style.visibility === "hidden") return false;
+      }
+    }
+    return true;
+  }
+
+  /** The conversation list is on screen (either layout). */
+  function listShown(doc) {
+    var items = doc.querySelectorAll(SELECTORS.listItem);
+    for (var i = 0; i < items.length; i++) {
+      if (isShown(items[i])) return true;
+    }
+    return false;
+  }
+
+  function findBackButton(doc) {
+    for (var i = 0; i < BACK_BUTTON_SELECTORS.length; i++) {
+      var els = doc.querySelectorAll(BACK_BUTTON_SELECTORS[i]);
+      for (var j = 0; j < els.length; j++) {
+        if (isShown(els[j])) return els[j];
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Make the conversation list the pane on screen. Two-pane: it already is,
+   * nothing is clicked. Single-pane with a chat open: click the header's back
+   * button, else `io.back()` (history.back), and wait for the list items.
+   * Never throws: false means the list could not be brought back (the next
+   * open then fails and that chat is reported as not opened).
+   *
+   * @param {Document} doc
+   * @param {{click: function(Element): void, sleep: function(number): Promise<void>,
+   *          back?: function(): void, timeoutMs?: number}} io
+   * @returns {Promise<boolean>}
+   */
+  async function returnToList(doc, io) {
+    try {
+      if (listShown(doc)) return true;
+      var t = io.timeoutMs || 5000;
+      var waitList = function () {
+        return waitFor(function () { return listShown(doc); }, io.sleep, t, 100, "the conversation list").then(
+          function () { return true; },
+          function () { return false; },
+        );
+      };
+      var button = findBackButton(doc);
+      if (button) {
+        io.click(button);
+        if (await waitList()) return true;
+      }
+      if (io.back) {
+        io.back();
+        if (await waitList()) return true;
+      }
+      return false;
+    } catch (_e) {
+      return false;
+    }
+  }
+
+  function findLink(doc, conversationId) {
+    var links = doc.querySelectorAll(SELECTORS.listLink);
+    for (var i = 0; i < links.length; i++) {
+      if (conversationIdFromHref(links[i].getAttribute("href")) === conversationId) return links[i];
+    }
+    return null;
+  }
+
+  /**
+   * Open one chat from the list, in either layout: bring the list back first
+   * (single-pane), find the item (walking a virtualized list from the top),
+   * click it and wait for the chat's header.
+   *
+   * Rejects with `code: "not_reachable"` when the list cannot be brought back
+   * and `code: "not_found"` when the item is not in the list.
+   *
+   * @param {Document} doc
+   * @param {{conversationId: string}} conv
+   * @param {{click: function(Element): void, sleep: function(number): Promise<void>,
+   *          back?: function(): void, getPathname: function(): string, timeoutMs?: number}} io
+   */
+  async function openFromList(doc, conv, io) {
+    if (!(await returnToList(doc, io))) {
+      var unreachable = new Error("The conversation list is not on screen");
+      unreachable.code = "not_reachable";
+      throw unreachable;
+    }
+    var link = findLink(doc, conv.conversationId);
+    if (!link) {
+      // The list is virtualized: walk it from the top until the item appears.
+      var el = findListScroller(doc);
+      if (el) el.scrollTop = 0;
+      for (var i = 0; i < 40 && !link; i++) {
+        await io.sleep(300);
+        link = findLink(doc, conv.conversationId);
+        if (!link && el) el.scrollTop += Math.max(200, el.clientHeight - 50);
+      }
+    }
+    if (!link) {
+      var missing = new Error("Chat not found in the list");
+      missing.code = "not_found";
+      throw missing;
+    }
+    io.click(link);
+    await waitFor(function () {
+      return io.getPathname().indexOf("/" + conv.conversationId) !== -1 &&
+        doc.querySelector(SELECTORS.headerTitle);
+    }, io.sleep, io.timeoutMs || 10000, 100, "the chat to open");
+  }
+
   var api = {
     SELECTORS: SELECTORS,
+    BACK_BUTTON_SELECTORS: BACK_BUTTON_SELECTORS,
+    isShown: isShown,
+    listShown: listShown,
+    returnToList: returnToList,
+    openFromList: openFromList,
     findMessageScroller: findMessageScroller,
     loadHistory: loadHistory,
     messageIdSet: messageIdSet,

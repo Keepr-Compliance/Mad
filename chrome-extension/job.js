@@ -27,8 +27,8 @@
   }
 
   /**
-   * Wait until the page is either signed in (the list is there) or on a
-   * sign-in path. "not_signed_in" | "ready" | "timeout".
+   * Wait until the page is either signed in (the list, or in a narrow window
+   * an open chat's header, is there) or on a sign-in path. "not_signed_in" | "ready" | "timeout".
    */
   async function waitForPageState(env, timeoutMs) {
     var waited = 0;
@@ -36,6 +36,9 @@
       var state = env.scan.signInState(env.getLocation().pathname);
       if (state === "not_signed_in") return "not_signed_in";
       if (env.doc.querySelector(LIST_ITEM)) return "ready";
+      // A narrow window with a chat open shows no list (BACKLOG-3629): the
+      // chat header proves the page is signed in and loaded too.
+      if (env.scan.SELECTORS && env.doc.querySelector(env.scan.SELECTORS.headerTitle)) return "ready";
       if (waited >= timeoutMs) return "timeout";
       await env.sleep(250);
       waited += 250;
@@ -48,6 +51,43 @@
 
   var CANCELLED = "Sync cancelled in Keepr";
   var MESSAGES_NOT_LOADED = "messages_not_loaded";
+
+  /** Keepr keeps at most this many named entries (RCS_NOT_REACHED_CAP). */
+  var NOT_REACHED_CAP = 20;
+  var RETURN_TO_KEEPR = "Switch back to Keepr to see the imported messages.";
+
+  /** Why a chat was left out, or imported only in part, for the overlay. */
+  var REASON_TEXT = {
+    not_opened: "could not be opened",
+    no_numbers: "no phone number shown",
+    messages_not_loaded: "messages did not load",
+    history_not_settled: "messages kept changing",
+    no_messages: "no messages found",
+    error: "failed",
+    images_failed: "images not imported",
+    history_truncated: "only the newest messages imported",
+  };
+
+  function reasonText(entry) {
+    var text = REASON_TEXT[entry.reason] || entry.reason;
+    return entry.count ? text + ": " + entry.count : text;
+  }
+
+  /** The finished overlay: totals, every chat left out, the way back to Keepr. */
+  function doneText(totals, reported, more) {
+    var lines = [
+      "Done — imported " + totals.chats + " chats, " + totals.messages + " messages, " + totals.images + " images.",
+    ];
+    if (reported.length > 0) {
+      lines.push("Not fully imported:");
+      for (var i = 0; i < reported.length; i++) {
+        lines.push("• " + reported[i].name + " (" + reasonText(reported[i]) + ")");
+      }
+      if (more > 0) lines.push("+" + more + " more");
+    }
+    lines.push(RETURN_TO_KEEPR);
+    return lines.join("\n");
+  }
 
   /** Keepr no longer knows this job (cancelled, replaced or over). */
   function jobGone(reply) {
@@ -66,6 +106,7 @@
    * @param {string} jobId
    * @param {object} env  { doc, getLocation, api(method, path, body), overlay:{show(text,isError)},
    *                        sleep(ms), click(el), scroll(), scrollMessagesUp?(), openConversation(conv),
+   *                        returnToList?() (narrow window: back to the list; never throws),
    *                        readImage(src), extract(doc, href, now), scan, now?, pageTimeoutMs?,
    *                        messagesTimeoutMs?, messagesStableMs?, historyCap?, historyNoNewMs? }
    *
@@ -88,6 +129,13 @@
   async function runJobInner(jobId, env) {
     var base = "/job/" + jobId;
     var skips = [];
+    // BACKLOG-3629: every chat left out, or imported in part, by name.
+    var notReached = [];
+    function leaveOut(conv, reason, count) {
+      var entry = { name: conv.name || "(unnamed chat)", reason: reason };
+      if (count !== undefined) entry.count = count;
+      notReached.push(entry);
+    }
 
     /** Every job call: a 404/410 ends the run. */
     async function call(method, path, body) {
@@ -124,7 +172,8 @@
 
     // 2. Claim: contact names only.
     // The claim keeps its own message (already running / over) for the overlay.
-    var claim = await env.api("GET", base);
+    // POST (BACKLOG-3628): Chrome on Windows sends a worker GET without Origin.
+    var claim = await env.api("POST", base + "/claim");
     if (!claim.ok) {
       env.overlay.show(messageOf(claim, "Keepr refused this sync."), true);
       return { outcome: "claim_refused" };
@@ -135,8 +184,10 @@
     if (!isFinite(floorMs)) floorMs = null;
     var history = [];
 
-    // 3. Scan the list and pick candidates.
+    // 3. Scan the list and pick candidates. A narrow window shows the list OR
+    // a chat (BACKLOG-3629): make sure the list is the pane on screen first.
     env.overlay.show("Loading your conversation list…", false);
+    if (env.returnToList) await env.returnToList();
     var collected = await env.scan.collectConversations(env.doc, { scroll: env.scroll, sleep: env.sleep });
     var candidates = env.scan.pickCandidates(collected.conversations, contacts);
     progress.listed = collected.conversations.length;
@@ -146,14 +197,23 @@
     // 4. Each candidate: open, read numbers, close Details, ask Keepr.
     for (var i = 0; i < candidates.length; i++) {
       var conv = candidates[i].conversation;
+      var opened = false;
+      var gone = false;
+      var imagesFailed = 0;
       try {
         env.overlay.show("Checking chat " + (i + 1) + " of " + candidates.length + "…", false);
         // The messages on screen before the click: the next chat is ready only
         // once this set has been replaced (the URL and title flip first).
         var before = env.scan.messageIdSet(env.doc);
         await env.openConversation(conv);
+        opened = true;
         var numbers = await env.scan.readParticipantsAndClose(env.doc, { click: env.click, sleep: env.sleep });
         progress.checked += 1;
+        if (!numbers || numbers.length === 0) {
+          // Keepr cannot check a chat with no number on screen: report it.
+          leaveOut(conv, "no_numbers");
+          continue;
+        }
         var match = await call("POST", base + "/match", { conversationId: conv.conversationId, numbers: numbers });
         if (!match.ok) throw new Error(messageOf(match, "Keepr could not check this chat."));
         if (!match.body || !match.body.matched) continue;
@@ -166,6 +226,7 @@
         if (!ready) {
           progress.skipped += 1;
           skips.push({ conversationId: conv.conversationId, reason: MESSAGES_NOT_LOADED });
+          leaveOut(conv, MESSAGES_NOT_LOADED);
           env.overlay.show("Skipped a chat: its messages did not load", false);
           continue;
         }
@@ -213,6 +274,7 @@
           // a set that is moving under us.
           progress.skipped += 1;
           skips.push({ conversationId: conv.conversationId, reason: "history_not_settled" });
+          leaveOut(conv, "history_not_settled");
           continue;
         }
         loc = env.getLocation();
@@ -225,6 +287,7 @@
         if (messages.length === 0) {
           progress.skipped += 1;
           skips.push({ conversationId: conv.conversationId, reason: "no_messages" });
+          leaveOut(conv, "no_messages");
           continue;
         }
         var sent = await call("POST", base + "/chat", {
@@ -235,6 +298,8 @@
         if (!sent.ok) throw new Error(messageOf(sent, "Keepr could not save this chat."));
         totals.chats += 1;
         totals.messages += messages.length;
+        // Imported, but only back to the cap: older messages are missing.
+        if (hist.stopReason === "cap") leaveOut(conv, "history_truncated");
 
         for (var j = 0; j < extracted.messages.length; j++) {
           var msg = extracted.messages[j];
@@ -244,6 +309,7 @@
               var img = await env.readImage(srcs[n]);
               if (!img || !/^image\//.test(img.mimeType)) {
                 progress.skipped += 1;
+                imagesFailed += 1;
                 continue;
               }
               var up = await call("POST", base + "/attachment", {
@@ -254,15 +320,22 @@
                 base64: img.base64,
               });
               if (up.ok) totals.images += 1;
-              else progress.skipped += 1;
+              else {
+                progress.skipped += 1;
+                imagesFailed += 1;
+              }
             } catch (imgErr) {
               if (imgErr && imgErr.jobGone) throw imgErr;
               progress.skipped += 1;
+              imagesFailed += 1;
             }
           }
         }
       } catch (err) {
-        if (err && err.jobGone) throw err;
+        if (err && err.jobGone) {
+          gone = true;
+          throw err;
+        }
         if (err && err.code === "details_stuck") {
           // The Details pane is still showing an earlier chat's people; every
           // later chat would be read against it. Stop the whole job.
@@ -270,25 +343,40 @@
         }
         progress.skipped += 1;
         skips.push({ conversationId: conv.conversationId, reason: "error" });
+        leaveOut(conv, opened ? "error" : "not_opened");
+      } finally {
+        if (imagesFailed > 0) leaveOut(conv, "images_failed", imagesFailed);
+        // Narrow window (BACKLOG-3629): the chat replaced the list; go back to
+        // it so the next chat can be found. A no-op when both panes show.
+        if (!gone && env.returnToList) await env.returnToList();
       }
       await report("Checked " + progress.checked + " of " + candidates.length + " chats");
     }
 
-    // 5. Done: Keepr brings itself forward.
+    // 5. Done: Keepr brings itself forward. Every chat left out (or imported
+    // in part) is named here and on the page — never a silent skip.
+    var reported = notReached.slice(0, NOT_REACHED_CAP);
+    var more = notReached.length - reported.length;
     await call("POST", base + "/finish", {
       chats: totals.chats,
       messages: totals.messages,
       images: totals.images,
+      notReached: reported,
+      notReachedMore: more,
     });
-    env.overlay.show(
-      "Done — imported " + totals.chats + " chats, " + totals.messages + " messages, " +
-        totals.images + " images. Returning to Keepr.",
-      false,
-    );
-    return { outcome: "finished", progress: progress, totals: totals, skips: skips, history: history };
+    env.overlay.show(doneText(totals, reported, more), false);
+    return {
+      outcome: "finished", progress: progress, totals: totals, skips: skips, history: history, notReached: notReached,
+    };
   }
 
-  var api = { runJob: runJob, jobIdFromHash: jobIdFromHash, waitForPageState: waitForPageState, NOT_SIGNED_IN: NOT_SIGNED_IN };
+  var api = {
+    runJob: runJob,
+    jobIdFromHash: jobIdFromHash,
+    waitForPageState: waitForPageState,
+    NOT_SIGNED_IN: NOT_SIGNED_IN,
+    RETURN_TO_KEEPR: RETURN_TO_KEEPR,
+  };
 
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;
@@ -349,6 +437,8 @@
         maxWidth: "360px", padding: "10px 14px", borderRadius: "10px",
         fontFamily: "system-ui, -apple-system, sans-serif", fontSize: "14px",
         boxShadow: "0 2px 10px rgba(0,0,0,0.25)",
+        // The finished text lists chats left out, one per line.
+        whiteSpace: "pre-line", maxHeight: "60vh", overflowY: "auto",
       });
       document.body.appendChild(panel);
     }
@@ -382,34 +472,21 @@
     el.dispatchEvent(new el.ownerDocument.defaultView.Event("scroll"));
   }
 
-  function findLink(conv) {
-    var links = document.querySelectorAll("a[data-e2e-conversation]");
-    for (var i = 0; i < links.length; i++) {
-      if (root.KeeprScan.conversationIdFromHref(links[i].getAttribute("href")) === conv.conversationId) {
-        return links[i];
-      }
-    }
-    return null;
+  // BACKLOG-3629: both layouts (list + chat side by side, or list OR chat in a
+  // narrow window) go through scan.js, where jest drives them on fixtures.
+  var layoutIo = {
+    click: click,
+    sleep: sleep,
+    back: function () { root.history.back(); },
+    getPathname: function () { return location.pathname; },
+  };
+
+  function openConversation(conv) {
+    return root.KeeprScan.openFromList(document, conv, layoutIo);
   }
 
-  async function openConversation(conv) {
-    var link = findLink(conv);
-    if (!link) {
-      // The list is virtualized: walk it from the top until the item appears.
-      var el = scroller();
-      if (el) el.scrollTop = 0;
-      for (var i = 0; i < 40 && !link; i++) {
-        await sleep(300);
-        link = findLink(conv);
-        if (!link && el) el.scrollTop += Math.max(200, el.clientHeight - 50);
-      }
-    }
-    if (!link) throw new Error("Chat not found in the list");
-    click(link);
-    await root.KeeprScan.waitFor(function () {
-      return location.pathname.indexOf("/" + conv.conversationId) !== -1 &&
-        document.querySelector(root.KeeprScan.SELECTORS.headerTitle);
-    }, sleep, 10000, 100, "the chat to open");
+  function returnToList() {
+    return root.KeeprScan.returnToList(document, layoutIo);
   }
 
   async function readImage(src) {
@@ -438,6 +515,7 @@
       scroll: scroll,
       scrollMessagesUp: scrollMessagesUp,
       openConversation: openConversation,
+      returnToList: returnToList,
       readImage: readImage,
       extract: root.KeeprExtract.extractConversation,
       scan: root.KeeprScan,
@@ -469,7 +547,7 @@
     if (message.type === "keepr-ping") {
       sendResponse({
         signedIn: root.KeeprScan.signInState(location.pathname) === "signed_in" &&
-          !!document.querySelector(LIST_ITEM),
+          !!(document.querySelector(LIST_ITEM) || document.querySelector(root.KeeprScan.SELECTORS.headerTitle)),
         running: running,
       });
       return false;

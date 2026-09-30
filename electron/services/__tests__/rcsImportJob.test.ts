@@ -9,7 +9,9 @@
  */
 
 import {
+  parseNotReached,
   phonesMatchExactly,
+  RCS_NOT_REACHED_CAP,
   RCS_JOB_NOT_OPENED_MESSAGE,
   RCS_JOB_UNCLAIMED_MS,
   RcsJobRegistry,
@@ -120,5 +122,38 @@ describe("RcsImportJob / RcsJobRegistry", () => {
     expect(first.state).toBe("cancelled");
     expect(jobs.check(first.jobId)).toMatchObject({ ok: false, status: 404 });
     expect(jobs.check(second.jobId)).toMatchObject({ ok: true });
+  });
+});
+
+// BACKLOG-3629. Mutations that turn these red: drop the `entries.length >=
+// RCS_NOT_REACHED_CAP` branch (21 entries kept), or ignore the page's own
+// "more" count.
+describe("parseNotReached (the page's /finish list)", () => {
+  it("keeps well-formed entries up to the cap and counts the rest", () => {
+    const list = [
+      { name: "Chat A", reason: "not_opened" },
+      { name: 42, reason: "bad" },
+      "junk",
+      { name: "Chat B", reason: "images_failed", count: 3.7 },
+      ...Array.from({ length: RCS_NOT_REACHED_CAP }, (_, i) => ({ name: `Chat ${i}`, reason: "error" })),
+    ];
+    const parsed = parseNotReached(list, 4);
+    expect(parsed.entries).toHaveLength(RCS_NOT_REACHED_CAP);
+    expect(parsed.entries[0]).toEqual({ name: "Chat A", reason: "not_opened" });
+    expect(parsed.entries[1]).toEqual({ name: "Chat B", reason: "images_failed", count: 3 });
+    expect(parsed.more).toBe(4 + 2);
+  });
+
+  it("anything but an array is no entries; a bad 'more' is 0", () => {
+    expect(parseNotReached(undefined, "x")).toEqual({ entries: [], more: 0 });
+    expect(parseNotReached({ name: "a" }, -1)).toEqual({ entries: [], more: 0 });
+  });
+
+  it("finish() puts the entries on the snapshot", () => {
+    const { jobs } = registry();
+    const job = jobs.create("tx-1", CONTACTS);
+    job.claim(jobs.nowMs());
+    job.finish(jobs.nowMs(), { entries: [{ name: "Chat A", reason: "no_numbers" }], more: 0 });
+    expect(job.snapshot()).toMatchObject({ state: "finished", notReached: [{ name: "Chat A", reason: "no_numbers" }], notReachedMore: 0 });
   });
 });

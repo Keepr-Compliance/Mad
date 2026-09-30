@@ -62,6 +62,50 @@ export interface RcsJobProgress {
   skipped: number;
 }
 
+/**
+ * BACKLOG-3629: a chat the page left out of the import, or imported only in
+ * part. Names only (never numbers). `count` is the number of images that
+ * failed, for `images_failed`.
+ */
+export interface RcsJobNotReached {
+  name: string;
+  reason: string;
+  count?: number;
+}
+
+/** At most this many {@link RcsJobNotReached} entries are kept per job. */
+export const RCS_NOT_REACHED_CAP = 20;
+
+/**
+ * Validate the page's `/finish` list: keep well-formed entries up to the cap;
+ * the rest (plus the page's own "more" count) go into `more`.
+ */
+export function parseNotReached(
+  list: unknown,
+  moreFromPage: unknown,
+): { entries: RcsJobNotReached[]; more: number } {
+  const entries: RcsJobNotReached[] = [];
+  let more =
+    typeof moreFromPage === "number" && Number.isFinite(moreFromPage) && moreFromPage > 0
+      ? Math.floor(moreFromPage)
+      : 0;
+  if (Array.isArray(list)) {
+    for (const item of list as unknown[]) {
+      if (!item || typeof item !== "object") continue;
+      const rec = item as Record<string, unknown>;
+      if (typeof rec.name !== "string" || typeof rec.reason !== "string") continue;
+      if (entries.length >= RCS_NOT_REACHED_CAP) {
+        more += 1;
+        continue;
+      }
+      const entry: RcsJobNotReached = { name: rec.name.slice(0, 120), reason: rec.reason.slice(0, 40) };
+      if (typeof rec.count === "number" && Number.isFinite(rec.count)) entry.count = Math.floor(rec.count);
+      entries.push(entry);
+    }
+  }
+  return { entries, more };
+}
+
 export interface RcsJobSnapshot {
   jobId: string;
   transactionId: string;
@@ -73,6 +117,10 @@ export interface RcsJobSnapshot {
   error?: { code: string; message: string };
   createdAt: string;
   finishedAt?: string;
+  /** BACKLOG-3629: chats left out or imported in part (sent with /finish). */
+  notReached?: RcsJobNotReached[];
+  /** Entries beyond {@link RCS_NOT_REACHED_CAP}. */
+  notReachedMore?: number;
 }
 
 /** What the page receives when it claims a job: names only, never numbers. */
@@ -135,6 +183,9 @@ export class RcsImportJob {
   progress: RcsJobProgress = { ...EMPTY_PROGRESS };
   error?: { code: string; message: string };
   finishedAtMs?: number;
+  /** BACKLOG-3629: set from the page's /finish (see RcsJobNotReached). */
+  notReached: RcsJobNotReached[] = [];
+  notReachedMore = 0;
   readonly contacts: RcsJobContact[];
   /** History floor sent to the page on claim (see RcsJobClaim.startDate). */
   readonly startDate: string | null;
@@ -173,6 +224,9 @@ export class RcsImportJob {
       createdAt: new Date(this.createdAtMs).toISOString(),
       ...(this.finishedAtMs !== undefined
         ? { finishedAt: new Date(this.finishedAtMs).toISOString() }
+        : {}),
+      ...(this.notReached.length > 0 || this.notReachedMore > 0
+        ? { notReached: this.notReached.map((e) => ({ ...e })), notReachedMore: this.notReachedMore }
         : {}),
     };
   }
@@ -237,8 +291,12 @@ export class RcsImportJob {
     }
   }
 
-  finish(nowMs: number): void {
+  finish(nowMs: number, notReached?: { entries: RcsJobNotReached[]; more: number }): void {
     if (!this.isActive) return;
+    if (notReached) {
+      this.notReached = notReached.entries.slice(0, RCS_NOT_REACHED_CAP);
+      this.notReachedMore = notReached.more;
+    }
     this.state = "finished";
     this.stage = "Done";
     this.finishedAtMs = nowMs;

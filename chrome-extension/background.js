@@ -5,7 +5,9 @@
  * content script hands it a chat; this posts it to the loopback bridge. A fetch
  * from here carries `Origin: chrome-extension://<this extension's id>`, which
  * is the only origin the bridge accepts. (A fetch from the content script would
- * carry the messages.google.com origin and be refused.)
+ * carry the messages.google.com origin and be refused.) Only a POST is sure to
+ * carry that Origin — Chrome on Windows sends a GET from here without one —
+ * so every call is a POST (BACKLOG-3628).
  *
  * Every outcome comes back to the page as either { ok: true, ... } or
  * { ok: false, error } — there is no silent success.
@@ -60,15 +62,24 @@ async function sendChat(chat) {
 // BACKLOG-3620: Sync jobs
 // ---------------------------------------------------------------------------
 
-/** One request to a /job/... route. Always resolves {ok, status, body}. */
+/**
+ * One request to a /job/... route. Always resolves {ok, status, body}.
+ *
+ * POST only (BACKLOG-3628): Chrome on Windows sends a GET from this worker
+ * without an Origin header, and Keepr refuses any request without its Origin.
+ * A caller asking for any other method is refused here, before any request.
+ */
 async function jobApi(method, path, body) {
+  if (method !== "POST") {
+    return { ok: false, status: 0, body: { message: "Refused: Keepr job calls are POST only." } };
+  }
   if (typeof path !== "string" || !path.startsWith("/job/")) {
     return { ok: false, status: 0, body: { message: "Refused: not a job route." } };
   }
   let response;
   try {
     response = await fetch(`${BRIDGE_URL}${path}`, {
-      method,
+      method: "POST",
       headers: body === undefined ? undefined : { "Content-Type": "application/json" },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
@@ -147,7 +158,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       jobApi(message.method, message.path, message.body).then(sendResponse, fail);
       return true;
     case "keepr-check-pending":
-      jobApi("GET", "/job/pending").then(sendResponse, fail);
+      jobApi("POST", "/job/pending").then(sendResponse, fail);
       return true;
     case "keepr-job-found":
       routeJob(message.jobId, sender.tab).then(sendResponse, fail);

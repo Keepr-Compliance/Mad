@@ -340,7 +340,7 @@ describe("job runner", () => {
       }),
       api: async (method: string, p: string, body?: Record<string, unknown>): Promise<ApiReply> => {
         calls.push([method, p, body]);
-        if (method === "GET") {
+        if (p.endsWith("/claim")) {
           return { ok: true, status: 200, body: { jobId: JOB, contacts: [{ contactId: "c-1", displayName: "Test Contact A" }, { contactId: "c-2", displayName: "Test Contact" }] } };
         }
         if (p.endsWith("/match")) {
@@ -454,7 +454,7 @@ function jobPage(opts: {
       calls.push([method, p, body]);
       const custom = opts.api?.(method, p, body);
       if (custom) return custom;
-      if (method === "GET") {
+      if (p.endsWith("/claim")) {
         return { ok: true, status: 200, body: { jobId: JOB, contacts: [{ contactId: "c-1", displayName: "Test Contact A" }, { contactId: "c-2", displayName: "Test Contact" }] } };
       }
       if (p.endsWith("/match")) {
@@ -818,7 +818,7 @@ describe("job runner: loads history before extracting a matched chat", () => {
         calls.push([method, p, body]);
         const custom = opts.api?.(method, p, body);
         if (custom) return custom;
-        if (method === "GET") {
+        if (p.endsWith("/claim")) {
           return { ok: true, status: 200, body: { jobId: JOB, contacts: [{ contactId: "c-1", displayName: "Test Contact A" }], startDate: opts.startDate } };
         }
         if (p.endsWith("/match")) {

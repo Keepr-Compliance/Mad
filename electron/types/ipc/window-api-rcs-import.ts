@@ -66,6 +66,9 @@ export interface RcsJobInfo {
   error?: { code: string; message: string };
   createdAt: string;
   finishedAt?: string;
+  /** BACKLOG-3629: chats left out or imported in part. Names only. */
+  notReached?: Array<{ name: string; reason: string; count?: number }>;
+  notReachedMore?: number;
 }
 
 export type RcsImportJobResult =

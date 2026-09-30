@@ -16,7 +16,7 @@
  *   messages.google.com origin); only the service worker does.
  *
  * ## Endpoints
- * - `GET  /status` — bridge + session state. Diagnostics only; the extension's
+ * - `POST /status` — bridge + session state. Diagnostics only; the extension's
  *   Send does not depend on it.
  * - `POST /chat`   — one chat. With no open session it answers 409 with
  *   {@link RCS_NO_SESSION_MESSAGE}: never a silent success.
@@ -27,15 +27,25 @@
  * random and doubles as the job's secret; the Origin pin applies too. Job
  * routes never read the manual-send session, so closing the Import panel does
  * not stop a running job.
- * - `GET  /job/pending`         — an unclaimed job, for a page that lost the hash.
- * - `GET  /job/:id`             — claim; returns contact NAMES only. Once.
+ * - `POST /job/pending`         — an unclaimed job, for a page that lost the hash.
+ * - `POST /job/:id/claim`       — claim; returns contact NAMES only. Once.
  * - `POST /job/:id/match`       — {conversationId, numbers[]} → matched contacts.
  *                                 The phone comparison happens here, in Keepr.
  * - `POST /job/:id/chat`        — a chat; 403 unless /match matched it.
  * - `POST /job/:id/attachment`  — one image; 403 unless matched; 413 over the cap.
  * - `POST /job/:id/progress`    — counts + stage for the Keepr panel.
- * - `POST /job/:id/finish`      — done; Keepr brings its window forward.
+ * - `POST /job/:id/finish`      — done; {notReached?[], notReachedMore?}: chats the
+ *                                 page left out or imported in part. Keepr brings
+ *                                 its window forward.
  * - `POST /job/:id/error`       — {code, message}; the job fails with it.
+ *
+ * ## POST only, exact Host (BACKLOG-3628)
+ * Every route is POST. Chrome on Windows (Chrome 154) sends a GET from the
+ * extension service worker WITHOUT an Origin header, so a GET can never pass
+ * the Origin pin; any GET answers 405, so a future GET caller fails loudly on
+ * every OS instead of only on Windows. The Origin pin stays strict: a missing
+ * Origin is always refused. The `Host` header must be exactly
+ * `127.0.0.1:<bound port>` (DNS-rebinding guard).
  *
  * ## Port
  * Fixed at {@link RCS_BRIDGE_PORT} so the extension knows where to post. If the
@@ -47,6 +57,7 @@ import * as crypto from "crypto";
 import * as http from "http";
 
 import {
+  parseNotReached,
   RcsJobRegistry,
   type RcsJobContact,
   type RcsJobProgress,
@@ -188,7 +199,7 @@ async function readJson(
   }
 }
 
-const JOB_ROUTE = /^\/job\/([0-9a-fA-F-]{36})(?:\/(match|chat|attachment|progress|finish|error))?$/;
+const JOB_ROUTE = /^\/job\/([0-9a-fA-F-]{36})(?:\/(claim|match|chat|attachment|progress|finish|error))?$/;
 
 const silentLogger: RcsBridgeLogger = { info: () => {}, warn: () => {}, error: () => {} };
 
@@ -330,6 +341,16 @@ export class RcsExtensionBridge {
 
   private async handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     try {
+      // BACKLOG-3628: DNS-rebinding guard. The bound port, not the constant,
+      // so a test bridge on port 0 is checked the same way.
+      const host = req.headers.host;
+      if (host !== `${RCS_BRIDGE_HOST}:${this.port}`) {
+        this.logger.warn(`[RcsBridge] Refused request with host ${host === undefined ? "(none)" : host.slice(0, 80)}`);
+        sendJson(res, 403, { error: "forbidden_host" });
+        return;
+      }
+
+      // Strict: a missing Origin is refused too (see "POST only" above).
       const origin = req.headers.origin;
       if (origin !== this.allowedOrigin) {
         this.logger.warn(`[RcsBridge] Refused request with origin ${origin ?? "(none)"}`);
@@ -342,14 +363,22 @@ export class RcsExtensionBridge {
       if (req.method === "OPTIONS") {
         res.writeHead(204, {
           "Access-Control-Allow-Origin": this.allowedOrigin,
-          "Access-Control-Allow-Methods": "GET, POST",
+          "Access-Control-Allow-Methods": "POST",
           "Access-Control-Allow-Headers": "Content-Type",
         });
         res.end();
         return;
       }
 
-      if (req.method === "GET" && path === "/status") {
+      // BACKLOG-3628: POST only. A GET from the service worker arrives with no
+      // Origin on Windows Chrome and was refused above; any other method (or a
+      // GET that somehow carries the Origin) gets a clear 405.
+      if (req.method !== "POST") {
+        sendJson(res, 405, { error: "method_not_allowed", message: "Keepr's bridge accepts POST only." });
+        return;
+      }
+
+      if (path === "/status") {
         const s = this.getStatus();
         sendJson(res, 200, {
           bridge: s.bridge,
@@ -360,12 +389,12 @@ export class RcsExtensionBridge {
         return;
       }
 
-      if (req.method === "POST" && path === "/chat") {
+      if (path === "/chat") {
         await this.handleChat(req, res);
         return;
       }
 
-      if (req.method === "GET" && path === "/job/pending") {
+      if (path === "/job/pending") {
         const job = this.jobs.pending();
         if (!job) {
           sendJson(res, 404, { error: "no_job", message: "No Keepr sync is waiting." });
@@ -412,11 +441,18 @@ export class RcsExtensionBridge {
     }
     const job = check.job;
 
+    // The bare job URL was the old GET claim (BACKLOG-3628): nothing lives there.
     if (action === null) {
-      if (req.method !== "GET") {
-        sendJson(res, 404, { error: "not_found" });
-        return;
-      }
+      sendJson(res, 404, { error: "not_found" });
+      return;
+    }
+
+    if (req.method !== "POST") {
+      sendJson(res, 405, { error: "method_not_allowed", message: "Keepr's bridge accepts POST only." });
+      return;
+    }
+
+    if (action === "claim") {
       const claim = job.claim(this.jobs.nowMs());
       if ("error" in claim) {
         sendJson(res, claim.status, { error: claim.error, message: claim.message });
@@ -427,10 +463,6 @@ export class RcsExtensionBridge {
       return;
     }
 
-    if (req.method !== "POST") {
-      sendJson(res, 404, { error: "not_found" });
-      return;
-    }
     // /error is accepted before the claim: a page that is not signed in
     // reports that without claiming.
     if (job.state !== "running" && action !== "error") {
@@ -513,9 +545,13 @@ export class RcsExtensionBridge {
         return;
       }
       case "finish": {
-        job.finish(this.jobs.nowMs());
+        job.finish(this.jobs.nowMs(), parseNotReached(body.notReached, body.notReachedMore));
         const snap = job.snapshot();
-        this.logger.info(`[RcsBridge] Sync job finished: ${snap.progress.imported} chats, ${snap.progress.messages} messages`);
+        // Counts only: chat names never go to the log.
+        const left = (snap.notReached?.length ?? 0) + (snap.notReachedMore ?? 0);
+        this.logger.info(
+          `[RcsBridge] Sync job finished: ${snap.progress.imported} chats, ${snap.progress.messages} messages, ${left} not fully imported`,
+        );
         this.emitJob(snap);
         this.options.onJobFinished?.(snap);
         sendJson(res, 200, { ok: true });
