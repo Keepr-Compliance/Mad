@@ -395,6 +395,9 @@
    * UNTRACED on the live page; the header is `mws-header` with `.left-content`
    * holding the back button and the title (observed 2026-09-30).
    */
+  /** An open chat's path: the only place history.back() is used from. */
+  var CHAT_PATH_RE = /^\/web\/conversations\/[^/?#]+/;
+
   var BACK_BUTTON_SELECTORS = [
     "mws-header [data-e2e-back-button]",
     'mws-header button[aria-label="Back"]',
@@ -441,13 +444,14 @@
   /**
    * Make the conversation list the pane on screen. Two-pane: it already is,
    * nothing is clicked. Single-pane with a chat open: click the header's back
-   * button, else `io.back()` (history.back), and wait for the list items.
+   * button, else `io.back()` (history.back, only while `io.getPathname()` is
+   * an open chat's path), and wait for the list items.
    * Never throws: false means the list could not be brought back (the next
    * open then fails and that chat is reported as not opened).
    *
    * @param {Document} doc
    * @param {{click: function(Element): void, sleep: function(number): Promise<void>,
-   *          back?: function(): void, timeoutMs?: number}} io
+   *          back?: function(): void, getPathname?: function(): string, timeoutMs?: number}} io
    * @returns {Promise<boolean>}
    */
   async function returnToList(doc, io) {
@@ -465,7 +469,10 @@
         io.click(button);
         if (await waitList()) return true;
       }
-      if (io.back) {
+      // history.back() only from an open chat inside Messages: from anywhere
+      // else (a reused tab, a chat opened by direct URL as the first entry) it
+      // could leave messages.google.com and strand the job.
+      if (io.back && io.getPathname && CHAT_PATH_RE.test(io.getPathname())) {
         io.back();
         if (await waitList()) return true;
       }

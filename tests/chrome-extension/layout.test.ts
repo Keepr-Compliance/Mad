@@ -61,6 +61,7 @@ interface NotReached {
 
 interface JobModule {
   RETURN_TO_KEEPR: string;
+  LIST_NOT_REACHABLE: string;
   runJob: (
     jobId: string,
     env: Record<string, unknown>,
@@ -202,6 +203,18 @@ describe("layout detection and returning to the list (scan.js)", () => {
     expect(page.log).toEqual(["history.back"]);
   });
 
+  // SR B1. Mutation: drop the chat-path condition on io.back() → back() is
+  // called from these paths and this goes red.
+  it.each(["/web/conversations", "/web/conversations/", "/web/welcome", "/"])(
+    "never calls history.back() when the path %s is not an open chat (B1)",
+    async (pathname) => {
+      const page = messagesPage({ layout: "single", backButton: false, startInChat: "aaaaaaaaaaaaaaaaaaa" });
+      const io: LayoutIo = { ...page.io, getPathname: () => pathname };
+      expect(await scan.returnToList(document, io)).toBe(false);
+      expect(page.log).toEqual([]);
+    },
+  );
+
   it("the list cannot be brought back: returnToList is false (never throws) and openFromList rejects not_reachable", async () => {
     const page = messagesPage({ layout: "single", backButton: false, startInChat: "aaaaaaaaaaaaaaaaaaa" });
     const stuck: LayoutIo = { ...page.io, back: () => page.log.push("history.back (no effect)") };
@@ -302,6 +315,42 @@ describe("the Sync job in both layouts", () => {
     await job.runJob(JOB, t.env);
     expect(t.calls[0]).toEqual(["POST", `/job/${JOB}/claim`, undefined]);
     expect(t.calls.some(([m]) => m !== "POST")).toBe(false);
+  });
+
+  // SR B2. Mutation: ignore returnToList's false before the scan → the job
+  // "finishes" with 0 chats and this goes red.
+  it("the list cannot be shown at the start: the job fails list_not_reachable, no scan, no /finish (B2)", async () => {
+    const page = messagesPage({ layout: "single", backButton: false, startInChat: "bbbbbbbbbbbbbbbbbbb" });
+    page.io.back = () => page.log.push("history.back (no effect)");
+    const t = layoutJob(page);
+    const outcome = await job.runJob(JOB, t.env);
+    expect(outcome.outcome).toBe("list_not_reachable");
+    const err = t.calls.find(([, p]) => p.endsWith("/error"));
+    expect(err?.[2]).toEqual({ code: "list_not_reachable", message: job.LIST_NOT_REACHABLE });
+    expect(t.calls.some(([, p]) => p.endsWith("/finish") || p.endsWith("/match"))).toBe(false);
+    expect(t.shown[t.shown.length - 1]).toBe(job.LIST_NOT_REACHABLE);
+    expect(job.LIST_NOT_REACHABLE).toContain("messages.google.com/web/conversations");
+  });
+
+  // SR O1. Mutation: drop the signed_in check on the chat-header branch of
+  // waitForPageState → the job claims on an unknown path and this goes red.
+  it("a chat header on a path that is not a signed-in Messages path is not 'ready' (O1)", async () => {
+    document.body.innerHTML = "<mws-header><h2 data-e2e-header-title>x</h2></mws-header>";
+    const calls: string[] = [];
+    const outcome = await job.runJob(JOB, {
+      doc: document,
+      getLocation: () => ({ pathname: "/web/somewhere-else", href: "https://messages.google.com/web/somewhere-else" }),
+      api: async (_m: string, p: string): Promise<ApiReply> => {
+        calls.push(p);
+        return { ok: true, status: 200, body: { ok: true } };
+      },
+      overlay: { show: () => {} },
+      sleep: noSleep,
+      pageTimeoutMs: 500,
+      scan,
+    });
+    expect(outcome.outcome).toBe("page_not_ready");
+    expect(calls).toEqual([`/job/${JOB}/error`]);
   });
 });
 

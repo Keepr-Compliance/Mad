@@ -547,10 +547,15 @@ export class RcsExtensionBridge {
       case "finish": {
         job.finish(this.jobs.nowMs(), parseNotReached(body.notReached, body.notReachedMore));
         const snap = job.snapshot();
-        // Counts only: chat names never go to the log.
-        const left = (snap.notReached?.length ?? 0) + (snap.notReachedMore ?? 0);
+        // Counts only: chat names never go to the log. One chat can have two
+        // entries (e.g. history truncated AND images failed), so chats are
+        // counted by distinct name; entries past the cap are counted apart.
+        const entries = snap.notReached ?? [];
+        const chats = new Set(entries.map((e) => e.name)).size;
+        const more = snap.notReachedMore ?? 0;
         this.logger.info(
-          `[RcsBridge] Sync job finished: ${snap.progress.imported} chats, ${snap.progress.messages} messages, ${left} not fully imported`,
+          `[RcsBridge] Sync job finished: ${snap.progress.imported} chats, ${snap.progress.messages} messages; ` +
+            `${chats} chats not fully imported (${entries.length} entries${more > 0 ? `, +${more} more` : ""})`,
         );
         this.emitJob(snap);
         this.options.onJobFinished?.(snap);

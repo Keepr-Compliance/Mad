@@ -405,6 +405,7 @@ describe("RcsExtensionBridge sync jobs", () => {
         expect((await request(ownPort, "POST", `/job/${id}/claim`, EXT)).status).toBe(200);
         const list = Array.from({ length: 22 }, (_, i) => ({ name: `Chat Name ${i}`, reason: "not_opened" }));
         list[1] = { name: "Chat Name 1", reason: "images_failed", count: 2 } as (typeof list)[number];
+        list[2] = { name: "Chat Name 1", reason: "history_truncated" };
         const reply = await request(ownPort, "POST", `/job/${id}/finish`, EXT, JSON.stringify({
           chats: 0, messages: 0, images: 0, notReached: list, notReachedMore: 3,
         }));
@@ -414,7 +415,9 @@ describe("RcsExtensionBridge sync jobs", () => {
         expect(snap.notReached?.[1]).toEqual({ name: "Chat Name 1", reason: "images_failed", count: 2 });
         expect(snap.notReachedMore).toBe(5); // 3 from the page + 2 over the cap
         const line = logged.find((m) => m.includes("Sync job finished")) ?? "";
-        expect(line).toContain("25 not fully imported");
+        // 20 kept entries but 19 distinct chats ("Chat Name 1" twice), and
+        // 5 more past the cap. Mutation: count entries, not names → red.
+        expect(line).toContain("19 chats not fully imported (20 entries, +5 more)");
         expect(logged.join("\n")).not.toContain("Chat Name");
       } finally {
         await own.stop();

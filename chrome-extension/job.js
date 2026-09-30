@@ -37,8 +37,10 @@
       if (state === "not_signed_in") return "not_signed_in";
       if (env.doc.querySelector(LIST_ITEM)) return "ready";
       // A narrow window with a chat open shows no list (BACKLOG-3629): the
-      // chat header proves the page is signed in and loaded too.
-      if (env.scan.SELECTORS && env.doc.querySelector(env.scan.SELECTORS.headerTitle)) return "ready";
+      // chat header on a signed-in path proves the page is loaded too.
+      if (state === "signed_in" && env.scan.SELECTORS && env.doc.querySelector(env.scan.SELECTORS.headerTitle)) {
+        return "ready";
+      }
       if (waited >= timeoutMs) return "timeout";
       await env.sleep(250);
       waited += 250;
@@ -55,6 +57,9 @@
   /** Keepr keeps at most this many named entries (RCS_NOT_REACHED_CAP). */
   var NOT_REACHED_CAP = 20;
   var RETURN_TO_KEEPR = "Switch back to Keepr to see the imported messages.";
+  var LIST_NOT_REACHABLE =
+    "Couldn't show the Messages conversation list. Make the window wider or open " +
+    "messages.google.com/web/conversations, then click Sync again.";
 
   /** Why a chat was left out, or imported only in part, for the overlay. */
   var REASON_TEXT = {
@@ -187,7 +192,10 @@
     // 3. Scan the list and pick candidates. A narrow window shows the list OR
     // a chat (BACKLOG-3629): make sure the list is the pane on screen first.
     env.overlay.show("Loading your conversation list…", false);
-    if (env.returnToList) await env.returnToList();
+    if (env.returnToList && !(await env.returnToList())) {
+      // No list, no scan: say so instead of "Done — imported 0 chats".
+      return fail("list_not_reachable", LIST_NOT_REACHABLE);
+    }
     var collected = await env.scan.collectConversations(env.doc, { scroll: env.scroll, sleep: env.sleep });
     var candidates = env.scan.pickCandidates(collected.conversations, contacts);
     progress.listed = collected.conversations.length;
@@ -376,6 +384,7 @@
     waitForPageState: waitForPageState,
     NOT_SIGNED_IN: NOT_SIGNED_IN,
     RETURN_TO_KEEPR: RETURN_TO_KEEPR,
+    LIST_NOT_REACHABLE: LIST_NOT_REACHABLE,
   };
 
   if (typeof module !== "undefined" && module.exports) {
