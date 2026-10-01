@@ -21,6 +21,9 @@
  * - The audit line's time-of-day needs the viewer's local timezone (PR 4),
  *   which the server can't know when it renders the initial HTML — see the
  *   `mounted` gate below.
+ * - BACKLOG-3618: on the caller's own template (`own`) a "Send with
+ *   submissions" switch, on by default. The save sends it only when it was
+ *   changed (toSaveRequest), so an untouched switch keeps the stored value.
  */
 
 import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent } from 'react';
@@ -59,6 +62,7 @@ import {
   newItem,
   removeItem,
   toSavePayload,
+  toSaveRequest,
   updateItem,
   validateSavePayload,
   type EditorState,
@@ -71,17 +75,25 @@ export interface ChecklistEditorClientProps {
   /** updated_at text as read; null for a new template. */
   updatedAt: string | null;
   archived: boolean;
-  template: { name: string; description: string | null } | null;
+  template: { name: string; description: string | null; includeInSubmission?: boolean | null } | null;
   items: TemplateItemRow[];
+  /** The caller's own template (BACKLOG-3618): shows the "Send with submissions" switch. */
+  own?: boolean;
   /** Created / last edited / archived, names already resolved. Absent for a new template. */
   audit?: TemplateAudit | null;
 }
 
 const LIST_PATH = '/dashboard/checklists';
 
-function initialState(template: ChecklistEditorClientProps['template'], items: TemplateItemRow[]): EditorState {
-  if (template) return fromTemplate(template, items);
-  return { ...emptyEditor(), items: [newItem('new-0')] };
+function initialState(
+  template: ChecklistEditorClientProps['template'],
+  items: TemplateItemRow[],
+  own: boolean
+): EditorState {
+  if (template) {
+    return fromTemplate({ ...template, includeInSubmission: own ? (template.includeInSubmission ?? true) : null }, items);
+  }
+  return { ...emptyEditor(own), items: [newItem('new-0')] };
 }
 
 function DirtyMarker() {
@@ -100,9 +112,10 @@ export default function ChecklistEditorClient({
   template,
   items: itemRows,
   audit = null,
+  own = false,
 }: ChecklistEditorClientProps) {
   const router = useRouter();
-  const [initial, setInitial] = useState<EditorState>(() => initialState(template, itemRows));
+  const [initial, setInitial] = useState<EditorState>(() => initialState(template, itemRows, own));
   const [state, setState] = useState<EditorState>(initial);
   const [token, setToken] = useState<string | null>(updatedAt);
   const [saving, setSaving] = useState(false);
@@ -183,7 +196,11 @@ export default function ChecklistEditorClient({
     setSaving(true);
     setMessage(null);
     try {
-      const result = await saveChecklistTemplate({ templateId, expectedUpdatedAt: token, payload });
+      const result = await saveChecklistTemplate({
+        templateId,
+        expectedUpdatedAt: token,
+        payload: toSaveRequest(initial, state),
+      });
       if (!result.ok) {
         setMessage({ kind: 'error', text: result.message });
         return;
@@ -254,7 +271,9 @@ export default function ChecklistEditorClient({
 
       {archived && (
         <p className="rounded-md border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600">
-          This template is archived. Agents do not see it until you restore it from the list.
+          {own
+            ? 'This checklist is archived. You will not see it on transactions until you restore it from the list.'
+            : 'This template is archived. Agents do not see it until you restore it from the list.'}
         </p>
       )}
 
@@ -271,7 +290,11 @@ export default function ChecklistEditorClient({
         <CardHeader>
           <div>
             <CardTitle>Template details</CardTitle>
-            <CardDescription className="mt-1">The name agents see when this checklist is applied to a transaction.</CardDescription>
+            <CardDescription className="mt-1">
+              {own
+                ? 'The name you see when this checklist is applied to a transaction.'
+                : 'The name agents see when this checklist is applied to a transaction.'}
+            </CardDescription>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -296,9 +319,41 @@ export default function ChecklistEditorClient({
             {showErrors && errors.description ? (
               <p className="mt-1 text-xs text-red-600">{errors.description}</p>
             ) : (
-              <FieldHelp>Optional. Shown in the template list, not to agents.</FieldHelp>
+              <FieldHelp>
+                {own ? 'Optional. Shown in your list only.' : 'Optional. Shown in the template list, not to agents.'}
+              </FieldHelp>
             )}
           </div>
+          {state.includeInSubmission !== null && (
+            <div className="max-w-2xl">
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  role="switch"
+                  id="checklist-send-with-submissions"
+                  aria-checked={state.includeInSubmission}
+                  aria-labelledby="checklist-send-with-submissions-label"
+                  aria-describedby="checklist-send-with-submissions-help"
+                  onClick={() => edit({ ...state, includeInSubmission: !state.includeInSubmission })}
+                  className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent align-middle transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 ${
+                    state.includeInSubmission ? 'bg-primary-600' : 'bg-gray-200'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                      state.includeInSubmission ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+                <span id="checklist-send-with-submissions-label" className="text-sm font-medium text-gray-900">
+                  Send with submissions
+                </span>
+              </div>
+              <p id="checklist-send-with-submissions-help" className="mt-1 text-xs text-gray-400">
+                Turn off to keep this checklist just for you; it won&apos;t be sent to your broker.
+              </p>
+            </div>
+          )}
         </CardContent>
       </Card>
 
