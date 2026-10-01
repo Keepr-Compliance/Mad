@@ -1,0 +1,103 @@
+mutants.py: 25 written
+n01-broker-sees-agents-lists [want red: as expected] (draft)
+    MUTATION APPLIED: 3 line(s); first: OR checklist_templates.owner_user_id = (SELECT auth.uid())
+    RED: e04  green: none
+      e04: CONTROL FAILED: e04a u_t1_broker SELECT A1 template: expected rows:0, got rows:1
+n02-peers-see-each-other [want red: as expected] (draft)
+    MUTATION APPLIED: 4 line(s); first: USING (checklist_templates.organization_id IN (SELECT public.get_user_org_ids((SELECT auth.uid()))));
+    RED: e03 e16  green: none
+      e03: CONTROL FAILED: e03a agent2 SELECT A1 template: expected rows:0, got rows:1
+      e16: CONTROL FAILED: e16c agent pull lacks agent2 template
+n03-item-select-without-owner-term [want green: as expected] (draft)
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: none  green: e03 e04 e16
+n04-editor-writes-any-private [want red: as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: ELSE (p_owner = (SELECT auth.uid()) OR public.can_edit_checklist_templates(p_org_id)) AND public.can_create_ow
+    RED: e08  green: none
+      e08: CONTROL FAILED: e08d agent private template untouched by broker bare UPDATE
+n05-write-rule-ignores-owner [want red: as expected] (draft)
+    MUTATION APPLIED: 5 line(s); first: SELECT public.can_edit_checklist_templates(p_org_id) OR public.can_create_own_checklist_templates(p_org_id);
+    RED: e02  green: none
+      e02: CONTROL FAILED: e02a agent INSERT brokerage template (owner null): expected RLS, got rows:1
+n06-owner-fk-set-null [want red: as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: ADD COLUMN IF NOT EXISTS owner_user_id uuid NULL REFERENCES auth.users(id) ON DELETE SET NULL;
+    RED: e07  green: none
+      e07: CONTROL FAILED: e07d no template of that name is left
+n07-create-own-without-feature [want red: as expected] (draft)
+    MUTATION APPLIED: 3 line(s); first: );
+    RED: e05  green: none
+      e05: CONTROL FAILED: e05c feature-off org: false
+n08-add-at-review-no-filter [want red: as expected] (draft)
+    MUTATION APPLIED: 5 line(s); first: AND t.archived_at IS NULL;
+    RED: e10  green: none
+      e10: CONTROL FAILED: e10b broker adds private P to another deal: {"items": 1, "status": "added", "checklist_id": "<id>"}
+n09-add-at-review-bare-filter [want red: as expected] (draft)
+    MUTATION APPLIED: 4 line(s); first: AND t.owner_user_id IS NULL;
+    RED: e10  green: none
+      e10: CONTROL FAILED: e10 P present -> exists: {"status": "template_not_found"}
+n10-add-at-review-any-submission [want red: as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: WHERE h0.template_id = t.id));
+    RED: e10  green: none
+      e10: CONTROL FAILED: e10b broker adds private P to another deal: {"items": 1, "status": "added", "checklist_id": "<id>"}
+n11-snapshot-no-filter [want red: as expected] (draft)
+    MUTATION APPLIED: 8 line(s); first: 
+    RED: e11  green: none
+      e11: CONTROL FAILED: e11a v1 wrote 3 checklists: {"carry": {"status": "no_parent"}, "items": 8, "links": 5, "members": 6, "checklists": 4, "dropped_links": 0, "dropped_members": 0}
+n12-snapshot-drops-brokerage [want red: as expected] (draft)
+    MUTATION APPLIED: 4 line(s); first: AND (t.owner_user_id IS NULL OR (t.owner_user_id = (SELECT auth.uid())
+    RED: e11  green: none
+      e11: CONTROL FAILED: e11a v1 wrote 3 checklists: {"carry": {"status": "no_parent"}, "items": 2, "links": 0, "members": 0, "checklists": 2, "dropped_links": 0, "dropped_members": 0}
+n13-snapshot-drops-every-own [want red: as expected] (draft)
+    MUTATION APPLIED: 3 line(s); first: AND t.owner_user_id = (SELECT auth.uid())) THEN
+    RED: e11  green: none
+      e11: CONTROL FAILED: e11a v1 wrote 3 checklists: {"carry": {"status": "no_parent"}, "items": 6, "links": 5, "members": 6, "checklists": 2, "dropped_links": 0, "dropped_members": 0}
+n14-snapshot-without-owner-term [want green: as expected] (draft)
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: none  green: e11
+n15-check-dropped [want red: as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: ADD CONSTRAINT checklist_templates_include_owner_check CHECK (true);
+    RED: e09  green: none
+      e09: CONTROL FAILED: e09a broker excludes a brokerage template: expected CHK, got rows:1
+n16-save-scope-from-argument [want red: as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: IF NOT public.can_write_checklist_template(p_org_id, CASE WHEN p_personal THEN (SELECT auth.uid()) END) THEN
+    RED: e06  green: none
+      e06: CONTROL FAILED: e06e agent save existing BROKERAGE template with p_personal true: expected ~^42501:not_authorized, got P0001:stale_or_not_found
+n17-save-omitted-switch-resets [want red: as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: include_in_submission = COALESCE(p_include_in_submission, true)
+    RED: e06  green: none
+      e06: CONTROL FAILED: e06i switch omitted: still excluded
+n18-save-brokerage-excludable-guard-gone [want red: as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: IF false THEN
+    RED: e06  green: none
+      e06: CONTROL FAILED: e06n broker save NEW brokerage, not sent: expected ~^22023:not_excludable, got 23514:new row for relation "checklist_templates" violates check constraint "checklist_templates_include_owner_check"
+n19-owner-column-updatable [want red: as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: GRANT UPDATE (include_in_submission, owner_user_id) ON public.checklist_templates TO authenticated;
+    RED: e02 e15  green: none
+      e02: CONTROL FAILED: e02d agent UPDATE owner_user_id: expected PRIV, got 42501:new row violates row-level security policy for table "checklist_templates"
+      e15: CONTROL FAILED: e15 after-fingerprint differs: column_grants: a76b61558319567c16c2ce0c361ce6a3 -> <absent>; columns: a18ca0359567602c9ac3d5d5bdb8e9bc -> <absent>; constraints: 436e8b4e446816db6bb67613099cf7ff -> <absent>; fn:add_submission_checklist
+n20-save-personal-never-owned [want red: as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: v_owner := NULL;
+    RED: e06  green: none
+      e06: CONTROL FAILED: e06a agent save NEW personal: expected rows:1, got 42501:new row violates row-level security policy for table "checklist_templates"
+n21-item-insert-editor-only [want red: as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: AND public.can_edit_checklist_templates(t.organization_id)
+    RED: e01  green: none
+      e01: CONTROL FAILED: e01e agent INSERT item into own: expected rows:1, got 42501:new row violates row-level security policy for table "checklist_template_items"
+n22-snapshot-body-drift [want red: as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: n_checklists := n_checklists + 1 ;
+    RED: e12  green: none
+      e12: CONTROL FAILED: e12b snapshot minus the hunk = production md5, got 86f0b6818ae47b1b1146c12bb81385d7
+n23-add-body-drift [want red: as expected] (draft)
+    MUTATION APPLIED: 2 line(s); first: RETURN jsonb_build_object('status', 'template_not_found' );
+    RED: e12  green: none
+      e12: CONTROL FAILED: e12d add-at-review minus the hunk = production md5, got 0121f61799c32659a06d5cc66c9cdf36
+n24-rollback-keeps-private-rows [want red: as expected] (rollback)
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: e13  green: none
+      e13: CONTROL FAILED: e13e the private template is gone, not turned into a brokerage one
+n25-rollback-leaves-new-save [want red: as expected] (rollback)
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: e13  green: none
+      e13: CONTROL FAILED: e13c rollback = before: fn:save_checklist_template(uuid,uuid,text,text,text,jsonb,boolean,boolean): 98df72955f3da7356a33359d1cc9ec99 def=false cfg=search_path=public acl={postgres=X/postgres,authenticated=X/postgres,service_role=X/po
+mutants: 25 run, 0 not as expected
+exit=0
