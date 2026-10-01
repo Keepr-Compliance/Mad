@@ -55,6 +55,7 @@ const row: ChecklistListRow = {
   updatedBy: 'Jane Doe',
   itemCount: 3,
   requiredCount: 2,
+  notSent: false,
 };
 
 describe('ChecklistsListClient — last edited time', () => {

@@ -1,5 +1,5 @@
 /**
- * /dashboard/checklists route gate — BACKLOG-3474.
+ * /dashboard/checklists route gate — BACKLOG-3474, BACKLOG-3618.
  *
  * The real gate (lib/checklist-access.ts) runs underneath; only the Supabase
  * client and the impersonation reader are stand-ins. checklist_templates is
@@ -9,7 +9,7 @@
  * Feature payloads are DERIVED (see checklist-access.test.ts).
  */
 
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import '@testing-library/jest-dom';
 
 const mockCreateClient = jest.fn();
@@ -42,9 +42,12 @@ import { AUDIT_USER_SELECT } from '@/lib/checklists/audit';
 import { ORG_WITHOUT_PLAN_FEATURES, withFeature } from '../../../fixtures/orgFeatures';
 import {
   FIXTURE_BROKERAGE_ORG_ID,
+  FIXTURE_OTHER_USER_ID,
+  FIXTURE_PERSONAL_ORG_ID,
   FIXTURE_USER_ID,
   brokerageMembership,
   createPostgrestEmulator,
+  personalMembership,
   type Row,
 } from '../../../helpers/postgrestEmulator';
 
@@ -58,13 +61,20 @@ const FEATURE_OFF = withFeature(ORG_WITHOUT_PLAN_FEATURES, CHECKLIST_FEATURE_KEY
  * the database it asks.
  */
 const DB_EDITOR_ROLES = ['broker', 'admin', 'it_admin'];
-const canEditAnswer = (role: string, features: unknown): boolean =>
-  DB_EDITOR_ROLES.includes(role) && features !== FEATURE_OFF;
-const canEditRpc = (role: string, features: unknown) =>
+const canEditAnswer = (role: string, features: unknown, personal: boolean): boolean =>
+  (personal || DB_EDITOR_ROLES.includes(role)) && features !== FEATURE_OFF;
+/**
+ * can_create_own_checklist_templates (BACKLOG-3618, migration
+ * 20261001120000 §2): any member of the org AND the feature on. No role term.
+ */
+const canOwnAnswer = (features: unknown): boolean => features !== FEATURE_OFF;
+const canEditRpc = (role: string, features: unknown, personal = false) =>
   jest.fn(async (fn: string) =>
     fn === 'can_edit_checklist_templates'
-      ? { data: canEditAnswer(role, features), error: null }
-      : { data: null, error: { code: 'PGRST202', message: `unexpected rpc ${fn}` } }
+      ? { data: canEditAnswer(role, features, personal), error: null }
+      : fn === 'can_create_own_checklist_templates'
+        ? { data: canOwnAnswer(features), error: null }
+        : { data: null, error: { code: 'PGRST202', message: `unexpected rpc ${fn}` } }
   );
 
 /** pii-allow-uuid: invented fixture id */
@@ -89,6 +99,8 @@ const template = (id: string, organization_id: string, over: Partial<Row> = {}):
   updated_at: DEFAULT_UPDATED_AT,
   updated_by: null,
   sort_order: 10,
+  owner_user_id: null,
+  include_in_submission: true,
   checklist_template_items: [{ is_required: true }, { is_required: false }],
   ...over,
 });
@@ -109,6 +121,8 @@ function dt(iso: string): string {
 
 interface Setup {
   role?: string;
+  /** A solo user: the only membership is their personal organization. */
+  personal?: boolean;
   features?: unknown;
   templates?: Row[];
   impersonating?: boolean;
@@ -119,7 +133,7 @@ interface Setup {
 function setup(opts: Setup = {}) {
   const emu = createPostgrestEmulator({
     rows: {
-      organization_members: [brokerageMembership(opts.role ?? 'broker')],
+      organization_members: [opts.personal ? personalMembership() : brokerageMembership(opts.role ?? 'broker')],
       checklist_templates: opts.templates ?? [],
       users: opts.users ?? [],
     },
@@ -139,7 +153,7 @@ function setup(opts: Setup = {}) {
   mockCreateClient.mockResolvedValue({
     auth: { getUser: async () => ({ data: { user: { id: FIXTURE_USER_ID } } }) },
     from,
-    rpc: canEditRpc(opts.role ?? 'broker', opts.features ?? FEATURE_ON),
+    rpc: canEditRpc(opts.role ?? 'broker', opts.features ?? FEATURE_ON, opts.personal ?? false),
   });
   mockGetImpersonationSession.mockResolvedValue(
     opts.impersonating ? { session_id: 's', target_user_id: 't' } : null
@@ -162,9 +176,11 @@ describe('/dashboard/checklists — refuses with 404', () => {
     expect(from).not.toHaveBeenCalledWith('checklist_templates');
   });
 
-  it('for an agent', async () => {
-    setup({ role: 'agent' });
+  // BACKLOG-3618: an agent is admitted with the feature on (below); off, refused.
+  it('for an agent when the feature is off', async () => {
+    const { from } = setup({ role: 'agent', features: FEATURE_OFF });
     await expect(ChecklistsPage()).rejects.toThrow(NOT_FOUND);
+    expect(from).not.toHaveBeenCalledWith('checklist_templates');
   });
 
   // A10: editor-role user with the feature on, inside a support session.
@@ -264,5 +280,126 @@ describe('/dashboard/checklists — renders', () => {
     render(await ChecklistsPage());
     expect(screen.getByRole('alert')).toHaveTextContent('could not be loaded');
     expect(screen.queryByText('No checklist templates yet')).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3618: agents' own checklists
+// ---------------------------------------------------------------------------
+
+const names = () => screen.queryAllByTestId('checklist-row').map((r) => r.querySelector('td')?.textContent);
+const section = (name: string) => screen.getByRole('region', { name });
+
+describe('BACKLOG-3618 — a brokerage agent', () => {
+  const rows = () => [
+    template('mine-1', FIXTURE_BROKERAGE_ORG_ID, { name: 'Housewarming', owner_user_id: FIXTURE_USER_ID }),
+    template('mine-2', FIXTURE_BROKERAGE_ORG_ID, {
+      name: 'Just for me',
+      owner_user_id: FIXTURE_USER_ID,
+      include_in_submission: false,
+      sort_order: 20,
+    }),
+    template('b-1', FIXTURE_BROKERAGE_ORG_ID, { name: 'Brokerage listing' }),
+    template('b-arch', FIXTURE_BROKERAGE_ORG_ID, { name: 'Brokerage old', archived_at: '2026-09-01T00:00:00+00:00' }),
+    // Another agent's own template: RLS never returns it; the page drops it if it arrives.
+    template('peer', FIXTURE_BROKERAGE_ORG_ID, { name: 'Peer private', owner_user_id: FIXTURE_OTHER_USER_ID }),
+  ];
+
+  it('A1 sees My checklists (editable) and the brokerage list (read-only, active only)', async () => {
+    setup({ role: 'agent', templates: rows() });
+    render(await ChecklistsPage());
+    const mine = within(section('My checklists'));
+    expect(mine.getAllByTestId('checklist-row').map((r) => r.querySelector('a')?.textContent)).toEqual([
+      'Housewarming',
+      'Just for me',
+    ]);
+    expect(mine.getByRole('link', { name: 'Edit Housewarming' })).toHaveAttribute('href', '/dashboard/checklists/mine-1');
+    expect(mine.getByRole('button', { name: 'Archive Housewarming' })).toBeInTheDocument();
+    expect(mine.getByRole('link', { name: 'New checklist' })).toHaveAttribute('href', '/dashboard/checklists/new');
+
+    const brokerage = within(section('Brokerage checklists'));
+    const brokerageRows = brokerage.getAllByTestId('checklist-row');
+    expect(brokerageRows.map((r) => r.querySelector('td')?.textContent)).toEqual(['Brokerage listing']);
+    // Read-only: no link into the editor, no Edit, no Archive.
+    expect(brokerage.queryAllByRole('link')).toHaveLength(0);
+    expect(brokerage.queryAllByRole('button')).toHaveLength(0);
+    expect(screen.queryByText('Brokerage old')).not.toBeInTheDocument();
+    expect(screen.queryByText('Peer private')).not.toBeInTheDocument();
+  });
+
+  it('A2 marks only the own template set not to be sent', async () => {
+    setup({ role: 'agent', templates: rows() });
+    render(await ChecklistsPage());
+    const [housewarming, justForMe] = within(section('My checklists')).getAllByTestId('checklist-row');
+    expect(justForMe).toHaveTextContent('Not sent');
+    expect(housewarming).not.toHaveTextContent('Not sent');
+  });
+
+  it('A3 with nothing of their own: an empty My checklists with the one way forward', async () => {
+    setup({ role: 'agent', templates: [template('b-1', FIXTURE_BROKERAGE_ORG_ID, { name: 'Brokerage listing' })] });
+    render(await ChecklistsPage());
+    const mine = within(section('My checklists'));
+    expect(mine.getByText('No checklists of your own yet')).toBeInTheDocument();
+    expect(mine.getByRole('link', { name: 'New checklist' })).toHaveAttribute('href', '/dashboard/checklists/new');
+    expect(screen.queryByText('No checklist templates yet')).not.toBeInTheDocument();
+  });
+
+  it('A4 does not claim "no checklists" when the read fails', async () => {
+    setup({ role: 'agent', templatesError: true });
+    render(await ChecklistsPage());
+    expect(screen.getByRole('alert')).toHaveTextContent('could not be loaded');
+    expect(screen.queryByText('No checklists of your own yet')).not.toBeInTheDocument();
+  });
+});
+
+describe('BACKLOG-3618 — editors never see anyone\'s own checklists', () => {
+  it.each(DB_EDITOR_ROLES)('B1 a %s sees the brokerage templates only, with no My checklists section', async (role) => {
+    setup({
+      role,
+      templates: [
+        template('b-1', FIXTURE_BROKERAGE_ORG_ID, { name: 'Brokerage listing' }),
+        template('agent', FIXTURE_BROKERAGE_ORG_ID, { name: 'Agent private', owner_user_id: FIXTURE_OTHER_USER_ID }),
+        template('self', FIXTURE_BROKERAGE_ORG_ID, { name: 'Editor private', owner_user_id: FIXTURE_USER_ID }),
+      ],
+    });
+    render(await ChecklistsPage());
+    expect(names()).toEqual(['Brokerage listing']);
+    expect(screen.queryByText('Agent private')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'My checklists' })).not.toBeInTheDocument();
+    expect(screen.getByText('Showing 1 template · 1 active')).toBeInTheDocument();
+  });
+});
+
+describe('BACKLOG-3618 — a solo user keeps one list (C8)', () => {
+  it('S1 the personal organization shows one editable list and no My checklists section', async () => {
+    setup({
+      personal: true,
+      templates: [
+        template('p-1', FIXTURE_PERSONAL_ORG_ID, { name: 'Solo listing' }),
+        template('p-2', FIXTURE_PERSONAL_ORG_ID, { name: 'Solo buyer', sort_order: 20 }),
+      ],
+    });
+    render(await ChecklistsPage());
+    expect(screen.queryByRole('heading', { name: 'My checklists' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Brokerage checklists' })).not.toBeInTheDocument();
+    expect(names()).toEqual(['Solo listing', 'Solo buyer']);
+    expect(screen.getByRole('link', { name: 'Edit Solo listing' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'New template' })).toBeInTheDocument();
+  });
+});
+
+describe('BACKLOG-3618 — stable order (C9)', () => {
+  it('O1 equal sort_order and equal name sort by id, whatever order the read returns', async () => {
+    setup({
+      templates: [
+        template('tpl-c', FIXTURE_BROKERAGE_ORG_ID, { name: 'Same' }),
+        template('tpl-a', FIXTURE_BROKERAGE_ORG_ID, { name: 'Same' }),
+        template('tpl-b', FIXTURE_BROKERAGE_ORG_ID, { name: 'Same' }),
+      ],
+    });
+    render(await ChecklistsPage());
+    expect(
+      screen.getAllByTestId('checklist-row').map((r) => r.querySelector('a')?.getAttribute('href'))
+    ).toEqual(['/dashboard/checklists/tpl-a', '/dashboard/checklists/tpl-b', '/dashboard/checklists/tpl-c']);
   });
 });

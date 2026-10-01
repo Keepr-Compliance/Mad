@@ -1,5 +1,5 @@
 /**
- * Checklist template editor — BACKLOG-3474.
+ * Checklist template editor — BACKLOG-3474, BACKLOG-3618.
  *
  * Two layers:
  *   - the routes (/dashboard/checklists/[id] and /new): the real gate runs
@@ -52,9 +52,11 @@ import type { TemplateItemRow } from '@/lib/checklists/editorState';
 import { ORG_WITHOUT_PLAN_FEATURES, withFeature } from '../../../fixtures/orgFeatures';
 import {
   FIXTURE_BROKERAGE_ORG_ID,
+  FIXTURE_OTHER_USER_ID,
   FIXTURE_USER_ID,
   brokerageMembership,
   createPostgrestEmulator,
+  personalMembership,
   type Row,
 } from '../../../helpers/postgrestEmulator';
 
@@ -70,11 +72,14 @@ const FEATURE_OFF = withFeature(ORG_WITHOUT_PLAN_FEATURES, CHECKLIST_FEATURE_KEY
 const DB_EDITOR_ROLES = ['broker', 'admin', 'it_admin'];
 const canEditAnswer = (role: string, features: unknown): boolean =>
   DB_EDITOR_ROLES.includes(role) && features !== FEATURE_OFF;
-const canEditRpc = (role: string, features: unknown) =>
+const canEditRpc = (role: string, features: unknown, personal = false) =>
   jest.fn(async (fn: string) =>
     fn === 'can_edit_checklist_templates'
-      ? { data: canEditAnswer(role, features), error: null }
-      : { data: null, error: { code: 'PGRST202', message: `unexpected rpc ${fn}` } }
+      ? { data: (personal || DB_EDITOR_ROLES.includes(role)) && features !== FEATURE_OFF, error: null }
+      : fn === 'can_create_own_checklist_templates'
+        ? // BACKLOG-3618 (migration 20261001120000 §2): any member AND feature on.
+          { data: features !== FEATURE_OFF, error: null }
+        : { data: null, error: { code: 'PGRST202', message: `unexpected rpc ${fn}` } }
   );
 
 /** Transcribed PostgREST text of a real checklist_templates.updated_at (pm_comments 6501344d). */
@@ -94,7 +99,7 @@ const ITEMS: TemplateItemRow[] = [
   { id: 'item-c', title: 'Closing disclosure', sort_order: 30, description: 'Final numbers', is_required: true, expected_document_type: 'closing' },
 ];
 
-const templateRow = (id: string, organization_id: string): Row => ({
+const templateRow = (id: string, organization_id: string, over: Partial<Row> = {}): Row => ({
   id,
   organization_id,
   name: 'Residential purchase',
@@ -105,15 +110,25 @@ const templateRow = (id: string, organization_id: string): Row => ({
   updated_by: null,
   archived_at: null,
   archived_by: null,
+  owner_user_id: null,
+  include_in_submission: true,
   checklist_template_items: ITEMS,
+  ...over,
 });
 
 function setupRoute(
-  opts: { role?: string; features?: unknown; impersonating?: boolean; templates?: Row[]; users?: Row[] } = {}
+  opts: {
+    role?: string;
+    personal?: boolean;
+    features?: unknown;
+    impersonating?: boolean;
+    templates?: Row[];
+    users?: Row[];
+  } = {}
 ) {
   const emu = createPostgrestEmulator({
     rows: {
-      organization_members: [brokerageMembership(opts.role ?? 'broker')],
+      organization_members: [opts.personal ? personalMembership() : brokerageMembership(opts.role ?? 'broker')],
       checklist_templates: opts.templates ?? [templateRow(TEMPLATE_ID, FIXTURE_BROKERAGE_ORG_ID)],
       users: opts.users ?? [],
     },
@@ -122,7 +137,7 @@ function setupRoute(
   mockCreateClient.mockResolvedValue({
     auth: { getUser: async () => ({ data: { user: { id: FIXTURE_USER_ID } } }) },
     from,
-    rpc: canEditRpc(opts.role ?? 'broker', opts.features ?? FEATURE_ON),
+    rpc: canEditRpc(opts.role ?? 'broker', opts.features ?? FEATURE_ON, opts.personal ?? false),
   });
   mockGetImpersonationSession.mockResolvedValue(opts.impersonating ? { session_id: 's', target_user_id: 't' } : null);
   return { emu, from };
@@ -161,7 +176,8 @@ afterEach(() => errorSpy.mockRestore());
 describe('/dashboard/checklists/[id] — refuses with 404', () => {
   it.each([
     ['with the feature off', { features: FEATURE_OFF }],
-    ['for an agent', { role: 'agent' }],
+    // BACKLOG-3618: an agent is admitted to the page, but a brokerage template is not theirs to edit.
+    ['for an agent, on a brokerage template', { role: 'agent' }],
     ['during impersonation', { role: 'admin', impersonating: true }],
   ] as const)('%s', async (_l, opts) => {
     setupRoute(opts);
@@ -415,5 +431,137 @@ describe('editor — validation and create', () => {
       payload: { name: 'Land / lot', items: [{ title: 'Survey', is_required: false, expected_document_type: null }] },
     });
     expect(within(document.body).queryByRole('alert')).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3618: own templates and the "Send with submissions" switch
+// ---------------------------------------------------------------------------
+
+const sendSwitch = () => screen.queryByRole('switch', { name: 'Send with submissions' });
+const HELP = "Turn off to keep this checklist just for you; it won't be sent to your broker.";
+
+describe('BACKLOG-3618 — who opens which template', () => {
+  it("O1 an agent opens their own template, with the switch showing the stored value", async () => {
+    setupRoute({
+      role: 'agent',
+      templates: [templateRow(TEMPLATE_ID, FIXTURE_BROKERAGE_ORG_ID, { owner_user_id: FIXTURE_USER_ID, include_in_submission: false })],
+    });
+    render(await EditChecklistTemplatePage(params(TEMPLATE_ID)));
+    expect(sendSwitch()).toHaveAttribute('aria-checked', 'false');
+    expect(screen.getByText(HELP)).toBeInTheDocument();
+  });
+
+  it.each([
+    ['an agent', 'agent'],
+    ['a broker', 'broker'],
+  ])("O2 %s gets a 404 for another user's own template", async (_l, role) => {
+    setupRoute({
+      role,
+      templates: [templateRow(TEMPLATE_ID, FIXTURE_BROKERAGE_ORG_ID, { owner_user_id: FIXTURE_OTHER_USER_ID })],
+    });
+    await expect(EditChecklistTemplatePage(params(TEMPLATE_ID))).rejects.toThrow(NOT_FOUND);
+  });
+
+  it('O3 a broker editing a brokerage template sees no switch', async () => {
+    setupRoute();
+    render(await EditChecklistTemplatePage(params(TEMPLATE_ID)));
+    expect(screen.getByLabelText('Name')).toBeInTheDocument();
+    expect(sendSwitch()).toBeNull();
+  });
+
+  it('O4 an agent creating a checklist gets the switch, on', async () => {
+    setupRoute({ role: 'agent' });
+    render(await NewChecklistTemplatePage());
+    expect(sendSwitch()).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it.each([
+    ['a broker', { role: 'broker' }],
+    ['a solo user [C8]', { personal: true }],
+  ])('O5 %s creating a template gets no switch', async (_l, opts) => {
+    setupRoute(opts);
+    render(await NewChecklistTemplatePage());
+    expect(screen.getByRole('heading', { name: 'New template' })).toBeInTheDocument();
+    expect(sendSwitch()).toBeNull();
+  });
+});
+
+describe('BACKLOG-3618 — the switch is sent only when changed', () => {
+  const ownEditor = (include: boolean) =>
+    renderEditor({ own: true, template: { name: 'Housewarming', description: null, includeInSubmission: include } });
+
+  it('T1 turning it off arms Save and sends include_in_submission: false', async () => {
+    mockSave.mockResolvedValue({ ok: true, id: TEMPLATE_ID, updatedAt: TOKEN });
+    ownEditor(true);
+    saveButtons().forEach((b) => expect(b).toBeDisabled());
+    fireEvent.click(sendSwitch()!);
+    expect(sendSwitch()).toHaveAttribute('aria-checked', 'false');
+    fireEvent.click(saveButtons()[0]);
+    await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
+    expect(mockSave.mock.calls[0][0].payload.include_in_submission).toBe(false);
+  });
+
+  it('T2 flipping it back is no change: Save disarms', () => {
+    ownEditor(true);
+    fireEvent.click(sendSwitch()!);
+    fireEvent.click(sendSwitch()!);
+    saveButtons().forEach((b) => expect(b).toBeDisabled());
+  });
+
+  it('T3 a save that did not touch it omits it (the stored "off" is kept)', async () => {
+    mockSave.mockResolvedValue({ ok: true, id: TEMPLATE_ID, updatedAt: TOKEN });
+    ownEditor(false);
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Housewarming party' } });
+    fireEvent.click(saveButtons()[0]);
+    await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
+    expect(mockSave.mock.calls[0][0].payload).not.toHaveProperty('include_in_submission');
+    expect(mockSave.mock.calls[0][0].payload.name).toBe('Housewarming party');
+  });
+
+  it('T4 turning it back on sends true', async () => {
+    mockSave.mockResolvedValue({ ok: true, id: TEMPLATE_ID, updatedAt: TOKEN });
+    ownEditor(false);
+    fireEvent.click(sendSwitch()!);
+    fireEvent.click(saveButtons()[0]);
+    await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
+    expect(mockSave.mock.calls[0][0].payload.include_in_submission).toBe(true);
+  });
+
+  it.each([
+    ['left on omits it', false, undefined],
+    ['turned off sends false', true, false],
+  ])('T5 a new own checklist %s', async (_l, flip, expected) => {
+    mockSave.mockResolvedValue({ ok: true, id: TEMPLATE_ID, updatedAt: TOKEN });
+    renderEditor({ own: true, templateId: null, updatedAt: null, template: null, items: [] });
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Housewarming' } });
+    fireEvent.change(screen.getAllByLabelText('Item title')[0], { target: { value: 'Send invites' } });
+    if (flip) fireEvent.click(sendSwitch()!);
+    fireEvent.click(saveButtons()[0]);
+    await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
+    const payload = mockSave.mock.calls[0][0].payload;
+    if (expected === undefined) expect(payload).not.toHaveProperty('include_in_submission');
+    else expect(payload.include_in_submission).toBe(expected);
+  });
+
+  it('T6 a brokerage template never sends the field', async () => {
+    mockSave.mockResolvedValue({ ok: true, id: TEMPLATE_ID, updatedAt: TOKEN });
+    renderEditor();
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Residential purchase v2' } });
+    fireEvent.click(saveButtons()[0]);
+    await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
+    expect(mockSave.mock.calls[0][0].payload).not.toHaveProperty('include_in_submission');
+  });
+
+  it('T7 shows what the server says when a brokerage template is refused', async () => {
+    mockSave.mockResolvedValue({
+      ok: false,
+      reason: 'brokerage_read_only',
+      message: SAVE_MESSAGES.brokerage_read_only,
+    });
+    renderEditor();
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'x' } });
+    fireEvent.click(saveButtons()[0]);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Only your broker or an admin can change brokerage checklists.');
   });
 });

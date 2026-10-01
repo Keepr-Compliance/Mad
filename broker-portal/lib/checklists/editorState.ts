@@ -15,6 +15,12 @@
  * A UTF-16 count is never smaller than a code-point count, so bounding the
  * UTF-16 length satisfies both. The save stores trimmed values, so the length
  * checked here is the length stored.
+ *
+ * BACKLOG-3618: an own template carries the "Send with submissions" switch
+ * (`includeInSubmission`; null = the template has no switch, a brokerage
+ * template). toSaveRequest sends it ONLY when it differs from what the page
+ * read: save_checklist_template keeps the stored value when the argument is
+ * omitted, so a save that did not touch the switch can never change it.
  */
 
 import {
@@ -44,6 +50,8 @@ export interface EditorState {
   name: string;
   description: string;
   items: EditorItem[];
+  /** "Send with submissions" on an own template; null = no switch (brokerage template). */
+  includeInSubmission: boolean | null;
 }
 
 /** The row shape the editor page reads (PostgREST embed). */
@@ -68,10 +76,13 @@ export interface SavePayload {
   name: string;
   description: string | null;
   items: SaveItem[];
+  /** Present only when the switch changed (toSaveRequest). */
+  include_in_submission?: boolean;
 }
 
-export function emptyEditor(): EditorState {
-  return { name: '', description: '', items: [] };
+/** A new template; `own` gives it the switch, on by default. */
+export function emptyEditor(own = false): EditorState {
+  return { name: '', description: '', items: [], includeInSubmission: own ? true : null };
 }
 
 export function newItem(key: string): EditorItem {
@@ -80,12 +91,13 @@ export function newItem(key: string): EditorItem {
 
 /** Editor state from a stored template; items in sort_order. */
 export function fromTemplate(
-  template: { name: string; description: string | null },
+  template: { name: string; description: string | null; includeInSubmission?: boolean | null },
   items: TemplateItemRow[]
 ): EditorState {
   return {
     name: template.name,
     description: template.description ?? '',
+    includeInSubmission: typeof template.includeInSubmission === 'boolean' ? template.includeInSubmission : null,
     items: [...items]
       .sort((a, b) => a.sort_order - b.sort_order)
       .map((row) => ({
@@ -132,9 +144,10 @@ const blankToNull = (s: string): string | null => {
   return t === '' ? null : t;
 };
 
-/** What the save sends: trimmed, in display order, the order IS the item order. */
+/** What the editor holds, as a payload: trimmed, in display order, the order IS the item order. */
 export function toSavePayload(state: EditorState): SavePayload {
   return {
+    ...(state.includeInSubmission === null ? {} : { include_in_submission: state.includeInSubmission }),
     name: state.name.trim(),
     description: blankToNull(state.description),
     items: state.items.map((i) => ({
@@ -145,6 +158,18 @@ export function toSavePayload(state: EditorState): SavePayload {
       expected_document_type: i.documentType === '' ? null : i.documentType,
     })),
   };
+}
+
+/**
+ * What the save sends: the payload, with the switch only when it changed from
+ * `initial` (keep-current semantics; see the header).
+ */
+export function toSaveRequest(initial: EditorState, current: EditorState): SavePayload {
+  const payload = toSavePayload(current);
+  if (current.includeInSubmission === null || current.includeInSubmission === initial.includeInSubmission) {
+    delete payload.include_in_submission;
+  }
+  return payload;
 }
 
 /** True when saving `current` would write something `initial` does not hold. Order counts. */
@@ -181,6 +206,10 @@ export function validateSavePayload(payload: unknown): PayloadErrors {
     errors.name = 'Give the template a name.';
   } else if (p.name.trim().length > TEMPLATE_NAME_MAX) {
     errors.name = `Keep the name to ${TEMPLATE_NAME_MAX} characters.`;
+  }
+
+  if (p.include_in_submission !== undefined && typeof p.include_in_submission !== 'boolean') {
+    errors.name = 'The template could not be read.';
   }
 
   if (p.description !== null && p.description !== undefined) {
