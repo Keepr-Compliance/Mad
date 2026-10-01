@@ -116,15 +116,45 @@ describe("only the grip drags (O6, O7)", () => {
     expect(saved).toEqual([{ left: 400, top: 300 }]);
   });
 
-  it("the real box: the grab cursor is on the grip only; Move stays a button", () => {
+  it("the real box: the grab cursor is on the badge only; Move stays a button", () => {
     const built = job.buildBox(document);
-    expect(built.box.id).toBe(job.OVERLAY_ID);
-    expect(built.box.style.cursor).toBe("");
-    expect(built.panel.style.cursor).toBe("");
-    expect(built.handle.style.cursor).toBe("grab");
-    expect(built.handle.getAttribute("data-keepr")).toBe("drag-handle");
-    expect(built.move.tagName).toBe("BUTTON");
-    expect(built.box.contains(built.handle) && built.box.contains(built.panel)).toBe(true);
+    expect(built.id).toBe(job.OVERLAY_ID);
+    const move = jest.fn();
+    job.renderOverlay(built, job.DONE_LINE, false, { details: "d", copy: "c" }, { copy: async () => true, move, theme: "light" });
+    expect(built.style.cursor).toBe("");
+    const badge = built.querySelector(job.DRAG_HANDLE) as HTMLElement;
+    expect(badge.style.cursor).toBe("grab");
+    const others = Array.from(built.querySelectorAll("*")).filter((n) => n !== badge && (n as HTMLElement).style.cursor === "grab");
+    expect(others).toEqual([]);
+    const moveButton = built.querySelector('[data-keepr="move"]') as HTMLButtonElement;
+    expect(moveButton.tagName).toBe("BUTTON");
+    moveButton.click();
+    expect(move).toHaveBeenCalledTimes(1);
+  });
+
+  it("with a handle selector, only the (re-rendered) badge starts a drag", () => {
+    document.body.innerHTML = "";
+    box = job.buildBox(document);
+    document.body.appendChild(box);
+    saved = [];
+    job.attachDrag(box, {
+      view: () => VIEW, size: () => SIZE, load: () => null,
+      save: (p: { left: number; top: number }) => saved.push(p),
+      handleSelector: job.DRAG_HANDLE,
+    });
+    job.renderOverlay(box, "Chat 8 of 21…", false, { cancel: true }, { copy: async () => true, theme: "light" });
+    const line = box.querySelector('[data-keepr="line"]') as HTMLElement;
+    pointer("pointerdown", 50, 50, line);
+    pointer("pointermove", 450, 350, line);
+    pointer("pointerup", 450, 350, line);
+    expect(saved).toEqual([]);
+    // A new render replaces the badge: dragging still works.
+    job.renderOverlay(box, "Chat 9 of 21…", false, { cancel: true }, { copy: async () => true, theme: "light" });
+    const badge = box.querySelector(job.DRAG_HANDLE) as HTMLElement;
+    pointer("pointerdown", 50, 50, badge);
+    pointer("pointermove", 450, 350, badge);
+    pointer("pointerup", 450, 350, badge);
+    expect(saved).toEqual([{ left: 400, top: 300 }]);
   });
 });
 
@@ -135,7 +165,7 @@ describe("never two Keepr boxes (O8)", () => {
   it("a newer instance removes a stale box and owns the page; the older one steps aside", () => {
     document.body.innerHTML = "";
     job.claimPage(document, "old");
-    const stale = job.buildBox(document).box;
+    const stale = job.buildBox(document);
     document.body.appendChild(stale);
     expect(job.ownsPage(document, "old")).toBe(true);
     job.claimPage(document, "new");

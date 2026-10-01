@@ -708,61 +708,253 @@
 
   var SEE_DETAILS = "See details ▾";
   var HIDE_DETAILS = "Hide details ▴";
+  /** BACKLOG-3658 security H1: a Sync Keepr did not open in this tab asks first. */
+  var ASK_TITLE = "Keepr wants to sync your texts";
+  var ASK_TEXT = "Keepr asked to copy your recent Google Messages texts into the Keepr app on this computer.";
+  var PAUSED_TITLE = "Sync paused";
+  var PAUSED_BODY = "Keep this Chrome window visible — Sync continues when it's back.";
+  var SYNCING_TITLE = "Syncing your texts";
+
+  // Keepr brand (android-companion BrandMark): the indigo mark with an amber
+  // dot; primary #4F46E5 (hover #4338CA); amber #F5A524 for paused/attention.
+  // No green. Every text/background pair is >= 4.5:1.
+  var PRIMARY = "#4F46E5";
+  var PRIMARY_HOVER = "#4338CA";
+  var AMBER = "#F5A524";
+  var PALETTE = {
+    light: {
+      card: "#FFFFFF", border: "#C7D2FE", doneBorder: "#C7D2FE", text: "#111827", muted: "#374151", link: "#4F46E5",
+      secondaryBg: "#FFFFFF", secondaryBorder: "#C7D2FE", secondaryText: "#374151",
+      detailsBg: "#F9FAFB", detailsBorder: "#E5E7EB",
+    },
+    dark: {
+      card: "#1F2937", border: "#374151", doneBorder: "#4F46E5", text: "#F3F4F6", muted: "#D1D5DB", link: "#A5B4FC",
+      secondaryBg: "#1F2937", secondaryBorder: "#4B5563", secondaryText: "#F3F4F6",
+      detailsBg: "#111827", detailsBorder: "#374151",
+    },
+  };
 
   /**
-   * Fill the overlay panel (BACKLOG-3641, founder's final layout, mockup screen 4):
+   * The theme a CSS background colour asks for: "dark" (relative luminance
+   * under 0.18, i.e. darker than mid-grey), "light", or null when it says
+   * nothing (transparent, or not an rgb()/rgba() colour).
+   * @param {string} css
+   * @returns {"dark"|"light"|null}
+   */
+  function themeFromColor(css) {
+    var m = /rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)(?:\s*[,/]\s*([\d.]+%?))?\s*\)/.exec(css || "");
+    if (!m) return null;
+    if (m[4] !== undefined && parseFloat(m[4]) === 0) return null;
+    function lin(c) {
+      var v = Math.min(255, Math.max(0, c)) / 255;
+      return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    }
+    var l = 0.2126 * lin(+m[1]) + 0.7152 * lin(+m[2]) + 0.0722 * lin(+m[3]);
+    return l < 0.18 ? "dark" : "light";
+  }
+
+  /**
+   * Auto theme (founder): Google Messages' own theme, read from the computed
+   * background of the page (the first element that has one), else the
+   * system's prefers-color-scheme, else light.
+   * @param {Document} doc
+   * @returns {"dark"|"light"}
+   */
+  function pageTheme(doc) {
+    var win = doc.defaultView;
+    var candidates = [doc.querySelector("mw-app, mws-app, main"), doc.body, doc.documentElement];
+    for (var i = 0; i < candidates.length; i++) {
+      var node = candidates[i];
+      if (!node || !win || !win.getComputedStyle) continue;
+      var t = themeFromColor(win.getComputedStyle(node).backgroundColor);
+      if (t) return t;
+    }
+    try {
+      if (win && win.matchMedia && win.matchMedia("(prefers-color-scheme: dark)").matches) return "dark";
+    } catch (_e) { /* no media queries: light */ }
+    return "light";
+  }
+
+  /** The box's state, from what the job shows. */
+  function overlayState(text, isError, extras) {
+    if (extras && extras.ask) return "ask";
+    if (isError) return "error";
+    if (extras && extras.details) return "done";
+    if (text === PAUSED_TEXT) return "paused";
+    return "syncing";
+  }
+
+  /** "Chat 8 of 21…" → "8 of 21" for the pill; other lines as they are. */
+  function shortProgress(text) {
+    return String(text).replace(/^(Checking chat|Chat) /, "").replace(/…$/, "");
+  }
+
+  /**
+   * THE Keepr box (founder's design C, "collapsible chip"). ALL of its look is
+   * here: every element and style is (re)built from (state, theme) on each
+   * call; createElement + textContent only, so page text never becomes markup.
    *
-   *   [headline: "Sync done — switch back to Keepr." or the failure line]
-   *   [See details ▾ (link, bottom-LEFT)]          [Open Keepr (primary, RIGHT)]
-   *   [details card — below the row, collapsed: the summary + "Copy details"]
+   *   syncing  collapsed pill: [badge] "Keepr · 8 of 21" [▾]; ▾ expands to the
+   *            progress line + Cancel.
+   *   paused   expanded card, amber: "Sync paused", what to do, Cancel.
+   *   done     expanded card: [✓] "Sync done — switch back to Keepr.",
+   *            "See details ▾" (link, left) + "Open Keepr" (primary, right),
+   *            the details card below with "Copy details" inside; ×.
+   *   error    as done, amber, with the failure line; ×.
+   *   ask      (security H1) "Keepr wants to sync your texts": Not now / Start.
    *
-   * The link reads "Hide details ▴" while the card is open. "Open Keepr" asks
-   * Keepr (through the extension's worker and the bridge's POST /focus) to bring
-   * itself to the front — the backup when Windows blocks the focus change.
-   * Progress lines (no `extras`) are just the headline. createElement and
-   * textContent only: page text never becomes markup.
+   * The round badge is the ONLY drag handle (data-keepr="drag-handle", grab
+   * cursor). The keyboard Move button is visually hidden until focused.
    *
-   * @param {HTMLElement} panel
+   * @param {HTMLElement} box  the fixed box (or any container, in tests)
    * @param {string} text
    * @param {boolean} isError
-   * @param {{details: string, copy: string}=} extras
+   * @param {{details?: string, copy?: string, cancel?: boolean,
+   *   ask?: {start: function(): void, later: function(): void}}=} extras
    * @param {{copy: function(string): Promise<boolean>, focus?: function(): Promise<boolean>,
-   *   cancel?: function(): Promise<boolean>, close?: function(): void}} io
+   *   cancel?: function(): Promise<boolean>, close?: function(): void, move?: function(): void,
+   *   expanded?: boolean, onExpand?: function(boolean): void, theme?: "light"|"dark"}} io
    */
-  function renderOverlay(panel, text, isError, extras, io) {
-    var doc = panel.ownerDocument;
-    while (panel.firstChild) panel.removeChild(panel.firstChild);
-    panel.style.background = isError ? "#fee2e2" : "#eef2ff";
-    panel.style.color = isError ? "#991b1b" : "#1e1b4b";
-    var line = doc.createElement("div");
-    line.setAttribute("data-keepr", "line");
-    line.textContent = "Keepr: " + text;
-    Object.assign(line.style, { fontWeight: "600" });
-    // BACKLOG-3658 (founder): once the Sync is over (result card, failure,
-    // cancelled) the box can be closed; a running Sync keeps it.
-    if (io.close && (isError || !!(extras && extras.details))) {
-      var close = doc.createElement("button");
-      close.type = "button";
-      close.setAttribute("data-keepr", "close");
-      close.setAttribute("aria-label", "Close");
-      close.textContent = "×";
-      Object.assign(close.style, {
-        float: "right", marginLeft: "8px", background: "none", border: "none", padding: "0 4px",
-        cursor: "pointer", font: "inherit", fontSize: "16px", lineHeight: "1", color: "inherit",
-      });
-      close.addEventListener("click", function () { io.close(); });
-      panel.appendChild(close);
+  function renderOverlay(box, text, isError, extras, io) {
+    var doc = box.ownerDocument;
+    var theme = io.theme === "dark" || io.theme === "light" ? io.theme : pageTheme(doc);
+    var p = PALETTE[theme];
+    var state = overlayState(text, isError, extras);
+    var expanded = state !== "syncing" || !!io.expanded;
+    var attention = state === "paused" || state === "error";
+
+    while (box.firstChild) box.removeChild(box.firstChild);
+    box.setAttribute("data-keepr-state", state);
+    box.setAttribute("data-keepr-theme", theme);
+    box.setAttribute("role", "region");
+    box.setAttribute("aria-label", "Keepr");
+    Object.assign(box.style, {
+      background: p.card,
+      color: p.text,
+      border: "1px solid " + (attention ? AMBER : state === "done" ? p.doneBorder : p.border),
+      borderRadius: expanded ? "16px" : "999px",
+      boxShadow: "0 8px 24px rgba(0,0,0,.16)",
+      boxSizing: "border-box",
+      width: expanded ? "300px" : "auto",
+      maxWidth: "calc(100vw - 16px)",
+      padding: expanded ? "12px 14px" : "5px 8px 5px 5px",
+      fontFamily: "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
+      fontSize: "14px",
+      lineHeight: "1.4",
+      textAlign: "left",
+    });
+
+    function el(tag, key, style, content) {
+      var node = doc.createElement(tag);
+      if (key) node.setAttribute("data-keepr", key);
+      if (style) Object.assign(node.style, style);
+      if (content !== undefined) node.textContent = content;
+      return node;
     }
-    panel.appendChild(line);
-    if (!extras) return;
-    if (extras.cancel && !extras.details) {
+    function button(key, label, kind) {
+      var b = el("button", key, {
+        font: "inherit", cursor: "pointer", borderRadius: "8px", lineHeight: "1.2",
+      }, label);
+      b.type = "button";
+      if (kind === "primary") {
+        Object.assign(b.style, { background: PRIMARY, color: "#FFFFFF", border: "1px solid " + PRIMARY, padding: "7px 14px", fontWeight: "600" });
+        b.addEventListener("mouseenter", function () { b.style.background = PRIMARY_HOVER; });
+        b.addEventListener("mouseleave", function () { b.style.background = PRIMARY; });
+      } else if (kind === "link") {
+        Object.assign(b.style, { background: "none", border: "none", padding: "0", color: p.link, textDecoration: "none", fontWeight: "600" });
+      } else if (kind === "icon") {
+        Object.assign(b.style, { background: "none", border: "none", padding: "2px 6px", color: p.muted, fontSize: "16px" });
+      } else {
+        Object.assign(b.style, { background: p.secondaryBg, color: p.secondaryText, border: "1px solid " + p.secondaryBorder, padding: "6px 12px" });
+      }
+      return b;
+    }
+
+    // Header: badge (the drag handle) + title + controls.
+    var header = el("div", "header", { display: "flex", alignItems: "center", gap: "8px" });
+    var badge = el("div", "drag-handle", {
+      position: "relative", flex: "0 0 30px", width: "30px", height: "30px", borderRadius: "50%",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      fontWeight: "700", fontSize: "15px", cursor: "grab", touchAction: "none", userSelect: "none",
+      background: attention ? AMBER : "linear-gradient(135deg, #4F46E5, #6D5DF0)",
+      color: attention ? "#111827" : "#FFFFFF",
+    }, state === "done" ? "✓" : state === "error" ? "!" : "K");
+    badge.title = "Drag to move";
+    badge.setAttribute("aria-hidden", "true");
+    if (!attention) {
+      badge.appendChild(el("span", null, {
+        position: "absolute", top: "0", right: "0", width: "8px", height: "8px", borderRadius: "50%",
+        background: AMBER, border: "1.5px solid " + p.card, boxSizing: "border-box",
+      }));
+    }
+    header.appendChild(badge);
+
+    var title = state === "syncing"
+      ? (expanded ? SYNCING_TITLE : "Keepr · " + shortProgress(text))
+      : state === "paused" ? PAUSED_TITLE : state === "ask" ? ASK_TITLE : text;
+    header.appendChild(el("div", "line", {
+      flex: "1 1 auto", minWidth: "0", fontWeight: "600", color: p.text, whiteSpace: expanded ? "normal" : "nowrap",
+    }, title));
+
+    if (state === "syncing") {
+      var expand = button("expand", expanded ? "▴" : "▾", "icon");
+      expand.setAttribute("aria-expanded", expanded ? "true" : "false");
+      expand.setAttribute("aria-label", expanded ? "Hide Sync progress" : "Show Sync progress");
+      expand.addEventListener("click", function () {
+        if (io.onExpand) io.onExpand(!expanded);
+      });
+      header.appendChild(expand);
+    }
+    if (io.move) {
+      // Keyboard alternative to dragging: hidden until it has focus.
+      var move = button("move", "Move", "secondary");
+      move.setAttribute("aria-label", "Move this box to the next corner");
+      var hidden = { position: "absolute", width: "1px", height: "1px", overflow: "hidden", clip: "rect(0 0 0 0)", padding: "0", border: "0" };
+      var shown = { position: "static", width: "auto", height: "auto", overflow: "visible", clip: "auto", padding: "2px 8px", border: "1px solid " + p.secondaryBorder };
+      Object.assign(move.style, hidden);
+      move.addEventListener("focus", function () { Object.assign(move.style, shown); });
+      move.addEventListener("blur", function () { Object.assign(move.style, hidden); });
+      move.addEventListener("click", function () { io.move(); });
+      header.appendChild(move);
+    }
+    // Once the Sync is over (result, failure) the box can be closed.
+    if (io.close && (state === "done" || state === "error")) {
+      var close = button("close", "×", "icon");
+      close.setAttribute("aria-label", "Close");
+      close.addEventListener("click", function () { io.close(); });
+      header.appendChild(close);
+    }
+    box.appendChild(header);
+    if (!expanded) return;
+
+    var bodyStyle = { marginTop: "8px", color: p.muted };
+    if (state === "syncing") box.appendChild(el("div", "progress", bodyStyle, text));
+    if (state === "paused") box.appendChild(el("div", "progress", bodyStyle, PAUSED_BODY));
+
+    if (state === "ask") {
+      box.appendChild(el("div", "progress", bodyStyle, ASK_TEXT));
+      var askRow = el("div", "bottom-row", {
+        display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", marginTop: "12px",
+      });
+      var later = button("ask-later", "Not now", "secondary");
+      var startButton = button("ask-start", "Start", "primary");
+      later.addEventListener("click", function () { extras.ask.later(); });
+      startButton.addEventListener("click", function () {
+        startButton.disabled = true;
+        later.disabled = true;
+        extras.ask.start();
+      });
+      askRow.appendChild(later);
+      askRow.appendChild(startButton);
+      box.appendChild(askRow);
+      return;
+    }
+
+    if ((state === "syncing" || state === "paused") && extras && extras.cancel) {
       // BACKLOG-3658: a running Sync's Cancel (this job only, via the bridge).
-      var cancel = doc.createElement("button");
-      cancel.type = "button";
-      cancel.setAttribute("data-keepr", "cancel");
-      cancel.textContent = "Cancel";
-      Object.assign(cancel.style, { marginTop: "8px", cursor: "pointer", font: "inherit" });
-      panel.appendChild(cancel);
+      var cancel = button("cancel", "Cancel", "secondary");
+      cancel.style.marginTop = "10px";
+      box.appendChild(cancel);
       cancel.addEventListener("click", function () {
         if (!io.cancel) return;
         cancel.disabled = true;
@@ -779,53 +971,30 @@
       });
       return;
     }
+    if (!extras || !extras.details) return;
 
     // Bottom row: the details link LEFT, Open Keepr RIGHT.
-    var row = doc.createElement("div");
-    row.setAttribute("data-keepr", "bottom-row");
-    Object.assign(row.style, {
-      display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", marginTop: "10px",
+    var row = el("div", "bottom-row", {
+      display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", marginTop: "12px",
     });
-    var toggle = doc.createElement("button");
-    toggle.type = "button";
-    toggle.setAttribute("data-keepr", "details-toggle");
+    var toggle = button("details-toggle", SEE_DETAILS, "link");
     toggle.setAttribute("aria-expanded", "false");
-    toggle.textContent = SEE_DETAILS;
-    Object.assign(toggle.style, {
-      background: "none", border: "none", padding: "0", cursor: "pointer",
-      color: "inherit", textDecoration: "underline", font: "inherit",
-    });
-    var open = doc.createElement("button");
-    open.type = "button";
-    open.setAttribute("data-keepr", "open-keepr");
-    open.textContent = "Open Keepr";
-    Object.assign(open.style, {
-      background: "#4f46e5", color: "#fff", border: "none", borderRadius: "8px",
-      padding: "8px 14px", fontWeight: "600", cursor: "pointer", font: "inherit",
-    });
+    var open = button("open-keepr", "Open Keepr", "primary");
     row.appendChild(toggle);
     row.appendChild(open);
-    panel.appendChild(row);
+    box.appendChild(row);
 
     // The details card, BELOW the row, collapsed by default.
-    var card = doc.createElement("div");
-    card.setAttribute("data-keepr", "details-card");
-    Object.assign(card.style, {
-      display: "none", marginTop: "10px", padding: "10px", borderRadius: "8px",
-      background: "#ffffff", color: "#1f2937", border: "1px solid #e5e7eb",
+    var card = el("div", "details-card", {
+      display: "none", marginTop: "10px", padding: "10px", borderRadius: "10px",
+      background: p.detailsBg, color: p.text, border: "1px solid " + p.detailsBorder,
     });
-    var details = doc.createElement("pre");
-    details.setAttribute("data-keepr", "details");
-    details.textContent = extras.details;
-    Object.assign(details.style, { whiteSpace: "pre-wrap", margin: "0", font: "inherit" });
-    var copyButton = doc.createElement("button");
-    copyButton.type = "button";
-    copyButton.setAttribute("data-keepr", "copy");
-    copyButton.textContent = "Copy details";
-    Object.assign(copyButton.style, { marginTop: "8px", cursor: "pointer", font: "inherit" });
+    var details = el("pre", "details", { whiteSpace: "pre-wrap", margin: "0", font: "inherit", fontSize: "13px" }, extras.details);
+    var copyButton = button("copy", "Copy details", "secondary");
+    copyButton.style.marginTop = "8px";
     card.appendChild(details);
     card.appendChild(copyButton);
-    panel.appendChild(card);
+    box.appendChild(card);
 
     toggle.addEventListener("click", function () {
       var opening = card.style.display === "none";
@@ -892,7 +1061,7 @@
    * @param {HTMLElement} box
    * @param {{view: function(): {width: number, height: number}, size: function(): {width: number, height: number},
    *   load: function(): ({left: number, top: number}|null), save: function({left: number, top: number}): void,
-   *   handle?: HTMLElement}} io
+   *   handle?: HTMLElement, handleSelector?: string}} io
    */
   function attachDrag(box, io) {
     var grip = io.handle || box;
@@ -917,7 +1086,12 @@
     grip.addEventListener("pointerdown", function (e) {
       if (typeof e.button === "number" && e.button !== 0) return;
       var target = e.target;
-      if (grip === box && target && target.closest && target.closest("button, a, input, textarea, pre")) return;
+      if (io.handleSelector) {
+        // Only the handle (rebuilt on every render) starts a drag.
+        if (!target || !target.closest || !target.closest(io.handleSelector)) return;
+      } else if (grip === box && target && target.closest && target.closest("button, a, input, textarea, pre")) {
+        return;
+      }
       var rect = box.getBoundingClientRect();
       var from = box.style.left ? current() : { left: rect.left, top: rect.top };
       drag = { dx: e.clientX - from.left, dy: e.clientY - from.top };
@@ -977,55 +1151,32 @@
   }
 
   /**
-   * The Keepr box's frame (founder: its look is being redesigned - layout
-   * lives here and in renderOverlay only). A header strip with the drag grip
-   * (the ONLY place with the grab cursor) and the keyboard Move button, then
-   * the panel renderOverlay fills. createElement only.
+   * The Keepr box's fixed frame: where it sits and how it scrolls. Its look
+   * (founder's design C) is entirely renderOverlay's.
    * @param {Document} doc
-   * @returns {{box: HTMLElement, handle: HTMLElement, move: HTMLButtonElement, panel: HTMLElement}}
+   * @returns {HTMLElement}
    */
   function buildBox(doc) {
     var box = doc.createElement("div");
     box.id = OVERLAY_ID;
     Object.assign(box.style, {
       position: "fixed", top: "16px", right: "16px", zIndex: "2147483647",
-      maxWidth: "360px", padding: "6px 14px 10px", borderRadius: "10px",
-      fontFamily: "system-ui, -apple-system, sans-serif", fontSize: "14px",
-      boxShadow: "0 2px 10px rgba(0,0,0,0.25)",
-      maxHeight: "60vh", overflowY: "auto",
+      maxHeight: "70vh", overflowY: "auto",
     });
-    var header = doc.createElement("div");
-    header.setAttribute("data-keepr", "header");
-    Object.assign(header.style, { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" });
-    var handle = doc.createElement("div");
-    handle.setAttribute("data-keepr", "drag-handle");
-    handle.setAttribute("aria-hidden", "true");
-    handle.title = "Drag to move";
-    handle.textContent = "⠿";
-    Object.assign(handle.style, {
-      cursor: "grab", touchAction: "none", userSelect: "none", padding: "2px 6px 2px 0",
-      fontSize: "16px", lineHeight: "1", flex: "1 1 auto",
-    });
-    var move = doc.createElement("button");
-    move.type = "button";
-    move.setAttribute("data-keepr", "move");
-    move.setAttribute("aria-label", "Move this box to the next corner");
-    move.title = "Move to the next corner";
-    move.textContent = "Move";
-    Object.assign(move.style, {
-      background: "none", border: "1px solid currentColor",
-      borderRadius: "6px", padding: "0 6px", cursor: "pointer", font: "inherit", fontSize: "12px", color: "inherit",
-    });
-    header.appendChild(handle);
-    header.appendChild(move);
-    var panel = doc.createElement("div");
-    box.appendChild(header);
-    box.appendChild(panel);
-    return { box: box, handle: handle, move: move, panel: panel };
+    return box;
   }
+
+  /** The drag handle inside the box (renderOverlay's badge). */
+  var DRAG_HANDLE = '[data-keepr="drag-handle"]';
 
   var api = {
     buildBox: buildBox,
+    themeFromColor: themeFromColor,
+    pageTheme: pageTheme,
+    overlayState: overlayState,
+    PALETTE: PALETTE,
+    ASK_TITLE: ASK_TITLE,
+    DRAG_HANDLE: DRAG_HANDLE,
     claimPage: claimPage,
     ownsPage: ownsPage,
     OVERLAY_ID: OVERLAY_ID,
@@ -1107,10 +1258,12 @@
   }
 
   // Overlay ------------------------------------------------------------------
-  var panel = null;
   var box = null;
   var mover = null;
   var POSITION_KEY = "keepr-overlay-pos";
+  // The pill's ▾/▴ (kept across progress lines); the last thing shown, to redraw it.
+  var syncExpanded = false;
+  var lastShown = null;
   function showOverlay(text, isError, extras) {
     if (!document.body) return;
     // A newer extension instance owns the page: this one shows nothing.
@@ -1121,13 +1274,10 @@
     if (!box) {
       // One box per page: anything left by an older instance goes first.
       claimPage(document, INSTANCE);
-      var built = buildBox(document);
-      box = built.box;
-      panel = built.panel;
-      var move = built.move;
+      box = buildBox(document);
       document.body.appendChild(box);
       mover = attachDrag(box, {
-        handle: built.handle,
+        handleSelector: DRAG_HANDLE,
         view: function () { return { width: root.innerWidth, height: root.innerHeight }; },
         size: function () { var r = box.getBoundingClientRect(); return { width: r.width, height: r.height }; },
         load: function () {
@@ -1142,15 +1292,19 @@
           try { sessionStorage.setItem(POSITION_KEY, JSON.stringify(pos)); } catch (_e) { /* not kept: fine */ }
         },
       });
-      move.addEventListener("click", function () { mover.moveToNextCorner(); });
       root.addEventListener("resize", function () { if (mover) mover.keepOnScreen(); });
     }
-    renderOverlay(panel, text, isError, extras, {
+    lastShown = { text: text, isError: isError, extras: extras };
+    renderOverlay(box, text, isError, extras, {
       copy: copyToClipboard, focus: focusKeepr, cancel: cancelJob, close: closeOverlay,
+      move: function () { if (mover) mover.moveToNextCorner(); },
+      expanded: syncExpanded,
+      onExpand: function (open) {
+        syncExpanded = open;
+        if (lastShown) showOverlay(lastShown.text, lastShown.isError, lastShown.extras);
+      },
     });
-    // The box wears the content's colours; a taller box is kept on screen.
-    box.style.background = panel.style.background;
-    box.style.color = panel.style.color;
+    // A taller (expanded) box is kept on screen.
     mover.keepOnScreen();
   }
 
@@ -1158,8 +1312,8 @@
   function closeOverlay() {
     if (box && box.parentNode) box.parentNode.removeChild(box);
     box = null;
-    panel = null;
     mover = null;
+    lastShown = null;
   }
 
   /** The page's Cancel: POST /job/<this job>/cancel through the worker. */

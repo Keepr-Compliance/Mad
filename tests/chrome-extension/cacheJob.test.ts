@@ -328,13 +328,12 @@ describe("runJob: a cache Sync", () => {
 });
 
 describe("renderOverlay: Cancel (M8)", () => {
-  it("a progress line with {cancel} has one Cancel that asks for this job's cancel", async () => {
+  it("a progress line with {cancel}, expanded, has one Cancel that asks for this job's cancel", async () => {
     const panel = document.createElement("div");
     document.body.appendChild(panel);
     const cancel = jest.fn(async () => true);
-    job.renderOverlay(panel, "Chat 1 of 3…", false, { cancel: true }, { copy: async () => true, cancel });
-    const buttons = panel.querySelectorAll("button");
-    expect(buttons).toHaveLength(1);
+    job.renderOverlay(panel, "Chat 1 of 3…", false, { cancel: true }, { copy: async () => true, cancel, expanded: true });
+    expect(panel.querySelectorAll('[data-keepr="cancel"]')).toHaveLength(1);
     const button = panel.querySelector('[data-keepr="cancel"]') as HTMLButtonElement;
     button.click();
     expect(cancel).toHaveBeenCalledTimes(1);
@@ -342,10 +341,12 @@ describe("renderOverlay: Cancel (M8)", () => {
     expect(button.textContent).toBe("Cancelling…");
   });
 
-  it("a plain line has no buttons", () => {
+  it("a plain line has no Cancel, collapsed or expanded", () => {
     const panel = document.createElement("div");
     job.renderOverlay(panel, "Loading…", false, undefined, { copy: async () => true });
-    expect(panel.querySelectorAll("button")).toHaveLength(0);
+    expect(panel.querySelector('[data-keepr="cancel"]')).toBeNull();
+    job.renderOverlay(panel, "Loading…", false, undefined, { copy: async () => true, expanded: true });
+    expect(panel.querySelector('[data-keepr="cancel"]')).toBeNull();
   });
 });
 

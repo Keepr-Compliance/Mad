@@ -280,8 +280,8 @@ describe("the overlay panel (BACKLOG-3641 founder UX)", () => {
       },
     });
     const kids = Array.from(el.children).map((c) => c.getAttribute("data-keepr"));
-    expect(kids).toEqual(["line", "bottom-row", "details-card"]);
-    expect(el.querySelector("[data-keepr=line]")?.textContent).toBe("Keepr: Sync done — switch back to Keepr.");
+    expect(kids).toEqual(["header", "bottom-row", "details-card"]);
+    expect(el.querySelector("[data-keepr=line]")?.textContent).toBe("Sync done — switch back to Keepr.");
     const row = el.querySelector("[data-keepr=bottom-row]") as HTMLElement;
     expect(Array.from(row.children).map((c) => c.getAttribute("data-keepr"))).toEqual(["details-toggle", "open-keepr"]);
     expect(row.style.justifyContent).toBe("space-between");
@@ -311,10 +311,11 @@ describe("the overlay panel (BACKLOG-3641 founder UX)", () => {
     expect(card.style.display).toBe("none");
     expect(toggle.textContent).toBe("See details ▾");
 
-    // A progress line replaces everything: no stale buttons.
+    // A progress line replaces everything: the collapsed pill, no stale buttons.
     job.renderOverlay(el, "Checking chat 2 of 9", false, undefined, { copy: async () => true });
     expect(el.children).toHaveLength(1);
-    expect(el.textContent).toBe("Keepr: Checking chat 2 of 9");
+    expect(el.querySelector("[data-keepr=line]")?.textContent).toBe("Keepr · 2 of 9");
+    expect(el.querySelector("[data-keepr=open-keepr]")).toBeNull();
   });
 
   it("a failure: one plain line + the same bottom row", () => {
@@ -323,8 +324,8 @@ describe("the overlay panel (BACKLOG-3641 founder UX)", () => {
       copy: async () => true,
       focus: async () => true,
     });
-    expect(Array.from(el.children).map((c) => c.getAttribute("data-keepr"))).toEqual(["line", "bottom-row", "details-card"]);
-    expect(el.querySelector("[data-keepr=line]")?.textContent).toBe("Keepr: Sign in to Google Messages, then click Sync in Keepr again");
+    expect(Array.from(el.children).map((c) => c.getAttribute("data-keepr"))).toEqual(["header", "bottom-row", "details-card"]);
+    expect(el.querySelector("[data-keepr=line]")?.textContent).toBe("Sign in to Google Messages, then click Sync in Keepr again");
   });
 
   it("Open Keepr that Keepr could not honour says where to look", async () => {
