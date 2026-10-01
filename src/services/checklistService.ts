@@ -193,6 +193,40 @@ export const checklistService = {
       return { success: false, error: getErrorMessage(error) };
     }
   },
+
+  /**
+   * BACKLOG-3617: may this user create checklist templates?
+   * `true` / `false` are the database's answer; `null` means UNKNOWN (refused,
+   * offline, no organization, or a reply that is not a boolean). Never
+   * flattened to `false` — an unknown user is not told they cannot create.
+   */
+  async canEditTemplates(): Promise<boolean | null> {
+    try {
+      const result = await window.api.checklists.canEditTemplates();
+      if (!result.success) return null;
+      // `ipcRenderer.invoke` is `any`: check what actually arrived.
+      return typeof result.canEdit === "boolean" ? result.canEdit : null;
+    } catch {
+      return null;
+    }
+  },
+
+  /**
+   * BACKLOG-3617: open the portal Checklists page (main builds the URL).
+   * `portalAddress` comes back only when main allowed the address but the
+   * browser did not open; the renderer never chooses one.
+   */
+  async openTemplatesPortal(): Promise<{ success: boolean; portalAddress?: string }> {
+    try {
+      const result = await window.api.checklists.openTemplatesPortal();
+      if (result.success) return { success: true };
+      return typeof result.portalAddress === "string"
+        ? { success: false, portalAddress: result.portalAddress }
+        : { success: false };
+    } catch {
+      return { success: false };
+    }
+  },
 };
 
 export default checklistService;

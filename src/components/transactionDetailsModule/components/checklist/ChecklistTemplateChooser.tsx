@@ -21,6 +21,15 @@
  * A template already on the transaction renders a disabled checkbox, marked
  * "Already added" (BACKLOG-3476: a template may be on a transaction once).
  * The checkbox is the checklist item row's own (`ChecklistCheckbox`).
+ *
+ * BACKLOG-3617: the hint under the list depends on whether this user may
+ * create templates — asked of the database (`checklistService.canEditTemplates`,
+ * the portal Checklists page's own check). ONE boolean, {@link canCreateChecklists},
+ * decides every "create your own → Checklists" line in both views, so
+ * BACKLOG-3618 (brokerage agents create their own) changes one place.
+ *   creator            → the create line, "Checklists" opens the portal page
+ *   cannot create      → no create line; nothing under the list
+ *   unknown            → today's "Templates come from…" under the list
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChecklistCheckbox } from "./ChecklistCheckbox";
@@ -79,8 +88,24 @@ export function batchResultMessage(attempted: number, notAdded: string[]): strin
   return `Added ${added} of ${attempted} checklists. Couldn't add ${quotedList(notAdded)} \u2014 try again.`;
 }
 
+/**
+ * BACKLOG-3617: the ONE role check. `canEditTemplates` is the database's answer
+ * (`null` = unknown). Every create line in the chooser reads this and nothing
+ * else — BACKLOG-3618 flips it.
+ */
+export function canCreateChecklists(canEditTemplates: boolean | null): boolean {
+  return canEditTemplates === true;
+}
+
 export function addButtonLabel(count: number): string {
   return count === 1 ? "Add checklist" : `Add ${count} checklists`;
+}
+
+/** BACKLOG-3617: the line shown when "Checklists" did not open. */
+export function portalOpenFailedMessage(portalAddress?: string): string {
+  return portalAddress
+    ? `Couldn't open the portal. Go to ${portalAddress} \u2192 Checklists.`
+    : "Couldn't open the portal Checklists page.";
 }
 
 export function ChecklistTemplateChooser({
@@ -98,6 +123,9 @@ export function ChecklistTemplateChooser({
   const [ticked, setTicked] = useState<ReadonlySet<string>>(new Set());
   const [adding, setAdding] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  // BACKLOG-3617: null = unknown (still asking, refused, offline).
+  const [canEditTemplates, setCanEditTemplates] = useState<boolean | null>(null);
+  const [linkError, setLinkError] = useState<string | null>(null);
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
@@ -121,6 +149,16 @@ export function ChecklistTemplateChooser({
         });
       }
     })();
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshKey, retryKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void checklistService.canEditTemplates().then((answer) => {
+      if (!cancelled) setCanEditTemplates(answer);
+    });
     return () => {
       cancelled = true;
     };
@@ -190,6 +228,56 @@ export function ChecklistTemplateChooser({
   }, [locked, toAdd, onAdd, onAllAdded, onSomeNotAdded]);
 
   const hasList = listing.status === "ready" && listing.templates.length > 0;
+  const listIsEmpty = listing.status === "ready" && listing.templates.length === 0;
+  const canCreate = canCreateChecklists(canEditTemplates);
+
+  const openPortal = async () => {
+    setLinkError(null);
+    const result = await checklistService.openTemplatesPortal();
+    if (!mountedRef.current) return;
+    if (!result.success) setLinkError(portalOpenFailedMessage(result.portalAddress));
+  };
+
+  const linkErrorLine = linkError ? (
+    <p className="mt-1 text-xs text-red-600" role="alert" data-testid="checklist-create-link-error">
+      {linkError}
+    </p>
+  ) : null;
+
+  const checklistsLink = (
+    <button
+      type="button"
+      onClick={() => void openPortal()}
+      className="font-medium text-blue-600 hover:underline"
+      data-testid="checklist-create-link"
+    >
+      Checklists
+    </button>
+  );
+
+  // "pick": the line under the title. An empty list has nothing to select from.
+  let pickHint: React.ReactNode = null;
+  if (canCreate) {
+    pickHint = listIsEmpty ? (
+      <>Need a checklist? Create your own &rarr; {checklistsLink}.</>
+    ) : (
+      <>Need a checklist? Select one from the list or create your own &rarr; {checklistsLink}.</>
+    );
+  } else if (!listIsEmpty) {
+    pickHint = <>Need a checklist? Select one from the list.</>;
+  }
+
+  // "add": the line under the list (or under the empty sentence).
+  let addHint: React.ReactNode = null;
+  if (canCreate) {
+    addHint = listIsEmpty ? (
+      <>Need a checklist? Create your own &rarr; {checklistsLink}.</>
+    ) : (
+      <>Need a different checklist? Create your own &rarr; {checklistsLink}.</>
+    );
+  } else if (canEditTemplates === null && hasList) {
+    addHint = <>Templates come from your organization&rsquo;s checklist settings.</>;
+  }
 
   return (
     <div className="text-center pt-12" data-testid="checklist-chooser">
@@ -198,8 +286,13 @@ export function ChecklistTemplateChooser({
       </svg>
       {mode === "pick" ? (
         <>
-          <p className="text-gray-600 mb-2">No checklist yet</p>
-          <p className="text-sm text-gray-500">Choose the templates to start this transaction&rsquo;s checklists.</p>
+          <p className="text-gray-600 mb-2" data-testid="checklist-chooser-title">No checklist added yet.</p>
+          {pickHint && (
+            <p className="text-sm text-gray-500" data-testid="checklist-chooser-hint">
+              {pickHint}
+            </p>
+          )}
+          {linkErrorLine}
         </>
       ) : (
         <>
@@ -232,6 +325,15 @@ export function ChecklistTemplateChooser({
         <p className="text-sm text-gray-500" data-testid="checklist-templates-empty">
           No checklist templates have been set up yet.
         </p>
+      )}
+
+      {mode === "add" && listIsEmpty && addHint && (
+        <>
+          <p className="mt-2 text-sm text-gray-500" data-testid="checklist-chooser-hint">
+            {addHint}
+          </p>
+          {linkErrorLine}
+        </>
       )}
 
       {listing.status === "ready" && listing.templates.length > 0 && (
@@ -275,7 +377,14 @@ export function ChecklistTemplateChooser({
               );
             })}
           </div>
-          <p className="mt-3 text-xs text-gray-400 text-left">Templates come from your organization&rsquo;s checklist settings.</p>
+          {mode === "add" && addHint && (
+            <>
+              <p className="mt-3 text-xs text-gray-400 text-left" data-testid="checklist-chooser-hint">
+                {addHint}
+              </p>
+              <div className="text-left">{linkErrorLine}</div>
+            </>
+          )}
           {listing.source === "cache" && (
             <p className="mt-1 text-xs text-gray-400 text-left" data-testid="checklist-templates-cached">
               Showing saved templates &mdash; couldn&rsquo;t connect just now.

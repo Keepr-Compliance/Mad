@@ -1,7 +1,8 @@
 /**
  * @jest-environment node
  *
- * BACKLOG-3475 C6 / C9 / C12 — the nine checklist channels, over the real
+ * BACKLOG-3475 C6 / C9 / C12 — the checklist channels (nine from 3475, two
+ * from BACKLOG-3617), over the real
  * `schema.sql` on a real SQLite engine.
  *
  * ===========================================================================
@@ -30,7 +31,7 @@
  * The SPLIT itself is asserted too, by execution rather than by prose: "the
  * gated and ungated sets, by execution" enumerates every registered
  * `checklists:` channel, invokes each one with the plan unreadable, and
- * partitions them by what they answer. Six refuse, three work. A tenth channel
+ * partitions them by what they answer. Seven refuse, four work. A twelfth channel
  * nobody classified, a gate dropped, or a gate added to `get` all red it —
  * which is what makes the module header's count something other than a
  * sentence to be trusted.
@@ -89,6 +90,8 @@ jest.mock("electron", () => ({
   },
   BrowserWindow: jest.fn(),
   app: { isPackaged: false, getPath: jest.fn(() => "/mock/user/data") },
+  // BACKLOG-3617: `checklists:open-templates-portal` opens the portal page.
+  shell: { openExternal: jest.fn().mockResolvedValue(undefined) },
 }));
 
 jest.mock("@sentry/electron/main", () => ({
@@ -508,11 +511,11 @@ describe("BACKLOG-3475 C9 — the gated and ungated sets, by execution", () => {
    * answer would be indistinguishable from a gated one by grep, and a channel
    * registered under a name nobody thought to search for would be invisible.
    *
-   * The enumeration comes from `registeredHandlers`, so a tenth channel that
+   * The enumeration comes from `registeredHandlers`, so a twelfth channel that
    * this list does not classify fails the first assertion instead of quietly
    * escaping the sweep.
    */
-  it("exactly six channels refuse when the plan cannot be read, and three answer", async () => {
+  it("exactly seven channels refuse when the plan cannot be read, and four answer", async () => {
     const checklistId = await seedChecklist();
     const itemId = itemIds()[0];
     const added = await invoke("checklists:add-link", {
@@ -538,11 +541,15 @@ describe("BACKLOG-3475 C9 — the gated and ungated sets, by execution", () => {
       ["checklists:set-item-note", { itemId, note: "signed 3 Mar" }],
       ["checklists:add-link", { itemId, kind: "email", targetIds: ["e-mine"] }],
       ["checklists:remove-link", { linkId }],
-      // The ungated three last, and `remove` after `get`: it clears the rows
+      // BACKLOG-3617: asks the cloud about the organization, so gated.
+      ["checklists:can-edit-templates", undefined],
+      // The ungated ones last, and `remove` after `get`: it clears the rows
       // `get` is asked to return.
       ["checklists:get", { transactionId: TRANSACTION }],
       ["checklists:remove", { transactionId: TRANSACTION, checklistId }],
       ["checklists:invalidate-templates", undefined],
+      // BACKLOG-3617: opens the portal page; reads and writes nothing.
+      ["checklists:open-templates-portal", undefined],
     ];
 
     // The sweep covers every channel this module registers — not a list
@@ -571,11 +578,13 @@ describe("BACKLOG-3475 C9 — the gated and ungated sets, by execution", () => {
       "checklists:set-item-note",
       "checklists:add-link",
       "checklists:remove-link",
+      "checklists:can-edit-templates",
     ]);
     expect(answered).toEqual([
       "checklists:get",
       "checklists:remove",
       "checklists:invalidate-templates",
+      "checklists:open-templates-portal",
     ]);
   });
 });
