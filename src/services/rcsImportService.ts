@@ -100,4 +100,14 @@ export const rcsImportService = {
     if (!bridge) return () => {};
     return bridge.onChatReceived(callback);
   },
+
+  /**
+   * BACKLOG-3657: the texts imported from Google Messages for Web were cleared
+   * (Settings > Android Messages > Force re-import). Returns an unsubscribe.
+   */
+  onDataCleared(callback: (event: { messagesDeleted: number }) => void): () => void {
+    const bridge = api();
+    if (!bridge || !bridge.onDataCleared) return () => {};
+    return bridge.onDataCleared(callback);
+  },
 };

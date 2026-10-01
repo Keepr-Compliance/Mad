@@ -48,4 +48,13 @@ export const rcsImportBridge = {
       ipcRenderer.removeListener("rcs-import:job-progress", handler);
     };
   },
+
+  /** BACKLOG-3657: Google Messages for Web texts were cleared (Force re-import). */
+  onDataCleared: (callback: (event: { messagesDeleted: number }) => void) => {
+    const handler = (_event: unknown, data: { messagesDeleted: number }) => callback(data);
+    ipcRenderer.on("rcs-import:data-cleared", handler);
+    return () => {
+      ipcRenderer.removeListener("rcs-import:data-cleared", handler);
+    };
+  },
 };

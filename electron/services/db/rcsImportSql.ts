@@ -96,3 +96,75 @@ export const RCS_BACKFILL_PARTICIPANT_KEY_SQL = sql`
       AND json_valid(metadata)
       AND COALESCE(json_extract(metadata, '$.participantKey'), '') != ?
   `;
+
+// ============================================
+// BACKLOG-3657: Force re-import clears Google Messages for Web texts.
+// Every statement is scoped to ONE user (user_id = ?). Delete order, as
+// reviewed for the one-off purge: attachments -> communications (per message,
+// then gmweb thread-level) -> messages -> transactions.message_count.
+// ignored_communications (the user's removals) are NOT touched.
+// ============================================
+
+/** Parameters: user id. Attachment files of the user's gmweb messages. */
+export const RCS_CLEAR_ATTACHMENT_PATHS_SQL = sql`
+    SELECT a.storage_path AS storagePath
+    FROM attachments a
+    WHERE a.message_id IN (
+      SELECT m.id FROM messages m WHERE m.user_id = ? AND m.external_id LIKE 'gmweb:%'
+    )
+  `;
+
+/**
+ * Parameters: user id, user id. Per transaction, the gmweb links that were
+ * COUNTED into message_count — non-reaction messages; reactions are linked
+ * without counting (rcsImportHandlers.linkWithoutCount).
+ */
+export const RCS_CLEAR_COUNTED_LINKS_SQL = sql`
+    SELECT c.transaction_id AS transactionId, COUNT(*) AS counted
+    FROM communications c
+    JOIN messages m ON m.id = c.message_id
+    WHERE m.user_id = ?
+      AND c.user_id = ?
+      AND m.external_id LIKE 'gmweb:%'
+      AND c.transaction_id IS NOT NULL
+      AND (m.associated_message_type IS NULL OR m.associated_message_type = 0)
+    GROUP BY c.transaction_id
+  `;
+
+/** Parameters: transaction id, user id. */
+export const RCS_CLEAR_GET_MESSAGE_COUNT_SQL = sql`
+    SELECT message_count AS messageCount FROM transactions WHERE id = ? AND user_id = ?
+  `;
+
+/** Parameters: user id. */
+export const RCS_CLEAR_DELETE_ATTACHMENTS_SQL = sql`
+    DELETE FROM attachments
+    WHERE message_id IN (
+      SELECT m.id FROM messages m WHERE m.user_id = ? AND m.external_id LIKE 'gmweb:%'
+    )
+  `;
+
+/** Parameters: user id, user id. Per-message links, then gmweb thread-level links. */
+export const RCS_CLEAR_DELETE_MESSAGE_LINKS_SQL = sql`
+    DELETE FROM communications
+    WHERE user_id = ?
+      AND message_id IN (
+        SELECT m.id FROM messages m WHERE m.user_id = ? AND m.external_id LIKE 'gmweb:%'
+      )
+  `;
+
+/** Parameters: user id. */
+export const RCS_CLEAR_DELETE_THREAD_LINKS_SQL = sql`
+    DELETE FROM communications
+    WHERE user_id = ? AND message_id IS NULL AND thread_id LIKE 'gmweb-chat-%'
+  `;
+
+/** Parameters: user id. Text and reaction rows. */
+export const RCS_CLEAR_DELETE_MESSAGES_SQL = sql`
+    DELETE FROM messages WHERE user_id = ? AND external_id LIKE 'gmweb:%'
+  `;
+
+/** Parameters: message count, transaction id, user id. */
+export const RCS_CLEAR_SET_MESSAGE_COUNT_SQL = sql`
+    UPDATE transactions SET message_count = ? WHERE id = ? AND user_id = ?
+  `;

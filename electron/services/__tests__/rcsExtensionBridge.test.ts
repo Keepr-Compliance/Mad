@@ -131,6 +131,55 @@ describe("RcsExtensionBridge", () => {
     });
   });
 
+  // BACKLOG-3657: while Force re-import clears the Google Messages for Web
+  // texts, nothing may be written. Mutations that turn these red: no 503 while
+  // paused; pauseWrites resolving before in-progress writes finish; no job cancel.
+  describe("BACKLOG-3657: writes paused while the texts are cleared", () => {
+    it("refuses new chats with 503, waits for the chat already being written, and accepts chats again after resume", async () => {
+      bridge.openSession("tx-1");
+      let release: () => void = () => {};
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      importChat.mockImplementationOnce(async (chat: RcsIncomingChat) => {
+        await gate;
+        return { received: chat.messages.length, stored: 2, alreadyPresent: 0, linked: 2, reactions: 0, reactionsStored: 0 };
+      });
+      const first = request(port, "POST", "/chat", EXT, CHAT_JSON);
+      await new Promise((r) => setTimeout(r, 50));
+      expect(importChat).toHaveBeenCalledTimes(1);
+
+      let paused = false;
+      const pausing = bridge.pauseWrites().then(() => {
+        paused = true;
+      });
+      const refused = await request(port, "POST", "/chat", EXT, CHAT_JSON);
+      expect(refused.status).toBe(503);
+      expect(refused.body.error).toBe("busy");
+      expect(importChat).toHaveBeenCalledTimes(1);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(paused).toBe(false); // the first chat is still being written
+
+      release();
+      expect((await first).status).toBe(200);
+      await pausing;
+      expect(paused).toBe(true);
+
+      bridge.resumeWrites();
+      expect((await request(port, "POST", "/chat", EXT, CHAT_JSON)).status).toBe(200);
+    });
+
+    it("pausing cancels the running Sync job", async () => {
+      const job = bridge.createJob("tx-1", [{ contactId: "c-1", displayName: "Test Contact A", phonesE164: ["+15555550199"] }]);
+      await bridge.pauseWrites();
+      expect(bridge.getJob()?.state).toBe("cancelled");
+      expect(bridge.writesArePaused).toBe(true);
+      bridge.resumeWrites();
+      expect(bridge.writesArePaused).toBe(false);
+      expect(job.jobId).toBeTruthy();
+    });
+  });
+
   describe("session (control 3)", () => {
     it("answers 409 with an explicit message when no session is open", async () => {
       const reply = await request(port, "POST", "/chat", {

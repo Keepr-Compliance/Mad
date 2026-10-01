@@ -10,6 +10,14 @@ import {
   RCS_INSERT_REACTION_SQL,
   RCS_MARK_MESSAGE_HAS_ATTACHMENTS_SQL,
   RCS_BACKFILL_PARTICIPANT_KEY_SQL,
+  RCS_CLEAR_ATTACHMENT_PATHS_SQL,
+  RCS_CLEAR_COUNTED_LINKS_SQL,
+  RCS_CLEAR_DELETE_ATTACHMENTS_SQL,
+  RCS_CLEAR_DELETE_MESSAGE_LINKS_SQL,
+  RCS_CLEAR_DELETE_MESSAGES_SQL,
+  RCS_CLEAR_DELETE_THREAD_LINKS_SQL,
+  RCS_CLEAR_GET_MESSAGE_COUNT_SQL,
+  RCS_CLEAR_SET_MESSAGE_COUNT_SQL,
   RCS_REMOVALS_SQL,
   RCS_REMOVED_PARTICIPANT_KEYS_SQL,
 } from "./rcsImportSql";
@@ -230,6 +238,36 @@ export function getRcsRemovals(
     if (typeof k.participantKey === "string" && k.participantKey.length > 0) participantKeys.add(k.participantKey);
   }
   return { threadIds, messageIds, participantKeys };
+}
+
+/**
+ * BACKLOG-3657: the database side of clearing Google Messages for Web texts
+ * (see rcsClearService.ts). Every statement is scoped to the user.
+ */
+export function rcsClearDbOps(): import("../rcsClearService").RcsClearDbOps {
+  const db = ensureDb();
+  return {
+    inTransaction: <T>(fn: () => T): T => db.transaction(fn)(),
+    attachmentPaths: (userId) =>
+      (db.prepare(RCS_CLEAR_ATTACHMENT_PATHS_SQL).all(userId) as { storagePath: string | null }[])
+        .map((r) => r.storagePath)
+        .filter((p): p is string => typeof p === "string" && p.length > 0),
+    countedLinks: (userId) =>
+      db.prepare(RCS_CLEAR_COUNTED_LINKS_SQL).all(userId, userId) as { transactionId: string; counted: number }[],
+    messageCount: (userId, transactionId) => {
+      const row = db.prepare(RCS_CLEAR_GET_MESSAGE_COUNT_SQL).get(transactionId, userId) as
+        | { messageCount: number | null }
+        | undefined;
+      return row ? row.messageCount ?? 0 : null;
+    },
+    deleteAttachments: (userId) => db.prepare(RCS_CLEAR_DELETE_ATTACHMENTS_SQL).run(userId).changes,
+    deleteMessageLinks: (userId) => db.prepare(RCS_CLEAR_DELETE_MESSAGE_LINKS_SQL).run(userId, userId).changes,
+    deleteThreadLinks: (userId) => db.prepare(RCS_CLEAR_DELETE_THREAD_LINKS_SQL).run(userId).changes,
+    deleteMessages: (userId) => db.prepare(RCS_CLEAR_DELETE_MESSAGES_SQL).run(userId).changes,
+    setMessageCount: (userId, transactionId, count) => {
+      db.prepare(RCS_CLEAR_SET_MESSAGE_COUNT_SQL).run(count, transactionId, userId);
+    },
+  };
 }
 
 /** BACKLOG-3642: write a thread's participant key into its existing rows. Returns rows changed. */

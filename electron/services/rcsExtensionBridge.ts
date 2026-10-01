@@ -73,6 +73,8 @@ export const RCS_BRIDGE_PORT = 38619;
 export const RCS_EXTENSION_ID = "nlfohmjehedijceeelokclkglmjnlonj";
 export const RCS_EXTENSION_ORIGIN = `chrome-extension://${RCS_EXTENSION_ID}`;
 export const RCS_NO_SESSION_MESSAGE = "Open a transaction in Keepr and click Import first.";
+/** BACKLOG-3657: the reply while Keepr clears the Google Messages for Web texts. */
+export const RCS_CLEARING_MESSAGE = "Keepr is clearing imported texts. Try again in a moment.";
 
 const MAX_BODY_BYTES = 10 * 1024 * 1024;
 /** One image as base64 (4/3 of the raw cap) plus JSON framing. */
@@ -217,6 +219,10 @@ export class RcsExtensionBridge {
   private readonly logger: RcsBridgeLogger;
   private readonly jobs: RcsJobRegistry;
   private unclaimedTimer: NodeJS.Timeout | null = null;
+  /** BACKLOG-3657: see pauseWrites. */
+  private writesPaused = false;
+  private inFlightWrites = 0;
+  private drainWaiters: Array<() => void> = [];
 
   constructor(private readonly options: RcsExtensionBridgeOptions) {
     this.allowedOrigin = options.allowedOrigin ?? RCS_EXTENSION_ORIGIN;
@@ -260,6 +266,34 @@ export class RcsExtensionBridge {
   getJob(): RcsJobSnapshot | null {
     const job = this.jobs.current();
     return job ? job.snapshot() : null;
+  }
+
+  /**
+   * BACKLOG-3657: stop every write before Keepr clears the Google Messages for
+   * Web texts. Refuses new chats/images (manual session or job) with 503,
+   * cancels the running job, then resolves once the writes already in progress
+   * have finished — so nothing is written between the cancel and the delete.
+   * Pair with {@link resumeWrites} in a `finally`.
+   */
+  async pauseWrites(): Promise<void> {
+    this.writesPaused = true;
+    this.cancelJob();
+    if (this.inFlightWrites === 0) return;
+    await new Promise<void>((resolve) => this.drainWaiters.push(resolve));
+  }
+
+  resumeWrites(): void {
+    this.writesPaused = false;
+  }
+
+  get writesArePaused(): boolean {
+    return this.writesPaused;
+  }
+
+  private releaseDrainWaiters(): void {
+    const waiters = this.drainWaiters;
+    this.drainWaiters = [];
+    for (const w of waiters) w();
   }
 
   private emitJob(snapshot: RcsJobSnapshot): void {
@@ -393,6 +427,38 @@ export class RcsExtensionBridge {
         return;
       }
 
+      // BACKLOG-3657: while Keepr clears the Google Messages for Web texts, no
+      // chat or image may be written; writes already running are counted so
+      // the clear can wait for them (no write lands between cancel and delete).
+      const jobMatch = JOB_ROUTE.exec(path);
+      const isWrite = path === "/chat" || (!!jobMatch && (jobMatch[2] === "chat" || jobMatch[2] === "attachment"));
+      if (isWrite && this.writesPaused) {
+        sendJson(res, 503, { error: "busy", message: RCS_CLEARING_MESSAGE });
+        return;
+      }
+      if (isWrite) this.inFlightWrites += 1;
+      try {
+        await this.route(req, res, path, jobMatch);
+      } finally {
+        if (isWrite) {
+          this.inFlightWrites -= 1;
+          if (this.inFlightWrites === 0) this.releaseDrainWaiters();
+        }
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.error(`[RcsBridge] Request failed: ${message}`);
+      if (!res.headersSent) sendJson(res, 500, { error: "internal", message: "Keepr could not save this chat." });
+    }
+  }
+
+  private async route(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    path: string,
+    jobRoute: RegExpExecArray | null,
+  ): Promise<void> {
+    {
       if (path === "/chat") {
         await this.handleChat(req, res);
         return;
@@ -408,17 +474,12 @@ export class RcsExtensionBridge {
         return;
       }
 
-      const jobRoute = JOB_ROUTE.exec(path);
       if (jobRoute) {
         await this.handleJob(req, res, jobRoute[1], jobRoute[2] ?? null);
         return;
       }
 
       sendJson(res, 404, { error: "not_found" });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.logger.error(`[RcsBridge] Request failed: ${message}`);
-      if (!res.headersSent) sendJson(res, 500, { error: "internal", message: "Keepr could not save this chat." });
     }
   }
 

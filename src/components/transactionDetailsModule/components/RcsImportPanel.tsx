@@ -177,12 +177,18 @@ export function useRcsSyncJob(
       lastCountRef.current = count;
     };
     const unsubscribe = rcsImportService.onJobProgress(accept);
+    // BACKLOG-3657: Force re-import cleared the imported texts: refetch this
+    // transaction's messages so the removed ones disappear at once.
+    const unsubscribeCleared = rcsImportService.onDataCleared(() => {
+      if (alive) void onImportedRef.current?.();
+    });
     void rcsImportService.getJob().then((r) => {
       if (r.success) accept(r.data ?? null);
     });
     return () => {
       alive = false;
       unsubscribe();
+      unsubscribeCleared();
     };
   }, [transactionId]);
 

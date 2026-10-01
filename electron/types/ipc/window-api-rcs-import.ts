@@ -96,4 +96,6 @@ export interface WindowApiRcsImport {
   getJob: () => Promise<RcsImportJobResult>;
   /** BACKLOG-3620: every job change. Returns an unsubscribe. */
   onJobProgress: (callback: (job: RcsJobInfo) => void) => () => void;
+  /** BACKLOG-3657: Google Messages for Web texts were cleared. Returns an unsubscribe. */
+  onDataCleared: (callback: (event: { messagesDeleted: number }) => void) => () => void;
 }

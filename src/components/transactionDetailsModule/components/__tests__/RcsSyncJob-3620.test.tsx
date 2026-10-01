@@ -14,6 +14,7 @@ import type { RcsJobInfo } from "../../../../services/rcsImportService";
 
 type JobListener = (job: RcsJobInfo) => void;
 let jobListener: JobListener | null = null;
+let clearedListener: ((e: { messagesDeleted: number }) => void) | null = null;
 
 const mockStartJob = jest.fn();
 const mockCancelJob = jest.fn();
@@ -32,6 +33,12 @@ jest.mock("../../../../services/rcsImportService", () => ({
       jobListener = cb;
       return () => {
         jobListener = null;
+      };
+    },
+    onDataCleared: (cb: (e: { messagesDeleted: number }) => void) => {
+      clearedListener = cb;
+      return () => {
+        clearedListener = null;
       };
     },
   },
@@ -78,6 +85,17 @@ describe("Sync job (BACKLOG-3620)", () => {
       jobListener?.(job({ state: "running", stage: "Checked 1 of 2 chats", progress: { ...job().progress, candidates: 2, checked: 1, imported: 1, messages: 5, images: 1 } }));
     });
     expect(screen.getByTestId("rcs-sync-job-status")).toHaveTextContent("imported 1 chat, 5 messages, 1 images");
+    expect(onImported).toHaveBeenCalledTimes(1);
+  });
+
+  // BACKLOG-3657. Mutation: drop the onDataCleared subscription → red.
+  it("refetches the transaction's messages when Force re-import cleared the imported texts", async () => {
+    const onImported = jest.fn();
+    render(<Harness transactionId="tx-1" onImported={onImported} />);
+    await waitFor(() => expect(clearedListener).not.toBeNull());
+    act(() => {
+      clearedListener?.({ messagesDeleted: 50 });
+    });
     expect(onImported).toHaveBeenCalledTimes(1);
   });
 

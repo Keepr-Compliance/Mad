@@ -35,6 +35,7 @@ import { createCommunicationReference } from "../services/messageMatchingService
 import type { RcsJobContact, RcsJobSnapshot } from "../services/rcsImportJob";
 import { storeImage, type RcsMediaDeps } from "../services/rcsImportMedia";
 import { importChat, type RcsImportDeps } from "../services/rcsImportStore";
+import { clearGoogleMessagesWebData, runWithWritesPaused, type RcsClearResult } from "../services/rcsClearService";
 import transactionService from "../services/transactionService";
 import { bringAppToFront } from "../utils/bringAppToFront";
 import { wrapHandler } from "../utils/wrapHandler";
@@ -50,6 +51,8 @@ const LOG_TAG = "RcsImport";
 export const RCS_CHAT_RECEIVED_CHANNEL = "rcs-import:chat-received";
 export const RCS_JOB_PROGRESS_CHANNEL = "rcs-import:job-progress";
 export const RCS_MESSAGES_WEB_URL = "https://messages.google.com/web/conversations";
+/** BACKLOG-3657: Google Messages for Web texts were cleared; open views refetch. */
+export const RCS_DATA_CLEARED_CHANNEL = "rcs-import:data-cleared";
 
 const deps: RcsImportDeps = {
   getTransactionUserId: async (transactionId) => {
@@ -154,6 +157,37 @@ function argsObject(args: unknown): Record<string, unknown> {
   return args && typeof args === "object" ? (args as Record<string, unknown>) : {};
 }
 
+/**
+ * BACKLOG-3657: clear every Google Messages for Web text of the user (Force
+ * re-import). Writes are paused first — new chats/images refused, the running
+ * Sync cancelled, writes in progress drained — so nothing lands between the
+ * cancel and the delete; they resume afterwards, whatever happens. Open
+ * transaction views are told to refetch.
+ */
+export async function clearGoogleMessagesWebTexts(userId: string): Promise<RcsClearResult> {
+  return runWithWritesPaused(bridge, () => {
+    const result = clearGoogleMessagesWebData(
+      userId,
+      databaseService.rcsClearDbOps(),
+      {
+        attachmentsRoot: mediaDeps.attachmentsDir(),
+        resolve: (p) => (path.isAbsolute(p) ? p : path.join(app.getPath("userData"), p)),
+        deleteFile: (abs) => {
+          try {
+            fs.unlinkSync(abs);
+            return true;
+          } catch {
+            return false;
+          }
+        },
+      },
+      (m) => void logService.info(m, LOG_TAG),
+    );
+    hostWindows.broadcast(RCS_DATA_CLEARED_CHANNEL, { messagesDeleted: result.messagesDeleted });
+    return result;
+  });
+}
+
 export function registerRcsImportHandlers(): void {
   ipcMain.handle(
     "rcs-import:get-status",
@@ -179,6 +213,9 @@ export function registerRcsImportHandlers(): void {
       const transactionId = requireString(argsObject(args).transactionId, "transactionId");
       const tx = await databaseService.getTransactionById(transactionId);
       if (!tx) return { success: false, error: "Transaction not found" };
+      if (bridge.writesArePaused) {
+        return { success: false, error: "Keepr is clearing imported texts. Try Sync again in a moment." };
+      }
       if (bridge.getStatus().bridge !== "listening") {
         const s = bridge.getStatus();
         return { success: false, error: `Import bridge unavailable${s.reason ? `: ${s.reason}` : ""}.` };

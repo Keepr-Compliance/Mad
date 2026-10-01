@@ -2434,6 +2434,11 @@ class DatabaseService implements IDatabaseService {
     return syncDb.backfillRcsParticipantKey(userId, threadId, key);
   }
 
+  // BACKLOG-3657: database operations for clearing Google Messages for Web texts
+  rcsClearDbOps() {
+    return syncDb.rcsClearDbOps();
+  }
+
   insertReactionRows(rows: Parameters<typeof syncDb.insertReactionRows>[0]) {
     return syncDb.insertReactionRows(rows);
   }

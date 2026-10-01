@@ -33,9 +33,13 @@ export interface WindowApiLocalSync {
    */
   checkFirewallAllowed: () => Promise<{ allowed: boolean; checked: boolean }>;
 
-  /** Clear all Android-synced messages and contacts from local DB (BACKLOG-1468) */
+  /**
+   * Clear all Android-synced messages and contacts from local DB (BACKLOG-1468),
+   * and the texts imported from Google Messages for Web (BACKLOG-3657).
+   */
   clearAndroidData: (options: { userId: string }) => Promise<{
     messagesDeleted: number;
     contactsDeleted: number;
+    gmwebMessagesDeleted: number;
   }>;
 }
