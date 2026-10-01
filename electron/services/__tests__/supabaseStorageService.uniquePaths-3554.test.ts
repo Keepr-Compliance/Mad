@@ -55,7 +55,7 @@ import {
 type UploadAnswer =
   | { kind: "store" }
   | { kind: "lose-answer" } // stores the bytes, then the client sees a transport error
-  | { kind: "error"; error: Record<string, unknown> };
+  | { kind: "error"; error: unknown };
 
 const objects = new Map<string, Buffer>();
 const uploadCalls: string[] = [];
