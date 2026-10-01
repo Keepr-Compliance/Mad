@@ -11,7 +11,7 @@ It is not in CI: CI has no database. The CI tripwire is
 `broker-portal/__tests__/migrations/agent-checklists-3618.test.ts`.
 No file here has a `.test.` or `.spec.` infix.
 
-**Nothing has been applied to production, and nothing here can reach it.**
+**The migration was applied to production as ledger version `20261001054306`. Nothing here can reach production.**
 
 ## Running it
 
