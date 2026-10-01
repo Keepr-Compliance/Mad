@@ -773,6 +773,16 @@ CREATE TABLE IF NOT EXISTS rcs_cache_staging_images (
   PRIMARY KEY (job_id, chat_hash, msg_id, idx)
 );
 
+-- BACKLOG-3658 (SR S2): files a cache commit moves into message-attachments,
+-- journaled before the move and cleared once the commit is done. A
+-- row left behind (a crash) names a file the next sweep deletes when no
+-- attachments row uses it.
+CREATE TABLE IF NOT EXISTS rcs_cache_placed_files (
+  path TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL,
+  placed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS message_thread_names (
   user_id TEXT NOT NULL,
   thread_id TEXT NOT NULL,               -- Matches messages.thread_id ("macos-chat-<chat ROWID>")

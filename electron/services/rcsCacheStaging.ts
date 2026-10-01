@@ -81,8 +81,14 @@ export interface RcsStagingDbOps {
   images(jobId: string): StagedImageRow[];
   deleteJob(jobId: string): void;
   deleteAll(): void;
-  /** Every job id with staging rows. */
+  /** Every job id with staging rows or journaled files. */
   jobIds(): string[];
+  /** SR S2: a file the commit is about to move into message-attachments. */
+  journalPlaced(jobId: string, filePath: string): void;
+  /** SR S2: the job's journal is done with (after the commit, or a failure). */
+  journalClear(jobId: string): void;
+  journalRows(): Array<{ jobId: string; path: string }>;
+  journalDelete(filePath: string): void;
   /** Does any attachments row (any user, any source) still point to this file? */
   fileStillReferenced(filePath: string): boolean;
 }
@@ -331,6 +337,10 @@ export class RcsCacheStaging {
         const ext = rcsImageExt(img.mimeType);
         const target = path.join(this.files.attachmentsDir, `${img.sha256}${ext}`);
         if (!(await this.files.exists(target))) {
+          // SR S2: journaled BEFORE the move. A crash before the journal is
+          // cleared leaves the row; the next sweep deletes the file only if no
+          // attachments row references it (a committed one is kept).
+          this.db.journalPlaced(jobId, target);
           await this.files.move(img.tempPath, target);
           placed.push(target);
         }
@@ -403,8 +413,12 @@ export class RcsCacheStaging {
       for (const p of placed) {
         if (!this.db.fileStillReferenced(p)) await this.files.unlink(p);
       }
-      this.committing.delete(jobId);
-      await this.dropStaging(jobId);
+      try {
+        this.db.journalClear(jobId);
+      } finally {
+        this.committing.delete(jobId);
+        await this.dropStaging(jobId);
+      }
     }
   }
 
@@ -416,9 +430,12 @@ export class RcsCacheStaging {
 
   /**
    * Every job's staging (stale rows when a new job starts; app quit) — but
-   * never a job whose commit is running (SR B1).
+   * never a job whose commit is running (SR B1). Also finishes the journal of
+   * a commit that crashed (SR S2): a journaled file no attachments row uses
+   * is deleted.
    */
   async discardAll(): Promise<void> {
+    await this.recoverPlacedFiles();
     if (this.committing.size === 0) {
       this.db.deleteAll();
       await this.files.removeDir(this.files.stagingRoot);
@@ -433,6 +450,19 @@ export class RcsCacheStaging {
     }
   }
 
+  /** SR S2: files a crashed commit moved into place but never recorded. */
+  async recoverPlacedFiles(): Promise<number> {
+    let removed = 0;
+    for (const row of this.db.journalRows()) {
+      if (this.committing.has(row.jobId)) continue;
+      if (!this.db.fileStillReferenced(row.path)) {
+        await this.files.unlink(row.path);
+        removed += 1;
+      }
+      this.db.journalDelete(row.path);
+    }
+    return removed;
+  }
 
   private async dropStaging(jobId: string): Promise<void> {
     try {

@@ -29,6 +29,10 @@ import {
   RCS_STAGING_DELETE_JOB_SQL,
   RCS_STAGING_DELETE_ALL_SQL,
   RCS_STAGING_JOB_IDS_SQL,
+  RCS_PLACED_FILE_PUT_SQL,
+  RCS_PLACED_FILE_CLEAR_JOB_SQL,
+  RCS_PLACED_FILE_ROWS_SQL,
+  RCS_PLACED_FILE_DELETE_SQL,
   RCS_CLEAR_DELETE_ATTACHMENTS_SQL,
   RCS_CLEAR_DELETE_MESSAGE_LINKS_SQL,
   RCS_CLEAR_DELETE_MESSAGES_SQL,
@@ -405,6 +409,16 @@ export function rcsStagingDbOps(): import("../rcsCacheStaging").RcsStagingDbOps 
       })();
     },
     jobIds: () => (db.prepare(RCS_STAGING_JOB_IDS_SQL).all() as Array<{ jobId: string }>).map((r) => r.jobId),
+    journalPlaced: (jobId, filePath) => {
+      db.prepare(RCS_PLACED_FILE_PUT_SQL).run(filePath, jobId);
+    },
+    journalClear: (jobId) => {
+      db.prepare(RCS_PLACED_FILE_CLEAR_JOB_SQL).run(jobId);
+    },
+    journalRows: () => db.prepare(RCS_PLACED_FILE_ROWS_SQL).all() as Array<{ jobId: string; path: string }>,
+    journalDelete: (filePath) => {
+      db.prepare(RCS_PLACED_FILE_DELETE_SQL).run(filePath);
+    },
     fileStillReferenced: (filePath) => attachmentFileReferenced(filePath),
   };
 }

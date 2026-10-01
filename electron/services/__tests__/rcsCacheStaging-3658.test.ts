@@ -20,6 +20,9 @@
  *   A11 schema.sql not re-runnable (IF NOT EXISTS)               → "schema.sql runs twice"
  *   B1a a sweep during a commit deletes that commit's staging     → "a sweep never touches a commit in progress"
  *   B1b a failed commit unlinks a file another row now uses       → "a failed commit keeps a file another row now uses"
+ *   S2a files moved without a journal row first                   → "journaled before the move"
+ *   S2b the journal not cleared after the commit                  → "journaled before the move"
+ *   S2c a crashed commit's files never recovered                  → "a crashed commit's files are recovered"
  */
 
 import * as nodePath from "path";
@@ -354,6 +357,36 @@ describe("atomic: all or nothing", () => {
     const failing: RcsCommitWriter = { ...writer, storeChat: () => { throw new Error("disk I/O error"); } };
     await expect(staging.commit(JOB, USER, ALL, failing)).rejects.toThrow("disk I/O error");
     expect(listFiles(files.attachmentsDir)).toHaveLength(1);
+  });
+
+  it("journaled before the move; the journal is cleared with the commit (S2a, S2b)", async () => {
+    staging.stageChat(JOB, USER, chat("conv-a", [msg("a1", "2026-09-20T10:00:00.000Z")]), peopleA, hashA);
+    await staging.stageImage(JOB, { conversationId: "conv-a", msgId: "a1", index: 0, mimeType: "image/png", base64: PNG }, hashA);
+    const journaledAtMove: number[] = [];
+    const realMove = files.move;
+    files.move = async (from, to) => {
+      journaledAtMove.push(count("SELECT COUNT(*) AS n FROM rcs_cache_placed_files WHERE path = ?", to));
+      await realMove(from, to);
+    };
+    staging = new RcsCacheStaging(rcsStagingDbOps(), files);
+    await staging.commit(JOB, USER, ALL, writer);
+    expect(journaledAtMove).toEqual([1]);
+    expect(count("SELECT COUNT(*) AS n FROM rcs_cache_placed_files")).toBe(0);
+  });
+
+  it("a crashed commit's files are recovered: unreferenced deleted, referenced kept (S2c)", async () => {
+    fs.mkdirSync(files.attachmentsDir, { recursive: true });
+    const orphan = nodePath.join(files.attachmentsDir, "aaaa.png");
+    const used = nodePath.join(files.attachmentsDir, "bbbb.png");
+    fs.writeFileSync(orphan, "x");
+    fs.writeFileSync(used, "y");
+    db.prepare("INSERT INTO rcs_cache_placed_files (path, job_id) VALUES (?, 'crashed'), (?, 'crashed')").run(orphan, used);
+    db.prepare("INSERT INTO messages (id, user_id, channel, external_id, direction, sent_at) VALUES ('m-ip', ?, 'sms', 'ip-1', 'inbound', '2026-09-01T00:00:00Z')").run(USER);
+    db.prepare("INSERT INTO attachments (id, message_id, filename, storage_path) VALUES ('att-ip', 'm-ip', 'IMG.png', ?)").run(used);
+    await staging.discardAll(); // the next Sync's sweep
+    expect(fs.existsSync(orphan)).toBe(false);
+    expect(fs.existsSync(used)).toBe(true);
+    expect(count("SELECT COUNT(*) AS n FROM rcs_cache_placed_files")).toBe(0);
   });
 
   it("schema.sql runs twice (CREATE ... IF NOT EXISTS) (A11)", () => {

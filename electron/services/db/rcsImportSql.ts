@@ -324,12 +324,27 @@ export const RCS_STAGING_DELETE_JOB_SQL = [
   sql`DELETE FROM rcs_cache_staging_chats WHERE job_id = ?`,
 ] as const;
 
-/** No parameters: every job id with staging rows. */
+/** No parameters: every job id with staging rows or journaled files. */
 export const RCS_STAGING_JOB_IDS_SQL = sql`
     SELECT job_id AS jobId FROM rcs_cache_staging_chats
     UNION SELECT job_id FROM rcs_cache_staging_messages
     UNION SELECT job_id FROM rcs_cache_staging_images
+    UNION SELECT job_id FROM rcs_cache_placed_files
   `;
+
+/** Parameters: path, job id. SR S2: journal a file before the commit moves it into place. */
+export const RCS_PLACED_FILE_PUT_SQL = sql`
+    INSERT OR REPLACE INTO rcs_cache_placed_files (path, job_id) VALUES (?, ?)
+  `;
+
+/** Parameters: job id. */
+export const RCS_PLACED_FILE_CLEAR_JOB_SQL = sql`DELETE FROM rcs_cache_placed_files WHERE job_id = ?`;
+
+/** No parameters. */
+export const RCS_PLACED_FILE_ROWS_SQL = sql`SELECT job_id AS jobId, path FROM rcs_cache_placed_files`;
+
+/** Parameters: path. */
+export const RCS_PLACED_FILE_DELETE_SQL = sql`DELETE FROM rcs_cache_placed_files WHERE path = ?`;
 
 /** No parameters: every job (stale rows when a new cache job starts, or at quit). */
 export const RCS_STAGING_DELETE_ALL_SQL = [
