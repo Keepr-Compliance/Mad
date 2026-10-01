@@ -235,31 +235,48 @@ export function checklistsPortalUrl(
 }
 
 /**
- * BACKLOG-3617: `can_edit_checklist_templates(p_org_id)` — the function the
- * portal Checklists page gate (`broker-portal/lib/checklist-access.ts`) and the
- * template RLS use. Nothing about roles is copied into the desktop.
- * Returns null for every answer that is not a literal boolean.
+ * One boolean RPC about this organization; null for every answer that is not a
+ * literal boolean (an error, a throw, no session, a missing function).
  */
-async function readCanEditTemplates(orgId: string): Promise<boolean | null> {
+async function readBooleanRpc(
+  fn: "can_edit_checklist_templates" | "can_create_own_checklist_templates",
+  orgId: string,
+): Promise<boolean | null> {
   try {
     const session = await supabaseService.getAuthSession();
     if (!session) return null;
-    const { data, error } = await supabaseService
-      .getClient()
-      .rpc("can_edit_checklist_templates", { p_org_id: orgId });
+    const { data, error } = await supabaseService.getClient().rpc(fn, { p_org_id: orgId });
     if (error) {
-      logService.warn("[Checklists] can_edit_checklist_templates failed", "Checklists", {
-        code: error.code,
-      });
+      logService.warn(`[Checklists] ${fn} failed`, "Checklists", { code: error.code });
       return null;
     }
     return typeof data === "boolean" ? data : null;
   } catch (error) {
-    logService.warn("[Checklists] can_edit_checklist_templates threw", "Checklists", {
+    logService.warn(`[Checklists] ${fn} threw`, "Checklists", {
       error: error instanceof Error ? error.message : "Unknown error",
     });
     return null;
   }
+}
+
+/**
+ * May this user create checklists on the portal Checklists page?
+ *
+ * BACKLOG-3617 asked `can_edit_checklist_templates` (brokerage templates:
+ * broker, admin, solo owner). BACKLOG-3618 lets every member on a plan with
+ * checklists make their OWN, asked of `can_create_own_checklist_templates`.
+ * Asked in the portal page gate's own order (`broker-portal/lib/checklist-
+ * access.ts`): `can_edit` first; only a `false` goes on to `can_create_own`.
+ *   - an editor never depends on the new function;
+ *   - a database without it (3618 not applied, or rolled back) answers exactly
+ *     as before 3618 — the new function's failure falls back to `false`.
+ * Nothing about roles is copied into the desktop. Null = unknown.
+ */
+async function readCanEditTemplates(orgId: string): Promise<boolean | null> {
+  const canEdit = await readBooleanRpc("can_edit_checklist_templates", orgId);
+  if (canEdit !== false) return canEdit;
+  const canCreateOwn = await readBooleanRpc("can_create_own_checklist_templates", orgId);
+  return canCreateOwn === true;
 }
 
 function parseArgs<T>(

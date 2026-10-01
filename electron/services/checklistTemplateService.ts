@@ -2,8 +2,10 @@
  * Broker checklist templates, read from the cloud — BACKLOG-3475.
  *
  * Modelled on `featureGateService`: a 5-minute memory cache, a 7-day disk cache
- * for offline use, both keyed by organization, and an `invalidate()` the
- * renderer can call after the broker edits a template in the portal.
+ * for offline use, both keyed by organization AND user (BACKLOG-3618: a
+ * listing holds the user's own templates), and an `invalidate()` the renderer
+ * can call after the broker edits a template in the portal, also run on every
+ * sign-out.
  *
  * ## What is allowed to fail open here, and what is not
  *
@@ -69,10 +71,41 @@ const TEMPLATE_SELECT =
   "id,name,description,sort_order,updated_at," +
   "checklist_template_items(id,title,description,is_required,expected_document_type,sort_order)";
 
+/**
+ * BACKLOG-3618: the same read plus the two columns that say whose template it
+ * is and whether it is sent with submissions.
+ */
+const TEMPLATE_SELECT_3618 =
+  "id,name,description,sort_order,updated_at,owner_user_id,include_in_submission," +
+  "checklist_template_items(id,title,description,is_required,expected_document_type,sort_order)";
+
+/**
+ * PostgREST's answer when a selected or filtered column does not exist —
+ * captured from production on 2026-09-30, before the 3618 migration was
+ * applied: HTTP 400, `{"code":"42703","details":null,"hint":null,"message":
+ * "column checklist_templates.owner_user_id does not exist"}`. A database
+ * without the 3618 columns (not yet applied, or rolled back) answers exactly
+ * this, and ONLY this code sends the read back to {@link TEMPLATE_SELECT}.
+ */
+const UNDEFINED_COLUMN_CODE = "42703";
+
+/**
+ * The user id goes into a PostgREST filter string, so it must be a plain
+ * token. A Supabase user id is a UUID; anything with filter syntax in it is
+ * refused rather than escaped.
+ */
+const FILTER_SAFE_ID = /^[A-Za-z0-9-]+$/;
+
 interface TemplateCache {
   templates: ChecklistTemplate[];
   fetchedAt: number;
   orgId: string;
+  /**
+   * BACKLOG-3618: whose listing this is. A listing now holds the user's own
+   * templates, so it belongs to one person, not to the organization. A file
+   * written before 3618 has no `userId` and is refused.
+   */
+  userId: string;
 }
 
 function toItem(row: {
@@ -116,16 +149,23 @@ class ChecklistTemplateService {
    *   how two parts of an app come to disagree about who the user is.
    */
   async listTemplates(orgId: string): Promise<ChecklistTemplateListing | null> {
-    if (this.isCacheFresh(orgId)) {
+    // BACKLOG-3618: the listing includes the user's own templates, so every
+    // cache is keyed on the user as well as the organization. No signed-in
+    // user → nothing can be read AND no cache can be shown: a file on this
+    // profile may belong to someone else.
+    const userId = await this.currentUserId(orgId);
+    if (!userId) return null;
+
+    if (this.isCacheFresh(orgId, userId)) {
       return { source: "cache", templates: this.cache!.templates };
     }
 
-    const fetched = await this.fetchOnce(orgId);
+    const fetched = await this.fetchOnce(orgId, userId);
     if (fetched) {
       return { source: "live", templates: fetched };
     }
 
-    const persisted = await this.loadPersistedCache(orgId);
+    const persisted = await this.loadPersistedCache(orgId, userId);
     if (persisted) {
       this.cache = persisted;
       return { source: "cache", templates: persisted.templates };
@@ -162,9 +202,33 @@ class ChecklistTemplateService {
     }
   }
 
-  private isCacheFresh(orgId: string): boolean {
+  private async currentUserId(orgId: string): Promise<string | null> {
+    try {
+      const session = await supabaseService.getAuthSession();
+      const userId = session?.userId ?? null;
+      if (!userId || !FILTER_SAFE_ID.test(userId)) {
+        logService.warn(
+          "[ChecklistTemplates] No usable signed-in user, cannot list templates",
+          "ChecklistTemplateService",
+          { orgId },
+        );
+        return null;
+      }
+      return userId;
+    } catch (error) {
+      logService.warn(
+        "[ChecklistTemplates] Reading the signed-in user threw",
+        "ChecklistTemplateService",
+        { orgId, error: error instanceof Error ? error.message : "Unknown error" },
+      );
+      return null;
+    }
+  }
+
+  private isCacheFresh(orgId: string, userId: string): boolean {
     if (!this.cache) return false;
     if (this.cache.orgId !== orgId) return false;
+    if (this.cache.userId !== userId) return false;
     return Date.now() - this.cache.fetchedAt < CACHE_TTL_MS;
   }
 
@@ -192,23 +256,24 @@ class ChecklistTemplateService {
    * send a second request for A. One entry per organization keeps every
    * organization's collapsing independent of the others.
    */
-  private async fetchOnce(orgId: string): Promise<ChecklistTemplate[] | null> {
-    const inFlight = this.fetchInProgress.get(orgId);
+  private async fetchOnce(orgId: string, userId: string): Promise<ChecklistTemplate[] | null> {
+    // BACKLOG-3618: keyed on the user too — two users' reads are two answers.
+    const key = `${orgId}|${userId}`;
+    const inFlight = this.fetchInProgress.get(key);
     if (inFlight) {
       return inFlight;
     }
 
-    const promise = this.fetchFromSupabase(orgId);
-    this.fetchInProgress.set(orgId, promise);
+    const promise = this.fetchFromSupabase(orgId, userId);
+    this.fetchInProgress.set(key, promise);
     try {
       return await promise;
     } finally {
-      // Delete only our OWN entry. Nothing else writes this organization's key
-      // today, so the comparison always holds; it is here so that a later
-      // writer (a forced refresh, say) cannot have its read deleted by an
-      // older one finishing.
-      if (this.fetchInProgress.get(orgId) === promise) {
-        this.fetchInProgress.delete(orgId);
+      // Delete only our OWN entry. Nothing else writes this key today, so the
+      // comparison always holds; it is here so that a later writer (a forced
+      // refresh, say) cannot have its read deleted by an older one finishing.
+      if (this.fetchInProgress.get(key) === promise) {
+        this.fetchInProgress.delete(key);
       }
     }
   }
@@ -225,29 +290,42 @@ class ChecklistTemplateService {
    * tables were applied to production (they are now). An error branch written
    * around one response would be a guess about a shape nobody has captured.
    */
-  private async fetchFromSupabase(orgId: string): Promise<ChecklistTemplate[] | null> {
+  private async fetchFromSupabase(
+    orgId: string,
+    userId: string,
+  ): Promise<ChecklistTemplate[] | null> {
     try {
       const client = supabaseService.getClient();
 
-      // The read is RLS-scoped to the caller's membership, so it is worth
-      // nothing without a session. Asking first turns a confusing empty result
-      // into an honest "could not read".
-      const session = await supabaseService.getAuthSession();
-      if (!session) {
-        logService.warn(
-          "[ChecklistTemplates] No Supabase auth session, cannot read templates",
+      // BACKLOG-3618: brokerage templates plus the user's OWN. The owner filter
+      // is explicit even though RLS already hides other people's templates:
+      // if the policy ever lets a broker see agents' lists, this read must
+      // still show a user only theirs.
+      let { data, error } = await client
+        .from("checklist_templates")
+        .select(TEMPLATE_SELECT_3618)
+        .eq("organization_id", orgId)
+        .is("archived_at", null)
+        .or(`owner_user_id.is.null,owner_user_id.eq.${userId}`)
+        .order("sort_order", { ascending: true });
+
+      // A database without the 3618 columns (not yet applied, or rolled back)
+      // has no own templates at all — every row is the brokerage's and is
+      // sent. Read it the way builds before 3618 did. Only the captured
+      // missing-column code comes here; every other error is a failed read.
+      if (error && (error as { code?: unknown }).code === UNDEFINED_COLUMN_CODE) {
+        logService.info(
+          "[ChecklistTemplates] Own-template columns absent, reading brokerage templates only",
           "ChecklistTemplateService",
           { orgId },
         );
-        return null;
+        ({ data, error } = await client
+          .from("checklist_templates")
+          .select(TEMPLATE_SELECT)
+          .eq("organization_id", orgId)
+          .is("archived_at", null)
+          .order("sort_order", { ascending: true }));
       }
-
-      const { data, error } = await client
-        .from("checklist_templates")
-        .select(TEMPLATE_SELECT)
-        .eq("organization_id", orgId)
-        .is("archived_at", null)
-        .order("sort_order", { ascending: true });
 
       if (error) {
         logService.warn(
@@ -267,9 +345,9 @@ class ChecklistTemplateService {
         return null;
       }
 
-      const templates = this.parseRows(data, orgId);
+      const templates = this.parseRows(data, orgId, userId);
 
-      this.cache = { templates, fetchedAt: Date.now(), orgId };
+      this.cache = { templates, fetchedAt: Date.now(), orgId, userId };
       await this.persistCache();
       return templates;
     } catch (error) {
@@ -296,9 +374,10 @@ class ChecklistTemplateService {
    * only, and trusting the embed's arrival order is how a checklist comes out
    * shuffled on one machine and not another.
    */
-  private parseRows(rows: unknown[], orgId: string): ChecklistTemplate[] {
+  private parseRows(rows: unknown[], orgId: string, userId: string): ChecklistTemplate[] {
     const templates: ChecklistTemplate[] = [];
     let dropped = 0;
+    let notOwn = 0;
 
     for (const row of rows) {
       const parsed = safeValidate(CloudChecklistTemplateSchema, row);
@@ -306,6 +385,15 @@ class ChecklistTemplateService {
         dropped += 1;
         continue;
       }
+      // BACKLOG-3618: absent (pre-3618 database) or null = the brokerage's.
+      // Someone else's own template never reaches the list or the cache,
+      // whatever the server sent.
+      const owner = parsed.data.owner_user_id ?? null;
+      if (owner !== null && owner !== userId) {
+        notOwn += 1;
+        continue;
+      }
+      const isMine = owner !== null;
       templates.push({
         id: parsed.data.id,
         name: parsed.data.name,
@@ -315,9 +403,20 @@ class ChecklistTemplateService {
         items: parsed.data.checklist_template_items
           .map(toItem)
           .sort((a, b) => a.sortOrder - b.sortOrder),
+        isMine,
+        // A brokerage template is always sent (the database's CHECK); only an
+        // own template can be held back, and an absent value means sent.
+        includeInSubmission: isMine ? parsed.data.include_in_submission !== false : true,
       });
     }
 
+    if (notOwn > 0) {
+      logService.warn(
+        "[ChecklistTemplates] Dropped another user's own templates from the read",
+        "ChecklistTemplateService",
+        { orgId, dropped: notOwn },
+      );
+    }
     if (dropped > 0) {
       logService.warn(
         "[ChecklistTemplates] Dropped template rows that did not validate",
@@ -363,7 +462,7 @@ class ChecklistTemplateService {
    * shown the other organization's checklist templates — plan-holder data, from
    * a plan they are not on, rendered as though it were theirs.
    */
-  private async loadPersistedCache(orgId: string): Promise<TemplateCache | null> {
+  private async loadPersistedCache(orgId: string, userId: string): Promise<TemplateCache | null> {
     try {
       const raw = await fs.readFile(this.getCacheFilePath(), "utf8");
       const cache: TemplateCache = JSON.parse(raw);
@@ -371,6 +470,16 @@ class ChecklistTemplateService {
       if (cache.orgId !== orgId) {
         logService.debug(
           "[ChecklistTemplates] Persisted cache is for a different org, ignoring",
+          "ChecklistTemplateService",
+        );
+        return null;
+      }
+      // BACKLOG-3618: and for THIS user. A second person signing in to the
+      // same profile, same brokerage, must never see the first one's own
+      // checklists. A pre-3618 file has no userId and is refused here.
+      if (cache.userId !== userId) {
+        logService.debug(
+          "[ChecklistTemplates] Persisted cache is for a different user, ignoring",
           "ChecklistTemplateService",
         );
         return null;

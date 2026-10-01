@@ -117,6 +117,27 @@ export function resetFeatureGateOnLogout(): void {
     });
 }
 
+/**
+ * BACKLOG-3618: drop the checklist template listing — memory AND file — on
+ * every logout path. A listing now holds the signed-in user's own checklists,
+ * so it belongs to that user; the next person on this profile must not be
+ * shown it. The cache is also keyed on the user, so this is the second line.
+ *
+ * Dynamic import and fail-closed, mirroring the resets above — this must
+ * NEVER throw into a logout path.
+ */
+export function resetChecklistTemplatesOnLogout(): void {
+  void import("../services/checklistTemplateService")
+    .then((m) => m.default.invalidate())
+    .catch((err) => {
+      logService.warn(
+        "[SessionHandlers] Checklist template cache reset failed (non-fatal)",
+        "SessionHandlers",
+        { error: err instanceof Error ? err.message : "Unknown" },
+      );
+    });
+}
+
 // Type definitions
 interface AuthResponse {
   success: boolean;
@@ -322,6 +343,7 @@ async function handleLogout(
 
     resetContactLinkingOnLogout();
     resetFeatureGateOnLogout();
+    resetChecklistTemplatesOnLogout();
 
     await auditService.log({
       userId,
@@ -1297,6 +1319,7 @@ async function handleForceLogout(): Promise<AuthResponse> {
     stopShadowDeltaSyncOnLogout();
     resetContactLinkingOnLogout();
     resetFeatureGateOnLogout();
+    resetChecklistTemplatesOnLogout();
 
     await logService.info("Force logout completed successfully", "AuthHandlers");
     return { success: true };
@@ -1378,6 +1401,7 @@ async function handleSignOutAllDevices(): Promise<AuthResponse> {
     setSyncUserId(null);
     stopShadowDeltaSyncOnLogout();
     resetFeatureGateOnLogout();
+    resetChecklistTemplatesOnLogout();
 
     await logService.info("Global sign-out completed successfully", "SessionHandlers");
     return { success: true };

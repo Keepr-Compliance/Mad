@@ -119,7 +119,14 @@ jest.mock("../logService", () => {
  * `order()` is the terminal call in this service, so it resolves the response.
  */
 let nextResponse: { data: unknown; error: unknown } = { data: [], error: null };
-const calls: Array<{ table: string; select: string; eq: unknown[][]; is: unknown[][]; order: unknown[][] }> = [];
+const calls: Array<{
+  table: string;
+  select: string;
+  eq: unknown[][];
+  is: unknown[][];
+  or: unknown[][];
+  order: unknown[][];
+}> = [];
 
 /**
  * Opt-in, per-request responses. `nextResponse` is one shared value, which is
@@ -130,7 +137,14 @@ const calls: Array<{ table: string; select: string; eq: unknown[][]; is: unknown
 let responder: ((record: (typeof calls)[number]) => Promise<{ data: unknown; error: unknown }>) | null = null;
 
 const mockFrom = jest.fn((table: string) => {
-  const record = { table, select: "", eq: [] as unknown[][], is: [] as unknown[][], order: [] as unknown[][] };
+  const record = {
+    table,
+    select: "",
+    eq: [] as unknown[][],
+    is: [] as unknown[][],
+    or: [] as unknown[][],
+    order: [] as unknown[][],
+  };
   calls.push(record);
   const qb: Record<string, any> = {};
   qb.select = jest.fn((cols: string) => {
@@ -143,6 +157,11 @@ const mockFrom = jest.fn((table: string) => {
   });
   qb.is = jest.fn((...args: unknown[]) => {
     record.is.push(args);
+    return qb;
+  });
+  // BACKLOG-3618: the explicit owner filter.
+  qb.or = jest.fn((...args: unknown[]) => {
+    record.or.push(args);
     return qb;
   });
   qb.order = jest.fn((...args: unknown[]) => {
@@ -266,17 +285,19 @@ describe("BACKLOG-3475 C13-A — the D1 capture, read live", () => {
     expect(template.items.map((i) => i.description)).toEqual(["the desktop tooltip", null]);
   });
 
-  it("asks for exactly the request BACKLOG-3473 probed: this org, unarchived, ordered", async () => {
+  it("asks for the request BACKLOG-3473 probed plus the 3618 columns and owner filter: this org, unarchived, brokerage or mine, ordered", async () => {
     await loadService().listTemplates(ORG_A);
 
     expect(calls).toHaveLength(1);
     expect(calls[0].table).toBe("checklist_templates");
     expect(calls[0].select).toBe(
-      "id,name,description,sort_order,updated_at," +
+      "id,name,description,sort_order,updated_at,owner_user_id,include_in_submission," +
         "checklist_template_items(id,title,description,is_required,expected_document_type,sort_order)",
     );
     expect(calls[0].eq).toEqual([["organization_id", ORG_A]]);
     expect(calls[0].is).toEqual([["archived_at", null]]);
+    // BACKLOG-3618 C10: the explicit owner filter, keyed on the session's user.
+    expect(calls[0].or).toEqual([["owner_user_id.is.null,owner_user_id.eq.u-3475"]]);
     expect(calls[0].order).toEqual([["sort_order", { ascending: true }]]);
   });
 });
@@ -343,6 +364,7 @@ describe("BACKLOG-3475 C13-E / C13-F / C13-G — the disk cache", () => {
       CACHE_PATH,
       JSON.stringify({
         orgId: ORG_A,
+        userId: "u-3475",
         fetchedAt: Date.now() - 60_000,
         templates: [
           {
@@ -396,6 +418,7 @@ describe("BACKLOG-3475 C13-E / C13-F / C13-G — the disk cache", () => {
       CACHE_PATH,
       JSON.stringify({
         orgId: ORG_A,
+        userId: "u-3475",
         fetchedAt: Date.now() - 8 * DAY_MS,
         templates: [{ id: "t", name: "Stale", description: null, sortOrder: 0, updatedAt: null, items: [] }],
       }),
@@ -689,5 +712,178 @@ describe("BACKLOG-3475 C13-K — a concurrent read for ANOTHER org is never serv
     expect(calls).toHaveLength(1);
     expect(one!.templates.map((t) => t.name)).toEqual(["Probe template"]);
     expect(two!.templates.map((t) => t.name)).toEqual(["Probe template"]);
+  });
+});
+
+// ===========================================================================
+// BACKLOG-3618 — the user's own templates
+// ===========================================================================
+//
+// Fixture provenance:
+//   PRE_3618_MISSING_COLUMN — captured from PRODUCTION on 2026-09-30, before
+//     the 3618 migration was applied: GET /rest/v1/checklist_templates with
+//     the 3618 select, HTTP 400, body verbatim.
+//   The pre-3618 rows are D1 (the 3473 capture) — what a database without the
+//     columns returns to the legacy select.
+//   The post-3618 rows are D1's row plus the migration's two scalar columns
+//     (`owner_user_id uuid NULL`, `include_in_submission boolean NOT NULL`,
+//     20261001120000). DERIVED, not captured: no PostgREST in reach serves the
+//     3618 schema yet. The service reads the two fields by name only.
+
+const PRE_3618_MISSING_COLUMN = {
+  code: "42703",
+  details: null,
+  hint: null,
+  message: "column checklist_templates.owner_user_id does not exist",
+};
+
+const USER_A = "u-3475"; // the default session in beforeEach
+const USER_B = "u-3618-b";
+
+function row(
+  id: string,
+  name: string,
+  owner: string | null,
+  include = true,
+): Record<string, unknown> {
+  return { ...D1_DATA[0], id, name, owner_user_id: owner, include_in_submission: include };
+}
+
+describe("BACKLOG-3618 C13 — a database without the 3618 columns still lists templates", () => {
+  it("on the captured 42703, reads again with the pre-3618 request and lists every row as brokerage + sent", async () => {
+    let n = 0;
+    responder = async () => (n++ === 0 ? { data: null, error: PRE_3618_MISSING_COLUMN } : { data: D1_DATA, error: null });
+
+    const listing = await loadService().listTemplates(ORG_A);
+
+    expect(listing).not.toBeNull();
+    expect(listing!.source).toBe("live");
+    expect(listing!.templates.map((t) => [t.name, t.isMine, t.includeInSubmission])).toEqual([
+      ["Probe template", false, true],
+    ]);
+    expect(calls).toHaveLength(2);
+    // The second request is exactly the pre-3618 one: no new columns, no owner filter.
+    expect(calls[1].select).toBe(
+      "id,name,description,sort_order,updated_at," +
+        "checklist_template_items(id,title,description,is_required,expected_document_type,sort_order)",
+    );
+    expect(calls[1].or).toEqual([]);
+    expect(calls[1].eq).toEqual([["organization_id", ORG_A]]);
+    expect(calls[1].is).toEqual([["archived_at", null]]);
+  });
+
+  it("a pre-3618 row (no owner, no switch) parses as brokerage + sent even on the first request", async () => {
+    resolveWith(D1_DATA);
+    const listing = await loadService().listTemplates(ORG_A);
+    expect(listing!.templates.map((t) => [t.isMine, t.includeInSubmission])).toEqual([[false, true]]);
+  });
+
+  it("any OTHER error is a failed read: no second request, null", async () => {
+    resolveWith(null, ANON_REFUSAL);
+    expect(await loadService().listTemplates(ORG_A)).toBeNull();
+    expect(calls).toHaveLength(1);
+  });
+});
+
+describe("BACKLOG-3618 C10 — only brokerage templates and the user's own reach the list", () => {
+  it("labels own rows, keeps brokerage rows, drops another user's own row even if the server sent it", async () => {
+    resolveWith([
+      row("tpl-brokerage", "Brokerage list", null),
+      row("tpl-mine", "My list", USER_A),
+      row("tpl-theirs", "Their list", USER_B),
+    ]);
+
+    const listing = await loadService().listTemplates(ORG_A);
+
+    expect(listing!.templates.map((t) => [t.id, t.isMine])).toEqual([
+      ["tpl-brokerage", false],
+      ["tpl-mine", true],
+    ]);
+    // Never cached either.
+    expect(persisted().templates.map((t: any) => t.id)).toEqual(["tpl-brokerage", "tpl-mine"]);
+  });
+
+  it("include_in_submission false holds back only an OWN template; a brokerage row is always sent", async () => {
+    resolveWith([
+      row("tpl-brokerage", "Brokerage list", null, false),
+      row("tpl-mine-kept", "Mine, not sent", USER_A, false),
+      row("tpl-mine-sent", "Mine, sent", USER_A, true),
+    ]);
+
+    const listing = await loadService().listTemplates(ORG_A);
+
+    expect(listing!.templates.map((t) => [t.id, t.includeInSubmission])).toEqual([
+      ["tpl-brokerage", true],
+      ["tpl-mine-kept", false],
+      ["tpl-mine-sent", true],
+    ]);
+  });
+
+  it("no signed-in user: no request, no cache, null", async () => {
+    mockGetAuthSession.mockResolvedValue(null);
+    diskFiles.set(
+      CACHE_PATH,
+      JSON.stringify({ orgId: ORG_A, userId: USER_A, fetchedAt: Date.now(), templates: [] }),
+    );
+    expect(await loadService().listTemplates(ORG_A)).toBeNull();
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("BACKLOG-3618 C2 — two users, one profile, one brokerage", () => {
+  const A_ROWS = [row("tpl-brokerage", "Brokerage list", null), row("tpl-a-own", "A's own list", USER_A)];
+  const B_ROWS = [row("tpl-brokerage", "Brokerage list", null)];
+
+  it("memory path: B, within A's 5-minute cache, reads for B and never sees A's own list", async () => {
+    const service = loadService();
+    resolveWith(A_ROWS);
+    const a = await service.listTemplates(ORG_A);
+    expect(a!.templates.map((t) => t.id)).toContain("tpl-a-own");
+
+    mockGetAuthSession.mockResolvedValue({ userId: USER_B, accessToken: "t" });
+    resolveWith(B_ROWS);
+    const b = await service.listTemplates(ORG_A);
+
+    expect(b!.source).toBe("live");
+    expect(b!.templates.map((t) => t.id)).toEqual(["tpl-brokerage"]);
+    expect(calls).toHaveLength(2);
+    expect(calls[1].or).toEqual([[`owner_user_id.is.null,owner_user_id.eq.${USER_B}`]]);
+  });
+
+  it("disk path: B offline after A's read is NOT served A's file", async () => {
+    resolveWith(A_ROWS);
+    await loadService().listTemplates(ORG_A);
+    expect(persisted().userId).toBe(USER_A);
+
+    // New process (fresh memory), B signed in, cloud unreachable.
+    mockGetAuthSession.mockResolvedValue({ userId: USER_B, accessToken: "t" });
+    resolveWith(null, ANON_REFUSAL);
+    const b = await loadService().listTemplates(ORG_A);
+
+    expect(b).toBeNull();
+  });
+
+  it("disk path control: A offline IS served A's own file", async () => {
+    resolveWith(A_ROWS);
+    await loadService().listTemplates(ORG_A);
+
+    resolveWith(null, ANON_REFUSAL);
+    const a = await loadService().listTemplates(ORG_A);
+
+    expect(a!.source).toBe("cache");
+    expect(a!.templates.map((t) => t.id)).toEqual(["tpl-brokerage", "tpl-a-own"]);
+  });
+
+  it("a file written before 3618 (no userId) is refused", async () => {
+    diskFiles.set(
+      CACHE_PATH,
+      JSON.stringify({
+        orgId: ORG_A,
+        fetchedAt: Date.now() - 60_000,
+        templates: [{ id: "t", name: "Old", description: null, sortOrder: 0, updatedAt: null, items: [] }],
+      }),
+    );
+    resolveWith(null, ANON_REFUSAL);
+    expect(await loadService().listTemplates(ORG_A)).toBeNull();
   });
 });
