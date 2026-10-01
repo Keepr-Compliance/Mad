@@ -1,7 +1,7 @@
 e00-prelude-is-production                GREEN 2 assertions
 e01-agent-own                            GREEN 15 assertions
 e02-agent-refused                        GREEN 9 assertions
-e03-peer-agent                           GREEN 9 assertions
+e03-peer-agent                           GREEN 11 assertions
 e04-broker-and-editors                   GREEN 22 assertions
 e05-gating                               GREEN 8 assertions
 e06-save-rpc                             GREEN 22 assertions
@@ -11,7 +11,7 @@ e09-include-flag                         GREEN 11 assertions
 e10-add-at-review                        GREEN 8 assertions
 e11-snapshot-filter                      GREEN 9 assertions
 e12-copied-bodies-identical              GREEN 7 assertions
-e13-rollback                             GREEN 9 assertions
+e13-rollback                             GREEN 13 assertions
 e14-apply-twice                          GREEN 2 assertions
 e15-after-fingerprint                    GREEN 4 assertions
 e16-desktop-pull                         GREEN 6 assertions

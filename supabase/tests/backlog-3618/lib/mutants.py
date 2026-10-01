@@ -85,6 +85,16 @@ MUTANTS = {
     "n25-rollback-leaves-new-save": ("rollback",
         "DROP FUNCTION IF EXISTS public.save_checklist_template(uuid, uuid, text, text, text, jsonb, boolean, boolean);\n", "",
         "e13", "red"),
+    # SR review (pm_comments a3493296), C11/C12
+    "s1-select-drops-org-term": ("draft",
+        "  USING (checklist_templates.organization_id IN (SELECT public.get_user_org_ids((SELECT auth.uid())))\n"
+        "         AND (checklist_templates.owner_user_id IS NULL\n",
+        "  USING ((checklist_templates.owner_user_id IS NULL\n",
+        "e03", "red"),
+    "s3-rollback-deletes-only-excluded": ("rollback",
+        "DELETE FROM public.checklist_templates WHERE owner_user_id IS NOT NULL;\n",
+        "DELETE FROM public.checklist_templates WHERE owner_user_id IS NOT NULL AND NOT include_in_submission;\n",
+        "e13", "red"),
 }
 
 OUT.mkdir(parents=True, exist_ok=True)
