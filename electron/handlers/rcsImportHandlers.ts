@@ -88,6 +88,9 @@ const deps: RcsImportDeps = {
   getRemovals: (transactionId, userId) => databaseService.getRcsRemovals(transactionId, userId),
   // BACKLOG-3630: the content guard (same sent_at + direction + body).
   findContentDuplicates: (userId, rows) => databaseService.findRcsContentDuplicates(userId, rows),
+  // BACKLOG-3665: a legacy chat removal moves onto the gmweb2 thread.
+  repointLegacyRemoval: (userId, legacy, threadId, transactionId) =>
+    databaseService.repointLegacyRcsRemoval(userId, legacy, threadId, transactionId),
 };
 
 const mediaDeps: RcsMediaDeps = {

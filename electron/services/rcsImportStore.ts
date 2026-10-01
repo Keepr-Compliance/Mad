@@ -260,6 +260,12 @@ export interface RcsImportDeps {
    * existing id). Those rows are not inserted; the existing row is linked.
    */
   findContentDuplicates?: (userId: string, rows: RcsInsertRow[]) => Map<string, string>;
+  /**
+   * BACKLOG-3665: move a legacy removal (`gmweb-chat-<conversation id>`) onto
+   * the chat's gmweb2 thread — on `transactionId`, or on every transaction of
+   * the user when null. Returns how many removals moved.
+   */
+  repointLegacyRemoval?: (userId: string, legacyThreadId: string, threadId: string, transactionId: string | null) => number;
   // (Real one: syncDbService.findRcsContentDuplicates — same people only, never empty bodies.)
 }
 
@@ -431,9 +437,14 @@ export async function importChat(
   // again. Its gmweb2 thread id is stable across re-pairs (BACKLOG-3630); a
   // legacy removal of the same conversation id is honoured too.
   const removals = deps.getRemovals ? deps.getRemovals(transactionId, userId) : null;
-  const chatRemoved =
-    !!removals &&
-    (removals.threadIds.has(threadId) || removals.threadIds.has(`${RCS_LEGACY_THREAD_PREFIX}${chat.conversationId}`));
+  const legacyThreadId = `${RCS_LEGACY_THREAD_PREFIX}${chat.conversationId}`;
+  const removedByLegacy = !!removals && removals.threadIds.has(legacyThreadId);
+  const chatRemoved = !!removals && (removals.threadIds.has(threadId) || removedByLegacy);
+  // BACKLOG-3665: the legacy removal moves onto the gmweb2 thread, where "Show
+  // removed" finds the rows just stored (and Restore can link them).
+  if (removedByLegacy && deps.repointLegacyRemoval) {
+    deps.repointLegacyRemoval(userId, legacyThreadId, threadId, transactionId);
+  }
   const keep = (id: string): boolean => !chatRemoved && !(removals?.messageIds.has(id) ?? false);
 
   const idMap = deps.getMessageIdMap(userId);
@@ -478,11 +489,26 @@ export async function importChat(
 export async function importCacheChat(
   chat: RcsIncomingChat,
   userId: string,
-  deps: Pick<RcsImportDeps, "batchInsertMessages" | "getMessageIdMap" | "insertReactionRows" | "findContentDuplicates">,
+  deps: Pick<
+    RcsImportDeps,
+    "batchInsertMessages" | "getMessageIdMap" | "insertReactionRows" | "findContentDuplicates" | "repointLegacyRemoval"
+  >,
   people: RcsChatPeople,
 ): Promise<RcsImportResult> {
   if (people.numbers.length === 0) throw new Error(RCS_NO_NUMBER_MESSAGE);
   const rows = mapChatToRows(chat, userId, people, RCS_CACHE_SOURCE);
+  // BACKLOG-3665 (SR): the auto-link reads gmweb2 removals only, so a chat the
+  // user removed before 3630 (legacy gmweb-chat-<conversation id>) gets the
+  // same removal on its gmweb2 thread, on every transaction it was removed
+  // from — before anything can link it.
+  if (deps.repointLegacyRemoval) {
+    deps.repointLegacyRemoval(
+      userId,
+      `${RCS_LEGACY_THREAD_PREFIX}${chat.conversationId}`,
+      `${RCS_THREAD_PREFIX}${rcsChatHash(people.numbers)}`,
+      null,
+    );
+  }
   const before = deps.getMessageIdMap(userId);
   const fresh = rows.filter((r) => !before.has(r.externalId));
   const sameContent = deps.findContentDuplicates && fresh.length > 0

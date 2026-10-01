@@ -59,6 +59,36 @@ export const RCS_REMOVALS_SQL = sql`
   `;
 
 /**
+ * BACKLOG-3665: a legacy chat removal (thread `gmweb-chat-<conversation id>`)
+ * moved onto the chat's gmweb2 thread, so "Show removed" (which joins the
+ * removal's thread id to messages.thread_id) lists the chat and Restore works,
+ * and the auto-link (which skips removed thread ids) never brings it back.
+ *
+ * Step 1 drops a legacy row whose transaction already has the gmweb2 removal
+ * (the same removal twice would be listed twice). Step 2 moves the rest; the
+ * audit fields (reason, ignored_at, match_reason, id) are untouched.
+ * Parameters (both): user id, legacy thread id, transaction id or NULL (every
+ * transaction of the user) twice, gmweb2 thread id — step 2 also takes the
+ * legacy and gmweb2 ids first for email_thread_id (the row's mirror of
+ * thread_id, see addIgnoredCommunicationSync).
+ */
+export const RCS_LEGACY_REMOVAL_DROP_DUPLICATE_SQL = sql`
+    DELETE FROM ignored_communications
+    WHERE user_id = ? AND thread_id = ? AND (? IS NULL OR transaction_id = ?)
+      AND EXISTS (
+        SELECT 1 FROM ignored_communications n
+        WHERE n.transaction_id = ignored_communications.transaction_id AND n.thread_id = ?
+      )
+  `;
+
+export const RCS_LEGACY_REMOVAL_REPOINT_SQL = sql`
+    UPDATE ignored_communications
+    SET email_thread_id = CASE WHEN email_thread_id = ? THEN ? ELSE email_thread_id END,
+        thread_id = ?
+    WHERE user_id = ? AND thread_id = ? AND (? IS NULL OR transaction_id = ?)
+  `;
+
+/**
  * BACKLOG-3630: the content guard's CANDIDATES. gmweb2 rows of the user, under
  * a DIFFERENT key, with the same sent_at + direction + exact (non-empty) body.
  * sent_at has minute precision, so a candidate is only a duplicate when it is
