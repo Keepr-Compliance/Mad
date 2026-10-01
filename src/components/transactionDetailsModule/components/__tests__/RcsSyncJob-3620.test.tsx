@@ -241,6 +241,25 @@ describe("only one Sync at a time (BACKLOG-3661)", () => {
     expect(screen.queryByTestId("rcs-sync-active-elsewhere")).toBeNull();
   });
 
+  // SR 2a optional (2). Mutation: let the late first read overwrite the
+  // broadcast → the button stays "Syncing…" for a job that already ended.
+  it("a late first read does not overwrite a newer broadcast", async () => {
+    let answer: (v: unknown) => void = () => {};
+    mockGetJob.mockReturnValue(new Promise((r) => {
+      answer = r;
+    }));
+    render(<Harness transactionId="tx-1" />);
+    await waitFor(() => expect(jobListener).not.toBeNull());
+    act(() => {
+      jobListener?.(job({ transactionId: "tx-2", state: "finished", label: "2 Test Street" }));
+    });
+    await act(async () => {
+      answer({ success: true, data: job({ transactionId: "tx-2", state: "running", label: "2 Test Street" }) });
+    });
+    expect(screen.getByTestId("rcs-sync-button")).not.toBeDisabled();
+    expect(screen.queryByTestId("rcs-sync-active-elsewhere")).toBeNull();
+  });
+
   it("this transaction's own Sync: 'Syncing…' disabled, with no second 'Syncing:' line", async () => {
     mockStartJob.mockResolvedValue({ success: true, data: job() });
     render(<Harness transactionId="tx-1" />);

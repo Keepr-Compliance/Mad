@@ -208,7 +208,7 @@ describe("RcsExtensionBridge", () => {
     });
 
     it("pausing cancels the running Sync job", async () => {
-      const job = bridge.createJob("tx-1", [{ contactId: "c-1", displayName: "Test Contact A", phonesE164: ["+15555550199"] }]);
+      const job = bridge.createJob("tx-1", [{ contactId: "c-1", displayName: "Test Contact A", phonesE164: ["+15555550199"] }])!;
       await bridge.pauseWrites();
       expect(bridge.getJob()?.state).toBe("cancelled");
       expect(bridge.writesArePaused).toBe(true);
@@ -348,7 +348,7 @@ describe("RcsExtensionBridge sync jobs", () => {
     });
     expect(await bridge.start(0)).toBe("listening");
     port = bridge.getStatus().port;
-    jobId = bridge.createJob("tx-job", JOB_CONTACTS).jobId;
+    jobId = bridge.createJob("tx-job", JOB_CONTACTS)!.jobId;
   });
 
   afterEach(async () => {
@@ -400,7 +400,7 @@ describe("RcsExtensionBridge sync jobs", () => {
 
     it("claim carries the transaction's start date when the job has one", async () => {
       bridge.cancelJob(jobId); // one Sync at a time (BACKLOG-3661)
-      jobId = bridge.createJob("tx-job", JOB_CONTACTS, { startDate: "2026-03-01" }).jobId;
+      jobId = bridge.createJob("tx-job", JOB_CONTACTS, { startDate: "2026-03-01" })!.jobId;
       const claim = await request(port, "POST", `/job/${jobId}/claim`, EXT);
       expect(claim.body).toMatchObject({ jobId, startDate: "2026-03-01" });
     });
@@ -514,7 +514,7 @@ describe("RcsExtensionBridge sync jobs", () => {
       expect(await own.start(0)).toBe("listening");
       try {
         const ownPort = own.getStatus().port;
-        const id = own.createJob("tx-job", JOB_CONTACTS).jobId;
+        const id = own.createJob("tx-job", JOB_CONTACTS)!.jobId;
         expect((await request(ownPort, "POST", `/job/${id}/claim`, EXT)).status).toBe(200);
         const list = Array.from({ length: 22 }, (_, i) => ({ name: `Chat Name ${i}`, reason: "not_opened" }));
         list[1] = { name: "Chat Name 1", reason: "images_failed", count: 2 } as (typeof list)[number];
@@ -556,11 +556,11 @@ describe("RcsExtensionBridge sync jobs", () => {
   // BACKLOG-3661. Mutations that turn these red: createJob replacing the
   // running job; the manual Send accepted during a Sync.
   describe("BACKLOG-3661: one Sync at a time", () => {
-    it("createJob while a job runs returns the running job; activeJob names it", () => {
-      const again = bridge.createJob("tx-other", JOB_CONTACTS, { label: "9 Other Street" });
-      expect(again.jobId).toBe(jobId);
-      expect(again.transactionId).toBe("tx-job");
+    it("createJob while a job runs creates nothing (null) and leaves the running job; activeJob names it", () => {
+      expect(bridge.createJob("tx-other", JOB_CONTACTS, { label: "9 Other Street" })).toBeNull();
       expect(bridge.activeJob()?.jobId).toBe(jobId);
+      expect(bridge.activeJob()?.transactionId).toBe("tx-job");
+      expect(bridge.activeJob()?.state).toBe("created");
     });
 
     it("the page's manual Send is refused (409) while a Sync runs, and accepted after", async () => {

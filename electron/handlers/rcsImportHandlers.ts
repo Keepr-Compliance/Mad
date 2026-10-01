@@ -250,6 +250,10 @@ export function registerRcsImportHandlers(): void {
         startDate: tx.started_at ?? null,
         label: tx.property_address ?? null,
       });
+      if (!job) {
+        // A Sync started between the check above and here.
+        return { success: false, error: `${RCS_ALREADY_SYNCING_MESSAGE}. Wait for it to finish, or cancel it.` };
+      }
       await shell.openExternal(`${RCS_MESSAGES_WEB_URL}#keepr-job=${job.jobId}`);
       return { success: true, job };
     }, { module: LOG_TAG }),

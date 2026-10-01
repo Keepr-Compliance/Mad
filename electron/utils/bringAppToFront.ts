@@ -99,6 +99,9 @@ export function bringAppToFront(win: BrowserWindow | null): void {
   }
 }
 
+/** Windows whose taskbar button is flashing until they get focus. */
+const flashing = new WeakSet<BrowserWindow>();
+
 /**
  * BACKLOG-3641: the user asked from the browser ("Open Keepr"). Bring Keepr
  * forward; if Windows still refuses the foreground change (the window is not
@@ -108,9 +111,13 @@ export function bringAppToFront(win: BrowserWindow | null): void {
 export function bringAppToFrontOrFlash(win: BrowserWindow | null): void {
   bringAppToFront(win);
   try {
-    if (win && !win.isDestroyed() && !win.isFocused()) {
+    // One flash per window at a time: repeated clicks never pile up
+    // once("focus") listeners.
+    if (win && !win.isDestroyed() && !win.isFocused() && !flashing.has(win)) {
+      flashing.add(win);
       win.flashFrame(true);
       win.once("focus", () => {
+        flashing.delete(win);
         if (!win.isDestroyed()) win.flashFrame(false);
       });
     }

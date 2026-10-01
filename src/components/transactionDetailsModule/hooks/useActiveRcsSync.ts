@@ -29,14 +29,20 @@ export function useActiveRcsSync(): ActiveRcsSync {
 
   useEffect(() => {
     let alive = true;
+    let heardBroadcast = false;
     const accept = (next: RcsJobInfo | null): void => {
       if (!alive) return;
       // There is one job at a time: whatever the broadcast says is THE job.
       setActiveJob(isActiveJob(next) ? next : null);
     };
-    const unsubscribe = rcsImportService.onJobProgress(accept);
+    const unsubscribe = rcsImportService.onJobProgress((next) => {
+      heardBroadcast = true;
+      accept(next);
+    });
+    // The first read only fills the gap before any broadcast: a late answer
+    // must not overwrite a newer broadcast (e.g. a job that just finished).
     void rcsImportService.getJob().then((r) => {
-      if (r.success) accept(r.data ?? null);
+      if (r.success && !heardBroadcast) accept(r.data ?? null);
     });
     return () => {
       alive = false;

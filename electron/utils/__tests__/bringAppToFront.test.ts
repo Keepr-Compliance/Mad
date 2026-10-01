@@ -151,6 +151,20 @@ describe("bringAppToFrontOrFlash — the page's Open Keepr", () => {
     expect(win.calls[win.calls.length - 1]).toBe("flash(false)");
   });
 
+  // SR 2a optional (1). Mutation: no flashing guard → listeners pile up → red.
+  it("repeated Open Keepr clicks flash once and add one focus listener", () => {
+    const { win, extra } = flashWindow(false);
+    bringAppToFrontOrFlash(win as unknown as BrowserWindow);
+    bringAppToFrontOrFlash(win as unknown as BrowserWindow);
+    bringAppToFrontOrFlash(win as unknown as BrowserWindow);
+    expect(extra.flashFrame).toHaveBeenCalledTimes(1);
+    expect(extra.once).toHaveBeenCalledTimes(1);
+    extra.focusCb?.();
+    bringAppToFrontOrFlash(win as unknown as BrowserWindow);
+    expect(extra.flashFrame).toHaveBeenLastCalledWith(true);
+    expect(extra.once).toHaveBeenCalledTimes(2);
+  });
+
   it("Keepr came to the front: no flash", () => {
     const { win } = flashWindow(true);
     bringAppToFrontOrFlash(win as unknown as BrowserWindow);

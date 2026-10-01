@@ -273,10 +273,11 @@ export class RcsExtensionBridge {
     transactionId: string,
     contacts: RcsJobContact[],
     options: { startDate?: string | null; unclaimedMs?: number; label?: string | null } = {},
-  ): RcsJobSnapshot {
-    // BACKLOG-3661: one Sync at a time — a running job is returned untouched.
-    const running = this.jobs.active();
-    if (running) return running.snapshot();
+  ): RcsJobSnapshot | null {
+    // BACKLOG-3661: one Sync at a time — while a job is active nothing is
+    // created (null); the running job is left untouched. Callers check
+    // activeJob() first to tell the user what is running.
+    if (this.jobs.active()) return null;
     const unclaimedMs = options.unclaimedMs ?? 60_000;
     const job = this.jobs.create(transactionId, contacts, options.startDate ?? null, options.label ?? null);
     this.logger.info(`[RcsBridge] Sync job created for transaction ${transactionId} (${contacts.length} contacts)`);
