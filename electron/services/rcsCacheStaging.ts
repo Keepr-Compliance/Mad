@@ -422,6 +422,16 @@ export class RcsCacheStaging {
     }
   }
 
+  /**
+   * A commit that never settled (the save timeout): it no longer counts as in
+   * progress, and its staging goes. Should it still finish later, its own
+   * clean-up is harmless (idempotent).
+   */
+  async abandon(jobId: string): Promise<void> {
+    this.committing.delete(jobId);
+    await this.discard(jobId);
+  }
+
   /** Cancel / error / user switch: the job's rows and files go; nothing was written. */
   async discard(jobId: string): Promise<void> {
     this.ended.add(jobId);

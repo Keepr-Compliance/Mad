@@ -12,6 +12,7 @@
  *   B1a cacheSaveInFlight always false                  → "busy while saving"
  *   B1b the counter set only after an await (too late)   → "busy while saving"
  *   S1  the refresh broadcast dropped / sent before link → "refresh after save"
+ *   T1  no save timeout (a hung commit keeps Keepr busy) → "a hung save"
  */
 
 export {};
@@ -21,6 +22,7 @@ const broadcasts: Array<[string, unknown]> = [];
 const order: string[] = [];
 let bridgeOptions: Record<string, (...a: unknown[]) => unknown> = {};
 let releaseCommit: (() => void) | null = null;
+const abandoned: string[] = [];
 
 jest.mock("electron", () => ({
   app: { isPackaged: true, getPath: () => "/tmp/keepr-test" },
@@ -52,6 +54,9 @@ jest.mock("../../services/rcsCacheStaging", () => ({
     isCommitting = false;
     async discardAll() {}
     async discard() {}
+    async abandon(jobId: string) {
+      abandoned.push(jobId);
+    }
     commit() {
       order.push("commit");
       return new Promise((resolve) => {
@@ -140,5 +145,29 @@ describe("a cache Sync being saved (SR B1, S1)", () => {
     expect(handlersModule.cacheSaveInFlight()).toBe(false);
     expect((await startTx()).error).not.toBe(handlersModule.RCS_SAVING_MESSAGE);
     expect((await startCache()).success).toBe(true);
+  });
+
+  it("a hung save releases the busy flag after the timeout and drops that job's staging (T1)", async () => {
+    jest.useFakeTimers();
+    try {
+      bridgeOptions.onJobEnded({
+        kind: "cache", userId: "user-1", detectedOwnNumber: null,
+        snapshot: { state: "finished", jobId: "job-1", createdAt: "2026-10-01T10:00:00.000Z" },
+      });
+      await flush();
+      expect(handlersModule.cacheSaveInFlight()).toBe(true);
+      jest.advanceTimersByTime(handlersModule.RCS_CACHE_SAVE_TIMEOUT_MS - 1000);
+      expect(handlersModule.cacheSaveInFlight()).toBe(true);
+      jest.advanceTimersByTime(2000);
+      expect(handlersModule.cacheSaveInFlight()).toBe(false);
+      expect(abandoned).toEqual(["job-1"]);
+      // The hung save settling later does not make the counter go negative.
+      releaseCommit?.();
+      await flush();
+      expect(handlersModule.cacheSaveInFlight()).toBe(false);
+      expect((await startCache()).success).toBe(true);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

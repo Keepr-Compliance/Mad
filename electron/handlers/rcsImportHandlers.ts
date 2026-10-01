@@ -163,6 +163,12 @@ function cacheStaging(): RcsCacheStaging {
  * or write the same content-addressed files meanwhile.
  */
 let cacheEndsInFlight = 0;
+/**
+ * SR optional: a commit or auto-link that never settles must not leave Keepr
+ * busy for good. After this long the busy flag is released, the job's staging
+ * is abandoned, and the hang is logged.
+ */
+export const RCS_CACHE_SAVE_TIMEOUT_MS = 10 * 60 * 1000;
 export function cacheSaveInFlight(): boolean {
   return cacheEndsInFlight > 0 || (staging?.isCommitting ?? false);
 }
@@ -362,6 +368,24 @@ const bridge = new RcsExtensionBridge({
     if (ended.kind !== "cache") return;
     // Busy from this moment (synchronously, before the job slot can be reused).
     cacheEndsInFlight += 1;
+    let released = false;
+    const release = (): void => {
+      if (released) return;
+      released = true;
+      cacheEndsInFlight -= 1;
+    };
+    const jobId = ended.snapshot.jobId;
+    const hung = setTimeout(() => {
+      if (released) return;
+      void logService.error(
+        `[RcsCache] Saving the cache Sync did not finish in ${RCS_CACHE_SAVE_TIMEOUT_MS / 60000} minutes: its staging is dropped`,
+        LOG_TAG,
+      );
+      release();
+      cacheLimitsByJob.delete(jobId);
+      void cacheStaging().abandon(jobId).catch(() => undefined);
+    }, RCS_CACHE_SAVE_TIMEOUT_MS);
+    hung.unref?.();
     void handleCacheJobEnded(ended, {
       saveFinishedAt: (userId, iso) => databaseService.updateRcsCacheState(userId, { lastCacheFinishedAt: iso }),
       saveOwnNumber: (userId, number) => databaseService.updateRcsCacheState(userId, { ownNumber: number }),
@@ -372,9 +396,17 @@ const bridge = new RcsExtensionBridge({
       onSaved: () => hostWindows.broadcast(RCS_DATA_CHANGED_CHANNEL, { reason: "cache-saved" }),
       now: () => Date.now(),
       log: (m) => void logService.warn(m, LOG_TAG),
-    }).finally(() => {
-      cacheEndsInFlight -= 1;
-    });
+    })
+      .finally(() => {
+        clearTimeout(hung);
+        release();
+      })
+      .catch((err: unknown) => {
+        void logService.error(
+          `[RcsCache] After the cache Sync: ${err instanceof Error ? err.message : String(err)}`,
+          LOG_TAG,
+        );
+      });
   },
   onChatImported: broadcastChatImported,
   importImage: async (image, transactionId, chatHash) => {

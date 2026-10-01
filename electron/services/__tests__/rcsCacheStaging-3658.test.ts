@@ -23,6 +23,7 @@
  *   S2a files moved without a journal row first                   → "journaled before the move"
  *   S2b the journal not cleared after the commit                  → "journaled before the move"
  *   S2c a crashed commit's files never recovered                  → "a crashed commit's files are recovered"
+ *   T1  an abandoned (hung) commit still counted as in progress    → "an abandoned commit"
  */
 
 import * as nodePath from "path";
@@ -341,6 +342,27 @@ describe("atomic: all or nothing", () => {
     expect(listFiles(files.attachmentsDir)).toHaveLength(1);
     expect(count("SELECT COUNT(*) AS n FROM rcs_cache_staging_messages WHERE job_id = 'stale-job'")).toBe(0);
     expect(staging.isCommitting).toBe(false);
+  });
+
+  it("an abandoned commit no longer counts as in progress; its staging goes (T1)", async () => {
+    staging.stageChat(JOB, USER, chat("conv-a", [msg("a1", "2026-09-20T10:00:00.000Z")]), peopleA, hashA);
+    await staging.stageImage(JOB, { conversationId: "conv-a", msgId: "a1", index: 0, mimeType: "image/png", base64: PNG }, hashA);
+    let moving: () => void = () => undefined;
+    const atMove = new Promise<void>((r) => {
+      moving = r;
+    });
+    files.move = async () => {
+      moving();
+      await new Promise<void>(() => undefined); // never settles
+    };
+    staging = new RcsCacheStaging(rcsStagingDbOps(), files);
+    void staging.commit(JOB, USER, ALL, writer);
+    await atMove;
+    expect(staging.isCommitting).toBe(true);
+    await staging.abandon(JOB);
+    expect(staging.isCommitting).toBe(false);
+    expect(stagedCount()).toBe(0);
+    expect(messageCount()).toBe(0);
   });
 
   it("a failed commit keeps a file another row now uses (B1b)", async () => {
