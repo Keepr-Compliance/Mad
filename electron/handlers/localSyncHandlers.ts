@@ -11,6 +11,7 @@ import localSyncService from "../services/localSyncService";
 import logService from "../services/logService";
 import { checkInboundFirewallAllowed } from "../services/firewallService";
 import { clearGoogleMessagesWebTexts } from "./rcsImportHandlers";
+import { runSharedForceClear, type SharedForceClearResult } from "../services/rcsClearService";
 
 const LOG_TAG = "LocalSyncHandlers";
 
@@ -55,13 +56,21 @@ export function registerLocalSyncHandlers(): void {
     async (
       _event,
       options: { userId: string }
-    ): Promise<{ messagesDeleted: number; contactsDeleted: number; gmwebMessagesDeleted: number }> => {
+    ): Promise<SharedForceClearResult> => {
       logService.info("[LocalSync] IPC: clear-android-data requested", LOG_TAG);
-      const android = localSyncService.clearAndroidData(options.userId);
       // BACKLOG-3657 (founder: one shared reset): also the texts imported from
-      // Google Messages for Web. The user's removals are kept, as Android keeps them.
-      const gmweb = await clearGoogleMessagesWebTexts(options.userId);
-      return { ...android, gmwebMessagesDeleted: gmweb.messagesDeleted };
+      // Google Messages for Web — cleared FIRST, so a refusal deletes nothing.
+      // The user's removals are kept, as Android keeps them.
+      const result = await runSharedForceClear({
+        clearGmweb: () => clearGoogleMessagesWebTexts(options.userId),
+        clearAndroid: () => localSyncService.clearAndroidData(options.userId),
+      });
+      logService.info(
+        `[LocalSync] Force clear: android ${result.androidCleared ? "cleared" : "not cleared"}, ` +
+          `google messages web ${result.gmwebCleared ? "cleared" : "not cleared"}`,
+        LOG_TAG,
+      );
+      return result;
     }
   );
 }

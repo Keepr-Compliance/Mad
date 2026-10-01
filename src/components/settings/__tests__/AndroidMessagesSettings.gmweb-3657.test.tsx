@@ -53,4 +53,17 @@ describe("BACKLOG-3657 — Force re-import clears Google Messages for Web texts 
     expect(await screen.findByText(/plus 50 texts imported from Google Messages for Web/)).toBeInTheDocument();
     expect(clearAndroidData).toHaveBeenCalledWith({ userId: "user-3657" });
   });
+
+  // SR F2. Mutation: show the green "Cleared …" line even when there is an error → red.
+  it("a partial or refused clear shows its error, not a success line", async () => {
+    clearAndroidData.mockResolvedValue({
+      messagesDeleted: 0, contactsDeleted: 0, gmwebMessagesDeleted: 50, gmwebCleared: true, androidCleared: false,
+      error: "The texts imported from Google Messages for Web were cleared, but the Android texts and contacts were not. Try Force re-import again.",
+    });
+    render(<AndroidMessagesSettings userId="user-3657" />);
+    fireEvent.click(await screen.findByRole("button", { name: /force re-import/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /continue with re-import/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/but the Android texts and contacts were not/);
+    expect(screen.queryByText(/^Cleared /)).toBeNull();
+  });
 });

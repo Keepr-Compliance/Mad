@@ -65,8 +65,10 @@ export async function runWithWritesPaused<T>(
   gate: { pauseWrites(): Promise<void>; resumeWrites(): void },
   fn: () => T,
 ): Promise<T> {
-  await gate.pauseWrites();
+  // pauseWrites can throw (the drain timed out): writes are resumed and `fn`
+  // never runs — nothing is deleted.
   try {
+    await gate.pauseWrites();
     return fn();
   } finally {
     gate.resumeWrites();
@@ -119,4 +121,56 @@ export function clearGoogleMessagesWebData(
       `message_count updated on ${result.transactionsUpdated} transactions`,
   );
   return result;
+}
+
+/** The shared Force re-import result (Android + Google Messages for Web). */
+export interface SharedForceClearResult {
+  messagesDeleted: number;
+  contactsDeleted: number;
+  gmwebMessagesDeleted: number;
+  /** False when that part was not cleared. */
+  gmwebCleared: boolean;
+  androidCleared: boolean;
+  /** Plain-language reason when something was not cleared. */
+  error?: string;
+}
+
+/**
+ * BACKLOG-3657 (SR F2): the Google Messages for Web clear runs FIRST — it is
+ * the part that can refuse to start (writes still in progress) — and when it
+ * fails nothing at all is deleted. Only then the Android clear; if that fails,
+ * the result says which part WAS cleared.
+ */
+export async function runSharedForceClear(deps: {
+  clearGmweb: () => Promise<{ messagesDeleted: number }>;
+  clearAndroid: () => { messagesDeleted: number; contactsDeleted: number };
+}): Promise<SharedForceClearResult> {
+  let gmwebDeleted: number;
+  try {
+    gmwebDeleted = (await deps.clearGmweb()).messagesDeleted;
+  } catch (err) {
+    return {
+      messagesDeleted: 0,
+      contactsDeleted: 0,
+      gmwebMessagesDeleted: 0,
+      gmwebCleared: false,
+      androidCleared: false,
+      error: `Nothing was cleared. ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  try {
+    const android = deps.clearAndroid();
+    return { ...android, gmwebMessagesDeleted: gmwebDeleted, gmwebCleared: true, androidCleared: true };
+  } catch (err) {
+    return {
+      messagesDeleted: 0,
+      contactsDeleted: 0,
+      gmwebMessagesDeleted: gmwebDeleted,
+      gmwebCleared: true,
+      androidCleared: false,
+      error:
+        `The texts imported from Google Messages for Web were cleared, but the Android texts and contacts were not. ` +
+        `Try Force re-import again. (${err instanceof Error ? err.message : String(err)})`,
+    };
+  }
 }

@@ -41,5 +41,9 @@ export interface WindowApiLocalSync {
     messagesDeleted: number;
     contactsDeleted: number;
     gmwebMessagesDeleted: number;
+    /** BACKLOG-3657: which parts were cleared; `error` says why not. */
+    gmwebCleared?: boolean;
+    androidCleared?: boolean;
+    error?: string;
   }>;
 }

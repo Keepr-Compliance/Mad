@@ -169,6 +169,44 @@ describe("RcsExtensionBridge", () => {
       expect((await request(port, "POST", "/chat", EXT, CHAT_JSON)).status).toBe(200);
     });
 
+    // SR F1 / O1. Mutations that turn these red: an unbounded drain; readBody
+    // not settling on 'close'; a boolean pause flag instead of a count.
+    it("a write that never completes: the drain gives up after its timeout (busy), writes reopen, and a closed client releases the write", async () => {
+      bridge.openSession("tx-1");
+      const stalled = http.request({
+        host: "127.0.0.1", port, method: "POST", path: "/chat",
+        headers: { ...EXT, "Content-Length": "100000" },
+      });
+      stalled.on("error", () => {});
+      stalled.write("{\"conversationId\":");
+      await new Promise((r) => setTimeout(r, 50));
+
+      await expect(bridge.pauseWrites(200)).rejects.toThrow("Keepr is busy importing");
+      bridge.resumeWrites();
+      expect(bridge.writesArePaused).toBe(false);
+
+      stalled.destroy();
+      await new Promise((r) => setTimeout(r, 50));
+      await expect(bridge.pauseWrites(200)).resolves.toBeUndefined();
+      bridge.resumeWrites();
+      expect(importChat).not.toHaveBeenCalled();
+    });
+
+    it("pauses are counted: overlapping clears cannot reopen writes early", async () => {
+      await bridge.pauseWrites();
+      await bridge.pauseWrites();
+      bridge.resumeWrites();
+      expect(bridge.writesArePaused).toBe(true);
+      bridge.openSession("tx-1");
+      expect((await request(port, "POST", "/chat", EXT, CHAT_JSON)).status).toBe(503);
+      bridge.resumeWrites();
+      expect(bridge.writesArePaused).toBe(false);
+      bridge.resumeWrites(); // an extra resume never goes below zero
+      await bridge.pauseWrites();
+      expect(bridge.writesArePaused).toBe(true);
+      bridge.resumeWrites();
+    });
+
     it("pausing cancels the running Sync job", async () => {
       const job = bridge.createJob("tx-1", [{ contactId: "c-1", displayName: "Test Contact A", phonesE164: ["+15555550199"] }]);
       await bridge.pauseWrites();

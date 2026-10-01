@@ -73,6 +73,18 @@ export const RCS_BRIDGE_PORT = 38619;
 export const RCS_EXTENSION_ID = "nlfohmjehedijceeelokclkglmjnlonj";
 export const RCS_EXTENSION_ORIGIN = `chrome-extension://${RCS_EXTENSION_ID}`;
 export const RCS_NO_SESSION_MESSAGE = "Open a transaction in Keepr and click Import first.";
+/** BACKLOG-3657 (SR F1): how long a clear waits for writes in progress. */
+export const RCS_DRAIN_TIMEOUT_MS = 15_000;
+export const RCS_BUSY_MESSAGE = "Keepr is busy importing — try again in a moment.";
+
+/** A clear could not start: a write was still in progress after the drain timeout. */
+export class RcsBusyError extends Error {
+  constructor() {
+    super(RCS_BUSY_MESSAGE);
+    this.name = "RcsBusyError";
+  }
+}
+
 /** BACKLOG-3657: the reply while Keepr clears the Google Messages for Web texts. */
 export const RCS_CLEARING_MESSAGE = "Keepr is clearing imported texts. Try again in a moment.";
 
@@ -171,8 +183,24 @@ function readBody(req: http.IncomingMessage, limit: number = MAX_BODY_BYTES): Pr
       }
       chunks.push(chunk);
     });
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    req.on("error", reject);
+    let settled = false;
+    req.on("end", () => {
+      settled = true;
+      resolve(Buffer.concat(chunks).toString("utf8"));
+    });
+    req.on("error", (err) => {
+      settled = true;
+      reject(err);
+    });
+    // BACKLOG-3657 (SR F1): a client that stalls or goes away must not leave
+    // this read (and so a counted write) open forever.
+    const gone = (): void => {
+      if (settled) return;
+      settled = true;
+      reject(new Error("The request was closed before its body arrived"));
+    };
+    req.on("aborted", gone);
+    req.on("close", gone);
   });
 }
 
@@ -220,7 +248,8 @@ export class RcsExtensionBridge {
   private readonly jobs: RcsJobRegistry;
   private unclaimedTimer: NodeJS.Timeout | null = null;
   /** BACKLOG-3657: see pauseWrites. */
-  private writesPaused = false;
+  /** Re-entrant: overlapping clears each pause; writes reopen after the last resume. */
+  private pauseCount = 0;
   private inFlightWrites = 0;
   private drainWaiters: Array<() => void> = [];
 
@@ -275,19 +304,32 @@ export class RcsExtensionBridge {
    * have finished — so nothing is written between the cancel and the delete.
    * Pair with {@link resumeWrites} in a `finally`.
    */
-  async pauseWrites(): Promise<void> {
-    this.writesPaused = true;
+  async pauseWrites(drainTimeoutMs = RCS_DRAIN_TIMEOUT_MS): Promise<void> {
+    this.pauseCount += 1;
     this.cancelJob();
     if (this.inFlightWrites === 0) return;
-    await new Promise<void>((resolve) => this.drainWaiters.push(resolve));
+    // Bounded (SR F1): a write that never finishes must not hang the clear.
+    let waiter: (() => void) | null = null;
+    let timer: NodeJS.Timeout | null = null;
+    const drained = await new Promise<boolean>((resolve) => {
+      waiter = () => resolve(true);
+      this.drainWaiters.push(waiter);
+      timer = setTimeout(() => resolve(false), drainTimeoutMs);
+    });
+    if (timer) clearTimeout(timer);
+    if (!drained) {
+      this.drainWaiters = this.drainWaiters.filter((w) => w !== waiter);
+      throw new RcsBusyError();
+    }
   }
 
+  /** Undo one pauseWrites (also after it threw). Writes reopen at zero. */
   resumeWrites(): void {
-    this.writesPaused = false;
+    this.pauseCount = Math.max(0, this.pauseCount - 1);
   }
 
   get writesArePaused(): boolean {
-    return this.writesPaused;
+    return this.pauseCount > 0;
   }
 
   private releaseDrainWaiters(): void {
@@ -432,7 +474,7 @@ export class RcsExtensionBridge {
       // the clear can wait for them (no write lands between cancel and delete).
       const jobMatch = JOB_ROUTE.exec(path);
       const isWrite = path === "/chat" || (!!jobMatch && (jobMatch[2] === "chat" || jobMatch[2] === "attachment"));
-      if (isWrite && this.writesPaused) {
+      if (isWrite && this.writesArePaused) {
         sendJson(res, 503, { error: "busy", message: RCS_CLEARING_MESSAGE });
         return;
       }
