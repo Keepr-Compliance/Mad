@@ -297,8 +297,32 @@ export class RcsImportJob {
    * numbers its Details showed ("" when unknown). Stored with the chat's rows
    * so a later removal can be recognised after a re-pair changes the id.
    */
+  /**
+   * The chat's numbers for its key (BACKLOG-3630), minus a likely OWN number
+   * (SR optional): the page skips a Details row named "You", but if the user's
+   * row is not labelled so, their number would make keys inconsistent. A chat
+   * never keeps zero numbers. Limit: chats imported before the second chat was
+   * checked keep the number (no evidence yet).
+   */
   numbersFor(conversationId: string): string[] {
-    return [...(this.participantNumbers.get(conversationId) ?? [])];
+    const numbers = this.participantNumbers.get(conversationId) ?? [];
+    const own = this.likelyOwnNumbers();
+    const kept = numbers.filter((n) => !own.has(n));
+    return kept.length > 0 ? kept : [...numbers];
+  }
+
+  /**
+   * A number shown in EVERY checked chat's Details — only once 2+ chats were
+   * checked, and only when every checked chat showed 2+ numbers (the user's
+   * own row always sits beside someone else's; a contact shown alone in a 1:1
+   * chat is never dropped).
+   */
+  private likelyOwnNumbers(): Set<string> {
+    const lists = Array.from(this.participantNumbers.values()).filter((l) => l.length > 0);
+    if (lists.length < 2 || lists.some((l) => l.length < 2)) return new Set();
+    let common = new Set(lists[0]);
+    for (const l of lists.slice(1)) common = new Set(l.filter((n) => common.has(n)));
+    return common;
   }
 
   /**

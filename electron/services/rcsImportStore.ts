@@ -100,6 +100,44 @@ export function peopleFrom(rows: unknown, allowed?: readonly string[]): RcsChatP
   return { numbers: Array.from(found).sort(), names };
 }
 
+function numbersIn(flat: string | null | undefined): string[] {
+  return String(flat || "")
+    .split(/,\s*/)
+    .map((n) => n.trim())
+    .filter((n) => n.startsWith("+"));
+}
+
+function fromOf(participants: string | null | undefined): string | null {
+  try {
+    const parsed = JSON.parse(String(participants || "")) as { from?: unknown };
+    return typeof parsed.from === "string" ? parsed.from : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * BACKLOG-3630 (SR F1): is an existing gmweb2 row (same sent_at + direction +
+ * body, a candidate of the content guard) about the SAME people as a new row?
+ * sent_at has minute precision, so "Ok" from two different chats in the same
+ * minute must never collapse into one. Inbound: the new row's sender number is
+ * the old row's `from` or one of its numbers (an unresolved sender — no
+ * number — never matches). Outbound: the two chats share at least one number.
+ */
+export function samePeople(
+  row: { direction: string; participants: string; participantsFlat: string },
+  old: { participants: string | null; participantsFlat: string | null },
+): boolean {
+  const oldNumbers = numbersIn(old.participantsFlat);
+  if (row.direction === "inbound") {
+    const sender = fromOf(row.participants);
+    if (!sender || !sender.startsWith("+")) return false;
+    return fromOf(old.participants) === sender || oldNumbers.includes(sender);
+  }
+  const mine = new Set(numbersIn(row.participantsFlat));
+  return oldNumbers.some((n) => mine.has(n));
+}
+
 /** A group sender's number: only when the shown name maps to exactly one number. */
 function senderNumber(sender: string, people: RcsChatPeople): string | null {
   const wanted = sender.trim().toLowerCase();
@@ -220,6 +258,7 @@ export interface RcsImportDeps {
    * existing id). Those rows are not inserted; the existing row is linked.
    */
   findContentDuplicates?: (userId: string, rows: RcsInsertRow[]) => Map<string, string>;
+  // (Real one: syncDbService.findRcsContentDuplicates — same people only, never empty bodies.)
 }
 
 /**

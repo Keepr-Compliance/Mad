@@ -16,6 +16,7 @@ import {
   parseIncomingChat,
   peopleFrom,
   rcsChatHash,
+  samePeople,
   type RcsChatPeople,
   type RcsImportDeps,
   type RcsIncomingChat,
@@ -473,5 +474,23 @@ describe("the content guard (BACKLOG-3630)", () => {
     };
     await importChat(CHAT, "tx-1", db.deps, PEOPLE);
     expect(asked).toEqual([]);
+  });
+});
+
+// SR F1: the content guard's people check (pure). Mutation: return true
+// whenever the bodies matched → red.
+describe("samePeople (BACKLOG-3630, SR F1)", () => {
+  const inbound = (from: string, flat: string) => ({ direction: "inbound", participants: JSON.stringify({ from, to: ["me"] }), participantsFlat: flat });
+  const outbound = (flat: string) => ({ direction: "outbound", participants: JSON.stringify({ from: "me", to: flat.split(", ") }), participantsFlat: flat });
+  it("inbound: the sender's number must be the old row's sender or one of its numbers", () => {
+    expect(samePeople(inbound(NUM_A, NUM_A), { participants: JSON.stringify({ from: NUM_A }), participantsFlat: NUM_A })).toBe(true);
+    expect(samePeople(inbound(NUM_A, NUM_A), { participants: JSON.stringify({ from: NUM_B }), participantsFlat: NUM_B })).toBe(false);
+    expect(samePeople(inbound(NUM_A, NUM_A), { participants: "{}", participantsFlat: `${NUM_B}, ${NUM_A}` })).toBe(true);
+    expect(samePeople(inbound("Test Contact Twin", NUM_A), { participants: JSON.stringify({ from: "Test Contact Twin" }), participantsFlat: NUM_A })).toBe(false);
+  });
+  it("outbound: at least one number in common", () => {
+    expect(samePeople(outbound(`${NUM_A}, ${NUM_B}`), { participants: "{}", participantsFlat: NUM_B })).toBe(true);
+    expect(samePeople(outbound(NUM_A), { participants: "{}", participantsFlat: NUM_B })).toBe(false);
+    expect(samePeople(outbound(NUM_A), { participants: null, participantsFlat: null })).toBe(false);
   });
 });

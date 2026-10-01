@@ -58,19 +58,20 @@ export const RCS_REMOVALS_SQL = sql`
   `;
 
 /**
- * BACKLOG-3630: the content guard. A gmweb2 row of the user, under a DIFFERENT
- * key, with the same sent_at + direction + body (NULL bodies compare equal).
+ * BACKLOG-3630: the content guard's CANDIDATES. gmweb2 rows of the user, under
+ * a DIFFERENT key, with the same sent_at + direction + exact (non-empty) body.
+ * sent_at has minute precision, so a candidate is only a duplicate when it is
+ * also about the same people — checked in code (rcsImportStore.samePeople).
  * Parameters: user id, external id, sent_at, direction, body.
  */
 export const RCS_CONTENT_DUPLICATE_SQL = sql`
-    SELECT id FROM messages
+    SELECT id, participants, participants_flat AS participantsFlat FROM messages
     WHERE user_id = ?
       AND external_id LIKE 'gmweb2:%'
       AND external_id != ?
       AND sent_at = ?
       AND direction = ?
-      AND COALESCE(body_text, '') = COALESCE(?, '')
-    LIMIT 1
+      AND body_text = ?
   `;
 
 // ============================================

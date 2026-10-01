@@ -4,6 +4,7 @@
  */
 
 import { ensureDb } from "./core/dbConnection";
+import { samePeople } from "../rcsImportStore";
 import logService from "../logService";
 import {
   RCS_IMPORT_TRANSACTION_CONTACTS_SQL,
@@ -242,13 +243,27 @@ export function getRcsRemovals(
  */
 export function findRcsContentDuplicates(
   userId: string,
-  rows: { externalId: string; sentAt: string; direction: string; bodyText: string | null }[]
+  rows: {
+    externalId: string;
+    sentAt: string;
+    direction: string;
+    bodyText: string | null;
+    participants: string;
+    participantsFlat: string;
+  }[]
 ): Map<string, string> {
   const db = ensureDb();
   const stmt = db.prepare(RCS_CONTENT_DUPLICATE_SQL);
   const found = new Map<string, string>();
   for (const r of rows) {
-    const hit = stmt.get(userId, r.externalId, r.sentAt, r.direction, r.bodyText) as { id: string } | undefined;
+    // Never for an empty body: image-only messages of the same minute collide.
+    if (!r.bodyText || r.bodyText.trim() === "") continue;
+    const candidates = stmt.all(userId, r.externalId, r.sentAt, r.direction, r.bodyText) as {
+      id: string;
+      participants: string | null;
+      participantsFlat: string | null;
+    }[];
+    const hit = candidates.find((old) => samePeople(r, old));
     if (hit) found.set(r.externalId, hit.id);
   }
   return found;

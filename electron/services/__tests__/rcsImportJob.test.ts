@@ -189,6 +189,30 @@ describe("participantKey (re-pair-proof chat identity)", () => {
     expect(participantKey(["someone@example.test", ""])).toBe("");
   });
 
+  // SR optional own-number fallback. Mutations: drop the "2+ chats" or the
+  // "2+ numbers each" condition → red.
+  it("a number shown in every checked chat (each with 2+ numbers) is treated as the user's own", () => {
+    const { jobs } = registry();
+    const job = jobs.create("tx-1", CONTACTS);
+    job.claim(jobs.nowMs());
+    job.match("chat-1", ["(555) 555-0199", "(555) 555-0100"]);
+    // One chat only: no evidence yet.
+    expect(job.numbersFor("chat-1")).toEqual(["+15555550100", "+15555550199"]);
+    job.match("chat-2", ["(555) 555-0142", "(555) 555-0100"]);
+    expect(job.numbersFor("chat-1")).toEqual(["+15555550199"]);
+    expect(job.numbersFor("chat-2")).toEqual(["+15555550142"]);
+  });
+
+  it("a contact alone in a 1:1 chat and also in a group is never dropped", () => {
+    const { jobs } = registry();
+    const job = jobs.create("tx-1", CONTACTS);
+    job.claim(jobs.nowMs());
+    job.match("one-to-one", ["(555) 555-0199"]);
+    job.match("group", ["(555) 555-0199", "(555) 555-0142"]);
+    expect(job.numbersFor("one-to-one")).toEqual(["+15555550199"]);
+    expect(job.numbersFor("group")).toEqual(["+15555550142", "+15555550199"]);
+  });
+
   it("the job remembers the numbers of each chat it matched (BACKLOG-3630)", () => {
     const { jobs } = registry();
     const job = jobs.create("tx-1", CONTACTS);

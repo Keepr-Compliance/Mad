@@ -2433,7 +2433,14 @@ class DatabaseService implements IDatabaseService {
   // BACKLOG-3630: the RCS content guard
   findRcsContentDuplicates(
     userId: string,
-    rows: { externalId: string; sentAt: string; direction: string; bodyText: string | null }[],
+    rows: {
+      externalId: string;
+      sentAt: string;
+      direction: string;
+      bodyText: string | null;
+      participants: string;
+      participantsFlat: string;
+    }[],
   ) {
     return syncDb.findRcsContentDuplicates(userId, rows);
   }
