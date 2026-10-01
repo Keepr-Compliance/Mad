@@ -1,6 +1,6 @@
 # BACKLOG-3618 harness — agents' own checklist templates
 
-Runs `supabase/migrations/20261001120000_backlog_3618_agent_checklist_templates.sql`
+Runs `supabase/migrations/20261001054306_backlog_3618_agent_checklist_templates.sql`
 — **the shipped file itself** — on a real Postgres, on top of every checklist
 migration production runs (the backlog-3607 prelude plus `20260921101758` and
 `20260925044046`, the three 3596 files and the 3607 file). `control-run.txt`,
@@ -11,7 +11,7 @@ It is not in CI: CI has no database. The CI tripwire is
 `broker-portal/__tests__/migrations/agent-checklists-3618.test.ts`.
 No file here has a `.test.` or `.spec.` infix.
 
-**Nothing has been applied to production, and nothing here can reach it.**
+**The migration was applied to production as ledger version `20261001054306`. Nothing here can reach production.**
 
 ## Running it
 

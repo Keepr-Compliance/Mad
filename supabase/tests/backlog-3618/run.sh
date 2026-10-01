@@ -43,7 +43,7 @@ M96=( "$MIGDIR/20260928120000_backlog_3596_broker_checklist_ticks.sql"
       "$MIGDIR/20260928130000_backlog_3596_review_refusals.sql"
       "$MIGDIR/20260928170000_backlog_3596_added_checklist_ticks.sql" )
 M07="$MIGDIR/20260929120000_backlog_3607_checklist_add_remove.sql"
-DRAFT="$MIGDIR/20261001120000_backlog_3618_agent_checklist_templates.sql"
+DRAFT="$MIGDIR/20261001054306_backlog_3618_agent_checklist_templates.sql"
 DRAFT_RB="$HERE/rollback-3618.sql"
 SSH_HOST="${SSH_HOST:?set SSH_HOST}"; CONTAINER="${PG_CONTAINER:?set PG_CONTAINER}"
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=20)
