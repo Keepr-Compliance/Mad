@@ -265,6 +265,34 @@ describe("BACKLOG-3554 — uploadAttachments", () => {
     expect(objects.get(target)?.toString()).toBe("first file bytes");
     expect(uploadCalls).toHaveLength(1);
   });
+
+  it("a definitive 403 on attempt 1, then the path occupied → failure (the 403 stored nothing)", async () => {
+    const target = buildAttachmentStoragePath(ORG, SUBMISSION, ATT_B, "image001.png");
+    objects.set(target, Buffer.from("first file bytes"));
+    script = [
+      { kind: "error", error: storageApiError("new row violates row-level security policy", 403, "403") },
+    ];
+
+    const result = await supabaseStorageService.uploadAttachments(ORG, SUBMISSION, [sameNamePair()[1]]);
+
+    expect(result.results[0]).toMatchObject({ success: false, storagePath: "" });
+    expect(uploadCalls).toHaveLength(2);
+    expect(objects.get(target)?.toString()).toBe("first file bytes");
+  });
+
+  it("a retryable pre-upload failure (EACCES) on attempt 1, then the path occupied → failure", async () => {
+    const target = buildAttachmentStoragePath(ORG, SUBMISSION, ATT_B, "image001.png");
+    objects.set(target, Buffer.from("first file bytes"));
+    const eacces = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+    jest.spyOn(fs.promises, "readFile").mockRejectedValueOnce(eacces);
+
+    const result = await supabaseStorageService.uploadAttachments(ORG, SUBMISSION, [sameNamePair()[1]]);
+
+    expect(result.results[0]).toMatchObject({ success: false, storagePath: "" });
+    // Attempt 1 never reached storage; attempt 2 met the occupied path.
+    expect(uploadCalls).toHaveLength(1);
+    expect(objects.get(target)?.toString()).toBe("first file bytes");
+  });
 });
 
 describe("BACKLOG-3554 — submit: each submission_attachments row points at its own file", () => {

@@ -369,7 +369,16 @@ class SupabaseStorageService {
         storagePath: "",
         success: false,
         error: errorMessage,
-        uploadRequestIssued,
+        // BACKLOG-3554: only an UNCLEAR outcome may have stored the bytes. A
+        // definitive HTTP answer below 500 (403 policy, 413 too large) means
+        // nothing was written, so a later "already exists" is not ours.
+        // StorageUnknownError (transport) carries no numeric status.
+        uploadRequestIssued:
+          uploadRequestIssued &&
+          !(
+            typeof (error as { status?: unknown })?.status === "number" &&
+            (error as { status: number }).status < 500
+          ),
       };
     }
   }
