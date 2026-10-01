@@ -183,6 +183,8 @@ export interface RcsExtensionBridgeOptions {
    * decides (signed in, opted in, nothing running) and answers status + body.
    */
   startCacheJobFromPage?: () => Promise<{ status: number; body: Record<string, unknown> }>;
+  /** BACKLOG-3658: POST /cache/status — may the page's "Sync to Keepr" start now? No user data. */
+  cacheStatus?: () => Promise<{ ready: true } | { ready: false; reason: "signed_out" | "not_opted_in" | "busy" }>;
   /** BACKLOG-3658: POST /hello — the extension is installed ({version}) / the page is paired. */
   onHello?: (hello: RcsHello) => void;
   /** BACKLOG-3658: store a cache chat for `userId` (no transaction, no link). */
@@ -287,7 +289,7 @@ async function readJson(
   }
 }
 
-const JOB_ROUTE = /^\/job\/([0-9a-fA-F-]{36})(?:\/(claim|match|chat|attachment|progress|finish|error))?$/;
+const JOB_ROUTE = /^\/job\/([0-9a-fA-F-]{36})(?:\/(claim|match|chat|attachment|progress|finish|error|cancel))?$/;
 
 const silentLogger: RcsBridgeLogger = { info: () => {}, warn: () => {}, error: () => {} };
 
@@ -389,6 +391,11 @@ export class RcsExtensionBridge {
     this.logger.warn("[RcsBridge] The signed-in user changed: the Sync was cancelled");
     this.cancelJob(job.jobId);
     return false;
+  }
+
+  /** BACKLOG-3658: the user the running job was started for, if any. */
+  activeJobUserId(): string | null {
+    return this.jobs.active()?.userId ?? null;
   }
 
   /** BACKLOG-3661: the created or running job, if any. */
@@ -588,6 +595,17 @@ export class RcsExtensionBridge {
         return;
       }
 
+      // BACKLOG-3658: the page's button state (ready, or why not). No user data.
+      if (path === "/cache/status") {
+        if (!this.options.cacheStatus) {
+          sendJson(res, 501, { error: "unsupported" });
+          return;
+        }
+        const status = await this.options.cacheStatus();
+        sendJson(res, 200, status.ready ? { ready: true } : { ready: false, reason: status.reason });
+        return;
+      }
+
       // BACKLOG-3658: the page's "Sync to Keepr" button starts the cache job.
       if (path === "/job/cache/start") {
         if (!this.options.startCacheJobFromPage) {
@@ -707,6 +725,14 @@ export class RcsExtensionBridge {
 
     if (req.method !== "POST") {
       sendJson(res, 405, { error: "method_not_allowed", message: "Keepr's bridge accepts POST only." });
+      return;
+    }
+
+    // BACKLOG-3658: the page's Cancel. Only this job; unknown → 404, over → 410
+    // (both answered by the check above).
+    if (action === "cancel") {
+      this.cancelJob(job.jobId);
+      sendJson(res, 200, { ok: true });
       return;
     }
 

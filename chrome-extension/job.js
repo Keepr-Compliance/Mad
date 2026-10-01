@@ -56,6 +56,11 @@
 
   /** Keepr keeps at most this many named entries (RCS_NOT_REACHED_CAP). */
   var NOT_REACHED_CAP = 20;
+  /** BACKLOG-3658: a cache Sync checks at most this many chats per run (the rest: not checked). */
+  var CACHE_CHECK_MAX = 300;
+  /** BACKLOG-3658: the list read for a cache Sync stops here when no time can be read. */
+  var CACHE_LIST_MAX = 1000;
+  var PAUSED_TEXT = "Keep this Chrome window visible — Sync paused";
   /** Step-log lines kept for the overlay's Copy. */
   var LOG_BUFFER_MAX = 500;
   var LIST_NOT_REACHABLE =
@@ -107,6 +112,9 @@
     if (s.contactsWithoutPhone > 0) {
       lines.push(s.contactsWithoutPhone + " contact" + (s.contactsWithoutPhone === 1 ? " has" : "s have") +
         " no phone number — see Keepr");
+    }
+    if (s.imagesNotKept > 0) {
+      lines.push(s.imagesNotKept + " images not kept (no transaction contact in the chat)");
     }
     if (s.removedByUser > 0) {
       lines.push(s.removedByUser + " messages you removed were not re-added");
@@ -232,6 +240,30 @@
    * job: the run ends at once — no more chats, no /finish, no /error.
    * @returns {Promise<{outcome: string, progress?: object}>}
    */
+  /**
+   * BACKLOG-3658: a cache Sync's chats — every chat above the cutoff, in list
+   * order (no name planning). The list is newest first, so the first chat whose
+   * time is older than `since` is the cutoff; with no readable time the whole
+   * list counts. At most CACHE_CHECK_MAX are checked; the rest are "not checked".
+   */
+  function cachePlan(conversations, sinceMs) {
+    var above = conversations;
+    if (typeof sinceMs === "number" && isFinite(sinceMs)) {
+      for (var i = 0; i < conversations.length; i++) {
+        var t = conversations[i].timeMs;
+        if (typeof t === "number" && t < sinceMs) {
+          above = conversations.slice(0, i);
+          break;
+        }
+      }
+    }
+    var picked = above.slice(0, CACHE_CHECK_MAX);
+    return {
+      queue: picked.map(function (c) { return { conversation: c, reason: "cache" }; }),
+      notChecked: above.length - picked.length,
+    };
+  }
+
   async function runJob(jobId, env) {
     try {
       return await runJobInner(jobId, env);
@@ -294,12 +326,32 @@
       return reply;
     }
     var progress = { listed: 0, candidates: 0, checked: 0, skipped: 0, notChecked: 0 };
-    var totals = { chats: 0, messages: 0, images: 0, removedByUser: 0 };
+    var totals = { chats: 0, messages: 0, images: 0, removedByUser: 0, imagesNotKept: 0 };
     var contactsWithoutPhone = 0;
+
+    // BACKLOG-3658: progress lines carry the page's Cancel (this job only).
+    var RUNNING_EXTRAS = { cancel: true };
+    function stageText(n, of) {
+      return (isCache ? "Chat " : "Checking chat ") + n + " of " + of;
+    }
+    /**
+     * BACKLOG-3658: a hidden tab is throttled by Chrome (timers slowed, the
+     * list may not render), so the steps stop while the page is hidden and
+     * resume once it is visible again. Keepr hears the pause as a stage.
+     */
+    var pauses = 0;
+    async function holdWhileHidden(resumeText) {
+      if (!env.visibility || !env.visibility.hidden()) return;
+      pauses += 1;
+      await report(PAUSED_TEXT);
+      await env.visibility.whenVisible();
+      log("resumed");
+      if (resumeText) await report(resumeText);
+    }
 
     async function report(stage) {
       log("stage: " + stage);
-      env.overlay.show(stage, false);
+      env.overlay.show(stage, false, RUNNING_EXTRAS);
       await call("POST", base + "/progress", {
         stage: stage,
         listed: progress.listed,
@@ -322,6 +374,7 @@
         notChecked: progress.notChecked,
         contactsWithoutPhone: contactsWithoutPhone,
         removedByUser: totals.removedByUser,
+        imagesNotKept: totals.imagesNotKept,
         notReached: reported,
         notReachedMore: notReached.length - reported.length,
       };
@@ -370,7 +423,10 @@
     for (var ct = 0; ct < contacts.length; ct++) contactTags.push(await tag(contacts[ct].displayName));
     log("claimed: " + contacts.length + " contacts with a phone [" + contactTags.join(", ") + "]");
     // History floor: the transaction's start date; none → no date floor.
-    var floorMs = claim.body && typeof claim.body.startDate === "string" ? Date.parse(claim.body.startDate) : NaN;
+    // BACKLOG-3658: a cache Sync — every chat, history back to `since`.
+    var isCache = !!(claim.body && claim.body.kind === "cache");
+    var floorSource = isCache ? claim.body.since : claim.body && claim.body.startDate;
+    var floorMs = typeof floorSource === "string" ? Date.parse(floorSource) : NaN;
     if (!isFinite(floorMs)) floorMs = null;
     var history = [];
 
@@ -384,13 +440,20 @@
     log("stage: loading the conversation list");
     // No env.scroll in the browser: collectConversations drives the page's own
     // scroller (top first, then step down with scroll events).
-    var collected = await env.scan.collectConversations(env.doc, { scroll: env.scroll, sleep: env.sleep });
+    await holdWhileHidden("Loading your conversation list…");
+    var collected = await env.scan.collectConversations(env.doc, isCache
+      ? { scroll: env.scroll, sleep: env.sleep, stopAtOlderThanMs: floorMs, maxItems: CACHE_LIST_MAX }
+      : { scroll: env.scroll, sleep: env.sleep });
     // BACKLOG-3645: the phone number is the gate, a name only orders the queue.
     // Up to CHECK_ALL_MAX chats every chat is checked; above it, plausible names
     // plus number-only chats, and the rest are reported as not checked.
-    var plan = env.scan.planChecks
-      ? env.scan.planChecks(collected.conversations, contacts)
-      : { queue: env.scan.pickCandidates(collected.conversations, contacts), notChecked: 0 };
+    // BACKLOG-3658: a cache Sync checks every chat newer than `since` in list
+    // order (no names), at most CACHE_CHECK_MAX; the rest are not checked.
+    var plan = isCache
+      ? cachePlan(collected.conversations, floorMs)
+      : env.scan.planChecks
+        ? env.scan.planChecks(collected.conversations, contacts)
+        : { queue: env.scan.pickCandidates(collected.conversations, contacts), notChecked: 0 };
     var candidates = plan.queue;
     progress.listed = collected.conversations.length;
     progress.candidates = candidates.length;
@@ -403,7 +466,7 @@
     }
     log("candidates " + candidates.length + " " + JSON.stringify(byReason) + ", not checked " + plan.notChecked);
     // Chats, not contacts (founder): "Checking chat i of N".
-    await report(candidates.length > 0 ? "Checking chat 1 of " + candidates.length : "No chats to check");
+    await report(candidates.length > 0 ? stageText(1, candidates.length) : "No chats to check");
 
     // 4. Each candidate: open, read numbers, close Details, ask Keepr.
     for (var i = 0; i < candidates.length; i++) {
@@ -411,8 +474,9 @@
       var opened = false;
       var gone = false;
       var imagesFailed = 0;
+      await holdWhileHidden(stageText(i + 1, candidates.length));
       try {
-        env.overlay.show("Checking chat " + (i + 1) + " of " + candidates.length + "…", false);
+        env.overlay.show(stageText(i + 1, candidates.length) + "…", false, RUNNING_EXTRAS);
         log("#" + (i + 1) + "/" + candidates.length + " chat " + (await tag(conv.name)) +
           " reason=" + candidates[i].reason);
         // The messages on screen before the click: the next chat is ready only
@@ -452,6 +516,7 @@
         }
         // Only the latest messages render on open: load older ones back past
         // the transaction's start date, then let the set settle.
+        await holdWhileHidden(stageText(i + 1, candidates.length));
         var loc = env.getLocation();
         var hist = await env.scan.loadHistory(env.doc, {
           scrollUp: env.scrollMessagesUp || function () {},
@@ -547,7 +612,11 @@
                 base64: img.base64,
               });
               if (up.ok) totals.images += 1;
-              else {
+              else if (up.status === 422 && up.body && up.body.error === "not_a_contact") {
+                // BACKLOG-3658: an expected skip in a cache Sync (no transaction
+                // contact in the chat): counted on its own, never "not imported".
+                totals.imagesNotKept += 1;
+              } else {
                 progress.skipped += 1;
                 imagesFailed += 1;
               }
@@ -581,7 +650,7 @@
       }
       // Also the cancel check between chats: a job Keepr dropped answers 404/410.
       await report(i + 1 < candidates.length
-        ? "Checking chat " + (i + 2) + " of " + candidates.length
+        ? stageText(i + 2, candidates.length)
         : "Checked " + candidates.length + " of " + candidates.length + " chats");
     }
 
@@ -600,7 +669,7 @@
     log("done: listed " + progress.listed + ", candidates " + progress.candidates + ", checked " + progress.checked +
       ", matched " + matchedCount + ", imported " + totals.chats + " chats / " + totals.messages + " messages / " +
       totals.images + " images, not fully imported " + notReached.length + ", not checked " + progress.notChecked +
-      ", removed by you " + totals.removedByUser);
+      ", removed by you " + totals.removedByUser + ", images not kept " + totals.imagesNotKept + ", pauses " + pauses);
     // One line + Details / Copy (founder, BACKLOG-3641); results live in Keepr.
     env.overlay.show(DONE_LINE, false, await overlayExtras());
     return {
@@ -628,7 +697,8 @@
    * @param {string} text
    * @param {boolean} isError
    * @param {{details: string, copy: string}=} extras
-   * @param {{copy: function(string): Promise<boolean>, focus?: function(): Promise<boolean>}} io
+   * @param {{copy: function(string): Promise<boolean>, focus?: function(): Promise<boolean>,
+   *   cancel?: function(): Promise<boolean>}} io
    */
   function renderOverlay(panel, text, isError, extras, io) {
     var doc = panel.ownerDocument;
@@ -641,6 +711,30 @@
     Object.assign(line.style, { fontWeight: "600" });
     panel.appendChild(line);
     if (!extras) return;
+    if (extras.cancel && !extras.details) {
+      // BACKLOG-3658: a running Sync's Cancel (this job only, via the bridge).
+      var cancel = doc.createElement("button");
+      cancel.type = "button";
+      cancel.setAttribute("data-keepr", "cancel");
+      cancel.textContent = "Cancel";
+      Object.assign(cancel.style, { marginTop: "8px", cursor: "pointer", font: "inherit" });
+      panel.appendChild(cancel);
+      cancel.addEventListener("click", function () {
+        if (!io.cancel) return;
+        cancel.disabled = true;
+        cancel.textContent = "Cancelling…";
+        Promise.resolve(io.cancel()).then(function (ok) {
+          if (!ok) {
+            cancel.disabled = false;
+            cancel.textContent = "Cancel";
+          }
+        }, function () {
+          cancel.disabled = false;
+          cancel.textContent = "Cancel";
+        });
+      });
+      return;
+    }
 
     // Bottom row: the details link LEFT, Open Keepr RIGHT.
     var row = doc.createElement("div");
@@ -724,6 +818,9 @@
     copyText: copyText,
     numberShape: numberShape,
     shortHash: shortHash,
+    cachePlan: cachePlan,
+    PAUSED_TEXT: PAUSED_TEXT,
+    CACHE_CHECK_MAX: CACHE_CHECK_MAX,
   };
 
   if (typeof module !== "undefined" && module.exports) {
@@ -796,8 +893,32 @@
       });
       document.body.appendChild(panel);
     }
-    renderOverlay(panel, text, isError, extras, { copy: copyToClipboard, focus: focusKeepr });
+    renderOverlay(panel, text, isError, extras, { copy: copyToClipboard, focus: focusKeepr, cancel: cancelJob });
   }
+
+  /** The page's Cancel: POST /job/<this job>/cancel through the worker. */
+  var currentJobId = null;
+  function cancelJob() {
+    if (!currentJobId) return Promise.resolve(false);
+    return toWorker({ type: "keepr-job-api", method: "POST", path: "/job/" + currentJobId + "/cancel", body: {} })
+      .then(function (r) { return !!(r && r.ok); });
+  }
+
+  // BACKLOG-3658: the steps wait while the tab is hidden (Chrome throttles it).
+  var visibility = {
+    hidden: function () { return document.visibilityState === "hidden"; },
+    whenVisible: function () {
+      return new Promise(function (resolve) {
+        if (document.visibilityState !== "hidden") return resolve();
+        function onChange() {
+          if (document.visibilityState === "hidden") return;
+          document.removeEventListener("visibilitychange", onChange);
+          resolve();
+        }
+        document.addEventListener("visibilitychange", onChange);
+      });
+    },
+  };
 
   /** "Open Keepr": the worker asks the bridge (POST /focus) to bring Keepr forward. */
   function focusKeepr() {
@@ -916,12 +1037,14 @@
       readImage: readImage,
       extract: root.KeeprExtract.extractConversation,
       scan: root.KeeprScan,
+      visibility: visibility,
     };
   }
 
   async function start(jobId) {
     if (running) return;
     setRunning(true);
+    currentJobId = jobId;
     try { sessionStorage.removeItem(STORAGE_KEY); } catch (_e) { /* ignore */ }
     if (!document.body) {
       await new Promise(function (r) { document.addEventListener("DOMContentLoaded", r, { once: true }); });
@@ -937,6 +1060,7 @@
         body: { code: "scan_failed", message: String((err && err.message) || err) },
       });
     } finally {
+      currentJobId = null;
       setRunning(false);
     }
   }

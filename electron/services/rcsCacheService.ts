@@ -62,6 +62,26 @@ export function decideCacheStart(input: {
   return { ok: true, userId: input.userId };
 }
 
+/** BACKLOG-3658: why the page's "Sync to Keepr" button is not ready (no user data). */
+export type CacheStatusReason = "signed_out" | "not_opted_in" | "busy";
+
+/** The page's button state, from the same rule as starting a cache Sync. */
+export function cacheStatusFrom(
+  decision: { ok: true; userId: string } | CacheStartRefusal,
+): { ready: true } | { ready: false; reason: CacheStatusReason } {
+  if ("ok" in decision) return { ready: true };
+  if (decision.error === "signed_out") return { ready: false, reason: "signed_out" };
+  if (decision.error === "not_opted_in") return { ready: false, reason: "not_opted_in" };
+  return { ready: false, reason: "busy" };
+}
+
+/** BACKLOG-3658: an extension report is written to the database at most once a minute per user. */
+export const RCS_HELLO_PERSIST_MS = 60_000;
+
+export function shouldPersistHello(lastPersistedMs: number | undefined, nowMs: number): boolean {
+  return lastPersistedMs === undefined || nowMs - lastPersistedMs >= RCS_HELLO_PERSIST_MS;
+}
+
 export interface CacheJobEndedDeps {
   saveFinishedAt: (userId: string, iso: string) => void;
   saveOwnNumber: (userId: string, number: string) => void;
@@ -71,22 +91,46 @@ export interface CacheJobEndedDeps {
 }
 
 /**
- * After a cache Sync ends: the finish time is saved ONLY on success (the next
+ * After a cache Sync ends: its start time is saved ONLY on success (the next
  * run then overlaps it by a day); a detected own number (3+ chats agreed) is
  * kept for the next run; and the phone auto-link runs for THAT user whatever
  * the outcome — chats stored before a cancel or an error still get linked.
  */
 export async function handleCacheJobEnded(
-  ended: { kind: string; userId: string | null; snapshot: { state: string }; detectedOwnNumber: string | null },
+  ended: {
+    kind: string;
+    userId: string | null;
+    snapshot: { state: string; createdAt?: string };
+    detectedOwnNumber: string | null;
+  },
   deps: CacheJobEndedDeps,
 ): Promise<void> {
   if (ended.kind !== "cache" || !ended.userId) return;
   const userId = ended.userId;
-  if (ended.snapshot.state === "finished") deps.saveFinishedAt(userId, new Date(deps.now()).toISOString());
+  // The job's START time (SR): chats that changed while it ran are re-read
+  // next time (since = this − 1 day anyway).
+  if (ended.snapshot.state === "finished") {
+    deps.saveFinishedAt(userId, ended.snapshot.createdAt ?? new Date(deps.now()).toISOString());
+  }
   if (ended.detectedOwnNumber) deps.saveOwnNumber(userId, ended.detectedOwnNumber);
   try {
     await deps.autoLink(userId);
   } catch (err) {
     deps.log?.(`[RcsCache] Auto-link after the cache Sync failed: ${err instanceof Error ? err.message : String(err)}`);
   }
+}
+
+/**
+ * BACKLOG-3658: a running Sync belongs to the user who started it. Signing out
+ * cancels it; another user signing in cancels it; a refresh for the same user
+ * (or a job of no user) keeps it.
+ */
+export function cancelOnSessionChange(
+  change: { kind: "saved" | "cleared"; userId: string | null },
+  activeJobUserId: string | null,
+  hasActiveJob: boolean,
+): boolean {
+  if (!hasActiveJob) return false;
+  if (change.kind === "cleared") return true;
+  return !!activeJobUserId && !!change.userId && activeJobUserId !== change.userId;
 }

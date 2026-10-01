@@ -106,6 +106,93 @@ async function focusKeepr() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// BACKLOG-3658: presence, and the page's "Sync to Keepr"
+// ---------------------------------------------------------------------------
+
+/** One POST to a non-job bridge route. Always resolves {ok, status, body}. */
+async function postBridge(path, body) {
+  let response;
+  try {
+    response = await fetch(`${BRIDGE_URL}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+  } catch (_err) {
+    return { ok: false, status: 0, body: { message: NOT_RUNNING } };
+  }
+  let parsed = null;
+  try {
+    parsed = await response.json();
+  } catch (_err) {
+    parsed = null;
+  }
+  return { ok: response.status >= 200 && response.status < 300, status: response.status, body: parsed };
+}
+
+/** A hello of each kind goes out at most once a minute (the worker restarts often). */
+const HELLO_EVERY_MS = 60 * 1000;
+const lastHelloAt = {};
+
+async function helloSentRecently(kind, nowMs) {
+  const key = "keepr-hello-" + kind;
+  let last = lastHelloAt[kind];
+  try {
+    if (last === undefined && chrome.storage && chrome.storage.session) {
+      const stored = await chrome.storage.session.get(key);
+      last = stored && typeof stored[key] === "number" ? stored[key] : undefined;
+    }
+  } catch (_err) {
+    // No session storage: the in-memory time still throttles this worker.
+  }
+  if (last !== undefined && nowMs - last < HELLO_EVERY_MS) return true;
+  lastHelloAt[kind] = nowMs;
+  try {
+    if (chrome.storage && chrome.storage.session) await chrome.storage.session.set({ [key]: nowMs });
+  } catch (_err) {
+    // ignore
+  }
+  return false;
+}
+
+function extensionVersion() {
+  try {
+    return chrome.runtime.getManifest().version;
+  } catch (_err) {
+    return undefined;
+  }
+}
+
+/**
+ * POST /hello: the extension is installed ({version}), or a signed-in Messages
+ * page is open ({paired:true}). No user data in either.
+ */
+async function sayHello(paired) {
+  const kind = paired ? "paired" : "version";
+  if (await helloSentRecently(kind, Date.now())) return { ok: true, throttled: true };
+  const body = { version: extensionVersion() };
+  if (paired) body.paired = true;
+  return postBridge("/hello", body);
+}
+
+/**
+ * The page's "Sync to Keepr": Keepr starts a cache job; the job then runs in
+ * the tab that asked (job.js takes it through "keepr-run-job").
+ */
+async function startCacheSync(senderTab) {
+  const started = await jobApi("POST", "/job/cache/start", {});
+  if (!started.ok || !started.body || typeof started.body.jobId !== "string") return started;
+  if (!senderTab || senderTab.id === undefined) return { ok: false, status: 0, body: { message: "No tab to run in." } };
+  const accepted = await askTab(senderTab.id, { type: "keepr-run-job", jobId: started.body.jobId });
+  if (!accepted || !accepted.ok) {
+    // The tab could not take it: give it back so Keepr is not left "syncing".
+    await jobApi("POST", "/job/" + started.body.jobId + "/cancel", {});
+    return { ok: false, status: 0, body: { message: "This tab is busy. Try again." } };
+  }
+  return { ok: true, status: 200, body: { jobId: started.body.jobId } };
+}
+
 function askTab(tabId, message) {
   return new Promise((resolve) => {
     try {
@@ -178,6 +265,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // BACKLOG-3641: the overlay's "Open Keepr" button.
       focusKeepr().then(sendResponse, fail);
       return true;
+    case "keepr-hello":
+      // BACKLOG-3658: a signed-in Messages page is open.
+      sayHello(message.paired === true).then(sendResponse, fail);
+      return true;
+    case "keepr-cache-status":
+      postBridge("/cache/status", {}).then(sendResponse, fail);
+      return true;
+    case "keepr-cache-start":
+      startCacheSync(sender.tab).then(sendResponse, fail);
+      return true;
     case "keepr-log":
       // BACKLOG-3641: the Sync step log, for the founder to copy from this
       // worker's console. The page sends shapes and hashes only (job.js).
@@ -188,3 +285,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return false;
   }
 });
+
+// BACKLOG-3658: the worker started (install, browser start, or a wake-up):
+// tell Keepr the extension is installed. At most once a minute.
+void sayHello(false).catch(() => {});

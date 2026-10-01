@@ -35,7 +35,15 @@ import { createCommunicationReference } from "../services/messageMatchingService
 import type { RcsJobContact, RcsJobSnapshot } from "../services/rcsImportJob";
 import { storeImage, type RcsMediaDeps } from "../services/rcsImportMedia";
 import { importCacheChat, importChat, type RcsImportDeps } from "../services/rcsImportStore";
-import { cacheSince, decideCacheStart, handleCacheJobEnded } from "../services/rcsCacheService";
+import {
+  cacheSince,
+  cacheStatusFrom,
+  cancelOnSessionChange,
+  decideCacheStart,
+  handleCacheJobEnded,
+  shouldPersistHello,
+} from "../services/rcsCacheService";
+import { onSessionChanged } from "../services/authEvents";
 import { autoLinkNewMessagesForUser } from "../services/autoLinkService";
 import sessionService from "../services/sessionService";
 import { clearGoogleMessagesWebData, runWithWritesPaused, type RcsClearResult } from "../services/rcsClearService";
@@ -127,15 +135,29 @@ function broadcastChatImported(event: RcsChatImportedEvent): void {
 // BACKLOG-3658: the cache job (all recent chats, then the phone auto-link)
 // ---------------------------------------------------------------------------
 
-/** The signed-in user, or null. */
+/**
+ * The signed-in user, or null — kept in memory (SR P1 optional) and dropped on
+ * every session change (sign-in, refresh, sign-out), then read once again.
+ */
+let cachedUserId: string | null | undefined;
+
 async function currentUserId(): Promise<string | null> {
+  if (cachedUserId !== undefined) return cachedUserId;
   try {
     const session = await sessionService.loadSession();
-    return session?.user?.id ?? null;
+    cachedUserId = session?.user?.id ?? null;
   } catch {
-    return null;
+    cachedUserId = null;
   }
+  return cachedUserId;
 }
+
+// A running Sync belongs to the user who started it: signing out cancels it;
+// another user signing in cancels it too (and the bridge re-checks per write).
+onSessionChanged((change) => {
+  cachedUserId = undefined;
+  if (cancelOnSessionChange(change, bridge.activeJobUserId(), !!bridge.activeJob())) bridge.cancelJob();
+});
 
 /**
  * What the extension last said (POST /hello). Kept in memory while signed
@@ -147,6 +169,9 @@ const extensionPresence: { version: string | null; seenAt: string | null; paired
   pairedAt: null,
 };
 
+/** Last time an extension report was written, per user and kind (at most once a minute). */
+const helloPersistedAt = new Map<string, number>();
+
 async function onHello(hello: { version?: string; paired?: boolean }): Promise<void> {
   const now = new Date().toISOString();
   if (hello.version) {
@@ -156,6 +181,11 @@ async function onHello(hello: { version?: string; paired?: boolean }): Promise<v
   if (hello.paired) extensionPresence.pairedAt = now;
   const userId = await currentUserId();
   if (!userId) return;
+  // At most once a minute per user and kind (a paired report is not lost to a
+  // version report a second earlier).
+  const key = `${userId}:${hello.paired ? "paired" : "version"}`;
+  if (!shouldPersistHello(helloPersistedAt.get(key), Date.now())) return;
+  helloPersistedAt.set(key, Date.now());
   databaseService.updateRcsCacheState(userId, {
     extension: {
       ...(hello.version ? { version: hello.version, seenAt: now } : {}),
@@ -186,9 +216,17 @@ async function startCacheJob(): Promise<
   return { ok: true, job };
 }
 
-/** Cancel any Sync when the user signs out (its rows belong to that user). */
-export function cancelRcsSyncOnLogout(): void {
-  if (bridge.activeJob()) bridge.cancelJob();
+/** The page's "Sync to Keepr" state: the same rule as starting one. No user data. */
+async function cacheStatus(): Promise<{ ready: true } | { ready: false; reason: "signed_out" | "not_opted_in" | "busy" }> {
+  const userId = await currentUserId();
+  const state = userId ? databaseService.getRcsCacheState(userId) : null;
+  const active = bridge.activeJob();
+  return cacheStatusFrom(decideCacheStart({
+    userId,
+    optedIn: !!state?.optedInAt,
+    activeLabel: active ? active.label ?? "" : null,
+    writesPaused: bridge.writesArePaused,
+  }));
 }
 
 const bridge = new RcsExtensionBridge({
@@ -200,6 +238,7 @@ const bridge = new RcsExtensionBridge({
     return storeImage(image, userId, mediaDeps, chatHash);
   },
   currentUserId,
+  cacheStatus,
   onHello: (hello) => void onHello(hello),
   startCacheJobFromPage: async () => {
     const started = await startCacheJob();

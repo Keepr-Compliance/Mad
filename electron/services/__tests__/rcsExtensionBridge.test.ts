@@ -707,9 +707,12 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
   let ended: Array<{ state: string; kind: string; userId: string | null }>;
   let imageAnswer: { stored: false; reason: "not_a_contact" } | { stored: true; alreadyPresent: false; filename: string; bytes: number };
   let jobId: string;
+  let focus: string[];
+  let cacheStatus: { ready: true } | { ready: false; reason: "signed_out" | "not_opted_in" | "busy" } = { ready: true };
 
   beforeEach(async () => {
     current = "user-a";
+    focus = [];
     cacheChats = [];
     ended = [];
     imageAnswer = { stored: false, reason: "not_a_contact" };
@@ -722,6 +725,8 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
       importCacheImage: async () => imageAnswer,
       currentUserId: async () => current,
       onJobEnded: (e) => void ended.push({ state: e.snapshot.state, kind: e.kind, userId: e.userId }),
+      onJobFinished: () => void focus.push("front"),
+      cacheStatus: async () => cacheStatus,
       jobs: new RcsJobRegistry(),
     });
     expect(await bridge.start(0)).toBe("listening");
@@ -769,6 +774,56 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
     expect(ended).toEqual([{ state: "finished", kind: "cache", userId: "user-a" }]);
     bridge.cancelJob();
     expect(ended).toHaveLength(1);
+  });
+
+  // BACKLOG-3658 P2: the page's Cancel. Mutations: cancel any job (ignore the
+  // id), announce twice, accept a GET, or skip the Origin check → red.
+  it("POST /job/:id/cancel cancels that job and announces its end once", async () => {
+    const reply = await request(port, "POST", `/job/${jobId}/cancel`, EXT, "{}");
+    expect(reply).toEqual({ status: 200, body: { ok: true } });
+    expect(bridge.getJob()?.state).toBe("cancelled");
+    expect(ended).toEqual([{ state: "cancelled", kind: "cache", userId: "user-a" }]);
+    // Over: 410, and nothing announced again.
+    const again = await request(port, "POST", `/job/${jobId}/cancel`, EXT, "{}");
+    expect(again.status).toBe(410);
+    expect(ended).toHaveLength(1);
+  });
+
+  it("cancel of an unknown job: 404, and the running job keeps going", async () => {
+    const other = "99999999-8888-4777-8666-555555555555"; // pii-allow-uuid: invented, not from any live row
+    const reply = await request(port, "POST", `/job/${other}/cancel`, EXT, "{}");
+    expect(reply.status).toBe(404);
+    expect(bridge.getJob()?.state).toBe("running");
+    expect(ended).toEqual([]);
+  });
+
+  it("cancel needs POST and the extension's Origin", async () => {
+    expect((await request(port, "GET", `/job/${jobId}/cancel`, { Origin: RCS_EXTENSION_ORIGIN })).status).toBe(405);
+    expect((await request(port, "POST", `/job/${jobId}/cancel`, { ...JSON_HEADERS, Origin: "https://messages.google.com" }, "{}")).status).toBe(403);
+    expect(bridge.getJob()?.state).toBe("running");
+  });
+
+  it("Keepr is not brought forward during a cache job — only when it finishes", async () => {
+    await request(port, "POST", `/job/${jobId}/progress`, EXT, JSON.stringify({ stage: "Chat 1 of 2" }));
+    await request(port, "POST", `/job/${jobId}/match`, EXT, JSON.stringify({ conversationId: CHAT.conversationId, numbers: ["(555) 555-0142"] }));
+    await request(port, "POST", `/job/${jobId}/chat`, EXT, CHAT_JSON);
+    expect(focus).toEqual([]);
+    await request(port, "POST", `/job/${jobId}/finish`, EXT, JSON.stringify({ chats: 1, messages: 1, images: 0 }));
+    expect(focus).toEqual(["front"]);
+  });
+
+  // BACKLOG-3658 P2: the page button state — ready, or a reason; never user data.
+  it("POST /cache/status answers ready or a reason only", async () => {
+    cacheStatus = { ready: true };
+    expect(await request(port, "POST", "/cache/status", EXT, "{}")).toEqual({ status: 200, body: { ready: true } });
+    cacheStatus = { ready: false, reason: "not_opted_in" };
+    expect(await request(port, "POST", "/cache/status", EXT, "{}")).toEqual({
+      status: 200, body: { ready: false, reason: "not_opted_in" },
+    });
+    // Extra fields from the provider never reach the page.
+    cacheStatus = { ready: false, reason: "busy", userId: "user-a" } as unknown as typeof cacheStatus;
+    expect((await request(port, "POST", "/cache/status", EXT, "{}")).body).toEqual({ ready: false, reason: "busy" });
+    expect((await request(port, "POST", "/cache/status", { ...JSON_HEADERS, Origin: "https://messages.google.com" }, "{}")).status).toBe(403);
   });
 
   it("/error announces the end too", async () => {

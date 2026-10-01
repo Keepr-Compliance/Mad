@@ -28,13 +28,24 @@ type Listener = (
 const SOURCE = fs.readFileSync(path.join(__dirname, "..", "..", "chrome-extension", "background.js"), "utf8");
 const EXTENSION_ID = "nlfohmjehedijceeelokclkglmjnlonj";
 
-function loadWorker() {
+async function loadWorker(opts: { storage?: Record<string, unknown> } = {}) {
   let listener: Listener | null = null;
   const chromeStub = {
     runtime: {
       id: EXTENSION_ID,
       onMessage: { addListener: (fn: Listener) => (listener = fn) },
+      getManifest: () => ({ version: "9.9.9" }),
     },
+    storage: opts.storage
+      ? {
+          session: {
+            get: async (key: string) => (key in opts.storage! ? { [key]: opts.storage![key] } : {}),
+            set: async (items: Record<string, unknown>) => {
+              Object.assign(opts.storage!, items);
+            },
+          },
+        }
+      : undefined,
     tabs: { query: jest.fn(async () => []), sendMessage: jest.fn(), update: jest.fn(), remove: jest.fn() },
     windows: { update: jest.fn() },
   };
@@ -58,12 +69,17 @@ function loadWorker() {
       if (!async) resolve({ sync: true });
     });
   }
-  return { send, fetchStub };
+  // BACKLOG-3658: the worker says hello on start; tests below see only their own calls.
+  await new Promise((r) => setTimeout(r, 0));
+  await new Promise((r) => setTimeout(r, 0));
+  const startupCalls = fetchStub.mock.calls.slice();
+  fetchStub.mockClear();
+  return { send, fetchStub, startupCalls, chromeStub };
 }
 
 describe("service worker: POST only (BACKLOG-3628)", () => {
   it("the pending check is a POST to /job/pending", async () => {
-    const w = loadWorker();
+    const w = await loadWorker();
     const reply = await w.send({ type: "keepr-check-pending" });
     expect(w.fetchStub).toHaveBeenCalledTimes(1);
     const [url, init] = w.fetchStub.mock.calls[0];
@@ -73,14 +89,14 @@ describe("service worker: POST only (BACKLOG-3628)", () => {
   });
 
   it.each(["GET", "PUT", "DELETE", undefined])("a page asking for %s is refused and nothing is fetched", async (method) => {
-    const w = loadWorker();
+    const w = await loadWorker();
     const reply = await w.send({ type: "keepr-job-api", method, path: "/job/pending" });
     expect(reply).toMatchObject({ ok: false, status: 0 });
     expect(w.fetchStub).not.toHaveBeenCalled();
   });
 
   it("a POST job call is forwarded as a POST", async () => {
-    const w = loadWorker();
+    const w = await loadWorker();
     await w.send({
       type: "keepr-job-api",
       method: "POST",
@@ -91,7 +107,7 @@ describe("service worker: POST only (BACKLOG-3628)", () => {
   });
 
   it("a non-job path is still refused", async () => {
-    const w = loadWorker();
+    const w = await loadWorker();
     const reply = await w.send({ type: "keepr-job-api", method: "POST", path: "/chat" });
     expect(reply).toMatchObject({ ok: false, status: 0 });
     expect(w.fetchStub).not.toHaveBeenCalled();
@@ -103,7 +119,7 @@ describe("service worker: Sync step log (BACKLOG-3641)", () => {
   it("prints each page line to this worker's console with the [Keepr Sync] prefix", async () => {
     const spy = jest.spyOn(console, "log").mockImplementation(() => {});
     try {
-      const w = loadWorker();
+      const w = await loadWorker();
       const reply = await w.send({ type: "keepr-log", line: "listed 60, stopReason stable" });
       expect(reply).toEqual({ ok: true });
       expect(spy).toHaveBeenCalledWith("[Keepr Sync] listed 60, stopReason stable");
@@ -117,7 +133,7 @@ describe("service worker: Sync step log (BACKLOG-3641)", () => {
 // BACKLOG-3641. Mutation: keepr-focus not handled, or not a POST to /focus → red.
 describe("service worker: Open Keepr", () => {
   it("keepr-focus POSTs /focus and reports ok", async () => {
-    const w = loadWorker();
+    const w = await loadWorker();
     w.fetchStub.mockResolvedValueOnce({ status: 200, json: async () => ({ ok: true }) });
     const reply = await w.send({ type: "keepr-focus" });
     expect(w.fetchStub).toHaveBeenCalledTimes(1);
@@ -125,5 +141,86 @@ describe("service worker: Open Keepr", () => {
     expect(url).toBe("http://127.0.0.1:38619/focus");
     expect(init.method).toBe("POST");
     expect(reply).toEqual({ ok: true });
+  });
+});
+
+// BACKLOG-3658: presence (/hello) and the page's "Sync to Keepr".
+// Mutations that turn this block red: drop the startup hello; drop the
+// once-a-minute throttle (or its stored time); send user data or `paired` in
+// the startup hello; route keepr-cache-start somewhere but /job/cache/start;
+// run the job in another tab; leave a job claimed when the tab refuses it.
+describe("service worker: presence and Sync to Keepr (BACKLOG-3658)", () => {
+  const JOB = "11111111-2222-4333-8444-555555555555"; // pii-allow-uuid: invented, not from any live row
+  const bodyOf = (init: unknown) => JSON.parse(String((init as { body: string }).body));
+
+  it("says hello with only its version when the worker starts", async () => {
+    const w = await loadWorker();
+    expect(w.startupCalls).toHaveLength(1);
+    const [url, init] = w.startupCalls[0];
+    expect(url).toBe("http://127.0.0.1:38619/hello");
+    expect(init.method).toBe("POST");
+    expect(bodyOf(init)).toEqual({ version: "9.9.9" });
+  });
+
+  it("does not say hello again within a minute of the last one (kept across worker restarts)", async () => {
+    const recent = await loadWorker({ storage: { "keepr-hello-version": Date.now() - 10_000 } });
+    expect(recent.startupCalls).toHaveLength(0);
+    const stale = await loadWorker({ storage: { "keepr-hello-version": Date.now() - 61_000 } });
+    expect(stale.startupCalls).toHaveLength(1);
+  });
+
+  it("a signed-in page says paired, once a minute", async () => {
+    const w = await loadWorker();
+    w.fetchStub.mockResolvedValue({ status: 200, json: async () => ({ ok: true }) });
+    const first = await w.send({ type: "keepr-hello", paired: true });
+    expect(first).toMatchObject({ ok: true, status: 200 });
+    expect(w.fetchStub).toHaveBeenCalledTimes(1);
+    expect(w.fetchStub.mock.calls[0][0]).toBe("http://127.0.0.1:38619/hello");
+    expect(bodyOf(w.fetchStub.mock.calls[0][1])).toEqual({ version: "9.9.9", paired: true });
+    const second = await w.send({ type: "keepr-hello", paired: true });
+    expect(second).toMatchObject({ ok: true, throttled: true });
+    expect(w.fetchStub).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks Keepr for the button state with a POST to /cache/status", async () => {
+    const w = await loadWorker();
+    w.fetchStub.mockResolvedValueOnce({ status: 200, json: async () => ({ ready: false, reason: "not_opted_in" }) });
+    const reply = await w.send({ type: "keepr-cache-status" });
+    expect(w.fetchStub.mock.calls[0][0]).toBe("http://127.0.0.1:38619/cache/status");
+    expect(w.fetchStub.mock.calls[0][1].method).toBe("POST");
+    expect(reply).toEqual({ ok: true, status: 200, body: { ready: false, reason: "not_opted_in" } });
+  });
+
+  it("starts a cache job and runs it in the tab that asked", async () => {
+    const w = await loadWorker();
+    w.fetchStub.mockResolvedValueOnce({ status: 200, json: async () => ({ jobId: JOB }) });
+    w.chromeStub.tabs.sendMessage.mockImplementation((_id: number, _m: unknown, cb: (r: unknown) => void) => cb({ ok: true }));
+    const reply = await w.send({ type: "keepr-cache-start" });
+    expect(w.fetchStub.mock.calls[0][0]).toBe("http://127.0.0.1:38619/job/cache/start");
+    expect(w.fetchStub.mock.calls[0][1].method).toBe("POST");
+    expect(w.chromeStub.tabs.sendMessage).toHaveBeenCalledWith(1, { type: "keepr-run-job", jobId: JOB }, expect.any(Function));
+    expect(reply).toEqual({ ok: true, status: 200, body: { jobId: JOB } });
+  });
+
+  it("cancels the new job when the tab cannot take it", async () => {
+    const w = await loadWorker();
+    w.fetchStub
+      .mockResolvedValueOnce({ status: 200, json: async () => ({ jobId: JOB }) })
+      .mockResolvedValueOnce({ status: 200, json: async () => ({ ok: true }) });
+    w.chromeStub.tabs.sendMessage.mockImplementation((_id: number, _m: unknown, cb: (r: unknown) => void) =>
+      cb({ ok: false, running: true }),
+    );
+    const reply = await w.send({ type: "keepr-cache-start" });
+    expect(reply).toMatchObject({ ok: false });
+    expect(w.fetchStub.mock.calls[1][0]).toBe(`http://127.0.0.1:38619/job/${JOB}/cancel`);
+    expect(w.fetchStub.mock.calls[1][1].method).toBe("POST");
+  });
+
+  it("passes Keepr's refusal back and runs nothing", async () => {
+    const w = await loadWorker();
+    w.fetchStub.mockResolvedValueOnce({ status: 403, json: async () => ({ error: "not_opted_in", message: "x" }) });
+    const reply = await w.send({ type: "keepr-cache-start" });
+    expect(reply).toMatchObject({ ok: false, status: 403, body: { error: "not_opted_in" } });
+    expect(w.chromeStub.tabs.sendMessage).not.toHaveBeenCalled();
   });
 });

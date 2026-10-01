@@ -11,6 +11,8 @@
  *   S3 the contact check not scoped to the user                 → "another user's transaction"
  *   S4 cache state writes not scoped to the user                → "each user's state is their own"
  *   S5 the reset forgetting to clear the own number             → "Force re-import resets"
+ *   S6 a cancelled run saving its time (the rest never re-read)  → "an interrupted cache Sync resumes"
+ *   S7 importCacheChat not skipping keys already stored           → same test (no duplicate rows)
  */
 
 import * as nodePath from "path";
@@ -27,7 +29,13 @@ jest.mock("../logService", () => {
 });
 
 import { setDb } from "../db/core/dbConnection";
+import { importCacheChat, peopleFrom, type RcsIncomingChat } from "../rcsImportStore";
+import { cacheSince, handleCacheJobEnded } from "../rcsCacheService";
 import {
+  batchInsertMessages,
+  findRcsContentDuplicates,
+  getMessageIdMap,
+  insertReactionRows,
   getRcsCacheState,
   rcsNumbersMatchLiveContact,
   resetRcsCacheState,
@@ -140,5 +148,61 @@ describe("rcs_cache_state (bound to the user)", () => {
     expect(getRcsCacheState(USER)).toMatchObject({ lastCacheFinishedAt: null, ownNumber: null });
     expect(getRcsCacheState(USER)?.optedInAt).toEqual(expect.any(String));
     expect(getRcsCacheState(OTHER)?.lastCacheFinishedAt).toBe("2026-09-30T10:00:00.000Z");
+  });
+});
+
+// BACKLOG-3658 (P2, SR): a cache Sync cut short (cancel, sign-out, Chrome
+// closed) is simply run again: it reads the same window (nothing saved), and
+// what the first run stored is not stored twice.
+describe("an interrupted cache Sync resumes without duplicates (S6, S7)", () => {
+  const storeDeps = { batchInsertMessages, getMessageIdMap, insertReactionRows, findContentDuplicates: findRcsContentDuplicates };
+  const people = peopleFrom([{ name: "", number: NUM }], [NUM]);
+  const msg = (n: number) => ({
+    msgId: `m${n}`, direction: "inbound" as const, sender: "x", text: `text ${n}`,
+    sentAt: `2026-09-2${n}T10:00:00.000Z`, transport: "rcs" as const,
+  });
+  const chat = (id: string, count: number): RcsIncomingChat => ({
+    conversationId: id, title: "Test Contact A", messages: Array.from({ length: count }, (_, i) => msg(i + 1)),
+  });
+  const endedDeps = {
+    saveFinishedAt: (u: string, iso: string) => updateRcsCacheState(u, { lastCacheFinishedAt: iso }),
+    saveOwnNumber: () => {},
+    autoLink: async () => {},
+    now: () => Date.parse("2026-09-30T12:00:00.000Z"),
+  };
+  const rows = () => db.prepare("SELECT external_id FROM messages WHERE user_id = ?").all(USER) as Array<{ external_id: string }>;
+
+  it("run 1 is cut short; run 2 reads the same window and stores only what is new", async () => {
+    const now = Date.parse("2026-09-30T12:00:00.000Z");
+    updateRcsCacheState(USER, { lastCacheFinishedAt: "2026-09-25T12:00:00.000Z" });
+    const since1 = cacheSince(now, getRcsCacheState(USER)?.lastCacheFinishedAt);
+
+    // Run 1: chat A, then the first 2 of chat B's 4 — then cancelled.
+    expect((await importCacheChat(chat("conv-a", 3), USER, storeDeps, people)).stored).toBe(3);
+    const peopleB = peopleFrom([{ name: "", number: "+15555550142" }], ["+15555550142"]);
+    expect((await importCacheChat(chat("conv-b", 2), USER, storeDeps, peopleB)).stored).toBe(2);
+    await handleCacheJobEnded(
+      { kind: "cache", userId: USER, snapshot: { state: "cancelled", createdAt: "2026-09-30T11:00:00.000Z" }, detectedOwnNumber: null },
+      endedDeps,
+    );
+    // S6: nothing saved — run 2 reads the same window.
+    expect(cacheSince(now, getRcsCacheState(USER)?.lastCacheFinishedAt)).toBe(since1);
+
+    // Run 2: everything again, plus B's last 2.
+    const a2 = await importCacheChat(chat("conv-a", 3), USER, storeDeps, people);
+    const b2 = await importCacheChat(chat("conv-b", 4), USER, storeDeps, peopleB);
+    expect([a2.stored, a2.alreadyPresent]).toEqual([0, 3]);
+    expect([b2.stored, b2.alreadyPresent]).toEqual([2, 2]);
+    // S7: no row twice.
+    const ids = rows().map((r) => r.external_id);
+    expect(ids).toHaveLength(7);
+    expect(new Set(ids).size).toBe(7);
+
+    // Run 2 finishes: its START time is saved (SR P1 optional).
+    await handleCacheJobEnded(
+      { kind: "cache", userId: USER, snapshot: { state: "finished", createdAt: "2026-09-30T11:30:00.000Z" }, detectedOwnNumber: null },
+      endedDeps,
+    );
+    expect(getRcsCacheState(USER)?.lastCacheFinishedAt).toBe("2026-09-30T11:30:00.000Z");
   });
 });

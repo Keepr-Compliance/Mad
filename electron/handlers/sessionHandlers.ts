@@ -4,7 +4,6 @@
  */
 
 import { ipcMain, IpcMainInvokeEvent, shell } from "electron";
-import { cancelRcsSyncOnLogout } from "./rcsImportHandlers";
 import * as Sentry from "@sentry/electron/main";
 import type { User } from "../types/models";
 
@@ -323,8 +322,6 @@ async function handleLogout(
 
     resetContactLinkingOnLogout();
     resetFeatureGateOnLogout();
-    // BACKLOG-3658: a running Google Messages Sync belongs to this user: stop it.
-    cancelRcsSyncOnLogout();
 
     await auditService.log({
       userId,
@@ -1300,8 +1297,6 @@ async function handleForceLogout(): Promise<AuthResponse> {
     stopShadowDeltaSyncOnLogout();
     resetContactLinkingOnLogout();
     resetFeatureGateOnLogout();
-    // BACKLOG-3658: a running Google Messages Sync belongs to this user: stop it.
-    cancelRcsSyncOnLogout();
 
     await logService.info("Force logout completed successfully", "AuthHandlers");
     return { success: true };

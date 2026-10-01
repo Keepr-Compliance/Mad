@@ -119,6 +119,7 @@ describe("readConversationList / signInState", () => {
       conversationId: "aaaaaaaaaaaaaaaaaaa",
       name: "Test Contact A",
       href: "/web/conversations/aaaaaaaaaaaaaaaaaaa",
+      timeMs: null, // the synthetic list shows no times
     });
   });
 

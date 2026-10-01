@@ -57,7 +57,7 @@
   }
 
   /** The list items currently in the DOM. */
-  function readConversationList(doc) {
+  function readConversationList(doc, now) {
     var items = doc.querySelectorAll(SELECTORS.listItem);
     var out = [];
     for (var i = 0; i < items.length; i++) {
@@ -66,9 +66,67 @@
       var href = link ? link.getAttribute("href") || "" : "";
       var id = conversationIdFromHref(href);
       if (!id || id === "new") continue;
-      out.push({ conversationId: id, name: normalizeSpace(nameEl ? nameEl.textContent : ""), href: href });
+      out.push({
+        conversationId: id,
+        name: normalizeSpace(nameEl ? nameEl.textContent : ""),
+        href: href,
+        // BACKLOG-3658: the list's last-message time (null when unreadable).
+        timeMs: listItemTimeMs(items[i], now ? now() : Date.now()),
+      });
     }
     return out;
+  }
+
+  /**
+   * BACKLOG-3658: where the list shows a chat's last-message time. UNTRACED on
+   * the live page: trace with the read-only snippet in the P2 report before
+   * relying on it. No match → null → the cache job reads the full list (capped).
+   */
+  var LIST_TIME_SELECTORS = ["[data-e2e-conversation-timestamp]", "mws-relative-timestamp", "[data-e2e-timestamp]"];
+
+  var MONTHS = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+  var WEEKDAYS = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
+
+  /**
+   * A list time as epoch ms, at day precision (the cache only needs "older
+   * than since"). Today's "3:45 PM" → now; "Yesterday"; a weekday → the most
+   * recent such day; "Sep 20" (this year, or last year if that is in the
+   * future); "Sep 20, 2025"; "9/20/25". Anything else → null.
+   */
+  function parseListTime(text, nowMs) {
+    var t = normalizeSpace(text).toLowerCase();
+    if (!t) return null;
+    var now = new Date(nowMs);
+    var day = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    if (/^\d{1,2}:\d{2}(\s?[ap]\.?m\.?)?$/.test(t) || /^now$|min/.test(t)) return nowMs;
+    if (t === "yesterday") return day - 864e5;
+    var wd = WEEKDAYS[t.slice(0, 3)];
+    if (wd !== undefined && /^[a-z]+$/.test(t)) {
+      var back = (now.getDay() - wd + 7) % 7 || 7;
+      return day - back * 864e5;
+    }
+    var md = t.match(/^([a-z]{3})[a-z]*\.? (\d{1,2})(?:, (\d{4}))?$/);
+    if (md && MONTHS[md[1]] !== undefined) {
+      var y = md[3] ? Number(md[3]) : now.getFullYear();
+      var d = new Date(y, MONTHS[md[1]], Number(md[2])).getTime();
+      if (!md[3] && d > nowMs) d = new Date(y - 1, MONTHS[md[1]], Number(md[2])).getTime();
+      return d;
+    }
+    var nd = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/);
+    if (nd) {
+      var yy = Number(nd[3]);
+      if (yy < 100) yy += 2000;
+      return new Date(yy, Number(nd[1]) - 1, Number(nd[2])).getTime();
+    }
+    return null;
+  }
+
+  function listItemTimeMs(item, nowMs) {
+    for (var i = 0; i < LIST_TIME_SELECTORS.length; i++) {
+      var el = item.querySelector(LIST_TIME_SELECTORS[i]);
+      if (el) return parseListTime(el.textContent, nowMs);
+    }
+    return null;
   }
 
   /**
@@ -146,12 +204,16 @@
     var stable = 0;
     var stopReason = "stable";
 
+    var stopAt = typeof opts.stopAtOlderThanMs === "number" ? opts.stopAtOlderThanMs : null;
+    var reachedSince = false;
     function absorb() {
-      var list = readConversationList(doc);
+      var list = readConversationList(doc, now);
       for (var i = 0; i < list.length; i++) {
         if (!byId[list[i].conversationId]) {
           byId[list[i].conversationId] = list[i];
           order.push(list[i].conversationId);
+          // BACKLOG-3658: newest first — a chat older than `since` ends the list.
+          if (stopAt !== null && list[i].timeMs !== null && list[i].timeMs < stopAt) reachedSince = true;
         }
       }
     }
@@ -174,6 +236,7 @@
     absorb();
 
     while (stable < stableRounds) {
+      if (reachedSince) { stopReason = "since"; break; }
       if (order.length >= maxItems) { stopReason = "max_items"; break; }
       if (now() - started >= maxMs) { stopReason = "max_time"; break; }
       var before = order.length;
@@ -737,6 +800,7 @@
     normalizeName: normalizeName,
     looksLikePhone: looksLikePhone,
     pickCandidates: pickCandidates,
+    parseListTime: parseListTime,
     planChecks: planChecks,
     CHECK_ALL_MAX: CHECK_ALL_MAX,
     OVER_CAP_QUEUE_MAX: OVER_CAP_QUEUE_MAX,
