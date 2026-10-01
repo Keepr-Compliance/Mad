@@ -96,6 +96,16 @@ async function jobApi(method, path, body) {
   return { ok: response.status >= 200 && response.status < 300, status: response.status, body: parsed };
 }
 
+/** POST /focus: Keepr brings itself to the front. Resolves {ok}. */
+async function focusKeepr() {
+  try {
+    const response = await fetch(`${BRIDGE_URL}/focus`, { method: "POST" });
+    return { ok: response.status === 200 };
+  } catch (_err) {
+    return { ok: false, error: NOT_RUNNING };
+  }
+}
+
 function askTab(tabId, message) {
   return new Promise((resolve) => {
     try {
@@ -163,6 +173,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     case "keepr-job-found":
       routeJob(message.jobId, sender.tab).then(sendResponse, fail);
+      return true;
+    case "keepr-focus":
+      // BACKLOG-3641: the overlay's "Open Keepr" button.
+      focusKeepr().then(sendResponse, fail);
       return true;
     case "keepr-log":
       // BACKLOG-3641: the Sync step log, for the founder to copy from this

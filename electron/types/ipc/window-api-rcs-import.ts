@@ -70,6 +70,8 @@ export interface RcsJobInfo {
   error?: { code: string; message: string };
   createdAt: string;
   finishedAt?: string;
+  /** BACKLOG-3661: what is syncing (the transaction's name). */
+  label?: string;
   /** BACKLOG-3629: chats left out or imported in part. Names only. */
   notReached?: Array<{ name: string; reason: string; count?: number }>;
   notReachedMore?: number;

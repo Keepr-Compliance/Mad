@@ -110,3 +110,17 @@ describe("service worker: Sync step log (BACKLOG-3641)", () => {
     }
   });
 });
+
+// BACKLOG-3641. Mutation: keepr-focus not handled, or not a POST to /focus → red.
+describe("service worker: Open Keepr", () => {
+  it("keepr-focus POSTs /focus and reports ok", async () => {
+    const w = loadWorker();
+    w.fetchStub.mockResolvedValueOnce({ status: 200, json: async () => ({ ok: true }) });
+    const reply = await w.send({ type: "keepr-focus" });
+    expect(w.fetchStub).toHaveBeenCalledTimes(1);
+    const [url, init] = w.fetchStub.mock.calls[0];
+    expect(url).toBe("http://127.0.0.1:38619/focus");
+    expect(init.method).toBe("POST");
+    expect(reply).toEqual({ ok: true });
+  });
+});

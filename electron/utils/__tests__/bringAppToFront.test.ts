@@ -30,7 +30,7 @@ jest.mock("../../services/logService", () => ({
 }));
 
 import type { BrowserWindow } from "electron";
-import { bringAppToFront } from "../bringAppToFront";
+import { bringAppToFront, bringAppToFrontOrFlash } from "../bringAppToFront";
 
 type FakeWindow = {
   calls: string[];
@@ -122,5 +122,42 @@ describe("bringAppToFront — macOS unchanged", () => {
     const win = fakeWindow({ visible: false });
     bringAppToFront(asWindow(win));
     expect(win.calls).toEqual(["show", "focus"]);
+  });
+});
+
+// BACKLOG-3641: "Open Keepr" from the browser. Mutation: no flash fallback, or
+// flashing when the window did come to the front → red.
+describe("bringAppToFrontOrFlash — the page's Open Keepr", () => {
+  beforeEach(() => onPlatform("win32"));
+
+  function flashWindow(focusedAfter: boolean) {
+    const win = fakeWindow();
+    const extra = {
+      isFocused: jest.fn().mockReturnValue(focusedAfter),
+      flashFrame: jest.fn((on: boolean) => win.calls.push(`flash(${String(on)})`)),
+      once: jest.fn((event: string, cb: () => void) => {
+        win.calls.push(`once(${event})`);
+        (extra as { focusCb?: () => void }).focusCb = cb;
+      }),
+    };
+    return { win: Object.assign(win, extra), extra: extra as typeof extra & { focusCb?: () => void } };
+  }
+
+  it("Windows refused the foreground change: the taskbar button flashes until Keepr gets focus", () => {
+    const { win, extra } = flashWindow(false);
+    bringAppToFrontOrFlash(win as unknown as BrowserWindow);
+    expect(win.calls).toEqual(["top(true)", "show", "focus", "top(false)", "flash(true)", "once(focus)"]);
+    extra.focusCb?.();
+    expect(win.calls[win.calls.length - 1]).toBe("flash(false)");
+  });
+
+  it("Keepr came to the front: no flash", () => {
+    const { win } = flashWindow(true);
+    bringAppToFrontOrFlash(win as unknown as BrowserWindow);
+    expect(win.calls).toEqual(["top(true)", "show", "focus", "top(false)"]);
+  });
+
+  it("no window: nothing to flash, no throw", () => {
+    expect(() => bringAppToFrontOrFlash(null)).not.toThrow();
   });
 });

@@ -98,3 +98,25 @@ export function bringAppToFront(win: BrowserWindow | null): void {
     );
   }
 }
+
+/**
+ * BACKLOG-3641: the user asked from the browser ("Open Keepr"). Bring Keepr
+ * forward; if Windows still refuses the foreground change (the window is not
+ * focused afterwards), flash its taskbar button until it gets focus. Never
+ * throws (cosmetic, as above).
+ */
+export function bringAppToFrontOrFlash(win: BrowserWindow | null): void {
+  bringAppToFront(win);
+  try {
+    if (win && !win.isDestroyed() && !win.isFocused()) {
+      win.flashFrame(true);
+      win.once("focus", () => {
+        if (!win.isDestroyed()) win.flashFrame(false);
+      });
+    }
+  } catch (error) {
+    void logService.warn("Failed to flash the app's window", "BringAppToFront", {
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+}

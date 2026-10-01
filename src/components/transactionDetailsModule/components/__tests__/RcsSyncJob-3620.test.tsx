@@ -14,6 +14,10 @@ import type { RcsJobInfo } from "../../../../services/rcsImportService";
 
 type JobListener = (job: RcsJobInfo) => void;
 let jobListener: JobListener | null = null;
+// Several hooks subscribe (the panel's Sync hook and the shared Sync button,
+// BACKLOG-3661): the test's jobListener reaches all of them.
+const jobListeners = new Set<JobListener>();
+const dispatchJob: JobListener = (j) => jobListeners.forEach((l) => l(j));
 let clearedListener: ((e: { messagesDeleted: number }) => void) | null = null;
 
 const mockStartJob = jest.fn();
@@ -30,9 +34,11 @@ jest.mock("../../../../services/rcsImportService", () => ({
     cancelJob: (...a: unknown[]) => mockCancelJob(...a),
     getJob: (...a: unknown[]) => mockGetJob(...a),
     onJobProgress: (cb: JobListener) => {
-      jobListener = cb;
+      jobListeners.add(cb);
+      jobListener = dispatchJob;
       return () => {
-        jobListener = null;
+        jobListeners.delete(cb);
+        if (jobListeners.size === 0) jobListener = null;
       };
     },
     onDataCleared: (cb: (e: { messagesDeleted: number }) => void) => {
@@ -207,5 +213,44 @@ describe("Sync job (BACKLOG-3620)", () => {
     render(<Harness transactionId="tx-1" />);
     fireEvent.click(screen.getByTestId("rcs-sync-button"));
     expect(await screen.findByTestId("rcs-sync-error")).toHaveTextContent("This transaction has no contacts to look for.");
+  });
+});
+
+// BACKLOG-3661 — one Sync at a time. Mutations that turn these red: the Sync
+// button ignoring a job of ANOTHER transaction; no "Syncing: <name>" + Cancel.
+describe("only one Sync at a time (BACKLOG-3661)", () => {
+  it("while another transaction syncs: 'Syncing…' disabled, says what is syncing, and Cancel cancels THAT job", async () => {
+    render(<Harness transactionId="tx-1" />);
+    await waitFor(() => expect(jobListener).not.toBeNull());
+    act(() => {
+      jobListener?.(job({ jobId: "22222222-2222-4333-8444-555555555555", transactionId: "tx-2", state: "running", label: "2 Test Street" })); // pii-allow-uuid: invented
+    });
+    const button = screen.getByTestId("rcs-sync-button");
+    expect(button).toBeDisabled();
+    expect(button).toHaveTextContent("Syncing…");
+    expect(screen.getByTestId("rcs-sync-active-elsewhere")).toHaveTextContent("Syncing: 2 Test Street");
+    mockCancelJob.mockResolvedValue({ success: true, data: null });
+    fireEvent.click(screen.getByTestId("rcs-sync-active-cancel"));
+    expect(mockCancelJob).toHaveBeenCalledWith("22222222-2222-4333-8444-555555555555"); // pii-allow-uuid: invented
+
+    act(() => {
+      jobListener?.(job({ jobId: "22222222-2222-4333-8444-555555555555", transactionId: "tx-2", state: "cancelled", label: "2 Test Street" })); // pii-allow-uuid: invented
+    });
+    expect(screen.getByTestId("rcs-sync-button")).not.toBeDisabled();
+    expect(screen.getByTestId("rcs-sync-button")).toHaveTextContent("Sync");
+    expect(screen.queryByTestId("rcs-sync-active-elsewhere")).toBeNull();
+  });
+
+  it("this transaction's own Sync: 'Syncing…' disabled, with no second 'Syncing:' line", async () => {
+    mockStartJob.mockResolvedValue({ success: true, data: job() });
+    render(<Harness transactionId="tx-1" />);
+    fireEvent.click(screen.getByTestId("rcs-sync-button"));
+    await screen.findByTestId("rcs-sync-job");
+    act(() => {
+      jobListener?.(job({ state: "running", label: "1 Test Street" }));
+    });
+    expect(screen.getByTestId("rcs-sync-button")).toBeDisabled();
+    expect(screen.getByTestId("rcs-sync-button")).toHaveTextContent("Syncing…");
+    expect(screen.queryByTestId("rcs-sync-active-elsewhere")).toBeNull();
   });
 });

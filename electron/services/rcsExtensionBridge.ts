@@ -37,6 +37,7 @@
  * - `POST /job/:id/finish`      — done; {notReached?[], notReachedMore?}: chats the
  *                                 page left out or imported in part. Keepr brings
  *                                 its window forward.
+ * - `POST /focus`                — "Open Keepr" on the page: Keepr brings itself forward.
  * - `POST /job/:id/error`       — {code, message}; the job fails with it.
  *
  * ## POST only, exact Host (BACKLOG-3628)
@@ -73,6 +74,8 @@ export const RCS_BRIDGE_PORT = 38619;
 export const RCS_EXTENSION_ID = "nlfohmjehedijceeelokclkglmjnlonj";
 export const RCS_EXTENSION_ORIGIN = `chrome-extension://${RCS_EXTENSION_ID}`;
 export const RCS_NO_SESSION_MESSAGE = "Open a transaction in Keepr and click Import first.";
+/** BACKLOG-3661: the manual Send's reply while a Sync runs. */
+export const RCS_SYNC_RUNNING_MESSAGE = "A Keepr Sync is running. Wait for it to finish, then send again.";
 /** BACKLOG-3657 (SR F1): how long a clear waits for writes in progress. */
 export const RCS_DRAIN_TIMEOUT_MS = 15_000;
 export const RCS_BUSY_MESSAGE = "Keepr is busy importing — try again in a moment.";
@@ -147,6 +150,8 @@ export interface RcsExtensionBridgeOptions {
   onJobChanged?: (job: RcsJobSnapshot) => void;
   /** BACKLOG-3620: the job finished; Keepr brings its window forward. */
   onJobFinished?: (job: RcsJobSnapshot) => void;
+  /** BACKLOG-3641: the page's "Open Keepr" button (POST /focus). */
+  onFocusRequested?: () => void;
   /** Overridable for tests only. */
   jobs?: RcsJobRegistry;
 }
@@ -267,10 +272,13 @@ export class RcsExtensionBridge {
   createJob(
     transactionId: string,
     contacts: RcsJobContact[],
-    options: { startDate?: string | null; unclaimedMs?: number } = {},
+    options: { startDate?: string | null; unclaimedMs?: number; label?: string | null } = {},
   ): RcsJobSnapshot {
+    // BACKLOG-3661: one Sync at a time — a running job is returned untouched.
+    const running = this.jobs.active();
+    if (running) return running.snapshot();
     const unclaimedMs = options.unclaimedMs ?? 60_000;
-    const job = this.jobs.create(transactionId, contacts, options.startDate ?? null);
+    const job = this.jobs.create(transactionId, contacts, options.startDate ?? null, options.label ?? null);
     this.logger.info(`[RcsBridge] Sync job created for transaction ${transactionId} (${contacts.length} contacts)`);
     if (this.unclaimedTimer) clearTimeout(this.unclaimedTimer);
     this.unclaimedTimer = setTimeout(() => {
@@ -284,6 +292,12 @@ export class RcsExtensionBridge {
     const snap = job.snapshot();
     this.emitJob(snap);
     return snap;
+  }
+
+  /** BACKLOG-3661: the created or running job, if any. */
+  activeJob(): RcsJobSnapshot | null {
+    const job = this.jobs.active();
+    return job ? job.snapshot() : null;
   }
 
   cancelJob(jobId?: string): void {
@@ -455,6 +469,18 @@ export class RcsExtensionBridge {
       // GET that somehow carries the Origin) gets a clear 405.
       if (req.method !== "POST") {
         sendJson(res, 405, { error: "method_not_allowed", message: "Keepr's bridge accepts POST only." });
+        return;
+      }
+
+      // BACKLOG-3641: the page's "Open Keepr" button. Same Host/Origin checks as
+      // every route (above); no body, no data — Keepr brings itself forward.
+      if (path === "/focus") {
+        if (!this.options.onFocusRequested) {
+          sendJson(res, 501, { error: "unsupported" });
+          return;
+        }
+        this.options.onFocusRequested();
+        sendJson(res, 200, { ok: true });
         return;
       }
 
@@ -698,6 +724,11 @@ export class RcsExtensionBridge {
   }
 
   private async handleChat(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    // BACKLOG-3661: one Sync at a time — the page's manual Send waits too.
+    if (this.jobs.active()) {
+      sendJson(res, 409, { error: "sync_running", message: RCS_SYNC_RUNNING_MESSAGE });
+      return;
+    }
     const session = this.session;
     if (!session) {
       sendJson(res, 409, { error: "no_session", message: RCS_NO_SESSION_MESSAGE });

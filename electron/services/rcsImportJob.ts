@@ -121,6 +121,8 @@ export interface RcsJobSnapshot {
   error?: { code: string; message: string };
   createdAt: string;
   finishedAt?: string;
+  /** BACKLOG-3661: what is syncing (the transaction's name). */
+  label?: string;
   /** BACKLOG-3629: chats left out or imported in part (sent with /finish). */
   notReached?: RcsJobNotReached[];
   /** Entries beyond {@link RCS_NOT_REACHED_CAP}. */
@@ -212,6 +214,8 @@ export class RcsImportJob {
   /** BACKLOG-3629: set from the page's /finish (see RcsJobNotReached). */
   notReached: RcsJobNotReached[] = [];
   notReachedMore = 0;
+  /** BACKLOG-3661: what is syncing, for "Syncing: <label>" (the transaction's name). */
+  label: string | null = null;
   readonly contacts: RcsJobContact[];
   /** History floor sent to the page on claim (see RcsJobClaim.startDate). */
   readonly startDate: string | null;
@@ -253,6 +257,7 @@ export class RcsImportJob {
       ...(this.finishedAtMs !== undefined
         ? { finishedAt: new Date(this.finishedAtMs).toISOString() }
         : {}),
+      ...(this.label ? { label: this.label } : {}),
       ...(this.notReached.length > 0 || this.notReachedMore > 0
         ? { notReached: this.notReached.map((e) => ({ ...e })), notReachedMore: this.notReachedMore }
         : {}),
@@ -372,11 +377,28 @@ export class RcsJobRegistry {
 
   constructor(private readonly now: () => number = () => Date.now()) {}
 
-  create(transactionId: string, contacts: RcsJobContact[], startDate: string | null = null): RcsImportJob {
-    // A new job replaces any other; a running one is cancelled first.
-    if (this.job && this.job.isActive) this.job.cancel(this.now());
+  /**
+   * BACKLOG-3661: only one Sync at a time. While a job is created or running,
+   * NO new job is made: the running one is returned, untouched (replacing it
+   * used to orphan it part-way). Check {@link active} first to tell the user.
+   */
+  create(
+    transactionId: string,
+    contacts: RcsJobContact[],
+    startDate: string | null = null,
+    label: string | null = null,
+  ): RcsImportJob {
+    const running = this.active();
+    if (running) return running;
     this.job = new RcsImportJob(transactionId, contacts, this.now(), undefined, startDate);
+    this.job.label = label;
     return this.job;
+  }
+
+  /** The created or running job, if any. */
+  active(): RcsImportJob | null {
+    const job = this.current();
+    return job && job.isActive ? job : null;
   }
 
   current(): RcsImportJob | null {

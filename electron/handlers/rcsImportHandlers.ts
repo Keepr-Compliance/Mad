@@ -37,7 +37,7 @@ import { storeImage, type RcsMediaDeps } from "../services/rcsImportMedia";
 import { importChat, type RcsImportDeps } from "../services/rcsImportStore";
 import { clearGoogleMessagesWebData, runWithWritesPaused, type RcsClearResult } from "../services/rcsClearService";
 import transactionService from "../services/transactionService";
-import { bringAppToFront } from "../utils/bringAppToFront";
+import { bringAppToFront, bringAppToFrontOrFlash } from "../utils/bringAppToFront";
 import { wrapHandler } from "../utils/wrapHandler";
 import { getMainWindow } from "../windowRegistry";
 import { ValidationError } from "../utils/validation";
@@ -51,6 +51,8 @@ const LOG_TAG = "RcsImport";
 export const RCS_CHAT_RECEIVED_CHANNEL = "rcs-import:chat-received";
 export const RCS_JOB_PROGRESS_CHANNEL = "rcs-import:job-progress";
 export const RCS_MESSAGES_WEB_URL = "https://messages.google.com/web/conversations";
+/** BACKLOG-3661: the start-job refusal while another Sync runs. */
+export const RCS_ALREADY_SYNCING_MESSAGE = "Keepr is already syncing";
 /** BACKLOG-3657: Google Messages for Web texts were cleared; open views refetch. */
 export const RCS_DATA_CLEARED_CHANNEL = "rcs-import:data-cleared";
 
@@ -130,6 +132,8 @@ const bridge = new RcsExtensionBridge({
   // The job finished in the browser: bring Keepr's main window forward
   // (BACKLOG-3636: shared with mailbox connect, incl. the Windows workaround).
   onJobFinished: () => bringAppToFront(getMainWindow()),
+  // BACKLOG-3641: "Open Keepr" on the page (POST /focus).
+  onFocusRequested: () => focusKeeprFromBrowser(),
   logger: {
     info: (m) => void logService.info(m, LOG_TAG),
     warn: (m) => void logService.warn(m, LOG_TAG),
@@ -188,6 +192,15 @@ export async function clearGoogleMessagesWebTexts(userId: string): Promise<RcsCl
   });
 }
 
+/**
+ * BACKLOG-3641: bring Keepr forward because the user asked from the browser
+ * ("Open Keepr"). Windows may still refuse the foreground change, so the
+ * taskbar button flashes as the fallback, until Keepr gets focus.
+ */
+export function focusKeeprFromBrowser(): void {
+  bringAppToFrontOrFlash(getMainWindow());
+}
+
 export function registerRcsImportHandlers(): void {
   ipcMain.handle(
     "rcs-import:get-status",
@@ -213,6 +226,14 @@ export function registerRcsImportHandlers(): void {
       const transactionId = requireString(argsObject(args).transactionId, "transactionId");
       const tx = await databaseService.getTransactionById(transactionId);
       if (!tx) return { success: false, error: "Transaction not found" };
+      // BACKLOG-3661: one Sync at a time — never replace a running one.
+      const running = bridge.activeJob();
+      if (running) {
+        return {
+          success: false,
+          error: `${RCS_ALREADY_SYNCING_MESSAGE}${running.label ? `: ${running.label}` : ""}. Wait for it to finish, or cancel it.`,
+        };
+      }
       if (bridge.writesArePaused) {
         return { success: false, error: "Keepr is clearing imported texts. Try Sync again in a moment." };
       }
@@ -225,7 +246,10 @@ export function registerRcsImportHandlers(): void {
         return { success: false, error: "This transaction has no contacts to look for." };
       }
       // The audit start date: the page loads chat history back past it.
-      const job = bridge.createJob(transactionId, contacts, { startDate: tx.started_at ?? null });
+      const job = bridge.createJob(transactionId, contacts, {
+        startDate: tx.started_at ?? null,
+        label: tx.property_address ?? null,
+      });
       await shell.openExternal(`${RCS_MESSAGES_WEB_URL}#keepr-job=${job.jobId}`);
       return { success: true, job };
     }, { module: LOG_TAG }),

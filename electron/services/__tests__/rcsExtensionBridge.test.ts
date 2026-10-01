@@ -218,6 +218,31 @@ describe("RcsExtensionBridge", () => {
     });
   });
 
+  // BACKLOG-3641: the page's "Open Keepr". Mutation: the route not calling
+  // onFocusRequested (or skipping the Origin check) → red.
+  describe("POST /focus (Open Keepr)", () => {
+    it("asks Keepr to come forward; refused without the pinned Origin, or by GET", async () => {
+      const focus = jest.fn();
+      const own = new RcsExtensionBridge({ importChat, onFocusRequested: focus });
+      expect(await own.start(0)).toBe("listening");
+      try {
+        const p = own.getStatus().port;
+        expect((await request(p, "POST", "/focus", { Origin: "https://messages.google.com" })).status).toBe(403);
+        expect((await request(p, "GET", "/focus", EXT)).status).toBe(405);
+        expect(focus).not.toHaveBeenCalled();
+        const reply = await request(p, "POST", "/focus", EXT);
+        expect(reply.status).toBe(200);
+        expect(focus).toHaveBeenCalledTimes(1);
+      } finally {
+        await own.stop();
+      }
+    });
+
+    it("a bridge without a focus handler answers 501", async () => {
+      expect((await request(port, "POST", "/focus", EXT)).status).toBe(501);
+    });
+  });
+
   describe("session (control 3)", () => {
     it("answers 409 with an explicit message when no session is open", async () => {
       const reply = await request(port, "POST", "/chat", {
@@ -374,6 +399,7 @@ describe("RcsExtensionBridge sync jobs", () => {
     });
 
     it("claim carries the transaction's start date when the job has one", async () => {
+      bridge.cancelJob(jobId); // one Sync at a time (BACKLOG-3661)
       jobId = bridge.createJob("tx-job", JOB_CONTACTS, { startDate: "2026-03-01" }).jobId;
       const claim = await request(port, "POST", `/job/${jobId}/claim`, EXT);
       expect(claim.body).toMatchObject({ jobId, startDate: "2026-03-01" });
@@ -527,6 +553,27 @@ describe("RcsExtensionBridge sync jobs", () => {
   // BACKLOG-3642 / 3645. Mutations that turn these red: pass the page's own
   // participantKey (or none) to importChat; drop the removedNotRelinked sum;
   // drop notChecked from /progress or /finish.
+  // BACKLOG-3661. Mutations that turn these red: createJob replacing the
+  // running job; the manual Send accepted during a Sync.
+  describe("BACKLOG-3661: one Sync at a time", () => {
+    it("createJob while a job runs returns the running job; activeJob names it", () => {
+      const again = bridge.createJob("tx-other", JOB_CONTACTS, { label: "9 Other Street" });
+      expect(again.jobId).toBe(jobId);
+      expect(again.transactionId).toBe("tx-job");
+      expect(bridge.activeJob()?.jobId).toBe(jobId);
+    });
+
+    it("the page's manual Send is refused (409) while a Sync runs, and accepted after", async () => {
+      bridge.openSession("tx-manual");
+      const refused = await request(port, "POST", "/chat", EXT, CHAT_JSON);
+      expect(refused.status).toBe(409);
+      expect(refused.body.error).toBe("sync_running");
+      expect(importChat).not.toHaveBeenCalled();
+      bridge.cancelJob(jobId);
+      expect((await request(port, "POST", "/chat", EXT, CHAT_JSON)).status).toBe(200);
+    });
+  });
+
   describe("BACKLOG-3642/3645: participant key, removed-by-you, not checked", () => {
     it("the chat is imported with the participant key of the numbers THIS job's /match saw — never the page's", async () => {
       await claimAndMatch(["(555) 555-0199"]);

@@ -76,14 +76,16 @@ describe("RcsImportJob / RcsJobRegistry", () => {
   });
 
   it("the claim carries the transaction's start date; a missing or unparseable one is null (no date floor)", () => {
-    const { jobs } = registry();
-    expect(jobs.create("tx-1", CONTACTS, "2026-03-01").claim(jobs.nowMs())).toMatchObject({ startDate: "2026-03-01" });
-    expect(jobs.create("tx-1", CONTACTS, "2026-03-01T00:00:00.000Z").claim(jobs.nowMs())).toMatchObject({
-      startDate: "2026-03-01T00:00:00.000Z",
-    });
-    expect(jobs.create("tx-1", CONTACTS, null).claim(jobs.nowMs())).toMatchObject({ startDate: null });
-    expect(jobs.create("tx-1", CONTACTS, "").claim(jobs.nowMs())).toMatchObject({ startDate: null });
-    expect(jobs.create("tx-1", CONTACTS, "not a date").claim(jobs.nowMs())).toMatchObject({ startDate: null });
+    // A fresh registry per case: one Sync at a time (BACKLOG-3661).
+    const claimWith = (startDate: string | null) => {
+      const { jobs } = registry();
+      return jobs.create("tx-1", CONTACTS, startDate).claim(jobs.nowMs());
+    };
+    expect(claimWith("2026-03-01")).toMatchObject({ startDate: "2026-03-01" });
+    expect(claimWith("2026-03-01T00:00:00.000Z")).toMatchObject({ startDate: "2026-03-01T00:00:00.000Z" });
+    expect(claimWith(null)).toMatchObject({ startDate: null });
+    expect(claimWith("")).toMatchObject({ startDate: null });
+    expect(claimWith("not a date")).toMatchObject({ startDate: null });
   });
 
   it("reports contacts that have no phone number", () => {
@@ -120,11 +122,26 @@ describe("RcsImportJob / RcsJobRegistry", () => {
     expect(jobs.check(job.jobId)).toMatchObject({ ok: false, status: 410 });
   });
 
-  it("a new job cancels the previous one", () => {
+  // BACKLOG-3661. Mutation: replace (or cancel) the running job again → red.
+  it("one Sync at a time: while a job is created or running, create returns THAT job, untouched", () => {
+    const { jobs } = registry();
+    const first = jobs.create("tx-1", CONTACTS, null, "1 Test Street");
+    expect(jobs.create("tx-2", CONTACTS)).toBe(first);
+    first.claim(jobs.nowMs());
+    expect(jobs.create("tx-2", CONTACTS)).toBe(first);
+    expect(first.state).toBe("running");
+    expect(jobs.check(first.jobId)).toMatchObject({ ok: true });
+    expect(jobs.active()).toBe(first);
+    expect(first.snapshot().label).toBe("1 Test Street");
+  });
+
+  it("after the job ends (finished, failed or cancelled) a new one is created", () => {
     const { jobs } = registry();
     const first = jobs.create("tx-1", CONTACTS);
+    first.cancel(jobs.nowMs());
+    expect(jobs.active()).toBeNull();
     const second = jobs.create("tx-2", CONTACTS);
-    expect(first.state).toBe("cancelled");
+    expect(second).not.toBe(first);
     expect(jobs.check(first.jobId)).toMatchObject({ ok: false, status: 404 });
     expect(jobs.check(second.jobId)).toMatchObject({ ok: true });
   });

@@ -87,7 +87,24 @@
     });
   }
 
+  // BACKLOG-3661: no manual Send while a Sync runs in this tab (job.js).
+  let sending = false;
+  function syncRunning() {
+    return !!(globalThis.KeeprSyncState && globalThis.KeeprSyncState.running);
+  }
+  function refreshButton() {
+    const syncing = syncRunning();
+    button.disabled = sending || syncing;
+    button.style.opacity = button.disabled ? "0.6" : "1";
+    button.textContent = syncing ? "Sync running…" : "Send to Keepr";
+  }
+
   button.addEventListener("click", async () => {
+    if (sending || syncRunning()) {
+      refreshButton();
+      return;
+    }
+    sending = true;
     button.disabled = true;
     button.style.opacity = "0.6";
     try {
@@ -139,8 +156,8 @@
     } catch (err) {
       showStatus(`Couldn't read this conversation: ${String((err && err.message) || err)}`, true);
     } finally {
-      button.disabled = false;
-      button.style.opacity = "1";
+      sending = false;
+      refreshButton();
     }
   });
 
@@ -155,5 +172,6 @@
       status.style.display = "none";
     }
     mount();
+    refreshButton();
   }, 1000);
 })();

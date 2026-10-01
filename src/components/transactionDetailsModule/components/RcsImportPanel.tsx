@@ -19,6 +19,7 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { isActiveJob, useActiveRcsSync } from "../hooks/useActiveRcsSync";
 
 import {
   rcsImportService,
@@ -320,6 +321,43 @@ export function RcsSyncJobStatus({ sync }: { sync: RcsSyncJobController }): Reac
   );
 }
 
+/**
+ * BACKLOG-3661: a Sync button that knows about EVERY Sync. While any job runs
+ * (this transaction's or another's — one at a time), it reads "Syncing…" and
+ * is disabled; a job on another transaction is named ("Syncing: <name>") with
+ * a Cancel. Built on useActiveRcsSync so the dashboard's Sync can share it.
+ */
+export function RcsSyncButton({ sync }: { sync: RcsSyncJobController }): React.ReactElement {
+  const active = useActiveRcsSync();
+  const busy = sync.starting || isActiveJob(sync.job) || !!active.activeJob;
+  const elsewhere = active.activeJob && active.activeJob.jobId !== sync.job?.jobId ? active.activeJob : null;
+  return (
+    <>
+      <button
+        onClick={() => void sync.start()}
+        disabled={busy}
+        className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 rounded-lg transition-colors disabled:opacity-50"
+        data-testid="rcs-sync-button"
+        title="Find this transaction's chats in Messages for Web (Chrome) and import them"
+      >
+        {busy ? "Syncing…" : "Sync"}
+      </button>
+      {elsewhere && (
+        <span className="inline-flex items-center gap-2 text-sm text-gray-600" data-testid="rcs-sync-active-elsewhere">
+          {active.syncingLabel}
+          <button
+            onClick={() => void active.cancel()}
+            className="px-2 py-1 font-medium text-indigo-700 hover:bg-indigo-100 rounded"
+            data-testid="rcs-sync-active-cancel"
+          >
+            Cancel
+          </button>
+        </span>
+      )}
+    </>
+  );
+}
+
 export function RcsImportPanel({
   controller,
   sync,
@@ -328,22 +366,10 @@ export function RcsImportPanel({
   sync?: RcsSyncJobController;
 }): React.ReactElement {
   const { session, bridgeProblem, error, starting, start, done } = controller;
-  const syncActive = !!sync?.job && (sync.job.state === "created" || sync.job.state === "running");
-
   if (!session) {
     return (
       <div className="inline-flex items-center gap-2">
-        {sync && (
-          <button
-            onClick={() => void sync.start()}
-            disabled={sync.starting || syncActive}
-            className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 rounded-lg transition-colors disabled:opacity-50"
-            data-testid="rcs-sync-button"
-            title="Find this transaction's chats in Messages for Web (Chrome) and import them"
-          >
-            Sync
-          </button>
-        )}
+        {sync && <RcsSyncButton sync={sync} />}
         <button
           onClick={() => void start()}
           disabled={starting}

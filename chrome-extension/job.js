@@ -604,16 +604,27 @@
     };
   }
 
+  var SEE_DETAILS = "See details ▾";
+  var HIDE_DETAILS = "Hide details ▴";
+
   /**
-   * Fill the overlay panel (BACKLOG-3641 founder UX): one line, and with
-   * `extras` a Details toggle (the details text in a pre block) and a Copy
-   * button. createElement / textContent only — page text never becomes markup.
+   * Fill the overlay panel (BACKLOG-3641, founder's final layout, mockup screen 4):
+   *
+   *   [headline: "Sync done — switch back to Keepr." or the failure line]
+   *   [See details ▾ (link, bottom-LEFT)]          [Open Keepr (primary, RIGHT)]
+   *   [details card — below the row, collapsed: the summary + "Copy details"]
+   *
+   * The link reads "Hide details ▴" while the card is open. "Open Keepr" asks
+   * Keepr (through the extension's worker and the bridge's POST /focus) to bring
+   * itself to the front — the backup when Windows blocks the focus change.
+   * Progress lines (no `extras`) are just the headline. createElement and
+   * textContent only: page text never becomes markup.
    *
    * @param {HTMLElement} panel
    * @param {string} text
    * @param {boolean} isError
    * @param {{details: string, copy: string}=} extras
-   * @param {{copy: function(string): Promise<boolean>}} io
+   * @param {{copy: function(string): Promise<boolean>, focus?: function(): Promise<boolean>}} io
    */
   function renderOverlay(panel, text, isError, extras, io) {
     var doc = panel.ownerDocument;
@@ -623,40 +634,76 @@
     var line = doc.createElement("div");
     line.setAttribute("data-keepr", "line");
     line.textContent = "Keepr: " + text;
+    Object.assign(line.style, { fontWeight: "600" });
     panel.appendChild(line);
     if (!extras) return;
 
-    var buttons = doc.createElement("div");
-    buttons.style.marginTop = "6px";
-    var detailsButton = doc.createElement("button");
-    detailsButton.type = "button";
-    detailsButton.setAttribute("data-keepr", "details-toggle");
-    detailsButton.textContent = "Details";
-    var copyButton = doc.createElement("button");
-    copyButton.type = "button";
-    copyButton.setAttribute("data-keepr", "copy");
-    copyButton.textContent = "Copy";
-    copyButton.style.marginLeft = "8px";
-    buttons.appendChild(detailsButton);
-    buttons.appendChild(copyButton);
-    panel.appendChild(buttons);
+    // Bottom row: the details link LEFT, Open Keepr RIGHT.
+    var row = doc.createElement("div");
+    row.setAttribute("data-keepr", "bottom-row");
+    Object.assign(row.style, {
+      display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", marginTop: "10px",
+    });
+    var toggle = doc.createElement("button");
+    toggle.type = "button";
+    toggle.setAttribute("data-keepr", "details-toggle");
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.textContent = SEE_DETAILS;
+    Object.assign(toggle.style, {
+      background: "none", border: "none", padding: "0", cursor: "pointer",
+      color: "inherit", textDecoration: "underline", font: "inherit",
+    });
+    var open = doc.createElement("button");
+    open.type = "button";
+    open.setAttribute("data-keepr", "open-keepr");
+    open.textContent = "Open Keepr";
+    Object.assign(open.style, {
+      background: "#4f46e5", color: "#fff", border: "none", borderRadius: "8px",
+      padding: "8px 14px", fontWeight: "600", cursor: "pointer", font: "inherit",
+    });
+    row.appendChild(toggle);
+    row.appendChild(open);
+    panel.appendChild(row);
 
+    // The details card, BELOW the row, collapsed by default.
+    var card = doc.createElement("div");
+    card.setAttribute("data-keepr", "details-card");
+    Object.assign(card.style, {
+      display: "none", marginTop: "10px", padding: "10px", borderRadius: "8px",
+      background: "#ffffff", color: "#1f2937", border: "1px solid #e5e7eb",
+    });
     var details = doc.createElement("pre");
     details.setAttribute("data-keepr", "details");
     details.textContent = extras.details;
-    Object.assign(details.style, { display: "none", whiteSpace: "pre-wrap", margin: "8px 0 0", font: "inherit" });
-    panel.appendChild(details);
+    Object.assign(details.style, { whiteSpace: "pre-wrap", margin: "0", font: "inherit" });
+    var copyButton = doc.createElement("button");
+    copyButton.type = "button";
+    copyButton.setAttribute("data-keepr", "copy");
+    copyButton.textContent = "Copy details";
+    Object.assign(copyButton.style, { marginTop: "8px", cursor: "pointer", font: "inherit" });
+    card.appendChild(details);
+    card.appendChild(copyButton);
+    panel.appendChild(card);
 
-    detailsButton.addEventListener("click", function () {
-      var open = details.style.display === "none";
-      details.style.display = open ? "block" : "none";
-      detailsButton.textContent = open ? "Hide details" : "Details";
+    toggle.addEventListener("click", function () {
+      var opening = card.style.display === "none";
+      card.style.display = opening ? "block" : "none";
+      toggle.textContent = opening ? HIDE_DETAILS : SEE_DETAILS;
+      toggle.setAttribute("aria-expanded", opening ? "true" : "false");
     });
     copyButton.addEventListener("click", function () {
       Promise.resolve(io.copy(extras.copy)).then(function (ok) {
         copyButton.textContent = ok ? "Copied" : "Copy failed";
       }, function () {
         copyButton.textContent = "Copy failed";
+      });
+    });
+    open.addEventListener("click", function () {
+      if (!io.focus) return;
+      Promise.resolve(io.focus()).then(function (ok) {
+        if (!ok) open.textContent = "Open Keepr from the taskbar";
+      }, function () {
+        open.textContent = "Open Keepr from the taskbar";
       });
     });
   }
@@ -690,6 +737,13 @@
 
   var STORAGE_KEY = "keepr-job";
   var running = false;
+  // BACKLOG-3661: the page's Send button (content.js) is disabled while a Sync
+  // runs in this tab; Keepr refuses a manual Send during any Sync as well.
+  root.KeeprSyncState = { running: false };
+  function setRunning(value) {
+    running = value;
+    root.KeeprSyncState.running = value;
+  }
 
   // Read the hash at document_start, before the app's router runs; keep it for
   // this tab in case a redirect (e.g. to the sign-in page) drops it.
@@ -738,7 +792,12 @@
       });
       document.body.appendChild(panel);
     }
-    renderOverlay(panel, text, isError, extras, { copy: copyToClipboard });
+    renderOverlay(panel, text, isError, extras, { copy: copyToClipboard, focus: focusKeepr });
+  }
+
+  /** "Open Keepr": the worker asks the bridge (POST /focus) to bring Keepr forward. */
+  function focusKeepr() {
+    return toWorker({ type: "keepr-focus" }).then(function (r) { return !!(r && r.ok); });
   }
 
   /** navigator.clipboard, else a hidden textarea + execCommand("copy"). */
@@ -858,7 +917,7 @@
 
   async function start(jobId) {
     if (running) return;
-    running = true;
+    setRunning(true);
     try { sessionStorage.removeItem(STORAGE_KEY); } catch (_e) { /* ignore */ }
     if (!document.body) {
       await new Promise(function (r) { document.addEventListener("DOMContentLoaded", r, { once: true }); });
@@ -866,13 +925,15 @@
     try {
       await runJob(jobId, env());
     } catch (err) {
-      showOverlay("The sync stopped: " + String((err && err.message) || err), true);
+      var stopped = "The sync stopped: " + String((err && err.message) || err);
+      // Copy carries no error text (it could quote the page).
+      showOverlay(stopped, true, { details: stopped, copy: "Keepr Sync diagnostics: the sync stopped with an error." });
       await toWorker({
         type: "keepr-job-api", method: "POST", path: "/job/" + jobId + "/error",
         body: { code: "scan_failed", message: String((err && err.message) || err) },
       });
     } finally {
-      running = false;
+      setRunning(false);
     }
   }
 
