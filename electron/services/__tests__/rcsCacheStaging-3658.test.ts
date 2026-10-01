@@ -377,11 +377,12 @@ describe("atomic: all or nothing", () => {
     const atMove = new Promise<void>((r) => {
       moving = r;
     });
-    const realMove = files.move;
-    files.move = async (from, to) => {
+    // The move does not need the staged file (abandon() drops it), so the
+    // commit really reaches its transaction check.
+    files.move = async (_from, to) => {
       moving();
       await gate;
-      await realMove(from, to);
+      fs.writeFileSync(to, "x");
     };
     staging = new RcsCacheStaging(rcsStagingDbOps(), files);
     const committed = staging.commit(JOB, USER, ALL, writer);
