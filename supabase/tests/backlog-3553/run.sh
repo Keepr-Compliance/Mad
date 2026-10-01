@@ -8,7 +8,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
-MIG="${MIG:-$REPO/supabase/migrations/20260929150000_backlog_3553_storage_usage_execute.sql}"
+MIG="${MIG:-$REPO/supabase/migrations/20260929074121_backlog_3553_storage_usage_execute.sql}"
 SSH_HOST="${SSH_HOST:?set SSH_HOST}"; CONTAINER="${PG_CONTAINER:?set PG_CONTAINER}"
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=20)
 n=$(grep -c '^-- harness: migration$' "$HERE/controls.sql")
