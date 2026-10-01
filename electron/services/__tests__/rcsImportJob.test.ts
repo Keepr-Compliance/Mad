@@ -66,10 +66,12 @@ describe("RcsImportJob / RcsJobRegistry", () => {
         { contactId: "c-2", displayName: "Test Contact B" },
       ],
       startDate: null,
-      // BACKLOG-3641: names only, for the page's Details.
-      contactsWithoutPhone: ["Test Contact C"],
+      // BACKLOG-3641 / SR B1: a COUNT only — Keepr-only names never reach the page.
+      contactsWithoutPhoneCount: 1,
     });
     expect(JSON.stringify(claim)).not.toContain("+1");
+    // SR B1. Mutation: send the no-phone contacts' names again → red.
+    expect(JSON.stringify(claim)).not.toContain("Test Contact C");
     expect(job.claim(jobs.nowMs())).toMatchObject({ status: 409, error: "already_running" });
   });
 

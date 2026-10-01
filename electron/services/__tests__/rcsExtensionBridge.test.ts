@@ -283,7 +283,7 @@ describe("RcsExtensionBridge sync jobs", () => {
 
     it("claim returns names only, never the contacts' numbers", async () => {
       const claim = await request(port, "POST", `/job/${jobId}/claim`, EXT);
-      expect(claim.body).toEqual({ jobId, contacts: [{ contactId: "c-1", displayName: "Test Contact A" }], startDate: null, contactsWithoutPhone: [] });
+      expect(claim.body).toEqual({ jobId, contacts: [{ contactId: "c-1", displayName: "Test Contact A" }], startDate: null, contactsWithoutPhoneCount: 0 });
     });
 
     it("claim carries the transaction's start date when the job has one", async () => {

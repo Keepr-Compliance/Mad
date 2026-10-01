@@ -290,6 +290,8 @@
    * rest are reported as not checked.
    */
   var CHECK_ALL_MAX = 50;
+  /** Over the cap, at most this many chats are checked; the rest count as notChecked. */
+  var OVER_CAP_QUEUE_MAX = 100;
 
   /** Lower case, accents removed, punctuation → space. */
   function foldName(s) {
@@ -307,7 +309,8 @@
     for (var i = 0; i < contacts.length; i++) {
       var tokens = foldName(contacts[i].displayName).split(" ").filter(Boolean);
       if (tokens.length === 0 || tokens.join(" ") === "unknown") continue;
-      if (words[0] === tokens[0]) return true;
+      // First name: at least 3 letters, so "Al" or "Jo" does not pull in every chat.
+      if (tokens[0].length >= 3 && words[0] === tokens[0]) return true;
       for (var t = 0; t < tokens.length; t++) {
         if (tokens[t].length >= 3 && words.indexOf(tokens[t]) !== -1) return true;
       }
@@ -348,6 +351,8 @@
     queue.sort(function (a, b) {
       return QUEUE_ORDER[a.reason] - QUEUE_ORDER[b.reason] || a.at - b.at;
     });
+    // Over the cap the queue itself is bounded: the best-ranked first.
+    if (!checkAll && queue.length > OVER_CAP_QUEUE_MAX) queue = queue.slice(0, OVER_CAP_QUEUE_MAX);
     return {
       queue: queue.map(function (q) { return { conversation: q.conversation, reason: q.reason }; }),
       notChecked: conversations.length - queue.length,
@@ -719,6 +724,7 @@
     pickCandidates: pickCandidates,
     planChecks: planChecks,
     CHECK_ALL_MAX: CHECK_ALL_MAX,
+    OVER_CAP_QUEUE_MAX: OVER_CAP_QUEUE_MAX,
     waitFor: waitFor,
     readParticipantsAndClose: readParticipantsAndClose,
   };

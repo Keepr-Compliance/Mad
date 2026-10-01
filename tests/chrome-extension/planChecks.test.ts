@@ -33,6 +33,7 @@ interface Plan {
 
 interface ScanModule {
   CHECK_ALL_MAX: number;
+  OVER_CAP_QUEUE_MAX: number;
   planChecks: (conversations: Conv[], contacts: Array<{ displayName: string }>, opts?: { checkAllMax?: number }) => Plan;
   [key: string]: unknown;
 }
@@ -125,6 +126,21 @@ describe("planChecks (BACKLOG-3645)", () => {
     expect(names).not.toContain("Al Sample");
   });
 
+  // SR O4. Mutation: first-name rule without the 3-letter minimum → red.
+  it("over the cap: a first name shorter than 3 letters does not pull a chat in", () => {
+    const plan = scan.planChecks(list(60, [conv(60, "Al Household")]), [{ displayName: "Al Bo" }]);
+    expect(plan.queue.map((q) => q.conversation.name)).not.toContain("Al Household");
+  });
+
+  // SR O3. Mutation: no hard cap on the over-cap queue → red.
+  it("over the cap: the queue is bounded (OVER_CAP_QUEUE_MAX = 100), the rest counted as not checked", () => {
+    const many = Array.from({ length: 300 }, (_, i) => conv(i, "(555) 555-01" + String(i % 100).padStart(2, "0")));
+    const plan = scan.planChecks(many, CONTACTS);
+    expect(scan.OVER_CAP_QUEUE_MAX).toBe(100);
+    expect(plan.queue).toHaveLength(100);
+    expect(plan.notChecked).toBe(200);
+  });
+
   it("over the cap: case- and accent-insensitive (P4)", () => {
     const plan = scan.planChecks(list(60, [conv(60, "TÉST household")]), [{ displayName: "Test Contact Lee" }]);
     expect(plan.queue.map((q) => q.conversation.name)).toContain("TÉST household");
@@ -132,7 +148,7 @@ describe("planChecks (BACKLOG-3645)", () => {
 });
 
 /** A Sync over a stubbed page: every chat shows a number, none matches. */
-function planJob(chats: Conv[], opts: { throwFor?: string; contactsWithoutPhone?: string[] } = {}) {
+function planJob(chats: Conv[], opts: { throwFor?: string; contactsWithoutPhoneCount?: number; strayNames?: string[] } = {}) {
   const calls: Array<[string, string, Record<string, unknown> | undefined]> = [];
   const shown: Array<{ text: string; extras?: { details: string; copy: string } }> = [];
   document.body.innerHTML = "<mws-conversation-list-item></mws-conversation-list-item>";
@@ -146,7 +162,9 @@ function planJob(chats: Conv[], opts: { throwFor?: string; contactsWithoutPhone?
         return {
           ok: true,
           status: 200,
-          body: { jobId: JOB, contacts: [{ contactId: "c-1", displayName: "Test Contact Lee" }], contactsWithoutPhone: opts.contactsWithoutPhone ?? [] },
+          body: { jobId: JOB, contacts: [{ contactId: "c-1", displayName: "Test Contact Lee" }], contactsWithoutPhoneCount: opts.contactsWithoutPhoneCount ?? 0,
+            // An older Keepr's names field: the page must ignore it (SR B1).
+            ...(opts.strayNames ? { contactsWithoutPhone: opts.strayNames } : {}) },
         };
       }
       if (p.endsWith("/match")) return { ok: true, status: 200, body: { matched: false, contactIds: [] } };
@@ -203,23 +221,37 @@ describe("the job reports what it did not check (P5)", () => {
 
 describe("Copy text (BACKLOG-3641, SR ruling 2)", () => {
   it("Copy text: no names, no numbers, no message text — salted tags, reasons and counts only (P6)", async () => {
-    const t = planJob(list(19), { throwFor: "Sample Person 5", contactsWithoutPhone: ["Sample Nophone"] });
+    const t = planJob(list(19), { throwFor: "Sample Person 5", contactsWithoutPhoneCount: 2 });
     await job.runJob(JOB, t.env);
     const last = t.shown[t.shown.length - 1];
     const copy = last.extras?.copy ?? "";
     const details = last.extras?.details ?? "";
     // On screen: the real names.
     expect(details).toContain("Sample Person 5 (could not be opened)");
-    expect(details).toContain("No phone number: Sample Nophone");
+    expect(details).toContain("2 contacts have no phone number — see Keepr");
     // Copied: tags and reasons.
     expect(copy).toContain("Keepr Sync diagnostics");
     expect(copy).toContain("Scanned 19 chats · checked 18 · matched 0 · imported 0 messages");
     expect(copy).toMatch(/• #[0-9a-f]{6} \(could not be opened\)/);
-    expect(copy).toMatch(/No phone number: #[0-9a-f]{6}/);
+    expect(copy).toContain("2 contacts have no phone number — see Keepr");
     expect(copy).toContain("--- step log ---");
     for (const forbidden of ["Sample", "Nophone", "Test Contact", "555", "0199", "0100"]) {
       expect([forbidden, copy.includes(forbidden)]).toEqual([forbidden, false]);
     }
+  });
+});
+
+// SR B1: Keepr-only names (contacts with no phone) never go into Google's page
+// DOM — not even into the hidden Details block. Mutation: render a names list
+// from the claim again → red.
+describe("contacts with no phone number: a count on the page, names only in Keepr", () => {
+  it("the page shows a count; no Keepr-only name reaches the overlay, Details or Copy", async () => {
+    const t = planJob(list(5), { contactsWithoutPhoneCount: 1, strayNames: ["Sample Nophone"] });
+    await job.runJob(JOB, t.env);
+    const last = t.shown[t.shown.length - 1];
+    expect(last.extras?.details).toContain("1 contact has no phone number — see Keepr");
+    const everything = JSON.stringify(t.shown);
+    expect(everything).not.toContain("Nophone");
   });
 });
 

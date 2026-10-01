@@ -356,3 +356,18 @@ describe("importChat respects the user's removals (BACKLOG-3642)", () => {
     expect(JSON.parse(manual[0].metadata ?? "{}")).not.toHaveProperty("participantKey");
   });
 });
+
+// SR O1. Mutation: drop the backfill call (or call it without a key) → red.
+describe("importChat backfills the participant key into a thread's older rows (SR O1)", () => {
+  it("with a key: asks for the thread's existing rows to get it; without one: never", async () => {
+    const db = makeFakeDb("user-1");
+    const backfills: Array<[string, string, string]> = [];
+    db.deps.backfillParticipantKey = (uid, threadId, key) => {
+      backfills.push([uid, threadId, key]);
+    };
+    await importChat(CHAT, "tx-1", db.deps);
+    expect(backfills).toEqual([]);
+    await importChat(CHAT, "tx-1", db.deps, { participantKey: "+15555550199" });
+    expect(backfills).toEqual([["user-1", "gmweb-chat-aaaaaaaaaaaaaaaaaaa", "+15555550199"]]);
+  });
+});

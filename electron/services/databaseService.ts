@@ -2430,6 +2430,10 @@ class DatabaseService implements IDatabaseService {
     return syncDb.getRcsRemovals(transactionId, userId);
   }
 
+  backfillRcsParticipantKey(userId: string, threadId: string, key: string) {
+    return syncDb.backfillRcsParticipantKey(userId, threadId, key);
+  }
+
   insertReactionRows(rows: Parameters<typeof syncDb.insertReactionRows>[0]) {
     return syncDb.insertReactionRows(rows);
   }

@@ -60,16 +60,39 @@ export const RCS_REMOVALS_SQL = sql`
 /**
  * BACKLOG-3642: participant keys (`metadata.participantKey`, written by Sync) of
  * gmweb rows the user removed from the transaction — by thread or by message.
- * Parameters: transaction id, user id. `json_valid` guards rows whose metadata
- * is not JSON (only gmweb rows are read, but the guard keeps the query safe).
+ * Parameters: user id, transaction id, transaction id. Starts from the (small)
+ * removal set with IN (...) subqueries, so SQLite looks rows up by thread id /
+ * primary key instead of scanning every message. `json_valid` guards rows whose
+ * metadata is not JSON.
  */
 export const RCS_REMOVED_PARTICIPANT_KEYS_SQL = sql`
     SELECT DISTINCT
       CASE WHEN json_valid(m.metadata) THEN json_extract(m.metadata, '$.participantKey') END AS participantKey
     FROM messages m
-    JOIN ignored_communications ic
-      ON ic.transaction_id = ?
-     AND (ic.thread_id = m.thread_id OR ic.original_communication_id = m.id)
     WHERE m.user_id = ?
       AND m.thread_id LIKE 'gmweb-chat-%'
+      AND (
+        m.thread_id IN (
+          SELECT ic.thread_id FROM ignored_communications ic
+          WHERE ic.transaction_id = ? AND ic.thread_id LIKE 'gmweb-chat-%'
+        )
+        OR m.id IN (
+          SELECT ic.original_communication_id FROM ignored_communications ic
+          WHERE ic.transaction_id = ? AND ic.original_communication_id IS NOT NULL
+        )
+      )
+  `;
+
+/**
+ * BACKLOG-3642 (SR O1): backfill the participant key into a thread's existing
+ * rows (stored before pass 1c, or by a manual Send), so they get re-pair
+ * protection too. Parameters: key, user id, thread id, key.
+ */
+export const RCS_BACKFILL_PARTICIPANT_KEY_SQL = sql`
+    UPDATE messages
+    SET metadata = json_set(metadata, '$.participantKey', ?)
+    WHERE user_id = ?
+      AND thread_id = ?
+      AND json_valid(metadata)
+      AND COALESCE(json_extract(metadata, '$.participantKey'), '') != ?
   `;

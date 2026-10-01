@@ -69,6 +69,9 @@ const deps: RcsImportDeps = {
   },
   // BACKLOG-3642: never re-link what the user removed from the transaction.
   getRemovals: (transactionId, userId) => databaseService.getRcsRemovals(transactionId, userId),
+  backfillParticipantKey: (userId, threadId, key) => {
+    databaseService.backfillRcsParticipantKey(userId, threadId, key);
+  },
 };
 
 const mediaDeps: RcsMediaDeps = {

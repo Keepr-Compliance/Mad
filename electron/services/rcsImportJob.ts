@@ -138,10 +138,11 @@ export interface RcsJobClaim {
    */
   startDate: string | null;
   /**
-   * BACKLOG-3641: names of the transaction's contacts with no phone number, for
-   * the page's on-screen Details (they can never match). Names only.
+   * BACKLOG-3641: how many of the transaction's contacts have no phone number
+   * (they can never match). A COUNT only: the page is Google's, and Keepr-only
+   * names must never be written into it. Keepr's own panel lists the names.
    */
-  contactsWithoutPhone: string[];
+  contactsWithoutPhoneCount: number;
 }
 
 /**
@@ -282,7 +283,7 @@ export class RcsImportJob {
         .filter((c) => c.phonesE164.length > 0)
         .map((c) => ({ contactId: c.contactId, displayName: c.displayName })),
       startDate: this.startDate,
-      contactsWithoutPhone: this.contacts.filter((c) => c.phonesE164.length === 0).map((c) => c.displayName),
+      contactsWithoutPhoneCount: this.contacts.filter((c) => c.phonesE164.length === 0).length,
     };
   }
 

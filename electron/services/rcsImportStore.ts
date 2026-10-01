@@ -125,6 +125,11 @@ export interface RcsImportDeps {
    * time). Absent → nothing is treated as removed.
    */
   getRemovals?: (transactionId: string, userId: string) => RcsRemovals;
+  /**
+   * BACKLOG-3642 (SR O1): write the participant key into the thread's rows
+   * already stored without it (before pass 1c, or by a manual Send).
+   */
+  backfillParticipantKey?: (userId: string, threadId: string, key: string) => void;
 }
 
 /**
@@ -272,6 +277,10 @@ export async function importChat(
   // Rows are ALWAYS stored (dedup keeps working); only the link respects the
   // user's removals.
   const { stored, skipped } = deps.batchInsertMessages(rows, 500);
+  // Rows stored earlier keep their metadata (INSERT OR IGNORE): backfill the key.
+  if (key !== "" && deps.backfillParticipantKey) {
+    deps.backfillParticipantKey(userId, `${RCS_THREAD_PREFIX}${chat.conversationId}`, key);
+  }
 
   const reactionRows = mapChatToReactionRows(chat, userId);
   const reactionResult =

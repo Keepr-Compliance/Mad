@@ -9,6 +9,7 @@ import {
   RCS_IMPORT_TRANSACTION_CONTACTS_SQL,
   RCS_INSERT_REACTION_SQL,
   RCS_MARK_MESSAGE_HAS_ATTACHMENTS_SQL,
+  RCS_BACKFILL_PARTICIPANT_KEY_SQL,
   RCS_REMOVALS_SQL,
   RCS_REMOVED_PARTICIPANT_KEYS_SQL,
 } from "./rcsImportSql";
@@ -221,7 +222,7 @@ export function getRcsRemovals(
     if (r.threadId && r.threadId.startsWith("gmweb-chat-")) threadIds.add(r.threadId);
     if (r.messageId) messageIds.add(r.messageId);
   }
-  const keys = db.prepare(RCS_REMOVED_PARTICIPANT_KEYS_SQL).all(transactionId, userId) as {
+  const keys = db.prepare(RCS_REMOVED_PARTICIPANT_KEYS_SQL).all(userId, transactionId, transactionId) as {
     participantKey: unknown;
   }[];
   const participantKeys = new Set<string>();
@@ -229,6 +230,12 @@ export function getRcsRemovals(
     if (typeof k.participantKey === "string" && k.participantKey.length > 0) participantKeys.add(k.participantKey);
   }
   return { threadIds, messageIds, participantKeys };
+}
+
+/** BACKLOG-3642: write a thread's participant key into its existing rows. Returns rows changed. */
+export function backfillRcsParticipantKey(userId: string, threadId: string, key: string): number {
+  const db = ensureDb();
+  return db.prepare(RCS_BACKFILL_PARTICIPANT_KEY_SQL).run(key, userId, threadId, key).changes;
 }
 
 export function markMessageHasAttachments(messageId: string): number {

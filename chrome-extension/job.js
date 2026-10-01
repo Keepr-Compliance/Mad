@@ -87,7 +87,7 @@
    * the name itself on screen, a salted tag in the Copy text.
    *
    * @param {{listed: number, checked: number, matched: number, chats: number, messages: number,
-   *          images: number, notChecked: number, contactsWithoutPhone: string[],
+   *          images: number, notChecked: number, contactsWithoutPhone: number,
    *          removedByUser: number, notReached: Array<{name: string, reason: string, count?: number}>,
    *          notReachedMore: number}} s
    * @param {function(string): string} nameOf
@@ -103,8 +103,10 @@
     if (s.notChecked > 0) {
       lines.push("Not checked: " + s.notChecked + " chats (name didn't match a contact on this transaction)");
     }
-    if (s.contactsWithoutPhone.length > 0) {
-      lines.push("No phone number: " + s.contactsWithoutPhone.map(nameOf).join(", "));
+    // A count only: Keepr-only names never go into the page (SR B1).
+    if (s.contactsWithoutPhone > 0) {
+      lines.push(s.contactsWithoutPhone + " contact" + (s.contactsWithoutPhone === 1 ? " has" : "s have") +
+        " no phone number — see Keepr");
     }
     if (s.removedByUser > 0) {
       lines.push(s.removedByUser + " messages you removed were not re-added");
@@ -293,7 +295,7 @@
     }
     var progress = { listed: 0, candidates: 0, checked: 0, skipped: 0, notChecked: 0 };
     var totals = { chats: 0, messages: 0, images: 0, removedByUser: 0 };
-    var contactsWithoutPhone = [];
+    var contactsWithoutPhone = 0;
 
     async function report(stage) {
       log("stage: " + stage);
@@ -329,7 +331,7 @@
     async function overlayExtras() {
       var s = summary();
       var tags = {};
-      var names = s.contactsWithoutPhone.concat(s.notReached.map(function (e) { return e.name; }));
+      var names = s.notReached.map(function (e) { return e.name; });
       for (var n = 0; n < names.length; n++) {
         if (!(names[n] in tags)) tags[names[n]] = await tag(names[n]);
       }
@@ -362,9 +364,8 @@
       return { outcome: "claim_refused" };
     }
     var contacts = (claim.body && claim.body.contacts) || [];
-    contactsWithoutPhone = claim.body && Array.isArray(claim.body.contactsWithoutPhone)
-      ? claim.body.contactsWithoutPhone.filter(function (n) { return typeof n === "string"; })
-      : [];
+    var noPhone = claim.body && claim.body.contactsWithoutPhoneCount;
+    contactsWithoutPhone = typeof noPhone === "number" && noPhone > 0 ? Math.floor(noPhone) : 0;
     var contactTags = [];
     for (var ct = 0; ct < contacts.length; ct++) contactTags.push(await tag(contacts[ct].displayName));
     log("claimed: " + contacts.length + " contacts with a phone [" + contactTags.join(", ") + "]");
