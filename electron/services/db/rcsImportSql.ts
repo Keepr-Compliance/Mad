@@ -324,6 +324,13 @@ export const RCS_STAGING_DELETE_JOB_SQL = [
   sql`DELETE FROM rcs_cache_staging_chats WHERE job_id = ?`,
 ] as const;
 
+/** No parameters: every job id with staging rows. */
+export const RCS_STAGING_JOB_IDS_SQL = sql`
+    SELECT job_id AS jobId FROM rcs_cache_staging_chats
+    UNION SELECT job_id FROM rcs_cache_staging_messages
+    UNION SELECT job_id FROM rcs_cache_staging_images
+  `;
+
 /** No parameters: every job (stale rows when a new cache job starts, or at quit). */
 export const RCS_STAGING_DELETE_ALL_SQL = [
   sql`DELETE FROM rcs_cache_staging_images`,

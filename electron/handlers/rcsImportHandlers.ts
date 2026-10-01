@@ -68,6 +68,10 @@ export const RCS_MESSAGES_WEB_URL = "https://messages.google.com/web/conversatio
 export const RCS_ALREADY_SYNCING_MESSAGE = "Keepr is already syncing";
 /** BACKLOG-3657: Google Messages for Web texts were cleared; open views refetch. */
 export const RCS_DATA_CLEARED_CHANNEL = "rcs-import:data-cleared";
+/** BACKLOG-3658 (SR S1): a cache Sync was saved and auto-linked; open views refetch. */
+export const RCS_DATA_CHANGED_CHANNEL = "rcs-import:data-changed";
+/** SR B1: refusal while a finished cache Sync is still being saved. */
+export const RCS_SAVING_MESSAGE = "Keepr is still saving the last Sync. Try again in a moment.";
 
 const deps: RcsImportDeps = {
   getTransactionUserId: async (transactionId) => {
@@ -147,8 +151,20 @@ function cacheStaging(): RcsCacheStaging {
     removeDir: async (dir) => {
       await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => undefined);
     },
+    listDir: async (dir) => fs.promises.readdir(dir).catch(() => [] as string[]),
   });
   return staging;
+}
+
+/**
+ * SR B1: a finished cache Sync is saved (commit + auto-link) AFTER its job
+ * slot is free. Until that is done Keepr is busy: no new cache or
+ * transaction Sync, no Force re-import — none of them may sweep the staging
+ * or write the same content-addressed files meanwhile.
+ */
+let cacheEndsInFlight = 0;
+export function cacheSaveInFlight(): boolean {
+  return cacheEndsInFlight > 0 || (staging?.isCommitting ?? false);
 }
 
 /** The commit writes through the cache job's existing writers. */
@@ -281,6 +297,7 @@ let cacheStartInFlight = false;
 async function startCacheJob(opts: { sinceDays?: unknown } = {}): Promise<
   { ok: true; job: RcsJobSnapshot } | { ok: false; status: number; error: string; message: string }
 > {
+  if (cacheSaveInFlight()) return { ok: false, status: 503, error: "busy", message: RCS_SAVING_MESSAGE };
   // Two quick starts must not both pass the checks below (the plan read and
   // the stale-staging sweep await): the second one is refused.
   if (cacheStartInFlight) {
@@ -341,16 +358,24 @@ const bridge = new RcsExtensionBridge({
   },
   currentUserId,
   onHello: (hello) => void onHello(hello),
-  onJobEnded: (ended) =>
+  onJobEnded: (ended) => {
+    if (ended.kind !== "cache") return;
+    // Busy from this moment (synchronously, before the job slot can be reused).
+    cacheEndsInFlight += 1;
     void handleCacheJobEnded(ended, {
       saveFinishedAt: (userId, iso) => databaseService.updateRcsCacheState(userId, { lastCacheFinishedAt: iso }),
       saveOwnNumber: (userId, number) => databaseService.updateRcsCacheState(userId, { ownNumber: number }),
       commit: commitCacheJob,
       discard: discardCacheJob,
       autoLink: (userId) => autoLinkNewMessagesForUser(userId),
+      // SR S1: open views refetch only once the texts are saved AND linked.
+      onSaved: () => hostWindows.broadcast(RCS_DATA_CHANGED_CHANNEL, { reason: "cache-saved" }),
       now: () => Date.now(),
       log: (m) => void logService.warn(m, LOG_TAG),
-    }),
+    }).finally(() => {
+      cacheEndsInFlight -= 1;
+    });
+  },
   onChatImported: broadcastChatImported,
   importImage: async (image, transactionId, chatHash) => {
     const userId = await deps.getTransactionUserId(transactionId);
@@ -402,6 +427,8 @@ function argsObject(args: unknown): Record<string, unknown> {
  * transaction views are told to refetch.
  */
 export async function clearGoogleMessagesWebTexts(userId: string): Promise<RcsClearResult> {
+  // SR B1: never while a cache Sync is being saved (it is moving files in).
+  if (cacheSaveInFlight()) throw new Error(RCS_SAVING_MESSAGE);
   return runWithWritesPaused(bridge, () => {
     const result = clearGoogleMessagesWebData(
       userId,
@@ -472,6 +499,7 @@ export function registerRcsImportHandlers(): void {
       if (bridge.writesArePaused) {
         return { success: false, error: "Keepr is clearing imported texts. Try Sync again in a moment." };
       }
+      if (cacheSaveInFlight()) return { success: false, error: RCS_SAVING_MESSAGE };
       if (bridge.getStatus().bridge !== "listening") {
         const s = bridge.getStatus();
         return { success: false, error: `Import bridge unavailable${s.reason ? `: ${s.reason}` : ""}.` };

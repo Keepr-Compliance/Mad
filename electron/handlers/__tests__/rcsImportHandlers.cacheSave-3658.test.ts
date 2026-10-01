@@ -1,0 +1,142 @@
+/**
+ * @jest-environment node
+ */
+/**
+ * BACKLOG-3658 (SR B1, S1) — a finished cache Sync is saved (commit +
+ * auto-link) AFTER its job slot is free. Until it is done, Keepr is busy: a
+ * new cache Sync, a transaction Sync and Force re-import are refused, so none
+ * of them can sweep the staging or write the same content-addressed files.
+ * Open views are told to refetch only once the texts are saved AND linked.
+ *
+ * Mutation controls (each turns a test red):
+ *   B1a cacheSaveInFlight always false                  → "busy while saving"
+ *   B1b the counter set only after an await (too late)   → "busy while saving"
+ *   S1  the refresh broadcast dropped / sent before link → "refresh after save"
+ */
+
+const handlers = new Map<string, (event: unknown, args?: unknown) => Promise<unknown>>();
+const broadcasts: Array<[string, unknown]> = [];
+const order: string[] = [];
+let bridgeOptions: Record<string, (...a: unknown[]) => unknown> = {};
+let releaseCommit: (() => void) | null = null;
+
+jest.mock("electron", () => ({
+  app: { isPackaged: true, getPath: () => "/tmp/keepr-test" },
+  ipcMain: { handle: (channel: string, fn: (event: unknown, args?: unknown) => Promise<unknown>) => handlers.set(channel, fn) },
+  shell: { openExternal: jest.fn(async () => undefined) },
+}));
+jest.mock("../../services/rcsExtensionBridge", () => ({
+  RcsExtensionBridge: class {
+    writesArePaused = false;
+    constructor(options: Record<string, (...a: unknown[]) => unknown>) {
+      bridgeOptions = options;
+    }
+    getStatus() {
+      return { bridge: "listening", port: 1 };
+    }
+    activeJob() {
+      return null;
+    }
+    activeJobUserId() {
+      return null;
+    }
+    createCacheJob() {
+      return { jobId: "job-1", kind: "cache", state: "created" };
+    }
+  },
+}));
+jest.mock("../../services/rcsCacheStaging", () => ({
+  RcsCacheStaging: class {
+    isCommitting = false;
+    async discardAll() {}
+    async discard() {}
+    commit() {
+      order.push("commit");
+      return new Promise((resolve) => {
+        releaseCommit = () =>
+          resolve({ staged: 1, kept: 1, droppedByDate: 0, droppedByCap: 0, chats: 1, stored: 1, alreadyPresent: 0, imagesStaged: 0, imagesStored: 0 });
+      });
+    }
+  },
+}));
+jest.mock("../../services/databaseService", () => ({
+  __esModule: true,
+  default: {
+    getRcsCacheState: () => ({ optedInAt: "2026-09-01T00:00:00.000Z", lastCacheFinishedAt: null, ownNumber: null }),
+    updateRcsCacheState: () => undefined,
+    rcsStagingDbOps: () => ({}),
+    getTransactionById: async () => ({ id: "tx-1", user_id: "user-1" }),
+    getRcsImportContacts: () => [],
+  },
+}));
+jest.mock("../../services/importPlanInputs", () => ({
+  resolveImportPlanForUser: async () => ({ fetchStartISO: "2026-07-01T00:00:00.000Z", effectiveCap: 50000, protectedSpans: [] }),
+}));
+jest.mock("../../services/sessionService", () => ({
+  __esModule: true,
+  default: { loadSession: async () => ({ user: { id: "user-1" } }) },
+}));
+jest.mock("../../services/logService", () => {
+  const noop = jest.fn().mockResolvedValue(undefined);
+  return { __esModule: true, default: { info: noop, warn: noop, error: noop, debug: noop } };
+});
+jest.mock("../../services/autoLinkService", () => ({
+  autoLinkNewMessagesForUser: jest.fn(async () => {
+    order.push("autolink");
+  }),
+}));
+jest.mock("../../services/messageMatchingService", () => ({ createCommunicationReference: jest.fn() }));
+jest.mock("../../capabilities/windowsProvider", () => ({
+  hostWindows: {
+    broadcast: (channel: string, payload: unknown) => {
+      broadcasts.push([channel, payload]);
+      order.push(`broadcast ${channel}`);
+    },
+  },
+}));
+jest.mock("../../utils/bringAppToFront", () => ({ bringAppToFront: jest.fn(), bringAppToFrontOrFlash: jest.fn() }));
+jest.mock("../../windowRegistry", () => ({ getMainWindow: () => null }));
+jest.mock("../../services/db/core/dbConnection", () => ({ dbTransaction: (fn: () => unknown) => fn() }));
+jest.mock("../../utils/wrapHandler", () => ({
+  wrapHandler: (fn: (event: unknown, args?: unknown) => Promise<unknown>) => fn,
+}));
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const handlersModule = require("../rcsImportHandlers") as typeof import("../rcsImportHandlers");
+
+beforeAll(() => handlersModule.registerRcsImportHandlers());
+
+const flush = async () => {
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+};
+const startCache = () => handlers.get("rcs-import:start-cache-job")!({}, undefined) as Promise<{ success: boolean; error?: string }>;
+const startTx = () => handlers.get("rcs-import:start-job")!({}, { transactionId: "tx-1" }) as Promise<{ success: boolean; error?: string }>;
+
+describe("a cache Sync being saved (SR B1, S1)", () => {
+  it("busy while saving; a refresh only after the save and the auto-link", async () => {
+    expect((await startCache()).success).toBe(true);
+    // The job finishes: its slot is free at once; the save starts.
+    bridgeOptions.onJobEnded({
+      kind: "cache", userId: "user-1", detectedOwnNumber: null,
+      snapshot: { state: "finished", jobId: "job-1", createdAt: "2026-10-01T10:00:00.000Z" },
+    });
+    expect(handlersModule.cacheSaveInFlight()).toBe(true);
+    await flush();
+    expect(order).toEqual(["commit"]);
+
+    // B1: nothing that could sweep the staging or write the same files.
+    const cache = await startCache();
+    expect(cache).toEqual({ success: false, error: handlersModule.RCS_SAVING_MESSAGE });
+    expect(await startTx()).toEqual({ success: false, error: handlersModule.RCS_SAVING_MESSAGE });
+    await expect(handlersModule.clearGoogleMessagesWebTexts("user-1")).rejects.toThrow(handlersModule.RCS_SAVING_MESSAGE);
+    expect(broadcasts).toEqual([]);
+
+    // The save finishes: auto-link, then the refresh (S1); no longer busy.
+    releaseCommit?.();
+    await flush();
+    expect(order).toEqual(["commit", "autolink", `broadcast ${handlersModule.RCS_DATA_CHANGED_CHANNEL}`]);
+    expect(handlersModule.cacheSaveInFlight()).toBe(false);
+    expect((await startTx()).error).not.toBe(handlersModule.RCS_SAVING_MESSAGE);
+    expect((await startCache()).success).toBe(true);
+  });
+});

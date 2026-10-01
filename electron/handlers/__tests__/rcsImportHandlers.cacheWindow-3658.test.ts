@@ -45,7 +45,7 @@ jest.mock("../../services/databaseService", () => ({
   __esModule: true,
   default: {
     getRcsCacheState: () => ({ optedInAt: "2026-09-01T00:00:00.000Z", lastCacheFinishedAt: null, ownNumber: null }),
-    rcsStagingDbOps: () => ({ deleteAll: () => undefined }),
+    rcsStagingDbOps: () => ({ deleteAll: () => undefined, journalRows: () => [] }),
   },
 }));
 jest.mock("../../services/importPlanInputs", () => ({

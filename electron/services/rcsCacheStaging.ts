@@ -81,6 +81,10 @@ export interface RcsStagingDbOps {
   images(jobId: string): StagedImageRow[];
   deleteJob(jobId: string): void;
   deleteAll(): void;
+  /** Every job id with staging rows. */
+  jobIds(): string[];
+  /** Does any attachments row (any user, any source) still point to this file? */
+  fileStillReferenced(filePath: string): boolean;
 }
 
 export interface RcsStagingFs {
@@ -97,6 +101,8 @@ export interface RcsStagingFs {
   unlink(filePath: string): Promise<void>;
   /** Recursive; never throws. */
   removeDir(dir: string): Promise<void>;
+  /** Entry names in a folder; [] when it does not exist. */
+  listDir(dir: string): Promise<string[]>;
 }
 
 /** The writers the commit reuses — the cache job's existing write path. */
@@ -226,6 +232,13 @@ export class RcsStagingJobEndedError extends Error {
 export class RcsCacheStaging {
   /** Jobs that committed or were discarded: late requests stage nothing. */
   private readonly ended = new Set<string>();
+  /** SR B1: jobs whose commit is running — a sweep never touches them. */
+  private readonly committing = new Set<string>();
+
+  /** True while a commit runs (Keepr treats it as busy: no new Sync, no clear). */
+  get isCommitting(): boolean {
+    return this.committing.size > 0;
+  }
 
   constructor(
     private readonly db: RcsStagingDbOps,
@@ -305,6 +318,7 @@ export class RcsCacheStaging {
    */
   async commit(jobId: string, userId: string, limits: CacheLimits, writer: RcsCommitWriter): Promise<CacheCommitResult> {
     this.ended.add(jobId);
+    this.committing.add(jobId);
     const placed: string[] = [];
     try {
       const selection = selectForCommit(this.db.messageKeys(jobId), limits);
@@ -383,8 +397,13 @@ export class RcsCacheStaging {
       placed.length = 0; // committed: the files are referenced now
       return result;
     } finally {
-      // A failed commit placed files no row points to: delete them again.
-      for (const p of placed) await this.files.unlink(p);
+      // A failed commit placed files no row of it points to: delete them
+      // again — unless another row (iPhone sync, a transaction Sync) now
+      // uses the same content-addressed file.
+      for (const p of placed) {
+        if (!this.db.fileStillReferenced(p)) await this.files.unlink(p);
+      }
+      this.committing.delete(jobId);
       await this.dropStaging(jobId);
     }
   }
@@ -395,11 +414,25 @@ export class RcsCacheStaging {
     await this.dropStaging(jobId);
   }
 
-  /** Every job's staging (stale rows when a new job starts; app quit). */
+  /**
+   * Every job's staging (stale rows when a new job starts; app quit) — but
+   * never a job whose commit is running (SR B1).
+   */
   async discardAll(): Promise<void> {
-    this.db.deleteAll();
-    await this.files.removeDir(this.files.stagingRoot);
+    if (this.committing.size === 0) {
+      this.db.deleteAll();
+      await this.files.removeDir(this.files.stagingRoot);
+      return;
+    }
+    for (const id of this.db.jobIds()) {
+      if (!this.committing.has(id)) this.db.deleteJob(id);
+    }
+    const keep = new Set(Array.from(this.committing, (id) => path.basename(this.jobDir(id))));
+    for (const name of await this.files.listDir(this.files.stagingRoot)) {
+      if (!keep.has(name)) await this.files.removeDir(path.join(this.files.stagingRoot, name));
+    }
   }
+
 
   private async dropStaging(jobId: string): Promise<void> {
     try {

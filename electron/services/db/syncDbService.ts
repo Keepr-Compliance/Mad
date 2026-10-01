@@ -28,6 +28,7 @@ import {
   RCS_STAGING_IMAGES_SQL,
   RCS_STAGING_DELETE_JOB_SQL,
   RCS_STAGING_DELETE_ALL_SQL,
+  RCS_STAGING_JOB_IDS_SQL,
   RCS_CLEAR_DELETE_ATTACHMENTS_SQL,
   RCS_CLEAR_DELETE_MESSAGE_LINKS_SQL,
   RCS_CLEAR_DELETE_MESSAGES_SQL,
@@ -323,6 +324,16 @@ export function findRcsContentDuplicates(
 }
 
 /**
+ * BACKLOG-3667: does any attachments row (any user, any source) point to this
+ * content-addressed file? Matched on the stored path or its file name.
+ */
+export function attachmentFileReferenced(storagePath: string): boolean {
+  const db = ensureDb();
+  const name = path.basename(storagePath.replace(/\\/g, "/"));
+  return !!db.prepare(RCS_CLEAR_FILE_REFERENCED_SQL).get(storagePath, name, name, name, name);
+}
+
+/**
  * BACKLOG-3657: the database side of clearing Google Messages for Web texts
  * (see rcsClearService.ts). Every statement is scoped to the user.
  */
@@ -352,10 +363,7 @@ export function rcsClearDbOps(): import("../rcsClearService").RcsClearDbOps {
     setMessageCount: (userId, transactionId, count) => {
       db.prepare(RCS_CLEAR_SET_MESSAGE_COUNT_SQL).run(count, transactionId, userId);
     },
-    fileStillReferenced: (storagePath) => {
-      const name = path.basename(storagePath.replace(/\\/g, "/"));
-      return !!db.prepare(RCS_CLEAR_FILE_REFERENCED_SQL).get(storagePath, name, name, name, name);
-    },
+    fileStillReferenced: (storagePath) => attachmentFileReferenced(storagePath),
     // The same rule as every link/unlink (communicationDbService), on this connection.
     refreshTextThreadCount: (transactionId) => updateTransactionThreadCountSync(transactionId),
   };
@@ -396,6 +404,8 @@ export function rcsStagingDbOps(): import("../rcsCacheStaging").RcsStagingDbOps 
         for (const q of RCS_STAGING_DELETE_ALL_SQL) db.prepare(q).run();
       })();
     },
+    jobIds: () => (db.prepare(RCS_STAGING_JOB_IDS_SQL).all() as Array<{ jobId: string }>).map((r) => r.jobId),
+    fileStillReferenced: (filePath) => attachmentFileReferenced(filePath),
   };
 }
 

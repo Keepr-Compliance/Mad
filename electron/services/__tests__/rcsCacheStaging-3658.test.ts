@@ -18,6 +18,8 @@
  *   A9 placed files kept after a failed commit                  → "a failing commit leaves messages as they were"
  *   A10 the content guard / dedup skipped by the commit          → "the commit is the same writer"
  *   A11 schema.sql not re-runnable (IF NOT EXISTS)               → "schema.sql runs twice"
+ *   B1a a sweep during a commit deletes that commit's staging     → "a sweep never touches a commit in progress"
+ *   B1b a failed commit unlinks a file another row now uses       → "a failed commit keeps a file another row now uses"
  */
 
 import * as nodePath from "path";
@@ -138,6 +140,7 @@ beforeEach(() => {
     removeDir: async (d) => {
       await fs.promises.rm(d, { recursive: true, force: true });
     },
+    listDir: async (d) => (fs.existsSync(d) ? fs.readdirSync(d) : []),
   };
   db = new Database(":memory:");
   db.pragma("foreign_keys = OFF");
@@ -303,6 +306,54 @@ describe("atomic: all or nothing", () => {
     await staging.discardAll();
     expect(stagedCount()).toBe(0);
     expect(fs.existsSync(files.stagingRoot)).toBe(false);
+  });
+
+  it("a sweep never touches a commit in progress (B1a)", async () => {
+    staging.stageChat(JOB, USER, chat("conv-a", [msg("a1", "2026-09-20T10:00:00.000Z")]), peopleA, hashA);
+    await staging.stageImage(JOB, { conversationId: "conv-a", msgId: "a1", index: 0, mimeType: "image/png", base64: PNG }, hashA);
+    staging.stageChat("stale-job", USER, chat("conv-b", [msg("b1", "2026-09-21T10:00:00.000Z")]), peopleB, hashB);
+    await staging.stageImage("stale-job", { conversationId: "conv-b", msgId: "b1", index: 0, mimeType: "image/png", base64: PNG }, hashB);
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    let moving: () => void = () => undefined;
+    const atMove = new Promise<void>((r) => {
+      moving = r;
+    });
+    const realMove = files.move;
+    files.move = async (from, to) => {
+      moving();
+      await gate;
+      await realMove(from, to);
+    };
+    staging = new RcsCacheStaging(rcsStagingDbOps(), files);
+    const committed = staging.commit(JOB, USER, ALL, writer);
+    await atMove;
+    expect(staging.isCommitting).toBe(true);
+    await staging.discardAll(); // e.g. a new Sync starting now
+    release();
+    await expect(committed).resolves.toMatchObject({ stored: 1, imagesStored: 1 });
+    expect(messageCount()).toBe(1);
+    expect(listFiles(files.attachmentsDir)).toHaveLength(1);
+    expect(count("SELECT COUNT(*) AS n FROM rcs_cache_staging_messages WHERE job_id = 'stale-job'")).toBe(0);
+    expect(staging.isCommitting).toBe(false);
+  });
+
+  it("a failed commit keeps a file another row now uses (B1b)", async () => {
+    staging.stageChat(JOB, USER, chat("conv-a", [msg("a1", "2026-09-20T10:00:00.000Z")]), peopleA, hashA);
+    await staging.stageImage(JOB, { conversationId: "conv-a", msgId: "a1", index: 0, mimeType: "image/png", base64: PNG }, hashA);
+    const realMove = files.move;
+    files.move = async (from, to) => {
+      await realMove(from, to);
+      // Meanwhile another import attached the same content-addressed file.
+      db.prepare("INSERT INTO messages (id, user_id, channel, external_id, direction, sent_at) VALUES ('other', ?, 'sms', 'other-1', 'inbound', '2026-09-01T00:00:00Z')").run(USER);
+      db.prepare("INSERT INTO attachments (id, message_id, filename, storage_path) VALUES ('att-other', 'other', 'IMG.png', ?)").run(to);
+    };
+    staging = new RcsCacheStaging(rcsStagingDbOps(), files);
+    const failing: RcsCommitWriter = { ...writer, storeChat: () => { throw new Error("disk I/O error"); } };
+    await expect(staging.commit(JOB, USER, ALL, failing)).rejects.toThrow("disk I/O error");
+    expect(listFiles(files.attachmentsDir)).toHaveLength(1);
   });
 
   it("schema.sql runs twice (CREATE ... IF NOT EXISTS) (A11)", () => {
