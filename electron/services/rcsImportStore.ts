@@ -481,6 +481,12 @@ export async function importChat(
   };
 }
 
+/** The writers a cache chat uses (all synchronous). */
+export type RcsCacheChatDeps = Pick<
+  RcsImportDeps,
+  "batchInsertMessages" | "getMessageIdMap" | "insertReactionRows" | "findContentDuplicates" | "repointLegacyRemoval"
+>;
+
 /**
  * BACKLOG-3658: store one chat of the cache job for `userId`: same key, rows
  * and content guard as a transaction Sync, tagged source "gmweb-cache", and
@@ -489,12 +495,23 @@ export async function importChat(
 export async function importCacheChat(
   chat: RcsIncomingChat,
   userId: string,
-  deps: Pick<
-    RcsImportDeps,
-    "batchInsertMessages" | "getMessageIdMap" | "insertReactionRows" | "findContentDuplicates" | "repointLegacyRemoval"
-  >,
+  deps: RcsCacheChatDeps,
   people: RcsChatPeople,
 ): Promise<RcsImportResult> {
+  return storeCacheChatSync(chat, userId, deps, people);
+}
+
+/**
+ * The same, synchronous: the atomic cache commit (rcsCacheStaging.ts) runs it
+ * for every chat inside ONE database transaction, where a throw must roll back
+ * (an async function would turn it into a rejection after the commit).
+ */
+export function storeCacheChatSync(
+  chat: RcsIncomingChat,
+  userId: string,
+  deps: RcsCacheChatDeps,
+  people: RcsChatPeople,
+): RcsImportResult {
   if (people.numbers.length === 0) throw new Error(RCS_NO_NUMBER_MESSAGE);
   const rows = mapChatToRows(chat, userId, people, RCS_CACHE_SOURCE);
   // BACKLOG-3665 (SR): the auto-link reads gmweb2 removals only, so a chat the

@@ -732,6 +732,47 @@ CREATE TABLE IF NOT EXISTS rcs_cache_state (
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
 );
 
+-- BACKLOG-3658: the cache Sync's staging area. A cache job COLLECTS every
+-- chat here first; only a finished job commits it to messages (one database
+-- transaction, limited by the user's months / max-messages settings).
+-- Cancel, error, a user switch or app quit discards the job's rows. Rows
+-- exist only while a job runs (any found when a new job starts are stale).
+-- Images are staged as files under <userData>/rcs-cache-staging/<job id>/.
+CREATE TABLE IF NOT EXISTS rcs_cache_staging_chats (
+  job_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  chat_hash TEXT NOT NULL,               -- rcsChatHash of the Details numbers
+  conversation_id TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  people_json TEXT NOT NULL,             -- RcsChatPeople
+  staged_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (job_id, chat_hash)
+);
+
+CREATE TABLE IF NOT EXISTS rcs_cache_staging_messages (
+  job_id TEXT NOT NULL,
+  chat_hash TEXT NOT NULL,
+  msg_id TEXT NOT NULL,
+  sent_at TEXT NOT NULL,                 -- ISO-8601, as the page sent it
+  seq INTEGER NOT NULL,                  -- position in the chat as sent
+  message_json TEXT NOT NULL,            -- RcsIncomingMessage, reactions included
+  PRIMARY KEY (job_id, chat_hash, msg_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rcs_cache_staging_messages_sent ON rcs_cache_staging_messages(job_id, sent_at);
+
+CREATE TABLE IF NOT EXISTS rcs_cache_staging_images (
+  job_id TEXT NOT NULL,
+  chat_hash TEXT NOT NULL,
+  msg_id TEXT NOT NULL,
+  idx INTEGER NOT NULL,
+  mime_type TEXT NOT NULL,
+  byte_size INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  temp_path TEXT NOT NULL,
+  PRIMARY KEY (job_id, chat_hash, msg_id, idx)
+);
+
 CREATE TABLE IF NOT EXISTS message_thread_names (
   user_id TEXT NOT NULL,
   thread_id TEXT NOT NULL,               -- Matches messages.thread_id ("macos-chat-<chat ROWID>")

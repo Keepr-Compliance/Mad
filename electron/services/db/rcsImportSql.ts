@@ -247,6 +247,76 @@ export const RCS_CACHE_STATE_RESET_SQL = sql`
     WHERE user_id = ?
   `;
 
+// ============================================
+// BACKLOG-3658: the cache Sync's staging area (rcsCacheStaging.ts). Every
+// statement is scoped to one job id.
+// ============================================
+
+/** Parameters: job id, user id, chat hash, conversation id, title, people json. */
+export const RCS_STAGING_PUT_CHAT_SQL = sql`
+    INSERT OR REPLACE INTO rcs_cache_staging_chats (job_id, user_id, chat_hash, conversation_id, title, people_json)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `;
+
+/** Parameters: job id, chat hash, msg id, sent_at, seq, message json. */
+export const RCS_STAGING_PUT_MESSAGE_SQL = sql`
+    INSERT OR REPLACE INTO rcs_cache_staging_messages (job_id, chat_hash, msg_id, sent_at, seq, message_json)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `;
+
+/** Parameters: job id, chat hash, msg id. */
+export const RCS_STAGING_HAS_MESSAGE_SQL = sql`
+    SELECT 1 AS hit FROM rcs_cache_staging_messages WHERE job_id = ? AND chat_hash = ? AND msg_id = ?
+  `;
+
+/** Parameters: job id, chat hash, msg id, idx, mime type, byte size, sha256, temp path. */
+export const RCS_STAGING_PUT_IMAGE_SQL = sql`
+    INSERT OR REPLACE INTO rcs_cache_staging_images (job_id, chat_hash, msg_id, idx, mime_type, byte_size, sha256, temp_path)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `;
+
+/** Parameters: job id. */
+export const RCS_STAGING_IMAGE_BYTES_SQL = sql`
+    SELECT COALESCE(SUM(byte_size), 0) AS bytes FROM rcs_cache_staging_images WHERE job_id = ?
+  `;
+
+/** Parameters: job id. Every staged message's key and time (no bodies): the commit's selection. */
+export const RCS_STAGING_MESSAGE_KEYS_SQL = sql`
+    SELECT chat_hash AS chatHash, msg_id AS msgId, sent_at AS sentAt FROM rcs_cache_staging_messages WHERE job_id = ?
+  `;
+
+/** Parameters: job id. */
+export const RCS_STAGING_CHATS_SQL = sql`
+    SELECT chat_hash AS chatHash, user_id AS userId, conversation_id AS conversationId, title, people_json AS peopleJson
+    FROM rcs_cache_staging_chats WHERE job_id = ? ORDER BY staged_at, chat_hash
+  `;
+
+/** Parameters: job id, chat hash. In the order the page sent them. */
+export const RCS_STAGING_CHAT_MESSAGES_SQL = sql`
+    SELECT msg_id AS msgId, message_json AS messageJson FROM rcs_cache_staging_messages
+    WHERE job_id = ? AND chat_hash = ? ORDER BY seq
+  `;
+
+/** Parameters: job id. */
+export const RCS_STAGING_IMAGES_SQL = sql`
+    SELECT chat_hash AS chatHash, msg_id AS msgId, idx, mime_type AS mimeType, byte_size AS byteSize, sha256, temp_path AS tempPath
+    FROM rcs_cache_staging_images WHERE job_id = ?
+  `;
+
+/** Parameters: job id. One statement per table (run together, in one transaction). */
+export const RCS_STAGING_DELETE_JOB_SQL = [
+  sql`DELETE FROM rcs_cache_staging_images WHERE job_id = ?`,
+  sql`DELETE FROM rcs_cache_staging_messages WHERE job_id = ?`,
+  sql`DELETE FROM rcs_cache_staging_chats WHERE job_id = ?`,
+] as const;
+
+/** No parameters: every job (stale rows when a new cache job starts, or at quit). */
+export const RCS_STAGING_DELETE_ALL_SQL = [
+  sql`DELETE FROM rcs_cache_staging_images`,
+  sql`DELETE FROM rcs_cache_staging_messages`,
+  sql`DELETE FROM rcs_cache_staging_chats`,
+] as const;
+
 /**
  * BACKLOG-3658: does any of these E.164 numbers belong to a contact on one of
  * the user's LIVE transactions (the shared live-transaction predicate;

@@ -15,6 +15,17 @@ import {
   RCS_CLEAR_ATTACHMENT_PATHS_SQL,
   RCS_CLEAR_COUNTED_LINKS_SQL,
   RCS_CLEAR_LINKED_TRANSACTIONS_SQL,
+  RCS_STAGING_PUT_CHAT_SQL,
+  RCS_STAGING_PUT_MESSAGE_SQL,
+  RCS_STAGING_HAS_MESSAGE_SQL,
+  RCS_STAGING_PUT_IMAGE_SQL,
+  RCS_STAGING_IMAGE_BYTES_SQL,
+  RCS_STAGING_MESSAGE_KEYS_SQL,
+  RCS_STAGING_CHATS_SQL,
+  RCS_STAGING_CHAT_MESSAGES_SQL,
+  RCS_STAGING_IMAGES_SQL,
+  RCS_STAGING_DELETE_JOB_SQL,
+  RCS_STAGING_DELETE_ALL_SQL,
   RCS_CLEAR_DELETE_ATTACHMENTS_SQL,
   RCS_CLEAR_DELETE_MESSAGE_LINKS_SQL,
   RCS_CLEAR_DELETE_MESSAGES_SQL,
@@ -341,6 +352,44 @@ export function rcsClearDbOps(): import("../rcsClearService").RcsClearDbOps {
     },
     // The same rule as every link/unlink (communicationDbService), on this connection.
     refreshTextThreadCount: (transactionId) => updateTransactionThreadCountSync(transactionId),
+  };
+}
+
+/**
+ * BACKLOG-3658: the database side of the cache Sync's staging area (see
+ * rcsCacheStaging.ts). Every statement is scoped to one job id.
+ */
+export function rcsStagingDbOps(): import("../rcsCacheStaging").RcsStagingDbOps {
+  const db = ensureDb();
+  return {
+    inTransaction: <T>(fn: () => T): T => db.transaction(fn)(),
+    putChat: (jobId, r) => {
+      db.prepare(RCS_STAGING_PUT_CHAT_SQL).run(jobId, r.userId, r.chatHash, r.conversationId, r.title, r.peopleJson);
+    },
+    putMessage: (jobId, chatHash, msgId, sentAt, seq, json) => {
+      db.prepare(RCS_STAGING_PUT_MESSAGE_SQL).run(jobId, chatHash, msgId, sentAt, seq, json);
+    },
+    hasMessage: (jobId, chatHash, msgId) => !!db.prepare(RCS_STAGING_HAS_MESSAGE_SQL).get(jobId, chatHash, msgId),
+    putImage: (jobId, r) => {
+      db.prepare(RCS_STAGING_PUT_IMAGE_SQL).run(jobId, r.chatHash, r.msgId, r.idx, r.mimeType, r.byteSize, r.sha256, r.tempPath);
+    },
+    stagedImageBytes: (jobId) => (db.prepare(RCS_STAGING_IMAGE_BYTES_SQL).get(jobId) as { bytes: number }).bytes,
+    messageKeys: (jobId) =>
+      db.prepare(RCS_STAGING_MESSAGE_KEYS_SQL).all(jobId) as import("../rcsCacheStaging").StagedMessageKey[],
+    chats: (jobId) => db.prepare(RCS_STAGING_CHATS_SQL).all(jobId) as import("../rcsCacheStaging").StagedChatRow[],
+    chatMessages: (jobId, chatHash) =>
+      db.prepare(RCS_STAGING_CHAT_MESSAGES_SQL).all(jobId, chatHash) as Array<{ msgId: string; messageJson: string }>,
+    images: (jobId) => db.prepare(RCS_STAGING_IMAGES_SQL).all(jobId) as import("../rcsCacheStaging").StagedImageRow[],
+    deleteJob: (jobId) => {
+      db.transaction(() => {
+        for (const q of RCS_STAGING_DELETE_JOB_SQL) db.prepare(q).run(jobId);
+      })();
+    },
+    deleteAll: () => {
+      db.transaction(() => {
+        for (const q of RCS_STAGING_DELETE_ALL_SQL) db.prepare(q).run();
+      })();
+    },
   };
 }
 

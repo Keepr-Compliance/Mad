@@ -73,9 +73,13 @@ export type RcsImageResult =
   | { stored: true; alreadyPresent: boolean; filename: string; bytes: number }
   | { stored: false; reason: "message_not_found" | "not_an_image" | "too_large" | "empty" };
 
+/** The file extension Keepr stores an image under (".img" when unknown). */
+export function rcsImageExt(mimeType: string): string {
+  return EXT_BY_MIME[mimeType.toLowerCase()] ?? ".img";
+}
+
 export function rcsImageFilename(msgId: string, index: number, mimeType: string): string {
-  const ext = EXT_BY_MIME[mimeType.toLowerCase()] ?? ".img";
-  return `gmweb-${msgId}-${index}${ext}`;
+  return `gmweb-${msgId}-${index}${rcsImageExt(mimeType)}`;
 }
 
 /** Validate an untrusted image body, or return an error string. */

@@ -2472,6 +2472,11 @@ class DatabaseService implements IDatabaseService {
     return syncDb.rcsClearDbOps();
   }
 
+  // BACKLOG-3658: the cache Sync's staging area
+  rcsStagingDbOps() {
+    return syncDb.rcsStagingDbOps();
+  }
+
   insertReactionRows(rows: Parameters<typeof syncDb.insertReactionRows>[0]) {
     return syncDb.insertReactionRows(rows);
   }
