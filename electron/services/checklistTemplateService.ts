@@ -139,9 +139,9 @@ class ChecklistTemplateService {
    * The templates this organization may pick from.
    *
    * Resolution order, and it is the order that matters:
-   *   1. a fresh memory cache for THIS org;
+   *   1. a fresh memory cache for THIS org + user;
    *   2. the cloud;
-   *   3. the disk cache for THIS org, if it is under 7 days old;
+   *   3. the disk cache for THIS org + user, if it is under 7 days old;
    *   4. `null` — could not find out.
    *
    * @param orgId Resolved by the caller through `resolveOrgId()`. This service
