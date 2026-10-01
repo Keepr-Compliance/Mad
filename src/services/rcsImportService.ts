@@ -88,10 +88,10 @@ export const rcsImportService = {
   },
 
   /** BACKLOG-3658: start the cache job (all recent chats) for the signed-in user. */
-  async startCacheJob(): Promise<ApiResult<RcsJobInfo | null>> {
+  async startCacheJob(args?: { sinceDays?: number }): Promise<ApiResult<RcsJobInfo | null>> {
     const bridge = api();
     if (!bridge || !bridge.startCacheJob) return { success: false, error: NOT_AVAILABLE };
-    return callJob(() => bridge.startCacheJob());
+    return callJob(() => bridge.startCacheJob(args));
   },
 
   /** Subscribe to job changes. Returns an unsubscribe (a no-op when unavailable). */

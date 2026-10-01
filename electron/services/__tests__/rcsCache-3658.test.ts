@@ -167,6 +167,8 @@ describe("an interrupted cache Sync resumes without duplicates (S6, S7)", () => 
   const endedDeps = {
     saveFinishedAt: (u: string, iso: string) => updateRcsCacheState(u, { lastCacheFinishedAt: iso }),
     saveOwnNumber: () => {},
+    commit: async () => {},
+    discard: async () => {},
     autoLink: async () => {},
     now: () => Date.parse("2026-09-30T12:00:00.000Z"),
   };
@@ -182,7 +184,7 @@ describe("an interrupted cache Sync resumes without duplicates (S6, S7)", () => 
     const peopleB = peopleFrom([{ name: "", number: "+15555550142" }], ["+15555550142"]);
     expect((await importCacheChat(chat("conv-b", 2), USER, storeDeps, peopleB)).stored).toBe(2);
     await handleCacheJobEnded(
-      { kind: "cache", userId: USER, snapshot: { state: "cancelled", createdAt: "2026-09-30T11:00:00.000Z" }, detectedOwnNumber: null },
+      { kind: "cache", userId: USER, snapshot: { state: "cancelled", createdAt: "2026-09-30T11:00:00.000Z", jobId: "job-1" }, detectedOwnNumber: null },
       endedDeps,
     );
     // S6: nothing saved — run 2 reads the same window.
@@ -200,7 +202,7 @@ describe("an interrupted cache Sync resumes without duplicates (S6, S7)", () => 
 
     // Run 2 finishes: its START time is saved (SR P1 optional).
     await handleCacheJobEnded(
-      { kind: "cache", userId: USER, snapshot: { state: "finished", createdAt: "2026-09-30T11:30:00.000Z" }, detectedOwnNumber: null },
+      { kind: "cache", userId: USER, snapshot: { state: "finished", createdAt: "2026-09-30T11:30:00.000Z", jobId: "job-2" }, detectedOwnNumber: null },
       endedDeps,
     );
     expect(getRcsCacheState(USER)?.lastCacheFinishedAt).toBe("2026-09-30T11:30:00.000Z");

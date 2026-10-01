@@ -33,10 +33,12 @@ import logService from "../services/logService";
 import { RcsExtensionBridge, type RcsChatImportedEvent } from "../services/rcsExtensionBridge";
 import { createCommunicationReference } from "../services/messageMatchingService";
 import type { RcsJobContact, RcsJobSnapshot } from "../services/rcsImportJob";
-import { storeImage, type RcsMediaDeps } from "../services/rcsImportMedia";
-import { importCacheChat, importChat, type RcsImportDeps } from "../services/rcsImportStore";
+import { rcsImageFilename, storeImage, type RcsMediaDeps } from "../services/rcsImportMedia";
+import { importChat, rcsChatHash, rcsExternalId, storeCacheChatSync, type RcsImportDeps } from "../services/rcsImportStore";
+import { RcsCacheStaging, type CacheLimits, type RcsCommitWriter } from "../services/rcsCacheStaging";
+import { resolveImportPlanForUser } from "../services/importPlanInputs";
 import {
-  cacheSince,
+  cacheWindow,
   cancelOnSessionChange,
   decideCacheStart,
   handleCacheJobEnded,
@@ -112,6 +114,78 @@ const mediaDeps: RcsMediaDeps = {
     await fs.promises.mkdir(dir, { recursive: true });
   },
 };
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3658: the cache Sync's staging (atomic, limit-aware import)
+// ---------------------------------------------------------------------------
+
+let staging: RcsCacheStaging | null = null;
+
+/** Lazily: the database is opened after sign-in, long after this module loads. */
+function cacheStaging(): RcsCacheStaging {
+  if (staging) return staging;
+  staging = new RcsCacheStaging(databaseService.rcsStagingDbOps(), {
+    stagingRoot: path.join(app.getPath("userData"), "rcs-cache-staging"),
+    attachmentsDir: mediaDeps.attachmentsDir(),
+    mkdir: async (dir) => {
+      await fs.promises.mkdir(dir, { recursive: true });
+    },
+    writeFile: (filePath, data) => fs.promises.writeFile(filePath, data),
+    exists: mediaDeps.fileExists,
+    move: async (from, to) => {
+      try {
+        await fs.promises.rename(from, to);
+      } catch {
+        // Another volume (or a locked file): copy, then drop the staged one.
+        await fs.promises.copyFile(from, to);
+        await fs.promises.unlink(from).catch(() => undefined);
+      }
+    },
+    unlink: async (filePath) => {
+      await fs.promises.unlink(filePath).catch(() => undefined);
+    },
+    removeDir: async (dir) => {
+      await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    },
+  });
+  return staging;
+}
+
+/** The commit writes through the cache job's existing writers. */
+const commitWriter: RcsCommitWriter = {
+  storeChat: (chat, userId, people) => storeCacheChatSync(chat, userId, deps, people),
+  getMessageIdMap: (userId) => databaseService.getMessageIdMap(userId),
+  getExistingAttachmentRecords: () => databaseService.getExistingAttachmentRecords(),
+  insertAttachment: (params) => databaseService.insertAttachment(params),
+  markMessageHasAttachments: (messageId) => databaseService.markMessageHasAttachments(messageId),
+  externalId: rcsExternalId,
+  imageFilename: rcsImageFilename,
+};
+
+/** The limits each cache job was started with (frozen at start; used by its commit). */
+const cacheLimitsByJob = new Map<string, CacheLimits>();
+
+async function commitCacheJob(jobId: string, userId: string): Promise<void> {
+  const limits = cacheLimitsByJob.get(jobId);
+  cacheLimitsByJob.delete(jobId);
+  if (!limits) {
+    // Never started here (should not happen): keep nothing rather than guess.
+    await cacheStaging().discard(jobId);
+    throw new Error("No limits recorded for this Sync");
+  }
+  const r = await cacheStaging().commit(jobId, userId, limits, commitWriter);
+  void logService.info(
+    `[RcsCache] Cache Sync saved: ${r.staged} staged, ${r.kept} kept (${r.droppedByDate} older than the months setting, ` +
+      `${r.droppedByCap} over the max messages); ${r.chats} chats, ${r.stored} new, ${r.alreadyPresent} already there; ` +
+      `images ${r.imagesStored} of ${r.imagesStaged}`,
+    LOG_TAG,
+  );
+}
+
+async function discardCacheJob(jobId: string): Promise<void> {
+  cacheLimitsByJob.delete(jobId);
+  await cacheStaging().discard(jobId);
+}
 
 function broadcastJob(job: RcsJobSnapshot): void {
   hostWindows.broadcast(RCS_JOB_PROGRESS_CHANNEL, job);
@@ -196,8 +270,31 @@ async function onHello(hello: { version?: string; paired?: boolean }): Promise<v
   });
 }
 
-/** Start the cache job for the signed-in user, or say why not (status + body). */
-async function startCacheJob(): Promise<
+/**
+ * Start the cache job for the signed-in user, or say why not (status + body).
+ * BACKLOG-3658: the window and limits come from the user's message import
+ * settings (months, max messages — the same plan as every other source);
+ * `sinceDays` is a DEV-ONLY override, ignored in a packaged build.
+ */
+let cacheStartInFlight = false;
+
+async function startCacheJob(opts: { sinceDays?: unknown } = {}): Promise<
+  { ok: true; job: RcsJobSnapshot } | { ok: false; status: number; error: string; message: string }
+> {
+  // Two quick starts must not both pass the checks below (the plan read and
+  // the stale-staging sweep await): the second one is refused.
+  if (cacheStartInFlight) {
+    return { ok: false, status: 409, error: "already_syncing", message: "Keepr is already starting a Sync." };
+  }
+  cacheStartInFlight = true;
+  try {
+    return await startCacheJobOnce(opts);
+  } finally {
+    cacheStartInFlight = false;
+  }
+}
+
+async function startCacheJobOnce(opts: { sinceDays?: unknown }): Promise<
   { ok: true; job: RcsJobSnapshot } | { ok: false; status: number; error: string; message: string }
 > {
   const userId = await currentUserId();
@@ -210,21 +307,37 @@ async function startCacheJob(): Promise<
     writesPaused: bridge.writesArePaused,
   });
   if (!("ok" in decision)) return { ok: false, ...decision };
+  const plan = await resolveImportPlanForUser({ userId: decision.userId, mode: "delta" });
+  const window = cacheWindow({
+    nowMs: Date.now(),
+    lastFinishedAt: state?.lastCacheFinishedAt,
+    plan,
+    sinceDays: opts.sinceDays,
+    isPackaged: app.isPackaged,
+  });
+  // Only one Sync at a time: any staging left now is stale (a crash, a quit).
+  await cacheStaging().discardAll();
   const job = bridge.createCacheJob(decision.userId, {
-    since: cacheSince(Date.now(), state?.lastCacheFinishedAt),
+    since: window.since,
     ownNumbers: state?.ownNumber ? [state.ownNumber] : [],
   });
   if (!job) return { ok: false, status: 409, error: "already_syncing", message: "Keepr is already syncing." };
+  cacheLimitsByJob.set(job.jobId, window.limits);
+  if (window.devOverrideDays !== null) {
+    void logService.warn(`[RcsCache] DEV window override: ${window.devOverrideDays} days`, LOG_TAG);
+  }
   return { ok: true, job };
 }
 
 const bridge = new RcsExtensionBridge({
   importChat: (chat, transactionId, people) => importChat(chat, transactionId, deps, people),
-  importCacheChat: (chat, userId, people) => importCacheChat(chat, userId, deps, people),
-  importCacheImage: async (image, userId, chatHash, numbers) => {
+  // BACKLOG-3658: a cache job STAGES; only a finished job commits (atomic).
+  importCacheChat: async (chat, userId, people, jobId) =>
+    cacheStaging().stageChat(jobId, userId, chat, people, rcsChatHash(people.numbers)),
+  importCacheImage: async (image, userId, chatHash, numbers, jobId) => {
     // Images only for chats with a live transaction contact (BACKLOG-3658).
     if (!databaseService.rcsNumbersMatchLiveContact(userId, numbers)) return { stored: false, reason: "not_a_contact" };
-    return storeImage(image, userId, mediaDeps, chatHash);
+    return cacheStaging().stageImage(jobId, image, chatHash);
   },
   currentUserId,
   onHello: (hello) => void onHello(hello),
@@ -232,6 +345,8 @@ const bridge = new RcsExtensionBridge({
     void handleCacheJobEnded(ended, {
       saveFinishedAt: (userId, iso) => databaseService.updateRcsCacheState(userId, { lastCacheFinishedAt: iso }),
       saveOwnNumber: (userId, number) => databaseService.updateRcsCacheState(userId, { ownNumber: number }),
+      commit: commitCacheJob,
+      discard: discardCacheJob,
       autoLink: (userId) => autoLinkNewMessagesForUser(userId),
       now: () => Date.now(),
       log: (m) => void logService.warn(m, LOG_TAG),
@@ -261,6 +376,10 @@ export async function startRcsExtensionBridge(): Promise<void> {
 }
 
 export async function stopRcsExtensionBridge(): Promise<void> {
+  // Quit: a running cache Sync is not committed — its staging goes.
+  const active = bridge.activeJob();
+  if (active) bridge.cancelJob(active.jobId);
+  if (staging) await staging.discardAll().catch(() => undefined);
   await bridge.stop();
 }
 
@@ -388,12 +507,13 @@ export function registerRcsImportHandlers(): void {
   // BACKLOG-3658: the cache job (the dashboard's "Sync Android" uses it, P3).
   ipcMain.handle(
     "rcs-import:start-cache-job",
-    wrapHandler(async (): Promise<RcsImportJobResult> => {
+    wrapHandler(async (_event, args: unknown): Promise<RcsImportJobResult> => {
       if (bridge.getStatus().bridge !== "listening") {
         const st = bridge.getStatus();
         return { success: false, error: `Import bridge unavailable${st.reason ? `: ${st.reason}` : ""}.` };
       }
-      const started = await startCacheJob();
+      // DEV ONLY (ignored in a packaged build): { sinceDays } widens the window.
+      const started = await startCacheJob({ sinceDays: argsObject(args).sinceDays });
       if (!started.ok) return { success: false, error: started.message };
       await shell.openExternal(`${RCS_MESSAGES_WEB_URL}#keepr-job=${started.job.jobId}`);
       return { success: true, job: started.job };

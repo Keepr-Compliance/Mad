@@ -8,15 +8,23 @@
  *   R1 since without the max (always 60 days, or always last − 1 day) → "since"
  *   R2 a refusal skipped (signed out / not opted in / busy / running)   → "who may start"
  *   R3 the finish time saved after a cancel or an error                 → "saved only on success"
- *   R4 no auto-link after a cancel or an error                          → "auto-link runs whatever the outcome"
+ *   R4 (atomic import) a cancel/error commits, links, or keeps staging  → "cancelled or failed: discard only"
+ *   R4b a failed commit still saving the time or linking                → "a failed commit saves nothing"
  *   R5 a transaction Sync treated as a cache Sync                       → "a transaction Sync is left alone"
  *   R6 the finish time = now instead of the job start (SR P1)           → "the job START time is saved"
  *   R8 the hello throttle off by one or missing                         → "hello at most once a minute"
  *   R9 a sign-out / user switch not cancelling, or a refresh cancelling  → "session changes"
+ *   W1 the months setting ignored (always 60 days)                     → "cacheWindow: the months setting"
+ *   W2 the incremental rule dropped                                    → "cacheWindow: the months setting"
+ *   W3 the dev override honoured in a packaged build                   → "cacheWindow: dev override"
+ *   W4 the dev override not clamped 1..3650                            → "clampSinceDays"
+ *   W5 the cap or the audit spans not passed to the commit              → "cacheWindow: limits"
  */
 
 import {
   cacheSince,
+  cacheWindow,
+  clampSinceDays,
   cancelOnSessionChange,
   decideCacheStart,
   handleCacheJobEnded,
@@ -76,6 +84,12 @@ describe("when a cache Sync ends", () => {
       deps: {
         saveFinishedAt: (u: string, iso: string) => void calls.push(`finished ${u} ${iso}`),
         saveOwnNumber: (u: string, n: string) => void calls.push(`own ${u} ${n}`),
+        commit: async (j: string, u: string) => {
+          calls.push(`commit ${j} ${u}`);
+        },
+        discard: async (j: string) => {
+          calls.push(`discard ${j}`);
+        },
         autoLink: async (u: string) => {
           calls.push(`autolink ${u}`);
         },
@@ -84,36 +98,51 @@ describe("when a cache Sync ends", () => {
     };
   }
   const ended = (state: string, kind = "cache", own: string | null = null) => ({
-    kind, userId: "u-1", snapshot: { state }, detectedOwnNumber: own,
+    kind, userId: "u-1", snapshot: { state, jobId: "job-1" }, detectedOwnNumber: own,
   });
 
-  it("finished: the time is saved, then the auto-link runs for that user", async () => {
+  it("finished: committed (one transaction), then the time is saved, then the auto-link for that user", async () => {
     const d = deps();
     await handleCacheJobEnded(ended("finished"), d.deps);
-    expect(d.calls).toEqual([`finished u-1 ${new Date(NOW).toISOString()}`, "autolink u-1"]);
+    expect(d.calls).toEqual(["commit job-1 u-1", `finished u-1 ${new Date(NOW).toISOString()}`, "autolink u-1"]);
   });
 
-  it("saved only on success; the auto-link runs whatever the outcome (R3, R4)", async () => {
+  // BACKLOG-3658 atomic import: nothing was written, so nothing to link.
+  it("cancelled or failed: discard only — no time saved, no commit, no auto-link (R3, R4)", async () => {
     for (const state of ["cancelled", "failed"]) {
       const d = deps();
       await handleCacheJobEnded(ended(state), d.deps);
-      expect([state, d.calls]).toEqual([state, ["autolink u-1"]]);
+      expect([state, d.calls]).toEqual([state, ["discard job-1"]]);
     }
+  });
+
+  it("a failed commit saves nothing and links nothing; the error is logged (R4b)", async () => {
+    const d = deps();
+    const logs: string[] = [];
+    await expect(handleCacheJobEnded(ended("finished"), {
+      ...d.deps,
+      commit: async () => {
+        throw new Error("disk full");
+      },
+      log: (m) => void logs.push(m),
+    })).resolves.toBeUndefined();
+    expect(d.calls).toEqual([]);
+    expect(logs[0]).toContain("disk full");
   });
 
   it("a detected own number (3+ chats agreed) is kept for the next run", async () => {
     const d = deps();
     await handleCacheJobEnded(ended("cancelled", "cache", "+15555550100"), d.deps);
-    expect(d.calls).toEqual(["own u-1 +15555550100", "autolink u-1"]);
+    expect(d.calls).toEqual(["own u-1 +15555550100", "discard job-1"]);
   });
 
   it("the job START time is saved, not the finish time (R6)", async () => {
     const d = deps();
     await handleCacheJobEnded(
-      { kind: "cache", userId: "u-1", snapshot: { state: "finished", createdAt: "2026-10-01T11:00:00.000Z" }, detectedOwnNumber: null },
+      { kind: "cache", userId: "u-1", snapshot: { state: "finished", createdAt: "2026-10-01T11:00:00.000Z", jobId: "job-1" }, detectedOwnNumber: null },
       d.deps,
     );
-    expect(d.calls[0]).toBe("finished u-1 2026-10-01T11:00:00.000Z");
+    expect(d.calls[1]).toBe("finished u-1 2026-10-01T11:00:00.000Z");
   });
 
   it("a transaction Sync is left alone (R5)", async () => {
@@ -132,6 +161,59 @@ describe("when a cache Sync ends", () => {
       log: (m) => void logs.push(m),
     })).resolves.toBeUndefined();
     expect(logs[0]).toContain("db busy");
+  });
+});
+
+// BACKLOG-3658: the same settings as every other source (the import plan).
+describe("cacheWindow", () => {
+  const plan = (fetchStartISO: string | null, effectiveCap: number | null = 50000) => ({
+    fetchStartISO, effectiveCap, protectedSpans: [] as Array<{ startNano: number; endNano: number | null }>,
+  });
+  const threeMonths = "2026-07-01T12:00:00.000Z";
+
+  it("the months setting: the floor; since = max(floor, last − 1 day) (W1, W2)", () => {
+    const first = cacheWindow({ nowMs: NOW, lastFinishedAt: null, plan: plan(threeMonths), isPackaged: true });
+    expect(first.since).toBe(threeMonths);
+    expect(first.limits.floorMs).toBe(Date.parse(threeMonths));
+    const later = cacheWindow({ nowMs: NOW, lastFinishedAt: "2026-09-30T08:00:00.000Z", plan: plan(threeMonths), isPackaged: true });
+    expect(later.since).toBe("2026-09-29T08:00:00.000Z");
+    expect(later.limits.floorMs).toBe(Date.parse(threeMonths));
+    // All time: 3650 days at most.
+    expect(cacheWindow({ nowMs: NOW, lastFinishedAt: null, plan: plan(null), isPackaged: true }).limits.floorMs)
+      .toBe(NOW - 3650 * DAY);
+  });
+
+  it("limits: the cap and the audit periods (Apple-epoch ns → ms) go to the commit (W5)", () => {
+    const startMs = Date.parse("2026-05-01T00:00:00.000Z");
+    const nano = (ms: number) => (ms - 978307200000) * 1_000_000;
+    const w = cacheWindow({
+      nowMs: NOW, lastFinishedAt: null, isPackaged: true,
+      plan: { fetchStartISO: threeMonths, effectiveCap: 1000, protectedSpans: [{ startNano: nano(startMs), endNano: null }] },
+    });
+    expect(w.limits.cap).toBe(1000);
+    expect(w.limits.protectedSpans).toEqual([{ startMs, endMs: null }]);
+  });
+
+  it("dev override: honoured only when NOT packaged; it skips the incremental rule (W3)", () => {
+    const dev = cacheWindow({ nowMs: NOW, lastFinishedAt: "2026-09-30T08:00:00.000Z", plan: plan(threeMonths), sinceDays: 400, isPackaged: false });
+    expect(dev.devOverrideDays).toBe(400);
+    expect(dev.since).toBe(new Date(NOW - 400 * DAY).toISOString());
+    expect(dev.limits.floorMs).toBe(NOW - 400 * DAY);
+    const packaged = cacheWindow({ nowMs: NOW, lastFinishedAt: null, plan: plan(threeMonths), sinceDays: 400, isPackaged: true });
+    expect(packaged.devOverrideDays).toBeNull();
+    expect(packaged.since).toBe(threeMonths);
+    // No override asked: the setting, even in a dev build.
+    expect(cacheWindow({ nowMs: NOW, lastFinishedAt: null, plan: plan(threeMonths), isPackaged: false }).since).toBe(threeMonths);
+  });
+
+  it("clampSinceDays: whole days 1..3650; junk → no override (W4)", () => {
+    expect(clampSinceDays(0)).toBe(1);
+    expect(clampSinceDays(-5)).toBe(1);
+    expect(clampSinceDays(99999)).toBe(3650);
+    expect(clampSinceDays(30.4)).toBe(30);
+    expect(clampSinceDays("30")).toBeNull();
+    expect(clampSinceDays(NaN)).toBeNull();
+    expect(clampSinceDays(undefined)).toBeNull();
   });
 });
 

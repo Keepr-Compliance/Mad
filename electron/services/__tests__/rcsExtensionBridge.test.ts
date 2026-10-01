@@ -694,21 +694,33 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
   let imageAnswer: { stored: false; reason: "not_a_contact" } | { stored: true; alreadyPresent: false; filename: string; bytes: number };
   let jobId: string;
   let focus: string[];
+  let cancelWhileChecking: boolean;
+  let stagedFor: string[];
 
   beforeEach(async () => {
     current = "user-a";
     focus = [];
     cacheChats = [];
+    cancelWhileChecking = false;
+    stagedFor = [];
     ended = [];
     imageAnswer = { stored: false, reason: "not_a_contact" };
     bridge = new RcsExtensionBridge({
       importChat: jest.fn(),
-      importCacheChat: async (chat, userId, people) => {
+      importCacheChat: async (chat, userId, people, forJob) => {
         cacheChats.push([chat.conversationId, userId, people]);
+        stagedFor.push(forJob);
         return { received: chat.messages.length, stored: chat.messages.length, alreadyPresent: 0, linked: 0, reactions: 0, reactionsStored: 0 };
       },
-      importCacheImage: async () => imageAnswer,
-      currentUserId: async () => current,
+      importCacheImage: async (_image, _userId, _hash, _numbers, forJob) => {
+        stagedFor.push(forJob);
+        return imageAnswer;
+      },
+      currentUserId: async () => {
+        // A Cancel that lands while the user is being checked.
+        if (cancelWhileChecking) bridge.cancelJob();
+        return current;
+      },
       onJobEnded: (e) => void ended.push({ state: e.snapshot.state, kind: e.kind, userId: e.userId }),
       onJobFinished: () => void focus.push("front"),
       jobs: new RcsJobRegistry(),
@@ -729,6 +741,28 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
     const body = JSON.stringify({ ...CHAT, participants: [{ name: "Test Contact Unmatched", number: "+1 555 555 0177" }] });
     expect((await request(port, "POST", `/job/${jobId}/chat`, EXT, body)).status).toBe(200);
     expect(cacheChats).toEqual([[CHAT.conversationId, "user-a", { numbers: ["+15555550142"], names: [] }]]);
+    // BACKLOG-3658 atomic import: staged under THIS job.
+    expect(stagedFor).toEqual([jobId]);
+  });
+
+  // BACKLOG-3658 atomic import. Mutation: drop the isActive re-check → red
+  // (a chat or image of an ended job would be staged after its discard).
+  it("a job that ended while the user was checked stages nothing: 410", async () => {
+    await request(port, "POST", `/job/${jobId}/match`, EXT, JSON.stringify({ conversationId: CHAT.conversationId, numbers: ["(555) 555-0142"] }));
+    cancelWhileChecking = true;
+    const chatReply = await request(port, "POST", `/job/${jobId}/chat`, EXT, CHAT_JSON);
+    expect(chatReply.status).toBe(410);
+    expect(stagedFor).toEqual([]);
+  });
+
+  it("an image of a job that ended while the user was checked is not staged: 410", async () => {
+    await request(port, "POST", `/job/${jobId}/match`, EXT, JSON.stringify({ conversationId: CHAT.conversationId, numbers: ["(555) 555-0142"] }));
+    cancelWhileChecking = true;
+    const reply = await request(port, "POST", `/job/${jobId}/attachment`, EXT, JSON.stringify({
+      conversationId: CHAT.conversationId, msgId: "1", index: 0, mimeType: "image/png", base64: "AAAA",
+    }));
+    expect(reply.status).toBe(410);
+    expect(stagedFor).toEqual([]);
   });
 
   it("another user signed in meanwhile: nothing stored, the Sync is cancelled, its end announced once", async () => {

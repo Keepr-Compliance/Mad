@@ -180,17 +180,22 @@ export interface RcsExtensionBridgeOptions {
   onFocusRequested?: () => void;
   /** BACKLOG-3658: POST /hello — the extension is installed ({version}) / the page is paired. */
   onHello?: (hello: RcsHello) => void;
-  /** BACKLOG-3658: store a cache chat for `userId` (no transaction, no link). */
-  importCacheChat?: (chat: RcsIncomingChat, userId: string, people: RcsChatPeople) => Promise<RcsImportResult>;
   /**
-   * BACKLOG-3658: a cache chat's image. Kept only when the chat's numbers match
-   * a live transaction contact; otherwise { stored: false, reason: "not_a_contact" }.
+   * BACKLOG-3658: a cache chat for `userId` (no transaction, no link). Keepr
+   * STAGES it under `jobId`; only a finished job commits (atomic import).
+   */
+  importCacheChat?: (chat: RcsIncomingChat, userId: string, people: RcsChatPeople, jobId: string) => Promise<RcsImportResult>;
+  /**
+   * BACKLOG-3658: a cache chat's image, staged under `jobId`. Kept only when
+   * the chat's numbers match a live transaction contact; otherwise
+   * { stored: false, reason: "not_a_contact" }.
    */
   importCacheImage?: (
     image: RcsIncomingImage,
     userId: string,
     chatHash: string,
     numbers: string[],
+    jobId: string,
   ) => Promise<RcsImageResult | { stored: false; reason: "not_a_contact" }>;
   /** BACKLOG-3658: the signed-in user now; a job of another user is cancelled. */
   currentUserId?: () => Promise<string | null>;
@@ -773,7 +778,13 @@ export class RcsExtensionBridge {
             sendJson(res, 501, { error: "unsupported", message: "This Keepr build cannot save chats." });
             return;
           }
-          result = await this.options.importCacheChat(chat, job.userId, people);
+          // A Cancel (or the user switch) can land while the user was checked:
+          // an ended job stages nothing (BACKLOG-3658 atomic import).
+          if (!job.isActive) {
+            sendJson(res, 410, { error: "job_over", message: "This Sync is over." });
+            return;
+          }
+          result = await this.options.importCacheChat(chat, job.userId, people, job.jobId);
         } else {
           result = await this.options.importChat(chat, job.transactionId, people);
         }
@@ -814,7 +825,11 @@ export class RcsExtensionBridge {
             sendJson(res, 501, { error: "unsupported", message: "This Keepr build cannot store images." });
             return;
           }
-          result = await this.options.importCacheImage(image, job.userId, rcsChatHash(imageNumbers), imageNumbers);
+          if (!job.isActive) {
+            sendJson(res, 410, { error: "job_over", message: "This Sync is over." });
+            return;
+          }
+          result = await this.options.importCacheImage(image, job.userId, rcsChatHash(imageNumbers), imageNumbers, job.jobId);
           if (!result.stored && result.reason === "not_a_contact") {
             // Counted and reported, never silent (BACKLOG-3658): the page lists
             // it as "images not imported".

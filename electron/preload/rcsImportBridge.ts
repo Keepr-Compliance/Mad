@@ -51,7 +51,8 @@ export const rcsImportBridge = {
   },
 
   /** BACKLOG-3658: the cache job, the local opt-in and the extension state. */
-  startCacheJob: (): Promise<RcsImportJobResult> => ipcRenderer.invoke("rcs-import:start-cache-job"),
+  startCacheJob: (args?: { sinceDays?: number }): Promise<RcsImportJobResult> =>
+    ipcRenderer.invoke("rcs-import:start-cache-job", args),
   setCacheOptIn: (args: { optedIn: boolean }): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke("rcs-import:set-cache-opt-in", args),
   getExtensionState: (): Promise<RcsExtensionStateResult> => ipcRenderer.invoke("rcs-import:get-extension-state"),
