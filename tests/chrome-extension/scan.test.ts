@@ -395,12 +395,16 @@ describe("job runner", () => {
       base64: "B64(blob:https://messages.google.com/x-1)",
     });
     expect(posts[posts.length - 1]).toBe("/finish");
-    // Candidates opened in list order, each matched after its Details closed.
+    // BACKLOG-3645: EVERY chat is checked (5 ≤ the cap); names only order the
+    // queue — exact name, loose name, number-only, then the rest. Each match
+    // is asked after its Details closed. The last chat shows no number, so it
+    // is reported (no_numbers) and never sent to /match.
     expect(order).toEqual([
       "open:aaaaaaaaaaaaaaaaaaa", "match:aaaaaaaaaaaaaaaaaaa",
-      "open:ccccccccccccccccccc", "match:ccccccccccccccccccc",
       "open:ddddddddddddddddddd", "match:ddddddddddddddddddd",
       "open:eeeeeeeeeeeeeeeeeee", "match:eeeeeeeeeeeeeeeeeee",
+      "open:ccccccccccccccccccc", "match:ccccccccccccccccccc",
+      "open:bbbbbbbbbbbbbbbbbbb",
     ]);
   });
 });
@@ -554,11 +558,12 @@ describe("SR fix 2: Details rows from an earlier chat", () => {
     const outcome = await job.runJob(t.JOB, t.env);
     expect(outcome.outcome).toBe("details_stuck");
     const matches = t.calls.filter(([, p]) => p.endsWith("/match")).map(([, , b]) => b?.conversationId);
-    expect(matches).toEqual(["aaaaaaaaaaaaaaaaaaa"]);
+    // The queue is a, d, e (names) then c: c is where Details sticks.
+    expect(matches).toEqual(["aaaaaaaaaaaaaaaaaaa", "ddddddddddddddddddd", "eeeeeeeeeeeeeeeeeee"]);
     const err = t.calls.find(([, p]) => p.endsWith("/error"));
     expect(err?.[2]).toMatchObject({ code: "details_stuck" });
     expect(t.posts()).not.toContain("/finish");
-    expect(t.opened).toEqual(["aaaaaaaaaaaaaaaaaaa", "ccccccccccccccccccc"]);
+    expect(t.opened).toEqual(["aaaaaaaaaaaaaaaaaaa", "ddddddddddddddddddd", "eeeeeeeeeeeeeeeeeee", "ccccccccccccccccccc"]);
   });
 });
 

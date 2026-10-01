@@ -98,7 +98,7 @@ describe("importChat", () => {
   it("stores every message once and attaches all of them to the transaction", async () => {
     const db = makeFakeDb("user-1");
     const result = await importChat(CHAT, "tx-1", db.deps);
-    expect(result).toEqual({ received: 3, stored: 3, alreadyPresent: 0, linked: 3, reactions: 0, reactionsStored: 0 });
+    expect(result).toEqual({ received: 3, stored: 3, alreadyPresent: 0, linked: 3, reactions: 0, reactionsStored: 0, removedByUser: 0 });
     expect(db.rows).toHaveLength(3);
     expect(db.links.size).toBe(3);
   });
@@ -109,7 +109,7 @@ describe("importChat", () => {
     const firstIds = db.rows.map((r) => r.id).sort();
 
     const again = await importChat(CHAT, "tx-1", db.deps);
-    expect(again).toEqual({ received: 3, stored: 0, alreadyPresent: 3, linked: 3, reactions: 0, reactionsStored: 0 });
+    expect(again).toEqual({ received: 3, stored: 0, alreadyPresent: 3, linked: 3, reactions: 0, reactionsStored: 0, removedByUser: 0 });
     expect(db.rows).toHaveLength(3);
     expect(db.rows.map((r) => r.id).sort()).toEqual(firstIds);
     expect(db.links.size).toBe(3);
@@ -282,5 +282,77 @@ describe("image-only and file-only messages", () => {
     expect(JSON.parse(file.metadata ?? "{}")).toMatchObject({
       filesNotImported: [{ name: "contract.pdf", size: "1.3 MB" }],
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3642 — the user's removals stick. Rows are still STORED (dedup), but
+// a chat the user removed from the transaction is never linked again: by its
+// gmweb thread id, or — after a re-pair changed the conversation id — by the
+// same participant set as a removed gmweb thread.
+//
+// Mutations that turn these red: drop the thread-id check; drop the
+// participant-key check; drop the per-message check; link reactions of a
+// removed chat; stop writing participantKey into the rows' metadata.
+// ---------------------------------------------------------------------------
+describe("importChat respects the user's removals (BACKLOG-3642)", () => {
+  const KEY = "+15555550199";
+  const noRemovals = { threadIds: new Set<string>(), messageIds: new Set<string>(), participantKeys: new Set<string>() };
+
+  function withRemovals(db: ReturnType<typeof makeFakeDb>, removals: Partial<typeof noRemovals>) {
+    db.deps.getRemovals = () => ({ ...noRemovals, ...removals });
+    return db;
+  }
+
+  const REACTED: RcsIncomingChat = {
+    ...CHAT,
+    messages: [{ ...CHAT.messages[0], reactions: [{ emoji: "😡", reactor: "Test Contact A", word: "angry" }] }],
+  };
+
+  it("a removed thread (same conversation id): stored, not linked, counted as removed by you — reactions too", async () => {
+    const db = withRemovals(makeFakeDb("user-1"), { threadIds: new Set(["gmweb-chat-aaaaaaaaaaaaaaaaaaa"]) });
+    const result = await importChat(REACTED, "tx-1", db.deps, { participantKey: KEY });
+    expect(db.rows).toHaveLength(1);
+    expect(db.reactionRows).toHaveLength(1);
+    expect(db.linkCalls).toEqual([]);
+    expect(db.uncountedLinkCalls).toEqual([]);
+    expect(db.links.size).toBe(0);
+    expect(result).toMatchObject({ stored: 1, linked: 0, removedByUser: 1 });
+  });
+
+  it("a re-paired chat (NEW conversation id) with the same participants as a removed gmweb thread is not linked", async () => {
+    const db = withRemovals(makeFakeDb("user-1"), { participantKeys: new Set([KEY]) });
+    const repaired: RcsIncomingChat = { ...CHAT, conversationId: "bbbbbbbbbbbbbbbbbbb" };
+    const result = await importChat(repaired, "tx-1", db.deps, { participantKey: KEY });
+    expect(db.rows).toHaveLength(3);
+    expect(db.links.size).toBe(0);
+    expect(result).toMatchObject({ linked: 0, removedByUser: 3 });
+  });
+
+  it("different participants are linked as usual; an unknown key never matches", async () => {
+    const db = withRemovals(makeFakeDb("user-1"), { participantKeys: new Set([KEY]) });
+    const other = await importChat(CHAT, "tx-1", db.deps, { participantKey: "+15555550100" });
+    expect(other).toMatchObject({ linked: 3, removedByUser: 0 });
+    const db2 = withRemovals(makeFakeDb("user-1"), { participantKeys: new Set([""]) });
+    expect(await importChat(CHAT, "tx-1", db2.deps)).toMatchObject({ linked: 3, removedByUser: 0 });
+  });
+
+  it("a single removed message (thread-less removal) is skipped, the rest are linked", async () => {
+    const db = makeFakeDb("user-1");
+    await importChat(CHAT, "tx-1", db.deps);
+    const removedId = db.rows.find((r) => r.externalId.endsWith(":m-2"))?.id as string;
+    withRemovals(db, { messageIds: new Set([removedId]) });
+    db.linkCalls.length = 0;
+    const again = await importChat(CHAT, "tx-1", db.deps);
+    expect(db.linkCalls).toEqual([db.rows.filter((r) => r.id !== removedId).map((r) => r.id)]);
+    expect(again).toMatchObject({ linked: 2, removedByUser: 1 });
+  });
+
+  it("Sync writes the participant key into each row's metadata (so a later removal is recognised)", async () => {
+    const db = makeFakeDb("user-1");
+    await importChat(CHAT, "tx-1", db.deps, { participantKey: KEY });
+    for (const r of db.rows) expect(JSON.parse(r.metadata ?? "{}")).toMatchObject({ participantKey: KEY });
+    const manual = mapChatToRows(CHAT, "user-1");
+    expect(JSON.parse(manual[0].metadata ?? "{}")).not.toHaveProperty("participantKey");
   });
 });

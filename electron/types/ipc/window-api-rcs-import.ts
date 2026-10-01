@@ -53,6 +53,10 @@ export interface RcsJobProgressCounts {
   images: number;
   reactions: number;
   skipped: number;
+  /** BACKLOG-3645: chats the page did not check (list over the cap). */
+  notChecked?: number;
+  /** BACKLOG-3642: messages stored but not linked again — the user removed them. */
+  removedNotRelinked?: number;
 }
 
 /** BACKLOG-3620: one sync job, as main reports it. */

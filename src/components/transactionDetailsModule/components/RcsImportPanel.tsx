@@ -139,6 +139,16 @@ export interface RcsSyncJobController {
 }
 
 /**
+ * When the transaction's messages are refetched: on another imported chat or
+ * image, and once when the job finishes. NOT on created → running
+ * (BACKLOG-3642): nothing has been imported yet, and the early refetch made
+ * links still in the database look like the Sync had re-added them.
+ */
+function refetchKey(job: RcsJobInfo): string {
+  return `${job.progress.imported}:${job.progress.images}:${job.state === "finished" ? "finished" : "open"}`;
+}
+
+/**
  * The Sync job for one transaction. The job itself lives in the main process,
  * keyed by its own id — this hook only shows it. Leaving the tab does NOT cancel
  * it; coming back shows it again (`getJob`). `onImported` runs whenever the job
@@ -162,7 +172,7 @@ export function useRcsSyncJob(
     const accept = (next: RcsJobInfo | null): void => {
       if (!alive || !next || next.transactionId !== transactionId) return;
       setJob(next);
-      const count = `${next.progress.imported}:${next.progress.images}:${next.state}`;
+      const count = refetchKey(next);
       if (lastCountRef.current && count !== lastCountRef.current) void onImportedRef.current?.();
       lastCountRef.current = count;
     };
@@ -186,7 +196,7 @@ export function useRcsSyncJob(
       setError(result.error ?? "Could not start the sync.");
       return;
     }
-    lastCountRef.current = `${result.data.progress.imported}:${result.data.progress.images}:${result.data.state}`;
+    lastCountRef.current = refetchKey(result.data);
     setJob(result.data);
   }, [transactionId]);
 
@@ -199,6 +209,24 @@ export function useRcsSyncJob(
 
   return { job, error, starting, start, cancel, dismiss };
 }
+
+/** BACKLOG-3641: the same counts the page's Details show. Chats, not contacts. */
+function countsLine(job: RcsJobInfo): string {
+  const p = job.progress;
+  return `Scanned ${p.listed} chats · checked ${p.checked} · matched ${p.matched} · imported ${p.messages} messages`;
+}
+
+/** Why a chat was left out (BACKLOG-3629), as the page's Details word it. */
+const LEFT_OUT_TEXT: Record<string, string> = {
+  not_opened: "could not be opened",
+  no_numbers: "no phone number shown",
+  messages_not_loaded: "messages did not load",
+  history_not_settled: "messages kept changing",
+  no_messages: "no messages found",
+  error: "failed",
+  images_failed: "images not imported",
+  history_truncated: "only the newest messages imported",
+};
 
 function jobLine(job: RcsJobInfo): string {
   const p = job.progress;
@@ -241,6 +269,28 @@ export function RcsSyncJobStatus({ sync }: { sync: RcsSyncJobController }): Reac
       {job.contactsWithoutPhone.length > 0 && (
         <span className="text-gray-500" data-testid="rcs-sync-job-no-phone">
           No phone number: {job.contactsWithoutPhone.join(", ")}
+        </span>
+      )}
+      {!active && job.progress.listed > 0 && (
+        <span className="text-gray-500" data-testid="rcs-sync-job-counts">
+          {countsLine(job)}
+        </span>
+      )}
+      {!active && (job.progress.notChecked ?? 0) > 0 && (
+        <span className="text-gray-500" data-testid="rcs-sync-job-not-checked">
+          Not checked: {job.progress.notChecked} chats (name didn&apos;t match a contact on this transaction)
+        </span>
+      )}
+      {!active && (job.progress.removedNotRelinked ?? 0) > 0 && (
+        <span className="text-gray-500" data-testid="rcs-sync-job-removed">
+          {job.progress.removedNotRelinked} messages you removed were not re-added
+        </span>
+      )}
+      {!active && job.notReached && job.notReached.length > 0 && (
+        <span className="text-gray-500" data-testid="rcs-sync-job-left-out">
+          Not fully imported:{" "}
+          {job.notReached.map((e) => `${e.name} (${LEFT_OUT_TEXT[e.reason] ?? e.reason})`).join(", ")}
+          {(job.notReachedMore ?? 0) > 0 ? `, +${job.notReachedMore} more` : ""}
         </span>
       )}
       {active ? (

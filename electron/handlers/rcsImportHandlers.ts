@@ -67,6 +67,8 @@ const deps: RcsImportDeps = {
       await createCommunicationReference(id, transactionId, userId, "manual", 1.0);
     }
   },
+  // BACKLOG-3642: never re-link what the user removed from the transaction.
+  getRemovals: (transactionId, userId) => databaseService.getRcsRemovals(transactionId, userId),
 };
 
 const mediaDeps: RcsMediaDeps = {
@@ -103,14 +105,15 @@ function broadcastChatImported(event: RcsChatImportedEvent): void {
     session: event.session,
   };
   void logService.info(
-    `Chat imported: ${event.result.received} received, ${event.result.stored} new, ${event.result.linked} linked`,
+    `Chat imported: ${event.result.received} received, ${event.result.stored} new, ${event.result.linked} linked, ` +
+      `${event.result.removedByUser ?? 0} removed by you not re-linked`,
     LOG_TAG,
   );
   hostWindows.broadcast(RCS_CHAT_RECEIVED_CHANNEL, payload);
 }
 
 const bridge = new RcsExtensionBridge({
-  importChat: (chat, transactionId) => importChat(chat, transactionId, deps),
+  importChat: (chat, transactionId, opts) => importChat(chat, transactionId, deps, opts),
   onChatImported: broadcastChatImported,
   importImage: async (image, transactionId) => {
     const userId = await deps.getTransactionUserId(transactionId);

@@ -118,7 +118,11 @@ export interface RcsBridgeLogger {
 }
 
 export interface RcsExtensionBridgeOptions {
-  importChat: (chat: RcsIncomingChat, transactionId: string) => Promise<RcsImportResult>;
+  importChat: (
+    chat: RcsIncomingChat,
+    transactionId: string,
+    opts?: { participantKey?: string },
+  ) => Promise<RcsImportResult>;
   onChatImported?: (event: RcsChatImportedEvent) => void;
   logger?: RcsBridgeLogger;
   /** Overridable for tests only. */
@@ -498,10 +502,16 @@ export class RcsExtensionBridge {
           sendJson(res, 403, { error: "not_matched", message: "Keepr did not match this chat to a transaction contact." });
           return;
         }
-        const result = await this.options.importChat(chat, job.transactionId);
+        // BACKLOG-3642: the participant key comes from the numbers THIS job's
+        // /match saw (never from the page's /chat body), so a removal survives a
+        // re-pair that changes the conversation id.
+        const result = await this.options.importChat(chat, job.transactionId, {
+          participantKey: job.participantKeyFor(chat.conversationId),
+        });
         job.progress.imported += 1;
         job.progress.messages += result.received;
         job.progress.reactions += result.reactions;
+        job.progress.removedNotRelinked += result.removedByUser ?? 0;
         this.emitJob(job.snapshot());
         sendJson(res, 200, { ok: true, ...result });
         return;
@@ -535,7 +545,7 @@ export class RcsExtensionBridge {
       }
       case "progress": {
         const patch: Partial<RcsJobProgress> & { stage?: string } = {};
-        for (const key of ["listed", "candidates", "checked", "skipped"] as const) {
+        for (const key of ["listed", "candidates", "checked", "skipped", "notChecked"] as const) {
           if (typeof body[key] === "number") patch[key] = body[key] as number;
         }
         if (typeof body.stage === "string") patch.stage = body.stage.slice(0, 200);
@@ -545,7 +555,11 @@ export class RcsExtensionBridge {
         return;
       }
       case "finish": {
-        job.finish(this.jobs.nowMs(), parseNotReached(body.notReached, body.notReachedMore));
+        job.finish(
+          this.jobs.nowMs(),
+          parseNotReached(body.notReached, body.notReachedMore),
+          typeof body.notChecked === "number" ? body.notChecked : undefined,
+        );
         const snap = job.snapshot();
         // Counts only: chat names never go to the log. One chat can have two
         // entries (e.g. history truncated AND images failed), so chats are
@@ -557,7 +571,8 @@ export class RcsExtensionBridge {
         // BACKLOG-3641: the scan counts, so a 0-chat run can be explained.
         this.logger.info(
           `[RcsBridge] Sync job finished: listed ${p.listed}, candidates ${p.candidates}, checked ${p.checked}, ` +
-            `matched ${p.matched}, skipped ${p.skipped}; imported ${p.imported} chats, ${p.messages} messages; ` +
+            `matched ${p.matched}, skipped ${p.skipped}, not checked ${p.notChecked}; imported ${p.imported} chats, ` +
+            `${p.messages} messages, ${p.removedNotRelinked} removed by you not re-added; ` +
             `${chats} chats not fully imported (${entries.length} entries${more > 0 ? `, +${more} more` : ""})`,
         );
         this.emitJob(snap);

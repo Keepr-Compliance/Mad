@@ -120,6 +120,29 @@ export interface RcsImportDeps {
   insertReactionRows: (rows: RcsReactionRow[]) => { stored: number; skipped: number };
   /** Link rows to the transaction without changing transactions.message_count. */
   linkWithoutCount: (messageIds: string[], transactionId: string, userId: string) => Promise<void>;
+  /**
+   * BACKLOG-3642: what the user removed from this transaction (read at import
+   * time). Absent → nothing is treated as removed.
+   */
+  getRemovals?: (transactionId: string, userId: string) => RcsRemovals;
+}
+
+/**
+ * The user's removals from one transaction, as the import needs them:
+ * removed gmweb thread ids, removed message ids (thread-less removals), and the
+ * participant keys (see `participantKey`) of removed gmweb threads — so a chat
+ * whose conversation id changed after a re-pair is still recognised.
+ * gmweb only: an SMS phone-backup removal never blocks an RCS chat.
+ */
+export interface RcsRemovals {
+  threadIds: Set<string>;
+  messageIds: Set<string>;
+  participantKeys: Set<string>;
+}
+
+export interface RcsImportOptions {
+  /** Participant key of the chat (Sync jobs only; "" or absent when unknown). */
+  participantKey?: string;
 }
 
 export interface RcsImportResult {
@@ -129,15 +152,23 @@ export interface RcsImportResult {
   linked: number;
   reactions: number;
   reactionsStored: number;
+  /** BACKLOG-3642: messages stored but NOT linked — the user removed them. */
+  removedByUser?: number;
 }
+
+export const RCS_THREAD_PREFIX = "gmweb-chat-";
 
 export function rcsExternalId(conversationId: string, msgId: string): string {
   return `${RCS_EXTERNAL_ID_PREFIX}${conversationId}:${msgId}`;
 }
 
-/** Map a chat to insert rows. Pure. */
-export function mapChatToRows(chat: RcsIncomingChat, userId: string): RcsInsertRow[] {
-  const threadId = `gmweb-chat-${chat.conversationId}`;
+/**
+ * Map a chat to insert rows. Pure. `participantKey` (Sync jobs) goes into each
+ * row's metadata, so a later removal of this thread can be recognised by its
+ * participants (BACKLOG-3642).
+ */
+export function mapChatToRows(chat: RcsIncomingChat, userId: string, participantKey = ""): RcsInsertRow[] {
+  const threadId = `${RCS_THREAD_PREFIX}${chat.conversationId}`;
   const counterpart = chat.title || "Unknown";
   return chat.messages.map((m) => {
     const outbound = m.direction === "outbound";
@@ -167,6 +198,7 @@ export function mapChatToRows(chat: RcsIncomingChat, userId: string): RcsInsertR
         conversationId: chat.conversationId,
         conversationTitle: chat.title,
         msgId: m.msgId,
+        ...(participantKey ? { participantKey } : {}),
         ...(images > 0 ? { images } : {}),
         ...(files.length > 0 ? { filesNotImported: files } : {}),
       }),
@@ -228,18 +260,31 @@ export async function importChat(
   chat: RcsIncomingChat,
   transactionId: string,
   deps: RcsImportDeps,
+  opts: RcsImportOptions = {},
 ): Promise<RcsImportResult> {
   const userId = await deps.getTransactionUserId(transactionId);
   if (!userId) {
     throw new Error("Transaction not found");
   }
 
-  const rows = mapChatToRows(chat, userId);
+  const key = opts.participantKey ?? "";
+  const rows = mapChatToRows(chat, userId, key);
+  // Rows are ALWAYS stored (dedup keeps working); only the link respects the
+  // user's removals.
   const { stored, skipped } = deps.batchInsertMessages(rows, 500);
 
   const reactionRows = mapChatToReactionRows(chat, userId);
   const reactionResult =
     reactionRows.length > 0 ? deps.insertReactionRows(reactionRows) : { stored: 0, skipped: 0 };
+
+  // BACKLOG-3642: a chat the user removed from this transaction is never linked
+  // again — by its thread id, or (after a re-pair changed the conversation id)
+  // by the same participant set as a removed gmweb thread.
+  const removals = deps.getRemovals ? deps.getRemovals(transactionId, userId) : null;
+  const threadId = `${RCS_THREAD_PREFIX}${chat.conversationId}`;
+  const chatRemoved =
+    !!removals && (removals.threadIds.has(threadId) || (key !== "" && removals.participantKeys.has(key)));
+  const keep = (id: string): boolean => !chatRemoved && !(removals?.messageIds.has(id) ?? false);
 
   const idMap = deps.getMessageIdMap(userId);
   const ids: string[] = [];
@@ -247,8 +292,9 @@ export async function importChat(
     const id = idMap.get(row.externalId);
     if (id) ids.push(id);
   }
-  if (ids.length > 0) {
-    await deps.linkMessages(ids, transactionId);
+  const linkIds = ids.filter(keep);
+  if (linkIds.length > 0) {
+    await deps.linkMessages(linkIds, transactionId);
   }
 
   // Reactions are linked (the loader joins communications by message id) but
@@ -256,7 +302,7 @@ export async function importChat(
   const reactionIds: string[] = [];
   for (const row of reactionRows) {
     const id = idMap.get(row.externalId);
-    if (id) reactionIds.push(id);
+    if (id && keep(id)) reactionIds.push(id);
   }
   if (reactionIds.length > 0) {
     await deps.linkWithoutCount(reactionIds, transactionId, userId);
@@ -266,9 +312,10 @@ export async function importChat(
     received: chat.messages.length,
     stored,
     alreadyPresent: skipped,
-    linked: ids.length,
+    linked: linkIds.length,
     reactions: reactionRows.length,
     reactionsStored: reactionResult.stored,
+    removedByUser: ids.length - linkIds.length,
   };
 }
 

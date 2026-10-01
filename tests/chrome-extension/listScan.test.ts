@@ -47,7 +47,7 @@ interface ScanModule {
 }
 
 interface JobModule {
-  RETURN_TO_KEEPR: string;
+  DONE_LINE: string;
   numberShape: (s: string) => string;
   shortHash: (s: string) => string;
   runJob: (jobId: string, env: Record<string, unknown>) => Promise<{ outcome: string }>;
@@ -260,6 +260,8 @@ describe("Sync step log (BACKLOG-3641)", () => {
     document.body.innerHTML = LIST;
     const lines: string[] = [];
     const shown: string[] = [];
+    const details: string[] = [];
+    const copies: string[] = [];
     let open = "";
     const env = {
       doc: document,
@@ -274,7 +276,7 @@ describe("Sync step log (BACKLOG-3641)", () => {
         }
         return { ok: true, status: 200, body: { ok: true } };
       },
-      overlay: { show: (t: string) => shown.push(t) },
+      overlay: { show: (t: string, _e?: boolean, x?: { details: string; copy: string }) => { shown.push(t); details.push(x?.details ?? ""); copies.push(x?.copy ?? ""); } },
       log: (line: string) => lines.push(line),
       sleep: () => Promise.resolve(),
       click: () => {},
@@ -296,7 +298,7 @@ describe("Sync step log (BACKLOG-3641)", () => {
         messageIdSet: () => "",
       },
     };
-    return { env, lines, shown };
+    return { env, lines, shown, details, copies };
   }
 
   it("the step log: stages, list stats, candidates, per-chat reason / number shapes / match, final counts — no names, numbers or text (D1, D2, D3)", async () => {
@@ -307,12 +309,12 @@ describe("Sync step log (BACKLOG-3641)", () => {
     expect(all).toContain("stage: job found");
     expect(all).toContain("stage: loading the conversation list");
     expect(all).toMatch(/listed 5, stopReason \w+, scroll /);
-    expect(all).toMatch(/candidates 4 \{.*"name".*\}/);
-    expect(all).toMatch(/#1\/4 chat [0-9a-f]{6} reason=name/);
+    expect(all).toMatch(/candidates 5 \{.*"name".*\}/);
+    expect(all).toMatch(/#1\/5 chat [0-9a-f]{6} reason=name/);
     expect(all).toContain('numbers ["(ddd) ddd-dddd","+d ddd ddd dddd"]');
-    expect(t.lines.filter((l) => /match=(yes|no)/.test(l))).toHaveLength(4);
+    expect(t.lines.filter((l) => /match=(yes|no)/.test(l))).toHaveLength(5);
     expect(all).toContain("match=yes");
-    expect(all).toMatch(/done: listed 5, candidates 4, checked 4, matched 1, imported 1 chats/);
+    expect(all).toMatch(/done: listed 5, candidates 5, checked 5, matched 1, imported 1 chats/);
     // Never PII.
     for (const forbidden of ["555", "0199", "Test Contact", "Test B. Contact", "SECRET MESSAGE TEXT", "Someone Else"]) {
       expect([forbidden, all.includes(forbidden)]).toEqual([forbidden, false]);
@@ -325,7 +327,7 @@ describe("Sync step log (BACKLOG-3641)", () => {
     const t = diagJob([], ["Test Contact A", "test.contact@example.test"]);
     await job.runJob(JOB, t.env);
     const numberLines = t.lines.filter((l) => l.startsWith("  numbers "));
-    expect(numberLines).toHaveLength(4);
+    expect(numberLines).toHaveLength(5);
     for (const line of numberLines) {
       expect(line).toBe('  numbers ["aaaa aaaaaaa a","aaaa.aaaaaaa*aaaaaaa.aaaa"]');
       // Only the shape alphabet: no letter other than the placeholder "a".
@@ -339,7 +341,7 @@ describe("Sync step log (BACKLOG-3641)", () => {
 
   // SR: per-job salt. Mutation D9: hash the name without the salt → red.
   it("name tags are salted per job: the same chat gets the same tag within a run, a different one across runs", async () => {
-    const tagOf = (lines: string[]): string => (lines.find((l) => l.startsWith("#1/4 chat ")) ?? "").split(" ")[2];
+    const tagOf = (lines: string[]): string => (lines.find((l) => l.startsWith("#1/5 chat ")) ?? "").split(" ")[2];
     const contactTags = (lines: string[]): string[] =>
       ((lines.find((l) => l.startsWith("claimed:")) ?? "").match(/\[(.*)\]/)?.[1] ?? "").split(", ");
     const a = diagJob([]);
@@ -368,9 +370,13 @@ describe("Sync step log (BACKLOG-3641)", () => {
   it("checked but none matched: the overlay says so instead of 'imported 0 chats' (D4)", async () => {
     const t = diagJob([]);
     await job.runJob(JOB, t.env);
-    const done = t.shown[t.shown.length - 1];
-    expect(done.split("\n")[0]).toBe("Checked 4 chats — none matched a phone number on this transaction's contacts.");
-    expect(done).not.toContain("imported 0 chats");
-    expect(done.endsWith(job.RETURN_TO_KEEPR)).toBe(true);
+    // BACKLOG-3641 founder UX: one line, the reason is in Details. Mutation:
+    // drop the none-matched line from summaryLines → red.
+    expect(t.shown[t.shown.length - 1]).toBe(job.DONE_LINE);
+    const done = t.details[t.details.length - 1];
+    const doneLines = done.split(/\n/);
+    expect(doneLines[0]).toBe("Scanned 5 chats · checked 5 · matched 0 · imported 0 messages");
+    expect(doneLines[1]).toBe("None of the checked chats matched a phone number on this transaction's contacts.");
+    expect(t.shown.some((s) => s.includes("see the imported messages"))).toBe(false);
   });
 });

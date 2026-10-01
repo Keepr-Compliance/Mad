@@ -19,7 +19,7 @@
  *   M6 drop any one leaveOut(...) reason in runJob                → "every way a chat is left out"
  *   M7 drop the cap / "+N more"                                   → "caps the named list at 20"
  *   M8 claim back to GET, or no "/claim"                          → "claims with POST /claim"
- *   M9 drop RETURN_TO_KEEPR from the done text                    → the overlay assertions
+ *   M9 the finished overlay is more than its one line             → the overlay assertions
  */
 
 import * as fs from "fs";
@@ -60,7 +60,7 @@ interface NotReached {
 }
 
 interface JobModule {
-  RETURN_TO_KEEPR: string;
+  DONE_LINE: string;
   LIST_NOT_REACHABLE: string;
   runJob: (
     jobId: string,
@@ -269,7 +269,11 @@ function layoutJob(page: ReturnType<typeof messagesPage>) {
 }
 
 describe("the Sync job in both layouts", () => {
-  const CANDIDATES = ["aaaaaaaaaaaaaaaaaaa", "ccccccccccccccccccc", "ddddddddddddddddddd", "eeeeeeeeeeeeeeeeeee"];
+  // BACKLOG-3645: every chat of a list under the cap, names first (exact,
+  // loose), then number-only, then the rest.
+  const CANDIDATES = [
+    "aaaaaaaaaaaaaaaaaaa", "ddddddddddddddddddd", "eeeeeeeeeeeeeeeeeee", "ccccccccccccccccccc", "bbbbbbbbbbbbbbbbbbb",
+  ];
 
   it("two-pane: every candidate is opened, the back button is never used, nothing is left out", async () => {
     const page = messagesPage({ layout: "two" });
@@ -306,7 +310,7 @@ describe("the Sync job in both layouts", () => {
     expect(outcome.outcome).toBe("finished");
     expect(page.log[0]).toBe("back");
     const progress = t.calls.find(([, p, b]) => p.endsWith("/progress") && String(b?.stage).startsWith("Checking"));
-    expect(progress?.[2]).toMatchObject({ candidates: 4 });
+    expect(progress?.[2]).toMatchObject({ listed: 5, candidates: 5 });
   });
 
   it("claims with POST /claim, never a GET (M8)", async () => {
@@ -379,6 +383,8 @@ describe("no chat is ever silently left out (BACKLOG-3629)", () => {
     let swaps = 0;
     const calls: Array<[string, string, Record<string, unknown> | undefined]> = [];
     const shown: string[] = [];
+    const details: string[] = [];
+    const copies: string[] = [];
     const current = (): Plan => byId.get(open) as Plan;
     document.body.innerHTML = "<mws-conversation-list-item></mws-conversation-list-item>";
     const env = {
@@ -399,7 +405,13 @@ describe("no chat is ever silently left out (BACKLOG-3629)", () => {
         }
         return { ok: true, status: 200, body: { ok: true } };
       },
-      overlay: { show: (text: string) => shown.push(text) },
+      overlay: {
+        show: (text: string, _isError?: boolean, extras?: { details: string; copy: string }) => {
+          shown.push(text);
+          details.push(extras?.details ?? "");
+          copies.push(extras?.copy ?? "");
+        },
+      },
       sleep: noSleep,
       click: () => {},
       scroll: () => {},
@@ -445,7 +457,7 @@ describe("no chat is ever silently left out (BACKLOG-3629)", () => {
       },
     };
     const finish = (): Record<string, unknown> | undefined => calls.find(([, p]) => p.endsWith("/finish"))?.[2];
-    return { env, calls, shown, finish };
+    return { env, calls, shown, details, copies, finish };
   }
 
   it("every way a chat is left out, or imported only in part, is named in /finish and on the page (M6, M9)", async () => {
@@ -478,24 +490,25 @@ describe("no chat is ever silently left out (BACKLOG-3629)", () => {
     const matched = t.calls.filter(([, p]) => p.endsWith("/match")).length;
     expect(matched).toBe(7);
 
-    const done = t.shown[t.shown.length - 1];
-    expect(done).toContain("Done — imported 2 chats");
+    // BACKLOG-3641 founder UX: one line on the page; the list is in Details.
+    expect(t.shown[t.shown.length - 1]).toBe(job.DONE_LINE);
+    expect(job.DONE_LINE).toBe("Sync done — switch back to Keepr.");
+    const done = t.details[t.details.length - 1];
+    expect(done).toContain("Scanned 9 chats · checked 8 · matched 6 · imported 2 messages");
     for (const e of expected) expect(done).toContain(e.name);
     expect(done).toContain("images not imported: 2");
     expect(done).toContain("only the newest messages imported");
     expect(done).not.toContain("Chat Not Theirs");
     expect(done).not.toContain("Chat Fine");
-    expect(done.endsWith(job.RETURN_TO_KEEPR)).toBe(true);
-    expect(job.RETURN_TO_KEEPR).toBe("Switch back to Keepr to see the imported messages.");
   });
 
-  it("nothing left out: the done text has no list, and still says how to get back to Keepr", async () => {
+  it("nothing left out: one line on the page, and Details is just the counts", async () => {
     const t = planJob([{ name: "Chat Fine", matched: true }]);
     await job.runJob(JOB, t.env);
     expect(t.finish()).toMatchObject({ notReached: [], notReachedMore: 0 });
-    const done = t.shown[t.shown.length - 1];
-    expect(done).not.toContain("Not fully imported");
-    expect(done).toBe(`Done — imported 1 chats, 1 messages, 0 images.\n${job.RETURN_TO_KEEPR}`);
+    expect(t.shown[t.shown.length - 1]).toBe(job.DONE_LINE);
+    const done = t.details[t.details.length - 1];
+    expect(done).toBe("Scanned 1 chats · checked 1 · matched 1 · imported 1 messages");
   });
 
   it("caps the named list at 20 and counts the rest as '+N more' (M7)", async () => {
@@ -505,7 +518,7 @@ describe("no chat is ever silently left out (BACKLOG-3629)", () => {
     const body = t.finish() as { notReached: NotReached[]; notReachedMore: number };
     expect(body.notReached).toHaveLength(20);
     expect(body.notReachedMore).toBe(5);
-    const done = t.shown[t.shown.length - 1];
+    const done = t.details[t.details.length - 1];
     expect(done).toContain("Chat 19 (could not be opened)");
     expect(done).not.toContain("Chat 20 ");
     expect(done).toContain("+5 more");

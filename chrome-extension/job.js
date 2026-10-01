@@ -56,7 +56,8 @@
 
   /** Keepr keeps at most this many named entries (RCS_NOT_REACHED_CAP). */
   var NOT_REACHED_CAP = 20;
-  var RETURN_TO_KEEPR = "Switch back to Keepr to see the imported messages.";
+  /** Step-log lines kept for the overlay's Copy. */
+  var LOG_BUFFER_MAX = 500;
   var LIST_NOT_REACHABLE =
     "Couldn't show the Messages conversation list. Make the window wider or open " +
     "messages.google.com/web/conversations, then click Sync again.";
@@ -78,27 +79,60 @@
     return entry.count ? text + ": " + entry.count : text;
   }
 
+  /** BACKLOG-3641 founder UX: the finished overlay is this one line + Details. */
+  var DONE_LINE = "Sync done — switch back to Keepr.";
+
   /**
-   * The finished overlay: totals, every chat left out, the way back to Keepr.
-   * BACKLOG-3641: chats checked but none matched says so, instead of a bare
-   * "imported 0 chats".
+   * The Details lines (BACKLOG-3641). `nameOf` renders a chat or contact name:
+   * the name itself on screen, a salted tag in the Copy text.
+   *
+   * @param {{listed: number, checked: number, matched: number, chats: number, messages: number,
+   *          images: number, notChecked: number, contactsWithoutPhone: string[],
+   *          removedByUser: number, notReached: Array<{name: string, reason: string, count?: number}>,
+   *          notReachedMore: number}} s
+   * @param {function(string): string} nameOf
    */
-  function doneText(totals, reported, more, counts) {
+  function summaryLines(s, nameOf) {
     var lines = [
-      counts && counts.checked > 0 && counts.matched === 0
-        ? "Checked " + counts.checked + " chat" + (counts.checked === 1 ? "" : "s") +
-          " — none matched a phone number on this transaction's contacts."
-        : "Done — imported " + totals.chats + " chats, " + totals.messages + " messages, " + totals.images + " images.",
+      "Scanned " + s.listed + " chats · checked " + s.checked + " · matched " + s.matched +
+        " · imported " + s.messages + " messages" + (s.images > 0 ? ", " + s.images + " images" : ""),
     ];
-    if (reported.length > 0) {
-      lines.push("Not fully imported:");
-      for (var i = 0; i < reported.length; i++) {
-        lines.push("• " + reported[i].name + " (" + reasonText(reported[i]) + ")");
-      }
-      if (more > 0) lines.push("+" + more + " more");
+    if (s.checked > 0 && s.matched === 0) {
+      lines.push("None of the checked chats matched a phone number on this transaction's contacts.");
     }
-    lines.push(RETURN_TO_KEEPR);
-    return lines.join("\n");
+    if (s.notChecked > 0) {
+      lines.push("Not checked: " + s.notChecked + " chats (name didn't match a contact on this transaction)");
+    }
+    if (s.contactsWithoutPhone.length > 0) {
+      lines.push("No phone number: " + s.contactsWithoutPhone.map(nameOf).join(", "));
+    }
+    if (s.removedByUser > 0) {
+      lines.push(s.removedByUser + " messages you removed were not re-added");
+    }
+    if (s.notReached.length > 0) {
+      lines.push("Not fully imported:");
+      for (var i = 0; i < s.notReached.length; i++) {
+        lines.push("• " + nameOf(s.notReached[i].name) + " (" + reasonText(s.notReached[i]) + ")");
+      }
+      if (s.notReachedMore > 0) lines.push("+" + s.notReachedMore + " more");
+    }
+    return lines;
+  }
+
+  /** On-screen Details: real names are fine on the user's own page. */
+  function detailsText(s) {
+    return summaryLines(s, function (n) { return n; }).join("\n");
+  }
+
+  /**
+   * Copy text for a test user to send: counts, reasons and salted name tags,
+   * then the step log (already shapes and tags). No name, number or message text.
+   */
+  function copyText(s, tags, logLines) {
+    return ["Keepr Sync diagnostics"]
+      .concat(summaryLines(s, function (n) { return "#" + (tags[n] || "??????"); }))
+      .concat(["--- step log ---"], logLines)
+      .join("\n");
   }
 
   // -------------------------------------------------------------------------
@@ -233,7 +267,12 @@
   async function runJobInner(jobId, env) {
     var base = "/job/" + jobId;
     var skips = [];
-    var log = function (line) { diag(env, line); };
+    // The step log is also kept for the overlay's Copy (BACKLOG-3641).
+    var logLines = [];
+    var log = function (line) {
+      if (logLines.length < LOG_BUFFER_MAX) logLines.push(line);
+      diag(env, line);
+    };
     var salt = typeof env.salt === "string" ? env.salt : newSalt();
     var tag = function (name) { return nameTag(env, salt, name); };
     var matchedCount = 0;
@@ -252,8 +291,9 @@
       if (jobGone(reply)) throw JobGoneError();
       return reply;
     }
-    var progress = { listed: 0, candidates: 0, checked: 0, skipped: 0 };
-    var totals = { chats: 0, messages: 0, images: 0 };
+    var progress = { listed: 0, candidates: 0, checked: 0, skipped: 0, notChecked: 0 };
+    var totals = { chats: 0, messages: 0, images: 0, removedByUser: 0 };
+    var contactsWithoutPhone = [];
 
     async function report(stage) {
       log("stage: " + stage);
@@ -264,12 +304,41 @@
         candidates: progress.candidates,
         checked: progress.checked,
         skipped: progress.skipped,
+        notChecked: progress.notChecked,
       });
+    }
+
+    function summary() {
+      var reported = notReached.slice(0, NOT_REACHED_CAP);
+      return {
+        listed: progress.listed,
+        checked: progress.checked,
+        matched: matchedCount,
+        chats: totals.chats,
+        messages: totals.messages,
+        images: totals.images,
+        notChecked: progress.notChecked,
+        contactsWithoutPhone: contactsWithoutPhone,
+        removedByUser: totals.removedByUser,
+        notReached: reported,
+        notReachedMore: notReached.length - reported.length,
+      };
+    }
+
+    /** Details (real names, on screen) and Copy (tags only) for the overlay. */
+    async function overlayExtras() {
+      var s = summary();
+      var tags = {};
+      var names = s.contactsWithoutPhone.concat(s.notReached.map(function (e) { return e.name; }));
+      for (var n = 0; n < names.length; n++) {
+        if (!(names[n] in tags)) tags[names[n]] = await tag(names[n]);
+      }
+      return { details: detailsText(s), copy: copyText(s, tags, logLines) };
     }
 
     async function fail(code, message) {
       log("failed: " + code);
-      env.overlay.show(message, true);
+      env.overlay.show(message, true, await overlayExtras());
       await env.api("POST", base + "/error", { code: code, message: message });
       return { outcome: code };
     }
@@ -289,10 +358,13 @@
     var claim = await env.api("POST", base + "/claim");
     if (!claim.ok) {
       log("claim refused: HTTP " + claim.status);
-      env.overlay.show(messageOf(claim, "Keepr refused this sync."), true);
+      env.overlay.show(messageOf(claim, "Keepr refused this sync."), true, await overlayExtras());
       return { outcome: "claim_refused" };
     }
     var contacts = (claim.body && claim.body.contacts) || [];
+    contactsWithoutPhone = claim.body && Array.isArray(claim.body.contactsWithoutPhone)
+      ? claim.body.contactsWithoutPhone.filter(function (n) { return typeof n === "string"; })
+      : [];
     var contactTags = [];
     for (var ct = 0; ct < contacts.length; ct++) contactTags.push(await tag(contacts[ct].displayName));
     log("claimed: " + contacts.length + " contacts with a phone [" + contactTags.join(", ") + "]");
@@ -312,17 +384,25 @@
     // No env.scroll in the browser: collectConversations drives the page's own
     // scroller (top first, then step down with scroll events).
     var collected = await env.scan.collectConversations(env.doc, { scroll: env.scroll, sleep: env.sleep });
-    var candidates = env.scan.pickCandidates(collected.conversations, contacts);
+    // BACKLOG-3645: the phone number is the gate, a name only orders the queue.
+    // Up to CHECK_ALL_MAX chats every chat is checked; above it, plausible names
+    // plus number-only chats, and the rest are reported as not checked.
+    var plan = env.scan.planChecks
+      ? env.scan.planChecks(collected.conversations, contacts)
+      : { queue: env.scan.pickCandidates(collected.conversations, contacts), notChecked: 0 };
+    var candidates = plan.queue;
     progress.listed = collected.conversations.length;
     progress.candidates = candidates.length;
+    progress.notChecked = plan.notChecked;
     log("listed " + progress.listed + ", stopReason " + collected.stopReason +
       ", scroll " + JSON.stringify(collected.scroll || null));
     var byReason = {};
     for (var cr = 0; cr < candidates.length; cr++) {
       byReason[candidates[cr].reason] = (byReason[candidates[cr].reason] || 0) + 1;
     }
-    log("candidates " + candidates.length + " " + JSON.stringify(byReason));
-    await report("Checking " + candidates.length + " possible chats");
+    log("candidates " + candidates.length + " " + JSON.stringify(byReason) + ", not checked " + plan.notChecked);
+    // Chats, not contacts (founder): "Checking chat i of N".
+    await report(candidates.length > 0 ? "Checking chat 1 of " + candidates.length : "No chats to check");
 
     // 4. Each candidate: open, read numbers, close Details, ask Keepr.
     for (var i = 0; i < candidates.length; i++) {
@@ -434,6 +514,11 @@
         if (!sent.ok) throw new Error(messageOf(sent, "Keepr could not save this chat."));
         totals.chats += 1;
         totals.messages += messages.length;
+        // BACKLOG-3642: rows the user removed from this transaction are stored
+        // but not linked again; Keepr says how many.
+        var removed = sent.body && typeof sent.body.removedByUser === "number" ? sent.body.removedByUser : 0;
+        totals.removedByUser += removed;
+        if (removed > 0) log("  removed by you, not re-added: " + removed);
         log("  imported " + messages.length + " messages (history stop: " + hist.stopReason + ")");
         // Imported, but only back to the cap: older messages are missing.
         if (hist.stopReason === "cap") leaveOut(conv, "history_truncated");
@@ -489,7 +574,10 @@
         // it so the next chat can be found. A no-op when both panes show.
         if (!gone && env.returnToList) await env.returnToList();
       }
-      await report("Checked " + progress.checked + " of " + candidates.length + " chats");
+      // Also the cancel check between chats: a job Keepr dropped answers 404/410.
+      await report(i + 1 < candidates.length
+        ? "Checking chat " + (i + 2) + " of " + candidates.length
+        : "Checked " + candidates.length + " of " + candidates.length + " chats");
     }
 
     // 5. Done: Keepr brings itself forward. Every chat left out (or imported
@@ -502,23 +590,86 @@
       images: totals.images,
       notReached: reported,
       notReachedMore: more,
+      notChecked: progress.notChecked,
     });
     log("done: listed " + progress.listed + ", candidates " + progress.candidates + ", checked " + progress.checked +
       ", matched " + matchedCount + ", imported " + totals.chats + " chats / " + totals.messages + " messages / " +
-      totals.images + " images, not fully imported " + notReached.length);
-    env.overlay.show(doneText(totals, reported, more, { checked: progress.checked, matched: matchedCount }), false);
+      totals.images + " images, not fully imported " + notReached.length + ", not checked " + progress.notChecked +
+      ", removed by you " + totals.removedByUser);
+    // One line + Details / Copy (founder, BACKLOG-3641); results live in Keepr.
+    env.overlay.show(DONE_LINE, false, await overlayExtras());
     return {
       outcome: "finished", progress: progress, totals: totals, skips: skips, history: history, notReached: notReached,
     };
   }
 
+  /**
+   * Fill the overlay panel (BACKLOG-3641 founder UX): one line, and with
+   * `extras` a Details toggle (the details text in a pre block) and a Copy
+   * button. createElement / textContent only — page text never becomes markup.
+   *
+   * @param {HTMLElement} panel
+   * @param {string} text
+   * @param {boolean} isError
+   * @param {{details: string, copy: string}=} extras
+   * @param {{copy: function(string): Promise<boolean>}} io
+   */
+  function renderOverlay(panel, text, isError, extras, io) {
+    var doc = panel.ownerDocument;
+    while (panel.firstChild) panel.removeChild(panel.firstChild);
+    panel.style.background = isError ? "#fee2e2" : "#eef2ff";
+    panel.style.color = isError ? "#991b1b" : "#1e1b4b";
+    var line = doc.createElement("div");
+    line.setAttribute("data-keepr", "line");
+    line.textContent = "Keepr: " + text;
+    panel.appendChild(line);
+    if (!extras) return;
+
+    var buttons = doc.createElement("div");
+    buttons.style.marginTop = "6px";
+    var detailsButton = doc.createElement("button");
+    detailsButton.type = "button";
+    detailsButton.setAttribute("data-keepr", "details-toggle");
+    detailsButton.textContent = "Details";
+    var copyButton = doc.createElement("button");
+    copyButton.type = "button";
+    copyButton.setAttribute("data-keepr", "copy");
+    copyButton.textContent = "Copy";
+    copyButton.style.marginLeft = "8px";
+    buttons.appendChild(detailsButton);
+    buttons.appendChild(copyButton);
+    panel.appendChild(buttons);
+
+    var details = doc.createElement("pre");
+    details.setAttribute("data-keepr", "details");
+    details.textContent = extras.details;
+    Object.assign(details.style, { display: "none", whiteSpace: "pre-wrap", margin: "8px 0 0", font: "inherit" });
+    panel.appendChild(details);
+
+    detailsButton.addEventListener("click", function () {
+      var open = details.style.display === "none";
+      details.style.display = open ? "block" : "none";
+      detailsButton.textContent = open ? "Hide details" : "Details";
+    });
+    copyButton.addEventListener("click", function () {
+      Promise.resolve(io.copy(extras.copy)).then(function (ok) {
+        copyButton.textContent = ok ? "Copied" : "Copy failed";
+      }, function () {
+        copyButton.textContent = "Copy failed";
+      });
+    });
+  }
+
   var api = {
+    renderOverlay: renderOverlay,
     runJob: runJob,
     jobIdFromHash: jobIdFromHash,
     waitForPageState: waitForPageState,
     NOT_SIGNED_IN: NOT_SIGNED_IN,
-    RETURN_TO_KEEPR: RETURN_TO_KEEPR,
+    DONE_LINE: DONE_LINE,
     LIST_NOT_REACHABLE: LIST_NOT_REACHABLE,
+    detailsText: detailsText,
+    copyText: copyText,
     numberShape: numberShape,
     shortHash: shortHash,
   };
@@ -572,7 +723,7 @@
 
   // Overlay ------------------------------------------------------------------
   var panel = null;
-  function showOverlay(text, isError) {
+  function showOverlay(text, isError, extras) {
     if (!document.body) return;
     if (!panel) {
       panel = document.createElement("div");
@@ -582,14 +733,35 @@
         maxWidth: "360px", padding: "10px 14px", borderRadius: "10px",
         fontFamily: "system-ui, -apple-system, sans-serif", fontSize: "14px",
         boxShadow: "0 2px 10px rgba(0,0,0,0.25)",
-        // The finished text lists chats left out, one per line.
-        whiteSpace: "pre-line", maxHeight: "60vh", overflowY: "auto",
+        maxHeight: "60vh", overflowY: "auto",
       });
       document.body.appendChild(panel);
     }
-    panel.textContent = "Keepr: " + text;
-    panel.style.background = isError ? "#fee2e2" : "#eef2ff";
-    panel.style.color = isError ? "#991b1b" : "#1e1b4b";
+    renderOverlay(panel, text, isError, extras, { copy: copyToClipboard });
+  }
+
+  /** navigator.clipboard, else a hidden textarea + execCommand("copy"). */
+  function copyToClipboard(text) {
+    if (root.navigator && root.navigator.clipboard && root.navigator.clipboard.writeText) {
+      return root.navigator.clipboard.writeText(text).then(function () { return true; }, fallback);
+    }
+    return Promise.resolve(fallback());
+    function fallback() {
+      try {
+        var area = document.createElement("textarea");
+        area.value = text;
+        area.setAttribute("readonly", "");
+        area.style.position = "fixed";
+        area.style.left = "-9999px";
+        document.body.appendChild(area);
+        area.select();
+        var ok = document.execCommand("copy");
+        area.remove();
+        return ok;
+      } catch (_e) {
+        return false;
+      }
+    }
   }
 
   // Page actions -------------------------------------------------------------

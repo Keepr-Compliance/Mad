@@ -2425,6 +2425,11 @@ class DatabaseService implements IDatabaseService {
     return syncDb.markMessageHasAttachments(messageId);
   }
 
+  // BACKLOG-3642: the user's removals, so an RCS import never re-links them
+  getRcsRemovals(transactionId: string, userId: string) {
+    return syncDb.getRcsRemovals(transactionId, userId);
+  }
+
   insertReactionRows(rows: Parameters<typeof syncDb.insertReactionRows>[0]) {
     return syncDb.insertReactionRows(rows);
   }

@@ -60,6 +60,10 @@ export interface RcsJobProgress {
   images: number;
   reactions: number;
   skipped: number;
+  /** BACKLOG-3645: chats in the list the page did not check (over the cap). */
+  notChecked: number;
+  /** BACKLOG-3642: messages stored but not linked again — the user removed them. */
+  removedNotRelinked: number;
 }
 
 /**
@@ -133,6 +137,25 @@ export interface RcsJobClaim {
    * this date before extracting (BACKLOG-3620).
    */
   startDate: string | null;
+  /**
+   * BACKLOG-3641: names of the transaction's contacts with no phone number, for
+   * the page's on-screen Details (they can never match). Names only.
+   */
+  contactsWithoutPhone: string[];
+}
+
+/**
+ * BACKLOG-3642: a chat's participant set as one key — the sorted, de-duplicated
+ * E.164 numbers joined by ",". Numbers that do not normalize to "+…" are
+ * dropped; an empty set gives "" (never a match).
+ */
+export function participantKey(numbers: readonly string[]): string {
+  const set = new Set<string>();
+  for (const n of numbers) {
+    const e = toE164(n);
+    if (e && e.startsWith("+")) set.add(e);
+  }
+  return Array.from(set).sort().join(",");
 }
 
 /**
@@ -160,6 +183,8 @@ const EMPTY_PROGRESS: RcsJobProgress = {
   images: 0,
   reactions: 0,
   skipped: 0,
+  notChecked: 0,
+  removedNotRelinked: 0,
 };
 
 /**
@@ -191,6 +216,8 @@ export class RcsImportJob {
   readonly startDate: string | null;
   /** conversationId -> matched contact ids. */
   private readonly matched = new Map<string, string[]>();
+  /** conversationId -> participantKey of the numbers its Details showed. */
+  private readonly participantKeys = new Map<string, string>();
 
   constructor(
     transactionId: string,
@@ -255,7 +282,17 @@ export class RcsImportJob {
         .filter((c) => c.phonesE164.length > 0)
         .map((c) => ({ contactId: c.contactId, displayName: c.displayName })),
       startDate: this.startDate,
+      contactsWithoutPhone: this.contacts.filter((c) => c.phonesE164.length === 0).map((c) => c.displayName),
     };
+  }
+
+  /**
+   * BACKLOG-3642: the participant key of a chat this job matched, from the
+   * numbers its Details showed ("" when unknown). Stored with the chat's rows
+   * so a later removal can be recognised after a re-pair changes the id.
+   */
+  participantKeyFor(conversationId: string): string {
+    return this.participantKeys.get(conversationId) ?? "";
   }
 
   /**
@@ -263,6 +300,7 @@ export class RcsImportJob {
    * on the page equals any number of any transaction contact.
    */
   match(conversationId: string, numbers: string[]): string[] {
+    this.participantKeys.set(conversationId, participantKey(numbers));
     const hits: string[] = [];
     for (const contact of this.contacts) {
       const hit = contact.phonesE164.some((own) =>
@@ -291,8 +329,15 @@ export class RcsImportJob {
     }
   }
 
-  finish(nowMs: number, notReached?: { entries: RcsJobNotReached[]; more: number }): void {
+  finish(
+    nowMs: number,
+    notReached?: { entries: RcsJobNotReached[]; more: number },
+    notChecked?: number,
+  ): void {
     if (!this.isActive) return;
+    if (typeof notChecked === "number" && Number.isFinite(notChecked) && notChecked >= 0) {
+      this.progress.notChecked = Math.floor(notChecked);
+    }
     if (notReached) {
       this.notReached = notReached.entries.slice(0, RCS_NOT_REACHED_CAP);
       this.notReachedMore = notReached.more;

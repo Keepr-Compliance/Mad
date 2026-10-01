@@ -279,6 +279,82 @@
     return out;
   }
 
+  // -------------------------------------------------------------------------
+  // BACKLOG-3645: a contact's name never hides a chat
+  // -------------------------------------------------------------------------
+
+  /**
+   * Up to this many chats in the list, EVERY chat's Details number is checked
+   * (about 1.5–2.5 s each); names only order the queue. Above it, only chats a
+   * name could plausibly belong to, plus number-only chats, are checked and the
+   * rest are reported as not checked.
+   */
+  var CHECK_ALL_MAX = 50;
+
+  /** Lower case, accents removed, punctuation → space. */
+  function foldName(s) {
+    return normalizeName(String(s || "").normalize("NFD").replace(/\p{M}+/gu, ""));
+  }
+
+  /**
+   * Over the cap: a chat whose name shares any word of 3+ letters with a
+   * contact's name, or starts with the contact's first name. Case- and
+   * accent-insensitive.
+   */
+  function looseNameMatch(convName, contacts) {
+    var words = foldName(convName).split(" ").filter(Boolean);
+    if (words.length === 0) return false;
+    for (var i = 0; i < contacts.length; i++) {
+      var tokens = foldName(contacts[i].displayName).split(" ").filter(Boolean);
+      if (tokens.length === 0 || tokens.join(" ") === "unknown") continue;
+      if (words[0] === tokens[0]) return true;
+      for (var t = 0; t < tokens.length; t++) {
+        if (tokens[t].length >= 3 && words.indexOf(tokens[t]) !== -1) return true;
+      }
+    }
+    return false;
+  }
+
+  var QUEUE_ORDER = { name: 0, name_loose: 1, name_token: 1, phone_name: 2, unmatched_name: 3 };
+
+  /**
+   * Which chats to check, in what order.
+   *
+   * @param {Array<{conversationId: string, name: string}>} conversations the whole list
+   * @param {Array<{displayName: string}>} contacts
+   * @param {{checkAllMax?: number}} [opts]
+   * @returns {{queue: Array<{conversation: object, reason: string}>, notChecked: number, checkAll: boolean}}
+   *   reason: name | name_loose | phone_name (pickCandidates), name_token (over
+   *   the cap only) or unmatched_name (checked only because the list is small).
+   */
+  function planChecks(conversations, contacts, opts) {
+    var max = (opts && opts.checkAllMax) || CHECK_ALL_MAX;
+    var ranked = pickCandidates(conversations, contacts);
+    var reasonById = {};
+    for (var i = 0; i < ranked.length; i++) reasonById[ranked[i].conversation.conversationId] = ranked[i].reason;
+    var checkAll = conversations.length <= max;
+    var queue = [];
+    for (var j = 0; j < conversations.length; j++) {
+      var conv = conversations[j];
+      var reason = reasonById[conv.conversationId];
+      if (!reason) {
+        if (checkAll) reason = "unmatched_name";
+        else if (looseNameMatch(conv.name, contacts)) reason = "name_token";
+        else continue;
+      }
+      queue.push({ conversation: conv, reason: reason, at: j });
+    }
+    // Stable: by reason group, then list order.
+    queue.sort(function (a, b) {
+      return QUEUE_ORDER[a.reason] - QUEUE_ORDER[b.reason] || a.at - b.at;
+    });
+    return {
+      queue: queue.map(function (q) { return { conversation: q.conversation, reason: q.reason }; }),
+      notChecked: conversations.length - queue.length,
+      checkAll: checkAll,
+    };
+  }
+
   /**
    * Poll until `predicate()` is truthy; resolve its value. Rejects on timeout.
    */
@@ -641,6 +717,8 @@
     normalizeName: normalizeName,
     looksLikePhone: looksLikePhone,
     pickCandidates: pickCandidates,
+    planChecks: planChecks,
+    CHECK_ALL_MAX: CHECK_ALL_MAX,
     waitFor: waitFor,
     readParticipantsAndClose: readParticipantsAndClose,
   };

@@ -10,6 +10,7 @@
 
 import {
   parseNotReached,
+  participantKey,
   phonesMatchExactly,
   RCS_NOT_REACHED_CAP,
   RCS_JOB_NOT_OPENED_MESSAGE,
@@ -65,6 +66,8 @@ describe("RcsImportJob / RcsJobRegistry", () => {
         { contactId: "c-2", displayName: "Test Contact B" },
       ],
       startDate: null,
+      // BACKLOG-3641: names only, for the page's Details.
+      contactsWithoutPhone: ["Test Contact C"],
     });
     expect(JSON.stringify(claim)).not.toContain("+1");
     expect(job.claim(jobs.nowMs())).toMatchObject({ status: 409, error: "already_running" });
@@ -155,5 +158,24 @@ describe("parseNotReached (the page's /finish list)", () => {
     job.claim(jobs.nowMs());
     job.finish(jobs.nowMs(), { entries: [{ name: "Chat A", reason: "no_numbers" }], more: 0 });
     expect(job.snapshot()).toMatchObject({ state: "finished", notReached: [{ name: "Chat A", reason: "no_numbers" }], notReachedMore: 0 });
+  });
+});
+
+// BACKLOG-3642. Mutations: unsorted key, or a key that keeps unnormalized
+// numbers → red.
+describe("participantKey (re-pair-proof chat identity)", () => {
+  it("sorted, de-duplicated E.164; formatting does not matter; non-numbers dropped", () => {
+    expect(participantKey(["(555) 555-0199", "+1 555 555 0100", "555-555-0199"])).toBe("+15555550100,+15555550199");
+    expect(participantKey(["+1 555 555 0100", "(555) 555-0199"])).toBe(participantKey(["(555) 555-0199", "+15555550100"]));
+    expect(participantKey(["someone@example.test", ""])).toBe("");
+  });
+
+  it("the job remembers the key of each chat it matched", () => {
+    const { jobs } = registry();
+    const job = jobs.create("tx-1", CONTACTS);
+    job.claim(jobs.nowMs());
+    job.match("conv-1", ["(555) 555-0199"]);
+    expect(job.participantKeyFor("conv-1")).toBe("+15555550199");
+    expect(job.participantKeyFor("conv-unknown")).toBe("");
   });
 });

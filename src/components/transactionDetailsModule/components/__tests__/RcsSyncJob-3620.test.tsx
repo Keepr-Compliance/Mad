@@ -81,6 +81,49 @@ describe("Sync job (BACKLOG-3620)", () => {
     expect(onImported).toHaveBeenCalledTimes(1);
   });
 
+  // BACKLOG-3642. Mutation: put the job state back into the refetch key → the
+  // created→running refetch returns and this goes red.
+  it("does not refetch messages when the job goes created → running; refetches on an import and once on finish", async () => {
+    const onImported = jest.fn();
+    mockStartJob.mockResolvedValue({ success: true, data: job() });
+    render(<Harness transactionId="tx-1" onImported={onImported} />);
+    fireEvent.click(screen.getByTestId("rcs-sync-button"));
+    await screen.findByTestId("rcs-sync-job");
+    act(() => {
+      jobListener?.(job({ state: "running", stage: "Checking chat 1 of 9" }));
+    });
+    expect(onImported).not.toHaveBeenCalled();
+    act(() => {
+      jobListener?.(job({ state: "running", progress: { ...job().progress, imported: 1, messages: 50 } }));
+    });
+    expect(onImported).toHaveBeenCalledTimes(1);
+    act(() => {
+      jobListener?.(job({ state: "finished", stage: "Done", progress: { ...job().progress, imported: 1, messages: 50 } }));
+    });
+    expect(onImported).toHaveBeenCalledTimes(2);
+  });
+
+  // BACKLOG-3641/3642/3645. Mutation: drop any of the four lines → red.
+  it("finished: shows the scan counts, chats not checked, removed-not-re-added and chats left out", async () => {
+    mockStartJob.mockResolvedValue({ success: true, data: job() });
+    render(<Harness transactionId="tx-1" />);
+    fireEvent.click(screen.getByTestId("rcs-sync-button"));
+    await screen.findByTestId("rcs-sync-job");
+    act(() => {
+      jobListener?.(job({
+        state: "finished",
+        stage: "Done",
+        progress: { ...job().progress, listed: 60, candidates: 2, checked: 2, matched: 1, imported: 1, messages: 50, notChecked: 58, removedNotRelinked: 7 },
+        notReached: [{ name: "Sample Person", reason: "history_truncated" }],
+        notReachedMore: 0,
+      }));
+    });
+    expect(screen.getByTestId("rcs-sync-job-counts")).toHaveTextContent("Scanned 60 chats · checked 2 · matched 1 · imported 50 messages");
+    expect(screen.getByTestId("rcs-sync-job-not-checked")).toHaveTextContent("Not checked: 58 chats (name didn't match a contact on this transaction)");
+    expect(screen.getByTestId("rcs-sync-job-removed")).toHaveTextContent("7 messages you removed were not re-added");
+    expect(screen.getByTestId("rcs-sync-job-left-out")).toHaveTextContent("Not fully imported: Sample Person (only the newest messages imported)");
+  });
+
   // BACKLOG-3641. Mutation: drop the `checked > 0 && matched === 0` branch in
   // jobLine → the panel says "imported 0 chats" and this goes red.
   it("finished with chats checked but none matched: says so instead of 'imported 0 chats'", async () => {

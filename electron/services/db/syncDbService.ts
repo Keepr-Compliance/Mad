@@ -9,6 +9,8 @@ import {
   RCS_IMPORT_TRANSACTION_CONTACTS_SQL,
   RCS_INSERT_REACTION_SQL,
   RCS_MARK_MESSAGE_HAS_ATTACHMENTS_SQL,
+  RCS_REMOVALS_SQL,
+  RCS_REMOVED_PARTICIPANT_KEYS_SQL,
 } from "./rcsImportSql";
 
 // ============================================
@@ -199,6 +201,36 @@ export function getRcsImportContacts(
  * `batchInsertMessages` is INSERT OR IGNORE, so a row first stored text-only
  * never gets the flag from a later insert. Returns rows changed.
  */
+/**
+ * BACKLOG-3642: what the user removed from a transaction, for the RCS import.
+ * gmweb thread ids only (an SMS phone-backup removal never blocks RCS), the
+ * thread-less message ids, and the participant keys of removed gmweb rows.
+ */
+export function getRcsRemovals(
+  transactionId: string,
+  userId: string
+): { threadIds: Set<string>; messageIds: Set<string>; participantKeys: Set<string> } {
+  const db = ensureDb();
+  const rows = db.prepare(RCS_REMOVALS_SQL).all(transactionId) as {
+    threadId: string | null;
+    messageId: string | null;
+  }[];
+  const threadIds = new Set<string>();
+  const messageIds = new Set<string>();
+  for (const r of rows) {
+    if (r.threadId && r.threadId.startsWith("gmweb-chat-")) threadIds.add(r.threadId);
+    if (r.messageId) messageIds.add(r.messageId);
+  }
+  const keys = db.prepare(RCS_REMOVED_PARTICIPANT_KEYS_SQL).all(transactionId, userId) as {
+    participantKey: unknown;
+  }[];
+  const participantKeys = new Set<string>();
+  for (const k of keys) {
+    if (typeof k.participantKey === "string" && k.participantKey.length > 0) participantKeys.add(k.participantKey);
+  }
+  return { threadIds, messageIds, participantKeys };
+}
+
 export function markMessageHasAttachments(messageId: string): number {
   const db = ensureDb();
   return db.prepare(RCS_MARK_MESSAGE_HAS_ATTACHMENTS_SQL).run(messageId).changes;

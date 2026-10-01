@@ -283,7 +283,7 @@ describe("RcsExtensionBridge sync jobs", () => {
 
     it("claim returns names only, never the contacts' numbers", async () => {
       const claim = await request(port, "POST", `/job/${jobId}/claim`, EXT);
-      expect(claim.body).toEqual({ jobId, contacts: [{ contactId: "c-1", displayName: "Test Contact A" }], startDate: null });
+      expect(claim.body).toEqual({ jobId, contacts: [{ contactId: "c-1", displayName: "Test Contact A" }], startDate: null, contactsWithoutPhone: [] });
     });
 
     it("claim carries the transaction's start date when the job has one", async () => {
@@ -434,6 +434,38 @@ describe("RcsExtensionBridge sync jobs", () => {
       expect((await request(port, "POST", `/job/${jobId}/claim`, EXT)).status).toBe(200);
       await request(port, "POST", `/job/${jobId}/finish`, EXT, JSON.stringify({ chats: 1, messages: 2, images: 0, notReached: [], notReachedMore: 0 }));
       expect(finished[finished.length - 1]).not.toHaveProperty("notReached");
+    });
+  });
+
+  // BACKLOG-3642 / 3645. Mutations that turn these red: pass the page's own
+  // participantKey (or none) to importChat; drop the removedNotRelinked sum;
+  // drop notChecked from /progress or /finish.
+  describe("BACKLOG-3642/3645: participant key, removed-by-you, not checked", () => {
+    it("the chat is imported with the participant key of the numbers THIS job's /match saw — never the page's", async () => {
+      await claimAndMatch(["(555) 555-0199"]);
+      const body = JSON.stringify({ ...CHAT, participantKey: "+15555550142" });
+      expect((await request(port, "POST", `/job/${jobId}/chat`, EXT, body)).status).toBe(200);
+      const call = importChat.mock.calls[0] as unknown as [RcsIncomingChat, string, { participantKey?: string }];
+      expect(call[2]).toEqual({ participantKey: "+15555550199" });
+    });
+
+    it("messages the user removed are summed into progress.removedNotRelinked and returned to the page", async () => {
+      importChat.mockImplementation(async (chat: RcsIncomingChat) => ({
+        received: chat.messages.length, stored: 0, alreadyPresent: chat.messages.length,
+        linked: 0, reactions: 0, reactionsStored: 0, removedByUser: chat.messages.length,
+      }));
+      await claimAndMatch(["(555) 555-0199"]);
+      const reply = await request(port, "POST", `/job/${jobId}/chat`, EXT, CHAT_JSON);
+      expect(reply.body).toMatchObject({ ok: true, removedByUser: 2 });
+      expect(bridge.getJob()?.progress.removedNotRelinked).toBe(2);
+    });
+
+    it("notChecked from /progress and /finish lands on the job", async () => {
+      expect((await request(port, "POST", `/job/${jobId}/claim`, EXT)).status).toBe(200);
+      await request(port, "POST", `/job/${jobId}/progress`, EXT, JSON.stringify({ stage: "Checking chat 1 of 2", notChecked: 58 }));
+      expect(bridge.getJob()?.progress.notChecked).toBe(58);
+      await request(port, "POST", `/job/${jobId}/finish`, EXT, JSON.stringify({ chats: 0, messages: 0, images: 0, notChecked: 57 }));
+      expect(finished[finished.length - 1].progress.notChecked).toBe(57);
     });
   });
 

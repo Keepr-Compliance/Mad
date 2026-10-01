@@ -45,3 +45,31 @@ export const RCS_INSERT_REACTION_SQL = sql`
       associated_message_type, associated_message_guid, created_at
     ) VALUES (?, ?, 'sms', ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, CURRENT_TIMESTAMP)
   `;
+
+/**
+ * BACKLOG-3642: the user's removals from one transaction (one bound parameter:
+ * transaction id). Thread ids and thread-less message ids; the caller keeps
+ * gmweb threads only.
+ */
+export const RCS_REMOVALS_SQL = sql`
+    SELECT ic.thread_id AS threadId, ic.original_communication_id AS messageId
+    FROM ignored_communications ic
+    WHERE ic.transaction_id = ?
+  `;
+
+/**
+ * BACKLOG-3642: participant keys (`metadata.participantKey`, written by Sync) of
+ * gmweb rows the user removed from the transaction — by thread or by message.
+ * Parameters: transaction id, user id. `json_valid` guards rows whose metadata
+ * is not JSON (only gmweb rows are read, but the guard keeps the query safe).
+ */
+export const RCS_REMOVED_PARTICIPANT_KEYS_SQL = sql`
+    SELECT DISTINCT
+      CASE WHEN json_valid(m.metadata) THEN json_extract(m.metadata, '$.participantKey') END AS participantKey
+    FROM messages m
+    JOIN ignored_communications ic
+      ON ic.transaction_id = ?
+     AND (ic.thread_id = m.thread_id OR ic.original_communication_id = m.id)
+    WHERE m.user_id = ?
+      AND m.thread_id LIKE 'gmweb-chat-%'
+  `;
