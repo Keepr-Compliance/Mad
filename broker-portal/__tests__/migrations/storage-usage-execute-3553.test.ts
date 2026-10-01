@@ -18,7 +18,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 
 const REPO = join(__dirname, '../../..');
-const FILE = '20260929150000_backlog_3553_storage_usage_execute.sql';
+const FILE = '20260929074121_backlog_3553_storage_usage_execute.sql';
 const TARGET = 'public.get_storage_usage()';
 
 const RAW = readFileSync(join(REPO, 'supabase/migrations', FILE), 'utf8').replace(/\r\n?/g, '\n');
