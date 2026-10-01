@@ -110,10 +110,25 @@
   var SHAPE_KEEP = "+()-. ";
 
   /**
-   * "(555) 555-0199" → "(ddd) ddd-dddd". Digits → d, ASCII letters → a,
-   * non-ASCII → U+XXXX; only `+ ( ) - . space` are kept as they are; any
-   * other ASCII → `*`. The Details number selector is untraced on the live
-   * page, so a name or an email could arrive here: it must never be readable.
+   * Invisible / format characters that matter when a number fails to parse:
+   * U+00A0, U+200B–U+200F, U+202A–U+202F (U+202F, the narrow no-break
+   * space, is used by the page itself), U+2060–U+2069, U+FEFF.
+   */
+  function isFormatChar(code) {
+    return code === 0xa0 ||
+      (code >= 0x200b && code <= 0x200f) ||
+      (code >= 0x202a && code <= 0x202f) ||
+      (code >= 0x2060 && code <= 0x2069) ||
+      code === 0xfeff;
+  }
+
+  /**
+   * "(555) 555-0199" → "(ddd) ddd-dddd". Digits → d, ASCII letters → a; only
+   * `+ ( ) - . space` are kept as they are; any other ASCII → `*`. Non-ASCII:
+   * the invisible/format characters above → U+XXXX, every other → `?` (a code
+   * point would spell out a non-Latin name exactly). The Details number
+   * selector is untraced on the live page, so a name or an email could arrive
+   * here: it must never be readable.
    */
   function numberShape(s) {
     var out = "";
@@ -123,7 +138,7 @@
       var code = ch.codePointAt(0);
       if (ch >= "0" && ch <= "9") out += "d";
       else if ((ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z")) out += "a";
-      else if (code > 127) out += "U+" + code.toString(16).toUpperCase().padStart(4, "0");
+      else if (code > 127) out += isFormatChar(code) ? "U+" + code.toString(16).toUpperCase().padStart(4, "0") : "?";
       else if (SHAPE_KEEP.indexOf(ch) !== -1) out += ch;
       else out += "*";
     }

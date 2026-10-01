@@ -222,11 +222,32 @@ describe("Sync step log (BACKLOG-3641)", () => {
     expect(job.numberShape("+1 (555) 555-0199 ext_9/x")).toBe("+d (ddd) ddd-dddd aaa*d*a");
   });
 
-  it("numberShape keeps the format, hides the digits, spells out non-ASCII", () => {
+  it("numberShape keeps the format, hides the digits, spells out only invisible/format characters", () => {
     expect(job.numberShape("(555) 555-0199")).toBe("(ddd) ddd-dddd");
-    expect(job.numberShape("+1 555 0100")).toBe("+d dddU+202Fdddd");
-    expect(job.numberShape("٣٤")).toBe("U+0663U+0664");
+    expect(job.numberShape("+1 555\u202f0100")).toBe("+d dddU+202Fdddd");
+    expect(job.numberShape("\u00a0\u200b\u200e\u202a\u202e\u2060\u2069\ufeff")).toBe(
+      "U+00A0U+200BU+200EU+202AU+202EU+2060U+2069U+FEFF",
+    );
+    expect(job.numberShape("\u0663\u0664")).toBe("??");
     expect(job.numberShape("")).toBe("");
+  });
+
+  // SR F1b. Mutation D10: spell every non-ASCII char as U+XXXX again → red.
+  it("a non-Latin or accented name is not spelled out as code points", () => {
+    // Invented samples: "test" in Hebrew, Japanese and Cyrillic, and an accented "Test Contact".
+    const names = ["\u05d1\u05d3\u05d9\u05e7\u05d4", "\u30c6\u30b9\u30c8", "\u0422\u0435\u0441\u0442 \u041a\u043e\u043d\u0442\u0430\u043a\u0442", "T\u00e9st C\u00f6ntact"];
+    for (const name of names) {
+      const shape = job.numberShape(name);
+      for (const ch of Array.from(name)) {
+        const code = ch.codePointAt(0) ?? 0;
+        if (code > 127) {
+          const spelled = "U+" + code.toString(16).toUpperCase().padStart(4, "0");
+          expect([name, spelled, shape.includes(spelled)]).toEqual([name, spelled, false]);
+        }
+      }
+      expect(shape).toMatch(/^[a ?]*$/);
+    }
+    expect(job.numberShape("T\u00e9st C\u00f6ntact")).toBe("a?aa a?aaaaa");
   });
 
   it("shortHash is 6 hex and stable", () => {
