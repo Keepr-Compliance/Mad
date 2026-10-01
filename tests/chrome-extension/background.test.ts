@@ -38,10 +38,13 @@ function loadWorker() {
     tabs: { query: jest.fn(async () => []), sendMessage: jest.fn(), update: jest.fn(), remove: jest.fn() },
     windows: { update: jest.fn() },
   };
-  const fetchStub = jest.fn(async (_url: string, _init: { method: string }) => ({
-    status: 404,
-    json: async () => ({ error: "no_job" }),
-  }));
+  // Typed loosely: tests answer with different bodies (BACKLOG-3641 focus).
+  const fetchStub = jest.fn(
+    async (_url: string, _init: { method: string }): Promise<{ status: number; json: () => Promise<Record<string, unknown>> }> => ({
+      status: 404,
+      json: async () => ({ error: "no_job" }),
+    }),
+  );
   // eslint-disable-next-line @typescript-eslint/no-implied-eval
   new Function("chrome", "fetch", SOURCE)(chromeStub, fetchStub);
   if (!listener) throw new Error("background.js registered no message listener");
