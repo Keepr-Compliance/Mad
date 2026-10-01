@@ -4,7 +4,9 @@
  * apart from the screen.
  *
  *   install  → the extension has never said hello
- *   connect  → installed; ready to Sync (Google Messages pairing is shown
+ *   consent  → (P3b) the user has not accepted the current consent text:
+ *              Keepr's record is the only gate for a cache Sync
+ *   connect  → installed and consented; ready to Sync (Google Messages pairing is shown
  *              as a checklist item, not a gate: the page itself says when it
  *              is not signed in)
  *   syncing  → a cache Sync of this flow is running
@@ -14,7 +16,14 @@
 
 import type { RcsExtensionState, RcsJobInfo } from "../../../../electron/types/ipc/window-api-rcs-import";
 
-export type GoogleMessagesStep = "install" | "connect" | "syncing" | "done" | "failed";
+export type GoogleMessagesStep = "install" | "consent" | "connect" | "syncing" | "done" | "failed";
+
+/** P3b: the user accepted the consent text Keepr requires now. */
+export function consentCurrent(state: RcsExtensionState | null): boolean {
+  if (!state) return false;
+  const required = state.consentRequired ?? 1;
+  return typeof state.consentVersion === "number" && state.consentVersion >= required;
+}
 
 export function googleMessagesStep(input: {
   state: RcsExtensionState | null;
@@ -30,6 +39,7 @@ export function googleMessagesStep(input: {
   }
   const installed = !!input.state?.extensionVersion;
   if (!installed && !input.continued) return "install";
+  if (!consentCurrent(input.state)) return "consent";
   return "connect";
 }
 

@@ -7,6 +7,10 @@
   "background": {
     "service_worker": "background.js"
   },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
   "host_permissions": [
     "https://messages.google.com/*",
     "http://127.0.0.1:38619/*"

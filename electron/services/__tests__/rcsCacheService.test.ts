@@ -6,7 +6,10 @@
  *
  * Mutation controls (each turns a test red):
  *   R1 since without the max (always 60 days, or always last − 1 day) → "since"
- *   R2 a refusal skipped (signed out / not opted in / busy / running)   → "who may start"
+ *   R2 a refusal skipped (signed out / no current consent / busy / running) → "who may start"
+ *   K1 (P3b) an old consent version accepted                            → "who may start"
+ *   K2 (P3b) Keepr's version and the text's version drift apart          → "the consent text"
+ *   K3 (P3b) the auto-delete run before the auto-link, or not at all      → "finished: committed"
  *   R3 the finish time saved after a cancel or an error                 → "saved only on success"
  *   R4 (atomic import) a cancel/error commits, links, or keeps staging  → "cancelled or failed: discard only"
  *   R4b a failed commit still saving the time or linking                → "a failed commit saves nothing"
@@ -30,6 +33,7 @@ import {
   decideCacheStart,
   handleCacheJobEnded,
   RCS_CACHE_WINDOW_DAYS,
+  RCS_CONSENT_VERSION,
   RCS_HELLO_PERSIST_MS,
   shouldPersistHello,
 } from "../rcsCacheService";
@@ -54,15 +58,22 @@ describe("since: max(now − 60 days, last finished − 1 day)", () => {
 });
 
 describe("who may start a cache Sync (R2)", () => {
-  const ok = { userId: "u-1", optedIn: true, activeLabel: null, writesPaused: false };
-  it("signed in, opted in, nothing running: yes", () => {
+  const ok = { userId: "u-1", consentVersion: RCS_CONSENT_VERSION, activeLabel: null, writesPaused: false };
+  it("signed in, consent current, nothing running: yes", () => {
     expect(decideCacheStart(ok)).toEqual({ ok: true, userId: "u-1" });
   });
   it("signed out: 403", () => {
     expect(decideCacheStart({ ...ok, userId: null })).toMatchObject({ status: 403, error: "signed_out" });
   });
-  it("not opted in: 403", () => {
-    expect(decideCacheStart({ ...ok, optedIn: false })).toMatchObject({ status: 403, error: "not_opted_in" });
+  it("no consent, or an older consent text: 403 consent_needed (K1)", () => {
+    expect(decideCacheStart({ ...ok, consentVersion: null })).toMatchObject({ status: 403, error: "consent_needed" });
+    expect(decideCacheStart({ ...ok, consentVersion: undefined })).toMatchObject({ status: 403, error: "consent_needed" });
+    expect(decideCacheStart({ ...ok, consentVersion: RCS_CONSENT_VERSION - 1 })).toMatchObject({ status: 403, error: "consent_needed" });
+  });
+  it("the consent text shown is the version Keepr requires (K2)", () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const copy = require("../../../src/components/settings/android/rcsConsentCopy") as { RCS_CONSENT_COPY_VERSION: number };
+    expect(copy.RCS_CONSENT_COPY_VERSION).toBe(RCS_CONSENT_VERSION);
   });
   it("a Force re-import is clearing texts: 503", () => {
     expect(decideCacheStart({ ...ok, writesPaused: true })).toMatchObject({ status: 503, error: "busy" });
@@ -94,6 +105,9 @@ describe("when a cache Sync ends", () => {
         autoLink: async (u: string) => {
           calls.push(`autolink ${u}`);
         },
+        afterLink: async (u: string) => {
+          calls.push(`afterlink ${u}`);
+        },
         onSaved: (u: string) => void calls.push(`saved ${u}`),
         now: () => NOW,
       },
@@ -106,7 +120,7 @@ describe("when a cache Sync ends", () => {
   it("finished: committed (one transaction), then the time is saved, then the auto-link for that user", async () => {
     const d = deps();
     await handleCacheJobEnded(ended("finished"), d.deps);
-    expect(d.calls).toEqual(["commit job-1 u-1", `finished u-1 ${new Date(NOW).toISOString()}`, "autolink u-1", "saved u-1"]);
+    expect(d.calls).toEqual(["commit job-1 u-1", `finished u-1 ${new Date(NOW).toISOString()}`, "autolink u-1", "afterlink u-1", "saved u-1"]);
   });
 
   // BACKLOG-3658 atomic import: nothing was written, so nothing to link.

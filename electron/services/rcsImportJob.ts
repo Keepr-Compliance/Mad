@@ -380,13 +380,16 @@ export class RcsImportJob {
    * The phone gate. Records the conversation as matched when any number shown
    * on the page equals any number of any transaction contact.
    */
-  match(conversationId: string, numbers: string[]): string[] {
+  match(conversationId: string, numbers: string[], cacheAllow?: (numbers: string[]) => boolean): string[] {
     this.participantNumbers.set(conversationId, participantKey(numbers.slice(0, 50)).split(",").filter(Boolean));
     if (this.kind === "cache") {
       // BACKLOG-3658: every chat with a number is kept (no contact gate); the
       // numbers recorded here are the ONLY numbers its /chat and images use.
+      // P3b: with the contacts-only flag on, `cacheAllow` keeps only chats
+      // with a transaction contact.
       this.progress.checked += 1;
-      if ((this.participantNumbers.get(conversationId) ?? []).length > 0) {
+      const recorded = this.participantNumbers.get(conversationId) ?? [];
+      if (recorded.length > 0 && (!cacheAllow || cacheAllow(recorded))) {
         if (!this.matched.has(conversationId)) this.progress.matched += 1;
         this.matched.set(conversationId, []);
       }

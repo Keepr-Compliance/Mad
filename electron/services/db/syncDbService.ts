@@ -18,6 +18,15 @@ import {
   RCS_CLEAR_LINKED_TRANSACTIONS_SQL,
   RCS_CLEAR_FILE_REFERENCED_SQL,
   RCS_STAGING_PUT_CHAT_SQL,
+  RCS_CONSENT_GET_SQL,
+  RCS_CONSENT_ENSURE_SQL,
+  RCS_CONSENT_SET_SQL,
+  RCS_CONSENT_SET_CONTACTS_ONLY_SQL,
+  RCS_CONSENT_SET_AUTO_DELETE_SQL,
+  RCS_UNLINKED_OLD_THREADS_SQL,
+  RCS_THREADS_ATTACHMENT_PATHS_SQL,
+  RCS_THREADS_DELETE_ATTACHMENTS_SQL,
+  RCS_THREADS_DELETE_MESSAGES_SQL,
   RCS_STAGING_PUT_MESSAGE_SQL,
   RCS_STAGING_HAS_MESSAGE_SQL,
   RCS_STAGING_PUT_IMAGE_SQL,
@@ -465,6 +474,69 @@ export function updateRcsCacheState(
       db.prepare(RCS_CACHE_STATE_SET_EXTENSION_SQL).run(e.version ?? null, e.seenAt ?? null, e.pairedAt ?? null, userId);
     }
   })();
+}
+
+// ============================================
+// BACKLOG-3658 P3b: consent + cache options
+// ============================================
+
+export interface RcsConsent {
+  consentAt: string | null;
+  consentVersion: number | null;
+  contactsOnly: boolean;
+  /** null = auto-delete off. */
+  autoDeleteDays: number | null;
+}
+
+export function getRcsConsent(userId: string): RcsConsent | null {
+  const db = ensureDb();
+  const row = db.prepare(RCS_CONSENT_GET_SQL).get(userId) as
+    | { consentAt: string | null; consentVersion: number | null; contactsOnly: number; autoDeleteDays: number | null }
+    | undefined;
+  if (!row) return null;
+  return {
+    consentAt: row.consentAt,
+    consentVersion: row.consentVersion,
+    contactsOnly: row.contactsOnly === 1,
+    autoDeleteDays: row.autoDeleteDays,
+  };
+}
+
+/** Record (version) or withdraw (null) the user's consent; options are kept. */
+export function setRcsConsent(userId: string, version: number | null, nowIso: string): void {
+  const db = ensureDb();
+  db.transaction(() => {
+    db.prepare(RCS_CONSENT_ENSURE_SQL).run(userId);
+    db.prepare(RCS_CONSENT_SET_SQL).run(version === null ? null : nowIso, version, userId);
+  })();
+}
+
+export function setRcsCacheOptions(userId: string, patch: { contactsOnly?: boolean; autoDeleteDays?: number | null }): void {
+  const db = ensureDb();
+  db.transaction(() => {
+    db.prepare(RCS_CONSENT_ENSURE_SQL).run(userId);
+    if (patch.contactsOnly !== undefined) db.prepare(RCS_CONSENT_SET_CONTACTS_ONLY_SQL).run(patch.contactsOnly ? 1 : 0, userId);
+    if (patch.autoDeleteDays !== undefined) db.prepare(RCS_CONSENT_SET_AUTO_DELETE_SQL).run(patch.autoDeleteDays, userId);
+  })();
+}
+
+/** BACKLOG-3658 P3b: the database side of the optional auto-delete (rcsClearService.clearUnlinkedOldChats). */
+export function rcsAutoDeleteDbOps(): import("../rcsClearService").RcsAutoDeleteDbOps {
+  const db = ensureDb();
+  return {
+    inTransaction: <T>(fn: () => T): T => db.transaction(fn)(),
+    unlinkedOldThreads: (userId, cutoffIso) =>
+      (db.prepare(RCS_UNLINKED_OLD_THREADS_SQL).all(userId, userId, userId, userId, cutoffIso) as Array<{ threadId: string }>)
+        .map((r) => r.threadId),
+    attachmentPaths: (userId, threadIds) =>
+      (db.prepare(RCS_THREADS_ATTACHMENT_PATHS_SQL).all(userId, JSON.stringify(threadIds)) as Array<{ storagePath: string | null }>)
+        .map((r) => r.storagePath)
+        .filter((p): p is string => typeof p === "string" && p.length > 0),
+    deleteAttachments: (userId, threadIds) =>
+      db.prepare(RCS_THREADS_DELETE_ATTACHMENTS_SQL).run(userId, JSON.stringify(threadIds)).changes,
+    deleteMessages: (userId, threadIds) => db.prepare(RCS_THREADS_DELETE_MESSAGES_SQL).run(userId, JSON.stringify(threadIds)).changes,
+    fileStillReferenced: (storagePath) => attachmentFileReferenced(storagePath),
+  };
 }
 
 /** Force re-import (3657): forget the cache position and the own number. */

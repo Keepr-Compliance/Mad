@@ -723,6 +723,8 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
       },
       onJobEnded: (e) => void ended.push({ state: e.snapshot.state, kind: e.kind, userId: e.userId }),
       onJobFinished: () => void focus.push("front"),
+      // P3b contacts-only flag: this test number is not a transaction contact.
+      cacheChatAllowed: (_jobId, _userId, numbers) => !numbers.includes("+15555550199"),
       jobs: new RcsJobRegistry(),
     });
     expect(await bridge.start(0)).toBe("listening");
@@ -763,6 +765,16 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
     }));
     expect(reply.status).toBe(410);
     expect(stagedFor).toEqual([]);
+  });
+
+  // BACKLOG-3658 P3b: with the contacts-only flag on, a chat without a
+  // transaction contact is not matched (so never staged). Mutation: the
+  // filter not passed to job.match → red.
+  it("contacts-only: a chat the filter refuses is not matched and cannot be sent", async () => {
+    const match = await request(port, "POST", `/job/${jobId}/match`, EXT, JSON.stringify({ conversationId: CHAT.conversationId, numbers: ["(555) 555-0199"] }));
+    expect(match.body).toEqual({ matched: false, contactIds: [] });
+    expect((await request(port, "POST", `/job/${jobId}/chat`, EXT, CHAT_JSON)).status).toBe(403);
+    expect(cacheChats).toEqual([]);
   });
 
   it("another user signed in meanwhile: nothing stored, the Sync is cancelled, its end announced once", async () => {

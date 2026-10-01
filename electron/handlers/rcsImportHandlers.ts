@@ -47,6 +47,8 @@ import {
 } from "../services/rcsExtensionDelivery";
 import {
   cacheWindow,
+  consentIsCurrent,
+  RCS_CONSENT_VERSION,
   cancelOnSessionChange,
   decideCacheStart,
   handleCacheJobEnded,
@@ -55,7 +57,13 @@ import {
 import { onSessionChanged } from "../services/authEvents";
 import { autoLinkNewMessagesForUser } from "../services/autoLinkService";
 import sessionService from "../services/sessionService";
-import { clearGoogleMessagesWebData, runWithWritesPaused, type RcsClearResult } from "../services/rcsClearService";
+import {
+  clearGoogleMessagesWebData,
+  clearUnlinkedOldChats,
+  RCS_AUTO_DELETE_DAYS,
+  runWithWritesPaused,
+  type RcsClearResult,
+} from "../services/rcsClearService";
 import transactionService from "../services/transactionService";
 import { bringAppToFront, bringAppToFrontOrFlash } from "../utils/bringAppToFront";
 import { wrapHandler } from "../utils/wrapHandler";
@@ -194,6 +202,33 @@ const commitWriter: RcsCommitWriter = {
 
 /** The limits each cache job was started with (frozen at start; used by its commit). */
 const cacheLimitsByJob = new Map<string, CacheLimits>();
+/** P3b: each cache job's options, frozen at start (contacts-only flag, auto-delete). */
+const cacheOptionsByJob = new Map<string, { contactsOnly: boolean; autoDeleteDays: number | null }>();
+
+/** P3b: the attachments folder rules shared by the clears. */
+function clearFiles() {
+  return {
+    attachmentsRoot: mediaDeps.attachmentsDir(),
+    resolve: (p: string) => (path.isAbsolute(p) ? p : path.join(app.getPath("userData"), p)),
+    deleteFile: (abs: string) => {
+      try {
+        fs.unlinkSync(abs);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  };
+}
+
+/** P3b: after the auto-link, the optional auto-delete of old chats linked to nothing. */
+async function afterCacheLinked(jobId: string, userId: string): Promise<void> {
+  const options = cacheOptionsByJob.get(jobId);
+  cacheOptionsByJob.delete(jobId);
+  if (!options?.autoDeleteDays) return;
+  const cutoff = new Date(Date.now() - options.autoDeleteDays * 24 * 60 * 60 * 1000).toISOString();
+  clearUnlinkedOldChats(userId, cutoff, databaseService.rcsAutoDeleteDbOps(), clearFiles(), (m) => void logService.info(m, LOG_TAG));
+}
 
 async function commitCacheJob(jobId: string, userId: string): Promise<void> {
   const limits = cacheLimitsByJob.get(jobId);
@@ -214,6 +249,7 @@ async function commitCacheJob(jobId: string, userId: string): Promise<void> {
 
 async function discardCacheJob(jobId: string): Promise<void> {
   cacheLimitsByJob.delete(jobId);
+  cacheOptionsByJob.delete(jobId);
   await cacheStaging().discard(jobId);
 }
 
@@ -330,10 +366,12 @@ async function startCacheJobOnce(opts: { sinceDays?: unknown }): Promise<
 > {
   const userId = await currentUserId();
   const state = userId ? databaseService.getRcsCacheState(userId) : null;
+  // P3b: Keepr's consent record is the only gate.
+  const consent = userId ? databaseService.getRcsConsent(userId) : null;
   const active = bridge.activeJob();
   const decision = decideCacheStart({
     userId,
-    optedIn: !!state?.optedInAt,
+    consentVersion: consent?.consentVersion,
     activeLabel: active ? active.label ?? "" : null,
     writesPaused: bridge.writesArePaused,
   });
@@ -354,6 +392,10 @@ async function startCacheJobOnce(opts: { sinceDays?: unknown }): Promise<
   });
   if (!job) return { ok: false, status: 409, error: "already_syncing", message: "Keepr is already syncing." };
   cacheLimitsByJob.set(job.jobId, window.limits);
+  cacheOptionsByJob.set(job.jobId, {
+    contactsOnly: consent?.contactsOnly === true,
+    autoDeleteDays: consent?.autoDeleteDays ?? null,
+  });
   if (window.devOverrideDays !== null) {
     void logService.warn(`[RcsCache] DEV window override: ${window.devOverrideDays} days`, LOG_TAG);
   }
@@ -362,6 +404,9 @@ async function startCacheJobOnce(opts: { sinceDays?: unknown }): Promise<
 
 const bridge = new RcsExtensionBridge({
   importChat: (chat, transactionId, people) => importChat(chat, transactionId, deps, people),
+  // P3b: the contacts-only flag (off by default), frozen per job.
+  cacheChatAllowed: (jobId, userId, numbers) =>
+    cacheOptionsByJob.get(jobId)?.contactsOnly ? databaseService.rcsNumbersMatchLiveContact(userId, numbers) : true,
   // BACKLOG-3658: a cache job STAGES; only a finished job commits (atomic).
   importCacheChat: async (chat, userId, people, jobId) =>
     cacheStaging().stageChat(jobId, userId, chat, people, rcsChatHash(people.numbers)),
@@ -391,6 +436,7 @@ const bridge = new RcsExtensionBridge({
       );
       release();
       cacheLimitsByJob.delete(jobId);
+      cacheOptionsByJob.delete(jobId);
       void cacheStaging().abandon(jobId).catch(() => undefined);
     }, RCS_CACHE_SAVE_TIMEOUT_MS);
     hung.unref?.();
@@ -400,6 +446,7 @@ const bridge = new RcsExtensionBridge({
       commit: commitCacheJob,
       discard: discardCacheJob,
       autoLink: (userId) => autoLinkNewMessagesForUser(userId),
+      afterLink: (userId) => afterCacheLinked(jobId, userId),
       // SR S1: open views refetch only once the texts are saved AND linked.
       onSaved: () => hostWindows.broadcast(RCS_DATA_CHANGED_CHANNEL, { reason: "cache-saved" }),
       now: () => Date.now(),
@@ -473,18 +520,7 @@ export async function clearGoogleMessagesWebTexts(userId: string): Promise<RcsCl
     const result = clearGoogleMessagesWebData(
       userId,
       databaseService.rcsClearDbOps(),
-      {
-        attachmentsRoot: mediaDeps.attachmentsDir(),
-        resolve: (p) => (path.isAbsolute(p) ? p : path.join(app.getPath("userData"), p)),
-        deleteFile: (abs) => {
-          try {
-            fs.unlinkSync(abs);
-            return true;
-          } catch {
-            return false;
-          }
-        },
-      },
+      clearFiles(),
       (m) => void logService.info(m, LOG_TAG),
     );
     // BACKLOG-3658: the next cache Sync starts over (60 days) and re-learns the own number.
@@ -594,7 +630,40 @@ export function registerRcsImportHandlers(): void {
       const optedIn = argsObject(args).optedIn === true;
       const userId = await currentUserId();
       if (!userId) return { success: false, error: "Sign in to Keepr first." };
-      databaseService.updateRcsCacheState(userId, { optedIn });
+      // Developer shortcut kept from P1: it records (or withdraws) the CURRENT consent.
+      databaseService.setRcsConsent(userId, optedIn ? RCS_CONSENT_VERSION : null, new Date().toISOString());
+      return { success: true };
+    }, { module: LOG_TAG }),
+  );
+
+  // P3b: the consent the user read and accepted (version of the text shown),
+  // or withdrawn (version null). An out-of-date version is refused.
+  ipcMain.handle(
+    "rcs-import:set-cache-consent",
+    wrapHandler(async (_event, args: unknown): Promise<{ success: boolean; error?: string }> => {
+      const version = argsObject(args).version;
+      const userId = await currentUserId();
+      if (!userId) return { success: false, error: "Sign in to Keepr first." };
+      if (version !== null && version !== RCS_CONSENT_VERSION) {
+        return { success: false, error: "This consent text is out of date. Close and open Sync Android again." };
+      }
+      databaseService.setRcsConsent(userId, version as number | null, new Date().toISOString());
+      return { success: true };
+    }, { module: LOG_TAG }),
+  );
+
+  // P3b: cache options. autoDelete: a user setting (off by default; 90 days).
+  // contactsOnly: a feature flag, settable only in a development build.
+  ipcMain.handle(
+    "rcs-import:set-cache-options",
+    wrapHandler(async (_event, args: unknown): Promise<{ success: boolean; error?: string }> => {
+      const a = argsObject(args);
+      const userId = await currentUserId();
+      if (!userId) return { success: false, error: "Sign in to Keepr first." };
+      const patch: { autoDeleteDays?: number | null; contactsOnly?: boolean } = {};
+      if (typeof a.autoDelete === "boolean") patch.autoDeleteDays = a.autoDelete ? RCS_AUTO_DELETE_DAYS : null;
+      if (typeof a.contactsOnly === "boolean" && !app.isPackaged) patch.contactsOnly = a.contactsOnly;
+      databaseService.setRcsCacheOptions(userId, patch);
       return { success: true };
     }, { module: LOG_TAG }),
   );
@@ -604,14 +673,19 @@ export function registerRcsImportHandlers(): void {
     wrapHandler(async (): Promise<RcsExtensionStateResult> => {
       const userId = await currentUserId();
       const state = userId ? databaseService.getRcsCacheState(userId) : null;
+      const consent = userId ? databaseService.getRcsConsent(userId) : null;
       return {
         success: true,
         state: {
           extensionVersion: extensionPresence.version ?? state?.extensionVersion ?? null,
           extensionSeenAt: extensionPresence.seenAt ?? state?.extensionSeenAt ?? null,
           pairedAt: extensionPresence.pairedAt ?? state?.pairedAt ?? null,
-          optedIn: !!state?.optedInAt,
+          optedIn: consentIsCurrent(consent?.consentVersion),
           lastCacheFinishedAt: state?.lastCacheFinishedAt ?? null,
+          consentVersion: consent?.consentVersion ?? null,
+          consentRequired: RCS_CONSENT_VERSION,
+          consentAt: consent?.consentAt ?? null,
+          autoDeleteDays: consent?.autoDeleteDays ?? null,
         },
       };
     }, { module: LOG_TAG }),

@@ -353,6 +353,81 @@ export const RCS_STAGING_DELETE_ALL_SQL = [
   sql`DELETE FROM rcs_cache_staging_chats`,
 ] as const;
 
+// ============================================
+// BACKLOG-3658 P3b: consent + cache options (rcs_consent), and the optional
+// auto-delete of old chats linked to nothing.
+// ============================================
+
+/** Parameters: user id. */
+export const RCS_CONSENT_GET_SQL = sql`
+    SELECT consent_at AS consentAt, consent_version AS consentVersion,
+           contacts_only AS contactsOnly, auto_delete_days AS autoDeleteDays
+    FROM rcs_consent WHERE user_id = ?
+  `;
+
+/** Parameters: user id. */
+export const RCS_CONSENT_ENSURE_SQL = sql`INSERT OR IGNORE INTO rcs_consent (user_id) VALUES (?)`;
+
+/** Parameters: consent_at (NULL withdraws), version (NULL withdraws), user id. */
+export const RCS_CONSENT_SET_SQL = sql`
+    UPDATE rcs_consent SET consent_at = ?, consent_version = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?
+  `;
+
+/** Parameters: contacts_only (0/1), user id. */
+export const RCS_CONSENT_SET_CONTACTS_ONLY_SQL = sql`
+    UPDATE rcs_consent SET contacts_only = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?
+  `;
+
+/** Parameters: auto_delete_days (NULL = off), user id. */
+export const RCS_CONSENT_SET_AUTO_DELETE_SQL = sql`
+    UPDATE rcs_consent SET auto_delete_days = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?
+  `;
+
+/**
+ * Parameters: user id (four times), cutoff ISO. The user's gmweb2 chats
+ * (threads) linked to NOTHING — no thread-level link and no link on any of
+ * its messages — whose LAST message is older than the cutoff.
+ */
+export const RCS_UNLINKED_OLD_THREADS_SQL = sql`
+    SELECT m.thread_id AS threadId
+    FROM messages m
+    WHERE m.user_id = ? AND m.external_id LIKE 'gmweb2:%' AND m.thread_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM communications c
+        WHERE c.user_id = ? AND c.message_id IS NULL AND c.thread_id = m.thread_id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM communications c JOIN messages m2 ON m2.id = c.message_id
+        WHERE c.user_id = ? AND m2.user_id = ? AND m2.thread_id = m.thread_id
+      )
+    GROUP BY m.thread_id
+    HAVING MAX(m.sent_at) < ?
+  `;
+
+/** Parameters: user id, JSON array of thread ids. */
+export const RCS_THREADS_ATTACHMENT_PATHS_SQL = sql`
+    SELECT a.storage_path AS storagePath FROM attachments a
+    WHERE a.message_id IN (
+      SELECT m.id FROM messages m
+      WHERE m.user_id = ? AND m.external_id LIKE 'gmweb2:%' AND m.thread_id IN (SELECT value FROM json_each(?))
+    )
+  `;
+
+/** Parameters: user id, JSON array of thread ids. */
+export const RCS_THREADS_DELETE_ATTACHMENTS_SQL = sql`
+    DELETE FROM attachments
+    WHERE message_id IN (
+      SELECT m.id FROM messages m
+      WHERE m.user_id = ? AND m.external_id LIKE 'gmweb2:%' AND m.thread_id IN (SELECT value FROM json_each(?))
+    )
+  `;
+
+/** Parameters: user id, JSON array of thread ids. Texts and reactions. */
+export const RCS_THREADS_DELETE_MESSAGES_SQL = sql`
+    DELETE FROM messages
+    WHERE user_id = ? AND external_id LIKE 'gmweb2:%' AND thread_id IN (SELECT value FROM json_each(?))
+  `;
+
 /**
  * BACKLOG-3658: does any of these E.164 numbers belong to a contact on one of
  * the user's LIVE transactions (the shared live-transaction predicate;

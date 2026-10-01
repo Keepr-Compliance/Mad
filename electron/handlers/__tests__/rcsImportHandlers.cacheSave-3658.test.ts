@@ -70,6 +70,7 @@ jest.mock("../../services/databaseService", () => ({
   __esModule: true,
   default: {
     getRcsCacheState: () => ({ optedInAt: "2026-09-01T00:00:00.000Z", lastCacheFinishedAt: null, ownNumber: null }),
+    getRcsConsent: () => ({ consentAt: "2026-09-01T00:00:00.000Z", consentVersion: 1, contactsOnly: false, autoDeleteDays: null }),
     updateRcsCacheState: () => undefined,
     rcsStagingDbOps: () => ({}),
     getTransactionById: async () => ({ id: "tx-1", user_id: "user-1" }),

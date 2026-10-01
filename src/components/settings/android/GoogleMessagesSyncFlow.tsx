@@ -13,6 +13,12 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { rcsImportService } from "../../../services/rcsImportService";
 import type { RcsExtensionState, RcsJobInfo } from "../../../../electron/types/ipc/window-api-rcs-import";
 import { extensionInstalled, googleMessagesStep } from "./googleMessagesSyncSteps";
+import {
+  RCS_CONSENT_AGREE,
+  RCS_CONSENT_COPY_VERSION,
+  RCS_CONSENT_PARAGRAPHS,
+  RCS_CONSENT_TITLE,
+} from "./rcsConsentCopy";
 
 const POLL_MS = 3000;
 
@@ -120,6 +126,16 @@ export function GoogleMessagesSyncFlow({ onClose, onUseCompanion, pollMs = POLL_
     setJob(r.data);
   }, []);
 
+  const agree = useCallback(async () => {
+    setError(null);
+    const r = await rcsImportService.setCacheConsent(RCS_CONSENT_COPY_VERSION);
+    if (!r.success) {
+      setError(r.error ?? "Keepr could not save your answer.");
+      return;
+    }
+    await refresh();
+  }, [refresh]);
+
   const cancel = useCallback(async () => {
     if (job) await rcsImportService.cancelJob(job.jobId);
   }, [job]);
@@ -172,6 +188,27 @@ export function GoogleMessagesSyncFlow({ onClose, onUseCompanion, pollMs = POLL_
               Use another texting app? Use the Keepr companion app instead
             </button>
           )}
+        </>
+      )}
+
+      {step === "consent" && (
+        <>
+          <h2 className="text-lg font-bold text-gray-900">{RCS_CONSENT_TITLE}</h2>
+          <div className="flex flex-col gap-2" data-testid="gm-consent-text">
+            {RCS_CONSENT_PARAGRAPHS.map((p) => (
+              <p key={p} className="text-sm text-gray-800 leading-relaxed">
+                {p}
+              </p>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <button type="button" className={`flex-1 ${secondary}`} onClick={onClose}>
+              Not now
+            </button>
+            <button type="button" className={`flex-1 ${primary}`} onClick={() => void agree()}>
+              {RCS_CONSENT_AGREE}
+            </button>
+          </div>
         </>
       )}
 

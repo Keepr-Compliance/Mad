@@ -162,6 +162,54 @@ export function clearGoogleMessagesWebData(
   return result;
 }
 
+// ---------------------------------------------------------------------------
+// BACKLOG-3658 P3b: optional auto-delete (a setting, OFF by default; 90 days
+// when on). After a cache Sync and its auto-link, a gmweb2 chat linked to
+// NOTHING whose last message is older than the cutoff is deleted (texts,
+// reactions, attachments; files only when no other row uses them). Chats
+// linked to any transaction, and every other source, are never touched.
+// ---------------------------------------------------------------------------
+
+/** Auto-delete's age when it is on. */
+export const RCS_AUTO_DELETE_DAYS = 90;
+
+export interface RcsAutoDeleteDbOps {
+  inTransaction<T>(fn: () => T): T;
+  unlinkedOldThreads(userId: string, cutoffIso: string): string[];
+  attachmentPaths(userId: string, threadIds: string[]): string[];
+  deleteAttachments(userId: string, threadIds: string[]): number;
+  deleteMessages(userId: string, threadIds: string[]): number;
+  fileStillReferenced(storagePath: string): boolean;
+}
+
+export function clearUnlinkedOldChats(
+  userId: string,
+  cutoffIso: string,
+  db: RcsAutoDeleteDbOps,
+  files: RcsClearFs,
+  log: (message: string) => void = () => {},
+): { chats: number; messages: number; filesDeleted: number } {
+  const root = path.resolve(files.attachmentsRoot) + path.sep;
+  const done = db.inTransaction(() => {
+    const threads = db.unlinkedOldThreads(userId, cutoffIso);
+    if (threads.length === 0) return { threads, paths: [] as string[], messages: 0 };
+    const paths = db.attachmentPaths(userId, threads);
+    db.deleteAttachments(userId, threads);
+    const messages = db.deleteMessages(userId, threads);
+    return { threads, paths, messages };
+  });
+  let filesDeleted = 0;
+  for (const p of new Set(done.paths)) {
+    const abs = path.resolve(files.resolve(p));
+    if (!abs.startsWith(root) || db.fileStillReferenced(p)) continue;
+    if (files.deleteFile(abs)) filesDeleted += 1;
+  }
+  if (done.threads.length > 0) {
+    log(`[RcsClear] Auto-delete: ${done.threads.length} chats linked to nothing, ${done.messages} messages, ${filesDeleted} files`);
+  }
+  return { chats: done.threads.length, messages: done.messages, filesDeleted };
+}
+
 /** The shared Force re-import result (Android + Google Messages for Web). */
 export interface SharedForceClearResult {
   messagesDeleted: number;

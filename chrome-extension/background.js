@@ -220,6 +220,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
+// BACKLOG-3658 P3b: on first install, show the first-run page (what the
+// extension does; the consent itself is given in Keepr).
+if (chrome.runtime.onInstalled) {
+  chrome.runtime.onInstalled.addListener((details) => {
+    if (details && details.reason === "install" && chrome.runtime.openOptionsPage) {
+      try {
+        void chrome.runtime.openOptionsPage();
+      } catch (_err) {
+        // The page is reachable from the Extensions page anyway.
+      }
+    }
+  });
+}
+
 // BACKLOG-3658: the worker started (install, browser start, or a wake-up):
 // tell Keepr the extension is installed. At most once a minute.
 void sayHello(false).catch(() => {});

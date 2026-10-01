@@ -197,6 +197,11 @@ export interface RcsExtensionBridgeOptions {
     numbers: string[],
     jobId: string,
   ) => Promise<RcsImageResult | { stored: false; reason: "not_a_contact" }>;
+  /**
+   * BACKLOG-3658 P3b: the contacts-only flag (off by default). When given, a
+   * cache job keeps only the chats it allows (numbers in E.164).
+   */
+  cacheChatAllowed?: (jobId: string, userId: string, numbers: string[]) => boolean;
   /** BACKLOG-3658: the signed-in user now; a job of another user is cancelled. */
   currentUserId?: () => Promise<string | null>;
   /** BACKLOG-3658: a job ended (finished, failed or cancelled). Once per job. */
@@ -743,7 +748,10 @@ export class RcsExtensionBridge {
           return;
         }
         const shown = (numbers as unknown[]).filter((n): n is string => typeof n === "string").slice(0, 50);
-        const contactIds = job.match(conversationId, shown);
+        const allow = job.kind === "cache" && job.userId && this.options.cacheChatAllowed
+          ? (n: string[]) => this.options.cacheChatAllowed!(job.jobId, job.userId as string, n)
+          : undefined;
+        const contactIds = job.match(conversationId, shown, allow);
         this.emitJob(job.snapshot());
         // A cache job keeps every chat with a number (BACKLOG-3658).
         const matched = job.kind === "cache" ? job.isMatched(conversationId) : contactIds.length > 0;

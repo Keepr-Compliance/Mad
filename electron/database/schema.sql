@@ -783,6 +783,23 @@ CREATE TABLE IF NOT EXISTS rcs_cache_placed_files (
   placed_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- BACKLOG-3658 P3b: the user's consent to the Google Messages cache, and its
+-- options. Keepr's record is the ONLY gate for a cache Sync: a consent_version
+-- below the current one blocks the NEXT Sync (re-consent). contacts_only
+-- (feature flag, off) keeps only chats with a transaction contact;
+-- auto_delete_days (off = NULL; 90 when on) deletes chats linked to nothing
+-- whose last message is older than that. A new table (not a column) so this
+-- branch needs no versioned migration; it folds into one at merge.
+CREATE TABLE IF NOT EXISTS rcs_consent (
+  user_id TEXT PRIMARY KEY,
+  consent_at DATETIME,
+  consent_version INTEGER,
+  contacts_only INTEGER NOT NULL DEFAULT 0,
+  auto_delete_days INTEGER,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS message_thread_names (
   user_id TEXT NOT NULL,
   thread_id TEXT NOT NULL,               -- Matches messages.thread_id ("macos-chat-<chat ROWID>")

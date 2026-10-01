@@ -57,6 +57,11 @@ export const rcsImportBridge = {
   setCacheOptIn: (args: { optedIn: boolean }): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke("rcs-import:set-cache-opt-in", args),
   getExtensionState: (): Promise<RcsExtensionStateResult> => ipcRenderer.invoke("rcs-import:get-extension-state"),
+  /** P3b: consent and cache options. */
+  setCacheConsent: (args: { version: number | null }): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke("rcs-import:set-cache-consent", args),
+  setCacheOptions: (args: { autoDelete?: boolean; contactsOnly?: boolean }): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke("rcs-import:set-cache-options", args),
 
   /** BACKLOG-3659: the extension, delivered to Downloads (Release 1: unpacked). */
   prepareExtension: (): Promise<RcsPrepareExtensionResult> => ipcRenderer.invoke("rcs-import:prepare-extension"),

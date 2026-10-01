@@ -86,8 +86,15 @@ export interface RcsExtensionState {
   extensionVersion: string | null;
   extensionSeenAt: string | null;
   pairedAt: string | null;
+  /** The consent is current (P3b). */
   optedIn: boolean;
   lastCacheFinishedAt: string | null;
+  /** P3b: the version the user accepted (null: never / withdrawn), and the one required now. */
+  consentVersion?: number | null;
+  consentRequired?: number;
+  consentAt?: string | null;
+  /** P3b: auto-delete of old chats linked to nothing (null = off). */
+  autoDeleteDays?: number | null;
 }
 
 export type RcsExtensionStateResult =
@@ -132,6 +139,10 @@ export interface WindowApiRcsImport {
   startCacheJob: (args?: { sinceDays?: number }) => Promise<RcsImportJobResult>;
   /** BACKLOG-3658: the local opt-in to keep a copy of recent chats. */
   setCacheOptIn: (args: { optedIn: boolean }) => Promise<{ success: boolean; error?: string }>;
+  /** P3b: accept the consent text of `version`, or withdraw (null). */
+  setCacheConsent?: (args: { version: number | null }) => Promise<{ success: boolean; error?: string }>;
+  /** P3b: cache options (auto-delete; contacts-only in a development build only). */
+  setCacheOptions?: (args: { autoDelete?: boolean; contactsOnly?: boolean }) => Promise<{ success: boolean; error?: string }>;
   /** BACKLOG-3658: is the extension installed / paired, opted in, last cache Sync. */
   getExtensionState: () => Promise<RcsExtensionStateResult>;
   /** BACKLOG-3659: copy the extension to Downloads/"Keepr Extension". */

@@ -19,6 +19,7 @@ const handlers = new Map<string, (event: unknown, args?: unknown) => Promise<unk
 const created: Array<{ userId: string; since: string }> = [];
 const electronApp = { isPackaged: true, getPath: () => "/tmp/keepr-test" };
 let planStart: string | null = "2026-07-01T00:00:00.000Z";
+let mockConsentVersion: number | null = 1;
 
 jest.mock("electron", () => ({
   app: electronApp,
@@ -47,6 +48,7 @@ jest.mock("../../services/databaseService", () => ({
   __esModule: true,
   default: {
     getRcsCacheState: () => ({ optedInAt: "2026-09-01T00:00:00.000Z", lastCacheFinishedAt: null, ownNumber: null }),
+    getRcsConsent: () => ({ consentAt: "2026-09-01T00:00:00.000Z", consentVersion: mockConsentVersion, contactsOnly: false, autoDeleteDays: null }),
     rcsStagingDbOps: () => ({ deleteAll: () => undefined, journalRows: () => [] }),
   },
 }));
@@ -78,6 +80,7 @@ beforeAll(() => registerRcsImportHandlers());
 beforeEach(() => {
   created.length = 0;
   planStart = "2026-07-01T00:00:00.000Z";
+  mockConsentVersion = 1;
 });
 
 const start = (args?: unknown) => handlers.get("rcs-import:start-cache-job")!({}, args) as Promise<{ success: boolean }>;
@@ -87,6 +90,16 @@ describe("rcs-import:start-cache-job window (BACKLOG-3658)", () => {
     electronApp.isPackaged = true;
     expect((await start()).success).toBe(true);
     expect(created[0]).toEqual({ userId: "user-1", since: "2026-07-01T00:00:00.000Z" });
+  });
+
+  // P3b: Keepr's consent record is the only gate. Mutation: the handler not
+  // reading rcs_consent (or ignoring it) → red.
+  it("no current consent: the cache Sync is refused and no job is created (K6)", async () => {
+    mockConsentVersion = null;
+    const r = (await start()) as { success: boolean; error?: string };
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/agree/);
+    expect(created).toEqual([]);
   });
 
   it("packaged: { sinceDays } is ignored (H1)", async () => {

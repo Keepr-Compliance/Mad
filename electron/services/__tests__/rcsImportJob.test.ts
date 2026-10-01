@@ -288,3 +288,21 @@ describe("the cache job (BACKLOG-3658)", () => {
     expect(jobs.create("tx-1", CONTACTS, null, null, "u-9").userId).toBe("u-9");
   });
 });
+
+// BACKLOG-3658 P3b: the contacts-only flag (off by default). Mutation: the
+// filter ignored in match() → red.
+describe("cache job: the contacts-only filter", () => {
+  it("keeps only the chats the filter allows; without it, every chat with a number", () => {
+    const registry = new RcsJobRegistry();
+    const job = registry.createCache("user-1", "2026-08-01T00:00:00.000Z", []);
+    job.claim(Date.now());
+    job.match("conv-a", ["+15555550101"], (n) => n.includes("+15555550101"));
+    job.match("conv-b", ["+15555550102"], (n) => n.includes("+15555550101"));
+    job.match("conv-c", ["+15555550103"]);
+    expect(job.isMatched("conv-a")).toBe(true);
+    expect(job.isMatched("conv-b")).toBe(false);
+    expect(job.isMatched("conv-c")).toBe(true);
+    expect(job.progress.checked).toBe(3);
+    expect(job.progress.matched).toBe(2);
+  });
+});

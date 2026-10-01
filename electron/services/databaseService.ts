@@ -2477,6 +2477,23 @@ class DatabaseService implements IDatabaseService {
     return syncDb.rcsStagingDbOps();
   }
 
+  // BACKLOG-3658 P3b: consent + cache options + auto-delete
+  getRcsConsent(userId: string) {
+    return syncDb.getRcsConsent(userId);
+  }
+
+  setRcsConsent(userId: string, version: number | null, nowIso: string) {
+    return syncDb.setRcsConsent(userId, version, nowIso);
+  }
+
+  setRcsCacheOptions(userId: string, patch: Parameters<typeof syncDb.setRcsCacheOptions>[1]) {
+    return syncDb.setRcsCacheOptions(userId, patch);
+  }
+
+  rcsAutoDeleteDbOps() {
+    return syncDb.rcsAutoDeleteDbOps();
+  }
+
   insertReactionRows(rows: Parameters<typeof syncDb.insertReactionRows>[0]) {
     return syncDb.insertReactionRows(rows);
   }

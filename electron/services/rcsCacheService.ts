@@ -101,21 +101,37 @@ export interface CacheStartRefusal {
 }
 
 /**
- * Who may start a cache Sync (from Keepr or from the page's button): a
- * signed-in user who opted in (local), while no Sync runs and no Force
- * re-import is clearing texts.
+ * BACKLOG-3658 P3b: the consent text's version. Raising it (the copy or the
+ * practice changed) makes every user consent again before their NEXT cache
+ * Sync; a Sync already running is not stopped.
+ */
+export const RCS_CONSENT_VERSION = 1;
+
+/** The user's consent is current. */
+export function consentIsCurrent(consentVersion: number | null | undefined): boolean {
+  return typeof consentVersion === "number" && consentVersion >= RCS_CONSENT_VERSION;
+}
+
+/**
+ * Who may start a cache Sync: a signed-in user whose consent (Keepr's record,
+ * the ONLY gate) is current, while no Sync runs and no Force re-import is
+ * clearing texts. A per-transaction Sync does not need it.
  */
 export function decideCacheStart(input: {
   userId: string | null;
-  optedIn: boolean;
+  consentVersion: number | null | undefined;
   activeLabel: string | null | undefined;
   writesPaused: boolean;
 }): { ok: true; userId: string } | CacheStartRefusal {
   if (!input.userId) {
     return { status: 403, error: "signed_out", message: "Sign in to Keepr first." };
   }
-  if (!input.optedIn) {
-    return { status: 403, error: "not_opted_in", message: "Turn on Google Messages sync in Keepr first." };
+  if (!consentIsCurrent(input.consentVersion)) {
+    return {
+      status: 403,
+      error: "consent_needed",
+      message: "Review what Keepr copies from Google Messages and agree first (Dashboard → Sync Android).",
+    };
   }
   if (input.writesPaused) {
     return { status: 503, error: "busy", message: "Keepr is clearing imported texts. Try again in a moment." };
@@ -145,6 +161,8 @@ export interface CacheJobEndedDeps {
   /** BACKLOG-3658: drop the job's staging (cancel / error / user switch). */
   discard: (jobId: string) => Promise<void>;
   autoLink: (userId: string) => Promise<unknown>;
+  /** P3b: after the auto-link (the optional auto-delete). Errors are logged. */
+  afterLink?: (userId: string) => Promise<void>;
   /** SR S1: the texts are saved and linked — open views may refetch now. */
   onSaved?: (userId: string) => void;
   now: () => number;
@@ -195,6 +213,13 @@ export async function handleCacheJobEnded(
     await deps.autoLink(userId);
   } catch (err) {
     deps.log?.(`[RcsCache] Auto-link after the cache Sync failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (deps.afterLink) {
+    try {
+      await deps.afterLink(userId);
+    } catch (err) {
+      deps.log?.(`[RcsCache] After the auto-link: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
   // Even when the auto-link failed, the saved texts are new to open views.
   deps.onSaved?.(userId);

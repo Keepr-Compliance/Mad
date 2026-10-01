@@ -8,6 +8,8 @@
  *   G3 the extension not copied to Downloads when install shows         → "install step"
  *   G4 detection not polled (an installed extension never noticed)       → "install step"
  *   G5 Sync now not starting the cache job, or another job's progress shown → "connect → sync → done"
+ *   C1 (P3b) Sync reachable without the current consent                 → "steps", "consent"
+ *   C2 (P3b) Agree not recording the version shown                      → "consent"
  */
 
 import React from "react";
@@ -21,6 +23,7 @@ let progressListener: ((j: RcsJobInfo) => void) | null = null;
 const mockPrepare = jest.fn();
 const mockStartCache = jest.fn();
 const mockOpenChrome = jest.fn();
+const mockConsent = jest.fn();
 
 jest.mock("../../../../services/rcsImportService", () => ({
   rcsImportService: {
@@ -29,6 +32,7 @@ jest.mock("../../../../services/rcsImportService", () => ({
     showExtensionFolder: async () => undefined,
     openChromeForExtension: (...a: unknown[]) => mockOpenChrome(...a),
     startCacheJob: (...a: unknown[]) => mockStartCache(...a),
+    setCacheConsent: (...a: unknown[]) => mockConsent(...a),
     cancelJob: async () => ({ success: true, data: null }),
     onJobProgress: (cb: (j: RcsJobInfo) => void) => {
       progressListener = cb;
@@ -43,7 +47,10 @@ jest.mock("../../../../services/rcsImportService", () => ({
 const { GoogleMessagesSyncFlow } = require("../GoogleMessagesSyncFlow") as typeof import("../GoogleMessagesSyncFlow");
 
 const NOT_INSTALLED: RcsExtensionState = { extensionVersion: null, extensionSeenAt: null, pairedAt: null, optedIn: false, lastCacheFinishedAt: null };
-const INSTALLED: RcsExtensionState = { ...NOT_INSTALLED, extensionVersion: "0.3.4", extensionSeenAt: "2026-10-01T10:00:00.000Z" };
+const INSTALLED_NO_CONSENT: RcsExtensionState = {
+  ...NOT_INSTALLED, extensionVersion: "0.3.4", extensionSeenAt: "2026-10-01T10:00:00.000Z", consentVersion: null, consentRequired: 1,
+};
+const INSTALLED: RcsExtensionState = { ...INSTALLED_NO_CONSENT, consentVersion: 1, optedIn: true };
 
 function job(over: Partial<RcsJobInfo> = {}): RcsJobInfo {
   return {
@@ -60,17 +67,25 @@ function job(over: Partial<RcsJobInfo> = {}): RcsJobInfo {
 }
 
 beforeEach(() => {
+  jest.clearAllMocks();
   mockState = NOT_INSTALLED;
   mockPrepare.mockResolvedValue({ success: true, data: { folder: "C:\\Users\\u\\Downloads\\Keepr Extension", version: "0.3.4" } });
   mockOpenChrome.mockResolvedValue({ copied: true, opened: true });
   mockStartCache.mockResolvedValue({ success: true, data: job() });
+  mockConsent.mockImplementation(async () => {
+    mockState = INSTALLED;
+    return { success: true };
+  });
 });
 
 describe("googleMessagesStep (G1, G2)", () => {
   it("steps", () => {
     expect(googleMessagesStep({ state: NOT_INSTALLED, job: null, continued: false })).toBe("install");
     expect(googleMessagesStep({ state: INSTALLED, job: null, continued: false })).toBe("connect");
-    expect(googleMessagesStep({ state: NOT_INSTALLED, job: null, continued: true })).toBe("connect");
+    expect(googleMessagesStep({ state: INSTALLED_NO_CONSENT, job: null, continued: false })).toBe("consent");
+    expect(googleMessagesStep({ state: { ...INSTALLED, consentRequired: 2 }, job: null, continued: false })).toBe("consent");
+    expect(googleMessagesStep({ state: { ...NOT_INSTALLED, consentVersion: 1 }, job: null, continued: true })).toBe("connect");
+    expect(googleMessagesStep({ state: NOT_INSTALLED, job: null, continued: true })).toBe("consent");
     expect(googleMessagesStep({ state: INSTALLED, job: job({ state: "running" }), continued: false })).toBe("syncing");
     expect(googleMessagesStep({ state: INSTALLED, job: job({ state: "finished" }), continued: false })).toBe("done");
     expect(googleMessagesStep({ state: INSTALLED, job: job({ state: "cancelled" }), continued: false })).toBe("failed");
@@ -89,6 +104,28 @@ describe("GoogleMessagesSyncFlow", () => {
     mockState = INSTALLED;
     // Installed: the flow moves on to Connect by itself.
     expect(await screen.findByTestId("gm-step-connect")).toBeInTheDocument();
+  });
+
+  it("consent: shown before any Sync; Agree records the version shown, then Connect (C1, C2)", async () => {
+    mockState = INSTALLED_NO_CONSENT;
+    const onClose = jest.fn();
+    render(<GoogleMessagesSyncFlow onClose={onClose} pollMs={20} />);
+    expect(await screen.findByTestId("gm-step-consent")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Sync now" })).not.toBeInTheDocument();
+    expect(screen.getByTestId("gm-consent-text")).toHaveTextContent("ALL your Google Messages conversations");
+    fireEvent.click(screen.getByRole("button", { name: "I agree, sync my texts" }));
+    await waitFor(() => expect(mockConsent).toHaveBeenCalledWith(1));
+    expect(await screen.findByTestId("gm-step-connect")).toBeInTheDocument();
+    expect(mockStartCache).not.toHaveBeenCalled();
+  });
+
+  it("consent: Not now closes without recording anything", async () => {
+    mockState = INSTALLED_NO_CONSENT;
+    const onClose = jest.fn();
+    render(<GoogleMessagesSyncFlow onClose={onClose} pollMs={20} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Not now" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(mockConsent).not.toHaveBeenCalled();
   });
 
   it("connect → Sync now starts the cache job → progress → done with the counts (G5)", async () => {

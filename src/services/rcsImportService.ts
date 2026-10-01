@@ -107,6 +107,30 @@ export const rcsImportService = {
     }
   },
 
+  /** P3b: accept the consent text of `version`, or withdraw (null). */
+  async setCacheConsent(version: number | null): Promise<ApiResult<void>> {
+    const bridge = api();
+    if (!bridge || !bridge.setCacheConsent) return { success: false, error: NOT_AVAILABLE };
+    try {
+      const r = await bridge.setCacheConsent({ version });
+      return r.success ? { success: true } : { success: false, error: r.error ?? "Keepr could not save that." };
+    } catch (err) {
+      return { success: false, error: getErrorMessage(err) };
+    }
+  },
+
+  /** P3b: the auto-delete setting (off by default; 90 days when on). */
+  async setCacheAutoDelete(on: boolean): Promise<ApiResult<void>> {
+    const bridge = api();
+    if (!bridge || !bridge.setCacheOptions) return { success: false, error: NOT_AVAILABLE };
+    try {
+      const r = await bridge.setCacheOptions({ autoDelete: on });
+      return r.success ? { success: true } : { success: false, error: r.error ?? "Keepr could not save that." };
+    } catch (err) {
+      return { success: false, error: getErrorMessage(err) };
+    }
+  },
+
   /** BACKLOG-3659: copy the extension to Downloads/"Keepr Extension". */
   async prepareExtension(): Promise<ApiResult<{ folder: string; version: string }>> {
     const bridge = api();
