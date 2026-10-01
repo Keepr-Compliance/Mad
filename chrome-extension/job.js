@@ -885,13 +885,17 @@
   }
 
   /**
-   * Make a fixed box draggable by pointer (anywhere but its buttons and text
-   * blocks, which keep working). Returns the keyboard moves.
+   * Make a fixed box draggable by pointer. With `io.handle` (founder: the
+   * grip), ONLY the handle starts a drag - the rest of the box keeps the normal
+   * cursor, selectable text and clickable buttons. Without one, anywhere but
+   * its buttons and text blocks. Returns the keyboard moves.
    * @param {HTMLElement} box
    * @param {{view: function(): {width: number, height: number}, size: function(): {width: number, height: number},
-   *   load: function(): ({left: number, top: number}|null), save: function({left: number, top: number}): void}} io
+   *   load: function(): ({left: number, top: number}|null), save: function({left: number, top: number}): void,
+   *   handle?: HTMLElement}} io
    */
   function attachDrag(box, io) {
+    var grip = io.handle || box;
     var drag = null;
     var corner = CORNERS[0];
     function place(p) {
@@ -910,29 +914,31 @@
     var saved = io.load();
     if (saved && typeof saved.left === "number" && typeof saved.top === "number") settle(saved);
 
-    box.addEventListener("pointerdown", function (e) {
+    grip.addEventListener("pointerdown", function (e) {
       if (typeof e.button === "number" && e.button !== 0) return;
       var target = e.target;
-      if (target && target.closest && target.closest("button, a, input, textarea, pre")) return;
+      if (grip === box && target && target.closest && target.closest("button, a, input, textarea, pre")) return;
       var rect = box.getBoundingClientRect();
       var from = box.style.left ? current() : { left: rect.left, top: rect.top };
       drag = { dx: e.clientX - from.left, dy: e.clientY - from.top };
-      if (typeof e.pointerId === "number" && box.setPointerCapture) {
-        try { box.setPointerCapture(e.pointerId); } catch (_e) { /* capture is a nicety */ }
+      if (grip !== box) grip.style.cursor = "grabbing";
+      if (typeof e.pointerId === "number" && grip.setPointerCapture) {
+        try { grip.setPointerCapture(e.pointerId); } catch (_e) { /* capture is a nicety */ }
       }
       if (e.preventDefault) e.preventDefault();
     });
-    box.addEventListener("pointermove", function (e) {
+    grip.addEventListener("pointermove", function (e) {
       if (!drag) return;
       settle({ left: e.clientX - drag.dx, top: e.clientY - drag.dy });
     });
     function end() {
       if (!drag) return;
       drag = null;
+      if (grip !== box) grip.style.cursor = "grab";
       io.save(current());
     }
-    box.addEventListener("pointerup", end);
-    box.addEventListener("pointercancel", end);
+    grip.addEventListener("pointerup", end);
+    grip.addEventListener("pointercancel", end);
 
     return {
       /** Keyboard alternative: the next corner, clockwise from top-right. */
@@ -948,7 +954,81 @@
     };
   }
 
+  // ---------------------------------------------------------------------------
+  // Founder: never two Keepr boxes. A reloaded extension leaves its old content
+  // scripts running in an open tab (another isolated world, so window flags do
+  // not see each other). The page's DOM is shared: the newest instance writes
+  // its token on <html>; an older one sees a different token and steps aside;
+  // a stale box of an older instance is removed when a newer one starts.
+  // ---------------------------------------------------------------------------
+  var OVERLAY_ID = "keepr-job-overlay";
+  var OWNER_ATTR = "data-keepr-job-owner";
+
+  /** Become the page's Keepr box owner; remove a stale box. */
+  function claimPage(doc, token) {
+    if (doc.documentElement) doc.documentElement.setAttribute(OWNER_ATTR, token);
+    var stale = doc.getElementById(OVERLAY_ID);
+    if (stale && stale.parentNode) stale.parentNode.removeChild(stale);
+  }
+
+  /** Still the page's owner? (False once a newer instance claimed it.) */
+  function ownsPage(doc, token) {
+    return !!doc.documentElement && doc.documentElement.getAttribute(OWNER_ATTR) === token;
+  }
+
+  /**
+   * The Keepr box's frame (founder: its look is being redesigned - layout
+   * lives here and in renderOverlay only). A header strip with the drag grip
+   * (the ONLY place with the grab cursor) and the keyboard Move button, then
+   * the panel renderOverlay fills. createElement only.
+   * @param {Document} doc
+   * @returns {{box: HTMLElement, handle: HTMLElement, move: HTMLButtonElement, panel: HTMLElement}}
+   */
+  function buildBox(doc) {
+    var box = doc.createElement("div");
+    box.id = OVERLAY_ID;
+    Object.assign(box.style, {
+      position: "fixed", top: "16px", right: "16px", zIndex: "2147483647",
+      maxWidth: "360px", padding: "6px 14px 10px", borderRadius: "10px",
+      fontFamily: "system-ui, -apple-system, sans-serif", fontSize: "14px",
+      boxShadow: "0 2px 10px rgba(0,0,0,0.25)",
+      maxHeight: "60vh", overflowY: "auto",
+    });
+    var header = doc.createElement("div");
+    header.setAttribute("data-keepr", "header");
+    Object.assign(header.style, { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" });
+    var handle = doc.createElement("div");
+    handle.setAttribute("data-keepr", "drag-handle");
+    handle.setAttribute("aria-hidden", "true");
+    handle.title = "Drag to move";
+    handle.textContent = "⠿";
+    Object.assign(handle.style, {
+      cursor: "grab", touchAction: "none", userSelect: "none", padding: "2px 6px 2px 0",
+      fontSize: "16px", lineHeight: "1", flex: "1 1 auto",
+    });
+    var move = doc.createElement("button");
+    move.type = "button";
+    move.setAttribute("data-keepr", "move");
+    move.setAttribute("aria-label", "Move this box to the next corner");
+    move.title = "Move to the next corner";
+    move.textContent = "Move";
+    Object.assign(move.style, {
+      background: "none", border: "1px solid currentColor",
+      borderRadius: "6px", padding: "0 6px", cursor: "pointer", font: "inherit", fontSize: "12px", color: "inherit",
+    });
+    header.appendChild(handle);
+    header.appendChild(move);
+    var panel = doc.createElement("div");
+    box.appendChild(header);
+    box.appendChild(panel);
+    return { box: box, handle: handle, move: move, panel: panel };
+  }
+
   var api = {
+    buildBox: buildBox,
+    claimPage: claimPage,
+    ownsPage: ownsPage,
+    OVERLAY_ID: OVERLAY_ID,
     renderOverlay: renderOverlay,
     attachDrag: attachDrag,
     clampPosition: clampPosition,
@@ -983,6 +1063,9 @@
   root.__keeprJobInstalled = true;
 
   var STORAGE_KEY = "keepr-job";
+  // This instance's token (see claimPage): the newest instance owns the page.
+  var INSTANCE = String(Date.now()) + "-" + Math.random().toString(36).slice(2);
+  claimPage(document, INSTANCE);
   var running = false;
   // BACKLOG-3661: the page's Send button (content.js) is disabled while a Sync
   // runs in this tab; Keepr refuses a manual Send during any Sync as well.
@@ -1030,33 +1113,21 @@
   var POSITION_KEY = "keepr-overlay-pos";
   function showOverlay(text, isError, extras) {
     if (!document.body) return;
+    // A newer extension instance owns the page: this one shows nothing.
+    if (!ownsPage(document, INSTANCE)) {
+      closeOverlay();
+      return;
+    }
     if (!box) {
-      // The box (fixed, draggable) holds the Move button and the content that
-      // renderOverlay fills; createElement only.
-      box = document.createElement("div");
-      box.id = "keepr-job-overlay";
-      Object.assign(box.style, {
-        position: "fixed", top: "16px", right: "16px", zIndex: "2147483647",
-        maxWidth: "360px", padding: "10px 14px", borderRadius: "10px",
-        fontFamily: "system-ui, -apple-system, sans-serif", fontSize: "14px",
-        boxShadow: "0 2px 10px rgba(0,0,0,0.25)",
-        maxHeight: "60vh", overflowY: "auto", cursor: "move", touchAction: "none",
-      });
-      var move = document.createElement("button");
-      move.type = "button";
-      move.setAttribute("data-keepr", "move");
-      move.setAttribute("aria-label", "Move this box to the next corner");
-      move.title = "Drag the box, or click to move it to the next corner";
-      move.textContent = "Move";
-      Object.assign(move.style, {
-        float: "right", marginLeft: "8px", background: "none", border: "1px solid currentColor",
-        borderRadius: "6px", padding: "0 6px", cursor: "pointer", font: "inherit", fontSize: "12px", color: "inherit",
-      });
-      panel = document.createElement("div");
-      box.appendChild(move);
-      box.appendChild(panel);
+      // One box per page: anything left by an older instance goes first.
+      claimPage(document, INSTANCE);
+      var built = buildBox(document);
+      box = built.box;
+      panel = built.panel;
+      var move = built.move;
       document.body.appendChild(box);
       mover = attachDrag(box, {
+        handle: built.handle,
         view: function () { return { width: root.innerWidth, height: root.innerHeight }; },
         size: function () { var r = box.getBoundingClientRect(); return { width: r.width, height: r.height }; },
         load: function () {

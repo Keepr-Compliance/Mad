@@ -9,6 +9,10 @@
  *   O3 the place not saved at the end of a drag       → "remembers"
  *   O4 a saved place not restored (or not clamped)    → "restores"
  *   O5 the corner cycle stuck / wrong order           → "Move button cycles"
+ *   O6 a drag that starts on the box body (not the grip) → "only the grip drags"
+ *   O7 the grab cursor on the whole box                 → "only the grip drags"
+ *   O8 a stale box of an older extension instance kept,
+ *      or an older instance still showing             → "never two Keepr boxes"
  */
 export {};
 
@@ -27,11 +31,21 @@ function pointer(type: string, x: number, y: number, target?: Element): void {
 let box: HTMLElement;
 let saved: Array<{ left: number; top: number }>;
 
-function setup(load: { left: number; top: number } | null = null) {
+let handle: HTMLElement | undefined;
+
+function setup(load: { left: number; top: number } | null = null, withHandle = false) {
   document.body.innerHTML = "";
   box = document.createElement("div");
   const button = document.createElement("button");
   button.textContent = "Cancel";
+  handle = undefined;
+  if (withHandle) {
+    handle = document.createElement("div");
+    box.appendChild(handle);
+  }
+  const text = document.createElement("div");
+  text.textContent = "Keepr: Chat 1 of 9";
+  box.appendChild(text);
   box.appendChild(button);
   document.body.appendChild(box);
   saved = [];
@@ -40,8 +54,9 @@ function setup(load: { left: number; top: number } | null = null) {
     size: () => SIZE,
     load: () => load,
     save: (p: { left: number; top: number }) => saved.push(p),
+    ...(handle ? { handle } : {}),
   });
-  return { mover, button };
+  return { mover, button, text };
 }
 
 const at = () => ({ left: parseFloat(box.style.left), top: parseFloat(box.style.top) });
@@ -80,6 +95,84 @@ describe("the Keepr box can be dragged", () => {
   it("restores the saved place, clamped to the screen (O4)", () => {
     setup({ left: 5000, top: -20 });
     expect(at()).toEqual({ left: VIEW.width - SIZE.width - 8, top: 8 });
+  });
+});
+
+// Founder: drag ONLY by the grip; the rest of the box is a normal box.
+describe("only the grip drags (O6, O7)", () => {
+  it("a press on the grip drags; a press on the text or a button does not", () => {
+    const { text, button } = setup(null, true);
+    pointer("pointerdown", 50, 50, text);
+    pointer("pointermove", 450, 350, text);
+    pointer("pointerup", 450, 350, text);
+    pointer("pointerdown", 50, 50, button);
+    pointer("pointerup", 450, 350, button);
+    expect(box.style.left).toBe("");
+    expect(saved).toEqual([]);
+    pointer("pointerdown", 50, 50, handle);
+    pointer("pointermove", 450, 350, handle);
+    pointer("pointerup", 450, 350, handle);
+    expect(at()).toEqual({ left: 400, top: 300 });
+    expect(saved).toEqual([{ left: 400, top: 300 }]);
+  });
+
+  it("the real box: the grab cursor is on the grip only; Move stays a button", () => {
+    const built = job.buildBox(document);
+    expect(built.box.id).toBe(job.OVERLAY_ID);
+    expect(built.box.style.cursor).toBe("");
+    expect(built.panel.style.cursor).toBe("");
+    expect(built.handle.style.cursor).toBe("grab");
+    expect(built.handle.getAttribute("data-keepr")).toBe("drag-handle");
+    expect(built.move.tagName).toBe("BUTTON");
+    expect(built.box.contains(built.handle) && built.box.contains(built.panel)).toBe(true);
+  });
+});
+
+// Founder saw two Keepr elements: an extension reload leaves the old content
+// scripts running in the tab (another isolated world). The newest instance
+// owns the page.
+describe("never two Keepr boxes (O8)", () => {
+  it("a newer instance removes a stale box and owns the page; the older one steps aside", () => {
+    document.body.innerHTML = "";
+    job.claimPage(document, "old");
+    const stale = job.buildBox(document).box;
+    document.body.appendChild(stale);
+    expect(job.ownsPage(document, "old")).toBe(true);
+    job.claimPage(document, "new");
+    expect(document.getElementById(job.OVERLAY_ID)).toBeNull();
+    expect(job.ownsPage(document, "new")).toBe(true);
+    expect(job.ownsPage(document, "old")).toBe(false);
+  });
+
+  it("content.js: a second instance removes the first one's Send container; the first then stops", () => {
+    jest.useFakeTimers();
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const fs = require("fs") as typeof import("fs");
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const path = require("path") as typeof import("path");
+      const src = fs.readFileSync(path.join(__dirname, "..", "..", "chrome-extension", "content.js"), "utf8");
+      document.body.innerHTML = "";
+      (globalThis as Record<string, unknown>).chrome = { runtime: { sendMessage: () => undefined, lastError: undefined } };
+      const runInstance = () => {
+        // Each extension instance runs in its own isolated world: its own flag.
+        delete (window as unknown as Record<string, unknown>).__keeprSendInstalled;
+        new Function(src)();
+      };
+      runInstance();
+      jest.advanceTimersByTime(1100);
+      expect(document.querySelectorAll("#keepr-send-container")).toHaveLength(1);
+      const first = document.getElementById("keepr-send-container");
+      runInstance();
+      expect(first?.isConnected).toBe(false);
+      jest.advanceTimersByTime(3100);
+      expect(document.querySelectorAll("#keepr-send-container")).toHaveLength(1);
+      expect(document.getElementById("keepr-send-container")).not.toBe(first);
+    } finally {
+      jest.clearAllTimers();
+      jest.useRealTimers();
+      delete (globalThis as Record<string, unknown>).chrome;
+    }
   });
 });
 

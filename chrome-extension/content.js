@@ -19,10 +19,27 @@
   if (window.__keeprSendInstalled) return;
   window.__keeprSendInstalled = true;
 
+  // Founder: never two Keepr elements. A reloaded extension leaves this script
+  // running in open tabs (another isolated world: the window flag above does
+  // not see it). The newest instance writes its token on <html> and removes a
+  // stale container; an older one sees another token and removes its own.
+  const CONTAINER_ID = "keepr-send-container";
+  const OWNER_ATTR = "data-keepr-send-owner";
+  const INSTANCE = String(Date.now()) + "-" + Math.random().toString(36).slice(2);
+  function claimPage() {
+    if (document.documentElement) document.documentElement.setAttribute(OWNER_ATTR, INSTANCE);
+    const stale = document.getElementById(CONTAINER_ID);
+    if (stale && stale.parentNode) stale.parentNode.removeChild(stale);
+  }
+  function ownsPage() {
+    return !!document.documentElement && document.documentElement.getAttribute(OWNER_ATTR) === INSTANCE;
+  }
+  claimPage();
+
   const CONVERSATION_PATH = /\/web\/conversations\/[^/?#]+/;
 
   const container = document.createElement("div");
-  container.id = "keepr-send-container";
+  container.id = CONTAINER_ID;
   Object.assign(container.style, {
     position: "fixed",
     right: "24px",
@@ -214,7 +231,13 @@
   // mount() waits for it and the interval below retries.
   mount();
   let lastPath = location.pathname;
-  setInterval(() => {
+  const tick = setInterval(() => {
+    if (!ownsPage()) {
+      // A newer instance owns the page: step aside for good.
+      if (container.parentNode) container.parentNode.removeChild(container);
+      clearInterval(tick);
+      return;
+    }
     if (location.pathname !== lastPath) {
       lastPath = location.pathname;
       status.style.display = "none";
