@@ -3,6 +3,7 @@
  * Handles iPhone sync-related database operations (message/attachment/contact batch ops)
  */
 
+import * as path from "path";
 import { ensureDb } from "./core/dbConnection";
 import { updateTransactionThreadCountSync } from "./communicationDbService";
 import { samePeople } from "../rcsImportStore";
@@ -15,6 +16,7 @@ import {
   RCS_CLEAR_ATTACHMENT_PATHS_SQL,
   RCS_CLEAR_COUNTED_LINKS_SQL,
   RCS_CLEAR_LINKED_TRANSACTIONS_SQL,
+  RCS_CLEAR_FILE_REFERENCED_SQL,
   RCS_STAGING_PUT_CHAT_SQL,
   RCS_STAGING_PUT_MESSAGE_SQL,
   RCS_STAGING_HAS_MESSAGE_SQL,
@@ -349,6 +351,10 @@ export function rcsClearDbOps(): import("../rcsClearService").RcsClearDbOps {
     deleteMessages: (userId) => db.prepare(RCS_CLEAR_DELETE_MESSAGES_SQL).run(userId).changes,
     setMessageCount: (userId, transactionId, count) => {
       db.prepare(RCS_CLEAR_SET_MESSAGE_COUNT_SQL).run(count, transactionId, userId);
+    },
+    fileStillReferenced: (storagePath) => {
+      const name = path.basename(storagePath.replace(/\\/g, "/"));
+      return !!db.prepare(RCS_CLEAR_FILE_REFERENCED_SQL).get(storagePath, name, name, name, name);
     },
     // The same rule as every link/unlink (communicationDbService), on this connection.
     refreshTextThreadCount: (transactionId) => updateTransactionThreadCountSync(transactionId),

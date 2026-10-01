@@ -21,7 +21,10 @@
  *        message_count — it is counted in text_thread_count (communicationDb
  *        createThreadCommunicationReference) — so removing it must refresh that.
  *   after the commit: delete the attachment FILES, only inside the app's
- *   message-attachments folder. A failed transaction deletes no file.
+ *   message-attachments folder, and only when NO attachments row (any
+ *   source, any user) still points to the file — files are content-addressed
+ *   (<sha256><ext>), so iPhone sync or another user can share one
+ *   (BACKLOG-3667). A failed transaction deletes no file.
  *
  * The user's removals (`ignored_communications`) are kept, as Android keeps
  * them: a removed chat stays removed and can be restored from "Show removed".
@@ -45,6 +48,12 @@ export interface RcsClearDbOps {
   deleteThreadLinks(userId: string): number;
   deleteMessages(userId: string): number;
   setMessageCount(userId: string, transactionId: string, count: number): void;
+  /**
+   * BACKLOG-3667: does any remaining attachments row (any user, any source)
+   * point to this file? Matched on the stored path or its file name, since a
+   * path may be stored absolute or relative.
+   */
+  fileStillReferenced(storagePath: string): boolean;
   /** Recompute transactions.text_thread_count from the links that remain. */
   refreshTextThreadCount(transactionId: string): void;
 }
@@ -121,12 +130,18 @@ export function clearGoogleMessagesWebData(
     };
   });
 
-  // Files only after the commit, and only inside the attachments folder.
+  // Files only after the commit, only inside the attachments folder, and
+  // only when nothing else points to them (BACKLOG-3667: shared by hash).
   let filesDeleted = 0;
-  for (const p of done.paths) {
+  let filesKept = 0;
+  for (const p of new Set(done.paths)) {
     if (!p) continue;
     const abs = path.resolve(files.resolve(p));
     if (!abs.startsWith(root)) continue;
+    if (db.fileStillReferenced(p)) {
+      filesKept += 1;
+      continue;
+    }
     if (files.deleteFile(abs)) filesDeleted += 1;
   }
 
@@ -141,7 +156,7 @@ export function clearGoogleMessagesWebData(
   log(
     `[RcsClear] Cleared Google Messages for Web texts: ${result.messagesDeleted} messages, ` +
       `${result.linksDeleted} links (${result.threadLinksDeleted} thread-level), ${result.attachmentsDeleted} attachments ` +
-      `(${result.filesDeleted} files), message_count updated on ${result.transactionsUpdated} transactions, ` +
+      `(${result.filesDeleted} files deleted, ${filesKept} kept: still used), message_count updated on ${result.transactionsUpdated} transactions, ` +
       `thread count refreshed on ${done.threadCountsUpdated}`,
   );
   return result;

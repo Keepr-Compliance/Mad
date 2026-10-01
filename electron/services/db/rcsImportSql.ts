@@ -160,6 +160,20 @@ export const RCS_CLEAR_LINKED_TRANSACTIONS_SQL = sql`
       AND c.transaction_id IN (SELECT t.id FROM transactions t WHERE t.user_id = ?)
   `;
 
+/**
+ * BACKLOG-3667: is a file still used by ANY attachments row (any user, any
+ * source)? Files are content-addressed, so they can be shared. Parameters:
+ * the stored path, then its file name twice (a path may be stored absolute or
+ * relative, with / or \).
+ */
+export const RCS_CLEAR_FILE_REFERENCED_SQL = sql`
+    SELECT 1 AS hit FROM attachments
+    WHERE storage_path = ?
+       OR substr(storage_path, -length('/' || ?)) = '/' || ?
+       OR substr(storage_path, -length('\\' || ?)) = '\\' || ?
+    LIMIT 1
+  `;
+
 /** Parameters: transaction id, user id. */
 export const RCS_CLEAR_GET_MESSAGE_COUNT_SQL = sql`
     SELECT message_count AS messageCount FROM transactions WHERE id = ? AND user_id = ?

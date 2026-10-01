@@ -15,6 +15,7 @@
  *   C6 thread-level gmweb links not deleted        → "every gmweb link is gone"
  *   C7 delete order changed                        → "the reviewed order"
  *   C8 writes resume only on success               → "writes resume even when the clear throws"
+ *   C10 a file still used by another attachments row deleted  → "a file shared by content hash is kept"
  *   C9 thread-level links not counted / text_thread_count left stale
  *                                                  → "thread-level auto-links are counted and the thread count refreshed"
  */
@@ -196,6 +197,31 @@ describe("clearGoogleMessagesWebData on the real schema (BACKLOG-3657)", () => {
     expect(result.filesDeleted).toBe(1);
   });
 
+  // BACKLOG-3667 (security review M1): files are content-addressed, so an
+  // iPhone-synced image (or another user's) can be the SAME file. Mutation
+  // (C10): delete without the still-referenced check → red.
+  it.each([
+    ["relative, /", (name: string) => `message-attachments/${name}`],
+    ["relative, \\", (name: string) => `message-attachments\\${name}`],
+    ["the same absolute path", () => inside],
+  ])("a file shared by content hash is kept while another attachments row uses it — %s (C10)", (_label, stored) => {
+    // The Android/iPhone message keeps an attachment on the same file.
+    db.prepare("INSERT INTO attachments (id, message_id, filename, storage_path) VALUES ('a-iphone', 'android', 'IMG_0001.png', ?)")
+      .run(stored(nodePath.basename(inside)));
+    const result = clearGoogleMessagesWebData(USER, rcsClearDbOps(), fsOps());
+    expect(fs.existsSync(inside)).toBe(true);
+    expect(result.filesDeleted).toBe(0);
+    expect(count("SELECT COUNT(*) AS n FROM attachments WHERE id = 'a-iphone'")).toBe(1);
+  });
+
+  it("an unshared file is still deleted (C10 control)", () => {
+    db.prepare("INSERT INTO attachments (id, message_id, filename, storage_path) VALUES ('a-other', 'android', 'IMG_0002.png', ?)")
+      .run(nodePath.join(attachmentsRoot, "someotherhash.png"));
+    const result = clearGoogleMessagesWebData(USER, rcsClearDbOps(), fsOps());
+    expect(fs.existsSync(inside)).toBe(false);
+    expect(result.filesDeleted).toBe(1);
+  });
+
   it("a failing statement rolls back: no file deleted, rows and counts unchanged (C3)", () => {
     const real = rcsClearDbOps();
     const failing: RcsClearDbOps = {
@@ -237,6 +263,7 @@ describe("order and the write gate (fakes)", () => {
       refreshTextThreadCount: (t) => {
         order.push(`threads ${t}`);
       },
+      fileStillReferenced: () => false,
     };
     clearGoogleMessagesWebData(USER, ops, {
       attachmentsRoot: "/data/message-attachments",
