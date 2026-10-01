@@ -129,8 +129,9 @@ function toItem(row: {
 class ChecklistTemplateService {
   private cache: TemplateCache | null = null;
   /**
-   * The reads currently out, one per organization, keyed by the organization
-   * each asked about. See {@link ChecklistTemplateService.fetchOnce}.
+   * The reads currently out, one per organization + user pair, keyed by the
+   * organization and user each asked about. See {@link
+   * ChecklistTemplateService.fetchOnce}.
    */
   private fetchInProgress = new Map<string, Promise<ChecklistTemplate[] | null>>();
 
@@ -233,10 +234,11 @@ class ChecklistTemplateService {
   }
 
   /**
-   * Collapse concurrent reads onto one request — for the SAME organization.
+   * Collapse concurrent reads onto one request — for the SAME organization
+   * and user.
    *
-   * Keying the in-flight reads by organization is the whole point, and it is
-   * the same hazard {@link
+   * Keying the in-flight reads by organization AND user (BACKLOG-3618) is the
+   * whole point, and it is the same hazard {@link
    * ChecklistTemplateService.loadPersistedCache} guards on the disk path: a
    * user who belongs to two brokerages, or who switches accounts, must never be
    * handed the other organization's templates. Sharing the promise blind would
@@ -253,8 +255,8 @@ class ChecklistTemplateService {
    *
    * A map rather than one slot (BACKLOG-3476): with a single slot, reads for
    * A, then B, then A again while both are out would lose A's entry to B and
-   * send a second request for A. One entry per organization keeps every
-   * organization's collapsing independent of the others.
+   * send a second request for A. One entry per organization + user pair
+   * (BACKLOG-3618) keeps every pair's collapsing independent of the others.
    */
   private async fetchOnce(orgId: string, userId: string): Promise<ChecklistTemplate[] | null> {
     // BACKLOG-3618: keyed on the user too — two users' reads are two answers.
