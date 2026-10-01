@@ -553,8 +553,11 @@ export class RcsExtensionBridge {
         const entries = snap.notReached ?? [];
         const chats = new Set(entries.map((e) => e.name)).size;
         const more = snap.notReachedMore ?? 0;
+        const p = snap.progress;
+        // BACKLOG-3641: the scan counts, so a 0-chat run can be explained.
         this.logger.info(
-          `[RcsBridge] Sync job finished: ${snap.progress.imported} chats, ${snap.progress.messages} messages; ` +
+          `[RcsBridge] Sync job finished: listed ${p.listed}, candidates ${p.candidates}, checked ${p.checked}, ` +
+            `matched ${p.matched}, skipped ${p.skipped}; imported ${p.imported} chats, ${p.messages} messages; ` +
             `${chats} chats not fully imported (${entries.length} entries${more > 0 ? `, +${more} more` : ""})`,
         );
         this.emitJob(snap);

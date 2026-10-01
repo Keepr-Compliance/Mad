@@ -406,6 +406,9 @@ describe("RcsExtensionBridge sync jobs", () => {
         const list = Array.from({ length: 22 }, (_, i) => ({ name: `Chat Name ${i}`, reason: "not_opened" }));
         list[1] = { name: "Chat Name 1", reason: "images_failed", count: 2 } as (typeof list)[number];
         list[2] = { name: "Chat Name 1", reason: "history_truncated" };
+        await request(ownPort, "POST", `/job/${id}/progress`, EXT, JSON.stringify({
+          stage: "Checked 8 of 8 chats", listed: 19, candidates: 8, checked: 8, skipped: 1,
+        }));
         const reply = await request(ownPort, "POST", `/job/${id}/finish`, EXT, JSON.stringify({
           chats: 0, messages: 0, images: 0, notReached: list, notReachedMore: 3,
         }));
@@ -418,6 +421,9 @@ describe("RcsExtensionBridge sync jobs", () => {
         // 20 kept entries but 19 distinct chats ("Chat Name 1" twice), and
         // 5 more past the cap. Mutation: count entries, not names → red.
         expect(line).toContain("19 chats not fully imported (20 entries, +5 more)");
+        // BACKLOG-3641: the scan counts are in Keepr's log. Mutation: drop
+        // them from the finish line → red.
+        expect(line).toContain("listed 19, candidates 8, checked 8, matched 0, skipped 1");
         expect(logged.join("\n")).not.toContain("Chat Name");
       } finally {
         await own.stop();

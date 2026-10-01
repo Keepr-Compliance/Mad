@@ -78,10 +78,17 @@
     return entry.count ? text + ": " + entry.count : text;
   }
 
-  /** The finished overlay: totals, every chat left out, the way back to Keepr. */
-  function doneText(totals, reported, more) {
+  /**
+   * The finished overlay: totals, every chat left out, the way back to Keepr.
+   * BACKLOG-3641: chats checked but none matched says so, instead of a bare
+   * "imported 0 chats".
+   */
+  function doneText(totals, reported, more, counts) {
     var lines = [
-      "Done — imported " + totals.chats + " chats, " + totals.messages + " messages, " + totals.images + " images.",
+      counts && counts.checked > 0 && counts.matched === 0
+        ? "Checked " + counts.checked + " chat" + (counts.checked === 1 ? "" : "s") +
+          " — none matched a phone number on this transaction's contacts."
+        : "Done — imported " + totals.chats + " chats, " + totals.messages + " messages, " + totals.images + " images.",
     ];
     if (reported.length > 0) {
       lines.push("Not fully imported:");
@@ -92,6 +99,37 @@
     }
     lines.push(RETURN_TO_KEEPR);
     return lines.join("\n");
+  }
+
+  // -------------------------------------------------------------------------
+  // BACKLOG-3641: diagnostics. Step lines go to the service-worker console
+  // (prefix "[Keepr Sync]"). NEVER message text, never a full phone number,
+  // never a name: numbers as shapes, names as a short hash.
+  // -------------------------------------------------------------------------
+
+  /** "(555) 555-0199" → "(ddd) ddd-dddd"; non-ASCII → U+XXXX. */
+  function numberShape(s) {
+    var out = "";
+    var chars = Array.from(String(s === null || s === undefined ? "" : s));
+    for (var i = 0; i < chars.length; i++) {
+      var ch = chars[i];
+      var code = ch.codePointAt(0);
+      if (ch >= "0" && ch <= "9") out += "d";
+      else if (code > 127) out += "U+" + code.toString(16).toUpperCase().padStart(4, "0");
+      else out += ch;
+    }
+    return out;
+  }
+
+  /** FNV-1a, 6 hex: the fallback name tag when the page has no SHA-256. */
+  function shortHash(s) {
+    var h = 0x811c9dc5;
+    var str = String(s);
+    for (var i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return ("00000000" + h.toString(16)).slice(-8).slice(0, 6);
   }
 
   /** Keepr no longer knows this job (cancelled, replaced or over). */
@@ -112,6 +150,8 @@
    * @param {object} env  { doc, getLocation, api(method, path, body), overlay:{show(text,isError)},
    *                        sleep(ms), click(el), scroll(), scrollMessagesUp?(), openConversation(conv),
    *                        returnToList?() (narrow window: back to the list; never throws),
+   *                        log?(line) (diagnostics, BACKLOG-3641), hashName?(name) → Promise<string>,
+   *                        scroll?() (tests only: replaces the page's list scroller),
    *                        readImage(src), extract(doc, href, now), scan, now?, pageTimeoutMs?,
    *                        messagesTimeoutMs?, messagesStableMs?, historyCap?, historyNoNewMs? }
    *
@@ -124,6 +164,7 @@
       return await runJobInner(jobId, env);
     } catch (err) {
       if (err && err.jobGone) {
+        diag(env, "stopped: cancelled or replaced in Keepr");
         env.overlay.show(CANCELLED, true);
         return { outcome: "job_gone" };
       }
@@ -131,15 +172,34 @@
     }
   }
 
+  /** One diagnostics line; never throws (a log must not stop a sync). */
+  function diag(env, line) {
+    try {
+      if (env.log) env.log(line);
+    } catch (_e) { /* ignore */ }
+  }
+
+  /** A name as a short hash, so runs correlate without the name itself. */
+  async function nameTag(env, name) {
+    try {
+      return env.hashName ? await env.hashName(String(name || "")) : shortHash(String(name || ""));
+    } catch (_e) {
+      return "??????";
+    }
+  }
+
   async function runJobInner(jobId, env) {
     var base = "/job/" + jobId;
     var skips = [];
+    var log = function (line) { diag(env, line); };
+    var matchedCount = 0;
     // BACKLOG-3629: every chat left out, or imported in part, by name.
     var notReached = [];
     function leaveOut(conv, reason, count) {
       var entry = { name: conv.name || "(unnamed chat)", reason: reason };
       if (count !== undefined) entry.count = count;
       notReached.push(entry);
+      log("  left out: " + reason + (count !== undefined ? " (" + count + ")" : ""));
     }
 
     /** Every job call: a 404/410 ends the run. */
@@ -152,6 +212,7 @@
     var totals = { chats: 0, messages: 0, images: 0 };
 
     async function report(stage) {
+      log("stage: " + stage);
       env.overlay.show(stage, false);
       await call("POST", base + "/progress", {
         stage: stage,
@@ -163,13 +224,16 @@
     }
 
     async function fail(code, message) {
+      log("failed: " + code);
       env.overlay.show(message, true);
       await env.api("POST", base + "/error", { code: code, message: message });
       return { outcome: code };
     }
 
     // 1. Signed in? (founder decision: no waiting for sign-in, no auto-resume)
+    log("stage: job found, waiting for Messages for Web");
     var pageState = await waitForPageState(env, env.pageTimeoutMs == null ? 20000 : env.pageTimeoutMs);
+    log("page: " + pageState);
     if (pageState === "not_signed_in") return fail("not_signed_in", NOT_SIGNED_IN);
     if (pageState !== "ready") {
       return fail("page_not_ready", "Messages for Web did not finish loading. Click Sync in Keepr again.");
@@ -180,10 +244,14 @@
     // POST (BACKLOG-3628): Chrome on Windows sends a worker GET without Origin.
     var claim = await env.api("POST", base + "/claim");
     if (!claim.ok) {
+      log("claim refused: HTTP " + claim.status);
       env.overlay.show(messageOf(claim, "Keepr refused this sync."), true);
       return { outcome: "claim_refused" };
     }
     var contacts = (claim.body && claim.body.contacts) || [];
+    var contactTags = [];
+    for (var ct = 0; ct < contacts.length; ct++) contactTags.push(await nameTag(env, contacts[ct].displayName));
+    log("claimed: " + contacts.length + " contacts with a phone [" + contactTags.join(", ") + "]");
     // History floor: the transaction's start date; none → no date floor.
     var floorMs = claim.body && typeof claim.body.startDate === "string" ? Date.parse(claim.body.startDate) : NaN;
     if (!isFinite(floorMs)) floorMs = null;
@@ -196,10 +264,20 @@
       // No list, no scan: say so instead of "Done — imported 0 chats".
       return fail("list_not_reachable", LIST_NOT_REACHABLE);
     }
+    log("stage: loading the conversation list");
+    // No env.scroll in the browser: collectConversations drives the page's own
+    // scroller (top first, then step down with scroll events).
     var collected = await env.scan.collectConversations(env.doc, { scroll: env.scroll, sleep: env.sleep });
     var candidates = env.scan.pickCandidates(collected.conversations, contacts);
     progress.listed = collected.conversations.length;
     progress.candidates = candidates.length;
+    log("listed " + progress.listed + ", stopReason " + collected.stopReason +
+      ", scroll " + JSON.stringify(collected.scroll || null));
+    var byReason = {};
+    for (var cr = 0; cr < candidates.length; cr++) {
+      byReason[candidates[cr].reason] = (byReason[candidates[cr].reason] || 0) + 1;
+    }
+    log("candidates " + candidates.length + " " + JSON.stringify(byReason));
     await report("Checking " + candidates.length + " possible chats");
 
     // 4. Each candidate: open, read numbers, close Details, ask Keepr.
@@ -210,6 +288,8 @@
       var imagesFailed = 0;
       try {
         env.overlay.show("Checking chat " + (i + 1) + " of " + candidates.length + "…", false);
+        log("#" + (i + 1) + "/" + candidates.length + " chat " + (await nameTag(env, conv.name)) +
+          " reason=" + candidates[i].reason);
         // The messages on screen before the click: the next chat is ready only
         // once this set has been replaced (the URL and title flip first).
         var before = env.scan.messageIdSet(env.doc);
@@ -217,6 +297,7 @@
         opened = true;
         var numbers = await env.scan.readParticipantsAndClose(env.doc, { click: env.click, sleep: env.sleep });
         progress.checked += 1;
+        log("  numbers " + JSON.stringify((numbers || []).map(numberShape)));
         if (!numbers || numbers.length === 0) {
           // Keepr cannot check a chat with no number on screen: report it.
           leaveOut(conv, "no_numbers");
@@ -224,7 +305,10 @@
         }
         var match = await call("POST", base + "/match", { conversationId: conv.conversationId, numbers: numbers });
         if (!match.ok) throw new Error(messageOf(match, "Keepr could not check this chat."));
-        if (!match.body || !match.body.matched) continue;
+        var isMatch = !!(match.body && match.body.matched);
+        log("  match=" + (isMatch ? "yes" : "no"));
+        if (!isMatch) continue;
+        matchedCount += 1;
 
         var ready = await env.scan.waitForMessageSwap(env.doc, before, {
           sleep: env.sleep,
@@ -306,6 +390,7 @@
         if (!sent.ok) throw new Error(messageOf(sent, "Keepr could not save this chat."));
         totals.chats += 1;
         totals.messages += messages.length;
+        log("  imported " + messages.length + " messages (history stop: " + hist.stopReason + ")");
         // Imported, but only back to the cap: older messages are missing.
         if (hist.stopReason === "cap") leaveOut(conv, "history_truncated");
 
@@ -351,6 +436,8 @@
         }
         progress.skipped += 1;
         skips.push({ conversationId: conv.conversationId, reason: "error" });
+        // The error's code only: its message could quote the page.
+        log("  error" + (err && err.code ? ": " + err.code : ""));
         leaveOut(conv, opened ? "error" : "not_opened");
       } finally {
         if (imagesFailed > 0) leaveOut(conv, "images_failed", imagesFailed);
@@ -372,7 +459,10 @@
       notReached: reported,
       notReachedMore: more,
     });
-    env.overlay.show(doneText(totals, reported, more), false);
+    log("done: listed " + progress.listed + ", candidates " + progress.candidates + ", checked " + progress.checked +
+      ", matched " + matchedCount + ", imported " + totals.chats + " chats / " + totals.messages + " messages / " +
+      totals.images + " images, not fully imported " + notReached.length);
+    env.overlay.show(doneText(totals, reported, more, { checked: progress.checked, matched: matchedCount }), false);
     return {
       outcome: "finished", progress: progress, totals: totals, skips: skips, history: history, notReached: notReached,
     };
@@ -385,6 +475,8 @@
     NOT_SIGNED_IN: NOT_SIGNED_IN,
     RETURN_TO_KEEPR: RETURN_TO_KEEPR,
     LIST_NOT_REACHABLE: LIST_NOT_REACHABLE,
+    numberShape: numberShape,
+    shortHash: shortHash,
   };
 
   if (typeof module !== "undefined" && module.exports) {
@@ -463,13 +555,28 @@
     el.click();
   }
 
-  function scroller() {
-    return root.KeeprScan.findListScroller(document);
+  // The conversation list is scrolled by scan.collectConversations itself
+  // (top first, then steps with scroll events): no env.scroll here.
+
+  // BACKLOG-3641: one diagnostics line to the service-worker console.
+  function sendLog(line) {
+    try {
+      var runtime = root.chrome.runtime;
+      runtime.sendMessage({ type: "keepr-log", line: String(line) }, function () {
+        void runtime.lastError; // the worker may be asleep: a lost line is fine
+      });
+    } catch (_e) { /* ignore */ }
   }
 
-  async function scroll() {
-    var el = scroller();
-    if (el) el.scrollTop = el.scrollHeight;
+  /** First 6 hex of SHA-256(name): correlates a run without the name. */
+  async function hashName(name) {
+    var subtle = root.crypto && root.crypto.subtle;
+    if (!subtle) return "??????";
+    var digest = await subtle.digest("SHA-256", new TextEncoder().encode(String(name)));
+    var bytes = new Uint8Array(digest);
+    var hex = "";
+    for (var i = 0; i < 3; i++) hex += ("0" + bytes[i].toString(16)).slice(-2);
+    return hex;
   }
 
   // The open chat's message list: scrolling to its top asks the page for
@@ -521,7 +628,8 @@
       overlay: { show: showOverlay },
       sleep: sleep,
       click: click,
-      scroll: scroll,
+      log: sendLog,
+      hashName: hashName,
       scrollMessagesUp: scrollMessagesUp,
       openConversation: openConversation,
       returnToList: returnToList,

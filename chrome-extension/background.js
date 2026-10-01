@@ -14,6 +14,7 @@
  */
 
 const BRIDGE_URL = "http://127.0.0.1:38619";
+const SYNC_LOG_PREFIX = "[Keepr Sync]";
 
 const NOT_RUNNING =
   "Keepr isn't reachable. Make sure the Keepr app is open and its import bridge is running.";
@@ -163,6 +164,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case "keepr-job-found":
       routeJob(message.jobId, sender.tab).then(sendResponse, fail);
       return true;
+    case "keepr-log":
+      // BACKLOG-3641: the Sync step log, for the founder to copy from this
+      // worker's console. The page sends shapes and hashes only (job.js).
+      console.log(SYNC_LOG_PREFIX + " " + String(message.line).slice(0, 1000));
+      sendResponse({ ok: true });
+      return false;
     default:
       return false;
   }

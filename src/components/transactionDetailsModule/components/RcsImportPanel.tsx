@@ -209,6 +209,10 @@ function jobLine(job: RcsJobInfo): string {
     case "running":
       return `${job.stage} — checked ${p.checked} of ${p.candidates} chats; imported ${imported}`;
     case "finished":
+      // BACKLOG-3641: say why nothing came in, not a bare "imported 0 chats".
+      if (p.checked > 0 && p.matched === 0) {
+        return `Sync done: checked ${p.checked} chat${p.checked === 1 ? "" : "s"} — none matched a phone number on this transaction's contacts.`;
+      }
       return `Sync done: imported ${imported}` + (p.skipped > 0 ? `; ${p.skipped} skipped` : "") + ".";
     case "cancelled":
       return "Sync cancelled.";

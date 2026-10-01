@@ -85,19 +85,58 @@
     return item ? item.parentElement : null;
   }
 
+  /** The next scrollable ancestor above `el` (a re-pick when `el` is stuck). */
+  function nextScroller(doc, el) {
+    var cur = el ? el.parentElement : null;
+    while (cur && cur !== doc.body && cur !== doc.documentElement) {
+      if (cur.scrollHeight > cur.clientHeight + 4) return cur;
+      cur = cur.parentElement;
+    }
+    return null;
+  }
+
+  /** Set the list's scroll position and tell the page, which renders on 'scroll'. */
+  function setScrollTop(el, top) {
+    el.scrollTop = top;
+    var view = el.ownerDocument && el.ownerDocument.defaultView;
+    if (view) el.dispatchEvent(new view.Event("scroll"));
+  }
+
+  function atBottom(el) {
+    return el.scrollTop + el.clientHeight >= el.scrollHeight - 2;
+  }
+
   /**
-   * Load the whole (lazily rendered) list: scroll to the bottom, wait, re-read.
-   * Stops when the count is unchanged for `stableRounds` scrolls in a row, or
-   * at `maxItems`, or after `maxMs`.
+   * Load the whole (virtualized, lazily fetched) conversation list.
+   *
+   * BACKLOG-3620 live fix (Windows, 2026-09-30): the page renders ~19 items at
+   * a time and only re-renders on a 'scroll' event, and the tab may open
+   * scrolled part-way down. So, with the page's own scroller:
+   *   1. scroll to the TOP first (scroll event, wait), so the scan starts at
+   *      the most recent chats;
+   *   2. step down by ~90% of the visible height (not a jump to the end), with
+   *      a scroll event each time, so every intermediate window renders;
+   *   3. read the items at every step (the list unmounts items it scrolls past);
+   *   4. after each step wait up to `settleRetries` x `waitMs` (~2 s) for new
+   *      items or a taller list (more chats fetched over the network);
+   *   5. stop as "stable" only when the scroller is AT THE BOTTOM and nothing
+   *      grew for `stableRounds` rounds in a row. A scroller that will not move
+   *      is re-picked (its scrollable parent) before it counts as stable.
+   * `maxItems` and `maxMs` still bound the scan.
+   *
+   * `opts.scroll` (tests of the stop rule only) replaces the page scroller
+   * with a callback; the list then counts as at the bottom every round.
    *
    * @param {Document} doc
-   * @param {{scroll: function(): (void|Promise<void>), sleep: function(number): Promise<void>,
-   *          now?: function(): number, waitMs?: number, stableRounds?: number,
-   *          maxItems?: number, maxMs?: number}} opts
+   * @param {{scroll?: function(): (void|Promise<void>), sleep: function(number): Promise<void>,
+   *          now?: function(): number, waitMs?: number, settleRetries?: number,
+   *          stableRounds?: number, maxItems?: number, maxMs?: number}} opts
+   * @returns {Promise<{conversations: Array, stopReason: string, scroll: object}>}
    */
   async function collectConversations(doc, opts) {
     var now = opts.now || function () { return Date.now(); };
-    var waitMs = opts.waitMs == null ? 800 : opts.waitMs;
+    var waitMs = opts.waitMs == null ? 700 : opts.waitMs;
+    var settleRetries = opts.settleRetries || 3;
     var stableRounds = opts.stableRounds || 3;
     var maxItems = opts.maxItems || 1000;
     var maxMs = opts.maxMs || 90000;
@@ -117,19 +156,70 @@
       }
     }
 
+    var el = opts.scroll ? null : findListScroller(doc);
+    var stats = {
+      scroller: !!el,
+      startTop: el ? el.scrollTop : null,
+      clientHeight: el ? el.clientHeight : null,
+      scrollHeightBefore: el ? el.scrollHeight : null,
+      steps: 0,
+      repicks: 0,
+    };
+
+    if (el) {
+      // 1. Top first: the newest chats are at the top.
+      setScrollTop(el, 0);
+      await opts.sleep(waitMs);
+    }
     absorb();
+
     while (stable < stableRounds) {
       if (order.length >= maxItems) { stopReason = "max_items"; break; }
       if (now() - started >= maxMs) { stopReason = "max_time"; break; }
       var before = order.length;
-      await opts.scroll();
-      await opts.sleep(waitMs);
-      absorb();
-      stable = order.length === before ? stable + 1 : 0;
+      var heightBefore = el ? el.scrollHeight : 0;
+      var topBefore = el ? el.scrollTop : 0;
+      if (opts.scroll) {
+        await opts.scroll();
+      } else if (el) {
+        // 2. One step down, so the virtual list renders the next window.
+        setScrollTop(el, el.scrollTop + Math.max(50, Math.floor(el.clientHeight * 0.9)));
+        stats.steps += 1;
+      }
+      // 3 + 4. Read at every wait; stop waiting once something new arrived.
+      var grew = false;
+      for (var r = 0; r < settleRetries && !grew; r++) {
+        await opts.sleep(waitMs);
+        absorb();
+        grew = order.length > before || (!!el && el.scrollHeight > heightBefore);
+      }
+      if (grew) {
+        stable = 0;
+        continue;
+      }
+      if (!el || atBottom(el)) {
+        // 5. At the bottom and nothing came: one stable round.
+        stable += 1;
+      } else if (el.scrollTop === topBefore) {
+        // Not at the bottom, yet it did not move: the wrong element. Try the
+        // scrollable parent; with none left, count it as stable.
+        var parent = nextScroller(doc, el);
+        if (parent) {
+          el = parent;
+          stats.repicks += 1;
+        } else {
+          stable += 1;
+        }
+      }
+      // Moved but not at the bottom yet: keep stepping (no stable round).
     }
+    stats.endTop = el ? el.scrollTop : null;
+    stats.scrollHeightAfter = el ? el.scrollHeight : null;
+    stats.atBottom = el ? atBottom(el) : null;
     return {
       conversations: order.slice(0, maxItems).map(function (id) { return byId[id]; }),
       stopReason: stopReason,
+      scroll: stats,
     };
   }
 

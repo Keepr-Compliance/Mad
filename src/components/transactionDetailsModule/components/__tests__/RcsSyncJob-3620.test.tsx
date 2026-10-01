@@ -81,6 +81,32 @@ describe("Sync job (BACKLOG-3620)", () => {
     expect(onImported).toHaveBeenCalledTimes(1);
   });
 
+  // BACKLOG-3641. Mutation: drop the `checked > 0 && matched === 0` branch in
+  // jobLine → the panel says "imported 0 chats" and this goes red.
+  it("finished with chats checked but none matched: says so instead of 'imported 0 chats'", async () => {
+    mockStartJob.mockResolvedValue({ success: true, data: job() });
+    render(<Harness transactionId="tx-1" />);
+    fireEvent.click(screen.getByTestId("rcs-sync-button"));
+    await screen.findByTestId("rcs-sync-job");
+    act(() => {
+      jobListener?.(job({ state: "finished", stage: "Done", progress: { ...job().progress, listed: 19, candidates: 8, checked: 8 } }));
+    });
+    const status = screen.getByTestId("rcs-sync-job-status");
+    expect(status).toHaveTextContent("Sync done: checked 8 chats — none matched a phone number on this transaction's contacts.");
+    expect(status).not.toHaveTextContent("imported 0");
+  });
+
+  it("finished with a match keeps the imported counts", async () => {
+    mockStartJob.mockResolvedValue({ success: true, data: job() });
+    render(<Harness transactionId="tx-1" />);
+    fireEvent.click(screen.getByTestId("rcs-sync-button"));
+    await screen.findByTestId("rcs-sync-job");
+    act(() => {
+      jobListener?.(job({ state: "finished", stage: "Done", progress: { ...job().progress, checked: 8, matched: 1, imported: 1, messages: 3 } }));
+    });
+    expect(screen.getByTestId("rcs-sync-job-status")).toHaveTextContent("Sync done: imported 1 chat, 3 messages, 0 images.");
+  });
+
   it("shows the not-signed-in message from the page", async () => {
     mockStartJob.mockResolvedValue({ success: true, data: job() });
     render(<Harness transactionId="tx-1" />);

@@ -94,3 +94,19 @@ describe("service worker: POST only (BACKLOG-3628)", () => {
     expect(w.fetchStub).not.toHaveBeenCalled();
   });
 });
+
+// BACKLOG-3641. Mutation: drop the keepr-log case (or its prefix) → red.
+describe("service worker: Sync step log (BACKLOG-3641)", () => {
+  it("prints each page line to this worker's console with the [Keepr Sync] prefix", async () => {
+    const spy = jest.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const w = loadWorker();
+      const reply = await w.send({ type: "keepr-log", line: "listed 60, stopReason stable" });
+      expect(reply).toEqual({ ok: true });
+      expect(spy).toHaveBeenCalledWith("[Keepr Sync] listed 60, stopReason stable");
+      expect(w.fetchStub).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
