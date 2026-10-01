@@ -240,6 +240,8 @@ export class RcsCacheStaging {
   private readonly ended = new Set<string>();
   /** SR B1: jobs whose commit is running — a sweep never touches them. */
   private readonly committing = new Set<string>();
+  /** SR: commits given up on (the save timeout): a slow one must not write afterwards. */
+  private readonly abandoned = new Set<string>();
 
   /** True while a commit runs (Keepr treats it as busy: no new Sync, no clear). */
   get isCommitting(): boolean {
@@ -347,6 +349,8 @@ export class RcsCacheStaging {
         finalPath.set(img, target);
       }
 
+      // A slow (not hung) commit abandoned meanwhile writes nothing.
+      if (this.abandoned.has(jobId)) throw new RcsStagingJobEndedError();
       const result = this.db.inTransaction((): CacheCommitResult => {
         let chats = 0;
         let stored = 0;
@@ -428,6 +432,7 @@ export class RcsCacheStaging {
    * clean-up is harmless (idempotent).
    */
   async abandon(jobId: string): Promise<void> {
+    this.abandoned.add(jobId);
     this.committing.delete(jobId);
     await this.discard(jobId);
   }
