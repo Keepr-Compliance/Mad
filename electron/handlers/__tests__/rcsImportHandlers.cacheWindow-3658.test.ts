@@ -13,6 +13,8 @@
  */
 
 const DAY = 24 * 60 * 60 * 1000;
+export {};
+
 const handlers = new Map<string, (event: unknown, args?: unknown) => Promise<unknown>>();
 const created: Array<{ userId: string; since: string }> = [];
 const electronApp = { isPackaged: true, getPath: () => "/tmp/keepr-test" };

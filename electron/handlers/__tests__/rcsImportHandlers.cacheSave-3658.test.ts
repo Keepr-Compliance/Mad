@@ -14,6 +14,8 @@
  *   S1  the refresh broadcast dropped / sent before link → "refresh after save"
  */
 
+export {};
+
 const handlers = new Map<string, (event: unknown, args?: unknown) => Promise<unknown>>();
 const broadcasts: Array<[string, unknown]> = [];
 const order: string[] = [];
