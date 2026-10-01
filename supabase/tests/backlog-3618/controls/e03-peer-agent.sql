@@ -10,6 +10,10 @@ SELECT pg_temp.expect('e03e agent2 UPDATE A1 items', format('UPDATE public.check
 SELECT pg_temp.expect('e03f agent2 DELETE A1 items', format('DELETE FROM public.checklist_template_items WHERE template_id = %L', current_setting('t3618.p')), 'rows:0');
 SELECT pg_temp.act_as(pg_temp.id('u_e_agent'));
 SELECT pg_temp.expect('e03g other-org agent SELECT A1 template', format('SELECT 1 FROM public.checklist_templates WHERE id = %L', current_setting('t3618.p')), 'rows:0');
+-- C11 (SR review a3493296): an other-org agent cannot read o_t1's own
+-- BROKERAGE templates either, not just A1's private one.
+SELECT pg_temp.expect('e03j other-org agent SELECT o_t1 brokerage template', format('SELECT 1 FROM public.checklist_templates WHERE id = %L', pg_temp.id('tpl_t1_a')), 'rows:0');
+SELECT pg_temp.expect('e03k other-org agent SELECT o_t1 brokerage items', format('SELECT 1 FROM public.checklist_template_items WHERE template_id = %L', pg_temp.id('tpl_t1_a')), 'rows:0');
 SELECT pg_temp.act_owner();
 SELECT pg_temp.check((SELECT name FROM public.checklist_templates WHERE id = current_setting('t3618.p')::uuid) = 'A1 private', 'e03h A1 template unchanged');
 SELECT pg_temp.check((SELECT count(*) FROM public.checklist_template_items WHERE template_id = current_setting('t3618.p')::uuid AND title = 'A1 private item') = 1, 'e03i A1 item unchanged');
