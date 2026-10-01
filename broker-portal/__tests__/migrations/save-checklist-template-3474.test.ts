@@ -66,12 +66,16 @@ describe('BACKLOG-3474 save_checklist_template migration (A14)', () => {
     expect(FILE > '20260921101757_backlog_3473_transaction_checklists.sql').toBe(true);
   });
 
-  it('is the last migration that defines save_checklist_template', () => {
+  // BACKLOG-3618 replaces this six-argument function with an eight-argument
+  // one; its own tripwire (agent-checklists-3618.test.ts) pins that file.
+  it('is the last migration before BACKLOG-3618 that defines save_checklist_template, and 3618 the only one after', () => {
     const definers = readdirSync(MIGRATIONS_DIR)
       .filter((f) => f.endsWith('.sql'))
       .sort()
       .filter((f) => /FUNCTION\s+("?public"?\.)?"?save_checklist_template"?\s*\(/i.test(stripSqlComments(readMigration(f))));
-    expect(definers[definers.length - 1]).toBe(FILE);
+    const at = definers.indexOf(FILE);
+    expect(at).toBeGreaterThan(-1);
+    expect(definers.slice(at + 1)).toEqual(['20261001120000_backlog_3618_agent_checklist_templates.sql']);
   });
 
   it('runs SECURITY INVOKER with a pinned search_path, never SECURITY DEFINER', () => {
