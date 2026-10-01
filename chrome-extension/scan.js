@@ -474,6 +474,22 @@
     target.dispatchEvent(new view.KeyboardEvent("keyup", init));
   }
 
+  /** How long a stuck Details panel gets to close after Escape / Done. */
+  var RECOVER_MS = 5000;
+
+  /**
+   * SR: close a Details panel that is still open — Escape, then Done if it is
+   * still there, then wait up to timeoutMs. True when the rows are gone.
+   */
+  async function recoverDetails(doc, io, timeoutMs) {
+    var gone = function () { return !doc.querySelector(SELECTORS.participant); };
+    if (gone()) return true;
+    pressEscape(doc, io);
+    var done = doc.querySelector(SELECTORS.detailsDone);
+    if (done && !gone()) io.click(done);
+    return !!(await waitForOrNull(gone, io.sleep, timeoutMs));
+  }
+
   /** Waits up to timeoutMs; null instead of throwing. */
   async function waitForOrNull(predicate, sleep, timeoutMs) {
     try {
@@ -511,7 +527,8 @@
     var t = io.timeoutMs || 5000;
     // Rows already on screen belong to an earlier chat whose Details did not
     // close. Reading them would check this chat against the wrong numbers.
-    if (doc.querySelector(SELECTORS.participant)) {
+    // SR: one stuck panel must not end a 300-chat run — try to close it first.
+    if (doc.querySelector(SELECTORS.participant) && !(await recoverDetails(doc, io, RECOVER_MS))) {
       var stuck = new Error("The Details panel from an earlier chat is still open");
       stuck.code = "details_stuck";
       throw stuck;
@@ -529,8 +546,14 @@
     var listed = await waitForOrNull(function () { return doc.querySelector(SELECTORS.participant); }, io.sleep, t);
     if (!listed) {
       var doneEarly = doc.querySelector(SELECTORS.detailsDone);
-      if (doneEarly) io.click(doneEarly);
-      else pressEscape(doc, io);
+      if (doneEarly) {
+        io.click(doneEarly);
+        // Still open after the wait: Escape as well.
+        var shut = await waitForOrNull(function () { return !doc.querySelector(SELECTORS.detailsDone); }, io.sleep, t);
+        if (!shut) pressEscape(doc, io);
+      } else {
+        pressEscape(doc, io);
+      }
       return noNumbers("no_details");
     }
     var rows = doc.querySelectorAll(SELECTORS.participant);
@@ -557,9 +580,10 @@
     }
     // Not enumerable: callers that only want the numbers see a plain list.
     Object.defineProperty(numbers, "rows", { value: people, enumerable: false });
-    var done = await waitFor(function () { return doc.querySelector(SELECTORS.detailsDone); }, io.sleep, t, 100, "the Done button");
-    io.click(done);
-    await waitFor(function () { return !doc.querySelector(SELECTORS.participant); }, io.sleep, t, 100, "Details to close");
+    var done = await waitForOrNull(function () { return doc.querySelector(SELECTORS.detailsDone); }, io.sleep, t);
+    if (done) io.click(done);
+    var closed = await waitForOrNull(function () { return !doc.querySelector(SELECTORS.participant); }, io.sleep, t);
+    if (!closed && !(await recoverDetails(doc, io, RECOVER_MS))) throw new Error("Timed out waiting for Details to close");
     return numbers;
   }
 

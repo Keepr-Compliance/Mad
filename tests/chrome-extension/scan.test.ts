@@ -42,7 +42,7 @@ interface ScanModule {
   ) => Array<{ conversation: Conv; reason: string }>;
   readParticipantsAndClose: (
     doc: Document,
-    io: { click: (el: Element) => void; sleep: (ms: number) => Promise<void>; timeoutMs?: number },
+    io: { click: (el: Element) => void; sleep: (ms: number) => Promise<void>; timeoutMs?: number; escape?: () => void },
   ) => Promise<string[] & { rows?: Array<{ name: string; number: string }> }>;
 }
 
@@ -541,21 +541,54 @@ describe("SR fix 1: a job Keepr no longer knows ends the run", () => {
 });
 
 describe("SR fix 2: Details rows from an earlier chat", () => {
-  it("readParticipantsAndClose throws details_stuck when participant rows are on screen before the menu click", async () => {
+  it("readParticipantsAndClose throws details_stuck when an earlier chat's Details cannot be closed (Escape and Done tried)", async () => {
     const page = mountDetails(["(555) 555-0109"]);
     page.click(document.querySelector("[data-e2e-conversation-menu-button]")!);
     page.click(document.querySelector("[data-e2e-details-button]")!);
     page.clicks.length = 0; // the earlier chat's Details is open and never closed
+    const stuckClick = (el: Element): void => {
+      if (el.matches('button[aria-label="Done"]')) {
+        page.clicks.push("done (ignored)");
+        return;
+      }
+      page.click(el);
+    };
+    const escapes: string[] = [];
     let result: string[] | undefined;
     const err = await scan
-      .readParticipantsAndClose(document, { click: page.click, sleep: noSleep, timeoutMs: 500 })
+      .readParticipantsAndClose(document, { click: stuckClick, sleep: noSleep, timeoutMs: 500, escape: () => escapes.push("esc") })
       .then((r) => {
         result = r;
         return null;
       }, (e: Error & { code?: string }) => e);
     expect(result).toBeUndefined();
     expect(err?.code).toBe("details_stuck");
-    expect(page.clicks).toEqual([]);
+    expect(escapes).toEqual(["esc"]);
+    expect(page.clicks).toEqual(["done (ignored)"]); // and never the menu
+  });
+
+  // SR (before the cache test): one stuck panel must not end a 300-chat run.
+  it("an earlier chat's Details that closes on recovery: the read goes on for this chat", async () => {
+    const page = mountDetails(["(555) 555-0109"]);
+    page.click(document.querySelector("[data-e2e-conversation-menu-button]")!);
+    page.click(document.querySelector("[data-e2e-details-button]")!);
+    page.clicks.length = 0;
+    const numbers = await scan.readParticipantsAndClose(document, { click: page.click, sleep: noSleep, timeoutMs: 500, escape: () => {} });
+    expect(Array.from(numbers)).toEqual(["(555) 555-0109"]);
+    expect(page.clicks).toEqual(["done", "menu", "details", "done"]);
+  });
+
+  it("Done does nothing at the end of a read but Escape closes Details: the numbers are returned", async () => {
+    const page = mountDetails(["(555) 555-0199"]);
+    const noDone = (el: Element): void => {
+      if (el.matches('button[aria-label="Done"]')) return;
+      page.click(el);
+    };
+    const escape = (): void => {
+      document.getElementById("overlay-container")!.innerHTML = "";
+    };
+    const numbers = await scan.readParticipantsAndClose(document, { click: noDone, sleep: noSleep, timeoutMs: 500, escape });
+    expect(Array.from(numbers)).toEqual(["(555) 555-0199"]);
   });
 
   it("the job fails with details_stuck instead of skipping: no /match for that chat, no /finish", async () => {

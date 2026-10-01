@@ -124,6 +124,20 @@ describe("readParticipantsAndClose: AI chats and unreadable Details", () => {
     expect(page.clicks).toEqual(["menu", "details", "done"]);
   });
 
+  it("Details without rows whose Done does nothing: Escape after the wait", async () => {
+    const page = mountChat({ menu: true, details: true, participants: false });
+    const click = (el: Element): void => {
+      if (el.matches('button[aria-label="Done"]')) {
+        page.clicks.push("done (ignored)");
+        return;
+      }
+      page.click(el);
+    };
+    const out = await scan.readParticipantsAndClose(document, { click, sleep: countingSleep, escape: page.escape, timeoutMs: 500 });
+    expect(out.kind).toBe("no_details");
+    expect(page.clicks).toEqual(["menu", "details", "done (ignored)", "escape"]);
+  });
+
   it("an ordinary chat still reads its number (no kind)", async () => {
     const page = mountChat({ menu: true, details: true, participants: true });
     const out = await scan.readParticipantsAndClose(document, { click: page.click, sleep: countingSleep });
