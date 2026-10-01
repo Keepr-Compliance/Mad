@@ -9,8 +9,7 @@
  *   - an image Keepr does not keep (422 not_a_contact) is counted apart and
  *     never makes the chat "not fully imported";
  *   - the steps PAUSE while the tab is hidden and resume once visible;
- *   - progress lines carry a Cancel for this job; the button reads "Sync to
- *     Keepr" and says why when it cannot start.
+ *   - progress lines carry a Cancel for this job.
  *
  * Mutations that turn this suite red:
  *   M1 drop the `since` stop in collectConversations         → "stops at the first chat older than since"
@@ -21,7 +20,7 @@
  *   M6 drop holdWhileHidden before a chat                     → "pauses while hidden"
  *   M7 the history floor back to startDate for a cache job    → "history floor is since"
  *   M8 no Cancel on progress lines / Cancel calls nothing     → "renderOverlay: Cancel"
- *   M9 the not-opted-in hint dropped / button enabled         → "syncButtonState"
+ *   M9 the page Sync button brought back                     → "no Keepr element on the page when idle"
  */
 
 import * as fs from "fs";
@@ -30,7 +29,6 @@ import * as path from "path";
 /* eslint-disable @typescript-eslint/no-require-imports */
 const scan = require("../../chrome-extension/scan.js") as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 const job = require("../../chrome-extension/job.js") as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
-const content = require("../../chrome-extension/content.js") as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 /* eslint-enable @typescript-eslint/no-require-imports */
 
 const JOB = "11111111-2222-4333-8444-555555555555"; // pii-allow-uuid: invented, not from any live row
@@ -351,39 +349,12 @@ describe("renderOverlay: Cancel (M8)", () => {
   });
 });
 
-describe("the page's Sync to Keepr button (M9)", () => {
-  const base = { running: false, starting: false, pageSignedIn: true };
-  it.each([
-    [{ ...base, status: { ok: true, body: { ready: true } } }, false, ""],
-    [{ ...base, status: { ok: true, body: { ready: false, reason: "not_opted_in" } } }, true, "Turn on in Keepr: Dashboard → Sync Android"],
-    [{ ...base, status: { ok: true, body: { ready: false, reason: "signed_out" } } }, true, "Sign in to Keepr first"],
-    [{ ...base, status: { ok: true, body: { ready: false, reason: "busy" } } }, true, "Keepr is busy — try again in a moment"],
-    [{ ...base, status: { ok: false, status: 0, body: null } }, true, "Open Keepr to sync"],
-    [{ ...base, pageSignedIn: false, status: { ok: true, body: { ready: true } } }, true, "Sign in to Google Messages first"],
-  ])("%j → disabled %s, hint %p", (input, disabled, hint) => {
-    const state = content.syncButtonState(input);
-    expect(state).toEqual({ label: "Sync to Keepr", disabled, hint });
-  });
-
-  it("disabled while a Sync runs", () => {
-    expect(content.syncButtonState({ ...base, running: true, status: { ok: true, body: { ready: true } } })).toMatchObject({
-      label: "Sync running…",
-      disabled: true,
-    });
-  });
-
-  it("a refused start says why", () => {
-    expect(content.startRefusalHint({ ok: false, status: 403, body: { error: "not_opted_in" } })).toBe(
-      "Turn on in Keepr: Dashboard → Sync Android",
-    );
-    expect(content.startRefusalHint({ ok: false, status: 409, body: { error: "already_syncing" } })).toBe(
-      "Keepr is busy — try again in a moment",
-    );
-    expect(content.startRefusalHint({ ok: false, status: 0, body: null })).toBe("Open Keepr to sync");
-  });
-
-  it("the button is made with createElement/textContent only (no markup from strings)", () => {
+// Founder decision (BACKLOG-3658): no Sync button on the page; the extension
+// shows nothing when idle. Mutation: bring the button back → red.
+describe("no Keepr element on the page when idle", () => {
+  it("content.js no longer builds a Sync button or asks for a cache status", () => {
     const src = fs.readFileSync(path.join(__dirname, "..", "..", "chrome-extension", "content.js"), "utf8");
+    expect(src).not.toMatch(/Sync to Keepr|keepr-cache-start|keepr-cache-status|cache\/status/);
     expect(src).not.toMatch(/innerHTML|insertAdjacentHTML|outerHTML/);
   });
 });

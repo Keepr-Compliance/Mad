@@ -178,13 +178,6 @@ export interface RcsExtensionBridgeOptions {
   onJobFinished?: (job: RcsJobSnapshot) => void;
   /** BACKLOG-3641: the page's "Open Keepr" button (POST /focus). */
   onFocusRequested?: () => void;
-  /**
-   * BACKLOG-3658: the page's "Sync to Keepr" (POST /job/cache/start). Keepr
-   * decides (signed in, opted in, nothing running) and answers status + body.
-   */
-  startCacheJobFromPage?: () => Promise<{ status: number; body: Record<string, unknown> }>;
-  /** BACKLOG-3658: POST /cache/status — may the page's "Sync to Keepr" start now? No user data. */
-  cacheStatus?: () => Promise<{ ready: true } | { ready: false; reason: "signed_out" | "not_opted_in" | "busy" }>;
   /** BACKLOG-3658: POST /hello — the extension is installed ({version}) / the page is paired. */
   onHello?: (hello: RcsHello) => void;
   /** BACKLOG-3658: store a cache chat for `userId` (no transaction, no link). */
@@ -592,28 +585,6 @@ export class RcsExtensionBridge {
         if (b.paired === true) hello.paired = true;
         this.options.onHello?.(hello);
         sendJson(res, 200, { ok: true });
-        return;
-      }
-
-      // BACKLOG-3658: the page's button state (ready, or why not). No user data.
-      if (path === "/cache/status") {
-        if (!this.options.cacheStatus) {
-          sendJson(res, 501, { error: "unsupported" });
-          return;
-        }
-        const status = await this.options.cacheStatus();
-        sendJson(res, 200, status.ready ? { ready: true } : { ready: false, reason: status.reason });
-        return;
-      }
-
-      // BACKLOG-3658: the page's "Sync to Keepr" button starts the cache job.
-      if (path === "/job/cache/start") {
-        if (!this.options.startCacheJobFromPage) {
-          sendJson(res, 501, { error: "unsupported" });
-          return;
-        }
-        const answer = await this.options.startCacheJobFromPage();
-        sendJson(res, answer.status, answer.body);
         return;
       }
 

@@ -107,7 +107,7 @@ async function focusKeepr() {
 }
 
 // ---------------------------------------------------------------------------
-// BACKLOG-3658: presence, and the page's "Sync to Keepr"
+// BACKLOG-3658: presence (a Sync is always started from Keepr)
 // ---------------------------------------------------------------------------
 
 /** One POST to a non-job bridge route. Always resolves {ok, status, body}. */
@@ -174,23 +174,6 @@ async function sayHello(paired) {
   const body = { version: extensionVersion() };
   if (paired) body.paired = true;
   return postBridge("/hello", body);
-}
-
-/**
- * The page's "Sync to Keepr": Keepr starts a cache job; the job then runs in
- * the tab that asked (job.js takes it through "keepr-run-job").
- */
-async function startCacheSync(senderTab) {
-  const started = await jobApi("POST", "/job/cache/start", {});
-  if (!started.ok || !started.body || typeof started.body.jobId !== "string") return started;
-  if (!senderTab || senderTab.id === undefined) return { ok: false, status: 0, body: { message: "No tab to run in." } };
-  const accepted = await askTab(senderTab.id, { type: "keepr-run-job", jobId: started.body.jobId });
-  if (!accepted || !accepted.ok) {
-    // The tab could not take it: give it back so Keepr is not left "syncing".
-    await jobApi("POST", "/job/" + started.body.jobId + "/cancel", {});
-    return { ok: false, status: 0, body: { message: "This tab is busy. Try again." } };
-  }
-  return { ok: true, status: 200, body: { jobId: started.body.jobId } };
 }
 
 function askTab(tabId, message) {
@@ -268,12 +251,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case "keepr-hello":
       // BACKLOG-3658: a signed-in Messages page is open.
       sayHello(message.paired === true).then(sendResponse, fail);
-      return true;
-    case "keepr-cache-status":
-      postBridge("/cache/status", {}).then(sendResponse, fail);
-      return true;
-    case "keepr-cache-start":
-      startCacheSync(sender.tab).then(sendResponse, fail);
       return true;
     case "keepr-log":
       // BACKLOG-3641: the Sync step log, for the founder to copy from this

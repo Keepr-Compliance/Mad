@@ -263,20 +263,6 @@ describe("RcsExtensionBridge", () => {
       }
     });
 
-    it("/job/cache/start answers what Keepr decides", async () => {
-      const own = new RcsExtensionBridge({
-        importChat,
-        startCacheJobFromPage: async () => ({ status: 403, body: { error: "not_opted_in", message: "Turn on" } }),
-      });
-      expect(await own.start(0)).toBe("listening");
-      try {
-        const reply = await request(own.getStatus().port, "POST", "/job/cache/start", EXT);
-        expect(reply).toEqual({ status: 403, body: { error: "not_opted_in", message: "Turn on" } });
-      } finally {
-        await own.stop();
-      }
-      expect((await request(port, "POST", "/job/cache/start", EXT)).status).toBe(501);
-    });
   });
 
   describe("session (control 3)", () => {
@@ -708,7 +694,6 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
   let imageAnswer: { stored: false; reason: "not_a_contact" } | { stored: true; alreadyPresent: false; filename: string; bytes: number };
   let jobId: string;
   let focus: string[];
-  let cacheStatus: { ready: true } | { ready: false; reason: "signed_out" | "not_opted_in" | "busy" } = { ready: true };
 
   beforeEach(async () => {
     current = "user-a";
@@ -726,7 +711,6 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
       currentUserId: async () => current,
       onJobEnded: (e) => void ended.push({ state: e.snapshot.state, kind: e.kind, userId: e.userId }),
       onJobFinished: () => void focus.push("front"),
-      cacheStatus: async () => cacheStatus,
       jobs: new RcsJobRegistry(),
     });
     expect(await bridge.start(0)).toBe("listening");
@@ -812,18 +796,11 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
     expect(focus).toEqual(["front"]);
   });
 
-  // BACKLOG-3658 P2: the page button state — ready, or a reason; never user data.
-  it("POST /cache/status answers ready or a reason only", async () => {
-    cacheStatus = { ready: true };
-    expect(await request(port, "POST", "/cache/status", EXT, "{}")).toEqual({ status: 200, body: { ready: true } });
-    cacheStatus = { ready: false, reason: "not_opted_in" };
-    expect(await request(port, "POST", "/cache/status", EXT, "{}")).toEqual({
-      status: 200, body: { ready: false, reason: "not_opted_in" },
-    });
-    // Extra fields from the provider never reach the page.
-    cacheStatus = { ready: false, reason: "busy", userId: "user-a" } as unknown as typeof cacheStatus;
-    expect((await request(port, "POST", "/cache/status", EXT, "{}")).body).toEqual({ ready: false, reason: "busy" });
-    expect((await request(port, "POST", "/cache/status", { ...JSON_HEADERS, Origin: "https://messages.google.com" }, "{}")).status).toBe(403);
+  // Founder decision (BACKLOG-3658): a Sync is always started from Keepr — the
+  // page routes are gone. Mutation: bring either route back → red.
+  it("there is no page start or status route", async () => {
+    expect((await request(port, "POST", "/job/cache/start", EXT, "{}")).status).toBe(404);
+    expect((await request(port, "POST", "/cache/status", EXT, "{}")).status).toBe(404);
   });
 
   // BACKLOG-3664. Mutation: notText not parsed from /finish → red.

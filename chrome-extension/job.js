@@ -714,7 +714,7 @@
    * @param {boolean} isError
    * @param {{details: string, copy: string}=} extras
    * @param {{copy: function(string): Promise<boolean>, focus?: function(): Promise<boolean>,
-   *   cancel?: function(): Promise<boolean>}} io
+   *   cancel?: function(): Promise<boolean>, close?: function(): void}} io
    */
   function renderOverlay(panel, text, isError, extras, io) {
     var doc = panel.ownerDocument;
@@ -725,6 +725,21 @@
     line.setAttribute("data-keepr", "line");
     line.textContent = "Keepr: " + text;
     Object.assign(line.style, { fontWeight: "600" });
+    // BACKLOG-3658 (founder): once the Sync is over (result card, failure,
+    // cancelled) the box can be closed; a running Sync keeps it.
+    if (io.close && (isError || !!(extras && extras.details))) {
+      var close = doc.createElement("button");
+      close.type = "button";
+      close.setAttribute("data-keepr", "close");
+      close.setAttribute("aria-label", "Close");
+      close.textContent = "×";
+      Object.assign(close.style, {
+        float: "right", marginLeft: "8px", background: "none", border: "none", padding: "0 4px",
+        cursor: "pointer", font: "inherit", fontSize: "16px", lineHeight: "1", color: "inherit",
+      });
+      close.addEventListener("click", function () { io.close(); });
+      panel.appendChild(close);
+    }
     panel.appendChild(line);
     if (!extras) return;
     if (extras.cancel && !extras.details) {
@@ -1044,13 +1059,23 @@
         },
       });
       move.addEventListener("click", function () { mover.moveToNextCorner(); });
-      root.addEventListener("resize", function () { mover.keepOnScreen(); });
+      root.addEventListener("resize", function () { if (mover) mover.keepOnScreen(); });
     }
-    renderOverlay(panel, text, isError, extras, { copy: copyToClipboard, focus: focusKeepr, cancel: cancelJob });
+    renderOverlay(panel, text, isError, extras, {
+      copy: copyToClipboard, focus: focusKeepr, cancel: cancelJob, close: closeOverlay,
+    });
     // The box wears the content's colours; a taller box is kept on screen.
     box.style.background = panel.style.background;
     box.style.color = panel.style.color;
     mover.keepOnScreen();
+  }
+
+  /** Close (×): the box goes; the next Sync makes a new one where it was. */
+  function closeOverlay() {
+    if (box && box.parentNode) box.parentNode.removeChild(box);
+    box = null;
+    panel = null;
+    mover = null;
   }
 
   /** The page's Cancel: POST /job/<this job>/cancel through the worker. */

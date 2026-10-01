@@ -62,19 +62,6 @@ export function decideCacheStart(input: {
   return { ok: true, userId: input.userId };
 }
 
-/** BACKLOG-3658: why the page's "Sync to Keepr" button is not ready (no user data). */
-export type CacheStatusReason = "signed_out" | "not_opted_in" | "busy";
-
-/** The page's button state, from the same rule as starting a cache Sync. */
-export function cacheStatusFrom(
-  decision: { ok: true; userId: string } | CacheStartRefusal,
-): { ready: true } | { ready: false; reason: CacheStatusReason } {
-  if ("ok" in decision) return { ready: true };
-  if (decision.error === "signed_out") return { ready: false, reason: "signed_out" };
-  if (decision.error === "not_opted_in") return { ready: false, reason: "not_opted_in" };
-  return { ready: false, reason: "busy" };
-}
-
 /** BACKLOG-3658: an extension report is written to the database at most once a minute per user. */
 export const RCS_HELLO_PERSIST_MS = 60_000;
 

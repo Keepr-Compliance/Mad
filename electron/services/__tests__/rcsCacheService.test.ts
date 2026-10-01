@@ -11,14 +11,12 @@
  *   R4 no auto-link after a cancel or an error                          → "auto-link runs whatever the outcome"
  *   R5 a transaction Sync treated as a cache Sync                       → "a transaction Sync is left alone"
  *   R6 the finish time = now instead of the job start (SR P1)           → "the job START time is saved"
- *   R7 a status reason other than signed_out/not_opted_in/busy          → "button status"
  *   R8 the hello throttle off by one or missing                         → "hello at most once a minute"
  *   R9 a sign-out / user switch not cancelling, or a refresh cancelling  → "session changes"
  */
 
 import {
   cacheSince,
-  cacheStatusFrom,
   cancelOnSessionChange,
   decideCacheStart,
   handleCacheJobEnded,
@@ -134,18 +132,6 @@ describe("when a cache Sync ends", () => {
       log: (m) => void logs.push(m),
     })).resolves.toBeUndefined();
     expect(logs[0]).toContain("db busy");
-  });
-});
-
-describe("button status for the page (R7)", () => {
-  it.each([
-    [{ ok: true as const, userId: "u-1" }, { ready: true }],
-    [{ status: 403, error: "signed_out", message: "x" }, { ready: false, reason: "signed_out" }],
-    [{ status: 403, error: "not_opted_in", message: "x" }, { ready: false, reason: "not_opted_in" }],
-    [{ status: 503, error: "busy", message: "x" }, { ready: false, reason: "busy" }],
-    [{ status: 409, error: "already_syncing", message: "x" }, { ready: false, reason: "busy" }],
-  ])("%j → %j (no user data)", (decision, expected) => {
-    expect(cacheStatusFrom(decision)).toEqual(expected);
   });
 });
 

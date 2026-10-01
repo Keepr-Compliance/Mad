@@ -101,3 +101,29 @@ describe("the Move button (keyboard alternative)", () => {
     expect(job.clampPosition({ left: 50, top: 50 }, { width: 2000, height: 2000 }, VIEW)).toEqual({ left: 8, top: 8 });
   });
 });
+
+// BACKLOG-3658 (founder): one box; it becomes the result card and can then be
+// closed. Mutations: C1 no close on the result card / a failure; C2 a close on
+// a running Sync's progress line; C3 the close does nothing.
+describe("closing the box when the Sync is over", () => {
+  function render(text: string, isError: boolean, extras?: unknown) {
+    const panel = document.createElement("div");
+    const close = jest.fn();
+    job.renderOverlay(panel, text, isError, extras, { copy: async () => true, close });
+    return { panel, close };
+  }
+
+  it("the result card and a failure have a Close (C1, C3)", () => {
+    const card = render(job.DONE_LINE, false, { details: "d", copy: "c" });
+    const button = card.panel.querySelector('[data-keepr="close"]') as HTMLButtonElement;
+    expect(button.getAttribute("aria-label")).toBe("Close");
+    button.click();
+    expect(card.close).toHaveBeenCalledTimes(1);
+    expect(render("Sync cancelled in Keepr", true).panel.querySelector('[data-keepr="close"]')).not.toBeNull();
+  });
+
+  it("a running Sync's progress line has none (C2)", () => {
+    expect(render("Chat 1 of 9…", false, { cancel: true }).panel.querySelector('[data-keepr="close"]')).toBeNull();
+    expect(render("Loading your conversation list…", false).panel.querySelector('[data-keepr="close"]')).toBeNull();
+  });
+});

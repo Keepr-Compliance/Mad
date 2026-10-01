@@ -37,7 +37,6 @@ import { storeImage, type RcsMediaDeps } from "../services/rcsImportMedia";
 import { importCacheChat, importChat, type RcsImportDeps } from "../services/rcsImportStore";
 import {
   cacheSince,
-  cacheStatusFrom,
   cancelOnSessionChange,
   decideCacheStart,
   handleCacheJobEnded,
@@ -219,19 +218,6 @@ async function startCacheJob(): Promise<
   return { ok: true, job };
 }
 
-/** The page's "Sync to Keepr" state: the same rule as starting one. No user data. */
-async function cacheStatus(): Promise<{ ready: true } | { ready: false; reason: "signed_out" | "not_opted_in" | "busy" }> {
-  const userId = await currentUserId();
-  const state = userId ? databaseService.getRcsCacheState(userId) : null;
-  const active = bridge.activeJob();
-  return cacheStatusFrom(decideCacheStart({
-    userId,
-    optedIn: !!state?.optedInAt,
-    activeLabel: active ? active.label ?? "" : null,
-    writesPaused: bridge.writesArePaused,
-  }));
-}
-
 const bridge = new RcsExtensionBridge({
   importChat: (chat, transactionId, people) => importChat(chat, transactionId, deps, people),
   importCacheChat: (chat, userId, people) => importCacheChat(chat, userId, deps, people),
@@ -241,13 +227,7 @@ const bridge = new RcsExtensionBridge({
     return storeImage(image, userId, mediaDeps, chatHash);
   },
   currentUserId,
-  cacheStatus,
   onHello: (hello) => void onHello(hello),
-  startCacheJobFromPage: async () => {
-    const started = await startCacheJob();
-    if (!started.ok) return { status: started.status, body: { error: started.error, message: started.message } };
-    return { status: 200, body: { jobId: started.job.jobId } };
-  },
   onJobEnded: (ended) =>
     void handleCacheJobEnded(ended, {
       saveFinishedAt: (userId, iso) => databaseService.updateRcsCacheState(userId, { lastCacheFinishedAt: iso }),
