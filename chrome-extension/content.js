@@ -178,7 +178,13 @@
       }
       const participants = numbers.rows || numbers.map((n) => ({ name: "", number: n }));
       if (participants.length === 0) {
-        showStatus("Open the chat's Details: no phone number found", true);
+        // BACKLOG-3664: an AI chat (Gemini) has no Details or number.
+        showStatus(
+          numbers.kind === "not_text"
+            ? "This isn't a text conversation, so there is nothing to send"
+            : "Open the chat's Details: no phone number found",
+          true,
+        );
         return;
       }
       showStatus(`Sending ${extracted.messages.length} messages…`, false);

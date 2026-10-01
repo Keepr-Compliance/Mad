@@ -113,6 +113,9 @@
       lines.push(s.contactsWithoutPhone + " contact" + (s.contactsWithoutPhone === 1 ? " has" : "s have") +
         " no phone number — see Keepr");
     }
+    if (s.notText > 0) {
+      lines.push(s.notText + " not a text conversation (e.g. an AI chat) — skipped");
+    }
     if (s.imagesNotKept > 0) {
       lines.push(s.imagesNotKept + " images not kept (no transaction contact in the chat)");
     }
@@ -242,20 +245,23 @@
    */
   /**
    * BACKLOG-3658: a cache Sync's chats — every chat above the cutoff, in list
-   * order (no name planning). The list is newest first, so the first chat whose
-   * time is older than `since` is the cutoff; with no readable time the whole
-   * list counts. At most CACHE_CHECK_MAX are checked; the rest are "not checked".
+   * order (no name planning). The list is newest first: the cutoff is the first
+   * of two chats in a row older than `since` (SR: one older chat may be pinned
+   * at the top). A single older chat above it has nothing new and is left out;
+   * a chat with no readable time is kept. With no readable times the whole list
+   * counts. At most CACHE_CHECK_MAX are checked; the rest are "not checked".
    */
   function cachePlan(conversations, sinceMs) {
     var above = conversations;
     if (typeof sinceMs === "number" && isFinite(sinceMs)) {
+      var older = function (c) { return !!c && typeof c.timeMs === "number" && c.timeMs < sinceMs; };
       for (var i = 0; i < conversations.length; i++) {
-        var t = conversations[i].timeMs;
-        if (typeof t === "number" && t < sinceMs) {
+        if (older(conversations[i]) && older(conversations[i + 1])) {
           above = conversations.slice(0, i);
           break;
         }
       }
+      above = above.filter(function (c) { return !older(c); });
     }
     var picked = above.slice(0, CACHE_CHECK_MAX);
     return {
@@ -326,7 +332,7 @@
       return reply;
     }
     var progress = { listed: 0, candidates: 0, checked: 0, skipped: 0, notChecked: 0 };
-    var totals = { chats: 0, messages: 0, images: 0, removedByUser: 0, imagesNotKept: 0 };
+    var totals = { chats: 0, messages: 0, images: 0, removedByUser: 0, imagesNotKept: 0, notText: 0 };
     var contactsWithoutPhone = 0;
 
     // BACKLOG-3658: progress lines carry the page's Cancel (this job only).
@@ -375,6 +381,7 @@
         contactsWithoutPhone: contactsWithoutPhone,
         removedByUser: totals.removedByUser,
         imagesNotKept: totals.imagesNotKept,
+        notText: totals.notText,
         notReached: reported,
         notReachedMore: notReached.length - reported.length,
       };
@@ -488,7 +495,15 @@
         // BACKLOG-3630: name + number rows (group senders); Keepr keys the chat
         // on the numbers its /match saw.
         var people = (numbers && numbers.rows) || (numbers || []).map(function (n) { return { name: "", number: n }; });
+        // BACKLOG-3664: an AI assistant chat (Gemini) is not a text
+        // conversation: counted apart, never a failure, never "not imported".
+        if (numbers && numbers.kind === "not_text") {
+          totals.notText += 1;
+          log("  not a text conversation");
+          continue;
+        }
         progress.checked += 1;
+        if (numbers && numbers.kind === "no_details") log("  Details did not open");
         log("  numbers " + JSON.stringify((numbers || []).map(numberShape)));
         if (!numbers || numbers.length === 0) {
           // Keepr cannot check a chat with no number on screen: report it.
@@ -665,11 +680,12 @@
       notReached: reported,
       notReachedMore: more,
       notChecked: progress.notChecked,
+      notText: totals.notText,
     });
     log("done: listed " + progress.listed + ", candidates " + progress.candidates + ", checked " + progress.checked +
       ", matched " + matchedCount + ", imported " + totals.chats + " chats / " + totals.messages + " messages / " +
       totals.images + " images, not fully imported " + notReached.length + ", not checked " + progress.notChecked +
-      ", removed by you " + totals.removedByUser + ", images not kept " + totals.imagesNotKept + ", pauses " + pauses);
+      ", removed by you " + totals.removedByUser + ", images not kept " + totals.imagesNotKept + ", not text " + totals.notText + ", pauses " + pauses);
     // One line + Details / Copy (founder, BACKLOG-3641); results live in Keepr.
     env.overlay.show(DONE_LINE, false, await overlayExtras());
     return {

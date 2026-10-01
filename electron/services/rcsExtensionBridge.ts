@@ -884,6 +884,7 @@ export class RcsExtensionBridge {
           this.jobs.nowMs(),
           parseNotReached(body.notReached, body.notReachedMore),
           typeof body.notChecked === "number" ? body.notChecked : undefined,
+          typeof body.notText === "number" ? body.notText : undefined,
         );
         const snap = job.snapshot();
         // Counts only: chat names never go to the log. One chat can have two
@@ -896,7 +897,7 @@ export class RcsExtensionBridge {
         // BACKLOG-3641: the scan counts, so a 0-chat run can be explained.
         this.logger.info(
           `[RcsBridge] Sync job finished: listed ${p.listed}, candidates ${p.candidates}, checked ${p.checked}, ` +
-            `matched ${p.matched}, skipped ${p.skipped}, not checked ${p.notChecked}; imported ${p.imported} chats, ` +
+            `matched ${p.matched}, skipped ${p.skipped}, not checked ${p.notChecked}, not text ${p.notText}; imported ${p.imported} chats, ` +
             `${p.messages} messages, ${p.removedNotRelinked} removed by you not re-added; ` +
             `${chats} chats not fully imported (${entries.length} entries${more > 0 ? `, +${more} more` : ""})`,
         );

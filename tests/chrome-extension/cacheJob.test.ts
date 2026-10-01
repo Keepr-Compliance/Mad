@@ -74,7 +74,7 @@ describe("parseListTime (day precision)", () => {
     expect(scan.parseListTime(text, NOW)).toBe(expected);
   });
 
-  it.each(["", "soon", "Sep", "13/45/2026x"])("unreadable %p → null", (text) => {
+  it.each(["", "soon", "Sep", "13/45/2026x", "3/4/25", "12/12/2025"])("unreadable %p → null", (text) => {
     expect(scan.parseListTime(text, NOW)).toBeNull();
   });
 });
@@ -92,6 +92,17 @@ describe("collectConversations with a since cutoff (M1)", () => {
     expect(out.conversations[2].timeMs).toBe(new Date(2026, 8, 1).getTime());
   });
 
+  it("one older chat followed by a newer one does not stop the read (SR D)", async () => {
+    renderList([["Pinned", "Aug 1"], ["A", "3:45 PM"], ["B", "Mon"]]);
+    const out = await scan.collectConversations(document, {
+      sleep: async () => {},
+      now: () => NOW,
+      stopAtOlderThanMs: NOW - 10 * DAY,
+    });
+    expect(out.stopReason).not.toBe("since");
+    expect(out.conversations).toHaveLength(3);
+  });
+
   it("without list times it reads on (no early stop)", async () => {
     renderList([["A", null], ["B", null]]);
     const out = await scan.collectConversations(document, {
@@ -107,13 +118,19 @@ describe("collectConversations with a since cutoff (M1)", () => {
 describe("cachePlan (M2)", () => {
   const conv = (n: number, timeMs: number | null) => ({ conversationId: id(n), name: `Chat ${n}`, href: "", timeMs });
 
-  it("every chat above the cutoff, in list order; the cutoff chat and below are out", () => {
-    const list = [conv(0, NOW), conv(1, null), conv(2, NOW - 5 * DAY), conv(3, NOW - 30 * DAY), conv(4, NOW)];
+  const idsOf = (plan: { queue: Array<{ conversation: { conversationId: string } }> }) =>
+    plan.queue.map((q) => q.conversation.conversationId);
+
+  it("every chat above the cutoff (two older in a row), in list order; the cutoff and below are out", () => {
+    const list = [conv(0, NOW), conv(1, null), conv(2, NOW - 5 * DAY), conv(3, NOW - 30 * DAY), conv(4, NOW - 31 * DAY), conv(5, NOW)];
     const plan = job.cachePlan(list, NOW - 10 * DAY);
-    expect(plan.queue.map((q: { conversation: { conversationId: string } }) => q.conversation.conversationId)).toEqual([
-      id(0), id(1), id(2),
-    ]);
+    expect(idsOf(plan)).toEqual([id(0), id(1), id(2)]);
     expect(plan.notChecked).toBe(0);
+  });
+
+  it("one older chat (e.g. pinned at the top) neither cuts the list nor is checked (SR D)", () => {
+    const list = [conv(0, NOW - 90 * DAY), conv(1, NOW), conv(2, NOW - 2 * DAY)];
+    expect(idsOf(job.cachePlan(list, NOW - 10 * DAY))).toEqual([id(1), id(2)]);
   });
 
   it("no list times: the whole list, capped; the rest are not checked", () => {

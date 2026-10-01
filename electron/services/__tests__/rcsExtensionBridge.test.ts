@@ -826,6 +826,21 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
     expect((await request(port, "POST", "/cache/status", { ...JSON_HEADERS, Origin: "https://messages.google.com" }, "{}")).status).toBe(403);
   });
 
+  // BACKLOG-3664. Mutation: notText not parsed from /finish → red.
+  it("/finish records the AI chats skipped as not text conversations", async () => {
+    await request(port, "POST", `/job/${jobId}/finish`, EXT, JSON.stringify({ chats: 0, messages: 0, images: 0, notText: 2 }));
+    expect(bridge.getJob()?.progress.notText).toBe(2);
+  });
+
+  // SR (C): a cancel after the job ended is 410, never 200, and changes nothing.
+  it("cancel of a finished job: 410, still finished, announced once", async () => {
+    await request(port, "POST", `/job/${jobId}/finish`, EXT, JSON.stringify({ chats: 0, messages: 0, images: 0 }));
+    const reply = await request(port, "POST", `/job/${jobId}/cancel`, EXT, "{}");
+    expect(reply.status).toBe(410);
+    expect(bridge.getJob()?.state).toBe("finished");
+    expect(ended).toHaveLength(1);
+  });
+
   it("/error announces the end too", async () => {
     await request(port, "POST", `/job/${jobId}/error`, EXT, JSON.stringify({ code: "scan_failed", message: "x" }));
     expect(ended).toEqual([{ state: "failed", kind: "cache", userId: "user-a" }]);

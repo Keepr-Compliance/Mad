@@ -68,6 +68,8 @@ export interface RcsJobProgress {
   skipped: number;
   /** BACKLOG-3645: chats in the list the page did not check (over the cap). */
   notChecked: number;
+  /** BACKLOG-3664: AI assistant chats (Gemini) skipped — not text conversations. */
+  notText: number;
   /** BACKLOG-3642: messages stored but not linked again — the user removed them. */
   removedNotRelinked: number;
   /** BACKLOG-3658: cache images not kept (the chat has no transaction contact). */
@@ -200,6 +202,7 @@ const EMPTY_PROGRESS: RcsJobProgress = {
   reactions: 0,
   skipped: 0,
   notChecked: 0,
+  notText: 0,
   removedNotRelinked: 0,
   imagesSkipped: 0,
 };
@@ -421,8 +424,12 @@ export class RcsImportJob {
     nowMs: number,
     notReached?: { entries: RcsJobNotReached[]; more: number },
     notChecked?: number,
+    notText?: number,
   ): void {
     if (!this.isActive) return;
+    if (typeof notText === "number" && Number.isFinite(notText) && notText >= 0) {
+      this.progress.notText = Math.min(Math.floor(notText), 100_000);
+    }
     if (typeof notChecked === "number" && Number.isFinite(notChecked) && notChecked >= 0) {
       this.progress.notChecked = Math.floor(notChecked);
     }

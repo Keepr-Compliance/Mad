@@ -84,6 +84,9 @@
    */
   var LIST_TIME_SELECTORS = ["[data-e2e-conversation-timestamp]", "mws-relative-timestamp", "[data-e2e-timestamp]"];
 
+  /** Older-than-since chats in a row that end a cache Sync's list read. */
+  var SINCE_STOP_RUN = 2;
+
   var MONTHS = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
   var WEEKDAYS = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
 
@@ -91,7 +94,9 @@
    * A list time as epoch ms, at day precision (the cache only needs "older
    * than since"). Today's "3:45 PM" → now; "Yesterday"; a weekday → the most
    * recent such day; "Sep 20" (this year, or last year if that is in the
-   * future); "Sep 20, 2025"; "9/20/25". Anything else → null.
+   * future); "Sep 20, 2025"; "9/20/25" (month first). A numeric date whose
+   * first two parts are both 12 or less ("3/4/25") could be either order: null
+   * (SR). Anything else → null.
    */
   function parseListTime(text, nowMs) {
     var t = normalizeSpace(text).toLowerCase();
@@ -114,6 +119,7 @@
     }
     var nd = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/);
     if (nd) {
+      if (Number(nd[1]) <= 12 && Number(nd[2]) <= 12) return null;
       var yy = Number(nd[3]);
       if (yy < 100) yy += 2000;
       return new Date(yy, Number(nd[1]) - 1, Number(nd[2])).getTime();
@@ -206,6 +212,9 @@
 
     var stopAt = typeof opts.stopAtOlderThanMs === "number" ? opts.stopAtOlderThanMs : null;
     var reachedSince = false;
+    // SR: two older chats IN A ROW end the list (a single older one may be a
+    // pinned chat at the top); a newer or unreadable one starts over.
+    var olderInARow = 0;
     function absorb() {
       var list = readConversationList(doc, now);
       for (var i = 0; i < list.length; i++) {
@@ -213,7 +222,10 @@
           byId[list[i].conversationId] = list[i];
           order.push(list[i].conversationId);
           // BACKLOG-3658: newest first — a chat older than `since` ends the list.
-          if (stopAt !== null && list[i].timeMs !== null && list[i].timeMs < stopAt) reachedSince = true;
+          if (stopAt !== null) {
+            olderInARow = list[i].timeMs !== null && list[i].timeMs < stopAt ? olderInARow + 1 : 0;
+            if (olderInARow >= SINCE_STOP_RUN) reachedSince = true;
+          }
         }
       }
     }
@@ -439,15 +451,64 @@
   }
 
   /**
+   * BACKLOG-3664: an AI assistant chat (Gemini) sits in the conversation list
+   * but is not a text conversation. Founder, live: its Details button is
+   * greyed out. A disabled (or aria-disabled) menu or Details button is the
+   * marker.
+   */
+  function isDisabled(el) {
+    return !!el && (el.disabled === true || el.hasAttribute("disabled") || el.getAttribute("aria-disabled") === "true");
+  }
+
+  /** Close an open menu or dialog the way a user would: Escape. */
+  function pressEscape(doc, io) {
+    if (io.escape) {
+      io.escape();
+      return;
+    }
+    var view = doc.defaultView;
+    var target = doc.activeElement || doc.body;
+    if (!view || !target || typeof view.KeyboardEvent !== "function") return;
+    var init = { key: "Escape", code: "Escape", keyCode: 27, bubbles: true, cancelable: true };
+    target.dispatchEvent(new view.KeyboardEvent("keydown", init));
+    target.dispatchEvent(new view.KeyboardEvent("keyup", init));
+  }
+
+  /** Waits up to timeoutMs; null instead of throwing. */
+  async function waitForOrNull(predicate, sleep, timeoutMs) {
+    try {
+      return await waitFor(predicate, sleep, timeoutMs, 100, "");
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  /** An empty result with why: "not_text" (skip, not a failure) or "no_details" (→ no_numbers). */
+  function noNumbers(kind) {
+    var none = [];
+    Object.defineProperty(none, "rows", { value: [], enumerable: false });
+    Object.defineProperty(none, "kind", { value: kind, enumerable: false });
+    return none;
+  }
+
+  /**
    * Open Details for the open chat, read every participant's number, close
    * Details with Done and confirm the participant rows are gone.
    *
+   * BACKLOG-3664: a disabled menu or Details button → "not_text" at once (an
+   * AI chat: skipped quietly, no waits). Otherwise every wait is bounded: no
+   * menu, no Details item, or Details without participant rows → "no_details"
+   * (the caller reports no_numbers), after closing what was opened. Only a
+   * Details panel that will not close still throws (the next chat would be
+   * read against it).
+   *
    * @param {Document} doc
-   * @param {{click: function(Element): void, sleep: function(number): Promise<void>, timeoutMs?: number}} io
-   * @returns {Promise<string[]>} the numbers as shown
+   * @param {{click: function(Element): void, sleep: function(number): Promise<void>, timeoutMs?: number,
+   *   escape?: function(): void}} io
+   * @returns {Promise<string[]>} the numbers as shown; non-enumerable `rows`, and `kind` when empty for a reason
    */
   async function readParticipantsAndClose(doc, io) {
-    var t = io.timeoutMs || 10000;
+    var t = io.timeoutMs || 5000;
     // Rows already on screen belong to an earlier chat whose Details did not
     // close. Reading them would check this chat against the wrong numbers.
     if (doc.querySelector(SELECTORS.participant)) {
@@ -455,11 +516,23 @@
       stuck.code = "details_stuck";
       throw stuck;
     }
-    var menu = await waitFor(function () { return doc.querySelector(SELECTORS.menuButton); }, io.sleep, t, 100, "the conversation menu");
+    var menu = await waitForOrNull(function () { return doc.querySelector(SELECTORS.menuButton); }, io.sleep, t);
+    if (!menu) return noNumbers("no_details");
+    if (isDisabled(menu)) return noNumbers("not_text");
     io.click(menu);
-    var details = await waitFor(function () { return doc.querySelector(SELECTORS.detailsButton); }, io.sleep, t, 100, "the Details item");
+    var details = await waitForOrNull(function () { return doc.querySelector(SELECTORS.detailsButton); }, io.sleep, t);
+    if (!details || isDisabled(details)) {
+      pressEscape(doc, io);
+      return noNumbers(details ? "not_text" : "no_details");
+    }
     io.click(details);
-    await waitFor(function () { return doc.querySelector(SELECTORS.participant); }, io.sleep, t, 100, "the participant list");
+    var listed = await waitForOrNull(function () { return doc.querySelector(SELECTORS.participant); }, io.sleep, t);
+    if (!listed) {
+      var doneEarly = doc.querySelector(SELECTORS.detailsDone);
+      if (doneEarly) io.click(doneEarly);
+      else pressEscape(doc, io);
+      return noNumbers("no_details");
+    }
     var rows = doc.querySelectorAll(SELECTORS.participant);
     var numbers = [];
     // BACKLOG-3630: each number with the name shown beside it (group senders
