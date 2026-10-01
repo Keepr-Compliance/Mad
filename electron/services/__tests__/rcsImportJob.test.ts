@@ -189,12 +189,12 @@ describe("participantKey (re-pair-proof chat identity)", () => {
     expect(participantKey(["someone@example.test", ""])).toBe("");
   });
 
-  it("the job remembers the key of each chat it matched", () => {
+  it("the job remembers the numbers of each chat it matched (BACKLOG-3630)", () => {
     const { jobs } = registry();
     const job = jobs.create("tx-1", CONTACTS);
     job.claim(jobs.nowMs());
     job.match("conv-1", ["(555) 555-0199"]);
-    expect(job.participantKeyFor("conv-1")).toBe("+15555550199");
-    expect(job.participantKeyFor("conv-unknown")).toBe("");
+    expect(job.numbersFor("conv-1")).toEqual(["+15555550199"]);
+    expect(job.numbersFor("conv-unknown")).toEqual([]);
   });
 });

@@ -15,7 +15,10 @@
 import * as crypto from "crypto";
 
 import { rcsImageFilename, storeImage, type RcsMediaDeps } from "../rcsImportMedia";
-import { rcsExternalId } from "../rcsImportStore";
+import { rcsChatHash, rcsExternalId } from "../rcsImportStore";
+
+// BACKLOG-3630: an image finds its message by the chat's stable hash.
+const HASH = rcsChatHash(["+15555550199"]);
 
 const USER = "user-1";
 const PNG_BYTES = Buffer.from("synthetic-png-bytes-for-a-test");
@@ -55,18 +58,18 @@ describe("storeImage (control 5)", () => {
   it("text stored first, image later: the row gets has_attachments = 1 and one attachment row; a re-send adds none", async () => {
     const f = makeFake();
     // The message was stored earlier WITHOUT its image (has_attachments 0).
-    f.messages.set(rcsExternalId("conv-1", "301"), { id: "msg-301", hasAttachments: 0 });
+    f.messages.set(rcsExternalId(HASH, "301"), { id: "msg-301", hasAttachments: 0 });
 
     const img = { conversationId: "conv-1", msgId: "301", index: 0, mimeType: "image/png", base64: PNG };
-    const first = await storeImage(img, USER, f.deps);
+    const first = await storeImage(img, USER, f.deps, HASH);
     expect(first).toMatchObject({ stored: true, alreadyPresent: false, filename: "gmweb-301-0.png" });
-    expect(f.messages.get(rcsExternalId("conv-1", "301"))?.hasAttachments).toBe(1);
+    expect(f.messages.get(rcsExternalId(HASH, "301"))?.hasAttachments).toBe(1);
     expect(f.attachments).toHaveLength(1);
     const hash = crypto.createHash("sha256").update(PNG_BYTES).digest("hex");
     expect(f.attachments[0].storagePath).toBe(`/fake/userData/message-attachments/${hash}.png`);
     expect(f.files.size).toBe(1);
 
-    const again = await storeImage(img, USER, f.deps);
+    const again = await storeImage(img, USER, f.deps, HASH);
     expect(again).toMatchObject({ stored: true, alreadyPresent: true });
     expect(f.attachments).toHaveLength(1);
     expect(f.files.size).toBe(1);
@@ -79,12 +82,12 @@ describe("storeImage (control 5)", () => {
 
   it("refuses a non-image (PDFs are out of scope) and an image for a message not stored", async () => {
     const f = makeFake();
-    f.messages.set(rcsExternalId("conv-1", "302"), { id: "msg-302", hasAttachments: 0 });
+    f.messages.set(rcsExternalId(HASH, "302"), { id: "msg-302", hasAttachments: 0 });
     await expect(
-      storeImage({ conversationId: "conv-1", msgId: "302", index: 0, mimeType: "application/pdf", base64: PNG }, USER, f.deps),
+      storeImage({ conversationId: "conv-1", msgId: "302", index: 0, mimeType: "application/pdf", base64: PNG }, USER, f.deps, HASH),
     ).resolves.toEqual({ stored: false, reason: "not_an_image" });
     await expect(
-      storeImage({ conversationId: "conv-1", msgId: "999", index: 0, mimeType: "image/png", base64: PNG }, USER, f.deps),
+      storeImage({ conversationId: "conv-1", msgId: "999", index: 0, mimeType: "image/png", base64: PNG }, USER, f.deps, HASH),
     ).resolves.toEqual({ stored: false, reason: "message_not_found" });
     expect(f.attachments).toHaveLength(0);
   });

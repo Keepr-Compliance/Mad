@@ -399,22 +399,37 @@
     await waitFor(function () { return doc.querySelector(SELECTORS.participant); }, io.sleep, t, 100, "the participant list");
     var rows = doc.querySelectorAll(SELECTORS.participant);
     var numbers = [];
+    // BACKLOG-3630: each number with the name shown beside it (group senders
+    // are resolved by name), and never the user's own row: the chat's key is
+    // its OTHER participants, whether or not Details lists "You".
+    var people = [];
     for (var i = 0; i < rows.length; i++) {
+      var nmEl = rows[i].querySelector(SELECTORS.participantName);
+      var shownName = normalizeSpace(nmEl ? nmEl.textContent : "");
+      if (isSelfName(shownName)) continue;
       var num = rows[i].querySelector(SELECTORS.participantNumber);
       var v = normalizeSpace(num ? num.textContent : "");
       if (!v) {
         // An unsaved contact: the number span is empty and the number itself
         // is shown where a saved contact's name would be.
-        var nm = rows[i].querySelector(SELECTORS.participantName);
-        var t = normalizeSpace(nm ? nm.textContent : "");
-        if (looksLikePhone(t)) v = t;
+        if (looksLikePhone(shownName)) v = shownName;
       }
-      if (v) numbers.push(v);
+      if (v) {
+        numbers.push(v);
+        people.push({ name: v === shownName ? "" : shownName, number: v });
+      }
     }
+    // Not enumerable: callers that only want the numbers see a plain list.
+    Object.defineProperty(numbers, "rows", { value: people, enumerable: false });
     var done = await waitFor(function () { return doc.querySelector(SELECTORS.detailsDone); }, io.sleep, t, 100, "the Done button");
     io.click(done);
     await waitFor(function () { return !doc.querySelector(SELECTORS.participant); }, io.sleep, t, 100, "Details to close");
     return numbers;
+  }
+
+  /** The user's own Details row. UNTRACED label; "You" seen in other Google UIs. */
+  function isSelfName(name) {
+    return /^(you|me)$/i.test(String(name || "").trim());
   }
 
   /** Digits, +, (, ), - and spaces only, with at least 10 digits. */

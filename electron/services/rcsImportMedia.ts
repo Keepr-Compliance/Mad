@@ -103,6 +103,8 @@ export async function storeImage(
   image: RcsIncomingImage,
   userId: string,
   deps: RcsMediaDeps,
+  /** BACKLOG-3630: the chat's hash (rcsChatHash of its Details numbers). */
+  chatHash: string,
 ): Promise<RcsImageResult> {
   const mimeType = image.mimeType.toLowerCase();
   if (!mimeType.startsWith("image/")) return { stored: false, reason: "not_an_image" };
@@ -111,7 +113,7 @@ export async function storeImage(
   if (bytes.length === 0) return { stored: false, reason: "empty" };
   if (bytes.length > RCS_MAX_IMAGE_BYTES) return { stored: false, reason: "too_large" };
 
-  const externalId = rcsExternalId(image.conversationId, image.msgId);
+  const externalId = rcsExternalId(chatHash, image.msgId);
   const messageId = deps.getMessageIdMap(userId).get(externalId);
   if (!messageId) return { stored: false, reason: "message_not_found" };
 

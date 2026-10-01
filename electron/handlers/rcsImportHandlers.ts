@@ -74,9 +74,8 @@ const deps: RcsImportDeps = {
   },
   // BACKLOG-3642: never re-link what the user removed from the transaction.
   getRemovals: (transactionId, userId) => databaseService.getRcsRemovals(transactionId, userId),
-  backfillParticipantKey: (userId, threadId, key) => {
-    databaseService.backfillRcsParticipantKey(userId, threadId, key);
-  },
+  // BACKLOG-3630: the content guard (same sent_at + direction + body).
+  findContentDuplicates: (userId, rows) => databaseService.findRcsContentDuplicates(userId, rows),
 };
 
 const mediaDeps: RcsMediaDeps = {
@@ -121,12 +120,12 @@ function broadcastChatImported(event: RcsChatImportedEvent): void {
 }
 
 const bridge = new RcsExtensionBridge({
-  importChat: (chat, transactionId, opts) => importChat(chat, transactionId, deps, opts),
+  importChat: (chat, transactionId, people) => importChat(chat, transactionId, deps, people),
   onChatImported: broadcastChatImported,
-  importImage: async (image, transactionId) => {
+  importImage: async (image, transactionId, chatHash) => {
     const userId = await deps.getTransactionUserId(transactionId);
     if (!userId) throw new Error("Transaction not found");
-    return storeImage(image, userId, mediaDeps);
+    return storeImage(image, userId, mediaDeps, chatHash);
   },
   onJobChanged: broadcastJob,
   // The job finished in the browser: bring Keepr's main window forward

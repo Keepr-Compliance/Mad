@@ -61,7 +61,8 @@ const CHAT: RcsIncomingChat = {
     { msgId: "2", direction: "outbound", sender: "me", text: "two", sentAt: "2026-09-20T13:06:00.000Z", transport: "rcs" },
   ],
 };
-const CHAT_JSON = JSON.stringify(CHAT);
+// BACKLOG-3630: the page sends the chat's Details rows with every chat.
+const CHAT_JSON = JSON.stringify({ ...CHAT, participants: [{ name: "Test Contact A", number: "(555) 555-0199" }] });
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
 describe("RcsExtensionBridge", () => {
@@ -575,12 +576,33 @@ describe("RcsExtensionBridge sync jobs", () => {
   });
 
   describe("BACKLOG-3642/3645: participant key, removed-by-you, not checked", () => {
-    it("the chat is imported with the participant key of the numbers THIS job's /match saw — never the page's", async () => {
+    // BACKLOG-3630. Mutation: take the numbers from the page's body → red.
+    it("the chat is keyed on the numbers THIS job's /match saw — the page only names them", async () => {
       await claimAndMatch(["(555) 555-0199"]);
-      const body = JSON.stringify({ ...CHAT, participantKey: "+15555550142" });
+      const body = JSON.stringify({
+        ...CHAT,
+        participants: [
+          { name: "Test Contact A", number: "(555) 555-0199" },
+          { name: "Test Contact Unmatched", number: "+1 555 555 0142" },
+        ],
+      });
       expect((await request(port, "POST", `/job/${jobId}/chat`, EXT, body)).status).toBe(200);
-      const call = importChat.mock.calls[0] as unknown as [RcsIncomingChat, string, { participantKey?: string }];
-      expect(call[2]).toEqual({ participantKey: "+15555550199" });
+      const call = importChat.mock.calls[0] as unknown as [RcsIncomingChat, string, { numbers: string[]; names: unknown[] }];
+      expect(call[2]).toEqual({ numbers: ["+15555550199"], names: [{ name: "Test Contact A", number: "+15555550199" }] });
+    });
+
+    // Mutation: accept a manual Send with no number → red.
+    it("a manual Send with no phone number is refused with the page's message", async () => {
+      bridge.cancelJob(jobId);
+      bridge.openSession("tx-manual");
+      const reply = await request(port, "POST", "/chat", EXT, JSON.stringify(CHAT));
+      expect(reply.status).toBe(400);
+      expect(reply.body.message).toBe("Open the chat's Details: no phone number found");
+      expect(importChat).not.toHaveBeenCalled();
+      const ok = await request(port, "POST", "/chat", EXT, CHAT_JSON);
+      expect(ok.status).toBe(200);
+      const call = importChat.mock.calls[0] as unknown as [RcsIncomingChat, string, { numbers: string[] }];
+      expect(call[2].numbers).toEqual(["+15555550199"]);
     });
 
     it("messages the user removed are summed into progress.removedNotRelinked and returned to the page", async () => {

@@ -58,43 +58,19 @@ export const RCS_REMOVALS_SQL = sql`
   `;
 
 /**
- * BACKLOG-3642: participant keys (`metadata.participantKey`, written by Sync) of
- * gmweb rows the user removed from the transaction — by thread or by message.
- * Parameters: user id, transaction id, transaction id. Starts from the (small)
- * removal set with IN (...) subqueries, so SQLite looks rows up by thread id /
- * primary key instead of scanning every message. `json_valid` guards rows whose
- * metadata is not JSON.
+ * BACKLOG-3630: the content guard. A gmweb2 row of the user, under a DIFFERENT
+ * key, with the same sent_at + direction + body (NULL bodies compare equal).
+ * Parameters: user id, external id, sent_at, direction, body.
  */
-export const RCS_REMOVED_PARTICIPANT_KEYS_SQL = sql`
-    SELECT DISTINCT
-      CASE WHEN json_valid(m.metadata) THEN json_extract(m.metadata, '$.participantKey') END AS participantKey
-    FROM messages m
-    WHERE m.user_id = ?
-      AND m.thread_id LIKE 'gmweb-chat-%'
-      AND (
-        m.thread_id IN (
-          SELECT ic.thread_id FROM ignored_communications ic
-          WHERE ic.transaction_id = ? AND ic.thread_id LIKE 'gmweb-chat-%'
-        )
-        OR m.id IN (
-          SELECT ic.original_communication_id FROM ignored_communications ic
-          WHERE ic.transaction_id = ? AND ic.original_communication_id IS NOT NULL
-        )
-      )
-  `;
-
-/**
- * BACKLOG-3642 (SR O1): backfill the participant key into a thread's existing
- * rows (stored before pass 1c, or by a manual Send), so they get re-pair
- * protection too. Parameters: key, user id, thread id, key.
- */
-export const RCS_BACKFILL_PARTICIPANT_KEY_SQL = sql`
-    UPDATE messages
-    SET metadata = json_set(metadata, '$.participantKey', ?)
+export const RCS_CONTENT_DUPLICATE_SQL = sql`
+    SELECT id FROM messages
     WHERE user_id = ?
-      AND thread_id = ?
-      AND json_valid(metadata)
-      AND COALESCE(json_extract(metadata, '$.participantKey'), '') != ?
+      AND external_id LIKE 'gmweb2:%'
+      AND external_id != ?
+      AND sent_at = ?
+      AND direction = ?
+      AND COALESCE(body_text, '') = COALESCE(?, '')
+    LIMIT 1
   `;
 
 // ============================================
@@ -110,7 +86,8 @@ export const RCS_CLEAR_ATTACHMENT_PATHS_SQL = sql`
     SELECT a.storage_path AS storagePath
     FROM attachments a
     WHERE a.message_id IN (
-      SELECT m.id FROM messages m WHERE m.user_id = ? AND m.external_id LIKE 'gmweb:%'
+      SELECT m.id FROM messages m
+      WHERE m.user_id = ? AND (m.external_id LIKE 'gmweb:%' OR m.external_id LIKE 'gmweb2:%')
     )
   `;
 
@@ -125,7 +102,7 @@ export const RCS_CLEAR_COUNTED_LINKS_SQL = sql`
     JOIN messages m ON m.id = c.message_id
     WHERE m.user_id = ?
       AND c.user_id = ?
-      AND m.external_id LIKE 'gmweb:%'
+      AND (m.external_id LIKE 'gmweb:%' OR m.external_id LIKE 'gmweb2:%')
       AND c.transaction_id IS NOT NULL
       AND (m.associated_message_type IS NULL OR m.associated_message_type = 0)
     GROUP BY c.transaction_id
@@ -140,7 +117,8 @@ export const RCS_CLEAR_GET_MESSAGE_COUNT_SQL = sql`
 export const RCS_CLEAR_DELETE_ATTACHMENTS_SQL = sql`
     DELETE FROM attachments
     WHERE message_id IN (
-      SELECT m.id FROM messages m WHERE m.user_id = ? AND m.external_id LIKE 'gmweb:%'
+      SELECT m.id FROM messages m
+      WHERE m.user_id = ? AND (m.external_id LIKE 'gmweb:%' OR m.external_id LIKE 'gmweb2:%')
     )
   `;
 
@@ -149,19 +127,20 @@ export const RCS_CLEAR_DELETE_MESSAGE_LINKS_SQL = sql`
     DELETE FROM communications
     WHERE user_id = ?
       AND message_id IN (
-        SELECT m.id FROM messages m WHERE m.user_id = ? AND m.external_id LIKE 'gmweb:%'
+        SELECT m.id FROM messages m
+        WHERE m.user_id = ? AND (m.external_id LIKE 'gmweb:%' OR m.external_id LIKE 'gmweb2:%')
       )
   `;
 
 /** Parameters: user id. */
 export const RCS_CLEAR_DELETE_THREAD_LINKS_SQL = sql`
     DELETE FROM communications
-    WHERE user_id = ? AND message_id IS NULL AND thread_id LIKE 'gmweb-chat-%'
+    WHERE user_id = ? AND message_id IS NULL AND (thread_id LIKE 'gmweb-chat-%' OR thread_id LIKE 'gmweb2-%')
   `;
 
 /** Parameters: user id. Text and reaction rows. */
 export const RCS_CLEAR_DELETE_MESSAGES_SQL = sql`
-    DELETE FROM messages WHERE user_id = ? AND external_id LIKE 'gmweb:%'
+    DELETE FROM messages WHERE user_id = ? AND (external_id LIKE 'gmweb:%' OR external_id LIKE 'gmweb2:%')
   `;
 
 /** Parameters: message count, transaction id, user id. */

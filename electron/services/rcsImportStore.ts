@@ -7,11 +7,19 @@
  *
  * - Insert: `databaseService.batchInsertMessages` (INSERT OR IGNORE). The
  *   Android path, `localSyncService.storeMessages`, is the mapping pattern.
- * - Dedup: `external_id = "gmweb:<conversation id>:<msg-id>"`. msg-id is a
- *   number that is NOT unique across conversations (observed on the live
- *   page), so the conversation id is part of the key. The table's unique index is
+ * - Dedup (BACKLOG-3630): `external_id = "gmweb2:<h>:<msg-id>"`, thread
+ *   `gmweb2-<h>`, where <h> = sha256 of the chat's sorted, normalized E.164
+ *   participant numbers (the user's own number excluded, by the page). The URL
+ *   conversation id is NOT in the key: it changes on every re-pair (measured),
+ *   while the numbers and msg-ids do not. The table's unique index is
  *   `(user_id, external_id) WHERE external_id IS NOT NULL`
  *   (`electron/database/schema.sql:1341`), so a re-sent chat inserts nothing.
+ *   A content guard also skips a row when the user already has a gmweb2 row
+ *   with the same sent_at + direction + body (the key drifts when a group's
+ *   members change). Old `gmweb:` rows are not migrated: Force re-import
+ *   clears them.
+ * - participants / participants_flat hold the E.164 NUMBERS (as the Android
+ *   path does), so the existing phone auto-link can match them.
  * - Attach: after the insert, the stored ids are looked up BY external_id (a
  *   re-send's rows already exist under their original ids), then
  *   `transactionService.linkMessages(ids, transactionId)` — the same call the
@@ -36,10 +44,91 @@
 
 import * as crypto from "crypto";
 
+import { participantKey } from "./rcsImportJob";
 import { rcsReactionExternalId, reactionTypeForEmoji, bareEmoji } from "./rcsReactionMap";
+import { toE164 } from "../utils/phoneNormalization";
 
 export const RCS_IMPORT_SOURCE = "google_messages_web";
-export const RCS_EXTERNAL_ID_PREFIX = "gmweb:";
+/** BACKLOG-3630: the stable key. */
+export const RCS_EXTERNAL_ID_PREFIX = "gmweb2:";
+export const RCS_THREAD_PREFIX = "gmweb2-";
+/** Pre-3630 rows (keyed on the URL conversation id); read for removals only. */
+export const RCS_LEGACY_EXTERNAL_ID_PREFIX = "gmweb:";
+export const RCS_LEGACY_THREAD_PREFIX = "gmweb-chat-";
+/** BACKLOG-3630: a chat whose Details showed no phone number cannot be keyed. */
+export const RCS_NO_NUMBER_MESSAGE = "Open the chat's Details: no phone number found";
+
+/**
+ * BACKLOG-3630: who is in a chat, from its Details panel. `numbers` are the
+ * normalized E.164 numbers, sorted and unique (the user's own excluded);
+ * `names` pairs a shown name with its number, to resolve group senders.
+ */
+export interface RcsChatPeople {
+  numbers: string[];
+  names: Array<{ name: string; number: string }>;
+}
+
+/** The chat's stable hash: sha256 of its sorted, normalized numbers. */
+export function rcsChatHash(numbers: readonly string[]): string {
+  return crypto.createHash("sha256").update(participantKey(numbers)).digest("hex");
+}
+
+/**
+ * Validate the page's Details rows ({name, number}[]) into RcsChatPeople.
+ * Numbers that do not normalize to "+…" are dropped. When `allowed` is given
+ * (a Sync job: the numbers its /match saw), the numbers ARE those and only
+ * rows on them are kept for names.
+ */
+export function peopleFrom(rows: unknown, allowed?: readonly string[]): RcsChatPeople {
+  const names: Array<{ name: string; number: string }> = [];
+  const found = new Set<string>();
+  if (Array.isArray(rows)) {
+    for (const r of (rows as unknown[]).slice(0, 50)) {
+      if (!r || typeof r !== "object") continue;
+      const rec = r as Record<string, unknown>;
+      if (typeof rec.number !== "string") continue;
+      const e = toE164(rec.number);
+      if (!e || !e.startsWith("+")) continue;
+      found.add(e);
+      if (typeof rec.name === "string" && rec.name.trim()) names.push({ name: rec.name.trim().slice(0, 120), number: e });
+    }
+  }
+  if (allowed) {
+    const set = new Set(participantKey(allowed).split(",").filter(Boolean));
+    return { numbers: Array.from(set).sort(), names: names.filter((n) => set.has(n.number)) };
+  }
+  return { numbers: Array.from(found).sort(), names };
+}
+
+/** A group sender's number: only when the shown name maps to exactly one number. */
+function senderNumber(sender: string, people: RcsChatPeople): string | null {
+  const wanted = sender.trim().toLowerCase();
+  if (!wanted) return null;
+  const hits = new Set(people.names.filter((n) => n.name.toLowerCase() === wanted).map((n) => n.number));
+  return hits.size === 1 ? Array.from(hits)[0] : null;
+}
+
+/**
+ * participants JSON, as the Android path writes it (localSyncService.ts
+ * storeMessages): 1:1 inbound {from: number, to: ["me"]}, outbound {from:
+ * "me", to: [all numbers]}. Group inbound: from = the sender's number when the
+ * name resolves to exactly one number, else the shown name; to = "me" and the
+ * other numbers. Every group row also carries `chat_members` (all numbers),
+ * which the conversation grouping (threadMergeUtils) treats as authoritative,
+ * so a group never looks like a 1:1 chat with its only sender.
+ */
+export function participantsJson(direction: "inbound" | "outbound", sender: string, people: RcsChatPeople): string {
+  const group = people.numbers.length > 1;
+  const members = group ? { chat_members: people.numbers } : {};
+  if (direction === "outbound") return JSON.stringify({ from: "me", to: people.numbers, ...members });
+  if (!group) return JSON.stringify({ from: people.numbers[0], to: ["me"] });
+  const from = senderNumber(sender, people);
+  return JSON.stringify({
+    from: from ?? (sender || "unknown"),
+    to: ["me", ...people.numbers.filter((n) => n !== from)],
+    ...members,
+  });
+}
 
 /** One message as the extension extracts it (chrome-extension/extract.js). */
 export interface RcsIncomingMessage {
@@ -126,28 +215,22 @@ export interface RcsImportDeps {
    */
   getRemovals?: (transactionId: string, userId: string) => RcsRemovals;
   /**
-   * BACKLOG-3642 (SR O1): write the participant key into the thread's rows
-   * already stored without it (before pass 1c, or by a manual Send).
+   * BACKLOG-3630: for rows about to be inserted, the id of an EXISTING gmweb2
+   * row of the user with the same sent_at + direction + body (external_id ->
+   * existing id). Those rows are not inserted; the existing row is linked.
    */
-  backfillParticipantKey?: (userId: string, threadId: string, key: string) => void;
+  findContentDuplicates?: (userId: string, rows: RcsInsertRow[]) => Map<string, string>;
 }
 
 /**
- * The user's removals from one transaction, as the import needs them:
- * removed gmweb thread ids, removed message ids (thread-less removals), and the
- * participant keys (see `participantKey`) of removed gmweb threads — so a chat
- * whose conversation id changed after a re-pair is still recognised.
- * gmweb only: an SMS phone-backup removal never blocks an RCS chat.
+ * The user's removals from one transaction, as the import needs them: removed
+ * gmweb thread ids — `gmweb2-<h>` (stable across re-pairs, BACKLOG-3630) and
+ * legacy `gmweb-chat-<conversation id>` — and removed message ids (thread-less
+ * removals). gmweb only: an SMS phone-backup removal never blocks an RCS chat.
  */
 export interface RcsRemovals {
   threadIds: Set<string>;
   messageIds: Set<string>;
-  participantKeys: Set<string>;
-}
-
-export interface RcsImportOptions {
-  /** Participant key of the chat (Sync jobs only; "" or absent when unknown). */
-  participantKey?: string;
 }
 
 export interface RcsImportResult {
@@ -159,28 +242,26 @@ export interface RcsImportResult {
   reactionsStored: number;
   /** BACKLOG-3642: messages stored but NOT linked — the user removed them. */
   removedByUser?: number;
+  /** BACKLOG-3630: messages already stored under another key (content guard). */
+  sameContent?: number;
 }
 
-export const RCS_THREAD_PREFIX = "gmweb-chat-";
-
-export function rcsExternalId(conversationId: string, msgId: string): string {
-  return `${RCS_EXTERNAL_ID_PREFIX}${conversationId}:${msgId}`;
+/** BACKLOG-3630: `gmweb2:<chat hash>:<msg-id>`. */
+export function rcsExternalId(chatHash: string, msgId: string): string {
+  return `${RCS_EXTERNAL_ID_PREFIX}${chatHash}:${msgId}`;
 }
 
 /**
- * Map a chat to insert rows. Pure. `participantKey` (Sync jobs) goes into each
- * row's metadata, so a later removal of this thread can be recognised by its
- * participants (BACKLOG-3642).
+ * Map a chat to insert rows. Pure. BACKLOG-3630: the key and thread come from
+ * the chat's numbers (`people`), never from the URL conversation id, and
+ * participants / participants_flat carry the numbers.
  */
-export function mapChatToRows(chat: RcsIncomingChat, userId: string, participantKey = ""): RcsInsertRow[] {
-  const threadId = `${RCS_THREAD_PREFIX}${chat.conversationId}`;
-  const counterpart = chat.title || "Unknown";
+export function mapChatToRows(chat: RcsIncomingChat, userId: string, people: RcsChatPeople): RcsInsertRow[] {
+  const hash = rcsChatHash(people.numbers);
+  const threadId = `${RCS_THREAD_PREFIX}${hash}`;
+  const flat = people.numbers.join(", ");
   return chat.messages.map((m) => {
-    const outbound = m.direction === "outbound";
-    const participants = JSON.stringify({
-      from: outbound ? "me" : m.sender || counterpart,
-      to: outbound ? [counterpart] : ["me"],
-    });
+    const participants = participantsJson(m.direction, m.sender, people);
     const images = m.images ?? 0;
     const files = m.files ?? [];
     const text = m.text.length > 0 ? m.text : fileOnlyText(files);
@@ -188,11 +269,11 @@ export function mapChatToRows(chat: RcsIncomingChat, userId: string, participant
       id: crypto.randomUUID(),
       userId,
       channel: "sms",
-      externalId: rcsExternalId(chat.conversationId, m.msgId),
+      externalId: rcsExternalId(hash, m.msgId),
       direction: m.direction,
       bodyText: text.length > 0 ? text : null,
       participants,
-      participantsFlat: counterpart,
+      participantsFlat: flat,
       threadId,
       sentAt: new Date(m.sentAt).toISOString(),
       hasAttachments: images > 0 ? 1 : 0,
@@ -203,7 +284,6 @@ export function mapChatToRows(chat: RcsIncomingChat, userId: string, participant
         conversationId: chat.conversationId,
         conversationTitle: chat.title,
         msgId: m.msgId,
-        ...(participantKey ? { participantKey } : {}),
         ...(images > 0 ? { images } : {}),
         ...(files.length > 0 ? { filesNotImported: files } : {}),
       }),
@@ -220,12 +300,13 @@ function fileOnlyText(files: Array<{ name: string; size: string }>): string {
 }
 
 /** Map every reaction on a chat to a reaction row. Pure. */
-export function mapChatToReactionRows(chat: RcsIncomingChat, userId: string): RcsReactionRow[] {
-  const threadId = `gmweb-chat-${chat.conversationId}`;
-  const counterpart = chat.title || "Unknown";
+export function mapChatToReactionRows(chat: RcsIncomingChat, userId: string, people: RcsChatPeople): RcsReactionRow[] {
+  const hash = rcsChatHash(people.numbers);
+  const threadId = `${RCS_THREAD_PREFIX}${hash}`;
+  const flat = people.numbers.join(", ");
   const rows: RcsReactionRow[] = [];
   for (const m of chat.messages) {
-    const parentExternalId = rcsExternalId(chat.conversationId, m.msgId);
+    const parentExternalId = rcsExternalId(hash, m.msgId);
     for (const r of m.reactions ?? []) {
       const emoji = bareEmoji(r.emoji);
       if (!emoji) continue;
@@ -236,11 +317,8 @@ export function mapChatToReactionRows(chat: RcsIncomingChat, userId: string): Rc
         externalId: rcsReactionExternalId(parentExternalId, r.reactor, emoji),
         direction: mine ? "outbound" : "inbound",
         bodyText: emoji,
-        participants: JSON.stringify({
-          from: mine ? "me" : r.reactor || counterpart,
-          to: mine ? [counterpart] : ["me"],
-        }),
-        participantsFlat: counterpart,
+        participants: participantsJson(mine ? "outbound" : "inbound", r.reactor, people),
+        participantsFlat: flat,
         threadId,
         // The page shows no reaction time; the parent's time keeps it in order.
         sentAt: new Date(m.sentAt).toISOString(),
@@ -260,45 +338,57 @@ export function mapChatToReactionRows(chat: RcsIncomingChat, userId: string): Rc
   return rows;
 }
 
-/** Store one chat and attach all of its messages to `transactionId`. */
+/**
+ * Store one chat and attach all of its messages to `transactionId`.
+ * `people` (BACKLOG-3630) are the chat's Details numbers and names: the key,
+ * the thread and participants come from them. A chat with no number is refused.
+ */
 export async function importChat(
   chat: RcsIncomingChat,
   transactionId: string,
   deps: RcsImportDeps,
-  opts: RcsImportOptions = {},
+  people: RcsChatPeople,
 ): Promise<RcsImportResult> {
+  if (people.numbers.length === 0) throw new Error(RCS_NO_NUMBER_MESSAGE);
   const userId = await deps.getTransactionUserId(transactionId);
   if (!userId) {
     throw new Error("Transaction not found");
   }
 
-  const key = opts.participantKey ?? "";
-  const rows = mapChatToRows(chat, userId, key);
+  const rows = mapChatToRows(chat, userId, people);
+  const threadId = rows.length > 0 ? (rows[0].threadId as string) : `${RCS_THREAD_PREFIX}${rcsChatHash(people.numbers)}`;
+
+  // BACKLOG-3630 content guard: a message already stored under ANOTHER gmweb2
+  // key (same sent_at + direction + body; the key drifts when a group's members
+  // change) is not stored again; that existing row is linked instead.
+  const before = deps.getMessageIdMap(userId);
+  const fresh = rows.filter((r) => !before.has(r.externalId));
+  const sameContent = deps.findContentDuplicates && fresh.length > 0
+    ? deps.findContentDuplicates(userId, fresh)
+    : new Map<string, string>();
+  const toInsert = sameContent.size > 0 ? rows.filter((r) => !sameContent.has(r.externalId)) : rows;
+
   // Rows are ALWAYS stored (dedup keeps working); only the link respects the
   // user's removals.
-  const { stored, skipped } = deps.batchInsertMessages(rows, 500);
-  // Rows stored earlier keep their metadata (INSERT OR IGNORE): backfill the key.
-  if (key !== "" && deps.backfillParticipantKey) {
-    deps.backfillParticipantKey(userId, `${RCS_THREAD_PREFIX}${chat.conversationId}`, key);
-  }
+  const { stored, skipped } = deps.batchInsertMessages(toInsert, 500);
 
-  const reactionRows = mapChatToReactionRows(chat, userId);
+  const reactionRows = mapChatToReactionRows(chat, userId, people);
   const reactionResult =
     reactionRows.length > 0 ? deps.insertReactionRows(reactionRows) : { stored: 0, skipped: 0 };
 
   // BACKLOG-3642: a chat the user removed from this transaction is never linked
-  // again — by its thread id, or (after a re-pair changed the conversation id)
-  // by the same participant set as a removed gmweb thread.
+  // again. Its gmweb2 thread id is stable across re-pairs (BACKLOG-3630); a
+  // legacy removal of the same conversation id is honoured too.
   const removals = deps.getRemovals ? deps.getRemovals(transactionId, userId) : null;
-  const threadId = `${RCS_THREAD_PREFIX}${chat.conversationId}`;
   const chatRemoved =
-    !!removals && (removals.threadIds.has(threadId) || (key !== "" && removals.participantKeys.has(key)));
+    !!removals &&
+    (removals.threadIds.has(threadId) || removals.threadIds.has(`${RCS_LEGACY_THREAD_PREFIX}${chat.conversationId}`));
   const keep = (id: string): boolean => !chatRemoved && !(removals?.messageIds.has(id) ?? false);
 
   const idMap = deps.getMessageIdMap(userId);
   const ids: string[] = [];
   for (const row of rows) {
-    const id = idMap.get(row.externalId);
+    const id = idMap.get(row.externalId) ?? sameContent.get(row.externalId);
     if (id) ids.push(id);
   }
   const linkIds = ids.filter(keep);
@@ -320,11 +410,12 @@ export async function importChat(
   return {
     received: chat.messages.length,
     stored,
-    alreadyPresent: skipped,
+    alreadyPresent: skipped + sameContent.size,
     linked: linkIds.length,
     reactions: reactionRows.length,
     reactionsStored: reactionResult.stored,
     removedByUser: ids.length - linkIds.length,
+    sameContent: sameContent.size,
   };
 }
 

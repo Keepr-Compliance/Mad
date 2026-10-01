@@ -221,8 +221,8 @@ export class RcsImportJob {
   readonly startDate: string | null;
   /** conversationId -> matched contact ids. */
   private readonly matched = new Map<string, string[]>();
-  /** conversationId -> participantKey of the numbers its Details showed. */
-  private readonly participantKeys = new Map<string, string>();
+  /** conversationId -> the normalized E.164 numbers its Details showed (BACKLOG-3630). */
+  private readonly participantNumbers = new Map<string, string[]>();
 
   constructor(
     transactionId: string,
@@ -297,8 +297,8 @@ export class RcsImportJob {
    * numbers its Details showed ("" when unknown). Stored with the chat's rows
    * so a later removal can be recognised after a re-pair changes the id.
    */
-  participantKeyFor(conversationId: string): string {
-    return this.participantKeys.get(conversationId) ?? "";
+  numbersFor(conversationId: string): string[] {
+    return [...(this.participantNumbers.get(conversationId) ?? [])];
   }
 
   /**
@@ -306,7 +306,7 @@ export class RcsImportJob {
    * on the page equals any number of any transaction contact.
    */
   match(conversationId: string, numbers: string[]): string[] {
-    this.participantKeys.set(conversationId, participantKey(numbers));
+    this.participantNumbers.set(conversationId, participantKey(numbers).split(",").filter(Boolean));
     const hits: string[] = [];
     for (const contact of this.contacts) {
       const hit = contact.phonesE164.some((own) =>

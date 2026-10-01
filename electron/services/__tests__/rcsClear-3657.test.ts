@@ -108,12 +108,16 @@ beforeEach(() => {
   insertMsg("m1", USER, "gmweb:conv3657aaaaaaaaaa:1", gm);
   insertMsg("m2", USER, "gmweb:conv3657aaaaaaaaaa:2", gm);
   insertMsg("r1", USER, "gmweb:conv3657aaaaaaaaaa:1:react", gm, { reaction: true });
+  // BACKLOG-3630: a row under the stable gmweb2 key and its thread.
+  insertMsg("m3", USER, "gmweb2:abc3657:3", gm, { thread: "gmweb2-abc3657" });
   insertMsg("android", USER, "android-1", { source: "android_wifi_sync" }, { thread: "android-thread" });
   insertMsg("b1", OTHER, "gmweb:conv3657bbbbbbbbbb:1", gm, { thread: "gmweb-chat-conv3657bbbbbbbbbb" });
 
   link("c-m1", USER, "tx-a", "m1");
   link("c-m2", USER, "tx-a", "m2");
   link("c-r1", USER, "tx-a", "r1");
+  link("c-m3", USER, "tx-a", "m3");
+  link("c-thread2", USER, "tx-a", null, "gmweb2-abc3657");
   link("c-thread", USER, "tx-a", null, THREAD);
   link("c-android", USER, "tx-a", "android");
   link("c-b1", OTHER, "tx-b", "b1");
@@ -134,8 +138,9 @@ afterEach(() => {
 describe("clearGoogleMessagesWebData on the real schema (BACKLOG-3657)", () => {
   it("deletes the user's gmweb texts, reactions, links and attachments; leaves Android alone", () => {
     const result = clearGoogleMessagesWebData(USER, rcsClearDbOps(), fsOps());
-    expect(result).toMatchObject({ messagesDeleted: 3, attachmentsDeleted: 2, transactionsUpdated: 1 });
-    expect(count("SELECT COUNT(*) AS n FROM messages WHERE user_id = ? AND external_id LIKE 'gmweb:%'", USER)).toBe(0);
+    // BACKLOG-3630: legacy gmweb: AND stable gmweb2: rows.
+    expect(result).toMatchObject({ messagesDeleted: 4, attachmentsDeleted: 2, transactionsUpdated: 1 });
+    expect(count("SELECT COUNT(*) AS n FROM messages WHERE user_id = ? AND (external_id LIKE 'gmweb:%' OR external_id LIKE 'gmweb2:%')", USER)).toBe(0);
     expect(count("SELECT COUNT(*) AS n FROM messages WHERE id = 'android'")).toBe(1);
     expect(count("SELECT COUNT(*) AS n FROM communications WHERE id = 'c-android'")).toBe(1);
   });
@@ -147,7 +152,7 @@ describe("clearGoogleMessagesWebData on the real schema (BACKLOG-3657)", () => {
 
   it("message_count drops by the counted links only — reactions were never counted (C2)", () => {
     clearGoogleMessagesWebData(USER, rcsClearDbOps(), fsOps());
-    expect(count("SELECT message_count AS n FROM transactions WHERE id = 'tx-a'")).toBe(8);
+    expect(count("SELECT message_count AS n FROM transactions WHERE id = 'tx-a'")).toBe(7);
   });
 
   it("another user's rows are untouched (C1)", () => {
@@ -180,8 +185,8 @@ describe("clearGoogleMessagesWebData on the real schema (BACKLOG-3657)", () => {
     expect(() => clearGoogleMessagesWebData(USER, failing, fsOps())).toThrow("disk I/O error");
     expect(fs.existsSync(inside)).toBe(true);
     expect(count("SELECT COUNT(*) AS n FROM attachments")).toBe(2);
-    expect(count("SELECT COUNT(*) AS n FROM communications WHERE user_id = ?", USER)).toBe(5);
-    expect(count("SELECT COUNT(*) AS n FROM messages WHERE user_id = ?", USER)).toBe(4);
+    expect(count("SELECT COUNT(*) AS n FROM communications WHERE user_id = ?", USER)).toBe(7);
+    expect(count("SELECT COUNT(*) AS n FROM messages WHERE user_id = ?", USER)).toBe(5);
     expect(count("SELECT message_count AS n FROM transactions WHERE id = 'tx-a'")).toBe(10);
   });
 });

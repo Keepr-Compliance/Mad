@@ -421,6 +421,9 @@
         await env.openConversation(conv);
         opened = true;
         var numbers = await env.scan.readParticipantsAndClose(env.doc, { click: env.click, sleep: env.sleep });
+        // BACKLOG-3630: name + number rows (group senders); Keepr keys the chat
+        // on the numbers its /match saw.
+        var people = (numbers && numbers.rows) || (numbers || []).map(function (n) { return { name: "", number: n }; });
         progress.checked += 1;
         log("  numbers " + JSON.stringify((numbers || []).map(numberShape)));
         if (!numbers || numbers.length === 0) {
@@ -511,6 +514,7 @@
           conversationId: conv.conversationId,
           title: extracted.title || conv.name,
           messages: messages,
+          participants: people,
         });
         if (!sent.ok) throw new Error(messageOf(sent, "Keepr could not save this chat."));
         totals.chats += 1;

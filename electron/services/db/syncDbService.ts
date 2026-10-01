@@ -9,7 +9,6 @@ import {
   RCS_IMPORT_TRANSACTION_CONTACTS_SQL,
   RCS_INSERT_REACTION_SQL,
   RCS_MARK_MESSAGE_HAS_ATTACHMENTS_SQL,
-  RCS_BACKFILL_PARTICIPANT_KEY_SQL,
   RCS_CLEAR_ATTACHMENT_PATHS_SQL,
   RCS_CLEAR_COUNTED_LINKS_SQL,
   RCS_CLEAR_DELETE_ATTACHMENTS_SQL,
@@ -18,8 +17,8 @@ import {
   RCS_CLEAR_DELETE_THREAD_LINKS_SQL,
   RCS_CLEAR_GET_MESSAGE_COUNT_SQL,
   RCS_CLEAR_SET_MESSAGE_COUNT_SQL,
+  RCS_CONTENT_DUPLICATE_SQL,
   RCS_REMOVALS_SQL,
-  RCS_REMOVED_PARTICIPANT_KEYS_SQL,
 } from "./rcsImportSql";
 
 // ============================================
@@ -218,7 +217,8 @@ export function getRcsImportContacts(
 export function getRcsRemovals(
   transactionId: string,
   userId: string
-): { threadIds: Set<string>; messageIds: Set<string>; participantKeys: Set<string> } {
+): { threadIds: Set<string>; messageIds: Set<string> } {
+  void userId; // removals are per transaction; kept for the caller's signature
   const db = ensureDb();
   const rows = db.prepare(RCS_REMOVALS_SQL).all(transactionId) as {
     threadId: string | null;
@@ -227,17 +227,31 @@ export function getRcsRemovals(
   const threadIds = new Set<string>();
   const messageIds = new Set<string>();
   for (const r of rows) {
-    if (r.threadId && r.threadId.startsWith("gmweb-chat-")) threadIds.add(r.threadId);
+    // BACKLOG-3630: gmweb2-<hash> (stable across re-pairs) and legacy gmweb-chat-*.
+    if (r.threadId && (r.threadId.startsWith("gmweb2-") || r.threadId.startsWith("gmweb-chat-"))) {
+      threadIds.add(r.threadId);
+    }
     if (r.messageId) messageIds.add(r.messageId);
   }
-  const keys = db.prepare(RCS_REMOVED_PARTICIPANT_KEYS_SQL).all(userId, transactionId, transactionId) as {
-    participantKey: unknown;
-  }[];
-  const participantKeys = new Set<string>();
-  for (const k of keys) {
-    if (typeof k.participantKey === "string" && k.participantKey.length > 0) participantKeys.add(k.participantKey);
+  return { threadIds, messageIds };
+}
+
+/**
+ * BACKLOG-3630: the content guard — for each row, an existing gmweb2 row of the
+ * user under a different key with the same sent_at + direction + body.
+ */
+export function findRcsContentDuplicates(
+  userId: string,
+  rows: { externalId: string; sentAt: string; direction: string; bodyText: string | null }[]
+): Map<string, string> {
+  const db = ensureDb();
+  const stmt = db.prepare(RCS_CONTENT_DUPLICATE_SQL);
+  const found = new Map<string, string>();
+  for (const r of rows) {
+    const hit = stmt.get(userId, r.externalId, r.sentAt, r.direction, r.bodyText) as { id: string } | undefined;
+    if (hit) found.set(r.externalId, hit.id);
   }
-  return { threadIds, messageIds, participantKeys };
+  return found;
 }
 
 /**
@@ -271,11 +285,6 @@ export function rcsClearDbOps(): import("../rcsClearService").RcsClearDbOps {
 }
 
 /** BACKLOG-3642: write a thread's participant key into its existing rows. Returns rows changed. */
-export function backfillRcsParticipantKey(userId: string, threadId: string, key: string): number {
-  const db = ensureDb();
-  return db.prepare(RCS_BACKFILL_PARTICIPANT_KEY_SQL).run(key, userId, threadId, key).changes;
-}
-
 export function markMessageHasAttachments(messageId: string): number {
   const db = ensureDb();
   return db.prepare(RCS_MARK_MESSAGE_HAS_ATTACHMENTS_SQL).run(messageId).changes;

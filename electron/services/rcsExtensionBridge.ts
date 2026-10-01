@@ -66,7 +66,13 @@ import {
 } from "./rcsImportJob";
 import { parseIncomingImage, RCS_MAX_IMAGE_BYTES, type RcsImageResult, type RcsIncomingImage } from "./rcsImportMedia";
 import type { RcsImportResult, RcsIncomingChat } from "./rcsImportStore";
-import { parseIncomingChat } from "./rcsImportStore";
+import {
+  parseIncomingChat,
+  peopleFrom,
+  rcsChatHash,
+  RCS_NO_NUMBER_MESSAGE,
+  type RcsChatPeople,
+} from "./rcsImportStore";
 
 export const RCS_BRIDGE_HOST = "127.0.0.1";
 export const RCS_BRIDGE_PORT = 38619;
@@ -138,14 +144,14 @@ export interface RcsExtensionBridgeOptions {
   importChat: (
     chat: RcsIncomingChat,
     transactionId: string,
-    opts?: { participantKey?: string },
+    people: RcsChatPeople,
   ) => Promise<RcsImportResult>;
   onChatImported?: (event: RcsChatImportedEvent) => void;
   logger?: RcsBridgeLogger;
   /** Overridable for tests only. */
   allowedOrigin?: string;
   /** BACKLOG-3620: store one image of a matched chat. */
-  importImage?: (image: RcsIncomingImage, transactionId: string) => Promise<RcsImageResult>;
+  importImage?: (image: RcsIncomingImage, transactionId: string, chatHash: string) => Promise<RcsImageResult>;
   /** BACKLOG-3620: every job state/progress change. */
   onJobChanged?: (job: RcsJobSnapshot) => void;
   /** BACKLOG-3620: the job finished; Keepr brings its window forward. */
@@ -632,12 +638,15 @@ export class RcsExtensionBridge {
           sendJson(res, 403, { error: "not_matched", message: "Keepr did not match this chat to a transaction contact." });
           return;
         }
-        // BACKLOG-3642: the participant key comes from the numbers THIS job's
-        // /match saw (never from the page's /chat body), so a removal survives a
-        // re-pair that changes the conversation id.
-        const result = await this.options.importChat(chat, job.transactionId, {
-          participantKey: job.participantKeyFor(chat.conversationId),
-        });
+        // BACKLOG-3630: the chat's numbers are the ones THIS job's /match saw
+        // (never the page's /chat body); the body only names them, for group
+        // senders.
+        const people = peopleFrom(body.participants, job.numbersFor(chat.conversationId));
+        if (people.numbers.length === 0) {
+          sendJson(res, 400, { error: "no_number", message: RCS_NO_NUMBER_MESSAGE });
+          return;
+        }
+        const result = await this.options.importChat(chat, job.transactionId, people);
         job.progress.imported += 1;
         job.progress.messages += result.received;
         job.progress.reactions += result.reactions;
@@ -660,7 +669,12 @@ export class RcsExtensionBridge {
           sendJson(res, 501, { error: "unsupported", message: "This Keepr build cannot store images." });
           return;
         }
-        const result = await this.options.importImage(image, job.transactionId);
+        const imageNumbers = job.numbersFor(image.conversationId);
+        if (imageNumbers.length === 0) {
+          sendJson(res, 400, { error: "no_number", message: RCS_NO_NUMBER_MESSAGE });
+          return;
+        }
+        const result = await this.options.importImage(image, job.transactionId, rcsChatHash(imageNumbers));
         if (!result.stored) {
           const status = result.reason === "too_large" ? 413 : result.reason === "message_not_found" ? 409 : 400;
           job.progress.skipped += 1;
@@ -744,8 +758,14 @@ export class RcsExtensionBridge {
       sendJson(res, 400, { error: "bad_request", message: chat });
       return;
     }
+    // BACKLOG-3630: the manual Send reads the chat's Details numbers itself.
+    const people = peopleFrom((read.body as Record<string, unknown>).participants);
+    if (people.numbers.length === 0) {
+      sendJson(res, 400, { error: "no_number", message: RCS_NO_NUMBER_MESSAGE });
+      return;
+    }
 
-    const result = await this.options.importChat(chat, session.transactionId);
+    const result = await this.options.importChat(chat, session.transactionId, people);
 
     // The session may have been closed or replaced while the import ran; the
     // rows are stored and attached either way, so report success.

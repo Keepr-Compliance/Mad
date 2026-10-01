@@ -117,6 +117,27 @@
         showStatus("No messages found on the page. Scroll the conversation and try again.", true);
         return;
       }
+      // BACKLOG-3630: Keepr keys a chat on its participants' phone numbers, read
+      // from the chat's Details panel (opened and closed here).
+      showStatus("Reading the chat's phone numbers…", false);
+      let numbers = [];
+      try {
+        numbers = await globalThis.KeeprScan.readParticipantsAndClose(document, {
+          click: (el) => {
+            el.dispatchEvent(new globalThis.MouseEvent("mousedown", { bubbles: true }));
+            el.dispatchEvent(new globalThis.MouseEvent("mouseup", { bubbles: true }));
+            el.click();
+          },
+          sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+        });
+      } catch (_err) {
+        numbers = [];
+      }
+      const participants = numbers.rows || numbers.map((n) => ({ name: "", number: n }));
+      if (participants.length === 0) {
+        showStatus("Open the chat's Details: no phone number found", true);
+        return;
+      }
       showStatus(`Sending ${extracted.messages.length} messages…`, false);
       // Manual send is text, files and reactions only: image bytes are sent
       // by a Sync job (BACKLOG-3620). A message with only an image is left out.
@@ -141,6 +162,7 @@
         conversationId: extracted.conversationId,
         title: extracted.title,
         messages,
+        participants,
       });
       if (result.ok) {
         const skipped = extracted.skipped.noDate + extracted.skipped.noText;

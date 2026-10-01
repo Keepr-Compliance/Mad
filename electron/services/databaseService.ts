@@ -2430,8 +2430,12 @@ class DatabaseService implements IDatabaseService {
     return syncDb.getRcsRemovals(transactionId, userId);
   }
 
-  backfillRcsParticipantKey(userId: string, threadId: string, key: string) {
-    return syncDb.backfillRcsParticipantKey(userId, threadId, key);
+  // BACKLOG-3630: the RCS content guard
+  findRcsContentDuplicates(
+    userId: string,
+    rows: { externalId: string; sentAt: string; direction: string; bodyText: string | null }[],
+  ) {
+    return syncDb.findRcsContentDuplicates(userId, rows);
   }
 
   // BACKLOG-3657: database operations for clearing Google Messages for Web texts

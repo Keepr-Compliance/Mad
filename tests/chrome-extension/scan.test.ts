@@ -43,7 +43,7 @@ interface ScanModule {
   readParticipantsAndClose: (
     doc: Document,
     io: { click: (el: Element) => void; sleep: (ms: number) => Promise<void>; timeoutMs?: number },
-  ) => Promise<string[]>;
+  ) => Promise<string[] & { rows?: Array<{ name: string; number: string }> }>;
 }
 
 interface ApiReply {
@@ -251,6 +251,20 @@ function mountDetails(numbers: DetailsRow[]): { clicks: string[]; click: (el: El
   };
   return { clicks, click };
 }
+
+// BACKLOG-3630: the chat key excludes the user's own number, which Details may
+// or may not list ("You"). Mutation: keep the "You" row → red.
+describe("readParticipantsAndClose: the user's own row (BACKLOG-3630)", () => {
+  it("the 'You' row is never read, so the numbers are the same whether Details lists it or not", async () => {
+    let page = mountDetails([{ name: "Test Contact A", number: "(555) 555-0199" }, { name: "You", number: "(555) 555-0100" }]);
+    const withSelf = await scan.readParticipantsAndClose(document, { click: page.click, sleep: noSleep });
+    page = mountDetails([{ name: "Test Contact A", number: "(555) 555-0199" }]);
+    const withoutSelf = await scan.readParticipantsAndClose(document, { click: page.click, sleep: noSleep });
+    expect(Array.from(withSelf)).toEqual(["(555) 555-0199"]);
+    expect(Array.from(withoutSelf)).toEqual(["(555) 555-0199"]);
+    expect(withSelf.rows).toEqual([{ name: "Test Contact A", number: "(555) 555-0199" }]);
+  });
+});
 
 describe("readParticipantsAndClose (control 11)", () => {
   it("reads every participant's number, clicks Done, and returns only once the rows are gone", async () => {
