@@ -1166,10 +1166,27 @@
     return box;
   }
 
+  /**
+   * Security review H1 (stopgap): which job this page load runs, and whether
+   * it must ASK first. A job Keepr itself opened this tab for (the
+   * #keepr-job hash, or the copy of it kept for this tab) may run at once. A
+   * job only found pending on page load (POST /job/pending) runs only after
+   * the user clicks Start in the Keepr box.
+   * @param {{hashJob: (string|null), storedJob: (string|null), pendingJob: (string|null)}} found
+   * @returns {{jobId: (string|null), ask: boolean}}
+   */
+  function bootPlan(found) {
+    if (found.hashJob) return { jobId: found.hashJob, ask: false };
+    if (found.storedJob) return { jobId: found.storedJob, ask: false };
+    if (found.pendingJob) return { jobId: found.pendingJob, ask: true };
+    return { jobId: null, ask: false };
+  }
+
   /** The drag handle inside the box (renderOverlay's badge). */
   var DRAG_HANDLE = '[data-keepr="drag-handle"]';
 
   var api = {
+    bootPlan: bootPlan,
     buildBox: buildBox,
     themeFromColor: themeFromColor,
     pageTheme: pageTheme,
@@ -1509,15 +1526,31 @@
   });
 
   // Hand the job to the worker: it may pass it to an already signed-in tab.
-  (async function boot() {
-    var jobId = hashJob || storedJob;
-    if (!jobId) {
-      var pending = await toWorker({ type: "keepr-check-pending" });
-      jobId = pending && pending.ok && pending.body && pending.body.jobId ? pending.body.jobId : null;
-    }
-    if (!jobId) return;
+  async function routeAndStart(jobId) {
     var route = await toWorker({ type: "keepr-job-found", jobId: jobId });
     if (route && route.handedOff) return;
     void start(jobId);
+  }
+
+  (async function boot() {
+    var pendingJob = null;
+    if (!hashJob && !storedJob) {
+      var pending = await toWorker({ type: "keepr-check-pending" });
+      pendingJob = pending && pending.ok && pending.body && pending.body.jobId ? pending.body.jobId : null;
+    }
+    var plan = bootPlan({ hashJob: hashJob, storedJob: storedJob, pendingJob: pendingJob });
+    if (!plan.jobId) return;
+    if (!plan.ask) {
+      await routeAndStart(plan.jobId);
+      return;
+    }
+    // Security H1: a Sync Keepr did not open this tab for runs only on Start.
+    var askedJob = plan.jobId;
+    showOverlay(ASK_TITLE, false, {
+      ask: {
+        start: function () { void routeAndStart(askedJob); },
+        later: function () { closeOverlay(); },
+      },
+    });
   })();
 })(typeof globalThis !== "undefined" ? globalThis : this);

@@ -9,6 +9,8 @@
  *   D3 the syncing pill starts expanded, or ▾ does nothing                → "syncing: a collapsed pill"
  *   D4 paused or done not auto-expanded                                   → "paused" / "done"
  *   D5 green anywhere, or the details link underlined                     → "done"
+ *   H1a a pending job (found on page load) runs without asking            → "bootPlan"
+ *   H1b Start / Not now not wired                                         → "ask"
  */
 export {};
 
@@ -107,5 +109,28 @@ describe("states (design C)", () => {
       const html = render(job.DONE_LINE, false, { details: "d", copy: "c" }, { theme }).outerHTML;
       expect(html).not.toMatch(/#(?:16a34a|22c55e|dcfce7|166534)|rgb\(\s*(?:22, 163, 74|34, 197, 94|220, 252, 231|22, 101, 52)\s*\)/i);
     }
+  });
+});
+
+describe("security H1: a Sync Keepr did not open the tab for asks first", () => {
+  it("bootPlan: the hash or its kept copy run at once; a pending job asks (H1a)", () => {
+    expect(job.bootPlan({ hashJob: "j-1", storedJob: null, pendingJob: null })).toEqual({ jobId: "j-1", ask: false });
+    expect(job.bootPlan({ hashJob: null, storedJob: "j-2", pendingJob: null })).toEqual({ jobId: "j-2", ask: false });
+    expect(job.bootPlan({ hashJob: null, storedJob: null, pendingJob: "j-3" })).toEqual({ jobId: "j-3", ask: true });
+    expect(job.bootPlan({ hashJob: null, storedJob: null, pendingJob: null })).toEqual({ jobId: null, ask: false });
+  });
+
+  it("ask: 'Keepr wants to sync your texts' — Start runs it, Not now does not (H1b)", () => {
+    const start = jest.fn();
+    const later = jest.fn();
+    const box = render(job.ASK_TITLE, false, { ask: { start, later } }, { theme: "light" });
+    expect(box.getAttribute("data-keepr-state")).toBe("ask");
+    expect(box.querySelector('[data-keepr="line"]')?.textContent).toBe("Keepr wants to sync your texts");
+    expect(start).not.toHaveBeenCalled();
+    (box.querySelector('[data-keepr="ask-later"]') as HTMLElement).click();
+    expect(later).toHaveBeenCalledTimes(1);
+    expect(start).not.toHaveBeenCalled();
+    (box.querySelector('[data-keepr="ask-start"]') as HTMLElement).click();
+    expect(start).toHaveBeenCalledTimes(1);
   });
 });
