@@ -727,7 +727,7 @@ describe("BACKLOG-3475 C13-K — a concurrent read for ANOTHER org is never serv
 //     columns returns to the legacy select.
 //   The post-3618 rows are D1's row plus the migration's two scalar columns
 //     (`owner_user_id uuid NULL`, `include_in_submission boolean NOT NULL`,
-//     20261001120000). DERIVED, not captured: no PostgREST in reach serves the
+//     20261001054306). DERIVED, not captured: no PostgREST in reach serves the
 //     3618 schema yet. The service reads the two fields by name only.
 
 const PRE_3618_MISSING_COLUMN = {
