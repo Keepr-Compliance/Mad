@@ -13,6 +13,7 @@
  */
 
 import * as crypto from "crypto";
+import * as path from "path";
 
 import { rcsImageFilename, storeImage, type RcsMediaDeps } from "../rcsImportMedia";
 import { rcsChatHash, rcsExternalId } from "../rcsImportStore";
@@ -66,7 +67,8 @@ describe("storeImage (control 5)", () => {
     expect(f.messages.get(rcsExternalId(HASH, "301"))?.hasAttachments).toBe(1);
     expect(f.attachments).toHaveLength(1);
     const hash = crypto.createHash("sha256").update(PNG_BYTES).digest("hex");
-    expect(f.attachments[0].storagePath).toBe(`/fake/userData/message-attachments/${hash}.png`);
+    // path.join, as storeImage builds it:  on Windows, / elsewhere.
+    expect(f.attachments[0].storagePath).toBe(path.join("/fake/userData/message-attachments", `${hash}.png`));
     expect(f.files.size).toBe(1);
 
     const again = await storeImage(img, USER, f.deps, HASH);
