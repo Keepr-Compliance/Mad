@@ -140,6 +140,26 @@ export const RCS_CLEAR_COUNTED_LINKS_SQL = sql`
     GROUP BY c.transaction_id
   `;
 
+/**
+ * Parameters: user id, user id, user id. Transactions with any gmweb link of
+ * the user: per message (legacy gmweb: and gmweb2: rows) or thread-level
+ * (gmweb-chat-* / gmweb2-* threads, message_id NULL — what auto-link writes).
+ */
+export const RCS_CLEAR_LINKED_TRANSACTIONS_SQL = sql`
+    SELECT DISTINCT c.transaction_id AS transactionId
+    FROM communications c
+    WHERE c.user_id = ?
+      AND c.transaction_id IS NOT NULL
+      AND (
+        c.message_id IN (
+          SELECT m.id FROM messages m
+          WHERE m.user_id = ? AND (m.external_id LIKE 'gmweb:%' OR m.external_id LIKE 'gmweb2:%')
+        )
+        OR (c.message_id IS NULL AND (c.thread_id LIKE 'gmweb-chat-%' OR c.thread_id LIKE 'gmweb2-%'))
+      )
+      AND c.transaction_id IN (SELECT t.id FROM transactions t WHERE t.user_id = ?)
+  `;
+
 /** Parameters: transaction id, user id. */
 export const RCS_CLEAR_GET_MESSAGE_COUNT_SQL = sql`
     SELECT message_count AS messageCount FROM transactions WHERE id = ? AND user_id = ?

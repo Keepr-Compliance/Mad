@@ -1298,6 +1298,11 @@ function countTextThreadsForTransactionInternal(transactionId: string): number {
  *
  * BACKLOG-396: Ensures TransactionCard displays the correct thread count.
  */
+/** BACKLOG-3657: the synchronous form, for callers inside a db transaction. */
+export function updateTransactionThreadCountSync(transactionId: string): void {
+  updateTransactionThreadCountInternal(transactionId);
+}
+
 export function updateTransactionThreadCount(transactionId: string): Promise<void> {
   return Promise.resolve(updateTransactionThreadCountInternal(transactionId));
 }

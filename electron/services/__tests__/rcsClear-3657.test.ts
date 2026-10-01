@@ -15,6 +15,8 @@
  *   C6 thread-level gmweb links not deleted        → "every gmweb link is gone"
  *   C7 delete order changed                        → "the reviewed order"
  *   C8 writes resume only on success               → "writes resume even when the clear throws"
+ *   C9 thread-level links not counted / text_thread_count left stale
+ *                                                  → "thread-level auto-links are counted and the thread count refreshed"
  */
 
 import * as nodePath from "path";
@@ -150,6 +152,26 @@ describe("clearGoogleMessagesWebData on the real schema (BACKLOG-3657)", () => {
     expect(count("SELECT COUNT(*) AS n FROM communications WHERE user_id = ? AND id != 'c-android'", USER)).toBe(0);
   });
 
+  // Live (2026-10-01): the log said "0 links". Auto-link writes THREAD-level
+  // rows (message_id NULL, thread_id gmweb2-<hash>) that count in
+  // text_thread_count, not message_count. Mutations (C9): deleteThreadLinks
+  // not counted into linksDeleted; the thread-count refresh dropped; the
+  // linked-transactions read missing thread-level links.
+  it("thread-level auto-links are counted and the thread count refreshed (C9)", () => {
+    db.prepare("UPDATE transactions SET text_thread_count = 9 WHERE id = 'tx-a'").run();
+    db.prepare("INSERT INTO transactions (id, user_id, property_address, message_count, text_thread_count) VALUES ('tx-c', ?, '3 Test Street', 0, 1)").run(USER);
+    link("c-auto", USER, "tx-c", null, "gmweb2-abc3657");
+    const result = clearGoogleMessagesWebData(USER, rcsClearDbOps(), fsOps());
+    // tx-a: c-m1, c-m2, c-r1, c-m3 (message) + c-thread2, c-thread (thread); tx-c: c-auto (thread).
+    expect(result).toMatchObject({ linksDeleted: 7, threadLinksDeleted: 3 });
+    // Only the Android link is left on tx-a; nothing on tx-c.
+    expect(count("SELECT text_thread_count AS n FROM transactions WHERE id = 'tx-a'")).toBe(1);
+    expect(count("SELECT text_thread_count AS n FROM transactions WHERE id = 'tx-c'")).toBe(0);
+    expect(count("SELECT message_count AS n FROM transactions WHERE id = 'tx-c'")).toBe(0);
+    // Another user's transaction is never refreshed.
+    expect(count("SELECT COUNT(*) AS n FROM communications WHERE user_id = ?", OTHER)).toBe(2);
+  });
+
   it("message_count drops by the counted links only — reactions were never counted (C2)", () => {
     clearGoogleMessagesWebData(USER, rcsClearDbOps(), fsOps());
     expect(count("SELECT message_count AS n FROM transactions WHERE id = 'tx-a'")).toBe(7);
@@ -203,6 +225,7 @@ describe("order and the write gate (fakes)", () => {
       },
       attachmentPaths: () => (order.push("read paths"), ["message-attachments/x.png"]),
       countedLinks: () => (order.push("read counts"), [{ transactionId: "tx-a", counted: 2 }]),
+      linkedTransactions: () => (order.push("read linked"), ["tx-a"]),
       messageCount: () => 3,
       deleteAttachments: () => (order.push("attachments"), 1),
       deleteMessageLinks: () => (order.push("message links"), 2),
@@ -211,6 +234,9 @@ describe("order and the write gate (fakes)", () => {
       setMessageCount: (_u, _t, n) => {
         order.push(`count=${n}`);
       },
+      refreshTextThreadCount: (t) => {
+        order.push(`threads ${t}`);
+      },
     };
     clearGoogleMessagesWebData(USER, ops, {
       attachmentsRoot: "/data/message-attachments",
@@ -218,7 +244,8 @@ describe("order and the write gate (fakes)", () => {
       deleteFile: () => (order.push("file"), true),
     });
     expect(order).toEqual([
-      "begin", "read paths", "read counts", "attachments", "message links", "thread links", "messages", "count=1", "commit", "file",
+      "begin", "read paths", "read counts", "read linked", "attachments", "message links", "thread links", "messages", "count=1",
+      "threads tx-a", "commit", "file",
     ]);
   });
 

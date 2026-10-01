@@ -4,6 +4,7 @@
  */
 
 import { ensureDb } from "./core/dbConnection";
+import { updateTransactionThreadCountSync } from "./communicationDbService";
 import { samePeople } from "../rcsImportStore";
 import { withLiveTransactionParam } from "./core/transactionEligibilitySql";
 import logService from "../logService";
@@ -13,6 +14,7 @@ import {
   RCS_MARK_MESSAGE_HAS_ATTACHMENTS_SQL,
   RCS_CLEAR_ATTACHMENT_PATHS_SQL,
   RCS_CLEAR_COUNTED_LINKS_SQL,
+  RCS_CLEAR_LINKED_TRANSACTIONS_SQL,
   RCS_CLEAR_DELETE_ATTACHMENTS_SQL,
   RCS_CLEAR_DELETE_MESSAGE_LINKS_SQL,
   RCS_CLEAR_DELETE_MESSAGES_SQL,
@@ -321,6 +323,9 @@ export function rcsClearDbOps(): import("../rcsClearService").RcsClearDbOps {
         .filter((p): p is string => typeof p === "string" && p.length > 0),
     countedLinks: (userId) =>
       db.prepare(RCS_CLEAR_COUNTED_LINKS_SQL).all(userId, userId) as { transactionId: string; counted: number }[],
+    linkedTransactions: (userId) =>
+      (db.prepare(RCS_CLEAR_LINKED_TRANSACTIONS_SQL).all(userId, userId, userId) as { transactionId: string }[])
+        .map((r) => r.transactionId),
     messageCount: (userId, transactionId) => {
       const row = db.prepare(RCS_CLEAR_GET_MESSAGE_COUNT_SQL).get(transactionId, userId) as
         | { messageCount: number | null }
@@ -334,6 +339,8 @@ export function rcsClearDbOps(): import("../rcsClearService").RcsClearDbOps {
     setMessageCount: (userId, transactionId, count) => {
       db.prepare(RCS_CLEAR_SET_MESSAGE_COUNT_SQL).run(count, transactionId, userId);
     },
+    // The same rule as every link/unlink (communicationDbService), on this connection.
+    refreshTextThreadCount: (transactionId) => updateTransactionThreadCountSync(transactionId),
   };
 }
 

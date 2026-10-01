@@ -15,6 +15,11 @@
  *     5. message_count = max(0, old - counted links), the rule of
  *        transactionService.unlinkMessages (linkMessages adds +1 per counted
  *        link; reactions are never counted)
+ *     6. text_thread_count recomputed on every transaction that had a gmweb
+ *        link (per message OR thread-level). A thread-level link (auto-link:
+ *        message_id NULL, thread_id gmweb2-<hash>) never added to
+ *        message_count — it is counted in text_thread_count (communicationDb
+ *        createThreadCommunicationReference) — so removing it must refresh that.
  *   after the commit: delete the attachment FILES, only inside the app's
  *   message-attachments folder. A failed transaction deletes no file.
  *
@@ -32,12 +37,16 @@ export interface RcsClearDbOps {
   inTransaction<T>(fn: () => T): T;
   attachmentPaths(userId: string): string[];
   countedLinks(userId: string): Array<{ transactionId: string; counted: number }>;
+  /** Transactions with ANY gmweb link of the user (per message or thread-level). */
+  linkedTransactions(userId: string): string[];
   messageCount(userId: string, transactionId: string): number | null;
   deleteAttachments(userId: string): number;
   deleteMessageLinks(userId: string): number;
   deleteThreadLinks(userId: string): number;
   deleteMessages(userId: string): number;
   setMessageCount(userId: string, transactionId: string, count: number): void;
+  /** Recompute transactions.text_thread_count from the links that remain. */
+  refreshTextThreadCount(transactionId: string): void;
 }
 
 export interface RcsClearFs {
@@ -51,6 +60,8 @@ export interface RcsClearFs {
 export interface RcsClearResult {
   messagesDeleted: number;
   linksDeleted: number;
+  /** Of linksDeleted: thread-level links (auto-link writes these). */
+  threadLinksDeleted: number;
   attachmentsDeleted: number;
   filesDeleted: number;
   transactionsUpdated: number;
@@ -86,8 +97,10 @@ export function clearGoogleMessagesWebData(
   const done = db.inTransaction(() => {
     const paths = db.attachmentPaths(userId);
     const counted = db.countedLinks(userId);
+    const linked = db.linkedTransactions(userId);
     const attachmentsDeleted = db.deleteAttachments(userId);
-    const linksDeleted = db.deleteMessageLinks(userId) + db.deleteThreadLinks(userId);
+    const messageLinksDeleted = db.deleteMessageLinks(userId);
+    const threadLinksDeleted = db.deleteThreadLinks(userId);
     const messagesDeleted = db.deleteMessages(userId);
     let transactionsUpdated = 0;
     for (const { transactionId, counted: n } of counted) {
@@ -96,7 +109,16 @@ export function clearGoogleMessagesWebData(
       db.setMessageCount(userId, transactionId, Math.max(0, old - n));
       transactionsUpdated += 1;
     }
-    return { paths, attachmentsDeleted, linksDeleted, messagesDeleted, transactionsUpdated };
+    for (const transactionId of linked) db.refreshTextThreadCount(transactionId);
+    return {
+      paths,
+      attachmentsDeleted,
+      linksDeleted: messageLinksDeleted + threadLinksDeleted,
+      threadLinksDeleted,
+      messagesDeleted,
+      transactionsUpdated,
+      threadCountsUpdated: linked.length,
+    };
   });
 
   // Files only after the commit, and only inside the attachments folder.
@@ -111,14 +133,16 @@ export function clearGoogleMessagesWebData(
   const result: RcsClearResult = {
     messagesDeleted: done.messagesDeleted,
     linksDeleted: done.linksDeleted,
+    threadLinksDeleted: done.threadLinksDeleted,
     attachmentsDeleted: done.attachmentsDeleted,
     filesDeleted,
     transactionsUpdated: done.transactionsUpdated,
   };
   log(
     `[RcsClear] Cleared Google Messages for Web texts: ${result.messagesDeleted} messages, ` +
-      `${result.linksDeleted} links, ${result.attachmentsDeleted} attachments (${result.filesDeleted} files), ` +
-      `message_count updated on ${result.transactionsUpdated} transactions`,
+      `${result.linksDeleted} links (${result.threadLinksDeleted} thread-level), ${result.attachmentsDeleted} attachments ` +
+      `(${result.filesDeleted} files), message_count updated on ${result.transactionsUpdated} transactions, ` +
+      `thread count refreshed on ${done.threadCountsUpdated}`,
   );
   return result;
 }
