@@ -822,8 +822,110 @@
     });
   }
 
+  // ---------------------------------------------------------------------------
+  // BACKLOG-3641 (founder): the overlay box can be moved — dragged with the
+  // pointer, or sent corner to corner with its Move button (keyboard). It
+  // always stays on screen; its place is remembered for this tab's session.
+  // ---------------------------------------------------------------------------
+  var OVERLAY_MARGIN = 8;
+  var CORNER_GAP = 16;
+  var CORNERS = ["top-right", "bottom-right", "bottom-left", "top-left"];
+
+  /** pos clamped so the whole box ({width, height}) stays inside the view. */
+  function clampPosition(pos, size, view) {
+    var maxLeft = Math.max(OVERLAY_MARGIN, view.width - size.width - OVERLAY_MARGIN);
+    var maxTop = Math.max(OVERLAY_MARGIN, view.height - size.height - OVERLAY_MARGIN);
+    var left = isFinite(pos.left) ? pos.left : OVERLAY_MARGIN;
+    var top = isFinite(pos.top) ? pos.top : OVERLAY_MARGIN;
+    return {
+      left: Math.round(Math.min(Math.max(left, OVERLAY_MARGIN), maxLeft)),
+      top: Math.round(Math.min(Math.max(top, OVERLAY_MARGIN), maxTop)),
+    };
+  }
+
+  function cornerPosition(corner, size, view) {
+    var right = corner.indexOf("right") >= 0;
+    var bottom = corner.indexOf("bottom") >= 0;
+    return clampPosition({
+      left: right ? view.width - size.width - CORNER_GAP : CORNER_GAP,
+      top: bottom ? view.height - size.height - CORNER_GAP : CORNER_GAP,
+    }, size, view);
+  }
+
+  function nextCorner(corner) {
+    return CORNERS[(CORNERS.indexOf(corner) + 1) % CORNERS.length];
+  }
+
+  /**
+   * Make a fixed box draggable by pointer (anywhere but its buttons and text
+   * blocks, which keep working). Returns the keyboard moves.
+   * @param {HTMLElement} box
+   * @param {{view: function(): {width: number, height: number}, size: function(): {width: number, height: number},
+   *   load: function(): ({left: number, top: number}|null), save: function({left: number, top: number}): void}} io
+   */
+  function attachDrag(box, io) {
+    var drag = null;
+    var corner = CORNERS[0];
+    function place(p) {
+      box.style.left = p.left + "px";
+      box.style.top = p.top + "px";
+      box.style.right = "auto";
+      box.style.bottom = "auto";
+      return p;
+    }
+    function settle(pos) {
+      return place(clampPosition(pos, io.size(), io.view()));
+    }
+    function current() {
+      return { left: parseFloat(box.style.left) || 0, top: parseFloat(box.style.top) || 0 };
+    }
+    var saved = io.load();
+    if (saved && typeof saved.left === "number" && typeof saved.top === "number") settle(saved);
+
+    box.addEventListener("pointerdown", function (e) {
+      if (typeof e.button === "number" && e.button !== 0) return;
+      var target = e.target;
+      if (target && target.closest && target.closest("button, a, input, textarea, pre")) return;
+      var rect = box.getBoundingClientRect();
+      var from = box.style.left ? current() : { left: rect.left, top: rect.top };
+      drag = { dx: e.clientX - from.left, dy: e.clientY - from.top };
+      if (typeof e.pointerId === "number" && box.setPointerCapture) {
+        try { box.setPointerCapture(e.pointerId); } catch (_e) { /* capture is a nicety */ }
+      }
+      if (e.preventDefault) e.preventDefault();
+    });
+    box.addEventListener("pointermove", function (e) {
+      if (!drag) return;
+      settle({ left: e.clientX - drag.dx, top: e.clientY - drag.dy });
+    });
+    function end() {
+      if (!drag) return;
+      drag = null;
+      io.save(current());
+    }
+    box.addEventListener("pointerup", end);
+    box.addEventListener("pointercancel", end);
+
+    return {
+      /** Keyboard alternative: the next corner, clockwise from top-right. */
+      moveToNextCorner: function () {
+        corner = nextCorner(corner);
+        io.save(place(cornerPosition(corner, io.size(), io.view())));
+        return corner;
+      },
+      /** After a resize (or a taller box): back inside the view. */
+      keepOnScreen: function () {
+        if (box.style.left) settle(current());
+      },
+    };
+  }
+
   var api = {
     renderOverlay: renderOverlay,
+    attachDrag: attachDrag,
+    clampPosition: clampPosition,
+    cornerPosition: cornerPosition,
+    nextCorner: nextCorner,
     runJob: runJob,
     jobIdFromHash: jobIdFromHash,
     waitForPageState: waitForPageState,
@@ -895,21 +997,60 @@
 
   // Overlay ------------------------------------------------------------------
   var panel = null;
+  var box = null;
+  var mover = null;
+  var POSITION_KEY = "keepr-overlay-pos";
   function showOverlay(text, isError, extras) {
     if (!document.body) return;
-    if (!panel) {
-      panel = document.createElement("div");
-      panel.id = "keepr-job-overlay";
-      Object.assign(panel.style, {
+    if (!box) {
+      // The box (fixed, draggable) holds the Move button and the content that
+      // renderOverlay fills; createElement only.
+      box = document.createElement("div");
+      box.id = "keepr-job-overlay";
+      Object.assign(box.style, {
         position: "fixed", top: "16px", right: "16px", zIndex: "2147483647",
         maxWidth: "360px", padding: "10px 14px", borderRadius: "10px",
         fontFamily: "system-ui, -apple-system, sans-serif", fontSize: "14px",
         boxShadow: "0 2px 10px rgba(0,0,0,0.25)",
-        maxHeight: "60vh", overflowY: "auto",
+        maxHeight: "60vh", overflowY: "auto", cursor: "move", touchAction: "none",
       });
-      document.body.appendChild(panel);
+      var move = document.createElement("button");
+      move.type = "button";
+      move.setAttribute("data-keepr", "move");
+      move.setAttribute("aria-label", "Move this box to the next corner");
+      move.title = "Drag the box, or click to move it to the next corner";
+      move.textContent = "Move";
+      Object.assign(move.style, {
+        float: "right", marginLeft: "8px", background: "none", border: "1px solid currentColor",
+        borderRadius: "6px", padding: "0 6px", cursor: "pointer", font: "inherit", fontSize: "12px", color: "inherit",
+      });
+      panel = document.createElement("div");
+      box.appendChild(move);
+      box.appendChild(panel);
+      document.body.appendChild(box);
+      mover = attachDrag(box, {
+        view: function () { return { width: root.innerWidth, height: root.innerHeight }; },
+        size: function () { var r = box.getBoundingClientRect(); return { width: r.width, height: r.height }; },
+        load: function () {
+          try {
+            var raw = sessionStorage.getItem(POSITION_KEY);
+            return raw ? JSON.parse(raw) : null;
+          } catch (_e) {
+            return null;
+          }
+        },
+        save: function (pos) {
+          try { sessionStorage.setItem(POSITION_KEY, JSON.stringify(pos)); } catch (_e) { /* not kept: fine */ }
+        },
+      });
+      move.addEventListener("click", function () { mover.moveToNextCorner(); });
+      root.addEventListener("resize", function () { mover.keepOnScreen(); });
     }
     renderOverlay(panel, text, isError, extras, { copy: copyToClipboard, focus: focusKeepr, cancel: cancelJob });
+    // The box wears the content's colours; a taller box is kept on screen.
+    box.style.background = panel.style.background;
+    box.style.color = panel.style.color;
+    mover.keepOnScreen();
   }
 
   /** The page's Cancel: POST /job/<this job>/cancel through the worker. */
