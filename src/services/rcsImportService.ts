@@ -87,6 +87,13 @@ export const rcsImportService = {
     return callJob(() => bridge.getJob());
   },
 
+  /** BACKLOG-3658: start the cache job (all recent chats) for the signed-in user. */
+  async startCacheJob(): Promise<ApiResult<RcsJobInfo | null>> {
+    const bridge = api();
+    if (!bridge || !bridge.startCacheJob) return { success: false, error: NOT_AVAILABLE };
+    return callJob(() => bridge.startCacheJob());
+  },
+
   /** Subscribe to job changes. Returns an unsubscribe (a no-op when unavailable). */
   onJobProgress(callback: (job: RcsJobInfo) => void): () => void {
     const bridge = api();

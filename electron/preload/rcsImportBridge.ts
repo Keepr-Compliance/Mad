@@ -11,6 +11,7 @@ import { ipcRenderer } from "electron";
 import type {
   RcsChatReceivedEvent,
   RcsImportJobResult,
+  RcsExtensionStateResult,
   RcsImportStatusResult,
   RcsJobInfo,
 } from "../types/ipc/window-api-rcs-import";
@@ -48,6 +49,12 @@ export const rcsImportBridge = {
       ipcRenderer.removeListener("rcs-import:job-progress", handler);
     };
   },
+
+  /** BACKLOG-3658: the cache job, the local opt-in and the extension state. */
+  startCacheJob: (): Promise<RcsImportJobResult> => ipcRenderer.invoke("rcs-import:start-cache-job"),
+  setCacheOptIn: (args: { optedIn: boolean }): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke("rcs-import:set-cache-opt-in", args),
+  getExtensionState: (): Promise<RcsExtensionStateResult> => ipcRenderer.invoke("rcs-import:get-extension-state"),
 
   /** BACKLOG-3657: Google Messages for Web texts were cleared (Force re-import). */
   onDataCleared: (callback: (event: { messagesDeleted: number }) => void) => {

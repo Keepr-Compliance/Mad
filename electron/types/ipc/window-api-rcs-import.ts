@@ -57,6 +57,8 @@ export interface RcsJobProgressCounts {
   notChecked?: number;
   /** BACKLOG-3642: messages stored but not linked again — the user removed them. */
   removedNotRelinked?: number;
+  /** BACKLOG-3658: cache images not kept (no transaction contact in the chat). */
+  imagesSkipped?: number;
 }
 
 /** BACKLOG-3620: one sync job, as main reports it. */
@@ -72,10 +74,25 @@ export interface RcsJobInfo {
   finishedAt?: string;
   /** BACKLOG-3661: what is syncing (the transaction's name). */
   label?: string;
+  /** BACKLOG-3658: "cache" for the all-chats cache job. */
+  kind?: "transaction" | "cache";
   /** BACKLOG-3629: chats left out or imported in part. Names only. */
   notReached?: Array<{ name: string; reason: string; count?: number }>;
   notReachedMore?: number;
 }
+
+/** BACKLOG-3658: the extension and cache state, for the setup wizard. */
+export interface RcsExtensionState {
+  extensionVersion: string | null;
+  extensionSeenAt: string | null;
+  pairedAt: string | null;
+  optedIn: boolean;
+  lastCacheFinishedAt: string | null;
+}
+
+export type RcsExtensionStateResult =
+  | { success: true; state: RcsExtensionState }
+  | { success: false; error: string };
 
 export type RcsImportJobResult =
   | { success: true; job: RcsJobInfo | null }
@@ -100,4 +117,10 @@ export interface WindowApiRcsImport {
   onJobProgress: (callback: (job: RcsJobInfo) => void) => () => void;
   /** BACKLOG-3657: Google Messages for Web texts were cleared. Returns an unsubscribe. */
   onDataCleared: (callback: (event: { messagesDeleted: number }) => void) => () => void;
+  /** BACKLOG-3658: start the cache job (all recent chats), for the signed-in user. */
+  startCacheJob: () => Promise<RcsImportJobResult>;
+  /** BACKLOG-3658: the local opt-in to keep a copy of recent chats. */
+  setCacheOptIn: (args: { optedIn: boolean }) => Promise<{ success: boolean; error?: string }>;
+  /** BACKLOG-3658: is the extension installed / paired, opted in, last cache Sync. */
+  getExtensionState: () => Promise<RcsExtensionStateResult>;
 }

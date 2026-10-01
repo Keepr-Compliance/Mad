@@ -11,6 +11,7 @@
  */
 
 import { sql } from "./core/sqlText";
+import { LIVE_TRANSACTION_SQL_PREDICATE } from "./core/transactionEligibilitySql";
 
 /** One bound parameter: transaction id. */
 export const RCS_IMPORT_TRANSACTION_CONTACTS_SQL = sql`
@@ -147,4 +148,72 @@ export const RCS_CLEAR_DELETE_MESSAGES_SQL = sql`
 /** Parameters: message count, transaction id, user id. */
 export const RCS_CLEAR_SET_MESSAGE_COUNT_SQL = sql`
     UPDATE transactions SET message_count = ? WHERE id = ? AND user_id = ?
+  `;
+
+// ============================================
+// BACKLOG-3658: the cache job
+// ============================================
+
+/** Parameters: user id. */
+export const RCS_CACHE_STATE_GET_SQL = sql`
+    SELECT opted_in_at AS optedInAt, last_cache_finished_at AS lastCacheFinishedAt, own_number AS ownNumber,
+           extension_version AS extensionVersion, extension_seen_at AS extensionSeenAt, paired_at AS pairedAt
+    FROM rcs_cache_state WHERE user_id = ?
+  `;
+
+/** Parameters: user id. Creates the user's row if missing. */
+export const RCS_CACHE_STATE_ENSURE_SQL = sql`
+    INSERT OR IGNORE INTO rcs_cache_state (user_id) VALUES (?)
+  `;
+
+/** Parameters: opted_in_at (NULL = opted out), user id. */
+export const RCS_CACHE_STATE_SET_OPT_IN_SQL = sql`
+    UPDATE rcs_cache_state SET opted_in_at = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?
+  `;
+
+/** Parameters: finished at, user id. */
+export const RCS_CACHE_STATE_SET_FINISHED_SQL = sql`
+    UPDATE rcs_cache_state SET last_cache_finished_at = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?
+  `;
+
+/** Parameters: own number, user id. */
+export const RCS_CACHE_STATE_SET_OWN_NUMBER_SQL = sql`
+    UPDATE rcs_cache_state SET own_number = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?
+  `;
+
+/** Parameters: version (NULL keeps), seen at (NULL keeps), paired at (NULL keeps), user id. */
+export const RCS_CACHE_STATE_SET_EXTENSION_SQL = sql`
+    UPDATE rcs_cache_state
+    SET extension_version = COALESCE(?, extension_version),
+        extension_seen_at = COALESCE(?, extension_seen_at),
+        paired_at = COALESCE(?, paired_at),
+        updated_at = CURRENT_TIMESTAMP
+    WHERE user_id = ?
+  `;
+
+/** Parameters: user id. Force re-import (3657) forgets the cache position and the own number. */
+export const RCS_CACHE_STATE_RESET_SQL = sql`
+    UPDATE rcs_cache_state SET last_cache_finished_at = NULL, own_number = NULL, updated_at = CURRENT_TIMESTAMP
+    WHERE user_id = ?
+  `;
+
+/**
+ * BACKLOG-3658: does any of these E.164 numbers belong to a contact on one of
+ * the user's LIVE transactions (the shared live-transaction predicate;
+ * contact not removed from the transaction or deleted)? Parameters, via
+ * withLiveTransactionParam: user id, JSON array of E.164 numbers, then the
+ * predicate's own parameter.
+ */
+export const RCS_NUMBERS_MATCH_LIVE_CONTACT_SQL = sql`
+    SELECT 1 AS hit
+    FROM transaction_contacts tc
+    JOIN transactions t ON t.id = tc.transaction_id
+    JOIN contacts c ON c.id = tc.contact_id
+    JOIN contact_phones cp ON cp.contact_id = tc.contact_id
+    WHERE t.user_id = ?
+      AND tc.removed_at IS NULL
+      AND c.removed_at IS NULL
+      AND cp.phone_e164 IN (SELECT value FROM json_each(?))
+      AND ${LIVE_TRANSACTION_SQL_PREDICATE}
+    LIMIT 1
   `;

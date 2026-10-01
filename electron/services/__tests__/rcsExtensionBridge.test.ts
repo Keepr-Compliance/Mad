@@ -244,6 +244,41 @@ describe("RcsExtensionBridge", () => {
     });
   });
 
+  // BACKLOG-3658 — /hello and /job/cache/start. Mutations: echo the hello
+  // back / no version cap; start without asking Keepr → red.
+  describe("POST /hello and /job/cache/start (BACKLOG-3658)", () => {
+    it("/hello passes a capped version / paired to Keepr and sends nothing back", async () => {
+      const hellos: unknown[] = [];
+      const own = new RcsExtensionBridge({ importChat, onHello: (h) => void hellos.push(h) });
+      expect(await own.start(0)).toBe("listening");
+      try {
+        const p = own.getStatus().port;
+        const reply = await request(p, "POST", "/hello", EXT, JSON.stringify({ version: "9".repeat(100), extra: "x" }));
+        expect(reply).toEqual({ status: 200, body: { ok: true } });
+        await request(p, "POST", "/hello", EXT, JSON.stringify({ paired: true }));
+        expect(hellos).toEqual([{ version: "9".repeat(40) }, { paired: true }]);
+        expect((await request(p, "POST", "/hello", { Origin: "https://messages.google.com" }, "{}")).status).toBe(403);
+      } finally {
+        await own.stop();
+      }
+    });
+
+    it("/job/cache/start answers what Keepr decides", async () => {
+      const own = new RcsExtensionBridge({
+        importChat,
+        startCacheJobFromPage: async () => ({ status: 403, body: { error: "not_opted_in", message: "Turn on" } }),
+      });
+      expect(await own.start(0)).toBe("listening");
+      try {
+        const reply = await request(own.getStatus().port, "POST", "/job/cache/start", EXT);
+        expect(reply).toEqual({ status: 403, body: { error: "not_opted_in", message: "Turn on" } });
+      } finally {
+        await own.stop();
+      }
+      expect((await request(port, "POST", "/job/cache/start", EXT)).status).toBe(501);
+    });
+  });
+
   describe("session (control 3)", () => {
     it("answers 409 with an explicit message when no session is open", async () => {
       const reply = await request(port, "POST", "/chat", {
@@ -655,5 +690,89 @@ describe("RcsExtensionBridge sync jobs", () => {
       state: "failed",
       error: { code: "not_signed_in", message: "Sign in to Google Messages, then click Sync in Keepr again" },
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3658 — a cache job end to end through the bridge.
+// Mutations that turn these red: numbers taken from the /chat body; the user
+// check skipped; a not-a-contact image counted silently; the end announced
+// twice / never.
+// ---------------------------------------------------------------------------
+describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
+  let bridge: RcsExtensionBridge;
+  let port: number;
+  let current: string | null;
+  let cacheChats: Array<[string, string, unknown]>;
+  let ended: Array<{ state: string; kind: string; userId: string | null }>;
+  let imageAnswer: { stored: false; reason: "not_a_contact" } | { stored: true; alreadyPresent: false; filename: string; bytes: number };
+  let jobId: string;
+
+  beforeEach(async () => {
+    current = "user-a";
+    cacheChats = [];
+    ended = [];
+    imageAnswer = { stored: false, reason: "not_a_contact" };
+    bridge = new RcsExtensionBridge({
+      importChat: jest.fn(),
+      importCacheChat: async (chat, userId, people) => {
+        cacheChats.push([chat.conversationId, userId, people]);
+        return { received: chat.messages.length, stored: chat.messages.length, alreadyPresent: 0, linked: 0, reactions: 0, reactionsStored: 0 };
+      },
+      importCacheImage: async () => imageAnswer,
+      currentUserId: async () => current,
+      onJobEnded: (e) => void ended.push({ state: e.snapshot.state, kind: e.kind, userId: e.userId }),
+      jobs: new RcsJobRegistry(),
+    });
+    expect(await bridge.start(0)).toBe("listening");
+    port = bridge.getStatus().port;
+    jobId = bridge.createCacheJob("user-a", { since: "2026-08-01T00:00:00.000Z" })!.jobId;
+    expect((await request(port, "POST", `/job/${jobId}/claim`, EXT)).body).toMatchObject({ kind: "cache", contacts: [] });
+  });
+
+  afterEach(async () => {
+    await bridge.stop();
+  });
+
+  it("every chat with a number is matched; /chat stores it for the job's user with the numbers /match saw", async () => {
+    const match = await request(port, "POST", `/job/${jobId}/match`, EXT, JSON.stringify({ conversationId: CHAT.conversationId, numbers: ["(555) 555-0142"] }));
+    expect(match.body).toEqual({ matched: true, contactIds: [] });
+    const body = JSON.stringify({ ...CHAT, participants: [{ name: "Test Contact Unmatched", number: "+1 555 555 0177" }] });
+    expect((await request(port, "POST", `/job/${jobId}/chat`, EXT, body)).status).toBe(200);
+    expect(cacheChats).toEqual([[CHAT.conversationId, "user-a", { numbers: ["+15555550142"], names: [] }]]);
+  });
+
+  it("another user signed in meanwhile: nothing stored, the Sync is cancelled, its end announced once", async () => {
+    await request(port, "POST", `/job/${jobId}/match`, EXT, JSON.stringify({ conversationId: CHAT.conversationId, numbers: ["(555) 555-0142"] }));
+    current = "user-b";
+    const reply = await request(port, "POST", `/job/${jobId}/chat`, EXT, CHAT_JSON);
+    expect(reply.status).toBe(409);
+    expect(reply.body.error).toBe("user_changed");
+    expect(cacheChats).toEqual([]);
+    expect(bridge.getJob()?.state).toBe("cancelled");
+    bridge.cancelJob();
+    expect(ended).toEqual([{ state: "cancelled", kind: "cache", userId: "user-a" }]);
+  });
+
+  it("an image of a chat with no transaction contact: 422, counted as skipped (never silent)", async () => {
+    await request(port, "POST", `/job/${jobId}/match`, EXT, JSON.stringify({ conversationId: CHAT.conversationId, numbers: ["(555) 555-0142"] }));
+    const reply = await request(port, "POST", `/job/${jobId}/attachment`, EXT, JSON.stringify({
+      conversationId: CHAT.conversationId, msgId: "1", index: 0, mimeType: "image/png", base64: "AAAA",
+    }));
+    expect(reply.status).toBe(422);
+    expect(reply.body.error).toBe("not_a_contact");
+    expect(bridge.getJob()?.progress.imagesSkipped).toBe(1);
+  });
+
+  it("/finish announces the end once, with the job's user", async () => {
+    await request(port, "POST", `/job/${jobId}/finish`, EXT, JSON.stringify({ chats: 0, messages: 0, images: 0 }));
+    expect(ended).toEqual([{ state: "finished", kind: "cache", userId: "user-a" }]);
+    bridge.cancelJob();
+    expect(ended).toHaveLength(1);
+  });
+
+  it("/error announces the end too", async () => {
+    await request(port, "POST", `/job/${jobId}/error`, EXT, JSON.stringify({ code: "scan_failed", message: "x" }));
+    expect(ended).toEqual([{ state: "failed", kind: "cache", userId: "user-a" }]);
   });
 });

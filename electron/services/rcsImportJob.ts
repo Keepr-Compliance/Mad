@@ -50,6 +50,12 @@ export interface RcsJobContact {
   phonesE164: string[];
 }
 
+/** BACKLOG-3658: a transaction Sync, or the cache of all recent chats. */
+export type RcsJobKind = "transaction" | "cache";
+
+/** BACKLOG-3658: the label every Sync button shows for a cache job. */
+export const RCS_CACHE_JOB_LABEL = "all Android texts";
+
 export interface RcsJobProgress {
   listed: number;
   candidates: number;
@@ -64,6 +70,8 @@ export interface RcsJobProgress {
   notChecked: number;
   /** BACKLOG-3642: messages stored but not linked again — the user removed them. */
   removedNotRelinked: number;
+  /** BACKLOG-3658: cache images not kept (the chat has no transaction contact). */
+  imagesSkipped: number;
 }
 
 /**
@@ -123,6 +131,8 @@ export interface RcsJobSnapshot {
   finishedAt?: string;
   /** BACKLOG-3661: what is syncing (the transaction's name). */
   label?: string;
+  /** BACKLOG-3658: "cache" for the all-chats cache; absent for a transaction Sync. */
+  kind?: RcsJobKind;
   /** BACKLOG-3629: chats left out or imported in part (sent with /finish). */
   notReached?: RcsJobNotReached[];
   /** Entries beyond {@link RCS_NOT_REACHED_CAP}. */
@@ -145,6 +155,9 @@ export interface RcsJobClaim {
    * names must never be written into it. Keepr's own panel lists the names.
    */
   contactsWithoutPhoneCount: number;
+  /** BACKLOG-3658: "cache" jobs: no contacts; load each chat back to `since`. */
+  kind?: RcsJobKind;
+  since?: string;
 }
 
 /**
@@ -188,6 +201,7 @@ const EMPTY_PROGRESS: RcsJobProgress = {
   skipped: 0,
   notChecked: 0,
   removedNotRelinked: 0,
+  imagesSkipped: 0,
 };
 
 /**
@@ -216,6 +230,11 @@ export class RcsImportJob {
   notReachedMore = 0;
   /** BACKLOG-3661: what is syncing, for "Syncing: <label>" (the transaction's name). */
   label: string | null = null;
+  /** BACKLOG-3658: the job kind and the user it was started for (rows go to that user only). */
+  kind: RcsJobKind = "transaction";
+  userId: string | null = null;
+  /** BACKLOG-3658: own numbers known before this job (persisted), excluded from the first chat. */
+  seededOwnNumbers = new Set<string>();
   readonly contacts: RcsJobContact[];
   /** History floor sent to the page on claim (see RcsJobClaim.startDate). */
   readonly startDate: string | null;
@@ -258,6 +277,7 @@ export class RcsImportJob {
         ? { finishedAt: new Date(this.finishedAtMs).toISOString() }
         : {}),
       ...(this.label ? { label: this.label } : {}),
+      ...(this.kind === "cache" ? { kind: this.kind } : {}),
       ...(this.notReached.length > 0 || this.notReachedMore > 0
         ? { notReached: this.notReached.map((e) => ({ ...e })), notReachedMore: this.notReachedMore }
         : {}),
@@ -281,6 +301,18 @@ export class RcsImportJob {
       return { status: 410, error: "job_over", message: "This Keepr sync has ended. Click Sync in Keepr again." };
     }
     this.state = "running";
+    if (this.kind === "cache") {
+      // BACKLOG-3658: no contacts, no name gate; history back to `since`.
+      this.stage = "Saving your recent chats";
+      return {
+        jobId: this.jobId,
+        kind: "cache",
+        contacts: [],
+        startDate: this.startDate,
+        since: this.startDate ?? undefined,
+        contactsWithoutPhoneCount: 0,
+      };
+    }
     this.stage = "Looking for this transaction's chats";
     return {
       jobId: this.jobId,
@@ -318,11 +350,27 @@ export class RcsImportJob {
    * chat is never dropped).
    */
   private likelyOwnNumbers(): Set<string> {
+    const detected = this.commonNumbers(2);
+    for (const n of this.seededOwnNumbers) detected.add(n);
+    return detected;
+  }
+
+  /** Numbers in every checked chat — at least `minChats` chats, each with 2+ numbers. */
+  private commonNumbers(minChats: number): Set<string> {
     const lists = Array.from(this.participantNumbers.values()).filter((l) => l.length > 0);
-    if (lists.length < 2 || lists.some((l) => l.length < 2)) return new Set();
+    if (lists.length < minChats || lists.some((l) => l.length < 2)) return new Set();
     let common = new Set(lists[0]);
     for (const l of lists.slice(1)) common = new Set(l.filter((n) => common.has(n)));
     return common;
+  }
+
+  /**
+   * BACKLOG-3658: the user's own number, to remember for the next job — only
+   * when 3+ checked chats agree on exactly one common number.
+   */
+  detectedOwnNumber(): string | null {
+    const common = this.commonNumbers(3);
+    return common.size === 1 ? Array.from(common)[0] : null;
   }
 
   /**
@@ -330,7 +378,17 @@ export class RcsImportJob {
    * on the page equals any number of any transaction contact.
    */
   match(conversationId: string, numbers: string[]): string[] {
-    this.participantNumbers.set(conversationId, participantKey(numbers).split(",").filter(Boolean));
+    this.participantNumbers.set(conversationId, participantKey(numbers.slice(0, 50)).split(",").filter(Boolean));
+    if (this.kind === "cache") {
+      // BACKLOG-3658: every chat with a number is kept (no contact gate); the
+      // numbers recorded here are the ONLY numbers its /chat and images use.
+      this.progress.checked += 1;
+      if ((this.participantNumbers.get(conversationId) ?? []).length > 0) {
+        if (!this.matched.has(conversationId)) this.progress.matched += 1;
+        this.matched.set(conversationId, []);
+      }
+      return [];
+    }
     const hits: string[] = [];
     for (const contact of this.contacts) {
       const hit = contact.phonesE164.some((own) =>
@@ -411,12 +469,30 @@ export class RcsJobRegistry {
     contacts: RcsJobContact[],
     startDate: string | null = null,
     label: string | null = null,
+    userId: string | null = null,
   ): RcsImportJob {
     const running = this.active();
     if (running) return running;
     this.job = new RcsImportJob(transactionId, contacts, this.now(), undefined, startDate);
     this.job.label = label;
+    this.job.userId = userId;
     return this.job;
+  }
+
+  /**
+   * BACKLOG-3658: the cache job — all recent chats for `userId`, history back
+   * to `since`. Same one-at-a-time slot as a transaction Sync.
+   */
+  createCache(userId: string, since: string, ownNumbers: readonly string[] = []): RcsImportJob {
+    const running = this.active();
+    if (running) return running;
+    const job = new RcsImportJob("", [], this.now(), undefined, since);
+    job.kind = "cache";
+    job.userId = userId;
+    job.label = RCS_CACHE_JOB_LABEL;
+    for (const n of participantKey(ownNumbers).split(",").filter(Boolean)) job.seededOwnNumbers.add(n);
+    this.job = job;
+    return job;
   }
 
   /** The created or running job, if any. */

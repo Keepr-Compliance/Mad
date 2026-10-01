@@ -5,6 +5,7 @@
 
 import { ensureDb } from "./core/dbConnection";
 import { samePeople } from "../rcsImportStore";
+import { withLiveTransactionParam } from "./core/transactionEligibilitySql";
 import logService from "../logService";
 import {
   RCS_IMPORT_TRANSACTION_CONTACTS_SQL,
@@ -19,6 +20,14 @@ import {
   RCS_CLEAR_GET_MESSAGE_COUNT_SQL,
   RCS_CLEAR_SET_MESSAGE_COUNT_SQL,
   RCS_CONTENT_DUPLICATE_SQL,
+  RCS_CACHE_STATE_ENSURE_SQL,
+  RCS_CACHE_STATE_GET_SQL,
+  RCS_CACHE_STATE_RESET_SQL,
+  RCS_CACHE_STATE_SET_EXTENSION_SQL,
+  RCS_CACHE_STATE_SET_FINISHED_SQL,
+  RCS_CACHE_STATE_SET_OPT_IN_SQL,
+  RCS_CACHE_STATE_SET_OWN_NUMBER_SQL,
+  RCS_NUMBERS_MATCH_LIVE_CONTACT_SQL,
   RCS_REMOVALS_SQL,
 } from "./rcsImportSql";
 
@@ -300,6 +309,65 @@ export function rcsClearDbOps(): import("../rcsClearService").RcsClearDbOps {
 }
 
 /** BACKLOG-3642: write a thread's participant key into its existing rows. Returns rows changed. */
+// ============================================
+// BACKLOG-3658: the cache job's state and contact check
+// ============================================
+
+export interface RcsCacheState {
+  optedInAt: string | null;
+  lastCacheFinishedAt: string | null;
+  ownNumber: string | null;
+  extensionVersion: string | null;
+  extensionSeenAt: string | null;
+  pairedAt: string | null;
+}
+
+export function getRcsCacheState(userId: string): RcsCacheState | null {
+  const db = ensureDb();
+  return (db.prepare(RCS_CACHE_STATE_GET_SQL).get(userId) as RcsCacheState | undefined) ?? null;
+}
+
+/** Update one user's cache state (the row is created when missing). */
+export function updateRcsCacheState(
+  userId: string,
+  patch: {
+    optedIn?: boolean;
+    lastCacheFinishedAt?: string;
+    ownNumber?: string;
+    extension?: { version?: string; seenAt?: string; pairedAt?: string };
+  }
+): void {
+  const db = ensureDb();
+  db.transaction(() => {
+    db.prepare(RCS_CACHE_STATE_ENSURE_SQL).run(userId);
+    if (patch.optedIn !== undefined) {
+      db.prepare(RCS_CACHE_STATE_SET_OPT_IN_SQL).run(patch.optedIn ? new Date().toISOString() : null, userId);
+    }
+    if (patch.lastCacheFinishedAt) db.prepare(RCS_CACHE_STATE_SET_FINISHED_SQL).run(patch.lastCacheFinishedAt, userId);
+    if (patch.ownNumber) db.prepare(RCS_CACHE_STATE_SET_OWN_NUMBER_SQL).run(patch.ownNumber, userId);
+    if (patch.extension) {
+      const e = patch.extension;
+      db.prepare(RCS_CACHE_STATE_SET_EXTENSION_SQL).run(e.version ?? null, e.seenAt ?? null, e.pairedAt ?? null, userId);
+    }
+  })();
+}
+
+/** Force re-import (3657): forget the cache position and the own number. */
+export function resetRcsCacheState(userId: string): void {
+  const db = ensureDb();
+  db.prepare(RCS_CACHE_STATE_RESET_SQL).run(userId);
+}
+
+/** BACKLOG-3658: does a number belong to a contact on a live transaction of the user? */
+export function rcsNumbersMatchLiveContact(userId: string, numbers: readonly string[]): boolean {
+  if (numbers.length === 0) return false;
+  const db = ensureDb();
+  const hit = db
+    .prepare(RCS_NUMBERS_MATCH_LIVE_CONTACT_SQL)
+    .get(...withLiveTransactionParam([userId, JSON.stringify(numbers.slice(0, 50))]));
+  return !!hit;
+}
+
 export function markMessageHasAttachments(messageId: string): number {
   const db = ensureDb();
   return db.prepare(RCS_MARK_MESSAGE_HAS_ATTACHMENTS_SQL).run(messageId).changes;

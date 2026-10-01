@@ -34,7 +34,10 @@ import { RcsExtensionBridge, type RcsChatImportedEvent } from "../services/rcsEx
 import { createCommunicationReference } from "../services/messageMatchingService";
 import type { RcsJobContact, RcsJobSnapshot } from "../services/rcsImportJob";
 import { storeImage, type RcsMediaDeps } from "../services/rcsImportMedia";
-import { importChat, type RcsImportDeps } from "../services/rcsImportStore";
+import { importCacheChat, importChat, type RcsImportDeps } from "../services/rcsImportStore";
+import { cacheSince, decideCacheStart, handleCacheJobEnded } from "../services/rcsCacheService";
+import { autoLinkNewMessagesForUser } from "../services/autoLinkService";
+import sessionService from "../services/sessionService";
 import { clearGoogleMessagesWebData, runWithWritesPaused, type RcsClearResult } from "../services/rcsClearService";
 import transactionService from "../services/transactionService";
 import { bringAppToFront, bringAppToFrontOrFlash } from "../utils/bringAppToFront";
@@ -42,6 +45,7 @@ import { wrapHandler } from "../utils/wrapHandler";
 import { getMainWindow } from "../windowRegistry";
 import { ValidationError } from "../utils/validation";
 import type {
+  RcsExtensionStateResult,
   RcsChatReceivedEvent,
   RcsImportJobResult,
   RcsImportStatusResult,
@@ -119,8 +123,97 @@ function broadcastChatImported(event: RcsChatImportedEvent): void {
   hostWindows.broadcast(RCS_CHAT_RECEIVED_CHANNEL, payload);
 }
 
+// ---------------------------------------------------------------------------
+// BACKLOG-3658: the cache job (all recent chats, then the phone auto-link)
+// ---------------------------------------------------------------------------
+
+/** The signed-in user, or null. */
+async function currentUserId(): Promise<string | null> {
+  try {
+    const session = await sessionService.loadSession();
+    return session?.user?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * What the extension last said (POST /hello). Kept in memory while signed
+ * out; written to the signed-in user's rcs_cache_state row when there is one.
+ */
+const extensionPresence: { version: string | null; seenAt: string | null; pairedAt: string | null } = {
+  version: null,
+  seenAt: null,
+  pairedAt: null,
+};
+
+async function onHello(hello: { version?: string; paired?: boolean }): Promise<void> {
+  const now = new Date().toISOString();
+  if (hello.version) {
+    extensionPresence.version = hello.version;
+    extensionPresence.seenAt = now;
+  }
+  if (hello.paired) extensionPresence.pairedAt = now;
+  const userId = await currentUserId();
+  if (!userId) return;
+  databaseService.updateRcsCacheState(userId, {
+    extension: {
+      ...(hello.version ? { version: hello.version, seenAt: now } : {}),
+      ...(hello.paired ? { pairedAt: now } : {}),
+    },
+  });
+}
+
+/** Start the cache job for the signed-in user, or say why not (status + body). */
+async function startCacheJob(): Promise<
+  { ok: true; job: RcsJobSnapshot } | { ok: false; status: number; error: string; message: string }
+> {
+  const userId = await currentUserId();
+  const state = userId ? databaseService.getRcsCacheState(userId) : null;
+  const active = bridge.activeJob();
+  const decision = decideCacheStart({
+    userId,
+    optedIn: !!state?.optedInAt,
+    activeLabel: active ? active.label ?? "" : null,
+    writesPaused: bridge.writesArePaused,
+  });
+  if (!("ok" in decision)) return { ok: false, ...decision };
+  const job = bridge.createCacheJob(decision.userId, {
+    since: cacheSince(Date.now(), state?.lastCacheFinishedAt),
+    ownNumbers: state?.ownNumber ? [state.ownNumber] : [],
+  });
+  if (!job) return { ok: false, status: 409, error: "already_syncing", message: "Keepr is already syncing." };
+  return { ok: true, job };
+}
+
+/** Cancel any Sync when the user signs out (its rows belong to that user). */
+export function cancelRcsSyncOnLogout(): void {
+  if (bridge.activeJob()) bridge.cancelJob();
+}
+
 const bridge = new RcsExtensionBridge({
   importChat: (chat, transactionId, people) => importChat(chat, transactionId, deps, people),
+  importCacheChat: (chat, userId, people) => importCacheChat(chat, userId, deps, people),
+  importCacheImage: async (image, userId, chatHash, numbers) => {
+    // Images only for chats with a live transaction contact (BACKLOG-3658).
+    if (!databaseService.rcsNumbersMatchLiveContact(userId, numbers)) return { stored: false, reason: "not_a_contact" };
+    return storeImage(image, userId, mediaDeps, chatHash);
+  },
+  currentUserId,
+  onHello: (hello) => void onHello(hello),
+  startCacheJobFromPage: async () => {
+    const started = await startCacheJob();
+    if (!started.ok) return { status: started.status, body: { error: started.error, message: started.message } };
+    return { status: 200, body: { jobId: started.job.jobId } };
+  },
+  onJobEnded: (ended) =>
+    void handleCacheJobEnded(ended, {
+      saveFinishedAt: (userId, iso) => databaseService.updateRcsCacheState(userId, { lastCacheFinishedAt: iso }),
+      saveOwnNumber: (userId, number) => databaseService.updateRcsCacheState(userId, { ownNumber: number }),
+      autoLink: (userId) => autoLinkNewMessagesForUser(userId),
+      now: () => Date.now(),
+      log: (m) => void logService.warn(m, LOG_TAG),
+    }),
   onChatImported: broadcastChatImported,
   importImage: async (image, transactionId, chatHash) => {
     const userId = await deps.getTransactionUserId(transactionId);
@@ -186,6 +279,8 @@ export async function clearGoogleMessagesWebTexts(userId: string): Promise<RcsCl
       },
       (m) => void logService.info(m, LOG_TAG),
     );
+    // BACKLOG-3658: the next cache Sync starts over (60 days) and re-learns the own number.
+    databaseService.resetRcsCacheState(userId);
     hostWindows.broadcast(RCS_DATA_CLEARED_CHANNEL, { messagesDeleted: result.messagesDeleted });
     return result;
   });
@@ -248,6 +343,7 @@ export function registerRcsImportHandlers(): void {
       const job = bridge.createJob(transactionId, contacts, {
         startDate: tx.started_at ?? null,
         label: tx.property_address ?? null,
+        userId: tx.user_id ?? null,
       });
       if (!job) {
         // A Sync started between the check above and here.
@@ -264,6 +360,50 @@ export function registerRcsImportHandlers(): void {
       const jobId = requireString(argsObject(args).jobId, "jobId");
       bridge.cancelJob(jobId);
       return { success: true, job: bridge.getJob() };
+    }, { module: LOG_TAG }),
+  );
+
+  // BACKLOG-3658: the cache job (the dashboard's "Sync Android" uses it, P3).
+  ipcMain.handle(
+    "rcs-import:start-cache-job",
+    wrapHandler(async (): Promise<RcsImportJobResult> => {
+      if (bridge.getStatus().bridge !== "listening") {
+        const st = bridge.getStatus();
+        return { success: false, error: `Import bridge unavailable${st.reason ? `: ${st.reason}` : ""}.` };
+      }
+      const started = await startCacheJob();
+      if (!started.ok) return { success: false, error: started.message };
+      await shell.openExternal(`${RCS_MESSAGES_WEB_URL}#keepr-job=${started.job.jobId}`);
+      return { success: true, job: started.job };
+    }, { module: LOG_TAG }),
+  );
+
+  ipcMain.handle(
+    "rcs-import:set-cache-opt-in",
+    wrapHandler(async (_event, args: unknown): Promise<{ success: boolean; error?: string }> => {
+      const optedIn = argsObject(args).optedIn === true;
+      const userId = await currentUserId();
+      if (!userId) return { success: false, error: "Sign in to Keepr first." };
+      databaseService.updateRcsCacheState(userId, { optedIn });
+      return { success: true };
+    }, { module: LOG_TAG }),
+  );
+
+  ipcMain.handle(
+    "rcs-import:get-extension-state",
+    wrapHandler(async (): Promise<RcsExtensionStateResult> => {
+      const userId = await currentUserId();
+      const state = userId ? databaseService.getRcsCacheState(userId) : null;
+      return {
+        success: true,
+        state: {
+          extensionVersion: extensionPresence.version ?? state?.extensionVersion ?? null,
+          extensionSeenAt: extensionPresence.seenAt ?? state?.extensionSeenAt ?? null,
+          pairedAt: extensionPresence.pairedAt ?? state?.pairedAt ?? null,
+          optedIn: !!state?.optedInAt,
+          lastCacheFinishedAt: state?.lastCacheFinishedAt ?? null,
+        },
+      };
     }, { module: LOG_TAG }),
   );
 

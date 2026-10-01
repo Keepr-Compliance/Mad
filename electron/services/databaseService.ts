@@ -2430,6 +2430,23 @@ class DatabaseService implements IDatabaseService {
     return syncDb.getRcsRemovals(transactionId, userId);
   }
 
+  // BACKLOG-3658: the RCS cache job
+  getRcsCacheState(userId: string) {
+    return syncDb.getRcsCacheState(userId);
+  }
+
+  updateRcsCacheState(userId: string, patch: Parameters<typeof syncDb.updateRcsCacheState>[1]) {
+    return syncDb.updateRcsCacheState(userId, patch);
+  }
+
+  resetRcsCacheState(userId: string) {
+    return syncDb.resetRcsCacheState(userId);
+  }
+
+  rcsNumbersMatchLiveContact(userId: string, numbers: readonly string[]) {
+    return syncDb.rcsNumbersMatchLiveContact(userId, numbers);
+  }
+
   // BACKLOG-3630: the RCS content guard
   findRcsContentDuplicates(
     userId: string,

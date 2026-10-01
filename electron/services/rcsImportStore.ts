@@ -49,6 +49,8 @@ import { rcsReactionExternalId, reactionTypeForEmoji, bareEmoji } from "./rcsRea
 import { toE164 } from "../utils/phoneNormalization";
 
 export const RCS_IMPORT_SOURCE = "google_messages_web";
+/** BACKLOG-3658: rows saved by the cache job (no transaction at import time). */
+export const RCS_CACHE_SOURCE = "gmweb-cache";
 /** BACKLOG-3630: the stable key. */
 export const RCS_EXTERNAL_ID_PREFIX = "gmweb2:";
 export const RCS_THREAD_PREFIX = "gmweb2-";
@@ -295,7 +297,12 @@ export function rcsExternalId(chatHash: string, msgId: string): string {
  * the chat's numbers (`people`), never from the URL conversation id, and
  * participants / participants_flat carry the numbers.
  */
-export function mapChatToRows(chat: RcsIncomingChat, userId: string, people: RcsChatPeople): RcsInsertRow[] {
+export function mapChatToRows(
+  chat: RcsIncomingChat,
+  userId: string,
+  people: RcsChatPeople,
+  source: string = RCS_IMPORT_SOURCE,
+): RcsInsertRow[] {
   const hash = rcsChatHash(people.numbers);
   const threadId = `${RCS_THREAD_PREFIX}${hash}`;
   const flat = people.numbers.join(", ");
@@ -318,7 +325,7 @@ export function mapChatToRows(chat: RcsIncomingChat, userId: string, people: Rcs
       hasAttachments: images > 0 ? 1 : 0,
       messageType: m.text.length > 0 ? "text" : "attachment_only",
       metadata: JSON.stringify({
-        source: RCS_IMPORT_SOURCE,
+        source,
         transport: m.transport,
         conversationId: chat.conversationId,
         conversationTitle: chat.title,
@@ -339,7 +346,12 @@ function fileOnlyText(files: Array<{ name: string; size: string }>): string {
 }
 
 /** Map every reaction on a chat to a reaction row. Pure. */
-export function mapChatToReactionRows(chat: RcsIncomingChat, userId: string, people: RcsChatPeople): RcsReactionRow[] {
+export function mapChatToReactionRows(
+  chat: RcsIncomingChat,
+  userId: string,
+  people: RcsChatPeople,
+  source: string = RCS_IMPORT_SOURCE,
+): RcsReactionRow[] {
   const hash = rcsChatHash(people.numbers);
   const threadId = `${RCS_THREAD_PREFIX}${hash}`;
   const flat = people.numbers.join(", ");
@@ -362,7 +374,7 @@ export function mapChatToReactionRows(chat: RcsIncomingChat, userId: string, peo
         // The page shows no reaction time; the parent's time keeps it in order.
         sentAt: new Date(m.sentAt).toISOString(),
         metadata: JSON.stringify({
-          source: RCS_IMPORT_SOURCE,
+          source,
           kind: "reaction",
           emoji,
           word: r.word,
@@ -454,6 +466,41 @@ export async function importChat(
     reactions: reactionRows.length,
     reactionsStored: reactionResult.stored,
     removedByUser: ids.length - linkIds.length,
+    sameContent: sameContent.size,
+  };
+}
+
+/**
+ * BACKLOG-3658: store one chat of the cache job for `userId`: same key, rows
+ * and content guard as a transaction Sync, tagged source "gmweb-cache", and
+ * NOT linked to anything — the phone auto-link attaches it afterwards.
+ */
+export async function importCacheChat(
+  chat: RcsIncomingChat,
+  userId: string,
+  deps: Pick<RcsImportDeps, "batchInsertMessages" | "getMessageIdMap" | "insertReactionRows" | "findContentDuplicates">,
+  people: RcsChatPeople,
+): Promise<RcsImportResult> {
+  if (people.numbers.length === 0) throw new Error(RCS_NO_NUMBER_MESSAGE);
+  const rows = mapChatToRows(chat, userId, people, RCS_CACHE_SOURCE);
+  const before = deps.getMessageIdMap(userId);
+  const fresh = rows.filter((r) => !before.has(r.externalId));
+  const sameContent = deps.findContentDuplicates && fresh.length > 0
+    ? deps.findContentDuplicates(userId, fresh)
+    : new Map<string, string>();
+  const toInsert = sameContent.size > 0 ? rows.filter((r) => !sameContent.has(r.externalId)) : rows;
+  const { stored, skipped } = deps.batchInsertMessages(toInsert, 500);
+  const reactionRows = mapChatToReactionRows(chat, userId, people, RCS_CACHE_SOURCE);
+  const reactionResult =
+    reactionRows.length > 0 ? deps.insertReactionRows(reactionRows) : { stored: 0, skipped: 0 };
+  return {
+    received: chat.messages.length,
+    stored,
+    alreadyPresent: skipped + sameContent.size,
+    linked: 0,
+    reactions: reactionRows.length,
+    reactionsStored: reactionResult.stored,
+    removedByUser: 0,
     sameContent: sameContent.size,
   };
 }

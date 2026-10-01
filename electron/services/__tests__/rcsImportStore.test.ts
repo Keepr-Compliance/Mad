@@ -10,6 +10,7 @@
  */
 
 import {
+  importCacheChat,
   importChat,
   mapChatToReactionRows,
   mapChatToRows,
@@ -492,5 +493,24 @@ describe("samePeople (BACKLOG-3630, SR F1)", () => {
     expect(samePeople(outbound(`${NUM_A}, ${NUM_B}`), { participants: "{}", participantsFlat: NUM_B })).toBe(true);
     expect(samePeople(outbound(NUM_A), { participants: "{}", participantsFlat: NUM_B })).toBe(false);
     expect(samePeople(outbound(NUM_A), { participants: null, participantsFlat: null })).toBe(false);
+  });
+});
+
+// BACKLOG-3658: a cache chat is stored for the job's user, tagged
+// "gmweb-cache", and linked to nothing. Mutation: link it / keep the source → red.
+describe("importCacheChat (BACKLOG-3658)", () => {
+  it("stores the rows for the user, tagged gmweb-cache, and links nothing", async () => {
+    const db = makeFakeDb("user-1");
+    const result = await importCacheChat(CHAT, "user-1", db.deps, PEOPLE);
+    expect(result).toMatchObject({ stored: 3, linked: 0 });
+    expect(db.rows.every((r) => r.userId === "user-1")).toBe(true);
+    expect(db.rows.map((r) => JSON.parse(r.metadata ?? "{}").source)).toEqual(["gmweb-cache", "gmweb-cache", "gmweb-cache"]);
+    expect(db.linkCalls).toEqual([]);
+    expect(db.links.size).toBe(0);
+  });
+
+  it("a chat without a number is refused", async () => {
+    const db = makeFakeDb("user-1");
+    await expect(importCacheChat(CHAT, "user-1", db.deps, { numbers: [], names: [] })).rejects.toThrow("no phone number");
   });
 });

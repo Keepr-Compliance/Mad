@@ -715,6 +715,23 @@ CREATE TABLE IF NOT EXISTS message_import_state (
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
 );
 
+-- BACKLOG-3658: Google Messages for Web cache state, per user, on THIS device.
+-- opted_in_at: the user agreed to keep a local copy of recent chats (local only).
+-- last_cache_finished_at: the last cache Sync that finished (next one starts 1 day before).
+-- own_number: the user's own number, once 3+ chats agreed (left out of chat keys).
+-- extension_*: what the extension last reported (POST /hello).
+CREATE TABLE IF NOT EXISTS rcs_cache_state (
+  user_id TEXT PRIMARY KEY,
+  opted_in_at DATETIME,
+  last_cache_finished_at DATETIME,
+  own_number TEXT,
+  extension_version TEXT,
+  extension_seen_at DATETIME,
+  paired_at DATETIME,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS message_thread_names (
   user_id TEXT NOT NULL,
   thread_id TEXT NOT NULL,               -- Matches messages.thread_id ("macos-chat-<chat ROWID>")

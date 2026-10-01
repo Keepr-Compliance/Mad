@@ -222,3 +222,69 @@ describe("participantKey (re-pair-proof chat identity)", () => {
     expect(job.numbersFor("conv-unknown")).toEqual([]);
   });
 });
+
+// BACKLOG-3658 — the cache job. Mutations: a cache job replacing a running
+// one; the claim keeping contacts / losing since; a chat without a number
+// counted as matched; the stored own number not used for the first chat; an
+// own number remembered from fewer than 3 chats → red.
+describe("the cache job (BACKLOG-3658)", () => {
+  it("one slot: no cache job while a Sync runs, and none of either kind while it runs", () => {
+    const { jobs } = registry();
+    const tx = jobs.create("tx-1", CONTACTS);
+    expect(jobs.createCache("u-1", "2026-08-01T00:00:00.000Z")).toBe(tx);
+    tx.cancel(jobs.nowMs());
+    const cache = jobs.createCache("u-1", "2026-08-01T00:00:00.000Z");
+    expect(cache.kind).toBe("cache");
+    expect(jobs.create("tx-2", CONTACTS)).toBe(cache);
+    expect(cache.snapshot()).toMatchObject({ kind: "cache", label: "all Android texts", transactionId: "" });
+  });
+
+  it("the claim: no contacts, kind cache, history back to since", () => {
+    const { jobs } = registry();
+    const cache = jobs.createCache("u-1", "2026-08-01T00:00:00.000Z");
+    expect(cache.claim(jobs.nowMs())).toEqual({
+      jobId: cache.jobId,
+      kind: "cache",
+      contacts: [],
+      startDate: "2026-08-01T00:00:00.000Z",
+      since: "2026-08-01T00:00:00.000Z",
+      contactsWithoutPhoneCount: 0,
+    });
+  });
+
+  it("every chat with a number is kept (no contact gate); a chat without one is not", () => {
+    const { jobs } = registry();
+    const cache = jobs.createCache("u-1", "2026-08-01T00:00:00.000Z");
+    cache.claim(jobs.nowMs());
+    cache.match("c-1", ["(555) 555-0142"]);
+    cache.match("c-2", ["not a number"]);
+    expect(cache.isMatched("c-1")).toBe(true);
+    expect(cache.isMatched("c-2")).toBe(false);
+    expect(cache.numbersFor("c-1")).toEqual(["+15555550142"]);
+    expect(cache.progress).toMatchObject({ checked: 2, matched: 1 });
+  });
+
+  it("the stored own number is left out of the FIRST chat already", () => {
+    const { jobs } = registry();
+    const cache = jobs.createCache("u-1", "2026-08-01T00:00:00.000Z", ["(555) 555-0100"]);
+    cache.claim(jobs.nowMs());
+    cache.match("c-1", ["(555) 555-0142", "(555) 555-0100"]);
+    expect(cache.numbersFor("c-1")).toEqual(["+15555550142"]);
+  });
+
+  it("an own number is only remembered when 3+ chats agree on exactly one", () => {
+    const { jobs } = registry();
+    const cache = jobs.createCache("u-1", "2026-08-01T00:00:00.000Z");
+    cache.claim(jobs.nowMs());
+    cache.match("c-1", ["(555) 555-0142", "(555) 555-0100"]);
+    cache.match("c-2", ["(555) 555-0199", "(555) 555-0100"]);
+    expect(cache.detectedOwnNumber()).toBeNull();
+    cache.match("c-3", ["(555) 555-0123", "(555) 555-0100"]);
+    expect(cache.detectedOwnNumber()).toBe("+15555550100");
+  });
+
+  it("transaction jobs remember their user too", () => {
+    const { jobs } = registry();
+    expect(jobs.create("tx-1", CONTACTS, null, null, "u-9").userId).toBe("u-9");
+  });
+});

@@ -60,6 +60,8 @@ import * as http from "http";
 import {
   parseNotReached,
   RcsJobRegistry,
+  type RcsImportJob,
+  type RcsJobKind,
   type RcsJobContact,
   type RcsJobProgress,
   type RcsJobSnapshot,
@@ -80,6 +82,9 @@ export const RCS_BRIDGE_PORT = 38619;
 export const RCS_EXTENSION_ID = "nlfohmjehedijceeelokclkglmjnlonj";
 export const RCS_EXTENSION_ORIGIN = `chrome-extension://${RCS_EXTENSION_ID}`;
 export const RCS_NO_SESSION_MESSAGE = "Open a transaction in Keepr and click Import first.";
+/** BACKLOG-3658 */
+export const RCS_USER_CHANGED_MESSAGE = "Another Keepr user signed in: this Sync was stopped.";
+export const RCS_IMAGE_NOT_A_CONTACT_MESSAGE = "Images are kept only for chats with a transaction contact.";
 /** BACKLOG-3661: the manual Send's reply while a Sync runs. */
 export const RCS_SYNC_RUNNING_MESSAGE = "A Keepr Sync is running. Wait for it to finish, then send again.";
 /** BACKLOG-3657 (SR F1): how long a clear waits for writes in progress. */
@@ -140,6 +145,21 @@ export interface RcsBridgeLogger {
   error: (message: string) => void;
 }
 
+/** BACKLOG-3658: what POST /hello reports (never echoed back). */
+export interface RcsHello {
+  version?: string;
+  paired?: boolean;
+}
+
+/** BACKLOG-3658: a job that just ended. */
+export interface RcsJobEnded {
+  snapshot: RcsJobSnapshot;
+  kind: RcsJobKind;
+  userId: string | null;
+  /** The user's own number when 3+ checked chats agreed on it. */
+  detectedOwnNumber: string | null;
+}
+
 export interface RcsExtensionBridgeOptions {
   importChat: (
     chat: RcsIncomingChat,
@@ -158,6 +178,29 @@ export interface RcsExtensionBridgeOptions {
   onJobFinished?: (job: RcsJobSnapshot) => void;
   /** BACKLOG-3641: the page's "Open Keepr" button (POST /focus). */
   onFocusRequested?: () => void;
+  /**
+   * BACKLOG-3658: the page's "Sync to Keepr" (POST /job/cache/start). Keepr
+   * decides (signed in, opted in, nothing running) and answers status + body.
+   */
+  startCacheJobFromPage?: () => Promise<{ status: number; body: Record<string, unknown> }>;
+  /** BACKLOG-3658: POST /hello — the extension is installed ({version}) / the page is paired. */
+  onHello?: (hello: RcsHello) => void;
+  /** BACKLOG-3658: store a cache chat for `userId` (no transaction, no link). */
+  importCacheChat?: (chat: RcsIncomingChat, userId: string, people: RcsChatPeople) => Promise<RcsImportResult>;
+  /**
+   * BACKLOG-3658: a cache chat's image. Kept only when the chat's numbers match
+   * a live transaction contact; otherwise { stored: false, reason: "not_a_contact" }.
+   */
+  importCacheImage?: (
+    image: RcsIncomingImage,
+    userId: string,
+    chatHash: string,
+    numbers: string[],
+  ) => Promise<RcsImageResult | { stored: false; reason: "not_a_contact" }>;
+  /** BACKLOG-3658: the signed-in user now; a job of another user is cancelled. */
+  currentUserId?: () => Promise<string | null>;
+  /** BACKLOG-3658: a job ended (finished, failed or cancelled). Once per job. */
+  onJobEnded?: (ended: RcsJobEnded) => void;
   /** Overridable for tests only. */
   jobs?: RcsJobRegistry;
 }
@@ -263,6 +306,8 @@ export class RcsExtensionBridge {
   private pauseCount = 0;
   private inFlightWrites = 0;
   private drainWaiters: Array<() => void> = [];
+  /** BACKLOG-3658: jobs whose end was already announced (onJobEnded). */
+  private readonly endedAnnounced = new Set<string>();
 
   constructor(private readonly options: RcsExtensionBridgeOptions) {
     this.allowedOrigin = options.allowedOrigin ?? RCS_EXTENSION_ORIGIN;
@@ -278,15 +323,35 @@ export class RcsExtensionBridge {
   createJob(
     transactionId: string,
     contacts: RcsJobContact[],
-    options: { startDate?: string | null; unclaimedMs?: number; label?: string | null } = {},
+    options: { startDate?: string | null; unclaimedMs?: number; label?: string | null; userId?: string | null } = {},
   ): RcsJobSnapshot | null {
     // BACKLOG-3661: one Sync at a time — while a job is active nothing is
     // created (null); the running job is left untouched. Callers check
     // activeJob() first to tell the user what is running.
     if (this.jobs.active()) return null;
     const unclaimedMs = options.unclaimedMs ?? 60_000;
-    const job = this.jobs.create(transactionId, contacts, options.startDate ?? null, options.label ?? null);
+    const job = this.jobs.create(
+      transactionId, contacts, options.startDate ?? null, options.label ?? null, options.userId ?? null,
+    );
     this.logger.info(`[RcsBridge] Sync job created for transaction ${transactionId} (${contacts.length} contacts)`);
+    return this.armJob(job, options.unclaimedMs ?? 60_000);
+  }
+
+  /**
+   * BACKLOG-3658: the cache job — all recent chats of `userId`, back to
+   * `since`. null while any job runs (one at a time, BACKLOG-3661).
+   */
+  createCacheJob(
+    userId: string,
+    options: { since: string; ownNumbers?: readonly string[]; unclaimedMs?: number },
+  ): RcsJobSnapshot | null {
+    if (this.jobs.active()) return null;
+    const job = this.jobs.createCache(userId, options.since, options.ownNumbers ?? []);
+    this.logger.info("[RcsBridge] Cache job created");
+    return this.armJob(job, options.unclaimedMs ?? 60_000);
+  }
+
+  private armJob(job: RcsImportJob, unclaimedMs: number): RcsJobSnapshot {
     if (this.unclaimedTimer) clearTimeout(this.unclaimedTimer);
     this.unclaimedTimer = setTimeout(() => {
       this.unclaimedTimer = null;
@@ -301,6 +366,31 @@ export class RcsExtensionBridge {
     return snap;
   }
 
+  /** Tell the owner, once, that a job ended (BACKLOG-3658). */
+  private announceEnded(job: RcsImportJob): void {
+    if (job.isActive || this.endedAnnounced.has(job.jobId)) return;
+    this.endedAnnounced.add(job.jobId);
+    this.options.onJobEnded?.({
+      snapshot: job.snapshot(),
+      kind: job.kind,
+      userId: job.userId,
+      detectedOwnNumber: job.detectedOwnNumber(),
+    });
+  }
+
+  /**
+   * BACKLOG-3658: rows go to the user the job was started for. If someone
+   * else is signed in now, the job is cancelled and nothing is written.
+   */
+  private async stillSameUser(job: RcsImportJob): Promise<boolean> {
+    if (!this.options.currentUserId || !job.userId) return true;
+    const current = await this.options.currentUserId();
+    if (current === job.userId) return true;
+    this.logger.warn("[RcsBridge] The signed-in user changed: the Sync was cancelled");
+    this.cancelJob(job.jobId);
+    return false;
+  }
+
   /** BACKLOG-3661: the created or running job, if any. */
   activeJob(): RcsJobSnapshot | null {
     const job = this.jobs.active();
@@ -310,7 +400,10 @@ export class RcsExtensionBridge {
   cancelJob(jobId?: string): void {
     this.jobs.cancelJob(jobId);
     const job = this.jobs.current();
-    if (job) this.emitJob(job.snapshot());
+    if (job) {
+      this.emitJob(job.snapshot());
+      this.announceEnded(job);
+    }
   }
 
   getJob(): RcsJobSnapshot | null {
@@ -481,6 +574,31 @@ export class RcsExtensionBridge {
 
       // BACKLOG-3641: the page's "Open Keepr" button. Same Host/Origin checks as
       // every route (above); no body, no data — Keepr brings itself forward.
+      // BACKLOG-3658: the extension says it is installed / the page is paired.
+      // Works signed out; nothing is sent back.
+      if (path === "/hello") {
+        const read = await readJson(req, res, 4096);
+        if (!read.ok) return;
+        const b = (read.body && typeof read.body === "object" ? read.body : {}) as Record<string, unknown>;
+        const hello: RcsHello = {};
+        if (typeof b.version === "string") hello.version = b.version.slice(0, 40);
+        if (b.paired === true) hello.paired = true;
+        this.options.onHello?.(hello);
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+
+      // BACKLOG-3658: the page's "Sync to Keepr" button starts the cache job.
+      if (path === "/job/cache/start") {
+        if (!this.options.startCacheJobFromPage) {
+          sendJson(res, 501, { error: "unsupported" });
+          return;
+        }
+        const answer = await this.options.startCacheJobFromPage();
+        sendJson(res, answer.status, answer.body);
+        return;
+      }
+
       if (path === "/focus") {
         if (!this.options.onFocusRequested) {
           sendJson(res, 501, { error: "unsupported" });
@@ -625,7 +743,9 @@ export class RcsExtensionBridge {
         const shown = (numbers as unknown[]).filter((n): n is string => typeof n === "string").slice(0, 50);
         const contactIds = job.match(conversationId, shown);
         this.emitJob(job.snapshot());
-        sendJson(res, 200, { matched: contactIds.length > 0, contactIds });
+        // A cache job keeps every chat with a number (BACKLOG-3658).
+        const matched = job.kind === "cache" ? job.isMatched(conversationId) : contactIds.length > 0;
+        sendJson(res, 200, { matched, contactIds });
         return;
       }
       case "chat": {
@@ -646,7 +766,20 @@ export class RcsExtensionBridge {
           sendJson(res, 400, { error: "no_number", message: RCS_NO_NUMBER_MESSAGE });
           return;
         }
-        const result = await this.options.importChat(chat, job.transactionId, people);
+        if (!(await this.stillSameUser(job))) {
+          sendJson(res, 409, { error: "user_changed", message: RCS_USER_CHANGED_MESSAGE });
+          return;
+        }
+        let result: RcsImportResult;
+        if (job.kind === "cache") {
+          if (!this.options.importCacheChat || !job.userId) {
+            sendJson(res, 501, { error: "unsupported", message: "This Keepr build cannot save chats." });
+            return;
+          }
+          result = await this.options.importCacheChat(chat, job.userId, people);
+        } else {
+          result = await this.options.importChat(chat, job.transactionId, people);
+        }
         job.progress.imported += 1;
         job.progress.messages += result.received;
         job.progress.reactions += result.reactions;
@@ -665,7 +798,7 @@ export class RcsExtensionBridge {
           sendJson(res, 403, { error: "not_matched", message: "Keepr did not match this chat to a transaction contact." });
           return;
         }
-        if (!this.options.importImage) {
+        if (job.kind !== "cache" && !this.options.importImage) {
           sendJson(res, 501, { error: "unsupported", message: "This Keepr build cannot store images." });
           return;
         }
@@ -674,7 +807,29 @@ export class RcsExtensionBridge {
           sendJson(res, 400, { error: "no_number", message: RCS_NO_NUMBER_MESSAGE });
           return;
         }
-        const result = await this.options.importImage(image, job.transactionId, rcsChatHash(imageNumbers));
+        if (!(await this.stillSameUser(job))) {
+          sendJson(res, 409, { error: "user_changed", message: RCS_USER_CHANGED_MESSAGE });
+          return;
+        }
+        let result: RcsImageResult | { stored: false; reason: "not_a_contact" };
+        if (job.kind === "cache") {
+          if (!this.options.importCacheImage || !job.userId) {
+            sendJson(res, 501, { error: "unsupported", message: "This Keepr build cannot store images." });
+            return;
+          }
+          result = await this.options.importCacheImage(image, job.userId, rcsChatHash(imageNumbers), imageNumbers);
+          if (!result.stored && result.reason === "not_a_contact") {
+            // Counted and reported, never silent (BACKLOG-3658): the page lists
+            // it as "images not imported".
+            job.progress.imagesSkipped += 1;
+            this.emitJob(job.snapshot());
+            sendJson(res, 422, { error: "not_a_contact", message: RCS_IMAGE_NOT_A_CONTACT_MESSAGE });
+            return;
+          }
+        } else {
+          if (!this.options.importImage) return;
+          result = await this.options.importImage(image, job.transactionId, rcsChatHash(imageNumbers));
+        }
         if (!result.stored) {
           const status = result.reason === "too_large" ? 413 : result.reason === "message_not_found" ? 409 : 400;
           job.progress.skipped += 1;
@@ -721,6 +876,7 @@ export class RcsExtensionBridge {
         );
         this.emitJob(snap);
         this.options.onJobFinished?.(snap);
+        this.announceEnded(job);
         sendJson(res, 200, { ok: true });
         return;
       }
@@ -730,6 +886,7 @@ export class RcsExtensionBridge {
         job.fail(code, message, this.jobs.nowMs());
         this.logger.warn(`[RcsBridge] Sync job failed: ${code}`);
         this.emitJob(job.snapshot());
+        this.announceEnded(job);
         sendJson(res, 200, { ok: true });
         return;
       }
