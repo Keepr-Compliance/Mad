@@ -319,7 +319,9 @@ export default function ChecklistEditorClient({
             {showErrors && errors.description ? (
               <p className="mt-1 text-xs text-red-600">{errors.description}</p>
             ) : (
-              <FieldHelp>Optional. Shown in the template list, not to agents.</FieldHelp>
+              <FieldHelp>
+                {own ? 'Optional. Shown in your list only.' : 'Optional. Shown in the template list, not to agents.'}
+              </FieldHelp>
             )}
           </div>
           {state.includeInSubmission !== null && (

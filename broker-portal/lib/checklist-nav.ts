@@ -11,7 +11,9 @@
  *            and feature_definitions.is_built is true for the feature.
  *            featureRenderPolicy is the portal's one rule for this
  *            (BACKLOG-3098).
- * - hidden   everything else: impersonation, floor users (agents), an
+ * - hidden   everything else: impersonation, floor users the gate refuses
+ *            (since BACKLOG-3618 a brokerage agent with the feature is
+ *            admitted, so 'enabled'), an
  *            unbuilt feature, an unreadable build state.
  *
  * Grayed is presentation only. The route, the actions and RLS still refuse.
