@@ -622,8 +622,9 @@
    *
    * @param {Document} doc
    * @param {string} before  messageIdSet(doc) taken before the click
-   * @param {{sleep: function(number): Promise<void>, timeoutMs?: number, stableMs?: number, intervalMs?: number}} io
-   * @returns {Promise<boolean>}
+   * @param {{sleep: function(number): Promise<void>, timeoutMs?: number, stableMs?: number, intervalMs?: number,
+   *   reportEmpty?: boolean, emptyConfirmMs?: number}} io
+   * @returns {Promise<boolean|"empty">}  "empty" only with io.reportEmpty (BACKLOG-3664)
    */
   async function waitForMessageSwap(doc, before, io) {
     var timeoutMs = typeof io.timeoutMs !== "number" ? 8000 : io.timeoutMs;
@@ -638,7 +639,21 @@
       else sameFor = 0;
       last = cur;
       if (cur !== "" && cur !== before && sameFor >= stableMs) return true;
-      if (waited >= timeoutMs) return false;
+      if (waited >= timeoutMs) {
+        // BACKLOG-3664: with io.reportEmpty, a chat that shows NO message at
+        // all (the earlier chat's are gone too) gets a further wait; still none
+        // → "empty" (a chat with no messages yet), not a load failure. The
+        // earlier chat's messages still on screen stay a failure (false).
+        if (io.reportEmpty && cur === "") {
+          var extra = typeof io.emptyConfirmMs !== "number" ? 3000 : io.emptyConfirmMs;
+          for (var w = 0; w < extra; w += step) {
+            await io.sleep(step);
+            if (messageIdSet(doc) !== "") return waitForMessageSwap(doc, before, { sleep: io.sleep, timeoutMs: timeoutMs, stableMs: stableMs, intervalMs: step });
+          }
+          return "empty";
+        }
+        return false;
+      }
       await io.sleep(step);
       waited += step;
     }

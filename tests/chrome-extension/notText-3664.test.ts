@@ -234,3 +234,59 @@ describe.each(["transaction", "cache"] as const)("a %s Sync over a list with an 
     expect(finish?.[1]).toMatchObject({ notText: 1 });
   });
 });
+
+// BACKLOG-3664 (founder retest): an EMPTY chat (e.g. a new group with no
+// messages) is "no messages yet" — counted quietly, never "not fully
+// imported" — while the earlier chat's messages still on screen remain a
+// real load failure. Mutations: E1 empty treated as a failure; E2 a stale
+// screen treated as empty; E3 the job reports an empty chat as left out.
+describe("an empty chat vs a load failure", () => {
+  const wrap = (id: string) => `<mws-message-wrapper msg-id="${id}"></mws-message-wrapper>`;
+
+  it("no message on screen after the wait and a further confirm: 'empty' (E1)", async () => {
+    document.body.innerHTML = "<div id='chat'></div>";
+    const out = await scan.waitForMessageSwap(document, "m-old", {
+      sleep: countingSleep, timeoutMs: 300, stableMs: 100, reportEmpty: true, emptyConfirmMs: 300,
+    });
+    expect(out).toBe("empty");
+  });
+
+  it("the earlier chat's messages still on screen: false, a real failure (E2)", async () => {
+    document.body.innerHTML = `<div id='chat'>${wrap("m-old")}</div>`;
+    const out = await scan.waitForMessageSwap(document, "m-old", {
+      sleep: countingSleep, timeoutMs: 300, stableMs: 100, reportEmpty: true, emptyConfirmMs: 300,
+    });
+    expect(out).toBe(false);
+  });
+
+  it("messages that arrive during the confirm wait: ready after all", async () => {
+    document.body.innerHTML = "<div id='chat'></div>";
+    let n = 0;
+    const sleep = async (): Promise<void> => {
+      n += 1;
+      if (n === 5) document.getElementById("chat")!.innerHTML = wrap("m-new");
+    };
+    const out = await scan.waitForMessageSwap(document, "m-old", {
+      sleep, timeoutMs: 300, stableMs: 100, reportEmpty: true, emptyConfirmMs: 1000,
+    });
+    expect(out).toBe(true);
+  });
+
+  it("without reportEmpty an empty screen is still false (callers unchanged)", async () => {
+    document.body.innerHTML = "<div id='chat'></div>";
+    expect(await scan.waitForMessageSwap(document, "m-old", { sleep: countingSleep, timeoutMs: 300, stableMs: 100 })).toBe(false);
+  });
+
+  it.each(["transaction", "cache"] as const)("a %s Sync counts it as 'no messages yet', never left out (E3)", async (kind) => {
+    const t = runWith(kind);
+    const orig = t.env.api;
+    t.env.api = async (m: string, p: string, b?: Record<string, unknown>) =>
+      p.endsWith("/match") ? { ok: true, status: 200, body: { matched: true } } : orig(m, p, b);
+    t.env.scan.waitForMessageSwap = (async () => "empty") as never;
+    const outcome = await job.runJob(JOB, t.env);
+    expect(outcome.outcome).toBe("finished");
+    expect(outcome.totals.noMessagesYet).toBe(1);
+    expect(outcome.notReached).toEqual([{ name: "Test Contact B", reason: "no_numbers" }]);
+    expect(t.calls.some(([p]) => p.endsWith("/chat"))).toBe(false);
+  });
+});
