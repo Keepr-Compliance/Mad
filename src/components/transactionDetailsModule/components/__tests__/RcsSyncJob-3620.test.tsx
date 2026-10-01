@@ -127,51 +127,44 @@ describe("Sync job (BACKLOG-3620)", () => {
     expect(onImported).toHaveBeenCalledTimes(2);
   });
 
-  // BACKLOG-3641/3642/3645. Mutation: drop any of the four lines → red.
-  it("finished: shows the scan counts, chats not checked, removed-not-re-added and chats left out", async () => {
+  // BACKLOG-3641 (founder): no summary in Keepr when the Sync is over — the
+  // button returns from "Syncing…" to "Sync". Mutation: render the finished
+  // or cancelled state again → red.
+  it.each(["finished", "cancelled"] as const)("%s: no Sync panel, the button reads Sync again", async (state) => {
     mockStartJob.mockResolvedValue({ success: true, data: job() });
     render(<Harness transactionId="tx-1" />);
     fireEvent.click(screen.getByTestId("rcs-sync-button"));
     await screen.findByTestId("rcs-sync-job");
+    expect(screen.getByTestId("rcs-sync-button")).toHaveTextContent("Syncing…");
     act(() => {
       jobListener?.(job({
-        state: "finished",
+        state,
         stage: "Done",
         progress: { ...job().progress, listed: 60, candidates: 2, checked: 2, matched: 1, imported: 1, messages: 50, notChecked: 58, removedNotRelinked: 7 },
         notReached: [{ name: "Sample Person", reason: "history_truncated" }],
-        notReachedMore: 0,
       }));
     });
-    expect(screen.getByTestId("rcs-sync-job-counts")).toHaveTextContent("Scanned 60 chats · checked 2 · matched 1 · imported 50 messages");
-    expect(screen.getByTestId("rcs-sync-job-not-checked")).toHaveTextContent("Not checked: 58 chats (name didn't match a contact on this transaction)");
-    expect(screen.getByTestId("rcs-sync-job-removed")).toHaveTextContent("7 messages you removed were not re-added");
-    expect(screen.getByTestId("rcs-sync-job-left-out")).toHaveTextContent("Not fully imported: Sample Person (only the newest messages imported)");
+    expect(screen.queryByTestId("rcs-sync-job")).toBeNull();
+    expect(screen.queryByText(/Scanned|Not fully imported|Close/)).toBeNull();
+    expect(screen.getByTestId("rcs-sync-button")).toHaveTextContent(/^Sync$/);
+    expect(screen.getByTestId("rcs-sync-button")).not.toBeDisabled();
   });
 
-  // BACKLOG-3641. Mutation: drop the `checked > 0 && matched === 0` branch in
-  // jobLine → the panel says "imported 0 chats" and this goes red.
-  it("finished with chats checked but none matched: says so instead of 'imported 0 chats'", async () => {
+  // Mutation: no length cap on the failure line → red.
+  it("a failure is one short line, and it can be dismissed", async () => {
     mockStartJob.mockResolvedValue({ success: true, data: job() });
     render(<Harness transactionId="tx-1" />);
     fireEvent.click(screen.getByTestId("rcs-sync-button"));
     await screen.findByTestId("rcs-sync-job");
     act(() => {
-      jobListener?.(job({ state: "finished", stage: "Done", progress: { ...job().progress, listed: 19, candidates: 8, checked: 8 } }));
+      jobListener?.(job({ state: "failed", error: { code: "scan_failed", message: "x".repeat(400) } }));
     });
-    const status = screen.getByTestId("rcs-sync-job-status");
-    expect(status).toHaveTextContent("Sync done: checked 8 chats — none matched a phone number on this transaction's contacts.");
-    expect(status).not.toHaveTextContent("imported 0");
-  });
-
-  it("finished with a match keeps the imported counts", async () => {
-    mockStartJob.mockResolvedValue({ success: true, data: job() });
-    render(<Harness transactionId="tx-1" />);
-    fireEvent.click(screen.getByTestId("rcs-sync-button"));
-    await screen.findByTestId("rcs-sync-job");
-    act(() => {
-      jobListener?.(job({ state: "finished", stage: "Done", progress: { ...job().progress, checked: 8, matched: 1, imported: 1, messages: 3 } }));
-    });
-    expect(screen.getByTestId("rcs-sync-job-status")).toHaveTextContent("Sync done: imported 1 chat, 3 messages, 0 images.");
+    const line = screen.getByTestId("rcs-sync-job-status").textContent ?? "";
+    expect(line.length).toBeLessThanOrEqual(140);
+    expect(line.endsWith("…")).toBe(true);
+    expect(screen.queryByTestId("rcs-sync-job-counts")).toBeNull();
+    fireEvent.click(screen.getByTestId("rcs-sync-job-dismiss"));
+    expect(screen.queryByTestId("rcs-sync-job")).toBeNull();
   });
 
   it("shows the not-signed-in message from the page", async () => {

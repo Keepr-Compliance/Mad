@@ -217,23 +217,8 @@ export function useRcsSyncJob(
   return { job, error, starting, start, cancel, dismiss };
 }
 
-/** BACKLOG-3641: the same counts the page's Details show. Chats, not contacts. */
-function countsLine(job: RcsJobInfo): string {
-  const p = job.progress;
-  return `Scanned ${p.listed} chats · checked ${p.checked} · matched ${p.matched} · imported ${p.messages} messages`;
-}
-
-/** Why a chat was left out (BACKLOG-3629), as the page's Details word it. */
-const LEFT_OUT_TEXT: Record<string, string> = {
-  not_opened: "could not be opened",
-  no_numbers: "no phone number shown",
-  messages_not_loaded: "messages did not load",
-  history_not_settled: "messages kept changing",
-  no_messages: "no messages found",
-  error: "failed",
-  images_failed: "images not imported",
-  history_truncated: "only the newest messages imported",
-};
+/** BACKLOG-3641 (founder): a failure is one short line in Keepr. */
+const FAILURE_LINE_MAX = 140;
 
 function jobLine(job: RcsJobInfo): string {
   const p = job.progress;
@@ -243,25 +228,26 @@ function jobLine(job: RcsJobInfo): string {
       return "Opening Messages for Web in Chrome…";
     case "running":
       return `${job.stage} — checked ${p.checked} of ${p.candidates} chats; imported ${imported}`;
-    case "finished":
-      // BACKLOG-3641: say why nothing came in, not a bare "imported 0 chats".
-      if (p.checked > 0 && p.matched === 0) {
-        return `Sync done: checked ${p.checked} chat${p.checked === 1 ? "" : "s"} — none matched a phone number on this transaction's contacts.`;
-      }
-      return `Sync done: imported ${imported}` + (p.skipped > 0 ? `; ${p.skipped} skipped` : "") + ".";
-    case "cancelled":
-      return "Sync cancelled.";
-    case "failed":
-      return job.error?.message ?? "The sync failed.";
+    case "failed": {
+      const message = job.error?.message ?? "The sync failed.";
+      return message.length > FAILURE_LINE_MAX ? `${message.slice(0, FAILURE_LINE_MAX - 1)}…` : message;
+    }
     default:
       return job.stage;
   }
 }
 
+/**
+ * The Sync's line in the Messages panel. BACKLOG-3641 (founder): while it runs,
+ * one progress line and Cancel; when it is over the panel shows nothing — the
+ * button simply returns from "Syncing…" to "Sync" (the details live on the
+ * page in Chrome) — except a real failure: one short line, dismissable.
+ */
 export function RcsSyncJobStatus({ sync }: { sync: RcsSyncJobController }): React.ReactElement | null {
   const { job } = sync;
   if (!job) return null;
   const active = job.state === "created" || job.state === "running";
+  if (!active && job.state !== "failed") return null;
   return (
     <div
       className={`inline-flex items-center gap-3 px-3 py-1.5 text-sm rounded-lg ${
@@ -273,31 +259,9 @@ export function RcsSyncJobStatus({ sync }: { sync: RcsSyncJobController }): Reac
       <span className={job.state === "failed" ? "text-red-700" : "text-gray-700"} data-testid="rcs-sync-job-status">
         {jobLine(job)}
       </span>
-      {job.contactsWithoutPhone.length > 0 && (
+      {active && job.contactsWithoutPhone.length > 0 && (
         <span className="text-gray-500" data-testid="rcs-sync-job-no-phone">
           No phone number: {job.contactsWithoutPhone.join(", ")}
-        </span>
-      )}
-      {!active && job.progress.listed > 0 && (
-        <span className="text-gray-500" data-testid="rcs-sync-job-counts">
-          {countsLine(job)}
-        </span>
-      )}
-      {!active && (job.progress.notChecked ?? 0) > 0 && (
-        <span className="text-gray-500" data-testid="rcs-sync-job-not-checked">
-          Not checked: {job.progress.notChecked} chats (name didn&apos;t match a contact on this transaction)
-        </span>
-      )}
-      {!active && (job.progress.removedNotRelinked ?? 0) > 0 && (
-        <span className="text-gray-500" data-testid="rcs-sync-job-removed">
-          {job.progress.removedNotRelinked} messages you removed were not re-added
-        </span>
-      )}
-      {!active && job.notReached && job.notReached.length > 0 && (
-        <span className="text-gray-500" data-testid="rcs-sync-job-left-out">
-          Not fully imported:{" "}
-          {job.notReached.map((e) => `${e.name} (${LEFT_OUT_TEXT[e.reason] ?? e.reason})`).join(", ")}
-          {(job.notReachedMore ?? 0) > 0 ? `, +${job.notReachedMore} more` : ""}
         </span>
       )}
       {active ? (
@@ -311,10 +275,11 @@ export function RcsSyncJobStatus({ sync }: { sync: RcsSyncJobController }): Reac
       ) : (
         <button
           onClick={sync.dismiss}
-          className="px-2 py-1 font-medium text-indigo-700 hover:bg-indigo-100 rounded"
+          aria-label="Dismiss"
+          className="px-1.5 py-0.5 font-medium text-red-700 hover:bg-red-100 rounded"
           data-testid="rcs-sync-job-dismiss"
         >
-          Close
+          ×
         </button>
       )}
     </div>
