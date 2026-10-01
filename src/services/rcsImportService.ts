@@ -117,4 +117,15 @@ export const rcsImportService = {
     if (!bridge || !bridge.onDataCleared) return () => {};
     return bridge.onDataCleared(callback);
   },
+
+  /**
+   * BACKLOG-3658: a cache Sync's texts were saved and auto-linked (after the
+   * Sync's /finish, so a refetch on finish alone is too early). Returns an
+   * unsubscribe.
+   */
+  onDataChanged(callback: (event: { reason: string }) => void): () => void {
+    const bridge = api();
+    if (!bridge || !bridge.onDataChanged) return () => {};
+    return bridge.onDataChanged(callback);
+  },
 };

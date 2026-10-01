@@ -57,6 +57,15 @@ export const rcsImportBridge = {
     ipcRenderer.invoke("rcs-import:set-cache-opt-in", args),
   getExtensionState: (): Promise<RcsExtensionStateResult> => ipcRenderer.invoke("rcs-import:get-extension-state"),
 
+  /** BACKLOG-3658 (SR S1): a cache Sync was saved and auto-linked. */
+  onDataChanged: (callback: (event: { reason: string }) => void) => {
+    const handler = (_event: unknown, data: { reason: string }) => callback(data);
+    ipcRenderer.on("rcs-import:data-changed", handler);
+    return () => {
+      ipcRenderer.removeListener("rcs-import:data-changed", handler);
+    };
+  },
+
   /** BACKLOG-3657: Google Messages for Web texts were cleared (Force re-import). */
   onDataCleared: (callback: (event: { messagesDeleted: number }) => void) => {
     const handler = (_event: unknown, data: { messagesDeleted: number }) => callback(data);

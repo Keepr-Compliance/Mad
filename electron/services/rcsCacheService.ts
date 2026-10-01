@@ -143,6 +143,8 @@ export interface CacheJobEndedDeps {
   /** BACKLOG-3658: drop the job's staging (cancel / error / user switch). */
   discard: (jobId: string) => Promise<void>;
   autoLink: (userId: string) => Promise<unknown>;
+  /** SR S1: the texts are saved and linked — open views may refetch now. */
+  onSaved?: (userId: string) => void;
   now: () => number;
   log?: (message: string) => void;
 }
@@ -192,6 +194,8 @@ export async function handleCacheJobEnded(
   } catch (err) {
     deps.log?.(`[RcsCache] Auto-link after the cache Sync failed: ${err instanceof Error ? err.message : String(err)}`);
   }
+  // Even when the auto-link failed, the saved texts are new to open views.
+  deps.onSaved?.(userId);
 }
 
 /**

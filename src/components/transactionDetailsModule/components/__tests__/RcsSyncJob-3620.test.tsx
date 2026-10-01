@@ -19,6 +19,7 @@ let jobListener: JobListener | null = null;
 const jobListeners = new Set<JobListener>();
 const dispatchJob: JobListener = (j) => jobListeners.forEach((l) => l(j));
 let clearedListener: ((e: { messagesDeleted: number }) => void) | null = null;
+let changedListener: ((e: { reason: string }) => void) | null = null;
 
 const mockStartJob = jest.fn();
 const mockCancelJob = jest.fn();
@@ -45,6 +46,12 @@ jest.mock("../../../../services/rcsImportService", () => ({
       clearedListener = cb;
       return () => {
         clearedListener = null;
+      };
+    },
+    onDataChanged: (cb: (e: { reason: string }) => void) => {
+      changedListener = cb;
+      return () => {
+        changedListener = null;
       };
     },
   },
@@ -91,6 +98,18 @@ describe("Sync job (BACKLOG-3620)", () => {
       jobListener?.(job({ state: "running", stage: "Checked 1 of 2 chats", progress: { ...job().progress, candidates: 2, checked: 1, imported: 1, messages: 5, images: 1 } }));
     });
     expect(screen.getByTestId("rcs-sync-job-status")).toHaveTextContent("imported 1 chat, 5 messages, 1 images");
+    expect(onImported).toHaveBeenCalledTimes(1);
+  });
+
+  // BACKLOG-3658 (SR S1): a cache Sync is saved + auto-linked after its
+  // /finish. Mutation: drop the onDataChanged subscription → red.
+  it("refetches the transaction's messages when a cache Sync was saved and linked", async () => {
+    const onImported = jest.fn();
+    render(<Harness transactionId="tx-1" onImported={onImported} />);
+    await waitFor(() => expect(changedListener).not.toBeNull());
+    act(() => {
+      changedListener?.({ reason: "cache-saved" });
+    });
     expect(onImported).toHaveBeenCalledTimes(1);
   });
 

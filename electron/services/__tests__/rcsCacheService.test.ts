@@ -10,6 +10,7 @@
  *   R3 the finish time saved after a cancel or an error                 → "saved only on success"
  *   R4 (atomic import) a cancel/error commits, links, or keeps staging  → "cancelled or failed: discard only"
  *   R4b a failed commit still saving the time or linking                → "a failed commit saves nothing"
+ *   S1 views told to refetch before the auto-link, or after a discard   → "finished: committed"
  *   R5 a transaction Sync treated as a cache Sync                       → "a transaction Sync is left alone"
  *   R6 the finish time = now instead of the job start (SR P1)           → "the job START time is saved"
  *   R8 the hello throttle off by one or missing                         → "hello at most once a minute"
@@ -93,6 +94,7 @@ describe("when a cache Sync ends", () => {
         autoLink: async (u: string) => {
           calls.push(`autolink ${u}`);
         },
+        onSaved: (u: string) => void calls.push(`saved ${u}`),
         now: () => NOW,
       },
     };
@@ -104,7 +106,7 @@ describe("when a cache Sync ends", () => {
   it("finished: committed (one transaction), then the time is saved, then the auto-link for that user", async () => {
     const d = deps();
     await handleCacheJobEnded(ended("finished"), d.deps);
-    expect(d.calls).toEqual(["commit job-1 u-1", `finished u-1 ${new Date(NOW).toISOString()}`, "autolink u-1"]);
+    expect(d.calls).toEqual(["commit job-1 u-1", `finished u-1 ${new Date(NOW).toISOString()}`, "autolink u-1", "saved u-1"]);
   });
 
   // BACKLOG-3658 atomic import: nothing was written, so nothing to link.

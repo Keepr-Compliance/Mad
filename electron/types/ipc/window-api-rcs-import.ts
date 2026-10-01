@@ -117,6 +117,8 @@ export interface WindowApiRcsImport {
   onJobProgress: (callback: (job: RcsJobInfo) => void) => () => void;
   /** BACKLOG-3657: Google Messages for Web texts were cleared. Returns an unsubscribe. */
   onDataCleared: (callback: (event: { messagesDeleted: number }) => void) => () => void;
+  /** BACKLOG-3658: a cache Sync was saved and auto-linked. Returns an unsubscribe. */
+  onDataChanged?: (callback: (event: { reason: string }) => void) => () => void;
   /**
    * BACKLOG-3658: start the cache job (all recent chats), for the signed-in
    * user. `sinceDays` (1..3650) is a DEV-ONLY window override, ignored in a

@@ -183,6 +183,11 @@ export function useRcsSyncJob(
     const unsubscribeCleared = rcsImportService.onDataCleared(() => {
       if (alive) void onImportedRef.current?.();
     });
+    // BACKLOG-3658 (SR S1): a cache Sync's texts are saved and linked AFTER
+    // its /finish: refetch then, not on the finish.
+    const unsubscribeChanged = rcsImportService.onDataChanged(() => {
+      if (alive) void onImportedRef.current?.();
+    });
     void rcsImportService.getJob().then((r) => {
       if (r.success) accept(r.data ?? null);
     });
@@ -190,6 +195,7 @@ export function useRcsSyncJob(
       alive = false;
       unsubscribe();
       unsubscribeCleared();
+      unsubscribeChanged();
     };
   }, [transactionId]);
 
