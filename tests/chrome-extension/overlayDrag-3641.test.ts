@@ -173,37 +173,6 @@ describe("never two Keepr boxes (O8)", () => {
     expect(job.ownsPage(document, "new")).toBe(true);
     expect(job.ownsPage(document, "old")).toBe(false);
   });
-
-  it("content.js: a second instance removes the first one's Send container; the first then stops", () => {
-    jest.useFakeTimers();
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const fs = require("fs") as typeof import("fs");
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const path = require("path") as typeof import("path");
-      const src = fs.readFileSync(path.join(__dirname, "..", "..", "chrome-extension", "content.js"), "utf8");
-      document.body.innerHTML = "";
-      (globalThis as Record<string, unknown>).chrome = { runtime: { sendMessage: () => undefined, lastError: undefined } };
-      const runInstance = () => {
-        // Each extension instance runs in its own isolated world: its own flag.
-        delete (window as unknown as Record<string, unknown>).__keeprSendInstalled;
-        new Function(src)();
-      };
-      runInstance();
-      jest.advanceTimersByTime(1100);
-      expect(document.querySelectorAll("#keepr-send-container")).toHaveLength(1);
-      const first = document.getElementById("keepr-send-container");
-      runInstance();
-      expect(first?.isConnected).toBe(false);
-      jest.advanceTimersByTime(3100);
-      expect(document.querySelectorAll("#keepr-send-container")).toHaveLength(1);
-      expect(document.getElementById("keepr-send-container")).not.toBe(first);
-    } finally {
-      jest.clearAllTimers();
-      jest.useRealTimers();
-      delete (globalThis as Record<string, unknown>).chrome;
-    }
-  });
 });
 
 describe("the Move button (keyboard alternative)", () => {

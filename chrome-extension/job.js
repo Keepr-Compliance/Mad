@@ -1235,12 +1235,8 @@
   var INSTANCE = String(Date.now()) + "-" + Math.random().toString(36).slice(2);
   claimPage(document, INSTANCE);
   var running = false;
-  // BACKLOG-3661: the page's Send button (content.js) is disabled while a Sync
-  // runs in this tab; Keepr refuses a manual Send during any Sync as well.
-  root.KeeprSyncState = { running: false };
   function setRunning(value) {
     running = value;
-    root.KeeprSyncState.running = value;
   }
 
   // Read the hash at document_start, before the app's router runs; keep it for

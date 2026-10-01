@@ -1,8 +1,8 @@
 /**
  * Keepr — service worker (BACKLOG-3619 POC; BACKLOG-3620 Sync jobs).
  *
- * The ONLY part of the extension that talks to the Keepr desktop app. The
- * content script hands it a chat; this posts it to the loopback bridge. A fetch
+ * The ONLY part of the extension that talks to the Keepr desktop app: the
+ * page's Sync job (job.js) asks it to post to the loopback bridge. A fetch
  * from here carries `Origin: chrome-extension://<this extension's id>`, which
  * is the only origin the bridge accepts. (A fetch from the content script would
  * carry the messages.google.com origin and be refused.) Only a POST is sure to
@@ -18,46 +18,6 @@ const SYNC_LOG_PREFIX = "[Keepr Sync]";
 
 const NOT_RUNNING =
   "Keepr isn't reachable. Make sure the Keepr app is open and its import bridge is running.";
-
-async function sendChat(chat) {
-  let response;
-  try {
-    response = await fetch(`${BRIDGE_URL}/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(chat),
-    });
-  } catch (_err) {
-    return { ok: false, error: NOT_RUNNING };
-  }
-
-  let body = null;
-  try {
-    body = await response.json();
-  } catch (_err) {
-    body = null;
-  }
-
-  if (response.status === 200 && body && body.ok === true) {
-    return {
-      ok: true,
-      received: body.received,
-      stored: body.stored,
-      alreadyPresent: body.alreadyPresent,
-      linked: body.linked,
-    };
-  }
-  if (response.status === 409) {
-    return { ok: false, error: (body && body.message) || "Open a transaction in Keepr and click Import first." };
-  }
-  if (response.status === 403) {
-    return { ok: false, error: "Keepr refused the request from this extension." };
-  }
-  return {
-    ok: false,
-    error: (body && body.message) || `Keepr could not save this chat (HTTP ${response.status}).`,
-  };
-}
 
 // ---------------------------------------------------------------------------
 // BACKLOG-3620: Sync jobs
@@ -232,9 +192,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const fail = (err) => sendResponse({ ok: false, error: String((err && err.message) || err) });
 
   switch (message.type) {
-    case "keepr-send-chat":
-      sendChat(message.chat).then(sendResponse, fail);
-      return true; // async response
     case "keepr-job-api":
       jobApi(message.method, message.path, message.body).then(sendResponse, fail);
       return true;
