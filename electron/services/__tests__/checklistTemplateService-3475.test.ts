@@ -887,3 +887,74 @@ describe("BACKLOG-3618 C2 — two users, one profile, one brokerage", () => {
     expect(await loadService().listTemplates(ORG_A)).toBeNull();
   });
 });
+
+// ===========================================================================
+// BACKLOG-3618 — SR review pm_comments 134e1698 (should-fix)
+// ===========================================================================
+//
+// The most likely wrong build: `fetchOnce`'s in-flight collapse keyed on
+// `orgId` ALONE, the same shape C13-K already pins for two ORGANIZATIONS
+// sharing a promise. Nothing in this suite pinned the user half of that same
+// key before this test. A build with `const key = orgId;` still passes every
+// other test in this file — the C2 tests above only exercise the MEMORY and
+// DISK caches, which carry their own `userId` check one line later and would
+// mask an org-only in-flight key the same way `fetchOnce`'s own doc comment
+// (BACKLOG-3618) warns the org-only key already did for organizations before
+// the per-org map landed.
+//
+// Exposure: user B joining user A's in-flight read across a sign-out/sign-in
+// (or a session switch while an app-start read for A is still out) is handed
+// A's private "own" templates, mislabelled `source: "live"`.
+
+describe("BACKLOG-3618 SR 134e1698 — the in-flight collapse is keyed by user, not just org", () => {
+  const A_ROWS = [row("tpl-brokerage", "Brokerage list", null), row("tpl-a-own", "A's own list", USER_A)];
+  const B_ROWS = [row("tpl-brokerage", "Brokerage list", null)];
+
+  /** Let every queued microtask run. Same helper as C13-K, scoped locally. */
+  const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+  it("B's read, issued while A's is still out for the SAME org, gets B's own rows — never A's", async () => {
+    const pending: Array<() => void> = [];
+    responder = (record) =>
+      new Promise((resolve) => {
+        const orFilter = record.or[0]?.[0] as string | undefined;
+        const forB = orFilter?.includes(USER_B) ?? false;
+        pending.push(() => resolve({ data: forB ? B_ROWS : A_ROWS, error: null }));
+      });
+
+    const service = loadService();
+
+    // 1. A's read is out and has NOT answered.
+    mockGetAuthSession.mockResolvedValue({ userId: USER_A, accessToken: "t" });
+    const a = service.listTemplates(ORG_A);
+    await settle();
+    expect(pending).toHaveLength(1);
+
+    // 2. The session switches to B (sign-out/sign-in) and B reads the SAME
+    //    org while A's request is still out. This is the only state in which
+    //    `fetchOnce` shares a promise at all, so it is the only state in
+    //    which the user half of the key can matter.
+    mockGetAuthSession.mockResolvedValue({ userId: USER_B, accessToken: "t" });
+    const b = service.listTemplates(ORG_A);
+    await settle();
+
+    for (let i = 0; i < 5 && pending.length > 0; i += 1) {
+      for (const resolve of pending.splice(0)) resolve();
+      await settle();
+    }
+
+    const [listingA, listingB] = await Promise.all([a, b]);
+
+    // Identity, not a count: one request per USER even though both ask about
+    // the SAME organization. An org-only key collapses B's read onto A's
+    // in-flight promise and this becomes length 1, with calls[0] alone.
+    expect(calls).toHaveLength(2);
+
+    // The leak an org-only key would produce: B handed A's own template,
+    // labelled "live" — a read B never issued, for rows B cannot see.
+    expect(listingB!.source).toBe("live");
+    expect(listingB!.templates.map((t) => t.id)).toEqual(["tpl-brokerage"]);
+    expect(listingB!.templates.map((t) => t.id)).not.toContain("tpl-a-own");
+    expect(listingA!.templates.map((t) => t.id)).toContain("tpl-a-own");
+  });
+});
