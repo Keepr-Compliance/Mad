@@ -13,7 +13,7 @@ import { join } from 'path';
 
 const REPO = join(__dirname, '../../..');
 const MIGRATIONS_DIR = join(REPO, 'supabase/migrations');
-const FILE = '20261001120000_backlog_3618_agent_checklist_templates.sql';
+const FILE = '20261001054306_backlog_3618_agent_checklist_templates.sql';
 const ROLLBACK = join(REPO, 'supabase/tests/backlog-3618/rollback-3618.sql');
 
 const read = (path: string): string => readFileSync(path, 'utf8').replace(/\r\n?/g, '\n');

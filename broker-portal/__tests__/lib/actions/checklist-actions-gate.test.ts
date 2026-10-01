@@ -124,7 +124,7 @@ function setup(opts: Setup = {}) {
         };
       }
       if (fn === 'can_create_own_checklist_templates') {
-        // BACKLOG-3618 (migration 20261001120000 §2): any member AND feature on.
+        // BACKLOG-3618 (migration 20261001054306 §2): any member AND feature on.
         return { data: (opts.features ?? FEATURE_ON) !== FEATURE_OFF, error: null };
       }
       if (fn === 'save_checklist_template') {

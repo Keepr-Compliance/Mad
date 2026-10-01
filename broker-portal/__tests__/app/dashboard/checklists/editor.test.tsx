@@ -77,7 +77,7 @@ const canEditRpc = (role: string, features: unknown, personal = false) =>
     fn === 'can_edit_checklist_templates'
       ? { data: (personal || DB_EDITOR_ROLES.includes(role)) && features !== FEATURE_OFF, error: null }
       : fn === 'can_create_own_checklist_templates'
-        ? // BACKLOG-3618 (migration 20261001120000 §2): any member AND feature on.
+        ? // BACKLOG-3618 (migration 20261001054306 §2): any member AND feature on.
           { data: features !== FEATURE_OFF, error: null }
         : { data: null, error: { code: 'PGRST202', message: `unexpected rpc ${fn}` } }
   );

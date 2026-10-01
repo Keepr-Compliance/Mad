@@ -58,7 +58,7 @@ function canEditChecklistTemplates(orgId: unknown): boolean {
 }
 /**
  * can_create_own_checklist_templates, transcribed from
- * supabase/migrations/20261001120000_backlog_3618_agent_checklist_templates.sql
+ * supabase/migrations/20261001054306_backlog_3618_agent_checklist_templates.sql
  * §2: the caller is a member of p_org_id (any role) AND the feature is
  * allowed (taken as ON, same convention as above). BACKLOG-3618 deliberately
  * admits brokerage agents to the Checklists page through this function.

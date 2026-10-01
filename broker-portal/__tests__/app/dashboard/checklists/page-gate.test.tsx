@@ -65,7 +65,7 @@ const canEditAnswer = (role: string, features: unknown, personal: boolean): bool
   (personal || DB_EDITOR_ROLES.includes(role)) && features !== FEATURE_OFF;
 /**
  * can_create_own_checklist_templates (BACKLOG-3618, migration
- * 20261001120000 §2): any member of the org AND the feature on. No role term.
+ * 20261001054306 §2): any member of the org AND the feature on. No role term.
  */
 const canOwnAnswer = (features: unknown): boolean => features !== FEATURE_OFF;
 const canEditRpc = (role: string, features: unknown, personal = false) =>
