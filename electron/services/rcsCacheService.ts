@@ -59,8 +59,9 @@ export interface CachePlanInput {
  *
  *  - floor = the months setting (All time → 3650 days);
  *  - the page's `since` = max(floor, last finished − 1 day) — incremental;
- *  - the commit keeps the newest `effectiveCap` messages (the plan's Cap'
- *    rule: deal audit periods are always kept and never counted).
+ *  - NO max-messages cap for this source (founder, 2026-10-01: a total cap
+ *    comes later): the plan's `effectiveCap` is NOT applied. The date
+ *    floor alone limits the cache (the audit periods still widen it).
  *
  * DEV ONLY: `sinceDays` (1..3650) replaces the floor AND skips the
  * incremental rule — to test a longer window — but only when the build is
@@ -89,7 +90,8 @@ export function cacheWindow(input: {
     startMs: APPLE_EPOCH_MS + s.startNano / NANOS_PER_MS,
     endMs: s.endNano === null ? null : APPLE_EPOCH_MS + s.endNano / NANOS_PER_MS,
   }));
-  return { since, limits: { floorMs, cap: input.plan.effectiveCap, protectedSpans }, devOverrideDays };
+  // Date only: the max-messages setting does not apply to the cache (cap null).
+  return { since, limits: { floorMs, cap: null, protectedSpans }, devOverrideDays };
 }
 
 export interface CacheStartRefusal {

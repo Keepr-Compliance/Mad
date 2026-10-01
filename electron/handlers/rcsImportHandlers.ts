@@ -191,8 +191,8 @@ async function commitCacheJob(jobId: string, userId: string): Promise<void> {
   }
   const r = await cacheStaging().commit(jobId, userId, limits, commitWriter);
   void logService.info(
-    `[RcsCache] Cache Sync saved: ${r.staged} staged, ${r.kept} kept (${r.droppedByDate} older than the months setting, ` +
-      `${r.droppedByCap} over the max messages); ${r.chats} chats, ${r.stored} new, ${r.alreadyPresent} already there; ` +
+    `[RcsCache] Cache Sync saved: ${r.staged} staged, ${r.kept} kept (${r.droppedByDate} older than the months setting; ` +
+      `no max-messages cap for this source); ${r.chats} chats, ${r.stored} new, ${r.alreadyPresent} already there; ` +
       `images ${r.imagesStored} of ${r.imagesStaged}`,
     LOG_TAG,
   );

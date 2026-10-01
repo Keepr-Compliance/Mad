@@ -19,7 +19,7 @@
  *   W2 the incremental rule dropped                                    → "cacheWindow: the months setting"
  *   W3 the dev override honoured in a packaged build                   → "cacheWindow: dev override"
  *   W4 the dev override not clamped 1..3650                            → "clampSinceDays"
- *   W5 the cap or the audit spans not passed to the commit              → "cacheWindow: limits"
+ *   W5 max-messages applied to the cache, or the audit spans lost        → "cacheWindow: limits"
  */
 
 import {
@@ -185,14 +185,15 @@ describe("cacheWindow", () => {
       .toBe(NOW - 3650 * DAY);
   });
 
-  it("limits: the cap and the audit periods (Apple-epoch ns → ms) go to the commit (W5)", () => {
+  // Founder (2026-10-01): date limit only for this source; a total cap later.
+  it("limits: the date floor only — max messages NOT applied; the audit periods (Apple-epoch ns → ms) kept (W5)", () => {
     const startMs = Date.parse("2026-05-01T00:00:00.000Z");
     const nano = (ms: number) => (ms - 978307200000) * 1_000_000;
     const w = cacheWindow({
       nowMs: NOW, lastFinishedAt: null, isPackaged: true,
       plan: { fetchStartISO: threeMonths, effectiveCap: 1000, protectedSpans: [{ startNano: nano(startMs), endNano: null }] },
     });
-    expect(w.limits.cap).toBe(1000);
+    expect(w.limits.cap).toBeNull();
     expect(w.limits.protectedSpans).toEqual([{ startMs, endMs: null }]);
   });
 
