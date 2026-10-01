@@ -107,7 +107,14 @@
   // never a name: numbers as shapes, names as a short hash.
   // -------------------------------------------------------------------------
 
-  /** "(555) 555-0199" → "(ddd) ddd-dddd"; non-ASCII → U+XXXX. */
+  var SHAPE_KEEP = "+()-. ";
+
+  /**
+   * "(555) 555-0199" → "(ddd) ddd-dddd". Digits → d, ASCII letters → a,
+   * non-ASCII → U+XXXX; only `+ ( ) - . space` are kept as they are; any
+   * other ASCII → `*`. The Details number selector is untraced on the live
+   * page, so a name or an email could arrive here: it must never be readable.
+   */
   function numberShape(s) {
     var out = "";
     var chars = Array.from(String(s === null || s === undefined ? "" : s));
@@ -115,10 +122,23 @@
       var ch = chars[i];
       var code = ch.codePointAt(0);
       if (ch >= "0" && ch <= "9") out += "d";
+      else if ((ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z")) out += "a";
       else if (code > 127) out += "U+" + code.toString(16).toUpperCase().padStart(4, "0");
-      else out += ch;
+      else if (SHAPE_KEEP.indexOf(ch) !== -1) out += ch;
+      else out += "*";
     }
     return out;
+  }
+
+  /** A per-job random salt for name tags: tags correlate within a run only. */
+  function newSalt() {
+    try {
+      var bytes = new Uint8Array(4);
+      root.crypto.getRandomValues(bytes);
+      return Array.from(bytes, function (b) { return ("0" + b.toString(16)).slice(-2); }).join("");
+    } catch (_e) {
+      return Math.random().toString(16).slice(2, 10);
+    }
   }
 
   /** FNV-1a, 6 hex: the fallback name tag when the page has no SHA-256. */
@@ -148,10 +168,12 @@
    *
    * @param {string} jobId
    * @param {object} env  { doc, getLocation, api(method, path, body), overlay:{show(text,isError)},
-   *                        sleep(ms), click(el), scroll(), scrollMessagesUp?(), openConversation(conv),
+   *                        sleep(ms), click(el), scrollMessagesUp?(), openConversation(conv),
    *                        returnToList?() (narrow window: back to the list; never throws),
-   *                        log?(line) (diagnostics, BACKLOG-3641), hashName?(name) → Promise<string>,
-   *                        scroll?() (tests only: replaces the page's list scroller),
+   *                        log?(line) (diagnostics, BACKLOG-3641), hashName?(text) → Promise<string>,
+   *                        salt? (name-tag salt; random per job when absent),
+   *                        scroll?() (tests only: replaces the page's list scroller; the browser
+   *                        passes none and collectConversations scrolls the list itself),
    *                        readImage(src), extract(doc, href, now), scan, now?, pageTimeoutMs?,
    *                        messagesTimeoutMs?, messagesStableMs?, historyCap?, historyNoNewMs? }
    *
@@ -179,10 +201,15 @@
     } catch (_e) { /* ignore */ }
   }
 
-  /** A name as a short hash, so runs correlate without the name itself. */
-  async function nameTag(env, name) {
+  /**
+   * A name as a short salted hash: the lines of one run correlate, without the
+   * name itself, and the per-job salt keeps tags from matching across runs (a
+   * fixed hash of a short name list is easy to reverse).
+   */
+  async function nameTag(env, salt, name) {
+    var text = salt + ":" + String(name || "");
     try {
-      return env.hashName ? await env.hashName(String(name || "")) : shortHash(String(name || ""));
+      return env.hashName ? await env.hashName(text) : shortHash(text);
     } catch (_e) {
       return "??????";
     }
@@ -192,6 +219,8 @@
     var base = "/job/" + jobId;
     var skips = [];
     var log = function (line) { diag(env, line); };
+    var salt = typeof env.salt === "string" ? env.salt : newSalt();
+    var tag = function (name) { return nameTag(env, salt, name); };
     var matchedCount = 0;
     // BACKLOG-3629: every chat left out, or imported in part, by name.
     var notReached = [];
@@ -250,7 +279,7 @@
     }
     var contacts = (claim.body && claim.body.contacts) || [];
     var contactTags = [];
-    for (var ct = 0; ct < contacts.length; ct++) contactTags.push(await nameTag(env, contacts[ct].displayName));
+    for (var ct = 0; ct < contacts.length; ct++) contactTags.push(await tag(contacts[ct].displayName));
     log("claimed: " + contacts.length + " contacts with a phone [" + contactTags.join(", ") + "]");
     // History floor: the transaction's start date; none → no date floor.
     var floorMs = claim.body && typeof claim.body.startDate === "string" ? Date.parse(claim.body.startDate) : NaN;
@@ -288,7 +317,7 @@
       var imagesFailed = 0;
       try {
         env.overlay.show("Checking chat " + (i + 1) + " of " + candidates.length + "…", false);
-        log("#" + (i + 1) + "/" + candidates.length + " chat " + (await nameTag(env, conv.name)) +
+        log("#" + (i + 1) + "/" + candidates.length + " chat " + (await tag(conv.name)) +
           " reason=" + candidates[i].reason);
         // The messages on screen before the click: the next chat is ready only
         // once this set has been replaced (the URL and title flip first).

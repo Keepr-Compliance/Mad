@@ -169,9 +169,59 @@ describe("collectConversations on a virtualized list (BACKLOG-3620 live fix)", (
     } as Parameters<ScanModule["collectConversations"]>[1]);
     expect(result.stopReason).toBe("max_time");
   });
+
+  // SR O1. The nearest overflowing ancestor of the items cannot move (its
+  // scrollTop stays 0); its parent is the element that really scrolls.
+  // Mutation L6: count a stable round instead of re-picking → only 19.
+  it("re-picks the scrollable parent when the first scroller will not move (L6)", async () => {
+    document.body.innerHTML = `<div id="outer"><div id="inner"></div></div>`;
+    const outer = document.getElementById("outer") as HTMLElement;
+    const inner = document.getElementById("inner") as HTMLElement;
+    const total = 60;
+    let top = 0;
+    let clock = 0;
+    const maxTop = total * ROW - CLIENT;
+    Object.defineProperty(inner, "scrollTop", { configurable: true, get: () => 0, set: () => {} });
+    Object.defineProperty(inner, "clientHeight", { configurable: true, get: () => CLIENT });
+    Object.defineProperty(inner, "scrollHeight", { configurable: true, get: () => total * ROW });
+    Object.defineProperty(outer, "scrollTop", {
+      configurable: true,
+      get: () => top,
+      set: (v: number) => {
+        top = Math.min(Math.max(0, v), maxTop);
+      },
+    });
+    Object.defineProperty(outer, "clientHeight", { configurable: true, get: () => CLIENT });
+    Object.defineProperty(outer, "scrollHeight", { configurable: true, get: () => total * ROW });
+    const render = (): void => {
+      const first = Math.floor(top / ROW);
+      let html = "";
+      for (let i = first; i < Math.min(total, first + WINDOW); i++) {
+        html += `<mws-conversation-list-item><a data-e2e-conversation href="/web/conversations/${convId(i)}"><span data-e2e-conversation-name>Person ${i}</span></a></mws-conversation-list-item>`;
+      }
+      inner.innerHTML = html;
+    };
+    outer.addEventListener("scroll", render);
+    render();
+    const result = await scan.collectConversations(document, {
+      sleep: async (ms: number) => {
+        clock += ms;
+      },
+      now: () => clock,
+    });
+    expect(result.conversations).toHaveLength(60);
+    expect(result.scroll).toMatchObject({ repicks: 1, atBottom: true });
+  });
 });
 
 describe("Sync step log (BACKLOG-3641)", () => {
+  // SR F1. Mutation D8: copy ASCII letters / other ASCII through → red.
+  it("numberShape never lets a name or an email through: letters → a, other ASCII → *", () => {
+    expect(job.numberShape("Test Contact A")).toBe("aaaa aaaaaaa a");
+    expect(job.numberShape("test.contact@example.test")).toBe("aaaa.aaaaaaa*aaaaaaa.aaaa");
+    expect(job.numberShape("+1 (555) 555-0199 ext_9/x")).toBe("+d (ddd) ddd-dddd aaa*d*a");
+  });
+
   it("numberShape keeps the format, hides the digits, spells out non-ASCII", () => {
     expect(job.numberShape("(555) 555-0199")).toBe("(ddd) ddd-dddd");
     expect(job.numberShape("+1 555 0100")).toBe("+d dddU+202Fdddd");
@@ -185,7 +235,7 @@ describe("Sync step log (BACKLOG-3641)", () => {
     expect(job.shortHash("Test Contact A")).not.toBe(job.shortHash("Test Contact B"));
   });
 
-  function diagJob(matchIds: string[]) {
+  function diagJob(matchIds: string[], numbers: string[] = ["(555) 555-0199", "+1 555 555 0100"]) {
     document.body.innerHTML = LIST;
     const lines: string[] = [];
     const shown: string[] = [];
@@ -219,7 +269,7 @@ describe("Sync step log (BACKLOG-3641)", () => {
       }),
       scan: {
         ...scan,
-        readParticipantsAndClose: async () => ["(555) 555-0199", "+1 555 555 0100"],
+        readParticipantsAndClose: async () => numbers,
         waitForMessageSwap: async () => true,
         loadHistory: async () => ({ stopReason: "no_more", count: 1 }),
         messageIdSet: () => "",
@@ -246,6 +296,44 @@ describe("Sync step log (BACKLOG-3641)", () => {
     for (const forbidden of ["555", "0199", "Test Contact", "Test B. Contact", "SECRET MESSAGE TEXT", "Someone Else"]) {
       expect([forbidden, all.includes(forbidden)]).toEqual([forbidden, false]);
     }
+  });
+
+  // SR F1: the Details selector is untraced, so a name or an email may come
+  // back as a "number". Mutation D8 (letters copied through) → red.
+  it("a name or an email read from Details never reaches the log: no letters, no '@'", async () => {
+    const t = diagJob([], ["Test Contact A", "test.contact@example.test"]);
+    await job.runJob(JOB, t.env);
+    const numberLines = t.lines.filter((l) => l.startsWith("  numbers "));
+    expect(numberLines).toHaveLength(4);
+    for (const line of numberLines) {
+      expect(line).toBe('  numbers ["aaaa aaaaaaa a","aaaa.aaaaaaa*aaaaaaa.aaaa"]');
+      // Only the shape alphabet: no letter other than the placeholder "a".
+      expect(line.replace(/^ {2}numbers /, "")).toMatch(/^[\["a d+()\-.*,\]]*$/);
+    }
+    const all = t.lines.join("\n");
+    for (const forbidden of ["Test Contact", "test.contact", "Contact A", "example", "@"]) {
+      expect([forbidden, all.includes(forbidden)]).toEqual([forbidden, false]);
+    }
+  });
+
+  // SR: per-job salt. Mutation D9: hash the name without the salt → red.
+  it("name tags are salted per job: the same chat gets the same tag within a run, a different one across runs", async () => {
+    const tagOf = (lines: string[]): string => (lines.find((l) => l.startsWith("#1/4 chat ")) ?? "").split(" ")[2];
+    const contactTags = (lines: string[]): string[] =>
+      ((lines.find((l) => l.startsWith("claimed:")) ?? "").match(/\[(.*)\]/)?.[1] ?? "").split(", ");
+    const a = diagJob([]);
+    await job.runJob(JOB, a.env);
+    const b = diagJob([]);
+    await job.runJob(JOB, b.env);
+    expect(tagOf(a.lines)).toMatch(/^[0-9a-f]{6}$/);
+    // Chat #1 is "Test Contact A", also contact 1: one run correlates them.
+    expect(contactTags(a.lines)[0]).toBe(tagOf(a.lines));
+    expect(tagOf(b.lines)).not.toBe(tagOf(a.lines));
+    // A fixed salt (tests only) is deterministic.
+    const c = diagJob([]);
+    (c.env as Record<string, unknown>).salt = "fixed";
+    await job.runJob(JOB, c.env);
+    expect(tagOf(c.lines)).toBe(job.shortHash("fixed:Test Contact A"));
   });
 
   it("a failing log never stops the sync", async () => {
