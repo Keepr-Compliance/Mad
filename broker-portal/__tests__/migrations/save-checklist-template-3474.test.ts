@@ -75,7 +75,7 @@ describe('BACKLOG-3474 save_checklist_template migration (A14)', () => {
       .filter((f) => /FUNCTION\s+("?public"?\.)?"?save_checklist_template"?\s*\(/i.test(stripSqlComments(readMigration(f))));
     const at = definers.indexOf(FILE);
     expect(at).toBeGreaterThan(-1);
-    expect(definers.slice(at + 1)).toEqual(['20261001120000_backlog_3618_agent_checklist_templates.sql']);
+    expect(definers.slice(at + 1)).toEqual(['20261001054306_backlog_3618_agent_checklist_templates.sql']);
   });
 
   it('runs SECURITY INVOKER with a pinned search_path, never SECURITY DEFINER', () => {

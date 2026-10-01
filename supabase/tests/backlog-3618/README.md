@@ -1,6 +1,6 @@
 # BACKLOG-3618 harness — agents' own checklist templates
 
-Runs `supabase/migrations/20261001120000_backlog_3618_agent_checklist_templates.sql`
+Runs `supabase/migrations/20261001054306_backlog_3618_agent_checklist_templates.sql`
 — **the shipped file itself** — on a real Postgres, on top of every checklist
 migration production runs (the backlog-3607 prelude plus `20260921101758` and
 `20260925044046`, the three 3596 files and the 3607 file). `control-run.txt`,
