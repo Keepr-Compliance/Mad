@@ -13,6 +13,7 @@ import type {
   RcsImportStatus,
   RcsImportStatusResult,
   RcsJobInfo,
+  RcsExtensionState,
 } from "../../electron/types/ipc/window-api-rcs-import";
 
 export type { RcsChatReceivedEvent, RcsImportStatus, RcsJobInfo };
@@ -92,6 +93,46 @@ export const rcsImportService = {
     const bridge = api();
     if (!bridge || !bridge.startCacheJob) return { success: false, error: NOT_AVAILABLE };
     return callJob(() => bridge.startCacheJob(args));
+  },
+
+  /** BACKLOG-3658/3659: is the extension installed / paired, and the cache state. */
+  async getExtensionState(): Promise<ApiResult<RcsExtensionState>> {
+    const bridge = api();
+    if (!bridge || !bridge.getExtensionState) return { success: false, error: NOT_AVAILABLE };
+    try {
+      const r = await bridge.getExtensionState();
+      return r.success ? { success: true, data: r.state } : { success: false, error: r.error };
+    } catch (err) {
+      return { success: false, error: getErrorMessage(err) };
+    }
+  },
+
+  /** BACKLOG-3659: copy the extension to Downloads/"Keepr Extension". */
+  async prepareExtension(): Promise<ApiResult<{ folder: string; version: string }>> {
+    const bridge = api();
+    if (!bridge || !bridge.prepareExtension) return { success: false, error: NOT_AVAILABLE };
+    try {
+      const r = await bridge.prepareExtension();
+      return r.success ? { success: true, data: { folder: r.folder, version: r.version } } : { success: false, error: r.error };
+    } catch (err) {
+      return { success: false, error: getErrorMessage(err) };
+    }
+  },
+
+  async showExtensionFolder(): Promise<void> {
+    await api()?.showExtensionFolder?.();
+  },
+
+  /** Copies "chrome://extensions" and starts Chrome; says whether Chrome was started. */
+  async openChromeForExtension(): Promise<{ copied: boolean; opened: boolean }> {
+    const bridge = api();
+    if (!bridge || !bridge.openChromeForExtension) return { copied: false, opened: false };
+    try {
+      const r = await bridge.openChromeForExtension();
+      return { copied: r.copied, opened: r.opened };
+    } catch {
+      return { copied: false, opened: false };
+    }
   },
 
   /** Subscribe to job changes. Returns an unsubscribe (a no-op when unavailable). */

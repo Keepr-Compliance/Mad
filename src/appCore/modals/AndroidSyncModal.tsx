@@ -7,18 +7,25 @@
  * (BACKLOG-2320).
  */
 
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { ResponsiveModal } from "../../components/common/ResponsiveModal";
 import { AndroidSyncSetup } from "../../components/settings/android/AndroidSyncSetup";
+import { GoogleMessagesSyncFlow } from "../../components/settings/android/GoogleMessagesSyncFlow";
 import logger from "../../utils/logger";
 
 interface AndroidSyncModalProps {
   /** The logged-in desktop user id (forwarded to the wizard for BACKLOG-2224 account-match). */
   userId: string;
   onClose: () => void;
+  /**
+   * BACKLOG-3659: which Android app the user texts with — Google Messages
+   * (Keepr's Chrome extension) or another app (the Keepr companion app).
+   */
+  app?: "google-messages" | "companion";
 }
 
-export function AndroidSyncModal({ userId, onClose }: AndroidSyncModalProps) {
+export function AndroidSyncModal({ userId, onClose, app = "companion" }: AndroidSyncModalProps) {
+  const [shown, setShown] = useState(app);
   useEffect(() => {
     logger.info("[AndroidSyncModal] Mounted");
     return () => logger.info("[AndroidSyncModal] Unmounted");
@@ -48,7 +55,11 @@ export function AndroidSyncModal({ userId, onClose }: AndroidSyncModalProps) {
           {/* BACKLOG-2323: onComplete auto-dismisses the modal shortly after a
               live pairing success advances the wizard off the (now-consumed) QR,
               mirroring how IPhoneSyncModal closes on success. */}
-          <AndroidSyncSetup userId={userId} onComplete={onClose} />
+          {shown === "google-messages" ? (
+            <GoogleMessagesSyncFlow onClose={onClose} onUseCompanion={() => setShown("companion")} />
+          ) : (
+            <AndroidSyncSetup userId={userId} onComplete={onClose} />
+          )}
         </div>
     </ResponsiveModal>
   );

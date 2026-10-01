@@ -5,7 +5,7 @@
  * This keeps modal logic centralized and separate from routing.
  */
 
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import Profile from "../components/Profile";
 import Settings from "../components/Settings";
 import TransactionList from "../components/TransactionList";
@@ -15,6 +15,7 @@ import AuditTransactionModal from "../components/AuditTransactionModal";
 import MoveAppPrompt from "../components/MoveAppPrompt";
 import { IPhoneSyncModal } from "./modals/IPhoneSyncModal";
 import { AndroidSyncModal } from "./modals/AndroidSyncModal";
+import { settingsService } from "../services/settingsService";
 import type { AppStateMachine } from "./state/types";
 import type { Transaction } from "@/types";
 import { useEmailSettingsCallbacks } from "./hooks/useEmailSettingsCallbacks";
@@ -80,6 +81,28 @@ export function AppModals({ app }: AppModalsProps) {
   // Email connect/disconnect callbacks for Settings modal
   const { handleEmailConnectedFromSettings, handleEmailDisconnectedFromSettings } =
     useEmailSettingsCallbacks({ userId: currentUser?.id });
+
+  // BACKLOG-3659: the Android flow follows the chosen Android app (read when
+  // the flow opens; Google Messages users get the extension flow).
+  const [androidApp, setAndroidApp] = useState<"google-messages" | "companion" | null>(null);
+  useEffect(() => {
+    if (!modalState.showAndroidSync || !currentUser?.id) {
+      setAndroidApp(null);
+      return;
+    }
+    let alive = true;
+    settingsService
+      .getPreferences(currentUser.id)
+      .then((r) => {
+        if (alive) setAndroidApp(r.success && r.data?.messages?.source === "android-messages-web" ? "google-messages" : "companion");
+      })
+      .catch(() => {
+        if (alive) setAndroidApp("companion");
+      });
+    return () => {
+      alive = false;
+    };
+  }, [modalState.showAndroidSync, currentUser?.id]);
 
   // BACKLOG-2347: "Connect your Android phone" CTA in Settings — close Settings
   // and open the guided Android sync wizard (same entry point as the Dashboard
@@ -186,8 +209,8 @@ export function AppModals({ app }: AppModalsProps) {
       {modalState.showIPhoneSync && <IPhoneSyncModal onClose={closeIPhoneSync} />}
 
       {/* Android Sync Wizard Modal (BACKLOG-2320) */}
-      {modalState.showAndroidSync && currentUser && (
-        <AndroidSyncModal userId={currentUser.id} onClose={closeAndroidSync} />
+      {modalState.showAndroidSync && currentUser && androidApp && (
+        <AndroidSyncModal userId={currentUser.id} onClose={closeAndroidSync} app={androidApp} />
       )}
     </>
   );

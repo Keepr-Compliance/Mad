@@ -123,7 +123,8 @@ export function AppRouter({ app }: AppRouterProps) {
     // BACKLOG-2320: Show Android sync card based on import source preference,
     // mirroring the iPhone flow. Card shows when the user selects the Android
     // companion ("android-companion") as their import source in Settings.
-    const showAndroidSyncButton = importSource === "android-companion";
+    // BACKLOG-3659: also for Android with Google Messages (Keepr's extension).
+    const showAndroidSyncButton = importSource === "android-companion" || importSource === "android-messages-web";
 
     // Scroll to and highlight a target element inside the Settings modal.
     // Reusable helper for handleOpenSettings.

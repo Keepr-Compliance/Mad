@@ -14,6 +14,7 @@ import type {
   RcsExtensionStateResult,
   RcsImportStatusResult,
   RcsJobInfo,
+  RcsPrepareExtensionResult,
 } from "../types/ipc/window-api-rcs-import";
 
 export const rcsImportBridge = {
@@ -56,6 +57,12 @@ export const rcsImportBridge = {
   setCacheOptIn: (args: { optedIn: boolean }): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke("rcs-import:set-cache-opt-in", args),
   getExtensionState: (): Promise<RcsExtensionStateResult> => ipcRenderer.invoke("rcs-import:get-extension-state"),
+
+  /** BACKLOG-3659: the extension, delivered to Downloads (Release 1: unpacked). */
+  prepareExtension: (): Promise<RcsPrepareExtensionResult> => ipcRenderer.invoke("rcs-import:prepare-extension"),
+  showExtensionFolder: (): Promise<{ success: boolean }> => ipcRenderer.invoke("rcs-import:show-extension-folder"),
+  openChromeForExtension: (): Promise<{ success: true; copied: boolean; opened: boolean }> =>
+    ipcRenderer.invoke("rcs-import:open-chrome-for-extension"),
 
   /** BACKLOG-3658 (SR S1): a cache Sync was saved and auto-linked. */
   onDataChanged: (callback: (event: { reason: string }) => void) => {

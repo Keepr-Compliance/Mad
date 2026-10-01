@@ -94,6 +94,11 @@ export type RcsExtensionStateResult =
   | { success: true; state: RcsExtensionState }
   | { success: false; error: string };
 
+/** BACKLOG-3659: the extension copied to Downloads. */
+export type RcsPrepareExtensionResult =
+  | { success: true; folder: string; version: string }
+  | { success: false; error: string };
+
 export type RcsImportJobResult =
   | { success: true; job: RcsJobInfo | null }
   | { success: false; error: string };
@@ -129,4 +134,10 @@ export interface WindowApiRcsImport {
   setCacheOptIn: (args: { optedIn: boolean }) => Promise<{ success: boolean; error?: string }>;
   /** BACKLOG-3658: is the extension installed / paired, opted in, last cache Sync. */
   getExtensionState: () => Promise<RcsExtensionStateResult>;
+  /** BACKLOG-3659: copy the extension to Downloads/"Keepr Extension". */
+  prepareExtension?: () => Promise<RcsPrepareExtensionResult>;
+  /** BACKLOG-3659: show that folder in the file manager. */
+  showExtensionFolder?: () => Promise<{ success: boolean }>;
+  /** BACKLOG-3659: copy "chrome://extensions" and start Chrome. */
+  openChromeForExtension?: () => Promise<{ success: true; copied: boolean; opened: boolean }>;
 }

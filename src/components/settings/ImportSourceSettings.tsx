@@ -314,6 +314,33 @@ export function ImportSourceSettings({ userId, onSourceChange, onConnectAndroid 
               </div>
             </label>
 
+            {/* Radio: Android with Google Messages (BACKLOG-3659, recommended) */}
+            <label
+              className={`flex items-start gap-3 p-3 bg-white rounded border cursor-pointer transition-all ${
+                source === "android-messages-web"
+                  ? "border-indigo-500 ring-1 ring-indigo-500"
+                  : "border-gray-200 hover:border-gray-300"
+              } ${saving ? "opacity-50 cursor-not-allowed" : ""}`}
+            >
+              <input
+                type="radio"
+                name="importSource"
+                value="android-messages-web"
+                checked={source === "android-messages-web"}
+                onChange={() => handleSourceChange("android-messages-web")}
+                disabled={saving}
+                className="mt-0.5 w-5 h-5"
+              />
+              <div>
+                <div className="text-sm font-medium text-gray-900">
+                  Android: Google Messages <span className="ml-1 text-xs font-semibold text-indigo-800 bg-indigo-50 px-2 py-0.5 rounded-full">Recommended</span>
+                </div>
+                <div className="text-xs text-gray-500">
+                  Includes RCS chats. Keepr reads them through a small Chrome extension.
+                </div>
+              </div>
+            </label>
+
             {/* Radio: Android Companion (BACKLOG-1447) */}
             <label
               className={`flex items-start gap-3 p-3 bg-white rounded border cursor-pointer transition-all ${

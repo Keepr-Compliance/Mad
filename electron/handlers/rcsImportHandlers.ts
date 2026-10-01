@@ -24,7 +24,8 @@
 import * as fs from "fs";
 import * as path from "path";
 
-import { app, ipcMain, shell } from "electron";
+import { spawn } from "child_process";
+import { app, clipboard, ipcMain, shell } from "electron";
 
 import { hostWindows } from "../capabilities/windowsProvider";
 import { dbTransaction } from "../services/db/core/dbConnection";
@@ -37,6 +38,13 @@ import { rcsImageFilename, storeImage, type RcsMediaDeps } from "../services/rcs
 import { importChat, rcsChatHash, rcsExternalId, storeCacheChatSync, type RcsImportDeps } from "../services/rcsImportStore";
 import { RcsCacheStaging, type CacheLimits, type RcsCommitWriter } from "../services/rcsCacheStaging";
 import { resolveImportPlanForUser } from "../services/importPlanInputs";
+import {
+  CHROME_EXTENSIONS_ADDRESS,
+  chromeCandidates,
+  extensionSourceDir,
+  extensionTargetDir,
+  prepareExtensionFolder,
+} from "../services/rcsExtensionDelivery";
 import {
   cacheWindow,
   cancelOnSessionChange,
@@ -606,6 +614,60 @@ export function registerRcsImportHandlers(): void {
           lastCacheFinishedAt: state?.lastCacheFinishedAt ?? null,
         },
       };
+    }, { module: LOG_TAG }),
+  );
+
+  // BACKLOG-3659: deliver the extension (Release 1: unpacked, from Downloads).
+  ipcMain.handle(
+    "rcs-import:prepare-extension",
+    wrapHandler(async (): Promise<{ success: true; folder: string; version: string } | { success: false; error: string }> => {
+      try {
+        const source = extensionSourceDir({
+          isPackaged: app.isPackaged,
+          resourcesPath: process.resourcesPath,
+          appPath: app.getAppPath(),
+        });
+        const out = await prepareExtensionFolder(source, app.getPath("downloads"), {
+          exists: async (p) => fs.promises.access(p).then(() => true, () => false),
+          readText: (p) => fs.promises.readFile(p, "utf8"),
+          copyDir: (from, to) => fs.promises.cp(from, to, { recursive: true, force: true }),
+        });
+        return { success: true, ...out };
+      } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }, { module: LOG_TAG }),
+  );
+
+  ipcMain.handle(
+    "rcs-import:show-extension-folder",
+    wrapHandler(async (): Promise<{ success: boolean }> => {
+      shell.showItemInFolder(path.join(extensionTargetDir(app.getPath("downloads")), "manifest.json"));
+      return { success: true };
+    }, { module: LOG_TAG }),
+  );
+
+  // Chrome refuses chrome:// addresses from other apps: copy it, start Chrome.
+  ipcMain.handle(
+    "rcs-import:open-chrome-for-extension",
+    wrapHandler(async (): Promise<{ success: true; copied: boolean; opened: boolean }> => {
+      clipboard.writeText(CHROME_EXTENSIONS_ADDRESS);
+      let opened = false;
+      for (const candidate of chromeCandidates(process.platform, process.env)) {
+        const there = await fs.promises.access(candidate).then(() => true, () => false);
+        if (!there) continue;
+        try {
+          const child = process.platform === "darwin"
+            ? spawn("open", ["-a", candidate], { detached: true, stdio: "ignore" })
+            : spawn(candidate, [], { detached: true, stdio: "ignore" });
+          child.unref();
+          opened = true;
+        } catch {
+          opened = false;
+        }
+        break;
+      }
+      return { success: true, copied: true, opened };
     }, { module: LOG_TAG }),
   );
 

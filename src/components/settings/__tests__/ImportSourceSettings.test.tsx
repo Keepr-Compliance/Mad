@@ -309,6 +309,17 @@ describe("ImportSourceSettings", () => {
       });
     });
 
+    // BACKLOG-3659. Mutation: drop the Google Messages radio → red.
+    it("should save preference when selection changes to Android: Google Messages", async () => {
+      const user = userEvent.setup();
+      render(<ImportSourceSettings userId={mockUserId} />);
+      const radio = await screen.findByRole("radio", { name: /android: google messages/i });
+      await user.click(radio);
+      expect(window.api.preferences.update).toHaveBeenCalledWith(mockUserId, {
+        messages: { source: "android-messages-web" },
+      });
+    });
+
     it("should save preference when selection changes to android-companion", async () => {
       const user = userEvent.setup();
       render(<ImportSourceSettings userId={mockUserId} />);

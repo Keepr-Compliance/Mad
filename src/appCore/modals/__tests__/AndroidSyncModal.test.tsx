@@ -20,7 +20,23 @@ jest.mock("../../../components/settings/android/AndroidSyncSetup", () => ({
   ),
 }));
 
+jest.mock("../../../components/settings/android/GoogleMessagesSyncFlow", () => ({
+  GoogleMessagesSyncFlow: ({ onUseCompanion }: { onUseCompanion?: () => void }) => (
+    <button type="button" data-testid="gm-flow-stub" onClick={onUseCompanion}>
+      google messages flow
+    </button>
+  ),
+}));
+
 describe("AndroidSyncModal", () => {
+  // BACKLOG-3659. Mutation: ignore `app` (always the companion wizard) → red.
+  it("Google Messages users get the extension flow, and can switch to the companion app", () => {
+    render(<AndroidSyncModal userId="user-1" onClose={jest.fn()} app="google-messages" />);
+    expect(screen.queryByTestId("android-sync-setup-stub")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("gm-flow-stub"));
+    expect(screen.getByTestId("android-sync-setup-stub")).toBeInTheDocument();
+  });
+
   it("renders the wizard flush inside a scrollable body", () => {
     render(<AndroidSyncModal userId="user-1" onClose={jest.fn()} />);
 

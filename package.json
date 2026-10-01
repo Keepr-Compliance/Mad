@@ -269,6 +269,13 @@
       },
       ".env.production",
       {
+        "from": "chrome-extension",
+        "to": "chrome-extension",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
         "from": "scripts/cleanup-macos.sh",
         "to": "cleanup-macos.sh"
       },
