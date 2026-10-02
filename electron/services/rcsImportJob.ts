@@ -184,6 +184,9 @@ export interface RcsJobClaim {
   contactsWithoutPhoneCount: number;
   /** BACKLOG-3658: "cache" jobs: no contacts; load each chat back to `since`. */
   kind?: RcsJobKind;
+  /** Live (0.3.15): the full floor, and chats switched back on — read to it whatever their age. Ids only. */
+  floor?: string;
+  pendingConversationIds?: string[];
   since?: string;
 }
 
@@ -268,6 +271,9 @@ export class RcsImportJob {
   kind: RcsJobKind = "transaction";
   /** BACKLOG-3663: a cache run reading down to its floor again. */
   readingOlder = false;
+  /** Live (0.3.15): the full floor, and the chats switched back on (read to it whatever their age). */
+  floorISO: string | null = null;
+  pendingConversationIds: string[] = [];
   userId: string | null = null;
   /** BACKLOG-3658: own numbers known before this job (persisted), excluded from the first chat. */
   seededOwnNumbers = new Set<string>();
@@ -356,6 +362,8 @@ export class RcsImportJob {
         startDate: this.startDate,
         since: this.startDate ?? undefined,
         contactsWithoutPhoneCount: 0,
+        ...(this.floorISO ? { floor: this.floorISO } : {}),
+        ...(this.pendingConversationIds.length > 0 ? { pendingConversationIds: [...this.pendingConversationIds] } : {}),
       };
     }
     this.stage = "Looking for this transaction's chats";
@@ -541,7 +549,13 @@ export class RcsJobRegistry {
    * BACKLOG-3658: the cache job — all recent chats for `userId`, history back
    * to `since`. Same one-at-a-time slot as a transaction Sync.
    */
-  createCache(userId: string, since: string, ownNumbers: readonly string[] = [], readingOlder = false): RcsImportJob {
+  createCache(
+    userId: string,
+    since: string,
+    ownNumbers: readonly string[] = [],
+    readingOlder = false,
+    full: { floorISO?: string; pendingConversationIds?: readonly string[] } = {},
+  ): RcsImportJob {
     const running = this.active();
     if (running) return running;
     const job = new RcsImportJob("", [], this.now(), undefined, since);
@@ -549,6 +563,8 @@ export class RcsJobRegistry {
     job.userId = userId;
     job.label = RCS_CACHE_JOB_LABEL;
     job.readingOlder = readingOlder;
+    job.floorISO = full.floorISO ?? null;
+    job.pendingConversationIds = [...(full.pendingConversationIds ?? [])].slice(0, 500);
     for (const n of participantKey(ownNumbers).split(",").filter(Boolean)) job.seededOwnNumbers.add(n);
     this.job = job;
     return job;

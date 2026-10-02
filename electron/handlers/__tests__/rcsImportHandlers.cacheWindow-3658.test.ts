@@ -15,6 +15,7 @@
 const DAY = 24 * 60 * 60 * 1000;
 export {};
 
+let mockLastCacheOptions: unknown = null;
 const handlers = new Map<string, (event: unknown, args?: unknown) => Promise<unknown>>();
 const created: Array<{ userId: string; since: string }> = [];
 const electronApp = { isPackaged: true, getPath: () => "/tmp/keepr-test" };
@@ -40,6 +41,7 @@ jest.mock("../../services/rcsExtensionBridge", () => ({
       return null;
     }
     createCacheJob(userId: string, options: { since: string }) {
+      mockLastCacheOptions = options;
       created.push({ userId, since: options.since });
       return { jobId: `job-${created.length}`, kind: "cache", state: "created" };
     }
@@ -82,6 +84,13 @@ jest.mock("../../services/auditCoverageService", () => ({
   forgetSourceCoverage: jest.fn(),
 }));
 const mockRunRecords: unknown[] = [];
+let mockPendingFull: string[] = [];
+const mockPendingCleared: unknown[][] = [];
+jest.mock("../../services/db/rcsPendingFullSyncDbService", () => ({
+  listPendingFullRead: () => mockPendingFull,
+  clearPendingFullRead: (...a: unknown[]) => void mockPendingCleared.push(a),
+  clearAllPendingFullRead: jest.fn(),
+}));
 jest.mock("../../services/db/rcsCacheRunsDbService", () => ({
   recordRcsCacheRun: (_u: string, run: unknown) => void mockRunRecords.push(run),
   getRcsCacheRun: () => mockLastRun,
@@ -156,6 +165,16 @@ describe("rcs-import:start-cache-job window (BACKLOG-3658)", () => {
     expect((await start()).success).toBe(true);
     expect(mockCoverageWrites).toEqual([]);
     mockLastRun = null;
+  });
+
+  // Live (0.3.15): chats switched back on go to the page with the full floor.
+  // Mutation: the pending ids not passed → red.
+  it("chats switched back on are handed to the cache job with the full floor", async () => {
+    electronApp.isPackaged = true;
+    mockPendingFull = ["conv-on-again"];
+    expect((await start()).success).toBe(true);
+    expect(mockLastCacheOptions).toMatchObject({ pendingConversationIds: ["conv-on-again"], floorISO: "2026-07-01T00:00:00.000Z" });
+    mockPendingFull = [];
   });
 
   it("packaged: { sinceDays } is ignored (H1)", async () => {

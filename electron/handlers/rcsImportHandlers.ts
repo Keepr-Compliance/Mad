@@ -33,6 +33,7 @@ import { RcsCacheStaging, type CacheLimits, type RcsCommitWriter } from "../serv
 import { loadStoredImportFilters, resolveImportPlanForUser } from "../services/importPlanInputs";
 import { resolveLookbackMonths } from "../services/macOSMessagesImportService/importHelpers";
 import { clearRcsCacheRun, getRcsCacheRun, recordRcsCacheRun } from "../services/db/rcsCacheRunsDbService";
+import { clearAllPendingFullRead, clearPendingFullRead, listPendingFullRead } from "../services/db/rcsPendingFullSyncDbService";
 import { RCS_EXCLUSIONS_MAX } from "../services/rcsExclusions";
 import { forgetSourceCoverage, getSourceCoverage, recordSourceCoverage } from "../services/auditCoverageService";
 import {
@@ -199,7 +200,12 @@ export function cacheSaveInFlight(): boolean {
 
 /** The commit writes through the cache job's existing writers. */
 const commitWriter: RcsCommitWriter = {
-  storeChat: (chat, userId, people) => storeCacheChatSync(chat, userId, deps, people),
+  storeChat: (chat, userId, people) => {
+    const r = storeCacheChatSync(chat, userId, deps, people);
+    // Saved (in the commit's transaction): a chat switched back on is no longer pending.
+    clearPendingFullRead(userId, chat.conversationId, rcsChatHash(people.numbers));
+    return r;
+  },
   getMessageIdMap: (userId) => databaseService.getMessageIdMap(userId),
   getExistingAttachmentRecords: () => databaseService.getExistingAttachmentRecords(),
   insertAttachment: (params) => databaseService.insertAttachment(params),
@@ -419,6 +425,9 @@ async function startCacheJobOnce(opts: { sinceDays?: unknown }): Promise<
     since: window.since,
     ownNumbers: state?.ownNumber ? [state.ownNumber] : [],
     readingOlder: window.readingOlder,
+    // Live (0.3.15): chats switched back on are read to the full floor.
+    floorISO: new Date(window.limits.floorMs).toISOString(),
+    pendingConversationIds: listPendingFullRead(decision.userId),
   });
   if (!job) return { ok: false, status: 409, error: "already_syncing", message: "Keepr is already syncing." };
   // No consent screen (RCS_CONSENT_REQUIRED off): the first Sync records
@@ -581,6 +590,7 @@ export async function clearGoogleMessagesWebTexts(userId: string): Promise<RcsCl
     // BACKLOG-3663: and its coverage is gone with the texts.
     forgetSourceCoverage(userId, "google_messages");
     clearRcsCacheRun(userId);
+    clearAllPendingFullRead(userId);
     hostWindows.broadcast(RCS_DATA_CLEARED_CHANNEL, { messagesDeleted: result.messagesDeleted });
     return result;
   });

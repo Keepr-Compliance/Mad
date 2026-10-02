@@ -11,6 +11,7 @@ import { samePeople } from "../rcsImportStore";
 import { withLiveTransactionParam } from "./core/transactionEligibilitySql";
 import logService from "../logService";
 import { clearRcsChatPeople, clearRcsChatPeopleForChats } from "./rcsChatPeopleDbService";
+import { exclusionKeysFor, markPendingFullRead } from "./rcsPendingFullSyncDbService";
 import {
   RCS_IMPORT_TRANSACTION_CONTACTS_SQL,
   RCS_INSERT_REACTION_SQL,
@@ -574,16 +575,30 @@ export function listRcsExclusionConversationIds(userId: string, max: number): st
 export function setRcsExclusion(userId: string, conversationId: string, excluded: boolean): void {
   const db = ensureDb();
   if (excluded) db.prepare(RCS_EXCLUSION_ADD_SQL).run(crypto.randomUUID(), userId, conversationId);
-  else db.prepare(RCS_EXCLUSION_REMOVE_SQL).run(userId, conversationId, userId, conversationId);
+  else {
+    // Switched back on: read it in full on the next Sync (no new message needed).
+    db.transaction(() => {
+      markPendingFullRead(userId, exclusionKeysFor(userId, { conversationId }));
+      db.prepare(RCS_EXCLUSION_REMOVE_SQL).run(userId, conversationId, userId, conversationId);
+    })();
+  }
 }
 
 /** Settings: switch one chat back on, or all ("Sync all again"). */
 export function removeRcsExclusionById(userId: string, id: string): void {
-  ensureDb().prepare(RCS_EXCLUSION_REMOVE_BY_ID_SQL).run(userId, id);
+  const db = ensureDb();
+  db.transaction(() => {
+    markPendingFullRead(userId, exclusionKeysFor(userId, { id }));
+    db.prepare(RCS_EXCLUSION_REMOVE_BY_ID_SQL).run(userId, id);
+  })();
 }
 
 export function clearRcsExclusions(userId: string): number {
-  return ensureDb().prepare(RCS_EXCLUSIONS_CLEAR_SQL).run(userId).changes;
+  const db = ensureDb();
+  return db.transaction(() => {
+    markPendingFullRead(userId, exclusionKeysFor(userId, { all: true }));
+    return db.prepare(RCS_EXCLUSIONS_CLEAR_SQL).run(userId).changes;
+  })();
 }
 
 /**

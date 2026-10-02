@@ -369,8 +369,9 @@
    * a chat with no readable time is kept. With no readable times the whole list
    * counts. At most CACHE_CHECK_MAX are checked; the rest are "not checked".
    */
-  function cachePlan(conversations, sinceMs) {
+  function cachePlan(conversations, sinceMs, pending) {
     var above = conversations;
+    var must = pending || {};
     if (typeof sinceMs === "number" && isFinite(sinceMs)) {
       var older = function (c) { return !!c && typeof c.timeMs === "number" && c.timeMs < sinceMs; };
       for (var i = 0; i < conversations.length; i++) {
@@ -380,6 +381,12 @@
         }
       }
       above = above.filter(function (c) { return !older(c); });
+      // Chats switched back on are candidates however old their last message.
+      var inAbove = {};
+      above.forEach(function (c) { inAbove[c.conversationId] = true; });
+      conversations.forEach(function (c) {
+        if (must[c.conversationId] && !inAbove[c.conversationId]) above.push(c);
+      });
     }
     var picked = above.slice(0, CACHE_CHECK_MAX);
     return {
@@ -564,6 +571,13 @@
     var floorSource = isCache ? claim.body.since : claim.body && claim.body.startDate;
     var floorMs = typeof floorSource === "string" ? Date.parse(floorSource) : NaN;
     if (!isFinite(floorMs)) floorMs = null;
+    // Live (0.3.15): chats switched back on — read to the FULL floor even with
+    // no new message (Keepr clears them once saved). Conversation ids only.
+    var pendingFull = {};
+    var pendingIds = isCache && claim.body && Array.isArray(claim.body.pendingConversationIds) ? claim.body.pendingConversationIds : [];
+    for (var pf = 0; pf < pendingIds.length; pf++) if (typeof pendingIds[pf] === "string") pendingFull[pendingIds[pf]] = true;
+    var fullFloorMs = isCache && claim.body && typeof claim.body.floor === "string" ? Date.parse(claim.body.floor) : NaN;
+    if (!isFinite(fullFloorMs)) fullFloorMs = floorMs;
     var history = [];
 
     // 3. Scan the list and pick candidates. A narrow window shows the list OR
@@ -578,7 +592,10 @@
     // scroller (top first, then step down with scroll events).
     await holdWhileHidden("Loading your conversation list…");
     var collected = await env.scan.collectConversations(env.doc, isCache
-      ? { scroll: env.scroll, sleep: env.sleep, stopAtOlderThanMs: floorMs, maxItems: CACHE_LIST_MAX }
+      ? {
+        scroll: env.scroll, sleep: env.sleep, stopAtOlderThanMs: floorMs, maxItems: CACHE_LIST_MAX,
+        mustSee: pendingIds, mustSeeFloorMs: fullFloorMs,
+      }
       : { scroll: env.scroll, sleep: env.sleep });
     // BACKLOG-3645: the phone number is the gate, a name only orders the queue.
     // Up to CHECK_ALL_MAX chats every chat is checked; above it, plausible names
@@ -586,7 +603,7 @@
     // BACKLOG-3658: a cache Sync checks every chat newer than `since` in list
     // order (no names), at most CACHE_CHECK_MAX; the rest are not checked.
     var plan = isCache
-      ? cachePlan(collected.conversations, floorMs)
+      ? cachePlan(collected.conversations, floorMs, pendingFull)
       : env.scan.planChecks
         ? env.scan.planChecks(collected.conversations, contacts)
         : { queue: env.scan.pickCandidates(collected.conversations, contacts), notChecked: 0 };
@@ -703,7 +720,7 @@
           stepBack: env.stepBackMessages,
           budgetMs: env.historyBudgetMs,
           sleep: env.sleep,
-          floorMs: floorMs,
+          floorMs: pendingFull[conv.conversationId] ? fullFloorMs : floorMs,
           cap: env.historyCap,
           noNewTimeoutMs: env.historyNoNewMs,
           oldestMs: function () {

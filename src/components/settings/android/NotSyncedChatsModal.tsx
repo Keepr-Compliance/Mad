@@ -24,6 +24,8 @@ interface NotSyncedChatsModalProps {
 export function NotSyncedChatsModal({ chats, onSyncAgain, onSyncAllAgain, onClose }: NotSyncedChatsModalProps) {
   const [query, setQuery] = useState("");
   const [confirmAll, setConfirmAll] = useState(false);
+  /** Live (0.3.15): after Sync again, say when it happens (the next Sync reads the chat in full). */
+  const [notice, setNotice] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -81,7 +83,10 @@ export function NotSyncedChatsModal({ chats, onSyncAgain, onSyncAllAgain, onClos
               <button
                 type="button"
                 className="shrink-0 text-indigo-700 hover:text-indigo-900 text-xs font-medium min-h-[32px] px-2"
-                onClick={() => void onSyncAgain(c.id)}
+                onClick={() => {
+                  setNotice(`${c.title ?? NOT_SYNCED_FALLBACK_TITLE}: will sync on the next Sync.`);
+                  void onSyncAgain(c.id);
+                }}
               >
                 Sync again
               </button>
@@ -89,6 +94,11 @@ export function NotSyncedChatsModal({ chats, onSyncAgain, onSyncAllAgain, onClos
           ))}
           {shown.length === 0 && <li className="py-3 text-sm text-gray-600">No chat matches.</li>}
         </ul>
+        {notice && (
+          <p className="px-4 py-2 text-xs text-indigo-800 bg-indigo-50" role="status" data-testid="gm-not-synced-notice">
+            {notice}
+          </p>
+        )}
         <div className="px-4 py-3 border-t border-gray-200">
           {!confirmAll ? (
             <button
@@ -107,6 +117,7 @@ export function NotSyncedChatsModal({ chats, onSyncAgain, onSyncAllAgain, onClos
                   className="px-2 py-1 rounded bg-amber-600 text-white font-medium"
                   onClick={() => {
                     setConfirmAll(false);
+                    setNotice("Every chat will sync on the next Sync.");
                     void onSyncAllAgain();
                   }}
                 >

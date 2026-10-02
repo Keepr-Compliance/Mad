@@ -185,6 +185,8 @@ describe("GoogleMessagesSettings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sync again" }));
     await waitFor(() => expect(mockRemoveExclusion).toHaveBeenCalledWith({ id: "x-1" }));
     await waitFor(() => expect(screen.getByTestId("gm-not-synced-line")).toHaveTextContent("2 chats not synced"));
+    // Live (0.3.15): when it happens. Mutation: no notice → red.
+    expect(screen.getByTestId("gm-not-synced-notice")).toHaveTextContent("Test Contact A: will sync on the next Sync.");
   });
 
   it("Sync all again (in the modal footer) asks first, then clears every exclusion; Escape closes (E3, M3)", async () => {

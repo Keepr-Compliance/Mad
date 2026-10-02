@@ -816,6 +816,18 @@ CREATE TABLE IF NOT EXISTS rcs_chat_exclusions (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_rcs_chat_exclusions_conv ON rcs_chat_exclusions(user_id, conversation_id) WHERE conversation_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_rcs_chat_exclusions_hash ON rcs_chat_exclusions(user_id, chat_hash);
 
+-- Live (0.3.15): chats switched back ON. The next cache Sync reads them in
+-- full whatever their age; each row is cleared once its chat is saved.
+CREATE TABLE IF NOT EXISTS rcs_pending_full_sync (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  conversation_id TEXT,
+  chat_hash TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_rcs_pending_full_sync_user ON rcs_pending_full_sync(user_id);
+
 -- BACKLOG-3670: people found in texts. One row per (chat, member number) of a
 -- Google Messages chat Keepr stored, with the name the phone's address book
 -- shows for that number (Details rows; a 1:1 chat's title). LOCAL ONLY: never

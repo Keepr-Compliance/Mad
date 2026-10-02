@@ -212,6 +212,19 @@
     var stopReason = "stable";
 
     var stopAt = typeof opts.stopAtOlderThanMs === "number" ? opts.stopAtOlderThanMs : null;
+    // Live (0.3.15): chats switched back on must be read even with no new
+    // message: the list scan goes on past `since` until it has seen every
+    // one of them (opts.mustSee) — but never past the floor (opts.mustSeeFloorMs).
+    var mustSee = {};
+    var mustSeeLeft = 0;
+    (opts.mustSee || []).forEach(function (id) {
+      if (id && !mustSee[id]) {
+        mustSee[id] = true;
+        mustSeeLeft += 1;
+      }
+    });
+    var mustSeeFloor = typeof opts.mustSeeFloorMs === "number" ? opts.mustSeeFloorMs : null;
+    var olderThanFloorInARow = 0;
     var reachedSince = false;
     // SR: two older chats IN A ROW end the list (a single older one may be a
     // pinned chat at the top); a newer or unreadable one starts over.
@@ -223,9 +236,17 @@
           byId[list[i].conversationId] = list[i];
           order.push(list[i].conversationId);
           // BACKLOG-3658: newest first — a chat older than `since` ends the list.
+          if (mustSee[list[i].conversationId]) {
+            mustSee[list[i].conversationId] = false;
+            mustSeeLeft -= 1;
+          }
           if (stopAt !== null) {
             olderInARow = list[i].timeMs !== null && list[i].timeMs < stopAt ? olderInARow + 1 : 0;
-            if (olderInARow >= SINCE_STOP_RUN) reachedSince = true;
+            if (mustSeeFloor !== null) {
+              olderThanFloorInARow = list[i].timeMs !== null && list[i].timeMs < mustSeeFloor ? olderThanFloorInARow + 1 : 0;
+            }
+            var pastFloor = mustSeeFloor !== null && olderThanFloorInARow >= SINCE_STOP_RUN;
+            if (olderInARow >= SINCE_STOP_RUN && (mustSeeLeft <= 0 || pastFloor)) reachedSince = true;
           }
         }
       }

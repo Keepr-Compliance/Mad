@@ -97,6 +97,13 @@ jest.mock("../../windowRegistry", () => ({ getMainWindow: () => null }));
 jest.mock("../../services/db/core/dbConnection", () => ({ dbTransaction: (fn: () => unknown) => fn() }));
 let mockLastRun: unknown = null;
 const mockRunRecords: unknown[] = [];
+let mockPendingFull: string[] = [];
+const mockPendingCleared: unknown[][] = [];
+jest.mock("../../services/db/rcsPendingFullSyncDbService", () => ({
+  listPendingFullRead: () => mockPendingFull,
+  clearPendingFullRead: (...a: unknown[]) => void mockPendingCleared.push(a),
+  clearAllPendingFullRead: jest.fn(),
+}));
 jest.mock("../../services/db/rcsCacheRunsDbService", () => ({
   recordRcsCacheRun: (_u: string, run: unknown) => void mockRunRecords.push(run),
   getRcsCacheRun: () => mockLastRun,

@@ -343,10 +343,20 @@ export class RcsExtensionBridge {
    */
   createCacheJob(
     userId: string,
-    options: { since: string; ownNumbers?: readonly string[]; unclaimedMs?: number; readingOlder?: boolean },
+    options: {
+      since: string;
+      ownNumbers?: readonly string[];
+      unclaimedMs?: number;
+      readingOlder?: boolean;
+      floorISO?: string;
+      pendingConversationIds?: readonly string[];
+    },
   ): RcsJobSnapshot | null {
     if (this.jobs.active()) return null;
-    const job = this.jobs.createCache(userId, options.since, options.ownNumbers ?? [], options.readingOlder === true);
+    const job = this.jobs.createCache(userId, options.since, options.ownNumbers ?? [], options.readingOlder === true, {
+      floorISO: options.floorISO,
+      pendingConversationIds: options.pendingConversationIds,
+    });
     this.logger.info("[RcsBridge] Cache job created");
     return this.armJob(job, options.unclaimedMs ?? 60_000);
   }

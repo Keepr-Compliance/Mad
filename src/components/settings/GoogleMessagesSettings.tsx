@@ -196,7 +196,7 @@ export function GoogleMessagesSettings({ userId }: { userId: string }) {
           texts already in Keepr stay.
         </p>
       </div>
-      {manageOpen && excluded.length > 0 && (
+      {manageOpen && (
         <NotSyncedChatsModal
           chats={excluded}
           onSyncAgain={syncAgain}

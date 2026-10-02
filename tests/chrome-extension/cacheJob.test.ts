@@ -155,6 +155,8 @@ function cacheEnv(opts: {
   finishReply?: Record<string, unknown>;
   /** History v2: /match's keepImages answer. */
   keepImages?: boolean;
+  /** Live (0.3.15): extra claim fields (pendingConversationIds, floor). */
+  claimExtra?: Record<string, unknown>;
 }) {
   renderList(opts.rows);
   let open = "";
@@ -170,7 +172,7 @@ function cacheEnv(opts: {
     api: async (method: string, p: string, body?: Record<string, unknown>) => {
       calls.push([method, p, body]);
       if (p.endsWith("/claim")) {
-        return { ok: true, status: 200, body: { jobId: JOB, kind: "cache", contacts: [], since, startDate: "2020-01-01T00:00:00.000Z" } };
+        return { ok: true, status: 200, body: { jobId: JOB, kind: "cache", contacts: [], since, startDate: "2020-01-01T00:00:00.000Z", ...(opts.claimExtra ?? {}) } };
       }
       if (p.endsWith("/match")) {
         return { ok: true, status: 200, body: opts.keepImages === undefined ? { matched: true } : { matched: true, keepImages: opts.keepImages } };
@@ -297,6 +299,46 @@ describe("runJob: a cache Sync", () => {
       await job.runJob(JOB, t.env);
       expect(seen).toEqual([keep]);
     }
+  });
+
+  // Live (0.3.15): chats switched back on have no new message — they are
+  // candidates anyway, read to the FULL floor. Mutations: not a candidate /
+  // read only to since / the list scan stopping at since → red.
+  it("a chat switched back on: a candidate though older than since, read to the full floor", async () => {
+    const floor = new Date(NOW - 90 * DAY).toISOString();
+    const t = cacheEnv({
+      rows: ROWS,
+      numbers: { [id(0)]: ["+15555550101"], [id(3)]: ["+15555550104"] },
+      claimExtra: { pendingConversationIds: [id(3)], floor },
+    });
+    await job.runJob(JOB, t.env);
+    expect(t.opened).toContain(id(3));
+    const i = t.opened.indexOf(id(3));
+    expect(t.floors.length).toBeGreaterThan(0);
+    expect(t.floors[t.floors.length - 1]).toBe(Date.parse(floor)); // the pending chat (last opened) reads to the full floor
+    expect(i).toBe(t.opened.length - 1);
+  });
+
+  it("the list scan goes on past since until it has seen the chats switched back on", async () => {
+    const rows: Array<[string, string | null]> = [["A", "3:45 PM"], ["B", "Aug 10"], ["C", "Aug 5"], ["D", "Aug 1"], ["E", "Jul 30"]];
+    const read = async (mustSee: string[]) => {
+      let shown = 2;
+      renderList(rows.slice(0, shown));
+      return scan.collectConversations(document, {
+        sleep: async () => {},
+        now: () => NOW,
+        // A virtualized list: one more row per scroll step.
+        scroll: async () => {
+          if (shown < rows.length) renderList(rows.slice(0, ++shown));
+        },
+        stopAtOlderThanMs: NOW - 10 * DAY,
+        mustSee,
+        mustSeeFloorMs: NOW - 90 * DAY,
+      });
+    };
+    const ids = (out: { conversations: Array<{ conversationId: string }> }) => out.conversations.map((c) => c.conversationId);
+    expect(ids(await read([]))).not.toContain(id(3)); // stops at since
+    expect(ids(await read([id(3)]))).toContain(id(3)); // goes on until it has seen it
   });
 
   it("the history floor is since, not a transaction start date (M7)", async () => {
