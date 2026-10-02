@@ -138,6 +138,9 @@ describe("reachability and last sync text", () => {
     expect(job.idleReachability({ ok: true, status: 200, body: { conversationIds: [] } })).toBe("ready");
     expect(job.idleReachability({ ok: false, status: 501 })).toBe("ready");
     expect(job.idleReachability({ ok: false, status: 403 })).toBe("signed_out");
+    // SR B1: Keepr wants signed requests (this extension lost its pairing): reachable → the pair chip.
+    expect(job.idleReachability({ ok: false, status: 401, body: { error: "signature_required" } })).toBe("ready");
+    expect(job.idleReachability({ ok: false, status: 401, body: { error: "other" } })).toBe("down");
     expect(job.idleReachability({ ok: false, status: 0 })).toBe("down");
     expect(job.idleReachability(null)).toBe("down");
   });

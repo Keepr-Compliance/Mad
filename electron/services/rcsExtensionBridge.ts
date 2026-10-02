@@ -229,6 +229,8 @@ const replySigners = new WeakMap<http.ServerResponse, { sign: (status: number, b
 const PAIR_OPEN_ROUTES = new Set(["/hello", "/pair/start", "/pair/finish"]);
 /** "dual" mode only (one release): what an older, unpaired extension still needs. Never a job route. */
 const PAIR_DUAL_ROUTES = new Set(["/status", "/focus", "/exclusions/list", "/exclusions/set"]);
+/** SR B1: an unsigned request although this user's extension is paired. */
+const SIGNATURE_REQUIRED_MESSAGE = "This extension is paired with Keepr: its requests must be signed. Update or reload the Keepr extension.";
 
 function signHeaders(res: http.ServerResponse, status: number, payload: string): Record<string, string> {
   const signer = replySigners.get(res);
@@ -718,6 +720,12 @@ export class RcsExtensionBridge {
    * outside the open (and, in dual mode, the dual) routes. → the verified
    * pairing, null (unsigned, allowed), or "handled" (replied).
    */
+  /** SR B1: does the signed-in user have an active pairing? */
+  private async signedInUserIsPaired(): Promise<boolean> {
+    const userId = this.options.currentUserId ? await this.options.currentUserId() : null;
+    return !!userId && !!this.options.pairing?.isPaired(userId);
+  }
+
   private async authGate(
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -755,7 +763,13 @@ export class RcsExtensionBridge {
     const signed = typeof req.headers[PAIR_HEADERS.pair] === "string";
     if (!signed) {
       if (PAIR_OPEN_ROUTES.has(path)) return null;
-      if ((this.options.pairingMode ?? "dual") === "dual" && PAIR_DUAL_ROUTES.has(path)) return null;
+      // SR B1: the dual routes go unsigned ONLY while the signed-in user has
+      // no pairing; once paired, everything must be signed.
+      if ((this.options.pairingMode ?? "dual") === "dual" && PAIR_DUAL_ROUTES.has(path)) {
+        if (!(await this.signedInUserIsPaired())) return null;
+        sendJson(res, 401, { error: "signature_required", message: SIGNATURE_REQUIRED_MESSAGE });
+        return "handled";
+      }
       sendJson(res, 401, { error: "not_paired", message: NOT_PAIRED_MESSAGE });
       return "handled";
     }

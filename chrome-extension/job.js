@@ -1438,6 +1438,9 @@
   function idleReachability(reply) {
     if (!reply || typeof reply !== "object") return "down";
     if (reply.ok || reply.status === 501) return "ready";
+    // SR B1: Keepr is there; it wants this (paired) user's requests signed —
+    // this extension lost its pairing: "Pair with Keepr".
+    if (reply.status === 401 && reply.body && reply.body.error === "signature_required") return "ready";
     if (reply.status === 403) return "signed_out";
     return "down";
   }

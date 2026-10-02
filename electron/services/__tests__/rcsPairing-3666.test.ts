@@ -257,7 +257,21 @@ describe("the auth gate (BACKLOG-3666)", () => {
     expect(replyOk(p, "/hello", s.nonce, paired)).toBe(true);
   });
 
+  // SR B1: once the signed-in user is paired, the dual routes need a signature
+  // too (/exclusions/set is a write). Mutation: dual routes open regardless → red.
+  it("paired user: the dual routes are refused unsigned (B1)", async () => {
+    for (const route of ["/exclusions/set", "/exclusions/list", "/focus", "/status"]) {
+      const r = await post(port, route, {}, JSON.stringify({ conversationId: "abc", excluded: true }));
+      expect(r.status).toBe(401);
+      expect(r.body.error).toBe("signature_required");
+    }
+    // Signed, they work.
+    const s = signed(p, "/exclusions/list", "{}");
+    expect((await post(port, "/exclusions/list", s.headers, "{}")).status).not.toBe(401);
+  });
+
   it("dual mode: an older, unpaired extension keeps the eyes and /status, never a job (A10)", async () => {
+    auth.revoke("user-a"); // this user has no pairing: the older extension's unsigned calls
     expect((await post(port, "/exclusions/list", {}, "{}")).status).not.toBe(401);
     expect((await post(port, "/status", {})).status).toBe(200);
     expect((await post(port, "/job/pending", {})).status).toBe(401);
