@@ -266,6 +266,34 @@ async function afterCacheLinked(jobId: string, userId: string): Promise<void> {
   clearUnlinkedOldChats(userId, cutoff, databaseService.rcsAutoDeleteDbOps(), clearFiles(), (m) => void logService.info(m, LOG_TAG));
 }
 
+/**
+ * What a cache commit records INSIDE its own transaction (exported for the
+ * real-SQL commit test): the coverage, the pending media read done (SR M), the
+ * run. A failed or discarded commit records none of it.
+ */
+export function cacheCommitInsideTransaction(
+  userId: string,
+  read: { fullRead: boolean; floorISO: string; mediaPending?: boolean } | undefined,
+  reached: boolean,
+  notSettledChats: number,
+  listStop: string | null,
+): void {
+  const nowISO = new Date().toISOString();
+  recordSourceCoverage(userId, "google_messages", reached && read ? read.floorISO : null, nowISO);
+  // SR M: the media read asked for by a toggle is done once this commit saves.
+  if (read?.mediaPending) clearPendingMediaRead(userId);
+  if (read) {
+    recordRcsCacheRun(userId, {
+      floorISO: read.floorISO,
+      fullRead: read.fullRead,
+      listStop,
+      reachedFloor: reached,
+      notSettledChats,
+      finishedAt: nowISO,
+    });
+  }
+}
+
 async function commitCacheJob(jobId: string, userId: string, snapshot?: CacheEndSnapshot): Promise<void> {
   const limits = cacheLimitsByJob.get(jobId);
   cacheLimitsByJob.delete(jobId);
@@ -281,22 +309,9 @@ async function commitCacheJob(jobId: string, userId: string, snapshot?: CacheEnd
   // L2: not-settled chats no longer block it — they are counted and shown.
   const coverage = read && snapshot ? cacheRunCoverage(read.fullRead, snapshot) : { reached: false, notSettledChats: 0 };
   const reached = coverage.reached;
-  const r = await cacheStaging().commit(jobId, userId, limits, commitWriter, () => {
-    const nowISO = new Date().toISOString();
-    recordSourceCoverage(userId, "google_messages", reached && read ? read.floorISO : null, nowISO);
-    // SR M: the media read asked for by a toggle is done once this commit saves.
-    if (read?.mediaPending) clearPendingMediaRead(userId);
-    if (read) {
-      recordRcsCacheRun(userId, {
-        floorISO: read.floorISO,
-        fullRead: read.fullRead,
-        listStop: snapshot?.listStop ?? null,
-        reachedFloor: reached,
-        notSettledChats: coverage.notSettledChats,
-        finishedAt: nowISO,
-      });
-    }
-  });
+  const r = await cacheStaging().commit(jobId, userId, limits, commitWriter, () =>
+    cacheCommitInsideTransaction(userId, read, reached, coverage.notSettledChats, snapshot?.listStop ?? null),
+  );
   void logService.info(
     `[RcsCache] Cache Sync saved: ${r.staged} staged, ${r.kept} kept (${r.droppedByDate} older than the months setting; ` +
       `no max-messages cap for this source); ${r.chats} chats, ${r.stored} new, ${r.alreadyPresent} already there; ` +
