@@ -26,7 +26,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { rcsImportService } from "../../services/rcsImportService";
 import { settingsService } from "../../services";
-import { LookbackMonthsSelect, parseLookbackOption } from "./LookbackMonthsSelect";
+import { LookbackMonthsSelect, lastMonthsPhrase, parseLookbackOption } from "./LookbackMonthsSelect";
 import { AndroidForceReimportWarning, androidClearedText } from "./AndroidForceReimportWarning";
 import { NotSyncedChatsModal } from "./android/NotSyncedChatsModal";
 import { readMessageImportPreferences, resolveStoredLookbackMonths } from "./messageImportPreferences";
@@ -172,7 +172,7 @@ export function GoogleMessagesSettings({ userId }: { userId: string }) {
           />
         </div>
         <p className="text-xs text-blue-600 mt-2" data-testid="gm-lookback-line">
-          {lookbackMonths === null ? "Copying all your texts" : `Copying texts from the last ${lookbackMonths} months`}
+          {lookbackMonths === null ? "Copying all your texts" : `Copying texts from ${lastMonthsPhrase(lookbackMonths)}`}
         </p>
       </div>
 

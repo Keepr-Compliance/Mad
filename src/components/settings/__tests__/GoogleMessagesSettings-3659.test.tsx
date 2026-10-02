@@ -79,12 +79,13 @@ describe("GoogleMessagesSettings", () => {
     expect(screen.queryByRole("button", { name: "Withdraw" })).toBeNull();
   });
 
-  it("months control: absent → the default 3 months; the stored value; null → All time (L1)", async () => {
+  it("months control: absent → the default 1.5 months; the stored value; null → All time (L1)", async () => {
     const view = render(<GoogleMessagesSettings userId="user-1" />);
     const select = (await screen.findByRole("combobox", { name: "Import messages from" })) as HTMLSelectElement;
     await waitFor(() => expect(select.disabled).toBe(false));
-    expect(select.value).toBe("3");
-    expect(screen.getByTestId("gm-lookback-line")).toHaveTextContent("Copying texts from the last 3 months");
+    expect(select.value).toBe("1.5");
+    expect(select.selectedOptions[0].textContent).toBe("Last 1.5 months (default)");
+    expect(screen.getByTestId("gm-lookback-line")).toHaveTextContent("Copying texts from the last 1.5 months");
     view.unmount();
     mockPrefs = { messageImport: { filters: { lookbackMonths: null } } };
     render(<GoogleMessagesSettings userId="user-1" />);
@@ -101,9 +102,9 @@ describe("GoogleMessagesSettings", () => {
     await waitFor(() =>
       expect(mockUpdatePrefs).toHaveBeenCalledWith("user-1", { messageImport: { filters: { lookbackMonths: 12 } } }),
     );
-    expect(screen.getByTestId("gm-lookback-line")).toHaveTextContent("Copying texts from the last 12 months");
+    expect(screen.getByTestId("gm-lookback-line")).toHaveTextContent("Copying texts from the last year");
     mockUpdatePrefs.mockResolvedValue({ success: false });
-    fireEvent.change(select, { target: { value: "all" } });
+    fireEvent.change(select, { target: { value: "3" } });
     await waitFor(() => expect(select.value).toBe("12"));
     expect(await screen.findByRole("alert")).toHaveTextContent("Keepr could not save that.");
   });

@@ -167,10 +167,10 @@ describe("MacOSMessagesImportSettings — effective import window label (BACKLOG
 
     renderStrict(<MacOSMessagesImportSettings userId={userId} />);
 
-    // Default UI state is 3 months + 50,000 cap, so the combined pref copy shows.
+    // Default UI state is 1.5 months + 50,000 cap, so the combined pref copy shows.
     await waitFor(() => {
       expect(
-        screen.getByText(/Importing last 3 months, up to 50,000 messages/i),
+        screen.getByText(/Importing the last 1\.5 months, up to 50,000 messages/i),
       ).toBeInTheDocument();
     });
 
@@ -584,7 +584,7 @@ describe("MacOSMessagesImportSettings — disk space guard (BACKLOG-2743)", () =
     await waitFor(() =>
       expect(window.api.messages.getImportCount).toHaveBeenCalledWith(
         userId,
-        expect.objectContaining({ lookbackMonths: 3 }),
+        expect.objectContaining({ lookbackMonths: 1.5 }),
       ),
     );
 

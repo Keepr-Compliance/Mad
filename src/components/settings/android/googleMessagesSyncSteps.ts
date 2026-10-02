@@ -18,6 +18,7 @@
  */
 
 import type { RcsExtensionState, RcsJobInfo } from "../../../../electron/types/ipc/window-api-rcs-import";
+import { lastMonthsPhrase } from "../LookbackMonthsSelect";
 
 export type GoogleMessagesStep = "install" | "connect" | "syncing" | "done" | "failed";
 
@@ -57,7 +58,7 @@ export function syncCopyLine(lookbackMonths: number | null | undefined): string 
     lookbackMonths === null
       ? "all your texts"
       : typeof lookbackMonths === "number"
-        ? `your texts from the last ${lookbackMonths} month${lookbackMonths === 1 ? "" : "s"}`
+        ? `your texts from ${lastMonthsPhrase(lookbackMonths)}`
         : "your texts";
   return `Keepr copies ${what} to this computer, encrypted.`;
 }

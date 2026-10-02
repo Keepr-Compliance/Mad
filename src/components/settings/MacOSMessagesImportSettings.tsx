@@ -35,7 +35,7 @@ import {
   type ImportPhaseDisplay,
 } from "../../utils/importPhaseDisplay";
 import { FdaHelpSheet } from "../permissions/FdaHelpSheet";
-import { LookbackMonthsSelect } from "./LookbackMonthsSelect";
+import { LookbackMonthsSelect, lastMonthsPhrase, lookbackOptionLabel } from "./LookbackMonthsSelect";
 import { usePlatform } from "../../contexts/PlatformContext";
 import { useSyncOrchestrator } from "../../hooks/useSyncOrchestrator";
 import { settingsService, systemService } from '../../services';
@@ -2063,12 +2063,12 @@ export function MacOSMessagesImportSettings({
             <p className="text-xs text-blue-600 mt-2">
               {hasProtectedHistory
                 ? lookbackMonths !== null
-                  ? `Importing last ${lookbackMonths} months, covering ${availableCount!.toLocaleString()} messages (your ${planCap!.toLocaleString()} newest plus your deals' protected history)`
+                  ? `Importing ${lastMonthsPhrase(lookbackMonths)}, covering ${availableCount!.toLocaleString()} messages (your ${planCap!.toLocaleString()} newest plus your deals' protected history)`
                   : `Covering ${availableCount!.toLocaleString()} messages — your ${planCap!.toLocaleString()} newest, plus your deals' protected history`
                 : lookbackMonths !== null && maxMessages !== null
-                  ? `Importing last ${lookbackMonths} months, up to ${maxMessages.toLocaleString()} messages`
+                  ? `Importing ${lastMonthsPhrase(lookbackMonths)}, up to ${maxMessages.toLocaleString()} messages`
                   : lookbackMonths !== null
-                    ? `Importing messages from the last ${lookbackMonths} months`
+                    ? `Importing messages from ${lastMonthsPhrase(lookbackMonths)}`
                     : `Importing up to ${maxMessages!.toLocaleString()} messages`}
             </p>
           )
@@ -2346,7 +2346,7 @@ export function MacOSMessagesImportSettings({
             rangeLabel={
               lookbackMonths === null
                 ? "All time"
-                : `Last ${lookbackMonths} months`
+                : lookbackOptionLabel(lookbackMonths, null)
             }
             capFittingRange={capFittingRange}
             capRangeSearching={capRangeSearching}

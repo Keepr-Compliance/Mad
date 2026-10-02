@@ -125,7 +125,8 @@ describe("GoogleMessagesSyncFlow", () => {
       "Keepr copies your texts from the last 6 months to this computer, encrypted. Change this in Settings → Messages.",
     );
     expect(syncCopyLine(null)).toBe("Keepr copies all your texts to this computer, encrypted.");
-    expect(syncCopyLine(12)).toContain("from the last 12 months");
+    expect(syncCopyLine(12)).toContain("from the last year");
+    expect(syncCopyLine(1.5)).toContain("from the last 1.5 months");
     expect(syncCopyLine(undefined)).toBe("Keepr copies your texts to this computer, encrypted.");
   });
 

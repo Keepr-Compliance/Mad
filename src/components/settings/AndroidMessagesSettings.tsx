@@ -16,7 +16,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { settingsService } from '../../services';
 import logger from '../../utils/logger';
-import { LookbackMonthsSelect } from "./LookbackMonthsSelect";
+import { LookbackMonthsSelect, lastMonthsPhrase } from "./LookbackMonthsSelect";
 import { AndroidForceReimportWarning, androidClearedText } from "./AndroidForceReimportWarning";
 import {
   DEFAULT_LOOKBACK_MONTHS,
@@ -347,7 +347,7 @@ export function AndroidMessagesSettings({ userId }: AndroidMessagesSettingsProps
             states nothing, rather than stating a limit no run enforces. */}
         {lookbackMonths !== null && (
           <p className="text-xs text-blue-600 mt-2">
-            {`Importing messages from the last ${lookbackMonths} months`}
+            {`Importing messages from ${lastMonthsPhrase(lookbackMonths)}`}
           </p>
         )}
       </div>{/* /BACKLOG-3156 stage E — Import Preferences block (its own card) */}
