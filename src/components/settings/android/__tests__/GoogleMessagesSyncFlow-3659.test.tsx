@@ -7,7 +7,8 @@
  *   G2 a running job not shown as syncing / finished not "done"         → "steps"
  *   G3 the extension not copied to Downloads when install shows         → "install step"
  *   G4 detection not polled (an installed extension never noticed)       → "install step"
- *   G5 Sync now not starting the cache job, or another job's progress shown → "connect → sync → done"
+ *   G6 the pairing instruction shown with both checks ticked, or hidden before → "connect copy"
+ *   G5 the Sync button not starting the cache job, or another job's progress shown → "connect → sync → done"
  *   C1 a consent step shown again (founder: removed 2026-10-01)         → "steps", "no consent step"
  *   C2 the copy line not under the Sync button / wrong months            → "copy line"
  */
@@ -128,7 +129,7 @@ describe("GoogleMessagesSyncFlow", () => {
     mockState = INSTALLED;
     const onClose = jest.fn();
     render(<GoogleMessagesSyncFlow onClose={onClose} pollMs={20} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Sync now" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open Google Messages and sync" }));
     await waitFor(() => expect(mockStartCache).toHaveBeenCalledTimes(1));
     expect(await screen.findByTestId("gm-step-syncing")).toBeInTheDocument();
     act(() => {
@@ -149,11 +150,26 @@ describe("GoogleMessagesSyncFlow", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it("connect copy: the pairing instruction until both checks are ticked (G6)", async () => {
+    mockState = INSTALLED;
+    const view = render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);
+    expect(await screen.findByTestId("gm-pair-instruction")).toHaveTextContent(
+      "In Chrome, open Google Messages and sign in with your Google account or scan the QR code with your phone. Leave Remember this computer on.",
+    );
+    expect(screen.getByTestId("gm-step-connect")).toHaveTextContent("Keep that Chrome window visible until it is done.");
+    view.unmount();
+    mockState = { ...INSTALLED, pairedAt: "2026-10-01T10:05:00.000Z" };
+    render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);
+    expect(await screen.findByTestId("gm-sync-note")).toHaveTextContent("Keep that Chrome window visible until it is done.");
+    expect(screen.queryByTestId("gm-pair-instruction")).toBeNull();
+    expect(screen.getByRole("button", { name: "Open Google Messages and sync" })).toBeInTheDocument();
+  });
+
   it("a refused start says why and stays on Connect", async () => {
     mockState = INSTALLED;
     mockStartCache.mockResolvedValue({ success: false, error: "Sign in to Keepr first." });
     render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Sync now" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open Google Messages and sync" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Sign in to Keepr first.");
     expect(screen.getByTestId("gm-step-connect")).toBeInTheDocument();
   });

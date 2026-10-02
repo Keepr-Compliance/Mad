@@ -88,6 +88,7 @@ export function GoogleMessagesSyncFlow({ onClose, onUseCompanion, pollMs = POLL_
 
   const step = googleMessagesStep({ state, job, continued });
   const installed = extensionInstalled(state);
+  const paired = !!state?.pairedAt;
   const stepRef = useRef(step);
   stepRef.current = step;
   const preparedRef = useRef(false);
@@ -187,20 +188,28 @@ export function GoogleMessagesSyncFlow({ onClose, onUseCompanion, pollMs = POLL_
           <h2 className="text-lg font-bold text-gray-900">Connect your phone and sync</h2>
           <div className="flex flex-col gap-2 p-3 rounded-xl border border-gray-200">
             <Check ok={installed}>Keepr extension installed</Check>
-            <Check ok={!!state?.pairedAt}>Google Messages connected to your phone</Check>
+            <Check ok={paired}>Google Messages connected to your phone</Check>
           </div>
-          <ol className="flex flex-col gap-2">
-            <Numbered n={1}>
-              In Chrome, open Google Messages and scan the QR code with your phone (Messages › your profile › Device
-              pairing). Leave <b>Remember this computer</b> on.
-            </Numbered>
-            <Numbered n={2}>
-              Click <b>Sync now</b>. Keepr opens Google Messages and copies your texts. Keep that Chrome window visible
-              until it is done.
-            </Numbered>
-          </ol>
+          {/* Both checks ticked: the pairing instruction is no longer needed. */}
+          {installed && paired ? (
+            <p className="text-sm text-gray-800 leading-relaxed" data-testid="gm-sync-note">
+              Keepr opens Google Messages and copies your texts. Keep that Chrome window visible until it is done.
+            </p>
+          ) : (
+            <ol className="flex flex-col gap-2">
+              <Numbered n={1}>
+                <span data-testid="gm-pair-instruction">
+                  In Chrome, open Google Messages and sign in with your Google account or scan the QR code with your
+                  phone. Leave <b>Remember this computer</b> on.
+                </span>
+              </Numbered>
+              <Numbered n={2}>
+                Click <b>Open Google Messages and sync</b>. Keep that Chrome window visible until it is done.
+              </Numbered>
+            </ol>
+          )}
           <button type="button" className={primary} onClick={() => void startSync()} disabled={starting}>
-            {starting ? "Starting…" : "Sync now"}
+            {starting ? "Starting…" : "Open Google Messages and sync"}
           </button>
           <p className="text-xs text-gray-600" data-testid="gm-copy-line">
             {syncCopyLine(state?.lookbackMonths)}
