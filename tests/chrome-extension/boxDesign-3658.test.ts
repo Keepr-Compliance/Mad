@@ -127,7 +127,7 @@ describe("security H1: a Sync Keepr did not open the tab for asks first", () => 
     expect(job.bootPlan({ hashJob: "j-1", storedJob: null, pendingJob: null })).toEqual({ jobId: "j-1", ask: false });
     expect(job.bootPlan({ hashJob: null, storedJob: "j-2", pendingJob: null })).toEqual({ jobId: "j-2", ask: false });
     expect(job.bootPlan({ hashJob: null, storedJob: null, pendingJob: "j-3" })).toEqual({ jobId: "j-3", ask: true });
-    expect(job.bootPlan({ hashJob: null, storedJob: null, pendingJob: null })).toEqual({ jobId: null, ask: false });
+    expect(job.bootPlan({ hashJob: null, storedJob: null, pendingJob: null })).toEqual({ jobId: null, ask: false, idle: true }); // no Sync: the idle chip
   });
 
   it("ask: 'Keepr wants to sync your texts' — Start runs it, Not now does not (H1b)", () => {

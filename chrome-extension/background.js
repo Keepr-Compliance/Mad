@@ -56,6 +56,34 @@ async function jobApi(method, path, body) {
   return { ok: response.status >= 200 && response.status < 300, status: response.status, body: parsed };
 }
 
+// ---------------------------------------------------------------------------
+// Idle chip (founder, 2026-10-02): "Last sync: …" — this extension's OWN
+// record of when a Sync last finished (a /job/<id>/finish Keepr answered).
+// Nothing new is asked of Keepr; it never leaves this browser.
+// ---------------------------------------------------------------------------
+const LAST_SYNC_KEY = "keepr-last-sync-at";
+const FINISH_ROUTE = /^\/job\/[^/]+\/finish$/;
+
+async function noteSyncFinished(path, reply) {
+  if (!reply || !reply.ok || !FINISH_ROUTE.test(String(path))) return;
+  try {
+    if (chrome.storage && chrome.storage.local) await chrome.storage.local.set({ [LAST_SYNC_KEY]: Date.now() });
+  } catch (_err) {
+    // Not kept: the chip just shows no time.
+  }
+}
+
+async function lastSyncAt() {
+  try {
+    if (!chrome.storage || !chrome.storage.local) return { ok: true, at: null };
+    const stored = await chrome.storage.local.get(LAST_SYNC_KEY);
+    const at = stored && typeof stored[LAST_SYNC_KEY] === "number" ? stored[LAST_SYNC_KEY] : null;
+    return { ok: true, at };
+  } catch (_err) {
+    return { ok: true, at: null };
+  }
+}
+
 /** POST /focus: Keepr brings itself to the front. Resolves {ok}. */
 async function focusKeepr() {
   try {
@@ -193,7 +221,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   switch (message.type) {
     case "keepr-job-api":
-      jobApi(message.method, message.path, message.body).then(sendResponse, fail);
+      jobApi(message.method, message.path, message.body)
+        .then(async (reply) => {
+          await noteSyncFinished(message.path, reply);
+          return reply;
+        })
+        .then(sendResponse, fail);
+      return true;
+    case "keepr-last-sync":
+      // The idle chip's "Last sync: …" (this extension's own record).
+      lastSyncAt().then(sendResponse, fail);
       return true;
     case "keepr-check-pending":
       jobApi("POST", "/job/pending").then(sendResponse, fail);

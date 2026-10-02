@@ -965,6 +965,14 @@
    */
   var SYNCING_HINT = "Keep this tab open and on screen while Keepr syncs. When it's done, you'll go back to Keepr automatically.";
   var SYNCING_CHIP_HINT = "keep this tab on screen";
+  /**
+   * Founder (2026-10-02, reverses "nothing on the page while idle"): with no
+   * Sync running, the box sits on the page as its collapsed chip. Never a
+   * Sync button — Keepr starts every Sync.
+   */
+  var IDLE_CHIP_READY = "Keepr · Open Keepr to sync";
+  var IDLE_CHIP_DOWN = "Keepr · Start the Keepr app to sync";
+  var IDLE_HOW = "Start a sync from Keepr: Dashboard → Sync Android";
 
   // Keepr brand (android-companion BrandMark): the indigo mark with an amber
   // dot; primary #4F46E5 (hover #4338CA); amber #F5A524 for paused/attention.
@@ -1028,6 +1036,7 @@
 
   /** The box's state, from what the job shows. */
   function overlayState(text, isError, extras) {
+    if (extras && extras.idle) return "idle";
     if (extras && extras.ask) return "ask";
     if (isError) return "error";
     if (extras && extras.details) return "done";
@@ -1039,6 +1048,31 @@
   function chipTitle(text) {
     var short = shortProgress(text);
     return "Keepr · " + (/^\d+ of \d+$/.test(short) ? "syncing " + short : short) + " — " + SYNCING_CHIP_HINT;
+  }
+
+  /**
+   * Idle: is Keepr there to open? From the worker's reply to an existing
+   * route (POST /exclusions/list — ids only): "ready" (answered), "signed_out"
+   * (403), "down" (no answer: the app or its bridge is not running).
+   * @returns {"ready"|"signed_out"|"down"}
+   */
+  function idleReachability(reply) {
+    if (!reply || typeof reply !== "object") return "down";
+    if (reply.ok || reply.status === 501) return "ready";
+    if (reply.status === 403) return "signed_out";
+    return "down";
+  }
+
+  /** "Last sync: 5 min ago" — from this extension's own record of its last finished Sync. */
+  function lastSyncText(atMs, nowMs) {
+    if (typeof atMs !== "number" || !isFinite(atMs) || typeof nowMs !== "number") return null;
+    var min = Math.max(0, Math.floor((nowMs - atMs) / 60000));
+    var ago = min < 1 ? "just now"
+      : min < 60 ? min + " min ago"
+      : min < 24 * 60 ? Math.floor(min / 60) + " h ago"
+      : min < 48 * 60 ? "yesterday"
+      : Math.floor(min / (24 * 60)) + " days ago";
+    return "Last sync: " + ago;
   }
 
   /** "Chat 8 of 21…" → "8 of 21" for the pill; other lines as they are. */
@@ -1077,7 +1111,19 @@
     var theme = io.theme === "dark" || io.theme === "light" ? io.theme : pageTheme(doc);
     var p = PALETTE[theme];
     var state = overlayState(text, isError, extras);
-    var expanded = state !== "syncing" || !!io.expanded;
+    var collapsible = state === "syncing" || state === "idle";
+    var expanded = !collapsible || !!io.expanded;
+    var idle = state === "idle" ? extras.idle : null;
+    var idleReady = !!idle && idle.reachable === true;
+    /** Idle "Open Keepr" (chip or button): POST /focus; no answer → the down chip. */
+    function openKeepr() {
+      if (!io.focus) return;
+      Promise.resolve(io.focus()).then(function (ok) {
+        if (!ok && idle.onUnreachable) idle.onUnreachable();
+      }, function () {
+        if (idle.onUnreachable) idle.onUnreachable();
+      });
+    }
     var attention = state === "paused" || state === "error";
 
     while (box.firstChild) box.removeChild(box.firstChild);
@@ -1146,17 +1192,34 @@
     }
     header.appendChild(badge);
 
-    var title = state === "syncing"
+    var title = state === "idle" ? (idleReady ? IDLE_CHIP_READY : IDLE_CHIP_DOWN)
+      : state === "syncing"
       ? (expanded ? SYNCING_TITLE : chipTitle(text))
       : state === "paused" ? PAUSED_TITLE : state === "ask" ? ASK_TITLE : text;
-    header.appendChild(el("div", "line", {
+    var line = el("div", "line", {
       flex: "1 1 auto", minWidth: "0", fontWeight: "600", color: p.text, whiteSpace: expanded ? "normal" : "nowrap",
-    }, title));
+    }, title);
+    header.appendChild(line);
+    if (idleReady) {
+      // The idle chip itself opens Keepr.
+      line.setAttribute("role", "button");
+      line.setAttribute("tabindex", "0");
+      line.style.cursor = "pointer";
+      line.addEventListener("click", openKeepr);
+      line.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          openKeepr();
+        }
+      });
+    }
 
-    if (state === "syncing") {
+    if (collapsible) {
       var expand = button("expand", expanded ? "▴" : "▾", "icon");
       expand.setAttribute("aria-expanded", expanded ? "true" : "false");
-      expand.setAttribute("aria-label", expanded ? "Hide Sync progress" : "Show Sync progress");
+      expand.setAttribute("aria-label", state === "idle"
+        ? (expanded ? "Hide Keepr details" : "Show Keepr details")
+        : (expanded ? "Hide Sync progress" : "Show Sync progress"));
       expand.addEventListener("click", function () {
         if (io.onExpand) io.onExpand(!expanded);
       });
@@ -1185,6 +1248,21 @@
     if (!expanded) return;
 
     var bodyStyle = { marginTop: "8px", color: p.muted };
+    if (state === "idle") {
+      box.appendChild(el("div", "idle-how", { marginTop: "8px", color: p.text }, IDLE_HOW));
+      var last = lastSyncText(idle.lastSyncAt, idle.nowMs);
+      if (last) box.appendChild(el("div", "last-sync", bodyStyle, last));
+      if (idleReady) {
+        var openIdle = button("open-keepr", "Open Keepr", "primary");
+        openIdle.style.marginTop = "10px";
+        openIdle.addEventListener("click", openKeepr);
+        box.appendChild(openIdle);
+      }
+      if (extras.version) {
+        box.appendChild(el("div", "version", { marginTop: "8px", fontSize: "12px", color: p.muted }, "Keepr extension " + extras.version));
+      }
+      return;
+    }
     if (state === "syncing") {
       box.appendChild(el("div", "progress", bodyStyle, text));
       box.appendChild(el("div", "hint", { marginTop: "6px", color: p.text }, SYNCING_HINT));
@@ -1437,13 +1515,14 @@
    * job only found pending on page load (POST /job/pending) runs only after
    * the user clicks Start in the Keepr box.
    * @param {{hashJob: (string|null), storedJob: (string|null), pendingJob: (string|null)}} found
-   * @returns {{jobId: (string|null), ask: boolean}}
+   * @returns {{jobId: (string|null), ask: boolean, idle?: boolean}}
    */
   function bootPlan(found) {
     if (found.hashJob) return { jobId: found.hashJob, ask: false };
     if (found.storedJob) return { jobId: found.storedJob, ask: false };
     if (found.pendingJob) return { jobId: found.pendingJob, ask: true };
-    return { jobId: null, ask: false };
+    // No Sync: the idle chip (founder, 2026-10-02).
+    return { jobId: null, ask: false, idle: true };
   }
 
   /** The drag handle inside the box (renderOverlay's badge). */
@@ -1457,6 +1536,11 @@
     overlayState: overlayState,
     PALETTE: PALETTE,
     ASK_TITLE: ASK_TITLE,
+    IDLE_CHIP_READY: IDLE_CHIP_READY,
+    IDLE_CHIP_DOWN: IDLE_CHIP_DOWN,
+    IDLE_HOW: IDLE_HOW,
+    idleReachability: idleReachability,
+    lastSyncText: lastSyncText,
     DRAG_HANDLE: DRAG_HANDLE,
     claimPage: claimPage,
     ownsPage: ownsPage,
@@ -1542,6 +1626,7 @@
   var POSITION_KEY = "keepr-overlay-pos";
   // The pill's ▾/▴ (kept across progress lines); the last thing shown, to redraw it.
   var syncExpanded = false;
+  var idleExpanded = false;
   var lastShown = null;
   function showOverlay(text, isError, extras) {
     if (!document.body) return;
@@ -1575,11 +1660,12 @@
     }
     lastShown = { text: text, isError: isError, extras: extras };
     renderOverlay(box, text, isError, extras, {
-      copy: copyToClipboard, focus: focusKeepr, cancel: cancelJob, close: closeOverlay,
+      copy: copyToClipboard, focus: focusKeepr, cancel: cancelJob, close: dismiss,
       move: function () { if (mover) mover.moveToNextCorner(); },
-      expanded: syncExpanded,
+      expanded: extras && extras.idle ? idleExpanded : syncExpanded,
       onExpand: function (open) {
-        syncExpanded = open;
+        if (extras && extras.idle) idleExpanded = open;
+        else syncExpanded = open;
         if (lastShown) showOverlay(lastShown.text, lastShown.isError, lastShown.extras);
       },
     });
@@ -1594,6 +1680,44 @@
     mover = null;
     lastShown = null;
   }
+
+  // Idle (founder, 2026-10-02): with no Sync running and nothing asked, the
+  // box is the collapsed chip. Reachability comes from an existing route
+  // (POST /exclusions/list, ids only); the last sync time is this extension's
+  // own record (the worker notes when a /finish succeeded). No new data.
+  var asking = false;
+  var IDLE_REFRESH_MS = 30000;
+  function idleOnScreen() {
+    return !lastShown || !!(lastShown.extras && lastShown.extras.idle);
+  }
+  function showIdle(reachable, lastSyncAt) {
+    if (running || asking || !idleOnScreen()) return;
+    showOverlay("", false, {
+      idle: {
+        reachable: reachable, lastSyncAt: lastSyncAt, nowMs: Date.now(),
+        onUnreachable: function () { showIdle(false, lastSyncAt); },
+      },
+      version: manifestVersion(),
+    });
+  }
+  async function refreshIdle() {
+    if (running || asking || !idleOnScreen()) return;
+    if (!document.body) {
+      await new Promise(function (r) { document.addEventListener("DOMContentLoaded", r, { once: true }); });
+    }
+    var reach = idleReachability(await toWorker({ type: "keepr-exclusions-list" }));
+    var last = await toWorker({ type: "keepr-last-sync" });
+    showIdle(reach === "ready", last && typeof last.at === "number" ? last.at : null);
+  }
+  /** × on a finished Sync, or "Not now": the box goes back to the idle chip. */
+  function dismiss() {
+    asking = false;
+    closeOverlay();
+    void refreshIdle();
+  }
+  setInterval(function () {
+    if (ownsPage(document, INSTANCE)) void refreshIdle();
+  }, IDLE_REFRESH_MS);
 
   /** The page's Cancel: POST /job/<this job>/cancel through the worker. */
   var currentJobId = null;
@@ -1866,17 +1990,21 @@
       pendingJob = pending && pending.ok && pending.body && pending.body.jobId ? pending.body.jobId : null;
     }
     var plan = bootPlan({ hashJob: hashJob, storedJob: storedJob, pendingJob: pendingJob });
-    if (!plan.jobId) return;
+    if (plan.idle) {
+      void refreshIdle();
+      return;
+    }
     if (!plan.ask) {
       await routeAndStart(plan.jobId);
       return;
     }
     // Security H1: a Sync Keepr did not open this tab for runs only on Start.
     var askedJob = plan.jobId;
+    asking = true;
     showOverlay(ASK_TITLE, false, {
       ask: {
-        start: function () { void routeAndStart(askedJob); },
-        later: function () { closeOverlay(); },
+        start: function () { asking = false; void routeAndStart(askedJob); },
+        later: function () { dismiss(); },
       },
     });
   })();

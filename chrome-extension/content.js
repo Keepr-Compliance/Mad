@@ -1,9 +1,10 @@
 /**
  * Keepr — content script (BACKLOG-3619; BACKLOG-3658).
  *
- * Founder decisions: a Sync is always started from Keepr, and the extension
- * shows NOTHING on the page when idle — no Sync button, and no manual "Send
- * to Keepr" button any more. During a Sync the one Keepr box is job.js's.
+ * Founder decisions: a Sync is always started from Keepr — never a Sync
+ * button on the page, and no manual "Send to Keepr" button any more. The one
+ * Keepr box (the idle chip, and the Sync itself) is job.js's; this script
+ * adds nothing to the page.
  *
  * What this script still does: a signed-in Messages page tells Keepr it is
  * paired (POST /hello {paired:true}, through the worker, which throttles it;

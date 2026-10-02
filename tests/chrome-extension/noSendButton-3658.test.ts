@@ -1,6 +1,6 @@
 /**
- * BACKLOG-3658 (founder): the extension shows NOTHING on the page when idle —
- * the legacy manual "Send to Keepr" button is gone, and so is its plumbing
+ * BACKLOG-3658 (founder): content.js adds nothing to the page (the idle chip
+ * is job.js's, see idleChip-3658) — the legacy manual "Send to Keepr" button is gone, and so is its plumbing
  * (the worker's keepr-send-chat → POST /chat). A signed-in page only says it
  * is paired. A Sync job (job.js) is untouched.
  *
@@ -44,7 +44,7 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-describe("content.js: nothing on the page when idle", () => {
+describe("content.js: adds nothing to the page", () => {
   it("adds no element to a signed-in conversation page; says paired once (N1, N4)", () => {
     document.body.innerHTML = "<div id='app'></div>";
     const before = document.body.innerHTML;
