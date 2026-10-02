@@ -130,7 +130,7 @@ export function consentIsCurrent(consentVersion: number | null | undefined): boo
  * the floor stores nothing and is not counted (the commit skips it).
  */
 export function cacheSavedFromCommit(r: CacheCommitResult): RcsCacheSaved {
-  return { chats: r.chats, messages: r.stored + r.alreadyPresent, newMessages: r.stored };
+  return { chats: r.chats, messages: r.stored + r.alreadyPresent, newMessages: r.stored, reactions: r.reactions };
 }
 
 /**

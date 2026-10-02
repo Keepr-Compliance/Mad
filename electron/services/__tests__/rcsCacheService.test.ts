@@ -71,9 +71,9 @@ describe("cacheSavedFromCommit", () => {
     expect(
       cacheSavedFromCommit({
         staged: 328, kept: 212, droppedByDate: 116, droppedByCap: 0, chats: 9, stored: 200, alreadyPresent: 12,
-        imagesStaged: 0, imagesStored: 0,
+        imagesStaged: 0, imagesStored: 0, reactions: 7,
       }),
-    ).toEqual({ chats: 9, messages: 212, newMessages: 200 });
+    ).toEqual({ chats: 9, messages: 212, newMessages: 200, reactions: 7 });
   });
 });
 

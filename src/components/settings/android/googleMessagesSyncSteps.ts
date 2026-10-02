@@ -75,7 +75,8 @@ export function doneSummaryLines(job: RcsJobInfo): string[] | null {
   const s = job.saved;
   const lines = [
     `Scanned ${plural(job.progress.listed, "chat", "chats")} · saved ${plural(s.chats, "chat", "chats")} · ` +
-      `${plural(s.messages, "message", "messages")} (${s.newMessages} new)`,
+      `${plural(s.messages, "message", "messages")} (${s.newMessages} new)` +
+      (typeof s.reactions === "number" ? ` · ${plural(s.reactions, "reaction", "reactions")}` : ""),
   ];
   const noMessages = job.progress.noMessagesYet ?? 0;
   if (noMessages > 0) lines.push(`${plural(noMessages, "chat", "chats")} with no messages yet`);

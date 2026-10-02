@@ -262,7 +262,8 @@ describe("reactions and images follow their message (A6)", () => {
         .toMatchObject({ stored: true });
     }
     const r = await staging.commit(JOB, USER, { floorMs: Date.parse("2026-07-01T00:00:00.000Z"), cap: null, protectedSpans: [] }, writer);
-    expect(r).toMatchObject({ kept: 1, imagesStaged: 1, imagesStored: 1 });
+    // #14: the kept message's reaction is counted in the saved result. Mutation: not summed → red.
+    expect(r).toMatchObject({ kept: 1, imagesStaged: 1, imagesStored: 1, reactions: 1 });
     const reactions = db.prepare("SELECT associated_message_guid AS g FROM messages WHERE associated_message_type IS NOT NULL").all() as Array<{ g: string }>;
     expect(reactions.map((x) => x.g)).toEqual([rcsExternalId(hashA, "new")]);
     const att = db.prepare("SELECT filename, storage_path AS p FROM attachments").all() as Array<{ filename: string; p: string }>;

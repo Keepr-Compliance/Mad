@@ -190,7 +190,8 @@ function cacheEnv(opts: {
       title: open,
       messages: [{
         msgId: "m1", direction: "inbound", sender: "x", text: "hi", sentAt: new Date(NOW - DAY).toISOString(),
-        transport: "rcs", imageSrcs: ["blob:x"], files: [], reactions: [],
+        transport: "rcs", imageSrcs: ["blob:x"], files: [],
+        reactions: [{ emoji: "x", reactor: "me", word: "" }, { emoji: "y", reactor: "them", word: "" }],
       }],
       skipped: { noDate: 0, noText: 0 },
     }),
@@ -230,7 +231,7 @@ describe("runJob: a cache Sync", () => {
     const t = cacheEnv({
       rows: ROWS,
       numbers: { [id(0)]: ["+15555550101"], [id(2)]: ["+15555550102"] },
-      finishReply: { ok: true, saved: { chats: 1, messages: 1, newMessages: 1 } },
+      finishReply: { ok: true, saved: { chats: 1, messages: 1, newMessages: 1, reactions: 2 } },
     });
     await job.runJob(JOB, t.env);
     const finishAt = t.calls.findIndex(([, p]) => p.endsWith("/finish"));
@@ -238,9 +239,12 @@ describe("runJob: a cache Sync", () => {
     expect(t.shown.some(([text]) => text === "Saving in Keepr…")).toBe(true);
     const [text, , extras] = t.shown[t.shown.length - 1] as [string, boolean, { details: string; copy: string }];
     expect(text).toBe(job.DONE_LINE);
-    expect(extras.details.split("\n")[0]).toBe("Scanned 4 chats · saved 1 chat · 1 message (1 new)");
+    expect(extras.details.split("\n")[0]).toBe("Scanned 4 chats · saved 1 chat · 1 message (1 new) · 2 reactions");
     expect(extras.details).not.toMatch(/matched|checked/);
-    expect(extras.copy).toContain("Checked 3 · matched 2 · sent 2 chats / 2 messages");
+    // #14: per-chat reaction counts in the step log, the sum in Copy details.
+    // Mutation: reactions not counted → red.
+    expect(extras.copy).toContain("Checked 3 · matched 2 · sent 2 chats / 2 messages / 4 reactions");
+    expect(extras.copy).toMatch(/imported 1 messages, 2 reactions \(history stop/);
   });
 
   it("done details when Keepr's save failed, or had not answered", async () => {

@@ -158,7 +158,8 @@
     if (s.saved === null) return scanned + " · Keepr could not save this Sync — nothing was imported";
     if (!s.saved || typeof s.saved !== "object") return scanned + " · Keepr is still saving — see Keepr for the result";
     return scanned + " · saved " + plural(s.saved.chats, "chat", "chats") + " · " +
-      plural(s.saved.messages, "message", "messages") + " (" + s.saved.newMessages + " new)";
+      plural(s.saved.messages, "message", "messages") + " (" + s.saved.newMessages + " new)" +
+      (typeof s.saved.reactions === "number" ? " · " + plural(s.saved.reactions, "reaction", "reactions") : "");
   }
 
   /** On-screen Details: real names are fine on the user's own page. */
@@ -175,7 +176,7 @@
     // in the Copy text only, not on screen.
     var scanCounts = s.isCache
       ? ["Checked " + s.checked + " · matched " + s.matched + " · sent " + s.chats + " chats / " + s.messages + " messages" +
-        (s.images > 0 ? " / " + s.images + " images" : "")]
+        " / " + (s.reactions || 0) + " reactions" + (s.images > 0 ? " / " + s.images + " images" : "")]
       : [];
     return ["Keepr Sync diagnostics"]
       .concat(summaryLines(s, function (n) { return "#" + (tags[n] || "??????"); }))
@@ -369,7 +370,7 @@
       return reply;
     }
     var progress = { listed: 0, candidates: 0, checked: 0, skipped: 0, notChecked: 0 };
-    var totals = { chats: 0, messages: 0, images: 0, removedByUser: 0, imagesNotKept: 0, notText: 0, noMessagesYet: 0, notSynced: 0 };
+    var totals = { chats: 0, messages: 0, images: 0, reactions: 0, removedByUser: 0, imagesNotKept: 0, notText: 0, noMessagesYet: 0, notSynced: 0 };
     var contactsWithoutPhone = 0;
 
     // BACKLOG-3658: progress lines carry the page's Cancel (this job only).
@@ -414,6 +415,7 @@
         chats: totals.chats,
         messages: totals.messages,
         images: totals.images,
+        reactions: totals.reactions,
         notChecked: progress.notChecked,
         contactsWithoutPhone: contactsWithoutPhone,
         removedByUser: totals.removedByUser,
@@ -669,7 +671,13 @@
         var removed = sent.body && typeof sent.body.removedByUser === "number" ? sent.body.removedByUser : 0;
         totals.removedByUser += removed;
         if (removed > 0) log("  removed by you, not re-added: " + removed);
-        log("  imported " + messages.length + " messages (history stop: " + hist.stopReason +
+        // BACKLOG-3658 #14: the reactions (tapbacks) read with this chat — a count only.
+        var chatReactions = 0;
+        for (var rx = 0; rx < messages.length; rx++) {
+          chatReactions += Array.isArray(messages[rx].reactions) ? messages[rx].reactions.length : 0;
+        }
+        totals.reactions += chatReactions;
+        log("  imported " + messages.length + " messages, " + chatReactions + " reactions (history stop: " + hist.stopReason +
           (hist.confirmedBy ? ", confirmed by " + hist.confirmedBy : "") +
           (hist.nudges ? ", nudges " + hist.nudges : "") + ")");
         // Imported, but only back to the cap: older messages are missing.

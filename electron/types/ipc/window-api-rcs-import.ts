@@ -68,7 +68,7 @@ export interface RcsJobInfo {
    * A finished cache Sync: what Keepr SAVED (null: the save failed; absent:
    * still saving). The done screens show these, not the staged counts.
    */
-  saved?: { chats: number; messages: number; newMessages: number } | null;
+  saved?: { chats: number; messages: number; newMessages: number; reactions?: number } | null;
 }
 
 /** BACKLOG-3658: the extension and cache state, for the setup wizard. */

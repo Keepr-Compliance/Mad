@@ -164,6 +164,8 @@ export interface CacheCommitResult {
   alreadyPresent: number;
   imagesStaged: number;
   imagesStored: number;
+  /** BACKLOG-3658 #14: reactions stored with the kept messages (new rows). */
+  reactions: number;
 }
 
 const keyOf = (chatHash: string, msgId: string): string => `${chatHash}\u0000${msgId}`;
@@ -363,6 +365,7 @@ export class RcsCacheStaging {
         let chats = 0;
         let stored = 0;
         let alreadyPresent = 0;
+        let reactions = 0;
         for (const row of this.db.chats(jobId)) {
           if (row.userId !== userId) continue; // never another user's staging
           const messages: RcsIncomingMessage[] = [];
@@ -375,6 +378,7 @@ export class RcsCacheStaging {
           chats += 1;
           stored += r.stored;
           alreadyPresent += r.alreadyPresent;
+          reactions += r.reactionsStored ?? 0;
         }
 
         let imagesStored = 0;
@@ -414,6 +418,7 @@ export class RcsCacheStaging {
           alreadyPresent,
           imagesStaged: images.length,
           imagesStored,
+          reactions,
         };
         insideTransaction?.(out);
         return out;
