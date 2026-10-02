@@ -144,33 +144,67 @@ describe("GoogleMessagesSettings", () => {
     await waitFor(() => expect(mockAutoDelete).toHaveBeenCalledWith(true));
   });
 
-  it("chats not synced: listed with the stored title, or a plain fallback; Sync again switches one back on (E1, E2)", async () => {
+  // Founder (2026-10-02): one line + Manage, never an inline list. Mutation:
+  // the list back inline, or the line shown at 0 → red.
+  it("chats not synced: one line 'N chats not synced · Manage'; no inline list; 0 → no line (M1)", async () => {
     mockExcluded = [
       { id: "x-1", title: "Test Contact A", createdAt: "2026-10-01T10:00:00.000Z" },
       { id: "x-2", title: null, createdAt: "2026-10-01T09:00:00.000Z" },
     ];
-    render(<GoogleMessagesSettings userId="user-1" />);
+    const view = render(<GoogleMessagesSettings userId="user-1" />);
     const box = await screen.findByTestId("gm-not-synced");
-    await waitFor(() => expect(box).toHaveTextContent("2 chats not synced"));
-    expect(box).toHaveTextContent("Test Contact A");
-    expect(box).toHaveTextContent("A chat you switched off in Google Messages");
+    await waitFor(() => expect(screen.getByTestId("gm-not-synced-line")).toHaveTextContent("2 chats not synced · Manage"));
+    expect(box).not.toHaveTextContent("Test Contact A");
+    expect(screen.queryByRole("button", { name: "Sync again" })).toBeNull();
     expect(box).toHaveTextContent("texts already in Keepr stay");
-    fireEvent.click(screen.getAllByRole("button", { name: "Sync again" })[0]);
-    await waitFor(() => expect(mockRemoveExclusion).toHaveBeenCalledWith({ id: "x-1" }));
-    await waitFor(() => expect(box).toHaveTextContent("1 chat not synced"));
+    view.unmount();
+    mockExcluded = [];
+    render(<GoogleMessagesSettings userId="user-1" />);
+    await screen.findByTestId("gm-not-synced");
+    expect(screen.queryByTestId("gm-not-synced-line")).toBeNull();
   });
 
-  it("Sync all again asks first, then clears every exclusion (E3)", async () => {
+  // Mutation: Manage not opening the modal / Sync again not switching the chat back on → red.
+  it("Manage opens the modal: titles or the fallback, search, Sync again (M2, E1, E2)", async () => {
+    mockExcluded = [
+      { id: "x-1", title: "Test Contact A", createdAt: "2026-10-01T10:00:00.000Z" },
+      { id: "x-2", title: null, createdAt: "2026-10-01T09:00:00.000Z" },
+      { id: "x-3", title: "+1 (555) 555-0123", createdAt: "2026-10-01T08:00:00.000Z" },
+    ];
+    render(<GoogleMessagesSettings userId="user-1" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Manage" }));
+    const list = await screen.findByTestId("gm-not-synced-list");
+    expect(list).toHaveTextContent("Test Contact A");
+    expect(list).toHaveTextContent("A chat you switched off in Google Messages");
+    const search = screen.getByRole("searchbox", { name: "Search chats not synced" });
+    expect(search).toHaveFocus();
+    fireEvent.change(search, { target: { value: "0123" } });
+    expect(list).toHaveTextContent("+1 (555) 555-0123");
+    expect(list).not.toHaveTextContent("Test Contact A");
+    fireEvent.change(search, { target: { value: "contact" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sync again" }));
+    await waitFor(() => expect(mockRemoveExclusion).toHaveBeenCalledWith({ id: "x-1" }));
+    await waitFor(() => expect(screen.getByTestId("gm-not-synced-line")).toHaveTextContent("2 chats not synced"));
+  });
+
+  it("Sync all again (in the modal footer) asks first, then clears every exclusion; Escape closes (E3, M3)", async () => {
     mockExcluded = [
       { id: "x-1", title: null, createdAt: "2026-10-01T10:00:00.000Z" },
       { id: "x-2", title: null, createdAt: "2026-10-01T09:00:00.000Z" },
     ];
-    render(<GoogleMessagesSettings userId="user-1" />);
+    const view = render(<GoogleMessagesSettings userId="user-1" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Manage" }));
     fireEvent.click(await screen.findByRole("button", { name: "Sync all again" }));
     expect(mockRemoveExclusion).not.toHaveBeenCalled();
     const confirm = screen.getAllByRole("button", { name: "Sync all again" });
     fireEvent.click(confirm[confirm.length - 1]);
     await waitFor(() => expect(mockRemoveExclusion).toHaveBeenCalledWith({ all: true }));
-    await waitFor(() => expect(screen.getByTestId("gm-not-synced")).toHaveTextContent("Every chat is synced"));
+    await waitFor(() => expect(screen.queryByTestId("gm-not-synced-line")).toBeNull());
+    view.unmount();
+    mockExcluded = [{ id: "x-1", title: null, createdAt: "2026-10-01T10:00:00.000Z" }];
+    render(<GoogleMessagesSettings userId="user-1" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Manage" }));
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(screen.queryByTestId("gm-not-synced-modal")).toBeNull();
   });
 });

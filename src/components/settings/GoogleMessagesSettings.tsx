@@ -16,7 +16,8 @@
  * - Force re-import: Android's SHARED reset (BACKLOG-3657) — every text
  *   imported from Google Messages AND from the Android Companion (one
  *   confirmation naming both, AndroidForceReimportWarning).
- * - Chats not synced (BACKLOG-3658 P3c): the chats switched off with the eye
+ * - Chats not synced (BACKLOG-3658 P3c): one line "N chats not synced · Manage";
+ *   Manage opens NotSyncedChatsModal: the chats switched off with the eye
  *   on their row in Google Messages, each with "Sync again", and "Sync all
  *   again" (after a confirmation). The keyboard alternative to the page's
  *   eye. Titles shown here stay in Keepr (never sent to the page).
@@ -27,6 +28,7 @@ import { rcsImportService } from "../../services/rcsImportService";
 import { settingsService } from "../../services";
 import { LookbackMonthsSelect, parseLookbackOption } from "./LookbackMonthsSelect";
 import { AndroidForceReimportWarning, androidClearedText } from "./AndroidForceReimportWarning";
+import { NotSyncedChatsModal } from "./android/NotSyncedChatsModal";
 import { readMessageImportPreferences, resolveStoredLookbackMonths } from "./messageImportPreferences";
 
 import { GM_LOOKBACK_TARGET } from "./android/googleMessagesSyncSteps";
@@ -47,7 +49,7 @@ export function GoogleMessagesSettings({ userId }: { userId: string }) {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [excluded, setExcluded] = useState<Array<{ id: string; title: string | null }>>([]);
-  const [confirmAll, setConfirmAll] = useState(false);
+  const [manageOpen, setManageOpen] = useState(false);
 
   const refreshExcluded = useCallback(async () => {
     const r = await rcsImportService.listExclusions();
@@ -110,7 +112,6 @@ export function GoogleMessagesSettings({ userId }: { userId: string }) {
   }, [refreshExcluded]);
 
   const syncAllAgain = useCallback(async () => {
-    setConfirmAll(false);
     const r = await rcsImportService.removeExclusion({ all: true });
     if (!r.success) setResult({ ok: false, text: r.error ?? "Keepr could not save that." });
     await refreshExcluded();
@@ -175,51 +176,34 @@ export function GoogleMessagesSettings({ userId }: { userId: string }) {
         </p>
       </div>
 
+      {/* Founder (2026-10-02): one line + Manage (a modal), never a list
+          that fills the page. 0 → no line. */}
       <div className="p-4 bg-white rounded-lg border border-gray-200" data-testid="gm-not-synced">
-        <div className="text-sm font-medium text-gray-900">
-          {excluded.length === 0
-            ? "Every chat is synced"
-            : `${excluded.length} chat${excluded.length === 1 ? "" : "s"} not synced`}
-        </div>
+        {excluded.length > 0 && (
+          <div className="text-sm font-medium text-gray-900" data-testid="gm-not-synced-line">
+            {excluded.length} chat{excluded.length === 1 ? "" : "s"} not synced ·{" "}
+            <button
+              type="button"
+              className="text-indigo-700 hover:text-indigo-900 font-medium"
+              onClick={() => setManageOpen(true)}
+            >
+              Manage
+            </button>
+          </div>
+        )}
         <p className="text-xs text-gray-600 mt-1">
           Switch a chat off with the eye on its row in Google Messages. New messages from it won&rsquo;t be synced;
           texts already in Keepr stay.
         </p>
-        {excluded.length > 0 && (
-          <ul className="mt-2 divide-y divide-gray-100">
-            {excluded.map((c) => (
-              <li key={c.id} className="flex items-center justify-between gap-3 py-2 text-sm text-gray-800">
-                <span>{c.title ?? "A chat you switched off in Google Messages"}</span>
-                <button
-                  type="button"
-                  className="text-indigo-700 hover:text-indigo-900 text-xs font-medium"
-                  onClick={() => void syncAgain(c.id)}
-                >
-                  Sync again
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-        {excluded.length > 1 && !confirmAll && (
-          <button type="button" className="mt-2 text-xs font-medium text-indigo-700 hover:text-indigo-900" onClick={() => setConfirmAll(true)}>
-            Sync all again
-          </button>
-        )}
-        {confirmAll && (
-          <div className="mt-2 p-2 rounded border border-amber-300 bg-amber-50 text-xs text-amber-800">
-            New messages from all {excluded.length} chats will be synced again from the next Sync.
-            <div className="flex gap-2 mt-2">
-              <button type="button" className="px-2 py-1 rounded bg-amber-600 text-white font-medium" onClick={() => void syncAllAgain()}>
-                Sync all again
-              </button>
-              <button type="button" className="px-2 py-1 rounded border border-gray-300 bg-white text-gray-700" onClick={() => setConfirmAll(false)}>
-                Cancel
-              </button>
-            </div>
-          </div>
-        )}
       </div>
+      {manageOpen && excluded.length > 0 && (
+        <NotSyncedChatsModal
+          chats={excluded}
+          onSyncAgain={syncAgain}
+          onSyncAllAgain={syncAllAgain}
+          onClose={() => setManageOpen(false)}
+        />
+      )}
 
       <label className="flex items-start gap-3 p-4 bg-white rounded-lg border border-gray-200 cursor-pointer">
         <input
