@@ -278,6 +278,8 @@ describe("cacheWindow", () => {
     expect(cacheRunReachedFloor(false, done)).toBe(false); // incremental
     expect(cacheRunReachedFloor(true, { ...done, progress: { notChecked: 3 } })).toBe(false); // over the 300 cap
     expect(cacheRunReachedFloor(true, { ...done, notReached: [{ reason: "history_truncated" }] })).toBe(false);
+    // #10: a chat whose start was not confirmed (unconfirmed history stop).
+    expect(cacheRunReachedFloor(true, { ...done, notReached: [{ reason: "history_not_settled" }] })).toBe(false);
     expect(cacheRunReachedFloor(true, { ...done, notReachedMore: 1 })).toBe(false);
     expect(cacheRunReachedFloor(true, { ...done, state: "cancelled" })).toBe(false);
   });

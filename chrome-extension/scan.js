@@ -680,32 +680,89 @@
   }
 
   /**
+   * BACKLOG-3658 #10: a chat's whole history gets at most this long (scrolls,
+   * waits and nudges together). Past it the load stops UNCONFIRMED. The
+   * founder may change it.
+   */
+  var RCS_HISTORY_BUDGET_MS = 60000;
+
+  /** Google renders at most this many messages when a chat opens (live, 2026-09-29). */
+  var HISTORY_FIRST_PAGE = 25;
+
+  /**
+   * Waits after a scroll brought nothing: each nudge (a small scroll down and
+   * back to the top, so the page's loader fires again) gets the next, longer
+   * wait. Real-phone run 2026-10-01: dozens of chats stopped at ~41-50 with
+   * "no_more" after ONE 3 s wait — the next page had not arrived yet.
+   */
+  var HISTORY_NUDGE_WAITS_MS = [3000, 6000, 10000];
+
+  /**
+   * TODO(BACKLOG-3658 #10, SR to trace live): the element Google Messages
+   * shows at the TRUE start of a conversation (above the oldest message).
+   * UNTRACED — empty until traced, so a stop is "confirmed" only by
+   * HISTORY_FIRST_PAGE (the whole chat fit on the first page). Add the traced
+   * selector(s) here; loadHistory uses them as they are.
+   */
+  var HISTORY_START_MARKER_SELECTORS = [];
+
+  /**
+   * A "loading older messages" indicator in the chat pane: while one shows,
+   * the load keeps waiting (within the budget). UNTRACED: generic progress
+   * elements, looked for inside the message scroller (else the document).
+   */
+  var HISTORY_LOADING_SELECTORS = ['[role="progressbar"]', "mat-progress-spinner", "mat-spinner", "mws-loading-spinner"];
+
+  function anyMatch(scope, selectors) {
+    for (var i = 0; i < selectors.length; i++) {
+      if (scope.querySelector(selectors[i])) return true;
+    }
+    return false;
+  }
+
+  /**
    * Load older messages of the open chat (live, 2026-09-29: only the latest
    * 25 render on open). Repeats: scroll up, then wait for a message with a
    * msg-id not seen before. Stops at the first of:
    *   - "date_floor": the oldest loaded message is EARLIER than `floorMs`
    *     (checked before every scroll, so no scroll when already there);
    *   - "cap": `cap` distinct messages seen (default 2000);
-   *   - "no_more": a scroll brought no new message within `noNewTimeoutMs`
-   *     (default 3000), measured in `sleep` steps.
+   *   - "no_more": CONFIRMED at the start of the chat — a start marker
+   *     (HISTORY_START_MARKER_SELECTORS) is on screen, or the whole chat fit
+   *     on the first page (fewer than HISTORY_FIRST_PAGE on open);
+   *   - "not_settled": UNCONFIRMED — nothing new after every nudge
+   *     (HISTORY_NUDGE_WAITS_MS), or the budget (RCS_HISTORY_BUDGET_MS) ran
+   *     out. The caller reports it (history_not_settled); never silent.
+   * While a loading indicator shows, waiting goes on (within the budget).
    * "New" is counted over every msg-id seen so far, not the number on screen,
    * so a list that drops its newest rows while scrolling still counts loads.
+   * Time is measured in `sleep` steps.
    *
    * @param {Document} doc
-   * @param {{scrollUp: function(): (void|Promise<void>), sleep: function(number): Promise<void>,
+   * @param {{scrollUp: function(): (void|Promise<void>), nudge?: function(): (void|Promise<void>),
+   *          sleep: function(number): Promise<void>,
    *          oldestMs: function(): (number|null), floorMs?: (number|null), cap?: number,
-   *          noNewTimeoutMs?: number, intervalMs?: number, onProgress?: function(number): void,
+   *          noNewTimeoutMs?: number, budgetMs?: number, nudgeWaitsMs?: number[],
+   *          startMarkerSelectors?: string[], loadingSelectors?: string[],
+   *          intervalMs?: number, onProgress?: function(number): void,
    *          checkpoint?: function(number): Promise<void>}} io
-   * @returns {Promise<{stopReason: string, count: number, scrolls: number}>}
+   * @returns {Promise<{stopReason: string, count: number, scrolls: number, nudges: number, confirmedBy?: string}>}
    */
   async function loadHistory(doc, io) {
     var cap = typeof io.cap === "number" ? io.cap : 2000;
     var noNewMs = typeof io.noNewTimeoutMs === "number" ? io.noNewTimeoutMs : 3000;
+    var budgetMs = typeof io.budgetMs === "number" ? io.budgetMs : RCS_HISTORY_BUDGET_MS;
+    var nudgeWaits = io.nudgeWaitsMs || HISTORY_NUDGE_WAITS_MS;
+    var startSelectors = io.startMarkerSelectors || HISTORY_START_MARKER_SELECTORS;
+    var loadingSelectors = io.loadingSelectors || HISTORY_LOADING_SELECTORS;
+    var nudge = io.nudge || io.scrollUp;
     var step = io.intervalMs || 250;
     var floorMs = typeof io.floorMs === "number" && isFinite(io.floorMs) ? io.floorMs : null;
     var seen = {};
     var count = 0;
     var scrolls = 0;
+    var nudges = 0;
+    var spent = 0;
 
     function absorb() {
       var wrappers = doc.querySelectorAll(SELECTORS.message);
@@ -720,28 +777,49 @@
       }
       return added;
     }
+    function atStart() {
+      return startSelectors.length > 0 && anyMatch(doc, startSelectors);
+    }
+    function result(stopReason, confirmedBy) {
+      var r = { stopReason: stopReason, count: count, scrolls: scrolls, nudges: nudges };
+      if (confirmedBy) r.confirmedBy = confirmedBy;
+      return r;
+    }
+    /** Wait up to `ms` for a new message; longer while loading shows. Budget-bounded. */
+    async function waitForNew(ms) {
+      var waited = 0;
+      while (waited < ms && spent < budgetMs) {
+        await io.sleep(step);
+        spent += step;
+        if (absorb() > 0) return true;
+        // A loading indicator: this wait does not run down (the budget does).
+        if (!anyMatch(findMessageScroller(doc) || doc, loadingSelectors)) waited += step;
+      }
+      return false;
+    }
 
     absorb();
+    var firstPage = count;
     for (;;) {
       if (io.onProgress) io.onProgress(count);
-      if (count >= cap) return { stopReason: "cap", count: count, scrolls: scrolls };
+      if (count >= cap) return result("cap");
       if (floorMs !== null) {
         var oldest = io.oldestMs();
-        if (typeof oldest === "number" && oldest < floorMs) {
-          return { stopReason: "date_floor", count: count, scrolls: scrolls };
-        }
+        if (typeof oldest === "number" && oldest < floorMs) return result("date_floor");
       }
+      if (atStart()) return result("no_more", "start_marker");
+      if (scrolls === 0 && firstPage < HISTORY_FIRST_PAGE) return result("no_more", "first_page");
+      if (spent >= budgetMs) return result("not_settled");
       await io.scrollUp();
       scrolls += 1;
-      var waited = 0;
-      var added = 0;
-      while (waited < noNewMs) {
-        await io.sleep(step);
-        waited += step;
-        added = absorb();
-        if (added > 0) break;
+      var added = await waitForNew(noNewMs);
+      for (var k = 0; !added && k < nudgeWaits.length && spent < budgetMs; k++) {
+        if (atStart()) return result("no_more", "start_marker");
+        await nudge();
+        nudges += 1;
+        added = await waitForNew(nudgeWaits[k]);
       }
-      if (added === 0) return { stopReason: "no_more", count: count, scrolls: scrolls };
+      if (!added) return atStart() ? result("no_more", "start_marker") : result("not_settled");
       // Awaited after every scroll that loaded something, so a caller can end
       // the load (by throwing) as soon as it learns the job was cancelled.
       if (io.checkpoint) await io.checkpoint(count);
@@ -920,6 +998,10 @@
     openFromList: openFromList,
     findMessageScroller: findMessageScroller,
     loadHistory: loadHistory,
+    RCS_HISTORY_BUDGET_MS: RCS_HISTORY_BUDGET_MS,
+    HISTORY_NUDGE_WAITS_MS: HISTORY_NUDGE_WAITS_MS,
+    HISTORY_START_MARKER_SELECTORS: HISTORY_START_MARKER_SELECTORS,
+    HISTORY_LOADING_SELECTORS: HISTORY_LOADING_SELECTORS,
     messageIdSet: messageIdSet,
     waitForMessageSwap: waitForMessageSwap,
     signInState: signInState,

@@ -681,9 +681,12 @@ interface HistoryModule {
       floorMs?: number | null;
       cap?: number;
       noNewTimeoutMs?: number;
+      budgetMs?: number;
+      nudge?: () => void | Promise<void>;
+      startMarkerSelectors?: string[];
       onProgress?: (n: number) => void;
     },
-  ) => Promise<{ stopReason: string; count: number; scrolls: number }>;
+  ) => Promise<{ stopReason: string; count: number; scrolls: number; nudges: number; confirmedBy?: string }>;
 }
 const hist = scan as unknown as HistoryModule;
 const extractFn = extract.extractConversation as (d: Document, h: string, n: Date) => {
@@ -710,7 +713,7 @@ function historyWrapper(i: number): string {
  * 25 older ones, which appear `loadDelayMs` of clock later (clock advanced by
  * `sleep`). `virtualized`: the pane only ever holds the 25 oldest loaded.
  */
-function historyPane(opts: { total: number; loadDelayMs?: number; virtualized?: boolean }) {
+function historyPane(opts: { total: number; loadDelayMs?: number; virtualized?: boolean; spinner?: boolean; startMarker?: boolean }) {
   const delay = opts.loadDelayMs ?? 400;
   let loaded = Math.min(PAGE, opts.total);
   let clock = 0;
@@ -719,6 +722,9 @@ function historyPane(opts: { total: number; loadDelayMs?: number; virtualized?: 
   const render = (): void => {
     const from = opts.virtualized ? Math.max(0, loaded - PAGE) : 0;
     let html = "";
+    // #10: a loading indicator while a page is pending; a start marker once all is loaded.
+    if (opts.spinner && pendingAt !== null) html += `<div role="progressbar"></div>`;
+    if (opts.startMarker && loaded >= opts.total) html += `<div data-test-chat-start></div>`;
     for (let i = loaded - 1; i >= from; i--) html += historyWrapper(i);
     const pane = document.getElementById("pane");
     if (pane) pane.innerHTML = html;
@@ -737,7 +743,10 @@ function historyPane(opts: { total: number; loadDelayMs?: number; virtualized?: 
     scrollClocks,
     scrollUp: (): void => {
       scrollClocks.push(clock);
-      if (loaded < opts.total && pendingAt === null) pendingAt = clock + delay;
+      if (loaded < opts.total && pendingAt === null) {
+        pendingAt = clock + delay;
+        if (opts.spinner) render();
+      }
     },
     sleep: async (ms: number): Promise<void> => {
       budget();
@@ -778,76 +787,127 @@ describe("findMessageScroller: picked by computed style", () => {
   });
 });
 
-describe("loadHistory: scroll up until the start date, nothing new, or the cap", () => {
+describe("loadHistory: scroll up until the start date, the confirmed start, the cap — or an unconfirmed stop", () => {
   beforeEach(() => {
     document.body.innerHTML = "";
   });
+
+  const base = (p: ReturnType<typeof historyPane>) => ({ scrollUp: p.scrollUp, sleep: p.sleep, oldestMs: p.oldestMs });
 
   it("stops once the oldest loaded message is earlier than the date floor", async () => {
     const p = historyPane({ total: 200 });
     p.render();
     const floorMs = new Date(2026, 8, 20 - 60).getTime(); // midnight of message 60's day
-    const r = await hist.loadHistory(document, { scrollUp: p.scrollUp, sleep: p.sleep, oldestMs: p.oldestMs, floorMs });
-    expect(r).toEqual({ stopReason: "date_floor", count: 75, scrolls: 2 });
+    const r = await hist.loadHistory(document, { ...base(p), floorMs });
+    expect(r).toEqual({ stopReason: "date_floor", count: 75, scrolls: 2, nudges: 0 });
     expect(p.oldestMs()).toBe(historyDate(74).getTime());
   });
 
   it("a message dated exactly at the floor is inside the window: one more scroll is needed", async () => {
     const p = historyPane({ total: 200 });
     p.render();
-    const r = await hist.loadHistory(document, {
-      scrollUp: p.scrollUp, sleep: p.sleep, oldestMs: p.oldestMs, floorMs: historyDate(49).getTime(),
-    });
-    expect(r).toEqual({ stopReason: "date_floor", count: 75, scrolls: 2 });
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: historyDate(49).getTime() });
+    expect(r).toEqual({ stopReason: "date_floor", count: 75, scrolls: 2, nudges: 0 });
   });
 
   it("does not scroll at all when the first 25 already reach past the floor", async () => {
     const p = historyPane({ total: 200 });
     p.render();
-    const r = await hist.loadHistory(document, {
-      scrollUp: p.scrollUp, sleep: p.sleep, oldestMs: p.oldestMs, floorMs: historyDate(10).getTime(),
-    });
-    expect(r).toEqual({ stopReason: "date_floor", count: 25, scrolls: 0 });
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: historyDate(10).getTime() });
+    expect(r).toEqual({ stopReason: "date_floor", count: 25, scrolls: 0, nudges: 0 });
     expect(p.scrollClocks).toEqual([]);
   });
 
-  it("stops when a scroll brings nothing new within 3 s", async () => {
+  // BACKLOG-3658 #10. Mutation: confirm on the first empty wait (the old
+  // rule) → "no_more" after 3 s → red.
+  it("nothing new after a scroll: three nudges with 3 / 6 / 10 s waits, then an UNCONFIRMED stop", async () => {
     const p = historyPane({ total: 60 });
     p.render();
-    const r = await hist.loadHistory(document, { scrollUp: p.scrollUp, sleep: p.sleep, oldestMs: p.oldestMs, floorMs: null });
-    expect(r).toEqual({ stopReason: "no_more", count: 60, scrolls: 3 });
-    // The last scroll waited the full 3 s before giving up.
-    expect(p.clock() - p.scrollClocks[2]).toBe(3000);
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null });
+    expect(r).toEqual({ stopReason: "not_settled", count: 60, scrolls: 3, nudges: 3 });
+    const last = p.scrollClocks.slice(-4); // the 3rd scroll and its 3 nudges
+    // 3 s after the scroll, then 3 / 6 / 10 s after each nudge.
+    expect([last[1] - last[0], last[2] - last[1], last[3] - last[2], p.clock() - last[3]]).toEqual([3000, 3000, 6000, 10000]);
   });
 
-  it("a slow load (2.5 s) still counts; one slower than 3 s ends the load", async () => {
-    const slow = historyPane({ total: 60, loadDelayMs: 2500 });
-    slow.render();
-    expect(await hist.loadHistory(document, { scrollUp: slow.scrollUp, sleep: slow.sleep, oldestMs: slow.oldestMs })).toMatchObject({
-      stopReason: "no_more", count: 60,
-    });
+  // The real-phone case: the next page took longer than 3 s. Mutation: no
+  // nudges → stops at 25 → red.
+  it("a page slower than 3 s (5 s) is still loaded thanks to the nudges", async () => {
+    const p = historyPane({ total: 60, loadDelayMs: 5000 });
+    p.render();
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null });
+    expect(r).toMatchObject({ stopReason: "not_settled", count: 60 });
+  });
+
+  // Mutation: the loading indicator ignored → 22 s of waits < 25 s → red.
+  it("while a loading indicator shows, the wait goes on (a 25 s page still arrives)", async () => {
+    const p = historyPane({ total: 60, loadDelayMs: 25_000, spinner: true });
+    p.render();
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null });
+    expect(r.count).toBe(60);
+  });
+
+  // Mutation: the start marker not checked → "not_settled" → red.
+  it("a start marker on screen CONFIRMS the start: no_more, no nudges", async () => {
+    const p = historyPane({ total: 60, startMarker: true });
+    p.render();
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null, startMarkerSelectors: ["[data-test-chat-start]"] });
+    expect(r).toEqual({ stopReason: "no_more", count: 60, scrolls: 2, nudges: 0, confirmedBy: "start_marker" });
+  });
+
+  it("the start marker list is a named constant, empty until traced live", () => {
+    expect((scan as unknown as { HISTORY_START_MARKER_SELECTORS: string[] }).HISTORY_START_MARKER_SELECTORS).toEqual([]);
+    expect((scan as unknown as { HISTORY_NUDGE_WAITS_MS: number[] }).HISTORY_NUDGE_WAITS_MS).toEqual([3000, 6000, 10000]);
+    expect((scan as unknown as { RCS_HISTORY_BUDGET_MS: number }).RCS_HISTORY_BUDGET_MS).toBe(60_000);
+  });
+
+  // Mutation: drop the first-page rule → nudges and "not_settled" → red.
+  it("a chat that fits on the first page (under 25) is complete: confirmed, no scroll", async () => {
+    const p = historyPane({ total: 20 });
+    p.render();
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null });
+    expect(r).toEqual({ stopReason: "no_more", count: 20, scrolls: 0, nudges: 0, confirmedBy: "first_page" });
+  });
+
+  // Mutation: no budget → the spinner keeps it waiting forever (harness throws) → red.
+  it("the per-chat budget (60 s) ends a load that never settles: unconfirmed", async () => {
+    const p = historyPane({ total: 60, loadDelayMs: 10_000_000, spinner: true });
+    p.render();
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null });
+    expect(r).toMatchObject({ stopReason: "not_settled", count: 25 });
+    expect(p.clock()).toBeLessThanOrEqual(60_000);
+    expect(p.clock()).toBeGreaterThanOrEqual(59_000);
     document.body.innerHTML = "";
-    const tooSlow = historyPane({ total: 60, loadDelayMs: 3500 });
-    tooSlow.render();
-    expect(await hist.loadHistory(document, { scrollUp: tooSlow.scrollUp, sleep: tooSlow.sleep, oldestMs: tooSlow.oldestMs })).toEqual({
-      stopReason: "no_more", count: 25, scrolls: 1,
-    });
+    const big = historyPane({ total: 5000 });
+    big.render();
+    const r2 = await hist.loadHistory(document, { ...base(big), floorMs: null, budgetMs: 5000 });
+    expect(r2.stopReason).toBe("not_settled");
+    expect(r2.count).toBeLessThan(5000);
   });
 
   it("stops at the 2,000-message cap", async () => {
     const p = historyPane({ total: 5000 });
     p.render();
-    const r = await hist.loadHistory(document, { scrollUp: p.scrollUp, sleep: p.sleep, oldestMs: p.oldestMs, floorMs: null });
-    expect(r).toEqual({ stopReason: "cap", count: 2000, scrolls: 79 });
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null });
+    expect(r).toEqual({ stopReason: "cap", count: 2000, scrolls: 79, nudges: 0 });
   });
 
   it("counts new msg-ids, not the number on screen: a list that drops its newest rows still loads", async () => {
     const p = historyPane({ total: 100, virtualized: true });
     p.render();
-    const r = await hist.loadHistory(document, { scrollUp: p.scrollUp, sleep: p.sleep, oldestMs: p.oldestMs, floorMs: null });
-    expect(r).toEqual({ stopReason: "no_more", count: 100, scrolls: 4 });
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null });
+    expect(r).toEqual({ stopReason: "not_settled", count: 100, scrolls: 4, nudges: 3 });
+  });
+
+  it("a nudge function, when given, is used for the retries", async () => {
+    const p = historyPane({ total: 60 });
+    p.render();
+    const nudge = jest.fn(p.scrollUp);
+    await hist.loadHistory(document, { ...base(p), floorMs: null, nudge } as Parameters<typeof hist.loadHistory>[1]);
+    expect(nudge).toHaveBeenCalledTimes(3);
   });
 });
+
 
 describe("job runner: loads history before extracting a matched chat", () => {
   function historyJob(opts: {
@@ -925,11 +985,14 @@ describe("job runner: loads history before extracting a matched chat", () => {
     expect(t.shown).toEqual(expect.arrayContaining(["Loading history… 25 messages", "Loading history… 50 messages", "Loading history… 75 messages"]));
   });
 
-  it("no start date: loads until nothing new comes", async () => {
+  // #10: an unconfirmed stop is imported as far as it loaded AND reported
+  // (history_not_settled). Mutation: not reported → red.
+  it("no start date: loads until nothing new comes; an unconfirmed start is imported and reported", async () => {
     const t = historyJob({ total: 120, startDate: null });
-    const outcome = (await job.runJob(t.JOB, t.env)) as HistoryOutcome;
-    expect(outcome.history).toEqual([{ conversationId: "aaaaaaaaaaaaaaaaaaa", stopReason: "no_more", count: 120 }]);
+    const outcome = (await job.runJob(t.JOB, t.env)) as HistoryOutcome & { notReached?: Array<{ reason: string }> };
+    expect(outcome.history).toEqual([{ conversationId: "aaaaaaaaaaaaaaaaaaa", stopReason: "not_settled", count: 120 }]);
     expect(t.sentIds()).toHaveLength(120);
+    expect(outcome.notReached).toEqual([expect.objectContaining({ reason: "history_not_settled" })]);
   });
 
   it("a cancel during the history load ends the run at the first checkpoint: no more scrolls, no /chat, no /finish", async () => {

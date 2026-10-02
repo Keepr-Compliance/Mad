@@ -72,7 +72,7 @@
     not_opened: "could not be opened",
     no_numbers: "no phone number shown",
     messages_not_loaded: "messages did not load",
-    history_not_settled: "messages kept changing",
+    history_not_settled: "older messages did not finish loading — sync again later",
     no_messages: "no messages found",
     error: "failed",
     images_failed: "images not imported",
@@ -271,7 +271,8 @@
    *                        scroll?() (tests only: replaces the page's list scroller; the browser
    *                        passes none and collectConversations scrolls the list itself),
    *                        readImage(src), extract(doc, href, now), scan, now?, pageTimeoutMs?,
-   *                        messagesTimeoutMs?, messagesStableMs?, historyCap?, historyNoNewMs? }
+   *                        messagesTimeoutMs?, messagesStableMs?, historyCap?, historyNoNewMs?,
+   *                        nudgeMessages?() and historyBudgetMs? (BACKLOG-3658 #10) }
    *
    * Any job call answering 404 or 410 means Keepr cancelled or replaced this
    * job: the run ends at once — no more chats, no /finish, no /error.
@@ -590,6 +591,8 @@
         var loc = env.getLocation();
         var hist = await env.scan.loadHistory(env.doc, {
           scrollUp: env.scrollMessagesUp || function () {},
+          nudge: env.nudgeMessages,
+          budgetMs: env.historyBudgetMs,
           sleep: env.sleep,
           floorMs: floorMs,
           cap: env.historyCap,
@@ -659,9 +662,15 @@
         var removed = sent.body && typeof sent.body.removedByUser === "number" ? sent.body.removedByUser : 0;
         totals.removedByUser += removed;
         if (removed > 0) log("  removed by you, not re-added: " + removed);
-        log("  imported " + messages.length + " messages (history stop: " + hist.stopReason + ")");
+        log("  imported " + messages.length + " messages (history stop: " + hist.stopReason +
+          (hist.confirmedBy ? ", confirmed by " + hist.confirmedBy : "") +
+          (hist.nudges ? ", nudges " + hist.nudges : "") + ")");
         // Imported, but only back to the cap: older messages are missing.
         if (hist.stopReason === "cap") leaveOut(conv, "history_truncated");
+        // BACKLOG-3658 #10: the start of the chat was not confirmed (nothing
+        // new after every nudge, or the budget ran out): imported as far as it
+        // loaded, reported, and the coverage does not reach the floor.
+        if (hist.stopReason === "not_settled") leaveOut(conv, "history_not_settled");
 
         for (var j = 0; j < extracted.messages.length; j++) {
           var msg = extracted.messages[j];
@@ -1486,6 +1495,18 @@
     el.dispatchEvent(new el.ownerDocument.defaultView.Event("scroll"));
   }
 
+  /** BACKLOG-3658 #10: a small scroll down and back to the top, so the page's loader fires again. */
+  async function nudgeMessages() {
+    var el = root.KeeprScan.findMessageScroller(document);
+    if (!el) return;
+    var Ev = el.ownerDocument.defaultView.Event;
+    el.scrollTop = Math.min(200, el.scrollHeight);
+    el.dispatchEvent(new Ev("scroll"));
+    await sleep(150);
+    el.scrollTop = 0;
+    el.dispatchEvent(new Ev("scroll"));
+  }
+
   // BACKLOG-3629: both layouts (list + chat side by side, or list OR chat in a
   // narrow window) go through scan.js, where jest drives them on fixtures.
   var layoutIo = {
@@ -1529,6 +1550,7 @@
       log: sendLog,
       hashName: hashName,
       scrollMessagesUp: scrollMessagesUp,
+      nudgeMessages: nudgeMessages,
       openConversation: openConversation,
       returnToList: returnToList,
       readImage: readImage,
