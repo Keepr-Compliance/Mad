@@ -11,16 +11,34 @@
     "page": "options.html",
     "open_in_tab": true
   },
-  "permissions": ["storage"],
+  "permissions": [
+    "storage"
+  ],
   "host_permissions": [
     "https://messages.google.com/*",
     "http://127.0.0.1:38619/*"
   ],
   "content_scripts": [
     {
-      "matches": ["https://messages.google.com/web/*"],
-      "js": ["extract.js", "scan.js", "job.js", "eyes.js", "content.js"],
+      "matches": [
+        "https://messages.google.com/web/*"
+      ],
+      "js": [
+        "extract.js",
+        "scan.js",
+        "job.js",
+        "eyes.js",
+        "content.js"
+      ],
       "run_at": "document_start"
     }
-  ]
+  ],
+  "commands": {
+    "toggle-eye": {
+      "suggested_key": {
+        "default": "Alt+Shift+E"
+      },
+      "description": "Sync on/off for the selected chat (Keepr's eye)"
+    }
+  }
 }

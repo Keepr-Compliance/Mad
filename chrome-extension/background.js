@@ -267,6 +267,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
+// SR K (2026-10-02): the eye's keyboard command ("toggle-eye", Alt+Shift+E by
+// default, remappable at chrome://extensions/shortcuts) goes to the active
+// Google Messages tab, which switches the focused / selected chat.
+async function routeEyeCommand(command) {
+  if (command !== "toggle-eye") return false;
+  let tabs = [];
+  try {
+    tabs = await chrome.tabs.query({ active: true, currentWindow: true, url: "https://messages.google.com/web/*" });
+  } catch (_err) {
+    tabs = [];
+  }
+  const tab = tabs[0];
+  if (!tab || tab.id === undefined) return false;
+  try {
+    chrome.tabs.sendMessage(tab.id, { type: "keepr-eye-toggle" }, () => void chrome.runtime.lastError);
+  } catch (_err) {
+    return false;
+  }
+  return true;
+}
+if (chrome.commands && chrome.commands.onCommand) {
+  chrome.commands.onCommand.addListener((command) => {
+    void routeEyeCommand(command);
+  });
+}
+
 // BACKLOG-3658 P3b: on first install, show the first-run page (what the
 // extension does; the consent itself is given in Keepr).
 if (chrome.runtime.onInstalled) {

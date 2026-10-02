@@ -19,8 +19,11 @@
  * row or the list (live: a real click opened the FIRST chat — the list's
  * key navigation reacted to focus moving into it), and pointerdown/mousedown
  * are prevented so focus never moves. tabindex=-1 keeps it out of the list's
- * arrow-key navigation (keyboard alternative: Keepr's Settings → Google
- * Messages → chats not synced).
+ * arrow-key navigation. KEYBOARD (SR, 2026-10-02): the extension command
+ * "toggle-eye" (Alt+Shift+E by default, remappable at
+ * chrome://extensions/shortcuts) switches the eye of the focused — else the
+ * selected / open — chat; a polite live region says only "synced" or
+ * "not synced", never a name.
  *
  * The list is virtualized (Angular re-renders rows on scroll): a
  * MutationObserver on the list re-attaches eyes, at most BATCH rows per tick,
@@ -52,6 +55,10 @@
     "focus", "focusin", "keydown", "keyup", "dblclick", "auxclick", "contextmenu",
   ];
   var COPY = "New messages from this chat won't be synced. Texts already in Keepr stay.";
+  /** The default of the "toggle-eye" command (manifest.json); the user may remap it. */
+  var SHORTCUT = "Alt+Shift+E";
+  var SHORTCUT_HINT = "Keyboard: " + SHORTCUT + " (change it at chrome://extensions/shortcuts)";
+  var LIVE_ID = "keepr-eye-live";
   var SVG_NS = "http://www.w3.org/2000/svg";
   var COLORS = {
     light: { on: "#4F46E5", off: "#4B5563", overlay: "rgba(107, 114, 128, 0.28)" },
@@ -127,7 +134,8 @@
     var label = excluded ? LABEL_OFF : LABEL_ON;
     button.setAttribute("aria-label", label);
     button.setAttribute("aria-pressed", excluded ? "true" : "false");
-    button.title = excluded ? "Not synced — click to sync this chat again" : LABEL_ON + ". Click to stop: " + COPY;
+    button.title = (excluded ? "Not synced — click to sync this chat again" : LABEL_ON + ". Click to stop: " + COPY) +
+      " " + SHORTCUT_HINT;
   }
 
   /**
@@ -275,7 +283,63 @@
     };
   }
 
+  /**
+   * The chat the keyboard command acts on: the row holding focus, else the
+   * row Google marks selected, else the row of the chat open in the URL.
+   * → its conversation id, or null.
+   */
+  function eyeTarget(doc, pathname) {
+    var active = doc.activeElement;
+    var row = active && active.closest ? active.closest(ROW) : null;
+    if (!row) {
+      var selected = doc.querySelector(ROW + ' [aria-selected="true"], ' + ROW + '[aria-selected="true"], ' + ROW + ' [aria-current="page"]');
+      row = selected ? (selected.matches(ROW) ? selected : selected.closest(ROW)) : null;
+    }
+    if (!row && pathname) {
+      var m = /^\/web\/conversations\/([^/?#]+)/.exec(pathname);
+      if (m) {
+        var rows = doc.querySelectorAll(ROW);
+        for (var i = 0; i < rows.length; i++) {
+          if (conversationIdOf(rows[i]) === m[1]) {
+            row = rows[i];
+            break;
+          }
+        }
+      }
+    }
+    return row ? conversationIdOf(row) : null;
+  }
+
+  /** The live region's words: the state only, never the chat's name. */
+  function eyeAnnouncement(excluded) {
+    return excluded ? "not synced" : "synced";
+  }
+
+  /** A visually hidden polite live region (created once) says the new state. */
+  function announce(doc, text) {
+    var live = doc.getElementById(LIVE_ID);
+    if (!live) {
+      live = doc.createElement("div");
+      live.id = LIVE_ID;
+      live.setAttribute("role", "status");
+      live.setAttribute("aria-live", "polite");
+      Object.assign(live.style, {
+        position: "fixed", width: "1px", height: "1px", overflow: "hidden", clip: "rect(0 0 0 0)",
+        margin: "-1px", padding: "0", border: "0", pointerEvents: "none",
+      });
+      (doc.body || doc.documentElement).appendChild(live);
+    }
+    live.textContent = "";
+    live.textContent = text;
+    return live;
+  }
+
   var api = {
+    eyeTarget: eyeTarget,
+    eyeAnnouncement: eyeAnnouncement,
+    announce: announce,
+    SHORTCUT: SHORTCUT,
+    SHORTCUT_HINT: SHORTCUT_HINT,
     debounceFrame: debounceFrame,
     createEyes: createEyes,
     conversationIdOf: conversationIdOf,
@@ -327,23 +391,36 @@
   }
 
   var excluded = {};
+  /** Switch a chat off/on: shown at once; put back if Keepr did not save it. */
+  function toggleChat(id, off) {
+    if (off) excluded[id] = true;
+    else delete excluded[id];
+    eyes.refresh();
+    void toWorker({ type: "keepr-exclusions-set", conversationId: id, excluded: off }).then(function (r) {
+      if (r && r.ok) return;
+      if (off) delete excluded[id];
+      else excluded[id] = true;
+      eyes.refresh();
+    });
+  }
   var eyes = createEyes(document, {
     isExcluded: function (id) { return excluded[id] === true; },
     theme: function () {
       return root.KeeprJob && root.KeeprJob.pageTheme ? root.KeeprJob.pageTheme(document) : "light";
     },
-    toggle: function (id, off) {
-      // Shown at once; put back if Keepr did not save it.
-      if (off) excluded[id] = true;
-      else delete excluded[id];
-      eyes.refresh();
-      void toWorker({ type: "keepr-exclusions-set", conversationId: id, excluded: off }).then(function (r) {
-        if (r && r.ok) return;
-        if (off) delete excluded[id];
-        else excluded[id] = true;
-        eyes.refresh();
-      });
-    },
+    toggle: toggleChat,
+  });
+
+  // SR K: the "toggle-eye" command, routed here by the worker.
+  chrome.runtime.onMessage.addListener(function (message, sender) {
+    if (!message || sender.id !== chrome.runtime.id || message.type !== "keepr-eye-toggle") return false;
+    if (!started || !ownsPage()) return false;
+    var id = eyeTarget(document, location.pathname);
+    if (!id) return false;
+    var off = excluded[id] !== true;
+    toggleChat(id, off);
+    announce(document, eyeAnnouncement(off));
+    return false;
   });
 
   var started = false;
