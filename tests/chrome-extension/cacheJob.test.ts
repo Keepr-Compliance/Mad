@@ -73,10 +73,80 @@ describe("parseListTime (day precision)", () => {
     expect(scan.parseListTime(text, NOW)).toBe(expected);
   });
 
-  it.each(["", "soon", "Sep", "13/45/2026x", "3/4/25", "12/12/2025"])("unreadable %p → null", (text) => {
+  it.each(["", "soon", "Sep", "13/45/2026x", "13/14/25", "0/5/25"])("unreadable %p → null", (text) => {
     expect(scan.parseListTime(text, NOW)).toBeNull();
   });
+
+  // LIVE (0.3.18): chats from before this year read "M/D/YY". Both parts 12
+  // or less used to be null, so the list read ran on past the floor.
+  // Mutation: back to null for both-≤12 → red.
+  it.each([
+    ["9/2/25", "mdy", new Date(2025, 8, 2).getTime()],
+    ["9/2/2025", "mdy", new Date(2025, 8, 2).getTime()],
+    ["12/12/2025", "mdy", new Date(2025, 11, 12).getTime()],
+    ["3/4/25", "mdy", new Date(2025, 2, 4).getTime()],
+    ["3/4/25", "dmy", new Date(2025, 3, 3).getTime()],
+    ["2.9.25", "dmy", new Date(2025, 8, 2).getTime()],
+  ])("numeric %s (%s)", (text, order, expected) => {
+    expect(scan.parseListTime(text, NOW, { order })).toBe(expected);
+  });
+
+  it("a part over 12 settles the order and records it for the rest of the read", () => {
+    const order = { order: "mdy" };
+    expect(scan.parseListTime("20/9/25", NOW, order)).toBe(new Date(2025, 8, 20).getTime());
+    expect(order).toEqual({ order: "dmy", proven: true });
+    expect(scan.parseListTime("2/9/25", NOW, order)).toBe(new Date(2025, 8, 2).getTime());
+    expect(scan.parseListTime("9/20/25", NOW, { order: "dmy" })).toBe(new Date(2025, 8, 20).getTime());
+  });
+
+  it("the locale's order is month first or day first", () => {
+    expect(["mdy", "dmy"]).toContain(scan.localeDateOrder());
+  });
 });
+
+describe("the list read never goes past the floor (LIVE 0.3.18)", () => {
+  // A 90-day run: this year's "Mon D" / weekday / time stamps, then last
+  // year's "M/D/YY" — all with both parts 12 or less.
+  const LIVE_LIST: Array<[string, string]> = [
+    ["A", "3:45 PM"], ["B", "Mon"], ["C", "Sep 20"], ["D", "Aug 31"], ["E", "Mar 28"], ["F", "Jan 18"],
+    ["G", "9/2/25"], ["H", "9/1/25"], ["I", "8/12/25"], ["J", "7/4/25"], ["K", "6/6/2025"],
+  ];
+  const names = (out: { conversations: Array<{ name: string }> }) => out.conversations.map((c) => c.name);
+  // The page renders the list a window at a time: one more row per scroll.
+  const read = (opts: Record<string, unknown>) => {
+    let shown = 1;
+    renderList(LIVE_LIST.slice(0, shown));
+    return scan.collectConversations(document, {
+      sleep: async () => {}, now: () => NOW, dateOrder: "mdy", stableRounds: 2,
+      scroll: () => renderList(LIVE_LIST.slice(0, ++shown)),
+      ...opts,
+    });
+  };
+  const FLOOR_400 = NOW - 400 * DAY; // ≈ 8/26/25: inside the M/D/YY stretch
+
+  // Mutation: both-≤12 numeric dates back to null → the read runs to the end → red.
+  it("M/D/YY stamps end the read two past the floor", async () => {
+    const out = await read({ stopAtOlderThanMs: FLOOR_400 });
+    expect(out.stopReason).toBe("since");
+    expect(names(out)).toEqual(["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"]);
+    expect(out.scroll.timesUnread).toBe(0);
+    expect(out.scroll.timesRead).toBe(10);
+  });
+
+  // Mutation: chats switched back on keep the read going past the floor → red.
+  it("a chat switched back on that was never seen does not push the read past the floor", async () => {
+    const out = await read({ stopAtOlderThanMs: NOW - 10 * DAY, mustSee: ["zzzzzzzzzzzzzzzzzzz"], mustSeeFloorMs: FLOOR_400 });
+    expect(out.stopReason).toBe("since");
+    expect(names(out)).not.toContain("K");
+  });
+
+  it("chats switched back on are still looked for, down to the floor", async () => {
+    const out = await read({ stopAtOlderThanMs: NOW - 10 * DAY, mustSee: [id(7)], mustSeeFloorMs: FLOOR_400 });
+    expect(out.stopReason).toBe("since");
+    expect(names(out)).toEqual(["A", "B", "C", "D", "E", "F", "G", "H"]); // already past since: stops as soon as H is seen
+  });
+});
+
 
 describe("collectConversations with a since cutoff (M1)", () => {
   it("stops at the first chat older than since", async () => {

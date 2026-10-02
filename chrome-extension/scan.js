@@ -58,7 +58,7 @@
   }
 
   /** The list items currently in the DOM. */
-  function readConversationList(doc, now) {
+  function readConversationList(doc, now, dateOrder) {
     var items = doc.querySelectorAll(SELECTORS.listItem);
     var out = [];
     for (var i = 0; i < items.length; i++) {
@@ -72,7 +72,7 @@
         name: normalizeSpace(nameEl ? nameEl.textContent : ""),
         href: href,
         // BACKLOG-3658: the list's last-message time (null when unreadable).
-        timeMs: listItemTimeMs(items[i], now ? now() : Date.now()),
+        timeMs: listItemTimeMs(items[i], now ? now() : Date.now(), dateOrder),
       });
     }
     return out;
@@ -92,14 +92,40 @@
   var WEEKDAYS = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
 
   /**
+   * The order of a numeric date ("9/2/25") on this page: "mdy" or "dmy".
+   * Google Messages writes it in the browser's locale; this asks the same
+   * locale (Intl). An order the page itself proves (a part over 12) wins: see
+   * DateOrder in collectConversations.
+   */
+  function localeDateOrder() {
+    try {
+      var parts = new Intl.DateTimeFormat(undefined, { year: "2-digit", month: "numeric", day: "numeric" })
+        .formatToParts(new Date(2001, 10, 22));
+      for (var i = 0; i < parts.length; i++) {
+        if (parts[i].type === "month") return "mdy";
+        if (parts[i].type === "day") return "dmy";
+      }
+    } catch (_e) { /* no Intl: month first (en-US) */ }
+    return "mdy";
+  }
+
+  /**
    * A list time as epoch ms, at day precision (the cache only needs "older
    * than since"). Today's "3:45 PM" → now; "Yesterday"; a weekday → the most
    * recent such day; "Sep 20" (this year, or last year if that is in the
-   * future); "Sep 20, 2025"; "9/20/25" (month first). A numeric date whose
-   * first two parts are both 12 or less ("3/4/25") could be either order: null
-   * (SR). Anything else → null.
+   * future); "Sep 20, 2025"; numeric "9/2/25" / "9/2/2025".
+   *
+   * LIVE (0.3.18): Google shows chats from before this year as "M/D/YY". A
+   * numeric date with both parts 12 or less ("9/2/25") used to be null, so
+   * the list read never saw two older chats in a row and ran on to its cap,
+   * past the floor. Now: a part over 12 settles the order (and is recorded in
+   * `dateOrder`, an object {order} shared across one list read); otherwise the
+   * order recorded, else the locale's. Anything else → null.
+   * @param {string} text
+   * @param {number} nowMs
+   * @param {{order: ("mdy"|"dmy"), proven?: boolean}=} dateOrder
    */
-  function parseListTime(text, nowMs) {
+  function parseListTime(text, nowMs, dateOrder) {
     var t = normalizeSpace(text).toLowerCase();
     if (!t) return null;
     var now = new Date(nowMs);
@@ -118,20 +144,36 @@
       if (!md[3] && d > nowMs) d = new Date(y - 1, MONTHS[md[1]], Number(md[2])).getTime();
       return d;
     }
-    var nd = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/);
+    var nd = t.match(/^(\d{1,2})[/.](\d{1,2})[/.](\d{2}|\d{4})$/);
     if (nd) {
-      if (Number(nd[1]) <= 12 && Number(nd[2]) <= 12) return null;
+      var a = Number(nd[1]);
+      var b = Number(nd[2]);
       var yy = Number(nd[3]);
       if (yy < 100) yy += 2000;
-      return new Date(yy, Number(nd[1]) - 1, Number(nd[2])).getTime();
+      var monthFirst;
+      if (a > 12 && b > 12) return null;
+      if (a > 12 || b > 12) {
+        monthFirst = b > 12;
+        if (dateOrder) {
+          dateOrder.order = monthFirst ? "mdy" : "dmy";
+          dateOrder.proven = true;
+        }
+      } else {
+        monthFirst = ((dateOrder && dateOrder.order) || localeDateOrder()) !== "dmy";
+      }
+      var month = monthFirst ? a : b;
+      var dom = monthFirst ? b : a;
+      if (month < 1 || dom < 1 || dom > 31) return null;
+      var ts = new Date(yy, month - 1, dom).getTime();
+      return isFinite(ts) ? ts : null;
     }
     return null;
   }
 
-  function listItemTimeMs(item, nowMs) {
+  function listItemTimeMs(item, nowMs, dateOrder) {
     for (var i = 0; i < LIST_TIME_SELECTORS.length; i++) {
       var el = item.querySelector(LIST_TIME_SELECTORS[i]);
-      if (el) return parseListTime(el.textContent, nowMs);
+      if (el) return parseListTime(el.textContent, nowMs, dateOrder);
     }
     return null;
   }
@@ -224,13 +266,21 @@
       }
     });
     var mustSeeFloor = typeof opts.mustSeeFloorMs === "number" ? opts.mustSeeFloorMs : null;
+    // The floor is a HARD stop (founder: never past it, for any reason — not
+    // for chats switched back on, not without a since): two chats older than
+    // the floor in a row end the read. Without a floor of its own, since is it.
+    var hardFloor = mustSeeFloor !== null ? mustSeeFloor : stopAt;
+    // One numeric-date order for the whole read: the locale's until the page proves one.
+    var dateOrder = { order: opts.dateOrder === "dmy" || opts.dateOrder === "mdy" ? opts.dateOrder : localeDateOrder() };
+    var timesRead = 0;
+    var timesUnread = 0;
     var olderThanFloorInARow = 0;
     var reachedSince = false;
     // SR: two older chats IN A ROW end the list (a single older one may be a
     // pinned chat at the top); a newer or unreadable one starts over.
     var olderInARow = 0;
     function absorb() {
-      var list = readConversationList(doc, now);
+      var list = readConversationList(doc, now, dateOrder);
       for (var i = 0; i < list.length; i++) {
         if (!byId[list[i].conversationId]) {
           byId[list[i].conversationId] = list[i];
@@ -240,13 +290,15 @@
             mustSee[list[i].conversationId] = false;
             mustSeeLeft -= 1;
           }
+          if (list[i].timeMs === null) timesUnread += 1;
+          else timesRead += 1;
+          if (hardFloor !== null) {
+            olderThanFloorInARow = list[i].timeMs !== null && list[i].timeMs < hardFloor ? olderThanFloorInARow + 1 : 0;
+            if (olderThanFloorInARow >= SINCE_STOP_RUN) reachedSince = true;
+          }
           if (stopAt !== null) {
             olderInARow = list[i].timeMs !== null && list[i].timeMs < stopAt ? olderInARow + 1 : 0;
-            if (mustSeeFloor !== null) {
-              olderThanFloorInARow = list[i].timeMs !== null && list[i].timeMs < mustSeeFloor ? olderThanFloorInARow + 1 : 0;
-            }
-            var pastFloor = mustSeeFloor !== null && olderThanFloorInARow >= SINCE_STOP_RUN;
-            if (olderInARow >= SINCE_STOP_RUN && (mustSeeLeft <= 0 || pastFloor)) reachedSince = true;
+            if (olderInARow >= SINCE_STOP_RUN && mustSeeLeft <= 0) reachedSince = true;
           }
         }
       }
@@ -313,6 +365,10 @@
     stats.endTop = el ? el.scrollTop : null;
     stats.scrollHeightAfter = el ? el.scrollHeight : null;
     stats.atBottom = el ? atBottom(el) : null;
+    // Diagnostics (counts only): how many list times could be read.
+    stats.timesRead = timesRead;
+    stats.timesUnread = timesUnread;
+    stats.dateOrder = dateOrder.order + (dateOrder.proven ? "" : "?");
     return {
       conversations: order.slice(0, maxItems).map(function (id) { return byId[id]; }),
       stopReason: stopReason,
@@ -1419,6 +1475,7 @@
     isShortCode: isShortCode,
     pickCandidates: pickCandidates,
     parseListTime: parseListTime,
+    localeDateOrder: localeDateOrder,
     planChecks: planChecks,
     CHECK_ALL_MAX: CHECK_ALL_MAX,
     OVER_CAP_QUEUE_MAX: OVER_CAP_QUEUE_MAX,
