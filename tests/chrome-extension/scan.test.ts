@@ -717,6 +717,9 @@ describe("chat switch readiness (live measurement 2026-09-29)", () => {
 // ---------------------------------------------------------------------------
 
 interface HistoryModule {
+  HISTORY_BUDGET_EXTEND_MS: number;
+  HISTORY_BUDGET_GROWTH_WINDOW_MS: number;
+  HISTORY_BUDGET_CAP_MS: number;
   findMessageScroller: (doc: Document) => Element | null;
   loadHistory: (
     doc: Document,
@@ -728,6 +731,7 @@ interface HistoryModule {
       cap?: number;
       noNewTimeoutMs?: number;
       budgetMs?: number;
+      budgetCapMs?: number;
       nudge?: () => void | Promise<void>;
       startMarkerSelectors?: string[];
       hasScroller?: () => boolean;
@@ -738,7 +742,8 @@ interface HistoryModule {
       extractBatch?: () => unknown[];
       onProgress?: (n: number) => void;
     },
-  ) => Promise<{ stopReason: string; count: number; scrolls: number; nudges: number; confirmedBy?: string; gapsDetected?: number; messages?: unknown[] }>;
+  ) => Promise<{ stopReason: string; count: number; scrolls: number; nudges: number; confirmedBy?: string; gapsDetected?: number; messages?: unknown[];
+    batches?: number; elapsedMs?: number; budgetExtensions?: number }>;
 }
 const hist = scan as unknown as HistoryModule;
 const extractFn = extract.extractConversation as (d: Document, h: string, n: Date) => {
@@ -869,7 +874,7 @@ describe("loadHistory: scroll up until the start date, the confirmed start, the 
     p.render();
     const floorMs = new Date(2026, 8, 20 - 60).getTime(); // midnight of message 60's day
     const r = await hist.loadHistory(document, { ...base(p), floorMs });
-    expect(r).toEqual({ stopReason: "date_floor", count: 75, scrolls: 2, nudges: 0 });
+    expect(r).toMatchObject({ stopReason: "date_floor", count: 75, scrolls: 2, nudges: 0 });
     expect(p.oldestMs()).toBe(historyDate(74).getTime());
   });
 
@@ -877,14 +882,14 @@ describe("loadHistory: scroll up until the start date, the confirmed start, the 
     const p = historyPane({ total: 200 });
     p.render();
     const r = await hist.loadHistory(document, { ...base(p), floorMs: historyDate(49).getTime() });
-    expect(r).toEqual({ stopReason: "date_floor", count: 75, scrolls: 2, nudges: 0 });
+    expect(r).toMatchObject({ stopReason: "date_floor", count: 75, scrolls: 2, nudges: 0 });
   });
 
   it("does not scroll at all when the first 25 already reach past the floor", async () => {
     const p = historyPane({ total: 200 });
     p.render();
     const r = await hist.loadHistory(document, { ...base(p), floorMs: historyDate(10).getTime() });
-    expect(r).toEqual({ stopReason: "date_floor", count: 25, scrolls: 0, nudges: 0 });
+    expect(r).toMatchObject({ stopReason: "date_floor", count: 25, scrolls: 0, nudges: 0 });
     expect(p.scrollClocks).toEqual([]);
   });
 
@@ -897,7 +902,7 @@ describe("loadHistory: scroll up until the start date, the confirmed start, the 
     const p = historyPane({ total: 60 });
     p.render();
     const r = await hist.loadHistory(document, { ...base(p), floorMs: null });
-    expect(r).toEqual({ stopReason: "no_more", count: 60, scrolls: 3, nudges: 1, confirmedBy: "one_stall" });
+    expect(r).toMatchObject({ stopReason: "no_more", count: 60, scrolls: 3, nudges: 1, confirmedBy: "one_stall" });
     const lastScroll = p.scrollClocks[p.scrollClocks.length - 2]; // the stalled batch request (its nudge re-requests too)
     expect(p.clock() - lastScroll).toBeLessThanOrEqual(10_000);
   });
@@ -973,7 +978,7 @@ describe("loadHistory: scroll up until the start date, the confirmed start, the 
     const p = historyPane({ total: 60, startMarker: true });
     p.render();
     const r = await hist.loadHistory(document, { ...base(p), floorMs: null, startMarkerSelectors: ["[data-test-chat-start]"] });
-    expect(r).toEqual({ stopReason: "no_more", count: 60, scrolls: 2, nudges: 0, confirmedBy: "marker" });
+    expect(r).toMatchObject({ stopReason: "no_more", count: 60, scrolls: 2, nudges: 0, confirmedBy: "marker" });
   });
 
   it("the start marker list is a named constant, empty until traced live", () => {
@@ -987,7 +992,7 @@ describe("loadHistory: scroll up until the start date, the confirmed start, the 
     const p = historyPane({ total: 20 });
     p.render();
     const r = await hist.loadHistory(document, { ...base(p), floorMs: null });
-    expect(r).toEqual({ stopReason: "no_more", count: 20, scrolls: 0, nudges: 0, confirmedBy: "first_page" });
+    expect(r).toMatchObject({ stopReason: "no_more", count: 20, scrolls: 0, nudges: 0, confirmedBy: "first_page" });
     // Only after the set was stable for 1 s.
     expect(p.clock()).toBeGreaterThanOrEqual(1000);
   });
@@ -1018,7 +1023,7 @@ describe("loadHistory: scroll up until the start date, the confirmed start, the 
     const p = historyPane({ total: 30 });
     p.render();
     const r = await hist.loadHistory(document, { ...base(p), floorMs: null, hasScroller: () => false });
-    expect(r).toEqual({ stopReason: "no_more", count: 25, scrolls: 0, nudges: 0, confirmedBy: "no_overflow" });
+    expect(r).toMatchObject({ stopReason: "no_more", count: 25, scrolls: 0, nudges: 0, confirmedBy: "no_overflow" });
     expect(p.scrollClocks).toEqual([]);
     expect(p.clock()).toBeGreaterThanOrEqual(1000);
   });
@@ -1064,16 +1069,48 @@ describe("loadHistory: scroll up until the start date, the confirmed start, the 
     document.body.innerHTML = "";
     const big = historyPane({ total: 5000 });
     big.render();
-    const r2 = await hist.loadHistory(document, { ...base(big), floorMs: null, budgetMs: 5000 });
+    // No room to extend (cap = budget): a growing chat still stops.
+    const r2 = await hist.loadHistory(document, { ...base(big), floorMs: null, budgetMs: 5000, budgetCapMs: 5000 });
     expect(r2.stopReason).toBe("not_settled");
     expect(r2.count).toBeLessThan(5000);
+    expect(r2.budgetExtensions).toBeUndefined();
+  });
+
+  // Real phone (2026-10-02): the biggest chats ran out of budget still
+  // loading. The budget follows progress. Mutations: no extension → red
+  // ("keeps going"); no hard cap → red ("hard cap").
+  it("the budget is extended while batches keep growing: a big chat loads to its start", async () => {
+    const p = historyPane({ total: 1500 });
+    p.render();
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null, budgetMs: 5000 });
+    expect(r.stopReason).toBe("no_more");
+    expect(r.count).toBe(1500);
+    expect(r.budgetExtensions).toBeGreaterThan(0);
+    expect(r.elapsedMs).toBeGreaterThan(5000);
+    expect(r.batches).toBeGreaterThan(0);
+  });
+
+  it("the extension has a hard cap per chat", async () => {
+    const p = historyPane({ total: 5000 });
+    p.render();
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null, budgetMs: 5000, budgetCapMs: 20_000 });
+    expect(r.stopReason).toBe("not_settled");
+    expect(r.count).toBeLessThan(2000);
+    expect(r.elapsedMs).toBeLessThanOrEqual(20_075); // at most one 75 ms poll past it
+    expect(r.elapsedMs).toBeGreaterThanOrEqual(19_000);
+  });
+
+  it("the default extension: +30 s while growth in the last 10 s, up to 5 min", () => {
+    expect(hist.HISTORY_BUDGET_EXTEND_MS).toBe(30_000);
+    expect(hist.HISTORY_BUDGET_GROWTH_WINDOW_MS).toBe(10_000);
+    expect(hist.HISTORY_BUDGET_CAP_MS).toBe(300_000);
   });
 
   it("stops at the 2,000-message cap", async () => {
     const p = historyPane({ total: 5000 });
     p.render();
     const r = await hist.loadHistory(document, { ...base(p), floorMs: null });
-    expect(r).toEqual({ stopReason: "cap", count: 2000, scrolls: 79, nudges: 0 });
+    expect(r).toMatchObject({ stopReason: "cap", count: 2000, scrolls: 79, nudges: 0 });
   });
 
   it("counts new msg-ids, not the number on screen: a list that drops its newest rows still loads", async () => {

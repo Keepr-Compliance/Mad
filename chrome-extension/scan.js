@@ -729,6 +729,16 @@
    * founder may change it.
    */
   var RCS_HISTORY_BUDGET_MS = 60000;
+  /**
+   * The budget follows progress (real phone, 2026-10-02: the biggest, most
+   * active chats ran out at 60 s still loading): when it runs out while
+   * messages arrived in the last HISTORY_BUDGET_GROWTH_WINDOW_MS, it grows by
+   * HISTORY_BUDGET_EXTEND_MS, up to HISTORY_BUDGET_CAP_MS for the chat. A chat
+   * stops on the budget only after a whole window with NO growth.
+   */
+  var HISTORY_BUDGET_EXTEND_MS = 30000;
+  var HISTORY_BUDGET_GROWTH_WINDOW_MS = 10000;
+  var HISTORY_BUDGET_CAP_MS = 300000;
 
   /**
    * History loading v2 (2026-10-02). A batch request polls every
@@ -836,7 +846,8 @@
    *     larger one ("two_stalls");
    *   - "history_gap": a batch that grew does not overlap what was read
    *     before and could not be bridged (gap guard);
-   *   - "not_settled": the budget (RCS_HISTORY_BUDGET_MS) ran out.
+   *   - "not_settled": the budget (RCS_HISTORY_BUDGET_MS, extended while the
+   *     chat keeps growing, up to HISTORY_BUDGET_CAP_MS) ran out.
    * Every poll collects the messages on screen (io.extractBatch, by msg-id,
    * freshest copy wins); `messages` in the result is that union. With
    * io.imagePass, a bounded pass down the chat mounts lazy images first.
@@ -846,7 +857,7 @@
    * @param {{scrollUp: function(): (void|Promise<void>), sleep: function(number): Promise<void>,
    *          nudgeDown?: function(): (void|Promise<void>), nudgeReturnStep?: function(number, number): (void|Promise<void>),
    *          nudge?: function(): (void|Promise<void>), stepDown?: function(number): (boolean|Promise<boolean>),
-   *          oldestMs: function(): (number|null), floorMs?: (number|null), cap?: number, budgetMs?: number,
+   *          oldestMs: function(): (number|null), floorMs?: (number|null), cap?: number, budgetMs?: number, budgetCapMs?: number,
    *          startMarkerSelectors?: string[], loadingSelectors?: string[], hasScroller?: function(): boolean,
    *          extractBatch?: function(): Array<{msgId: string, sentAt: string}>, stepBack?: function(): (void|Promise<void>),
    *          imagePass?: boolean, pollMs?: number, intervalMs?: number, onProgress?: function(number): void,
@@ -856,6 +867,10 @@
   async function loadHistory(doc, io) {
     var cap = typeof io.cap === "number" ? io.cap : 2000;
     var budgetMs = typeof io.budgetMs === "number" ? io.budgetMs : RCS_HISTORY_BUDGET_MS;
+    var budgetCapMs = Math.max(budgetMs, typeof io.budgetCapMs === "number" ? io.budgetCapMs : HISTORY_BUDGET_CAP_MS);
+    var budgetExtensions = 0;
+    var lastGrowthAt = -Infinity;
+    var batches = 0;
     var startSelectors = io.startMarkerSelectors || HISTORY_START_MARKER_SELECTORS;
     var loadingSelectors = io.loadingSelectors || HISTORY_LOADING_SELECTORS;
     var step = io.intervalMs || 250;
@@ -877,7 +892,17 @@
           added += 1;
         }
       }
+      if (added > 0) lastGrowthAt = spent;
       return added;
+    }
+    /** Budget left? Out of it while still growing → extended (up to the cap). */
+    function inBudget() {
+      if (spent < budgetMs) return true;
+      if (budgetMs < budgetCapMs && spent - lastGrowthAt <= HISTORY_BUDGET_GROWTH_WINDOW_MS) {
+        budgetMs = Math.min(budgetCapMs, budgetMs + HISTORY_BUDGET_EXTEND_MS);
+        budgetExtensions += 1;
+      }
+      return spent < budgetMs;
     }
     function atStart() {
       return startSelectors.length > 0 && anyMatch(doc, startSelectors);
@@ -922,7 +947,7 @@
     async function recoverGap(before, after) {
       if (!io.stepBack) return false;
       var prev = after;
-      for (var attempt = 0; attempt < GAP_RECOVERY_ATTEMPTS && spent < budgetMs; attempt++) {
+      for (var attempt = 0; attempt < GAP_RECOVERY_ATTEMPTS && inBudget(); attempt++) {
         await io.stepBack();
         await io.sleep(step);
         spent += step;
@@ -945,7 +970,8 @@
     }
     function result(stopReason, confirmedBy) {
       collect();
-      var r = { stopReason: stopReason, count: count, scrolls: scrolls, nudges: nudges };
+      var r = { stopReason: stopReason, count: count, scrolls: scrolls, nudges: nudges, batches: batches, elapsedMs: spent };
+      if (budgetExtensions > 0) r.budgetExtensions = budgetExtensions;
       if (confirmedBy) r.confirmedBy = confirmedBy;
       if (gapsDetected > 0) {
         r.gapsDetected = gapsDetected;
@@ -976,7 +1002,7 @@
       var last = messageIdSet(doc);
       var stableFor = 0;
       var waited = 0;
-      while (waited < HISTORY_FIRST_PAGE_MAX_WAIT_MS && spent < budgetMs) {
+      while (waited < HISTORY_FIRST_PAGE_MAX_WAIT_MS && inBudget()) {
         await io.sleep(step);
         spent += step;
         waited += step;
@@ -1011,7 +1037,7 @@
     /** Poll for `ms`, collecting every step (the union) — no growth decision. */
     async function pollFor(ms) {
       var waited = 0;
-      while (waited < ms && spent < budgetMs) {
+      while (waited < ms && inBudget()) {
         await io.sleep(poll);
         spent += poll;
         waited += poll;
@@ -1026,7 +1052,7 @@
      */
     async function waitGrowth(ms, fromCount) {
       var waited = 0;
-      while (waited < ms && spent < budgetMs) {
+      while (waited < ms && inBudget()) {
         await io.sleep(poll);
         spent += poll;
         absorb();
@@ -1040,7 +1066,7 @@
     async function quietPeriod() {
       var quiet = 0;
       var total = 0;
-      while (quiet < HISTORY_QUIET_MS && total < HISTORY_QUIET_CAP_MS && spent < budgetMs) {
+      while (quiet < HISTORY_QUIET_MS && total < HISTORY_QUIET_CAP_MS && inBudget()) {
         await io.sleep(poll);
         spent += poll;
         total += poll;
@@ -1089,7 +1115,7 @@
       nudges += 1;
       await nudgeDown();
       await pollFor(HISTORY_NUDGE_WAKE_MS);
-      for (var i = 0; i < HISTORY_NUDGE_RETURN_STEPS && spent < budgetMs; i++) {
+      for (var i = 0; i < HISTORY_NUDGE_RETURN_STEPS && inBudget(); i++) {
         await nudgeReturnStep(i, HISTORY_NUDGE_RETURN_STEPS);
         await pollFor(HISTORY_NUDGE_STEP_MS);
       }
@@ -1156,7 +1182,7 @@
       // history is on screen once it is settled.
       if (scrolls === 0 && !hasScroller() && (await firstPageSettled(false))) return finish("no_more", "no_overflow");
       if (scrolls === 0 && firstPage < HISTORY_FIRST_PAGE && (await firstPageSettled(true))) return finish("no_more", "first_page");
-      if (spent >= budgetMs) return finish("not_settled");
+      if (!inBudget()) return finish("not_settled");
       var outcome = await requestBatch();
       if (outcome === "none") {
         if (atStart()) return finish("no_more", "marker");
@@ -1165,13 +1191,14 @@
       if (outcome === "gap") return finish("history_gap");
       if (outcome === "grew") {
         stalls = 0;
+        batches += 1;
         // Awaited after every batch that loaded something, so a caller can
         // end the load (by throwing) as soon as it learns the job was cancelled.
         if (io.checkpoint) await io.checkpoint(count);
         continue;
       }
       // A stall: a batch request AND a nudge brought nothing.
-      if (spent >= budgetMs) return finish("not_settled");
+      if (!inBudget()) return finish("not_settled");
       stalls += 1;
       var small = count < HISTORY_SMALL_CHAT && !loadingShown();
       if (small && stalls >= 1) return finish("no_more", "one_stall");
@@ -1352,6 +1379,9 @@
     findMessageScroller: findMessageScroller,
     loadHistory: loadHistory,
     RCS_HISTORY_BUDGET_MS: RCS_HISTORY_BUDGET_MS,
+    HISTORY_BUDGET_EXTEND_MS: HISTORY_BUDGET_EXTEND_MS,
+    HISTORY_BUDGET_GROWTH_WINDOW_MS: HISTORY_BUDGET_GROWTH_WINDOW_MS,
+    HISTORY_BUDGET_CAP_MS: HISTORY_BUDGET_CAP_MS,
     HISTORY_SMALL_CHAT: HISTORY_SMALL_CHAT,
     HISTORY_FIRST_GROWTH_MS: HISTORY_FIRST_GROWTH_MS,
     HISTORY_NUDGE_WATCH_MS: HISTORY_NUDGE_WATCH_MS,

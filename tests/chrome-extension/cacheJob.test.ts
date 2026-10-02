@@ -276,13 +276,13 @@ describe("runJob: a cache Sync", () => {
     expect(lastSlow[2].details).toContain("Keepr is still saving — see Keepr for the result");
   });
 
-  // 3671 history depth: per chat "oldest kept: N days ago (floor N days)",
+  // 3671 history depth: per chat "oldest read: N days ago (floor N days)",
   // and a "History depth" summary — counts and day numbers only. Mutation:
   // the depth not counted / the line missing → red.
-  it("history depth: oldest kept per chat in days, and the summary line (counts only)", async () => {
+  it("history depth: oldest read per chat in days, and the summary line (counts only)", async () => {
     const t = cacheEnv({ rows: ROWS, numbers: { [id(0)]: ["+15555550101"], [id(1)]: ["+15555550102"], [id(2)]: ["+15555550103"] } });
     const stops = [
-      { stopReason: "date_floor", count: 1, scrolls: 1, nudges: 0 },
+      { stopReason: "date_floor", count: 1, scrolls: 1, nudges: 0, elapsedMs: 95_400, batches: 12, budgetExtensions: 2 },
       { stopReason: "no_more", count: 1, scrolls: 0, nudges: 0, confirmedBy: "first_page" },
       { stopReason: "history_gap", count: 1, scrolls: 2, nudges: 0, gapsDetected: 1, gapsRecovered: 0 },
     ];
@@ -290,7 +290,11 @@ describe("runJob: a cache Sync", () => {
     (t.env.scan as Record<string, unknown>).loadHistory = async () => stops[n++];
     await job.runJob(JOB, t.env);
     const [, , extras] = t.shown[t.shown.length - 1] as [string, boolean, { details: string; copy: string }];
-    expect(extras.copy).toContain("oldest kept: 1 days ago (floor 10 days)");
+    expect(extras.copy).toContain("oldest read: 1 days ago (floor 10 days)");
+    // Per-chat load time and batches; date_floor counts as confirmed coverage.
+    expect(extras.copy).toContain("load 95s, batches 12, budget extended 2×");
+    expect(extras.copy).toContain("start confirmed by date_floor");
+    expect(extras.details).toContain(" · 0 without scrolling · 1 reached the months limit · 1 not confirmed");
     expect(extras.details).toContain(
       "History depth: 1 chats reached the 1-month limit · 1 reached the chat's start · 1 not fully loaded · 1 gaps (0 recovered)",
     );
