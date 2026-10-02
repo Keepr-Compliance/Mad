@@ -49,6 +49,11 @@ export const rcsImportBridge = {
   setCacheOptions: (args: { autoDelete?: boolean; contactsOnly?: boolean }): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke("rcs-import:set-cache-options", args),
 
+  /** BACKLOG-3658 P3c: the chats switched off ("Don't sync"). */
+  listExclusions: () => ipcRenderer.invoke("rcs-import:list-exclusions"),
+  removeExclusion: (args: { id?: string; all?: boolean }): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke("rcs-import:remove-exclusion", args),
+
   /** BACKLOG-3659 P3d: Google Messages' own Force re-import. */
   clearTexts: (): Promise<RcsClearTextsResult> => ipcRenderer.invoke("rcs-import:clear-texts"),
 

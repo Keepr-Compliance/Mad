@@ -94,6 +94,30 @@ export const rcsImportService = {
     }
   },
 
+  /** BACKLOG-3658 P3c: the chats switched off ("Don't sync"). */
+  async listExclusions(): Promise<ApiResult<Array<{ id: string; title: string | null; createdAt: string }>>> {
+    const bridge = api();
+    if (!bridge || !bridge.listExclusions) return { success: false, error: NOT_AVAILABLE };
+    try {
+      const r = await bridge.listExclusions();
+      return r.success ? { success: true, data: r.chats } : { success: false, error: r.error };
+    } catch (err) {
+      return { success: false, error: getErrorMessage(err) };
+    }
+  },
+
+  /** P3c: switch one chat back on, or all ("Sync all again"). */
+  async removeExclusion(args: { id?: string; all?: boolean }): Promise<ApiResult<void>> {
+    const bridge = api();
+    if (!bridge || !bridge.removeExclusion) return { success: false, error: NOT_AVAILABLE };
+    try {
+      const r = await bridge.removeExclusion(args);
+      return r.success ? { success: true } : { success: false, error: r.error ?? "Keepr could not save that." };
+    } catch (err) {
+      return { success: false, error: getErrorMessage(err) };
+    }
+  },
+
   /** BACKLOG-3659 P3d: Settings → Google Messages → Force re-import. */
   async clearTexts(): Promise<ApiResult<{ messagesDeleted: number }>> {
     const bridge = api();

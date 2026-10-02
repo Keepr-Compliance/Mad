@@ -53,6 +53,7 @@ import * as http from "http";
 
 import {
   parseNotReached,
+  participantKey,
   RcsJobRegistry,
   type RcsImportJob,
   type RcsJobKind,
@@ -61,6 +62,7 @@ import {
   type RcsJobSnapshot,
 } from "./rcsImportJob";
 import { parseIncomingImage, RCS_MAX_IMAGE_BYTES, type RcsImageResult, type RcsIncomingImage } from "./rcsImportMedia";
+import { isConversationId, RCS_EXCLUSIONS_MAX } from "./rcsExclusions";
 import type { RcsImportResult, RcsIncomingChat } from "./rcsImportStore";
 import {
   parseIncomingChat,
@@ -174,6 +176,16 @@ export interface RcsExtensionBridgeOptions {
    * cache job keeps only the chats it allows (numbers in E.164).
    */
   cacheChatAllowed?: (jobId: string, userId: string, numbers: string[]) => boolean;
+  /**
+   * BACKLOG-3658 P3c: is this chat switched off ("Don't sync")? By its hash or
+   * its conversation id; records the hash on a pending exclusion. Applies to
+   * every Sync; a refused chat is counted (progress.notSynced).
+   */
+  chatExcluded?: (userId: string, chatHash: string, conversationId: string) => boolean;
+  /** P3c: POST /exclusions/list — the conversation ids switched off (ids only). */
+  listExclusions?: (userId: string) => string[];
+  /** P3c: POST /exclusions/set — the eye on a row. */
+  setExclusion?: (userId: string, conversationId: string, excluded: boolean) => void;
   /** BACKLOG-3658: the signed-in user now; a job of another user is cancelled. */
   currentUserId?: () => Promise<string | null>;
   /** BACKLOG-3658: a job ended (finished, failed or cancelled). Once per job. */
@@ -593,6 +605,13 @@ export class RcsExtensionBridge {
     jobRoute: RegExpExecArray | null,
   ): Promise<void> {
     {
+      // BACKLOG-3658 P3c: the eye on each conversation row. Ids only — never
+      // names or numbers; a signed-in user; a capped list.
+      if (path === "/exclusions/list" || path === "/exclusions/set") {
+        await this.handleExclusions(req, res, path);
+        return;
+      }
+
       if (path === "/job/pending") {
         const job = this.jobs.pending();
         if (!job) {
@@ -685,6 +704,18 @@ export class RcsExtensionBridge {
           return;
         }
         const shown = (numbers as unknown[]).filter((n): n is string => typeof n === "string").slice(0, 50);
+        // P3c: a chat the user switched off is never synced (any Sync), counted.
+        if (this.options.chatExcluded) {
+          const normalized = participantKey(shown).split(",").filter(Boolean);
+          const userId = job.userId ?? (this.options.currentUserId ? await this.options.currentUserId() : null);
+          if (normalized.length > 0 && userId && this.options.chatExcluded(userId, rcsChatHash(normalized), conversationId)) {
+            job.progress.checked += 1;
+            job.progress.notSynced += 1;
+            this.emitJob(job.snapshot());
+            sendJson(res, 200, { matched: false, contactIds: [], excluded: true });
+            return;
+          }
+        }
         const allow = job.kind === "cache" && job.userId && this.options.cacheChatAllowed
           ? (n: string[]) => this.options.cacheChatAllowed!(job.jobId, job.userId as string, n)
           : undefined;
@@ -828,7 +859,8 @@ export class RcsExtensionBridge {
         // BACKLOG-3641: the scan counts, so a 0-chat run can be explained.
         this.logger.info(
           `[RcsBridge] Sync job finished: listed ${p.listed}, candidates ${p.candidates}, checked ${p.checked}, ` +
-            `matched ${p.matched}, skipped ${p.skipped}, not checked ${p.notChecked}, not text ${p.notText}; imported ${p.imported} chats, ` +
+            `matched ${p.matched}, skipped ${p.skipped}, not checked ${p.notChecked}, not text ${p.notText}, ` +
+            `not synced (switched off) ${p.notSynced}; imported ${p.imported} chats, ` +
             `${p.messages} messages, ${p.removedNotRelinked} removed by you not re-added; ` +
             `${chats} chats not fully imported (${entries.length} entries${more > 0 ? `, +${more} more` : ""})`,
         );
@@ -851,5 +883,31 @@ export class RcsExtensionBridge {
       default:
         sendJson(res, 404, { error: "not_found" });
     }
+  }
+
+  /** BACKLOG-3658 P3c: POST /exclusions/list | /exclusions/set (ids only). */
+  private async handleExclusions(req: http.IncomingMessage, res: http.ServerResponse, path: string): Promise<void> {
+    if (!this.options.listExclusions || !this.options.setExclusion || !this.options.currentUserId) {
+      sendJson(res, 501, { error: "unsupported" });
+      return;
+    }
+    const read = await readJson(req, res, 4096);
+    if (!read.ok) return;
+    const userId = await this.options.currentUserId();
+    if (!userId) {
+      sendJson(res, 403, { error: "signed_out", message: "Sign in to Keepr first." });
+      return;
+    }
+    if (path === "/exclusions/list") {
+      sendJson(res, 200, { conversationIds: this.options.listExclusions(userId).slice(0, RCS_EXCLUSIONS_MAX) });
+      return;
+    }
+    const b = (read.body && typeof read.body === "object" ? read.body : {}) as Record<string, unknown>;
+    if (!isConversationId(b.conversationId) || typeof b.excluded !== "boolean") {
+      sendJson(res, 400, { error: "bad_request", message: "conversationId and excluded are required" });
+      return;
+    }
+    this.options.setExclusion(userId, b.conversationId, b.excluded);
+    sendJson(res, 200, { ok: true });
   }
 }

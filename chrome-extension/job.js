@@ -113,6 +113,9 @@
       lines.push(s.contactsWithoutPhone + " contact" + (s.contactsWithoutPhone === 1 ? " has" : "s have") +
         " no phone number — see Keepr");
     }
+    if (s.notSynced > 0) {
+      lines.push(s.notSynced + " chat" + (s.notSynced === 1 ? "" : "s") + " not synced — switched off by you");
+    }
     if (s.noMessagesYet > 0) {
       lines.push(s.noMessagesYet + " chat" + (s.noMessagesYet === 1 ? "" : "s") + " with no messages yet");
     }
@@ -335,7 +338,7 @@
       return reply;
     }
     var progress = { listed: 0, candidates: 0, checked: 0, skipped: 0, notChecked: 0 };
-    var totals = { chats: 0, messages: 0, images: 0, removedByUser: 0, imagesNotKept: 0, notText: 0, noMessagesYet: 0 };
+    var totals = { chats: 0, messages: 0, images: 0, removedByUser: 0, imagesNotKept: 0, notText: 0, noMessagesYet: 0, notSynced: 0 };
     var contactsWithoutPhone = 0;
 
     // BACKLOG-3658: progress lines carry the page's Cancel (this job only).
@@ -386,6 +389,7 @@
         imagesNotKept: totals.imagesNotKept,
         notText: totals.notText,
         noMessagesYet: totals.noMessagesYet,
+        notSynced: totals.notSynced,
         notReached: reported,
         notReachedMore: notReached.length - reported.length,
       };
@@ -517,6 +521,12 @@
         var match = await call("POST", base + "/match", { conversationId: conv.conversationId, numbers: numbers });
         if (!match.ok) throw new Error(messageOf(match, "Keepr could not check this chat."));
         var isMatch = !!(match.body && match.body.matched);
+        if (!isMatch && match.body && match.body.excluded === true) {
+          // BACKLOG-3658 P3c: the user switched this chat off — counted, never silent.
+          totals.notSynced += 1;
+          log("  switched off by you: not synced");
+          continue;
+        }
         log("  match=" + (isMatch ? "yes" : "no"));
         if (!isMatch) continue;
         matchedCount += 1;
@@ -698,7 +708,7 @@
     log("done: listed " + progress.listed + ", candidates " + progress.candidates + ", checked " + progress.checked +
       ", matched " + matchedCount + ", imported " + totals.chats + " chats / " + totals.messages + " messages / " +
       totals.images + " images, not fully imported " + notReached.length + ", not checked " + progress.notChecked +
-      ", removed by you " + totals.removedByUser + ", images not kept " + totals.imagesNotKept + ", not text " + totals.notText + ", no messages yet " + totals.noMessagesYet + ", pauses " + pauses);
+      ", removed by you " + totals.removedByUser + ", images not kept " + totals.imagesNotKept + ", not text " + totals.notText + ", no messages yet " + totals.noMessagesYet + ", not synced (switched off) " + totals.notSynced + ", pauses " + pauses);
     // One line + Details / Copy (founder, BACKLOG-3641); results live in Keepr.
     env.overlay.show(DONE_LINE, false, await overlayExtras());
     return {

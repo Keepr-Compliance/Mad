@@ -434,6 +434,73 @@ export const RCS_THREADS_DELETE_MESSAGES_SQL = sql`
     WHERE user_id = ? AND external_id LIKE 'gmweb2:%' AND thread_id IN (SELECT value FROM json_each(?))
   `;
 
+// ============================================
+// BACKLOG-3658 P3c: per-chat exclusions ("Don't sync")
+// ============================================
+
+/** Parameters: user id. Conversation ids the page shows as switched off. */
+export const RCS_EXCLUSIONS_CONV_IDS_SQL = sql`
+    SELECT conversation_id AS conversationId FROM rcs_chat_exclusions
+    WHERE user_id = ? AND conversation_id IS NOT NULL
+    ORDER BY created_at DESC LIMIT ?
+  `;
+
+/** Parameters: id, user id, conversation id. */
+export const RCS_EXCLUSION_ADD_SQL = sql`
+    INSERT OR IGNORE INTO rcs_chat_exclusions (id, user_id, conversation_id) VALUES (?, ?, ?)
+  `;
+
+/**
+ * Parameters: user id, conversation id, user id, conversation id. Switching a
+ * chat back on removes its row AND every row with the same hash (the same
+ * chat under an older conversation id).
+ */
+export const RCS_EXCLUSION_REMOVE_SQL = sql`
+    DELETE FROM rcs_chat_exclusions
+    WHERE user_id = ? AND (
+      conversation_id = ?
+      OR (chat_hash IS NOT NULL AND chat_hash IN (
+        SELECT chat_hash FROM rcs_chat_exclusions WHERE user_id = ? AND conversation_id = ? AND chat_hash IS NOT NULL
+      ))
+    )
+  `;
+
+/** Parameters: user id, id. Switch one chat (a Settings row) back on. */
+export const RCS_EXCLUSION_REMOVE_BY_ID_SQL = sql`DELETE FROM rcs_chat_exclusions WHERE user_id = ? AND id = ?`;
+
+/** Parameters: user id. "Sync all again". */
+export const RCS_EXCLUSIONS_CLEAR_SQL = sql`DELETE FROM rcs_chat_exclusions WHERE user_id = ?`;
+
+/** Parameters: user id, chat hash, user id, conversation id. Is this chat switched off? */
+export const RCS_EXCLUSION_MATCH_SQL = sql`
+    SELECT id, chat_hash AS chatHash, conversation_id AS conversationId FROM rcs_chat_exclusions
+    WHERE (user_id = ? AND chat_hash = ?) OR (user_id = ? AND conversation_id = ?)
+  `;
+
+/** Parameters: chat hash, id. Record the chat's hash on a pending exclusion. */
+export const RCS_EXCLUSION_SET_HASH_SQL = sql`UPDATE rcs_chat_exclusions SET chat_hash = ? WHERE id = ?`;
+
+/** Parameters: id, user id, chat hash, conversation id. The same chat under a new conversation id. */
+export const RCS_EXCLUSION_ADD_FULL_SQL = sql`
+    INSERT OR IGNORE INTO rcs_chat_exclusions (id, user_id, chat_hash, conversation_id) VALUES (?, ?, ?, ?)
+  `;
+
+/** Parameters: user id. Every switched-off chat for Settings, with the stored title when Keepr has the chat. */
+export const RCS_EXCLUSIONS_FOR_SETTINGS_SQL = sql`
+    SELECT e.id AS id, e.chat_hash AS chatHash, e.created_at AS createdAt,
+      (SELECT json_extract(m.metadata, '$.conversationTitle') FROM messages m
+        WHERE m.user_id = e.user_id AND e.chat_hash IS NOT NULL AND m.thread_id = 'gmweb2-' || e.chat_hash
+        ORDER BY m.sent_at DESC LIMIT 1) AS title
+    FROM rcs_chat_exclusions e
+    WHERE e.user_id = ?
+    ORDER BY e.created_at DESC
+  `;
+
+/** Parameters: user id. The hashes of switched-off chats. */
+export const RCS_EXCLUSION_HASHES_SQL = sql`
+    SELECT DISTINCT chat_hash AS chatHash FROM rcs_chat_exclusions WHERE user_id = ? AND chat_hash IS NOT NULL
+  `;
+
 /**
  * BACKLOG-3658: does any of these E.164 numbers belong to a contact on one of
  * the user's LIVE transactions (the shared live-transaction predicate;

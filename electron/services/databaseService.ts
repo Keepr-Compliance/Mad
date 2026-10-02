@@ -2494,6 +2494,35 @@ class DatabaseService implements IDatabaseService {
     return syncDb.rcsAutoDeleteDbOps();
   }
 
+  // BACKLOG-3658 P3c: per-chat exclusions ("Don't sync")
+  listRcsExclusionConversationIds(userId: string, max: number) {
+    return syncDb.listRcsExclusionConversationIds(userId, max);
+  }
+
+  setRcsExclusion(userId: string, conversationId: string, excluded: boolean) {
+    return syncDb.setRcsExclusion(userId, conversationId, excluded);
+  }
+
+  removeRcsExclusionById(userId: string, id: string) {
+    return syncDb.removeRcsExclusionById(userId, id);
+  }
+
+  clearRcsExclusions(userId: string) {
+    return syncDb.clearRcsExclusions(userId);
+  }
+
+  checkRcsExclusion(userId: string, chatHash: string, conversationId: string) {
+    return syncDb.checkRcsExclusion(userId, chatHash, conversationId);
+  }
+
+  listRcsExclusionsForSettings(userId: string) {
+    return syncDb.listRcsExclusionsForSettings(userId);
+  }
+
+  rcsExclusionHashes(userId: string) {
+    return syncDb.rcsExclusionHashes(userId);
+  }
+
   insertReactionRows(rows: Parameters<typeof syncDb.insertReactionRows>[0]) {
     return syncDb.insertReactionRows(rows);
   }

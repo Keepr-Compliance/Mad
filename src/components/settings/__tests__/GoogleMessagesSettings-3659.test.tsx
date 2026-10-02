@@ -8,6 +8,9 @@
  *   S3 the auto-delete switch not saved                                     → "auto-delete"
  *   S4 Withdraw not recording null                                          → "consent"
  *   S5 Settings not showing this section for android-messages-web           → (Settings.test)
+ *   E1 (P3c) switched-off chats not listed / no fallback title               → "chats not synced"
+ *   E2 (P3c) Sync again not switching that chat back on                       → "chats not synced"
+ *   E3 (P3c) Sync all again without a confirmation                            → "Sync all again"
  */
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -18,6 +21,8 @@ let mockState: RcsExtensionState;
 const mockClear = jest.fn();
 const mockAutoDelete = jest.fn();
 const mockConsent = jest.fn();
+let mockExcluded: Array<{ id: string; title: string | null; createdAt: string }> = [];
+const mockRemoveExclusion = jest.fn();
 
 jest.mock("../../../services/rcsImportService", () => ({
   rcsImportService: {
@@ -25,6 +30,9 @@ jest.mock("../../../services/rcsImportService", () => ({
     clearTexts: (...a: unknown[]) => mockClear(...a),
     setCacheAutoDelete: (...a: unknown[]) => mockAutoDelete(...a),
     setCacheConsent: (...a: unknown[]) => mockConsent(...a),
+    listExclusions: async () => ({ success: true, data: mockExcluded }),
+    removeExclusion: (...a: unknown[]) => mockRemoveExclusion(...a),
+    onDataChanged: () => () => undefined,
   },
 }));
 
@@ -41,6 +49,11 @@ beforeEach(() => {
   mockClear.mockResolvedValue({ success: true, data: { messagesDeleted: 175 } });
   mockAutoDelete.mockResolvedValue({ success: true });
   mockConsent.mockResolvedValue({ success: true });
+  mockExcluded = [];
+  mockRemoveExclusion.mockImplementation(async (a: { id?: string; all?: boolean }) => {
+    mockExcluded = a.all ? [] : mockExcluded.filter((c) => c.id !== a.id);
+    return { success: true };
+  });
 });
 
 describe("GoogleMessagesSettings", () => {
@@ -81,5 +94,35 @@ describe("GoogleMessagesSettings", () => {
     render(<GoogleMessagesSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "Withdraw" }));
     await waitFor(() => expect(mockConsent).toHaveBeenCalledWith(null));
+  });
+
+  it("chats not synced: listed with the stored title, or a plain fallback; Sync again switches one back on (E1, E2)", async () => {
+    mockExcluded = [
+      { id: "x-1", title: "Test Contact A", createdAt: "2026-10-01T10:00:00.000Z" },
+      { id: "x-2", title: null, createdAt: "2026-10-01T09:00:00.000Z" },
+    ];
+    render(<GoogleMessagesSettings />);
+    const box = await screen.findByTestId("gm-not-synced");
+    await waitFor(() => expect(box).toHaveTextContent("2 chats not synced"));
+    expect(box).toHaveTextContent("Test Contact A");
+    expect(box).toHaveTextContent("A chat you switched off in Google Messages");
+    expect(box).toHaveTextContent("texts already in Keepr stay");
+    fireEvent.click(screen.getAllByRole("button", { name: "Sync again" })[0]);
+    await waitFor(() => expect(mockRemoveExclusion).toHaveBeenCalledWith({ id: "x-1" }));
+    await waitFor(() => expect(box).toHaveTextContent("1 chat not synced"));
+  });
+
+  it("Sync all again asks first, then clears every exclusion (E3)", async () => {
+    mockExcluded = [
+      { id: "x-1", title: null, createdAt: "2026-10-01T10:00:00.000Z" },
+      { id: "x-2", title: null, createdAt: "2026-10-01T09:00:00.000Z" },
+    ];
+    render(<GoogleMessagesSettings />);
+    fireEvent.click(await screen.findByRole("button", { name: "Sync all again" }));
+    expect(mockRemoveExclusion).not.toHaveBeenCalled();
+    const confirm = screen.getAllByRole("button", { name: "Sync all again" });
+    fireEvent.click(confirm[confirm.length - 1]);
+    await waitFor(() => expect(mockRemoveExclusion).toHaveBeenCalledWith({ all: true }));
+    await waitFor(() => expect(screen.getByTestId("gm-not-synced")).toHaveTextContent("Every chat is synced"));
   });
 });

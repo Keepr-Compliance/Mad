@@ -290,3 +290,24 @@ describe("an empty chat vs a load failure", () => {
     expect(t.calls.some(([p]) => p.endsWith("/chat"))).toBe(false);
   });
 });
+
+// BACKLOG-3658 P3c: a chat the user switched off is COUNTED and reported
+// ("N chats not synced — switched off by you"), never silent and never "not
+// fully imported". Mutation: the excluded answer treated as a plain no-match → red.
+describe.each(["transaction", "cache"] as const)("a %s Sync over a chat switched off with the eye", (kind) => {
+  it("is counted as not synced and reported", async () => {
+    const t = runWith(kind);
+    const orig = t.env.api;
+    t.env.api = async (m: string, p: string, b?: Record<string, unknown>) =>
+      p.endsWith("/match") ? { ok: true, status: 200, body: { matched: false, contactIds: [], excluded: true } } : orig(m, p, b);
+    const outcome = await job.runJob(JOB, t.env);
+    expect(outcome.outcome).toBe("finished");
+    expect(outcome.totals.notSynced).toBeGreaterThan(0);
+    expect(outcome.notReached.some((e: { reason: string }) => e.reason === "messages_not_loaded")).toBe(false);
+    const details: string = job.detailsText({
+      listed: 3, checked: 1, matched: 0, chats: 0, messages: 0, images: 0, notChecked: 0, contactsWithoutPhone: 0,
+      removedByUser: 0, notReached: [], notReachedMore: 0, notSynced: 2,
+    });
+    expect(details).toContain("2 chats not synced — switched off by you");
+  });
+});

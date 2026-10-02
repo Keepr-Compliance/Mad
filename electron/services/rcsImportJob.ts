@@ -74,6 +74,8 @@ export interface RcsJobProgress {
   removedNotRelinked: number;
   /** BACKLOG-3658: cache images not kept (the chat has no transaction contact). */
   imagesSkipped: number;
+  /** BACKLOG-3658 P3c: chats not synced because the user switched them off. */
+  notSynced: number;
 }
 
 /**
@@ -205,6 +207,7 @@ const EMPTY_PROGRESS: RcsJobProgress = {
   notText: 0,
   removedNotRelinked: 0,
   imagesSkipped: 0,
+  notSynced: 0,
 };
 
 /**

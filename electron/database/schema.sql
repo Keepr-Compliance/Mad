@@ -800,6 +800,22 @@ CREATE TABLE IF NOT EXISTS rcs_consent (
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
 );
 
+-- BACKLOG-3658 P3c: chats the user switched off ("Don't sync") with the eye on
+-- their row in Google Messages. conversation_id is what the page knows; the
+-- chat's hash (gmweb2 key) is recorded at the next /match so the exclusion
+-- survives a re-pair. Nothing already imported is deleted.
+CREATE TABLE IF NOT EXISTS rcs_chat_exclusions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  chat_hash TEXT,
+  conversation_id TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rcs_chat_exclusions_conv ON rcs_chat_exclusions(user_id, conversation_id) WHERE conversation_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_rcs_chat_exclusions_hash ON rcs_chat_exclusions(user_id, chat_hash);
+
 CREATE TABLE IF NOT EXISTS message_thread_names (
   user_id TEXT NOT NULL,
   thread_id TEXT NOT NULL,               -- Matches messages.thread_id ("macos-chat-<chat ROWID>")

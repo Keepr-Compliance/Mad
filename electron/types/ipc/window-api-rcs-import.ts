@@ -36,6 +36,8 @@ export interface RcsJobProgressCounts {
   removedNotRelinked?: number;
   /** BACKLOG-3658: cache images not kept (no transaction contact in the chat). */
   imagesSkipped?: number;
+  /** BACKLOG-3658 P3c: chats not synced because the user switched them off. */
+  notSynced?: number;
 }
 
 /** BACKLOG-3620: one sync job, as main reports it. */
@@ -121,6 +123,12 @@ export interface WindowApiRcsImport {
   setCacheOptions?: (args: { autoDelete?: boolean; contactsOnly?: boolean }) => Promise<{ success: boolean; error?: string }>;
   /** BACKLOG-3658: is the extension installed / paired, opted in, last cache Sync. */
   getExtensionState: () => Promise<RcsExtensionStateResult>;
+  /** BACKLOG-3658 P3c: the chats switched off ("Don't sync"), with stored titles when Keepr has them. */
+  listExclusions?: () => Promise<
+    { success: true; chats: Array<{ id: string; title: string | null; createdAt: string }> } | { success: false; error: string }
+  >;
+  /** P3c: switch one chat back on (`id`), or all (`all: true`). */
+  removeExclusion?: (args: { id?: string; all?: boolean }) => Promise<{ success: boolean; error?: string }>;
   /** BACKLOG-3659 P3d: clear every text imported from Google Messages (Force re-import). */
   clearTexts?: () => Promise<RcsClearTextsResult>;
   /** BACKLOG-3659: copy the extension to Downloads/"Keepr Extension". */

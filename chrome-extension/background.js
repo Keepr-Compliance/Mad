@@ -209,6 +209,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // BACKLOG-3658: a signed-in Messages page is open.
       sayHello(message.paired === true).then(sendResponse, fail);
       return true;
+    case "keepr-exclusions-list":
+      // BACKLOG-3658 P3c: the conversation ids switched off (ids only).
+      postBridge("/exclusions/list", {}).then(sendResponse, fail);
+      return true;
+    case "keepr-exclusions-set":
+      postBridge("/exclusions/set", {
+        conversationId: String(message.conversationId || "").slice(0, 200),
+        excluded: message.excluded === true,
+      }).then(sendResponse, fail);
+      return true;
     case "keepr-log":
       // BACKLOG-3641: the Sync step log, for the founder to copy from this
       // worker's console. The page sends shapes and hashes only (job.js).

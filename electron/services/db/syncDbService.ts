@@ -3,6 +3,7 @@
  * Handles iPhone sync-related database operations (message/attachment/contact batch ops)
  */
 
+import * as crypto from "crypto";
 import * as path from "path";
 import { ensureDb } from "./core/dbConnection";
 import { updateTransactionThreadCountSync } from "./communicationDbService";
@@ -18,6 +19,16 @@ import {
   RCS_CLEAR_LINKED_TRANSACTIONS_SQL,
   RCS_CLEAR_FILE_REFERENCED_SQL,
   RCS_STAGING_PUT_CHAT_SQL,
+  RCS_EXCLUSIONS_CONV_IDS_SQL,
+  RCS_EXCLUSION_ADD_SQL,
+  RCS_EXCLUSION_REMOVE_SQL,
+  RCS_EXCLUSION_REMOVE_BY_ID_SQL,
+  RCS_EXCLUSIONS_CLEAR_SQL,
+  RCS_EXCLUSION_MATCH_SQL,
+  RCS_EXCLUSION_SET_HASH_SQL,
+  RCS_EXCLUSION_ADD_FULL_SQL,
+  RCS_EXCLUSIONS_FOR_SETTINGS_SQL,
+  RCS_EXCLUSION_HASHES_SQL,
   RCS_CONSENT_GET_SQL,
   RCS_CONSENT_ENSURE_SQL,
   RCS_CONSENT_SET_SQL,
@@ -537,6 +548,80 @@ export function rcsAutoDeleteDbOps(): import("../rcsClearService").RcsAutoDelete
     deleteMessages: (userId, threadIds) => db.prepare(RCS_THREADS_DELETE_MESSAGES_SQL).run(userId, JSON.stringify(threadIds)).changes,
     fileStillReferenced: (storagePath) => attachmentFileReferenced(storagePath),
   };
+}
+
+// ============================================
+// BACKLOG-3658 P3c: per-chat exclusions
+// ============================================
+
+/** Conversation ids the page shows as switched off (most recent first, capped). */
+export function listRcsExclusionConversationIds(userId: string, max: number): string[] {
+  const db = ensureDb();
+  return (db.prepare(RCS_EXCLUSIONS_CONV_IDS_SQL).all(userId, max) as Array<{ conversationId: string }>).map((r) => r.conversationId);
+}
+
+/** The eye: switch a chat off (pending by conversation id) or back on (this chat under every id). */
+export function setRcsExclusion(userId: string, conversationId: string, excluded: boolean): void {
+  const db = ensureDb();
+  if (excluded) db.prepare(RCS_EXCLUSION_ADD_SQL).run(crypto.randomUUID(), userId, conversationId);
+  else db.prepare(RCS_EXCLUSION_REMOVE_SQL).run(userId, conversationId, userId, conversationId);
+}
+
+/** Settings: switch one chat back on, or all ("Sync all again"). */
+export function removeRcsExclusionById(userId: string, id: string): void {
+  ensureDb().prepare(RCS_EXCLUSION_REMOVE_BY_ID_SQL).run(userId, id);
+}
+
+export function clearRcsExclusions(userId: string): number {
+  return ensureDb().prepare(RCS_EXCLUSIONS_CLEAR_SQL).run(userId).changes;
+}
+
+/**
+ * At /match: is this chat switched off — by its hash or its conversation id?
+ * When it is, the hash is recorded on a pending row and the current
+ * conversation id is added for a hash-only match, so the row and the chat
+ * stay paired across re-pairs.
+ */
+export function checkRcsExclusion(userId: string, chatHash: string, conversationId: string): boolean {
+  const db = ensureDb();
+  const rows = db.prepare(RCS_EXCLUSION_MATCH_SQL).all(userId, chatHash, userId, conversationId) as Array<{
+    id: string;
+    chatHash: string | null;
+    conversationId: string | null;
+  }>;
+  if (rows.length === 0) return false;
+  db.transaction(() => {
+    for (const r of rows) if (!r.chatHash) db.prepare(RCS_EXCLUSION_SET_HASH_SQL).run(chatHash, r.id);
+    if (!rows.some((r) => r.conversationId === conversationId)) {
+      db.prepare(RCS_EXCLUSION_ADD_FULL_SQL).run(crypto.randomUUID(), userId, chatHash, conversationId);
+    }
+  })();
+  return true;
+}
+
+/** Settings: every switched-off chat (stored title when Keepr has the chat; never sent to the page). */
+export function listRcsExclusionsForSettings(userId: string): Array<{ id: string; title: string | null; createdAt: string }> {
+  const db = ensureDb();
+  const rows = db.prepare(RCS_EXCLUSIONS_FOR_SETTINGS_SQL).all(userId) as Array<{
+    id: string;
+    chatHash: string | null;
+    createdAt: string;
+    title: string | null;
+  }>;
+  // One entry per chat: rows of the same hash (old and new conversation ids) are one chat.
+  const seen = new Set<string>();
+  const out: Array<{ id: string; title: string | null; createdAt: string }> = [];
+  for (const r of rows) {
+    const key = r.chatHash ?? r.id;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ id: r.id, title: r.title && r.title.trim() ? r.title : null, createdAt: r.createdAt });
+  }
+  return out;
+}
+
+export function rcsExclusionHashes(userId: string): string[] {
+  return (ensureDb().prepare(RCS_EXCLUSION_HASHES_SQL).all(userId) as Array<{ chatHash: string }>).map((r) => r.chatHash);
 }
 
 /** Force re-import (3657): forget the cache position and the own number. */

@@ -10,6 +10,10 @@
  * - Auto-delete (BACKLOG-3658 P3b; off by default, 90 days when on).
  * - Force re-import: deletes every text imported from Google Messages; the
  *   next Sync (Dashboard → Sync Android) copies them again.
+ * - Chats not synced (BACKLOG-3658 P3c): the chats switched off with the eye
+ *   on their row in Google Messages, each with "Sync again", and "Sync all
+ *   again" (after a confirmation). The keyboard alternative to the page's
+ *   eye. Titles shown here stay in Keepr (never sent to the page).
  */
 
 import React, { useCallback, useEffect, useState } from "react";
@@ -28,16 +32,39 @@ export function GoogleMessagesSettings() {
   const [showForceWarning, setShowForceWarning] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const [excluded, setExcluded] = useState<Array<{ id: string; title: string | null }>>([]);
+  const [confirmAll, setConfirmAll] = useState(false);
+
+  const refreshExcluded = useCallback(async () => {
+    const r = await rcsImportService.listExclusions();
+    if (r.success && r.data) setExcluded(r.data);
+  }, []);
 
   const refresh = useCallback(async () => {
     const r = await rcsImportService.getExtensionState();
     if (r.success && r.data) setState(r.data);
     setLoading(false);
-  }, []);
+    await refreshExcluded();
+  }, [refreshExcluded]);
 
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+    // A chat switched off (or on) with the eye on the page.
+    return rcsImportService.onDataChanged(() => void refreshExcluded());
+  }, [refresh, refreshExcluded]);
+
+  const syncAgain = useCallback(async (id: string) => {
+    const r = await rcsImportService.removeExclusion({ id });
+    if (!r.success) setResult({ ok: false, text: r.error ?? "Keepr could not save that." });
+    await refreshExcluded();
+  }, [refreshExcluded]);
+
+  const syncAllAgain = useCallback(async () => {
+    setConfirmAll(false);
+    const r = await rcsImportService.removeExclusion({ all: true });
+    if (!r.success) setResult({ ok: false, text: r.error ?? "Keepr could not save that." });
+    await refreshExcluded();
+  }, [refreshExcluded]);
 
   const toggleAutoDelete = useCallback(async (on: boolean) => {
     const r = await rcsImportService.setCacheAutoDelete(on);
@@ -92,6 +119,52 @@ export function GoogleMessagesSettings() {
             </div>
             <p className="text-xs text-gray-600 pt-1">To sync, click Sync Android on the dashboard.</p>
           </>
+        )}
+      </div>
+
+      <div className="p-4 bg-white rounded-lg border border-gray-200" data-testid="gm-not-synced">
+        <div className="text-sm font-medium text-gray-900">
+          {excluded.length === 0
+            ? "Every chat is synced"
+            : `${excluded.length} chat${excluded.length === 1 ? "" : "s"} not synced`}
+        </div>
+        <p className="text-xs text-gray-600 mt-1">
+          Switch a chat off with the eye on its row in Google Messages. New messages from it won&rsquo;t be synced;
+          texts already in Keepr stay.
+        </p>
+        {excluded.length > 0 && (
+          <ul className="mt-2 divide-y divide-gray-100">
+            {excluded.map((c) => (
+              <li key={c.id} className="flex items-center justify-between gap-3 py-2 text-sm text-gray-800">
+                <span>{c.title ?? "A chat you switched off in Google Messages"}</span>
+                <button
+                  type="button"
+                  className="text-indigo-700 hover:text-indigo-900 text-xs font-medium"
+                  onClick={() => void syncAgain(c.id)}
+                >
+                  Sync again
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {excluded.length > 1 && !confirmAll && (
+          <button type="button" className="mt-2 text-xs font-medium text-indigo-700 hover:text-indigo-900" onClick={() => setConfirmAll(true)}>
+            Sync all again
+          </button>
+        )}
+        {confirmAll && (
+          <div className="mt-2 p-2 rounded border border-amber-300 bg-amber-50 text-xs text-amber-800">
+            New messages from all {excluded.length} chats will be synced again from the next Sync.
+            <div className="flex gap-2 mt-2">
+              <button type="button" className="px-2 py-1 rounded bg-amber-600 text-white font-medium" onClick={() => void syncAllAgain()}>
+                Sync all again
+              </button>
+              <button type="button" className="px-2 py-1 rounded border border-gray-300 bg-white text-gray-700" onClick={() => setConfirmAll(false)}>
+                Cancel
+              </button>
+            </div>
+          </div>
         )}
       </div>
 

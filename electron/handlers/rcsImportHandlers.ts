@@ -31,6 +31,7 @@ import { rcsImageFilename, storeImage, type RcsMediaDeps } from "../services/rcs
 import { importChat, rcsChatHash, rcsExternalId, storeCacheChatSync, type RcsImportDeps } from "../services/rcsImportStore";
 import { RcsCacheStaging, type CacheLimits, type RcsCommitWriter } from "../services/rcsCacheStaging";
 import { resolveImportPlanForUser } from "../services/importPlanInputs";
+import { RCS_EXCLUSIONS_MAX } from "../services/rcsExclusions";
 import {
   CHROME_EXTENSIONS_ADDRESS,
   chromeCandidates,
@@ -381,6 +382,13 @@ async function startCacheJobOnce(opts: { sinceDays?: unknown }): Promise<
 
 const bridge = new RcsExtensionBridge({
   importChat: (chat, transactionId, people) => importChat(chat, transactionId, deps, people),
+  // P3c: chats switched off with the eye on their row ("Don't sync").
+  chatExcluded: (userId, chatHash, conversationId) => databaseService.checkRcsExclusion(userId, chatHash, conversationId),
+  listExclusions: (userId) => databaseService.listRcsExclusionConversationIds(userId, RCS_EXCLUSIONS_MAX),
+  setExclusion: (userId, conversationId, excluded) => {
+    databaseService.setRcsExclusion(userId, conversationId, excluded);
+    hostWindows.broadcast(RCS_DATA_CHANGED_CHANNEL, { reason: "exclusions" });
+  },
   // P3b: the contacts-only flag (off by default), frozen per job.
   cacheChatAllowed: (jobId, userId, numbers) =>
     cacheOptionsByJob.get(jobId)?.contactsOnly ? databaseService.rcsNumbersMatchLiveContact(userId, numbers) : true,
@@ -653,6 +661,29 @@ export function registerRcsImportHandlers(): void {
           autoDeleteDays: consent?.autoDeleteDays ?? null,
         },
       };
+    }, { module: LOG_TAG }),
+  );
+
+  // BACKLOG-3658 P3c: Settings → Google Messages → chats not synced (the
+  // keyboard alternative to the page's eye). Titles stay in Keepr.
+  ipcMain.handle(
+    "rcs-import:list-exclusions",
+    wrapHandler(async (): Promise<{ success: true; chats: Array<{ id: string; title: string | null; createdAt: string }> } | { success: false; error: string }> => {
+      const userId = await currentUserId();
+      if (!userId) return { success: false, error: "Sign in to Keepr first." };
+      return { success: true, chats: databaseService.listRcsExclusionsForSettings(userId) };
+    }, { module: LOG_TAG }),
+  );
+
+  ipcMain.handle(
+    "rcs-import:remove-exclusion",
+    wrapHandler(async (_event, args: unknown): Promise<{ success: boolean; error?: string }> => {
+      const userId = await currentUserId();
+      if (!userId) return { success: false, error: "Sign in to Keepr first." };
+      const a = argsObject(args);
+      if (a.all === true) databaseService.clearRcsExclusions(userId);
+      else databaseService.removeRcsExclusionById(userId, requireString(a.id, "id"));
+      return { success: true };
     }, { module: LOG_TAG }),
   );
 

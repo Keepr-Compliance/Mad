@@ -792,3 +792,77 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
     expect(ended).toEqual([{ state: "failed", kind: "cache", userId: "user-a" }]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3658 P3c — the eye on each row: /exclusions/* and /match.
+// Mutations that turn these red: the routes without a signed-in user, or
+// with names; the list not capped; an excluded chat matched (any Sync kind);
+// the refusal not counted.
+// ---------------------------------------------------------------------------
+describe("RcsExtensionBridge exclusions (BACKLOG-3658 P3c)", () => {
+  let bridge: RcsExtensionBridge;
+  let port: number;
+  let user: string | null;
+  let excluded: Set<string>;
+  let sets: Array<[string, string, boolean]>;
+  let checks: Array<[string, string, string]>;
+
+  beforeEach(async () => {
+    user = "user-a";
+    excluded = new Set(["conv-off"]);
+    sets = [];
+    checks = [];
+    bridge = new RcsExtensionBridge({
+      importChat: jest.fn(),
+      importCacheChat: jest.fn(),
+      currentUserId: async () => user,
+      chatExcluded: (userId, hash, conversationId) => {
+        checks.push([userId, hash, conversationId]);
+        return excluded.has(conversationId);
+      },
+      listExclusions: () => Array.from({ length: 2100 }, (_, i) => `conv-${i}`),
+      setExclusion: (userId, conversationId, off) => void sets.push([userId, conversationId, off]),
+      jobs: new RcsJobRegistry(),
+    });
+    expect(await bridge.start(0)).toBe("listening");
+    port = bridge.getStatus().port;
+  });
+
+  afterEach(async () => {
+    await bridge.stop();
+  });
+
+  it("/exclusions/list: ids only, capped; refused signed out or from a web page", async () => {
+    const r = await request(port, "POST", "/exclusions/list", EXT, "{}");
+    expect(r.status).toBe(200);
+    expect(Object.keys(r.body)).toEqual(["conversationIds"]);
+    expect((r.body.conversationIds as string[]).length).toBe(2000);
+    expect((await request(port, "POST", "/exclusions/list", { ...JSON_HEADERS, Origin: "https://messages.google.com" }, "{}")).status).toBe(403);
+    expect((await request(port, "GET", "/exclusions/list", EXT)).status).toBe(405);
+    user = null;
+    expect((await request(port, "POST", "/exclusions/list", EXT, "{}")).status).toBe(403);
+  });
+
+  it("/exclusions/set: a valid conversation id and a boolean, for the signed-in user", async () => {
+    expect((await request(port, "POST", "/exclusions/set", EXT, JSON.stringify({ conversationId: "conv-1", excluded: true }))).status).toBe(200);
+    expect((await request(port, "POST", "/exclusions/set", EXT, JSON.stringify({ conversationId: "../x", excluded: true }))).status).toBe(400);
+    expect((await request(port, "POST", "/exclusions/set", EXT, JSON.stringify({ conversationId: "conv-1", excluded: "yes" }))).status).toBe(400);
+    expect(sets).toEqual([["user-a", "conv-1", true]]);
+  });
+
+  it.each(["cache", "transaction"] as const)("/match on a %s Sync: a switched-off chat is refused and COUNTED", async (kind) => {
+    const jobId = kind === "cache"
+      ? bridge.createCacheJob("user-a", { since: "2026-08-01T00:00:00.000Z" })!.jobId
+      : bridge.createJob("tx-1", [{ contactId: "c-1", displayName: "Test Contact A", phonesE164: ["+15555550199"] }])!.jobId;
+    expect((await request(port, "POST", `/job/${jobId}/claim`, EXT)).status).toBe(200);
+    const off = await request(port, "POST", `/job/${jobId}/match`, EXT, JSON.stringify({ conversationId: "conv-off", numbers: ["(555) 555-0199"] }));
+    expect(off.body).toEqual({ matched: false, contactIds: [], excluded: true });
+    expect((await request(port, "POST", `/job/${jobId}/chat`, EXT, CHAT_JSON)).status).toBe(403);
+    const on = await request(port, "POST", `/job/${jobId}/match`, EXT, JSON.stringify({ conversationId: CHAT.conversationId, numbers: ["(555) 555-0199"] }));
+    expect(on.body.matched).toBe(true);
+    expect(bridge.getJob()?.progress).toMatchObject({ notSynced: 1, checked: 2 });
+    // Keepr gets the chat's hash, never a name.
+    expect(checks[0][0]).toBe("user-a");
+    expect(checks[0][1]).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
