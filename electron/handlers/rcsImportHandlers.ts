@@ -773,26 +773,14 @@ export function registerRcsImportHandlers(): void {
     }, { module: LOG_TAG }),
   );
 
-  // BACKLOG-3658 P3c: Settings → Google Messages → chats not synced (the
-  // keyboard alternative to the page's eye). Titles stay in Keepr.
+  // BACKLOG-3658 P3c: Settings → Google Messages → chats not synced (read-only
+  // since 2026-10-02: the page's eye is the only switch). Titles stay in Keepr.
   ipcMain.handle(
     "rcs-import:list-exclusions",
     wrapHandler(async (): Promise<{ success: true; chats: Array<{ id: string; title: string | null; createdAt: string }> } | { success: false; error: string }> => {
       const userId = await currentUserId();
       if (!userId) return { success: false, error: "Sign in to Keepr first." };
       return { success: true, chats: databaseService.listRcsExclusionsForSettings(userId) };
-    }, { module: LOG_TAG }),
-  );
-
-  ipcMain.handle(
-    "rcs-import:remove-exclusion",
-    wrapHandler(async (_event, args: unknown): Promise<{ success: boolean; error?: string }> => {
-      const userId = await currentUserId();
-      if (!userId) return { success: false, error: "Sign in to Keepr first." };
-      const a = argsObject(args);
-      if (a.all === true) databaseService.clearRcsExclusions(userId);
-      else databaseService.removeRcsExclusionById(userId, requireString(a.id, "id"));
-      return { success: true };
     }, { module: LOG_TAG }),
   );
 

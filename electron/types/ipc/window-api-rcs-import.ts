@@ -151,8 +151,6 @@ export interface WindowApiRcsImport {
   listExclusions?: () => Promise<
     { success: true; chats: Array<{ id: string; title: string | null; createdAt: string }> } | { success: false; error: string }
   >;
-  /** P3c: switch one chat back on (`id`), or all (`all: true`). */
-  removeExclusion?: (args: { id?: string; all?: boolean }) => Promise<{ success: boolean; error?: string }>;
   /** Android's shared Force re-import: Google Messages + the companion's texts and contacts (BACKLOG-3657). */
   clearTexts?: () => Promise<RcsClearTextsResult>;
   /** BACKLOG-3659: copy the extension to Downloads/"Keepr Extension". */

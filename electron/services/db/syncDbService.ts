@@ -24,8 +24,6 @@ import {
   RCS_EXCLUSIONS_CONV_IDS_SQL,
   RCS_EXCLUSION_ADD_SQL,
   RCS_EXCLUSION_REMOVE_SQL,
-  RCS_EXCLUSION_REMOVE_BY_ID_SQL,
-  RCS_EXCLUSIONS_CLEAR_SQL,
   RCS_EXCLUSION_MATCH_SQL,
   RCS_EXCLUSION_SET_HASH_SQL,
   RCS_EXCLUSION_ADD_FULL_SQL,
@@ -582,23 +580,6 @@ export function setRcsExclusion(userId: string, conversationId: string, excluded
       db.prepare(RCS_EXCLUSION_REMOVE_SQL).run(userId, conversationId, userId, conversationId);
     })();
   }
-}
-
-/** Settings: switch one chat back on, or all ("Sync all again"). */
-export function removeRcsExclusionById(userId: string, id: string): void {
-  const db = ensureDb();
-  db.transaction(() => {
-    markPendingFullRead(userId, exclusionKeysFor(userId, { id }));
-    db.prepare(RCS_EXCLUSION_REMOVE_BY_ID_SQL).run(userId, id);
-  })();
-}
-
-export function clearRcsExclusions(userId: string): number {
-  const db = ensureDb();
-  return db.transaction(() => {
-    markPendingFullRead(userId, exclusionKeysFor(userId, { all: true }));
-    return db.prepare(RCS_EXCLUSIONS_CLEAR_SQL).run(userId).changes;
-  })();
 }
 
 /**

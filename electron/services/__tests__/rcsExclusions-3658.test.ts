@@ -30,11 +30,9 @@ jest.mock("../logService", () => {
 import { setDb } from "../db/core/dbConnection";
 import {
   checkRcsExclusion,
-  clearRcsExclusions,
   listRcsExclusionConversationIds,
   listRcsExclusionsForSettings,
   rcsExclusionHashes,
-  removeRcsExclusionById,
   setRcsExclusion,
 } from "../db/syncDbService";
 import { exclusionAutolinkThreads, isConversationId, RCS_EXCLUSION_STOPS_AUTOLINK } from "../rcsExclusions";
@@ -90,7 +88,7 @@ describe("rcs_chat_exclusions (P3c)", () => {
     checkRcsExclusion(OTHER, "hash-a", "conv-a");
     expect(checkRcsExclusion(USER, "hash-a", "conv-a")).toBe(false);
     expect(listRcsExclusionConversationIds(USER, 100)).toEqual([]);
-    expect(clearRcsExclusions(USER)).toBe(0);
+    setRcsExclusion(USER, "conv-a", false); // the user's eye never touches another user's row
     expect(listRcsExclusionConversationIds(OTHER, 100)).toEqual(["conv-a"]);
   });
 
@@ -99,7 +97,7 @@ describe("rcs_chat_exclusions (P3c)", () => {
     expect(listRcsExclusionConversationIds(USER, 3)).toHaveLength(3);
   });
 
-  it("Settings list: one entry per chat, the stored title when Keepr has the chat, else none; remove / clear (X5)", () => {
+  it("Settings list (read-only): one entry per chat, the stored title when Keepr has the chat, else none (X5)", () => {
     db.prepare(
       `INSERT INTO messages (id, user_id, channel, external_id, direction, body_text, thread_id, sent_at, metadata)
        VALUES ('m1', ?, 'sms', 'gmweb2:hash-a:1', 'inbound', 'x', 'gmweb2-hash-a', '2026-09-20T10:00:00.000Z', ?)`,
@@ -111,10 +109,9 @@ describe("rcs_chat_exclusions (P3c)", () => {
     const list = listRcsExclusionsForSettings(USER);
     expect(new Set(list.map((c) => c.title))).toEqual(new Set(["Test Contact A", null]));
     expect(list).toHaveLength(2);
-    removeRcsExclusionById(USER, list.find((c) => c.title === null)!.id);
+    // Only the eye switches a chat back on.
+    setRcsExclusion(USER, "conv-b", false);
     expect(listRcsExclusionsForSettings(USER)).toHaveLength(1);
-    clearRcsExclusions(USER);
-    expect(listRcsExclusionsForSettings(USER)).toEqual([]);
   });
 });
 

@@ -465,12 +465,6 @@ export const RCS_EXCLUSION_REMOVE_SQL = sql`
     )
   `;
 
-/** Parameters: user id, id. Switch one chat (a Settings row) back on. */
-export const RCS_EXCLUSION_REMOVE_BY_ID_SQL = sql`DELETE FROM rcs_chat_exclusions WHERE user_id = ? AND id = ?`;
-
-/** Parameters: user id. "Sync all again". */
-export const RCS_EXCLUSIONS_CLEAR_SQL = sql`DELETE FROM rcs_chat_exclusions WHERE user_id = ?`;
-
 /** Parameters: user id, chat hash, user id, conversation id. Is this chat switched off? */
 export const RCS_EXCLUSION_MATCH_SQL = sql`
     SELECT id, chat_hash AS chatHash, conversation_id AS conversationId FROM rcs_chat_exclusions

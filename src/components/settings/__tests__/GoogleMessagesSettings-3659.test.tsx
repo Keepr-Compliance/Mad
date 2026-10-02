@@ -12,8 +12,7 @@
  *   L2 the months written anywhere but messageImport.filters (the key the
  *      cache Sync's floor reads), or a failed save left on screen          → "months control"
  *   E1 (P3c) switched-off chats not listed / no fallback title               → "chats not synced"
- *   E2 (P3c) Sync again not switching that chat back on                       → "chats not synced"
- *   E3 (P3c) Sync all again without a confirmation                            → "Sync all again"
+ *   E2 (P3c) the modal not read-only (an action back), or no eye hint          → "read-only modal"
  */
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -25,7 +24,6 @@ const mockClear = jest.fn();
 const mockAutoDelete = jest.fn();
 const mockConsent = jest.fn();
 let mockExcluded: Array<{ id: string; title: string | null; createdAt: string }> = [];
-const mockRemoveExclusion = jest.fn();
 let mockPrefs: Record<string, unknown> = {};
 const mockUpdatePrefs = jest.fn();
 
@@ -43,7 +41,6 @@ jest.mock("../../../services/rcsImportService", () => ({
     setCacheAutoDelete: (...a: unknown[]) => mockAutoDelete(...a),
     setCacheConsent: (...a: unknown[]) => mockConsent(...a),
     listExclusions: async () => ({ success: true, data: mockExcluded }),
-    removeExclusion: (...a: unknown[]) => mockRemoveExclusion(...a),
     onDataChanged: () => () => undefined,
   },
 }));
@@ -64,10 +61,6 @@ beforeEach(() => {
   mockExcluded = [];
   mockPrefs = {};
   mockUpdatePrefs.mockResolvedValue({ success: true });
-  mockRemoveExclusion.mockImplementation(async (a: { id?: string; all?: boolean }) => {
-    mockExcluded = a.all ? [] : mockExcluded.filter((c) => c.id !== a.id);
-    return { success: true };
-  });
 });
 
 describe("GoogleMessagesSettings", () => {
@@ -165,8 +158,10 @@ describe("GoogleMessagesSettings", () => {
     expect(screen.queryByTestId("gm-not-synced-line")).toBeNull();
   });
 
-  // Mutation: Manage not opening the modal / Sync again not switching the chat back on → red.
-  it("Manage opens the modal: titles or the fallback, search, Sync again (M2, E1, E2)", async () => {
+  // Founder (2026-10-02): the modal is READ-ONLY — the eye in Google Messages
+  // is the only switch. Mutations: Manage not opening the modal, a Sync again
+  // / Sync all again action back, or the eye hint missing → red.
+  it("Manage opens the read-only modal: titles or the fallback, search, the eye hint — no actions (M2, E1, E2)", async () => {
     mockExcluded = [
       { id: "x-1", title: "Test Contact A", createdAt: "2026-10-01T10:00:00.000Z" },
       { id: "x-2", title: null, createdAt: "2026-10-01T09:00:00.000Z" },
@@ -182,28 +177,16 @@ describe("GoogleMessagesSettings", () => {
     fireEvent.change(search, { target: { value: "0123" } });
     expect(list).toHaveTextContent("+1 (555) 555-0123");
     expect(list).not.toHaveTextContent("Test Contact A");
-    fireEvent.change(search, { target: { value: "contact" } });
-    fireEvent.click(screen.getByRole("button", { name: "Sync again" }));
-    await waitFor(() => expect(mockRemoveExclusion).toHaveBeenCalledWith({ id: "x-1" }));
-    await waitFor(() => expect(screen.getByTestId("gm-not-synced-line")).toHaveTextContent("2 chats not synced"));
-    // Live (0.3.15): when it happens. Mutation: no notice → red.
-    expect(screen.getByTestId("gm-not-synced-notice")).toHaveTextContent("Test Contact A: will sync on the next Sync.");
+    expect(screen.getByTestId("gm-not-synced-hint")).toHaveTextContent(
+      "To sync a chat again, click the eye next to it in Google Messages.",
+    );
+    const modal = screen.getByTestId("gm-not-synced-modal");
+    const labels = Array.from(modal.querySelectorAll("button")).map((b) => b.textContent);
+    expect(labels).toEqual(["Close"]);
+    expect(modal).not.toHaveTextContent(/Sync again|Sync all again/);
   });
 
-  it("Sync all again (in the modal footer) asks first, then clears every exclusion; Escape closes (E3, M3)", async () => {
-    mockExcluded = [
-      { id: "x-1", title: null, createdAt: "2026-10-01T10:00:00.000Z" },
-      { id: "x-2", title: null, createdAt: "2026-10-01T09:00:00.000Z" },
-    ];
-    const view = render(<GoogleMessagesSettings userId="user-1" />);
-    fireEvent.click(await screen.findByRole("button", { name: "Manage" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Sync all again" }));
-    expect(mockRemoveExclusion).not.toHaveBeenCalled();
-    const confirm = screen.getAllByRole("button", { name: "Sync all again" });
-    fireEvent.click(confirm[confirm.length - 1]);
-    await waitFor(() => expect(mockRemoveExclusion).toHaveBeenCalledWith({ all: true }));
-    await waitFor(() => expect(screen.queryByTestId("gm-not-synced-line")).toBeNull());
-    view.unmount();
+  it("Escape closes the modal (M3)", async () => {
     mockExcluded = [{ id: "x-1", title: null, createdAt: "2026-10-01T10:00:00.000Z" }];
     render(<GoogleMessagesSettings userId="user-1" />);
     fireEvent.click(await screen.findByRole("button", { name: "Manage" }));

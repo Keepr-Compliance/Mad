@@ -17,10 +17,10 @@
  *   imported from Google Messages AND from the Android Companion (one
  *   confirmation naming both, AndroidForceReimportWarning).
  * - Chats not synced (BACKLOG-3658 P3c): one line "N chats not synced · Manage";
- *   Manage opens NotSyncedChatsModal: the chats switched off with the eye
- *   on their row in Google Messages, each with "Sync again", and "Sync all
- *   again" (after a confirmation). The keyboard alternative to the page's
- *   eye. Titles shown here stay in Keepr (never sent to the page).
+ *   Manage opens NotSyncedChatsModal, READ-ONLY (founder, 2026-10-02): the
+ *   chats switched off with the eye on their row in Google Messages, and the
+ *   hint to click the eye to sync one again. The eye is the only control.
+ *   Titles shown here stay in Keepr (never sent to the page).
  */
 
 import React, { useCallback, useEffect, useState } from "react";
@@ -105,18 +105,6 @@ export function GoogleMessagesSettings({ userId }: { userId: string }) {
     return rcsImportService.onDataChanged(() => void refreshExcluded());
   }, [refresh, refreshExcluded]);
 
-  const syncAgain = useCallback(async (id: string) => {
-    const r = await rcsImportService.removeExclusion({ id });
-    if (!r.success) setResult({ ok: false, text: r.error ?? "Keepr could not save that." });
-    await refreshExcluded();
-  }, [refreshExcluded]);
-
-  const syncAllAgain = useCallback(async () => {
-    const r = await rcsImportService.removeExclusion({ all: true });
-    if (!r.success) setResult({ ok: false, text: r.error ?? "Keepr could not save that." });
-    await refreshExcluded();
-  }, [refreshExcluded]);
-
   const toggleAutoDelete = useCallback(async (on: boolean) => {
     const r = await rcsImportService.setCacheAutoDelete(on);
     if (!r.success) setResult({ ok: false, text: r.error ?? "Keepr could not save that." });
@@ -199,8 +187,6 @@ export function GoogleMessagesSettings({ userId }: { userId: string }) {
       {manageOpen && (
         <NotSyncedChatsModal
           chats={excluded}
-          onSyncAgain={syncAgain}
-          onSyncAllAgain={syncAllAgain}
           onClose={() => setManageOpen(false)}
         />
       )}

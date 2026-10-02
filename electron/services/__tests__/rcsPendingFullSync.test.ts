@@ -9,7 +9,6 @@
  *
  * Mutations that turn this red:
  *   P1 the eye's "on" not recording the chat            → "the eye"
- *   P2 Settings "Sync again" / "Sync all again" not recording → "Settings"
  *   P3 cleared before / without the chat being saved    → "cleared"
  */
 
@@ -27,7 +26,7 @@ jest.mock("../logService", () => {
 });
 
 import { setDb } from "../db/core/dbConnection";
-import { checkRcsExclusion, clearRcsExclusions, listRcsExclusionsForSettings, removeRcsExclusionById, setRcsExclusion } from "../db/syncDbService";
+import { checkRcsExclusion, setRcsExclusion } from "../db/syncDbService";
 import { clearAllPendingFullRead, clearPendingFullRead, listPendingFullRead } from "../db/rcsPendingFullSyncDbService";
 
 const PRODUCTION_SCHEMA = nodePath.join(__dirname, "..", "..", "database", "schema.sql");
@@ -53,22 +52,12 @@ describe("chats switched back on are read in full on the next Sync", () => {
     expect(listPendingFullRead(USER)).toEqual(["conv-1"]);
   });
 
-  it("Settings: Sync again and Sync all again record the chats (P2)", () => {
-    setRcsExclusion(USER, "conv-1", true);
-    setRcsExclusion(USER, "conv-2", true);
-    setRcsExclusion(USER, "conv-3", true);
-    const rows = listRcsExclusionsForSettings(USER);
-    removeRcsExclusionById(USER, rows.find((r) => r.id)!.id);
-    expect(listPendingFullRead(USER)).toHaveLength(1);
-    clearRcsExclusions(USER);
-    expect(new Set(listPendingFullRead(USER))).toEqual(new Set(["conv-1", "conv-2", "conv-3"]));
-  });
-
   it("cleared once the chat is saved — by conversation id or by hash (P3)", () => {
     setRcsExclusion(USER, "conv-1", true);
     checkRcsExclusion(USER, "hash-1", "conv-1");
     setRcsExclusion(USER, "conv-2", true);
-    clearRcsExclusions(USER);
+    setRcsExclusion(USER, "conv-1", false);
+    setRcsExclusion(USER, "conv-2", false);
     expect(new Set(listPendingFullRead(USER))).toEqual(new Set(["conv-1", "conv-2"]));
     expect(clearPendingFullRead(USER, "conv-renamed", "hash-1")).toBeGreaterThan(0); // re-paired: same chat, new id
     expect(listPendingFullRead(USER)).toEqual(["conv-2"]);

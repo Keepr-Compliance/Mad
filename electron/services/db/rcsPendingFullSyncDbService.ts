@@ -24,13 +24,9 @@ const SELECT_FOR_CONVERSATION = sql`
         SELECT chat_hash FROM rcs_chat_exclusions WHERE user_id = ? AND conversation_id = ? AND chat_hash IS NOT NULL
       ))
     )`;
-const SELECT_BY_ID = sql`SELECT conversation_id AS conversationId, chat_hash AS chatHash FROM rcs_chat_exclusions WHERE user_id = ? AND id = ?`;
-const SELECT_ALL = sql`SELECT conversation_id AS conversationId, chat_hash AS chatHash FROM rcs_chat_exclusions WHERE user_id = ?`;
 
-/** The exclusion rows a removal is about to delete (by the eye's conversation id / a Settings row id / all). */
-export function exclusionKeysFor(userId: string, by: { conversationId?: string; id?: string; all?: boolean }): ExclusionKey[] {
-  if (by.all) return dbAll<ExclusionKey>(SELECT_ALL, [userId]);
-  if (by.id) return dbAll<ExclusionKey>(SELECT_BY_ID, [userId, by.id]);
+/** The exclusion rows the eye is about to switch back on (by its conversation id; the eye is the only switch). */
+export function exclusionKeysFor(userId: string, by: { conversationId?: string }): ExclusionKey[] {
   if (by.conversationId) return dbAll<ExclusionKey>(SELECT_FOR_CONVERSATION, [userId, by.conversationId, userId, by.conversationId]);
   return [];
 }

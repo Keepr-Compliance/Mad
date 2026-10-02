@@ -106,18 +106,6 @@ export const rcsImportService = {
     }
   },
 
-  /** P3c: switch one chat back on, or all ("Sync all again"). */
-  async removeExclusion(args: { id?: string; all?: boolean }): Promise<ApiResult<void>> {
-    const bridge = api();
-    if (!bridge || !bridge.removeExclusion) return { success: false, error: NOT_AVAILABLE };
-    try {
-      const r = await bridge.removeExclusion(args);
-      return r.success ? { success: true } : { success: false, error: r.error ?? "Keepr could not save that." };
-    } catch (err) {
-      return { success: false, error: getErrorMessage(err) };
-    }
-  },
-
   /** BACKLOG-3659 P3d: Settings → Google Messages → Force re-import. */
   /** Android's shared Force re-import: Google Messages + the companion's texts and contacts. */
   async clearTexts(): Promise<ApiResult<{ messagesDeleted: number; androidMessagesDeleted: number; contactsDeleted: number }>> {

@@ -2523,13 +2523,6 @@ class DatabaseService implements IDatabaseService {
     return syncDb.setRcsExclusion(userId, conversationId, excluded);
   }
 
-  removeRcsExclusionById(userId: string, id: string) {
-    return syncDb.removeRcsExclusionById(userId, id);
-  }
-
-  clearRcsExclusions(userId: string) {
-    return syncDb.clearRcsExclusions(userId);
-  }
 
   checkRcsExclusion(userId: string, chatHash: string, conversationId: string) {
     return syncDb.checkRcsExclusion(userId, chatHash, conversationId);
