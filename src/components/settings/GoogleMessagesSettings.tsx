@@ -16,8 +16,8 @@
  * - Force re-import: Android's SHARED reset (BACKLOG-3657) — every text
  *   imported from Google Messages AND from the Android Companion (one
  *   confirmation naming both, AndroidForceReimportWarning).
- * - Chats not synced (BACKLOG-3658 P3c): one line "N chats not synced · Manage";
- *   Manage opens NotSyncedChatsModal, READ-ONLY (founder, 2026-10-02): the
+ * - Chats not synced (BACKLOG-3658 P3c): one line "N chats not synced · See hidden list";
+ *   "See hidden list" opens NotSyncedChatsModal ("Hidden chats"), READ-ONLY (founder, 2026-10-02): the
  *   chats switched off with the eye on their row in Google Messages, and the
  *   hint to click the eye to sync one again. The eye is the only control.
  *   Titles shown here stay in Keepr (never sent to the page).
@@ -185,7 +185,7 @@ export function GoogleMessagesSettings({ userId }: { userId: string }) {
         </p>
       </div>
 
-      {/* Founder (2026-10-02): one line + Manage (a modal), never a list
+      {/* Founder (2026-10-02): one line + "See hidden list" (a read-only modal), never a list
           that fills the page. 0 → no line. */}
       <div className="p-4 bg-white rounded-lg border border-gray-200" data-testid="gm-not-synced">
         {excluded.length > 0 && (
@@ -196,7 +196,7 @@ export function GoogleMessagesSettings({ userId }: { userId: string }) {
               className="text-indigo-700 hover:text-indigo-900 font-medium"
               onClick={() => setManageOpen(true)}
             >
-              Manage
+              See hidden list
             </button>
           </div>
         )}

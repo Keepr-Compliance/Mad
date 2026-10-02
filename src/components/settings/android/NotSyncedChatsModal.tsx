@@ -1,5 +1,5 @@
 /**
- * Settings → Google Messages → "N chats not synced · Manage" (founder,
+ * Settings → Google Messages → "N chats not synced · See hidden list" (founder,
  * 2026-10-02): the chats switched off with the eye in Google Messages, in a
  * modal instead of an inline list that would fill the page.
  *
@@ -56,7 +56,7 @@ export function NotSyncedChatsModal({ chats, onClose }: NotSyncedChatsModalProps
       >
         <div className="flex items-center justify-between px-4 pt-4 pb-2">
           <h2 id="gm-not-synced-title" className="text-base font-semibold text-gray-900">
-            {chats.length} chat{chats.length === 1 ? "" : "s"} not synced
+            Hidden chats
           </h2>
           <button type="button" className="text-sm text-gray-600 hover:text-gray-900" onClick={onClose} aria-label="Close">
             Close

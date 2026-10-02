@@ -145,16 +145,16 @@ describe("GoogleMessagesSettings", () => {
     await waitFor(() => expect(mockAutoDelete).toHaveBeenCalledWith(true));
   });
 
-  // Founder (2026-10-02): one line + Manage, never an inline list. Mutation:
+  // Founder (2026-10-02): one line + "See hidden list", never an inline list. Mutation:
   // the list back inline, or the line shown at 0 → red.
-  it("chats not synced: one line 'N chats not synced · Manage'; no inline list; 0 → no line (M1)", async () => {
+  it("chats not synced: one line 'N chats not synced · See hidden list'; no inline list; 0 → no line (M1)", async () => {
     mockExcluded = [
       { id: "x-1", title: "Test Contact A", createdAt: "2026-10-01T10:00:00.000Z" },
       { id: "x-2", title: null, createdAt: "2026-10-01T09:00:00.000Z" },
     ];
     const view = render(<GoogleMessagesSettings userId="user-1" />);
     const box = await screen.findByTestId("gm-not-synced");
-    await waitFor(() => expect(screen.getByTestId("gm-not-synced-line")).toHaveTextContent("2 chats not synced · Manage"));
+    await waitFor(() => expect(screen.getByTestId("gm-not-synced-line")).toHaveTextContent("2 chats not synced · See hidden list"));
     expect(box).not.toHaveTextContent("Test Contact A");
     expect(screen.queryByRole("button", { name: "Sync again" })).toBeNull();
     expect(box).toHaveTextContent("texts already in Keepr stay");
@@ -166,17 +166,19 @@ describe("GoogleMessagesSettings", () => {
   });
 
   // Founder (2026-10-02): the modal is READ-ONLY — the eye in Google Messages
-  // is the only switch. Mutations: Manage not opening the modal, a Sync again
+  // is the only switch. Mutations: "See hidden list" not opening the modal, a Sync again
   // / Sync all again action back, or the eye hint missing → red.
-  it("Manage opens the read-only modal: titles or the fallback, search, the eye hint — no actions (M2, E1, E2)", async () => {
+  it("See hidden list opens the read-only \"Hidden chats\" modal: titles or the fallback, search, the eye hint — no actions (M2, E1, E2)", async () => {
     mockExcluded = [
       { id: "x-1", title: "Test Contact A", createdAt: "2026-10-01T10:00:00.000Z" },
       { id: "x-2", title: null, createdAt: "2026-10-01T09:00:00.000Z" },
       { id: "x-3", title: "+1 (555) 555-0123", createdAt: "2026-10-01T08:00:00.000Z" },
     ];
     render(<GoogleMessagesSettings userId="user-1" />);
-    fireEvent.click(await screen.findByRole("button", { name: "Manage" }));
+    fireEvent.click(await screen.findByRole("button", { name: "See hidden list" }));
     const list = await screen.findByTestId("gm-not-synced-list");
+    // Founder copy: the read-only modal is "Hidden chats". Mutation: old title → red.
+    expect(screen.getByRole("heading", { name: "Hidden chats" })).toBeInTheDocument();
     expect(list).toHaveTextContent("Test Contact A");
     expect(list).toHaveTextContent("A chat you switched off in Google Messages");
     const search = screen.getByRole("searchbox", { name: "Search chats not synced" });
@@ -196,7 +198,7 @@ describe("GoogleMessagesSettings", () => {
   it("Escape closes the modal (M3)", async () => {
     mockExcluded = [{ id: "x-1", title: null, createdAt: "2026-10-01T10:00:00.000Z" }];
     render(<GoogleMessagesSettings userId="user-1" />);
-    fireEvent.click(await screen.findByRole("button", { name: "Manage" }));
+    fireEvent.click(await screen.findByRole("button", { name: "See hidden list" }));
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
     expect(screen.queryByTestId("gm-not-synced-modal")).toBeNull();
   });
