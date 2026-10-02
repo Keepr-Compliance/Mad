@@ -114,6 +114,8 @@
     if (confirmedLine) lines.push(confirmedLine);
     var depthLine = historyDepthLine(s.depth);
     if (depthLine) lines.push(depthLine);
+    var extraLine = extraTimeLine(s.extraTime);
+    if (extraLine) lines.push(extraLine);
     if (s.notChecked > 0) {
       lines.push("Not checked: " + s.notChecked + " chats (name didn't match a contact on this transaction)");
     }
@@ -198,6 +200,12 @@
     return "History depth: " + d.limit + " chats reached " + limit + " · " + d.start + " reached the chat's start · " +
       d.partial + " not fully loaded" +
       (d.gaps > 0 ? " · " + d.gaps + " gaps (" + d.gapsRecovered + " recovered)" : "");
+  }
+
+  /** SR: the run's extra-time pool, "Extra time used: N min of 30" — or null when none was used. */
+  function extraTimeLine(x) {
+    if (!x || !(x.usedMs > 0)) return null;
+    return "Extra time used: " + Math.ceil(x.usedMs / 60000) + " min of " + Math.round(x.poolMs / 60000);
   }
 
   /** SR S2: the per-kind count line ("History start: …"), or null when no chat was imported. */
@@ -467,6 +475,11 @@
     var totals = { chats: 0, messages: 0, images: 0, reactions: 0, historyConfirmed: { marker: 0, first_page: 0, no_overflow: 0, date_floor: 0, none: 0 },
       depth: { limit: 0, start: 0, partial: 0, gaps: 0, gapsRecovered: 0, floorDays: null }, removedByUser: 0, imagesNotKept: 0, notText: 0, noMessagesYet: 0, notSynced: 0 };
     var contactsWithoutPhone = 0;
+    // SR: the per-RUN pool of extra history time, shared by every chat.
+    var extraTime = {
+      poolMs: typeof env.scan.RCS_HISTORY_EXTENSION_POOL_MS === "number" ? env.scan.RCS_HISTORY_EXTENSION_POOL_MS : 30 * 60000,
+      usedMs: 0,
+    };
 
     // BACKLOG-3658: progress lines carry the page's Cancel (this job only).
     var RUNNING_EXTRAS = { cancel: true };
@@ -513,6 +526,7 @@
         reactions: totals.reactions,
         historyConfirmed: totals.historyConfirmed,
         depth: totals.depth,
+        extraTime: extraTime,
         notChecked: progress.notChecked,
         contactsWithoutPhone: contactsWithoutPhone,
         removedByUser: totals.removedByUser,
@@ -726,6 +740,7 @@
           },
           stepBack: env.stepBackMessages,
           budgetMs: env.historyBudgetMs,
+          extensionPoolLeftMs: Math.max(0, extraTime.poolMs - extraTime.usedMs),
           sleep: env.sleep,
           floorMs: pendingFull[conv.conversationId] ? fullFloorMs : floorMs,
           cap: env.historyCap,
@@ -806,6 +821,7 @@
         totals.reactions += chatReactions;
         // SR S2: how this chat's history start was confirmed, counted per kind.
         totals.historyConfirmed[startConfirmedBy(hist)] += 1;
+        extraTime.usedMs += hist.extraMs || 0;
         // History depth (3671): how far back this chat was READ, in whole days
         // (older than the floor is dropped at commit, so this is not what is kept).
         var nowMs = (env.now ? env.now() : new Date()).getTime();
@@ -827,6 +843,7 @@
           // Per-chat load time and batches (counted load time, in seconds).
           ", load " + Math.round((hist.elapsedMs || 0) / 1000) + "s, batches " + (hist.batches || 0) +
           (hist.budgetExtensions ? ", budget extended " + hist.budgetExtensions + "×" : "") +
+          (hist.poolExhausted ? ", extra time used up" : "") +
           (hist.gapsDetected ? ", gaps " + hist.gapsDetected + " detected / " + (hist.gapsRecovered || 0) + " recovered" : "") + ")");
         // Imported, but only back to the cap: older messages are missing.
         if (hist.stopReason === "cap") leaveOut(conv, "history_truncated");
@@ -898,6 +915,9 @@
         : "Checked " + candidates.length + " of " + candidates.length + " chats");
     }
 
+    if (extraTime.usedMs > 0) {
+      log("extra time used: " + Math.ceil(extraTime.usedMs / 60000) + " min of " + Math.round(extraTime.poolMs / 60000));
+    }
     // 5. Done: Keepr brings itself forward. Every chat left out (or imported
     // in part) is named here and on the page — never a silent skip.
     var reported = notReached.slice(0, NOT_REACHED_CAP);

@@ -739,6 +739,13 @@
   var HISTORY_BUDGET_EXTEND_MS = 30000;
   var HISTORY_BUDGET_GROWTH_WINDOW_MS = 10000;
   var HISTORY_BUDGET_CAP_MS = 300000;
+  /**
+   * SR: the extra time is a per-RUN pool, shared by every chat of a Sync.
+   * Once it is spent, the remaining chats get only the base budget (a chat
+   * still loading then ends not_settled: reported, coverage not marked, read
+   * in full next time). The job passes what is left (extensionPoolLeftMs).
+   */
+  var RCS_HISTORY_EXTENSION_POOL_MS = 30 * 60000;
 
   /**
    * History loading v2 (2026-10-02). A batch request polls every
@@ -857,7 +864,7 @@
    * @param {{scrollUp: function(): (void|Promise<void>), sleep: function(number): Promise<void>,
    *          nudgeDown?: function(): (void|Promise<void>), nudgeReturnStep?: function(number, number): (void|Promise<void>),
    *          nudge?: function(): (void|Promise<void>), stepDown?: function(number): (boolean|Promise<boolean>),
-   *          oldestMs: function(): (number|null), floorMs?: (number|null), cap?: number, budgetMs?: number, budgetCapMs?: number,
+   *          oldestMs: function(): (number|null), floorMs?: (number|null), cap?: number, budgetMs?: number, budgetCapMs?: number, extensionPoolLeftMs?: number,
    *          startMarkerSelectors?: string[], loadingSelectors?: string[], hasScroller?: function(): boolean,
    *          extractBatch?: function(): Array<{msgId: string, sentAt: string}>, stepBack?: function(): (void|Promise<void>),
    *          imagePass?: boolean, pollMs?: number, intervalMs?: number, onProgress?: function(number): void,
@@ -869,6 +876,10 @@
     var budgetMs = typeof io.budgetMs === "number" ? io.budgetMs : RCS_HISTORY_BUDGET_MS;
     var budgetCapMs = Math.max(budgetMs, typeof io.budgetCapMs === "number" ? io.budgetCapMs : HISTORY_BUDGET_CAP_MS);
     var budgetExtensions = 0;
+    var baseBudgetMs = budgetMs;
+    var poolLeftMs = typeof io.extensionPoolLeftMs === "number" ? Math.max(0, io.extensionPoolLeftMs) : RCS_HISTORY_EXTENSION_POOL_MS;
+    var chatCapMs = Math.min(budgetCapMs, baseBudgetMs + poolLeftMs);
+    var poolExhausted = false;
     var lastGrowthAt = -Infinity;
     var batches = 0;
     var startSelectors = io.startMarkerSelectors || HISTORY_START_MARKER_SELECTORS;
@@ -898,9 +909,13 @@
     /** Budget left? Out of it while still growing → extended (up to the cap). */
     function inBudget() {
       if (spent < budgetMs) return true;
-      if (budgetMs < budgetCapMs && spent - lastGrowthAt <= HISTORY_BUDGET_GROWTH_WINDOW_MS) {
-        budgetMs = Math.min(budgetCapMs, budgetMs + HISTORY_BUDGET_EXTEND_MS);
-        budgetExtensions += 1;
+      if (spent - lastGrowthAt <= HISTORY_BUDGET_GROWTH_WINDOW_MS) {
+        if (budgetMs < chatCapMs) {
+          budgetMs = Math.min(chatCapMs, budgetMs + HISTORY_BUDGET_EXTEND_MS);
+          budgetExtensions += 1;
+        } else if (chatCapMs < budgetCapMs) {
+          poolExhausted = true; // still growing, but the run's extra time is spent
+        }
       }
       return spent < budgetMs;
     }
@@ -972,6 +987,10 @@
       collect();
       var r = { stopReason: stopReason, count: count, scrolls: scrolls, nudges: nudges, batches: batches, elapsedMs: spent };
       if (budgetExtensions > 0) r.budgetExtensions = budgetExtensions;
+      // Extra time actually used from the run's pool (not what was granted).
+      var extraMs = Math.max(0, Math.min(spent, budgetMs) - baseBudgetMs);
+      if (extraMs > 0) r.extraMs = extraMs;
+      if (poolExhausted) r.poolExhausted = true;
       if (confirmedBy) r.confirmedBy = confirmedBy;
       if (gapsDetected > 0) {
         r.gapsDetected = gapsDetected;
@@ -1382,6 +1401,7 @@
     HISTORY_BUDGET_EXTEND_MS: HISTORY_BUDGET_EXTEND_MS,
     HISTORY_BUDGET_GROWTH_WINDOW_MS: HISTORY_BUDGET_GROWTH_WINDOW_MS,
     HISTORY_BUDGET_CAP_MS: HISTORY_BUDGET_CAP_MS,
+    RCS_HISTORY_EXTENSION_POOL_MS: RCS_HISTORY_EXTENSION_POOL_MS,
     HISTORY_SMALL_CHAT: HISTORY_SMALL_CHAT,
     HISTORY_FIRST_GROWTH_MS: HISTORY_FIRST_GROWTH_MS,
     HISTORY_NUDGE_WATCH_MS: HISTORY_NUDGE_WATCH_MS,

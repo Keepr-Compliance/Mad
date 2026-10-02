@@ -301,6 +301,39 @@ describe("runJob: a cache Sync", () => {
     expect(extras.copy).toContain("gaps 1 detected / 0 recovered");
   });
 
+  // SR: one pool of extra history time per RUN (30 min). Each chat is given
+  // what is left; once spent, chats get the base budget only. Shown in the
+  // step log and the done details. Mutations: the used time not subtracted →
+  // red; the details line missing → red.
+  it("the extra-time pool is shared by the run's chats and shown when used", async () => {
+    const t = cacheEnv({ rows: ROWS, numbers: { [id(0)]: ["+15555550101"], [id(1)]: ["+15555550102"], [id(2)]: ["+15555550103"] } });
+    const stops = [
+      { stopReason: "no_more", count: 1, scrolls: 3, nudges: 0, extraMs: 1_200_000 },
+      { stopReason: "not_settled", count: 1, scrolls: 9, nudges: 0, extraMs: 600_000, poolExhausted: true },
+      { stopReason: "not_settled", count: 1, scrolls: 2, nudges: 0, poolExhausted: true },
+    ];
+    const poolLeft: Array<number | undefined> = [];
+    let n = 0;
+    (t.env.scan as Record<string, unknown>).loadHistory = async (_doc: unknown, io: { extensionPoolLeftMs?: number }) => {
+      poolLeft.push(io.extensionPoolLeftMs);
+      return stops[n++];
+    };
+    await job.runJob(JOB, t.env);
+    expect(poolLeft).toEqual([1_800_000, 600_000, 0]);
+    const [, , extras] = t.shown[t.shown.length - 1] as [string, boolean, { details: string; copy: string }];
+    expect(extras.copy).toContain("extra time used up");
+    expect(extras.copy).toContain("extra time used: 30 min of 30");
+    expect(extras.details).toContain("Extra time used: 30 min of 30");
+  });
+
+  it("no extra time used: no extra-time line", async () => {
+    const t = cacheEnv({ rows: ROWS, numbers: { [id(0)]: ["+15555550101"], [id(1)]: ["+15555550102"], [id(2)]: ["+15555550103"] } });
+    (t.env.scan as Record<string, unknown>).loadHistory = async () => ({ stopReason: "no_more", count: 1, scrolls: 0, nudges: 0 });
+    await job.runJob(JOB, t.env);
+    const [, , extras] = t.shown[t.shown.length - 1] as [string, boolean, { details: string; copy: string }];
+    expect(extras.details).not.toContain("Extra time used");
+  });
+
   // History v2: the image pass only where Keepr keeps the images.
   // Mutation: imagePass always on → red.
   it("image pass only for chats whose images Keepr keeps (/match keepImages)", async () => {

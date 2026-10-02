@@ -717,6 +717,7 @@ describe("chat switch readiness (live measurement 2026-09-29)", () => {
 // ---------------------------------------------------------------------------
 
 interface HistoryModule {
+  RCS_HISTORY_EXTENSION_POOL_MS: number;
   HISTORY_BUDGET_EXTEND_MS: number;
   HISTORY_BUDGET_GROWTH_WINDOW_MS: number;
   HISTORY_BUDGET_CAP_MS: number;
@@ -732,6 +733,7 @@ interface HistoryModule {
       noNewTimeoutMs?: number;
       budgetMs?: number;
       budgetCapMs?: number;
+      extensionPoolLeftMs?: number;
       nudge?: () => void | Promise<void>;
       startMarkerSelectors?: string[];
       hasScroller?: () => boolean;
@@ -743,7 +745,7 @@ interface HistoryModule {
       onProgress?: (n: number) => void;
     },
   ) => Promise<{ stopReason: string; count: number; scrolls: number; nudges: number; confirmedBy?: string; gapsDetected?: number; messages?: unknown[];
-    batches?: number; elapsedMs?: number; budgetExtensions?: number }>;
+    batches?: number; elapsedMs?: number; budgetExtensions?: number; extraMs?: number; poolExhausted?: boolean }>;
 }
 const hist = scan as unknown as HistoryModule;
 const extractFn = extract.extractConversation as (d: Document, h: string, n: Date) => {
@@ -1098,6 +1100,44 @@ describe("loadHistory: scroll up until the start date, the confirmed start, the 
     expect(r.count).toBeLessThan(2000);
     expect(r.elapsedMs).toBeLessThanOrEqual(20_075); // at most one 75 ms poll past it
     expect(r.elapsedMs).toBeGreaterThanOrEqual(19_000);
+  });
+
+  // SR: the extra time is a per-RUN pool. Mutations: the pool ignored → red
+  // ("pool spent", "pool partly left"); extraMs counting the granted time
+  // instead of the used time → red ("used, not granted").
+  it("pool spent: a growing chat gets only the base budget and ends not_settled", async () => {
+    const p = historyPane({ total: 1500 });
+    p.render();
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null, budgetMs: 5000, extensionPoolLeftMs: 0 });
+    expect(r.stopReason).toBe("not_settled");
+    expect(r.budgetExtensions).toBeUndefined();
+    expect(r.extraMs).toBeUndefined();
+    expect(r.poolExhausted).toBe(true);
+    expect(r.elapsedMs).toBeLessThanOrEqual(5_075);
+  });
+
+  it("pool partly left: extensions stop where the pool ends", async () => {
+    const p = historyPane({ total: 5000 });
+    p.render();
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null, budgetMs: 5000, extensionPoolLeftMs: 10_000 });
+    expect(r.stopReason).toBe("not_settled");
+    expect(r.poolExhausted).toBe(true);
+    expect(r.extraMs).toBe(10_000);
+    expect(r.elapsedMs).toBeLessThanOrEqual(15_075);
+  });
+
+  it("used, not granted: a chat that finishes inside an extension draws only what it used", async () => {
+    const p = historyPane({ total: 1500 });
+    p.render();
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null, budgetMs: 5000, extensionPoolLeftMs: 600_000 });
+    expect(r.stopReason).toBe("no_more");
+    expect(r.poolExhausted).toBeUndefined();
+    expect(r.extraMs).toBe((r.elapsedMs ?? 0) - 5000);
+    expect(r.extraMs! % 30_000).not.toBe(0); // not a whole number of grants
+  });
+
+  it("the run's extra-time pool is 30 min", () => {
+    expect(hist.RCS_HISTORY_EXTENSION_POOL_MS).toBe(30 * 60_000);
   });
 
   it("the default extension: +30 s while growth in the last 10 s, up to 5 min", () => {
