@@ -804,6 +804,8 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
     const reply = await request(port, "POST", `/job/${jobId}/finish`, EXT, JSON.stringify({ chats: 1, messages: 1, images: 0 }));
     expect(reply.body).toEqual({ ok: true });
     expect(bridge.getJob()?.saved).toBeUndefined();
+    // SR minor: the timed-out waiter's entry is gone.
+    expect(bridge.pendingSavedWaiters(jobId)).toBe(0);
     bridge.recordCacheSaved(jobId, { chats: 1, messages: 1, newMessages: 0 });
     expect(bridge.getJob()?.saved).toEqual({ chats: 1, messages: 1, newMessages: 0 });
   });

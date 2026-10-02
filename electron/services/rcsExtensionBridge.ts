@@ -428,16 +428,29 @@ export class RcsExtensionBridge {
   private waitForSaved(job: RcsImportJob, ms: number): Promise<void> {
     if (job.saved !== undefined) return Promise.resolve();
     return new Promise((resolve) => {
-      const timer = setTimeout(done, ms);
+      const jobId = job.jobId;
+      const waiters = this.savedWaiters;
+      const timer = setTimeout(() => {
+        // SR minor: a timed-out waiter leaves no entry behind.
+        const left = (waiters.get(jobId) ?? []).filter((w) => w !== done);
+        if (left.length > 0) waiters.set(jobId, left);
+        else waiters.delete(jobId);
+        done();
+      }, ms);
       timer.unref?.();
-      const list = this.savedWaiters.get(job.jobId) ?? [];
+      const list = waiters.get(jobId) ?? [];
       list.push(done);
-      this.savedWaiters.set(job.jobId, list);
+      waiters.set(jobId, list);
       function done(): void {
         clearTimeout(timer);
         resolve();
       }
     });
+  }
+
+  /** /finish requests still waiting for the job's save (diagnostics, tests). */
+  pendingSavedWaiters(jobId: string): number {
+    return this.savedWaiters.get(jobId)?.length ?? 0;
   }
 
   getJob(): RcsJobSnapshot | null {

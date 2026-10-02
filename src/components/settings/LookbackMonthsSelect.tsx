@@ -28,6 +28,12 @@ interface LookbackMonthsSelectProps {
 export function LookbackMonthsSelect({ value, onChange, disabled, className = DEFAULT_CLASS, ...rest }: LookbackMonthsSelectProps) {
   return (
     <select value={value ?? "all"} onChange={(e) => onChange(e.target.value)} disabled={disabled} className={className} {...rest}>
+      {/* A stored value outside the list (e.g. 2) is shown as it is, never blank. */}
+      {value !== null && !LOOKBACK_MONTH_OPTIONS.includes(value) && (
+        <option value={String(value)}>
+          Custom: {value} month{value === 1 ? "" : "s"}
+        </option>
+      )}
       {LOOKBACK_MONTH_OPTIONS.map((m) => (
         <option key={m} value={String(m)}>
           Last {m} months
