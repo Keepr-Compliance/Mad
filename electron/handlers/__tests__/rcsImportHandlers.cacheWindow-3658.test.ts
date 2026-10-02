@@ -139,11 +139,11 @@ describe("rcs-import:start-cache-job window (BACKLOG-3658)", () => {
 
   // Item 5: the Sync screen's line names the months the cache floor reads
   // (messageImport.filters). Mutation: another key / no default → red.
-  it("get-extension-state: lookbackMonths from messageImport.filters (absent → 3, null → All time)", async () => {
+  it("get-extension-state: lookbackMonths from messageImport.filters (absent → 1.5, null → All time)", async () => {
     const state = async () =>
       ((await handlers.get("rcs-import:get-extension-state")!({})) as { state: { lookbackMonths?: number | null } }).state.lookbackMonths;
     mockStoredFilters = null;
-    expect(await state()).toBe(3);
+    expect(await state()).toBe(1.5);
     mockStoredFilters = { lookbackMonths: 12 };
     expect(await state()).toBe(12);
     mockStoredFilters = { lookbackMonths: null };
