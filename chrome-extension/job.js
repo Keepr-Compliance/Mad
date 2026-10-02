@@ -53,6 +53,25 @@
 
   var CANCELLED = "Sync cancelled in Keepr";
   var MESSAGES_NOT_LOADED = "messages_not_loaded";
+  /**
+   * SR (2026-10-02): the chat is ALREADY open (often the top chat in the two-
+   * pane layout): clicking it re-renders nothing, so waiting for the message
+   * set to change timed out as "not loaded". Then the "before" snapshot is
+   * this sentinel (never a real set) and the messages on screen are read once
+   * present and stable for ALREADY_OPEN_STABLE_MS.
+   */
+  var ALREADY_OPEN = "\u0000already-open";
+  var ALREADY_OPEN_STABLE_MS = 1000;
+
+  /** The URL AND the header already show this chat. */
+  function chatAlreadyOpen(env, conv) {
+    var loc = env.getLocation ? env.getLocation() : null;
+    var m = loc && /^\/web\/conversations\/([^/?#]+)/.exec(loc.pathname || "");
+    if (!m || m[1] !== conv.conversationId) return false;
+    var header = env.doc && env.doc.querySelector ? env.doc.querySelector("[data-e2e-header-title]") : null;
+    var norm = function (t) { return String(t || "").replace(/\s+/g, " ").trim().toLowerCase(); };
+    return !!header && !!conv.name && norm(header.textContent) === norm(conv.name);
+  }
 
   /** Keepr keeps at most this many named entries (RCS_NOT_REACHED_CAP). */
   var NOT_REACHED_CAP = 20;
@@ -884,7 +903,9 @@
           " id " + (await tag("conversation-id:" + conv.conversationId)) + " reason=" + candidates[i].reason);
         // The messages on screen before the click: the next chat is ready only
         // once this set has been replaced (the URL and title flip first).
-        var before = env.scan.messageIdSet(env.doc);
+        var alreadyOpen = chatAlreadyOpen(env, conv);
+        var before = alreadyOpen ? ALREADY_OPEN : env.scan.messageIdSet(env.doc);
+        if (alreadyOpen) log("  already open: read as shown");
         await env.openConversation(conv);
         opened = true;
         var numbers = await env.scan.readParticipantsAndClose(env.doc, { click: env.click, sleep: env.sleep });
@@ -933,7 +954,7 @@
         var ready = await env.scan.waitForMessageSwap(env.doc, before, {
           sleep: env.sleep,
           timeoutMs: env.messagesTimeoutMs,
-          stableMs: env.messagesStableMs,
+          stableMs: alreadyOpen ? Math.max(ALREADY_OPEN_STABLE_MS, env.messagesStableMs || 0) : env.messagesStableMs,
           reportEmpty: true,
           emptyConfirmMs: env.messagesEmptyConfirmMs,
         });
@@ -1798,6 +1819,8 @@
     lastSyncText: lastSyncText,
     windowLabel: windowLabel,
     mediaLine: mediaLine,
+    chatAlreadyOpen: chatAlreadyOpen,
+    ALREADY_OPEN_STABLE_MS: ALREADY_OPEN_STABLE_MS,
     RCS_MAX_PHOTO_BYTES: RCS_MAX_PHOTO_BYTES,
     RCS_MAX_VIDEO_BYTES: RCS_MAX_VIDEO_BYTES,
     RCS_MEDIA_RETRY_POOL_MS: RCS_MEDIA_RETRY_POOL_MS,

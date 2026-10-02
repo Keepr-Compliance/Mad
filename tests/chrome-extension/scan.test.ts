@@ -53,6 +53,7 @@ interface ApiReply {
 }
 
 interface JobModule {
+  chatAlreadyOpen: (env: { doc: Document; getLocation: () => { pathname: string; href: string } }, conv: { conversationId: string; name: string }) => boolean;
   jobIdFromHash: (hash: string) => string | null;
   NOT_SIGNED_IN: string;
   runJob: (jobId: string, env: Record<string, unknown>) => Promise<{ outcome: string }>;
@@ -1360,6 +1361,33 @@ describe("job runner: loads history before extracting a matched chat", () => {
     expect(outcome.skips).toEqual([{ conversationId: "aaaaaaaaaaaaaaaaaaa", reason: "history_not_settled" }]);
     expect(t.posts()).not.toContain("/chat");
     expect(t.posts()).toContain("/finish");
+  });
+
+  // SR (live, 0.3.18): the top chat was ALREADY open at job start; clicking it
+  // re-rendered the same messages, the swap never came, and it was left out as
+  // messages_not_loaded. Mutation: the "before" snapshot taken as usual → red.
+  it("a chat already open (URL + header) is read as shown, not skipped as not loaded", async () => {
+    const t = historyJob({ total: 30, startDate: null });
+    t.env.messagesTimeoutMs = 1500;
+    // The page already shows the chat: its URL, header and messages.
+    await t.env.openConversation({ conversationId: "aaaaaaaaaaaaaaaaaaa", name: "Test Contact A", href: "" } as never);
+    document.body.insertAdjacentHTML("afterbegin", LIST);
+    const outcome = (await job.runJob(t.JOB, t.env)) as HistoryOutcome & { skips: Array<{ reason: string }> };
+    expect(outcome.outcome).toBe("finished");
+    expect(outcome.skips).not.toContainEqual({ conversationId: "aaaaaaaaaaaaaaaaaaa", reason: "messages_not_loaded" });
+    expect(t.posts()).toContain("/chat");
+    expect(t.sentIds().length).toBeGreaterThan(0);
+  });
+
+  it("chatAlreadyOpen: the URL AND the header must both show the chat", () => {
+    document.body.innerHTML = '<div data-e2e-header-title><h2>Test Contact A</h2></div>';
+    const env = (path: string) => ({ doc: document, getLocation: () => ({ pathname: path, href: "" }) });
+    const conv = { conversationId: "aaaaaaaaaaaaaaaaaaa", name: "Test Contact A" };
+    expect(job.chatAlreadyOpen(env("/web/conversations/aaaaaaaaaaaaaaaaaaa"), conv)).toBe(true);
+    expect(job.chatAlreadyOpen(env("/web/conversations/bbbbbbbbbbbbbbbbbbb"), conv)).toBe(false);
+    expect(job.chatAlreadyOpen(env("/web/conversations/aaaaaaaaaaaaaaaaaaa"), { ...conv, name: "Someone Else" })).toBe(false);
+    document.body.innerHTML = "";
+    expect(job.chatAlreadyOpen(env("/web/conversations/aaaaaaaaaaaaaaaaaaa"), conv)).toBe(false);
   });
 
   it("stops at the cap", async () => {
