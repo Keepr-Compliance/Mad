@@ -349,3 +349,54 @@ describe("the nonce store (A8)", () => {
     expect(PAIR_NONCE_TTL_MS).toBe(120_000);
   });
 });
+
+// SR S3: the revocation race. A signed request passes the gate as user-a; the
+// session is signed out before the write. The write re-checks the user
+// (stillSameUser): 409 user_changed, the job is cancelled, nothing staged.
+// Mutation: no re-check at the write → the chat is staged for a signed-out
+// user → red.
+describe("signed out while a signed request is past the gate (S3)", () => {
+  it("the write refuses (user_changed), the job is cancelled, nothing staged", async () => {
+    await bridge.stop();
+    store = memoryStore();
+    auth = new RcsPairingAuth(P, store, { now: () => clock });
+    const staged = jest.fn(async () => ({ received: 2, stored: 2, alreadyPresent: 0, linked: 0, reactions: 0, reactionsStored: 0 }));
+    let signOutAfterGate = false;
+    bridge = new RcsExtensionBridge({
+      importChat: jest.fn(),
+      importImage: jest.fn(),
+      importCacheChat: staged,
+      // The gate asks first (user-a); the sign-out lands right after it.
+      currentUserId: async () => {
+        const u = currentUser;
+        if (signOutAfterGate) {
+          signOutAfterGate = false;
+          currentUser = null;
+        }
+        return u;
+      },
+      jobs: new RcsJobRegistry(),
+      pairing: auth,
+      pairingMode: "dual",
+    } as never);
+    expect(await bridge.start(0)).toBe("listening");
+    port = bridge.getStatus().port;
+    const p = await pairWith(auth.issueCode("user-a").code);
+    const job = bridge.createCacheJob("user-a", { since: "2026-08-01T00:00:00.000Z" })!;
+    const go = async (route: string, body = "") => post(port, `/job/${job.jobId}/${route}`, signed(p, `/job/${job.jobId}/${route}`, body).headers, body);
+    expect((await go("claim")).status).toBe(200);
+    const match = JSON.stringify({ conversationId: "aaaaaaaaaaaaaaaaaaa", numbers: ["(555) 555-0142"] });
+    expect((await go("match", match)).status).toBe(200);
+    signOutAfterGate = true;
+    const chat = JSON.stringify({
+      conversationId: "aaaaaaaaaaaaaaaaaaa", title: "Test Contact A",
+      messages: [{ msgId: "1", direction: "inbound", sender: "x", text: "one", sentAt: "2026-09-20T13:05:00.000Z", transport: "sms" }],
+      participants: [{ name: "Test Contact A", number: "(555) 555-0142" }],
+    });
+    const r = await go("chat", chat);
+    expect(r.status).toBe(409);
+    expect(r.body.error).toBe("user_changed");
+    expect(staged).not.toHaveBeenCalled();
+    expect(bridge.activeJob()).toBeNull();
+  });
+});
