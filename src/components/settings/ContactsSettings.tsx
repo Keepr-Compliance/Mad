@@ -168,10 +168,16 @@ export function ContactsSettings({
     const val = initialPreferences?.contactSources?.inferred?.gmailEmails;
     return typeof val === "boolean" ? val : false;
   });
-  const [messagesInferred, setMessagesInferred] = useState<boolean>(() => {
+  // BACKLOG-3670 C1: null = no stored value. Unset → ON for an Android:
+  // Google Messages user (the main process applies the same rule to the
+  // people found in texts), off otherwise; an explicit value wins.
+  const [messagesInferredStored, setMessagesInferredStored] = useState<boolean | null>(() => {
     const val = initialPreferences?.contactSources?.inferred?.messages;
-    return typeof val === "boolean" ? val : false;
+    return typeof val === "boolean" ? val : null;
   });
+  const messagesInferred = messagesInferredStored ?? messagesImportSource === "android-messages-web";
+  const setMessagesInferred: React.Dispatch<React.SetStateAction<boolean>> = (v) =>
+    setMessagesInferredStored(typeof v === "function" ? v(messagesInferred) : v);
 
   /**
    * BACKLOG-2986: the message shown when a toggle's write fails, cleared on the

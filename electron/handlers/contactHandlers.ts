@@ -144,16 +144,17 @@ import {
 // the import goes with it. Only the type remains in use.
 import { type ContactOrigin } from "../services/db/contactOriginLink";
 import { getValidUserId } from "../utils/userIdHelper";
-import { isContactSourceEnabled } from "../utils/preferenceHelper";
+import { isContactSourceEnabled, isTextPeopleEnabled } from "../utils/preferenceHelper";
 
 /**
  * BACKLOG-3670: people found in Google Messages texts are offered only while
  * Settings → Contacts → Auto-discover from conversations → Messages / SMS is
- * on (off by default, like the switch). A failed read → off.
+ * on — by default on for an Android: Google Messages user (C1, founder
+ * decision b), off otherwise; an explicit off stays off. A failed read → off.
  */
 async function textPeopleEnabled(userId: string): Promise<boolean> {
   try {
-    return await isContactSourceEnabled(userId, "inferred", "messages", false);
+    return await isTextPeopleEnabled(userId);
   } catch {
     return false;
   }

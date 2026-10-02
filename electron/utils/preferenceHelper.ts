@@ -361,6 +361,29 @@ export async function isShadowDeltaSyncEnabled(userId: string): Promise<boolean>
 }
 
 /**
+ * BACKLOG-3670 C1 (founder decision b): are people found in Google Messages
+ * texts offered? The Settings → Contacts → Auto-discover → Messages / SMS
+ * switch decides; with NO stored value it is ON for a user whose import
+ * source is Android: Google Messages, off otherwise. An explicit off stays off.
+ * Pure, so both defaults are tested apart from the read.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- matches getPreferences
+export function resolveTextPeopleEnabled(preferences: Record<string, any> | null | undefined): boolean {
+  const stored = preferences?.contactSources?.inferred?.messages;
+  if (typeof stored === "boolean") return stored;
+  return preferences?.messages?.source === "android-messages-web";
+}
+
+/** BACKLOG-3670 C1: the read; a failed or timed-out read → off. */
+export async function isTextPeopleEnabled(userId: string): Promise<boolean> {
+  try {
+    return resolveTextPeopleEnabled(await readPreferences(userId));
+  } catch {
+    return false;
+  }
+}
+
+/**
  * BACKLOG-1361: Compute the email cache since-date based on the user's preference.
  *
  * @param durationMonths - Number of months to look back

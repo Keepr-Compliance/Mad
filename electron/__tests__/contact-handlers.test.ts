@@ -113,9 +113,11 @@ jest.mock("../services/logService", () => ({
 
 // TASK-1950: Mock preferenceHelper for contact source gating
 const mockIsContactSourceEnabled = jest.fn().mockResolvedValue(true);
+const mockIsTextPeopleEnabled = jest.fn().mockResolvedValue(true);
 jest.mock("../utils/preferenceHelper", () => ({
   __esModule: true,
   isContactSourceEnabled: (...args: any[]) => mockIsContactSourceEnabled(...args),
+  isTextPeopleEnabled: (...args: any[]) => mockIsTextPeopleEnabled(...args),
 }));
 
 // TASK-1950: Mock outlookFetchService for syncOutlookContacts tests
@@ -414,16 +416,14 @@ describe("Contact Handlers", () => {
     mockLinkedSourceKeys = new Set<string>();
     // TASK-1950: Default all sources to enabled
     mockIsContactSourceEnabled.mockResolvedValue(true);
+    mockIsTextPeopleEnabled.mockResolvedValue(true);
   });
 
   // BACKLOG-3670: people found in Google Messages texts only while Settings →
   // Contacts → Auto-discover → Messages / SMS is on (default off). Mutation:
   // the gate not read, or passed as always-on → red.
   describe("people found in texts follow the Messages / SMS auto-discover switch (BACKLOG-3670)", () => {
-    const messagesSwitch = (on: boolean) =>
-      mockIsContactSourceEnabled.mockImplementation(async (_u: string, category: string, key: string) =>
-        category === "inferred" && key === "messages" ? on : true,
-      );
+    const messagesSwitch = (on: boolean) => mockIsTextPeopleEnabled.mockResolvedValue(on);
 
     it.each([true, false])("contacts:get-all and contacts:search pass textPeople = %s", async (on) => {
       messagesSwitch(on);
@@ -432,7 +432,7 @@ describe("Contact Handlers", () => {
       expect(mockDatabaseService.getImportedContactsByUserIdAsync).toHaveBeenLastCalledWith(TEST_USER_ID, { textPeople: on });
       await registeredHandlers.get("contacts:search")(mockEvent, TEST_USER_ID, "Test");
       expect(mockDatabaseService.searchContactsForSelection).toHaveBeenLastCalledWith(TEST_USER_ID, "Test", undefined, { textPeople: on });
-      expect(mockIsContactSourceEnabled).toHaveBeenCalledWith(TEST_USER_ID, "inferred", "messages", false);
+      expect(mockIsTextPeopleEnabled).toHaveBeenCalledWith(TEST_USER_ID);
     });
   });
 
