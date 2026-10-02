@@ -34,12 +34,17 @@ export interface WindowApiLocalSync {
   checkFirewallAllowed: () => Promise<{ allowed: boolean; checked: boolean }>;
 
   /**
-   * Clear all Android-synced messages and contacts from local DB (BACKLOG-1468).
-   * Google Messages (the extension) has its own: rcsImport.clearTexts.
+   * Android's shared Force re-import (BACKLOG-1468, BACKLOG-3657): the
+   * companion's messages and contacts AND the texts imported from Google
+   * Messages (the same clear as rcsImport.clearTexts).
    */
   clearAndroidData: (options: { userId: string }) => Promise<{
     messagesDeleted: number;
     contactsDeleted: number;
+    gmwebMessagesDeleted?: number;
+    /** Which parts were cleared; `error` says why not. */
+    gmwebCleared?: boolean;
+    androidCleared?: boolean;
     error?: string;
   }>;
 }

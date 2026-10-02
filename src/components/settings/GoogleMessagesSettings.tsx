@@ -13,8 +13,9 @@
  *   floor actually reads (importPlanInputs.loadStoredImportFilters); the
  *   companion's `messageImport.android` namespace is not read by it.
  * - Auto-delete (BACKLOG-3658 P3b; off by default, 90 days when on).
- * - Force re-import: deletes every text imported from Google Messages; the
- *   next Sync (Dashboard → Sync Android) copies them again.
+ * - Force re-import: Android's SHARED reset (BACKLOG-3657) — every text
+ *   imported from Google Messages AND from the Android Companion (one
+ *   confirmation naming both, AndroidForceReimportWarning).
  * - Chats not synced (BACKLOG-3658 P3c): the chats switched off with the eye
  *   on their row in Google Messages, each with "Sync again", and "Sync all
  *   again" (after a confirmation). The keyboard alternative to the page's
@@ -25,6 +26,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { rcsImportService } from "../../services/rcsImportService";
 import { settingsService } from "../../services";
 import { LookbackMonthsSelect, parseLookbackOption } from "./LookbackMonthsSelect";
+import { AndroidForceReimportWarning, androidClearedText } from "./AndroidForceReimportWarning";
 import { readMessageImportPreferences, resolveStoredLookbackMonths } from "./messageImportPreferences";
 
 import { GM_LOOKBACK_TARGET } from "./android/googleMessagesSyncSteps";
@@ -130,7 +132,11 @@ export function GoogleMessagesSettings({ userId }: { userId: string }) {
       r.success
         ? {
             ok: true,
-            text: `Cleared ${(r.data?.messagesDeleted ?? 0).toLocaleString()} texts imported from Google Messages. Click Sync Android on the dashboard to import them again.`,
+            text: androidClearedText({
+              gmwebMessages: r.data?.messagesDeleted ?? 0,
+              companionMessages: r.data?.androidMessagesDeleted ?? 0,
+              contacts: r.data?.contactsDeleted ?? 0,
+            }),
           }
         : { ok: false, text: r.error ?? "Nothing was cleared." },
     );
@@ -253,31 +259,7 @@ export function GoogleMessagesSettings({ userId }: { userId: string }) {
       </div>
 
       {showForceWarning && (
-        <div className="p-3 bg-amber-50 border border-amber-300 rounded-lg">
-          <p className="text-sm font-medium text-amber-800">Force re-import will delete every text imported from Google Messages</p>
-          <p className="text-xs text-amber-800 mt-1">
-            This deletes all texts, reactions and images Keepr copied from Google Messages, and their links to
-            transactions. The next Sync copies them again from the period set in Settings → Messages. Chats you removed
-            from a transaction stay removed when you sync again; you can restore them from &ldquo;Show removed&rdquo; on
-            the transaction.
-          </p>
-          <div className="flex gap-2 mt-2">
-            <button
-              type="button"
-              onClick={() => void forceReimport()}
-              className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-medium rounded transition-all"
-            >
-              Continue with Re-import
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowForceWarning(false)}
-              className="px-3 py-1.5 bg-white hover:bg-gray-100 text-gray-700 text-xs font-medium rounded border border-gray-300 transition-all"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
+        <AndroidForceReimportWarning onConfirm={() => void forceReimport()} onCancel={() => setShowForceWarning(false)} />
       )}
     </div>
   );

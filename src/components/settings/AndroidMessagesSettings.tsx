@@ -17,6 +17,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { settingsService } from '../../services';
 import logger from '../../utils/logger';
 import { LookbackMonthsSelect } from "./LookbackMonthsSelect";
+import { AndroidForceReimportWarning, androidClearedText } from "./AndroidForceReimportWarning";
 import {
   DEFAULT_LOOKBACK_MONTHS,
   DEFAULT_MAX_MESSAGES,
@@ -77,6 +78,7 @@ export function AndroidMessagesSettings({ userId }: AndroidMessagesSettingsProps
   const [clearResult, setClearResult] = useState<{
     messagesDeleted: number;
     contactsDeleted: number;
+    gmwebMessagesDeleted?: number;
     error?: string;
   } | null>(null);
 
@@ -259,10 +261,12 @@ export function AndroidMessagesSettings({ userId }: AndroidMessagesSettingsProps
         </div>
       )}
       {clearResult && !clearResult.error && (
-        <div className="text-xs text-green-700 bg-green-50 rounded p-2 border border-green-200">
-          Cleared {clearResult.messagesDeleted.toLocaleString()} messages and{" "}
-          {clearResult.contactsDeleted.toLocaleString()} contacts
-          . Open the companion app and tap Sync Now to re-import.
+        <div className="text-xs text-green-700 bg-green-50 rounded p-2 border border-green-200" role="status">
+          {androidClearedText({
+            gmwebMessages: clearResult.gmwebMessagesDeleted ?? 0,
+            companionMessages: clearResult.messagesDeleted,
+            contacts: clearResult.contactsDeleted,
+          })}
         </div>
       )}
 
@@ -377,40 +381,9 @@ export function AndroidMessagesSettings({ userId }: AndroidMessagesSettingsProps
 
       {/* Force re-import warning confirmation */}
       {showForceWarning && (
-        <div className="mt-3 p-3 bg-amber-50 border border-amber-300 rounded-lg">
-          <div className="flex items-start gap-2">
-            <svg className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
-            </svg>
-            <div className="flex-1">
-              <p className="text-sm font-medium text-amber-800">
-                Force re-import will delete all Android data
-              </p>
-              <p className="text-xs text-amber-700 mt-1">
-                This deletes all Android texts and contacts the companion app sent to
-                Keepr, then stops the sync server. (Texts from Google Messages have their
-                own Force re-import.) Open
-                the companion app and tap Sync Now to re-import everything from scratch.
-                Links from checklist items to those messages&rsquo; attachments are removed
-                too. Chats you removed from a transaction stay removed when you sync
-                again; you can restore them from &ldquo;Show removed&rdquo; on the transaction.
-              </p>
-              <div className="flex gap-2 mt-2">
-                <button
-                  onClick={handleForceReimport}
-                  className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-medium rounded transition-all"
-                >
-                  Continue with Re-import
-                </button>
-                <button
-                  onClick={() => setShowForceWarning(false)}
-                  className="px-3 py-1.5 bg-white hover:bg-gray-100 text-gray-700 text-xs font-medium rounded border border-gray-300 transition-all"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </div>
+        <div className="mt-3">
+          {/* BACKLOG-3657: the ONE Android confirmation, shared with Google Messages. */}
+          <AndroidForceReimportWarning onConfirm={() => void handleForceReimport()} onCancel={() => setShowForceWarning(false)} />
         </div>
       )}
     </div>

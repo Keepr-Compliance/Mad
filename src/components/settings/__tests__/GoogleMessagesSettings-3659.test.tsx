@@ -58,7 +58,7 @@ beforeEach(() => {
     optedIn: true, lastCacheFinishedAt: "2026-10-01T11:00:00.000Z", consentVersion: 1, consentRequired: 1,
     consentAt: "2026-10-01T09:00:00.000Z", autoDeleteDays: null,
   };
-  mockClear.mockResolvedValue({ success: true, data: { messagesDeleted: 175 } });
+  mockClear.mockResolvedValue({ success: true, data: { messagesDeleted: 175, androidMessagesDeleted: 12, contactsDeleted: 3 } });
   mockAutoDelete.mockResolvedValue({ success: true });
   mockConsent.mockResolvedValue({ success: true });
   mockExcluded = [];
@@ -108,13 +108,22 @@ describe("GoogleMessagesSettings", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Keepr could not save that.");
   });
 
-  it("Force re-import: asks first, then clears only Google Messages texts and says so (S1)", async () => {
+  // BACKLOG-3657 (founder re-confirmed 2026-10-01): the shared Android reset,
+  // one confirmation naming both sources. Mutation: the old Google-Messages-
+  // only warning / result → red.
+  it("Force re-import: asks first (one warning naming both Android sources), then says what both lost (S1)", async () => {
     render(<GoogleMessagesSettings userId="user-1" />);
     fireEvent.click(await screen.findByRole("button", { name: /force re-import/i }));
     expect(mockClear).not.toHaveBeenCalled();
-    expect(screen.getByText(/delete every text imported from Google Messages/)).toBeInTheDocument();
+    const warning = screen.getByTestId("android-force-warning");
+    expect(warning).toHaveTextContent(
+      "Force re-import will delete every text imported from your Android phone (Google Messages and Android Companion)",
+    );
+    expect(warning).toHaveTextContent(/you can restore them from “Show removed” on the transaction/);
     fireEvent.click(screen.getByRole("button", { name: /continue with re-import/i }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Cleared 175 texts imported from Google Messages");
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Cleared 175 texts imported from Google Messages and 12 texts and 3 contacts from the Android Companion.",
+    );
     expect(mockClear).toHaveBeenCalledTimes(1);
   });
 

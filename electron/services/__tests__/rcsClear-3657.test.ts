@@ -16,6 +16,8 @@
  *   C7 delete order changed                        → "the reviewed order"
  *   C8 writes resume only on success               → "writes resume even when the clear throws"
  *   C10 a file still used by another attachments row deleted  → "a file shared by content hash is kept"
+ *   F2 the shared Android clear not clearing both, or the companion first   → "the shared Force re-import"
+ *   F3 iPhone or Mac texts touched by the Android clear                    → "iPhone and Mac texts are untouched"
  *   C9 thread-level links not counted / text_thread_count left stale
  *                                                  → "thread-level auto-links are counted and the thread count refreshed"
  */
@@ -35,9 +37,10 @@ jest.mock("../logService", () => {
 });
 
 import { setDb } from "../db/core/dbConnection";
-import { rcsClearDbOps } from "../db/syncDbService";
+import { deleteMessagesByMetadataSource, rcsClearDbOps } from "../db/syncDbService";
 import {
   clearGoogleMessagesWebData,
+  runSharedForceClear,
   runWithWritesPaused,
   type RcsClearDbOps,
   type RcsClearFs,
@@ -310,5 +313,65 @@ describe("refusals (SR F1)", () => {
     };
     await expect(runWithWritesPaused(gate, () => (order.push("clear"), 1))).rejects.toThrow("busy importing");
     expect(order).toEqual(["pause", "resume"]);
+  });
+});
+
+// BACKLOG-3657 (founder re-confirmed 2026-10-01): Android's Force re-import is
+// shared — Google Messages FIRST, then the companion. Mutations: the
+// companion first; a refused Google Messages clear still clearing Android → red.
+describe("the shared Force re-import (F2)", () => {
+  it("Google Messages is cleared FIRST; when it fails, nothing is cleared", async () => {
+    const order: string[] = [];
+    const result = await runSharedForceClear({
+      clearGmweb: async () => {
+        order.push("gmweb");
+        throw new Error("Keepr is busy importing — try again in a moment.");
+      },
+      clearAndroid: () => (order.push("android"), { messagesDeleted: 5, contactsDeleted: 1 }),
+    });
+    expect(order).toEqual(["gmweb"]);
+    expect(result).toMatchObject({ gmwebCleared: false, androidCleared: false, messagesDeleted: 0, gmwebMessagesDeleted: 0 });
+    expect(result.error).toBe("Nothing was cleared. Keepr is busy importing — try again in a moment.");
+  });
+
+  it("both cleared: the counts of both, no error", async () => {
+    const order: string[] = [];
+    const result = await runSharedForceClear({
+      clearGmweb: async () => (order.push("gmweb"), { messagesDeleted: 50 }),
+      clearAndroid: () => (order.push("android"), { messagesDeleted: 12, contactsDeleted: 3 }),
+    });
+    expect(order).toEqual(["gmweb", "android"]);
+    expect(result).toEqual({
+      messagesDeleted: 12, contactsDeleted: 3, gmwebMessagesDeleted: 50, gmwebCleared: true, androidCleared: true,
+    });
+  });
+
+  it("the companion clear fails after Google Messages was cleared: a partial result that says so", async () => {
+    const result = await runSharedForceClear({
+      clearGmweb: async () => ({ messagesDeleted: 50 }),
+      clearAndroid: () => {
+        throw new Error("database is locked");
+      },
+    });
+    expect(result).toMatchObject({ gmwebCleared: true, androidCleared: false, gmwebMessagesDeleted: 50, messagesDeleted: 0 });
+    expect(result.error).toContain("The texts imported from Google Messages were cleared, but the Android Companion texts and contacts were not.");
+  });
+
+  // F3, real SQL: the two Android sources go; iPhone and Mac stay.
+  it("on the real schema: both Android sources are cleared; iPhone and Mac texts are untouched (F3)", async () => {
+    insertMsg("iphone", USER, "ios-guid-3657", { source: "iphone_sync" }, { thread: "iphone-thread" });
+    insertMsg("mac", USER, "mac-guid-3657", { source: "macos_messages" }, { thread: "mac-thread" });
+    link("c-iphone", USER, "tx-a", "iphone");
+    link("c-mac", USER, "tx-a", "mac");
+    const result = await runSharedForceClear({
+      clearGmweb: async () => clearGoogleMessagesWebData(USER, rcsClearDbOps(), fsOps()),
+      clearAndroid: () => ({ messagesDeleted: deleteMessagesByMetadataSource(USER, "android_wifi_sync"), contactsDeleted: 0 }),
+    });
+    expect(result).toMatchObject({ gmwebCleared: true, androidCleared: true, messagesDeleted: 1 });
+    const ids = (db.prepare("SELECT id FROM messages WHERE user_id = ? ORDER BY id").all(USER) as Array<{ id: string }>).map((r) => r.id);
+    expect(ids).toEqual(["iphone", "mac"]);
+    expect(count("SELECT COUNT(*) AS n FROM communications WHERE id IN ('c-iphone', 'c-mac')")).toBe(2);
+    // The other user's Google Messages texts are untouched too.
+    expect(count("SELECT COUNT(*) AS n FROM messages WHERE user_id = ?", OTHER)).toBe(1);
   });
 });

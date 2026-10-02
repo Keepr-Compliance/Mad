@@ -119,12 +119,22 @@ export const rcsImportService = {
   },
 
   /** BACKLOG-3659 P3d: Settings → Google Messages → Force re-import. */
-  async clearTexts(): Promise<ApiResult<{ messagesDeleted: number }>> {
+  /** Android's shared Force re-import: Google Messages + the companion's texts and contacts. */
+  async clearTexts(): Promise<ApiResult<{ messagesDeleted: number; androidMessagesDeleted: number; contactsDeleted: number }>> {
     const bridge = api();
     if (!bridge || !bridge.clearTexts) return { success: false, error: NOT_AVAILABLE };
     try {
       const r = await bridge.clearTexts();
-      return r.success ? { success: true, data: { messagesDeleted: r.messagesDeleted } } : { success: false, error: r.error };
+      return r.success
+        ? {
+            success: true,
+            data: {
+              messagesDeleted: r.messagesDeleted,
+              androidMessagesDeleted: r.androidMessagesDeleted ?? 0,
+              contactsDeleted: r.contactsDeleted ?? 0,
+            },
+          }
+        : { success: false, error: r.error };
     } catch (err) {
       return { success: false, error: getErrorMessage(err) };
     }

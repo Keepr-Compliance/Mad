@@ -93,9 +93,20 @@ export type RcsExtensionStateResult =
   | { success: true; state: RcsExtensionState }
   | { success: false; error: string };
 
-/** BACKLOG-3659 P3d: Google Messages' own Force re-import. */
+/**
+ * Android's shared Force re-import, from the Google Messages section
+ * (BACKLOG-3657): `messagesDeleted` are the Google Messages texts; the
+ * companion's texts and contacts are counted apart.
+ */
 export type RcsClearTextsResult =
-  | { success: true; messagesDeleted: number; linksDeleted: number; filesDeleted: number }
+  | {
+      success: true;
+      messagesDeleted: number;
+      linksDeleted: number;
+      filesDeleted: number;
+      androidMessagesDeleted?: number;
+      contactsDeleted?: number;
+    }
   | { success: false; error: string };
 
 /** BACKLOG-3659: the extension copied to Downloads. */
@@ -142,7 +153,7 @@ export interface WindowApiRcsImport {
   >;
   /** P3c: switch one chat back on (`id`), or all (`all: true`). */
   removeExclusion?: (args: { id?: string; all?: boolean }) => Promise<{ success: boolean; error?: string }>;
-  /** BACKLOG-3659 P3d: clear every text imported from Google Messages (Force re-import). */
+  /** Android's shared Force re-import: Google Messages + the companion's texts and contacts (BACKLOG-3657). */
   clearTexts?: () => Promise<RcsClearTextsResult>;
   /** BACKLOG-3659: copy the extension to Downloads/"Keepr Extension". */
   prepareExtension?: () => Promise<RcsPrepareExtensionResult>;

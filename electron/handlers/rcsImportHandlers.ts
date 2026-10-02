@@ -63,8 +63,10 @@ import {
   clearGoogleMessagesWebData,
   clearUnlinkedOldChats,
   RCS_AUTO_DELETE_DAYS,
+  runSharedForceClear,
   runWithWritesPaused,
   type RcsClearResult,
+  type SharedForceClearResult,
 } from "../services/rcsClearService";
 import transactionService from "../services/transactionService";
 import { bringAppToFrontOrFlash } from "../utils/bringAppToFront";
@@ -554,6 +556,29 @@ export async function clearGoogleMessagesWebTexts(userId: string): Promise<RcsCl
 }
 
 /**
+ * BACKLOG-3657 (founder re-confirmed 2026-10-01): Android's Force re-import is
+ * SHARED — from either Android section (Google Messages or the companion) it
+ * clears both Android sources: the Google Messages texts (with their images,
+ * links, the cache's last sync and coverage) FIRST, then the companion's
+ * texts and contacts. iPhone and Mac data are never touched.
+ */
+export async function clearAllAndroidTexts(userId: string): Promise<SharedForceClearResult & { gmweb?: RcsClearResult }> {
+  // Loaded on use: the companion service pulls in its HTTP server and cloud sync.
+  const { default: localSyncService } = await import("../services/localSyncService");
+  let gmweb: RcsClearResult | undefined;
+  const result = await runSharedForceClear({
+    clearGmweb: async () => (gmweb = await clearGoogleMessagesWebTexts(userId)),
+    clearAndroid: () => localSyncService.clearAndroidData(userId),
+  });
+  void logService.info(
+    `[RcsClear] Android Force re-import: google messages ${result.gmwebCleared ? "cleared" : "not cleared"} (${result.gmwebMessagesDeleted}), ` +
+      `companion ${result.androidCleared ? "cleared" : "not cleared"} (${result.messagesDeleted} texts, ${result.contactsDeleted} contacts)`,
+    LOG_TAG,
+  );
+  return { ...result, gmweb };
+}
+
+/**
  * BACKLOG-3641: bring Keepr forward because the user asked from the browser
  * ("Open Keepr"). Windows may still refuse the foreground change, so the
  * taskbar button flashes as the fallback, until Keepr gets focus.
@@ -735,12 +760,17 @@ export function registerRcsImportHandlers(): void {
     wrapHandler(async (): Promise<RcsClearTextsResult> => {
       const userId = await currentUserId();
       if (!userId) return { success: false, error: "Sign in to Keepr first." };
-      try {
-        const r = await clearGoogleMessagesWebTexts(userId);
-        return { success: true, messagesDeleted: r.messagesDeleted, linksDeleted: r.linksDeleted, filesDeleted: r.filesDeleted };
-      } catch (err) {
-        return { success: false, error: `Nothing was cleared. ${err instanceof Error ? err.message : String(err)}` };
-      }
+      // Shared with the companion's Force re-import (clearAllAndroidTexts).
+      const r = await clearAllAndroidTexts(userId);
+      if (r.error) return { success: false, error: r.error };
+      return {
+        success: true,
+        messagesDeleted: r.gmwebMessagesDeleted,
+        linksDeleted: r.gmweb?.linksDeleted ?? 0,
+        filesDeleted: r.gmweb?.filesDeleted ?? 0,
+        androidMessagesDeleted: r.messagesDeleted,
+        contactsDeleted: r.contactsDeleted,
+      };
     }, { module: LOG_TAG }),
   );
 
