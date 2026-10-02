@@ -2,7 +2,9 @@
  * Keepr — the per-chat eye on Google Messages' conversation list (BACKLOG-3658 P3c).
  *
  * One small eye on EACH conversation row: open (the default) = this chat is
- * synced to Keepr; crossed out = "Don't sync" (+ a subtle "Not synced" mark).
+ * synced to Keepr; crossed out = "Don't sync", and the whole row is dimmed by
+ * a gray overlay (founder design, 2026-10-01; "Not synced" is in the eye's
+ * aria-label and tooltip, no text label on the row).
  * New messages from a switched-off chat are not synced; texts already in
  * Keepr stay (founder). Keepr holds the list; this page sends and reads
  * conversation ids only — never names or numbers.
@@ -10,11 +12,15 @@
  * Placement (live DOM trace, 2026-10-01): each row is
  * <mws-conversation-list-item> → ONE <a data-e2e-conversation href> (the whole
  * row is a link). The eye is a SIBLING of that link inside the row, absolutely
- * positioned at the right column next to the timestamp and clear of Google's
- * own hover ⋮ menu — no change to the row's layout. Its clicks never reach
- * the link (the chat does not open), and tabindex=-1 keeps it out of the
- * list's arrow-key navigation (keyboard alternative: Keepr's Settings →
- * Google Messages → chats not synced).
+ * positioned, vertically centred, and LEFT of the row's right column — its
+ * offset is measured from the actual left edge of the timestamp / Google's
+ * icons (live 2026-10-01: a fixed offset covered "3:38 PM"). No change to the
+ * row's layout. No pointer, mouse, focus or key event of the eye reaches the
+ * row or the list (live: a real click opened the FIRST chat — the list's
+ * key navigation reacted to focus moving into it), and pointerdown/mousedown
+ * are prevented so focus never moves. tabindex=-1 keeps it out of the list's
+ * arrow-key navigation (keyboard alternative: Keepr's Settings → Google
+ * Messages → chats not synced).
  *
  * The list is virtualized (Angular re-renders rows on scroll): a
  * MutationObserver on the list re-attaches eyes, at most BATCH rows per tick,
@@ -30,12 +36,26 @@
   var MARK = "data-keepr-eye";
   var BATCH = 50;
   var LABEL_ON = "Sync this chat to Keepr";
-  var LABEL_OFF = "Not syncing this chat";
+  var LABEL_OFF = "Not synced: this chat is not synced to Keepr";
+  var OVERLAY = "data-keepr-eye-overlay";
+  /** The row's right column (timestamp, Google's icons): the eye stays left of it. */
+  var RIGHT_COLUMN = [
+    "[data-e2e-conversation-timestamp]", "mws-relative-timestamp", "[data-e2e-timestamp]",
+    "button", "mat-icon", '[role="button"]',
+  ];
+  var GAP_PX = 8;
+  /** When nothing can be measured (no layout yet). */
+  var FALLBACK_RIGHT_PX = 72;
+  /** Every event of the eye that must never reach the row or the list. */
+  var STOPPED_EVENTS = [
+    "pointerdown", "pointerup", "mousedown", "mouseup", "touchstart", "touchend",
+    "focus", "focusin", "keydown", "keyup", "dblclick", "auxclick", "contextmenu",
+  ];
   var COPY = "New messages from this chat won't be synced. Texts already in Keepr stay.";
   var SVG_NS = "http://www.w3.org/2000/svg";
   var COLORS = {
-    light: { on: "#4F46E5", off: "#4B5563", markBg: "#F3F4F6" },
-    dark: { on: "#A5B4FC", off: "#D1D5DB", markBg: "#374151" },
+    light: { on: "#4F46E5", off: "#4B5563", overlay: "rgba(107, 114, 128, 0.28)" },
+    dark: { on: "#A5B4FC", off: "#D1D5DB", overlay: "rgba(0, 0, 0, 0.40)" },
   };
 
   /** The conversation id in a row's address (/web/conversations/<id>), or null. */
@@ -52,7 +72,47 @@
     return el;
   }
 
-  /** Paint the eye for its state (open / crossed out + "Not synced"). */
+  /**
+   * How far from the row's right edge the eye goes: left of the leftmost
+   * element of the right column (timestamp, icons), plus a gap.
+   */
+  function rightOffset(row) {
+    var rr = row.getBoundingClientRect ? row.getBoundingClientRect() : null;
+    if (!rr || !rr.width) return FALLBACK_RIGHT_PX;
+    var els = row.querySelectorAll(RIGHT_COLUMN.join(","));
+    var minLeft = null;
+    for (var i = 0; i < els.length; i++) {
+      if (els[i].closest("[" + MARK + "]")) continue; // our own eye
+      var r = els[i].getBoundingClientRect();
+      if (!r.width || r.left < rr.left + rr.width / 2) continue;
+      if (minLeft === null || r.left < minLeft) minLeft = r.left;
+    }
+    return minLeft === null ? FALLBACK_RIGHT_PX : Math.round(rr.right - minLeft + GAP_PX);
+  }
+
+  /** The gray layer over a switched-off row (pointer-events none: the row still opens). */
+  function setOverlay(row, on, theme) {
+    var layer = null;
+    for (var i = 0; i < row.children.length; i++) {
+      if (row.children[i].hasAttribute && row.children[i].hasAttribute(OVERLAY)) layer = row.children[i];
+    }
+    if (!on) {
+      if (layer) row.removeChild(layer);
+      return;
+    }
+    if (!layer) {
+      layer = row.ownerDocument.createElement("div");
+      layer.setAttribute(OVERLAY, "");
+      layer.setAttribute("aria-hidden", "true");
+      row.appendChild(layer);
+    }
+    Object.assign(layer.style, {
+      position: "absolute", top: "0", right: "0", bottom: "0", left: "0", zIndex: "1",
+      pointerEvents: "none", borderRadius: "inherit", background: (COLORS[theme] || COLORS.light).overlay,
+    });
+  }
+
+  /** Paint the eye for its state (open / crossed out). */
   function paint(button, excluded, theme) {
     var doc = button.ownerDocument;
     var c = COLORS[theme] || COLORS.light;
@@ -64,20 +124,10 @@
     svg.appendChild(svgEl(doc, "circle", { cx: "12", cy: "12", r: "3" }));
     if (excluded) svg.appendChild(svgEl(doc, "path", { d: "M3 3l18 18" }));
     button.appendChild(svg);
-    if (excluded) {
-      var mark = doc.createElement("span");
-      mark.setAttribute("data-keepr", "not-synced");
-      mark.textContent = "Not synced";
-      Object.assign(mark.style, {
-        fontSize: "11px", lineHeight: "1", marginLeft: "4px", padding: "2px 4px", borderRadius: "4px",
-        background: c.markBg, color: c.off, whiteSpace: "nowrap",
-      });
-      button.appendChild(mark);
-    }
     var label = excluded ? LABEL_OFF : LABEL_ON;
     button.setAttribute("aria-label", label);
     button.setAttribute("aria-pressed", excluded ? "true" : "false");
-    button.title = excluded ? LABEL_OFF + " — click to sync it again" : LABEL_ON + ". Click to stop: " + COPY;
+    button.title = excluded ? "Not synced — click to sync this chat again" : LABEL_ON + ". Click to stop: " + COPY;
   }
 
   /**
@@ -107,6 +157,7 @@
       }
       if (!id) {
         if (button) row.removeChild(button);
+        setOverlay(row, false);
         return;
       }
       if (!button) {
@@ -114,11 +165,12 @@
         button.type = "button";
         button.setAttribute("tabindex", "-1");
         Object.assign(button.style, {
-          position: "absolute", top: "8px", right: "48px", zIndex: "2",
+          position: "absolute", top: "50%", transform: "translateY(-50%)", zIndex: "2",
           minWidth: "24px", minHeight: "24px", padding: "3px", display: "flex", alignItems: "center",
-          background: "transparent", border: "none", borderRadius: "6px", cursor: "pointer", font: "inherit",
+          justifyContent: "center", background: "transparent", border: "none", borderRadius: "6px",
+          cursor: "pointer", font: "inherit", fontFamily: "inherit",
         });
-        ["pointerdown", "mousedown", "mouseup", "touchstart", "keydown"].forEach(function (t) {
+        STOPPED_EVENTS.forEach(function (t) {
           button.addEventListener(t, stop);
         });
         button.addEventListener("click", function (e) {
@@ -131,7 +183,11 @@
         row.appendChild(button); // a SIBLING of the row's link
       }
       button.setAttribute(MARK, id); // a recycled row gets its new chat's id
-      paint(button, io.isExcluded(id), io.theme());
+      button.style.right = rightOffset(row) + "px";
+      var off = io.isExcluded(id);
+      var theme = io.theme();
+      paint(button, off, theme);
+      setOverlay(row, off, theme);
     }
 
     function drain() {
@@ -178,7 +234,7 @@
           }
           for (var j = 0; j < r.addedNodes.length; j++) {
             var n = r.addedNodes[j];
-            if (n.nodeType !== 1 || (n.hasAttribute && n.hasAttribute(MARK))) continue;
+            if (n.nodeType !== 1 || (n.hasAttribute && (n.hasAttribute(MARK) || n.hasAttribute(OVERLAY)))) continue;
             var own = rowOf(n);
             if (own) enqueue(own);
             else if (n.querySelectorAll) scan(n);
@@ -196,7 +252,7 @@
     function disconnect() {
       if (observer) observer.disconnect();
       observer = null;
-      var eyes = doc.querySelectorAll("[" + MARK + "]");
+      var eyes = doc.querySelectorAll("[" + MARK + "], [" + OVERLAY + "]");
       for (var i = 0; i < eyes.length; i++) if (eyes[i].parentNode) eyes[i].parentNode.removeChild(eyes[i]);
     }
 
@@ -208,6 +264,9 @@
     conversationIdOf: conversationIdOf,
     paint: paint,
     MARK: MARK,
+    OVERLAY: OVERLAY,
+    STOPPED_EVENTS: STOPPED_EVENTS,
+    rightOffset: rightOffset,
     BATCH: BATCH,
     LABEL_ON: LABEL_ON,
     LABEL_OFF: LABEL_OFF,
@@ -295,6 +354,10 @@
     }
     if (!started) void start();
   }, 2000);
+  // The timestamp column moves with the window width: place the eyes again.
+  window.addEventListener("resize", function () {
+    if (started) eyes.refresh();
+  });
   document.addEventListener("visibilitychange", function () {
     if (document.visibilityState !== "visible" || !started) return;
     // Keepr's Settings may have switched chats back on meanwhile.
