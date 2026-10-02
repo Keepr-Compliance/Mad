@@ -56,3 +56,25 @@ export function syncCopyLine(lookbackMonths: number | null | undefined): string 
         : "your texts";
   return `Keepr copies ${what} to this computer, encrypted. Change this in Settings → Messages.`;
 }
+
+const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
+
+/**
+ * The done screen's lines (founder, 2026-10-01): what Keepr SAVED, not what
+ * the page sent — a chat whose messages were all older than the months
+ * setting is not "saved". null while Keepr is still saving.
+ */
+export function doneSummaryLines(job: RcsJobInfo): string[] | null {
+  if (job.saved === undefined) return null;
+  if (job.saved === null) return ["Keepr could not save this Sync. Nothing was imported: try again."];
+  const s = job.saved;
+  const lines = [
+    `Scanned ${plural(job.progress.listed, "chat", "chats")} · saved ${plural(s.chats, "chat", "chats")} · ` +
+      `${plural(s.messages, "message", "messages")} (${s.newMessages} new)`,
+  ];
+  const noMessages = job.progress.noMessagesYet ?? 0;
+  if (noMessages > 0) lines.push(`${plural(noMessages, "chat", "chats")} with no messages yet`);
+  const notText = job.progress.notText ?? 0;
+  if (notText > 0) lines.push(`${notText} not a text conversation (e.g. an AI chat) — skipped`);
+  return lines;
+}

@@ -218,6 +218,16 @@ describe("limits: the user's months and max-messages settings", () => {
     expect(bodies()).toEqual(["text b1", "text a2", "text a3", "text b2"]);
   });
 
+  // Founder (2026-10-01): "saved N chats" counts only chats with a message
+  // kept. Mutation: count every staged chat → red.
+  it("a chat whose messages are all older than the floor is not a saved chat (A3b)", async () => {
+    stageTwoChats();
+    // Every message of conv-a is older than the floor; conv-b keeps b2.
+    const r = await staging.commit(JOB, USER, { floorMs: Date.parse("2026-09-29T12:00:00.000Z"), cap: null, protectedSpans: [] }, writer);
+    expect(r).toMatchObject({ staged: 5, kept: 1, chats: 1, stored: 1 });
+    expect(bodies()).toEqual(["text b2"]);
+  });
+
   it("the cap keeps the newest N across chats (A4)", async () => {
     stageTwoChats();
     const r = await staging.commit(JOB, USER, { floorMs: 0, cap: 3, protectedSpans: [] }, writer);

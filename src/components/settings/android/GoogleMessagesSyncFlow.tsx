@@ -12,7 +12,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { rcsImportService } from "../../../services/rcsImportService";
 import type { RcsExtensionState, RcsJobInfo } from "../../../../electron/types/ipc/window-api-rcs-import";
-import { extensionInstalled, googleMessagesStep, syncCopyLine } from "./googleMessagesSyncSteps";
+import { doneSummaryLines, extensionInstalled, googleMessagesStep, syncCopyLine } from "./googleMessagesSyncSteps";
 
 const POLL_MS = 3000;
 
@@ -89,6 +89,7 @@ export function GoogleMessagesSyncFlow({ onClose, onUseCompanion, pollMs = POLL_
   const step = googleMessagesStep({ state, job, continued });
   const installed = extensionInstalled(state);
   const paired = !!state?.pairedAt;
+  const doneLines = step === "done" && job ? doneSummaryLines(job) : null;
   const stepRef = useRef(step);
   stepRef.current = step;
   const preparedRef = useRef(false);
@@ -237,16 +238,16 @@ export function GoogleMessagesSyncFlow({ onClose, onUseCompanion, pollMs = POLL_
 
       {step === "done" && job && (
         <>
-          <h2 className="text-lg font-bold text-gray-900">Your texts are synced</h2>
-          <div className="grid grid-cols-2 gap-2">
-            <div className="p-3 rounded-lg border border-gray-200">
-              <div className="text-xl font-bold" data-testid="gm-chats">{job.progress.imported}</div>
-              <div className="text-xs text-gray-600">chats</div>
-            </div>
-            <div className="p-3 rounded-lg border border-gray-200">
-              <div className="text-xl font-bold" data-testid="gm-messages">{job.progress.messages}</div>
-              <div className="text-xs text-gray-600">messages</div>
-            </div>
+          <h2 className="text-lg font-bold text-gray-900">
+            {doneLines ? "Your texts are synced" : "Saving your texts…"}
+          </h2>
+          {/* What Keepr SAVED (not what the page sent). */}
+          <div className="flex flex-col gap-1 p-3 rounded-lg border border-gray-200" role="status" data-testid="gm-done-summary">
+            {(doneLines ?? ["Keepr is saving what it copied. This takes a moment."]).map((line) => (
+              <p key={line} className="text-sm text-gray-800">
+                {line}
+              </p>
+            ))}
           </div>
           <p className="text-xs text-gray-600">
             Keepr adds them to the right transactions by phone number. Next time, click <b>Sync Android</b> on the

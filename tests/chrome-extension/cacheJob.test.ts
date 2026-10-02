@@ -21,6 +21,7 @@
  *   M7 the history floor back to startDate for a cache job    → "history floor is since"
  *   M8 no Cancel on progress lines / Cancel calls nothing     → "renderOverlay: Cancel"
  *   M9 the page Sync button brought back                     → "no Keepr element on the page when idle"
+ *   M10 done details not Keepr's saved counts                → "done details"
  */
 
 import * as fs from "fs";
@@ -151,6 +152,7 @@ function cacheEnv(opts: {
   numbers: Record<string, string[]>;
   imageReply?: { ok: boolean; status: number; body: Record<string, unknown> };
   visibility?: { hidden: () => boolean; whenVisible: () => Promise<void> };
+  finishReply?: Record<string, unknown>;
 }) {
   renderList(opts.rows);
   let open = "";
@@ -171,6 +173,7 @@ function cacheEnv(opts: {
       if (p.endsWith("/match")) return { ok: true, status: 200, body: { matched: true } };
       if (p.endsWith("/attachment")) return opts.imageReply ?? { ok: true, status: 200, body: { ok: true } };
       if (p.endsWith("/chat")) return { ok: true, status: 200, body: { ok: true, stored: 1, received: 1 } };
+      if (p.endsWith("/finish") && opts.finishReply) return { ok: true, status: 200, body: opts.finishReply };
       return { ok: true, status: 200, body: { ok: true } };
     },
     overlay: { show: (t: string, e: boolean, x?: unknown) => shown.push([t, e, x]) },
@@ -218,6 +221,37 @@ describe("runJob: a cache Sync", () => {
     expect(outcome.notReached).toEqual([{ name: "Ann Example", reason: "no_numbers" }]);
     const finish = t.calls.find(([, p]) => p.endsWith("/finish"));
     expect(finish?.[2]).toMatchObject({ chats: 2, notChecked: 0 });
+  });
+
+  // Founder (2026-10-01): the done details show what Keepr SAVED (its /finish
+  // answer), checked / matched only in Copy details. Mutation M10: the page's
+  // own sent counts on screen, or checked/matched left on screen → red.
+  it("done details: what Keepr saved; checked / matched in Copy only (M10)", async () => {
+    const t = cacheEnv({
+      rows: ROWS,
+      numbers: { [id(0)]: ["+15555550101"], [id(2)]: ["+15555550102"] },
+      finishReply: { ok: true, saved: { chats: 1, messages: 1, newMessages: 1 } },
+    });
+    await job.runJob(JOB, t.env);
+    const finishAt = t.calls.findIndex(([, p]) => p.endsWith("/finish"));
+    expect(finishAt).toBeGreaterThan(-1);
+    expect(t.shown.some(([text]) => text === "Saving in Keepr…")).toBe(true);
+    const [text, , extras] = t.shown[t.shown.length - 1] as [string, boolean, { details: string; copy: string }];
+    expect(text).toBe(job.DONE_LINE);
+    expect(extras.details.split("\n")[0]).toBe("Scanned 4 chats · saved 1 chat · 1 message (1 new)");
+    expect(extras.details).not.toMatch(/matched|checked/);
+    expect(extras.copy).toContain("Checked 3 · matched 2 · sent 2 chats / 2 messages");
+  });
+
+  it("done details when Keepr's save failed, or had not answered", async () => {
+    const failed = cacheEnv({ rows: ROWS.slice(0, 1), numbers: { [id(0)]: ["+15555550101"] }, finishReply: { ok: true, saved: null } });
+    await job.runJob(JOB, failed.env);
+    const last = failed.shown[failed.shown.length - 1] as [string, boolean, { details: string }];
+    expect(last[2].details).toContain("Keepr could not save this Sync — nothing was imported");
+    const slow = cacheEnv({ rows: ROWS.slice(0, 1), numbers: { [id(0)]: ["+15555550101"] }, finishReply: { ok: true } });
+    await job.runJob(JOB, slow.env);
+    const lastSlow = slow.shown[slow.shown.length - 1] as [string, boolean, { details: string }];
+    expect(lastSlow[2].details).toContain("Keepr is still saving — see Keepr for the result");
   });
 
   it("the history floor is since, not a transaction start date (M7)", async () => {

@@ -619,9 +619,12 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
   let focus: string[];
   let cancelWhileChecking: boolean;
   let stagedFor: string[];
+  /** What Keepr's (mocked) save records for a finished job; undefined: never answers. */
+  let savedAnswer: { chats: number; messages: number; newMessages: number } | null | undefined;
 
   beforeEach(async () => {
     current = "user-a";
+    savedAnswer = { chats: 0, messages: 0, newMessages: 0 };
     focus = [];
     cacheChats = [];
     cancelWhileChecking = false;
@@ -644,8 +647,16 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
         if (cancelWhileChecking) bridge.cancelJob();
         return current;
       },
-      onJobEnded: (e) => void ended.push({ state: e.snapshot.state, kind: e.kind, userId: e.userId }),
+      onJobEnded: (e) => {
+        ended.push({ state: e.snapshot.state, kind: e.kind, userId: e.userId });
+        // Keepr's save (handlers: commitCacheJob) answers a moment later.
+        if (e.snapshot.state === "finished" && savedAnswer !== undefined) {
+          const answer = savedAnswer;
+          setTimeout(() => bridge.recordCacheSaved(e.snapshot.jobId, answer), 5);
+        }
+      },
       onJobFinished: () => void focus.push("front"),
+      finishSaveWaitMs: 200,
       // P3b contacts-only flag: this test number is not a transaction contact.
       cacheChatAllowed: (_jobId, _userId, numbers) => !numbers.includes("+15555550199"),
       jobs: new RcsJobRegistry(),
@@ -770,6 +781,31 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
   it("there is no page start or status route", async () => {
     expect((await request(port, "POST", "/job/cache/start", EXT, "{}")).status).toBe(404);
     expect((await request(port, "POST", "/cache/status", EXT, "{}")).status).toBe(404);
+  });
+
+  // Founder (2026-10-01): the page shows what Keepr SAVED. Mutations: /finish
+  // not waiting for the save, or the saved counts not on the snapshot → red.
+  it("/finish of a cache job answers with what Keepr saved, and the job carries it", async () => {
+    savedAnswer = { chats: 3, messages: 212, newMessages: 212 };
+    const reply = await request(port, "POST", `/job/${jobId}/finish`, EXT, JSON.stringify({ chats: 5, messages: 328, images: 0, noMessagesYet: 2 }));
+    expect(reply).toEqual({ status: 200, body: { ok: true, saved: { chats: 3, messages: 212, newMessages: 212 } } });
+    expect(bridge.getJob()).toMatchObject({ state: "finished", saved: { chats: 3, messages: 212, newMessages: 212 } });
+    expect(bridge.getJob()?.progress.noMessagesYet).toBe(2);
+  });
+
+  it("/finish of a cache job whose save failed answers saved: null", async () => {
+    savedAnswer = null;
+    const reply = await request(port, "POST", `/job/${jobId}/finish`, EXT, JSON.stringify({ chats: 1, messages: 1, images: 0 }));
+    expect(reply.body).toEqual({ ok: true, saved: null });
+  });
+
+  it("/finish does not wait past the bound for a slow save; the job gets it later", async () => {
+    savedAnswer = undefined;
+    const reply = await request(port, "POST", `/job/${jobId}/finish`, EXT, JSON.stringify({ chats: 1, messages: 1, images: 0 }));
+    expect(reply.body).toEqual({ ok: true });
+    expect(bridge.getJob()?.saved).toBeUndefined();
+    bridge.recordCacheSaved(jobId, { chats: 1, messages: 1, newMessages: 0 });
+    expect(bridge.getJob()?.saved).toEqual({ chats: 1, messages: 1, newMessages: 0 });
   });
 
   // BACKLOG-3664. Mutation: notText not parsed from /finish → red.

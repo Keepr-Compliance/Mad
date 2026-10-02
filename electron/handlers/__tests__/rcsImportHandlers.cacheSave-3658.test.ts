@@ -13,6 +13,7 @@
  *   B1b the counter set only after an await (too late)   → "busy while saving"
  *   S1  the refresh broadcast dropped / sent before link → "refresh after save"
  *   T1  no save timeout (a hung commit keeps Keepr busy) → "a hung save"
+ *   H4  the saved counts not handed to the bridge after the commit       → "saved counts"
  *   C3663 coverage recorded for a run that did not reach its floor, or never → "coverage"
  */
 
@@ -25,6 +26,7 @@ let bridgeOptions: Record<string, (...a: unknown[]) => unknown> = {};
 let releaseCommit: (() => void) | null = null;
 const abandoned: string[] = [];
 const coverageWrites: Array<[string, string, string | null]> = [];
+const savedRecords: Array<[string, unknown]> = [];
 
 jest.mock("electron", () => ({
   app: { isPackaged: true, getPath: () => "/tmp/keepr-test" },
@@ -48,6 +50,9 @@ jest.mock("../../services/rcsExtensionBridge", () => ({
     }
     createCacheJob() {
       return { jobId: "job-1", kind: "cache", state: "created" };
+    }
+    recordCacheSaved(jobId: string, saved: unknown) {
+      savedRecords.push([jobId, saved]);
     }
   },
 }));
@@ -181,6 +186,22 @@ describe("a cache Sync being saved (SR B1, S1)", () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  // Founder (2026-10-01): the done screens show what was SAVED. Mutation: the
+  // commit's result not passed to bridge.recordCacheSaved → red.
+  it("saved counts: the commit's result goes to the bridge for the done screens (H4)", async () => {
+    savedRecords.length = 0;
+    expect((await startCache()).success).toBe(true);
+    bridgeOptions.onJobEnded({
+      kind: "cache", userId: "user-1", detectedOwnNumber: null,
+      snapshot: { state: "finished", jobId: "job-1", createdAt: "2026-10-01T10:00:00.000Z" },
+    });
+    await flush();
+    expect(savedRecords).toEqual([]);
+    releaseCommit?.();
+    await flush();
+    expect(savedRecords[0]).toEqual(["job-1", { chats: 1, messages: 1, newMessages: 1 }]);
   });
 
   // BACKLOG-3663: Google Messages coverage — in the commit transaction, down

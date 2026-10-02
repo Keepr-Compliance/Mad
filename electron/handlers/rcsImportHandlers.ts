@@ -47,6 +47,7 @@ import {
   cacheWindow,
   type CacheEndSnapshot,
   consentIsCurrent,
+  cacheSavedFromCommit,
   consentToRecordOnSync,
   RCS_CONSENT_VERSION,
   cancelOnSessionChange,
@@ -254,6 +255,8 @@ async function commitCacheJob(jobId: string, userId: string, snapshot?: CacheEnd
       `images ${r.imagesStored} of ${r.imagesStaged}`,
     LOG_TAG,
   );
+  // The done screens (Keepr's and the page's) show what was SAVED.
+  bridge.recordCacheSaved(jobId, cacheSavedFromCommit(r));
 }
 
 async function discardCacheJob(jobId: string): Promise<void> {
@@ -467,6 +470,9 @@ const bridge = new RcsExtensionBridge({
       .finally(() => {
         clearTimeout(hung);
         release();
+        // Not saved (the commit failed or was dropped): the done screens say
+        // so instead of waiting. A no-op once the save was recorded.
+        if (ended.snapshot.state === "finished") bridge.recordCacheSaved(jobId, null);
       })
       .catch((err: unknown) => {
         void logService.error(

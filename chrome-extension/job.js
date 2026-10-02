@@ -86,6 +86,8 @@
 
   /** BACKLOG-3641 founder UX: the finished overlay is this one line + Details. */
   var DONE_LINE = "Sync done — switch back to Keepr.";
+  /** A cache Sync, between the last chat and Keepr's answer to /finish. */
+  var SAVING_TEXT = "Saving in Keepr…";
 
   /**
    * The Details lines (BACKLOG-3641). `nameOf` renders a chat or contact name:
@@ -98,11 +100,11 @@
    * @param {function(string): string} nameOf
    */
   function summaryLines(s, nameOf) {
-    var lines = [
+    var lines = [s.isCache ? cacheSavedLine(s) :
       "Scanned " + s.listed + " chats · checked " + s.checked + " · matched " + s.matched +
         " · imported " + s.messages + " messages" + (s.images > 0 ? ", " + s.images + " images" : ""),
     ];
-    if (s.checked > 0 && s.matched === 0) {
+    if (!s.isCache && s.checked > 0 && s.matched === 0) {
       lines.push("None of the checked chats matched a phone number on this transaction's contacts.");
     }
     if (s.notChecked > 0) {
@@ -138,6 +140,25 @@
     return lines;
   }
 
+  function plural(n, one, many) {
+    return n + " " + (n === 1 ? one : many);
+  }
+
+  /**
+   * Founder (2026-10-01): a cache Sync's first line is what Keepr SAVED (its
+   * /finish answer), not what the page sent — the commit drops texts older
+   * than the months setting, and a chat left with none is not "saved".
+   * `s.saved`: {chats, messages, newMessages}; null = the save failed;
+   * undefined = Keepr had not answered yet.
+   */
+  function cacheSavedLine(s) {
+    var scanned = "Scanned " + plural(s.listed, "chat", "chats");
+    if (s.saved === null) return scanned + " · Keepr could not save this Sync — nothing was imported";
+    if (!s.saved || typeof s.saved !== "object") return scanned + " · Keepr is still saving — see Keepr for the result";
+    return scanned + " · saved " + plural(s.saved.chats, "chat", "chats") + " · " +
+      plural(s.saved.messages, "message", "messages") + " (" + s.saved.newMessages + " new)";
+  }
+
   /** On-screen Details: real names are fine on the user's own page. */
   function detailsText(s) {
     return summaryLines(s, function (n) { return n; }).join("\n");
@@ -148,8 +169,15 @@
    * then the step log (already shapes and tags). No name, number or message text.
    */
   function copyText(s, tags, logLines) {
+    // A cache Sync's scan counts (checked / matched / sent) are diagnostics:
+    // in the Copy text only, not on screen.
+    var scanCounts = s.isCache
+      ? ["Checked " + s.checked + " · matched " + s.matched + " · sent " + s.chats + " chats / " + s.messages + " messages" +
+        (s.images > 0 ? " / " + s.images + " images" : "")]
+      : [];
     return ["Keepr Sync diagnostics"]
       .concat(summaryLines(s, function (n) { return "#" + (tags[n] || "??????"); }))
+      .concat(scanCounts)
       .concat(["--- step log ---"], logLines)
       .join("\n");
   }
@@ -392,8 +420,12 @@
         notSynced: totals.notSynced,
         notReached: reported,
         notReachedMore: notReached.length - reported.length,
+        isCache: isCache,
+        saved: saved,
       };
     }
+    /** A cache Sync: Keepr's /finish answer (what it saved); see cacheSavedLine. */
+    var saved;
 
     /** Details (real names, on screen) and Copy (tags only) for the overlay. */
     async function overlayExtras() {
@@ -696,7 +728,9 @@
     // in part) is named here and on the page — never a silent skip.
     var reported = notReached.slice(0, NOT_REACHED_CAP);
     var more = notReached.length - reported.length;
-    await call("POST", base + "/finish", {
+    // A cache Sync: Keepr answers once it has saved, with what it saved.
+    if (isCache) env.overlay.show(SAVING_TEXT, false);
+    var finished = await call("POST", base + "/finish", {
       chats: totals.chats,
       messages: totals.messages,
       images: totals.images,
@@ -704,7 +738,11 @@
       notReachedMore: more,
       notChecked: progress.notChecked,
       notText: totals.notText,
+      noMessagesYet: totals.noMessagesYet,
     });
+    if (isCache && finished && finished.body && Object.prototype.hasOwnProperty.call(finished.body, "saved")) {
+      saved = finished.body.saved;
+    }
     log("done: listed " + progress.listed + ", candidates " + progress.candidates + ", checked " + progress.checked +
       ", matched " + matchedCount + ", imported " + totals.chats + " chats / " + totals.messages + " messages / " +
       totals.images + " images, not fully imported " + notReached.length + ", not checked " + progress.notChecked +

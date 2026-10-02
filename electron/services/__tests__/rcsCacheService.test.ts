@@ -33,6 +33,7 @@ import {
   cacheWindow,
   clampSinceDays,
   cancelOnSessionChange,
+  cacheSavedFromCommit,
   consentToRecordOnSync,
   decideCacheStart,
   handleCacheJobEnded,
@@ -59,6 +60,19 @@ describe("since: max(now − 60 days, last finished − 1 day)", () => {
 
   it("a run longer ago than 60 days: still only 60 days (R1)", () => {
     expect(cacheSince(NOW, "2026-01-01T00:00:00.000Z")).toBe(new Date(NOW - 60 * DAY).toISOString());
+  });
+});
+
+// Founder (2026-10-01): the done screens show what Keepr SAVED. Mutation:
+// staged/kept counts used instead → red.
+describe("cacheSavedFromCommit", () => {
+  it("saved chats = chats stored (all-below-floor chats are not), messages = new + already there", () => {
+    expect(
+      cacheSavedFromCommit({
+        staged: 328, kept: 212, droppedByDate: 116, droppedByCap: 0, chats: 9, stored: 200, alreadyPresent: 12,
+        imagesStaged: 0, imagesStored: 0,
+      }),
+    ).toEqual({ chats: 9, messages: 212, newMessages: 200 });
   });
 });
 

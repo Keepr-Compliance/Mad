@@ -9,7 +9,8 @@
  * ends. Dependencies are injected so jest runs it without Electron or SQLite.
  */
 
-import type { CacheLimits } from "./rcsCacheStaging";
+import type { CacheCommitResult, CacheLimits } from "./rcsCacheStaging";
+import type { RcsCacheSaved } from "./rcsImportJob";
 
 /** How far back a first cache Sync reaches when no floor is given (tests; the app passes the user's setting). */
 export const RCS_CACHE_WINDOW_DAYS = 60;
@@ -121,6 +122,15 @@ export const RCS_CONSENT_VERSION = 1;
 /** The user's consent is current. */
 export function consentIsCurrent(consentVersion: number | null | undefined): boolean {
   return typeof consentVersion === "number" && consentVersion >= RCS_CONSENT_VERSION;
+}
+
+/**
+ * What the done screens show for a cache Sync (founder, 2026-10-01): what
+ * Keepr SAVED, not what the page staged. A chat whose messages were all below
+ * the floor stores nothing and is not counted (the commit skips it).
+ */
+export function cacheSavedFromCommit(r: CacheCommitResult): RcsCacheSaved {
+  return { chats: r.chats, messages: r.stored + r.alreadyPresent, newMessages: r.stored };
 }
 
 /**

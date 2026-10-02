@@ -32,6 +32,10 @@ export interface RcsJobProgressCounts {
   skipped: number;
   /** BACKLOG-3645: chats the page did not check (list over the cap). */
   notChecked?: number;
+  /** BACKLOG-3664: not text conversations (e.g. an AI chat), skipped. */
+  notText?: number;
+  /** Chats with no messages yet (e.g. a new group). */
+  noMessagesYet?: number;
   /** BACKLOG-3642: messages stored but not linked again — the user removed them. */
   removedNotRelinked?: number;
   /** BACKLOG-3658: cache images not kept (no transaction contact in the chat). */
@@ -60,6 +64,11 @@ export interface RcsJobInfo {
   /** BACKLOG-3629: chats left out or imported in part. Names only. */
   notReached?: Array<{ name: string; reason: string; count?: number }>;
   notReachedMore?: number;
+  /**
+   * A finished cache Sync: what Keepr SAVED (null: the save failed; absent:
+   * still saving). The done screens show these, not the staged counts.
+   */
+  saved?: { chats: number; messages: number; newMessages: number } | null;
 }
 
 /** BACKLOG-3658: the extension and cache state, for the setup wizard. */

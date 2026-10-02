@@ -70,6 +70,8 @@ export interface RcsJobProgress {
   notChecked: number;
   /** BACKLOG-3664: AI assistant chats (Gemini) skipped — not text conversations. */
   notText: number;
+  /** Chats that have no messages yet (e.g. a new group), reported with /finish. */
+  noMessagesYet: number;
   /** BACKLOG-3642: messages stored but not linked again — the user removed them. */
   removedNotRelinked: number;
   /** BACKLOG-3658: cache images not kept (the chat has no transaction contact). */
@@ -143,6 +145,21 @@ export interface RcsJobSnapshot {
   notReached?: RcsJobNotReached[];
   /** Entries beyond {@link RCS_NOT_REACHED_CAP}. */
   notReachedMore?: number;
+  /**
+   * A finished cache job: what Keepr SAVED (after the commit's limits), or
+   * null when the save failed. Absent while it is still saving.
+   */
+  saved?: RcsCacheSaved | null;
+}
+
+/** What a cache job's commit saved: the counts the done screens show. */
+export interface RcsCacheSaved {
+  /** Chats with at least one message saved (a chat all below the floor is not counted). */
+  chats: number;
+  /** Messages saved (new + already in Keepr). */
+  messages: number;
+  /** Of those, new to Keepr. */
+  newMessages: number;
 }
 
 /** What the page receives when it claims a job: names only, never numbers. */
@@ -207,6 +224,7 @@ const EMPTY_PROGRESS: RcsJobProgress = {
   skipped: 0,
   notChecked: 0,
   notText: 0,
+  noMessagesYet: 0,
   removedNotRelinked: 0,
   imagesSkipped: 0,
   notSynced: 0,
@@ -236,6 +254,8 @@ export class RcsImportJob {
   /** BACKLOG-3629: set from the page's /finish (see RcsJobNotReached). */
   notReached: RcsJobNotReached[] = [];
   notReachedMore = 0;
+  /** A finished cache job's saved result (undefined: still saving; null: failed). */
+  saved?: RcsCacheSaved | null;
   /** BACKLOG-3661: what is syncing, for "Syncing: <label>" (the transaction's name). */
   label: string | null = null;
   /** BACKLOG-3658: the job kind and the user it was started for (rows go to that user only). */
@@ -292,7 +312,14 @@ export class RcsImportJob {
       ...(this.notReached.length > 0 || this.notReachedMore > 0
         ? { notReached: this.notReached.map((e) => ({ ...e })), notReachedMore: this.notReachedMore }
         : {}),
+      ...(this.saved !== undefined ? { saved: this.saved ? { ...this.saved } : null } : {}),
     };
+  }
+
+  /** A finished cache job's saved result (null: the save failed). Once. */
+  setSaved(saved: RcsCacheSaved | null): void {
+    if (this.kind !== "cache" || this.state !== "finished" || this.saved !== undefined) return;
+    this.saved = saved ? { ...saved } : null;
   }
 
   /** Expire an unclaimed job. Returns true when this call expired it. */
@@ -436,8 +463,12 @@ export class RcsImportJob {
     notReached?: { entries: RcsJobNotReached[]; more: number },
     notChecked?: number,
     notText?: number,
+    noMessagesYet?: number,
   ): void {
     if (!this.isActive) return;
+    if (typeof noMessagesYet === "number" && Number.isFinite(noMessagesYet) && noMessagesYet >= 0) {
+      this.progress.noMessagesYet = Math.min(Math.floor(noMessagesYet), 100_000);
+    }
     if (typeof notText === "number" && Number.isFinite(notText) && notText >= 0) {
       this.progress.notText = Math.min(Math.floor(notText), 100_000);
     }

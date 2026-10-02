@@ -31,7 +31,9 @@
  * - `POST /job/:id/progress`    — counts + stage for the Keepr panel.
  * - `POST /job/:id/finish`      — done; {notReached?[], notReachedMore?}: chats the
  *                                 page left out or imported in part. Keepr brings
- *                                 its window forward.
+ *                                 its window forward. A cache job answers once
+ *                                 Keepr has saved it: {ok, saved} (what was SAVED;
+ *                                 absent if the save outlasts RCS_FINISH_SAVE_WAIT_MS).
  * - `POST /focus`                — "Open Keepr" on the page: Keepr brings itself forward.
  * - `POST /job/:id/error`       — {code, message}; the job fails with it.
  *
@@ -55,6 +57,7 @@ import {
   parseNotReached,
   participantKey,
   RcsJobRegistry,
+  type RcsCacheSaved,
   type RcsImportJob,
   type RcsJobKind,
   type RcsJobContact,
@@ -82,6 +85,9 @@ export const RCS_USER_CHANGED_MESSAGE = "Another Keepr user signed in: this Sync
 export const RCS_IMAGE_NOT_A_CONTACT_MESSAGE = "Images are kept only for chats with a transaction contact.";
 /** BACKLOG-3657 (SR F1): how long a clear waits for writes in progress. */
 export const RCS_DRAIN_TIMEOUT_MS = 15_000;
+
+/** A cache job's /finish waits this long for Keepr's save before answering without it. */
+export const RCS_FINISH_SAVE_WAIT_MS = 30_000;
 export const RCS_BUSY_MESSAGE = "Keepr is busy importing — try again in a moment.";
 
 /** A clear could not start: a write was still in progress after the drain timeout. */
@@ -192,6 +198,8 @@ export interface RcsExtensionBridgeOptions {
   onJobEnded?: (ended: RcsJobEnded) => void;
   /** Overridable for tests only. */
   jobs?: RcsJobRegistry;
+  /** Overridable for tests only (default RCS_FINISH_SAVE_WAIT_MS). */
+  finishSaveWaitMs?: number;
 }
 
 function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
@@ -296,6 +304,8 @@ export class RcsExtensionBridge {
   private drainWaiters: Array<() => void> = [];
   /** BACKLOG-3658: jobs whose end was already announced (onJobEnded). */
   private readonly endedAnnounced = new Set<string>();
+  /** /finish requests of cache jobs waiting for Keepr's save, by job id. */
+  private readonly savedWaiters = new Map<string, Array<() => void>>();
 
   constructor(private readonly options: RcsExtensionBridgeOptions) {
     this.allowedOrigin = options.allowedOrigin ?? RCS_EXTENSION_ORIGIN;
@@ -397,6 +407,37 @@ export class RcsExtensionBridge {
       this.emitJob(job.snapshot());
       this.announceEnded(job);
     }
+  }
+
+  /**
+   * A finished cache job was saved (or the save failed: null). The done
+   * screens show these counts; a /finish waiting for them is answered.
+   */
+  recordCacheSaved(jobId: string, saved: RcsCacheSaved | null): void {
+    const job = this.jobs.current();
+    if (job && job.jobId === jobId) {
+      job.setSaved(saved);
+      this.emitJob(job.snapshot());
+    }
+    const waiters = this.savedWaiters.get(jobId) ?? [];
+    this.savedWaiters.delete(jobId);
+    for (const w of waiters) w();
+  }
+
+  /** Resolves once {@link recordCacheSaved} ran for the job, or after `ms`. */
+  private waitForSaved(job: RcsImportJob, ms: number): Promise<void> {
+    if (job.saved !== undefined) return Promise.resolve();
+    return new Promise((resolve) => {
+      const timer = setTimeout(done, ms);
+      timer.unref?.();
+      const list = this.savedWaiters.get(job.jobId) ?? [];
+      list.push(done);
+      this.savedWaiters.set(job.jobId, list);
+      function done(): void {
+        clearTimeout(timer);
+        resolve();
+      }
+    });
   }
 
   getJob(): RcsJobSnapshot | null {
@@ -847,6 +888,7 @@ export class RcsExtensionBridge {
           parseNotReached(body.notReached, body.notReachedMore),
           typeof body.notChecked === "number" ? body.notChecked : undefined,
           typeof body.notText === "number" ? body.notText : undefined,
+          typeof body.noMessagesYet === "number" ? body.noMessagesYet : undefined,
         );
         const snap = job.snapshot();
         // Counts only: chat names never go to the log. One chat can have two
@@ -867,6 +909,13 @@ export class RcsExtensionBridge {
         this.emitJob(snap);
         this.options.onJobFinished?.(snap);
         this.announceEnded(job);
+        if (job.kind === "cache") {
+          // The page shows what Keepr SAVED, not what it sent (the commit
+          // drops what is below the months setting).
+          await this.waitForSaved(job, this.options.finishSaveWaitMs ?? RCS_FINISH_SAVE_WAIT_MS);
+          sendJson(res, 200, job.saved !== undefined ? { ok: true, saved: job.saved } : { ok: true });
+          return;
+        }
         sendJson(res, 200, { ok: true });
         return;
       }

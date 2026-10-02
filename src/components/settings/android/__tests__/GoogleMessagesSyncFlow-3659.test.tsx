@@ -8,6 +8,7 @@
  *   G3 the extension not copied to Downloads when install shows         → "install step"
  *   G4 detection not polled (an installed extension never noticed)       → "install step"
  *   G6 the pairing instruction shown with both checks ticked, or hidden before → "connect copy"
+ *   H4 the done screen showing staged counts, not what Keepr saved      → "connect → sync → done"
  *   G5 the Sync button not starting the cache job, or another job's progress shown → "connect → sync → done"
  *   C1 a consent step shown again (founder: removed 2026-10-01)         → "steps", "no consent step"
  *   C2 the copy line not under the Sync button / wrong months            → "copy line"
@@ -140,12 +141,22 @@ describe("GoogleMessagesSyncFlow", () => {
       progressListener?.(job({ state: "running", stage: "Chat 3 of 9" }));
     });
     expect(screen.getByTestId("gm-stage")).toHaveTextContent("Chat 3 of 9");
+    const progress = { listed: 21, candidates: 21, checked: 21, matched: 21, imported: 9, messages: 328, images: 0, reactions: 0, skipped: 0, noMessagesYet: 2, notText: 1 };
     act(() => {
-      progressListener?.(job({ state: "finished", progress: { listed: 9, candidates: 9, checked: 9, matched: 9, imported: 7, messages: 175, images: 0, reactions: 0, skipped: 0 } } as Partial<RcsJobInfo>));
+      progressListener?.(job({ state: "finished", progress } as Partial<RcsJobInfo>));
     });
-    expect(screen.getByTestId("gm-step-done")).toBeInTheDocument();
-    expect(screen.getByTestId("gm-chats")).toHaveTextContent("7");
-    expect(screen.getByTestId("gm-messages")).toHaveTextContent("175");
+    // Finished, not saved yet: no staged counts on screen.
+    expect(screen.getByTestId("gm-step-done")).toHaveTextContent("Saving your texts…");
+    expect(screen.getByTestId("gm-done-summary")).not.toHaveTextContent("328");
+    act(() => {
+      progressListener?.(job({ state: "finished", progress, saved: { chats: 7, messages: 212, newMessages: 212 } } as Partial<RcsJobInfo>));
+    });
+    // H4: what Keepr SAVED, not the 328 the page sent.
+    const summary = screen.getByTestId("gm-done-summary");
+    expect(summary).toHaveTextContent("Scanned 21 chats · saved 7 chats · 212 messages (212 new)");
+    expect(summary).toHaveTextContent("2 chats with no messages yet");
+    expect(summary).toHaveTextContent("1 not a text conversation (e.g. an AI chat) — skipped");
+    expect(summary).not.toHaveTextContent("328");
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
