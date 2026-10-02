@@ -227,7 +227,7 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
                 ) : activeImportSource === 'android-messages-web' ? (
                   /* BACKLOG-3659 P3d: Android with Google Messages (Keepr's
                      extension): its status, auto-delete and its own reset. */
-                  <GoogleMessagesSettings />
+                  <GoogleMessagesSettings userId={userId} />
                 ) : (
                   /* BACKLOG-2335: macOS panel renders for every non-Android
                      source, but only macos-native can actually import — the

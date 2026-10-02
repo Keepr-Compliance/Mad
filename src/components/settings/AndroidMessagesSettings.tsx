@@ -16,6 +16,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { settingsService } from '../../services';
 import logger from '../../utils/logger';
+import { LookbackMonthsSelect } from "./LookbackMonthsSelect";
 import {
   DEFAULT_LOOKBACK_MONTHS,
   DEFAULT_MAX_MESSAGES,
@@ -296,20 +297,12 @@ export function AndroidMessagesSettings({ userId }: AndroidMessagesSettingsProps
         {/* Date Range Filter */}
         <div className="flex items-center justify-between mb-2">
           <span className="text-xs text-gray-600">Import messages from</span>
-          <select
-            value={lookbackMonths ?? "all"}
-            onChange={(e) => handleLookbackChange(e.target.value)}
+          <LookbackMonthsSelect
+            value={lookbackMonths}
+            onChange={(v) => handleLookbackChange(v)}
             disabled={!prefsSettled}
             className="text-xs border border-gray-300 rounded px-2 py-1 bg-white text-gray-900 disabled:opacity-50"
-          >
-            <option value="3">Last 3 months</option>
-            <option value="6">Last 6 months</option>
-            <option value="9">Last 9 months</option>
-            <option value="12">Last 12 months</option>
-            <option value="18">Last 18 months</option>
-            <option value="24">Last 24 months</option>
-            <option value="all">All time</option>
-          </select>
+          />
         </div>
 
         {/* Message Count Cap */}

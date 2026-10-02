@@ -19,6 +19,7 @@ import { settingsService } from "../services/settingsService";
 import type { AppStateMachine } from "./state/types";
 import type { Transaction } from "@/types";
 import { useEmailSettingsCallbacks } from "./hooks/useEmailSettingsCallbacks";
+import { scrollToSettingsSection } from "../utils/scrollToSettingsSection";
 
 interface AppModalsProps {
   app: AppStateMachine;
@@ -210,7 +211,15 @@ export function AppModals({ app }: AppModalsProps) {
 
       {/* Android Sync Wizard Modal (BACKLOG-2320) */}
       {modalState.showAndroidSync && currentUser && androidApp && (
-        <AndroidSyncModal userId={currentUser.id} onClose={closeAndroidSync} app={androidApp} />
+        <AndroidSyncModal
+          userId={currentUser.id}
+          onClose={closeAndroidSync}
+          app={androidApp}
+          onOpenSettings={(target) => {
+            openSettings();
+            scrollToSettingsSection(target);
+          }}
+        />
       )}
     </>
   );

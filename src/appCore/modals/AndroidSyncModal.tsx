@@ -11,6 +11,7 @@ import React, { useEffect, useState } from "react";
 import { ResponsiveModal } from "../../components/common/ResponsiveModal";
 import { AndroidSyncSetup } from "../../components/settings/android/AndroidSyncSetup";
 import { GoogleMessagesSyncFlow } from "../../components/settings/android/GoogleMessagesSyncFlow";
+import { GM_LOOKBACK_TARGET } from "../../components/settings/android/googleMessagesSyncSteps";
 import logger from "../../utils/logger";
 
 interface AndroidSyncModalProps {
@@ -22,9 +23,11 @@ interface AndroidSyncModalProps {
    * (Keepr's Chrome extension) or another app (the Keepr companion app).
    */
   app?: "google-messages" | "companion";
+  /** Open Settings scrolled to a section (by element id): Google Messages' "Change". */
+  onOpenSettings?: (target: string) => void;
 }
 
-export function AndroidSyncModal({ userId, onClose, app = "companion" }: AndroidSyncModalProps) {
+export function AndroidSyncModal({ userId, onClose, app = "companion", onOpenSettings }: AndroidSyncModalProps) {
   const [shown, setShown] = useState(app);
   useEffect(() => {
     logger.info("[AndroidSyncModal] Mounted");
@@ -56,7 +59,18 @@ export function AndroidSyncModal({ userId, onClose, app = "companion" }: Android
               live pairing success advances the wizard off the (now-consumed) QR,
               mirroring how IPhoneSyncModal closes on success. */}
           {shown === "google-messages" ? (
-            <GoogleMessagesSyncFlow onClose={onClose} onUseCompanion={() => setShown("companion")} />
+            <GoogleMessagesSyncFlow
+              onClose={onClose}
+              onUseCompanion={() => setShown("companion")}
+              onOpenSettings={
+                onOpenSettings
+                  ? () => {
+                      onClose();
+                      onOpenSettings(GM_LOOKBACK_TARGET);
+                    }
+                  : undefined
+              }
+            />
           ) : (
             <AndroidSyncSetup userId={userId} onComplete={onClose} />
           )}

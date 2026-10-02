@@ -43,9 +43,14 @@ export function extensionInstalled(state: RcsExtensionState | null): boolean {
   return !!state?.extensionVersion;
 }
 
+/** Settings → Messages → Google Messages' months control (scroll target of "Change"). */
+export const GM_LOOKBACK_TARGET = "settings-gm-lookback";
+
 /**
- * The one line under the Sync button: what a Sync copies. `lookbackMonths`
- * is the configured window (null = All time; undefined = not known yet).
+ * The one line under the Sync button: what a Sync copies (the screen adds
+ * "Change this in Settings → Messages.", "Change" a link to the control).
+ * `lookbackMonths` is the configured window (null = All time; undefined =
+ * not known yet).
  */
 export function syncCopyLine(lookbackMonths: number | null | undefined): string {
   const what =
@@ -54,7 +59,7 @@ export function syncCopyLine(lookbackMonths: number | null | undefined): string 
       : typeof lookbackMonths === "number"
         ? `your texts from the last ${lookbackMonths} month${lookbackMonths === 1 ? "" : "s"}`
         : "your texts";
-  return `Keepr copies ${what} to this computer, encrypted. Change this in Settings → Messages.`;
+  return `Keepr copies ${what} to this computer, encrypted.`;
 }
 
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;

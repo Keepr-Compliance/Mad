@@ -20,6 +20,8 @@ interface GoogleMessagesSyncFlowProps {
   onClose: () => void;
   /** "Another messaging app": switch to the Keepr companion app flow. */
   onUseCompanion?: () => void;
+  /** "Change" under the Sync button: open Settings → Messages at the months control. */
+  onOpenSettings?: () => void;
   /** Test seam: the poll interval. */
   pollMs?: number;
 }
@@ -57,7 +59,7 @@ const primary =
 const secondary =
   "min-h-[44px] px-4 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 text-gray-900 text-sm font-semibold";
 
-export function GoogleMessagesSyncFlow({ onClose, onUseCompanion, pollMs = POLL_MS }: GoogleMessagesSyncFlowProps) {
+export function GoogleMessagesSyncFlow({ onClose, onUseCompanion, onOpenSettings, pollMs = POLL_MS }: GoogleMessagesSyncFlowProps) {
   const [state, setState] = useState<RcsExtensionState | null>(null);
   const [job, setJob] = useState<RcsJobInfo | null>(null);
   const [continued, setContinued] = useState(false);
@@ -213,7 +215,15 @@ export function GoogleMessagesSyncFlow({ onClose, onUseCompanion, pollMs = POLL_
             {starting ? "Starting…" : "Open Google Messages and sync"}
           </button>
           <p className="text-xs text-gray-600" data-testid="gm-copy-line">
-            {syncCopyLine(state?.lookbackMonths)}
+            {syncCopyLine(state?.lookbackMonths)}{" "}
+            {onOpenSettings ? (
+              <button type="button" className="text-indigo-700 hover:text-indigo-900 underline" onClick={onOpenSettings}>
+                Change
+              </button>
+            ) : (
+              "Change"
+            )}{" "}
+            this in Settings → Messages.
           </p>
           {!installed && (
             <button type="button" className="text-sm text-indigo-700 hover:text-indigo-900 text-left" onClick={() => setContinued(false)}>

@@ -121,9 +121,19 @@ describe("GoogleMessagesSyncFlow", () => {
     expect(await screen.findByTestId("gm-copy-line")).toHaveTextContent(
       "Keepr copies your texts from the last 6 months to this computer, encrypted. Change this in Settings → Messages.",
     );
-    expect(syncCopyLine(null)).toBe("Keepr copies all your texts to this computer, encrypted. Change this in Settings → Messages.");
+    expect(syncCopyLine(null)).toBe("Keepr copies all your texts to this computer, encrypted.");
     expect(syncCopyLine(12)).toContain("from the last 12 months");
-    expect(syncCopyLine(undefined)).toBe("Keepr copies your texts to this computer, encrypted. Change this in Settings → Messages.");
+    expect(syncCopyLine(undefined)).toBe("Keepr copies your texts to this computer, encrypted.");
+  });
+
+  // Founder: "Change" opens Settings → Messages at the months control.
+  // Mutation: the link not calling onOpenSettings → red.
+  it("copy line: Change opens Settings at the months control (C3)", async () => {
+    mockState = { ...INSTALLED, lookbackMonths: 3 };
+    const onOpenSettings = jest.fn();
+    render(<GoogleMessagesSyncFlow onClose={jest.fn()} onOpenSettings={onOpenSettings} pollMs={20} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Change" }));
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
   });
 
   it("connect → Sync now starts the cache job → progress → done with the counts (G5)", async () => {

@@ -5,7 +5,8 @@
  * This is a pure extraction of the routing logic from App.tsx.
  */
 
-import { useState, useCallback, useRef, lazy, Suspense } from "react";
+import { useState, useCallback, lazy, Suspense } from "react";
+import { scrollToSettingsSection } from "../utils/scrollToSettingsSection";
 import Login from "../components/Login";
 import Dashboard from "../components/Dashboard";
 import OfflineFallback from "../components/OfflineFallback";
@@ -39,11 +40,6 @@ export function AppRouter({ app }: AppRouterProps) {
     setIsTourActive, openIPhoneSync, openAndroidSync, openSettings,
     handleLogout,
   } = app;
-
-  // Ref for scroll-to-highlight targets in Settings modal (cross-component).
-  // The Settings modal mounts/unmounts dynamically, so the ref is re-resolved
-  // each time via the callback below.
-  const scrollTargetRef = useRef<HTMLElement | null>(null);
 
   // Track license blocked state for login screen
   const [licenseBlocked, setLicenseBlocked] = useState<{
@@ -125,22 +121,6 @@ export function AppRouter({ app }: AppRouterProps) {
     // companion ("android-companion") as their import source in Settings.
     // BACKLOG-3659: also for Android with Google Messages (Keepr's extension).
     const showAndroidSyncButton = importSource === "android-companion" || importSource === "android-messages-web";
-
-    // Scroll to and highlight a target element inside the Settings modal.
-    // Reusable helper for handleOpenSettings.
-    const scrollToSettingsSection = (elementId: string) => {
-      setTimeout(() => {
-        scrollTargetRef.current = document.getElementById(elementId);
-        if (scrollTargetRef.current) {
-          scrollTargetRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
-          scrollTargetRef.current.classList.add("ring-2", "ring-amber-400", "ring-offset-2", "rounded-lg");
-          const el = scrollTargetRef.current;
-          setTimeout(() => {
-            el.classList.remove("ring-2", "ring-amber-400", "ring-offset-2", "rounded-lg");
-          }, 3000);
-        }
-      }, 500);
-    };
 
     // Handler to open Settings, optionally scrolling to a specific section
     const handleOpenSettings = (scrollTarget?: string) => {

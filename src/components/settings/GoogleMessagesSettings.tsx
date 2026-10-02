@@ -8,6 +8,10 @@
  * - Status: the extension (installed / version), Google Messages paired, the
  *   last Sync. (No consent line: users accept Keepr's terms at sign-up; the
  *   first Sync records the consent for audit.)
+ * - How far back a Sync copies (the months control, shared with the macOS
+ *   section). Written to `messageImport.filters` — the key the cache Sync's
+ *   floor actually reads (importPlanInputs.loadStoredImportFilters); the
+ *   companion's `messageImport.android` namespace is not read by it.
  * - Auto-delete (BACKLOG-3658 P3b; off by default, 90 days when on).
  * - Force re-import: deletes every text imported from Google Messages; the
  *   next Sync (Dashboard → Sync Android) copies them again.
@@ -19,6 +23,11 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 import { rcsImportService } from "../../services/rcsImportService";
+import { settingsService } from "../../services";
+import { LookbackMonthsSelect, parseLookbackOption } from "./LookbackMonthsSelect";
+import { readMessageImportPreferences, resolveStoredLookbackMonths } from "./messageImportPreferences";
+
+import { GM_LOOKBACK_TARGET } from "./android/googleMessagesSyncSteps";
 import type { RcsExtensionState } from "../../../electron/types/ipc/window-api-rcs-import";
 
 function formatWhen(iso: string | null | undefined): string {
@@ -27,8 +36,10 @@ function formatWhen(iso: string | null | undefined): string {
   return Number.isFinite(t) ? new Date(t).toLocaleString() : "never";
 }
 
-export function GoogleMessagesSettings() {
+export function GoogleMessagesSettings({ userId }: { userId: string }) {
   const [state, setState] = useState<RcsExtensionState | null>(null);
+  const [lookbackMonths, setLookbackMonths] = useState<number | null>(resolveStoredLookbackMonths(undefined));
+  const [prefsSettled, setPrefsSettled] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showForceWarning, setShowForceWarning] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -47,6 +58,42 @@ export function GoogleMessagesSettings() {
     setLoading(false);
     await refreshExcluded();
   }, [refreshExcluded]);
+
+  // The stored window (absent key → the default, null → All time).
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      try {
+        const r = await settingsService.getPreferences(userId);
+        if (live && r?.success) setLookbackMonths(resolveStoredLookbackMonths(readMessageImportPreferences(r.data)?.filters));
+      } catch {
+        // The default stays.
+      } finally {
+        if (live) setPrefsSettled(true);
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [userId]);
+
+  // Saved where the cache Sync reads it; reverted when the save fails.
+  const changeLookback = useCallback(async (value: string) => {
+    const months = parseLookbackOption(value);
+    const previous = lookbackMonths;
+    setLookbackMonths(months);
+    let saved = false;
+    try {
+      const r = await settingsService.updatePreferences(userId, { messageImport: { filters: { lookbackMonths: months } } });
+      saved = r?.success !== false;
+    } catch {
+      saved = false;
+    }
+    if (!saved) {
+      setLookbackMonths(previous);
+      setResult({ ok: false, text: "Keepr could not save that." });
+    }
+  }, [userId, lookbackMonths]);
 
   useEffect(() => {
     void refresh();
@@ -105,6 +152,21 @@ export function GoogleMessagesSettings() {
             <p className="text-xs text-gray-600 pt-1">To sync, click Sync Android on the dashboard.</p>
           </>
         )}
+      </div>
+
+      <div id={GM_LOOKBACK_TARGET} className="p-4 bg-white rounded-lg border border-gray-200" data-testid="gm-lookback">
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-gray-600">Import messages from</span>
+          <LookbackMonthsSelect
+            value={lookbackMonths}
+            onChange={(v) => void changeLookback(v)}
+            disabled={!prefsSettled}
+            aria-label="Import messages from"
+          />
+        </div>
+        <p className="text-xs text-blue-600 mt-2" data-testid="gm-lookback-line">
+          {lookbackMonths === null ? "Copying all your texts" : `Copying texts from the last ${lookbackMonths} months`}
+        </p>
       </div>
 
       <div className="p-4 bg-white rounded-lg border border-gray-200" data-testid="gm-not-synced">

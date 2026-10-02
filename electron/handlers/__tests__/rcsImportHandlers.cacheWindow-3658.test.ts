@@ -54,8 +54,10 @@ jest.mock("../../services/databaseService", () => ({
     setRcsConsent: (...a: unknown[]) => mockSetConsent(...a),
   },
 }));
+let mockStoredFilters: Record<string, unknown> | null = null;
 jest.mock("../../services/importPlanInputs", () => ({
   resolveImportPlanForUser: async () => ({ fetchStartISO: planStart, effectiveCap: 50000, protectedSpans: [] }),
+  loadStoredImportFilters: async () => mockStoredFilters,
 }));
 jest.mock("../../services/sessionService", () => ({
   __esModule: true,
@@ -110,6 +112,20 @@ describe("rcs-import:start-cache-job window (BACKLOG-3658)", () => {
   it("a current consent is not re-recorded (K7)", async () => {
     expect((await start()).success).toBe(true);
     expect(mockSetConsent).not.toHaveBeenCalled();
+  });
+
+  // Item 5: the Sync screen's line names the months the cache floor reads
+  // (messageImport.filters). Mutation: another key / no default → red.
+  it("get-extension-state: lookbackMonths from messageImport.filters (absent → 3, null → All time)", async () => {
+    const state = async () =>
+      ((await handlers.get("rcs-import:get-extension-state")!({})) as { state: { lookbackMonths?: number | null } }).state.lookbackMonths;
+    mockStoredFilters = null;
+    expect(await state()).toBe(3);
+    mockStoredFilters = { lookbackMonths: 12 };
+    expect(await state()).toBe(12);
+    mockStoredFilters = { lookbackMonths: null };
+    expect(await state()).toBeNull();
+    mockStoredFilters = null;
   });
 
   it("packaged: { sinceDays } is ignored (H1)", async () => {

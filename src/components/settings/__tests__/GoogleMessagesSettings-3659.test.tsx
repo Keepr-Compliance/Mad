@@ -8,6 +8,9 @@
  *   S3 the auto-delete switch not saved                                     → "auto-delete"
  *   S4 the consent line / Withdraw back in this section                     → "no consent line"
  *   S5 Settings not showing this section for android-messages-web           → (Settings.test)
+ *   L1 the months control missing, or not showing the stored window       → "months control"
+ *   L2 the months written anywhere but messageImport.filters (the key the
+ *      cache Sync's floor reads), or a failed save left on screen          → "months control"
  *   E1 (P3c) switched-off chats not listed / no fallback title               → "chats not synced"
  *   E2 (P3c) Sync again not switching that chat back on                       → "chats not synced"
  *   E3 (P3c) Sync all again without a confirmation                            → "Sync all again"
@@ -23,6 +26,15 @@ const mockAutoDelete = jest.fn();
 const mockConsent = jest.fn();
 let mockExcluded: Array<{ id: string; title: string | null; createdAt: string }> = [];
 const mockRemoveExclusion = jest.fn();
+let mockPrefs: Record<string, unknown> = {};
+const mockUpdatePrefs = jest.fn();
+
+jest.mock("../../../services", () => ({
+  settingsService: {
+    getPreferences: async () => ({ success: true, data: mockPrefs }),
+    updatePreferences: (...a: unknown[]) => mockUpdatePrefs(...a),
+  },
+}));
 
 jest.mock("../../../services/rcsImportService", () => ({
   rcsImportService: {
@@ -50,6 +62,8 @@ beforeEach(() => {
   mockAutoDelete.mockResolvedValue({ success: true });
   mockConsent.mockResolvedValue({ success: true });
   mockExcluded = [];
+  mockPrefs = {};
+  mockUpdatePrefs.mockResolvedValue({ success: true });
   mockRemoveExclusion.mockImplementation(async (a: { id?: string; all?: boolean }) => {
     mockExcluded = a.all ? [] : mockExcluded.filter((c) => c.id !== a.id);
     return { success: true };
@@ -58,15 +72,44 @@ beforeEach(() => {
 
 describe("GoogleMessagesSettings", () => {
   it("shows the extension, the pairing and the last sync; no consent line (S4)", async () => {
-    render(<GoogleMessagesSettings />);
+    render(<GoogleMessagesSettings userId="user-1" />);
     expect(await screen.findByTestId("gm-settings-extension")).toHaveTextContent("installed (version 0.3.4)");
     expect(screen.queryByTestId("gm-settings-consent")).toBeNull();
     expect(screen.queryByText(/Copying your texts/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Withdraw" })).toBeNull();
   });
 
+  it("months control: absent → the default 3 months; the stored value; null → All time (L1)", async () => {
+    const view = render(<GoogleMessagesSettings userId="user-1" />);
+    const select = (await screen.findByRole("combobox", { name: "Import messages from" })) as HTMLSelectElement;
+    await waitFor(() => expect(select.disabled).toBe(false));
+    expect(select.value).toBe("3");
+    expect(screen.getByTestId("gm-lookback-line")).toHaveTextContent("Copying texts from the last 3 months");
+    view.unmount();
+    mockPrefs = { messageImport: { filters: { lookbackMonths: null } } };
+    render(<GoogleMessagesSettings userId="user-1" />);
+    await waitFor(() => expect((screen.getByRole("combobox", { name: "Import messages from" }) as HTMLSelectElement).value).toBe("all"));
+    expect(screen.getByTestId("gm-lookback-line")).toHaveTextContent("Copying all your texts");
+  });
+
+  it("months control: a change is saved to messageImport.filters; a failed save reverts (L2)", async () => {
+    mockPrefs = { messageImport: { filters: { lookbackMonths: 6 } } };
+    render(<GoogleMessagesSettings userId="user-1" />);
+    const select = (await screen.findByRole("combobox", { name: "Import messages from" })) as HTMLSelectElement;
+    await waitFor(() => expect(select.value).toBe("6"));
+    fireEvent.change(select, { target: { value: "12" } });
+    await waitFor(() =>
+      expect(mockUpdatePrefs).toHaveBeenCalledWith("user-1", { messageImport: { filters: { lookbackMonths: 12 } } }),
+    );
+    expect(screen.getByTestId("gm-lookback-line")).toHaveTextContent("Copying texts from the last 12 months");
+    mockUpdatePrefs.mockResolvedValue({ success: false });
+    fireEvent.change(select, { target: { value: "all" } });
+    await waitFor(() => expect(select.value).toBe("12"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Keepr could not save that.");
+  });
+
   it("Force re-import: asks first, then clears only Google Messages texts and says so (S1)", async () => {
-    render(<GoogleMessagesSettings />);
+    render(<GoogleMessagesSettings userId="user-1" />);
     fireEvent.click(await screen.findByRole("button", { name: /force re-import/i }));
     expect(mockClear).not.toHaveBeenCalled();
     expect(screen.getByText(/delete every text imported from Google Messages/)).toBeInTheDocument();
@@ -77,7 +120,7 @@ describe("GoogleMessagesSettings", () => {
 
   it("a refused clear shows its error, not a success line (S2)", async () => {
     mockClear.mockResolvedValue({ success: false, error: "Nothing was cleared. Keepr is still saving the last Sync." });
-    render(<GoogleMessagesSettings />);
+    render(<GoogleMessagesSettings userId="user-1" />);
     fireEvent.click(await screen.findByRole("button", { name: /force re-import/i }));
     fireEvent.click(screen.getByRole("button", { name: /continue with re-import/i }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Nothing was cleared");
@@ -85,7 +128,7 @@ describe("GoogleMessagesSettings", () => {
   });
 
   it("auto-delete: off by default; switching it on saves it (S3)", async () => {
-    render(<GoogleMessagesSettings />);
+    render(<GoogleMessagesSettings userId="user-1" />);
     const box = (await screen.findByTestId("gm-auto-delete")) as HTMLInputElement;
     await waitFor(() => expect(box.checked).toBe(false));
     fireEvent.click(box);
@@ -97,7 +140,7 @@ describe("GoogleMessagesSettings", () => {
       { id: "x-1", title: "Test Contact A", createdAt: "2026-10-01T10:00:00.000Z" },
       { id: "x-2", title: null, createdAt: "2026-10-01T09:00:00.000Z" },
     ];
-    render(<GoogleMessagesSettings />);
+    render(<GoogleMessagesSettings userId="user-1" />);
     const box = await screen.findByTestId("gm-not-synced");
     await waitFor(() => expect(box).toHaveTextContent("2 chats not synced"));
     expect(box).toHaveTextContent("Test Contact A");
@@ -113,7 +156,7 @@ describe("GoogleMessagesSettings", () => {
       { id: "x-1", title: null, createdAt: "2026-10-01T10:00:00.000Z" },
       { id: "x-2", title: null, createdAt: "2026-10-01T09:00:00.000Z" },
     ];
-    render(<GoogleMessagesSettings />);
+    render(<GoogleMessagesSettings userId="user-1" />);
     fireEvent.click(await screen.findByRole("button", { name: "Sync all again" }));
     expect(mockRemoveExclusion).not.toHaveBeenCalled();
     const confirm = screen.getAllByRole("button", { name: "Sync all again" });

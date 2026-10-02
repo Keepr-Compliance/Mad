@@ -35,6 +35,7 @@ import {
   type ImportPhaseDisplay,
 } from "../../utils/importPhaseDisplay";
 import { FdaHelpSheet } from "../permissions/FdaHelpSheet";
+import { LookbackMonthsSelect } from "./LookbackMonthsSelect";
 import { usePlatform } from "../../contexts/PlatformContext";
 import { useSyncOrchestrator } from "../../hooks/useSyncOrchestrator";
 import { settingsService, systemService } from '../../services';
@@ -2001,20 +2002,11 @@ export function MacOSMessagesImportSettings({
         {/* Date Range Filter */}
         <div className="flex items-center justify-between mb-2">
           <span className="text-xs text-gray-600">Import messages from</span>
-          <select
-            value={lookbackMonths ?? "all"}
-            onChange={(e) => handleLookbackChange(e.target.value)}
+          <LookbackMonthsSelect
+            value={lookbackMonths}
+            onChange={(v) => handleLookbackChange(v)}
             disabled={controlsDisabled}
-            className="text-xs border border-gray-300 rounded px-3 py-2.5 bg-white text-gray-900 disabled:opacity-50 min-h-[44px]"
-          >
-            <option value="3">Last 3 months</option>
-            <option value="6">Last 6 months</option>
-            <option value="9">Last 9 months</option>
-            <option value="12">Last 12 months</option>
-            <option value="18">Last 18 months</option>
-            <option value="24">Last 24 months</option>
-            <option value="all">All time</option>
-          </select>
+          />
         </div>
 
         {/* Message Count Cap */}
