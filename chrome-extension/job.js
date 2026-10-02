@@ -112,6 +112,8 @@
     }
     var confirmedLine = historyConfirmedLine(s.historyConfirmed);
     if (confirmedLine) lines.push(confirmedLine);
+    var depthLine = historyDepthLine(s.depth);
+    if (depthLine) lines.push(depthLine);
     if (s.notChecked > 0) {
       lines.push("Not checked: " + s.notChecked + " chats (name didn't match a contact on this transaction)");
     }
@@ -167,14 +169,36 @@
 
   /** SR S2: "marker" | "first_page" | "none" — how a chat's history start was confirmed. */
   function startConfirmedBy(hist) {
-    return hist && (hist.confirmedBy === "marker" || hist.confirmedBy === "first_page") ? hist.confirmedBy : "none";
+    return hist && (hist.confirmedBy === "marker" || hist.confirmedBy === "first_page" || hist.confirmedBy === "no_overflow")
+      ? hist.confirmedBy : "none";
+  }
+
+  var DAY_MS = 864e5;
+
+  /** History depth (3671 metrics): where a chat's history load ended. */
+  function depthKind(hist) {
+    if (!hist) return "partial";
+    if (hist.stopReason === "date_floor") return "limit";
+    if (hist.stopReason === "no_more") return "start";
+    return "partial"; // not_settled, history_gap, cap
+  }
+
+  /** "History depth: …" — counts only (no dates, no names). */
+  function historyDepthLine(d) {
+    if (!d || d.limit + d.start + d.partial === 0) return null;
+    var limit = d.floorDays !== null && d.floorDays !== undefined
+      ? "the " + Math.max(1, Math.round(d.floorDays / 30.44)) + "-month limit"
+      : "the months limit";
+    return "History depth: " + d.limit + " chats reached " + limit + " · " + d.start + " reached the chat's start · " +
+      d.partial + " not fully loaded" +
+      (d.gaps > 0 ? " · " + d.gaps + " gaps (" + d.gapsRecovered + " recovered)" : "");
   }
 
   /** SR S2: the per-kind count line ("History start: …"), or null when no chat was imported. */
   function historyConfirmedLine(c) {
-    if (!c || c.marker + c.first_page + c.none === 0) return null;
+    if (!c || c.marker + c.first_page + (c.no_overflow || 0) + c.none === 0) return null;
     return "History start: " + c.marker + " confirmed by the start marker · " + c.first_page +
-      " complete on the first page · " + c.none + " not confirmed";
+      " complete on the first page · " + (c.no_overflow || 0) + " without scrolling · " + c.none + " not confirmed";
   }
 
   /**
@@ -410,7 +434,8 @@
       return reply;
     }
     var progress = { listed: 0, candidates: 0, checked: 0, skipped: 0, notChecked: 0 };
-    var totals = { chats: 0, messages: 0, images: 0, reactions: 0, historyConfirmed: { marker: 0, first_page: 0, none: 0 }, removedByUser: 0, imagesNotKept: 0, notText: 0, noMessagesYet: 0, notSynced: 0 };
+    var totals = { chats: 0, messages: 0, images: 0, reactions: 0, historyConfirmed: { marker: 0, first_page: 0, no_overflow: 0, none: 0 },
+      depth: { limit: 0, start: 0, partial: 0, gaps: 0, gapsRecovered: 0, floorDays: null }, removedByUser: 0, imagesNotKept: 0, notText: 0, noMessagesYet: 0, notSynced: 0 };
     var contactsWithoutPhone = 0;
 
     // BACKLOG-3658: progress lines carry the page's Cancel (this job only).
@@ -457,6 +482,7 @@
         images: totals.images,
         reactions: totals.reactions,
         historyConfirmed: totals.historyConfirmed,
+        depth: totals.depth,
         notChecked: progress.notChecked,
         contactsWithoutPhone: contactsWithoutPhone,
         removedByUser: totals.removedByUser,
@@ -731,6 +757,20 @@
         totals.reactions += chatReactions;
         // SR S2: how this chat's history start was confirmed, counted per kind.
         totals.historyConfirmed[startConfirmedBy(hist)] += 1;
+        // History depth (3671): how far back this chat reaches, in whole days.
+        var nowMs = (env.now ? env.now() : new Date()).getTime();
+        var oldestMs = null;
+        for (var od = 0; od < messages.length; od++) {
+          var ot = Date.parse(messages[od].sentAt);
+          if (isFinite(ot) && (oldestMs === null || ot < oldestMs)) oldestMs = ot;
+        }
+        var floorDays = floorMs === null ? null : Math.round((nowMs - floorMs) / DAY_MS);
+        totals.depth[depthKind(hist)] += 1;
+        totals.depth.floorDays = floorDays;
+        totals.depth.gaps += hist.gapsDetected || 0;
+        totals.depth.gapsRecovered += hist.gapsRecovered || 0;
+        log("  oldest kept: " + (oldestMs === null ? "none" : Math.floor((nowMs - oldestMs) / DAY_MS) + " days ago") +
+          " (floor " + (floorDays === null ? "none" : floorDays + " days") + ")");
         log("  imported " + messages.length + " messages, " + chatReactions + " reactions (history stop: " + hist.stopReason +
           ", start confirmed by " + startConfirmedBy(hist) +
           (hist.nudges ? ", nudges " + hist.nudges : "") +

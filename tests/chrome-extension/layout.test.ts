@@ -582,7 +582,8 @@ describe("no chat is ever silently left out (BACKLOG-3629)", () => {
     const done = t.details[t.details.length - 1];
     expect(done).toBe(
       "Scanned 1 chats · checked 1 · matched 1 · imported 1 messages\n" +
-        "History start: 0 confirmed by the start marker · 0 complete on the first page · 1 not confirmed",
+        "History start: 0 confirmed by the start marker · 0 complete on the first page · 0 without scrolling · 1 not confirmed\n" +
+        "History depth: 0 chats reached the months limit · 1 reached the chat's start · 0 not fully loaded",
     );
   });
 
@@ -608,7 +609,7 @@ describe("no chat is ever silently left out (BACKLOG-3629)", () => {
     expect(copy).toContain("start confirmed by first_page");
     expect(copy).toContain("start confirmed by none");
     expect(t.details[t.details.length - 1]).toContain(
-      "History start: 1 confirmed by the start marker · 1 complete on the first page · 1 not confirmed",
+      "History start: 1 confirmed by the start marker · 1 complete on the first page · 0 without scrolling · 1 not confirmed",
     );
   });
 
