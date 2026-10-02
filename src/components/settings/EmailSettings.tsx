@@ -11,6 +11,8 @@ import { ResponsiveModal } from "../common/ResponsiveModal";
 import { ImportInfoPopover } from "./ImportInfoPopover";
 import { emailPrecacheStageDisplayFor } from "../../utils/emailPrecacheStageDisplay";
 import { ConnectionMenu } from "./ConnectionMenu";
+import { LookbackMonthsSelect } from "./LookbackMonthsSelect";
+import { DEFAULT_EMAIL_CACHE_MONTHS } from "./messageImportPreferences";
 import type {
   Connections,
   ConnectionStatus,
@@ -302,7 +304,7 @@ export function EmailSettings({
   const [emailCacheDurationMonths, setEmailCacheDurationMonths] = useState<number>(() => {
     const val = initialPreferences?.emailCache?.durationMonths
       ?? initialPreferences?.emailSync?.lookbackMonths;
-    return (typeof val === "number" && val > 0) ? val : 3;
+    return (typeof val === "number" && val > 0) ? val : DEFAULT_EMAIL_CACHE_MONTHS;
   });
 
   // Check connections
@@ -777,18 +779,15 @@ export function EmailSettings({
               filters already use. */}
           <div className="flex items-center justify-between">
             <span className="text-xs text-gray-600">Import emails from</span>
-            <select
+            {/* Founder (2026-10-02): the shared months list (1, 1.5, 2, 3, 4,
+                5, 6 months, 1 year); a stored value outside it shows as Custom. */}
+            <LookbackMonthsSelect
               value={emailCacheDurationMonths}
-              onChange={(e) =>
-                handleEmailCacheDurationChange(Number(e.target.value))
-              }
+              onChange={(v) => handleEmailCacheDurationChange(Number(v))}
+              defaultMonths={DEFAULT_EMAIL_CACHE_MONTHS}
+              aria-label="Import emails from"
               className="ml-4 text-sm border border-gray-300 rounded px-3 py-2.5 bg-white text-gray-900 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 min-h-[44px]"
-            >
-              <option value={1}>Last 1 month</option>
-              <option value={3}>Last 3 months</option>
-              <option value={6}>Last 6 months</option>
-              <option value={12}>Last 12 months</option>
-            </select>
+            />
           </div>
         </div>
 

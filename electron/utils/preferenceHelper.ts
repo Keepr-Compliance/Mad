@@ -12,6 +12,7 @@
 import supabaseService from "../services/supabaseService";
 import logService from "../services/logService";
 import { EMAIL_CACHE_DURATION_MONTHS_DEFAULT } from "../constants";
+import { lookbackStartMs } from "./lookbackWindow";
 import {
   BACKEND_DERIVED_DEFAULT_KEYS,
   isContactSourceKey,
@@ -389,7 +390,7 @@ export async function isTextPeopleEnabled(userId: string): Promise<boolean> {
  * @param durationMonths - Number of months to look back
  * @returns Date representing the earliest email date to fetch
  */
-export function computeEmailCacheSinceDate(durationMonths: number): Date {
-  // Approximate: 30 days per month is sufficient for cache window purposes
-  return new Date(Date.now() - durationMonths * 30 * 24 * 60 * 60 * 1000);
+export function computeEmailCacheSinceDate(durationMonths: number, nowMs: number = Date.now()): Date {
+  // The one months→days rule for every window (utils/lookbackWindow): 1.5 months = 46 days.
+  return new Date(lookbackStartMs(durationMonths, nowMs));
 }

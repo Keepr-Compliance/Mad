@@ -59,6 +59,13 @@
 export const DEFAULT_LOOKBACK_MONTHS = 1.5;
 
 /**
+ * Email History (`emailCache.durationMonths`) shown when none is stored.
+ * MIRROR of `EMAIL_CACHE_DURATION_MONTHS_DEFAULT` in `electron/constants.ts`.
+ * Founder (2026-10-02): 1.5 months, the same default as messages (was 3).
+ */
+export const DEFAULT_EMAIL_CACHE_MONTHS = 1.5;
+
+/**
  * Cap shown when the user has stored NO `maxMessages` preference.
  *
  * BACKLOG-2749: must equal `DEFAULT_MAX_MESSAGES` in
