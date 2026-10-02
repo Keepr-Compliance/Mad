@@ -63,9 +63,13 @@ export type VerifyResult =
   | { ok: false; status: number; error: string; keyHex?: string; nonce?: string };
 
 const NOT_PAIRED_MESSAGE = "Pair the extension with Keepr: open Keepr › Settings › Google Messages.";
+/** SR: 5 wrong tries burned the code — worth saying plainly (it can be an attack). */
+export const CODE_BURNED_MESSAGE = "Code used up by wrong attempts — get a new code.";
 
 export class RcsPairingAuth {
   private pending: { code: string; userId: string; expiresAt: number; tries: number } | null = null;
+  /** SR: the last code was burned by wrong tries (cleared by a new code). */
+  private burned = false;
   private readonly exchanges = new Map<string, { userId: string; expectCA: string; ke: string; expiresAt: number }>();
   private readonly nonces = new Map<string, Map<string, number>>();
   private readonly now: () => number;
@@ -93,6 +97,7 @@ export class RcsPairingAuth {
     const expiresAt = this.now() + PAIR_CODE_TTL_MS;
     this.pending = { code, userId, expiresAt, tries: 0 };
     this.exchanges.clear();
+    this.burned = false;
     return { code, expiresAt };
   }
 
@@ -100,6 +105,11 @@ export class RcsPairingAuth {
   cancelCode(): void {
     this.pending = null;
     this.exchanges.clear();
+  }
+
+  /** SR: the code shown was used up by wrong attempts. */
+  codeBurned(): boolean {
+    return this.burned;
   }
 
   isPaired(userId: string): boolean {
@@ -121,7 +131,8 @@ export class RcsPairingAuth {
     p.tries += 1;
     if (p.tries > PAIR_CODE_MAX_TRIES) {
       this.cancelCode();
-      return { status: 429, body: { error: "too_many_tries", message: "Too many tries: show a new code in Keepr." } };
+      this.burned = true;
+      return { status: 429, body: { error: "too_many_tries", message: CODE_BURNED_MESSAGE } };
     }
     const pA = body && typeof body === "object" ? (body as Record<string, unknown>).pA : undefined;
     if (typeof pA !== "string" || pA.length > 200) return { status: 400, body: { error: "bad_request" } };

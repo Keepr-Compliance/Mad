@@ -161,9 +161,13 @@ describe("pairing (BACKLOG-3666)", () => {
     }
     const sixth = await post(port, "/pair/start", {}, JSON.stringify({ pA: P.startA(code).pA }));
     expect(sixth.status).toBe(429); // and the code is gone
+    // SR: said plainly — it can be an attack.
+    expect(sixth.body.message).toBe("Code used up by wrong attempts — get a new code.");
+    expect(auth.codeBurned()).toBe(true);
     expect((await post(port, "/pair/start", {}, JSON.stringify({ pA: P.startA(code).pA }))).status).toBe(404);
     // Single use.
     const fresh = auth.issueCode("user-a");
+    expect(auth.codeBurned()).toBe(false); // a new code clears it
     await pairWith(fresh.code);
     expect((await post(port, "/pair/start", {}, JSON.stringify({ pA: P.startA(fresh.code).pA }))).status).toBe(404);
     // Expiry.

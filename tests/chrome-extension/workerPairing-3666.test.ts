@@ -12,6 +12,11 @@
  *   W3 re_pair / unknown_pair not forgetting the pairing      → "re_pair"
  *   W4 the key extractable                                    → "non-extractable"
  *   W5 a wrong code stored as paired                          → "wrong code"
+ *
+ * EQUIVALENT (recorded, SR): skipping the worker's own cB check (finishA)
+ * stays green — Keepr's /pair/finish then refuses the wrong cA (403, same
+ * message), so nothing is stored. Kept as defence in depth: it is the check
+ * that stops a port squatter, which has no Keepr behind it.
  */
 import * as fs from "fs";
 import * as path from "path";
@@ -120,6 +125,14 @@ describe("the worker pairs with Keepr (BACKLOG-3666)", () => {
     expect(key.type).toBe("secret");
     expect(key.extractable).toBe(false);
     expect(key.usages).toEqual(["sign"]);
+  });
+
+  it("five wrong tries use the code up: the worker says so plainly", async () => {
+    const w = await worker();
+    auth.issueCode("user-a");
+    for (let i = 0; i < 5; i++) expect((await w.send({ type: "keepr-pair", code: "AAAAAAAA" })).ok).toBe(false);
+    const r = await w.send({ type: "keepr-pair", code: "AAAAAAAA" });
+    expect(r.error).toBe("Code used up by wrong attempts — get a new code.");
   });
 
   it("a wrong code: refused, still unpaired (W5)", async () => {

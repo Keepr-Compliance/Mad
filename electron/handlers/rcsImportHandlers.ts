@@ -893,6 +893,8 @@ export function registerRcsImportHandlers(): void {
           media: userId ? getRcsMediaOptions(userId) : undefined,
           // BACKLOG-3666: the extension is paired with this Keepr, for this user.
           extensionPaired: userId ? pairingAuth.isPaired(userId) : false,
+          // SR: the pairing code shown was used up by wrong attempts.
+          pairCodeBurned: pairingAuth.codeBurned(),
         },
       };
     }, { module: LOG_TAG }),

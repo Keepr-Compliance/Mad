@@ -91,6 +91,8 @@ export interface RcsExtensionState {
   media?: { photosAllChats: boolean; videosAllChats: boolean; lastPhotosSeen: number | null; lastVideosSeen: number | null };
   /** BACKLOG-3666: the extension is paired with this Keepr for the signed-in user. */
   extensionPaired?: boolean;
+  /** SR (3666): the pairing code shown was used up by wrong attempts. */
+  pairCodeBurned?: boolean;
 }
 
 export type RcsExtensionStateResult =

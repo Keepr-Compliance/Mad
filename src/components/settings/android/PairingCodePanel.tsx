@@ -26,15 +26,35 @@ export function PairingCodePanel({ label = "Show pairing code" }: PairingCodePan
   const [code, setCode] = useState<{ code: string; expiresAt: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** SR: 5 wrong tries used the code up — said plainly (it can be an attack). */
+  const [burned, setBurned] = useState(false);
 
   const show = useCallback(async () => {
     setBusy(true);
     setError(null);
     const r = await rcsImportService.pairCode();
     setBusy(false);
-    if (r.success && r.data) setCode(r.data);
-    else setError(r.error ?? "Keepr could not make a code. Try again.");
+    if (r.success && r.data) {
+      setCode(r.data);
+      setBurned(false);
+    } else {
+      setError(r.error ?? "Keepr could not make a code. Try again.");
+    }
   }, []);
+
+  // While a code is shown: was it used up by wrong attempts?
+  useEffect(() => {
+    if (!code) return undefined;
+    const t = setInterval(() => {
+      void rcsImportService.getExtensionState().then((r) => {
+        if (r.success && r.data?.pairCodeBurned) {
+          setBurned(true);
+          setCode(null);
+        }
+      });
+    }, 2000);
+    return () => clearInterval(t);
+  }, [code]);
 
   // A code shown but no longer needed (closed, or paired) is dropped.
   useEffect(() => () => void rcsImportService.pairCancel?.(), []);
@@ -66,6 +86,11 @@ export function PairingCodePanel({ label = "Show pairing code" }: PairingCodePan
         >
           {busy ? "…" : label}
         </button>
+      )}
+      {burned && (
+        <p className="text-sm font-medium text-red-700" role="alert" data-testid="gm-pair-burned">
+          Code used up by wrong attempts — get a new code.
+        </p>
       )}
       {error && (
         <p className="text-xs text-red-700" role="alert">

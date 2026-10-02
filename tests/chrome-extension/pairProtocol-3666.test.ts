@@ -12,6 +12,10 @@
  *   P3 the session key not bound to the pairing id                   → "session key"
  *   P4 a signed field left out of the request / reply string         → "signatures"
  *   P5 an invalid peer point accepted                                → "points"
+ *
+ * EQUIVALENT (recorded, SR): dropping peerPoint()'s own assertValidity /
+ * identity check stays green — noble's Point.fromHex already rejects an
+ * off-curve or identity encoding. Kept as defence in depth.
  */
 import * as fs from "fs";
 import * as path from "path";
