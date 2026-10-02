@@ -53,6 +53,7 @@ import {
   cancelOnSessionChange,
   decideCacheStart,
   handleCacheJobEnded,
+  shouldFocusKeeprOnJobEnd,
   shouldPersistHello,
 } from "../services/rcsCacheService";
 import { onSessionChanged } from "../services/authEvents";
@@ -66,7 +67,7 @@ import {
   type RcsClearResult,
 } from "../services/rcsClearService";
 import transactionService from "../services/transactionService";
-import { bringAppToFront, bringAppToFrontOrFlash } from "../utils/bringAppToFront";
+import { bringAppToFrontOrFlash } from "../utils/bringAppToFront";
 import { wrapHandler } from "../utils/wrapHandler";
 import { getMainWindow } from "../windowRegistry";
 import { ValidationError } from "../utils/validation";
@@ -432,6 +433,10 @@ const bridge = new RcsExtensionBridge({
   currentUserId,
   onHello: (hello) => void onHello(hello),
   onJobEnded: (ended) => {
+    // Founder (2026-10-01): a Sync that is done or failed brings Keepr to the
+    // front by itself (the page's "Open Keepr" stays as the fallback); a
+    // cancel does not. The /focus route's mechanism, incl. the taskbar flash.
+    if (shouldFocusKeeprOnJobEnd(ended.snapshot.state)) focusKeeprFromBrowser();
     if (ended.kind !== "cache") return;
     // Busy from this moment (synchronously, before the job slot can be reused).
     cacheEndsInFlight += 1;
@@ -488,9 +493,7 @@ const bridge = new RcsExtensionBridge({
     return storeImage(image, userId, mediaDeps, chatHash);
   },
   onJobChanged: broadcastJob,
-  // The job finished in the browser: bring Keepr's main window forward
-  // (BACKLOG-3636: shared with mailbox connect, incl. the Windows workaround).
-  onJobFinished: () => bringAppToFront(getMainWindow()),
+  // (A finished or failed job brings Keepr forward from onJobEnded above.)
   // BACKLOG-3641: "Open Keepr" on the page (POST /focus).
   onFocusRequested: () => focusKeeprFromBrowser(),
   logger: {

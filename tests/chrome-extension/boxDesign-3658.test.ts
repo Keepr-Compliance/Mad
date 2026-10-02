@@ -69,12 +69,15 @@ describe("auto theme (D1, D2)", () => {
 });
 
 describe("states (design C)", () => {
-  it("syncing: a collapsed pill 'Keepr · 8 of 21' with ▾; ▾ asks to expand; expanded shows progress + Cancel (D3)", () => {
+  it("syncing: a collapsed pill 'Keepr · syncing 8 of 21 — keep this tab on screen' with ▾; ▾ asks to expand; expanded shows progress + Cancel (D3)", () => {
     const onExpand = jest.fn();
     const pill = render("Chat 8 of 21…", false, { cancel: true }, { onExpand, theme: "light" });
     expect(pill.getAttribute("data-keepr-state")).toBe("syncing");
     expect(pill.style.borderRadius).toBe("999px");
-    expect(pill.querySelector('[data-keepr="line"]')?.textContent).toBe("Keepr · 8 of 21");
+    // Founder (2026-10-01): the keep-on-screen hint from the first second.
+    // Mutation: the hint only once paused → red.
+    expect(pill.querySelector('[data-keepr="line"]')?.textContent).toBe("Keepr · syncing 8 of 21 — keep this tab on screen");
+    expect(pill.querySelector('[data-keepr="hint"]')).toBeNull();
     expect(pill.querySelector('[data-keepr="cancel"]')).toBeNull();
     const expand = pill.querySelector('[data-keepr="expand"]') as HTMLButtonElement;
     expect(expand.getAttribute("aria-expanded")).toBe("false");
@@ -83,7 +86,13 @@ describe("states (design C)", () => {
     const card = render("Chat 8 of 21…", false, { cancel: true }, { expanded: true, theme: "light" });
     expect(card.style.borderRadius).toBe("16px");
     expect(card.querySelector('[data-keepr="progress"]')?.textContent).toBe("Chat 8 of 21…");
+    expect(card.querySelector('[data-keepr="hint"]')?.textContent).toBe(
+      "Keep this tab open and on screen while Keepr syncs. When it's done, you'll go back to Keepr automatically.",
+    );
     expect(card.querySelector('[data-keepr="cancel"]')).not.toBeNull();
+    // A line that is not "n of m" keeps its words.
+    const waiting = render("Saving in Keepr…", false, undefined, { theme: "light" });
+    expect(waiting.querySelector('[data-keepr="line"]')?.textContent).toBe("Keepr · Saving in Keepr — keep this tab on screen");
   });
 
   it("paused: auto-expanded, amber, says what to do, keeps Cancel (D4)", () => {
@@ -93,6 +102,7 @@ describe("states (design C)", () => {
     expect(box.style.border.toLowerCase()).toMatch(/#f5a524|rgb\(245, 165, 36\)/);
     expect(box.querySelector('[data-keepr="line"]')?.textContent).toBe("Sync paused");
     expect(box.querySelector('[data-keepr="progress"]')?.textContent).toBe("Keep this Chrome window visible — Sync continues when it's back.");
+    expect(box.querySelector('[data-keepr="hint"]')).toBeNull();
     expect(box.querySelector('[data-keepr="cancel"]')).not.toBeNull();
   });
 

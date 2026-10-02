@@ -14,6 +14,8 @@
  *   S1  the refresh broadcast dropped / sent before link → "refresh after save"
  *   T1  no save timeout (a hung commit keeps Keepr busy) → "a hung save"
  *   H4  the saved counts not handed to the bridge after the commit       → "saved counts"
+ *   F1  Keepr not brought forward when a Sync is done or failed, or brought
+ *       forward on a cancel                                          → "comes to the front"
  *   C3663 coverage recorded for a run that did not reach its floor, or never → "coverage"
  */
 
@@ -202,6 +204,28 @@ describe("a cache Sync being saved (SR B1, S1)", () => {
     releaseCommit?.();
     await flush();
     expect(savedRecords[0]).toEqual(["job-1", { chats: 1, messages: 1, newMessages: 1 }]);
+  });
+
+  // Founder (2026-10-01): done or failed → Keepr comes to the front by itself
+  // (the /focus mechanism, incl. the taskbar flash); never on a cancel.
+  it.each([
+    ["finished", "cache", 1],
+    ["failed", "cache", 1],
+    ["finished", "transaction", 1],
+    ["failed", "transaction", 1],
+    ["cancelled", "cache", 0],
+    ["cancelled", "transaction", 0],
+  ] as const)("comes to the front: %s %s job → %i (F1)", async (state, kind, times) => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const front = require("../../utils/bringAppToFront") as { bringAppToFrontOrFlash: jest.Mock };
+    front.bringAppToFrontOrFlash.mockClear();
+    bridgeOptions.onJobEnded({
+      kind, userId: "user-1", detectedOwnNumber: null,
+      snapshot: { state, jobId: "job-1", createdAt: "2026-10-01T10:00:00.000Z" },
+    });
+    expect(front.bringAppToFrontOrFlash).toHaveBeenCalledTimes(times);
+    releaseCommit?.();
+    await flush();
   });
 
   // BACKLOG-3663: Google Messages coverage — in the commit transaction, down

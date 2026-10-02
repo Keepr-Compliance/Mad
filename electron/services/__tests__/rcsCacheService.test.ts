@@ -36,6 +36,7 @@ import {
   cacheSavedFromCommit,
   consentToRecordOnSync,
   decideCacheStart,
+  shouldFocusKeeprOnJobEnd,
   handleCacheJobEnded,
   RCS_CACHE_WINDOW_DAYS,
   RCS_CONSENT_REQUIRED,
@@ -73,6 +74,15 @@ describe("cacheSavedFromCommit", () => {
         imagesStaged: 0, imagesStored: 0,
       }),
     ).toEqual({ chats: 9, messages: 212, newMessages: 200 });
+  });
+});
+
+describe("shouldFocusKeeprOnJobEnd", () => {
+  it("done or failed: yes; cancelled (or still running): no", () => {
+    expect(shouldFocusKeeprOnJobEnd("finished")).toBe(true);
+    expect(shouldFocusKeeprOnJobEnd("failed")).toBe(true);
+    expect(shouldFocusKeeprOnJobEnd("cancelled")).toBe(false);
+    expect(shouldFocusKeeprOnJobEnd("running")).toBe(false);
   });
 });
 

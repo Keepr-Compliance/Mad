@@ -192,6 +192,14 @@ export function decideCacheStart(input: {
   return { ok: true, userId: input.userId };
 }
 
+/**
+ * Founder (2026-10-01): when a Sync ends done or failed, Keepr comes to the
+ * front by itself; a cancel (from Keepr, the page, or a user switch) does not.
+ */
+export function shouldFocusKeeprOnJobEnd(state: string): boolean {
+  return state === "finished" || state === "failed";
+}
+
 /** BACKLOG-3658: an extension report is written to the database at most once a minute per user. */
 export const RCS_HELLO_PERSIST_MS = 60_000;
 

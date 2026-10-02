@@ -762,6 +762,12 @@
   var PAUSED_TITLE = "Sync paused";
   var PAUSED_BODY = "Keep this Chrome window visible — Sync continues when it's back.";
   var SYNCING_TITLE = "Syncing your texts";
+  /**
+   * Founder (2026-10-01): from the first second of a Sync, not only once
+   * paused. The full sentence in the expanded box; a short tail on the chip.
+   */
+  var SYNCING_HINT = "Keep this tab open and on screen while Keepr syncs. When it's done, you'll go back to Keepr automatically.";
+  var SYNCING_CHIP_HINT = "keep this tab on screen";
 
   // Keepr brand (android-companion BrandMark): the indigo mark with an amber
   // dot; primary #4F46E5 (hover #4338CA); amber #F5A524 for paused/attention.
@@ -830,6 +836,12 @@
     if (extras && extras.details) return "done";
     if (text === PAUSED_TEXT) return "paused";
     return "syncing";
+  }
+
+  /** The collapsed chip: "Keepr · syncing 4 of 21 — keep this tab on screen". */
+  function chipTitle(text) {
+    var short = shortProgress(text);
+    return "Keepr · " + (/^\d+ of \d+$/.test(short) ? "syncing " + short : short) + " — " + SYNCING_CHIP_HINT;
   }
 
   /** "Chat 8 of 21…" → "8 of 21" for the pill; other lines as they are. */
@@ -938,7 +950,7 @@
     header.appendChild(badge);
 
     var title = state === "syncing"
-      ? (expanded ? SYNCING_TITLE : "Keepr · " + shortProgress(text))
+      ? (expanded ? SYNCING_TITLE : chipTitle(text))
       : state === "paused" ? PAUSED_TITLE : state === "ask" ? ASK_TITLE : text;
     header.appendChild(el("div", "line", {
       flex: "1 1 auto", minWidth: "0", fontWeight: "600", color: p.text, whiteSpace: expanded ? "normal" : "nowrap",
@@ -976,7 +988,10 @@
     if (!expanded) return;
 
     var bodyStyle = { marginTop: "8px", color: p.muted };
-    if (state === "syncing") box.appendChild(el("div", "progress", bodyStyle, text));
+    if (state === "syncing") {
+      box.appendChild(el("div", "progress", bodyStyle, text));
+      box.appendChild(el("div", "hint", { marginTop: "6px", color: p.text }, SYNCING_HINT));
+    }
     if (state === "paused") box.appendChild(el("div", "progress", bodyStyle, PAUSED_BODY));
 
     if (state === "ask") {
@@ -1255,6 +1270,7 @@
     waitForPageState: waitForPageState,
     NOT_SIGNED_IN: NOT_SIGNED_IN,
     DONE_LINE: DONE_LINE,
+    SYNCING_HINT: SYNCING_HINT,
     LIST_NOT_REACHABLE: LIST_NOT_REACHABLE,
     detailsText: detailsText,
     copyText: copyText,
