@@ -245,7 +245,7 @@ describe("order and the write gate (fakes)", () => {
   it("the reviewed order: read, attachments, links (message, thread), messages, then counts; files last (C7)", () => {
     const order: string[] = [];
     const ops: RcsClearDbOps = {
-      inTransaction: (fn) => {
+      transaction: (fn) => {
         order.push("begin");
         const r = fn();
         order.push("commit");

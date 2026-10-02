@@ -37,7 +37,8 @@ import * as path from "path";
 
 export interface RcsClearDbOps {
   /** Run `fn` in one database transaction; a throw rolls everything back. */
-  inTransaction<T>(fn: () => T): T;
+  /** Runs `fn` in ONE database transaction (named `transaction` so the sync-twin guard sees the body). */
+  transaction<T>(fn: () => T): T;
   attachmentPaths(userId: string): string[];
   countedLinks(userId: string): Array<{ transactionId: string; counted: number }>;
   /** Transactions with ANY gmweb link of the user (per message or thread-level). */
@@ -105,7 +106,7 @@ export function clearGoogleMessagesWebData(
 ): RcsClearResult {
   const root = path.resolve(files.attachmentsRoot) + path.sep;
 
-  const done = db.inTransaction(() => {
+  const done = db.transaction(() => {
     const paths = db.attachmentPaths(userId);
     const counted = db.countedLinks(userId);
     const linked = db.linkedTransactions(userId);
@@ -177,7 +178,8 @@ export function clearGoogleMessagesWebData(
 export const RCS_AUTO_DELETE_DAYS = 90;
 
 export interface RcsAutoDeleteDbOps {
-  inTransaction<T>(fn: () => T): T;
+  /** Runs `fn` in ONE database transaction (named `transaction` so the sync-twin guard sees the body). */
+  transaction<T>(fn: () => T): T;
   unlinkedOldThreads(userId: string, cutoffIso: string): string[];
   attachmentPaths(userId: string, threadIds: string[]): string[];
   deleteAttachments(userId: string, threadIds: string[]): number;
@@ -195,7 +197,7 @@ export function clearUnlinkedOldChats(
   log: (message: string) => void = () => {},
 ): { chats: number; messages: number; filesDeleted: number } {
   const root = path.resolve(files.attachmentsRoot) + path.sep;
-  const done = db.inTransaction(() => {
+  const done = db.transaction(() => {
     const threads = db.unlinkedOldThreads(userId, cutoffIso);
     if (threads.length === 0) return { threads, paths: [] as string[], messages: 0 };
     const paths = db.attachmentPaths(userId, threads);

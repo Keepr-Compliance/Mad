@@ -365,7 +365,7 @@ export function attachmentFileReferenced(storagePath: string): boolean {
 export function rcsClearDbOps(): import("../rcsClearService").RcsClearDbOps {
   const db = ensureDb();
   return {
-    inTransaction: <T>(fn: () => T): T => db.transaction(fn)(),
+    transaction: <T>(fn: () => T): T => db.transaction(fn)(),
     // BACKLOG-3670: the people found in the cleared texts.
     deletePeople: (userId) => clearRcsChatPeople(userId),
     attachmentPaths: (userId) =>
@@ -539,7 +539,7 @@ export function setRcsCacheOptions(userId: string, patch: { contactsOnly?: boole
 export function rcsAutoDeleteDbOps(): import("../rcsClearService").RcsAutoDeleteDbOps {
   const db = ensureDb();
   return {
-    inTransaction: <T>(fn: () => T): T => db.transaction(fn)(),
+    transaction: <T>(fn: () => T): T => db.transaction(fn)(),
     // BACKLOG-3670: gmweb2-<hash> thread → that chat's people.
     deletePeople: (userId, threadIds) =>
       clearRcsChatPeopleForChats(

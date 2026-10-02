@@ -239,13 +239,15 @@ describe("BACKLOG-2408: onboarding round-trip — the answer is written and read
     expect(await readImportSource()).toBe("iphone-sync");
   });
 
-  it("still writes android-companion when the user answers Android", async () => {
+  // BACKLOG-3659 (f1103c1da): an Android answer now defaults to Google
+  // Messages (the extension), the recommended Android source.
+  it("writes android-messages-web when the user answers Android", async () => {
     mockIsMacOS = true;
 
     await completePhoneTypeStep(onboardingPhoneTypeMac, "android");
 
-    expect(mockPrefs?.messages?.source).toBe("android-companion");
-    expect(await readImportSource()).toBe("android-companion");
+    expect(mockPrefs?.messages?.source).toBe("android-messages-web");
+    expect(await readImportSource()).toBe("android-messages-web");
   });
 
   it("leaves no answer unrecorded: both options produce a stored source", async () => {
