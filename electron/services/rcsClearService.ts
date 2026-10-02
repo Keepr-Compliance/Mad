@@ -47,6 +47,8 @@ export interface RcsClearDbOps {
   deleteMessageLinks(userId: string): number;
   deleteThreadLinks(userId: string): number;
   deleteMessages(userId: string): number;
+  /** BACKLOG-3670: the people found in these texts go with them. */
+  deletePeople?(userId: string): number;
   setMessageCount(userId: string, transactionId: string, count: number): void;
   /**
    * BACKLOG-3667: does any remaining attachments row (any user, any source)
@@ -111,6 +113,7 @@ export function clearGoogleMessagesWebData(
     const messageLinksDeleted = db.deleteMessageLinks(userId);
     const threadLinksDeleted = db.deleteThreadLinks(userId);
     const messagesDeleted = db.deleteMessages(userId);
+    db.deletePeople?.(userId);
     let transactionsUpdated = 0;
     for (const { transactionId, counted: n } of counted) {
       const old = db.messageCount(userId, transactionId);
@@ -179,6 +182,8 @@ export interface RcsAutoDeleteDbOps {
   attachmentPaths(userId: string, threadIds: string[]): string[];
   deleteAttachments(userId: string, threadIds: string[]): number;
   deleteMessages(userId: string, threadIds: string[]): number;
+  /** BACKLOG-3670: the people found in the deleted chats (gmweb2 thread ids). */
+  deletePeople?(userId: string, threadIds: string[]): number;
   fileStillReferenced(storagePath: string): boolean;
 }
 
@@ -196,6 +201,7 @@ export function clearUnlinkedOldChats(
     const paths = db.attachmentPaths(userId, threads);
     db.deleteAttachments(userId, threads);
     const messages = db.deleteMessages(userId, threads);
+    db.deletePeople?.(userId, threads);
     return { threads, paths, messages };
   });
   let filesDeleted = 0;

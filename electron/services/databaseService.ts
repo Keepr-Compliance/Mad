@@ -141,6 +141,7 @@ import * as diagnosticDb from "./db/diagnosticDbService";
 import * as attachmentDb from "./db/attachmentDbService";
 import * as submissionDb from "./db/submissionDbService";
 import * as syncDb from "./db/syncDbService";
+import * as rcsChatPeopleDb from "./db/rcsChatPeopleDbService";
 import * as maintenanceDb from "./db/maintenanceDbService";
 
 // Re-export types for backward compatibility
@@ -1704,12 +1705,12 @@ class DatabaseService implements IDatabaseService {
     return contactDb.getContacts(filters);
   }
 
-  async getImportedContactsByUserId(userId: string): Promise<Contact[]> {
-    return contactDb.getImportedContactsByUserId(userId);
+  async getImportedContactsByUserId(userId: string, opts?: contactDb.TextPeopleOption): Promise<Contact[]> {
+    return contactDb.getImportedContactsByUserId(userId, opts);
   }
 
-  async getImportedContactsByUserIdAsync(userId: string): Promise<Contact[]> {
-    return contactDb.getImportedContactsByUserIdAsync(userId);
+  async getImportedContactsByUserIdAsync(userId: string, opts?: contactDb.TextPeopleOption): Promise<Contact[]> {
+    return contactDb.getImportedContactsByUserIdAsync(userId, undefined, opts);
   }
 
   async getUnimportedContactsByUserId(userId: string): Promise<Contact[]> {
@@ -1759,8 +1760,12 @@ class DatabaseService implements IDatabaseService {
     return contactDb.backfillContactPhones(contactId, phones, source);
   }
 
-  async getContactsSortedByActivity(userId: string, propertyAddress?: string): Promise<contactDb.ContactWithActivity[]> {
-    return contactDb.getContactsSortedByActivity(userId, propertyAddress);
+  async getContactsSortedByActivity(
+    userId: string,
+    propertyAddress?: string,
+    opts?: contactDb.TextPeopleOption,
+  ): Promise<contactDb.ContactWithActivity[]> {
+    return contactDb.getContactsSortedByActivity(userId, propertyAddress, opts);
   }
 
   async backfillContactCommunicationDates(userId: string): Promise<number> {
@@ -1771,8 +1776,13 @@ class DatabaseService implements IDatabaseService {
     return contactDb.searchContacts(query, userId);
   }
 
-  searchContactsForSelection(userId: string, query: string, limit?: number): contactDb.ContactWithActivity[] {
-    return contactDb.searchContactsForSelection(userId, query, limit);
+  searchContactsForSelection(
+    userId: string,
+    query: string,
+    limit?: number,
+    opts?: contactDb.TextPeopleOption,
+  ): contactDb.ContactWithActivity[] {
+    return contactDb.searchContactsForSelection(userId, query, limit, opts);
   }
 
   async updateContact(contactId: string, updates: ContactUpdateFields): Promise<void> {
@@ -2497,6 +2507,16 @@ class DatabaseService implements IDatabaseService {
   // BACKLOG-3658 P3c: per-chat exclusions ("Don't sync")
   listRcsExclusionConversationIds(userId: string, max: number) {
     return syncDb.listRcsExclusionConversationIds(userId, max);
+  }
+
+  /** BACKLOG-3670: a stored Google Messages chat's people (numbers + shown names). */
+  recordRcsChatPeople(
+    userId: string,
+    chatHash: string,
+    rows: import("./db/rcsChatPeopleDbService").RcsChatPersonRow[],
+    lastMessageAt: string | null,
+  ) {
+    return rcsChatPeopleDb.recordRcsChatPeople(userId, chatHash, rows, lastMessageAt);
   }
 
   setRcsExclusion(userId: string, conversationId: string, excluded: boolean) {

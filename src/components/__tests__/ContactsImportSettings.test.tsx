@@ -362,6 +362,28 @@ describe("ContactsImportSettings", () => {
 
       expect(mockOnToggleSource).toHaveBeenCalledWith("inferred", "messages", false);
     });
+
+    // BACKLOG-3670: the Messages / SMS row names the selected text-message
+    // import source (Settings → Messages' own labels), on Windows too.
+    // Mutation: no label, or a different string → red.
+    it.each([
+      ["android-messages-web", "(Android: Google Messages)"],
+      ["iphone-sync", "(iPhone Sync)"],
+      ["android-companion", "(Android Companion)"],
+      ["macos-native", "(macOS Messages)"],
+    ] as const)("Messages / SMS shows the import source %s as %s", (source, label) => {
+      renderWithPlatform(
+        <ContactsImportSettings {...defaultProps} isMicrosoftConnected={true} messagesImportSource={source} />,
+        "win32"
+      );
+      expect(screen.getByTestId("autodiscover-messages-source")).toHaveTextContent(label);
+    });
+
+    it("no import source: no label", () => {
+      renderWithPlatform(<ContactsImportSettings {...defaultProps} isMicrosoftConnected={true} />, "win32");
+      expect(screen.queryByTestId("autodiscover-messages-source")).toBeNull();
+      expect(screen.getByLabelText("Messages SMS auto-discover")).toBeInTheDocument();
+    });
   });
 
   // BACKLOG-2142: a disabled import toggle (no email connection) must explain

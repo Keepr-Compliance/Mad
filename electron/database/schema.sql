@@ -816,6 +816,24 @@ CREATE TABLE IF NOT EXISTS rcs_chat_exclusions (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_rcs_chat_exclusions_conv ON rcs_chat_exclusions(user_id, conversation_id) WHERE conversation_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_rcs_chat_exclusions_hash ON rcs_chat_exclusions(user_id, chat_hash);
 
+-- BACKLOG-3670: people found in texts. One row per (chat, member number) of a
+-- Google Messages chat Keepr stored, with the name the phone's address book
+-- shows for that number (Details rows; a 1:1 chat's title). LOCAL ONLY: never
+-- sent anywhere. Read as contact suggestions (number = the key, never the
+-- name); cleared with the texts by both Android Force re-imports and auto-delete.
+CREATE TABLE IF NOT EXISTS rcs_chat_people (
+  user_id TEXT NOT NULL,
+  chat_hash TEXT NOT NULL,
+  number_e164 TEXT NOT NULL,
+  name TEXT,
+  last_message_at DATETIME,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, chat_hash, number_e164),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_rcs_chat_people_number ON rcs_chat_people(user_id, number_e164);
+
 -- BACKLOG-3663: how far back each text source's import is known to reach
 -- ("covered since"), per user. General (any source); today written by the
 -- Google Messages cache — in its commit transaction, and only when that run

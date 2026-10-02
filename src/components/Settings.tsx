@@ -284,6 +284,7 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
                  jump to the Android Companion panel when that panel is on the
                  page, which is exactly when this source is active (see :210). */
               androidCompanionActive={activeImportSource === 'android-companion'}
+              messagesImportSource={activeImportSource}
             />
 
             {/* AI Settings - Only visible with AI add-on (BACKLOG-462) */}

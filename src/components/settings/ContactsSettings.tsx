@@ -8,6 +8,7 @@ import {
   normalizePhoneType,
 } from "../../utils/contactSourceDefaults";
 import type { PreferencesResult } from './types';
+import type { ImportSource } from "../../services/settingsService";
 
 /**
  * Human labels for the six preference keys this screen writes, used only in the
@@ -43,6 +44,8 @@ interface ContactsSettingsProps {
    * absent answer must not draw a control that goes nowhere.
    */
   androidCompanionActive?: boolean;
+  /** BACKLOG-3670: the selected text-message import source (the Messages / SMS row's label). */
+  messagesImportSource?: ImportSource | null;
 }
 
 export function ContactsSettings({
@@ -51,6 +54,7 @@ export function ContactsSettings({
   isMicrosoftConnected,
   isGoogleConnected,
   androidCompanionActive = false,
+  messagesImportSource = null,
 }: ContactsSettingsProps) {
   const { isMacOS } = usePlatform();
   // BACKLOG-2486: the phone type the user declared at onboarding decides both
@@ -295,6 +299,7 @@ export function ContactsSettings({
           contactInference={contactInference}
           gmailEmailsInferred={gmailEmailsInferred}
           messagesInferred={messagesInferred}
+          messagesImportSource={messagesImportSource}
           loadingPreferences={false}
           onToggleSource={(category, key, currentValue) => {
             handleContactSourceToggle(category, key, currentValue);

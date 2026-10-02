@@ -55,6 +55,8 @@ import { ImportInfoPopover } from "./ImportInfoPopover";
 import logger from '../../utils/logger';
 import { safeErrorMessage } from '../../utils/formatUtils';
 import type { ContactInferenceStates } from "../../hooks/useContactInferenceState";
+import type { ImportSource } from "../../services/settingsService";
+import { importSourceLabel } from "./importSourceLabels";
 
 /**
  * BACKLOG-2388: Shared "counts clause" for a contact-sync result so the macOS,
@@ -174,6 +176,11 @@ interface ContactsImportSettingsProps {
   contactInference: ContactInferenceStates;
   gmailEmailsInferred: boolean;
   messagesInferred: boolean;
+  /**
+   * BACKLOG-3670: the selected text-message import source, shown as the
+   * Messages / SMS row's inline label (the source its people come from).
+   */
+  messagesImportSource?: ImportSource | null;
   loadingPreferences: boolean;
   onToggleSource: (category: "direct" | "inferred", key: string, currentValue: boolean) => void;
 }
@@ -201,6 +208,7 @@ export function ContactsImportSettings({
   contactInference,
   gmailEmailsInferred,
   messagesInferred,
+  messagesImportSource,
   loadingPreferences,
   onToggleSource,
 }: ContactsImportSettingsProps) {
@@ -972,6 +980,14 @@ export function ContactsImportSettings({
           <div className="flex items-center justify-between py-1">
             <div className="flex items-center gap-2">
               <span className="text-sm text-gray-700">Messages / SMS</span>
+              {/* BACKLOG-3670: the selected import source, in the inline-label
+                  slot the email rows use for their one reason. This row has no
+                  plan or connection reason today; one would replace it. */}
+              {importSourceLabel(messagesImportSource) && (
+                <span className="text-xs text-gray-400" data-testid="autodiscover-messages-source">
+                  ({importSourceLabel(messagesImportSource)})
+                </span>
+              )}
             </div>
             <button
               onClick={() => onToggleSource("inferred", "messages", messagesInferred)}

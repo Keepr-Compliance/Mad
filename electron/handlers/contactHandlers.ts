@@ -145,6 +145,19 @@ import {
 import { type ContactOrigin } from "../services/db/contactOriginLink";
 import { getValidUserId } from "../utils/userIdHelper";
 import { isContactSourceEnabled } from "../utils/preferenceHelper";
+
+/**
+ * BACKLOG-3670: people found in Google Messages texts are offered only while
+ * Settings → Contacts → Auto-discover from conversations → Messages / SMS is
+ * on (off by default, like the switch). A failed read → off.
+ */
+async function textPeopleEnabled(userId: string): Promise<boolean> {
+  try {
+    return await isContactSourceEnabled(userId, "inferred", "messages", false);
+  } catch {
+    return false;
+  }
+}
 // BACKLOG-1717 — people found in the user's Outlook and Gmail mail.
 import {
   getEmailDerivedContactsAsync,
@@ -1178,7 +1191,9 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
 
         // TASK-1956: Use worker thread to avoid blocking main process during contact load
         const importedContacts =
-          await databaseService.getImportedContactsByUserIdAsync(validatedUserId);
+          await databaseService.getImportedContactsByUserIdAsync(validatedUserId, {
+            textPeople: await textPeopleEnabled(validatedUserId),
+          });
 
         logService.debug(
           `[PERF] contacts.getAll: ${Date.now() - t0}ms, ${importedContacts.length} contacts`,
@@ -2866,6 +2881,7 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
           await databaseService.getContactsSortedByActivity(
             validatedUserId,
             validatedAddress ?? undefined,
+            { textPeople: await textPeopleEnabled(validatedUserId) },
           );
 
         logService.info(
@@ -3792,7 +3808,9 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
             "Contacts",
             { userId, queryLength: query?.length || 0 },
           );
-          const contacts = await databaseService.getContactsSortedByActivity(validatedUserId);
+          const contacts = await databaseService.getContactsSortedByActivity(validatedUserId, undefined, {
+            textPeople: await textPeopleEnabled(validatedUserId),
+          });
           return {
             success: true,
             contacts,
@@ -3819,6 +3837,8 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
         const contacts = databaseService.searchContactsForSelection(
           validatedUserId,
           validatedQuery,
+          undefined,
+          { textPeople: await textPeopleEnabled(validatedUserId) },
         );
 
         logService.info(

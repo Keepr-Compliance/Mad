@@ -416,6 +416,26 @@ describe("Contact Handlers", () => {
     mockIsContactSourceEnabled.mockResolvedValue(true);
   });
 
+  // BACKLOG-3670: people found in Google Messages texts only while Settings →
+  // Contacts → Auto-discover → Messages / SMS is on (default off). Mutation:
+  // the gate not read, or passed as always-on → red.
+  describe("people found in texts follow the Messages / SMS auto-discover switch (BACKLOG-3670)", () => {
+    const messagesSwitch = (on: boolean) =>
+      mockIsContactSourceEnabled.mockImplementation(async (_u: string, category: string, key: string) =>
+        category === "inferred" && key === "messages" ? on : true,
+      );
+
+    it.each([true, false])("contacts:get-all and contacts:search pass textPeople = %s", async (on) => {
+      messagesSwitch(on);
+      mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
+      await registeredHandlers.get("contacts:get-all")(mockEvent, TEST_USER_ID);
+      expect(mockDatabaseService.getImportedContactsByUserIdAsync).toHaveBeenLastCalledWith(TEST_USER_ID, { textPeople: on });
+      await registeredHandlers.get("contacts:search")(mockEvent, TEST_USER_ID, "Test");
+      expect(mockDatabaseService.searchContactsForSelection).toHaveBeenLastCalledWith(TEST_USER_ID, "Test", undefined, { textPeople: on });
+      expect(mockIsContactSourceEnabled).toHaveBeenCalledWith(TEST_USER_ID, "inferred", "messages", false);
+    });
+  });
+
   describe("contacts:get-all", () => {
     it("should return all imported contacts for user", async () => {
       const mockContacts = [
@@ -1640,7 +1660,7 @@ describe("Contact Handlers", () => {
       expect(result.contacts).toHaveLength(2);
       expect(
         mockDatabaseService.getContactsSortedByActivity,
-      ).toHaveBeenCalledWith(TEST_USER_ID, "123 Main St");
+      ).toHaveBeenCalledWith(TEST_USER_ID, "123 Main St", { textPeople: true });
     });
 
     it("should work without property address", async () => {
@@ -1652,7 +1672,7 @@ describe("Contact Handlers", () => {
       expect(result.success).toBe(true);
       expect(
         mockDatabaseService.getContactsSortedByActivity,
-      ).toHaveBeenCalledWith(TEST_USER_ID, undefined);
+      ).toHaveBeenCalledWith(TEST_USER_ID, undefined, { textPeople: true });
     });
 
     it("should return empty contacts for invalid user ID (graceful deferred DB init)", async () => {

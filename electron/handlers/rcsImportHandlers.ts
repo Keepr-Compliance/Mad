@@ -115,6 +115,9 @@ const deps: RcsImportDeps = {
   // BACKLOG-3665: a legacy chat removal moves onto the gmweb2 thread.
   repointLegacyRemoval: (userId, legacy, threadId, transactionId) =>
     databaseService.repointLegacyRcsRemoval(userId, legacy, threadId, transactionId),
+  // BACKLOG-3670: people found in texts (local only; names never logged).
+  recordPeople: (userId, chatHash, rows, lastMessageAt) =>
+    databaseService.recordRcsChatPeople(userId, chatHash, rows, lastMessageAt),
 };
 
 const mediaDeps: RcsMediaDeps = {

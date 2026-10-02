@@ -21,6 +21,7 @@ import { usePlatform } from "../../contexts/PlatformContext";
 import type { ImportSource, UserPreferences } from "../../services/settingsService";
 import { settingsService } from '../../services';
 import logger from '../../utils/logger';
+import { IMPORT_SOURCE_LABELS } from "./importSourceLabels";
 
 // Re-export type for consumers
 export type { ImportSource } from "../../services/settingsService";
@@ -278,7 +279,7 @@ export function ImportSourceSettings({ userId, onSourceChange, onConnectAndroid 
                 />
                 <div>
                   <div className="text-sm font-medium text-gray-900">
-                    macOS Messages
+                    {IMPORT_SOURCE_LABELS["macos-native"]}
                   </div>
                   <div className="text-xs text-gray-500">
                     Import text messages from your Mac's Messages app
@@ -306,7 +307,7 @@ export function ImportSourceSettings({ userId, onSourceChange, onConnectAndroid 
               />
               <div>
                 <div className="text-sm font-medium text-gray-900">
-                  iPhone Sync
+                  {IMPORT_SOURCE_LABELS["iphone-sync"]}
                 </div>
                 <div className="text-xs text-gray-500">
                   Sync from a connected iPhone{isMacOS ? " (same as Windows experience)" : " via backup"}
@@ -333,7 +334,7 @@ export function ImportSourceSettings({ userId, onSourceChange, onConnectAndroid 
               />
               <div>
                 <div className="text-sm font-medium text-gray-900">
-                  Android: Google Messages <span className="ml-1 text-xs font-semibold text-indigo-800 bg-indigo-50 px-2 py-0.5 rounded-full">Recommended</span>
+                  {IMPORT_SOURCE_LABELS["android-messages-web"]} <span className="ml-1 text-xs font-semibold text-indigo-800 bg-indigo-50 px-2 py-0.5 rounded-full">Recommended</span>
                 </div>
                 <div className="text-xs text-gray-500">
                   Includes RCS chats. Keepr reads them through a small Chrome extension.
@@ -360,7 +361,7 @@ export function ImportSourceSettings({ userId, onSourceChange, onConnectAndroid 
               />
               <div>
                 <div className="text-sm font-medium text-gray-900 flex items-center gap-2">
-                  Android Companion
+                  {IMPORT_SOURCE_LABELS["android-companion"]}
                   <svg className="w-4 h-4 text-green-500" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M17.6 9.48l1.84-3.18c.16-.31.04-.69-.26-.85-.29-.15-.65-.06-.83.22l-1.88 3.24a11.463 11.463 0 00-8.94 0L5.65 5.67c-.19-.29-.54-.38-.84-.22-.3.16-.42.54-.26.85L6.4 9.48A10.78 10.78 0 002 18h20a10.78 10.78 0 00-4.4-8.52zM7 15.25a1.25 1.25 0 110-2.5 1.25 1.25 0 010 2.5zm10 0a1.25 1.25 0 110-2.5 1.25 1.25 0 010 2.5z" />
                   </svg>

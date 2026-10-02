@@ -47,6 +47,7 @@ import * as crypto from "crypto";
 import { participantKey } from "./rcsImportJob";
 import { rcsReactionExternalId, reactionTypeForEmoji, bareEmoji } from "./rcsReactionMap";
 import { toE164 } from "../utils/phoneNormalization";
+import { chatPeopleRows, type RcsChatPersonRow } from "./db/rcsChatPeopleDbService";
 
 export const RCS_IMPORT_SOURCE = "google_messages_web";
 /** BACKLOG-3658: rows saved by the cache job (no transaction at import time). */
@@ -267,6 +268,21 @@ export interface RcsImportDeps {
    */
   repointLegacyRemoval?: (userId: string, legacyThreadId: string, threadId: string, transactionId: string | null) => number;
   // (Real one: syncDbService.findRcsContentDuplicates — same people only, never empty bodies.)
+  /**
+   * BACKLOG-3670: record the stored chat's people (member numbers + the names
+   * shown for them) for "people found in texts". Local only.
+   */
+  recordPeople?: (userId: string, chatHash: string, rows: RcsChatPersonRow[], lastMessageAt: string | null) => void;
+}
+
+/** The newest message time of a chat, or null. */
+function lastSentAt(chat: RcsIncomingChat): string | null {
+  let max: number | null = null;
+  for (const m of chat.messages) {
+    const t = Date.parse(m.sentAt);
+    if (Number.isFinite(t) && (max === null || t > max)) max = t;
+  }
+  return max === null ? null : new Date(max).toISOString();
 }
 
 /**
@@ -428,6 +444,9 @@ export async function importChat(
   // Rows are ALWAYS stored (dedup keeps working); only the link respects the
   // user's removals.
   const { stored, skipped } = deps.batchInsertMessages(toInsert, 500);
+  // BACKLOG-3670: straight after the insert — numbers seen only in a
+  // transaction Sync count too.
+  deps.recordPeople?.(userId, rcsChatHash(people.numbers), chatPeopleRows(people, chat.title), lastSentAt(chat));
 
   const reactionRows = mapChatToReactionRows(chat, userId, people);
   const reactionResult =
@@ -484,7 +503,7 @@ export async function importChat(
 /** The writers a cache chat uses (all synchronous). */
 export type RcsCacheChatDeps = Pick<
   RcsImportDeps,
-  "batchInsertMessages" | "getMessageIdMap" | "insertReactionRows" | "findContentDuplicates" | "repointLegacyRemoval"
+  "batchInsertMessages" | "getMessageIdMap" | "insertReactionRows" | "findContentDuplicates" | "repointLegacyRemoval" | "recordPeople"
 >;
 
 /**
@@ -533,6 +552,8 @@ export function storeCacheChatSync(
     : new Map<string, string>();
   const toInsert = sameContent.size > 0 ? rows.filter((r) => !sameContent.has(r.externalId)) : rows;
   const { stored, skipped } = deps.batchInsertMessages(toInsert, 500);
+  // BACKLOG-3670: inside the cache commit's transaction (this runs in it).
+  deps.recordPeople?.(userId, rcsChatHash(people.numbers), chatPeopleRows(people, chat.title), lastSentAt(chat));
   const reactionRows = mapChatToReactionRows(chat, userId, people, RCS_CACHE_SOURCE);
   const reactionResult =
     reactionRows.length > 0 ? deps.insertReactionRows(reactionRows) : { stored: 0, skipped: 0 };
