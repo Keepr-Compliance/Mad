@@ -191,3 +191,31 @@ describe("extraction edge cases", () => {
     expect(new Date(r.messages[0].sentAt)).toEqual(new Date(2025, 11, 30, 9, 5));
   });
 });
+
+// Founder (2026-10-02): the quote is captured for reply-to metadata (never as
+// the body; never the quoted sender's name). Mutations: no quote captured →
+// red; the header kept as text → red; "You" not read as me → red.
+describe("quoted reply: the quote captured for reply-to", () => {
+  const reply = (header: string) => `<mws-message-wrapper msg-id="1"><div data-e2e-message-wrapper-core data-e2e-message-outgoing="false" data-e2e-message-rcs="true">
+      <mws-text-message-part aria-label="Test Contact A replied: Yes i am!!! ${ON("December 30, 2025")}."><mws-message-part-content data-e2e-message-content>
+        <div class="embed-msg-part-container"><span>${header}</span><span>Are you still coming to the open house?</span></div>
+        <span>Yes i am!!!</span>
+      </mws-message-part-content></mws-text-message-part>
+      </div></mws-message-wrapper>`;
+
+  it("the quoted text without its sender header; someone else's quote is not mine", () => {
+    const r = run(reply("Test Contact B"));
+    expect(r.messages[0].text).toBe("Yes i am!!!");
+    expect((r.messages[0] as unknown as { quote: unknown }).quote).toEqual({ text: "Are you still coming to the open house?", fromMe: false });
+  });
+
+  it("a quote of my own message (header \"You\") is mine", () => {
+    expect((run(reply("You")).messages[0] as unknown as { quote: { fromMe: boolean } }).quote.fromMe).toBe(true);
+  });
+
+  it("no quote → null", () => {
+    const r = run(`<mws-message-wrapper msg-id="2"><div data-e2e-message-wrapper-core data-e2e-message-outgoing="true" data-e2e-message-rcs="true">
+      <mws-text-message-part aria-label="You said: plain. ${ON("December 30, 2025")}."><mws-message-part-content data-e2e-message-content>plain</mws-message-part-content></mws-text-message-part></div></mws-message-wrapper>`);
+    expect((r.messages[0] as unknown as { quote: unknown }).quote).toBeNull();
+  });
+});

@@ -287,6 +287,35 @@
       .join("\n");
   }
 
+  /**
+   * Founder (2026-10-02): what a quoted reply quotes, for the reply-to
+   * metadata — { text, fromMe } or null. The quote's own text part when it
+   * has one, else the quote without its first child (the quoted sender's
+   * header). The header is only ever compared with "You"; a name is never
+   * kept. job.js turns this into replyTo and never sends it as such.
+   */
+  function messageQuote(wrapper) {
+    var q = wrapper.querySelector(SELECTORS.quoted);
+    if (!q) return null;
+    var kids = q.children;
+    var header = kids.length > 1 ? kids[0] : null;
+    var content = q.querySelector(SELECTORS.text);
+    var text;
+    if (content && !(header && header.contains(content))) {
+      text = content.textContent;
+    } else if (header) {
+      var parts = [];
+      for (var i = 1; i < kids.length; i++) parts.push(kids[i].textContent);
+      text = parts.join(" ");
+    } else {
+      text = q.textContent;
+    }
+    text = normalizeSpace(text);
+    if (!text) return null;
+    var who = normalizeSpace(header ? header.textContent : "");
+    return { text: text, fromMe: /^(you|me)$/i.test(who) };
+  }
+
   /** An element's text without any quoted parent inside it (a copy is trimmed; the page is untouched). */
   function ownTextContent(el) {
     if (!el.querySelector(SELECTORS.quoted)) return el.textContent;
@@ -475,6 +504,7 @@
         imageSrcs: images,
         files: files,
         reactions: messageReactions(w),
+        quote: messageQuote(w),
       });
     }
     result.messages = foldTapbackLines(result.messages);

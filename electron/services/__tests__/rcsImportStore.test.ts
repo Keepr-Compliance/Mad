@@ -15,6 +15,8 @@ import {
   mapChatToReactionRows,
   mapChatToRows,
   parseIncomingChat,
+  parseReplyTo,
+  RCS_REPLY_SNIPPET_MAX,
   peopleFrom,
   rcsChatHash,
   samePeople,
@@ -512,5 +514,43 @@ describe("importCacheChat (BACKLOG-3658)", () => {
   it("a chat without a number is refused", async () => {
     const db = makeFakeDb("user-1");
     await expect(importCacheChat(CHAT, "user-1", db.deps, { numbers: [], names: [] })).rejects.toThrow("no phone number");
+  });
+});
+
+// Founder (2026-10-02): reply-to captured now, shown later — in the row's
+// metadata only, sanitized and capped. Mutations: replyTo dropped by the
+// parser / not stored → red; no cap or no sanitizing → red; a bad msgId or
+// sender kept → red.
+describe("reply-to metadata", () => {
+  const base = { msgId: "m-9", direction: "inbound", sender: "x", text: "Yes i am!!!", sentAt: "2026-09-20T13:05:00.000Z", transport: "rcs" };
+  const parse = (replyTo: unknown) => parseIncomingChat({ conversationId: "c", title: "t", messages: [{ ...base, replyTo }] }) as RcsIncomingChat;
+
+  it("by id (same chat) → reply_to_external_id; by snippet → reply_snippet + reply_sender", () => {
+    const byId = parse({ msgId: "m-1" });
+    expect(byId.messages[0].replyTo).toEqual({ msgId: "m-1" });
+    const rows = mapChatToRows(byId, "user-1", PEOPLE);
+    expect(JSON.parse(rows[0].metadata as string).reply_to_external_id).toBe(`gmweb2:${H}:m-1`);
+    const bySnippet = parse({ snippet: "Are you still coming to the open house?", sender: "them" });
+    const meta = JSON.parse(mapChatToRows(bySnippet, "user-1", PEOPLE)[0].metadata as string);
+    expect(meta).toMatchObject({ reply_snippet: "Are you still coming to the open house?", reply_sender: "them" });
+    expect(meta.reply_to_external_id).toBeUndefined();
+  });
+
+  it("sanitized and capped: control characters out, whitespace collapsed, 80 characters", () => {
+    const long = parse({ snippet: "a\u0000b\n\n  c\t" + "x".repeat(200), sender: "me" });
+    const s = (long.messages[0].replyTo as { snippet: string }).snippet;
+    expect(s.length).toBe(RCS_REPLY_SNIPPET_MAX);
+    expect(s.startsWith("a b c x")).toBe(true);
+    expect(RCS_REPLY_SNIPPET_MAX).toBe(80);
+  });
+
+  it("anything else is dropped, never an error: bad ids, other senders, empty snippets", () => {
+    expect(parseReplyTo({ msgId: "<script>" })).toBeUndefined();
+    expect(parseReplyTo({ msgId: "x".repeat(65) })).toBeUndefined();
+    expect(parseReplyTo({ snippet: "hi", sender: "Test Contact B" })).toBeUndefined();
+    expect(parseReplyTo({ snippet: "   ", sender: "me" })).toBeUndefined();
+    expect(parseReplyTo("nope")).toBeUndefined();
+    expect(parse(undefined).messages[0].replyTo).toBeUndefined();
+    expect(JSON.parse(mapChatToRows(parse(undefined), "user-1", PEOPLE)[0].metadata as string)).not.toHaveProperty("reply_snippet");
   });
 });

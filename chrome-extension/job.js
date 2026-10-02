@@ -319,6 +319,29 @@
       (c.date_floor || 0) + " reached the months limit · " + c.none + " not confirmed";
   }
 
+  /** A reply's quoted snippet cap (characters), as Keepr's RCS_REPLY_SNIPPET_MAX. */
+  var REPLY_SNIPPET_MAX = 80;
+
+  /**
+   * Founder (2026-10-02): a quoted reply's reply-to. The quoted message's
+   * msg-id ONLY when exactly one OTHER message of the same chat has that text
+   * (a short "ok" quoted among several "ok"s never links); else a snippet
+   * (whitespace collapsed, at most 80 characters) and who sent it ("me" |
+   * "them"; never a name). null when the message quotes nothing.
+   */
+  function replyToFor(msg, all) {
+    var q = msg && msg.quote;
+    if (!q || !q.text) return null;
+    var norm = function (t) { return String(t || "").replace(/\s+/g, " ").trim(); };
+    var target = norm(q.text);
+    var hits = [];
+    for (var i = 0; i < all.length; i++) {
+      if (all[i] !== msg && all[i].msgId !== msg.msgId && norm(all[i].text) === target) hits.push(all[i].msgId);
+    }
+    if (hits.length === 1) return { msgId: hits[0] };
+    return { snippet: target.slice(0, REPLY_SNIPPET_MAX), sender: q.fromMe ? "me" : "them" };
+  }
+
   /**
    * GAP GUARD: the messages on screen at the end merged with the ones read
    * during the history load (by msg-id), unique, oldest first. The ON-SCREEN
@@ -1110,7 +1133,10 @@
         var readSet = unionMessages(hist.messages, extracted.messages);
         var messages = readSet.map(function (m) {
           var copy = {};
-          for (var k in m) if (k !== "imageSrcs") copy[k] = m[k];
+          for (var k in m) if (k !== "imageSrcs" && k !== "quote") copy[k] = m[k];
+          // Founder: a quoted reply's reply-to (the quote itself is never sent).
+          var replyTo = replyToFor(m, readSet);
+          if (replyTo) copy.replyTo = replyTo;
           return copy;
         });
         if (messages.length === 0) {
@@ -1916,6 +1942,7 @@
     LIST_NOT_REACHABLE: LIST_NOT_REACHABLE,
     detailsText: detailsText,
     unionMessages: unionMessages,
+    replyToFor: replyToFor,
     copyText: copyText,
     numberShape: numberShape,
     shortHash: shortHash,

@@ -821,3 +821,44 @@ describe("no Keepr element on the page when idle", () => {
     expect(src).not.toMatch(/innerHTML|insertAdjacentHTML|outerHTML/);
   });
 });
+
+// Founder (2026-10-02): reply-to — a msg-id only on a UNIQUE quoted-text match
+// in the same chat, else a snippet (≤80, whitespace collapsed) + me/them.
+// Mutations: a non-unique "ok" linked → red; no cap → red; the quote sent
+// to Keepr as such → red.
+describe("replyToFor (reply-to metadata)", () => {
+  const ROWS2: Array<[string, string | null]> = [["Zed Example", "3:45 PM"]];
+
+  it("/chat carries replyTo and never the quote itself", async () => {
+    const t = cacheEnv({ rows: ROWS2, numbers: { [id(0)]: ["+15555550101"] } });
+    (t.env as Record<string, unknown>).extract = () => ({
+      conversationId: id(0), title: "x", skipped: { noDate: 0, noText: 0 },
+      messages: [
+        { msgId: "1", direction: "inbound", sender: "x", text: "Are you still coming?", sentAt: new Date(NOW - DAY).toISOString(), transport: "rcs", imageSrcs: [], files: [], quote: null },
+        { msgId: "2", direction: "outbound", sender: "me", text: "Yes!", sentAt: new Date(NOW - DAY).toISOString(), transport: "rcs", imageSrcs: [], files: [], quote: { text: "Are you still coming?", fromMe: false } },
+      ],
+    });
+    await job.runJob(JOB, t.env);
+    const sent = t.calls.find(([, p]) => p.endsWith("/chat"))![2] as { messages: Array<Record<string, unknown>> };
+    expect(sent.messages[1].replyTo).toEqual({ msgId: "1" });
+    expect(sent.messages.some((x) => "quote" in x)).toBe(false);
+  });
+
+  const m = (msgId: string, text: string, quote?: { text: string; fromMe: boolean }) => ({ msgId, text, ...(quote ? { quote } : {}) });
+
+  it("a unique match in the chat → the quoted message's msg-id", () => {
+    const all = [m("1", "Are you still coming?"), m("2", "Yes!", { text: "Are  you still\ncoming?", fromMe: false })];
+    expect(job.replyToFor(all[1], all)).toEqual({ msgId: "1" });
+  });
+
+  it("a non-unique text (\"ok\") never links: a snippet instead", () => {
+    const all = [m("1", "ok"), m("2", "ok"), m("3", "great", { text: "ok", fromMe: true })];
+    expect(job.replyToFor(all[2], all)).toEqual({ snippet: "ok", sender: "me" });
+  });
+
+  it("no match → a snippet capped at 80; no quote → null", () => {
+    const all = [m("1", "Sure", { text: "y".repeat(200), fromMe: false }), m("2", "plain")];
+    expect(job.replyToFor(all[0], all)).toEqual({ snippet: "y".repeat(80), sender: "them" });
+    expect(job.replyToFor(all[1], all)).toBeNull();
+  });
+});

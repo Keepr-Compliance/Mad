@@ -187,6 +187,33 @@ export interface RcsIncomingMessage {
   files?: Array<{ name: string; size: string }>;
   /** Reactions shown on the message (BACKLOG-3620). */
   reactions?: RcsIncomingReaction[];
+  /**
+   * Founder (2026-10-02): what a quoted reply quotes — captured now, shown
+   * later. The quoted message's msg-id when the page matched it uniquely in
+   * the same chat; else a short snippet and who sent it ("me" | "them";
+   * never a name). Stored in the row's metadata only.
+   */
+  replyTo?: RcsReplyTo;
+}
+
+/** A reply's quoted message: by id (same chat) or by snippet. */
+export type RcsReplyTo = { msgId: string } | { snippet: string; sender: "me" | "them" };
+
+/** Snippet cap (characters) for a reply's quoted text. */
+export const RCS_REPLY_SNIPPET_MAX = 80;
+
+/** Untrusted replyTo → a clean value, or undefined (dropped, never an error). */
+export function parseReplyTo(raw: unknown): RcsReplyTo | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.msgId === "string" && /^[\w.:-]{1,64}$/.test(r.msgId)) return { msgId: r.msgId };
+  if (typeof r.snippet === "string" && (r.sender === "me" || r.sender === "them")) {
+    // Control characters out, whitespace collapsed, capped.
+    // eslint-disable-next-line no-control-regex -- stripping control characters is the point
+    const snippet = r.snippet.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, RCS_REPLY_SNIPPET_MAX);
+    if (snippet.length > 0) return { snippet, sender: r.sender };
+  }
+  return undefined;
 }
 
 /** One reaction as the extension reads it. */
@@ -354,6 +381,9 @@ export function mapChatToRows(
         msgId: m.msgId,
         ...(images > 0 ? { images } : {}),
         ...(files.length > 0 ? { filesNotImported: files } : {}),
+        // Founder: a quoted reply's reply-to, captured (shown later).
+        ...(m.replyTo && "msgId" in m.replyTo ? { reply_to_external_id: rcsExternalId(hash, m.replyTo.msgId) } : {}),
+        ...(m.replyTo && "snippet" in m.replyTo ? { reply_snippet: m.replyTo.snippet, reply_sender: m.replyTo.sender } : {}),
       }),
     };
   });
@@ -604,6 +634,7 @@ export function parseIncomingChat(body: unknown): RcsIncomingChat | string {
     if (transport !== null && transport !== "rcs" && transport !== "sms") {
       return "message.transport must be rcs, sms or null";
     }
+    const replyTo = parseReplyTo(m.replyTo);
     messages.push({
       msgId: m.msgId,
       direction: m.direction,
@@ -614,6 +645,7 @@ export function parseIncomingChat(body: unknown): RcsIncomingChat | string {
       images,
       files,
       reactions,
+      ...(replyTo ? { replyTo } : {}),
     });
   }
   return {
