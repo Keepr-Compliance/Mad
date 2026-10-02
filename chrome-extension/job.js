@@ -61,6 +61,21 @@
   /** BACKLOG-3658: the list read for a cache Sync stops here when no time can be read. */
   var CACHE_LIST_MAX = 1000;
   var PAUSED_TEXT = "Keep this Chrome window visible — Sync paused";
+  /**
+   * Google's connection banner (scan.connectionBanner): the job pauses while
+   * it shows and resumes when it clears; past RCS_CONNECTION_LOST_MS it ends
+   * with a named reason (not a pile of per-chat failures).
+   */
+  var CONNECTING_TEXT = "Reconnecting to your phone…";
+  var UNREACHABLE_TEXT = "Your phone isn't reachable — check it's on and connected";
+  var RCS_CONNECTION_LOST_MS = 5 * 60000;
+  var CONNECTION_POLL_MS = 1000;
+  var CONNECTION_LOST_TEXT = {
+    connection_lost: "Keepr stopped: Messages for Web could not reconnect to your phone for 5 minutes. Check your phone, then sync again from Keepr.",
+    phone_unreachable: "Keepr stopped: your phone wasn't reachable for 5 minutes. Check it's on and connected, then sync again from Keepr.",
+  };
+  /** The paused box's line for each pause. */
+  var PAUSE_BODIES = {};
   /** Step-log lines kept for the overlay's Copy. */
   var LOG_BUFFER_MAX = 500;
   var LIST_NOT_REACHABLE =
@@ -492,13 +507,60 @@
      * resume once it is visible again. Keepr hears the pause as a stage.
      */
     var pauses = 0;
+    var connectionLostMs = env.connectionLostMs == null ? RCS_CONNECTION_LOST_MS : env.connectionLostMs;
+    /** Telemetry (counts and ms only): each banner kind's occurrences and time. */
+    var connection = {
+      connecting: { count: 0, ms: 0 }, phone_unreachable: { count: 0, ms: 0 }, connection_banner: { count: 0, ms: 0 },
+    };
+    function bannerNow() {
+      return env.scan && env.scan.connectionBanner ? env.scan.connectionBanner(env.doc) : null;
+    }
+    /**
+     * Wait while the page cannot be worked: a hidden tab (until visible) or
+     * the connection banner (until it clears, at most connectionLostMs).
+     * → null (nothing held), {resumed: true}, or {code, message} (give up).
+     */
     async function holdWhileHidden(resumeText) {
-      if (!env.visibility || !env.visibility.hidden()) return;
-      pauses += 1;
-      await report(PAUSED_TEXT);
-      await env.visibility.whenVisible();
-      log("resumed");
+      var held = false;
+      for (;;) {
+        if (env.visibility && env.visibility.hidden()) {
+          held = true;
+          pauses += 1;
+          await report(PAUSED_TEXT);
+          await env.visibility.whenVisible();
+          log("resumed");
+          continue;
+        }
+        var banner = bannerNow();
+        if (!banner) break;
+        held = true;
+        var kind = banner.kind;
+        var waited = 0;
+        connection[kind].count += 1;
+        log("connection banner: " + kind + (kind === "connection_banner" ? " (title " + banner.titleLength + " chars)" : ""));
+        await report(kind === "phone_unreachable" ? UNREACHABLE_TEXT : CONNECTING_TEXT);
+        while (banner) {
+          if (waited >= connectionLostMs) {
+            var code = kind === "phone_unreachable" ? "phone_unreachable" : "connection_lost";
+            log("connection banner for " + Math.round(waited / 1000) + "s: " + code);
+            return { code: code, message: CONNECTION_LOST_TEXT[code] };
+          }
+          await env.sleep(CONNECTION_POLL_MS);
+          waited += CONNECTION_POLL_MS;
+          connection[kind].ms += CONNECTION_POLL_MS;
+          banner = bannerNow();
+          if (banner && banner.kind !== kind) {
+            kind = banner.kind;
+            connection[kind].count += 1;
+            log("connection banner: " + kind);
+            await report(kind === "phone_unreachable" ? UNREACHABLE_TEXT : CONNECTING_TEXT);
+          }
+        }
+        log("connection back after " + Math.round(waited / 1000) + "s");
+      }
+      if (!held) return null;
       if (resumeText) await report(resumeText);
+      return { resumed: true };
     }
 
     async function report(stage) {
@@ -611,7 +673,8 @@
     log("stage: loading the conversation list");
     // No env.scroll in the browser: collectConversations drives the page's own
     // scroller (top first, then step down with scroll events).
-    await holdWhileHidden("Loading your conversation list…");
+    var lostList = await holdWhileHidden("Loading your conversation list…");
+    if (lostList && lostList.code) return fail(lostList.code, lostList.message);
     var collected = await env.scan.collectConversations(env.doc, isCache
       ? {
         scroll: env.scroll, sleep: env.sleep, stopAtOlderThanMs: floorMs, maxItems: CACHE_LIST_MAX,
@@ -648,7 +711,8 @@
       var opened = false;
       var gone = false;
       var imagesFailed = 0;
-      await holdWhileHidden(stageText(i + 1, candidates.length));
+      var lostChat = await holdWhileHidden(stageText(i + 1, candidates.length));
+      if (lostChat && lostChat.code) return fail(lostChat.code, lostChat.message);
       try {
         env.overlay.show(stageText(i + 1, candidates.length) + "…", false, RUNNING_EXTRAS);
         // BACKLOG-3658 #12: the conversation id as a 6-hex tag salted per job
@@ -722,9 +786,10 @@
         }
         // Only the latest messages render on open: load older ones back past
         // the transaction's start date, then let the set settle.
-        await holdWhileHidden(stageText(i + 1, candidates.length));
+        var lostHist = await holdWhileHidden(stageText(i + 1, candidates.length));
+        if (lostHist && lostHist.code) return fail(lostHist.code, lostHist.message);
         var loc = env.getLocation();
-        var hist = await env.scan.loadHistory(env.doc, {
+        var histIo = {
           scrollUp: env.scrollMessagesUp || function () {},
           nudge: env.nudgeMessages,
           nudgeDown: env.nudgeDownMessages,
@@ -768,7 +833,16 @@
               skipped: progress.skipped,
             });
           },
-        });
+        };
+        var hist = await env.scan.loadHistory(env.doc, histIo);
+        // The banner came up while this chat loaded: what was read may stop
+        // short. Once it clears, the chat's history is loaded again.
+        var lostMid = await holdWhileHidden(null);
+        if (lostMid && lostMid.code) return fail(lostMid.code, lostMid.message);
+        if (lostMid && lostMid.resumed) {
+          log("  history loaded again after the pause");
+          hist = await env.scan.loadHistory(env.doc, histIo);
+        }
         history.push({ conversationId: conv.conversationId, stopReason: hist.stopReason, count: hist.count });
         var settled = await env.scan.waitForMessageSwap(env.doc, "", {
           sleep: env.sleep,
@@ -933,6 +1007,7 @@
       notChecked: progress.notChecked,
       notText: totals.notText,
       noMessagesYet: totals.noMessagesYet,
+      connection: connection,
       historyConfirmed: totals.historyConfirmed,
       // L2: how the list scan stopped (Keepr records the coverage only for a normal stop).
       listStop: collected.stopReason,
@@ -958,6 +1033,8 @@
   var ASK_TEXT = "Keepr asked to copy your recent Google Messages texts into the Keepr app on this computer.";
   var PAUSED_TITLE = "Sync paused";
   var PAUSED_BODY = "Keep this Chrome window visible — Sync continues when it's back.";
+  PAUSE_BODIES[CONNECTING_TEXT] = CONNECTING_TEXT + " Sync continues when it's back.";
+  PAUSE_BODIES[UNREACHABLE_TEXT] = UNREACHABLE_TEXT + ". Sync continues when it's back.";
   var SYNCING_TITLE = "Syncing your texts";
   /**
    * Founder (2026-10-01): from the first second of a Sync, not only once
@@ -1040,7 +1117,7 @@
     if (extras && extras.ask) return "ask";
     if (isError) return "error";
     if (extras && extras.details) return "done";
-    if (text === PAUSED_TEXT) return "paused";
+    if (text === PAUSED_TEXT || text === CONNECTING_TEXT || text === UNREACHABLE_TEXT) return "paused";
     return "syncing";
   }
 
@@ -1267,7 +1344,7 @@
       box.appendChild(el("div", "progress", bodyStyle, text));
       box.appendChild(el("div", "hint", { marginTop: "6px", color: p.text }, SYNCING_HINT));
     }
-    if (state === "paused") box.appendChild(el("div", "progress", bodyStyle, PAUSED_BODY));
+    if (state === "paused") box.appendChild(el("div", "progress", bodyStyle, PAUSE_BODIES[text] || PAUSED_BODY));
 
     if (state === "ask") {
       box.appendChild(el("div", "progress", bodyStyle, ASK_TEXT));
@@ -1564,6 +1641,10 @@
     shortHash: shortHash,
     cachePlan: cachePlan,
     PAUSED_TEXT: PAUSED_TEXT,
+    CONNECTING_TEXT: CONNECTING_TEXT,
+    UNREACHABLE_TEXT: UNREACHABLE_TEXT,
+    CONNECTION_LOST_TEXT: CONNECTION_LOST_TEXT,
+    RCS_CONNECTION_LOST_MS: RCS_CONNECTION_LOST_MS,
     CACHE_CHECK_MAX: CACHE_CHECK_MAX,
   };
 

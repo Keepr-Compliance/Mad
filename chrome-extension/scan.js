@@ -862,6 +862,44 @@
    */
   var HISTORY_LOADING_SELECTORS = ['[role="progressbar"]', "mat-progress-spinner", "mat-spinner", "mws-loading-spinner"];
 
+  /**
+   * Google's connection banner (TRACED live, 0.3.18): `div.information-banner`
+   * with an `mws-spinner > mat-progress-spinner[role=progressbar]` and
+   * `div.content-container > h2.title` ("Connecting", or "Trying to reach your
+   * phone" with a "Check that your phone is on…" content line). The banner
+   * container is the match; its title text only tells the states apart.
+   */
+  var CONNECTION_BANNER_SELECTORS = [".information-banner"];
+
+  /**
+   * The connection banner on screen, or null:
+   *   {kind: "connecting" | "phone_unreachable" | "connection_banner", titleLength}
+   * Any other banner title is the generic kind; only its length is reported.
+   */
+  function connectionBanner(doc) {
+    for (var s = 0; s < CONNECTION_BANNER_SELECTORS.length; s++) {
+      var banners = doc.querySelectorAll(CONNECTION_BANNER_SELECTORS[s]);
+      for (var i = 0; i < banners.length; i++) {
+        if (!isShown(banners[i])) continue;
+        var titleEl = banners[i].querySelector("h2.title, .title");
+        var title = normalizeSpace(titleEl ? titleEl.textContent : "");
+        var kind = /^connecting\b/i.test(title) ? "connecting"
+          : /trying to reach your phone/i.test(title) ? "phone_unreachable"
+          : "connection_banner";
+        return { kind: kind, titleLength: title.length };
+      }
+    }
+    return null;
+  }
+
+  /** Inside the connection banner (its spinner is never "history loading"). */
+  function inConnectionBanner(el) {
+    for (var s = 0; s < CONNECTION_BANNER_SELECTORS.length; s++) {
+      if (el.closest && el.closest(CONNECTION_BANNER_SELECTORS[s])) return true;
+    }
+    return false;
+  }
+
   function anyMatch(scope, selectors) {
     for (var i = 0; i < selectors.length; i++) {
       if (scope.querySelector(selectors[i])) return true;
@@ -889,6 +927,7 @@
     for (var i = 0; i < selectors.length; i++) {
       var els = pane.querySelectorAll(selectors[i]);
       for (var j = 0; j < els.length; j++) {
+        if (inConnectionBanner(els[j])) continue;
         var r = els[j].getBoundingClientRect ? els[j].getBoundingClientRect() : null;
         if (r && r.width > 0 && r.height > 0 && isShown(els[j])) return true;
       }
@@ -1475,6 +1514,9 @@
     isShortCode: isShortCode,
     pickCandidates: pickCandidates,
     parseListTime: parseListTime,
+    connectionBanner: connectionBanner,
+    CONNECTION_BANNER_SELECTORS: CONNECTION_BANNER_SELECTORS,
+    loadingVisible: loadingVisible,
     localeDateOrder: localeDateOrder,
     planChecks: planChecks,
     CHECK_ALL_MAX: CHECK_ALL_MAX,
