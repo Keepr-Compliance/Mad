@@ -76,6 +76,7 @@ import { bringAppToFrontOrFlash } from "../utils/bringAppToFront";
 import { wrapHandler } from "../utils/wrapHandler";
 import { getMainWindow } from "../windowRegistry";
 import { ValidationError } from "../utils/validation";
+import { RCS_MEDIA_DEFAULTS, clearPendingMediaRead, getRcsMediaOptions, hasPendingMediaRead, recordRcsMediaSeen, setRcsMediaOptions } from "../services/db/rcsMediaDbService";
 import type {
   RcsClearTextsResult,
   RcsExtensionStateResult,
@@ -218,10 +219,27 @@ export const commitWriter: RcsCommitWriter = {
 /** The limits each cache job was started with (frozen at start; used by its commit). */
 const cacheLimitsByJob = new Map<string, CacheLimits>();
 /** BACKLOG-3663: each cache job's read — did it start at the floor, and where is the floor. */
-const cacheReadByJob = new Map<string, { fullRead: boolean; floorISO: string }>();
+const cacheReadByJob = new Map<string, { fullRead: boolean; floorISO: string; mediaPending?: boolean }>();
 
 /** P3b: each cache job's options, frozen at start (contacts-only flag, auto-delete). */
-const cacheOptionsByJob = new Map<string, { contactsOnly: boolean; autoDeleteDays: number | null }>();
+const cacheOptionsByJob = new Map<string, {
+  contactsOnly: boolean;
+  autoDeleteDays: number | null;
+  /** SR M: frozen per job — keep photos / videos of chats with no transaction contact. */
+  photosAllChats: boolean;
+  videosAllChats: boolean;
+}>();
+
+/** SR M: are this chat's photos / videos kept? A transaction contact, or the "all chats" toggle. */
+export function mediaKeptFor(
+  options: { photosAllChats: boolean; videosAllChats: boolean } | undefined,
+  hasContact: boolean,
+): { photos: boolean; videos: boolean } {
+  return {
+    photos: hasContact || (options?.photosAllChats ?? RCS_MEDIA_DEFAULTS.photosAllChats),
+    videos: hasContact || (options?.videosAllChats ?? RCS_MEDIA_DEFAULTS.videosAllChats),
+  };
+}
 
 /** P3b: the attachments folder rules shared by the clears. */
 function clearFiles() {
@@ -266,6 +284,8 @@ async function commitCacheJob(jobId: string, userId: string, snapshot?: CacheEnd
   const r = await cacheStaging().commit(jobId, userId, limits, commitWriter, () => {
     const nowISO = new Date().toISOString();
     recordSourceCoverage(userId, "google_messages", reached && read ? read.floorISO : null, nowISO);
+    // SR M: the media read asked for by a toggle is done once this commit saves.
+    if (read?.mediaPending) clearPendingMediaRead(userId);
     if (read) {
       recordRcsCacheRun(userId, {
         floorISO: read.floorISO,
@@ -421,12 +441,18 @@ async function startCacheJobOnce(opts: { sinceDays?: unknown }): Promise<
     sinceDays: opts.sinceDays,
     isPackaged: app.isPackaged,
   });
+  // SR M: a media toggle switched ON since the last Sync: read every chat down
+  // to the floor, so chats already in Keepr get their media (cleared by the commit).
+  const mediaOptions = getRcsMediaOptions(decision.userId);
+  const mediaPending = window.devOverrideDays === null && hasPendingMediaRead(decision.userId);
+  const floorISO = new Date(window.limits.floorMs).toISOString();
+  const since = mediaPending ? floorISO : window.since;
   // Only one Sync at a time: any staging left now is stale (a crash, a quit).
   await cacheStaging().discardAll();
   const job = bridge.createCacheJob(decision.userId, {
-    since: window.since,
+    since,
     ownNumbers: state?.ownNumber ? [state.ownNumber] : [],
-    readingOlder: window.readingOlder,
+    readingOlder: window.readingOlder || mediaPending,
     // Live (0.3.15): chats switched back on are read to the full floor.
     floorISO: new Date(window.limits.floorMs).toISOString(),
     pendingConversationIds: listPendingFullRead(decision.userId),
@@ -438,12 +464,15 @@ async function startCacheJobOnce(opts: { sinceDays?: unknown }): Promise<
   if (recordVersion !== null) databaseService.setRcsConsent(decision.userId, recordVersion, new Date().toISOString());
   cacheLimitsByJob.set(job.jobId, window.limits);
   cacheReadByJob.set(job.jobId, {
-    fullRead: window.since === new Date(window.limits.floorMs).toISOString(),
+    fullRead: since === floorISO,
+    mediaPending,
     floorISO: new Date(window.limits.floorMs).toISOString(),
   });
   cacheOptionsByJob.set(job.jobId, {
     contactsOnly: consent?.contactsOnly === true,
     autoDeleteDays: consent?.autoDeleteDays ?? null,
+    photosAllChats: mediaOptions.photosAllChats,
+    videosAllChats: mediaOptions.videosAllChats,
   });
   if (window.devOverrideDays !== null) {
     void logService.warn(`[RcsCache] DEV window override: ${window.devOverrideDays} days`, LOG_TAG);
@@ -463,14 +492,25 @@ const bridge = new RcsExtensionBridge({
   // P3b: the contacts-only flag (off by default), frozen per job.
   cacheChatAllowed: (jobId, userId, numbers) =>
     cacheOptionsByJob.get(jobId)?.contactsOnly ? databaseService.rcsNumbersMatchLiveContact(userId, numbers) : true,
-  // History v2: the page's image pass only for chats whose images are kept (the same rule as importCacheImage).
-  cacheImagesKept: (userId, numbers) => databaseService.rcsNumbersMatchLiveContact(userId, numbers),
+  // SR M: photos / videos kept — a transaction contact, or the job's "all chats" toggles (same rule as importCacheImage).
+  cacheMediaKept: (jobId, userId, numbers) =>
+    mediaKeptFor(cacheOptionsByJob.get(jobId), databaseService.rcsNumbersMatchLiveContact(userId, numbers)),
+  onMediaCounts: (userId, counts) => {
+    try {
+      recordRcsMediaSeen(userId, counts.photosSeen, counts.videosSeen);
+    } catch {
+      /* the estimate is best-effort */
+    }
+  },
   // BACKLOG-3658: a cache job STAGES; only a finished job commits (atomic).
   importCacheChat: async (chat, userId, people, jobId) =>
     cacheStaging().stageChat(jobId, userId, chat, people, rcsChatHash(people.numbers)),
   importCacheImage: async (image, userId, chatHash, numbers, jobId) => {
-    // Images only for chats with a live transaction contact (BACKLOG-3658).
-    if (!databaseService.rcsNumbersMatchLiveContact(userId, numbers)) return { stored: false, reason: "not_a_contact" };
+    // SR M: photos for chats with a live transaction contact, or every chat when
+    // "Download photos from all chats" is on (frozen for this job).
+    if (!mediaKeptFor(cacheOptionsByJob.get(jobId), databaseService.rcsNumbersMatchLiveContact(userId, numbers)).photos) {
+      return { stored: false, reason: "not_a_contact" };
+    }
     return cacheStaging().stageImage(jobId, image, chatHash);
   },
   currentUserId,
@@ -748,6 +788,21 @@ export function registerRcsImportHandlers(): void {
     }, { module: LOG_TAG }),
   );
 
+  // SR M: Settings → Google Messages → "Download photos / videos from all chats".
+  ipcMain.handle(
+    "rcs-import:set-media-options",
+    wrapHandler(async (_event, args: unknown): Promise<{ success: boolean; error?: string }> => {
+      const a = argsObject(args);
+      const userId = await currentUserId();
+      if (!userId) return { success: false, error: "Sign in to Keepr first." };
+      const patch: { photosAllChats?: boolean; videosAllChats?: boolean } = {};
+      if (typeof a.photosAllChats === "boolean") patch.photosAllChats = a.photosAllChats;
+      if (typeof a.videosAllChats === "boolean") patch.videosAllChats = a.videosAllChats;
+      setRcsMediaOptions(userId, patch);
+      return { success: true };
+    }, { module: LOG_TAG }),
+  );
+
   ipcMain.handle(
     "rcs-import:get-extension-state",
     wrapHandler(async (): Promise<RcsExtensionStateResult> => {
@@ -768,6 +823,7 @@ export function registerRcsImportHandlers(): void {
           autoDeleteDays: consent?.autoDeleteDays ?? null,
           // The months a cache Sync copies (messageImport.filters; null = All time).
           lookbackMonths: userId ? resolveLookbackMonths(await loadStoredImportFilters(userId)) : undefined,
+          media: userId ? getRcsMediaOptions(userId) : undefined,
         },
       };
     }, { module: LOG_TAG }),

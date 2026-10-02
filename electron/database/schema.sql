@@ -828,6 +828,29 @@ CREATE TABLE IF NOT EXISTS rcs_pending_full_sync (
 );
 CREATE INDEX IF NOT EXISTS idx_rcs_pending_full_sync_user ON rcs_pending_full_sync(user_id);
 
+-- SR M (2026-10-02): Google Messages media options, per user, on THIS device.
+-- photos_all_chats: keep photos of every chat in the window (default ON), not
+-- only chats with a transaction contact; videos_all_chats likewise (default
+-- OFF; videos are counted, not downloaded, until the video bubble is traced).
+-- last_*_seen: the bubbles the last Sync counted (the video storage estimate).
+CREATE TABLE IF NOT EXISTS rcs_media_options (
+  user_id TEXT PRIMARY KEY,
+  photos_all_chats INTEGER NOT NULL DEFAULT 1,
+  videos_all_chats INTEGER NOT NULL DEFAULT 0,
+  last_photos_seen INTEGER,
+  last_videos_seen INTEGER,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- SR M: a media toggle was switched ON: the next cache Sync reads every chat
+-- down to the floor so existing chats get their media; cleared by its commit.
+CREATE TABLE IF NOT EXISTS rcs_pending_media (
+  user_id TEXT PRIMARY KEY,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
 -- BACKLOG-3670: people found in texts. One row per (chat, member number) of a
 -- Google Messages chat Keepr stored, with the name the phone's address book
 -- shows for that number (Details rows; a 1:1 chat's title). LOCAL ONLY: never

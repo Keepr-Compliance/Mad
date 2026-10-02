@@ -621,8 +621,10 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
   let stagedFor: string[];
   /** What Keepr's (mocked) save records for a finished job; undefined: never answers. */
   let savedAnswer: { chats: number; messages: number; newMessages: number } | null | undefined;
+  const mediaCounts: Array<[string, { photosSeen: number; videosSeen: number }]> = [];
 
   beforeEach(async () => {
+    mediaCounts.length = 0;
     current = "user-a";
     savedAnswer = { chats: 0, messages: 0, newMessages: 0 };
     focus = [];
@@ -659,8 +661,9 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
       finishSaveWaitMs: 200,
       // P3b contacts-only flag: this test number is not a transaction contact.
       cacheChatAllowed: (_jobId, _userId, numbers) => !numbers.includes("+15555550199"),
-      // History v2: images kept only for this (contact) number.
-      cacheImagesKept: (_userId, numbers) => numbers.includes("+15555550142"),
+      // SR M: photos kept for this (contact) number; videos never in this fixture.
+      cacheMediaKept: (_jobId, _userId, numbers) => ({ photos: numbers.includes("+15555550142"), videos: false }),
+      onMediaCounts: (userId, counts) => void mediaCounts.push([userId, counts]),
       jobs: new RcsJobRegistry(),
     });
     expect(await bridge.start(0)).toBe("listening");
@@ -676,7 +679,7 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
   it("every chat with a number is matched; /chat stores it for the job's user with the numbers /match saw", async () => {
     const match = await request(port, "POST", `/job/${jobId}/match`, EXT, JSON.stringify({ conversationId: CHAT.conversationId, numbers: ["(555) 555-0142"] }));
     // History v2: keepImages tells the page whether to run its image pass.
-    expect(match.body).toEqual({ matched: true, contactIds: [], keepImages: true });
+    expect(match.body).toEqual({ matched: true, contactIds: [], keepPhotos: true, keepVideos: false, keepImages: true });
     const body = JSON.stringify({ ...CHAT, participants: [{ name: "Test Contact Unmatched", number: "+1 555 555 0177" }] });
     expect((await request(port, "POST", `/job/${jobId}/chat`, EXT, body)).status).toBe(200);
     expect(cacheChats).toEqual([[CHAT.conversationId, "user-a", { numbers: ["+15555550142"], names: [] }]]);
@@ -684,10 +687,17 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
     expect(stagedFor).toEqual([jobId]);
   });
 
-  // History v2. Mutation: keepImages always true → red.
-  it("/match tells the page when Keepr does NOT keep a chat's images", async () => {
+  // History v2 / SR M. Mutation: keepPhotos always true → red.
+  it("/match tells the page when Keepr does NOT keep a chat's photos", async () => {
     const match = await request(port, "POST", `/job/${jobId}/match`, EXT, JSON.stringify({ conversationId: CHAT.conversationId, numbers: ["(555) 555-0177"] }));
-    expect(match.body).toEqual({ matched: true, contactIds: [], keepImages: false });
+    expect(match.body).toEqual({ matched: true, contactIds: [], keepPhotos: false, keepVideos: false, keepImages: false });
+  });
+
+  // SR M: the media counts of a finished Sync (numbers only). Mutation: not passed on → red.
+  it("/finish passes the photo / video bubble counts on (counts only)", async () => {
+    const body = JSON.stringify({ chats: 0, messages: 0, images: 0, media: { photos: { seen: 12, saved: 9 }, videos: { seen: 3, saved: 0 } } });
+    await request(port, "POST", `/job/${jobId}/finish`, EXT, body);
+    expect(mediaCounts).toEqual([["user-a", { photosSeen: 12, videosSeen: 3 }]]);
   });
 
   // BACKLOG-3658 atomic import. Mutation: drop the isActive re-check → red

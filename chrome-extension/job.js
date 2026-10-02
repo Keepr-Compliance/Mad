@@ -62,6 +62,24 @@
   var CACHE_LIST_MAX = 1000;
   var PAUSED_TEXT = "Keep this Chrome window visible — Sync paused";
   /**
+   * SR M (2026-10-02): media. Keepr says per chat whether it keeps the chat's
+   * photos (keepPhotos: a transaction contact, or "Download photos from all
+   * chats", on by default) and videos (keepVideos; off by default). Every
+   * photo and video bubble is counted against what was saved; photos that
+   * did not load are retried once at the end, within RCS_MEDIA_RETRY_POOL_MS
+   * for the whole run. VIDEOS are counted but not downloaded yet (no live
+   * trace of the video bubble): "couldn't download (not supported yet)".
+   */
+  var RCS_MAX_PHOTO_BYTES = 25 * 1024 * 1024;
+  var RCS_MAX_VIDEO_BYTES = 200 * 1024 * 1024;
+  var RCS_MEDIA_RETRY_POOL_MS = 5 * 60000;
+  var VIDEO_FILE_RE = /\.(mp4|mov|m4v|3gp|3gpp|webm|avi)$/i;
+  var NOT_LOADED_IMAGE = "image (not loaded)";
+  var MEDIA_REASON_TEXT = {
+    notLoaded: "didn't load", readFailed: "couldn't be read", tooLarge: "too large", failed: "Keepr couldn't save",
+    notSupported: "not supported yet",
+  };
+  /**
    * Google's connection banner (scan.connectionBanner): the job pauses while
    * it shows and resumes when it clears; past RCS_CONNECTION_LOST_MS it ends
    * with a named reason (not a pile of per-chat failures).
@@ -148,6 +166,10 @@
     if (s.notText > 0) {
       lines.push(s.notText + " not a text conversation (e.g. an AI chat) — skipped");
     }
+    var photoLine = mediaLine("Photos", s.media && s.media.photos);
+    if (photoLine) lines.push(photoLine);
+    var videoLine = mediaLine("Videos", s.media && s.media.videos);
+    if (videoLine) lines.push(videoLine);
     if (s.imagesNotKept > 0) {
       lines.push(s.imagesNotKept + " images not kept (no transaction contact in the chat)");
     }
@@ -238,6 +260,24 @@
   function extraTimeLine(x) {
     if (!x || !(x.usedMs > 0)) return null;
     return "Extra time used: " + Math.ceil(x.usedMs / 60000) + " min of " + Math.round(x.poolMs / 60000);
+  }
+
+  /**
+   * SR M: "Photos: 12 saved · 3 couldn't download (2 didn't load, 1 too large)"
+   * — counts only; null when the run saw none to keep.
+   */
+  function mediaLine(label, m) {
+    if (!m) return null;
+    var failed = 0;
+    var parts = [];
+    ["notLoaded", "readFailed", "tooLarge", "failed", "notSupported"].forEach(function (k) {
+      if (m[k] > 0) {
+        failed += m[k];
+        parts.push(m[k] + " " + MEDIA_REASON_TEXT[k]);
+      }
+    });
+    if (m.saved === 0 && failed === 0) return null;
+    return label + ": " + m.saved + " saved" + (failed > 0 ? " · " + failed + " couldn't download (" + parts.join(", ") + ")" : "");
   }
 
   /** SR S2: the per-kind count line ("History start: …"), or null when no chat was imported. */
@@ -507,6 +547,13 @@
     var totals = { chats: 0, messages: 0, images: 0, reactions: 0, historyConfirmed: { marker: 0, first_page: 0, no_overflow: 0, date_floor: 0, none: 0 },
       depth: { limit: 0, start: 0, partial: 0, gaps: 0, gapsRecovered: 0, floorDays: null }, removedByUser: 0, imagesNotKept: 0, notText: 0, noMessagesYet: 0, notSynced: 0 };
     var contactsWithoutPhone = 0;
+    // SR M: every photo / video bubble against what was saved (counts only).
+    var media = {
+      photos: { seen: 0, saved: 0, notKept: 0, notLoaded: 0, readFailed: 0, tooLarge: 0, failed: 0, recovered: 0 },
+      videos: { seen: 0, saved: 0, notKept: 0, notSupported: 0 },
+    };
+    /** Chats whose photos did not load: retried once at the end (bounded). */
+    var mediaRetry = [];
     // SR: the per-RUN pool of extra history time, shared by every chat.
     var extraTime = {
       poolMs: typeof env.scan.RCS_HISTORY_EXTENSION_POOL_MS === "number" ? env.scan.RCS_HISTORY_EXTENSION_POOL_MS : 30 * 60000,
@@ -580,6 +627,104 @@
       return { resumed: true };
     }
 
+    /**
+     * SR M: one photo → Keepr. → "saved" | "notKept" | "tooLarge" |
+     * "readFailed" | "failed" (counts only; the bytes never leave for
+     * anywhere but Keepr on this computer).
+     */
+    async function uploadPhoto(conv, msgId, index, src) {
+      try {
+        var img = await env.readImage(src);
+        if (!img || !/^image\//.test(img.mimeType)) return "readFailed";
+        if (typeof img.base64 === "string" && Math.floor(img.base64.length * 3 / 4) > RCS_MAX_PHOTO_BYTES) return "tooLarge";
+        var up = await call("POST", base + "/attachment", {
+          conversationId: conv.conversationId, msgId: msgId, index: index, mimeType: img.mimeType, base64: img.base64,
+        });
+        if (up.ok) {
+          totals.images += 1;
+          return "saved";
+        }
+        if (up.status === 413) return "tooLarge";
+        if (up.status === 422 && up.body && up.body.error === "not_a_contact") {
+          // An expected skip (Keepr does not keep this chat's photos): counted apart.
+          totals.imagesNotKept += 1;
+          return "notKept";
+        }
+        return "failed";
+      } catch (imgErr) {
+        if (imgErr && imgErr.jobGone) throw imgErr;
+        return "readFailed";
+      }
+    }
+
+    /**
+     * SR M: the end-of-run retry for photos that did not load — each such
+     * chat is opened again and its history re-read down to its oldest missing
+     * photo with the image pass, all within RCS_MEDIA_RETRY_POOL_MS for the
+     * run. Recovered photos move from "didn't load" to "saved".
+     */
+    async function retryMissingPhotos() {
+      if (mediaRetry.length === 0) return;
+      var poolMs = env.mediaRetryPoolMs == null ? RCS_MEDIA_RETRY_POOL_MS : env.mediaRetryPoolMs;
+      var used = 0;
+      var recovered = 0;
+      var tried = 0;
+      for (var r = 0; r < mediaRetry.length && used < poolMs; r++) {
+        var item = mediaRetry[r];
+        var lost = await holdWhileHidden(null);
+        if (lost && lost.code) return;
+        tried += 1;
+        try {
+          var before = env.scan.messageIdSet(env.doc);
+          await env.openConversation(item.conv);
+          var ready = await env.scan.waitForMessageSwap(env.doc, before, { sleep: env.sleep, timeoutMs: env.messagesTimeoutMs });
+          used += 1000;
+          if (!ready) continue;
+          var loc = env.getLocation();
+          var hist = await env.scan.loadHistory(env.doc, {
+            scrollUp: env.scrollMessagesUp || function () {},
+            nudge: env.nudgeMessages, nudgeDown: env.nudgeDownMessages, nudgeReturnStep: env.nudgeReturnMessages,
+            stepDown: env.stepDownMessages, stepBack: env.stepBackMessages, hasScroller: env.hasMessageScroller,
+            imagePass: true, sleep: env.sleep,
+            floorMs: typeof item.oldestMs === "number" ? item.oldestMs - 1 : item.floorMs,
+            budgetMs: Math.max(1000, Math.min(60000, poolMs - used)), extensionPoolLeftMs: 0,
+            extractBatch: function () { return env.extract(env.doc, loc.href, env.now ? env.now() : new Date()).messages; },
+            oldestMs: function () {
+              var ex = env.extract(env.doc, loc.href, env.now ? env.now() : new Date());
+              var min = null;
+              for (var q = 0; q < ex.messages.length; q++) {
+                var t = Date.parse(ex.messages[q].sentAt);
+                if (isFinite(t) && (min === null || t < min)) min = t;
+              }
+              return min;
+            },
+          });
+          used += hist.elapsedMs || 0;
+          var want = {};
+          item.msgIds.forEach(function (id) { want[id] = true; });
+          var got = hist.messages || [];
+          for (var g = 0; g < got.length; g++) {
+            if (!want[got[g].msgId]) continue;
+            var srcs = got[g].imageSrcs || [];
+            for (var s = 0; s < srcs.length; s++) {
+              var outcome = await uploadPhoto(item.conv, got[g].msgId, s, srcs[s]);
+              if (outcome !== "saved") continue;
+              recovered += 1;
+              media.photos.saved += 1;
+              if (media.photos.notLoaded > 0) media.photos.notLoaded -= 1;
+            }
+          }
+        } catch (err) {
+          if (err && err.jobGone) throw err;
+        } finally {
+          if (env.returnToList) await env.returnToList();
+        }
+      }
+      media.photos.recovered = recovered;
+      log("media retry: " + tried + " of " + mediaRetry.length + " chats, " + recovered + " photos recovered, " +
+        Math.round(used / 1000) + "s of " + Math.round(poolMs / 1000) + "s");
+    }
+
     async function report(stage) {
       log("stage: " + stage);
       env.overlay.show(stage, false, RUNNING_EXTRAS);
@@ -605,6 +750,7 @@
         reactions: totals.reactions,
         historyConfirmed: totals.historyConfirmed,
         depth: totals.depth,
+        media: media,
         extraTime: extraTime,
         notChecked: progress.notChecked,
         contactsWithoutPhone: contactsWithoutPhone,
@@ -769,7 +915,11 @@
         // Keepr says whether it keeps this chat's images (a cache Sync keeps
         // them only for chats with a transaction contact); a transaction
         // Sync's matched chat always keeps them.
-        var keepImages = isCache ? !!(match.body && match.body.keepImages) : true;
+        var keepPhotos = isCache
+          ? !!(match.body && (match.body.keepPhotos !== undefined ? match.body.keepPhotos : match.body.keepImages))
+          : true;
+        var keepVideos = isCache ? !!(match.body && match.body.keepVideos) : false;
+        var keepImages = keepPhotos;
         if (!isMatch && match.body && match.body.excluded === true) {
           // BACKLOG-3658 P3c: the user switched this chat off — counted, never silent.
           totals.notSynced += 1;
@@ -945,39 +1095,47 @@
         // GAP GUARD: a gap that could not be bridged — imported as read, reported.
         if (hist.stopReason === "history_gap") leaveOut(conv, "history_gap");
 
+        // SR M: every photo / video bubble of the chat, counted.
+        var missingIds = [];
+        var missingOldest = null;
         for (var j = 0; j < readSet.length; j++) {
           var msg = readSet[j];
           var srcs = msg.imageSrcs || [];
+          var files = msg.files || [];
+          var notLoaded = 0;
+          for (var f = 0; f < files.length; f++) {
+            if (files[f] && files[f].name === NOT_LOADED_IMAGE) notLoaded += 1;
+            else if (files[f] && VIDEO_FILE_RE.test(files[f].name || "")) {
+              media.videos.seen += 1;
+              // Not downloaded yet (no live trace of the video bubble).
+              if (keepVideos) media.videos.notSupported += 1;
+              else media.videos.notKept += 1;
+            }
+          }
+          media.photos.seen += srcs.length + notLoaded;
+          if (!keepPhotos) {
+            media.photos.notKept += srcs.length + notLoaded;
+            if (srcs.length > 0) totals.imagesNotKept += srcs.length;
+            continue;
+          }
+          if (notLoaded > 0) {
+            media.photos.notLoaded += notLoaded;
+            missingIds.push(msg.msgId);
+            var mt = Date.parse(msg.sentAt);
+            if (isFinite(mt) && (missingOldest === null || mt < missingOldest)) missingOldest = mt;
+          }
           for (var n = 0; n < srcs.length; n++) {
-            try {
-              var img = await env.readImage(srcs[n]);
-              if (!img || !/^image\//.test(img.mimeType)) {
-                progress.skipped += 1;
-                imagesFailed += 1;
-                continue;
-              }
-              var up = await call("POST", base + "/attachment", {
-                conversationId: conv.conversationId,
-                msgId: msg.msgId,
-                index: n,
-                mimeType: img.mimeType,
-                base64: img.base64,
-              });
-              if (up.ok) totals.images += 1;
-              else if (up.status === 422 && up.body && up.body.error === "not_a_contact") {
-                // BACKLOG-3658: an expected skip in a cache Sync (no transaction
-                // contact in the chat): counted on its own, never "not imported".
-                totals.imagesNotKept += 1;
-              } else {
-                progress.skipped += 1;
-                imagesFailed += 1;
-              }
-            } catch (imgErr) {
-              if (imgErr && imgErr.jobGone) throw imgErr;
+            var outcome = await uploadPhoto(conv, msg.msgId, n, srcs[n]);
+            if (outcome === "saved") media.photos.saved += 1;
+            else media.photos[outcome] += 1;
+            if (outcome === "readFailed" || outcome === "failed") {
               progress.skipped += 1;
               imagesFailed += 1;
             }
           }
+        }
+        if (missingIds.length > 0) {
+          mediaRetry.push({ conv: conv, msgIds: missingIds, oldestMs: missingOldest, floorMs: floorMs });
         }
       } catch (err) {
         if (err && err.jobGone) {
@@ -1006,6 +1164,7 @@
         : "Checked " + candidates.length + " of " + candidates.length + " chats");
     }
 
+    await retryMissingPhotos();
     if (extraTime.usedMs > 0) {
       log("extra time used: " + Math.ceil(extraTime.usedMs / 60000) + " min of " + Math.round(extraTime.poolMs / 60000));
     }
@@ -1025,6 +1184,8 @@
       notText: totals.notText,
       noMessagesYet: totals.noMessagesYet,
       connection: connection,
+      // SR M: photo / video counts (telemetry; counts only).
+      media: media,
       historyConfirmed: totals.historyConfirmed,
       // L2: how the list scan stopped (Keepr records the coverage only for a normal stop).
       listStop: collected.stopReason,
@@ -1636,6 +1797,10 @@
     idleReachability: idleReachability,
     lastSyncText: lastSyncText,
     windowLabel: windowLabel,
+    mediaLine: mediaLine,
+    RCS_MAX_PHOTO_BYTES: RCS_MAX_PHOTO_BYTES,
+    RCS_MAX_VIDEO_BYTES: RCS_MAX_VIDEO_BYTES,
+    RCS_MEDIA_RETRY_POOL_MS: RCS_MEDIA_RETRY_POOL_MS,
     DRAG_HANDLE: DRAG_HANDLE,
     claimPage: claimPage,
     ownsPage: ownsPage,

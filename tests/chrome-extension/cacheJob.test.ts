@@ -320,6 +320,118 @@ function cacheEnv(opts: {
 describe("runJob: a cache Sync", () => {
   const ROWS: Array<[string, string | null]> = [["Zed Example", "3:45 PM"], ["Ann Example", "Mon"], ["Bob Example", "Sep 22"], ["Old Example", "Aug 1"]];
 
+  // SR M: media. Every photo / video bubble counted against what was saved.
+  // Mutations: keepPhotos ignored → red ("not kept"); no end-of-run retry →
+  // red ("recovered"); the retry pool unbounded → red ("pool"); a too-large
+  // photo uploaded → red; videos counted as saved / not counted → red.
+  describe("media (SR M)", () => {
+    type Env = ReturnType<typeof cacheEnv>;
+    const media = (t: Env) =>
+      (t.calls.find(([, p]) => p.endsWith("/finish"))![2] as { media: Record<string, Record<string, number>> }).media;
+    const details = (t: Env) => (t.shown[t.shown.length - 1] as [string, boolean, { details: string }])[2].details;
+    const withMatch = (t: Env, body: Record<string, unknown>) => {
+      const api = t.env.api;
+      t.env.api = async (m: string, p: string, b?: Record<string, unknown>) =>
+        p.endsWith("/match") ? (t.calls.push([m, p, b]), { ok: true, status: 200, body: { matched: true, ...body } }) : api(m, p, b);
+    };
+    const oneChat = () => cacheEnv({ rows: ROWS, numbers: { [id(0)]: ["+15555550101"] } });
+
+    it("photos not kept for this chat: counted, none sent", async () => {
+      const t = oneChat();
+      withMatch(t, { keepPhotos: false, keepVideos: false });
+      await job.runJob(JOB, t.env);
+      expect(t.calls.some(([, p]) => p.endsWith("/attachment"))).toBe(false);
+      expect(media(t).photos).toMatchObject({ seen: 1, saved: 0, notKept: 1 });
+    });
+
+    it("photos kept (all chats): saved and shown as \"Photos: N saved\"", async () => {
+      const t = oneChat();
+      withMatch(t, { keepPhotos: true });
+      await job.runJob(JOB, t.env);
+      expect(media(t).photos).toMatchObject({ seen: 1, saved: 1 });
+      expect(details(t)).toContain("Photos: 1 saved");
+    });
+
+    it("a photo that didn't load is retried at the end and recovered", async () => {
+      const t = oneChat();
+      withMatch(t, { keepPhotos: true });
+      const notLoaded = { msgId: "m1", direction: "inbound", sender: "x", text: "", sentAt: new Date(NOW - DAY).toISOString(), transport: "rcs", imageSrcs: [], files: [{ name: "image (not loaded)", size: "" }] };
+      (t.env as Record<string, unknown>).extract = () => ({ conversationId: id(0), title: "x", messages: [notLoaded], skipped: { noDate: 0, noText: 0 } });
+      let loads = 0;
+      (t.env.scan as Record<string, unknown>).loadHistory = async () => {
+        loads += 1;
+        return loads === 1
+          ? { stopReason: "no_more", count: 1, scrolls: 0, nudges: 0 }
+          : { stopReason: "no_more", count: 1, scrolls: 0, nudges: 0, elapsedMs: 3000, messages: [{ ...notLoaded, imageSrcs: ["blob:y"] }] };
+      };
+      await job.runJob(JOB, t.env);
+      expect(loads).toBe(2);
+      expect(media(t).photos).toMatchObject({ seen: 1, saved: 1, notLoaded: 0, recovered: 1 });
+      expect(details(t)).toContain("Photos: 1 saved");
+      expect(details(t)).not.toContain("didn't load");
+    });
+
+    it("the retry has its own bounded pool: past it, photos stay \"didn't load\"", async () => {
+      const t = cacheEnv({ rows: ROWS, numbers: { [id(0)]: ["+15555550101"], [id(1)]: ["+15555550102"] } });
+      withMatch(t, { keepPhotos: true });
+      (t.env as Record<string, unknown>).mediaRetryPoolMs = 2500;
+      const nl = (c: string) => ({ msgId: "m-" + c, direction: "inbound", sender: "x", text: "", sentAt: new Date(NOW - DAY).toISOString(), transport: "rcs", imageSrcs: [], files: [{ name: "image (not loaded)", size: "" }] });
+      let current = "";
+      const open = t.env.openConversation;
+      t.env.openConversation = async (c: { conversationId: string }) => {
+        current = c.conversationId;
+        return open(c);
+      };
+      (t.env as Record<string, unknown>).extract = () => ({ conversationId: current, title: "x", messages: [nl(current)], skipped: { noDate: 0, noText: 0 } });
+      let retries = 0;
+      let main = 0;
+      (t.env.scan as Record<string, unknown>).loadHistory = async (_d: unknown, io: { imagePass?: boolean; extensionPoolLeftMs?: number }) => {
+        if (main < 2) {
+          main += 1;
+          return { stopReason: "no_more", count: 1, scrolls: 0, nudges: 0 };
+        }
+        retries += 1;
+        return { stopReason: "not_settled", count: 1, scrolls: 0, nudges: 0, elapsedMs: 3000, messages: [] };
+      };
+      await job.runJob(JOB, t.env);
+      expect(retries).toBe(1); // 1 s open + 3 s load > the 2.5 s pool: the second chat is not tried
+      expect(media(t).photos).toMatchObject({ seen: 2, saved: 0, notLoaded: 2 });
+      expect(details(t)).toContain("Photos: 0 saved · 2 couldn't download (2 didn't load)");
+    });
+
+    it("a photo over 25 MB is not sent and counts as too large", async () => {
+      const t = oneChat();
+      withMatch(t, { keepPhotos: true });
+      t.env.readImage = async () => ({ mimeType: "image/jpeg", base64: "A".repeat(Math.ceil((job.RCS_MAX_PHOTO_BYTES * 4) / 3) + 8) });
+      await job.runJob(JOB, t.env);
+      expect(t.calls.some(([, p]) => p.endsWith("/attachment"))).toBe(false);
+      expect(media(t).photos).toMatchObject({ tooLarge: 1, saved: 0 });
+      expect(details(t)).toContain("1 too large");
+    });
+
+    it("videos: counted; not downloaded yet when kept (not supported), not kept when off", async () => {
+      const video = { msgId: "v1", direction: "inbound", sender: "x", text: "", sentAt: new Date(NOW - DAY).toISOString(), transport: "rcs", imageSrcs: [], files: [{ name: "clip_01.mp4", size: "" }] };
+      const on = oneChat();
+      withMatch(on, { keepPhotos: true, keepVideos: true });
+      (on.env as Record<string, unknown>).extract = () => ({ conversationId: id(0), title: "x", messages: [video], skipped: { noDate: 0, noText: 0 } });
+      await job.runJob(JOB, on.env);
+      expect(media(on).videos).toEqual({ seen: 1, saved: 0, notKept: 0, notSupported: 1 });
+      expect(details(on)).toContain("Videos: 0 saved · 1 couldn't download (1 not supported yet)");
+      const off = oneChat();
+      withMatch(off, { keepPhotos: true, keepVideos: false });
+      (off.env as Record<string, unknown>).extract = on.env.extract;
+      await job.runJob(JOB, off.env);
+      expect(media(off).videos).toEqual({ seen: 1, saved: 0, notKept: 1, notSupported: 0 });
+      expect(details(off)).not.toContain("Videos:");
+    });
+
+    it("caps and pool are constants", () => {
+      expect(job.RCS_MAX_PHOTO_BYTES).toBe(25 * 1024 * 1024);
+      expect(job.RCS_MAX_VIDEO_BYTES).toBe(200 * 1024 * 1024);
+      expect(job.RCS_MEDIA_RETRY_POOL_MS).toBe(5 * 60000);
+    });
+  });
+
   it("checks every chat above the cutoff, in list order (no names); no number → no_numbers (M3, M4)", async () => {
     const t = cacheEnv({ rows: ROWS, numbers: { [id(0)]: ["+15555550101"], [id(2)]: ["+15555550102"] } });
     const outcome = await job.runJob(JOB, t.env);

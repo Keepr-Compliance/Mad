@@ -23,6 +23,7 @@ let mockState: RcsExtensionState;
 const mockClear = jest.fn();
 const mockAutoDelete = jest.fn();
 const mockConsent = jest.fn();
+const mockSetMedia = jest.fn();
 let mockExcluded: Array<{ id: string; title: string | null; createdAt: string }> = [];
 let mockPrefs: Record<string, unknown> = {};
 const mockUpdatePrefs = jest.fn();
@@ -40,6 +41,7 @@ jest.mock("../../../services/rcsImportService", () => ({
     clearTexts: (...a: unknown[]) => mockClear(...a),
     setCacheAutoDelete: (...a: unknown[]) => mockAutoDelete(...a),
     setCacheConsent: (...a: unknown[]) => mockConsent(...a),
+    setMediaOptions: (...a: unknown[]) => mockSetMedia(...a),
     listExclusions: async () => ({ success: true, data: mockExcluded }),
     onDataChanged: () => () => undefined,
   },
@@ -58,6 +60,7 @@ beforeEach(() => {
   mockClear.mockResolvedValue({ success: true, data: { messagesDeleted: 175, androidMessagesDeleted: 12, contactsDeleted: 3 } });
   mockAutoDelete.mockResolvedValue({ success: true });
   mockConsent.mockResolvedValue({ success: true });
+  mockSetMedia.mockResolvedValue({ success: true });
   mockExcluded = [];
   mockPrefs = {};
   mockUpdatePrefs.mockResolvedValue({ success: true });
@@ -196,5 +199,35 @@ describe("GoogleMessagesSettings", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Manage" }));
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
     expect(screen.queryByTestId("gm-not-synced-modal")).toBeNull();
+  });
+
+  // SR M: "Download photos / videos from all chats". Photos ON and videos OFF
+  // by default; videos ask first, with the storage estimate. Mutations: the
+  // defaults inverted, videos switched on without asking, no estimate → red.
+  it("media toggles: photos on by default; videos ask first with the storage estimate (M5)", async () => {
+    render(<GoogleMessagesSettings userId="user-1" />);
+    const photos = (await screen.findByTestId("gm-photos-all")) as HTMLInputElement;
+    const videos = screen.getByTestId("gm-videos-all") as HTMLInputElement;
+    expect(photos.checked).toBe(true);
+    expect(videos.checked).toBe(false);
+    fireEvent.click(photos);
+    await waitFor(() => expect(mockSetMedia).toHaveBeenCalledWith({ photosAllChats: false }));
+    mockSetMedia.mockClear();
+    fireEvent.click(videos);
+    expect(mockSetMedia).not.toHaveBeenCalled();
+    expect(screen.getByTestId("gm-videos-estimate")).toHaveTextContent("Sync once to see an estimate");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(mockSetMedia).not.toHaveBeenCalled();
+    fireEvent.click(videos);
+    fireEvent.click(screen.getByRole("button", { name: "Turn on videos" }));
+    await waitFor(() => expect(mockSetMedia).toHaveBeenCalledWith({ videosAllChats: true }));
+  });
+
+  it("the video estimate from the last Sync's count", () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { videoEstimateText } = require("../GoogleMessagesSettings") as typeof import("../GoogleMessagesSettings");
+    expect(videoEstimateText(6)).toBe("Your last Sync saw 6 videos: about 150 MB on this computer at 25 MB each (a video can be up to 200 MB).");
+    expect(videoEstimateText(80)).toContain("about 2.0 GB");
+    expect(videoEstimateText(null)).toContain("Sync once");
   });
 });

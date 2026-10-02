@@ -152,6 +152,18 @@ export const rcsImportService = {
     }
   },
 
+  /** SR M: "Download photos / videos from all chats" (switching one ON reads existing chats' media next Sync). */
+  async setMediaOptions(args: { photosAllChats?: boolean; videosAllChats?: boolean }): Promise<ApiResult<void>> {
+    const bridge = api();
+    if (!bridge || !bridge.setMediaOptions) return { success: false, error: NOT_AVAILABLE };
+    try {
+      const r = await bridge.setMediaOptions(args);
+      return r.success ? { success: true } : { success: false, error: r.error ?? "Keepr could not save that." };
+    } catch (err) {
+      return { success: false, error: getErrorMessage(err) };
+    }
+  },
+
   /** BACKLOG-3659: copy the extension to Downloads/"Keepr Extension". */
   async prepareExtension(): Promise<ApiResult<{ folder: string; version: string }>> {
     const bridge = api();

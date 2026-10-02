@@ -192,8 +192,14 @@ export interface RcsExtensionBridgeOptions {
   listExclusions?: (userId: string) => string[];
   /** P3c: POST /exclusions/set — the eye on a row. */
   setExclusion?: (userId: string, conversationId: string, excluded: boolean) => void;
-  /** History v2: does Keepr keep images of a cache chat with these numbers (E.164)? */
-  cacheImagesKept?: (userId: string, numbers: string[]) => boolean;
+  /**
+   * SR M: does Keepr keep this cache chat's photos / videos (E.164 numbers)?
+   * Replied to /match as keepPhotos / keepVideos (+ keepImages = keepPhotos
+   * for an older extension). Booleans only.
+   */
+  cacheMediaKept?: (jobId: string, userId: string, numbers: string[]) => { photos: boolean; videos: boolean };
+  /** SR M: the photo / video bubbles a finished Sync counted (counts only). */
+  onMediaCounts?: (userId: string, counts: { photosSeen: number; videosSeen: number }) => void;
   /** BACKLOG-3658: the signed-in user now; a job of another user is cancelled. */
   currentUserId?: () => Promise<string | null>;
   /** BACKLOG-3658: a job ended (finished, failed or cancelled). Once per job. */
@@ -791,9 +797,10 @@ export class RcsExtensionBridge {
         const matched = job.kind === "cache" ? job.isMatched(conversationId) : contactIds.length > 0;
         // History v2: whether Keepr keeps this chat's images, so the page runs
         // its image pass only where it matters (a boolean — no names, no numbers).
-        if (job.kind === "cache" && matched && this.options.cacheImagesKept && job.userId) {
+        if (job.kind === "cache" && matched && this.options.cacheMediaKept && job.userId) {
           const normalized = participantKey(shown).split(",").filter(Boolean);
-          sendJson(res, 200, { matched, contactIds, keepImages: this.options.cacheImagesKept(job.userId, normalized) });
+          const kept = this.options.cacheMediaKept(job.jobId, job.userId, normalized);
+          sendJson(res, 200, { matched, contactIds, keepPhotos: kept.photos, keepVideos: kept.videos, keepImages: kept.photos });
           return;
         }
         sendJson(res, 200, { matched, contactIds });
@@ -915,6 +922,15 @@ export class RcsExtensionBridge {
         return;
       }
       case "finish": {
+        // SR M: the media counts (numbers only) for the video storage estimate.
+        const media = body.media && typeof body.media === "object" ? (body.media as Record<string, unknown>) : null;
+        const seen = (k: string): number | null => {
+          const m = media && media[k] && typeof media[k] === "object" ? (media[k] as Record<string, unknown>) : null;
+          return m && typeof m.seen === "number" && Number.isFinite(m.seen) && m.seen >= 0 ? Math.floor(m.seen) : null;
+        };
+        if (job.kind === "cache" && job.userId && this.options.onMediaCounts && seen("photos") !== null && seen("videos") !== null) {
+          this.options.onMediaCounts(job.userId, { photosSeen: seen("photos") as number, videosSeen: seen("videos") as number });
+        }
         job.finish(
           this.jobs.nowMs(),
           parseNotReached(body.notReached, body.notReachedMore),

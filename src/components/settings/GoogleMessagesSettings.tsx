@@ -24,6 +24,19 @@
  */
 
 import React, { useCallback, useEffect, useState } from "react";
+
+/** SR M: the typical size used for the video storage estimate (a video may be up to 200 MB). */
+export const VIDEO_ESTIMATE_MB = 25;
+
+/** SR M: the storage estimate shown BEFORE videos are switched on (counts only). */
+export function videoEstimateText(lastVideosSeen: number | null | undefined): string {
+  if (typeof lastVideosSeen !== "number") {
+    return "Keepr doesn't know yet how many videos your chats have. Sync once to see an estimate.";
+  }
+  const gb = (lastVideosSeen * VIDEO_ESTIMATE_MB) / 1024;
+  const size = gb >= 1 ? `about ${gb.toFixed(1)} GB` : `about ${Math.max(1, Math.round(lastVideosSeen * VIDEO_ESTIMATE_MB))} MB`;
+  return `Your last Sync saw ${lastVideosSeen} video${lastVideosSeen === 1 ? "" : "s"}: ${size} on this computer at ${VIDEO_ESTIMATE_MB} MB each (a video can be up to 200 MB).`;
+}
 import { rcsImportService } from "../../services/rcsImportService";
 import { settingsService } from "../../services";
 import { LookbackMonthsSelect, lastMonthsPhrase, parseLookbackOption } from "./LookbackMonthsSelect";
@@ -104,6 +117,14 @@ export function GoogleMessagesSettings({ userId }: { userId: string }) {
     // A chat switched off (or on) with the eye on the page.
     return rcsImportService.onDataChanged(() => void refreshExcluded());
   }, [refresh, refreshExcluded]);
+
+  // SR M: "Download photos / videos from all chats". Videos ask first (storage).
+  const [videoConfirm, setVideoConfirm] = useState(false);
+  const setMedia = useCallback(async (patch: { photosAllChats?: boolean; videosAllChats?: boolean }) => {
+    const r = await rcsImportService.setMediaOptions(patch);
+    if (!r.success) setResult({ ok: false, text: r.error ?? "Keepr could not save that." });
+    await refresh();
+  }, [refresh]);
 
   const toggleAutoDelete = useCallback(async (on: boolean) => {
     const r = await rcsImportService.setCacheAutoDelete(on);
@@ -207,6 +228,66 @@ export function GoogleMessagesSettings({ userId }: { userId: string }) {
           </span>
         </span>
       </label>
+
+      {/* SR M: media from chats with no transaction contact. Photos ON, videos OFF by default. */}
+      <label className="flex items-start gap-3 p-4 bg-white rounded-lg border border-gray-200 cursor-pointer">
+        <input
+          type="checkbox"
+          className="mt-0.5 w-5 h-5"
+          checked={state?.media ? state.media.photosAllChats : true}
+          onChange={(e) => void setMedia({ photosAllChats: e.target.checked })}
+          data-testid="gm-photos-all"
+        />
+        <span>
+          <span className="block text-sm font-medium text-gray-900">Download photos from all chats</span>
+          <span className="block text-xs text-gray-600">
+            On: photos are saved for every chat in the period. Off: only for chats with a transaction contact.
+          </span>
+        </span>
+      </label>
+      <label className="flex items-start gap-3 p-4 bg-white rounded-lg border border-gray-200 cursor-pointer">
+        <input
+          type="checkbox"
+          className="mt-0.5 w-5 h-5"
+          checked={!!state?.media?.videosAllChats}
+          onChange={(e) => {
+            if (e.target.checked) setVideoConfirm(true);
+            else void setMedia({ videosAllChats: false });
+          }}
+          data-testid="gm-videos-all"
+        />
+        <span>
+          <span className="block text-sm font-medium text-gray-900">Download videos from all chats</span>
+          <span className="block text-xs text-gray-600">
+            Off by default. Videos take much more space than photos.
+          </span>
+        </span>
+      </label>
+      {videoConfirm && (
+        <div className="p-3 bg-amber-50 border border-amber-300 rounded-lg" role="alert" data-testid="gm-videos-confirm">
+          <p className="text-xs text-amber-800" data-testid="gm-videos-estimate">{videoEstimateText(state?.media?.lastVideosSeen)}</p>
+          <p className="text-xs text-amber-800 mt-1">Video download arrives in a coming update; until then videos are counted, not saved.</p>
+          <div className="flex gap-2 mt-2">
+            <button
+              type="button"
+              className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-medium rounded"
+              onClick={() => {
+                setVideoConfirm(false);
+                void setMedia({ videosAllChats: true });
+              }}
+            >
+              Turn on videos
+            </button>
+            <button
+              type="button"
+              className="px-3 py-1.5 bg-white hover:bg-gray-100 text-gray-700 text-xs font-medium rounded border border-gray-300"
+              onClick={() => setVideoConfirm(false)}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {result && (
         <div

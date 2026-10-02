@@ -87,6 +87,8 @@ export interface RcsExtensionState {
   autoDeleteDays?: number | null;
   /** The months a cache Sync copies (messageImport.filters); null = All time. */
   lookbackMonths?: number | null;
+  /** SR M: the media toggles (local), and the bubbles the last Sync counted (for the video estimate). */
+  media?: { photosAllChats: boolean; videosAllChats: boolean; lastPhotosSeen: number | null; lastVideosSeen: number | null };
 }
 
 export type RcsExtensionStateResult =
@@ -145,6 +147,8 @@ export interface WindowApiRcsImport {
   setCacheConsent?: (args: { version: number | null }) => Promise<{ success: boolean; error?: string }>;
   /** P3b: cache options (auto-delete; contacts-only in a development build only). */
   setCacheOptions?: (args: { autoDelete?: boolean; contactsOnly?: boolean }) => Promise<{ success: boolean; error?: string }>;
+  /** SR M: "Download photos / videos from all chats". */
+  setMediaOptions?: (args: { photosAllChats?: boolean; videosAllChats?: boolean }) => Promise<{ success: boolean; error?: string }>;
   /** BACKLOG-3658: is the extension installed / paired, opted in, last cache Sync. */
   getExtensionState: () => Promise<RcsExtensionStateResult>;
   /** BACKLOG-3658 P3c: the chats switched off ("Don't sync"), with stored titles when Keepr has them. */

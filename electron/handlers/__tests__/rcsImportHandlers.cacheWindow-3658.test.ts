@@ -18,6 +18,8 @@ export {};
 let mockLastCacheOptions: unknown = null;
 const handlers = new Map<string, (event: unknown, args?: unknown) => Promise<unknown>>();
 const created: Array<{ userId: string; since: string }> = [];
+let mockLastFinished: string | null = null;
+let mockMediaPending = false;
 const electronApp = { isPackaged: true, getPath: () => "/tmp/keepr-test" };
 let planStart: string | null = "2026-07-01T00:00:00.000Z";
 let mockConsentVersion: number | null = 1;
@@ -50,7 +52,7 @@ jest.mock("../../services/rcsExtensionBridge", () => ({
 jest.mock("../../services/databaseService", () => ({
   __esModule: true,
   default: {
-    getRcsCacheState: () => ({ optedInAt: "2026-09-01T00:00:00.000Z", lastCacheFinishedAt: null, ownNumber: null }),
+    getRcsCacheState: () => ({ optedInAt: "2026-09-01T00:00:00.000Z", lastCacheFinishedAt: mockLastFinished, ownNumber: null }),
     getRcsConsent: () => ({ consentAt: "2026-09-01T00:00:00.000Z", consentVersion: mockConsentVersion, contactsOnly: false, autoDeleteDays: null }),
     rcsStagingDbOps: () => ({ deleteAll: () => undefined, journalRows: () => [] }),
     setRcsConsent: (...a: unknown[]) => mockSetConsent(...a),
@@ -96,6 +98,14 @@ jest.mock("../../services/db/rcsCacheRunsDbService", () => ({
   getRcsCacheRun: () => mockLastRun,
   clearRcsCacheRun: jest.fn(),
 }));
+jest.mock("../../services/db/rcsMediaDbService", () => ({
+  RCS_MEDIA_DEFAULTS: { photosAllChats: true, videosAllChats: false, lastPhotosSeen: null, lastVideosSeen: null },
+  getRcsMediaOptions: () => ({ photosAllChats: true, videosAllChats: false, lastPhotosSeen: null, lastVideosSeen: null }),
+  hasPendingMediaRead: () => mockMediaPending,
+  clearPendingMediaRead: jest.fn(),
+  recordRcsMediaSeen: jest.fn(),
+  setRcsMediaOptions: jest.fn(),
+}));
 jest.mock("../../utils/wrapHandler", () => ({
   wrapHandler: (fn: (event: unknown, args?: unknown) => Promise<unknown>) => fn,
 }));
@@ -107,6 +117,8 @@ beforeAll(() => registerRcsImportHandlers());
 beforeEach(() => {
   created.length = 0;
   planStart = "2026-07-01T00:00:00.000Z";
+  mockLastFinished = null;
+  mockMediaPending = false;
   mockConsentVersion = 1;
   mockSetConsent.mockClear();
 });
@@ -114,6 +126,21 @@ beforeEach(() => {
 const start = (args?: unknown) => handlers.get("rcs-import:start-cache-job")!({}, args) as Promise<{ success: boolean }>;
 
 describe("rcs-import:start-cache-job window (BACKLOG-3658)", () => {
+  // SR M: a media toggle switched ON → the next Sync reads every chat down to
+  // the floor (existing chats get their media). Mutation: the pending media
+  // read ignored → the incremental since → red.
+  it("a pending media read: since = the floor, not the incremental since", async () => {
+    electronApp.isPackaged = true;
+    mockLastFinished = "2026-09-29T10:00:00.000Z";
+    expect((await start()).success).toBe(true);
+    expect(created[0].since).not.toBe("2026-07-01T00:00:00.000Z"); // incremental without it
+    created.length = 0;
+    mockMediaPending = true;
+    expect((await start()).success).toBe(true);
+    expect(created[0].since).toBe("2026-07-01T00:00:00.000Z");
+  });
+
+
   it("the months setting: since = the import plan's start (H3)", async () => {
     electronApp.isPackaged = true;
     expect((await start()).success).toBe(true);
@@ -191,5 +218,18 @@ describe("rcs-import:start-cache-job window (BACKLOG-3658)", () => {
     expect(since).toBeLessThanOrEqual(before - 3650 * DAY + 1000);
     expect(since).toBeGreaterThanOrEqual(before - 3650 * DAY - 60_000);
     electronApp.isPackaged = true;
+  });
+});
+
+// SR M: photos / videos kept — a transaction contact, or the "all chats" toggle.
+// Mutation: the toggle ignored, or a contact chat not kept → red.
+describe("mediaKeptFor (SR M)", () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { mediaKeptFor } = require("../rcsImportHandlers") as typeof import("../rcsImportHandlers");
+  it("a contact chat keeps both; otherwise the toggles decide; no options → the defaults", () => {
+    expect(mediaKeptFor({ photosAllChats: false, videosAllChats: false }, true)).toEqual({ photos: true, videos: true });
+    expect(mediaKeptFor({ photosAllChats: true, videosAllChats: false }, false)).toEqual({ photos: true, videos: false });
+    expect(mediaKeptFor({ photosAllChats: false, videosAllChats: true }, false)).toEqual({ photos: false, videos: true });
+    expect(mediaKeptFor(undefined, false)).toEqual({ photos: true, videos: false });
   });
 });

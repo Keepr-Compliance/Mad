@@ -48,6 +48,9 @@ export const rcsImportBridge = {
     ipcRenderer.invoke("rcs-import:set-cache-consent", args),
   setCacheOptions: (args: { autoDelete?: boolean; contactsOnly?: boolean }): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke("rcs-import:set-cache-options", args),
+  /** SR M: "Download photos / videos from all chats". */
+  setMediaOptions: (args: { photosAllChats?: boolean; videosAllChats?: boolean }): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke("rcs-import:set-media-options", args),
 
   /** BACKLOG-3658 P3c: the chats switched off ("Don't sync"). */
   listExclusions: () => ipcRenderer.invoke("rcs-import:list-exclusions"),
