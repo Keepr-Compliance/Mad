@@ -383,7 +383,7 @@ export function AndroidMessagesSettings({ userId }: AndroidMessagesSettingsProps
       {showForceWarning && (
         <div className="mt-3">
           {/* BACKLOG-3657: the ONE Android confirmation, shared with Google Messages. */}
-          <AndroidForceReimportWarning onConfirm={() => void handleForceReimport()} onCancel={() => setShowForceWarning(false)} />
+          <AndroidForceReimportWarning windowMonths={lookbackMonths} onConfirm={() => void handleForceReimport()} onCancel={() => setShowForceWarning(false)} />
         </div>
       )}
     </div>

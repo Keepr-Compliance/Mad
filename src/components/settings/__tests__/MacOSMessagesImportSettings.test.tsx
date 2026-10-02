@@ -212,6 +212,10 @@ describe("MacOSMessagesImportSettings — Force Re-import confirm dialog (BACKLO
     expect(modal).toHaveTextContent(
       /Links from checklist items to their attachments are removed too\./,
     );
+    // SR F1: the window it keeps. Mutation: line missing → red.
+    expect(screen.getByTestId("force-window-line")).toHaveTextContent(
+      "Keeps texts from the last 1.5 months; older texts not in an audit period are removed.",
+    );
   });
 
   it("starts a FORCE import once the destructive confirm is clicked", async () => {

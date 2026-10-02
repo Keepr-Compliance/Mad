@@ -11,7 +11,7 @@ import { ResponsiveModal } from "../common/ResponsiveModal";
 import { ImportInfoPopover } from "./ImportInfoPopover";
 import { emailPrecacheStageDisplayFor } from "../../utils/emailPrecacheStageDisplay";
 import { ConnectionMenu } from "./ConnectionMenu";
-import { LookbackMonthsSelect } from "./LookbackMonthsSelect";
+import { LookbackMonthsSelect, forceWindowLine } from "./LookbackMonthsSelect";
 import { DEFAULT_EMAIL_CACHE_MONTHS } from "./messageImportPreferences";
 import type {
   Connections,
@@ -1039,6 +1039,9 @@ export function EmailSettings({
             review decisions on those emails are lost, and attachments are
             re-downloaded when you next open or export them. This can take a
             while.
+          </p>
+          <p className="text-sm font-medium text-gray-800 -mt-4 mb-6" data-testid="force-window-line">
+            {forceWindowLine(emailCacheDurationMonths, "emails")}
           </p>
           <div className="flex items-center gap-3 justify-end">
             <button

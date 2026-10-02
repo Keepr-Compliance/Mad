@@ -35,7 +35,7 @@ import {
   type ImportPhaseDisplay,
 } from "../../utils/importPhaseDisplay";
 import { FdaHelpSheet } from "../permissions/FdaHelpSheet";
-import { LookbackMonthsSelect, lastMonthsPhrase, lookbackOptionLabel } from "./LookbackMonthsSelect";
+import { LookbackMonthsSelect, forceWindowLine, lastMonthsPhrase, lookbackOptionLabel } from "./LookbackMonthsSelect";
 import { usePlatform } from "../../contexts/PlatformContext";
 import { useSyncOrchestrator } from "../../hooks/useSyncOrchestrator";
 import { settingsService, systemService } from '../../services';
@@ -2534,6 +2534,9 @@ export function MacOSMessagesImportSettings({
             transactions — you&rsquo;ll need to re-attach them afterward. Links
             from checklist items to their attachments are removed too. This
             can take a while.
+          </p>
+          <p className="text-sm font-medium text-gray-800 -mt-4 mb-6" data-testid="force-window-line">
+            {forceWindowLine(lookbackMonths, "texts")}
           </p>
           {/* BACKLOG-2749 / founder `c2300351`: "switch the design of the
               cancel button and the Re-Import&Unlink so the cancel is red and

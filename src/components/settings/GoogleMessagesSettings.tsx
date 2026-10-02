@@ -229,7 +229,7 @@ export function GoogleMessagesSettings({ userId }: { userId: string }) {
       </div>
 
       {showForceWarning && (
-        <AndroidForceReimportWarning onConfirm={() => void forceReimport()} onCancel={() => setShowForceWarning(false)} />
+        <AndroidForceReimportWarning windowMonths={lookbackMonths} onConfirm={() => void forceReimport()} onCancel={() => setShowForceWarning(false)} />
       )}
     </div>
   );

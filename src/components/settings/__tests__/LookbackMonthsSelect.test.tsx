@@ -17,6 +17,7 @@ import "@testing-library/jest-dom";
 import {
   LOOKBACK_MONTH_OPTIONS,
   LookbackMonthsSelect,
+  forceWindowLine,
   lastMonthsPhrase,
   lookbackOptionLabel,
   parseLookbackOption,
@@ -65,6 +66,12 @@ describe("LookbackMonthsSelect", () => {
     expect(labels(screen.getByRole("combobox", { name: "months" }) as HTMLSelectElement)).toEqual([
       "Last 1 month", "Last 3 months (default)", "Last 6 months",
     ]);
+  });
+
+  it("forceWindowLine: what a Force run keeps", () => {
+    expect(forceWindowLine(1.5, "texts")).toBe("Keeps texts from the last 1.5 months; older texts not in an audit period are removed.");
+    expect(forceWindowLine(12, "emails")).toBe("Keeps emails from the last year; older emails are removed from this computer.");
+    expect(forceWindowLine(null, "texts")).toBe("Keeps all your texts.");
   });
 
   it("labels and phrases", () => {

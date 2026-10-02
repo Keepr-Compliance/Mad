@@ -826,6 +826,15 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
       // We DON'T await the DB-ready gate on the callback path itself — the
       // renderer success event has already been sent — so login stays snappy.
       void runAfterDbReady("post-login-consumers", async () => {
+        // SR (2026-10-02): keep an existing user's old 3-month default as an
+        // explicit value BEFORE anything reads the window (the precache below).
+        try {
+          const { grandfatherLookbackDefaultsForUser } = await import("./services/lookbackGrandfatherService");
+          await grandfatherLookbackDefaultsForUser(localUserId);
+        } catch (gfErr) {
+          log.warn("[DeepLink] Lookback grandfathering failed (non-fatal):", gfErr);
+        }
+
         // BACKLOG-1559: Start email precache immediately after login.
         // Don't wait for renderer/dashboard — start in the main process.
         try {

@@ -6,6 +6,7 @@
  */
 
 import React from "react";
+import { lastMonthsPhrase } from "./LookbackMonthsSelect";
 
 export const ANDROID_FORCE_REIMPORT_TITLE =
   "Force re-import will delete every text imported from your Android phone (Google Messages and Android Companion)";
@@ -13,9 +14,22 @@ export const ANDROID_FORCE_REIMPORT_TITLE =
 interface AndroidForceReimportWarningProps {
   onConfirm: () => void;
   onCancel: () => void;
+  /**
+   * SR (2026-10-02): the window the next Sync copies back (this section's
+   * months setting; null = All time). Everything is deleted first, so texts
+   * older than it are not copied back unless an audit period covers them.
+   */
+  windowMonths: number | null;
 }
 
-export function AndroidForceReimportWarning({ onConfirm, onCancel }: AndroidForceReimportWarningProps) {
+/** The line every Android Force dialog states. */
+export function androidForceWindowLine(months: number | null): string {
+  return months === null
+    ? "Syncing again copies all your texts back."
+    : `Syncing again copies texts from ${lastMonthsPhrase(months)}; older texts not in an audit period are not copied back.`;
+}
+
+export function AndroidForceReimportWarning({ onConfirm, onCancel, windowMonths }: AndroidForceReimportWarningProps) {
   return (
     <div className="p-3 bg-amber-50 border border-amber-300 rounded-lg" data-testid="android-force-warning">
       <p className="text-sm font-medium text-amber-800">{ANDROID_FORCE_REIMPORT_TITLE}</p>
@@ -25,6 +39,9 @@ export function AndroidForceReimportWarning({ onConfirm, onCancel }: AndroidForc
         messages&rsquo; attachments are removed too. Your iPhone and Mac texts stay. To import them again, click Sync Android on
         the dashboard, or open the companion app and tap Sync Now. Chats you removed from a transaction stay removed
         when you sync again; you can restore them from &ldquo;Show removed&rdquo; on the transaction.
+      </p>
+      <p className="text-xs font-medium text-amber-900 mt-1" data-testid="force-window-line">
+        {androidForceWindowLine(windowMonths)}
       </p>
       <div className="flex gap-2 mt-2">
         <button

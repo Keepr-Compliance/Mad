@@ -114,6 +114,10 @@ describe("GoogleMessagesSettings", () => {
       "Force re-import will delete every text imported from your Android phone (Google Messages and Android Companion)",
     );
     expect(warning).toHaveTextContent(/you can restore them from “Show removed” on the transaction/);
+    // SR F1: the window the next Sync copies back. Mutation: line missing → red.
+    expect(screen.getByTestId("force-window-line")).toHaveTextContent(
+      "Syncing again copies texts from the last 1.5 months; older texts not in an audit period are not copied back.",
+    );
     fireEvent.click(screen.getByRole("button", { name: /continue with re-import/i }));
     expect(await screen.findByRole("status")).toHaveTextContent(
       "Cleared 175 texts imported from Google Messages and 12 texts and 3 contacts from the Android Companion.",

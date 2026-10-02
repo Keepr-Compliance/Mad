@@ -39,6 +39,18 @@ export function lastMonthsPhrase(months: number): string {
   return `the last ${months} months`;
 }
 
+/**
+ * SR (2026-10-02): every Force dialog states the window it keeps — a Force
+ * run replaces everything with the window's rows. "Keeps texts from the last
+ * 1.5 months; older texts not in an audit period are removed."
+ */
+export function forceWindowLine(months: number | null, what: "texts" | "emails"): string {
+  if (months === null) return `Keeps all your ${what}.`;
+  return what === "emails"
+    ? `Keeps emails from ${lastMonthsPhrase(months)}; older emails are removed from this computer.`
+    : `Keeps texts from ${lastMonthsPhrase(months)}; older texts not in an audit period are removed.`;
+}
+
 interface LookbackMonthsSelectProps {
   value: number | null;
   onChange: (value: string) => void;
