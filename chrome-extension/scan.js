@@ -713,6 +713,14 @@
   var HISTORY_FIRST_PAGE = 25;
 
   /**
+   * SR S2: a short first page confirms the start only when the message set
+   * has been stable this long, with no loading indicator, immediately before.
+   */
+  var HISTORY_FIRST_PAGE_STABLE_MS = 1000;
+  /** At most this long is spent waiting for that stability (then: scroll as usual). */
+  var HISTORY_FIRST_PAGE_MAX_WAIT_MS = 3000;
+
+  /**
    * Waits after a scroll brought nothing: each nudge (a small scroll down and
    * back to the top, so the page's loader fires again) gets the next, longer
    * wait. Real-phone run 2026-10-01: dozens of chats stopped at ~41-50 with
@@ -750,9 +758,11 @@
    *   - "date_floor": the oldest loaded message is EARLIER than `floorMs`
    *     (checked before every scroll, so no scroll when already there);
    *   - "cap": `cap` distinct messages seen (default 2000);
-   *   - "no_more": CONFIRMED at the start of the chat — a start marker
-   *     (HISTORY_START_MARKER_SELECTORS) is on screen, or the whole chat fit
-   *     on the first page (fewer than HISTORY_FIRST_PAGE on open);
+   *   - "no_more": CONFIRMED at the start of the chat (confirmedBy) — a start
+   *     marker (HISTORY_START_MARKER_SELECTORS) is on screen ("marker"), or
+   *     the whole chat fit on the first page (fewer than HISTORY_FIRST_PAGE,
+   *     settled: no loading indicator and stable for
+   *     HISTORY_FIRST_PAGE_STABLE_MS — "first_page");
    *   - "not_settled": UNCONFIRMED — nothing new after every nudge
    *     (HISTORY_NUDGE_WAITS_MS), or the budget (RCS_HISTORY_BUDGET_MS) ran
    *     out. The caller reports it (history_not_settled); never silent.
@@ -808,6 +818,34 @@
       if (confirmedBy) r.confirmedBy = confirmedBy;
       return r;
     }
+    function loadingShown() {
+      return anyMatch(findMessageScroller(doc) || doc, loadingSelectors);
+    }
+    /**
+     * SR S2: the first page is short AND settled — no loading indicator and
+     * the same message set for HISTORY_FIRST_PAGE_STABLE_MS, right now.
+     */
+    async function firstPageSettled() {
+      var last = messageIdSet(doc);
+      var stableFor = 0;
+      var waited = 0;
+      while (waited < HISTORY_FIRST_PAGE_MAX_WAIT_MS && spent < budgetMs) {
+        await io.sleep(step);
+        spent += step;
+        waited += step;
+        absorb();
+        if (count >= HISTORY_FIRST_PAGE) return false;
+        var cur = messageIdSet(doc);
+        if (cur !== last || loadingShown()) {
+          last = cur;
+          stableFor = 0;
+          continue;
+        }
+        stableFor += step;
+        if (stableFor >= HISTORY_FIRST_PAGE_STABLE_MS) return true;
+      }
+      return false;
+    }
     /** Wait up to `ms` for a new message; longer while loading shows. Budget-bounded. */
     async function waitForNew(ms) {
       var waited = 0;
@@ -816,7 +854,7 @@
         spent += step;
         if (absorb() > 0) return true;
         // A loading indicator: this wait does not run down (the budget does).
-        if (!anyMatch(findMessageScroller(doc) || doc, loadingSelectors)) waited += step;
+        if (!loadingShown()) waited += step;
       }
       return false;
     }
@@ -830,19 +868,19 @@
         var oldest = io.oldestMs();
         if (typeof oldest === "number" && oldest < floorMs) return result("date_floor");
       }
-      if (atStart()) return result("no_more", "start_marker");
-      if (scrolls === 0 && firstPage < HISTORY_FIRST_PAGE) return result("no_more", "first_page");
+      if (atStart()) return result("no_more", "marker");
+      if (scrolls === 0 && firstPage < HISTORY_FIRST_PAGE && (await firstPageSettled())) return result("no_more", "first_page");
       if (spent >= budgetMs) return result("not_settled");
       await io.scrollUp();
       scrolls += 1;
       var added = await waitForNew(noNewMs);
       for (var k = 0; !added && k < nudgeWaits.length && spent < budgetMs; k++) {
-        if (atStart()) return result("no_more", "start_marker");
+        if (atStart()) return result("no_more", "marker");
         await nudge();
         nudges += 1;
         added = await waitForNew(nudgeWaits[k]);
       }
-      if (!added) return atStart() ? result("no_more", "start_marker") : result("not_settled");
+      if (!added) return atStart() ? result("no_more", "marker") : result("not_settled");
       // Awaited after every scroll that loaded something, so a caller can end
       // the load (by throwing) as soon as it learns the job was cancelled.
       if (io.checkpoint) await io.checkpoint(count);

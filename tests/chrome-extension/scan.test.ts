@@ -898,7 +898,7 @@ describe("loadHistory: scroll up until the start date, the confirmed start, the 
     const p = historyPane({ total: 60, startMarker: true });
     p.render();
     const r = await hist.loadHistory(document, { ...base(p), floorMs: null, startMarkerSelectors: ["[data-test-chat-start]"] });
-    expect(r).toEqual({ stopReason: "no_more", count: 60, scrolls: 2, nudges: 0, confirmedBy: "start_marker" });
+    expect(r).toEqual({ stopReason: "no_more", count: 60, scrolls: 2, nudges: 0, confirmedBy: "marker" });
   });
 
   it("the start marker list is a named constant, empty until traced live", () => {
@@ -913,6 +913,48 @@ describe("loadHistory: scroll up until the start date, the confirmed start, the 
     p.render();
     const r = await hist.loadHistory(document, { ...base(p), floorMs: null });
     expect(r).toEqual({ stopReason: "no_more", count: 20, scrolls: 0, nudges: 0, confirmedBy: "first_page" });
+    // Only after the set was stable for 1 s.
+    expect(p.clock()).toBeGreaterThanOrEqual(1000);
+  });
+
+  // SR S2. Mutation: confirm without checking the loading indicator → red.
+  it("a short first page with a loading indicator showing is NOT confirmed", async () => {
+    const p = historyPane({ total: 20 });
+    p.render();
+    document.body.insertAdjacentHTML("beforeend", `<div role="progressbar"></div>`);
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null, budgetMs: 30_000 });
+    expect(r.confirmedBy).toBeUndefined();
+    expect(r.stopReason).toBe("not_settled");
+  });
+
+  // SR S2. Mutation: confirm without the stability wait → red.
+  it("a short first page still changing is NOT confirmed until it has been stable for 1 s", async () => {
+    const p = historyPane({ total: 20 });
+    p.render();
+    let clock = 0;
+    let n = 100;
+    const changing = async (ms: number) => {
+      clock += ms;
+      // A new message every 500 ms for the first 2 s, then quiet.
+      if (clock <= 2000 && clock % 500 === 0) document.getElementById("pane")!.insertAdjacentHTML("beforeend", historyWrapper(n++));
+      await p.sleep(ms);
+    };
+    const r = await hist.loadHistory(document, { ...base(p), sleep: changing, floorMs: null });
+    expect(r).toMatchObject({ stopReason: "no_more", confirmedBy: "first_page", scrolls: 0 });
+    expect(clock).toBeGreaterThanOrEqual(3000);
+    // Never while it keeps changing: the 3 s stability window runs out → it scrolls.
+    document.body.innerHTML = "";
+    const q = historyPane({ total: 20 });
+    q.render();
+    let c2 = 0;
+    let m = 200;
+    const always = async (ms: number) => {
+      c2 += ms;
+      if (c2 <= 3000 && c2 % 500 === 0) document.getElementById("pane")!.insertAdjacentHTML("beforeend", historyWrapper(m++));
+      await q.sleep(ms);
+    };
+    const r2 = await hist.loadHistory(document, { ...base(q), sleep: always, floorMs: null, budgetMs: 30_000 });
+    expect(r2.scrolls).toBeGreaterThan(0);
   });
 
   // Mutation: no budget → the spinner keeps it waiting forever (harness throws) → red.

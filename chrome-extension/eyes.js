@@ -259,7 +259,24 @@
     return { scan: scan, observe: observe, refresh: refresh, disconnect: disconnect, decorate: decorate };
   }
 
+  /** `fn` at most once per animation frame (falls back to a 16 ms timer). */
+  function debounceFrame(win, fn) {
+    var pending = false;
+    var raf = win && typeof win.requestAnimationFrame === "function"
+      ? function (cb) { win.requestAnimationFrame(cb); }
+      : function (cb) { setTimeout(cb, 16); };
+    return function () {
+      if (pending) return;
+      pending = true;
+      raf(function () {
+        pending = false;
+        fn();
+      });
+    };
+  }
+
   var api = {
+    debounceFrame: debounceFrame,
     createEyes: createEyes,
     conversationIdOf: conversationIdOf,
     paint: paint,
@@ -354,10 +371,11 @@
     }
     if (!started) void start();
   }, 2000);
-  // The timestamp column moves with the window width: place the eyes again.
-  window.addEventListener("resize", function () {
+  // The timestamp column moves with the window width: place the eyes again,
+  // once per animation frame however many resize events arrive (SR).
+  window.addEventListener("resize", debounceFrame(window, function () {
     if (started) eyes.refresh();
-  });
+  }));
   document.addEventListener("visibilitychange", function () {
     if (document.visibilityState !== "visible" || !started) return;
     // Keepr's Settings may have switched chats back on meanwhile.

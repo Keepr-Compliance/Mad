@@ -246,6 +246,22 @@ describe("the eye on each row", () => {
     expect(l.querySelectorAll(`[${eyes.MARK}]`)).toHaveLength(eyes.BATCH + 7);
   });
 
+  // SR (optional): resize re-placement once per frame. Mutation: no debounce → red.
+  it("debounceFrame: many resize events → one re-placement per animation frame", () => {
+    const frames: Array<() => void> = [];
+    const win = { requestAnimationFrame: (cb: () => void) => frames.push(cb) };
+    let runs = 0;
+    const onResize = eyes.debounceFrame(win, () => (runs += 1));
+    onResize();
+    onResize();
+    onResize();
+    expect(frames).toHaveLength(1);
+    frames.shift()!();
+    expect(runs).toBe(1);
+    onResize();
+    expect(frames).toHaveLength(1);
+  });
+
   it("a row with no conversation address gets no eye", () => {
     document.body.innerHTML = "<div mwskeynavigation><mws-conversation-list-item><a data-e2e-conversation href='/web/settings'></a></mws-conversation-list-item></div>";
     const t = setup();

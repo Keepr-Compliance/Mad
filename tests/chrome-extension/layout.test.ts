@@ -580,7 +580,36 @@ describe("no chat is ever silently left out (BACKLOG-3629)", () => {
     expect(t.finish()).toMatchObject({ notReached: [], notReachedMore: 0 });
     expect(t.shown[t.shown.length - 1]).toBe(job.DONE_LINE);
     const done = t.details[t.details.length - 1];
-    expect(done).toBe("Scanned 1 chats · checked 1 · matched 1 · imported 1 messages");
+    expect(done).toBe(
+      "Scanned 1 chats · checked 1 · matched 1 · imported 1 messages\n" +
+        "History start: 0 confirmed by the start marker · 0 complete on the first page · 1 not confirmed",
+    );
+  });
+
+  // SR S2: how each chat's history start was confirmed — per chat in the step
+  // log, a count per kind in the summary and /finish. Mutation: kind not
+  // recorded / not counted → red.
+  it("history start: confirmedBy per chat in the step log, counted per kind", async () => {
+    const t = planJob([
+      { name: "Chat Marker", matched: true },
+      { name: "Chat First Page", matched: true },
+      { name: "Chat Unconfirmed", matched: true },
+    ]);
+    const kinds = ["marker", "first_page", undefined];
+    let n = 0;
+    (t.env.scan as Record<string, unknown>).loadHistory = async () => {
+      const confirmedBy = kinds[n++];
+      return { stopReason: confirmedBy ? "no_more" : "not_settled", count: 1, scrolls: 0, nudges: 0, ...(confirmedBy ? { confirmedBy } : {}) };
+    };
+    await job.runJob(JOB, t.env);
+    expect(t.finish()).toMatchObject({ historyConfirmed: { marker: 1, first_page: 1, none: 1 } });
+    const copy = t.copies[t.copies.length - 1];
+    expect(copy).toContain("start confirmed by marker");
+    expect(copy).toContain("start confirmed by first_page");
+    expect(copy).toContain("start confirmed by none");
+    expect(t.details[t.details.length - 1]).toContain(
+      "History start: 1 confirmed by the start marker · 1 complete on the first page · 1 not confirmed",
+    );
   });
 
   it("caps the named list at 20 and counts the rest as '+N more' (M7)", async () => {

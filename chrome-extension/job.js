@@ -109,6 +109,8 @@
     if (!s.isCache && s.checked > 0 && s.matched === 0) {
       lines.push("None of the checked chats matched a phone number on this transaction's contacts.");
     }
+    var confirmedLine = historyConfirmedLine(s.historyConfirmed);
+    if (confirmedLine) lines.push(confirmedLine);
     if (s.notChecked > 0) {
       lines.push("Not checked: " + s.notChecked + " chats (name didn't match a contact on this transaction)");
     }
@@ -160,6 +162,18 @@
     return scanned + " · saved " + plural(s.saved.chats, "chat", "chats") + " · " +
       plural(s.saved.messages, "message", "messages") + " (" + s.saved.newMessages + " new)" +
       (typeof s.saved.reactions === "number" ? " · " + plural(s.saved.reactions, "reaction", "reactions") : "");
+  }
+
+  /** SR S2: "marker" | "first_page" | "none" — how a chat's history start was confirmed. */
+  function startConfirmedBy(hist) {
+    return hist && (hist.confirmedBy === "marker" || hist.confirmedBy === "first_page") ? hist.confirmedBy : "none";
+  }
+
+  /** SR S2: the per-kind count line ("History start: …"), or null when no chat was imported. */
+  function historyConfirmedLine(c) {
+    if (!c || c.marker + c.first_page + c.none === 0) return null;
+    return "History start: " + c.marker + " confirmed by the start marker · " + c.first_page +
+      " complete on the first page · " + c.none + " not confirmed";
   }
 
   /** On-screen Details: real names are fine on the user's own page. */
@@ -370,7 +384,7 @@
       return reply;
     }
     var progress = { listed: 0, candidates: 0, checked: 0, skipped: 0, notChecked: 0 };
-    var totals = { chats: 0, messages: 0, images: 0, reactions: 0, removedByUser: 0, imagesNotKept: 0, notText: 0, noMessagesYet: 0, notSynced: 0 };
+    var totals = { chats: 0, messages: 0, images: 0, reactions: 0, historyConfirmed: { marker: 0, first_page: 0, none: 0 }, removedByUser: 0, imagesNotKept: 0, notText: 0, noMessagesYet: 0, notSynced: 0 };
     var contactsWithoutPhone = 0;
 
     // BACKLOG-3658: progress lines carry the page's Cancel (this job only).
@@ -416,6 +430,7 @@
         messages: totals.messages,
         images: totals.images,
         reactions: totals.reactions,
+        historyConfirmed: totals.historyConfirmed,
         notChecked: progress.notChecked,
         contactsWithoutPhone: contactsWithoutPhone,
         removedByUser: totals.removedByUser,
@@ -677,8 +692,10 @@
           chatReactions += Array.isArray(messages[rx].reactions) ? messages[rx].reactions.length : 0;
         }
         totals.reactions += chatReactions;
+        // SR S2: how this chat's history start was confirmed, counted per kind.
+        totals.historyConfirmed[startConfirmedBy(hist)] += 1;
         log("  imported " + messages.length + " messages, " + chatReactions + " reactions (history stop: " + hist.stopReason +
-          (hist.confirmedBy ? ", confirmed by " + hist.confirmedBy : "") +
+          ", start confirmed by " + startConfirmedBy(hist) +
           (hist.nudges ? ", nudges " + hist.nudges : "") + ")");
         // Imported, but only back to the cap: older messages are missing.
         if (hist.stopReason === "cap") leaveOut(conv, "history_truncated");
@@ -763,6 +780,7 @@
       notChecked: progress.notChecked,
       notText: totals.notText,
       noMessagesYet: totals.noMessagesYet,
+      historyConfirmed: totals.historyConfirmed,
     });
     if (isCache && finished && finished.body && Object.prototype.hasOwnProperty.call(finished.body, "saved")) {
       saved = finished.body.saved;
