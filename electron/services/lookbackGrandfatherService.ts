@@ -17,12 +17,13 @@
  *   own — WHATEVER this machine holds: a long-time user signing in on a new,
  *   empty machine first must not leave the original machine ungrandfathered
  *   (SR fix: "has data" used to be local).
- *   NEW user — created on/after the cut-over: nothing but the marker, so 1.5
- *   applies even if this machine already imported something.
- *   UNKNOWN — the account row has no created_at: local data decides (a user
- *   with data on this machine is existing). The account row could not be
- *   read (offline): NOTHING is written, not even the marker; retried on the
- *   next sign-in.
+ *   OR this machine already holds data (messages or cached email) — SR: a
+ *   deleted-and-recreated account with an old local database is still
+ *   grandfathered; a recent created_at never overrides local data.
+ *   NEW user — created on/after the cut-over (or no created_at) AND no local
+ *   data: nothing but the marker, so 1.5 applies.
+ *   The account row could not be read (offline): NOTHING is written, not even
+ *   the marker; retried on the next sign-in.
  *
  * The marker (`defaultsMigrations.lookback15`) is written only together with
  * that decision, in the same save.
@@ -60,9 +61,9 @@ const isObj = (v: unknown): v is Prefs => !!v && typeof v === "object" && !Array
 /** existing / new / undecided (write nothing). */
 export function classifyAccount(account: AccountCreatedAt, hasLocalData: boolean): "existing" | "new" | "undecided" {
   if (!account.known) return "undecided";
+  if (hasLocalData) return "existing";
   const t = account.createdAt ? Date.parse(account.createdAt) : NaN;
-  if (Number.isFinite(t)) return t < Date.parse(LOOKBACK_DEFAULT_CUTOVER_ISO) ? "existing" : "new";
-  return hasLocalData ? "existing" : "new";
+  return Number.isFinite(t) && t < Date.parse(LOOKBACK_DEFAULT_CUTOVER_ISO) ? "existing" : "new";
 }
 
 /** The preferences to merge in (always with the marker), or null when already done. */

@@ -6,7 +6,8 @@
  *
  * Mutations that turn this red:
  *   G1 an existing account not grandfathered                     → "existing account"
- *   G2 a new account written 3 (e.g. local data after an import)  → "new account"
+ *   G2 a new account (no local data) written 3                    → "new account"
+ *   G7 a recent created_at overriding local data                  → "recreated account"
  *   G3 a stored choice overwritten                                → "stored choice"
  *   G4 the marker ignored (runs again)                            → "once"
  *   G5 the marker written while undecided (offline)               → "undecided"
@@ -70,10 +71,19 @@ describe("grandfatherLookbackDefaults (SR F1)", () => {
     expect(c.store.prefs!.messageImport.filters.lookbackMonths).toBe(3);
   });
 
-  it("new account: only the marker, even with local data after an import (G2)", async () => {
+  it("new account with no local data: only the marker (G2)", async () => {
     const c = cloud(null);
-    await grandfatherLookbackDefaults("u", c.device(NEW, true));
+    await grandfatherLookbackDefaults("u", c.device(NEW, false));
     expect(c.saves).toEqual([{ defaultsMigrations: { lookback15: true } }]);
+  });
+
+  // SR: a deleted-and-recreated account (recent created_at) on a machine with an
+  // old local database is still an existing user — local data wins.
+  it("recreated account with old local data: grandfathered despite a recent created_at (G7)", async () => {
+    const c = cloud({});
+    await grandfatherLookbackDefaults("u", c.device(NEW, true));
+    expect(c.store.prefs!.messageImport.filters.lookbackMonths).toBe(3);
+    expect(c.store.prefs!.emailCache.durationMonths).toBe(3);
   });
 
   // First sign-in offline, then an import: the account age is unknown → nothing
@@ -82,14 +92,16 @@ describe("grandfatherLookbackDefaults (SR F1)", () => {
     const c = cloud({});
     await grandfatherLookbackDefaults("u", c.device({ known: false }, true));
     expect(c.saves).toEqual([]);
-    await grandfatherLookbackDefaults("u", c.device(NEW, true));
+    await grandfatherLookbackDefaults("u", c.device(NEW, false));
     expect(c.saves).toEqual([{ defaultsMigrations: { lookback15: true } }]);
   });
 
-  it("no created_at on the account row: local data decides", () => {
+  it("existing = created before the cut-over OR local data; unread row → undecided", () => {
     expect(classifyAccount({ known: true, createdAt: null }, true)).toBe("existing");
     expect(classifyAccount({ known: true, createdAt: null }, false)).toBe("new");
-    expect(classifyAccount({ known: true, createdAt: LOOKBACK_DEFAULT_CUTOVER_ISO }, true)).toBe("new");
+    expect(classifyAccount({ known: true, createdAt: LOOKBACK_DEFAULT_CUTOVER_ISO }, false)).toBe("new");
+    expect(classifyAccount({ known: true, createdAt: LOOKBACK_DEFAULT_CUTOVER_ISO }, true)).toBe("existing");
+    expect(classifyAccount(OLD, false)).toBe("existing");
     expect(classifyAccount({ known: false }, true)).toBe("undecided");
   });
 
