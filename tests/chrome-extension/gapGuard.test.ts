@@ -156,6 +156,49 @@ describe("history v2: the nudge's return steps are collected, never judged (SR T
   });
 });
 
+/**
+ * SR T3: a batch that lands in two renders — first poll after the scroll
+ * shows the NEW rows alone (no overlap), two polls later it settles on a
+ * window overlapping what was read. The quiet period waits for the settle.
+ */
+function twoStepPane() {
+  const render = (from: number, to: number) => {
+    let html = "";
+    for (let i = to - 1; i >= from; i--) html += wrapper(i);
+    document.body.innerHTML = `<div id="pane">${html}</div>`;
+  };
+  render(0, 25);
+  let tick = 0;
+  let armedAt = -1;
+  let loaded = false;
+  return {
+    scrollUp: (): void => {
+      if (!loaded && armedAt < 0) armedAt = tick;
+    },
+    sleep: async (): Promise<void> => {
+      tick += 1;
+      if (armedAt < 0 || loaded) return;
+      if (tick - armedAt === 1) render(25, 50); // partial: new rows only
+      if (tick - armedAt === 3) {
+        render(20, 50); // settled: overlaps g20..g24
+        loaded = true;
+      }
+    },
+    oldestMs: (): number | null => null,
+    extractBatch: () =>
+      extract.extractConversation(document, "https://messages.google.com/web/conversations/aaaaaaaaaaaaaaaaaaa", new Date(2026, 8, 21)).messages,
+  };
+}
+
+describe("history v2: a batch is judged only after its quiet period (SR T3)", () => {
+  // Mutation: drop quietPeriod() from requestBatch → the partial render is judged → a gap → red.
+  it("a batch that lands in two renders is not a gap", async () => {
+    const r = await scan.loadHistory(document, { ...twoStepPane(), floorMs: null, hasScroller: () => true, budgetMs: 60_000 });
+    expect(r.gapsDetected).toBeUndefined();
+    expect(r.count).toBe(50);
+  });
+});
+
 describe("gap guard on a recycling list", () => {
   it("every message read is kept (unique, oldest first), though the DOM only ever holds 25 (G2, G4)", async () => {
     const r = await run(recyclingPane({ total: 100 }));
