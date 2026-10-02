@@ -20,6 +20,7 @@
 export {};
 
 import * as fs from "fs";
+import { installPairing, signedReply, uninstallPairing } from "./helpers/pairedWorker";
 import * as path from "path";
 
 /* eslint-disable @typescript-eslint/no-require-imports, @typescript-eslint/no-explicit-any */
@@ -40,6 +41,7 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 
 afterEach(() => {
   document.body.innerHTML = "";
+  uninstallPairing();
 });
 
 describe("the idle chip", () => {
@@ -169,7 +171,9 @@ describe("the worker's last sync record (I7)", () => {
       tabs: { query: jest.fn(async () => []) },
       windows: { update: jest.fn() },
     };
-    const fetchStub = jest.fn(async () => ({ status, json: async () => ({}) }));
+    // BACKLOG-3666: job calls need a pairing; replies signed as Keepr signs them.
+    await installPairing(true);
+    const fetchStub = jest.fn(async (url: string, init: { headers?: Record<string, string> }) => signedReply(url, init, status, {}));
     // eslint-disable-next-line @typescript-eslint/no-implied-eval
     new Function("chrome", "fetch", SOURCE)(chromeStub, fetchStub);
     const send = (m: Record<string, unknown>) =>

@@ -25,10 +25,16 @@ type Listener = (
   sendResponse: (reply: unknown) => void,
 ) => boolean;
 
+import { installPairing, signedReply, uninstallPairing } from "./helpers/pairedWorker";
+
+afterEach(() => uninstallPairing());
+
 const SOURCE = fs.readFileSync(path.join(__dirname, "..", "..", "chrome-extension", "background.js"), "utf8");
 const EXTENSION_ID = "nlfohmjehedijceeelokclkglmjnlonj";
 
-async function loadWorker(opts: { storage?: Record<string, unknown> } = {}) {
+async function loadWorker(opts: { storage?: Record<string, unknown>; paired?: boolean } = {}) {
+  // BACKLOG-3666: job calls need a pairing (paired: replies are signed as Keepr signs them).
+  await installPairing(!!opts.paired);
   let listener: Listener | null = null;
   const chromeStub = {
     runtime: {
@@ -51,10 +57,9 @@ async function loadWorker(opts: { storage?: Record<string, unknown> } = {}) {
   };
   // Typed loosely: tests answer with different bodies (BACKLOG-3641 focus).
   const fetchStub = jest.fn(
-    async (_url: string, _init: { method: string }): Promise<{ status: number; json: () => Promise<Record<string, unknown>> }> => ({
-      status: 404,
-      json: async () => ({ error: "no_job" }),
-    }),
+    async (url: string, init: { method: string; headers?: Record<string, string> }): Promise<{ status: number; json: () => Promise<Record<string, unknown>> }> =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- a signed Response-like stub
+      signedReply(url, init, 404, { error: "no_job" }) as any,
   );
   // eslint-disable-next-line @typescript-eslint/no-implied-eval
   new Function("chrome", "fetch", SOURCE)(chromeStub, fetchStub);
@@ -79,7 +84,7 @@ async function loadWorker(opts: { storage?: Record<string, unknown> } = {}) {
 
 describe("service worker: POST only (BACKLOG-3628)", () => {
   it("the pending check is a POST to /job/pending", async () => {
-    const w = await loadWorker();
+    const w = await loadWorker({ paired: true });
     const reply = await w.send({ type: "keepr-check-pending" });
     expect(w.fetchStub).toHaveBeenCalledTimes(1);
     const [url, init] = w.fetchStub.mock.calls[0];
@@ -96,7 +101,7 @@ describe("service worker: POST only (BACKLOG-3628)", () => {
   });
 
   it("a POST job call is forwarded as a POST", async () => {
-    const w = await loadWorker();
+    const w = await loadWorker({ paired: true });
     await w.send({
       type: "keepr-job-api",
       method: "POST",
