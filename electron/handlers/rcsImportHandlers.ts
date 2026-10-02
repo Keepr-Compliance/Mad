@@ -36,6 +36,7 @@ import {
   chromeCandidates,
   extensionSourceDir,
   extensionTargetDir,
+  launchChrome,
   prepareExtensionFolder,
 } from "../services/rcsExtensionDelivery";
 import {
@@ -706,21 +707,14 @@ export function registerRcsImportHandlers(): void {
     "rcs-import:open-chrome-for-extension",
     wrapHandler(async (): Promise<{ success: true; copied: boolean; opened: boolean }> => {
       clipboard.writeText(CHROME_EXTENSIONS_ADDRESS);
-      let opened = false;
-      for (const candidate of chromeCandidates(process.platform, process.env)) {
-        const there = await fs.promises.access(candidate).then(() => true, () => false);
-        if (!there) continue;
-        try {
-          const child = process.platform === "darwin"
+      const opened = await launchChrome(
+        chromeCandidates(process.platform, process.env),
+        (p) => fs.promises.access(p).then(() => true, () => false),
+        (candidate) =>
+          process.platform === "darwin"
             ? spawn("open", ["-a", candidate], { detached: true, stdio: "ignore" })
-            : spawn(candidate, [], { detached: true, stdio: "ignore" });
-          child.unref();
-          opened = true;
-        } catch {
-          opened = false;
-        }
-        break;
-      }
+            : spawn(candidate, [], { detached: true, stdio: "ignore" }),
+      );
       return { success: true, copied: true, opened };
     }, { module: LOG_TAG }),
   );

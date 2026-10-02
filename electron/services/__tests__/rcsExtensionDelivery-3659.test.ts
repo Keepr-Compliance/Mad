@@ -9,12 +9,16 @@
  *   X2 the copy lands anywhere but Downloads/"Keepr Extension"      → "copies to Downloads"
  *   X3 a build without the extension copies nothing / no error      → "a build without the extension"
  *   X4 Chrome's usual Windows paths missing                        → "where Chrome is"
+ *   L1 a launch failure ('error') unhandled, or reported as opened  → "launchChrome"
+ *   L2 "opened" before the process really started                   → "launchChrome"
  */
 
 import * as path from "path";
 import {
   chromeCandidates,
   extensionSourceDir,
+  launchChrome,
+  type LaunchedProcess,
   prepareExtensionFolder,
   RCS_EXTENSION_FOLDER_NAME,
   type DeliveryFs,
@@ -31,6 +35,54 @@ function fakeFs(files: Record<string, string>): DeliveryFs & { copies: Array<[st
     },
   };
 }
+
+import { EventEmitter } from "events";
+
+function fakeChild(): LaunchedProcess & EventEmitter & { unrefs: number } {
+  const e = new EventEmitter() as EventEmitter & { unrefs: number; unref: () => void };
+  e.unrefs = 0;
+  e.unref = () => {
+    e.unrefs += 1;
+  };
+  return e as unknown as LaunchedProcess & EventEmitter & { unrefs: number };
+}
+
+describe("launchChrome (SR F1)", () => {
+  it("opened only after 'spawn'; an async 'error' is handled and reported as not opened (L1, L2)", async () => {
+    const ok = fakeChild();
+    let settled = false;
+    const p = launchChrome(["/c/chrome"], async () => true, () => ok).then((v) => {
+      settled = true;
+      return v;
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(settled).toBe(false); // not before the process started
+    ok.emit("spawn");
+    expect(await p).toBe(true);
+    expect(ok.unrefs).toBe(1);
+
+    const bad = fakeChild();
+    const q = launchChrome(["/c/chrome"], async () => true, () => bad);
+    await new Promise((r) => setTimeout(r, 0));
+    // With no 'error' listener an EventEmitter throws here (uncaught in main).
+    expect(() => bad.emit("error", new Error("EACCES"))).not.toThrow();
+    expect(await q).toBe(false);
+  });
+
+  it("skips missing candidates; none installed or a throwing start → false", async () => {
+    const tried: string[] = [];
+    const child = fakeChild();
+    const p = launchChrome(["/a", "/b"], async (c) => c === "/b", (c) => (tried.push(c), child));
+    await new Promise((r) => setTimeout(r, 0));
+    child.emit("spawn");
+    expect(await p).toBe(true);
+    expect(tried).toEqual(["/b"]);
+    expect(await launchChrome(["/a"], async () => false, () => child)).toBe(false);
+    expect(await launchChrome(["/a"], async () => true, () => {
+      throw new Error("ENOENT");
+    })).toBe(false);
+  });
+});
 
 describe("extension delivery (BACKLOG-3659)", () => {
   it("source folder: resources when packaged, the repo in development (X1)", () => {

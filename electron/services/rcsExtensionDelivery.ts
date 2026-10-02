@@ -64,6 +64,42 @@ export async function prepareExtensionFolder(
   return { folder, version };
 }
 
+/** What launchChrome needs of a child process (node's ChildProcess has it). */
+export interface LaunchedProcess {
+  once(event: "spawn", listener: () => void): unknown;
+  once(event: "error", listener: (err: Error) => void): unknown;
+  unref(): void;
+}
+
+/**
+ * SR F1: start Chrome (the first installed candidate). Resolves true only
+ * once the process really started ('spawn'); a launch failure ('error', or a
+ * throw) resolves false — never an uncaught exception in the main process.
+ */
+export async function launchChrome(
+  candidates: readonly string[],
+  exists: (p: string) => Promise<boolean>,
+  start: (candidate: string) => LaunchedProcess,
+): Promise<boolean> {
+  for (const candidate of candidates) {
+    if (!(await exists(candidate))) continue;
+    let child: LaunchedProcess;
+    try {
+      child = start(candidate);
+    } catch {
+      return false;
+    }
+    return new Promise<boolean>((resolve) => {
+      child.once("error", () => resolve(false));
+      child.once("spawn", () => {
+        child.unref();
+        resolve(true);
+      });
+    });
+  }
+  return false;
+}
+
 /** Where Google Chrome is usually installed (first that exists wins). */
 export function chromeCandidates(platform: NodeJS.Platform, env: Record<string, string | undefined>): string[] {
   if (platform === "win32") {
