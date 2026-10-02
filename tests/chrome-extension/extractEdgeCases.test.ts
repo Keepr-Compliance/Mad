@@ -110,7 +110,35 @@ describe("extraction edge cases", () => {
     expect(at["1"]).toEqual(new Date(2025, 6, 28, 13, 43));
     expect(at["2"]).toEqual(new Date(2026, 0, 1, 10, 24)); // this year
     expect(at["3"]).toEqual(new Date(2025, 11, 31, 23, 59)); // Dec 31 is in the future this year → last year
-    expect(at["4"]).toEqual(new Date(2026, 0, 2, 14, 56)); // time only → today
+    // time only, no day separator: 2:56 PM is > 5 min in the future at 10:00 → yesterday
+    expect(at["4"]).toEqual(new Date(2026, 0, 1, 14, 56));
+  });
+
+  // SR: a time-only label takes the nearest preceding day separator's day;
+  // else today, or yesterday when today would be > 5 min in the future.
+  // Mutations: the separator ignored / the future rule dropped → red.
+  it("time-only labels: the preceding day separator, across midnight, a \"Yesterday\" header, a future time", () => {
+    const sep = (text: string) => `<mws-tombstone-message-wrapper><div>${text}</div></mws-tombstone-message-wrapper>`;
+    const r = run(`
+      ${sep("Wednesday, Dec 31 · 11:58 PM")}
+      ${textMsg("1", "before midnight", "Received at 11:59 PM")}
+      ${sep("Thursday, Jan 1 · 12:01 AM")}
+      ${textMsg("2", "after midnight", "Received at 12:01 AM")}
+      ${sep("Yesterday · 2:56 PM")}
+      ${sep("2:56 PM ·")}
+      ${textMsg("3", "yesterday afternoon", "Received at 2:56 PM")}
+      ${sep("Today · 9:00 AM")}
+      ${textMsg("4", "this morning", "Received at 9:00 AM")}`);
+    const at = Object.fromEntries(r.messages.map((m) => [m.msgId, new Date(m.sentAt)]));
+    expect(at["1"]).toEqual(new Date(2025, 11, 31, 23, 59));
+    expect(at["2"]).toEqual(new Date(2026, 0, 1, 0, 1));
+    expect(at["3"]).toEqual(new Date(2026, 0, 1, 14, 56)); // the time-only "2:56 PM ·" row is skipped
+    expect(at["4"]).toEqual(new Date(2026, 0, 2, 9, 0));
+    // No separator: a past time is today; within 5 min ahead (clock skew) still today.
+    const past = run(textMsg("5", "earlier", "Received at 9:58 AM"));
+    expect(new Date(past.messages[0].sentAt)).toEqual(new Date(2026, 0, 2, 9, 58));
+    const soon = run(textMsg("6", "clock skew", "Received at 10:04 AM"));
+    expect(new Date(soon.messages[0].sentAt)).toEqual(new Date(2026, 0, 2, 10, 4));
   });
 
   it("quoted reply: the reply is the one message; the quoted name and text are not (X7)", () => {

@@ -202,27 +202,40 @@
   }
 
   /**
-   * GAP GUARD: the messages read during a chat's history load (by msg-id)
-   * merged with the ones on screen at the end, unique, oldest first.
+   * GAP GUARD: the messages on screen at the end merged with the ones read
+   * during the history load (by msg-id), unique, oldest first. The ON-SCREEN
+   * copy is listed first so it wins (its images have loaded, its reactions
+   * are present). Same sentAt (minute precision): numeric msg-id order
+   * (monotonic within a chat), then first-seen order.
    */
   function unionMessages(read, onScreen) {
     var byId = {};
     var out = [];
-    var lists = [read || [], onScreen || []];
+    var lists = [onScreen || [], read || []];
     for (var l = 0; l < lists.length; l++) {
       for (var i = 0; i < lists[l].length; i++) {
         var m = lists[l][i];
         if (!m || !m.msgId || byId[m.msgId]) continue;
         byId[m.msgId] = true;
-        out.push(m);
+        out.push({ m: m, seen: out.length });
       }
     }
-    out.sort(function (a, b) {
-      var ta = Date.parse(a.sentAt);
-      var tb = Date.parse(b.sentAt);
-      return (isFinite(ta) ? ta : 0) - (isFinite(tb) ? tb : 0);
+    function num(id) {
+      var n = /^\d+$/.test(String(id)) ? parseInt(id, 10) : NaN;
+      return isFinite(n) ? n : null;
+    }
+    out.sort(function (x, y) {
+      var tx = Date.parse(x.m.sentAt);
+      var ty = Date.parse(y.m.sentAt);
+      tx = isFinite(tx) ? tx : 0;
+      ty = isFinite(ty) ? ty : 0;
+      if (tx !== ty) return tx - ty;
+      var nx = num(x.m.msgId);
+      var ny = num(y.m.msgId);
+      if (nx !== null && ny !== null && nx !== ny) return nx - ny;
+      return x.seen - y.seen;
     });
-    return out;
+    return out.map(function (e) { return e.m; });
   }
 
   /** On-screen Details: real names are fine on the user's own page. */
@@ -1401,6 +1414,7 @@
     SYNCING_HINT: SYNCING_HINT,
     LIST_NOT_REACHABLE: LIST_NOT_REACHABLE,
     detailsText: detailsText,
+    unionMessages: unionMessages,
     copyText: copyText,
     numberShape: numberShape,
     shortHash: shortHash,

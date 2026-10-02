@@ -181,10 +181,10 @@
       if (!t) return null;
       var th = parseInt(t[2], 10) % 12;
       if (t[4].toUpperCase() === "P") th += 12;
-      var td = startOfDay(now);
       return {
         direction: t[1].toLowerCase() === "sent" ? "outbound" : "inbound",
-        date: new Date(td.getFullYear(), td.getMonth(), td.getDate(), th, parseInt(t[3], 10)),
+        date: timeOnDay(null, th, parseInt(t[3], 10), now),
+        timeOnly: { hour: th, minute: parseInt(t[3], 10) },
       };
     }
     var hour = parseInt(m[3], 10) % 12;
@@ -194,6 +194,39 @@
       direction: m[1].toLowerCase() === "sent" ? "outbound" : "inbound",
       date: new Date(day.getFullYear(), day.getMonth(), day.getDate(), hour, minute),
     };
+  }
+
+  /** A time with no day: on `day` (a day separator's) — else today, or yesterday when today's would be > 5 min in the future. */
+  function timeOnDay(day, hour, minute, now) {
+    if (day) return new Date(day.getFullYear(), day.getMonth(), day.getDate(), hour, minute);
+    var td = startOfDay(now);
+    var d = new Date(td.getFullYear(), td.getMonth(), td.getDate(), hour, minute);
+    if (d.getTime() - now.getTime() > 5 * 60 * 1000) d = new Date(td.getFullYear(), td.getMonth(), td.getDate() - 1, hour, minute);
+    return d;
+  }
+
+  /**
+   * Day separators in the messages pane (UNTRACED shapes, handled
+   * defensively): the date rows Google shows between messages, e.g.
+   * "Monday, July 28, 2025 · 1:43 PM", "Yesterday · 2:56 PM", "2:56 PM ·".
+   */
+  var DAY_SEPARATOR_SELECTORS = "mws-tombstone-message-wrapper, [data-e2e-date-separator], mws-message-date-separator";
+
+  /** The day the nearest preceding day separator names (a time-only one is skipped), or null. */
+  function precedingSeparatorDay(wrapper, now) {
+    var doc = wrapper.ownerDocument;
+    var all = doc.querySelectorAll(SELECTORS.message + ", " + DAY_SEPARATOR_SELECTORS);
+    var idx = Array.prototype.indexOf.call(all, wrapper);
+    for (var i = idx - 1; i >= 0; i--) {
+      var el = all[i];
+      if (el.matches && el.matches(SELECTORS.message)) continue;
+      var parts = normalizeSpace(el.textContent).split("·");
+      for (var p = 0; p < parts.length; p++) {
+        var day = parseDayPhrase(parts[p], now);
+        if (day) return day;
+      }
+    }
+    return null;
   }
 
   function firstText(scope, selectors) {
@@ -396,6 +429,10 @@
         continue;
       }
       var dated = messageLabel(w, now);
+      // A time-only label: the nearest preceding day separator's day.
+      if (dated && dated.parsed.timeOnly) {
+        dated.parsed.date = timeOnDay(precedingSeparatorDay(w, now), dated.parsed.timeOnly.hour, dated.parsed.timeOnly.minute, now);
+      }
       if (!dated) {
         result.skipped.noDate++;
         continue;

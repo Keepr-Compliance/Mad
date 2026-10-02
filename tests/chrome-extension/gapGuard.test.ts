@@ -71,6 +71,30 @@ function recyclingPane(opts: { total: number; jumpAt?: number[]; stuck?: boolean
 const run = (p: ReturnType<typeof recyclingPane>) =>
   scan.loadHistory(document, { ...p, floorMs: null, hasScroller: () => true, nudgeWaitsMs: [250], budgetMs: 60_000 });
 
+// SR: the ON-SCREEN copy wins (images loaded, reactions present); a
+// same-minute sentAt is ordered by numeric msg-id, then first-seen.
+// Mutations: read copy first / no numeric tie-break → red.
+describe("unionMessages (gap guard)", () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-explicit-any
+  const job = require("../../chrome-extension/job.js") as Record<string, any>;
+  const at = "2026-09-20T09:05:00.000Z";
+  it("the on-screen copy of a message wins over the copy read earlier", () => {
+    const read = [{ msgId: "7", sentAt: at, images: 0, reactions: [] }];
+    const onScreen = [{ msgId: "7", sentAt: at, images: 1, reactions: [{ emoji: "x" }] }];
+    expect(job.unionMessages(read, onScreen)).toEqual(onScreen);
+  });
+  it("same minute: numeric msg-id order (10 after 9), then first seen", () => {
+    const read = [
+      { msgId: "10", sentAt: at },
+      { msgId: "9", sentAt: at },
+      { msgId: "b", sentAt: at },
+      { msgId: "a", sentAt: at },
+      { msgId: "1", sentAt: "2026-09-20T09:04:00.000Z" },
+    ];
+    expect(job.unionMessages(read, []).map((m: { msgId: string }) => m.msgId)).toEqual(["1", "9", "10", "b", "a"]);
+  });
+});
+
 describe("gap guard on a recycling list", () => {
   it("every message read is kept (unique, oldest first), though the DOM only ever holds 25 (G2, G4)", async () => {
     const r = await run(recyclingPane({ total: 100 }));

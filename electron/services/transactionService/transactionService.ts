@@ -57,7 +57,7 @@ import auditService from "../auditService";
 import { createEmail, getEmailByExternalId } from "../db/emailDbService";
 import emailAttachmentService from "../emailAttachmentService";
 import * as externalContactDb from "../db/externalContactDbService";
-import { isContactSourceEnabled } from "../../utils/preferenceHelper";
+import { isContactSourceEnabled, isTextPeopleEnabled } from "../../utils/preferenceHelper";
 
 // Hybrid extraction imports
 import { HybridExtractorService } from "../extraction/hybridExtractorService";
@@ -183,7 +183,8 @@ class TransactionService {
       [inferOutlookContacts, inferGmailContacts, inferMessageContacts] = await Promise.all([
         isContactSourceEnabled(userId, "inferred", "outlookEmails", false),
         isContactSourceEnabled(userId, "inferred", "gmailEmails", false),
-        isContactSourceEnabled(userId, "inferred", "messages", false),
+        // BACKLOG-3670 C1: one switch, one default (on for Android: Google Messages).
+        isTextPeopleEnabled(userId),
       ]);
 
       await logService.info(
