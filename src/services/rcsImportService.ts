@@ -152,6 +152,28 @@ export const rcsImportService = {
     }
   },
 
+  /** BACKLOG-3666: a one-time pairing code (5 min, 5 tries, single use) to type into the extension. */
+  async pairCode(): Promise<ApiResult<{ code: string; expiresAt: string }>> {
+    const bridge = api();
+    if (!bridge || !bridge.pairCode) return { success: false, error: NOT_AVAILABLE };
+    try {
+      const r = await bridge.pairCode();
+      return r.success ? { success: true, data: { code: r.code, expiresAt: r.expiresAt } } : { success: false, error: r.error };
+    } catch (err) {
+      return { success: false, error: getErrorMessage(err) };
+    }
+  },
+
+  /** BACKLOG-3666: drop the pairing code shown. */
+  async pairCancel(): Promise<void> {
+    const bridge = api();
+    try {
+      await bridge?.pairCancel?.();
+    } catch {
+      /* nothing to drop */
+    }
+  },
+
   /** SR M: "Download photos / videos from all chats" (switching one ON reads existing chats' media next Sync). */
   async setMediaOptions(args: { photosAllChats?: boolean; videosAllChats?: boolean }): Promise<ApiResult<void>> {
     const bridge = api();

@@ -42,6 +42,8 @@ jest.mock("../../../services/rcsImportService", () => ({
     setCacheAutoDelete: (...a: unknown[]) => mockAutoDelete(...a),
     setCacheConsent: (...a: unknown[]) => mockConsent(...a),
     setMediaOptions: (...a: unknown[]) => mockSetMedia(...a),
+    pairCode: async () => ({ success: true, data: { code: "ZXCVBN23", expiresAt: "2026-10-02T12:05:00.000Z" } }),
+    pairCancel: async () => undefined,
     listExclusions: async () => ({ success: true, data: mockExcluded }),
     onDataChanged: () => () => undefined,
   },
@@ -231,5 +233,20 @@ describe("GoogleMessagesSettings", () => {
     expect(videoEstimateText(6)).toBe("Your last Sync saw 6 videos: about 150 MB on this computer at 25 MB each (a video can be up to 200 MB).");
     expect(videoEstimateText(80)).toContain("about 2.0 GB");
     expect(videoEstimateText(null)).toContain("Sync once");
+  });
+
+  // BACKLOG-3666: Settings says whether the extension is paired with this
+  // Keepr and offers Pair / Re-pair. Mutations: the line wrong, or no code → red.
+  it("pairing: the paired line, and Pair / Re-pair show a one-time code", async () => {
+    const view = render(<GoogleMessagesSettings userId="user-1" />);
+    expect(await screen.findByTestId("gm-pairing-line")).toHaveTextContent("Extension not paired with this Keepr yet");
+    fireEvent.click(screen.getByRole("button", { name: "Pair" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Show pairing code" }));
+    expect(await screen.findByTestId("gm-pair-code")).toHaveTextContent("ZXCV-BN23");
+    view.unmount();
+    mockState = { ...mockState, extensionPaired: true };
+    render(<GoogleMessagesSettings userId="user-1" />);
+    await waitFor(() => expect(screen.getByTestId("gm-pairing-line")).toHaveTextContent("Extension paired with this Keepr"));
+    expect(screen.getByRole("button", { name: "Re-pair" })).toBeInTheDocument();
   });
 });

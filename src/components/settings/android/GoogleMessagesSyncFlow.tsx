@@ -13,6 +13,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { rcsImportService } from "../../../services/rcsImportService";
 import type { RcsExtensionState, RcsJobInfo } from "../../../../electron/types/ipc/window-api-rcs-import";
 import { doneSummaryLines, extensionInstalled, googleMessagesStep, syncCopyLine } from "./googleMessagesSyncSteps";
+import { PairingCodePanel } from "./PairingCodePanel";
 
 const POLL_MS = 3000;
 
@@ -109,6 +110,8 @@ export function GoogleMessagesSyncFlow({ onClose, onUseCompanion, onOpenSettings
   const step = googleMessagesStep({ state, job, continued });
   const installed = extensionInstalled(state);
   const paired = !!state?.pairedAt;
+  /** BACKLOG-3666: the extension paired with THIS Keepr (a Sync is refused until then). */
+  const keeprPaired = state?.extensionPaired === true;
   const doneLines = step === "done" && job ? doneSummaryLines(job) : null;
   const stepRef = useRef(step);
   stepRef.current = step;
@@ -210,7 +213,9 @@ export function GoogleMessagesSyncFlow({ onClose, onUseCompanion, onOpenSettings
           <div className="flex flex-col gap-2 p-3 rounded-xl border border-gray-200">
             <Check ok={installed}>Keepr extension installed</Check>
             <Check ok={paired}>Google Messages connected to your phone</Check>
+            <Check ok={keeprPaired}>Extension paired with this Keepr</Check>
           </div>
+          {installed && !keeprPaired && <PairingCodePanel label="Pair" />}
           {/* Both checks ticked: the pairing instruction is no longer needed. */}
           {installed && paired ? (
             <p className="text-sm text-gray-800 leading-relaxed" data-testid="gm-sync-note">
@@ -229,7 +234,7 @@ export function GoogleMessagesSyncFlow({ onClose, onUseCompanion, onOpenSettings
               </Numbered>
             </ol>
           )}
-          <button type="button" className={primary} onClick={() => void startSync()} disabled={starting}>
+          <button type="button" className={primary} onClick={() => void startSync()} disabled={starting || !keeprPaired}>
             {starting ? "Starting…" : "Open Google Messages and sync"}
           </button>
           <p className="text-xs text-gray-600" data-testid="gm-copy-line">

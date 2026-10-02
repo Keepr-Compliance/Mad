@@ -21,7 +21,33 @@
 
   function render() {
     var state = document.getElementById("keepr-ack-state");
-    var button = document.getElementById("keepr-ack");
+    // BACKLOG-3666: pair with the code Keepr shows (the worker runs the exchange).
+  var pairState = document.getElementById("keepr-pair-state");
+  function showPaired() {
+    try {
+      chrome.runtime.sendMessage({ type: "keepr-pair-status" }, function (r) {
+        void chrome.runtime.lastError;
+        if (pairState) pairState.textContent = r && r.paired ? "Paired with Keepr." : "Not paired yet.";
+      });
+    } catch (_e) { /* not in an extension page */ }
+  }
+  var pairButton = document.getElementById("keepr-pair");
+  var pairInput = document.getElementById("keepr-pair-code");
+  if (pairButton && pairInput) {
+    pairButton.addEventListener("click", function () {
+      pairButton.disabled = true;
+      if (pairState) pairState.textContent = "Pairing…";
+      chrome.runtime.sendMessage({ type: "keepr-pair", code: pairInput.value }, function (r) {
+        void chrome.runtime.lastError;
+        pairButton.disabled = false;
+        if (pairState) pairState.textContent = r && r.ok ? "Paired with Keepr." : (r && r.error) || "Pairing failed. Show a new code in Keepr and try again.";
+        if (r && r.ok) pairInput.value = "";
+      });
+    });
+  }
+  showPaired();
+
+  var button = document.getElementById("keepr-ack");
     if (!state || !button) return;
     if (acknowledged()) {
       state.textContent = "Thanks. You can close this tab and go back to Keepr.";

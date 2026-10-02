@@ -202,3 +202,56 @@ describe("the worker's last sync record (I7)", () => {
     expect(other.local).toEqual({});
   });
 });
+
+// BACKLOG-3666: Keepr is there but this extension is not paired → the chip
+// says "Pair with Keepr" and expands to the code field (never a Sync button).
+// Mutations: the pair chip not shown → red; the code not sent → red; typing
+// reaching Google's shortcuts → red; a failed pair claiming success → red.
+describe("the idle chip when unpaired (BACKLOG-3666)", () => {
+  const unpaired = (over: Record<string, unknown> = {}) => idle({ paired: false, ...over });
+
+  it("collapsed: 'Keepr · Pair with Keepr'; clicking it opens the code field, not Keepr", async () => {
+    const focus = jest.fn(async () => true);
+    const onExpand = jest.fn();
+    const box = render(unpaired(), { focus, onExpand });
+    expect(q(box, "line")!.textContent).toBe("Keepr · Pair with Keepr");
+    q(box, "line")!.click();
+    expect(onExpand).toHaveBeenCalledWith(true);
+    expect(focus).not.toHaveBeenCalled();
+  });
+
+  it("expanded: the code field and Pair; the right code pairs", async () => {
+    const pair = jest.fn(async () => ({ ok: true }));
+    const onPaired = jest.fn();
+    const box = render(unpaired({ pair, onPaired }), { expanded: true });
+    expect(q(box, "open-keepr")).toBeNull();
+    const input = q(box, "pair-code") as HTMLInputElement;
+    input.value = "ab3d-ef7h";
+    q(box, "pair")!.click();
+    await flush();
+    expect(pair).toHaveBeenCalledWith("ab3d-ef7h");
+    expect(q(box, "pair-result")!.textContent).toBe("Paired with Keepr.");
+    expect(onPaired).toHaveBeenCalledTimes(1);
+  });
+
+  it("a refused code shows why and lets the user try again", async () => {
+    const box = render(unpaired({ pair: async () => ({ ok: false, error: "That code didn't match." }) }), { expanded: true });
+    q(box, "pair")!.click();
+    await flush();
+    expect(q(box, "pair-result")!.textContent).toBe("That code didn't match.");
+    expect((q(box, "pair") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("typing the code never reaches the page's keyboard shortcuts", () => {
+    const box = render(unpaired(), { expanded: true });
+    const seen = jest.fn();
+    document.addEventListener("keydown", seen);
+    q(box, "pair-code")!.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    document.removeEventListener("keydown", seen);
+    expect(seen).not.toHaveBeenCalled();
+  });
+
+  it("paired: the usual chip", () => {
+    expect(q(render(idle({ paired: true })), "line")!.textContent).toBe("Keepr · Open Keepr to sync");
+  });
+});

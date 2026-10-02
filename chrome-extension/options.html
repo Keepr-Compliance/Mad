@@ -34,6 +34,14 @@
     <li>An eye on each chat in Google Messages switches syncing to Keepr off or on for that chat. Keyboard: <b>Alt+Shift+E</b> switches the selected chat (change the key at chrome://extensions/shortcuts).</li>
     <li>You agree to this in Keepr itself, before your first sync. Keepr explains there what it keeps, how texts are linked to transactions, and how to delete them.</li>
   </ul>
+  <h2>Pair with Keepr</h2>
+  <p>The extension works only with your own Keepr app. In Keepr, open <b>Settings › Google Messages</b> (or the Sync screen) to see a pairing code, then type it here.</p>
+  <p>
+    <label for="keepr-pair-code">Pairing code</label>
+    <input id="keepr-pair-code" autocomplete="off" spellcheck="false" maxlength="12">
+    <button type="button" id="keepr-pair">Pair</button>
+  </p>
+  <p id="keepr-pair-state" role="status"></p>
   <p id="keepr-ack-state"></p>
   <button type="button" id="keepr-ack">Got it</button>
   <p id="keepr-version" class="version"></p>

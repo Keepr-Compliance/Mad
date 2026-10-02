@@ -15,7 +15,7 @@
  */
 
 import React from "react";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import type { RcsExtensionState, RcsJobInfo } from "../../../../../electron/types/ipc/window-api-rcs-import";
 import { googleMessagesStep, syncCopyLine } from "../googleMessagesSyncSteps";
@@ -28,6 +28,7 @@ const mockOpenChrome = jest.fn();
 const mockConsent = jest.fn();
 let mockCurrentJob: RcsJobInfo | null = null;
 
+const mockPairCode = jest.fn();
 jest.mock("../../../../services/rcsImportService", () => ({
   rcsImportService: {
     getExtensionState: async () => ({ success: true, data: mockState }),
@@ -35,6 +36,8 @@ jest.mock("../../../../services/rcsImportService", () => ({
     showExtensionFolder: async () => undefined,
     openChromeForExtension: (...a: unknown[]) => mockOpenChrome(...a),
     startCacheJob: (...a: unknown[]) => mockStartCache(...a),
+    pairCode: (...a: unknown[]) => mockPairCode(...a),
+    pairCancel: async () => undefined,
     setCacheConsent: (...a: unknown[]) => mockConsent(...a),
     cancelJob: async () => ({ success: true, data: null }),
     getJob: async () => ({ success: true, data: mockCurrentJob }),
@@ -54,7 +57,7 @@ const NOT_INSTALLED: RcsExtensionState = { extensionVersion: null, extensionSeen
 const INSTALLED_NO_CONSENT: RcsExtensionState = {
   ...NOT_INSTALLED, extensionVersion: "0.3.4", extensionSeenAt: "2026-10-01T10:00:00.000Z", consentVersion: null, consentRequired: 1,
 };
-const INSTALLED: RcsExtensionState = { ...INSTALLED_NO_CONSENT, consentVersion: 1, optedIn: true };
+const INSTALLED: RcsExtensionState = { ...INSTALLED_NO_CONSENT, consentVersion: 1, optedIn: true, extensionPaired: true };
 
 function job(over: Partial<RcsJobInfo> = {}): RcsJobInfo {
   return {
@@ -245,5 +248,18 @@ describe("GoogleMessagesSyncFlow", () => {
       fail({ success: false, error: "ENOENT: copyfile" });
     });
     expect(screen.queryByText(/ENOENT/)).toBeNull();
+  });
+
+  // BACKLOG-3666: Connect shows the Pair step until the extension is paired
+  // with this Keepr; Sync stays off until then. Mutations: no pair step, or
+  // Sync enabled while unpaired → red.
+  it("unpaired: the Pair step shows a code, Sync waits until paired", async () => {
+    mockState = { ...INSTALLED, extensionPaired: false };
+    mockPairCode.mockResolvedValue({ success: true, data: { code: "ABCDEFGH", expiresAt: "2026-10-02T12:05:00.000Z" } });
+    render(<GoogleMessagesSyncFlow onClose={() => {}} />);
+    const panel = await screen.findByTestId("gm-pair-panel");
+    expect(screen.getByRole("button", { name: "Open Google Messages and sync" })).toBeDisabled();
+    fireEvent.click(within(panel).getByRole("button", { name: "Pair" }));
+    expect(await screen.findByTestId("gm-pair-code")).toHaveTextContent("ABCD-EFGH");
   });
 });

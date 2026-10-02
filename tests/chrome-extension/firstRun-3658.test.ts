@@ -60,6 +60,10 @@ describe("first-run page", () => {
   it("is informational: the agreement is given in Keepr (F3)", () => {
     const html = read("options.html");
     expect(html).toMatch(/You agree to this in Keepr itself/);
-    expect(read("options.js")).not.toMatch(/fetch\(|sendMessage|127\.0\.0\.1/);
+    // Never the bridge itself. BACKLOG-3666: only the pairing messages to its own worker.
+    const js = read("options.js");
+    expect(js).not.toMatch(/fetch\(|127\.0\.0\.1/);
+    const types = Array.from(js.matchAll(/sendMessage\(\{ type: "([a-z-]+)"/g)).map((m) => m[1]);
+    expect(new Set(types)).toEqual(new Set(["keepr-pair-status", "keepr-pair"]));
   });
 });

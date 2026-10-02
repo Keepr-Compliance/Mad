@@ -1348,6 +1348,10 @@
   var IDLE_CHIP_READY = "Keepr · Open Keepr to sync";
   var IDLE_CHIP_DOWN = "Keepr · Start the Keepr app to sync";
   var IDLE_HOW = "Start a sync from Keepr: Dashboard → Sync Android";
+  /** BACKLOG-3666: Keepr is there but this extension is not paired with it. */
+  var IDLE_CHIP_PAIR = "Keepr · Pair with Keepr";
+  var PAIR_HOW = "Type the code Keepr shows (Settings › Google Messages, or the Sync screen):";
+  var PAIRED_TEXT = "Paired with Keepr.";
 
   // Keepr brand (android-companion BrandMark): the indigo mark with an amber
   // dot; primary #4F46E5 (hover #4338CA); amber #F5A524 for paused/attention.
@@ -1489,7 +1493,9 @@
     var collapsible = state === "syncing" || state === "idle";
     var expanded = !collapsible || !!io.expanded;
     var idle = state === "idle" ? extras.idle : null;
-    var idleReady = !!idle && idle.reachable === true;
+    // BACKLOG-3666: reachable but unpaired → "Pair with Keepr" (the chip expands to the code field).
+    var idleUnpaired = !!idle && idle.reachable === true && idle.paired === false;
+    var idleReady = !!idle && idle.reachable === true && !idleUnpaired;
     /** Idle "Open Keepr" (chip or button): POST /focus; no answer → the down chip. */
     function openKeepr() {
       if (!io.focus) return;
@@ -1567,7 +1573,7 @@
     }
     header.appendChild(badge);
 
-    var title = state === "idle" ? (idleReady ? IDLE_CHIP_READY : IDLE_CHIP_DOWN)
+    var title = state === "idle" ? (idleUnpaired ? IDLE_CHIP_PAIR : idleReady ? IDLE_CHIP_READY : IDLE_CHIP_DOWN)
       : state === "syncing"
       ? (expanded ? SYNCING_TITLE : chipTitle(text))
       : state === "paused" ? PAUSED_TITLE : state === "ask" ? ASK_TITLE : text;
@@ -1575,6 +1581,20 @@
       flex: "1 1 auto", minWidth: "0", fontWeight: "600", color: p.text, whiteSpace: expanded ? "normal" : "nowrap",
     }, title);
     header.appendChild(line);
+    if (idleUnpaired && !expanded) {
+      // The unpaired chip opens the code field.
+      line.setAttribute("role", "button");
+      line.setAttribute("tabindex", "0");
+      line.style.cursor = "pointer";
+      var openPair = function () { if (io.onExpand) io.onExpand(true); };
+      line.addEventListener("click", openPair);
+      line.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          openPair();
+        }
+      });
+    }
     if (idleReady) {
       // The idle chip itself opens Keepr.
       line.setAttribute("role", "button");
@@ -1623,6 +1643,57 @@
     if (!expanded) return;
 
     var bodyStyle = { marginTop: "8px", color: p.muted };
+    if (state === "idle" && idleUnpaired) {
+      // BACKLOG-3666: the code Keepr shows, typed here (never a Sync button).
+      box.appendChild(el("div", "pair-how", { marginTop: "8px", color: p.text }, PAIR_HOW));
+      var pairRow = el("div", "pair-row", { display: "flex", gap: "8px", marginTop: "8px" });
+      var codeInput = doc.createElement("input");
+      codeInput.setAttribute("data-keepr", "pair-code");
+      codeInput.setAttribute("aria-label", "Pairing code");
+      codeInput.setAttribute("autocomplete", "off");
+      codeInput.setAttribute("spellcheck", "false");
+      codeInput.maxLength = 12;
+      Object.assign(codeInput.style, {
+        flex: "1 1 auto", minWidth: "0", font: "inherit", letterSpacing: "2px", textTransform: "uppercase",
+        padding: "6px 8px", borderRadius: "8px", border: "1px solid " + p.secondaryBorder, background: p.secondaryBg, color: p.text,
+      });
+      // Typing here must never reach Google's keyboard shortcuts.
+      ["keydown", "keyup", "keypress"].forEach(function (t) {
+        codeInput.addEventListener(t, function (e) { e.stopPropagation(); });
+      });
+      var pairButton = button("pair", "Pair", "primary");
+      var pairResult = el("div", "pair-result", { marginTop: "6px", color: p.muted, fontSize: "13px" });
+      pairResult.setAttribute("role", "status");
+      var doPair = function () {
+        if (!idle.pair) return;
+        pairButton.disabled = true;
+        pairResult.textContent = "Pairing…";
+        Promise.resolve(idle.pair(codeInput.value)).then(function (r) {
+          if (r && r.ok) {
+            pairResult.textContent = PAIRED_TEXT;
+            if (idle.onPaired) idle.onPaired();
+          } else {
+            pairButton.disabled = false;
+            pairResult.textContent = (r && r.error) || "Pairing failed. Show a new code in Keepr and try again.";
+          }
+        }, function () {
+          pairButton.disabled = false;
+          pairResult.textContent = "Pairing failed. Show a new code in Keepr and try again.";
+        });
+      };
+      pairButton.addEventListener("click", doPair);
+      codeInput.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") doPair();
+      });
+      pairRow.appendChild(codeInput);
+      pairRow.appendChild(pairButton);
+      box.appendChild(pairRow);
+      box.appendChild(pairResult);
+      if (extras.version) {
+        box.appendChild(el("div", "version", { marginTop: "8px", fontSize: "12px", color: p.muted }, "Keepr extension " + extras.version));
+      }
+      return;
+    }
     if (state === "idle") {
       box.appendChild(el("div", "idle-how", { marginTop: "8px", color: p.text }, IDLE_HOW));
       var last = lastSyncText(idle.lastSyncAt, idle.nowMs);
@@ -1913,6 +1984,8 @@
     ASK_TITLE: ASK_TITLE,
     IDLE_CHIP_READY: IDLE_CHIP_READY,
     IDLE_CHIP_DOWN: IDLE_CHIP_DOWN,
+    IDLE_CHIP_PAIR: IDLE_CHIP_PAIR,
+    PAIRED_TEXT: PAIRED_TEXT,
     IDLE_HOW: IDLE_HOW,
     idleReachability: idleReachability,
     lastSyncText: lastSyncText,
@@ -2078,12 +2151,15 @@
   function idleOnScreen() {
     return !lastShown || !!(lastShown.extras && lastShown.extras.idle);
   }
-  function showIdle(reachable, lastSyncAt) {
+  function showIdle(reachable, lastSyncAt, paired) {
     if (running || asking || !idleOnScreen()) return;
     showOverlay("", false, {
       idle: {
-        reachable: reachable, lastSyncAt: lastSyncAt, nowMs: Date.now(),
-        onUnreachable: function () { showIdle(false, lastSyncAt); },
+        reachable: reachable, lastSyncAt: lastSyncAt, nowMs: Date.now(), paired: paired !== false,
+        onUnreachable: function () { showIdle(false, lastSyncAt, paired); },
+        // BACKLOG-3666: the code typed into the chip → the worker pairs.
+        pair: function (code) { return toWorker({ type: "keepr-pair", code: code }); },
+        onPaired: function () { idleExpanded = false; void refreshIdle(); },
       },
       version: manifestVersion(),
     });
@@ -2095,7 +2171,8 @@
     }
     var reach = idleReachability(await toWorker({ type: "keepr-exclusions-list" }));
     var last = await toWorker({ type: "keepr-last-sync" });
-    showIdle(reach === "ready", last && typeof last.at === "number" ? last.at : null);
+    var pairState = await toWorker({ type: "keepr-pair-status" });
+    showIdle(reach === "ready", last && typeof last.at === "number" ? last.at : null, !!(pairState && pairState.paired));
   }
   /** × on a finished Sync, or "Not now": the box goes back to the idle chip. */
   function dismiss() {
