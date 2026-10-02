@@ -685,7 +685,9 @@ export function registerRcsImportHandlers(): void {
         const out = await prepareExtensionFolder(source, app.getPath("downloads"), {
           exists: async (p) => fs.promises.access(p).then(() => true, () => false),
           readText: (p) => fs.promises.readFile(p, "utf8"),
-          copyDir: (from, to) => fs.promises.cp(from, to, { recursive: true, force: true }),
+          copyDir: (from, to) => fs.promises.cp(from, to, { recursive: true, errorOnExist: true }),
+          removeDir: (p) => fs.promises.rm(p, { recursive: true, force: true }),
+          rename: (from, to) => fs.promises.rename(from, to),
         });
         return { success: true, ...out };
       } catch (err) {

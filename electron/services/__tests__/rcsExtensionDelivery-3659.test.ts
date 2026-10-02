@@ -11,9 +11,12 @@
  *   X4 Chrome's usual Windows paths missing                        → "where Chrome is"
  *   L1 a launch failure ('error') unhandled, or reported as opened  → "launchChrome"
  *   L2 "opened" before the process really started                   → "launchChrome"
+ *   S1 copied over the old folder (stale files of an older build kept) → "a real folder"
  */
 
 import * as path from "path";
+import * as nodeFs from "fs";
+import * as os from "os";
 import {
   chromeCandidates,
   extensionSourceDir,
@@ -24,14 +27,20 @@ import {
   type DeliveryFs,
 } from "../rcsExtensionDelivery";
 
-function fakeFs(files: Record<string, string>): DeliveryFs & { copies: Array<[string, string]> } {
+function fakeFs(files: Record<string, string>): DeliveryFs & { copies: Array<[string, string]>; renames: Array<[string, string]> } {
   const copies: Array<[string, string]> = [];
+  const renames: Array<[string, string]> = [];
   return {
     copies,
+    renames,
     exists: async (p) => p in files,
     readText: async (p) => files[p],
     copyDir: async (from, to) => {
       copies.push([from, to]);
+    },
+    removeDir: async () => undefined,
+    rename: async (from, to) => {
+      renames.push([from, to]);
     },
   };
 }
@@ -96,7 +105,38 @@ describe("extension delivery (BACKLOG-3659)", () => {
     const fs = fakeFs({ [path.join(src, "manifest.json")]: JSON.stringify({ version: "0.3.4" }) });
     const out = await prepareExtensionFolder(src, "/home/u/Downloads", fs);
     expect(out).toEqual({ folder: path.join("/home/u/Downloads", RCS_EXTENSION_FOLDER_NAME), version: "0.3.4" });
-    expect(fs.copies).toEqual([[src, path.join("/home/u/Downloads", "Keepr Extension")]]);
+    const target = path.join("/home/u/Downloads", "Keepr Extension");
+    expect(fs.copies).toHaveLength(1);
+    expect(fs.copies[0][0]).toBe(src);
+    expect(fs.renames).toEqual([[fs.copies[0][1], target]]);
+  });
+
+  it("a real folder: an older build's stale files are gone after the copy (S1)", async () => {
+    const tmp = nodeFs.mkdtempSync(path.join(os.tmpdir(), "keepr-ext-3659-"));
+    try {
+      const src = path.join(tmp, "res", "chrome-extension");
+      nodeFs.mkdirSync(src, { recursive: true });
+      nodeFs.writeFileSync(path.join(src, "manifest.json"), JSON.stringify({ version: "0.3.5" }));
+      nodeFs.writeFileSync(path.join(src, "job.js"), "new");
+      const downloads = path.join(tmp, "Downloads");
+      const old = path.join(downloads, "Keepr Extension");
+      nodeFs.mkdirSync(old, { recursive: true });
+      nodeFs.writeFileSync(path.join(old, "job.js"), "old");
+      nodeFs.writeFileSync(path.join(old, "removed-in-new-build.js"), "stale");
+      const out = await prepareExtensionFolder(src, downloads, {
+        exists: async (p) => nodeFs.existsSync(p),
+        readText: async (p) => nodeFs.readFileSync(p, "utf8"),
+        copyDir: (from, to) => nodeFs.promises.cp(from, to, { recursive: true, errorOnExist: true }),
+        removeDir: (p) => nodeFs.promises.rm(p, { recursive: true, force: true }),
+        rename: (from, to) => nodeFs.promises.rename(from, to),
+      });
+      expect(out.folder).toBe(old);
+      expect(nodeFs.readdirSync(old).sort()).toEqual(["job.js", "manifest.json"]);
+      expect(nodeFs.readFileSync(path.join(old, "job.js"), "utf8")).toBe("new");
+      expect(nodeFs.readdirSync(downloads)).toEqual(["Keepr Extension"]);
+    } finally {
+      nodeFs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   it("a build without the extension: a plain error, nothing copied (X3)", async () => {

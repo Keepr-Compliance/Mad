@@ -21,9 +21,12 @@ export const CHROME_EXTENSIONS_ADDRESS = "chrome://extensions";
 
 export interface DeliveryFs {
   exists(p: string): Promise<boolean>;
-  /** Copy a folder (recursive), replacing what is there. */
+  /** Copy a folder (recursive) to a path that does not exist yet. */
   copyDir(from: string, to: string): Promise<void>;
   readText(p: string): Promise<string>;
+  /** Recursive; a missing folder is fine. */
+  removeDir(p: string): Promise<void>;
+  rename(from: string, to: string): Promise<void>;
 }
 
 /** Where the shipped extension is: <resources>/chrome-extension, or the repo's folder in development. */
@@ -42,6 +45,11 @@ export function extensionTargetDir(downloadsDir: string): string {
  * Copy the shipped extension to Downloads (again each time: a newer Keepr
  * brings a newer extension; Chrome's "Reload" then picks it up). Returns the
  * folder and the extension's version.
+ *
+ * SR S1: copied whole into a temp sibling first, then the old fixed-name
+ * folder is removed and the copy renamed into place — so no file of an older
+ * build is left behind (a copy "over" the folder would keep them). A failed
+ * copy leaves the old folder as it was.
  */
 export async function prepareExtensionFolder(
   sourceDir: string,
@@ -60,7 +68,15 @@ export async function prepareExtensionFolder(
     throw new Error("The Google Messages extension in this Keepr build is damaged.");
   }
   const folder = extensionTargetDir(downloadsDir);
-  await fs.copyDir(sourceDir, folder);
+  const staging = `${folder}.new-${process.pid}-${Date.now()}`;
+  try {
+    await fs.copyDir(sourceDir, staging);
+  } catch (err) {
+    await fs.removeDir(staging);
+    throw err;
+  }
+  await fs.removeDir(folder);
+  await fs.rename(staging, folder);
   return { folder, version };
 }
 
