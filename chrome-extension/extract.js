@@ -90,6 +90,24 @@
   var SENDER_RE = /^(.+?) (?:said: |sent an image\b|sent a file\b)/;
   /** Reaction tail on a message label: "<Reactor> reacted with <word>." */
   var REACTED_RE = /(?:^|\.\s+)([^.]+?) reacted with ([^.]+?)(?=\.|$)/g;
+  /**
+   * A label with a time and no day ("Received at 2:56 PM" — a message under
+   * a time-only header): today. UNTRACED wording, handled defensively.
+   */
+  var TIME_ONLY_RE = /\b(Sent|Received) at (\d{1,2}):(\d{2})\s*([AP])\.?M\b/i;
+  /** A bubble whose whole text is a video file name ("<uuid>.mp4", "159605.mp4"): an attachment. */
+  var VIDEO_NAME_RE = /^[\w.-]+\.(mp4|mov|m4v|3gp|3gpp|webm|avi)$/i;
+  /**
+   * An SMS tapback summary line ("Loved an image", "Laughed at “…”") sent by
+   * a phone that cannot send RCS reactions: a reaction on its target, not a
+   * message. Verb → emoji.
+   */
+  var TAPBACK_RE = /^(Loved|Liked|Disliked|Laughed at|Emphasized|Questioned) (?:(an image|a photo|a movie|a video|an attachment|a GIF|an audio message)|[“"](.+)[”"])$/;
+  var TAPBACK_EMOJI = {
+    loved: "\u2764\ufe0f", liked: "\ud83d\udc4d", disliked: "\ud83d\udc4e",
+    "laughed at": "\ud83d\ude02", emphasized: "\u203c\ufe0f", questioned: "\u2753",
+  };
+
   /** File label: "<Name> sent a file: <file name>. Sent on …". */
   var FILE_RE = /sent a file: (.+?)\. (?:Sent|Received) on /;
 
@@ -158,7 +176,17 @@
       m = matches[i];
       day = parseDayPhrase(m[2], now);
     }
-    if (!day) return null;
+    if (!day) {
+      var t = text.match(TIME_ONLY_RE);
+      if (!t) return null;
+      var th = parseInt(t[2], 10) % 12;
+      if (t[4].toUpperCase() === "P") th += 12;
+      var td = startOfDay(now);
+      return {
+        direction: t[1].toLowerCase() === "sent" ? "outbound" : "inbound",
+        date: new Date(td.getFullYear(), td.getMonth(), td.getDate(), th, parseInt(t[3], 10)),
+      };
+    }
     var hour = parseInt(m[3], 10) % 12;
     if (m[5].toUpperCase() === "P") hour += 12;
     var minute = parseInt(m[4], 10);
@@ -354,6 +382,14 @@
       var text = messageText(w);
       var images = messageImages(w);
       var files = messageFiles(w);
+      // A video shown as its file name: an attachment, not text.
+      if (images.length === 0 && VIDEO_NAME_RE.test(text)) {
+        files.push({ name: text, size: "" });
+        text = "";
+      }
+      // An image bubble whose image did not load (no blob yet): still an
+      // attachment message, never silently dropped.
+      if (images.length === 0 && hasOwnImagePart(w)) files.push({ name: "image (not loaded)", size: "" });
       // BACKLOG-3620: an image-only (or file-only) message is kept.
       if (!text && images.length === 0 && files.length === 0) {
         result.skipped.noText++;
@@ -382,7 +418,45 @@
         reactions: messageReactions(w),
       });
     }
+    result.messages = foldTapbackLines(result.messages);
     return result;
+  }
+
+  /** An image part of this message (not of a quoted parent), loaded or not. */
+  function hasOwnImagePart(wrapper) {
+    var parts = wrapper.querySelectorAll("mws-image-message-part");
+    for (var i = 0; i < parts.length; i++) {
+      if (!isInside(parts[i], SELECTORS.quoted, wrapper)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Tapback summary lines → reactions on their target: the latest earlier
+   * message whose text is the quoted text, or (for "an image" etc.) the
+   * latest earlier message with media. No target on screen → kept as a
+   * message (never lost).
+   */
+  function foldTapbackLines(messages) {
+    var out = [];
+    for (var i = 0; i < messages.length; i++) {
+      var msg = messages[i];
+      var m = msg.images === 0 && msg.files.length === 0 ? String(msg.text).match(TAPBACK_RE) : null;
+      var target = null;
+      if (m) {
+        for (var j = out.length - 1; j >= 0 && !target; j--) {
+          var c = out[j];
+          if (m[3] !== undefined ? c.text === m[3] : c.images > 0 || c.files.length > 0) target = c;
+        }
+      }
+      if (!target) {
+        out.push(msg);
+        continue;
+      }
+      var verb = m[1].toLowerCase();
+      target.reactions.push({ emoji: TAPBACK_EMOJI[verb], reactor: msg.sender, word: verb.replace(/ at$/, "") });
+    }
+    return out;
   }
 
   var api = {
