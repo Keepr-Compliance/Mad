@@ -102,8 +102,13 @@ function messagesPage(opts: {
   layout: Layout;
   hideListBy?: "remove" | "display";
   backButton?: boolean;
+  /** "anchor": the live page's back control (traced 2026-10-01). */
+  backMarkup?: "button" | "anchor";
+  /** The first N clicks of the back control do nothing (a slow page). */
+  backIgnoresClicks?: number;
   startInChat?: string;
 }) {
+  let ignoreBack = opts.backIgnoresClicks ?? 0;
   const log: string[] = [];
   let open = "";
   document.body.innerHTML = `<div id="list-wrap"></div><div id="chat"></div>`;
@@ -119,7 +124,9 @@ function messagesPage(opts: {
       listWrap.innerHTML = listOnScreen ? LIST : "";
     }
     const back = opts.layout === "single" && opts.backButton !== false
-      ? `<button aria-label="Back" id="back">Back</button>`
+      ? opts.backMarkup === "anchor"
+        ? `<a aria-label="Back" data-e2e-header-back-button class="mdc-icon-button mat-mdc-icon-button mat-unthemed" id="back"><span class="mat-mdc-button-touch-target"></span></a>`
+        : `<button aria-label="Back" id="back">Back</button>`
       : "";
     chat.innerHTML = open
       ? `<mws-header><div class="left-content">${back}<h2 data-e2e-header-title>${open}</h2></div></mws-header>`
@@ -134,8 +141,13 @@ function messagesPage(opts: {
 
   document.body.addEventListener("click", (e) => {
     const target = e.target as Element;
-    if (target.id === "back") {
+    if (target.closest("#back")) {
       e.preventDefault();
+      if (ignoreBack > 0) {
+        ignoreBack -= 1;
+        log.push("back (no effect)");
+        return;
+      }
       goBack();
       return;
     }
@@ -195,6 +207,25 @@ describe("layout detection and returning to the list (scan.js)", () => {
     expect(await scan.returnToList(document, page.io)).toBe(true);
     expect(page.log).toEqual(["back"]);
     expect(scan.listShown(document)).toBe(true);
+  });
+
+  // Live 2026-10-01 (narrow window, a chat open → list_not_reachable): the
+  // back control is an <a data-e2e-header-back-button>. Mutation: the old
+  // selectors (no anchor) → history.back() → red.
+  it("single-pane, the live anchor back control: clicked, never history.back() (N1)", async () => {
+    const page = messagesPage({ layout: "single", backMarkup: "anchor", startInChat: "aaaaaaaaaaaaaaaaaaa" });
+    expect(await scan.returnToList(document, page.io)).toBe(true);
+    expect(page.log).toEqual(["back"]);
+  });
+
+  // Mutation: one click only, or history.back() after the control → red.
+  it("the back control is retried (at most 3 clicks), never followed by history.back() (N2)", async () => {
+    const slow = messagesPage({ layout: "single", backMarkup: "anchor", backIgnoresClicks: 2, startInChat: "aaaaaaaaaaaaaaaaaaa" });
+    expect(await scan.returnToList(document, slow.io)).toBe(true);
+    expect(slow.log).toEqual(["back (no effect)", "back (no effect)", "back"]);
+    const dead = messagesPage({ layout: "single", backMarkup: "anchor", backIgnoresClicks: 99, startInChat: "aaaaaaaaaaaaaaaaaaa" });
+    expect(await scan.returnToList(document, dead.io)).toBe(false);
+    expect(dead.log).toEqual(["back (no effect)", "back (no effect)", "back (no effect)"]);
   });
 
   it("single-pane with no back button: history.back() brings the list back (M3)", async () => {

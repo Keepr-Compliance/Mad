@@ -19,8 +19,9 @@
  *   and whether scrolling up removes the newest wrappers from the page.
  * NARROW WINDOW (BACKLOG-3629, founder observation 2026-09-30): the page shows
  *   the list OR the open chat, not both. UNTRACED: whether the hidden list
- *   leaves the DOM or is only hidden, and the header back button's selector
- *   (see BACK_BUTTON_SELECTORS; history.back() is the fallback).
+ *   leaves the DOM or is only hidden. The header back control was TRACED on
+ *   2026-10-01 (see BACK_BUTTON_SELECTORS); history.back() is used only when
+ *   no back control is on screen.
  */
 (function (root) {
   "use strict";
@@ -751,20 +752,29 @@
   // BACKLOG-3629: two-pane and single-pane layouts
   // -------------------------------------------------------------------------
 
-  /**
-   * The header's back button in the single-pane layout, most specific first.
-   * UNTRACED on the live page; the header is `mws-header` with `.left-content`
-   * holding the back button and the title (observed 2026-09-30).
-   */
   /** An open chat's path: the only place history.back() is used from. */
   var CHAT_PATH_RE = /^\/web\/conversations\/[^/?#]+/;
 
+  /**
+   * The header's back control in the single-pane layout, most specific first.
+   * TRACED on the live page 2026-10-01: an ANCHOR, not a button —
+   * `<a aria-label="Back" data-e2e-header-back-button class="mdc-icon-button
+   * mat-mdc-icon-button …">` inside `mws-header`. (The old
+   * "[data-e2e-back-button]" was the wrong attribute and the rest required a
+   * `button`, so the job fell to history.back(), which landed on a previous
+   * chat: list_not_reachable.)
+   */
   var BACK_BUTTON_SELECTORS = [
-    "mws-header [data-e2e-back-button]",
+    "mws-header [data-e2e-header-back-button]",
+    'mws-header a[aria-label="Back"]',
     'mws-header button[aria-label="Back"]',
+    "mws-header [data-e2e-back-button]",
     "mws-header .left-content button",
     'button[aria-label="Back"]',
   ];
+
+  /** Clicks of the back control before returnToList gives up (no history.back then). */
+  var BACK_CLICK_ATTEMPTS = 3;
 
   /**
    * True unless the element or an ancestor is hidden by `hidden`, display:none
@@ -825,10 +835,17 @@
           function () { return false; },
         );
       };
+      // The back control, up to BACK_CLICK_ATTEMPTS clicks (found again each
+      // time). While it is on screen, history.back() is never used: it lands
+      // on a previous chat, not the list.
       var button = findBackButton(doc);
       if (button) {
-        io.click(button);
-        if (await waitList()) return true;
+        for (var attempt = 0; attempt < BACK_CLICK_ATTEMPTS && button; attempt++) {
+          io.click(button);
+          if (await waitList()) return true;
+          button = findBackButton(doc);
+        }
+        return false;
       }
       // history.back() only from an open chat inside Messages: from anywhere
       // else (a reused tab, a chat opened by direct URL as the first entry) it
@@ -896,6 +913,7 @@
   var api = {
     SELECTORS: SELECTORS,
     BACK_BUTTON_SELECTORS: BACK_BUTTON_SELECTORS,
+    BACK_CLICK_ATTEMPTS: BACK_CLICK_ATTEMPTS,
     isShown: isShown,
     listShown: listShown,
     returnToList: returnToList,
