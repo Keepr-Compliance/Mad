@@ -60,6 +60,7 @@ import {
   rcsExternalId,
   storeCacheChatSync,
   type RcsIncomingChat,
+  type RcsChatPeople,
   type RcsIncomingMessage,
 } from "../rcsImportStore";
 import { rcsImageFilename } from "../rcsImportMedia";
@@ -273,6 +274,24 @@ describe("reactions and images follow their message (A6)", () => {
     expect(count("SELECT has_attachments AS n FROM messages WHERE body_text = 'text new'")).toBe(1);
     // The staging folder is gone (the dropped image's file with it).
     expect(fs.existsSync(files.stagingRoot) ? listFiles(files.stagingRoot) : []).toEqual([]);
+  });
+
+  // SR optional: the commit orders a chat's messages by time then id, not by
+  // staging order (a retried chat is staged twice, its seq values mix).
+  // Mutation: back to ORDER BY seq → red.
+  it("a chat staged twice (a retry) commits its messages in time order", async () => {
+    staging.stageChat(JOB, USER, chat("conv-a", [
+      msg("10", "2026-09-29T12:00:00.000Z"),
+      msg("9", "2026-09-29T11:00:00.000Z"),
+    ]), peopleA, hashA);
+    staging.stageChat(JOB, USER, chat("conv-a", [msg("8", "2026-09-29T10:00:00.000Z"), msg("11", "2026-09-29T11:00:00.000Z")]), peopleA, hashA);
+    const order: string[] = [];
+    const spy = { ...writer, storeChat: (c: RcsIncomingChat, u: string, p: RcsChatPeople) => {
+      order.push(...c.messages.map((m) => m.msgId));
+      return writer.storeChat(c, u, p);
+    } };
+    await staging.commit(JOB, USER, { floorMs: Date.parse("2026-07-01T00:00:00.000Z"), cap: null, protectedSpans: [] }, spy);
+    expect(order).toEqual(["8", "9", "11", "10"]);
   });
 
   // Live (0.3.18): "0 reactions" while 52 were sent, "images 0 of 4": what

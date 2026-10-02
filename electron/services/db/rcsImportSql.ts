@@ -306,9 +306,14 @@ export const RCS_STAGING_CHATS_SQL = sql`
   `;
 
 /** Parameters: job id, chat hash. In the order the page sent them. */
+/**
+ * Ordered by the message's own time, then its id (numeric ids: shorter first),
+ * NOT by staging order: a retried chat is staged twice, so its seq values mix
+ * (SR optional, 2026-10-02).
+ */
 export const RCS_STAGING_CHAT_MESSAGES_SQL = sql`
     SELECT msg_id AS msgId, message_json AS messageJson FROM rcs_cache_staging_messages
-    WHERE job_id = ? AND chat_hash = ? ORDER BY seq
+    WHERE job_id = ? AND chat_hash = ? ORDER BY sent_at, length(msg_id), msg_id
   `;
 
 /** Parameters: job id. */
