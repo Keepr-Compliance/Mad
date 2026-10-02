@@ -439,6 +439,8 @@ describe("job runner", () => {
     };
     // The list is read first, from the list page.
     document.body.innerHTML = listHtml;
+    // The transient retry has its own tests (retry-3671); none here.
+    (env as Record<string, unknown>).transientRetryPoolMs = 0;
     const outcome = await job.runJob(JOB, env);
     expect(outcome.outcome).toBe("finished");
 

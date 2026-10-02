@@ -92,6 +92,14 @@
   var RCS_MAX_PHOTO_BYTES = 25 * 1024 * 1024;
   var RCS_MAX_VIDEO_BYTES = 200 * 1024 * 1024;
   var RCS_MEDIA_RETRY_POOL_MS = 5 * 60000;
+  /**
+   * SR (3671 P1): a chat that failed for a TRANSIENT reason (its messages did
+   * not load, it could not be opened / found, Details timed out, its history
+   * did not settle) gets ONE retry at the end of the run, BEFORE the photo
+   * retry, within its own pool. A recovered chat leaves "not fully imported".
+   */
+  var RCS_TRANSIENT_RETRY_POOL_MS = 5 * 60000;
+  var RETRY_OVERHEAD_MS = 1000;
   var VIDEO_FILE_RE = /\.(mp4|mov|m4v|3gp|3gpp|webm|avi)$/i;
   var NOT_LOADED_IMAGE = "image (not loaded)";
   var MEDIA_REASON_TEXT = {
@@ -184,6 +192,10 @@
     }
     if (s.notText > 0) {
       lines.push(s.notText + " not a text conversation (e.g. an AI chat) — skipped");
+    }
+    if (s.retry && s.retry.retried > 0) {
+      lines.push("Retried " + plural(s.retry.retried, "chat", "chats") + ", recovered " + s.retry.recovered +
+        (s.retry.notRetried > 0 ? " · " + s.retry.notRetried + " not retried (time limit)" : ""));
     }
     var photoLine = mediaLine("Photos", s.media && s.media.photos);
     if (photoLine) lines.push(photoLine);
@@ -553,7 +565,22 @@
       var entry = { name: conv.name || "(unnamed chat)", reason: reason };
       if (count !== undefined) entry.count = count;
       notReached.push(entry);
+      (entriesByConv[conv.conversationId] = entriesByConv[conv.conversationId] || []).push(entry);
       log("  left out: " + reason + (count !== undefined ? " (" + count + ")" : ""));
+      noteTransient(conv, reason);
+    }
+
+    // SR (3671 P1): the transient-failure retry (see RCS_TRANSIENT_RETRY_POOL_MS).
+    var TRANSIENT_REASONS = { messages_not_loaded: true, not_opened: true, history_not_settled: true, details_timeout: true };
+    var entriesByConv = {};
+    var retryState = { item: null };
+    var queuedRetry = {};
+    var work = [];
+    function noteTransient(conv, reason) {
+      var item = retryState.item;
+      if (!TRANSIENT_REASONS[reason] || !item || item.attempt > 0 || queuedRetry[conv.conversationId]) return;
+      queuedRetry[conv.conversationId] = true;
+      work.push({ cand: item.cand, attempt: 1 });
     }
 
     /** Every job call: a 404/410 ends the run. */
@@ -769,6 +796,7 @@
         reactions: totals.reactions,
         historyConfirmed: totals.historyConfirmed,
         depth: totals.depth,
+        retry: retry,
         media: media,
         extraTime: extraTime,
         notChecked: progress.notChecked,
@@ -888,8 +916,36 @@
     await report(candidates.length > 0 ? stageText(1, candidates.length) : "No chats to check");
 
     // 4. Each candidate: open, read numbers, close Details, ask Keepr.
-    for (var i = 0; i < candidates.length; i++) {
-      var conv = candidates[i].conversation;
+    work = candidates.map(function (c) { return { cand: c, attempt: 0 }; });
+    var retryPoolMs = env.transientRetryPoolMs == null ? RCS_TRANSIENT_RETRY_POOL_MS : env.transientRetryPoolMs;
+    var retry = { retried: 0, recovered: 0, notRetried: 0, usedMs: 0 };
+    var sleptMs = 0;
+    var baseSleep = env.sleep;
+    env.sleep = function (ms) {
+      sleptMs += typeof ms === "number" && isFinite(ms) ? ms : 0;
+      return baseSleep(ms);
+    };
+    /** Messages already sent per chat: a retried chat is not counted twice. */
+    var sentMessages = {};
+    for (var wi = 0; wi < work.length; wi++) {
+      var item = work[wi];
+      var i = item.attempt > 0 ? candidates.length - 1 : wi;
+      var conv = item.cand.conversation;
+      retryState.item = item;
+      var retryStart = sleptMs;
+      if (item.attempt > 0) {
+        if (retry.usedMs >= retryPoolMs) {
+          retry.notRetried += 1;
+          continue;
+        }
+        retry.retried += 1;
+        // Its earlier "left out" entries go; failing again adds them back.
+        var gone0 = entriesByConv[conv.conversationId] || [];
+        notReached = notReached.filter(function (e) { return gone0.indexOf(e) < 0; });
+        skips = skips.filter(function (sk) { return sk.conversationId !== conv.conversationId; });
+        entriesByConv[conv.conversationId] = [];
+        log("retry " + retry.retried + ": chat " + (await tag(conv.name)));
+      }
       var opened = false;
       var gone = false;
       var imagesFailed = 0;
@@ -900,7 +956,7 @@
         // BACKLOG-3658 #12: the conversation id as a 6-hex tag salted per job
         // (never the raw id), so two chats with the same name are told apart.
         log("#" + (i + 1) + "/" + candidates.length + " chat " + (await tag(conv.name)) +
-          " id " + (await tag("conversation-id:" + conv.conversationId)) + " reason=" + candidates[i].reason);
+          " id " + (await tag("conversation-id:" + conv.conversationId)) + " reason=" + item.cand.reason);
         // The messages on screen before the click: the next chat is ready only
         // once this set has been replaced (the URL and title flip first).
         var alreadyOpen = chatAlreadyOpen(env, conv);
@@ -928,6 +984,8 @@
           var why = numbers && (numbers.kind === "short_code" || numbers.kind === "business") ? numbers.kind : "no_numbers";
           if (why !== "no_numbers") log("  " + why.replace("_", " "));
           leaveOut(conv, why);
+          // Details timed out: a transient failure, retried once at the end.
+          if (numbers && numbers.kind === "no_details") noteTransient(conv, "details_timeout");
           continue;
         }
         var match = await call("POST", base + "/match", { conversationId: conv.conversationId, numbers: numbers });
@@ -1068,8 +1126,10 @@
           participants: people,
         });
         if (!sent.ok) throw new Error(messageOf(sent, "Keepr could not save this chat."));
-        totals.chats += 1;
-        totals.messages += messages.length;
+        var prevSent = sentMessages[conv.conversationId];
+        if (prevSent === undefined) totals.chats += 1;
+        totals.messages += Math.max(0, messages.length - (prevSent || 0));
+        sentMessages[conv.conversationId] = Math.max(prevSent || 0, messages.length);
         // BACKLOG-3642: rows the user removed from this transaction are stored
         // but not linked again; Keepr says how many.
         var removed = sent.body && typeof sent.body.removedByUser === "number" ? sent.body.removedByUser : 0;
@@ -1080,9 +1140,9 @@
         for (var rx = 0; rx < messages.length; rx++) {
           chatReactions += Array.isArray(messages[rx].reactions) ? messages[rx].reactions.length : 0;
         }
-        totals.reactions += chatReactions;
+        if (prevSent === undefined) totals.reactions += chatReactions;
         // SR S2: how this chat's history start was confirmed, counted per kind.
-        totals.historyConfirmed[startConfirmedBy(hist)] += 1;
+        if (prevSent === undefined) totals.historyConfirmed[startConfirmedBy(hist)] += 1;
         extraTime.usedMs += hist.extraMs || 0;
         // History depth (3671): how far back this chat was READ, in whole days
         // (older than the floor is dropped at commit, so this is not what is kept).
@@ -1093,7 +1153,7 @@
           if (isFinite(ot) && (oldestMs === null || ot < oldestMs)) oldestMs = ot;
         }
         var floorDays = floorMs === null ? null : Math.round((nowMs - floorMs) / DAY_MS);
-        totals.depth[depthKind(hist)] += 1;
+        if (prevSent === undefined) totals.depth[depthKind(hist)] += 1;
         totals.depth.floorDays = floorDays;
         totals.depth.gaps += hist.gapsDetected || 0;
         totals.depth.gapsRecovered += hist.gapsRecovered || 0;
@@ -1119,7 +1179,8 @@
         // SR M: every photo / video bubble of the chat, counted.
         var missingIds = [];
         var missingOldest = null;
-        for (var j = 0; j < readSet.length; j++) {
+        // A retried chat already sent: its photos were counted the first time.
+        for (var j = 0; j < readSet.length && prevSent === undefined; j++) {
           var msg = readSet[j];
           var srcs = msg.imageSrcs || [];
           var files = msg.files || [];
@@ -1178,6 +1239,10 @@
         // Narrow window (BACKLOG-3629): the chat replaced the list; go back to
         // it so the next chat can be found. A no-op when both panes show.
         if (!gone && env.returnToList) await env.returnToList();
+        if (item.attempt > 0) {
+          retry.usedMs += sleptMs - retryStart + RETRY_OVERHEAD_MS;
+          if ((entriesByConv[conv.conversationId] || []).length === 0) retry.recovered += 1;
+        }
       }
       // Also the cancel check between chats: a job Keepr dropped answers 404/410.
       await report(i + 1 < candidates.length
@@ -1185,6 +1250,12 @@
         : "Checked " + candidates.length + " of " + candidates.length + " chats");
     }
 
+    env.sleep = baseSleep;
+    if (retry.retried + retry.notRetried > 0) {
+      log("retried " + retry.retried + ", recovered " + retry.recovered +
+        (retry.notRetried ? ", " + retry.notRetried + " not retried (time limit)" : "") +
+        ", " + Math.round(retry.usedMs / 1000) + "s of " + Math.round(retryPoolMs / 1000) + "s");
+    }
     await retryMissingPhotos();
     if (extraTime.usedMs > 0) {
       log("extra time used: " + Math.ceil(extraTime.usedMs / 60000) + " min of " + Math.round(extraTime.poolMs / 60000));
@@ -1207,6 +1278,8 @@
       connection: connection,
       // SR M: photo / video counts (telemetry; counts only).
       media: media,
+      // SR (3671 P1): the transient retry (counts only).
+      retry: { retried: retry.retried, recovered: retry.recovered, notRetried: retry.notRetried },
       historyConfirmed: totals.historyConfirmed,
       // L2: how the list scan stopped (Keepr records the coverage only for a normal stop).
       listStop: collected.stopReason,
@@ -1824,6 +1897,7 @@
     RCS_MAX_PHOTO_BYTES: RCS_MAX_PHOTO_BYTES,
     RCS_MAX_VIDEO_BYTES: RCS_MAX_VIDEO_BYTES,
     RCS_MEDIA_RETRY_POOL_MS: RCS_MEDIA_RETRY_POOL_MS,
+    RCS_TRANSIENT_RETRY_POOL_MS: RCS_TRANSIENT_RETRY_POOL_MS,
     DRAG_HANDLE: DRAG_HANDLE,
     claimPage: claimPage,
     ownsPage: ownsPage,

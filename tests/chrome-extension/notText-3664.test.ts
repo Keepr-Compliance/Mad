@@ -219,6 +219,8 @@ function runWith(kind: "transaction" | "cache") {
 describe.each(["transaction", "cache"] as const)("a %s Sync over a list with an AI chat (G5, G6)", (kind) => {
   it("Gemini is skipped as not a text conversation; a Details that won't open is no_numbers", async () => {
     const t = runWith(kind);
+    // The transient retry has its own tests (retry-3671); none here.
+    (t.env as Record<string, unknown>).transientRetryPoolMs = 0;
     const outcome = await job.runJob(JOB, t.env);
     expect(outcome.outcome).toBe("finished");
     expect(outcome.notReached).toEqual([{ name: "Test Contact B", reason: "no_numbers" }]);

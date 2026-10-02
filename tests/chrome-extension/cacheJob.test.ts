@@ -320,6 +320,96 @@ function cacheEnv(opts: {
 describe("runJob: a cache Sync", () => {
   const ROWS: Array<[string, string | null]> = [["Zed Example", "3:45 PM"], ["Ann Example", "Mon"], ["Bob Example", "Sep 22"], ["Old Example", "Aug 1"]];
 
+  // SR (3671 P1): one retry per chat for transient failures, at the end of the
+  // run, within its own pool. Mutations: no retry → red ("recovered"); the
+  // entry kept after recovery → red; the pool unbounded → red ("pool"); a
+  // second retry → red ("still failing").
+  describe("transient retry (3671 P1)", () => {
+    type Env = ReturnType<typeof cacheEnv>;
+    const finishBody = (t: Env) => t.calls.find(([, p]) => p.endsWith("/finish"))![2] as {
+      notReached: Array<{ name: string; reason: string }>;
+      retry: { retried: number; recovered: number; notRetried: number };
+    };
+    const details = (t: Env) => (t.shown[t.shown.length - 1] as [string, boolean, { details: string }])[2].details;
+    /** Opening `ids` throws the first time each is opened (a transient "not opened"). */
+    const failFirstOpen = (t: Env, ids: string[]) => {
+      const open = t.env.openConversation;
+      const tries: Record<string, number> = {};
+      t.env.openConversation = async (c: { conversationId: string }) => {
+        tries[c.conversationId] = (tries[c.conversationId] || 0) + 1;
+        if (ids.includes(c.conversationId) && tries[c.conversationId] === 1) throw Object.assign(new Error("gone"), { code: "not_found" });
+        return open(c);
+      };
+      return tries;
+    };
+
+    it("first open fails, the retry succeeds: recovered, no longer \"not fully imported\"", async () => {
+      const t = cacheEnv({ rows: ROWS, numbers: { [id(0)]: ["+15555550101"] } });
+      const tries = failFirstOpen(t, [id(0)]);
+      await job.runJob(JOB, t.env);
+      expect(tries[id(0)]).toBe(2);
+      const f = finishBody(t);
+      expect(f.retry).toEqual({ retried: 1, recovered: 1, notRetried: 0 });
+      expect(f.notReached.some((e) => e.reason === "not_opened")).toBe(false);
+      expect(t.calls.filter(([, p]) => p.endsWith("/chat")).length).toBeGreaterThan(0);
+      expect(details(t)).toContain("Retried 1 chat, recovered 1");
+    });
+
+    it("messages that did not load the first time are read on the retry", async () => {
+      const t = cacheEnv({ rows: ROWS, numbers: { [id(0)]: ["+15555550101"] } });
+      let swaps = 0;
+      (t.env.scan as Record<string, unknown>).waitForMessageSwap = async () => (++swaps === 1 ? false : true);
+      await job.runJob(JOB, t.env);
+      expect(finishBody(t).retry).toMatchObject({ retried: 1, recovered: 1 });
+      expect(finishBody(t).notReached.some((e) => e.reason === "messages_not_loaded")).toBe(false);
+    });
+
+    it("still failing on the retry: left out as before, never a second retry", async () => {
+      const t = cacheEnv({ rows: ROWS, numbers: { [id(0)]: ["+15555550101"] } });
+      const open = t.env.openConversation;
+      let opens = 0;
+      t.env.openConversation = async (c: { conversationId: string }) => {
+        if (c.conversationId === id(0)) {
+          opens += 1;
+          throw Object.assign(new Error("gone"), { code: "not_found" });
+        }
+        return open(c);
+      };
+      await job.runJob(JOB, t.env);
+      expect(opens).toBe(2);
+      expect(finishBody(t).retry).toEqual({ retried: 1, recovered: 0, notRetried: 0 });
+      expect(finishBody(t).notReached.filter((e) => e.reason === "not_opened")).toHaveLength(1);
+    });
+
+    it("the retry has its own pool: past it, chats are not retried and stay left out", async () => {
+      const t = cacheEnv({ rows: ROWS, numbers: { [id(0)]: ["+15555550101"], [id(1)]: ["+15555550102"] } });
+      (t.env as Record<string, unknown>).transientRetryPoolMs = 500;
+      failFirstOpen(t, [id(0), id(1)]);
+      await job.runJob(JOB, t.env);
+      const f = finishBody(t);
+      expect(f.retry).toEqual({ retried: 1, recovered: 1, notRetried: 1 });
+      expect(f.notReached.filter((e) => e.reason === "not_opened")).toHaveLength(1);
+      expect(details(t)).toContain("1 not retried (time limit)");
+    });
+
+    it("a retried chat already sent is not counted twice", async () => {
+      const t = cacheEnv({ rows: ROWS, numbers: { [id(0)]: ["+15555550101"] } });
+      let loads = 0;
+      (t.env.scan as Record<string, unknown>).loadHistory = async () => ({
+        stopReason: ++loads === 1 ? "not_settled" : "no_more", count: 1, scrolls: 0, nudges: 0, confirmedBy: "first_page",
+      });
+      await job.runJob(JOB, t.env);
+      const f = t.calls.find(([, p]) => p.endsWith("/finish"))![2] as { chats: number; messages: number; retry: Record<string, number> };
+      expect(f.retry).toMatchObject({ retried: 1, recovered: 1 });
+      expect(f.chats).toBe(1);
+      expect(f.messages).toBe(1);
+    });
+
+    it("the pool is 5 minutes", () => {
+      expect(job.RCS_TRANSIENT_RETRY_POOL_MS).toBe(5 * 60000);
+    });
+  });
+
   // SR M: media. Every photo / video bubble counted against what was saved.
   // Mutations: keepPhotos ignored → red ("not kept"); no end-of-run retry →
   // red ("recovered"); the retry pool unbounded → red ("pool"); a too-large
@@ -519,6 +609,8 @@ describe("runJob: a cache Sync", () => {
       poolLeft.push(io.extensionPoolLeftMs);
       return stops[n++];
     };
+    // The transient retry has its own tests (retry-3671); none here.
+    (t.env as Record<string, unknown>).transientRetryPoolMs = 0;
     await job.runJob(JOB, t.env);
     expect(poolLeft).toEqual([1_800_000, 600_000, 0]);
     const [, , extras] = t.shown[t.shown.length - 1] as [string, boolean, { details: string; copy: string }];

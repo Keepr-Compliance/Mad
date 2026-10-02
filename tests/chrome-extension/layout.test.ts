@@ -544,6 +544,8 @@ describe("no chat is ever silently left out (BACKLOG-3629)", () => {
       { name: "Chat Save Failed", matched: true, chat: "fails" },
       { name: "Chat Fine", matched: true, images: ["ok"] },
     ]);
+    // The transient retry has its own tests (retry-3671); none here.
+    (t.env as Record<string, unknown>).transientRetryPoolMs = 0;
     const outcome = await job.runJob(JOB, t.env);
     expect(outcome.outcome).toBe("finished");
     const expected: NotReached[] = [
