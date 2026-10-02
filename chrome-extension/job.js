@@ -618,6 +618,7 @@
         var hist = await env.scan.loadHistory(env.doc, {
           scrollUp: env.scrollMessagesUp || function () {},
           nudge: env.nudgeMessages,
+          hasScroller: env.hasMessageScroller,
           budgetMs: env.historyBudgetMs,
           sleep: env.sleep,
           floorMs: floorMs,

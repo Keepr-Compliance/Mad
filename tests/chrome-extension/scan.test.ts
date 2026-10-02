@@ -730,6 +730,7 @@ interface HistoryModule {
       budgetMs?: number;
       nudge?: () => void | Promise<void>;
       startMarkerSelectors?: string[];
+      hasScroller?: () => boolean;
       onProgress?: (n: number) => void;
     },
   ) => Promise<{ stopReason: string; count: number; scrolls: number; nudges: number; confirmedBy?: string }>;
@@ -769,7 +770,7 @@ function historyPane(opts: { total: number; loadDelayMs?: number; virtualized?: 
     const from = opts.virtualized ? Math.max(0, loaded - PAGE) : 0;
     let html = "";
     // #10: a loading indicator while a page is pending; a start marker once all is loaded.
-    if (opts.spinner && pendingAt !== null) html += `<div role="progressbar"></div>`;
+    if (opts.spinner && pendingAt !== null) html += `<div role="progressbar" data-test-visible></div>`;
     if (opts.startMarker && loaded >= opts.total) html += `<div data-test-chat-start></div>`;
     for (let i = loaded - 1; i >= from; i--) html += historyWrapper(i);
     const pane = document.getElementById("pane");
@@ -838,7 +839,18 @@ describe("loadHistory: scroll up until the start date, the confirmed start, the 
     document.body.innerHTML = "";
   });
 
-  const base = (p: ReturnType<typeof historyPane>) => ({ scrollUp: p.scrollUp, sleep: p.sleep, oldestMs: p.oldestMs });
+  const base = (p: ReturnType<typeof historyPane>) => ({ scrollUp: p.scrollUp, sleep: p.sleep, oldestMs: p.oldestMs, hasScroller: () => true });
+
+  // L1: jsdom has no layout — a progress element is "visible" here only when
+  // it says so (data-test-visible), so a test states which spinners are on screen.
+  let rectSpy: jest.SpyInstance;
+  beforeEach(() => {
+    rectSpy = jest.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      const on = this.hasAttribute("data-test-visible");
+      return { left: 0, top: 0, right: on ? 10 : 0, bottom: on ? 10 : 0, width: on ? 10 : 0, height: on ? 10 : 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
+    });
+  });
+  afterEach(() => rectSpy.mockRestore());
 
   it("stops once the oldest loaded message is earlier than the date floor", async () => {
     const p = historyPane({ total: 200 });
@@ -921,10 +933,31 @@ describe("loadHistory: scroll up until the start date, the confirmed start, the 
   it("a short first page with a loading indicator showing is NOT confirmed", async () => {
     const p = historyPane({ total: 20 });
     p.render();
-    document.body.insertAdjacentHTML("beforeend", `<div role="progressbar"></div>`);
+    document.getElementById("pane")!.insertAdjacentHTML("beforeend", `<div role="progressbar" data-test-visible></div>`);
     const r = await hist.loadHistory(document, { ...base(p), floorMs: null, budgetMs: 30_000 });
     expect(r.confirmedBy).toBeUndefined();
     expect(r.stopReason).toBe("not_settled");
+  });
+
+  // L1 (live: a 7-message chat ended not_settled). Mutations: search the
+  // whole document, or count an invisible spinner → red.
+  it("a spinner outside the messages pane (a list row's), or an invisible one, is not loading", async () => {
+    const p = historyPane({ total: 7 });
+    p.render();
+    document.body.insertAdjacentHTML("afterbegin", `<mws-conversation-list-item><div role="progressbar" data-test-visible></div></mws-conversation-list-item>`);
+    document.getElementById("pane")!.insertAdjacentHTML("beforeend", `<div role="progressbar"></div>`); // zero size
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null });
+    expect(r).toMatchObject({ stopReason: "no_more", confirmedBy: "first_page", scrolls: 0 });
+  });
+
+  // L1 ADD. Mutation: no no_overflow rule → it scrolls / nudges → red.
+  it("a chat that does not overflow (no message scroller) is confirmed as no_overflow after 1 s, without scrolling", async () => {
+    const p = historyPane({ total: 30 });
+    p.render();
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null, hasScroller: () => false });
+    expect(r).toEqual({ stopReason: "no_more", count: 25, scrolls: 0, nudges: 0, confirmedBy: "no_overflow" });
+    expect(p.scrollClocks).toEqual([]);
+    expect(p.clock()).toBeGreaterThanOrEqual(1000);
   });
 
   // SR S2. Mutation: confirm without the stability wait → red.
@@ -1013,6 +1046,7 @@ describe("job runner: loads history before extracting a matched chat", () => {
     let clock = 0;
     document.body.innerHTML = LIST;
     const env = {
+      hasMessageScroller: () => true,
       doc: document,
       getLocation: () => ({ pathname: `/web/conversations/${open}`, href: `https://messages.google.com/web/conversations/${open}` }),
       api: async (method: string, p: string, body?: Record<string, unknown>): Promise<ApiReply> => {

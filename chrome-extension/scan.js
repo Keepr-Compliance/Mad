@@ -752,6 +752,33 @@
   }
 
   /**
+   * L1 (live, 2026-10-02): the open chat's MESSAGES PANE — the message
+   * scroller, else the messages list holding the wrappers, else their
+   * container. Never the document: every conversation-list row carries a
+   * spinner, so a document-wide search read "loading" forever and every short
+   * chat burned its whole budget. Null when no message is on screen.
+   */
+  function messagesPane(doc) {
+    var first = doc.querySelector(SELECTORS.message);
+    if (!first) return null;
+    return findMessageScroller(doc) || (first.closest && first.closest("mws-messages-list")) || first.parentElement;
+  }
+
+  /** A loading indicator in the messages pane that is actually VISIBLE (on screen, non-zero size). */
+  function loadingVisible(doc, selectors) {
+    var pane = messagesPane(doc);
+    if (!pane) return false;
+    for (var i = 0; i < selectors.length; i++) {
+      var els = pane.querySelectorAll(selectors[i]);
+      for (var j = 0; j < els.length; j++) {
+        var r = els[j].getBoundingClientRect ? els[j].getBoundingClientRect() : null;
+        if (r && r.width > 0 && r.height > 0 && isShown(els[j])) return true;
+      }
+    }
+    return false;
+  }
+
+  /**
    * Load older messages of the open chat (live, 2026-09-29: only the latest
    * 25 render on open). Repeats: scroll up, then wait for a message with a
    * msg-id not seen before. Stops at the first of:
@@ -776,7 +803,7 @@
    *          sleep: function(number): Promise<void>,
    *          oldestMs: function(): (number|null), floorMs?: (number|null), cap?: number,
    *          noNewTimeoutMs?: number, budgetMs?: number, nudgeWaitsMs?: number[],
-   *          startMarkerSelectors?: string[], loadingSelectors?: string[],
+   *          startMarkerSelectors?: string[], loadingSelectors?: string[], hasScroller?: function(): boolean,
    *          intervalMs?: number, onProgress?: function(number): void,
    *          checkpoint?: function(number): Promise<void>}} io
    * @returns {Promise<{stopReason: string, count: number, scrolls: number, nudges: number, confirmedBy?: string}>}
@@ -819,13 +846,14 @@
       return r;
     }
     function loadingShown() {
-      return anyMatch(findMessageScroller(doc) || doc, loadingSelectors);
+      return loadingVisible(doc, loadingSelectors);
     }
+    var hasScroller = io.hasScroller || function () { return !!findMessageScroller(doc); };
     /**
      * SR S2: the first page is short AND settled — no loading indicator and
      * the same message set for HISTORY_FIRST_PAGE_STABLE_MS, right now.
      */
-    async function firstPageSettled() {
+    async function firstPageSettled(shortOnly) {
       var last = messageIdSet(doc);
       var stableFor = 0;
       var waited = 0;
@@ -834,7 +862,7 @@
         spent += step;
         waited += step;
         absorb();
-        if (count >= HISTORY_FIRST_PAGE) return false;
+        if (shortOnly && count >= HISTORY_FIRST_PAGE) return false;
         var cur = messageIdSet(doc);
         if (cur !== last || loadingShown()) {
           last = cur;
@@ -869,7 +897,10 @@
         if (typeof oldest === "number" && oldest < floorMs) return result("date_floor");
       }
       if (atStart()) return result("no_more", "marker");
-      if (scrolls === 0 && firstPage < HISTORY_FIRST_PAGE && (await firstPageSettled())) return result("no_more", "first_page");
+      // L1: a chat that does not overflow has nothing to scroll — its whole
+      // history is on screen once it is settled.
+      if (scrolls === 0 && !hasScroller() && (await firstPageSettled(false))) return result("no_more", "no_overflow");
+      if (scrolls === 0 && firstPage < HISTORY_FIRST_PAGE && (await firstPageSettled(true))) return result("no_more", "first_page");
       if (spent >= budgetMs) return result("not_settled");
       await io.scrollUp();
       scrolls += 1;
