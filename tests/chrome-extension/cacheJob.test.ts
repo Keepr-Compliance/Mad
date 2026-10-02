@@ -120,6 +120,18 @@ describe("cachePlan (M2)", () => {
   const idsOf = (plan: { queue: Array<{ conversation: { conversationId: string } }> }) =>
     plan.queue.map((q) => q.conversation.conversationId);
 
+  // SR F1: chats switched back on go FIRST, then the 300 cap — with a full
+  // list they would otherwise stay "not checked" forever. Mutation: append
+  // them after the regular chats → red.
+  it("chats switched back on are checked first, even behind a full list (> 300 chats)", () => {
+    const list = Array.from({ length: 320 }, (_, i) => conv(i, NOW - DAY));
+    list.push(conv(400, NOW - 50 * DAY)); // switched back on, older than since
+    const plan = job.cachePlan(list, NOW - 10 * DAY, { [id(400)]: true });
+    expect(idsOf(plan)[0]).toBe(id(400));
+    expect(idsOf(plan)).toHaveLength(300);
+    expect(plan.notChecked).toBe(21);
+  });
+
   it("every chat above the cutoff (two older in a row), in list order; the cutoff and below are out", () => {
     const list = [conv(0, NOW), conv(1, null), conv(2, NOW - 5 * DAY), conv(3, NOW - 30 * DAY), conv(4, NOW - 31 * DAY), conv(5, NOW)];
     const plan = job.cachePlan(list, NOW - 10 * DAY);
@@ -312,11 +324,10 @@ describe("runJob: a cache Sync", () => {
       claimExtra: { pendingConversationIds: [id(3)], floor },
     });
     await job.runJob(JOB, t.env);
-    expect(t.opened).toContain(id(3));
-    const i = t.opened.indexOf(id(3));
-    expect(t.floors.length).toBeGreaterThan(0);
-    expect(t.floors[t.floors.length - 1]).toBe(Date.parse(floor)); // the pending chat (last opened) reads to the full floor
-    expect(i).toBe(t.opened.length - 1);
+    // SR F1: checked FIRST, and read to the full floor; the others to since.
+    expect(t.opened[0]).toBe(id(3));
+    expect(t.floors[0]).toBe(Date.parse(floor));
+    expect(t.floors.slice(1).every((f) => f === Date.parse(t.since))).toBe(true);
   });
 
   it("the list scan goes on past since until it has seen the chats switched back on", async () => {

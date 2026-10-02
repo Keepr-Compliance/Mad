@@ -101,6 +101,61 @@ describe("unionMessages (gap guard)", () => {
   });
 });
 
+/**
+ * SR T1/T2: a page parked at the top that loads only during the nudge's
+ * return steps, with a recycling window. At return step 2 the window jumps to
+ * the NEW batch only (no overlap — momentarily), at step 5 it settles on a
+ * window that overlaps what was read before. `flash`: a message is on screen
+ * ONLY during return step 3's poll.
+ */
+function nudgePane(opts: { flash?: boolean }) {
+  const render = (from: number, to: number, extra = "") => {
+    let html = "";
+    for (let i = to - 1; i >= from; i--) html += wrapper(i);
+    document.body.innerHTML = `<div id="pane">${html}${extra}</div>`;
+  };
+  render(0, 25);
+  let loaded = false;
+  return {
+    scrollUp: (): void => {}, // parked: a plain scroll-up asks for nothing
+    nudgeDown: (): void => {},
+    nudgeReturnStep: (i: number): void => {
+      if (loaded) return;
+      if (i === 2) render(25, 50); // the new batch alone: NO overlap yet
+      if (i === 3 && opts.flash) render(25, 50, wrapper(77)); // g77 visible only now
+      if (i === 4 && opts.flash) render(25, 50);
+      if (i === 5) {
+        render(20, 50); // settled: overlaps g20..g24
+        loaded = true;
+      }
+    },
+    sleep: async (): Promise<void> => {},
+    oldestMs: (): number | null => null,
+    extractBatch: () =>
+      extract.extractConversation(document, "https://messages.google.com/web/conversations/aaaaaaaaaaaaaaaaaaa", new Date(2026, 8, 21)).messages,
+  };
+}
+
+describe("history v2: the nudge's return steps are collected, never judged (SR T1, T2)", () => {
+  const go = (p: ReturnType<typeof nudgePane>) =>
+    scan.loadHistory(document, { ...p, floorMs: null, hasScroller: () => true, budgetMs: 60_000 });
+
+  // Mutation: check contiguity at each return step → the momentary jump trips history_gap → red.
+  it("a momentary jump during the return steps is not a gap (T1)", async () => {
+    const r = await go(nudgePane({}));
+    expect(r.stopReason).toBe("no_more");
+    expect(r.gapsDetected).toBeUndefined();
+    expect(r.count).toBe(50);
+  });
+
+  // Mutation: no union collect in the nudge polls → g77 is lost → red.
+  it("a message on screen only during a nudge poll is kept (T2)", async () => {
+    const r = await go(nudgePane({ flash: true }));
+    const ids = (r.messages as Array<{ msgId: string }>).map((m) => m.msgId);
+    expect(ids).toContain("g77");
+  });
+});
+
 describe("gap guard on a recycling list", () => {
   it("every message read is kept (unique, oldest first), though the DOM only ever holds 25 (G2, G4)", async () => {
     const r = await run(recyclingPane({ total: 100 }));

@@ -381,13 +381,13 @@
         }
       }
       above = above.filter(function (c) { return !older(c); });
-      // Chats switched back on are candidates however old their last message.
-      var inAbove = {};
-      above.forEach(function (c) { inAbove[c.conversationId] = true; });
-      conversations.forEach(function (c) {
-        if (must[c.conversationId] && !inAbove[c.conversationId]) above.push(c);
-      });
     }
+    // Chats switched back on are candidates however old their last message,
+    // and they go FIRST: Keepr clears them only once saved, so behind a full
+    // list (CACHE_CHECK_MAX) they would stay "not checked" forever.
+    var pendingFirst = conversations.filter(function (c) { return must[c.conversationId]; });
+    var rest = above.filter(function (c) { return !must[c.conversationId]; });
+    above = pendingFirst.concat(rest);
     var picked = above.slice(0, CACHE_CHECK_MAX);
     return {
       queue: picked.map(function (c) { return { conversation: c, reason: "cache" }; }),

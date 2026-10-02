@@ -199,7 +199,8 @@ export function cacheSaveInFlight(): boolean {
 }
 
 /** The commit writes through the cache job's existing writers. */
-const commitWriter: RcsCommitWriter = {
+/** The cache commit's writer (exported for the real-SQL commit test). */
+export const commitWriter: RcsCommitWriter = {
   storeChat: (chat, userId, people) => {
     const r = storeCacheChatSync(chat, userId, deps, people);
     // Saved (in the commit's transaction): a chat switched back on is no longer pending.
