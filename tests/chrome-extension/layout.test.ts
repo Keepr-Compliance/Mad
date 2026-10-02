@@ -497,6 +497,25 @@ describe("no chat is ever silently left out (BACKLOG-3629)", () => {
     return { env, calls, shown, details, copies, finish };
   }
 
+  // BACKLOG-3658 #12: same-name threads are told apart in the step log by a
+  // salted id tag — never the raw id. Mutation: no id tag, or the raw id → red.
+  it("the step log tags each chat's conversation id (salted per job), never the raw id", async () => {
+    const t = planJob([
+      { name: "Chat Same Name", matched: true },
+      { name: "Chat Same Name", matched: true },
+    ]);
+    await job.runJob(JOB, t.env);
+    const copy = t.copies[t.copies.length - 1];
+    const lines = copy.split("\n").filter((l) => /^#\d+\/2 chat /.test(l));
+    expect(lines).toHaveLength(2);
+    const nameTags = lines.map((l) => /chat (\S+)/.exec(l)?.[1]);
+    const idTags = lines.map((l) => / id ([0-9a-f]{6}) /.exec(l)?.[1]);
+    expect(nameTags[0]).toBe(nameTags[1]);
+    expect(idTags[0]).toMatch(/^[0-9a-f]{6}$/);
+    expect(idTags[0]).not.toBe(idTags[1]);
+    expect(copy).not.toContain("conv000000000000000");
+  });
+
   // BACKLOG-3658 #11. Mutation: every empty result reported as no_numbers → red.
   it("short-code and named-sender chats are reported apart from no_numbers, never sent to /match", async () => {
     const t = planJob([

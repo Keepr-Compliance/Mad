@@ -527,8 +527,10 @@
       await holdWhileHidden(stageText(i + 1, candidates.length));
       try {
         env.overlay.show(stageText(i + 1, candidates.length) + "…", false, RUNNING_EXTRAS);
+        // BACKLOG-3658 #12: the conversation id as a 6-hex tag salted per job
+        // (never the raw id), so two chats with the same name are told apart.
         log("#" + (i + 1) + "/" + candidates.length + " chat " + (await tag(conv.name)) +
-          " reason=" + candidates[i].reason);
+          " id " + (await tag("conversation-id:" + conv.conversationId)) + " reason=" + candidates[i].reason);
         // The messages on screen before the click: the next chat is ready only
         // once this set has been replaced (the URL and title flip first).
         var before = env.scan.messageIdSet(env.doc);

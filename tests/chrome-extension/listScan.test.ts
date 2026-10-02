@@ -310,7 +310,7 @@ describe("Sync step log (BACKLOG-3641)", () => {
     expect(all).toContain("stage: loading the conversation list");
     expect(all).toMatch(/listed 5, stopReason \w+, scroll /);
     expect(all).toMatch(/candidates 5 \{.*"name".*\}/);
-    expect(all).toMatch(/#1\/5 chat [0-9a-f]{6} reason=name/);
+    expect(all).toMatch(/#1\/5 chat [0-9a-f]{6} id [0-9a-f]{6} reason=name/);
     expect(all).toContain('numbers ["(ddd) ddd-dddd","+d ddd ddd dddd"]');
     expect(t.lines.filter((l) => /match=(yes|no)/.test(l))).toHaveLength(5);
     expect(all).toContain("match=yes");
