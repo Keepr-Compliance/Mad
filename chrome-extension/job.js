@@ -185,14 +185,15 @@
    * Copy text for a test user to send: counts, reasons and salted name tags,
    * then the step log (already shapes and tags). No name, number or message text.
    */
-  function copyText(s, tags, logLines) {
+  function copyText(s, tags, logLines, version) {
     // A cache Sync's scan counts (checked / matched / sent) are diagnostics:
     // in the Copy text only, not on screen.
     var scanCounts = s.isCache
       ? ["Checked " + s.checked + " · matched " + s.matched + " · sent " + s.chats + " chats / " + s.messages + " messages" +
         " / " + (s.reactions || 0) + " reactions" + (s.images > 0 ? " / " + s.images + " images" : "")]
       : [];
-    return ["Keepr Sync diagnostics"]
+    // Founder: the extension version heads the Copy text.
+    return ["Keepr Sync diagnostics" + (version ? " · extension " + version : "")]
       .concat(summaryLines(s, function (n) { return "#" + (tags[n] || "??????"); }))
       .concat(scanCounts)
       .concat(["--- step log ---"], logLines)
@@ -455,7 +456,8 @@
       for (var n = 0; n < names.length; n++) {
         if (!(names[n] in tags)) tags[names[n]] = await tag(names[n]);
       }
-      return { details: detailsText(s), copy: copyText(s, tags, logLines) };
+      var version = typeof env.extensionVersion === "string" ? env.extensionVersion : "";
+      return { details: detailsText(s), copy: copyText(s, tags, logLines, version), version: version };
     }
 
     async function fail(code, message) {
@@ -911,7 +913,7 @@
    * @param {HTMLElement} box  the fixed box (or any container, in tests)
    * @param {string} text
    * @param {boolean} isError
-   * @param {{details?: string, copy?: string, cancel?: boolean,
+   * @param {{details?: string, copy?: string, version?: string, cancel?: boolean,
    *   ask?: {start: function(): void, later: function(): void}}=} extras
    * @param {{copy: function(string): Promise<boolean>, focus?: function(): Promise<boolean>,
    *   cancel?: function(): Promise<boolean>, close?: function(): void, move?: function(): void,
@@ -1099,6 +1101,10 @@
     copyButton.style.marginTop = "8px";
     card.appendChild(details);
     card.appendChild(copyButton);
+    // Founder: the extension version, a muted footer of the details.
+    if (extras.version) {
+      card.appendChild(el("div", "version", { marginTop: "8px", fontSize: "12px", color: p.muted }, "Keepr extension " + extras.version));
+    }
     box.appendChild(card);
 
     toggle.addEventListener("click", function () {
@@ -1570,6 +1576,15 @@
     return { mimeType: blob.type || "application/octet-stream", base64: comma >= 0 ? dataUrl.slice(comma + 1) : "" };
   }
 
+  /** This extension's version (manifest.json), or "" when it cannot be read. */
+  function manifestVersion() {
+    try {
+      return chrome.runtime.getManifest().version || "";
+    } catch (_e) {
+      return "";
+    }
+  }
+
   function env() {
     return {
       doc: document,
@@ -1584,6 +1599,7 @@
       hashName: hashName,
       scrollMessagesUp: scrollMessagesUp,
       nudgeMessages: nudgeMessages,
+      extensionVersion: manifestVersion(),
       openConversation: openConversation,
       returnToList: returnToList,
       readImage: readImage,

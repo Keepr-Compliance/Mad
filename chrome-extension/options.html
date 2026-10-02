@@ -14,11 +14,13 @@
   button { min-height: 44px; padding: 0 18px; border-radius: 8px; border: 1px solid #4F46E5; background: #4F46E5; color: #FFFFFF; font: inherit; font-weight: 600; cursor: pointer; }
   button:hover { background: #4338CA; }
   .done { color: #3730A3; font-weight: 600; }
+  .version { font-size: 12px; color: #6B7280; margin: 16px 0 0; }
   @media (prefers-color-scheme: dark) {
     body { background: #111827; color: #F3F4F6; }
     main { background: #1F2937; border-color: #374151; }
     p, li { color: #D1D5DB; }
     .done { color: #A5B4FC; }
+    .version { color: #9CA3AF; }
   }
 </style>
 </head>
@@ -33,6 +35,7 @@
   </ul>
   <p id="keepr-ack-state"></p>
   <button type="button" id="keepr-ack">Got it</button>
+  <p id="keepr-version" class="version"></p>
 </main>
 <script src="options.js"></script>
 </body>

@@ -33,6 +33,16 @@
     }
   }
 
+  // Founder: which extension build this is.
+  var versionLine = document.getElementById("keepr-version");
+  if (versionLine) {
+    var version = "";
+    try {
+      version = chrome.runtime.getManifest().version || "";
+    } catch (_e) { /* not in an extension page */ }
+    versionLine.textContent = version ? "Keepr extension " + version : "";
+  }
+
   var button = document.getElementById("keepr-ack");
   if (button) {
     button.addEventListener("click", function () {
