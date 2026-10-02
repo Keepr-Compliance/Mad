@@ -27,7 +27,13 @@ export interface DeliveryFs {
   /** Recursive; a missing folder is fine. */
   removeDir(p: string): Promise<void>;
   rename(from: string, to: string): Promise<void>;
+  /** Entry names in a folder; [] when it does not exist. */
+  listDir(p: string): Promise<string[]>;
 }
+
+/** SR: shown when Windows keeps the old folder in use (Explorer, Chrome). */
+export const RCS_EXTENSION_FOLDER_BUSY =
+  "Close the Keepr Extension folder (and Chrome's extensions page if it's using it), then try again.";
 
 /** Where the shipped extension is: <resources>/chrome-extension, or the repo's folder in development. */
 export function extensionSourceDir(opts: { isPackaged: boolean; resourcesPath: string; appPath: string }): string {
@@ -46,10 +52,14 @@ export function extensionTargetDir(downloadsDir: string): string {
  * brings a newer extension; Chrome's "Reload" then picks it up). Returns the
  * folder and the extension's version.
  *
- * SR S1: copied whole into a temp sibling first, then the old fixed-name
- * folder is removed and the copy renamed into place — so no file of an older
- * build is left behind (a copy "over" the folder would keep them). A failed
- * copy leaves the old folder as it was.
+ * SR S1: copied whole into a temp sibling, then swapped in by RENAMES only,
+ * so no file of an older build is left behind and the old folder is never
+ * half-emptied (Windows may hold it open — EBUSY/EPERM):
+ *   1. old "Keepr Extension" → ".old-<ts>"; if that fails the old folder is
+ *      untouched and the error says to close it;
+ *   2. the copy → "Keepr Extension"; if that fails the old one is renamed back;
+ *   3. ".old-<ts>" is deleted best-effort (leftovers swept next time).
+ * The copy is removed on every failure path.
  */
 export async function prepareExtensionFolder(
   sourceDir: string,
@@ -68,15 +78,41 @@ export async function prepareExtensionFolder(
     throw new Error("The Google Messages extension in this Keepr build is damaged.");
   }
   const folder = extensionTargetDir(downloadsDir);
-  const staging = `${folder}.new-${process.pid}-${Date.now()}`;
+  const stamp = `${process.pid}-${Date.now()}`;
+  const staging = `${folder}.new-${stamp}`;
+  const old = `${folder}.old-${stamp}`;
+
+  // Leftovers of an earlier attempt (best-effort).
+  for (const name of await fs.listDir(downloadsDir).catch(() => [] as string[])) {
+    if (name.startsWith(`${RCS_EXTENSION_FOLDER_NAME}.new-`) || name.startsWith(`${RCS_EXTENSION_FOLDER_NAME}.old-`)) {
+      await fs.removeDir(path.join(downloadsDir, name)).catch(() => undefined);
+    }
+  }
+
   try {
     await fs.copyDir(sourceDir, staging);
   } catch (err) {
-    await fs.removeDir(staging);
+    await fs.removeDir(staging).catch(() => undefined);
     throw err;
   }
-  await fs.removeDir(folder);
-  await fs.rename(staging, folder);
+
+  const hadOld = await fs.exists(folder);
+  if (hadOld) {
+    try {
+      await fs.rename(folder, old);
+    } catch {
+      await fs.removeDir(staging).catch(() => undefined);
+      throw new Error(RCS_EXTENSION_FOLDER_BUSY);
+    }
+  }
+  try {
+    await fs.rename(staging, folder);
+  } catch (err) {
+    if (hadOld) await fs.rename(old, folder).catch(() => undefined);
+    await fs.removeDir(staging).catch(() => undefined);
+    throw hadOld ? new Error(RCS_EXTENSION_FOLDER_BUSY) : err;
+  }
+  if (hadOld) await fs.removeDir(old).catch(() => undefined);
   return { folder, version };
 }
 

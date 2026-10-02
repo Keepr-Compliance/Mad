@@ -688,6 +688,7 @@ export function registerRcsImportHandlers(): void {
           copyDir: (from, to) => fs.promises.cp(from, to, { recursive: true, errorOnExist: true }),
           removeDir: (p) => fs.promises.rm(p, { recursive: true, force: true }),
           rename: (from, to) => fs.promises.rename(from, to),
+          listDir: (p) => fs.promises.readdir(p),
         });
         return { success: true, ...out };
       } catch (err) {

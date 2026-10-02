@@ -12,6 +12,10 @@
  *   L1 a launch failure ('error') unhandled, or reported as opened  → "launchChrome"
  *   L2 "opened" before the process really started                   → "launchChrome"
  *   S1 copied over the old folder (stale files of an older build kept) → "a real folder"
+ *   S1b the old folder emptied before the swap can fail                → "old folder in use"
+ *   S1c no rollback when the copy cannot be renamed into place          → "the copy cannot be put in place"
+ *   S1d the copy left behind on a failure                               → "old folder in use", "copy cannot be put in place"
+ *   S1e an old leftover (.old-* / .new-*) never swept                   → "a real folder"
  */
 
 import * as path from "path";
@@ -23,6 +27,7 @@ import {
   launchChrome,
   type LaunchedProcess,
   prepareExtensionFolder,
+  RCS_EXTENSION_FOLDER_BUSY,
   RCS_EXTENSION_FOLDER_NAME,
   type DeliveryFs,
 } from "../rcsExtensionDelivery";
@@ -42,7 +47,34 @@ function fakeFs(files: Record<string, string>): DeliveryFs & { copies: Array<[st
     rename: async (from, to) => {
       renames.push([from, to]);
     },
+    listDir: async () => [],
   };
+}
+
+/** A real temp Downloads with an old extension folder, and fs ops that can fail one rename. */
+function realSetup() {
+  const tmp = nodeFs.mkdtempSync(path.join(os.tmpdir(), "keepr-ext-3659-"));
+  const src = path.join(tmp, "res", "chrome-extension");
+  nodeFs.mkdirSync(src, { recursive: true });
+  nodeFs.writeFileSync(path.join(src, "manifest.json"), JSON.stringify({ version: "0.3.5" }));
+  nodeFs.writeFileSync(path.join(src, "job.js"), "new");
+  const downloads = path.join(tmp, "Downloads");
+  const old = path.join(downloads, "Keepr Extension");
+  nodeFs.mkdirSync(old, { recursive: true });
+  nodeFs.writeFileSync(path.join(old, "job.js"), "old");
+  nodeFs.writeFileSync(path.join(old, "removed-in-new-build.js"), "stale");
+  const fsOps = (failRename?: (from: string, to: string) => boolean): DeliveryFs => ({
+    exists: async (p) => nodeFs.existsSync(p),
+    readText: async (p) => nodeFs.readFileSync(p, "utf8"),
+    copyDir: (from, to) => nodeFs.promises.cp(from, to, { recursive: true, errorOnExist: true }),
+    removeDir: (p) => nodeFs.promises.rm(p, { recursive: true, force: true }),
+    rename: async (from, to) => {
+      if (failRename && failRename(from, to)) throw Object.assign(new Error("EBUSY: resource busy"), { code: "EBUSY" });
+      await nodeFs.promises.rename(from, to);
+    },
+    listDir: async (p) => (nodeFs.existsSync(p) ? nodeFs.readdirSync(p) : []),
+  });
+  return { tmp, src, downloads, old, fsOps, cleanup: () => nodeFs.rmSync(tmp, { recursive: true, force: true }) };
 }
 
 import { EventEmitter } from "events";
@@ -111,31 +143,62 @@ describe("extension delivery (BACKLOG-3659)", () => {
     expect(fs.renames).toEqual([[fs.copies[0][1], target]]);
   });
 
-  it("a real folder: an older build's stale files are gone after the copy (S1)", async () => {
-    const tmp = nodeFs.mkdtempSync(path.join(os.tmpdir(), "keepr-ext-3659-"));
+  it("a real folder: an older build's stale files are gone; leftovers of an earlier attempt are swept (S1, S1e)", async () => {
+    const s = realSetup();
     try {
-      const src = path.join(tmp, "res", "chrome-extension");
-      nodeFs.mkdirSync(src, { recursive: true });
-      nodeFs.writeFileSync(path.join(src, "manifest.json"), JSON.stringify({ version: "0.3.5" }));
-      nodeFs.writeFileSync(path.join(src, "job.js"), "new");
-      const downloads = path.join(tmp, "Downloads");
-      const old = path.join(downloads, "Keepr Extension");
-      nodeFs.mkdirSync(old, { recursive: true });
-      nodeFs.writeFileSync(path.join(old, "job.js"), "old");
-      nodeFs.writeFileSync(path.join(old, "removed-in-new-build.js"), "stale");
-      const out = await prepareExtensionFolder(src, downloads, {
-        exists: async (p) => nodeFs.existsSync(p),
-        readText: async (p) => nodeFs.readFileSync(p, "utf8"),
-        copyDir: (from, to) => nodeFs.promises.cp(from, to, { recursive: true, errorOnExist: true }),
-        removeDir: (p) => nodeFs.promises.rm(p, { recursive: true, force: true }),
-        rename: (from, to) => nodeFs.promises.rename(from, to),
-      });
-      expect(out.folder).toBe(old);
-      expect(nodeFs.readdirSync(old).sort()).toEqual(["job.js", "manifest.json"]);
-      expect(nodeFs.readFileSync(path.join(old, "job.js"), "utf8")).toBe("new");
-      expect(nodeFs.readdirSync(downloads)).toEqual(["Keepr Extension"]);
+      nodeFs.mkdirSync(path.join(s.downloads, "Keepr Extension.old-1-1"));
+      nodeFs.mkdirSync(path.join(s.downloads, "Keepr Extension.new-1-1"));
+      nodeFs.mkdirSync(path.join(s.downloads, "Something else"));
+      const out = await prepareExtensionFolder(s.src, s.downloads, s.fsOps());
+      expect(out.folder).toBe(s.old);
+      expect(nodeFs.readdirSync(s.old).sort()).toEqual(["job.js", "manifest.json"]);
+      expect(nodeFs.readFileSync(path.join(s.old, "job.js"), "utf8")).toBe("new");
+      expect(nodeFs.readdirSync(s.downloads).sort()).toEqual(["Keepr Extension", "Something else"]);
     } finally {
-      nodeFs.rmSync(tmp, { recursive: true, force: true });
+      s.cleanup();
+    }
+  });
+
+  it("old folder in use (rename refused): it is left untouched, the copy is removed, a clear error (S1b, S1d)", async () => {
+    const s = realSetup();
+    try {
+      const fsOps = s.fsOps((from) => from === s.old);
+      await expect(prepareExtensionFolder(s.src, s.downloads, fsOps)).rejects.toThrow(RCS_EXTENSION_FOLDER_BUSY);
+      expect(nodeFs.readdirSync(s.old).sort()).toEqual(["job.js", "removed-in-new-build.js"]);
+      expect(nodeFs.readFileSync(path.join(s.old, "job.js"), "utf8")).toBe("old");
+      expect(nodeFs.readdirSync(s.downloads)).toEqual(["Keepr Extension"]);
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  it("the copy cannot be put in place: the old folder is renamed back, the copy removed (S1c, S1d)", async () => {
+    const s = realSetup();
+    try {
+      const fsOps = s.fsOps((from, to) => to === s.old && from.includes(".new-"));
+      await expect(prepareExtensionFolder(s.src, s.downloads, fsOps)).rejects.toThrow(RCS_EXTENSION_FOLDER_BUSY);
+      expect(nodeFs.readFileSync(path.join(s.old, "job.js"), "utf8")).toBe("old");
+      expect(nodeFs.readdirSync(s.downloads)).toEqual(["Keepr Extension"]);
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  it("deleting the renamed old folder may fail: the new one is in place anyway", async () => {
+    const s = realSetup();
+    try {
+      const base = s.fsOps();
+      const fsOps: DeliveryFs = {
+        ...base,
+        removeDir: async (p) => {
+          if (p.includes(".old-")) throw new Error("EPERM");
+          await base.removeDir(p);
+        },
+      };
+      const out = await prepareExtensionFolder(s.src, s.downloads, fsOps);
+      expect(nodeFs.readFileSync(path.join(out.folder, "job.js"), "utf8")).toBe("new");
+    } finally {
+      s.cleanup();
     }
   });
 
