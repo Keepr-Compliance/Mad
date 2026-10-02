@@ -48,8 +48,15 @@
     textFallback: "mws-text-message-part",
     /** The element whose aria-label carries sender, text and date. */
     label: "mws-text-message-part[aria-label], .msg-focus-element[aria-label], [aria-label]",
-    /** A quoted parent message (reply-to). Its text is NOT this message's text. */
-    quoted: ".embed-msg-part-container",
+    /**
+     * A quoted parent message (reply-to). Its text — and its sender's name —
+     * is NOT this message's text. LIVE (0.3.18): a reply was stored as
+     * "<quoted sender><quoted text><reply>": the quote sat INSIDE the reply's
+     * own text part, so it is cut out of every part, not only skipped beside
+     * it. The first selector is the traced one; the rest are defensive.
+     */
+    quoted: ".embed-msg-part-container, mws-reply-message-part, mws-quoted-message-part, " +
+      "[data-e2e-reply-message], [data-e2e-quoted-message], [class*='reply-container'], [class*='quoted-message']",
     /** BACKLOG-3620: an image or GIF; its bytes are behind a blob: URL. */
     image: "mws-image-message-part [data-e2e-message-image] img[src]",
     /** BACKLOG-3620: a file (PDF, …) — recorded by name and size only. */
@@ -275,9 +282,20 @@
       });
     });
     return own
-      .map(function (el) { return normalizeSpace(el.textContent); })
+      .map(function (el) { return normalizeSpace(ownTextContent(el)); })
       .filter(Boolean)
       .join("\n");
+  }
+
+  /** An element's text without any quoted parent inside it (a copy is trimmed; the page is untouched). */
+  function ownTextContent(el) {
+    if (!el.querySelector(SELECTORS.quoted)) return el.textContent;
+    var copy = el.cloneNode(true);
+    var quotes = copy.querySelectorAll(SELECTORS.quoted);
+    for (var i = 0; i < quotes.length; i++) {
+      if (quotes[i].parentNode) quotes[i].parentNode.removeChild(quotes[i]);
+    }
+    return copy.textContent;
   }
 
   /** The first aria-label in the message that carries a date, parsed. */

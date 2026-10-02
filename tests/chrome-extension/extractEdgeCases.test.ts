@@ -153,6 +153,32 @@ describe("extraction edge cases", () => {
     expect(r.messages.map((m) => m.sender)).toEqual(["Test Contact B", "Test Contact C", "Test Contact A"]);
   });
 
+  // LIVE (0.3.18): the quote INSIDE the reply's own text part was merged into
+  // the body ("<name><quoted text><reply>"). Mutation: the quote not cut out
+  // of the part → red.
+  it("quoted reply nested in the reply's own text part: body is the reply only, never the quoted name (X7b)", () => {
+    const r = run(`<mws-message-wrapper msg-id="1"><div data-e2e-message-wrapper-core data-e2e-message-outgoing="false" data-e2e-message-rcs="true">
+      <mws-text-message-part aria-label="Test Contact A replied: Yes i am!!! ${ON("December 30, 2025")}."><mws-message-part-content data-e2e-message-content>
+        <div class="embed-msg-part-container"><span>Test Contact B</span><span>Are you still coming to the open house?</span></div>
+        <span>Yes i am!!!</span>
+      </mws-message-part-content></mws-text-message-part>
+      </div></mws-message-wrapper>`);
+    expect(r.messages).toHaveLength(1);
+    expect(r.messages[0].text).toBe("Yes i am!!!");
+    expect(r.messages[0].text).not.toContain("Test Contact B");
+    expect(r.messages[0].sender).toBe("Test Contact A");
+  });
+
+  it("a nested quote is cut from a copy: the page itself is not changed", () => {
+    document.body.innerHTML = `<mws-message-wrapper msg-id="1"><div data-e2e-message-wrapper-core data-e2e-message-outgoing="true" data-e2e-message-rcs="true">
+      <mws-text-message-part aria-label="You said: ok. ${ON("December 30, 2025")}."><mws-message-part-content data-e2e-message-content>
+        <mws-reply-message-part><span>Test Contact B</span><span>the question</span></mws-reply-message-part><span>ok</span>
+      </mws-message-part-content></mws-text-message-part></div></mws-message-wrapper>`;
+    const r = extract.extractConversation(document, "https://messages.google.com/web/conversations/aaaaaaaaaaaaaaaaaaa", new Date(2026, 8, 21));
+    expect(r.messages[0].text).toBe("ok");
+    expect(document.querySelector("mws-reply-message-part")).not.toBeNull();
+  });
+
   it("quoted reply: the reply is the one message; the quoted name and text are not (X7)", () => {
     const quote = `<div class="embed-msg-part-container"><mws-text-message-part aria-label="Test Contact B said: the original question. ${ON("December 29, 2025")}.">
       <span>Test Contact B</span><mws-message-part-content data-e2e-message-content>the original question</mws-message-part-content></mws-text-message-part></div>`;
