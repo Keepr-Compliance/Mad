@@ -297,6 +297,12 @@ describe("atomic: all or nothing", () => {
     expect(stagedCount()).toBe(0);
   });
 
+  it("a discard returns the staging rows it deleted (for the cancel log line)", async () => {
+    staging.stageChat(JOB, USER, chat("conv-c", [msg("c1", "2026-09-01T10:00:00.000Z"), msg("c2", "2026-09-02T10:00:00.000Z")]), peopleA, hashA);
+    expect(await staging.discard(JOB)).toBe(3); // 1 chat + 2 messages
+    expect(stagedCount()).toBe(0);
+  });
+
   it("a discard (cancel / error / user switch) leaves nothing (A7)", async () => {
     staging.stageChat(JOB, USER, chat("conv-a", [msg("a1", "2026-09-20T10:00:00.000Z")]), peopleA, hashA);
     await staging.stageImage(JOB, { conversationId: "conv-a", msgId: "a1", index: 0, mimeType: "image/png", base64: PNG }, hashA);

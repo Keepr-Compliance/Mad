@@ -79,7 +79,8 @@ export interface RcsStagingDbOps {
   chats(jobId: string): StagedChatRow[];
   chatMessages(jobId: string, chatHash: string): Array<{ msgId: string; messageJson: string }>;
   images(jobId: string): StagedImageRow[];
-  deleteJob(jobId: string): void;
+  /** The staging rows deleted (chats + messages + images). */
+  deleteJob(jobId: string): number | void;
   deleteAll(): void;
   /** Every job id with staging rows or journaled files. */
   jobIds(): string[];
@@ -447,9 +448,10 @@ export class RcsCacheStaging {
   }
 
   /** Cancel / error / user switch: the job's rows and files go; nothing was written. */
-  async discard(jobId: string): Promise<void> {
+  /** Drops the job's staging; returns the staging rows deleted. */
+  async discard(jobId: string): Promise<number> {
     this.ended.add(jobId);
-    await this.dropStaging(jobId);
+    return this.dropStaging(jobId);
   }
 
   /**
@@ -488,9 +490,9 @@ export class RcsCacheStaging {
     return removed;
   }
 
-  private async dropStaging(jobId: string): Promise<void> {
+  private async dropStaging(jobId: string): Promise<number> {
     try {
-      this.db.deleteJob(jobId);
+      return this.db.deleteJob(jobId) ?? 0;
     } finally {
       await this.files.removeDir(this.jobDir(jobId));
     }

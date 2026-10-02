@@ -204,8 +204,8 @@ export interface CacheJobEndedDeps {
   saveOwnNumber: (userId: string, number: string) => void;
   /** BACKLOG-3658 atomic import: the finished job's staging → messages, in one transaction. */
   commit: (jobId: string, userId: string, snapshot: CacheEndSnapshot) => Promise<unknown>;
-  /** BACKLOG-3658: drop the job's staging (cancel / error / user switch). */
-  discard: (jobId: string) => Promise<void>;
+  /** BACKLOG-3658: drop the job's staging (cancel / error / user switch); the staging rows dropped. */
+  discard: (jobId: string) => Promise<number | void>;
   autoLink: (userId: string) => Promise<unknown>;
   /** P3b: after the auto-link (the optional auto-delete). Errors are logged. */
   afterLink?: (userId: string) => Promise<void>;
@@ -213,6 +213,8 @@ export interface CacheJobEndedDeps {
   onSaved?: (userId: string) => void;
   now: () => number;
   log?: (message: string) => void;
+  /** An INFO line (e.g. a cancel), where `log` is for problems. */
+  info?: (message: string) => void;
 }
 
 /**
@@ -230,7 +232,7 @@ export interface CacheEndSnapshot {
   state: string;
   createdAt?: string;
   jobId: string;
-  progress?: { notChecked?: number };
+  progress?: { notChecked?: number; imported?: number };
   notReached?: Array<{ reason: string }>;
   notReachedMore?: number;
 }
@@ -266,7 +268,14 @@ export async function handleCacheJobEnded(
   if (ended.detectedOwnNumber) deps.saveOwnNumber(userId, ended.detectedOwnNumber);
   if (ended.snapshot.state !== "finished") {
     try {
-      await deps.discard(jobId);
+      const discarded = await deps.discard(jobId);
+      // A cancel used to leave no log line at all.
+      if (ended.snapshot.state === "cancelled") {
+        deps.info?.(
+          `[RcsCache] Sync cancelled (job kind ${ended.kind}): ${ended.snapshot.progress?.imported ?? 0} chats done so far, ` +
+            `${typeof discarded === "number" ? discarded : 0} staging rows discarded`,
+        );
+      }
     } catch (err) {
       deps.log?.(`[RcsCache] Discarding the cache Sync's staging failed: ${err instanceof Error ? err.message : String(err)}`);
     }

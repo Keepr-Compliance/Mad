@@ -259,11 +259,11 @@ async function commitCacheJob(jobId: string, userId: string, snapshot?: CacheEnd
   bridge.recordCacheSaved(jobId, cacheSavedFromCommit(r));
 }
 
-async function discardCacheJob(jobId: string): Promise<void> {
+async function discardCacheJob(jobId: string): Promise<number> {
   cacheLimitsByJob.delete(jobId);
   cacheReadByJob.delete(jobId);
   cacheOptionsByJob.delete(jobId);
-  await cacheStaging().discard(jobId);
+  return cacheStaging().discard(jobId);
 }
 
 function broadcastJob(job: RcsJobSnapshot): void {
@@ -466,6 +466,7 @@ const bridge = new RcsExtensionBridge({
       onSaved: () => hostWindows.broadcast(RCS_DATA_CHANGED_CHANNEL, { reason: "cache-saved" }),
       now: () => Date.now(),
       log: (m) => void logService.warn(m, LOG_TAG),
+      info: (m) => void logService.info(m, LOG_TAG),
     })
       .finally(() => {
         clearTimeout(hung);

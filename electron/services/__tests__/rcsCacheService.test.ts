@@ -176,6 +176,23 @@ describe("when a cache Sync ends", () => {
     expect(logs[0]).toContain("disk full");
   });
 
+  // Item 7: a cancel used to leave no log line. Mutation: no info line, or
+  // one for a failed job / a finished one → red.
+  it("cancelled: one INFO line with the job kind, chats done so far and staging rows discarded (L7)", async () => {
+    const infos: string[] = [];
+    const d = deps();
+    await handleCacheJobEnded(
+      { kind: "cache", userId: "u-1", snapshot: { state: "cancelled", jobId: "job-1", progress: { imported: 4 } }, detectedOwnNumber: null },
+      { ...d.deps, discard: async () => 37, info: (m) => void infos.push(m) },
+    );
+    expect(infos).toEqual(["[RcsCache] Sync cancelled (job kind cache): 4 chats done so far, 37 staging rows discarded"]);
+    for (const state of ["failed", "finished"]) {
+      infos.length = 0;
+      await handleCacheJobEnded(ended(state), { ...deps().deps, info: (m) => void infos.push(m) });
+      expect([state, infos]).toEqual([state, []]);
+    }
+  });
+
   it("a detected own number (3+ chats agreed) is kept for the next run", async () => {
     const d = deps();
     await handleCacheJobEnded(ended("cancelled", "cache", "+15555550100"), d.deps);

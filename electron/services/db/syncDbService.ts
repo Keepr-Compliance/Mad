@@ -418,11 +418,12 @@ export function rcsStagingDbOps(): import("../rcsCacheStaging").RcsStagingDbOps 
     chatMessages: (jobId, chatHash) =>
       db.prepare(RCS_STAGING_CHAT_MESSAGES_SQL).all(jobId, chatHash) as Array<{ msgId: string; messageJson: string }>,
     images: (jobId) => db.prepare(RCS_STAGING_IMAGES_SQL).all(jobId) as import("../rcsCacheStaging").StagedImageRow[],
-    deleteJob: (jobId) => {
+    deleteJob: (jobId) =>
       db.transaction(() => {
-        for (const q of RCS_STAGING_DELETE_JOB_SQL) db.prepare(q).run(jobId);
-      })();
-    },
+        let rows = 0;
+        for (const q of RCS_STAGING_DELETE_JOB_SQL) rows += db.prepare(q).run(jobId).changes;
+        return rows;
+      })(),
     deleteAll: () => {
       db.transaction(() => {
         for (const q of RCS_STAGING_DELETE_ALL_SQL) db.prepare(q).run();
