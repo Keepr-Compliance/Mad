@@ -77,7 +77,8 @@ import { wrapHandler } from "../utils/wrapHandler";
 import { getMainWindow } from "../windowRegistry";
 import { ValidationError } from "../utils/validation";
 import { RCS_MEDIA_DEFAULTS, clearPendingMediaRead, getRcsMediaOptions, hasPendingMediaRead, recordRcsMediaSeen, setRcsMediaOptions } from "../services/db/rcsMediaDbService";
-import { NOT_PAIRED_MESSAGE, RcsPairingAuth, type PairProtocol } from "../services/rcsPairingAuth";
+import { NOT_PAIRED_MESSAGE, RcsPairingAuth } from "../services/rcsPairingAuth";
+import { loadPairProtocol } from "../services/rcsPairProtocol";
 import { rcsPairingStore } from "../services/db/rcsPairingDbService";
 import type {
   RcsClearTextsResult,
@@ -511,15 +512,11 @@ async function startCacheJobOnce(opts: { sinceDays?: unknown }): Promise<
 }
 
 /**
- * BACKLOG-3666: pairing. The protocol is the SAME file the extension runs:
- * pair-protocol.js (+ vendor/noble-p256.js) from the extension folder Keepr
- * ships, loaded on first use.
+ * BACKLOG-3666: pairing. The protocol is the SAME source the extension runs,
+ * bundled into the main-process build at build time (rcsPairProtocol, SR S2);
+ * never loaded from the extension folder. Loaded on first use.
  */
-const pairingAuth = new RcsPairingAuth(() => {
-  const dir = extensionSourceDir({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() });
-  // eslint-disable-next-line @typescript-eslint/no-require-imports -- the shipped extension's own file, not a module of this build
-  return require(path.join(dir, "pair-protocol.js")) as PairProtocol;
-}, rcsPairingStore);
+const pairingAuth = new RcsPairingAuth(loadPairProtocol, rcsPairingStore);
 
 /** Jobs are refused until the extension is paired (BACKLOG-3666). */
 export const RCS_NOT_PAIRED_ERROR = { status: 409, error: "not_paired", message: NOT_PAIRED_MESSAGE } as const;
