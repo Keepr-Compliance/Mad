@@ -452,6 +452,8 @@ const bridge = new RcsExtensionBridge({
   // P3b: the contacts-only flag (off by default), frozen per job.
   cacheChatAllowed: (jobId, userId, numbers) =>
     cacheOptionsByJob.get(jobId)?.contactsOnly ? databaseService.rcsNumbersMatchLiveContact(userId, numbers) : true,
+  // History v2: the page's image pass only for chats whose images are kept (the same rule as importCacheImage).
+  cacheImagesKept: (userId, numbers) => databaseService.rcsNumbersMatchLiveContact(userId, numbers),
   // BACKLOG-3658: a cache job STAGES; only a finished job commits (atomic).
   importCacheChat: async (chat, userId, people, jobId) =>
     cacheStaging().stageChat(jobId, userId, chat, people, rcsChatHash(people.numbers)),

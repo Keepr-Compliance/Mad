@@ -709,6 +709,34 @@
    */
   var RCS_HISTORY_BUDGET_MS = 60000;
 
+  /**
+   * History loading v2 (2026-10-02). A batch request polls every
+   * HISTORY_POLL_MS for the FIRST growth (new msg-ids) up to
+   * HISTORY_FIRST_GROWTH_MS, then waits for HISTORY_QUIET_MS of no change
+   * (capped at HISTORY_QUIET_CAP_MS) and asks for the next batch at once —
+   * fast chats are no longer held by fixed waits. No growth → the scroll
+   * nudge: half a screen down, HISTORY_NUDGE_WAKE_MS for the phone sync path
+   * to wake, HISTORY_NUDGE_RETURN_STEPS eased steps back to the top
+   * (HISTORY_NUDGE_STEP_MS apart, each a scroll event), then a
+   * HISTORY_NUDGE_WATCH_MS watch. A batch AND a nudge that both bring
+   * nothing is a stall: a small chat (under HISTORY_SMALL_CHAT messages, no
+   * visible loading indicator) is at its start after ONE stall (about 10 s),
+   * a larger one after TWO. The 60 s budget stays the outer bound.
+   */
+  var HISTORY_POLL_MS = 75;
+  var HISTORY_FIRST_GROWTH_MS = 4275;
+  var HISTORY_QUIET_MS = 190;
+  var HISTORY_QUIET_CAP_MS = 950;
+  var HISTORY_NUDGE_WAKE_MS = 1050;
+  var HISTORY_NUDGE_RETURN_STEPS = 10;
+  var HISTORY_NUDGE_STEP_MS = 150;
+  var HISTORY_NUDGE_WATCH_MS = 3000;
+  var HISTORY_SMALL_CHAT = 100;
+  /** The image pass (kept-image chats only): its time bound, stop rule and step. */
+  var HISTORY_IMAGE_PASS_MS = 3000;
+  var HISTORY_IMAGE_STAGNANT = 4;
+  var HISTORY_IMAGE_STEP_FRACTION = 0.5;
+
   /** GAP GUARD: step-backs tried to bridge a gap before the chat ends "history_gap". */
   var GAP_RECOVERY_ATTEMPTS = 8;
 
@@ -723,13 +751,6 @@
   /** At most this long is spent waiting for that stability (then: scroll as usual). */
   var HISTORY_FIRST_PAGE_MAX_WAIT_MS = 3000;
 
-  /**
-   * Waits after a scroll brought nothing: each nudge (a small scroll down and
-   * back to the top, so the page's loader fires again) gets the next, longer
-   * wait. Real-phone run 2026-10-01: dozens of chats stopped at ~41-50 with
-   * "no_more" after ONE 3 s wait — the next page had not arrived yet.
-   */
-  var HISTORY_NUDGE_WAITS_MS = [3000, 6000, 10000];
 
   /**
    * TODO(BACKLOG-3658 #10, SR to trace live): the element Google Messages
@@ -783,43 +804,39 @@
 
   /**
    * Load older messages of the open chat (live, 2026-09-29: only the latest
-   * 25 render on open). Repeats: scroll up, then wait for a message with a
-   * msg-id not seen before. Stops at the first of:
+   * 25 render on open), in batches (v2, see HISTORY_POLL_MS). Stops at the
+   * first of:
    *   - "date_floor": the oldest loaded message is EARLIER than `floorMs`
-   *     (checked before every scroll, so no scroll when already there);
+   *     (checked before every batch: no more requests once it is reached);
    *   - "cap": `cap` distinct messages seen (default 2000);
-   *   - "no_more": CONFIRMED at the start of the chat (confirmedBy) — a start
-   *     marker (HISTORY_START_MARKER_SELECTORS) is on screen ("marker"), or
-   *     the whole chat fit on the first page (fewer than HISTORY_FIRST_PAGE,
-   *     settled: no loading indicator and stable for
-   *     HISTORY_FIRST_PAGE_STABLE_MS — "first_page");
-   *   - "not_settled": UNCONFIRMED — nothing new after every nudge
-   *     (HISTORY_NUDGE_WAITS_MS), or the budget (RCS_HISTORY_BUDGET_MS) ran
-   *     out. The caller reports it (history_not_settled); never silent.
-   * While a loading indicator shows, waiting goes on (within the budget).
-   * "New" is counted over every msg-id seen so far, not the number on screen,
-   * so a list that drops its newest rows while scrolling still counts loads.
+   *   - "no_more" (confirmedBy): a start marker ("marker"); the whole chat on
+   *     the first page, settled ("first_page"); no message scroller, settled
+   *     ("no_overflow"); one stall for a small chat ("one_stall"), two for a
+   *     larger one ("two_stalls");
+   *   - "history_gap": a batch that grew does not overlap what was read
+   *     before and could not be bridged (gap guard);
+   *   - "not_settled": the budget (RCS_HISTORY_BUDGET_MS) ran out.
+   * Every poll collects the messages on screen (io.extractBatch, by msg-id,
+   * freshest copy wins); `messages` in the result is that union. With
+   * io.imagePass, a bounded pass down the chat mounts lazy images first.
    * Time is measured in `sleep` steps.
    *
    * @param {Document} doc
-   * @param {{scrollUp: function(): (void|Promise<void>), nudge?: function(): (void|Promise<void>),
-   *          sleep: function(number): Promise<void>,
-   *          oldestMs: function(): (number|null), floorMs?: (number|null), cap?: number,
-   *          noNewTimeoutMs?: number, budgetMs?: number, nudgeWaitsMs?: number[],
+   * @param {{scrollUp: function(): (void|Promise<void>), sleep: function(number): Promise<void>,
+   *          nudgeDown?: function(): (void|Promise<void>), nudgeReturnStep?: function(number, number): (void|Promise<void>),
+   *          nudge?: function(): (void|Promise<void>), stepDown?: function(number): (boolean|Promise<boolean>),
+   *          oldestMs: function(): (number|null), floorMs?: (number|null), cap?: number, budgetMs?: number,
    *          startMarkerSelectors?: string[], loadingSelectors?: string[], hasScroller?: function(): boolean,
    *          extractBatch?: function(): Array<{msgId: string, sentAt: string}>, stepBack?: function(): (void|Promise<void>),
-   *          intervalMs?: number, onProgress?: function(number): void,
+   *          imagePass?: boolean, pollMs?: number, intervalMs?: number, onProgress?: function(number): void,
    *          checkpoint?: function(number): Promise<void>}} io
    * @returns {Promise<{stopReason: string, count: number, scrolls: number, nudges: number, confirmedBy?: string}>}
    */
   async function loadHistory(doc, io) {
     var cap = typeof io.cap === "number" ? io.cap : 2000;
-    var noNewMs = typeof io.noNewTimeoutMs === "number" ? io.noNewTimeoutMs : 3000;
     var budgetMs = typeof io.budgetMs === "number" ? io.budgetMs : RCS_HISTORY_BUDGET_MS;
-    var nudgeWaits = io.nudgeWaitsMs || HISTORY_NUDGE_WAITS_MS;
     var startSelectors = io.startMarkerSelectors || HISTORY_START_MARKER_SELECTORS;
     var loadingSelectors = io.loadingSelectors || HISTORY_LOADING_SELECTORS;
-    var nudge = io.nudge || io.scrollUp;
     var step = io.intervalMs || 250;
     var floorMs = typeof io.floorMs === "number" && isFinite(io.floorMs) ? io.floorMs : null;
     var seen = {};
@@ -869,7 +886,11 @@
       var batch = io.extractBatch() || [];
       for (var i = 0; i < batch.length; i++) {
         var m = batch[i];
-        if (m && m.msgId && !collected[m.msgId]) collected[m.msgId] = m;
+        if (!m || !m.msgId) continue;
+        var had = collected[m.msgId];
+        // The freshest copy wins: one whose images have loaded / reactions arrived.
+        if (!had || (m.imageSrcs || []).length > (had.imageSrcs || []).length ||
+            (m.reactions || []).length > (had.reactions || []).length) collected[m.msgId] = m;
       }
     }
     /**
@@ -951,51 +972,64 @@
       }
       return false;
     }
-    /** Wait up to `ms` for a new message; longer while loading shows. Budget-bounded. */
-    async function waitForNew(ms) {
+    // ---------------------------------------------------------------------
+    // History loading v2: adaptive batches, a scroll nudge, stall counting.
+    // ---------------------------------------------------------------------
+    var poll = io.pollMs || HISTORY_POLL_MS;
+    var nudgeDown = io.nudgeDown || function () {};
+    var nudgeReturnStep = io.nudgeReturnStep || function (i, n) {
+      // Without a real scroller (tests, old callers): the last return step
+      // re-requests history, as reaching the top again does on the page.
+      if (i === n - 1) return (io.nudge || io.scrollUp)();
+    };
+    function copySeen() {
+      var out = {};
+      for (var sid in seen) out[sid] = true;
+      return out;
+    }
+    /** Poll for `ms`, collecting every step (the union) — no growth decision. */
+    async function pollFor(ms) {
       var waited = 0;
       while (waited < ms && spent < budgetMs) {
-        await io.sleep(step);
-        spent += step;
-        if (absorb() > 0) {
-          collect();
-          return true;
-        }
-        // A loading indicator: this wait does not run down (the budget does).
-        if (!loadingShown()) waited += step;
+        await io.sleep(poll);
+        spent += poll;
+        waited += poll;
+        absorb();
+        collect();
+      }
+    }
+    /**
+     * Wait up to `ms` for the FIRST growth (new msg-ids beyond `fromCount`),
+     * polling every `poll` ms; a visible loading indicator stops the clock
+     * (the budget still runs).
+     */
+    async function waitGrowth(ms, fromCount) {
+      var waited = 0;
+      while (waited < ms && spent < budgetMs) {
+        await io.sleep(poll);
+        spent += poll;
+        absorb();
+        collect();
+        if (count > fromCount) return true;
+        if (!loadingShown()) waited += poll;
       }
       return false;
     }
-
-    absorb();
-    collect();
-    var firstPage = count;
-    for (;;) {
-      if (io.onProgress) io.onProgress(count);
-      if (count >= cap) return result("cap");
-      if (floorMs !== null) {
-        var oldest = io.oldestMs();
-        if (typeof oldest === "number" && oldest < floorMs) return result("date_floor");
+    /** After the first growth: wait for HISTORY_QUIET_MS of no change, capped at HISTORY_QUIET_CAP_MS. */
+    async function quietPeriod() {
+      var quiet = 0;
+      var total = 0;
+      while (quiet < HISTORY_QUIET_MS && total < HISTORY_QUIET_CAP_MS && spent < budgetMs) {
+        await io.sleep(poll);
+        spent += poll;
+        total += poll;
+        if (absorb() > 0) quiet = 0;
+        else quiet += poll;
+        collect();
       }
-      if (atStart()) return result("no_more", "marker");
-      // L1: a chat that does not overflow has nothing to scroll — its whole
-      // history is on screen once it is settled.
-      if (scrolls === 0 && !hasScroller() && (await firstPageSettled(false))) return result("no_more", "no_overflow");
-      if (scrolls === 0 && firstPage < HISTORY_FIRST_PAGE && (await firstPageSettled(true))) return result("no_more", "first_page");
-      if (spent >= budgetMs) return result("not_settled");
-      var before = {};
-      for (var sid in seen) before[sid] = true;
-      await io.scrollUp();
-      scrolls += 1;
-      var added = await waitForNew(noNewMs);
-      for (var k = 0; !added && k < nudgeWaits.length && spent < budgetMs; k++) {
-        if (atStart()) return result("no_more", "marker");
-        await nudge();
-        nudges += 1;
-        added = await waitForNew(nudgeWaits[k]);
-      }
-      if (!added) return atStart() ? result("no_more", "marker") : result("not_settled");
-      // GAP GUARD: the new read must overlap what was read before.
+    }
+    /** GAP GUARD on a batch that GREW: it must overlap what was read before it. */
+    async function contiguous(before) {
       var screen = onScreenIds();
       var overlap = false;
       var fresh = {};
@@ -1003,14 +1037,124 @@
         if (before[screen[q]]) overlap = true;
         else fresh[screen[q]] = true;
       }
-      if (!overlap) {
-        gapsDetected += 1;
-        if (await recoverGap(before, fresh)) gapsRecovered += 1;
-        else return result("history_gap");
+      if (overlap) return true;
+      gapsDetected += 1;
+      if (await recoverGap(before, fresh)) {
+        gapsRecovered += 1;
+        return true;
       }
-      // Awaited after every scroll that loaded something, so a caller can end
-      // the load (by throwing) as soon as it learns the job was cancelled.
-      if (io.checkpoint) await io.checkpoint(count);
+      return false;
+    }
+    /** One batch request: to the top, first growth, quiet period. → "grew" | "none" | "gap". */
+    async function requestBatch() {
+      var before = copySeen();
+      var c0 = count;
+      await io.scrollUp();
+      scrolls += 1;
+      if (!(await waitGrowth(HISTORY_FIRST_GROWTH_MS, c0))) return "none";
+      await quietPeriod();
+      return (await contiguous(before)) ? "grew" : "gap";
+    }
+    /**
+     * The scroll nudge: half a screen down, a short wait for the phone sync
+     * path to wake, then back to the top in eased steps (each a scroll event,
+     * so the page asks for history again), then a watch. The down/return
+     * steps are COLLECTED but never judged — only the whole nudge's growth
+     * counts, and only a nudge that grew is checked for contiguity.
+     */
+    async function scrollNudge() {
+      var before = copySeen();
+      var c0 = count;
+      nudges += 1;
+      await nudgeDown();
+      await pollFor(HISTORY_NUDGE_WAKE_MS);
+      for (var i = 0; i < HISTORY_NUDGE_RETURN_STEPS && spent < budgetMs; i++) {
+        await nudgeReturnStep(i, HISTORY_NUDGE_RETURN_STEPS);
+        await pollFor(HISTORY_NUDGE_STEP_MS);
+      }
+      var grew = count > c0 || (await waitGrowth(HISTORY_NUDGE_WATCH_MS, c0));
+      if (!grew) return "none";
+      await quietPeriod();
+      return (await contiguous(before)) ? "grew" : "gap";
+    }
+
+    absorb();
+    collect();
+    var firstPage = count;
+    var stalls = 0;
+    var finish = async function (stopReason, confirmedBy) {
+      if (stopReason !== "history_gap" && io.imagePass) await imagePass();
+      return result(stopReason, confirmedBy);
+    };
+    /**
+     * Images mount only in the viewport: a bounded pass DOWN the chat
+     * (HISTORY_IMAGE_PASS_MS), collecting as it goes; it stops after
+     * HISTORY_IMAGE_STAGNANT steps that mounted no new image, then one retry
+     * pass. Only for chats whose images Keepr keeps (io.imagePass).
+     */
+    async function imagePass() {
+      var deadline = spent + HISTORY_IMAGE_PASS_MS;
+      for (var pass = 0; pass < 2 && spent < deadline; pass++) {
+        if (pass > 0) await io.scrollUp();
+        var stagnant = 0;
+        var known = imagesCollected();
+        while (stagnant < HISTORY_IMAGE_STAGNANT && spent < deadline) {
+          if (!io.stepDown) return;
+          var moved = await io.stepDown(HISTORY_IMAGE_STEP_FRACTION);
+          await io.sleep(poll);
+          spent += poll;
+          absorb();
+          collect();
+          var now = imagesCollected();
+          if (now > known) {
+            known = now;
+            stagnant = 0;
+          } else {
+            stagnant += 1;
+          }
+          if (moved === false) break; // at the bottom
+        }
+      }
+    }
+    function imagesCollected() {
+      var n = 0;
+      for (var id in collected) n += (collected[id].imageSrcs || []).length;
+      return n;
+    }
+
+    for (;;) {
+      if (io.onProgress) io.onProgress(count);
+      if (count >= cap) return finish("cap");
+      if (floorMs !== null) {
+        var oldest = io.oldestMs();
+        // Date-range stop: a message older than the floor is loaded — no more requests.
+        if (typeof oldest === "number" && oldest < floorMs) return finish("date_floor");
+      }
+      if (atStart()) return finish("no_more", "marker");
+      // L1: a chat that does not overflow has nothing to scroll — its whole
+      // history is on screen once it is settled.
+      if (scrolls === 0 && !hasScroller() && (await firstPageSettled(false))) return finish("no_more", "no_overflow");
+      if (scrolls === 0 && firstPage < HISTORY_FIRST_PAGE && (await firstPageSettled(true))) return finish("no_more", "first_page");
+      if (spent >= budgetMs) return finish("not_settled");
+      var outcome = await requestBatch();
+      if (outcome === "none") {
+        if (atStart()) return finish("no_more", "marker");
+        outcome = await scrollNudge();
+      }
+      if (outcome === "gap") return finish("history_gap");
+      if (outcome === "grew") {
+        stalls = 0;
+        // Awaited after every batch that loaded something, so a caller can
+        // end the load (by throwing) as soon as it learns the job was cancelled.
+        if (io.checkpoint) await io.checkpoint(count);
+        continue;
+      }
+      // A stall: a batch request AND a nudge brought nothing.
+      if (spent >= budgetMs) return finish("not_settled");
+      stalls += 1;
+      var small = count < HISTORY_SMALL_CHAT && !loadingShown();
+      if (small && stalls >= 1) return finish("no_more", "one_stall");
+      if (stalls >= 2) return finish("no_more", "two_stalls");
     }
   }
 
@@ -1187,7 +1331,9 @@
     findMessageScroller: findMessageScroller,
     loadHistory: loadHistory,
     RCS_HISTORY_BUDGET_MS: RCS_HISTORY_BUDGET_MS,
-    HISTORY_NUDGE_WAITS_MS: HISTORY_NUDGE_WAITS_MS,
+    HISTORY_SMALL_CHAT: HISTORY_SMALL_CHAT,
+    HISTORY_FIRST_GROWTH_MS: HISTORY_FIRST_GROWTH_MS,
+    HISTORY_NUDGE_WATCH_MS: HISTORY_NUDGE_WATCH_MS,
     HISTORY_START_MARKER_SELECTORS: HISTORY_START_MARKER_SELECTORS,
     HISTORY_LOADING_SELECTORS: HISTORY_LOADING_SELECTORS,
     messageIdSet: messageIdSet,

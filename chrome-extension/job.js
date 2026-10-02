@@ -220,9 +220,13 @@
         out.push({ m: m, seen: out.length });
       }
     }
-    function num(id) {
-      var n = /^\d+$/.test(String(id)) ? parseInt(id, 10) : NaN;
-      return isFinite(n) ? n : null;
+    /** Numeric msg-id order: shorter first, then by digits (exact for ids of any length). */
+    function cmpIds(x, y) {
+      var a = String(x);
+      var b = String(y);
+      if (!/^\d+$/.test(a) || !/^\d+$/.test(b)) return 0;
+      if (a.length !== b.length) return a.length - b.length;
+      return a < b ? -1 : a > b ? 1 : 0;
     }
     out.sort(function (x, y) {
       var tx = Date.parse(x.m.sentAt);
@@ -230,9 +234,8 @@
       tx = isFinite(tx) ? tx : 0;
       ty = isFinite(ty) ? ty : 0;
       if (tx !== ty) return tx - ty;
-      var nx = num(x.m.msgId);
-      var ny = num(y.m.msgId);
-      if (nx !== null && ny !== null && nx !== ny) return nx - ny;
+      var byId = cmpIds(x.m.msgId, y.m.msgId);
+      if (byId !== 0) return byId;
       return x.seen - y.seen;
     });
     return out.map(function (e) { return e.m; });
@@ -644,6 +647,10 @@
         var match = await call("POST", base + "/match", { conversationId: conv.conversationId, numbers: numbers });
         if (!match.ok) throw new Error(messageOf(match, "Keepr could not check this chat."));
         var isMatch = !!(match.body && match.body.matched);
+        // Keepr says whether it keeps this chat's images (a cache Sync keeps
+        // them only for chats with a transaction contact); a transaction
+        // Sync's matched chat always keeps them.
+        var keepImages = isCache ? !!(match.body && match.body.keepImages) : true;
         if (!isMatch && match.body && match.body.excluded === true) {
           // BACKLOG-3658 P3c: the user switched this chat off — counted, never silent.
           totals.notSynced += 1;
@@ -682,6 +689,11 @@
         var hist = await env.scan.loadHistory(env.doc, {
           scrollUp: env.scrollMessagesUp || function () {},
           nudge: env.nudgeMessages,
+          nudgeDown: env.nudgeDownMessages,
+          nudgeReturnStep: env.nudgeReturnMessages,
+          stepDown: env.stepDownMessages,
+          // Images mount only in view: the image pass, only for chats whose images Keepr keeps.
+          imagePass: keepImages,
           hasScroller: env.hasMessageScroller,
           // GAP GUARD: messages are kept as they are read (a virtualized list
           // may drop them before the end), and a gap is stepped back over.
@@ -1625,7 +1637,7 @@
     var el = root.KeeprScan.findMessageScroller(document);
     if (!el) return;
     el.scrollTop = 0;
-    el.dispatchEvent(new el.ownerDocument.defaultView.Event("scroll"));
+    el.dispatchEvent(new el.ownerDocument.defaultView.Event("scroll", { bubbles: true }));
   }
 
   /** GAP GUARD: half a screen back down, to re-read across a gap. */
@@ -1642,10 +1654,40 @@
     if (!el) return;
     var Ev = el.ownerDocument.defaultView.Event;
     el.scrollTop = Math.min(200, el.scrollHeight);
-    el.dispatchEvent(new Ev("scroll"));
+    el.dispatchEvent(new Ev("scroll", { bubbles: true }));
     await sleep(150);
     el.scrollTop = 0;
-    el.dispatchEvent(new Ev("scroll"));
+    el.dispatchEvent(new Ev("scroll", { bubbles: true }));
+  }
+
+  /** History v2 nudge: half a viewport down (a bubbling scroll event). */
+  var nudgeFrom = 0;
+  async function nudgeDownMessages() {
+    var el = root.KeeprScan.findMessageScroller(document);
+    if (!el) return;
+    nudgeFrom = Math.min(el.scrollHeight, el.scrollTop + Math.floor(el.clientHeight / 2));
+    el.scrollTop = nudgeFrom;
+    el.dispatchEvent(new el.ownerDocument.defaultView.Event("scroll", { bubbles: true }));
+  }
+
+  /** History v2 nudge: step i of n back to the top, eased (each a scroll event). */
+  async function nudgeReturnMessages(i, n) {
+    var el = root.KeeprScan.findMessageScroller(document);
+    if (!el) return;
+    var t = (i + 1) / n;
+    var eased = 1 - Math.pow(1 - t, 3); // ease-out: big steps first, gentle at the top
+    el.scrollTop = Math.round(nudgeFrom * (1 - eased));
+    el.dispatchEvent(new el.ownerDocument.defaultView.Event("scroll", { bubbles: true }));
+  }
+
+  /** Image pass: a fraction of a viewport down; false at the bottom. */
+  async function stepDownMessages(fraction) {
+    var el = root.KeeprScan.findMessageScroller(document);
+    if (!el) return false;
+    var before = el.scrollTop;
+    el.scrollTop = Math.min(el.scrollHeight, el.scrollTop + Math.floor(el.clientHeight * fraction));
+    el.dispatchEvent(new el.ownerDocument.defaultView.Event("scroll", { bubbles: true }));
+    return el.scrollTop > before;
   }
 
   // BACKLOG-3629: both layouts (list + chat side by side, or list OR chat in a
@@ -1701,6 +1743,9 @@
       hashName: hashName,
       scrollMessagesUp: scrollMessagesUp,
       nudgeMessages: nudgeMessages,
+      nudgeDownMessages: nudgeDownMessages,
+      nudgeReturnMessages: nudgeReturnMessages,
+      stepDownMessages: stepDownMessages,
       stepBackMessages: stepBackMessages,
       extensionVersion: manifestVersion(),
       openConversation: openConversation,

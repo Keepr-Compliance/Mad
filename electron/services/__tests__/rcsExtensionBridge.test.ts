@@ -659,6 +659,8 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
       finishSaveWaitMs: 200,
       // P3b contacts-only flag: this test number is not a transaction contact.
       cacheChatAllowed: (_jobId, _userId, numbers) => !numbers.includes("+15555550199"),
+      // History v2: images kept only for this (contact) number.
+      cacheImagesKept: (_userId, numbers) => numbers.includes("+15555550142"),
       jobs: new RcsJobRegistry(),
     });
     expect(await bridge.start(0)).toBe("listening");
@@ -673,12 +675,19 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
 
   it("every chat with a number is matched; /chat stores it for the job's user with the numbers /match saw", async () => {
     const match = await request(port, "POST", `/job/${jobId}/match`, EXT, JSON.stringify({ conversationId: CHAT.conversationId, numbers: ["(555) 555-0142"] }));
-    expect(match.body).toEqual({ matched: true, contactIds: [] });
+    // History v2: keepImages tells the page whether to run its image pass.
+    expect(match.body).toEqual({ matched: true, contactIds: [], keepImages: true });
     const body = JSON.stringify({ ...CHAT, participants: [{ name: "Test Contact Unmatched", number: "+1 555 555 0177" }] });
     expect((await request(port, "POST", `/job/${jobId}/chat`, EXT, body)).status).toBe(200);
     expect(cacheChats).toEqual([[CHAT.conversationId, "user-a", { numbers: ["+15555550142"], names: [] }]]);
     // BACKLOG-3658 atomic import: staged under THIS job.
     expect(stagedFor).toEqual([jobId]);
+  });
+
+  // History v2. Mutation: keepImages always true → red.
+  it("/match tells the page when Keepr does NOT keep a chat's images", async () => {
+    const match = await request(port, "POST", `/job/${jobId}/match`, EXT, JSON.stringify({ conversationId: CHAT.conversationId, numbers: ["(555) 555-0177"] }));
+    expect(match.body).toEqual({ matched: true, contactIds: [], keepImages: false });
   });
 
   // BACKLOG-3658 atomic import. Mutation: drop the isActive re-check → red

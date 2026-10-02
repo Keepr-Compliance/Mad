@@ -93,6 +93,12 @@ describe("unionMessages (gap guard)", () => {
     ];
     expect(job.unionMessages(read, []).map((m: { msgId: string }) => m.msgId)).toEqual(["1", "9", "10", "b", "a"]);
   });
+  it("ids longer than 15 digits: compared exactly (length, then digits), not as rounded numbers", () => {
+    const big = ["90071992547409930", "90071992547409929", "900719925474099301"].map((msgId) => ({ msgId, sentAt: at }));
+    expect(job.unionMessages(big, []).map((m: { msgId: string }) => m.msgId)).toEqual([
+      "90071992547409929", "90071992547409930", "900719925474099301",
+    ]);
+  });
 });
 
 describe("gap guard on a recycling list", () => {

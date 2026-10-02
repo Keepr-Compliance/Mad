@@ -192,6 +192,8 @@ export interface RcsExtensionBridgeOptions {
   listExclusions?: (userId: string) => string[];
   /** P3c: POST /exclusions/set — the eye on a row. */
   setExclusion?: (userId: string, conversationId: string, excluded: boolean) => void;
+  /** History v2: does Keepr keep images of a cache chat with these numbers (E.164)? */
+  cacheImagesKept?: (userId: string, numbers: string[]) => boolean;
   /** BACKLOG-3658: the signed-in user now; a job of another user is cancelled. */
   currentUserId?: () => Promise<string | null>;
   /** BACKLOG-3658: a job ended (finished, failed or cancelled). Once per job. */
@@ -777,6 +779,13 @@ export class RcsExtensionBridge {
         this.emitJob(job.snapshot());
         // A cache job keeps every chat with a number (BACKLOG-3658).
         const matched = job.kind === "cache" ? job.isMatched(conversationId) : contactIds.length > 0;
+        // History v2: whether Keepr keeps this chat's images, so the page runs
+        // its image pass only where it matters (a boolean — no names, no numbers).
+        if (job.kind === "cache" && matched && this.options.cacheImagesKept && job.userId) {
+          const normalized = participantKey(shown).split(",").filter(Boolean);
+          sendJson(res, 200, { matched, contactIds, keepImages: this.options.cacheImagesKept(job.userId, normalized) });
+          return;
+        }
         sendJson(res, 200, { matched, contactIds });
         return;
       }

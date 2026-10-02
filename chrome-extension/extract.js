@@ -87,7 +87,11 @@
    * Observed shapes: "<Sender Name> said: <text>. Received on …",
    * "<Sender Name> sent an image. Received on …", "<Sender Name> sent a file: …".
    */
-  var SENDER_RE = /^(.+?) (?:said: |sent an image\b|sent a file\b)/;
+  // History v2 sender fallback (English): "<name> said: …", "<name> replied: …",
+  // "<name> sent …" — ANCHORED at the start, so a reaction later in the label
+  // ("… <reactor> reacted with …") is never taken for the sender. The name is
+  // only used to map a group sender to a number; never logged, never a key.
+  var SENDER_RE = /^(.+?) (?:said: |replied: |replied\b|sent an? \w+|sent a file\b)/;
   /** Reaction tail on a message label: "<Reactor> reacted with <word>." */
   var REACTED_RE = /(?:^|\.\s+)([^.]+?) reacted with ([^.]+?)(?=\.|$)/g;
   /**

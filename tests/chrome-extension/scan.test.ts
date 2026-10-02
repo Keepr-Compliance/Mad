@@ -731,9 +731,14 @@ interface HistoryModule {
       nudge?: () => void | Promise<void>;
       startMarkerSelectors?: string[];
       hasScroller?: () => boolean;
+      nudgeDown?: () => void;
+      nudgeReturnStep?: (i: number, n: number) => void;
+      imagePass?: boolean;
+      stepDown?: (f: number) => boolean;
+      extractBatch?: () => unknown[];
       onProgress?: (n: number) => void;
     },
-  ) => Promise<{ stopReason: string; count: number; scrolls: number; nudges: number; confirmedBy?: string }>;
+  ) => Promise<{ stopReason: string; count: number; scrolls: number; nudges: number; confirmedBy?: string; gapsDetected?: number; messages?: unknown[] }>;
 }
 const hist = scan as unknown as HistoryModule;
 const extractFn = extract.extractConversation as (d: Document, h: string, n: Date) => {
@@ -760,7 +765,7 @@ function historyWrapper(i: number): string {
  * 25 older ones, which appear `loadDelayMs` of clock later (clock advanced by
  * `sleep`). `virtualized`: the pane only ever holds the 30 oldest loaded.
  */
-function historyPane(opts: { total: number; loadDelayMs?: number; virtualized?: boolean; spinner?: boolean; startMarker?: boolean }) {
+function historyPane(opts: { total: number; loadDelayMs?: number; virtualized?: boolean; spinner?: boolean; startMarker?: boolean; parkAfter?: number }) {
   const delay = opts.loadDelayMs ?? 400;
   let loaded = Math.min(PAGE, opts.total);
   let clock = 0;
@@ -789,8 +794,14 @@ function historyPane(opts: { total: number; loadDelayMs?: number; virtualized?: 
     render,
     clock: () => clock,
     scrollClocks,
+    /** A load request the page makes itself (e.g. after the nudge's scroll events). */
+    trigger: (): void => {
+      if (loaded < opts.total && pendingAt === null) pendingAt = clock + delay;
+    },
     scrollUp: (): void => {
       scrollClocks.push(clock);
+      // A page parked at the top stops requesting history on plain scroll-ups.
+      if (opts.parkAfter !== undefined && scrollClocks.length > opts.parkAfter) return;
       if (loaded < opts.total && pendingAt === null) {
         pendingAt = clock + delay;
         if (opts.spinner) render();
@@ -879,23 +890,74 @@ describe("loadHistory: scroll up until the start date, the confirmed start, the 
 
   // BACKLOG-3658 #10. Mutation: confirm on the first empty wait (the old
   // rule) → "no_more" after 3 s → red.
-  it("nothing new after a scroll: three nudges with 3 / 6 / 10 s waits, then an UNCONFIRMED stop", async () => {
+  // v2: a small chat (< 100 messages, no loading indicator) is at its start
+  // after ONE stall (a batch request + a nudge that both bring nothing), in
+  // ≤ 10 s. Mutations: two stalls for small chats / a longer stall → red.
+  it("a small chat: ONE stall (batch + nudge) confirms the start, within 10 s", async () => {
     const p = historyPane({ total: 60 });
     p.render();
     const r = await hist.loadHistory(document, { ...base(p), floorMs: null });
-    expect(r).toEqual({ stopReason: "not_settled", count: 60, scrolls: 3, nudges: 3 });
-    const last = p.scrollClocks.slice(-4); // the 3rd scroll and its 3 nudges
-    // 3 s after the scroll, then 3 / 6 / 10 s after each nudge.
-    expect([last[1] - last[0], last[2] - last[1], last[3] - last[2], p.clock() - last[3]]).toEqual([3000, 3000, 6000, 10000]);
+    expect(r).toEqual({ stopReason: "no_more", count: 60, scrolls: 3, nudges: 1, confirmedBy: "one_stall" });
+    const lastScroll = p.scrollClocks[p.scrollClocks.length - 2]; // the stalled batch request (its nudge re-requests too)
+    expect(p.clock() - lastScroll).toBeLessThanOrEqual(10_000);
+  });
+
+  it("a larger chat (≥ 100): TWO stalls confirm the start", async () => {
+    const p = historyPane({ total: 150 });
+    p.render();
+    const r = await hist.loadHistory(document, { ...base(p), floorMs: null });
+    expect(r).toMatchObject({ stopReason: "no_more", count: 150, nudges: 2, confirmedBy: "two_stalls" });
+  });
+
+  // v2: fast chats are not held by fixed waits. Mutation: no early return on
+  // the first growth → each batch waits the full window → red.
+  it("adaptive batches: the next request follows the first growth + a short quiet period", async () => {
+    const p = historyPane({ total: 200 });
+    p.render();
+    await hist.loadHistory(document, { ...base(p), floorMs: new Date(2026, 8, 20 - 150).getTime() });
+    const gaps = p.scrollClocks.slice(1).map((c, i) => c - p.scrollClocks[i]);
+    // a 400 ms load + ≤ 950 ms quiet cap, never the 4.3 s window
+    for (const g of gaps) expect(g).toBeLessThanOrEqual(1400);
   });
 
   // The real-phone case: the next page took longer than 3 s. Mutation: no
   // nudges → stops at 25 → red.
-  it("a page slower than 3 s (5 s) is still loaded thanks to the nudges", async () => {
+  it("a page slower than the first-growth window (5 s) is still loaded thanks to the nudge", async () => {
     const p = historyPane({ total: 60, loadDelayMs: 5000 });
     p.render();
     const r = await hist.loadHistory(document, { ...base(p), floorMs: null });
-    expect(r).toMatchObject({ stopReason: "not_settled", count: 60 });
+    expect(r).toMatchObject({ stopReason: "no_more", count: 60 });
+  });
+
+  // v2 + gap guard: a page parked at the top only loads again after the
+  // nudge; the batch that nudge loads overlaps what was read, so no gap.
+  // Mutation: the nudge return steps judged for gaps → history_gap → red.
+  it("a nudge that loads one batch keeps the overlap and raises no history_gap", async () => {
+    const p = historyPane({ total: 90, virtualized: true, parkAfter: 1 });
+    p.render();
+    const r = await hist.loadHistory(document, {
+      ...base(p), floorMs: null, nudgeReturnStep: (i: number, n: number) => (i === n - 1 ? p.trigger() : undefined),
+    });
+    expect(r.stopReason).toBe("no_more");
+    expect(r.count).toBe(90);
+    expect(r.gapsDetected).toBeUndefined();
+  });
+
+  it("while a loading indicator stays visible, a small chat is never confirmed (the budget ends it)", async () => {
+    const p = historyPane({ total: 40 });
+    p.render();
+    // The pane re-renders on each load: the indicator is put back after every step.
+    const spin = () => {
+      const pane = document.getElementById("pane")!;
+      if (!pane.querySelector("[role=progressbar]")) pane.insertAdjacentHTML("beforeend", `<div role="progressbar" data-test-visible></div>`);
+    };
+    spin();
+    const sleep = async (ms: number) => {
+      await p.sleep(ms);
+      spin();
+    };
+    const r = await hist.loadHistory(document, { ...base(p), sleep, floorMs: null, budgetMs: 30_000 });
+    expect(r.stopReason).toBe("not_settled");
   });
 
   // Mutation: the loading indicator ignored → 22 s of waits < 25 s → red.
@@ -916,7 +978,7 @@ describe("loadHistory: scroll up until the start date, the confirmed start, the 
 
   it("the start marker list is a named constant, empty until traced live", () => {
     expect((scan as unknown as { HISTORY_START_MARKER_SELECTORS: string[] }).HISTORY_START_MARKER_SELECTORS).toEqual([]);
-    expect((scan as unknown as { HISTORY_NUDGE_WAITS_MS: number[] }).HISTORY_NUDGE_WAITS_MS).toEqual([3000, 6000, 10000]);
+    expect((scan as unknown as { HISTORY_SMALL_CHAT: number }).HISTORY_SMALL_CHAT).toBe(100);
     expect((scan as unknown as { RCS_HISTORY_BUDGET_MS: number }).RCS_HISTORY_BUDGET_MS).toBe(60_000);
   });
 
@@ -1018,15 +1080,40 @@ describe("loadHistory: scroll up until the start date, the confirmed start, the 
     const p = historyPane({ total: 100, virtualized: true });
     p.render();
     const r = await hist.loadHistory(document, { ...base(p), floorMs: null });
-    expect(r).toEqual({ stopReason: "not_settled", count: 100, scrolls: 4, nudges: 3 });
+    expect(r).toMatchObject({ stopReason: "no_more", count: 100, confirmedBy: "two_stalls" });
   });
 
-  it("a nudge function, when given, is used for the retries", async () => {
+  it("the nudge: down once, then 10 eased return steps", async () => {
     const p = historyPane({ total: 60 });
     p.render();
-    const nudge = jest.fn(p.scrollUp);
-    await hist.loadHistory(document, { ...base(p), floorMs: null, nudge } as Parameters<typeof hist.loadHistory>[1]);
-    expect(nudge).toHaveBeenCalledTimes(3);
+    const down = jest.fn();
+    const back = jest.fn();
+    await hist.loadHistory(document, { ...base(p), floorMs: null, nudgeDown: down, nudgeReturnStep: back } as Parameters<typeof hist.loadHistory>[1]);
+    expect(down).toHaveBeenCalledTimes(1);
+    expect(back.mock.calls.map((c) => c[0])).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  });
+
+  // v2 image pass (kept-image chats only): images mount only in view.
+  // Mutations: no pass / no stagnant stop / no time bound → red.
+  it("image pass: steps down collecting lazily mounted images; 4 stagnant steps stop it; ≤ 3 s", async () => {
+    const p = historyPane({ total: 10 });
+    p.render();
+    let downs = 0;
+    const startClock = p.clock();
+    const r = await hist.loadHistory(document, {
+      ...base(p),
+      floorMs: null,
+      hasScroller: () => false,
+      imagePass: true,
+      stepDown: () => {
+        downs += 1;
+        return true;
+      },
+      extractBatch: () => [{ msgId: "h3", sentAt: "2026-09-17T09:05:00.000Z", imageSrcs: downs >= 2 ? ["blob:x"] : [] }],
+    } as Parameters<typeof hist.loadHistory>[1]);
+    expect(((r as unknown as { messages: Array<{ imageSrcs: string[] }> }).messages)[0].imageSrcs).toEqual(["blob:x"]);
+    expect(downs).toBe(2 + 4 + 4); // until the image, 4 stagnant, then one retry pass of 4
+    expect(p.clock() - startClock).toBeLessThanOrEqual(3000 + 3000); // stability check + the ≤ 3 s pass
   });
 });
 
@@ -1125,9 +1212,10 @@ describe("job runner: loads history before extracting a matched chat", () => {
   it("no start date: loads until nothing new comes; an unconfirmed start is imported and reported", async () => {
     const t = historyJob({ total: 120, startDate: null });
     const outcome = (await job.runJob(t.JOB, t.env)) as HistoryOutcome & { notReached?: Array<{ reason: string }> };
-    expect(outcome.history).toEqual([{ conversationId: "aaaaaaaaaaaaaaaaaaa", stopReason: "not_settled", count: 120 }]);
+    // v2: a chat of 120 messages is at its start after two stalls (confirmed).
+    expect(outcome.history).toEqual([{ conversationId: "aaaaaaaaaaaaaaaaaaa", stopReason: "no_more", count: 120 }]);
     expect(t.sentIds()).toHaveLength(120);
-    expect(outcome.notReached).toEqual([expect.objectContaining({ reason: "history_not_settled" })]);
+    expect(outcome.notReached ?? []).toEqual([]);
   });
 
   it("a cancel during the history load ends the run at the first checkpoint: no more scrolls, no /chat, no /finish", async () => {

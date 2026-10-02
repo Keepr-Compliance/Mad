@@ -141,6 +141,18 @@ describe("extraction edge cases", () => {
     expect(new Date(soon.messages[0].sentAt)).toEqual(new Date(2026, 0, 2, 10, 4));
   });
 
+  // History v2 sender fallback: "<name> replied: …" / "<name> sent a GIF",
+  // anchored at the start — a reactor later in the label is never the sender.
+  // Mutation: no "replied" form, or an unanchored match → red.
+  it("sender from the label start: replied / sent …; a later reaction is not the sender", () => {
+    const one = (id: string, label: string) => `<mws-message-wrapper msg-id="${id}"><div data-e2e-message-wrapper-core data-e2e-message-outgoing="false" data-e2e-message-rcs="true">
+      <mws-text-message-part aria-label="${label}"><mws-message-part-content data-e2e-message-content>x</mws-message-part-content></mws-text-message-part></div></mws-message-wrapper>`;
+    const r = run(`${one("1", "Test Contact B replied: x. Received on December 30, 2025 at 9:05 AM.")}
+      ${one("2", "Test Contact C sent a GIF. Received on December 30, 2025 at 9:06 AM.")}
+      ${one("3", "x. Received on December 30, 2025 at 9:07 AM. Test Contact D reacted with heart.")}`);
+    expect(r.messages.map((m) => m.sender)).toEqual(["Test Contact B", "Test Contact C", "Test Contact A"]);
+  });
+
   it("quoted reply: the reply is the one message; the quoted name and text are not (X7)", () => {
     const quote = `<div class="embed-msg-part-container"><mws-text-message-part aria-label="Test Contact B said: the original question. ${ON("December 29, 2025")}.">
       <span>Test Contact B</span><mws-message-part-content data-e2e-message-content>the original question</mws-message-part-content></mws-text-message-part></div>`;

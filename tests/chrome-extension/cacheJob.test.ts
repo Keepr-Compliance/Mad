@@ -153,6 +153,8 @@ function cacheEnv(opts: {
   imageReply?: { ok: boolean; status: number; body: Record<string, unknown> };
   visibility?: { hidden: () => boolean; whenVisible: () => Promise<void> };
   finishReply?: Record<string, unknown>;
+  /** History v2: /match's keepImages answer. */
+  keepImages?: boolean;
 }) {
   renderList(opts.rows);
   let open = "";
@@ -170,7 +172,9 @@ function cacheEnv(opts: {
       if (p.endsWith("/claim")) {
         return { ok: true, status: 200, body: { jobId: JOB, kind: "cache", contacts: [], since, startDate: "2020-01-01T00:00:00.000Z" } };
       }
-      if (p.endsWith("/match")) return { ok: true, status: 200, body: { matched: true } };
+      if (p.endsWith("/match")) {
+        return { ok: true, status: 200, body: opts.keepImages === undefined ? { matched: true } : { matched: true, keepImages: opts.keepImages } };
+      }
       if (p.endsWith("/attachment")) return opts.imageReply ?? { ok: true, status: 200, body: { ok: true } };
       if (p.endsWith("/chat")) return { ok: true, status: 200, body: { ok: true, stored: 1, received: 1 } };
       if (p.endsWith("/finish") && opts.finishReply) return { ok: true, status: 200, body: opts.finishReply };
@@ -277,6 +281,22 @@ describe("runJob: a cache Sync", () => {
       "History depth: 1 chats reached the 1-month limit · 1 reached the chat's start · 1 not fully loaded · 1 gaps (0 recovered)",
     );
     expect(extras.copy).toContain("gaps 1 detected / 0 recovered");
+  });
+
+  // History v2: the image pass only where Keepr keeps the images.
+  // Mutation: imagePass always on → red.
+  it("image pass only for chats whose images Keepr keeps (/match keepImages)", async () => {
+    for (const keep of [true, false]) {
+      const t = cacheEnv({ rows: ROWS.slice(0, 1), numbers: { [id(0)]: ["+15555550101"] }, keepImages: keep });
+      const seen: unknown[] = [];
+      const inner = (t.env.scan as Record<string, any>).loadHistory; // eslint-disable-line @typescript-eslint/no-explicit-any
+      (t.env.scan as Record<string, unknown>).loadHistory = async (d: Document, o: { imagePass?: boolean }) => {
+        seen.push(o.imagePass);
+        return inner(d, o);
+      };
+      await job.runJob(JOB, t.env);
+      expect(seen).toEqual([keep]);
+    }
   });
 
   it("the history floor is since, not a transaction start date (M7)", async () => {
