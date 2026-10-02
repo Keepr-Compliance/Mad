@@ -500,7 +500,11 @@
     }
   }
 
-  /** An empty result with why: "not_text" (skip, not a failure) or "no_details" (→ no_numbers). */
+  /**
+   * An empty result with why: "not_text" (skip, not a failure), "short_code"
+   * or "business" (BACKLOG-3658 #11: a sender with no phone number), or
+   * "no_details" (→ no_numbers).
+   */
   function noNumbers(kind) {
     var none = [];
     Object.defineProperty(none, "rows", { value: [], enumerable: false });
@@ -562,25 +566,38 @@
     // BACKLOG-3630: each number with the name shown beside it (group senders
     // are resolved by name), and never the user's own row: the chat's key is
     // its OTHER participants, whether or not Details lists "You".
+    // BACKLOG-3658 #11: only a PHONE-SHAPED value is a number (the number span
+    // can hold other text, e.g. a label). A short code (all digits, 3-8) and a
+    // named sender with no number are classified apart — a chat is never keyed
+    // on a name.
     var people = [];
+    var shortCodes = 0;
+    var namedOnly = 0;
     for (var i = 0; i < rows.length; i++) {
       var nmEl = rows[i].querySelector(SELECTORS.participantName);
       var shownName = normalizeSpace(nmEl ? nmEl.textContent : "");
       if (isSelfName(shownName)) continue;
       var num = rows[i].querySelector(SELECTORS.participantNumber);
-      var v = normalizeSpace(num ? num.textContent : "");
-      if (!v) {
-        // An unsaved contact: the number span is empty and the number itself
-        // is shown where a saved contact's name would be.
-        if (looksLikePhone(shownName)) v = shownName;
-      }
-      if (v) {
-        numbers.push(v);
-        people.push({ name: v === shownName ? "" : shownName, number: v });
+      var spanText = normalizeSpace(num ? num.textContent : "");
+      // An unsaved contact: the number span is empty and the number itself
+      // is shown where a saved contact's name would be.
+      var candidate = spanText || shownName;
+      if (looksLikePhone(candidate)) {
+        numbers.push(candidate);
+        people.push({ name: candidate === shownName ? "" : shownName, number: candidate });
+      } else if (isShortCode(spanText) || (!spanText && isShortCode(shownName))) {
+        shortCodes += 1;
+      } else if (shownName) {
+        namedOnly += 1;
       }
     }
     // Not enumerable: callers that only want the numbers see a plain list.
-    Object.defineProperty(numbers, "rows", { value: people, enumerable: false });
+    if (numbers.length === 0) {
+      numbers = noNumbers(shortCodes > 0 ? "short_code" : namedOnly > 0 ? "business" : "no_details");
+    } else {
+      Object.defineProperty(numbers, "rows", { value: people, enumerable: false });
+    }
+
     var done = await waitForOrNull(function () { return doc.querySelector(SELECTORS.detailsDone); }, io.sleep, t);
     if (done) io.click(done);
     var closed = await waitForOrNull(function () { return !doc.querySelector(SELECTORS.participant); }, io.sleep, t);
@@ -591,6 +608,12 @@
   /** The user's own Details row. UNTRACED label; "You" seen in other Google UIs. */
   function isSelfName(name) {
     return /^(you|me)$/i.test(String(name || "").trim());
+  }
+
+  /** BACKLOG-3658 #11: a short-code sender — digits only (spaces allowed), 3 to 8 of them. */
+  function isShortCode(text) {
+    var t = String(text || "").replace(/ /g, "");
+    return /^[0-9]{3,8}$/.test(t);
   }
 
   /** Digits, +, (, ), - and spaces only, with at least 10 digits. */
@@ -1011,6 +1034,7 @@
     collectConversations: collectConversations,
     normalizeName: normalizeName,
     looksLikePhone: looksLikePhone,
+    isShortCode: isShortCode,
     pickCandidates: pickCandidates,
     parseListTime: parseListTime,
     planChecks: planChecks,

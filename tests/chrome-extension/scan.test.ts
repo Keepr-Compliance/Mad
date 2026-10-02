@@ -267,6 +267,52 @@ describe("readParticipantsAndClose: the user's own row (BACKLOG-3630)", () => {
   });
 });
 
+// BACKLOG-3658 #11 (real phone: 19 of 180 chats "no_numbers"; a group's
+// list held "*aaaaa aaaaaa"). Mutations: accept any number-span text, drop
+// the short-code / business kinds, or key a chat on a name → red.
+describe("readParticipantsAndClose: only phone-shaped numbers; short codes and named senders apart (#11)", () => {
+  type Read = string[] & { kind?: string; rows?: Array<{ name: string; number: string }> };
+  const read = async (rows: DetailsRow[]): Promise<Read> => {
+    const page = mountDetails(rows);
+    return (await scan.readParticipantsAndClose(document, { click: page.click, sleep: noSleep })) as Read;
+  };
+
+  it("a number span holding non-number text is not a number", async () => {
+    const r = await read([{ name: "Test Contact A", number: "(555) 555-0199" }, { name: "Test Contact B", number: "*Test Label" }]);
+    expect(Array.from(r)).toEqual(["(555) 555-0199"]);
+    expect(r.rows).toEqual([{ name: "Test Contact A", number: "(555) 555-0199" }]);
+  });
+
+  it("a short-code sender (3-8 digits): kind short_code, no number", async () => {
+    const r = await read([{ name: "72975", number: "" }]);
+    expect(Array.from(r)).toEqual([]);
+    expect(r.kind).toBe("short_code");
+    const spaced = await read([{ name: "Test Bank Alerts", number: "227 898" }]);
+    expect(spaced.kind).toBe("short_code");
+  });
+
+  it("a named sender with no number: kind business — the name is never used as a key", async () => {
+    const r = await read([{ name: "Test Shop Deliveries", number: "" }]);
+    expect(Array.from(r)).toEqual([]);
+    expect(r.kind).toBe("business");
+  });
+
+  it("the box names short_code and business apart from no_numbers", () => {
+    const details = (job as unknown as { detailsText: (s: Record<string, unknown>) => string }).detailsText({
+      listed: 3, checked: 3, matched: 0, chats: 0, messages: 0, images: 0, notChecked: 0, contactsWithoutPhone: 0,
+      removedByUser: 0, imagesNotKept: 0, notText: 0, noMessagesYet: 0, notSynced: 0, notReachedMore: 0,
+      notReached: [
+        { name: "Chat One", reason: "short_code" },
+        { name: "Chat Two", reason: "business" },
+        { name: "Chat Three", reason: "no_numbers" },
+      ],
+    });
+    expect(details).toContain("Chat One (a short-code sender (no phone number))");
+    expect(details).toContain("Chat Two (a named sender with no phone number (e.g. a business))");
+    expect(details).toContain("Chat Three (no phone number shown)");
+  });
+});
+
 describe("readParticipantsAndClose (control 11)", () => {
   it("reads every participant's number, clicks Done, and returns only once the rows are gone", async () => {
     const page = mountDetails(["(555) 555-0199", "(555) 555-0101"]);

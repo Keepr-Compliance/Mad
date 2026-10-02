@@ -394,6 +394,8 @@ describe("no chat is ever silently left out (BACKLOG-3629)", () => {
     name: string;
     open?: "throws";
     numbers?: string[];
+    /** #11: the kind readParticipantsAndClose gives an empty result. */
+    numbersKind?: string;
     matched?: boolean;
     swap1?: boolean;
     swap2?: boolean;
@@ -478,7 +480,11 @@ describe("no chat is ever silently left out (BACKLOG-3629)", () => {
         collectConversations: async () => ({ conversations: convs, stopReason: "stable" }),
         pickCandidates: () => convs.map((c) => ({ conversation: c, reason: "name" })),
         messageIdSet: () => "",
-        readParticipantsAndClose: async () => current().numbers ?? ["(555) 555-0199"],
+        readParticipantsAndClose: async () => {
+          const list = current().numbers ?? ["(555) 555-0199"];
+          if (current().numbersKind) Object.defineProperty(list, "kind", { value: current().numbersKind, enumerable: false });
+          return list;
+        },
         waitForMessageSwap: async () => {
           swaps += 1;
           const plan = current();
@@ -490,6 +496,22 @@ describe("no chat is ever silently left out (BACKLOG-3629)", () => {
     const finish = (): Record<string, unknown> | undefined => calls.find(([, p]) => p.endsWith("/finish"))?.[2];
     return { env, calls, shown, details, copies, finish };
   }
+
+  // BACKLOG-3658 #11. Mutation: every empty result reported as no_numbers → red.
+  it("short-code and named-sender chats are reported apart from no_numbers, never sent to /match", async () => {
+    const t = planJob([
+      { name: "Chat Short Code", numbers: [], numbersKind: "short_code" },
+      { name: "Chat Business", numbers: [], numbersKind: "business" },
+      { name: "Chat No Details", numbers: [], numbersKind: "no_details" },
+    ]);
+    const outcome = await job.runJob(JOB, t.env);
+    expect(outcome.notReached).toEqual([
+      { name: "Chat Short Code", reason: "short_code" },
+      { name: "Chat Business", reason: "business" },
+      { name: "Chat No Details", reason: "no_numbers" },
+    ]);
+    expect(t.calls.filter(([, p]) => p.endsWith("/match"))).toEqual([]);
+  });
 
   it("every way a chat is left out, or imported only in part, is named in /finish and on the page (M6, M9)", async () => {
     const t = planJob([

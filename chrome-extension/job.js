@@ -71,6 +71,8 @@
   var REASON_TEXT = {
     not_opened: "could not be opened",
     no_numbers: "no phone number shown",
+    short_code: "a short-code sender (no phone number)",
+    business: "a named sender with no phone number (e.g. a business)",
     messages_not_loaded: "messages did not load",
     history_not_settled: "older messages did not finish loading — sync again later",
     no_messages: "no messages found",
@@ -548,7 +550,10 @@
         log("  numbers " + JSON.stringify((numbers || []).map(numberShape)));
         if (!numbers || numbers.length === 0) {
           // Keepr cannot check a chat with no number on screen: report it.
-          leaveOut(conv, "no_numbers");
+          // BACKLOG-3658 #11: short codes and named senders apart.
+          var why = numbers && (numbers.kind === "short_code" || numbers.kind === "business") ? numbers.kind : "no_numbers";
+          if (why !== "no_numbers") log("  " + why.replace("_", " "));
+          leaveOut(conv, why);
           continue;
         }
         var match = await call("POST", base + "/match", { conversationId: conv.conversationId, numbers: numbers });
