@@ -78,17 +78,63 @@ export async function prepareExtensionFolder(
     throw new Error("The Google Messages extension in this Keepr build is damaged.");
   }
   const folder = extensionTargetDir(downloadsDir);
-  const stamp = `${process.pid}-${Date.now()}`;
+  const stamp = `${process.pid}-${Date.now()}-${(runSeq += 1)}`;
   const staging = `${folder}.new-${stamp}`;
   const old = `${folder}.old-${stamp}`;
 
-  // Leftovers of an earlier attempt (best-effort).
-  for (const name of await fs.listDir(downloadsDir).catch(() => [] as string[])) {
-    if (name.startsWith(`${RCS_EXTENSION_FOLDER_NAME}.new-`) || name.startsWith(`${RCS_EXTENSION_FOLDER_NAME}.old-`)) {
-      await fs.removeDir(path.join(downloadsDir, name)).catch(() => undefined);
+  // Leftovers of an earlier attempt (best-effort) — never a folder of a run
+  // still in flight.
+  inFlightNames.add(path.basename(staging));
+  inFlightNames.add(path.basename(old));
+  try {
+    for (const name of await fs.listDir(downloadsDir).catch(() => [] as string[])) {
+      if (inFlightNames.has(name)) continue;
+      if (name.startsWith(`${RCS_EXTENSION_FOLDER_NAME}.new-`) || name.startsWith(`${RCS_EXTENSION_FOLDER_NAME}.old-`)) {
+        await fs.removeDir(path.join(downloadsDir, name)).catch(() => undefined);
+      }
     }
+    return await swapIn(sourceDir, folder, staging, old, fs, version);
+  } finally {
+    inFlightNames.delete(path.basename(staging));
+    inFlightNames.delete(path.basename(old));
   }
+}
 
+let runSeq = 0;
+/** Names of the temp folders of runs in flight (the sweep skips them). */
+const inFlightNames = new Set<string>();
+/** The one run in flight per target folder: concurrent callers share it. */
+const inFlight = new Map<string, Promise<{ folder: string; version: string }>>();
+
+/**
+ * SR (live ENOENT): React's StrictMode runs the install step's effect twice in
+ * development, so two copies started at once and the second one's sweep
+ * deleted the first one's temp folder mid-copy. Callers share the one run in
+ * flight for the same Downloads folder.
+ */
+export function prepareExtensionFolderShared(
+  sourceDir: string,
+  downloadsDir: string,
+  fs: DeliveryFs,
+): Promise<{ folder: string; version: string }> {
+  const key = extensionTargetDir(downloadsDir);
+  const running = inFlight.get(key);
+  if (running) return running;
+  const run = prepareExtensionFolder(sourceDir, downloadsDir, fs).finally(() => {
+    inFlight.delete(key);
+  });
+  inFlight.set(key, run);
+  return run;
+}
+
+async function swapIn(
+  sourceDir: string,
+  folder: string,
+  staging: string,
+  old: string,
+  fs: DeliveryFs,
+  version: string,
+): Promise<{ folder: string; version: string }> {
   try {
     await fs.copyDir(sourceDir, staging);
   } catch (err) {

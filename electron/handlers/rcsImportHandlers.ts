@@ -39,7 +39,7 @@ import {
   extensionSourceDir,
   extensionTargetDir,
   launchChrome,
-  prepareExtensionFolder,
+  prepareExtensionFolderShared,
 } from "../services/rcsExtensionDelivery";
 import {
   cacheRunReachedFloor,
@@ -736,7 +736,8 @@ export function registerRcsImportHandlers(): void {
           resourcesPath: process.resourcesPath,
           appPath: app.getAppPath(),
         });
-        const out = await prepareExtensionFolder(source, app.getPath("downloads"), {
+        // Concurrent callers (StrictMode runs the effect twice) share one run.
+        const out = await prepareExtensionFolderShared(source, app.getPath("downloads"), {
           exists: async (p) => fs.promises.access(p).then(() => true, () => false),
           readText: (p) => fs.promises.readFile(p, "utf8"),
           copyDir: (from, to) => fs.promises.cp(from, to, { recursive: true, errorOnExist: true }),

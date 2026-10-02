@@ -161,4 +161,31 @@ describe("GoogleMessagesSyncFlow", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Sign in to Keepr first.");
     expect(screen.getByTestId("gm-step-connect")).toBeInTheDocument();
   });
+
+  // Live ENOENT: the effect ran twice under StrictMode. Mutation: drop the
+  // once-per-flow guard → red.
+  it("StrictMode: the extension is prepared once per flow", async () => {
+    render(
+      <React.StrictMode>
+        <GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />
+      </React.StrictMode>,
+    );
+    await screen.findByTestId("gm-step-install");
+    await new Promise((r) => setTimeout(r, 30));
+    expect(mockPrepare).toHaveBeenCalledTimes(1);
+  });
+
+  it("a prepare error is not shown once the flow has left the install step", async () => {
+    let fail: (v: unknown) => void = () => undefined;
+    mockPrepare.mockReturnValue(new Promise((r) => {
+      fail = r;
+    }));
+    render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);
+    await screen.findByTestId("gm-step-install");
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await act(async () => {
+      fail({ success: false, error: "ENOENT: copyfile" });
+    });
+    expect(screen.queryByText(/ENOENT/)).toBeNull();
+  });
 });

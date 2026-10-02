@@ -94,15 +94,21 @@ export function GoogleMessagesSyncFlow({ onClose, onUseCompanion, pollMs = POLL_
 
   const step = googleMessagesStep({ state, job, continued });
   const installed = extensionInstalled(state);
+  const stepRef = useRef(step);
+  stepRef.current = step;
+  const preparedRef = useRef(false);
 
-  // The extension goes to Downloads as soon as the install step shows.
+  // The extension goes to Downloads as soon as the install step shows — once
+  // per flow (StrictMode runs effects twice in development). A failure is
+  // shown only while the user is still on the install step.
   useEffect(() => {
-    if (step !== "install" || folderNote) return;
+    if (step !== "install" || preparedRef.current) return;
+    preparedRef.current = true;
     void rcsImportService.prepareExtension().then((r) => {
-      setFolderNote(r.success ? `Downloads › ${r.data?.folder.split(/[\\/]/).pop() ?? "Keepr Extension"}` : null);
-      if (!r.success) setError(r.error ?? "Keepr could not prepare the extension.");
+      if (r.success) setFolderNote(`Downloads › ${r.data?.folder.split(/[\\/]/).pop() ?? "Keepr Extension"}`);
+      else if (stepRef.current === "install") setError(r.error ?? "Keepr could not prepare the extension.");
     });
-  }, [step, folderNote]);
+  }, [step]);
 
   const openChrome = useCallback(async () => {
     const r = await rcsImportService.openChromeForExtension();

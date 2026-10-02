@@ -16,6 +16,8 @@
  *   S1c no rollback when the copy cannot be renamed into place          → "the copy cannot be put in place"
  *   S1d the copy left behind on a failure                               → "old folder in use", "copy cannot be put in place"
  *   S1e an old leftover (.old-* / .new-*) never swept                   → "a real folder"
+ *   P1 concurrent calls not sharing one run (live ENOENT)               → "two concurrent calls"
+ *   P2 the sweep deleting a temp folder of a run in flight              → "the sweep never touches"
  */
 
 import * as path from "path";
@@ -27,6 +29,7 @@ import {
   launchChrome,
   type LaunchedProcess,
   prepareExtensionFolder,
+  prepareExtensionFolderShared,
   RCS_EXTENSION_FOLDER_BUSY,
   RCS_EXTENSION_FOLDER_NAME,
   type DeliveryFs,
@@ -216,5 +219,68 @@ describe("extension delivery (BACKLOG-3659)", () => {
     ]);
     expect(chromeCandidates("darwin", {})).toEqual(["/Applications/Google Chrome.app"]);
     expect(chromeCandidates("linux", {})).toEqual([]);
+  });
+
+  // Live ENOENT: StrictMode ran the install effect twice; the second run's
+  // sweep deleted the first run's temp folder mid-copy.
+  it("two concurrent calls: both succeed with one copy (P1)", async () => {
+    const s1 = realSetup();
+    try {
+      const base = s1.fsOps();
+      let copies = 0;
+      const fsOps: DeliveryFs = {
+        ...base,
+        copyDir: async (from, to) => {
+          copies += 1;
+          await new Promise((r) => setTimeout(r, 20));
+          await base.copyDir(from, to);
+        },
+      };
+      const [a, b] = await Promise.all([
+        prepareExtensionFolderShared(s1.src, s1.downloads, fsOps),
+        prepareExtensionFolderShared(s1.src, s1.downloads, fsOps),
+      ]);
+      expect(a).toEqual(b);
+      expect(copies).toBe(1);
+      expect(nodeFs.readFileSync(path.join(a.folder, "job.js"), "utf8")).toBe("new");
+      // Done: the next call copies again (a newer build).
+      await prepareExtensionFolderShared(s1.src, s1.downloads, fsOps);
+      expect(copies).toBe(2);
+    } finally {
+      s1.cleanup();
+    }
+  });
+
+  it("the sweep never touches a temp folder of a run in flight (P2)", async () => {
+    const s1 = realSetup();
+    try {
+      const base = s1.fsOps();
+      let release: () => void = () => undefined;
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      let copying: () => void = () => undefined;
+      const atCopy = new Promise<void>((r) => {
+        copying = r;
+      });
+      const slow: DeliveryFs = {
+        ...base,
+        copyDir: async (from, to) => {
+          await base.copyDir(from, to);
+          copying();
+          await gate;
+        },
+      };
+      const first = prepareExtensionFolder(s1.src, s1.downloads, slow);
+      await atCopy;
+      // A second, unshared run (another window) sweeps while the first copies.
+      const second = prepareExtensionFolder(s1.src, s1.downloads, base);
+      await second;
+      release();
+      await expect(first).resolves.toMatchObject({ folder: s1.old });
+      expect(nodeFs.readFileSync(path.join(s1.old, "job.js"), "utf8")).toBe("new");
+    } finally {
+      s1.cleanup();
+    }
   });
 });
