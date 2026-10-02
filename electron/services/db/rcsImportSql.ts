@@ -384,9 +384,11 @@ export const RCS_CONSENT_SET_AUTO_DELETE_SQL = sql`
   `;
 
 /**
- * Parameters: user id (four times), cutoff ISO. The user's gmweb2 chats
+ * Parameters: user id (five times), cutoff ISO. The user's gmweb2 chats
  * (threads) linked to NOTHING — no thread-level link and no link on any of
- * its messages — whose LAST message is older than the cutoff.
+ * its messages — whose LAST message is older than the cutoff. A chat the user
+ * REMOVED from a transaction (a thread-level ignored_communications row) is
+ * never auto-deleted: it must stay restorable from "Show removed" (SR S2).
  */
 export const RCS_UNLINKED_OLD_THREADS_SQL = sql`
     SELECT m.thread_id AS threadId
@@ -399,6 +401,10 @@ export const RCS_UNLINKED_OLD_THREADS_SQL = sql`
       AND NOT EXISTS (
         SELECT 1 FROM communications c JOIN messages m2 ON m2.id = c.message_id
         WHERE c.user_id = ? AND m2.user_id = ? AND m2.thread_id = m.thread_id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM ignored_communications ic
+        WHERE ic.user_id = ? AND ic.thread_id = m.thread_id
       )
     GROUP BY m.thread_id
     HAVING MAX(m.sent_at) < ?

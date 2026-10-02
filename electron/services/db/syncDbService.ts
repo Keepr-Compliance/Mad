@@ -526,7 +526,7 @@ export function rcsAutoDeleteDbOps(): import("../rcsClearService").RcsAutoDelete
   return {
     inTransaction: <T>(fn: () => T): T => db.transaction(fn)(),
     unlinkedOldThreads: (userId, cutoffIso) =>
-      (db.prepare(RCS_UNLINKED_OLD_THREADS_SQL).all(userId, userId, userId, userId, cutoffIso) as Array<{ threadId: string }>)
+      (db.prepare(RCS_UNLINKED_OLD_THREADS_SQL).all(userId, userId, userId, userId, userId, cutoffIso) as Array<{ threadId: string }>)
         .map((r) => r.threadId),
     attachmentPaths: (userId, threadIds) =>
       (db.prepare(RCS_THREADS_ATTACHMENT_PATHS_SQL).all(userId, JSON.stringify(threadIds)) as Array<{ storagePath: string | null }>)

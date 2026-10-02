@@ -13,6 +13,7 @@
  *   A2 auto-delete ignores the age (deletes a recent chat)   → "a recent unlinked chat is kept"
  *   A3 auto-delete reaches another user or another source    → "only this user's gmweb2 chats"
  *   A4 a shared image file deleted                           → "an image file another row uses is kept"
+ *   A5 a chat the user removed is auto-deleted (unrestorable) → "a chat the user removed is kept"
  */
 
 import * as nodePath from "path";
@@ -133,6 +134,18 @@ describe("auto-delete of old chats linked to nothing (P3b, off by default)", () 
     const r = clearUnlinkedOldChats(USER, CUTOFF, rcsAutoDeleteDbOps(), files());
     expect(r).toMatchObject({ chats: 1, messages: 3 });
     expect(ids()).toEqual(["a1", "l1", "l2", "r1", "r2", "x1"]);
+  });
+
+  // SR S2: a removed chat has no link either, but "Show removed" must still
+  // restore it.
+  it("a chat the user removed is kept (A5)", () => {
+    msg("u1", USER, "gmweb2-removed", "2026-05-01T10:00:00.000Z");
+    db.prepare(
+      "INSERT INTO ignored_communications (id, user_id, transaction_id, thread_id, reason) VALUES ('ic-1', ?, 'tx-a', 'gmweb2-removed', 'Manually unlinked by user')",
+    ).run(USER);
+    const r = clearUnlinkedOldChats(USER, CUTOFF, rcsAutoDeleteDbOps(), files());
+    expect(r.chats).toBe(1); // only gmweb2-old
+    expect(ids()).toContain("u1");
   });
 
   it("a recent unlinked chat is kept (A2)", () => {
