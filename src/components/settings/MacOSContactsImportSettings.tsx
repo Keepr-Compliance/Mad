@@ -604,8 +604,12 @@ export function ContactsImportSettings({
   // BACKLOG-2986: Android counts as a source, for the same reason BACKLOG-2486
   // added `showIphoneContacts` — a user whose only address book is the phone in
   // their pocket must not hit the "no sources" placeholder.
+  // C2 (BACKLOG-3670): a text-message import source (e.g. Android: Google
+  // Messages on Windows with no mailbox) is a source too — its Auto-discover
+  // Messages / SMS switch must be reachable.
+  const hasMessageSource = importSourceLabel(messagesImportSource) !== null;
   const hasAnySources =
-    hasMacOS || hasOutlook || hasGoogle || showIphoneContacts || showAndroidContacts;
+    hasMacOS || hasOutlook || hasGoogle || showIphoneContacts || showAndroidContacts || hasMessageSource;
 
   const anySyncing = isSyncing || outlookSyncing || googleSyncing;
 
