@@ -65,6 +65,7 @@ import {
   type RcsJobSnapshot,
 } from "./rcsImportJob";
 import { parseIncomingImage, RCS_MAX_IMAGE_BYTES, type RcsImageResult, type RcsIncomingImage } from "./rcsImportMedia";
+import { NOT_PAIRED_MESSAGE, PAIR_HEADERS, type RcsPairingAuth } from "./rcsPairingAuth";
 import { isConversationId, RCS_EXCLUSIONS_MAX } from "./rcsExclusions";
 import type { RcsImportResult, RcsIncomingChat } from "./rcsImportStore";
 import {
@@ -208,6 +209,30 @@ export interface RcsExtensionBridgeOptions {
   jobs?: RcsJobRegistry;
   /** Overridable for tests only (default RCS_FINISH_SAVE_WAIT_MS). */
   finishSaveWaitMs?: number;
+  /**
+   * BACKLOG-3666: pairing. With it, ONE auth gate runs before routing: every
+   * request is signed (except /hello and /pair/*; and, in "dual" mode for one
+   * release, the routes an older extension needs that start no job:
+   * /status, /focus, /exclusions/*), every reply to a signed request is
+   * signed, and job routes are refused until paired.
+   */
+  pairing?: RcsPairingAuth;
+  pairingMode?: "dual" | "required";
+}
+
+/** BACKLOG-3666: requests whose body the auth gate already read (it signs the body). */
+const prereadBodies = new WeakMap<http.IncomingMessage, string>();
+/** BACKLOG-3666: replies to sign, with what the signature binds. */
+const replySigners = new WeakMap<http.ServerResponse, { sign: (status: number, body: string) => string }>();
+
+/** Routes that never need a signature. */
+const PAIR_OPEN_ROUTES = new Set(["/hello", "/pair/start", "/pair/finish"]);
+/** "dual" mode only (one release): what an older, unpaired extension still needs. Never a job route. */
+const PAIR_DUAL_ROUTES = new Set(["/status", "/focus", "/exclusions/list", "/exclusions/set"]);
+
+function signHeaders(res: http.ServerResponse, status: number, payload: string): Record<string, string> {
+  const signer = replySigners.get(res);
+  return signer ? { "X-Keepr-Sig": signer.sign(status, payload) } : {};
 }
 
 function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
@@ -216,6 +241,7 @@ function sendJson(res: http.ServerResponse, status: number, body: unknown): void
     "Content-Type": "application/json",
     "Content-Length": Buffer.byteLength(payload),
     "Cache-Control": "no-store",
+    ...signHeaders(res, status, payload),
   });
   res.end(payload);
 }
@@ -227,6 +253,10 @@ function sendJson(res: http.ServerResponse, status: number, body: unknown): void
  * {@link sendTooLarge}), so the extension sees "too large", not "not reachable".
  */
 function readBody(req: http.IncomingMessage, limit: number = MAX_BODY_BYTES): Promise<string> {
+  const preread = prereadBodies.get(req);
+  if (preread !== undefined) {
+    return Buffer.byteLength(preread) > limit ? Promise.reject(new BodyTooLargeError()) : Promise.resolve(preread);
+  }
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
@@ -271,6 +301,7 @@ function sendTooLarge(req: http.IncomingMessage, res: http.ServerResponse, messa
     "Content-Length": Buffer.byteLength(payload),
     "Cache-Control": "no-store",
     Connection: "close",
+    ...signHeaders(res, 413, payload),
   });
   res.end(payload, () => req.destroy());
 }
@@ -599,7 +630,7 @@ export class RcsExtensionBridge {
         res.writeHead(204, {
           "Access-Control-Allow-Origin": this.allowedOrigin,
           "Access-Control-Allow-Methods": "POST",
-          "Access-Control-Allow-Headers": "Content-Type",
+          "Access-Control-Allow-Headers": "Content-Type, X-Keepr-Pair, X-Keepr-Ts, X-Keepr-Nonce, X-Keepr-Sig",
         });
         res.end();
         return;
@@ -611,6 +642,14 @@ export class RcsExtensionBridge {
       if (req.method !== "POST") {
         sendJson(res, 405, { error: "method_not_allowed", message: "Keepr's bridge accepts POST only." });
         return;
+      }
+
+      // BACKLOG-3666: the ONE auth gate, before routing.
+      let signedPairing: { pairId: string; userId: string } | null = null;
+      if (this.options.pairing) {
+        const gate = await this.authGate(req, res, path);
+        if (gate === "handled") return;
+        signedPairing = gate;
       }
 
       // BACKLOG-3641: the page's "Open Keepr" button. Same Host/Origin checks as
@@ -625,7 +664,9 @@ export class RcsExtensionBridge {
         if (typeof b.version === "string") hello.version = b.version.slice(0, 40);
         if (b.paired === true) hello.paired = true;
         this.options.onHello?.(hello);
-        sendJson(res, 200, { ok: true });
+        // BACKLOG-3666: only "paired: yes / no" (yes = a valid signature of a
+        // pairing bound to the signed-in user).
+        sendJson(res, 200, this.options.pairing ? { ok: true, paired: signedPairing !== null } : { ok: true });
         return;
       }
 
@@ -668,6 +709,71 @@ export class RcsExtensionBridge {
       this.logger.error(`[RcsBridge] Request failed: ${message}`);
       if (!res.headersSent) sendJson(res, 500, { error: "internal", message: "Keepr could not save this chat." });
     }
+  }
+
+  /**
+   * BACKLOG-3666: the auth gate. Reads the body once (the signature covers
+   * it), handles /pair/*, verifies a signed request (and signs its reply,
+   * errors included except "unknown pairing"), refuses an unsigned one
+   * outside the open (and, in dual mode, the dual) routes. → the verified
+   * pairing, null (unsigned, allowed), or "handled" (replied).
+   */
+  private async authGate(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    path: string,
+  ): Promise<{ pairId: string; userId: string } | null | "handled"> {
+    const pairing = this.options.pairing as RcsPairingAuth;
+    let raw: string;
+    try {
+      raw = await readBody(req, MAX_ATTACHMENT_BODY_BYTES);
+    } catch (err) {
+      if (err instanceof BodyTooLargeError) sendTooLarge(req, res, "This item is too large to send to Keepr.");
+      else sendJson(res, 400, { error: "bad_request" });
+      return "handled";
+    }
+    prereadBodies.set(req, raw);
+    const json = (): unknown => {
+      try {
+        return raw ? JSON.parse(raw) : {};
+      } catch {
+        return null;
+      }
+    };
+    if (path === "/pair/start" || path === "/pair/finish") {
+      const r = path === "/pair/start" ? pairing.start(json()) : pairing.finish(json());
+      if (r.signWith) {
+        const w = r.signWith;
+        replySigners.set(res, { sign: (status, body) => pairing.signReply(w.keyHex, status, path, w.nonce, body) });
+        this.logger.info("[RcsBridge] Extension paired");
+      } else if (r.status !== 200) {
+        this.logger.warn(`[RcsBridge] Pairing refused: ${String(r.body.error)}`);
+      }
+      sendJson(res, r.status, r.body);
+      return "handled";
+    }
+    const signed = typeof req.headers[PAIR_HEADERS.pair] === "string";
+    if (!signed) {
+      if (PAIR_OPEN_ROUTES.has(path)) return null;
+      if ((this.options.pairingMode ?? "dual") === "dual" && PAIR_DUAL_ROUTES.has(path)) return null;
+      sendJson(res, 401, { error: "not_paired", message: NOT_PAIRED_MESSAGE });
+      return "handled";
+    }
+    const userId = this.options.currentUserId ? await this.options.currentUserId() : undefined;
+    const v = pairing.verify(req.headers, req.method ?? "POST", path, raw, userId);
+    if (!v.ok) {
+      if (v.keyHex) {
+        const keyHex = v.keyHex;
+        const nonce = v.nonce ?? "";
+        replySigners.set(res, { sign: (status, body) => pairing.signReply(keyHex, status, path, nonce, body) });
+      }
+      this.logger.warn(`[RcsBridge] Refused a signed request: ${v.error}`);
+      sendJson(res, v.status, { error: v.error, ...(v.error === "re_pair" || v.error === "unknown_pair" ? { message: NOT_PAIRED_MESSAGE } : {}) });
+      return "handled";
+    }
+    const { keyHex } = v.pairing;
+    replySigners.set(res, { sign: (status, body) => pairing.signReply(keyHex, status, path, v.nonce, body) });
+    return { pairId: v.pairing.pairId, userId: v.pairing.userId };
   }
 
   private async route(

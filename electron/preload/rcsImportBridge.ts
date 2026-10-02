@@ -48,6 +48,10 @@ export const rcsImportBridge = {
     ipcRenderer.invoke("rcs-import:set-cache-consent", args),
   setCacheOptions: (args: { autoDelete?: boolean; contactsOnly?: boolean }): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke("rcs-import:set-cache-options", args),
+  /** BACKLOG-3666: a one-time pairing code, and dropping it. */
+  pairCode: (): Promise<{ success: true; code: string; expiresAt: string } | { success: false; error: string }> =>
+    ipcRenderer.invoke("rcs-import:pair-code"),
+  pairCancel: (): Promise<{ success: true }> => ipcRenderer.invoke("rcs-import:pair-cancel"),
   /** SR M: "Download photos / videos from all chats". */
   setMediaOptions: (args: { photosAllChats?: boolean; videosAllChats?: boolean }): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke("rcs-import:set-media-options", args),

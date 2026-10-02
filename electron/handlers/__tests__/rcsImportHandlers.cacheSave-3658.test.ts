@@ -137,6 +137,11 @@ jest.mock("../../services/db/rcsCacheRunsDbService", () => ({
   getRcsCacheRun: () => mockLastRun,
   clearRcsCacheRun: jest.fn(),
 }));
+// BACKLOG-3666: paired unless a test says otherwise.
+let mockPaired = true;
+jest.mock("../../services/db/rcsPairingDbService", () => ({
+  rcsPairingStore: { get: () => null, save: jest.fn(), existsForUser: () => mockPaired, deleteForUser: jest.fn() },
+}));
 jest.mock("../../utils/wrapHandler", () => ({
   wrapHandler: (fn: (event: unknown, args?: unknown) => Promise<unknown>) => fn,
 }));

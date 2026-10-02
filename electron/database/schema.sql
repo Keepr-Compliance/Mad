@@ -828,6 +828,17 @@ CREATE TABLE IF NOT EXISTS rcs_pending_full_sync (
 );
 CREATE INDEX IF NOT EXISTS idx_rcs_pending_full_sync_user ON rcs_pending_full_sync(user_id);
 
+-- BACKLOG-3666: the extension paired with this Keepr (SPAKE2, pair-protocol.js).
+-- key_hex: the session key (HMAC-SHA256), in this encrypted database only.
+-- One pairing per user: a re-pair replaces it; sign-out removes it.
+CREATE TABLE IF NOT EXISTS rcs_extension_pairings (
+  pair_id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  key_hex TEXT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
 -- SR M (2026-10-02): Google Messages media options, per user, on THIS device.
 -- photos_all_chats: keep photos of every chat in the window (default ON), not
 -- only chats with a transaction contact; videos_all_chats likewise (default

@@ -106,6 +106,11 @@ jest.mock("../../services/db/rcsMediaDbService", () => ({
   recordRcsMediaSeen: jest.fn(),
   setRcsMediaOptions: jest.fn(),
 }));
+// BACKLOG-3666: paired unless a test says otherwise.
+let mockPaired = true;
+jest.mock("../../services/db/rcsPairingDbService", () => ({
+  rcsPairingStore: { get: () => null, save: jest.fn(), existsForUser: () => mockPaired, deleteForUser: jest.fn() },
+}));
 jest.mock("../../utils/wrapHandler", () => ({
   wrapHandler: (fn: (event: unknown, args?: unknown) => Promise<unknown>) => fn,
 }));
@@ -126,6 +131,16 @@ beforeEach(() => {
 const start = (args?: unknown) => handlers.get("rcs-import:start-cache-job")!({}, args) as Promise<{ success: boolean }>;
 
 describe("rcs-import:start-cache-job window (BACKLOG-3658)", () => {
+  // BACKLOG-3666: no Sync until the extension is paired. Mutation: the check removed → red.
+  it("not paired: the Sync is refused (not_paired), no job created", async () => {
+    mockPaired = false;
+    const r = (await start()) as { success: boolean; error?: string };
+    mockPaired = true;
+    expect(r.success).toBe(false);
+    expect(JSON.stringify(r)).toMatch(/Pair the extension with Keepr/);
+    expect(created).toHaveLength(0);
+  });
+
   // SR M: a media toggle switched ON → the next Sync reads every chat down to
   // the floor (existing chats get their media). Mutation: the pending media
   // read ignored → the incremental since → red.

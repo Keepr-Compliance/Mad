@@ -77,6 +77,8 @@ import { wrapHandler } from "../utils/wrapHandler";
 import { getMainWindow } from "../windowRegistry";
 import { ValidationError } from "../utils/validation";
 import { RCS_MEDIA_DEFAULTS, clearPendingMediaRead, getRcsMediaOptions, hasPendingMediaRead, recordRcsMediaSeen, setRcsMediaOptions } from "../services/db/rcsMediaDbService";
+import { NOT_PAIRED_MESSAGE, RcsPairingAuth, type PairProtocol } from "../services/rcsPairingAuth";
+import { rcsPairingStore } from "../services/db/rcsPairingDbService";
 import type {
   RcsClearTextsResult,
   RcsExtensionStateResult,
@@ -352,14 +354,25 @@ async function currentUserId(): Promise<string | null> {
   } catch {
     cachedUserId = null;
   }
+  // BACKLOG-3666: a restored session names its user here (a later sign-out revokes the pairing).
+  if (cachedUserId) lastSessionUserId = cachedUserId;
   return cachedUserId;
 }
 
 // A running Sync belongs to the user who started it: signing out cancels it;
 // another user signing in cancels it too (and the bridge re-checks per write).
+/** BACKLOG-3666: the user the session last named (a sign-out revokes their pairing). */
+let lastSessionUserId: string | null = null;
+
 onSessionChanged((change) => {
   cachedUserId = undefined;
   if (cancelOnSessionChange(change, bridge.activeJobUserId(), !!bridge.activeJob())) bridge.cancelJob();
+  // BACKLOG-3666: sign-out or a user switch revokes the earlier user's pairing.
+  if (lastSessionUserId && (change.kind === "cleared" || change.userId !== lastSessionUserId)) {
+    pairingAuth.revoke(lastSessionUserId);
+    pairingAuth.cancelCode();
+  }
+  lastSessionUserId = change.kind === "saved" ? change.userId : null;
 });
 
 /**
@@ -437,6 +450,8 @@ async function startCacheJobOnce(opts: { sinceDays?: unknown }): Promise<
     writesPaused: bridge.writesArePaused,
   });
   if (!("ok" in decision)) return { ok: false, ...decision };
+  // BACKLOG-3666: no Sync until the extension is paired with this Keepr.
+  if (!pairingAuth.isPaired(decision.userId)) return { ok: false, ...RCS_NOT_PAIRED_ERROR };
   const plan = await resolveImportPlanForUser({ userId: decision.userId, mode: "delta" });
   // L2: no coverage recorded yet → backfill it from the previous run's floor,
   // only when that run was a full read with a normal list stop that reached it.
@@ -495,7 +510,25 @@ async function startCacheJobOnce(opts: { sinceDays?: unknown }): Promise<
   return { ok: true, job };
 }
 
+/**
+ * BACKLOG-3666: pairing. The protocol is the SAME file the extension runs:
+ * pair-protocol.js (+ vendor/noble-p256.js) from the extension folder Keepr
+ * ships, loaded on first use.
+ */
+const pairingAuth = new RcsPairingAuth(() => {
+  const dir = extensionSourceDir({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() });
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- the shipped extension's own file, not a module of this build
+  return require(path.join(dir, "pair-protocol.js")) as PairProtocol;
+}, rcsPairingStore);
+
+/** Jobs are refused until the extension is paired (BACKLOG-3666). */
+export const RCS_NOT_PAIRED_ERROR = { status: 409, error: "not_paired", message: NOT_PAIRED_MESSAGE } as const;
+
 const bridge = new RcsExtensionBridge({
+  // BACKLOG-3666: one auth gate before routing; "dual" for this one release
+  // (an older extension keeps /status, /focus and the eyes, never a job).
+  pairing: pairingAuth,
+  pairingMode: "dual",
   importChat: (chat, transactionId, people) => importChat(chat, transactionId, deps, people),
   // P3c: chats switched off with the eye on their row ("Don't sync").
   chatExcluded: (userId, chatHash, conversationId) => databaseService.checkRcsExclusion(userId, chatHash, conversationId),
@@ -719,6 +752,8 @@ export function registerRcsImportHandlers(): void {
       if (contacts.length === 0) {
         return { success: false, error: "This transaction has no contacts to look for." };
       }
+      // BACKLOG-3666: no Sync until the extension is paired with this Keepr.
+      if (tx.user_id && !pairingAuth.isPaired(tx.user_id)) return { success: false, error: NOT_PAIRED_MESSAGE };
       // The audit start date: the page loads chat history back past it.
       const job = bridge.createJob(transactionId, contacts, {
         startDate: tx.started_at ?? null,
@@ -818,6 +853,26 @@ export function registerRcsImportHandlers(): void {
     }, { module: LOG_TAG }),
   );
 
+  // BACKLOG-3666: Settings / the Sync flow → a one-time pairing code (5 min,
+  // 5 tries, single use) to type into the Keepr box in Google Messages.
+  ipcMain.handle(
+    "rcs-import:pair-code",
+    wrapHandler(async (): Promise<{ success: true; code: string; expiresAt: string } | { success: false; error: string }> => {
+      const userId = await currentUserId();
+      if (!userId) return { success: false, error: "Sign in to Keepr first." };
+      const { code, expiresAt } = pairingAuth.issueCode(userId);
+      return { success: true, code, expiresAt: new Date(expiresAt).toISOString() };
+    }, { module: LOG_TAG }),
+  );
+
+  ipcMain.handle(
+    "rcs-import:pair-cancel",
+    wrapHandler(async (): Promise<{ success: true }> => {
+      pairingAuth.cancelCode();
+      return { success: true };
+    }, { module: LOG_TAG }),
+  );
+
   ipcMain.handle(
     "rcs-import:get-extension-state",
     wrapHandler(async (): Promise<RcsExtensionStateResult> => {
@@ -839,6 +894,8 @@ export function registerRcsImportHandlers(): void {
           // The months a cache Sync copies (messageImport.filters; null = All time).
           lookbackMonths: userId ? resolveLookbackMonths(await loadStoredImportFilters(userId)) : undefined,
           media: userId ? getRcsMediaOptions(userId) : undefined,
+          // BACKLOG-3666: the extension is paired with this Keepr, for this user.
+          extensionPaired: userId ? pairingAuth.isPaired(userId) : false,
         },
       };
     }, { module: LOG_TAG }),
