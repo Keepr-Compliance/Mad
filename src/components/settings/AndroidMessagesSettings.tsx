@@ -76,7 +76,6 @@ export function AndroidMessagesSettings({ userId }: AndroidMessagesSettingsProps
   const [clearResult, setClearResult] = useState<{
     messagesDeleted: number;
     contactsDeleted: number;
-    gmwebMessagesDeleted?: number;
     error?: string;
   } | null>(null);
 
@@ -262,10 +261,7 @@ export function AndroidMessagesSettings({ userId }: AndroidMessagesSettingsProps
         <div className="text-xs text-green-700 bg-green-50 rounded p-2 border border-green-200">
           Cleared {clearResult.messagesDeleted.toLocaleString()} messages and{" "}
           {clearResult.contactsDeleted.toLocaleString()} contacts
-          {(clearResult.gmwebMessagesDeleted ?? 0) > 0 && (
-            <>, plus {(clearResult.gmwebMessagesDeleted ?? 0).toLocaleString()} texts imported from Google Messages for Web</>
-          )}
-          . Open the companion app and tap Sync Now to re-import, or click Sync on a transaction.
+          . Open the companion app and tap Sync Now to re-import.
         </div>
       )}
 
@@ -398,8 +394,9 @@ export function AndroidMessagesSettings({ userId }: AndroidMessagesSettingsProps
                 Force re-import will delete all Android data
               </p>
               <p className="text-xs text-amber-700 mt-1">
-                This deletes all Android texts and contacts in Keepr, including texts
-                imported from Google Messages for Web, then stops the sync server. Open
+                This deletes all Android texts and contacts the companion app sent to
+                Keepr, then stops the sync server. (Texts from Google Messages have their
+                own Force re-import.) Open
                 the companion app and tap Sync Now to re-import everything from scratch.
                 Links from checklist items to those messages&rsquo; attachments are removed
                 too. Chats you removed from a transaction stay removed when you sync

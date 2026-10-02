@@ -1,45 +1,22 @@
 /**
  * WindowApi RCS import sub-interface — BACKLOG-3619 (proof of concept).
  *
- * The renderer's view of `window.api.rcsImport`: open / close the one import
- * session the Chrome extension posts chats into, read the bridge's state, and
- * hear about each chat as it lands.
+ * The renderer's view of `window.api.rcsImport`: the bridge's state, the Sync
+ * jobs, the Google Messages cache Sync and its setup (BACKLOG-3658/3659). The
+ * manual import session is gone (BACKLOG-3662).
  */
 
 export type RcsBridgeState = "stopped" | "listening" | "unavailable";
-
-export interface RcsImportSessionInfo {
-  sessionId: string;
-  transactionId: string;
-  chatsReceived: number;
-  messagesReceived: number;
-  messagesStored: number;
-  startedAt: string;
-}
 
 export interface RcsImportStatus {
   bridge: RcsBridgeState;
   port: number;
   reason?: string;
-  session: RcsImportSessionInfo | null;
 }
 
 export type RcsImportStatusResult =
   | { success: true; status: RcsImportStatus }
   | { success: false; error: string };
-
-export interface RcsChatReceivedEvent {
-  sessionId: string;
-  transactionId: string;
-  conversationTitle: string;
-  received: number;
-  stored: number;
-  alreadyPresent: number;
-  linked: number;
-  reactions: number;
-  reactionsStored: number;
-  session: RcsImportSessionInfo;
-}
 
 export type RcsJobState = "created" | "running" | "finished" | "failed" | "cancelled";
 
@@ -101,6 +78,11 @@ export type RcsExtensionStateResult =
   | { success: true; state: RcsExtensionState }
   | { success: false; error: string };
 
+/** BACKLOG-3659 P3d: Google Messages' own Force re-import. */
+export type RcsClearTextsResult =
+  | { success: true; messagesDeleted: number; linksDeleted: number; filesDeleted: number }
+  | { success: false; error: string };
+
 /** BACKLOG-3659: the extension copied to Downloads. */
 export type RcsPrepareExtensionResult =
   | { success: true; folder: string; version: string }
@@ -111,14 +93,8 @@ export type RcsImportJobResult =
   | { success: false; error: string };
 
 export interface WindowApiRcsImport {
-  /** Bridge + session state. */
+  /** Bridge state. */
   getStatus: () => Promise<RcsImportStatusResult>;
-  /** Open the import session for a transaction (replaces any open session). */
-  startSession: (args: { transactionId: string }) => Promise<RcsImportStatusResult>;
-  /** Close the import session, if it is still the one named. */
-  endSession: (args: { sessionId: string }) => Promise<RcsImportStatusResult>;
-  /** One call per chat received. Returns an unsubscribe. */
-  onChatReceived: (callback: (event: RcsChatReceivedEvent) => void) => () => void;
   /** BACKLOG-3620: start a sync job (opens Messages for Web in the browser). */
   startJob: (args: { transactionId: string }) => Promise<RcsImportJobResult>;
   /** BACKLOG-3620: cancel the job, if it is still the one named. */
@@ -145,6 +121,8 @@ export interface WindowApiRcsImport {
   setCacheOptions?: (args: { autoDelete?: boolean; contactsOnly?: boolean }) => Promise<{ success: boolean; error?: string }>;
   /** BACKLOG-3658: is the extension installed / paired, opted in, last cache Sync. */
   getExtensionState: () => Promise<RcsExtensionStateResult>;
+  /** BACKLOG-3659 P3d: clear every text imported from Google Messages (Force re-import). */
+  clearTexts?: () => Promise<RcsClearTextsResult>;
   /** BACKLOG-3659: copy the extension to Downloads/"Keepr Extension". */
   prepareExtension?: () => Promise<RcsPrepareExtensionResult>;
   /** BACKLOG-3659: show that folder in the file manager. */

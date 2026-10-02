@@ -8,7 +8,6 @@
 import { type ApiResult, getErrorMessage } from "./index";
 
 import type {
-  RcsChatReceivedEvent,
   RcsImportJobResult,
   RcsImportStatus,
   RcsImportStatusResult,
@@ -16,7 +15,7 @@ import type {
   RcsExtensionState,
 } from "../../electron/types/ipc/window-api-rcs-import";
 
-export type { RcsChatReceivedEvent, RcsImportStatus, RcsJobInfo };
+export type { RcsImportStatus, RcsJobInfo };
 
 const NOT_AVAILABLE = "Import is not available in this build.";
 
@@ -55,18 +54,6 @@ export const rcsImportService = {
     return call(() => bridge.getStatus());
   },
 
-  async startSession(transactionId: string): Promise<ApiResult<RcsImportStatus>> {
-    const bridge = api();
-    if (!bridge) return { success: false, error: NOT_AVAILABLE };
-    return call(() => bridge.startSession({ transactionId }));
-  },
-
-  async endSession(sessionId: string): Promise<ApiResult<RcsImportStatus>> {
-    const bridge = api();
-    if (!bridge) return { success: false, error: NOT_AVAILABLE };
-    return call(() => bridge.endSession({ sessionId }));
-  },
-
   // BACKLOG-3620: sync jobs
 
   /** Start a sync job: Keepr opens Messages for Web in the browser. */
@@ -102,6 +89,18 @@ export const rcsImportService = {
     try {
       const r = await bridge.getExtensionState();
       return r.success ? { success: true, data: r.state } : { success: false, error: r.error };
+    } catch (err) {
+      return { success: false, error: getErrorMessage(err) };
+    }
+  },
+
+  /** BACKLOG-3659 P3d: Settings → Google Messages → Force re-import. */
+  async clearTexts(): Promise<ApiResult<{ messagesDeleted: number }>> {
+    const bridge = api();
+    if (!bridge || !bridge.clearTexts) return { success: false, error: NOT_AVAILABLE };
+    try {
+      const r = await bridge.clearTexts();
+      return r.success ? { success: true, data: { messagesDeleted: r.messagesDeleted } } : { success: false, error: r.error };
     } catch (err) {
       return { success: false, error: getErrorMessage(err) };
     }
@@ -164,13 +163,6 @@ export const rcsImportService = {
     const bridge = api();
     if (!bridge) return () => {};
     return bridge.onJobProgress(callback);
-  },
-
-  /** Subscribe to chats as they land. Returns an unsubscribe (a no-op when unavailable). */
-  onChatReceived(callback: (event: RcsChatReceivedEvent) => void): () => void {
-    const bridge = api();
-    if (!bridge) return () => {};
-    return bridge.onChatReceived(callback);
   },
 
   /**

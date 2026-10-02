@@ -38,7 +38,6 @@ import { setDb } from "../db/core/dbConnection";
 import { rcsClearDbOps } from "../db/syncDbService";
 import {
   clearGoogleMessagesWebData,
-  runSharedForceClear,
   runWithWritesPaused,
   type RcsClearDbOps,
   type RcsClearFs,
@@ -297,7 +296,7 @@ describe("order and the write gate (fakes)", () => {
 
 // SR F1 / F2. Mutations that turn these red: pauseWrites outside the try (no
 // resume after a refusal); the Android clear run first.
-describe("refusals and the shared Force re-import (SR F1, F2)", () => {
+describe("refusals (SR F1)", () => {
   it("a refused pause (writes still in progress) runs nothing and still resumes", async () => {
     const order: string[] = [];
     const gate = {
@@ -311,42 +310,5 @@ describe("refusals and the shared Force re-import (SR F1, F2)", () => {
     };
     await expect(runWithWritesPaused(gate, () => (order.push("clear"), 1))).rejects.toThrow("busy importing");
     expect(order).toEqual(["pause", "resume"]);
-  });
-
-  it("Google Messages for Web is cleared FIRST; when it fails, nothing is cleared", async () => {
-    const order: string[] = [];
-    const result = await runSharedForceClear({
-      clearGmweb: async () => {
-        order.push("gmweb");
-        throw new Error("Keepr is busy importing — try again in a moment.");
-      },
-      clearAndroid: () => (order.push("android"), { messagesDeleted: 5, contactsDeleted: 1 }),
-    });
-    expect(order).toEqual(["gmweb"]);
-    expect(result).toMatchObject({ gmwebCleared: false, androidCleared: false, messagesDeleted: 0, gmwebMessagesDeleted: 0 });
-    expect(result.error).toBe("Nothing was cleared. Keepr is busy importing — try again in a moment.");
-  });
-
-  it("both cleared: the counts of both, no error", async () => {
-    const order: string[] = [];
-    const result = await runSharedForceClear({
-      clearGmweb: async () => (order.push("gmweb"), { messagesDeleted: 50 }),
-      clearAndroid: () => (order.push("android"), { messagesDeleted: 12, contactsDeleted: 3 }),
-    });
-    expect(order).toEqual(["gmweb", "android"]);
-    expect(result).toEqual({
-      messagesDeleted: 12, contactsDeleted: 3, gmwebMessagesDeleted: 50, gmwebCleared: true, androidCleared: true,
-    });
-  });
-
-  it("the Android clear fails after Google Messages for Web was cleared: a partial result that says so", async () => {
-    const result = await runSharedForceClear({
-      clearGmweb: async () => ({ messagesDeleted: 50 }),
-      clearAndroid: () => {
-        throw new Error("database is locked");
-      },
-    });
-    expect(result).toMatchObject({ gmwebCleared: true, androidCleared: false, gmwebMessagesDeleted: 50, messagesDeleted: 0 });
-    expect(result.error).toContain("The texts imported from Google Messages for Web were cleared, but the Android texts and contacts were not.");
   });
 });

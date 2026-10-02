@@ -3,6 +3,7 @@ import { ResponsiveModal } from "./common/ResponsiveModal";
 import { LLMSettings } from "./settings/LLMSettings";
 import { MacOSMessagesImportSettings } from "./settings/MacOSMessagesImportSettings";
 import { AndroidMessagesSettings } from "./settings/AndroidMessagesSettings";
+import { GoogleMessagesSettings } from "./settings/GoogleMessagesSettings";
 import { ImportSourceSettings } from "./settings/ImportSourceSettings";
 import { IphoneSyncSettings } from "./settings/IphoneSyncSettings";
 import { FeatureGate } from "./common/FeatureGate";
@@ -223,6 +224,10 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
                      Dashboard button (mirroring iOS). Settings keeps only the
                      device/status management below. */
                   <AndroidMessagesSettings userId={userId} />
+                ) : activeImportSource === 'android-messages-web' ? (
+                  /* BACKLOG-3659 P3d: Android with Google Messages (Keepr's
+                     extension): its status, auto-delete and its own reset. */
+                  <GoogleMessagesSettings />
                 ) : (
                   /* BACKLOG-2335: macOS panel renders for every non-Android
                      source, but only macos-native can actually import — the

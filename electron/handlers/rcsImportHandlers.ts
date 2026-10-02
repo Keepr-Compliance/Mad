@@ -1,16 +1,9 @@
 /**
  * RCS import IPC — BACKLOG-3619 (proof of concept).
  *
- * Owns the one {@link RcsExtensionBridge} instance, wires it to the real
- * storage (`databaseService.batchInsertMessages`, `getMessageIdMap`,
- * `transactionService.linkMessages`), and exposes three channels to the
- * Messages tab's Import panel:
- *
- * - `rcs-import:get-status`
- * - `rcs-import:start-session` { transactionId }
- * - `rcs-import:end-session`   { sessionId }
- *
- * Each stored chat is pushed to every window on `rcs-import:chat-received`.
+ * Owns the one {@link RcsExtensionBridge} instance and wires it to the real
+ * storage. `rcs-import:get-status` reports the bridge's state. (The manual
+ * import session and its Import panel are gone: BACKLOG-3662.)
  *
  * BACKLOG-3620 — Sync jobs:
  * - `rcs-import:start-job`  { transactionId } — creates the job and opens
@@ -31,7 +24,7 @@ import { hostWindows } from "../capabilities/windowsProvider";
 import { dbTransaction } from "../services/db/core/dbConnection";
 import databaseService from "../services/databaseService";
 import logService from "../services/logService";
-import { RcsExtensionBridge, type RcsChatImportedEvent } from "../services/rcsExtensionBridge";
+import { RcsExtensionBridge } from "../services/rcsExtensionBridge";
 import { createCommunicationReference } from "../services/messageMatchingService";
 import type { RcsJobContact, RcsJobSnapshot } from "../services/rcsImportJob";
 import { rcsImageFilename, storeImage, type RcsMediaDeps } from "../services/rcsImportMedia";
@@ -70,14 +63,13 @@ import { wrapHandler } from "../utils/wrapHandler";
 import { getMainWindow } from "../windowRegistry";
 import { ValidationError } from "../utils/validation";
 import type {
+  RcsClearTextsResult,
   RcsExtensionStateResult,
-  RcsChatReceivedEvent,
   RcsImportJobResult,
   RcsImportStatusResult,
 } from "../types/ipc/window-api-rcs-import";
 
 const LOG_TAG = "RcsImport";
-export const RCS_CHAT_RECEIVED_CHANNEL = "rcs-import:chat-received";
 export const RCS_JOB_PROGRESS_CHANNEL = "rcs-import:job-progress";
 export const RCS_MESSAGES_WEB_URL = "https://messages.google.com/web/conversations";
 /** BACKLOG-3661: the start-job refusal while another Sync runs. */
@@ -255,22 +247,6 @@ async function discardCacheJob(jobId: string): Promise<void> {
 
 function broadcastJob(job: RcsJobSnapshot): void {
   hostWindows.broadcast(RCS_JOB_PROGRESS_CHANNEL, job);
-}
-
-function broadcastChatImported(event: RcsChatImportedEvent): void {
-  const payload: RcsChatReceivedEvent = {
-    sessionId: event.sessionId,
-    transactionId: event.transactionId,
-    conversationTitle: event.conversationTitle,
-    ...event.result,
-    session: event.session,
-  };
-  void logService.info(
-    `Chat imported: ${event.result.received} received, ${event.result.stored} new, ${event.result.linked} linked, ` +
-      `${event.result.removedByUser ?? 0} removed by you not re-linked`,
-    LOG_TAG,
-  );
-  hostWindows.broadcast(RCS_CHAT_RECEIVED_CHANNEL, payload);
 }
 
 // ---------------------------------------------------------------------------
@@ -463,7 +439,6 @@ const bridge = new RcsExtensionBridge({
         );
       });
   },
-  onChatImported: broadcastChatImported,
   importImage: async (image, transactionId, chatHash) => {
     const userId = await deps.getTransactionUserId(transactionId);
     if (!userId) throw new Error("Transaction not found");
@@ -543,17 +518,6 @@ export function registerRcsImportHandlers(): void {
   ipcMain.handle(
     "rcs-import:get-status",
     wrapHandler(async (): Promise<RcsImportStatusResult> => {
-      return { success: true, status: bridge.getStatus() };
-    }, { module: LOG_TAG }),
-  );
-
-  ipcMain.handle(
-    "rcs-import:start-session",
-    wrapHandler(async (_event, args: unknown): Promise<RcsImportStatusResult> => {
-      const transactionId = requireString(argsObject(args).transactionId, "transactionId");
-      const tx = await databaseService.getTransactionById(transactionId);
-      if (!tx) return { success: false, error: "Transaction not found" };
-      bridge.openSession(transactionId);
       return { success: true, status: bridge.getStatus() };
     }, { module: LOG_TAG }),
   );
@@ -691,6 +655,22 @@ export function registerRcsImportHandlers(): void {
     }, { module: LOG_TAG }),
   );
 
+  // BACKLOG-3659 P3d: Settings → Google Messages → Force re-import (its own,
+  // apart from the Android companion's).
+  ipcMain.handle(
+    "rcs-import:clear-texts",
+    wrapHandler(async (): Promise<RcsClearTextsResult> => {
+      const userId = await currentUserId();
+      if (!userId) return { success: false, error: "Sign in to Keepr first." };
+      try {
+        const r = await clearGoogleMessagesWebTexts(userId);
+        return { success: true, messagesDeleted: r.messagesDeleted, linksDeleted: r.linksDeleted, filesDeleted: r.filesDeleted };
+      } catch (err) {
+        return { success: false, error: `Nothing was cleared. ${err instanceof Error ? err.message : String(err)}` };
+      }
+    }, { module: LOG_TAG }),
+  );
+
   // BACKLOG-3659: deliver the extension (Release 1: unpacked, from Downloads).
   ipcMain.handle(
     "rcs-import:prepare-extension",
@@ -749,15 +729,6 @@ export function registerRcsImportHandlers(): void {
     "rcs-import:get-job",
     wrapHandler(async (): Promise<RcsImportJobResult> => {
       return { success: true, job: bridge.getJob() };
-    }, { module: LOG_TAG }),
-  );
-
-  ipcMain.handle(
-    "rcs-import:end-session",
-    wrapHandler(async (_event, args: unknown): Promise<RcsImportStatusResult> => {
-      const sessionId = requireString(argsObject(args).sessionId, "sessionId");
-      bridge.closeSession(sessionId);
-      return { success: true, status: bridge.getStatus() };
     }, { module: LOG_TAG }),
   );
 }

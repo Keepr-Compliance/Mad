@@ -2,37 +2,23 @@
  * RCS import bridge — BACKLOG-3619 (proof of concept).
  *
  * `window.api.rcsImport`. Each method is one `ipcRenderer.invoke` of one
- * channel; `onChatReceived` subscribes to the main process's push and returns
- * an unsubscribe.
+ * channel; the `on…` ones subscribe to a main-process push and return an
+ * unsubscribe.
  */
 
 import { ipcRenderer } from "electron";
 
 import type {
-  RcsChatReceivedEvent,
   RcsImportJobResult,
   RcsExtensionStateResult,
   RcsImportStatusResult,
   RcsJobInfo,
   RcsPrepareExtensionResult,
+  RcsClearTextsResult,
 } from "../types/ipc/window-api-rcs-import";
 
 export const rcsImportBridge = {
   getStatus: (): Promise<RcsImportStatusResult> => ipcRenderer.invoke("rcs-import:get-status"),
-
-  startSession: (args: { transactionId: string }): Promise<RcsImportStatusResult> =>
-    ipcRenderer.invoke("rcs-import:start-session", args),
-
-  endSession: (args: { sessionId: string }): Promise<RcsImportStatusResult> =>
-    ipcRenderer.invoke("rcs-import:end-session", args),
-
-  onChatReceived: (callback: (event: RcsChatReceivedEvent) => void) => {
-    const handler = (_event: unknown, data: RcsChatReceivedEvent) => callback(data);
-    ipcRenderer.on("rcs-import:chat-received", handler);
-    return () => {
-      ipcRenderer.removeListener("rcs-import:chat-received", handler);
-    };
-  },
 
   // BACKLOG-3620: sync jobs
   startJob: (args: { transactionId: string }): Promise<RcsImportJobResult> =>
@@ -62,6 +48,9 @@ export const rcsImportBridge = {
     ipcRenderer.invoke("rcs-import:set-cache-consent", args),
   setCacheOptions: (args: { autoDelete?: boolean; contactsOnly?: boolean }): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke("rcs-import:set-cache-options", args),
+
+  /** BACKLOG-3659 P3d: Google Messages' own Force re-import. */
+  clearTexts: (): Promise<RcsClearTextsResult> => ipcRenderer.invoke("rcs-import:clear-texts"),
 
   /** BACKLOG-3659: the extension, delivered to Downloads (Release 1: unpacked). */
   prepareExtension: (): Promise<RcsPrepareExtensionResult> => ipcRenderer.invoke("rcs-import:prepare-extension"),

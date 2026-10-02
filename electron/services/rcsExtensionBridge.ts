@@ -2,9 +2,9 @@
  * RCS extension bridge — BACKLOG-3619 (proof of concept).
  *
  * A small HTTP server on 127.0.0.1 that the Keepr Chrome extension's service
- * worker posts chats to. It holds at most ONE import session, opened from the
- * transaction's Messages tab, and every chat it receives is stored and
- * attached to that session's transaction.
+ * worker talks to. Chats arrive only through a Sync job Keepr started (a
+ * transaction Sync, or the cache Sync of BACKLOG-3658); the manual Send and
+ * its import session are gone (BACKLOG-3662).
  *
  * ## What it accepts
  * - Loopback only: bound to 127.0.0.1, never 0.0.0.0 or the LAN address.
@@ -16,17 +16,12 @@
  *   messages.google.com origin); only the service worker does.
  *
  * ## Endpoints
- * - `POST /status` — bridge + session state. Diagnostics only; the extension's
- *   Send does not depend on it.
- * - `POST /chat`   — one chat. With no open session it answers 409 with
- *   {@link RCS_NO_SESSION_MESSAGE}: never a silent success.
+ * - `POST /status` — bridge state. Diagnostics only.
  *
  * ## Sync jobs (BACKLOG-3620)
  * "Sync" in Keepr creates a job ({@link RcsJobRegistry}) and opens Messages for
  * Web with `#keepr-job=<jobId>`. Every job route names the job id, which is
- * random and doubles as the job's secret; the Origin pin applies too. Job
- * routes never read the manual-send session, so closing the Import panel does
- * not stop a running job.
+ * random and doubles as the job's secret; the Origin pin applies too.
  * - `POST /job/pending`         — an unclaimed job, for a page that lost the hash.
  * - `POST /job/:id/claim`       — claim; returns contact NAMES only. Once.
  * - `POST /job/:id/match`       — {conversationId, numbers[]} → matched contacts.
@@ -54,7 +49,6 @@
  * app keeps running and the Import panel says the bridge is unavailable.
  */
 
-import * as crypto from "crypto";
 import * as http from "http";
 
 import {
@@ -81,12 +75,9 @@ export const RCS_BRIDGE_PORT = 38619;
 /** Derived from the public key in chrome-extension/manifest.json. */
 export const RCS_EXTENSION_ID = "nlfohmjehedijceeelokclkglmjnlonj";
 export const RCS_EXTENSION_ORIGIN = `chrome-extension://${RCS_EXTENSION_ID}`;
-export const RCS_NO_SESSION_MESSAGE = "Open a transaction in Keepr and click Import first.";
 /** BACKLOG-3658 */
 export const RCS_USER_CHANGED_MESSAGE = "Another Keepr user signed in: this Sync was stopped.";
 export const RCS_IMAGE_NOT_A_CONTACT_MESSAGE = "Images are kept only for chats with a transaction contact.";
-/** BACKLOG-3661: the manual Send's reply while a Sync runs. */
-export const RCS_SYNC_RUNNING_MESSAGE = "A Keepr Sync is running. Wait for it to finish, then send again.";
 /** BACKLOG-3657 (SR F1): how long a clear waits for writes in progress. */
 export const RCS_DRAIN_TIMEOUT_MS = 15_000;
 export const RCS_BUSY_MESSAGE = "Keepr is busy importing — try again in a moment.";
@@ -114,29 +105,11 @@ class BodyTooLargeError extends Error {
 
 export type RcsBridgeState = "stopped" | "listening" | "unavailable";
 
-export interface RcsImportSession {
-  sessionId: string;
-  transactionId: string;
-  chatsReceived: number;
-  messagesReceived: number;
-  messagesStored: number;
-  startedAt: string;
-}
-
 export interface RcsBridgeStatus {
   bridge: RcsBridgeState;
   port: number;
   /** Why the bridge is unavailable, when it is. */
   reason?: string;
-  session: RcsImportSession | null;
-}
-
-export interface RcsChatImportedEvent {
-  sessionId: string;
-  transactionId: string;
-  conversationTitle: string;
-  result: RcsImportResult;
-  session: RcsImportSession;
 }
 
 export interface RcsBridgeLogger {
@@ -166,7 +139,6 @@ export interface RcsExtensionBridgeOptions {
     transactionId: string,
     people: RcsChatPeople,
   ) => Promise<RcsImportResult>;
-  onChatImported?: (event: RcsChatImportedEvent) => void;
   logger?: RcsBridgeLogger;
   /** Overridable for tests only. */
   allowedOrigin?: string;
@@ -301,7 +273,6 @@ export class RcsExtensionBridge {
   private state: RcsBridgeState = "stopped";
   private reason: string | undefined;
   private port = RCS_BRIDGE_PORT;
-  private session: RcsImportSession | null = null;
   private readonly allowedOrigin: string;
   private readonly logger: RcsBridgeLogger;
   private readonly jobs: RcsJobRegistry;
@@ -505,7 +476,6 @@ export class RcsExtensionBridge {
     const server = this.server;
     this.server = null;
     this.state = "stopped";
-    this.session = null;
     if (this.unclaimedTimer) clearTimeout(this.unclaimedTimer);
     this.unclaimedTimer = null;
     if (!server) return Promise.resolve();
@@ -517,30 +487,7 @@ export class RcsExtensionBridge {
       bridge: this.state,
       port: this.port,
       ...(this.reason ? { reason: this.reason } : {}),
-      session: this.session ? { ...this.session } : null,
     };
-  }
-
-  /** Open (or replace) the one import session. */
-  openSession(transactionId: string): RcsImportSession {
-    this.session = {
-      sessionId: crypto.randomUUID(),
-      transactionId,
-      chatsReceived: 0,
-      messagesReceived: 0,
-      messagesStored: 0,
-      startedAt: new Date().toISOString(),
-    };
-    this.logger.info(`[RcsBridge] Import session opened for transaction ${transactionId}`);
-    return { ...this.session };
-  }
-
-  /** Close the session if it is the one named (or any, when none is named). */
-  closeSession(sessionId?: string): void {
-    if (!this.session) return;
-    if (sessionId && this.session.sessionId !== sessionId) return;
-    this.logger.info(`[RcsBridge] Import session closed (${this.session.chatsReceived} chats)`);
-    this.session = null;
   }
 
   private async handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -610,12 +557,7 @@ export class RcsExtensionBridge {
 
       if (path === "/status") {
         const s = this.getStatus();
-        sendJson(res, 200, {
-          bridge: s.bridge,
-          session: s.session
-            ? { transactionId: s.session.transactionId, chatsReceived: s.session.chatsReceived }
-            : null,
-        });
+        sendJson(res, 200, { bridge: s.bridge });
         return;
       }
 
@@ -623,7 +565,7 @@ export class RcsExtensionBridge {
       // chat or image may be written; writes already running are counted so
       // the clear can wait for them (no write lands between cancel and delete).
       const jobMatch = JOB_ROUTE.exec(path);
-      const isWrite = path === "/chat" || (!!jobMatch && (jobMatch[2] === "chat" || jobMatch[2] === "attachment"));
+      const isWrite = (!!jobMatch && (jobMatch[2] === "chat" || jobMatch[2] === "attachment"));
       if (isWrite && this.writesArePaused) {
         sendJson(res, 503, { error: "busy", message: RCS_CLEARING_MESSAGE });
         return;
@@ -651,11 +593,6 @@ export class RcsExtensionBridge {
     jobRoute: RegExpExecArray | null,
   ): Promise<void> {
     {
-      if (path === "/chat") {
-        await this.handleChat(req, res);
-        return;
-      }
-
       if (path === "/job/pending") {
         const job = this.jobs.pending();
         if (!job) {
@@ -914,56 +851,5 @@ export class RcsExtensionBridge {
       default:
         sendJson(res, 404, { error: "not_found" });
     }
-  }
-
-  private async handleChat(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    // BACKLOG-3661: one Sync at a time — the page's manual Send waits too.
-    if (this.jobs.active()) {
-      sendJson(res, 409, { error: "sync_running", message: RCS_SYNC_RUNNING_MESSAGE });
-      return;
-    }
-    const session = this.session;
-    if (!session) {
-      sendJson(res, 409, { error: "no_session", message: RCS_NO_SESSION_MESSAGE });
-      return;
-    }
-
-    const read = await readJson(req, res);
-    if (!read.ok) return;
-
-    const chat = parseIncomingChat(read.body);
-    if (typeof chat === "string") {
-      sendJson(res, 400, { error: "bad_request", message: chat });
-      return;
-    }
-    // BACKLOG-3630: the manual Send reads the chat's Details numbers itself.
-    const people = peopleFrom((read.body as Record<string, unknown>).participants);
-    if (people.numbers.length === 0) {
-      sendJson(res, 400, { error: "no_number", message: RCS_NO_NUMBER_MESSAGE });
-      return;
-    }
-
-    const result = await this.options.importChat(chat, session.transactionId, people);
-
-    // The session may have been closed or replaced while the import ran; the
-    // rows are stored and attached either way, so report success.
-    if (this.session && this.session.sessionId === session.sessionId) {
-      this.session.chatsReceived += 1;
-      this.session.messagesReceived += result.received;
-      this.session.messagesStored += result.stored;
-    }
-    const snapshot = this.session && this.session.sessionId === session.sessionId
-      ? { ...this.session }
-      : { ...session };
-
-    this.options.onChatImported?.({
-      sessionId: session.sessionId,
-      transactionId: session.transactionId,
-      conversationTitle: chat.title,
-      result,
-      session: snapshot,
-    });
-
-    sendJson(res, 200, { ok: true, ...result });
   }
 }

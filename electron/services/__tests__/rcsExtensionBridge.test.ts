@@ -6,8 +6,7 @@
  *
  * Control 2: only the pinned extension Origin is accepted (wrong AND missing
  *            Origin are refused, and nothing is imported).
- * Control 3: a chat sent with no open session gets an explicit error, never a
- *            success.
+ * (Control 3, the manual session, is gone with the manual Send: BACKLOG-3662.)
  */
 
 import * as http from "http";
@@ -15,9 +14,7 @@ import * as http from "http";
 import {
   MAX_ATTACHMENT_BODY_BYTES,
   RCS_EXTENSION_ORIGIN,
-  RCS_NO_SESSION_MESSAGE,
   RcsExtensionBridge,
-  type RcsChatImportedEvent,
 } from "../rcsExtensionBridge";
 import { RcsJobRegistry, type RcsJobContact, type RcsJobSnapshot } from "../rcsImportJob";
 import type { RcsImageResult, RcsIncomingImage } from "../rcsImportMedia";
@@ -64,12 +61,12 @@ const CHAT: RcsIncomingChat = {
 // BACKLOG-3630: the page sends the chat's Details rows with every chat.
 const CHAT_JSON = JSON.stringify({ ...CHAT, participants: [{ name: "Test Contact A", number: "(555) 555-0199" }] });
 const JSON_HEADERS = { "Content-Type": "application/json" };
+const EXT_HEADERS = { ...JSON_HEADERS, Origin: RCS_EXTENSION_ORIGIN };
 
 describe("RcsExtensionBridge", () => {
   let bridge: RcsExtensionBridge;
   let port: number;
   let importChat: jest.Mock<Promise<RcsImportResult>, [RcsIncomingChat, string]>;
-  let events: RcsChatImportedEvent[];
 
   beforeEach(async () => {
     importChat = jest.fn(async (chat: RcsIncomingChat, _transactionId: string): Promise<RcsImportResult> => ({
@@ -80,8 +77,7 @@ describe("RcsExtensionBridge", () => {
       reactions: 0,
       reactionsStored: 0,
     }));
-    events = [];
-    bridge = new RcsExtensionBridge({ importChat, onChatImported: (e) => events.push(e) });
+    bridge = new RcsExtensionBridge({ importChat, jobs: new RcsJobRegistry() });
     expect(await bridge.start(0)).toBe("listening");
     port = bridge.getStatus().port;
     expect(port).toBeGreaterThan(0);
@@ -91,10 +87,18 @@ describe("RcsExtensionBridge", () => {
     await bridge.stop();
   });
 
+  /** A claimed transaction job whose chat matched: its /chat route is open. */
+  async function matchedChatPath(): Promise<string> {
+    const jobId = bridge.createJob("tx-1", [{ contactId: "c-1", displayName: "Test Contact A", phonesE164: ["+15555550199"] }])!.jobId;
+    expect((await request(port, "POST", `/job/${jobId}/claim`, EXT_HEADERS)).status).toBe(200);
+    await request(port, "POST", `/job/${jobId}/match`, EXT_HEADERS, JSON.stringify({ conversationId: CHAT.conversationId, numbers: ["(555) 555-0199"] }));
+    return `/job/${jobId}/chat`;
+  }
+
   describe("Origin (control 2)", () => {
     it("refuses a web-page Origin and imports nothing", async () => {
-      bridge.openSession("tx-1");
-      const reply = await request(port, "POST", "/chat", {
+      const chatPath = await matchedChatPath();
+      const reply = await request(port, "POST", chatPath, {
         ...JSON_HEADERS,
         Origin: "https://messages.google.com",
       }, CHAT_JSON);
@@ -104,8 +108,8 @@ describe("RcsExtensionBridge", () => {
     });
 
     it("refuses a DIFFERENT extension's Origin", async () => {
-      bridge.openSession("tx-1");
-      const reply = await request(port, "POST", "/chat", {
+      const chatPath = await matchedChatPath();
+      const reply = await request(port, "POST", chatPath, {
         ...JSON_HEADERS,
         Origin: "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       }, CHAT_JSON);
@@ -114,30 +118,38 @@ describe("RcsExtensionBridge", () => {
     });
 
     it("refuses a request with NO Origin", async () => {
-      bridge.openSession("tx-1");
-      const reply = await request(port, "POST", "/chat", JSON_HEADERS, CHAT_JSON);
+      const chatPath = await matchedChatPath();
+      const reply = await request(port, "POST", chatPath, JSON_HEADERS, CHAT_JSON);
       expect(reply.status).toBe(403);
       expect(importChat).not.toHaveBeenCalled();
     });
 
-    it("refuses GET /status without the pinned Origin", async () => {
+    it("refuses POST /status without the pinned Origin", async () => {
       const reply = await request(port, "POST", "/status", {});
       expect(reply.status).toBe(403);
     });
 
-    it("accepts the pinned extension Origin", async () => {
+    it("accepts the pinned extension Origin; /status reports the bridge only", async () => {
       const reply = await request(port, "POST", "/status", { Origin: RCS_EXTENSION_ORIGIN });
       expect(reply.status).toBe(200);
-      expect(reply.body).toEqual({ bridge: "listening", session: null });
+      expect(reply.body).toEqual({ bridge: "listening" });
     });
+  });
+
+  // BACKLOG-3662: the manual Send and its import session are gone. Mutation:
+  // bring the manual POST /chat route back → red.
+  it("there is no manual POST /chat outside a Sync job", async () => {
+    const reply = await request(port, "POST", "/chat", EXT_HEADERS, CHAT_JSON);
+    expect(reply.status).toBe(404);
+    expect(importChat).not.toHaveBeenCalled();
   });
 
   // BACKLOG-3657: while Force re-import clears the Google Messages for Web
   // texts, nothing may be written. Mutations that turn these red: no 503 while
   // paused; pauseWrites resolving before in-progress writes finish; no job cancel.
   describe("BACKLOG-3657: writes paused while the texts are cleared", () => {
-    it("refuses new chats with 503, waits for the chat already being written, and accepts chats again after resume", async () => {
-      bridge.openSession("tx-1");
+    it("refuses new chats with 503, waits for the chat already being written", async () => {
+      const chatPath = await matchedChatPath();
       let release: () => void = () => {};
       const gate = new Promise<void>((r) => {
         release = r;
@@ -146,7 +158,7 @@ describe("RcsExtensionBridge", () => {
         await gate;
         return { received: chat.messages.length, stored: 2, alreadyPresent: 0, linked: 2, reactions: 0, reactionsStored: 0 };
       });
-      const first = request(port, "POST", "/chat", EXT, CHAT_JSON);
+      const first = request(port, "POST", chatPath, EXT_HEADERS, CHAT_JSON);
       await new Promise((r) => setTimeout(r, 50));
       expect(importChat).toHaveBeenCalledTimes(1);
 
@@ -154,7 +166,7 @@ describe("RcsExtensionBridge", () => {
       const pausing = bridge.pauseWrites().then(() => {
         paused = true;
       });
-      const refused = await request(port, "POST", "/chat", EXT, CHAT_JSON);
+      const refused = await request(port, "POST", chatPath, EXT_HEADERS, CHAT_JSON);
       expect(refused.status).toBe(503);
       expect(refused.body.error).toBe("busy");
       expect(importChat).toHaveBeenCalledTimes(1);
@@ -165,18 +177,17 @@ describe("RcsExtensionBridge", () => {
       expect((await first).status).toBe(200);
       await pausing;
       expect(paused).toBe(true);
-
       bridge.resumeWrites();
-      expect((await request(port, "POST", "/chat", EXT, CHAT_JSON)).status).toBe(200);
+      expect(bridge.writesArePaused).toBe(false);
     });
 
     // SR F1 / O1. Mutations that turn these red: an unbounded drain; readBody
     // not settling on 'close'; a boolean pause flag instead of a count.
     it("a write that never completes: the drain gives up after its timeout (busy), writes reopen, and a closed client releases the write", async () => {
-      bridge.openSession("tx-1");
+      const chatPath = await matchedChatPath();
       const stalled = http.request({
-        host: "127.0.0.1", port, method: "POST", path: "/chat",
-        headers: { ...EXT, "Content-Length": "100000" },
+        host: "127.0.0.1", port, method: "POST", path: chatPath,
+        headers: { ...EXT_HEADERS, "Content-Length": "100000" },
       });
       stalled.on("error", () => {});
       stalled.write("{\"conversationId\":");
@@ -194,12 +205,12 @@ describe("RcsExtensionBridge", () => {
     });
 
     it("pauses are counted: overlapping clears cannot reopen writes early", async () => {
+      const chatPath = await matchedChatPath();
       await bridge.pauseWrites();
       await bridge.pauseWrites();
       bridge.resumeWrites();
       expect(bridge.writesArePaused).toBe(true);
-      bridge.openSession("tx-1");
-      expect((await request(port, "POST", "/chat", EXT, CHAT_JSON)).status).toBe(503);
+      expect((await request(port, "POST", chatPath, EXT_HEADERS, CHAT_JSON)).status).toBe(503);
       bridge.resumeWrites();
       expect(bridge.writesArePaused).toBe(false);
       bridge.resumeWrites(); // an extra resume never goes below zero
@@ -229,9 +240,9 @@ describe("RcsExtensionBridge", () => {
       try {
         const p = own.getStatus().port;
         expect((await request(p, "POST", "/focus", { Origin: "https://messages.google.com" })).status).toBe(403);
-        expect((await request(p, "GET", "/focus", EXT)).status).toBe(405);
+        expect((await request(p, "GET", "/focus", EXT_HEADERS)).status).toBe(405);
         expect(focus).not.toHaveBeenCalled();
-        const reply = await request(p, "POST", "/focus", EXT);
+        const reply = await request(p, "POST", "/focus", EXT_HEADERS);
         expect(reply.status).toBe(200);
         expect(focus).toHaveBeenCalledTimes(1);
       } finally {
@@ -240,82 +251,32 @@ describe("RcsExtensionBridge", () => {
     });
 
     it("a bridge without a focus handler answers 501", async () => {
-      expect((await request(port, "POST", "/focus", EXT)).status).toBe(501);
+      expect((await request(port, "POST", "/focus", EXT_HEADERS)).status).toBe(501);
     });
   });
 
-  // BACKLOG-3658 — /hello and /job/cache/start. Mutations: echo the hello
-  // back / no version cap; start without asking Keepr → red.
-  describe("POST /hello and /job/cache/start (BACKLOG-3658)", () => {
+  // BACKLOG-3658 — /hello. Mutations: echo the hello back / no version cap → red.
+  describe("POST /hello (BACKLOG-3658)", () => {
     it("/hello passes a capped version / paired to Keepr and sends nothing back", async () => {
       const hellos: unknown[] = [];
       const own = new RcsExtensionBridge({ importChat, onHello: (h) => void hellos.push(h) });
       expect(await own.start(0)).toBe("listening");
       try {
         const p = own.getStatus().port;
-        const reply = await request(p, "POST", "/hello", EXT, JSON.stringify({ version: "9".repeat(100), extra: "x" }));
+        const reply = await request(p, "POST", "/hello", EXT_HEADERS, JSON.stringify({ version: "9".repeat(100), extra: "x" }));
         expect(reply).toEqual({ status: 200, body: { ok: true } });
-        await request(p, "POST", "/hello", EXT, JSON.stringify({ paired: true }));
+        await request(p, "POST", "/hello", EXT_HEADERS, JSON.stringify({ paired: true }));
         expect(hellos).toEqual([{ version: "9".repeat(40) }, { paired: true }]);
         expect((await request(p, "POST", "/hello", { Origin: "https://messages.google.com" }, "{}")).status).toBe(403);
       } finally {
         await own.stop();
       }
     });
-
-  });
-
-  describe("session (control 3)", () => {
-    it("answers 409 with an explicit message when no session is open", async () => {
-      const reply = await request(port, "POST", "/chat", {
-        ...JSON_HEADERS,
-        Origin: RCS_EXTENSION_ORIGIN,
-      }, CHAT_JSON);
-      expect(reply.status).toBe(409);
-      expect(reply.body).toEqual({ error: "no_session", message: RCS_NO_SESSION_MESSAGE });
-      expect(importChat).not.toHaveBeenCalled();
-      expect(events).toHaveLength(0);
-    });
-
-    it("answers 409 after the session is closed", async () => {
-      const s = bridge.openSession("tx-1");
-      bridge.closeSession(s.sessionId);
-      const reply = await request(port, "POST", "/chat", {
-        ...JSON_HEADERS,
-        Origin: RCS_EXTENSION_ORIGIN,
-      }, CHAT_JSON);
-      expect(reply.status).toBe(409);
-      expect(importChat).not.toHaveBeenCalled();
-    });
-
-    it("imports into the session's transaction and reports it", async () => {
-      const s = bridge.openSession("tx-1");
-      const reply = await request(port, "POST", "/chat", {
-        ...JSON_HEADERS,
-        Origin: RCS_EXTENSION_ORIGIN,
-      }, CHAT_JSON);
-      expect(reply.status).toBe(200);
-      expect(reply.body).toEqual({ ok: true, received: 2, stored: 2, alreadyPresent: 0, linked: 2, reactions: 0, reactionsStored: 0 });
-      expect(importChat).toHaveBeenCalledTimes(1);
-      expect(importChat.mock.calls[0][1]).toBe("tx-1");
-      expect(events).toHaveLength(1);
-      expect(events[0]).toMatchObject({ sessionId: s.sessionId, transactionId: "tx-1" });
-      expect(bridge.getStatus().session).toMatchObject({ chatsReceived: 1, messagesReceived: 2, messagesStored: 2 });
-    });
-
-    it("closeSession with a stale id leaves the current session open", () => {
-      bridge.openSession("tx-1");
-      bridge.closeSession("not-the-session");
-      expect(bridge.getStatus().session?.transactionId).toBe("tx-1");
-    });
   });
 
   it("rejects a malformed chat with 400", async () => {
-    bridge.openSession("tx-1");
-    const reply = await request(port, "POST", "/chat", {
-      ...JSON_HEADERS,
-      Origin: RCS_EXTENSION_ORIGIN,
-    }, JSON.stringify({ title: "x", messages: [] }));
+    const chatPath = await matchedChatPath();
+    const reply = await request(port, "POST", chatPath, EXT_HEADERS, JSON.stringify({ title: "x", messages: [] }));
     expect(reply.status).toBe(400);
     expect(reply.body.message).toBe("conversationId is required");
     expect(importChat).not.toHaveBeenCalled();
@@ -425,20 +386,6 @@ describe("RcsExtensionBridge sync jobs", () => {
       jobId = bridge.createJob("tx-job", JOB_CONTACTS, { startDate: "2026-03-01" })!.jobId;
       const claim = await request(port, "POST", `/job/${jobId}/claim`, EXT);
       expect(claim.body).toMatchObject({ jobId, startDate: "2026-03-01" });
-    });
-  });
-
-  describe("control 3: the job does not depend on the manual-send session", () => {
-    it("job posts succeed with no session, and after a session is opened and closed", async () => {
-      await claimAndMatch(["(555) 555-0199"]);
-      const s = bridge.openSession("tx-other");
-      bridge.closeSession(s.sessionId);
-      const chat = await request(port, "POST", `/job/${jobId}/chat`, EXT, CHAT_JSON);
-      expect(chat.status).toBe(200);
-      expect(importChat.mock.calls[0][1]).toBe("tx-job");
-      // the manual route still needs its own session
-      const manual = await request(port, "POST", "/chat", EXT, CHAT_JSON);
-      expect(manual.status).toBe(409);
     });
   });
 
@@ -575,24 +522,14 @@ describe("RcsExtensionBridge sync jobs", () => {
   // BACKLOG-3642 / 3645. Mutations that turn these red: pass the page's own
   // participantKey (or none) to importChat; drop the removedNotRelinked sum;
   // drop notChecked from /progress or /finish.
-  // BACKLOG-3661. Mutations that turn these red: createJob replacing the
-  // running job; the manual Send accepted during a Sync.
+  // BACKLOG-3661. Mutation that turns this red: createJob replacing the
+  // running job.
   describe("BACKLOG-3661: one Sync at a time", () => {
     it("createJob while a job runs creates nothing (null) and leaves the running job; activeJob names it", () => {
       expect(bridge.createJob("tx-other", JOB_CONTACTS, { label: "9 Other Street" })).toBeNull();
       expect(bridge.activeJob()?.jobId).toBe(jobId);
       expect(bridge.activeJob()?.transactionId).toBe("tx-job");
       expect(bridge.activeJob()?.state).toBe("created");
-    });
-
-    it("the page's manual Send is refused (409) while a Sync runs, and accepted after", async () => {
-      bridge.openSession("tx-manual");
-      const refused = await request(port, "POST", "/chat", EXT, CHAT_JSON);
-      expect(refused.status).toBe(409);
-      expect(refused.body.error).toBe("sync_running");
-      expect(importChat).not.toHaveBeenCalled();
-      bridge.cancelJob(jobId);
-      expect((await request(port, "POST", "/chat", EXT, CHAT_JSON)).status).toBe(200);
     });
   });
 
@@ -610,20 +547,6 @@ describe("RcsExtensionBridge sync jobs", () => {
       expect((await request(port, "POST", `/job/${jobId}/chat`, EXT, body)).status).toBe(200);
       const call = importChat.mock.calls[0] as unknown as [RcsIncomingChat, string, { numbers: string[]; names: unknown[] }];
       expect(call[2]).toEqual({ numbers: ["+15555550199"], names: [{ name: "Test Contact A", number: "+15555550199" }] });
-    });
-
-    // Mutation: accept a manual Send with no number → red.
-    it("a manual Send with no phone number is refused with the page's message", async () => {
-      bridge.cancelJob(jobId);
-      bridge.openSession("tx-manual");
-      const reply = await request(port, "POST", "/chat", EXT, JSON.stringify(CHAT));
-      expect(reply.status).toBe(400);
-      expect(reply.body.message).toBe("Open the chat's Details: no phone number found");
-      expect(importChat).not.toHaveBeenCalled();
-      const ok = await request(port, "POST", "/chat", EXT, CHAT_JSON);
-      expect(ok.status).toBe(200);
-      const call = importChat.mock.calls[0] as unknown as [RcsIncomingChat, string, { numbers: string[] }];
-      expect(call[2].numbers).toEqual(["+15555550199"]);
     });
 
     it("messages the user removed are summed into progress.removedNotRelinked and returned to the page", async () => {

@@ -16,7 +16,7 @@ import {
 import { AttachMessagesModal, UnlinkMessageModal } from "./modals";
 import { AuditPeriodToggle } from "./AuditPeriodToggle";
 import { RemovedMessagesSection } from "./RemovedMessagesSection";
-import { RcsImportPanel, useRcsImportSession, useRcsSyncJob } from "./RcsImportPanel";
+import { rcsImportService } from "../../../services/rcsImportService";
 import { BulkSelectionBar, BulkRemoveConfirmModal } from "./BulkSelectionBar";
 import { useSelection } from "../../../hooks/useSelection";
 import type { NotificationAction, NotificationOptions } from "../../ui/Notification/types";
@@ -137,6 +137,11 @@ export function TransactionMessagesTab({
   onShowError,
   auditStartDate,
   auditEndDate,
+  onSyncMessages,
+  syncingMessages = false,
+  globalSyncRunning = false,
+  messagesSyncInFlight = false,
+  isOnline = true,
   hasContacts = false,
   highlightTarget,
   onHighlightConsumed,
@@ -149,21 +154,34 @@ export function TransactionMessagesTab({
   // Stand-in until BACKLOG-3365: always "blocked", so only Unhide can render.
   const hideFromExportState = useHideFromExportState();
 
-  // BACKLOG-3619 POC: the import session lives HERE, not in the panel — the
-  // panel renders in two trees (empty state / header) and the first chat that
-  // lands switches between them.
-  const rcsImport = useRcsImportSession(transactionId, onMessagesChanged);
-  // BACKLOG-3620: the Sync job lives in main; this only shows it.
-  const rcsSync = useRcsSyncJob(transactionId, onMessagesChanged);
+  // BACKLOG-3662: texts from Google Messages arrive through the dashboard's
+  // cache Sync, then the phone auto-link; refetch when such a Sync is saved
+  // and linked (SR S1: data-changed), and when Force re-import cleared them.
+  const onMessagesChangedRef = useRef(onMessagesChanged);
+  onMessagesChangedRef.current = onMessagesChanged;
+  useEffect(() => {
+    const offChanged = rcsImportService.onDataChanged(() => void onMessagesChangedRef.current?.());
+    const offCleared = rcsImportService.onDataCleared(() => void onMessagesChangedRef.current?.());
+    return () => {
+      offChanged();
+      offCleared();
+    };
+  }, []);
 
   // TASK-2074: Disable sync when offline, already syncing, or when a global dashboard sync is running.
   // BACKLOG-2294: a BACKGROUND messages sync (audit-date-change / create auto-import, the
   // orchestrator's post-login sync, or the 2293 re-sync expansion) is also "active" — surface the
   // SAME spinner + "Syncing…" affordance instead of a dead disabled gray, and keep the button
   // non-clickable while it runs (a manual re-sync would only coalesce onto the in-flight one).
-  // BACKLOG-3619 POC: the Sync button is replaced by Import on this branch, so
-  // the sync props (onSyncMessages, syncingMessages, globalSyncRunning,
-  // messagesSyncInFlight, isOnline) are accepted and unused here.
+  const syncActive = syncingMessages || globalSyncRunning || messagesSyncInFlight;
+  const syncDisabled = !isOnline || syncActive;
+  const syncTooltip = !isOnline
+    ? "You are offline"
+    : globalSyncRunning
+    ? "A sync is already in progress from the dashboard"
+    : messagesSyncInFlight
+    ? "Syncing messages…"
+    : undefined;
 
   const [showAttachModal, setShowAttachModal] = useState(false);
   const [unlinkTarget, setUnlinkTarget] = useState<{
@@ -848,9 +866,30 @@ export function TransactionMessagesTab({
               : "Click \"Attach Messages\" to get started"}
           </p>
           <div className="flex items-center justify-center gap-3">
-            {/* BACKLOG-3619 POC: Import (from the Chrome extension) replaces Sync on this branch; not gated on contacts. */}
-            {transactionId && (
-              <RcsImportPanel controller={rcsImport} sync={rcsSync} />
+            {/* BACKLOG-3662: Sync re-links this transaction's texts from every source. */}
+            {onSyncMessages && hasContacts && (
+              <button
+                onClick={onSyncMessages}
+                disabled={syncDisabled}
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-green-600 bg-green-50 hover:bg-green-100 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                data-testid="sync-messages-button"
+                title={syncTooltip}
+              >
+                <svg
+                  className={`w-4 h-4 ${syncActive ? "animate-spin" : ""}`}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                  />
+                </svg>
+                {syncActive ? "Syncing..." : <>Sync<span className="hidden sm:inline"> Messages</span></>}
+              </button>
             )}
             {userId && transactionId && (
               <button
@@ -949,9 +988,57 @@ export function TransactionMessagesTab({
               Attach<span className="hidden sm:inline"> Messages</span>
             </button>
           )}
-          {/* BACKLOG-3619 POC: Import (from the Chrome extension) replaces Sync on this branch; not gated on contacts. */}
-          {transactionId && (
-            <RcsImportPanel controller={rcsImport} sync={rcsSync} />
+          {/* Sync button (BACKLOG-3662: re-links this transaction's texts) */}
+          {onSyncMessages && hasContacts && (
+            <button
+              onClick={onSyncMessages}
+              disabled={syncDisabled}
+              className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-green-600 hover:text-green-800 hover:bg-green-50 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              data-testid="sync-messages-button"
+              title={syncTooltip}
+            >
+              {syncActive ? (
+                <>
+                  <svg
+                    className="w-4 h-4 animate-spin"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    ></circle>
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                    ></path>
+                  </svg>
+                  Syncing...
+                </>
+              ) : (
+                <>
+                  <svg
+                    className="w-4 h-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                    />
+                  </svg>
+                  Sync<span className="hidden sm:inline"> Messages</span>
+                </>
+              )}
+            </button>
           )}
         </div>
       </div>

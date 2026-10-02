@@ -598,6 +598,23 @@ describe("Settings", () => {
      * why it is asserted here — with the macOS panel's absence checked too, so
      * the test cannot pass by silently having rendered the other branch.
      */
+    // BACKLOG-3659 P3d. Mutation: the android-messages-web branch removed → red.
+    it("Android with Google Messages: the Google Messages section, not the companion or macOS panel", async () => {
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
+        success: true,
+        preferences: {
+          export: { defaultFormat: "combined-pdf" },
+          messages: { source: "android-messages-web" },
+        },
+      });
+
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+
+      expect(await screen.findByTestId("google-messages-settings")).toBeInTheDocument();
+      expect(screen.queryByTestId("android-block-actions")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("macos-messages-import")).not.toBeInTheDocument();
+    });
+
     it("Android: the same Sources block sits above the Android panel", async () => {
       jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
