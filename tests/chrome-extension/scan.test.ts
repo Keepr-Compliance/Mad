@@ -758,7 +758,7 @@ function historyWrapper(i: number): string {
 /**
  * A chat pane holding the latest 25 of `total` messages. `scrollUp()` asks for
  * 25 older ones, which appear `loadDelayMs` of clock later (clock advanced by
- * `sleep`). `virtualized`: the pane only ever holds the 25 oldest loaded.
+ * `sleep`). `virtualized`: the pane only ever holds the 30 oldest loaded.
  */
 function historyPane(opts: { total: number; loadDelayMs?: number; virtualized?: boolean; spinner?: boolean; startMarker?: boolean }) {
   const delay = opts.loadDelayMs ?? 400;
@@ -767,7 +767,8 @@ function historyPane(opts: { total: number; loadDelayMs?: number; virtualized?: 
   let pendingAt: number | null = null;
   const scrollClocks: number[] = [];
   const render = (): void => {
-    const from = opts.virtualized ? Math.max(0, loaded - PAGE) : 0;
+    // A virtualized pane keeps the oldest loaded page plus 5 rows of the previous one (real lists overlap).
+    const from = opts.virtualized ? Math.max(0, loaded - PAGE - 5) : 0;
     let html = "";
     // #10: a loading indicator while a page is pending; a start marker once all is loaded.
     if (opts.spinner && pendingAt !== null) html += `<div role="progressbar" data-test-visible></div>`;
@@ -1035,6 +1036,8 @@ describe("job runner: loads history before extracting a matched chat", () => {
     total: number;
     startDate: string | null;
     historyCap?: number;
+    /** GAP GUARD: the chat pane recycles its rows (only 30 in the DOM). */
+    virtualized?: boolean;
     api?: (method: string, p: string, body?: Record<string, unknown>) => ApiReply | undefined;
   }) {
     const JOB = "11111111-2222-4333-8444-555555555555"; // pii-allow-uuid: invented, not from any live row
@@ -1074,7 +1077,7 @@ describe("job runner: loads history before extracting a matched chat", () => {
       openConversation: async (conv: Conv) => {
         open = conv.conversationId;
         page = mountDetails(["(555) 555-0199"]);
-        pane = open === "aaaaaaaaaaaaaaaaaaa" ? historyPane({ total: opts.total }) : null;
+        pane = open === "aaaaaaaaaaaaaaaaaaa" ? historyPane({ total: opts.total, virtualized: opts.virtualized }) : null;
         pane?.render();
       },
       readImage: async (_src: string): Promise<{ mimeType: string; base64: string } | null> => null,
@@ -1109,6 +1112,16 @@ describe("job runner: loads history before extracting a matched chat", () => {
 
   // #10: an unconfirmed stop is imported as far as it loaded AND reported
   // (history_not_settled). Mutation: not reported → red.
+  // GAP GUARD: on a recycling pane, /chat carries every message read during
+  // the load, not only the rows left in the DOM. Mutation: send the final
+  // DOM only → red.
+  it("a recycling pane: every message read is sent, not only the final DOM", async () => {
+    const t = historyJob({ total: 120, startDate: null, virtualized: true });
+    await job.runJob(t.JOB, t.env);
+    expect(document.querySelectorAll("mws-message-wrapper").length).toBeLessThanOrEqual(30);
+    expect(t.sentIds()).toHaveLength(120);
+  });
+
   it("no start date: loads until nothing new comes; an unconfirmed start is imported and reported", async () => {
     const t = historyJob({ total: 120, startDate: null });
     const outcome = (await job.runJob(t.JOB, t.env)) as HistoryOutcome & { notReached?: Array<{ reason: string }> };

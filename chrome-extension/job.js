@@ -79,6 +79,7 @@
     error: "failed",
     images_failed: "images not imported",
     history_truncated: "only the newest messages imported",
+    history_gap: "some messages in the middle could not be read — sync again",
   };
 
   function reasonText(entry) {
@@ -174,6 +175,30 @@
     if (!c || c.marker + c.first_page + c.none === 0) return null;
     return "History start: " + c.marker + " confirmed by the start marker · " + c.first_page +
       " complete on the first page · " + c.none + " not confirmed";
+  }
+
+  /**
+   * GAP GUARD: the messages read during a chat's history load (by msg-id)
+   * merged with the ones on screen at the end, unique, oldest first.
+   */
+  function unionMessages(read, onScreen) {
+    var byId = {};
+    var out = [];
+    var lists = [read || [], onScreen || []];
+    for (var l = 0; l < lists.length; l++) {
+      for (var i = 0; i < lists[l].length; i++) {
+        var m = lists[l][i];
+        if (!m || !m.msgId || byId[m.msgId]) continue;
+        byId[m.msgId] = true;
+        out.push(m);
+      }
+    }
+    out.sort(function (a, b) {
+      var ta = Date.parse(a.sentAt);
+      var tb = Date.parse(b.sentAt);
+      return (isFinite(ta) ? ta : 0) - (isFinite(tb) ? tb : 0);
+    });
+    return out;
   }
 
   /** On-screen Details: real names are fine on the user's own page. */
@@ -619,6 +644,12 @@
           scrollUp: env.scrollMessagesUp || function () {},
           nudge: env.nudgeMessages,
           hasScroller: env.hasMessageScroller,
+          // GAP GUARD: messages are kept as they are read (a virtualized list
+          // may drop them before the end), and a gap is stepped back over.
+          extractBatch: function () {
+            return env.extract(env.doc, loc.href, env.now ? env.now() : new Date()).messages;
+          },
+          stepBack: env.stepBackMessages,
           budgetMs: env.historyBudgetMs,
           sleep: env.sleep,
           floorMs: floorMs,
@@ -664,7 +695,10 @@
         }
         loc = env.getLocation();
         var extracted = env.extract(env.doc, loc.href, env.now ? env.now() : new Date());
-        var messages = extracted.messages.map(function (m) {
+        // GAP GUARD: every message read during the load (kept by msg-id) plus
+        // what is on screen now — never only the final DOM.
+        var readSet = unionMessages(hist.messages, extracted.messages);
+        var messages = readSet.map(function (m) {
           var copy = {};
           for (var k in m) if (k !== "imageSrcs") copy[k] = m[k];
           return copy;
@@ -699,16 +733,19 @@
         totals.historyConfirmed[startConfirmedBy(hist)] += 1;
         log("  imported " + messages.length + " messages, " + chatReactions + " reactions (history stop: " + hist.stopReason +
           ", start confirmed by " + startConfirmedBy(hist) +
-          (hist.nudges ? ", nudges " + hist.nudges : "") + ")");
+          (hist.nudges ? ", nudges " + hist.nudges : "") +
+          (hist.gapsDetected ? ", gaps " + hist.gapsDetected + " detected / " + (hist.gapsRecovered || 0) + " recovered" : "") + ")");
         // Imported, but only back to the cap: older messages are missing.
         if (hist.stopReason === "cap") leaveOut(conv, "history_truncated");
         // BACKLOG-3658 #10: the start of the chat was not confirmed (nothing
         // new after every nudge, or the budget ran out): imported as far as it
         // loaded, reported, and the coverage does not reach the floor.
         if (hist.stopReason === "not_settled") leaveOut(conv, "history_not_settled");
+        // GAP GUARD: a gap that could not be bridged — imported as read, reported.
+        if (hist.stopReason === "history_gap") leaveOut(conv, "history_gap");
 
-        for (var j = 0; j < extracted.messages.length; j++) {
-          var msg = extracted.messages[j];
+        for (var j = 0; j < readSet.length; j++) {
+          var msg = readSet[j];
           var srcs = msg.imageSrcs || [];
           for (var n = 0; n < srcs.length; n++) {
             try {
@@ -1537,6 +1574,14 @@
     el.dispatchEvent(new el.ownerDocument.defaultView.Event("scroll"));
   }
 
+  /** GAP GUARD: half a screen back down, to re-read across a gap. */
+  async function stepBackMessages() {
+    var el = root.KeeprScan.findMessageScroller(document);
+    if (!el) return;
+    el.scrollTop = Math.min(el.scrollHeight, el.scrollTop + Math.floor(el.clientHeight / 2));
+    el.dispatchEvent(new el.ownerDocument.defaultView.Event("scroll"));
+  }
+
   /** BACKLOG-3658 #10: a small scroll down and back to the top, so the page's loader fires again. */
   async function nudgeMessages() {
     var el = root.KeeprScan.findMessageScroller(document);
@@ -1602,6 +1647,7 @@
       hashName: hashName,
       scrollMessagesUp: scrollMessagesUp,
       nudgeMessages: nudgeMessages,
+      stepBackMessages: stepBackMessages,
       extensionVersion: manifestVersion(),
       openConversation: openConversation,
       returnToList: returnToList,

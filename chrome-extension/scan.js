@@ -709,6 +709,9 @@
    */
   var RCS_HISTORY_BUDGET_MS = 60000;
 
+  /** GAP GUARD: step-backs tried to bridge a gap before the chat ends "history_gap". */
+  var GAP_RECOVERY_ATTEMPTS = 8;
+
   /** Google renders at most this many messages when a chat opens (live, 2026-09-29). */
   var HISTORY_FIRST_PAGE = 25;
 
@@ -804,6 +807,7 @@
    *          oldestMs: function(): (number|null), floorMs?: (number|null), cap?: number,
    *          noNewTimeoutMs?: number, budgetMs?: number, nudgeWaitsMs?: number[],
    *          startMarkerSelectors?: string[], loadingSelectors?: string[], hasScroller?: function(): boolean,
+   *          extractBatch?: function(): Array<{msgId: string, sentAt: string}>, stepBack?: function(): (void|Promise<void>),
    *          intervalMs?: number, onProgress?: function(number): void,
    *          checkpoint?: function(number): Promise<void>}} io
    * @returns {Promise<{stopReason: string, count: number, scrolls: number, nudges: number, confirmedBy?: string}>}
@@ -840,9 +844,82 @@
     function atStart() {
       return startSelectors.length > 0 && anyMatch(doc, startSelectors);
     }
+    // GAP GUARD (founder, 2026-10-02): every message inside the window, no
+    // gap in the middle. The list may be virtualized (rows dropped/recycled
+    // while scrolling), so (a) each step's messages are extracted AS THEY
+    // ARE READ and kept by msg-id (io.extractBatch) — the end-of-load DOM is
+    // not trusted to still hold them; (b) each newly read batch must share at
+    // least one msg-id with what was read before (contiguity). No overlap → a
+    // gap: step back (io.stepBack) and re-read until a read bridges the two
+    // sides; unrecovered → "history_gap".
+    var collected = {};
+    var gapsDetected = 0;
+    var gapsRecovered = 0;
+    function onScreenIds() {
+      var wrappers = doc.querySelectorAll(SELECTORS.message);
+      var out = [];
+      for (var i = 0; i < wrappers.length; i++) {
+        var id = wrappers[i].getAttribute("msg-id") || "";
+        if (id) out.push(id);
+      }
+      return out;
+    }
+    function collect() {
+      if (!io.extractBatch) return;
+      var batch = io.extractBatch() || [];
+      for (var i = 0; i < batch.length; i++) {
+        var m = batch[i];
+        if (m && m.msgId && !collected[m.msgId]) collected[m.msgId] = m;
+      }
+    }
+    /**
+     * Walk back down from the far side of a gap in steps that each overlap the
+     * previous read (contiguity), until a read reaches what was read before
+     * the gap. Every message on the way is absorbed and collected.
+     */
+    async function recoverGap(before, after) {
+      if (!io.stepBack) return false;
+      var prev = after;
+      for (var attempt = 0; attempt < GAP_RECOVERY_ATTEMPTS && spent < budgetMs; attempt++) {
+        await io.stepBack();
+        await io.sleep(step);
+        spent += step;
+        absorb();
+        collect();
+        var ids = onScreenIds();
+        var touchesPrev = false;
+        var reachesBefore = false;
+        var next = {};
+        for (var i = 0; i < ids.length; i++) {
+          if (prev[ids[i]]) touchesPrev = true;
+          if (before[ids[i]]) reachesBefore = true;
+          next[ids[i]] = true;
+        }
+        if (!touchesPrev) return false; // the step itself skipped messages
+        if (reachesBefore) return true;
+        prev = next;
+      }
+      return false;
+    }
     function result(stopReason, confirmedBy) {
+      collect();
       var r = { stopReason: stopReason, count: count, scrolls: scrolls, nudges: nudges };
       if (confirmedBy) r.confirmedBy = confirmedBy;
+      if (gapsDetected > 0) {
+        r.gapsDetected = gapsDetected;
+        r.gapsRecovered = gapsRecovered;
+      }
+      if (io.extractBatch) {
+        // Final consistency pass: unique ids, sorted by time.
+        var all = [];
+        for (var id in collected) all.push(collected[id]);
+        all.sort(function (a, b) {
+          var ta = Date.parse(a.sentAt);
+          var tb = Date.parse(b.sentAt);
+          return (isFinite(ta) ? ta : 0) - (isFinite(tb) ? tb : 0);
+        });
+        r.messages = all;
+      }
       return r;
     }
     function loadingShown() {
@@ -880,7 +957,10 @@
       while (waited < ms && spent < budgetMs) {
         await io.sleep(step);
         spent += step;
-        if (absorb() > 0) return true;
+        if (absorb() > 0) {
+          collect();
+          return true;
+        }
         // A loading indicator: this wait does not run down (the budget does).
         if (!loadingShown()) waited += step;
       }
@@ -888,6 +968,7 @@
     }
 
     absorb();
+    collect();
     var firstPage = count;
     for (;;) {
       if (io.onProgress) io.onProgress(count);
@@ -902,6 +983,8 @@
       if (scrolls === 0 && !hasScroller() && (await firstPageSettled(false))) return result("no_more", "no_overflow");
       if (scrolls === 0 && firstPage < HISTORY_FIRST_PAGE && (await firstPageSettled(true))) return result("no_more", "first_page");
       if (spent >= budgetMs) return result("not_settled");
+      var before = {};
+      for (var sid in seen) before[sid] = true;
       await io.scrollUp();
       scrolls += 1;
       var added = await waitForNew(noNewMs);
@@ -912,6 +995,19 @@
         added = await waitForNew(nudgeWaits[k]);
       }
       if (!added) return atStart() ? result("no_more", "marker") : result("not_settled");
+      // GAP GUARD: the new read must overlap what was read before.
+      var screen = onScreenIds();
+      var overlap = false;
+      var fresh = {};
+      for (var q = 0; q < screen.length; q++) {
+        if (before[screen[q]]) overlap = true;
+        else fresh[screen[q]] = true;
+      }
+      if (!overlap) {
+        gapsDetected += 1;
+        if (await recoverGap(before, fresh)) gapsRecovered += 1;
+        else return result("history_gap");
+      }
       // Awaited after every scroll that loaded something, so a caller can end
       // the load (by throwing) as soon as it learns the job was cancelled.
       if (io.checkpoint) await io.checkpoint(count);
