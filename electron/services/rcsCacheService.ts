@@ -132,7 +132,12 @@ export function consentIsCurrent(consentVersion: number | null | undefined): boo
  * the floor stores nothing and is not counted (the commit skips it).
  */
 export function cacheSavedFromCommit(r: CacheCommitResult): RcsCacheSaved {
-  return { chats: r.chats, messages: r.stored + r.alreadyPresent, newMessages: r.stored, reactions: r.reactions };
+  // Live (0.3.18): "0 reactions" while 52 were sent — only NEW rows were
+  // counted. Reactions read like messages now: all saved, then how many new.
+  return {
+    chats: r.chats, messages: r.stored + r.alreadyPresent, newMessages: r.stored,
+    reactions: r.reactionsKept ?? r.reactions, newReactions: r.reactions,
+  };
 }
 
 /**

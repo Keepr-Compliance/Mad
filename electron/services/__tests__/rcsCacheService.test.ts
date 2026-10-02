@@ -75,7 +75,18 @@ describe("cacheSavedFromCommit", () => {
         staged: 328, kept: 212, droppedByDate: 116, droppedByCap: 0, chats: 9, stored: 200, alreadyPresent: 12,
         imagesStaged: 0, imagesStored: 0, reactions: 7,
       }),
-    ).toEqual({ chats: 9, messages: 212, newMessages: 200, reactions: 7 });
+    ).toEqual({ chats: 9, messages: 212, newMessages: 200, reactions: 7, newReactions: 7 });
+  });
+
+  // Live (0.3.18): reactions read like messages — all saved, then how many new.
+  // Mutation: reactions = new rows only again → red.
+  it("reactions: every saved reaction, and how many are new", () => {
+    expect(
+      cacheSavedFromCommit({
+        staged: 244, kept: 244, droppedByDate: 0, droppedByCap: 0, chats: 11, stored: 0, alreadyPresent: 244,
+        imagesStaged: 4, imagesStored: 0, reactions: 0, reactionsKept: 52, imagesAlreadyThere: 4, imagesNoMessage: 0,
+      }),
+    ).toMatchObject({ messages: 244, newMessages: 0, reactions: 52, newReactions: 0 });
   });
 });
 

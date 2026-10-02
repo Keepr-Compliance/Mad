@@ -162,8 +162,10 @@ export interface RcsCacheSaved {
   messages: number;
   /** Of those, new to Keepr. */
   newMessages: number;
-  /** BACKLOG-3658 #14: reactions (tapbacks) stored. Counts only. */
+  /** BACKLOG-3658 #14: reactions (tapbacks) saved (new + already in Keepr). Counts only. */
   reactions?: number;
+  /** Live (0.3.18): of those, new to Keepr (as newMessages for messages). */
+  newReactions?: number;
 }
 
 /** What the page receives when it claims a job: names only, never numbers. */

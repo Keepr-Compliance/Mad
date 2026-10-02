@@ -181,7 +181,10 @@
     if (!s.saved || typeof s.saved !== "object") return scanned + " · Keepr is still saving — see Keepr for the result";
     return scanned + " · saved " + plural(s.saved.chats, "chat", "chats") + " · " +
       plural(s.saved.messages, "message", "messages") + " (" + s.saved.newMessages + " new)" +
-      (typeof s.saved.reactions === "number" ? " · " + plural(s.saved.reactions, "reaction", "reactions") : "");
+      (typeof s.saved.reactions === "number"
+        ? " · " + plural(s.saved.reactions, "reaction", "reactions") +
+          (typeof s.saved.newReactions === "number" ? " (" + s.saved.newReactions + " new)" : "")
+        : "");
   }
 
   /**
@@ -206,12 +209,26 @@
     return "partial"; // not_settled, history_gap, cap
   }
 
+  /**
+   * The window as the user set it, from the floor's days (live: a 14-day run
+   * read "the 1-month limit"). Whole and half months (days = months ×
+   * 30.4375, ±3 days for calendar months) read as months, 12 as a year;
+   * anything else as days: "14-day", "1.5-month", "3-month", "1-year".
+   */
+  function windowLabel(floorDays) {
+    if (typeof floorDays !== "number" || !isFinite(floorDays) || floorDays <= 0) return null;
+    for (var halves = 2; halves <= 24; halves++) {
+      var months = halves / 2;
+      if (Math.abs(floorDays - months * 30.4375) <= 3) return months === 12 ? "1-year" : months + "-month";
+    }
+    return Math.round(floorDays) + "-day";
+  }
+
   /** "History depth: …" — counts only (no dates, no names). */
   function historyDepthLine(d) {
     if (!d || d.limit + d.start + d.partial === 0) return null;
-    var limit = d.floorDays !== null && d.floorDays !== undefined
-      ? "the " + Math.max(1, Math.round(d.floorDays / 30.44)) + "-month limit"
-      : "the months limit";
+    var label = windowLabel(d.floorDays);
+    var limit = label ? "the " + label + " limit" : "the months limit";
     return "History depth: " + d.limit + " chats reached " + limit + " · " + d.start + " reached the chat's start · " +
       d.partial + " not fully loaded" +
       (d.gaps > 0 ? " · " + d.gaps + " gaps (" + d.gapsRecovered + " recovered)" : "");
@@ -1618,6 +1635,7 @@
     IDLE_HOW: IDLE_HOW,
     idleReachability: idleReachability,
     lastSyncText: lastSyncText,
+    windowLabel: windowLabel,
     DRAG_HANDLE: DRAG_HANDLE,
     claimPage: claimPage,
     ownsPage: ownsPage,

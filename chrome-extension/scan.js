@@ -281,7 +281,10 @@
     var olderInARow = 0;
     function absorb() {
       var list = readConversationList(doc, now, dateOrder);
-      for (var i = 0; i < list.length; i++) {
+      // Live (0.3.18, 14-day run: "Scanned 273 chats", steps 0): rows still
+      // mounted from an earlier scroll position were all read in one pass.
+      // The read ends AT the stop: no row after it is taken.
+      for (var i = 0; i < list.length && !reachedSince; i++) {
         if (!byId[list[i].conversationId]) {
           byId[list[i].conversationId] = list[i];
           order.push(list[i].conversationId);

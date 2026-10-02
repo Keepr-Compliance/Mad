@@ -280,7 +280,8 @@ async function commitCacheJob(jobId: string, userId: string, snapshot?: CacheEnd
   void logService.info(
     `[RcsCache] Cache Sync saved: ${r.staged} staged, ${r.kept} kept (${r.droppedByDate} older than the months setting; ` +
       `no max-messages cap for this source); ${r.chats} chats, ${r.stored} new, ${r.alreadyPresent} already there; ` +
-      `images ${r.imagesStored} of ${r.imagesStaged}; ${r.reactions} reactions`,
+      `images: ${r.imagesStaged} kept, ${r.imagesStored} new, ${r.imagesAlreadyThere ?? 0} already there, ` +
+      `${r.imagesNoMessage ?? 0} with no saved message; reactions ${r.reactionsKept ?? r.reactions} (${r.reactions} new)`,
     LOG_TAG,
   );
   // The done screens (Keepr's and the page's) show what was SAVED.

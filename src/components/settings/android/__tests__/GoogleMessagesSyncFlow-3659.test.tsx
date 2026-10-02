@@ -162,11 +162,11 @@ describe("GoogleMessagesSyncFlow", () => {
     expect(screen.getByTestId("gm-step-done")).toHaveTextContent("Saving your texts…");
     expect(screen.getByTestId("gm-done-summary")).not.toHaveTextContent("328");
     act(() => {
-      progressListener?.(job({ state: "finished", progress, saved: { chats: 7, messages: 212, newMessages: 212, reactions: 9 } } as Partial<RcsJobInfo>));
+      progressListener?.(job({ state: "finished", progress, saved: { chats: 7, messages: 212, newMessages: 212, reactions: 9, newReactions: 4 } } as Partial<RcsJobInfo>));
     });
     // H4: what Keepr SAVED, not the 328 the page sent.
     const summary = screen.getByTestId("gm-done-summary");
-    expect(summary).toHaveTextContent("Scanned 21 chats · saved 7 chats · 212 messages (212 new) · 9 reactions");
+    expect(summary).toHaveTextContent("Scanned 21 chats · saved 7 chats · 212 messages (212 new) · 9 reactions (4 new)");
     expect(summary).toHaveTextContent("2 chats with no messages yet");
     expect(summary).toHaveTextContent("1 not a text conversation (e.g. an AI chat) — skipped");
     expect(summary).not.toHaveTextContent("328");

@@ -166,6 +166,12 @@ export interface CacheCommitResult {
   imagesStored: number;
   /** BACKLOG-3658 #14: reactions stored with the kept messages (new rows). */
   reactions: number;
+  /** Live (0.3.18): every reaction on the kept messages, new or already stored. */
+  reactionsKept?: number;
+  /** Kept images whose attachment row already existed (nothing to add). */
+  imagesAlreadyThere?: number;
+  /** Kept images whose message is not in Keepr (no row to attach to): not saved. */
+  imagesNoMessage?: number;
 }
 
 const keyOf = (chatHash: string, msgId: string): string => `${chatHash}\u0000${msgId}`;
@@ -366,6 +372,7 @@ export class RcsCacheStaging {
         let stored = 0;
         let alreadyPresent = 0;
         let reactions = 0;
+        let reactionsKept = 0;
         for (const row of this.db.chats(jobId)) {
           if (row.userId !== userId) continue; // never another user's staging
           const messages: RcsIncomingMessage[] = [];
@@ -373,6 +380,7 @@ export class RcsCacheStaging {
             if (selection.kept.has(keyOf(row.chatHash, m.msgId))) messages.push(JSON.parse(m.messageJson) as RcsIncomingMessage);
           }
           if (messages.length === 0) continue;
+          for (const m of messages) reactionsKept += m.reactions?.length ?? 0;
           const people = JSON.parse(row.peopleJson) as RcsChatPeople;
           const r = writer.storeChat({ conversationId: row.conversationId, title: row.title, messages }, userId, people);
           chats += 1;
@@ -382,13 +390,18 @@ export class RcsCacheStaging {
         }
 
         let imagesStored = 0;
+        let imagesAlreadyThere = 0;
+        let imagesNoMessage = 0;
         if (images.length > 0) {
           const ids = writer.getMessageIdMap(userId);
           const existing = writer.getExistingAttachmentRecords();
           for (const img of images) {
             const externalId = writer.externalId(img.chatHash, img.msgId);
             const messageId = ids.get(externalId);
-            if (!messageId) continue;
+            if (!messageId) {
+              imagesNoMessage += 1;
+              continue;
+            }
             const filename = writer.imageFilename(img.msgId, img.idx, img.mimeType);
             if (!existing.has(`${messageId}:${filename}`)) {
               writer.insertAttachment({
@@ -402,6 +415,8 @@ export class RcsCacheStaging {
               });
               existing.add(`${messageId}:${filename}`);
               imagesStored += 1;
+            } else {
+              imagesAlreadyThere += 1;
             }
             // A row stored earlier without its image must now show it.
             writer.markMessageHasAttachments(messageId);
@@ -419,6 +434,9 @@ export class RcsCacheStaging {
           imagesStaged: images.length,
           imagesStored,
           reactions,
+          reactionsKept,
+          imagesAlreadyThere,
+          imagesNoMessage,
         };
         insideTransaction?.(out);
         return out;

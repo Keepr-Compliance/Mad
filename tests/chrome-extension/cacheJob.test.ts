@@ -104,6 +104,14 @@ describe("parseListTime (day precision)", () => {
   });
 });
 
+// Live (0.3.18, a 14-day run read "the 1-month limit"). Mutation: rounded to months again → red.
+describe("windowLabel: the window as set", () => {
+  it.each([[14, "14-day"], [10, "10-day"], [30, "1-month"], [46, "1.5-month"], [91, "3-month"], [89, "3-month"], [183, "6-month"], [365, "1-year"], [400, "400-day"]])(
+    "%d days → %s", (days, label) => {
+      expect(job.windowLabel(days)).toBe(label);
+    });
+});
+
 describe("the list read never goes past the floor (LIVE 0.3.18)", () => {
   // A 90-day run: this year's "Mon D" / weekday / time stamps, then last
   // year's "M/D/YY" — all with both parts 12 or less.
@@ -131,6 +139,17 @@ describe("the list read never goes past the floor (LIVE 0.3.18)", () => {
     expect(names(out)).toEqual(["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"]);
     expect(out.scroll.timesUnread).toBe(0);
     expect(out.scroll.timesRead).toBe(10);
+  });
+
+  // Live (0.3.18, 14-day run: "Scanned 273 chats", steps 0): rows still mounted
+  // were all taken in one pass. Mutation: the pass not ended at the stop → red.
+  it("rows already on screen past the stop are not taken", async () => {
+    renderList(LIVE_LIST);
+    const out = await scan.collectConversations(document, {
+      sleep: async () => {}, now: () => NOW, dateOrder: "mdy", stopAtOlderThanMs: FLOOR_400,
+    });
+    expect(out.stopReason).toBe("since");
+    expect(names(out)).toEqual(["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"]);
   });
 
   // Mutation: chats switched back on keep the read going past the floor → red.
@@ -319,7 +338,7 @@ describe("runJob: a cache Sync", () => {
     const t = cacheEnv({
       rows: ROWS,
       numbers: { [id(0)]: ["+15555550101"], [id(2)]: ["+15555550102"] },
-      finishReply: { ok: true, saved: { chats: 1, messages: 1, newMessages: 1, reactions: 2 } },
+      finishReply: { ok: true, saved: { chats: 1, messages: 1, newMessages: 1, reactions: 2, newReactions: 1 } },
     });
     await job.runJob(JOB, t.env);
     const finishAt = t.calls.findIndex(([, p]) => p.endsWith("/finish"));
@@ -327,7 +346,7 @@ describe("runJob: a cache Sync", () => {
     expect(t.shown.some(([text]) => text === "Saving in Keepr…")).toBe(true);
     const [text, , extras] = t.shown[t.shown.length - 1] as [string, boolean, { details: string; copy: string }];
     expect(text).toBe(job.DONE_LINE);
-    expect(extras.details.split("\n")[0]).toBe("Scanned 4 chats · saved 1 chat · 1 message (1 new) · 2 reactions");
+    expect(extras.details.split("\n")[0]).toBe("Scanned 4 chats · saved 1 chat · 1 message (1 new) · 2 reactions (1 new)");
     expect(extras.details).not.toMatch(/matched|checked/);
     // #14: per-chat reaction counts in the step log, the sum in Copy details.
     // Mutation: reactions not counted → red.
@@ -366,7 +385,7 @@ describe("runJob: a cache Sync", () => {
     expect(extras.copy).toContain("start confirmed by date_floor");
     expect(extras.details).toContain(" · 0 without scrolling · 1 reached the months limit · 1 not confirmed");
     expect(extras.details).toContain(
-      "History depth: 1 chats reached the 1-month limit · 1 reached the chat's start · 1 not fully loaded · 1 gaps (0 recovered)",
+      "History depth: 1 chats reached the 10-day limit · 1 reached the chat's start · 1 not fully loaded · 1 gaps (0 recovered)",
     );
     expect(extras.copy).toContain("gaps 1 detected / 0 recovered");
   });

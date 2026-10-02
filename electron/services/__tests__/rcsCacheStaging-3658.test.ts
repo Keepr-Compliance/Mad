@@ -274,6 +274,23 @@ describe("reactions and images follow their message (A6)", () => {
     // The staging folder is gone (the dropped image's file with it).
     expect(fs.existsSync(files.stagingRoot) ? listFiles(files.stagingRoot) : []).toEqual([]);
   });
+
+  // Live (0.3.18): "0 reactions" while 52 were sent, "images 0 of 4": what
+  // was already in Keepr counted as nothing. Mutations: reactionsKept /
+  // imagesAlreadyThere not counted → red.
+  it("a second Sync of the same chat: reactions and images already there are counted as such", async () => {
+    const stageOnce = async (job: string) => {
+      staging.stageChat(job, USER, chat("conv-a", [
+        msg("new", "2026-09-29T10:00:00.000Z", { reactions: [{ emoji: "y", reactor: "me", word: "" }], images: 1 }),
+      ]), peopleA, hashA);
+      await staging.stageImage(job, { conversationId: "conv-a", msgId: "new", index: 0, mimeType: "image/png", base64: Buffer.from("image new").toString("base64") }, hashA);
+      return staging.commit(job, USER, { floorMs: Date.parse("2026-07-01T00:00:00.000Z"), cap: null, protectedSpans: [] }, writer);
+    };
+    const first = await stageOnce(JOB);
+    expect(first).toMatchObject({ reactions: 1, reactionsKept: 1, imagesStored: 1, imagesAlreadyThere: 0, imagesNoMessage: 0 });
+    const second = await stageOnce(JOB.replace(/.$/, (c) => (c === "0" ? "1" : "0")));
+    expect(second).toMatchObject({ stored: 0, alreadyPresent: 1, reactions: 0, reactionsKept: 1, imagesStaged: 1, imagesStored: 0, imagesAlreadyThere: 1 });
+  });
 });
 
 describe("atomic: all or nothing", () => {
