@@ -834,6 +834,21 @@ CREATE TABLE IF NOT EXISTS rcs_chat_people (
 
 CREATE INDEX IF NOT EXISTS idx_rcs_chat_people_number ON rcs_chat_people(user_id, number_e164);
 
+-- BACKLOG-3658 L2: the last finished Google Messages cache run per user (its
+-- floor, full read or not, how the list scan stopped, whether it reached its
+-- floor, and how many chats it could not confirm complete). Backfills the
+-- coverage; drives "N chats may be incomplete". Cleared by Force re-import.
+CREATE TABLE IF NOT EXISTS rcs_cache_runs (
+  user_id TEXT PRIMARY KEY,
+  floor_iso DATETIME NOT NULL,
+  full_read INTEGER NOT NULL DEFAULT 0,
+  list_stop TEXT,
+  reached_floor INTEGER NOT NULL DEFAULT 0,
+  not_settled_chats INTEGER NOT NULL DEFAULT 0,
+  finished_at DATETIME NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
 -- BACKLOG-3663: how far back each text source's import is known to reach
 -- ("covered since"), per user. General (any source); today written by the
 -- Google Messages cache — in its commit transaction, and only when that run

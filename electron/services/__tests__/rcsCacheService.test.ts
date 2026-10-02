@@ -29,6 +29,8 @@
 
 import {
   cacheSince,
+  backfillCoverageFrom,
+  cacheRunCoverage,
   cacheRunReachedFloor,
   cacheWindow,
   clampSinceDays,
@@ -262,26 +264,49 @@ describe("cacheWindow", () => {
   // Founder (2026-10-01): date limit only for this source; a total cap later.
   // BACKLOG-3663: the months setting (or a deal's audit period) widened, or no
   // run reached its floor yet → the next Sync reads down to the floor again.
-  it("reading older texts: a floor older than what is covered, or nothing covered yet (V8)", () => {
+  it("reading older texts: only a floor older than what is covered (V8; L2: NULL coverage does not)", () => {
     const base = { nowMs: NOW, lastFinishedAt: "2026-09-30T08:00:00.000Z", plan: plan(threeMonths), isPackaged: true };
     const widened = cacheWindow({ ...base, coveredSince: "2026-08-01T00:00:00.000Z" });
     expect(widened).toMatchObject({ since: threeMonths, readingOlder: true });
+    // L2 (live: every Sync re-read everything). Mutation: NULL forcing a full read → red.
     const neverReached = cacheWindow({ ...base, coveredSince: null });
-    expect(neverReached).toMatchObject({ since: threeMonths, readingOlder: true });
+    expect(neverReached.readingOlder).toBe(false);
+    expect(neverReached.since).toBe("2026-09-29T08:00:00.000Z"); // incremental: last finished − 1 day
     // The very first run reads to the floor anyway, but it is not "older".
     expect(cacheWindow({ ...base, lastFinishedAt: null, coveredSince: null })).toMatchObject({ since: threeMonths, readingOlder: false });
   });
 
   it("cacheRunReachedFloor: a full, finished read of every chat only (V9)", () => {
-    const done = { state: "finished", jobId: "j", progress: { notChecked: 0 }, notReached: [{ reason: "no_numbers" }], notReachedMore: 0 };
+    const done = { state: "finished", jobId: "j", progress: { notChecked: 0 }, notReached: [{ reason: "no_numbers" }], notReachedMore: 0, listStop: "since" };
     expect(cacheRunReachedFloor(true, done)).toBe(true);
     expect(cacheRunReachedFloor(false, done)).toBe(false); // incremental
     expect(cacheRunReachedFloor(true, { ...done, progress: { notChecked: 3 } })).toBe(false); // over the 300 cap
     expect(cacheRunReachedFloor(true, { ...done, notReached: [{ reason: "history_truncated" }] })).toBe(false);
-    // #10: a chat whose start was not confirmed (unconfirmed history stop).
-    expect(cacheRunReachedFloor(true, { ...done, notReached: [{ reason: "history_not_settled" }] })).toBe(false);
+    // L2: a not-settled chat no longer blocks the coverage — it is counted.
+    expect(cacheRunReachedFloor(true, { ...done, notReached: [{ reason: "history_not_settled" }] })).toBe(true);
+    expect(cacheRunCoverage(true, { ...done, notReached: [{ reason: "history_not_settled", name: "A" }, { reason: "history_not_settled", name: "B" }] }))
+      .toEqual({ reached: true, notSettledChats: 2 });
+    // L2: only a normal list stop (since | stable) records it.
+    expect(cacheRunReachedFloor(true, { ...done, listStop: "max_time" })).toBe(false);
+    expect(cacheRunReachedFloor(true, { ...done, listStop: "max_items" })).toBe(false);
+    expect(cacheRunReachedFloor(true, { ...done, listStop: undefined })).toBe(false);
+    expect(cacheRunReachedFloor(true, { ...done, listStop: "stable" })).toBe(true);
+    // #10 gap guard: an unrecovered gap blocks it.
+    expect(cacheRunReachedFloor(true, { ...done, notReached: [{ reason: "history_gap" }] })).toBe(false);
     expect(cacheRunReachedFloor(true, { ...done, notReachedMore: 1 })).toBe(false);
     expect(cacheRunReachedFloor(true, { ...done, state: "cancelled" })).toBe(false);
+  });
+
+  // L2: backfill only from a full, normally-stopped run that reached its floor.
+  // Mutation: backfill from any run → red.
+  it("backfillCoverageFrom: the previous run's floor only for a full read with a normal list stop", () => {
+    const ok = { floorISO: "2026-07-01T00:00:00.000Z", fullRead: true, listStop: "since", reachedFloor: true };
+    expect(backfillCoverageFrom(ok)).toBe("2026-07-01T00:00:00.000Z");
+    expect(backfillCoverageFrom({ ...ok, listStop: "max_time" })).toBeNull();
+    expect(backfillCoverageFrom({ ...ok, listStop: "max_items" })).toBeNull();
+    expect(backfillCoverageFrom({ ...ok, fullRead: false })).toBeNull();
+    expect(backfillCoverageFrom({ ...ok, reachedFloor: false })).toBeNull();
+    expect(backfillCoverageFrom(null)).toBeNull();
   });
 
   it("limits: the date floor only — max messages NOT applied; the audit periods (Apple-epoch ns → ms) kept (W5)", () => {

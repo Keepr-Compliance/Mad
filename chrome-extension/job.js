@@ -784,6 +784,8 @@
       notText: totals.notText,
       noMessagesYet: totals.noMessagesYet,
       historyConfirmed: totals.historyConfirmed,
+      // L2: how the list scan stopped (Keepr records the coverage only for a normal stop).
+      listStop: collected.stopReason,
     });
     if (isCache && finished && finished.body && Object.prototype.hasOwnProperty.call(finished.body, "saved")) {
       saved = finished.body.saved;

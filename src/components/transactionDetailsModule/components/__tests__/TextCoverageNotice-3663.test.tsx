@@ -34,7 +34,7 @@ jest.mock("../../../../services/settingsService", () => ({
 }));
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { TextCoverageNotice, chosenTextSource } = require("../TextCoverageNotice") as typeof import("../TextCoverageNotice");
+const { TextCoverageNotice, chosenTextSource, gapLine } = require("../TextCoverageNotice") as typeof import("../TextCoverageNotice");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { AuditCoveragePrompt } = require("../AuditCoveragePrompt") as typeof import("../AuditCoveragePrompt");
 
@@ -73,6 +73,14 @@ describe("TextCoverageNotice", () => {
     getTextCoverage.mockResolvedValue({ success: true, auditStartISO: "2026-05-01T00:00:00.000Z", gaps: [iphone, gm] });
     render(<TextCoverageNotice transactionId="tx-1" userId="user-1" />);
     await waitFor(() => expect(screen.getByTestId("text-coverage-notice").className).toMatch(/bg-amber-50/));
+  });
+
+  // L2: the not-settled chats of the last full run are shown, not hidden.
+  // Mutation: no "incomplete" line → red.
+  it("incomplete: \"N chats may be incomplete\" (L2)", () => {
+    const gap: SourceCoverageGap = { source: "google_messages", coveredSince: "2026-07-01T00:00:00.000Z", approximate: false, kind: "incomplete", incompleteChats: 3 };
+    expect(gapLine(gap, "2026-08-01T00:00:00.000Z")).toBe("Google Messages: 3 chats may be incomplete.");
+    expect(gapLine({ ...gap, incompleteChats: 1 }, null)).toBe("Google Messages: 1 chat may be incomplete.");
   });
 
   it("nothing to say: no notice", async () => {

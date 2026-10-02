@@ -123,6 +123,13 @@ jest.mock("../../capabilities/windowsProvider", () => ({
 jest.mock("../../utils/bringAppToFront", () => ({ bringAppToFront: jest.fn(), bringAppToFrontOrFlash: jest.fn() }));
 jest.mock("../../windowRegistry", () => ({ getMainWindow: () => null }));
 jest.mock("../../services/db/core/dbConnection", () => ({ dbTransaction: (fn: () => unknown) => fn() }));
+let mockLastRun: unknown = null;
+const mockRunRecords: unknown[] = [];
+jest.mock("../../services/db/rcsCacheRunsDbService", () => ({
+  recordRcsCacheRun: (_u: string, run: unknown) => void mockRunRecords.push(run),
+  getRcsCacheRun: () => mockLastRun,
+  clearRcsCacheRun: jest.fn(),
+}));
 jest.mock("../../utils/wrapHandler", () => ({
   wrapHandler: (fn: (event: unknown, args?: unknown) => Promise<unknown>) => fn,
 }));
@@ -230,19 +237,28 @@ describe("a cache Sync being saved (SR B1, S1)", () => {
 
   // BACKLOG-3663: Google Messages coverage — in the commit transaction, down
   // to the floor only for a full run that checked every chat.
+  // L2: a normal list stop is required; not-settled chats are counted, not blocking.
+  // Mutations: not-settled blocking again, the list stop ignored, or the
+  // count not recorded → red.
   it.each([
-    ["a full read of every chat", 0, "2026-07-01T00:00:00.000Z"],
-    ["a run over the 300-chat cap", 5, null],
-  ] as const)("coverage: %s", async (_label, notChecked, expected) => {
+    ["a full read of every chat", 0, "since", [], "2026-07-01T00:00:00.000Z", 0],
+    ["a run over the 300-chat cap", 5, "since", [], null, 0],
+    ["a list scan that timed out", 0, "max_time", [], null, 0],
+    ["two chats not settled (counted, not blocking)", 0, "stable",
+      [{ name: "A", reason: "history_not_settled" }, { name: "B", reason: "history_not_settled" }], "2026-07-01T00:00:00.000Z", 2],
+    ["a truncated chat (blocking)", 0, "since", [{ name: "A", reason: "history_truncated" }], null, 0],
+  ] as const)("coverage: %s", async (_label, notChecked, listStop, notReached, expected, notSettled) => {
     coverageWrites.length = 0;
+    mockRunRecords.length = 0;
     expect((await startCache()).success).toBe(true);
     bridgeOptions.onJobEnded({
       kind: "cache", userId: "user-1", detectedOwnNumber: null,
-      snapshot: { state: "finished", jobId: "job-1", createdAt: "2026-10-01T10:00:00.000Z", progress: { notChecked }, notReached: [] },
+      snapshot: { state: "finished", jobId: "job-1", createdAt: "2026-10-01T10:00:00.000Z", progress: { notChecked }, notReached, listStop },
     });
     await flush();
     releaseCommit?.();
     await flush();
     expect(coverageWrites).toEqual([["user-1", "google_messages", expected]]);
+    expect(mockRunRecords).toEqual([expect.objectContaining({ listStop, reachedFloor: expected !== null, notSettledChats: notSettled, fullRead: true })]);
   });
 });

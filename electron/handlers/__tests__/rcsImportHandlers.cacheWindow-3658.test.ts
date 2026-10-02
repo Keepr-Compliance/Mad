@@ -73,6 +73,20 @@ jest.mock("../../capabilities/windowsProvider", () => ({ hostWindows: { broadcas
 jest.mock("../../utils/bringAppToFront", () => ({ bringAppToFront: jest.fn(), bringAppToFrontOrFlash: jest.fn() }));
 jest.mock("../../windowRegistry", () => ({ getMainWindow: () => null }));
 jest.mock("../../services/db/core/dbConnection", () => ({ dbTransaction: (fn: () => unknown) => fn() }));
+let mockLastRun: unknown = null;
+let mockCoveredSince: string | null = null;
+const mockCoverageWrites: unknown[][] = [];
+jest.mock("../../services/auditCoverageService", () => ({
+  getSourceCoverage: () => (mockCoveredSince ? [{ source: "google_messages", coveredSince: mockCoveredSince }] : []),
+  recordSourceCoverage: (...a: unknown[]) => void mockCoverageWrites.push(a),
+  forgetSourceCoverage: jest.fn(),
+}));
+const mockRunRecords: unknown[] = [];
+jest.mock("../../services/db/rcsCacheRunsDbService", () => ({
+  recordRcsCacheRun: (_u: string, run: unknown) => void mockRunRecords.push(run),
+  getRcsCacheRun: () => mockLastRun,
+  clearRcsCacheRun: jest.fn(),
+}));
 jest.mock("../../utils/wrapHandler", () => ({
   wrapHandler: (fn: (event: unknown, args?: unknown) => Promise<unknown>) => fn,
 }));
@@ -126,6 +140,22 @@ describe("rcs-import:start-cache-job window (BACKLOG-3658)", () => {
     mockStoredFilters = { lookbackMonths: null };
     expect(await state()).toBeNull();
     mockStoredFilters = null;
+  });
+
+  // L2: no coverage yet → backfilled from the previous run only when it was a
+  // full read with a normal list stop that reached its floor. Mutation:
+  // backfill skipped, or taken from a timed-out run → red.
+  it("coverage backfill: from the previous normal full run only (L2)", async () => {
+    electronApp.isPackaged = true;
+    mockCoverageWrites.length = 0;
+    mockLastRun = { floorISO: "2026-06-01T00:00:00.000Z", fullRead: true, listStop: "stable", reachedFloor: true, notSettledChats: 0, finishedAt: "2026-09-30T00:00:00.000Z" };
+    expect((await start()).success).toBe(true);
+    expect(mockCoverageWrites).toEqual([["user-1", "google_messages", "2026-06-01T00:00:00.000Z", expect.any(String)]]);
+    mockCoverageWrites.length = 0;
+    mockLastRun = { floorISO: "2026-06-01T00:00:00.000Z", fullRead: true, listStop: "max_time", reachedFloor: true, notSettledChats: 0, finishedAt: "2026-09-30T00:00:00.000Z" };
+    expect((await start()).success).toBe(true);
+    expect(mockCoverageWrites).toEqual([]);
+    mockLastRun = null;
   });
 
   it("packaged: { sinceDays } is ignored (H1)", async () => {

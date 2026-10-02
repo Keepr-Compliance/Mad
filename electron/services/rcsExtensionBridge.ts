@@ -902,6 +902,7 @@ export class RcsExtensionBridge {
           typeof body.notChecked === "number" ? body.notChecked : undefined,
           typeof body.notText === "number" ? body.notText : undefined,
           typeof body.noMessagesYet === "number" ? body.noMessagesYet : undefined,
+          typeof body.listStop === "string" ? body.listStop : undefined,
         );
         const snap = job.snapshot();
         // Counts only: chat names never go to the log. One chat can have two

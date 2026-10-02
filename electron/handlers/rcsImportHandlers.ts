@@ -32,6 +32,7 @@ import { importChat, rcsChatHash, rcsExternalId, storeCacheChatSync, type RcsImp
 import { RcsCacheStaging, type CacheLimits, type RcsCommitWriter } from "../services/rcsCacheStaging";
 import { loadStoredImportFilters, resolveImportPlanForUser } from "../services/importPlanInputs";
 import { resolveLookbackMonths } from "../services/macOSMessagesImportService/importHelpers";
+import { clearRcsCacheRun, getRcsCacheRun, recordRcsCacheRun } from "../services/db/rcsCacheRunsDbService";
 import { RCS_EXCLUSIONS_MAX } from "../services/rcsExclusions";
 import { forgetSourceCoverage, getSourceCoverage, recordSourceCoverage } from "../services/auditCoverageService";
 import {
@@ -43,7 +44,8 @@ import {
   prepareExtensionFolderShared,
 } from "../services/rcsExtensionDelivery";
 import {
-  cacheRunReachedFloor,
+  backfillCoverageFrom,
+  cacheRunCoverage,
   cacheWindow,
   type CacheEndSnapshot,
   consentIsCurrent,
@@ -251,10 +253,23 @@ async function commitCacheJob(jobId: string, userId: string, snapshot?: CacheEnd
   }
   // BACKLOG-3663: the Google Messages coverage, in the commit's own
   // transaction — down to the floor only when this run read down to it.
-  const reached = !!read && !!snapshot && cacheRunReachedFloor(read.fullRead, snapshot);
-  const r = await cacheStaging().commit(jobId, userId, limits, commitWriter, () =>
-    recordSourceCoverage(userId, "google_messages", reached && read ? read.floorISO : null, new Date().toISOString()),
-  );
+  // L2: not-settled chats no longer block it — they are counted and shown.
+  const coverage = read && snapshot ? cacheRunCoverage(read.fullRead, snapshot) : { reached: false, notSettledChats: 0 };
+  const reached = coverage.reached;
+  const r = await cacheStaging().commit(jobId, userId, limits, commitWriter, () => {
+    const nowISO = new Date().toISOString();
+    recordSourceCoverage(userId, "google_messages", reached && read ? read.floorISO : null, nowISO);
+    if (read) {
+      recordRcsCacheRun(userId, {
+        floorISO: read.floorISO,
+        fullRead: read.fullRead,
+        listStop: snapshot?.listStop ?? null,
+        reachedFloor: reached,
+        notSettledChats: coverage.notSettledChats,
+        finishedAt: nowISO,
+      });
+    }
+  });
   void logService.info(
     `[RcsCache] Cache Sync saved: ${r.staged} staged, ${r.kept} kept (${r.droppedByDate} older than the months setting; ` +
       `no max-messages cap for this source); ${r.chats} chats, ${r.stored} new, ${r.alreadyPresent} already there; ` +
@@ -380,10 +395,20 @@ async function startCacheJobOnce(opts: { sinceDays?: unknown }): Promise<
   });
   if (!("ok" in decision)) return { ok: false, ...decision };
   const plan = await resolveImportPlanForUser({ userId: decision.userId, mode: "delta" });
+  // L2: no coverage recorded yet → backfill it from the previous run's floor,
+  // only when that run was a full read with a normal list stop that reached it.
+  let coveredSince = getSourceCoverage(decision.userId).find((c) => c.source === "google_messages")?.coveredSince ?? null;
+  if (!coveredSince) {
+    const backfill = backfillCoverageFrom(getRcsCacheRun(decision.userId));
+    if (backfill) {
+      recordSourceCoverage(decision.userId, "google_messages", backfill, new Date().toISOString());
+      coveredSince = backfill;
+    }
+  }
   const window = cacheWindow({
     nowMs: Date.now(),
     lastFinishedAt: state?.lastCacheFinishedAt,
-    coveredSince: getSourceCoverage(decision.userId).find((c) => c.source === "google_messages")?.coveredSince ?? null,
+    coveredSince,
     plan,
     sinceDays: opts.sinceDays,
     isPackaged: app.isPackaged,
@@ -553,6 +578,7 @@ export async function clearGoogleMessagesWebTexts(userId: string): Promise<RcsCl
     databaseService.resetRcsCacheState(userId);
     // BACKLOG-3663: and its coverage is gone with the texts.
     forgetSourceCoverage(userId, "google_messages");
+    clearRcsCacheRun(userId);
     hostWindows.broadcast(RCS_DATA_CLEARED_CHANNEL, { messagesDeleted: result.messagesDeleted });
     return result;
   });

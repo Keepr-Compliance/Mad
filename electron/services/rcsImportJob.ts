@@ -150,6 +150,8 @@ export interface RcsJobSnapshot {
    * null when the save failed. Absent while it is still saving.
    */
   saved?: RcsCacheSaved | null;
+  /** L2: how the page's list scan stopped (from /finish). */
+  listStop?: string;
 }
 
 /** What a cache job's commit saved: the counts the done screens show. */
@@ -258,6 +260,8 @@ export class RcsImportJob {
   notReachedMore = 0;
   /** A finished cache job's saved result (undefined: still saving; null: failed). */
   saved?: RcsCacheSaved | null;
+  /** L2: how the page's list scan stopped (since | stable | max_items | max_time), from /finish. */
+  listStop: string | null = null;
   /** BACKLOG-3661: what is syncing, for "Syncing: <label>" (the transaction's name). */
   label: string | null = null;
   /** BACKLOG-3658: the job kind and the user it was started for (rows go to that user only). */
@@ -315,6 +319,7 @@ export class RcsImportJob {
         ? { notReached: this.notReached.map((e) => ({ ...e })), notReachedMore: this.notReachedMore }
         : {}),
       ...(this.saved !== undefined ? { saved: this.saved ? { ...this.saved } : null } : {}),
+      ...(this.listStop ? { listStop: this.listStop } : {}),
     };
   }
 
@@ -466,8 +471,10 @@ export class RcsImportJob {
     notChecked?: number,
     notText?: number,
     noMessagesYet?: number,
+    listStop?: string,
   ): void {
     if (!this.isActive) return;
+    if (typeof listStop === "string" && /^(since|stable|max_items|max_time)$/.test(listStop)) this.listStop = listStop;
     if (typeof noMessagesYet === "number" && Number.isFinite(noMessagesYet) && noMessagesYet >= 0) {
       this.progress.noMessagesYet = Math.min(Math.floor(noMessagesYet), 100_000);
     }

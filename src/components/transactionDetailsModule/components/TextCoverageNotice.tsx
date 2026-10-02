@@ -53,6 +53,11 @@ function day(iso: string | null): string {
 export function gapLine(gap: SourceCoverageGap, auditStartISO: string | null): string {
   const label = LABEL[gap.source];
   if (gap.kind === "never") return `${label}: not fully synced yet.`;
+  // L2: covered back to the start, but some chats could not be confirmed complete.
+  if (gap.kind === "incomplete") {
+    const n = gap.incompleteChats ?? 0;
+    return `${label}: ${n} chat${n === 1 ? "" : "s"} may be incomplete.`;
+  }
   const approx = gap.approximate ? " (from the oldest text Keepr has)" : "";
   return `${label}: texts only from ${day(gap.coveredSince)}${approx}${auditStartISO ? `; this transaction starts ${day(auditStartISO)}` : ""}.`;
 }

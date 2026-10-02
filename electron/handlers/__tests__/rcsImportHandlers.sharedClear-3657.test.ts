@@ -95,6 +95,13 @@ jest.mock("../../capabilities/windowsProvider", () => ({ hostWindows: { broadcas
 jest.mock("../../utils/bringAppToFront", () => ({ bringAppToFront: jest.fn(), bringAppToFrontOrFlash: jest.fn() }));
 jest.mock("../../windowRegistry", () => ({ getMainWindow: () => null }));
 jest.mock("../../services/db/core/dbConnection", () => ({ dbTransaction: (fn: () => unknown) => fn() }));
+let mockLastRun: unknown = null;
+const mockRunRecords: unknown[] = [];
+jest.mock("../../services/db/rcsCacheRunsDbService", () => ({
+  recordRcsCacheRun: (_u: string, run: unknown) => void mockRunRecords.push(run),
+  getRcsCacheRun: () => mockLastRun,
+  clearRcsCacheRun: jest.fn(),
+}));
 jest.mock("../../utils/wrapHandler", () => ({
   wrapHandler: (fn: (event: unknown, args?: unknown) => Promise<unknown>) => fn,
 }));

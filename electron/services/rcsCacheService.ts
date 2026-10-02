@@ -93,8 +93,10 @@ export function cacheWindow(input: {
   }
   const covered = input.coveredSince ? Date.parse(input.coveredSince) : NaN;
   const hadRun = !!input.lastFinishedAt && Number.isFinite(Date.parse(input.lastFinishedAt));
-  // A previous run, but the floor is older than what is covered (or nothing reached its floor yet).
-  const readingOlder = devOverrideDays === null && hadRun && (!Number.isFinite(covered) || floorMs < covered);
+  // A previous run, and the floor is now older than what is covered.
+  // L2 (live): an UNKNOWN coverage (NULL) no longer forces a full read — with
+  // any not-settled chat it stayed NULL, and every Sync re-read everything.
+  const readingOlder = devOverrideDays === null && hadRun && Number.isFinite(covered) && floorMs < covered;
   const since = devOverrideDays !== null || readingOlder
     ? new Date(floorMs).toISOString()
     : cacheSince(input.nowMs, input.lastFinishedAt, floorMs);
@@ -241,12 +243,40 @@ export interface CacheEndSnapshot {
   createdAt?: string;
   jobId: string;
   progress?: { notChecked?: number; imported?: number };
-  notReached?: Array<{ reason: string }>;
+  notReached?: Array<{ reason: string; name?: string }>;
   notReachedMore?: number;
+  /** L2: how the page's list scan stopped (since | stable | max_items | max_time). */
+  listStop?: string;
 }
 
-/** Reasons a chat's history was NOT read down to the floor. */
-const HISTORY_SHORT_REASONS = new Set(["history_truncated", "history_not_settled", "messages_not_loaded", "not_opened", "error"]);
+/**
+ * Reasons a chat's history was NOT read down to the floor and the run's
+ * coverage must not be recorded. history_not_settled is NOT one (L2): those
+ * chats are counted (not_settled_chats) and shown ("N chats may be
+ * incomplete") instead of blocking the coverage forever.
+ */
+const HISTORY_SHORT_REASONS = new Set(["history_truncated", "history_gap", "messages_not_loaded", "not_opened", "error"]);
+
+/** A list scan that ended normally: at `since`, or the list stopped growing (not a cap or a timeout). */
+export function isNormalListStop(listStop: string | null | undefined): boolean {
+  return listStop === "since" || listStop === "stable";
+}
+
+/** L2: what a finished cache run says about the coverage. */
+export function cacheRunCoverage(fullRead: boolean, snapshot: CacheEndSnapshot): { reached: boolean; notSettledChats: number } {
+  const notSettled = new Set((snapshot.notReached ?? []).filter((e) => e.reason === "history_not_settled").map((e) => e.name ?? ""));
+  return { reached: cacheRunReachedFloor(fullRead, snapshot), notSettledChats: notSettled.size };
+}
+
+/**
+ * L2: the coverage to backfill when none is recorded — the previous run's
+ * floor, ONLY if that run was a full read that finished with a normal list
+ * stop (not a cap or a timeout) and reached its floor.
+ */
+export function backfillCoverageFrom(run: { floorISO: string; fullRead: boolean; listStop: string | null; reachedFloor: boolean } | null): string | null {
+  if (!run || !run.fullRead || !run.reachedFloor || !isNormalListStop(run.listStop)) return null;
+  return Number.isFinite(Date.parse(run.floorISO)) ? run.floorISO : null;
+}
 
 /**
  * BACKLOG-3663: did this cache run read down to its floor? Only a FULL read
@@ -256,6 +286,7 @@ const HISTORY_SHORT_REASONS = new Set(["history_truncated", "history_not_settled
  */
 export function cacheRunReachedFloor(fullRead: boolean, snapshot: CacheEndSnapshot): boolean {
   if (!fullRead || snapshot.state !== "finished") return false;
+  if (!isNormalListStop(snapshot.listStop)) return false;
   if ((snapshot.progress?.notChecked ?? 0) > 0) return false;
   if ((snapshot.notReachedMore ?? 0) > 0) return false;
   return !(snapshot.notReached ?? []).some((e) => HISTORY_SHORT_REASONS.has(e.reason));

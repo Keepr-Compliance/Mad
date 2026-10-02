@@ -33,6 +33,7 @@ import {
   SOURCE_COVERAGE_DELETE_SQL,
 } from "./db/auditCoverageSql";
 import { isExpansionStale, getDeepestImportStart } from "./db/messageImportStateService";
+import { getRcsCacheRun } from "./db/rcsCacheRunsDbService";
 import permissionService from "./permissionService";
 import logService from "./logService";
 import { computeTransactionDateRange } from "../utils/emailDateRange";
@@ -84,9 +85,13 @@ export function getSourceCoverage(userId: string): SourceCoverage[] {
       if (!hasRows && !rec && !(source === "mac" && deepestMac)) continue;
       let coveredSince: string | null;
       let approximate: boolean;
+      let incompleteChats: number | undefined;
       if (source === "google_messages") {
         coveredSince = rec?.coveredSince ?? null;
         approximate = false;
+        // L2: the gap is not hidden — the last full run's not-settled chats.
+        const run = getRcsCacheRun(userId);
+        incompleteChats = run && run.reachedFloor ? run.notSettledChats : 0;
       } else if (source === "mac") {
         coveredSince = deepestMac ?? rec?.coveredSince ?? f?.floor ?? null;
         approximate = !deepestMac && !rec?.coveredSince;
@@ -94,7 +99,7 @@ export function getSourceCoverage(userId: string): SourceCoverage[] {
         coveredSince = rec?.coveredSince ?? f?.floor ?? null;
         approximate = !rec?.coveredSince;
       }
-      out.push({ source, coveredSince, lastSyncAt: rec?.lastSyncAt ?? null, approximate, hasRows });
+      out.push({ source, coveredSince, lastSyncAt: rec?.lastSyncAt ?? null, approximate, hasRows, ...(incompleteChats ? { incompleteChats } : {}) });
     }
     return out;
   } catch (error) {
@@ -132,6 +137,8 @@ export function sourceCoverageGaps(
     const since = Date.parse(c.coveredSince);
     if (Number.isFinite(since) && since - start > COVERAGE_TOLERANCE_MS) {
       gaps.push({ source, coveredSince: c.coveredSince, approximate: c.approximate, kind: "later" });
+    } else if ((c.incompleteChats ?? 0) > 0) {
+      gaps.push({ source, coveredSince: c.coveredSince, approximate: c.approximate, kind: "incomplete", incompleteChats: c.incompleteChats });
     }
   }
   return gaps;

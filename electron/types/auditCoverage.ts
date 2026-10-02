@@ -48,6 +48,8 @@ export interface SourceCoverage {
   approximate: boolean;
   /** The user has texts from this source. */
   hasRows: boolean;
+  /** L2 (Google Messages): chats whose history the last full run could not confirm complete. */
+  incompleteChats?: number;
 }
 
 /** A source that does not reach back to an audit start. Never blocks export. */
@@ -55,8 +57,13 @@ export interface SourceCoverageGap {
   source: TextSource;
   coveredSince: string | null;
   approximate: boolean;
-  /** "later": covers only since coveredSince; "never": no full read yet. */
-  kind: "later" | "never";
+  /**
+   * "later": covers only since coveredSince; "never": no full read yet;
+   * "incomplete" (L2): covered, but some chats' history could not be
+   * confirmed complete (incompleteChats).
+   */
+  kind: "later" | "never" | "incomplete";
+  incompleteChats?: number;
 }
 
 /** Result of transactions:get-text-coverage (the Texts tab). */
