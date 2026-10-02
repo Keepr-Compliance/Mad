@@ -1,12 +1,12 @@
 /**
  * BACKLOG-3659 P3d — Settings → Android: Google Messages, with its own
- * Force re-import, auto-delete and consent controls.
+ * Force re-import and auto-delete (no consent line: founder, 2026-10-01).
  *
  * Mutations that turn this suite red:
  *   S1 Force re-import without the confirmation, or not calling clearTexts → "Force re-import"
  *   S2 a failed clear shown as a success                                    → "a refused clear"
  *   S3 the auto-delete switch not saved                                     → "auto-delete"
- *   S4 Withdraw not recording null                                          → "consent"
+ *   S4 the consent line / Withdraw back in this section                     → "no consent line"
  *   S5 Settings not showing this section for android-messages-web           → (Settings.test)
  *   E1 (P3c) switched-off chats not listed / no fallback title               → "chats not synced"
  *   E2 (P3c) Sync again not switching that chat back on                       → "chats not synced"
@@ -57,10 +57,12 @@ beforeEach(() => {
 });
 
 describe("GoogleMessagesSettings", () => {
-  it("shows the extension, the pairing, the last sync and the consent", async () => {
+  it("shows the extension, the pairing and the last sync; no consent line (S4)", async () => {
     render(<GoogleMessagesSettings />);
     expect(await screen.findByTestId("gm-settings-extension")).toHaveTextContent("installed (version 0.3.4)");
-    expect(screen.getByTestId("gm-settings-consent")).toHaveTextContent(/agreed/);
+    expect(screen.queryByTestId("gm-settings-consent")).toBeNull();
+    expect(screen.queryByText(/Copying your texts/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Withdraw" })).toBeNull();
   });
 
   it("Force re-import: asks first, then clears only Google Messages texts and says so (S1)", async () => {
@@ -88,12 +90,6 @@ describe("GoogleMessagesSettings", () => {
     await waitFor(() => expect(box.checked).toBe(false));
     fireEvent.click(box);
     await waitFor(() => expect(mockAutoDelete).toHaveBeenCalledWith(true));
-  });
-
-  it("consent: Withdraw records null (S4)", async () => {
-    render(<GoogleMessagesSettings />);
-    fireEvent.click(await screen.findByRole("button", { name: "Withdraw" }));
-    await waitFor(() => expect(mockConsent).toHaveBeenCalledWith(null));
   });
 
   it("chats not synced: listed with the stored title, or a plain fallback; Sync again switches one back on (E1, E2)", async () => {

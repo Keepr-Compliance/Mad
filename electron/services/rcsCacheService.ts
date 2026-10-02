@@ -124,20 +124,45 @@ export function consentIsCurrent(consentVersion: number | null | undefined): boo
 }
 
 /**
- * Who may start a cache Sync: a signed-in user whose consent (Keepr's record,
- * the ONLY gate) is current, while no Sync runs and no Force re-import is
- * clearing texts. A per-transaction Sync does not need it.
+ * Founder decision (2026-10-01): no separate consent screen — users accept
+ * Keepr's terms at sign-up, and the Sync screen says in one line what is
+ * copied. While false, a cache Sync is not refused for a missing consent; the
+ * first Sync records consent_at + the version for audit instead. Set true to
+ * bring the gate back (the rcs_consent plumbing is kept for that).
+ */
+export const RCS_CONSENT_REQUIRED = false;
+
+/**
+ * The consent version a starting cache Sync records for audit while the
+ * consent screen is off: the current version when the record is not current
+ * yet, else null (nothing to record).
+ */
+export function consentToRecordOnSync(
+  consentVersion: number | null | undefined,
+  consentRequired: boolean = RCS_CONSENT_REQUIRED,
+): number | null {
+  if (consentRequired) return null;
+  return consentIsCurrent(consentVersion) ? null : RCS_CONSENT_VERSION;
+}
+
+/**
+ * Who may start a cache Sync: a signed-in user (whose consent, Keepr's
+ * record, is current — only while RCS_CONSENT_REQUIRED), while no Sync runs
+ * and no Force re-import is clearing texts. A per-transaction Sync does not
+ * need it.
  */
 export function decideCacheStart(input: {
   userId: string | null;
   consentVersion: number | null | undefined;
   activeLabel: string | null | undefined;
   writesPaused: boolean;
+  /** Test seam: defaults to RCS_CONSENT_REQUIRED. */
+  consentRequired?: boolean;
 }): { ok: true; userId: string } | CacheStartRefusal {
   if (!input.userId) {
     return { status: 403, error: "signed_out", message: "Sign in to Keepr first." };
   }
-  if (!consentIsCurrent(input.consentVersion)) {
+  if ((input.consentRequired ?? RCS_CONSENT_REQUIRED) && !consentIsCurrent(input.consentVersion)) {
     return {
       status: 403,
       error: "consent_needed",

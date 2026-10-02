@@ -12,13 +12,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { rcsImportService } from "../../../services/rcsImportService";
 import type { RcsExtensionState, RcsJobInfo } from "../../../../electron/types/ipc/window-api-rcs-import";
-import { extensionInstalled, googleMessagesStep } from "./googleMessagesSyncSteps";
-import {
-  RCS_CONSENT_AGREE,
-  RCS_CONSENT_COPY_VERSION,
-  RCS_CONSENT_PARAGRAPHS,
-  RCS_CONSENT_TITLE,
-} from "./rcsConsentCopy";
+import { extensionInstalled, googleMessagesStep, syncCopyLine } from "./googleMessagesSyncSteps";
 
 const POLL_MS = 3000;
 
@@ -132,16 +126,6 @@ export function GoogleMessagesSyncFlow({ onClose, onUseCompanion, pollMs = POLL_
     setJob(r.data);
   }, []);
 
-  const agree = useCallback(async () => {
-    setError(null);
-    const r = await rcsImportService.setCacheConsent(RCS_CONSENT_COPY_VERSION);
-    if (!r.success) {
-      setError(r.error ?? "Keepr could not save your answer.");
-      return;
-    }
-    await refresh();
-  }, [refresh]);
-
   const cancel = useCallback(async () => {
     if (job) await rcsImportService.cancelJob(job.jobId);
   }, [job]);
@@ -197,27 +181,6 @@ export function GoogleMessagesSyncFlow({ onClose, onUseCompanion, pollMs = POLL_
         </>
       )}
 
-      {step === "consent" && (
-        <>
-          <h2 className="text-lg font-bold text-gray-900">{RCS_CONSENT_TITLE}</h2>
-          <div className="flex flex-col gap-2" data-testid="gm-consent-text">
-            {RCS_CONSENT_PARAGRAPHS.map((p) => (
-              <p key={p} className="text-sm text-gray-800 leading-relaxed">
-                {p}
-              </p>
-            ))}
-          </div>
-          <div className="flex gap-2">
-            <button type="button" className={`flex-1 ${secondary}`} onClick={onClose}>
-              Not now
-            </button>
-            <button type="button" className={`flex-1 ${primary}`} onClick={() => void agree()}>
-              {RCS_CONSENT_AGREE}
-            </button>
-          </div>
-        </>
-      )}
-
       {step === "connect" && (
         <>
           <div className="text-xs font-semibold text-gray-500 tracking-wide">STEP 2 OF 2</div>
@@ -239,6 +202,9 @@ export function GoogleMessagesSyncFlow({ onClose, onUseCompanion, pollMs = POLL_
           <button type="button" className={primary} onClick={() => void startSync()} disabled={starting}>
             {starting ? "Starting…" : "Sync now"}
           </button>
+          <p className="text-xs text-gray-600" data-testid="gm-copy-line">
+            {syncCopyLine(state?.lookbackMonths)}
+          </p>
           {!installed && (
             <button type="button" className="text-sm text-indigo-700 hover:text-indigo-900 text-left" onClick={() => setContinued(false)}>
               Back to installing the extension

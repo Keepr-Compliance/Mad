@@ -6,7 +6,8 @@
  * own section (AndroidMessagesSettings) with its own reset.
  *
  * - Status: the extension (installed / version), Google Messages paired, the
- *   last Sync, the consent (and Withdraw).
+ *   last Sync. (No consent line: users accept Keepr's terms at sign-up; the
+ *   first Sync records the consent for audit.)
  * - Auto-delete (BACKLOG-3658 P3b; off by default, 90 days when on).
  * - Force re-import: deletes every text imported from Google Messages; the
  *   next Sync (Dashboard → Sync Android) copies them again.
@@ -72,12 +73,6 @@ export function GoogleMessagesSettings() {
     await refresh();
   }, [refresh]);
 
-  const withdraw = useCallback(async () => {
-    const r = await rcsImportService.setCacheConsent(null);
-    if (!r.success) setResult({ ok: false, text: r.error ?? "Keepr could not save that." });
-    await refresh();
-  }, [refresh]);
-
   const forceReimport = useCallback(async () => {
     setShowForceWarning(false);
     setBusy(true);
@@ -95,8 +90,6 @@ export function GoogleMessagesSettings() {
     await refresh();
   }, [refresh]);
 
-  const consentGiven = typeof state?.consentVersion === "number" && state.consentVersion >= (state.consentRequired ?? 1);
-
   return (
     <div id="settings-google-messages" className="space-y-4" data-testid="google-messages-settings">
       <div className="p-4 bg-white rounded-lg border border-gray-200 space-y-1 text-sm text-gray-700">
@@ -109,14 +102,6 @@ export function GoogleMessagesSettings() {
             </div>
             <div>Google Messages connected: {state?.pairedAt ? "yes" : "not yet"}</div>
             <div>Last sync: {formatWhen(state?.lastCacheFinishedAt)}</div>
-            <div data-testid="gm-settings-consent">
-              Copying your texts: {consentGiven ? `agreed ${formatWhen(state?.consentAt)}` : "not agreed yet (asked before the first Sync)"}
-              {consentGiven && (
-                <button type="button" className="ml-2 text-indigo-700 hover:text-indigo-900 text-xs font-medium" onClick={() => void withdraw()}>
-                  Withdraw
-                </button>
-              )}
-            </div>
             <p className="text-xs text-gray-600 pt-1">To sync, click Sync Android on the dashboard.</p>
           </>
         )}

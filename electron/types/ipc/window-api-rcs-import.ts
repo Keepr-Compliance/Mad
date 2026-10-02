@@ -76,6 +76,8 @@ export interface RcsExtensionState {
   consentAt?: string | null;
   /** P3b: auto-delete of old chats linked to nothing (null = off). */
   autoDeleteDays?: number | null;
+  /** The months a cache Sync copies (messageImport.filters); null = All time. */
+  lookbackMonths?: number | null;
 }
 
 export type RcsExtensionStateResult =

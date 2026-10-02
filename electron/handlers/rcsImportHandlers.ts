@@ -30,7 +30,8 @@ import type { RcsJobContact, RcsJobSnapshot } from "../services/rcsImportJob";
 import { rcsImageFilename, storeImage, type RcsMediaDeps } from "../services/rcsImportMedia";
 import { importChat, rcsChatHash, rcsExternalId, storeCacheChatSync, type RcsImportDeps } from "../services/rcsImportStore";
 import { RcsCacheStaging, type CacheLimits, type RcsCommitWriter } from "../services/rcsCacheStaging";
-import { resolveImportPlanForUser } from "../services/importPlanInputs";
+import { loadStoredImportFilters, resolveImportPlanForUser } from "../services/importPlanInputs";
+import { resolveLookbackMonths } from "../services/macOSMessagesImportService/importHelpers";
 import { RCS_EXCLUSIONS_MAX } from "../services/rcsExclusions";
 import { forgetSourceCoverage, getSourceCoverage, recordSourceCoverage } from "../services/auditCoverageService";
 import {
@@ -46,6 +47,7 @@ import {
   cacheWindow,
   type CacheEndSnapshot,
   consentIsCurrent,
+  consentToRecordOnSync,
   RCS_CONSENT_VERSION,
   cancelOnSessionChange,
   decideCacheStart,
@@ -358,7 +360,7 @@ async function startCacheJobOnce(opts: { sinceDays?: unknown }): Promise<
 > {
   const userId = await currentUserId();
   const state = userId ? databaseService.getRcsCacheState(userId) : null;
-  // P3b: Keepr's consent record is the only gate.
+  // P3b: Keepr's consent record (a gate only while RCS_CONSENT_REQUIRED).
   const consent = userId ? databaseService.getRcsConsent(userId) : null;
   const active = bridge.activeJob();
   const decision = decideCacheStart({
@@ -385,6 +387,10 @@ async function startCacheJobOnce(opts: { sinceDays?: unknown }): Promise<
     readingOlder: window.readingOlder,
   });
   if (!job) return { ok: false, status: 409, error: "already_syncing", message: "Keepr is already syncing." };
+  // No consent screen (RCS_CONSENT_REQUIRED off): the first Sync records
+  // consent_at + the version for audit.
+  const recordVersion = consentToRecordOnSync(consent?.consentVersion);
+  if (recordVersion !== null) databaseService.setRcsConsent(decision.userId, recordVersion, new Date().toISOString());
   cacheLimitsByJob.set(job.jobId, window.limits);
   cacheReadByJob.set(job.jobId, {
     fullRead: window.since === new Date(window.limits.floorMs).toISOString(),
@@ -682,6 +688,8 @@ export function registerRcsImportHandlers(): void {
           consentRequired: RCS_CONSENT_VERSION,
           consentAt: consent?.consentAt ?? null,
           autoDeleteDays: consent?.autoDeleteDays ?? null,
+          // The months a cache Sync copies (messageImport.filters; null = All time).
+          lookbackMonths: userId ? resolveLookbackMonths(await loadStoredImportFilters(userId)) : undefined,
         },
       };
     }, { module: LOG_TAG }),

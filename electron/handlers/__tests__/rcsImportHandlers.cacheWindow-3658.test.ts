@@ -20,6 +20,7 @@ const created: Array<{ userId: string; since: string }> = [];
 const electronApp = { isPackaged: true, getPath: () => "/tmp/keepr-test" };
 let planStart: string | null = "2026-07-01T00:00:00.000Z";
 let mockConsentVersion: number | null = 1;
+const mockSetConsent = jest.fn();
 
 jest.mock("electron", () => ({
   app: electronApp,
@@ -50,6 +51,7 @@ jest.mock("../../services/databaseService", () => ({
     getRcsCacheState: () => ({ optedInAt: "2026-09-01T00:00:00.000Z", lastCacheFinishedAt: null, ownNumber: null }),
     getRcsConsent: () => ({ consentAt: "2026-09-01T00:00:00.000Z", consentVersion: mockConsentVersion, contactsOnly: false, autoDeleteDays: null }),
     rcsStagingDbOps: () => ({ deleteAll: () => undefined, journalRows: () => [] }),
+    setRcsConsent: (...a: unknown[]) => mockSetConsent(...a),
   },
 }));
 jest.mock("../../services/importPlanInputs", () => ({
@@ -81,6 +83,7 @@ beforeEach(() => {
   created.length = 0;
   planStart = "2026-07-01T00:00:00.000Z";
   mockConsentVersion = 1;
+  mockSetConsent.mockClear();
 });
 
 const start = (args?: unknown) => handlers.get("rcs-import:start-cache-job")!({}, args) as Promise<{ success: boolean }>;
@@ -92,14 +95,21 @@ describe("rcs-import:start-cache-job window (BACKLOG-3658)", () => {
     expect(created[0]).toEqual({ userId: "user-1", since: "2026-07-01T00:00:00.000Z" });
   });
 
-  // P3b: Keepr's consent record is the only gate. Mutation: the handler not
-  // reading rcs_consent (or ignoring it) → red.
-  it("no current consent: the cache Sync is refused and no job is created (K6)", async () => {
+  // Founder, 2026-10-01: no consent screen (RCS_CONSENT_REQUIRED false). The
+  // first Sync starts and records consent_at + the version for audit.
+  // Mutation: the record not written by the start → red.
+  it("no consent yet: the Sync starts and records the current version (K6)", async () => {
     mockConsentVersion = null;
     const r = (await start()) as { success: boolean; error?: string };
-    expect(r.success).toBe(false);
-    expect(r.error).toMatch(/agree/);
-    expect(created).toEqual([]);
+    expect(r.success).toBe(true);
+    expect(created).toHaveLength(1);
+    expect(mockSetConsent).toHaveBeenCalledTimes(1);
+    expect(mockSetConsent).toHaveBeenCalledWith("user-1", 1, expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/));
+  });
+
+  it("a current consent is not re-recorded (K7)", async () => {
+    expect((await start()).success).toBe(true);
+    expect(mockSetConsent).not.toHaveBeenCalled();
   });
 
   it("packaged: { sinceDays } is ignored (H1)", async () => {

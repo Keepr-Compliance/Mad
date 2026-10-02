@@ -33,9 +33,11 @@ import {
   cacheWindow,
   clampSinceDays,
   cancelOnSessionChange,
+  consentToRecordOnSync,
   decideCacheStart,
   handleCacheJobEnded,
   RCS_CACHE_WINDOW_DAYS,
+  RCS_CONSENT_REQUIRED,
   RCS_CONSENT_VERSION,
   RCS_HELLO_PERSIST_MS,
   shouldPersistHello,
@@ -68,15 +70,26 @@ describe("who may start a cache Sync (R2)", () => {
   it("signed out: 403", () => {
     expect(decideCacheStart({ ...ok, userId: null })).toMatchObject({ status: 403, error: "signed_out" });
   });
-  it("no consent, or an older consent text: 403 consent_needed (K1)", () => {
-    expect(decideCacheStart({ ...ok, consentVersion: null })).toMatchObject({ status: 403, error: "consent_needed" });
-    expect(decideCacheStart({ ...ok, consentVersion: undefined })).toMatchObject({ status: 403, error: "consent_needed" });
-    expect(decideCacheStart({ ...ok, consentVersion: RCS_CONSENT_VERSION - 1 })).toMatchObject({ status: 403, error: "consent_needed" });
+  it("consent required: no consent, or an older consent text → 403 consent_needed (K1)", () => {
+    const req = { ...ok, consentRequired: true };
+    expect(decideCacheStart({ ...req, consentVersion: null })).toMatchObject({ status: 403, error: "consent_needed" });
+    expect(decideCacheStart({ ...req, consentVersion: undefined })).toMatchObject({ status: 403, error: "consent_needed" });
+    expect(decideCacheStart({ ...req, consentVersion: RCS_CONSENT_VERSION - 1 })).toMatchObject({ status: 403, error: "consent_needed" });
+    expect(decideCacheStart(req)).toEqual({ ok: true, userId: "u-1" });
   });
-  it("the consent text shown is the version Keepr requires (K2)", () => {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const copy = require("../../../src/components/settings/android/rcsConsentCopy") as { RCS_CONSENT_COPY_VERSION: number };
-    expect(copy.RCS_CONSENT_COPY_VERSION).toBe(RCS_CONSENT_VERSION);
+  // Founder, 2026-10-01: no consent screen. Mutation: the gate not behind
+  // RCS_CONSENT_REQUIRED → red.
+  it("consent not required (the shipped default): no consent_needed (K2)", () => {
+    expect(RCS_CONSENT_REQUIRED).toBe(false);
+    expect(decideCacheStart({ ...ok, consentVersion: null })).toEqual({ ok: true, userId: "u-1" });
+    expect(decideCacheStart({ ...ok, consentVersion: RCS_CONSENT_VERSION - 1, consentRequired: false })).toEqual({ ok: true, userId: "u-1" });
+  });
+  it("the first Sync records the current version; a current record is left alone (K3)", () => {
+    expect(consentToRecordOnSync(null)).toBe(RCS_CONSENT_VERSION);
+    expect(consentToRecordOnSync(RCS_CONSENT_VERSION - 1)).toBe(RCS_CONSENT_VERSION);
+    expect(consentToRecordOnSync(RCS_CONSENT_VERSION)).toBeNull();
+    // With the screen back on, the screen records it, not the Sync.
+    expect(consentToRecordOnSync(null, true)).toBeNull();
   });
   it("a Force re-import is clearing texts: 503", () => {
     expect(decideCacheStart({ ...ok, writesPaused: true })).toMatchObject({ status: 503, error: "busy" });
