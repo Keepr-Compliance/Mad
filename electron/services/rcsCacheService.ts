@@ -73,7 +73,14 @@ export function cacheWindow(input: {
   plan: CachePlanInput;
   sinceDays?: unknown;
   isPackaged: boolean;
-}): { since: string; limits: CacheLimits; devOverrideDays: number | null } {
+  /**
+   * BACKLOG-3663: how far back the cache is known to reach (a run that read
+   * down to its floor). When the floor is now EARLIER (the months setting or
+   * a deal's audit period widened) — or no run reached its floor yet — the
+   * page reads down to the floor again ("Reading older texts…").
+   */
+  coveredSince?: string | null;
+}): { since: string; limits: CacheLimits; devOverrideDays: number | null; readingOlder: boolean } {
   const oldest = input.nowMs - RCS_CACHE_MAX_DAYS * DAY_MS;
   const devOverrideDays = input.isPackaged ? null : clampSinceDays(input.sinceDays);
   let floorMs: number;
@@ -83,7 +90,11 @@ export function cacheWindow(input: {
     const planStart = input.plan.fetchStartISO ? Date.parse(input.plan.fetchStartISO) : NaN;
     floorMs = Number.isFinite(planStart) ? Math.max(oldest, planStart) : oldest;
   }
-  const since = devOverrideDays !== null
+  const covered = input.coveredSince ? Date.parse(input.coveredSince) : NaN;
+  const hadRun = !!input.lastFinishedAt && Number.isFinite(Date.parse(input.lastFinishedAt));
+  // A previous run, but the floor is older than what is covered (or nothing reached its floor yet).
+  const readingOlder = devOverrideDays === null && hadRun && (!Number.isFinite(covered) || floorMs < covered);
+  const since = devOverrideDays !== null || readingOlder
     ? new Date(floorMs).toISOString()
     : cacheSince(input.nowMs, input.lastFinishedAt, floorMs);
   const protectedSpans = input.plan.protectedSpans.map((s) => ({
@@ -91,7 +102,7 @@ export function cacheWindow(input: {
     endMs: s.endNano === null ? null : APPLE_EPOCH_MS + s.endNano / NANOS_PER_MS,
   }));
   // Date only: the max-messages setting does not apply to the cache (cap null).
-  return { since, limits: { floorMs, cap: null, protectedSpans }, devOverrideDays };
+  return { since, limits: { floorMs, cap: null, protectedSpans }, devOverrideDays, readingOlder };
 }
 
 export interface CacheStartRefusal {
@@ -157,7 +168,7 @@ export interface CacheJobEndedDeps {
   saveFinishedAt: (userId: string, iso: string) => void;
   saveOwnNumber: (userId: string, number: string) => void;
   /** BACKLOG-3658 atomic import: the finished job's staging → messages, in one transaction. */
-  commit: (jobId: string, userId: string) => Promise<unknown>;
+  commit: (jobId: string, userId: string, snapshot: CacheEndSnapshot) => Promise<unknown>;
   /** BACKLOG-3658: drop the job's staging (cancel / error / user switch). */
   discard: (jobId: string) => Promise<void>;
   autoLink: (userId: string) => Promise<unknown>;
@@ -179,11 +190,37 @@ export interface CacheJobEndedDeps {
  *    nothing was written, so there is nothing to link.
  * A detected own number (3+ chats agreed) is kept for the next run either way.
  */
+/** What the end of a cache job tells (the job snapshot's relevant part). */
+export interface CacheEndSnapshot {
+  state: string;
+  createdAt?: string;
+  jobId: string;
+  progress?: { notChecked?: number };
+  notReached?: Array<{ reason: string }>;
+  notReachedMore?: number;
+}
+
+/** Reasons a chat's history was NOT read down to the floor. */
+const HISTORY_SHORT_REASONS = new Set(["history_truncated", "history_not_settled", "messages_not_loaded", "not_opened", "error"]);
+
+/**
+ * BACKLOG-3663: did this cache run read down to its floor? Only a FULL read
+ * (since = floor) that checked every listed chat (none over the cap) and
+ * read every chat's history (no truncated / failed one) counts — then the
+ * Google Messages coverage reaches the floor.
+ */
+export function cacheRunReachedFloor(fullRead: boolean, snapshot: CacheEndSnapshot): boolean {
+  if (!fullRead || snapshot.state !== "finished") return false;
+  if ((snapshot.progress?.notChecked ?? 0) > 0) return false;
+  if ((snapshot.notReachedMore ?? 0) > 0) return false;
+  return !(snapshot.notReached ?? []).some((e) => HISTORY_SHORT_REASONS.has(e.reason));
+}
+
 export async function handleCacheJobEnded(
   ended: {
     kind: string;
     userId: string | null;
-    snapshot: { state: string; createdAt?: string; jobId: string };
+    snapshot: CacheEndSnapshot;
     detectedOwnNumber: string | null;
   },
   deps: CacheJobEndedDeps,
@@ -201,7 +238,7 @@ export async function handleCacheJobEnded(
     return;
   }
   try {
-    await deps.commit(jobId, userId);
+    await deps.commit(jobId, userId, ended.snapshot);
   } catch (err) {
     deps.log?.(`[RcsCache] The cache Sync could not be saved; nothing was imported: ${err instanceof Error ? err.message : String(err)}`);
     return;

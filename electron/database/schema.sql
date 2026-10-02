@@ -816,6 +816,21 @@ CREATE TABLE IF NOT EXISTS rcs_chat_exclusions (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_rcs_chat_exclusions_conv ON rcs_chat_exclusions(user_id, conversation_id) WHERE conversation_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_rcs_chat_exclusions_hash ON rcs_chat_exclusions(user_id, chat_hash);
 
+-- BACKLOG-3663: how far back each text source's import is known to reach
+-- ("covered since"), per user. General (any source); today written by the
+-- Google Messages cache — in its commit transaction, and only when that run
+-- read down to its floor. Mac reads message_import_state; iPhone and the
+-- Android companion fall back to MIN(sent_at) ("approximate") until their
+-- importers write here (follow-up).
+CREATE TABLE IF NOT EXISTS message_source_coverage (
+  user_id TEXT NOT NULL,
+  source TEXT NOT NULL,                   -- iphone | mac | android_companion | google_messages
+  covered_since DATETIME,
+  last_sync_at DATETIME,
+  PRIMARY KEY (user_id, source),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS message_thread_names (
   user_id TEXT NOT NULL,
   thread_id TEXT NOT NULL,               -- Matches messages.thread_id ("macos-chat-<chat ROWID>")

@@ -17,6 +17,7 @@ import { AttachMessagesModal, UnlinkMessageModal } from "./modals";
 import { AuditPeriodToggle } from "./AuditPeriodToggle";
 import { RemovedMessagesSection } from "./RemovedMessagesSection";
 import { rcsImportService } from "../../../services/rcsImportService";
+import { TextCoverageNotice } from "./TextCoverageNotice";
 import { BulkSelectionBar, BulkRemoveConfirmModal } from "./BulkSelectionBar";
 import { useSelection } from "../../../hooks/useSelection";
 import type { NotificationAction, NotificationOptions } from "../../ui/Notification/types";
@@ -845,6 +846,8 @@ export function TransactionMessagesTab({
   if (messages.length === 0 && !hasReviewItems) {
     return (
       <div>
+        {/* BACKLOG-3663: a source that does not reach back to the audit start. */}
+        {userId && transactionId && <TextCoverageNotice transactionId={transactionId} userId={userId} />}
         <div className="bg-gray-50 rounded-lg p-6 text-center">
           <svg
             className="w-12 h-12 text-gray-300 mx-auto mb-3"
@@ -949,6 +952,8 @@ export function TransactionMessagesTab({
 
   return (
     <div>
+      {/* BACKLOG-3663: a source that does not reach back to the audit start. */}
+      {userId && transactionId && <TextCoverageNotice transactionId={transactionId} userId={userId} />}
       {/* Header with message count and filter toggle */}
       <div className="flex items-center justify-between mb-4">
         <div>

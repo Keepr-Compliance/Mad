@@ -22,11 +22,15 @@
 
 import os from "os";
 import * as Sentry from "@sentry/electron/main";
-import { dbGet, dbAll } from "./db/core/dbConnection";
+import { dbGet, dbAll, dbRun } from "./db/core/dbConnection";
 import {
   EMAIL_SYNC_FLOOR_SQL,
   MESSAGES_FLOOR_SQL,
   TRANSACTION_WINDOW_SQL,
+  MESSAGES_FLOOR_BY_SOURCE_SQL,
+  SOURCE_COVERAGE_ROWS_SQL,
+  SOURCE_COVERAGE_UPSERT_SQL,
+  SOURCE_COVERAGE_DELETE_SQL,
 } from "./db/auditCoverageSql";
 import { isExpansionStale, getDeepestImportStart } from "./db/messageImportStateService";
 import permissionService from "./permissionService";
@@ -38,7 +42,130 @@ import {
   isBeforeFloor,
   type AuditCoverageResult,
   type ExportCompletenessResult,
+  type SourceCoverage,
+  type SourceCoverageGap,
+  type TextCoverageResult,
+  type TextSource,
 } from "../types/auditCoverage";
+
+// ============================================
+// BACKLOG-3663: per-source text coverage
+// ============================================
+
+const TEXT_SOURCES: readonly TextSource[] = ["iphone", "mac", "android_companion", "google_messages"];
+/** A source "covers" an audit start when its floor is no more than this after it. */
+export const COVERAGE_TOLERANCE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * How far back each text source reaches, for one user. Never throws (→ []).
+ *  - Google Messages: message_source_coverage (written by the cache commit,
+ *    only when a run read down to its floor) — exact; null = never complete.
+ *  - Mac: message_import_state.deepest_import_start (exact), else the oldest
+ *    Mac text (approximate).
+ *  - iPhone / Android companion: a recorded coverage row when their importer
+ *    writes one (follow-up), else the oldest text (approximate).
+ */
+export function getSourceCoverage(userId: string): SourceCoverage[] {
+  try {
+    const floors = new Map<string, { floor: string | null; n: number }>();
+    for (const r of dbAll<{ source: string; floor: string | null; n: number }>(MESSAGES_FLOOR_BY_SOURCE_SQL, [userId])) {
+      floors.set(r.source, { floor: r.floor, n: r.n });
+    }
+    const recorded = new Map<string, { coveredSince: string | null; lastSyncAt: string | null }>();
+    for (const r of dbAll<{ source: string; coveredSince: string | null; lastSyncAt: string | null }>(SOURCE_COVERAGE_ROWS_SQL, [userId])) {
+      recorded.set(r.source, { coveredSince: r.coveredSince, lastSyncAt: r.lastSyncAt });
+    }
+    const deepestMac = getDeepestImportStart(userId);
+    const out: SourceCoverage[] = [];
+    for (const source of TEXT_SOURCES) {
+      const f = floors.get(source);
+      const rec = recorded.get(source);
+      const hasRows = !!f && f.n > 0;
+      if (!hasRows && !rec && !(source === "mac" && deepestMac)) continue;
+      let coveredSince: string | null;
+      let approximate: boolean;
+      if (source === "google_messages") {
+        coveredSince = rec?.coveredSince ?? null;
+        approximate = false;
+      } else if (source === "mac") {
+        coveredSince = deepestMac ?? rec?.coveredSince ?? f?.floor ?? null;
+        approximate = !deepestMac && !rec?.coveredSince;
+      } else {
+        coveredSince = rec?.coveredSince ?? f?.floor ?? null;
+        approximate = !rec?.coveredSince;
+      }
+      out.push({ source, coveredSince, lastSyncAt: rec?.lastSyncAt ?? null, approximate, hasRows });
+    }
+    return out;
+  } catch (error) {
+    logService.warn("[BACKLOG-3663] getSourceCoverage failed (non-fatal)", "AuditCoverage", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return [];
+  }
+}
+
+/**
+ * Which sources do not reach back to the audit start — only the CHOSEN source
+ * and sources the user has texts from (SR). A source with no full read yet is
+ * "never"; one whose floor is more than a day after the start is "later".
+ */
+export function sourceCoverageGaps(
+  coverage: readonly SourceCoverage[],
+  auditStartISO: string | null,
+  chosen: TextSource | null,
+): SourceCoverageGap[] {
+  if (!auditStartISO) return [];
+  const start = Date.parse(auditStartISO);
+  if (!Number.isFinite(start)) return [];
+  const bySource = new Map(coverage.map((c) => [c.source, c]));
+  const relevant = new Set<TextSource>(coverage.filter((c) => c.hasRows).map((c) => c.source));
+  if (chosen) relevant.add(chosen);
+  const gaps: SourceCoverageGap[] = [];
+  for (const source of TEXT_SOURCES) {
+    if (!relevant.has(source)) continue;
+    const c = bySource.get(source);
+    if (!c || !c.coveredSince) {
+      gaps.push({ source, coveredSince: null, approximate: c?.approximate ?? false, kind: "never" });
+      continue;
+    }
+    const since = Date.parse(c.coveredSince);
+    if (Number.isFinite(since) && since - start > COVERAGE_TOLERANCE_MS) {
+      gaps.push({ source, coveredSince: c.coveredSince, approximate: c.approximate, kind: "later" });
+    }
+  }
+  return gaps;
+}
+
+/** Record a source's coverage (inside the caller's transaction when there is one). */
+export function recordSourceCoverage(userId: string, source: TextSource, coveredSinceISO: string | null, lastSyncISO: string): void {
+  dbRun(SOURCE_COVERAGE_UPSERT_SQL, [userId, source, coveredSinceISO, lastSyncISO]);
+}
+
+/** Force re-import of a source: its coverage is gone too. */
+export function forgetSourceCoverage(userId: string, source: TextSource): void {
+  dbRun(SOURCE_COVERAGE_DELETE_SQL, [userId, source]);
+}
+
+/** BACKLOG-3663: the Texts tab's coverage for one transaction. Never throws. */
+export function getTransactionTextCoverage(
+  transactionId: string,
+  userId: string,
+  chosen: TextSource | null,
+): TextCoverageResult {
+  try {
+    const txn = dbGet<{ started_at: string | null; created_at: string | null; closed_at: string | null; status: string | null }>(
+      TRANSACTION_WINDOW_SQL,
+      [transactionId, userId],
+    );
+    if (!txn || !isLiveTransactionStatus(txn.status)) return { success: true, auditStartISO: null, gaps: [] };
+    const auditStartISO = computeTransactionDateRange(txn).start.toISOString();
+    return { success: true, auditStartISO, gaps: sourceCoverageGaps(getSourceCoverage(userId), auditStartISO, chosen) };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { success: false, auditStartISO: null, gaps: [], error: message };
+  }
+}
 
 /**
  * The messages floor-of-record: MIN(sent_at) over the user's non-reaction
@@ -150,6 +277,7 @@ export async function getAuditCoverage(
       needsEmailBackfill,
       expansionStale: isExpansionStale(userId),
       messagesImporterAvailable,
+      sourceGaps: sourceCoverageGaps(getSourceCoverage(userId), proposedStartISO, null),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -257,6 +385,8 @@ export async function checkExportCompleteness(
       needsMessagesImport,
       expansionStale,
       messagesImporterAvailable,
+      // BACKLOG-3663: informational only — never changes `complete`.
+      sourceGaps: sourceCoverageGaps(getSourceCoverage(userId), auditStartISO, null),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

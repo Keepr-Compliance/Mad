@@ -23,10 +23,13 @@
  *   W3 the dev override honoured in a packaged build                   → "cacheWindow: dev override"
  *   W4 the dev override not clamped 1..3650                            → "clampSinceDays"
  *   W5 max-messages applied to the cache, or the audit spans lost        → "cacheWindow: limits"
+ *   V8 (3663) a widened floor read only incrementally (older never read)  → "reading older texts"
+ *   V9 (3663) coverage recorded for a capped / partial / incremental run  → "cacheRunReachedFloor"
  */
 
 import {
   cacheSince,
+  cacheRunReachedFloor,
   cacheWindow,
   clampSinceDays,
   cancelOnSessionChange,
@@ -191,7 +194,10 @@ describe("cacheWindow", () => {
     const first = cacheWindow({ nowMs: NOW, lastFinishedAt: null, plan: plan(threeMonths), isPackaged: true });
     expect(first.since).toBe(threeMonths);
     expect(first.limits.floorMs).toBe(Date.parse(threeMonths));
-    const later = cacheWindow({ nowMs: NOW, lastFinishedAt: "2026-09-30T08:00:00.000Z", plan: plan(threeMonths), isPackaged: true });
+    const later = cacheWindow({
+      nowMs: NOW, lastFinishedAt: "2026-09-30T08:00:00.000Z", plan: plan(threeMonths), isPackaged: true, coveredSince: threeMonths,
+    });
+    expect(later.readingOlder).toBe(false);
     expect(later.since).toBe("2026-09-29T08:00:00.000Z");
     expect(later.limits.floorMs).toBe(Date.parse(threeMonths));
     // All time: 3650 days at most.
@@ -200,6 +206,28 @@ describe("cacheWindow", () => {
   });
 
   // Founder (2026-10-01): date limit only for this source; a total cap later.
+  // BACKLOG-3663: the months setting (or a deal's audit period) widened, or no
+  // run reached its floor yet → the next Sync reads down to the floor again.
+  it("reading older texts: a floor older than what is covered, or nothing covered yet (V8)", () => {
+    const base = { nowMs: NOW, lastFinishedAt: "2026-09-30T08:00:00.000Z", plan: plan(threeMonths), isPackaged: true };
+    const widened = cacheWindow({ ...base, coveredSince: "2026-08-01T00:00:00.000Z" });
+    expect(widened).toMatchObject({ since: threeMonths, readingOlder: true });
+    const neverReached = cacheWindow({ ...base, coveredSince: null });
+    expect(neverReached).toMatchObject({ since: threeMonths, readingOlder: true });
+    // The very first run reads to the floor anyway, but it is not "older".
+    expect(cacheWindow({ ...base, lastFinishedAt: null, coveredSince: null })).toMatchObject({ since: threeMonths, readingOlder: false });
+  });
+
+  it("cacheRunReachedFloor: a full, finished read of every chat only (V9)", () => {
+    const done = { state: "finished", jobId: "j", progress: { notChecked: 0 }, notReached: [{ reason: "no_numbers" }], notReachedMore: 0 };
+    expect(cacheRunReachedFloor(true, done)).toBe(true);
+    expect(cacheRunReachedFloor(false, done)).toBe(false); // incremental
+    expect(cacheRunReachedFloor(true, { ...done, progress: { notChecked: 3 } })).toBe(false); // over the 300 cap
+    expect(cacheRunReachedFloor(true, { ...done, notReached: [{ reason: "history_truncated" }] })).toBe(false);
+    expect(cacheRunReachedFloor(true, { ...done, notReachedMore: 1 })).toBe(false);
+    expect(cacheRunReachedFloor(true, { ...done, state: "cancelled" })).toBe(false);
+  });
+
   it("limits: the date floor only — max messages NOT applied; the audit periods (Apple-epoch ns → ms) kept (W5)", () => {
     const startMs = Date.parse("2026-05-01T00:00:00.000Z");
     const nano = (ms: number) => (ms - 978307200000) * 1_000_000;

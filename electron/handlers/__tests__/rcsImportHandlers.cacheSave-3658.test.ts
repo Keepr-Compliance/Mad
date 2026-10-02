@@ -13,6 +13,7 @@
  *   B1b the counter set only after an await (too late)   → "busy while saving"
  *   S1  the refresh broadcast dropped / sent before link → "refresh after save"
  *   T1  no save timeout (a hung commit keeps Keepr busy) → "a hung save"
+ *   C3663 coverage recorded for a run that did not reach its floor, or never → "coverage"
  */
 
 export {};
@@ -23,6 +24,7 @@ const order: string[] = [];
 let bridgeOptions: Record<string, (...a: unknown[]) => unknown> = {};
 let releaseCommit: (() => void) | null = null;
 const abandoned: string[] = [];
+const coverageWrites: Array<[string, string, string | null]> = [];
 
 jest.mock("electron", () => ({
   app: { isPackaged: true, getPath: () => "/tmp/keepr-test" },
@@ -57,11 +59,14 @@ jest.mock("../../services/rcsCacheStaging", () => ({
     async abandon(jobId: string) {
       abandoned.push(jobId);
     }
-    commit() {
+    commit(_j: string, _u: string, _l: unknown, _w: unknown, inside?: (r: unknown) => void) {
       order.push("commit");
       return new Promise((resolve) => {
-        releaseCommit = () =>
-          resolve({ staged: 1, kept: 1, droppedByDate: 0, droppedByCap: 0, chats: 1, stored: 1, alreadyPresent: 0, imagesStaged: 0, imagesStored: 0 });
+        releaseCommit = () => {
+          const r = { staged: 1, kept: 1, droppedByDate: 0, droppedByCap: 0, chats: 1, stored: 1, alreadyPresent: 0, imagesStaged: 0, imagesStored: 0 };
+          inside?.(r);
+          resolve(r);
+        };
       });
     }
   },
@@ -76,6 +81,12 @@ jest.mock("../../services/databaseService", () => ({
     getTransactionById: async () => ({ id: "tx-1", user_id: "user-1" }),
     getRcsImportContacts: () => [],
   },
+}));
+jest.mock("../../services/auditCoverageService", () => ({
+  getSourceCoverage: () => [],
+  forgetSourceCoverage: jest.fn(),
+  recordSourceCoverage: (userId: string, source: string, coveredSince: string | null) =>
+    void coverageWrites.push([userId, source, coveredSince]),
 }));
 jest.mock("../../services/importPlanInputs", () => ({
   resolveImportPlanForUser: async () => ({ fetchStartISO: "2026-07-01T00:00:00.000Z", effectiveCap: 50000, protectedSpans: [] }),
@@ -170,5 +181,23 @@ describe("a cache Sync being saved (SR B1, S1)", () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  // BACKLOG-3663: Google Messages coverage — in the commit transaction, down
+  // to the floor only for a full run that checked every chat.
+  it.each([
+    ["a full read of every chat", 0, "2026-07-01T00:00:00.000Z"],
+    ["a run over the 300-chat cap", 5, null],
+  ] as const)("coverage: %s", async (_label, notChecked, expected) => {
+    coverageWrites.length = 0;
+    expect((await startCache()).success).toBe(true);
+    bridgeOptions.onJobEnded({
+      kind: "cache", userId: "user-1", detectedOwnNumber: null,
+      snapshot: { state: "finished", jobId: "job-1", createdAt: "2026-10-01T10:00:00.000Z", progress: { notChecked }, notReached: [] },
+    });
+    await flush();
+    releaseCommit?.();
+    await flush();
+    expect(coverageWrites).toEqual([["user-1", "google_messages", expected]]);
   });
 });

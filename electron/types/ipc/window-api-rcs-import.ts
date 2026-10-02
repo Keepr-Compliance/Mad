@@ -55,6 +55,8 @@ export interface RcsJobInfo {
   label?: string;
   /** BACKLOG-3658: "cache" for the all-chats cache job. */
   kind?: "transaction" | "cache";
+  /** BACKLOG-3663: this cache Sync reads older texts (down to the months setting). */
+  readingOlder?: boolean;
   /** BACKLOG-3629: chats left out or imported in part. Names only. */
   notReached?: Array<{ name: string; reason: string; count?: number }>;
   notReachedMore?: number;

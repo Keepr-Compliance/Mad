@@ -32,6 +32,7 @@ import { importChat, rcsChatHash, rcsExternalId, storeCacheChatSync, type RcsImp
 import { RcsCacheStaging, type CacheLimits, type RcsCommitWriter } from "../services/rcsCacheStaging";
 import { resolveImportPlanForUser } from "../services/importPlanInputs";
 import { RCS_EXCLUSIONS_MAX } from "../services/rcsExclusions";
+import { forgetSourceCoverage, getSourceCoverage, recordSourceCoverage } from "../services/auditCoverageService";
 import {
   CHROME_EXTENSIONS_ADDRESS,
   chromeCandidates,
@@ -41,7 +42,9 @@ import {
   prepareExtensionFolder,
 } from "../services/rcsExtensionDelivery";
 import {
+  cacheRunReachedFloor,
   cacheWindow,
+  type CacheEndSnapshot,
   consentIsCurrent,
   RCS_CONSENT_VERSION,
   cancelOnSessionChange,
@@ -196,6 +199,9 @@ const commitWriter: RcsCommitWriter = {
 
 /** The limits each cache job was started with (frozen at start; used by its commit). */
 const cacheLimitsByJob = new Map<string, CacheLimits>();
+/** BACKLOG-3663: each cache job's read — did it start at the floor, and where is the floor. */
+const cacheReadByJob = new Map<string, { fullRead: boolean; floorISO: string }>();
+
 /** P3b: each cache job's options, frozen at start (contacts-only flag, auto-delete). */
 const cacheOptionsByJob = new Map<string, { contactsOnly: boolean; autoDeleteDays: number | null }>();
 
@@ -224,15 +230,22 @@ async function afterCacheLinked(jobId: string, userId: string): Promise<void> {
   clearUnlinkedOldChats(userId, cutoff, databaseService.rcsAutoDeleteDbOps(), clearFiles(), (m) => void logService.info(m, LOG_TAG));
 }
 
-async function commitCacheJob(jobId: string, userId: string): Promise<void> {
+async function commitCacheJob(jobId: string, userId: string, snapshot?: CacheEndSnapshot): Promise<void> {
   const limits = cacheLimitsByJob.get(jobId);
   cacheLimitsByJob.delete(jobId);
+  const read = cacheReadByJob.get(jobId);
+  cacheReadByJob.delete(jobId);
   if (!limits) {
     // Never started here (should not happen): keep nothing rather than guess.
     await cacheStaging().discard(jobId);
     throw new Error("No limits recorded for this Sync");
   }
-  const r = await cacheStaging().commit(jobId, userId, limits, commitWriter);
+  // BACKLOG-3663: the Google Messages coverage, in the commit's own
+  // transaction — down to the floor only when this run read down to it.
+  const reached = !!read && !!snapshot && cacheRunReachedFloor(read.fullRead, snapshot);
+  const r = await cacheStaging().commit(jobId, userId, limits, commitWriter, () =>
+    recordSourceCoverage(userId, "google_messages", reached && read ? read.floorISO : null, new Date().toISOString()),
+  );
   void logService.info(
     `[RcsCache] Cache Sync saved: ${r.staged} staged, ${r.kept} kept (${r.droppedByDate} older than the months setting; ` +
       `no max-messages cap for this source); ${r.chats} chats, ${r.stored} new, ${r.alreadyPresent} already there; ` +
@@ -243,6 +256,7 @@ async function commitCacheJob(jobId: string, userId: string): Promise<void> {
 
 async function discardCacheJob(jobId: string): Promise<void> {
   cacheLimitsByJob.delete(jobId);
+  cacheReadByJob.delete(jobId);
   cacheOptionsByJob.delete(jobId);
   await cacheStaging().discard(jobId);
 }
@@ -358,6 +372,7 @@ async function startCacheJobOnce(opts: { sinceDays?: unknown }): Promise<
   const window = cacheWindow({
     nowMs: Date.now(),
     lastFinishedAt: state?.lastCacheFinishedAt,
+    coveredSince: getSourceCoverage(decision.userId).find((c) => c.source === "google_messages")?.coveredSince ?? null,
     plan,
     sinceDays: opts.sinceDays,
     isPackaged: app.isPackaged,
@@ -367,9 +382,14 @@ async function startCacheJobOnce(opts: { sinceDays?: unknown }): Promise<
   const job = bridge.createCacheJob(decision.userId, {
     since: window.since,
     ownNumbers: state?.ownNumber ? [state.ownNumber] : [],
+    readingOlder: window.readingOlder,
   });
   if (!job) return { ok: false, status: 409, error: "already_syncing", message: "Keepr is already syncing." };
   cacheLimitsByJob.set(job.jobId, window.limits);
+  cacheReadByJob.set(job.jobId, {
+    fullRead: window.since === new Date(window.limits.floorMs).toISOString(),
+    floorISO: new Date(window.limits.floorMs).toISOString(),
+  });
   cacheOptionsByJob.set(job.jobId, {
     contactsOnly: consent?.contactsOnly === true,
     autoDeleteDays: consent?.autoDeleteDays ?? null,
@@ -421,6 +441,7 @@ const bridge = new RcsExtensionBridge({
       );
       release();
       cacheLimitsByJob.delete(jobId);
+      cacheReadByJob.delete(jobId);
       cacheOptionsByJob.delete(jobId);
       void cacheStaging().abandon(jobId).catch(() => undefined);
     }, RCS_CACHE_SAVE_TIMEOUT_MS);
@@ -509,6 +530,8 @@ export async function clearGoogleMessagesWebTexts(userId: string): Promise<RcsCl
     );
     // BACKLOG-3658: the next cache Sync starts over (60 days) and re-learns the own number.
     databaseService.resetRcsCacheState(userId);
+    // BACKLOG-3663: and its coverage is gone with the texts.
+    forgetSourceCoverage(userId, "google_messages");
     hostWindows.broadcast(RCS_DATA_CLEARED_CHANNEL, { messagesDeleted: result.messagesDeleted });
     return result;
   });

@@ -243,7 +243,7 @@ export function GoogleMessagesSyncFlow({ onClose, onUseCompanion, pollMs = POLL_
 
       {step === "syncing" && (
         <>
-          <h2 className="text-lg font-bold text-gray-900">Syncing your texts</h2>
+          <h2 className="text-lg font-bold text-gray-900">{job?.readingOlder ? "Reading older texts…" : "Syncing your texts"}</h2>
           <p className="text-sm text-gray-700" role="status" data-testid="gm-stage">
             {job?.stage || "Waiting for Google Messages to open in Chrome"}
           </p>

@@ -324,7 +324,14 @@ export class RcsCacheStaging {
    * staging is gone afterwards whatever happens; a throw leaves messages as
    * they were.
    */
-  async commit(jobId: string, userId: string, limits: CacheLimits, writer: RcsCommitWriter): Promise<CacheCommitResult> {
+  async commit(
+    jobId: string,
+    userId: string,
+    limits: CacheLimits,
+    writer: RcsCommitWriter,
+    /** BACKLOG-3663: runs INSIDE the commit's transaction (e.g. record the coverage). */
+    insideTransaction?: (result: CacheCommitResult) => void,
+  ): Promise<CacheCommitResult> {
     this.ended.add(jobId);
     this.committing.add(jobId);
     const placed: string[] = [];
@@ -396,7 +403,7 @@ export class RcsCacheStaging {
           }
         }
 
-        return {
+        const out: CacheCommitResult = {
           staged: selection.staged,
           kept: selection.kept.size,
           droppedByDate: selection.droppedByDate,
@@ -407,6 +414,8 @@ export class RcsCacheStaging {
           imagesStaged: images.length,
           imagesStored,
         };
+        insideTransaction?.(out);
+        return out;
       });
       placed.length = 0; // committed: the files are referenced now
       return result;

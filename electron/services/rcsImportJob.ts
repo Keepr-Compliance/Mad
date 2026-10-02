@@ -137,6 +137,8 @@ export interface RcsJobSnapshot {
   label?: string;
   /** BACKLOG-3658: "cache" for the all-chats cache; absent for a transaction Sync. */
   kind?: RcsJobKind;
+  /** BACKLOG-3663: this cache run reads down to the floor again (older texts). */
+  readingOlder?: boolean;
   /** BACKLOG-3629: chats left out or imported in part (sent with /finish). */
   notReached?: RcsJobNotReached[];
   /** Entries beyond {@link RCS_NOT_REACHED_CAP}. */
@@ -238,6 +240,8 @@ export class RcsImportJob {
   label: string | null = null;
   /** BACKLOG-3658: the job kind and the user it was started for (rows go to that user only). */
   kind: RcsJobKind = "transaction";
+  /** BACKLOG-3663: a cache run reading down to its floor again. */
+  readingOlder = false;
   userId: string | null = null;
   /** BACKLOG-3658: own numbers known before this job (persisted), excluded from the first chat. */
   seededOwnNumbers = new Set<string>();
@@ -284,6 +288,7 @@ export class RcsImportJob {
         : {}),
       ...(this.label ? { label: this.label } : {}),
       ...(this.kind === "cache" ? { kind: this.kind } : {}),
+      ...(this.readingOlder ? { readingOlder: true } : {}),
       ...(this.notReached.length > 0 || this.notReachedMore > 0
         ? { notReached: this.notReached.map((e) => ({ ...e })), notReachedMore: this.notReachedMore }
         : {}),
@@ -496,13 +501,14 @@ export class RcsJobRegistry {
    * BACKLOG-3658: the cache job — all recent chats for `userId`, history back
    * to `since`. Same one-at-a-time slot as a transaction Sync.
    */
-  createCache(userId: string, since: string, ownNumbers: readonly string[] = []): RcsImportJob {
+  createCache(userId: string, since: string, ownNumbers: readonly string[] = [], readingOlder = false): RcsImportJob {
     const running = this.active();
     if (running) return running;
     const job = new RcsImportJob("", [], this.now(), undefined, since);
     job.kind = "cache";
     job.userId = userId;
     job.label = RCS_CACHE_JOB_LABEL;
+    job.readingOlder = readingOlder;
     for (const n of participantKey(ownNumbers).split(",").filter(Boolean)) job.seededOwnNumbers.add(n);
     this.job = job;
     return job;

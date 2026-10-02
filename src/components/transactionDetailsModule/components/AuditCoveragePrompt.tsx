@@ -19,6 +19,8 @@
 import React from "react";
 import { ResponsiveModal } from "../../common/ResponsiveModal";
 import type { CoverageImportProgress } from "../../../hooks/useAuditCoverageCheck";
+import type { SourceCoverageGap } from "../../../../electron/types/auditCoverage";
+import { gapLine } from "./TextCoverageNotice";
 
 export interface AuditCoveragePromptProps {
   /** New range extends earlier than the imported messages OR email floor. */
@@ -45,6 +47,14 @@ export interface AuditCoveragePromptProps {
   onSkip: () => void;
   /** Dismiss and return to editing (no proceed). */
   onCancel: () => void;
+  /**
+   * BACKLOG-3663: sources (other than the Mac import above) that do not reach
+   * back to this range — one soft line each, with the right re-sync. Never
+   * changes the actions.
+   */
+  sourceGaps?: SourceCoverageGap[];
+  /** The proposed start, for those lines. */
+  proposedStartISO?: string | null;
 }
 
 export function AuditCoveragePrompt({
@@ -57,7 +67,11 @@ export function AuditCoveragePrompt({
   onUpdateNow,
   onSkip,
   onCancel,
+  sourceGaps = [],
+  proposedStartISO = null,
 }: AuditCoveragePromptProps): React.ReactElement {
+  // The Mac import has its own lines above; the other sources are listed here.
+  const otherGaps = sourceGaps.filter((g) => g.source !== "mac");
   const canImport = hasGap && importerAvailable;
   const percent = progress ? Math.max(0, Math.min(100, Math.round(progress.percent))) : 0;
   // BACKLOG-2305: fall back to indeterminate whenever we lack a trustworthy
@@ -121,6 +135,17 @@ export function AuditCoveragePrompt({
             range will still update, but earlier texts won&apos;t be included on
             this device.
           </p>
+        )}
+
+        {/* BACKLOG-3663: other text sources that start later than this range. */}
+        {otherGaps.length > 0 && (
+          <ul className="text-sm text-gray-700 mb-3 space-y-1" data-testid="audit-coverage-source-gaps">
+            {otherGaps.map((g) => (
+              <li key={g.source}>
+                {gapLine(g, proposedStartISO)} {g.source === "iphone" ? "Click Sync iPhone on the dashboard." : "Click Sync Android on the dashboard."}
+              </li>
+            ))}
+          </ul>
         )}
 
         {/* Inline progress while importing. */}

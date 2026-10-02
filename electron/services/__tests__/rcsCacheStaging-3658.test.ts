@@ -441,6 +441,20 @@ describe("atomic: all or nothing", () => {
     expect(count("SELECT COUNT(*) AS n FROM rcs_cache_placed_files")).toBe(0);
   });
 
+  // BACKLOG-3663: the coverage is written in the commit's OWN transaction.
+  // Mutation: the hook called after the transaction → red (a failure would
+  // leave coverage without the texts).
+  it("insideTransaction runs in the commit transaction: a throw there leaves nothing (V10)", async () => {
+    staging.stageChat(JOB, USER, chat("conv-a", [msg("a1", "2026-09-20T10:00:00.000Z")]), peopleA, hashA);
+    const seen: number[] = [];
+    await expect(staging.commit(JOB, USER, ALL, writer, (r) => {
+      seen.push(messageCount(), r.stored);
+      throw new Error("coverage write failed");
+    })).rejects.toThrow("coverage write failed");
+    expect(seen).toEqual([1, 1]); // it saw the rows of THIS transaction
+    expect(messageCount()).toBe(0);
+  });
+
   it("schema.sql runs twice (CREATE ... IF NOT EXISTS) (A11)", () => {
     expect(() => db.exec(fs.readFileSync(PRODUCTION_SCHEMA, "utf8"))).not.toThrow();
   });
