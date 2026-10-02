@@ -44,8 +44,12 @@ jest.mock("../../hooks/useReconnectionSummary", () => ({
   useReconnectionSummary: () => {},
 }));
 
+let mockIndicatorProps: { onViewSyncDetails?: (type: string) => void } = {};
 jest.mock("../dashboard/index", () => ({
-  SyncStatusIndicator: () => <div data-testid="sync-status-indicator" />,
+  SyncStatusIndicator: (p: { onViewSyncDetails?: (type: string) => void }) => {
+    mockIndicatorProps = p;
+    return <div data-testid="sync-status-indicator" />;
+  },
 }));
 
 jest.mock("../StartNewAuditModal", () => ({
@@ -116,6 +120,15 @@ describe("Dashboard sync cards", () => {
 
       expect(screen.queryByTestId("sync-android-card")).not.toBeInTheDocument();
       expect(screen.queryByText("Sync Android Messages")).not.toBeInTheDocument();
+    });
+
+    // BACKLOG-3658: the indicator's Details for a Google Messages Sync reopens
+    // the Sync Android window. Mutation: the mapping missing → red.
+    it("the sync indicator's Details for Google Messages reopens Sync Android", () => {
+      const onSyncAndroid = jest.fn();
+      render(<Dashboard {...baseProps} onSyncAndroid={onSyncAndroid} />);
+      mockIndicatorProps.onViewSyncDetails?.("google-messages");
+      expect(onSyncAndroid).toHaveBeenCalledTimes(1);
     });
 
     it("invokes onSyncAndroid when the Android card is clicked (opens the wizard modal)", async () => {

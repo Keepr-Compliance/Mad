@@ -88,6 +88,24 @@ export function GoogleMessagesSyncFlow({ onClose, onUseCompanion, onOpenSettings
     });
   }, []);
 
+  // BACKLOG-3658: reopened (from the dashboard indicator) while a cache Sync
+  // runs or is being saved: show THAT Sync's live progress, not the start.
+  useEffect(() => {
+    let live = true;
+    void rcsImportService.getJob().then((r) => {
+      const current = r.success ? r.data : null;
+      if (!live || !current || current.kind !== "cache" || jobIdRef.current) return;
+      const active = current.state === "created" || current.state === "running";
+      const saving = current.state === "finished" && current.saved === undefined;
+      if (!active && !saving) return;
+      jobIdRef.current = current.jobId;
+      setJob(current);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+
   const step = googleMessagesStep({ state, job, continued });
   const installed = extensionInstalled(state);
   const paired = !!state?.pairedAt;

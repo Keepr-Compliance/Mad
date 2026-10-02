@@ -20,6 +20,7 @@ import type { AppStateMachine } from "./state/types";
 import type { Transaction } from "@/types";
 import { useEmailSettingsCallbacks } from "./hooks/useEmailSettingsCallbacks";
 import { scrollToSettingsSection } from "../utils/scrollToSettingsSection";
+import { useGoogleMessagesSyncStatus } from "../hooks/useGoogleMessagesSyncStatus";
 
 interface AppModalsProps {
   app: AppStateMachine;
@@ -53,6 +54,9 @@ export function AppModals({ app }: AppModalsProps) {
     closeIPhoneSync,
     closeAndroidSync,
   } = app;
+
+  // BACKLOG-3658: a Google Messages Sync on the dashboard indicator, even minimized.
+  useGoogleMessagesSyncStatus();
 
   // Track newly created transaction so TransactionList can auto-open its details
   const [auditCreatedTransaction, setAuditCreatedTransaction] = useState<Transaction | null>(null);

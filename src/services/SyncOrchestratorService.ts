@@ -24,7 +24,9 @@ import logger from '../utils/logger';
 import type { AttachmentsRefusedForSpace } from '@electron/types/ipc/window-api-messages';
 
 export type SyncType = 'contacts' | 'emails' | 'messages' | 'iphone'
-  | 'reindex' | 'backup' | 'restore' | 'ccpa-export';
+  | 'reindex' | 'backup' | 'restore' | 'ccpa-export'
+  // BACKLOG-3658: the Google Messages cache Sync (an external sync, like iPhone).
+  | 'google-messages';
 
 /**
  * BACKLOG-2794 added `'skipped'`: the run reached this leg and did not run it,
@@ -121,6 +123,11 @@ export interface SyncItem {
   indeterminate?: boolean;
   /** Optional warning message (e.g., message cap exceeded) */
   warning?: string;
+  /**
+   * BACKLOG-3658: an external sync's own result line for the completion card
+   * (e.g. the Google Messages saved counts). Counts only.
+   */
+  summary?: string;
   /**
    * BACKLOG-2329: actual number of rows the sync imported (e.g. messages).
    * Propagated from the sync function's structured result so the settings UI
@@ -1192,7 +1199,7 @@ class SyncOrchestratorServiceClass {
   /**
    * Update progress/phase for an external sync.
    */
-  updateExternalSync(type: SyncType, updates: Partial<Pick<SyncItem, 'progress' | 'phase'>>): void {
+  updateExternalSync(type: SyncType, updates: Partial<Pick<SyncItem, 'progress' | 'phase' | 'indeterminate'>>): void {
     const existing = this.state.queue.find((item) => item.type === type && item.external);
     if (!existing) return;
 
@@ -1203,7 +1210,7 @@ class SyncOrchestratorServiceClass {
    * Mark an external sync as complete or error.
    * After completion, recalculates isRunning from remaining queue items.
    */
-  completeExternalSync(type: SyncType, result: { status: 'complete' | 'error'; error?: string }): void {
+  completeExternalSync(type: SyncType, result: { status: 'complete' | 'error'; error?: string; summary?: string }): void {
     const existing = this.state.queue.find((item) => item.type === type && item.external);
     if (!existing) return;
 
@@ -1214,6 +1221,7 @@ class SyncOrchestratorServiceClass {
       progress: result.status === 'complete' ? 100 : existing.progress,
       error: result.error,
       phase: undefined,
+      ...(result.summary ? { summary: result.summary } : {}),
     });
 
     // Recalculate isRunning: true if any item is still running

@@ -26,6 +26,7 @@ const mockPrepare = jest.fn();
 const mockStartCache = jest.fn();
 const mockOpenChrome = jest.fn();
 const mockConsent = jest.fn();
+let mockCurrentJob: RcsJobInfo | null = null;
 
 jest.mock("../../../../services/rcsImportService", () => ({
   rcsImportService: {
@@ -36,6 +37,7 @@ jest.mock("../../../../services/rcsImportService", () => ({
     startCacheJob: (...a: unknown[]) => mockStartCache(...a),
     setCacheConsent: (...a: unknown[]) => mockConsent(...a),
     cancelJob: async () => ({ success: true, data: null }),
+    getJob: async () => ({ success: true, data: mockCurrentJob }),
     onJobProgress: (cb: (j: RcsJobInfo) => void) => {
       progressListener = cb;
       return () => {
@@ -70,6 +72,7 @@ function job(over: Partial<RcsJobInfo> = {}): RcsJobInfo {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockCurrentJob = null;
   mockState = NOT_INSTALLED;
   mockPrepare.mockResolvedValue({ success: true, data: { folder: "C:\\Users\\u\\Downloads\\Keepr Extension", version: "0.3.4" } });
   mockOpenChrome.mockResolvedValue({ copied: true, opened: true });
@@ -184,6 +187,27 @@ describe("GoogleMessagesSyncFlow", () => {
     expect(await screen.findByTestId("gm-sync-note")).toHaveTextContent("Keep that Chrome window visible until it is done.");
     expect(screen.queryByTestId("gm-pair-instruction")).toBeNull();
     expect(screen.getByRole("button", { name: "Open Google Messages and sync" })).toBeInTheDocument();
+  });
+
+  // BACKLOG-3658: reopened from the dashboard indicator while a cache Sync
+  // runs → that Sync's live progress, then its result. Mutation: the
+  // running job not adopted on open → red.
+  it("reopened while a cache Sync runs: shows its live progress and result", async () => {
+    mockState = INSTALLED;
+    mockCurrentJob = job({ jobId: "job-live", state: "running", stage: "Chat 4 of 21" });
+    render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);
+    expect(await screen.findByTestId("gm-stage")).toHaveTextContent("Chat 4 of 21");
+    act(() => {
+      progressListener?.(job({ jobId: "job-live", state: "running", stage: "Chat 5 of 21" }));
+    });
+    expect(screen.getByTestId("gm-stage")).toHaveTextContent("Chat 5 of 21");
+  });
+
+  it("reopened after a Sync ended (and was saved): the normal start, not the old run", async () => {
+    mockState = INSTALLED;
+    mockCurrentJob = job({ jobId: "job-old", state: "finished", saved: { chats: 1, messages: 1, newMessages: 1 } } as Partial<RcsJobInfo>);
+    render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);
+    expect(await screen.findByTestId("gm-step-connect")).toBeInTheDocument();
   });
 
   it("a refused start says why and stays on Connect", async () => {

@@ -29,6 +29,7 @@ import { useSyncOrchestrator } from "../../hooks/useSyncOrchestrator";
 import type { SyncType, SyncItemStatus, ReconnectProvider } from "../../services/SyncOrchestratorService";
 import logger from "../../utils/logger";
 import { openEmailSettings } from "../../utils/openEmailSettings";
+import { IMPORT_SOURCE_LABELS } from "../settings/importSourceLabels";
 // BACKLOG-3128: the macOS Messages phase vocabulary, shared with the Settings
 // panel so the pill and the panel cannot disagree about what is happening.
 import { importPhaseDisplayFor } from "../../utils/importPhaseDisplay";
@@ -71,6 +72,8 @@ const getLabelForType = (type: SyncType): string => {
       return 'Restore';
     case 'ccpa-export':
       return 'Data Export';
+    case 'google-messages':
+      return IMPORT_SOURCE_LABELS['android-messages-web'];
     default:
       return type;
   }
@@ -111,6 +114,8 @@ export function SyncStatusIndicator({
   // connection expired — reconnect to sync email") so the completion subtitle
   // names the failure and reconnect action instead of a generic "Failed: emails".
   const errorMessagesDuringSync = useRef<string[]>([]);
+  /** BACKLOG-3658: external syncs' own result lines (e.g. Google Messages' saved counts). */
+  const summariesDuringSync = useRef<string[]>([]);
   // BACKLOG-2127: capture the TYPED reconnect provider (from the item's
   // reconnectProvider discriminator — NOT parsed from the message) so the
   // completion card can render a provider-aware "Reconnect" CTA that routes to
@@ -186,6 +191,7 @@ export function SyncStatusIndicator({
         hadErrorsDuringSync.current = false;
         errorItemsDuringSync.current = [];
         errorMessagesDuringSync.current = [];
+        summariesDuringSync.current = [];
         reconnectProviderDuringSync.current = null;
         // BACKLOG-2748: a cancel belongs to the run it stopped, not the next one.
         cancelledDuringSync.current = false;
@@ -197,6 +203,10 @@ export function SyncStatusIndicator({
       setDismissed(false);
       // Track errors as they happen during sync
       for (const item of queue) {
+        // BACKLOG-3658: an external sync's own result line (counts only).
+        if (item.status === "complete" && item.summary && !summariesDuringSync.current.includes(item.summary)) {
+          summariesDuringSync.current.push(item.summary);
+        }
         // BACKLOG-2748: a multi-type run (contacts, emails, messages) can land
         // the cancelled messages item while the others are still going, so the
         // flag has to be observed here too and not only at the transition.
@@ -241,6 +251,10 @@ export function SyncStatusIndicator({
       // below, which meant a cancel returned early and the run's errors were
       // never recorded — see the ordering note on that gate.
       for (const item of queue) {
+        // BACKLOG-3658: an external sync's own result line (counts only).
+        if (item.status === "complete" && item.summary && !summariesDuringSync.current.includes(item.summary)) {
+          summariesDuringSync.current.push(item.summary);
+        }
         // BACKLOG-2748: catch an internal cancel that only became visible on
         // the transition itself (the single-sync case: the messages item flips
         // to complete+cancelled and `isRunning` goes false in one update).
@@ -403,7 +417,7 @@ export function SyncStatusIndicator({
             ? errorMessagesDuringSync.current.join(' ')
             : `Failed: ${errorItemsDuringSync.current.join(', ')}`) :
       completionVariant === 'pending' ? 'New transactions detected and ready for review' :
-      'All data synced successfully';
+      (summariesDuringSync.current.length > 0 ? summariesDuringSync.current.join(' ') : 'All data synced successfully');
 
     return (
       <div
