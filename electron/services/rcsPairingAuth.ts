@@ -155,6 +155,27 @@ export class RcsPairingAuth {
     return { status: 200, body: { ok: true, paired: true }, signWith: { keyHex, nonce: typeof b.nonce === "string" ? b.nonce : "" } };
   }
 
+  /**
+   * SR S1: what the HEADERS alone can settle, before any body is read: the
+   * pairing is known, the timestamp is in the window, the nonce well formed.
+   */
+  precheck(headers: Record<string, string | string[] | undefined>): VerifyResult | { ok: true; pairing: RcsPairing } {
+    const h = (k: string): string => {
+      const v = headers[k];
+      return typeof v === "string" ? v : "";
+    };
+    const pairId = h(PAIR_HEADERS.pair);
+    const pairing = pairId ? this.store.get(pairId) : null;
+    if (!pairing) return { ok: false, status: 401, error: "unknown_pair" };
+    const nonce = h(PAIR_HEADERS.nonce);
+    const ts = Number(h(PAIR_HEADERS.ts));
+    if (!Number.isFinite(ts) || Math.abs(this.now() - ts) > PAIR_TS_WINDOW_MS) {
+      return { ok: false, status: 401, error: "stale", keyHex: pairing.keyHex, nonce };
+    }
+    if (!/^[0-9a-f]{16,64}$/.test(nonce)) return { ok: false, status: 400, error: "bad_nonce", keyHex: pairing.keyHex, nonce };
+    return { ok: true, pairing };
+  }
+
   /** A signed request (headers lower-cased by Node). */
   verify(
     headers: Record<string, string | string[] | undefined>,

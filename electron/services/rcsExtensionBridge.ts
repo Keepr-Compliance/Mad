@@ -732,9 +732,35 @@ export class RcsExtensionBridge {
     path: string,
   ): Promise<{ pairId: string; userId: string } | null | "handled"> {
     const pairing = this.options.pairing as RcsPairingAuth;
+    const signed = typeof req.headers[PAIR_HEADERS.pair] === "string";
+    const refuse = (status: number, error: string, keyHex?: string, nonce?: string): "handled" => {
+      if (keyHex) replySigners.set(res, { sign: (st, body) => pairing.signReply(keyHex, st, path, nonce ?? "", body) });
+      this.logger.warn(`[RcsBridge] Refused a request: ${error}`);
+      const message = error === "re_pair" || error === "unknown_pair" || error === "not_paired"
+        ? NOT_PAIRED_MESSAGE
+        : error === "signature_required" ? SIGNATURE_REQUIRED_MESSAGE : undefined;
+      // Refused before its body was read: the connection closes after the reply (the body is never drained).
+      res.setHeader("Connection", "close");
+      sendJson(res, status, { error, ...(message ? { message } : {}) });
+      return "handled";
+    };
+    // SR S1: what the HEADERS settle comes first — no body is read for an
+    // unknown pairing, a stale timestamp, a malformed nonce, or an unsigned
+    // call that is not allowed.
+    if (signed) {
+      const pre = pairing.precheck(req.headers);
+      if (!pre.ok) return refuse(pre.status, pre.error, pre.keyHex, pre.nonce);
+    } else if (!PAIR_OPEN_ROUTES.has(path)) {
+      // SR B1: the dual routes go unsigned ONLY while the signed-in user has
+      // no pairing; once paired, everything must be signed.
+      if ((this.options.pairingMode ?? "dual") !== "dual" || !PAIR_DUAL_ROUTES.has(path)) return refuse(401, "not_paired");
+      if (await this.signedInUserIsPaired()) return refuse(401, "signature_required");
+    }
+    // SR S1: then the body, with its route's cap (the large one only for an image).
+    const cap = JOB_ROUTE.exec(path)?.[2] === "attachment" ? MAX_ATTACHMENT_BODY_BYTES : MAX_BODY_BYTES;
     let raw: string;
     try {
-      raw = await readBody(req, MAX_ATTACHMENT_BODY_BYTES);
+      raw = await readBody(req, cap);
     } catch (err) {
       if (err instanceof BodyTooLargeError) sendTooLarge(req, res, "This item is too large to send to Keepr.");
       else sendJson(res, 400, { error: "bad_request" });
@@ -760,19 +786,7 @@ export class RcsExtensionBridge {
       sendJson(res, r.status, r.body);
       return "handled";
     }
-    const signed = typeof req.headers[PAIR_HEADERS.pair] === "string";
-    if (!signed) {
-      if (PAIR_OPEN_ROUTES.has(path)) return null;
-      // SR B1: the dual routes go unsigned ONLY while the signed-in user has
-      // no pairing; once paired, everything must be signed.
-      if ((this.options.pairingMode ?? "dual") === "dual" && PAIR_DUAL_ROUTES.has(path)) {
-        if (!(await this.signedInUserIsPaired())) return null;
-        sendJson(res, 401, { error: "signature_required", message: SIGNATURE_REQUIRED_MESSAGE });
-        return "handled";
-      }
-      sendJson(res, 401, { error: "not_paired", message: NOT_PAIRED_MESSAGE });
-      return "handled";
-    }
+    if (!signed) return null;
     const userId = this.options.currentUserId ? await this.options.currentUserId() : undefined;
     const v = pairing.verify(req.headers, req.method ?? "POST", path, raw, userId);
     if (!v.ok) {

@@ -282,6 +282,51 @@ describe("the auth gate (BACKLOG-3666)", () => {
   });
 });
 
+// SR S1: the headers are checked BEFORE any body is read, and the body has its
+// route's cap. A body that never ends must not hold off the refusal.
+// Mutations: the body read first → the refusal never comes (timeout) → red;
+// the image cap for every route → the oversized claim is accepted → red.
+describe("headers before the body (S1)", () => {
+  let p: { pairId: string; keyHex: string };
+  beforeEach(async () => {
+    p = await pairWith(auth.issueCode("user-a").code);
+  });
+
+  /** Headers and a first chunk, then the body never ends. → the reply (or "no reply"). */
+  function endless(path: string, headers: Record<string, string>): Promise<{ status: number; body: Record<string, unknown> } | "no reply"> {
+    return new Promise((resolve) => {
+      const req = http.request(
+        { host: "127.0.0.1", port, method: "POST", path, headers: { "Content-Type": "application/json", Origin: RCS_EXTENSION_ORIGIN, "Content-Length": "100000", ...headers } },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (c: Buffer) => chunks.push(c));
+          res.on("end", () => resolve({ status: res.statusCode ?? 0, body: JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") }));
+        },
+      );
+      req.on("error", () => undefined);
+      req.write("{\"a\":");
+      setTimeout(() => {
+        resolve("no reply");
+        req.destroy();
+      }, 1500);
+    });
+  }
+
+  it("unknown pairing, stale timestamp, unsigned job route: refused without waiting for the body", async () => {
+    const unknown = signed({ pairId: "e".repeat(32), keyHex: p.keyHex }, "/job/pending").headers;
+    expect(await endless("/job/pending", unknown)).toMatchObject({ status: 401, body: { error: "unknown_pair" } });
+    const stale = signed(p, "/job/pending", "", { ts: String(clock - PAIR_TS_WINDOW_MS - 5) }).headers;
+    expect(await endless("/job/pending", stale)).toMatchObject({ status: 401, body: { error: "stale" } });
+    expect(await endless("/job/pending", {})).toMatchObject({ status: 401, body: { error: "not_paired" } });
+  });
+
+  it("each route has its own cap: an oversized body on a non-image route is refused (413)", async () => {
+    const big = JSON.stringify({ x: "y".repeat(10 * 1024 * 1024 + 10) });
+    const r = await post(port, "/job/pending", signed(p, "/job/pending", big).headers, big);
+    expect(r.status).toBe(413);
+  });
+});
+
 describe("the nonce store (A8)", () => {
   it("evicts after 120 s and is capped at 10 000 per pairing", () => {
     const s = memoryStore();
