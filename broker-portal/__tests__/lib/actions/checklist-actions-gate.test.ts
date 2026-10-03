@@ -1,8 +1,8 @@
 /**
- * Checklist server actions — BACKLOG-3474.
+ * Checklist server actions — BACKLOG-3474, BACKLOG-3618.
  *
  * The gate is NOT mocked: every action runs the real
- * blockWriteDuringImpersonation and requireChecklistEditorAccess (membership
+ * blockWriteDuringImpersonation and requireChecklistAccess (membership
  * through the BACKLOG-3364 PostgREST emulator, feature through the real
  * fail-closed check). Only the Supabase client, the impersonation cookie reader
  * and next/cache are stand-ins.
@@ -43,9 +43,12 @@ import { SAVE_MESSAGES } from '@/lib/checklists/saveErrors';
 import { ORG_WITHOUT_PLAN_FEATURES, withFeature } from '../../fixtures/orgFeatures';
 import {
   FIXTURE_BROKERAGE_ORG_ID,
+  FIXTURE_OTHER_USER_ID,
+  FIXTURE_PERSONAL_ORG_ID,
   FIXTURE_USER_ID,
   brokerageMembership,
   createPostgrestEmulator,
+  personalMembership,
 } from '../../helpers/postgrestEmulator';
 
 const FEATURE_ON = withFeature(ORG_WITHOUT_PLAN_FEATURES, CHECKLIST_FEATURE_KEY, true);
@@ -66,7 +69,11 @@ interface TableCall {
 
 interface Setup {
   role?: string;
+  /** A solo user: the only membership is their personal organization. */
+  personal?: boolean;
   features?: unknown;
+  /** BACKLOG-3618: what the agent's ownership pre-read (maybeSingle) returns. */
+  read?: { data?: unknown; error?: unknown };
   impersonating?: boolean;
   save?: { data?: unknown; error?: unknown };
   write?: { data?: unknown; error?: unknown };
@@ -74,7 +81,7 @@ interface Setup {
 
 function setup(opts: Setup = {}) {
   const emu = createPostgrestEmulator({
-    rows: { organization_members: [brokerageMembership(opts.role ?? 'broker')] },
+    rows: { organization_members: [opts.personal ? personalMembership() : brokerageMembership(opts.role ?? 'broker')] },
   });
   const tableCalls: TableCall[] = [];
   const fromLog: string[] = [];
@@ -84,14 +91,18 @@ function setup(opts: Setup = {}) {
     const entry: TableCall = { table, calls: [] };
     tableCalls.push(entry);
     const chain: Record<string, unknown> = {};
-    for (const m of ['select', 'update', 'insert', 'upsert', 'delete', 'eq', 'is', 'not', 'in', 'order']) {
+    for (const m of ['select', 'update', 'insert', 'upsert', 'delete', 'eq', 'is', 'not', 'in', 'order', 'maybeSingle']) {
       chain[m] = (...args: unknown[]) => {
         entry.calls.push({ method: m, args });
         return chain;
       };
     }
     chain.then = (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) =>
-      Promise.resolve({ data: [{ id: TEMPLATE_ID }], error: null, ...opts.write }).then(res, rej);
+      Promise.resolve(
+        entry.calls.some((c) => c.method === 'maybeSingle')
+          ? { data: null, error: null, ...opts.read }
+          : { data: [{ id: TEMPLATE_ID }], error: null, ...opts.write }
+      ).then(res, rej);
     return chain;
   }
 
@@ -104,9 +115,17 @@ function setup(opts: Setup = {}) {
     rpc: async (fn: string, args: Record<string, unknown>) => {
       rpcLog.push({ fn, args });
       if (fn === 'can_edit_checklist_templates') {
-        // Stands in for the database (harness C4, C5, C41): editor role AND feature on.
+        // Stands in for the database (harness C4, C5, C41): editor role (or the
+        // personal organization's owner) AND feature on.
         const role = opts.role ?? 'broker';
-        return { data: ['broker', 'admin', 'it_admin'].includes(role) && (opts.features ?? FEATURE_ON) !== FEATURE_OFF, error: null };
+        return {
+          data: (opts.personal || ['broker', 'admin', 'it_admin'].includes(role)) && (opts.features ?? FEATURE_ON) !== FEATURE_OFF,
+          error: null,
+        };
+      }
+      if (fn === 'can_create_own_checklist_templates') {
+        // BACKLOG-3618 (migration 20261001054306 §2): any member AND feature on.
+        return { data: (opts.features ?? FEATURE_ON) !== FEATURE_OFF, error: null };
       }
       if (fn === 'save_checklist_template') {
         return { data: [{ id: TEMPLATE_ID, updated_at: '2026-09-24T19:21:08.951159+00:00' }], error: null, ...opts.save };
@@ -246,7 +265,7 @@ describe('saveChecklistTemplate — what a failure says', () => {
 describe('saveChecklistTemplate — refusals make no save call', () => {
   it.each([
     ['during impersonation', { impersonating: true, role: 'admin' }],
-    ['for an agent', { role: 'agent' }],
+    ['for an agent with the feature off', { role: 'agent', features: FEATURE_OFF }],
     ['with the feature off', { features: FEATURE_OFF }],
   ] as const)('%s', async (_label, opts) => {
     const { saves, writes } = setup(opts);
@@ -305,10 +324,137 @@ describe('archive / restore', () => {
     ['archive', archiveChecklistTemplate],
     ['restore', restoreChecklistTemplate],
   ] as const)('%s refuses with the feature off, during impersonation and for an agent [M7]', async (_l, action) => {
-    for (const opts of [{ features: FEATURE_OFF }, { impersonating: true, role: 'admin' }, { role: 'agent' }]) {
+    for (const opts of [{ features: FEATURE_OFF }, { impersonating: true, role: 'admin' }, { role: 'agent', features: FEATURE_OFF }]) {
       const { writes } = setup(opts);
       expect(await action(TEMPLATE_ID)).toMatchObject({ ok: false });
       expect(writes()).toEqual([]);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3618: own checklists — scope, the switch, and what a refusal says
+// ---------------------------------------------------------------------------
+
+const create = (over: Partial<SaveChecklistTemplateInput['payload']> = {}) =>
+  input({ templateId: null, expectedUpdatedAt: null, payload: { ...input().payload, ...over } });
+
+describe('BACKLOG-3618 — the scope of a new template is decided on the server', () => {
+  it('S1 an agent creates their own (p_personal: true)', async () => {
+    const { saves } = setup({ role: 'agent' });
+    expect(await saveChecklistTemplate(create())).toMatchObject({ ok: true });
+    expect(saves()[0].args.p_personal).toBe(true);
+  });
+
+  it.each(['broker', 'admin', 'it_admin'])('S2 a %s creates a brokerage template (no p_personal)', async (role) => {
+    const { saves } = setup({ role });
+    await saveChecklistTemplate(create());
+    expect(saves()[0].args).not.toHaveProperty('p_personal');
+  });
+
+  it('S3 a solo user creates in their one list (no p_personal) [C8]', async () => {
+    const { saves } = setup({ personal: true });
+    expect(await saveChecklistTemplate(create())).toMatchObject({ ok: true });
+    expect(saves()[0].args.p_org_id).toBe(FIXTURE_PERSONAL_ORG_ID);
+    expect(saves()[0].args).not.toHaveProperty('p_personal');
+  });
+
+  it('S4 editing an existing template never sends p_personal (the row decides)', async () => {
+    const { saves } = setup({ role: 'agent' });
+    await saveChecklistTemplate(input());
+    expect(saves()[0].args).not.toHaveProperty('p_personal');
+  });
+
+  it('S5 a browser cannot ask for a scope: extra fields are ignored', async () => {
+    const { saves } = setup({ role: 'broker' });
+    const tampered = { ...create(), personal: true, p_personal: true } as SaveChecklistTemplateInput;
+    await saveChecklistTemplate(tampered);
+    expect(saves()[0].args).not.toHaveProperty('p_personal');
+  });
+});
+
+describe('BACKLOG-3618 — Send with submissions: sent only when the editor changed it', () => {
+  it.each([true, false])('T1 include_in_submission %s reaches the database as p_include_in_submission', async (value) => {
+    const { saves } = setup({ role: 'agent' });
+    await saveChecklistTemplate(input({ payload: { ...input().payload, include_in_submission: value } }));
+    expect(saves()[0].args.p_include_in_submission).toBe(value);
+  });
+
+  it('T2 omitted in the payload, omitted in the call (the database keeps the stored value)', async () => {
+    const { saves } = setup({ role: 'agent' });
+    await saveChecklistTemplate(input());
+    expect(saves()[0].args).not.toHaveProperty('p_include_in_submission');
+  });
+
+  it('T3 a non-boolean is refused before the database', async () => {
+    const { saves } = setup({ role: 'agent' });
+    const bad = input({ payload: { ...input().payload, include_in_submission: 'false' as unknown as boolean } });
+    expect(await saveChecklistTemplate(bad)).toMatchObject({ ok: false, reason: 'invalid' });
+    expect(saves()).toEqual([]);
+  });
+});
+
+describe('BACKLOG-3618 — what a refused save says', () => {
+  it('R1 an agent saving a brokerage template is told only the broker can change it', async () => {
+    setup({ role: 'agent', save: { data: null, error: { code: '42501', message: 'not_authorized' } } });
+    expect(await saveChecklistTemplate(input())).toEqual({
+      ok: false,
+      reason: 'brokerage_read_only',
+      message: 'Only your broker or an admin can change brokerage checklists.',
+    });
+  });
+
+  it('R2 a broker refused by the database keeps the general message', async () => {
+    setup({ role: 'broker', save: { data: null, error: { code: '42501', message: 'not_authorized' } } });
+    expect(await saveChecklistTemplate(input())).toMatchObject({ reason: 'not_authorized' });
+  });
+
+  it('R3 "not sent" on a brokerage template has its own message, not "invalid"', async () => {
+    setup({ role: 'broker', save: { data: null, error: { code: '22023', message: 'not_excludable' } } });
+    expect(await saveChecklistTemplate(input())).toEqual({
+      ok: false,
+      reason: 'not_excludable',
+      message: 'Brokerage checklists are always sent with submissions.',
+    });
+  });
+});
+
+describe('BACKLOG-3618 — archive / restore by an agent', () => {
+  it.each([
+    ['archive', archiveChecklistTemplate],
+    ['restore', restoreChecklistTemplate],
+  ] as const)('A1 %s of a brokerage template is refused before any write', async (_l, action) => {
+    const { writes, tableCalls } = setup({ role: 'agent', read: { data: { id: TEMPLATE_ID, owner_user_id: null } } });
+    expect(await action(TEMPLATE_ID)).toEqual({
+      ok: false,
+      message: 'Only your broker or an admin can change brokerage checklists.',
+    });
+    expect(writes()).toEqual([]);
+    // The read is live and scoped to the gate's org.
+    expect(tableCalls[0].calls).toContainEqual({ method: 'eq', args: ['organization_id', FIXTURE_BROKERAGE_ORG_ID] });
+  });
+
+  it("A2 another user's template is not found, and nothing is written", async () => {
+    const { writes } = setup({ role: 'agent', read: { data: { id: TEMPLATE_ID, owner_user_id: FIXTURE_OTHER_USER_ID } } });
+    expect(await archiveChecklistTemplate(TEMPLATE_ID)).toEqual({ ok: false, message: 'That template could not be found.' });
+    expect(writes()).toEqual([]);
+  });
+
+  it('A3 a template the read cannot see is not found, and nothing is written', async () => {
+    const { writes } = setup({ role: 'agent', read: { data: null } });
+    expect(await archiveChecklistTemplate(TEMPLATE_ID)).toEqual({ ok: false, message: 'That template could not be found.' });
+    expect(writes()).toEqual([]);
+  });
+
+  it('A4 the agent archives their own', async () => {
+    const { writes } = setup({ role: 'agent', read: { data: { id: TEMPLATE_ID, owner_user_id: FIXTURE_USER_ID } } });
+    expect(await archiveChecklistTemplate(TEMPLATE_ID)).toEqual({ ok: true });
+    expect(writes()).toHaveLength(1);
+  });
+
+  it('A5 an editor makes no ownership read (unchanged path)', async () => {
+    const { tableCalls } = setup({ role: 'broker' });
+    expect(await archiveChecklistTemplate(TEMPLATE_ID)).toEqual({ ok: true });
+    expect(tableCalls.flatMap((t) => t.calls).some((c) => c.method === 'maybeSingle')).toBe(false);
   });
 });
