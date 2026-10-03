@@ -545,19 +545,58 @@ export const RCS_LEFTOVER_STAGING_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
  * failed run) ONLY when its user is the signed-in user and it started within
  * 7 days; otherwise discarded. Never throws.
  */
-export async function recoverLeftoverStaging(signedInUserId: string | null, nowMs: number = Date.now()): Promise<{ committed: number; discarded: number }> {
-  const out = { committed: 0, discarded: 0 };
-  for (const job of cacheStaging().leftoverJobs()) {
-    out[await settleLeftoverJob(job, leftoverMaySave(job, signedInUserId, nowMs))] += 1;
-  }
-  return out;
+/** SR F3: one recovery at a time (app start, sign-in and Sync start share it). */
+let recoveryInFlight: Promise<{ committed: number; discarded: number; kept: number }> | null = null;
+
+export function recoverLeftoverStaging(
+  signedInUserId: string | null,
+  nowMs: number = Date.now(),
+): Promise<{ committed: number; discarded: number; kept: number }> {
+  if (recoveryInFlight) return recoveryInFlight;
+  recoveryInFlight = (async () => {
+    const out = { committed: 0, discarded: 0, kept: 0 };
+    for (const job of cacheStaging().leftoverJobs()) {
+      const action = leftoverAction(job, signedInUserId, nowMs);
+      // SR F1: nobody signed in (yet): the run is left as it is.
+      if (action === "keep") {
+        out.kept += 1;
+        continue;
+      }
+      out[await settleLeftoverJob(job, action === "save")] += 1;
+    }
+    return out;
+  })().finally(() => {
+    recoveryInFlight = null;
+  });
+  return recoveryInFlight;
 }
 
-/** 3671 P3 (SR): only the signed-in user's own run, started within 7 days. */
-export function leftoverMaySave(job: { userId: string; startedAt: string }, signedInUserId: string | null, nowMs: number): boolean {
+/**
+ * SR F3: Sync start — wait for a recovery already running (e.g. the one at
+ * app start, maybe before anyone was signed in), then settle for THIS user,
+ * before the staging sweep.
+ */
+export async function recoverLeftoverStagingFor(userId: string): Promise<{ committed: number; discarded: number; kept: number }> {
+  if (recoveryInFlight) await recoveryInFlight.catch(() => undefined);
+  return recoverLeftoverStaging(userId);
+}
+
+/**
+ * 3671 P3 (SR, F1): what to do with a run a crash left behind —
+ *  - "discard": a DIFFERENT user is signed in, or it started over 7 days ago;
+ *  - "keep": nobody is signed in (yet) — untouched until someone is;
+ *  - "save": the signed-in user's own run, within 7 days.
+ */
+export function leftoverAction(
+  job: { userId: string; startedAt: string },
+  signedInUserId: string | null,
+  nowMs: number,
+): "save" | "discard" | "keep" {
   const started = Date.parse(job.startedAt);
   const fresh = Number.isFinite(started) && nowMs - started <= RCS_LEFTOVER_STAGING_MAX_AGE_MS && started <= nowMs + 60_000;
-  return !!signedInUserId && job.userId === signedInUserId && fresh;
+  if (!fresh) return "discard";
+  if (!signedInUserId) return "keep";
+  return job.userId === signedInUserId ? "save" : "discard";
 }
 
 /**
@@ -634,6 +673,8 @@ onSessionChanged((change) => {
     pairingAuth.cancelCode();
   }
   lastSessionUserId = change.kind === "saved" ? change.userId : null;
+  // SR F1: a run a crash cut short is settled once we know who is signed in.
+  if (change.kind === "saved") void recoverLeftoverStaging(change.userId).catch(() => undefined);
 });
 
 /**
@@ -748,7 +789,7 @@ async function startCacheJobOnce(opts: { sinceDays?: unknown }): Promise<
     : dealChatsForClaim(decision.userId, window.limits.floorMs, coveredSince);
   // 3671 P3: staging a crash left: its finished chats are saved (same user,
   // within 7 days), the rest discarded. Then only one Sync at a time.
-  await recoverLeftoverStaging(decision.userId);
+  await recoverLeftoverStagingFor(decision.userId);
   await cacheStaging().discardAll();
   const job = bridge.createCacheJob(decision.userId, {
     since,
@@ -889,6 +930,10 @@ const bridge = new RcsExtensionBridge({
     // cancel does not. The /focus route's mechanism, incl. the taskbar flash.
     if (shouldFocusKeeprOnJobEnd(ended.snapshot.state)) focusKeeprFromBrowser();
     if (ended.kind !== "cache") return;
+    // SR F2: a STOP (cancel) is final at once — the job's record goes now,
+    // synchronously, so a quit before the async discard can never let the
+    // next start save a stopped run.
+    if (ended.snapshot.state === "cancelled") cacheStaging().markStopped(ended.snapshot.jobId);
     // Busy from this moment (synchronously, before the job slot can be reused).
     cacheEndsInFlight += 1;
     let released = false;
@@ -966,6 +1011,8 @@ export async function startRcsExtensionBridge(): Promise<void> {
 export async function stopRcsExtensionBridge(): Promise<void> {
   // Quit: a running cache Sync is not committed — its staging goes.
   const active = bridge.activeJob();
+  // SR F2: a quit is a stop — recorded synchronously before anything async.
+  if (active && staging) staging.markStopped(active.jobId);
   if (active) bridge.cancelJob(active.jobId);
   // A quit is a stop: the running Sync's staging goes. (3671 P3: staging a
   // crash left is kept for the next start's recovery.)

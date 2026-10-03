@@ -51,6 +51,7 @@ import {
   RCS_PLACED_FILE_DELETE_ALL_SQL,
   RCS_STAGING_PUT_JOB_SQL,
   RCS_STAGING_JOBS_SQL,
+  RCS_STAGING_DELETE_JOB_RECORD_SQL,
   RCS_STAGING_PUT_CHAT_META_SQL,
   RCS_STAGING_CHAT_META_SQL,
   RCS_STAGING_JOB_IDS_SQL,
@@ -443,6 +444,9 @@ export function rcsStagingDbOps(): import("../rcsCacheStaging").RcsStagingDbOps 
       db.prepare(RCS_STAGING_PUT_JOB_SQL).run(jobId, r.userId, r.startedAt, r.limitsJson, r.readJson);
     },
     jobs: () => db.prepare(RCS_STAGING_JOBS_SQL).all() as import("../rcsCacheStaging").StagedJobRow[],
+    deleteJobRecord: (jobId) => {
+      db.prepare(RCS_STAGING_DELETE_JOB_RECORD_SQL).run(jobId);
+    },
     putChatMeta: (jobId, r) => {
       db.prepare(RCS_STAGING_PUT_CHAT_META_SQL).run(jobId, r.chatHash, r.chatFloorMs, r.readFloorMs, r.reachedFloor ? 1 : 0, r.readAt);
     },

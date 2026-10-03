@@ -8,6 +8,9 @@
  * Mutations that turn this red:
  *   P1 crash-left staging of ANOTHER user committed            → "a crash-left run of another user is discarded"
  *   P2 crash-left staging older than 7 days committed          → "a crash-left run of another user is discarded"
+ *   F1 nobody signed in discarding the run                     → "nobody signed in (yet)"
+ *   F2 a stopped run recovered from its leftover rows          → "a stopped run is never recovered"
+ *   F3 overlapping recoveries settling one run twice           → "overlapping recoveries"
  *   P3 a fresh crash-left run of this user discarded            → "a crash-left run of the signed-in user"
  *   P4 Force re-import keeping staging or the journal          → "Force re-import drops every staged run"
  *   P5 exclusions not re-checked at commit                      → "a chat switched to Don't sync since"
@@ -129,26 +132,56 @@ afterEach(() => db?.close());
 describe("3671 P3: per-chat commits (SR 2026-10-03)", () => {
   it("a crash-left run of another user, or older than 7 days, is discarded — nothing saved (P1, P2)", async () => {
     stageRun(OTHER, new Date(NOW - 60_000).toISOString(), { a: true, b: true });
-    expect(await recoverLeftoverStaging(USER, NOW)).toEqual({ committed: 0, discarded: 1 });
+    expect(await recoverLeftoverStaging(USER, NOW)).toEqual({ committed: 0, discarded: 1, kept: 0 });
     expect(count("SELECT COUNT(*) AS n FROM messages")).toBe(0);
     expect(count("SELECT COUNT(*) AS n FROM rcs_cache_staging_chats")).toBe(0);
 
     jobN += 1;
     JOB = JOB_BASE + String(jobN);
     stageRun(USER, new Date(NOW - RCS_LEFTOVER_STAGING_MAX_AGE_MS - 1).toISOString(), { a: true, b: true });
-    expect(await recoverLeftoverStaging(USER, NOW)).toEqual({ committed: 0, discarded: 1 });
+    expect(await recoverLeftoverStaging(USER, NOW)).toEqual({ committed: 0, discarded: 1, kept: 0 });
     expect(count("SELECT COUNT(*) AS n FROM messages")).toBe(0);
-    // Signed out: discarded too.
-    jobN += 1;
-    JOB = JOB_BASE + String(jobN);
+  });
+
+  // SR F1: at app start the session may not be restored yet — nobody signed
+  // in must leave the run untouched (it was discarded before). Mutation: a
+  // null user discarding → red.
+  it("nobody signed in (yet): the run is kept untouched, then saved once its user signs in (F1)", async () => {
     stageRun(USER, new Date(NOW - 60_000).toISOString(), { a: true, b: true });
-    expect(await recoverLeftoverStaging(null, NOW)).toEqual({ committed: 0, discarded: 1 });
+    expect(await recoverLeftoverStaging(null, NOW)).toEqual({ committed: 0, discarded: 0, kept: 1 });
+    expect(count("SELECT COUNT(*) AS n FROM rcs_cache_staging_jobs")).toBe(1);
+    expect(count("SELECT COUNT(*) AS n FROM rcs_cache_staging_chats")).toBe(2);
+    expect(await recoverLeftoverStaging(USER, NOW)).toEqual({ committed: 1, discarded: 0, kept: 0 });
+    expect(threadRows(HASH_A)).toBe(1);
+  });
+
+  // SR F2: a stopped run (the user's Stop, a quit) must never be saved as a
+  // crash-cut run, even if its rows are still there. Mutation: the record
+  // kept on a stop → red.
+  it("a stopped run is never recovered, even if its staging rows are left (F2)", async () => {
+    stageRun(USER, new Date(NOW - 60_000).toISOString(), { a: true, b: true });
+    staging.markStopped(JOB);
+    expect(count("SELECT COUNT(*) AS n FROM rcs_cache_staging_jobs")).toBe(0);
+    // The app quit before the async discard: the rows are still there.
+    expect(count("SELECT COUNT(*) AS n FROM rcs_cache_staging_chats")).toBe(2);
+    expect(await recoverLeftoverStaging(USER, NOW)).toEqual({ committed: 0, discarded: 0, kept: 0 });
+    expect(count("SELECT COUNT(*) AS n FROM messages")).toBe(0);
+  });
+
+  // SR F3: one recovery at a time. Mutation: no single flight → red (the
+  // second call settles the same run again).
+  it("overlapping recoveries share one run (F3)", async () => {
+    stageRun(USER, new Date(NOW - 60_000).toISOString(), { a: true, b: true });
+    const [first, second] = await Promise.all([recoverLeftoverStaging(USER, NOW), recoverLeftoverStaging(USER, NOW)]);
+    expect(first).toEqual({ committed: 1, discarded: 0, kept: 0 });
+    expect(second).toBe(first);
+    expect(threadRows(HASH_A)).toBe(1);
   });
 
   it("a crash-left run of the signed-in user (within 7 days): its finished chats are saved as a failed run (P3)", async () => {
     const started = new Date(NOW - 5 * 60_000).toISOString();
     stageRun(USER, started, { a: true, b: false });
-    expect(await recoverLeftoverStaging(USER, NOW)).toEqual({ committed: 1, discarded: 0 });
+    expect(await recoverLeftoverStaging(USER, NOW)).toEqual({ committed: 1, discarded: 0, kept: 0 });
     expect(threadRows(HASH_A)).toBe(1);
     expect(threadRows(HASH_B)).toBe(1);
     expect(getFailedRun(USER)).toBe(started);

@@ -86,6 +86,8 @@ export interface RcsStagingDbOps {
   jobIds(): string[];
   /** 3671 P3: a job's own record, written when it starts. */
   putJob(jobId: string, row: Omit<StagedJobRow, "jobId">): void;
+  /** SR F2: the job's record only (a stop), synchronously. */
+  deleteJobRecord(jobId: string): void;
   jobs(): StagedJobRow[];
   /** 3671 P3: one staged chat's floor / reached / read time (upsert). */
   putChatMeta(jobId: string, row: StagedChatMeta): void;
@@ -342,6 +344,16 @@ export class RcsCacheStaging {
    */
   dropAllRowsForForce(): void {
     this.db.deleteAllWithJournal();
+  }
+
+  /**
+   * SR F2: the run was STOPPED (the user's Stop, a quit): its record goes
+   * synchronously, so it can never be taken for a crash-cut run and saved.
+   * The rows and files follow with discard().
+   */
+  markStopped(jobId: string): void {
+    this.ended.add(jobId);
+    this.db.deleteJobRecord(jobId);
   }
 
   /** 3671 P3: staging left by a run that never ended here (a crash), with its record. */

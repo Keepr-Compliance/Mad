@@ -81,6 +81,10 @@ jest.mock("../../services/rcsCacheStaging", () => ({
     isCommitting = false;
     async discardAll() {}
     async discard() {}
+    // SR F2: a stop is recorded synchronously.
+    markStopped(jobId: string) {
+      order.push("stopped " + jobId);
+    }
     async abandon(jobId: string) {
       abandoned.push(jobId);
     }
@@ -184,6 +188,20 @@ const startCache = () => handlers.get("rcs-import:start-cache-job")!({}, undefin
 const startTx = () => handlers.get("rcs-import:start-job")!({}, { transactionId: "tx-1" }) as Promise<{ success: boolean; error?: string }>;
 
 describe("a cache Sync being saved (SR B1, S1)", () => {
+  // SR F2: a STOP's record goes synchronously — before anything async (a quit
+  // may follow at once). Mutation: markStopped removed / made async → red.
+  it("a cancelled Sync is marked stopped synchronously, before the discard", async () => {
+    expect((await startCache()).success).toBe(true);
+    order.length = 0;
+    bridgeOptions.onJobEnded({
+      kind: "cache", userId: "user-1", detectedOwnNumber: null,
+      snapshot: { state: "cancelled", jobId: "job-stop", createdAt: "2026-10-01T10:00:00.000Z" },
+    });
+    expect(order).toEqual(["stopped job-stop"]);
+    await flush();
+    order.length = 0;
+  });
+
   it("busy while saving; a refresh only after the save and the auto-link", async () => {
     expect((await startCache()).success).toBe(true);
     // The job finishes: its slot is free at once; the save starts.

@@ -337,6 +337,9 @@ export const RCS_STAGING_PUT_JOB_SQL = sql`
     VALUES (?, ?, ?, ?, ?)
   `;
 
+/** SR F2. Parameters: job id. A stop: the job's record goes first, synchronously. */
+export const RCS_STAGING_DELETE_JOB_RECORD_SQL = sql`DELETE FROM rcs_cache_staging_jobs WHERE job_id = ?`;
+
 /** 3671 P3. No parameters: every job's own record. */
 export const RCS_STAGING_JOBS_SQL = sql`
     SELECT job_id AS jobId, user_id AS userId, started_at AS startedAt, limits_json AS limitsJson, read_json AS readJson
