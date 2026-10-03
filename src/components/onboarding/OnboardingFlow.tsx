@@ -526,12 +526,6 @@ function OnboardingFlowInner({ app, machineState, resumeBundle }: OnboardingFlow
   // `permissionsGranted === true` and is untouched; this is the same
   // "already answered, move on" semantic the manual-advance path already has.
   //
-  // Note this is the SECOND line of defence, not the fix. The reducer keeps a
-  // user who declined FDA out of onboarding entirely (isOnboardingComplete).
-  // This covers the case where they re-enter onboarding for an unrelated
-  // reason — no mailbox connected yet — and must not be re-asked on the way
-  // through.
-  //
   // BACKLOG-3673: the account's recorded answers (loaded in Phase 4 from the
   // server, carried on onboarding state as `accountAnswers`) seed their steps
   // on EVERY entry into setup, on any computer -- not only after an FDA
