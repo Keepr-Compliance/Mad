@@ -24,6 +24,8 @@ export {};
 const handlers = new Map<string, (event: unknown, args?: unknown) => Promise<unknown>>();
 const broadcasts: Array<[string, unknown]> = [];
 const order: string[] = [];
+/** SR F2 (quit): the bridge's running job, when a test sets one. */
+let mockActiveJob: { jobId: string } | null = null;
 let bridgeOptions: Record<string, (...a: unknown[]) => unknown> = {};
 let releaseCommit: (() => void) | null = null;
 const abandoned: string[] = [];
@@ -63,11 +65,15 @@ jest.mock("../../services/rcsExtensionBridge", () => ({
       return { bridge: "listening", port: 1 };
     }
     activeJob() {
-      return null;
+      return mockActiveJob;
     }
     activeJobUserId() {
       return null;
     }
+    cancelJob(jobId?: string) {
+      order.push("cancel " + String(jobId));
+    }
+    async stop() {}
     createCacheJob() {
       return { jobId: "job-1", kind: "cache", state: "created" };
     }
@@ -188,6 +194,18 @@ const startCache = () => handlers.get("rcs-import:start-cache-job")!({}, undefin
 const startTx = () => handlers.get("rcs-import:start-job")!({}, { transactionId: "tx-1" }) as Promise<{ success: boolean; error?: string }>;
 
 describe("a cache Sync being saved (SR B1, S1)", () => {
+  // SR F2 (quit): the running Sync is marked stopped BEFORE it is cancelled
+  // (a quit may end the process right after). Mutation: the order swapped → red.
+  it("quit: markStopped runs before cancelJob", async () => {
+    expect((await startCache()).success).toBe(true); // the staging object exists
+    order.length = 0;
+    mockActiveJob = { jobId: "job-quit" };
+    await handlersModule.stopRcsExtensionBridge();
+    mockActiveJob = null;
+    expect(order.slice(0, 2)).toEqual(["stopped job-quit", "cancel job-quit"]);
+    order.length = 0;
+  });
+
   // SR F2: a STOP's record goes synchronously — before anything async (a quit
   // may follow at once). Mutation: markStopped removed / made async → red.
   it("a cancelled Sync is marked stopped synchronously, before the discard", async () => {
