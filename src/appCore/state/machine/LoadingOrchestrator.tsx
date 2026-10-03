@@ -25,6 +25,7 @@ import {
 import { waitForApi } from "./utils/waitForApi";
 import { useAuth } from "../../../contexts";
 import { fdaFromProbe, unknownFdaFor } from "./fdaState";
+import { readAccountSetup } from "./routing/readAccountSetup";
 import type { PlatformInfo, User, UserData } from "./types";
 import logger from "../../../utils/logger";
 
@@ -646,7 +647,7 @@ export function LoadingOrchestrator({
       // Load all user data in parallel for faster loading
       const [
         phoneTypeResult,
-        emailOnboardingResult,
+        accountSetupResult,
         connectionsResult,
         permissionsResult,
         onboardingPrefsResult,
@@ -657,13 +658,14 @@ export function LoadingOrchestrator({
             phoneType: null as "iphone" | "android" | null,
           })),
 
-          // Check if email onboarding is completed
-          window.api.auth
-            .checkEmailOnboarding(userId)
-            .catch(() => ({
-              success: false,
-              completed: false,
-            })),
+          // BACKLOG-3673: the per-account "setup finished" record and the
+          // account's recorded answers, read by main for the SESSION user from
+          // the server (or its offline cache). Wrapped like the preferences
+          // read below: a missing bridge or a rejection means "unknown", which
+          // routes to setup (fail closed).
+          Promise.resolve()
+            .then(() => window.api.user.getAccountSetup?.())
+            .catch(() => undefined),
 
           // Check if email is connected (any provider)
           window.api.system.checkAllConnections(userId).catch(() => ({
@@ -682,8 +684,10 @@ export function LoadingOrchestrator({
 
           // BACKLOG-3212: read the persisted "Skip for now" choice for Full
           // Disk Access (Supabase user_preferences `onboarding.fdaSkipped`,
-          // written by PermissionsStep via preferences:update). macOS only —
+          // written by PermissionsStep via preferences:update). macOS only --
           // the flag has no meaning elsewhere, so Windows pays nothing.
+          // (BACKLOG-3673 reads the contacts answer through getAccountSetup
+          // above, so this read stays macOS-only.)
           //
           // Cloud-backed, matching phoneType/contactSources/the 1842 resume
           // marker: readable without local DB init, which matters because this
@@ -724,12 +728,12 @@ export function LoadingOrchestrator({
         (connectionsResult.google?.connected === true ||
           connectionsResult.microsoft?.connected === true);
 
-      // Determine if email onboarding is completed
-      // If email is connected, consider onboarding complete (for returning users
-      // who connected email before the hasCompletedEmailOnboarding flag existed)
-      const hasCompletedEmailOnboarding =
-        (emailOnboardingResult.success && emailOnboardingResult.completed) ||
-        hasEmailConnected;
+      // BACKLOG-3673: the account record. Anything but a well-formed answer is
+      // "unknown" (routes to setup). The email-step and contacts answers only
+      // seed the setup queue; neither is a routing input, and a connected
+      // mailbox no longer stands in for either.
+      const accountSetup = readAccountSetup(accountSetupResult);
+      const hasCompletedEmailOnboarding = accountSetup.emailStepAnswered;
 
       // Determine permissions status (macOS only)
       const probeGranted =
@@ -778,6 +782,8 @@ export function LoadingOrchestrator({
         hasEmailConnected,
         needsDriverSetup,
         fda,
+        setup: accountSetup.setup,
+        contactSourceAnswered: accountSetup.contactSourceAnswered,
       };
     };
 
@@ -814,6 +820,9 @@ export function LoadingOrchestrator({
             // recorded decline. We could not read preferences, so we do not
             // know — and "ask again" is the safe direction to be wrong in.
             fda: unknownFdaFor(platform),
+            // BACKLOG-3673: we could not read the account record -> setup.
+            setup: "unknown",
+            contactSourceAnswered: false,
           };
 
           dispatch({

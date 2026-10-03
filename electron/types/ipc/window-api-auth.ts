@@ -118,17 +118,6 @@ export interface WindowApiAuth {
   completeEmailOnboarding: (
     userId: string,
   ) => Promise<{ success: boolean; error?: string }>;
-  checkEmailOnboarding: (
-    userId: string,
-  ) => Promise<{
-    success: boolean;
-    completed: boolean;
-    error?: string;
-    // BACKLOG-1842 (startup-resilience follow-up): DB still starting up —
-    // caller should retry, not treat as terminal.
-    transient?: boolean;
-    retryable?: boolean;
-  }>;
   // Complete pending login after keychain setup (login-first flow)
   completePendingLogin: (oauthData: unknown) => Promise<{
     success: boolean;

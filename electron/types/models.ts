@@ -189,6 +189,8 @@ export interface User {
 
   // Onboarding
   email_onboarding_completed_at?: string;
+  /** BACKLOG-3673: server-side "setup finished" record (cloud users row only). Write-once. */
+  onboarding_completed_at?: string | null;
 
   // Preferences
   timezone?: string;
