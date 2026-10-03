@@ -1081,17 +1081,33 @@ class SupabaseService {
   /**
    * BACKLOG-3673: write the per-account "setup finished" record. Write-once: it
    * only sets an EMPTY value (a DB trigger also refuses to change a set one).
+   * Resolves when the value is set afterwards (written now, or already set).
+   * Throws when 0 rows were updated and the value is still empty or there is
+   * no row -- the caller reports that as a failure and caches nothing.
    * @param userId - MUST be the session's auth user id (see getAuthUserId)
    */
   async completeAccountSetup(userId: string): Promise<void> {
     const client = this._ensureClient();
-    const { error } = await client
+    const { data, error } = await client
       .from("users")
       .update({ onboarding_completed_at: new Date().toISOString() })
       .eq("id", userId)
-      .is("onboarding_completed_at", null);
+      .is("onboarding_completed_at", null)
+      .select("id");
 
     if (error) throw error;
+    if (Array.isArray(data) && data.length > 0) return;
+
+    // 0 rows updated: either the value was already set (a write-once hit -- the
+    // account is finished) or there is no writable row for this id. Only the
+    // first is success; re-read to tell them apart.
+    const record = await this.getAccountSetupRecord(userId);
+    if (record.onboardingCompletedAt) return;
+    throw new Error(
+      record.found
+        ? "Setup-finished record not written: 0 rows updated and the value is still empty"
+        : "Setup-finished record not written: no users row for the session user",
+    );
   }
 
   /**

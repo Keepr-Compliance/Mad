@@ -91,15 +91,45 @@ describe("supabaseService — setup-finished record (BACKLOG-3673)", () => {
     await expect(svc.getAccountSetupRecord(AUTH_ID)).rejects.toEqual({ message: "boom" });
   });
 
-  it("completeAccountSetup: sets the value only where it is still empty", async () => {
-    const q = chain({ data: null, error: null });
+  it("completeAccountSetup: sets the value only where it is still empty; 1 row -> done, no re-read", async () => {
+    const q = chain({ data: [{ id: AUTH_ID }], error: null });
     mockSupabaseClient.from.mockReturnValue(q);
 
-    await svc.completeAccountSetup(AUTH_ID);
+    await expect(svc.completeAccountSetup(AUTH_ID)).resolves.toBeUndefined();
 
     expect(q.update).toHaveBeenCalledWith({ onboarding_completed_at: expect.any(String) });
     expect(q.eq).toHaveBeenCalledWith("id", AUTH_ID);
     expect(q.is).toHaveBeenCalledWith("onboarding_completed_at", null);
+    expect(q.select).toHaveBeenCalledWith("id");
+    expect(mockSupabaseClient.from).toHaveBeenCalledTimes(1);
+  });
+
+  // SR C-2: PostgREST answers a 0-row UPDATE with {error: null}. The write must
+  // not be reported as success unless the value is actually set.
+  it("C-2: 0 rows updated, re-read finds the value set -> success (write-once hit)", async () => {
+    mockSupabaseClient.from
+      .mockReturnValueOnce(chain({ data: [], error: null }))
+      .mockReturnValueOnce(
+        chain({ data: { onboarding_completed_at: TS, email_onboarding_completed_at: null }, error: null }),
+      );
+    await expect(svc.completeAccountSetup(AUTH_ID)).resolves.toBeUndefined();
+    expect(mockSupabaseClient.from).toHaveBeenCalledTimes(2);
+  });
+
+  it("C-2: 0 rows updated, re-read finds the value still empty -> throws", async () => {
+    mockSupabaseClient.from
+      .mockReturnValueOnce(chain({ data: [], error: null }))
+      .mockReturnValueOnce(
+        chain({ data: { onboarding_completed_at: null, email_onboarding_completed_at: TS }, error: null }),
+      );
+    await expect(svc.completeAccountSetup(AUTH_ID)).rejects.toThrow(/still empty/);
+  });
+
+  it("C-2: 0 rows updated and no row for the id -> throws", async () => {
+    mockSupabaseClient.from
+      .mockReturnValueOnce(chain({ data: [], error: null }))
+      .mockReturnValueOnce(chain({ data: null, error: null }));
+    await expect(svc.completeAccountSetup(AUTH_ID)).rejects.toThrow(/no users row/);
   });
 
   it("completeAccountSetup: an error throws (never silently succeeds)", async () => {
