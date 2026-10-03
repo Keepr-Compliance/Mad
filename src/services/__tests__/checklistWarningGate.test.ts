@@ -118,3 +118,76 @@ describe("BACKLOG-3477 E-C5 — readUncheckedRequiredItems fails open", () => {
     await expect(readUncheckedRequiredItems("txn-3477")).resolves.toEqual([]);
   });
 });
+
+/**
+ * BACKLOG-3618 — the user's own templates set "not sent to broker".
+ *
+ * The server drops those checklists at submit, so the warning skips them. The
+ * listing is the main-process mapper's output shape (`isMine`,
+ * `includeInSubmission`), pinned against PostgREST rows in
+ * checklistTemplateService-3475.test.ts ("BACKLOG-3618 C10").
+ */
+describe("BACKLOG-3618 — the warning ignores own checklists that are not sent", () => {
+  const listMock = () => window.api.checklists.listTemplates as jest.Mock;
+  const tpl = (id: string, isMine: boolean, includeInSubmission: boolean) => ({
+    id,
+    name: id,
+    description: null,
+    sortOrder: 0,
+    updatedAt: null,
+    items: [],
+    isMine,
+    includeInSubmission,
+  });
+
+  beforeEach(() => {
+    getMock().mockReset();
+    getMock().mockResolvedValue({ success: true, checklists: REAL });
+    listMock().mockReset();
+  });
+
+  it("the lister skips every checklist whose template is in the not-sent set", () => {
+    const items = listUncheckedRequiredItems(REAL, new Set(["tpl-other"]));
+    expect(items.map((i) => [i.title, i.checklistName])).toEqual([["Probe item 2", "Probe template"]]);
+  });
+
+  it("an own template set not to be sent is skipped at submit", async () => {
+    listMock().mockResolvedValue({
+      success: true,
+      source: "live",
+      templates: [tpl("tpl-probe", false, true), tpl("tpl-other", true, false)],
+    });
+    const items = await readUncheckedRequiredItems("txn-3618");
+    expect(items.map((i) => i.title)).toEqual(["Probe item 2"]);
+  });
+
+  it("an own template that IS sent still warns", async () => {
+    listMock().mockResolvedValue({
+      success: true,
+      source: "live",
+      templates: [tpl("tpl-other", true, true)],
+    });
+    expect((await readUncheckedRequiredItems("txn-3618")).map((i) => i.title)).toEqual([
+      "Probe item 2",
+      "Other item 2",
+      "Other item 3",
+    ]);
+  });
+
+  it("a brokerage template always warns, whatever its switch says", async () => {
+    listMock().mockResolvedValue({
+      success: true,
+      source: "live",
+      templates: [tpl("tpl-other", false, false)],
+    });
+    expect(await readUncheckedRequiredItems("txn-3618")).toHaveLength(3);
+  });
+
+  it.each([
+    ["the listing is refused", () => listMock().mockResolvedValue({ success: false, error: "offline" })],
+    ["the listing rejects", () => listMock().mockRejectedValue(new Error("ipc down"))],
+  ])("%s → warn on everything", async (_label, arrange) => {
+    arrange();
+    expect(await readUncheckedRequiredItems("txn-3618")).toHaveLength(3);
+  });
+});

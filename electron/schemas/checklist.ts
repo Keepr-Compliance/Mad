@@ -87,6 +87,16 @@ export const CloudChecklistTemplateSchema = z.object({
   sort_order: z.number().int(),
   updated_at: z.string().nullable().catch(null),
   checklist_template_items: z.array(CloudChecklistTemplateItemSchema).catch([]),
+  /**
+   * BACKLOG-3618. Both OPTIONAL: a database without the 3618 migration (or
+   * after its rollback) returns neither, and such a row is a brokerage
+   * template that is sent. A malformed owner is NOT caught — the row is
+   * dropped rather than guessed to be the brokerage's. A malformed switch
+   * reads as `true`: wrong in that direction costs one extra warning; wrong
+   * the other way would hide one.
+   */
+  owner_user_id: z.string().min(1).nullable().optional(),
+  include_in_submission: z.boolean().optional().catch(true),
 });
 
 export type CloudChecklistTemplate = z.infer<typeof CloudChecklistTemplateSchema>;
