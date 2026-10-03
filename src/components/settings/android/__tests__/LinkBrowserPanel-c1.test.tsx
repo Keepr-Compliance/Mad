@@ -94,6 +94,25 @@ describe("LinkBrowserPanel", () => {
     expect(onLinked).toHaveBeenCalledTimes(1);
   });
 
+  // Live (B2): a code from the browser gets its field even when Keepr already
+  // counts a link; "Link a browser" is always there. Mutations: linked
+  // hiding the field → red; no "Link a browser" → red.
+  it("linked AND a code waiting: the field is shown (a new link replaces the old)", async () => {
+    mockLinked = true;
+    mockLink = { state: "waiting", expiresAt: Date.now() + 90_000, triesLeft: 5, intrusion: false };
+    render(<LinkBrowserPanel />);
+    await flush();
+    expect(screen.getByTestId("gm-link-code")).toBeInTheDocument();
+  });
+
+  it("linked: 'Link a browser' tells where to start", async () => {
+    mockLinked = true;
+    render(<LinkBrowserPanel />);
+    await flush();
+    fireEvent.click(screen.getByTestId("gm-link-another"));
+    expect(screen.getByTestId("gm-link-none")).toHaveTextContent(LINK_COPY.none);
+  });
+
   it("cleanLinkCode: digits only, at most 6", () => {
     expect(cleanLinkCode("12-34 56789")).toBe("123456");
   });

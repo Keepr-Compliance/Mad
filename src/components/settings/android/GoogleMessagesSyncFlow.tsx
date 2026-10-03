@@ -215,7 +215,9 @@ export function GoogleMessagesSyncFlow({ onClose, onUseCompanion, onOpenSettings
             <Check ok={paired}>Google Messages connected to your phone</Check>
             <Check ok={keeprPaired}>Extension linked with this Keepr</Check>
           </div>
-          {installed && !keeprPaired && <LinkBrowserPanel />}
+          {/* Live (B2): always there once installed — a code from the browser
+              gets its field even when Keepr already counts a link. */}
+          {installed && <LinkBrowserPanel />}
           {/* Both checks ticked: the pairing instruction is no longer needed. */}
           {installed && paired ? (
             <p className="text-sm text-gray-800 leading-relaxed" data-testid="gm-sync-note">

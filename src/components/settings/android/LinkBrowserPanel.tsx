@@ -43,18 +43,22 @@ export function LinkBrowserPanel({ onLinked }: LinkBrowserPanelProps) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+  /** Live (B2): "Link a browser" opened while already linked. */
+  const [howOpen, setHowOpen] = useState(false);
 
   const refresh = useCallback(async () => {
     const r = await rcsImportService.linkState();
     if (!r.success || !r.data) return;
     setLink(r.data.link);
     setNow(Date.now());
+    // Live (B1): Keepr's honest state each time (a lost link is shown again).
     if (r.data.linked && !linked) {
-      setLinked(true);
       setCode("");
       setError(null);
+      setHowOpen(false);
       onLinked?.();
     }
+    setLinked(r.data.linked);
   }, [linked, onLinked]);
 
   useEffect(() => {
@@ -89,9 +93,9 @@ export function LinkBrowserPanel({ onLinked }: LinkBrowserPanelProps) {
           )}
         </div>
       )}
-      {linked ? (
-        <p className="text-sm text-gray-800" data-testid="gm-link-linked">{LINK_COPY.linked}</p>
-      ) : waiting ? (
+      {/* Live (B2): a code waiting from the browser ALWAYS gets the field —
+          linked or not (a new link replaces the old one). */}
+      {waiting ? (
         <>
           <p className="text-sm font-medium text-gray-900">{LINK_COPY.enter}</p>
           <div className="flex items-center gap-2">
@@ -127,7 +131,19 @@ export function LinkBrowserPanel({ onLinked }: LinkBrowserPanelProps) {
             </p>
           )}
         </>
-      ) : link?.state === "locked" ? null : (
+      ) : link?.state === "locked" ? null : linked && !howOpen ? (
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-sm text-gray-800" data-testid="gm-link-linked">{LINK_COPY.linked}</p>
+          <button
+            type="button"
+            className="text-sm text-indigo-700 hover:text-indigo-900"
+            onClick={() => setHowOpen(true)}
+            data-testid="gm-link-another"
+          >
+            Link a browser
+          </button>
+        </div>
+      ) : (
         <p className="text-sm text-gray-800" data-testid="gm-link-none">{LINK_COPY.none}</p>
       )}
     </div>
