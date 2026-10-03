@@ -102,5 +102,9 @@ export function registerEntitlementHandlers(): void {
     },
   );
 
+  // BACKLOG-3675: keep the offline pass fresh while Keepr is online.
+  // Main-process only; no IPC channel exposes the pass.
+  entitlementService.startOfflinePassRefresher();
+
   logService.debug("Entitlement handlers registered", MODULE);
 }

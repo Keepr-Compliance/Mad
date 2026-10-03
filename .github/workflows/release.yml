@@ -32,6 +32,10 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      # BACKLOG-3675: refuse to release with the placeholder (empty) offline pass key map.
+      - name: Verify offline pass public key is set
+        run: node scripts/ci/check-offline-pass-keys.mjs
+
       - name: Build application
         run: npm run build
 
@@ -299,6 +303,10 @@ jobs:
 
       - name: Install dependencies
         run: npm install
+
+      # BACKLOG-3675: refuse to release with the placeholder (empty) offline pass key map.
+      - name: Verify offline pass public key is set
+        run: node scripts/ci/check-offline-pass-keys.mjs
 
       - name: Build application
         run: npm run build
