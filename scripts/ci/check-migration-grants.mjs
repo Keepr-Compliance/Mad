@@ -65,6 +65,22 @@
  *   top-level semicolons and are not supported (none exist in the repo today).
  * - `CREATE PROCEDURE` is not checked: procedures run through CALL and are not
  *   exposed by the API.
+ * - The existing-function catalog is every `CREATE FUNCTION` in the base
+ *   branch's migrations. A later `DROP FUNCTION` in the base is NOT replayed,
+ *   so a PR that re-creates a function the base already dropped passes through
+ *   the re-create exemption even though the new function gets default grants.
+ *   (False negative; reviewers should check re-creates of dropped functions.)
+ * - The catalog does not include other files added by the same PR. File 1
+ *   creating a function (with its REVOKE) and file 2 re-creating it without a
+ *   REVOKE fails on file 2. Fail-safe; the fix is a one-line REVOKE.
+ * - Renames are read as additions (`--no-renames`). A grandfathered migration
+ *   that is re-timestamped (renamed) is checked as new and fails if it has no
+ *   REVOKE. Fail-safe.
+ * - The re-create exemption means "this file does not WIDEN the grants", not
+ *   "this function is locked down": the function keeps whatever grants it had
+ *   on the base, including a missing REVOKE from an older migration.
+ * - The WARN rule also fires on service-role-only SECURITY DEFINER functions
+ *   that legitimately have no auth.uid() check. It is advisory.
  *
  * ## Modes
  *

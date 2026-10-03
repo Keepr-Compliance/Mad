@@ -102,6 +102,15 @@ afterAll(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
+/**
+ * Read a fixture as LF text. .gitattributes pins these files to LF, but a
+ * checkout made without it (or a future edit) must not turn every slice and
+ * replace below into a silent no-op on Windows.
+ */
+function readFixture(p: string): string {
+  return readFileSync(p, 'utf8').replace(/\r\n/g, '\n');
+}
+
 let counter = 0;
 function sqlFile(sql: string, name?: string): string {
   counter += 1;
@@ -110,7 +119,7 @@ function sqlFile(sql: string, name?: string): string {
   return p;
 }
 
-const NEW_FN = readFileSync(path.join(FIX, 'negative', 'new_function_no_revoke.sql'), 'utf8');
+const NEW_FN = readFixture(path.join(FIX, 'negative', 'new_function_no_revoke.sql'));
 const SIG = 'public.support_update_template_copy(uuid, text, text, text, boolean)';
 
 function rules(r: Result): string[] {
@@ -224,6 +233,35 @@ describe('lexing: REVOKE text that is not a statement does not count', () => {
   });
 });
 
+describe('signature normalisation and string escapes', () => {
+  it('OUT parameters are not part of the signature', () => {
+    const sql = NEW_FN.replace('p_is_active boolean DEFAULT true)', 'p_is_active boolean DEFAULT true, OUT o_updated boolean)');
+    expect(sql).not.toBe(NEW_FN);
+    const r = check([sqlFile(`${sql}\nREVOKE EXECUTE ON FUNCTION ${SIG} FROM PUBLIC, anon;\n`)]);
+    expect(r.status).toBe(0);
+    expect(r.json!.files[0].passes[0].object).toBe('public.support_update_template_copy(uuid,text,text,text,boolean)');
+  });
+
+  it("an E'' string with a backslash-escaped quote stays one string", () => {
+    // Without escape handling the string would end at \' and the REVOKE after
+    // the next ';' would read as a real statement.
+    const sql = `${NEW_FN}\nCOMMENT ON FUNCTION ${SIG} IS E'don\\'t; REVOKE EXECUTE ON FUNCTION ${SIG} FROM PUBLIC, anon; --';\n`;
+    expect(sql).toContain("E'don\\'t;");
+    expect(rules(check([sqlFile(sql)]))).toEqual(['function-missing-revoke']);
+  });
+});
+
+describe('CRLF input', () => {
+  it('a CRLF migration is checked the same as an LF one', () => {
+    const crlf = (t: string) => t.replace(/\n/g, '\r\n');
+    const marked = `-- Intentionally callable by anon: public support form\n${NEW_FN}`;
+    const revoked = `${NEW_FN}\nREVOKE EXECUTE ON FUNCTION ${SIG} FROM PUBLIC, anon;\n`;
+    expect(rules(check([sqlFile(crlf(NEW_FN))]))).toEqual(['function-missing-revoke']);
+    expect(check([sqlFile(crlf(marked))]).status).toBe(0);
+    expect(check([sqlFile(crlf(revoked))]).status).toBe(0);
+  });
+});
+
 describe('REVOKE / GRANT replay', () => {
   it('PUBLIC and anon revoked in two statements passes', () => {
     const sql = `${NEW_FN}\nREVOKE EXECUTE ON FUNCTION ${SIG} FROM PUBLIC;\nREVOKE ALL ON FUNCTION ${SIG} FROM anon;\n`;
@@ -249,7 +287,7 @@ describe('REVOKE / GRANT replay', () => {
 describe('re-creating an existing function (catalog = base/)', () => {
   // support_agent_analytics(p_period_days INT DEFAULT 30) is created in
   // base/20260313_support_analytics_rpc.sql.
-  const RECREATE = readFileSync(path.join(FIX, 'real', '20261001044523_backlog_3646_support_agent_checks.sql'), 'utf8')
+  const RECREATE = readFixture(path.join(FIX, 'real', '20261001044523_backlog_3646_support_agent_checks.sql'))
     .split('\n')
     .slice(71, 131)
     .join('\n');
@@ -344,7 +382,7 @@ describe('markers and exemptions', () => {
 });
 
 describe('tables', () => {
-  const TABLE = readFileSync(path.join(FIX, 'negative', 'new_table_no_truncate_revoke.sql'), 'utf8');
+  const TABLE = readFixture(path.join(FIX, 'negative', 'new_table_no_truncate_revoke.sql'));
 
   it('REVOKE ALL counts; REVOKE ... ON ALL TABLES IN SCHEMA public counts', () => {
     expect(check([sqlFile(`${TABLE}\nREVOKE ALL ON TABLE public.account_suspensions_copy FROM anon, authenticated;\n`)]).status).toBe(0);
@@ -390,11 +428,17 @@ describe('PR mode (--base): only files ADDED under supabase/migrations', () => {
     mkdirSync(path.join(repo, 'supabase', 'parked'), { recursive: true });
     git('init', '-q', '-b', 'base');
     // Belt and braces: the scratch repo must be its own top level, never the real repo.
-    expect(path.resolve(git('rev-parse', '--show-toplevel').trim())).toBe(path.resolve(fs.realpathSync(repo)));
+    // realpathSync.native expands Windows 8.3 short names (RUNNER~1 -> runneradmin),
+    // which the JS realpathSync does not; Windows paths compare case-insensitively.
+    const canon = (p: string) => {
+      const real = path.resolve(fs.realpathSync.native(p));
+      return process.platform === 'win32' ? real.toLowerCase() : real;
+    };
+    expect(canon(git('rev-parse', '--show-toplevel').trim())).toBe(canon(repo));
     // An old migration with no REVOKE (grandfathered) that also creates support_agent_analytics.
     writeFileSync(
       path.join(repo, 'supabase', 'migrations', '20260313_support_analytics_rpc.sql'),
-      readFileSync(path.join(BASE, '20260313_support_analytics_rpc.sql'), 'utf8'),
+      readFixture(path.join(BASE, '20260313_support_analytics_rpc.sql')),
     );
     writeFileSync(path.join(repo, 'supabase', 'parked', '20261005_parked.sql'), NEW_FN);
     git('add', '-A');
@@ -411,7 +455,7 @@ describe('PR mode (--base): only files ADDED under supabase/migrations', () => {
   it('a modified existing migration is not checked; an added one is; a re-create uses the base catalog', () => {
     const old = path.join(repo, 'supabase', 'migrations', '20260313_support_analytics_rpc.sql');
     writeFileSync(old, `${readFileSync(old, 'utf8')}\n-- edited\n`);
-    const recreate = readFileSync(path.join(FIX, 'real', '20261001044523_backlog_3646_support_agent_checks.sql'), 'utf8')
+    const recreate = readFixture(path.join(FIX, 'real', '20261001044523_backlog_3646_support_agent_checks.sql'))
       .split('\n')
       .slice(71, 131)
       .join('\n');
