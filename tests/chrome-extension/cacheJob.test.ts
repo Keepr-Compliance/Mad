@@ -885,6 +885,45 @@ describe("runJob: a cache Sync", () => {
   });
 });
 
+// C5 (founder): a real failure of a cache Sync — "Sync failed · Try again"
+// (Keepr saved the chats it finished). Mutations: no retry offered → red; the
+// button not asking Keepr → red; Try again on a non-retryable error → red;
+// the closed tab not reported → red.
+describe("Sync failed · Try again (C5)", () => {
+  it("a cache Sync that fails for real offers Try again", async () => {
+    const t = cacheEnv({ rows: [["A", "3:45 PM"]], numbers: {} });
+    t.env.returnToList = async () => false;
+    const outcome = await job.runJob(JOB, t.env);
+    expect(outcome.outcome).toBe("list_not_reachable");
+    const last = t.shown[t.shown.length - 1] as [string, boolean, { retry?: boolean }];
+    expect(last[1]).toBe(true);
+    expect(last[2].retry).toBe(true);
+  });
+
+  it("the failed box: 'Sync failed', the reason, and Try again asks Keepr", async () => {
+    const panel = document.createElement("div");
+    const retry = jest.fn(async () => true);
+    job.renderOverlay(panel, "Your phone isn't reachable.", true, { details: "x", copy: "y", retry: true }, { copy: async () => true, retry });
+    expect(panel.querySelector('[data-keepr="line"]')!.textContent).toBe(job.SYNC_FAILED_TITLE);
+    expect(panel.textContent).toContain("Your phone isn't reachable.");
+    const button = panel.querySelector('[data-keepr="try-again"]') as HTMLButtonElement;
+    expect(button.textContent).toBe("Try again");
+    button.click();
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(button.disabled).toBe(true);
+    // Not a retryable failure: no Try again.
+    const other = document.createElement("div");
+    job.renderOverlay(other, "Keepr refused this sync.", true, { details: "x", copy: "y" }, { copy: async () => true, retry });
+    expect(other.querySelector('[data-keepr="try-again"]')).toBeNull();
+  });
+
+  it("the tab closed during a Sync is reported to Keepr as page_gone", () => {
+    const src = fs.readFileSync(path.join(__dirname, "..", "..", "chrome-extension", "job.js"), "utf8");
+    expect(src).toContain('root.addEventListener("pagehide", function () {');
+    expect(src).toContain('body: { code: "page_gone", message: PAGE_GONE_MESSAGE },');
+  });
+});
+
 describe("renderOverlay: Cancel (M8)", () => {
   // Founder (2026-10-02): "Stop sync" asks inline first. Mutations: the
   // confirm skipped (one click cancels) → red; "Keep syncing" cancelling → red.

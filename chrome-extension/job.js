@@ -901,7 +901,11 @@
 
     async function fail(code, message) {
       log("failed: " + code);
-      env.overlay.show(message, true, await overlayExtras());
+      var failExtras = await overlayExtras();
+      // C5 (founder): a cache Sync that failed for real says "Sync failed"
+      // and offers Try again (Keepr saved the chats it finished).
+      if (isCache) failExtras.retry = true;
+      env.overlay.show(message, true, failExtras);
       await env.api("POST", base + "/error", { code: code, message: message });
       return { outcome: code };
     }
@@ -1447,6 +1451,10 @@
   var IDLE_TAB_LINE = "Sync from Keepr";
   /** C3: an unanswered "Stop the sync?" closes itself after this long (the sync never pauses). */
   var STOP_CONFIRM_AUTO_CLOSE_MS = 10000;
+  /** C5 (founder): a real failure of a cache Sync — "Sync failed · Try again". */
+  var SYNC_FAILED_TITLE = "Sync failed";
+  var TRY_AGAIN_LABEL = "Try again";
+  var PAGE_GONE_MESSAGE = "The Google Messages tab was closed.";
 
   // Keepr brand (android-companion BrandMark): the indigo mark with an amber
   // dot; primary #4F46E5 (hover #4338CA); amber #F5A524 for paused/attention.
@@ -1681,7 +1689,8 @@
     }
     header.appendChild(badge);
 
-    var title = state === "syncing"
+    var retryable = state === "error" && !!(extras && extras.retry) && !!io.retry;
+    var title = retryable ? SYNC_FAILED_TITLE : state === "syncing"
       ? (expanded ? SYNCING_TITLE : chipTitle(text))
       : state === "paused" ? PAUSED_TITLE : state === "ask" ? ASK_TITLE : text;
     var line = el("div", "line", {
@@ -1720,6 +1729,18 @@
     if (!expanded) return;
 
     var bodyStyle = { marginTop: "8px", color: p.muted };
+    if (retryable) {
+      box.appendChild(el("div", "progress", bodyStyle, text));
+      var retry = button("try-again", TRY_AGAIN_LABEL, "primary");
+      retry.style.marginTop = "10px";
+      retry.addEventListener("click", function () {
+        retry.disabled = true;
+        Promise.resolve(io.retry()).then(function (ok) {
+          if (!ok) retry.disabled = false;
+        }, function () { retry.disabled = false; });
+      });
+      box.appendChild(retry);
+    }
     if (state === "syncing") {
       box.appendChild(el("div", "progress", bodyStyle, text));
       box.appendChild(el("div", "hint", { marginTop: "6px", color: p.text }, SYNCING_HINT));
@@ -2094,6 +2115,9 @@
     STOP_CONFIRM_ARM_MS: STOP_CONFIRM_ARM_MS,
     IDLE_TAB_LINE: IDLE_TAB_LINE,
     STOP_CONFIRM_AUTO_CLOSE_MS: STOP_CONFIRM_AUTO_CLOSE_MS,
+    SYNC_FAILED_TITLE: SYNC_FAILED_TITLE,
+    TRY_AGAIN_LABEL: TRY_AGAIN_LABEL,
+    PAGE_GONE_MESSAGE: PAGE_GONE_MESSAGE,
     tabPosition: tabPosition,
     windowLabel: windowLabel,
     mediaLine: mediaLine,
@@ -2241,6 +2265,9 @@
     renderOverlay(box, text, isError, extras, {
       copy: copyToClipboard, focus: focusKeepr, cancel: cancelJob, close: dismiss, stop: stopConfirm,
       rerender: function () { if (lastShown) showOverlay(lastShown.text, lastShown.isError, lastShown.extras); },
+      // C5: "Try again" — Keepr starts a new Sync (signed; only after a failed
+      // one); this tab runs it (the chats the failed one saved are skipped).
+      retry: retrySync,
       move: function () { if (mover) mover.moveToNextCorner(); },
       expanded: extras && extras.idle ? idleExpanded : syncExpanded,
       onExpand: function (open) {
@@ -2287,6 +2314,28 @@
     closeOverlay();
     void refreshIdle();
   }
+
+  /** C5: Try again after a failed Sync. Resolves true once the new run started here. */
+  function retrySync() {
+    return toWorker({ type: "keepr-retry" }).then(function (r) {
+      var jobId = r && r.ok && r.body && typeof r.body.jobId === "string" ? r.body.jobId : null;
+      if (!jobId || running) return false;
+      idleExpanded = false;
+      void start(jobId);
+      return true;
+    });
+  }
+
+  // C5 (founder): the tab closed (or navigated away) during a Sync is a real
+  // failure — Keepr is told at once (it saves the chats already finished),
+  // instead of waiting on a time limit.
+  root.addEventListener("pagehide", function () {
+    if (!currentJobId || !running) return;
+    void toWorker({
+      type: "keepr-job-api", method: "POST", path: "/job/" + currentJobId + "/error",
+      body: { code: "page_gone", message: PAGE_GONE_MESSAGE },
+    });
+  });
 
   /** The page's Cancel: POST /job/<this job>/cancel through the worker. */
   var currentJobId = null;

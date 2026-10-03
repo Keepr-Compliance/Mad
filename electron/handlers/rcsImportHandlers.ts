@@ -931,6 +931,14 @@ const bridge = new RcsExtensionBridge({
     return cacheStaging().stageImage(jobId, image, chatHash);
   },
   currentUserId,
+  // C5: "Try again" on the page — only after a failed Sync of the signed-in user.
+  onRetryRequested: async () => {
+    const userId = await currentUserId();
+    if (!userId) return { ok: false, status: 401, error: "signed_out" };
+    if (!getFailedRun(userId)) return { ok: false, status: 409, error: "nothing_to_retry", message: "There is no failed Sync to try again." };
+    const r = await startCacheJob({});
+    return r.ok ? { ok: true, jobId: r.job.jobId } : { ok: false, status: r.status, error: r.error, message: r.message };
+  },
   // C1 (founder): who the browser is linked to — masked by the bridge, signed /status only.
   currentUserEmail: async () => {
     try {

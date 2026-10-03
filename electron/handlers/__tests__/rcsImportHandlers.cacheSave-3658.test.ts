@@ -194,6 +194,16 @@ const startCache = () => handlers.get("rcs-import:start-cache-job")!({}, undefin
 const startTx = () => handlers.get("rcs-import:start-job")!({}, { transactionId: "tx-1" }) as Promise<{ success: boolean; error?: string }>;
 
 describe("a cache Sync being saved (SR B1, S1)", () => {
+  // C5: "Try again" from the page starts a new Sync only after a FAILED one.
+  // Mutation: no failed-run check → red.
+  it("Try again: only after a failed Sync of the signed-in user", async () => {
+    mockFailedRunStart = null;
+    expect(await bridgeOptions.onRetryRequested()).toMatchObject({ ok: false, status: 409, error: "nothing_to_retry" });
+    mockFailedRunStart = "2026-10-01T10:00:00.000Z";
+    expect(await bridgeOptions.onRetryRequested()).toEqual({ ok: true, jobId: "job-1" });
+    mockFailedRunStart = null;
+  });
+
   // SR F2 (quit): the running Sync is marked stopped BEFORE it is cancelled
   // (a quit may end the process right after). Mutation: the order swapped → red.
   it("quit: markStopped runs before cancelJob", async () => {

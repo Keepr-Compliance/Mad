@@ -215,6 +215,11 @@ export interface RcsExtensionBridgeOptions {
   onMediaCounts?: (userId: string, counts: { photosSeen: number; videosSeen: number }) => void;
   /** BACKLOG-3658: the signed-in user now; a job of another user is cancelled. */
   currentUserId?: () => Promise<string | null>;
+  /**
+   * C5 (founder): "Try again" on the page after a failed Sync — signed only;
+   * Keepr starts a new cache Sync (only when the last one failed).
+   */
+  onRetryRequested?: () => Promise<{ ok: true; jobId: string } | { ok: false; status: number; error: string; message?: string }>;
   /** C1 (founder): the signed-in user's email — masked, only in a SIGNED /status reply (the popup). */
   currentUserEmail?: () => Promise<string | null>;
   /** BACKLOG-3658: a job ended (finished, failed or cancelled). Once per job. */
@@ -705,6 +710,22 @@ export class RcsExtensionBridge {
         sendJson(res, 200, this.options.pairing
           ? { ok: true, paired: signedPairing !== null, minExtensionVersion: RCS_MIN_EXTENSION_VERSION }
           : { ok: true });
+        return;
+      }
+
+      // C5: "Try again" after a failed Sync — signed only.
+      if (path === "/cache/retry") {
+        if (!signedPairing) {
+          sendJson(res, 401, { error: "not_paired", message: NOT_PAIRED_MESSAGE });
+          return;
+        }
+        if (!this.options.onRetryRequested) {
+          sendJson(res, 501, { error: "unsupported" });
+          return;
+        }
+        const r = await this.options.onRetryRequested();
+        if (r.ok) sendJson(res, 200, { ok: true, jobId: r.jobId });
+        else sendJson(res, r.status, { error: r.error, ...(r.message ? { message: r.message } : {}) });
         return;
       }
 

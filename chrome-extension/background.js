@@ -597,6 +597,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // C2: the popup asks what to show each time it opens.
       popupState().then(sendResponse, fail);
       return true;
+    case "keepr-retry":
+      // C5: "Try again" on the page — signed; Keepr starts the new Sync.
+      bridgeFetch("/cache/retry", "{}", { requirePaired: true }).then(sendResponse, fail);
+      return true;
     case "keepr-open-messages":
       openMessages().then(sendResponse, fail);
       return true;

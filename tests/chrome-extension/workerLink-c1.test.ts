@@ -31,6 +31,7 @@ const EXTENSION_ID = "nlfohmjehedijceeelokclkglmjnlonj";
 type Listener = (m: Record<string, unknown>, s: { id: string }, r: (x: unknown) => void) => boolean;
 
 let currentUser: string | null = "user-a";
+let retryAllowed = true;
 let rows: RcsPairing[];
 let auth: RcsPairingAuth;
 let bridge: RcsExtensionBridge;
@@ -55,6 +56,7 @@ beforeEach(async () => {
     importImage: jest.fn(),
     currentUserId: async () => currentUser,
     currentUserEmail: async () => "agent.tester@example.test",
+    onRetryRequested: async () => (retryAllowed ? { ok: true, jobId: "job-retry" } : { ok: false, status: 409, error: "nothing_to_retry" }),
     jobs: new RcsJobRegistry(),
     pairing: auth,
     pairingMode: "dual",
@@ -169,6 +171,24 @@ describe("C1: reversed linking (the popup's 6-digit code, typed in Keepr)", () =
     await waitFor(() => rows.length === 1);
     expect(await w.send({ type: "keepr-popup-state" })).toMatchObject({ state: "linked", email: "a***@example.test" });
     expect(w.bodies.join("\n")).not.toContain("agent.tester");
+  });
+
+  // C5: "Try again" — signed only; Keepr answers with the new job.
+  // Mutation: the route open to unsigned callers → red.
+  it("Try again: signed /cache/retry starts the new Sync; refused unsigned or with nothing to retry", async () => {
+    const w = await worker();
+    expect((await w.send({ type: "keepr-retry" })).body).toMatchObject({ error: "not_paired" });
+    const l = (await w.send({ type: "keepr-link-start" })).link as { code: string };
+    auth.linkEnterCode("user-a", l.code);
+    await waitFor(() => rows.length === 1);
+    expect(await w.send({ type: "keepr-retry" })).toMatchObject({ ok: true, body: { ok: true, jobId: "job-retry" } });
+    retryAllowed = false;
+    expect(await w.send({ type: "keepr-retry" })).toMatchObject({ ok: false, status: 409 });
+    retryAllowed = true;
+    const unsigned = await fetch(`http://127.0.0.1:${port}/cache/retry`, {
+      method: "POST", headers: { "Content-Type": "application/json", Origin: RCS_EXTENSION_ORIGIN }, body: "{}",
+    });
+    expect(unsigned.status).toBe(401);
   });
 
   it("the popup's states: Keepr down, out of date, not linked, linking (L6)", async () => {
