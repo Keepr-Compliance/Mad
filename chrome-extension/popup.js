@@ -110,6 +110,28 @@
     if (view && view.version && state !== "out_of_date") box.appendChild(el(doc, "div", "muted", "Keepr extension " + view.version));
   }
 
+  /**
+   * Live (founder 2026-10-03): start / bring forward Keepr through its
+   * keepr:// link, WITHOUT a new tab — a link clicked in this page: Chrome
+   * hands an external protocol to the OS (asking the user once) and the page
+   * stays as it is. Only these two links (Keepr ignores any parameter).
+   */
+  function launchKeepr(doc, url) {
+    if (url !== "keepr://open" && url !== "keepr://link") return false;
+    try {
+      var a = doc.createElement("a");
+      a.setAttribute("href", url);
+      a.setAttribute("rel", "noopener");
+      a.style.display = "none";
+      (doc.body || doc.documentElement).appendChild(a);
+      a.click();
+      a.parentNode.removeChild(a);
+      return true;
+    } catch (_e) {
+      return false;
+    }
+  }
+
   function start(doc, chromeApi) {
     var box = doc.getElementById("keepr-popup");
     var view = null;
@@ -143,8 +165,15 @@
       now: function () { return Date.now(); },
       link: function () { ask({ type: "keepr-link-start" }).then(refresh); },
       cancel: function () { ask({ type: "keepr-link-cancel" }).then(refresh); },
-      openApp: function () { ask({ type: "keepr-open-app" }); },
-      openKeepr: function () { ask({ type: "keepr-focus" }); },
+      // Live (founder): Keepr not running → keepr://open; linking → keepr://link
+      // (its code screen) — from this popup, never a new tab.
+      openApp: function () { launchKeepr(doc, view && view.state === "linking" ? "keepr://link" : "keepr://open"); },
+      // Linked: signed /focus only (no tab); refused or unreachable → keepr://open.
+      openKeepr: function () {
+        ask({ type: "keepr-focus" }).then(function (r) {
+          if (!r || !r.ok) launchKeepr(doc, "keepr://open");
+        });
+      },
       openMessages: function () { ask({ type: "keepr-open-messages" }); },
       unlink: function () {
         confirmUnlink = false;
@@ -162,7 +191,7 @@
     return refresh();
   }
 
-  var api = { renderPopup: renderPopup, start: start, COPY: COPY, lastSyncText: lastSyncText, spaced: spaced };
+  var api = { launchKeepr: launchKeepr, renderPopup: renderPopup, start: start, COPY: COPY, lastSyncText: lastSyncText, spaced: spaced };
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;
   } else if (typeof document !== "undefined" && typeof chrome !== "undefined") {

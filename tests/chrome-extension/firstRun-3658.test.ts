@@ -55,7 +55,9 @@ describe("first-run (C4)", () => {
     expect(html).not.toMatch(/<input|keepr-pair|Got it/);
     expect(read("options.js")).not.toMatch(/sendMessage/);
     const types = Array.from(read("welcome.js").matchAll(/type: "([a-z-]+)"/g)).map((m) => m[1]);
-    expect(new Set(types)).toEqual(new Set(["keepr-link-start", "keepr-open-app", "keepr-popup-state"]));
+    expect(new Set(types)).toEqual(new Set(["keepr-link-start", "keepr-popup-state"]));
+    // Live (founder): Open Keepr from this page itself (keepr://), never a worker tab.
+    expect(read("welcome.js")).toContain('launchKeepr(doc, lastState === "linking" ? "keepr://link" : "keepr://open")');
   });
 
   it("step 2 links like the popup: Link → the code → linked (F5)", () => {

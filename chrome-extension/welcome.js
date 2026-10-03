@@ -63,9 +63,32 @@
     button("link", "Link", null, io.link);
   }
 
+  /**
+   * Live (founder 2026-10-03): start / bring forward Keepr through its
+   * keepr:// link, WITHOUT a new tab — a link clicked in this page: Chrome
+   * hands an external protocol to the OS (asking the user once) and the page
+   * stays as it is. Only these two links (Keepr ignores any parameter).
+   */
+  function launchKeepr(doc, url) {
+    if (url !== "keepr://open" && url !== "keepr://link") return false;
+    try {
+      var a = doc.createElement("a");
+      a.setAttribute("href", url);
+      a.setAttribute("rel", "noopener");
+      a.style.display = "none";
+      (doc.body || doc.documentElement).appendChild(a);
+      a.click();
+      a.parentNode.removeChild(a);
+      return true;
+    } catch (_e) {
+      return false;
+    }
+  }
+
   function start(doc, chromeApi) {
     var box = doc.getElementById("keepr-welcome-link");
     var timer = null;
+    var lastState = null;
     var ask = function (message) {
       return new Promise(function (resolve) {
         try {
@@ -80,10 +103,12 @@
     };
     var io = {
       link: function () { ask({ type: "keepr-link-start" }).then(refresh); },
-      openApp: function () { ask({ type: "keepr-open-app" }); },
+      // Live (founder): from this page, never a new tab — linking: its code screen.
+      openApp: function () { launchKeepr(doc, lastState === "linking" ? "keepr://link" : "keepr://open"); },
     };
     function refresh() {
       return ask({ type: "keepr-popup-state" }).then(function (view) {
+        lastState = view && view.state;
         renderLinkStep(doc, box, view, io);
         if (timer) clearTimeout(timer);
         if (view && view.state === "linking") timer = setTimeout(refresh, 1000);
@@ -98,7 +123,7 @@
     return refresh();
   }
 
-  var api = { renderLinkStep: renderLinkStep, start: start, COPY: COPY };
+  var api = { launchKeepr: launchKeepr, renderLinkStep: renderLinkStep, start: start, COPY: COPY };
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;
   } else if (typeof document !== "undefined" && typeof chrome !== "undefined") {

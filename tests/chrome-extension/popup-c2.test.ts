@@ -124,6 +124,76 @@ describe("the popup (C2)", () => {
 // C2: the worker's "Go to Google Messages" and "Open Keepr" (keepr://link).
 // Mutations: a second Messages tab opened when one exists → red; Open Keepr
 // not via keepr://link → red.
+// Live (founder 2026-10-03): the popup's Open Keepr. Linked + Keepr running:
+// a signed /focus only, no tab. Keepr not running (or /focus refused):
+// keepr://open from the popup itself — never a new tab. Linking: keepr://link.
+// Mutations: a tab opened → red; no launch when /focus fails → red; a
+// launch although /focus worked → red.
+describe("the popup's Open Keepr (live)", () => {
+  async function popupWith(state: Record<string, unknown>, focusOk: boolean) {
+    document.body.innerHTML = '<main id="keepr-popup"></main>';
+    const sent: string[] = [];
+    const launched: string[] = [];
+    const click = jest.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      launched.push(this.getAttribute("href") || "");
+    });
+    const create = jest.fn();
+    const chromeStub = {
+      runtime: {
+        lastError: undefined,
+        sendMessage: (m: { type: string }, cb: (r: unknown) => void) => {
+          sent.push(m.type);
+          cb(m.type === "keepr-popup-state" ? state : m.type === "keepr-focus" ? { ok: focusOk, launch: !focusOk } : { ok: true });
+        },
+      },
+      tabs: { create },
+    };
+    await popup.start(document, chromeStub);
+    return { sent, launched, click, create };
+  }
+  afterEach(() => jest.restoreAllMocks());
+
+  it("linked, Keepr running: a signed /focus only", async () => {
+    const p = await popupWith({ state: "linked" }, true);
+    (document.querySelector('[data-keepr="open-keepr"]') as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(p.sent).toContain("keepr-focus");
+    expect(p.launched).toEqual([]);
+    expect(p.create).not.toHaveBeenCalled();
+  });
+
+  it("linked, /focus refused or Keepr away: keepr://open from the popup", async () => {
+    const p = await popupWith({ state: "linked" }, false);
+    (document.querySelector('[data-keepr="open-keepr"]') as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(p.launched).toEqual(["keepr://open"]);
+    expect(p.create).not.toHaveBeenCalled();
+  });
+
+  it("Keepr not running: keepr://open; linking: keepr://link — no worker tab", async () => {
+    const down = await popupWith({ state: "keepr_down" }, false);
+    (document.querySelector('[data-keepr="open-app"]') as HTMLButtonElement).click();
+    expect(down.launched).toEqual(["keepr://open"]);
+    expect(down.sent).not.toContain("keepr-open-app");
+    jest.restoreAllMocks();
+    const linking = await popupWith({ state: "linking", link: { status: "waiting", code: "123456", expiresAt: Date.now() + 60_000 } }, false);
+    (document.querySelector('[data-keepr="open-app"]') as HTMLButtonElement).click();
+    expect(linking.launched).toEqual(["keepr://link"]);
+  });
+
+  it("launchKeepr: only keepr://open and keepr://link", () => {
+    const launched: string[] = [];
+    jest.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      launched.push(this.getAttribute("href") || "");
+    });
+    expect(popup.launchKeepr(document, "keepr://callback?access_token=x")).toBe(false);
+    expect(popup.launchKeepr(document, "https://example.test")).toBe(false);
+    expect(popup.launchKeepr(document, "keepr://open")).toBe(true);
+    expect(launched).toEqual(["keepr://open"]);
+    expect(document.querySelectorAll("a")).toHaveLength(0);
+  });
+});
+
 describe("the popup's buttons, in the worker (C2)", () => {
   const SOURCE = fs.readFileSync(path.join(__dirname, "..", "..", "chrome-extension", "background.js"), "utf8");
   type Listener = (m: Record<string, unknown>, s: { id: string }, r: (x: unknown) => void) => boolean;
@@ -161,9 +231,12 @@ describe("the popup's buttons, in the worker (C2)", () => {
     expect(none.calls).toEqual([["create", "https://messages.google.com/web/conversations"]]);
   });
 
-  it("Open Keepr (not running, or linking): keepr://link", async () => {
+  // Live (founder): the worker never opens a tab for Keepr any more.
+  it("no keepr:// tab from the worker", async () => {
     const w = worker([]);
-    await w.send({ type: "keepr-open-app" });
-    expect(w.calls[0]).toEqual(["create", "keepr://link"]);
+    void w.send({ type: "keepr-open-app" }); // no such message any more: never answered
+    await new Promise((r) => setTimeout(r, 0));
+    expect(w.calls).toEqual([]);
+    expect(SOURCE).not.toMatch(/tabs[.](create|update)[(][^)]*keepr:/);
   });
 });

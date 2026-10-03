@@ -424,13 +424,25 @@
   });
 
   var started = false;
+  var EYES_BACKOFF_START_MS = 2000;
+  var EYES_BACKOFF_MAX_MS = 60000;
+  var backoff = EYES_BACKOFF_START_MS;
+  var nextTry = 0;
   async function start() {
     if (started || !ownsPage()) return;
     var list = document.querySelector(LIST);
     if (!list) return;
+    if (Date.now() < nextTry) return;
     // Only when Keepr answers for a signed-in user: no eyes that cannot save.
     var r = await toWorker({ type: "keepr-exclusions-list" });
-    if (!r || !r.ok || !r.body || !Array.isArray(r.body.conversationIds)) return;
+    if (!r || !r.ok || !r.body || !Array.isArray(r.body.conversationIds)) {
+      // Live: refused (not linked here) or Keepr away — ask less and less
+      // often (2 s, 4 s … a minute), never a 2-second spin.
+      backoff = Math.min(EYES_BACKOFF_MAX_MS, backoff * 2);
+      nextTry = Date.now() + backoff;
+      return;
+    }
+    backoff = EYES_BACKOFF_START_MS;
     started = true;
     excluded = {};
     r.body.conversationIds.forEach(function (id) {

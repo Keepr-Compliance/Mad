@@ -149,6 +149,61 @@ describe("service worker: Open Keepr", () => {
   });
 });
 
+// Live (founder 2026-10-03): Keepr refused the extension's calls
+// ("signature_required") every 2 s and Open Keepr did nothing. A LINKED worker
+// signs every call; an UNLINKED one, refused because Keepr has a link it
+// lacks, stops asking for a minute and tells the page to launch keepr://open.
+// Mutations: a linked call sent unsigned → red; no backoff after the refusal
+// → red; /focus refused without "launch" → red.
+describe("service worker: signed when linked; quiet when Keepr has a link it lacks", () => {
+  const ROUTE_MESSAGES: Array<Record<string, unknown>> = [
+    { type: "keepr-focus" },
+    { type: "keepr-exclusions-list" },
+    { type: "keepr-exclusions-set", conversationId: "c-1", excluded: true },
+    { type: "keepr-popup-state" },
+    { type: "keepr-check-pending" },
+    { type: "keepr-retry" },
+    { type: "keepr-hello", paired: true },
+    { type: "keepr-job-api", method: "POST", path: "/job/j-1/progress", body: {} },
+  ];
+
+  it("linked: every bridge call carries the signature (fetch spy)", async () => {
+    const w = await loadWorker({ paired: true });
+    for (const m of ROUTE_MESSAGES) await w.send(m);
+    const calls = w.startupCalls.concat(w.fetchStub.mock.calls);
+    expect(calls.length).toBeGreaterThanOrEqual(ROUTE_MESSAGES.length);
+    for (const [url, init] of calls) {
+      expect([url, typeof (init.headers || {})["X-Keepr-Sig"]]).toEqual([url, "string"]);
+    }
+  });
+
+  it("linked: Open Keepr is a signed /focus and nothing else (no tab)", async () => {
+    const w = await loadWorker({ paired: true });
+    w.fetchStub.mockImplementationOnce(async (url: string, init: { method: string; headers?: Record<string, string> }) =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      signedReply(url, init, 200, { ok: true }) as any,
+    );
+    expect(await w.send({ type: "keepr-focus" })).toEqual({ ok: true });
+    expect(w.fetchStub).toHaveBeenCalledTimes(1);
+    expect(w.chromeStub.tabs.update).not.toHaveBeenCalled();
+  });
+
+  it("not linked here while Keepr has a link: one refusal, then a minute of silence; Open Keepr says launch", async () => {
+    const w = await loadWorker();
+    w.fetchStub.mockImplementation(async (url: string) =>
+      ({ status: url.endsWith("/hello") ? 200 : 401, json: async () => (url.endsWith("/hello") ? { ok: true } : { error: "signature_required" }) }) as never,
+    );
+    const first = await w.send({ type: "keepr-exclusions-list" });
+    expect(first).toMatchObject({ ok: false, status: 401, body: { error: "not_linked_here" } });
+    expect(String((first.body as { message: string }).message)).toBe("Not linked. Click the Keepr icon in Chrome's toolbar to link.");
+    expect(w.fetchStub).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 5; i++) await w.send({ type: "keepr-exclusions-list" });
+    expect(w.fetchStub).toHaveBeenCalledTimes(1);
+    expect(await w.send({ type: "keepr-focus" })).toMatchObject({ ok: false, launch: true });
+    expect(w.fetchStub).toHaveBeenCalledTimes(1);
+  });
+});
+
 // BACKLOG-3658: presence (/hello) and the page's "Sync to Keepr".
 // Mutations that turn this block red: drop the startup hello; drop the
 // once-a-minute throttle (or its stored time); send user data or `paired` in

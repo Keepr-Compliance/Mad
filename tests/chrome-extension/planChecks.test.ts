@@ -328,13 +328,15 @@ describe("the overlay panel (BACKLOG-3641 founder UX)", () => {
     expect(el.querySelector("[data-keepr=line]")?.textContent).toBe("Sign in to Google Messages, then click Sync in Keepr again");
   });
 
-  it("Open Keepr that Keepr could not honour says where to look", async () => {
+  // Live (founder): a refused /focus falls back to keepr://open (the page's
+  // focusKeepr) — the button never sends the user to the taskbar.
+  it("Open Keepr that Keepr could not honour keeps its words", async () => {
     const el = panel();
     job.renderOverlay(el, job.DONE_LINE, false, { details: "d", copy: "c" }, { copy: async () => true, focus: async () => false });
     (el.querySelector("[data-keepr=open-keepr]") as HTMLElement).click();
     await Promise.resolve();
     await Promise.resolve();
-    expect(el.querySelector("[data-keepr=open-keepr]")?.textContent).toBe("Open Keepr from the taskbar");
+    expect(el.querySelector("[data-keepr=open-keepr]")?.textContent).toBe("Open Keepr");
   });
 
   it("page text never becomes markup (P8)", () => {

@@ -1875,14 +1875,8 @@
         copyButton.textContent = "Copy failed";
       });
     });
-    open.addEventListener("click", function () {
-      if (!io.focus) return;
-      Promise.resolve(io.focus()).then(function (ok) {
-        if (!ok) open.textContent = "Open Keepr from the taskbar";
-      }, function () {
-        open.textContent = "Open Keepr from the taskbar";
-      });
-    });
+    // Live (founder): /focus, else keepr://open — the button never changes its words.
+    open.addEventListener("click", openKeepr);
   }
 
   // ---------------------------------------------------------------------------
@@ -2121,6 +2115,7 @@
 
   var api = {
     bootPlan: bootPlan,
+    launchKeepr: launchKeepr,
     buildBox: buildBox,
     themeFromColor: themeFromColor,
     pageTheme: pageTheme,
@@ -2393,10 +2388,41 @@
     },
   };
 
-  /** "Open Keepr": the worker asks the bridge (POST /focus) to bring Keepr forward. */
+  /**
+   * "Open Keepr": the worker asks the bridge (POST /focus, signed when linked)
+   * to bring Keepr forward — no tab. Refused or unreachable: keepr://open from
+   * this page (no new tab). Resolves true once one of them was done.
+   */
   function focusKeepr() {
-    return toWorker({ type: "keepr-focus" }).then(function (r) { return !!(r && r.ok); });
+    return toWorker({ type: "keepr-focus" }).then(function (r) {
+      if (r && r.ok) return true;
+      return launchKeepr(document, "keepr://open");
+    }, function () {
+      return launchKeepr(document, "keepr://open");
+    });
   }
+  /**
+   * Live (founder 2026-10-03): start / bring forward Keepr through its
+   * keepr:// link, WITHOUT a new tab — a link clicked in this page: Chrome
+   * hands an external protocol to the OS (asking the user once) and the page
+   * stays as it is. Only these two links (Keepr ignores any parameter).
+   */
+  function launchKeepr(doc, url) {
+    if (url !== "keepr://open" && url !== "keepr://link") return false;
+    try {
+      var a = doc.createElement("a");
+      a.setAttribute("href", url);
+      a.setAttribute("rel", "noopener");
+      a.style.display = "none";
+      (doc.body || doc.documentElement).appendChild(a);
+      a.click();
+      a.parentNode.removeChild(a);
+      return true;
+    } catch (_e) {
+      return false;
+    }
+  }
+
 
   /** navigator.clipboard, else a hidden textarea + execCommand("copy"). */
   function copyToClipboard(text) {

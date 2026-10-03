@@ -81,7 +81,9 @@ async function currentPairing() {
     try {
       pairCache = (await keyStore().get()) || null;
     } catch (_err) {
-      pairCache = null;
+      // Live: a failed read is NOT "no link" — read again next time (an
+      // unsigned call while a key exists would be refused by Keepr).
+      return null;
     }
   }
   return pairCache;
@@ -146,12 +148,29 @@ async function rawPost(path, bodyText, headers) {
  * the pairing is forgotten. Unpaired: `requirePaired` calls (every job call)
  * are refused here, never sent.
  */
+/** The routes an unlinked extension may always call (unsigned): presence and linking. */
+const UNSIGNED_ALWAYS = new Set(["/hello", "/link/start", "/link/poll", "/link/finish"]);
+const NOT_LINKED_HERE_BACKOFF_MS = 60 * 1000;
+let notLinkedHereUntil = 0;
+function NOT_LINKED_HERE_REPLY() {
+  return { ok: false, status: 401, body: { error: "not_linked_here", message: NOT_PAIRED } };
+}
+
 async function bridgeFetch(path, bodyText, opts) {
   const P = pairLib();
   const pairing = P ? await currentPairing() : null;
   if (!pairing) {
     if (opts && opts.requirePaired) return { ok: false, status: 0, body: { error: "not_paired", message: NOT_PAIRED } };
+    // Live (founder 2026-10-03): Keepr has a link for its user that this
+    // browser lacks — it refuses every unsigned call. Don't keep asking
+    // (the page's eyes polled every 2 s): one refusal holds them off a minute.
+    const gated = !UNSIGNED_ALWAYS.has(path);
+    if (gated && Date.now() < notLinkedHereUntil) return NOT_LINKED_HERE_REPLY();
     const r = await rawPost(path, bodyText);
+    if (gated && r.status === 401 && r.body && r.body.error === "signature_required") {
+      notLinkedHereUntil = Date.now() + NOT_LINKED_HERE_BACKOFF_MS;
+      return NOT_LINKED_HERE_REPLY();
+    }
     return { ok: r.status >= 200 && r.status < 300, status: r.status, body: r.body };
   }
   const ts = String(Date.now());
@@ -209,6 +228,7 @@ async function saveLink(pairId, key) {
   const pairing = { pairId, key, pairedAt: Date.now() };
   await keyStore().put(pairing);
   pairCache = pairing;
+  notLinkedHereUntil = 0;
 }
 
 /** "Link" in the popup: a code, a session with Keepr, then wait for the user. */
@@ -291,7 +311,8 @@ async function unlink() {
 async function popupState() {
   const version = extensionVersion();
   const pairing = await currentPairing();
-  const hello = await rawPost("/hello", JSON.stringify({ version }));
+  // Live: signed when linked, like every other call (the version only).
+  const hello = await bridgeFetch("/hello", JSON.stringify({ version }), {});
   if (hello.status === 0) return { state: "keepr_down", version, link: linkView() };
   const min = hello.body && typeof hello.body.minExtensionVersion === "string" ? hello.body.minExtensionVersion : null;
   if (min && compareVersions(version, min) < 0) return { state: "out_of_date", version, minVersion: min };
@@ -310,7 +331,6 @@ async function popupState() {
 }
 
 const MESSAGES_URL = "https://messages.google.com/web/conversations";
-const KEEPR_LINK_URL = "keepr://link";
 
 /** C2 "Go to Google Messages": the open Messages tab, else a new one. */
 async function openMessages() {
@@ -322,21 +342,6 @@ async function openMessages() {
       return { ok: true };
     }
     await chrome.tabs.create({ url: MESSAGES_URL });
-    return { ok: true };
-  } catch (_err) {
-    return { ok: false };
-  }
-}
-
-/**
- * C2 "Open Keepr" while Keepr is not running (or while linking): keepr://link
- * starts Keepr and opens its link screen (the OS asks the user once). The tab
- * the protocol needs is closed again.
- */
-async function openApp() {
-  try {
-    const tab = await chrome.tabs.create({ url: KEEPR_LINK_URL, active: false });
-    if (tab && typeof tab.id === "number") setTimeout(() => void chrome.tabs.remove(tab.id).catch(() => undefined), 3000);
     return { ok: true };
   } catch (_err) {
     return { ok: false };
@@ -405,10 +410,14 @@ async function lastSyncAt() {
   }
 }
 
-/** POST /focus: Keepr brings itself to the front. Resolves {ok}. */
+/**
+ * POST /focus: Keepr brings itself to the front (signed when linked — never a
+ * tab). Resolves {ok}. Not ok (Keepr not running, or this browser not linked
+ * while Keepr has a link): the caller launches keepr://open from its own page.
+ */
 async function focusKeepr() {
   const r = await bridgeFetch("/focus", "", {});
-  return r.status === 200 ? { ok: true } : { ok: false, error: (r.body && r.body.message) || NOT_RUNNING };
+  return r.status === 200 ? { ok: true } : { ok: false, launch: true, error: (r.body && r.body.message) || NOT_RUNNING };
 }
 
 // ---------------------------------------------------------------------------
@@ -563,9 +572,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     case "keepr-open-messages":
       openMessages().then(sendResponse, fail);
-      return true;
-    case "keepr-open-app":
-      openApp().then(sendResponse, fail);
       return true;
     case "keepr-link-start":
       linkStart().then(sendResponse, fail);

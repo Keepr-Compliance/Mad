@@ -28,7 +28,8 @@ import {
 } from "electron";
 import path from "path";
 import log from "electron-log";
-import { isRcsLinkDeepLink } from "./utils/rcsLinkDeepLink";
+import { isRcsLinkDeepLink, isRcsOpenDeepLink } from "./utils/rcsLinkDeepLink";
+import { bringAppToFrontOrFlash } from "./utils/bringAppToFront";
 import {
   buildFirstRunNotice,
   getAppliedAppDataPaths,
@@ -512,6 +513,15 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
       return;
     }
 
+    // Live (founder): keepr://open — the extension's "Open Keepr" fallback.
+    // ONLY shows + focuses the main window (flashes the taskbar on Windows if
+    // focus is refused); nothing is read from the URL.
+    if (isRcsOpenDeepLink(url)) {
+      log.info("[DeepLink] Open requested");
+      bringAppToFrontOrFlash(mainWindow);
+      return;
+    }
+
     // Support multiple path formats: //callback, /callback, or host=callback
     const isCallback =
       parsed.pathname === "//callback" ||
@@ -969,11 +979,9 @@ app.on("second-instance", (_event, commandLine) => {
     handleDeepLinkCallback(url);
   }
 
-  // Focus main window when second instance is attempted
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
-  }
+  // Focus main window when second instance is attempted: restored, shown,
+  // focused — and on Windows the taskbar flashes if focus is refused.
+  if (mainWindow && !mainWindow.isDestroyed()) bringAppToFrontOrFlash(mainWindow);
 });
 
 /**
