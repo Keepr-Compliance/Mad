@@ -1333,6 +1333,8 @@
   /** Founder (2026-10-02): the page's stop, with an inline confirm. */
   var STOP_SYNC_LABEL = "Stop sync";
   var STOP_SYNC_QUESTION = "Stop the sync? Nothing from this run will be saved.";
+  /** SR: clicks on the confirm's Stop within this time after it opened are ignored (a double-click). */
+  var STOP_CONFIRM_ARM_MS = 400;
   var PAUSED_BODY = "Keep this Chrome window visible — Sync continues when it's back.";
   PAUSE_BODIES[CONNECTING_TEXT] = CONNECTING_TEXT + " Sync continues when it's back.";
   PAUSE_BODIES[UNREACHABLE_TEXT] = UNREACHABLE_TEXT + ". Sync continues when it's back.";
@@ -1759,23 +1761,37 @@
       confirmRow.appendChild(stopNo);
       confirmBox.appendChild(confirmRow);
       box.appendChild(confirmBox);
+      // SR: the box is rebuilt on every progress line, so the confirm's state
+      // lives in io.stop (kept by the page across renders) until the user
+      // answers or the job ends: "closed" | "open" | "stopping".
+      var stop = io.stop || { state: "closed", openedAt: 0 };
+      var now = function () { return io.now ? io.now() : Date.now(); };
+      var paint = function () {
+        confirmBox.style.display = stop.state === "closed" ? "none" : "block";
+        cancel.style.display = stop.state === "closed" ? "" : "none";
+        stopYes.disabled = stop.state === "stopping";
+        stopNo.disabled = stop.state === "stopping";
+        stopYes.textContent = stop.state === "stopping" ? "Stopping…" : STOP_SYNC_LABEL;
+      };
+      paint();
       cancel.addEventListener("click", function () {
-        confirmBox.style.display = "block";
-        cancel.style.display = "none";
+        stop.state = "open";
+        stop.openedAt = now();
+        paint();
       });
       stopNo.addEventListener("click", function () {
-        confirmBox.style.display = "none";
-        cancel.style.display = "";
+        stop.state = "closed";
+        paint();
       });
       stopYes.addEventListener("click", function () {
-        if (!io.cancel) return;
-        stopYes.disabled = true;
-        stopNo.disabled = true;
-        stopYes.textContent = "Stopping…";
+        if (!io.cancel || stop.state !== "open") return;
+        // SR: an accidental double-click on "Stop sync" is not a confirm.
+        if (now() - stop.openedAt < STOP_CONFIRM_ARM_MS) return;
+        stop.state = "stopping";
+        paint();
         var undo = function () {
-          stopYes.disabled = false;
-          stopNo.disabled = false;
-          stopYes.textContent = STOP_SYNC_LABEL;
+          stop.state = "open";
+          paint();
         };
         Promise.resolve(io.cancel()).then(function (ok) {
           if (!ok) undo();
@@ -2014,6 +2030,7 @@
     IDLE_CHIP_DOWN: IDLE_CHIP_DOWN,
     IDLE_CHIP_PAIR: IDLE_CHIP_PAIR,
     STOP_SYNC_QUESTION: STOP_SYNC_QUESTION,
+    STOP_CONFIRM_ARM_MS: STOP_CONFIRM_ARM_MS,
     PAIRED_TEXT: PAIRED_TEXT,
     IDLE_HOW: IDLE_HOW,
     idleReachability: idleReachability,
@@ -2117,6 +2134,8 @@
   // The pill's ▾/▴ (kept across progress lines); the last thing shown, to redraw it.
   var syncExpanded = false;
   var idleExpanded = false;
+  /** SR: the "Stop the sync?" confirm, kept across re-renders until answered or the job ends. */
+  var stopConfirm = { state: "closed", openedAt: 0 };
   var lastShown = null;
   function showOverlay(text, isError, extras) {
     if (!document.body) return;
@@ -2149,8 +2168,10 @@
       root.addEventListener("resize", function () { if (mover) mover.keepOnScreen(); });
     }
     lastShown = { text: text, isError: isError, extras: extras };
+    // The job is no longer running (done, failed, idle): the confirm is over.
+    if (!(extras && extras.cancel)) stopConfirm = { state: "closed", openedAt: 0 };
     renderOverlay(box, text, isError, extras, {
-      copy: copyToClipboard, focus: focusKeepr, cancel: cancelJob, close: dismiss,
+      copy: copyToClipboard, focus: focusKeepr, cancel: cancelJob, close: dismiss, stop: stopConfirm,
       move: function () { if (mover) mover.moveToNextCorner(); },
       expanded: extras && extras.idle ? idleExpanded : syncExpanded,
       onExpand: function (open) {

@@ -796,7 +796,8 @@ describe("renderOverlay: Cancel (M8)", () => {
     const panel = document.createElement("div");
     document.body.appendChild(panel);
     const cancel = jest.fn(async () => true);
-    job.renderOverlay(panel, "Chat 1 of 3…", false, { cancel: true }, { copy: async () => true, cancel, expanded: true });
+    let clock = 1_000;
+    job.renderOverlay(panel, "Chat 1 of 3…", false, { cancel: true }, { copy: async () => true, cancel, expanded: true, now: () => clock });
     expect(panel.querySelectorAll('[data-keepr="cancel"]')).toHaveLength(1);
     const button = panel.querySelector('[data-keepr="cancel"]') as HTMLButtonElement;
     expect(button.textContent).toBe("Stop sync");
@@ -810,11 +811,62 @@ describe("renderOverlay: Cancel (M8)", () => {
     expect(cancel).not.toHaveBeenCalled();
     expect(confirm.style.display).toBe("none");
     button.click();
+    clock += job.STOP_CONFIRM_ARM_MS;
     const yes = panel.querySelector('[data-keepr="stop-yes"]') as HTMLButtonElement;
     yes.click();
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(yes.disabled).toBe(true);
     expect(yes.textContent).toBe("Stopping…");
+  });
+
+  // SR (f7aaa4486): the box is rebuilt on every progress line. Mutations: the
+  // confirm state not kept across renders → red; the 400 ms arm removed → red;
+  // the state not cleared when the job ends → red.
+  it("the open confirm survives the next progress line and is answered there", () => {
+    const panel = document.createElement("div");
+    const cancel = jest.fn(async () => true);
+    let clock = 5_000;
+    const stop = { state: "closed", openedAt: 0 };
+    const io = () => ({ copy: async () => true, cancel, expanded: true, now: () => clock, stop });
+    job.renderOverlay(panel, "Chat 1 of 3…", false, { cancel: true }, io());
+    (panel.querySelector('[data-keepr="cancel"]') as HTMLButtonElement).click();
+    clock += 1_000;
+    job.renderOverlay(panel, "Chat 2 of 3…", false, { cancel: true }, io());
+    const confirm = panel.querySelector('[data-keepr="stop-confirm"]') as HTMLElement;
+    expect(confirm.style.display).toBe("block");
+    expect((panel.querySelector('[data-keepr="cancel"]') as HTMLElement).style.display).toBe("none");
+    (panel.querySelector('[data-keepr="stop-yes"]') as HTMLButtonElement).click();
+    expect(cancel).toHaveBeenCalledTimes(1);
+    // While stopping, a re-render keeps "Stopping…".
+    job.renderOverlay(panel, "Chat 2 of 3…", false, { cancel: true }, io());
+    const yes = panel.querySelector('[data-keepr="stop-yes"]') as HTMLButtonElement;
+    expect(yes.textContent).toBe("Stopping…");
+    expect(yes.disabled).toBe(true);
+  });
+
+  it("a double-click on Stop sync is not a confirm (Stop ignored for 400 ms after opening)", () => {
+    const panel = document.createElement("div");
+    const cancel = jest.fn(async () => true);
+    let clock = 5_000;
+    job.renderOverlay(panel, "Chat 1 of 3…", false, { cancel: true }, { copy: async () => true, cancel, expanded: true, now: () => clock });
+    (panel.querySelector('[data-keepr="cancel"]') as HTMLButtonElement).click();
+    const yes = panel.querySelector('[data-keepr="stop-yes"]') as HTMLButtonElement;
+    clock += 50;
+    yes.click();
+    clock += job.STOP_CONFIRM_ARM_MS - 100;
+    yes.click();
+    expect(cancel).not.toHaveBeenCalled();
+    expect(job.STOP_CONFIRM_ARM_MS).toBe(400);
+    clock += 100;
+    yes.click();
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("the page keeps the confirm across renders and drops it when the job ends", () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const src = require("fs").readFileSync(require("path").join(__dirname, "..", "..", "chrome-extension", "job.js"), "utf8") as string;
+    expect(src).toContain("close: dismiss, stop: stopConfirm,");
+    expect(src).toContain(`if (!(extras && extras.cancel)) stopConfirm = { state: "closed", openedAt: 0 };`);
   });
 
   it("the page's stop is a signed job call that says it was the page (ended_by=user_page)", () => {
