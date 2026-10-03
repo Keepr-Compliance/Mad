@@ -672,7 +672,7 @@
     }
     var progress = { listed: 0, candidates: 0, checked: 0, skipped: 0, notChecked: 0 };
     var totals = { chats: 0, messages: 0, images: 0, reactions: 0, historyConfirmed: { marker: 0, first_page: 0, no_overflow: 0, date_floor: 0, none: 0 },
-      depth: { limit: 0, start: 0, partial: 0, gaps: 0, gapsRecovered: 0, floorDays: null }, removedByUser: 0, imagesNotKept: 0, notText: 0, noMessagesYet: 0, notSynced: 0 };
+      depth: { limit: 0, start: 0, partial: 0, gaps: 0, gapsRecovered: 0, floorDays: null }, removedByUser: 0, imagesNotKept: 0, notText: 0, noMessagesYet: 0, notSynced: 0, alreadySaved: 0 };
     var contactsWithoutPhone = 0;
     // SR M: every photo / video bubble against what was saved (counts only).
     var media = {
@@ -1104,6 +1104,12 @@
         log("  match=" + (isMatch ? "yes" : "no"));
         if (!isMatch) continue;
         matchedCount += 1;
+        // 3671 P3 "Try again": the failed run already saved this chat in full.
+        if (isCache && match.body && match.body.skip === true) {
+          totals.alreadySaved += 1;
+          log("  saved by the last run: skipped");
+          continue;
+        }
 
         var ready = await env.scan.waitForMessageSwap(env.doc, before, {
           sleep: env.sleep,
@@ -1381,6 +1387,8 @@
       notChecked: progress.notChecked,
       notText: totals.notText,
       noMessagesYet: totals.noMessagesYet,
+      // 3671 P3: chats the failed run already saved (skipped on "Try again"; a count).
+      alreadySaved: totals.alreadySaved,
       connection: connection,
       // SR M: photo / video counts (telemetry; counts only).
       media: media,

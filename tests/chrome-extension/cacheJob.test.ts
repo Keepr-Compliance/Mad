@@ -260,6 +260,8 @@ function cacheEnv(opts: {
   claimExtra?: Record<string, unknown>;
   /** SR (2026-10-02): /match's floorMs per conversation id (a deal chat). */
   matchFloor?: Record<string, number>;
+  /** 3671 P3 "Try again": /match says skip for these conversation ids. */
+  matchSkip?: string[];
   /** The history load's stop reason (default "floor"). */
   historyStop?: string;
 }) {
@@ -286,6 +288,7 @@ function cacheEnv(opts: {
           body: {
             ...(opts.keepImages === undefined ? { matched: true } : { matched: true, keepImages: opts.keepImages }),
             ...(floorMs !== undefined ? { floorMs } : {}),
+            ...(opts.matchSkip && body && opts.matchSkip.includes(body.conversationId as string) ? { skip: true } : {}),
           },
         };
       }
@@ -697,6 +700,22 @@ describe("runJob: a cache Sync", () => {
   // ignored → red; applied to every chat → red; deal chats not queued after
   // the pending ones and before the rest → red; mustSeeDeep not passed to the
   // list scan → red; /chat without reachedFloor (or true after a cap) → red.
+  // 3671 P3 "Try again": a chat Keepr says the failed run saved is skipped
+  // (no history read, no /chat) and counted. Mutation: skip ignored → red.
+  it("Try again: a chat the failed run already saved is skipped and counted", async () => {
+    const t = cacheEnv({
+      rows: ROWS,
+      numbers: { [id(0)]: ["+15555550101"], [id(1)]: ["+15555550102"] },
+      matchSkip: [id(0)],
+    });
+    await job.runJob(JOB, t.env);
+    expect(t.floors).toHaveLength(1);
+    const chats = t.calls.filter(([, p]) => p.endsWith("/chat")).map(([, , b]) => b!.conversationId);
+    expect(chats).toEqual([id(1)]);
+    const fin = t.calls.find(([, p]) => p.endsWith("/finish"))![2] as { alreadySaved: number };
+    expect(fin.alreadySaved).toBe(1);
+  });
+
   describe("deal chats (SR 2026-10-02)", () => {
     const JAN = new Date(2026, 0, 10).getTime();
 
