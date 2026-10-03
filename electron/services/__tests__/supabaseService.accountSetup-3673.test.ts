@@ -59,6 +59,9 @@ describe("supabaseService — setup-finished record (BACKLOG-3673)", () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    // clearAllMocks keeps queued mockReturnValueOnce values; drop them so an
+    // unconsumed one cannot leak into the next test.
+    mockSupabaseClient.from.mockReset();
     jest.resetModules();
     svc = (await import("../supabaseService")).default;
   });
