@@ -61,6 +61,29 @@
     return out;
   }
 
+  /**
+   * UX redesign (C1, founder 2026-10-03): REVERSED linking. The extension's
+   * popup makes a 6-digit code (never sent anywhere) and the user types it
+   * into Keepr. Same SPAKE2: the popup is A, Keepr is B. 2 minutes, 5 tries,
+   * one pending session (Keepr side).
+   */
+  var LINK_CODE_LENGTH = 6;
+
+  /** A fresh 6-digit link code from the CSPRNG (no modulo bias that matters: 0..999 999 from 24 bits, rejection-sampled). */
+  function newLinkCode() {
+    for (;;) {
+      var b = noble.randomBytes(3);
+      var n = (b[0] << 16) | (b[1] << 8) | b[2];
+      if (n < 16000000) return String(n % 1000000).padStart(LINK_CODE_LENGTH, "0");
+    }
+  }
+
+  /** As typed in Keepr: digits only (spaces and dashes removed). null when it cannot be a link code. */
+  function normalizeLinkCode(text) {
+    var c = String(text || "").replace(/[\s-]/g, "");
+    return /^[0-9]{6}$/.test(c) ? c : null;
+  }
+
   /** As typed: upper case, spaces and dashes removed. null when it cannot be a code. */
   function normalizeCode(text) {
     var c = String(text || "").toUpperCase().replace(/[\s-]/g, "");
@@ -194,6 +217,8 @@
     CODE_LENGTH: CODE_LENGTH,
     newCode: newCode,
     normalizeCode: normalizeCode,
+    newLinkCode: newLinkCode,
+    normalizeLinkCode: normalizeLinkCode,
     startA: startA,
     respondB: respondB,
     finishA: finishA,

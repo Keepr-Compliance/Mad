@@ -26,9 +26,13 @@ jest.mock("../logService", () => {
   return { __esModule: true, default: { info: noop, warn: noop, error: noop, debug: noop } };
 });
 
-import { RcsExtensionBridge, RCS_EXTENSION_ORIGIN } from "../rcsExtensionBridge";
+import { RcsExtensionBridge, RCS_EXTENSION_ORIGIN, RCS_MIN_EXTENSION_VERSION } from "../rcsExtensionBridge";
 import { RcsJobRegistry } from "../rcsImportJob";
 import {
+  LINK_INTERRUPTED_MESSAGE,
+  LINK_INTRUSION_MESSAGE,
+  LINK_MAX_TRIES,
+  LINK_TTL_MS,
   PAIR_CODE_MAX_TRIES,
   PAIR_CODE_TTL_MS,
   PAIR_NONCE_CAP,
@@ -318,12 +322,14 @@ describe("the auth gate (BACKLOG-3666)", () => {
     expect((await post(port, "/job/pending", signed(p, "/job/pending").headers)).body.error).toBe("unknown_pair");
   });
 
-  it("/hello reveals only paired yes / no (A9)", async () => {
+  // C1 (SR): plus the oldest extension version this Keepr works with (the
+  // popup's "out of date"). Mutation: no minExtensionVersion → red.
+  it("/hello reveals only paired yes / no, and the minimum extension version (A9)", async () => {
     const plain = await post(port, "/hello", {}, JSON.stringify({ version: "0.3.22" }));
-    expect(plain.body).toEqual({ ok: true, paired: false });
+    expect(plain.body).toEqual({ ok: true, paired: false, minExtensionVersion: RCS_MIN_EXTENSION_VERSION });
     const s = signed(p, "/hello", JSON.stringify({ version: "0.3.22" }));
     const paired = await post(port, "/hello", s.headers, JSON.stringify({ version: "0.3.22" }));
-    expect(paired.body).toEqual({ ok: true, paired: true });
+    expect(paired.body).toEqual({ ok: true, paired: true, minExtensionVersion: RCS_MIN_EXTENSION_VERSION });
     expect(replyOk(p, "/hello", s.nonce, paired)).toBe(true);
   });
 
@@ -394,6 +400,73 @@ describe("headers before the body (S1)", () => {
     const big = JSON.stringify({ x: "y".repeat(10 * 1024 * 1024 + 10) });
     const r = await post(port, "/job/pending", signed(p, "/job/pending", big).headers, big);
     expect(r.status).toBe(413);
+  });
+});
+
+// C1 (UX redesign, SR 2026-10-03): the reversed link's rules, Keepr side.
+// Mutations: a second start not aborting both → red; no rate limit / no
+// intrusion warning → red; tries not counted (5th not dropping) → red; no
+// 2-minute expiry → red.
+describe("C1: the reversed link (the popup's code typed in Keepr)", () => {
+  const start = async () => post(port, "/link/start", {}, JSON.stringify({ pA: P.startA("123456").pA }));
+
+  it("one pending session: a second /link/start aborts BOTH", async () => {
+    expect((await start()).status).toBe(200);
+    const second = await start();
+    expect(second.status).toBe(409);
+    expect(second.body).toMatchObject({ error: "interrupted", message: LINK_INTERRUPTED_MESSAGE });
+    expect(auth.linkState().state).toBe("none");
+  });
+
+  it("more than 5 starts a minute: locked for a minute, and Keepr says another app tried", async () => {
+    for (let i = 0; i < 5; i++) {
+      await start();
+      auth.linkEnterCode("user-a", "999999"); // (any state; each start counts)
+      clock += 1000;
+    }
+    const sixth = await start();
+    expect(sixth.status).toBe(429);
+    expect(sixth.body).toMatchObject({ error: "locked", message: LINK_INTRUSION_MESSAGE });
+    expect(auth.linkState()).toMatchObject({ state: "locked", intrusion: true });
+    clock += 61_000;
+    expect(auth.linkState()).toMatchObject({ state: "none", intrusion: true });
+    expect((await start()).status).toBe(200);
+  });
+
+  it("wrong codes: each counts; the 5th drops the session", async () => {
+    const s = await start();
+    const id = s.body.sessionId as string;
+    for (let i = 1; i <= LINK_MAX_TRIES; i++) {
+      expect(auth.linkEnterCode("user-a", "000000")).toEqual({ ok: true });
+      const fin = await post(port, "/link/finish", {}, JSON.stringify({ sessionId: id, cA: "wrong" }));
+      expect(fin.status).toBe(i < LINK_MAX_TRIES ? 403 : 429);
+    }
+    expect(auth.linkState().state).toBe("none");
+  });
+
+  it("the session lives 2 minutes from the popup's start", async () => {
+    const s = await start();
+    clock += LINK_TTL_MS + 1;
+    expect(auth.linkEnterCode("user-a", "123456")).toEqual({ ok: false, reason: "expired" });
+    expect((await post(port, "/link/poll", {}, JSON.stringify({ sessionId: s.body.sessionId }))).status).toBe(404);
+    expect(LINK_TTL_MS).toBe(2 * 60 * 1000);
+  });
+
+  it("the right code: linked for the user who typed it, replacing that user's earlier link", async () => {
+    const old = await pairWith(auth.issueCode("user-a").code);
+    const a = P.startA("123456");
+    const s = await post(port, "/link/start", {}, JSON.stringify({ pA: a.pA }));
+    expect(auth.linkEnterCode("user-a", "123-456")).toEqual({ ok: true });
+    const poll = await post(port, "/link/poll", {}, JSON.stringify({ sessionId: s.body.sessionId }));
+    const f = P.finishA(a.state, poll.body.pB as string, poll.body.cB as string);
+    const nonce = P.newNonce();
+    const fin = await post(port, "/link/finish", {}, JSON.stringify({ sessionId: s.body.sessionId, cA: f.cA, nonce }));
+    expect(fin.status).toBe(200);
+    const keyHex = P.sessionKey(f.ke, s.body.sessionId as string);
+    expect(fin.sig).toBe(P.sign(keyHex, P.replyString(200, "/link/finish", nonce, fin.text)));
+    expect(store.rows.map((r) => r.pairId)).toEqual([s.body.sessionId]);
+    // The old browser's signed calls: unknown now (it forgets its link).
+    expect((await post(port, "/job/pending", signed(old, "/job/pending").headers)).body.error).toBe("unknown_pair");
   });
 });
 

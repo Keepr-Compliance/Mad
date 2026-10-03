@@ -36,8 +36,10 @@ jest.mock("../../../../services/rcsImportService", () => ({
     showExtensionFolder: async () => undefined,
     openChromeForExtension: (...a: unknown[]) => mockOpenChrome(...a),
     startCacheJob: (...a: unknown[]) => mockStartCache(...a),
-    pairCode: (...a: unknown[]) => mockPairCode(...a),
-    pairCancel: async () => undefined,
+    // C1: the reversed link panel (nothing pending).
+    linkState: async () => ({ success: true, data: { link: { state: "none", intrusion: false }, linked: false } }),
+    linkEnterCode: async () => ({ success: true }),
+    linkDismissWarning: async () => undefined,
     setCacheConsent: (...a: unknown[]) => mockConsent(...a),
     cancelJob: async () => ({ success: true, data: null }),
     getJob: async () => ({ success: true, data: mockCurrentJob }),
@@ -250,16 +252,13 @@ describe("GoogleMessagesSyncFlow", () => {
     expect(screen.queryByText(/ENOENT/)).toBeNull();
   });
 
-  // BACKLOG-3666: Connect shows the Pair step until the extension is paired
-  // with this Keepr; Sync stays off until then. Mutations: no pair step, or
-  // Sync enabled while unpaired → red.
-  it("unpaired: the Pair step shows a code, Sync waits until paired", async () => {
+  // C1 (UX redesign): Connect shows the link panel until the extension is
+  // linked with this Keepr; Sync stays off until then. Mutations: no link
+  // panel, or Sync enabled while unlinked → red.
+  it("unlinked: the link panel shows, Sync waits until linked", async () => {
     mockState = { ...INSTALLED, extensionPaired: false };
-    mockPairCode.mockResolvedValue({ success: true, data: { code: "ABCDEFGH", expiresAt: "2026-10-02T12:05:00.000Z" } });
     render(<GoogleMessagesSyncFlow onClose={() => {}} />);
-    const panel = await screen.findByTestId("gm-pair-panel");
+    expect(await screen.findByTestId("gm-link-panel")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open Google Messages and sync" })).toBeDisabled();
-    fireEvent.click(within(panel).getByRole("button", { name: "Pair" }));
-    expect(await screen.findByTestId("gm-pair-code")).toHaveTextContent("ABCD-EFGH");
   });
 });

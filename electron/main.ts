@@ -28,6 +28,7 @@ import {
 } from "electron";
 import path from "path";
 import log from "electron-log";
+import { isRcsLinkDeepLink } from "./utils/rcsLinkDeepLink";
 import {
   buildFirstRunNotice,
   getAppliedAppDataPaths,
@@ -497,6 +498,16 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
       const sessionId = sanitizeSessionId(rawSession);
       log.info("[DeepLink] Payment callback received", { hasSession: !!sessionId });
       sendToRenderer("payment:deep-link-callback", { sessionId });
+      focusMainWindow();
+      return;
+    }
+
+    // C1 (UX redesign): keepr://link — ONLY opens Keepr's "Enter the code from
+    // your browser" screen. Any parameters are ignored (any local app can
+    // fire keepr://); nothing is read from the URL.
+    if (isRcsLinkDeepLink(url)) {
+      log.info("[DeepLink] Link screen requested");
+      sendToRenderer("rcs-import:open-link-screen", {});
       focusMainWindow();
       return;
     }

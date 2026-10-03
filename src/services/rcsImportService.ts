@@ -13,6 +13,7 @@ import type {
   RcsImportStatusResult,
   RcsJobInfo,
   RcsExtensionState,
+  RcsLinkState,
 } from "../../electron/types/ipc/window-api-rcs-import";
 
 export type { RcsImportStatus, RcsJobInfo };
@@ -236,6 +237,45 @@ export const rcsImportService = {
    * Sync's /finish, so a refetch on finish alone is too early). Returns an
    * unsubscribe.
    */
+  /** C1: Keepr's link screen state (the popup's pending code), and whether this user is linked. */
+  async linkState(): Promise<ApiResult<{ link: RcsLinkState; linked: boolean }>> {
+    const bridge = api();
+    if (!bridge || !bridge.linkState) return { success: false, error: NOT_AVAILABLE };
+    try {
+      const r = await bridge.linkState();
+      return { success: true, data: { link: r.link, linked: r.linked } };
+    } catch (err) {
+      return { success: false, error: getErrorMessage(err) };
+    }
+  },
+
+  /** C1: the 6-digit code the user typed (shown by the extension's popup). */
+  async linkEnterCode(code: string): Promise<ApiResult<void>> {
+    const bridge = api();
+    if (!bridge || !bridge.linkEnterCode) return { success: false, error: NOT_AVAILABLE };
+    try {
+      const r = await bridge.linkEnterCode({ code });
+      return r.success ? { success: true } : { success: false, error: r.error };
+    } catch (err) {
+      return { success: false, error: getErrorMessage(err) };
+    }
+  },
+
+  async linkDismissWarning(): Promise<void> {
+    try {
+      await api()?.linkDismissWarning?.();
+    } catch {
+      /* nothing to dismiss */
+    }
+  },
+
+  /** C1: keepr://link asked for the link screen. Returns an unsubscribe. */
+  onOpenLinkScreen(callback: () => void): () => void {
+    const bridge = api();
+    if (!bridge || !bridge.onOpenLinkScreen) return () => {};
+    return bridge.onOpenLinkScreen(callback);
+  },
+
   onDataChanged(callback: (event: { reason: string }) => void): () => void {
     const bridge = api();
     if (!bridge || !bridge.onDataChanged) return () => {};

@@ -102,7 +102,7 @@ import { wrapHandler } from "../utils/wrapHandler";
 import { getMainWindow } from "../windowRegistry";
 import { ValidationError } from "../utils/validation";
 import { RCS_MEDIA_DEFAULTS, clearPendingMediaRead, getRcsMediaOptions, hasPendingMediaRead, recordRcsMediaSeen, setRcsMediaOptions } from "../services/db/rcsMediaDbService";
-import { NOT_PAIRED_MESSAGE, RcsPairingAuth } from "../services/rcsPairingAuth";
+import { NOT_PAIRED_MESSAGE, RcsPairingAuth, type LinkState } from "../services/rcsPairingAuth";
 import { loadPairProtocol } from "../services/rcsPairProtocol";
 import { rcsPairingStore } from "../services/db/rcsPairingDbService";
 import type {
@@ -875,6 +875,14 @@ export function dealChatsForClaim(userId: string, settingsFloorMs: number, sourc
  */
 const pairingAuth = new RcsPairingAuth(loadPairProtocol, rcsPairingStore);
 
+/** C1: what Keepr's link screen says when a typed code is not taken. One line each. */
+export const LINK_ENTER_ERRORS: Record<"no_session" | "expired" | "bad_shape" | "bad_code", string> = {
+  no_session: "No code is waiting. Click Link in the Keepr extension first.",
+  expired: "That code expired. Click Link in the extension for a new one.",
+  bad_shape: "Codes have 6 digits.",
+  bad_code: "That code didn't work. Check the extension and try again.",
+};
+
 /** Jobs are refused until the extension is paired (BACKLOG-3666). */
 export const RCS_NOT_PAIRED_ERROR = { status: 409, error: "not_paired", message: NOT_PAIRED_MESSAGE } as const;
 
@@ -923,6 +931,15 @@ const bridge = new RcsExtensionBridge({
     return cacheStaging().stageImage(jobId, image, chatHash);
   },
   currentUserId,
+  // C1 (founder): who the browser is linked to — masked by the bridge, signed /status only.
+  currentUserEmail: async () => {
+    try {
+      const session = await sessionService.loadSession();
+      return session?.user?.email ?? null;
+    } catch {
+      return null;
+    }
+  },
   onHello: (hello) => void onHello(hello),
   onJobEnded: (ended) => {
     // Founder (2026-10-01): a Sync that is done or failed brings Keepr to the
@@ -1261,6 +1278,35 @@ export function registerRcsImportHandlers(): void {
       // Live (E): a panel closing drops only ITS code, never one another panel shows now.
       const code = args && typeof args === "object" ? (args as { code?: unknown }).code : undefined;
       pairingAuth.cancelCode(typeof code === "string" ? code : undefined);
+      return { success: true };
+    }, { module: LOG_TAG }),
+  );
+
+  // C1 (UX redesign): Keepr's "Enter the code from your browser" screen.
+  ipcMain.handle(
+    "rcs-import:link-state",
+    wrapHandler(async (): Promise<{ success: true; link: LinkState; linked: boolean }> => {
+      const userId = await currentUserId();
+      return { success: true, link: pairingAuth.linkState(), linked: userId ? pairingAuth.isPaired(userId) : false };
+    }, { module: LOG_TAG }),
+  );
+
+  ipcMain.handle(
+    "rcs-import:link-enter-code",
+    wrapHandler(async (_event: unknown, args?: unknown): Promise<{ success: true } | { success: false; error: string }> => {
+      const userId = await currentUserId();
+      if (!userId) return { success: false, error: "Sign in to Keepr first." };
+      const code = args && typeof args === "object" ? (args as { code?: unknown }).code : undefined;
+      const r = pairingAuth.linkEnterCode(userId, typeof code === "string" ? code : "");
+      if (r.ok) return { success: true };
+      return { success: false, error: LINK_ENTER_ERRORS[r.reason] };
+    }, { module: LOG_TAG }),
+  );
+
+  ipcMain.handle(
+    "rcs-import:link-dismiss-warning",
+    wrapHandler(async (): Promise<{ success: true }> => {
+      pairingAuth.clearLinkIntrusion();
       return { success: true };
     }, { module: LOG_TAG }),
   );

@@ -42,8 +42,10 @@ jest.mock("../../../services/rcsImportService", () => ({
     setCacheAutoDelete: (...a: unknown[]) => mockAutoDelete(...a),
     setCacheConsent: (...a: unknown[]) => mockConsent(...a),
     setMediaOptions: (...a: unknown[]) => mockSetMedia(...a),
-    pairCode: async () => ({ success: true, data: { code: "ZXCVBN23", expiresAt: "2026-10-02T12:05:00.000Z" } }),
-    pairCancel: async () => undefined,
+    // C1: the reversed link panel (nothing pending).
+    linkState: async () => ({ success: true, data: { link: { state: "none", intrusion: false }, linked: false } }),
+    linkEnterCode: async () => ({ success: true }),
+    linkDismissWarning: async () => undefined,
     listExclusions: async () => ({ success: true, data: mockExcluded }),
     onDataChanged: () => () => undefined,
   },
@@ -235,18 +237,19 @@ describe("GoogleMessagesSettings", () => {
     expect(videoEstimateText(null)).toContain("Sync once");
   });
 
-  // BACKLOG-3666: Settings says whether the extension is paired with this
-  // Keepr and offers Pair / Re-pair. Mutations: the line wrong, or no code → red.
-  it("pairing: the paired line, and Pair / Re-pair show a one-time code", async () => {
+  // C1 (UX redesign): Settings says whether the extension is linked and
+  // always shows the link panel (the code comes from the extension's popup;
+  // Keepr makes none). Mutations: the line wrong; the panel missing; a
+  // Keepr-made code shown → red.
+  it("linking: the linked line, and the link panel (no Keepr-made code)", async () => {
     const view = render(<GoogleMessagesSettings userId="user-1" />);
-    expect(await screen.findByTestId("gm-pairing-line")).toHaveTextContent("Extension not paired with this Keepr yet");
-    fireEvent.click(screen.getByRole("button", { name: "Pair" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Show pairing code" }));
-    expect(await screen.findByTestId("gm-pair-code")).toHaveTextContent("ZXCV-BN23");
+    expect(await screen.findByTestId("gm-pairing-line")).toHaveTextContent("Extension not linked with this Keepr yet");
+    expect(await screen.findByTestId("gm-link-panel")).toBeInTheDocument();
+    expect(screen.queryByTestId("gm-pair-code")).toBeNull();
+    expect(screen.queryByRole("button", { name: /pairing code|Re-pair/ })).toBeNull();
     view.unmount();
     mockState = { ...mockState, extensionPaired: true };
     render(<GoogleMessagesSettings userId="user-1" />);
-    await waitFor(() => expect(screen.getByTestId("gm-pairing-line")).toHaveTextContent("Extension paired with this Keepr"));
-    expect(screen.getByRole("button", { name: "Re-pair" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("gm-pairing-line")).toHaveTextContent("Extension linked with this Keepr"));
   });
 });

@@ -175,6 +175,151 @@ async function bridgeFetch(path, bodyText, opts) {
   return { ok: r.status >= 200 && r.status < 300, status: r.status, body: r.body };
 }
 
+// ---------------------------------------------------------------------------
+// C1 (UX redesign, founder 2026-10-03): REVERSED linking. The popup's "Link"
+// makes a 6-digit code HERE (never sent anywhere), starts a session with
+// Keepr, and waits while the user types the code into Keepr. The session
+// lives in this worker (the popup may close). 2 minutes, 5 wrong codes.
+// ---------------------------------------------------------------------------
+const LINK_POLL_MS = 1500;
+let linkSession = null;
+
+function linkView() {
+  if (!linkSession) return { status: "none" };
+  const s = linkSession;
+  return {
+    status: s.status, // waiting | linked | failed
+    code: s.status === "waiting" ? s.code : undefined,
+    expiresAt: s.expiresAt,
+    triesLeft: s.triesLeft,
+    error: s.error,
+  };
+}
+
+function linkFailed(error) {
+  if (linkSession) {
+    linkSession.status = "failed";
+    linkSession.error = error;
+    linkSession.code = undefined;
+  }
+}
+
+/** Store a new link (the old one, if any, is replaced). */
+async function saveLink(pairId, key) {
+  const pairing = { pairId, key, pairedAt: Date.now() };
+  await keyStore().put(pairing);
+  pairCache = pairing;
+}
+
+/** "Link" in the popup: a code, a session with Keepr, then wait for the user. */
+async function linkStart(opts) {
+  const P = pairLib();
+  if (!P) return { ok: false, error: "Linking isn't available in this extension." };
+  if (linkSession && linkSession.status === "waiting" && Date.now() < linkSession.expiresAt) return { ok: true, link: linkView() };
+  const code = P.newLinkCode();
+  const a = P.startA(code);
+  const s = await rawPost("/link/start", JSON.stringify({ pA: a.pA }));
+  if (s.status === 0) return { ok: false, error: NOT_RUNNING, keeprDown: true };
+  if (s.status !== 200 || !s.body || typeof s.body.sessionId !== "string") {
+    return { ok: false, error: (s.body && s.body.message) || "Keepr refused the link. Try again." };
+  }
+  const ttl = typeof s.body.expiresInMs === "number" ? s.body.expiresInMs : 120000;
+  linkSession = { code, state: a.state, sessionId: s.body.sessionId, expiresAt: Date.now() + ttl, triesLeft: 5, status: "waiting", error: undefined };
+  void linkPollLoop(linkSession, (opts && opts.sleep) || ((ms) => new Promise((r) => setTimeout(r, ms))));
+  return { ok: true, link: linkView() };
+}
+
+/** Wait for Keepr's answer (the user typed the code there), then confirm. */
+async function linkPollLoop(session, sleep) {
+  const P = pairLib();
+  while (linkSession === session && session.status === "waiting") {
+    if (Date.now() > session.expiresAt) {
+      linkFailed("That code expired. Click Link for a new one.");
+      return;
+    }
+    const r = await rawPost("/link/poll", JSON.stringify({ sessionId: session.sessionId }));
+    if (linkSession !== session) return;
+    if (r.status === 0) {
+      await sleep(LINK_POLL_MS);
+      continue;
+    }
+    if (r.status === 410) return linkFailed("That code expired. Click Link for a new one.");
+    if (r.status !== 200 || !r.body) return linkFailed("Keepr stopped the link. Click Link to try again.");
+    if (r.body.state !== "answered") {
+      await sleep(LINK_POLL_MS);
+      continue;
+    }
+    let f;
+    try {
+      f = P.finishA(session.state, r.body.pB, r.body.cB);
+    } catch (_err) {
+      // A wrong code typed in Keepr: Keepr is told (it counts the tries).
+      const told = await rawPost("/link/finish", JSON.stringify({ sessionId: session.sessionId, cA: "wrong" }));
+      if (told.status === 429) return linkFailed("Too many wrong codes. Click Link for a new one.");
+      if (told.body && typeof told.body.triesLeft === "number") session.triesLeft = told.body.triesLeft;
+      await sleep(LINK_POLL_MS);
+      continue;
+    }
+    const key = await crypto.subtle.importKey("raw", fromHex(P.sessionKey(f.ke, session.sessionId)), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const nonce = P.newNonce();
+    const fin = await rawPost("/link/finish", JSON.stringify({ sessionId: session.sessionId, cA: f.cA, nonce }));
+    if (fin.status !== 200) return linkFailed("Keepr refused the link. Click Link to try again.");
+    const expected = await hmacHex(key, P.replyString(200, "/link/finish", nonce, fin.text));
+    if (!fin.sig || !P.safeEqual(fin.sig, expected)) return linkFailed(NOT_VERIFIED);
+    await saveLink(session.sessionId, key);
+    session.status = "linked";
+    session.code = undefined;
+    return;
+  }
+}
+
+/** The popup closed linking ("Cancel"): the session is dropped here (Keepr's expires). */
+function linkCancel() {
+  linkSession = null;
+  return { ok: true };
+}
+
+/** "Unlink" in the popup (after its confirm): Keepr revokes it (signed), then it is forgotten here. */
+async function unlink() {
+  const r = await bridgeFetch("/link/unlink", "{}", { requirePaired: true });
+  // Forgotten here whatever Keepr said (Keepr down: it is unknown there after a new link anyway).
+  await forgetPairing();
+  return { ok: true, keepr: r.ok };
+}
+
+/** C2: what the popup shows, asked each time it opens (this worker may have slept). */
+async function popupState() {
+  const version = extensionVersion();
+  const pairing = await currentPairing();
+  const hello = await rawPost("/hello", JSON.stringify({ version }));
+  if (hello.status === 0) return { state: "keepr_down", version, link: linkView() };
+  const min = hello.body && typeof hello.body.minExtensionVersion === "string" ? hello.body.minExtensionVersion : null;
+  if (min && compareVersions(version, min) < 0) return { state: "out_of_date", version, minVersion: min };
+  if (linkSession && linkSession.status === "waiting") return { state: "linking", version, link: linkView() };
+  if (!pairing) return { state: "not_linked", version, link: linkView() };
+  const status = await bridgeFetch("/status", "{}");
+  // Keepr no longer knows this link (unlinked, another browser linked): forgotten by bridgeFetch.
+  if (!(await currentPairing())) return { state: "not_linked", version, link: linkView() };
+  const last = await lastSyncAt();
+  return {
+    state: "linked",
+    version,
+    email: status.ok && status.body && typeof status.body.linkedEmail === "string" ? status.body.linkedEmail : null,
+    lastSyncAt: last && typeof last.at === "number" ? last.at : null,
+  };
+}
+
+/** "0.3.9" < "0.3.10". Missing parts count as 0. */
+function compareVersions(a, b) {
+  const pa = String(a || "0").split(".").map((n) => parseInt(n, 10) || 0);
+  const pb = String(b || "0").split(".").map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d !== 0) return d < 0 ? -1 : 1;
+  }
+  return 0;
+}
+
 /** The extension side of SPAKE2 with the code Keepr shows. → {ok} | {ok:false, error} */
 async function pairWithCode(codeText) {
   const P = pairLib();
@@ -408,6 +553,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case "keepr-pair":
       // BACKLOG-3666: the code typed into the Keepr box or the options page.
       pairWithCode(String(message.code || "")).then(sendResponse, fail);
+      return true;
+    case "keepr-popup-state":
+      // C2: the popup asks what to show each time it opens.
+      popupState().then(sendResponse, fail);
+      return true;
+    case "keepr-link-start":
+      linkStart().then(sendResponse, fail);
+      return true;
+    case "keepr-link-state":
+      sendResponse({ ok: true, link: linkView() });
+      return false;
+    case "keepr-link-cancel":
+      sendResponse(linkCancel());
+      return false;
+    case "keepr-unlink":
+      unlink().then(sendResponse, fail);
       return true;
     case "keepr-pair-status":
       currentPairing().then((p) => sendResponse({ ok: true, paired: !!p }), fail);

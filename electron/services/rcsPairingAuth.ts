@@ -18,6 +18,8 @@
 export interface PairProtocol {
   newCode(): string;
   normalizeCode(text: string): string | null;
+  /** C1: the 6-digit link code as typed in Keepr (digits only), or null. */
+  normalizeLinkCode(text: string): string | null;
   respondB(code: string, pAHex: string): { pB: string; cB: string; expectCA: string; ke: string };
   sessionKey(keHex: string, pairId: string): string;
   requestString(method: string, path: string, ts: number | string, nonce: string, bodyText: string): string;
@@ -47,6 +49,29 @@ export const PAIR_EXCHANGE_TTL_MS = 60 * 1000;
 export const PAIR_TS_WINDOW_MS = 60 * 1000;
 export const PAIR_NONCE_TTL_MS = 120 * 1000;
 export const PAIR_NONCE_CAP = 10_000;
+/** C1 (reversed linking): the popup's code lives 2 minutes, from the popup's /link/start. */
+export const LINK_TTL_MS = 2 * 60 * 1000;
+/** C1: wrong codes typed in Keepr before the session is dropped. */
+export const LINK_MAX_TRIES = 5;
+/** C1 (SR): at most this many /link/start a minute; more locks linking for a minute. */
+export const LINK_STARTS_PER_MIN = 5;
+export const LINK_LOCKOUT_MS = 60 * 1000;
+export const LINK_INTERRUPTED_MESSAGE = "Pairing interrupted, try again";
+export const LINK_INTRUSION_MESSAGE = "Another app tried to link — check for unknown software";
+/**
+ * The old 8-character Keepr-made codes (/pair/start, /pair/finish, issueCode):
+ * kept ONLY so an extension older than the popup (≤ 0.3.31) can still pair.
+ * REMOVE after 2026-12-01 (two releases after the popup ships) — see the
+ * branch's merge notes.
+ */
+export const LEGACY_PAIR_ENDPOINTS_REMOVE_AFTER = "2026-12-01";
+
+/** C1: Keepr's link screen, from Keepr's state (never anything the page could see). */
+export type LinkState =
+  | { state: "none"; intrusion: boolean }
+  | { state: "waiting"; expiresAt: number; triesLeft: number; intrusion: boolean }
+  | { state: "answered"; expiresAt: number; triesLeft: number; intrusion: boolean }
+  | { state: "locked"; until: number; intrusion: boolean };
 
 export const PAIR_HEADERS = {
   pair: "x-keepr-pair",
@@ -71,6 +96,19 @@ const NO_CODE_MESSAGE = "Show a new pairing code in Keepr first.";
 export type PairCodeState = "none" | "active" | "expired" | "burned";
 
 export class RcsPairingAuth {
+  /** C1: the ONE pending reversed-link session (the popup's code). */
+  private link: {
+    sessionId: string;
+    pA: string;
+    expiresAt: number;
+    tries: number;
+    /** Keepr's answer to the code typed in Keepr (cleared after a wrong code). */
+    answer: { pB: string; cB: string; expectCA: string; ke: string; userId: string } | null;
+  } | null = null;
+  private linkStarts: number[] = [];
+  private linkLockedUntil = 0;
+  /** C1 (SR): too many /link/start in a minute — said in Keepr's link screen. */
+  private linkIntrusion = false;
   private pending: { code: string; userId: string; expiresAt: number; tries: number } | null = null;
   /** SR: the last code was burned by wrong tries (cleared by a new code). */
   private burned = false;
@@ -268,6 +306,120 @@ export class RcsPairingAuth {
     seen.set(nonce, this.now());
     if (currentUserId !== undefined && pairing.userId !== currentUserId) return err(401, "re_pair");
     return { ok: true, pairing, nonce };
+  }
+
+  // ==========================================================================
+  // C1 (UX redesign, founder 2026-10-03): REVERSED linking. The popup makes
+  // a 6-digit code (never sent) and starts a session; the user types the code
+  // into Keepr; the popup polls for Keepr's answer and confirms. One pending
+  // session (a second start aborts both), 2 minutes, 5 wrong codes, at most
+  // 5 starts a minute (then a 1-minute lockout, said in Keepr). One linked
+  // browser per user: a new link revokes the old one.
+  // ==========================================================================
+
+  /** POST /link/start {pA} — the popup. */
+  linkStart(body: unknown): Reply {
+    const now = this.now();
+    this.linkStarts = this.linkStarts.filter((t) => now - t < 60_000);
+    if (now < this.linkLockedUntil) return { status: 429, body: { error: "locked", message: LINK_INTRUSION_MESSAGE } };
+    this.linkStarts.push(now);
+    if (this.linkStarts.length > LINK_STARTS_PER_MIN) {
+      this.linkLockedUntil = now + LINK_LOCKOUT_MS;
+      this.linkIntrusion = true;
+      this.link = null;
+      return { status: 429, body: { error: "locked", message: LINK_INTRUSION_MESSAGE } };
+    }
+    // One pending session: a second start (another popup — or another app)
+    // aborts BOTH; the user starts again.
+    if (this.link && now <= this.link.expiresAt) {
+      this.link = null;
+      return { status: 409, body: { error: "interrupted", message: LINK_INTERRUPTED_MESSAGE } };
+    }
+    const pA = body && typeof body === "object" ? (body as Record<string, unknown>).pA : undefined;
+    if (typeof pA !== "string" || pA.length === 0 || pA.length > 200) return { status: 400, body: { error: "bad_request" } };
+    const sessionId = this.randomId();
+    this.link = { sessionId, pA, expiresAt: now + LINK_TTL_MS, tries: 0, answer: null };
+    return { status: 200, body: { sessionId, expiresInMs: LINK_TTL_MS } };
+  }
+
+  /** Keepr's link screen: the code the user typed (from the popup). Never throws. */
+  linkEnterCode(userId: string, typed: string): { ok: true } | { ok: false; reason: "no_session" | "expired" | "bad_shape" | "bad_code" } {
+    const l = this.link;
+    if (!l) return { ok: false, reason: "no_session" };
+    if (this.now() > l.expiresAt) {
+      this.link = null;
+      return { ok: false, reason: "expired" };
+    }
+    const code = this.protocol.normalizeLinkCode(typed);
+    if (!code) return { ok: false, reason: "bad_shape" };
+    try {
+      const a = this.protocol.respondB(code, l.pA);
+      l.answer = { pB: a.pB, cB: a.cB, expectCA: a.expectCA, ke: a.ke, userId };
+      return { ok: true };
+    } catch {
+      return { ok: false, reason: "bad_code" };
+    }
+  }
+
+  /** POST /link/poll {sessionId} — the popup waits for Keepr's answer. */
+  linkPoll(body: unknown): Reply {
+    const b = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const l = this.link;
+    if (!l || b.sessionId !== l.sessionId) return { status: 404, body: { error: "no_session" } };
+    if (this.now() > l.expiresAt) {
+      this.link = null;
+      return { status: 410, body: { error: "expired" } };
+    }
+    if (!l.answer) return { status: 200, body: { state: "waiting", triesLeft: LINK_MAX_TRIES - l.tries } };
+    return { status: 200, body: { state: "answered", pB: l.answer.pB, cB: l.answer.cB } };
+  }
+
+  /**
+   * POST /link/finish {sessionId, cA, nonce} — the popup's confirmation. A
+   * wrong code (the popup reports one it caught, cA "wrong") counts a try and
+   * waits for the next code typed in Keepr; the 5th drops the session.
+   * Success: the user's earlier link is revoked, the new one saved, the reply
+   * signed with the new key.
+   */
+  linkFinish(body: unknown): Reply {
+    const b = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    const l = this.link;
+    if (!l || b.sessionId !== l.sessionId) return { status: 404, body: { error: "no_session" } };
+    if (this.now() > l.expiresAt) {
+      this.link = null;
+      return { status: 410, body: { error: "expired" } };
+    }
+    if (!l.answer) return { status: 409, body: { error: "waiting" } };
+    if (typeof b.cA !== "string" || !this.protocol.safeEqual(b.cA, l.answer.expectCA)) {
+      l.tries += 1;
+      l.answer = null;
+      if (l.tries >= LINK_MAX_TRIES) {
+        this.link = null;
+        return { status: 429, body: { error: "too_many_tries" } };
+      }
+      return { status: 403, body: { error: "bad_code", triesLeft: LINK_MAX_TRIES - l.tries } };
+    }
+    const keyHex = this.protocol.sessionKey(l.answer.ke, l.sessionId);
+    // One linked browser per user: the old one's requests become "unknown".
+    this.revoke(l.answer.userId);
+    this.store.save({ pairId: l.sessionId, userId: l.answer.userId, keyHex });
+    this.link = null;
+    this.linkIntrusion = false;
+    return { status: 200, body: { ok: true, linked: true }, signWith: { keyHex, nonce: typeof b.nonce === "string" ? b.nonce : "" } };
+  }
+
+  /** Keepr's link screen. */
+  linkState(): LinkState {
+    const now = this.now();
+    if (now < this.linkLockedUntil) return { state: "locked", until: this.linkLockedUntil, intrusion: this.linkIntrusion };
+    const l = this.link;
+    if (!l || now > l.expiresAt) return { state: "none", intrusion: this.linkIntrusion };
+    return { state: l.answer ? "answered" : "waiting", expiresAt: l.expiresAt, triesLeft: LINK_MAX_TRIES - l.tries, intrusion: this.linkIntrusion };
+  }
+
+  /** The user dismissed the intrusion warning in Keepr. */
+  clearLinkIntrusion(): void {
+    this.linkIntrusion = false;
   }
 
   /** The reply signature header value. */

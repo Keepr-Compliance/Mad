@@ -215,6 +215,8 @@ export interface RcsExtensionBridgeOptions {
   onMediaCounts?: (userId: string, counts: { photosSeen: number; videosSeen: number }) => void;
   /** BACKLOG-3658: the signed-in user now; a job of another user is cancelled. */
   currentUserId?: () => Promise<string | null>;
+  /** C1 (founder): the signed-in user's email — masked, only in a SIGNED /status reply (the popup). */
+  currentUserEmail?: () => Promise<string | null>;
   /** BACKLOG-3658: a job ended (finished, failed or cancelled). Once per job. */
   onJobEnded?: (ended: RcsJobEnded) => void;
   /** Overridable for tests only. */
@@ -238,7 +240,22 @@ const prereadBodies = new WeakMap<http.IncomingMessage, string>();
 const replySigners = new WeakMap<http.ServerResponse, { sign: (status: number, body: string) => string }>();
 
 /** Routes that never need a signature. */
-const PAIR_OPEN_ROUTES = new Set(["/hello", "/pair/start", "/pair/finish"]);
+const PAIR_OPEN_ROUTES = new Set(["/hello", "/pair/start", "/pair/finish", "/link/start", "/link/poll", "/link/finish"]);
+/** C1: the reversed-link routes (the popup's 6-digit code). */
+const LINK_ROUTES = new Set(["/link/start", "/link/poll", "/link/finish"]);
+/**
+ * C1 (SR): the oldest extension this Keepr works with — the popup's
+ * reversed linking. /hello answers it; an older extension says "out of date".
+ */
+export const RCS_MIN_EXTENSION_VERSION = "0.3.32";
+
+/** C1 (founder): the linked user's email, masked, for the popup only (signed /status): "d***@example.com". */
+export function maskEmail(email: string | null | undefined): string | null {
+  if (!email || typeof email !== "string") return null;
+  const at = email.lastIndexOf("@");
+  if (at < 1 || at === email.length - 1) return null;
+  return email[0] + "***" + email.slice(at);
+}
 /** "dual" mode only (one release): what an older, unpaired extension still needs. Never a job route. */
 const PAIR_DUAL_ROUTES = new Set(["/status", "/focus", "/exclusions/list", "/exclusions/set"]);
 /** SR B1: an unsigned request although this user's extension is paired. */
@@ -683,8 +700,24 @@ export class RcsExtensionBridge {
         if (b.paired === true) hello.paired = true;
         this.options.onHello?.(hello);
         // BACKLOG-3666: only "paired: yes / no" (yes = a valid signature of a
-        // pairing bound to the signed-in user).
-        sendJson(res, 200, this.options.pairing ? { ok: true, paired: signedPairing !== null } : { ok: true });
+        // pairing bound to the signed-in user). C1: the oldest extension
+        // version this Keepr works with (the popup says "out of date").
+        sendJson(res, 200, this.options.pairing
+          ? { ok: true, paired: signedPairing !== null, minExtensionVersion: RCS_MIN_EXTENSION_VERSION }
+          : { ok: true });
+        return;
+      }
+
+      // C1 (founder): "Unlink" in the popup — signed only (the auth gate
+      // refuses it unsigned); the user's link is revoked.
+      if (path === "/link/unlink") {
+        if (!signedPairing || !this.options.pairing) {
+          sendJson(res, 401, { error: "not_paired", message: NOT_PAIRED_MESSAGE });
+          return;
+        }
+        this.options.pairing.revoke(signedPairing.userId);
+        this.logger.info("[RcsBridge] Extension unlinked from the browser");
+        sendJson(res, 200, { ok: true, linked: false });
         return;
       }
 
@@ -700,6 +733,13 @@ export class RcsExtensionBridge {
 
       if (path === "/status") {
         const s = this.getStatus();
+        // C1 (founder): the popup's "linked" state shows WHO it is linked to —
+        // masked, and only to a signed request (never the page's DOM).
+        if (signedPairing && this.options.currentUserEmail) {
+          const email = maskEmail(await this.options.currentUserEmail());
+          sendJson(res, 200, { bridge: s.bridge, linked: true, ...(email ? { linkedEmail: email } : {}) });
+          return;
+        }
         sendJson(res, 200, { bridge: s.bridge });
         return;
       }
@@ -790,6 +830,22 @@ export class RcsExtensionBridge {
         return null;
       }
     };
+    // C1: the reversed link (the popup's code typed in Keepr).
+    if (LINK_ROUTES.has(path)) {
+      const body = json();
+      const r = path === "/link/start" ? pairing.linkStart(body) : path === "/link/poll" ? pairing.linkPoll(body) : pairing.linkFinish(body);
+      if (r.signWith) {
+        const w = r.signWith;
+        replySigners.set(res, { sign: (status, b) => pairing.signReply(w.keyHex, status, path, w.nonce, b) });
+        this.logger.info("[RcsBridge] Browser linked");
+      } else if (r.status !== 200) {
+        this.logger.warn(`[RcsBridge] Link refused: ${String(r.body.error)}`);
+      }
+      sendJson(res, r.status, r.body);
+      return "handled";
+    }
+    // LEGACY 8-character codes (≤ 0.3.31 extensions): remove after
+    // LEGACY_PAIR_ENDPOINTS_REMOVE_AFTER (rcsPairingAuth.ts; merge notes).
     if (path === "/pair/start" || path === "/pair/finish") {
       const r = path === "/pair/start" ? pairing.start(json()) : pairing.finish(json());
       if (r.signWith) {

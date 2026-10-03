@@ -42,7 +42,7 @@ import { settingsService } from "../../services";
 import { LookbackMonthsSelect, lastMonthsPhrase, parseLookbackOption } from "./LookbackMonthsSelect";
 import { AndroidForceReimportWarning, androidClearedText } from "./AndroidForceReimportWarning";
 import { NotSyncedChatsModal } from "./android/NotSyncedChatsModal";
-import { PairingCodePanel } from "./android/PairingCodePanel";
+import { LinkBrowserPanel } from "./android/LinkBrowserPanel";
 import { readMessageImportPreferences, resolveStoredLookbackMonths } from "./messageImportPreferences";
 
 import { GM_LOOKBACK_TARGET } from "./android/googleMessagesSyncSteps";
@@ -65,7 +65,6 @@ export function GoogleMessagesSettings({ userId }: { userId: string }) {
   const [excluded, setExcluded] = useState<Array<{ id: string; title: string | null }>>([]);
   const [manageOpen, setManageOpen] = useState(false);
   // BACKLOG-3666: Pair / Re-pair the extension with this Keepr.
-  const [pairOpen, setPairOpen] = useState(false);
   const keeprPaired = state?.extensionPaired === true;
 
   const refreshExcluded = useCallback(async () => {
@@ -189,26 +188,15 @@ export function GoogleMessagesSettings({ userId }: { userId: string }) {
         </p>
       </div>
 
-      {/* BACKLOG-3666: the extension works only once paired with this Keepr. */}
+      {/* C1 (UX redesign): linking starts in the extension's popup (Link → a
+          6-digit code); the code is typed here. One linked browser at a time. */}
       <div className="p-4 bg-white rounded-lg border border-gray-200" data-testid="gm-pairing">
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-sm text-gray-900" data-testid="gm-pairing-line">
-            {keeprPaired ? "Extension paired with this Keepr" : "Extension not paired with this Keepr yet"}
-          </span>
-          {!pairOpen && (
-            <button type="button" className="text-sm text-indigo-700 hover:text-indigo-900" onClick={() => setPairOpen(true)}>
-              {keeprPaired ? "Re-pair" : "Pair"}
-            </button>
-          )}
+        <span className="text-sm text-gray-900" data-testid="gm-pairing-line">
+          {keeprPaired ? "Extension linked with this Keepr" : "Extension not linked with this Keepr yet"}
+        </span>
+        <div className="mt-3">
+          <LinkBrowserPanel onLinked={() => void refresh()} />
         </div>
-        {pairOpen && (
-          <div className="mt-3 flex flex-col gap-2">
-            <PairingCodePanel label={keeprPaired ? "Show a code to re-pair" : "Show pairing code"} />
-            <button type="button" className="self-start text-xs text-gray-600 hover:text-gray-900" onClick={() => { setPairOpen(false); void refresh(); }}>
-              Done
-            </button>
-          </div>
-        )}
       </div>
 
       {/* Founder (2026-10-02): one line + "See hidden list" (a read-only modal), never a list

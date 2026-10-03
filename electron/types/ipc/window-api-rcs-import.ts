@@ -72,6 +72,13 @@ export interface RcsJobInfo {
 }
 
 /** BACKLOG-3658: the extension and cache state, for the setup wizard. */
+/** C1: the reversed link, as Keepr's link screen sees it (rcsPairingAuth.LinkState). */
+export type RcsLinkState =
+  | { state: "none"; intrusion: boolean }
+  | { state: "waiting"; expiresAt: number; triesLeft: number; intrusion: boolean }
+  | { state: "answered"; expiresAt: number; triesLeft: number; intrusion: boolean }
+  | { state: "locked"; until: number; intrusion: boolean };
+
 export interface RcsExtensionState {
   extensionVersion: string | null;
   extensionSeenAt: string | null;
@@ -141,6 +148,12 @@ export interface WindowApiRcsImport {
   onDataCleared: (callback: (event: { messagesDeleted: number }) => void) => () => void;
   /** BACKLOG-3658: a cache Sync was saved and auto-linked. Returns an unsubscribe. */
   onDataChanged?: (callback: (event: { reason: string }) => void) => () => void;
+  /** C1: Keepr's "Enter the code from your browser" screen. */
+  linkState?: () => Promise<{ success: true; link: RcsLinkState; linked: boolean }>;
+  linkEnterCode?: (args: { code: string }) => Promise<{ success: true } | { success: false; error: string }>;
+  linkDismissWarning?: () => Promise<{ success: true }>;
+  /** C1: keepr://link asked for the link screen. Returns an unsubscribe. */
+  onOpenLinkScreen?: (callback: () => void) => () => void;
   /**
    * BACKLOG-3658: start the cache job (all recent chats), for the signed-in
    * user. `sinceDays` (1..3650) is a DEV-ONLY window override, ignored in a

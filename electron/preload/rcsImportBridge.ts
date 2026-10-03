@@ -69,6 +69,17 @@ export const rcsImportBridge = {
     ipcRenderer.invoke("rcs-import:open-chrome-for-extension"),
 
   /** BACKLOG-3658 (SR S1): a cache Sync was saved and auto-linked. */
+  /** C1: Keepr's "Enter the code from your browser" screen. */
+  linkState: () => ipcRenderer.invoke("rcs-import:link-state"),
+  linkEnterCode: (args: { code: string }) => ipcRenderer.invoke("rcs-import:link-enter-code", args),
+  linkDismissWarning: () => ipcRenderer.invoke("rcs-import:link-dismiss-warning"),
+  onOpenLinkScreen: (callback: () => void) => {
+    const handler = () => callback();
+    ipcRenderer.on("rcs-import:open-link-screen", handler);
+    return () => {
+      ipcRenderer.removeListener("rcs-import:open-link-screen", handler);
+    };
+  },
   onDataChanged: (callback: (event: { reason: string }) => void) => {
     const handler = (_event: unknown, data: { reason: string }) => callback(data);
     ipcRenderer.on("rcs-import:data-changed", handler);
