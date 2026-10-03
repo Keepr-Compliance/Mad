@@ -39,6 +39,8 @@ describe("the box's Open Keepr (live)", () => {
     const fn = /function focusKeepr\(\) \{[\s\S]*?\n {2}\}/.exec(src)![0];
     expect(fn).toContain('type: "keepr-focus"');
     expect(fn).toContain("if (r && r.ok) return true;");
+    // SR: only when Keepr is unreachable (the worker says launch).
+    expect(fn).toContain('return r && r.launch ? launchKeepr(document, "keepr://open") : false;');
     expect((fn.match(/launchKeepr\(document, "keepr:\/\/open"\)/g) || []).length).toBe(2);
   });
 

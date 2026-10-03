@@ -250,6 +250,29 @@ describe("RcsExtensionBridge", () => {
       }
     });
 
+    // SR: /focus is open, so at most one per 2 s (more → 429); it only calls
+    // onFocusRequested. Mutation: the limit removed → red.
+    it("at most one per 2 s: more → 429, Keepr not raised again", async () => {
+      const focus = jest.fn();
+      let clock = 10_000;
+      const own = new RcsExtensionBridge({ importChat, onFocusRequested: focus, now: () => clock });
+      expect(await own.start(0)).toBe("listening");
+      try {
+        const p = own.getStatus().port;
+        expect((await request(p, "POST", "/focus", EXT_HEADERS)).status).toBe(200);
+        clock += 500;
+        expect((await request(p, "POST", "/focus", EXT_HEADERS)).status).toBe(429);
+        clock += 1_499; // 1 999 ms after the first
+        expect((await request(p, "POST", "/focus", EXT_HEADERS)).status).toBe(429);
+        expect(focus).toHaveBeenCalledTimes(1);
+        clock += 1;
+        expect((await request(p, "POST", "/focus", EXT_HEADERS)).status).toBe(200);
+        expect(focus).toHaveBeenCalledTimes(2);
+      } finally {
+        await own.stop();
+      }
+    });
+
     it("a bridge without a focus handler answers 501", async () => {
       expect((await request(port, "POST", "/focus", EXT_HEADERS)).status).toBe(501);
     });

@@ -278,7 +278,7 @@ describe("the auth gate (BACKLOG-3666)", () => {
   // SR B1: once the signed-in user is paired, the dual routes need a signature
   // too (/exclusions/set is a write). Mutation: dual routes open regardless → red.
   it("paired user: the dual routes are refused unsigned (B1)", async () => {
-    for (const route of ["/exclusions/set", "/exclusions/list", "/focus", "/status"]) {
+    for (const route of ["/exclusions/set", "/exclusions/list", "/status"]) {
       const r = await post(port, route, {}, JSON.stringify({ conversationId: "abc", excluded: true }));
       expect(r.status).toBe(401);
       expect(r.body.error).toBe("signature_required");
@@ -286,6 +286,15 @@ describe("the auth gate (BACKLOG-3666)", () => {
     // Signed, they work.
     const s = signed(p, "/exclusions/list", "{}");
     expect((await post(port, "/exclusions/list", s.headers, "{}")).status).not.toBe(401);
+  });
+
+  // SR (2026-10-03): /focus is open — Open Keepr works from an unlinked
+  // browser even while this user has a link. Mutation: /focus back among the
+  // signed-only routes → red.
+  it("paired user: an unsigned /focus is still answered (never signature_required)", async () => {
+    const r = await post(port, "/focus", {}, "");
+    expect(r.status).not.toBe(401);
+    expect(r.body.error).not.toBe("signature_required");
   });
 
   it("dual mode: an older, unpaired extension keeps the eyes and /status, never a job (A10)", async () => {

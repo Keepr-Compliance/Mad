@@ -59,7 +59,7 @@
    */
   var KEEPR_LOST_MESSAGES = {
     unreachable: "Keepr closed.",
-    unknown_job: "Keepr closed.",
+    unknown_job: "Keepr closed or restarted.",
     refused: "Not linked. Click the Keepr icon in Chrome's toolbar to link.",
     keepr_error: "Keepr could not save the chats.",
   };
@@ -2481,7 +2481,8 @@
   function focusKeepr() {
     return toWorker({ type: "keepr-focus" }).then(function (r) {
       if (r && r.ok) return true;
-      return launchKeepr(document, "keepr://open");
+      // SR: keepr://open only when Keepr is unreachable.
+      return r && r.launch ? launchKeepr(document, "keepr://open") : false;
     }, function () {
       return launchKeepr(document, "keepr://open");
     });

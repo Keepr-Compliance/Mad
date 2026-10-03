@@ -149,7 +149,7 @@ async function rawPost(path, bodyText, headers) {
  * are refused here, never sent.
  */
 /** The routes an unlinked extension may always call (unsigned): presence and linking. */
-const UNSIGNED_ALWAYS = new Set(["/hello", "/link/start", "/link/poll", "/link/finish"]);
+const UNSIGNED_ALWAYS = new Set(["/hello", "/link/start", "/link/poll", "/link/finish", "/focus"]);
 const NOT_LINKED_HERE_BACKOFF_MS = 60 * 1000;
 let notLinkedHereUntil = 0;
 function NOT_LINKED_HERE_REPLY() {
@@ -411,13 +411,15 @@ async function lastSyncAt() {
 }
 
 /**
- * POST /focus: Keepr brings itself to the front (signed when linked — never a
- * tab). Resolves {ok}. Not ok (Keepr not running, or this browser not linked
- * while Keepr has a link): the caller launches keepr://open from its own page.
+ * POST /focus: Keepr brings itself to the front — signed when linked, open
+ * when not (SR) — never a tab. Resolves {ok}; 429 (asked again within 2 s)
+ * counts as done. Only when Keepr is unreachable does the caller launch
+ * keepr://open from its own page ({launch: true}).
  */
 async function focusKeepr() {
   const r = await bridgeFetch("/focus", "", {});
-  return r.status === 200 ? { ok: true } : { ok: false, launch: true, error: (r.body && r.body.message) || NOT_RUNNING };
+  if (r.status === 200 || r.status === 429) return { ok: true };
+  return { ok: false, launch: r.status === 0, error: (r.body && r.body.message) || NOT_RUNNING };
 }
 
 // ---------------------------------------------------------------------------

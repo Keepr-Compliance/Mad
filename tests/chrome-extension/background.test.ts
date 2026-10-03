@@ -188,10 +188,12 @@ describe("service worker: signed when linked; quiet when Keepr has a link it lac
     expect(w.chromeStub.tabs.update).not.toHaveBeenCalled();
   });
 
-  it("not linked here while Keepr has a link: one refusal, then a minute of silence; Open Keepr says launch", async () => {
+  it("not linked here while Keepr has a link: one refusal, then a minute of silence; /focus still asked (open)", async () => {
     const w = await loadWorker();
     w.fetchStub.mockImplementation(async (url: string) =>
-      ({ status: url.endsWith("/hello") ? 200 : 401, json: async () => (url.endsWith("/hello") ? { ok: true } : { error: "signature_required" }) }) as never,
+      (url.endsWith("/hello") || url.endsWith("/focus")
+        ? { status: 200, json: async () => ({ ok: true }) }
+        : { status: 401, json: async () => ({ error: "signature_required" }) }) as never,
     );
     const first = await w.send({ type: "keepr-exclusions-list" });
     expect(first).toMatchObject({ ok: false, status: 401, body: { error: "not_linked_here" } });
@@ -199,8 +201,24 @@ describe("service worker: signed when linked; quiet when Keepr has a link it lac
     expect(w.fetchStub).toHaveBeenCalledTimes(1);
     for (let i = 0; i < 5; i++) await w.send({ type: "keepr-exclusions-list" });
     expect(w.fetchStub).toHaveBeenCalledTimes(1);
+    // SR: /focus is open — Keepr comes forward with no OS prompt.
+    expect(await w.send({ type: "keepr-focus" })).toEqual({ ok: true });
+    expect(w.fetchStub).toHaveBeenCalledTimes(2);
+  });
+
+  // SR: keepr://open ONLY when Keepr is unreachable; 429 (asked twice) is done.
+  // Mutations: launch on a refusal → red; 429 not ok → red.
+  it("Open Keepr: launch only when Keepr is unreachable", async () => {
+    const w = await loadWorker();
+    const reply = (status: number) => w.fetchStub.mockImplementationOnce(async () => ({ status, json: async () => ({}) }) as never);
+    reply(429);
+    expect(await w.send({ type: "keepr-focus" })).toEqual({ ok: true });
+    reply(500);
+    expect(await w.send({ type: "keepr-focus" })).toMatchObject({ ok: false, launch: false });
+    w.fetchStub.mockImplementationOnce(async () => {
+      throw new Error("offline");
+    });
     expect(await w.send({ type: "keepr-focus" })).toMatchObject({ ok: false, launch: true });
-    expect(w.fetchStub).toHaveBeenCalledTimes(1);
   });
 });
 

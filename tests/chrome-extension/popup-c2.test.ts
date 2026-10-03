@@ -170,6 +170,26 @@ describe("the popup's Open Keepr (live)", () => {
     expect(p.create).not.toHaveBeenCalled();
   });
 
+  it("linked, /focus refused but Keepr there: no launch (SR: only when unreachable)", async () => {
+    document.body.innerHTML = '<main id="keepr-popup"></main>';
+    const launched: string[] = [];
+    jest.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      launched.push(this.getAttribute("href") || "");
+    });
+    const chromeStub = {
+      runtime: {
+        lastError: undefined,
+        sendMessage: (m: { type: string }, cb: (r: unknown) => void) =>
+          cb(m.type === "keepr-popup-state" ? { state: "linked" } : m.type === "keepr-focus" ? { ok: false, launch: false } : { ok: true }),
+      },
+      tabs: { create: jest.fn() },
+    };
+    await popup.start(document, chromeStub);
+    (document.querySelector('[data-keepr="open-keepr"]') as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(launched).toEqual([]);
+  });
+
   it("Keepr not running: keepr://open; linking: keepr://link — no worker tab", async () => {
     const down = await popupWith({ state: "keepr_down" }, false);
     (document.querySelector('[data-keepr="open-app"]') as HTMLButtonElement).click();

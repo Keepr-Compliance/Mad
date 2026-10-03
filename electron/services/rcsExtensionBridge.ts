@@ -159,6 +159,8 @@ export interface RcsExtensionBridgeOptions {
   onJobFinished?: (job: RcsJobSnapshot) => void;
   /** BACKLOG-3641: the page's "Open Keepr" button (POST /focus). */
   onFocusRequested?: () => void;
+  /** Overridable for tests only: the clock of the /focus rate limit. */
+  now?: () => number;
   /** BACKLOG-3658: POST /hello — the extension is installed ({version}) / the page is paired. */
   onHello?: (hello: RcsHello) => void;
   /**
@@ -245,7 +247,14 @@ const prereadBodies = new WeakMap<http.IncomingMessage, string>();
 const replySigners = new WeakMap<http.ServerResponse, { sign: (status: number, body: string) => string }>();
 
 /** Routes that never need a signature. */
-const PAIR_OPEN_ROUTES = new Set(["/hello", "/pair/start", "/pair/finish", "/link/start", "/link/poll", "/link/finish"]);
+/**
+ * SR (2026-10-03): /focus is open too — it only raises Keepr's window (the
+ * worst a local process can do with it is pop Keepr forward), so "Open
+ * Keepr" works from an unlinked browser without the OS prompt. Rate-limited.
+ */
+const PAIR_OPEN_ROUTES = new Set(["/hello", "/pair/start", "/pair/finish", "/link/start", "/link/poll", "/link/finish", "/focus"]);
+/** SR: at most one /focus per this long (more → 429). */
+export const FOCUS_MIN_INTERVAL_MS = 2000;
 /** SR: the legacy 8-character pairing is gone — an older extension is told to update. */
 export const LEGACY_PAIR_GONE_MESSAGE = "Update the Keepr extension: it now links from its toolbar button.";
 /** C1: the reversed-link routes (the popup's 6-digit code). */
@@ -264,7 +273,7 @@ export function maskEmail(email: string | null | undefined): string | null {
   return email[0] + "***" + email.slice(at);
 }
 /** "dual" mode only (one release): what an older, unpaired extension still needs. Never a job route. */
-const PAIR_DUAL_ROUTES = new Set(["/status", "/focus", "/exclusions/list", "/exclusions/set"]);
+const PAIR_DUAL_ROUTES = new Set(["/status", "/exclusions/list", "/exclusions/set"]);
 /** SR B1: an unsigned request although this user's extension is paired. */
 const SIGNATURE_REQUIRED_MESSAGE = "This extension is paired with Keepr: its requests must be signed. Update or reload the Keepr extension.";
 
@@ -366,6 +375,8 @@ const JOB_ROUTE = /^\/job\/([0-9a-fA-F-]{36})(?:\/(claim|match|chat|attachment|p
 const silentLogger: RcsBridgeLogger = { info: () => {}, warn: () => {}, error: () => {} };
 
 export class RcsExtensionBridge {
+  /** SR: the last /focus honoured (its rate limit). */
+  private lastFocusAt: number | null = null;
   private server: http.Server | null = null;
   private state: RcsBridgeState = "stopped";
   private reason: string | undefined;
@@ -753,6 +764,13 @@ export class RcsExtensionBridge {
           sendJson(res, 501, { error: "unsupported" });
           return;
         }
+        // SR: open (signed or not), so at most one per FOCUS_MIN_INTERVAL_MS.
+        const at = this.options.now ? this.options.now() : Date.now();
+        if (this.lastFocusAt !== null && at - this.lastFocusAt < FOCUS_MIN_INTERVAL_MS) {
+          sendJson(res, 429, { error: "too_many" });
+          return;
+        }
+        this.lastFocusAt = at;
         this.options.onFocusRequested();
         sendJson(res, 200, { ok: true });
         return;

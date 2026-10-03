@@ -587,7 +587,7 @@ describe("SR fix 1: a job Keepr no longer knows ends the run", () => {
     const outcome = await job.runJob(t.JOB, t.env);
     // Live (founder): Keepr no longer knows the job (it restarted) — Keepr lost.
     expect(outcome).toMatchObject({ outcome: "keepr_lost", reason: "unknown_job" });
-    expect(t.shown[t.shown.length - 1]).toEqual(["Keepr closed.", true]);
+    expect(t.shown[t.shown.length - 1]).toEqual(["Keepr closed or restarted.", true]);
     expect(t.opened).toEqual(["aaaaaaaaaaaaaaaaaaa"]);
     expect(t.posts()).not.toContain("/finish");
   });

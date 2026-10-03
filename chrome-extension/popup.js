@@ -171,7 +171,8 @@
       // Linked: signed /focus only (no tab); refused or unreachable → keepr://open.
       openKeepr: function () {
         ask({ type: "keepr-focus" }).then(function (r) {
-          if (!r || !r.ok) launchKeepr(doc, "keepr://open");
+          // SR: keepr://open only when Keepr is unreachable.
+          if (!r || (!r.ok && r.launch)) launchKeepr(doc, "keepr://open");
         });
       },
       openMessages: function () { ask({ type: "keepr-open-messages" }); },
