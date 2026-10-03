@@ -239,4 +239,56 @@ describe("permissionHandlers — relaunch-app (BACKLOG-1842, BACKLOG-2173b)", ()
     expect(mockRelaunch).toHaveBeenCalledTimes(1);
     expect(result).toEqual({ relaunched: true });
   });
+
+  // BACKLOG-3673 C11: the flush is a full REPLACE of the session file mid-session,
+  // not a sign-in. The offline cache of the account's "setup finished" record
+  // must survive it, or an offline relaunch after granting FDA would route a
+  // finished account back into setup.
+  it("BACKLOG-3673 C11: the flush keeps the session's setup-finished cache", async () => {
+    mockLoadSession.mockResolvedValue({
+      user: { id: "user-1" },
+      sessionToken: "tok",
+      provider: "google",
+      accountSetupFinishedAt: "2026-10-01T00:00:00.000Z",
+      // no supabaseTokens -> the flush path runs
+    });
+    mockGetAuthSession.mockResolvedValue({
+      userId: "user-1",
+      accessToken: "access-tok",
+      refreshToken: "refresh-tok",
+    });
+    mockGetUserById.mockResolvedValue({
+      id: "user-1",
+      email: "user@example.com",
+      oauth_provider: "google",
+      subscription_tier: "free",
+      subscription_status: "trial",
+    });
+    mockCreateSession.mockResolvedValue("session-token-123");
+
+    const handler = loadRelaunchHandler();
+    await handler();
+
+    expect(mockSaveSession).toHaveBeenCalledTimes(1);
+    expect(mockSaveSession).toHaveBeenCalledWith(
+      expect.objectContaining({ accountSetupFinishedAt: "2026-10-01T00:00:00.000Z" }),
+    );
+  });
+
+  it("BACKLOG-3673 C11: no cache on the old session -> none invented", async () => {
+    mockLoadSession.mockResolvedValue({ user: { id: "user-1" }, sessionToken: "tok", provider: "google" });
+    mockGetAuthSession.mockResolvedValue({
+      userId: "user-1",
+      accessToken: "access-tok",
+      refreshToken: "refresh-tok",
+    });
+    mockGetUserById.mockResolvedValue({ id: "user-1", oauth_provider: "google" });
+    mockCreateSession.mockResolvedValue("session-token-123");
+
+    const handler = loadRelaunchHandler();
+    await handler();
+
+    expect(mockSaveSession).toHaveBeenCalledTimes(1);
+    expect(mockSaveSession.mock.calls[0][0]).not.toHaveProperty("accountSetupFinishedAt");
+  });
 });
