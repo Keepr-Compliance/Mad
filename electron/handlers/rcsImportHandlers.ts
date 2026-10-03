@@ -1276,7 +1276,7 @@ export function registerRcsImportHandlers(): void {
     "rcs-import:link-state",
     wrapHandler(async (): Promise<{ success: true; link: LinkState; linked: boolean }> => {
       const userId = await currentUserId();
-      return { success: true, link: pairingAuth.linkState(), linked: userId ? pairingAuth.isPaired(userId) : false };
+      return { success: true, link: pairingAuth.linkState(), linked: userId ? pairingAuth.isLinkProven(userId) : false };
     }, { module: LOG_TAG }),
   );
 
@@ -1322,7 +1322,8 @@ export function registerRcsImportHandlers(): void {
           lookbackMonths: userId ? resolveLookbackMonths(await loadStoredImportFilters(userId)) : undefined,
           media: userId ? getRcsMediaOptions(userId) : undefined,
           // BACKLOG-3666: the extension is paired with this Keepr, for this user.
-          extensionPaired: userId ? pairingAuth.isPaired(userId) : false,
+          // Live (B1): "linked" only when the extension proved it (a signed call) recently.
+          extensionPaired: userId ? pairingAuth.isLinkProven(userId) : false,
           // SR: the pairing code shown was used up by wrong attempts.
         },
       };

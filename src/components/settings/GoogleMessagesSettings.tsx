@@ -43,6 +43,9 @@ import { LookbackMonthsSelect, lastMonthsPhrase, parseLookbackOption } from "./L
 import { AndroidForceReimportWarning, androidClearedText } from "./AndroidForceReimportWarning";
 import { NotSyncedChatsModal } from "./android/NotSyncedChatsModal";
 import { LinkBrowserPanel } from "./android/LinkBrowserPanel";
+
+/** Live (B1): not proven by the extension (a lost key, another profile…): said honestly. */
+export const NOT_LINKED_HERE = "Not linked in this browser — click the Keepr icon in Chrome to link";
 import { readMessageImportPreferences, resolveStoredLookbackMonths } from "./messageImportPreferences";
 
 import { GM_LOOKBACK_TARGET } from "./android/googleMessagesSyncSteps";
@@ -192,7 +195,7 @@ export function GoogleMessagesSettings({ userId }: { userId: string }) {
           6-digit code); the code is typed here. One linked browser at a time. */}
       <div className="p-4 bg-white rounded-lg border border-gray-200" data-testid="gm-pairing">
         <span className="text-sm text-gray-900" data-testid="gm-pairing-line">
-          {keeprPaired ? "Extension linked with this Keepr" : "Extension not linked with this Keepr yet"}
+          {keeprPaired ? "Extension linked with this Keepr" : NOT_LINKED_HERE}
         </span>
         <div className="mt-3">
           <LinkBrowserPanel onLinked={() => void refresh()} />

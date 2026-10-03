@@ -30,6 +30,8 @@ jest.mock("../logService", () => {
 import { LEGACY_PAIR_GONE_MESSAGE, RcsExtensionBridge, RCS_EXTENSION_ORIGIN, RCS_MIN_EXTENSION_VERSION } from "../rcsExtensionBridge";
 import { RcsJobRegistry } from "../rcsImportJob";
 import {
+  LINK_PROOF_MS,
+  LINK_STALE_AFTER_MS,
   LINK_INTERRUPTED_MESSAGE,
   LINK_INTRUSION_MESSAGE,
   LINK_MAX_TRIES,
@@ -408,6 +410,34 @@ describe("C1: the reversed link (the popup's code typed in Keepr)", () => {
     expect(store.rows.map((r) => r.pairId)).toEqual([s.body.sessionId]);
     // The old browser's signed calls: unknown now (it forgets its link).
     expect((await post(port, "/job/pending", signed(old, "/job/pending").headers)).body.error).toBe("unknown_pair");
+  });
+});
+
+// Live (B1): "linked" means PROVEN by the extension (a signed call, or the
+// link itself) within 24 h — not just a row. An unsigned "no link here"
+// drops a row not proven in the last 10 minutes. Mutations: isLinkProven =
+// isPaired → red; no proof on a signed call → red; a recent proof dropped → red.
+describe("an honest 'linked' (B1)", () => {
+  it("proven by the link and by signed calls; a restart (no proof yet) is not 'linked'; 24 h without proof is not", async () => {
+    const p = await linkWith("user-a");
+    expect(auth.isLinkProven("user-a")).toBe(true);
+    const restarted = new RcsPairingAuth(P, store, { now: () => clock });
+    expect(restarted.isPaired("user-a")).toBe(true);
+    expect(restarted.isLinkProven("user-a")).toBe(false);
+    clock += LINK_PROOF_MS + 1;
+    expect(auth.isLinkProven("user-a")).toBe(false);
+    expect((await post(port, "/job/pending", signed(p, "/job/pending").headers)).status).toBe(404);
+    expect(auth.isLinkProven("user-a")).toBe(true);
+  });
+
+  it("an unsigned hello 'no link here' drops a stale row, never a recently proven one", async () => {
+    await linkWith("user-a");
+    const hello = () => post(port, "/hello", {}, JSON.stringify({ version: "0.3.38", linked: false }));
+    await hello();
+    expect(store.rows).toHaveLength(1); // proven moments ago: another, unlinked browser
+    clock += LINK_STALE_AFTER_MS + 1;
+    await hello();
+    expect(store.rows).toEqual([]);
   });
 });
 

@@ -156,13 +156,15 @@ describe("service worker: Open Keepr", () => {
 describe("service worker: presence (BACKLOG-3658)", () => {
   const bodyOf = (init: unknown) => JSON.parse(String((init as { body: string }).body));
 
-  it("says hello with only its version when the worker starts", async () => {
+  // Live (B1): an extension with no link also says linked:false (unsigned),
+  // so Keepr drops a stale row — still no user data.
+  it("says hello with only its version (and 'no link here') when the worker starts", async () => {
     const w = await loadWorker();
     expect(w.startupCalls).toHaveLength(1);
     const [url, init] = w.startupCalls[0];
     expect(url).toBe("http://127.0.0.1:38619/hello");
     expect(init.method).toBe("POST");
-    expect(bodyOf(init)).toEqual({ version: "9.9.9" });
+    expect(bodyOf(init)).toEqual({ version: "9.9.9", linked: false });
   });
 
   it("does not say hello again within a minute of the last one (kept across worker restarts)", async () => {
@@ -179,7 +181,7 @@ describe("service worker: presence (BACKLOG-3658)", () => {
     expect(first).toMatchObject({ ok: true, status: 200 });
     expect(w.fetchStub).toHaveBeenCalledTimes(1);
     expect(w.fetchStub.mock.calls[0][0]).toBe("http://127.0.0.1:38619/hello");
-    expect(bodyOf(w.fetchStub.mock.calls[0][1])).toEqual({ version: "9.9.9", paired: true });
+    expect(bodyOf(w.fetchStub.mock.calls[0][1])).toEqual({ version: "9.9.9", paired: true, linked: false });
     const second = await w.send({ type: "keepr-hello", paired: true });
     expect(second).toMatchObject({ ok: true, throttled: true });
     expect(w.fetchStub).toHaveBeenCalledTimes(1);

@@ -60,6 +60,15 @@ export const LINK_MAX_TRIES = 5;
 export const LINK_STARTS_PER_MIN = 5;
 export const LINK_LOCKOUT_MS = 60 * 1000;
 export const LINK_INTERRUPTED_MESSAGE = "Pairing interrupted, try again";
+/**
+ * Live (B1, founder 2026-10-03): Keepr says "linked" only when the extension
+ * PROVED it — a signed call (or the link itself) within this long. A row
+ * alone is not proof (the extension may have lost its key: removed and
+ * loaded again, browser data cleared, another Chrome profile).
+ */
+export const LINK_PROOF_MS = 24 * 60 * 60 * 1000;
+/** B1: an unsigned "no link here" (/hello linked:false) drops a row not proven this recently. */
+export const LINK_STALE_AFTER_MS = 10 * 60 * 1000;
 export const LINK_INTRUSION_MESSAGE = "Another app tried to link — check for unknown software";
 /**
  * The old 8-character Keepr-made codes (/pair/start, /pair/finish, issueCode):
@@ -110,6 +119,8 @@ export class RcsPairingAuth {
     answer: { pB: string; cB: string; expectCA: string; ke: string; userId: string } | null;
   } | null = null;
   private linkStarts: number[] = [];
+  /** B1: when each user's link was last proven (a signed call, or the link itself). In memory. */
+  private readonly proven = new Map<string, number>();
   private linkLockedUntil = 0;
   /** C1 (SR): too many /link/start in a minute — said in Keepr's link screen. */
   private linkIntrusion = false;
@@ -183,6 +194,27 @@ export class RcsPairingAuth {
     if (this.burned) return "burned";
     if (this.expired) return "expired";
     return "none";
+  }
+
+  /** B1: linked AND proven by the extension recently (what Keepr shows as "Linked"). */
+  isLinkProven(userId: string): boolean {
+    const at = this.proven.get(userId);
+    return at !== undefined && this.now() - at <= LINK_PROOF_MS && this.isPaired(userId);
+  }
+
+  /**
+   * B1: the extension says it has NO link (an unsigned /hello, linked:false).
+   * The user's row is dropped unless a signed call proved it within
+   * LINK_STALE_AFTER_MS (another, unlinked browser must not drop a live link).
+   * → true when a stale row was dropped.
+   */
+  dropUnprovenLink(userId: string): boolean {
+    if (!this.isPaired(userId)) return false;
+    const at = this.proven.get(userId);
+    if (at !== undefined && this.now() - at <= LINK_STALE_AFTER_MS) return false;
+    this.revoke(userId);
+    this.proven.delete(userId);
+    return true;
   }
 
   isPaired(userId: string): boolean {
@@ -309,6 +341,7 @@ export class RcsPairingAuth {
     if (seen.size >= PAIR_NONCE_CAP) return err(429, "busy");
     seen.set(nonce, this.now());
     if (currentUserId !== undefined && pairing.userId !== currentUserId) return err(401, "re_pair");
+    this.proven.set(pairing.userId, this.now());
     return { ok: true, pairing, nonce };
   }
 
@@ -408,6 +441,7 @@ export class RcsPairingAuth {
     // with the new one in ONE transaction (SR) — the old one's requests
     // become "unknown"; a failed save leaves the old link as it was.
     this.store.save({ pairId: l.sessionId, userId: l.answer.userId, keyHex });
+    this.proven.set(l.answer.userId, this.now());
     this.link = null;
     this.linkIntrusion = false;
     return { status: 200, body: { ok: true, linked: true }, signWith: { keyHex, nonce: typeof b.nonce === "string" ? b.nonce : "" } };

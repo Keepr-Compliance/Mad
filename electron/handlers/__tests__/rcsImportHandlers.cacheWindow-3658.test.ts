@@ -199,6 +199,14 @@ describe("rcs-import:start-cache-job window (BACKLOG-3658)", () => {
 
   // Item 5: the Sync screen's line names the months the cache floor reads
   // (messageImport.filters). Mutation: another key / no default → red.
+  // Live (B1): a pairing row alone is NOT "linked" — the extension must have
+  // proved it (a signed call). Mutation: extensionPaired from the row → red.
+  it("get-extension-state: a row nobody proved is not 'linked'", async () => {
+    mockPaired = true;
+    const r = (await handlers.get("rcs-import:get-extension-state")!({})) as { state: { extensionPaired?: boolean } };
+    expect(r.state.extensionPaired).toBe(false);
+  });
+
   it("get-extension-state: lookbackMonths from messageImport.filters (absent → 1.5, null → All time)", async () => {
     const state = async () =>
       ((await handlers.get("rcs-import:get-extension-state")!({})) as { state: { lookbackMonths?: number | null } }).state.lookbackMonths;

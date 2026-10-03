@@ -243,7 +243,7 @@ describe("GoogleMessagesSettings", () => {
   // Keepr-made code shown → red.
   it("linking: the linked line, and the link panel (no Keepr-made code)", async () => {
     const view = render(<GoogleMessagesSettings userId="user-1" />);
-    expect(await screen.findByTestId("gm-pairing-line")).toHaveTextContent("Extension not linked with this Keepr yet");
+    expect(await screen.findByTestId("gm-pairing-line")).toHaveTextContent("Not linked in this browser — click the Keepr icon in Chrome to link");
     expect(await screen.findByTestId("gm-link-panel")).toBeInTheDocument();
     expect(screen.queryByTestId("gm-pair-code")).toBeNull();
     expect(screen.queryByRole("button", { name: /pairing code|Re-pair/ })).toBeNull();

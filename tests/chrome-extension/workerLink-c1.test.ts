@@ -69,8 +69,9 @@ afterEach(async () => {
   uninstallPairing();
 });
 
-async function worker(version = "9.9.9") {
-  await installPairing(false);
+async function worker(version = "9.9.9", keepStore = false) {
+  // keepStore: the same key store as the last worker (an extension reload / update).
+  if (!keepStore) await installPairing(false);
   let listener: Listener | null = null;
   const bodies: string[] = [];
   const chromeStub = {
@@ -189,6 +190,29 @@ describe("C1: reversed linking (the popup's 6-digit code, typed in Keepr)", () =
       method: "POST", headers: { "Content-Type": "application/json", Origin: RCS_EXTENSION_ORIGIN }, body: "{}",
     });
     expect(unsigned.status).toBe(401);
+  });
+
+  // Live (B1): a link survives the worker / extension restarting (the key
+  // store persists); an unlinked extension says so in its hello and Keepr
+  // drops a stale row; Keepr says "linked" only once the extension proved it.
+  // Mutations: the hello without linked:false → red; a stale row kept → red.
+  it("a link survives an extension reload; Keepr's 'linked' needs proof", async () => {
+    const w = await worker();
+    const l = (await w.send({ type: "keepr-link-start" })).link as { code: string };
+    auth.linkEnterCode("user-a", l.code);
+    await waitFor(() => rows.length === 1);
+    expect(auth.isLinkProven("user-a")).toBe(true);
+    const reloaded = await worker("9.9.9", true);
+    expect((await reloaded.send({ type: "keepr-pair-status" })).paired).toBe(true);
+    expect((await reloaded.send({ type: "keepr-check-pending" })).status).toBe(404); // signed, accepted
+  });
+
+  it("an extension with no link says so in its hello; Keepr drops a row nobody proved recently", async () => {
+    rows = [{ pairId: "stale", userId: "user-a", keyHex: "22".repeat(32) }]; // Keepr kept a row; the extension lost its key
+    expect(auth.isPaired("user-a")).toBe(true);
+    expect(auth.isLinkProven("user-a")).toBe(false);
+    await worker(); // its startup hello: unsigned, linked:false
+    await waitFor(() => rows.length === 0);
   });
 
   it("the popup's states: Keepr down, out of date, not linked, linking (L6)", async () => {
