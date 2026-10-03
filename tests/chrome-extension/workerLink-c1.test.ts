@@ -207,12 +207,16 @@ describe("C1: reversed linking (the popup's 6-digit code, typed in Keepr)", () =
     expect((await reloaded.send({ type: "keepr-check-pending" })).status).toBe(404); // signed, accepted
   });
 
-  it("an extension with no link says so in its hello; Keepr drops a row nobody proved recently", async () => {
-    rows = [{ pairId: "stale", userId: "user-a", keyHex: "22".repeat(32) }]; // Keepr kept a row; the extension lost its key
-    expect(auth.isPaired("user-a")).toBe(true);
-    expect(auth.isLinkProven("user-a")).toBe(false);
-    await worker(); // its startup hello: unsigned, linked:false
-    await waitFor(() => rows.length === 0);
+  it("an extension with no link says so in its hello; Keepr keeps the link but stops saying 'linked' (SR B1)", async () => {
+    const linked = await worker();
+    const l = (await linked.send({ type: "keepr-link-start" })).link as { code: string };
+    auth.linkEnterCode("user-a", l.code);
+    await waitFor(() => rows.length === 1);
+    expect(auth.isLinkProven("user-a")).toBe(true);
+    await new Promise((r) => setTimeout(r, 5));
+    await worker(); // a second Chrome profile, never linked: its startup hello (unsigned, linked:false)
+    await waitFor(() => !auth.isLinkProven("user-a"));
+    expect(rows).toHaveLength(1);
   });
 
   it("the popup's states: Keepr down, out of date, not linked, linking (L6)", async () => {

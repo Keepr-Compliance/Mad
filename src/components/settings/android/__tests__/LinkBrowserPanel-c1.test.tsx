@@ -15,11 +15,13 @@ type Link =
 let mockLink: Link = { state: "none", intrusion: false };
 let mockLinked = false;
 const mockEnter = jest.fn(async (_code: string) => ({ success: true }) as { success: boolean; error?: string });
+const mockLinkForget = jest.fn(async () => undefined);
 jest.mock("../../../../services/rcsImportService", () => ({
   rcsImportService: {
     linkState: async () => ({ success: true, data: { link: mockLink, linked: mockLinked } }),
     linkEnterCode: (code: string) => mockEnter(code),
     linkDismissWarning: async () => undefined,
+    linkForget: () => mockLinkForget(),
   },
 }));
 
@@ -111,6 +113,17 @@ describe("LinkBrowserPanel", () => {
     await flush();
     fireEvent.click(screen.getByTestId("gm-link-another"));
     expect(screen.getByTestId("gm-link-none")).toHaveTextContent(LINK_COPY.none);
+  });
+
+  // SR (B1): "Forget link" is Keepr's own way to delete a link.
+  // Mutation: the button not calling linkForget → red.
+  it("linked: 'Forget link' forgets it", async () => {
+    mockLinked = true;
+    render(<LinkBrowserPanel />);
+    await flush();
+    fireEvent.click(screen.getByTestId("gm-link-forget"));
+    await flush();
+    expect(mockLinkForget).toHaveBeenCalledTimes(1);
   });
 
   it("cleanLinkCode: digits only, at most 6", () => {

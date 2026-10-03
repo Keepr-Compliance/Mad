@@ -705,12 +705,10 @@ export class RcsExtensionBridge {
         const hello: RcsHello = {};
         if (typeof b.version === "string") hello.version = b.version.slice(0, 40);
         if (b.paired === true) hello.paired = true;
-        // Live (B1): the extension has NO link (an unsigned hello saying so):
-        // a stale row of the signed-in user goes, so Keepr stops saying "linked".
-        if (!signedPairing && b.linked === false && this.options.pairing) {
-          const userId = this.options.currentUserId ? await this.options.currentUserId() : null;
-          if (userId && this.options.pairing.dropUnprovenLink(userId)) this.logger.info("[RcsBridge] A stale link was dropped (the extension has none)");
-        }
+        // Live (B1): an extension says, unsigned, it has NO link. Keepr only
+        // SHOWS "Not linked in this browser" — never deletes a link on it
+        // (SR: anyone local can send it; a second profile sends it too).
+        if (!signedPairing && b.linked === false && this.options.pairing) this.options.pairing.noteExtensionUnlinked();
         this.options.onHello?.(hello);
         // BACKLOG-3666: only "paired: yes / no" (yes = a valid signature of a
         // pairing bound to the signed-in user). C1: the oldest extension

@@ -1292,6 +1292,17 @@ export function registerRcsImportHandlers(): void {
     }, { module: LOG_TAG }),
   );
 
+  // SR (B1): Keepr's own "Forget link" — one of the only ways a link is deleted
+  // (with a signed /link/unlink, a new link, and sign-out / a user switch).
+  ipcMain.handle(
+    "rcs-import:link-forget",
+    wrapHandler(async (): Promise<{ success: true }> => {
+      const userId = await currentUserId();
+      if (userId) pairingAuth.forgetLink(userId);
+      return { success: true };
+    }, { module: LOG_TAG }),
+  );
+
   ipcMain.handle(
     "rcs-import:link-dismiss-warning",
     wrapHandler(async (): Promise<{ success: true }> => {

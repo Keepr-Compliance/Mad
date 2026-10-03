@@ -31,7 +31,6 @@ import { LEGACY_PAIR_GONE_MESSAGE, RcsExtensionBridge, RCS_EXTENSION_ORIGIN, RCS
 import { RcsJobRegistry } from "../rcsImportJob";
 import {
   LINK_PROOF_MS,
-  LINK_STALE_AFTER_MS,
   LINK_INTERRUPTED_MESSAGE,
   LINK_INTRUSION_MESSAGE,
   LINK_MAX_TRIES,
@@ -430,14 +429,37 @@ describe("an honest 'linked' (B1)", () => {
     expect(auth.isLinkProven("user-a")).toBe(true);
   });
 
-  it("an unsigned hello 'no link here' drops a stale row, never a recently proven one", async () => {
+  // SR (B1): an unsigned hello NEVER deletes a link — it changes only what
+  // Keepr shows. Mutations: the bridge deleting on it → red; the hello not
+  // changing the display → red; Forget link not deleting → red.
+  const unlinkedHello = () => post(port, "/hello", {}, JSON.stringify({ version: "0.3.38", linked: false }));
+
+  it("a second, unlinked profile's hello never deletes the link; Keepr shows 'not linked' until the next signed call", async () => {
+    const p = await linkWith("user-a");
+    clock += 60 * 60 * 1000; // long after the link
+    for (let i = 0; i < 3; i++) await unlinkedHello();
+    expect(store.rows).toHaveLength(1);
+    expect(auth.isPaired("user-a")).toBe(true);
+    expect(auth.isLinkProven("user-a")).toBe(false);
+    clock += 1;
+    expect((await post(port, "/job/pending", signed(p, "/job/pending").headers)).status).toBe(404);
+    expect(auth.isLinkProven("user-a")).toBe(true);
+  });
+
+  it("a Keepr restart, then an unsigned hello: the link is kept", async () => {
     await linkWith("user-a");
-    const hello = () => post(port, "/hello", {}, JSON.stringify({ version: "0.3.38", linked: false }));
-    await hello();
-    expect(store.rows).toHaveLength(1); // proven moments ago: another, unlinked browser
-    clock += LINK_STALE_AFTER_MS + 1;
-    await hello();
+    const restarted = new RcsPairingAuth(P, store, { now: () => clock });
+    restarted.noteExtensionUnlinked();
+    await unlinkedHello();
+    expect(store.rows).toHaveLength(1);
+    expect(restarted.isPaired("user-a")).toBe(true);
+  });
+
+  it("Forget link deletes the user's link", async () => {
+    await linkWith("user-a");
+    auth.forgetLink("user-a");
     expect(store.rows).toEqual([]);
+    expect(auth.isLinkProven("user-a")).toBe(false);
   });
 });
 

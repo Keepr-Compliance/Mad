@@ -67,8 +67,7 @@ export const LINK_INTERRUPTED_MESSAGE = "Pairing interrupted, try again";
  * loaded again, browser data cleared, another Chrome profile).
  */
 export const LINK_PROOF_MS = 24 * 60 * 60 * 1000;
-/** B1: an unsigned "no link here" (/hello linked:false) drops a row not proven this recently. */
-export const LINK_STALE_AFTER_MS = 10 * 60 * 1000;
+
 export const LINK_INTRUSION_MESSAGE = "Another app tried to link — check for unknown software";
 /**
  * The old 8-character Keepr-made codes (/pair/start, /pair/finish, issueCode):
@@ -121,6 +120,12 @@ export class RcsPairingAuth {
   private linkStarts: number[] = [];
   /** B1: when each user's link was last proven (a signed call, or the link itself). In memory. */
   private readonly proven = new Map<string, number>();
+  /**
+   * SR (B1): when an extension last said, unsigned, "no link here". It only
+   * changes what Keepr SHOWS — it never deletes a link (anyone on this
+   * computer can send it, and a second, unlinked Chrome profile sends it too).
+   */
+  private unlinkedReportAt: number | null = null;
   private linkLockedUntil = 0;
   /** C1 (SR): too many /link/start in a minute — said in Keepr's link screen. */
   private linkIntrusion = false;
@@ -196,25 +201,25 @@ export class RcsPairingAuth {
     return "none";
   }
 
-  /** B1: linked AND proven by the extension recently (what Keepr shows as "Linked"). */
+  /**
+   * B1: linked AND proven by the extension recently (what Keepr shows as
+   * "Linked"), and no extension has said "no link here" since that proof.
+   */
   isLinkProven(userId: string): boolean {
     const at = this.proven.get(userId);
-    return at !== undefined && this.now() - at <= LINK_PROOF_MS && this.isPaired(userId);
+    if (at === undefined || this.now() - at > LINK_PROOF_MS) return false;
+    if (this.unlinkedReportAt !== null && this.unlinkedReportAt >= at) return false;
+    return this.isPaired(userId);
   }
 
-  /**
-   * B1: the extension says it has NO link (an unsigned /hello, linked:false).
-   * The user's row is dropped unless a signed call proved it within
-   * LINK_STALE_AFTER_MS (another, unlinked browser must not drop a live link).
-   * → true when a stale row was dropped.
-   */
-  dropUnprovenLink(userId: string): boolean {
-    if (!this.isPaired(userId)) return false;
-    const at = this.proven.get(userId);
-    if (at !== undefined && this.now() - at <= LINK_STALE_AFTER_MS) return false;
+  /** SR (B1): an unsigned "no link here" (/hello linked:false) — display only, never a delete. */
+  noteExtensionUnlinked(): void {
+    this.unlinkedReportAt = this.now();
+  }
+
+  /** SR (B1): Keepr's own "Forget link" — the user's link goes. */
+  forgetLink(userId: string): void {
     this.revoke(userId);
-    this.proven.delete(userId);
-    return true;
   }
 
   isPaired(userId: string): boolean {
@@ -224,6 +229,7 @@ export class RcsPairingAuth {
   /** Sign-out / user switch: the user's pairing goes. */
   revoke(userId: string): void {
     this.store.deleteForUser(userId);
+    this.proven.delete(userId);
   }
 
   /** POST /pair/start {pA}. */

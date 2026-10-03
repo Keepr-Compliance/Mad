@@ -462,7 +462,7 @@ async function sayHello(paired) {
   if (await helloSentRecently(kind, Date.now())) return { ok: true, throttled: true };
   const body = { version: extensionVersion() };
   if (paired) body.paired = true;
-  // Live (B1): no link here — said so (unsigned), so Keepr drops a stale one.
+  // Live (B1): no link here — said so (unsigned); Keepr only shows "not linked".
   if (!(await currentPairing())) body.linked = false;
   return postBridge("/hello", body);
 }

@@ -134,14 +134,25 @@ export function LinkBrowserPanel({ onLinked }: LinkBrowserPanelProps) {
       ) : link?.state === "locked" ? null : linked && !howOpen ? (
         <div className="flex items-center justify-between gap-3">
           <p className="text-sm text-gray-800" data-testid="gm-link-linked">{LINK_COPY.linked}</p>
-          <button
-            type="button"
-            className="text-sm text-indigo-700 hover:text-indigo-900"
-            onClick={() => setHowOpen(true)}
-            data-testid="gm-link-another"
-          >
-            Link a browser
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              className="text-sm text-indigo-700 hover:text-indigo-900"
+              onClick={() => setHowOpen(true)}
+              data-testid="gm-link-another"
+            >
+              Link a browser
+            </button>
+            {/* SR (B1): the only Keepr-side way to delete a link. */}
+            <button
+              type="button"
+              className="text-sm text-gray-600 hover:text-gray-900"
+              onClick={() => void rcsImportService.linkForget().then(refresh)}
+              data-testid="gm-link-forget"
+            >
+              Forget link
+            </button>
+          </div>
         </div>
       ) : (
         <p className="text-sm text-gray-800" data-testid="gm-link-none">{LINK_COPY.none}</p>
