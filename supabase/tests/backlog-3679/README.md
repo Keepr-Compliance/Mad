@@ -1,6 +1,6 @@
 # BACKLOG-3679 harness — invite acceptance on organization_members
 
-Migration: `supabase/migrations/20261003100000_backlog_3679_invite_accept_policy.sql`
+Migration: `supabase/migrations/20261003061523_backlog_3679_invite_accept_policy.sql`
 Rollback:  `rollback-3679.sql`
 
 ```bash

@@ -15,7 +15,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
-MIG="${MIG_OVERRIDE:-$REPO/supabase/migrations/20261003100000_backlog_3679_invite_accept_policy.sql}"
+MIG="${MIG_OVERRIDE:-$REPO/supabase/migrations/20261003061523_backlog_3679_invite_accept_policy.sql}"
 SSH_HOST="${SSH_HOST:?set SSH_HOST}"; CONTAINER="${PG_CONTAINER:?set PG_CONTAINER}"
 psql_in() { ssh -o BatchMode=yes -o ConnectTimeout=20 "$SSH_HOST" "docker exec -i $CONTAINER psql -U postgres -v ON_ERROR_STOP=1 -X -q -tA -f -"; }
 
