@@ -69,14 +69,14 @@ describe("auto theme (D1, D2)", () => {
 });
 
 describe("states (design C)", () => {
-  it("syncing: a collapsed pill 'Keepr · syncing 8 of 21 — keep this tab on screen' with ▾; ▾ asks to expand; expanded shows progress + Cancel (D3)", () => {
+  it("syncing: a collapsed pill 'Keepr · syncing 8 of 21 — keep this tab open' with ▾; ▾ asks to expand; expanded shows progress + Cancel (D3)", () => {
     const onExpand = jest.fn();
     const pill = render("Chat 8 of 21…", false, { cancel: true }, { onExpand, theme: "light" });
     expect(pill.getAttribute("data-keepr-state")).toBe("syncing");
     expect(pill.style.borderRadius).toBe("999px");
     // Founder (2026-10-01): the keep-on-screen hint from the first second.
     // Mutation: the hint only once paused → red.
-    expect(pill.querySelector('[data-keepr="line"]')?.textContent).toBe("Keepr · syncing 8 of 21 — keep this tab on screen");
+    expect(pill.querySelector('[data-keepr="line"]')?.textContent).toBe("Keepr · syncing 8 of 21 — keep this tab open");
     expect(pill.querySelector('[data-keepr="hint"]')).toBeNull();
     expect(pill.querySelector('[data-keepr="cancel"]')).toBeNull();
     const expand = pill.querySelector('[data-keepr="expand"]') as HTMLButtonElement;
@@ -87,12 +87,12 @@ describe("states (design C)", () => {
     expect(card.style.borderRadius).toBe("16px");
     expect(card.querySelector('[data-keepr="progress"]')?.textContent).toBe("Chat 8 of 21…");
     expect(card.querySelector('[data-keepr="hint"]')?.textContent).toBe(
-      "Keep this tab open and on screen while Keepr syncs. When it's done, you'll go back to Keepr automatically.",
+      "Keep this tab open while Keepr syncs. When it's done, you'll go back to Keepr automatically.",
     );
     expect(card.querySelector('[data-keepr="cancel"]')).not.toBeNull();
     // A line that is not "n of m" keeps its words.
     const waiting = render("Saving in Keepr…", false, undefined, { theme: "light" });
-    expect(waiting.querySelector('[data-keepr="line"]')?.textContent).toBe("Keepr · Saving in Keepr — keep this tab on screen");
+    expect(waiting.querySelector('[data-keepr="line"]')?.textContent).toBe("Keepr · Saving in Keepr — keep this tab open");
   });
 
   it("paused: auto-expanded, amber, says what to do, keeps Cancel (D4)", () => {

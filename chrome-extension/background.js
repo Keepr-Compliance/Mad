@@ -319,6 +319,28 @@ async function sayHello(paired) {
   return postBridge("/hello", body);
 }
 
+/**
+ * A Sync's tab: Chrome must not discard it while the run is on (a hidden tab
+ * now syncs on). The tab's own setting is remembered and put back after.
+ */
+const keptTabs = new Map();
+async function keepTab(tab, keep) {
+  if (!tab || typeof tab.id !== "number") return { ok: false };
+  try {
+    if (keep) {
+      if (!keptTabs.has(tab.id)) keptTabs.set(tab.id, tab.autoDiscardable !== false);
+      await chrome.tabs.update(tab.id, { autoDiscardable: false });
+    } else {
+      const before = keptTabs.has(tab.id) ? keptTabs.get(tab.id) : true;
+      keptTabs.delete(tab.id);
+      await chrome.tabs.update(tab.id, { autoDiscardable: before });
+    }
+    return { ok: true };
+  } catch (_err) {
+    return { ok: false }; // the tab is gone: nothing to keep
+  }
+}
+
 function askTab(tabId, message) {
   return new Promise((resolve) => {
     try {
@@ -399,6 +421,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     case "keepr-job-found":
       routeJob(message.jobId, sender.tab).then(sendResponse, fail);
+      return true;
+    case "keepr-keep-tab":
+      // Founder (2026-10-03): the job's tab is not auto-discarded while a run is on.
+      keepTab(sender && sender.tab, message.keep === true).then(sendResponse, fail);
       return true;
     case "keepr-focus":
       // BACKLOG-3641: the overlay's "Open Keepr" button.

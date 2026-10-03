@@ -1092,6 +1092,16 @@ export class RcsExtensionBridge {
           const m = media && media[k] && typeof media[k] === "object" ? (media[k] as Record<string, unknown>) : null;
           return m && typeof m.seen === "number" && Number.isFinite(m.seen) && m.seen >= 0 ? Math.floor(m.seen) : null;
         };
+        // Founder (2026-10-03): time the tab was hidden and the history loaded
+        // meanwhile (numbers only) — are hidden / minimized runs slower?
+        const hidden = body.hidden && typeof body.hidden === "object" ? (body.hidden as Record<string, unknown>) : null;
+        const n = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0);
+        if (hidden) {
+          this.logger.info(
+            `[RcsBridge] Hidden tab: ${Math.round(n(hidden.ms) / 1000)}s in ${n(hidden.spells)} spells; ` +
+              `${n(hidden.batches)} history batches in ${n(hidden.chats)} chats loaded while hidden`,
+          );
+        }
         if (job.kind === "cache" && job.userId && this.options.onMediaCounts && seen("photos") !== null && seen("videos") !== null) {
           this.options.onMediaCounts(job.userId, { photosSeen: seen("photos") as number, videosSeen: seen("videos") as number });
         }

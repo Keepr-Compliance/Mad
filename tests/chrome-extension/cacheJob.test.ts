@@ -252,7 +252,7 @@ function cacheEnv(opts: {
   rows: Array<[string, string | null]>;
   numbers: Record<string, string[]>;
   imageReply?: { ok: boolean; status: number; body: Record<string, unknown> };
-  visibility?: { hidden: () => boolean; whenVisible: () => Promise<void> };
+  visibility?: { hidden: () => boolean; onChange?: (cb: (hidden: boolean) => void) => () => void };
   finishReply?: Record<string, unknown>;
   /** History v2: /match's keepImages answer. */
   keepImages?: boolean;
@@ -805,83 +805,64 @@ describe("runJob: a cache Sync", () => {
     expect(outcome.progress.skipped).toBe(0);
   });
 
-  it("pauses while hidden and resumes once visible (M6)", async () => {
-    let hidden = false;
-    let release: () => void = () => {};
+  // Founder (2026-10-03): a hidden tab (another tab, minimized, behind other
+  // windows) does NOT pause the run; the time hidden and the history loaded
+  // meanwhile are counted, and Chrome must not discard the tab during the run.
+  // Mutations: the hidden pause back → red; the telemetry not sent → red;
+  // the tab kept discardable / never released → red.
+  it("a hidden tab does not pause: every chat is read, the time hidden is counted", async () => {
+    let hidden = true;
+    let clock = NOW;
+    let notify: (h: boolean) => void = () => {};
     const t = cacheEnv({
       rows: ROWS,
       numbers: { [id(0)]: ["+15555550101"], [id(1)]: ["+15555550103"] },
       visibility: {
         hidden: () => hidden,
-        whenVisible: () => new Promise<void>((r) => {
-          release = () => {
-            hidden = false;
-            r();
-          };
-        }),
-      },
+        onChange: (cb: (h: boolean) => void) => {
+          notify = cb;
+          return () => { notify = () => {}; };
+        },
+      } as never,
     });
-    // Hidden once the first chat is done (back on the list), before the next.
-    t.env.returnToList = async () => {
-      if (t.opened.length === 1) hidden = true;
-      return true;
+    t.env.now = () => new Date(clock);
+    t.env.scan.loadHistory = async (_d: Document, o: { floorMs: number | null }) => {
+      t.floors.push(o.floorMs);
+      clock += 30_000;
+      if (t.floors.length === 2) {
+        hidden = false;
+        notify(false);
+      }
+      return { stopReason: "floor", count: 1, batches: 4 };
     };
-    const run = job.runJob(JOB, t.env);
-    for (let i = 0; i < 50; i++) await Promise.resolve();
-    await new Promise((r) => setTimeout(r, 0));
-    // Paused: Keepr heard it, and nothing more was opened.
-    expect(t.calls.some(([, p, b]) => p.endsWith("/progress") && b?.stage === job.PAUSED_TEXT)).toBe(true);
-    expect(t.opened).toEqual([id(0)]);
-    expect(t.shown.some(([text]) => text === job.PAUSED_TEXT)).toBe(true);
-    release();
-    const outcome = await run;
+    const kept: boolean[] = [];
+    (t.env as Record<string, unknown>).keepTab = (k: boolean) => void kept.push(k);
+    const outcome = await job.runJob(JOB, t.env);
     expect(outcome.outcome).toBe("finished");
     expect(t.opened).toEqual([id(0), id(1), id(2)]);
+    expect(t.calls.some(([, p, b]) => p.endsWith("/progress") && b?.stage === job.PAUSED_TEXT)).toBe(false);
+    const fin = t.calls.find(([, p]) => p.endsWith("/finish"))![2] as { hidden: Record<string, number> };
+    expect(fin.hidden).toEqual({ ms: 60_000, spells: 1, chats: 2, batches: 8 });
+    expect(kept).toEqual([true, false]);
   });
 
-  it("hidden mid-chat: pauses before loading its history, then goes on", async () => {
-    let hidden = false;
-    let release: () => void = () => {};
-    const t = cacheEnv({
-      rows: ROWS.slice(0, 1),
-      numbers: { [id(0)]: ["+15555550101"] },
-      visibility: {
-        hidden: () => hidden,
-        whenVisible: () => new Promise<void>((r) => {
-          release = () => {
-            hidden = false;
-            r();
-          };
-        }),
-      },
-    });
-    const origOpen = t.env.openConversation;
-    t.env.openConversation = async (c) => {
-      await origOpen(c);
-      hidden = true;
-    };
-    const run = job.runJob(JOB, t.env);
-    for (let i = 0; i < 50; i++) await Promise.resolve();
-    await new Promise((r) => setTimeout(r, 0));
-    expect(t.floors).toEqual([]);
-    expect(t.calls.some(([, p, b]) => p.endsWith("/progress") && b?.stage === job.PAUSED_TEXT)).toBe(true);
-    release();
-    expect((await run).outcome).toBe("finished");
-    expect(t.floors).toHaveLength(1);
-  });
-
-  it("a cancel while paused ends the run as cancelled", async () => {
-    const t = cacheEnv({
-      rows: ROWS,
-      numbers: {},
-      visibility: { hidden: () => true, whenVisible: async () => {} },
-    });
+  it("the tab is released also when the run ends early (cancelled in Keepr)", async () => {
+    const t = cacheEnv({ rows: ROWS, numbers: {} });
     const api = t.env.api;
     t.env.api = async (m: string, p: string, b?: Record<string, unknown>) =>
-      b?.stage === job.PAUSED_TEXT ? { ok: false, status: 410, body: { error: "job_over" } } : api(m, p, b);
-    const outcome = await job.runJob(JOB, t.env);
-    expect(outcome.outcome).toBe("job_gone");
-    expect(t.opened).toEqual([]);
+      p.endsWith("/claim") ? { ok: false, status: 410, body: { error: "job_over" } } : api(m, p, b);
+    const kept: boolean[] = [];
+    (t.env as Record<string, unknown>).keepTab = (k: boolean) => void kept.push(k);
+    await job.runJob(JOB, t.env);
+    expect(kept).toEqual([true, false]);
+  });
+
+  it("the worker keeps the job's tab from being discarded and puts its setting back", () => {
+    const src = fs.readFileSync(path.join(__dirname, "..", "..", "chrome-extension", "background.js"), "utf8");
+    expect(src).toContain("await chrome.tabs.update(tab.id, { autoDiscardable: false });");
+    expect(src).toContain("await chrome.tabs.update(tab.id, { autoDiscardable: before });");
+    const jobSrc = fs.readFileSync(path.join(__dirname, "..", "..", "chrome-extension", "job.js"), "utf8");
+    expect(jobSrc).not.toMatch(/whenVisible/);
   });
 });
 

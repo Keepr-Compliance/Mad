@@ -314,7 +314,7 @@ describe("the overlay panel (BACKLOG-3641 founder UX)", () => {
     // A progress line replaces everything: the collapsed pill, no stale buttons.
     job.renderOverlay(el, "Checking chat 2 of 9", false, undefined, { copy: async () => true });
     expect(el.children).toHaveLength(1);
-    expect(el.querySelector("[data-keepr=line]")?.textContent).toBe("Keepr · syncing 2 of 9 — keep this tab on screen");
+    expect(el.querySelector("[data-keepr=line]")?.textContent).toBe("Keepr · syncing 2 of 9 — keep this tab open");
     expect(el.querySelector("[data-keepr=open-keepr]")).toBeNull();
   });
 

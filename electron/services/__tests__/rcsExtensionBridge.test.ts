@@ -507,6 +507,30 @@ describe("RcsExtensionBridge sync jobs", () => {
         // them from the finish line → red.
         expect(line).toContain("listed 19, candidates 8, checked 8, matched 0, skipped 1");
         expect(logged.join("\n")).not.toContain("Chat Name");
+        expect(logged.join("\n")).not.toContain("Hidden tab");
+      } finally {
+        await own.stop();
+      }
+    });
+
+    // Founder (2026-10-03): the hidden-tab telemetry is logged (numbers only).
+    // Mutation: not logged → red; a non-number passed through → red.
+    it("/finish logs the time hidden and the history loaded while hidden", async () => {
+      const logged: string[] = [];
+      const own = new RcsExtensionBridge({
+        importChat,
+        jobs: new RcsJobRegistry(),
+        logger: { info: (m) => logged.push(m), warn: (m) => logged.push(m), error: (m) => logged.push(m) },
+      });
+      expect(await own.start(0)).toBe("listening");
+      try {
+        const ownPort = own.getStatus().port;
+        const id = own.createJob("tx-job", JOB_CONTACTS)!.jobId;
+        await request(ownPort, "POST", `/job/${id}/claim`, EXT);
+        await request(ownPort, "POST", `/job/${id}/finish`, EXT, JSON.stringify({
+          chats: 0, messages: 0, images: 0, hidden: { ms: 61_400, spells: 2, chats: 3, batches: "x<script>" },
+        }));
+        expect(logged).toContain("[RcsBridge] Hidden tab: 61s in 2 spells; 0 history batches in 3 chats loaded while hidden");
       } finally {
         await own.stop();
       }

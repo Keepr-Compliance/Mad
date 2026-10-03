@@ -79,6 +79,8 @@
   var CACHE_CHECK_MAX = 300;
   /** BACKLOG-3658: the list read for a cache Sync stops here when no time can be read. */
   var CACHE_LIST_MAX = 1000;
+  // No longer sent (founder 2026-10-03: no pause while hidden); still rendered
+  // as the paused state for an older Keepr-side stage.
   var PAUSED_TEXT = "Keep this Chrome window visible — Sync paused";
   /**
    * SR M (2026-10-02): media. Keepr says per chat whether it keeps the chat's
@@ -541,6 +543,9 @@
   }
 
   async function runJob(jobId, env) {
+    // Founder (2026-10-03): the sync runs on in a hidden tab; Chrome must not
+    // discard the tab while it runs (restored when the run ends).
+    keepTab(env, true);
     try {
       return await runJobInner(jobId, env);
     } catch (err) {
@@ -550,7 +555,56 @@
         return { outcome: "job_gone" };
       }
       throw err;
+    } finally {
+      keepTab(env, false);
     }
+  }
+
+  /** The job's tab: never auto-discarded while a run is on. Never throws. */
+  function keepTab(env, keep) {
+    try {
+      if (env.keepTab) env.keepTab(keep);
+    } catch (_e) { /* ignore */ }
+  }
+
+  /**
+   * Founder (2026-10-03): no pause while the tab is hidden (another tab,
+   * minimized, behind other windows). How long it was hidden, and how many
+   * history batches loaded meanwhile, are counted (telemetry: counts and ms
+   * only) to see whether hidden runs are slower.
+   */
+  function hiddenTracker(env) {
+    var vis = env.visibility;
+    var nowMs = function () { return (env.now ? env.now() : new Date()).getTime(); };
+    var t = { ms: 0, spells: 0, chats: 0, batches: 0 };
+    var since = vis && vis.hidden() ? nowMs() : null;
+    if (since !== null) t.spells += 1;
+    var off = vis && vis.onChange ? vis.onChange(function (hidden) {
+      if (hidden && since === null) {
+        since = nowMs();
+        t.spells += 1;
+      } else if (!hidden && since !== null) {
+        t.ms += Math.max(0, nowMs() - since);
+        since = null;
+      }
+    }) : null;
+    return {
+      hidden: function () { return !!(vis && vis.hidden()); },
+      /** A chat's history load ended: count its batches if the tab was hidden at its start or end. */
+      history: function (wasHidden, hist) {
+        if (!wasHidden && !(vis && vis.hidden())) return;
+        t.chats += 1;
+        t.batches += (hist && hist.batches) || 0;
+      },
+      done: function () {
+        if (since !== null) {
+          t.ms += Math.max(0, nowMs() - since);
+          since = nowMs();
+        }
+        if (typeof off === "function") off();
+        return { ms: t.ms, spells: t.spells, chats: t.chats, batches: t.batches };
+      },
+    };
   }
 
   /** One diagnostics line; never throws (a log must not stop a sync). */
@@ -638,11 +692,9 @@
     function stageText(n, of) {
       return (isCache ? "Chat " : "Checking chat ") + n + " of " + of;
     }
-    /**
-     * BACKLOG-3658: a hidden tab is throttled by Chrome (timers slowed, the
-     * list may not render), so the steps stop while the page is hidden and
-     * resume once it is visible again. Keepr hears the pause as a stage.
-     */
+    // Founder (2026-10-03): a hidden tab no longer pauses the run (it was
+    // observed to sync on fine); it is only counted.
+    var hiddenStats = hiddenTracker(env);
     var pauses = 0;
     var connectionLostMs = env.connectionLostMs == null ? RCS_CONNECTION_LOST_MS : env.connectionLostMs;
     /** Telemetry (counts and ms only): each banner kind's occurrences and time. */
@@ -653,21 +705,13 @@
       return env.scan && env.scan.connectionBanner ? env.scan.connectionBanner(env.doc) : null;
     }
     /**
-     * Wait while the page cannot be worked: a hidden tab (until visible) or
-     * the connection banner (until it clears, at most connectionLostMs).
+     * Wait while the page cannot be worked: the connection banner (until it
+     * clears, at most connectionLostMs). A hidden tab is NOT a reason.
      * → null (nothing held), {resumed: true}, or {code, message} (give up).
      */
-    async function holdWhileHidden(resumeText) {
+    async function holdWhileOffline(resumeText) {
       var held = false;
       for (;;) {
-        if (env.visibility && env.visibility.hidden()) {
-          held = true;
-          pauses += 1;
-          await report(PAUSED_TEXT);
-          await env.visibility.whenVisible();
-          log("resumed");
-          continue;
-        }
         var banner = bannerNow();
         if (!banner) break;
         held = true;
@@ -675,6 +719,7 @@
         var waited = 0;
         connection[kind].count += 1;
         log("connection banner: " + kind + (kind === "connection_banner" ? " (title " + banner.titleLength + " chars)" : ""));
+        pauses += 1;
         await report(kind === "phone_unreachable" ? UNREACHABLE_TEXT : CONNECTING_TEXT);
         while (banner) {
           if (waited >= connectionLostMs) {
@@ -744,7 +789,7 @@
       var tried = 0;
       for (var r = 0; r < mediaRetry.length && used < poolMs; r++) {
         var item = mediaRetry[r];
-        var lost = await holdWhileHidden(null);
+        var lost = await holdWhileOffline(null);
         if (lost && lost.code) return;
         tried += 1;
         try {
@@ -927,7 +972,7 @@
     log("stage: loading the conversation list");
     // No env.scroll in the browser: collectConversations drives the page's own
     // scroller (top first, then step down with scroll events).
-    var lostList = await holdWhileHidden("Loading your conversation list…");
+    var lostList = await holdWhileOffline("Loading your conversation list…");
     if (lostList && lostList.code) return fail(lostList.code, lostList.message);
     var collected = await env.scan.collectConversations(env.doc, isCache
       ? {
@@ -994,7 +1039,7 @@
       var opened = false;
       var gone = false;
       var imagesFailed = 0;
-      var lostChat = await holdWhileHidden(stageText(i + 1, candidates.length));
+      var lostChat = await holdWhileOffline(stageText(i + 1, candidates.length));
       if (lostChat && lostChat.code) return fail(lostChat.code, lostChat.message);
       try {
         env.overlay.show(stageText(i + 1, candidates.length) + "…", false, RUNNING_EXTRAS);
@@ -1083,7 +1128,7 @@
         }
         // Only the latest messages render on open: load older ones back past
         // the transaction's start date, then let the set settle.
-        var lostHist = await holdWhileHidden(stageText(i + 1, candidates.length));
+        var lostHist = await holdWhileOffline(stageText(i + 1, candidates.length));
         if (lostHist && lostHist.code) return fail(lostHist.code, lostHist.message);
         var loc = env.getLocation();
         var histIo = {
@@ -1131,10 +1176,12 @@
             });
           },
         };
+        var histHidden = hiddenStats.hidden();
         var hist = await env.scan.loadHistory(env.doc, histIo);
+        hiddenStats.history(histHidden, hist);
         // The banner came up while this chat loaded: what was read may stop
         // short. Once it clears, the chat's history is loaded again.
-        var lostMid = await holdWhileHidden(null);
+        var lostMid = await holdWhileOffline(null);
         if (lostMid && lostMid.code) return fail(lostMid.code, lostMid.message);
         if (lostMid && lostMid.resumed) {
           log("  history loaded again after the pause");
@@ -1322,6 +1369,9 @@
     var more = notReached.length - reported.length;
     // A cache Sync: Keepr answers once it has saved, with what it saved.
     if (isCache) env.overlay.show(SAVING_TEXT, false);
+    var hiddenNow = hiddenStats.done();
+    log("hidden: " + Math.round(hiddenNow.ms / 1000) + "s in " + hiddenNow.spells + " spells; " +
+      hiddenNow.batches + " history batches in " + hiddenNow.chats + " chats loaded while hidden");
     var finished = await call("POST", base + "/finish", {
       chats: totals.chats,
       messages: totals.messages,
@@ -1337,6 +1387,8 @@
       // SR (3671 P1): the transient retry (counts only).
       retry: { retried: retry.retried, recovered: retry.recovered, notRetried: retry.notRetried },
       historyConfirmed: totals.historyConfirmed,
+      // Founder (2026-10-03): time hidden and history loaded meanwhile (counts / ms only).
+      hidden: hiddenNow,
       // L2: how the list scan stopped (Keepr records the coverage only for a normal stop).
       listStop: collected.stopReason,
     });
@@ -1373,8 +1425,8 @@
    * Founder (2026-10-01): from the first second of a Sync, not only once
    * paused. The full sentence in the expanded box; a short tail on the chip.
    */
-  var SYNCING_HINT = "Keep this tab open and on screen while Keepr syncs. When it's done, you'll go back to Keepr automatically.";
-  var SYNCING_CHIP_HINT = "keep this tab on screen";
+  var SYNCING_HINT = "Keep this tab open while Keepr syncs. When it's done, you'll go back to Keepr automatically.";
+  var SYNCING_CHIP_HINT = "keep this tab open";
   /**
    * Founder (2026-10-02, reverses "nothing on the page while idle"): with no
    * Sync running, the box sits on the page as its collapsed chip. Never a
@@ -2273,19 +2325,14 @@
       .then(function (r) { return !!(r && r.ok); });
   }
 
-  // BACKLOG-3658: the steps wait while the tab is hidden (Chrome throttles it).
+  // Founder (2026-10-03): the run goes on while the tab is hidden; this only
+  // tells the job when it is (for the hidden-time telemetry).
   var visibility = {
     hidden: function () { return document.visibilityState === "hidden"; },
-    whenVisible: function () {
-      return new Promise(function (resolve) {
-        if (document.visibilityState !== "hidden") return resolve();
-        function onChange() {
-          if (document.visibilityState === "hidden") return;
-          document.removeEventListener("visibilitychange", onChange);
-          resolve();
-        }
-        document.addEventListener("visibilitychange", onChange);
-      });
+    onChange: function (cb) {
+      function onChange() { cb(document.visibilityState === "hidden"); }
+      document.addEventListener("visibilitychange", onChange);
+      return function () { document.removeEventListener("visibilitychange", onChange); };
     },
   };
 
@@ -2472,6 +2519,8 @@
       extract: root.KeeprExtract.extractConversation,
       scan: root.KeeprScan,
       visibility: visibility,
+      // Not discarded by Chrome while the run is on (the worker sets it on this tab).
+      keepTab: function (keep) { void toWorker({ type: "keepr-keep-tab", keep: keep === true }); },
     };
   }
 
