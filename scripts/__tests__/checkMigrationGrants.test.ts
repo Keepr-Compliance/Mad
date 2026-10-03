@@ -22,7 +22,7 @@
  *                                         only, anon not named -> FAIL; definer body with no
  *                                         auth.uid()/auth.role() -> WARN.
  *     new_function_no_revoke.sql          044453 lines 1-22, function renamed, REVOKE removed.
- *     new_function_anon_allowed.sql       the same plus an `-- anon-allowed:` marker.
+ *     new_function_intentionally_public.sql       the same plus an `-- Intentionally callable by anon:` marker.
  *     new_table_no_truncate_revoke.sql    20260906000000_backlog_2077 lines 47-75, renamed.
  *     new_table_with_truncate_revoke.sql  the same plus the TRUNCATE revoke.
  *
@@ -32,6 +32,7 @@
 import { spawnSync, execFileSync } from 'child_process';
 import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, rmSync, renameSync } from 'fs';
 import * as os from 'os';
+import * as fs from 'fs';
 import * as path from 'path';
 
 const REPO = path.resolve(__dirname, '..', '..');
@@ -59,11 +60,28 @@ interface Result {
   json?: { files: FileResult[]; failCount: number; warnCount: number };
 }
 
+/**
+ * The environment with every GIT_* variable removed.
+ *
+ * A git hook (pre-push) runs with GIT_DIR, GIT_INDEX_FILE etc. exported. A git
+ * command in a child process inherits them and acts on THAT repository instead
+ * of the one in its cwd. Measured during this PR: the scratch-repo `git init`
+ * below, run from the pre-push hook, re-initialised the real repository and set
+ * `core.bare = true` in its shared config. Every git call this file makes, and
+ * every guard it spawns, gets this scrubbed environment.
+ */
+function cleanEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(process.env)) if (!k.startsWith('GIT_')) env[k] = v;
+  env.GITHUB_ACTIONS = '';
+  return env;
+}
+
 function run(args: string[], cwd = REPO): Result {
   const res = spawnSync(process.execPath, [GUARD, ...args], {
     cwd,
     encoding: 'utf8',
-    env: { ...process.env, GITHUB_ACTIONS: '' },
+    env: cleanEnv(),
   });
   const out: Result = { status: res.status, stdout: res.stdout, stderr: res.stderr };
   if (args.includes('--json') && res.status !== 2) out.json = JSON.parse(res.stdout);
@@ -154,10 +172,10 @@ describe('negative fixtures', () => {
     expect(f.warnings.map((x) => x.rule)).toEqual(['definer-without-caller-check']);
   });
 
-  it('the anon-allowed marker passes', () => {
-    const r = check([path.join(FIX, 'negative', 'new_function_anon_allowed.sql')]);
+  it('the intentionally-public marker passes', () => {
+    const r = check([path.join(FIX, 'negative', 'new_function_intentionally_public.sql')]);
     expect(r.status).toBe(0);
-    expect(r.json!.files[0].passes[0].reason).toBe('anon-allowed marker');
+    expect(r.json!.files[0].passes[0].reason).toBe('intentionally-public marker');
   });
 
   it('a new table with no TRUNCATE revoke fails', () => {
@@ -307,13 +325,13 @@ describe('overloads and identifiers', () => {
 });
 
 describe('markers and exemptions', () => {
-  it('the security-patterns.md label also passes', () => {
-    const sql = `-- Intentionally callable by anon: public support form\n${NEW_FN}`;
-    expect(check([sqlFile(sql)]).status).toBe(0);
+  it('the retired `-- anon-allowed:` spelling does not pass', () => {
+    const sql = `-- anon-allowed: public support form\n${NEW_FN}`;
+    expect(rules(check([sqlFile(sql)]))).toEqual(['function-missing-revoke']);
   });
 
   it('a marker with no reason does not pass', () => {
-    const sql = `-- anon-allowed:\n${NEW_FN}`;
+    const sql = `-- Intentionally callable by anon:\n${NEW_FN}`;
     expect(rules(check([sqlFile(sql)]))).toEqual(['function-missing-revoke']);
   });
 
@@ -363,6 +381,7 @@ describe('PR mode (--base): only files ADDED under supabase/migrations', () => {
     execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false', ...args], {
       cwd: repo,
       encoding: 'utf8',
+      env: cleanEnv(),
     });
 
   beforeAll(() => {
@@ -370,6 +389,8 @@ describe('PR mode (--base): only files ADDED under supabase/migrations', () => {
     mkdirSync(path.join(repo, 'supabase', 'migrations'), { recursive: true });
     mkdirSync(path.join(repo, 'supabase', 'parked'), { recursive: true });
     git('init', '-q', '-b', 'base');
+    // Belt and braces: the scratch repo must be its own top level, never the real repo.
+    expect(path.resolve(git('rev-parse', '--show-toplevel').trim())).toBe(path.resolve(fs.realpathSync(repo)));
     // An old migration with no REVOKE (grandfathered) that also creates support_agent_analytics.
     writeFileSync(
       path.join(repo, 'supabase', 'migrations', '20260313_support_analytics_rpc.sql'),

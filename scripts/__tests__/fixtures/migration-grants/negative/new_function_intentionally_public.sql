@@ -1,6 +1,6 @@
--- FIXTURE (BACKLOG-3611). Same as new_function_no_revoke.sql plus an anon-allowed marker.
+-- FIXTURE (BACKLOG-3611). Same as new_function_no_revoke.sql plus an intentionally-public marker.
 -- support_update_template: require an internal_roles caller.
--- anon-allowed: fixture for the marker exemption
+-- Intentionally callable by anon: fixture for the marker exemption
 CREATE OR REPLACE FUNCTION public.support_update_template_copy(p_id uuid, p_name text, p_body text, p_category text DEFAULT NULL::text, p_is_active boolean DEFAULT true)
  RETURNS jsonb
  LANGUAGE plpgsql

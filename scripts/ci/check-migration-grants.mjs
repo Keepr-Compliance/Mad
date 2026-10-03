@@ -24,10 +24,10 @@
  *
  * 1. Marker. A function is exempt from the FAIL rule when a comment inside its
  *    CREATE statement, or in the comment lines directly above it, reads
- *        -- anon-allowed: <reason>
- *    or the label `.claude/docs/shared/security-patterns.md` documents:
  *        -- Intentionally callable by anon: <flow>
- *    The reason must be non-empty. The WARN rule still applies.
+ *    — the label CLAUDE.md and `.claude/docs/shared/security-patterns.md`
+ *    document (PR #2775). It is the only accepted spelling. The flow must be
+ *    non-empty. The WARN rule still applies.
  *
  * 2. Re-creating an existing function. `CREATE OR REPLACE` on a function that
  *    already exists keeps that function's grants, so the file does not widen
@@ -535,7 +535,7 @@ export function parsePrivilege(stmt) {
 // Analysis
 // ---------------------------------------------------------------------------
 
-const MARKER_RE = /^\s*(?:anon-allowed|Intentionally callable by anon)\s*:\s*\S/i;
+const MARKER_RE = /^\s*Intentionally callable by anon\s*:\s*\S/i;
 
 function hasMarker(stmt) {
   return stmt.comments.some((c) => c.split("\n").some((l) => MARKER_RE.test(l)));
@@ -636,7 +636,7 @@ export function analyzeMigration(sql, catalog = new Set()) {
       continue;
     }
     if (fn.marker) {
-      passes.push({ line: fn.line, object: label, reason: "anon-allowed marker" });
+      passes.push({ line: fn.line, object: label, reason: "intentionally-public marker" });
       continue;
     }
     const { last, granted } = replay(
@@ -656,7 +656,7 @@ export function analyzeMigration(sql, catalog = new Set()) {
         line: fn.line,
         rule: "function-granted-to-anon",
         object: label,
-        message: `${label}: the file GRANTs EXECUTE to ${regranted.join(" and ")}. Revoke it, or mark the function "-- anon-allowed: <reason>".`,
+        message: `${label}: the file GRANTs EXECUTE to ${regranted.join(" and ")}. Revoke it, or mark the function "-- Intentionally callable by anon: <flow>".`,
       });
       continue;
     }
@@ -680,7 +680,7 @@ export function analyzeMigration(sql, catalog = new Set()) {
       line: fn.line,
       rule: "function-missing-revoke",
       object: label,
-      message: `${label}: no REVOKE EXECUTE ... FROM ${missing.join(", ")} in this file${why}. Add "REVOKE EXECUTE ON FUNCTION public.${fn.key} FROM PUBLIC, anon;", or mark the function "-- anon-allowed: <reason>".`,
+      message: `${label}: no REVOKE EXECUTE ... FROM ${missing.join(", ")} in this file${why}. Add "REVOKE EXECUTE ON FUNCTION public.${fn.key} FROM PUBLIC, anon;", or mark the function "-- Intentionally callable by anon: <flow>".`,
     });
   }
 
