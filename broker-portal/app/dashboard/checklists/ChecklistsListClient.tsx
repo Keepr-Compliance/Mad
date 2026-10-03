@@ -13,6 +13,10 @@
  * TableContainer already scrolls horizontally, so the wider text costs
  * nothing, and it matches the editor header rather than needing a
  * separate tooltip for the time.
+ *
+ * BACKLOG-3618: `readOnly` (an agent viewing the brokerage's templates) shows
+ * the same table with no links and no actions. An own template set not to be
+ * sent with submissions carries a "Not sent" badge.
  */
 
 import { useEffect, useState } from 'react';
@@ -33,7 +37,13 @@ import { archiveChecklistTemplate, restoreChecklistTemplate } from '@/lib/action
 import type { ChecklistListRow } from '@/lib/checklists/listRows';
 import { formatAuditDate, formatAuditDateTime } from '@/lib/checklists/audit';
 
-export default function ChecklistsListClient({ rows }: { rows: ChecklistListRow[] }) {
+export default function ChecklistsListClient({
+  rows,
+  readOnly = false,
+}: {
+  rows: ChecklistListRow[];
+  readOnly?: boolean;
+}) {
   const router = useRouter();
   const [archiveTarget, setArchiveTarget] = useState<ChecklistListRow | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -75,9 +85,11 @@ export default function ChecklistsListClient({ rows }: { rows: ChecklistListRow[
               <Th scope="col" className="text-right">Required</Th>
               <Th scope="col">Last edited</Th>
               <Th scope="col">Status</Th>
-              <Th scope="col">
-                <span className="sr-only">Actions</span>
-              </Th>
+              {!readOnly && (
+                <Th scope="col">
+                  <span className="sr-only">Actions</span>
+                </Th>
+              )}
             </tr>
           </TableHead>
           <TableBody>
@@ -85,13 +97,18 @@ export default function ChecklistsListClient({ rows }: { rows: ChecklistListRow[
               <Tr key={row.id} data-testid="checklist-row">
                 <Td>
                   <div className="flex items-center gap-2">
-                    <Link
-                      href={`/dashboard/checklists/${row.id}`}
-                      className="text-sm font-medium text-gray-900 hover:text-primary-600"
-                    >
-                      {row.name}
-                    </Link>
+                    {readOnly ? (
+                      <span className="text-sm font-medium text-gray-900">{row.name}</span>
+                    ) : (
+                      <Link
+                        href={`/dashboard/checklists/${row.id}`}
+                        className="text-sm font-medium text-gray-900 hover:text-primary-600"
+                      >
+                        {row.name}
+                      </Link>
+                    )}
                     {row.seeded && <Badge hue="blue">Seeded</Badge>}
+                    {row.notSent && <Badge hue="gray">Not sent</Badge>}
                   </div>
                   {row.description && (
                     <p className="mt-0.5 text-xs text-gray-500 whitespace-normal">{row.description}</p>
@@ -106,36 +123,38 @@ export default function ChecklistsListClient({ rows }: { rows: ChecklistListRow[
                 <Td>
                   {row.archived ? <Badge hue="gray">Archived</Badge> : <Badge hue="green">Active</Badge>}
                 </Td>
-                <Td className="text-right space-x-4">
-                  <Link
-                    href={`/dashboard/checklists/${row.id}`}
-                    className="text-sm text-primary-600 hover:text-primary-800"
-                    aria-label={`Edit ${row.name}`}
-                  >
-                    Edit
-                  </Link>
-                  {row.archived ? (
-                    <button
-                      type="button"
-                      className="text-sm text-gray-500 hover:text-gray-700 disabled:opacity-50"
-                      disabled={busyId !== null}
-                      onClick={() => run(row.id, restoreChecklistTemplate)}
-                      aria-label={`Restore ${row.name}`}
+                {!readOnly && (
+                  <Td className="text-right space-x-4">
+                    <Link
+                      href={`/dashboard/checklists/${row.id}`}
+                      className="text-sm text-primary-600 hover:text-primary-800"
+                      aria-label={`Edit ${row.name}`}
                     >
-                      Restore
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      className="text-sm text-gray-500 hover:text-gray-700 disabled:opacity-50"
-                      disabled={busyId !== null}
-                      onClick={() => setArchiveTarget(row)}
-                      aria-label={`Archive ${row.name}`}
-                    >
-                      Archive
-                    </button>
-                  )}
-                </Td>
+                      Edit
+                    </Link>
+                    {row.archived ? (
+                      <button
+                        type="button"
+                        className="text-sm text-gray-500 hover:text-gray-700 disabled:opacity-50"
+                        disabled={busyId !== null}
+                        onClick={() => run(row.id, restoreChecklistTemplate)}
+                        aria-label={`Restore ${row.name}`}
+                      >
+                        Restore
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="text-sm text-gray-500 hover:text-gray-700 disabled:opacity-50"
+                        disabled={busyId !== null}
+                        onClick={() => setArchiveTarget(row)}
+                        aria-label={`Archive ${row.name}`}
+                      >
+                        Archive
+                      </button>
+                    )}
+                  </Td>
+                )}
               </Tr>
             ))}
           </TableBody>
