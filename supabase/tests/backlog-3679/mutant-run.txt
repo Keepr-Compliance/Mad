@@ -1,0 +1,60 @@
+== m01-no-guard-trigger  MUTATION APPLIED: > -- trigger removed
+FAIL|k04 (a) by id: user_id=self, role=admin|OK rows=1
+FAIL|k04 (a) no WHERE: user_id=self, role=admin|OK rows=1
+FAIL|k04 (b) by id: organization -> O2 + self|OK rows=1
+FAIL|k08 guard trigger present and enabled|
+FAIL|k08 with auth.users opened: no-WHERE role escalation still refused|OK rows=1
+KILLED|m01-no-guard-trigger
+== m02-guard-skips-everyone  MUTATION APPLIED: >   IF true THEN
+FAIL|k04 (a) by id: user_id=self, role=admin|OK rows=1
+FAIL|k04 (a) no WHERE: user_id=self, role=admin|OK rows=1
+FAIL|k04 (b) by id: organization -> O2 + self|OK rows=1
+KILLED|m02-guard-skips-everyone
+== m03-no-column-diff  MUTATION APPLIED: 
+FAIL|k04 (a) by id: user_id=self, role=admin|OK rows=1
+FAIL|k04 (a) no WHERE: user_id=self, role=admin|OK rows=1
+FAIL|k04 (b) by id: organization -> O2 + self|OK rows=1
+KILLED|m03-no-column-diff
+== m04-guard-skips-authenticated  MUTATION APPLIED: >   IF current_user NOT IN ('anon') THEN
+FAIL|k04 (a) by id: user_id=self, role=admin|OK rows=1
+FAIL|k04 (a) no WHERE: user_id=self, role=admin|OK rows=1
+FAIL|k04 (b) by id: organization -> O2 + self|OK rows=1
+KILLED|m04-guard-skips-authenticated
+== m05-any-license-status  MUTATION APPLIED: 
+FAIL|k04 (c) link self + license_status=expired|OK rows=1
+KILLED|m05-any-license-status
+== m06-any-invitation-token  MUTATION APPLIED: 
+FAIL|k04 link self + new invitation_token|OK rows=1
+KILLED|m06-any-invitation-token
+== m07-no-own-invite-select-policy  MUTATION APPLIED: >   FOR SELECT TO service_role
+FAIL|k03 callback finds the pending invite|OK <null>
+FAIL|k03 callback UPDATE links the invite|OK rows=0
+FAIL|k03 linked row: caller, same role/org, active, token cleared|{"id": "{inv_a}", "role": "agent", "user_id": null, "joined_at": null, "created_at": "2026-10-03T05:01:15.435982+00:00", "idp_groups": null, "invited_at": "2026-10-03T05:01:15.435982+00:00", "invited_by": "{u_c}", "updated_at": "2026-10-03T05:01:15.435982+00:00", "invited_email": "invitee-3679@example.test", "license_status": "pending", "provisioned_at": null, "provisioned_by": "invite", "scim_synced_at": null, "last_invited_at": null, "organization_id": "{org1}", "invitation_token": "tok-3679-a", "group_sync_enabled": false, "invitation_expires_at": "2026-10-10T05:01:15.435982+00:00", "provisioning_metadata": null}
+KILLED|m07-no-own-invite-select-policy
+== m08-policy-reads-auth-users  MUTATION APPLIED: >     AND invited_email = (SELECT u.email FROM auth.users u WHERE u.id = auth.uid())::text
+FAIL|k02 admin Edit role|ERR 42501 permission denied for table users
+FAIL|k02 admin Bulk role|ERR 42501 permission denied for table users
+FAIL|k02 admin Deactivate|ERR 42501 permission denied for table users
+FAIL|k08 no organization_members policy reads auth.users|
+KILLED|m08-policy-reads-auth-users
+== m09-no-expiry-on-accept  MUTATION APPLIED: 
+FAIL|k06 no-WHERE acceptance links only the unexpired invite|OK rows=2
+FAIL|k06 expired invite still unclaimed|
+KILLED|m09-no-expiry-on-accept
+== m10-no-expiry-on-view  MUTATION APPLIED: 
+FAIL|k06 expired invite not visible|OK 1
+KILLED|m10-no-expiry-on-view
+== m11-exact-case-email  MUTATION APPLIED: >     AND invited_email = (SELECT auth.jwt()) ->> 'email'
+FAIL|k06 claim email differing in case/spaces still accepts|OK rows=0
+KILLED|m11-exact-case-email
+== m12-no-link-self-check  MUTATION APPLIED: 
+SURVIVED|m12-no-link-self-check
+== m13-guard-allows-claimed-rows  MUTATION APPLIED: 
+SURVIVED|m13-guard-allows-claimed-rows
+== m14-guard-grants-execute  MUTATION APPLIED: > GRANT EXECUTE ON FUNCTION public.guard_invite_acceptance() TO authenticated;
+FAIL|k08 anon cannot execute guard_invite_acceptance()|
+FAIL|k08 authenticated cannot execute guard_invite_acceptance()|
+KILLED|m14-guard-grants-execute
+== m15-policy-to-public  MUTATION APPLIED: >   FOR UPDATE TO public
+FAIL|k08 accept policy is TO authenticated with a WITH CHECK|
+KILLED|m15-policy-to-public
