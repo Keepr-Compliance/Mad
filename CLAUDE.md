@@ -351,6 +351,18 @@ Nearly all `pm_*` RPCs (writes AND reads — e.g. `pm_create_item`, `pm_update_t
 
 **From MCP sessions: use direct SQL on the `pm_*` tables.** On INSERT into `pm_backlog_items`, set `item_number` (MAX+1) and `legacy_id` (`BACKLOG-<n>`) manually; add a `pm_events` row for audit when it matters. Unguarded RPCs safe from MCP: `pm_record_task_tokens`, `pm_label_agent_metrics`.
 
+### Supabase functions and grants: revoke by default (MANDATORY)
+
+**Supabase grants EXECUTE on every new `public` function to `anon`, `authenticated` and `PUBLIC` by default.** `anon` is anyone holding the public key, signed in or not. A function you never meant to expose is callable the moment its migration runs, and a `SECURITY DEFINER` function runs as its owner, so RLS does not stop it.
+
+1. **Every new function: `REVOKE EXECUTE ... FROM PUBLIC, anon`, then `GRANT EXECUTE ... TO` only the roles that call it** (`authenticated`, `service_role`), in the same migration, naming the full signature.
+2. **Every `SECURITY DEFINER` function checks its caller inside**: `auth.uid()` plus the role or membership check the data needs (an `internal_roles` row, org membership, `p_user_id = auth.uid()`, or `auth.role() = 'service_role'`). A NULL-uid check alone is not a caller check: it lets in every signed-in user.
+3. **A function that must be callable signed-out** (an invite-token lookup, the public support form) is documented as intentionally public in a comment in its migration, and still checks its inputs inside.
+4. **Every new table: no `TRUNCATE` for `anon` or `authenticated`** — `REVOKE TRUNCATE ON public.<table> FROM anon, authenticated`. RLS never evaluates TRUNCATE (BACKLOG-3549).
+5. **The default-privileges migration, once applied, is the backstop, not the rule.** It covers only functions created by the role it names; write the REVOKE anyway.
+
+Full checklist and SQL: `.claude/docs/shared/security-patterns.md` → *Supabase functions and grants*. Background: BACKLOG-3553, BACKLOG-3611, BACKLOG-3646, BACKLOG-3549.
+
 ---
 
 ## Project Overview
