@@ -510,9 +510,10 @@
    * a chat with no readable time is kept. With no readable times the whole list
    * counts. At most CACHE_CHECK_MAX are checked; the rest are "not checked".
    */
-  function cachePlan(conversations, sinceMs, pending) {
+  function cachePlan(conversations, sinceMs, pending, deal) {
     var above = conversations;
     var must = pending || {};
+    var dealMust = deal || {};
     if (typeof sinceMs === "number" && isFinite(sinceMs)) {
       var older = function (c) { return !!c && typeof c.timeMs === "number" && c.timeMs < sinceMs; };
       for (var i = 0; i < conversations.length; i++) {
@@ -527,8 +528,11 @@
     // and they go FIRST: Keepr clears them only once saved, so behind a full
     // list (CACHE_CHECK_MAX) they would stay "not checked" forever.
     var pendingFirst = conversations.filter(function (c) { return must[c.conversationId]; });
-    var rest = above.filter(function (c) { return !must[c.conversationId]; });
-    above = pendingFirst.concat(rest);
+    // SR (2026-10-02): then the chats on a live deal that Keepr wants read
+    // further back (however old their last message), inside the cap.
+    var dealNext = conversations.filter(function (c) { return !must[c.conversationId] && dealMust[c.conversationId]; });
+    var rest = above.filter(function (c) { return !must[c.conversationId] && !dealMust[c.conversationId]; });
+    above = pendingFirst.concat(dealNext, rest);
     var picked = above.slice(0, CACHE_CHECK_MAX);
     return {
       queue: picked.map(function (c) { return { conversation: c, reason: "cache" }; }),
@@ -894,6 +898,23 @@
     for (var pf = 0; pf < pendingIds.length; pf++) if (typeof pendingIds[pf] === "string") pendingFull[pendingIds[pf]] = true;
     var fullFloorMs = isCache && claim.body && typeof claim.body.floor === "string" ? Date.parse(claim.body.floor) : NaN;
     if (!isFinite(fullFloorMs)) fullFloorMs = floorMs;
+    // SR (2026-10-02): chats on a live deal Keepr wants read back to the deal's
+    // start — the list scan looks for them past the settings floor, never past
+    // the oldest deal start. Conversation ids only; each chat's own floor
+    // comes from /match.
+    var dealIds = [];
+    var dealSet = {};
+    var dealFloorMs = isCache && claim.body && typeof claim.body.dealFloor === "string" ? Date.parse(claim.body.dealFloor) : NaN;
+    if (isCache && claim.body && Array.isArray(claim.body.dealConversationIds) && isFinite(dealFloorMs)) {
+      for (var di = 0; di < claim.body.dealConversationIds.length; di++) {
+        var did = claim.body.dealConversationIds[di];
+        if (typeof did === "string" && did && !dealSet[did]) {
+          dealSet[did] = true;
+          dealIds.push(did);
+        }
+      }
+    }
+    if (!isFinite(dealFloorMs)) dealFloorMs = null;
     var history = [];
 
     // 3. Scan the list and pick candidates. A narrow window shows the list OR
@@ -912,6 +933,7 @@
       ? {
         scroll: env.scroll, sleep: env.sleep, stopAtOlderThanMs: floorMs, maxItems: CACHE_LIST_MAX,
         mustSee: pendingIds, mustSeeFloorMs: fullFloorMs,
+        mustSeeDeep: dealIds, mustSeeDeepFloorMs: dealFloorMs,
       }
       : { scroll: env.scroll, sleep: env.sleep });
     // BACKLOG-3645: the phone number is the gate, a name only orders the queue.
@@ -920,7 +942,7 @@
     // BACKLOG-3658: a cache Sync checks every chat newer than `since` in list
     // order (no names), at most CACHE_CHECK_MAX; the rest are not checked.
     var plan = isCache
-      ? cachePlan(collected.conversations, floorMs, pendingFull)
+      ? cachePlan(collected.conversations, floorMs, pendingFull, dealSet)
       : env.scan.planChecks
         ? env.scan.planChecks(collected.conversations, contacts)
         : { queue: env.scan.pickCandidates(collected.conversations, contacts), notChecked: 0 };
@@ -1021,6 +1043,12 @@
           ? !!(match.body && (match.body.keepPhotos !== undefined ? match.body.keepPhotos : match.body.keepImages))
           : true;
         var keepVideos = isCache ? !!(match.body && match.body.keepVideos) : false;
+        // SR (2026-10-02): a chat on a live deal is read back to Keepr's floor
+        // for it (/match floorMs); every other chat keeps the job's floor.
+        var chatFloorMs = pendingFull[conv.conversationId] ? fullFloorMs : floorMs;
+        if (isCache && match.body && typeof match.body.floorMs === "number" && isFinite(match.body.floorMs)) {
+          chatFloorMs = chatFloorMs === null ? match.body.floorMs : Math.min(chatFloorMs, match.body.floorMs);
+        }
         var keepImages = keepPhotos;
         if (!isMatch && match.body && match.body.excluded === true) {
           // BACKLOG-3658 P3c: the user switched this chat off — counted, never silent.
@@ -1076,7 +1104,7 @@
           budgetMs: env.historyBudgetMs,
           extensionPoolLeftMs: Math.max(0, extraTime.poolMs - extraTime.usedMs),
           sleep: env.sleep,
-          floorMs: pendingFull[conv.conversationId] ? fullFloorMs : floorMs,
+          floorMs: chatFloorMs,
           cap: env.historyCap,
           noNewTimeoutMs: env.historyNoNewMs,
           oldestMs: function () {
@@ -1150,6 +1178,8 @@
           title: extracted.title || conv.name,
           messages: messages,
           participants: people,
+          // Read down to its floor (not cut by the cap, not unsettled, no gap): a boolean.
+          reachedFloor: depthKind(hist) !== "partial",
         });
         if (!sent.ok) throw new Error(messageOf(sent, "Keepr could not save this chat."));
         var prevSent = sentMessages[conv.conversationId];
@@ -1243,7 +1273,7 @@
           }
         }
         if (missingIds.length > 0) {
-          mediaRetry.push({ conv: conv, msgIds: missingIds, oldestMs: missingOldest, floorMs: floorMs });
+          mediaRetry.push({ conv: conv, msgIds: missingIds, oldestMs: missingOldest, floorMs: chatFloorMs });
         }
       } catch (err) {
         if (err && err.jobGone) {

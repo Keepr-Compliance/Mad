@@ -258,6 +258,10 @@ function cacheEnv(opts: {
   keepImages?: boolean;
   /** Live (0.3.15): extra claim fields (pendingConversationIds, floor). */
   claimExtra?: Record<string, unknown>;
+  /** SR (2026-10-02): /match's floorMs per conversation id (a deal chat). */
+  matchFloor?: Record<string, number>;
+  /** The history load's stop reason (default "floor"). */
+  historyStop?: string;
 }) {
   renderList(opts.rows);
   let open = "";
@@ -276,7 +280,14 @@ function cacheEnv(opts: {
         return { ok: true, status: 200, body: { jobId: JOB, kind: "cache", contacts: [], since, startDate: "2020-01-01T00:00:00.000Z", ...(opts.claimExtra ?? {}) } };
       }
       if (p.endsWith("/match")) {
-        return { ok: true, status: 200, body: opts.keepImages === undefined ? { matched: true } : { matched: true, keepImages: opts.keepImages } };
+        const floorMs = opts.matchFloor && body ? opts.matchFloor[body.conversationId as string] : undefined;
+        return {
+          ok: true, status: 200,
+          body: {
+            ...(opts.keepImages === undefined ? { matched: true } : { matched: true, keepImages: opts.keepImages }),
+            ...(floorMs !== undefined ? { floorMs } : {}),
+          },
+        };
       }
       if (p.endsWith("/attachment")) return opts.imageReply ?? { ok: true, status: 200, body: { ok: true } };
       if (p.endsWith("/chat")) return { ok: true, status: 200, body: { ok: true, stored: 1, received: 1 } };
@@ -309,7 +320,7 @@ function cacheEnv(opts: {
       waitForMessageSwap: async () => true,
       loadHistory: async (_d: Document, o: { floorMs: number | null }) => {
         floors.push(o.floorMs);
-        return { stopReason: "floor", count: 1 };
+        return { stopReason: opts.historyStop ?? "floor", count: 1 };
       },
       messageIdSet: () => "",
     },
@@ -680,6 +691,91 @@ describe("runJob: a cache Sync", () => {
     const ids = (out: { conversations: Array<{ conversationId: string }> }) => out.conversations.map((c) => c.conversationId);
     expect(ids(await read([]))).not.toContain(id(3)); // stops at since
     expect(ids(await read([id(3)]))).toContain(id(3)); // goes on until it has seen it
+  });
+
+  // SR (2026-10-02): per-chat widening for deals. Mutations: /match floorMs
+  // ignored → red; applied to every chat → red; deal chats not queued after
+  // the pending ones and before the rest → red; mustSeeDeep not passed to the
+  // list scan → red; /chat without reachedFloor (or true after a cap) → red.
+  describe("deal chats (SR 2026-10-02)", () => {
+    const JAN = new Date(2026, 0, 10).getTime();
+
+    it("/match floorMs: that chat reads back to it; the others keep the job's floor", async () => {
+      const t = cacheEnv({
+        rows: ROWS,
+        numbers: { [id(0)]: ["+15555550101"], [id(1)]: ["+15555550102"] },
+        matchFloor: { [id(1)]: JAN },
+      });
+      await job.runJob(JOB, t.env);
+      expect(t.opened.slice(0, 2)).toEqual([id(0), id(1)]);
+      expect(t.floors).toEqual([Date.parse(t.since), JAN]);
+    });
+
+    it("/chat says whether the chat was read down to its floor (a boolean)", async () => {
+      const bodies = async (historyStop: string) => {
+        const t = cacheEnv({ rows: ROWS.slice(0, 1), numbers: { [id(0)]: ["+15555550101"] }, historyStop });
+        await job.runJob(JOB, t.env);
+        return t.calls.filter(([, p]) => p.endsWith("/chat")).map(([, , b]) => b!.reachedFloor);
+      };
+      expect(await bodies("date_floor")).toEqual([true]);
+      expect(await bodies("no_more")).toEqual([true]);
+      expect(await bodies("cap")).toEqual([false]);
+      // (a not-settled chat is retried once at the end: false both times)
+      expect(new Set(await bodies("not_settled"))).toEqual(new Set([false]));
+      expect(await bodies("history_gap")).toEqual([false]);
+    });
+
+    it("the claim's deal chats: looked for past the settings floor (never past the oldest deal start), queued after pending, before the rest", async () => {
+      const floor = new Date(NOW - 90 * DAY).toISOString();
+      const t = cacheEnv({
+        rows: ROWS,
+        numbers: { [id(0)]: ["+15555550101"], [id(2)]: ["+15555550103"], [id(3)]: ["+15555550104"] },
+        claimExtra: { pendingConversationIds: [id(2)], floor, dealConversationIds: [id(3)], dealFloor: new Date(JAN).toISOString() },
+        matchFloor: { [id(3)]: JAN },
+      });
+      const seen: Array<Record<string, unknown>> = [];
+      (t.env as Record<string, unknown>).scan = {
+        ...t.env.scan,
+        collectConversations: (d: Document, o: Record<string, unknown>) => {
+          seen.push(o);
+          return scan.collectConversations(d, o);
+        },
+      };
+      await job.runJob(JOB, t.env);
+      expect(seen[0]).toMatchObject({ mustSee: [id(2)], mustSeeFloorMs: Date.parse(floor), mustSeeDeep: [id(3)], mustSeeDeepFloorMs: JAN });
+      expect(t.opened.slice(0, 3)).toEqual([id(2), id(3), id(0)]);
+      expect(t.floors.slice(0, 2)).toEqual([Date.parse(floor), JAN]);
+    });
+
+    it("the list scan: deal chats past the settings floor are looked for, never past the oldest deal start", async () => {
+      const rows: Array<[string, string | null]> = [["A", "3:45 PM"], ["B", "Aug 10"], ["C", "Aug 5"], ["D", "Jun 1"], ["E", "May 30"], ["F", "Mar 1"], ["G", "Feb 27"], ["H", "Feb 20"]];
+      const read = async (deep: string[], deepFloor: number | null) => {
+        let shown = 2;
+        renderList(rows.slice(0, shown));
+        return scan.collectConversations(document, {
+          sleep: async () => {},
+          now: () => NOW,
+          scroll: async () => {
+            if (shown < rows.length) renderList(rows.slice(0, ++shown));
+          },
+          stopAtOlderThanMs: NOW - 10 * DAY,
+          mustSee: [],
+          mustSeeFloorMs: NOW - 90 * DAY,
+          mustSeeDeep: deep,
+          mustSeeDeepFloorMs: deepFloor,
+        });
+      };
+      const ids = (out: { conversations: Array<{ conversationId: string }> }) => out.conversations.map((c) => c.conversationId);
+      expect(ids(await read([], null))).not.toContain(id(4)); // stops at since
+      // A deal chat from June, the deal from April: found.
+      expect(ids(await read([id(4)], new Date(2026, 3, 1).getTime()))).toContain(id(4));
+      // A deal chat older than the oldest deal start: never read that far (two older rows end it, at G).
+      const tooOld = ids(await read([id(7)], new Date(2026, 3, 1).getTime()));
+      expect(tooOld).toContain(id(6));
+      expect(tooOld).not.toContain(id(7));
+      // Without a deep floor the list is never read past the settings floor for them.
+      expect(ids(await read([id(4)], null))).not.toContain(id(4));
+    });
   });
 
   it("the history floor is since, not a transaction start date (M7)", async () => {

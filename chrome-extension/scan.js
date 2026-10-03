@@ -266,10 +266,28 @@
       }
     });
     var mustSeeFloor = typeof opts.mustSeeFloorMs === "number" ? opts.mustSeeFloorMs : null;
+    // SR (2026-10-02): chats on a live deal (opts.mustSeeDeep) may lie past the
+    // settings floor: while any is unseen the scan goes on down to
+    // opts.mustSeeDeepFloorMs (the oldest deal start) — never further.
+    var deep = {};
+    var deepLeft = 0;
+    var deepFloor = typeof opts.mustSeeDeepFloorMs === "number" && isFinite(opts.mustSeeDeepFloorMs) ? opts.mustSeeDeepFloorMs : null;
+    if (deepFloor !== null) {
+      (opts.mustSeeDeep || []).forEach(function (id) {
+        if (id && !deep[id] && !mustSee[id]) {
+          deep[id] = true;
+          deepLeft += 1;
+        }
+      });
+    }
     // The floor is a HARD stop (founder: never past it, for any reason — not
     // for chats switched back on, not without a since): two chats older than
     // the floor in a row end the read. Without a floor of its own, since is it.
-    var hardFloor = mustSeeFloor !== null ? mustSeeFloor : stopAt;
+    var baseFloor = mustSeeFloor !== null ? mustSeeFloor : stopAt;
+    function hardFloorNow() {
+      if (deepLeft > 0 && deepFloor !== null) return baseFloor === null ? deepFloor : Math.min(baseFloor, deepFloor);
+      return baseFloor;
+    }
     // One numeric-date order for the whole read: the locale's until the page proves one.
     var dateOrder = { order: opts.dateOrder === "dmy" || opts.dateOrder === "mdy" ? opts.dateOrder : localeDateOrder() };
     var timesRead = 0;
@@ -293,6 +311,11 @@
             mustSee[list[i].conversationId] = false;
             mustSeeLeft -= 1;
           }
+          if (deep[list[i].conversationId]) {
+            deep[list[i].conversationId] = false;
+            deepLeft -= 1;
+          }
+          var hardFloor = hardFloorNow();
           if (list[i].timeMs === null) timesUnread += 1;
           else timesRead += 1;
           if (hardFloor !== null) {
@@ -301,7 +324,7 @@
           }
           if (stopAt !== null) {
             olderInARow = list[i].timeMs !== null && list[i].timeMs < stopAt ? olderInARow + 1 : 0;
-            if (olderInARow >= SINCE_STOP_RUN && mustSeeLeft <= 0) reachedSince = true;
+            if (olderInARow >= SINCE_STOP_RUN && mustSeeLeft <= 0 && deepLeft <= 0) reachedSince = true;
           }
         }
       }
