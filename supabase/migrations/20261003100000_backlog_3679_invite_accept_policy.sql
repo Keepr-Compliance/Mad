@@ -6,12 +6,12 @@
 --    new row to name the caller as user_id.
 -- 2. users_can_view_own_invite lets a signed-in user read their own unclaimed,
 --    unexpired invite row (the portal sign-in callback looks it up by email).
--- 3. guard_invite_acceptance (BEFORE UPDATE) limits a client-role update by a
---    caller who is not an admin of the row's organization to: user_id set to
+-- 3. guard_invite_acceptance (BEFORE UPDATE): a client-role update never
+--    changes organization_id. For a caller who is not an admin of the row's
+--    organization it is further limited to: user_id set to
 --    the caller on an unclaimed row, joined_at, license_status -> 'active',
 --    invitation_token -> NULL. Every other column must stay unchanged.
---    Organization admins, service_role and SECURITY DEFINER functions are not
---    affected by the guard.
+--    service_role and SECURITY DEFINER functions are not affected by the guard.
 
 DROP POLICY IF EXISTS users_can_accept_invite ON public.organization_members;
 
@@ -56,8 +56,16 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  -- Organization admins edit members through organization_members_all_public.
-  IF v_uid IS NOT NULL AND public.is_org_admin(v_uid, OLD.organization_id) THEN
+  -- No client role moves a membership between organizations.
+  IF NEW.organization_id IS DISTINCT FROM OLD.organization_id THEN
+    RAISE EXCEPTION 'organization_id cannot be changed' USING ERRCODE = '42501';
+  END IF;
+
+  -- Organization admins edit members of their organization through
+  -- organization_members_all_public; the organization stays the same.
+  IF v_uid IS NOT NULL
+     AND public.is_org_admin(v_uid, OLD.organization_id)
+     AND NEW.organization_id IS NOT DISTINCT FROM OLD.organization_id THEN
     RETURN NEW;
   END IF;
 

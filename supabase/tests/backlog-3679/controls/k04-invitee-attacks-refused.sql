@@ -15,6 +15,7 @@ DO $$ DECLARE m text; before text; s text; label text; BEGIN
     ('k04 link self + invited_by', $q$update public.organization_members set user_id=auth.uid(), invited_by=auth.uid() where id='{inv_a}'$q$),
     ('k04 link self + provisioning_metadata', $q$update public.organization_members set user_id=auth.uid(), provisioning_metadata='{"x":1}' where id='{inv_a}'$q$),
     ('k04 link someone else', $q$update public.organization_members set user_id='{u_b}' where id='{inv_a}'$q$),
+    ('k04 link self + change invited_email', $q$update public.organization_members set user_id=auth.uid(), invited_email='x@example.test' where id='{inv_a}'$q$),
     ('k04 change invited_email to keep access', $q$update public.organization_members set invited_email='x@example.test' where id='{inv_a}'$q$)
   LOOP
     m := pg_temp.as_user(pg_temp.ua(), 'invitee-3679@example.test', s);

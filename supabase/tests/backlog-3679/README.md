@@ -28,19 +28,26 @@ that produced zero checks.
 | k08 | no client role reads `auth.users`, no policy on the table reads it, the guard function is not client-executable, and the guard still refuses with `auth.users` opened to the caller |
 | k09 | applying the migration twice leaves one trigger and four policies |
 | k10 | after `rollback-3679.sql` the catalogue fingerprint equals the pre-migration one and pre-migration behaviour is back |
+| k99, k99b | client-role updates keep `organization_id` unchanged |
 
 ## Mutants (`lib/mutants.py`)
 
 Exact-string replacements; `apply` exits non-zero when the pattern does not
 occur exactly once, and `run.sh` prints `MUTATION APPLIED` with the changed line.
 
-13 of 15 killed. The two survivors are layered checks that the policies already
-enforce on their own:
+Single mutants: 13 of 20 killed; compound mutants: 3 of 3 killed. Each single
+survivor is a check that another layer also enforces. Where both layers are in
+this migration's guard or policies, a compound mutant removes them together and
+is killed, so the controls do see the property:
 
-- `m12-no-link-self-check` (guard no longer checks `NEW.user_id = auth.uid()`):
-  the accept policy's WITH CHECK requires `user_id = auth.uid()`, and moving the
-  row to an org where the caller is admin is caught by the guard's column diff.
-- `m13-guard-allows-claimed-rows` (guard no longer requires an unclaimed row):
-  no UPDATE policy lets a non-admin reach a claimed row.
+| survivor | other layer | compound, killed by |
+|---|---|---|
+| `m12-no-link-self-check` | accept policy WITH CHECK `user_id = auth.uid()` | — (policy layer; not a guard-only property) |
+| `m13-guard-allows-claimed-rows` | no UPDATE policy reaches a claimed row for a non-admin | — (policy layer) |
+| `m16-no-org-lock` | admin branch requires an unchanged organization; column diff | `c18` → k99 |
+| `m17-admin-org-condition-dropped` | organization lock | `c18` → k99 |
+| `mA-guard-uses-NEW-org` | organization lock (OLD and NEW organization are equal on every row that reaches the admin check, so this is equivalent while the lock exists) | `c19` → k99b |
+| `mB-withcheck-no-email` | guard keeps `invited_email` unchanged | `c20` → k04 |
+| `m21-guard-frees-invited-email` | accept policy WITH CHECK email match | `c20` → k04 |
 
 Recorded runs: `controls-run.txt`, `mutant-run.txt`.
