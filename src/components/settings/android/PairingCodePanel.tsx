@@ -9,7 +9,7 @@
  * Settings › Google Messages. The parent polls the state; once
  * `extensionPaired` turns true it stops showing this panel.
  */
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { rcsImportService } from "../../../services/rcsImportService";
 
 /** "ABCDEFGH" → "ABCD-EFGH" (easier to read and type; the dash is ignored). */
@@ -28,6 +28,8 @@ export function PairingCodePanel({ label = "Show pairing code" }: PairingCodePan
   const [busy, setBusy] = useState(false);
   /** SR: 5 wrong tries used the code up — said plainly (it can be an attack). */
   const [burned, setBurned] = useState(false);
+  /** The code THIS panel shows (its unmount drops only that one). */
+  const shown = useRef<string | null>(null);
 
   const show = useCallback(async () => {
     setBusy(true);
@@ -35,6 +37,7 @@ export function PairingCodePanel({ label = "Show pairing code" }: PairingCodePan
     const r = await rcsImportService.pairCode();
     setBusy(false);
     if (r.success && r.data) {
+      shown.current = r.data.code;
       setCode(r.data);
       setBurned(false);
     } else {
@@ -56,8 +59,9 @@ export function PairingCodePanel({ label = "Show pairing code" }: PairingCodePan
     return () => clearInterval(t);
   }, [code]);
 
-  // A code shown but no longer needed (closed, or paired) is dropped.
-  useEffect(() => () => void rcsImportService.pairCancel?.(), []);
+  // A code shown but no longer needed (closed, or paired) is dropped. Live
+  // (E): only THIS panel's code, never one another panel shows now.
+  useEffect(() => () => void rcsImportService.pairCancel?.(shown.current ?? undefined), []);
 
   return (
     <div className="flex flex-col gap-2 p-3 rounded-xl border border-indigo-200 bg-indigo-50" data-testid="gm-pair-panel">

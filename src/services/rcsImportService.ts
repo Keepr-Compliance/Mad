@@ -164,11 +164,11 @@ export const rcsImportService = {
     }
   },
 
-  /** BACKLOG-3666: drop the pairing code shown. */
-  async pairCancel(): Promise<void> {
+  /** BACKLOG-3666: drop the pairing code shown (only if it is still `code`). */
+  async pairCancel(code?: string): Promise<void> {
     const bridge = api();
     try {
-      await bridge?.pairCancel?.();
+      await bridge?.pairCancel?.(code ? { code } : undefined);
     } catch {
       /* nothing to drop */
     }

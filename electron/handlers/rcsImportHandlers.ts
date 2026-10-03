@@ -864,8 +864,10 @@ export function registerRcsImportHandlers(): void {
 
   ipcMain.handle(
     "rcs-import:pair-cancel",
-    wrapHandler(async (): Promise<{ success: true }> => {
-      pairingAuth.cancelCode();
+    wrapHandler(async (_event: unknown, args?: unknown): Promise<{ success: true }> => {
+      // Live (E): a panel closing drops only ITS code, never one another panel shows now.
+      const code = args && typeof args === "object" ? (args as { code?: unknown }).code : undefined;
+      pairingAuth.cancelCode(typeof code === "string" ? code : undefined);
       return { success: true };
     }, { module: LOG_TAG }),
   );
@@ -895,6 +897,8 @@ export function registerRcsImportHandlers(): void {
           extensionPaired: userId ? pairingAuth.isPaired(userId) : false,
           // SR: the pairing code shown was used up by wrong attempts.
           pairCodeBurned: pairingAuth.codeBurned(),
+          // Live (E): the code's state now (active / expired / burned / none).
+          pairCodeState: pairingAuth.codeState(),
         },
       };
     }, { module: LOG_TAG }),

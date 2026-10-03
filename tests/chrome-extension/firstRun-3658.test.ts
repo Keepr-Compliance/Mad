@@ -57,6 +57,33 @@ describe("first-run page", () => {
     expect((document.getElementById("keepr-ack") as HTMLButtonElement).style.display).toBe("none");
   });
 
+  // Live (E): the pair button was wired inside render(), which runs again on
+  // "Got it" — every Pair click then sent the code twice (two tries a click).
+  // Mutation: wire it inside render() again → red.
+  it("one Pair click sends the code once, also after Got it", () => {
+    const html = read("options.html");
+    document.body.innerHTML = html.slice(html.indexOf("<main>"), html.indexOf("</main>") + 7);
+    localStorage.clear();
+    const sent: string[] = [];
+    const chromeStub = {
+      runtime: {
+        lastError: undefined,
+        getManifest: () => ({ version: "0.3.27" }),
+        sendMessage: (m: { type: string }, cb?: (r: unknown) => void) => {
+          sent.push(m.type);
+          if (cb) cb({ ok: false, error: "x" });
+        },
+      },
+    };
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    new Function("chrome", read("options.js"))(chromeStub);
+    (document.getElementById("keepr-ack") as HTMLButtonElement).click();
+    sent.length = 0;
+    (document.getElementById("keepr-pair-code") as HTMLInputElement).value = "ABCD-EFGH";
+    (document.getElementById("keepr-pair") as HTMLButtonElement).click();
+    expect(sent.filter((t) => t === "keepr-pair")).toHaveLength(1);
+  });
+
   it("is informational: the agreement is given in Keepr (F3)", () => {
     const html = read("options.html");
     expect(html).toMatch(/You agree to this in Keepr itself/);

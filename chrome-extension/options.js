@@ -19,9 +19,9 @@
     }
   }
 
-  function render() {
-    var state = document.getElementById("keepr-ack-state");
-    // BACKLOG-3666: pair with the code Keepr shows (the worker runs the exchange).
+  // BACKLOG-3666: pair with the code Keepr shows (the worker runs the exchange).
+  // Live (E): wired ONCE — it sat inside render(), which runs again on "Got
+  // it", so every Pair click then sent the code twice (two tries a click).
   var pairState = document.getElementById("keepr-pair-state");
   function showPaired() {
     try {
@@ -47,7 +47,9 @@
   }
   showPaired();
 
-  var button = document.getElementById("keepr-ack");
+  function render() {
+    var state = document.getElementById("keepr-ack-state");
+    var button = document.getElementById("keepr-ack");
     if (!state || !button) return;
     if (acknowledged()) {
       state.textContent = "Thanks. You can close this tab and go back to Keepr.";

@@ -191,6 +191,10 @@ async function pairWithCode(codeText) {
   try {
     f = P.finishA(a.state, s.body.pB, s.body.cB);
   } catch (_err) {
+    // Live (E): a wrong code caught here is told to Keepr, so Keepr's count is
+    // right — the 5th wrong try uses the code up at once (Keepr says so).
+    const told = await rawPost("/pair/finish", JSON.stringify({ pairId: s.body.pairId, cA: "wrong" }));
+    if (told.status === 429 && told.body && told.body.message) return { ok: false, error: told.body.message };
     return { ok: false, error: "That code didn't match. Check the code in Keepr and try again." };
   }
   const key = await crypto.subtle.importKey("raw", fromHex(P.sessionKey(f.ke, s.body.pairId)), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);

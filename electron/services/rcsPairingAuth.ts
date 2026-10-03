@@ -65,11 +65,17 @@ export type VerifyResult =
 const NOT_PAIRED_MESSAGE = "Pair the extension with Keepr: open Keepr › Settings › Google Messages.";
 /** SR: 5 wrong tries burned the code — worth saying plainly (it can be an attack). */
 export const CODE_BURNED_MESSAGE = "Code used up by wrong attempts — get a new code.";
+const NO_CODE_MESSAGE = "Show a new pairing code in Keepr first.";
+
+/** The code Keepr shows, as it stands now (Keepr's API; the UI is the founder's next spec). */
+export type PairCodeState = "none" | "active" | "expired" | "burned";
 
 export class RcsPairingAuth {
   private pending: { code: string; userId: string; expiresAt: number; tries: number } | null = null;
   /** SR: the last code was burned by wrong tries (cleared by a new code). */
   private burned = false;
+  /** The last code ran out of time (cleared by a new code): later attempts say so. */
+  private expired = false;
   private readonly exchanges = new Map<string, { userId: string; expectCA: string; ke: string; expiresAt: number }>();
   private readonly nonces = new Map<string, Map<string, number>>();
   private readonly now: () => number;
@@ -91,18 +97,31 @@ export class RcsPairingAuth {
     return this.loaded;
   }
 
-  /** A new code for the signed-in user (any earlier code is dropped). */
+  /**
+   * A new code for `userId`. Founder (live, 0.3.25): starting a (re-)pair
+   * REVOKES the user's current pairing at once — the old pair id is unknown
+   * from now on, so the extension forgets it at its next call and offers the
+   * code field (never "paired" to a pairing Keepr is replacing). Any
+   * earlier code is dropped.
+   */
   issueCode(userId: string): { code: string; expiresAt: number } {
+    this.revoke(userId);
     const code = this.protocol.newCode();
     const expiresAt = this.now() + PAIR_CODE_TTL_MS;
     this.pending = { code, userId, expiresAt, tries: 0 };
     this.exchanges.clear();
     this.burned = false;
+    this.expired = false;
     return { code, expiresAt };
   }
 
-  /** The code is dropped (cancelled in Keepr, or used). */
-  cancelCode(): void {
+  /**
+   * The code is dropped (cancelled in Keepr, or used). With `code`: only if
+   * it is still the code pending (live: a second panel closing must not
+   * drop the code the first one shows).
+   */
+  cancelCode(code?: string): void {
+    if (code !== undefined && (!this.pending || this.pending.code !== code)) return;
     this.pending = null;
     this.exchanges.clear();
   }
@@ -110,6 +129,18 @@ export class RcsPairingAuth {
   /** SR: the code shown was used up by wrong attempts. */
   codeBurned(): boolean {
     return this.burned;
+  }
+
+  /**
+   * Live (E): the code's state NOW — expiry is measured from when Keepr made
+   * the code (5 minutes; attempts never extend it), evaluated here, not only
+   * at the next /pair/start.
+   */
+  codeState(): PairCodeState {
+    if (this.pending) return this.now() > this.pending.expiresAt ? "expired" : "active";
+    if (this.burned) return "burned";
+    if (this.expired) return "expired";
+    return "none";
   }
 
   isPaired(userId: string): boolean {
@@ -124,10 +155,19 @@ export class RcsPairingAuth {
   /** POST /pair/start {pA}. */
   start(body: unknown): Reply {
     const p = this.pending;
-    if (!p || this.now() > p.expiresAt) {
+    // Live (E): an attempt against a burned or expired code gets that reason
+    // (error code), not "no code".
+    if (p && this.now() > p.expiresAt) {
       this.pending = null;
-      return { status: 404, body: { error: "no_code", message: "Show a new pairing code in Keepr first." } };
+      this.exchanges.clear();
+      this.expired = true;
     }
+    if (!this.pending) {
+      if (this.burned) return { status: 429, body: { error: "too_many_tries", message: CODE_BURNED_MESSAGE } };
+      if (this.expired) return { status: 410, body: { error: "expired", message: NO_CODE_MESSAGE } };
+      return { status: 404, body: { error: "no_code", message: NO_CODE_MESSAGE } };
+    }
+    if (!p) return { status: 404, body: { error: "no_code", message: NO_CODE_MESSAGE } };
     p.tries += 1;
     if (p.tries > PAIR_CODE_MAX_TRIES) {
       this.cancelCode();
@@ -144,7 +184,8 @@ export class RcsPairingAuth {
     }
     const pairId = this.randomId();
     this.exchanges.set(pairId, { userId: p.userId, expectCA: answer.expectCA, ke: answer.ke, expiresAt: this.now() + PAIR_EXCHANGE_TTL_MS });
-    return { status: 200, body: { pairId, pB: answer.pB, cB: answer.cB } };
+    // A count only: the tries this code has left after this one.
+    return { status: 200, body: { pairId, pB: answer.pB, cB: answer.cB, triesLeft: Math.max(0, PAIR_CODE_MAX_TRIES - p.tries) } };
   }
 
   /** POST /pair/finish {pairId, cA}. Success is signed with the new key. */
@@ -158,7 +199,17 @@ export class RcsPairingAuth {
     }
     this.exchanges.delete(pairId);
     if (typeof b.cA !== "string" || !this.protocol.safeEqual(b.cA, ex.expectCA)) {
-      return { status: 403, body: { error: "bad_code", message: "That code didn't match. Check it and try again." } };
+      // Live (E): a wrong code (the extension reports one it caught itself,
+      // too). The 5th wrong try uses the code up AT ONCE (it was only burned
+      // at a 6th attempt); before it, the tries left (a count).
+      const p = this.pending;
+      const left = p ? Math.max(0, PAIR_CODE_MAX_TRIES - p.tries) : 0;
+      if (p && left === 0) {
+        this.cancelCode();
+        this.burned = true;
+        return { status: 429, body: { error: "too_many_tries", message: CODE_BURNED_MESSAGE } };
+      }
+      return { status: 403, body: { error: "bad_code", message: "That code didn't match. Check it and try again.", ...(p ? { triesLeft: left } : {}) } };
     }
     const keyHex = this.protocol.sessionKey(ex.ke, pairId);
     this.store.save({ pairId, userId: ex.userId, keyHex });

@@ -8,10 +8,11 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 
 let mockBurned = false;
+const mockCancel = jest.fn(async (_code?: string) => undefined);
 jest.mock("../../../../services/rcsImportService", () => ({
   rcsImportService: {
     pairCode: async () => ({ success: true, data: { code: "QWERTY23", expiresAt: "2026-10-02T12:05:00.000Z" } }),
-    pairCancel: async () => undefined,
+    pairCancel: (code?: string) => mockCancel(code),
     getExtensionState: async () => ({ success: true, data: { pairCodeBurned: mockBurned } }),
   },
 }));
@@ -26,6 +27,18 @@ beforeEach(() => {
 afterEach(() => jest.useRealTimers());
 
 describe("PairingCodePanel", () => {
+  // Live (E): closing a panel drops only the code IT shows (another panel's
+  // code stays valid). Mutation: cancel without the code → red.
+  it("unmounting drops only its own code", async () => {
+    mockCancel.mockClear();
+    const view = render(<PairingCodePanel />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Show pairing code" }));
+    });
+    view.unmount();
+    expect(mockCancel).toHaveBeenCalledWith("QWERTY23");
+  });
+
   it("shows the code as ABCD-EFGH", async () => {
     render(<PairingCodePanel />);
     await act(async () => {

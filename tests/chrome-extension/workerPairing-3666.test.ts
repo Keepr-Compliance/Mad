@@ -185,4 +185,35 @@ describe("the worker pairs with Keepr (BACKLOG-3666)", () => {
     expect(await w2.send(pending)).toMatchObject({ ok: false, status: 401, body: { error: "not_paired" } });
     expect(await w2.send({ type: "keepr-pair-status" })).toEqual({ ok: true, paired: false });
   });
+  // Live (E): the worker tells Keepr of a wrong code it caught, so Keepr's
+  // count is right: the 5th wrong code uses the code up at once, and the
+  // worker says so. Mutation: no report → red (Keepr burned only at a 6th).
+  it("five wrong codes: Keepr counts them and the 5th says the code is used up", async () => {
+    const w = await worker();
+    const { code } = auth.issueCode("user-a");
+    const wrong = code === "BBBBBBBB" ? "CCCCCCCC" : "BBBBBBBB";
+    for (let i = 1; i <= 4; i++) {
+      expect(await w.send({ type: "keepr-pair", code: wrong })).toEqual({
+        ok: false, error: "That code didn't match. Check the code in Keepr and try again.",
+      });
+    }
+    expect(auth.codeBurned()).toBe(false);
+    expect(await w.send({ type: "keepr-pair", code: wrong })).toEqual({ ok: false, error: "Code used up by wrong attempts — get a new code." });
+    expect(auth.codeBurned()).toBe(true);
+  });
+
+  // Founder (live, 0.3.25): a Re-pair started in Keepr (a new code shown)
+  // revokes the pairing; the idle chip's next refresh (a signed
+  // /exclusions/list) finds it unknown, the worker forgets it, and the chip
+  // offers the code field — no user action.
+  it("a Re-pair started in Keepr: the next idle refresh forgets the pairing", async () => {
+    const w = await worker();
+    await w.send({ type: "keepr-pair", code: auth.issueCode("user-a").code });
+    expect(await w.send({ type: "keepr-pair-status" })).toEqual({ ok: true, paired: true });
+    auth.issueCode("user-a"); // Settings › Re-pair
+    expect(await w.send({ type: "keepr-exclusions-list" })).toMatchObject({ ok: false, status: 401, body: { error: "not_paired" } });
+    expect(await w.send({ type: "keepr-pair-status" })).toEqual({ ok: true, paired: false });
+    // Unpaired now: sent unsigned (no pairing to fail on).
+    expect((await w.send({ type: "keepr-exclusions-list" })).status).not.toBe(401);
+  });
 });

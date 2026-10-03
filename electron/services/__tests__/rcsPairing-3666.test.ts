@@ -164,7 +164,8 @@ describe("pairing (BACKLOG-3666)", () => {
     // SR: said plainly — it can be an attack.
     expect(sixth.body.message).toBe("Code used up by wrong attempts — get a new code.");
     expect(auth.codeBurned()).toBe(true);
-    expect((await post(port, "/pair/start", {}, JSON.stringify({ pA: P.startA(code).pA }))).status).toBe(404);
+    // Live (E): later attempts say burned (429), not "no code".
+    expect((await post(port, "/pair/start", {}, JSON.stringify({ pA: P.startA(code).pA }))).status).toBe(429);
     // Single use.
     const fresh = auth.issueCode("user-a");
     expect(auth.codeBurned()).toBe(false); // a new code clears it
@@ -173,7 +174,8 @@ describe("pairing (BACKLOG-3666)", () => {
     // Expiry.
     const late = auth.issueCode("user-a");
     clock += PAIR_CODE_TTL_MS + 1;
-    expect((await post(port, "/pair/start", {}, JSON.stringify({ pA: P.startA(late.code).pA }))).status).toBe(404);
+    // Live (E): an expired code says so (410 expired), not "no code".
+    expect((await post(port, "/pair/start", {}, JSON.stringify({ pA: P.startA(late.code).pA }))).status).toBe(410);
     expect(PAIR_CODE_MAX_TRIES).toBe(5);
     expect(PAIR_CODE_TTL_MS).toBe(5 * 60 * 1000);
   });
@@ -183,6 +185,70 @@ describe("pairing (BACKLOG-3666)", () => {
     const second = await pairWith(auth.issueCode("user-a").code);
     expect(store.rows.map((r) => r.pairId)).toEqual([second.pairId]);
     const r = await post(port, "/job/pending", signed(first, "/job/pending").headers);
+    expect(r.body.error).toBe("unknown_pair");
+  });
+  // Live (E): Keepr's own count and reasons. The extension tells Keepr of a
+  // wrong code it caught (cA "wrong"); attempts 1-4 → 403 with the tries
+  // left; the 5th wrong try burns the code AT ONCE (429); a 6th → 429 too
+  // (not "no code"); an expired code → "expired". Expiry runs from when Keepr
+  // made the code; a /pair/start does not use the code up.
+  // Mutations: no burn on the 5th → red; burned/expired reported as
+  // no_code → red; codeState not evaluating expiry now → red; an unscoped
+  // cancel dropping another panel's code → red.
+  it("wrong codes 1..6: tries left, the 5th burns at once, the 6th says burned", async () => {
+    auth.issueCode("user-a");
+    const attempt = async () => {
+      const s = await post(port, "/pair/start", {}, JSON.stringify({ pA: P.startA("BBBBBBBB").pA }));
+      if (s.status !== 200) return { start: s.status, error: s.body.error };
+      const f = await post(port, "/pair/finish", {}, JSON.stringify({ pairId: s.body.pairId, cA: "wrong" }));
+      return { start: 200, startLeft: s.body.triesLeft, finish: f.status, error: f.body.error, left: f.body.triesLeft };
+    };
+    expect(await attempt()).toEqual({ start: 200, startLeft: 4, finish: 403, error: "bad_code", left: 4 });
+    expect(await attempt()).toMatchObject({ finish: 403, left: 3 });
+    expect(await attempt()).toMatchObject({ finish: 403, left: 2 });
+    expect(await attempt()).toMatchObject({ finish: 403, left: 1 });
+    expect(auth.codeState()).toBe("active");
+    expect(await attempt()).toMatchObject({ start: 200, startLeft: 0, finish: 429, error: "too_many_tries" });
+    expect(auth.codeBurned()).toBe(true);
+    expect(auth.codeState()).toBe("burned");
+    expect(await attempt()).toEqual({ start: 429, error: "too_many_tries" });
+  });
+
+  it("expiry: from when Keepr made the code, reported as expired (also by codeState, at once)", async () => {
+    const { code } = auth.issueCode("user-a");
+    clock += PAIR_CODE_TTL_MS - 1;
+    expect(auth.codeState()).toBe("active");
+    clock += 2;
+    expect(auth.codeState()).toBe("expired");
+    const s = await post(port, "/pair/start", {}, JSON.stringify({ pA: P.startA(code).pA }));
+    expect(s.status).toBe(410);
+    expect(s.body.error).toBe("expired");
+    expect(auth.codeState()).toBe("expired");
+    auth.issueCode("user-a");
+    expect(auth.codeState()).toBe("active");
+  });
+
+  it("a panel closing drops only its own code", () => {
+    const first = auth.issueCode("user-a");
+    const second = auth.issueCode("user-a");
+    auth.cancelCode(first.code);
+    expect(auth.codeState()).toBe("active");
+    auth.cancelCode(second.code);
+    expect(auth.codeState()).toBe("none");
+  });
+
+  // Founder (live, 0.3.25): Re-pair dead end. Starting a Re-pair in Keepr
+  // revokes the current pairing AT ONCE — before the new code is typed — so
+  // the extension's next call is "unknown_pair" and it offers the code field.
+  // Mutation: issueCode not revoking → red.
+  it("showing a new code revokes the current pairing immediately", async () => {
+    const p = await pairWith(auth.issueCode("user-a").code);
+    expect(auth.isPaired("user-a")).toBe(true);
+    auth.issueCode("user-a");
+    expect(auth.isPaired("user-a")).toBe(false);
+    expect(store.rows).toEqual([]);
+    const r = await post(port, "/exclusions/list", signed(p, "/exclusions/list").headers);
+    expect(r.status).toBe(401);
     expect(r.body.error).toBe("unknown_pair");
   });
 });

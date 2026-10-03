@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Keepr for Google Messages",
-  "version": "0.3.27",
+  "version": "0.3.28",
   "description": "Copies your Google Messages texts to the Keepr desktop app when you start a Sync in Keepr.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA/Z7wK4LRB9cJHFJmLFAQP/5YvAQjF4bHn0crzUmnP+8MUrVEDkGvnz4RzD3Lufngpk0c0HJs8KMY1vCMc56TYkqayOpM1I5fi0U2s0CQ+/mlDQNTfKOBCtfxgEj9TgIJq3d6COXIcnbenz326K/O6MF0cXz4a5x1ZYq/fOdK377K06NtXxtl9DLnVGRDIjTK7kJap2lTbWyzLdyRkp0NgW8qF1pxNtMlWOezke4mCqsEbRT7Q5j+ynLntW8K9n2/Hmi2HIILGpw8NwPeBtTew02QxHQhCN/P5ljFj/nTJAHcRgLev0wbTYxTCyFWvzp7Di0PMTJHZSi6XcmTidxS5wIDAQAB",
   "background": {
