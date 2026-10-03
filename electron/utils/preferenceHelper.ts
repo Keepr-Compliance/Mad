@@ -249,7 +249,7 @@ export async function isContactSourceEnabled(
  *   2. `emailSync.lookbackMonths` — the pre-TASK-2072 name for the same
  *      setting. No writer produces it any more; it survives only in the stored
  *      preferences of users who set the value before the rename.
- *   3. `EMAIL_CACHE_DURATION_MONTHS_DEFAULT` (3).
+ *   3. `EMAIL_CACHE_DURATION_MONTHS_DEFAULT` (1.5).
  *
  * THE DEFECT THIS CLOSES: the Settings screen has honoured the legacy key
  * since TASK-2072 (`EmailSettings.tsx:40-44`, the `??` fallback) while this

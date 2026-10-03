@@ -59,6 +59,7 @@ import {
   PREFERENCES_READ_TIMEOUT_MS,
 } from "../preferenceHelper";
 import logService from "../../services/logService";
+import { EMAIL_CACHE_DURATION_MONTHS_DEFAULT } from "../../constants";
 
 /** A read that is still outstanding when the universe ends. */
 const neverSettles = () => new Promise<never>(() => {});
@@ -114,7 +115,9 @@ describe("BACKLOG-2986 — a hung preference read still answers", () => {
 
     await expect(
       settleWithTimers(() => getEmailCacheDurationMonths("user-1")),
-    ).resolves.toBe(3);
+    ).resolves.toBe(EMAIL_CACHE_DURATION_MONTHS_DEFAULT);
+    // The email default is 1.5 months (founder, 2026-10-02).
+    expect(EMAIL_CACHE_DURATION_MONTHS_DEFAULT).toBe(1.5);
   });
 
   it("isShadowDeltaSyncEnabled fails CLOSED, which is its own rule", async () => {
