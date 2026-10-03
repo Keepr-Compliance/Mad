@@ -25,8 +25,12 @@
  * BACKLOG-3617: the hint under the list depends on whether this user may
  * create templates — asked of the database (`checklistService.canEditTemplates`,
  * the portal Checklists page's own check). ONE boolean, {@link canCreateChecklists},
- * decides every "create your own → Checklists" line in both views, so
- * BACKLOG-3618 (brokerage agents create their own) changes one place.
+ * decides every "create your own → Checklists" line in both views. BACKLOG-3618
+ * (brokerage agents create their own) changed only where the answer comes
+ * from — main now also asks `can_create_own_checklist_templates`.
+ *
+ * BACKLOG-3618: the user's own templates are tagged "Mine"; an own template
+ * set not to be sent with submissions also says "Not sent to broker".
  *   creator            → the create line, "Checklists" opens the portal page
  *   cannot create      → no create line; nothing under the list
  *   unknown            → today's "Templates come from…" under the list
@@ -360,10 +364,28 @@ export function ChecklistTemplateChooser({
                     testId={`checklist-template-check-${template.id}`}
                   />
                   <span className="flex-1 min-w-0 flex flex-col">
-                    <span className="text-base font-medium text-gray-900">{template.name}</span>
+                    <span className="text-base font-medium text-gray-900">
+                      {template.name}
+                      {template.isMine && (
+                        <span
+                          className="ml-2 align-middle rounded bg-gray-100 px-1.5 py-0.5 text-xs font-medium text-gray-600"
+                          data-testid={`checklist-template-mine-${template.id}`}
+                        >
+                          Mine
+                        </span>
+                      )}
+                    </span>
                     <span className="text-sm text-gray-500 tabular-nums">
                       {template.items.length} item{template.items.length === 1 ? "" : "s"} · {required} required
                     </span>
+                    {template.isMine && !template.includeInSubmission && (
+                      <span
+                        className="text-xs text-gray-500"
+                        data-testid={`checklist-template-not-sent-${template.id}`}
+                      >
+                        Not sent to broker
+                      </span>
+                    )}
                   </span>
                   {alreadyAdded && (
                     <span
