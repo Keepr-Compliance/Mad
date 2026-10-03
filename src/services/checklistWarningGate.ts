@@ -30,14 +30,22 @@ export interface UncheckedRequiredItem {
  * BACKLOG-3477: every required, unticked item across ALL checklists on the
  * transaction, in display order. Optional items never count. The warning's
  * title is this array's length, so the number and the list cannot disagree.
+ *
+ * BACKLOG-3618: `notSentTemplateIds` — the user's own templates set not to be
+ * sent with submissions. The server drops those checklists at submit, so
+ * they cannot be "missing" from what the broker receives, and the warning
+ * skips them.
  */
 export function listUncheckedRequiredItems(
   data: ChecklistsForTransaction,
+  notSentTemplateIds: ReadonlySet<string> = new Set(),
 ): UncheckedRequiredItem[] {
   const out: UncheckedRequiredItem[] = [];
   // Missing arrays read as empty: malformed data must never throw here, or the
   // Complete press would end with nothing on screen.
-  const checklists = data.checklists ?? [];
+  const checklists = (data.checklists ?? []).filter(
+    (detail) => !notSentTemplateIds.has(detail.checklist?.templateId),
+  );
   const named = checklists.length >= 2;
   for (const detail of checklists) {
     for (const item of detail.items ?? []) {
@@ -54,6 +62,26 @@ export function listUncheckedRequiredItems(
 }
 
 /**
+ * BACKLOG-3618: the ids of the user's own templates set not to be sent. A
+ * listing that cannot be read gives an empty set — warn on everything. Wrong
+ * in that direction costs one extra warning, which never blocks; the server
+ * drops a not-sent checklist at submit either way.
+ */
+async function readNotSentTemplateIds(): Promise<ReadonlySet<string>> {
+  try {
+    const listing = await checklistService.listTemplates();
+    if (!listing.success || !listing.data) return new Set();
+    return new Set(
+      listing.data.templates
+        .filter((t) => t.isMine === true && t.includeInSubmission === false)
+        .map((t) => t.id),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+/**
  * Read the transaction's checklists NOW and list the unticked required items.
  * A refused read or a throw returns `[]` — no warning, the flow continues.
  * An IPC rejection arrives as a refusal (`checklistService.get` catches it).
@@ -64,9 +92,12 @@ export async function readUncheckedRequiredItems(
   transactionId: string,
 ): Promise<UncheckedRequiredItem[]> {
   try {
-    const result = await checklistService.get(transactionId);
+    const [result, notSent] = await Promise.all([
+      checklistService.get(transactionId),
+      readNotSentTemplateIds(),
+    ]);
     if (result.success && result.data) {
-      return listUncheckedRequiredItems(result.data);
+      return listUncheckedRequiredItems(result.data, notSent);
     }
     logger.warn(
       "[ChecklistWarningGate] checklist read failed; continuing without the warning:",

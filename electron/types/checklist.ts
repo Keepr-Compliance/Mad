@@ -131,6 +131,18 @@ export interface ChecklistTemplate {
   updatedAt: string | null;
   /** Sorted by `sortOrder` here, not by the server: a PostgREST embed is unordered. */
   items: ChecklistTemplateItem[];
+  /**
+   * BACKLOG-3618: the signed-in user's own template (made on the portal's
+   * "My checklists"), not one of the brokerage's. False for every row read
+   * from a database without the 3618 columns.
+   */
+  isMine: boolean;
+  /**
+   * BACKLOG-3618: false only for an own template set not to be sent with
+   * submissions (the server drops it at submit). Brokerage templates are
+   * always true — the database cannot store anything else.
+   */
+  includeInSubmission: boolean;
 }
 
 /**
