@@ -1,0 +1,68 @@
+/**
+ * BACKLOG-3673 C1 — the one routing function, table-tested.
+ *
+ * Every row of the plan's routing table reduces to the account record, so the
+ * table here is the record's three values plus malformed IPC input. Terms are
+ * not an input (SR condition 2): the terms screen is AuthContext's and is shown
+ * over whichever destination this returns.
+ */
+import { routeAccount, type AccountSetup } from "../routeAccount";
+import { readAccountSetup } from "../readAccountSetup";
+
+describe("C1 — routeAccount", () => {
+  const table: Array<[AccountSetup, "dashboard" | "setup"]> = [
+    ["finished", "dashboard"], // rows 11-16, 18, 19 (record or cache set)
+    ["not-finished", "setup"], // rows 1-10, 17
+    ["unknown", "setup"], // row 20: fail CLOSED
+  ];
+
+  it.each(table)("setup=%s -> %s", (setup, destination) => {
+    expect(routeAccount({ setup })).toEqual({ destination });
+  });
+
+  it("a malformed runtime value routes to setup, never the dashboard", () => {
+    for (const bad of [undefined, null, "", "FINISHED", "done", true, 1]) {
+      expect(routeAccount({ setup: bad as unknown as AccountSetup })).toEqual({
+        destination: "setup",
+      });
+    }
+  });
+});
+
+describe("C1 — readAccountSetup (IPC result -> routing input)", () => {
+  it("a well-formed answer passes through", () => {
+    expect(
+      readAccountSetup({
+        success: true,
+        setup: "finished",
+        emailStepAnswered: true,
+        contactSourceAnswered: true,
+      }),
+    ).toEqual({ setup: "finished", emailStepAnswered: true, contactSourceAnswered: true });
+  });
+
+  it.each([
+    ["missing bridge / rejection", undefined],
+    ["null", null],
+    ["success:false", { success: false, setup: "finished" }],
+    ["unrecognised setup value", { success: true, setup: "yes" }],
+    ["setup missing", { success: true }],
+  ])("%s -> unknown, nothing answered", (_name, input) => {
+    expect(readAccountSetup(input)).toEqual({
+      setup: "unknown",
+      emailStepAnswered: false,
+      contactSourceAnswered: false,
+    });
+  });
+
+  it("answers are true only when literally true", () => {
+    expect(
+      readAccountSetup({
+        success: true,
+        setup: "not-finished",
+        emailStepAnswered: "true",
+        contactSourceAnswered: 1,
+      }),
+    ).toEqual({ setup: "not-finished", emailStepAnswered: false, contactSourceAnswered: false });
+  });
+});

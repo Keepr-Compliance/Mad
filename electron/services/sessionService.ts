@@ -28,6 +28,10 @@ interface SessionData {
   // TASK-2086: Timestamp of last successful server-side auth validation (SOC 2 CC6.1)
   // Used for offline grace period -- if missing, treated as "never validated"
   lastServerValidatedAt?: number;
+  // BACKLOG-3673: offline cache of the server record users.onboarding_completed_at.
+  // The server decides; this is read only when the server cannot be reached.
+  // Deleted with the session file on sign-out / expiry.
+  accountSetupFinishedAt?: string;
 }
 
 /**

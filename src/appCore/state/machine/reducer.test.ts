@@ -56,6 +56,7 @@ const mockCompleteUserData: UserData = {
   hasEmailConnected: true,
   needsDriverSetup: false,
   fda: "granted",
+  setup: "finished",
 };
 
 const mockIncompleteUserData: UserData = {
@@ -64,6 +65,7 @@ const mockIncompleteUserData: UserData = {
   hasEmailConnected: false,
   needsDriverSetup: true,
   fda: "not-asked",
+  setup: "not-finished",
 };
 
 /**
@@ -119,13 +121,25 @@ describe("getNextOnboardingStep", () => {
       expect(result).toBe("permissions");
     });
 
-    it("returns null when all macOS steps complete", () => {
+    // BACKLOG-3673: never null. "All listed steps done" returns the last
+    // listed step -- a label that keeps OnboardingFlow mounted. Only
+    // ONBOARDING_QUEUE_DONE leaves setup.
+    it("returns the last listed step (never null) when all macOS steps complete", () => {
       const result = getNextOnboardingStep(
         ["phone-type", "secure-storage", "email-connect", "permissions"],
         mockMacOSPlatform,
         { ...mockIncompleteUserData, fda: "granted" as const }
       );
-      expect(result).toBeNull();
+      expect(result).toBe("email-connect");
+    });
+
+    it("returns permissions as the last label when FDA still blocks and all steps are done", () => {
+      const result = getNextOnboardingStep(
+        ["phone-type", "secure-storage", "email-connect", "permissions"],
+        mockMacOSPlatform,
+        { ...mockIncompleteUserData, fda: "not-asked" as const }
+      );
+      expect(result).toBe("permissions");
     });
 
     it("skips permissions if already granted", () => {
@@ -134,7 +148,7 @@ describe("getNextOnboardingStep", () => {
         mockMacOSPlatform,
         { ...mockIncompleteUserData, fda: "granted" as const }
       );
-      expect(result).toBeNull();
+      expect(result).toBe("email-connect");
     });
   });
 
@@ -153,44 +167,41 @@ describe("getNextOnboardingStep", () => {
       expect(result).toBe("email-connect");
     });
 
-    it("returns apple-driver after email-connect if needed", () => {
-      // Must include phoneType: "iphone" because getNextOnboardingStep now
-      // checks userData.phoneType instead of platform.hasIPhone (TASK-1180 fix)
+    // BACKLOG-3673: the Apple driver is device state; it never decides the
+    // legacy step label (and never decides routing).
+    it("never returns apple-driver, even when the driver is missing", () => {
+      const driverMissing: UserData = {
+        ...mockIncompleteUserDataWindows,
+        phoneType: "iphone",
+        needsDriverSetup: true,
+      };
       const result = getNextOnboardingStep(
         ["phone-type", "email-connect"],
         mockWindowsPlatform,
-        { ...mockIncompleteUserDataWindows, phoneType: "iphone", needsDriverSetup: true }
+        driverMissing
       );
-      expect(result).toBe("apple-driver");
+      expect(result).toBe("email-connect");
     });
 
-    it("skips apple-driver if not needed", () => {
+    it("returns the last listed step when all Windows steps complete", () => {
+      const driverPresent: UserData = { ...mockIncompleteUserDataWindows, needsDriverSetup: false };
       const result = getNextOnboardingStep(
         ["phone-type", "email-connect"],
         mockWindowsPlatform,
-        { ...mockIncompleteUserDataWindows, needsDriverSetup: false }
+        driverPresent
       );
-      expect(result).toBeNull();
-    });
-
-    it("returns null when all Windows+iPhone steps complete", () => {
-      const result = getNextOnboardingStep(
-        ["phone-type", "email-connect", "apple-driver"],
-        mockWindowsPlatform,
-        { ...mockIncompleteUserDataWindows, needsDriverSetup: false }
-      );
-      expect(result).toBeNull();
+      expect(result).toBe("email-connect");
     });
   });
 
   describe("Windows + Android platform", () => {
-    it("skips apple-driver for Android users", () => {
+    it("returns the last listed step for Android users when all steps complete", () => {
       const result = getNextOnboardingStep(
         ["phone-type", "email-connect"],
         mockWindowsAndroidPlatform,
         mockIncompleteUserDataWindows
       );
-      expect(result).toBeNull();
+      expect(result).toBe("email-connect");
     });
   });
 });
@@ -522,7 +533,9 @@ describe("appStateReducer - Loading Phase Transitions", () => {
       }
     });
 
-    it("transitions new user directly to onboarding", () => {
+    // BACKLOG-3673: `isNewUser` (terms not current) no longer routes. Every
+    // signed-in account loads its data; routeAccount decides in USER_DATA_LOADED.
+    it("sends an account with outdated terms (isNewUser) to loading-user-data, not onboarding", () => {
       const state: LoadingState = { status: "loading", phase: "loading-auth" };
       const action: AppAction = {
         type: "AUTH_LOADED",
@@ -533,16 +546,10 @@ describe("appStateReducer - Loading Phase Transitions", () => {
 
       const result = appStateReducer(state, action);
 
-      expect(result.status).toBe("onboarding");
-      if (result.status === "onboarding") {
-        expect(result.user).toEqual(mockUser);
-        expect(result.platform).toEqual(mockMacOSPlatform);
-        expect(result.step).toBe("phone-type");
-        expect(result.completedSteps).toEqual([]);
-      }
+      expect(result).toEqual({ status: "loading", phase: "loading-user-data" });
     });
 
-    it("preserves deferredDbInit when transitioning new user to onboarding", () => {
+    it("preserves deferredDbInit for an account with outdated terms (isNewUser)", () => {
       const state: LoadingState = {
         status: "loading",
         phase: "loading-auth",
@@ -557,8 +564,9 @@ describe("appStateReducer - Loading Phase Transitions", () => {
 
       const result = appStateReducer(state, action);
 
-      expect(result.status).toBe("onboarding");
-      if (result.status === "onboarding") {
+      expect(result.status).toBe("loading");
+      if (result.status === "loading") {
+        expect(result.phase).toBe("loading-user-data");
         expect(result.deferredDbInit).toBe(true);
       }
     });
@@ -643,6 +651,7 @@ describe("appStateReducer - Loading Phase Transitions", () => {
         hasEmailConnected: false,
         needsDriverSetup: false,
         fda: "not-asked", // Still needs permissions on macOS
+        setup: "not-finished",
       };
       const action = {
         type: "USER_DATA_LOADED" as const,
@@ -702,7 +711,9 @@ describe("appStateReducer - Loading Phase Transitions", () => {
 
 describe("appStateReducer - LOGIN_SUCCESS Transitions", () => {
   describe("LOGIN_SUCCESS from unauthenticated", () => {
-    it("transitions new user directly to onboarding", () => {
+    // BACKLOG-3673 (BACKLOG-3324's defect): a sign-in with outdated terms used
+    // to restart all of setup. It now loads the account like any other sign-in.
+    it("sends a sign-in with outdated terms (isNewUser) to loading-user-data, not onboarding", () => {
       const state: AppState = { status: "unauthenticated" };
       const action = {
         type: "LOGIN_SUCCESS" as const,
@@ -713,12 +724,11 @@ describe("appStateReducer - LOGIN_SUCCESS Transitions", () => {
 
       const result = appStateReducer(state, action);
 
-      expect(result.status).toBe("onboarding");
-      if (result.status === "onboarding") {
+      expect(result.status).toBe("loading");
+      if (result.status === "loading") {
+        expect(result.phase).toBe("loading-user-data");
         expect(result.user).toEqual(mockUser);
         expect(result.platform).toEqual(mockMacOSPlatform);
-        expect(result.step).toBe("phone-type");
-        expect(result.completedSteps).toEqual([]);
       }
     });
 
@@ -859,7 +869,9 @@ describe("appStateReducer - Onboarding Transitions", () => {
       }
     });
 
-    it("transitions to ready when all steps complete", () => {
+    // BACKLOG-3673: completing the last legacy step no longer leaves setup.
+    // Only ONBOARDING_QUEUE_DONE does (see singleExit.c17ab-3673.test.tsx).
+    it("stays in onboarding when all steps complete", () => {
       const state: OnboardingState = {
         status: "onboarding",
         step: "permissions",
@@ -874,18 +886,12 @@ describe("appStateReducer - Onboarding Transitions", () => {
 
       const result = appStateReducer(state, action);
 
-      expect(result.status).toBe("ready");
-      if (result.status === "ready") {
-        expect(result.user).toEqual(mockUser);
-        expect(result.platform).toEqual(mockMacOSPlatform);
-        // BACKLOG-3275, deliberate behaviour change. This used to assert
-        // `hasPermissions === true`, which held only because `completedSteps`
-        // contained "permissions" — navigation deciding capability, the defect
-        // this item removes. A step completion now carries the Full Disk Access
-        // state through untouched; only FDA_GRANTED may report a grant, and the
-        // single production dispatcher sends it alongside this action.
-        // See reducer.fdaInversion.test.ts for the paired assertion.
-        expect(result.userData.fda).toBe("not-asked");
+      expect(result.status).toBe("onboarding");
+      if (result.status === "onboarding") {
+        expect(result.completedSteps).toContain("permissions");
+        // BACKLOG-3275: a step completion carries the FDA state through
+        // untouched; only FDA_GRANTED may report a grant.
+        expect(result.fda).toBeUndefined();
       }
     });
 
@@ -922,7 +928,7 @@ describe("appStateReducer - Onboarding Transitions", () => {
       expect(result).toBe(state);
     });
 
-    it("correctly handles Windows+iPhone apple-driver completion", () => {
+    it("Windows+iPhone apple-driver completion stays in onboarding (BACKLOG-3673)", () => {
       const windowsState: OnboardingState = {
         status: "onboarding",
         step: "apple-driver",
@@ -938,9 +944,10 @@ describe("appStateReducer - Onboarding Transitions", () => {
 
       const result = appStateReducer(windowsState, action);
 
-      expect(result.status).toBe("ready");
-      if (result.status === "ready") {
-        expect(result.userData.needsDriverSetup).toBe(false);
+      expect(result.status).toBe("onboarding");
+      if (result.status === "onboarding") {
+        expect(result.completedSteps).toContain("apple-driver");
+        expect(result.selectedPhoneType).toBe("iphone");
       }
     });
 
@@ -992,7 +999,7 @@ describe("appStateReducer - Onboarding Transitions", () => {
       }
     });
 
-    it("uses selectedPhoneType in userData when transitioning to ready", () => {
+    it("uses selectedPhoneType in userData when the queue completes setup", () => {
       const state: OnboardingState = {
         status: "onboarding",
         step: "permissions",
@@ -1001,16 +1008,16 @@ describe("appStateReducer - Onboarding Transitions", () => {
         completedSteps: ["phone-type", "secure-storage", "email-connect"],
         selectedPhoneType: "android", // Explicitly selected android
       };
-      const action: AppAction = {
+      const afterStep = appStateReducer(state, {
         type: "ONBOARDING_STEP_COMPLETE",
         step: "permissions",
-      };
-
-      const result = appStateReducer(state, action);
+      });
+      const result = appStateReducer(afterStep, { type: "ONBOARDING_QUEUE_DONE" });
 
       expect(result.status).toBe("ready");
       if (result.status === "ready") {
         expect(result.userData.phoneType).toBe("android");
+        expect(result.userData.setup).toBe("finished");
       }
     });
   });
@@ -1083,41 +1090,6 @@ describe("appStateReducer - Onboarding Transitions", () => {
       const action: AppAction = {
         type: "RESUME_MARKER_APPLIED",
         phoneType: "iphone",
-      };
-
-      const result = appStateReducer(state, action);
-
-      expect(result).toBe(state);
-    });
-  });
-
-  describe("ONBOARDING_SKIP", () => {
-    it("treats skip the same as complete", () => {
-      const state = baseOnboardingState;
-      const action: AppAction = {
-        type: "ONBOARDING_SKIP",
-        step: "phone-type",
-      };
-
-      const result = appStateReducer(state, action);
-
-      expect(result.status).toBe("onboarding");
-      if (result.status === "onboarding") {
-        expect(result.completedSteps).toContain("phone-type");
-        expect(result.step).toBe("secure-storage");
-      }
-    });
-
-    it("returns current state if not in onboarding status", () => {
-      const state: ReadyState = {
-        status: "ready",
-        user: mockUser,
-        platform: mockMacOSPlatform,
-        userData: mockCompleteUserData,
-      };
-      const action: AppAction = {
-        type: "ONBOARDING_SKIP",
-        step: "email-connect",
       };
 
       const result = appStateReducer(state, action);

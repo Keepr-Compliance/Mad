@@ -73,7 +73,6 @@ const mockApi = {
   },
   auth: {
     completeEmailOnboarding: jest.fn().mockResolvedValue({ success: true }),
-    checkEmailOnboarding: jest.fn().mockResolvedValue({ success: true, completed: false }),
   },
   system: {
     checkAllConnections: jest.fn().mockResolvedValue({ success: true }),
@@ -99,6 +98,7 @@ const returningUserDataMacOS: UserData = {
   hasEmailConnected: true,
   needsDriverSetup: false,
   fda: "granted",
+  setup: "finished",
 };
 
 const returningUserDataWindows: UserData = {
@@ -108,7 +108,23 @@ const returningUserDataWindows: UserData = {
   needsDriverSetup: false,
   // BACKLOG-3275: Full Disk Access is not a concept on Windows.
   fda: "not-applicable",
+  setup: "finished",
 };
+
+/**
+ * BACKLOG-3673: a brand-new account. Every sign-in now loads the account; its
+ * record is empty, so USER_DATA_LOADED routes it into setup. Shape transcribed
+ * from LoadingOrchestrator Phase 4's return (loadUserData).
+ */
+const newAccountData = (platform: PlatformInfo): UserData => ({
+  phoneType: null,
+  hasCompletedEmailOnboarding: false,
+  hasEmailConnected: false,
+  needsDriverSetup: false,
+  fda: platform.isMacOS ? "not-asked" : "not-applicable",
+  setup: "not-finished",
+  contactSourceAnswered: false,
+});
 
 // Initial loading state
 const initialLoadingState: LoadingState = {
@@ -275,6 +291,13 @@ describe("Full App Flow Integration Tests", () => {
           isNewUser: true,
           platform: macOSPlatform,
         });
+        // BACKLOG-3673: Phase 4 loads the new account; its record is empty.
+        result.current.appState.dispatch({
+          type: "USER_DATA_LOADED",
+          data: newAccountData(macOSPlatform),
+          user: testUser,
+          platform: macOSPlatform,
+        } as never);
       });
 
       // Should be in onboarding at phone-type step
@@ -326,12 +349,18 @@ describe("Full App Flow Integration Tests", () => {
       }
       expect(result.current.navigation.currentStep).toBe("permissions");
 
-      // Step 7: Complete permissions step -> APP_READY
+      // Step 7: Complete permissions step. BACKLOG-3673: that never leaves setup.
       act(() => {
         result.current.appState.dispatch({
           type: "ONBOARDING_STEP_COMPLETE",
           step: "permissions",
         });
+      });
+      expect(result.current.appState.state.status).toBe("onboarding");
+
+      // Step 8: the setup queue completes -> the only way out of setup.
+      act(() => {
+        result.current.appState.dispatch({ type: "ONBOARDING_QUEUE_DONE" });
       });
 
       // Should now be ready
@@ -361,6 +390,13 @@ describe("Full App Flow Integration Tests", () => {
           isNewUser: true,
           platform: macOSPlatform,
         });
+        // BACKLOG-3673: Phase 4 loads the new account; its record is empty.
+        result.current.dispatch({
+          type: "USER_DATA_LOADED",
+          data: newAccountData(macOSPlatform),
+          user: testUser,
+          platform: macOSPlatform,
+        } as never);
       });
 
       expect(result.current.state.status).toBe("onboarding");
@@ -412,6 +448,13 @@ describe("Full App Flow Integration Tests", () => {
           isNewUser: true,
           platform: windowsPlatform,
         });
+        // BACKLOG-3673: Phase 4 loads the new account; its record is empty.
+        result.current.appState.dispatch({
+          type: "USER_DATA_LOADED",
+          data: newAccountData(windowsPlatform),
+          user: testUser,
+          platform: windowsPlatform,
+        } as never);
       });
 
       // Should be at phone-type step
@@ -457,6 +500,13 @@ describe("Full App Flow Integration Tests", () => {
           isNewUser: true,
           platform: windowsPlatform,
         });
+        // BACKLOG-3673: Phase 4 loads the new account; its record is empty.
+        result.current.dispatch({
+          type: "USER_DATA_LOADED",
+          data: newAccountData(windowsPlatform),
+          user: testUser,
+          platform: windowsPlatform,
+        } as never);
       });
 
       // Complete phone-type
@@ -475,19 +525,17 @@ describe("Full App Flow Integration Tests", () => {
         });
       });
 
-      // On Windows (no iPhone), should skip to apple-driver or finish
-      // Depending on phone type, might go to apple-driver or finish
-      // With hasIPhone=true, should go to apple-driver
+      // BACKLOG-3673: no permissions label on Windows, and completing the last
+      // step never leaves setup; the legacy label stays an onboarding step.
+      expect(result.current.state.status).toBe("onboarding");
       if (result.current.state.status === "onboarding") {
-        expect(result.current.state.step).toBe("apple-driver");
+        expect(result.current.state.step).toBe("email-connect");
+        expect(result.current.state.completedSteps).not.toContain("permissions");
       }
 
-      // Complete apple-driver -> should be ready
+      // The setup queue completes -> ready
       act(() => {
-        result.current.dispatch({
-          type: "ONBOARDING_STEP_COMPLETE",
-          step: "apple-driver",
-        });
+        result.current.dispatch({ type: "ONBOARDING_QUEUE_DONE" });
       });
 
       expect(result.current.state.status).toBe("ready");
@@ -515,6 +563,13 @@ describe("Full App Flow Integration Tests", () => {
           isNewUser: true,
           platform: windowsPlatform,
         });
+        // BACKLOG-3673: Phase 4 loads the new account; its record is empty.
+        result.current.dispatch({
+          type: "USER_DATA_LOADED",
+          data: newAccountData(windowsPlatform),
+          user: testUser,
+          platform: windowsPlatform,
+        } as never);
       });
 
       expect(result.current.platform?.isMacOS).toBe(false);
@@ -1004,6 +1059,13 @@ describe("Full App Flow Integration Tests", () => {
           isNewUser: true,
           platform: macOSPlatform,
         });
+        // BACKLOG-3673: Phase 4 loads the new account; its record is empty.
+        result.current.dispatch({
+          type: "USER_DATA_LOADED",
+          data: newAccountData(macOSPlatform),
+          user: testUser,
+          platform: macOSPlatform,
+        } as never);
       });
 
       // State should be consistent

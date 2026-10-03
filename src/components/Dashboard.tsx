@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo, useContext } from "react";
 import Joyride from "react-joyride";
 import { useTour } from "../hooks/useTour";
 import { usePendingTransactionCount } from "../hooks/usePendingTransactionCount";
@@ -17,6 +17,7 @@ import {
 } from "../config/tourSteps";
 import type { Transaction } from "../types";
 import { useReconnectionSummary } from "../hooks/useReconnectionSummary";
+import AuthContext from "../contexts/AuthContext";
 
 interface DashboardActionProps {
   onAuditNew: () => void;
@@ -74,9 +75,12 @@ function Dashboard({
   // Get sync state from SyncOrchestrator (single source of truth for sync status)
   const { isRunning: isAnySyncing } = useSyncOrchestrator();
 
-  // Initialize the onboarding tour for first-time users
+  // Initialize the onboarding tour for first-time users.
+  // BACKLOG-3673: never over the terms screen -- the tour sits above it. It
+  // starts once the terms are accepted (AuthContext clears the flag).
+  const needsTermsAcceptance = useContext(AuthContext)?.needsTermsAcceptance === true;
   const { runTour, handleJoyrideCallback } = useTour(
-    true,
+    !needsTermsAcceptance,
     "hasSeenDashboardTour",
   );
 

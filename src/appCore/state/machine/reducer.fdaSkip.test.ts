@@ -13,6 +13,17 @@
  *
  * A fix that simply stopped asking anyone, ever, would pass (1) and fail (2).
  *
+ * BACKLOG-3673: routing no longer reads Full Disk Access at all (device state
+ * is checked at point of use). Only the per-account record routes. So the pair
+ * now lives where the question is still asked -- inside setup:
+ *
+ *   1. decline on record -> `permissions` seeded as answered, never re-asked
+ *   2. decline ABSENT    -> `permissions` still asked
+ *
+ * and the routing half is pinned on the record: a finished account lands on
+ * the dashboard whatever its FDA state; an unfinished one stays in setup
+ * whatever its FDA state (a release on the email/FDA values is the M6 bug).
+ *
  * Fixture provenance: `fdaSkipped` is derived in LoadingOrchestrator Phase 4
  * from `preferences.onboarding.fdaSkipped` — the exact key
  * preferenceHandlers.onboardingSkip.test.ts proves the real `preferences:update`
@@ -50,6 +61,8 @@ const declinedFdaWithMailbox: UserData = {
   // BACKLOG-3275: `hasPermissions: false` + `fdaSkipped: true` is now ONE state.
   // The pair could express combinations the domain does not have; this cannot.
   fda: "declined",
+  // BACKLOG-3673: this account has not finished setup (record empty).
+  setup: "not-finished",
 };
 
 const loadingUserData: LoadingState = { status: "loading", phase: "loading-user-data" };
@@ -64,8 +77,18 @@ function loadUserData(data: UserData, platform: PlatformInfo = mockMacOSPlatform
 }
 
 describe("BACKLOG-3212 — a persisted FDA skip survives a relaunch", () => {
-  it("routes a user who declined FDA (with a mailbox) straight to ready, not onboarding", () => {
+  it("BACKLOG-3673: an unfinished account that declined FDA stays in setup, with FDA NOT re-asked", () => {
     const result = loadUserData(declinedFdaWithMailbox);
+
+    expect(result.status).toBe("onboarding");
+    if (result.status === "onboarding") {
+      expect(result.fda).toBe("declined");
+      expect(result.completedSteps).toContain("permissions");
+    }
+  });
+
+  it("a FINISHED account that declined FDA lands on ready, with the decline carried (never granted)", () => {
+    const result = loadUserData({ ...declinedFdaWithMailbox, setup: "finished" });
 
     expect(result.status).toBe("ready");
     if (result.status === "ready") {
@@ -110,7 +133,7 @@ describe("BACKLOG-3212 — a persisted FDA skip survives a relaunch", () => {
     expect(result.status).toBe("onboarding");
   });
 
-  it("BACKLOG-3277: DOES release a user who declined FDA and has no mailbox — the gate now asks the floor", () => {
+  it("BACKLOG-3277 / BACKLOG-3673: a FINISHED account that declined FDA and has no mailbox is released", () => {
     // INVERTED BY BACKLOG-3277, deliberately. This test previously asserted
     // `onboarding`, on the stated ground that "the BACKLOG-1821 floor would
     // never fire again". That ground was false as written: the floor does not
@@ -120,15 +143,27 @@ describe("BACKLOG-3212 — a persisted FDA skip survives a relaunch", () => {
     // `getSatisfyingSource` returns "texts-iphone-driver" and the floor is
     // satisfied. The old gate was STRICTER than the floor it claimed to
     // protect, and that gap is what held the user forever.
+    // BACKLOG-3673: the release is now the record's, not the floor's.
     const noSourceAtAll: UserData = {
       ...declinedFdaWithMailbox,
       hasEmailConnected: false, // skipped email
       hasCompletedEmailOnboarding: true,
+      setup: "finished",
     };
 
     const result = loadUserData(noSourceAtAll);
 
     expect(result.status).toBe("ready");
+  });
+
+  it("BACKLOG-3673 CONTROL (M6): the same account WITHOUT the record is held, however complete its answers", () => {
+    const answeredEverything: UserData = {
+      ...declinedFdaWithMailbox,
+      hasEmailConnected: true,
+      hasCompletedEmailOnboarding: true,
+      setup: "not-finished",
+    };
+    expect(loadUserData(answeredEverything).status).toBe("onboarding");
   });
 
   it("BACKLOG-3277 HONESTY: the released user is NOT shown the Resume-setup banner", () => {
@@ -141,6 +176,7 @@ describe("BACKLOG-3212 — a persisted FDA skip survives a relaunch", () => {
       ...declinedFdaWithMailbox,
       hasEmailConnected: false,
       hasCompletedEmailOnboarding: true,
+      setup: "finished",
     };
 
     const result = loadUserData(noSourceAtAll);
@@ -193,6 +229,7 @@ describe("BACKLOG-3212 — a persisted FDA skip survives a relaunch", () => {
       hasEmailConnected: true,
       needsDriverSetup: false,
       fda: "granted",
+      setup: "finished",
     };
 
     const result = loadUserData(granted);
@@ -220,6 +257,7 @@ describe("BACKLOG-3212 — a persisted FDA skip survives a relaunch", () => {
       hasEmailConnected: true,
       needsDriverSetup: false,
       fda: "granted",
+      setup: "finished",
     };
 
     const result = loadUserData(grantedAfterSkipping);

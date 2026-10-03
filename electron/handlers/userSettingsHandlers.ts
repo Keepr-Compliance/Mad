@@ -17,11 +17,16 @@ import {
   validateUserId,
 } from "../utils/validation";
 import { ensureUserInLocalDb } from "./systemHandlers";
+import { registerAccountSetupHandlers } from "./accountSetupHandlers";
 
 /**
  * Register all user settings IPC handlers
  */
 export function registerUserSettingsHandlers(): void {
+  // BACKLOG-3673: the per-account "setup finished" record. Registered here so
+  // electron/main.ts needs no change.
+  registerAccountSetupHandlers();
+
   // ===== USER PHONE TYPE PREFERENCES =====
 
   /**

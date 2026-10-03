@@ -134,9 +134,13 @@ function setupMocks(options: {
   (window.api.user.getPhoneType as jest.Mock).mockResolvedValue(null);
   (window.api.user.setPhoneType as jest.Mock).mockResolvedValue({ success: true });
 
-  // Mock email onboarding
-  (window.api.auth.checkEmailOnboarding as jest.Mock).mockResolvedValue({
-    hasEmail: false,
+  // BACKLOG-3673: the account-setup record (replaces the removed
+  // email-onboarding check).
+  (window.api.user.getAccountSetup as jest.Mock).mockResolvedValue({
+    success: true,
+    setup: "not-finished",
+    emailStepAnswered: false,
+    contactSourceAnswered: false,
   });
 }
 
