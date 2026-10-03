@@ -1911,6 +1911,15 @@
     };
   }
 
+  /**
+   * SR (2026-10-03): the remembered place, read back from storage, is
+   * UNTRUSTED: only {topFrac: a finite number}, clamped to 0..1.
+   */
+  function sanitizeTabPosition(raw) {
+    if (!raw || typeof raw !== "object" || typeof raw.topFrac !== "number" || !isFinite(raw.topFrac)) return null;
+    return { topFrac: Math.min(1, Math.max(0, raw.topFrac)) };
+  }
+
   /** The band fraction of a top position (what is remembered). */
   function tabFraction(top, size, view) {
     var minTop = SAFE_TOP;
@@ -2037,6 +2046,13 @@
         io.save(place(cornerPosition(corner, io.size(), io.view())));
         return corner;
       },
+      /** SR: the remembered place arrived (async storage): go there. */
+      restore: function (saved) {
+        if (edge && saved && typeof saved.topFrac === "number") {
+          frac = saved.topFrac;
+          place(tabPosition(frac, io.size(), io.view()));
+        }
+      },
       /** After a resize (or a taller / wider box): back to its place. */
       keepOnScreen: function () {
         if (edge) place(tabPosition(frac, io.size(), io.view()));
@@ -2119,6 +2135,7 @@
     TRY_AGAIN_LABEL: TRY_AGAIN_LABEL,
     PAGE_GONE_MESSAGE: PAGE_GONE_MESSAGE,
     tabPosition: tabPosition,
+    sanitizeTabPosition: sanitizeTabPosition,
     windowLabel: windowLabel,
     mediaLine: mediaLine,
     chatAlreadyOpen: chatAlreadyOpen,
@@ -2215,6 +2232,24 @@
   var box = null;
   var mover = null;
   var POSITION_KEY = "keepr-overlay-pos";
+  /** The box's remembered place (chrome.storage.local), once read. */
+  var savedPosition = null;
+  /** SR: read the place from the extension's storage; drop what an older build left in the page's. */
+  var positionLoaded = (function () {
+    try { localStorage.removeItem(POSITION_KEY); } catch (_e) { /* nothing left */ }
+    return new Promise(function (resolve) {
+      try {
+        chrome.storage.local.get(POSITION_KEY, function (got) {
+          void chrome.runtime.lastError;
+          savedPosition = sanitizeTabPosition(got && got[POSITION_KEY]);
+          if (savedPosition && mover && mover.restore) mover.restore(savedPosition);
+          resolve(savedPosition);
+        });
+      } catch (_e) {
+        resolve(null);
+      }
+    });
+  })();
   // The pill's ▾/▴ (kept across progress lines); the last thing shown, to redraw it.
   var syncExpanded = false;
   var idleExpanded = false;
@@ -2245,16 +2280,17 @@
         },
         view: function () { return { width: root.innerWidth, height: root.innerHeight }; },
         size: function () { var r = box.getBoundingClientRect(); return { width: r.width, height: r.height }; },
-        load: function () {
-          try {
-            var raw = localStorage.getItem(POSITION_KEY);
-            return raw ? JSON.parse(raw) : null;
-          } catch (_e) {
-            return null;
-          }
-        },
+        // SR (2026-10-03): the extension's own storage, never the page's
+        // (Google's scripts could read it and see Keepr is in use).
+        load: function () { return savedPosition; },
         save: function (pos) {
-          try { localStorage.setItem(POSITION_KEY, JSON.stringify(pos)); } catch (_e) { /* not kept: fine */ }
+          savedPosition = sanitizeTabPosition(pos);
+          if (!savedPosition) return;
+          try {
+            var item = {};
+            item[POSITION_KEY] = savedPosition;
+            void chrome.storage.local.set(item);
+          } catch (_e) { /* not kept: fine */ }
         },
       });
       root.addEventListener("resize", function () { if (mover) mover.keepOnScreen(); });

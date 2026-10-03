@@ -153,10 +153,23 @@ describe("the tab's place (C3)", () => {
     expect(mover.moveToNextCorner()).toBe(1);
   });
 
-  it("the page's box uses the right edge, remembered on this computer", () => {
+  // SR (2026-10-03): the place lives in the EXTENSION's storage, never the
+  // page's (Google's scripts could read it); read back as untrusted.
+  // Mutations: page localStorage used → red; no clamping → red.
+  it("the page's box uses the right edge, remembered in the extension's storage", () => {
     const src = fs.readFileSync(path.join(__dirname, "..", "..", "chrome-extension", "job.js"), "utf8");
     expect(src).toContain("        rightEdge: true,");
-    expect(src).toContain("localStorage.setItem(POSITION_KEY, JSON.stringify(pos))");
+    expect(src).toContain("void chrome.storage.local.set(item);");
+    expect(src).not.toMatch(/localStorage.(setItem|getItem)/);
+  });
+
+  it("the remembered place is untrusted: only a finite topFrac, clamped", () => {
+    expect(job.sanitizeTabPosition({ topFrac: 0.3 })).toEqual({ topFrac: 0.3 });
+    expect(job.sanitizeTabPosition({ topFrac: 9 })).toEqual({ topFrac: 1 });
+    expect(job.sanitizeTabPosition({ topFrac: -2 })).toEqual({ topFrac: 0 });
+    for (const bad of [null, "0.5", { topFrac: "0.5" }, { topFrac: Infinity }, { left: 3, top: 4 }]) {
+      expect(job.sanitizeTabPosition(bad)).toBeNull();
+    }
   });
 });
 
