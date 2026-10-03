@@ -206,6 +206,11 @@ export interface RcsExtensionBridgeOptions {
    * Keepr from the numbers this job saw; the page never sends a floor.
    */
   cacheChatFloor?: (jobId: string, userId: string, conversationId: string, numbers: string[]) => number | null;
+  /**
+   * 3671 P3 "Try again": a chat the failed run already finished is skipped —
+   * replied to /match as skip: true (a boolean). Computed in Keepr.
+   */
+  cacheChatSkip?: (jobId: string, userId: string, conversationId: string, numbers: string[]) => boolean;
   /** SR M: the photo / video bubbles a finished Sync counted (counts only). */
   onMediaCounts?: (userId: string, counts: { photosSeen: number; videosSeen: number }) => void;
   /** BACKLOG-3658: the signed-in user now; a job of another user is cancelled. */
@@ -961,9 +966,13 @@ export class RcsExtensionBridge {
           const floorMs = this.options.cacheChatFloor
             ? this.options.cacheChatFloor(job.jobId, job.userId, conversationId, normalized)
             : null;
+          const skip = this.options.cacheChatSkip
+            ? this.options.cacheChatSkip(job.jobId, job.userId, conversationId, normalized) === true
+            : false;
           sendJson(res, 200, {
             matched, contactIds, keepPhotos: kept.photos, keepVideos: kept.videos, keepImages: kept.photos,
             ...(typeof floorMs === "number" && Number.isFinite(floorMs) ? { floorMs } : {}),
+            ...(skip ? { skip: true } : {}),
           });
           return;
         }

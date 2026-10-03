@@ -8,14 +8,14 @@
  *
  * Mutation controls (each turns at least one test red):
  *   A1 a staged chat written to messages before the commit      → "staging writes nothing to messages"
- *   A2 the commit not in ONE transaction (a throw keeps rows)    → "a failing commit leaves messages as they were"
+ *   A2 one chat's failure taking the others down (3671 P3)     → "a chat that fails rolls back alone"
  *   A3 the floor (months setting) not applied                   → "the months setting drops older messages"
  *   A4 the cap keeping the OLDEST, or counted per chat           → "the cap keeps the newest N across chats"
  *   A5 audit periods counted against the cap / dropped          → "messages in an audit period are always kept"
  *   A6 reactions or images of a dropped message kept            → "reactions and images follow their message"
  *   A7 a cancel / error leaving rows or files                   → "a discard leaves nothing"
  *   A8 a late chat/image of an ended job staged                 → "an ended job stages nothing"
- *   A9 placed files kept after a failed commit                  → "a failing commit leaves messages as they were"
+ *   A9 placed files kept after a failed chat                    → "a chat that fails rolls back alone"
  *   A10 the content guard / dedup skipped by the commit          → "the commit is the same writer"
  *   A11 schema.sql not re-runnable (IF NOT EXISTS)               → "schema.sql runs twice"
  *   B1a a sweep during a commit deletes that commit's staging     → "a sweep never touches a commit in progress"
@@ -313,25 +313,97 @@ describe("reactions and images follow their message (A6)", () => {
 });
 
 describe("atomic: all or nothing", () => {
-  it("a failing commit leaves messages as they were, deletes the placed files and the staging (A2, A9)", async () => {
+  // 3671 P3 (founder): per-chat atomicity. Mutation: one transaction for the
+  // whole run again → red (the other chat lost); a failed chat's files kept → red.
+  it("a chat that fails rolls back alone: its rows and placed files go, the other chat is saved (A2, A9)", async () => {
     staging.stageChat(JOB, USER, chat("conv-a", [msg("a1", "2026-09-20T10:00:00.000Z")]), peopleA, hashA);
     staging.stageChat(JOB, USER, chat("conv-b", [msg("b1", "2026-09-21T10:00:00.000Z")]), peopleB, hashB);
     await staging.stageImage(JOB, { conversationId: "conv-a", msgId: "a1", index: 0, mimeType: "image/png", base64: PNG }, hashA);
-    let calls = 0;
     const failing: RcsCommitWriter = {
       ...writer,
       storeChat: (c, u, p) => {
-        calls += 1;
-        if (calls === 2) throw new Error("disk I/O error");
+        if (c.conversationId === "conv-a") throw new Error("disk I/O error");
         return writer.storeChat(c, u, p);
       },
     };
-    await expect(staging.commit(JOB, USER, ALL, failing)).rejects.toThrow("disk I/O error");
-    expect(calls).toBe(2);
-    expect(messageCount()).toBe(0);
+    const r = await staging.commit(JOB, USER, ALL, failing);
+    expect(r).toMatchObject({ chats: 1, chatsFailed: 1, stopped: false });
+    expect(messageCount()).toBe(1);
     expect(count("SELECT COUNT(*) AS n FROM attachments")).toBe(0);
     expect(listFiles(files.attachmentsDir)).toEqual([]);
+    expect(count("SELECT COUNT(*) AS n FROM rcs_cache_placed_files")).toBe(0);
     expect(stagedCount()).toBe(0);
+  });
+
+  // 3671 P3 (SR): a chat switched to Don't sync since it was read is not
+  // saved; the run-level step runs only for a complete run with no failure.
+  // Mutations: chatExcluded ignored → red; runDone run for an incomplete run → red.
+  it("exclusions are re-checked per chat at commit; an incomplete run records no run", async () => {
+    staging.stageChat(JOB, USER, chat("conv-a", [msg("a1", "2026-09-20T10:00:00.000Z")]), peopleA, hashA);
+    staging.stageChat(JOB, USER, chat("conv-b", [msg("b1", "2026-09-21T10:00:00.000Z")]), peopleB, hashB);
+    const runs: number[] = [];
+    const r = await staging.commit(JOB, USER, ALL, writer, {
+      chatExcluded: (_u, hash) => hash === hashB,
+      runDone: (out) => void runs.push(out.chats),
+    }, { complete: false });
+    expect(r).toMatchObject({ chats: 1, chatsExcluded: 1 });
+    expect(messageCount()).toBe(1);
+    expect(runs).toEqual([]);
+  });
+
+  // SR: the save timeout stops further chats and keeps the committed ones.
+  // Mutation: abandon not checked between chats → red.
+  it("abandoned (the save timeout) after the first chat: that chat stays, no further chat is written", async () => {
+    staging.stageChat(JOB, USER, chat("conv-a", [msg("a1", "2026-09-20T10:00:00.000Z")]), peopleA, hashA);
+    staging.stageChat(JOB, USER, chat("conv-b", [msg("b1", "2026-09-21T10:00:00.000Z")]), peopleB, hashB);
+    let first = "";
+    const abandoning: RcsCommitWriter = {
+      ...writer,
+      storeChat: (c, u, p) => {
+        const r = writer.storeChat(c, u, p);
+        if (!first) {
+          first = c.conversationId;
+          void staging.abandon(JOB);
+        }
+        return r;
+      },
+    };
+    const r = await staging.commit(JOB, USER, ALL, abandoning);
+    expect(r).toMatchObject({ chats: 1, stopped: true });
+    expect(messageCount()).toBe(1);
+  });
+
+  it("perChat runs inside that chat's transaction: a throw there rolls back that chat only", async () => {
+    staging.stageChat(JOB, USER, chat("conv-a", [msg("a1", "2026-09-20T10:00:00.000Z")]), peopleA, hashA);
+    staging.stageChat(JOB, USER, chat("conv-b", [msg("b1", "2026-09-21T10:00:00.000Z")]), peopleB, hashB);
+    const seen: string[] = [];
+    const r = await staging.commit(JOB, USER, ALL, writer, {
+      perChat: (c) => {
+        seen.push(c.chatHash);
+        if (c.chatHash === hashA) throw new Error("coverage write failed");
+      },
+    });
+    expect(seen.sort()).toEqual([hashA, hashB].sort());
+    expect(r.chatsFailed).toBe(1);
+    expect(messageCount()).toBe(1);
+  });
+
+  it("the chat meta the page sent (floor, reached, read time) reaches perChat; the chat's own floor keeps its older texts", async () => {
+    const older = "2026-01-20T10:00:00.000Z";
+    staging.stageChat(JOB, USER, chat("conv-a", [msg("a1", older), msg("a2", "2026-09-20T10:00:00.000Z")]), peopleA, hashA);
+    staging.noteChat(JOB, { chatHash: hashA, chatFloorMs: Date.parse("2026-01-10T00:00:00.000Z"), readFloorMs: Date.parse("2026-01-10T00:00:00.000Z"), reachedFloor: true, readAt: "2026-10-01T10:00:00.000Z" });
+    // Read again later (the retry pass), not down to its floor this time:
+    // "reached" sticks (its messages are staged), the later read time wins.
+    staging.noteChat(JOB, { chatHash: hashA, chatFloorMs: null, readFloorMs: null, reachedFloor: false, readAt: "2026-10-01T11:00:00.000Z" });
+    const metas: unknown[] = [];
+    await staging.commit(JOB, USER, { floorMs: Date.parse("2026-08-01T00:00:00.000Z"), cap: null, protectedSpans: [] }, writer, {
+      perChat: (c) => void metas.push(c.meta),
+    });
+    expect(metas).toEqual([{
+      chatHash: hashA, chatFloorMs: Date.parse("2026-01-10T00:00:00.000Z"), readFloorMs: Date.parse("2026-01-10T00:00:00.000Z"),
+      reachedFloor: true, readAt: "2026-10-01T11:00:00.000Z",
+    }]);
+    expect(messageCount()).toBe(2);
   });
 
   it("a discard returns the staging rows it deleted (for the cancel log line)", async () => {
@@ -442,7 +514,8 @@ describe("atomic: all or nothing", () => {
     await atMove;
     await staging.abandon(JOB); // the save timeout fired
     release(); // ...and the slow move finishes after all
-    await expect(committed).rejects.toThrow(RcsStagingJobEndedError);
+    // 3671 P3: the save timeout stops further chats; nothing of this one was written.
+    expect((await committed).stopped).toBe(true);
     expect(messageCount()).toBe(0);
     expect(count("SELECT COUNT(*) AS n FROM attachments")).toBe(0);
     expect(listFiles(files.attachmentsDir)).toEqual([]);
@@ -460,7 +533,7 @@ describe("atomic: all or nothing", () => {
     };
     staging = new RcsCacheStaging(rcsStagingDbOps(), files);
     const failing: RcsCommitWriter = { ...writer, storeChat: () => { throw new Error("disk I/O error"); } };
-    await expect(staging.commit(JOB, USER, ALL, failing)).rejects.toThrow("disk I/O error");
+    expect((await staging.commit(JOB, USER, ALL, failing)).chatsFailed).toBe(1);
     expect(listFiles(files.attachmentsDir)).toHaveLength(1);
   });
 
@@ -497,15 +570,19 @@ describe("atomic: all or nothing", () => {
   // BACKLOG-3663: the coverage is written in the commit's OWN transaction.
   // Mutation: the hook called after the transaction → red (a failure would
   // leave coverage without the texts).
-  it("insideTransaction runs in the commit transaction: a throw there leaves nothing (V10)", async () => {
+  // 3671 P3: the run's records come after every chat, in their own
+  // transaction; a failure there keeps the chats and is reported (the next
+  // run is "Try again"). Mutation: thrown out of the commit → red.
+  it("the run-level step runs after the chats; a throw there keeps the chats and is reported (V10)", async () => {
     staging.stageChat(JOB, USER, chat("conv-a", [msg("a1", "2026-09-20T10:00:00.000Z")]), peopleA, hashA);
     const seen: number[] = [];
-    await expect(staging.commit(JOB, USER, ALL, writer, (r) => {
-      seen.push(messageCount(), r.stored);
+    const r = await staging.commit(JOB, USER, ALL, writer, (out) => {
+      seen.push(messageCount(), out.stored);
       throw new Error("coverage write failed");
-    })).rejects.toThrow("coverage write failed");
-    expect(seen).toEqual([1, 1]); // it saw the rows of THIS transaction
-    expect(messageCount()).toBe(0);
+    });
+    expect(seen).toEqual([1, 1]);
+    expect(r.runRecordFailed).toBe(true);
+    expect(messageCount()).toBe(1);
   });
 
   it("schema.sql runs twice (CREATE ... IF NOT EXISTS) (A11)", () => {

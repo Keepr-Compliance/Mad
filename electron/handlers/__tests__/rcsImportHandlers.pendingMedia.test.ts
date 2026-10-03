@@ -109,12 +109,13 @@ describe("the pending media read clears only when the commit saves (SR M)", () =
   });
 
   it("a failed commit leaves it pending (PM2)", async () => {
-    await expect(
-      staging.commit(JOB, USER, ALL, commitWriter, () => {
-        inside(READ)();
-        throw new Error("disk I/O error");
-      }),
-    ).rejects.toThrow("disk I/O error");
+    // 3671 P3: the run's records are their own transaction; its failure is
+    // reported (the chats stay) and rolls the clear back.
+    const r = await staging.commit(JOB, USER, ALL, commitWriter, () => {
+      inside(READ)();
+      throw new Error("disk I/O error");
+    });
+    expect(r.runRecordFailed).toBe(true);
     expect(hasPendingMediaRead(USER)).toBe(true);
   });
 

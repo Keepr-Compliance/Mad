@@ -79,7 +79,11 @@ jest.mock("../../services/databaseService", () => ({
   default: {
     rcsClearDbOps: () => ({}),
     resetRcsCacheState: (userId: string) => void calls.push(`reset cache state ${userId}`),
-    rcsStagingDbOps: () => ({ deleteAll: () => undefined, journalRows: () => [] }),
+    rcsStagingDbOps: () => ({
+      deleteAll: () => undefined, journalRows: () => [], jobs: () => [], putJob: () => undefined, putChatMeta: () => undefined,
+      // 3671 P3 (SR): Force re-import drops every staged run and the placed-files journal.
+      deleteAllWithJournal: () => void calls.push("drop staging + journal"),
+    }),
   },
 }));
 jest.mock("../../services/auditCoverageService", () => ({
@@ -113,6 +117,12 @@ jest.mock("../../services/db/rcsPendingFullSyncDbService", () => ({
 // SR (2026-10-02): Force re-import clears the per-chat coverage too.
 jest.mock("../../services/db/rcsChatCoverageDbService", () => ({
   clearChatCoverage: (userId: string) => void calls.push("forget chat coverage " + userId),
+  clearChatReads: (userId: string) => void calls.push("forget chat reads " + userId),
+  clearFailedRun: (userId: string) => void calls.push("forget failed run " + userId),
+  chatDoneInFailedRun: () => false,
+  getChatRead: () => null,
+  getFailedRun: () => null,
+  setFailedRun: jest.fn(),
   dealChatStarts: () => new Map(),
   dealStartForChat: () => null,
   getChatCoverage: () => new Map(),
@@ -149,6 +159,9 @@ const BOTH = [
   "reset cache state user-1",
   "forget coverage user-1 google_messages",
   "forget chat coverage user-1",
+  "drop staging + journal",
+  "forget chat reads user-1",
+  "forget failed run user-1",
   "resume",
   "clear companion user-1",
 ];

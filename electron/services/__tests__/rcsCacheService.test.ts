@@ -11,7 +11,8 @@
  *   K2 (P3b) Keepr's version and the text's version drift apart          → "the consent text"
  *   K3 (P3b) the auto-delete run before the auto-link, or not at all      → "finished: committed"
  *   R3 the finish time saved after a cancel or an error                 → "saved only on success"
- *   R4 (atomic import) a cancel/error commits, links, or keeps staging  → "cancelled or failed: discard only"
+ *   R4 a cancel (user Stop) commits / links / keeps staging, or a failure  → "cancelled (the user's Stop)" / "failed: the finished chats"
+ *      discards its finished chats (3671 P3)
  *   R4b a failed commit still saving the time or linking                → "a failed commit saves nothing"
  *   S1 views told to refetch before the auto-link, or after a discard   → "finished: committed"
  *   R5 a transaction Sync treated as a cache Sync                       → "a transaction Sync is left alone"
@@ -180,13 +181,20 @@ describe("when a cache Sync ends", () => {
     expect(d.calls).toEqual(["commit job-1 u-1", `finished u-1 ${new Date(NOW).toISOString()}`, "autolink u-1", "afterlink u-1", "saved u-1"]);
   });
 
-  // BACKLOG-3658 atomic import: nothing was written, so nothing to link.
-  it("cancelled or failed: discard only — no time saved, no commit, no auto-link (R3, R4)", async () => {
-    for (const state of ["cancelled", "failed"]) {
-      const d = deps();
-      await handleCacheJobEnded(ended(state), d.deps);
-      expect([state, d.calls]).toEqual([state, ["discard job-1"]]);
-    }
+  // 3671 P3 (founder): the user's STOP (a cancel) commits NOTHING; a real
+  // failure keeps the chats it finished, links them, and saves no time (the
+  // next run is "Try again"). Mutations: a cancel committing → red; a failure
+  // discarding → red; a failure saving the time → red.
+  it("cancelled (the user's Stop): discard only — nothing committed, no time saved, no auto-link (R3, R4)", async () => {
+    const d = deps();
+    await handleCacheJobEnded(ended("cancelled"), d.deps);
+    expect(d.calls).toEqual(["discard job-1"]);
+  });
+
+  it("failed: the finished chats are committed and linked; no time saved (R3, 3671 P3)", async () => {
+    const d = deps();
+    await handleCacheJobEnded(ended("failed"), d.deps);
+    expect(d.calls).toEqual(["commit job-1 u-1", "autolink u-1", "afterlink u-1", "saved u-1"]);
   });
 
   it("a failed commit saves nothing and links nothing; the error is logged (R4b)", async () => {

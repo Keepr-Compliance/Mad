@@ -25,6 +25,24 @@ let planStart: string | null = "2026-07-01T00:00:00.000Z";
 let mockConsentVersion: number | null = 1;
 const mockSetConsent = jest.fn();
 
+// 3671 P3: the per-chat records (mocked: this suite has no SQL).
+const mockFailedRuns: Array<[string, string]> = [];
+let mockFailedRunStart: string | null = null;
+jest.mock("../../services/db/rcsChatCoverageDbService", () => ({
+  chatDoneInFailedRun: () => false,
+  clearChatCoverage: jest.fn(),
+  clearChatReads: jest.fn(),
+  clearFailedRun: jest.fn(),
+  dealChatStarts: () => new Map(),
+  dealStartForChat: () => null,
+  getChatCoverage: () => new Map(),
+  getChatRead: () => null,
+  getFailedRun: () => mockFailedRunStart,
+  latestConversationIds: () => new Map(),
+  recordChatCoverage: jest.fn(),
+  recordChatRead: jest.fn(),
+  setFailedRun: (u: string, at: string) => void mockFailedRuns.push([u, at]),
+}));
 jest.mock("electron", () => ({
   app: electronApp,
   ipcMain: { handle: (channel: string, fn: (event: unknown, args?: unknown) => Promise<unknown>) => handlers.set(channel, fn) },
@@ -54,7 +72,7 @@ jest.mock("../../services/databaseService", () => ({
   default: {
     getRcsCacheState: () => ({ optedInAt: "2026-09-01T00:00:00.000Z", lastCacheFinishedAt: mockLastFinished, ownNumber: null }),
     getRcsConsent: () => ({ consentAt: "2026-09-01T00:00:00.000Z", consentVersion: mockConsentVersion, contactsOnly: false, autoDeleteDays: null }),
-    rcsStagingDbOps: () => ({ deleteAll: () => undefined, journalRows: () => [] }),
+    rcsStagingDbOps: () => ({ deleteAll: () => undefined, journalRows: () => [], jobs: () => [], putJob: () => undefined, putChatMeta: () => undefined }),
     setRcsConsent: (...a: unknown[]) => mockSetConsent(...a),
   },
 }));

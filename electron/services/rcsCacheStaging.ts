@@ -84,6 +84,14 @@ export interface RcsStagingDbOps {
   deleteAll(): void;
   /** Every job id with staging rows or journaled files. */
   jobIds(): string[];
+  /** 3671 P3: a job's own record, written when it starts. */
+  putJob(jobId: string, row: Omit<StagedJobRow, "jobId">): void;
+  jobs(): StagedJobRow[];
+  /** 3671 P3: one staged chat's floor / reached / read time (upsert). */
+  putChatMeta(jobId: string, row: StagedChatMeta): void;
+  chatMeta(jobId: string): StagedChatMeta[];
+  /** 3671 P3 (SR): Force re-import — every job's staging rows and the placed-files journal. */
+  deleteAllWithJournal(): void;
   /** SR S2: a file the commit is about to move into message-attachments. */
   journalPlaced(jobId: string, filePath: string): void;
   /** SR S2: the job's journal is done with (after the commit, or a failure). */
@@ -177,6 +185,43 @@ export interface CacheCommitResult {
   imagesAlreadyThere?: number;
   /** Kept images whose message is not in Keepr (no row to attach to): not saved. */
   imagesNoMessage?: number;
+  /** 3671 P3: chats that could not be saved (each rolled back alone). */
+  chatsFailed?: number;
+  /** 3671 P3: chats switched to Don't sync since they were read: not saved. */
+  chatsExcluded?: number;
+  /** 3671 P3: the save timeout stopped the commit (the chats saved before stay). */
+  stopped?: boolean;
+  /** 3671 P3: every chat was saved but the run's own records (hooks.runDone) were not. */
+  runRecordFailed?: boolean;
+}
+
+/** 3671 P3: what the caller adds to a per-chat commit. */
+export interface CacheCommitHooks {
+  /** Re-checked per chat at commit time: a chat switched to Don't sync since is skipped. */
+  chatExcluded?: (userId: string, chatHash: string, conversationId: string) => boolean;
+  /** INSIDE each chat's transaction, after its rows (its coverage, its read record). */
+  perChat?: (chat: { chatHash: string; conversationId: string; meta: StagedChatMeta | null }) => void;
+  /** In one last transaction, ONLY when the run is complete and every chat was saved. */
+  runDone?: (result: CacheCommitResult) => void;
+  log?: (message: string) => void;
+}
+
+/** 3671 P3: a cache job's own record (kept with its staging, for a crash). */
+export interface StagedJobRow {
+  jobId: string;
+  userId: string;
+  startedAt: string;
+  limitsJson: string;
+  readJson: string;
+}
+
+/** 3671 P3: what the page said of one staged chat. */
+export interface StagedChatMeta {
+  chatHash: string;
+  chatFloorMs: number | null;
+  readFloorMs: number | null;
+  reachedFloor: boolean;
+  readAt: string;
 }
 
 const keyOf = (chatHash: string, msgId: string): string => `${chatHash}\u0000${msgId}`;
@@ -279,6 +324,31 @@ export class RcsCacheStaging {
     return this.ended.has(jobId);
   }
 
+  /** 3671 P3: the job's own record, so a crash-cut run can still be saved later. */
+  beginJob(jobId: string, row: Omit<StagedJobRow, "jobId">): void {
+    this.db.putJob(jobId, row);
+  }
+
+  /** 3671 P3: what the page said of a staged chat (its floor, whether it got there, when). */
+  noteChat(jobId: string, row: StagedChatMeta): void {
+    if (this.ended.has(jobId)) return;
+    this.db.putChatMeta(jobId, row);
+  }
+
+  /**
+   * 3671 P3 (SR): Force re-import — every staged run's rows and the
+   * placed-files journal, inside the caller's transaction. Never while a
+   * commit runs (the clear refuses then). The folder goes at the next sweep.
+   */
+  dropAllRowsForForce(): void {
+    this.db.deleteAllWithJournal();
+  }
+
+  /** 3671 P3: staging left by a run that never ended here (a crash), with its record. */
+  leftoverJobs(): StagedJobRow[] {
+    return this.db.jobs().filter((j) => !this.committing.has(j.jobId) && !this.ended.has(j.jobId));
+  }
+
   /** Stage one chat (replaces what this job staged for the same chat/message). */
   stageChat(jobId: string, userId: string, chat: RcsIncomingChat, people: RcsChatPeople, chatHash: string): RcsImportResult {
     if (this.ended.has(jobId)) throw new RcsStagingJobEndedError();
@@ -336,127 +406,164 @@ export class RcsCacheStaging {
   }
 
   /**
-   * The finished job → messages, in ONE transaction, within the limits. The
-   * staging is gone afterwards whatever happens; a throw leaves messages as
-   * they were.
+   * 3671 P3 (SR 2026-10-03): the job's staging → messages, ONE CHAT AT A
+   * TIME. Each chat is its own transaction: its kept images are moved in
+   * first (journaled), then its rows, its coverage and its read record
+   * (hooks.perChat). A chat that fails rolls back alone and its unreferenced
+   * files go; earlier chats stay. A chat switched to Don't sync since it was
+   * read is skipped (hooks.chatExcluded). The save timeout (abandon) stops
+   * further chats and keeps the committed ones. Only a COMPLETE run (every
+   * chat saved, `opts.complete`) runs hooks.runDone (the source coverage, the
+   * run record) in one last transaction. The staging is gone afterwards.
    */
   async commit(
     jobId: string,
     userId: string,
     limits: CacheLimits,
     writer: RcsCommitWriter,
-    /** BACKLOG-3663: runs INSIDE the commit's transaction (e.g. record the coverage). */
-    insideTransaction?: (result: CacheCommitResult) => void,
+    hooks?: CacheCommitHooks | ((result: CacheCommitResult) => void),
+    opts: { complete?: boolean } = {},
   ): Promise<CacheCommitResult> {
+    const h: CacheCommitHooks = typeof hooks === "function" ? { runDone: hooks } : hooks ?? {};
+    const complete = opts.complete !== false;
     this.ended.add(jobId);
     this.committing.add(jobId);
-    const placed: string[] = [];
     try {
-      const selection = selectForCommit(this.db.messageKeys(jobId), limits);
-      const images = this.db.images(jobId).filter((img) => selection.kept.has(keyOf(img.chatHash, img.msgId)));
-
-      // Kept images into message-attachments (content-addressed, as storeImage).
-      const finalPath = new Map<StagedImageRow, string>();
-      if (images.length > 0) await this.files.mkdir(this.files.attachmentsDir);
-      for (const img of images) {
-        const ext = rcsImageExt(img.mimeType);
-        const target = path.join(this.files.attachmentsDir, `${img.sha256}${ext}`);
-        if (!(await this.files.exists(target))) {
-          // SR S2: journaled BEFORE the move. A crash before the journal is
-          // cleared leaves the row; the next sweep deletes the file only if no
-          // attachments row references it (a committed one is kept).
-          this.db.journalPlaced(jobId, target);
-          await this.files.move(img.tempPath, target);
-          placed.push(target);
+      const meta = new Map(this.db.chatMeta(jobId).map((m) => [m.chatHash, m]));
+      const floors = new Map(limits.chatFloorsMs ?? []);
+      for (const m of meta.values()) if (typeof m.chatFloorMs === "number") floors.set(m.chatHash, m.chatFloorMs);
+      const selection = selectForCommit(this.db.messageKeys(jobId), { ...limits, chatFloorsMs: floors });
+      const allImages = this.db.images(jobId).filter((img) => selection.kept.has(keyOf(img.chatHash, img.msgId)));
+      const out: CacheCommitResult = {
+        staged: selection.staged,
+        kept: selection.kept.size,
+        droppedByDate: selection.droppedByDate,
+        droppedByCap: selection.droppedByCap,
+        chats: 0,
+        stored: 0,
+        alreadyPresent: 0,
+        imagesStaged: allImages.length,
+        imagesStored: 0,
+        reactions: 0,
+        reactionsKept: 0,
+        imagesAlreadyThere: 0,
+        imagesNoMessage: 0,
+        chatsFailed: 0,
+        chatsExcluded: 0,
+        stopped: false,
+      };
+      for (const row of this.db.chats(jobId)) {
+        // The save timeout gave up on this commit: no further chat is written.
+        if (this.abandoned.has(jobId)) {
+          out.stopped = true;
+          break;
         }
-        finalPath.set(img, target);
-      }
-
-      // A slow (not hung) commit abandoned meanwhile writes nothing.
-      if (this.abandoned.has(jobId)) throw new RcsStagingJobEndedError();
-      const result = this.db.inTransaction((): CacheCommitResult => {
-        let chats = 0;
-        let stored = 0;
-        let alreadyPresent = 0;
-        let reactions = 0;
-        let reactionsKept = 0;
-        for (const row of this.db.chats(jobId)) {
-          if (row.userId !== userId) continue; // never another user's staging
-          const messages: RcsIncomingMessage[] = [];
-          for (const m of this.db.chatMessages(jobId, row.chatHash)) {
-            if (selection.kept.has(keyOf(row.chatHash, m.msgId))) messages.push(JSON.parse(m.messageJson) as RcsIncomingMessage);
-          }
-          if (messages.length === 0) continue;
-          for (const m of messages) reactionsKept += m.reactions?.length ?? 0;
-          const people = JSON.parse(row.peopleJson) as RcsChatPeople;
-          const r = writer.storeChat({ conversationId: row.conversationId, title: row.title, messages }, userId, people);
-          chats += 1;
-          stored += r.stored;
-          alreadyPresent += r.alreadyPresent;
-          reactions += r.reactionsStored ?? 0;
+        if (row.userId !== userId) continue; // never another user's staging
+        if (h.chatExcluded?.(userId, row.chatHash, row.conversationId)) {
+          out.chatsExcluded = (out.chatsExcluded ?? 0) + 1;
+          continue;
         }
-
-        let imagesStored = 0;
-        let imagesAlreadyThere = 0;
-        let imagesNoMessage = 0;
-        if (images.length > 0) {
-          const ids = writer.getMessageIdMap(userId);
-          const existing = writer.getExistingAttachmentRecords();
+        const messages: RcsIncomingMessage[] = [];
+        for (const m of this.db.chatMessages(jobId, row.chatHash)) {
+          if (selection.kept.has(keyOf(row.chatHash, m.msgId))) messages.push(JSON.parse(m.messageJson) as RcsIncomingMessage);
+        }
+        const images = allImages.filter((img) => img.chatHash === row.chatHash);
+        const placed: string[] = [];
+        try {
+          // This chat's kept images into message-attachments (content-addressed).
+          const finalPath = new Map<StagedImageRow, string>();
+          if (images.length > 0) await this.files.mkdir(this.files.attachmentsDir);
           for (const img of images) {
-            const externalId = writer.externalId(img.chatHash, img.msgId);
-            const messageId = ids.get(externalId);
-            if (!messageId) {
-              imagesNoMessage += 1;
-              continue;
+            const target = path.join(this.files.attachmentsDir, `${img.sha256}${rcsImageExt(img.mimeType)}`);
+            if (!(await this.files.exists(target))) {
+              // SR S2: journaled BEFORE the move (a crash leaves the row for the sweep).
+              this.db.journalPlaced(jobId, target);
+              await this.files.move(img.tempPath, target);
+              placed.push(target);
             }
-            const filename = writer.imageFilename(img.msgId, img.idx, img.mimeType);
-            if (!existing.has(`${messageId}:${filename}`)) {
-              writer.insertAttachment({
-                id: crypto.randomUUID(),
-                messageId,
-                externalMessageId: externalId,
-                filename,
-                mimeType: img.mimeType,
-                fileSizeBytes: img.byteSize,
-                storagePath: finalPath.get(img) as string,
-              });
-              existing.add(`${messageId}:${filename}`);
-              imagesStored += 1;
-            } else {
-              imagesAlreadyThere += 1;
-            }
-            // A row stored earlier without its image must now show it.
-            writer.markMessageHasAttachments(messageId);
+            finalPath.set(img, target);
           }
+          if (this.abandoned.has(jobId)) {
+            out.stopped = true;
+            throw new RcsStagingJobEndedError();
+          }
+          const one = this.db.inTransaction(() => {
+            const r = { chats: 0, stored: 0, alreadyPresent: 0, reactions: 0, reactionsKept: 0, imagesStored: 0, imagesAlreadyThere: 0, imagesNoMessage: 0 };
+            if (messages.length > 0) {
+              for (const m of messages) r.reactionsKept += m.reactions?.length ?? 0;
+              const people = JSON.parse(row.peopleJson) as RcsChatPeople;
+              const s = writer.storeChat({ conversationId: row.conversationId, title: row.title, messages }, userId, people);
+              r.chats = 1;
+              r.stored = s.stored;
+              r.alreadyPresent = s.alreadyPresent;
+              r.reactions = s.reactionsStored ?? 0;
+            }
+            if (images.length > 0) {
+              const ids = writer.getMessageIdMap(userId);
+              const existing = writer.getExistingAttachmentRecords();
+              for (const img of images) {
+                const externalId = writer.externalId(img.chatHash, img.msgId);
+                const messageId = ids.get(externalId);
+                if (!messageId) {
+                  r.imagesNoMessage += 1;
+                  continue;
+                }
+                const filename = writer.imageFilename(img.msgId, img.idx, img.mimeType);
+                if (!existing.has(`${messageId}:${filename}`)) {
+                  writer.insertAttachment({
+                    id: crypto.randomUUID(),
+                    messageId,
+                    externalMessageId: externalId,
+                    filename,
+                    mimeType: img.mimeType,
+                    fileSizeBytes: img.byteSize,
+                    storagePath: finalPath.get(img) as string,
+                  });
+                  existing.add(`${messageId}:${filename}`);
+                  r.imagesStored += 1;
+                } else {
+                  r.imagesAlreadyThere += 1;
+                }
+                // A row stored earlier without its image must now show it.
+                writer.markMessageHasAttachments(messageId);
+              }
+            }
+            h.perChat?.({ chatHash: row.chatHash, conversationId: row.conversationId, meta: meta.get(row.chatHash) ?? null });
+            return r;
+          });
+          // Committed: this chat's files are referenced now; its journal is done with.
+          for (const p of placed) this.db.journalDelete(p);
+          out.chats += one.chats;
+          out.stored += one.stored;
+          out.alreadyPresent += one.alreadyPresent;
+          out.reactions += one.reactions;
+          out.reactionsKept = (out.reactionsKept ?? 0) + one.reactionsKept;
+          out.imagesStored += one.imagesStored;
+          out.imagesAlreadyThere = (out.imagesAlreadyThere ?? 0) + one.imagesAlreadyThere;
+          out.imagesNoMessage = (out.imagesNoMessage ?? 0) + one.imagesNoMessage;
+        } catch (err) {
+          // This chat only: its rows rolled back; its files go unless another row uses them.
+          for (const p of placed) {
+            if (!this.db.fileStillReferenced(p)) await this.files.unlink(p);
+            this.db.journalDelete(p);
+          }
+          if (out.stopped) break;
+          out.chatsFailed = (out.chatsFailed ?? 0) + 1;
+          h.log?.(`[RcsCache] A chat could not be saved (the others are kept): ${err instanceof Error ? err.message : String(err)}`);
         }
-
-        const out: CacheCommitResult = {
-          staged: selection.staged,
-          kept: selection.kept.size,
-          droppedByDate: selection.droppedByDate,
-          droppedByCap: selection.droppedByCap,
-          chats,
-          stored,
-          alreadyPresent,
-          imagesStaged: images.length,
-          imagesStored,
-          reactions,
-          reactionsKept,
-          imagesAlreadyThere,
-          imagesNoMessage,
-        };
-        insideTransaction?.(out);
-        return out;
-      });
-      placed.length = 0; // committed: the files are referenced now
-      return result;
-    } finally {
-      // A failed commit placed files no row of it points to: delete them
-      // again — unless another row (iPhone sync, a transaction Sync) now
-      // uses the same content-addressed file.
-      for (const p of placed) {
-        if (!this.db.fileStillReferenced(p)) await this.files.unlink(p);
       }
+      // A complete run: the run-level records, in one last transaction.
+      if (complete && !out.stopped && (out.chatsFailed ?? 0) === 0 && h.runDone) {
+        try {
+          this.db.inTransaction(() => h.runDone?.(out));
+        } catch (err) {
+          // The chats are saved; only the run's records are not (the next run is "Try again").
+          out.runRecordFailed = true;
+          h.log?.(`[RcsCache] The run's records could not be saved (its chats are): ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      return out;
+    } finally {
       try {
         this.db.journalClear(jobId);
       } finally {

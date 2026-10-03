@@ -30,6 +30,24 @@ const abandoned: string[] = [];
 const coverageWrites: Array<[string, string, string | null]> = [];
 const savedRecords: Array<[string, unknown]> = [];
 
+// 3671 P3: the per-chat records (mocked: this suite has no SQL).
+const mockFailedRuns: Array<[string, string]> = [];
+let mockFailedRunStart: string | null = null;
+jest.mock("../../services/db/rcsChatCoverageDbService", () => ({
+  chatDoneInFailedRun: () => false,
+  clearChatCoverage: jest.fn(),
+  clearChatReads: jest.fn(),
+  clearFailedRun: jest.fn(),
+  dealChatStarts: () => new Map(),
+  dealStartForChat: () => null,
+  getChatCoverage: () => new Map(),
+  getChatRead: () => null,
+  getFailedRun: () => mockFailedRunStart,
+  latestConversationIds: () => new Map(),
+  recordChatCoverage: jest.fn(),
+  recordChatRead: jest.fn(),
+  setFailedRun: (u: string, at: string) => void mockFailedRuns.push([u, at]),
+}));
 jest.mock("electron", () => ({
   app: { isPackaged: true, getPath: () => "/tmp/keepr-test" },
   ipcMain: { handle: (channel: string, fn: (event: unknown, args?: unknown) => Promise<unknown>) => handlers.set(channel, fn) },
@@ -66,16 +84,24 @@ jest.mock("../../services/rcsCacheStaging", () => ({
     async abandon(jobId: string) {
       abandoned.push(jobId);
     }
-    commit(_j: string, _u: string, _l: unknown, _w: unknown, inside?: (r: unknown) => void) {
+    // 3671 P3: the run's records only for a complete run (opts.complete).
+    commit(_j: string, _u: string, _l: unknown, _w: unknown, hooks?: { runDone?: (r: unknown) => void }, opts?: { complete?: boolean }) {
       order.push("commit");
       return new Promise((resolve) => {
         releaseCommit = () => {
           const r = { staged: 1, kept: 1, droppedByDate: 0, droppedByCap: 0, chats: 1, stored: 1, alreadyPresent: 0, imagesStaged: 0, imagesStored: 0 };
-          inside?.(r);
+          if (opts?.complete !== false) hooks?.runDone?.(r);
           resolve(r);
         };
       });
     }
+    leftoverJobs() {
+      return [];
+    }
+    beginJob() {}
+    noteChat() {}
+    dropAllRowsForForce() {}
+    async removeFiles() {}
   },
 }));
 jest.mock("../../services/databaseService", () => ({

@@ -699,6 +699,8 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
         floorAsks.push(a);
         return (a[3] as string[]).includes("+15555550155") ? DEAL_FLOOR : null;
       },
+      // 3671 P3 "Try again": this number's chat was saved by the failed run.
+      cacheChatSkip: (_j, _u, _c, numbers) => numbers.includes("+15555550166"),
       jobs: new RcsJobRegistry(),
     });
     expect(await bridge.start(0)).toBe("listening");
@@ -735,6 +737,15 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
     expect((await request(port, "POST", `/job/${jobId}/chat`, EXT, JSON.stringify({ ...CHAT, reachedFloor: true }))).status).toBe(200);
     expect((await request(port, "POST", `/job/${jobId}/chat`, EXT, JSON.stringify({ ...CHAT, reachedFloor: "yes" }))).status).toBe(200);
     expect(reachedSeen).toEqual([true, undefined]);
+  });
+
+  // 3671 P3: /match says skip (a boolean) for a chat the failed run saved;
+  // none for others. Mutation: never replied → red.
+  it("/match: skip for a chat Keepr says the failed run saved", async () => {
+    const saved = await request(port, "POST", `/job/${jobId}/match`, EXT, JSON.stringify({ conversationId: "conv-saved", numbers: ["(555) 555-0166"] }));
+    expect(saved.body).toMatchObject({ matched: true, skip: true });
+    const other = await request(port, "POST", `/job/${jobId}/match`, EXT, JSON.stringify({ conversationId: CHAT.conversationId, numbers: ["(555) 555-0142"] }));
+    expect(other.body).not.toHaveProperty("skip");
   });
 
   // History v2 / SR M. Mutation: keepPhotos always true → red.

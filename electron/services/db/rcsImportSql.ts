@@ -327,11 +327,49 @@ export const RCS_STAGING_DELETE_JOB_SQL = [
   sql`DELETE FROM rcs_cache_staging_images WHERE job_id = ?`,
   sql`DELETE FROM rcs_cache_staging_messages WHERE job_id = ?`,
   sql`DELETE FROM rcs_cache_staging_chats WHERE job_id = ?`,
+  sql`DELETE FROM rcs_cache_staging_chat_meta WHERE job_id = ?`,
+  sql`DELETE FROM rcs_cache_staging_jobs WHERE job_id = ?`,
 ] as const;
+
+/** 3671 P3. Parameters: job id, user id, started at, limits JSON, read JSON. */
+export const RCS_STAGING_PUT_JOB_SQL = sql`
+    INSERT OR REPLACE INTO rcs_cache_staging_jobs (job_id, user_id, started_at, limits_json, read_json)
+    VALUES (?, ?, ?, ?, ?)
+  `;
+
+/** 3671 P3. No parameters: every job's own record. */
+export const RCS_STAGING_JOBS_SQL = sql`
+    SELECT job_id AS jobId, user_id AS userId, started_at AS startedAt, limits_json AS limitsJson, read_json AS readJson
+    FROM rcs_cache_staging_jobs
+  `;
+
+/**
+ * 3671 P3. Parameters: job id, chat hash, chat floor ms, read floor ms,
+ * reached (0/1), read at. A chat staged again (the retry pass) keeps
+ * "reached" once it got there and takes the later read time.
+ */
+export const RCS_STAGING_PUT_CHAT_META_SQL = sql`
+    INSERT INTO rcs_cache_staging_chat_meta (job_id, chat_hash, chat_floor_ms, read_floor_ms, reached_floor, read_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(job_id, chat_hash) DO UPDATE SET
+      chat_floor_ms = COALESCE(excluded.chat_floor_ms, rcs_cache_staging_chat_meta.chat_floor_ms),
+      read_floor_ms = COALESCE(excluded.read_floor_ms, rcs_cache_staging_chat_meta.read_floor_ms),
+      reached_floor = MAX(rcs_cache_staging_chat_meta.reached_floor, excluded.reached_floor),
+      read_at = MAX(rcs_cache_staging_chat_meta.read_at, excluded.read_at)
+  `;
+
+/** 3671 P3. Parameters: job id. */
+export const RCS_STAGING_CHAT_META_SQL = sql`
+    SELECT chat_hash AS chatHash, chat_floor_ms AS chatFloorMs, read_floor_ms AS readFloorMs,
+           reached_floor AS reachedFloor, read_at AS readAt
+    FROM rcs_cache_staging_chat_meta WHERE job_id = ?
+  `;
 
 /** No parameters: every job id with staging rows or journaled files. */
 export const RCS_STAGING_JOB_IDS_SQL = sql`
-    SELECT job_id AS jobId FROM rcs_cache_staging_chats
+    SELECT job_id AS jobId FROM rcs_cache_staging_jobs
+    UNION SELECT job_id FROM rcs_cache_staging_chat_meta
+    UNION SELECT job_id FROM rcs_cache_staging_chats
     UNION SELECT job_id FROM rcs_cache_staging_messages
     UNION SELECT job_id FROM rcs_cache_staging_images
     UNION SELECT job_id FROM rcs_cache_placed_files
@@ -356,7 +394,12 @@ export const RCS_STAGING_DELETE_ALL_SQL = [
   sql`DELETE FROM rcs_cache_staging_images`,
   sql`DELETE FROM rcs_cache_staging_messages`,
   sql`DELETE FROM rcs_cache_staging_chats`,
+  sql`DELETE FROM rcs_cache_staging_chat_meta`,
+  sql`DELETE FROM rcs_cache_staging_jobs`,
 ] as const;
+
+/** 3671 P3 (SR): Force re-import drops the placed-files journal too. No parameters. */
+export const RCS_PLACED_FILE_DELETE_ALL_SQL = sql`DELETE FROM rcs_cache_placed_files`;
 
 // ============================================
 // BACKLOG-3658 P3b: consent + cache options (rcs_consent), and the optional

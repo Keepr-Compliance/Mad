@@ -48,6 +48,11 @@ import {
   RCS_STAGING_IMAGES_SQL,
   RCS_STAGING_DELETE_JOB_SQL,
   RCS_STAGING_DELETE_ALL_SQL,
+  RCS_PLACED_FILE_DELETE_ALL_SQL,
+  RCS_STAGING_PUT_JOB_SQL,
+  RCS_STAGING_JOBS_SQL,
+  RCS_STAGING_PUT_CHAT_META_SQL,
+  RCS_STAGING_CHAT_META_SQL,
   RCS_STAGING_JOB_IDS_SQL,
   RCS_PLACED_FILE_PUT_SQL,
   RCS_PLACED_FILE_CLEAR_JOB_SQL,
@@ -400,7 +405,9 @@ export function rcsClearDbOps(): import("../rcsClearService").RcsClearDbOps {
  * rcsCacheStaging.ts). Every statement is scoped to one job id.
  */
 export function rcsStagingDbOps(): import("../rcsCacheStaging").RcsStagingDbOps {
-  const db = ensureDb();
+  // Resolved on every call: the handler keeps one staging object for the
+  // app's life, while the database connection may be reopened.
+  const db = { prepare: (q: string) => ensureDb().prepare(q), transaction: <F extends (...a: never[]) => unknown>(fn: F) => ensureDb().transaction(fn) };
   return {
     inTransaction: <T>(fn: () => T): T => db.transaction(fn)(),
     putChat: (jobId, r) => {
@@ -432,6 +439,23 @@ export function rcsStagingDbOps(): import("../rcsCacheStaging").RcsStagingDbOps 
       })();
     },
     jobIds: () => (db.prepare(RCS_STAGING_JOB_IDS_SQL).all() as Array<{ jobId: string }>).map((r) => r.jobId),
+    putJob: (jobId, r) => {
+      db.prepare(RCS_STAGING_PUT_JOB_SQL).run(jobId, r.userId, r.startedAt, r.limitsJson, r.readJson);
+    },
+    jobs: () => db.prepare(RCS_STAGING_JOBS_SQL).all() as import("../rcsCacheStaging").StagedJobRow[],
+    putChatMeta: (jobId, r) => {
+      db.prepare(RCS_STAGING_PUT_CHAT_META_SQL).run(jobId, r.chatHash, r.chatFloorMs, r.readFloorMs, r.reachedFloor ? 1 : 0, r.readAt);
+    },
+    chatMeta: (jobId) =>
+      (db.prepare(RCS_STAGING_CHAT_META_SQL).all(jobId) as Array<Omit<import("../rcsCacheStaging").StagedChatMeta, "reachedFloor"> & { reachedFloor: number }>)
+        .map((r) => ({ ...r, reachedFloor: r.reachedFloor === 1 })),
+    // Nested in Force re-import's transaction: a savepoint, all or nothing.
+    deleteAllWithJournal: () => {
+      db.transaction(() => {
+        for (const q of RCS_STAGING_DELETE_ALL_SQL) db.prepare(q).run();
+        db.prepare(RCS_PLACED_FILE_DELETE_ALL_SQL).run();
+      })();
+    },
     journalPlaced: (jobId, filePath) => {
       db.prepare(RCS_PLACED_FILE_PUT_SQL).run(filePath, jobId);
     },

@@ -318,13 +318,15 @@ export interface CacheJobEndedDeps {
 }
 
 /**
- * After a cache Sync ends (BACKLOG-3658, atomic):
- *  - FINISHED: the staged chats are committed (one transaction, within the
- *    user's limits); only then is the job's start time saved (the next run
- *    overlaps it by a day) and the phone auto-link run for THAT user. A failed
- *    commit saves nothing and links nothing; the staging is gone either way.
- *  - cancelled / failed (incl. a user switch): the staging is discarded —
- *    nothing was written, so there is nothing to link.
+ * After a cache Sync ends (BACKLOG-3658; 3671 P3 per-chat commits, founder):
+ *  - FINISHED: the staged chats are committed, each in its own transaction,
+ *    within the user's limits; only then is the job's start time saved (the
+ *    next run overlaps it by a day) and the phone auto-link run for THAT user.
+ *  - FAILED (a real failure: phone unreachable, Google signed out, page gone,
+ *    an error): the chats it FINISHED are committed (the next run is "Try
+ *    again"); its start time is NOT saved; the auto-link runs.
+ *  - CANCELLED (the user's Stop, on the page or in Keepr; a user switch; a
+ *    quit): the staging is discarded — nothing of the run is written.
  * A detected own number (3+ chats agreed) is kept for the next run either way.
  */
 /** What the end of a cache job tells (the job snapshot's relevant part). */
@@ -395,7 +397,8 @@ export async function handleCacheJobEnded(
   const userId = ended.userId;
   const jobId = ended.snapshot.jobId;
   if (ended.detectedOwnNumber) deps.saveOwnNumber(userId, ended.detectedOwnNumber);
-  if (ended.snapshot.state !== "finished") {
+  const failed = ended.snapshot.state === "failed";
+  if (ended.snapshot.state !== "finished" && !failed) {
     try {
       const discarded = await deps.discard(jobId);
       // A cancel used to leave no log line at all.
@@ -417,8 +420,8 @@ export async function handleCacheJobEnded(
     return;
   }
   // The job's START time (SR): chats that changed while it ran are re-read
-  // next time (since = this − 1 day anyway).
-  deps.saveFinishedAt(userId, ended.snapshot.createdAt ?? new Date(deps.now()).toISOString());
+  // next time (since = this − 1 day anyway). Only a fully finished run.
+  if (!failed) deps.saveFinishedAt(userId, ended.snapshot.createdAt ?? new Date(deps.now()).toISOString());
   try {
     await deps.autoLink(userId);
   } catch (err) {

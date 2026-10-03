@@ -62,13 +62,16 @@ import { checkExportCompleteness, getSourceCoverage, getTransactionTextCoverage,
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const {
-  commitWriter, cacheCommitInsideTransaction, cacheChatFloorFor, noteCacheChatRead, trackCacheChats, takeCacheChats, dealChatsForClaim,
+  commitWriter, commitCacheStaging, cacheChatFloorFor, noteCacheChatRead, trackCacheChats, takeCacheChats, dealChatsForClaim,
 } = require("../rcsImportHandlers") as typeof import("../rcsImportHandlers");
 /* eslint-enable @typescript-eslint/no-require-imports */
 
 const PRODUCTION_SCHEMA = nodePath.join(__dirname, "..", "..", "database", "schema.sql");
 const USER = "user-widen";
-const JOB = "31111111-2222-4333-8444-555555555555"; // pii-allow-uuid: invented, not from any live row
+const JOB_BASE = "31111111-2222-4333-8444-5555555555"; // pii-allow-uuid: invented, not from any live row
+// A new job id per test: the handler's staging remembers ended jobs, as in the app.
+let JOB = "";
+let jobN = 10;
 const SETTINGS_FLOOR_ISO = "2026-08-15T00:00:00.000Z";
 const SETTINGS_FLOOR = Date.parse(SETTINGS_FLOOR_ISO);
 const JANUARY_ISO = "2026-01-10T00:00:00.000Z";
@@ -134,13 +137,18 @@ async function syncBoth(reachedA: boolean, reachedB: boolean): Promise<void> {
   staging.stageChat(JOB, USER, chat("conv-b", reachedB), pplB, HASH_B);
   noteCacheChatRead(JOB, pplB.numbers, reachedB);
   const limits = { floorMs: SETTINGS_FLOOR, cap: null, protectedSpans: [], chatFloorsMs: chatFloors };
-  const chats = takeCacheChats(JOB);
-  await staging.commit(JOB, USER, limits, commitWriter, () =>
-    cacheCommitInsideTransaction(USER, { fullRead: true, floorISO: SETTINGS_FLOOR_ISO }, true, 0, "since", chats),
-  );
+  takeCacheChats(JOB);
+  // 3671 P3: chat by chat, the chat floors and reached flags from the staging.
+  await commitCacheStaging(JOB, USER, limits, { fullRead: true, floorISO: SETTINGS_FLOOR_ISO }, {
+    complete: true,
+    startedAt: "2026-10-01T00:00:00.000Z",
+    snapshot: { state: "finished", jobId: JOB, listStop: "since", progress: { notChecked: 0 }, notReached: [] },
+  });
 }
 
 beforeEach(() => {
+  jobN += 1;
+  JOB = JOB_BASE + String(jobN);
   tmp = fs.mkdtempSync(nodePath.join(os.tmpdir(), "rcs-widen-"));
   const files: RcsStagingFs = {
     stagingRoot: nodePath.join(tmp, "staging"),

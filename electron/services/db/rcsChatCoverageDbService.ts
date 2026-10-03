@@ -191,3 +191,59 @@ export function linkedChatHashes(transactionId: string, userId: string): string[
     [transactionId, userId],
   ).map((r) => r.chatHash).filter((h) => h.length > 0);
 }
+
+// ============================================
+// 3671 P3: per-chat read records and the failed run ("Try again")
+// ============================================
+
+/** A saved chat was read at `readAtISO` (and down to its floor, or not). Inside the chat's commit. */
+export function recordChatRead(userId: string, chatHash: string, readAtISO: string, reachedFloor: boolean): void {
+  dbRun(
+    sql`INSERT INTO rcs_chat_reads (user_id, chat_hash, read_at, reached_floor) VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id, chat_hash) DO UPDATE SET read_at = excluded.read_at, reached_floor = excluded.reached_floor`,
+    [userId, chatHash, readAtISO, reachedFloor ? 1 : 0],
+  );
+}
+
+export function getChatRead(userId: string, chatHash: string): { readAt: string; reachedFloor: boolean } | null {
+  const rows = dbAll<{ readAt: string; reachedFloor: number }>(
+    sql`SELECT read_at AS readAt, reached_floor AS reachedFloor FROM rcs_chat_reads WHERE user_id = ? AND chat_hash = ?`,
+    [userId, chatHash],
+  );
+  return rows.length > 0 ? { readAt: rows[0].readAt, reachedFloor: rows[0].reachedFloor === 1 } : null;
+}
+
+/** The user's last run failed (its finished chats were saved): the next run is "Try again". */
+export function setFailedRun(userId: string, startedAtISO: string): void {
+  dbRun(sql`INSERT OR REPLACE INTO rcs_cache_failed_run (user_id, started_at) VALUES (?, ?)`, [userId, startedAtISO]);
+}
+
+export function getFailedRun(userId: string): string | null {
+  try {
+    const rows = dbAll<{ startedAt: string }>(sql`SELECT started_at AS startedAt FROM rcs_cache_failed_run WHERE user_id = ?`, [userId]);
+    return rows.length > 0 ? rows[0].startedAt : null;
+  } catch {
+    return null; // never blocks a Sync: no "Try again" skipping then
+  }
+}
+
+export function clearFailedRun(userId: string): void {
+  dbRun(sql`DELETE FROM rcs_cache_failed_run WHERE user_id = ?`, [userId]);
+}
+
+/** Force re-import: the read records go with the texts. */
+export function clearChatReads(userId: string): void {
+  dbRun(sql`DELETE FROM rcs_chat_reads WHERE user_id = ?`, [userId]);
+}
+
+/**
+ * "Try again" (SR): skip a chat read at or after the failed run's start that
+ * reached its own floor. Partial / not settled / gap / unrecovered chats are
+ * read again.
+ */
+export function chatDoneInFailedRun(read: { readAt: string; reachedFloor: boolean } | null, failedRunStartISO: string | null): boolean {
+  if (!read || !failedRunStartISO || !read.reachedFloor) return false;
+  const at = Date.parse(read.readAt);
+  const start = Date.parse(failedRunStartISO);
+  return Number.isFinite(at) && Number.isFinite(start) && at >= start;
+}

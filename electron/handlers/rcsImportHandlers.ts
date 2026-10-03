@@ -29,14 +29,27 @@ import { createCommunicationReference } from "../services/messageMatchingService
 import type { RcsJobContact, RcsJobSnapshot } from "../services/rcsImportJob";
 import { rcsImageFilename, storeImage, type RcsMediaDeps } from "../services/rcsImportMedia";
 import { importChat, rcsChatHash, rcsExternalId, storeCacheChatSync, type RcsImportDeps } from "../services/rcsImportStore";
-import { RcsCacheStaging, type CacheLimits, type RcsCommitWriter } from "../services/rcsCacheStaging";
+import {
+  RcsCacheStaging,
+  type CacheCommitResult,
+  type CacheLimits,
+  type RcsCommitWriter,
+  type StagedChatMeta,
+} from "../services/rcsCacheStaging";
 import { loadStoredImportFilters, resolveImportPlanForUser } from "../services/importPlanInputs";
 import { resolveLookbackMonths } from "../services/macOSMessagesImportService/importHelpers";
 import { clearRcsCacheRun, getRcsCacheRun, recordRcsCacheRun } from "../services/db/rcsCacheRunsDbService";
 import { clearAllPendingFullRead, clearPendingFullRead, listPendingFullRead } from "../services/db/rcsPendingFullSyncDbService";
 import { RCS_EXCLUSIONS_MAX } from "../services/rcsExclusions";
 import {
+  chatDoneInFailedRun,
   clearChatCoverage,
+  clearChatReads,
+  clearFailedRun,
+  getChatRead,
+  getFailedRun,
+  recordChatRead,
+  setFailedRun,
   dealChatStarts,
   dealStartForChat,
   getChatCoverage,
@@ -243,6 +256,9 @@ export interface CacheChatsRead {
   reached: Set<string>;
 }
 interface CacheChatsState extends CacheChatsRead {
+  /** 3671 P3: the failed run's start, when this run is "Try again". */
+  tryAgainSince: string | null;
+  mediaPending: boolean;
   settingsFloorMs: number;
   fullRead: boolean;
   devOverride: boolean;
@@ -257,10 +273,20 @@ const cacheChatsByJob = new Map<string, CacheChatsState>();
 /** A cache job starts: its per-chat state (exported for the real-SQL widening test). Returns the commit's chat floors. */
 export function trackCacheChats(
   jobId: string,
-  init: { settingsFloorMs: number; fullRead: boolean; devOverride: boolean; pendingIds: readonly string[]; sourceCoveredSince: string | null },
+  init: {
+    settingsFloorMs: number;
+    fullRead: boolean;
+    devOverride: boolean;
+    pendingIds: readonly string[];
+    sourceCoveredSince: string | null;
+    tryAgainSince?: string | null;
+    mediaPending?: boolean;
+  },
 ): Map<string, number> {
   const chatFloors = new Map<string, number>();
   cacheChatsByJob.set(jobId, {
+    tryAgainSince: init.tryAgainSince ?? null,
+    mediaPending: init.mediaPending === true,
     settingsFloorMs: init.settingsFloorMs,
     fullRead: init.fullRead,
     devOverride: init.devOverride,
@@ -313,9 +339,37 @@ export function cacheChatFloorFor(jobId: string, userId: string, conversationId:
 }
 
 /** /chat (cache): the page read this chat down to its floor. */
-export function noteCacheChatRead(jobId: string, numbers: readonly string[], reachedFloor: boolean | undefined): void {
+export function noteCacheChatRead(jobId: string, numbers: readonly string[], reachedFloor: boolean | undefined, nowMs: number = Date.now()): void {
   const st = cacheChatsByJob.get(jobId);
-  if (st && reachedFloor === true && numbers.length > 0) st.reached.add(rcsChatHash(numbers));
+  if (!st || numbers.length === 0) return;
+  const hash = rcsChatHash(numbers);
+  if (reachedFloor === true) st.reached.add(hash);
+  // 3671 P3: kept with the staging (a crash-cut run is saved from it later).
+  cacheStaging().noteChat(jobId, {
+    chatHash: hash,
+    chatFloorMs: st.chatFloors.get(hash) ?? null,
+    readFloorMs: st.readFloors.get(hash) ?? null,
+    reachedFloor: reachedFloor === true,
+    readAt: new Date(nowMs).toISOString(),
+  });
+}
+
+/**
+ * 3671 P3 "Try again" (SR): after a failed run, a chat that run already
+ * finished (read at or after its start, down to its own floor) is skipped —
+ * unless it must be read in full anyway (switched back on, a media read).
+ */
+export function cacheChatSkipFor(jobId: string, userId: string, conversationId: string, numbers: string[]): boolean {
+  const st = cacheChatsByJob.get(jobId);
+  if (!st || !st.tryAgainSince || st.devOverride || st.mediaPending || numbers.length === 0) return false;
+  if (st.pendingIds.has(conversationId)) return false;
+  try {
+    const hash = rcsChatHash(numbers);
+    if (st.widened.has(hash)) return false;
+    return chatDoneInFailedRun(getChatRead(userId, hash), st.tryAgainSince);
+  } catch {
+    return false;
+  }
 }
 
 /** The limits each cache job was started with (frozen at start; used by its commit). */
@@ -379,19 +433,14 @@ export function cacheCommitInsideTransaction(
   reached: boolean,
   notSettledChats: number,
   listStop: string | null,
-  chats?: CacheChatsRead,
 ): void {
   const nowISO = new Date().toISOString();
   // The SOURCE row: every chat down to the settings floor (a widened deal
-  // chat never raises it: read.floorISO is the settings floor).
+  // chat never raises it: read.floorISO is the settings floor). 3671 P3:
+  // only a COMPLETE run gets here (the last transaction of its commit).
   recordSourceCoverage(userId, "google_messages", reached && read ? read.floorISO : null, nowISO);
-  // SR (2026-10-02): each chat whose history reached its own floor this run.
-  if (chats) {
-    for (const hash of chats.reached) {
-      const floorMs = chats.readFloors.get(hash);
-      if (floorMs !== undefined) recordChatCoverage(userId, hash, new Date(floorMs).toISOString());
-    }
-  }
+  // A complete run: the next one is no longer "Try again".
+  clearFailedRun(userId);
   // SR M: the media read asked for by a toggle is done once this commit saves.
   if (read?.mediaPending) clearPendingMediaRead(userId);
   if (read) {
@@ -406,6 +455,49 @@ export function cacheCommitInsideTransaction(
   }
 }
 
+/**
+ * 3671 P3: what each saved chat records, INSIDE its own transaction: its
+ * coverage (only when it reached its own floor) and when it was read.
+ */
+export function cacheChatCommitted(userId: string, chat: { chatHash: string; meta: StagedChatMeta | null }): void {
+  const m = chat.meta;
+  if (!m) return;
+  // Inside the chat's own transaction (a nested one is a savepoint).
+  dbTransaction(() => {
+    if (m.reachedFloor && typeof m.readFloorMs === "number") {
+      recordChatCoverage(userId, chat.chatHash, new Date(m.readFloorMs).toISOString());
+    }
+    recordChatRead(userId, chat.chatHash, m.readAt, m.reachedFloor);
+  });
+}
+
+/**
+ * 3671 P3: commit a job's staging chat by chat. `complete` (a fully finished
+ * run) also records the run (source coverage, run record); otherwise (a
+ * failed run, or one a crash cut short) only the finished chats are saved
+ * and the next run is "Try again".
+ */
+export async function commitCacheStaging(
+  jobId: string,
+  userId: string,
+  limits: CacheLimits,
+  read: { fullRead: boolean; floorISO: string; mediaPending?: boolean } | undefined,
+  run: { complete: boolean; startedAt: string; snapshot?: CacheEndSnapshot },
+): Promise<CacheCommitResult> {
+  const coverage = read && run.snapshot && run.complete ? cacheRunCoverage(read.fullRead, run.snapshot) : { reached: false, notSettledChats: 0 };
+  const r = await cacheStaging().commit(jobId, userId, limits, commitWriter, {
+    // SR: a chat switched to Don't sync since it was read is not saved.
+    chatExcluded: (u, hash, conversationId) => databaseService.checkRcsExclusion(u, hash, conversationId),
+    perChat: (chat) => cacheChatCommitted(userId, chat),
+    runDone: () => cacheCommitInsideTransaction(userId, read, coverage.reached, coverage.notSettledChats, run.snapshot?.listStop ?? null),
+    log: (m) => void logService.warn(m, LOG_TAG),
+  }, { complete: run.complete });
+  // Not complete (failed, crash-cut, a chat that failed, or stopped by the save
+  // timeout): the next run is "Try again" — it skips the chats this one finished.
+  if (!run.complete || (r.chatsFailed ?? 0) > 0 || r.stopped || r.runRecordFailed) setFailedRun(userId, run.startedAt);
+  return r;
+}
+
 async function commitCacheJob(jobId: string, userId: string, snapshot?: CacheEndSnapshot): Promise<void> {
   const limits = cacheLimitsByJob.get(jobId);
   cacheLimitsByJob.delete(jobId);
@@ -416,15 +508,15 @@ async function commitCacheJob(jobId: string, userId: string, snapshot?: CacheEnd
     await cacheStaging().discard(jobId);
     throw new Error("No limits recorded for this Sync");
   }
-  // BACKLOG-3663: the Google Messages coverage, in the commit's own
-  // transaction — down to the floor only when this run read down to it.
-  // L2: not-settled chats no longer block it — they are counted and shown.
-  const coverage = read && snapshot ? cacheRunCoverage(read.fullRead, snapshot) : { reached: false, notSettledChats: 0 };
-  const reached = coverage.reached;
+  // BACKLOG-3663 / 3671 P3: chat by chat; the source coverage and the run
+  // record only for a fully finished run (L2: not-settled chats are counted).
   const chats = takeCacheChats(jobId);
-  const r = await cacheStaging().commit(jobId, userId, limits, commitWriter, () =>
-    cacheCommitInsideTransaction(userId, read, reached, coverage.notSettledChats, snapshot?.listStop ?? null, chats),
-  );
+  const complete = snapshot?.state === "finished";
+  const r = await commitCacheStaging(jobId, userId, limits, read, {
+    complete,
+    startedAt: snapshot?.createdAt ?? new Date().toISOString(),
+    snapshot,
+  });
   // Telemetry (counts only): how many chats a live deal widened, and by how much.
   if (chats) {
     void logService.info(
@@ -433,14 +525,64 @@ async function commitCacheJob(jobId: string, userId: string, snapshot?: CacheEnd
     );
   }
   void logService.info(
-    `[RcsCache] Cache Sync saved: ${r.staged} staged, ${r.kept} kept (${r.droppedByDate} older than the months setting; ` +
+    `[RcsCache] Cache Sync saved (${complete ? "finished" : "failed: finished chats only"}): ` +
+      `${r.chatsFailed ?? 0} chats failed, ${r.chatsExcluded ?? 0} switched off since read${r.stopped ? ", stopped by the save timeout" : ""}; ` +
+      `${r.staged} staged, ${r.kept} kept (${r.droppedByDate} older than the months setting; ` +
       `no max-messages cap for this source); ${r.chats} chats, ${r.stored} new, ${r.alreadyPresent} already there; ` +
       `images: ${r.imagesStaged} kept, ${r.imagesStored} new, ${r.imagesAlreadyThere ?? 0} already there, ` +
       `${r.imagesNoMessage ?? 0} with no saved message; reactions ${r.reactionsKept ?? r.reactions} (${r.reactions} new)`,
     LOG_TAG,
   );
   // The done screens (Keepr's and the page's) show what was SAVED.
-  bridge.recordCacheSaved(jobId, cacheSavedFromCommit(r));
+  if (complete) bridge.recordCacheSaved(jobId, cacheSavedFromCommit(r));
+}
+
+/** 3671 P3 (SR): a crash-cut run's staging is saved only for its own user, within this long. */
+export const RCS_LEFTOVER_STAGING_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * 3671 P3 (SR): staging a crash left behind. Saved (its finished chats, as a
+ * failed run) ONLY when its user is the signed-in user and it started within
+ * 7 days; otherwise discarded. Never throws.
+ */
+export async function recoverLeftoverStaging(signedInUserId: string | null, nowMs: number = Date.now()): Promise<{ committed: number; discarded: number }> {
+  const out = { committed: 0, discarded: 0 };
+  for (const job of cacheStaging().leftoverJobs()) {
+    out[await settleLeftoverJob(job, leftoverMaySave(job, signedInUserId, nowMs))] += 1;
+  }
+  return out;
+}
+
+/** 3671 P3 (SR): only the signed-in user's own run, started within 7 days. */
+export function leftoverMaySave(job: { userId: string; startedAt: string }, signedInUserId: string | null, nowMs: number): boolean {
+  const started = Date.parse(job.startedAt);
+  const fresh = Number.isFinite(started) && nowMs - started <= RCS_LEFTOVER_STAGING_MAX_AGE_MS && started <= nowMs + 60_000;
+  return !!signedInUserId && job.userId === signedInUserId && fresh;
+}
+
+/**
+ * One leftover run: saved (its finished chats, as a failed run) or
+ * discarded. A commit always drops its staging, also when it fails. Never throws.
+ */
+async function settleLeftoverJob(
+  job: { jobId: string; userId: string; startedAt: string; limitsJson: string; readJson: string },
+  save: boolean,
+): Promise<"committed" | "discarded"> {
+  try {
+    if (save) {
+      const limits = JSON.parse(job.limitsJson) as CacheLimits;
+      const read = JSON.parse(job.readJson) as { fullRead: boolean; floorISO: string; mediaPending?: boolean };
+      const r = await commitCacheStaging(job.jobId, job.userId, limits, read, { complete: false, startedAt: job.startedAt });
+      void logService.info(`[RcsCache] A Sync a crash cut short: ${r.chats} finished chats saved`, LOG_TAG);
+      return "committed";
+    } else {
+      await cacheStaging().discard(job.jobId);
+      return "discarded";
+    }
+  } catch (err) {
+    void logService.warn(`[RcsCache] Leftover staging not settled: ${err instanceof Error ? err.message : String(err)}`, LOG_TAG);
+    return "discarded";
+  }
 }
 
 async function discardCacheJob(jobId: string): Promise<number> {
@@ -604,7 +746,9 @@ async function startCacheJobOnce(opts: { sinceDays?: unknown }): Promise<
   const deal = devOverride
     ? { ids: [] as string[], floorISO: null as string | null }
     : dealChatsForClaim(decision.userId, window.limits.floorMs, coveredSince);
-  // Only one Sync at a time: any staging left now is stale (a crash, a quit).
+  // 3671 P3: staging a crash left: its finished chats are saved (same user,
+  // within 7 days), the rest discarded. Then only one Sync at a time.
+  await recoverLeftoverStaging(decision.userId);
   await cacheStaging().discardAll();
   const job = bridge.createCacheJob(decision.userId, {
     since,
@@ -623,6 +767,15 @@ async function startCacheJobOnce(opts: { sinceDays?: unknown }): Promise<
     devOverride,
     pendingIds,
     sourceCoveredSince: coveredSince,
+    tryAgainSince: getFailedRun(decision.userId),
+    mediaPending,
+  });
+  // 3671 P3: the job's own record, with its staging (a crash-cut run is saved from it).
+  cacheStaging().beginJob(job.jobId, {
+    userId: decision.userId,
+    startedAt: job.createdAt,
+    limitsJson: JSON.stringify(window.limits),
+    readJson: JSON.stringify({ fullRead: since === floorISO, mediaPending, floorISO }),
   });
   // No consent screen (RCS_CONSENT_REQUIRED off): the first Sync records
   // consent_at + the version for audit.
@@ -705,6 +858,8 @@ const bridge = new RcsExtensionBridge({
     mediaKeptFor(cacheOptionsByJob.get(jobId), databaseService.rcsNumbersMatchLiveContact(userId, numbers)),
   // SR (2026-10-02): a deal chat's own floor (Keepr computes it; the page never sends one).
   cacheChatFloor: (jobId, userId, conversationId, numbers) => cacheChatFloorFor(jobId, userId, conversationId, numbers),
+  // 3671 P3 "Try again": a chat the failed run already finished is skipped.
+  cacheChatSkip: (jobId, userId, conversationId, numbers) => cacheChatSkipFor(jobId, userId, conversationId, numbers),
   onMediaCounts: (userId, counts) => {
     try {
       recordRcsMediaSeen(userId, counts.photosSeen, counts.videosSeen);
@@ -802,13 +957,19 @@ const bridge = new RcsExtensionBridge({
 /** Start the loopback bridge. Never throws; a taken port leaves it "unavailable". */
 export async function startRcsExtensionBridge(): Promise<void> {
   await bridge.start();
+  // 3671 P3: a Sync a crash cut short — its finished chats, for the signed-in user only.
+  void currentUserId()
+    .then((userId) => recoverLeftoverStaging(userId))
+    .catch(() => undefined);
 }
 
 export async function stopRcsExtensionBridge(): Promise<void> {
   // Quit: a running cache Sync is not committed — its staging goes.
   const active = bridge.activeJob();
   if (active) bridge.cancelJob(active.jobId);
-  if (staging) await staging.discardAll().catch(() => undefined);
+  // A quit is a stop: the running Sync's staging goes. (3671 P3: staging a
+  // crash left is kept for the next start's recovery.)
+  if (staging && active) await staging.discard(active.jobId).catch(() => undefined);
   await bridge.stop();
 }
 
@@ -860,6 +1021,11 @@ export function resetGoogleMessagesCacheRecords(userId: string): void {
     clearChatCoverage(userId);
     clearRcsCacheRun(userId);
     clearAllPendingFullRead(userId);
+    // 3671 P3 (SR): every staged run and the placed-files journal, the read
+    // records and the failed-run marker go too.
+    cacheStaging().dropAllRowsForForce();
+    clearChatReads(userId);
+    clearFailedRun(userId);
   });
 }
 

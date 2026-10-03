@@ -773,6 +773,52 @@ CREATE TABLE IF NOT EXISTS rcs_cache_staging_images (
   PRIMARY KEY (job_id, chat_hash, msg_id, idx)
 );
 
+-- 3671 P3 (SR 2026-10-03): per-chat commits. A cache job's own record, kept
+-- with its staging so a run a crash cut short can still save its finished
+-- chats at the next start (same user, started within 7 days): the user, the
+-- start time, the limits (JSON) and the read (JSON). Gone with the staging.
+CREATE TABLE IF NOT EXISTS rcs_cache_staging_jobs (
+  job_id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  started_at TEXT NOT NULL,              -- ISO-8601
+  limits_json TEXT NOT NULL,             -- CacheLimits (chat floors excluded)
+  read_json TEXT NOT NULL                -- { fullRead, floorISO, mediaPending }
+);
+
+-- 3671 P3: what the page said of each staged chat — its own floor (a live
+-- deal), the floor it was asked to read down to, whether it got there, and
+-- when it was read. Chat hashes only. Gone with the staging.
+CREATE TABLE IF NOT EXISTS rcs_cache_staging_chat_meta (
+  job_id TEXT NOT NULL,
+  chat_hash TEXT NOT NULL,
+  chat_floor_ms INTEGER,
+  read_floor_ms INTEGER,
+  reached_floor INTEGER NOT NULL DEFAULT 0,
+  read_at TEXT NOT NULL,                 -- ISO-8601
+  PRIMARY KEY (job_id, chat_hash)
+);
+
+-- 3671 P3: when each saved chat was last read, and whether down to its floor
+-- (chat hash, never a conversation id). "Try again" after a failed run skips
+-- a chat read at or after that run's start that reached its floor.
+CREATE TABLE IF NOT EXISTS rcs_chat_reads (
+  user_id TEXT NOT NULL,
+  chat_hash TEXT NOT NULL,
+  read_at TEXT NOT NULL,                 -- ISO-8601
+  reached_floor INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, chat_hash),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- 3671 P3: the user's last cache run FAILED (its finished chats were saved);
+-- the next run is "Try again". Cleared by a fully finished run and by Force
+-- re-import.
+CREATE TABLE IF NOT EXISTS rcs_cache_failed_run (
+  user_id TEXT PRIMARY KEY,
+  started_at TEXT NOT NULL,              -- ISO-8601
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
 -- BACKLOG-3658 (SR S2): files a cache commit moves into message-attachments,
 -- journaled before the move and cleared once the commit is done. A
 -- row left behind (a crash) names a file the next sweep deletes when no
