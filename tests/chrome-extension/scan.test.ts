@@ -57,6 +57,8 @@ interface JobModule {
   jobIdFromHash: (hash: string) => string | null;
   NOT_SIGNED_IN: string;
   runJob: (jobId: string, env: Record<string, unknown>) => Promise<{ outcome: string }>;
+  transportKind: (reply: { status: number; body?: Record<string, unknown> } | null) => string | null;
+  KEEPR_LOST_MESSAGES: Record<string, string>;
 }
 
 /* eslint-disable @typescript-eslint/no-require-imports */
@@ -583,9 +585,87 @@ describe("SR fix 1: a job Keepr no longer knows ends the run", () => {
       api: (_m, p) => (p.endsWith("/match") ? { ok: false, status: 404, body: { error: "no_job" } } : undefined),
     });
     const outcome = await job.runJob(t.JOB, t.env);
-    expect(outcome.outcome).toBe("job_gone");
+    // Live (founder): Keepr no longer knows the job (it restarted) — Keepr lost.
+    expect(outcome).toMatchObject({ outcome: "keepr_lost", reason: "unknown_job" });
+    expect(t.shown[t.shown.length - 1]).toEqual(["Keepr closed.", true]);
     expect(t.opened).toEqual(["aaaaaaaaaaaaaaaaaaa"]);
     expect(t.posts()).not.toContain("/finish");
+  });
+});
+
+// Live (founder 2026-10-03, 3671 P1): Keepr was restarted mid-run and the
+// page read on, chat after chat "error", then said "done … 0 chats".
+// Mutations: no stop when Keepr is unreachable → red; no one-more-try → red;
+// a 401 read on → red; no circuit breaker → red; "done" when every chat
+// failed → red; a refused /finish shown as done → red.
+describe("Keepr lost mid-run: the run stops with its reason", () => {
+  it("unreachable (after one more try): stops at once — 'Keepr closed.', no more chats, no /finish", async () => {
+    const t = jobPage({ swapAfterMs: 0, api: (_m, p) => (p.endsWith("/match") ? { ok: false, status: 0, body: {} } : undefined) });
+    const outcome = await job.runJob(t.JOB, t.env);
+    expect(outcome).toMatchObject({ outcome: "keepr_lost", reason: "unreachable" });
+    expect(t.opened).toHaveLength(1);
+    expect(t.posts().filter((p) => p === "/match")).toHaveLength(2);
+    expect(t.posts()).not.toContain("/finish");
+    expect(t.shown[t.shown.length - 1]).toEqual(["Keepr closed.", true]);
+  });
+
+  it("a blip: the one more try succeeds and the run goes on", async () => {
+    let first = true;
+    const t = jobPage({
+      swapAfterMs: 0,
+      api: (_m, p) => {
+        if (p.endsWith("/match") && first) {
+          first = false;
+          return { ok: false, status: 0, body: {} };
+        }
+        return undefined;
+      },
+    });
+    const outcome = await job.runJob(t.JOB, t.env);
+    expect(outcome.outcome).toBe("finished");
+    expect(t.posts()).toContain("/finish");
+  });
+
+  it("refused (401): stops at once with the not-linked line", async () => {
+    const t = jobPage({ swapAfterMs: 0, api: (_m, p) => (p.endsWith("/match") ? { ok: false, status: 401, body: { error: "not_paired" } } : undefined) });
+    const outcome = await job.runJob(t.JOB, t.env);
+    expect(outcome).toMatchObject({ outcome: "keepr_lost", reason: "refused" });
+    expect(t.opened).toHaveLength(1);
+    expect(t.shown[t.shown.length - 1][0]).toBe(job.KEEPR_LOST_MESSAGES.refused);
+  });
+
+  it("circuit breaker: 3 chats in a row refused by Keepr end the run with its reason", async () => {
+    const t = jobPage({ swapAfterMs: 0, api: (_m, p) => (p.endsWith("/match") ? { ok: false, status: 500, body: { error: "boom" } } : undefined) });
+    const outcome = await job.runJob(t.JOB, t.env);
+    expect(outcome).toMatchObject({ outcome: "keepr_error" });
+    expect(t.opened).toHaveLength(3);
+    expect(t.posts()).toContain("/error");
+    expect(t.posts()).not.toContain("/finish");
+    expect(t.shown[t.shown.length - 1]).toEqual([job.KEEPR_LOST_MESSAGES.keepr_error, true]);
+  });
+
+  it("a refused /finish is a failed run, never 'done'", async () => {
+    const t = jobPage({ swapAfterMs: 0, api: (_m, p) => (p.endsWith("/finish") ? { ok: false, status: 500, body: { message: "Keepr could not save." } } : undefined) });
+    const outcome = await job.runJob(t.JOB, t.env);
+    expect(outcome.outcome).toBe("finish_refused");
+    expect(t.shown[t.shown.length - 1]).toEqual(["Keepr could not save.", true]);
+  });
+
+  it("transportKind: 0 → unreachable, 401 → refused, 404 no_job → unknown_job; 410 / a bare 404 / 500 → none", () => {
+    expect(job.transportKind({ status: 0 })).toBe("unreachable");
+    expect(job.transportKind(null)).toBe("unreachable");
+    expect(job.transportKind({ status: 401, body: {} })).toBe("refused");
+    expect(job.transportKind({ status: 404, body: { error: "no_job" } })).toBe("unknown_job");
+    expect(job.transportKind({ status: 404, body: {} })).toBeNull();
+    expect(job.transportKind({ status: 410, body: { error: "job_over" } })).toBeNull();
+    expect(job.transportKind({ status: 500, body: {} })).toBeNull();
+  });
+
+  it("the page's Try again with Keepr not running launches keepr://open", () => {
+    const src = fs.readFileSync(path.join(__dirname, "..", "..", "chrome-extension", "job.js"), "utf8").replace(/\r\n/g, "\n");
+    const fn = /function retrySync\(\) \{[\s\S]*?\n {2}\}/.exec(src)![0];
+    expect(fn).toContain('if (!r || r.status === 0) {');
+    expect(fn).toContain('launchKeepr(document, "keepr://open");');
   });
 });
 

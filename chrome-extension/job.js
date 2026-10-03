@@ -52,6 +52,37 @@
   }
 
   var CANCELLED = "Sync cancelled in Keepr";
+  /**
+   * Live (founder 2026-10-03, 3671 P1): Keepr went away mid-run (closed or
+   * restarted) and the page read on chat after chat, each one "error". Now a
+   * lost Keepr ends the run at once with its reason (and Try again).
+   */
+  var KEEPR_LOST_MESSAGES = {
+    unreachable: "Keepr closed.",
+    unknown_job: "Keepr closed.",
+    refused: "Not linked. Click the Keepr icon in Chrome's toolbar to link.",
+    keepr_error: "Keepr could not save the chats.",
+  };
+  /** A localhost blip: one more try after this long before Keepr counts as gone. */
+  var TRANSPORT_RETRY_MS = 1500;
+  /** Circuit breaker: this many chats IN A ROW refused by Keepr end the run. */
+  var KEEPR_ERROR_CHATS_MAX = 3;
+  /** Reasons a chat was not read because something failed (not a choice / an empty chat). */
+  var FAILED_REASONS = { error: true, not_opened: true, messages_not_loaded: true, history_not_settled: true, details_timeout: true };
+
+  /** The kind of transport failure a bridge reply is, or null. 410 (over / cancelled) is not one. */
+  function transportKind(reply) {
+    if (!reply || reply.status === 0) return "unreachable";
+    if (reply.status === 401) return "refused";
+    if (reply.status === 404 && reply.body && reply.body.error === "no_job") return "unknown_job";
+    return null;
+  }
+
+  function KeeprLostError(kind) {
+    var err = new Error(KEEPR_LOST_MESSAGES[kind] || KEEPR_LOST_MESSAGES.unreachable);
+    err.keeprLost = kind;
+    return err;
+  }
   var MESSAGES_NOT_LOADED = "messages_not_loaded";
   /**
    * SR (2026-10-02): the chat is ALREADY open (often the top chat in the two-
@@ -554,6 +585,12 @@
         env.overlay.show(CANCELLED, true);
         return { outcome: "job_gone" };
       }
+      if (err && err.keeprLost) {
+        diag(env, "stopped: Keepr lost (" + err.keeprLost + ")");
+        // Try again reaches Keepr again (or launches it: the page's retry).
+        env.overlay.show(err.message, true, err.isCache ? { retry: true } : undefined);
+        return { outcome: "keepr_lost", reason: err.keeprLost };
+      }
       throw err;
     } finally {
       keepTab(env, false);
@@ -664,11 +701,32 @@
       work.push({ cand: item.cand, attempt: 1 });
     }
 
-    /** Every job call: a 404/410 ends the run. */
+    /**
+     * Every job call. Keepr lost — unreachable (after one more try), an
+     * unknown job (Keepr restarted), refused (401) — ends the run at once with
+     * its reason; a job that is over (410, or a bare 404) ends it as cancelled.
+     */
     async function call(method, path, body) {
       var reply = await env.api(method, path, body);
+      if (reply && reply.status === 0) {
+        await env.sleep(TRANSPORT_RETRY_MS);
+        reply = await env.api(method, path, body);
+      }
+      var kind = transportKind(reply);
+      if (kind) {
+        var lost = KeeprLostError(kind);
+        lost.isCache = isCache;
+        throw lost;
+      }
       if (jobGone(reply)) throw JobGoneError();
       return reply;
+    }
+    /** Circuit breaker: chats in a row that Keepr refused (an HTTP error from /match or /chat). */
+    var keeprErrorChats = 0;
+    function keeprReplyError(reply, fallback) {
+      var err = new Error(messageOf(reply, fallback));
+      err.keeprReply = reply && reply.status ? reply.status : 0;
+      return err;
     }
     var progress = { listed: 0, candidates: 0, checked: 0, skipped: 0, notChecked: 0 };
     var totals = { chats: 0, messages: 0, images: 0, reactions: 0, historyConfirmed: { marker: 0, first_page: 0, no_overflow: 0, date_floor: 0, none: 0 },
@@ -1083,7 +1141,7 @@
           continue;
         }
         var match = await call("POST", base + "/match", { conversationId: conv.conversationId, numbers: numbers });
-        if (!match.ok) throw new Error(messageOf(match, "Keepr could not check this chat."));
+        if (!match.ok) throw keeprReplyError(match, "Keepr could not check this chat.");
         var isMatch = !!(match.body && match.body.matched);
         // Keepr says whether it keeps this chat's images (a cache Sync keeps
         // them only for chats with a transaction contact); a transaction
@@ -1238,7 +1296,8 @@
           // Read down to its floor (not cut by the cap, not unsettled, no gap): a boolean.
           reachedFloor: depthKind(hist) !== "partial",
         });
-        if (!sent.ok) throw new Error(messageOf(sent, "Keepr could not save this chat."));
+        if (!sent.ok) throw keeprReplyError(sent, "Keepr could not save this chat.");
+        keeprErrorChats = 0;
         var prevSent = sentMessages[conv.conversationId];
         if (prevSent === undefined) totals.chats += 1;
         totals.messages += Math.max(0, messages.length - (prevSent || 0));
@@ -1333,9 +1392,16 @@
           mediaRetry.push({ conv: conv, msgIds: missingIds, oldestMs: missingOldest, floorMs: chatFloorMs });
         }
       } catch (err) {
-        if (err && err.jobGone) {
+        if (err && (err.jobGone || err.keeprLost)) {
           gone = true;
           throw err;
+        }
+        if (err && err.keeprReply) {
+          keeprErrorChats += 1;
+          if (keeprErrorChats >= KEEPR_ERROR_CHATS_MAX) {
+            log("  stopped: " + keeprErrorChats + " chats in a row refused by Keepr (HTTP " + err.keeprReply + ")");
+            return fail("keepr_error", KEEPR_LOST_MESSAGES.keepr_error);
+          }
         }
         if (err && err.code === "details_stuck") {
           // The Details pane is still showing an earlier chat's people; every
@@ -1377,6 +1443,15 @@
     // in part) is named here and on the page — never a silent skip.
     var reported = notReached.slice(0, NOT_REACHED_CAP);
     var more = notReached.length - reported.length;
+    // Live (founder): EVERY checked chat failed (none imported) → the run
+    // failed, never "done". A partial success stays done, with its list.
+    var failedChats = Object.keys(entriesByConv).filter(function (id) {
+      return (entriesByConv[id] || []).some(function (e) { return FAILED_REASONS[e.reason] === true; });
+    }).length;
+    if (totals.chats === 0 && failedChats > 0 && failedChats >= progress.checked) {
+      log("failed: every checked chat failed (" + failedChats + ")");
+      return fail("all_failed", "None of the " + failedChats + " chats could be read.");
+    }
     // A cache Sync: Keepr answers once it has saved, with what it saved.
     if (isCache) env.overlay.show(SAVING_TEXT, false);
     var hiddenNow = hiddenStats.done();
@@ -1404,6 +1479,9 @@
       // L2: how the list scan stopped (Keepr records the coverage only for a normal stop).
       listStop: collected.stopReason,
     });
+    if (!finished || !finished.ok) {
+      return fail("finish_refused", messageOf(finished, "Keepr could not finish this Sync."));
+    }
     if (isCache && finished && finished.body && Object.prototype.hasOwnProperty.call(finished.body, "saved")) {
       saved = finished.body.saved;
     }
@@ -2115,6 +2193,8 @@
 
   var api = {
     bootPlan: bootPlan,
+    transportKind: transportKind,
+    KEEPR_LOST_MESSAGES: KEEPR_LOST_MESSAGES,
     launchKeepr: launchKeepr,
     buildBox: buildBox,
     themeFromColor: themeFromColor,
@@ -2349,6 +2429,11 @@
   /** C5: Try again after a failed Sync. Resolves true once the new run started here. */
   function retrySync() {
     return toWorker({ type: "keepr-retry" }).then(function (r) {
+      // Live (founder): Keepr not running → launch it (no tab); the user tries again then.
+      if (!r || r.status === 0) {
+        launchKeepr(document, "keepr://open");
+        return false;
+      }
       var jobId = r && r.ok && r.body && typeof r.body.jobId === "string" ? r.body.jobId : null;
       if (!jobId || running) return false;
       idleExpanded = false;

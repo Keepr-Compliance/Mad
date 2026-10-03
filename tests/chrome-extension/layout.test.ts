@@ -615,8 +615,21 @@ describe("no chat is ever silently left out (BACKLOG-3629)", () => {
     );
   });
 
+  // Live (founder 2026-10-03): every checked chat failed, none imported →
+  // the run FAILED ("Sync failed"), never "done". Mutation: the rule removed → red.
+  it("every checked chat failed: a failed run, no /finish", async () => {
+    const t = planJob(Array.from({ length: 3 }, (_, i) => ({ name: `Chat ${i}`, open: "throws" as const })));
+    const outcome = await job.runJob(JOB, t.env);
+    expect(outcome.outcome).toBe("all_failed");
+    expect(t.calls.map(([, p]) => p).some((p) => p.endsWith("/finish"))).toBe(false);
+    expect(t.calls.map(([, p]) => p).some((p) => p.endsWith("/error"))).toBe(true);
+    expect(t.shown[t.shown.length - 1]).toBe("None of the 3 chats could be read.");
+  });
+
   it("caps the named list at 20 and counts the rest as '+N more' (M7)", async () => {
     const plans: Plan[] = Array.from({ length: 25 }, (_, i) => ({ name: `Chat ${i}`, open: "throws" as const }));
+    // One chat read (a partial success stays "done" with its list — live rule).
+    plans.push({ name: "Chat Read", matched: true });
     const t = planJob(plans);
     await job.runJob(JOB, t.env);
     const body = t.finish() as { notReached: NotReached[]; notReachedMore: number };
