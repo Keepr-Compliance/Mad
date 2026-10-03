@@ -1440,13 +1440,13 @@
    * Sync running, the box sits on the page as its collapsed chip. Never a
    * Sync button — Keepr starts every Sync.
    */
-  var IDLE_CHIP_READY = "Keepr · Open Keepr to sync";
-  var IDLE_CHIP_DOWN = "Keepr · Start the Keepr app to sync";
-  var IDLE_HOW = "Start a sync from Keepr: Dashboard → Sync Android";
-  /** BACKLOG-3666: Keepr is there but this extension is not paired with it. */
-  var IDLE_CHIP_PAIR = "Keepr · Pair with Keepr";
-  var PAIR_HOW = "Type the code Keepr shows (Settings › Google Messages, or the Sync screen):";
-  var PAIRED_TEXT = "Paired with Keepr.";
+  // C3 (UX redesign, founder 2026-10-03): idle, the page shows only a small
+  // "K" tab on the right edge at mid-height (draggable up and down, its place
+  // remembered); a tap opens one line + Open Keepr. Linking lives in the
+  // toolbar popup now (never on the page).
+  var IDLE_TAB_LINE = "Sync from Keepr";
+  /** C3: an unanswered "Stop the sync?" closes itself after this long (the sync never pauses). */
+  var STOP_CONFIRM_AUTO_CLOSE_MS = 10000;
 
   // Keepr brand (android-companion BrandMark): the indigo mark with an amber
   // dot; primary #4F46E5 (hover #4338CA); amber #F5A524 for paused/attention.
@@ -1524,34 +1524,6 @@
     return "Keepr · " + (/^\d+ of \d+$/.test(short) ? "syncing " + short : short) + " — " + SYNCING_CHIP_HINT;
   }
 
-  /**
-   * Idle: is Keepr there to open? From the worker's reply to an existing
-   * route (POST /exclusions/list — ids only): "ready" (answered), "signed_out"
-   * (403), "down" (no answer: the app or its bridge is not running).
-   * @returns {"ready"|"signed_out"|"down"}
-   */
-  function idleReachability(reply) {
-    if (!reply || typeof reply !== "object") return "down";
-    if (reply.ok || reply.status === 501) return "ready";
-    // SR B1: Keepr is there; it wants this (paired) user's requests signed —
-    // this extension lost its pairing: "Pair with Keepr".
-    if (reply.status === 401 && reply.body && reply.body.error === "signature_required") return "ready";
-    if (reply.status === 403) return "signed_out";
-    return "down";
-  }
-
-  /** "Last sync: 5 min ago" — from this extension's own record of its last finished Sync. */
-  function lastSyncText(atMs, nowMs) {
-    if (typeof atMs !== "number" || !isFinite(atMs) || typeof nowMs !== "number") return null;
-    var min = Math.max(0, Math.floor((nowMs - atMs) / 60000));
-    var ago = min < 1 ? "just now"
-      : min < 60 ? min + " min ago"
-      : min < 24 * 60 ? Math.floor(min / 60) + " h ago"
-      : min < 48 * 60 ? "yesterday"
-      : Math.floor(min / (24 * 60)) + " days ago";
-    return "Last sync: " + ago;
-  }
-
   /** "Chat 8 of 21…" → "8 of 21" for the pill; other lines as they are. */
   function shortProgress(text) {
     return String(text).replace(/^(Checking chat|Chat) /, "").replace(/…$/, "");
@@ -1590,18 +1562,9 @@
     var state = overlayState(text, isError, extras);
     var collapsible = state === "syncing" || state === "idle";
     var expanded = !collapsible || !!io.expanded;
-    var idle = state === "idle" ? extras.idle : null;
-    // BACKLOG-3666: reachable but unpaired → "Pair with Keepr" (the chip expands to the code field).
-    var idleUnpaired = !!idle && idle.reachable === true && idle.paired === false;
-    var idleReady = !!idle && idle.reachable === true && !idleUnpaired;
-    /** Idle "Open Keepr" (chip or button): POST /focus; no answer → the down chip. */
+    /** Idle "Open Keepr": POST /focus (a Sync is always started from Keepr). */
     function openKeepr() {
-      if (!io.focus) return;
-      Promise.resolve(io.focus()).then(function (ok) {
-        if (!ok && idle.onUnreachable) idle.onUnreachable();
-      }, function () {
-        if (idle.onUnreachable) idle.onUnreachable();
-      });
+      if (io.focus) void Promise.resolve(io.focus()).catch(function () {});
     }
     var attention = state === "paused" || state === "error";
 
@@ -1652,6 +1615,53 @@
       return b;
     }
 
+    if (state === "idle") {
+      renderIdleTab();
+      return;
+    }
+
+    /** C3: the idle "K" tab (collapsed), or its one line + Open Keepr (expanded). */
+    function renderIdleTab() {
+      Object.assign(box.style, {
+        width: expanded ? "220px" : "auto",
+        padding: expanded ? "10px 12px" : "4px",
+        borderRadius: expanded ? "14px" : "12px",
+      });
+      var tab = el("div", "drag-handle", {
+        width: "30px", height: "36px", borderRadius: "10px", display: "flex", alignItems: "center", justifyContent: "center",
+        fontWeight: "700", fontSize: "15px", cursor: "grab", touchAction: "none", userSelect: "none",
+        background: "linear-gradient(135deg, #4F46E5, #6D5DF0)", color: "#FFFFFF",
+      }, "K");
+      tab.setAttribute("data-keepr-tab", "1");
+      tab.setAttribute("role", "button");
+      tab.setAttribute("tabindex", "0");
+      tab.setAttribute("aria-label", expanded ? "Hide Keepr" : "Keepr");
+      tab.setAttribute("aria-expanded", expanded ? "true" : "false");
+      tab.title = "Keepr — drag to move";
+      // A tap (not a drag: the drag code tells) or Enter / Space opens it.
+      tab.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          if (io.onExpand) io.onExpand(!expanded);
+        }
+      });
+      if (!expanded) {
+        box.appendChild(tab);
+        return;
+      }
+      var row = el("div", "header", { display: "flex", alignItems: "center", gap: "8px" });
+      row.appendChild(tab);
+      row.appendChild(el("div", "line", { flex: "1 1 auto", fontWeight: "600", color: p.text }, IDLE_TAB_LINE));
+      box.appendChild(row);
+      var openIdle = button("open-keepr", "Open Keepr", "primary");
+      openIdle.style.marginTop = "10px";
+      openIdle.addEventListener("click", openKeepr);
+      box.appendChild(openIdle);
+      if (extras.version) {
+        box.appendChild(el("div", "version", { marginTop: "8px", fontSize: "12px", color: p.muted }, "Keepr extension " + extras.version));
+      }
+    }
+
     // Header: badge (the drag handle) + title + controls.
     var header = el("div", "header", { display: "flex", alignItems: "center", gap: "8px" });
     var badge = el("div", "drag-handle", {
@@ -1671,48 +1681,17 @@
     }
     header.appendChild(badge);
 
-    var title = state === "idle" ? (idleUnpaired ? IDLE_CHIP_PAIR : idleReady ? IDLE_CHIP_READY : IDLE_CHIP_DOWN)
-      : state === "syncing"
+    var title = state === "syncing"
       ? (expanded ? SYNCING_TITLE : chipTitle(text))
       : state === "paused" ? PAUSED_TITLE : state === "ask" ? ASK_TITLE : text;
     var line = el("div", "line", {
       flex: "1 1 auto", minWidth: "0", fontWeight: "600", color: p.text, whiteSpace: expanded ? "normal" : "nowrap",
     }, title);
     header.appendChild(line);
-    if (idleUnpaired && !expanded) {
-      // The unpaired chip opens the code field.
-      line.setAttribute("role", "button");
-      line.setAttribute("tabindex", "0");
-      line.style.cursor = "pointer";
-      var openPair = function () { if (io.onExpand) io.onExpand(true); };
-      line.addEventListener("click", openPair);
-      line.addEventListener("keydown", function (e) {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          openPair();
-        }
-      });
-    }
-    if (idleReady) {
-      // The idle chip itself opens Keepr.
-      line.setAttribute("role", "button");
-      line.setAttribute("tabindex", "0");
-      line.style.cursor = "pointer";
-      line.addEventListener("click", openKeepr);
-      line.addEventListener("keydown", function (e) {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          openKeepr();
-        }
-      });
-    }
-
     if (collapsible) {
       var expand = button("expand", expanded ? "▴" : "▾", "icon");
       expand.setAttribute("aria-expanded", expanded ? "true" : "false");
-      expand.setAttribute("aria-label", state === "idle"
-        ? (expanded ? "Hide Keepr details" : "Show Keepr details")
-        : (expanded ? "Hide Sync progress" : "Show Sync progress"));
+      expand.setAttribute("aria-label", expanded ? "Hide Sync progress" : "Show Sync progress");
       expand.addEventListener("click", function () {
         if (io.onExpand) io.onExpand(!expanded);
       });
@@ -1741,72 +1720,6 @@
     if (!expanded) return;
 
     var bodyStyle = { marginTop: "8px", color: p.muted };
-    if (state === "idle" && idleUnpaired) {
-      // BACKLOG-3666: the code Keepr shows, typed here (never a Sync button).
-      box.appendChild(el("div", "pair-how", { marginTop: "8px", color: p.text }, PAIR_HOW));
-      var pairRow = el("div", "pair-row", { display: "flex", gap: "8px", marginTop: "8px" });
-      var codeInput = doc.createElement("input");
-      codeInput.setAttribute("data-keepr", "pair-code");
-      codeInput.setAttribute("aria-label", "Pairing code");
-      codeInput.setAttribute("autocomplete", "off");
-      codeInput.setAttribute("spellcheck", "false");
-      codeInput.maxLength = 12;
-      Object.assign(codeInput.style, {
-        flex: "1 1 auto", minWidth: "0", font: "inherit", letterSpacing: "2px", textTransform: "uppercase",
-        padding: "6px 8px", borderRadius: "8px", border: "1px solid " + p.secondaryBorder, background: p.secondaryBg, color: p.text,
-      });
-      // Typing here must never reach Google's keyboard shortcuts.
-      ["keydown", "keyup", "keypress"].forEach(function (t) {
-        codeInput.addEventListener(t, function (e) { e.stopPropagation(); });
-      });
-      var pairButton = button("pair", "Pair", "primary");
-      var pairResult = el("div", "pair-result", { marginTop: "6px", color: p.muted, fontSize: "13px" });
-      pairResult.setAttribute("role", "status");
-      var doPair = function () {
-        if (!idle.pair) return;
-        pairButton.disabled = true;
-        pairResult.textContent = "Pairing…";
-        Promise.resolve(idle.pair(codeInput.value)).then(function (r) {
-          if (r && r.ok) {
-            pairResult.textContent = PAIRED_TEXT;
-            if (idle.onPaired) idle.onPaired();
-          } else {
-            pairButton.disabled = false;
-            pairResult.textContent = (r && r.error) || "Pairing failed. Show a new code in Keepr and try again.";
-          }
-        }, function () {
-          pairButton.disabled = false;
-          pairResult.textContent = "Pairing failed. Show a new code in Keepr and try again.";
-        });
-      };
-      pairButton.addEventListener("click", doPair);
-      codeInput.addEventListener("keydown", function (e) {
-        if (e.key === "Enter") doPair();
-      });
-      pairRow.appendChild(codeInput);
-      pairRow.appendChild(pairButton);
-      box.appendChild(pairRow);
-      box.appendChild(pairResult);
-      if (extras.version) {
-        box.appendChild(el("div", "version", { marginTop: "8px", fontSize: "12px", color: p.muted }, "Keepr extension " + extras.version));
-      }
-      return;
-    }
-    if (state === "idle") {
-      box.appendChild(el("div", "idle-how", { marginTop: "8px", color: p.text }, IDLE_HOW));
-      var last = lastSyncText(idle.lastSyncAt, idle.nowMs);
-      if (last) box.appendChild(el("div", "last-sync", bodyStyle, last));
-      if (idleReady) {
-        var openIdle = button("open-keepr", "Open Keepr", "primary");
-        openIdle.style.marginTop = "10px";
-        openIdle.addEventListener("click", openKeepr);
-        box.appendChild(openIdle);
-      }
-      if (extras.version) {
-        box.appendChild(el("div", "version", { marginTop: "8px", fontSize: "12px", color: p.muted }, "Keepr extension " + extras.version));
-      }
-      return;
-    }
     if (state === "syncing") {
       box.appendChild(el("div", "progress", bodyStyle, text));
       box.appendChild(el("div", "hint", { marginTop: "6px", color: p.text }, SYNCING_HINT));
@@ -1868,6 +1781,16 @@
         stop.state = "open";
         stop.openedAt = now();
         paint();
+        // C3 (founder): unanswered, it closes itself — the sync never paused.
+        var openedAt = stop.openedAt;
+        var later = io.setTimeout || setTimeout;
+        later(function () {
+          if (stop.state === "open" && stop.openedAt === openedAt) {
+            stop.state = "closed";
+            paint();
+            if (io.rerender) io.rerender();
+          }
+        }, STOP_CONFIRM_AUTO_CLOSE_MS);
       });
       stopNo.addEventListener("click", function () {
         stop.state = "closed";
@@ -1947,6 +1870,32 @@
   // always stays on screen; its place is remembered for this tab's session.
   // ---------------------------------------------------------------------------
   var OVERLAY_MARGIN = 8;
+  /**
+   * C3 (founder): the box lives on the RIGHT edge, at mid-height by default,
+   * kept off the header (top) and the compose box (bottom) and a little in
+   * from the edge so it never covers the messages' scrollbar.
+   */
+  var RIGHT_GAP = 18;
+  var SAFE_TOP = 72;
+  var SAFE_BOTTOM = 104;
+
+  /** Where the box goes: right edge; `topFrac` (0..1, default 0.5) of the safe band. */
+  function tabPosition(topFrac, size, view) {
+    var frac = typeof topFrac === "number" && isFinite(topFrac) ? Math.min(1, Math.max(0, topFrac)) : 0.5;
+    var minTop = SAFE_TOP;
+    var maxTop = Math.max(minTop, view.height - SAFE_BOTTOM - size.height);
+    return {
+      left: Math.round(Math.max(OVERLAY_MARGIN, view.width - size.width - RIGHT_GAP)),
+      top: Math.round(minTop + (maxTop - minTop) * frac),
+    };
+  }
+
+  /** The band fraction of a top position (what is remembered). */
+  function tabFraction(top, size, view) {
+    var minTop = SAFE_TOP;
+    var maxTop = Math.max(minTop, view.height - SAFE_BOTTOM - size.height);
+    return maxTop === minTop ? 0.5 : Math.min(1, Math.max(0, (top - minTop) / (maxTop - minTop)));
+  }
   var CORNER_GAP = 16;
   var CORNERS = ["top-right", "bottom-right", "bottom-left", "top-left"];
 
@@ -1989,6 +1938,8 @@
     var grip = io.handle || box;
     var drag = null;
     var corner = CORNERS[0];
+    var edge = io.rightEdge === true;
+    var frac = 0.5;
     function place(p) {
       box.style.left = p.left + "px";
       box.style.top = p.top + "px";
@@ -1997,13 +1948,21 @@
       return p;
     }
     function settle(pos) {
+      if (edge) {
+        // C3: up and down the right edge only, inside the safe band.
+        frac = tabFraction(pos.top, io.size(), io.view());
+        return place(tabPosition(frac, io.size(), io.view()));
+      }
       return place(clampPosition(pos, io.size(), io.view()));
     }
     function current() {
       return { left: parseFloat(box.style.left) || 0, top: parseFloat(box.style.top) || 0 };
     }
     var saved = io.load();
-    if (saved && typeof saved.left === "number" && typeof saved.top === "number") settle(saved);
+    if (edge) {
+      frac = saved && typeof saved.topFrac === "number" ? saved.topFrac : 0.5;
+      place(tabPosition(frac, io.size(), io.view()));
+    } else if (saved && typeof saved.left === "number" && typeof saved.top === "number") settle(saved);
 
     grip.addEventListener("pointerdown", function (e) {
       if (typeof e.button === "number" && e.button !== 0) return;
@@ -2016,7 +1975,7 @@
       }
       var rect = box.getBoundingClientRect();
       var from = box.style.left ? current() : { left: rect.left, top: rect.top };
-      drag = { dx: e.clientX - from.left, dy: e.clientY - from.top };
+      drag = { dx: e.clientX - from.left, dy: e.clientY - from.top, x0: e.clientX, y0: e.clientY, moved: false };
       if (grip !== box) grip.style.cursor = "grabbing";
       if (typeof e.pointerId === "number" && grip.setPointerCapture) {
         try { grip.setPointerCapture(e.pointerId); } catch (_e) { /* capture is a nicety */ }
@@ -2025,13 +1984,20 @@
     });
     grip.addEventListener("pointermove", function (e) {
       if (!drag) return;
-      settle({ left: e.clientX - drag.dx, top: e.clientY - drag.dy });
+      if (Math.abs(e.clientX - drag.x0) + Math.abs(e.clientY - drag.y0) > 4) drag.moved = true;
+      if (drag.moved) settle({ left: e.clientX - drag.dx, top: e.clientY - drag.dy });
     });
     function end() {
       if (!drag) return;
+      var moved = drag.moved;
       drag = null;
       if (grip !== box) grip.style.cursor = "grab";
-      io.save(current());
+      // C3: a tap (no move) on the tab opens / closes it.
+      if (!moved) {
+        if (io.onTap) io.onTap();
+        return;
+      }
+      io.save(edge ? { topFrac: frac } : current());
     }
     grip.addEventListener("pointerup", end);
     grip.addEventListener("pointercancel", end);
@@ -2039,13 +2005,21 @@
     return {
       /** Keyboard alternative: the next corner, clockwise from top-right. */
       moveToNextCorner: function () {
+        if (edge) {
+          // C3: the keyboard moves it along the edge: top, middle, bottom.
+          frac = frac < 0.25 ? 0.5 : frac < 0.75 ? 1 : 0;
+          place(tabPosition(frac, io.size(), io.view()));
+          io.save({ topFrac: frac });
+          return frac;
+        }
         corner = nextCorner(corner);
         io.save(place(cornerPosition(corner, io.size(), io.view())));
         return corner;
       },
-      /** After a resize (or a taller box): back inside the view. */
+      /** After a resize (or a taller / wider box): back to its place. */
       keepOnScreen: function () {
-        if (box.style.left) settle(current());
+        if (edge) place(tabPosition(frac, io.size(), io.view()));
+        else if (box.style.left) settle(current());
       },
     };
   }
@@ -2116,15 +2090,11 @@
     overlayState: overlayState,
     PALETTE: PALETTE,
     ASK_TITLE: ASK_TITLE,
-    IDLE_CHIP_READY: IDLE_CHIP_READY,
-    IDLE_CHIP_DOWN: IDLE_CHIP_DOWN,
-    IDLE_CHIP_PAIR: IDLE_CHIP_PAIR,
     STOP_SYNC_QUESTION: STOP_SYNC_QUESTION,
     STOP_CONFIRM_ARM_MS: STOP_CONFIRM_ARM_MS,
-    PAIRED_TEXT: PAIRED_TEXT,
-    IDLE_HOW: IDLE_HOW,
-    idleReachability: idleReachability,
-    lastSyncText: lastSyncText,
+    IDLE_TAB_LINE: IDLE_TAB_LINE,
+    STOP_CONFIRM_AUTO_CLOSE_MS: STOP_CONFIRM_AUTO_CLOSE_MS,
+    tabPosition: tabPosition,
     windowLabel: windowLabel,
     mediaLine: mediaLine,
     chatAlreadyOpen: chatAlreadyOpen,
@@ -2241,18 +2211,26 @@
       document.body.appendChild(box);
       mover = attachDrag(box, {
         handleSelector: DRAG_HANDLE,
+        // C3: the right edge, its place remembered on this computer.
+        rightEdge: true,
+        onTap: function () {
+          if (lastShown && lastShown.extras && lastShown.extras.idle) {
+            idleExpanded = !idleExpanded;
+            showOverlay(lastShown.text, lastShown.isError, lastShown.extras);
+          }
+        },
         view: function () { return { width: root.innerWidth, height: root.innerHeight }; },
         size: function () { var r = box.getBoundingClientRect(); return { width: r.width, height: r.height }; },
         load: function () {
           try {
-            var raw = sessionStorage.getItem(POSITION_KEY);
+            var raw = localStorage.getItem(POSITION_KEY);
             return raw ? JSON.parse(raw) : null;
           } catch (_e) {
             return null;
           }
         },
         save: function (pos) {
-          try { sessionStorage.setItem(POSITION_KEY, JSON.stringify(pos)); } catch (_e) { /* not kept: fine */ }
+          try { localStorage.setItem(POSITION_KEY, JSON.stringify(pos)); } catch (_e) { /* not kept: fine */ }
         },
       });
       root.addEventListener("resize", function () { if (mover) mover.keepOnScreen(); });
@@ -2262,6 +2240,7 @@
     if (!(extras && extras.cancel)) stopConfirm = { state: "closed", openedAt: 0 };
     renderOverlay(box, text, isError, extras, {
       copy: copyToClipboard, focus: focusKeepr, cancel: cancelJob, close: dismiss, stop: stopConfirm,
+      rerender: function () { if (lastShown) showOverlay(lastShown.text, lastShown.isError, lastShown.extras); },
       move: function () { if (mover) mover.moveToNextCorner(); },
       expanded: extras && extras.idle ? idleExpanded : syncExpanded,
       onExpand: function (open) {
@@ -2287,32 +2266,20 @@
   // (POST /exclusions/list, ids only); the last sync time is this extension's
   // own record (the worker notes when a /finish succeeded). No new data.
   var asking = false;
-  var IDLE_REFRESH_MS = 30000;
   function idleOnScreen() {
     return !lastShown || !!(lastShown.extras && lastShown.extras.idle);
   }
-  function showIdle(reachable, lastSyncAt, paired) {
+  function showIdle() {
     if (running || asking || !idleOnScreen()) return;
-    showOverlay("", false, {
-      idle: {
-        reachable: reachable, lastSyncAt: lastSyncAt, nowMs: Date.now(), paired: paired !== false,
-        onUnreachable: function () { showIdle(false, lastSyncAt, paired); },
-        // BACKLOG-3666: the code typed into the chip → the worker pairs.
-        pair: function (code) { return toWorker({ type: "keepr-pair", code: code }); },
-        onPaired: function () { idleExpanded = false; void refreshIdle(); },
-      },
-      version: manifestVersion(),
-    });
+    showOverlay("", false, { idle: {}, version: manifestVersion() });
   }
+  /** C3: idle, the page shows only the K tab (status and linking: the toolbar popup). */
   async function refreshIdle() {
     if (running || asking || !idleOnScreen()) return;
     if (!document.body) {
       await new Promise(function (r) { document.addEventListener("DOMContentLoaded", r, { once: true }); });
     }
-    var reach = idleReachability(await toWorker({ type: "keepr-exclusions-list" }));
-    var last = await toWorker({ type: "keepr-last-sync" });
-    var pairState = await toWorker({ type: "keepr-pair-status" });
-    showIdle(reach === "ready", last && typeof last.at === "number" ? last.at : null, !!(pairState && pairState.paired));
+    showIdle();
   }
   /** × on a finished Sync, or "Not now": the box goes back to the idle chip. */
   function dismiss() {
@@ -2320,9 +2287,6 @@
     closeOverlay();
     void refreshIdle();
   }
-  setInterval(function () {
-    if (ownsPage(document, INSTANCE)) void refreshIdle();
-  }, IDLE_REFRESH_MS);
 
   /** The page's Cancel: POST /job/<this job>/cancel through the worker. */
   var currentJobId = null;

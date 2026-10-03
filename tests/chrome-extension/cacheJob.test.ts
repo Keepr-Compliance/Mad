@@ -940,6 +940,34 @@ describe("renderOverlay: Cancel (M8)", () => {
     expect(yes.disabled).toBe(true);
   });
 
+  // C3 (founder): an unanswered "Stop the sync?" closes itself after 10 s
+  // (the sync never paused meanwhile). Mutation: no auto-close → red; it
+  // closing a confirm opened again later → red.
+  it("the confirm closes itself after 10 s unanswered; a newer one is left open", () => {
+    const panel = document.createElement("div");
+    const timers: Array<{ fn: () => void; ms: number }> = [];
+    const rerender = jest.fn();
+    let clock = 5_000;
+    const stop = { state: "closed", openedAt: 0 };
+    const io = () => ({
+      copy: async () => true, cancel: jest.fn(async () => true), expanded: true, now: () => clock, stop, rerender,
+      setTimeout: (fn: () => void, ms: number) => void timers.push({ fn, ms }),
+    });
+    job.renderOverlay(panel, "Chat 1 of 3…", false, { cancel: true }, io());
+    (panel.querySelector('[data-keepr="cancel"]') as HTMLButtonElement).click();
+    expect(timers.map((t) => t.ms)).toEqual([job.STOP_CONFIRM_AUTO_CLOSE_MS]);
+    expect(job.STOP_CONFIRM_AUTO_CLOSE_MS).toBe(10_000);
+    timers[0].fn();
+    expect(stop.state).toBe("closed");
+    expect(rerender).toHaveBeenCalledTimes(1);
+    // Opened again: an older timer does not close the newer confirm.
+    job.renderOverlay(panel, "Chat 2 of 3…", false, { cancel: true }, io());
+    clock += 20_000;
+    (panel.querySelector('[data-keepr="cancel"]') as HTMLButtonElement).click();
+    timers[0].fn();
+    expect(stop.state).toBe("open");
+  });
+
   it("a double-click on Stop sync is not a confirm (Stop ignored for 400 ms after opening)", () => {
     const panel = document.createElement("div");
     const cancel = jest.fn(async () => true);

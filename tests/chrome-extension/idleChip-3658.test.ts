@@ -1,21 +1,20 @@
 /**
- * Founder (2026-10-02; reverses "nothing on the page while idle"): with no
- * Sync running, the Keepr box sits on Messages for Web as its COLLAPSED chip,
- * "Keepr · Open Keepr to sync". The chip (or Open Keepr in the expanded view)
- * calls the existing /focus route; when Keepr is not reachable (bridge down /
- * signed out) it reads "Keepr · Start the Keepr app to sync" and there is no
- * button. NEVER a Sync button on the page. Expanded: how to start a Sync,
- * the last sync time if known (this extension's own record), the version.
+ * C3 (UX redesign, founder 2026-10-03): with no Sync running, the page shows
+ * only a small "K" tab on the right edge at mid-height (draggable up and down,
+ * its place remembered). A tap opens ONE line + Open Keepr (/focus). Status
+ * and linking live in the toolbar popup — never on the page; never a Sync
+ * button on the page.
  *
  * Mutations that turn this suite red:
- *   I1 no Sync on page load → no idle chip (bootPlan without idle)      → "bootPlan"
- *   I2 the idle chip starts expanded                                    → "collapsed chip"
- *   I3 the chip does not open Keepr (no /focus)                         → "the chip opens Keepr"
- *   I4 an unreachable Keepr still gets the Open Keepr button / wrong line → "unreachable"
- *   I5 a 403 (signed out) read as reachable                             → "reachability"
- *   I6 a failed /focus does not switch to the "Start the Keepr app" chip → "a failed /focus"
+ *   I1 no Sync on page load → no idle tab (bootPlan without idle)       → "bootPlan"
+ *   I2 the tab starts open, or shows text                              → "collapsed: the K tab"
+ *   I3 Open Keepr not through /focus                                   → "a tap opens it"
+ *   I4 a code field / pairing on the page                              → "nothing about linking on the page"
  *   I7 the worker does not note a finished Sync / notes a failed one    → "last sync"
- *   I8 a job's first line does not replace the idle chip                → "a job starts"
+ *   I8 a job's first line does not replace the idle tab                → "a job starts"
+ *   T1 the tab not on the right edge / outside the safe band           → "the right edge, mid-height"
+ *   T2 its place not remembered                                        → "the right edge, mid-height"
+ *   T3 a drag taken for a tap (or a tap not opening it)                → "a tap opens it, a drag moves it"
  */
 export {};
 
@@ -44,80 +43,49 @@ afterEach(() => {
   uninstallPairing();
 });
 
-describe("the idle chip", () => {
-  it("bootPlan: no Sync on page load shows the idle chip (I1)", () => {
+describe("the idle K tab (C3)", () => {
+  it("bootPlan: no Sync on page load shows the idle tab (I1)", () => {
     expect(job.bootPlan({ hashJob: null, storedJob: null, pendingJob: null })).toMatchObject({ jobId: null, idle: true });
     expect(job.bootPlan({ hashJob: "j-1", storedJob: null, pendingJob: null }).idle).toBeUndefined();
     expect(job.bootPlan({ hashJob: null, storedJob: null, pendingJob: "j-3" }).idle).toBeUndefined();
   });
 
-  it("collapsed chip: 'Keepr · Open Keepr to sync', a ▾, no body (I2)", () => {
+  it("collapsed: the K tab only — no text, no button (I2)", () => {
     const box = render(idle());
     expect(box.getAttribute("data-keepr-state")).toBe("idle");
-    expect(q(box, "line")!.textContent).toBe("Keepr · Open Keepr to sync");
-    expect(q(box, "expand")!.getAttribute("aria-expanded")).toBe("false");
-    expect(q(box, "idle-how")).toBeNull();
-    expect(q(box, "drag-handle")).not.toBeNull(); // draggable like every state
-    expect(box.style.borderRadius).toBe("999px");
+    const tab = q(box, "drag-handle")!;
+    expect(tab.textContent).toBe("K");
+    expect(tab.getAttribute("aria-expanded")).toBe("false");
+    expect(q(box, "line")).toBeNull();
+    expect(box.querySelectorAll("button")).toHaveLength(0);
   });
 
-  it("the chip opens Keepr through /focus (I3)", async () => {
-    const focus = jest.fn(async () => true);
-    const box = render(idle(), { focus });
-    q(box, "line")!.click();
-    await flush();
-    expect(focus).toHaveBeenCalledTimes(1);
-    q(box, "line")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    expect(focus).toHaveBeenCalledTimes(2);
-  });
-
-  it("▾ asks to expand; expanded: how to start, last sync, Open Keepr, version", async () => {
+  it("a tap opens it: one line and Open Keepr (/focus), the version (I3)", async () => {
     const onExpand = jest.fn();
-    render(idle(), { onExpand }).querySelector<HTMLElement>('[data-keepr="expand"]')!.click();
+    const closed = render(idle(), { onExpand });
+    q(closed, "drag-handle")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     expect(onExpand).toHaveBeenCalledWith(true);
     const focus = jest.fn(async () => true);
-    const box = render(idle({ lastSyncAt: NOW - 5 * 60000 }), { expanded: true, focus });
-    expect(q(box, "idle-how")!.textContent).toBe("Start a sync from Keepr: Dashboard → Sync Android");
-    expect(q(box, "last-sync")!.textContent).toBe("Last sync: 5 min ago");
+    const box = render(idle(), { expanded: true, focus });
+    expect(q(box, "line")!.textContent).toBe(job.IDLE_TAB_LINE);
     expect(q(box, "version")!.textContent).toBe("Keepr extension 0.3.19");
     q(box, "open-keepr")!.click();
     await flush();
     expect(focus).toHaveBeenCalledTimes(1);
   });
 
-  it("no last sync known: no time line", () => {
-    expect(q(render(idle(), { expanded: true }), "last-sync")).toBeNull();
-  });
-
-  it("unreachable: 'Keepr · Start the Keepr app to sync', no button, the chip opens nothing (I4)", async () => {
-    const focus = jest.fn(async () => true);
-    const box = render(idle({ reachable: false }), { expanded: true, focus });
-    expect(q(box, "line")!.textContent).toBe("Keepr · Start the Keepr app to sync");
-    expect(q(box, "open-keepr")).toBeNull();
-    q(box, "line")!.click();
-    await flush();
-    expect(focus).not.toHaveBeenCalled();
-  });
-
-  it("a failed /focus switches to the 'Start the Keepr app' chip (I6)", async () => {
-    const onUnreachable = jest.fn();
-    const box = render(idle({ onUnreachable }), { focus: async () => false });
-    q(box, "line")!.click();
-    await flush();
-    expect(onUnreachable).toHaveBeenCalledTimes(1);
-  });
-
-  it("never a Sync button on the page, collapsed or expanded, reachable or not", () => {
-    for (const reachable of [true, false]) {
-      for (const expanded of [false, true]) {
-        const box = render(idle({ reachable }), { expanded, focus: async () => true });
-        const labels = Array.from(box.querySelectorAll("button")).map((b) => b.textContent || "");
-        expect(labels.some((l) => /sync/i.test(l))).toBe(false);
-      }
+  it("nothing about linking on the page; never a Sync button (I4)", () => {
+    for (const expanded of [false, true]) {
+      const box = render(idle(), { expanded, focus: async () => true });
+      const labels = Array.from(box.querySelectorAll("button")).map((b) => b.textContent || "");
+      expect(labels.some((l) => /sync|pair|link/i.test(l))).toBe(false);
+      expect(box.querySelector("input")).toBeNull();
     }
+    const src = fs.readFileSync(path.join(__dirname, "..", "..", "chrome-extension", "job.js"), "utf8");
+    expect(src).not.toMatch(/keepr-pair"|pair-code|Pair with Keepr/);
   });
 
-  it("a job starts: its first line replaces the idle chip in the same box (I8)", () => {
+  it("a job starts: its first line replaces the idle tab in the same box (I8)", () => {
     const box = render(idle());
     job.renderOverlay(box, "Checking chat 1 of 3…", false, { cancel: true }, { copy: async () => true });
     expect(box.getAttribute("data-keepr-state")).toBe("syncing");
@@ -126,32 +94,69 @@ describe("the idle chip", () => {
 
   it("touches only its own box: nothing else is added to the page", () => {
     document.body.innerHTML = "<div id='app'>page</div>";
-    const box = render(idle(), { expanded: true });
+    render(idle(), { expanded: true });
     expect(document.body.children).toHaveLength(2);
-    expect(box.contains(q(box, "idle-how"))).toBe(true);
-    expect(box.style.pointerEvents).not.toBe("none");
   });
 });
 
-describe("reachability and last sync text", () => {
-  it("reachability from the existing /exclusions/list reply (I5)", () => {
-    expect(job.idleReachability({ ok: true, status: 200, body: { conversationIds: [] } })).toBe("ready");
-    expect(job.idleReachability({ ok: false, status: 501 })).toBe("ready");
-    expect(job.idleReachability({ ok: false, status: 403 })).toBe("signed_out");
-    // SR B1: Keepr wants signed requests (this extension lost its pairing): reachable → the pair chip.
-    expect(job.idleReachability({ ok: false, status: 401, body: { error: "signature_required" } })).toBe("ready");
-    expect(job.idleReachability({ ok: false, status: 401, body: { error: "other" } })).toBe("down");
-    expect(job.idleReachability({ ok: false, status: 0 })).toBe("down");
-    expect(job.idleReachability(null)).toBe("down");
+describe("the tab's place (C3)", () => {
+  const view = { width: 1200, height: 800 };
+  const size = { width: 38, height: 44 };
+
+  it("the right edge, mid-height, inside the safe band (T1)", () => {
+    const mid = job.tabPosition(0.5, size, view);
+    expect(mid.left).toBe(1200 - 38 - 18);
+    // Off the header (top) and the compose box (bottom).
+    expect(job.tabPosition(0, size, view).top).toBe(72);
+    expect(job.tabPosition(1, size, view).top).toBe(800 - 104 - 44);
+    expect(mid.top).toBe(Math.round(72 + (800 - 104 - 44 - 72) / 2));
+    expect(job.tabPosition(undefined, size, view)).toEqual(mid);
+    expect(job.tabPosition(7, size, view).top).toBe(800 - 104 - 44);
   });
 
-  it("lastSyncText: just now, minutes, hours, yesterday, days; unknown → null", () => {
-    expect(job.lastSyncText(NOW - 10_000, NOW)).toBe("Last sync: just now");
-    expect(job.lastSyncText(NOW - 42 * 60000, NOW)).toBe("Last sync: 42 min ago");
-    expect(job.lastSyncText(NOW - 3 * 3600000, NOW)).toBe("Last sync: 3 h ago");
-    expect(job.lastSyncText(NOW - 30 * 3600000, NOW)).toBe("Last sync: yesterday");
-    expect(job.lastSyncText(NOW - 5 * 86400000, NOW)).toBe("Last sync: 5 days ago");
-    expect(job.lastSyncText(null, NOW)).toBeNull();
+  it("a tap opens it, a drag moves it along the edge and its place is remembered (T2, T3)", () => {
+    const box = document.createElement("div");
+    const handle = document.createElement("div");
+    handle.setAttribute("data-keepr", "drag-handle");
+    box.appendChild(handle);
+    document.body.appendChild(box);
+    const saved: unknown[] = [];
+    const onTap = jest.fn();
+    const mover = job.attachDrag(box, {
+      handleSelector: '[data-keepr="drag-handle"]',
+      rightEdge: true,
+      onTap,
+      view: () => view,
+      size: () => size,
+      load: () => ({ topFrac: 0 }),
+      save: (p: unknown) => saved.push(p),
+    });
+    expect(box.style.top).toBe("72px");
+    const ev = (type: string, x: number, y: number) => {
+      const e = new MouseEvent(type, { bubbles: true, clientX: x, clientY: y, button: 0 });
+      handle.dispatchEvent(e);
+    };
+    // A tap: a pixel of jitter is not a drag.
+    ev("pointerdown", 1170, 90);
+    ev("pointermove", 1171, 91);
+    ev("pointerup", 1171, 91);
+    expect(onTap).toHaveBeenCalledTimes(1);
+    expect(saved).toEqual([]);
+    ev("pointerdown", 1170, 90);
+    ev("pointermove", 400, 400);
+    ev("pointerup", 400, 400);
+    expect(onTap).toHaveBeenCalledTimes(1);
+    expect(box.style.left).toBe(String(1200 - 38 - 18) + "px"); // stays on the right edge
+    expect(saved).toHaveLength(1);
+    expect((saved[0] as { topFrac: number }).topFrac).toBeGreaterThan(0);
+    // The keyboard: top → middle → bottom → top.
+    expect(mover.moveToNextCorner()).toBe(1);
+  });
+
+  it("the page's box uses the right edge, remembered on this computer", () => {
+    const src = fs.readFileSync(path.join(__dirname, "..", "..", "chrome-extension", "job.js"), "utf8");
+    expect(src).toContain("        rightEdge: true,");
+    expect(src).toContain("localStorage.setItem(POSITION_KEY, JSON.stringify(pos))");
   });
 });
 
@@ -203,58 +208,5 @@ describe("the worker's last sync record (I7)", () => {
     const other = await worker(200);
     await other.send({ ...finish, path: "/job/job-1/chat" });
     expect(other.local).toEqual({});
-  });
-});
-
-// BACKLOG-3666: Keepr is there but this extension is not paired → the chip
-// says "Pair with Keepr" and expands to the code field (never a Sync button).
-// Mutations: the pair chip not shown → red; the code not sent → red; typing
-// reaching Google's shortcuts → red; a failed pair claiming success → red.
-describe("the idle chip when unpaired (BACKLOG-3666)", () => {
-  const unpaired = (over: Record<string, unknown> = {}) => idle({ paired: false, ...over });
-
-  it("collapsed: 'Keepr · Pair with Keepr'; clicking it opens the code field, not Keepr", async () => {
-    const focus = jest.fn(async () => true);
-    const onExpand = jest.fn();
-    const box = render(unpaired(), { focus, onExpand });
-    expect(q(box, "line")!.textContent).toBe("Keepr · Pair with Keepr");
-    q(box, "line")!.click();
-    expect(onExpand).toHaveBeenCalledWith(true);
-    expect(focus).not.toHaveBeenCalled();
-  });
-
-  it("expanded: the code field and Pair; the right code pairs", async () => {
-    const pair = jest.fn(async () => ({ ok: true }));
-    const onPaired = jest.fn();
-    const box = render(unpaired({ pair, onPaired }), { expanded: true });
-    expect(q(box, "open-keepr")).toBeNull();
-    const input = q(box, "pair-code") as HTMLInputElement;
-    input.value = "ab3d-ef7h";
-    q(box, "pair")!.click();
-    await flush();
-    expect(pair).toHaveBeenCalledWith("ab3d-ef7h");
-    expect(q(box, "pair-result")!.textContent).toBe("Paired with Keepr.");
-    expect(onPaired).toHaveBeenCalledTimes(1);
-  });
-
-  it("a refused code shows why and lets the user try again", async () => {
-    const box = render(unpaired({ pair: async () => ({ ok: false, error: "That code didn't match." }) }), { expanded: true });
-    q(box, "pair")!.click();
-    await flush();
-    expect(q(box, "pair-result")!.textContent).toBe("That code didn't match.");
-    expect((q(box, "pair") as HTMLButtonElement).disabled).toBe(false);
-  });
-
-  it("typing the code never reaches the page's keyboard shortcuts", () => {
-    const box = render(unpaired(), { expanded: true });
-    const seen = jest.fn();
-    document.addEventListener("keydown", seen);
-    q(box, "pair-code")!.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
-    document.removeEventListener("keydown", seen);
-    expect(seen).not.toHaveBeenCalled();
-  });
-
-  it("paired: the usual chip", () => {
-    expect(q(render(idle({ paired: true })), "line")!.textContent).toBe("Keepr · Open Keepr to sync");
   });
 });
