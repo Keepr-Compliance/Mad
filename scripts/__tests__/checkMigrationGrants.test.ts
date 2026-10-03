@@ -182,8 +182,16 @@ describe('lexing: REVOKE text that is not a statement does not count', () => {
     expect(rules(check([sqlFile(sql)]))).toEqual(['function-missing-revoke']);
   });
 
+  it('a REVOKE statement inside a plpgsql function body', () => {
+    // Directly after a `;` inside the body, so a lexer that splits bodies on
+    // semicolons would see a statement starting with REVOKE.
+    const sql = NEW_FN.replace('  END IF;\n', `  END IF;\n  REVOKE EXECUTE ON FUNCTION ${SIG} FROM PUBLIC, anon;\n`);
+    expect(sql).not.toBe(NEW_FN);
+    expect(rules(check([sqlFile(sql)]))).toEqual(['function-missing-revoke']);
+  });
+
   it('a REVOKE inside a DO block', () => {
-    const sql = `${NEW_FN}\nDO $$ BEGIN REVOKE EXECUTE ON FUNCTION ${SIG} FROM PUBLIC, anon; END $$;\n`;
+    const sql = `${NEW_FN}\nDO $$ BEGIN PERFORM 1; REVOKE EXECUTE ON FUNCTION ${SIG} FROM PUBLIC, anon; END $$;\n`;
     expect(rules(check([sqlFile(sql)]))).toEqual(['function-missing-revoke']);
   });
 
