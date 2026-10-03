@@ -6,14 +6,16 @@
  * another organization is a 404 here even before RLS is consulted.
  * `updated_at` is handed to the editor as the text PostgREST returned; the
  * save sends it back unchanged.
+ *
+ * BACKLOG-3618: a brokerage template opens only for an editor of the
+ * organization; an own template only for its owner. Anything else is a 404
+ * (RLS already hides other users' own templates; the owner check here holds
+ * whatever the read returns).
  */
 
 import { notFound } from 'next/navigation';
 import { Card } from '@keepr/design-system';
-import {
-  requireChecklistEditorAccess,
-  type ChecklistEditorAccess,
-} from '@/lib/checklist-access';
+import { requireChecklistAccess, type ChecklistAccess } from '@/lib/checklist-access';
 import type { TemplateItemRow } from '@/lib/checklists/editorState';
 import { auditName, auditUserIds, resolveAuditNames } from '@/lib/checklists/audit';
 import ChecklistEditorClient from '../ChecklistEditorClient';
@@ -23,7 +25,7 @@ interface PageProps {
 }
 
 const EDITOR_SELECT =
-  'id, name, description, created_at, created_by, updated_at, updated_by, archived_at, archived_by, checklist_template_items(id, title, description, is_required, expected_document_type, sort_order)';
+  'id, name, description, created_at, created_by, updated_at, updated_by, archived_at, archived_by, owner_user_id, include_in_submission, checklist_template_items(id, title, description, is_required, expected_document_type, sort_order)';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -37,13 +39,15 @@ interface TemplateRecord {
   updated_by: string | null;
   archived_at: string | null;
   archived_by: string | null;
+  owner_user_id: string | null;
+  include_in_submission: boolean;
   checklist_template_items: TemplateItemRow[] | null;
 }
 
 export default async function EditChecklistTemplatePage({ params }: PageProps) {
-  let access: ChecklistEditorAccess;
+  let access: ChecklistAccess;
   try {
-    access = await requireChecklistEditorAccess();
+    access = await requireChecklistAccess();
   } catch {
     notFound();
   }
@@ -69,6 +73,8 @@ export default async function EditChecklistTemplatePage({ params }: PageProps) {
   if (!data) notFound();
 
   const template = data as unknown as TemplateRecord;
+  const own = template.owner_user_id !== null && template.owner_user_id === access.userId;
+  if (template.owner_user_id === null ? !access.canEditOrg : !own) notFound();
   const names = await resolveAuditNames(
     access.supabase,
     auditUserIds(template.created_by, template.updated_by, template.archived_by)
@@ -87,7 +93,12 @@ export default async function EditChecklistTemplatePage({ params }: PageProps) {
             ? { at: template.archived_at, by: auditName(template.archived_by, names) }
             : null,
       }}
-      template={{ name: template.name, description: template.description }}
+      own={own}
+      template={{
+        name: template.name,
+        description: template.description,
+        includeInSubmission: own ? template.include_in_submission : null,
+      }}
       items={Array.isArray(template.checklist_template_items) ? template.checklist_template_items : []}
     />
   );
