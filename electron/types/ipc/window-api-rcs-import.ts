@@ -98,10 +98,6 @@ export interface RcsExtensionState {
   media?: { photosAllChats: boolean; videosAllChats: boolean; lastPhotosSeen: number | null; lastVideosSeen: number | null };
   /** BACKLOG-3666: the extension is paired with this Keepr for the signed-in user. */
   extensionPaired?: boolean;
-  /** SR (3666): the pairing code shown was used up by wrong attempts. */
-  pairCodeBurned?: boolean;
-  /** Live (E): the pairing code's state now (expiry from when Keepr made it). */
-  pairCodeState?: "none" | "active" | "expired" | "burned";
 }
 
 export type RcsExtensionStateResult =
@@ -168,10 +164,6 @@ export interface WindowApiRcsImport {
   setCacheOptions?: (args: { autoDelete?: boolean; contactsOnly?: boolean }) => Promise<{ success: boolean; error?: string }>;
   /** SR M: "Download photos / videos from all chats". */
   setMediaOptions?: (args: { photosAllChats?: boolean; videosAllChats?: boolean }) => Promise<{ success: boolean; error?: string }>;
-  /** BACKLOG-3666: a one-time pairing code, and dropping it. */
-  pairCode?: () => Promise<{ success: true; code: string; expiresAt: string } | { success: false; error: string }>;
-  /** Drops the code only if it is still `code` (another panel's code stays). */
-  pairCancel?: (args?: { code?: string }) => Promise<{ success: true }>;
   /** BACKLOG-3658: is the extension installed / paired, opted in, last cache Sync. */
   getExtensionState: () => Promise<RcsExtensionStateResult>;
   /** BACKLOG-3658 P3c: the chats switched off ("Don't sync"), with stored titles when Keepr has them. */

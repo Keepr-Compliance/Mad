@@ -354,7 +354,12 @@ function compareVersions(a, b) {
   return 0;
 }
 
-/** The extension side of SPAKE2 with the code Keepr shows. → {ok} | {ok:false, error} */
+/**
+ * LEGACY (BACKLOG-3666 8-character codes made by Keepr): no page offers it
+ * any more (C4) — the popup links (C1). Kept, with Keepr's /pair/* endpoints,
+ * only until 2026-12-01 (LEGACY_PAIR_ENDPOINTS_REMOVE_AFTER; merge notes).
+ * The extension side of SPAKE2 with the code Keepr shows. → {ok} | {ok:false, error}
+ */
 async function pairWithCode(codeText) {
   const P = pairLib();
   if (!P) return { ok: false, error: "Pairing isn't available in this extension." };
@@ -686,11 +691,12 @@ if (chrome.commands && chrome.commands.onCommand) {
 // extension does; the consent itself is given in Keepr).
 if (chrome.runtime.onInstalled) {
   chrome.runtime.onInstalled.addListener((details) => {
-    if (details && details.reason === "install" && chrome.runtime.openOptionsPage) {
+    // C4 (UX redesign): the welcome page, on install only (pin, Link, Sync from Keepr).
+    if (details && details.reason === "install" && chrome.tabs && chrome.runtime.getURL) {
       try {
-        void chrome.runtime.openOptionsPage();
+        void chrome.tabs.create({ url: chrome.runtime.getURL("welcome.html") });
       } catch (_err) {
-        // The page is reachable from the Extensions page anyway.
+        // The popup has everything anyway.
       }
     }
   });

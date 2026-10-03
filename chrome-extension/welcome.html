@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Welcome to Keepr</title>
+<style>
+  :root { --bg: #f9fafb; --card: #ffffff; --text: #111827; --muted: #4b5563; --line: #e5e7eb; --primary: #4f46e5; --primary-text: #ffffff; --ok: #047857; --danger: #b91c1c; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111827; --card: #1f2937; --text: #f9fafb; --muted: #cbd5e1; --line: #374151; --primary: #818cf8; --primary-text: #111827; --ok: #6ee7b7; --danger: #fca5a5; }
+  }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 560px; margin: 40px auto; padding: 0 16px; display: flex; flex-direction: column; gap: 14px; }
+  h1 { font-size: 22px; margin: 0 0 6px; }
+  .step { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+  .step h2 { font-size: 15px; margin: 0; }
+  .step p { margin: 0; color: var(--muted); }
+  .code { font: 700 28px/1.1 ui-monospace, "Cascadia Mono", monospace; letter-spacing: 4px; }
+  .ok { color: var(--ok); font-weight: 600; }
+  .error { color: var(--danger); }
+  button { align-self: flex-start; font: inherit; border-radius: 8px; padding: 7px 14px; cursor: pointer; border: 1px solid var(--primary); background: var(--primary); color: var(--primary-text); font-weight: 600; }
+  button.secondary { background: transparent; color: var(--text); border-color: var(--line); font-weight: 400; }
+  .version { color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Keepr for Google Messages</h1>
+  <section class="step" id="step-pin">
+    <h2>1 · Pin Keepr</h2>
+    <p>Click the puzzle piece in Chrome's toolbar, then the pin next to Keepr.</p>
+  </section>
+  <section class="step" id="step-link">
+    <h2>2 · Link with Keepr</h2>
+    <div id="keepr-welcome-link" aria-live="polite"></div>
+  </section>
+  <section class="step" id="step-sync">
+    <h2>3 · Sync from Keepr</h2>
+    <p>In Keepr: Dashboard → Sync Android.</p>
+  </section>
+  <p class="version" id="keepr-version"></p>
+</main>
+<script src="welcome.js"></script>
+</body>
+</html>

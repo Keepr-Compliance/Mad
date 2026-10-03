@@ -1260,27 +1260,8 @@ export function registerRcsImportHandlers(): void {
     }, { module: LOG_TAG }),
   );
 
-  // BACKLOG-3666: Settings / the Sync flow → a one-time pairing code (5 min,
-  // 5 tries, single use) to type into the Keepr box in Google Messages.
-  ipcMain.handle(
-    "rcs-import:pair-code",
-    wrapHandler(async (): Promise<{ success: true; code: string; expiresAt: string } | { success: false; error: string }> => {
-      const userId = await currentUserId();
-      if (!userId) return { success: false, error: "Sign in to Keepr first." };
-      const { code, expiresAt } = pairingAuth.issueCode(userId);
-      return { success: true, code, expiresAt: new Date(expiresAt).toISOString() };
-    }, { module: LOG_TAG }),
-  );
-
-  ipcMain.handle(
-    "rcs-import:pair-cancel",
-    wrapHandler(async (_event: unknown, args?: unknown): Promise<{ success: true }> => {
-      // Live (E): a panel closing drops only ITS code, never one another panel shows now.
-      const code = args && typeof args === "object" ? (args as { code?: unknown }).code : undefined;
-      pairingAuth.cancelCode(typeof code === "string" ? code : undefined);
-      return { success: true };
-    }, { module: LOG_TAG }),
-  );
+  // C4 (UX redesign): Keepr no longer makes pairing codes — the extension's
+  // popup makes the link code (C1). The old IPCs are gone.
 
   // C1 (UX redesign): Keepr's "Enter the code from your browser" screen.
   ipcMain.handle(
@@ -1335,9 +1316,6 @@ export function registerRcsImportHandlers(): void {
           // BACKLOG-3666: the extension is paired with this Keepr, for this user.
           extensionPaired: userId ? pairingAuth.isPaired(userId) : false,
           // SR: the pairing code shown was used up by wrong attempts.
-          pairCodeBurned: pairingAuth.codeBurned(),
-          // Live (E): the code's state now (active / expired / burned / none).
-          pairCodeState: pairingAuth.codeState(),
         },
       };
     }, { module: LOG_TAG }),

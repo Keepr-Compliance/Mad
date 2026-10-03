@@ -98,3 +98,18 @@ describe("LinkBrowserPanel", () => {
     expect(cleanLinkCode("12-34 56789")).toBe("123456");
   });
 });
+
+// C4 (founder): Keepr never makes a pairing code any more. Mutation: the
+// old IPC brought back → red.
+describe("no Keepr-made codes (C4)", () => {
+  it("no pair-code / pair-cancel IPC in the preload or the handlers", () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fs = require("fs") as typeof import("fs");
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const path = require("path") as typeof import("path");
+    const root = path.join(__dirname, "..", "..", "..", "..", "..");
+    for (const f of ["electron/preload/rcsImportBridge.ts", "electron/handlers/rcsImportHandlers.ts", "src/services/rcsImportService.ts"]) {
+      expect([f, /rcs-import:pair-(code|cancel)|pairCode\(/.test(fs.readFileSync(path.join(root, f), "utf8"))]).toEqual([f, false]);
+    }
+  });
+});
