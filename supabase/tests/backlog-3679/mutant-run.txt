@@ -29,7 +29,7 @@ KILLED|m06-any-invitation-token
 == m07-no-own-invite-select-policy  MUTATION APPLIED: >   FOR SELECT TO service_role
 FAIL|k03 callback finds the pending invite|OK <null>
 FAIL|k03 callback UPDATE links the invite|OK rows=0
-FAIL|k03 linked row: caller, same role/org, active, token cleared|{"id": "{inv_a}", "role": "agent", "user_id": null, "joined_at": null, "created_at": "2026-10-03T05:23:48.115686+00:00", "idp_groups": null, "invited_at": "2026-10-03T05:23:48.115686+00:00", "invited_by": "{u_c}", "updated_at": "2026-10-03T05:23:48.115686+00:00", "invited_email": "invitee-3679@example.test", "license_status": "pending", "provisioned_at": null, "provisioned_by": "invite", "scim_synced_at": null, "last_invited_at": null, "organization_id": "{org1}", "invitation_token": "tok-3679-a", "group_sync_enabled": false, "invitation_expires_at": "2026-10-10T05:23:48.115686+00:00", "provisioning_metadata": null}
+FAIL|k03 linked row: caller, same role/org, active, token cleared|{"id": "{inv_a}", "role": "agent", "user_id": null, "joined_at": null, "created_at": "2026-10-03T05:35:12.258141+00:00", "idp_groups": null, "invited_at": "2026-10-03T05:35:12.258141+00:00", "invited_by": "{u_c}", "updated_at": "2026-10-03T05:35:12.258141+00:00", "invited_email": "invitee-3679@example.test", "license_status": "pending", "provisioned_at": null, "provisioned_by": "invite", "scim_synced_at": null, "last_invited_at": null, "organization_id": "{org1}", "invitation_token": "tok-3679-a", "group_sync_enabled": false, "invitation_expires_at": "2026-10-10T05:35:12.258141+00:00", "provisioning_metadata": null}
 KILLED|m07-no-own-invite-select-policy
 == m08-policy-reads-auth-users  MUTATION APPLIED: >     AND invited_email = (SELECT u.email FROM auth.users u WHERE u.id = auth.uid())::text
 FAIL|k02 admin Edit role|ERR 42501 permission denied for table users
@@ -60,18 +60,23 @@ FAIL|k08 accept policy is TO authenticated with a WITH CHECK|
 KILLED|m15-policy-to-public
 == m16-no-org-lock  MUTATION APPLIED: 
 SURVIVED|m16-no-org-lock
-== m17-admin-org-condition-dropped  MUTATION APPLIED: >      AND public.is_org_admin(v_uid, OLD.organization_id) THEN
+== m17-admin-org-condition-dropped  MUTATION APPLIED: 
 SURVIVED|m17-admin-org-condition-dropped
 == mA-guard-uses-NEW-org  MUTATION APPLIED: >      AND public.is_org_admin(v_uid, NEW.organization_id)
 SURVIVED|mA-guard-uses-NEW-org
 == mB-withcheck-no-email  MUTATION APPLIED: 
 SURVIVED|mB-withcheck-no-email
-== c18-no-org-lock+no-admin-org-condition  MUTATION APPLIED: >      AND public.is_org_admin(v_uid, OLD.organization_id) THEN
-FAIL|k99 admin edit of a member row keeps its organization|OK rows=1
-FAIL|k99 admin edit of a pending invite keeps its organization|OK rows=1
+== m22-admin-may-change-user-id  MUTATION APPLIED: >      AND NEW.organization_id IS NOT DISTINCT FROM OLD.organization_id THEN
+FAIL|k99c admin edit of a member row keeps its user_id|OK rows=1
+FAIL|k99c admin edit clearing user_id|OK rows=1
+FAIL|k99c rows and the other personal membership unchanged|
+KILLED|m22-admin-may-change-user-id
+== c18-no-org-lock+no-admin-org-condition  MUTATION APPLIED: 
+FAIL|k99d admin of both organizations cannot move a member row|OK rows=1
 KILLED|c18-no-org-lock+no-admin-org-condition
-== c19-A+no-org-lock+no-admin-org-condition  MUTATION APPLIED: >      AND public.is_org_admin(v_uid, NEW.organization_id) THEN
+== c19-A+no-org-lock+no-admin-org-condition  MUTATION APPLIED: >      AND public.is_org_admin(v_uid, NEW.organization_id)
 FAIL|k99b admin of the target organization cannot pull a row in|OK rows=1
+FAIL|k99d admin of both organizations cannot move a member row|OK rows=1
 KILLED|c19-A+no-org-lock+no-admin-org-condition
 == m21-guard-frees-invited-email  MUTATION APPLIED: >   v_free text[] := ARRAY['user_id', 'joined_at', 'license_status', 'invitation_token', 'updated_at', 'invited_email'];
 SURVIVED|m21-guard-frees-invited-email

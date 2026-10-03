@@ -12,7 +12,7 @@ PASS|k02 admin of another org refused|OK rows=0
 == k03-invitee-callback-accepts.sql
 PASS|k03 callback finds the pending invite|OK {inv_a}
 PASS|k03 callback UPDATE links the invite|OK rows=1
-PASS|k03 linked row: caller, same role/org, active, token cleared|{"id": "{inv_a}", "role": "agent", "user_id": "{u_a}", "joined_at": "2026-10-03T05:23:01.289319+00:00", "created_at": "2026-10-03T05:23:01.289319+00:00", "idp_groups": null, "invited_at": "2026-10-03T05:23:01.289319+00:00", "invited_by": "{u_c}", "updated_at": "2026-10-03T05:23:01.289319+00:00", "invited_email": "invitee-3679@example.test", "license_status": "active", "provisioned_at": null, "provisioned_by": "invite", "scim_synced_at": null, "last_invited_at": null, "organization_id": "{org1}", "invitation_token": null, "group_sync_enabled": false, "invitation_expires_at": "2026-10-10T05:23:01.289319+00:00", "provisioning_metadata": null}
+PASS|k03 linked row: caller, same role/org, active, token cleared|{"id": "{inv_a}", "role": "agent", "user_id": "{u_a}", "joined_at": "2026-10-03T05:34:59.403369+00:00", "created_at": "2026-10-03T05:34:59.403369+00:00", "idp_groups": null, "invited_at": "2026-10-03T05:34:59.403369+00:00", "invited_by": "{u_c}", "updated_at": "2026-10-03T05:34:59.403369+00:00", "invited_email": "invitee-3679@example.test", "license_status": "active", "provisioned_at": null, "provisioned_by": "invite", "scim_synced_at": null, "last_invited_at": null, "organization_id": "{org1}", "invitation_token": null, "group_sync_enabled": false, "invitation_expires_at": "2026-10-10T05:34:59.403369+00:00", "provisioning_metadata": null}
 PASS|k03 personal membership retired by existing trigger|
 PASS|k03 linked invitee cannot then change role|OK rows=0
 == k04-invitee-attacks-refused.sql
@@ -76,3 +76,10 @@ PASS|k99 admin edit of a pending invite keeps its organization|ERR 42501 organiz
 PASS|k99 admin edit changing only the organization|ERR 42501 organization_id cannot be changed
 PASS|k99 rows unchanged|
 PASS|k99b admin of the target organization cannot pull a row in|ERR 42501 organization_id cannot be changed
+PASS|k99c admin edit of a member row keeps its user_id|ERR 42501 Invite acceptance can only link the signed-in user
+PASS|k99c admin edit of a pending invite keeps its user_id|ERR 42501 Invite acceptance can only link the signed-in user
+PASS|k99c admin edit clearing user_id|ERR 42501 Invite acceptance can only link the signed-in user
+PASS|k99c rows and the other personal membership unchanged|
+PASS|k99c admin role edit still works|OK rows=1
+PASS|k99d admin of both organizations cannot move a member row|ERR 42501 organization_id cannot be changed
+PASS|k99d admin of both organizations cannot move a pending invite|ERR 42501 organization_id cannot be changed

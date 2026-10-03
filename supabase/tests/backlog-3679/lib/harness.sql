@@ -6,7 +6,7 @@ CREATE FUNCTION pg_temp.id(p_name text) RETURNS uuid LANGUAGE sql IMMUTABLE AS $
   SELECT md5('backlog-3679:' || p_name)::uuid $f$;
 CREATE FUNCTION pg_temp.id_names() RETURNS SETOF text LANGUAGE sql IMMUTABLE AS $f$
   SELECT unnest(ARRAY['u_a','u_b','u_c','u_d','u_e','org1','org2','org_pa',
-                      'inv_a','inv_d','inv_exp','m_admin1','m_member','m_admin2','m_pa']) $f$;
+                      'inv_a','inv_d','inv_exp','m_admin1','m_member','m_admin2','m_pa','org_pb','m_pb','m_c_o2']) $f$;
 CREATE FUNCTION pg_temp.subst(p text) RETURNS text LANGUAGE plpgsql AS $f$
 DECLARE n text; BEGIN
   FOR n IN SELECT pg_temp.id_names() LOOP p := replace(p, '{' || n || '}', pg_temp.id(n)::text); END LOOP;

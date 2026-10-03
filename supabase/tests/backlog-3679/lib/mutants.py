@@ -12,7 +12,7 @@ MUTANTS = {
         "-- trigger removed",
         "k04-invitee-attacks-refused k08-auth-users-stays-closed"),
     "m02-guard-skips-everyone": (
-        "IF v_uid IS NOT NULL\n     AND public.is_org_admin(v_uid, OLD.organization_id)\n     AND NEW.organization_id IS NOT DISTINCT FROM OLD.organization_id THEN",
+        "IF v_uid IS NOT NULL\n     AND public.is_org_admin(v_uid, OLD.organization_id)\n     AND NEW.organization_id IS NOT DISTINCT FROM OLD.organization_id\n     AND NEW.user_id IS NOT DISTINCT FROM OLD.user_id THEN",
         "IF true THEN",
         "k04-invitee-attacks-refused"),
     "m03-no-column-diff": (
@@ -72,8 +72,8 @@ MUTANTS = {
         "",
         "k99-organization-unchanged"),
     "m17-admin-org-condition-dropped": (
-        "     AND public.is_org_admin(v_uid, OLD.organization_id)\n     AND NEW.organization_id IS NOT DISTINCT FROM OLD.organization_id THEN",
-        "     AND public.is_org_admin(v_uid, OLD.organization_id) THEN",
+        "     AND public.is_org_admin(v_uid, OLD.organization_id)\n     AND NEW.organization_id IS NOT DISTINCT FROM OLD.organization_id\n",
+        "     AND public.is_org_admin(v_uid, OLD.organization_id)\n",
         "k99-organization-unchanged"),
     "mA-guard-uses-NEW-org": (
         "public.is_org_admin(v_uid, OLD.organization_id)",
@@ -83,6 +83,10 @@ MUTANTS = {
         "  WITH CHECK (\n    user_id = (SELECT auth.uid())\n    AND invited_email IS NOT NULL\n    AND lower(btrim(invited_email)) = lower(btrim(COALESCE((SELECT auth.jwt()) ->> 'email', '')))\n  );",
         "  WITH CHECK (\n    user_id = (SELECT auth.uid())\n  );",
         "k99-organization-unchanged k04-invitee-attacks-refused k05-other-user-refused"),
+    "m22-admin-may-change-user-id": (
+        "\n     AND NEW.user_id IS NOT DISTINCT FROM OLD.user_id THEN",
+        " THEN",
+        "k99-organization-unchanged"),
     # compound: the layers under each single mutant above, removed together
     "c18-no-org-lock+no-admin-org-condition": (
         ["m16-no-org-lock", "m17-admin-org-condition-dropped"],
