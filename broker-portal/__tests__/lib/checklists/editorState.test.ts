@@ -24,7 +24,9 @@ import {
   isDirty,
   moveItem,
   removeItem,
+  emptyEditor,
   toSavePayload,
+  toSaveRequest,
   updateItem,
   validateSavePayload,
   type EditorState,
@@ -205,5 +207,44 @@ describe('validateSavePayload — boundaries swept', () => {
 
   it('a valid payload has no errors', () => {
     expect(hasErrors(validateSavePayload(payload()))).toBe(false);
+  });
+});
+
+describe('BACKLOG-3618 — Send with submissions (toSaveRequest)', () => {
+  const own = (include: boolean): EditorState => fromTemplate({ name: 'Mine', description: null, includeInSubmission: include }, ROWS);
+
+  it('a brokerage template has no switch and never sends the field', () => {
+    const state = fromTemplate({ name: 'Brokerage', description: null }, ROWS);
+    expect(state.includeInSubmission).toBeNull();
+    expect(toSaveRequest(state, { ...state, name: 'Renamed' })).not.toHaveProperty('include_in_submission');
+  });
+
+  it.each([true, false])('unchanged (%s) is omitted: the database keeps the stored value', (value) => {
+    const initial = own(value);
+    expect(toSaveRequest(initial, { ...initial, name: 'Renamed' })).not.toHaveProperty('include_in_submission');
+  });
+
+  it.each([
+    [true, false],
+    [false, true],
+  ])('changed %s -> %s is sent', (from, to) => {
+    const initial = own(from);
+    expect(toSaveRequest(initial, { ...initial, includeInSubmission: to }).include_in_submission).toBe(to);
+  });
+
+  it('the switch alone makes the editor dirty', () => {
+    const initial = own(true);
+    expect(isDirty(initial, { ...initial, includeInSubmission: false })).toBe(true);
+    expect(isDirty(initial, { ...initial })).toBe(false);
+  });
+
+  it('a new own template starts on; a new brokerage template has no switch', () => {
+    expect(emptyEditor(true).includeInSubmission).toBe(true);
+    expect(emptyEditor().includeInSubmission).toBeNull();
+  });
+
+  it('validation refuses a non-boolean switch value', () => {
+    const payload = { ...toSavePayload(own(true)), include_in_submission: 'no' } as unknown as SavePayload;
+    expect(hasErrors(validateSavePayload(payload))).toBe(true);
   });
 });

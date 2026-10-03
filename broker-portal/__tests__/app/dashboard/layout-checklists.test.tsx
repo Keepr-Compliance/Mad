@@ -2,7 +2,7 @@
  * The dashboard layout hands the Sidebar the gate's answer — BACKLOG-3474 (A11).
  *
  * The Checklists entry must agree with the route: the layout derives
- * `showChecklists` from isChecklistEditorEnabled() (lib/checklist-access.ts),
+ * `showChecklists` from isChecklistPageEnabled() (lib/checklist-access.ts),
  * the same helper the route uses, never from the role alone. An admin whose org
  * has the feature off must not see the entry.
  */
@@ -17,7 +17,7 @@ const mockGetUser = jest.fn();
 // (an ordered many-read), so the stub is the PostgREST emulator.
 const mockEmulator = createPostgrestEmulator();
 const mockGetImpersonationSession = jest.fn();
-const mockIsChecklistEditorEnabled = jest.fn();
+const mockIsChecklistPageEnabled = jest.fn();
 
 jest.mock('@/lib/supabase/server', () => ({
   createClient: async () => ({
@@ -29,7 +29,7 @@ jest.mock('@/lib/impersonation', () => ({
   getImpersonationSession: () => mockGetImpersonationSession(),
 }));
 jest.mock('@/lib/checklist-access', () => ({
-  isChecklistEditorEnabled: () => mockIsChecklistEditorEnabled(),
+  isChecklistPageEnabled: () => mockIsChecklistPageEnabled(),
 }));
 jest.mock('next/navigation', () => ({
   redirect: () => {
@@ -56,21 +56,21 @@ beforeEach(() => {
 
 describe('DashboardLayout — showChecklists', () => {
   it('is false for an admin when the gate refuses (feature off) [A11]', async () => {
-    mockIsChecklistEditorEnabled.mockResolvedValue(false);
+    mockIsChecklistPageEnabled.mockResolvedValue(false);
     const props = await shellProps();
     expect(props.showChecklists).toBe(false);
-    expect(mockIsChecklistEditorEnabled).toHaveBeenCalledTimes(1);
+    expect(mockIsChecklistPageEnabled).toHaveBeenCalledTimes(1);
   });
 
   it('is true when the gate allows', async () => {
-    mockIsChecklistEditorEnabled.mockResolvedValue(true);
+    mockIsChecklistPageEnabled.mockResolvedValue(true);
     expect((await shellProps()).showChecklists).toBe(true);
   });
 
   it('is false during impersonation without asking the gate', async () => {
     mockGetImpersonationSession.mockResolvedValue({ target_email: 't@example.test', target_name: 'T' });
-    mockIsChecklistEditorEnabled.mockResolvedValue(true);
+    mockIsChecklistPageEnabled.mockResolvedValue(true);
     expect((await shellProps()).showChecklists).toBe(false);
-    expect(mockIsChecklistEditorEnabled).not.toHaveBeenCalled();
+    expect(mockIsChecklistPageEnabled).not.toHaveBeenCalled();
   });
 });
