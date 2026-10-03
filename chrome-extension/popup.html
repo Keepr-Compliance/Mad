@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Keepr</title>
+<style>
+  :root {
+    --bg: #ffffff; --text: #111827; --muted: #4b5563; --line: #e5e7eb;
+    --primary: #4f46e5; --primary-text: #ffffff; --danger: #b91c1c; --ok: #047857;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #1f2937; --text: #f9fafb; --muted: #cbd5e1; --line: #374151; --primary: #818cf8; --primary-text: #111827; --danger: #fca5a5; --ok: #6ee7b7; }
+  }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { width: 280px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+  .head { display: flex; align-items: center; gap: 8px; font-weight: 700; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.ok { background: var(--ok); }
+  .dot.bad { background: var(--danger); }
+  .line { text-align: center; }
+  .muted { color: var(--muted); font-size: 12px; text-align: center; }
+  .code { font: 700 30px/1.1 ui-monospace, "Cascadia Mono", monospace; letter-spacing: 4px; text-align: center; }
+  .error { color: var(--danger); font-size: 12px; text-align: center; }
+  .buttons { display: flex; flex-direction: column; gap: 6px; }
+  button { font: inherit; border-radius: 8px; padding: 7px 10px; cursor: pointer; border: 1px solid var(--line); background: transparent; color: var(--text); }
+  button.primary { background: var(--primary); color: var(--primary-text); border-color: var(--primary); font-weight: 600; }
+  button.link { border: none; padding: 2px; color: var(--muted); font-size: 12px; text-decoration: underline; }
+  button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<main id="keepr-popup" aria-live="polite"></main>
+<script src="popup.js"></script>
+</body>
+</html>

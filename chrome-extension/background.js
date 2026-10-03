@@ -309,6 +309,40 @@ async function popupState() {
   };
 }
 
+const MESSAGES_URL = "https://messages.google.com/web/conversations";
+const KEEPR_LINK_URL = "keepr://link";
+
+/** C2 "Go to Google Messages": the open Messages tab, else a new one. */
+async function openMessages() {
+  try {
+    const tabs = await chrome.tabs.query({ url: "https://messages.google.com/web/*" });
+    if (tabs && tabs.length > 0 && typeof tabs[0].id === "number") {
+      await chrome.tabs.update(tabs[0].id, { active: true });
+      if (typeof tabs[0].windowId === "number" && chrome.windows) await chrome.windows.update(tabs[0].windowId, { focused: true });
+      return { ok: true };
+    }
+    await chrome.tabs.create({ url: MESSAGES_URL });
+    return { ok: true };
+  } catch (_err) {
+    return { ok: false };
+  }
+}
+
+/**
+ * C2 "Open Keepr" while Keepr is not running (or while linking): keepr://link
+ * starts Keepr and opens its link screen (the OS asks the user once). The tab
+ * the protocol needs is closed again.
+ */
+async function openApp() {
+  try {
+    const tab = await chrome.tabs.create({ url: KEEPR_LINK_URL, active: false });
+    if (tab && typeof tab.id === "number") setTimeout(() => void chrome.tabs.remove(tab.id).catch(() => undefined), 3000);
+    return { ok: true };
+  } catch (_err) {
+    return { ok: false };
+  }
+}
+
 /** "0.3.9" < "0.3.10". Missing parts count as 0. */
 function compareVersions(a, b) {
   const pa = String(a || "0").split(".").map((n) => parseInt(n, 10) || 0);
@@ -557,6 +591,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case "keepr-popup-state":
       // C2: the popup asks what to show each time it opens.
       popupState().then(sendResponse, fail);
+      return true;
+    case "keepr-open-messages":
+      openMessages().then(sendResponse, fail);
+      return true;
+    case "keepr-open-app":
+      openApp().then(sendResponse, fail);
       return true;
     case "keepr-link-start":
       linkStart().then(sendResponse, fail);
