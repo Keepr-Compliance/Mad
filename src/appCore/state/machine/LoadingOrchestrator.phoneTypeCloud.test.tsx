@@ -66,7 +66,7 @@ const store = {
 let localReadCount = 0;
 
 const mockApi = {
-  auth: { getCurrentUser: jest.fn(), preValidateSession: jest.fn(), checkEmailOnboarding: jest.fn() },
+  auth: { getCurrentUser: jest.fn(), preValidateSession: jest.fn() },
   system: {
     hasEncryptionKeyStore: jest.fn(), initializeSecureStorage: jest.fn(), onInitStage: jest.fn(),
     getInitStage: jest.fn(), checkAllConnections: jest.fn(), checkPermissions: jest.fn(),
@@ -121,7 +121,6 @@ beforeEach(() => {
   mockApi.auth.preValidateSession.mockReturnValue(new Promise(() => {}));
   mockApi.system.onInitStage.mockReturnValue(jest.fn());
   mockApi.system.getInitStage.mockResolvedValue({ stage: "complete" });
-  mockApi.auth.checkEmailOnboarding.mockResolvedValue({ success: true, completed: false });
   mockApi.system.checkAllConnections.mockResolvedValue({
     success: true, google: { connected: true }, microsoft: { connected: false },
   });

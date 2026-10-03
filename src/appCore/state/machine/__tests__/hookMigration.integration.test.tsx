@@ -77,7 +77,6 @@ const mockApi = {
   },
   auth: {
     completeEmailOnboarding: jest.fn().mockResolvedValue({ success: true }),
-    checkEmailOnboarding: jest.fn().mockResolvedValue({ success: true, completed: false }),
   },
   system: {
     checkAllConnections: jest.fn().mockResolvedValue({ success: true }),
@@ -101,6 +100,7 @@ const completeUserData = {
   hasEmailConnected: true,
   needsDriverSetup: false,
   fda: "granted" as const,
+  setup: "finished" as const,
 };
 
 // Test states

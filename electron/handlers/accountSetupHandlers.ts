@@ -29,6 +29,22 @@ export interface GetAccountSetupResult {
 
 const MODULE = "AccountSetup";
 
+/**
+ * Upper bound on the server read. Phase 4 (the loading screen) waits for this
+ * answer, so a hung request must not hold the app: past this, the cache answers.
+ */
+export const ACCOUNT_SETUP_READ_TIMEOUT_MS = 8000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`account setup read timed out after ${ms} ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 /** The session file's offline cache of the record, or null. Never throws. */
 async function readCachedFinishedAt(): Promise<string | null> {
   try {
@@ -73,10 +89,13 @@ export async function getAccountSetup(): Promise<GetAccountSetupResult> {
   }
 
   try {
-    const [record, preferences] = await Promise.all([
-      supabaseService.getAccountSetupRecord(userId),
-      supabaseService.getPreferences(userId).catch(() => ({}) as Record<string, unknown>),
-    ]);
+    const [record, preferences] = await withTimeout(
+      Promise.all([
+        supabaseService.getAccountSetupRecord(userId),
+        supabaseService.getPreferences(userId).catch(() => ({}) as Record<string, unknown>),
+      ]),
+      ACCOUNT_SETUP_READ_TIMEOUT_MS,
+    );
 
     const finishedAt = record.onboardingCompletedAt;
     const setup: AccountSetup = finishedAt ? "finished" : "not-finished";

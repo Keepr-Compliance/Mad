@@ -264,7 +264,7 @@ class InitializationBroadcaster {
         timer = setTimeout(() => {
           // BACKLOG-1842 (resume-at-step fix round): a real timeout here means
           // EVERY db-ready-gated consumer (getCurrentUser, get-phone-type,
-          // check-email-onboarding, check-all-connections, verify-user-in-
+          // check-all-connections, verify-user-in-
           // local-db, the onboarding resume-marker flow) is about to degrade
           // to its transient/fallback path for this launch — worth knowing
           // about in aggregate, not just per-caller. One event here covers
