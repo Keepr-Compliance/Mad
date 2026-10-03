@@ -55,6 +55,8 @@ export type RcsJobKind = "transaction" | "cache";
 
 /** BACKLOG-3658: the label every Sync button shows for a cache job. */
 export const RCS_CACHE_JOB_LABEL = "all Android texts";
+/** SR (2026-10-02): at most this many deal chats in a claim's must-see list (the page checks at most 300 chats). */
+export const RCS_DEAL_CHATS_MAX = 300;
 
 export interface RcsJobProgress {
   listed: number;
@@ -191,6 +193,13 @@ export interface RcsJobClaim {
   /** Live (0.3.15): the full floor, and chats switched back on — read to it whatever their age. Ids only. */
   floor?: string;
   pendingConversationIds?: string[];
+  /**
+   * SR (2026-10-02): chats on a live deal not yet read back to their deal's
+   * audit start — the list scan goes past the settings floor until it has
+   * seen them, never past `dealFloor` (the oldest such start). Ids only.
+   */
+  dealConversationIds?: string[];
+  dealFloor?: string;
   since?: string;
 }
 
@@ -278,6 +287,8 @@ export class RcsImportJob {
   /** Live (0.3.15): the full floor, and the chats switched back on (read to it whatever their age). */
   floorISO: string | null = null;
   pendingConversationIds: string[] = [];
+  dealConversationIds: string[] = [];
+  dealFloorISO: string | null = null;
   userId: string | null = null;
   /** BACKLOG-3658: own numbers known before this job (persisted), excluded from the first chat. */
   seededOwnNumbers = new Set<string>();
@@ -369,6 +380,9 @@ export class RcsImportJob {
         contactsWithoutPhoneCount: 0,
         ...(this.floorISO ? { floor: this.floorISO } : {}),
         ...(this.pendingConversationIds.length > 0 ? { pendingConversationIds: [...this.pendingConversationIds] } : {}),
+        ...(this.dealConversationIds.length > 0 && this.dealFloorISO
+          ? { dealConversationIds: [...this.dealConversationIds], dealFloor: this.dealFloorISO }
+          : {}),
       };
     }
     this.stage = "Looking for this transaction's chats";
@@ -563,7 +577,12 @@ export class RcsJobRegistry {
     since: string,
     ownNumbers: readonly string[] = [],
     readingOlder = false,
-    full: { floorISO?: string; pendingConversationIds?: readonly string[] } = {},
+    full: {
+      floorISO?: string;
+      pendingConversationIds?: readonly string[];
+      dealConversationIds?: readonly string[];
+      dealFloorISO?: string | null;
+    } = {},
   ): RcsImportJob {
     const running = this.active();
     if (running) return running;
@@ -574,6 +593,8 @@ export class RcsJobRegistry {
     job.readingOlder = readingOlder;
     job.floorISO = full.floorISO ?? null;
     job.pendingConversationIds = [...(full.pendingConversationIds ?? [])].slice(0, 500);
+    job.dealConversationIds = [...(full.dealConversationIds ?? [])].slice(0, RCS_DEAL_CHATS_MAX);
+    job.dealFloorISO = full.dealFloorISO ?? null;
     for (const n of participantKey(ownNumbers).split(",").filter(Boolean)) job.seededOwnNumbers.add(n);
     this.job = job;
     return job;

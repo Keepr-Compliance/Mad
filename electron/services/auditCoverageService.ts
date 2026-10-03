@@ -34,6 +34,7 @@ import {
 } from "./db/auditCoverageSql";
 import { isExpansionStale, getDeepestImportStart } from "./db/messageImportStateService";
 import { getRcsCacheRun } from "./db/rcsCacheRunsDbService";
+import { getChatCoverage, linkedChatHashes } from "./db/rcsChatCoverageDbService";
 import permissionService from "./permissionService";
 import logService from "./logService";
 import { computeTransactionDateRange } from "../utils/emailDateRange";
@@ -111,6 +112,45 @@ export function getSourceCoverage(userId: string): SourceCoverage[] {
 }
 
 /**
+ * SR (2026-10-02): one transaction's text coverage. For Google Messages, the
+ * per-thread coverage of the chats LINKED to this transaction is preferred:
+ * a deal chat may be read further back than the months setting. Each linked
+ * chat counts as far back as the earlier of its own row and the source row;
+ * the transaction is covered as far as its LEAST covered linked chat. No
+ * linked chat (or a read failure) falls back to the source row, which can
+ * only over-warn. Never throws.
+ */
+export function getTransactionSourceCoverage(userId: string, transactionId: string): SourceCoverage[] {
+  const coverage = getSourceCoverage(userId);
+  try {
+    const gm = coverage.find((c) => c.source === "google_messages");
+    if (!gm) return coverage;
+    const hashes = linkedChatHashes(transactionId, userId);
+    if (hashes.length === 0) return coverage;
+    const own = getChatCoverage(userId, hashes);
+    const source = gm.coveredSince ? Date.parse(gm.coveredSince) : NaN;
+    let least: number | null = null;
+    for (const h of hashes) {
+      const row = own.get(h);
+      const mine = row ? Date.parse(row) : NaN;
+      const eff = Number.isFinite(mine) && Number.isFinite(source) ? Math.min(mine, source)
+        : Number.isFinite(mine) ? mine
+          : source;
+      if (!Number.isFinite(eff)) return coverage; // one linked chat not covered at all: the source row says it
+      if (least === null || eff > least) least = eff;
+    }
+    if (least === null) return coverage;
+    const coveredSince = new Date(least).toISOString();
+    return coverage.map((c) => (c === gm ? { ...c, coveredSince } : c));
+  } catch (error) {
+    logService.warn("[SR 2026-10-02] per-thread coverage failed (source coverage used)", "AuditCoverage", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return coverage;
+  }
+}
+
+/**
  * Which sources do not reach back to the audit start — only the CHOSEN source
  * and sources the user has texts from (SR). A source with no full read yet is
  * "never"; one whose floor is more than a day after the start is "later".
@@ -167,7 +207,7 @@ export function getTransactionTextCoverage(
     );
     if (!txn || !isLiveTransactionStatus(txn.status)) return { success: true, auditStartISO: null, gaps: [] };
     const auditStartISO = computeTransactionDateRange(txn).start.toISOString();
-    return { success: true, auditStartISO, gaps: sourceCoverageGaps(getSourceCoverage(userId), auditStartISO, chosen) };
+    return { success: true, auditStartISO, gaps: sourceCoverageGaps(getTransactionSourceCoverage(userId, transactionId), auditStartISO, chosen) };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { success: false, auditStartISO: null, gaps: [], error: message };
@@ -393,7 +433,7 @@ export async function checkExportCompleteness(
       expansionStale,
       messagesImporterAvailable,
       // BACKLOG-3663: informational only — never changes `complete`.
-      sourceGaps: sourceCoverageGaps(getSourceCoverage(userId), auditStartISO, null),
+      sourceGaps: sourceCoverageGaps(getTransactionSourceCoverage(userId, transactionId), auditStartISO, null),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

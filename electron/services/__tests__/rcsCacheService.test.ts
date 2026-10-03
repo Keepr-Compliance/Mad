@@ -33,7 +33,11 @@ import {
   cacheRunCoverage,
   cacheRunReachedFloor,
   cacheWindow,
+  chatFloorDecision,
   clampSinceDays,
+  effectiveChatCoverageMs,
+  pickDealChats,
+  settingsStartISO,
   cancelOnSessionChange,
   cacheSavedFromCommit,
   consentToRecordOnSync,
@@ -331,6 +335,26 @@ describe("cacheWindow", () => {
     expect(w.limits.protectedSpans).toEqual([{ startMs, endMs: null }]);
   });
 
+  // SR (2026-10-02): the job floor is the SETTINGS floor; a deal's audit
+  // period widens only that deal's chats (/match floorMs). Mutations: the
+  // plan's widened fetchStartISO used as the job floor → red; a deal span
+  // setting the job-wide "reading older" → red.
+  it("deal audit periods never widen the job floor or set reading older job-wide", () => {
+    const january = "2026-01-10T00:00:00.000Z";
+    const widenedPlan = {
+      ...plan(january),
+      overrides: [{ kind: "window-extended-by-deals", requestedStartISO: threeMonths, effectiveStartISO: january }],
+    };
+    expect(settingsStartISO(widenedPlan)).toBe(threeMonths);
+    expect(settingsStartISO(plan(threeMonths))).toBe(threeMonths);
+    const w = cacheWindow({
+      nowMs: NOW, lastFinishedAt: "2026-09-30T08:00:00.000Z", plan: widenedPlan, isPackaged: true, coveredSince: threeMonths,
+    });
+    expect(w.limits.floorMs).toBe(Date.parse(threeMonths));
+    expect(w.readingOlder).toBe(false);
+    expect(w.since).toBe("2026-09-29T08:00:00.000Z");
+  });
+
   it("dev override: honoured only when NOT packaged; it skips the incremental rule (W3)", () => {
     const dev = cacheWindow({ nowMs: NOW, lastFinishedAt: "2026-09-30T08:00:00.000Z", plan: plan(threeMonths), sinceDays: 400, isPackaged: false });
     expect(dev.devOverrideDays).toBe(400);
@@ -372,5 +396,53 @@ describe("session changes and a running Sync (R9)", () => {
     ["a save with no user id", { kind: "saved" as const, userId: null }, "u-1", true, false],
   ])("%s", (_label, change, owner, active, cancel) => {
     expect(cancelOnSessionChange(change, owner, active)).toBe(cancel);
+  });
+});
+
+// SR (2026-10-02): one chat's floor. Mutations: no 3650-day clamp → red; no
+// tolerance (a chat covered to within a day re-read) → red; a deal later than
+// the settings floor widening → red; pickDealChats keeping a Don't-sync chat
+// or ignoring max → red.
+describe("chatFloorDecision / pickDealChats (per-chat widening)", () => {
+  const settings = Date.parse("2026-08-15T00:00:00.000Z");
+  const jan = Date.parse("2026-01-10T00:00:00.000Z");
+
+  it("a deal older than the settings floor: the chat's floor is the deal's start; widen until covered", () => {
+    expect(chatFloorDecision({ nowMs: NOW, settingsFloorMs: settings, dealStartMs: jan, coveredSinceMs: null }))
+      .toEqual({ floorMs: jan, widen: true, widenDays: Math.round((settings - jan) / DAY) });
+    expect(chatFloorDecision({ nowMs: NOW, settingsFloorMs: settings, dealStartMs: jan, coveredSinceMs: settings }).widen).toBe(true);
+    // Covered to within a day of the deal's start: not read again.
+    expect(chatFloorDecision({ nowMs: NOW, settingsFloorMs: settings, dealStartMs: jan, coveredSinceMs: jan + DAY - 1 }))
+      .toMatchObject({ floorMs: jan, widen: false });
+    expect(chatFloorDecision({ nowMs: NOW, settingsFloorMs: settings, dealStartMs: jan, coveredSinceMs: jan + DAY + 1 }).widen).toBe(true);
+  });
+
+  it("no deal, or a deal inside the settings window: the settings floor (null)", () => {
+    expect(chatFloorDecision({ nowMs: NOW, settingsFloorMs: settings, dealStartMs: null, coveredSinceMs: null }).floorMs).toBeNull();
+    expect(chatFloorDecision({ nowMs: NOW, settingsFloorMs: settings, dealStartMs: settings + DAY, coveredSinceMs: null }).floorMs).toBeNull();
+    expect(chatFloorDecision({ nowMs: NOW, settingsFloorMs: settings, dealStartMs: settings, coveredSinceMs: null }).floorMs).toBeNull();
+  });
+
+  it("never more than 3650 days back", () => {
+    expect(chatFloorDecision({ nowMs: NOW, settingsFloorMs: settings, dealStartMs: Date.parse("1990-01-01T00:00:00.000Z"), coveredSinceMs: null }).floorMs)
+      .toBe(NOW - 3650 * DAY);
+  });
+
+  it("effective coverage: the earlier of the chat's own and the source's", () => {
+    expect(effectiveChatCoverageMs("2026-01-10T00:00:00.000Z", "2026-08-15T00:00:00.000Z")).toBe(jan);
+    expect(effectiveChatCoverageMs(null, "2026-08-15T00:00:00.000Z")).toBe(settings);
+    expect(effectiveChatCoverageMs("2026-01-10T00:00:00.000Z", null)).toBe(jan);
+    expect(effectiveChatCoverageMs(null, null)).toBeNull();
+  });
+
+  it("pickDealChats: not yet covered, not Don't-sync, oldest first, at most max", () => {
+    const starts = new Map([["h-old", Date.parse("2025-12-01T00:00:00.000Z")], ["h-jan", jan], ["h-off", jan], ["h-done", jan], ["h-new", settings + DAY]]);
+    const own = new Map([["h-done", "2026-01-10T00:00:00.000Z"]]);
+    const picked = pickDealChats({
+      nowMs: NOW, settingsFloorMs: settings, starts, own, sourceCoveredSince: "2026-08-15T00:00:00.000Z", excluded: new Set(["h-off"]), max: 300,
+    });
+    expect(picked.map((p) => p.chatHash)).toEqual(["h-old", "h-jan"]);
+    expect(pickDealChats({ nowMs: NOW, settingsFloorMs: settings, starts, own, sourceCoveredSince: null, excluded: new Set(), max: 1 }))
+      .toHaveLength(1);
   });
 });

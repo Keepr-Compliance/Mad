@@ -48,6 +48,12 @@ export function clampSinceDays(value: unknown): number | null {
 export interface CachePlanInput {
   /** The months setting's lower bound, widened for deal audit periods; null = All time. */
   fetchStartISO: string | null;
+  /**
+   * What the plan did beyond the user's selection. SR (2026-10-02): the cache's
+   * job floor is the SETTINGS floor — a deal's audit period widens only that
+   * deal's chats (/match floorMs), never every chat.
+   */
+  overrides?: ReadonlyArray<{ kind: string; requestedStartISO: string | null }>;
   /** Max messages outside protected spans; null = Unlimited. */
   effectiveCap: number | null;
   /** Deal audit periods (Apple-epoch nanoseconds). */
@@ -58,11 +64,12 @@ export interface CachePlanInput {
  * BACKLOG-3658: a cache Sync's window and limits, from the SAME settings as
  * every other message source (resolveImportPlanForUser):
  *
- *  - floor = the months setting (All time → 3650 days);
+ *  - floor = the months setting (All time → 3650 days) — NOT widened by deal
+ *    audit periods (SR 2026-10-02: per chat, see chatFloorDecision);
  *  - the page's `since` = max(floor, last finished − 1 day) — incremental;
  *  - NO max-messages cap for this source (founder, 2026-10-01: a total cap
  *    comes later): the plan's `effectiveCap` is NOT applied. The date
- *    floor alone limits the cache (the audit periods still widen it).
+ *    floor alone limits the cache.
  *
  * DEV ONLY: `sinceDays` (1..3650) replaces the floor AND skips the
  * incremental rule — to test a longer window — but only when the build is
@@ -76,9 +83,10 @@ export function cacheWindow(input: {
   isPackaged: boolean;
   /**
    * BACKLOG-3663: how far back the cache is known to reach (a run that read
-   * down to its floor). When the floor is now EARLIER (the months setting or
-   * a deal's audit period widened) — or no run reached its floor yet — the
-   * page reads down to the floor again ("Reading older texts…").
+   * down to its floor). When the floor is now EARLIER (the months setting
+   * widened) the page reads down to it again ("Reading older texts…"). A
+   * deal's audit period never does this job-wide (SR 2026-10-02): it widens
+   * only its own chats, per chat (/match floorMs).
    */
   coveredSince?: string | null;
 }): { since: string; limits: CacheLimits; devOverrideDays: number | null; readingOlder: boolean } {
@@ -88,7 +96,8 @@ export function cacheWindow(input: {
   if (devOverrideDays !== null) {
     floorMs = input.nowMs - devOverrideDays * DAY_MS;
   } else {
-    const planStart = input.plan.fetchStartISO ? Date.parse(input.plan.fetchStartISO) : NaN;
+    const startISO = settingsStartISO(input.plan);
+    const planStart = startISO ? Date.parse(startISO) : NaN;
     floorMs = Number.isFinite(planStart) ? Math.max(oldest, planStart) : oldest;
   }
   const covered = input.coveredSince ? Date.parse(input.coveredSince) : NaN;
@@ -106,6 +115,82 @@ export function cacheWindow(input: {
   }));
   // Date only: the max-messages setting does not apply to the cache (cap null).
   return { since, limits: { floorMs, cap: null, protectedSpans }, devOverrideDays, readingOlder };
+}
+
+/** The plan's start WITHOUT the deal widening: the user's months selection (null = All time). */
+export function settingsStartISO(plan: CachePlanInput): string | null {
+  const byDeals = (plan.overrides ?? []).find((o) => o.kind === "window-extended-by-deals");
+  return byDeals ? byDeals.requestedStartISO : plan.fetchStartISO;
+}
+
+/** A chat counts as covered to a floor when it reaches within this of it. */
+export const CHAT_COVERAGE_TOLERANCE_MS = DAY_MS;
+
+/**
+ * SR (2026-10-02): one chat's floor. A chat on a live deal whose audit start
+ * is older than the settings floor is read back to that start (never more
+ * than RCS_CACHE_MAX_DAYS); every other chat keeps the settings floor.
+ *
+ *  - floorMs: the chat's floor for the commit (older messages are dropped),
+ *    or null = the settings floor;
+ *  - widen: the page must read this chat down to floorMs now (per-chat
+ *    "reading older") — its coverage does not reach it yet;
+ *  - widenDays: how much earlier than the settings floor (telemetry).
+ */
+export function chatFloorDecision(input: {
+  nowMs: number;
+  settingsFloorMs: number;
+  dealStartMs: number | null;
+  /** The chat's effective coverage (its own row, else the source's); null = none. */
+  coveredSinceMs: number | null;
+}): { floorMs: number | null; widen: boolean; widenDays: number } {
+  const none = { floorMs: null, widen: false, widenDays: 0 };
+  if (input.dealStartMs === null || !Number.isFinite(input.dealStartMs)) return none;
+  const oldest = input.nowMs - RCS_CACHE_MAX_DAYS * DAY_MS;
+  const floorMs = Math.max(oldest, input.dealStartMs);
+  if (floorMs >= input.settingsFloorMs) return none;
+  const covered = input.coveredSinceMs !== null && Number.isFinite(input.coveredSinceMs)
+    && input.coveredSinceMs - floorMs <= CHAT_COVERAGE_TOLERANCE_MS;
+  return { floorMs, widen: !covered, widenDays: Math.round((input.settingsFloorMs - floorMs) / DAY_MS) };
+}
+
+/**
+ * SR (2026-10-02): the deal chats the claim names as must-see — those whose
+ * deal reaches past the settings floor and that are not yet read back to it
+ * (Don't-sync chats skipped), oldest floor first, at most `max`.
+ */
+export function pickDealChats(input: {
+  nowMs: number;
+  settingsFloorMs: number;
+  starts: ReadonlyMap<string, number>;
+  own: ReadonlyMap<string, string>;
+  sourceCoveredSince: string | null;
+  excluded: ReadonlySet<string>;
+  max: number;
+}): Array<{ chatHash: string; floorMs: number }> {
+  const out: Array<{ chatHash: string; floorMs: number }> = [];
+  for (const [chatHash, dealStartMs] of input.starts) {
+    if (input.excluded.has(chatHash)) continue;
+    const d = chatFloorDecision({
+      nowMs: input.nowMs,
+      settingsFloorMs: input.settingsFloorMs,
+      dealStartMs,
+      coveredSinceMs: effectiveChatCoverageMs(input.own.get(chatHash), input.sourceCoveredSince),
+    });
+    if (d.widen && d.floorMs !== null) out.push({ chatHash, floorMs: d.floorMs });
+  }
+  out.sort((a, b) => a.floorMs - b.floorMs || (a.chatHash < b.chatHash ? -1 : 1));
+  return out.slice(0, input.max);
+}
+
+/** A chat's effective coverage: the earlier of its own row and the source's (null = none). */
+export function effectiveChatCoverageMs(own: string | null | undefined, source: string | null | undefined): number | null {
+  const a = own ? Date.parse(own) : NaN;
+  const b = source ? Date.parse(source) : NaN;
+  if (Number.isFinite(a) && Number.isFinite(b)) return Math.min(a, b);
+  if (Number.isFinite(a)) return a;
+  if (Number.isFinite(b)) return b;
+  return null;
 }
 
 export interface CacheStartRefusal {

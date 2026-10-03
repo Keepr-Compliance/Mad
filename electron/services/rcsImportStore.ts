@@ -232,6 +232,11 @@ export interface RcsIncomingChat {
   conversationId: string;
   title: string;
   messages: RcsIncomingMessage[];
+  /**
+   * SR (2026-10-02): the page read this chat's history down to its floor
+   * (not cut by the cap, not unsettled, no gap). A boolean only.
+   */
+  reachedFloor?: boolean;
 }
 
 export interface RcsInsertRow {
@@ -652,6 +657,7 @@ export function parseIncomingChat(body: unknown): RcsIncomingChat | string {
     conversationId: b.conversationId,
     title: b.title,
     messages,
+    ...(b.reachedFloor === true ? { reachedFloor: true } : {}),
   };
 }
 

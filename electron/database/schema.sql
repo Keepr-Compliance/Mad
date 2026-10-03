@@ -901,6 +901,22 @@ CREATE TABLE IF NOT EXISTS rcs_cache_runs (
 -- read down to its floor. Mac reads message_import_state; iPhone and the
 -- Android companion fall back to MIN(sent_at) ("approximate") until their
 -- importers write here (follow-up).
+-- SR (2026-10-02): per-chat coverage of Google Messages, keyed by the CHAT
+-- HASH (never a conversation id). A chat on a live deal may be read further
+-- back than the months setting (to the deal's audit start); the source row
+-- below keeps its meaning (every chat down to the settings floor) and is
+-- never raised by such a chat. Written in the cache commit's transaction,
+-- only for a chat whose history reached its floor. A chat with no row is
+-- covered as far as the source row says. Cleared by Force re-import.
+CREATE TABLE IF NOT EXISTS rcs_chat_coverage (
+  user_id TEXT NOT NULL,
+  chat_hash TEXT NOT NULL,
+  covered_since DATETIME NOT NULL,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, chat_hash),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS message_source_coverage (
   user_id TEXT NOT NULL,
   source TEXT NOT NULL,                   -- iphone | mac | android_companion | google_messages

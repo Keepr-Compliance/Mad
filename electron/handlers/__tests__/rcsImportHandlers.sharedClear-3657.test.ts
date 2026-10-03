@@ -13,6 +13,7 @@
  * Mutation controls (each turns a test red):
  *   F4 either IPC clearing one source only                  → "both IPCs clear both sources"
  *   F5 the Google Messages cache state / coverage not reset  → "both IPCs clear both sources"
+ *      (SR 2026-10-02: incl. the per-chat coverage, rcs_chat_coverage)
  *   F6 a refused Google Messages clear still clearing the companion → "a refusal clears nothing"
  */
 
@@ -104,6 +105,15 @@ jest.mock("../../services/db/rcsPendingFullSyncDbService", () => ({
   clearPendingFullRead: (...a: unknown[]) => void mockPendingCleared.push(a),
   clearAllPendingFullRead: jest.fn(),
 }));
+// SR (2026-10-02): Force re-import clears the per-chat coverage too.
+jest.mock("../../services/db/rcsChatCoverageDbService", () => ({
+  clearChatCoverage: (userId: string) => void calls.push("forget chat coverage " + userId),
+  dealChatStarts: () => new Map(),
+  dealStartForChat: () => null,
+  getChatCoverage: () => new Map(),
+  latestConversationIds: () => new Map(),
+  recordChatCoverage: jest.fn(),
+}));
 jest.mock("../../services/db/rcsCacheRunsDbService", () => ({
   recordRcsCacheRun: (_u: string, run: unknown) => void mockRunRecords.push(run),
   getRcsCacheRun: () => mockLastRun,
@@ -132,6 +142,7 @@ const BOTH = [
   "clear google messages",
   "reset cache state user-1",
   "forget coverage user-1 google_messages",
+  "forget chat coverage user-1",
   "resume",
   "clear companion user-1",
 ];

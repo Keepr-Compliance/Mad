@@ -199,6 +199,13 @@ export interface RcsExtensionBridgeOptions {
    * for an older extension). Booleans only.
    */
   cacheMediaKept?: (jobId: string, userId: string, numbers: string[]) => { photos: boolean; videos: boolean };
+  /**
+   * SR (2026-10-02): this cache chat's own history floor (epoch ms) when it
+   * is on a live deal older than the settings floor and not yet read back to
+   * it — replied to /match as floorMs. null = the job's floor. Computed in
+   * Keepr from the numbers this job saw; the page never sends a floor.
+   */
+  cacheChatFloor?: (jobId: string, userId: string, conversationId: string, numbers: string[]) => number | null;
   /** SR M: the photo / video bubbles a finished Sync counted (counts only). */
   onMediaCounts?: (userId: string, counts: { photosSeen: number; videosSeen: number }) => void;
   /** BACKLOG-3658: the signed-in user now; a job of another user is cancelled. */
@@ -389,12 +396,16 @@ export class RcsExtensionBridge {
       readingOlder?: boolean;
       floorISO?: string;
       pendingConversationIds?: readonly string[];
+      dealConversationIds?: readonly string[];
+      dealFloorISO?: string | null;
     },
   ): RcsJobSnapshot | null {
     if (this.jobs.active()) return null;
     const job = this.jobs.createCache(userId, options.since, options.ownNumbers ?? [], options.readingOlder === true, {
       floorISO: options.floorISO,
       pendingConversationIds: options.pendingConversationIds,
+      dealConversationIds: options.dealConversationIds,
+      dealFloorISO: options.dealFloorISO,
     });
     this.logger.info("[RcsBridge] Cache job created");
     return this.armJob(job, options.unclaimedMs ?? 60_000);
@@ -947,7 +958,13 @@ export class RcsExtensionBridge {
         if (job.kind === "cache" && matched && this.options.cacheMediaKept && job.userId) {
           const normalized = participantKey(shown).split(",").filter(Boolean);
           const kept = this.options.cacheMediaKept(job.jobId, job.userId, normalized);
-          sendJson(res, 200, { matched, contactIds, keepPhotos: kept.photos, keepVideos: kept.videos, keepImages: kept.photos });
+          const floorMs = this.options.cacheChatFloor
+            ? this.options.cacheChatFloor(job.jobId, job.userId, conversationId, normalized)
+            : null;
+          sendJson(res, 200, {
+            matched, contactIds, keepPhotos: kept.photos, keepVideos: kept.videos, keepImages: kept.photos,
+            ...(typeof floorMs === "number" && Number.isFinite(floorMs) ? { floorMs } : {}),
+          });
           return;
         }
         sendJson(res, 200, { matched, contactIds });

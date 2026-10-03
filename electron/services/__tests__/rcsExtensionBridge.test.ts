@@ -622,9 +622,14 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
   /** What Keepr's (mocked) save records for a finished job; undefined: never answers. */
   let savedAnswer: { chats: number; messages: number; newMessages: number } | null | undefined;
   const mediaCounts: Array<[string, { photosSeen: number; videosSeen: number }]> = [];
+  const floorAsks: unknown[][] = [];
+  const reachedSeen: Array<boolean | undefined> = [];
+  const DEAL_FLOOR = Date.parse("2026-01-10T00:00:00.000Z");
 
   beforeEach(async () => {
     mediaCounts.length = 0;
+    floorAsks.length = 0;
+    reachedSeen.length = 0;
     current = "user-a";
     savedAnswer = { chats: 0, messages: 0, newMessages: 0 };
     focus = [];
@@ -637,6 +642,7 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
       importChat: jest.fn(),
       importCacheChat: async (chat, userId, people, forJob) => {
         cacheChats.push([chat.conversationId, userId, people]);
+        reachedSeen.push(chat.reachedFloor);
         stagedFor.push(forJob);
         return { received: chat.messages.length, stored: chat.messages.length, alreadyPresent: 0, linked: 0, reactions: 0, reactionsStored: 0 };
       },
@@ -664,6 +670,11 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
       // SR M: photos kept for this (contact) number; videos never in this fixture.
       cacheMediaKept: (_jobId, _userId, numbers) => ({ photos: numbers.includes("+15555550142"), videos: false }),
       onMediaCounts: (userId, counts) => void mediaCounts.push([userId, counts]),
+      // SR (2026-10-02): a deal chat (this number) has its own, earlier floor.
+      cacheChatFloor: (...a) => {
+        floorAsks.push(a);
+        return (a[3] as string[]).includes("+15555550155") ? DEAL_FLOOR : null;
+      },
       jobs: new RcsJobRegistry(),
     });
     expect(await bridge.start(0)).toBe("listening");
@@ -685,6 +696,21 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
     expect(cacheChats).toEqual([[CHAT.conversationId, "user-a", { numbers: ["+15555550142"], names: [] }]]);
     // BACKLOG-3658 atomic import: staged under THIS job.
     expect(stagedFor).toEqual([jobId]);
+  });
+
+  // SR (2026-10-02): /match carries a deal chat's own floor, computed in
+  // Keepr from the numbers this job saw; other chats get none. /chat passes
+  // the page's reachedFloor boolean on. Mutations: floorMs not replied → red;
+  // replied for every chat → red; reachedFloor dropped by the parser → red.
+  it("/match: floorMs for a deal chat only; /chat passes reachedFloor on", async () => {
+    const deal = await request(port, "POST", `/job/${jobId}/match`, EXT, JSON.stringify({ conversationId: "conv-deal", numbers: ["(555) 555-0155"] }));
+    expect(deal.body).toMatchObject({ matched: true, floorMs: DEAL_FLOOR });
+    expect(floorAsks).toEqual([[jobId, "user-a", "conv-deal", ["+15555550155"]]]);
+    const other = await request(port, "POST", `/job/${jobId}/match`, EXT, JSON.stringify({ conversationId: CHAT.conversationId, numbers: ["(555) 555-0142"] }));
+    expect(other.body).not.toHaveProperty("floorMs");
+    expect((await request(port, "POST", `/job/${jobId}/chat`, EXT, JSON.stringify({ ...CHAT, reachedFloor: true }))).status).toBe(200);
+    expect((await request(port, "POST", `/job/${jobId}/chat`, EXT, JSON.stringify({ ...CHAT, reachedFloor: "yes" }))).status).toBe(200);
+    expect(reachedSeen).toEqual([true, undefined]);
   });
 
   // History v2 / SR M. Mutation: keepPhotos always true → red.

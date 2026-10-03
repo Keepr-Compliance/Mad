@@ -252,6 +252,25 @@ describe("the cache job (BACKLOG-3658)", () => {
     });
   });
 
+  // SR (2026-10-02): the claim carries the deal chats to look for (ids) and
+  // the oldest deal start (the list scan's limit) — both or neither, at most
+  // 300 ids. Mutations: ids without the floor → red; no cap → red.
+  it("the claim: deal chats and their oldest start, both or neither", () => {
+    const { jobs } = registry();
+    const ids = Array.from({ length: 320 }, (_, i) => "d-" + i);
+    const cache = jobs.createCache("u-1", "2026-08-01T00:00:00.000Z", [], false, {
+      dealConversationIds: ids, dealFloorISO: "2026-01-10T00:00:00.000Z",
+    });
+    const claim = cache.claim(jobs.nowMs()) as Record<string, unknown>;
+    expect(claim.dealFloor).toBe("2026-01-10T00:00:00.000Z");
+    expect(claim.dealConversationIds).toEqual(ids.slice(0, 300));
+    cache.cancel(jobs.nowMs());
+    const noFloor = jobs.createCache("u-1", "2026-08-01T00:00:00.000Z", [], false, { dealConversationIds: ["d-1"], dealFloorISO: null });
+    const c2 = noFloor.claim(jobs.nowMs()) as Record<string, unknown>;
+    expect(c2).not.toHaveProperty("dealConversationIds");
+    expect(c2).not.toHaveProperty("dealFloor");
+  });
+
   it("every chat with a number is kept (no contact gate); a chat without one is not", () => {
     const { jobs } = registry();
     const cache = jobs.createCache("u-1", "2026-08-01T00:00:00.000Z");

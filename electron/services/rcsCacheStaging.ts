@@ -138,8 +138,13 @@ export interface RcsCommitWriter {
 
 /** What the user's settings allow, frozen when the job started (rcsCacheService.cacheWindow). */
 export interface CacheLimits {
-  /** Messages older than this are dropped (the months setting, widened for audit periods). */
+  /** Messages older than this are dropped (the months setting). */
   floorMs: number;
+  /**
+   * SR (2026-10-02): a chat on a live deal keeps messages back to its own,
+   * earlier floor (by chat hash; filled while the job runs, at /match).
+   */
+  chatFloorsMs?: ReadonlyMap<string, number>;
   /** Max messages outside protected spans; null = Unlimited. */
   cap: number | null;
   /** Deal audit periods: always kept, never counted against `cap`. */
@@ -202,7 +207,9 @@ export function selectForCommit(keys: readonly StagedMessageKey[], limits: Cache
   let droppedByCap = 0;
   let counted = 0;
   for (const { k, ms } of dated) {
-    if (!Number.isFinite(ms) || ms < limits.floorMs) {
+    const chatFloor = limits.chatFloorsMs?.get(k.chatHash);
+    const floor = chatFloor !== undefined && chatFloor < limits.floorMs ? chatFloor : limits.floorMs;
+    if (!Number.isFinite(ms) || ms < floor) {
       droppedByDate += 1;
       continue;
     }

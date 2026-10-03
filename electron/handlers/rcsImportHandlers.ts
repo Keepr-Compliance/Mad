@@ -35,6 +35,15 @@ import { resolveLookbackMonths } from "../services/macOSMessagesImportService/im
 import { clearRcsCacheRun, getRcsCacheRun, recordRcsCacheRun } from "../services/db/rcsCacheRunsDbService";
 import { clearAllPendingFullRead, clearPendingFullRead, listPendingFullRead } from "../services/db/rcsPendingFullSyncDbService";
 import { RCS_EXCLUSIONS_MAX } from "../services/rcsExclusions";
+import {
+  clearChatCoverage,
+  dealChatStarts,
+  dealStartForChat,
+  getChatCoverage,
+  latestConversationIds,
+  recordChatCoverage,
+} from "../services/db/rcsChatCoverageDbService";
+import { RCS_DEAL_CHATS_MAX } from "../services/rcsImportJob";
 import { forgetSourceCoverage, getSourceCoverage, recordSourceCoverage } from "../services/auditCoverageService";
 import {
   CHROME_EXTENSIONS_ADDRESS,
@@ -47,6 +56,9 @@ import {
 import {
   backfillCoverageFrom,
   cacheRunCoverage,
+  chatFloorDecision,
+  effectiveChatCoverageMs,
+  pickDealChats,
   cacheWindow,
   type CacheEndSnapshot,
   consentIsCurrent,
@@ -219,6 +231,93 @@ export const commitWriter: RcsCommitWriter = {
   imageFilename: rcsImageFilename,
 };
 
+/**
+ * SR (2026-10-02): what one cache job learned per chat (by chat hash):
+ *  - chatFloors: a deal chat's own floor (the commit keeps messages back to it);
+ *  - readFloors: the floor a chat was asked to read down to this run (widened,
+ *    a pending full read, or a full read at the settings floor);
+ *  - reached: chats the page read down to their floor (/chat reachedFloor).
+ */
+export interface CacheChatsRead {
+  readFloors: Map<string, number>;
+  reached: Set<string>;
+}
+interface CacheChatsState extends CacheChatsRead {
+  settingsFloorMs: number;
+  fullRead: boolean;
+  devOverride: boolean;
+  pendingIds: Set<string>;
+  sourceCoveredSince: string | null;
+  chatFloors: Map<string, number>;
+  widened: Set<string>;
+  maxWidenDays: number;
+}
+const cacheChatsByJob = new Map<string, CacheChatsState>();
+
+/** A cache job starts: its per-chat state (exported for the real-SQL widening test). Returns the commit's chat floors. */
+export function trackCacheChats(
+  jobId: string,
+  init: { settingsFloorMs: number; fullRead: boolean; devOverride: boolean; pendingIds: readonly string[]; sourceCoveredSince: string | null },
+): Map<string, number> {
+  const chatFloors = new Map<string, number>();
+  cacheChatsByJob.set(jobId, {
+    settingsFloorMs: init.settingsFloorMs,
+    fullRead: init.fullRead,
+    devOverride: init.devOverride,
+    pendingIds: new Set(init.pendingIds),
+    sourceCoveredSince: init.sourceCoveredSince,
+    chatFloors,
+    readFloors: new Map(),
+    reached: new Set(),
+    widened: new Set(),
+    maxWidenDays: 0,
+  });
+  return chatFloors;
+}
+
+/** The job is over: its per-chat state, once (for the commit). */
+export function takeCacheChats(jobId: string): (CacheChatsRead & { widened: number; maxWidenDays: number }) | undefined {
+  const st = cacheChatsByJob.get(jobId);
+  cacheChatsByJob.delete(jobId);
+  return st ? { readFloors: st.readFloors, reached: st.reached, widened: st.widened.size, maxWidenDays: st.maxWidenDays } : undefined;
+}
+
+/**
+ * /match (cache): this chat's own floor when a live deal reaches past the
+ * settings floor and the chat is not read back to it yet; null otherwise.
+ * Never throws (a failed read = the settings floor).
+ */
+export function cacheChatFloorFor(jobId: string, userId: string, conversationId: string, numbers: string[]): number | null {
+  const st = cacheChatsByJob.get(jobId);
+  if (!st || st.devOverride || numbers.length === 0) return null;
+  const hash = rcsChatHash(numbers);
+  if (st.fullRead || st.pendingIds.has(conversationId)) st.readFloors.set(hash, st.settingsFloorMs);
+  try {
+    const d = chatFloorDecision({
+      nowMs: Date.now(),
+      settingsFloorMs: st.settingsFloorMs,
+      dealStartMs: dealStartForChat(userId, hash, numbers),
+      coveredSinceMs: effectiveChatCoverageMs(getChatCoverage(userId, [hash]).get(hash), st.sourceCoveredSince),
+    });
+    if (d.floorMs === null) return null;
+    st.chatFloors.set(hash, d.floorMs);
+    if (!d.widen) return null;
+    st.readFloors.set(hash, d.floorMs);
+    st.widened.add(hash);
+    st.maxWidenDays = Math.max(st.maxWidenDays, d.widenDays);
+    return d.floorMs;
+  } catch (err) {
+    void logService.warn("[RcsCache] Deal floor for a chat failed (settings floor kept): " + (err instanceof Error ? err.message : String(err)), LOG_TAG);
+    return null;
+  }
+}
+
+/** /chat (cache): the page read this chat down to its floor. */
+export function noteCacheChatRead(jobId: string, numbers: readonly string[], reachedFloor: boolean | undefined): void {
+  const st = cacheChatsByJob.get(jobId);
+  if (st && reachedFloor === true && numbers.length > 0) st.reached.add(rcsChatHash(numbers));
+}
+
 /** The limits each cache job was started with (frozen at start; used by its commit). */
 const cacheLimitsByJob = new Map<string, CacheLimits>();
 /** BACKLOG-3663: each cache job's read — did it start at the floor, and where is the floor. */
@@ -280,9 +379,19 @@ export function cacheCommitInsideTransaction(
   reached: boolean,
   notSettledChats: number,
   listStop: string | null,
+  chats?: CacheChatsRead,
 ): void {
   const nowISO = new Date().toISOString();
+  // The SOURCE row: every chat down to the settings floor (a widened deal
+  // chat never raises it: read.floorISO is the settings floor).
   recordSourceCoverage(userId, "google_messages", reached && read ? read.floorISO : null, nowISO);
+  // SR (2026-10-02): each chat whose history reached its own floor this run.
+  if (chats) {
+    for (const hash of chats.reached) {
+      const floorMs = chats.readFloors.get(hash);
+      if (floorMs !== undefined) recordChatCoverage(userId, hash, new Date(floorMs).toISOString());
+    }
+  }
   // SR M: the media read asked for by a toggle is done once this commit saves.
   if (read?.mediaPending) clearPendingMediaRead(userId);
   if (read) {
@@ -312,9 +421,17 @@ async function commitCacheJob(jobId: string, userId: string, snapshot?: CacheEnd
   // L2: not-settled chats no longer block it — they are counted and shown.
   const coverage = read && snapshot ? cacheRunCoverage(read.fullRead, snapshot) : { reached: false, notSettledChats: 0 };
   const reached = coverage.reached;
+  const chats = takeCacheChats(jobId);
   const r = await cacheStaging().commit(jobId, userId, limits, commitWriter, () =>
-    cacheCommitInsideTransaction(userId, read, reached, coverage.notSettledChats, snapshot?.listStop ?? null),
+    cacheCommitInsideTransaction(userId, read, reached, coverage.notSettledChats, snapshot?.listStop ?? null, chats),
   );
+  // Telemetry (counts only): how many chats a live deal widened, and by how much.
+  if (chats) {
+    void logService.info(
+      "[RcsCache] Deal widening: dealWidenedChats=" + chats.widened + ", maxWideningDays=" + chats.maxWidenDays,
+      LOG_TAG,
+    );
+  }
   void logService.info(
     `[RcsCache] Cache Sync saved: ${r.staged} staged, ${r.kept} kept (${r.droppedByDate} older than the months setting; ` +
       `no max-messages cap for this source); ${r.chats} chats, ${r.stored} new, ${r.alreadyPresent} already there; ` +
@@ -328,6 +445,7 @@ async function commitCacheJob(jobId: string, userId: string, snapshot?: CacheEnd
 
 async function discardCacheJob(jobId: string): Promise<number> {
   cacheLimitsByJob.delete(jobId);
+  cacheChatsByJob.delete(jobId);
   cacheReadByJob.delete(jobId);
   cacheOptionsByJob.delete(jobId);
   return cacheStaging().discard(jobId);
@@ -478,6 +596,14 @@ async function startCacheJobOnce(opts: { sinceDays?: unknown }): Promise<
   const mediaPending = window.devOverrideDays === null && hasPendingMediaRead(decision.userId);
   const floorISO = new Date(window.limits.floorMs).toISOString();
   const since = mediaPending ? floorISO : window.since;
+  const pendingIds = listPendingFullRead(decision.userId);
+  // SR (2026-10-02): chats on a live deal older than the settings floor, not
+  // yet read back to it: must-see for the list scan (never past the oldest
+  // deal start). None with the dev window override.
+  const devOverride = window.devOverrideDays !== null;
+  const deal = devOverride
+    ? { ids: [] as string[], floorISO: null as string | null }
+    : dealChatsForClaim(decision.userId, window.limits.floorMs, coveredSince);
   // Only one Sync at a time: any staging left now is stale (a crash, a quit).
   await cacheStaging().discardAll();
   const job = bridge.createCacheJob(decision.userId, {
@@ -486,14 +612,23 @@ async function startCacheJobOnce(opts: { sinceDays?: unknown }): Promise<
     readingOlder: window.readingOlder || mediaPending,
     // Live (0.3.15): chats switched back on are read to the full floor.
     floorISO: new Date(window.limits.floorMs).toISOString(),
-    pendingConversationIds: listPendingFullRead(decision.userId),
+    pendingConversationIds: pendingIds,
+    dealConversationIds: deal.ids,
+    dealFloorISO: deal.floorISO,
   });
   if (!job) return { ok: false, status: 409, error: "already_syncing", message: "Keepr is already syncing." };
+  const chatFloors = trackCacheChats(job.jobId, {
+    settingsFloorMs: window.limits.floorMs,
+    fullRead: since === floorISO,
+    devOverride,
+    pendingIds,
+    sourceCoveredSince: coveredSince,
+  });
   // No consent screen (RCS_CONSENT_REQUIRED off): the first Sync records
   // consent_at + the version for audit.
   const recordVersion = consentToRecordOnSync(consent?.consentVersion);
   if (recordVersion !== null) databaseService.setRcsConsent(decision.userId, recordVersion, new Date().toISOString());
-  cacheLimitsByJob.set(job.jobId, window.limits);
+  cacheLimitsByJob.set(job.jobId, { ...window.limits, chatFloorsMs: chatFloors });
   cacheReadByJob.set(job.jobId, {
     fullRead: since === floorISO,
     mediaPending,
@@ -509,6 +644,34 @@ async function startCacheJobOnce(opts: { sinceDays?: unknown }): Promise<
     void logService.warn(`[RcsCache] DEV window override: ${window.devOverrideDays} days`, LOG_TAG);
   }
   return { ok: true, job };
+}
+
+/** The claim's deal chats (conversation ids) and the oldest of their floors. Never throws. */
+export function dealChatsForClaim(userId: string, settingsFloorMs: number, sourceCoveredSince: string | null): { ids: string[]; floorISO: string | null } {
+  try {
+    const picked = pickDealChats({
+      nowMs: Date.now(),
+      settingsFloorMs,
+      starts: dealChatStarts(userId),
+      own: getChatCoverage(userId),
+      sourceCoveredSince,
+      excluded: new Set(databaseService.rcsExclusionHashes(userId)),
+      max: RCS_DEAL_CHATS_MAX,
+    });
+    const convIds = latestConversationIds(userId, picked.map((p) => p.chatHash));
+    const ids: string[] = [];
+    let floorMs: number | null = null;
+    for (const p of picked) {
+      const id = convIds.get(p.chatHash);
+      if (!id) continue;
+      ids.push(id);
+      floorMs = floorMs === null ? p.floorMs : Math.min(floorMs, p.floorMs);
+    }
+    return { ids, floorISO: floorMs === null ? null : new Date(floorMs).toISOString() };
+  } catch (err) {
+    void logService.warn("[RcsCache] Deal chats not read (settings floor only): " + (err instanceof Error ? err.message : String(err)), LOG_TAG);
+    return { ids: [], floorISO: null };
+  }
 }
 
 /**
@@ -540,6 +703,8 @@ const bridge = new RcsExtensionBridge({
   // SR M: photos / videos kept — a transaction contact, or the job's "all chats" toggles (same rule as importCacheImage).
   cacheMediaKept: (jobId, userId, numbers) =>
     mediaKeptFor(cacheOptionsByJob.get(jobId), databaseService.rcsNumbersMatchLiveContact(userId, numbers)),
+  // SR (2026-10-02): a deal chat's own floor (Keepr computes it; the page never sends one).
+  cacheChatFloor: (jobId, userId, conversationId, numbers) => cacheChatFloorFor(jobId, userId, conversationId, numbers),
   onMediaCounts: (userId, counts) => {
     try {
       recordRcsMediaSeen(userId, counts.photosSeen, counts.videosSeen);
@@ -548,8 +713,11 @@ const bridge = new RcsExtensionBridge({
     }
   },
   // BACKLOG-3658: a cache job STAGES; only a finished job commits (atomic).
-  importCacheChat: async (chat, userId, people, jobId) =>
-    cacheStaging().stageChat(jobId, userId, chat, people, rcsChatHash(people.numbers)),
+  importCacheChat: async (chat, userId, people, jobId) => {
+    const r = await cacheStaging().stageChat(jobId, userId, chat, people, rcsChatHash(people.numbers));
+    noteCacheChatRead(jobId, people.numbers, chat.reachedFloor);
+    return r;
+  },
   importCacheImage: async (image, userId, chatHash, numbers, jobId) => {
     // SR M: photos for chats with a live transaction contact, or every chat when
     // "Download photos from all chats" is on (frozen for this job).
@@ -676,6 +844,7 @@ export async function clearGoogleMessagesWebTexts(userId: string): Promise<RcsCl
     databaseService.resetRcsCacheState(userId);
     // BACKLOG-3663: and its coverage is gone with the texts.
     forgetSourceCoverage(userId, "google_messages");
+    clearChatCoverage(userId);
     clearRcsCacheRun(userId);
     clearAllPendingFullRead(userId);
     hostWindows.broadcast(RCS_DATA_CLEARED_CHANNEL, { messagesDeleted: result.messagesDeleted });
