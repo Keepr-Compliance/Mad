@@ -1330,6 +1330,9 @@
   var ASK_TITLE = "Keepr wants to sync your texts";
   var ASK_TEXT = "Keepr asked to copy your recent Google Messages texts into the Keepr app on this computer.";
   var PAUSED_TITLE = "Sync paused";
+  /** Founder (2026-10-02): the page's stop, with an inline confirm. */
+  var STOP_SYNC_LABEL = "Stop sync";
+  var STOP_SYNC_QUESTION = "Stop the sync? Nothing from this run will be saved.";
   var PAUSED_BODY = "Keep this Chrome window visible — Sync continues when it's back.";
   PAUSE_BODIES[CONNECTING_TEXT] = CONNECTING_TEXT + " Sync continues when it's back.";
   PAUSE_BODIES[UNREACHABLE_TEXT] = UNREACHABLE_TEXT + ". Sync continues when it's back.";
@@ -1738,23 +1741,45 @@
     }
 
     if ((state === "syncing" || state === "paused") && extras && extras.cancel) {
-      // BACKLOG-3658: a running Sync's Cancel (this job only, via the bridge).
-      var cancel = button("cancel", "Cancel", "secondary");
+      // Founder (2026-10-02): "Stop sync" with an inline confirm; it cancels
+      // this job only, through the bridge (a signed job call), ended by the page.
+      var cancel = button("cancel", STOP_SYNC_LABEL, "secondary");
       cancel.style.marginTop = "10px";
       box.appendChild(cancel);
+      var confirmBox = el("div", "stop-confirm", {
+        display: "none", marginTop: "10px", padding: "8px", borderRadius: "10px",
+        border: "1px solid " + AMBER, color: p.text,
+      });
+      confirmBox.setAttribute("role", "alert");
+      confirmBox.appendChild(el("div", "stop-question", null, STOP_SYNC_QUESTION));
+      var confirmRow = el("div", null, { display: "flex", gap: "8px", marginTop: "8px" });
+      var stopYes = button("stop-yes", STOP_SYNC_LABEL, "primary");
+      var stopNo = button("stop-no", "Keep syncing", "secondary");
+      confirmRow.appendChild(stopYes);
+      confirmRow.appendChild(stopNo);
+      confirmBox.appendChild(confirmRow);
+      box.appendChild(confirmBox);
       cancel.addEventListener("click", function () {
+        confirmBox.style.display = "block";
+        cancel.style.display = "none";
+      });
+      stopNo.addEventListener("click", function () {
+        confirmBox.style.display = "none";
+        cancel.style.display = "";
+      });
+      stopYes.addEventListener("click", function () {
         if (!io.cancel) return;
-        cancel.disabled = true;
-        cancel.textContent = "Cancelling…";
+        stopYes.disabled = true;
+        stopNo.disabled = true;
+        stopYes.textContent = "Stopping…";
+        var undo = function () {
+          stopYes.disabled = false;
+          stopNo.disabled = false;
+          stopYes.textContent = STOP_SYNC_LABEL;
+        };
         Promise.resolve(io.cancel()).then(function (ok) {
-          if (!ok) {
-            cancel.disabled = false;
-            cancel.textContent = "Cancel";
-          }
-        }, function () {
-          cancel.disabled = false;
-          cancel.textContent = "Cancel";
-        });
+          if (!ok) undo();
+        }, undo);
       });
       return;
     }
@@ -1988,6 +2013,7 @@
     IDLE_CHIP_READY: IDLE_CHIP_READY,
     IDLE_CHIP_DOWN: IDLE_CHIP_DOWN,
     IDLE_CHIP_PAIR: IDLE_CHIP_PAIR,
+    STOP_SYNC_QUESTION: STOP_SYNC_QUESTION,
     PAIRED_TEXT: PAIRED_TEXT,
     IDLE_HOW: IDLE_HOW,
     idleReachability: idleReachability,
@@ -2191,7 +2217,8 @@
   var currentJobId = null;
   function cancelJob() {
     if (!currentJobId) return Promise.resolve(false);
-    return toWorker({ type: "keepr-job-api", method: "POST", path: "/job/" + currentJobId + "/cancel", body: {} })
+    // Signed (a job call); Keepr records who ended it.
+    return toWorker({ type: "keepr-job-api", method: "POST", path: "/job/" + currentJobId + "/cancel", body: { endedBy: "user_page" } })
       .then(function (r) { return !!(r && r.ok); });
   }
 

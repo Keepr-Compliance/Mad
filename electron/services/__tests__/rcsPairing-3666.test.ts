@@ -404,3 +404,26 @@ describe("signed out while a signed request is past the gate (S3)", () => {
     expect(bridge.activeJob()).toBeNull();
   });
 });
+
+// Founder (2026-10-02): the page's "Stop sync" — a signed cancel that records
+// who ended it. Mutation: endedBy ignored → red.
+describe("Stop sync on the page (ended_by=user_page)", () => {
+  it("a signed cancel with endedBy user_page cancels the job and records it", async () => {
+    const p = await pairWith(auth.issueCode("user-a").code);
+    const job = bridge.createCacheJob("user-a", { since: "2026-08-01T00:00:00.000Z" })!;
+    const path = `/job/${job.jobId}/cancel`;
+    const body = JSON.stringify({ endedBy: "user_page" });
+    const r = await post(port, path, signed(p, path, body).headers, body);
+    expect(r.status).toBe(200);
+    expect(bridge.activeJob()).toBeNull();
+    expect(bridge.getJob()).toMatchObject({ jobId: job.jobId, state: "cancelled", endedBy: "user_page" });
+  });
+
+  it("an unsigned cancel is refused (job routes are always signed)", async () => {
+    await pairWith(auth.issueCode("user-a").code);
+    const job = bridge.createCacheJob("user-a", { since: "2026-08-01T00:00:00.000Z" })!;
+    const r = await post(port, `/job/${job.jobId}/cancel`, {}, JSON.stringify({ endedBy: "user_page" }));
+    expect(r.status).toBe(401);
+    expect(bridge.activeJob()).not.toBeNull();
+  });
+});

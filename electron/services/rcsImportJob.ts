@@ -125,6 +125,8 @@ export function parseNotReached(
 }
 
 export interface RcsJobSnapshot {
+  /** Founder (2026-10-02): "user_page" when Stop sync on the page ended it. */
+  endedBy?: "user_page";
   jobId: string;
   transactionId: string;
   state: RcsJobState;
@@ -328,6 +330,7 @@ export class RcsImportJob {
         : {}),
       ...(this.saved !== undefined ? { saved: this.saved ? { ...this.saved } : null } : {}),
       ...(this.listStop ? { listStop: this.listStop } : {}),
+      ...(this.endedBy ? { endedBy: this.endedBy } : {}),
     };
   }
 
@@ -511,8 +514,12 @@ export class RcsImportJob {
     this.finishedAtMs = nowMs;
   }
 
-  cancel(nowMs: number): void {
+  /** Founder (2026-10-02): who ended a cancelled job ("user_page": Stop sync on the page). */
+  endedBy: "user_page" | undefined;
+
+  cancel(nowMs: number, endedBy?: "user_page"): void {
     if (!this.isActive) return;
+    if (endedBy) this.endedBy = endedBy;
     this.state = "cancelled";
     this.stage = "Cancelled";
     this.finishedAtMs = nowMs;

@@ -874,6 +874,19 @@ export class RcsExtensionBridge {
     // BACKLOG-3658: the page's Cancel. Only this job; unknown → 404, over → 410
     // (both answered by the check above).
     if (action === "cancel") {
+      // Founder (2026-10-02): "Stop sync" on the page says so (ended_by=user_page).
+      let endedBy: "user_page" | undefined;
+      try {
+        const raw = await readBody(req, 4096);
+        const b = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+        if (b && b.endedBy === "user_page") endedBy = "user_page";
+      } catch {
+        endedBy = undefined;
+      }
+      if (endedBy) {
+        job.cancel(this.jobs.nowMs(), endedBy);
+        this.logger.info("[RcsBridge] Sync stopped on the page (ended_by=user_page)");
+      }
       this.cancelJob(job.jobId);
       sendJson(res, 200, { ok: true });
       return;

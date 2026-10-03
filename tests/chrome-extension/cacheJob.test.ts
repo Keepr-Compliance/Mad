@@ -790,17 +790,38 @@ describe("runJob: a cache Sync", () => {
 });
 
 describe("renderOverlay: Cancel (M8)", () => {
-  it("a progress line with {cancel}, expanded, has one Cancel that asks for this job's cancel", async () => {
+  // Founder (2026-10-02): "Stop sync" asks inline first. Mutations: the
+  // confirm skipped (one click cancels) → red; "Keep syncing" cancelling → red.
+  it("a progress line with {cancel}, expanded: Stop sync asks first, then cancels this job", async () => {
     const panel = document.createElement("div");
     document.body.appendChild(panel);
     const cancel = jest.fn(async () => true);
     job.renderOverlay(panel, "Chat 1 of 3…", false, { cancel: true }, { copy: async () => true, cancel, expanded: true });
     expect(panel.querySelectorAll('[data-keepr="cancel"]')).toHaveLength(1);
     const button = panel.querySelector('[data-keepr="cancel"]') as HTMLButtonElement;
+    expect(button.textContent).toBe("Stop sync");
+    const confirm = panel.querySelector('[data-keepr="stop-confirm"]') as HTMLElement;
+    expect(confirm.style.display).toBe("none");
     button.click();
+    expect(cancel).not.toHaveBeenCalled();
+    expect(confirm.style.display).toBe("block");
+    expect(confirm.textContent).toContain("Stop the sync? Nothing from this run will be saved.");
+    (panel.querySelector('[data-keepr="stop-no"]') as HTMLButtonElement).click();
+    expect(cancel).not.toHaveBeenCalled();
+    expect(confirm.style.display).toBe("none");
+    button.click();
+    const yes = panel.querySelector('[data-keepr="stop-yes"]') as HTMLButtonElement;
+    yes.click();
     expect(cancel).toHaveBeenCalledTimes(1);
-    expect(button.disabled).toBe(true);
-    expect(button.textContent).toBe("Cancelling…");
+    expect(yes.disabled).toBe(true);
+    expect(yes.textContent).toBe("Stopping…");
+  });
+
+  it("the page's stop is a signed job call that says it was the page (ended_by=user_page)", () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const src = require("fs").readFileSync(require("path").join(__dirname, "..", "..", "chrome-extension", "job.js"), "utf8") as string;
+    // A job route (keepr-job-api: always signed by the worker), naming the page as who ended it.
+    expect(src).toContain(`type: "keepr-job-api", method: "POST", path: "/job/" + currentJobId + "/cancel", body: { endedBy: "user_page" }`);
   });
 
   it("a plain line has no Cancel, collapsed or expanded", () => {
