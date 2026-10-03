@@ -196,7 +196,11 @@ afterEach(async () => {
   // such write/delete settle before removing the temp userData dir — Windows
   // refuses to remove a directory another write is still filling.
   for (let i = 0; i < 20; i += 1) await flush();
-  rmSync(mockUserData.dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  try {
+    rmSync(mockUserData.dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  } catch {
+    // Each test has its own mkdtemp dir, so a leftover cannot affect another test.
+  }
 });
 
 // ── Online, live read ────────────────────────────────────────────────────
@@ -565,8 +569,12 @@ describe("BACKLOG-3675 P16 offline pass refresher", () => {
     mockInvoke.mockResolvedValue({ data: { pass: makePass() }, error: null });
     await service.getExportDecision("tx-r1");
     await service.getExportDecision("tx-r2");
-    // Wait for the background refresh to finish storing the pass.
-    for (let i = 0; i < 200 && !existsSync(passFile()); i += 1) await flush();
+    // Wait for the background refresh to finish storing the pass: the
+    // "stored" log line is written only after the file write has resolved.
+    const log = require("../logService").default as { info: jest.Mock };
+    const stored = () => log.info.mock.calls.some((c) => c[0] === "[Entitlement] Offline pass stored");
+    for (let i = 0; i < 200 && !stored(); i += 1) await new Promise((r) => setTimeout(r, 10));
+    expect(stored()).toBe(true);
     expect(existsSync(passFile())).toBe(true);
     expect(mockInvoke).toHaveBeenCalledTimes(1);
   });
