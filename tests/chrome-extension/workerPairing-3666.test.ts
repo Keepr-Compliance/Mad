@@ -6,17 +6,15 @@
  * service worker (background.js) against a REAL Keepr bridge (HTTP on a
  * random loopback port) running the REAL pairing gate and protocol.
  *
+ * SR (2026-10-03): the worker links only through the popup's code (C1); the
+ * legacy 8-character exchange is gone from both sides.
+ *
  * Mutations that turn this red:
  *   W1 a job call sent while unpaired                         → "unpaired"
  *   W2 a reply accepted without Keepr's signature (squatter)  → "squatter"
  *   W3 re_pair / unknown_pair not forgetting the pairing      → "re_pair"
  *   W4 the key extractable                                    → "non-extractable"
- *   W5 a wrong code stored as paired                          → "wrong code"
- *
- * EQUIVALENT (recorded, SR): skipping the worker's own cB check (finishA)
- * stays green — Keepr's /pair/finish then refuses the wrong cA (403, same
- * message), so nothing is stored. Kept as defence in depth: it is the check
- * that stops a port squatter, which has no Keepr behind it.
+ *   W6 the legacy code exchange still in the worker           → "no legacy exchange"
  */
 import * as fs from "fs";
 import * as path from "path";
@@ -100,7 +98,25 @@ async function worker(override?: (url: string, init: RequestInit) => Promise<Res
 
 const pending = { type: "keepr-check-pending" };
 
-describe("the worker pairs with Keepr (BACKLOG-3666)", () => {
+async function waitFor(check: () => Promise<boolean> | boolean, ms = 8000): Promise<void> {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    if (await check()) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error("timed out");
+}
+
+/** Link `w` the C1 way: its code, typed in Keepr by the signed-in user. */
+async function link(w: { send: (m: Record<string, unknown>) => Promise<Record<string, unknown>> }): Promise<void> {
+  const l = (await w.send({ type: "keepr-link-start" })).link as { code: string };
+  expect(auth.linkEnterCode(currentUser as string, l.code)).toEqual({ ok: true });
+  await waitFor(async () => (await w.send({ type: "keepr-pair-status" })).paired === true);
+}
+
+jest.setTimeout(20000);
+
+describe("the worker's link with Keepr (BACKLOG-3666, C1)", () => {
   it("unpaired: a job call is refused here and never sent (W1)", async () => {
     const w = await worker();
     const r = await w.send(pending);
@@ -108,11 +124,9 @@ describe("the worker pairs with Keepr (BACKLOG-3666)", () => {
     expect(w.sent).toEqual([]);
   });
 
-  it("the right code pairs; job calls are then signed and their replies verified", async () => {
+  it("linked: job calls are signed and their replies verified", async () => {
     const w = await worker();
-    const { code } = auth.issueCode("user-a");
-    expect(await w.send({ type: "keepr-pair", code: code.toLowerCase().replace(/(....)/, "$1-") })).toEqual({ ok: true });
-    expect(await w.send({ type: "keepr-pair-status" })).toEqual({ ok: true, paired: true });
+    await link(w);
     expect(rows).toHaveLength(1);
     const r = await w.send(pending);
     expect(r).toMatchObject({ ok: false, status: 404, body: { error: "no_job" } }); // signed, routed, verified
@@ -120,100 +134,62 @@ describe("the worker pairs with Keepr (BACKLOG-3666)", () => {
 
   it("the key is a non-extractable CryptoKey (W4)", async () => {
     const w = await worker();
-    await w.send({ type: "keepr-pair", code: auth.issueCode("user-a").code });
+    await link(w);
     const key = w.store.current!.key as unknown as { extractable: boolean; type: string; usages: string[] };
     expect(key.type).toBe("secret");
     expect(key.extractable).toBe(false);
     expect(key.usages).toEqual(["sign"]);
   });
 
-  it("five wrong tries use the code up: the worker says so plainly", async () => {
-    const w = await worker();
-    auth.issueCode("user-a");
-    for (let i = 0; i < 5; i++) expect((await w.send({ type: "keepr-pair", code: "AAAAAAAA" })).ok).toBe(false);
-    const r = await w.send({ type: "keepr-pair", code: "AAAAAAAA" });
-    expect(r.error).toBe("Code used up by wrong attempts — get a new code.");
-  });
-
-  it("a wrong code: refused, still unpaired (W5)", async () => {
-    const w = await worker();
-    auth.issueCode("user-a");
-    const r = await w.send({ type: "keepr-pair", code: "AAAAAAAA" });
-    expect(r.ok).toBe(false);
-    expect(String(r.error)).toMatch(/didn't match/);
-    expect(await w.send({ type: "keepr-pair-status" })).toEqual({ ok: true, paired: false });
-    expect(rows).toEqual([]);
-  });
-
-  // A process squatting Keepr's port, without the code Keepr shows.
-  it("a squatter can't complete pairing, and can't answer a paired worker (W2)", async () => {
+  // A process squatting Keepr's port, without the code typed in Keepr.
+  it("a squatter can't complete a link, and can't answer a linked worker (W2)", async () => {
     const fake = (status: number, body: unknown) =>
       new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+    let pA = "";
     const squat = await worker((url, init) => {
       const p = new URL(url).pathname;
-      if (p === "/pair/start") {
-        const pA = JSON.parse(String(init.body)).pA;
-        const guess = P.respondB(P.newCode(), pA);
-        return Promise.resolve(fake(200, { pairId: "squat", pB: guess.pB, cB: guess.cB }));
+      if (p === "/link/start") {
+        pA = JSON.parse(String(init.body)).pA;
+        return Promise.resolve(fake(200, { sessionId: "squat", expiresInMs: 120000 }));
       }
-      if (p === "/pair/finish") return Promise.resolve(fake(200, { ok: true, paired: true }));
+      if (p === "/link/poll") {
+        // It guesses the code.
+        const guess = P.respondB("000001", pA);
+        return Promise.resolve(fake(200, { state: "answered", pB: guess.pB, cB: guess.cB }));
+      }
+      if (p === "/link/finish") return Promise.resolve(fake(429, { error: "too_many_tries" }));
       return undefined;
     });
-    const r = await squat.send({ type: "keepr-pair", code: "QWERTY23" });
-    expect(r.ok).toBe(false);
+    await squat.send({ type: "keepr-link-start" });
+    await waitFor(async () => ((await squat.send({ type: "keepr-link-state" })).link as { status: string }).status === "failed");
     expect(await squat.send({ type: "keepr-pair-status" })).toEqual({ ok: true, paired: false });
 
-    // Paired for real, then the squatter answers a job call (unsigned, or signed with a guess).
+    // Linked for real, then the squatter answers a job call (unsigned, or signed with a guess).
     let squatting = false;
     const w = await worker((url) => (squatting && new URL(url).pathname.startsWith("/job/") ? Promise.resolve(fake(200, { jobId: "x" })) : undefined));
-    await w.send({ type: "keepr-pair", code: auth.issueCode("user-a").code });
+    await link(w);
     squatting = true;
     expect(await w.send(pending)).toMatchObject({ ok: false, status: 0, body: { error: "unverified" } });
   });
 
-  it("Keepr says re_pair (another user signed in), or no longer knows the pairing: forgotten (W3)", async () => {
+  it("Keepr says re_pair (another user signed in), or no longer knows the link: forgotten (W3)", async () => {
     const w = await worker();
-    await w.send({ type: "keepr-pair", code: auth.issueCode("user-a").code });
+    await link(w);
     currentUser = "user-b";
     expect(await w.send(pending)).toMatchObject({ ok: false, status: 401, body: { error: "not_paired" } });
     expect(await w.send({ type: "keepr-pair-status" })).toEqual({ ok: true, paired: false });
 
     currentUser = "user-a";
     const w2 = await worker();
-    await w2.send({ type: "keepr-pair", code: auth.issueCode("user-a").code });
+    await link(w2);
     auth.revoke("user-a");
     expect(await w2.send(pending)).toMatchObject({ ok: false, status: 401, body: { error: "not_paired" } });
     expect(await w2.send({ type: "keepr-pair-status" })).toEqual({ ok: true, paired: false });
   });
-  // Live (E): the worker tells Keepr of a wrong code it caught, so Keepr's
-  // count is right: the 5th wrong code uses the code up at once, and the
-  // worker says so. Mutation: no report → red (Keepr burned only at a 6th).
-  it("five wrong codes: Keepr counts them and the 5th says the code is used up", async () => {
-    const w = await worker();
-    const { code } = auth.issueCode("user-a");
-    const wrong = code === "BBBBBBBB" ? "CCCCCCCC" : "BBBBBBBB";
-    for (let i = 1; i <= 4; i++) {
-      expect(await w.send({ type: "keepr-pair", code: wrong })).toEqual({
-        ok: false, error: "That code didn't match. Check the code in Keepr and try again.",
-      });
-    }
-    expect(auth.codeBurned()).toBe(false);
-    expect(await w.send({ type: "keepr-pair", code: wrong })).toEqual({ ok: false, error: "Code used up by wrong attempts — get a new code." });
-    expect(auth.codeBurned()).toBe(true);
-  });
 
-  // Founder (live, 0.3.25): a Re-pair started in Keepr (a new code shown)
-  // revokes the pairing; the idle chip's next refresh (a signed
-  // /exclusions/list) finds it unknown, the worker forgets it, and the chip
-  // offers the code field — no user action.
-  it("a Re-pair started in Keepr: the next idle refresh forgets the pairing", async () => {
-    const w = await worker();
-    await w.send({ type: "keepr-pair", code: auth.issueCode("user-a").code });
-    expect(await w.send({ type: "keepr-pair-status" })).toEqual({ ok: true, paired: true });
-    auth.issueCode("user-a"); // Settings › Re-pair
-    expect(await w.send({ type: "keepr-exclusions-list" })).toMatchObject({ ok: false, status: 401, body: { error: "not_paired" } });
-    expect(await w.send({ type: "keepr-pair-status" })).toEqual({ ok: true, paired: false });
-    // Unpaired now: sent unsigned (no pairing to fail on).
-    expect((await w.send({ type: "keepr-exclusions-list" })).status).not.toBe(401);
+  // SR (2026-10-03): nothing can mint an 8-character code any more.
+  // Mutation: the legacy exchange kept in the worker → red.
+  it("no legacy exchange left in the worker (W6)", () => {
+    expect(SOURCE).not.toMatch(/pairWithCode|"\/pair\/start"|case "keepr-pair":/);
   });
 });

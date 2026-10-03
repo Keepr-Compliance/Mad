@@ -354,44 +354,6 @@ function compareVersions(a, b) {
   return 0;
 }
 
-/**
- * LEGACY (BACKLOG-3666 8-character codes made by Keepr): no page offers it
- * any more (C4) — the popup links (C1). Kept, with Keepr's /pair/* endpoints,
- * only until 2026-12-01 (LEGACY_PAIR_ENDPOINTS_REMOVE_AFTER; merge notes).
- * The extension side of SPAKE2 with the code Keepr shows. → {ok} | {ok:false, error}
- */
-async function pairWithCode(codeText) {
-  const P = pairLib();
-  if (!P) return { ok: false, error: "Pairing isn't available in this extension." };
-  const code = P.normalizeCode(codeText);
-  if (!code) return { ok: false, error: "Type the 8-character code Keepr shows." };
-  const a = P.startA(code);
-  const s = await rawPost("/pair/start", JSON.stringify({ pA: a.pA }));
-  if (s.status === 0) return { ok: false, error: NOT_RUNNING };
-  if (s.status !== 200 || !s.body || typeof s.body.pairId !== "string") {
-    return { ok: false, error: (s.body && s.body.message) || "Keepr refused the code. Show a new one in Keepr." };
-  }
-  let f;
-  try {
-    f = P.finishA(a.state, s.body.pB, s.body.cB);
-  } catch (_err) {
-    // Live (E): a wrong code caught here is told to Keepr, so Keepr's count is
-    // right — the 5th wrong try uses the code up at once (Keepr says so).
-    const told = await rawPost("/pair/finish", JSON.stringify({ pairId: s.body.pairId, cA: "wrong" }));
-    if (told.status === 429 && told.body && told.body.message) return { ok: false, error: told.body.message };
-    return { ok: false, error: "That code didn't match. Check the code in Keepr and try again." };
-  }
-  const key = await crypto.subtle.importKey("raw", fromHex(P.sessionKey(f.ke, s.body.pairId)), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const nonce = P.newNonce();
-  const fin = await rawPost("/pair/finish", JSON.stringify({ pairId: s.body.pairId, cA: f.cA, nonce }));
-  if (fin.status !== 200) return { ok: false, error: (fin.body && fin.body.message) || "Keepr refused the pairing." };
-  const expected = await hmacHex(key, P.replyString(200, "/pair/finish", nonce, fin.text));
-  if (!fin.sig || !P.safeEqual(fin.sig, expected)) return { ok: false, error: NOT_VERIFIED };
-  const pairing = { pairId: s.body.pairId, key, pairedAt: Date.now() };
-  await keyStore().put(pairing);
-  pairCache = pairing;
-  return { ok: true };
-}
 
 // ---------------------------------------------------------------------------
 // BACKLOG-3620: Sync jobs
@@ -588,10 +550,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return reply;
         })
         .then(sendResponse, fail);
-      return true;
-    case "keepr-pair":
-      // BACKLOG-3666: the code typed into the Keepr box or the options page.
-      pairWithCode(String(message.code || "")).then(sendResponse, fail);
       return true;
     case "keepr-popup-state":
       // C2: the popup asks what to show each time it opens.

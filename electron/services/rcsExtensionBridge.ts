@@ -246,6 +246,8 @@ const replySigners = new WeakMap<http.ServerResponse, { sign: (status: number, b
 
 /** Routes that never need a signature. */
 const PAIR_OPEN_ROUTES = new Set(["/hello", "/pair/start", "/pair/finish", "/link/start", "/link/poll", "/link/finish"]);
+/** SR: the legacy 8-character pairing is gone — an older extension is told to update. */
+export const LEGACY_PAIR_GONE_MESSAGE = "Update the Keepr extension: it now links from its toolbar button.";
 /** C1: the reversed-link routes (the popup's 6-digit code). */
 const LINK_ROUTES = new Set(["/link/start", "/link/poll", "/link/finish"]);
 /**
@@ -865,18 +867,12 @@ export class RcsExtensionBridge {
       sendJson(res, r.status, r.body);
       return "handled";
     }
-    // LEGACY 8-character codes (≤ 0.3.31 extensions): remove after
+    // LEGACY 8-character codes (≤ 0.3.31 extensions). SR (2026-10-03): gone
+    // NOW — Keepr no longer mints a code (C4), so nothing can complete them:
+    // 410, "update the extension". The code goes after
     // LEGACY_PAIR_ENDPOINTS_REMOVE_AFTER (rcsPairingAuth.ts; merge notes).
     if (path === "/pair/start" || path === "/pair/finish") {
-      const r = path === "/pair/start" ? pairing.start(json()) : pairing.finish(json());
-      if (r.signWith) {
-        const w = r.signWith;
-        replySigners.set(res, { sign: (status, body) => pairing.signReply(w.keyHex, status, path, w.nonce, body) });
-        this.logger.info("[RcsBridge] Extension paired");
-      } else if (r.status !== 200) {
-        this.logger.warn(`[RcsBridge] Pairing refused: ${String(r.body.error)}`);
-      }
-      sendJson(res, r.status, r.body);
+      sendJson(res, 410, { error: "gone", message: LEGACY_PAIR_GONE_MESSAGE });
       return "handled";
     }
     if (!signed) return null;

@@ -37,7 +37,10 @@ export interface RcsPairing {
 
 export interface PairingStore {
   get(pairId: string): RcsPairing | null;
-  /** Saves the pairing and removes the user's earlier ones (re-pair replaces). */
+  /**
+   * Saves the pairing and removes the user's earlier ones (re-pair replaces)
+   * — in ONE transaction (SR: a failed save never leaves the user unlinked).
+   */
   save(pairing: RcsPairing): void;
   existsForUser(userId: string): boolean;
   deleteForUser(userId: string): void;
@@ -400,8 +403,9 @@ export class RcsPairingAuth {
       return { status: 403, body: { error: "bad_code", triesLeft: LINK_MAX_TRIES - l.tries } };
     }
     const keyHex = this.protocol.sessionKey(l.answer.ke, l.sessionId);
-    // One linked browser per user: the old one's requests become "unknown".
-    this.revoke(l.answer.userId);
+    // One linked browser per user: the store replaces the user's old link
+    // with the new one in ONE transaction (SR) — the old one's requests
+    // become "unknown"; a failed save leaves the old link as it was.
     this.store.save({ pairId: l.sessionId, userId: l.answer.userId, keyHex });
     this.link = null;
     this.linkIntrusion = false;

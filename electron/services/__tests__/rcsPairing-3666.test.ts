@@ -14,7 +14,8 @@
  *   A4 a tampered body / bad signature accepted                 → "bad signature"
  *   A5 another user's pairing accepted                          → "re_pair"
  *   A6 an error reply left unsigned (other than unknown pairing) → "signed errors"
- *   A7 code tries unlimited / not single use / never expiring   → "code"
+ *   A7 the legacy 8-character pairing still answering           → "the legacy pairing is gone"
+ *   A11 a link replacing the old one outside one transaction    → "a failed save keeps the old link"
  *   A8 the nonce store unbounded / never evicted                → "nonce store"
  *   A9 /hello revealing more than paired yes / no               → "hello"
  *   A10 dual routes open in "required" mode                     → "dual"
@@ -26,7 +27,7 @@ jest.mock("../logService", () => {
   return { __esModule: true, default: { info: noop, warn: noop, error: noop, debug: noop } };
 });
 
-import { RcsExtensionBridge, RCS_EXTENSION_ORIGIN, RCS_MIN_EXTENSION_VERSION } from "../rcsExtensionBridge";
+import { LEGACY_PAIR_GONE_MESSAGE, RcsExtensionBridge, RCS_EXTENSION_ORIGIN, RCS_MIN_EXTENSION_VERSION } from "../rcsExtensionBridge";
 import { RcsJobRegistry } from "../rcsImportJob";
 import {
   LINK_INTERRUPTED_MESSAGE,
@@ -111,19 +112,24 @@ async function startBridge(mode: "dual" | "required" = "dual"): Promise<void> {
   port = bridge.getStatus().port;
 }
 
-/** The extension's side: pair with the code Keepr shows. → pairId + key. */
-async function pairWith(code: string): Promise<{ pairId: string; keyHex: string }> {
+/**
+ * The extension's side of the (C1) link: the popup's code, typed in Keepr by
+ * `userId`, confirmed by the extension. → pairId + key.
+ */
+async function linkWith(userId: string, code = "123456"): Promise<{ pairId: string; keyHex: string }> {
   const a = P.startA(code);
-  const s = await post(port, "/pair/start", {}, JSON.stringify({ pA: a.pA }));
+  const s = await post(port, "/link/start", {}, JSON.stringify({ pA: a.pA }));
   expect(s.status).toBe(200);
-  const f = P.finishA(a.state, s.body.pB as string, s.body.cB as string);
+  expect(auth.linkEnterCode(userId, code)).toEqual({ ok: true });
+  const poll = await post(port, "/link/poll", {}, JSON.stringify({ sessionId: s.body.sessionId }));
+  const f = P.finishA(a.state, poll.body.pB as string, poll.body.cB as string);
   const nonce = P.newNonce();
-  const fin = await post(port, "/pair/finish", {}, JSON.stringify({ pairId: s.body.pairId, cA: f.cA, nonce }));
+  const fin = await post(port, "/link/finish", {}, JSON.stringify({ sessionId: s.body.sessionId, cA: f.cA, nonce }));
   expect(fin.status).toBe(200);
-  const keyHex = P.sessionKey(f.ke, s.body.pairId as string);
+  const keyHex = P.sessionKey(f.ke, s.body.sessionId as string);
   // Keepr's success reply is signed with the new key.
-  expect(fin.sig).toBe(P.sign(keyHex, P.replyString(200, "/pair/finish", nonce, fin.text)));
-  return { pairId: s.body.pairId as string, keyHex };
+  expect(fin.sig).toBe(P.sign(keyHex, P.replyString(200, "/link/finish", nonce, fin.text)));
+  return { pairId: s.body.sessionId as string, keyHex };
 }
 
 function signed(p: { pairId: string; keyHex: string }, path: string, body = "", over: Partial<Record<"ts" | "nonce" | "sig", string>> = {}) {
@@ -145,122 +151,57 @@ afterEach(async () => {
   await bridge.stop();
 });
 
-describe("pairing (BACKLOG-3666)", () => {
-  it("pairs with the code Keepr shows, bound to the user who issued it", async () => {
-    const { code } = auth.issueCode("user-a");
-    const p = await pairWith(code);
+describe("pairing (BACKLOG-3666; linking C1)", () => {
+  it("links for the user who typed the code", async () => {
+    const p = await linkWith("user-a");
     expect(store.rows).toEqual([{ pairId: p.pairId, userId: "user-a", keyHex: p.keyHex }]);
     expect(auth.isPaired("user-a")).toBe(true);
   });
 
-  it("code: wrong code refused, at most 5 tries, single use, expires after 5 minutes (A7)", async () => {
-    const { code } = auth.issueCode("user-a");
-    // A wrong code: the extension rejects Keepr's cB; a made-up cA is refused.
-    const a = P.startA("AAAAAAAA");
-    const s = await post(port, "/pair/start", {}, JSON.stringify({ pA: a.pA }));
-    expect(() => P.finishA(a.state, s.body.pB as string, s.body.cB as string)).toThrow("bad_confirm");
-    expect((await post(port, "/pair/finish", {}, JSON.stringify({ pairId: s.body.pairId, cA: "00".repeat(32) }))).status).toBe(403);
-    for (let i = 2; i <= PAIR_CODE_MAX_TRIES; i++) {
-      expect((await post(port, "/pair/start", {}, JSON.stringify({ pA: P.startA("BBBBBBBB").pA }))).status).toBe(200);
+  // SR (2026-10-03): Keepr no longer mints 8-character codes, so the legacy
+  // exchange is gone now (410, "update the extension"). Mutation: the
+  // handlers answering again → red.
+  it("the legacy pairing is gone: /pair/start and /pair/finish → 410 (A7)", async () => {
+    for (const path of ["/pair/start", "/pair/finish"]) {
+      const r = await post(port, path, {}, JSON.stringify({ pA: P.startA("ABCDEFGH").pA }));
+      expect([path, r.status, r.body.error]).toEqual([path, 410, "gone"]);
+      expect(r.body.message).toBe(LEGACY_PAIR_GONE_MESSAGE);
     }
-    const sixth = await post(port, "/pair/start", {}, JSON.stringify({ pA: P.startA(code).pA }));
-    expect(sixth.status).toBe(429); // and the code is gone
-    // SR: said plainly — it can be an attack.
-    expect(sixth.body.message).toBe("Code used up by wrong attempts — get a new code.");
-    expect(auth.codeBurned()).toBe(true);
-    // Live (E): later attempts say burned (429), not "no code".
-    expect((await post(port, "/pair/start", {}, JSON.stringify({ pA: P.startA(code).pA }))).status).toBe(429);
-    // Single use.
-    const fresh = auth.issueCode("user-a");
-    expect(auth.codeBurned()).toBe(false); // a new code clears it
-    await pairWith(fresh.code);
-    expect((await post(port, "/pair/start", {}, JSON.stringify({ pA: P.startA(fresh.code).pA }))).status).toBe(404);
-    // Expiry.
-    const late = auth.issueCode("user-a");
-    clock += PAIR_CODE_TTL_MS + 1;
-    // Live (E): an expired code says so (410 expired), not "no code".
-    expect((await post(port, "/pair/start", {}, JSON.stringify({ pA: P.startA(late.code).pA }))).status).toBe(410);
-    expect(PAIR_CODE_MAX_TRIES).toBe(5);
-    expect(PAIR_CODE_TTL_MS).toBe(5 * 60 * 1000);
   });
 
-  it("a re-pair replaces the user's earlier pairing (the old key stops working)", async () => {
-    const first = await pairWith(auth.issueCode("user-a").code);
-    const second = await pairWith(auth.issueCode("user-a").code);
+  it("a new link replaces the user's earlier one (the old key stops working)", async () => {
+    const first = await linkWith("user-a");
+    const second = await linkWith("user-a", "654321");
     expect(store.rows.map((r) => r.pairId)).toEqual([second.pairId]);
     const r = await post(port, "/job/pending", signed(first, "/job/pending").headers);
     expect(r.body.error).toBe("unknown_pair");
   });
-  // Live (E): Keepr's own count and reasons. The extension tells Keepr of a
-  // wrong code it caught (cA "wrong"); attempts 1-4 → 403 with the tries
-  // left; the 5th wrong try burns the code AT ONCE (429); a 6th → 429 too
-  // (not "no code"); an expired code → "expired". Expiry runs from when Keepr
-  // made the code; a /pair/start does not use the code up.
-  // Mutations: no burn on the 5th → red; burned/expired reported as
-  // no_code → red; codeState not evaluating expiry now → red; an unscoped
-  // cancel dropping another panel's code → red.
-  it("wrong codes 1..6: tries left, the 5th burns at once, the 6th says burned", async () => {
-    auth.issueCode("user-a");
-    const attempt = async () => {
-      const s = await post(port, "/pair/start", {}, JSON.stringify({ pA: P.startA("BBBBBBBB").pA }));
-      if (s.status !== 200) return { start: s.status, error: s.body.error };
-      const f = await post(port, "/pair/finish", {}, JSON.stringify({ pairId: s.body.pairId, cA: "wrong" }));
-      return { start: 200, startLeft: s.body.triesLeft, finish: f.status, error: f.body.error, left: f.body.triesLeft };
+
+  // SR (2026-10-03): the old link is removed and the new one saved in ONE
+  // transaction (the store's save): a failed save leaves the old link.
+  // Mutation: a separate revoke before the save → red.
+  it("a failed save keeps the old link (A11)", async () => {
+    const first = await linkWith("user-a");
+    const realSave = store.save;
+    store.save = () => {
+      throw new Error("disk I/O error");
     };
-    expect(await attempt()).toEqual({ start: 200, startLeft: 4, finish: 403, error: "bad_code", left: 4 });
-    expect(await attempt()).toMatchObject({ finish: 403, left: 3 });
-    expect(await attempt()).toMatchObject({ finish: 403, left: 2 });
-    expect(await attempt()).toMatchObject({ finish: 403, left: 1 });
-    expect(auth.codeState()).toBe("active");
-    expect(await attempt()).toMatchObject({ start: 200, startLeft: 0, finish: 429, error: "too_many_tries" });
-    expect(auth.codeBurned()).toBe(true);
-    expect(auth.codeState()).toBe("burned");
-    expect(await attempt()).toEqual({ start: 429, error: "too_many_tries" });
-  });
-
-  it("expiry: from when Keepr made the code, reported as expired (also by codeState, at once)", async () => {
-    const { code } = auth.issueCode("user-a");
-    clock += PAIR_CODE_TTL_MS - 1;
-    expect(auth.codeState()).toBe("active");
-    clock += 2;
-    expect(auth.codeState()).toBe("expired");
-    const s = await post(port, "/pair/start", {}, JSON.stringify({ pA: P.startA(code).pA }));
-    expect(s.status).toBe(410);
-    expect(s.body.error).toBe("expired");
-    expect(auth.codeState()).toBe("expired");
-    auth.issueCode("user-a");
-    expect(auth.codeState()).toBe("active");
-  });
-
-  it("a panel closing drops only its own code", () => {
-    const first = auth.issueCode("user-a");
-    const second = auth.issueCode("user-a");
-    auth.cancelCode(first.code);
-    expect(auth.codeState()).toBe("active");
-    auth.cancelCode(second.code);
-    expect(auth.codeState()).toBe("none");
-  });
-
-  // Founder (live, 0.3.25): Re-pair dead end. Starting a Re-pair in Keepr
-  // revokes the current pairing AT ONCE — before the new code is typed — so
-  // the extension's next call is "unknown_pair" and it offers the code field.
-  // Mutation: issueCode not revoking → red.
-  it("showing a new code revokes the current pairing immediately", async () => {
-    const p = await pairWith(auth.issueCode("user-a").code);
-    expect(auth.isPaired("user-a")).toBe(true);
-    auth.issueCode("user-a");
-    expect(auth.isPaired("user-a")).toBe(false);
-    expect(store.rows).toEqual([]);
-    const r = await post(port, "/exclusions/list", signed(p, "/exclusions/list").headers);
-    expect(r.status).toBe(401);
-    expect(r.body.error).toBe("unknown_pair");
+    const a = P.startA("654321");
+    const s = await post(port, "/link/start", {}, JSON.stringify({ pA: a.pA }));
+    auth.linkEnterCode("user-a", "654321");
+    const poll = await post(port, "/link/poll", {}, JSON.stringify({ sessionId: s.body.sessionId }));
+    const f = P.finishA(a.state, poll.body.pB as string, poll.body.cB as string);
+    const fin = await post(port, "/link/finish", {}, JSON.stringify({ sessionId: s.body.sessionId, cA: f.cA, nonce: P.newNonce() }));
+    expect(fin.status).toBe(500);
+    store.save = realSave;
+    expect(store.rows.map((r) => r.pairId)).toEqual([first.pairId]);
   });
 });
 
 describe("the auth gate (BACKLOG-3666)", () => {
   let p: { pairId: string; keyHex: string };
   beforeEach(async () => {
-    p = await pairWith(auth.issueCode("user-a").code);
+    p = await linkWith("user-a");
   });
 
   it("unsigned job route → 401 not_paired; signed → routed, and the reply is signed (A1)", async () => {
@@ -365,7 +306,7 @@ describe("the auth gate (BACKLOG-3666)", () => {
 describe("headers before the body (S1)", () => {
   let p: { pairId: string; keyHex: string };
   beforeEach(async () => {
-    p = await pairWith(auth.issueCode("user-a").code);
+    p = await linkWith("user-a");
   });
 
   /** Headers and a first chunk, then the body never ends. → the reply (or "no reply"). */
@@ -453,7 +394,7 @@ describe("C1: the reversed link (the popup's code typed in Keepr)", () => {
   });
 
   it("the right code: linked for the user who typed it, replacing that user's earlier link", async () => {
-    const old = await pairWith(auth.issueCode("user-a").code);
+    const old = await linkWith("user-a", "111111");
     const a = P.startA("123456");
     const s = await post(port, "/link/start", {}, JSON.stringify({ pA: a.pA }));
     expect(auth.linkEnterCode("user-a", "123-456")).toEqual({ ok: true });
@@ -524,7 +465,7 @@ describe("signed out while a signed request is past the gate (S3)", () => {
     } as never);
     expect(await bridge.start(0)).toBe("listening");
     port = bridge.getStatus().port;
-    const p = await pairWith(auth.issueCode("user-a").code);
+    const p = await linkWith("user-a");
     const job = bridge.createCacheJob("user-a", { since: "2026-08-01T00:00:00.000Z" })!;
     const go = async (route: string, body = "") => post(port, `/job/${job.jobId}/${route}`, signed(p, `/job/${job.jobId}/${route}`, body).headers, body);
     expect((await go("claim")).status).toBe(200);
@@ -548,7 +489,7 @@ describe("signed out while a signed request is past the gate (S3)", () => {
 // who ended it. Mutation: endedBy ignored → red.
 describe("Stop sync on the page (ended_by=user_page)", () => {
   it("a signed cancel with endedBy user_page cancels the job and records it", async () => {
-    const p = await pairWith(auth.issueCode("user-a").code);
+    const p = await linkWith("user-a");
     const job = bridge.createCacheJob("user-a", { since: "2026-08-01T00:00:00.000Z" })!;
     const path = `/job/${job.jobId}/cancel`;
     const body = JSON.stringify({ endedBy: "user_page" });
@@ -559,7 +500,7 @@ describe("Stop sync on the page (ended_by=user_page)", () => {
   });
 
   it("an unsigned cancel is refused (job routes are always signed)", async () => {
-    await pairWith(auth.issueCode("user-a").code);
+    await linkWith("user-a");
     const job = bridge.createCacheJob("user-a", { since: "2026-08-01T00:00:00.000Z" })!;
     const r = await post(port, `/job/${job.jobId}/cancel`, {}, JSON.stringify({ endedBy: "user_page" }));
     expect(r.status).toBe(401);
