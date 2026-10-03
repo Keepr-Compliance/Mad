@@ -154,6 +154,21 @@ describe("C10 — user:get-account-setup", () => {
     expect((await getSetup()).setup).toBe("not-finished");
   });
 
+  it("the server beats the cache: server empty + cache finished -> not-finished, cache cleared", async () => {
+    mockGetAccountSetupRecord.mockResolvedValue({
+      found: true,
+      onboardingCompletedAt: null,
+      emailOnboardingCompletedAt: null,
+    });
+    mockLoadSession.mockResolvedValue({ user: { id: SESSION_USER }, accountSetupFinishedAt: TS });
+    const r = await getSetup();
+    expect(r.setup).toBe("not-finished");
+    expect(mockUpdateSession).toHaveBeenCalledWith({ accountSetupFinishedAt: undefined });
+    expect(mockUpdateSession).not.toHaveBeenCalledWith(
+      expect.objectContaining({ accountSetupFinishedAt: expect.any(String) }),
+    );
+  });
+
   it("server throws, cache says finished -> finished", async () => {
     mockGetAccountSetupRecord.mockRejectedValue(new Error("network down"));
     mockLoadSession.mockResolvedValue({ user: { id: SESSION_USER }, accountSetupFinishedAt: TS });
