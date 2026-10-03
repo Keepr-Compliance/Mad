@@ -2,7 +2,7 @@
  * SR M (2026-10-02): Google Messages media options and the pending media read
  * (tables rcs_media_options / rcs_pending_media, schema.sql). Local only.
  */
-import { dbGet, dbRun } from "./core/dbConnection";
+import { dbGet, dbRun, dbTransaction } from "./core/dbConnection";
 import { sql } from "./core/sqlText";
 
 export interface RcsMediaOptions {
@@ -40,16 +40,21 @@ export function setRcsMediaOptions(userId: string, next: { photosAllChats?: bool
   const prev = getRcsMediaOptions(userId);
   const photos = next.photosAllChats ?? prev.photosAllChats;
   const videos = next.videosAllChats ?? prev.videosAllChats;
-  dbRun(
-    sql`INSERT INTO rcs_media_options (user_id, photos_all_chats, videos_all_chats, updated_at)
-        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-        ON CONFLICT(user_id) DO UPDATE SET photos_all_chats = excluded.photos_all_chats,
-          videos_all_chats = excluded.videos_all_chats, updated_at = CURRENT_TIMESTAMP`,
-    [userId, photos ? 1 : 0, videos ? 1 : 0],
-  );
-  if ((photos && !prev.photosAllChats) || (videos && !prev.videosAllChats)) {
-    dbRun(sql`INSERT OR REPLACE INTO rcs_pending_media (user_id, created_at) VALUES (?, CURRENT_TIMESTAMP)`, [userId]);
-  }
+  // SR (G1): the toggles and the pending media read together, or neither.
+  // (Two tables: rcs_pending_media already exists on installed builds, and
+  // schema.sql cannot add a column to an existing table without a migration.)
+  dbTransaction(() => {
+    dbRun(
+      sql`INSERT INTO rcs_media_options (user_id, photos_all_chats, videos_all_chats, updated_at)
+          VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+          ON CONFLICT(user_id) DO UPDATE SET photos_all_chats = excluded.photos_all_chats,
+            videos_all_chats = excluded.videos_all_chats, updated_at = CURRENT_TIMESTAMP`,
+      [userId, photos ? 1 : 0, videos ? 1 : 0],
+    );
+    if ((photos && !prev.photosAllChats) || (videos && !prev.videosAllChats)) {
+      dbRun(sql`INSERT OR REPLACE INTO rcs_pending_media (user_id, created_at) VALUES (?, CURRENT_TIMESTAMP)`, [userId]);
+    }
+  });
   return getRcsMediaOptions(userId);
 }
 

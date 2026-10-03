@@ -66,6 +66,15 @@ describe("Google Messages media options (SR M)", () => {
     expect(getRcsMediaOptions(USER)).toMatchObject({ photosAllChats: true, videosAllChats: true });
   });
 
+  // SR (G1): the toggles and the pending media read in one transaction.
+  // Mutation: no dbTransaction → red (the toggle saved without its read).
+  it("a failed pending-read write leaves the toggles as they were", () => {
+    db.exec("CREATE TRIGGER fail_pending BEFORE INSERT ON rcs_pending_media BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END;");
+    expect(() => setRcsMediaOptions(USER, { videosAllChats: true })).toThrow("disk I/O error");
+    expect(getRcsMediaOptions(USER).videosAllChats).toBe(false);
+    expect(hasPendingMediaRead(USER)).toBe(false);
+  });
+
   it("the last Sync's counts are kept apart from the toggles (M4)", () => {
     setRcsMediaOptions(USER, { videosAllChats: true });
     recordRcsMediaSeen(USER, 40, 6);

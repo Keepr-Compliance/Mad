@@ -215,6 +215,16 @@ const EXEMPT: Record<string, string> = {
     "a per-folder delta loop that persists each folder's cursor only AFTER that folder is fully stored, which its own comment calls crash-safe per folder; the writes belong to different logical units by design and are separated by awaited Graph calls. NOT try/catch-exclusive (BACKLOG-3314 @0285e214c): four unseparated pairs, two of them plain sequences, so no try/catch rule would recover this slot; ensureSyncStateRow at :112 commits before the :115 throw that lands in the catch writing recordSyncFailure, and recordSyncSuccess is itself two statements (emailSyncStateService.ts:163-164). Harmless — an idempotent INSERT OR IGNORE and a failure counter — so the exemption stands",
   "electron/services/db/contactValueProvenanceBackfill.ts::relabelTypedContactValues":
     "called only from a migration — inside migration v60's migrate() at databaseService.ts:3276 — and EVERY migration is run by `const runInTransaction = currentDb.transaction(...)` at databaseService.ts:3513, verified by reading the caller, not inferred (BACKLOG-2569 re-checked these; they had drifted from :3231/:3468)",
+  // SR (G1, BACKLOG-3658 S2): the Google Messages cache commit. Every message,
+  // attachment, coverage and run row is written inside ONE db.transaction().
+  // The two writes the guard counts are the placed-files JOURNAL, which must
+  // live OUTSIDE that transaction by design: journalPlaced is written BEFORE
+  // each file move (an awaited fs rename, which no synchronous transaction
+  // can span) so a crash after the move still names the file for the next
+  // sweep; journalClear runs in finally, after the transaction committed OR
+  // rolled back. Putting either inside would lose the crash record.
+  "electron/services/rcsCacheStaging.ts::commit":
+    "its two counted writes are the placed-files journal (journalPlaced before each awaited file move, journalClear in finally), which must outlive the commit's db.transaction() so a crash between a file move and the commit is recovered by the next sweep; every message/attachment/coverage/run row is inside that one transaction",
 };
 
 /**

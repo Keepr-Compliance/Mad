@@ -834,21 +834,32 @@ export async function clearGoogleMessagesWebTexts(userId: string): Promise<RcsCl
   // SR B1: never while a cache Sync is being saved (it is moving files in).
   if (cacheSaveInFlight()) throw new Error(RCS_SAVING_MESSAGE);
   return runWithWritesPaused(bridge, () => {
+    // SR (G1): the texts and every cache record go in ONE transaction.
     const result = clearGoogleMessagesWebData(
       userId,
       databaseService.rcsClearDbOps(),
       clearFiles(),
       (m) => void logService.info(m, LOG_TAG),
+      () => resetGoogleMessagesCacheRecords(userId),
     );
-    // BACKLOG-3658: the next cache Sync starts over (60 days) and re-learns the own number.
+    hostWindows.broadcast(RCS_DATA_CLEARED_CHANNEL, { messagesDeleted: result.messagesDeleted });
+    return result;
+  });
+}
+
+/**
+ * Force re-import: the cache's records go with the texts. Called inside the
+ * clear's transaction (a nested transaction is a savepoint: all or nothing).
+ */
+export function resetGoogleMessagesCacheRecords(userId: string): void {
+  dbTransaction(() => {
+    // BACKLOG-3658: the next cache Sync starts over and re-learns the own number.
     databaseService.resetRcsCacheState(userId);
-    // BACKLOG-3663: and its coverage is gone with the texts.
+    // BACKLOG-3663: and its coverage is gone with the texts (per chat too).
     forgetSourceCoverage(userId, "google_messages");
     clearChatCoverage(userId);
     clearRcsCacheRun(userId);
     clearAllPendingFullRead(userId);
-    hostWindows.broadcast(RCS_DATA_CLEARED_CHANNEL, { messagesDeleted: result.messagesDeleted });
-    return result;
   });
 }
 

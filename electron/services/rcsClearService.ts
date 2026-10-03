@@ -103,6 +103,11 @@ export function clearGoogleMessagesWebData(
   db: RcsClearDbOps,
   files: RcsClearFs,
   log: (message: string) => void = () => {},
+  /**
+   * SR (G1): more rows to clear in the SAME transaction (the cache's state,
+   * coverage and run records): a failure leaves everything as it was.
+   */
+  insideTransaction?: () => void,
 ): RcsClearResult {
   const root = path.resolve(files.attachmentsRoot) + path.sep;
 
@@ -123,6 +128,7 @@ export function clearGoogleMessagesWebData(
       transactionsUpdated += 1;
     }
     for (const transactionId of linked) db.refreshTextThreadCount(transactionId);
+    insideTransaction?.();
     return {
       paths,
       attachmentsDeleted,

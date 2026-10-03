@@ -224,6 +224,20 @@ describe("clearGoogleMessagesWebData on the real schema (BACKLOG-3657)", () => {
     expect(result.filesDeleted).toBe(1);
   });
 
+  // SR (G1): the cache's records are cleared in the same transaction; a
+  // failure there leaves the texts too. Mutation: the hook called after the
+  // transaction → red.
+  it("a failure while clearing the cache records rolls the texts back too", () => {
+    expect(() =>
+      clearGoogleMessagesWebData(USER, rcsClearDbOps(), fsOps(), () => {}, () => {
+        throw new Error("disk I/O error");
+      }),
+    ).toThrow("disk I/O error");
+    expect(fs.existsSync(inside)).toBe(true);
+    expect(count("SELECT COUNT(*) AS n FROM messages WHERE user_id = ?", USER)).toBe(5);
+    expect(count("SELECT COUNT(*) AS n FROM attachments")).toBe(2);
+  });
+
   it("a failing statement rolls back: no file deleted, rows and counts unchanged (C3)", () => {
     const real = rcsClearDbOps();
     const failing: RcsClearDbOps = {

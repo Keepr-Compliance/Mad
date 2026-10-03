@@ -52,9 +52,14 @@ jest.mock("../../services/rcsClearService", () => {
   const actual = jest.requireActual("../../services/rcsClearService");
   return {
     ...actual,
-    clearGoogleMessagesWebData: () => {
+    clearGoogleMessagesWebData: (_u: string, _db: unknown, _fs: unknown, _log: unknown, inside?: () => void) => {
       if (gmwebThrows) throw gmwebThrows;
       calls.push("clear google messages");
+      // SR (G1): the cache records are cleared INSIDE the clear's transaction.
+      if (inside) {
+        calls.push("in the clear's transaction:");
+        inside();
+      }
       return { messagesDeleted: 50, linksDeleted: 4, filesDeleted: 2 };
     },
   };
@@ -140,6 +145,7 @@ beforeEach(() => {
 const BOTH = [
   "pause",
   "clear google messages",
+  "in the clear's transaction:",
   "reset cache state user-1",
   "forget coverage user-1 google_messages",
   "forget chat coverage user-1",
