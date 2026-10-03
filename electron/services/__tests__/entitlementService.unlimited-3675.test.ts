@@ -189,11 +189,15 @@ beforeEach(() => {
   store = require("../offlinePass/offlinePassStore");
 });
 
-afterEach(() => {
-  rmSync(mockUserData.dir, { recursive: true, force: true });
-});
-
 const flush = () => new Promise((r) => setImmediate(r));
+
+afterEach(async () => {
+  // Exports start the pass refresh without awaiting it (by design). Let any
+  // such write/delete settle before removing the temp userData dir — Windows
+  // refuses to remove a directory another write is still filling.
+  for (let i = 0; i < 20; i += 1) await flush();
+  rmSync(mockUserData.dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+});
 
 // ── Online, live read ────────────────────────────────────────────────────
 describe("BACKLOG-3675 online: live entitlement read", () => {
@@ -561,8 +565,9 @@ describe("BACKLOG-3675 P16 offline pass refresher", () => {
     mockInvoke.mockResolvedValue({ data: { pass: makePass() }, error: null });
     await service.getExportDecision("tx-r1");
     await service.getExportDecision("tx-r2");
-    await flush();
-    await flush();
+    // Wait for the background refresh to finish storing the pass.
+    for (let i = 0; i < 200 && !existsSync(passFile()); i += 1) await flush();
+    expect(existsSync(passFile())).toBe(true);
     expect(mockInvoke).toHaveBeenCalledTimes(1);
   });
 
