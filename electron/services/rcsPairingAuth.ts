@@ -90,7 +90,8 @@ export type VerifyResult =
   /** keyHex present → the error reply is signed (every error except an unknown pairing). */
   | { ok: false; status: number; error: string; keyHex?: string; nonce?: string };
 
-const NOT_PAIRED_MESSAGE = "Pair the extension with Keepr: open Keepr › Settings › Google Messages.";
+/** Live (B3): the ONE line for "not linked", in Keepr and in the extension. */
+const NOT_PAIRED_MESSAGE = "Not linked. Click the Keepr icon in Chrome's toolbar to link.";
 /** SR: 5 wrong tries burned the code — worth saying plainly (it can be an attack). */
 export const CODE_BURNED_MESSAGE = "Code used up by wrong attempts — get a new code.";
 const NO_CODE_MESSAGE = "Show a new pairing code in Keepr first.";

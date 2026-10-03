@@ -155,7 +155,7 @@ describe("rcs-import:start-cache-job window (BACKLOG-3658)", () => {
     const r = (await start()) as { success: boolean; error?: string };
     mockPaired = true;
     expect(r.success).toBe(false);
-    expect(JSON.stringify(r)).toMatch(/Pair the extension with Keepr/);
+    expect(JSON.stringify(r)).toMatch(/Not linked. Click the Keepr icon/);
     expect(created).toHaveLength(0);
   });
 

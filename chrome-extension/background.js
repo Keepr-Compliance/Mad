@@ -33,8 +33,8 @@ if (typeof importScripts === "function" && typeof KeeprPair === "undefined") {
 }
 
 const PAIR_DB = "keepr-pairing";
-const NOT_PAIRED =
-  "Pair the extension with Keepr: open Keepr › Settings › Google Messages for the code, then type it into the Keepr box in Google Messages.";
+// Live (B3): the ONE line for "not linked" (the popup links; never a code typed on the page).
+const NOT_PAIRED = "Not linked. Click the Keepr icon in Chrome's toolbar to link.";
 const NOT_VERIFIED = "Keepr's reply could not be verified. Is the real Keepr app running?";
 
 function pairLib() {
