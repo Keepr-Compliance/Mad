@@ -32,8 +32,10 @@
  * 2. Re-creating an existing function. `CREATE OR REPLACE` on a function that
  *    already exists keeps that function's grants, so the file does not widen
  *    them. Such a re-create PASSES when ALL of these hold:
- *      - a function with the same name AND the same argument types is created
- *        in a migration file that exists on the base branch;
+ *      - a function with the same name AND the same argument types still
+ *        exists after the base branch's migrations are replayed in version
+ *        order (created, and not dropped by a later base migration — a
+ *        function the base dropped is treated as new);
  *      - the file does not `DROP FUNCTION` that name (a DROP resets the ACL to
  *        the defaults, which give PUBLIC and anon EXECUTE);
  *      - the file has no GRANT to PUBLIC or anon naming that function.
@@ -65,11 +67,11 @@
  *   top-level semicolons and are not supported (none exist in the repo today).
  * - `CREATE PROCEDURE` is not checked: procedures run through CALL and are not
  *   exposed by the API.
- * - The existing-function catalog is every `CREATE FUNCTION` in the base
- *   branch's migrations. A later `DROP FUNCTION` in the base is NOT replayed,
- *   so a PR that re-creates a function the base already dropped passes through
- *   the re-create exemption even though the new function gets default grants.
- *   (False negative; reviewers should check re-creates of dropped functions.)
+ * - The existing-function catalog replays the base branch's migrations in
+ *   version order: `CREATE FUNCTION` adds a signature, a later `DROP FUNCTION`
+ *   removes it (one signature, or every overload when the DROP names no
+ *   argument list). DROPs written inside DO blocks or dynamic SQL are not
+ *   seen, and neither are functions dropped outside the migrations.
  * - The catalog does not include other files added by the same PR. File 1
  *   creating a function (with its REVOKE) and file 2 re-creating it without a
  *   REVOKE fails on file 2. Fail-safe; the fix is a one-line REVOKE.
@@ -471,16 +473,16 @@ export function parseCreateTable(stmt) {
 
 const DROP_FN_RE = /^\s*DROP\s+FUNCTION\s+(?:IF\s+EXISTS\s+)?([\s\S]*?)(?:\s+(?:CASCADE|RESTRICT))?\s*$/i;
 
-/** DROP FUNCTION -> list of dropped function names (public only). */
+/** DROP FUNCTION -> list of dropped functions { name, types|null } (public only). */
 export function parseDropFunction(stmt) {
   const m = DROP_FN_RE.exec(stmt.code);
   if (!m) return null;
-  const names = [];
+  const refs = [];
   for (const item of splitTopLevel(m[1])) {
     const t = parseObjectRef(item);
-    if (t && isPublicSchema(t.schema)) names.push(t.name);
+    if (t && isPublicSchema(t.schema)) refs.push({ name: t.name, types: t.types });
   }
-  return names;
+  return refs;
 }
 
 /** "public.f(uuid, text)" or "f" -> { schema, name, types|null } */
@@ -557,16 +559,49 @@ function hasMarker(stmt) {
   return stmt.comments.some((c) => c.split("\n").some((l) => MARKER_RE.test(l)));
 }
 
-/** Catalog of functions created in the given SQL texts: Set of sig keys. */
+/**
+ * Catalog of the functions that exist after applying the given SQL texts IN
+ * ORDER: Set of sig keys. A CREATE adds a signature; a later DROP FUNCTION
+ * removes it (by signature, or every overload when the DROP names no argument
+ * list), and a CREATE after the DROP adds it back.
+ */
 export function buildCatalog(texts) {
   const keys = new Set();
   for (const text of texts) {
     for (const stmt of lexStatements(text)) {
       const fn = parseCreateFunction(stmt);
-      if (fn && isPublicSchema(fn.schema)) keys.add(fn.key);
+      if (fn) {
+        if (isPublicSchema(fn.schema)) keys.add(fn.key);
+        continue;
+      }
+      const drops = parseDropFunction(stmt);
+      if (!drops) continue;
+      for (const d of drops) {
+        const exact = d.types === null ? null : sigKey(d.name, d.types);
+        for (const key of [...keys]) {
+          if (exact !== null ? key === exact : key.slice(0, key.indexOf("(")) === d.name) {
+            keys.delete(key);
+          }
+        }
+      }
     }
   }
   return keys;
+}
+
+/**
+ * Order migration file names the way they are applied: by the version prefix
+ * before the first "_" (so "20260313_x" comes before "20260313120000_y"), then
+ * by full name.
+ */
+export function sortMigrations(names) {
+  const version = (n) => basename(n).split("_")[0];
+  return [...names].sort((a, b) => {
+    const va = version(a);
+    const vb = version(b);
+    if (va !== vb) return va < vb ? -1 : 1;
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
 }
 
 function targetMatchesFunction(t, fn) {
@@ -628,7 +663,7 @@ export function analyzeMigration(sql, catalog = new Set()) {
     }
     const drops = parseDropFunction(stmt);
     if (drops) {
-      for (const d of drops) dropped.add(d);
+      for (const d of drops) dropped.add(d.name);
       continue;
     }
     const p = parsePrivilege(stmt);
@@ -777,7 +812,9 @@ function loadInputs(opts) {
     const baseFiles = git(["ls-tree", "-r", "--name-only", opts.base, "--", `${MIGRATIONS_DIR}/`])
       .split("\n")
       .filter((f) => f.endsWith(".sql"));
-    const catalog = buildCatalog(baseFiles.map((f) => git(["show", `${opts.base}:${f}`])));
+    const catalog = buildCatalog(
+      sortMigrations(baseFiles).map((f) => git(["show", `${opts.base}:${f}`])),
+    );
     return { files, catalog };
   }
   const files = opts.files.map((path) => {
@@ -788,9 +825,9 @@ function loadInputs(opts) {
   if (opts.catalogDir) {
     if (!existsSync(opts.catalogDir)) usage(`cannot read catalog dir ${opts.catalogDir}`);
     const skip = new Set(files.map((f) => basename(f.path)));
-    const texts = readdirSync(opts.catalogDir)
-      .filter((f) => f.endsWith(".sql") && !skip.has(f))
-      .map((f) => readFileSync(join(opts.catalogDir, f), "utf8"));
+    const texts = sortMigrations(
+      readdirSync(opts.catalogDir).filter((f) => f.endsWith(".sql") && !skip.has(f)),
+    ).map((f) => readFileSync(join(opts.catalogDir, f), "utf8"));
     catalog = buildCatalog(texts);
   }
   return { files, catalog };

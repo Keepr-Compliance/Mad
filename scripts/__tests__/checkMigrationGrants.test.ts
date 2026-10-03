@@ -25,6 +25,11 @@
  *     new_function_intentionally_public.sql       the same plus an `-- Intentionally callable by anon:` marker.
  *     new_table_no_truncate_revoke.sql    20260906000000_backlog_2077 lines 47-75, renamed.
  *     new_table_with_truncate_revoke.sql  the same plus the TRUNCATE revoke.
+ *     recreate_base_dropped_function.sql  20260924190429_backlog_3474 lines 34-136: the
+ *                                         6-argument save_checklist_template, no REVOKE.
+ *   fixtures/migration-grants/base-drop/  Verbatim 20260924190429_backlog_3474 (creates it) and
+ *                                         20261001054306_backlog_3618 (DROPs it).
+ *                                         A base catalog in which that function no longer exists.
  *
  * The inline cases below are built from the new_function_no_revoke.sql text so the SQL
  * shape (dollar-quoted plpgsql body, SECURITY DEFINER, DEFAULT args) is the real one.
@@ -325,6 +330,65 @@ describe('re-creating an existing function (catalog = base/)', () => {
   it('CREATE without OR REPLACE is never treated as a re-create', () => {
     const sql = RECREATE.replace('CREATE OR REPLACE FUNCTION', 'CREATE FUNCTION');
     expect(rules(check([sqlFile(sql)], BASE))).toEqual(['function-missing-revoke']);
+  });
+});
+
+describe('base-branch DROP FUNCTION is replayed into the catalog', () => {
+  // save_checklist_template(uuid, uuid, text, text, text, jsonb) is created in
+  // base-drop/20260924190429_backlog_3474 and DROPPED in base-drop/20261001054306_backlog_3618
+  // (which creates an 8-argument version instead). Nothing re-creates the 6-argument one.
+  const BASE_DROP = path.join(FIX, 'base-drop');
+  const RECREATE_DROPPED = path.join(FIX, 'negative', 'recreate_base_dropped_function.sql');
+  const CREATE_3474 = readFixture(path.join(BASE_DROP, '20260924190429_backlog_3474_save_checklist_template.sql'));
+  const DROP_3618 = readFixture(path.join(BASE_DROP, '20261001054306_backlog_3618_agent_checklist_templates.sql'));
+
+  function catalogDir(name: string, files: Record<string, string>): string {
+    const dir = path.join(tmp, name);
+    mkdirSync(dir, { recursive: true });
+    for (const [f, text] of Object.entries(files)) writeFileSync(path.join(dir, f), text);
+    return dir;
+  }
+
+  it('re-creating a function the base dropped is treated as new and needs the REVOKE', () => {
+    const r = check([RECREATE_DROPPED], BASE_DROP);
+    expect(r.status).toBe(1);
+    expect(r.json!.files[0].failures.map((f) => f.object)).toEqual([
+      'public.save_checklist_template(uuid,uuid,text,text,text,jsonb)',
+    ]);
+  });
+
+  it('control: with only the creating migration in the base, the same file passes as a re-create', () => {
+    const dir = catalogDir('only-create', { '20260924190429_backlog_3474_save_checklist_template.sql': CREATE_3474 });
+    const r = check([RECREATE_DROPPED], dir);
+    expect(r.status).toBe(0);
+    expect(r.json!.files[0].passes[0].reason).toBe('re-create of an existing function; its grants are unchanged');
+  });
+
+  it('a function dropped and then re-created later in the base still exists', () => {
+    const dir = catalogDir('drop-then-create', {
+      '20260924190429_backlog_3474_save_checklist_template.sql': CREATE_3474,
+      '20261001054306_backlog_3618_agent_checklist_templates.sql': DROP_3618,
+      '20261002000000_recreate.sql': CREATE_3474,
+    });
+    expect(check([RECREATE_DROPPED], dir).status).toBe(0);
+  });
+
+  it('base files replay in version order: "20260924_x" before "20260924190429_y"', () => {
+    // Lexical order would put the DROP file ("2026092419...") first and the CREATE
+    // file ("20260924_...") second, leaving the function in the catalog.
+    const dir = catalogDir('version-order', {
+      '20260924_create.sql': CREATE_3474,
+      '20260924190429_drop.sql': 'DROP FUNCTION IF EXISTS public.save_checklist_template(uuid, uuid, text, text, text, jsonb);\n',
+    });
+    expect(rules(check([RECREATE_DROPPED], dir))).toEqual(['function-missing-revoke']);
+  });
+
+  it('a DROP without an argument list removes every overload', () => {
+    const dir = catalogDir('drop-by-name', {
+      '20260924190429_backlog_3474_save_checklist_template.sql': CREATE_3474,
+      '20260925000000_drop.sql': 'DROP FUNCTION public.save_checklist_template;\n',
+    });
+    expect(rules(check([RECREATE_DROPPED], dir))).toEqual(['function-missing-revoke']);
   });
 });
 
