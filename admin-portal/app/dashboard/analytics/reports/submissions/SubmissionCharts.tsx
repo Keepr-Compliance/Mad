@@ -101,11 +101,11 @@ export function SubmissionCharts({ buckets }: { buckets: SubmissionDayBucket[] }
 
       <ChartFrame
         title="Failures per day"
-        subtitle="Failed or unknown, and did not finish, stacked. Cancelled is in the tooltip only."
+        subtitle="Failed or unknown, and did not finish or stalled, stacked. Cancelled is in the tooltip only."
         legend={
           <span className="flex items-center gap-3">
             <LegendSwatch color={COLOR_ERROR} label="failed or unknown" />
-            <LegendSwatch color={COLOR_CANCELLED} label="did not finish" />
+            <LegendSwatch color={COLOR_CANCELLED} label="did not finish or stalled" />
           </span>
         }
       >

@@ -582,7 +582,7 @@ export function failureTooltipLines(b: SubmissionDayBucket): string[] {
   if (b.attempts === 0) return [b.dayLabel, 'No submit attempts'];
   return [
     b.dayLabel,
-    `${b.failed} failed or unknown · ${b.didNotFinish} did not finish`,
+    `${b.failed} failed or unknown · ${b.didNotFinish} did not finish or stalled`,
     `${b.cancelled} cancelled · ${b.committed} committed`,
   ];
 }

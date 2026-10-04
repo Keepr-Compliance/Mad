@@ -12,6 +12,7 @@ import {
   buildOpenAttempts,
   buildSubmissionsReport,
   computeCounts,
+  failureTooltipLines,
   formatCountCell,
   isPastSweepWindow,
   isStalled,
@@ -197,6 +198,7 @@ describe('per-day buckets', () => {
       4
     );
     expect(segs.map((s) => s.color)).toEqual([COLOR_ERROR, COLOR_CANCELLED]);
+    expect(failureTooltipLines(day)[1]).toBe('2 failed or unknown · 2 did not finish or stalled');
   });
 });
 
