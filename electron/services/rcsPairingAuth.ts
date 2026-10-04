@@ -462,6 +462,11 @@ export class RcsPairingAuth {
     return { state: l.answer ? "answered" : "waiting", expiresAt: l.expiresAt, triesLeft: LINK_MAX_TRIES - l.tries, intrusion: this.linkIntrusion };
   }
 
+  /** The mockup's Cancel on Keepr's code screen: the pending link session goes. */
+  cancelLink(): void {
+    this.link = null;
+  }
+
   /** The user dismissed the intrusion warning in Keepr. */
   clearLinkIntrusion(): void {
     this.linkIntrusion = false;

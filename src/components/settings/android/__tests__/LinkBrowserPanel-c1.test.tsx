@@ -16,12 +16,14 @@ let mockLink: Link = { state: "none", intrusion: false };
 let mockLinked = false;
 const mockEnter = jest.fn(async (_code: string) => ({ success: true }) as { success: boolean; error?: string });
 const mockLinkForget = jest.fn(async () => undefined);
+const mockLinkCancel = jest.fn(async () => undefined);
 jest.mock("../../../../services/rcsImportService", () => ({
   rcsImportService: {
     linkState: async () => ({ success: true, data: { link: mockLink, linked: mockLinked } }),
     linkEnterCode: (code: string) => mockEnter(code),
     linkDismissWarning: async () => undefined,
     linkForget: () => mockLinkForget(),
+    linkCancel: () => mockLinkCancel(),
   },
 }));
 
@@ -124,6 +126,38 @@ describe("LinkBrowserPanel", () => {
     fireEvent.click(screen.getByTestId("gm-link-forget"));
     await flush();
     expect(mockLinkForget).toHaveBeenCalledTimes(1);
+  });
+
+  // The approved mockup (KeeprEnterCode, 2026-10-03): a 480 card, padding 32,
+  // gap 18, "Link your browser" 22px bold, the field 56 high with a 2px brand
+  // border, mono 28px, "000 000"; Cancel (outlined) then Link (brand) at the
+  // right, both 44 high. Mutations: a token off the mockup, the buttons
+  // swapped, Cancel not cancelling → red.
+  it("matches the mockup: card, title, field, Cancel + Link at the bottom-right", async () => {
+    mockLink = { state: "waiting", expiresAt: Date.now() + 90_000, triesLeft: 5, intrusion: false };
+    render(<LinkBrowserPanel />);
+    await flush();
+    const panel = screen.getByTestId("gm-link-panel");
+    for (const c of ["max-w-[480px]", "p-8", "gap-[18px]", "rounded-2xl", "border-[#D6D9E4]", "bg-white"]) expect(panel.className.split(" ")).toContain(c);
+    const title = screen.getByTestId("gm-link-title");
+    expect(title).toHaveTextContent("Link your browser");
+    for (const c of ["text-[22px]", "leading-7", "font-bold"]) expect(title.className.split(" ")).toContain(c);
+    expect(screen.getByText(LINK_COPY.enter)).toBeInTheDocument();
+    expect(LINK_COPY.enter).toBe("Enter the code shown in Chrome");
+    const input = screen.getByTestId("gm-link-code");
+    expect(input.getAttribute("placeholder")).toBe("000 000");
+    for (const c of ["min-h-[56px]", "border-2", "border-[#4F46E5]", "rounded-[10px]", "font-mono", "text-[28px]", "tracking-[0.2em]"]) {
+      expect(input.className.split(" ")).toContain(c);
+    }
+    const cancel = screen.getByTestId("gm-link-cancel");
+    const submit = screen.getByTestId("gm-link-submit");
+    expect(cancel.nextElementSibling).toBe(submit);
+    expect(cancel.parentElement!.className.split(" ")).toEqual(expect.arrayContaining(["flex", "justify-end", "gap-3"]));
+    for (const c of ["min-h-[44px]", "border-[#CDD1DE]", "rounded-[10px]", "font-semibold"]) expect(cancel.className.split(" ")).toContain(c);
+    for (const c of ["min-h-[44px]", "bg-[#4F46E5]", "rounded-[10px]", "font-bold", "text-white"]) expect(submit.className.split(" ")).toContain(c);
+    fireEvent.click(cancel);
+    await flush();
+    expect(mockLinkCancel).toHaveBeenCalledTimes(1);
   });
 
   it("cleanLinkCode: digits only, at most 6", () => {

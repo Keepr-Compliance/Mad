@@ -70,6 +70,7 @@ export const rcsImportBridge = {
   linkEnterCode: (args: { code: string }) => ipcRenderer.invoke("rcs-import:link-enter-code", args),
   linkDismissWarning: () => ipcRenderer.invoke("rcs-import:link-dismiss-warning"),
   linkForget: () => ipcRenderer.invoke("rcs-import:link-forget"),
+  linkCancel: () => ipcRenderer.invoke("rcs-import:link-cancel"),
   onOpenLinkScreen: (callback: () => void) => {
     const handler = () => callback();
     ipcRenderer.on("rcs-import:open-link-screen", handler);

@@ -1303,6 +1303,15 @@ export function registerRcsImportHandlers(): void {
     }, { module: LOG_TAG }),
   );
 
+  // The mockup's Cancel on the code screen: the browser's pending link goes.
+  ipcMain.handle(
+    "rcs-import:link-cancel",
+    wrapHandler(async (): Promise<{ success: true }> => {
+      pairingAuth.cancelLink();
+      return { success: true };
+    }, { module: LOG_TAG }),
+  );
+
   ipcMain.handle(
     "rcs-import:link-dismiss-warning",
     wrapHandler(async (): Promise<{ success: true }> => {

@@ -240,6 +240,15 @@ export const rcsImportService = {
     }
   },
 
+  /** The code screen's Cancel. */
+  async linkCancel(): Promise<void> {
+    try {
+      await api()?.linkCancel?.();
+    } catch {
+      /* nothing pending */
+    }
+  },
+
   /** SR (B1): Keepr's "Forget link". */
   async linkForget(): Promise<void> {
     await api()?.linkForget?.();
