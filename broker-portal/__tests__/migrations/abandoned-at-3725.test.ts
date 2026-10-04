@@ -11,7 +11,7 @@ import { join } from 'path';
 
 const REPO = join(__dirname, '../../..');
 const MIGRATIONS_DIR = join(REPO, 'supabase/migrations');
-const FILE = '20261004220000_backlog_3725_abandoned_at.sql';
+const FILE = '20261004213050_backlog_3725_abandoned_at.sql';
 const PRIOR = '20261004192647_backlog_3403_finalize_submission.sql';
 const ROLLBACK = join(REPO, 'supabase/tests/backlog-3725/rollback-3725.sql');
 

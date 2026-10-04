@@ -1,11 +1,13 @@
 # BACKLOG-3725 harness — transaction_submissions.abandoned_at
 
-Runs `supabase/migrations/20261004220000_backlog_3725_abandoned_at.sql` — the
+Runs `supabase/migrations/20261004213050_backlog_3725_abandoned_at.sql` — the
 shipped file — on a local Supabase stack, on top of the applied BACKLOG-3403
 file `20261004192647_backlog_3403_finalize_submission.sql`. It reuses the
 backlog-3403 venue prelude and fixtures. Recorded runs: `control-run.txt`,
 `mutant-run.txt`, `live/*.txt` (UUIDs masked). `rollback-3725.sql` restores
-the 3403 text verbatim. Not in CI (no database); the CI tripwire is
+the 3403 text verbatim. **Applied to production as ledger version `20261004213050` (2026-10-04).**
+`live/apply-run.txt` predates the rename and shows the earlier file name; the
+content (md5 `d92c51ab…`) is the same. Not in CI (no database); the CI tripwire is
 `broker-portal/__tests__/migrations/abandoned-at-3725.test.ts`. Nothing here can
 reach production.
 
