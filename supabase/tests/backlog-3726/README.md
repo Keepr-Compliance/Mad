@@ -1,7 +1,7 @@
 # BACKLOG-3726 harness — submission sweep
 
-Runs `supabase/migrations/20261005120000_backlog_3726_submission_sweep.sql` (and the
-schedule file `20261005120100_…`) — the shipped files — on a local Supabase stack, on top
+Runs `supabase/migrations/20261004232314_backlog_3726_submission_sweep.sql` (and the
+schedule file `20261004232511_…`) — the shipped files — on a local Supabase stack, on top
 of the applied BACKLOG-3403 file and the BACKLOG-3725 file (`abandoned_at`). Not in CI (no
 database). CI tripwires: `broker-portal/__tests__/migrations/submission-sweep-3726.test.ts`
 (migration text) and `tests/edge-functions/submissionSweep.test.ts` (Edge Function handler).
