@@ -686,6 +686,10 @@
         t.chats += 1;
         t.batches += (hist && hist.batches) || 0;
       },
+      /** BACKLOG-3671 P2: the hidden time so far (nothing changes). */
+      peek: function () {
+        return { ms: t.ms + (since !== null ? Math.max(0, nowMs() - since) : 0), spells: t.spells };
+      },
       done: function () {
         if (since !== null) {
           t.ms += Math.max(0, nowMs() - since);
@@ -811,6 +815,33 @@
      */
     /** The run's state (P01–P03): phase, chats found, chat i of M, chats completed. */
     var run = { phase: "finding", found: 0, index: 0, total: 0, done: 0 };
+    // BACKLOG-3671 P2 (telemetry; counts and ms only): phase times, each
+    // chat's read time (summarised before it leaves), bytes read.
+    var clock = function () { return (env.now ? env.now() : new Date()).getTime(); };
+    var tm = { findingAt: null, readingAt: null, readEndAt: null, chatMs: [], bytesRead: 0, chatsFound: 0, chatsInRange: 0, chatsFailed: 0 };
+    var chromeVersion = null;
+    function runMetrics() {
+      var now = clock();
+      var findingEnd = tm.readingAt !== null ? tm.readingAt : now;
+      var readingEnd = tm.readEndAt !== null ? tm.readEndAt : now;
+      var hiddenSoFar = hiddenStats && hiddenStats.peek ? hiddenStats.peek() : null;
+      var stats = perChatStats(tm.chatMs);
+      return {
+        finding: tm.findingAt === null ? {} : {
+          ms: Math.max(0, findingEnd - tm.findingAt), chatsFound: tm.chatsFound, chatsInRange: tm.chatsInRange,
+          chatsSkippedHidden: progress.notChecked + totals.notText, chatsSkippedDisabled: totals.notSynced,
+        },
+        reading: tm.readingAt === null ? {} : {
+          ms: Math.max(0, readingEnd - tm.readingAt), chatsRead: totals.chats, chatsSkipped: progress.skipped,
+          chatsFailed: tm.chatsFailed, chatsAlreadySaved: totals.alreadySaved, messagesRead: totals.messages,
+          photosRead: media.photos.seen, bytesRead: tm.bytesRead,
+          perChatP50Ms: stats.perChatP50Ms, perChatP90Ms: stats.perChatP90Ms, perChatSlowestMs: stats.perChatSlowestMs, perChatCount: stats.perChatCount,
+        },
+        hidden: hiddenSoFar ? { ms: hiddenSoFar.ms, spells: hiddenSoFar.spells } : undefined,
+        chromeVersion: chromeVersion || undefined,
+      };
+    }
+    if (typeof env.setRunMetrics === "function") env.setRunMetrics(runMetrics);
     function runExtras() {
       return { cancel: true, retrying: !!RUNNING_EXTRAS.retrying, run: { phase: run.phase, found: run.found, index: run.index, total: run.total, done: run.done } };
     }
@@ -890,6 +921,7 @@
         });
         if (up.ok) {
           totals.images += 1;
+          tm.bytesRead += Math.floor(img.base64.length * 3 / 4);
           return "saved";
         }
         if (up.status === 413) return "tooLarge";
@@ -1043,7 +1075,7 @@
       // SR U1: the card says one short line; the long text is in the details.
       failExtras.details = message + (failExtras.details ? "\n\n" + failExtras.details : "");
       env.overlay.show(failureLine(code), true, failExtras);
-      await env.api("POST", base + "/error", { code: code, message: message });
+      await env.api("POST", base + "/error", { code: code, message: message, metrics: runMetrics() });
       return { outcome: code };
     }
 
@@ -1085,6 +1117,13 @@
     // History floor: the transaction's start date; none → no date floor.
     // BACKLOG-3658: a cache Sync — every chat, history back to `since`.
     var isCache = !!(claim.body && claim.body.kind === "cache");
+    if (typeof env.chromeVersion === "function") {
+      try {
+        chromeVersion = await env.chromeVersion();
+      } catch (_e) {
+        chromeVersion = null;
+      }
+    }
     // Storyboard H03: a Try again run says "skipping saved chats".
     if (isCache && claim.body && claim.body.retrying === true) RUNNING_EXTRAS.retrying = true;
     var floorSource = isCache ? claim.body.since : claim.body && claim.body.startDate;
@@ -1119,6 +1158,7 @@
     // 3. Scan the list and pick candidates. A narrow window shows the list OR
     // a chat (BACKLOG-3629): make sure the list is the pane on screen first.
     showPhase("Loading your conversation list…");
+    tm.findingAt = clock();
     /** P01: the list scan's count ("N so far"), shown at most every half second. */
     var foundShownAt = 0;
     function onFound(n) {
@@ -1167,6 +1207,9 @@
     log("candidates " + candidates.length + " " + JSON.stringify(byReason) + ", not checked " + plan.notChecked);
     // P02: reading — chat i of M; the bar counts the chats completed.
     run.phase = "reading";
+    tm.readingAt = clock();
+    tm.chatsFound = collected.conversations.length;
+    tm.chatsInRange = candidates.length;
     run.total = candidates.length;
     run.index = candidates.length > 0 ? 1 : 0;
     // Chats, not contacts (founder): "Checking chat i of N" (the step log).
@@ -1205,6 +1248,7 @@
       var opened = false;
       var gone = false;
       var imagesFailed = 0;
+      var chatAt = clock();
       run.index = i + 1;
       var lostChat = await holdWhileOffline(stageText(i + 1, candidates.length));
       if (lostChat && lostChat.code) return fail(lostChat.code, lostChat.message);
@@ -1530,6 +1574,7 @@
         }
         // P02: a chat finished (read, skipped or failed) — the bar advances, never back.
         if (item.attempt === 0) run.done = Math.min(run.total, run.done + 1);
+        if (item.attempt === 0 && !gone) tm.chatMs.push(Math.max(0, clock() - chatAt));
       }
       // Also the cancel check between chats: a job Keepr dropped answers 404/410.
       if (i + 1 < candidates.length) run.index = i + 2;
@@ -1557,6 +1602,8 @@
     var failedChats = Object.keys(entriesByConv).filter(function (id) {
       return (entriesByConv[id] || []).some(function (e) { return FAILED_REASONS[e.reason] === true; });
     }).length;
+    tm.chatsFailed = failedChats;
+    tm.readEndAt = clock();
     if (totals.chats === 0 && failedChats > 0 && failedChats >= progress.checked) {
       log("failed: every checked chat failed (" + failedChats + ")");
       return fail("all_failed", "None of the " + failedChats + " chats could be read.");
@@ -1589,6 +1636,8 @@
       hidden: hiddenNow,
       // L2: how the list scan stopped (Keepr records the coverage only for a normal stop).
       listStop: collected.stopReason,
+      // BACKLOG-3671 P2: the run's numbers (counts, ms, Chrome's version only).
+      metrics: runMetrics(),
     });
     if (!finished || !finished.ok) {
       return fail("finish_refused", messageOf(finished, "Keepr could not finish this Sync."));
@@ -1837,6 +1886,35 @@
    *   saving   "Saving to Keepr"
    * @param {{phase: string, found?: number, index?: number, total?: number}=} run
    */
+  /**
+   * BACKLOG-3671 P2: the per-chat read times → p50 / p90 / slowest / count
+   * (nearest rank), computed HERE — the raw list never leaves the extension.
+   */
+  function perChatStats(msList) {
+    var xs = (msList || []).filter(function (x) { return typeof x === "number" && isFinite(x) && x >= 0; })
+      .slice().sort(function (a, b) { return a - b; });
+    if (xs.length === 0) return { perChatCount: 0 };
+    var rank = function (p) { return xs[Math.min(xs.length - 1, Math.max(0, Math.ceil(p * xs.length) - 1))]; };
+    return { perChatP50Ms: Math.round(rank(0.5)), perChatP90Ms: Math.round(rank(0.9)), perChatSlowestMs: Math.round(xs[xs.length - 1]), perChatCount: xs.length };
+  }
+
+  /**
+   * BACKLOG-3671 P2: Chrome's version — the full version from
+   * userAgentData's fullVersionList, else the user agent's "Chrome/x". The
+   * version string only (nothing else from either).
+   */
+  function chromeVersionFrom(fullVersionList, userAgent) {
+    var ok = function (v) { return typeof v === "string" && /^\d+(\.\d+){1,3}$/.test(v) ? v : null; };
+    if (Array.isArray(fullVersionList)) {
+      for (var i = 0; i < fullVersionList.length; i++) {
+        var b = fullVersionList[i];
+        if (b && (b.brand === "Google Chrome" || b.brand === "Chromium") && ok(b.version)) return b.version;
+      }
+    }
+    var m = typeof userAgent === "string" ? /Chrome\/(\d+(?:\.\d+){1,3})/.exec(userAgent) : null;
+    return m ? ok(m[1]) : null;
+  }
+
   function statusLine(run, retrying) {
     var r = run || { phase: "finding" };
     if (r.phase === "saving") return SAVING_LINE;
@@ -2602,6 +2680,8 @@
     DONE_TITLE: DONE_TITLE,
     statusLine: statusLine,
     runFraction: runFraction,
+    perChatStats: perChatStats,
+    chromeVersionFrom: chromeVersionFrom,
     FINDING_TEXT: FINDING_TEXT,
     DONT_CLICK_LINE: DONT_CLICK_LINE,
     STOP_CONFIRM_ARM_MS: STOP_CONFIRM_ARM_MS,
@@ -2872,18 +2952,27 @@
     if (!currentJobId || !running) return;
     void toWorker({
       type: "keepr-job-api", method: "POST", path: "/job/" + currentJobId + "/error",
-      body: { code: "page_gone", message: PAGE_GONE_MESSAGE },
+      body: { code: "page_gone", message: PAGE_GONE_MESSAGE, metrics: currentRunMetrics() },
     });
   });
 
   /** The page's Cancel: POST /job/<this job>/cancel through the worker. */
   var currentJobId = null;
+  /** BACKLOG-3671 P2: the running job's numbers (set by the job; counts / ms only). */
+  var runMetricsFn = null;
+  function currentRunMetrics() {
+    try {
+      return runMetricsFn ? runMetricsFn() : undefined;
+    } catch (_e) {
+      return undefined;
+    }
+  }
   /** Storyboard H07: this page's Stop sync ended the run (not Keepr). */
   var stoppedHere = false;
   function cancelJob() {
     if (!currentJobId) return Promise.resolve(false);
     // Signed (a job call); Keepr records who ended it.
-    return toWorker({ type: "keepr-job-api", method: "POST", path: "/job/" + currentJobId + "/cancel", body: { endedBy: "user_page" } })
+    return toWorker({ type: "keepr-job-api", method: "POST", path: "/job/" + currentJobId + "/cancel", body: { endedBy: "user_page", metrics: currentRunMetrics() } })
       .then(function (r) {
         var ok = !!(r && r.ok);
         if (ok) stoppedHere = true;
@@ -3112,6 +3201,17 @@
       stepDownMessages: stepDownMessages,
       stepBackMessages: stepBackMessages,
       extensionVersion: manifestVersion(),
+      setRunMetrics: function (fn) { runMetricsFn = typeof fn === "function" ? fn : null; },
+      // BACKLOG-3671 P2: Chrome's version string only.
+      chromeVersion: function () {
+        var uad = navigator.userAgentData;
+        if (uad && typeof uad.getHighEntropyValues === "function") {
+          return uad.getHighEntropyValues(["fullVersionList"])
+            .then(function (v) { return chromeVersionFrom(v && v.fullVersionList, navigator.userAgent); })
+            .catch(function () { return chromeVersionFrom(null, navigator.userAgent); });
+        }
+        return Promise.resolve(chromeVersionFrom(null, navigator.userAgent));
+      },
       openConversation: openConversation,
       returnToList: returnToList,
       readImage: readImage,
@@ -3140,10 +3240,11 @@
       showOverlay(failureLine("scan_failed"), true, { details: stopped, copy: "Keepr Sync diagnostics: the sync stopped with an error." });
       await toWorker({
         type: "keepr-job-api", method: "POST", path: "/job/" + jobId + "/error",
-        body: { code: "scan_failed", message: String((err && err.message) || err) },
+        body: { code: "scan_failed", message: String((err && err.message) || err), metrics: currentRunMetrics() },
       });
     } finally {
       currentJobId = null;
+      runMetricsFn = null;
       setRunning(false);
     }
   }

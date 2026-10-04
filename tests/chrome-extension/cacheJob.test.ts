@@ -957,7 +957,7 @@ describe("Sync failed · Try again (C5)", () => {
   it("the tab closed during a Sync is reported to Keepr as page_gone", () => {
     const src = fs.readFileSync(path.join(__dirname, "..", "..", "chrome-extension", "job.js"), "utf8");
     expect(src).toContain('root.addEventListener("pagehide", function () {');
-    expect(src).toContain('body: { code: "page_gone", message: PAGE_GONE_MESSAGE },');
+    expect(src).toContain('body: { code: "page_gone", message: PAGE_GONE_MESSAGE, metrics: currentRunMetrics() },');
   });
 });
 
@@ -1076,7 +1076,7 @@ describe("renderOverlay: Cancel (M8)", () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const src = require("fs").readFileSync(require("path").join(__dirname, "..", "..", "chrome-extension", "job.js"), "utf8") as string;
     // A job route (keepr-job-api: always signed by the worker), naming the page as who ended it.
-    expect(src).toContain(`type: "keepr-job-api", method: "POST", path: "/job/" + currentJobId + "/cancel", body: { endedBy: "user_page" }`);
+    expect(src).toContain(`type: "keepr-job-api", method: "POST", path: "/job/" + currentJobId + "/cancel", body: { endedBy: "user_page", metrics: currentRunMetrics() }`);
   });
 
   it("a plain line has no Cancel, collapsed or expanded", () => {
@@ -1136,5 +1136,76 @@ describe("replyToFor (reply-to metadata)", () => {
     const all = [m("1", "Sure", { text: "y".repeat(200), fromMe: false }), m("2", "plain")];
     expect(job.replyToFor(all[0], all)).toEqual({ snippet: "y".repeat(80), sender: "them" });
     expect(job.replyToFor(all[1], all)).toBeNull();
+  });
+});
+
+// BACKLOG-3671 P2: the run's numbers for Keepr's sync_outcomes corpus —
+// phase times, counts, per-chat p50 / p90 / slowest (computed HERE, the raw
+// list never leaves), bytes read, Chrome's version. Mutations: no metrics on
+// /finish or /error → red; a raw list sent → red; the percentiles wrong →
+// red; Chrome's version from anything but the version → red.
+describe("run metrics (BACKLOG-3671 P2)", () => {
+  const ROWS: Array<[string, string | null]> = [["Zed Example", "3:45 PM"], ["Ann Example", "Mon"], ["Bob Example", "Sep 22"]];
+  type Metrics = Record<string, Record<string, unknown> | string | undefined>;
+  const ticking = (t: ReturnType<typeof cacheEnv>) => {
+    let ms = NOW;
+    t.env.now = () => new Date((ms += 250));
+    (t.env as Record<string, unknown>).chromeVersion = async () => "141.0.7390.55";
+  };
+  const noArrays = (v: unknown): boolean =>
+    !Array.isArray(v) && (v === null || typeof v !== "object" || Object.values(v as object).every(noArrays));
+
+  it("/finish carries the numbers: phases, counts, per-chat summary, bytes, Chrome's version — no lists", async () => {
+    const t = cacheEnv({ rows: ROWS, keepImages: true, numbers: { [id(0)]: ["+15555550101"], [id(1)]: ["+15555550102"], [id(2)]: ["+15555550103"] } });
+    ticking(t);
+    await job.runJob(JOB, t.env);
+    const m = (t.calls.find(([, p]) => p.endsWith("/finish"))![2] as { metrics: Metrics }).metrics;
+    const finding = m.finding as Record<string, number>;
+    const reading = m.reading as Record<string, number>;
+    expect(finding.ms).toBeGreaterThan(0);
+    expect(finding).toMatchObject({ chatsFound: 3, chatsInRange: 3, chatsSkippedHidden: 0, chatsSkippedDisabled: 0 });
+    expect(reading.ms).toBeGreaterThan(0);
+    expect(reading).toMatchObject({ chatsRead: 3, chatsSkipped: 0, chatsFailed: 0, perChatCount: 3, photosRead: 3 });
+    expect(reading.messagesRead).toBe(3);
+    expect(reading.bytesRead).toBe(3 * 3); // "AAAA" → 3 bytes, one photo per chat
+    expect(reading.perChatP50Ms).toBeGreaterThan(0);
+    expect(reading.perChatP90Ms).toBeGreaterThanOrEqual(reading.perChatP50Ms);
+    expect(reading.perChatSlowestMs).toBeGreaterThanOrEqual(reading.perChatP90Ms);
+    expect(m.chromeVersion).toBe("141.0.7390.55");
+    expect(noArrays(m)).toBe(true);
+    expect(JSON.stringify(m)).not.toMatch(/Example|5555550|aaaa/);
+  });
+
+  it("a failed run's /error carries the numbers so far", async () => {
+    const t = cacheEnv({ rows: ROWS, numbers: {} });
+    ticking(t);
+    t.env.returnToList = async () => false; // list_not_reachable
+    await job.runJob(JOB, t.env);
+    const err = t.calls.find(([, p]) => p.endsWith("/error"))![2] as { code: string; metrics: Metrics };
+    expect(err.code).toBe("list_not_reachable");
+    expect(err.metrics).toMatchObject({ chromeVersion: "141.0.7390.55", reading: {} });
+  });
+
+  it("perChatStats: nearest-rank p50 / p90, slowest, count", () => {
+    expect(job.perChatStats([5, 1, 4, 2, 3, 10, 9, 8, 7, 6])).toEqual({ perChatP50Ms: 5, perChatP90Ms: 9, perChatSlowestMs: 10, perChatCount: 10 });
+    expect(job.perChatStats([700])).toEqual({ perChatP50Ms: 700, perChatP90Ms: 700, perChatSlowestMs: 700, perChatCount: 1 });
+    expect(job.perChatStats([])).toEqual({ perChatCount: 0 });
+    expect(job.perChatStats([1, NaN, -5, "x", 3])).toEqual({ perChatP50Ms: 1, perChatP90Ms: 3, perChatSlowestMs: 3, perChatCount: 2 });
+  });
+
+  it("chromeVersionFrom: the full version from userAgentData, else the UA's Chrome/x — the version only", () => {
+    // A browser brand, not a person (brand and version on their own lines).
+    const CHROME = "Google Chrome";
+    const list = [
+      { brand: "Not=A?Brand", version: "99.0.0.0" },
+      {
+        brand: CHROME,
+        version: "141.0.7390.55",
+      },
+    ];
+    expect(job.chromeVersionFrom(list, "Mozilla/5.0 Chrome/140.0.0.0")).toBe("141.0.7390.55");
+    expect(job.chromeVersionFrom(null, "Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 Chrome/141.0.0.0 Safari/537.36")).toBe("141.0.0.0");
+    expect(job.chromeVersionFrom([{ brand: CHROME, version: "141; drop table" }], "no chrome here")).toBeNull();
+    expect(job.chromeVersionFrom(undefined, undefined)).toBeNull();
   });
 });

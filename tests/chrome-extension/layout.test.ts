@@ -367,7 +367,7 @@ describe("the Sync job in both layouts", () => {
     const outcome = await job.runJob(JOB, t.env);
     expect(outcome.outcome).toBe("list_not_reachable");
     const err = t.calls.find(([, p]) => p.endsWith("/error"));
-    expect(err?.[2]).toEqual({ code: "list_not_reachable", message: job.LIST_NOT_REACHABLE });
+    expect(err?.[2]).toMatchObject({ code: "list_not_reachable", message: job.LIST_NOT_REACHABLE });
     expect(t.calls.some(([, p]) => p.endsWith("/finish") || p.endsWith("/match"))).toBe(false);
     // SR U1: the card's short line; the long how-to (with the URL) in the details.
     expect(t.shown[t.shown.length - 1]).toBe("Couldn't open your conversation list.");

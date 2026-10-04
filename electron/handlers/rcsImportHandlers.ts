@@ -105,6 +105,13 @@ import { RCS_MEDIA_DEFAULTS, clearPendingMediaRead, getRcsMediaOptions, hasPendi
 import { NOT_PAIRED_MESSAGE, RcsPairingAuth, type LinkState } from "../services/rcsPairingAuth";
 import { loadPairProtocol } from "../services/rcsPairProtocol";
 import { rcsPairingStore } from "../services/db/rcsPairingDbService";
+import { RcsSyncOutcomeTracker } from "../services/rcsSyncOutcome";
+import {
+  recordSyncOutcome,
+  recordSyncRunMetrics,
+  recordSyncRunProgressWhileRunning,
+  recordSyncRunStart,
+} from "../services/syncOutcomeSupabase";
 import type {
   RcsClearTextsResult,
   RcsExtensionStateResult,
@@ -810,6 +817,7 @@ async function startCacheJobOnce(opts: { sinceDays?: unknown }): Promise<
     retrying: !!getFailedRun(decision.userId),
   });
   if (!job) return { ok: false, status: 409, error: "already_syncing", message: "Keepr is already syncing." };
+  rcsSyncOutcomes.created(job.jobId, getFailedRun(decision.userId) ? "retry" : window.readingOlder ? "older" : "sync");
   const chatFloors = trackCacheChats(job.jobId, {
     settingsFloorMs: window.limits.floorMs,
     fullRead: since === floorISO,
@@ -894,7 +902,20 @@ export const LINK_ENTER_ERRORS: Record<"no_session" | "expired" | "bad_shape" | 
 /** Jobs are refused until the extension is paired (BACKLOG-3666). */
 export const RCS_NOT_PAIRED_ERROR = { status: 409, error: "not_paired", message: NOT_PAIRED_MESSAGE } as const;
 
+/**
+ * BACKLOG-3671 P2: every Google Messages Sync in the sync_outcomes corpus
+ * (start at claim, guarded heartbeat, terminal after the save, follow-ups
+ * to source_metrics only). Fire-and-forget: it never affects a Sync.
+ */
+export const rcsSyncOutcomes = new RcsSyncOutcomeTracker({
+  start: recordSyncRunStart,
+  heartbeat: recordSyncRunProgressWhileRunning,
+  terminal: recordSyncOutcome,
+  metrics: recordSyncRunMetrics,
+});
+
 const bridge = new RcsExtensionBridge({
+  telemetry: rcsSyncOutcomes,
   // BACKLOG-3666: one auth gate before routing; "dual" for this one release
   // (an older extension keeps /status, /focus and the eyes, never a job).
   pairing: pairingAuth,
@@ -1195,6 +1216,7 @@ export function registerRcsImportHandlers(): void {
         label: tx.property_address ?? null,
         userId: tx.user_id ?? null,
       });
+      if (job) rcsSyncOutcomes.created(job.jobId, "transaction");
       if (!job) {
         // A Sync started between the check above and here.
         return { success: false, error: `${RCS_ALREADY_SYNCING_MESSAGE}. Wait for it to finish, or cancel it.` };

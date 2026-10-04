@@ -114,6 +114,18 @@ class BodyTooLargeError extends Error {
 
 export type RcsBridgeState = "stopped" | "listening" | "unavailable";
 
+/** BACKLOG-3671 P2: what the bridge tells the sync_outcomes tracker. */
+export interface RcsBridgeTelemetry {
+  hello(version: string | undefined): void;
+  claimed(snap: RcsJobSnapshot): void;
+  progress(snap: RcsJobSnapshot): void;
+  photoStored(jobId: string, bytes: number): void;
+  extensionMetrics(jobId: string, raw: unknown): void;
+  finishing(jobId: string): void;
+  ended(snap: RcsJobSnapshot): void;
+  saved(snap: RcsJobSnapshot, saved: RcsCacheSaved | null): void;
+}
+
 export interface RcsBridgeStatus {
   bridge: RcsBridgeState;
   port: number;
@@ -226,6 +238,12 @@ export interface RcsExtensionBridgeOptions {
   currentUserEmail?: () => Promise<string | null>;
   /** BACKLOG-3658: a job ended (finished, failed or cancelled). Once per job. */
   onJobEnded?: (ended: RcsJobEnded) => void;
+  /**
+   * BACKLOG-3671 P2: the sync_outcomes corpus (rcsSyncOutcome). Numbers,
+   * codes and versions only; every call is synchronous and never throws
+   * into the Sync.
+   */
+  telemetry?: RcsBridgeTelemetry;
   /** Overridable for tests only. */
   jobs?: RcsJobRegistry;
   /** Overridable for tests only (default RCS_FINISH_SAVE_WAIT_MS). */
@@ -460,7 +478,10 @@ export class RcsExtensionBridge {
       this.unclaimedTimer = null;
       const current = this.jobs.current();
       if (current && current.jobId === job.jobId && current.state === "failed") {
-        this.emitJob(current.snapshot());
+        const expiredSnap = current.snapshot();
+        this.emitJob(expiredSnap);
+        // BACKLOG-3671 P2: a Sync never opened gets its own (terminal) row.
+        this.tel((t) => t.ended(expiredSnap));
       }
     }, unclaimedMs + 50);
     this.unclaimedTimer.unref?.();
@@ -469,10 +490,23 @@ export class RcsExtensionBridge {
     return snap;
   }
 
+  /** BACKLOG-3671 P2: telemetry never breaks a Sync. */
+  private tel(fn: (t: RcsBridgeTelemetry) => void): void {
+    const t = this.options.telemetry;
+    if (!t) return;
+    try {
+      fn(t);
+    } catch {
+      // Telemetry is best-effort.
+    }
+  }
+
   /** Tell the owner, once, that a job ended (BACKLOG-3658). */
   private announceEnded(job: RcsImportJob): void {
     if (job.isActive || this.endedAnnounced.has(job.jobId)) return;
     this.endedAnnounced.add(job.jobId);
+    const endedSnap = job.snapshot();
+    this.tel((t) => t.ended(endedSnap));
     this.options.onJobEnded?.({
       snapshot: job.snapshot(),
       kind: job.kind,
@@ -521,8 +555,12 @@ export class RcsExtensionBridge {
   recordCacheSaved(jobId: string, saved: RcsCacheSaved | null): void {
     const job = this.jobs.current();
     if (job && job.jobId === jobId) {
+      // Only the first answer counts (a later null "not saved" is a no-op).
+      const first = job.saved === undefined;
       job.setSaved(saved);
-      this.emitJob(job.snapshot());
+      const snap = job.snapshot();
+      this.emitJob(snap);
+      if (first) this.tel((t) => t.saved(snap, saved));
     }
     const waiters = this.savedWaiters.get(jobId) ?? [];
     this.savedWaiters.delete(jobId);
@@ -724,6 +762,7 @@ export class RcsExtensionBridge {
         // (SR: anyone local can send it; a second profile sends it too).
         if (!signedPairing && b.linked === false && this.options.pairing) this.options.pairing.noteExtensionUnlinked();
         this.options.onHello?.(hello);
+        this.tel((t) => t.hello(hello.version));
         // BACKLOG-3666: only "paired: yes / no" (yes = a valid signature of a
         // pairing bound to the signed-in user). C1: the oldest extension
         // version this Keepr works with (the popup says "out of date").
@@ -990,14 +1029,17 @@ export class RcsExtensionBridge {
     if (action === "cancel") {
       // Founder (2026-10-02): "Stop sync" on the page says so (ended_by=user_page).
       let endedBy: "user_page" | undefined;
+      let b: Record<string, unknown> = {};
       try {
         const raw = await readBody(req, 4096);
-        const b = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
-        if (b && b.endedBy === "user_page") endedBy = "user_page";
+        const parsed = raw ? (JSON.parse(raw) as unknown) : {};
+        b = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+        if (b.endedBy === "user_page") endedBy = "user_page";
       } catch {
         endedBy = undefined;
       }
       if (endedBy) {
+        this.tel((t) => t.extensionMetrics(job.jobId, b.metrics));
         job.cancel(this.jobs.nowMs(), endedBy);
         this.logger.info("[RcsBridge] Sync stopped on the page (ended_by=user_page)");
       }
@@ -1012,7 +1054,9 @@ export class RcsExtensionBridge {
         sendJson(res, claim.status, { error: claim.error, message: claim.message });
         return;
       }
-      this.emitJob(job.snapshot());
+      const claimedSnap = job.snapshot();
+      this.emitJob(claimedSnap);
+      this.tel((t) => t.claimed(claimedSnap));
       sendJson(res, 200, claim);
       return;
     }
@@ -1177,6 +1221,7 @@ export class RcsExtensionBridge {
           return;
         }
         job.progress.images += 1;
+        this.tel((t) => t.photoStored(job.jobId, Math.floor((image.base64.length * 3) / 4)));
         this.emitJob(job.snapshot());
         sendJson(res, 200, { ok: true, ...result });
         return;
@@ -1188,7 +1233,9 @@ export class RcsExtensionBridge {
         }
         if (typeof body.stage === "string") patch.stage = body.stage.slice(0, 200);
         job.updateProgress(patch);
-        this.emitJob(job.snapshot());
+        const progressSnap = job.snapshot();
+        this.emitJob(progressSnap);
+        this.tel((t) => t.progress(progressSnap));
         sendJson(res, 200, { ok: true });
         return;
       }
@@ -1209,6 +1256,10 @@ export class RcsExtensionBridge {
               `${n(hidden.batches)} history batches in ${n(hidden.chats)} chats loaded while hidden`,
           );
         }
+        this.tel((t) => {
+          t.extensionMetrics(job.jobId, body.metrics);
+          t.finishing(job.jobId);
+        });
         if (job.kind === "cache" && job.userId && this.options.onMediaCounts && seen("photos") !== null && seen("videos") !== null) {
           this.options.onMediaCounts(job.userId, { photosSeen: seen("photos") as number, videosSeen: seen("videos") as number });
         }
@@ -1252,6 +1303,7 @@ export class RcsExtensionBridge {
       case "error": {
         const code = typeof body.code === "string" ? body.code.slice(0, 60) : "failed";
         const message = typeof body.message === "string" ? body.message.slice(0, 300) : "The sync failed.";
+        this.tel((t) => t.extensionMetrics(job.jobId, body.metrics));
         job.fail(code, message, this.jobs.nowMs());
         this.logger.warn(`[RcsBridge] Sync job failed: ${code}`);
         this.emitJob(job.snapshot());

@@ -160,7 +160,7 @@ describe("the job pauses on the banner (B3, B4, B5, B6)", () => {
     expect(out.outcome).toBe("phone_unreachable");
     expect(t.shown).toContain(job.UNREACHABLE_TEXT);
     const err = t.calls.find(([, p]) => p.endsWith("/error"));
-    expect(err![2]).toEqual({ code: "phone_unreachable", message: job.CONNECTION_LOST_TEXT.phone_unreachable });
+    expect(err![2]).toMatchObject({ code: "phone_unreachable", message: job.CONNECTION_LOST_TEXT.phone_unreachable });
     expect(t.calls.some(([, p]) => p.endsWith("/finish"))).toBe(false);
     expect(t.calls.some(([, p]) => p.endsWith("/chat"))).toBe(false);
   });
