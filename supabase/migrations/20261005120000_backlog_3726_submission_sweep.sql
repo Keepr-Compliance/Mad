@@ -75,9 +75,12 @@ COMMENT ON TABLE public.submission_sweep_runs IS
 --    (a) abandoned: uploading, abandoned_at set, and either abandoned_at older than
 --        p_abandoned_grace OR the row older than p_stalled (so a future abandoned_at
 --        cannot hide a row), OR fenced by this run.
---    (b) stalled: uploading, abandoned_at NULL, older than p_stalled -> fenced
+--    (b) stalled: uploading, abandoned_at NULL, and no activity for p_stalled
+--        (activity = the newest of created_at, the newest attachment row, the
+--        newest object in the row's own {org}/{id}/ folder) -> fenced
 --        (abandoned_at = now()) with FOR UPDATE SKIP LOCKED, so an in-flight
 --        finalize (which holds the row lock) is skipped, not waited on.
+--        An upload that is still adding files is not stalled.
 --    (c) orphan object: no attachment row names it, no submission row has the id
 --        in path segment 2 (any status), older than p_orphan_age.
 --    Rowless objects inside a non-uploading submission's folder are counted, never listed.
@@ -125,13 +128,27 @@ BEGIN
     SELECT coalesce(array_agg(id), '{}') INTO v_would FROM (
       SELECT t.id FROM public.transaction_submissions t
        WHERE t.status::text = 'uploading' AND t.abandoned_at IS NULL
-         AND coalesce(t.created_at, t.updated_at, 'infinity'::timestamptz) < now() - p_stalled
+         AND coalesce(greatest(
+               t.created_at,
+               (SELECT max(a.created_at) FROM public.submission_attachments a WHERE a.submission_id = t.id),
+               (SELECT max(o.created_at) FROM storage.objects o
+                 WHERE o.bucket_id = 'submission-attachments'
+                   AND split_part(o.name, '/', 1) = t.organization_id::text
+                   AND split_part(o.name, '/', 2) = t.id::text)
+             ), t.updated_at, 'infinity'::timestamptz) < now() - p_stalled
        ORDER BY t.created_at LIMIT p_limit) s;
   ELSE
     WITH cand AS (
       SELECT t.id FROM public.transaction_submissions t
        WHERE t.status::text = 'uploading' AND t.abandoned_at IS NULL
-         AND coalesce(t.created_at, t.updated_at, 'infinity'::timestamptz) < now() - p_stalled
+         AND coalesce(greatest(
+               t.created_at,
+               (SELECT max(a.created_at) FROM public.submission_attachments a WHERE a.submission_id = t.id),
+               (SELECT max(o.created_at) FROM storage.objects o
+                 WHERE o.bucket_id = 'submission-attachments'
+                   AND split_part(o.name, '/', 1) = t.organization_id::text
+                   AND split_part(o.name, '/', 2) = t.id::text)
+             ), t.updated_at, 'infinity'::timestamptz) < now() - p_stalled
        ORDER BY t.created_at LIMIT p_limit
        FOR UPDATE SKIP LOCKED
     ), fenced AS (
