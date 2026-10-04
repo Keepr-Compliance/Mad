@@ -64,6 +64,32 @@ export const NO_OMISSIONS: ExportOmissions = { hiddenTextCount: 0 };
 export interface ExportOmissionDetail extends ExportOmissions {
   /** The omitted texts themselves, as `ExportPlan.hiddenTexts` lists them. */
   hiddenTexts: Communication[];
+  /**
+   * BACKLOG-3683 (coordinator routing 2026-10-04): attachments this export
+   * selected but could not write, as `exportAttachments` found them. Listed at
+   * the end of the combined PDF. Empty for an export that writes no
+   * attachment files.
+   */
+  filesNotIncluded: ExportFileNotIncluded[];
+}
+
+/** Why an export could not write an attachment. */
+export type ExportFileNotIncludedReason =
+  /** The attachment has no file on this computer (never downloaded). */
+  | "not_on_this_computer"
+  /** The attachment's file was here and is gone. */
+  | "file_missing"
+  /** The file is here but could not be copied. */
+  | "copy_failed";
+
+/** One attachment an export left out. Display data; never logged. */
+export interface ExportFileNotIncluded {
+  filename: string;
+  /** `Email "subject"` or `Text from sender`. */
+  source: string;
+  /** When the source message was sent (ISO), or null. */
+  sentAt: string | null;
+  reason: ExportFileNotIncludedReason;
 }
 
 export type ExportNoticeScope = "transaction" | "conversation";

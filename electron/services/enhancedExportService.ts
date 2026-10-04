@@ -87,6 +87,9 @@ class EnhancedExportService {
       const omissions: ExportOmissionDetail = {
         hiddenTextCount: plan.hiddenTextCount,
         hiddenTexts: plan.hiddenTexts,
+        // BACKLOG-3683: known only once attachments are written; set by the
+        // PDF branch that writes them. No other format lists files.
+        filesNotIncluded: [],
       };
 
       // Export based on format
@@ -157,6 +160,25 @@ class EnhancedExportService {
       const folderPath = path.join(downloadsPath, folderName);
       await fs.mkdir(folderPath, { recursive: true });
 
+      // BACKLOG-3683: attachments FIRST, so the PDF can list what could not be
+      // included. The PDF's file name and folder are unchanged.
+      // Export attachments into an /attachments subfolder
+      const attachmentsPath = path.join(folderPath, "attachments");
+      await fs.mkdir(attachmentsPath, { recursive: true });
+
+      // The plan's attachment selection, in this exporter's descending order —
+      // manifest.json encodes array position as `sourceEmailIndex`, so the
+      // order is observable and preserved. Nothing re-derives the predicate.
+      const attachmentComms = orderAttachmentComms(plan, communications);
+
+      // Use folderExportService's attachment export
+      const filesNotIncluded = await folderExportService.exportAttachments(
+        transaction,
+        attachmentComms,
+        attachmentsPath,
+        omissions,
+      );
+
       // Generate the combined PDF inside the folder.
       // BACKLOG-3449: the PDF states the property address too. It used to be a
       // bare "Combined_Report.pdf", so the moment it left this folder — moved,
@@ -173,25 +195,8 @@ class EnhancedExportService {
         transaction,
         communications,
         pdfPath,
-        omissions,
+        { ...omissions, filesNotIncluded },
         summaryOnly,
-      );
-
-      // Export attachments into an /attachments subfolder
-      const attachmentsPath = path.join(folderPath, "attachments");
-      await fs.mkdir(attachmentsPath, { recursive: true });
-
-      // The plan's attachment selection, in this exporter's descending order —
-      // manifest.json encodes array position as `sourceEmailIndex`, so the
-      // order is observable and preserved. Nothing re-derives the predicate.
-      const attachmentComms = orderAttachmentComms(plan, communications);
-
-      // Use folderExportService's attachment export
-      await folderExportService.exportAttachments(
-        transaction,
-        attachmentComms,
-        attachmentsPath,
-        omissions,
       );
 
       return folderPath;

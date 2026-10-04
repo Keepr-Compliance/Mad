@@ -35,7 +35,11 @@ import type { FolderExportProgress } from "../../types/ipc";
 // BACKLOG-2771: the single include-set decision, resolved by the caller.
 import type { ExportPlan } from "../exportPlan";
 import { orderAttachmentComms } from "../exportPlan";
-import type { ExportOmissionDetail, ExportOmissions } from "../exportNotices";
+import type { ExportFileNotIncluded, ExportOmissionDetail, ExportOmissions } from "../exportNotices";
+import {
+  FILES_NOT_INCLUDED_SECTION_ID,
+  generateFilesNotIncludedHTML,
+} from "./filesNotIncludedHelpers";
 import { isEmailMessage, isTextMessage } from "../../utils/channelHelpers";
 import { isReactionRow } from "../../utils/reactionUtils";
 import {
@@ -80,6 +84,7 @@ import {
   textThreadSectionId,
   textIndexRowId,
   EMAIL_INDEX_ANCHOR,
+  TEXT_INDEX_ANCHOR,
   type CombinedSection,
 } from "./combinedExportHelpers";
 
@@ -671,7 +676,10 @@ class FolderExportService {
     // for the same reason the summary page does.
     omissions: ExportOmissions,
     emailAttachmentResult?: AttachmentExportResult
-  ): Promise<void> {
+  ): Promise<ExportFileNotIncluded[]> {
+    // BACKLOG-3683: every attachment selected but not written, for the PDF's
+    // "Files not included" section. Same classification as the manifest.
+    const notIncluded: ExportFileNotIncluded[] = [];
     const manifest: AttachmentManifest = {
       transactionId: transaction.id,
       propertyAddress: transaction.property_address,
@@ -716,7 +724,7 @@ class FolderExportService {
         JSON.stringify(manifest, null, 2),
         "utf8"
       );
-      return;
+      return notIncluded;
     }
 
     // Query attachments table for all linked messages and emails
@@ -774,6 +782,23 @@ class FolderExportService {
     };
 
     const usedFilenames = new Set<string>();
+    const sourceOf = (comm: Communication | undefined): string => {
+      if (!comm) return "Unknown message";
+      return getMessageType(comm) === "email"
+        ? `Email "${comm.subject || "(No Subject)"}"`
+        : `Text from ${comm.sender || "Unknown"}`;
+    };
+    const leftOut = (
+      comm: Communication | undefined,
+      filename: string,
+      reason: ExportFileNotIncluded["reason"]
+    ) =>
+      notIncluded.push({
+        filename,
+        source: sourceOf(comm),
+        sentAt: typeof comm?.sent_at === "string" ? (comm.sent_at as string) : null,
+        reason,
+      });
 
     for (const att of attachmentRows) {
       let comm: Communication | undefined;
@@ -827,6 +852,7 @@ class FolderExportService {
           messagePreview,
           status: "file_not_found",
         });
+        leftOut(comm, originalFilename, "not_on_this_computer");
         continue;
       }
 
@@ -862,6 +888,7 @@ class FolderExportService {
             messagePreview,
             status: "file_not_found",
           });
+          leftOut(comm, originalFilename, "file_missing");
         }
       } catch (copyError) {
         logService.warn("[Folder Export] Failed to copy attachment", "FolderExport", {
@@ -878,6 +905,7 @@ class FolderExportService {
           messagePreview,
           status: "copy_failed",
         });
+        leftOut(comm, originalFilename, "copy_failed");
       }
     }
 
@@ -915,6 +943,7 @@ class FolderExportService {
       failed: manifest.attachments.filter((a) => a.status === "copy_failed").length,
       emailAttachmentsExported: emailAttachmentResult?.exported ?? 0,
     });
+    return notIncluded;
   }
 
   /**
@@ -1256,6 +1285,17 @@ class FolderExportService {
       }
     } else {
       logService.info("[Folder Export] Summary-only mode: index page only", "FolderExport");
+    }
+
+    // BACKLOG-3683: the last section — attachments this export left out.
+    // Nothing at zero.
+    if (omissions.filesNotIncluded.length > 0) {
+      sections.push({
+        id: FILES_NOT_INCLUDED_SECTION_ID,
+        html: generateFilesNotIncludedHTML(omissions.filesNotIncluded),
+        backHref: `#${emails.length > 0 ? EMAIL_INDEX_ANCHOR : TEXT_INDEX_ANCHOR}`,
+        backLabel: "Back to Index",
+      });
     }
 
     const indexHtml = injectIndexLinks(summaryHtml, emailRowTargets, textRowTargets, summaryOnly);

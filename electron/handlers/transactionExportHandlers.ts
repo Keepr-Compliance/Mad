@@ -255,7 +255,9 @@ export function registerTransactionExportHandlers(
         details,
         pdfPlan.communications,
         pdfPath,
-        { hiddenTextCount: pdfPlan.hiddenTextCount, hiddenTexts: pdfPlan.hiddenTexts },
+        // BACKLOG-3683: `attachmentType: "none"` — this channel writes no
+        // attachment files, so none can be left out.
+        { hiddenTextCount: pdfPlan.hiddenTextCount, hiddenTexts: pdfPlan.hiddenTexts, filesNotIncluded: [] },
       );
 
       // BACKLOG-2006a — funnel: export-completed (main-side, non-throwing).
