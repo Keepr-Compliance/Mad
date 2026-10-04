@@ -70,8 +70,9 @@ describe("the popup (C2)", () => {
     expect(linking.calls).toEqual(["openApp", "cancel"]);
 
     const linked = draw({ state: "linked", email: "a***@example.test", lastSyncAt: NOW - 5 * 60_000 });
-    expect(linked.box.textContent).toContain("Linked to a***@example.test");
-    expect(linked.box.textContent).toContain("Last sync: 5 min ago");
+    expect(linked.box.textContent).toContain(popup.COPY.linked);
+    expect(linked.box.textContent).toContain("a***@example.test");
+    expect(linked.box.textContent).toContain("Last sync 5 min ago");
     q(linked.box, "open-messages")!.click();
     q(linked.box, "open-keepr")!.click();
     expect(linked.calls).toEqual(["openMessages", "openKeepr"]);
@@ -115,7 +116,10 @@ describe("the popup (C2)", () => {
 
   it("the toolbar button opens it (P5)", () => {
     const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "chrome-extension", "manifest.json"), "utf8"));
-    expect(manifest.action).toEqual({ default_title: "Keepr", default_popup: "popup.html" });
+    const icons = { "16": "icons/keepr-16.png", "32": "icons/keepr-32.png", "48": "icons/keepr-48.png", "128": "icons/keepr-128.png" };
+    expect(manifest.action).toEqual({ default_title: "Keepr", default_popup: "popup.html", default_icon: icons });
+    expect(manifest.icons).toEqual(icons);
+    for (const p of Object.values(icons)) expect(fs.existsSync(path.join(__dirname, "..", "..", "chrome-extension", p))).toBe(true);
     const html = fs.readFileSync(path.join(__dirname, "..", "..", "chrome-extension", "popup.html"), "utf8");
     expect(html).toContain('<script src="popup.js"></script>');
   });

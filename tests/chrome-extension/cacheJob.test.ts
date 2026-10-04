@@ -940,8 +940,11 @@ describe("renderOverlay: Cancel (M8)", () => {
     expect(confirm.style.display).toBe("none");
     button.click();
     expect(cancel).not.toHaveBeenCalled();
-    expect(confirm.style.display).toBe("block");
-    expect(confirm.textContent).toContain("Stop the sync? Nothing from this run will be saved.");
+    expect(confirm.style.display).toBe("flex");
+    // The mockup (BoxStopConfirm): the question is the title, the consequence below.
+    expect(panel.querySelector('[data-keepr="line"]')!.textContent).toBe(job.STOP_SYNC_TITLE);
+    expect(confirm.textContent).toContain("Nothing from this run will be saved.");
+    expect((panel.querySelector('[data-keepr="progress"]') as HTMLElement).style.display).toBe("none");
     (panel.querySelector('[data-keepr="stop-no"]') as HTMLButtonElement).click();
     expect(cancel).not.toHaveBeenCalled();
     expect(confirm.style.display).toBe("none");
@@ -968,7 +971,7 @@ describe("renderOverlay: Cancel (M8)", () => {
     clock += 1_000;
     job.renderOverlay(panel, "Chat 2 of 3…", false, { cancel: true }, io());
     const confirm = panel.querySelector('[data-keepr="stop-confirm"]') as HTMLElement;
-    expect(confirm.style.display).toBe("block");
+    expect(confirm.style.display).toBe("flex");
     expect((panel.querySelector('[data-keepr="cancel"]') as HTMLElement).style.display).toBe("none");
     (panel.querySelector('[data-keepr="stop-yes"]') as HTMLButtonElement).click();
     expect(cancel).toHaveBeenCalledTimes(1);

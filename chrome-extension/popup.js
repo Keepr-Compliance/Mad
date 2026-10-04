@@ -1,13 +1,19 @@
 /**
  * Keepr — the toolbar popup: the extension's HOME (UX redesign C2, founder
- * 2026-10-03). One short line + a button per state:
+ * 2026-10-03), laid out as the approved mockups (Popup*.dc.html): a header
+ * (brand mark + title), a centred status, the buttons at the bottom, a footer.
  *
- *   keepr_down    "Keepr isn't running"            [Open Keepr]  (keepr://link)
- *   out_of_date   "Update the Keepr extension"     version line
- *   not_linked    "Not linked to Keepr"            [Link]
- *   linking       the 6-digit code, "Type this code in Keepr", m:ss  [Open Keepr] (Cancel)
- *   linked        "Linked to a***@example.com", last sync
- *                 [Go to Google Messages] [Open Keepr] (Unlink → confirm)
+ *   keepr_down    "Keepr isn't running"                  [Open Keepr]
+ *                 footer: Don't have Keepr? · Extension x
+ *   out_of_date   "Update the Keepr extension"           (what Keepr needs)
+ *   not_linked    (Not linked) "Link once to sync your texts."
+ *                 [Link with Keepr]  Go to Google Messages
+ *                 footer: Extension x · Help
+ *   linking       title "Link with Keepr"; "Type this code in Keepr",
+ *                 the code, "Expires in m:ss"            [Open Keepr]  Cancel
+ *   linked        "Linked to Keepr", the masked email, last sync
+ *                 [Go to Google Messages] [Open Keepr]
+ *                 footer: Unlink (→ confirm) · Extension x
  *
  * The state is asked of the worker each time the popup opens (the worker
  * sleeps); while linking it is asked again every second. The code is made by
@@ -17,13 +23,18 @@
   "use strict";
 
   var COPY = {
+    title: "Keepr for Google Messages",
+    linkingTitle: "Link with Keepr",
     keepr_down: "Keepr isn't running",
     out_of_date: "Update the Keepr extension",
-    not_linked: "Not linked to Keepr",
+    not_linked: "Not linked",
+    notLinkedLine: "Link once to sync your texts.",
     linking: "Type this code in Keepr",
     linked: "Linked to Keepr",
     unlinkAsk: "Unlink from Keepr? You'll need to link again to sync",
   };
+  /** Where "Don't have Keepr?" goes. */
+  var KEEPR_SITE = "https://www.keeprcompliance.com/";
 
   function el(doc, tag, cls, text) {
     var n = doc.createElement(tag);
@@ -35,10 +46,10 @@
   function lastSyncText(atMs, nowMs) {
     if (typeof atMs !== "number") return "No sync yet";
     var min = Math.max(0, Math.floor((nowMs - atMs) / 60000));
-    if (min < 1) return "Last sync: just now";
-    if (min < 60) return "Last sync: " + min + " min ago";
-    if (min < 24 * 60) return "Last sync: " + Math.floor(min / 60) + " h ago";
-    return "Last sync: " + Math.floor(min / (24 * 60)) + " d ago";
+    if (min < 1) return "Last sync just now";
+    if (min < 60) return "Last sync " + min + " min ago";
+    if (min < 24 * 60) return "Last sync " + Math.floor(min / 60) + " h ago";
+    return "Last sync " + Math.floor(min / (24 * 60)) + " d ago";
   }
 
   function countdown(ms) {
@@ -53,61 +64,110 @@
 
   /**
    * Draw one state into `box`. io: { link, cancel, openKeepr, openApp,
-   * openMessages, unlink, now, confirmUnlink (bool), setConfirm }.
+   * openMessages, unlink, help, getKeepr, now, confirmUnlink (bool), setConfirm }.
    */
   function renderPopup(doc, box, view, io) {
     while (box.firstChild) box.removeChild(box.firstChild);
     var state = view && view.state;
+    var version = view && view.version ? "Extension " + view.version : "";
+
     var head = el(doc, "div", "head");
-    var dot = el(doc, "span", "dot" + (state === "linked" ? " ok" : state === "keepr_down" || state === "out_of_date" ? " bad" : ""));
-    head.appendChild(dot);
-    head.appendChild(el(doc, "span", null, "Keepr"));
+    var mark = el(doc, "img", "mark");
+    mark.setAttribute("src", "icons/keepr-mark.svg");
+    mark.setAttribute("alt", "");
+    mark.setAttribute("data-keepr", "brand-mark");
+    head.appendChild(mark);
+    head.appendChild(el(doc, "div", "title", state === "linking" ? COPY.linkingTitle : COPY.title));
     box.appendChild(head);
-    var buttons = el(doc, "div", "buttons");
+
+    var middle = el(doc, "div", "middle");
+    box.appendChild(middle);
+    var actions = el(doc, "div", "actions");
     var button = function (key, label, cls, fn) {
-      var b = el(doc, "button", cls || null, label);
+      var b = el(doc, "button", cls, label);
       b.type = "button";
       b.setAttribute("data-keepr", key);
       b.addEventListener("click", fn);
-      buttons.appendChild(b);
+      actions.appendChild(b);
       return b;
+    };
+    var anchor = function (parent, key, label, cls, fn) {
+      var a = el(doc, "a", cls || null, label);
+      a.setAttribute("href", "#");
+      a.setAttribute("data-keepr", key);
+      a.addEventListener("click", function (e) {
+        if (e && e.preventDefault) e.preventDefault();
+        fn();
+      });
+      parent.appendChild(a);
+      return a;
+    };
+    var status = function (cls, text) {
+      var s = el(doc, "div", "status " + cls);
+      s.appendChild(el(doc, "span", "dot"));
+      s.appendChild(el(doc, "span", null, text));
+      middle.appendChild(s);
+      return s;
+    };
+    var foot = null;
+    var footer = function () {
+      foot = el(doc, "div", "foot");
+      return foot;
     };
     var now = io.now ? io.now() : Date.now();
 
     if (state === "keepr_down") {
-      box.appendChild(el(doc, "div", "line", COPY.keepr_down));
+      status("warn", COPY.keepr_down);
       button("open-app", "Open Keepr", "primary", io.openApp);
+      footer();
+      anchor(foot, "get-keepr", "Don't have Keepr?", null, io.getKeepr || function () {});
+      foot.appendChild(el(doc, "span", null, version));
     } else if (state === "out_of_date") {
-      box.appendChild(el(doc, "div", "line", COPY.out_of_date));
-      box.appendChild(el(doc, "div", "muted", "This is " + (view.version || "?") + "; Keepr needs " + (view.minVersion || "a newer one") + "."));
+      status("warn", COPY.out_of_date);
+      middle.appendChild(el(doc, "div", "sub", "This is " + (view.version || "?") + "; Keepr needs " + (view.minVersion || "a newer one") + "."));
     } else if (state === "linking") {
       var link = view.link || {};
-      box.appendChild(el(doc, "div", "code", spaced(link.code)));
-      box.appendChild(el(doc, "div", "line", COPY.linking));
-      if (typeof link.expiresAt === "number") box.appendChild(el(doc, "div", "muted", countdown(link.expiresAt - now)));
+      middle.className = "middle code-gap";
+      middle.appendChild(el(doc, "div", "ask", COPY.linking));
+      var code = el(doc, "div", "code", spaced(link.code));
+      code.setAttribute("data-keepr", "code");
+      middle.appendChild(code);
+      if (typeof link.expiresAt === "number") middle.appendChild(el(doc, "div", "sub", "Expires in " + countdown(link.expiresAt - now)));
       button("open-app", "Open Keepr", "primary", io.openApp);
-      button("cancel", "Cancel", "link", io.cancel);
+      anchor(actions, "cancel", "Cancel", "action", io.cancel);
     } else if (state === "linked") {
-      box.appendChild(el(doc, "div", "line", view.email ? "Linked to " + view.email : COPY.linked));
-      box.appendChild(el(doc, "div", "muted", lastSyncText(view.lastSyncAt, now)));
       if (io.confirmUnlink) {
-        box.appendChild(el(doc, "div", "line", COPY.unlinkAsk));
+        middle.appendChild(el(doc, "div", "line", COPY.unlinkAsk));
         button("unlink-yes", "Unlink", "primary", io.unlink);
-        button("unlink-no", "Cancel", "link", function () { io.setConfirm(false); });
+        anchor(actions, "unlink-no", "Cancel", "action", function () { io.setConfirm(false); });
       } else {
+        status("ok", COPY.linked);
+        if (view.email) middle.appendChild(el(doc, "div", "sub", view.email));
+        middle.appendChild(el(doc, "div", "sub", lastSyncText(view.lastSyncAt, now)));
         button("open-messages", "Go to Google Messages", "primary", io.openMessages);
-        button("open-keepr", "Open Keepr", null, io.openKeepr);
-        button("unlink", "Unlink", "link", function () { io.setConfirm(true); });
+        button("open-keepr", "Open Keepr", "secondary", io.openKeepr);
+        footer();
+        anchor(foot, "unlink", "Unlink", null, function () { io.setConfirm(true); });
+        foot.appendChild(el(doc, "span", null, version));
       }
     } else {
       // not_linked (and a link that failed: its reason)
-      box.appendChild(el(doc, "div", "line", COPY.not_linked));
+      middle.className = "middle pill-gap";
+      var pill = el(doc, "div", "pill");
+      pill.appendChild(el(doc, "span", "dot"));
+      pill.appendChild(el(doc, "span", null, COPY.not_linked));
+      middle.appendChild(pill);
+      middle.appendChild(el(doc, "div", "line", COPY.notLinkedLine));
       var failed = view && view.link && view.link.status === "failed" && view.link.error;
-      if (failed) box.appendChild(el(doc, "div", "error", failed));
-      button("link", "Link", "primary", io.link);
+      if (failed) middle.appendChild(el(doc, "div", "error", failed));
+      button("link", "Link with Keepr", "primary", io.link);
+      anchor(actions, "open-messages", "Go to Google Messages", "action", io.openMessages);
+      footer();
+      foot.appendChild(el(doc, "span", null, version));
+      anchor(foot, "help", "Help", null, io.help || function () {});
     }
-    box.appendChild(buttons);
-    if (view && view.version && state !== "out_of_date") box.appendChild(el(doc, "div", "muted", "Keepr extension " + view.version));
+    if (actions.firstChild) box.appendChild(actions);
+    if (foot) box.appendChild(foot);
   }
 
   /**
@@ -149,6 +209,11 @@
         }
       });
     };
+    var openTab = function (url) {
+      try {
+        chromeApi.tabs.create({ url: url });
+      } catch (_e) { /* no tabs API */ }
+    };
     var draw = function () {
       renderPopup(doc, box, view || { state: "keepr_down" }, io);
     };
@@ -176,6 +241,8 @@
         });
       },
       openMessages: function () { ask({ type: "keepr-open-messages" }); },
+      help: function () { openTab(chromeApi.runtime.getURL("welcome.html")); },
+      getKeepr: function () { openTab(KEEPR_SITE); },
       unlink: function () {
         confirmUnlink = false;
         io.confirmUnlink = false;
@@ -192,7 +259,7 @@
     return refresh();
   }
 
-  var api = { launchKeepr: launchKeepr, renderPopup: renderPopup, start: start, COPY: COPY, lastSyncText: lastSyncText, spaced: spaced };
+  var api = { launchKeepr: launchKeepr, renderPopup: renderPopup, start: start, COPY: COPY, lastSyncText: lastSyncText, spaced: spaced, KEEPR_SITE: KEEPR_SITE };
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;
   } else if (typeof document !== "undefined" && typeof chrome !== "undefined") {

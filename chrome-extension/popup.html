@@ -3,30 +3,57 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/png" href="icons/keepr-32.png">
 <title>Keepr</title>
 <style>
+  /* Founder-approved mockups (Popup*.dc.html): 360×340, padding 20, gap 16. */
   :root {
-    --bg: #ffffff; --text: #111827; --muted: #4b5563; --line: #e5e7eb;
-    --primary: #4f46e5; --primary-text: #ffffff; --danger: #b91c1c; --ok: #047857;
+    --bg: #FFFFFF; --text: #1F2433; --body: #374151; --muted: #4B5163; --foot: #6B7280;
+    --primary: #4F46E5; --primary-text: #FFFFFF; --link: #4F46E5; --link-hover: #3730A3;
+    --outline: #CDD1DE; --secondary-bg: #FFFFFF;
+    --pill-bg: #F1F2F5; --pill-dot: #9AA3B5;
+    --ok-text: #14532D; --ok-dot: #15803D; --warn-text: #92400E; --warn-dot: #B45309; --danger: #B42318;
+    --code-bg: #EEF0FF; --code-text: #312E81;
   }
+  /* Dark: derived as in the dark box mockups (#202124 page, #E8EAED text, #6D5DF0 brand). */
   @media (prefers-color-scheme: dark) {
-    :root { --bg: #1f2937; --text: #f9fafb; --muted: #cbd5e1; --line: #374151; --primary: #818cf8; --primary-text: #111827; --danger: #fca5a5; --ok: #6ee7b7; }
+    :root {
+      --bg: #202124; --text: #E8EAED; --body: #E8EAED; --muted: #BDC1C6; --foot: #9AA0A6;
+      --primary: #6D5DF0; --primary-text: #FFFFFF; --link: #8B80F5; --link-hover: #B3ACF8;
+      --outline: #5F6368; --secondary-bg: #2D2E31;
+      --pill-bg: #2D2E31; --pill-dot: #9AA0A6;
+      --ok-text: #81C995; --ok-dot: #34A853; --warn-text: #FDD663; --warn-dot: #F29900; --danger: #F28B82;
+      --code-bg: #2D2E31; --code-text: #C5C0FA;
+    }
   }
-  html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  main { width: 280px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
-  .head { display: flex; align-items: center; gap: 8px; font-weight: 700; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
-  .dot.ok { background: var(--ok); }
-  .dot.bad { background: var(--danger); }
-  .line { text-align: center; }
-  .muted { color: var(--muted); font-size: 12px; text-align: center; }
-  .code { font: 700 30px/1.1 ui-monospace, "Cascadia Mono", monospace; letter-spacing: 4px; text-align: center; }
-  .error { color: var(--danger); font-size: 12px; text-align: center; }
-  .buttons { display: flex; flex-direction: column; gap: 6px; }
-  button { font: inherit; border-radius: 8px; padding: 7px 10px; cursor: pointer; border: 1px solid var(--line); background: transparent; color: var(--text); }
-  button.primary { background: var(--primary); color: var(--primary-text); border-color: var(--primary); font-weight: 600; }
-  button.link { border: none; padding: 2px; color: var(--muted); font-size: 12px; text-decoration: underline; }
-  button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  a { color: var(--link); text-decoration: none; cursor: pointer; }
+  a:hover { color: var(--link-hover); }
+  main { width: 360px; height: 340px; box-sizing: border-box; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+  .head { display: flex; align-items: center; gap: 12px; }
+  .mark { width: 36px; height: 36px; display: block; flex: 0 0 36px; }
+  .title { font-size: 16px; font-weight: 700; }
+  .middle { flex-grow: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-align: center; }
+  .middle.code-gap { align-items: stretch; gap: 8px; }
+  .middle.pill-gap { gap: 10px; }
+  .pill { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: var(--pill-bg); font-size: 13px; font-weight: 600; color: var(--muted); }
+  .pill .dot { background: var(--pill-dot); }
+  .dot { width: 8px; height: 8px; border-radius: 999px; flex: 0 0 8px; }
+  .status { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; }
+  .status.ok { color: var(--ok-text); } .status.ok .dot { background: var(--ok-dot); }
+  .status.warn { color: var(--warn-text); } .status.warn .dot { background: var(--warn-dot); }
+  .line { font-size: 15px; line-height: 22px; color: var(--body); }
+  .ask { font-size: 14px; color: var(--body); }
+  .sub { font-size: 13px; color: var(--muted); }
+  .error { font-size: 13px; color: var(--danger); }
+  .code { padding: 14px 0; border-radius: 12px; background: var(--code-bg); font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 38px; font-weight: 700; letter-spacing: 0.12em; color: var(--code-text); }
+  .actions { display: flex; flex-direction: column; gap: 10px; }
+  button { font-family: inherit; cursor: pointer; }
+  button.primary { min-height: 48px; border: none; border-radius: 10px; background: var(--primary); color: var(--primary-text); font-size: 15px; font-weight: 700; }
+  button.secondary { min-height: 44px; border: 1px solid var(--outline); border-radius: 10px; background: var(--secondary-bg); color: var(--text); font-size: 15px; font-weight: 600; }
+  a.action { font-size: 14px; font-weight: 600; text-align: center; }
+  .foot { display: flex; justify-content: space-between; font-size: 12px; color: var(--foot); }
+  button:focus-visible, a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 </style>
 </head>
 <body>

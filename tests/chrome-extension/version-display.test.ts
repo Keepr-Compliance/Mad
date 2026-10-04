@@ -26,16 +26,17 @@ describe("the extension version", () => {
     expect((job.copyText(SUMMARY, {}, [], "") as string).split("\n")[0]).toBe("Keepr Sync diagnostics");
   });
 
-  it("is a muted footer line in the box's details", () => {
+  // Founder (2026-10-03): no version line in the box — Copy details and the
+  // popup carry it. Mutation: the footer back → red.
+  it("is NOT shown in the box (Copy details and the popup carry it)", () => {
     const box = document.createElement("div");
     document.body.appendChild(box);
     job.renderOverlay(box, job.DONE_LINE, false, { details: "Scanned 1 chats", copy: "x", version: "0.3.10" }, {
       copy: async () => true,
       theme: "light",
     });
-    const footer = box.querySelector('[data-keepr="details-card"] [data-keepr="version"]') as HTMLElement;
-    expect(footer.textContent).toBe("Keepr extension 0.3.10");
-    expect(footer.style.fontSize).toBe("12px");
+    expect(box.querySelector('[data-keepr="version"]')).toBeNull();
+    expect(box.textContent).not.toContain("0.3.10");
   });
 
   it("runJob puts env.extensionVersion into the box's extras", async () => {

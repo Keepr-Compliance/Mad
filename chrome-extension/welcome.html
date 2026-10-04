@@ -3,42 +3,67 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/png" href="icons/keepr-32.png">
 <title>Welcome to Keepr</title>
 <style>
-  :root { --bg: #f9fafb; --card: #ffffff; --text: #111827; --muted: #4b5563; --line: #e5e7eb; --primary: #4f46e5; --primary-text: #ffffff; --ok: #047857; --danger: #b91c1c; }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg: #111827; --card: #1f2937; --text: #f9fafb; --muted: #cbd5e1; --line: #374151; --primary: #818cf8; --primary-text: #111827; --ok: #6ee7b7; --danger: #fca5a5; }
+  /* Founder-approved mockup (Welcome.dc.html): padding 48, gap 22. */
+  :root {
+    --bg: #FFFFFF; --text: #1F2433; --body: #374151; --muted: #4B5163; --foot: #6B7280;
+    --primary: #4F46E5; --primary-text: #FFFFFF; --link: #4F46E5;
+    --step-bg: #EEF0FF; --step-text: #312E81; --code-bg: #EEF0FF; --code-text: #312E81;
+    --ok-text: #14532D; --ok-dot: #15803D; --warn-text: #92400E; --warn-dot: #B45309; --danger: #B42318;
+    --outline: #CDD1DE; --secondary-bg: #FFFFFF;
   }
-  html, body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  main { max-width: 560px; margin: 40px auto; padding: 0 16px; display: flex; flex-direction: column; gap: 14px; }
-  h1 { font-size: 22px; margin: 0 0 6px; }
-  .step { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
-  .step h2 { font-size: 15px; margin: 0; }
-  .step p { margin: 0; color: var(--muted); }
-  .code { font: 700 28px/1.1 ui-monospace, "Cascadia Mono", monospace; letter-spacing: 4px; }
-  .ok { color: var(--ok); font-weight: 600; }
-  .error { color: var(--danger); }
-  button { align-self: flex-start; font: inherit; border-radius: 8px; padding: 7px 14px; cursor: pointer; border: 1px solid var(--primary); background: var(--primary); color: var(--primary-text); font-weight: 600; }
-  button.secondary { background: transparent; color: var(--text); border-color: var(--line); font-weight: 400; }
-  .version { color: var(--muted); font-size: 12px; }
+  /* Dark: derived as in the dark box mockups (#202124 page, #E8EAED text, #6D5DF0 brand). */
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #202124; --text: #E8EAED; --body: #E8EAED; --muted: #BDC1C6; --foot: #9AA0A6;
+      --primary: #6D5DF0; --primary-text: #FFFFFF; --link: #8B80F5;
+      --step-bg: #2D2E31; --step-text: #C5C0FA; --code-bg: #2D2E31; --code-text: #C5C0FA;
+      --ok-text: #81C995; --ok-dot: #34A853; --warn-text: #FDD663; --warn-dot: #F29900; --danger: #F28B82;
+      --outline: #5F6368; --secondary-bg: #2D2E31;
+    }
+  }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 720px; min-height: 520px; margin: 0 auto; box-sizing: border-box; padding: 48px; display: flex; flex-direction: column; gap: 22px; }
+  .head { display: flex; align-items: center; gap: 12px; }
+  .mark { width: 40px; height: 40px; display: block; flex: 0 0 40px; }
+  h1 { margin: 0; font-size: 24px; line-height: 30px; font-weight: 700; }
+  .steps { display: flex; flex-direction: column; gap: 14px; }
+  .step { display: flex; gap: 14px; align-items: center; }
+  .num { width: 28px; height: 28px; flex-shrink: 0; border-radius: 999px; background: var(--step-bg); color: var(--step-text); display: flex; align-items: center; justify-content: center; font-weight: 700; }
+  .step-text { font-size: 15px; line-height: 22px; }
+  #keepr-welcome-link { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+  button { font-family: inherit; cursor: pointer; }
+  button.primary { min-height: 48px; padding: 0 24px; border: none; border-radius: 10px; background: var(--primary); color: var(--primary-text); font-size: 15px; font-weight: 700; }
+  button.secondary { min-height: 44px; padding: 0 18px; border: 1px solid var(--outline); border-radius: 10px; background: var(--secondary-bg); color: var(--text); font-size: 15px; font-weight: 600; }
+  .row { display: flex; gap: 12px; }
+  .ask { font-size: 14px; color: var(--body); }
+  .code { padding: 14px 28px; border-radius: 12px; background: var(--code-bg); font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 38px; font-weight: 700; letter-spacing: 0.12em; color: var(--code-text); }
+  .status { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; }
+  .dot { width: 8px; height: 8px; border-radius: 999px; flex: 0 0 8px; }
+  .status.ok { color: var(--ok-text); } .status.ok .dot { background: var(--ok-dot); }
+  .status.warn { color: var(--warn-text); } .status.warn .dot { background: var(--warn-dot); }
+  .error { font-size: 13px; color: var(--danger); }
+  .spacer { flex-grow: 1; }
+  .foot { font-size: 13px; line-height: 18px; color: var(--foot); }
+  button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 </style>
 </head>
 <body>
 <main>
-  <h1>Keepr for Google Messages</h1>
-  <section class="step" id="step-pin">
-    <h2>1 · Pin Keepr</h2>
-    <p>Click the puzzle piece in Chrome's toolbar, then the pin next to Keepr.</p>
-  </section>
-  <section class="step" id="step-link">
-    <h2>2 · Link with Keepr</h2>
-    <div id="keepr-welcome-link" aria-live="polite"></div>
-  </section>
-  <section class="step" id="step-sync">
-    <h2>3 · Sync from Keepr</h2>
-    <p>In Keepr: Dashboard → Sync Android.</p>
-  </section>
-  <p class="version" id="keepr-version"></p>
+  <div class="head">
+    <img class="mark" src="icons/keepr-mark.svg" alt="" data-keepr="brand-mark">
+    <h1>Keepr for Google Messages is installed</h1>
+  </div>
+  <div class="steps">
+    <div class="step" id="step-pin"><div class="num">1</div><div class="step-text"><b>Pin Keepr</b> (puzzle icon, then the pin)</div></div>
+    <div class="step" id="step-link"><div class="num">2</div><div class="step-text"><b>Link with Keepr</b></div></div>
+    <div class="step" id="step-sync"><div class="num">3</div><div class="step-text"><b>Sync from Keepr</b></div></div>
+  </div>
+  <div id="keepr-welcome-link" aria-live="polite"></div>
+  <div class="spacer"></div>
+  <div class="foot">Texts go only to Keepr on this computer, encrypted.</div>
 </main>
 <script src="welcome.js"></script>
 </body>

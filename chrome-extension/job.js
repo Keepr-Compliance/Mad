@@ -182,6 +182,8 @@
 
   /** BACKLOG-3641 founder UX: the finished overlay is this one line + Details. */
   var DONE_LINE = "Sync done — switch back to Keepr.";
+  /** The done box's title (the mockup); the counts go on the line below. */
+  var DONE_TITLE = "Sync done";
   /** A cache Sync, between the last chat and Keepr's answer to /finish. */
   var SAVING_TEXT = "Saving in Keepr…";
 
@@ -954,7 +956,9 @@
         if (!(names[n] in tags)) tags[names[n]] = await tag(names[n]);
       }
       var version = typeof env.extensionVersion === "string" ? env.extensionVersion : "";
-      return { details: detailsText(s), copy: copyText(s, tags, logLines, version), version: version };
+      var detailsLines = detailsText(s);
+      // The done box's line (the mockup): the first details line — counts only.
+      return { details: detailsLines, summary: String(detailsLines).split("\n")[0], copy: copyText(s, tags, logLines, version), version: version };
     }
 
     async function fail(code, message) {
@@ -1496,8 +1500,8 @@
     };
   }
 
-  var SEE_DETAILS = "See details ▾";
-  var HIDE_DETAILS = "Hide details ▴";
+  var SEE_DETAILS = "See details";
+  var HIDE_DETAILS = "Hide details";
   /** BACKLOG-3658 security H1: a Sync Keepr did not open in this tab asks first. */
   var ASK_TITLE = "Keepr wants to sync your texts";
   var ASK_TEXT = "Keepr asked to copy your recent Google Messages texts into the Keepr app on this computer.";
@@ -1505,6 +1509,9 @@
   /** Founder (2026-10-02): the page's stop, with an inline confirm. */
   var STOP_SYNC_LABEL = "Stop sync";
   var STOP_SYNC_QUESTION = "Stop the sync? Nothing from this run will be saved.";
+  /** The mockup's confirm: the question as the title, the consequence below. */
+  var STOP_SYNC_TITLE = "Stop the sync?";
+  var STOP_SYNC_BODY = "Nothing from this run will be saved.";
   /** SR: clicks on the confirm's Stop within this time after it opened are ignored (a double-click). */
   var STOP_CONFIRM_ARM_MS = 400;
   var PAUSED_BODY = "Keep this Chrome window visible — Sync continues when it's back.";
@@ -1534,24 +1541,37 @@
   var TRY_AGAIN_LABEL = "Try again";
   var PAGE_GONE_MESSAGE = "The Google Messages tab was closed.";
 
-  // Keepr brand (android-companion BrandMark): the indigo mark with an amber
-  // dot; primary #4F46E5 (hover #4338CA); amber #F5A524 for paused/attention.
-  // No green. Every text/background pair is >= 4.5:1.
-  var PRIMARY = "#4F46E5";
-  var PRIMARY_HOVER = "#4338CA";
-  var AMBER = "#F5A524";
+  // Keepr brand: the founder-approved box mockups (Box*.dc.html, 2026-10-03),
+  // light and dark (the dark ones: #2D2E31 card, #E8EAED text, #6D5DF0 brand).
+  // Every text/background pair is >= 4.5:1.
   var PALETTE = {
     light: {
-      card: "#FFFFFF", border: "#C7D2FE", doneBorder: "#C7D2FE", text: "#111827", muted: "#374151", link: "#4F46E5",
-      secondaryBg: "#FFFFFF", secondaryBorder: "#C7D2FE", secondaryText: "#374151",
+      card: "#FFFFFF", border: "#D6D9E4", doneBorder: "#C7D2FE", warnBorder: "#E5C78F",
+      text: "#1F2433", body: "#374151", muted: "#4B5163", link: "#4F46E5",
+      primary: "#4F46E5", primaryHover: "#4338CA", danger: "#B42318", dangerHover: "#912018",
+      secondaryBg: "#FFFFFF", secondaryBorder: "#CDD1DE", secondaryText: "#1F2433",
+      track: "#E5E7EB", fill: "#4F46E5", ok: "#15803D", warn: "#B45309",
+      shadow: "0 8px 24px rgba(31,36,51,0.16)",
+      tab: "linear-gradient(135deg, #4F46E5, #6D5DF0)", tabShadow: "0 4px 12px rgba(31,36,51,0.25)",
+      tipBg: "#1F2433", tipText: "#FFFFFF",
       detailsBg: "#F9FAFB", detailsBorder: "#E5E7EB",
     },
     dark: {
-      card: "#1F2937", border: "#374151", doneBorder: "#4F46E5", text: "#F3F4F6", muted: "#D1D5DB", link: "#A5B4FC",
-      secondaryBg: "#1F2937", secondaryBorder: "#4B5563", secondaryText: "#F3F4F6",
-      detailsBg: "#111827", detailsBorder: "#374151",
+      card: "#2D2E31", border: "#44464C", doneBorder: "#4F46E5", warnBorder: "#8A6A2F",
+      text: "#E8EAED", body: "#E8EAED", muted: "#BDC1C6", link: "#8B80F5",
+      primary: "#6D5DF0", primaryHover: "#5B4BE0", danger: "#B42318", dangerHover: "#912018",
+      secondaryBg: "#2D2E31", secondaryBorder: "#5F6368", secondaryText: "#E8EAED",
+      track: "#44464C", fill: "#8B80F5", ok: "#15803D", warn: "#B45309",
+      shadow: "0 8px 24px rgba(0,0,0,0.5)",
+      tab: "#6D5DF0", tabShadow: "0 4px 12px rgba(0,0,0,0.5)",
+      tipBg: "#E8EAED", tipText: "#202124",
+      detailsBg: "#202124", detailsBorder: "#44464C",
     },
   };
+  /** The mockups' button sizes (the box's small buttons). */
+  var BOX_BUTTON = { minHeight: "36px", padding: "0 14px", borderRadius: "8px", fontSize: "13px" };
+  /** The mockups' card: 320 wide, padding 16, gap 12, radius 16. */
+  var CARD_WIDTH = "320px";
 
   /**
    * The theme a CSS background colour asks for: "dark" (relative luminance
@@ -1594,6 +1614,55 @@
     return "light";
   }
 
+  var SVG_NS = "http://www.w3.org/2000/svg";
+  var markIds = 0;
+
+  /**
+   * Founder (2026-10-03): the Keepr brand mark (android-companion BrandMark:
+   * rounded square, #4F46E5 → #6D5DF0, white K, #F5A524 dot), drawn as SVG
+   * nodes — the same in light and dark. `bare`: the K and the dot only (on
+   * the idle tab, whose own background is the brand colour).
+   */
+  function brandMark(doc, size, bare) {
+    var svg = doc.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("width", String(size));
+    svg.setAttribute("height", String(size));
+    svg.setAttribute("viewBox", "0 0 512 512");
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("focusable", "false");
+    svg.setAttribute("data-keepr", "brand-mark");
+    svg.style.display = "block";
+    var add = function (tag, attrs) {
+      var n = doc.createElementNS(SVG_NS, tag);
+      for (var k in attrs) n.setAttribute(k, attrs[k]);
+      svg.appendChild(n);
+    };
+    if (!bare) {
+      var id = "keepr-mark-" + (++markIds);
+      var defs = doc.createElementNS(SVG_NS, "defs");
+      var grad = doc.createElementNS(SVG_NS, "linearGradient");
+      grad.setAttribute("id", id);
+      grad.setAttribute("x1", "0");
+      grad.setAttribute("y1", "0");
+      grad.setAttribute("x2", "1");
+      grad.setAttribute("y2", "1");
+      [["0", "#4F46E5"], ["1", "#6D5DF0"]].forEach(function (st) {
+        var stop = doc.createElementNS(SVG_NS, "stop");
+        stop.setAttribute("offset", st[0]);
+        stop.setAttribute("stop-color", st[1]);
+        grad.appendChild(stop);
+      });
+      defs.appendChild(grad);
+      svg.appendChild(defs);
+      add("rect", { width: "512", height: "512", rx: "116", fill: "url(#" + id + ")" });
+    }
+    add("path", { d: "M156 178 L182 154 L208 178 L208 382 L156 382 Z", fill: "#FFFFFF" });
+    add("path", { d: "M190 256 L300 382", stroke: "#FFFFFF", "stroke-width": "52" });
+    add("path", { d: "M190 254 L292 176", stroke: "#FFFFFF", "stroke-width": "52" });
+    add("circle", { cx: "352", cy: "352", r: "30", fill: "#F5A524" });
+    return svg;
+  }
+
   /** The box's state, from what the job shows. */
   function overlayState(text, isError, extras) {
     if (extras && extras.idle) return "idle";
@@ -1604,7 +1673,7 @@
     return "syncing";
   }
 
-  /** The collapsed chip: "Keepr · syncing 4 of 21 — keep this tab on screen". */
+  /** The collapsed chip: "Keepr · syncing 4 of 21 — keep this tab open". */
   function chipTitle(text) {
     var short = shortProgress(text);
     return "Keepr · " + (/^\d+ of \d+$/.test(short) ? "syncing " + short : short) + " — " + SYNCING_CHIP_HINT;
@@ -1615,28 +1684,46 @@
     return String(text).replace(/^(Checking chat|Chat) /, "").replace(/…$/, "");
   }
 
+  /** "Chat 8 of 21…" → 8/21 (the progress bar); null when the line has no count. */
+  function progressFraction(text) {
+    var m = /(\d+) of (\d+)/.exec(String(text));
+    if (!m || +m[2] <= 0) return null;
+    return Math.min(1, Math.max(0, +m[1] / +m[2]));
+  }
+
+  /** The syncing line under the bar: "Chat 12 of 180 · keep this tab open". */
+  function syncingLine(text) {
+    return String(text).replace(/…$/, "") + " · " + SYNCING_CHIP_HINT;
+  }
+
   /**
-   * THE Keepr box (founder's design C, "collapsible chip"). ALL of its look is
-   * here: every element and style is (re)built from (state, theme) on each
-   * call; createElement + textContent only, so page text never becomes markup.
+   * THE Keepr box, as the founder-approved mockups (Box*.dc.html). ALL of its
+   * look is here: every element and style is (re)built from (state, theme) on
+   * each call; createElement + textContent only, so page text never becomes
+   * markup.
    *
-   *   syncing  collapsed pill: [badge] "Keepr · 8 of 21" [▾]; ▾ expands to the
-   *            progress line + Cancel.
-   *   paused   expanded card, amber: "Sync paused", what to do, Cancel.
-   *   done     expanded card: [✓] "Sync done — switch back to Keepr.",
-   *            "See details ▾" (link, left) + "Open Keepr" (primary, right),
-   *            the details card below with "Copy details" inside; ×.
-   *   error    as done, amber, with the failure line; ×.
+   *   idle     a 40×56 K tab on the right edge (its label on hover); a tap
+   *            opens "Sync from Keepr" + Open Keepr (bottom-right).
+   *   syncing  card: [mark] "Syncing your texts", a progress bar,
+   *            "Chat 12 of 180 · keep this tab open", [Stop sync] right.
+   *            Collapsible to the chip (▴ / ▾).
+   *            Stop → "Stop the sync?" "Nothing from this run will be saved."
+   *            [Keep syncing] [Stop sync (red)].
+   *   paused   as syncing, amber border, what to do.
+   *   done     [✓] "Sync done", the counts, "See details" (left) +
+   *            [Open Keepr] (right); the details card above the row; ×.
+   *   error    [!] "Sync failed", the reason, [Try again] right (when Keepr
+   *            can retry), details as done; ×.
    *   ask      (security H1) "Keepr wants to sync your texts": Not now / Start.
    *
-   * The round badge is the ONLY drag handle (data-keepr="drag-handle", grab
+   * The badge is the ONLY drag handle (data-keepr="drag-handle", grab
    * cursor). The keyboard Move button is visually hidden until focused.
    *
    * @param {HTMLElement} box  the fixed box (or any container, in tests)
    * @param {string} text
    * @param {boolean} isError
-   * @param {{details?: string, copy?: string, version?: string, cancel?: boolean,
-   *   ask?: {start: function(): void, later: function(): void}}=} extras
+   * @param {{details?: string, summary?: string, copy?: string, version?: string, cancel?: boolean,
+   *   idle?: {linked?: boolean}, ask?: {start: function(): void, later: function(): void}}=} extras
    * @param {{copy: function(string): Promise<boolean>, focus?: function(): Promise<boolean>,
    *   cancel?: function(): Promise<boolean>, close?: function(): void, move?: function(): void,
    *   expanded?: boolean, onExpand?: function(boolean): void, theme?: "light"|"dark"}} io
@@ -1662,14 +1749,18 @@
     Object.assign(box.style, {
       background: p.card,
       color: p.text,
-      border: "1px solid " + (attention ? AMBER : state === "done" ? p.doneBorder : p.border),
+      border: "1px solid " + (attention ? p.warnBorder : state === "done" ? p.doneBorder : p.border),
       borderRadius: expanded ? "16px" : "999px",
-      boxShadow: "0 8px 24px rgba(0,0,0,.16)",
+      boxShadow: p.shadow,
       boxSizing: "border-box",
-      width: expanded ? "300px" : "auto",
+      width: expanded ? CARD_WIDTH : "auto",
+      height: "auto",
       maxWidth: "calc(100vw - 16px)",
-      padding: expanded ? "12px 14px" : "5px 8px 5px 5px",
-      fontFamily: "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
+      padding: expanded ? "16px" : "5px 8px 5px 5px",
+      display: "flex",
+      flexDirection: "column",
+      gap: "12px",
+      fontFamily: "system-ui, -apple-system, 'Segoe UI', sans-serif",
       fontSize: "14px",
       lineHeight: "1.4",
       textAlign: "left",
@@ -1683,45 +1774,53 @@
       return node;
     }
     function button(key, label, kind) {
-      var b = el("button", key, {
-        font: "inherit", cursor: "pointer", borderRadius: "8px", lineHeight: "1.2",
-      }, label);
+      var b = el("button", key, { fontFamily: "inherit", cursor: "pointer", lineHeight: "1.2" }, label);
       b.type = "button";
-      if (kind === "primary") {
-        Object.assign(b.style, { background: PRIMARY, color: "#FFFFFF", border: "1px solid " + PRIMARY, padding: "7px 14px", fontWeight: "600" });
-        b.addEventListener("mouseenter", function () { b.style.background = PRIMARY_HOVER; });
-        b.addEventListener("mouseleave", function () { b.style.background = PRIMARY; });
+      var hover = function (bg, over) {
+        b.addEventListener("mouseenter", function () { b.style.background = over; });
+        b.addEventListener("mouseleave", function () { b.style.background = bg; });
+      };
+      if (kind === "primary" || kind === "danger") {
+        var bg = kind === "danger" ? p.danger : p.primary;
+        Object.assign(b.style, BOX_BUTTON, { background: bg, color: "#FFFFFF", border: "none", fontWeight: "700" });
+        hover(bg, kind === "danger" ? p.dangerHover : p.primaryHover);
       } else if (kind === "link") {
-        Object.assign(b.style, { background: "none", border: "none", padding: "0", color: p.link, textDecoration: "none", fontWeight: "600" });
+        Object.assign(b.style, { background: "none", border: "none", padding: "0", color: p.link, textDecoration: "none", fontSize: "13px", fontWeight: "600" });
       } else if (kind === "icon") {
         Object.assign(b.style, { background: "none", border: "none", padding: "2px 6px", color: p.muted, fontSize: "16px" });
       } else {
-        Object.assign(b.style, { background: p.secondaryBg, color: p.secondaryText, border: "1px solid " + p.secondaryBorder, padding: "6px 12px" });
+        Object.assign(b.style, BOX_BUTTON, {
+          background: p.secondaryBg, color: p.secondaryText, border: "1px solid " + p.secondaryBorder, fontWeight: "600",
+        });
       }
       return b;
     }
+    /** A bottom row: `left` (or nothing) at the left, `right` at the right. */
+    function bottomRow(left, right) {
+      var row = el("div", "bottom-row", {
+        display: "flex", justifyContent: left ? "space-between" : "flex-end", alignItems: "center", gap: "8px",
+      });
+      if (left) row.appendChild(left);
+      for (var i = 0; i < right.length; i++) row.appendChild(right[i]);
+      return row;
+    }
+    var bodyStyle = { fontSize: "13px", lineHeight: "18px", color: p.body };
 
     if (state === "idle") {
       renderIdleTab();
       return;
     }
 
-    /** C3: the idle "K" tab (collapsed), or its one line + Open Keepr (expanded). */
+    /** C3: the idle K tab (collapsed), or its one line + Open Keepr (expanded). */
     function renderIdleTab() {
-      Object.assign(box.style, {
-        width: expanded ? "220px" : "auto",
-        padding: expanded ? "10px 12px" : "4px",
-        borderRadius: expanded ? "14px" : "12px",
-      });
       var tab = el("div", "drag-handle", {
-        width: "30px", height: "36px", borderRadius: "10px", display: "flex", alignItems: "center", justifyContent: "center",
-        fontWeight: "700", fontSize: "15px", cursor: "grab", touchAction: "none", userSelect: "none",
-        background: "linear-gradient(135deg, #4F46E5, #6D5DF0)", color: "#FFFFFF",
-      }, "K");
+        display: "flex", alignItems: "center", justifyContent: "center",
+        cursor: "grab", touchAction: "none", userSelect: "none",
+      });
       tab.setAttribute("data-keepr-tab", "1");
       tab.setAttribute("role", "button");
       tab.setAttribute("tabindex", "0");
-      tab.setAttribute("aria-label", expanded ? "Hide Keepr" : "Keepr");
+      tab.setAttribute("aria-label", expanded ? "Hide Keepr" : "Keepr status");
       tab.setAttribute("aria-expanded", expanded ? "true" : "false");
       tab.title = "Keepr — drag to move";
       // A tap (not a drag: the drag code tells) or Enter / Space opens it.
@@ -1732,47 +1831,67 @@
         }
       });
       if (!expanded) {
+        // The mockup's tab: 40×56, flush with the right edge, rounded on the left.
+        Object.assign(box.style, {
+          width: "40px", height: "56px", padding: "0", border: "none", gap: "0",
+          borderRadius: "12px 0 0 12px", background: p.tab, boxShadow: p.tabShadow, overflow: "visible",
+        });
+        Object.assign(tab.style, { width: "40px", height: "56px" });
+        tab.appendChild(brandMark(doc, 28, true));
         box.appendChild(tab);
+        // Its label, on hover / focus: "Keepr · linked".
+        var linked = extras && extras.idle && typeof extras.idle.linked === "boolean" ? extras.idle.linked : null;
+        var tip = el("div", "tab-label", {
+          position: "absolute", right: "48px", top: "50%", transform: "translateY(-50%)", display: "none",
+          padding: "8px 12px", borderRadius: "8px", background: p.tipBg, color: p.tipText,
+          fontSize: "13px", lineHeight: "18px", whiteSpace: "nowrap", pointerEvents: "none",
+        }, linked === null ? "Keepr" : linked ? "Keepr · linked" : "Keepr · not linked");
+        box.appendChild(tip);
+        var showTip = function (on) { return function () { tip.style.display = on ? "block" : "none"; }; };
+        tab.addEventListener("mouseenter", showTip(true));
+        tab.addEventListener("mouseleave", showTip(false));
+        tab.addEventListener("focus", showTip(true));
+        tab.addEventListener("blur", showTip(false));
         return;
       }
-      var row = el("div", "header", { display: "flex", alignItems: "center", gap: "8px" });
+      Object.assign(tab.style, { flex: "0 0 30px", width: "30px", height: "30px" });
+      tab.appendChild(brandMark(doc, 30));
+      var row = el("div", "header", { display: "flex", alignItems: "center", gap: "10px" });
       row.appendChild(tab);
-      row.appendChild(el("div", "line", { flex: "1 1 auto", fontWeight: "600", color: p.text }, IDLE_TAB_LINE));
+      row.appendChild(el("div", "line", { flex: "1 1 auto", fontSize: "15px", fontWeight: "700", color: p.text }, IDLE_TAB_LINE));
       box.appendChild(row);
+      // Founder: Open Keepr at the bottom-right of the box.
       var openIdle = button("open-keepr", "Open Keepr", "primary");
-      openIdle.style.marginTop = "10px";
       openIdle.addEventListener("click", openKeepr);
-      box.appendChild(openIdle);
-      if (extras.version) {
-        box.appendChild(el("div", "version", { marginTop: "8px", fontSize: "12px", color: p.muted }, "Keepr extension " + extras.version));
-      }
+      box.appendChild(bottomRow(null, [openIdle]));
     }
 
     // Header: badge (the drag handle) + title + controls.
-    var header = el("div", "header", { display: "flex", alignItems: "center", gap: "8px" });
+    var header = el("div", "header", { display: "flex", alignItems: "center", gap: "10px" });
+    // Founder (2026-10-03): the brand mark is the logo AND the drag handle;
+    // done shows a green ✓ and a failure an amber ! (the mockups).
     var badge = el("div", "drag-handle", {
-      position: "relative", flex: "0 0 30px", width: "30px", height: "30px", borderRadius: "50%",
+      flex: "0 0 30px", width: "30px", height: "30px", borderRadius: "999px",
       display: "flex", alignItems: "center", justifyContent: "center",
-      fontWeight: "700", fontSize: "15px", cursor: "grab", touchAction: "none", userSelect: "none",
-      background: attention ? AMBER : "linear-gradient(135deg, #4F46E5, #6D5DF0)",
-      color: attention ? "#111827" : "#FFFFFF",
-    }, state === "done" ? "✓" : state === "error" ? "!" : "K");
-    badge.title = "Drag to move";
-    badge.setAttribute("aria-hidden", "true");
-    if (!attention) {
-      badge.appendChild(el("span", null, {
-        position: "absolute", top: "0", right: "0", width: "8px", height: "8px", borderRadius: "50%",
-        background: AMBER, border: "1.5px solid " + p.card, boxSizing: "border-box",
-      }));
+      cursor: "grab", touchAction: "none", userSelect: "none",
+    });
+    if (state === "done" || state === "error") {
+      Object.assign(badge.style, { background: state === "done" ? p.ok : p.warn, color: "#FFFFFF", fontWeight: "800", fontSize: "15px" });
+      badge.textContent = state === "done" ? "✓" : "!";
+    } else {
+      badge.appendChild(brandMark(doc, 30));
     }
+    badge.title = "Keepr — drag to move";
+    badge.setAttribute("aria-hidden", "true");
     header.appendChild(badge);
 
     var retryable = state === "error" && !!(extras && extras.retry) && !!io.retry;
-    var title = retryable ? SYNC_FAILED_TITLE : state === "syncing"
-      ? (expanded ? SYNCING_TITLE : chipTitle(text))
+    var title = state === "error" ? SYNC_FAILED_TITLE : state === "done" ? (text === DONE_LINE ? DONE_TITLE : text)
+      : state === "syncing" ? (expanded ? SYNCING_TITLE : chipTitle(text))
       : state === "paused" ? PAUSED_TITLE : state === "ask" ? ASK_TITLE : text;
     var line = el("div", "line", {
-      flex: "1 1 auto", minWidth: "0", fontWeight: "600", color: p.text, whiteSpace: expanded ? "normal" : "nowrap",
+      flex: "1 1 auto", minWidth: "0", fontSize: expanded ? "15px" : "14px", fontWeight: "700", color: p.text,
+      whiteSpace: expanded ? "normal" : "nowrap",
     }, title);
     header.appendChild(line);
     if (collapsible) {
@@ -1788,7 +1907,7 @@
       // Keyboard alternative to dragging: hidden until it has focus.
       var move = button("move", "Move", "secondary");
       move.setAttribute("aria-label", "Move this box to the next corner");
-      var hidden = { position: "absolute", width: "1px", height: "1px", overflow: "hidden", clip: "rect(0 0 0 0)", padding: "0", border: "0" };
+      var hidden = { position: "absolute", width: "1px", height: "1px", overflow: "hidden", clip: "rect(0 0 0 0)", padding: "0", border: "0", minHeight: "0" };
       var shown = { position: "static", width: "auto", height: "auto", overflow: "visible", clip: "auto", padding: "2px 8px", border: "1px solid " + p.secondaryBorder };
       Object.assign(move.style, hidden);
       move.addEventListener("focus", function () { Object.assign(move.style, shown); });
@@ -1806,30 +1925,8 @@
     box.appendChild(header);
     if (!expanded) return;
 
-    var bodyStyle = { marginTop: "8px", color: p.muted };
-    if (retryable) {
-      box.appendChild(el("div", "progress", bodyStyle, text));
-      var retry = button("try-again", TRY_AGAIN_LABEL, "primary");
-      retry.style.marginTop = "10px";
-      retry.addEventListener("click", function () {
-        retry.disabled = true;
-        Promise.resolve(io.retry()).then(function (ok) {
-          if (!ok) retry.disabled = false;
-        }, function () { retry.disabled = false; });
-      });
-      box.appendChild(retry);
-    }
-    if (state === "syncing") {
-      box.appendChild(el("div", "progress", bodyStyle, text));
-      box.appendChild(el("div", "hint", { marginTop: "6px", color: p.text }, SYNCING_HINT));
-    }
-    if (state === "paused") box.appendChild(el("div", "progress", bodyStyle, PAUSE_BODIES[text] || PAUSED_BODY));
-
     if (state === "ask") {
       box.appendChild(el("div", "progress", bodyStyle, ASK_TEXT));
-      var askRow = el("div", "bottom-row", {
-        display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", marginTop: "12px",
-      });
       var later = button("ask-later", "Not now", "secondary");
       var startButton = button("ask-start", "Start", "primary");
       later.addEventListener("click", function () { extras.ask.later(); });
@@ -1838,30 +1935,36 @@
         later.disabled = true;
         extras.ask.start();
       });
-      askRow.appendChild(later);
-      askRow.appendChild(startButton);
-      box.appendChild(askRow);
+      box.appendChild(bottomRow(null, [later, startButton]));
       return;
     }
 
-    if ((state === "syncing" || state === "paused") && extras && extras.cancel) {
-      // Founder (2026-10-02): "Stop sync" with an inline confirm; it cancels
-      // this job only, through the bridge (a signed job call), ended by the page.
+    if (state === "syncing" || state === "paused") {
+      var running = [];
+      var frac = state === "syncing" ? progressFraction(text) : null;
+      if (frac !== null) {
+        var bar = el("div", "progress-bar", { height: "6px", borderRadius: "999px", background: p.track, overflow: "hidden" });
+        bar.appendChild(el("div", "progress-fill", { width: Math.round(frac * 100) + "%", height: "6px", background: p.fill }));
+        box.appendChild(bar);
+        running.push(bar);
+      }
+      var progressLine = el("div", "progress", { fontSize: "13px", color: p.muted },
+        state === "paused" ? PAUSE_BODIES[text] || PAUSED_BODY : syncingLine(text));
+      box.appendChild(progressLine);
+      running.push(progressLine);
+      if (!(extras && extras.cancel)) return;
+      // Founder (2026-10-02): "Stop sync" with a confirm; it cancels this job
+      // only, through the bridge (a signed job call), ended by the page.
       var cancel = button("cancel", STOP_SYNC_LABEL, "secondary");
-      cancel.style.marginTop = "10px";
+      cancel.style.alignSelf = "flex-end";
       box.appendChild(cancel);
-      var confirmBox = el("div", "stop-confirm", {
-        display: "none", marginTop: "10px", padding: "8px", borderRadius: "10px",
-        border: "1px solid " + AMBER, color: p.text,
-      });
+      running.push(cancel);
+      var confirmBox = el("div", "stop-confirm", { display: "none", flexDirection: "column", gap: "12px" });
       confirmBox.setAttribute("role", "alert");
-      confirmBox.appendChild(el("div", "stop-question", null, STOP_SYNC_QUESTION));
-      var confirmRow = el("div", null, { display: "flex", gap: "8px", marginTop: "8px" });
-      var stopYes = button("stop-yes", STOP_SYNC_LABEL, "primary");
+      confirmBox.appendChild(el("div", "stop-question", bodyStyle, STOP_SYNC_BODY));
       var stopNo = button("stop-no", "Keep syncing", "secondary");
-      confirmRow.appendChild(stopYes);
-      confirmRow.appendChild(stopNo);
-      confirmBox.appendChild(confirmRow);
+      var stopYes = button("stop-yes", STOP_SYNC_LABEL, "danger");
+      confirmBox.appendChild(bottomRow(null, [stopNo, stopYes]));
       box.appendChild(confirmBox);
       // SR: the box is rebuilt on every progress line, so the confirm's state
       // lives in io.stop (kept by the page across renders) until the user
@@ -1869,8 +1972,10 @@
       var stop = io.stop || { state: "closed", openedAt: 0 };
       var now = function () { return io.now ? io.now() : Date.now(); };
       var paint = function () {
-        confirmBox.style.display = stop.state === "closed" ? "none" : "block";
-        cancel.style.display = stop.state === "closed" ? "" : "none";
+        var asking = stop.state !== "closed";
+        confirmBox.style.display = asking ? "flex" : "none";
+        running.forEach(function (n) { n.style.display = asking ? "none" : ""; });
+        line.textContent = asking ? STOP_SYNC_TITLE : title;
         stopYes.disabled = stop.state === "stopping";
         stopNo.disabled = stop.state === "stopping";
         stopYes.textContent = stop.state === "stopping" ? "Stopping…" : STOP_SYNC_LABEL;
@@ -1882,8 +1987,8 @@
         paint();
         // C3 (founder): unanswered, it closes itself — the sync never paused.
         var openedAt = stop.openedAt;
-        var later = io.setTimeout || setTimeout;
-        later(function () {
+        var laterFn = io.setTimeout || setTimeout;
+        laterFn(function () {
           if (stop.state === "open" && stop.openedAt === openedAt) {
             stop.state = "closed";
             paint();
@@ -1911,48 +2016,58 @@
       });
       return;
     }
-    if (!extras || !extras.details) return;
 
-    // Bottom row: the details link LEFT, Open Keepr RIGHT.
-    var row = el("div", "bottom-row", {
-      display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", marginTop: "12px",
-    });
-    var toggle = button("details-toggle", SEE_DETAILS, "link");
-    toggle.setAttribute("aria-expanded", "false");
-    var open = button("open-keepr", "Open Keepr", "primary");
-    row.appendChild(toggle);
-    row.appendChild(open);
-    box.appendChild(row);
+    // done / error: one line (the counts, or the failure), then the bottom row.
+    var bodyLine = state === "error" ? text : extras && extras.summary ? extras.summary : "";
+    if (bodyLine) box.appendChild(el("div", "progress", bodyStyle, bodyLine));
+    var hasDetails = !!(extras && extras.details);
 
-    // The details card, BELOW the row, collapsed by default.
-    var card = el("div", "details-card", {
-      display: "none", marginTop: "10px", padding: "10px", borderRadius: "10px",
-      background: p.detailsBg, color: p.text, border: "1px solid " + p.detailsBorder,
-    });
-    var details = el("pre", "details", { whiteSpace: "pre-wrap", margin: "0", font: "inherit", fontSize: "13px" }, extras.details);
-    var copyButton = button("copy", "Copy details", "secondary");
-    copyButton.style.marginTop = "8px";
-    card.appendChild(details);
-    card.appendChild(copyButton);
-    // Founder: the extension version, a muted footer of the details.
-    if (extras.version) {
-      card.appendChild(el("div", "version", { marginTop: "8px", fontSize: "12px", color: p.muted }, "Keepr extension " + extras.version));
-    }
-    box.appendChild(card);
-
-    toggle.addEventListener("click", function () {
-      var opening = card.style.display === "none";
-      card.style.display = opening ? "block" : "none";
-      toggle.textContent = opening ? HIDE_DETAILS : SEE_DETAILS;
-      toggle.setAttribute("aria-expanded", opening ? "true" : "false");
-    });
-    copyButton.addEventListener("click", function () {
-      Promise.resolve(io.copy(extras.copy)).then(function (ok) {
-        copyButton.textContent = ok ? "Copied" : "Copy failed";
-      }, function () {
-        copyButton.textContent = "Copy failed";
+    // The details card, ABOVE the row (founder: the row's action stays at the
+    // box's bottom-right), collapsed by default.
+    var toggle = null;
+    if (hasDetails) {
+      toggle = button("details-toggle", SEE_DETAILS, "link");
+      toggle.setAttribute("aria-expanded", "false");
+      var card = el("div", "details-card", {
+        display: "none", padding: "10px", borderRadius: "10px",
+        background: p.detailsBg, color: p.text, border: "1px solid " + p.detailsBorder,
       });
-    });
+      var details = el("pre", "details", { whiteSpace: "pre-wrap", margin: "0", font: "inherit", fontSize: "13px" }, extras.details);
+      var copyButton = button("copy", "Copy details", "secondary");
+      copyButton.style.marginTop = "8px";
+      card.appendChild(details);
+      card.appendChild(copyButton);
+      // Founder (2026-10-03): no version line in the box (Copy details and the popup carry it).
+      box.appendChild(card);
+      toggle.addEventListener("click", function () {
+        var opening = card.style.display === "none";
+        card.style.display = opening ? "block" : "none";
+        toggle.textContent = opening ? HIDE_DETAILS : SEE_DETAILS;
+        toggle.setAttribute("aria-expanded", opening ? "true" : "false");
+      });
+      copyButton.addEventListener("click", function () {
+        Promise.resolve(io.copy(extras.copy)).then(function (ok) {
+          copyButton.textContent = ok ? "Copied" : "Copy failed";
+        }, function () {
+          copyButton.textContent = "Copy failed";
+        });
+      });
+    }
+
+    if (retryable) {
+      var retry = button("try-again", TRY_AGAIN_LABEL, "primary");
+      retry.addEventListener("click", function () {
+        retry.disabled = true;
+        Promise.resolve(io.retry()).then(function (ok) {
+          if (!ok) retry.disabled = false;
+        }, function () { retry.disabled = false; });
+      });
+      box.appendChild(bottomRow(toggle, [retry]));
+      return;
+    }
+    if (!hasDetails) return;
+    var open = button("open-keepr", "Open Keepr", "primary");
+    box.appendChild(bottomRow(toggle, [open]));
     // Live (founder): /focus, else keepr://open — the button never changes its words.
     open.addEventListener("click", openKeepr);
   }
@@ -1973,12 +2088,13 @@
   var SAFE_BOTTOM = 104;
 
   /** Where the box goes: right edge; `topFrac` (0..1, default 0.5) of the safe band. */
-  function tabPosition(topFrac, size, view) {
+  function tabPosition(topFrac, size, view, gap) {
     var frac = typeof topFrac === "number" && isFinite(topFrac) ? Math.min(1, Math.max(0, topFrac)) : 0.5;
+    var rightGap = typeof gap === "number" && isFinite(gap) ? gap : RIGHT_GAP;
     var minTop = SAFE_TOP;
     var maxTop = Math.max(minTop, view.height - SAFE_BOTTOM - size.height);
     return {
-      left: Math.round(Math.max(OVERLAY_MARGIN, view.width - size.width - RIGHT_GAP)),
+      left: Math.round(Math.max(0, view.width - size.width - rightGap)),
       top: Math.round(minTop + (maxTop - minTop) * frac),
     };
   }
@@ -2053,7 +2169,7 @@
       if (edge) {
         // C3: up and down the right edge only, inside the safe band.
         frac = tabFraction(pos.top, io.size(), io.view());
-        return place(tabPosition(frac, io.size(), io.view()));
+        return place(tabPosition(frac, io.size(), io.view(), io.rightGap ? io.rightGap() : RIGHT_GAP));
       }
       return place(clampPosition(pos, io.size(), io.view()));
     }
@@ -2063,7 +2179,7 @@
     var saved = io.load();
     if (edge) {
       frac = saved && typeof saved.topFrac === "number" ? saved.topFrac : 0.5;
-      place(tabPosition(frac, io.size(), io.view()));
+      place(tabPosition(frac, io.size(), io.view(), io.rightGap ? io.rightGap() : RIGHT_GAP));
     } else if (saved && typeof saved.left === "number" && typeof saved.top === "number") settle(saved);
 
     grip.addEventListener("pointerdown", function (e) {
@@ -2110,7 +2226,7 @@
         if (edge) {
           // C3: the keyboard moves it along the edge: top, middle, bottom.
           frac = frac < 0.25 ? 0.5 : frac < 0.75 ? 1 : 0;
-          place(tabPosition(frac, io.size(), io.view()));
+          place(tabPosition(frac, io.size(), io.view(), io.rightGap ? io.rightGap() : RIGHT_GAP));
           io.save({ topFrac: frac });
           return frac;
         }
@@ -2122,12 +2238,12 @@
       restore: function (saved) {
         if (edge && saved && typeof saved.topFrac === "number") {
           frac = saved.topFrac;
-          place(tabPosition(frac, io.size(), io.view()));
+          place(tabPosition(frac, io.size(), io.view(), io.rightGap ? io.rightGap() : RIGHT_GAP));
         }
       },
       /** After a resize (or a taller / wider box): back to its place. */
       keepOnScreen: function () {
-        if (edge) place(tabPosition(frac, io.size(), io.view()));
+        if (edge) place(tabPosition(frac, io.size(), io.view(), io.rightGap ? io.rightGap() : RIGHT_GAP));
         else if (box.style.left) settle(current());
       },
     };
@@ -2203,6 +2319,11 @@
     PALETTE: PALETTE,
     ASK_TITLE: ASK_TITLE,
     STOP_SYNC_QUESTION: STOP_SYNC_QUESTION,
+    STOP_SYNC_TITLE: STOP_SYNC_TITLE,
+    STOP_SYNC_BODY: STOP_SYNC_BODY,
+    DONE_TITLE: DONE_TITLE,
+    progressFraction: progressFraction,
+    syncingLine: syncingLine,
     STOP_CONFIRM_ARM_MS: STOP_CONFIRM_ARM_MS,
     IDLE_TAB_LINE: IDLE_TAB_LINE,
     STOP_CONFIRM_AUTO_CLOSE_MS: STOP_CONFIRM_AUTO_CLOSE_MS,
@@ -2210,6 +2331,7 @@
     TRY_AGAIN_LABEL: TRY_AGAIN_LABEL,
     PAGE_GONE_MESSAGE: PAGE_GONE_MESSAGE,
     tabPosition: tabPosition,
+    brandMark: brandMark,
     sanitizeTabPosition: sanitizeTabPosition,
     windowLabel: windowLabel,
     mediaLine: mediaLine,
@@ -2347,6 +2469,8 @@
         handleSelector: DRAG_HANDLE,
         // C3: the right edge, its place remembered on this computer.
         rightEdge: true,
+        // The mockup: the idle K tab sits flush with the edge; the open box a little in.
+        rightGap: function () { return box && box.getAttribute("data-keepr-state") === "idle" && !idleExpanded ? 0 : RIGHT_GAP; },
         onTap: function () {
           if (lastShown && lastShown.extras && lastShown.extras.idle) {
             idleExpanded = !idleExpanded;
@@ -2404,12 +2528,14 @@
   // (POST /exclusions/list, ids only); the last sync time is this extension's
   // own record (the worker notes when a /finish succeeded). No new data.
   var asking = false;
+  /** The idle tab's label: "Keepr · linked" / "Keepr · not linked" (a boolean from the worker). */
+  var idleLinked;
   function idleOnScreen() {
     return !lastShown || !!(lastShown.extras && lastShown.extras.idle);
   }
   function showIdle() {
     if (running || asking || !idleOnScreen()) return;
-    showOverlay("", false, { idle: {}, version: manifestVersion() });
+    showOverlay("", false, { idle: { linked: idleLinked }, version: manifestVersion() });
   }
   /** C3: idle, the page shows only the K tab (status and linking: the toolbar popup). */
   async function refreshIdle() {
@@ -2417,6 +2543,10 @@
     if (!document.body) {
       await new Promise(function (r) { document.addEventListener("DOMContentLoaded", r, { once: true }); });
     }
+    try {
+      var status = await toWorker({ type: "keepr-pair-status" });
+      idleLinked = status && status.ok ? !!status.paired : undefined;
+    } catch (_e) { idleLinked = undefined; }
     showIdle();
   }
   /** × on a finished Sync, or "Not now": the box goes back to the idle chip. */

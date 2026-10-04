@@ -85,10 +85,11 @@ describe("states (design C)", () => {
     expect(onExpand).toHaveBeenCalledWith(true);
     const card = render("Chat 8 of 21…", false, { cancel: true }, { expanded: true, theme: "light" });
     expect(card.style.borderRadius).toBe("16px");
-    expect(card.querySelector('[data-keepr="progress"]')?.textContent).toBe("Chat 8 of 21…");
-    expect(card.querySelector('[data-keepr="hint"]')?.textContent).toBe(
-      "Keep this tab open while Keepr syncs. When it's done, you'll go back to Keepr automatically.",
-    );
+    // The mockup (BoxSyncing): title, a 6px bar (8 of 21 = 38%), the line, Stop sync right.
+    expect(card.querySelector('[data-keepr="line"]')?.textContent).toBe("Syncing your texts");
+    expect((card.querySelector('[data-keepr="progress-fill"]') as HTMLElement).style.width).toBe("38%");
+    expect(card.querySelector('[data-keepr="progress"]')?.textContent).toBe("Chat 8 of 21 · keep this tab open");
+    expect(card.querySelector('[data-keepr="hint"]')).toBeNull();
     expect(card.querySelector('[data-keepr="cancel"]')).not.toBeNull();
     // A line that is not "n of m" keeps its words.
     const waiting = render("Saving in Keepr…", false, undefined, { theme: "light" });
@@ -98,8 +99,8 @@ describe("states (design C)", () => {
   it("paused: auto-expanded, amber, says what to do, keeps Cancel (D4)", () => {
     const box = render(job.PAUSED_TEXT, false, { cancel: true }, { theme: "dark" });
     expect(box.getAttribute("data-keepr-state")).toBe("paused");
-    expect(box.style.width).toBe("300px");
-    expect(box.style.border.toLowerCase()).toMatch(/#f5a524|rgb\(245, 165, 36\)/);
+    expect(box.style.width).toBe("320px");
+    expect(box.style.border.toLowerCase()).toMatch(/#8a6a2f|rgb\(138, 106, 47\)/);
     expect(box.querySelector('[data-keepr="line"]')?.textContent).toBe("Sync paused");
     expect(box.querySelector('[data-keepr="progress"]')?.textContent).toBe("Keep this Chrome window visible — Sync continues when it's back.");
     expect(box.querySelector('[data-keepr="hint"]')).toBeNull();

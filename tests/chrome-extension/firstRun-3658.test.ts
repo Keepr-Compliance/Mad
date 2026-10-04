@@ -65,7 +65,8 @@ describe("first-run (C4)", () => {
     const calls: string[] = [];
     const io = { link: () => calls.push("link"), openApp: () => calls.push("openApp") };
     welcome.renderLinkStep(document, box, { state: "not_linked" }, io);
-    expect(box.textContent).toContain(welcome.COPY.notLinked);
+    // The mockup (Welcome.dc.html): the steps, then [Link with Keepr].
+    expect(box.textContent).toBe("Link with Keepr");
     (box.querySelector('[data-keepr="link"]') as HTMLButtonElement).click();
     welcome.renderLinkStep(document, box, { state: "linking", link: { code: "042137" } }, io);
     expect(box.querySelector(".code")!.textContent).toBe("042 137");

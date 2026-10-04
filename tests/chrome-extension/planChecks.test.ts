@@ -51,7 +51,7 @@ interface JobModule {
     panel: HTMLElement,
     text: string,
     isError: boolean,
-    extras: { details: string; copy: string } | undefined,
+    extras: { details: string; copy: string; summary?: string } | undefined,
     io: { copy: (text: string) => Promise<boolean>; focus?: () => Promise<boolean> },
   ) => void;
 }
@@ -261,15 +261,16 @@ describe("the overlay panel (BACKLOG-3641 founder UX)", () => {
     return document.getElementById("p") as HTMLElement;
   }
 
-  // Founder's final layout (mockup screen 4). Mutations that turn this red:
-  // the details card above the row (or the row order swapped); the link text
-  // not switching to "Hide details ▴"; Copy details outside the card; Open
-  // Keepr not asking Keepr to come forward.
-  it("headline; bottom row = 'See details ▾' left, 'Open Keepr' right; the card opens BELOW the row with Copy details inside (P7)", async () => {
+  // The approved mockup (BoxDone, 2026-10-03): "Sync done", the counts, then
+  // the row — "See details" left, Open Keepr at the box's BOTTOM-RIGHT (the
+  // details card opens above the row). Mutations: the card below the row (or
+  // the row order swapped); the link text not switching; Copy details outside
+  // the card; Open Keepr not asking Keepr to come forward.
+  it("'Sync done' + the counts; bottom row = 'See details' left, 'Open Keepr' bottom-right; the card opens ABOVE the row (P7)", async () => {
     const el = panel();
     const copied: string[] = [];
     let focused = 0;
-    job.renderOverlay(el, job.DONE_LINE, false, { details: "Scanned 3 chats", copy: "COPY TEXT" }, {
+    job.renderOverlay(el, job.DONE_LINE, false, { details: "Scanned 3 chats", summary: "Scanned 3 chats", copy: "COPY TEXT" }, {
       copy: async (text) => {
         copied.push(text);
         return true;
@@ -280,21 +281,22 @@ describe("the overlay panel (BACKLOG-3641 founder UX)", () => {
       },
     });
     const kids = Array.from(el.children).map((c) => c.getAttribute("data-keepr"));
-    expect(kids).toEqual(["header", "bottom-row", "details-card"]);
-    expect(el.querySelector("[data-keepr=line]")?.textContent).toBe("Sync done — switch back to Keepr.");
+    expect(kids).toEqual(["header", "progress", "details-card", "bottom-row"]);
+    expect(el.querySelector("[data-keepr=line]")?.textContent).toBe("Sync done");
+    expect(el.querySelector("[data-keepr=progress]")?.textContent).toBe("Scanned 3 chats");
     const row = el.querySelector("[data-keepr=bottom-row]") as HTMLElement;
     expect(Array.from(row.children).map((c) => c.getAttribute("data-keepr"))).toEqual(["details-toggle", "open-keepr"]);
     expect(row.style.justifyContent).toBe("space-between");
     const toggle = el.querySelector("[data-keepr=details-toggle]") as HTMLElement;
     const card = el.querySelector("[data-keepr=details-card]") as HTMLElement;
-    expect(toggle.textContent).toBe("See details ▾");
+    expect(toggle.textContent).toBe("See details");
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(card.style.display).toBe("none");
     expect(card.querySelector("[data-keepr=copy]")?.textContent).toBe("Copy details");
 
     toggle.click();
     expect(card.style.display).toBe("block");
-    expect(toggle.textContent).toBe("Hide details ▴");
+    expect(toggle.textContent).toBe("Hide details");
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
     expect(card.querySelector("[data-keepr=details]")?.textContent).toBe("Scanned 3 chats");
 
@@ -309,7 +311,7 @@ describe("the overlay panel (BACKLOG-3641 founder UX)", () => {
 
     toggle.click();
     expect(card.style.display).toBe("none");
-    expect(toggle.textContent).toBe("See details ▾");
+    expect(toggle.textContent).toBe("See details");
 
     // A progress line replaces everything: the collapsed pill, no stale buttons.
     job.renderOverlay(el, "Checking chat 2 of 9", false, undefined, { copy: async () => true });
@@ -318,14 +320,15 @@ describe("the overlay panel (BACKLOG-3641 founder UX)", () => {
     expect(el.querySelector("[data-keepr=open-keepr]")).toBeNull();
   });
 
-  it("a failure: one plain line + the same bottom row", () => {
+  it("a failure: 'Sync failed', the reason on one line, the same bottom row (BoxCancelled)", () => {
     const el = panel();
     job.renderOverlay(el, "Sign in to Google Messages, then click Sync in Keepr again", true, { details: "d", copy: "c" }, {
       copy: async () => true,
       focus: async () => true,
     });
-    expect(Array.from(el.children).map((c) => c.getAttribute("data-keepr"))).toEqual(["header", "bottom-row", "details-card"]);
-    expect(el.querySelector("[data-keepr=line]")?.textContent).toBe("Sign in to Google Messages, then click Sync in Keepr again");
+    expect(Array.from(el.children).map((c) => c.getAttribute("data-keepr"))).toEqual(["header", "progress", "details-card", "bottom-row"]);
+    expect(el.querySelector("[data-keepr=line]")?.textContent).toBe("Sync failed");
+    expect(el.querySelector("[data-keepr=progress]")?.textContent).toBe("Sign in to Google Messages, then click Sync in Keepr again");
   });
 
   // Live (founder): a refused /focus falls back to keepr://open (the page's

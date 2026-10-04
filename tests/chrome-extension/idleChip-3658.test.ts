@@ -50,17 +50,18 @@ describe("the idle K tab (C3)", () => {
     expect(job.bootPlan({ hashJob: null, storedJob: null, pendingJob: "j-3" }).idle).toBeUndefined();
   });
 
-  it("collapsed: the K tab only — no text, no button (I2)", () => {
+  it("collapsed: the K tab only — the brand mark, no text, no button (I2)", () => {
     const box = render(idle());
     expect(box.getAttribute("data-keepr-state")).toBe("idle");
     const tab = q(box, "drag-handle")!;
-    expect(tab.textContent).toBe("K");
+    expect(tab.querySelector('[data-keepr="brand-mark"]')).not.toBeNull();
+    expect(tab.textContent).toBe("");
     expect(tab.getAttribute("aria-expanded")).toBe("false");
     expect(q(box, "line")).toBeNull();
     expect(box.querySelectorAll("button")).toHaveLength(0);
   });
 
-  it("a tap opens it: one line and Open Keepr (/focus), the version (I3)", async () => {
+  it("a tap opens it: one line and Open Keepr (/focus) at the bottom-right, no version line (I3)", async () => {
     const onExpand = jest.fn();
     const closed = render(idle(), { onExpand });
     q(closed, "drag-handle")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
@@ -68,7 +69,12 @@ describe("the idle K tab (C3)", () => {
     const focus = jest.fn(async () => true);
     const box = render(idle(), { expanded: true, focus });
     expect(q(box, "line")!.textContent).toBe(job.IDLE_TAB_LINE);
-    expect(q(box, "version")!.textContent).toBe("Keepr extension 0.3.19");
+    expect(q(box, "version")).toBeNull();
+    expect(box.textContent).not.toContain("0.3.19");
+    const row = q(box, "bottom-row")!;
+    expect(row.style.justifyContent).toBe("flex-end");
+    expect(row.lastElementChild!.getAttribute("data-keepr")).toBe("open-keepr");
+    expect(box.lastElementChild).toBe(row);
     q(box, "open-keepr")!.click();
     await flush();
     expect(focus).toHaveBeenCalledTimes(1);
