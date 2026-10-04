@@ -808,6 +808,11 @@ class SubmissionService {
     let orgId: string | null = null;
     /** Set BEFORE the parent insert: once sent, the row may exist. */
     let parentSent = false;
+    /** The `in_progress` attempt row was written (C1): only then a final one. */
+    let attemptStarted = false;
+    /** Known once the manifest is built / the snapshot ran (C3). */
+    let cloudIdByLocalOuter = new Map<string, string>();
+    let checklistsNotSentOuter: ChecklistsNotSentReason | undefined;
     let manifestPaths: string[] = [];
     let manifestCounts: ManifestCounts | null = null;
     let refusal: FinalizeRefusalCounts | null = null;
@@ -828,7 +833,9 @@ class SubmissionService {
       ...extra,
     });
 
-    this.active = { transactionId, controller, finalizing: false };
+    // S1: a local reference, so a second run on the singleton cannot null it.
+    const active = { transactionId, controller, finalizing: false };
+    this.active = active;
     this._isSubmitting = true;
     try {
       onProgress?.({
@@ -868,21 +875,11 @@ class SubmissionService {
       }
       const org: string = orgId;
 
-      void recordSubmissionAttempt(client, {
-        submissionId,
-        organizationId: org,
-        outcome: "in_progress",
-        stage: "gather",
-        reasonCode: null,
-        retryCount: 0,
-        counts: {},
-        isResubmit,
-      });
-
       await this.guardExistingSubmission(client, org, transactionId, options);
 
       // ---- Manifest: every id minted here, every path built here ------
       const cloudIdByLocal = new Map<string, string>();
+      cloudIdByLocalOuter = cloudIdByLocal;
       const textRecords = messages.map((m) => {
         const record = this.mapToSubmissionMessage(m, submissionId, partyNames);
         cloudIdByLocal.set(`text:${m.id}`, record.id);
@@ -963,6 +960,21 @@ class SubmissionService {
           excluded_files: excludedFiles,
         };
       }
+      // C1 (SR 8fa92bef): the attempt starts HERE, after every guard and just
+      // before the first write of this submission. Awaited, so a slow
+      // `in_progress` can never land after (and overwrite) the final outcome.
+      // A refusal before this point writes nothing and records no attempt.
+      attemptStarted = true;
+      await recordSubmissionAttempt(client, {
+        submissionId,
+        organizationId: org,
+        outcome: "in_progress",
+        stage: "parent",
+        reasonCode: null,
+        retryCount: 0,
+        counts: {},
+        isResubmit,
+      });
       parentSent = true;
       try {
         await withStageRetry(
@@ -1094,6 +1106,7 @@ class SubmissionService {
       const first = await writeAll(false, true);
       let manifestChecklists = first?.checklists ?? null;
       const checklistsNotSent: ChecklistsNotSentReason | undefined = first?.checklistsNotSent;
+      checklistsNotSentOuter = checklistsNotSent;
 
       const manifest = () => ({
         message_ids: messageRecords.map((m) => m.id),
@@ -1113,7 +1126,7 @@ class SubmissionService {
       // ---- 7. Finalize — the point of no return ------------------------
       throwIfCancelled(signal);
       stage = "finalize";
-      this.active.finalizing = true;
+      active.finalizing = true;
       onProgress?.({
         stage: "finalizing",
         stageProgress: 0,
@@ -1136,12 +1149,15 @@ class SubmissionService {
         const checklistsShort =
           typeof refusal.checklists_expected === "number" &&
           refusal.checklists_found !== refusal.checklists_expected;
-        this.active.finalizing = false;
+        active.finalizing = false;
         const again = await writeAll(true, checklistsShort);
         if (again && again.checklists !== undefined && checklistsShort) {
           manifestChecklists = again.checklists;
         }
-        this.active.finalizing = true;
+        // C2 (SR 8fa92bef): Cancel is accepted during the re-run, so check it
+        // again before asking the server a second time.
+        throwIfCancelled(signal);
+        active.finalizing = true;
         answer = await this.callFinalize(client, submissionId, manifest());
       }
 
@@ -1248,12 +1264,16 @@ class SubmissionService {
         manifestCounts,
         refusal,
         notIncludedCount: notIncluded.length,
+        notIncluded,
+        cloudIdByLocal: cloudIdByLocalOuter,
+        checklistsNotSent: checklistsNotSentOuter,
+        attemptStarted,
         isResubmit,
         onProgress,
         failedResult,
       });
     } finally {
-      this.active = null;
+      if (this.active === active) this.active = null;
       this._isSubmitting = false;
     }
   }
@@ -1275,6 +1295,10 @@ class SubmissionService {
     manifestCounts: ManifestCounts | null;
     refusal: FinalizeRefusalCounts | null;
     notIncludedCount: number;
+    notIncluded: NotIncludedItem[];
+    cloudIdByLocal: Map<string, string>;
+    checklistsNotSent: ChecklistsNotSentReason | undefined;
+    attemptStarted: boolean;
     isResubmit: boolean;
     onProgress?: (progress: SubmissionProgress) => void;
     failedResult: (error: string, extra?: Partial<SubmissionResult>) => SubmissionResult;
@@ -1335,13 +1359,19 @@ class SubmissionService {
           submitted_at: new Date().toISOString(),
         });
         ctx.onProgress?.({ stage: "complete", stageProgress: 100, overallProgress: 100, currentItem: "Submission complete" });
+        // C3 (SR 8fa92bef): the same success as the main path — the agent
+        // still sees what was left out, and the 3681 warning is still sent.
+        reportSubmissionExclusions(submissionId, ctx.notIncluded, ctx.cloudIdByLocal);
         return {
           success: true,
           submissionId,
           messagesCount: ctx.manifestCounts?.messages ?? 0,
           attachmentsCount: ctx.manifestCounts?.attachments ?? 0,
-          flaggedWithoutAttachments: 0,
-          notIncluded: [],
+          flaggedWithoutAttachments: new Set(
+            ctx.notIncluded.map((i) => `${i.kind}:${i.localMessageId}`)
+          ).size,
+          notIncluded: ctx.notIncluded,
+          ...(ctx.checklistsNotSent ? { checklistsNotSent: ctx.checklistsNotSent } : {}),
         };
       }
       if (abandoned.outcome === "unknown") {
@@ -1352,7 +1382,9 @@ class SubmissionService {
       }
     }
 
-    if (orgId) {
+    // C1: a final outcome only for an attempt that started (its `in_progress`
+    // row was written just before the parent write).
+    if (orgId && ctx.attemptStarted) {
       await recordSubmissionAttempt(client, {
         submissionId,
         organizationId: orgId,

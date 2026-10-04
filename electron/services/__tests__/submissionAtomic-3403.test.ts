@@ -86,6 +86,8 @@ class FakeCloud {
   pendingFinalize: (() => void) | null = null;
   attemptCalls: Row[] = [];
   snapshotPhantoms = 0;
+  /** C4: the next N storage removes answer with a network error. */
+  removeFailures = 0;
 
   private take(key: string): Script | undefined {
     const q = this.script[key];
@@ -129,6 +131,10 @@ class FakeCloud {
       // caller's, `uploading`, and fenced. Rows deleted first → nothing.
       remove: async (paths: string[]) => {
         this.calls.push({ kind: "storage.remove", detail: [...paths] });
+        if (this.removeFailures > 0) {
+          this.removeFailures -= 1;
+          return { data: null, error: { name: "StorageUnknownError", message: "fetch failed" } };
+        }
         const gone: string[] = [];
         for (const p of paths) {
           const parts = p.split("/");
@@ -813,6 +819,143 @@ describe("BACKLOG-3403 — what finalize says decides", () => {
     expect(subRows()).toHaveLength(1);
     expect(localStatusWrites()).toEqual([]);
     expect(cloud.attemptCalls.some((a) => a.p_outcome === "unconfirmed")).toBe(true);
+  });
+});
+
+// ============================================================================
+// SR CONDITIONS (pm_comments 8fa92bef)
+// ============================================================================
+
+describe("SR C1 — an attempt row exists only for an attempt that wrote something", () => {
+  /** MUTATIONS: in_progress before the guard → red; final record gated on orgId only → red. */
+  it("a refusal by the existing-submission guard records NO attempt row", async () => {
+    cloud.tables.transaction_submissions.push({ id: "sub-old", organization_id: ORG, submitted_by: USER, local_transaction_id: TX, status: "submitted", version: 1 });
+    const result = await submit();
+    expect(result.success).toBe(false);
+    expect(cloud.attemptCalls).toEqual([]);
+  });
+
+  it("an unconfirmed pre-flight list records NO attempt row", async () => {
+    setPreflightStatForTests(async () => null);
+    const result = await submit();
+    expect(result).toMatchObject({ success: false, preflightChanged: true });
+    expect(cloud.attemptCalls).toEqual([]);
+  });
+
+  /** MUTATION: send in_progress without awaiting (fire-and-forget) → the order changes → red. */
+  it("the in_progress row is written, awaited, immediately before the parent write", async () => {
+    let releaseAttempt: () => void = () => undefined;
+    const realRpc = cloud.rpc.bind(cloud);
+    jest.spyOn(cloud, "rpc").mockImplementation(async (fn: string, args: Row) => {
+      if (fn === "record_submission_attempt" && args.p_outcome === "in_progress") {
+        // A slow answer: the flow must wait for it before writing anything.
+        await new Promise<void>((r) => { releaseAttempt = r; setTimeout(r, 20); });
+        cloud.calls.push({ kind: "attempt-landed" });
+      }
+      return realRpc(fn, args);
+    });
+    const result = await submit();
+    void releaseAttempt;
+    expect(result.success).toBe(true);
+    const seq = cloud.calls
+      .filter((c) => c.kind === "attempt-landed" || (c.kind === "from" && c.op === "insert"))
+      .map((c) => (c.kind === "attempt-landed" ? "in_progress" : c.table));
+    expect(seq[0]).toBe("in_progress");
+    expect(seq[1]).toBe("transaction_submissions");
+  });
+});
+
+describe("SR C2 — a cancel accepted before finalize is honoured", () => {
+  /** MUTATION SRX1: drop the cancel check right before the first finalize → red. */
+  it("cancel during the checklist snapshot → no finalize call, cancelled, cleaned up", async () => {
+    const realRpc = cloud.rpc.bind(cloud);
+    jest.spyOn(cloud, "rpc").mockImplementation(async (fn: string, args: Row) => {
+      if (fn === "snapshot_submission_checklists") submissionService.cancelSubmission(TX);
+      return realRpc(fn, args);
+    });
+    const result = await submit();
+    expect(result).toMatchObject({ success: false, cancelled: true });
+    expect(cloud.calls.some((c) => c.fn === "finalize_submission")).toBe(false);
+    expectNothingLeft();
+  });
+
+  /** MUTATION: remove the new check before the second finalize → red. */
+  it("cancel during the re-run's last upload → no second finalize, cancelled", async () => {
+    cloud.script["submission_messages:insert"] = ["phantom"]; // first finalize refuses
+    let uploads = 0;
+    (supabaseStorageService.uploadAttachmentWithRetry as jest.Mock).mockImplementation(
+      async (org: string, sub: string, id: string, localPath: string, filename: string) => {
+        uploads += 1;
+        const storagePath = buildAttachmentStoragePath(org, sub, id, filename);
+        cloud.objects.add(storagePath);
+        if (uploads === 4) expect(submissionService.cancelSubmission(TX)).toEqual({ cancelled: true });
+        return { localId: localPath, storagePath, success: true };
+      }
+    );
+    const result = await submit();
+    expect(uploads).toBe(4);
+    expect(cloud.calls.filter((c) => c.fn === "finalize_submission")).toHaveLength(1);
+    expect(result).toMatchObject({ success: false, cancelled: true });
+    expectNothingLeft();
+  });
+});
+
+describe("SR C3 — a success found by the cleanup keeps what was left out", () => {
+  /** MUTATION SRX4-style: return notIncluded [] in the rescued branch → red. */
+  it("R1 with one confirmed exclusion: success still lists it and sends the 3681 warning", async () => {
+    setPreflightStatForTests(async (p: string) => (p.endsWith("Inspection.pdf") ? { size: 50 * 1024 * 1024 + 1 } : { size: 2048 }));
+    cloud.finalizeScript = ["lost", "network", "network"];
+    const realFrom = cloud.from.bind(cloud);
+    jest.spyOn(cloud, "from").mockImplementation((table: string) => {
+      const b = realFrom(table) as Record<string, (...a: unknown[]) => unknown>;
+      const realUpdate = b.update;
+      b.update = (p: unknown) => {
+        if (table === "transaction_submissions" && cloud.pendingFinalize) {
+          cloud.pendingFinalize();
+          cloud.pendingFinalize = null;
+        }
+        return realUpdate(p);
+      };
+      return b as never;
+    });
+    const result = await submissionService.submitTransaction(TX, undefined, { acceptedExclusionKeys: ["att:att-pdf"] });
+    expect(result.success).toBe(true);
+    expect(result.notIncluded.map((i) => i.key)).toEqual(["att:att-pdf"]);
+    expect(result.flaggedWithoutAttachments).toBe(1);
+    expect(captured.filter((e) => e.message === "Submission sent with exclusions")).toHaveLength(1);
+    expect(cloud.calls.filter((c) => c.kind === "storage.remove")).toEqual([]);
+  });
+});
+
+describe("SR C4 — a file that could not be removed stops the cleanup", () => {
+  /** MUTATION: remove the early return in abandonSubmission → rows deleted over the file → red. */
+  it("storage remove fails 3 times → the fenced row and its attachment rows stay, naming the file", async () => {
+    cloud.finalizeScript = [{ code: "42501", message: "permission denied" }];
+    cloud.removeFailures = 3;
+    const result = await submit();
+    expect(result.success).toBe(false);
+    expect(subRows()).toHaveLength(1);
+    expect(subRows()[0].abandoned_at).toBeTruthy();
+    expect(cloud.tables.submission_attachments).toHaveLength(2);
+    expect(cloud.objects.size).toBe(2);
+    expect(failureEvents()[0]).toMatchObject({ extra: expect.objectContaining({ cleanup_complete: false }) });
+  });
+});
+
+describe("SR S5 — the read-back counts any non-uploading status as committed", () => {
+  it.each(["resubmitted", "under_review"])("no answer, read-back shows %s → success, no fence", async (status) => {
+    cloud.finalizeScript = ["network", "network", "network"];
+    jest.spyOn(cloud, "rpc").mockImplementation(async (fn: string, args: Row) => {
+      if (fn === "finalize_submission") {
+        subRows()[0].status = status;
+        return { data: null, error: NETWORK };
+      }
+      return FakeCloud.prototype.rpc.call(cloud, fn, args);
+    });
+    const result = await submit();
+    expect(result.success).toBe(true);
+    expect(cloud.calls.filter((c) => c.kind === "from" && c.op === "update")).toEqual([]);
+    expect(localTx.submission_status).toBe(status);
   });
 });
 

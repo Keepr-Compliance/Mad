@@ -134,6 +134,13 @@ export async function abandonSubmission(
     }
   }
 
+  // C4 (SR 8fa92bef): a file that could not be removed stops here. The fenced
+  // row still names its path, so this client's stale sweep or the server
+  // sweep can finish it; deleting the rows now would orphan the file.
+  if (!complete) {
+    return { outcome: "abandoned", cleanupComplete: false, filesRemoved };
+  }
+
   // 3. Attachment rows, then 4. the parent (messages/checklists cascade).
   try {
     await withStageRetry("abandon", () =>
