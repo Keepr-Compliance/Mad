@@ -93,9 +93,10 @@ describe("the idle K tab (C3)", () => {
 
   it("a job starts: its first line replaces the idle tab in the same box (I8)", () => {
     const box = render(idle());
-    job.renderOverlay(box, "Checking chat 1 of 3…", false, { cancel: true }, { copy: async () => true });
+    job.renderOverlay(box, "Reading chat 1 of 3", false, { cancel: true, run: { phase: "reading", index: 1, total: 3, done: 0 } }, { copy: async () => true });
     expect(box.getAttribute("data-keepr-state")).toBe("syncing");
-    expect(q(box, "line")!.textContent).toContain("syncing 1 of 3");
+    expect(q(box, "line")!.textContent).toBe("Syncing your texts");
+    expect(q(box, "progress")!.textContent).toBe("Reading chat 1 of 3");
   });
 
   it("touches only its own box: nothing else is added to the page", () => {

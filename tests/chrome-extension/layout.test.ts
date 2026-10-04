@@ -346,7 +346,7 @@ describe("the Sync job in both layouts", () => {
     const outcome = await job.runJob(JOB, t.env);
     expect(outcome.outcome).toBe("finished");
     expect(page.log[0]).toBe("back");
-    const progress = t.calls.find(([, p, b]) => p.endsWith("/progress") && String(b?.stage).startsWith("Checking"));
+    const progress = t.calls.find(([, p, b]) => p.endsWith("/progress") && String(b?.stage).startsWith("Reading chat"));
     expect(progress?.[2]).toMatchObject({ listed: 5, candidates: 5 });
   });
 

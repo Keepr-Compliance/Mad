@@ -803,6 +803,25 @@
     function stageText(n, of) {
       return (isCache ? "Chat " : "Checking chat ") + n + " of " + of;
     }
+    /**
+     * Founder (live B3): the card shows the SAME thing in every phase — list
+     * scan, opening a chat, loading history, images, matching, saving:
+     * "Chat N of M" (or, before M is known, "Finding your chats"). The phase
+     * itself goes to the step log only.
+     */
+    /** The run's state (P01–P03): phase, chats found, chat i of M, chats completed. */
+    var run = { phase: "finding", found: 0, index: 0, total: 0, done: 0 };
+    function runExtras() {
+      return { cancel: true, retrying: !!RUNNING_EXTRAS.retrying, run: { phase: run.phase, found: run.found, index: run.index, total: run.total, done: run.done } };
+    }
+    function runningText() {
+      return statusLine(run, !!RUNNING_EXTRAS.retrying);
+    }
+    /** One phase of the run: logged; the card shows the run's state. */
+    function showPhase(phase) {
+      if (phase) log("phase: " + phase);
+      env.overlay.show(runningText(), false, runExtras());
+    }
     // Founder (2026-10-03): a hidden tab no longer pauses the run (it was
     // observed to sync on fine); it is only counted.
     var hiddenStats = hiddenTracker(env);
@@ -956,9 +975,12 @@
 
     async function report(stage) {
       log("stage: " + stage);
-      env.overlay.show(stage, false, RUNNING_EXTRAS);
+      // The phone's banner (paused): its own card; anything else: the run's.
+      if (stage === PAUSED_TEXT || stage === CONNECTING_TEXT || stage === UNREACHABLE_TEXT) env.overlay.show(stage, false, RUNNING_EXTRAS);
+      else env.overlay.show(runningText(), false, runExtras());
       await call("POST", base + "/progress", {
-        stage: stage,
+        // Keepr shows the same user line (its own screens and the dashboard).
+        stage: runningText(),
         listed: progress.listed,
         candidates: progress.candidates,
         checked: progress.checked,
@@ -1096,7 +1118,16 @@
 
     // 3. Scan the list and pick candidates. A narrow window shows the list OR
     // a chat (BACKLOG-3629): make sure the list is the pane on screen first.
-    env.overlay.show("Loading your conversation list…", false);
+    showPhase("Loading your conversation list…");
+    /** P01: the list scan's count ("N so far"), shown at most every half second. */
+    var foundShownAt = 0;
+    function onFound(n) {
+      run.found = n;
+      var t = Date.now();
+      if (t - foundShownAt < 500) return;
+      foundShownAt = t;
+      showPhase(null);
+    }
     if (env.returnToList && !(await env.returnToList())) {
       // No list, no scan: say so instead of "Done — imported 0 chats".
       return fail("list_not_reachable", LIST_NOT_REACHABLE);
@@ -1108,11 +1139,11 @@
     if (lostList && lostList.code) return fail(lostList.code, lostList.message);
     var collected = await env.scan.collectConversations(env.doc, isCache
       ? {
-        scroll: env.scroll, sleep: env.sleep, stopAtOlderThanMs: floorMs, maxItems: CACHE_LIST_MAX,
+        scroll: env.scroll, sleep: env.sleep, stopAtOlderThanMs: floorMs, maxItems: CACHE_LIST_MAX, onFound: onFound,
         mustSee: pendingIds, mustSeeFloorMs: fullFloorMs,
         mustSeeDeep: dealIds, mustSeeDeepFloorMs: dealFloorMs,
       }
-      : { scroll: env.scroll, sleep: env.sleep });
+      : { scroll: env.scroll, sleep: env.sleep, onFound: onFound });
     // BACKLOG-3645: the phone number is the gate, a name only orders the queue.
     // Up to CHECK_ALL_MAX chats every chat is checked; above it, plausible names
     // plus number-only chats, and the rest are reported as not checked.
@@ -1134,9 +1165,12 @@
       byReason[candidates[cr].reason] = (byReason[candidates[cr].reason] || 0) + 1;
     }
     log("candidates " + candidates.length + " " + JSON.stringify(byReason) + ", not checked " + plan.notChecked);
-    // Chats, not contacts (founder): "Checking chat i of N".
+    // P02: reading — chat i of M; the bar counts the chats completed.
+    run.phase = "reading";
+    run.total = candidates.length;
+    run.index = candidates.length > 0 ? 1 : 0;
+    // Chats, not contacts (founder): "Checking chat i of N" (the step log).
     await report(candidates.length > 0 ? stageText(1, candidates.length) : "No chats to check");
-
     // 4. Each candidate: open, read numbers, close Details, ask Keepr.
     work = candidates.map(function (c) { return { cand: c, attempt: 0 }; });
     var retryPoolMs = env.transientRetryPoolMs == null ? RCS_TRANSIENT_RETRY_POOL_MS : env.transientRetryPoolMs;
@@ -1171,10 +1205,11 @@
       var opened = false;
       var gone = false;
       var imagesFailed = 0;
+      run.index = i + 1;
       var lostChat = await holdWhileOffline(stageText(i + 1, candidates.length));
       if (lostChat && lostChat.code) return fail(lostChat.code, lostChat.message);
       try {
-        env.overlay.show(stageText(i + 1, candidates.length) + "…", false, RUNNING_EXTRAS);
+        showPhase(stageText(i + 1, candidates.length));
         // BACKLOG-3658 #12: the conversation id as a 6-hex tag salted per job
         // (never the raw id), so two chats with the same name are told apart.
         log("#" + (i + 1) + "/" + candidates.length + " chat " + (await tag(conv.name)) +
@@ -1261,7 +1296,7 @@
           progress.skipped += 1;
           skips.push({ conversationId: conv.conversationId, reason: MESSAGES_NOT_LOADED });
           leaveOut(conv, MESSAGES_NOT_LOADED);
-          env.overlay.show("Skipped a chat: its messages did not load", false);
+          showPhase("Skipped a chat: its messages did not load");
           continue;
         }
         // Only the latest messages render on open: load older ones back past
@@ -1300,13 +1335,14 @@
             return min;
           },
           onProgress: function (n) {
-            env.overlay.show("Loading history… " + n + " messages", false);
+            showPhase("Loading history… " + n + " messages");
           },
           // Tell Keepr after each scroll: a cancelled job answers 404/410 and
           // call() throws, so the load ends instead of running to the cap.
           checkpoint: function (n) {
             return call("POST", base + "/progress", {
-              stage: "Loading history… " + n + " messages",
+              stage: runningText(),
+              historyLoaded: n,
               listed: progress.listed,
               candidates: progress.candidates,
               checked: progress.checked,
@@ -1492,8 +1528,11 @@
           retry.usedMs += sleptMs - retryStart + RETRY_OVERHEAD_MS;
           if ((entriesByConv[conv.conversationId] || []).length === 0) retry.recovered += 1;
         }
+        // P02: a chat finished (read, skipped or failed) — the bar advances, never back.
+        if (item.attempt === 0) run.done = Math.min(run.total, run.done + 1);
       }
       // Also the cancel check between chats: a job Keepr dropped answers 404/410.
+      if (i + 1 < candidates.length) run.index = i + 2;
       await report(i + 1 < candidates.length
         ? stageText(i + 2, candidates.length)
         : "Checked " + candidates.length + " of " + candidates.length + " chats");
@@ -1523,7 +1562,9 @@
       return fail("all_failed", "None of the " + failedChats + " chats could be read.");
     }
     // A cache Sync: Keepr answers once it has saved, with what it saved.
-    if (isCache) env.overlay.show(SAVING_TEXT, false);
+    // P03: committing to Keepr.
+    run.phase = "saving";
+    if (isCache) showPhase(SAVING_TEXT);
     var hiddenNow = hiddenStats.done();
     log("hidden: " + Math.round(hiddenNow.ms / 1000) + "s in " + hiddenNow.spells + " spells; " +
       hiddenNow.batches + " history batches in " + hiddenNow.chats + " chats loaded while hidden");
@@ -1592,7 +1633,12 @@
    * paused. The full sentence in the expanded box; a short tail on the chip.
    */
   var SYNCING_HINT = "Keep this tab open while Keepr syncs. When it's done, you'll go back to Keepr automatically.";
-  var SYNCING_CHIP_HINT = "keep this tab open";
+  /** Founder (P01): the list scan. */
+  var FINDING_TEXT = "Finding your chats";
+  /** Founder (P03): committing to Keepr. */
+  var SAVING_LINE = "Saving to Keepr";
+  /** Founder (B03): the card's amber warning, every phase. */
+  var DONT_CLICK_LINE = "Don't click in this tab. Use another Chrome window.";
   /** Storyboard H03: a Try again run. */
   var RETRY_CHIP_HINT = "skipping saved chats";
   /**
@@ -1632,6 +1678,7 @@
       shadow: "0 8px 24px rgba(31,36,51,0.18)",
       guideShadow: "0 8px 24px rgba(31,36,51,0.18)",
       stoppedBadge: "#6B7280",
+      warnText: "#92400E",
       tab: "linear-gradient(135deg, #4F46E5, #6D5DF0)", tabShadow: "0 4px 12px rgba(31,36,51,0.25)",
       tipBg: "#1F2433", tipText: "#FFFFFF",
       detailsBg: "#F9FAFB", detailsBorder: "#E5E7EB",
@@ -1645,6 +1692,7 @@
       shadow: "0 8px 24px rgba(0,0,0,0.5)",
       guideShadow: "0 8px 24px rgba(0,0,0,0.5)",
       stoppedBadge: "#5F6368",
+      warnText: "#FDD663",
       tab: "#6D5DF0", tabShadow: "0 4px 12px rgba(0,0,0,0.5)",
       tipBg: "#E8EAED", tipText: "#202124",
       detailsBg: "#202124", detailsBorder: "#44464C",
@@ -1745,6 +1793,26 @@
     return svg;
   }
 
+  /**
+   * The indeterminate bar's moving segment (Web Animations); none under
+   * prefers-reduced-motion (a static partial bar) or where unsupported.
+   */
+  function animateSegment(doc, node) {
+    var win = doc.defaultView;
+    try {
+      if (win && win.matchMedia && win.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        node.setAttribute("data-motion", "reduced");
+        return false;
+      }
+      if (typeof node.animate !== "function") return false;
+      node.animate([{ left: "-28%" }, { left: "100%" }], { duration: 1400, iterations: Infinity, easing: "ease-in-out" });
+      node.setAttribute("data-motion", "moving");
+      return true;
+    } catch (_e) {
+      return false;
+    }
+  }
+
   /** The box's state, from what the job shows. */
   function overlayState(text, isError, extras) {
     // Founder (BoxNotLinked): not linked — the guide card under the toolbar.
@@ -1760,30 +1828,28 @@
     return "syncing";
   }
 
-  /** The collapsed chip: "Keepr · syncing 4 of 21 — keep this tab open". */
-  function chipTitle(text) {
-    var short = shortProgress(text);
-    return "Keepr · " + (/^\d+ of \d+$/.test(short) ? "syncing " + short : short) + " — " + SYNCING_CHIP_HINT;
-  }
-
-  /** "Chat 8 of 21…" → "8 of 21" for the pill; other lines as they are. */
-  function shortProgress(text) {
-    return String(text).replace(/^(Checking chat|Chat) /, "").replace(/…$/, "");
-  }
-
-  /** "Chat 8 of 21…" → 8/21 (the progress bar); null when the line has no count. */
-  function progressFraction(text) {
-    var m = /(\d+) of (\d+)/.exec(String(text));
-    if (!m || +m[2] <= 0) return null;
-    return Math.min(1, Math.max(0, +m[1] / +m[2]));
-  }
 
   /**
-   * The syncing line under the bar: "Chat 12 of 180 · keep this tab open";
-   * a Try again run (storyboard H03): "Chat 9 of 20 · skipping saved chats".
+   * Founder (storyboards P01–P03, B03, H03): the syncing card's ONE status
+   * line, from the run's state (never parsed from text):
+   *   finding  "Finding your chats · 34 so far"
+   *   reading  "Reading chat 4 of 20" (a Try again run: "· skipping saved chats")
+   *   saving   "Saving to Keepr"
+   * @param {{phase: string, found?: number, index?: number, total?: number}=} run
    */
-  function syncingLine(text, retrying) {
-    return String(text).replace(/…$/, "") + " · " + (retrying ? RETRY_CHIP_HINT : SYNCING_CHIP_HINT);
+  function statusLine(run, retrying) {
+    var r = run || { phase: "finding" };
+    if (r.phase === "saving") return SAVING_LINE;
+    if (r.phase === "reading" && r.total > 0) {
+      return "Reading chat " + Math.max(1, Math.min(r.index || 1, r.total)) + " of " + r.total + (retrying ? " · " + RETRY_CHIP_HINT : "");
+    }
+    return FINDING_TEXT + (r.found > 0 ? " · " + r.found + " so far" : "");
+  }
+
+  /** The bar: completed / total while reading; null (indeterminate) otherwise. */
+  function runFraction(run) {
+    if (!run || run.phase !== "reading" || !(run.total > 0)) return null;
+    return Math.min(1, Math.max(0, (run.done || 0) / run.total));
   }
 
   /**
@@ -1823,7 +1889,9 @@
     var theme = io.theme === "dark" || io.theme === "light" ? io.theme : pageTheme(doc);
     var p = PALETTE[theme];
     var state = overlayState(text, isError, extras);
-    var collapsible = state === "syncing" || state === "idle";
+    // Founder (2026-10-04): ONE syncing card — no collapsed chip; only the
+    // idle tab opens and closes.
+    var collapsible = state === "idle";
     var expanded = !collapsible || !!io.expanded;
     /** Idle "Open Keepr": POST /focus (a Sync is always started from Keepr). */
     function openKeepr() {
@@ -2061,22 +2129,13 @@
 
     var retryable = state === "error" && !!(extras && extras.retry) && !!io.retry;
     var title = state === "error" ? SYNC_FAILED_TITLE : state === "done" ? (text === DONE_LINE ? DONE_TITLE : text)
-      : state === "syncing" ? (expanded ? SYNCING_TITLE : chipTitle(text))
+      : state === "syncing" ? SYNCING_TITLE
       : state === "paused" ? PAUSED_TITLE : state === "ask" ? ASK_TITLE : text;
     var line = el("div", "line", {
       flex: "1 1 auto", minWidth: "0", fontSize: expanded ? "15px" : "14px", fontWeight: "700", color: p.text,
       whiteSpace: expanded ? "normal" : "nowrap",
     }, title);
     header.appendChild(line);
-    if (collapsible) {
-      var expand = button("expand", expanded ? "▴" : "▾", "icon");
-      expand.setAttribute("aria-expanded", expanded ? "true" : "false");
-      expand.setAttribute("aria-label", expanded ? "Hide Sync progress" : "Show Sync progress");
-      expand.addEventListener("click", function () {
-        if (io.onExpand) io.onExpand(!expanded);
-      });
-      header.appendChild(expand);
-    }
     if (io.move) {
       // Keyboard alternative to dragging: hidden until it has focus.
       var move = button("move", "Move", "secondary");
@@ -2115,17 +2174,37 @@
 
     if (state === "syncing" || state === "paused") {
       var running = [];
-      var frac = state === "syncing" ? progressFraction(text) : null;
-      if (frac !== null) {
-        var bar = el("div", "progress-bar", { height: "6px", borderRadius: "999px", background: p.track, overflow: "hidden" });
-        bar.appendChild(el("div", "progress-fill", { width: Math.round(frac * 100) + "%", height: "6px", background: p.fill }));
+      var run = extras && extras.run;
+      if (state === "syncing") {
+        // Founder (P01–P03): the bar in every phase, from the run's state —
+        // determinate while reading (completed / total), else a moving
+        // segment (static under prefers-reduced-motion).
+        var frac = runFraction(run);
+        var bar = el("div", "progress-bar", { height: "6px", borderRadius: "999px", background: p.track, overflow: "hidden", position: "relative" });
+        var fill;
+        if (frac === null) {
+          bar.setAttribute("data-indeterminate", "1");
+          fill = el("div", "progress-fill", { position: "absolute", left: "30%", width: "28%", height: "6px", borderRadius: "999px", background: p.fill });
+          bar.appendChild(fill);
+          animateSegment(doc, fill);
+        } else {
+          fill = el("div", "progress-fill", { width: Math.round(frac * 100) + "%", height: "6px", background: p.fill });
+          bar.appendChild(fill);
+        }
         box.appendChild(bar);
         running.push(bar);
       }
-      var progressLine = el("div", "progress", { fontSize: "13px", color: p.muted },
-        state === "paused" ? PAUSE_BODIES[text] || PAUSED_BODY : syncingLine(text, !!(extras && extras.retrying)));
+      var progressLine = el("div", "progress", {
+        fontSize: "13px", color: p.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+      },
+        state === "paused" ? PAUSE_BODIES[text] || PAUSED_BODY : statusLine(run, !!(extras && extras.retrying)));
       box.appendChild(progressLine);
       running.push(progressLine);
+      if (state === "syncing") {
+        var warn = el("div", "dont-click", { fontSize: "13px", lineHeight: "18px", color: p.warnText }, DONT_CLICK_LINE);
+        box.appendChild(warn);
+        running.push(warn);
+      }
       if (!(extras && extras.cancel)) return;
       // Founder (2026-10-02): "Stop sync" with a confirm; it cancels this job
       // only, through the bridge (a signed job call), ended by the page.
@@ -2521,8 +2600,10 @@
     STOPPED_BODY: STOPPED_BODY,
     STOP_SYNC_BODY: STOP_SYNC_BODY,
     DONE_TITLE: DONE_TITLE,
-    progressFraction: progressFraction,
-    syncingLine: syncingLine,
+    statusLine: statusLine,
+    runFraction: runFraction,
+    FINDING_TEXT: FINDING_TEXT,
+    DONT_CLICK_LINE: DONT_CLICK_LINE,
     STOP_CONFIRM_ARM_MS: STOP_CONFIRM_ARM_MS,
     IDLE_TAB_LINE: IDLE_TAB_LINE,
     STOP_CONFIRM_AUTO_CLOSE_MS: STOP_CONFIRM_AUTO_CLOSE_MS,
@@ -2646,8 +2727,7 @@
       }
     });
   })();
-  // The pill's ▾/▴ (kept across progress lines); the last thing shown, to redraw it.
-  var syncExpanded = false;
+  // The idle tab's open state; the last thing shown, to redraw it.
   var idleExpanded = false;
   /** SR: the "Stop the sync?" confirm, kept across re-renders until answered or the job ends. */
   var stopConfirm = { state: "closed", openedAt: 0 };
@@ -2710,10 +2790,10 @@
       // one); this tab runs it (the chats the failed one saved are skipped).
       retry: retrySync,
       move: function () { if (mover) mover.moveToNextCorner(); },
-      expanded: extras && extras.idle ? idleExpanded : syncExpanded,
+      // Founder: the syncing card never collapses; only the idle tab opens / closes.
+      expanded: extras && extras.idle ? idleExpanded : false,
       onExpand: function (open) {
         if (extras && extras.idle) idleExpanded = open;
-        else syncExpanded = open;
         if (lastShown) showOverlay(lastShown.text, lastShown.isError, lastShown.extras);
       },
     });

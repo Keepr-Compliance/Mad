@@ -51,7 +51,7 @@ interface JobModule {
     panel: HTMLElement,
     text: string,
     isError: boolean,
-    extras: { details: string; copy: string; summary?: string } | undefined,
+    extras: { details?: string; copy?: string; summary?: string; run?: Record<string, unknown> } | undefined,
     io: { copy: (text: string) => Promise<boolean>; focus?: () => Promise<boolean> },
   ) => void;
 }
@@ -203,7 +203,7 @@ describe("the job reports what it did not check (P5)", () => {
     const finish = t.calls.find(([, p]) => p.endsWith("/finish"))?.[2];
     expect(finish).toMatchObject({ notChecked: 58 });
     const progress = t.calls.filter(([, p]) => p.endsWith("/progress")).map(([, , b]) => b);
-    expect(progress[0]).toMatchObject({ listed: 60, candidates: 2, notChecked: 58, stage: "Checking chat 1 of 2" });
+    expect(progress[0]).toMatchObject({ listed: 60, candidates: 2, notChecked: 58, stage: "Reading chat 1 of 2" });
     const last = t.shown[t.shown.length - 1];
     expect(last.text).toBe(job.DONE_LINE);
     expect(last.extras?.details).toContain("Scanned 60 chats · checked 2 · matched 0 · imported 0 messages");
@@ -313,11 +313,12 @@ describe("the overlay panel (BACKLOG-3641 founder UX)", () => {
     expect(card.style.display).toBe("none");
     expect(toggle.textContent).toBe("See details");
 
-    // A progress line replaces everything: the collapsed pill, no stale buttons.
-    job.renderOverlay(el, "Checking chat 2 of 9", false, undefined, { copy: async () => true });
-    expect(el.children).toHaveLength(1);
-    expect(el.querySelector("[data-keepr=line]")?.textContent).toBe("Keepr · syncing 2 of 9 — keep this tab open");
+    // A progress line replaces everything: the syncing card, no stale buttons.
+    job.renderOverlay(el, "Reading chat 2 of 9", false, { run: { phase: "reading", index: 2, total: 9, done: 1 } }, { copy: async () => true });
+    expect(el.querySelector("[data-keepr=line]")?.textContent).toBe("Syncing your texts");
+    expect(el.querySelector("[data-keepr=progress]")?.textContent).toBe("Reading chat 2 of 9");
     expect(el.querySelector("[data-keepr=open-keepr]")).toBeNull();
+    expect(el.querySelector("[data-keepr=details-card]")).toBeNull();
   });
 
   it("a failure: 'Sync failed', the reason on one line, the same bottom row (BoxCancelled)", () => {

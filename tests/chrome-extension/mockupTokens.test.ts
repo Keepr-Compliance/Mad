@@ -199,19 +199,22 @@ describe("the page box = the mockups (Box*.dc.html)", () => {
   const q = (box: HTMLElement, key: string) => box.querySelector(`[data-keepr="${key}"]`) as HTMLElement;
 
   it("syncing: a 320 card, padding 16, radius 16, a 6px bar, a 36px Stop sync at the right", () => {
-    const box = render("Chat 12 of 180…", false, { cancel: true }, { expanded: true, theme: "light" });
+    const box = render("x", false, { cancel: true, run: { phase: "reading", index: 12, total: 180, done: 11 } }, { theme: "light" });
     expect(box.style).toMatchObject({ width: "320px", padding: "16px", borderRadius: "16px", gap: "12px" });
     expect(box.style.border.toLowerCase()).toBe("1px solid #d6d9e4");
     expect(q(box, "progress-bar").style.height).toBe("6px");
     expect(q(box, "progress-fill").style.background).toBe(rgb("#4F46E5"));
-    expect(q(box, "progress").textContent).toBe("Chat 12 of 180 · keep this tab open");
+    expect(q(box, "progress").textContent).toBe("Reading chat 12 of 180");
+    // B03: the amber warning under the line.
+    expect(q(box, "dont-click").textContent).toBe("Don't click in this tab. Use another Chrome window.");
+    expect(q(box, "dont-click").style.color).toBe(rgb("#92400E"));
     const stop = q(box, "cancel");
     expect(stop.style).toMatchObject({ minHeight: "36px", padding: "0px 14px", borderRadius: "8px", alignSelf: "flex-end" });
     expect(q(box, "drag-handle").querySelector('[data-keepr="brand-mark"]')).not.toBeNull();
   });
 
   it("dark syncing: #2D2E31 card, #44464C border, #8B80F5 bar", () => {
-    const box = render("Chat 12 of 180…", false, { cancel: true }, { expanded: true, theme: "dark" });
+    const box = render("x", false, { cancel: true, run: { phase: "reading", index: 12, total: 180, done: 11 } }, { theme: "dark" });
     expect(box.style.background).toBe(rgb("#2D2E31"));
     expect(box.style.border.toLowerCase()).toBe("1px solid #44464c");
     expect(q(box, "progress-fill").style.background).toBe(rgb("#8B80F5"));
@@ -295,11 +298,69 @@ describe("the page box = the mockups (Box*.dc.html)", () => {
     expect(Array.from(q(box, "bottom-row").children).map((c) => c.getAttribute("data-keepr"))).toEqual(["try-again"]);
   });
 
-  it("H03: a Try again run — 'Chat 9 of 20 · skipping saved chats'", () => {
-    const box = render("Chat 9 of 20…", false, { cancel: true, retrying: true }, { expanded: true, theme: "light" });
-    expect(q(box, "progress").textContent).toBe("Chat 9 of 20 · skipping saved chats");
-    const normal = render("Chat 9 of 20…", false, { cancel: true }, { expanded: true, theme: "light" });
-    expect(q(normal, "progress").textContent).toBe("Chat 9 of 20 · keep this tab open");
+  it("H03: a Try again run — 'Reading chat 9 of 20 · skipping saved chats'", () => {
+    const run = { phase: "reading", index: 9, total: 20, done: 8 };
+    const box = render("x", false, { cancel: true, retrying: true, run }, { theme: "light" });
+    expect(q(box, "progress").textContent).toBe("Reading chat 9 of 20 · skipping saved chats");
+    const normal = render("x", false, { cancel: true, run }, { theme: "light" });
+    expect(q(normal, "progress").textContent).toBe("Reading chat 9 of 20");
+  });
+
+  // Founder (P01–P03): the card per phase, from the run's state — never from
+  // text. Mutations: the bar parsed from text; the bar going back; finding /
+  // saving determinate; an animation under reduced motion; the warning or
+  // Stop sync missing in a phase → red.
+  const phaseCard = (run: Record<string, unknown>, extras: Record<string, unknown> = {}) =>
+    render("Loading history… 150 messages", false, { cancel: true, run, ...extras }, { theme: "light" });
+
+  it("P01 finding: 'Finding your chats · N so far', an indeterminate bar", () => {
+    const box = phaseCard({ phase: "finding", found: 34 });
+    expect(q(box, "progress").textContent).toBe("Finding your chats · 34 so far");
+    expect(q(box, "progress-bar").getAttribute("data-indeterminate")).toBe("1");
+    expect(q(phaseCard({ phase: "finding", found: 0 }), "progress").textContent).toBe("Finding your chats");
+  });
+
+  it("P02 reading: 'Reading chat i of M', the bar = chats completed / M (not the text)", () => {
+    const box = phaseCard({ phase: "reading", index: 4, total: 20, done: 4 });
+    expect(q(box, "progress").textContent).toBe("Reading chat 4 of 20");
+    expect(q(box, "progress-bar").getAttribute("data-indeterminate")).toBeNull();
+    expect(q(box, "progress-fill").style.width).toBe("20%");
+  });
+
+  it("P03 saving: 'Saving to Keepr', an indeterminate bar", () => {
+    const box = phaseCard({ phase: "saving", index: 20, total: 20, done: 20 });
+    expect(q(box, "progress").textContent).toBe("Saving to Keepr");
+    expect(q(box, "progress-bar").getAttribute("data-indeterminate")).toBe("1");
+  });
+
+  it("every phase: the title, the bar, ONE status line, the warning, Stop sync — nothing else", () => {
+    for (const run of [{ phase: "finding", found: 3 }, { phase: "reading", index: 2, total: 5, done: 1 }, { phase: "saving", total: 5, done: 5 }]) {
+      const box = phaseCard(run);
+      expect(Array.from(box.children).map((c) => c.getAttribute("data-keepr"))).toEqual(["header", "progress-bar", "progress", "dont-click", "cancel", "stop-confirm"]);
+      expect(q(box, "progress").style.whiteSpace).toBe("nowrap");
+      expect(q(box, "progress").textContent).toMatch(/^(Finding your chats( · \d+ so far)?|Reading chat \d+ of \d+( · skipping saved chats)?|Saving to Keepr)$/);
+    }
+  });
+
+  it("reduced motion: the indeterminate bar is a static partial bar (no animation)", () => {
+    const animate = jest.fn();
+    const proto = HTMLElement.prototype as unknown as { animate?: unknown };
+    const had = proto.animate;
+    proto.animate = animate;
+    const mm = window.matchMedia;
+    try {
+      window.matchMedia = ((q: string) => ({ matches: q.includes("reduce"), media: q })) as unknown as typeof window.matchMedia;
+      const still = phaseCard({ phase: "finding", found: 1 });
+      expect(q(still, "progress-fill").getAttribute("data-motion")).toBe("reduced");
+      expect(animate).not.toHaveBeenCalled();
+      window.matchMedia = ((q: string) => ({ matches: false, media: q })) as unknown as typeof window.matchMedia;
+      const moving = phaseCard({ phase: "finding", found: 1 });
+      expect(q(moving, "progress-fill").getAttribute("data-motion")).toBe("moving");
+      expect(animate).toHaveBeenCalledTimes(1);
+    } finally {
+      window.matchMedia = mm;
+      proto.animate = had;
+    }
   });
 
   it("H07: 'Sync stopped', 'Nothing from this run was saved.', a grey K, Close at the right", () => {

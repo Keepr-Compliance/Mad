@@ -306,6 +306,12 @@
         if (!byId[list[i].conversationId]) {
           byId[list[i].conversationId] = list[i];
           order.push(list[i].conversationId);
+          // Founder (P01): "Finding your chats · N so far" — a count only.
+          if (opts.onFound) {
+            try {
+              opts.onFound(order.length);
+            } catch (_e) { /* the card only */ }
+          }
           // BACKLOG-3658: newest first — a chat older than `since` ends the list.
           if (mustSee[list[i].conversationId]) {
             mustSee[list[i].conversationId] = false;

@@ -1386,7 +1386,10 @@ describe("job runner: loads history before extracting a matched chat", () => {
     expect(ids).toHaveLength(75);
     expect(ids).toContain("h74");
     expect(ids).not.toContain("h75");
-    expect(t.shown).toEqual(expect.arrayContaining(["Loading history… 25 messages", "Loading history… 50 messages", "Loading history… 75 messages"]));
+    // Founder (P02): the card never shows the phase ("Loading history…"):
+    // "Reading chat i of M" throughout the load.
+    expect(t.shown.some((x: string) => /Loading history/.test(x))).toBe(false);
+    expect(t.shown.filter((x: string) => x === "Reading chat 1 of 5").length).toBeGreaterThan(3);
   });
 
   // #10: an unconfirmed stop is imported as far as it loaded AND reported
@@ -1415,7 +1418,7 @@ describe("job runner: loads history before extracting a matched chat", () => {
       total: 500,
       startDate: null,
       api: (_m, p, body) =>
-        p.endsWith("/progress") && String(body?.stage).startsWith("Loading history")
+        p.endsWith("/progress") && typeof body?.historyLoaded === "number"
           ? { ok: false, status: 410, body: { error: "job_over" } }
           : undefined,
     });
@@ -1432,8 +1435,8 @@ describe("job runner: loads history before extracting a matched chat", () => {
     expect(t.posts()).not.toContain("/finish");
     expect(t.posts()).not.toContain("/error");
     // Each checkpoint carries the loaded count.
-    const cp = t.calls.find(([, p, b]) => p.endsWith("/progress") && String(b?.stage).startsWith("Loading history"));
-    expect(cp?.[2]?.stage).toBe("Loading history… 50 messages");
+    const cp = t.calls.find(([, p, b]) => p.endsWith("/progress") && typeof b?.historyLoaded === "number");
+    expect(cp?.[2]).toMatchObject({ historyLoaded: 50, stage: "Reading chat 1 of 5" });
   });
 
   it("an image upload answering 410 ends the run: no further upload, no /finish", async () => {

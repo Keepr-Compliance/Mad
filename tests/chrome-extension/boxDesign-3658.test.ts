@@ -6,7 +6,7 @@
  * Mutations that turn this suite red:
  *   D1 a dark page gets the light box (theme ignored / threshold inverted) → "auto theme"
  *   D2 a transparent page colour read as a theme (no fallback)            → "auto theme"
- *   D3 the syncing pill starts expanded, or ▾ does nothing                → "syncing: a collapsed pill"
+ *   D3 a collapsed chip / expand control back on the syncing card      → "syncing: always the card"
  *   D4 paused or done not auto-expanded                                   → "paused" / "done"
  *   D5 green anywhere, or the details link underlined                     → "done"
  *   H1a a pending job (found on page load) runs without asking            → "bootPlan"
@@ -69,31 +69,22 @@ describe("auto theme (D1, D2)", () => {
 });
 
 describe("states (design C)", () => {
-  it("syncing: a collapsed pill 'Keepr · syncing 8 of 21 — keep this tab open' with ▾; ▾ asks to expand; expanded shows progress + Cancel (D3)", () => {
-    const onExpand = jest.fn();
-    const pill = render("Chat 8 of 21…", false, { cancel: true }, { onExpand, theme: "light" });
-    expect(pill.getAttribute("data-keepr-state")).toBe("syncing");
-    expect(pill.style.borderRadius).toBe("999px");
-    // Founder (2026-10-01): the keep-on-screen hint from the first second.
-    // Mutation: the hint only once paused → red.
-    expect(pill.querySelector('[data-keepr="line"]')?.textContent).toBe("Keepr · syncing 8 of 21 — keep this tab open");
-    expect(pill.querySelector('[data-keepr="hint"]')).toBeNull();
-    expect(pill.querySelector('[data-keepr="cancel"]')).toBeNull();
-    const expand = pill.querySelector('[data-keepr="expand"]') as HTMLButtonElement;
-    expect(expand.getAttribute("aria-expanded")).toBe("false");
-    expand.click();
-    expect(onExpand).toHaveBeenCalledWith(true);
-    const card = render("Chat 8 of 21…", false, { cancel: true }, { expanded: true, theme: "light" });
-    expect(card.style.borderRadius).toBe("16px");
-    // The mockup (BoxSyncing): title, a 6px bar (8 of 21 = 38%), the line, Stop sync right.
-    expect(card.querySelector('[data-keepr="line"]')?.textContent).toBe("Syncing your texts");
-    expect((card.querySelector('[data-keepr="progress-fill"]') as HTMLElement).style.width).toBe("38%");
-    expect(card.querySelector('[data-keepr="progress"]')?.textContent).toBe("Chat 8 of 21 · keep this tab open");
-    expect(card.querySelector('[data-keepr="hint"]')).toBeNull();
-    expect(card.querySelector('[data-keepr="cancel"]')).not.toBeNull();
-    // A line that is not "n of m" keeps its words.
-    const waiting = render("Saving in Keepr…", false, undefined, { theme: "light" });
-    expect(waiting.querySelector('[data-keepr="line"]')?.textContent).toBe("Keepr · Saving in Keepr — keep this tab open");
+  // Founder (2026-10-04): ONE syncing card — no collapsed chip, no ▴/▾,
+  // whatever io.expanded says. Mutations: the chip or the expand control
+  // back → red.
+  it("syncing: always the card — no chip, no expand control (D3)", () => {
+    for (const expanded of [false, true]) {
+      const card = render("x", false, { cancel: true, run: { phase: "reading", index: 8, total: 21, done: 7 } }, { expanded, theme: "light", onExpand: jest.fn() });
+      expect(card.getAttribute("data-keepr-state")).toBe("syncing");
+      expect(card.style.borderRadius).toBe("16px");
+      expect(card.querySelector('[data-keepr="expand"]')).toBeNull();
+      expect(card.querySelector('[data-keepr="line"]')?.textContent).toBe("Syncing your texts");
+      expect(card.textContent).not.toMatch(/Keepr ·|—|keep this tab open/);
+      expect(card.querySelector('[data-keepr="progress-bar"]')).not.toBeNull();
+      expect(card.querySelector('[data-keepr="cancel"]')).not.toBeNull();
+    }
+    const src = require("fs").readFileSync(require("path").join(__dirname, "..", "..", "chrome-extension", "job.js"), "utf8");
+    expect(src).not.toMatch(/chipTitle|syncExpanded|Hide Sync progress/);
   });
 
   it("paused: auto-expanded, amber, says what to do, keeps Cancel (D4)", () => {

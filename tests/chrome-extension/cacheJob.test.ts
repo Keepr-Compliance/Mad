@@ -559,7 +559,7 @@ describe("runJob: a cache Sync", () => {
     await job.runJob(JOB, t.env);
     const finishAt = t.calls.findIndex(([, p]) => p.endsWith("/finish"));
     expect(finishAt).toBeGreaterThan(-1);
-    expect(t.shown.some(([text]) => text === "Saving in Keepr…")).toBe(true);
+    expect(t.shown.some(([text]) => text === "Saving to Keepr")).toBe(true);
     const [text, , extras] = t.shown[t.shown.length - 1] as [string, boolean, { details: string; copy: string }];
     expect(text).toBe(job.DONE_LINE);
     expect(extras.details.split("\n")[0]).toBe("Scanned 4 chats · saved 1 chat · 1 message (1 new) · 2 reactions (1 new)");
@@ -803,13 +803,50 @@ describe("runJob: a cache Sync", () => {
     expect(t.floors).toEqual([Date.parse(t.since)]);
   });
 
-  it("shows 'Chat i of N' with a Cancel on progress lines", async () => {
+  // Founder (P01–P03): walk EVERY card the run shows. Each running card has
+  // the run's state: the line is one of the three phase lines, the bar never
+  // goes back, and rendered it has the bar, the warning and Stop sync.
+  // Mutations: a phase showing its own text; the bar going back; Stop sync
+  // missing in a phase → red.
+  it("every phase of a run: one of the three lines, a monotonic bar, the bar + warning + Stop sync", async () => {
+    const t = cacheEnv({ rows: ROWS, numbers: { [id(0)]: ["+15555550101"], [id(2)]: ["+15555550102"] } });
+    await job.runJob(JOB, t.env);
+    const running = t.shown.filter(([, , x]) => !!x && (x as { cancel?: boolean }).cancel === true) as Array<[string, boolean, { run: { phase: string; done: number; total: number } }]>;
+    expect(running.length).toBeGreaterThan(5);
+    const phases = new Set(running.map(([, , x]) => x.run.phase));
+    expect(phases).toEqual(new Set(["finding", "reading", "saving"]));
+    // P01: the list scan says how many chats it found so far.
+    expect(running.some(([text]) => /^Finding your chats · \d+ so far$/.test(text))).toBe(true);
+    let lastFrac = -1;
+    let lastPhase = "finding";
+    const order = ["finding", "reading", "saving"];
+    for (const [text, isError, x] of running) {
+      expect(isError).toBe(false);
+      expect(text).toMatch(/^(Finding your chats( · \d+ so far)?|Reading chat \d+ of \d+( · skipping saved chats)?|Saving to Keepr)$/);
+      expect(order.indexOf(x.run.phase)).toBeGreaterThanOrEqual(order.indexOf(lastPhase));
+      lastPhase = x.run.phase;
+      const frac = job.runFraction(x.run);
+      if (frac !== null) {
+        expect(frac).toBeGreaterThanOrEqual(lastFrac);
+        lastFrac = frac;
+      }
+      const box = document.createElement("div");
+      job.renderOverlay(box, text, false, x, { copy: async () => true, theme: "dark" });
+      expect(box.querySelector('[data-keepr="progress"]')!.textContent).toBe(text);
+      expect(box.querySelector('[data-keepr="progress-bar"]')).not.toBeNull();
+      expect(box.querySelector('[data-keepr="dont-click"]')!.textContent).toBe(job.DONT_CLICK_LINE);
+      expect(box.querySelector('[data-keepr="cancel"]')).not.toBeNull();
+    }
+    expect(lastFrac).toBe(1);
+  });
+
+  it("shows 'Reading chat i of N' with Stop sync on progress lines (P02)", async () => {
     const t = cacheEnv({ rows: ROWS, numbers: { [id(0)]: ["+15555550101"] } });
     await job.runJob(JOB, t.env);
-    const stage = t.shown.find(([text]) => text.startsWith("Chat 1 of 3"));
+    const stage = t.shown.find(([text]) => text === "Reading chat 1 of 3");
     expect(stage).toBeDefined();
-    expect(stage?.[2]).toEqual({ cancel: true });
-    expect(t.calls.some(([, p, b]) => p.endsWith("/progress") && b?.stage === "Chat 2 of 3")).toBe(true);
+    expect(stage?.[2]).toMatchObject({ cancel: true, run: { phase: "reading", index: 1, total: 3 } });
+    expect(t.calls.some(([, p, b]) => p.endsWith("/progress") && b?.stage === "Reading chat 2 of 3")).toBe(true);
   });
 
   it("an image Keepr does not keep (422 not_a_contact) is counted apart, never 'not fully imported' (M5)", async () => {
