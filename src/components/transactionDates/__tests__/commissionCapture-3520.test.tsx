@@ -11,6 +11,7 @@
 import React from "react";
 import { render, screen, fireEvent, act, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
+import userEvent from "@testing-library/user-event";
 import type { Transaction } from "@/types";
 import ExportModal from "../../ExportModal";
 import { SubmitForReviewModal } from "../../transactionDetailsModule/components/modals/SubmitForReviewModal";
@@ -248,6 +249,40 @@ describe("what Submit saves", () => {
     expect(sentUpdate().sale_price).toBe(333.33);
     expect(sentUpdate().commission_actual_rate).toBe(1.005);
     expect(sentUpdate().commission_gross_amount).toBe(3);
+  });
+});
+
+// BACKLOG-3677: Sale Price is the shared LiveMoneyInput — commas as you type,
+// and backspacing the leading digit of 1,000,000 leaves it blank, not 0.
+describe("Sale Price uses the shared price input (BACKLOG-3677)", () => {
+  it.each([
+    ["Submit", () => renderSubmit()],
+    ["Export", () => renderExport()],
+  ])("%s route: commas appear while typing 1000000", async (_route, doRender) => {
+    doRender();
+    const input = await screen.findByTestId("commission-sale");
+    const user = userEvent.setup();
+    await user.clear(input);
+    const seen: string[] = [];
+    for (const d of "1000000") {
+      await user.type(input, d);
+      seen.push((input as HTMLInputElement).value);
+    }
+    expect(seen).toEqual(["1", "10", "100", "1,000", "10,000", "100,000", "1,000,000"]);
+  });
+
+  // A blank Sale Price is not sent (commission.ts buildCommissionUpdate omits a
+  // null sale) — the point here is that 0 is never sent.
+  it("backspacing the leading 1 of 1,000,000 leaves Sale Price blank, and no 0 is saved", async () => {
+    renderSubmit({ ...base, sale_price: 1000000 } as unknown as Transaction);
+    const input = field("commission-sale");
+    expect(input.value).toBe("1,000,000");
+    const user = userEvent.setup();
+    await user.type(input, "{Backspace}", { initialSelectionStart: 1, initialSelectionEnd: 1 });
+    expect(input.value).toBe("");
+    await click("submit-review-next");
+    await click("submit-review-submit");
+    expect(sentUpdate()).not.toHaveProperty("sale_price");
   });
 });
 
