@@ -1,0 +1,4 @@
+MUTATION APPLIED U1: submitter USING has abandoned_at term = f
+FAIL L7c abandoned_at back to NULL: matches 0 rows, value kept :: {"error":"42501","set":"t"}
+FAIL L7d 2.38-shaped flip of an abandoned upload: matches 0 rows, still uploading :: {"rows":1}
+live-run post: 39 pass, 2 fail

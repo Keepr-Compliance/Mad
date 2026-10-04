@@ -1,0 +1,127 @@
+32 mutants written
+A13 [want red: as expected] (draft) storage DELETE policy without the abandoned_at term
+    MUTATION APPLIED: 3 line(s); first: AND (s.status)::text = 'uploading'::text)));
+    RED: P6n  green: none
+      P6n: ASSERT FAILED: P6n deleted=0
+A17 [want red: as expected] (draft) MOST LIKELY WRONG: finalize ignores abandoned_at
+    MUTATION APPLIED: 3 line(s); first: 
+    RED: R3  green: none
+      R3: ASSERT FAILED: R3 {"ok": true, "status": "submitted", "already_final": false}
+A17b [want red: as expected] (draft) MOST LIKELY WRONG: finalize still reads the metadata flag
+    MUTATION APPLIED: 2 line(s); first: IF coalesce(v_sub.submission_metadata->>'abandoned', '') = 'true' THEN
+    RED: R3  green: none
+      R3: ASSERT FAILED: R3 {"ok": true, "status": "submitted", "already_final": false}
+A37 [want red: as expected] (draft) attachment-row DELETE policy without the abandoned_at term
+    MUTATION APPLIED: 3 line(s); first: AND (transaction_submissions.status)::text = 'uploading'::text));
+    RED: RD1  green: none
+      RD1: ASSERT FAILED: RD1 deleted=0
+A40 [want red: as expected] (draft) guard lets a client insert abandoned_at
+    MUTATION APPLIED: 2 line(s); first: IF false THEN
+    RED: AB6  green: none
+      AB6: AB6 was allowed
+A41 [want green: as expected] (draft) EQUIVALENT: guard without the only-from-NULL term (extra protection: the USING term keeps clients off a fenced row)
+    MUTATION APPLIED: 3 line(s); first: IF OLD.submitted_by IS DISTINCT FROM auth.uid()
+    RED: none  green: AB2 AB3
+A42 [want green: as expected] (draft) EQUIVALENT: guard without the submitter term (RLS USING already limits uploading rows to the submitter)
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: none  green: AB4
+A43 [want red: as expected] (draft) guard without the NEW status term
+    MUTATION APPLIED: 3 line(s); first: OR (OLD.status)::text <> 'uploading' THEN
+    RED: AB7  green: none
+      AB7: AB7 was allowed
+A45 [want red: as expected] (draft) trigger on UPDATE only
+    MUTATION APPLIED: 2 line(s); first: BEFORE UPDATE ON public.transaction_submissions
+    RED: AB6  green: none
+      AB6: AB6 was allowed
+A46 [want red: as expected] (draft) column added without IF NOT EXISTS (not re-runnable)
+    MUTATION APPLIED: 2 line(s); first: ADD COLUMN abandoned_at timestamptz NULL;
+    RED: G2  green: none
+      G2: column "abandoned_at" of relation "transaction_submissions" already exists
+A47 [want green: as expected] (draft) EQUIVALENT: guard without the OLD status term (the NEW status term catches every reachable case)
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: none  green: AB4 AB7
+A48 [want red: as expected] (draft) guard refuses the service role / definer callers too
+    MUTATION APPLIED: 3 line(s); first: 
+    RED: SV1  green: none
+      SV1: abandoned_at_submitter_once_while_uploading
+EQ15 [want green: as expected] (draft) EQUIVALENT: finalize REVOKE names PUBLIC only (re-create keeps the 3403 ACL)
+    MUTATION APPLIED: 2 line(s); first: REVOKE EXECUTE ON FUNCTION public.finalize_submission(uuid, jsonb) FROM PUBLIC;
+    RED: none  green: X3 X4
+M01 [want red: as expected] (draft) drop the storage-object check
+    MUTATION APPLIED: 3 line(s); first: 0,
+    RED: C1b G3  green: none
+      C1b: ASSERT FAILED: C1b {"ok": true, "status": "submitted", "already_final": false}
+      G3: ASSERT FAILED: G3 after = pinned
+M02 [want red: as expected] (draft) MOST LIKELY WRONG: compare message COUNT, not the id set
+    MUTATION APPLIED: 6 line(s); first: SELECT greatest(cardinality(v_msgs) - count(*), 0) INTO v_msg_missing FROM public.submission_messages m WHERE 
+    RED: C11  green: none
+      C11: ASSERT FAILED: C11 {"ok": true, "status": "submitted", "already_final": false}
+M03 [want red: as expected] (draft) drop the folder-scope check in finalize
+    MUTATION APPLIED: 2 line(s); first: 0,
+    RED: C12  green: none
+      C12: ASSERT FAILED: C12 {"ok": true, "status": "submitted", "already_final": false}
+M04 [want red: as expected] (draft) drop the checklist check
+    MUTATION APPLIED: 2 line(s); first: THEN
+    RED: C3  green: none
+      C3: ASSERT FAILED: C3 {"ok": true, "status": "submitted", "already_final": false}
+M05 [want red: as expected] (draft) drop the owner check in finalize
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: C4  green: none
+      C4: ASSERT FAILED: C4 {"ok": true, "status": "submitted", "already_final": false}
+M06 [want red: as expected] (draft) drop the idempotent branch
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: C6  green: none
+      C6: ASSERT FAILED: C6 {"ok": false, "code": "not_uploading"}
+M07 [want red: as expected] (draft) drop the attachment-to-message link check
+    MUTATION APPLIED: 3 line(s); first: 0,
+    RED: C13  green: none
+      C13: ASSERT FAILED: C13 {"ok": true, "status": "submitted", "already_final": false}
+M08 [want red: as expected] (draft) drop the undeclared-attachment check
+    MUTATION APPLIED: 2 line(s); first: AND false;
+    RED: C14  green: none
+      C14: ASSERT FAILED: C14 {"ok": true, "status": "submitted", "already_final": false}
+M12 [want red: as expected] (draft) target status always submitted
+    MUTATION APPLIED: 2 line(s); first: v_target := 'submitted';
+    RED: C7  green: none
+      C7: ASSERT FAILED: C7 {"ok": true, "status": "submitted", "already_final": false}
+M18 [want red: as expected] (draft) finalize replaces submission_metadata instead of merging
+    MUTATION APPLIED: 3 line(s); first: submission_metadata = jsonb_build_object('finalized_by', 'finalize_submission')
+    RED: E1  green: none
+      E1: ASSERT FAILED: E1 metadata {"finalized_by": "finalize_submission"}
+M24 [want red: as expected] (draft) finalize does not mark an existing attempt committed
+    MUTATION APPLIED: 4 line(s); first: SET updated_at = now()
+    RED: T6  green: none
+      T6: ASSERT FAILED: T6 existing in_progress
+M27 [want red: as expected] (draft) attachment_count from the manifest length, not distinct ids
+    MUTATION APPLIED: 2 line(s); first: attachment_count = jsonb_array_length(v_att),
+    RED: C5b  green: none
+      C5b: ASSERT FAILED: C5b attachment_count=2
+M31 [want red: as expected] (draft) finalize as SECURITY INVOKER
+    MUTATION APPLIED: 2 line(s); first: SECURITY INVOKER
+    RED: C5  green: none
+      C5: permission denied for table submission_attempts
+M38 [want red: as expected] (draft) finalize reads the submission without FOR UPDATE
+    MUTATION APPLIED: 2 line(s); first: SELECT * INTO v_sub FROM public.transaction_submissions WHERE id = p_submission_id;
+    RED: L1  green: none
+      L1: ASSERT FAILED: L1 row locked by this transaction
+RB1 [want red: as expected] (rollback) rollback leaves the column
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: G1  green: none
+      G1: ASSERT FAILED: G1 after rollback = before
+RB2 [want red: as expected] (rollback) rollback leaves finalize on abandoned_at
+    MUTATION APPLIED: 2 line(s); first: IF coalesce(v_sub.submission_metadata->>'abandoned', '') = 'true' OR false THEN
+    RED: G1  green: none
+      G1: ASSERT FAILED: G1 after rollback = before
+RB3 [want red: as expected] (rollback) rollback leaves the guard trigger
+    MUTATION APPLIED: 2 line(s); first: 
+    RED: G1  green: none
+      G1: ASSERT FAILED: G1 after rollback = before
+RB4 [want red: as expected] (rollback) rollback leaves the submitter USING term
+    MUTATION APPLIED: 2 line(s); first: ((submitted_by = (SELECT auth.uid() AS uid)) AND ((status)::text = 'uploading'::text) AND (abandoned_at IS NUL
+    RED: G1  green: none
+      G1: cannot drop column abandoned_at of table transaction_submissions because other objects depend on it
+U1 [want red: as expected] (draft) submitter USING branch without abandoned_at IS NULL (a 2.38 flip reaches a fenced row)
+    MUTATION APPLIED: 2 line(s); first: ((submitted_by = (SELECT auth.uid() AS uid)) AND ((status)::text = 'uploading'::text))
+    RED: AB5  green: none
+      AB5: ASSERT FAILED: AB5 flip 0 rows
+mutants: 32 run, 0 not as expected
