@@ -219,10 +219,13 @@ describe("BACKLOG-3594 submission came back notice (host: AppModals)", () => {
     expect(notices()).toHaveLength(1);
   });
 
-  it("notices a later, different change on the same transaction", () => {
+  it("notices a second round of changes after a resubmit (no event in between)", () => {
+    // Resubmit writes `resubmitted` locally and emits nothing
+    // (submissionService.ts, stage 7), so the producer's next event for this
+    // transaction is resubmitted>needs_changes, straight after the first
+    // submitted>needs_changes.
     renderHost();
-    emit(statusEvent("needs_changes"));
-    emit(statusEvent("resubmitted", { oldStatus: "needs_changes" }));
+    emit(statusEvent("needs_changes", { oldStatus: "submitted" }));
     emit(statusEvent("needs_changes", { oldStatus: "resubmitted" }));
     expect(notices()).toHaveLength(2);
   });

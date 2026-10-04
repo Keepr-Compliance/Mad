@@ -63,10 +63,14 @@ export function useSubmissionStatusNotice({
   const openRef = useRef(onOpenTransaction);
   openRef.current = onOpenTransaction;
 
-  // Last status seen per transaction. Realtime and the poller can both apply
-  // the same transition (each awaits a network pull before writing), so the
-  // same event can arrive twice; only a different status is a new change.
-  const lastStatusRef = useRef<Map<string, string>>(new Map());
+  // Last transition seen per transaction, keyed "old>new". Realtime and the
+  // poller can both apply the same transition (each awaits a network pull
+  // before writing), so the same event can arrive twice with the same
+  // oldStatus. Keying on newStatus alone would be wrong: a resubmit writes
+  // `resubmitted` locally WITHOUT an event, so a second round of changes
+  // arrives as resubmitted>needs_changes after an earlier
+  // submitted>needs_changes, and must be noticed again.
+  const lastTransitionRef = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
     const subscribe = window.api?.transactions?.onSubmissionStatusChanged;
@@ -74,9 +78,10 @@ export function useSubmissionStatusNotice({
 
     const unsubscribe = subscribe((data: SubmissionStatusChangedEvent) => {
       if (!data?.transactionId) return;
-      const seen = lastStatusRef.current;
-      if (seen.get(data.transactionId) === data.newStatus) return;
-      seen.set(data.transactionId, data.newStatus);
+      const seen = lastTransitionRef.current;
+      const transition = `${data.oldStatus}>${data.newStatus}`;
+      if (seen.get(data.transactionId) === transition) return;
+      seen.set(data.transactionId, transition);
 
       const address = data.propertyAddress?.trim() || "a transaction";
       const notice = describe(data.newStatus, address);
