@@ -64,6 +64,26 @@ describe("the sync bubble's Try again (Google Messages)", () => {
     expect(screen.queryByTestId("sync-status-complete")).toBeNull();
   });
 
+  // Storyboard H02: "Sync failed", the reason, Try again — an "!" and no
+  // support-ticket line. Another source's error keeps the old card.
+  // Mutations: the old title, or the support line back → red.
+  it("H02: 'Sync failed', the reason, '!', no support-ticket line", () => {
+    finish("google-messages", "Lost the connection to your phone.");
+    const card = screen.getByTestId("sync-status-complete");
+    expect(card).toHaveTextContent("Sync failed");
+    expect(card).not.toHaveTextContent("Sync Completed with Errors");
+    expect(card).toHaveTextContent("Lost the connection to your phone.");
+    expect(screen.getByTestId("sync-gm-failed-icon")).toHaveTextContent("!");
+    expect(card).not.toHaveTextContent("submit a support ticket");
+  });
+
+  it("another source's error: the old card (title + support line)", () => {
+    finish("emails", "Outlook connection expired");
+    const card = screen.getByTestId("sync-status-complete");
+    expect(card).toHaveTextContent("Sync Completed with Errors");
+    expect(card).toHaveTextContent("submit a support ticket");
+  });
+
   it("a refused retry says why", async () => {
     mockRetry.mockResolvedValue({ success: false, error: "There is no failed Sync to try again." });
     finish("google-messages", "Keepr closed or restarted.");

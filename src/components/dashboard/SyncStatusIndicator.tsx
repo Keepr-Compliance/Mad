@@ -407,7 +407,15 @@ export function SyncStatusIndicator({
 
     const styles = completionStyles[completionVariant];
 
+    // Storyboard H02 (founder 2026-10-04): a failed Google Messages Sync alone
+    // is "Sync failed", its reason, Try again — no support-ticket line.
+    const gmFailed =
+      completionVariant === 'error' &&
+      errorItemsDuringSync.current.length === 1 &&
+      errorItemsDuringSync.current[0] === GOOGLE_MESSAGES_SYNC_TYPE;
+
     const completionTitle =
+      gmFailed ? 'Sync failed' :
       completionVariant === 'error' ? 'Sync Completed with Errors' :
       completionVariant === 'pending' ? `${pendingCount} transaction${pendingCount !== 1 ? "s" : ""} found` :
       'Sync Complete';
@@ -449,6 +457,10 @@ export function SyncStatusIndicator({
                     d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"
                   />
                 </svg>
+              ) : gmFailed ? (
+                <span className="text-[18px] font-extrabold text-[#B45309]" aria-hidden="true" data-testid="sync-gm-failed-icon">
+                  !
+                </span>
               ) : completionVariant === 'error' ? (
                 <svg
                   className="w-5 h-5 text-amber-600"
@@ -497,7 +509,7 @@ export function SyncStatusIndicator({
               {gmRetryError && (
                 <p className="text-xs text-amber-800 mt-1" role="alert" data-testid="sync-gm-retry-error">{gmRetryError}</p>
               )}
-              {completionVariant === 'error' && (
+              {completionVariant === 'error' && !gmFailed && (
                 <p className="text-xs text-amber-600 mt-1">
                   If this persists, please <button type="button" onClick={() => window.dispatchEvent(new CustomEvent('open-support-widget', { detail: { subject: `Sync Error: ${errorItemsDuringSync.current.join(', ')}` } }))} className="underline hover:text-amber-800">submit a support ticket</button>.
                 </p>
