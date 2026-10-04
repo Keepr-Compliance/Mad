@@ -16,6 +16,7 @@
  */
 import React from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { consumeLinkStepRequest } from "../android/androidSyncIntent";
 import "@testing-library/jest-dom";
 import type { RcsExtensionState } from "../../../../electron/types/ipc/window-api-rcs-import";
 
@@ -35,8 +36,10 @@ jest.mock("../../../services", () => ({
   },
 }));
 
+const mockForget = jest.fn(async () => undefined);
 jest.mock("../../../services/rcsImportService", () => ({
   rcsImportService: {
+    linkForget: () => mockForget(),
     getExtensionState: async () => ({ success: true, data: mockState }),
     clearTexts: (...a: unknown[]) => mockClear(...a),
     setCacheAutoDelete: (...a: unknown[]) => mockAutoDelete(...a),
@@ -241,16 +244,45 @@ describe("GoogleMessagesSettings", () => {
   // always shows the link panel (the code comes from the extension's popup;
   // Keepr makes none). Mutations: the line wrong; the panel missing; a
   // Keepr-made code shown → red.
-  it("linking: the linked line, and the link panel (no Keepr-made code)", async () => {
-    const view = render(<GoogleMessagesSettings userId="user-1" />);
-    expect(await screen.findByTestId("gm-pairing-line")).toHaveTextContent("Not linked in this browser — click the Keepr icon in Chrome to link");
-    expect(await screen.findByTestId("gm-link-panel")).toBeInTheDocument();
-    expect(screen.queryByTestId("gm-pair-code")).toBeNull();
-    expect(screen.queryByRole("button", { name: /pairing code|Re-pair/ })).toBeNull();
+  // Founder (2026-10-04): Settings hosts no copy of a flow screen — one row
+  // in this screen's style: the status, and Link / Relink, which open the
+  // SAME Sync Android modal at its link step (Forget link when linked).
+  // Mutations: the panel / a code field back; Link not opening the modal at
+  // the link step; the button not in the screen's style → red.
+  it("link row: status + Link / Relink open the Sync Android modal at the link step; no code field here", async () => {
+    const onOpen = jest.fn();
+    const view = render(<GoogleMessagesSettings userId="user-1" onOpenSyncAndroid={onOpen} />);
+    expect(await screen.findByTestId("gm-pairing-line")).toHaveTextContent(/^Not linked$/);
+    expect(screen.queryByTestId("gm-link-panel")).toBeNull();
+    expect(screen.queryByTestId("gm-link-code")).toBeNull();
+    expect(document.querySelector('input[inputmode="numeric"]')).toBeNull();
+    expect(screen.queryByTestId("gm-link-forget")).toBeNull();
+    const link = screen.getByTestId("gm-link-open");
+    expect(link).toHaveTextContent(/^Link$/);
+    // The screen's own button (as Force Re-import).
+    expect(link.className).toBe(screen.getByRole("button", { name: "Force Re-import" }).className);
+    fireEvent.click(link);
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(consumeLinkStepRequest()).toBe(true);
+    expect(consumeLinkStepRequest()).toBe(false);
     view.unmount();
     mockState = { ...mockState, extensionPaired: true };
+    render(<GoogleMessagesSettings userId="user-1" onOpenSyncAndroid={onOpen} />);
+    await waitFor(() => expect(screen.getByTestId("gm-pairing-line")).toHaveTextContent(/^Linked$/));
+    expect(screen.getByTestId("gm-link-open")).toHaveTextContent(/^Relink$/);
+    fireEvent.click(screen.getByTestId("gm-link-forget"));
+    await waitFor(() => expect(mockForget).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByTestId("gm-link-open"));
+    expect(onOpen).toHaveBeenCalledTimes(2);
+    expect(consumeLinkStepRequest()).toBe(true);
+  });
+
+  it("the Beta row is the screen's checkbox row (as its neighbours)", async () => {
     render(<GoogleMessagesSettings userId="user-1" />);
-    await waitFor(() => expect(screen.getByTestId("gm-pairing-line")).toHaveTextContent("Extension linked with this Keepr"));
+    const beta = (await screen.findByTestId("gm-beta-install")).closest("label")!;
+    const auto = screen.getByTestId("gm-auto-delete").closest("label")!;
+    expect(beta.className).toBe(auto.className);
+    expect(screen.getByTestId("gm-beta-install").className).toBe(screen.getByTestId("gm-auto-delete").className);
   });
 
   // Founder (J flow): "Beta extension install" — with the account's other

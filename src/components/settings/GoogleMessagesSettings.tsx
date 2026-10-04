@@ -42,15 +42,15 @@ import { settingsService } from "../../services";
 import { LookbackMonthsSelect, lastMonthsPhrase, parseLookbackOption } from "./LookbackMonthsSelect";
 import { AndroidForceReimportWarning, androidClearedText } from "./AndroidForceReimportWarning";
 import { NotSyncedChatsModal } from "./android/NotSyncedChatsModal";
-import { LinkBrowserPanel } from "./android/LinkBrowserPanel";
+import { requestLinkStep } from "./android/androidSyncIntent";
 import {
   EXTENSION_PUBLISHED,
   betaInstallPreferencePatch,
   readBetaInstallPreference,
 } from "./android/extensionDistribution";
 
-/** Live (B1): not proven by the extension (a lost key, another profile…): said honestly. */
-export const NOT_LINKED_HERE = "Not linked in this browser — click the Keepr icon in Chrome to link";
+/** The link row's status (founder 2026-10-04): "Linked" / "Not linked". */
+export const LINK_STATUS = { linked: "Linked", notLinked: "Not linked" } as const;
 import { readMessageImportPreferences, resolveStoredLookbackMonths } from "./messageImportPreferences";
 
 import { GM_LOOKBACK_TARGET } from "./android/googleMessagesSyncSteps";
@@ -62,7 +62,16 @@ function formatWhen(iso: string | null | undefined): string {
   return Number.isFinite(t) ? new Date(t).toLocaleString() : "never";
 }
 
-export function GoogleMessagesSettings({ userId }: { userId: string }) {
+interface GoogleMessagesSettingsProps {
+  userId: string;
+  /**
+   * Founder (2026-10-04): Link / Relink open the SAME Sync Android modal the
+   * dashboard opens (it closes Settings), at its link step.
+   */
+  onOpenSyncAndroid?: () => void;
+}
+
+export function GoogleMessagesSettings({ userId, onOpenSyncAndroid }: GoogleMessagesSettingsProps) {
   const [state, setState] = useState<RcsExtensionState | null>(null);
   const [lookbackMonths, setLookbackMonths] = useState<number | null>(resolveStoredLookbackMonths(undefined));
   const [prefsSettled, setPrefsSettled] = useState(false);
@@ -217,14 +226,40 @@ export function GoogleMessagesSettings({ userId }: { userId: string }) {
         </p>
       </div>
 
-      {/* C1 (UX redesign): linking starts in the extension's popup (Link → a
-          6-digit code); the code is typed here. One linked browser at a time. */}
+      {/* Founder (2026-10-04): Settings hosts no copy of a flow screen — one
+          row in this screen's style: the status, and Link / Relink, which
+          open the Sync Android modal at its link step (a new link replaces
+          the old one only once its code succeeds). */}
       <div className="p-4 bg-white rounded-lg border border-gray-200" data-testid="gm-pairing">
-        <span className="text-sm text-gray-900" data-testid="gm-pairing-line">
-          {keeprPaired ? "Extension linked with this Keepr" : NOT_LINKED_HERE}
-        </span>
-        <div className="mt-3">
-          <LinkBrowserPanel onLinked={() => void refresh()} />
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-gray-900" data-testid="gm-pairing-line">
+            {keeprPaired ? LINK_STATUS.linked : LINK_STATUS.notLinked}
+          </span>
+          <div className="flex items-center gap-3">
+            {keeprPaired && (
+              <button
+                type="button"
+                className="text-[14px] text-[#4B5563] hover:text-[#1F2433]"
+                onClick={() => void rcsImportService.linkForget().then(refresh)}
+                data-testid="gm-link-forget"
+              >
+                Forget link
+              </button>
+            )}
+            {onOpenSyncAndroid && (
+              <button
+                type="button"
+                onClick={() => {
+                  requestLinkStep();
+                  onOpenSyncAndroid();
+                }}
+                className="px-3 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                data-testid="gm-link-open"
+              >
+                {keeprPaired ? "Relink" : "Link"}
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -257,16 +292,19 @@ export function GoogleMessagesSettings({ userId }: { userId: string }) {
 
       {/* Founder (J flow): the beta (unpacked) install of the extension. Until
           the extension is in the Chrome Web Store everyone gets it (forced on). */}
-      <label className="flex items-center gap-3 p-4 bg-white rounded-lg border border-gray-200 cursor-pointer">
+      <label className="flex items-start gap-3 p-4 bg-white rounded-lg border border-gray-200 cursor-pointer">
         <input
           type="checkbox"
-          className="w-5 h-5"
+          className="mt-0.5 w-5 h-5"
           checked={betaInstall || !EXTENSION_PUBLISHED}
           disabled={!EXTENSION_PUBLISHED}
           onChange={(e) => void changeBetaInstall(e.target.checked)}
           data-testid="gm-beta-install"
         />
-        <span className="text-sm font-medium text-gray-900">Beta extension install</span>
+        <span>
+          <span className="block text-sm font-medium text-gray-900">Beta extension install</span>
+          <span className="block text-xs text-gray-600">On until the extension is in the Chrome Web Store.</span>
+        </span>
       </label>
 
       <label className="flex items-start gap-3 p-4 bg-white rounded-lg border border-gray-200 cursor-pointer">

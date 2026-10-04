@@ -71,7 +71,7 @@ export function AppRouter({ app }: AppRouterProps) {
   // BACKLOG-1653: Import source preference to gate iPhone sync card.
   const importSource = useImportSource(currentUser?.id, app.modalState.showSettings);
   // C1: keepr://link opens the link screen (Settings › Google Messages).
-  useOpenLinkScreen(openSettings);
+  useOpenLinkScreen(openAndroidSync);
 
   // New onboarding architecture (when enabled)
   if (USE_NEW_ONBOARDING && isOnboardingStep(currentStep)) {

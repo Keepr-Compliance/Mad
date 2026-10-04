@@ -19,6 +19,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import "@testing-library/jest-dom";
 import type { RcsExtensionState, RcsJobInfo } from "../../../../../electron/types/ipc/window-api-rcs-import";
 import { googleMessagesStep } from "../googleMessagesSyncSteps";
+import { requestLinkStep } from "../androidSyncIntent";
 
 let mockState: RcsExtensionState;
 let progressListener: ((j: RcsJobInfo) => void) | null = null;
@@ -264,6 +265,25 @@ describe("GoogleMessagesSyncFlow", () => {
     expect(screen.queryByTestId("gm-sync-note")).toBeNull();
     expect(screen.queryByTestId("gm-pair-instruction")).toBeNull();
     expect(screen.queryByTestId("gm-copy-line")).toBeNull();
+  });
+
+  // Founder (2026-10-04): Settings' Link / Relink (and keepr://link) open this
+  // flow at the link step — even when linked (Relink); the old link goes only
+  // when the new code succeeds. Mutation: the request ignored → red.
+  it("opened at the link step (Relink): the link card, even when linked", async () => {
+    mockState = INSTALLED; // linked
+    requestLinkStep();
+    render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);
+    expect(await screen.findByTestId("gm-link-step-1")).toBeInTheDocument();
+    expect(screen.getByTestId("gm-link-step-2")).toBeInTheDocument();
+    expect(screen.queryByTestId("gm-sync-now")).toBeNull();
+  });
+
+  it("not asked: a linked flow opens at Sync now (B02)", async () => {
+    mockState = INSTALLED;
+    render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);
+    expect(await screen.findByTestId("gm-sync-now")).toBeInTheDocument();
+    expect(screen.queryByTestId("gm-link-step-1")).toBeNull();
   });
 
   /** Sync now, then the run ends as `over` (failed / cancelled). */

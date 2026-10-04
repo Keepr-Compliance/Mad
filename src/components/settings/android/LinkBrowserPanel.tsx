@@ -54,6 +54,8 @@ interface LinkBrowserPanelProps {
   onSyncNow?: () => void;
   /** Inside the Sync Android modal (D01): no card of its own — the modal frames it. */
   bare?: boolean;
+  /** Relink (from Settings): the two steps at once, even while linked. */
+  startLinking?: boolean;
 }
 
 type Check =
@@ -62,13 +64,13 @@ type Check =
   | { kind: "wrong"; message: string }
   | { kind: "linked" };
 
-export function LinkBrowserPanel({ onLinked, onJustLinked, onSyncNow, bare = false }: LinkBrowserPanelProps) {
+export function LinkBrowserPanel({ onLinked, onJustLinked, onSyncNow, bare = false, startLinking = false }: LinkBrowserPanelProps) {
   const [link, setLink] = useState<RcsLinkState | null>(null);
   const [linked, setLinked] = useState(false);
   const [code, setCode] = useState("");
   const [check, setCheck] = useState<Check>({ kind: "idle" });
   /** Live (B2): "Link a browser" opened while already linked. */
-  const [howOpen, setHowOpen] = useState(false);
+  const [howOpen, setHowOpen] = useState(startLinking);
   const input = useRef<HTMLInputElement | null>(null);
   const checkRef = useRef(check);
   checkRef.current = check;
@@ -96,7 +98,7 @@ export function LinkBrowserPanel({ onLinked, onJustLinked, onSyncNow, bare = fal
     }
     // Live (B1): Keepr's honest state each time (a lost link is shown again).
     if (r.data.linked && !linked) {
-      setHowOpen(false);
+      if (!startLinking) setHowOpen(false);
       onLinked?.();
     }
     setLinked(r.data.linked);

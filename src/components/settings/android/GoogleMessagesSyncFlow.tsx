@@ -23,6 +23,7 @@ import type { RcsExtensionState, RcsJobInfo } from "../../../../electron/types/i
 import { doneSummaryLines, googleMessagesStep } from "./googleMessagesSyncSteps";
 import { LinkBrowserPanel } from "./LinkBrowserPanel";
 import { syncFailureLine } from "./syncFailureLines";
+import { consumeLinkStepRequest } from "./androidSyncIntent";
 import { EXTENSION_PUBLISHED, readBetaInstallPreference, wantsBetaInstall } from "./extensionDistribution";
 
 const POLL_MS = 3000;
@@ -68,6 +69,8 @@ export function GoogleMessagesSyncFlow({
   /** A code typed in the link card just linked: its "Sync now" is the Sync (no second screen). */
   const [justLinked, setJustLinked] = useState(false);
   const [betaPref, setBetaPref] = useState(false);
+  /** Opened from Settings' Link / Relink (or keepr://link): the link step, even when linked. */
+  const [startAtLink] = useState(() => consumeLinkStepRequest());
   const jobIdRef = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -231,12 +234,13 @@ export function GoogleMessagesSyncFlow({
         </>
       )}
 
-      {step === "connect" && (!keeprPaired || justLinked) && (
+      {step === "connect" && (!keeprPaired || justLinked || startAtLink) && (
         // D01: the link card IS this step (the modal gives it its frame).
-        <LinkBrowserPanel bare onJustLinked={() => setJustLinked(true)} onSyncNow={() => void startSync()} />
+        // Relink: the same card; the old link goes only when the new code succeeds.
+        <LinkBrowserPanel bare startLinking={startAtLink} onJustLinked={() => setJustLinked(true)} onSyncNow={() => void startSync()} />
       )}
 
-      {step === "connect" && keeprPaired && !justLinked && (
+      {step === "connect" && keeprPaired && !justLinked && !startAtLink && (
         <>
           {/* B02 / I02: linked — one line, Sync now. */}
           <h2 className={title}>Sync Android</h2>
