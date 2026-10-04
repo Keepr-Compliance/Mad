@@ -17,6 +17,11 @@ case "$API_URL" in http://127.0.0.1:*|http://localhost:*) ;; *) echo "refusing: 
 psql_in() { docker exec -i "$PG" psql -U postgres -v ON_ERROR_STOP=1 -X -tA -q -f -; }
 psql_in < "$REPO/supabase/migrations/20261005120000_backlog_3726_submission_sweep.sql"
 echo "SELECT vault.update_secret((SELECT id FROM vault.secrets WHERE name='submission_sweep_url'), 'http://$KONG:8000/functions/v1/submission-sweep');" | psql_in >/dev/null
+# functions serve mounts <workdir>/supabase/functions (a symlink does not mount): copy the function in
+if [ "$(cd "$WD" && pwd)" != "$REPO" ]; then
+  mkdir -p "$WD/supabase/functions"; rm -rf "$WD/supabase/functions/submission-sweep"
+  cp -R "$REPO/supabase/functions/submission-sweep" "$WD/supabase/functions/submission-sweep"
+fi
 SERVE_PID=""
 serve() {  # serve <mode> [delay_ms]
   stop_serve
