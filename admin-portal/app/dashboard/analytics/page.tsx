@@ -14,6 +14,7 @@ import { SystemCounts } from './components/SystemCounts';
 import { PlatformBreakdown } from './components/PlatformBreakdown';
 import { LicenseUtilization } from './components/LicenseUtilization';
 import { PhoneTypeBreakdown } from './components/PhoneTypeBreakdown';
+import { parseCountMode } from './components/CountModeToggle';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,7 +27,7 @@ export const dynamic = 'force-dynamic';
 export default async function AnalyticsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ period?: string }>;
+  searchParams: Promise<{ period?: string; mode?: string }>;
 }) {
   const { supabase, user } = await getAuthenticatedUser();
 
@@ -59,12 +60,16 @@ export default async function AnalyticsPage({
   const VALID_PERIODS: Record<string, number> = { '1': 1, '7': 7, '30': 30, '90': 90 };
   const versionDays = VALID_PERIODS[params.period ?? ''] ?? 30;
 
+  // One shared count mode drives the Version and Platform cards together
+  // (BACKLOG-3201). Both toggles write this same param.
+  const countMode = parseCountMode(params.mode);
+
   // Fetch all analytics data in parallel
   const [versionData, systemCounts, platformData, licenseData, phoneTypeData] =
     await Promise.all([
-      getVersionDistribution(supabase, versionDays),
+      getVersionDistribution(supabase, versionDays, countMode),
       getSystemCounts(supabase),
-      getPlatformBreakdown(supabase),
+      getPlatformBreakdown(supabase, countMode),
       getLicenseUtilization(supabase),
       getPhoneTypeBreakdown(supabase),
     ]);
@@ -86,11 +91,15 @@ export default async function AnalyticsPage({
       <SystemCounts data={systemCounts} />
 
       {/* Section 2: Version Distribution */}
-      <VersionDistribution data={versionData} activePeriod={versionDays} />
+      <VersionDistribution
+        data={versionData}
+        activePeriod={versionDays}
+        activeMode={countMode}
+      />
 
       {/* Section 3: Two-column layout for Platform + Phone Type */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <PlatformBreakdown data={platformData} />
+        <PlatformBreakdown data={platformData} activeMode={countMode} />
         <PhoneTypeBreakdown data={phoneTypeData} />
       </div>
 
