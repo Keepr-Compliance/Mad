@@ -15,7 +15,7 @@ supabase start                                    # a stack whose project_id no 
 bash supabase/tests/backlog-3726/run.sh venue     # 3403 prelude + 3403 file + 3725 file + pg_cron + FORCE RLS
 ```
 
-`M3725` points at the 3725 migration when it is not yet in this tree. `PG_CONTAINER` selects
+`M3725` points at the 3725 migration (`20261004213050_backlog_3725_abandoned_at.sql`) when it is not yet in this tree. `PG_CONTAINER` selects
 the db container. **Use a stack with its own `project_id`.** Every worktree's `config.toml`
 says `keepr-test`, so a `supabase stop` or a prelude in another worktree hits the same
 containers (it happened during this build). The recorded runs used a copy of `config.toml`
@@ -40,6 +40,8 @@ Records: `control-run.txt`, `mutant-run.txt`, `handler-mutant-run.txt`,
 | Control | What |
 |---|---|
 | S01 | (b) at 2 h: 1 h 50 m untouched, 2 h 10 m fenced; submitted row untouched; (a) 1 h grace |
+| S17 | (b) is "no activity for 2 h": a 3 h old upload with a 30 min old file, or a 30 min old attachment row, is not claimed; a stalled one is; a new object in another org's folder is not activity (dry and live) |
+| S18 | activity boundary: newest object 1 h 50 m old → not claimed, 2 h 10 m old → claimed |
 | S02 | paths = attachment rows + rowless objects in the row's own `{org}/{id}/` folder only |
 | S03 | files removed, then finish: row gone, children cascaded, attempt row `abandoned`, run row closed |
 | S04 | an object left → row kept |
@@ -64,7 +66,7 @@ Records: `control-run.txt`, `mutant-run.txt`, `handler-mutant-run.txt`,
 |---|---|
 | L1 | Storage `remove()` of a folder prefix removes nothing (exact names only) |
 | L2 | service-role remove through storage-api with `protect_delete` present: object and bytes gone |
-| L3a/L3b | dry run then live run through pg_net → Edge Function; a submitted submission untouched |
+| L3a/L3b | dry run then live run through pg_net → Edge Function; a submitted submission untouched; an upload created 3 h ago that added a file 10 min ago is not fenced |
 | L3c | a run of ≥ 8 s (injected local delay) records its finish row; pg_net gets the 200 |
 | L3d | with the pg_net default 5 s timeout pg_net reports a timeout, and the local runtime still finishes the run |
 | L4 | finalize holds the row lock 3 s; a live claim at 1 s returns in < 1 s, does not fence or list the row |
