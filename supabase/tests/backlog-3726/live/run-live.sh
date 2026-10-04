@@ -28,9 +28,14 @@ serve() {  # serve <mode> [delay_ms]
   local envf; envf="$(mktemp)"; printf 'SUBMISSION_SWEEP_MODE=%s\nSUBMISSION_SWEEP_TEST_DELAY_MS=%s\n' "$1" "${2:-}" > "$envf"
   supabase functions serve submission-sweep --workdir "$WD" --no-verify-jwt --env-file "$envf" > "$HERE/.serve.log" 2>&1 &
   SERVE_PID=$!
-  for _ in $(seq 1 90); do
-    code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API_URL/functions/v1/submission-sweep" -d '{}' || true)
-    [ "$code" = "401" ] && return 0; sleep 1
+  # ready = this serve process printed its banner AND three 401s in a row (an old runtime can still answer)
+  local ok=0
+  for _ in $(seq 1 120); do
+    if grep -q 'Serving functions on' "$HERE/.serve.log"; then
+      code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API_URL/functions/v1/submission-sweep" -d '{}' || true)
+      if [ "$code" = "401" ]; then ok=$((ok+1)); [ $ok -ge 3 ] && return 0; else ok=0; fi
+    fi
+    sleep 1
   done
   echo "functions serve did not come up" >&2; tail -20 "$HERE/.serve.log" >&2; exit 1
 }
@@ -38,6 +43,7 @@ stop_serve() { if [ -n "$SERVE_PID" ]; then kill "$SERVE_PID" 2>/dev/null || tru
 trap stop_serve EXIT
 phase() { node "$HERE/live-run.mjs" "$@"; }
 rc=0
+phase reset || rc=1
 phase storage || rc=1
 serve dry_run;   out="$(phase dry)" || rc=1; echo "$out" | grep -v '^STATE'
 STATE="$(grep '^STATE ' <<<"$out" | sed 's/^STATE //')"

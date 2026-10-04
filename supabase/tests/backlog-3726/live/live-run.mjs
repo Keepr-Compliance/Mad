@@ -79,6 +79,15 @@ function httpResponse(rid) {
 const phase = process.argv[2];
 seedPeople();
 
+if (phase === "reset") {
+  // Local venue only: clear rows and objects a previous live run left under the live fixture org.
+  const objs = sql(`select coalesce(json_agg(name), '[]') from storage.objects where bucket_id='${BUCKET}' and name like '${ORG}/%'`);
+  const names = JSON.parse(objs);
+  for (let i = 0; i < names.length; i += 100) await removeApi(names.slice(i, i + 100));
+  sql(`delete from public.transaction_submissions where organization_id = '${ORG}'; delete from public.submission_sweep_runs;`);
+  check(sql(`select count(*) from storage.objects where name like '${ORG}/%'`) === "0", "reset: no live fixture objects left");
+}
+
 if (phase === "storage") {
   // L1 exact-name semantics; L2 service-role remove with protect_delete present.
   const sub = crypto.randomUUID();

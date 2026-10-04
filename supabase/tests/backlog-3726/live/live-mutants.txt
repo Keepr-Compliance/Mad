@@ -1,0 +1,15 @@
+MUTATION APPLIED M01: FOR UPDATE
+FAIL L4 live claim returned in 2065 ms while finalize held the lock 
+PASS L4 the in-flight row was not fenced or listed
+PASS L4 finalize committed; row submitted, not fenced
+live race: 2 pass, 1 fail
+MUTATION APPLIED MW: IF true THEN
+PASS L4 live claim returned in 47 ms while finalize held the lock
+FAIL L4 the in-flight row was not fenced or listed {"fenced":0,"listed":true}
+PASS L4 finalize committed; row submitted, not fenced
+live race: 2 pass, 1 fail
+restored shipped file:
+PASS L4 live claim returned in 44 ms while finalize held the lock
+PASS L4 the in-flight row was not fenced or listed
+PASS L4 finalize committed; row submitted, not fenced
+live race: 3 pass, 0 fail

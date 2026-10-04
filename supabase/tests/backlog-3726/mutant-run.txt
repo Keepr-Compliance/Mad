@@ -1,3 +1,4 @@
+29 mutants written
 M01 [as expected] (want green) FOR UPDATE without SKIP LOCKED: waits instead of skipping (live R1 measures the wait)
     MUTATION APPLIED: 2 line(s); first: FOR UPDATE
     RED: none
