@@ -152,6 +152,8 @@ export interface WindowApiRcsImport {
   linkForget?: () => Promise<{ success: true }>;
   /** The code screen's Cancel: the pending link session goes. */
   linkCancel?: () => Promise<{ success: true }>;
+  /** The link screen's "Open Google Messages" (no link needed). */
+  openGoogleMessages?: () => Promise<{ success: true }>;
   /** C1: keepr://link asked for the link screen. Returns an unsubscribe. */
   onOpenLinkScreen?: (callback: () => void) => () => void;
   /**

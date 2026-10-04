@@ -188,11 +188,11 @@ describe("GoogleMessagesSyncFlow", () => {
     expect(await screen.findByTestId("gm-pair-instruction")).toHaveTextContent(
       "In Chrome, open Google Messages and sign in with your Google account or scan the QR code with your phone. Leave Remember this computer on.",
     );
-    expect(screen.getByTestId("gm-step-connect")).toHaveTextContent("Keep that Chrome window visible until it is done.");
+    expect(screen.getByTestId("gm-step-connect")).toHaveTextContent("Keep the Google Messages tab open until it is done.");
     view.unmount();
     mockState = { ...INSTALLED, pairedAt: "2026-10-01T10:05:00.000Z" };
     render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);
-    expect(await screen.findByTestId("gm-sync-note")).toHaveTextContent("Keep that Chrome window visible until it is done.");
+    expect(await screen.findByTestId("gm-sync-note")).toHaveTextContent("Keep the Google Messages tab open until it is done.");
     expect(screen.queryByTestId("gm-pair-instruction")).toBeNull();
     expect(screen.getByRole("button", { name: "Open Google Messages and sync" })).toBeInTheDocument();
   });
@@ -257,11 +257,17 @@ describe("GoogleMessagesSyncFlow", () => {
   // C1 (UX redesign): Connect shows the link panel until the extension is
   // linked with this Keepr; Sync stays off until then. Mutations: no link
   // panel, or Sync enabled while unlinked → red.
-  it("unlinked: the link panel shows, Sync waits until linked", async () => {
+  // Founder (2026-10-04): not linked — the link card is the one thing to do;
+  // the Sync button and its notice appear only once linked. Mutation: the
+  // Sync shown (or its notice) while unlinked → red.
+  it("unlinked: the link card shows; no Sync button or notice until linked", async () => {
     mockState = { ...INSTALLED, extensionPaired: false };
     render(<GoogleMessagesSyncFlow onClose={() => {}} />);
     expect(await screen.findByTestId("gm-link-panel")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open Google Messages and sync" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Open Google Messages and sync" })).toBeNull();
+    expect(screen.queryByTestId("gm-sync-note")).toBeNull();
+    expect(screen.queryByTestId("gm-pair-instruction")).toBeNull();
+    expect(screen.queryByTestId("gm-copy-line")).toBeNull();
   });
 
   /** Sync now, then the run ends as `over` (failed / cancelled). */

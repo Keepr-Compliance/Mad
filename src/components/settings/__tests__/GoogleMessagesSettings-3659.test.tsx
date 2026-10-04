@@ -15,7 +15,7 @@
  *   E2 (P3c) the modal not read-only (an action back), or no eye hint          → "read-only modal"
  */
 import React from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import type { RcsExtensionState } from "../../../../electron/types/ipc/window-api-rcs-import";
 
@@ -222,7 +222,7 @@ describe("GoogleMessagesSettings", () => {
     fireEvent.click(videos);
     expect(mockSetMedia).not.toHaveBeenCalled();
     expect(screen.getByTestId("gm-videos-estimate")).toHaveTextContent("Sync once to see an estimate");
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(within(screen.getByTestId("gm-videos-estimate").parentElement as HTMLElement).getByRole("button", { name: "Cancel" }));
     expect(mockSetMedia).not.toHaveBeenCalled();
     fireEvent.click(videos);
     fireEvent.click(screen.getByRole("button", { name: "Turn on videos" }));

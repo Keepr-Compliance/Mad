@@ -248,6 +248,15 @@ export const rcsImportService = {
     }
   },
 
+  /** The link screen's "Open Google Messages" (works without a link). */
+  async openGoogleMessages(): Promise<void> {
+    try {
+      await api()?.openGoogleMessages?.();
+    } catch {
+      /* nothing opened */
+    }
+  },
+
   /** The code screen's Cancel. */
   async linkCancel(): Promise<void> {
     try {

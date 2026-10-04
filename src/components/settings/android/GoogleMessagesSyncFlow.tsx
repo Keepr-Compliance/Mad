@@ -68,6 +68,8 @@ export function GoogleMessagesSyncFlow({ onClose, onUseCompanion, onOpenSettings
   const [chromeNote, setChromeNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  /** A code typed in the link card just linked: its "Sync now" is the Sync (no second button). */
+  const [justLinked, setJustLinked] = useState(false);
   const jobIdRef = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -231,39 +233,45 @@ export function GoogleMessagesSyncFlow({ onClose, onUseCompanion, onOpenSettings
           </div>
           {/* Live (B2): always there once installed — a code from the browser
               gets its field even when Keepr already counts a link. */}
-          {installed && <LinkBrowserPanel />}
-          {/* Both checks ticked: the pairing instruction is no longer needed. */}
-          {installed && paired ? (
-            <p className="text-sm text-gray-800 leading-relaxed" data-testid="gm-sync-note">
-              Keepr opens Google Messages and copies your texts. Keep that Chrome window visible until it is done.
-            </p>
-          ) : (
-            <ol className="flex flex-col gap-2">
-              <Numbered n={1}>
-                <span data-testid="gm-pair-instruction">
-                  In Chrome, open Google Messages and sign in with your Google account or scan the QR code with your
-                  phone. Leave <b>Remember this computer</b> on.
-                </span>
-              </Numbered>
-              <Numbered n={2}>
-                Click <b>Open Google Messages and sync</b>. Keep that Chrome window visible until it is done.
-              </Numbered>
-            </ol>
-          )}
-          <button type="button" className={primary} onClick={() => void startSync()} disabled={starting || !keeprPaired}>
-            {starting ? "Starting…" : "Open Google Messages and sync"}
-          </button>
-          <p className="text-xs text-gray-600" data-testid="gm-copy-line">
-            {syncCopyLine(state?.lookbackMonths)}{" "}
-            {onOpenSettings ? (
-              <button type="button" className="text-indigo-700 hover:text-indigo-900 underline" onClick={onOpenSettings}>
-                Change
+          {installed && <LinkBrowserPanel onJustLinked={() => setJustLinked(true)} onSyncNow={() => void startSync()} />}
+          {/* Founder (2026-10-04): the Sync and its notice only once linked —
+              until then the link card is the one thing to do. */}
+          {keeprPaired && !justLinked && (
+            <>
+              {/* Both checks ticked: the pairing instruction is no longer needed. */}
+              {installed && paired ? (
+                <p className="text-sm text-gray-800 leading-relaxed" data-testid="gm-sync-note">
+                  Keepr opens Google Messages and copies your texts. Keep the Google Messages tab open until it is done.
+                </p>
+              ) : (
+                <ol className="flex flex-col gap-2">
+                  <Numbered n={1}>
+                    <span data-testid="gm-pair-instruction">
+                      In Chrome, open Google Messages and sign in with your Google account or scan the QR code with your
+                      phone. Leave <b>Remember this computer</b> on.
+                    </span>
+                  </Numbered>
+                  <Numbered n={2}>
+                    Click <b>Open Google Messages and sync</b>. Keep the Google Messages tab open until it is done.
+                  </Numbered>
+                </ol>
+              )}
+              <button type="button" className={primary} onClick={() => void startSync()} disabled={starting}>
+                {starting ? "Starting…" : "Open Google Messages and sync"}
               </button>
-            ) : (
-              "Change"
-            )}{" "}
-            this in Settings → Messages.
-          </p>
+              <p className="text-xs text-gray-600" data-testid="gm-copy-line">
+                {syncCopyLine(state?.lookbackMonths)}{" "}
+                {onOpenSettings ? (
+                  <button type="button" className="text-indigo-700 hover:text-indigo-900 underline" onClick={onOpenSettings}>
+                    Change
+                  </button>
+                ) : (
+                  "Change"
+                )}{" "}
+                this in Settings → Messages.
+              </p>
+            </>
+          )}
           {!installed && (
             <button type="button" className="text-sm text-indigo-700 hover:text-indigo-900 text-left" onClick={() => setContinued(false)}>
               Back to installing the extension

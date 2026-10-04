@@ -1333,6 +1333,16 @@ export function registerRcsImportHandlers(): void {
     }, { module: LOG_TAG }),
   );
 
+  // Founder (KeeprLinkPrompt): "Open Google Messages" on the link screen —
+  // works without a link (Keepr opens the page; no bridge involved).
+  ipcMain.handle(
+    "rcs-import:open-google-messages",
+    wrapHandler(async (): Promise<{ success: true }> => {
+      await shell.openExternal(RCS_MESSAGES_WEB_URL);
+      return { success: true };
+    }, { module: LOG_TAG }),
+  );
+
   // The mockup's Cancel on the code screen: the browser's pending link goes.
   ipcMain.handle(
     "rcs-import:link-cancel",
