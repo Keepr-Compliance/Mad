@@ -2371,6 +2371,11 @@ class DatabaseService implements IDatabaseService {
     return submissionDb.getTransactionAttachments(transactionId, auditStartDate, auditEndDate);
   }
 
+  /** BACKLOG-3403: email attachment rows the on-demand download could not fill. */
+  getUndownloadedEmailAttachments(emailIds: string[]) {
+    return submissionDb.getUndownloadedEmailAttachments(emailIds);
+  }
+
   getTransactionBySubmissionId(submissionId: string) {
     return submissionDb.getTransactionBySubmissionId(submissionId);
   }

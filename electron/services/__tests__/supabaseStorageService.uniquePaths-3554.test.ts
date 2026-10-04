@@ -40,6 +40,7 @@ import os from "os";
 import path from "path";
 
 import {
+  SUBMISSION_RPC_SUCCESS,
   createPostgrestEmulator,
   brokerageMembership,
   FIXTURE_USER_ID,
@@ -187,6 +188,25 @@ afterEach(() => {
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
 
+/**
+ * BACKLOG-3403: the batch helper `uploadAttachments` is gone (the submission
+ * uploads one file at a time so a cancel can land between files). This is the
+ * same loop over `uploadAttachmentWithRetry`, with the same result shape.
+ */
+async function uploadAll(list: { id: string; localPath: string; filename: string }[]) {
+  const results = [];
+  for (const a of list) {
+    results.push(
+      await supabaseStorageService.uploadAttachmentWithRetry(ORG, SUBMISSION, a.id, a.localPath, a.filename)
+    );
+  }
+  return {
+    results,
+    successCount: results.filter((r) => r.success).length,
+    failedCount: results.filter((r) => !r.success).length,
+  };
+}
+
 const sameNamePair = () => [
   { id: ATT_A, localPath: fileA, filename: "image001.png" },
   { id: ATT_B, localPath: fileB, filename: "image001.png" },
@@ -209,7 +229,7 @@ describe("BACKLOG-3554 — storage path shape", () => {
 
 describe("BACKLOG-3554 — uploadAttachments", () => {
   it("two same-name attachments → two distinct paths, both uploaded with their own bytes", async () => {
-    const result = await supabaseStorageService.uploadAttachments(ORG, SUBMISSION, sameNamePair());
+    const result = await uploadAll(sameNamePair());
 
     expect(result.successCount).toBe(2);
     expect(result.failedCount).toBe(0);
@@ -225,7 +245,7 @@ describe("BACKLOG-3554 — uploadAttachments", () => {
   it("a retry after a lost answer is idempotent: same path, success, bytes stored once", async () => {
     script = [{ kind: "lose-answer" }];
 
-    const result = await supabaseStorageService.uploadAttachments(ORG, SUBMISSION, [sameNamePair()[0]]);
+    const result = await uploadAll([sameNamePair()[0]]);
 
     expect(result.successCount).toBe(1);
     expect(result.results[0]).toMatchObject({
@@ -246,7 +266,7 @@ describe("BACKLOG-3554 — uploadAttachments", () => {
   ])("an unexpected %s on the first attempt is a failure, with no retry", async (_label, make) => {
     script = [{ kind: "error", error: make() }];
 
-    const result = await supabaseStorageService.uploadAttachments(ORG, SUBMISSION, [sameNamePair()[1]]);
+    const result = await uploadAll([sameNamePair()[1]]);
 
     expect(result.successCount).toBe(0);
     expect(result.failedCount).toBe(1);
@@ -259,7 +279,7 @@ describe("BACKLOG-3554 — uploadAttachments", () => {
     const target = buildAttachmentStoragePath(ORG, SUBMISSION, ATT_B, "image001.png");
     objects.set(target, Buffer.from("first file bytes"));
 
-    const result = await supabaseStorageService.uploadAttachments(ORG, SUBMISSION, [sameNamePair()[1]]);
+    const result = await uploadAll([sameNamePair()[1]]);
 
     expect(result.results[0]).toMatchObject({ success: false, storagePath: "" });
     expect(objects.get(target)?.toString()).toBe("first file bytes");
@@ -273,7 +293,7 @@ describe("BACKLOG-3554 — uploadAttachments", () => {
       { kind: "error", error: storageApiError("new row violates row-level security policy", 403, "403") },
     ];
 
-    const result = await supabaseStorageService.uploadAttachments(ORG, SUBMISSION, [sameNamePair()[1]]);
+    const result = await uploadAll([sameNamePair()[1]]);
 
     expect(result.results[0]).toMatchObject({ success: false, storagePath: "" });
     expect(uploadCalls).toHaveLength(2);
@@ -286,7 +306,7 @@ describe("BACKLOG-3554 — uploadAttachments", () => {
     const eacces = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
     jest.spyOn(fs.promises, "readFile").mockRejectedValueOnce(eacces);
 
-    const result = await supabaseStorageService.uploadAttachments(ORG, SUBMISSION, [sameNamePair()[1]]);
+    const result = await uploadAll([sameNamePair()[1]]);
 
     expect(result.results[0]).toMatchObject({ success: false, storagePath: "" });
     // Attempt 1 never reached storage; attempt 2 met the occupied path.
@@ -299,6 +319,7 @@ describe("BACKLOG-3554 — submit: each submission_attachments row points at its
   beforeEach(() => {
     emulator = createPostgrestEmulator({
       rows: { organization_members: [brokerageMembership()] },
+      rpcHandlers: SUBMISSION_RPC_SUCCESS,
     });
     mockGetAuthSession.mockResolvedValue({ userId: FIXTURE_USER_ID });
     (databaseService.getTransactionById as jest.Mock).mockResolvedValue({
@@ -326,13 +347,15 @@ describe("BACKLOG-3554 — submit: each submission_attachments row points at its
 
   const attachmentRows = () =>
     emulator.state.writes
-      .filter((w) => w.table === "submission_attachments" && w.op === "insert")
+      // BACKLOG-3403: rows carry minted ids and are written with ON CONFLICT
+      // (id) DO NOTHING, i.e. supabase-js upsert(…, { ignoreDuplicates }).
+      .filter((w) => w.table === "submission_attachments" && w.op === "upsert")
       .flatMap((w) => w.values as Record<string, unknown>[]);
 
   it("two same-name attachments → two rows, each on its own path and bytes", async () => {
     const result = await submissionService.submitTransaction(TX);
 
-    expect(result).toMatchObject({ success: true, attachmentsCount: 2, attachmentsFailed: 0 });
+    expect(result).toMatchObject({ success: true, attachmentsCount: 2 });
     const rows = attachmentRows();
     expect(rows).toHaveLength(2);
     const byLocal = new Map(rows.map((r) => [r.local_attachment_id, r]));
@@ -347,13 +370,16 @@ describe("BACKLOG-3554 — submit: each submission_attachments row points at its
     expect(objects.get(pathB)?.toString()).toBe("second, longer, different file bytes");
   });
 
-  it("an unexpected 'already exists' writes no row for that file and is counted as failed", async () => {
+  // BACKLOG-3403 changed this outcome on purpose. Before: the file was left
+  // out and the submission went through ("counted as failed"). Now a file
+  // that fails to upload fails the WHOLE submission (all-or-nothing), and
+  // the server is never asked to finalize it.
+  it("an unexpected 'already exists' fails the whole submission and never reaches finalize", async () => {
     script = [{ kind: "store" }, { kind: "error", error: DUPLICATE_409() }];
 
     const result = await submissionService.submitTransaction(TX);
 
-    expect(result).toMatchObject({ attachmentsCount: 1, attachmentsFailed: 1 });
-    const rows = attachmentRows();
-    expect(rows.map((r) => r.local_attachment_id)).toEqual([ATT_A]);
+    expect(result).toMatchObject({ success: false, submissionId: null });
+    expect(emulator.state.rpcs.map((c) => c.fn)).not.toContain("finalize_submission");
   });
 });

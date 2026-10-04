@@ -18,13 +18,18 @@
  */
 
 import * as fs from "fs";
-import * as path from "path";
-import { app } from "electron";
 import mime from "mime-types";
 import * as Sentry from "@sentry/electron/main";
 import supabaseService from "./supabaseService";
 import logService from "./logService";
-import { sanitizeFilenamePreserveCase } from "../utils/fileUtils";
+// BACKLOG-3403: shared with the submission pre-flight and manifest.
+import {
+  MAX_ATTACHMENT_FILE_SIZE,
+  buildAttachmentStoragePath,
+  resolveAttachmentPath,
+} from "./submissionAttachmentFiles";
+
+export { buildAttachmentStoragePath };
 
 // ============================================
 // TYPES & INTERFACES
@@ -58,19 +63,15 @@ export interface AttachmentUploadResult {
   uploadRequestIssued?: boolean;
 }
 
-/** Local attachment info (from database) */
-export interface LocalAttachment {
-  id: string;
-  localPath: string;
-  filename: string;
-}
-
-/** Batch upload result */
-export interface BatchUploadResult {
-  totalCount: number;
-  successCount: number;
-  failedCount: number;
-  results: AttachmentUploadResult[];
+/** BACKLOG-3403: options for {@link SupabaseStorageService.uploadAttachmentWithRetry}. */
+export interface UploadRetryOptions {
+  /**
+   * An earlier pass of THIS submission already sent this upload (the re-run
+   * after a finalize refusal). The path embeds this submission's own
+   * client-minted id and the local attachment id, so an object already at it
+   * can only be that earlier pass's bytes: "already exists" is then a success.
+   */
+  earlierAttemptMayHaveSent?: boolean;
 }
 
 // ============================================
@@ -78,7 +79,7 @@ export interface BatchUploadResult {
 // ============================================
 
 const STORAGE_BUCKET = "submission-attachments";
-const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
+const MAX_FILE_SIZE = MAX_ATTACHMENT_FILE_SIZE;
 const MAX_RETRIES = 3;
 const RETRY_DELAY_BASE = 1000; // 1 second
 
@@ -98,67 +99,6 @@ function sleep(ms: number): Promise<void> {
  */
 function getMimeType(filename: string): string {
   return mime.lookup(filename) || "application/octet-stream";
-}
-
-/**
- * Resolve attachment path - handles different attachment sources
- * - Email attachments: stored absolute path
- * - iMessage: ~/Library/Messages/Attachments/...
- * - Manual files: user's document paths
- */
-function resolveAttachmentPath(localPath: string): string {
-  // Expand ~ to home directory
-  if (localPath.startsWith("~")) {
-    const home = app.getPath("home");
-    return path.join(home, localPath.slice(1));
-  }
-
-  // Already absolute
-  if (path.isAbsolute(localPath)) {
-    return localPath;
-  }
-
-  // Relative to app data
-  const userData = app.getPath("userData");
-  return path.join(userData, "attachments", localPath);
-}
-
-/**
- * Sanitize filename for storage (URL-safe)
- */
-function sanitizeStorageFilename(filename: string): string {
-  // Preserve extension
-  const ext = path.extname(filename);
-  const base = path.basename(filename, ext);
-
-  // Use existing utility, collapse multiple underscores
-  const sanitizedBase = sanitizeFilenamePreserveCase(base, false)
-    .replace(/__+/g, "_")
-    .substring(0, 200); // Leave room for extension
-
-  return `${sanitizedBase}${ext.toLowerCase()}`;
-}
-
-/**
- * BACKLOG-3554: the per-attachment path segment. Local attachment ids are
- * `randomUUID()` values; anything outside `[A-Za-z0-9_-]` is replaced so the
- * id can never add or remove a path segment.
- */
-function sanitizeAttachmentIdSegment(attachmentId: string): string {
-  return attachmentId.replace(/[^A-Za-z0-9_-]/g, "_");
-}
-
-/**
- * BACKLOG-3554: object path for one attachment of one submission version.
- * Exported for tests.
- */
-export function buildAttachmentStoragePath(
-  orgId: string,
-  submissionId: string,
-  attachmentId: string,
-  filename: string
-): string {
-  return `${orgId}/${submissionId}/${sanitizeAttachmentIdSegment(attachmentId)}/${sanitizeStorageFilename(filename)}`;
 }
 
 /**
@@ -392,8 +332,9 @@ class SupabaseStorageService {
    *   a path holding a per-call random submission id) → success, same path;
    * - otherwise (first attempt, or only pre-upload failures before it) the
    *   object is not ours → failure, no further retries.
-   * The object cannot be read back to compare bytes: the bucket's SELECT
-   * policy hides it until the submission row exists, which is after upload.
+   * BACKLOG-3403: the submission row now exists before the upload, but the
+   * bytes are still not compared — the path holds this submission's own
+   * client-minted id, which is what makes the object ours.
    */
   async uploadAttachmentWithRetry(
     orgId: string,
@@ -402,10 +343,13 @@ class SupabaseStorageService {
     localPath: string,
     filename: string,
     onProgress?: (progress: UploadProgress) => void,
-    maxRetries: number = MAX_RETRIES
+    maxRetries: number = MAX_RETRIES,
+    options?: UploadRetryOptions
   ): Promise<AttachmentUploadResult> {
     let lastError: Error | null = null;
-    let earlierAttemptSentUpload = false;
+    // BACKLOG-3403: a submission that re-runs its uploads after a finalize
+    // refusal has already sent this exact path once, so its object is ours.
+    let earlierAttemptSentUpload = options?.earlierAttemptMayHaveSent === true;
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
@@ -490,65 +434,6 @@ class SupabaseStorageService {
   }
 
   /**
-   * Upload multiple attachments for a submission
-   *
-   * @param orgId - Organization ID
-   * @param submissionId - Submission ID
-   * @param attachments - Array of local attachment info
-   * @param onProgress - Overall progress callback
-   * @returns Batch upload result
-   */
-  async uploadAttachments(
-    orgId: string,
-    submissionId: string,
-    attachments: LocalAttachment[],
-    onProgress?: (overallPercent: number, current: UploadProgress) => void
-  ): Promise<BatchUploadResult> {
-    const results: AttachmentUploadResult[] = [];
-    let successCount = 0;
-    let failedCount = 0;
-
-    for (let i = 0; i < attachments.length; i++) {
-      const attachment = attachments[i];
-      const overallBase = (i / attachments.length) * 100;
-      const overallIncrement = 100 / attachments.length;
-
-      const result = await this.uploadAttachmentWithRetry(
-        orgId,
-        submissionId,
-        attachment.id,
-        attachment.localPath,
-        attachment.filename,
-        (progress) => {
-          const overallPercent =
-            overallBase + (progress.percentage / 100) * overallIncrement;
-          onProgress?.(overallPercent, progress);
-        }
-      );
-
-      results.push(result);
-
-      if (result.success) {
-        successCount++;
-      } else {
-        failedCount++;
-      }
-    }
-
-    logService.info(
-      `[Storage] Batch upload complete: ${successCount}/${attachments.length} succeeded`,
-      "SupabaseStorageService"
-    );
-
-    return {
-      totalCount: attachments.length,
-      successCount,
-      failedCount,
-      results,
-    };
-  }
-
-  /**
    * Get a signed URL for viewing a file (for broker portal)
    *
    * @param storagePath - Path in Supabase Storage
@@ -613,65 +498,6 @@ class SupabaseStorageService {
       );
       Sentry.captureException(error, {
         tags: { service: "supabase-storage", operation: "deleteAttachment" },
-      });
-      throw error;
-    }
-  }
-
-  /**
-   * Delete all attachments for a submission (cleanup)
-   *
-   * @param orgId - Organization ID
-   * @param submissionId - Submission ID
-   */
-  async deleteSubmissionAttachments(
-    orgId: string,
-    submissionId: string
-  ): Promise<void> {
-    try {
-      const client = supabaseService.getClient();
-      const prefix = `${orgId}/${submissionId}/`;
-
-      // List all files in the submission folder
-      const { data: files, error: listError } = await client.storage
-        .from(STORAGE_BUCKET)
-        .list(prefix);
-
-      if (listError) {
-        throw listError;
-      }
-
-      if (!files || files.length === 0) {
-        logService.debug(
-          `[Storage] No files to delete for ${prefix}`,
-          "SupabaseStorageService"
-        );
-        return;
-      }
-
-      // Delete all files
-      const paths = files.map((f) => `${prefix}${f.name}`);
-      const { error: deleteError } = await client.storage
-        .from(STORAGE_BUCKET)
-        .remove(paths);
-
-      if (deleteError) {
-        throw deleteError;
-      }
-
-      logService.info(
-        `[Storage] Deleted ${paths.length} files for submission ${submissionId}`,
-        "SupabaseStorageService"
-      );
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : "Unknown error";
-      logService.error(
-        `[Storage] Failed to delete submission attachments: ${errorMessage}`,
-        "SupabaseStorageService"
-      );
-      Sentry.captureException(error, {
-        tags: { service: "supabase-storage", operation: "deleteSubmissionAttachments" },
       });
       throw error;
     }

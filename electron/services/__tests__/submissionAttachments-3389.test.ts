@@ -48,6 +48,7 @@ import os from "os";
 import path from "path";
 
 import {
+  SUBMISSION_RPC_SUCCESS,
   createPostgrestEmulator,
   brokerageMembership,
   FIXTURE_USER_ID,
@@ -116,24 +117,19 @@ const uploaded: { id: string; localPath: string; filename: string }[] = [];
 jest.mock("../supabaseStorageService", () => ({
   __esModule: true,
   default: {
-    uploadAttachments: jest.fn(
-      async (
-        _orgId: string,
-        _submissionId: string,
-        localAttachments: { id: string; localPath: string; filename: string }[],
-      ) => {
-        uploaded.push(...localAttachments);
+    // BACKLOG-3403: one file at a time, stored under the manifest's path.
+    uploadAttachmentWithRetry: jest.fn(
+      async (orgId: string, submissionId: string, id: string, localPath: string, filename: string) => {
+        uploaded.push({ id, localPath, filename });
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const files = require("../submissionAttachmentFiles");
         return {
-          results: localAttachments.map((a) => ({
-            localId: a.id,
-            success: true,
-            remotePath: `remote/${a.id}`,
-          })),
-          failedCount: 0,
+          localId: localPath,
+          storagePath: files.buildAttachmentStoragePath(orgId, submissionId, id, filename),
+          success: true,
         };
       },
     ),
-    deleteSubmissionAttachments: jest.fn(),
   },
 }));
 
@@ -157,6 +153,8 @@ jest.mock("../databaseService", () => {
         (submissionDb.getTransactionEmails as (...a: unknown[]) => unknown)(...args),
       getTransactionAttachments: (...args: unknown[]) =>
         (submissionDb.getTransactionAttachments as (...a: unknown[]) => unknown)(...args),
+      getUndownloadedEmailAttachments: (...args: unknown[]) =>
+        (submissionDb.getUndownloadedEmailAttachments as (...a: unknown[]) => unknown)(...args),
       updateTransaction: jest.fn(),
     },
   };
@@ -228,8 +226,9 @@ jest.mock("electron", () => ({
   net: { isOnline: jest.fn().mockReturnValue(true) },
 }));
 
-import { submissionService } from "../submissionService";
+import { submissionService, PREFLIGHT_NOT_REVIEWED_ERROR } from "../submissionService";
 import databaseService from "../databaseService";
+import { setPreflightStatForTests } from "../submissionPreflight";
 
 // ---------------------------------------------------------------------------
 // Fixture
@@ -288,7 +287,17 @@ function storedTextAttachment(id: string, messageId: string): void {
   ).run(id, messageId, `/local/bytes/${id}`);
 }
 
-const submit = () => submissionService.submitTransaction(TX);
+/**
+ * BACKLOG-3403: Submit is two steps — the pre-flight lists what cannot be
+ * sent, and the agent confirms. These controls are about what is GATHERED,
+ * so they confirm whatever the pre-flight listed.
+ */
+const submit = async () => {
+  const preflight = await submissionService.preflightSubmission(TX);
+  return submissionService.submitTransaction(TX, undefined, {
+    acceptedExclusionKeys: preflight.notIncluded.map((i) => i.key),
+  });
+};
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -311,7 +320,11 @@ beforeEach(() => {
 
   emulator = createPostgrestEmulator({
     rows: { organization_members: [brokerageMembership()] },
+    rpcHandlers: SUBMISSION_RPC_SUCCESS,
   });
+  // The fixture's `/local/bytes/…` paths stand for files on disk; the
+  // pre-flight checks the disk, so it is told they are there (1 KB).
+  setPreflightStatForTests(async () => ({ size: 1024 }));
   mockGetAuthSession.mockResolvedValue({ userId: FIXTURE_USER_ID });
   (databaseService.getTransactionById as jest.Mock).mockResolvedValue({
     id: TX,
@@ -323,6 +336,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setPreflightStatForTests(null);
   db.close();
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
@@ -353,6 +367,23 @@ describe("BACKLOG-3389 — an attachment that exists only as metadata", () => {
   });
 
   /**
+   * BACKLOG-3403, founder 58695a05: "don't flag files that are missing because
+   * we haven't downloaded them yet". The pre-flight runs AFTER the download,
+   * so an attachment that only needed downloading is never listed.
+   * MUTATION: run the pre-flight before `downloadMissingEmailAttachments`
+   * → this lists `a-meta` as not downloaded.
+   */
+  it("pre-flight: an email attachment that only needed downloading is NOT listed", async () => {
+    insertEmail("e-meta", IN_WINDOW);
+    metadataOnlyEmailAttachment("a-meta", "e-meta");
+
+    const preflight = await submissionService.preflightSubmission(TX);
+
+    expect(preflight).toEqual({ success: true, notIncluded: [] });
+    expect(downloadEmailAttachments).toHaveBeenCalledTimes(1);
+  });
+
+  /**
    * CONTROL 2. The reported defect is not only the drop — it is the SILENCE.
    * Deleting the `countFlaggedWithoutAttachments` call and hardcoding 0 turns
    * this red; `attachmentsFailed` cannot be made to see it, because the
@@ -363,16 +394,49 @@ describe("BACKLOG-3389 — an attachment that exists only as metadata", () => {
     metadataOnlyEmailAttachment("a-fails", "e-fails");
     downloadShouldFail = true;
 
+    const preflight = await submissionService.preflightSubmission(TX);
+    // BACKLOG-3403: listed BEFORE sending, by file and reason.
+    expect(preflight.notIncluded).toEqual([
+      expect.objectContaining({
+        key: "att:a-fails",
+        kind: "email",
+        filename: "disclosure.pdf",
+        reason: "email_attachment_not_downloaded",
+      }),
+    ]);
+
     const result = await submit();
 
     expect(result.success).toBe(true);
     expect(result.attachmentsCount).toBe(0);
-    // The old, uninformative pair — still reported, still zero, and still
-    // structurally incapable of describing what happened.
-    expect(result.attachmentsFailed).toBe(0);
-    // The number that now says it.
+    // The number that says it, and (BACKLOG-3681) which one and why.
     expect(result.flaggedWithoutAttachments).toBe(1);
+    expect(result.notIncluded.map((i) => [i.key, i.reason])).toEqual([
+      ["att:a-fails", "email_attachment_not_downloaded"],
+    ]);
     expect(uploaded).toEqual([]);
+  });
+
+  /**
+   * BACKLOG-3403: the agent must have confirmed the list. A submit that did
+   * not (bulk submit from the list, or a list that changed) sends nothing.
+   * MUTATION: drop the confirmation check → this submits.
+   */
+  it("an unconfirmed attachment that cannot be sent stops the submit before anything is written", async () => {
+    insertEmail("e-fails", IN_WINDOW);
+    metadataOnlyEmailAttachment("a-fails", "e-fails");
+    downloadShouldFail = true;
+
+    const result = await submissionService.submitTransaction(TX);
+
+    expect(result).toMatchObject({ success: false, preflightChanged: true });
+    // No confirmation was sent at all (bulk submit from the list): the agent is
+    // sent to the transaction to review the list.
+    expect(result.error).toBe(PREFLIGHT_NOT_REVIEWED_ERROR);
+    expect(result.notIncluded.map((i) => i.key)).toEqual(["att:a-fails"]);
+    expect(
+      emulator.state.writes.filter((w) => w.table !== "error_logs")
+    ).toEqual([]);
   });
 
   /**

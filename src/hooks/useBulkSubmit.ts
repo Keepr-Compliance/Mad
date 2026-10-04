@@ -121,7 +121,7 @@ export function useBulkSubmit(): UseBulkSubmitResult {
           transactionId: transaction.id,
           propertyAddress: transaction.property_address,
           success: true,
-          submissionId: result.submissionId,
+          submissionId: result.submissionId ?? undefined,
         };
       } else {
         return {
