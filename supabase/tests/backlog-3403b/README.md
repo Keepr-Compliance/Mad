@@ -17,8 +17,10 @@ production.
   PostgREST v14.5, storage-api v1.71.0, GoTrue v2.196.0.
 - `supabase/tests/backlog-3403/run.sh prelude` (PR-A's production transcription),
   then `supabase/migrations/20261004192647_backlog_3403_finalize_submission.sql`,
-  then BACKLOG-3725's `20261004220000_backlog_3725_abandoned_at.sql` from PR #2795
-  at head `54e711c16` (file md5 `d92c51abbebf4c579bb1fc9d95f4a6fe`).
+  then BACKLOG-3725's migration. First run: `20261004220000_…` from PR #2795 at
+  `54e711c16`. Re-run after #2795 merged: the restamped
+  `20261004213050_backlog_3725_abandoned_at.sql` from int (same md5
+  `d92c51abbebf4c579bb1fc9d95f4a6fe`); `live-run.txt` is the re-run.
 - One venue addition, made by the test: `organization_members.created_at`. PR-A's
   prelude transcribed only what its migration touches; the desktop's membership
   read orders on `created_at`, which production has.
