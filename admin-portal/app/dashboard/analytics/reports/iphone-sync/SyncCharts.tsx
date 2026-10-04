@@ -35,6 +35,7 @@ import {
   roundedTopBarPath,
   stackSegments,
   thinLabels,
+  type ChartRun,
   type DayBucket,
 } from '@/lib/reports/iphone-sync-charts';
 
@@ -75,7 +76,7 @@ function formatTick(value: number, unit: string): string {
   return String(Math.round(value));
 }
 
-function DayLabels({ buckets }: { buckets: DayBucket[] }) {
+function DayLabels({ buckets }: { buckets: DayBucket<ChartRun>[] }) {
   const bars = barLayout(buckets.length);
   const show = thinLabels(buckets.length);
   return (
@@ -110,8 +111,8 @@ function HitRects({
   onShow,
   onHide,
 }: {
-  buckets: DayBucket[];
-  lines: (bucket: DayBucket) => string[];
+  buckets: DayBucket<ChartRun>[];
+  lines: (bucket: DayBucket<ChartRun>) => string[];
   onShow: (tooltip: Tooltip) => void;
   onHide: () => void;
 }) {
@@ -186,7 +187,8 @@ function LegendSwatch({ color, label }: { color: string; label: string }) {
   );
 }
 
-export function SyncCharts({ buckets }: { buckets: DayBucket[] }) {
+/** Any report's day buckets (see ChartRun): the iPhone and Google Messages reports share it. */
+export function SyncCharts({ buckets }: { buckets: DayBucket<ChartRun>[] }) {
   const [tooltip, setTooltip] = useState<Tooltip | null>(null);
   const duration = buildDurationSeries(buckets);
   const failures = buildFailureSeries(buckets);
