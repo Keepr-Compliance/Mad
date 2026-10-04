@@ -1,4 +1,3 @@
-27 mutants written
 M01 [as expected] (want green) FOR UPDATE without SKIP LOCKED: waits instead of skipping (live R1 measures the wait)
     MUTATION APPLIED: 2 line(s); first: FOR UPDATE
     RED: none
@@ -101,10 +100,18 @@ M26 [as expected] (want red) hard-coded production URL (SR condition 5)
     MUTATION APPLIED: 1 line(s); first: v_url := 'https://nercleijfrxqcvfjskbc.supabase.co/functions/v1/submission-sweep';
     RED: S15
       S15: ASSERT FAILED: S15 URL comes from Vault
+M27 [as expected] (want red) finish body guard removed
+    MUTATION APPLIED: 3 line(s); first: 
+    RED: S09b
+      S09b: ASSERT FAILED: S09b finish body guard
+M28 [as expected] (want red) secret body guard removed
+    MUTATION APPLIED: 3 line(s); first: 
+    RED: S09b
+      S09b: ASSERT FAILED: S09b secret body guard
 MW [as expected] (want red) MOST LIKELY WRONG: list stalled rows with no lock and no fence (delete later)
     MUTATION APPLIED: 2 line(s); first: IF true THEN
     RED: S01 S03 S10
       S01: ASSERT FAILED: S01 exactly one row fenced
       S03: ASSERT FAILED: S03 row deleted after its files
       S10: ASSERT FAILED: S10 finalize after the fence -> abandoned
-mutants: 27 run, 0 not as expected
+mutants: 29 run, 0 not as expected
