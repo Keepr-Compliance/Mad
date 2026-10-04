@@ -5,6 +5,8 @@ import { formatCurrency, formatDate, getStatusColor, formatStatus } from '@/lib/
 import { MessageList } from '@/components/submission/MessageList';
 import { ReviewActions } from '@/components/submission/ReviewActions';
 import { AttachmentList } from '@/components/submission/AttachmentList';
+import { ExcludedFilesNotice } from '@/components/submission/ExcludedFilesNotice';
+import { buildAttachmentSources, readExcludedFiles } from '@/lib/submissions/attachmentSources';
 import { StatusHistory } from '@/components/submission/StatusHistory';
 import { ChecklistReview } from '@/components/submission/ChecklistReview';
 import { getDataClient } from '@/lib/impersonation-guards';
@@ -68,6 +70,8 @@ interface Attachment {
   document_type: string | null;
   /** The desktop's id for the file (BACKLOG-3607 counts: one file, one document). */
   local_attachment_id?: string | null;
+  /** BACKLOG-3682: the submission_messages row the file came from (null before 2.39). */
+  message_id?: string | null;
 }
 
 async function getSubmission(id: string, client: SupabaseClient) {
@@ -281,6 +285,12 @@ export default async function SubmissionDetailPage({ params }: PageProps) {
   // Determine if messages section should be shown at all
   const showMessages = textEnabled || emailEnabled;
 
+  // BACKLOG-3682: each file's source message (from gated messages only, so a
+  // hidden channel never shows its sender or subject) and the files the agent
+  // left out (submission_metadata.excluded_files, absent before 2.39).
+  const attachmentSources = buildAttachmentSources(attachments, gatedMessages);
+  const excludedFiles = readExcludedFiles(submission.submission_metadata);
+
   // BACKLOG-3477: the Checklists area, fail-closed on the submission's org.
   // Not shown during impersonation: the scoped support client does not admit
   // the checklist copy tables.
@@ -441,7 +451,16 @@ export default async function SubmissionDetailPage({ params }: PageProps) {
 
       {/* Attachments with viewer - gated by broker_text_attachments / broker_email_attachments (TASK-2158) */}
       {showAttachments && (
-        <AttachmentList attachments={attachments} />
+        <AttachmentList attachments={attachments} sources={attachmentSources} />
+      )}
+
+      {/* BACKLOG-3682: files the agent did not include. Last on the page; hidden when empty. */}
+      {showAttachments && (
+        <ExcludedFilesNotice
+          files={excludedFiles}
+          showTextLabels={textEnabled}
+          showEmailLabels={emailEnabled}
+        />
       )}
     </div>
   );

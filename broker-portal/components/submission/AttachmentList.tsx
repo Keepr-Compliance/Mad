@@ -15,6 +15,7 @@ import { createClient } from '@/lib/supabase/client';
 import { AttachmentViewerModal } from './AttachmentViewerModal';
 import { EmptyAttachments } from '@/components/ui/EmptyState';
 import heic2any from 'heic2any';
+import { sourceLine, type AttachmentSource } from '@/lib/submissions/attachmentSources';
 import {
   Eye,
   FileSpreadsheet,
@@ -37,6 +38,11 @@ interface Attachment {
 
 interface AttachmentListProps {
   attachments: Attachment[];
+  /**
+   * BACKLOG-3682: attachment id -> the message it came from. Missing for older
+   * submissions (no message_id), which then render exactly as before.
+   */
+  sources?: Record<string, AttachmentSource>;
 }
 
 // Media file extensions and MIME types
@@ -129,9 +135,11 @@ function getDocumentIcon(attachment: Attachment): { icon: 'pdf' | 'excel' | 'wor
 // Media thumbnail component with lazy loading
 function MediaThumbnail({
   attachment,
+  source,
   onClick
 }: {
   attachment: Attachment;
+  source?: AttachmentSource;
   onClick: () => void;
 }) {
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
@@ -200,6 +208,7 @@ function MediaThumbnail({
   return (
     <button
       onClick={onClick}
+      title={source ? `${attachment.filename}\n${sourceLine(source)}` : undefined}
       className="relative aspect-square rounded-lg overflow-hidden bg-gray-100 hover:opacity-90 transition-opacity group focus:outline-none focus:ring-2 focus:ring-primary-500"
     >
       {loading && (
@@ -246,6 +255,11 @@ function MediaThumbnail({
       {/* Filename tooltip on hover */}
       <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black to-transparent p-2 opacity-0 group-hover:opacity-100 transition-opacity">
         <p className="text-white text-xs truncate">{attachment.filename}</p>
+        {source && (
+          <p className="text-white/80 text-[11px] truncate" data-testid="attachment-source">
+            {sourceLine(source)}
+          </p>
+        )}
       </div>
     </button>
   );
@@ -265,7 +279,7 @@ function DocumentIcon({ type, className }: { type: string; className?: string })
   }
 }
 
-export function AttachmentList({ attachments }: AttachmentListProps) {
+export function AttachmentList({ attachments, sources }: AttachmentListProps) {
   const [selectedAttachment, setSelectedAttachment] = useState<Attachment | null>(null);
   const [activeTab, setActiveTab] = useState<'all' | 'media' | 'documents'>('documents');
 
@@ -347,6 +361,7 @@ export function AttachmentList({ attachments }: AttachmentListProps) {
                   <MediaThumbnail
                     key={attachment.id}
                     attachment={attachment}
+                    source={sources?.[attachment.id]}
                     onClick={() => setSelectedAttachment(attachment)}
                   />
                 ))}
@@ -366,6 +381,7 @@ export function AttachmentList({ attachments }: AttachmentListProps) {
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 {displayedDocs.map((attachment) => {
                   const { icon, color } = getDocumentIcon(attachment);
+                  const source = sources?.[attachment.id];
 
                   return (
                     <button
@@ -389,6 +405,11 @@ export function AttachmentList({ attachments }: AttachmentListProps) {
                           )}
                           {formatFileSize(attachment.file_size_bytes)}
                         </p>
+                        {source && (
+                          <p className="text-xs text-gray-500 truncate" data-testid="attachment-source">
+                            {sourceLine(source)}
+                          </p>
+                        )}
                       </div>
 
                       {/* View indicator */}
