@@ -27,7 +27,11 @@ import {
   enforceExportGate,
   emitExportCompleted,
 } from "../services/exportGate";
-import type { SubmissionProgress } from "../services/submissionService";
+import type {
+  SubmissionProgress,
+  SubmissionResult,
+  SubmitOptions,
+} from "../services/submissionService";
 import type { TransactionResponse } from "../types/handlerTypes";
 import type { FolderExportProgress } from "../types/ipc";
 import {
@@ -113,6 +117,46 @@ export const cleanupTransactionHandlers = (): void => {
  * Register transaction export and submission IPC handlers
  * @param _mainWindow - Main window instance. No push reads it any more (BACKLOG-3454: pushes resolve the live window via sendToMainWindow), but its truthiness still gates the submission sync pollers below.
  */
+
+/**
+ * BACKLOG-3403: the renderer's confirmation of what will be left out. Anything
+ * malformed reads as "nothing confirmed", which makes the service ask again
+ * rather than send.
+ */
+function validateSubmitOptions(raw: unknown): SubmitOptions {
+  if (!raw || typeof raw !== "object") return {};
+  const keys = (raw as { acceptedExclusionKeys?: unknown }).acceptedExclusionKeys;
+  if (!Array.isArray(keys) || keys.length > 10000) return {};
+  return {
+    acceptedExclusionKeys: keys.filter(
+      (k): k is string => typeof k === "string" && k.length > 0 && k.length <= 300
+    ),
+  };
+}
+
+/** One response shape for submit and resubmit. */
+function toSubmitResponse(result: SubmissionResult): TransactionResponse {
+  return {
+    success: result.success,
+    submissionId: result.submissionId,
+    messagesCount: result.messagesCount,
+    attachmentsCount: result.attachmentsCount,
+    // BACKLOG-3389: in-window items whose attachments are not included.
+    flaggedWithoutAttachments: result.flaggedWithoutAttachments,
+    // BACKLOG-3681: which ones, and why (display only).
+    notIncluded: result.notIncluded,
+    // BACKLOG-3600: the checklists did not reach the broker on a submission
+    // that otherwise succeeded. Absent when there is nothing to say.
+    checklistsNotSent: result.checklistsNotSent,
+    // BACKLOG-3398 / 3403: the three non-success outcomes that are not errors
+    // of the app: cancelled, the list changed, the answer was lost.
+    cancelled: result.cancelled,
+    preflightChanged: result.preflightChanged,
+    unconfirmed: result.unconfirmed,
+    error: result.error,
+  };
+}
+
 export function registerTransactionExportHandlers(
   _mainWindow: BrowserWindow | null,
 ): void {
@@ -607,6 +651,7 @@ export function registerTransactionExportHandlers(
     wrapHandler(async (
       event: IpcMainInvokeEvent,
       transactionId: string,
+      rawOptions?: unknown,
     ): Promise<TransactionResponse> => {
       logService.info("Submitting transaction for broker review", "Transactions", {
         transactionId,
@@ -626,7 +671,8 @@ export function registerTransactionExportHandlers(
         validatedTransactionId,
         (progress: SubmissionProgress) => {
           sendToMainWindow("transactions:submit-progress", progress);
-        }
+        },
+        validateSubmitOptions(rawOptions)
       );
 
       if (result.success) {
@@ -655,21 +701,7 @@ export function registerTransactionExportHandlers(
         });
       }
 
-      return {
-        success: result.success,
-        submissionId: result.submissionId,
-        messagesCount: result.messagesCount,
-        attachmentsCount: result.attachmentsCount,
-        attachmentsFailed: result.attachmentsFailed,
-        // BACKLOG-3389: in-window items that advertised an attachment and
-        // contributed none. Carried across the boundary because a number the
-        // renderer cannot read is a number no one will ever act on.
-        flaggedWithoutAttachments: result.flaggedWithoutAttachments,
-        // BACKLOG-3600: the checklists did not reach the broker on a submission
-        // that otherwise succeeded. Absent when there is nothing to say.
-        checklistsNotSent: result.checklistsNotSent,
-        error: result.error,
-      };
+      return toSubmitResponse(result);
     }, { module: "Transactions" }),
   );
 
@@ -679,6 +711,7 @@ export function registerTransactionExportHandlers(
     wrapHandler(async (
       event: IpcMainInvokeEvent,
       transactionId: string,
+      rawOptions?: unknown,
     ): Promise<TransactionResponse> => {
       logService.info("Resubmitting transaction for broker review", "Transactions", {
         transactionId,
@@ -698,7 +731,8 @@ export function registerTransactionExportHandlers(
         validatedTransactionId,
         (progress: SubmissionProgress) => {
           sendToMainWindow("transactions:submit-progress", progress);
-        }
+        },
+        validateSubmitOptions(rawOptions)
       );
 
       if (result.success) {
@@ -750,21 +784,50 @@ export function registerTransactionExportHandlers(
         });
       }
 
+      return toSubmitResponse(result);
+    }, { module: "Transactions" }),
+  );
+
+  // BACKLOG-3403: what cannot be sent, decided before anything is sent. Runs
+  // the on-demand email attachment download first.
+  ipcMain.handle(
+    "transactions:submit-preflight",
+    wrapHandler(async (
+      event: IpcMainInvokeEvent,
+      transactionId: string,
+    ): Promise<TransactionResponse> => {
+      const validatedTransactionId = validateTransactionId(transactionId);
+      if (!validatedTransactionId) {
+        throw new ValidationError(
+          "Transaction ID validation failed",
+          "transactionId",
+        );
+      }
+      const result = await submissionService.preflightSubmission(validatedTransactionId);
       return {
         success: result.success,
-        submissionId: result.submissionId,
-        messagesCount: result.messagesCount,
-        attachmentsCount: result.attachmentsCount,
-        attachmentsFailed: result.attachmentsFailed,
-        // BACKLOG-3389: in-window items that advertised an attachment and
-        // contributed none. Carried across the boundary because a number the
-        // renderer cannot read is a number no one will ever act on.
-        flaggedWithoutAttachments: result.flaggedWithoutAttachments,
-        // BACKLOG-3600: the checklists did not reach the broker on a submission
-        // that otherwise succeeded. Absent when there is nothing to say.
-        checklistsNotSent: result.checklistsNotSent,
+        notIncluded: result.notIncluded,
         error: result.error,
       };
+    }, { module: "Transactions" }),
+  );
+
+  // BACKLOG-3398: Cancel really cancels — refused once the final step began.
+  ipcMain.handle(
+    "transactions:cancel-submit",
+    wrapHandler(async (
+      event: IpcMainInvokeEvent,
+      transactionId: string,
+    ): Promise<TransactionResponse> => {
+      const validatedTransactionId = validateTransactionId(transactionId);
+      if (!validatedTransactionId) {
+        throw new ValidationError(
+          "Transaction ID validation failed",
+          "transactionId",
+        );
+      }
+      const result = submissionService.cancelSubmission(validatedTransactionId);
+      return { success: true, cancelled: result.cancelled, reason: result.reason };
     }, { module: "Transactions" }),
   );
 

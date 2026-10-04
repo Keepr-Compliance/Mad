@@ -27,7 +27,15 @@ import {
 import type { Transaction } from "@/types";
 
 export interface SubmitProgress {
-  stage: "preparing" | "attachments" | "transaction" | "messages" | "complete" | "failed";
+  stage:
+    | "preparing"
+    | "attachments"
+    | "transaction"
+    | "messages"
+    // BACKLOG-3398: the final step; the submission can no longer be cancelled.
+    | "finalizing"
+    | "complete"
+    | "failed";
   stageProgress: number;
   overallProgress: number;
   currentItem?: string;
@@ -55,25 +63,73 @@ export const CHECKLISTS_NOT_SENT_COPY: Record<ChecklistsNotSentReason, string> =
 };
 
 /**
- * BACKLOG-3399: the amber line for gathered attachments that failed to upload.
- * No retry is offered: once submitted, a new version is only allowed after the
- * broker sends the deal back (see BLOCKED_SUBMISSION_STATUSES).
+ * BACKLOG-3681 / BACKLOG-3403: why an attachment is not sent. Mirrors
+ * `NotIncludedReason` in electron/services/submissionPreflight.ts (a type
+ * cannot be value-imported across the boundary, so it is restated).
+ *
+ * BACKLOG-3403 supersedes BACKLOG-2758's "couldn't be uploaded" line: under
+ * all-or-nothing a failed upload fails the whole submission, so a success
+ * screen can no longer report one.
  */
-export function attachmentsFailedCopy(count: number): string {
-  return count === 1
-    ? "Submitted, but 1 attachment couldn't be uploaded, so your broker won't see it."
-    : `Submitted, but ${count} attachments couldn't be uploaded, so your broker won't see them.`;
+export type NotIncludedReason =
+  | "email_attachment_not_downloaded"
+  | "text_attachment_not_on_this_computer"
+  | "file_missing_on_this_computer"
+  | "file_too_large";
+
+/** One attachment (or one message's attachments) that is not sent. */
+export interface NotIncludedItem {
+  key: string;
+  kind: "text" | "email";
+  localMessageId: string;
+  sentAt: string | null;
+  label: string;
+  filename: string | null;
+  reason: NotIncludedReason;
+  localAttachmentId: string | null;
+}
+
+/** The heading over the list, before sending and after. */
+export const NOT_INCLUDED_HEADING_BEFORE =
+  "These attachments can't be sent:";
+export const NOT_INCLUDED_HEADING_AFTER =
+  "Not included — your broker won't see these attachments:";
+
+function shortDate(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
 /**
- * BACKLOG-3399: the amber line for texts/emails that advertise an attachment
- * and contributed none. The count is of texts/emails, not of attachments.
+ * BACKLOG-3681: one line per item — which message, when, which file, why.
+ * Factual; no "submit again" (after a successful submit the deal is with the
+ * broker and cannot be resubmitted until it comes back).
  */
-export function flaggedWithoutAttachmentsCopy(count: number): string {
-  return count === 1
-    ? "Submitted, but the attachments from 1 text or email weren't included, so your broker won't see them."
-    : `Submitted, but the attachments from ${count} texts or emails weren't included, so your broker won't see them.`;
+export function notIncludedLine(item: NotIncludedItem): string {
+  const when = shortDate(item.sentAt);
+  const source =
+    item.kind === "text"
+      ? `Text with ${item.label || "an unknown sender"}`
+      : `Email "${item.label || "(no subject)"}"`;
+  const head = when ? `${source}, ${when}` : source;
+  const file = item.filename || (item.kind === "text" ? "a photo or file" : "an attachment");
+  switch (item.reason) {
+    case "text_attachment_not_on_this_computer":
+      return `${head} — a photo or file isn't downloaded to this computer. Open it in Messages to download it.`;
+    case "email_attachment_not_downloaded":
+      return `${head} — ${file} couldn't be downloaded from the mailbox.`;
+    case "file_missing_on_this_computer":
+      return `${head} — ${file} is no longer on this computer.`;
+    case "file_too_large":
+      return `${head} — ${file} is larger than 50 MB.`;
+  }
 }
+
+/** BACKLOG-3398: shown after a cancel. Mirrors SUBMISSION_CANCELLED_MESSAGE. */
+export const SUBMISSION_CANCELLED_COPY =
+  "Submission cancelled. Nothing was sent to your broker.";
 
 interface SubmitForReviewModalProps {
   transaction: Transaction;
@@ -136,15 +192,29 @@ interface SubmitForReviewModalProps {
    */
   checklistsNotSent?: ChecklistsNotSentReason | null;
   /**
-   * BACKLOG-3399: gathered attachments that failed to upload on a successful
-   * submission. Rendered only on the success screen, only when > 0.
+   * BACKLOG-3681: each attachment left out of a successful submission, and
+   * why. Rendered only on the success screen.
    */
-  attachmentsFailed?: number;
+  notIncluded?: NotIncludedItem[];
+  /** BACKLOG-3403: the pre-flight (download + check) is running. */
+  isCheckingFiles?: boolean;
   /**
-   * BACKLOG-3399: texts/emails whose attachments were not included in a
-   * successful submission. Rendered only on the success screen, only when > 0.
+   * BACKLOG-3403: attachments that cannot be sent, shown BEFORE anything is
+   * sent with Go back / Continue anyway. `null` = no question pending.
    */
-  flaggedWithoutAttachments?: number;
+  preflightItems?: NotIncludedItem[] | null;
+  /** BACKLOG-3403: the list changed after the agent confirmed it. */
+  preflightChanged?: boolean;
+  /** BACKLOG-3403: Go back — nothing is sent. */
+  onPreflightBack?: () => void;
+  /** BACKLOG-3403: Continue anyway — send the rest. */
+  onPreflightContinue?: () => void;
+  /** BACKLOG-3398: the agent cancelled; nothing was sent. */
+  cancelled?: boolean;
+  /** BACKLOG-3398: the cancel is being carried out. */
+  isCancelling?: boolean;
+  /** BACKLOG-3398: really cancel the running submission. */
+  onCancelSubmit?: () => void;
 }
 
 /**
@@ -160,6 +230,7 @@ const STAGE_LABELS: Record<string, string> = {
   attachments: "Uploading attachments...",
   transaction: "Creating submission record...",
   messages: "Uploading messages...",
+  finalizing: "Finalizing submission...",
   complete: "Submission complete!",
   failed: "Submission failed",
 };
@@ -190,8 +261,15 @@ export function SubmitForReviewModal({
   onExport,
   onDatesSaved,
   checklistsNotSent = null,
-  attachmentsFailed = 0,
-  flaggedWithoutAttachments = 0,
+  notIncluded = [],
+  isCheckingFiles = false,
+  preflightItems = null,
+  preflightChanged = false,
+  onPreflightBack,
+  onPreflightContinue,
+  cancelled = false,
+  isCancelling = false,
+  onCancelSubmit,
 }: SubmitForReviewModalProps): React.ReactElement {
   /**
    * BACKLOG-2853 — THE DEAL ALREADY HAS A SUBMISSION SITTING WITH THE BROKER.
@@ -362,6 +440,13 @@ export function SubmitForReviewModal({
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
 
   const isActivelySubmitting = isSubmitting && progress?.stage !== "complete" && progress?.stage !== "failed";
+  /**
+   * BACKLOG-3398: the final step has begun. The server decides from here, so
+   * Cancel is not offered — a cancel now could only misreport the outcome.
+   */
+  const isFinalizing = isActivelySubmitting && progress?.stage === "finalizing";
+  /** BACKLOG-3403: the pre-flight question is on screen. */
+  const showPreflight = !isSubmitting && preflightItems !== null;
 
   /**
    * BACKLOG-2849 — the submit SUCCEEDED. Load-bearing, and not the same test
@@ -404,6 +489,11 @@ export function SubmitForReviewModal({
     screen === "dates" &&
     !isSubmitting &&
     !isSuccess &&
+    // BACKLOG-3403 / 3398: the pre-flight question, the file check and the
+    // cancelled notice each replace the screen they were reached from.
+    !isCheckingFiles &&
+    preflightItems === null &&
+    !cancelled &&
     (!error || datesError !== null);
 
   /**
@@ -421,6 +511,11 @@ export function SubmitForReviewModal({
   }, []);
 
   const handleCancelClick = () => {
+    // During the final step the confirm is not rendered (see its gate), so
+    // the X raises nothing; while a cancel is running it does nothing either.
+    if (isCancelling) {
+      return;
+    }
     if (isActivelySubmitting) {
       setShowCancelConfirm(true);
     } else {
@@ -638,7 +733,7 @@ export function SubmitForReviewModal({
         )}
 
         {/* Content - not submitting, not yet submitted (screen 2 when the date step applies) */}
-        {!isSubmitting && !error && !isSuccess && !showDateStep && (
+        {!isSubmitting && !error && !isSuccess && !showDateStep && !isCheckingFiles && !showPreflight && !cancelled && (
           <>
             <p className="text-sm text-gray-600 mb-4" data-testid="submit-review-lead">
               {/* BACKLOG-2853 — "The following data will be sent to your
@@ -819,26 +914,67 @@ export function SubmitForReviewModal({
           </p>
         )}
         {/*
-          BACKLOG-3399 — the submission succeeded but some attachments did not
-          reach the broker: uploads that failed, and texts/emails whose
-          attachments were never gathered. Same amber line as above.
+          BACKLOG-3681 — the submission succeeded without some attachments
+          (the agent chose Continue anyway). One line per message: which one,
+          when, which file, why. Same amber as above.
         */}
-        {isSuccess && attachmentsFailed > 0 && (
-          <p
-            data-testid="submit-review-attachments-failed"
+        {isSuccess && notIncluded.length > 0 && (
+          <div
+            data-testid="submit-review-not-included"
             role="status"
             className="text-sm text-amber-700 mb-4"
           >
-            {attachmentsFailedCopy(attachmentsFailed)}
-          </p>
+            <p className="font-medium">{NOT_INCLUDED_HEADING_AFTER}</p>
+            <ul className="list-disc pl-5 mt-1 space-y-1">
+              {notIncluded.map((item) => (
+                <li key={item.key}>{notIncludedLine(item)}</li>
+              ))}
+            </ul>
+          </div>
         )}
-        {isSuccess && flaggedWithoutAttachments > 0 && (
-          <p
-            data-testid="submit-review-flagged-without-attachments"
-            role="status"
-            className="text-sm text-amber-700 mb-4"
+        {/* BACKLOG-3403 — downloading and checking the files before sending. */}
+        {isCheckingFiles && !isSubmitting && (
+          <div className="flex items-center gap-3 mb-4" data-testid="submit-review-checking">
+            <svg className="w-5 h-5 text-blue-600 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+            </svg>
+            <span className="text-sm font-medium text-gray-900">Checking attachments...</span>
+          </div>
+        )}
+        {/*
+          BACKLOG-3403 — founder 2026-10-04: warn ahead of time and let the
+          agent decide. Nothing has been sent while this is on screen.
+        */}
+        {showPreflight && preflightItems && (
+          <div
+            data-testid="submit-review-preflight"
+            className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4 text-sm text-amber-800"
           >
-            {flaggedWithoutAttachmentsCopy(flaggedWithoutAttachments)}
+            {preflightChanged && (
+              <p className="mb-2" data-testid="submit-review-preflight-changed">
+                Some attachments changed since you reviewed them, so nothing was sent yet.
+              </p>
+            )}
+            <p className="font-medium">{NOT_INCLUDED_HEADING_BEFORE}</p>
+            <ul className="list-disc pl-5 mt-1 space-y-1">
+              {preflightItems.map((item) => (
+                <li key={item.key}>{notIncludedLine(item)}</li>
+              ))}
+            </ul>
+            <p className="mt-2">
+              Continue anyway to send everything else. Your broker will see which files weren't included.
+            </p>
+          </div>
+        )}
+        {/* BACKLOG-3398 — the cancel really cancelled. */}
+        {cancelled && !isSubmitting && (
+          <p
+            data-testid="submit-review-cancelled"
+            role="status"
+            className="text-sm text-gray-700 mb-4"
+          >
+            {SUBMISSION_CANCELLED_COPY}
           </p>
         )}
         {isSuccess && (
@@ -946,7 +1082,7 @@ export function SubmitForReviewModal({
         )}
 
         {/* Cancel confirmation */}
-        {showCancelConfirm && (
+        {showCancelConfirm && isActivelySubmitting && !isFinalizing && (
           <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4">
             <div className="flex items-start gap-2">
               <svg
@@ -967,20 +1103,31 @@ export function SubmitForReviewModal({
                   Submission in progress
                 </p>
                 <p className="text-sm text-amber-700 mt-1">
-                  Cancelling now will result in an incomplete submission. Are you sure?
+                  {/* BACKLOG-3398 — what Cancel now really does. */}
+                  {isCancelling
+                    ? "Cancelling..."
+                    : "Cancel this submission? Nothing will be sent to your broker."}
                 </p>
                 <div className="flex gap-2 mt-3">
                   <button
                     onClick={() => setShowCancelConfirm(false)}
-                    className="px-3 py-1.5 bg-amber-100 text-amber-800 hover:bg-amber-200 rounded-lg text-sm font-medium transition-all"
+                    disabled={isCancelling}
+                    className="px-3 py-1.5 bg-amber-100 text-amber-800 hover:bg-amber-200 rounded-lg text-sm font-medium transition-all disabled:opacity-50"
                   >
                     Keep Uploading
                   </button>
                   <button
-                    onClick={onCancel}
-                    className="px-3 py-1.5 bg-red-100 text-red-700 hover:bg-red-200 rounded-lg text-sm font-medium transition-all"
+                    onClick={() => {
+                      // BACKLOG-3398: stop the submission in the main process;
+                      // the window stays open until it reports back.
+                      if (onCancelSubmit) onCancelSubmit();
+                      else onCancel();
+                    }}
+                    disabled={isCancelling}
+                    data-testid="submit-review-cancel-confirm"
+                    className="px-3 py-1.5 bg-red-100 text-red-700 hover:bg-red-200 rounded-lg text-sm font-medium transition-all disabled:opacity-50"
                   >
-                    Cancel Anyway
+                    Cancel Submission
                   </button>
                 </div>
               </div>
@@ -997,7 +1144,7 @@ export function SubmitForReviewModal({
         */}
         <div className="flex items-center gap-3 justify-end flex-shrink-0 px-6 pb-6 pt-4" data-testid="submit-review-footer">
           {/* BACKLOG-3498 — Back to the date step, on screen 2 only. */}
-          {dateStepApplies && !isSubmitting && !error && !isSuccess && !showDateStep && (
+          {dateStepApplies && !isSubmitting && !error && !isSuccess && !showDateStep && !isCheckingFiles && !showPreflight && !cancelled && (
             <button
               onClick={handleBack}
               disabled={savingDates}
@@ -1052,7 +1199,24 @@ export function SubmitForReviewModal({
             >
               Next
             </button>
-          ) : !progress?.stage || progress.stage === "failed" ? (
+          ) : showPreflight ? (
+            <>
+              <button
+                onClick={onPreflightBack}
+                data-testid="submit-review-preflight-back"
+                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg font-medium transition-all"
+              >
+                Go back
+              </button>
+              <button
+                onClick={onPreflightContinue}
+                data-testid="submit-review-preflight-continue"
+                className="px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-lg font-semibold transition-all"
+              >
+                Continue anyway
+              </button>
+            </>
+          ) : cancelled || isCheckingFiles ? null : !progress?.stage || progress.stage === "failed" ? (
             <button
               onClick={() => {
                 void proceed();
@@ -1135,7 +1299,7 @@ export function SubmitForReviewModal({
             a visual-weight preference, raised in the report for the founder,
             not decided here.
           */}
-          {isSuccess && (
+          {(isSuccess || (cancelled && !isSubmitting)) && (
             <button
               onClick={handleCancelClick}
               data-testid="submit-review-done"

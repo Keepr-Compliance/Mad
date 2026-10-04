@@ -177,6 +177,33 @@ export function getTransactionAttachments(
   return uniqueAttachments;
 }
 
+/**
+ * BACKLOG-3403: email attachment rows that still have no local file. Run AFTER
+ * the on-demand download, so what it returns is what the download could not
+ * fetch. Keyed by the in-window email ids the gather already chose.
+ */
+export function getUndownloadedEmailAttachments(
+  emailIds: string[]
+): { id: string; email_id: string; filename: string | null }[] {
+  if (emailIds.length === 0) return [];
+  const db = ensureDb();
+  const out: { id: string; email_id: string; filename: string | null }[] = [];
+  // SQLite caps bound parameters; 500 per statement stays well under it.
+  for (let i = 0; i < emailIds.length; i += 500) {
+    const chunk = emailIds.slice(i, i + 500);
+    const placeholders = chunk.map(() => "?").join(",");
+    const rows = db
+      .prepare(
+        `SELECT id, email_id, filename FROM attachments
+          WHERE email_id IN (${placeholders}) AND storage_path IS NULL
+          ORDER BY id`
+      )
+      .all(...chunk) as { id: string; email_id: string; filename: string | null }[];
+    out.push(...rows);
+  }
+  return out;
+}
+
 // ============================================
 // SUBMISSION SYNC QUERIES (TASK-2100)
 // ============================================

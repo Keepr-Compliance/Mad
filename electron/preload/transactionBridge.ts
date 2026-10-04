@@ -596,16 +596,34 @@ export const transactionBridge = {
    * @param transactionId - Transaction ID to submit
    * @returns Submission result with cloud submission ID
    */
-  submit: (transactionId: string) =>
-    ipcRenderer.invoke("transactions:submit", transactionId),
+  submit: (
+    transactionId: string,
+    options?: { acceptedExclusionKeys?: string[] }
+  ) => ipcRenderer.invoke("transactions:submit", transactionId, options),
 
   /**
    * Resubmit transaction (creates new version)
    * @param transactionId - Transaction ID to resubmit
    * @returns Submission result with new submission ID
    */
-  resubmit: (transactionId: string) =>
-    ipcRenderer.invoke("transactions:resubmit", transactionId),
+  resubmit: (
+    transactionId: string,
+    options?: { acceptedExclusionKeys?: string[] }
+  ) => ipcRenderer.invoke("transactions:resubmit", transactionId, options),
+
+  /**
+   * BACKLOG-3403: list the attachments that cannot be sent (after downloading
+   * any email attachment not on this computer yet), before submitting.
+   */
+  submitPreflight: (transactionId: string) =>
+    ipcRenderer.invoke("transactions:submit-preflight", transactionId),
+
+  /**
+   * BACKLOG-3398: cancel the running submission. Refused once the final step
+   * has begun.
+   */
+  cancelSubmit: (transactionId: string) =>
+    ipcRenderer.invoke("transactions:cancel-submit", transactionId),
 
   /**
    * Get submission status from cloud
