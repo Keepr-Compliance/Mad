@@ -230,6 +230,15 @@ describe("BACKLOG-3594 submission came back notice (host: AppModals)", () => {
     expect(notices()).toHaveLength(2);
   });
 
+  it("notices a second round of changes when the broker moves it through under review", () => {
+    renderHost();
+    expect(listeners.size).toBe(1);
+    emit(statusEvent("needs_changes", { oldStatus: "under_review" }));
+    emit(statusEvent("under_review", { oldStatus: "resubmitted" }));
+    emit(statusEvent("needs_changes", { oldStatus: "under_review" }));
+    expect(notices()).toHaveLength(2);
+  });
+
   it("keeps exactly one subscription across StrictMode and re-renders", () => {
     const { rerender } = renderHost(true);
     for (let i = 0; i < 3; i++) {
