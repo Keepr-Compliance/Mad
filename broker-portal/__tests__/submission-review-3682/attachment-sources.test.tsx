@@ -97,12 +97,18 @@ describe('buildAttachmentSources', () => {
 });
 
 describe('readExcludedFiles', () => {
-  it.each([[null], [undefined], [{}], [{ excluded_files: null }], [{ excluded_files: 'x' }], ['string'], [42]])(
-    'returns [] for %p',
-    (metadata) => {
-      expect(readExcludedFiles(metadata)).toEqual([]);
-    }
-  );
+  it.each([
+    [null],
+    [undefined],
+    [{}],
+    [{ excluded_files: null }],
+    [{ excluded_files: 'x' }],
+    [{ excluded_files: {} }],
+    ['string'],
+    [42],
+  ])('returns [] for %p', (metadata) => {
+    expect(readExcludedFiles(metadata)).toEqual([]);
+  });
 
   it('keeps valid entries, drops junk, fills missing strings', () => {
     expect(
@@ -189,6 +195,14 @@ describe('ExcludedFilesNotice', () => {
     const items = screen.getAllByTestId('excluded-file').map((li) => li.textContent);
     expect(items[1]).toBe("A photo or fileA textWasn't downloaded to the agent's computer");
     expect(screen.queryByText(/Gina Example/)).toBeNull();
+  });
+
+  it('with email view off, drops the email subject but keeps the text label', () => {
+    render(<ExcludedFilesNotice files={files} showTextLabels showEmailLabels={false} />);
+    const items = screen.getAllByTestId('excluded-file').map((li) => li.textContent);
+    expect(items[0]).toBe('Video.movAn email, Oct 3, 2026, 8:00 AMLarger than 50 MB');
+    expect(screen.queryByText(/Photos/)).toBeNull();
+    expect(items[1]).toBe("A photo or fileText with Gina ExampleWasn't downloaded to the agent's computer");
   });
 
   it('renders nothing when the list is empty', () => {
