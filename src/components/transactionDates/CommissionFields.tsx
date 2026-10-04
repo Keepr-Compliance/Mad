@@ -13,6 +13,7 @@
  */
 import React from "react";
 import { InfoTooltip } from "../common/InfoTooltip";
+import LiveMoneyInput from "../common/LiveMoneyInput";
 import { COMMISSION_REASON_MAX_LENGTH, formatCommissionAmount } from "./commission";
 import type { CommissionForm } from "./useCommissionForm";
 import { formatCurrency } from "@/utils/formatUtils";
@@ -84,13 +85,13 @@ export function CommissionFields({
           <Label htmlFor="commission-sale" text="Sale Price" help={saleHelp} />
           <div className="relative">
             <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-gray-500 pointer-events-none">$</span>
-            <input
+            {/* BACKLOG-3677: the shared price input — commas as you type. */}
+            <LiveMoneyInput
               id="commission-sale"
               data-testid="commission-sale"
-              type="text"
               inputMode="decimal"
               value={inputs.saleText}
-              onChange={(e) => commission.setSaleText(e.target.value)}
+              onValueChange={commission.setSaleText}
               className={`${INPUT_CLASS} pl-7`}
             />
           </div>

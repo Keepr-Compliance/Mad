@@ -1285,6 +1285,28 @@ describe("AuditTransactionModal", () => {
       expect(input).toHaveValue("1,000,000");
     });
 
+    // ---- BACKLOG-3677: the founder's leading-digit bug ----
+
+    it("L7: backspacing the leading 1 of 1,000,000 leaves Listing Price blank, and no 0 is sent", async () => {
+      const payload = await createThroughTheWizard(
+        "1000000{Home}{ArrowRight}{Backspace}",
+      );
+      expect(payload.listing_price).toBeUndefined();
+      expect(payload.listing_price).not.toBe(0);
+    });
+
+    it("L8: the box is blank right after the Backspace, before it loses focus", async () => {
+      renderCreate();
+      const input = screen.getByTestId("create-audit-listing-price-input");
+      await userEvent.type(input, "1000000");
+      expect(input).toHaveValue("1,000,000");
+      await userEvent.type(input, "{Backspace}", {
+        initialSelectionStart: 1,
+        initialSelectionEnd: 1,
+      });
+      expect(input).toHaveValue("");
+    });
+
     it("L4: Edit Transaction Details prefills the Listing Price and saves a change", async () => {
       renderWithProvider(
         <AuditTransactionModal
