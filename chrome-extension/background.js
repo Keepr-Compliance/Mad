@@ -278,7 +278,7 @@ async function linkPollLoop(session, sleep) {
     } catch (_err) {
       // A wrong code typed in Keepr: Keepr is told (it counts the tries).
       const told = await rawPost("/link/finish", JSON.stringify({ sessionId: session.sessionId, cA: "wrong" }));
-      if (told.status === 429) return linkFailed("Too many wrong codes. Click Link for a new one.");
+      if (told.status === 429) return linkFailed("Too many wrong codes. Get a new code.");
       if (told.body && typeof told.body.triesLeft === "number") session.triesLeft = told.body.triesLeft;
       await sleep(LINK_POLL_MS);
       continue;

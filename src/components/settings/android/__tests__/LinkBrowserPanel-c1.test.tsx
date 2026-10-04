@@ -1,8 +1,7 @@
 /**
- * C1 (UX redesign) — Keepr's "Enter the code from your browser" panel. One
- * short line per state; the code is typed here (Keepr never makes one).
- * Mutations: the code not sent → red; a 5-digit code sent → red; the
- * intrusion warning not shown → red; "linked" not reported → red.
+ * C1 (UX redesign) — Keepr's link card (storyboards D01–D05, F01–F02): the
+ * code is typed here (Keepr never makes one); the 6th digit submits by
+ * itself; the field says the state and its colour always wins over focus.
  */
 import React from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
@@ -15,48 +14,76 @@ type Link =
 let mockLink: Link = { state: "none", intrusion: false };
 let mockLinked = false;
 const mockEnter = jest.fn(async (_code: string) => ({ success: true }) as { success: boolean; error?: string });
-const mockLinkForget = jest.fn(async () => undefined);
 const mockOpenMessages = jest.fn(async () => undefined);
 jest.mock("../../../../services/rcsImportService", () => ({
   rcsImportService: {
     linkState: async () => ({ success: true, data: { link: mockLink, linked: mockLinked } }),
     linkEnterCode: (code: string) => mockEnter(code),
     linkDismissWarning: async () => undefined,
-    linkForget: () => mockLinkForget(),
     openGoogleMessages: () => mockOpenMessages(),
   },
 }));
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { LinkBrowserPanel, LINK_COPY, cleanLinkCode } = require("../LinkBrowserPanel") as typeof import("../LinkBrowserPanel");
+const { LinkBrowserPanel, LINK_COPY, FIELD_COLORS, cleanLinkCode } = require("../LinkBrowserPanel") as typeof import("../LinkBrowserPanel");
 
 const flush = async () => {
   await act(async () => {
     for (let i = 0; i < 5; i++) await Promise.resolve();
   });
 };
+const tick = async () => {
+  await act(async () => {
+    jest.advanceTimersByTime(1000);
+  });
+  await flush();
+};
+/** jsdom keeps a hex border-color as written (lower case), a background as rgb(). */
+const rgb = (hex: string) => hex.toLowerCase();
+const bg = (hex: string) => {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
+};
+const waiting = (triesLeft = 5): Link => ({ state: "waiting", expiresAt: Date.now() + 90_000, triesLeft, intrusion: false });
 
 beforeEach(() => {
   jest.useFakeTimers();
   mockLink = { state: "none", intrusion: false };
   mockLinked = false;
   mockEnter.mockClear();
+  mockOpenMessages.mockClear();
 });
 afterEach(() => {
   jest.useRealTimers();
 });
 
 describe("LinkBrowserPanel", () => {
-  // Founder (LinkFlow step 4, 2026-10-04): no Link button — the 6th digit
-  // (typed or pasted, with or without a space) submits by itself, once.
-  // Checking: a spinner in the field. Mutations: 5 digits sent; no
-  // auto-submit; a second submit while checking; no spinner → red.
-  it("the 6th digit submits by itself (typed or pasted); 5 digits never", async () => {
-    mockLink = { state: "waiting", expiresAt: Date.now() + 90_000, triesLeft: 5, intrusion: false };
+  // Mutations: a step missing or reordered; Open Google Messages not wired;
+  // a paragraph back → red.
+  it("the two-step card (D01): title, 1 Open Google Messages, 2 Type the code from Chrome", async () => {
     render(<LinkBrowserPanel />);
     await flush();
-    expect(screen.getByText(LINK_COPY.enter)).toBeInTheDocument();
+    const panel = screen.getByTestId("gm-link-panel");
+    expect(Array.from(panel.children).map((c) => c.getAttribute("data-testid"))).toEqual(["gm-link-title", "gm-link-step-1", "gm-link-step-2"]);
+    expect(screen.getByTestId("gm-link-title")).toHaveTextContent("Link your browser");
+    const open = screen.getByTestId("gm-link-open-messages");
+    for (const c of ["flex-grow", "min-h-[48px]", "rounded-[10px]", "bg-[#4F46E5]", "text-white", "font-bold"]) expect(open.className.split(" ")).toContain(c);
+    fireEvent.click(open);
+    expect(mockOpenMessages).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("gm-link-step-2")).toHaveTextContent("Type the code from Chrome");
+    const input = screen.getByTestId("gm-link-code") as HTMLInputElement;
+    expect(input.placeholder).toBe("000 000");
+    for (const c of ["min-h-[52px]", "border-2", "rounded-[10px]", "font-mono", "text-[26px]", "tracking-[0.2em]"]) expect(input.className.split(" ")).toContain(c);
+    expect(input.style.borderColor).toBe(rgb("#CDD1DE"));
     expect(screen.queryByTestId("gm-link-submit")).toBeNull();
+    expect(panel.querySelectorAll("p")).toHaveLength(0);
+  });
+
+  // Mutations: 5 digits sent; no auto-submit; a second submit while checking; no spinner → red.
+  it("the 6th digit submits by itself (typed or pasted); 5 digits never", async () => {
+    mockLink = waiting();
+    render(<LinkBrowserPanel />);
+    await flush();
     const input = screen.getByTestId("gm-link-code") as HTMLInputElement;
     fireEvent.change(input, { target: { value: "12345" } });
     await flush();
@@ -76,76 +103,91 @@ describe("LinkBrowserPanel", () => {
     });
   });
 
-  // Mutations: success not shown green with ✓ / "Linked" / "Sync now";
-  // Sync now not starting the Sync → red.
-  it("linked: a green field with ✓, 'Linked', and 'Sync now' starts the Sync", async () => {
-    mockLink = { state: "waiting", expiresAt: Date.now() + 90_000, triesLeft: 5, intrusion: false };
-    const onSyncNow = jest.fn();
+  // D05 (founder): the green border + ✓ INSIDE the field only (no "✓ Linked"
+  // line, no Sync now here); the parent is told. Mutations: an outside line
+  // back; not green; the parent not told → red.
+  it("linked: green border + tint, ✓ inside the field — nothing outside; the parent is told", async () => {
+    mockLink = waiting();
     const onJustLinked = jest.fn();
-    render(<LinkBrowserPanel onSyncNow={onSyncNow} onJustLinked={onJustLinked} />);
+    render(<LinkBrowserPanel onJustLinked={onJustLinked} />);
     await flush();
     await act(async () => {
       fireEvent.change(screen.getByTestId("gm-link-code"), { target: { value: "482913" } });
     });
     mockLink = { state: "none", intrusion: false };
     mockLinked = true;
-    await act(async () => {
-      jest.advanceTimersByTime(1000);
-    });
-    await flush();
-    const input = screen.getByTestId("gm-link-code");
-    // D05: green border on a green tint, the code kept, ✓ inside.
-    expect(input.className.split(" ")).toEqual(expect.arrayContaining(["border-[#15803D]", "bg-[#F0FDF4]"]));
-    expect((input as HTMLInputElement).value).toBe("482913");
+    await tick();
+    const input = screen.getByTestId("gm-link-code") as HTMLInputElement;
+    expect(input.style.borderColor).toBe(rgb("#15803D"));
+    expect(input.style.background).toBe(bg("#F0FDF4"));
     expect(screen.getByTestId("gm-link-ok")).toHaveTextContent("✓");
-    expect(screen.getByTestId("gm-link-just-linked")).toHaveTextContent("Linked");
     expect(onJustLinked).toHaveBeenCalledTimes(1);
-    // D05: step 1 stays; "✓ Linked" and Sync now sit under the field (step 2).
-    expect(screen.getByTestId("gm-link-open-messages")).toBeVisible();
-    expect(screen.getByTestId("gm-link-just-linked")).toHaveTextContent("✓Linked");
-    expect(screen.getByTestId("gm-link-step-2").contains(screen.getByTestId("gm-link-sync-now"))).toBe(true);
-    const sync = screen.getByTestId("gm-link-sync-now");
-    expect(sync).toHaveTextContent("Sync now");
-    for (const c of ["w-full", "min-h-[48px]", "bg-[#4F46E5]", "text-white", "font-bold", "rounded-[10px]"]) expect(sync.className.split(" ")).toContain(c);
-    fireEvent.click(sync);
-    expect(onSyncNow).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("gm-link-just-linked")).toBeNull();
+    expect(screen.queryByTestId("gm-link-sync-now")).toBeNull();
+    expect(screen.getByTestId("gm-link-step-2").textContent).not.toMatch(/Linked/);
   });
 
-  // Mutations: a wrong code not said with the tries left; the field not
-  // cleared; 5 tries not "used up" → red.
-  it("wrong: a red field, 'Code didn't match — N tries left', cleared; used up after the last", async () => {
-    mockLink = { state: "waiting", expiresAt: Date.now() + 90_000, triesLeft: 5, intrusion: false };
+  // F01 / F02. Mutations: not red; the red cleared before typing; a
+  // "Retype the code" placeholder; used up not disabled / grey → red.
+  it("wrong: RED border until the user types, 'Code didn't match · N tries left', placeholder 000 000; used up: disabled + grey", async () => {
+    mockLink = waiting();
     render(<LinkBrowserPanel />);
     await flush();
     const input = screen.getByTestId("gm-link-code") as HTMLInputElement;
     await act(async () => {
       fireEvent.change(input, { target: { value: "111111" } });
     });
-    mockLink = { state: "waiting", expiresAt: Date.now() + 90_000, triesLeft: 4, intrusion: false };
-    await act(async () => {
-      jest.advanceTimersByTime(1000);
-    });
-    await flush();
-    // SR (F01): a middle dot; the field cleared with "Retype the code".
+    mockLink = waiting(4);
+    await tick();
     expect(screen.getByTestId("gm-link-error")).toHaveTextContent("Code didn't match · 4 tries left");
-    expect(input.className.split(" ")).toContain("border-[#B42318]");
+    expect(input.style.borderColor).toBe(rgb("#B42318"));
     expect(input.value).toBe("");
-    expect(input.getAttribute("placeholder")).toBe("Retype the code");
-    expect(input.readOnly).toBe(false);
+    expect(input.placeholder).toBe("000 000");
+    await tick(); // still red with time passing
+    expect(input.style.borderColor).toBe(rgb("#B42318"));
+    fireEvent.change(input, { target: { value: "2" } });
+    expect(input.style.borderColor).not.toBe(rgb("#B42318"));
     await act(async () => {
       fireEvent.change(input, { target: { value: "222222" } });
     });
-    expect(mockEnter).toHaveBeenCalledTimes(2);
-    mockLink = { state: "none", intrusion: false }; // the 5th try burned the session
-    await act(async () => {
-      jest.advanceTimersByTime(1000);
-    });
+    mockLink = { state: "none", intrusion: false }; // the last try burned the code
+    await tick();
+    expect(screen.getByTestId("gm-link-error")).toHaveTextContent(LINK_COPY.usedUp);
+    expect(input.disabled).toBe(true);
+    expect(input.tabIndex).toBe(-1);
+    expect(input.placeholder).toBe("");
+    expect(input.style.background).toBe(bg("#F9FAFB"));
+    expect(input.style.borderColor).toBe(rgb("#E5E7EB"));
+    // A new code from Chrome: the field is back.
+    mockLink = waiting();
+    await tick();
+    expect(input.disabled).toBe(false);
+  });
+
+  // (a) live D5 / F1: a focus outline overrode the state colour. Mutations:
+  // the outline back; focus taking over the state border → red.
+  it("focused: the state colour wins — no outline; the ring is the state's own colour", async () => {
+    mockLink = waiting();
+    render(<LinkBrowserPanel />);
     await flush();
-    expect(screen.getByTestId("gm-link-error")).toHaveTextContent("Code used up. Get a new code in Chrome.");
+    const input = screen.getByTestId("gm-link-code") as HTMLInputElement;
+    fireEvent.focus(input);
+    expect(input.style.outline).toBe("none");
+    expect(input.style.borderColor).toBe(rgb(FIELD_COLORS.idle.focus));
+    expect(input.style.boxShadow).toContain(FIELD_COLORS.idle.focus);
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "111111" } });
+    });
+    mockLink = waiting(4);
+    await tick();
+    fireEvent.focus(input);
+    expect(input.style.outline).toBe("none");
+    expect(input.style.borderColor).toBe(rgb("#B42318"));
+    expect(input.style.boxShadow).toContain("#B42318");
   });
 
   it("a refused code says why, and the field is cleared", async () => {
-    mockLink = { state: "waiting", expiresAt: Date.now() + 90_000, triesLeft: 5, intrusion: false };
+    mockLink = waiting();
     mockEnter.mockResolvedValueOnce({ success: false, error: "That code expired. Click Link in the extension for a new one." });
     render(<LinkBrowserPanel />);
     await flush();
@@ -169,75 +211,7 @@ describe("LinkBrowserPanel", () => {
     const onLinked = jest.fn();
     render(<LinkBrowserPanel onLinked={onLinked} />);
     await flush();
-    expect(screen.getByTestId("gm-link-linked")).toHaveTextContent(LINK_COPY.linked);
     expect(onLinked).toHaveBeenCalledTimes(1);
-  });
-
-  // Live (B2): a code from the browser gets its field even when Keepr already
-  // counts a link; "Link a browser" is always there. Mutations: linked
-  // hiding the field → red; no "Link a browser" → red.
-  it("linked AND a code waiting: the field is shown (a new link replaces the old)", async () => {
-    mockLinked = true;
-    mockLink = { state: "waiting", expiresAt: Date.now() + 90_000, triesLeft: 5, intrusion: false };
-    render(<LinkBrowserPanel />);
-    await flush();
-    expect(screen.getByTestId("gm-link-code")).toBeInTheDocument();
-  });
-
-  // SR (B1): "Forget link" is Keepr's own way to delete a link.
-  // Mutation: the button not calling linkForget → red.
-  it("linked: 'Forget link' forgets it", async () => {
-    mockLinked = true;
-    render(<LinkBrowserPanel />);
-    await flush();
-    fireEvent.click(screen.getByTestId("gm-link-forget"));
-    await flush();
-    expect(mockLinkForget).toHaveBeenCalledTimes(1);
-  });
-
-  // The approved mockup (KeeprLinkPrompt, founder 2026-10-04): ONE minimal
-  // card — "Link your browser", (1) a 48px "Open Google Messages" (works
-  // without a link), (2) "Type the code from Chrome" (52px field) + a dark
-  // Link. No paragraphs, no illustration, no Cancel. Mutations: a step
-  // missing or reordered; Open Google Messages not wired; a token off the
-  // mockup; a paragraph back → red.
-  it("not linked: the two-step card of the mockup", async () => {
-    render(<LinkBrowserPanel />);
-    await flush();
-    const panel = screen.getByTestId("gm-link-panel");
-    for (const c of ["max-w-[520px]", "p-7", "gap-5", "rounded-2xl", "border-[#D6D9E4]", "bg-white"]) expect(panel.className.split(" ")).toContain(c);
-    expect(Array.from(panel.children).map((c) => c.getAttribute("data-testid"))).toEqual(["gm-link-title", "gm-link-step-1", "gm-link-step-2"]);
-    expect(screen.getByTestId("gm-link-title")).toHaveTextContent("Link your browser");
-    const one = screen.getByTestId("gm-link-step-1");
-    expect(one.firstElementChild).toHaveTextContent("1");
-    for (const c of ["w-7", "h-7", "rounded-full", "bg-[#EEF0FF]", "text-[#312E81]"]) expect((one.firstElementChild as HTMLElement).className.split(" ")).toContain(c);
-    const open = screen.getByTestId("gm-link-open-messages");
-    expect(open).toHaveTextContent("Open Google Messages");
-    for (const c of ["flex-grow", "min-h-[48px]", "rounded-[10px]", "bg-[#4F46E5]", "text-white", "text-[15px]", "font-bold"]) expect(open.className.split(" ")).toContain(c);
-    fireEvent.click(open);
-    expect(mockOpenMessages).toHaveBeenCalledTimes(1);
-    const two = screen.getByTestId("gm-link-step-2");
-    expect(two.firstElementChild).toHaveTextContent("2");
-    expect(two).toHaveTextContent("Type the code from Chrome");
-    const input = screen.getByTestId("gm-link-code");
-    expect(input.getAttribute("placeholder")).toBe("000 000");
-    for (const c of ["min-h-[52px]", "border-2", "border-[#CDD1DE]", "rounded-[10px]", "font-mono", "text-[26px]", "tracking-[0.2em]"]) {
-      expect(input.className.split(" ")).toContain(c);
-    }
-    // No Link button (the code submits itself) and no Cancel.
-    expect(screen.queryByTestId("gm-link-submit")).toBeNull();
-    expect(screen.queryByTestId("gm-link-cancel")).toBeNull();
-    expect(panel.querySelectorAll("p")).toHaveLength(0);
-  });
-
-  it("linked: 'Link a browser' shows the two steps", async () => {
-    mockLinked = true;
-    render(<LinkBrowserPanel />);
-    await flush();
-    expect(screen.queryByTestId("gm-link-step-1")).toBeNull();
-    fireEvent.click(screen.getByTestId("gm-link-another"));
-    expect(screen.getByTestId("gm-link-step-1")).toBeInTheDocument();
-    expect(screen.getByTestId("gm-link-step-2")).toBeInTheDocument();
   });
 
   it("cleanLinkCode: digits only, at most 6", () => {

@@ -56,9 +56,34 @@ const primary =
 const secondary =
   "w-full min-h-[44px] px-4 rounded-[10px] border border-[#CDD1DE] bg-white hover:bg-gray-50 text-[#1F2433] text-[15px] font-semibold";
 
+/** Founder (D05): the green ✓ in the field shows this long before the linked screen. */
+export const LINKED_FLASH_MS = 1000;
+
+/**
+ * Founder (B2): the note under Sync now — "Syncs your last 1.5 months of
+ * texts." (12 → "your last year", 1 → "your last month", All time → "Syncs
+ * all your texts.").
+ */
+export function syncWindowNote(months: number | null | undefined): string {
+  if (months === null) return "Syncs all your texts.";
+  if (typeof months !== "number") return "Syncs your recent texts.";
+  if (months === 12) return "Syncs your last year of texts.";
+  if (months === 1) return "Syncs your last month of texts.";
+  return `Syncs your last ${months} months of texts.`;
+}
+
+function prefersReducedMotion(): boolean {
+  try {
+    return !!window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  } catch {
+    return false;
+  }
+}
+
 export function GoogleMessagesSyncFlow({
   onClose,
   onUseCompanion,
+  onOpenSettings,
   userId,
   pollMs = POLL_MS,
   published = EXTENSION_PUBLISHED,
@@ -68,8 +93,20 @@ export function GoogleMessagesSyncFlow({
   const [job, setJob] = useState<RcsJobInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
-  /** A code typed in the link card just linked: its "Sync now" is the Sync (no second screen). */
-  const [justLinked, setJustLinked] = useState(false);
+  /**
+   * Founder (D05): a code just linked — the field's green ✓ for
+   * LINKED_FLASH_MS ("flash"), then the linked screen ("done"); at once under
+   * reduced motion.
+   */
+  const [linkFlash, setLinkFlash] = useState<"none" | "flash" | "done">("none");
+  const onJustLinked = useCallback(() => {
+    if (prefersReducedMotion()) {
+      setLinkFlash("done");
+      return;
+    }
+    setLinkFlash("flash");
+    setTimeout(() => setLinkFlash("done"), LINKED_FLASH_MS);
+  }, []);
   const [betaPref, setBetaPref] = useState(false);
   const jobIdRef = useRef<string | null>(null);
 
@@ -130,6 +167,20 @@ export function GoogleMessagesSyncFlow({
   const keeprPaired = state?.extensionPaired === true;
   const doneLines = step === "done" && job ? doneSummaryLines(job) : null;
   const beta = wantsBetaInstall(betaPref, published);
+  /** The link card: not linked, Relink, or a code's green ✓ still showing. */
+  const showLinkCard = linkFlash === "flash" || ((!keeprPaired || startAtLink) && linkFlash !== "done");
+  // Founder (B2): "Syncs your last N months of texts. Change" — never while
+  // a Sync runs (the syncing step shows none).
+  const windowNote = (
+    <p className="text-[13px] text-[#4B5563]" data-testid="gm-window-note">
+      {syncWindowNote(state?.lookbackMonths)}{" "}
+      {onOpenSettings && (
+        <button type="button" className="text-indigo-700 hover:text-indigo-900 font-medium" onClick={onOpenSettings} data-testid="gm-window-change">
+          Change
+        </button>
+      )}
+    </p>
+  );
   const stepRef = useRef(step);
   stepRef.current = step;
   const preparedRef = useRef(false);
@@ -234,26 +285,30 @@ export function GoogleMessagesSyncFlow({
         </>
       )}
 
-      {step === "connect" && (!keeprPaired || justLinked || startAtLink) && (
+      {step === "connect" && showLinkCard && (
         // D01: the link card IS this step (the modal gives it its frame).
         // Relink: the same card; the old link goes only when the new code succeeds.
-        <LinkBrowserPanel bare startLinking={startAtLink} onJustLinked={() => setJustLinked(true)} onSyncNow={() => void startSync()} />
+        <LinkBrowserPanel bare onJustLinked={onJustLinked} />
       )}
 
-      {step === "connect" && keeprPaired && !justLinked && !startAtLink && (
-        <>
-          {/* B02 / I02: linked — one line, Sync now. */}
+      {step === "connect" && !showLinkCard && (
+        // B02 / I02 / D05 after the flash: ONE linked screen. The modal keeps
+        // its standard size; the row + Sync now sit centred in the body.
+        <div className="flex flex-col gap-4 min-h-[360px]" data-testid="gm-linked-screen">
           <h2 className={title}>Sync Android</h2>
-          <div className="flex items-center gap-2 p-3 rounded-[10px] border border-[#E5E7EB] text-[14px] text-[#111827]" data-testid="gm-linked-row">
-            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="#4F46E5" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M5 12l5 5 9-10" />
-            </svg>
-            <span>Linked with your browser ✓</span>
+          <div className="flex-1 flex flex-col justify-center gap-4" data-testid="gm-linked-body">
+            <div className="flex items-center gap-2 p-3 rounded-[10px] border border-[#E5E7EB] text-[14px] text-[#111827]" data-testid="gm-linked-row">
+              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="#4F46E5" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M5 12l5 5 9-10" />
+              </svg>
+              <span>Linked with your browser</span>
+            </div>
+            <button type="button" className={primary} onClick={() => void startSync()} disabled={starting} data-testid="gm-sync-now">
+              {starting ? "Starting…" : "Sync now"}
+            </button>
           </div>
-          <button type="button" className={primary} onClick={() => void startSync()} disabled={starting} data-testid="gm-sync-now">
-            {starting ? "Starting…" : "Sync now"}
-          </button>
-        </>
+          {windowNote}
+        </div>
       )}
 
       {step === "syncing" && (
@@ -288,6 +343,7 @@ export function GoogleMessagesSyncFlow({
           <button type="button" className={primary} onClick={onClose}>
             Done
           </button>
+          {doneLines && windowNote}
         </>
       )}
 
@@ -306,6 +362,7 @@ export function GoogleMessagesSyncFlow({
           >
             Try again
           </button>
+          {windowNote}
         </>
       )}
 

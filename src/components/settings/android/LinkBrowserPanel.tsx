@@ -3,18 +3,21 @@
  * Keepr — REVERSED: the extension shows a 6-digit code, the user types it
  * here. Keepr never makes a code.
  *
- * The approved mockups (KeeprLinkPrompt + LinkFlow steps 4–5, founder
+ * The approved storyboards (KeeprLinkPrompt, D01–D05, F01–F02; founder
  * 2026-10-04): ONE minimal card — "Link your browser", (1) Open Google
  * Messages (works without a link), (2) "Type the code from Chrome". The 6th
- * digit (typed or pasted) submits by itself — no Link button. Checking: a
- * small spinner in the field. Linked: a green field with ✓, "Linked", and
- * "Sync now" right below (it starts the Sync). Wrong: a red field, "Code
- * didn't match — N tries left", the field cleared for retyping; after the
- * 5th: "Code used up. Get a new code in Chrome." Every submitted code is one
- * try (Keepr counts them, unchanged).
+ * digit (typed or pasted) submits by itself — no Link button. The field
+ * says the state, and its colour always wins over focus:
+ *   idle      grey border (indigo while focused)
+ *   checking  a small spinner in the field
+ *   linked    green border + green tint, ✓ inside (the parent then switches
+ *             to the linked screen); the code is not shown afterwards
+ *   wrong     red border, "Code didn't match · N tries left" — until the
+ *             user types again
+ *   used up   disabled (grey), "Code used up. Get a new code in Chrome."
+ * Every submitted code is one try (Keepr counts them, unchanged).
  *
- * Shown in Settings › Google Messages and in the Sync flow's Connect step;
- * keepr://link opens it (id "gm-link-panel").
+ * Shown in the Sync Android modal's link step (id "gm-link-panel").
  */
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { RcsLinkState } from "../../../../electron/types/ipc/window-api-rcs-import";
@@ -24,16 +27,20 @@ export const LINK_PANEL_ID = "gm-link-panel";
 export const LINK_COPY = {
   title: "Link your browser",
   enter: "Type the code from Chrome",
-  linked: "Linked with your browser ✓",
-  justLinked: "Linked",
-  syncNow: "Sync now",
   usedUp: "Code used up. Get a new code in Chrome.",
-  /** SR (F01): the field's placeholder after a miss. */
-  retype: "Retype the code",
   expired: "Code expired. Get a new code in Chrome.",
   locked: "Another app tried to link — check for unknown software",
 } as const;
 const POLL_MS = 1000;
+
+/** The field's colours per state (they win over any focus style). */
+export const FIELD_COLORS = {
+  idle: { border: "#CDD1DE", focus: "#4F46E5", background: "#FFFFFF" },
+  checking: { border: "#4F46E5", focus: "#4F46E5", background: "#FFFFFF" },
+  linked: { border: "#15803D", focus: "#15803D", background: "#F0FDF4" },
+  wrong: { border: "#B42318", focus: "#B42318", background: "#FFFFFF" },
+  usedUp: { border: "#E5E7EB", focus: "#E5E7EB", background: "#F9FAFB" },
+} as const;
 
 /** "Code didn't match · 3 tries left" (SR, F01 storyboard). */
 export function wrongCodeLine(triesLeft: number): string {
@@ -46,31 +53,27 @@ export function cleanLinkCode(text: string): string {
 }
 
 interface LinkBrowserPanelProps {
-  /** Called once Keepr reports this user linked (the parent may hide the panel). */
+  /** Called once Keepr reports this user linked. */
   onLinked?: () => void;
-  /** A code typed here just linked the browser (the parent hides its own Sync). */
+  /** A code typed here just linked the browser (the parent shows the linked screen). */
   onJustLinked?: () => void;
-  /** "Sync now" after a link; default: Keepr's Google Messages Sync. */
-  onSyncNow?: () => void;
   /** Inside the Sync Android modal (D01): no card of its own — the modal frames it. */
   bare?: boolean;
-  /** Relink (from Settings): the two steps at once, even while linked. */
-  startLinking?: boolean;
 }
 
 type Check =
   | { kind: "idle" }
   | { kind: "checking"; triesBefore: number | null; expiresAt: number | null }
   | { kind: "wrong"; message: string }
+  | { kind: "usedUp"; message: string }
   | { kind: "linked" };
 
-export function LinkBrowserPanel({ onLinked, onJustLinked, onSyncNow, bare = false, startLinking = false }: LinkBrowserPanelProps) {
+export function LinkBrowserPanel({ onLinked, onJustLinked, bare = false }: LinkBrowserPanelProps) {
   const [link, setLink] = useState<RcsLinkState | null>(null);
   const [linked, setLinked] = useState(false);
   const [code, setCode] = useState("");
   const [check, setCheck] = useState<Check>({ kind: "idle" });
-  /** Live (B2): "Link a browser" opened while already linked. */
-  const [howOpen, setHowOpen] = useState(startLinking);
+  const [focused, setFocused] = useState(false);
   const input = useRef<HTMLInputElement | null>(null);
   const checkRef = useRef(check);
   checkRef.current = check;
@@ -92,15 +95,15 @@ export function LinkBrowserPanel({ onLinked, onJustLinked, onSyncNow, bare = fal
         setCode("");
         setTimeout(() => input.current?.focus(), 0);
       } else if (l.state === "none" || l.state === "locked") {
-        setCheck({ kind: "wrong", message: expired ? LINK_COPY.expired : LINK_COPY.usedUp });
+        // F02: the last try burned the code (or it expired): nothing to type into.
+        setCheck({ kind: "usedUp", message: expired ? LINK_COPY.expired : LINK_COPY.usedUp });
         setCode("");
       }
+    } else if (c.kind === "usedUp" && l.state === "waiting") {
+      // A new code from Chrome: the field is back.
+      setCheck({ kind: "idle" });
     }
-    // Live (B1): Keepr's honest state each time (a lost link is shown again).
-    if (r.data.linked && !linked) {
-      if (!startLinking) setHowOpen(false);
-      onLinked?.();
-    }
+    if (r.data.linked && !linked) onLinked?.();
     setLinked(r.data.linked);
   }, [linked, onLinked, onJustLinked]);
 
@@ -132,28 +135,18 @@ export function LinkBrowserPanel({ onLinked, onJustLinked, onSyncNow, bare = fal
     (text: string) => {
       const next = cleanLinkCode(text);
       setCode(next);
+      // F01: the red stays until the user types again.
       if (checkRef.current.kind === "wrong") setCheck({ kind: "idle" });
       if (next.length === 6 && checkRef.current.kind !== "checking") void submit(next);
     },
     [submit],
   );
 
-  const syncNow = useCallback(() => {
-    if (onSyncNow) onSyncNow();
-    else void rcsImportService.startCacheJob();
-  }, [onSyncNow]);
-
-  const waiting = !!link && (link.state === "waiting" || link.state === "answered");
   const locked = link?.state === "locked";
   const justLinked = check.kind === "linked";
-  /** Not linked (or "Link a browser"), a code waiting, or just linked here: the steps. */
-  const steps = justLinked || (!locked && (waiting || !linked || howOpen));
+  const usedUp = check.kind === "usedUp";
+  const colors = FIELD_COLORS[check.kind];
   const stepNum = "w-7 h-7 flex-shrink-0 rounded-full bg-[#EEF0FF] text-[#312E81] flex items-center justify-center font-bold";
-  const fieldBorder = justLinked
-    ? "border-[#15803D] bg-[#F0FDF4]"
-    : check.kind === "wrong"
-      ? "border-[#B42318]"
-      : "border-[#CDD1DE] focus:border-[#4F46E5]";
   // 520 wide, padding 28, gap 20 (the mockup).
   return (
     <div
@@ -176,33 +169,8 @@ export function LinkBrowserPanel({ onLinked, onJustLinked, onSyncNow, bare = fal
           )}
         </div>
       )}
-      {linked && !waiting && !howOpen && !locked && !justLinked && (
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-[15px] text-[#14532D] font-semibold" data-testid="gm-link-linked">{LINK_COPY.linked}</span>
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              className="text-[14px] font-semibold text-[#4F46E5] hover:text-[#3730A3]"
-              onClick={() => setHowOpen(true)}
-              data-testid="gm-link-another"
-            >
-              Link a browser
-            </button>
-            {/* SR (B1): the only Keepr-side way to delete a link. */}
-            <button
-              type="button"
-              className="text-[14px] text-[#4B5163] hover:text-[#1F2433]"
-              onClick={() => void rcsImportService.linkForget().then(refresh)}
-              data-testid="gm-link-forget"
-            >
-              Forget link
-            </button>
-          </div>
-        </div>
-      )}
-      {steps && (
+      {(!locked || justLinked) && (
         <>
-          {/* D05: step 1 stays after the link (only step 2 changes). */}
           <div className="flex gap-3.5 items-center" data-testid="gm-link-step-1">
             <div className={stepNum}>1</div>
             <button
@@ -223,16 +191,30 @@ export function LinkBrowserPanel({ onLinked, onJustLinked, onSyncNow, bare = fal
                   <input
                     ref={input}
                     aria-label="Code from Chrome"
+                    aria-invalid={check.kind === "wrong" || usedUp}
                     data-testid="gm-link-code"
                     data-check={check.kind}
                     inputMode="numeric"
                     autoComplete="off"
-                    placeholder={check.kind === "wrong" ? LINK_COPY.retype : "000 000"}
+                    placeholder={usedUp ? "" : "000 000"}
                     maxLength={7}
                     value={code}
+                    disabled={usedUp}
+                    tabIndex={usedUp ? -1 : undefined}
                     readOnly={check.kind === "checking" || justLinked}
                     onChange={(e) => onType(e.target.value)}
-                    className={`min-h-[52px] w-full box-border px-3.5 border-2 ${fieldBorder} rounded-[10px] font-mono text-[26px] tracking-[0.2em] text-[#1F2433]`}
+                    onFocus={() => setFocused(true)}
+                    onBlur={() => setFocused(false)}
+                    className="min-h-[52px] w-full box-border px-3.5 border-2 rounded-[10px] font-mono text-[26px] tracking-[0.2em] text-[#1F2433] disabled:cursor-not-allowed"
+                    // The state's colour always wins: no browser / global focus
+                    // outline here; the focus indicator is a ring in the
+                    // state's own colour (indigo while idle).
+                    style={{
+                      borderColor: focused && check.kind === "idle" ? colors.focus : colors.border,
+                      background: colors.background,
+                      outline: "none",
+                      boxShadow: focused && !usedUp ? `0 0 0 3px ${colors.focus}33` : "none",
+                    }}
                   />
                   {check.kind === "checking" && (
                     <span
@@ -253,31 +235,10 @@ export function LinkBrowserPanel({ onLinked, onJustLinked, onSyncNow, bare = fal
                   )}
                 </span>
               </label>
-              {/* D05 / F01: under the field — "✓ Linked" + Sync now, or the reason. */}
-              {(justLinked || check.kind === "wrong") && (
-                <div className="flex flex-col gap-3 mt-1.5">
-                  {justLinked && (
-                    <span className="flex items-center gap-2 text-[15px] font-bold text-[#15803D]" data-testid="gm-link-just-linked">
-                      <span aria-hidden="true">✓</span>
-                      <span>{LINK_COPY.justLinked}</span>
-                    </span>
-                  )}
-                  {justLinked && (
-                    <button
-                      type="button"
-                      className="w-full min-h-[48px] border-0 rounded-[10px] bg-[#4F46E5] hover:bg-[#4338CA] text-white text-[15px] font-bold"
-                      onClick={syncNow}
-                      data-testid="gm-link-sync-now"
-                    >
-                      {LINK_COPY.syncNow}
-                    </button>
-                  )}
-                  {check.kind === "wrong" && (
-                    <span className="text-[14px] font-semibold text-[#B42318]" role="alert" data-testid="gm-link-error">
-                      {check.message}
-                    </span>
-                  )}
-                </div>
+              {(check.kind === "wrong" || usedUp) && (
+                <span className="mt-1.5 text-[14px] font-semibold text-[#B42318]" role="alert" data-testid="gm-link-error">
+                  {check.message}
+                </span>
               )}
             </div>
           </div>

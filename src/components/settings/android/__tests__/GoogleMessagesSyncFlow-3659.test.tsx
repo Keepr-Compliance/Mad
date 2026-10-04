@@ -28,6 +28,7 @@ const mockRetryCache = jest.fn();
 const mockOpenChrome = jest.fn();
 const mockConsent = jest.fn();
 let mockCurrentJob: RcsJobInfo | null = null;
+let mockLinkState = (): unknown => ({ success: true, data: { link: { state: "none", intrusion: false }, linked: false } });
 
 const mockPairCode = jest.fn();
 jest.mock("../../../../services/rcsImportService", () => ({
@@ -39,7 +40,7 @@ jest.mock("../../../../services/rcsImportService", () => ({
     startCacheJob: (...a: unknown[]) => mockStartCache(...a),
     retryCacheJob: (...a: unknown[]) => mockRetryCache(...a),
     // C1: the reversed link panel (nothing pending).
-    linkState: async () => ({ success: true, data: { link: { state: "none", intrusion: false }, linked: false } }),
+    linkState: async () => mockLinkState(),
     linkEnterCode: async () => ({ success: true }),
     linkDismissWarning: async () => undefined,
     setCacheConsent: (...a: unknown[]) => mockConsent(...a),
@@ -55,7 +56,7 @@ jest.mock("../../../../services/rcsImportService", () => ({
 }));
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { GoogleMessagesSyncFlow } = require("../GoogleMessagesSyncFlow") as typeof import("../GoogleMessagesSyncFlow");
+const { GoogleMessagesSyncFlow, LINKED_FLASH_MS, syncWindowNote } = require("../GoogleMessagesSyncFlow") as typeof import("../GoogleMessagesSyncFlow");
 
 const NOT_INSTALLED: RcsExtensionState = { extensionVersion: null, extensionSeenAt: null, pairedAt: null, optedIn: false, lastCacheFinishedAt: null };
 const INSTALLED_NO_CONSENT: RcsExtensionState = {
@@ -151,7 +152,8 @@ describe("GoogleMessagesSyncFlow", () => {
     render(<GoogleMessagesSyncFlow onClose={onClose} pollMs={20} />);
     const connect = await screen.findByTestId("gm-step-connect");
     expect(screen.getByRole("heading")).toHaveTextContent("Sync Android");
-    expect(screen.getByTestId("gm-linked-row")).toHaveTextContent("Linked with your browser ✓");
+    // Founder (B2): no trailing ✓ (the icon shows it).
+    expect(screen.getByTestId("gm-linked-row").textContent).toBe("Linked with your browser");
     expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["Sync now"]);
     expect(connect).not.toHaveTextContent("STEP");
     expect(screen.queryByTestId("gm-copy-line")).toBeNull();
@@ -321,4 +323,102 @@ describe("GoogleMessagesSyncFlow", () => {
     expect(await screen.findByTestId("gm-step-connect")).toBeInTheDocument();
     expect(mockRetryCache).not.toHaveBeenCalled();
   });
+
+  // Founder (B2): the linked screen — the row and Sync now centred in the
+  // body (the modal keeps its size), the window note at the bottom with
+  // Change. Mutations: not centred; the note's wording; Change not wired;
+  // the note shown while a Sync runs → red.
+  it("B2: row + Sync now centred; 'Syncs your last N months of texts. Change'", async () => {
+    mockState = { ...INSTALLED, lookbackMonths: 1.5 };
+    const onOpenSettings = jest.fn();
+    render(<GoogleMessagesSyncFlow onClose={jest.fn()} onOpenSettings={onOpenSettings} pollMs={20} />);
+    const screenEl = await screen.findByTestId("gm-linked-screen");
+    expect(screenEl.className.split(" ")).toEqual(expect.arrayContaining(["flex", "flex-col", "min-h-[360px]"]));
+    const body = screen.getByTestId("gm-linked-body");
+    expect(body.className.split(" ")).toEqual(expect.arrayContaining(["flex-1", "flex", "flex-col", "justify-center"]));
+    expect(body.contains(screen.getByTestId("gm-linked-row"))).toBe(true);
+    expect(body.contains(screen.getByTestId("gm-sync-now"))).toBe(true);
+    expect(screen.getByTestId("gm-window-note")).toHaveTextContent("Syncs your last 1.5 months of texts. Change");
+    expect(screenEl.lastElementChild).toBe(screen.getByTestId("gm-window-note"));
+    fireEvent.click(screen.getByTestId("gm-window-change"));
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
+    expect(syncWindowNote(3)).toBe("Syncs your last 3 months of texts.");
+    expect(syncWindowNote(12)).toBe("Syncs your last year of texts.");
+    expect(syncWindowNote(1)).toBe("Syncs your last month of texts.");
+    expect(syncWindowNote(null)).toBe("Syncs all your texts.");
+    // Hidden while the Sync runs.
+    fireEvent.click(screen.getByTestId("gm-sync-now"));
+    await screen.findByTestId("gm-step-syncing");
+    expect(screen.queryByTestId("gm-window-note")).toBeNull();
+  });
+
+  // Founder (D05): after a correct code the field's green ✓ for ~1 s, then
+  // the SAME linked screen as B2; at once under reduced motion. Mutations:
+  // no switch; switching before the flash; a second linked component → red.
+  it("D05: the green ✓ for 1 s, then the B2 screen (at once under reduced motion)", async () => {
+    jest.useFakeTimers();
+    try {
+      mockState = { ...INSTALLED, extensionPaired: false };
+      let linked = false;
+      mockLinkState = () => ({
+        success: true,
+        data: { link: linked ? { state: "none", intrusion: false } : { state: "waiting", expiresAt: Date.now() + 90_000, triesLeft: 5, intrusion: false }, linked },
+      });
+      render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);
+      await act(async () => {
+        jest.advanceTimersByTime(50);
+      });
+      const input = await screen.findByTestId("gm-link-code");
+      await act(async () => {
+        fireEvent.change(input, { target: { value: "482913" } });
+      });
+      linked = true;
+      await act(async () => {
+        jest.advanceTimersByTime(1000); // the panel's poll sees the link
+      });
+      expect(screen.getByTestId("gm-link-ok")).toBeInTheDocument();
+      expect(screen.queryByTestId("gm-linked-screen")).toBeNull();
+      await act(async () => {
+        jest.advanceTimersByTime(LINKED_FLASH_MS);
+      });
+      expect(screen.getByTestId("gm-linked-screen")).toBeInTheDocument();
+      expect(screen.queryByTestId("gm-link-code")).toBeNull();
+      expect(screen.getByTestId("gm-linked-row").textContent).toBe("Linked with your browser");
+    } finally {
+      jest.useRealTimers();
+      mockLinkState = () => ({ success: true, data: { link: { state: "none", intrusion: false }, linked: false } });
+    }
+  });
+
+
+  it("D05 under reduced motion: the linked screen at once (no flash)", async () => {
+    jest.useFakeTimers();
+    const mm = window.matchMedia;
+    window.matchMedia = ((q: string) => ({ matches: q.includes("reduce"), media: q })) as unknown as typeof window.matchMedia;
+    try {
+      mockState = { ...INSTALLED, extensionPaired: false };
+      let linked = false;
+      mockLinkState = () => ({
+        success: true,
+        data: { link: linked ? { state: "none", intrusion: false } : { state: "waiting", expiresAt: Date.now() + 90_000, triesLeft: 5, intrusion: false }, linked },
+      });
+      render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);
+      await act(async () => {
+        jest.advanceTimersByTime(50);
+      });
+      await act(async () => {
+        fireEvent.change(await screen.findByTestId("gm-link-code"), { target: { value: "482913" } });
+      });
+      linked = true;
+      await act(async () => {
+        jest.advanceTimersByTime(1000);
+      });
+      expect(screen.getByTestId("gm-linked-screen")).toBeInTheDocument();
+    } finally {
+      window.matchMedia = mm;
+      jest.useRealTimers();
+      mockLinkState = () => ({ success: true, data: { link: { state: "none", intrusion: false }, linked: false } });
+    }
+  });
+
 });
