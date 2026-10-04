@@ -31,7 +31,8 @@
  * directly. A core module must be able to report an error without being able to
  * configure where errors go.
  *
- * `level` is deliberately the two-value union the call sites use. Widening it
+ * `level` is deliberately the union the call sites use (three values since
+ * BACKLOG-3403 added `"error"`). Widening it
  * to Sentry's six speculatively would mean this file no longer describes the
  * codebase; a seventh caller that needs `"error"` adds it here, and the compile
  * error that prompts them to is the seam working, not the seam breaking.
@@ -42,8 +43,11 @@
 /** A Sentry-style tag value: indexed, low-cardinality, never an object. */
 export type TagValue = string | number | boolean | undefined;
 
-/** Severity, restricted to the levels this codebase actually reports. */
-export type ErrorLevel = "info" | "warning";
+/**
+ * Severity, restricted to the levels this codebase actually reports.
+ * `"error"`: BACKLOG-3403, a submission that failed after Submit.
+ */
+export type ErrorLevel = "info" | "warning" | "error";
 
 /** Options accepted by {@link ErrorReporter.captureException}. */
 export interface CaptureExceptionOptions {

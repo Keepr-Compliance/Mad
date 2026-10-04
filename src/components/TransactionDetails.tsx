@@ -717,9 +717,16 @@ function TransactionDetails({
     progress: submitProgress,
     error: submitError,
     checklistsNotSent: submitChecklistsNotSent,
-    attachmentsFailed: submitAttachmentsFailed,
-    flaggedWithoutAttachments: submitFlaggedWithoutAttachments,
+    notIncluded: submitNotIncluded,
+    isCheckingFiles: submitCheckingFiles,
+    preflightItems: submitPreflightItems,
+    preflightChanged: submitPreflightChanged,
+    cancelled: submitCancelled,
+    isCancelling: submitCancelling,
     submit: handleSubmitForReview,
+    confirmPreflight: confirmSubmitPreflight,
+    dismissPreflight: dismissSubmitPreflight,
+    cancel: cancelSubmit,
     reset: resetSubmit,
   } = useSubmitForReview({
     transactionId: transaction.id,
@@ -1730,8 +1737,21 @@ function TransactionDetails({
           progress={submitProgress}
           error={submitError}
           checklistsNotSent={submitChecklistsNotSent}
-          attachmentsFailed={submitAttachmentsFailed}
-          flaggedWithoutAttachments={submitFlaggedWithoutAttachments}
+          notIncluded={submitNotIncluded}
+          isCheckingFiles={submitCheckingFiles}
+          preflightItems={submitPreflightItems}
+          preflightChanged={submitPreflightChanged}
+          onPreflightBack={dismissSubmitPreflight}
+          onPreflightContinue={() => {
+            void confirmSubmitPreflight();
+          }}
+          cancelled={submitCancelled}
+          isCancelling={submitCancelling}
+          // BACKLOG-3398: Cancel stops the submission in the main process; the
+          // window stays open until it reports that nothing was sent.
+          onCancelSubmit={() => {
+            void cancelSubmit();
+          }}
           onCancel={() => {
             setShowSubmitModal(false);
             resetSubmit();
