@@ -34,7 +34,7 @@ jest.mock("../../../../services/settingsService", () => ({
 }));
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { TextCoverageNotice, chosenTextSource, gapLine, googleMessagesOlderLine } = require("../TextCoverageNotice") as typeof import("../TextCoverageNotice");
+const { TextCoverageNotice, chosenTextSource, gapLine, googleMessagesOlderLine, googleMessagesGapLine } = require("../TextCoverageNotice") as typeof import("../TextCoverageNotice");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { AuditCoveragePrompt } = require("../AuditCoveragePrompt") as typeof import("../AuditCoveragePrompt");
 
@@ -55,8 +55,8 @@ describe("TextCoverageNotice", () => {
   it("asks with the chosen import source and names the right re-sync (N1)", async () => {
     getTextCoverage.mockResolvedValue({ success: true, auditStartISO: "2026-05-01T00:00:00.000Z", gaps: [gm] });
     render(<TextCoverageNotice transactionId="tx-1" userId="user-1" />);
-    // C02: Google Messages alone → the one blue line.
-    expect(await screen.findByTestId("coverage-gap-google_messages")).toHaveTextContent(/^Older than .*\? Click Sync Android on the dashboard: it reads back to the start\.$/);
+    // Google Messages alone → the one blue line (the shared wording).
+    expect(await screen.findByTestId("coverage-gap-google_messages")).toHaveTextContent(/^Texts start .+\. Sync Android on the dashboard to get older ones\.$/);
     expect(getTextCoverage).toHaveBeenCalledWith("tx-1", "user-1", "google_messages");
     expect(chosenTextSource("macos-native")).toBe("mac");
     expect(chosenTextSource("iphone-sync")).toBe("iphone");
@@ -84,14 +84,20 @@ describe("TextCoverageNotice", () => {
     expect(gapLine({ ...gap, incompleteChats: 1 }, null)).toBe("Google Messages: 1 chat may be incomplete.");
   });
 
-  // Storyboard C02: Google Messages alone, read only since a date → ONE blue
-  // line. Mutation: the old amber block for this case → red.
-  it("C02: Google Messages alone, later → 'Older than <date>? Click Sync Android on the dashboard: it reads back to the start.'", () => {
-    const when = new Date(Date.parse("2026-08-01T12:00:00.000Z")).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-    expect(googleMessagesOlderLine([{ ...gm, coveredSince: "2026-08-01T12:00:00.000Z" }])).toBe(
-      `Older than ${when}? Click Sync Android on the dashboard: it reads back to the start.`,
+  // Founder (2026-10-04): ONE wording for a Google Messages gap, everywhere:
+  // "Texts start Sep 2. Sync Android on the dashboard to get older ones."
+  // ("MMM d"; the year only when not this year). Mutations: another wording;
+  // the year always / never → red.
+  it("the Google Messages gap line: 'Texts start Sep 2. Sync Android on the dashboard to get older ones.'", () => {
+    const now = new Date(2026, 9, 4);
+    expect(googleMessagesGapLine({ ...gm, coveredSince: new Date(2026, 8, 2, 12).toISOString() }, now)).toBe(
+      "Texts start Sep 2. Sync Android on the dashboard to get older ones.",
     );
-    expect(googleMessagesOlderLine([{ ...gm, kind: "never" }])).toBeNull();
+    expect(googleMessagesGapLine({ ...gm, coveredSince: new Date(2025, 11, 20, 12).toISOString() }, now)).toBe(
+      "Texts start Dec 20, 2025. Sync Android on the dashboard to get older ones.",
+    );
+    expect(googleMessagesGapLine({ ...gm, kind: "never" }, now)).toBeNull();
+    expect(googleMessagesGapLine({ ...gm, source: "mac" }, now)).toBeNull();
     expect(googleMessagesOlderLine([gm, { ...gm, source: "mac" }])).toBeNull();
   });
 
@@ -130,7 +136,9 @@ describe("audit prompt (N4)", () => {
       />,
     );
     const list = screen.getByTestId("audit-coverage-source-gaps");
-    expect(list).toHaveTextContent("Google Messages: texts only from");
+    // The dialog says the Google Messages gap exactly as the Texts tab does.
+    expect(screen.getByTestId("audit-coverage-gap-google_messages").textContent).toBe(googleMessagesGapLine(gm));
+    expect(list).not.toHaveTextContent("texts only from");
     expect(list).not.toHaveTextContent("Mac Messages");
   });
 });

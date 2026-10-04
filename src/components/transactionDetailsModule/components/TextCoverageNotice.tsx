@@ -50,18 +50,28 @@ function day(iso: string | null): string {
 }
 
 /**
- * Storyboard C02 (founder, 2026-10-04): when Google Messages alone reads only
- * since a date, ONE blue line — "Older than Aug 1? Click Sync Android on the
- * dashboard: it reads back to the start." null when it does not apply.
+ * Founder (2026-10-04): THE line for a Google Messages gap — the same
+ * wherever it shows (the Texts tab, the "Communications will update"
+ * dialog, any other caller): "Texts start Sep 2. Sync Android on the
+ * dashboard to get older ones." ("MMM d"; the year only when it isn't this
+ * year). null when the gap is not Google Messages reading only since a date.
  */
-export function googleMessagesOlderLine(gaps: SourceCoverageGap[]): string | null {
-  if (gaps.length !== 1) return null;
-  const g = gaps[0];
-  if (g.source !== "google_messages" || g.kind !== "later" || !g.coveredSince) return null;
-  const t = Date.parse(g.coveredSince);
+export function googleMessagesGapLine(gap: SourceCoverageGap, now: Date = new Date()): string | null {
+  if (gap.source !== "google_messages" || gap.kind !== "later" || !gap.coveredSince) return null;
+  const t = Date.parse(gap.coveredSince);
   if (!Number.isFinite(t)) return null;
-  const when = new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  return `Older than ${when}? ${ACTION.google_messages}`;
+  const d = new Date(t);
+  const when = d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    ...(d.getFullYear() !== now.getFullYear() ? { year: "numeric" } : {}),
+  });
+  return `Texts start ${when}. Sync Android on the dashboard to get older ones.`;
+}
+
+/** The Texts tab: Google Messages alone, read only since a date → that one line. */
+export function googleMessagesOlderLine(gaps: SourceCoverageGap[], now: Date = new Date()): string | null {
+  return gaps.length === 1 ? googleMessagesGapLine(gaps[0], now) : null;
 }
 
 /** One line per gap (exported for the audit prompt). */
@@ -157,7 +167,7 @@ export function TextCoverageNotice({ transactionId, userId }: TextCoverageNotice
       <ul className="mt-1 space-y-1">
         {gaps.map((g) => (
           <li key={g.source} data-testid={`coverage-gap-${g.source}`}>
-            {gapLine(g, auditStart)} {ACTION[g.source]}
+            {googleMessagesGapLine(g) ?? `${gapLine(g, auditStart)} ${ACTION[g.source]}`}
             {g.source === "mac" && (
               <button
                 type="button"

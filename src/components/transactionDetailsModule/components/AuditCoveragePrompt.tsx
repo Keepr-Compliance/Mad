@@ -20,7 +20,7 @@ import React from "react";
 import { ResponsiveModal } from "../../common/ResponsiveModal";
 import type { CoverageImportProgress } from "../../../hooks/useAuditCoverageCheck";
 import type { SourceCoverageGap } from "../../../../electron/types/auditCoverage";
-import { gapLine } from "./TextCoverageNotice";
+import { gapLine, googleMessagesGapLine } from "./TextCoverageNotice";
 
 export interface AuditCoveragePromptProps {
   /** New range extends earlier than the imported messages OR email floor. */
@@ -141,8 +141,10 @@ export function AuditCoveragePrompt({
         {otherGaps.length > 0 && (
           <ul className="text-sm text-gray-700 mb-3 space-y-1" data-testid="audit-coverage-source-gaps">
             {otherGaps.map((g) => (
-              <li key={g.source}>
-                {gapLine(g, proposedStartISO)} {g.source === "iphone" ? "Click Sync iPhone on the dashboard." : "Click Sync Android on the dashboard."}
+              <li key={g.source} data-testid={`audit-coverage-gap-${g.source}`}>
+                {/* Founder: the Google Messages line is the one the Texts tab shows. */}
+                {googleMessagesGapLine(g) ??
+                  `${gapLine(g, proposedStartISO)} ${g.source === "iphone" ? "Click Sync iPhone on the dashboard." : "Click Sync Android on the dashboard."}`}
               </li>
             ))}
           </ul>
