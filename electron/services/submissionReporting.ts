@@ -96,6 +96,20 @@ export function flatAttemptCounts(
   return out;
 }
 
+/**
+ * BACKLOG-3715 — the counts on the `in_progress` attempt row: what the desktop
+ * is about to send. Successful attempts are finished by the server (finalize),
+ * which never re-sends these keys, so they are what the Submissions report
+ * shows for a commit.
+ */
+export function inProgressAttemptCounts(
+  messages: number,
+  attachments: number,
+  excludedFiles: number
+): Record<string, number> {
+  return { messages, attachments, excluded_files: excludedFiles };
+}
+
 export interface AttemptRecord {
   submissionId: string;
   organizationId: string;
@@ -203,6 +217,49 @@ export function reportSubmissionExclusions(
         reason: item.reason,
         submission_message_id: cloudIdByLocal.get(`${item.kind}:${item.localMessageId}`) ?? null,
       })),
+    },
+  });
+}
+
+/** BACKLOG-3683: what the scope preview counted. Numbers only. */
+export interface SubmissionScopeCounts {
+  inWindow: { emails: number; texts: number; textThreads: number; attachments: number };
+  outOfWindow: {
+    emailsBefore: number;
+    emailsAfter: number;
+    textsBefore: number;
+    textsAfter: number;
+    undated: number;
+  };
+}
+
+/**
+ * BACKLOG-3683 — one Sentry INFO each time the agent reaches the summary:
+ * how much of what is linked falls inside the dates, and how much does not.
+ * Counts only; the transaction id is the one identifier.
+ */
+export function reportSubmissionScope(
+  transactionId: string,
+  counts: SubmissionScopeCounts
+): void {
+  const out = counts.outOfWindow;
+  hostErrorReporter.captureMessage("Submission scope previewed", {
+    level: "info",
+    tags: {
+      area: "submission",
+      out_of_window: out.emailsBefore + out.emailsAfter + out.textsBefore + out.textsAfter + out.undated > 0,
+    },
+    extra: {
+      transaction_id: transactionId,
+      app_version: app.getVersion(),
+      in_window: { ...counts.inWindow },
+      out_of_window: {
+        emails_before: out.emailsBefore,
+        emails_after: out.emailsAfter,
+        texts_before: out.textsBefore,
+        texts_after: out.textsAfter,
+        undated: out.undated,
+      },
     },
   });
 }

@@ -57,6 +57,7 @@ import {
   type FinalizeRefusalCounts,
   type ManifestCounts,
   type SubmissionFailureReason,
+  inProgressAttemptCounts,
 } from "./submissionReporting";
 import databaseService from "./databaseService";
 import logService from "./logService";
@@ -972,7 +973,14 @@ class SubmissionService {
         stage: "parent",
         reasonCode: null,
         retryCount: 0,
-        counts: {},
+        // BACKLOG-3715 (coordinator ruling): what this attempt is about to
+        // send, flat snake_case whole numbers. The server merges counts with
+        // `||`, so a later update keeps these unless it sends the same key.
+        counts: inProgressAttemptCounts(
+          messageRecords.length,
+          attachmentPlan.length,
+          excludedFiles.length
+        ),
         isResubmit,
       });
       parentSent = true;
