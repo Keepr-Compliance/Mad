@@ -1,0 +1,21 @@
+{
+  "_source": "BACKLOG-3403 live run, local stack (PostgREST postgrest/14.5), function absent, signed-in user",
+  "http_status": 404,
+  "body": {
+    "code": "PGRST202",
+    "details": "Searched for the function public.finalize_submission with parameters p_manifest, p_submission_id or with a single unnamed json/jsonb parameter, but no matches were found in the schema cache.",
+    "hint": "Perhaps you meant to call the function public.can_review_submission",
+    "message": "Could not find the function public.finalize_submission(p_manifest, p_submission_id) in the schema cache"
+  },
+  "supabase_js": {
+    "status": 404,
+    "statusText": "Not Found",
+    "error": {
+      "code": "PGRST202",
+      "details": "Searched for the function public.finalize_submission with parameters p_manifest, p_submission_id or with a single unnamed json/jsonb parameter, but no matches were found in the schema cache.",
+      "hint": "Perhaps you meant to call the function public.can_review_submission",
+      "message": "Could not find the function public.finalize_submission(p_manifest, p_submission_id) in the schema cache"
+    },
+    "data": null
+  }
+}

@@ -209,7 +209,9 @@ export default async function SubmissionDetailPage({ params }: PageProps) {
     getAttachments(id, client),
   ]);
 
-  if (!submission) {
+  // BACKLOG-3403: a submission still 'uploading' is not finished; it opens as
+  // not found, before anything below reads it or marks it under review.
+  if (!submission || submission.status === 'uploading') {
     notFound();
   }
 

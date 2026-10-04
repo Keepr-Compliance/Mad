@@ -1,0 +1,7 @@
+FAIL L3b submitter, uploading, NOT fenced: remove() removes nothing :: {"removed":1}
+FAIL L3d broker after the fence: remove() removes nothing :: {"removed":0}
+FAIL L3e submitter, fenced: remove() removes the object :: {"removed":0}
+FAIL R1 remove() while finalize holds the row (no fence): removes nothing :: {"removed":1}
+FAIL R1/R2 finalize committed; object still there :: {"fin":"{\"sub\":\"<id>\",\"role\":\"authenticated\"}\nFIN:{\"ok\": true, \"status\": \"submitted\", \"already_final\": false}","status":"submitted","objects":0}
+FAIL R2 remove() after the 0-row fence: removes nothing :: {"removed":0}
+live-run post: 25 pass, 6 fail
