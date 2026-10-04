@@ -18,6 +18,7 @@ import { AndroidSyncModal } from "./modals/AndroidSyncModal";
 import type { AppStateMachine } from "./state/types";
 import type { Transaction } from "@/types";
 import { useEmailSettingsCallbacks } from "./hooks/useEmailSettingsCallbacks";
+import { useSubmissionStatusNotice } from "./hooks/useSubmissionStatusNotice";
 
 interface AppModalsProps {
   app: AppStateMachine;
@@ -76,6 +77,10 @@ export function AppModals({ app }: AppModalsProps) {
     setPendingTransactionId(transactionId);
     openTransactions();
   }, [closeContacts, openTransactions]);
+
+  // BACKLOG-3594: tell the agent when a submission comes back from the broker;
+  // its "Open" action reuses the open-by-id path above.
+  useSubmissionStatusNotice({ onOpenTransaction: handleOpenTransactionFromContact });
 
   // Email connect/disconnect callbacks for Settings modal
   const { handleEmailConnectedFromSettings, handleEmailDisconnectedFromSettings } =

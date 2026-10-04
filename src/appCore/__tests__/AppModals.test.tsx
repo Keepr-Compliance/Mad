@@ -77,6 +77,13 @@ jest.mock("../hooks/useEmailSettingsCallbacks", () => ({
   }),
 }));
 
+// BACKLOG-3594: the submission notice needs NotificationProvider, which this
+// suite does not render. Its behaviour is pinned in
+// AppModals-3594-submission-notice.test.tsx, against the real hook.
+jest.mock("../hooks/useSubmissionStatusNotice", () => ({
+  useSubmissionStatusNotice: jest.fn(),
+}));
+
 // Helper to create default modal state
 const createModalState = (
   overrides: Partial<AppStateMachine["modalState"]> = {}
