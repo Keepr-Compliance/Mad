@@ -94,14 +94,19 @@ describe("LinkBrowserPanel", () => {
     });
     await flush();
     const input = screen.getByTestId("gm-link-code");
-    expect(input.className.split(" ")).toContain("border-[#15803D]");
+    // D05: green border on a green tint, the code kept, ✓ inside.
+    expect(input.className.split(" ")).toEqual(expect.arrayContaining(["border-[#15803D]", "bg-[#F0FDF4]"]));
+    expect((input as HTMLInputElement).value).toBe("482913");
     expect(screen.getByTestId("gm-link-ok")).toHaveTextContent("✓");
     expect(screen.getByTestId("gm-link-just-linked")).toHaveTextContent("Linked");
     expect(onJustLinked).toHaveBeenCalledTimes(1);
-    expect(screen.queryByTestId("gm-link-open-messages")).toBeNull();
+    // D05: step 1 stays; "✓ Linked" and Sync now sit under the field (step 2).
+    expect(screen.getByTestId("gm-link-open-messages")).toBeVisible();
+    expect(screen.getByTestId("gm-link-just-linked")).toHaveTextContent("✓Linked");
+    expect(screen.getByTestId("gm-link-step-2").contains(screen.getByTestId("gm-link-sync-now"))).toBe(true);
     const sync = screen.getByTestId("gm-link-sync-now");
     expect(sync).toHaveTextContent("Sync now");
-    for (const c of ["min-h-[48px]", "bg-[#4F46E5]", "text-white", "font-bold", "rounded-[10px]"]) expect(sync.className.split(" ")).toContain(c);
+    for (const c of ["w-full", "min-h-[48px]", "bg-[#4F46E5]", "text-white", "font-bold", "rounded-[10px]"]) expect(sync.className.split(" ")).toContain(c);
     fireEvent.click(sync);
     expect(onSyncNow).toHaveBeenCalledTimes(1);
   });

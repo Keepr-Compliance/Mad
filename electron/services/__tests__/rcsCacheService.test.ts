@@ -80,7 +80,18 @@ describe("cacheSavedFromCommit", () => {
         staged: 328, kept: 212, droppedByDate: 116, droppedByCap: 0, chats: 9, stored: 200, alreadyPresent: 12,
         imagesStaged: 0, imagesStored: 0, reactions: 7,
       }),
-    ).toEqual({ chats: 9, messages: 212, newMessages: 200, reactions: 7, newReactions: 7 });
+    ).toEqual({ chats: 9, messages: 212, newMessages: 200, reactions: 7, newReactions: 7, photos: 0 });
+  });
+
+  // Storyboard A10 / A11: "… · 64 photos" — photos in Keepr for this Sync
+  // (stored now + already there). Mutation: only the new ones → red.
+  it("photos = images stored + already there", () => {
+    expect(
+      cacheSavedFromCommit({
+        staged: 10, kept: 10, droppedByDate: 0, droppedByCap: 0, chats: 2, stored: 10, alreadyPresent: 0,
+        imagesStaged: 64, imagesStored: 60, imagesAlreadyThere: 4, reactions: 0,
+      }).photos,
+    ).toBe(64);
   });
 
   // Live (0.3.18): reactions read like messages — all saved, then how many new.

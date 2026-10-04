@@ -249,6 +249,15 @@ export const rcsImportService = {
   },
 
   /** The link screen's "Open Google Messages" (works without a link). */
+  /** A02 "Add to Chrome": the store listing. */
+  async openExtensionStore(): Promise<void> {
+    try {
+      await api()?.openExtensionStore?.();
+    } catch {
+      /* nothing opened */
+    }
+  },
+
   async openGoogleMessages(): Promise<void> {
     try {
       await api()?.openGoogleMessages?.();

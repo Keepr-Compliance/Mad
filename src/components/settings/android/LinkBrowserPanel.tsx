@@ -52,6 +52,8 @@ interface LinkBrowserPanelProps {
   onJustLinked?: () => void;
   /** "Sync now" after a link; default: Keepr's Google Messages Sync. */
   onSyncNow?: () => void;
+  /** Inside the Sync Android modal (D01): no card of its own — the modal frames it. */
+  bare?: boolean;
 }
 
 type Check =
@@ -60,7 +62,7 @@ type Check =
   | { kind: "wrong"; message: string }
   | { kind: "linked" };
 
-export function LinkBrowserPanel({ onLinked, onJustLinked, onSyncNow }: LinkBrowserPanelProps) {
+export function LinkBrowserPanel({ onLinked, onJustLinked, onSyncNow, bare = false }: LinkBrowserPanelProps) {
   const [link, setLink] = useState<RcsLinkState | null>(null);
   const [linked, setLinked] = useState(false);
   const [code, setCode] = useState("");
@@ -146,7 +148,7 @@ export function LinkBrowserPanel({ onLinked, onJustLinked, onSyncNow }: LinkBrow
   const steps = justLinked || (!locked && (waiting || !linked || howOpen));
   const stepNum = "w-7 h-7 flex-shrink-0 rounded-full bg-[#EEF0FF] text-[#312E81] flex items-center justify-center font-bold";
   const fieldBorder = justLinked
-    ? "border-[#15803D]"
+    ? "border-[#15803D] bg-[#F0FDF4]"
     : check.kind === "wrong"
       ? "border-[#B42318]"
       : "border-[#CDD1DE] focus:border-[#4F46E5]";
@@ -154,7 +156,11 @@ export function LinkBrowserPanel({ onLinked, onJustLinked, onSyncNow }: LinkBrow
   return (
     <div
       id={LINK_PANEL_ID}
-      className="w-full max-w-[520px] box-border p-7 flex flex-col gap-5 bg-white rounded-2xl border border-[#D6D9E4] text-[#1F2433]"
+      className={
+        bare
+          ? "w-full flex flex-col gap-4 text-[#1F2433]"
+          : "w-full max-w-[520px] box-border p-7 flex flex-col gap-5 bg-white rounded-2xl border border-[#D6D9E4] text-[#1F2433]"
+      }
       data-testid="gm-link-panel"
     >
       <div className="text-[22px] leading-7 font-bold" data-testid="gm-link-title">{LINK_COPY.title}</div>
@@ -194,21 +200,20 @@ export function LinkBrowserPanel({ onLinked, onJustLinked, onSyncNow }: LinkBrow
       )}
       {steps && (
         <>
-          {!justLinked && (
-            <div className="flex gap-3.5 items-center" data-testid="gm-link-step-1">
-              <div className={stepNum}>1</div>
-              <button
-                type="button"
-                className="flex-grow min-h-[48px] border-0 rounded-[10px] bg-[#4F46E5] hover:bg-[#4338CA] text-white text-[15px] font-bold"
-                onClick={() => void rcsImportService.openGoogleMessages()}
-                data-testid="gm-link-open-messages"
-              >
-                Open Google Messages
-              </button>
-            </div>
-          )}
+          {/* D05: step 1 stays after the link (only step 2 changes). */}
+          <div className="flex gap-3.5 items-center" data-testid="gm-link-step-1">
+            <div className={stepNum}>1</div>
+            <button
+              type="button"
+              className="flex-grow min-h-[48px] border-0 rounded-[10px] bg-[#4F46E5] hover:bg-[#4338CA] text-white text-[15px] font-bold"
+              onClick={() => void rcsImportService.openGoogleMessages()}
+              data-testid="gm-link-open-messages"
+            >
+              Open Google Messages
+            </button>
+          </div>
           <div className="flex gap-3.5 items-start" data-testid="gm-link-step-2">
-            <div className={`${stepNum} mt-3.5`}>2</div>
+            <div className={`${stepNum} mt-7`}>2</div>
             <div className="flex-grow flex flex-col gap-1.5">
               <label className="flex flex-col gap-1.5 text-[14px] text-[#374151]">
                 {LINK_COPY.enter}
@@ -246,28 +251,34 @@ export function LinkBrowserPanel({ onLinked, onJustLinked, onSyncNow }: LinkBrow
                   )}
                 </span>
               </label>
-              {justLinked && (
-                <span className="text-[14px] font-semibold text-[#14532D]" data-testid="gm-link-just-linked">
-                  {LINK_COPY.justLinked}
-                </span>
-              )}
-              {check.kind === "wrong" && (
-                <span className="text-[13px] text-[#B42318]" role="alert" data-testid="gm-link-error">
-                  {check.message}
-                </span>
+              {/* D05 / F01: under the field — "✓ Linked" + Sync now, or the reason. */}
+              {(justLinked || check.kind === "wrong") && (
+                <div className="flex flex-col gap-3 mt-1.5">
+                  {justLinked && (
+                    <span className="flex items-center gap-2 text-[15px] font-bold text-[#15803D]" data-testid="gm-link-just-linked">
+                      <span aria-hidden="true">✓</span>
+                      <span>{LINK_COPY.justLinked}</span>
+                    </span>
+                  )}
+                  {justLinked && (
+                    <button
+                      type="button"
+                      className="w-full min-h-[48px] border-0 rounded-[10px] bg-[#4F46E5] hover:bg-[#4338CA] text-white text-[15px] font-bold"
+                      onClick={syncNow}
+                      data-testid="gm-link-sync-now"
+                    >
+                      {LINK_COPY.syncNow}
+                    </button>
+                  )}
+                  {check.kind === "wrong" && (
+                    <span className="text-[14px] font-semibold text-[#B42318]" role="alert" data-testid="gm-link-error">
+                      {check.message}
+                    </span>
+                  )}
+                </div>
               )}
             </div>
           </div>
-          {justLinked && (
-            <button
-              type="button"
-              className="min-h-[48px] border-0 rounded-[10px] bg-[#4F46E5] hover:bg-[#4338CA] text-white text-[15px] font-bold"
-              onClick={syncNow}
-              data-testid="gm-link-sync-now"
-            >
-              {LINK_COPY.syncNow}
-            </button>
-          )}
         </>
       )}
     </div>

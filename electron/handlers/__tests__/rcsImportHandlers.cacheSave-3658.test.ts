@@ -294,7 +294,8 @@ describe("a cache Sync being saved (SR B1, S1)", () => {
     expect(savedRecords).toEqual([]);
     releaseCommit?.();
     await flush();
-    expect(savedRecords[0]).toEqual(["job-1", { chats: 1, messages: 1, newMessages: 1 }]);
+    // Storyboard A10/A11: the photos in Keepr for this Sync are counted too.
+    expect(savedRecords[0]).toEqual(["job-1", { chats: 1, messages: 1, newMessages: 1, photos: 0 }]);
   });
 
   // Founder (2026-10-01): done or failed → Keepr comes to the front by itself

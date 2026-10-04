@@ -18,7 +18,7 @@ import React from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import type { RcsExtensionState, RcsJobInfo } from "../../../../../electron/types/ipc/window-api-rcs-import";
-import { googleMessagesStep, syncCopyLine } from "../googleMessagesSyncSteps";
+import { googleMessagesStep } from "../googleMessagesSyncSteps";
 
 let mockState: RcsExtensionState;
 let progressListener: ((j: RcsJobInfo) => void) | null = null;
@@ -104,14 +104,29 @@ describe("googleMessagesStep (G1, G2)", () => {
 });
 
 describe("GoogleMessagesSyncFlow", () => {
-  it("install step: copies the extension to Downloads, copies the address, notices the install (G3, G4)", async () => {
+  // Storyboard J01 (beta install; until the extension is published, everyone):
+  // BETA, "Add the Keepr extension", 3 numbered lines, Open Chrome (address
+  // copied), "Waiting for the extension…" — nothing else. Mutations: a
+  // paragraph / warning / Show folder back; no auto-advance → red.
+  it("install (J01, beta): the label, the title, 3 lines, Open Chrome, waiting — nothing else", async () => {
     render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);
-    expect(await screen.findByTestId("gm-step-install")).toBeInTheDocument();
+    const step = await screen.findByTestId("gm-step-install");
     await waitFor(() => expect(mockPrepare).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(screen.getByTestId("gm-step-install")).toHaveTextContent("Downloads folder (Downloads › Keepr Extension)"));
-    fireEvent.click(screen.getByRole("button", { name: "Open Chrome (address copied)" }));
-    expect(await screen.findByText(/address is copied/)).toBeInTheDocument();
-    expect(screen.getByTestId("gm-detect")).toHaveTextContent("Waiting for the extension");
+    expect(screen.getByTestId("gm-beta-label")).toHaveTextContent("BETA");
+    expect(screen.getByRole("heading")).toHaveTextContent("Add the Keepr extension");
+    const lines = Array.from(screen.getByTestId("gm-install-steps").children).map((c) => c.textContent);
+    expect(lines).toEqual([
+      "1Open Chrome, paste the address, press Enter",
+      "2Turn on Developer mode",
+      "3Load unpacked › Downloads › Keepr Extension",
+    ]);
+    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["Open Chrome (address copied)"]);
+    expect(step.querySelectorAll("p")).toHaveLength(0);
+    expect(step).not.toHaveTextContent("Developer-mode extensions");
+    expect(step).not.toHaveTextContent("Show folder");
+    fireEvent.click(screen.getByTestId("gm-open-chrome"));
+    expect(mockOpenChrome).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("gm-detect")).toHaveTextContent("Waiting for the extension…");
     mockState = INSTALLED;
     // Installed: the flow moves on to Connect by itself.
     expect(await screen.findByTestId("gm-step-connect")).toBeInTheDocument();
@@ -125,33 +140,22 @@ describe("GoogleMessagesSyncFlow", () => {
     expect(mockConsent).not.toHaveBeenCalled();
   });
 
-  it("copy line: one short line under the Sync button with the configured months (C2)", async () => {
-    mockState = { ...INSTALLED, lookbackMonths: 6 };
-    render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);
-    expect(await screen.findByTestId("gm-copy-line")).toHaveTextContent(
-      "Keepr copies your texts from the last 6 months to this computer, encrypted. Change this in Settings → Messages.",
-    );
-    expect(syncCopyLine(null)).toBe("Keepr copies all your texts to this computer, encrypted.");
-    expect(syncCopyLine(12)).toContain("from the last year");
-    expect(syncCopyLine(1.5)).toContain("from the last 1.5 months");
-    expect(syncCopyLine(undefined)).toBe("Keepr copies your texts to this computer, encrypted.");
-  });
-
-  // Founder: "Change" opens Settings → Messages at the months control.
-  // Mutation: the link not calling onOpenSettings → red.
-  it("copy line: Change opens Settings at the months control (C3)", async () => {
-    mockState = { ...INSTALLED, lookbackMonths: 3 };
-    const onOpenSettings = jest.fn();
-    render(<GoogleMessagesSyncFlow onClose={jest.fn()} onOpenSettings={onOpenSettings} pollMs={20} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Change" }));
-    expect(onOpenSettings).toHaveBeenCalledTimes(1);
-  });
-
-  it("connect → Sync now starts the cache job → progress → done with the counts (G5)", async () => {
+  // Storyboard B02 / I02: linked — "Sync Android", "Linked with your browser
+  // ✓", Sync now; nothing else. Then A11: ✓ "Your texts are synced", the one
+  // count line, "Added to your transactions by phone number.", Done.
+  // Mutations: the old checks / notes / copy line back; staged counts shown;
+  // the summary not the storyboard line → red.
+  it("linked (B02) → Sync now → progress → done (A11) with what Keepr saved", async () => {
     mockState = INSTALLED;
     const onClose = jest.fn();
     render(<GoogleMessagesSyncFlow onClose={onClose} pollMs={20} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Open Google Messages and sync" }));
+    const connect = await screen.findByTestId("gm-step-connect");
+    expect(screen.getByRole("heading")).toHaveTextContent("Sync Android");
+    expect(screen.getByTestId("gm-linked-row")).toHaveTextContent("Linked with your browser ✓");
+    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["Sync now"]);
+    expect(connect).not.toHaveTextContent("STEP");
+    expect(screen.queryByTestId("gm-copy-line")).toBeNull();
+    fireEvent.click(screen.getByTestId("gm-sync-now"));
     await waitFor(() => expect(mockStartCache).toHaveBeenCalledTimes(1));
     expect(await screen.findByTestId("gm-step-syncing")).toBeInTheDocument();
     act(() => {
@@ -162,7 +166,8 @@ describe("GoogleMessagesSyncFlow", () => {
       progressListener?.(job({ state: "running", stage: "Chat 3 of 9" }));
     });
     expect(screen.getByTestId("gm-stage")).toHaveTextContent("Chat 3 of 9");
-    const progress = { listed: 21, candidates: 21, checked: 21, matched: 21, imported: 9, messages: 328, images: 0, reactions: 0, skipped: 0, noMessagesYet: 2, notText: 1 };
+    expect(screen.getByTestId("gm-step-syncing")).toHaveTextContent("Keep the Google Messages tab open until it is done.");
+    const progress = { listed: 21, candidates: 21, checked: 21, matched: 21, imported: 9, messages: 328, images: 0, reactions: 0, skipped: 0 };
     act(() => {
       progressListener?.(job({ state: "finished", progress } as Partial<RcsJobInfo>));
     });
@@ -170,31 +175,13 @@ describe("GoogleMessagesSyncFlow", () => {
     expect(screen.getByTestId("gm-step-done")).toHaveTextContent("Saving your texts…");
     expect(screen.getByTestId("gm-done-summary")).not.toHaveTextContent("328");
     act(() => {
-      progressListener?.(job({ state: "finished", progress, saved: { chats: 7, messages: 212, newMessages: 212, reactions: 9, newReactions: 4 } } as Partial<RcsJobInfo>));
+      progressListener?.(job({ state: "finished", progress, saved: { chats: 20, messages: 412, newMessages: 38, reactions: 9, newReactions: 4, photos: 64 } } as Partial<RcsJobInfo>));
     });
-    // H4: what Keepr SAVED, not the 328 the page sent.
-    const summary = screen.getByTestId("gm-done-summary");
-    expect(summary).toHaveTextContent("Scanned 21 chats · saved 7 chats · 212 messages (212 new) · 9 reactions (4 new)");
-    expect(summary).toHaveTextContent("2 chats with no messages yet");
-    expect(summary).toHaveTextContent("1 not a text conversation (e.g. an AI chat) — skipped");
-    expect(summary).not.toHaveTextContent("328");
+    expect(screen.getByRole("heading")).toHaveTextContent("Your texts are synced");
+    expect(screen.getByTestId("gm-done-summary")).toHaveTextContent(/^20 chats · 412 messages \(38 new\) · 64 photos$/);
+    expect(screen.getByTestId("gm-step-done")).toHaveTextContent("Added to your transactions by phone number.");
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
     expect(onClose).toHaveBeenCalledTimes(1);
-  });
-
-  it("connect copy: the pairing instruction until both checks are ticked (G6)", async () => {
-    mockState = INSTALLED;
-    const view = render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);
-    expect(await screen.findByTestId("gm-pair-instruction")).toHaveTextContent(
-      "In Chrome, open Google Messages and sign in with your Google account or scan the QR code with your phone. Leave Remember this computer on.",
-    );
-    expect(screen.getByTestId("gm-step-connect")).toHaveTextContent("Keep the Google Messages tab open until it is done.");
-    view.unmount();
-    mockState = { ...INSTALLED, pairedAt: "2026-10-01T10:05:00.000Z" };
-    render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);
-    expect(await screen.findByTestId("gm-sync-note")).toHaveTextContent("Keep the Google Messages tab open until it is done.");
-    expect(screen.queryByTestId("gm-pair-instruction")).toBeNull();
-    expect(screen.getByRole("button", { name: "Open Google Messages and sync" })).toBeInTheDocument();
   });
 
   // BACKLOG-3658: reopened from the dashboard indicator while a cache Sync
@@ -222,7 +209,7 @@ describe("GoogleMessagesSyncFlow", () => {
     mockState = INSTALLED;
     mockStartCache.mockResolvedValue({ success: false, error: "Sign in to Keepr first." });
     render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Open Google Messages and sync" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Sync now" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Sign in to Keepr first.");
     expect(screen.getByTestId("gm-step-connect")).toBeInTheDocument();
   });
@@ -247,7 +234,8 @@ describe("GoogleMessagesSyncFlow", () => {
     }));
     render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);
     await screen.findByTestId("gm-step-install");
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    mockState = INSTALLED; // the extension arrives: Connect
+    await screen.findByTestId("gm-step-connect");
     await act(async () => {
       fail({ success: false, error: "ENOENT: copyfile" });
     });
@@ -260,10 +248,18 @@ describe("GoogleMessagesSyncFlow", () => {
   // Founder (2026-10-04): not linked — the link card is the one thing to do;
   // the Sync button and its notice appear only once linked. Mutation: the
   // Sync shown (or its notice) while unlinked → red.
-  it("unlinked: the link card shows; no Sync button or notice until linked", async () => {
+  // Storyboard D01: the link card IS the step — its own title, the two steps,
+  // no card border (the modal frames it), no "STEP 2 OF 2", no checks list.
+  it("unlinked (D01): the bare link card is the step; no Sync button or notice until linked", async () => {
     mockState = { ...INSTALLED, extensionPaired: false };
     render(<GoogleMessagesSyncFlow onClose={() => {}} />);
-    expect(await screen.findByTestId("gm-link-panel")).toBeInTheDocument();
+    const panel = await screen.findByTestId("gm-link-panel");
+    expect(panel.className.split(" ")).not.toContain("border");
+    expect(panel.className.split(" ")).toContain("gap-4");
+    expect(screen.getByTestId("gm-step-connect").firstElementChild).toBe(panel);
+    expect(screen.getByTestId("gm-link-title")).toHaveTextContent("Link your browser");
+    expect(screen.getByTestId("gm-step-connect")).not.toHaveTextContent("STEP");
+    expect(screen.queryByTestId("check-ok")).toBeNull();
     expect(screen.queryByRole("button", { name: "Open Google Messages and sync" })).toBeNull();
     expect(screen.queryByTestId("gm-sync-note")).toBeNull();
     expect(screen.queryByTestId("gm-pair-instruction")).toBeNull();
@@ -273,7 +269,7 @@ describe("GoogleMessagesSyncFlow", () => {
   /** Sync now, then the run ends as `over` (failed / cancelled). */
   async function failedRun(over: Partial<RcsJobInfo>): Promise<void> {
     render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Open Google Messages and sync" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Sync now" }));
     await screen.findByTestId("gm-step-syncing");
     mockStartCache.mockClear();
     act(() => {

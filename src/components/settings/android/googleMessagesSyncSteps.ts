@@ -12,13 +12,12 @@
  *   failed   → it failed or was cancelled (Try again → connect)
  *
  * No consent step (founder, 2026-10-01): users accept Keepr's terms at
- * sign-up; the connect step says in one line what a Sync copies
- * (syncCopyLine). The main process keeps the consent gate behind
+ * sign-up (the storyboards show no copy line any more).
+ * The main process keeps the consent gate behind
  * RCS_CONSENT_REQUIRED and records the consent on the first Sync.
  */
 
 import type { RcsExtensionState, RcsJobInfo } from "../../../../electron/types/ipc/window-api-rcs-import";
-import { lastMonthsPhrase } from "../LookbackMonthsSelect";
 
 export type GoogleMessagesStep = "install" | "connect" | "syncing" | "done" | "failed";
 
@@ -47,22 +46,6 @@ export function extensionInstalled(state: RcsExtensionState | null): boolean {
 /** Settings → Messages → Google Messages' months control (scroll target of "Change"). */
 export const GM_LOOKBACK_TARGET = "settings-gm-lookback";
 
-/**
- * The one line under the Sync button: what a Sync copies (the screen adds
- * "Change this in Settings → Messages.", "Change" a link to the control).
- * `lookbackMonths` is the configured window (null = All time; undefined =
- * not known yet).
- */
-export function syncCopyLine(lookbackMonths: number | null | undefined): string {
-  const what =
-    lookbackMonths === null
-      ? "all your texts"
-      : typeof lookbackMonths === "number"
-        ? `your texts from ${lastMonthsPhrase(lookbackMonths)}`
-        : "your texts";
-  return `Keepr copies ${what} to this computer, encrypted.`;
-}
-
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 
 /**
@@ -74,16 +57,9 @@ export function doneSummaryLines(job: RcsJobInfo): string[] | null {
   if (job.saved === undefined) return null;
   if (job.saved === null) return ["Keepr could not save this Sync. Nothing was imported: try again."];
   const s = job.saved;
-  const lines = [
-    `Scanned ${plural(job.progress.listed, "chat", "chats")} · saved ${plural(s.chats, "chat", "chats")} · ` +
-      `${plural(s.messages, "message", "messages")} (${s.newMessages} new)` +
-      (typeof s.reactions === "number"
-        ? ` · ${plural(s.reactions, "reaction", "reactions")}` + (typeof s.newReactions === "number" ? ` (${s.newReactions} new)` : "")
-        : ""),
+  // Storyboard A11 / B05: ONE line — "20 chats · 412 messages (38 new) · 64 photos".
+  return [
+    `${plural(s.chats, "chat", "chats")} · ${plural(s.messages, "message", "messages")} (${s.newMessages} new)` +
+      (typeof s.photos === "number" && s.photos > 0 ? ` · ${plural(s.photos, "photo", "photos")}` : ""),
   ];
-  const noMessages = job.progress.noMessagesYet ?? 0;
-  if (noMessages > 0) lines.push(`${plural(noMessages, "chat", "chats")} with no messages yet`);
-  const notText = job.progress.notText ?? 0;
-  if (notText > 0) lines.push(`${notText} not a text conversation (e.g. an AI chat) — skipped`);
-  return lines;
 }

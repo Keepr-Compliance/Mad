@@ -1,9 +1,16 @@
 /**
- * Dashboard → Sync Android → Google Messages (BACKLOG-3659).
+ * Dashboard → Sync Android → Google Messages (BACKLOG-3659), as the
+ * founder-approved storyboards (2026-10-04):
  *
- * Install the Keepr extension (Release 1: unpacked, from Downloads) →
- * connect Google Messages → Sync (Keepr opens Google Messages in Chrome and
- * runs the cache Sync) → back in Keepr with the result.
+ *   install  J01 (beta: "Add the Keepr extension", 3 lines, Open Chrome,
+ *            Waiting for the extension…) or A02 (Chrome Web Store: Add to
+ *            Chrome) — see extensionDistribution.ts
+ *   connect  not linked: the link card (D01: Link your browser, 1 Open Google
+ *            Messages, 2 Type the code from Chrome → Linked ✓, Sync now);
+ *            linked: B02 (Sync Android, Linked with your browser ✓, Sync now)
+ *   syncing  the live stage (the page box is where the user looks)
+ *   done     A11 (✓ Your texts are synced, the one count line, Done)
+ *   failed   Sync failed, the reason, Try again
  *
  * The step comes from googleMessagesStep(); the extension is detected by its
  * hello (polled every 3 s while this flow is open).
@@ -11,65 +18,55 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { rcsImportService } from "../../../services/rcsImportService";
+import { settingsService } from "../../../services/settingsService";
 import type { RcsExtensionState, RcsJobInfo } from "../../../../electron/types/ipc/window-api-rcs-import";
-import { doneSummaryLines, extensionInstalled, googleMessagesStep, syncCopyLine } from "./googleMessagesSyncSteps";
+import { doneSummaryLines, googleMessagesStep } from "./googleMessagesSyncSteps";
 import { LinkBrowserPanel } from "./LinkBrowserPanel";
+import { EXTENSION_PUBLISHED, readBetaInstallPreference, wantsBetaInstall } from "./extensionDistribution";
 
 const POLL_MS = 3000;
 
 interface GoogleMessagesSyncFlowProps {
   onClose: () => void;
-  /** "Another messaging app": switch to the Keepr companion app flow. */
+  /** "Use another texting app?": switch to the Keepr companion app flow. */
   onUseCompanion?: () => void;
-  /** "Change" under the Sync button: open Settings → Messages at the months control. */
+  /** Kept for the modal's API (Settings › Messages); the storyboards show no link here. */
   onOpenSettings?: () => void;
+  /** The signed-in user (the "Beta extension install" preference). */
+  userId?: string;
   /** Test seam: the poll interval. */
   pollMs?: number;
+  /** Test seam: the extension is in the Chrome Web Store (default EXTENSION_PUBLISHED). */
+  published?: boolean;
 }
 
-function Numbered({ n, children }: { n: number; children: React.ReactNode }) {
+/** The storyboards' numbered circle: 28px, #EEF0FF / #312E81. */
+function StepNumber({ n }: { n: number }) {
   return (
-    <li className="flex gap-3 items-start">
-      <span className="w-6 h-6 rounded-full bg-indigo-100 text-indigo-800 text-xs font-bold flex items-center justify-center flex-shrink-0">
-        {n}
-      </span>
-      <span className="text-sm text-gray-800 leading-relaxed">{children}</span>
-    </li>
+    <div className="w-7 h-7 flex-shrink-0 rounded-full bg-[#EEF0FF] text-[#312E81] text-[14px] font-bold flex items-center justify-center">{n}</div>
   );
 }
 
-function Check({ ok, children }: { ok: boolean; children: React.ReactNode }) {
-  return (
-    <div className="flex items-center gap-2" data-testid={ok ? "check-ok" : "check-pending"}>
-      {ok ? (
-        <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M5 12l5 5 9-10" />
-        </svg>
-      ) : (
-        <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden="true">
-          <circle cx="12" cy="12" r="9" />
-        </svg>
-      )}
-      <span className={`text-sm ${ok ? "text-gray-900" : "text-gray-600"}`}>{children}</span>
-    </div>
-  );
-}
-
+const title = "text-[22px] leading-7 font-bold text-[#1F2433]";
 const primary =
-  "min-h-[44px] px-4 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed";
+  "w-full min-h-[48px] px-5 border-0 rounded-[10px] bg-[#4F46E5] hover:bg-[#4338CA] text-white text-[15px] font-bold disabled:opacity-50 disabled:cursor-not-allowed";
 const secondary =
-  "min-h-[44px] px-4 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 text-gray-900 text-sm font-semibold";
+  "w-full min-h-[44px] px-4 rounded-[10px] border border-[#CDD1DE] bg-white hover:bg-gray-50 text-[#1F2433] text-[15px] font-semibold";
 
-export function GoogleMessagesSyncFlow({ onClose, onUseCompanion, onOpenSettings, pollMs = POLL_MS }: GoogleMessagesSyncFlowProps) {
+export function GoogleMessagesSyncFlow({
+  onClose,
+  onUseCompanion,
+  userId,
+  pollMs = POLL_MS,
+  published = EXTENSION_PUBLISHED,
+}: GoogleMessagesSyncFlowProps) {
   const [state, setState] = useState<RcsExtensionState | null>(null);
   const [job, setJob] = useState<RcsJobInfo | null>(null);
-  const [continued, setContinued] = useState(false);
-  const [folderNote, setFolderNote] = useState<string | null>(null);
-  const [chromeNote, setChromeNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
-  /** A code typed in the link card just linked: its "Sync now" is the Sync (no second button). */
+  /** A code typed in the link card just linked: its "Sync now" is the Sync (no second screen). */
   const [justLinked, setJustLinked] = useState(false);
+  const [betaPref, setBetaPref] = useState(false);
   const jobIdRef = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -83,6 +80,21 @@ export function GoogleMessagesSyncFlow({ onClose, onUseCompanion, onOpenSettings
     const t = setInterval(() => void refresh(), pollMs);
     return () => clearInterval(t);
   }, [refresh, pollMs]);
+
+  // The account's "Beta extension install" preference.
+  useEffect(() => {
+    if (!userId) return;
+    let live = true;
+    void settingsService
+      .getPreferences(userId)
+      .then((r) => {
+        if (live && r?.success) setBetaPref(readBetaInstallPreference(r.data));
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [userId]);
 
   // The cache job this flow started.
   useEffect(() => {
@@ -109,36 +121,24 @@ export function GoogleMessagesSyncFlow({ onClose, onUseCompanion, onOpenSettings
     };
   }, []);
 
-  const step = googleMessagesStep({ state, job, continued });
-  const installed = extensionInstalled(state);
-  const paired = !!state?.pairedAt;
-  /** BACKLOG-3666: the extension paired with THIS Keepr (a Sync is refused until then). */
+  const step = googleMessagesStep({ state, job, continued: false });
+  /** BACKLOG-3666: the extension linked with THIS Keepr (a Sync is refused until then). */
   const keeprPaired = state?.extensionPaired === true;
   const doneLines = step === "done" && job ? doneSummaryLines(job) : null;
+  const beta = wantsBetaInstall(betaPref, published);
   const stepRef = useRef(step);
   stepRef.current = step;
   const preparedRef = useRef(false);
 
-  // The extension goes to Downloads as soon as the install step shows — once
-  // per flow (StrictMode runs effects twice in development). A failure is
-  // shown only while the user is still on the install step.
+  // Beta: the extension goes to Downloads as soon as the install step shows —
+  // once per flow. A failure is shown only while on the install step.
   useEffect(() => {
-    if (step !== "install" || preparedRef.current) return;
+    if (step !== "install" || !beta || preparedRef.current) return;
     preparedRef.current = true;
     void rcsImportService.prepareExtension().then((r) => {
-      if (r.success) setFolderNote(`Downloads › ${r.data?.folder.split(/[\\/]/).pop() ?? "Keepr Extension"}`);
-      else if (stepRef.current === "install") setError(r.error ?? "Keepr could not prepare the extension.");
+      if (!r.success && stepRef.current === "install") setError(r.error ?? "Keepr could not prepare the extension.");
     });
-  }, [step]);
-
-  const openChrome = useCallback(async () => {
-    const r = await rcsImportService.openChromeForExtension();
-    setChromeNote(
-      r.opened
-        ? "Chrome is opening. The address is copied: click Chrome's address bar, press Ctrl+V, then Enter."
-        : "The address is copied. Open Chrome, click its address bar, press Ctrl+V, then Enter.",
-    );
-  }, []);
+  }, [step, beta]);
 
   const startSync = useCallback(async () => {
     setStarting(true);
@@ -179,137 +179,107 @@ export function GoogleMessagesSyncFlow({ onClose, onUseCompanion, onOpenSettings
 
   return (
     <div className="flex flex-col gap-4" data-testid={`gm-step-${step}`}>
-      {step === "install" && (
+      {step === "install" && beta && (
         <>
-          <div className="text-xs font-semibold text-gray-500 tracking-wide">STEP 1 OF 2</div>
-          <h2 className="text-lg font-bold text-gray-900">Add the Keepr extension to Chrome</h2>
-          <p className="text-sm text-gray-600">
-            We put the extension in your Downloads folder{folderNote ? ` (${folderNote})` : ""}. It takes about a minute.
-          </p>
-          <ol className="flex flex-col gap-2">
-            <Numbered n={1}>
-              Click <b>Open Chrome</b> below. We copy the Extensions address for you. In Chrome, click the address bar,
-              press <b>Ctrl+V</b>, then <b>Enter</b>.
-            </Numbered>
-            <Numbered n={2}>Turn on <b>Developer mode</b> (the switch at the top right).</Numbered>
-            <Numbered n={3}>Click <b>Load unpacked</b> and choose <b>Downloads › Keepr Extension</b>.</Numbered>
-            <Numbered n={4}>Come back here. Keepr notices when it is installed.</Numbered>
-          </ol>
-          <div className="flex gap-2">
-            <button type="button" className={`flex-1 ${primary}`} onClick={() => void openChrome()}>
-              Open Chrome (address copied)
-            </button>
-            <button type="button" className={`flex-1 ${secondary}`} onClick={() => void rcsImportService.showExtensionFolder()}>
-              Show folder in Downloads
-            </button>
+          {/* J01 (beta): nothing else — no paragraphs, no warning. */}
+          <div className="text-[12px] font-semibold tracking-[0.05em] text-[#6B7280]" data-testid="gm-beta-label">
+            BETA
           </div>
-          {chromeNote && <p className="text-sm text-gray-700" role="status">{chromeNote}</p>}
-          <div className="p-3 rounded-lg bg-gray-50 border border-gray-200" role="status" data-testid="gm-detect">
-            {installed ? <Check ok>Keepr extension installed</Check> : <Check ok={false}>Waiting for the extension…</Check>}
+          <h2 className={`${title} -mt-2`}>Add the Keepr extension</h2>
+          <div className="flex flex-col gap-3" data-testid="gm-install-steps">
+            <div className="flex gap-3 items-center">
+              <StepNumber n={1} />
+              <div className="text-[15px]">Open Chrome, paste the address, press Enter</div>
+            </div>
+            <div className="flex gap-3 items-center">
+              <StepNumber n={2} />
+              <div className="text-[15px]">
+                Turn on <b>Developer mode</b>
+              </div>
+            </div>
+            <div className="flex gap-3 items-center">
+              <StepNumber n={3} />
+              <div className="text-[15px]">
+                <b>Load unpacked</b> › Downloads › <b>Keepr Extension</b>
+              </div>
+            </div>
           </div>
-          <p className="text-xs text-gray-600">
-            Chrome may warn about Developer-mode extensions when it starts. That is expected until Keepr is in the Chrome
-            Web Store. Keep the folder where it is.
-          </p>
-          <button type="button" className={primary} onClick={() => setContinued(true)}>
-            Continue
+          <button type="button" className={primary} onClick={() => void rcsImportService.openChromeForExtension()} data-testid="gm-open-chrome">
+            Open Chrome (address copied)
+          </button>
+          <div className="flex items-center gap-2 text-[14px] text-[#6B7280]" role="status" data-testid="gm-detect">
+            <span className="w-2 h-2 rounded-full bg-[#F5A524]" aria-hidden="true" />
+            Waiting for the extension…
+          </div>
+        </>
+      )}
+
+      {step === "install" && !beta && (
+        <>
+          {/* A02: the Chrome Web Store. */}
+          <h2 className={title}>Install the Keepr extension</h2>
+          <p className="text-[14px] text-[#4B5563]">For Chrome. Takes a minute.</p>
+          <button type="button" className={primary} onClick={() => void rcsImportService.openExtensionStore()} data-testid="gm-add-to-chrome">
+            Add to Chrome
           </button>
           {onUseCompanion && (
-            <button type="button" className="text-sm text-indigo-700 hover:text-indigo-900 text-left" onClick={onUseCompanion}>
-              Use another texting app? Use the Keepr companion app instead
+            <button type="button" className="self-start text-[14px] text-[#4338CA] hover:text-[#3730A3]" onClick={onUseCompanion}>
+              Use another texting app?
             </button>
           )}
         </>
       )}
 
-      {step === "connect" && (
+      {step === "connect" && (!keeprPaired || justLinked) && (
+        // D01: the link card IS this step (the modal gives it its frame).
+        <LinkBrowserPanel bare onJustLinked={() => setJustLinked(true)} onSyncNow={() => void startSync()} />
+      )}
+
+      {step === "connect" && keeprPaired && !justLinked && (
         <>
-          <div className="text-xs font-semibold text-gray-500 tracking-wide">STEP 2 OF 2</div>
-          <h2 className="text-lg font-bold text-gray-900">Connect your phone and sync</h2>
-          <div className="flex flex-col gap-2 p-3 rounded-xl border border-gray-200">
-            <Check ok={installed}>Keepr extension installed</Check>
-            <Check ok={paired}>Google Messages connected to your phone</Check>
-            <Check ok={keeprPaired}>Extension linked with this Keepr</Check>
+          {/* B02 / I02: linked — one line, Sync now. */}
+          <h2 className={title}>Sync Android</h2>
+          <div className="flex items-center gap-2 p-3 rounded-[10px] border border-[#E5E7EB] text-[14px] text-[#111827]" data-testid="gm-linked-row">
+            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="#4F46E5" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M5 12l5 5 9-10" />
+            </svg>
+            <span>Linked with your browser ✓</span>
           </div>
-          {/* Live (B2): always there once installed — a code from the browser
-              gets its field even when Keepr already counts a link. */}
-          {installed && <LinkBrowserPanel onJustLinked={() => setJustLinked(true)} onSyncNow={() => void startSync()} />}
-          {/* Founder (2026-10-04): the Sync and its notice only once linked —
-              until then the link card is the one thing to do. */}
-          {keeprPaired && !justLinked && (
-            <>
-              {/* Both checks ticked: the pairing instruction is no longer needed. */}
-              {installed && paired ? (
-                <p className="text-sm text-gray-800 leading-relaxed" data-testid="gm-sync-note">
-                  Keepr opens Google Messages and copies your texts. Keep the Google Messages tab open until it is done.
-                </p>
-              ) : (
-                <ol className="flex flex-col gap-2">
-                  <Numbered n={1}>
-                    <span data-testid="gm-pair-instruction">
-                      In Chrome, open Google Messages and sign in with your Google account or scan the QR code with your
-                      phone. Leave <b>Remember this computer</b> on.
-                    </span>
-                  </Numbered>
-                  <Numbered n={2}>
-                    Click <b>Open Google Messages and sync</b>. Keep the Google Messages tab open until it is done.
-                  </Numbered>
-                </ol>
-              )}
-              <button type="button" className={primary} onClick={() => void startSync()} disabled={starting}>
-                {starting ? "Starting…" : "Open Google Messages and sync"}
-              </button>
-              <p className="text-xs text-gray-600" data-testid="gm-copy-line">
-                {syncCopyLine(state?.lookbackMonths)}{" "}
-                {onOpenSettings ? (
-                  <button type="button" className="text-indigo-700 hover:text-indigo-900 underline" onClick={onOpenSettings}>
-                    Change
-                  </button>
-                ) : (
-                  "Change"
-                )}{" "}
-                this in Settings → Messages.
-              </p>
-            </>
-          )}
-          {!installed && (
-            <button type="button" className="text-sm text-indigo-700 hover:text-indigo-900 text-left" onClick={() => setContinued(false)}>
-              Back to installing the extension
-            </button>
-          )}
+          <button type="button" className={primary} onClick={() => void startSync()} disabled={starting} data-testid="gm-sync-now">
+            {starting ? "Starting…" : "Sync now"}
+          </button>
         </>
       )}
 
       {step === "syncing" && (
         <>
-          <h2 className="text-lg font-bold text-gray-900">{job?.readingOlder ? "Reading older texts…" : "Syncing your texts"}</h2>
-          <p className="text-sm text-gray-700" role="status" data-testid="gm-stage">
+          <h2 className={title}>{job?.readingOlder ? "Reading older texts…" : "Syncing your texts"}</h2>
+          <p className="text-[14px] text-[#374151]" role="status" data-testid="gm-stage">
             {job?.stage || "Waiting for Google Messages to open in Chrome"}
           </p>
-          <p className="text-xs text-gray-600">Keep the Chrome window visible: the Sync pauses while it is hidden.</p>
+          <p className="text-[13px] text-[#4B5563]">Keep the Google Messages tab open until it is done.</p>
           <button type="button" className={secondary} onClick={() => void cancel()}>
-            Cancel
+            Stop sync
           </button>
         </>
       )}
 
       {step === "done" && job && (
         <>
-          <h2 className="text-lg font-bold text-gray-900">
-            {doneLines ? "Your texts are synced" : "Saving your texts…"}
-          </h2>
-          {/* What Keepr SAVED (not what the page sent). */}
-          <div className="flex flex-col gap-1 p-3 rounded-lg border border-gray-200" role="status" data-testid="gm-done-summary">
-            {(doneLines ?? ["Keepr is saving what it copied. This takes a moment."]).map((line) => (
-              <p key={line} className="text-sm text-gray-800">
-                {line}
-              </p>
-            ))}
+          {/* A11 / B05. */}
+          <div className="flex items-center gap-2.5">
+            {doneLines && (
+              <div className="w-8 h-8 rounded-full bg-[#15803D] text-white font-extrabold flex items-center justify-center" aria-hidden="true">
+                ✓
+              </div>
+            )}
+            <h2 className={title}>{doneLines ? "Your texts are synced" : "Saving your texts…"}</h2>
           </div>
-          <p className="text-xs text-gray-600">
-            Keepr adds them to the right transactions by phone number. Next time, click <b>Sync Android</b> on the
-            dashboard: Keepr opens Google Messages and only fetches what is new.
-          </p>
+          {/* What Keepr SAVED (not what the page sent). */}
+          <div className="p-3 rounded-[10px] border border-[#E5E7EB] text-[14px] text-[#1F2937]" role="status" data-testid="gm-done-summary">
+            {(doneLines ?? ["Keepr is saving what it copied. This takes a moment."]).join(" ")}
+          </div>
+          {doneLines && <p className="text-[13px] text-[#4B5563]">Added to your transactions by phone number.</p>}
           <button type="button" className={primary} onClick={onClose}>
             Done
           </button>
@@ -318,8 +288,10 @@ export function GoogleMessagesSyncFlow({ onClose, onUseCompanion, onOpenSettings
 
       {step === "failed" && job && (
         <>
-          <h2 className="text-lg font-bold text-gray-900">{job.state === "failed" ? "Sync failed" : "The Sync did not finish"}</h2>
-          <p className="text-sm text-gray-700">{job.error?.message || (job.state === "cancelled" ? "It was cancelled." : "Something went wrong.")}</p>
+          <h2 className={title}>{job.state === "failed" ? "Sync failed" : "Sync stopped"}</h2>
+          <p className="text-[14px] text-[#374151]">
+            {job.error?.message || (job.state === "cancelled" ? "Nothing from this run was saved." : "Something went wrong.")}
+          </p>
           <button
             type="button"
             className={primary}
@@ -333,7 +305,7 @@ export function GoogleMessagesSyncFlow({ onClose, onUseCompanion, onOpenSettings
       )}
 
       {error && (
-        <p className="text-sm text-red-700" role="alert">
+        <p className="text-[14px] text-[#B42318]" role="alert">
           {error}
         </p>
       )}

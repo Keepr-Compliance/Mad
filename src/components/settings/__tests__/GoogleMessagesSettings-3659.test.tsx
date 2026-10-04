@@ -252,4 +252,23 @@ describe("GoogleMessagesSettings", () => {
     render(<GoogleMessagesSettings userId="user-1" />);
     await waitFor(() => expect(screen.getByTestId("gm-pairing-line")).toHaveTextContent("Extension linked with this Keepr"));
   });
+
+  // Founder (J flow): "Beta extension install" — with the account's other
+  // preferences (messageImport.googleMessages.betaExtensionInstall). While the
+  // extension is not published it is forced on (checked, disabled).
+  // Mutations: saved under another key; not forced while unpublished → red.
+  it("Beta extension install: forced on while unpublished; saved with the account's preferences", async () => {
+    render(<GoogleMessagesSettings userId="user-1" />);
+    const box = (await screen.findByTestId("gm-beta-install")) as HTMLInputElement;
+    expect(box.checked).toBe(true);
+    expect(box.disabled).toBe(true);
+    expect(box.closest("label")).toHaveTextContent("Beta extension install");
+    // The save itself (the toggle is enabled once published).
+    box.disabled = false;
+    fireEvent.click(box);
+    await waitFor(() =>
+      expect(mockUpdatePrefs).toHaveBeenCalledWith("user-1", { messageImport: { googleMessages: { betaExtensionInstall: false } } }),
+    );
+  });
+
 });

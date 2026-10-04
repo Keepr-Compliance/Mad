@@ -115,6 +115,12 @@ import type {
 const LOG_TAG = "RcsImport";
 export const RCS_JOB_PROGRESS_CHANNEL = "rcs-import:job-progress";
 export const RCS_MESSAGES_WEB_URL = "https://messages.google.com/web/conversations";
+/**
+ * The Keepr extension's Chrome Web Store listing (storyboard A02 "Add to
+ * Chrome"). Only used once the extension is published (the renderer's
+ * EXTENSION_PUBLISHED); held here so the renderer never names a URL to open.
+ */
+export const RCS_EXTENSION_STORE_URL = "https://chromewebstore.google.com/detail/keepr-for-google-messages";
 /** BACKLOG-3661: the start-job refusal while another Sync runs. */
 export const RCS_ALREADY_SYNCING_MESSAGE = "Keepr is already syncing";
 /** BACKLOG-3657: Google Messages for Web texts were cleared; open views refetch. */
@@ -1339,6 +1345,15 @@ export function registerRcsImportHandlers(): void {
     "rcs-import:open-google-messages",
     wrapHandler(async (): Promise<{ success: true }> => {
       await shell.openExternal(RCS_MESSAGES_WEB_URL);
+      return { success: true };
+    }, { module: LOG_TAG }),
+  );
+
+  // A02: "Add to Chrome" — the store listing (a fixed URL, nothing from the renderer).
+  ipcMain.handle(
+    "rcs-import:open-extension-store",
+    wrapHandler(async (): Promise<{ success: true }> => {
+      await shell.openExternal(RCS_EXTENSION_STORE_URL);
       return { success: true };
     }, { module: LOG_TAG }),
   );

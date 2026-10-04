@@ -222,6 +222,7 @@ export function cacheSavedFromCommit(r: CacheCommitResult): RcsCacheSaved {
   return {
     chats: r.chats, messages: r.stored + r.alreadyPresent, newMessages: r.stored,
     reactions: r.reactionsKept ?? r.reactions, newReactions: r.reactions,
+    photos: r.imagesStored + (r.imagesAlreadyThere ?? 0),
   };
 }
 

@@ -170,6 +170,8 @@ export interface RcsCacheSaved {
   reactions?: number;
   /** Live (0.3.18): of those, new to Keepr (as newMessages for messages). */
   newReactions?: number;
+  /** Storyboard A10/A11: photos in Keepr for this Sync (stored + already there). */
+  photos?: number;
 }
 
 /** What the page receives when it claims a job: names only, never numbers. */

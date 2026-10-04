@@ -43,6 +43,11 @@ import { LookbackMonthsSelect, lastMonthsPhrase, parseLookbackOption } from "./L
 import { AndroidForceReimportWarning, androidClearedText } from "./AndroidForceReimportWarning";
 import { NotSyncedChatsModal } from "./android/NotSyncedChatsModal";
 import { LinkBrowserPanel } from "./android/LinkBrowserPanel";
+import {
+  EXTENSION_PUBLISHED,
+  betaInstallPreferencePatch,
+  readBetaInstallPreference,
+} from "./android/extensionDistribution";
 
 /** Live (B1): not proven by the extension (a lost key, another profile…): said honestly. */
 export const NOT_LINKED_HERE = "Not linked in this browser — click the Keepr icon in Chrome to link";
@@ -61,6 +66,8 @@ export function GoogleMessagesSettings({ userId }: { userId: string }) {
   const [state, setState] = useState<RcsExtensionState | null>(null);
   const [lookbackMonths, setLookbackMonths] = useState<number | null>(resolveStoredLookbackMonths(undefined));
   const [prefsSettled, setPrefsSettled] = useState(false);
+  /** Founder (J flow): the account's "Beta extension install" (default off). */
+  const [betaInstall, setBetaInstall] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showForceWarning, setShowForceWarning] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -88,7 +95,10 @@ export function GoogleMessagesSettings({ userId }: { userId: string }) {
     void (async () => {
       try {
         const r = await settingsService.getPreferences(userId);
-        if (live && r?.success) setLookbackMonths(resolveStoredLookbackMonths(readMessageImportPreferences(r.data)?.filters));
+        if (live && r?.success) {
+          setLookbackMonths(resolveStoredLookbackMonths(readMessageImportPreferences(r.data)?.filters));
+          setBetaInstall(readBetaInstallPreference(r.data));
+        }
       } catch {
         // The default stays.
       } finally {
@@ -117,6 +127,22 @@ export function GoogleMessagesSettings({ userId }: { userId: string }) {
       setResult({ ok: false, text: "Keepr could not save that." });
     }
   }, [userId, lookbackMonths]);
+
+  // Founder (J flow): saved with the account's other preferences; reverted on failure.
+  const changeBetaInstall = useCallback(async (on: boolean) => {
+    setBetaInstall(on);
+    let saved = false;
+    try {
+      const r = await settingsService.updatePreferences(userId, betaInstallPreferencePatch(on));
+      saved = r?.success !== false;
+    } catch {
+      saved = false;
+    }
+    if (!saved) {
+      setBetaInstall(!on);
+      setResult({ ok: false, text: "Keepr could not save that." });
+    }
+  }, [userId]);
 
   useEffect(() => {
     void refresh();
@@ -228,6 +254,20 @@ export function GoogleMessagesSettings({ userId }: { userId: string }) {
           onClose={() => setManageOpen(false)}
         />
       )}
+
+      {/* Founder (J flow): the beta (unpacked) install of the extension. Until
+          the extension is in the Chrome Web Store everyone gets it (forced on). */}
+      <label className="flex items-center gap-3 p-4 bg-white rounded-lg border border-gray-200 cursor-pointer">
+        <input
+          type="checkbox"
+          className="w-5 h-5"
+          checked={betaInstall || !EXTENSION_PUBLISHED}
+          disabled={!EXTENSION_PUBLISHED}
+          onChange={(e) => void changeBetaInstall(e.target.checked)}
+          data-testid="gm-beta-install"
+        />
+        <span className="text-sm font-medium text-gray-900">Beta extension install</span>
+      </label>
 
       <label className="flex items-start gap-3 p-4 bg-white rounded-lg border border-gray-200 cursor-pointer">
         <input

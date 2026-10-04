@@ -68,7 +68,7 @@ export interface RcsJobInfo {
    * A finished cache Sync: what Keepr SAVED (null: the save failed; absent:
    * still saving). The done screens show these, not the staged counts.
    */
-  saved?: { chats: number; messages: number; newMessages: number; reactions?: number; newReactions?: number } | null;
+  saved?: { chats: number; messages: number; newMessages: number; reactions?: number; newReactions?: number; photos?: number } | null;
 }
 
 /** BACKLOG-3658: the extension and cache state, for the setup wizard. */
@@ -152,6 +152,8 @@ export interface WindowApiRcsImport {
   linkForget?: () => Promise<{ success: true }>;
   /** The link screen's "Open Google Messages" (no link needed). */
   openGoogleMessages?: () => Promise<{ success: true }>;
+  /** A02: the extension's Chrome Web Store listing. */
+  openExtensionStore?: () => Promise<{ success: true }>;
   /** C1: keepr://link asked for the link screen. Returns an unsubscribe. */
   onOpenLinkScreen?: (callback: () => void) => () => void;
   /**

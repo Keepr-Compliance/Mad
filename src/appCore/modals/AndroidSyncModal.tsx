@@ -54,13 +54,15 @@ export function AndroidSyncModal({ userId, onClose, app = "companion", onOpenSet
             </svg>
           </button>
         </div>
-        <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-4" data-testid="android-sync-modal-body">
+        {/* The storyboards' frame: 0 24 24 padding under the minimize row. */}
+        <div className={`flex-1 min-h-0 overflow-y-auto ${shown === "google-messages" ? "px-6 pb-6" : "px-4 pb-4"}`} data-testid="android-sync-modal-body">
           {/* BACKLOG-2323: onComplete auto-dismisses the modal shortly after a
               live pairing success advances the wizard off the (now-consumed) QR,
               mirroring how IPhoneSyncModal closes on success. */}
           {shown === "google-messages" ? (
             <GoogleMessagesSyncFlow
               onClose={onClose}
+              userId={userId}
               onUseCompanion={() => setShown("companion")}
               onOpenSettings={
                 onOpenSettings
