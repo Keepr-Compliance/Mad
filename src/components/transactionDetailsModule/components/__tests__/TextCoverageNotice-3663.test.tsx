@@ -34,7 +34,7 @@ jest.mock("../../../../services/settingsService", () => ({
 }));
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { TextCoverageNotice, chosenTextSource, gapLine } = require("../TextCoverageNotice") as typeof import("../TextCoverageNotice");
+const { TextCoverageNotice, chosenTextSource, gapLine, googleMessagesOlderLine } = require("../TextCoverageNotice") as typeof import("../TextCoverageNotice");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { AuditCoveragePrompt } = require("../AuditCoveragePrompt") as typeof import("../AuditCoveragePrompt");
 
@@ -55,7 +55,8 @@ describe("TextCoverageNotice", () => {
   it("asks with the chosen import source and names the right re-sync (N1)", async () => {
     getTextCoverage.mockResolvedValue({ success: true, auditStartISO: "2026-05-01T00:00:00.000Z", gaps: [gm] });
     render(<TextCoverageNotice transactionId="tx-1" userId="user-1" />);
-    expect(await screen.findByTestId("coverage-gap-google_messages")).toHaveTextContent(/Google Messages: texts only from .*Sync Android/);
+    // C02: Google Messages alone → the one blue line.
+    expect(await screen.findByTestId("coverage-gap-google_messages")).toHaveTextContent(/^Older than .*\? Click Sync Android on the dashboard: it reads back to the start\.$/);
     expect(getTextCoverage).toHaveBeenCalledWith("tx-1", "user-1", "google_messages");
     expect(chosenTextSource("macos-native")).toBe("mac");
     expect(chosenTextSource("iphone-sync")).toBe("iphone");
@@ -81,6 +82,17 @@ describe("TextCoverageNotice", () => {
     const gap: SourceCoverageGap = { source: "google_messages", coveredSince: "2026-07-01T00:00:00.000Z", approximate: false, kind: "incomplete", incompleteChats: 3 };
     expect(gapLine(gap, "2026-08-01T00:00:00.000Z")).toBe("Google Messages: 3 chats may be incomplete.");
     expect(gapLine({ ...gap, incompleteChats: 1 }, null)).toBe("Google Messages: 1 chat may be incomplete.");
+  });
+
+  // Storyboard C02: Google Messages alone, read only since a date → ONE blue
+  // line. Mutation: the old amber block for this case → red.
+  it("C02: Google Messages alone, later → 'Older than <date>? Click Sync Android on the dashboard: it reads back to the start.'", () => {
+    const when = new Date(Date.parse("2026-08-01T12:00:00.000Z")).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    expect(googleMessagesOlderLine([{ ...gm, coveredSince: "2026-08-01T12:00:00.000Z" }])).toBe(
+      `Older than ${when}? Click Sync Android on the dashboard: it reads back to the start.`,
+    );
+    expect(googleMessagesOlderLine([{ ...gm, kind: "never" }])).toBeNull();
+    expect(googleMessagesOlderLine([gm, { ...gm, source: "mac" }])).toBeNull();
   });
 
   it("nothing to say: no notice", async () => {

@@ -49,6 +49,21 @@ function day(iso: string | null): string {
   return Number.isFinite(t) ? new Date(t).toLocaleDateString() : "";
 }
 
+/**
+ * Storyboard C02 (founder, 2026-10-04): when Google Messages alone reads only
+ * since a date, ONE blue line — "Older than Aug 1? Click Sync Android on the
+ * dashboard: it reads back to the start." null when it does not apply.
+ */
+export function googleMessagesOlderLine(gaps: SourceCoverageGap[]): string | null {
+  if (gaps.length !== 1) return null;
+  const g = gaps[0];
+  if (g.source !== "google_messages" || g.kind !== "later" || !g.coveredSince) return null;
+  const t = Date.parse(g.coveredSince);
+  if (!Number.isFinite(t)) return null;
+  const when = new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return `Older than ${when}? ${ACTION.google_messages}`;
+}
+
 /** One line per gap (exported for the audit prompt). */
 export function gapLine(gap: SourceCoverageGap, auditStartISO: string | null): string {
   const label = LABEL[gap.source];
@@ -115,6 +130,22 @@ export function TextCoverageNotice({ transactionId, userId }: TextCoverageNotice
   }, [auditStart, load, transactionId, userId]);
 
   if (gaps.length === 0) return null;
+  const older = googleMessagesOlderLine(gaps);
+  if (older) {
+    return (
+      <div
+        className="mb-3 flex items-center gap-2.5 px-3.5 py-2.5 rounded-[10px] bg-[#EFF6FF] border border-[#BFDBFE] text-[13px] text-[#1E40AF]"
+        role="status"
+        data-testid="text-coverage-notice"
+      >
+        <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 8h.01M11 12h1v4h1" />
+        </svg>
+        <span data-testid="coverage-gap-google_messages">{older}</span>
+      </div>
+    );
+  }
   const exact = gaps.some((g) => !g.approximate);
   return (
     <div
