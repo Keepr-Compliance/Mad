@@ -15,12 +15,19 @@ let mockLink: Link = { state: "none", intrusion: false };
 let mockLinked = false;
 const mockEnter = jest.fn(async (_code: string) => ({ success: true }) as { success: boolean; error?: string });
 const mockOpenMessages = jest.fn(async () => undefined);
+let mockOpenLinkScreen: (() => void) | null = null;
 jest.mock("../../../../services/rcsImportService", () => ({
   rcsImportService: {
     linkState: async () => ({ success: true, data: { link: mockLink, linked: mockLinked } }),
     linkEnterCode: (code: string) => mockEnter(code),
     linkDismissWarning: async () => undefined,
     openGoogleMessages: () => mockOpenMessages(),
+    onOpenLinkScreen: (cb: () => void) => {
+      mockOpenLinkScreen = cb;
+      return () => {
+        mockOpenLinkScreen = null;
+      };
+    },
   },
 }));
 
@@ -74,6 +81,10 @@ describe("LinkBrowserPanel", () => {
     const input = screen.getByTestId("gm-link-code") as HTMLInputElement;
     expect(input.placeholder).toBe("000 000");
     for (const c of ["min-h-[52px]", "border-2", "rounded-[10px]", "font-mono", "text-[26px]", "tracking-[0.2em]"]) expect(input.className.split(" ")).toContain(c);
+    // Founder Option 1: focused on arrival (the focus ring is indigo).
+    expect(document.activeElement).toBe(input);
+    expect(input.style.borderColor).toBe(rgb(FIELD_COLORS.idle.focus));
+    fireEvent.blur(input);
     expect(input.style.borderColor).toBe(rgb("#CDD1DE"));
     expect(screen.queryByTestId("gm-link-submit")).toBeNull();
     expect(panel.querySelectorAll("p")).toHaveLength(0);
@@ -184,6 +195,24 @@ describe("LinkBrowserPanel", () => {
     expect(input.style.outline).toBe("none");
     expect(input.style.borderColor).toBe(rgb("#B42318"));
     expect(input.style.boxShadow).toContain("#B42318");
+  });
+
+  // Founder Option 1: the extension brings Keepr forward with a code waiting
+  // (/focus → the link screen): the field takes focus again. Mutations: not
+  // focused on arrival; the open-link-screen signal ignored → red.
+  it("the extension brings Keepr forward: the code field is focused again", async () => {
+    mockLink = waiting();
+    render(<LinkBrowserPanel />);
+    await flush();
+    const input = screen.getByTestId("gm-link-code") as HTMLInputElement;
+    input.blur();
+    expect(document.activeElement).not.toBe(input);
+    expect(mockOpenLinkScreen).not.toBeNull();
+    await act(async () => {
+      mockOpenLinkScreen!();
+      jest.advanceTimersByTime(1);
+    });
+    expect(document.activeElement).toBe(input);
   });
 
   it("a refused code says why, and the field is cleared", async () => {

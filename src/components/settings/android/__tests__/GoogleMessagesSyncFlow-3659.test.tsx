@@ -43,6 +43,7 @@ jest.mock("../../../../services/rcsImportService", () => ({
     linkState: async () => mockLinkState(),
     linkEnterCode: async () => ({ success: true }),
     linkDismissWarning: async () => undefined,
+    onOpenLinkScreen: () => () => undefined,
     setCacheConsent: (...a: unknown[]) => mockConsent(...a),
     cancelJob: async () => ({ success: true, data: null }),
     getJob: async () => ({ success: true, data: mockCurrentJob }),

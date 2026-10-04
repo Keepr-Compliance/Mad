@@ -155,13 +155,16 @@ describe("the worker's link window", () => {
     return { send, created, updated, closed: (id: number) => removed?.(id) };
   }
 
-  it("the toolbar popup when Chrome allows it, else link.html in a small popup window", async () => {
-    const withPopup = worker({ openPopup: async () => undefined });
-    expect(await withPopup.send({ type: "keepr-open-link-window" })).toEqual({ ok: true, how: "popup" });
-    expect(withPopup.created).toEqual([]);
-    const refused = worker({ openPopup: async () => { throw new Error("no gesture"); } });
-    expect(await refused.send({ type: "keepr-open-link-window" })).toEqual({ ok: true, how: "window" });
-    expect(refused.created).toEqual([{ url: "chrome-extension://ext/link.html", type: "popup", width: 380, height: 380, focused: true }]);
+  // Founder Option 1: Keepr comes forward as soon as the code shows, and an
+  // action popup closes when it loses focus — so ALWAYS link.html's small
+  // window (it starts the link itself: no second click). Mutation: the
+  // toolbar popup tried first → red.
+  it("always link.html in a small popup window — never the toolbar popup", async () => {
+    const openPopup = jest.fn(async () => undefined);
+    const w = worker({ openPopup });
+    expect(await w.send({ type: "keepr-open-link-window" })).toEqual({ ok: true, how: "window" });
+    expect(openPopup).not.toHaveBeenCalled();
+    expect(w.created).toEqual([{ url: "chrome-extension://ext/link.html", type: "popup", width: 380, height: 380, focused: true }]);
   });
 
   it("one window at a time, and a rate limit", async () => {

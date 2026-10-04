@@ -106,6 +106,7 @@ import { NOT_PAIRED_MESSAGE, RcsPairingAuth, type LinkState } from "../services/
 import { loadPairProtocol } from "../services/rcsPairProtocol";
 import { rcsPairingStore } from "../services/db/rcsPairingDbService";
 import { RcsSyncOutcomeTracker } from "../services/rcsSyncOutcome";
+import { focusForBrowser, RCS_OPEN_LINK_SCREEN_CHANNEL } from "../services/rcsLinkFocus";
 import {
   recordSyncOutcomeSettled,
   recordSyncRunMetrics,
@@ -1042,7 +1043,14 @@ const bridge = new RcsExtensionBridge({
   onJobChanged: broadcastJob,
   // (A finished or failed job brings Keepr forward from onJobEnded above.)
   // BACKLOG-3641: "Open Keepr" on the page (POST /focus).
-  onFocusRequested: () => focusKeeprFromBrowser(),
+  // Founder Option 1: while a link code is waiting, /focus also opens the
+  // Sync Android modal at its link step (the code field focused there).
+  onFocusRequested: () =>
+    focusForBrowser({
+      focus: focusKeeprFromBrowser,
+      linkState: () => pairingAuth.linkState(),
+      openLinkScreen: () => hostWindows.broadcast(RCS_OPEN_LINK_SCREEN_CHANNEL, {}),
+    }),
   logger: {
     info: (m) => void logService.info(m, LOG_TAG),
     warn: (m) => void logService.warn(m, LOG_TAG),

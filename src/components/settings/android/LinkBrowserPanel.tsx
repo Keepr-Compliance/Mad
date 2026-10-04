@@ -113,6 +113,18 @@ export function LinkBrowserPanel({ onLinked, onJustLinked, bare = false }: LinkB
     return () => clearInterval(t);
   }, [refresh]);
 
+  // Founder Option 1: the code field is focused on arrival — when the card
+  // opens, and again when the extension brings Keepr forward with a code
+  // waiting (its /focus opens this step). Nothing else is arranged.
+  useEffect(() => {
+    const focusField = (): void => {
+      const el = input.current;
+      if (el && !el.disabled && !el.readOnly) el.focus();
+    };
+    focusField();
+    return rcsImportService.onOpenLinkScreen(() => setTimeout(focusField, 0));
+  }, []);
+
   /** The 6th digit (typed or pasted): one try. */
   const submit = useCallback(
     async (six: string) => {

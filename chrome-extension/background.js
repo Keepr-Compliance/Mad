@@ -248,6 +248,9 @@ async function linkStart(opts) {
   }
   const ttl = typeof s.body.expiresInMs === "number" ? s.body.expiresInMs : 120000;
   linkSession = { code, state: a.state, sessionId: s.body.sessionId, expiresAt: Date.now() + ttl, triesLeft: 5, status: "waiting", error: undefined };
+  // Founder Option 1: the code is shown now — Keepr comes forward ONCE per
+  // session (the existing /focus; Keepr opens its link step, field focused).
+  void focusKeepr().catch(() => undefined);
   void linkPollLoop(linkSession, (opts && opts.sleep) || ((ms) => new Promise((r) => setTimeout(r, ms))));
   return { ok: true, link: linkView() };
 }
@@ -352,11 +355,16 @@ async function openMessages() {
 }
 
 // ---------------------------------------------------------------------------
-// Founder (LinkFlow, SR-approved 2026-10-04): the page card's "Link with
-// Keepr" opens the extension's OWN small window (link.html) — the toolbar
-// popup when Chrome allows it, else a popup-type window. The link session
-// (and its code) starts INSIDE that window, never on the page's click; the
-// code never reaches the page. One window at a time; a rate limit.
+// Founder (LinkFlow, SR-approved 2026-10-04; "Option 1"): the page card's
+// "Link with Keepr" opens the extension's OWN small window (link.html),
+// which starts the link session AT ONCE (no second click there). The code
+// never reaches the page. One window at a time; a rate limit.
+//
+// Not the toolbar popup (chrome.action.openPopup): Keepr now comes to the
+// front as soon as the code shows, and an action popup closes when it loses
+// focus ("There is no way to keep the popup open after the user has clicked
+// away", developer.chrome.com add-popup) — the code would vanish. A
+// popup-type window stays open beside Keepr.
 // ---------------------------------------------------------------------------
 const LINK_WINDOW_MIN_INTERVAL_MS = 2000;
 const LINK_WINDOW_SIZE = { width: 380, height: 380 };
@@ -395,14 +403,6 @@ async function openLinkWindow(now) {
     } catch (_err) {
       linkWindowId = null; // closed meanwhile
     }
-  }
-  try {
-    if (chrome.action && typeof chrome.action.openPopup === "function") {
-      await chrome.action.openPopup();
-      return { ok: true, how: "popup" };
-    }
-  } catch (_err) {
-    // Not allowed here (no gesture / older Chrome): the small window.
   }
   try {
     const win = await chrome.windows.create({

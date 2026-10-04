@@ -28,6 +28,7 @@ import { RcsExtensionBridge, RCS_EXTENSION_ORIGIN } from "../../electron/service
 import { RcsJobRegistry } from "../../electron/services/rcsImportJob";
 import { RcsPairingAuth, type PairProtocol, type PairingStore, type RcsPairing } from "../../electron/services/rcsPairingAuth";
 import { installPairing, P, uninstallPairing } from "./helpers/pairedWorker";
+import { focusForBrowser } from "../../electron/services/rcsLinkFocus";
 
 const SOURCE = fs.readFileSync(path.join(__dirname, "..", "..", "chrome-extension", "background.js"), "utf8");
 const EXTENSION_ID = "nlfohmjehedijceeelokclkglmjnlonj";
@@ -38,10 +39,15 @@ let rows: RcsPairing[];
 let auth: RcsPairingAuth;
 let bridge: RcsExtensionBridge;
 let port: number;
+/** Founder Option 1: what Keepr did on /focus (focused; opened the link step). */
+let focused: number;
+let linkScreens: number;
 
 beforeEach(async () => {
   currentUser = "user-a";
   rows = [];
+  focused = 0;
+  linkScreens = 0;
   const store: PairingStore = {
     get: (id) => rows.find((r) => r.pairId === id) ?? null,
     save: (p) => {
@@ -60,6 +66,12 @@ beforeEach(async () => {
     jobs: new RcsJobRegistry(),
     pairing: auth,
     pairingMode: "dual",
+    onFocusRequested: () =>
+      focusForBrowser({
+        focus: () => (focused += 1),
+        linkState: () => auth.linkState(),
+        openLinkScreen: () => (linkScreens += 1),
+      }),
   } as never);
   expect(await bridge.start(0)).toBe("listening");
   port = bridge.getStatus().port;
@@ -185,6 +197,29 @@ describe("the worker's link with Keepr (BACKLOG-3666, C1)", () => {
     auth.revoke("user-a");
     expect(await w2.send(pending)).toMatchObject({ ok: false, status: 401, body: { error: "not_paired" } });
     expect(await w2.send({ type: "keepr-pair-status" })).toEqual({ ok: true, paired: false });
+  });
+
+  // Founder Option 1: as soon as the code shows, Keepr comes forward ONCE
+  // per session and opens its link step (the code field focused there).
+  // Mutations: no /focus on a new session; /focus again for the same session;
+  // Keepr not opening the link step while a code waits → red.
+  it("a new code: /focus once per session; Keepr opens its link step", async () => {
+    const w = await worker();
+    await w.send({ type: "keepr-link-start" });
+    await waitFor(() => focused === 1);
+    await w.send({ type: "keepr-link-start" }); // the same session, still waiting
+    await new Promise((r) => setTimeout(r, 100));
+    expect(w.sent.filter((p) => p === "/focus")).toHaveLength(1);
+    expect(focused).toBe(1);
+    expect(linkScreens).toBe(1);
+  });
+
+  it("/focus with no code waiting only focuses (never opens the link step)", () => {
+    let opened = 0;
+    focusForBrowser({ focus: () => undefined, linkState: () => ({ state: "none" }), openLinkScreen: () => (opened += 1) });
+    focusForBrowser({ focus: () => undefined, linkState: () => ({ state: "locked" }), openLinkScreen: () => (opened += 1) });
+    focusForBrowser({ focus: () => undefined, linkState: () => { throw new Error("x"); }, openLinkScreen: () => (opened += 1) });
+    expect(opened).toBe(0);
   });
 
   // SR (2026-10-03): nothing can mint an 8-character code any more.
