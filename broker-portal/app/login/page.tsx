@@ -3,15 +3,15 @@
 /**
  * Login Page
  *
- * OAuth login with Google and Microsoft, plus magic link (email OTP)
+ * OAuth login with Google and Microsoft
  * Displays error messages from auth callback
  */
 
-import { useState, useEffect, useRef, useCallback, Suspense } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Alert, Spinner } from '@keepr/design-system';
 import { AppMark } from '@keepr/ui';
-import { Loader2, Mail, XCircle } from 'lucide-react';
+import { Loader2, XCircle } from 'lucide-react';
 
 // Error messages for auth failure states
 const ERROR_MESSAGES: Record<string, string> = {
@@ -21,14 +21,6 @@ const ERROR_MESSAGES: Record<string, string> = {
   org_not_setup: 'org_not_setup', // Special case: rendered with links below
   jit_disabled: 'jit_disabled', // Special case: rendered with links below
 };
-
-// Simple email format validation
-function isValidEmail(email: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-}
-
-// Resend cooldown in seconds
-const RESEND_COOLDOWN = 60;
 
 // Option A brand palette (matches the app mark + landing; not in the sky-blue
 // design-system token scale, so the mock's exact hex values are used here).
@@ -120,13 +112,6 @@ function LoginForm() {
   const [hashError, setHashError] = useState<string | null>(null);
   const searchParams = useSearchParams();
 
-  // Magic link state
-  const [email, setEmail] = useState('');
-  const [magicLinkSent, setMagicLinkSent] = useState(false);
-  const [sentEmail, setSentEmail] = useState('');
-  const [cooldown, setCooldown] = useState(0);
-  const cooldownRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
   // Parse error details from URL hash (Supabase puts detailed errors there)
   useEffect(() => {
     const hash = window.location.hash;
@@ -139,30 +124,9 @@ function LoginForm() {
     }
   }, []);
 
-  // Cleanup cooldown interval on unmount
-  useEffect(() => {
-    return () => {
-      if (cooldownRef.current) clearInterval(cooldownRef.current);
-    };
-  }, []);
-
   // Get error from URL params (set by auth callback)
   const urlError = searchParams.get('error');
   const displayError = error || hashError || (urlError ? ERROR_MESSAGES[urlError] : null);
-
-  const startCooldown = useCallback(() => {
-    setCooldown(RESEND_COOLDOWN);
-    if (cooldownRef.current) clearInterval(cooldownRef.current);
-    cooldownRef.current = setInterval(() => {
-      setCooldown((prev) => {
-        if (prev <= 1) {
-          if (cooldownRef.current) clearInterval(cooldownRef.current);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-  }, []);
 
   const handleOAuthLogin = async (provider: 'google' | 'azure') => {
     // Dynamic import to avoid SSR issues
@@ -187,121 +151,6 @@ function LoginForm() {
       setLoading(null);
     }
   };
-
-  const handleMagicLink = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!isValidEmail(email)) {
-      setError('Please enter a valid email address.');
-      return;
-    }
-
-    const { createClient } = await import('@/lib/supabase/client');
-    const supabase = createClient();
-    setLoading('email');
-    setError(null);
-
-    const { error: otpError } = await supabase.auth.signInWithOtp({
-      email,
-      options: {
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
-      },
-    });
-
-    if (otpError) {
-      setError(otpError.message);
-      setLoading(null);
-      return;
-    }
-
-    setSentEmail(email);
-    setMagicLinkSent(true);
-    setLoading(null);
-    startCooldown();
-  };
-
-  const handleResend = async () => {
-    if (cooldown > 0) return;
-
-    const { createClient } = await import('@/lib/supabase/client');
-    const supabase = createClient();
-    setLoading('email');
-    setError(null);
-
-    const { error: otpError } = await supabase.auth.signInWithOtp({
-      email: sentEmail,
-      options: {
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
-      },
-    });
-
-    if (otpError) {
-      setError(otpError.message);
-      setLoading(null);
-      return;
-    }
-
-    setLoading(null);
-    startCooldown();
-  };
-
-  const handleBackToLogin = () => {
-    setMagicLinkSent(false);
-    setError(null);
-    setCooldown(0);
-    if (cooldownRef.current) clearInterval(cooldownRef.current);
-  };
-
-  // Magic link sent confirmation view
-  if (magicLinkSent) {
-    return (
-      <AuthCard>
-        <BrandHeader label="Broker Portal" />
-
-        {/* Error (e.g., resend failure) */}
-        {error && (
-          <div className="mt-6">
-            <Alert variant="error">
-              <p>{error}</p>
-            </Alert>
-          </div>
-        )}
-
-        <div className="mt-7 text-center space-y-4">
-          <div className="text-green-600">
-            <Mail className="w-12 h-12 mx-auto" />
-          </div>
-          <h2 className="text-lg font-semibold text-gray-900">Check your email</h2>
-          <p className="text-sm text-gray-600">
-            We sent a magic link to <span className="font-medium">{sentEmail}</span>
-          </p>
-          <p className="text-sm text-gray-500">Click the link in the email to sign in.</p>
-
-          <div className="pt-2 space-y-3">
-            <p className="text-sm text-gray-500">
-              Didn&apos;t receive it?{' '}
-              <button
-                onClick={handleResend}
-                disabled={cooldown > 0 || loading === 'email'}
-                className="text-primary-600 hover:text-primary-700 font-medium disabled:text-gray-400 disabled:cursor-not-allowed"
-              >
-                {loading === 'email'
-                  ? 'Sending...'
-                  : cooldown > 0
-                    ? `Resend in ${cooldown}s`
-                    : 'Resend'}
-              </button>
-            </p>
-            <button
-              onClick={handleBackToLogin}
-              className="text-sm text-gray-500 hover:text-gray-700 underline"
-            >
-              Back to login
-            </button>
-          </div>
-        </div>
-      </AuthCard>
-    );
-  }
 
   const oauthButtonClass =
     'w-full flex items-center justify-center gap-3 px-4 py-3 border rounded-xl bg-white text-[15px] font-semibold text-[#14162B] hover:border-[#D4D6E2] hover:bg-[#FCFCFE] hover:shadow-[0_2px_8px_rgba(20,22,43,0.06)] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all';
@@ -389,43 +238,6 @@ function LoginForm() {
           <span>{loading === 'azure' ? 'Signing in...' : 'Continue with Microsoft'}</span>
         </button>
       </div>
-
-      {/* Divider */}
-      <div className="relative my-6">
-        <div className="absolute inset-0 flex items-center">
-          <div className="w-full border-t" style={{ borderColor: '#E7E8F0' }} />
-        </div>
-        <div className="relative flex justify-center text-sm">
-          <span className="px-2 bg-white" style={{ color: '#9297A6' }}>or</span>
-        </div>
-      </div>
-
-      {/* Magic Link */}
-      <form onSubmit={handleMagicLink} className="space-y-3">
-        <input
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          placeholder="Enter your email address"
-          required
-          className="w-full px-4 py-3 border rounded-xl bg-white text-[15px] text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors"
-          style={{ borderColor: '#E7E8F0' }}
-        />
-        <button
-          type="submit"
-          disabled={loading !== null}
-          className="w-full px-4 py-3 bg-primary-600 text-white rounded-xl hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-[15px] font-semibold"
-        >
-          {loading === 'email' ? (
-            <span className="flex items-center justify-center gap-2">
-              <Loader2 className="h-5 w-5 animate-spin text-white" />
-              Sending...
-            </span>
-          ) : (
-            'Continue with email'
-          )}
-        </button>
-      </form>
 
       {/* Agent license redirect */}
       <div className="mt-4">
