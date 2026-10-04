@@ -47,10 +47,12 @@ function newSub(ageSql, status = "uploading") {
   return sql(`insert into public.transaction_submissions (organization_id, submitted_by, local_transaction_id, property_address, status, version, created_at, updated_at)
               values ('${ORG}', '${AGENT}', 'live-' || gen_random_uuid(), 'Live Street', '${status}', 1, now() - interval '${ageSql}', now() - interval '${ageSql}') returning id`);
 }
-async function attach(sub, file) {
+// An attachment row + object; both backdated by ageSql (a stalled upload has no recent activity).
+async function attach(sub, file, ageSql = "3 hours") {
   const p = `${ORG}/${sub}/${crypto.randomUUID()}/${file}`;
   await upload(p);
-  sql(`insert into public.submission_attachments (submission_id, filename, storage_path) values ('${sub}', '${file}', '${p}')`);
+  sql(`insert into public.submission_attachments (submission_id, filename, storage_path, created_at) values ('${sub}', '${file}', '${p}', now() - interval '${ageSql}');
+       update storage.objects set created_at = now() - interval '${ageSql}' where bucket_id = '${BUCKET}' and name = '${p}'`);
   return p;
 }
 async function invokeAndWait(timeoutMs = 60000) {
@@ -107,6 +109,7 @@ if (phase === "dry") {
   // L3a: dry run through pg_net -> functions serve: counts only, nothing removed or fenced.
   const s = newSub("3 hours");
   const p1 = await attach(s, "a.pdf"); const p2 = await attach(s, "b.pdf");
+  const prog = newSub("3 hours"); const progPath = await attach(prog, "new.pdf", "10 minutes");  // still adding files
   const orphan = `${ORG}/${crypto.randomUUID()}/loc/old.pdf`; await upload(orphan);
   sql(`update storage.objects set created_at = now() - interval '8 days' where name = '${orphan}'`);
   const { run } = await invokeAndWait();
@@ -114,6 +117,7 @@ if (phase === "dry") {
   check(run && run.counts.would_fence === 1 && run.counts.objects_targeted === 2 && run.counts.orphans_targeted >= 1, "L3a counts", JSON.stringify(run?.counts));
   check(await exists(p1) && await exists(p2) && await exists(orphan), "L3a nothing removed");
   check(sql(`select abandoned_at is null from public.transaction_submissions where id='${s}'`) === "t", "L3a nothing fenced");
+  console.log(`PROG ${prog} ${progPath}`);
   check(!JSON.stringify(run?.counts ?? {}).includes("/"), "L3a run row has no path");
   console.log(`STATE ${JSON.stringify({ s, p1, p2, orphan })}`);
 }
@@ -122,11 +126,14 @@ if (phase === "live") {
   // L3b: live run: files removed through the Storage API, then the row; orphan removed.
   const st = JSON.parse(process.env.STATE);
   const keep = newSub("3 hours", "submitted"); const keepPath = await attach(keep, "live.pdf");
+  const [prog, progPath] = (process.env.PROG ?? "").split(" ");
   const { run } = await invokeAndWait();
   check(run && run.mode === "live" && run.outcome === "ok", "L3b live run row ok", JSON.stringify(run));
   check(!(await exists(st.p1)) && !(await exists(st.p2)) && !(await exists(st.orphan)), "L3b files removed (row's two + orphan)");
   check(sql(`select count(*) from public.transaction_submissions where id='${st.s}'`) === "0", "L3b stalled row deleted");
   check(await exists(keepPath) && sql(`select status from public.transaction_submissions where id='${keep}'`) === "submitted", "L3b submitted submission and its file untouched");
+  check(sql(`select status || '|' || (abandoned_at is null) from public.transaction_submissions where id='${prog}'`) === "uploading|true" && await exists(progPath),
+        "L3b an upload created 3 h ago that added a file 10 min ago is not fenced and keeps its file");
 }
 
 if (phase === "delay") {

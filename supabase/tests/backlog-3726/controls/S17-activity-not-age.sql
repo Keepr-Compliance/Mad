@@ -12,7 +12,6 @@ BEGIN
   INSERT INTO submission_attachments (submission_id, filename, storage_path, created_at)
   VALUES (p2, 'c.pdf', pg_temp.org1() || '/' || p2 || '/loc/c.pdf', now() - interval '30 minutes');
   st := pg_temp.sub('uploading', '3 hours'); PERFORM pg_temp.att(st, 'd.pdf', '2 hours 10 minutes');
-  UPDATE submission_attachments SET created_at = now() - interval '2 hours 10 minutes' WHERE submission_id = st;
   sf := pg_temp.sub('uploading', '3 hours');
   PERFORM pg_temp.obj(pg_temp.org2() || '/' || sf || '/loc/e.pdf', '30 minutes');
   wanted := (SELECT array_agg(v ORDER BY v) FROM unnest(ARRAY[st::text, sf::text]) v);

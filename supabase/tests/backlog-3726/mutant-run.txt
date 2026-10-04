@@ -1,4 +1,4 @@
-29 mutants written
+34 mutants written
 M01 [as expected] (want green) FOR UPDATE without SKIP LOCKED: waits instead of skipping (live R1 measures the wait)
     MUTATION APPLIED: 2 line(s); first: FOR UPDATE
     RED: none
@@ -83,7 +83,7 @@ M21 [as expected] (want red) pg_net default timeout (5 s)
     RED: S15
       S15: ASSERT FAILED: S15 timeout 150000 ms
 M22 [as expected] (want red) a row with no timestamps is fenced at once
-    MUTATION APPLIED: 2 line(s); first: AND coalesce(t.created_at, t.updated_at, '-infinity'::timestamptz) < now() - p_stalled
+    MUTATION APPLIED: 2 line(s); first: ), t.updated_at, '-infinity'::timestamptz) < now() - p_stalled
     RED: S12
       S12: ASSERT FAILED: S12 row with no timestamps never fenced
 M23 [as expected] (want red) work list without status = uploading
@@ -109,10 +109,34 @@ M28 [as expected] (want red) secret body guard removed
     MUTATION APPLIED: 3 line(s); first: 
     RED: S09b
       S09b: ASSERT FAILED: S09b secret body guard
+M30 [as expected] (want red) live fence reverts to created_at age (founder rule: no activity for 2 h)
+    MUTATION APPLIED: 9 line(s); first: AND coalesce(t.created_at, t.updated_at, 'infinity'::timestamptz) < now() - p_stalled
+    RED: S17 S18
+      S17: ASSERT FAILED: S17 live: only the two stalled rows fenced and listed
+      S18: ASSERT FAILED: S18 object 1h50m old: not claimed
+M31 [as expected] (want red) dry-run arm reverts to created_at age
+    MUTATION APPLIED: 9 line(s); first: AND coalesce(t.created_at, t.updated_at, 'infinity'::timestamptz) < now() - p_stalled
+    RED: S17
+      S17: ASSERT FAILED: S17 dry run: only the two stalled rows would be fenced
+M32 [as expected] (want red) live fence ignores new objects (attachment rows only)
+    MUTATION APPLIED: 6 line(s); first: (SELECT max(a.created_at) FROM public.submission_attachments a WHERE a.submission_id = t.id)
+    RED: S17 S18
+      S17: ASSERT FAILED: S17 live: only the two stalled rows fenced and listed
+      S18: ASSERT FAILED: S18 object 1h50m old: not claimed
+M33 [as expected] (want red) live fence counts an object in another org's folder as activity
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: S02 S17
+      S02: ASSERT FAILED: S02 paths = its 2 rows + its rowless object
+      S17: ASSERT FAILED: S17 live: only the two stalled rows fenced and listed
+M34 [as expected] (want red) live fence ignores new attachment rows
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: S17
+      S17: ASSERT FAILED: S17 live: only the two stalled rows fenced and listed
 MW [as expected] (want red) MOST LIKELY WRONG: list stalled rows with no lock and no fence (delete later)
     MUTATION APPLIED: 2 line(s); first: IF true THEN
-    RED: S01 S03 S10
+    RED: S01 S03 S10 S17
       S01: ASSERT FAILED: S01 exactly one row fenced
       S03: ASSERT FAILED: S03 row deleted after its files
       S10: ASSERT FAILED: S10 finalize after the fence -> abandoned
-mutants: 29 run, 0 not as expected
+      S17: ASSERT FAILED: S17 live: only the two stalled rows fenced and listed
+mutants: 34 run, 0 not as expected

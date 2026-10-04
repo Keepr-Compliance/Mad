@@ -1,7 +1,7 @@
 -- Files removed, then finish: row gone, children cascaded, attempt row abandoned, run row closed.
 DO $$ DECLARE b uuid; r jsonb; f jsonb;
 BEGIN
-  b := pg_temp.sub('uploading', '3 hours'); PERFORM pg_temp.att(b, 'a.pdf');
+  b := pg_temp.sub('uploading', '3 hours'); PERFORM pg_temp.att(b, 'a.pdf', '3 hours');
   INSERT INTO submission_messages (submission_id, channel) VALUES (b, 'sms');
   INSERT INTO submission_attempts (submission_id, user_id, organization_id) VALUES (b, pg_temp.agent(), pg_temp.org1());
   r := pg_temp.claim(false);

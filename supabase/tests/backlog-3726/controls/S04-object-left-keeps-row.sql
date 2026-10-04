@@ -1,7 +1,7 @@
 -- One removal failed: the object is still there, so the row stays (retried next run).
 DO $$ DECLARE b uuid; r jsonb; f jsonb; p1 text;
 BEGIN
-  b := pg_temp.sub('uploading', '3 hours'); p1 := pg_temp.att(b, 'a.pdf'); PERFORM pg_temp.att(b, 'b.pdf');
+  b := pg_temp.sub('uploading', '3 hours'); p1 := pg_temp.att(b, 'a.pdf', '3 hours'); PERFORM pg_temp.att(b, 'b.pdf', '3 hours');
   r := pg_temp.claim(false);
   PERFORM pg_temp.rm(jsonb_build_array(p1));
   f := pg_temp.finish(r, ARRAY[b], 'partial');

@@ -2,8 +2,8 @@
 DO $$ DECLARE b uuid; o uuid; p1 text; p2 text; p3 text; r jsonb;
 BEGIN
   b := pg_temp.sub('uploading', '3 hours'); o := pg_temp.sub('uploading', '10 minutes');
-  p1 := pg_temp.att(b, 'a.pdf'); p2 := pg_temp.att(b, 'b.pdf');
-  p3 := pg_temp.obj(pg_temp.org1() || '/' || b || '/x.jpg');                 -- 2.38-style object, no row
+  p1 := pg_temp.att(b, 'a.pdf', '3 hours'); p2 := pg_temp.att(b, 'b.pdf', '3 hours');
+  p3 := pg_temp.obj(pg_temp.org1() || '/' || b || '/x.jpg', '3 hours');                 -- 2.38-style object, no row
   PERFORM pg_temp.att(o, 'other.pdf');                                       -- another submission
   PERFORM pg_temp.obj(pg_temp.org2() || '/' || b || '/wrong-org.pdf');        -- seg 2 = b, other org
   r := pg_temp.claim(false);

@@ -10,3 +10,5 @@ T5 MUTATION APPLIED in supabase/config.toml
   red 1/11
 T6 MUTATION APPLIED in supabase/tests/backlog-3726/rollback-3726.sql
   red 1/11
+T7 MUTATION APPLIED: live fence activity reduced to created_at
+  red 1/12

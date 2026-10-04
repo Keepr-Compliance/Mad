@@ -45,9 +45,10 @@ phase() { node "$HERE/live-run.mjs" "$@"; }
 rc=0
 phase reset || rc=1
 phase storage || rc=1
-serve dry_run;   out="$(phase dry)" || rc=1; echo "$out" | grep -v '^STATE'
+serve dry_run;   out="$(phase dry)" || rc=1; echo "$out" | grep -vE '^(STATE|PROG) '
 STATE="$(grep '^STATE ' <<<"$out" | sed 's/^STATE //')"
-serve live;      STATE="$STATE" phase live || rc=1
+PROG="$(grep '^PROG ' <<<"$out" | sed 's/^PROG //')"
+serve live;      STATE="$STATE" PROG="$PROG" phase live || rc=1
 phase race || rc=1
 phase badsecret || rc=1
 serve live 8000; phase delay || rc=1

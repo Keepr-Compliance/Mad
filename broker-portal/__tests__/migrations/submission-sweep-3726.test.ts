@@ -50,6 +50,16 @@ describe('BACKLOG-3726 submission sweep migration', () => {
     expect(body).toContain("OR coalesce(t.created_at, t.updated_at, 'infinity'::timestamptz) < now() - p_stalled OR t.id = ANY (v_fenced)");
   });
 
+  it('stalled = no activity for p_stalled, in both the dry and the live arm (founder 2026-10-04)', () => {
+    const body = fnBody('submission_sweep_claim');
+    const activity =
+      "AND coalesce(greatest( t.created_at, (SELECT max(a.created_at) FROM public.submission_attachments a WHERE a.submission_id = t.id), " +
+      "(SELECT max(o.created_at) FROM storage.objects o WHERE o.bucket_id = 'submission-attachments' " +
+      "AND split_part(o.name, '/', 1) = t.organization_id::text AND split_part(o.name, '/', 2) = t.id::text) ), " +
+      "t.updated_at, 'infinity'::timestamptz) < now() - p_stalled";
+    expect(body.split(activity).length - 1).toBe(2);
+  });
+
   it('attachment paths and object names must sit in the row\'s own {org}/{id}/ folder (SR condition 3)', () => {
     const body = fnBody('submission_sweep_claim');
     expect(body).toContain("AND split_part(a.storage_path, '/', 1) = s.organization_id::text AND split_part(a.storage_path, '/', 2) = s.id::text");

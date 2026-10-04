@@ -30,11 +30,11 @@ CREATE FUNCTION pg_temp.obj(p_name text, p_age interval DEFAULT '0') RETURNS tex
   INSERT INTO storage.objects (bucket_id, name, created_at) VALUES ('submission-attachments', p_name, now() - p_age);
   SELECT p_name;
 $$;
--- An attachment row in the submission's own folder plus its object.
+-- An attachment row in the submission's own folder plus its object, both written p_age ago.
 CREATE FUNCTION pg_temp.att(p_sub uuid, p_file text, p_age interval DEFAULT '0') RETURNS text LANGUAGE plpgsql AS $$
 DECLARE p text := pg_temp.org1() || '/' || p_sub || '/' || gen_random_uuid() || '/' || p_file;
 BEGIN
-  INSERT INTO public.submission_attachments (submission_id, filename, storage_path) VALUES (p_sub, p_file, p);
+  INSERT INTO public.submission_attachments (submission_id, filename, storage_path, created_at) VALUES (p_sub, p_file, p, now() - p_age);
   PERFORM pg_temp.obj(p, p_age);
   RETURN p;
 END $$;
