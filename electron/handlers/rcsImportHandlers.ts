@@ -806,6 +806,8 @@ async function startCacheJobOnce(opts: { sinceDays?: unknown }): Promise<
     pendingConversationIds: pendingIds,
     dealConversationIds: deal.ids,
     dealFloorISO: deal.floorISO,
+    // Storyboard H03: after a failed Sync the run skips the chats it saved.
+    retrying: !!getFailedRun(decision.userId),
   });
   if (!job) return { ok: false, status: 409, error: "already_syncing", message: "Keepr is already syncing." };
   const chatFloors = trackCacheChats(job.jobId, {

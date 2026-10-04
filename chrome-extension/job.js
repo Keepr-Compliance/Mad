@@ -18,6 +18,10 @@
   "use strict";
 
   var NOT_SIGNED_IN = "Sign in to Google Messages, then click Sync in Keepr again";
+  /** Storyboard I01: the page box when Google Messages is not signed in. */
+  var SIGN_IN_TITLE = "Sign in to Google Messages";
+  var SIGN_IN_BEFORE = "Sign in or scan the QR code, then ";
+  var SIGN_IN_AFTER = " in Keepr.";
   var JOB_HASH_RE = /(?:^#|&)keepr-job=([0-9a-fA-F-]{36})(?:&|$)/;
   var LIST_ITEM = "mws-conversation-list-item";
 
@@ -263,6 +267,13 @@
    * `s.saved`: {chats, messages, newMessages}; null = the save failed;
    * undefined = Keepr had not answered yet.
    */
+  /** Storyboard A10 / A11: "20 chats · 412 messages (38 new) · 64 photos" (what Keepr saved). */
+  function cacheSummaryLine(saved) {
+    return plural(saved.chats, "chat", "chats") + " · " + plural(saved.messages, "message", "messages") +
+      " (" + saved.newMessages + " new)" +
+      (typeof saved.photos === "number" && saved.photos > 0 ? " · " + plural(saved.photos, "photo", "photos") : "");
+  }
+
   function cacheSavedLine(s) {
     var scanned = "Scanned " + plural(s.listed, "chat", "chats");
     if (s.saved === null) return scanned + " · Keepr could not save this Sync — nothing was imported";
@@ -583,6 +594,12 @@
       return await runJobInner(jobId, env);
     } catch (err) {
       if (err && err.jobGone) {
+        // Storyboard H07: the user stopped it here — "Sync stopped", Close.
+        if (env.stoppedHere && env.stoppedHere()) {
+          diag(env, "stopped: by the user on this page");
+          env.overlay.show(STOPPED_TITLE, false, { stopped: true });
+          return { outcome: "stopped" };
+        }
         diag(env, "stopped: cancelled or replaced in Keepr");
         env.overlay.show(CANCELLED, true);
         return { outcome: "job_gone" };
@@ -957,8 +974,8 @@
       }
       var version = typeof env.extensionVersion === "string" ? env.extensionVersion : "";
       var detailsLines = detailsText(s);
-      // The done box's line (the mockup): the first details line — counts only.
-      return { details: detailsLines, summary: String(detailsLines).split("\n")[0], copy: copyText(s, tags, logLines, version), version: version };
+      // The done box's line (storyboard A10): "20 chats · 412 messages (38 new) · 64 photos".
+      return { details: detailsLines, summary: s.isCache && s.saved && typeof s.saved === "object" ? cacheSummaryLine(s.saved) : String(detailsLines).split("\n")[0], copy: copyText(s, tags, logLines, version), version: version };
     }
 
     async function fail(code, message) {
@@ -976,7 +993,14 @@
     log("stage: job found, waiting for Messages for Web");
     var pageState = await waitForPageState(env, env.pageTimeoutMs == null ? 20000 : env.pageTimeoutMs);
     log("page: " + pageState);
-    if (pageState === "not_signed_in") return fail("not_signed_in", NOT_SIGNED_IN);
+    if (pageState === "not_signed_in") {
+      // Storyboard I01: its own card (Keepr still records the failure).
+      log("failed: not_signed_in");
+      // (Copy details still carries the diagnostics and the version.)
+      env.overlay.show(SIGN_IN_TITLE, false, Object.assign(await overlayExtras(), { signIn: true }));
+      await env.api("POST", base + "/error", { code: "not_signed_in", message: NOT_SIGNED_IN });
+      return { outcome: "not_signed_in" };
+    }
     if (pageState !== "ready") {
       return fail("page_not_ready", "Messages for Web did not finish loading. Click Sync in Keepr again.");
     }
@@ -999,6 +1023,8 @@
     // History floor: the transaction's start date; none → no date floor.
     // BACKLOG-3658: a cache Sync — every chat, history back to `since`.
     var isCache = !!(claim.body && claim.body.kind === "cache");
+    // Storyboard H03: a Try again run says "skipping saved chats".
+    if (isCache && claim.body && claim.body.retrying === true) RUNNING_EXTRAS.retrying = true;
     var floorSource = isCache ? claim.body.since : claim.body && claim.body.startDate;
     var floorMs = typeof floorSource === "string" ? Date.parse(floorSource) : NaN;
     if (!isFinite(floorMs)) floorMs = null;
@@ -1512,6 +1538,9 @@
   /** The mockup's confirm: the question as the title, the consequence below. */
   var STOP_SYNC_TITLE = "Stop the sync?";
   var STOP_SYNC_BODY = "Nothing from this run will be saved.";
+  /** Storyboard H07: after the user stopped it. */
+  var STOPPED_TITLE = "Sync stopped";
+  var STOPPED_BODY = "Nothing from this run was saved.";
   /** SR: clicks on the confirm's Stop within this time after it opened are ignored (a double-click). */
   var STOP_CONFIRM_ARM_MS = 400;
   var PAUSED_BODY = "Keep this Chrome window visible — Sync continues when it's back.";
@@ -1524,6 +1553,8 @@
    */
   var SYNCING_HINT = "Keep this tab open while Keepr syncs. When it's done, you'll go back to Keepr automatically.";
   var SYNCING_CHIP_HINT = "keep this tab open";
+  /** Storyboard H03: a Try again run. */
+  var RETRY_CHIP_HINT = "skipping saved chats";
   /**
    * Founder (2026-10-02, reverses "nothing on the page while idle"): with no
    * Sync running, the box sits on the page as its collapsed chip. Never a
@@ -1553,13 +1584,14 @@
   // Every text/background pair is >= 4.5:1.
   var PALETTE = {
     light: {
-      card: "#FFFFFF", border: "#D6D9E4", doneBorder: "#C7D2FE", warnBorder: "#E5C78F",
+      card: "#FFFFFF", border: "#D6D9E4", doneBorder: "#C7D2FE", warnBorder: "#FCD9A8",
       text: "#1F2433", body: "#374151", muted: "#4B5163", link: "#4F46E5",
       primary: "#4F46E5", primaryHover: "#4338CA", danger: "#B42318", dangerHover: "#912018",
       secondaryBg: "#FFFFFF", secondaryBorder: "#CDD1DE", secondaryText: "#1F2433",
       track: "#E5E7EB", fill: "#4F46E5", ok: "#15803D", warn: "#B45309",
-      shadow: "0 8px 24px rgba(31,36,51,0.16)",
+      shadow: "0 8px 24px rgba(31,36,51,0.18)",
       guideShadow: "0 8px 24px rgba(31,36,51,0.18)",
+      stoppedBadge: "#6B7280",
       tab: "linear-gradient(135deg, #4F46E5, #6D5DF0)", tabShadow: "0 4px 12px rgba(31,36,51,0.25)",
       tipBg: "#1F2433", tipText: "#FFFFFF",
       detailsBg: "#F9FAFB", detailsBorder: "#E5E7EB",
@@ -1572,6 +1604,7 @@
       track: "#44464C", fill: "#8B80F5", ok: "#15803D", warn: "#B45309",
       shadow: "0 8px 24px rgba(0,0,0,0.5)",
       guideShadow: "0 8px 24px rgba(0,0,0,0.5)",
+      stoppedBadge: "#5F6368",
       tab: "#6D5DF0", tabShadow: "0 4px 12px rgba(0,0,0,0.5)",
       tipBg: "#E8EAED", tipText: "#202124",
       detailsBg: "#202124", detailsBorder: "#44464C",
@@ -1676,6 +1709,8 @@
   function overlayState(text, isError, extras) {
     // Founder (BoxNotLinked): not linked — the guide card under the toolbar.
     if (extras && extras.idle && extras.idle.guide) return "not_linked";
+    if (extras && extras.stopped) return "stopped";
+    if (extras && extras.signIn) return "sign_in";
     if (extras && extras.idle) return "idle";
     if (extras && extras.ask) return "ask";
     if (isError) return "error";
@@ -1703,9 +1738,12 @@
     return Math.min(1, Math.max(0, +m[1] / +m[2]));
   }
 
-  /** The syncing line under the bar: "Chat 12 of 180 · keep this tab open". */
-  function syncingLine(text) {
-    return String(text).replace(/…$/, "") + " · " + SYNCING_CHIP_HINT;
+  /**
+   * The syncing line under the bar: "Chat 12 of 180 · keep this tab open";
+   * a Try again run (storyboard H03): "Chat 9 of 20 · skipping saved chats".
+   */
+  function syncingLine(text, retrying) {
+    return String(text).replace(/…$/, "") + " · " + (retrying ? RETRY_CHIP_HINT : SYNCING_CHIP_HINT);
   }
 
   /**
@@ -1825,6 +1863,53 @@
     if (state === "not_linked") {
       renderNotLinkedGuide();
       return;
+    }
+    if (state === "stopped") {
+      renderStopped();
+      return;
+    }
+    if (state === "sign_in") {
+      renderSignIn();
+      return;
+    }
+
+    /** Storyboard I01: Google Messages is not signed in — one line, no button. */
+    function renderSignIn() {
+      var row = el("div", "header", { display: "flex", alignItems: "center", gap: "10px" });
+      var mark = el("div", "drag-handle", { flex: "0 0 30px", width: "30px", height: "30px", cursor: "grab", touchAction: "none", userSelect: "none" });
+      mark.appendChild(brandMark(doc, 30));
+      row.appendChild(mark);
+      row.appendChild(el("div", "line", { flex: "1 1 auto", fontSize: "15px", fontWeight: "700", color: p.text }, SIGN_IN_TITLE));
+      if (io.close) {
+        var x = button("close", "×", "icon");
+        x.setAttribute("aria-label", "Close");
+        x.addEventListener("click", function () { io.close(); });
+        row.appendChild(x);
+      }
+      box.appendChild(row);
+      var line = el("div", "progress", bodyStyle);
+      line.appendChild(doc.createTextNode(SIGN_IN_BEFORE));
+      line.appendChild(el("b", null, null, "Sync now"));
+      line.appendChild(doc.createTextNode(SIGN_IN_AFTER));
+      box.appendChild(line);
+    }
+
+    /** Storyboard H07: the user stopped the Sync — one line and Close. */
+    function renderStopped() {
+      var row = el("div", "header", { display: "flex", alignItems: "center", gap: "10px" });
+      var mark = el("div", "drag-handle", {
+        flex: "0 0 30px", width: "30px", height: "30px", borderRadius: "999px", background: p.stoppedBadge, color: "#FFFFFF",
+        display: "flex", alignItems: "center", justifyContent: "center", fontWeight: "800", fontSize: "15px",
+        cursor: "grab", touchAction: "none", userSelect: "none",
+      }, "K");
+      mark.setAttribute("aria-hidden", "true");
+      row.appendChild(mark);
+      row.appendChild(el("div", "line", { flex: "1 1 auto", fontSize: "15px", fontWeight: "700", color: p.text }, STOPPED_TITLE));
+      box.appendChild(row);
+      box.appendChild(el("div", "progress", bodyStyle, STOPPED_BODY));
+      var closeStopped = button("close", "Close", "secondary");
+      closeStopped.addEventListener("click", function () { if (io.close) io.close(); });
+      box.appendChild(bottomRow(null, [closeStopped]));
     }
 
     /**
@@ -1998,7 +2083,7 @@
         running.push(bar);
       }
       var progressLine = el("div", "progress", { fontSize: "13px", color: p.muted },
-        state === "paused" ? PAUSE_BODIES[text] || PAUSED_BODY : syncingLine(text));
+        state === "paused" ? PAUSE_BODIES[text] || PAUSED_BODY : syncingLine(text, !!(extras && extras.retrying)));
       box.appendChild(progressLine);
       running.push(progressLine);
       if (!(extras && extras.cancel)) return;
@@ -2071,7 +2156,9 @@
     if (bodyLine) box.appendChild(el("div", "progress", bodyStyle, bodyLine));
     // SR U4 (the mockup): Done ALWAYS has See details (left) + Open Keepr
     // (right); with no details, See details shows the summary / copy.
-    var hasDetails = !!(extras && extras.details) || state === "done";
+    // Storyboard H01: a failed Sync that can try again shows its reason and
+    // Try again only (no See details).
+    var hasDetails = (!!(extras && extras.details) || state === "done") && !retryable;
     var detailsText = (extras && (extras.details || extras.summary || extras.copy)) || DONE_TITLE;
     var copyText = (extras && extras.copy) || detailsText;
 
@@ -2386,6 +2473,10 @@
     ASK_TITLE: ASK_TITLE,
     STOP_SYNC_QUESTION: STOP_SYNC_QUESTION,
     STOP_SYNC_TITLE: STOP_SYNC_TITLE,
+    STOPPED_TITLE: STOPPED_TITLE,
+    SIGN_IN_TITLE: SIGN_IN_TITLE,
+    cacheSummaryLine: cacheSummaryLine,
+    STOPPED_BODY: STOPPED_BODY,
     STOP_SYNC_BODY: STOP_SYNC_BODY,
     DONE_TITLE: DONE_TITLE,
     progressFraction: progressFraction,
@@ -2665,11 +2756,17 @@
 
   /** The page's Cancel: POST /job/<this job>/cancel through the worker. */
   var currentJobId = null;
+  /** Storyboard H07: this page's Stop sync ended the run (not Keepr). */
+  var stoppedHere = false;
   function cancelJob() {
     if (!currentJobId) return Promise.resolve(false);
     // Signed (a job call); Keepr records who ended it.
     return toWorker({ type: "keepr-job-api", method: "POST", path: "/job/" + currentJobId + "/cancel", body: { endedBy: "user_page" } })
-      .then(function (r) { return !!(r && r.ok); });
+      .then(function (r) {
+        var ok = !!(r && r.ok);
+        if (ok) stoppedHere = true;
+        return ok;
+      });
   }
 
   // Founder (2026-10-03): the run goes on while the tab is hidden; this only
@@ -2881,6 +2978,7 @@
         return toWorker({ type: "keepr-job-api", method: method, path: path, body: body });
       },
       overlay: { show: showOverlay },
+      stoppedHere: function () { return stoppedHere; },
       sleep: sleep,
       click: click,
       log: sendLog,
@@ -2907,6 +3005,7 @@
     if (running) return;
     setRunning(true);
     currentJobId = jobId;
+    stoppedHere = false;
     try { sessionStorage.removeItem(STORAGE_KEY); } catch (_e) { /* ignore */ }
     if (!document.body) {
       await new Promise(function (r) { document.addEventListener("DOMContentLoaded", r, { once: true }); });

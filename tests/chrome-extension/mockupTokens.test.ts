@@ -261,10 +261,10 @@ describe("the page box = the mockups (Box*.dc.html)", () => {
     expect(q(bare, "details").textContent).toBe("Sync done");
   });
 
-  it("failed: an amber ! badge, #E5C78F border, Try again at the right", () => {
+  it("failed (H01): an amber ! badge, #FCD9A8 border, the reason, Try again at the right — no See details", () => {
     const box = render("Lost the connection to your phone.", true, { retry: true }, { theme: "light", retry: async () => true });
     expect(q(box, "drag-handle").style.background).toBe(rgb("#B45309"));
-    expect(box.style.border.toLowerCase()).toBe("1px solid #e5c78f");
+    expect(box.style.border.toLowerCase()).toBe("1px solid #fcd9a8");
     expect(q(box, "line").textContent).toBe("Sync failed");
     expect(q(box, "bottom-row").style.justifyContent).toBe("flex-end");
     expect(q(box, "bottom-row").lastElementChild!.getAttribute("data-keepr")).toBe("try-again");
@@ -284,4 +284,58 @@ describe("the page box = the mockups (Box*.dc.html)", () => {
     expect(dark.style.background).toBe(rgb("#6D5DF0"));
     expect(q(dark, "tab-label").textContent).toBe("Keepr · not linked");
   });
+
+  // The approved storyboards (2026-10-04). Mutations: H01 with See details;
+  // H03 without "skipping saved chats"; H07 not "Sync stopped" + Close;
+  // I01 not its own card; A10 not the storyboard line → red.
+  it("H01: a failed Sync that can try again — no See details, even with details", () => {
+    const box = render("Lost the connection to your phone.", true, { retry: true, details: "d", copy: "c" }, { theme: "light", retry: async () => true });
+    expect(q(box, "details-toggle")).toBeNull();
+    expect(q(box, "details-card")).toBeNull();
+    expect(Array.from(q(box, "bottom-row").children).map((c) => c.getAttribute("data-keepr"))).toEqual(["try-again"]);
+  });
+
+  it("H03: a Try again run — 'Chat 9 of 20 · skipping saved chats'", () => {
+    const box = render("Chat 9 of 20…", false, { cancel: true, retrying: true }, { expanded: true, theme: "light" });
+    expect(q(box, "progress").textContent).toBe("Chat 9 of 20 · skipping saved chats");
+    const normal = render("Chat 9 of 20…", false, { cancel: true }, { expanded: true, theme: "light" });
+    expect(q(normal, "progress").textContent).toBe("Chat 9 of 20 · keep this tab open");
+  });
+
+  it("H07: 'Sync stopped', 'Nothing from this run was saved.', a grey K, Close at the right", () => {
+    const close = jest.fn();
+    const box = render(job.STOPPED_TITLE, false, { stopped: true }, { theme: "light", close });
+    expect(box.getAttribute("data-keepr-state")).toBe("stopped");
+    expect(q(box, "line").textContent).toBe("Sync stopped");
+    expect(q(box, "progress").textContent).toBe("Nothing from this run was saved.");
+    const badge = q(box, "drag-handle");
+    expect(badge.textContent).toBe("K");
+    expect(badge.style.background).toBe(rgb("#6B7280"));
+    const row = q(box, "bottom-row");
+    expect(row.style.justifyContent).toBe("flex-end");
+    expect(row.textContent).toBe("Close");
+    (row.firstElementChild as HTMLButtonElement).click();
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("I01: 'Sign in to Google Messages' and its one line — no button", () => {
+    const box = render(job.SIGN_IN_TITLE, false, { signIn: true, details: "d", copy: "c" }, { theme: "light" });
+    expect(box.getAttribute("data-keepr-state")).toBe("sign_in");
+    expect(q(box, "line").textContent).toBe("Sign in to Google Messages");
+    expect(q(box, "progress").textContent).toBe("Sign in or scan the QR code, then Sync now in Keepr.");
+    expect(q(box, "progress").querySelector("b")!.textContent).toBe("Sync now");
+    expect(box.querySelectorAll("button")).toHaveLength(0);
+    expect(box.style.border.toLowerCase()).toBe("1px solid #d6d9e4");
+  });
+
+  it("A10: the done line as Keepr saved it", () => {
+    expect(job.cacheSummaryLine({ chats: 20, messages: 412, newMessages: 38, photos: 64 })).toBe("20 chats · 412 messages (38 new) · 64 photos");
+    expect(job.cacheSummaryLine({ chats: 1, messages: 1, newMessages: 0 })).toBe("1 chat · 1 message (0 new)");
+  });
+
+  it("every card's shadow is the storyboards' 0 8px 24px rgba(31,36,51,0.18)", () => {
+    const box = render("Chat 1 of 3…", false, { cancel: true }, { expanded: true, theme: "light" });
+    expect(box.style.boxShadow).toBe("0 8px 24px rgba(31,36,51,0.18)");
+  });
+
 });

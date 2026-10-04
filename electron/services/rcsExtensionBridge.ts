@@ -438,6 +438,8 @@ export class RcsExtensionBridge {
       pendingConversationIds?: readonly string[];
       dealConversationIds?: readonly string[];
       dealFloorISO?: string | null;
+      /** Storyboard H03: a Try again run (the page says "skipping saved chats"). */
+      retrying?: boolean;
     },
   ): RcsJobSnapshot | null {
     if (this.jobs.active()) return null;
@@ -446,6 +448,7 @@ export class RcsExtensionBridge {
       pendingConversationIds: options.pendingConversationIds,
       dealConversationIds: options.dealConversationIds,
       dealFloorISO: options.dealFloorISO,
+      retrying: options.retrying === true,
     });
     this.logger.info("[RcsBridge] Cache job created");
     return this.armJob(job, options.unclaimedMs ?? 60_000);

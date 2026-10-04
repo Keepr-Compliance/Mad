@@ -166,6 +166,19 @@ describe("rcs-import:retry-cache-job (Keepr's Try again)", () => {
     expect(shell.openExternal).not.toHaveBeenCalled();
   });
 
+  // Storyboard H03: the page says "skipping saved chats" on a Try again run —
+  // Keepr marks the job (retrying) when the user's last Sync failed.
+  // Mutation: retrying not passed → red.
+  it("a Sync after a failed one is marked retrying; a normal one is not", async () => {
+    mockFailedRunStart = "2026-10-03T10:00:00.000Z";
+    await retry();
+    expect((mockLastCacheOptions as { retrying?: boolean }).retrying).toBe(true);
+    mockFailedRunStart = null;
+    created.length = 0;
+    await start();
+    expect((mockLastCacheOptions as { retrying?: boolean }).retrying).toBe(false);
+  });
+
   it("after a failed Sync: a new cache job, and Messages opened for it", async () => {
     mockFailedRunStart = "2026-10-03T10:00:00.000Z";
     shell.openExternal.mockClear();

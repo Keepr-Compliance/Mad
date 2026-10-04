@@ -379,7 +379,8 @@ describe("job runner", () => {
       ["POST", `/job/${JOB}/error`, { code: "not_signed_in", message: job.NOT_SIGNED_IN }],
     ]);
     expect(job.NOT_SIGNED_IN).toBe("Sign in to Google Messages, then click Sync in Keepr again");
-    expect(shown).toEqual([[job.NOT_SIGNED_IN, true]]);
+    // Storyboard I01: its own card ("Sign in to Google Messages"), not an error.
+    expect(shown).toEqual([["Sign in to Google Messages", false]]);
     expect(collect).not.toHaveBeenCalled();
   });
 
@@ -666,6 +667,36 @@ describe("Keepr lost mid-run: the run stops with its reason", () => {
     const fn = /function retrySync\(\) \{[\s\S]*?\n {2}\}/.exec(src)![0];
     expect(fn).toContain('if (!r || r.status === 0) {');
     expect(fn).toContain('launchKeepr(document, "keepr://open");');
+  });
+});
+
+// Storyboards H03 / H07 at the job level. Mutations: the claim's retrying
+// ignored; a stop from this page shown as "cancelled in Keepr" → red.
+describe("storyboards H03 / H07 in the job", () => {
+  it("H03: a Try again run's progress carries retrying (the box says 'skipping saved chats')", async () => {
+    const extras: Array<Record<string, unknown> | undefined> = [];
+    const t = jobPage({
+      swapAfterMs: 0,
+      api: (_m, p) => (p.endsWith("/claim") ? { ok: true, status: 200, body: { jobId: t.JOB, kind: "cache", since: "2026-09-01T00:00:00.000Z", contacts: [], retrying: true } } : undefined),
+    });
+    (t.env as Record<string, unknown>).overlay = { show: (_text: string, _e: boolean, x?: Record<string, unknown>) => extras.push(x) };
+    await job.runJob(t.JOB, t.env);
+    expect(extras.some((x) => !!x && x.cancel === true && x.retrying === true)).toBe(true);
+  });
+
+  it("H07: stopped from this page → 'Sync stopped' (not 'cancelled in Keepr')", async () => {
+    let progressCalls = 0;
+    const t = jobPage({
+      swapAfterMs: 0,
+      api: (_m, p) => {
+        if (p.endsWith("/progress") && ++progressCalls >= 2) return { ok: false, status: 410, body: { error: "job_over" } };
+        return undefined;
+      },
+    });
+    (t.env as Record<string, unknown>).stoppedHere = () => true;
+    const outcome = await job.runJob(t.JOB, t.env);
+    expect(outcome.outcome).toBe("stopped");
+    expect(t.shown[t.shown.length - 1]).toEqual(["Sync stopped", false]);
   });
 });
 

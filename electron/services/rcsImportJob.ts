@@ -291,6 +291,8 @@ export class RcsImportJob {
   pendingConversationIds: string[] = [];
   dealConversationIds: string[] = [];
   dealFloorISO: string | null = null;
+  /** Storyboard H03: a Try again run (it skips the chats the failed one saved). */
+  retrying = false;
   userId: string | null = null;
   /** BACKLOG-3658: own numbers known before this job (persisted), excluded from the first chat. */
   seededOwnNumbers = new Set<string>();
@@ -385,6 +387,7 @@ export class RcsImportJob {
         ...(this.dealConversationIds.length > 0 && this.dealFloorISO
           ? { dealConversationIds: [...this.dealConversationIds], dealFloor: this.dealFloorISO }
           : {}),
+        ...(this.retrying ? { retrying: true } : {}),
       };
     }
     this.stage = "Looking for this transaction's chats";
@@ -584,6 +587,7 @@ export class RcsJobRegistry {
       pendingConversationIds?: readonly string[];
       dealConversationIds?: readonly string[];
       dealFloorISO?: string | null;
+      retrying?: boolean;
     } = {},
   ): RcsImportJob {
     const running = this.active();
@@ -597,6 +601,7 @@ export class RcsJobRegistry {
     job.pendingConversationIds = [...(full.pendingConversationIds ?? [])].slice(0, 500);
     job.dealConversationIds = [...(full.dealConversationIds ?? [])].slice(0, RCS_DEAL_CHATS_MAX);
     job.dealFloorISO = full.dealFloorISO ?? null;
+    job.retrying = full.retrying === true;
     for (const n of participantKey(ownNumbers).split(",").filter(Boolean)) job.seededOwnNumbers.add(n);
     this.job = job;
     return job;
