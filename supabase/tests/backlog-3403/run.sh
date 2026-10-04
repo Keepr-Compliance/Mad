@@ -16,7 +16,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
-DRAFT="$REPO/supabase/migrations/20261004200000_backlog_3403_finalize_submission.sql"
+DRAFT="$REPO/supabase/migrations/20261004192647_backlog_3403_finalize_submission.sql"
 DRAFT_RB="$HERE/rollback-3403.sql"
 CONTAINER="${PG_CONTAINER:-supabase_db_keepr-test}"
 psql_in() {

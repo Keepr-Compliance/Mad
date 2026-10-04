@@ -1,6 +1,6 @@
 # BACKLOG-3403 harness — finalize_submission, submission_attempts, upload-time rules
 
-Runs `supabase/migrations/20261004200000_backlog_3403_finalize_submission.sql`
+Runs `supabase/migrations/20261004192647_backlog_3403_finalize_submission.sql`
 — **the shipped file itself** — on a local Supabase stack (`supabase start` in
 this repo: real `auth` and `storage` schemas, real PostgREST, storage-api and
 GoTrue). `control-run.txt`, `mutant-run.txt` and the files under `live/` are the
@@ -9,6 +9,8 @@ tested rollback.
 
 It is not in CI: CI has no database. The CI tripwire is
 `broker-portal/__tests__/migrations/finalize-submission-3403.test.ts`.
+**The migration was applied to production as ledger version `20261004192647` (2026-10-04).** `live/apply-run.txt` predates the rename and shows the earlier file name; the content (md5 `b7cc539f…`) is the same.
+
 No file here has a `.test.` or `.spec.` infix. **Nothing here can reach production**
 (`live/live-run.mjs` refuses any API URL that is not `127.0.0.1`/`localhost`).
 

@@ -1,5 +1,5 @@
 -- BACKLOG-3403 rollback: returns the catalogue to the state before
--- 20261004200000_backlog_3403_finalize_submission.sql (policy text transcribed
+-- 20261004192647_backlog_3403_finalize_submission.sql (policy text transcribed
 -- from production pg_policies on 2026-10-04). Run as ONE transaction.
 -- Drops public.submission_attempts and every row in it.
 
