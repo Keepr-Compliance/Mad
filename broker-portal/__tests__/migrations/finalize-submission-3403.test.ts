@@ -131,6 +131,8 @@ describe('submission_attempts', () => {
     const fn = fnBlock('record_submission_attempt');
     expect(fn).toContain('SECURITY DEFINER SET search_path = \'\'');
     expect(fn).toContain("RETURN jsonb_build_object('ok', false, 'code', 'not_member');");
+    // only finalize_submission writes 'committed'
+    expect(fn).toContain("IF p_outcome = 'committed' THEN RETURN jsonb_build_object('ok', false, 'code', 'committed_is_server_only');");
     expect(fn).toContain('(s.submitted_by <> v_uid OR s.organization_id <> p_organization_id)');
     expect(fn).toContain("IF v_existing.outcome = 'committed' THEN");
     expect(fn).toContain("WHERE a.user_id = v_uid AND a.outcome <> 'committed'");
@@ -162,6 +164,14 @@ describe('row-level security', () => {
     expect(check).toContain("OR (((status)::text <> 'uploading'::text) AND (organization_id IN");
   });
 
+  it('attachment-row DELETE also needs the abandon fence', () => {
+    const p = policy('agents_can_delete_own_attachments', 'public.submission_attachments');
+    expect(p).toContain('FOR DELETE');
+    expect(p).toContain('transaction_submissions.submitted_by = (SELECT auth.uid() AS uid)');
+    expect(p).toContain("(transaction_submissions.status)::text = 'uploading'::text");
+    expect(p).toContain("coalesce(transaction_submissions.submission_metadata->>'abandoned', '') = 'true'");
+  });
+
   it('storage DELETE: submitter of an uploading, abandoned submission, signed in', () => {
     const p = policy('"Submitters can delete attachments of their abandoned upload"', 'storage.objects');
     expect(p).toContain('FOR DELETE TO authenticated');
@@ -179,9 +189,15 @@ describe('rollback-3403.sql', () => {
     expect(RB).toContain('DROP FUNCTION IF EXISTS public.finalize_submission(uuid, jsonb);');
     expect(RB).toContain('DROP FUNCTION IF EXISTS public.record_submission_attempt(uuid, uuid, text, text, text, integer, jsonb, boolean, text, text);');
     expect(RB).toContain('DROP TABLE IF EXISTS public.submission_attempts;');
-    for (const name of ['transaction_submissions_update_public', 'agents_can_insert_attachments', 'agents_can_insert_messages']) {
+    for (const name of [
+      'transaction_submissions_update_public',
+      'agents_can_delete_own_attachments',
+      'agents_can_insert_attachments',
+      'agents_can_insert_messages',
+    ]) {
       expect(RB).toContain(`CREATE POLICY ${name} ON`);
     }
     expect(RB).not.toContain("'uploading'::text) AND (organization_id IN");
+    expect(RB).not.toContain("submission_metadata->>'abandoned'");
   });
 });

@@ -113,8 +113,20 @@ M = [
         "       AND (ts.status)::text = 'uploading'::text\n       AND split_part(submission_attachments.storage_path", "       AND split_part(submission_attachments.storage_path")]),
     ("M35", "table created without IF NOT EXISTS (not re-runnable)", "draft", ["G2"], [(
         "CREATE TABLE IF NOT EXISTS public.submission_attempts (", "CREATE TABLE public.submission_attempts (")]),
+    ("M36", "record_submission_attempt accepts outcome committed from a client", "draft", ["SR1"], [(
+        "  IF p_outcome = 'committed' THEN\n    RETURN jsonb_build_object('ok', false, 'code', 'committed_is_server_only');\n  END IF;\n", "")]),
+    ("M37", "attachment-row DELETE policy without the abandoned term", "draft", ["RD1"], [(
+        "       AND (transaction_submissions.status)::text = 'uploading'::text\n"
+        "       AND coalesce(transaction_submissions.submission_metadata->>'abandoned', '') = 'true'));",
+        "       AND (transaction_submissions.status)::text = 'uploading'::text));")]),
+    ("M38", "finalize reads the submission without FOR UPDATE", "draft", ["L1"], [(
+        "SELECT * INTO v_sub FROM public.transaction_submissions WHERE id = p_submission_id FOR UPDATE;",
+        "SELECT * INTO v_sub FROM public.transaction_submissions WHERE id = p_submission_id;")]),
     ("RB1", "rollback leaves the new message index", "rollback", ["G1"], [(
         "DROP INDEX IF EXISTS public.submission_messages_submission_id_idx;\n", "")]),
+    ("RB3", "rollback leaves the attachment-row DELETE term", "rollback", ["G1"], [(
+        "       AND ((transaction_submissions.status)::text = 'uploading'::text))));\n\nDROP POLICY IF EXISTS agents_can_insert_attachments",
+        "       AND ((transaction_submissions.status)::text = 'uploading'::text) AND coalesce(transaction_submissions.submission_metadata->>'abandoned', '') = 'true')));\n\nDROP POLICY IF EXISTS agents_can_insert_attachments")]),
     ("RB2", "rollback leaves the reviewer WITH CHECK tightened", "rollback", ["G1"], [(
         "    OR (organization_id IN (SELECT organization_members.organization_id\n                              FROM public.organization_members",
         "    OR ((status)::text <> 'uploading'::text AND organization_id IN (SELECT organization_members.organization_id\n                              FROM public.organization_members")]),

@@ -240,6 +240,28 @@ async function post() {
     check('R3 abandoned upload: remove() removes the object', rm3.data?.length === 1 && objectCount(r3.P1) === 0, { removed: rm3.data?.length });
   }
 
+  // L4b attachment-ROW delete during an open finalize (no fence), and the row lock on a refusal.
+  {
+    const r = seedSubmission(A);
+    await upload(A, r.P1);
+    const held = holdFinalize(A, r.S, r.manifest, 4000);
+    await sleep(1000);
+    const del = await A.client.from('submission_attachments').delete().eq('submission_id', r.S).select('id');
+    const fin = await held;
+    const rows = Number(psql(`select count(*) from public.submission_attachments where submission_id = '${r.S}'`));
+    check('R1-row attachment-row delete during finalize (no fence): deletes nothing', !del.error && (del.data?.length ?? 0) === 0, { deleted: del.data?.length, error: del.error?.code });
+    check('R1-row finalize committed with its attachment row', /"ok": true/.test(fin) && statusOf(r.S) === 'submitted' && rows === 1, { status: statusOf(r.S), rows });
+
+    const l = seedSubmission(A);
+    await upload(A, l.P1);
+    const short = { ...l.manifest, message_ids: [l.M1] };
+    const heldRefusal = holdFinalize(A, l.S, short, 4000);
+    await sleep(1000);
+    const fz = await fence(A.client, l.S);
+    const finR = await heldRefusal;
+    check('L6 finalize that refuses still holds the row: the fence waits, then matches 1 row', /incomplete/.test(finR) && fz.rows === 1 && fz.ms >= 2000, { fence: fz, fin: finR.split('\n').pop() });
+  }
+
   // L5 the per-attempt table through the API.
   {
     const S = randomUUID();
@@ -248,6 +270,8 @@ async function post() {
       p_retry_count: 3, p_counts: { messages: 4, attachments: 2, note: 'dropped' }, p_app_version: '2.39.0', p_platform: 'darwin',
     });
     check('L5 record_submission_attempt as the agent: ok', rec.data?.ok === true, rec.data ?? rec.error);
+    const fake = await A.client.rpc('record_submission_attempt', { p_submission_id: randomUUID(), p_organization_id: ORG, p_outcome: 'committed' });
+    check('SR1 record_submission_attempt refuses outcome committed', fake.data?.ok === false && fake.data?.code === 'committed_is_server_only', fake.data ?? fake.error);
     const anonRec = await anon.rpc('record_submission_attempt', { p_submission_id: randomUUID(), p_organization_id: ORG, p_outcome: 'failed' });
     check('L5 record_submission_attempt with the anon key: refused', !!anonRec.error, anonRec.error?.code);
     const seen = async (c) => ((await c.from('submission_attempts').select('submission_id, outcome, counts').eq('submission_id', S)).data ?? []);

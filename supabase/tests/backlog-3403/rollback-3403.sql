@@ -22,6 +22,15 @@ CREATE POLICY transaction_submissions_update_public ON public.transaction_submis
                              WHERE ((organization_members.user_id = (SELECT auth.uid() AS uid))
                                AND ((organization_members.role)::text = ANY (ARRAY[('broker'::character varying)::text, ('admin'::character varying)::text]))))));
 
+DROP POLICY IF EXISTS agents_can_delete_own_attachments ON public.submission_attachments;
+CREATE POLICY agents_can_delete_own_attachments ON public.submission_attachments
+  FOR DELETE
+  USING (submission_id IN (
+    SELECT transaction_submissions.id
+      FROM public.transaction_submissions
+     WHERE ((transaction_submissions.submitted_by = (SELECT auth.uid() AS uid))
+       AND ((transaction_submissions.status)::text = 'uploading'::text))));
+
 DROP POLICY IF EXISTS agents_can_insert_attachments ON public.submission_attachments;
 CREATE POLICY agents_can_insert_attachments ON public.submission_attachments
   FOR INSERT

@@ -20,7 +20,8 @@
 --   3. public.record_submission_attempt(...): SECURITY DEFINER. Creates or
 --      updates the caller's row for a submission id. Keeps only snake_case
 --      count keys with whole-number values. A row already marked committed
---      is not changed.
+--      is not changed. Refuses outcome 'committed' (code
+--      committed_is_server_only): only finalize_submission writes it.
 --
 --   4. public.finalize_submission(submission, manifest): SECURITY DEFINER.
 --      Verifies that the stored messages, attachment rows, storage objects
@@ -43,6 +44,9 @@
 --      - transaction_submissions_update_public: the reviewer branch of
 --        WITH CHECK no longer accepts status 'uploading'. Otherwise the
 --        production text.
+--      - agents_can_delete_own_attachments: the parent must also be marked
+--        abandoned. (A 2.38 cleanup still ends with every row gone: its parent
+--        delete cascades.)
 --      - storage.objects: new DELETE policy for bucket submission-attachments:
 --        the submitter of the submission named by the path, while it is
 --        'uploading' and marked abandoned.
@@ -142,6 +146,9 @@ BEGIN
   END IF;
   IF p_submission_id IS NULL OR p_organization_id IS NULL OR p_outcome IS NULL THEN
     RAISE EXCEPTION 'missing_argument' USING ERRCODE = '22023';
+  END IF;
+  IF p_outcome = 'committed' THEN
+    RETURN jsonb_build_object('ok', false, 'code', 'committed_is_server_only');
   END IF;
   IF NOT EXISTS (SELECT 1 FROM public.organization_members om
                   WHERE om.organization_id = p_organization_id AND om.user_id = v_uid) THEN
@@ -322,6 +329,16 @@ CREATE POLICY agents_can_insert_attachments ON public.submission_attachments
        AND (ts.status)::text = 'uploading'::text
        AND split_part(submission_attachments.storage_path, '/'::text, 1) = (ts.organization_id)::text
        AND split_part(submission_attachments.storage_path, '/'::text, 2) = (ts.id)::text));
+
+DROP POLICY IF EXISTS agents_can_delete_own_attachments ON public.submission_attachments;
+CREATE POLICY agents_can_delete_own_attachments ON public.submission_attachments
+  FOR DELETE
+  USING (submission_id IN (
+    SELECT transaction_submissions.id
+      FROM public.transaction_submissions
+     WHERE transaction_submissions.submitted_by = (SELECT auth.uid() AS uid)
+       AND (transaction_submissions.status)::text = 'uploading'::text
+       AND coalesce(transaction_submissions.submission_metadata->>'abandoned', '') = 'true'));
 
 DROP POLICY IF EXISTS transaction_submissions_update_public ON public.transaction_submissions;
 CREATE POLICY transaction_submissions_update_public ON public.transaction_submissions
