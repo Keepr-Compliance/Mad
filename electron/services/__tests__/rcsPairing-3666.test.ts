@@ -464,17 +464,6 @@ describe("an honest 'linked' (B1)", () => {
     expect(restarted.isPaired("user-a")).toBe(true);
   });
 
-  // The code screen's Cancel (the mockup): the pending session goes; the
-  // browser's poll learns it. Mutation: cancelLink a no-op → red.
-  it("Cancel on Keepr's code screen drops the pending link", async () => {
-    const a = P.startA("123456");
-    const st = await post(port, "/link/start", {}, JSON.stringify({ pA: a.pA }));
-    expect(auth.linkState().state).toBe("waiting");
-    auth.cancelLink();
-    expect(auth.linkState().state).toBe("none");
-    expect((await post(port, "/link/poll", {}, JSON.stringify({ sessionId: st.body.sessionId }))).status).toBe(404);
-  });
-
   it("Forget link deletes the user's link", async () => {
     await linkWith("user-a");
     auth.forgetLink("user-a");

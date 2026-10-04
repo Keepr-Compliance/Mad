@@ -16,7 +16,6 @@ let mockLink: Link = { state: "none", intrusion: false };
 let mockLinked = false;
 const mockEnter = jest.fn(async (_code: string) => ({ success: true }) as { success: boolean; error?: string });
 const mockLinkForget = jest.fn(async () => undefined);
-const mockLinkCancel = jest.fn(async () => undefined);
 const mockOpenMessages = jest.fn(async () => undefined);
 jest.mock("../../../../services/rcsImportService", () => ({
   rcsImportService: {
@@ -24,7 +23,6 @@ jest.mock("../../../../services/rcsImportService", () => ({
     linkEnterCode: (code: string) => mockEnter(code),
     linkDismissWarning: async () => undefined,
     linkForget: () => mockLinkForget(),
-    linkCancel: () => mockLinkCancel(),
     openGoogleMessages: () => mockOpenMessages(),
   },
 }));
@@ -243,14 +241,24 @@ describe("LinkBrowserPanel", () => {
 // C4 (founder): Keepr never makes a pairing code any more. Mutation: the
 // old IPC brought back → red.
 describe("no Keepr-made codes (C4)", () => {
-  it("no pair-code / pair-cancel IPC in the preload or the handlers", () => {
+  // SR: the link screen has no Cancel any more, and its IPC is gone too
+  // (rcs-import:link-cancel, linkCancel, cancelLink). Mutation: any of them back → red.
+  it("no pair-code / pair-cancel / link-cancel IPC in the preload, the handlers or the services", () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const fs = require("fs") as typeof import("fs");
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const path = require("path") as typeof import("path");
     const root = path.join(__dirname, "..", "..", "..", "..", "..");
-    for (const f of ["electron/preload/rcsImportBridge.ts", "electron/handlers/rcsImportHandlers.ts", "src/services/rcsImportService.ts"]) {
-      expect([f, /rcs-import:pair-(code|cancel)|pairCode\(/.test(fs.readFileSync(path.join(root, f), "utf8"))]).toEqual([f, false]);
+    for (const f of [
+      "electron/preload/rcsImportBridge.ts",
+      "electron/handlers/rcsImportHandlers.ts",
+      "src/services/rcsImportService.ts",
+      "electron/types/ipc/window-api-rcs-import.ts",
+      "electron/services/rcsPairingAuth.ts",
+    ]) {
+      const src = fs.readFileSync(path.join(root, f), "utf8");
+      expect([f, /rcs-import:pair-(code|cancel)|pairCode\(/.test(src)]).toEqual([f, false]);
+      expect([f, /rcs-import:link-cancel|\blinkCancel\b|\bcancelLink\b/.test(src)]).toEqual([f, false]);
     }
   });
 });
