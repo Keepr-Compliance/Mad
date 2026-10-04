@@ -6,6 +6,7 @@ AB5-abandoned-status-locked              GREEN 2 assertions
 AB6-insert-refused                       GREEN 1 assertions
 AB7-not-with-status-change               GREEN 1 assertions
 AB8-metadata-flag-no-longer-counts       GREEN 3 assertions
+AB9-server-time                          GREEN 2 assertions
 C1-declared-row-and-object-missing       GREEN 1 assertions
 C11-missing-plus-undeclared              GREEN 1 assertions
 C12-path-into-other-submission           GREEN 1 assertions
@@ -66,4 +67,4 @@ X2b-broker-needs-changes                 GREEN 1 assertions
 X3-execute-grants                        GREEN 5 assertions
 X4-anon-call                             GREEN 1 assertions
 X5-submitter-back-to-uploading           GREEN 1 assertions
-controls: 68 green / 68
+controls: 69 green / 69

@@ -65,6 +65,8 @@ M = ported() + [
     ("A45", "trigger on UPDATE only", "draft", ["AB6"], [(
         "  BEFORE INSERT OR UPDATE ON public.transaction_submissions\n  FOR EACH ROW EXECUTE FUNCTION public.guard_submission_abandoned_at();",
         "  BEFORE UPDATE ON public.transaction_submissions\n  FOR EACH ROW EXECUTE FUNCTION public.guard_submission_abandoned_at();")]),
+    ("A49", "guard keeps the client's value instead of stamping now()", "draft", ["AB9"], [(
+        "    -- Server time, whatever the client sent.\n    NEW.abandoned_at := now();\n", "")]),
     ("A46", "column added without IF NOT EXISTS (not re-runnable)", "draft", ["G2"], [(
         "ADD COLUMN IF NOT EXISTS abandoned_at", "ADD COLUMN abandoned_at")]),
     ("RB1", "rollback leaves the column", "rollback", ["G1"], [(

@@ -39,6 +39,7 @@ Every backlog-3403 control is carried over. The eight that set the old
 | AB6 | a client cannot insert a row with it set |
 | AB7 | setting it and leaving `uploading` in one statement is refused |
 | AB8 | the old metadata flag no longer fences (no delete, finalize succeeds) |
+| AB9 | a client writing a future value gets the server's `now()` stored |
 | SV1 | the service role, and a SECURITY DEFINER function owned by postgres (a server sweep), can set it |
 | G0–G3 | before = production (the 3403 post-apply fingerprint, 39 rows); rollback = before; twice = once; after = `lib/fp-after-3725.txt` (42 rows) |
 
@@ -58,5 +59,6 @@ copy. Mutants with `want green` are measured EQUIVALENT and kept in the run:
 - EQ15: the finalize REVOKE term. `CREATE OR REPLACE` keeps the ACL the 3403 file set.
 
 Load-bearing: U1 (submitter USING without `abandoned_at IS NULL` → AB5 red, and
-live L7d: a 2.38 flip turns an abandoned upload into `submitted`,
-`live/live-mutant-u1.txt`), A13, A17/A17b, A37, A40, A43, A45, A48.
+live L7d: a 2.38 flip turns an abandoned upload into `submitted`), A49 (no
+server-time stamp → AB9 red, live L7g stores a value 100 years ahead), A13,
+A17/A17b, A37, A40, A43, A45, A48. Live mutant runs: `live/live-mutants.txt`.

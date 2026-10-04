@@ -1,4 +1,4 @@
-32 mutants written
+33 mutants written
 A13 [want red: as expected] (draft) storage DELETE policy without the abandoned_at term
     MUTATION APPLIED: 3 line(s); first: AND (s.status)::text = 'uploading'::text)));
     RED: P6n  green: none
@@ -44,6 +44,10 @@ A48 [want red: as expected] (draft) guard refuses the service role / definer cal
     MUTATION APPLIED: 3 line(s); first: 
     RED: SV1  green: none
       SV1: abandoned_at_submitter_once_while_uploading
+A49 [want red: as expected] (draft) guard keeps the client's value instead of stamping now()
+    MUTATION APPLIED: 2 line(s); first: 
+    RED: AB9  green: none
+      AB9: ASSERT FAILED: AB9 stored = now(): 2126-10-04 20:19:55.991363+00
 EQ15 [want green: as expected] (draft) EQUIVALENT: finalize REVOKE names PUBLIC only (re-create keeps the 3403 ACL)
     MUTATION APPLIED: 2 line(s); first: REVOKE EXECUTE ON FUNCTION public.finalize_submission(uuid, jsonb) FROM PUBLIC;
     RED: none  green: X3 X4
@@ -124,4 +128,4 @@ U1 [want red: as expected] (draft) submitter USING branch without abandoned_at I
     MUTATION APPLIED: 2 line(s); first: ((submitted_by = (SELECT auth.uid() AS uid)) AND ((status)::text = 'uploading'::text))
     RED: AB5  green: none
       AB5: ASSERT FAILED: AB5 flip 0 rows
-mutants: 32 run, 0 not as expected
+mutants: 33 run, 0 not as expected

@@ -280,6 +280,11 @@ async function post() {
     check('L7d 2.38-shaped flip of an abandoned upload: matches 0 rows, still uploading', !flip.error && (flip.data?.length ?? 0) === 0 && statusOf(a.S) === 'uploading', { rows: flip.data?.length, error: flip.error?.code });
     const k = await K.client.from('transaction_submissions').update({ abandoned_at: new Date().toISOString() }).eq('id', f.S).select('id');
     check('L7e broker cannot set abandoned_at on a submission it reviews (42501)', k.error?.code === '42501', k.error?.code);
+    const st = seedSubmission(A);
+    const future = await A.client.from('transaction_submissions').update({ abandoned_at: '2126-01-01T00:00:00Z' })
+      .eq('id', st.S).eq('status', 'uploading').is('abandoned_at', null).select('abandoned_at');
+    const skew = Number(psql(`select abs(extract(epoch from (abandoned_at - now()))) from public.transaction_submissions where id = '${st.S}'`));
+    check('L7g client writes a future abandoned_at: stored value is server time', !future.error && future.data?.length === 1 && skew < 60, { rows: future.data?.length, skew_s: skew });
     const sw = seedSubmission(A);
     const svc = await admin.from('transaction_submissions').update({ abandoned_at: new Date().toISOString() })
       .eq('id', sw.S).eq('status', 'uploading').is('abandoned_at', null).select('id');

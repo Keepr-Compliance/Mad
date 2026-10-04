@@ -84,6 +84,8 @@ describe('BACKLOG-3725 migration file', () => {
     expect(fn).toContain("IF NEW.abandoned_at IS NOT NULL THEN RAISE EXCEPTION 'abandoned_at_insert'");
     expect(fn).toContain('OR OLD.submitted_by IS DISTINCT FROM auth.uid()');
     expect(fn).toContain("OR (NEW.status)::text <> 'uploading' THEN");
+    // server time, whatever the client sent
+    expect(fn).toContain("RAISE EXCEPTION 'abandoned_at_submitter_once_while_uploading' USING ERRCODE = '42501'; END IF; NEW.abandoned_at := now(); END IF;");
     expect(SQL).toContain('BEFORE INSERT OR UPDATE ON public.transaction_submissions FOR EACH ROW EXECUTE FUNCTION public.guard_submission_abandoned_at();');
     expect(SQL).toContain('REVOKE EXECUTE ON FUNCTION public.guard_submission_abandoned_at() FROM PUBLIC, anon, authenticated;');
   });

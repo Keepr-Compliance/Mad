@@ -2,7 +2,7 @@ column:transaction_submissions.abandoned_at|971bcf147236367f6be9b369c49f8ff4
 function:can_review_submission(p_org_id uuid)|686faa4d11f82471fb7e11b173ba66ce
 function:finalize_submission(p_submission_id uuid, p_manifest jsonb)|e7603c5b71aed927358dff07ddd8f5dc
 function:guard_status_history_append_only()|e53db0cc2573622f0135b1dfb363cc11
-function:guard_submission_abandoned_at()|e6dd1f3f6d873c0131d418c912486c8c
+function:guard_submission_abandoned_at()|8d330b83ce181d1a35fc0a845e2d50c1
 function:record_submission_attempt(p_submission_id uuid, p_organization_id uuid, p_outcome text, p_stage text, p_reason_code text, p_retry_count integer, p_counts jsonb, p_is_resubmit boolean, p_app_version text, p_platform text)|14772e83896f1265e34548f9e142d9e3
 function:track_submission_status_changes()|e2aca483ff4e280f8cb1d8bfdc5d49fa
 index:idx_submission_attachments_message_id|8a53e144c1d38ffeb9e4c16f188c9a74

@@ -21,7 +21,8 @@
 --      e.g. a server sweep) pass through:
 --        - INSERT: abandoned_at must be NULL.
 --        - UPDATE that changes abandoned_at: only the submitter, only while
---          the row is and stays 'uploading', and only from NULL to a value.
+--          the row is and stays 'uploading', and only from NULL to a value;
+--          the stored value is the server's now(), whatever the client sent.
 --      A trigger, because the policies cannot compare old and new values:
 --      USING sees the old row, WITH CHECK the new one. The "only from NULL"
 --      term is extra protection: with the USING term in (2), no client UPDATE
@@ -75,6 +76,8 @@ BEGIN
        OR (NEW.status)::text <> 'uploading' THEN
       RAISE EXCEPTION 'abandoned_at_submitter_once_while_uploading' USING ERRCODE = '42501';
     END IF;
+    -- Server time, whatever the client sent.
+    NEW.abandoned_at := now();
   END IF;
   RETURN NEW;
 END
