@@ -15,7 +15,7 @@ eval "$(supabase status --workdir "$WD" -o env 2>/dev/null | grep -E '^(API_URL|
 export API_URL SERVICE_ROLE_KEY PG_CONTAINER="$PG"
 case "$API_URL" in http://127.0.0.1:*|http://localhost:*) ;; *) echo "refusing: $API_URL is not local" >&2; exit 2 ;; esac
 psql_in() { docker exec -i "$PG" psql -U postgres -v ON_ERROR_STOP=1 -X -tA -q -f -; }
-psql_in < "$REPO/supabase/migrations/20261005120000_backlog_3726_submission_sweep.sql"
+psql_in < "$REPO/supabase/migrations/20261004232314_backlog_3726_submission_sweep.sql"
 echo "SELECT vault.update_secret((SELECT id FROM vault.secrets WHERE name='submission_sweep_url'), 'http://$KONG:8000/functions/v1/submission-sweep');" | psql_in >/dev/null
 # functions serve mounts <workdir>/supabase/functions (a symlink does not mount): copy the function in
 if [ "$(cd "$WD" && pwd)" != "$REPO" ]; then
@@ -54,11 +54,11 @@ phase badsecret || rc=1
 serve live 8000; phase delay || rc=1
 if [ "${WITH_TIMEOUT_MUTANT:-}" = 1 ]; then
   echo "MUTATION APPLIED: submission_sweep_invoke timeout_milliseconds 150000 -> 5000 (live venue)"
-  sed 's/timeout_milliseconds := 150000/timeout_milliseconds := 5000/' "$REPO/supabase/migrations/20261005120000_backlog_3726_submission_sweep.sql" | grep -c 'timeout_milliseconds := 5000' >/dev/null
-  sed 's/timeout_milliseconds := 150000/timeout_milliseconds := 5000/' "$REPO/supabase/migrations/20261005120000_backlog_3726_submission_sweep.sql" | psql_in
+  sed 's/timeout_milliseconds := 150000/timeout_milliseconds := 5000/' "$REPO/supabase/migrations/20261004232314_backlog_3726_submission_sweep.sql" | grep -c 'timeout_milliseconds := 5000' >/dev/null
+  sed 's/timeout_milliseconds := 150000/timeout_milliseconds := 5000/' "$REPO/supabase/migrations/20261004232314_backlog_3726_submission_sweep.sql" | psql_in
   echo "SELECT vault.update_secret((SELECT id FROM vault.secrets WHERE name='submission_sweep_url'), 'http://$KONG:8000/functions/v1/submission-sweep');" | psql_in >/dev/null
   phase timeout || rc=1
-  psql_in < "$REPO/supabase/migrations/20261005120000_backlog_3726_submission_sweep.sql"
+  psql_in < "$REPO/supabase/migrations/20261004232314_backlog_3726_submission_sweep.sql"
 fi
 stop_serve
 echo "live run exit $rc"; exit $rc

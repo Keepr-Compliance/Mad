@@ -15,8 +15,8 @@ const read = (p: string): string => readFileSync(join(REPO, p), 'utf8').replace(
 const statements = (raw: string): string =>
   raw.split('\n').map((l) => l.replace(/--.*$/, '')).join(' ').replace(/\s+/g, ' ').trim();
 
-const SQL = statements(read('supabase/migrations/20261005120000_backlog_3726_submission_sweep.sql'));
-const SCHED = statements(read('supabase/migrations/20261005120100_backlog_3726_submission_sweep_schedule.sql'));
+const SQL = statements(read('supabase/migrations/20261004232314_backlog_3726_submission_sweep.sql'));
+const SCHED = statements(read('supabase/migrations/20261004232511_backlog_3726_submission_sweep_schedule.sql'));
 const RB = statements(read('supabase/tests/backlog-3726/rollback-3726.sql'));
 const CONFIG = read('supabase/config.toml');
 

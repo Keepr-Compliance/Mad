@@ -5,7 +5,7 @@
  * `index.ts` wires it to `Deno.serve` with the real environment and `fetch`.
  *
  * Caller: `public.submission_sweep_invoke()`, run hourly by the cron job
- * `submission-sweep` (migration 20261005120100). It sends `x-webhook-secret`;
+ * `submission-sweep` (migration 20261004232511). It sends `x-webhook-secret`;
  * every request without the matching value gets 401.
  *
  * One run:
