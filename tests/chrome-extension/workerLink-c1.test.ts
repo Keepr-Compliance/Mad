@@ -28,7 +28,7 @@ import { installPairing, P, uninstallPairing } from "./helpers/pairedWorker";
 
 const SOURCE = fs.readFileSync(path.join(__dirname, "..", "..", "chrome-extension", "background.js"), "utf8");
 const EXTENSION_ID = "nlfohmjehedijceeelokclkglmjnlonj";
-type Listener = (m: Record<string, unknown>, s: { id: string }, r: (x: unknown) => void) => boolean;
+type Listener = (m: Record<string, unknown>, s: { id: string; url?: string }, r: (x: unknown) => void) => boolean;
 
 let currentUser: string | null = "user-a";
 let retryAllowed = true;
@@ -75,7 +75,7 @@ async function worker(version = "9.9.9", keepStore = false) {
   let listener: Listener | null = null;
   const bodies: string[] = [];
   const chromeStub = {
-    runtime: { id: EXTENSION_ID, onMessage: { addListener: (fn: Listener) => (listener = fn) }, getManifest: () => ({ version }) },
+    runtime: { id: EXTENSION_ID, getURL: (p: string) => `chrome-extension://${EXTENSION_ID}/${p}`, onMessage: { addListener: (fn: Listener) => (listener = fn) }, getManifest: () => ({ version }) },
     tabs: { query: jest.fn(async () => []) },
   };
   const fetchShim = async (url: string, init: RequestInit) => {
@@ -87,7 +87,7 @@ async function worker(version = "9.9.9", keepStore = false) {
   new Function("chrome", "fetch", SOURCE)(chromeStub, fetchShim);
   const send = (m: Record<string, unknown>) =>
     new Promise<Record<string, unknown>>((resolve) => {
-      if (!listener!(m, { id: EXTENSION_ID }, (x) => resolve(x as Record<string, unknown>))) resolve({ sync: true });
+      if (!listener!(m, { id: EXTENSION_ID, url: `chrome-extension://${EXTENSION_ID}/popup.html` }, (x) => resolve(x as Record<string, unknown>))) resolve({ sync: true });
     });
   await new Promise((r) => setTimeout(r, 20));
   bodies.length = 0;

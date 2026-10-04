@@ -183,8 +183,24 @@ describe("the worker's link window", () => {
     for (const type of ["keepr-popup-state", "keepr-link-start", "keepr-link-state", "keepr-link-cancel", "keepr-unlink"]) {
       expect(await w.send({ type })).toEqual({ ok: false, error: "not_allowed" });
     }
-    // The extension's own page (popup / link window) is answered.
-    const own = await w.send({ type: "keepr-link-state" }, { id: "ext", url: "chrome-extension://ext/link.html" });
+    // SR allow-list: only this extension AND a URL under its own origin.
+    // Mutations: the sender id not checked; the URL not checked → red.
+    const refused = [
+      { id: "ext", url: "http://messages.google.com/web" },
+      { id: "ext", url: "https://example.test/chrome-extension://ext/link.html" },
+      { id: "other-extension", url: "chrome-extension://ext/link.html" },
+      { id: "other-extension", url: "chrome-extension://other-extension/link.html" },
+      { id: "ext" }, // no URL
+      { id: "ext", tab: { id: 9 } }, // a tab is no proof
+    ];
+    for (const sender of refused) {
+      // Refused: "not_allowed", or (another extension) never answered at all.
+      const r = await w.send({ type: "keepr-link-start" }, sender);
+      expect([sender, r.ok === true || "link" in r]).toEqual([sender, false]);
+      expect([sender, r.error === "not_allowed" || r.sync === true]).toEqual([sender, true]);
+    }
+    // The extension's own page (popup / link window — which has a tab) is answered.
+    const own = await w.send({ type: "keepr-link-state" }, { id: "ext", url: "chrome-extension://ext/link.html", tab: { id: 12 } });
     expect(own).toMatchObject({ ok: true });
   });
 });

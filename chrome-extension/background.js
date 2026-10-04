@@ -360,9 +360,24 @@ const LINK_WINDOW_SIZE = { width: 380, height: 380 };
 let linkWindowId = null;
 let linkWindowAskedAt = 0;
 
-/** A message from a web page's content script (never sees a link code). */
-function fromWebPage(sender) {
-  return !!sender && typeof sender.url === "string" && /^https?:/i.test(sender.url);
+/** The code-bearing messages: the extension's own pages only. */
+const OWN_PAGE_MESSAGES = new Set(["keepr-popup-state", "keepr-link-start", "keepr-link-state", "keepr-link-cancel", "keepr-unlink"]);
+
+/**
+ * SR (allow-list): a sender is one of the extension's OWN pages (popup,
+ * link.html, welcome) only when it is this extension AND its URL is under
+ * this extension's origin. A content script on a web page has a web URL; a
+ * link.html window has a tab too, so sender.tab is never the test.
+ */
+function fromOwnPage(sender) {
+  if (!sender || sender.id !== chrome.runtime.id || typeof sender.url !== "string") return false;
+  let base = "";
+  try {
+    base = chrome.runtime.getURL("");
+  } catch (_err) {
+    return false;
+  }
+  return typeof base === "string" && base.length > 0 && sender.url.startsWith(base);
 }
 
 async function openLinkWindow(now) {
@@ -612,8 +627,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // The link code is for the extension's own pages only (popup, link
   // window, welcome) — never a web page's content script.
-  if (fromWebPage(sender) && (message.type === "keepr-popup-state" || message.type === "keepr-link-start" ||
-      message.type === "keepr-link-state" || message.type === "keepr-link-cancel" || message.type === "keepr-unlink")) {
+  if (OWN_PAGE_MESSAGES.has(message.type) && !fromOwnPage(sender)) {
     sendResponse({ ok: false, error: "not_allowed" });
     return false;
   }
