@@ -189,3 +189,41 @@ export function getTextDerivedPeople(userId: string, search?: string, limit: num
   }
   return out;
 }
+
+/** A number's name as shown in Google Messages (for naming texts' senders). */
+export interface RcsPersonName {
+  number: string;
+  name: string;
+}
+
+const NAMES_BY_DIGITS_SQL = sql`
+  SELECT p.number_e164 AS number,
+    (SELECT p2.name FROM rcs_chat_people p2
+      WHERE p2.user_id = p.user_id AND p2.number_e164 = p.number_e164
+        AND p2.name IS NOT NULL AND trim(p2.name) != ''
+        AND NOT EXISTS (SELECT 1 FROM rcs_chat_exclusions x WHERE x.user_id = p2.user_id AND x.chat_hash = p2.chat_hash)
+      ORDER BY p2.last_message_at DESC, p2.updated_at DESC LIMIT 1) AS name
+  FROM rcs_chat_people p
+  WHERE p.user_id = ?
+    AND ${L10_PERSON} IN (SELECT value FROM json_each(?))
+  GROUP BY p.number_e164`;
+
+/**
+ * Group-sender names: for these numbers (any format; matched on the last 10
+ * digits, as L10_PERSON), the newest non-empty name Google Messages showed
+ * for each, in this user's chats only, Don't-sync chats left out. Numbers
+ * with no name are not returned. Names are never logged.
+ */
+export function getRcsPeopleNamesByDigits(userId: string, numbers: readonly string[]): RcsPersonName[] {
+  const last10 = Array.from(
+    new Set(numbers.map((n) => n.replace(/\D/g, "")).filter((d) => d.length >= 10).map((d) => d.slice(-10))),
+  );
+  if (!userId || last10.length === 0) return [];
+  try {
+    const rows = dbAll<{ number: string; name: string | null }>(NAMES_BY_DIGITS_SQL, [userId, JSON.stringify(last10)]);
+    return rows.filter((r): r is RcsPersonName => typeof r.name === "string" && r.name.trim() !== "").map((r) => ({ number: r.number, name: r.name.trim() }));
+  } catch {
+    // A database without the table yet: no names, never a broken lookup.
+    return [];
+  }
+}
