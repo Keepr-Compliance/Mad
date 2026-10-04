@@ -45,6 +45,28 @@ describe("failure lines (SR U1)", () => {
     for (const c of codes) expect([c, c in SYNC_FAILURE_LINES]).toEqual([c, true]);
   });
 
+  // SR: a claim Keepr refused shows "Keepr couldn't start this Sync."; Keepr's
+  // own message goes to the details. Mutation: the raw message on the card → red.
+  it("claim refused: the short line on the card, Keepr's message in the details", async () => {
+    const shown: Array<[string, boolean, { details?: string } | undefined]> = [];
+    const outcome = await job.runJob("11111111-2222-4333-8444-555555555555", { // pii-allow-uuid: invented, not from any live row
+      doc: document,
+      getLocation: () => ({ pathname: "/web/conversations", href: "https://messages.google.com/web/conversations" }),
+      api: async (_m: string, p: string) =>
+        p.endsWith("/claim")
+          ? { ok: false, status: 409, body: { message: "Another Keepr Sync is already running on this computer — wait for it to finish." } }
+          : { ok: true, status: 200, body: { ok: true } },
+      overlay: { show: (t: string, e: boolean, x?: { details?: string }) => shown.push([t, e, x]) },
+      sleep: async () => undefined,
+      pageTimeoutMs: 0,
+      scan: { signInState: () => "signed_in", SELECTORS: { headerTitle: "body" } },
+    });
+    expect(outcome.outcome).toBe("claim_refused");
+    const [text, isError, extras] = shown[shown.length - 1];
+    expect([text, isError]).toEqual(["Keepr couldn't start this Sync.", true]);
+    expect(extras!.details).toContain("Another Keepr Sync is already running");
+  });
+
   it("no long text on the card: a failure shows the short line; the long one is in the details", () => {
     const box = document.createElement("div");
     const long = "Keepr stopped: Messages for Web could not reconnect to your phone for 5 minutes. Check your phone, then sync again from Keepr.";

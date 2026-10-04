@@ -24,6 +24,7 @@ export const SYNC_FAILURE_LINES: Readonly<Record<string, string>> = {
   keepr_unknown_job: "Keepr closed or restarted.",
   keepr_refused: "This browser isn't linked.",
   finish_refused: "Keepr couldn't finish the Sync.",
+  claim_refused: "Keepr couldn't start this Sync.",
   save_failed: "Keepr couldn't save this Sync.",
   scan_failed: "The Sync stopped unexpectedly.",
 };

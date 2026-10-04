@@ -89,6 +89,7 @@
     keepr_unknown_job: "Keepr closed or restarted.",
     keepr_refused: "This browser isn't linked.",
     finish_refused: "Keepr couldn't finish the Sync.",
+    claim_refused: "Keepr couldn't start this Sync.",
     save_failed: "Keepr couldn't save this Sync.",
     scan_failed: "The Sync stopped unexpectedly.",
   };
@@ -1046,7 +1047,11 @@
     var claim = await env.api("POST", base + "/claim");
     if (!claim.ok) {
       log("claim refused: HTTP " + claim.status);
-      env.overlay.show(messageOf(claim, "Keepr refused this sync."), true, await overlayExtras());
+      // SR: the card's short line; Keepr's own words go to the details.
+      var refusedExtras = await overlayExtras();
+      var refusedText = messageOf(claim, "Keepr refused this sync.");
+      refusedExtras.details = refusedText + (refusedExtras.details ? "\n\n" + refusedExtras.details : "");
+      env.overlay.show(failureLine("claim_refused"), true, refusedExtras);
       return { outcome: "claim_refused" };
     }
     var contacts = (claim.body && claim.body.contacts) || [];
