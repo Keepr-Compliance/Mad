@@ -144,6 +144,15 @@ describe('POST /api/support/notify — validation', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it.each(['constructor', 'toString', 'hasOwnProperty', '__proto__'])(
+    'rejects inherited property name %s as a type (400)',
+    async (type) => {
+      const res = await POST(req({ type, ticketId: TICKET_ID }));
+      expect(res.status).toBe(400);
+      expect(fetchMock).toHaveBeenCalledTimes(0);
+    }
+  );
+
   it('rejects a missing ticket id (400)', async () => {
     const res = await POST(req({ type: 'reply' }));
     expect(res.status).toBe(400);

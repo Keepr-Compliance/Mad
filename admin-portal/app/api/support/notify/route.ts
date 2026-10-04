@@ -145,7 +145,7 @@ export async function POST(request: NextRequest) {
     // ── 2. Validate the request ───────────────────────────────────────
     const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
     const type = body?.type;
-    if (!body || typeof type !== 'string' || !(type in TARGET_PATHS)) {
+    if (!body || typeof type !== 'string' || !Object.hasOwn(TARGET_PATHS, type)) {
       return NextResponse.json({ error: 'Invalid notification type' }, { status: 400 });
     }
     const ticketId = body.ticketId;
