@@ -47,6 +47,7 @@ import {
   resolveGroupChatParticipants as sharedResolveGroupChatParticipants,
   extractParticipantHandles,
   matchedNamesFor,
+  normalizePhone as sharedNormalizePhone,
 } from "../contactResolutionService";
 import type { HandleNameResolution } from "../contactResolutionService";
 
@@ -782,23 +783,31 @@ class FolderExportService {
     };
 
     const usedFilenames = new Set<string>();
-    const sourceOf = (comm: Communication | undefined): string => {
-      if (!comm) return "Unknown message";
-      return getMessageType(comm) === "email"
-        ? `Email "${comm.subject || "(No Subject)"}"`
-        : `Text from ${comm.sender || "Unknown"}`;
+    const handleOf = (comm: Communication): string | null => {
+      if (comm.sender) return comm.sender;
+      try {
+        const parsed =
+          typeof comm.participants === "string" ? JSON.parse(comm.participants) : comm.participants;
+        return typeof parsed?.from === "string" ? parsed.from : null;
+      } catch {
+        return null;
+      }
     };
     const leftOut = (
       comm: Communication | undefined,
       filename: string,
       reason: ExportFileNotIncluded["reason"]
-    ) =>
+    ) => {
+      const kind = comm ? getMessageType(comm) : null;
       notIncluded.push({
         filename,
-        source: sourceOf(comm),
+        sourceKind: kind,
+        subject: kind === "email" ? (comm?.subject as string | undefined) || null : null,
+        handle: kind === "text" && comm ? handleOf(comm) : null,
         sentAt: typeof comm?.sent_at === "string" ? (comm.sent_at as string) : null,
         reason,
       });
+    };
 
     for (const att of attachmentRows) {
       let comm: Communication | undefined;
@@ -1292,7 +1301,12 @@ class FolderExportService {
     if (omissions.filesNotIncluded.length > 0) {
       sections.push({
         id: FILES_NOT_INCLUDED_SECTION_ID,
-        html: generateFilesNotIncludedHTML(omissions.filesNotIncluded),
+        // Senders named exactly as the text sections name them
+        // (getThreadContact: normalized handle, then the raw handle).
+        html: generateFilesNotIncludedHTML(
+          omissions.filesNotIncluded,
+          (handle) => phoneNameMap[sharedNormalizePhone(handle)] || phoneNameMap[handle] || null
+        ),
         backHref: `#${emails.length > 0 ? EMAIL_INDEX_ANCHOR : TEXT_INDEX_ANCHOR}`,
         backLabel: "Back to Index",
       });

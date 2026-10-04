@@ -85,8 +85,16 @@ export type ExportFileNotIncludedReason =
 /** One attachment an export left out. Display data; never logged. */
 export interface ExportFileNotIncluded {
   filename: string;
-  /** `Email "subject"` or `Text from sender`. */
-  source: string;
+  /** The message it came from; null when no linked message was found. */
+  sourceKind: "email" | "text" | null;
+  /** The email's subject (emails only). */
+  subject: string | null;
+  /**
+   * The text's sender handle (texts only). Raw — the PDF renderer names it
+   * through the same resolution its text sections use, never printing a
+   * handle that has a name.
+   */
+  handle: string | null;
   /** When the source message was sent (ISO), or null. */
   sentAt: string | null;
   reason: ExportFileNotIncludedReason;

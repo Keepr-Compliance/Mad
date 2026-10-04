@@ -110,7 +110,8 @@ jest.mock("../db/userDbService", () => ({
 
 jest.mock("../contactResolutionService", () => ({
   __esModule: true,
-  resolveHandles: jest.fn().mockResolvedValue({ names: {}, matches: {} }),
+  // The text's sender resolves to a contact name; the PDF must print the name.
+  resolveHandles: jest.fn().mockResolvedValue({ names: { "+15550123": "Pat Fixture" }, matches: {} }),
   matchedNamesFor: jest.fn().mockReturnValue([]),
   nameForHandle: jest.fn().mockReturnValue(undefined),
   resolveGroupChatParticipants: jest.fn().mockResolvedValue(""),
@@ -191,7 +192,8 @@ describe("BACKLOG-3683 — the export PDF lists files it could not include", () 
     expect(section).toContain("Not downloaded to this computer");
     expect(section).toContain("gone.jpg");
     expect(section).toContain("No longer on this computer");
-    expect(section).toContain("Text from +15550123");
+    expect(section).toContain("Text from Pat Fixture");
+    expect(section).not.toContain("+15550123");
     expect(section).toContain("locked.pdf");
     expect(section).toContain("Could not be copied");
     expect(section).toContain("Email &quot;Closing package&quot;");

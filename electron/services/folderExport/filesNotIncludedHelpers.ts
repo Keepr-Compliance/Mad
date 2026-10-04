@@ -31,15 +31,36 @@ function shortDate(iso: string | null): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
-/** A full HTML document (the combined builder extracts its style and body). */
-export function generateFilesNotIncludedHTML(files: ExportFileNotIncluded[]): string {
+/** The source-message cell: `Email "subject"` / `Text from <name or handle>`. */
+export function filesNotIncludedSource(
+  file: ExportFileNotIncluded,
+  nameForHandle: (handle: string) => string | null
+): string {
+  if (file.sourceKind === "email") return `Email "${file.subject || "(No Subject)"}"`;
+  if (file.sourceKind === "text") {
+    const who = file.handle ? nameForHandle(file.handle) || file.handle : "Unknown";
+    return `Text from ${who}`;
+  }
+  return "Unknown message";
+}
+
+/**
+ * A full HTML document (the combined builder extracts its style and body).
+ * Every selector is scoped to `.fni-*` classes: the combined builder files
+ * this section under the same container class as the text threads, so a bare
+ * `h1` / `table` rule here would restyle them.
+ */
+export function generateFilesNotIncludedHTML(
+  files: ExportFileNotIncluded[],
+  nameForHandle: (handle: string) => string | null
+): string {
   const rows = files
     .map(
       (f) => `
         <tr>
-          <td>${escapeHtml(f.filename)}</td>
-          <td>${escapeHtml(f.source)}${f.sentAt ? `<div class="when">${escapeHtml(shortDate(f.sentAt))}</div>` : ""}</td>
-          <td>${escapeHtml(filesNotIncludedReasonText(f.reason))}</td>
+          <td class="fni-cell">${escapeHtml(f.filename)}</td>
+          <td class="fni-cell">${escapeHtml(filesNotIncludedSource(f, nameForHandle))}${f.sentAt ? `<div class="fni-when">${escapeHtml(shortDate(f.sentAt))}</div>` : ""}</td>
+          <td class="fni-cell">${escapeHtml(filesNotIncludedReasonText(f.reason))}</td>
         </tr>`
     )
     .join("");
@@ -48,23 +69,25 @@ export function generateFilesNotIncludedHTML(files: ExportFileNotIncluded[]): st
 <head>
   <meta charset="UTF-8">
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #1f2937; padding: 40px; }
-    h1 { font-size: 20px; margin-bottom: 8px; }
-    p.lead { font-size: 13px; color: #4b5563; margin-bottom: 16px; }
-    table { width: 100%; border-collapse: collapse; font-size: 12px; }
-    th { text-align: left; background: #f3f4f6; padding: 8px; border-bottom: 1px solid #e5e7eb; }
-    td { padding: 8px; border-bottom: 1px solid #e5e7eb; vertical-align: top; word-break: break-word; }
-    .when { color: #6b7280; font-size: 11px; margin-top: 2px; }
+    .fni-wrap { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #1f2937; padding: 40px; }
+    .fni-heading { font-size: 20px; margin-bottom: 8px; }
+    .fni-lead { font-size: 13px; color: #4b5563; margin-bottom: 16px; }
+    .fni-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .fni-head { text-align: left; background: #f3f4f6; padding: 8px; border-bottom: 1px solid #e5e7eb; }
+    .fni-cell { padding: 8px; border-bottom: 1px solid #e5e7eb; vertical-align: top; word-break: break-word; }
+    .fni-when { color: #6b7280; font-size: 11px; margin-top: 2px; }
   </style>
 </head>
 <body>
-  <h1>${FILES_NOT_INCLUDED_HEADING}</h1>
-  <p class="lead">${files.length} ${files.length === 1 ? "attachment was" : "attachments were"} selected for this export but could not be included.</p>
-  <table>
-    <thead><tr><th>File</th><th>Source message</th><th>Reason</th></tr></thead>
-    <tbody>${rows}
-    </tbody>
-  </table>
+  <div class="fni-wrap">
+    <h1 class="fni-heading">${FILES_NOT_INCLUDED_HEADING}</h1>
+    <p class="fni-lead">${files.length} ${files.length === 1 ? "attachment was" : "attachments were"} selected for this export but could not be included.</p>
+    <table class="fni-table">
+      <thead><tr><th class="fni-head">File</th><th class="fni-head">Source message</th><th class="fni-head">Reason</th></tr></thead>
+      <tbody>${rows}
+      </tbody>
+    </table>
+  </div>
 </body>
 </html>`;
 }
