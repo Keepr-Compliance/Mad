@@ -285,10 +285,11 @@ describe("GoogleMessagesSyncFlow", () => {
   it("failed: 'Sync failed', the reason, Try again starts the retry", async () => {
     mockState = INSTALLED;
     mockRetryCache.mockResolvedValue({ success: true, data: job({ jobId: "job-2", state: "created" }) });
-    await failedRun({ state: "failed", error: { code: "keepr_lost", message: "Keepr closed or restarted." } } as Partial<RcsJobInfo>);
+    await failedRun({ state: "failed", error: { code: "connection_lost", message: "Keepr stopped: Messages for Web could not reconnect to your phone for 5 minutes." } } as Partial<RcsJobInfo>);
     const step = await screen.findByTestId("gm-step-failed");
     expect(step).toHaveTextContent("Sync failed");
-    expect(step).toHaveTextContent("Keepr closed or restarted.");
+    expect(step).toHaveTextContent("Lost the connection to your phone.");
+    expect(step).not.toHaveTextContent("5 minutes");
     fireEvent.click(screen.getByTestId("gm-try-again"));
     await waitFor(() => expect(mockRetryCache).toHaveBeenCalledTimes(1));
     expect(mockStartCache).not.toHaveBeenCalled();

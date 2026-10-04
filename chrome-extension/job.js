@@ -67,6 +67,36 @@
     refused: "Not linked. Click the Keepr icon in Chrome's toolbar to link.",
     keepr_error: "Keepr could not save the chats.",
   };
+  /**
+   * SR U1 (storyboards H01 / H02): the ONE short line (≤ 45 chars) for each
+   * failure code — the box's "Sync failed" card says this; the long text goes
+   * to See details / Copy details. Keepr's bubble uses the same table
+   * (src/components/settings/android/syncFailureLines.ts; a test keeps the
+   * two identical).
+   */
+  var FAILURE_LINES = {
+    connection_lost: "Lost the connection to your phone.",
+    phone_unreachable: "Lost the connection to your phone.",
+    not_signed_in: "Google Messages isn't signed in.",
+    page_gone: "The Messages tab was closed.",
+    page_not_ready: "Google Messages didn't finish loading.",
+    not_opened: "Google Messages didn't open.",
+    list_not_reachable: "Couldn't open your conversation list.",
+    details_stuck: "A chat's details panel didn't close.",
+    all_failed: "None of the chats could be read.",
+    keepr_error: "Keepr couldn't save the chats.",
+    keepr_unreachable: "Keepr closed or restarted.",
+    keepr_unknown_job: "Keepr closed or restarted.",
+    keepr_refused: "This browser isn't linked.",
+    finish_refused: "Keepr couldn't finish the Sync.",
+    save_failed: "Keepr couldn't save this Sync.",
+    scan_failed: "The Sync stopped unexpectedly.",
+  };
+  var FAILURE_FALLBACK = "The Sync stopped unexpectedly.";
+  function failureLine(code) {
+    return (code && Object.prototype.hasOwnProperty.call(FAILURE_LINES, code) && FAILURE_LINES[code]) || FAILURE_FALLBACK;
+  }
+
   /** A localhost blip: one more try after this long before Keepr counts as gone. */
   var TRANSPORT_RETRY_MS = 1500;
   /** Circuit breaker: this many chats IN A ROW refused by Keepr end the run. */
@@ -607,7 +637,10 @@
       if (err && err.keeprLost) {
         diag(env, "stopped: Keepr lost (" + err.keeprLost + ")");
         // Try again reaches Keepr again (or launches it: the page's retry).
-        env.overlay.show(err.message, true, err.isCache ? { retry: true } : undefined);
+        // SR U1: the short line on the card, the long one in the details.
+        var lostExtras = { details: err.message, copy: "Keepr Sync diagnostics: Keepr lost (" + err.keeprLost + ")." };
+        if (err.isCache) lostExtras.retry = true;
+        env.overlay.show(failureLine("keepr_" + err.keeprLost), true, lostExtras);
         return { outcome: "keepr_lost", reason: err.keeprLost };
       }
       throw err;
@@ -984,7 +1017,9 @@
       // C5 (founder): a cache Sync that failed for real says "Sync failed"
       // and offers Try again (Keepr saved the chats it finished).
       if (isCache) failExtras.retry = true;
-      env.overlay.show(message, true, failExtras);
+      // SR U1: the card says one short line; the long text is in the details.
+      failExtras.details = message + (failExtras.details ? "\n\n" + failExtras.details : "");
+      env.overlay.show(failureLine(code), true, failExtras);
       await env.api("POST", base + "/error", { code: code, message: message });
       return { outcome: code };
     }
@@ -2459,6 +2494,8 @@
 
   var api = {
     bootPlan: bootPlan,
+    FAILURE_LINES: FAILURE_LINES,
+    failureLine: failureLine,
     guidePosition: guidePosition,
     GUIDE_TITLE: GUIDE_TITLE,
     GUIDE_HEADING: GUIDE_HEADING,
@@ -3014,8 +3051,8 @@
       await runJob(jobId, env());
     } catch (err) {
       var stopped = "The sync stopped: " + String((err && err.message) || err);
-      // Copy carries no error text (it could quote the page).
-      showOverlay(stopped, true, { details: stopped, copy: "Keepr Sync diagnostics: the sync stopped with an error." });
+      // Copy carries no error text (it could quote the page). SR U1: a short card line.
+      showOverlay(failureLine("scan_failed"), true, { details: stopped, copy: "Keepr Sync diagnostics: the sync stopped with an error." });
       await toWorker({
         type: "keepr-job-api", method: "POST", path: "/job/" + jobId + "/error",
         body: { code: "scan_failed", message: String((err && err.message) || err) },

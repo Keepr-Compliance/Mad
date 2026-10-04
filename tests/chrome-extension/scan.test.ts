@@ -607,7 +607,7 @@ describe("Keepr lost mid-run: the run stops with its reason", () => {
     expect(t.opened).toHaveLength(1);
     expect(t.posts().filter((p) => p === "/match")).toHaveLength(2);
     expect(t.posts()).not.toContain("/finish");
-    expect(t.shown[t.shown.length - 1]).toEqual(["Keepr closed.", true]);
+    expect(t.shown[t.shown.length - 1]).toEqual(["Keepr closed or restarted.", true]);
   });
 
   it("a blip: the one more try succeeds and the run goes on", async () => {
@@ -632,7 +632,7 @@ describe("Keepr lost mid-run: the run stops with its reason", () => {
     const outcome = await job.runJob(t.JOB, t.env);
     expect(outcome).toMatchObject({ outcome: "keepr_lost", reason: "refused" });
     expect(t.opened).toHaveLength(1);
-    expect(t.shown[t.shown.length - 1][0]).toBe(job.KEEPR_LOST_MESSAGES.refused);
+    expect(t.shown[t.shown.length - 1][0]).toBe("This browser isn't linked.");
   });
 
   it("circuit breaker: 3 chats in a row refused by Keepr end the run with its reason", async () => {
@@ -642,14 +642,15 @@ describe("Keepr lost mid-run: the run stops with its reason", () => {
     expect(t.opened).toHaveLength(3);
     expect(t.posts()).toContain("/error");
     expect(t.posts()).not.toContain("/finish");
-    expect(t.shown[t.shown.length - 1]).toEqual([job.KEEPR_LOST_MESSAGES.keepr_error, true]);
+    expect(t.shown[t.shown.length - 1]).toEqual(["Keepr couldn't save the chats.", true]);
   });
 
   it("a refused /finish is a failed run, never 'done'", async () => {
     const t = jobPage({ swapAfterMs: 0, api: (_m, p) => (p.endsWith("/finish") ? { ok: false, status: 500, body: { message: "Keepr could not save." } } : undefined) });
     const outcome = await job.runJob(t.JOB, t.env);
     expect(outcome.outcome).toBe("finish_refused");
-    expect(t.shown[t.shown.length - 1]).toEqual(["Keepr could not save.", true]);
+    // SR U1: the card's short line; Keepr's own words go to the details.
+    expect(t.shown[t.shown.length - 1]).toEqual(["Keepr couldn't finish the Sync.", true]);
   });
 
   it("transportKind: 0 → unreachable, 401 → refused, 404 no_job → unknown_job; 410 / a bare 404 / 500 → none", () => {

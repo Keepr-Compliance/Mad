@@ -79,9 +79,12 @@ describe("Google Messages on the dashboard indicator", () => {
     expect(calls).toEqual(["remove google-messages"]);
   });
 
-  it("failed: an error with its message; a failed save too (I5)", () => {
-    applyGoogleMessagesJob(job({ state: "failed", error: { code: "x", message: "Sign in to Google Messages" } }), new Set());
-    expect(calls[1]).toBe(`complete google-messages ${JSON.stringify({ status: "error", error: "Sign in to Google Messages" })}`);
-    expect(orchestratorStepFor(job({ state: "finished", saved: null })).kind).toBe("error");
+  // SR U1 (H02): the bubble says the short line for the failure's code —
+  // never the long message. Mutation: job.error.message shown → red.
+  it("failed: the short line for its code; a failed save too (I5)", () => {
+    applyGoogleMessagesJob(job({ state: "failed", error: { code: "connection_lost", message: "Keepr stopped: Messages for Web could not reconnect to your phone for 5 minutes. Check your phone, then sync again from Keepr." } }), new Set());
+    expect(calls[1]).toBe(`complete google-messages ${JSON.stringify({ status: "error", error: "Lost the connection to your phone." })}`);
+    expect(orchestratorStepFor(job({ state: "finished", saved: null }))).toEqual({ kind: "error", error: "Keepr couldn't save this Sync." });
+    expect(orchestratorStepFor(job({ state: "failed", error: { code: "something_new", message: "x".repeat(200) } }))).toEqual({ kind: "error", error: "The Sync stopped unexpectedly." });
   });
 });

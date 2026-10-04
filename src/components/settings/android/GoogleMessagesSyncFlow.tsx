@@ -22,6 +22,7 @@ import { settingsService } from "../../../services/settingsService";
 import type { RcsExtensionState, RcsJobInfo } from "../../../../electron/types/ipc/window-api-rcs-import";
 import { doneSummaryLines, googleMessagesStep } from "./googleMessagesSyncSteps";
 import { LinkBrowserPanel } from "./LinkBrowserPanel";
+import { syncFailureLine } from "./syncFailureLines";
 import { EXTENSION_PUBLISHED, readBetaInstallPreference, wantsBetaInstall } from "./extensionDistribution";
 
 const POLL_MS = 3000;
@@ -290,7 +291,7 @@ export function GoogleMessagesSyncFlow({
         <>
           <h2 className={title}>{job.state === "failed" ? "Sync failed" : "Sync stopped"}</h2>
           <p className="text-[14px] text-[#374151]">
-            {job.error?.message || (job.state === "cancelled" ? "Nothing from this run was saved." : "Something went wrong.")}
+            {job.state === "cancelled" ? "Nothing from this run was saved." : syncFailureLine(job.error?.code)}
           </p>
           <button
             type="button"

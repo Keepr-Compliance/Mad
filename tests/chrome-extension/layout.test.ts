@@ -261,6 +261,7 @@ describe("layout detection and returning to the list (scan.js)", () => {
 function layoutJob(page: ReturnType<typeof messagesPage>) {
   const calls: Array<[string, string, Record<string, unknown> | undefined]> = [];
   const shown: string[] = [];
+  const details: string[] = [];
   const env = {
     doc: document,
     getLocation: () => ({
@@ -276,7 +277,12 @@ function layoutJob(page: ReturnType<typeof messagesPage>) {
       }
       return { ok: true, status: 200, body: { ok: true } };
     },
-    overlay: { show: (text: string) => shown.push(text) },
+    overlay: {
+      show: (text: string, _e?: boolean, x?: { details?: string }) => {
+        shown.push(text);
+        details.push(x?.details ?? "");
+      },
+    },
     sleep: noSleep,
     click: page.io.click,
     scroll: () => {},
@@ -296,7 +302,7 @@ function layoutJob(page: ReturnType<typeof messagesPage>) {
       messageIdSet: () => "",
     },
   };
-  return { env, calls, shown };
+  return { env, calls, shown, details };
 }
 
 describe("the Sync job in both layouts", () => {
@@ -363,7 +369,9 @@ describe("the Sync job in both layouts", () => {
     const err = t.calls.find(([, p]) => p.endsWith("/error"));
     expect(err?.[2]).toEqual({ code: "list_not_reachable", message: job.LIST_NOT_REACHABLE });
     expect(t.calls.some(([, p]) => p.endsWith("/finish") || p.endsWith("/match"))).toBe(false);
-    expect(t.shown[t.shown.length - 1]).toBe(job.LIST_NOT_REACHABLE);
+    // SR U1: the card's short line; the long how-to (with the URL) in the details.
+    expect(t.shown[t.shown.length - 1]).toBe("Couldn't open your conversation list.");
+    expect(t.details[t.details.length - 1]).toContain(job.LIST_NOT_REACHABLE);
     expect(job.LIST_NOT_REACHABLE).toContain("messages.google.com/web/conversations");
   });
 
@@ -623,7 +631,8 @@ describe("no chat is ever silently left out (BACKLOG-3629)", () => {
     expect(outcome.outcome).toBe("all_failed");
     expect(t.calls.map(([, p]) => p).some((p) => p.endsWith("/finish"))).toBe(false);
     expect(t.calls.map(([, p]) => p).some((p) => p.endsWith("/error"))).toBe(true);
-    expect(t.shown[t.shown.length - 1]).toBe("None of the 3 chats could be read.");
+    expect(t.shown[t.shown.length - 1]).toBe("None of the chats could be read.");
+    expect(t.details[t.details.length - 1]).toContain("None of the 3 chats could be read.");
   });
 
   it("caps the named list at 20 and counts the rest as '+N more' (M7)", async () => {

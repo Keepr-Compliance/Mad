@@ -6,6 +6,7 @@
  */
 
 import type { RcsJobInfo } from "../../electron/types/ipc/window-api-rcs-import";
+import { syncFailureLine } from "../components/settings/android/syncFailureLines";
 
 /** The orchestrator's type for this source. */
 export const GOOGLE_MESSAGES_SYNC_TYPE = "google-messages" as const;
@@ -28,10 +29,11 @@ const plural = (n: number, one: string, many: string): string => `${n} ${n === 1
 export function orchestratorStepFor(job: RcsJobInfo): GoogleMessagesOrchestratorStep {
   if (job.kind !== "cache") return { kind: "ignore" };
   if (job.state === "cancelled") return { kind: "cancelled" };
-  if (job.state === "failed") return { kind: "error", error: job.error?.message || "The Google Messages Sync did not finish." };
+  // SR U1 (H02): the bubble says the short line for the failure's code.
+  if (job.state === "failed") return { kind: "error", error: syncFailureLine(job.error?.code) };
   if (job.state === "finished") {
     if (job.saved === undefined) return { kind: "saving" };
-    if (job.saved === null) return { kind: "error", error: "Keepr could not save the Google Messages Sync. Nothing was imported." };
+    if (job.saved === null) return { kind: "error", error: syncFailureLine("save_failed") };
     const s = job.saved;
     return {
       kind: "complete",
