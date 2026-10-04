@@ -1,37 +1,37 @@
-34 mutants written
+35 mutants written
 M01 [as expected] (want green) FOR UPDATE without SKIP LOCKED: waits instead of skipping (live R1 measures the wait)
     MUTATION APPLIED: 2 line(s); first: FOR UPDATE
     RED: none
 M02 [as expected] (want red) finish without status = uploading
-    MUTATION APPLIED: 1 line(s); first: 
+    MUTATION APPLIED: 1 line(s); first:
     RED: S05
       S05: ASSERT FAILED: S05 finish deletes no live or unabandoned row
 M03 [as expected] (want red) finish without abandoned_at IS NOT NULL
-    MUTATION APPLIED: 1 line(s); first: 
+    MUTATION APPLIED: 1 line(s); first:
     RED: S05
       S05: ASSERT FAILED: S05 finish deletes no live or unabandoned row
 M04 [as expected] (want red) finish deletes a row while an object remains
-    MUTATION APPLIED: 4 line(s); first: 
+    MUTATION APPLIED: 4 line(s); first:
     RED: S04
       S04: ASSERT FAILED: S04 row kept while an object remains
 M05 [as expected] (want red) finish without the referenced-parent term (SR condition 1)
-    MUTATION APPLIED: 2 line(s); first: 
+    MUTATION APPLIED: 2 line(s); first:
     RED: X2
       X2: update or delete on table "transaction_submissions" violates foreign key constraint "transaction_submissions_parent_submission_id_fkey" on table "transaction_submissions"
 M06 [as expected] (want red) orphans without the age term (a 2.38 upload in flight)
-    MUTATION APPLIED: 1 line(s); first: 
+    MUTATION APPLIED: 1 line(s); first:
     RED: S06
       S06: ASSERT FAILED: S06 orphans = old no-parent + old non-UUID only
 M07 [as expected] (want red) orphans inside an existing submission's folder
-    MUTATION APPLIED: 1 line(s); first: 
+    MUTATION APPLIED: 1 line(s); first:
     RED: S06
       S06: ASSERT FAILED: S06 orphans = old no-parent + old non-UUID only
 M08 [as expected] (want red) abandoned arm without the created_at age term (SR condition 2)
-    MUTATION APPLIED: 1 line(s); first: 
+    MUTATION APPLIED: 1 line(s); first:
     RED: X4
       X4: ASSERT FAILED: X4 future abandoned_at does not hide an old row
 M09 [as expected] (want red) attachment-path arm without the own-folder terms (SR condition 3)
-    MUTATION APPLIED: 2 line(s); first: 
+    MUTATION APPLIED: 2 line(s); first:
     RED: X1
       X1: ASSERT FAILED: X1 a live submission's object is never in a sweep path list
 M10 [as expected] (want red) SQL default live (SR condition 4)
@@ -55,11 +55,11 @@ M14 [as expected] (want red) NULL dry_run accepted
     RED: S08
       S08: ASSERT FAILED: S08 NULL dry_run refused
 M15 [as expected] (want red) claim body guard removed (REVOKE kept)
-    MUTATION APPLIED: 3 line(s); first: 
+    MUTATION APPLIED: 3 line(s); first:
     RED: S09b
       S09b: ASSERT FAILED: S09b claim body guard
 M16 [as expected] (want red) claim EXECUTE left to authenticated (guard kept)
-    MUTATION APPLIED: 2 line(s); first: REVOKE ALL ON FUNCTION public.submission_sweep_claim(boolean, interval, interval, interval, integer, integer) 
+    MUTATION APPLIED: 2 line(s); first: REVOKE ALL ON FUNCTION public.submission_sweep_claim(boolean, interval, interval, interval, integer, integer)
     RED: S09a
       S09a: ASSERT FAILED: S09a claim: no client EXECUTE
 M17 [as expected] (want red) invoke EXECUTE left to service_role
@@ -71,7 +71,7 @@ M18 [as expected] (want red) service_role keeps write on the run table
     RED: S13
       S13: ASSERT FAILED: S13 service_role cannot insert run rows
 M19 [as expected] (want red) no run-row retention
-    MUTATION APPLIED: 1 line(s); first: 
+    MUTATION APPLIED: 1 line(s); first:
     RED: S13
       S13: ASSERT FAILED: S13 31-day-old run row purged
 M20 [as expected] (want red) run row stores any value (paths could land there)
@@ -91,7 +91,7 @@ M23 [as expected] (want red) work list without status = uploading
     RED: S05
       S05: ASSERT FAILED: S05 submitted+abandoned never listed
 M24 [as expected] (want red) object arm without the org segment
-    MUTATION APPLIED: 1 line(s); first: 
+    MUTATION APPLIED: 1 line(s); first:
     RED: S02
       S02: ASSERT FAILED: S02 paths = its 2 rows + its rowless object
 M25 [as expected] (want green) fence UPDATE without its re-check: equivalent (SKIP LOCKED re-evaluates the WHERE on the latest row version)
@@ -102,11 +102,11 @@ M26 [as expected] (want red) hard-coded production URL (SR condition 5)
     RED: S15
       S15: ASSERT FAILED: S15 URL comes from Vault
 M27 [as expected] (want red) finish body guard removed
-    MUTATION APPLIED: 3 line(s); first: 
+    MUTATION APPLIED: 3 line(s); first:
     RED: S09b
       S09b: ASSERT FAILED: S09b finish body guard
 M28 [as expected] (want red) secret body guard removed
-    MUTATION APPLIED: 3 line(s); first: 
+    MUTATION APPLIED: 3 line(s); first:
     RED: S09b
       S09b: ASSERT FAILED: S09b secret body guard
 M30 [as expected] (want red) live fence reverts to created_at age (founder rule: no activity for 2 h)
@@ -119,24 +119,29 @@ M31 [as expected] (want red) dry-run arm reverts to created_at age
     RED: S17
       S17: ASSERT FAILED: S17 dry run: only the two stalled rows would be fenced
 M32 [as expected] (want red) live fence ignores new objects (attachment rows only)
-    MUTATION APPLIED: 6 line(s); first: (SELECT max(a.created_at) FROM public.submission_attachments a WHERE a.submission_id = t.id)
+    MUTATION APPLIED: 6 line(s); first: (SELECT max(a.created_at) FROM public.submission_attachments a WHERE a.submission_id = t.id AND a.created_at <
     RED: S17 S18
       S17: ASSERT FAILED: S17 live: only the two stalled rows fenced and listed
       S18: ASSERT FAILED: S18 object 1h50m old: not claimed
 M33 [as expected] (want red) live fence counts an object in another org's folder as activity
-    MUTATION APPLIED: 1 line(s); first: 
+    MUTATION APPLIED: 1 line(s); first:
     RED: S02 S17
       S02: ASSERT FAILED: S02 paths = its 2 rows + its rowless object
       S17: ASSERT FAILED: S17 live: only the two stalled rows fenced and listed
 M34 [as expected] (want red) live fence ignores new attachment rows
-    MUTATION APPLIED: 1 line(s); first: 
+    MUTATION APPLIED: 1 line(s); first:
     RED: S17
       S17: ASSERT FAILED: S17 live: only the two stalled rows fenced and listed
+M35 [as expected] (want red) SR D1: live fence drops the <= now() guard, so a future-dated attachment row hides a stalled upload
+    MUTATION APPLIED: 2 line(s); first: (SELECT max(a.created_at) FROM public.submission_attachments a WHERE a.submission_id = t.id),
+    RED: S19
+      S19: ASSERT FAILED: S19 future attachment row does not hide a stalled row (listed)
 MW [as expected] (want red) MOST LIKELY WRONG: list stalled rows with no lock and no fence (delete later)
     MUTATION APPLIED: 2 line(s); first: IF true THEN
-    RED: S01 S03 S10 S17
+    RED: S01 S03 S10 S17 S19
       S01: ASSERT FAILED: S01 exactly one row fenced
       S03: ASSERT FAILED: S03 row deleted after its files
       S10: ASSERT FAILED: S10 finalize after the fence -> abandoned
       S17: ASSERT FAILED: S17 live: only the two stalled rows fenced and listed
-mutants: 34 run, 0 not as expected
+      S19: ASSERT FAILED: S19 future attachment row does not hide a stalled row (fenced)
+mutants: 35 run, 0 not as expected

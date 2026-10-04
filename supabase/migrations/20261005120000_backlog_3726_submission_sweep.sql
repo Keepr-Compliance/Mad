@@ -76,8 +76,8 @@ COMMENT ON TABLE public.submission_sweep_runs IS
 --        p_abandoned_grace OR the row older than p_stalled (so a future abandoned_at
 --        cannot hide a row), OR fenced by this run.
 --    (b) stalled: uploading, abandoned_at NULL, and no activity for p_stalled
---        (activity = the newest of created_at, the newest attachment row, the
---        newest object in the row's own {org}/{id}/ folder) -> fenced
+--        (activity = the newest of created_at, the newest NOT-FUTURE attachment
+--        row, the newest object in the row's own {org}/{id}/ folder) -> fenced
 --        (abandoned_at = now()) with FOR UPDATE SKIP LOCKED, so an in-flight
 --        finalize (which holds the row lock) is skipped, not waited on.
 --        An upload that is still adding files is not stalled.
@@ -130,7 +130,7 @@ BEGIN
        WHERE t.status::text = 'uploading' AND t.abandoned_at IS NULL
          AND coalesce(greatest(
                t.created_at,
-               (SELECT max(a.created_at) FROM public.submission_attachments a WHERE a.submission_id = t.id),
+               (SELECT max(a.created_at) FROM public.submission_attachments a WHERE a.submission_id = t.id AND a.created_at <= now()),
                (SELECT max(o.created_at) FROM storage.objects o
                  WHERE o.bucket_id = 'submission-attachments'
                    AND split_part(o.name, '/', 1) = t.organization_id::text
@@ -143,7 +143,7 @@ BEGIN
        WHERE t.status::text = 'uploading' AND t.abandoned_at IS NULL
          AND coalesce(greatest(
                t.created_at,
-               (SELECT max(a.created_at) FROM public.submission_attachments a WHERE a.submission_id = t.id),
+               (SELECT max(a.created_at) FROM public.submission_attachments a WHERE a.submission_id = t.id AND a.created_at <= now()),
                (SELECT max(o.created_at) FROM storage.objects o
                  WHERE o.bucket_id = 'submission-attachments'
                    AND split_part(o.name, '/', 1) = t.organization_id::text

@@ -21,8 +21,9 @@ S15-invoke-request                       GREEN 3 assertions
 S16-seed-url                             GREEN 2 assertions
 S17-activity-not-age                     GREEN 4 assertions
 S18-activity-boundary                    GREEN 2 assertions
+S19-future-attachment-not-activity       GREEN 2 assertions
 X1-attachment-row-outside-folder         GREEN 2 assertions
 X2-referenced-parent                     GREEN 4 assertions
 X3-no-arg-claim-is-dry                   GREEN 2 assertions
 X4-future-abandoned-at                   GREEN 1 assertions
-controls: 27 green / 27
+controls: 28 green / 28

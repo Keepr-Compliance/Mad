@@ -42,6 +42,7 @@ Records: `control-run.txt`, `mutant-run.txt`, `handler-mutant-run.txt`,
 | S01 | (b) at 2 h: 1 h 50 m untouched, 2 h 10 m fenced; submitted row untouched; (a) 1 h grace |
 | S17 | (b) is "no activity for 2 h": a 3 h old upload with a 30 min old file, or a 30 min old attachment row, is not claimed; a stalled one is; a new object in another org's folder is not activity (dry and live) |
 | S18 | activity boundary: newest object 1 h 50 m old → not claimed, 2 h 10 m old → claimed |
+| S19 | SR D1: a future-dated `submission_attachments.created_at` (the submitter can insert this row) does not count as activity — the stalled row is still listed and fenced |
 | S02 | paths = attachment rows + rowless objects in the row's own `{org}/{id}/` folder only |
 | S03 | files removed, then finish: row gone, children cascaded, attempt row `abandoned`, run row closed |
 | S04 | an object left → row kept |
