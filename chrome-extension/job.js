@@ -1534,6 +1534,13 @@
   // remembered); a tap opens one line + Open Keepr. Linking lives in the
   // toolbar popup now (never on the page).
   var IDLE_TAB_LINE = "Sync from Keepr";
+  /** Founder (BoxNotLinked): the not-linked guide on the page. */
+  var GUIDE_TITLE = "Link with Keepr";
+  var GUIDE_LINE_BEFORE = "Click the Keepr icon above, then ";
+  var GUIDE_ARROW = "#F5A524";
+  /** The guide card's place: top-right, under the toolbar (the mockup). */
+  var GUIDE_TOP = 44;
+  var GUIDE_RIGHT = 16;
   /** C3: an unanswered "Stop the sync?" closes itself after this long (the sync never pauses). */
   var STOP_CONFIRM_AUTO_CLOSE_MS = 10000;
   /** C5 (founder): a real failure of a cache Sync — "Sync failed · Try again". */
@@ -1665,6 +1672,8 @@
 
   /** The box's state, from what the job shows. */
   function overlayState(text, isError, extras) {
+    // Founder (BoxNotLinked): not linked — the guide card under the toolbar.
+    if (extras && extras.idle && extras.idle.guide) return "not_linked";
     if (extras && extras.idle) return "idle";
     if (extras && extras.ask) return "ask";
     if (isError) return "error";
@@ -1810,6 +1819,49 @@
     if (state === "idle") {
       renderIdleTab();
       return;
+    }
+    if (state === "not_linked") {
+      renderNotLinkedGuide();
+      return;
+    }
+
+    /**
+     * Founder (BoxNotLinked mockup, 2026-10-04): not linked — a card at the
+     * top-right, under Chrome's toolbar, with a yellow ↑ toward the
+     * extension's icon: the brand mark, "Link with Keepr", one line, and ×
+     * (dismissed for this page load; it comes back on the next while unlinked).
+     */
+    function renderNotLinkedGuide() {
+      Object.assign(box.style, { width: "300px", padding: "16px", gap: "10px", borderRadius: "16px", overflow: "visible" });
+      box.appendChild(el("div", "guide-arrow", {
+        position: "absolute", right: "2px", top: "-34px", fontSize: "26px", lineHeight: "26px",
+        color: GUIDE_ARROW, fontWeight: "800", pointerEvents: "none",
+      }, "↑"));
+      var row = el("div", "header", { display: "flex", alignItems: "center", gap: "10px" });
+      var mark = el("div", "guide-mark", { flex: "0 0 30px", width: "30px", height: "30px" });
+      mark.appendChild(brandMark(doc, 30));
+      row.appendChild(mark);
+      row.appendChild(el("div", "line", { flex: "1 1 auto", fontSize: "15px", fontWeight: "700", color: p.text }, GUIDE_TITLE));
+      if (io.close) {
+        var x = button("close", "×", "icon");
+        x.setAttribute("aria-label", "Close");
+        x.addEventListener("click", function () { io.close(); });
+        row.appendChild(x);
+      }
+      box.appendChild(row);
+      // LinkFlow (SR): the primary "Link with Keepr" opens the extension's own
+      // window (the code shows there, never on this page). Trusted clicks only.
+      var linkButton = button("link-open", GUIDE_TITLE, "primary");
+      linkButton.addEventListener("click", function (e) {
+        if (!e || e.isTrusted !== true) return;
+        if (io.openLink) io.openLink();
+      });
+      box.appendChild(linkButton);
+      var line = el("div", "progress", { fontSize: "13px", lineHeight: "18px", color: p.muted });
+      line.appendChild(doc.createTextNode(GUIDE_LINE_BEFORE));
+      line.appendChild(el("b", null, null, GUIDE_TITLE));
+      line.appendChild(doc.createTextNode("."));
+      box.appendChild(line);
     }
 
     /** C3: the idle K tab (collapsed), or its one line + Open Keepr (expanded). */
@@ -2113,6 +2165,11 @@
     return { topFrac: Math.min(1, Math.max(0, raw.topFrac)) };
   }
 
+  /** The not-linked guide's place: top-right, under Chrome's toolbar. */
+  function guidePosition(width, viewWidth) {
+    return { left: Math.round(Math.max(0, viewWidth - width - GUIDE_RIGHT)), top: GUIDE_TOP };
+  }
+
   /** The band fraction of a top position (what is remembered). */
   function tabFraction(top, size, view) {
     var minTop = SAFE_TOP;
@@ -2248,6 +2305,11 @@
       },
       /** After a resize (or a taller / wider box): back to its place. */
       keepOnScreen: function () {
+        var pinned = io.pin ? io.pin() : null;
+        if (pinned) {
+          place(pinned);
+          return;
+        }
         if (edge) place(tabPosition(frac, io.size(), io.view(), io.rightGap ? io.rightGap() : RIGHT_GAP));
         else if (box.style.left) settle(current());
       },
@@ -2314,6 +2376,8 @@
 
   var api = {
     bootPlan: bootPlan,
+    guidePosition: guidePosition,
+    GUIDE_TITLE: GUIDE_TITLE,
     transportKind: transportKind,
     KEEPR_LOST_MESSAGES: KEEPR_LOST_MESSAGES,
     launchKeepr: launchKeepr,
@@ -2476,6 +2540,11 @@
         rightEdge: true,
         // The mockup: the idle K tab sits flush with the edge; the open box a little in.
         rightGap: function () { return box && box.getAttribute("data-keepr-state") === "idle" && !idleExpanded ? 0 : RIGHT_GAP; },
+        // The not-linked guide sits top-right under the toolbar (BoxNotLinked).
+        pin: function () {
+          if (!box || box.getAttribute("data-keepr-state") !== "not_linked") return null;
+          return guidePosition(box.getBoundingClientRect().width || 300, root.innerWidth);
+        },
         onTap: function () {
           if (lastShown && lastShown.extras && lastShown.extras.idle) {
             idleExpanded = !idleExpanded;
@@ -2503,7 +2572,9 @@
     // The job is no longer running (done, failed, idle): the confirm is over.
     if (!(extras && extras.cancel)) stopConfirm = { state: "closed", openedAt: 0 };
     renderOverlay(box, text, isError, extras, {
-      copy: copyToClipboard, focus: focusKeepr, cancel: cancelJob, close: dismiss, stop: stopConfirm,
+      copy: copyToClipboard, focus: focusKeepr, cancel: cancelJob, stop: stopConfirm,
+      close: extras && extras.idle && extras.idle.guide ? dismissGuide : dismiss,
+      openLink: function () { void toWorker({ type: "keepr-open-link-window" }); },
       rerender: function () { if (lastShown) showOverlay(lastShown.text, lastShown.isError, lastShown.extras); },
       // C5: "Try again" — Keepr starts a new Sync (signed; only after a failed
       // one); this tab runs it (the chats the failed one saved are skipped).
@@ -2535,12 +2606,14 @@
   var asking = false;
   /** The idle tab's label: "Keepr · linked" / "Keepr · not linked" (a boolean from the worker). */
   var idleLinked;
+  /** The not-linked guide's × — for this page load only. */
+  var guideDismissed = false;
   function idleOnScreen() {
     return !lastShown || !!(lastShown.extras && lastShown.extras.idle);
   }
   function showIdle() {
     if (running || asking || !idleOnScreen()) return;
-    showOverlay("", false, { idle: { linked: idleLinked }, version: manifestVersion() });
+    showOverlay("", false, { idle: { linked: idleLinked, guide: idleLinked === false && !guideDismissed }, version: manifestVersion() });
   }
   /** C3: idle, the page shows only the K tab (status and linking: the toolbar popup). */
   async function refreshIdle() {
@@ -2552,6 +2625,11 @@
       var status = await toWorker({ type: "keepr-pair-status" });
       idleLinked = status && status.ok ? !!status.paired : undefined;
     } catch (_e) { idleLinked = undefined; }
+    showIdle();
+  }
+  /** × on the not-linked guide: the normal K tab for the rest of this page load. */
+  function dismissGuide() {
+    guideDismissed = true;
     showIdle();
   }
   /** × on a finished Sync, or "Not now": the box goes back to the idle chip. */

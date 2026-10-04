@@ -217,9 +217,17 @@
     var draw = function () {
       renderPopup(doc, box, view || { state: "keepr_down" }, io);
     };
+    // link.html (the page card's "Link with Keepr"): the link starts HERE,
+    // in the extension's own window, once — never from the page.
+    var autoLink = !!(box && box.getAttribute("data-autolink") === "1");
     var refresh = function () {
       return ask({ type: "keepr-popup-state" }).then(function (r) {
         view = r;
+        if (autoLink && view && view.state === "not_linked") {
+          autoLink = false;
+          return ask({ type: "keepr-link-start" }).then(refresh);
+        }
+        if (view && view.state !== "keepr_down") autoLink = false;
         draw();
         // Linking: ask again every second (the code is typed in Keepr).
         if (timer) clearTimeout(timer);

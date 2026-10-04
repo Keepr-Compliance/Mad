@@ -1031,7 +1031,7 @@ describe("renderOverlay: Cancel (M8)", () => {
   it("the page keeps the confirm across renders and drops it when the job ends", () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const src = require("fs").readFileSync(require("path").join(__dirname, "..", "..", "chrome-extension", "job.js"), "utf8") as string;
-    expect(src).toContain("close: dismiss, stop: stopConfirm,");
+    expect(src).toContain("cancel: cancelJob, stop: stopConfirm,");
     expect(src).toContain(`if (!(extras && extras.cancel)) stopConfirm = { state: "closed", openedAt: 0 };`);
   });
 

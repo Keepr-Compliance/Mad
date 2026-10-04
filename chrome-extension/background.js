@@ -348,6 +348,61 @@ async function openMessages() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Founder (LinkFlow, SR-approved 2026-10-04): the page card's "Link with
+// Keepr" opens the extension's OWN small window (link.html) — the toolbar
+// popup when Chrome allows it, else a popup-type window. The link session
+// (and its code) starts INSIDE that window, never on the page's click; the
+// code never reaches the page. One window at a time; a rate limit.
+// ---------------------------------------------------------------------------
+const LINK_WINDOW_MIN_INTERVAL_MS = 2000;
+const LINK_WINDOW_SIZE = { width: 380, height: 380 };
+let linkWindowId = null;
+let linkWindowAskedAt = 0;
+
+/** A message from a web page's content script (never sees a link code). */
+function fromWebPage(sender) {
+  return !!sender && typeof sender.url === "string" && /^https?:/i.test(sender.url);
+}
+
+async function openLinkWindow(now) {
+  const at = typeof now === "number" ? now : Date.now();
+  if (at - linkWindowAskedAt < LINK_WINDOW_MIN_INTERVAL_MS) return { ok: false, error: "too_soon" };
+  linkWindowAskedAt = at;
+  // One at a time: the open one comes to the front.
+  if (linkWindowId !== null && chrome.windows) {
+    try {
+      await chrome.windows.update(linkWindowId, { focused: true });
+      return { ok: true, how: "focused" };
+    } catch (_err) {
+      linkWindowId = null; // closed meanwhile
+    }
+  }
+  try {
+    if (chrome.action && typeof chrome.action.openPopup === "function") {
+      await chrome.action.openPopup();
+      return { ok: true, how: "popup" };
+    }
+  } catch (_err) {
+    // Not allowed here (no gesture / older Chrome): the small window.
+  }
+  try {
+    const win = await chrome.windows.create({
+      url: chrome.runtime.getURL("link.html"), type: "popup", width: LINK_WINDOW_SIZE.width, height: LINK_WINDOW_SIZE.height, focused: true,
+    });
+    linkWindowId = win && typeof win.id === "number" ? win.id : null;
+    return { ok: true, how: "window" };
+  } catch (_err) {
+    return { ok: false, error: "no_window" };
+  }
+}
+
+if (chrome.windows && chrome.windows.onRemoved && typeof chrome.windows.onRemoved.addListener === "function") {
+  chrome.windows.onRemoved.addListener((id) => {
+    if (id === linkWindowId) linkWindowId = null;
+  });
+}
+
 /** "0.3.9" < "0.3.10". Missing parts count as 0. */
 function compareVersions(a, b) {
   const pa = String(a || "0").split(".").map((n) => parseInt(n, 10) || 0);
@@ -555,7 +610,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   const fail = (err) => sendResponse({ ok: false, error: String((err && err.message) || err) });
 
+  // The link code is for the extension's own pages only (popup, link
+  // window, welcome) — never a web page's content script.
+  if (fromWebPage(sender) && (message.type === "keepr-popup-state" || message.type === "keepr-link-start" ||
+      message.type === "keepr-link-state" || message.type === "keepr-link-cancel" || message.type === "keepr-unlink")) {
+    sendResponse({ ok: false, error: "not_allowed" });
+    return false;
+  }
+
   switch (message.type) {
+    case "keepr-open-link-window":
+      // The page card's "Link with Keepr" (a trusted click): the extension's window.
+      openLinkWindow().then(sendResponse, fail);
+      return true;
     case "keepr-job-api":
       jobApi(message.method, message.path, message.body)
         .then(async (reply) => {
