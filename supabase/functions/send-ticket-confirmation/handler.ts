@@ -7,7 +7,7 @@
  *
  * Caller: the `support_ticket_confirmation_webhook` trigger on
  * `support_tickets` INSERT (see migration
- * 20261004120000_backlog_3711_ticket_webhook_secret.sql). The trigger sends
+ * 20261004180237_backlog_3711_ticket_webhook_secret.sql). The trigger sends
  * the `x-webhook-secret` header. Every request without the matching value is
  * rejected with 401. The ticket is re-read from the database by id; the
  * payload's email/subject are not used.
