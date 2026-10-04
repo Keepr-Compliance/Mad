@@ -52,6 +52,36 @@ export interface SubmitNotIncludedItem {
   localAttachmentId: string | null;
 }
 
+/**
+ * BACKLOG-3683: the answer to `transactions:submission-scope`. Mirrors
+ * `SubmissionScopeResult` in electron/services/submissionService.ts.
+ */
+export interface SubmissionScopeIpcResult {
+  success: boolean;
+  inWindow?: {
+    emails: number;
+    texts: number;
+    textThreads: number;
+    attachments: number;
+    emailAttachments: number;
+    attachmentBytes: number;
+  };
+  outOfWindow?: {
+    emailsBefore: number;
+    emailsAfter: number;
+    textsBefore: number;
+    textsAfter: number;
+    undated: number;
+    items: Array<{
+      kind: "email" | "text";
+      sentAt: string | null;
+      label: string;
+      side: "before" | "after" | "undated";
+    }>;
+  };
+  error?: string;
+}
+
 /** The answer to `transactions:submit` / `transactions:resubmit`. */
 export interface SubmitIpcResult {
   success: boolean;
@@ -1091,6 +1121,15 @@ export interface WindowApiTransactions {
     notIncluded?: SubmitNotIncludedItem[];
     error?: string;
   }>;
+
+  /**
+   * BACKLOG-3683: what a submission with these (not yet saved) dates would
+   * send, and what is linked but outside them.
+   */
+  getSubmissionScope: (
+    transactionId: string,
+    candidate: { started_at: string | null; closed_at: string | null }
+  ) => Promise<SubmissionScopeIpcResult>;
 
   /** BACKLOG-3398: cancel the running submission. */
   cancelSubmit: (transactionId: string) => Promise<{

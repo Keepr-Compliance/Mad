@@ -619,6 +619,15 @@ export const transactionBridge = {
     ipcRenderer.invoke("transactions:submit-preflight", transactionId),
 
   /**
+   * BACKLOG-3683: what a submission with these (not yet saved) dates would
+   * send, and what is linked but outside them.
+   */
+  getSubmissionScope: (
+    transactionId: string,
+    candidate: { started_at: string | null; closed_at: string | null }
+  ) => ipcRenderer.invoke("transactions:submission-scope", transactionId, candidate),
+
+  /**
    * BACKLOG-3398: cancel the running submission. Refused once the final step
    * has begun.
    */
