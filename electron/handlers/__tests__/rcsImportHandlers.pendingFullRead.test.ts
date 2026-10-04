@@ -8,7 +8,7 @@
  *
  * Mutations that turn this red:
  *   T4a the handler's commit writer not clearing the flag      → "cleared when saved"
- *   T4b the flag cleared outside the commit transaction         → "a failed commit"
+ *   T4b the flag cleared outside the chat's commit transaction  → "a failed commit"
  */
 
 import * as nodePath from "path";
@@ -103,13 +103,29 @@ describe("the pending full read clears only when the commit saves (SR T4)", () =
     expect(listPendingFullRead(USER)).toEqual([]);
   });
 
+  // SR F2 (2026-10-04): since 3671 P3 each chat commits in its own
+  // transaction and a failure is REPORTED (chatsFailed), not thrown. The
+  // chat's write failing inside its transaction rolls back the flag's
+  // clearing with it — still pending.
   it("a failed commit leaves it pending (T4b)", async () => {
-    await expect(
-      staging.commit(JOB, USER, ALL, commitWriter, () => {
+    const r = await staging.commit(JOB, USER, ALL, commitWriter, {
+      perChat: () => {
         throw new Error("disk I/O error");
-      }),
-    ).rejects.toThrow("disk I/O error");
+      },
+    });
+    expect(r).toMatchObject({ chats: 0, chatsFailed: 1 });
     expect(listPendingFullRead(USER)).toEqual(["conv-back-on"]);
+  });
+
+  // The chat SAVED and only the run's own records failed (reported as
+  // runRecordFailed): the chat was read in full and is in Keepr, so its flag
+  // is rightly cleared (it went with the chat's transaction).
+  it("only the run records failed: the chat is saved, its flag cleared (T4c)", async () => {
+    const r = await staging.commit(JOB, USER, ALL, commitWriter, () => {
+      throw new Error("disk I/O error");
+    });
+    expect(r).toMatchObject({ chats: 1, chatsFailed: 0, runRecordFailed: true });
+    expect(listPendingFullRead(USER)).toEqual([]);
   });
 
   it("a discarded run (cancel / error) leaves it pending", async () => {
