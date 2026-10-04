@@ -97,7 +97,7 @@ import {
   type SharedForceClearResult,
 } from "../services/rcsClearService";
 import transactionService from "../services/transactionService";
-import { bringAppToFrontOrFlash } from "../utils/bringAppToFront";
+import { bringAppToFrontForLink, bringAppToFrontOrFlash } from "../utils/bringAppToFront";
 import { wrapHandler } from "../utils/wrapHandler";
 import { getMainWindow } from "../windowRegistry";
 import { ValidationError } from "../utils/validation";
@@ -1048,6 +1048,7 @@ const bridge = new RcsExtensionBridge({
   onFocusRequested: () =>
     focusForBrowser({
       focus: focusKeeprFromBrowser,
+      focusForLink: () => bringAppToFrontForLink(getMainWindow()),
       linkState: () => pairingAuth.linkState(),
       openLinkScreen: () => hostWindows.broadcast(RCS_OPEN_LINK_SCREEN_CHANNEL, {}),
     }),

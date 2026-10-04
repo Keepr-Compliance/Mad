@@ -88,7 +88,9 @@ describe("the not-linked guide card on the page", () => {
   it("the page shows the guide while unlinked, until ×, and asks the worker for the window", () => {
     const src = fs.readFileSync(path.join(EXT, "job.js"), "utf8").replace(/\r\n/g, "\n");
     expect(src).toContain("guide: idleLinked === false && !guideDismissed");
-    expect(src).toContain('openLink: function () { void toWorker({ type: "keepr-open-link-window" }); },');
+    // The page sends only the screen's numbers with it (D03/A06 placement).
+    expect(src).toContain('type: "keepr-open-link-window",');
+    expect(src).toContain("screen: { left: sc.availLeft, top: sc.availTop, width: sc.availWidth, height: sc.availHeight },");
   });
 
   it("no 6-digit code text in anything the page box renders, in any state", () => {

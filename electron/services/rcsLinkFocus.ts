@@ -15,6 +15,11 @@ export const RCS_OPEN_LINK_SCREEN_CHANNEL = "rcs-import:open-link-screen";
 export interface RcsFocusDeps {
   /** Brings Keepr's window to the front (or flashes it). */
   focus: () => void;
+  /**
+   * For linking: raises Keepr WITHOUT maximizing it (a minimized window
+   * comes back at normal bounds), so the code window beside it stays visible.
+   */
+  focusForLink: () => void;
   /** Keepr's link session state right now. */
   linkState: () => { state: string };
   /** Tells the renderer to open the Sync Android modal at the link step. */
@@ -23,12 +28,16 @@ export interface RcsFocusDeps {
 
 /** POST /focus: focus Keepr; while a link code is waiting, the link screen too. */
 export function focusForBrowser(deps: RcsFocusDeps): void {
-  deps.focus();
   let waiting = false;
   try {
     waiting = deps.linkState().state === "waiting";
   } catch {
     waiting = false;
   }
-  if (waiting) deps.openLinkScreen();
+  if (!waiting) {
+    deps.focus();
+    return;
+  }
+  deps.focusForLink();
+  deps.openLinkScreen();
 }

@@ -99,6 +99,26 @@ export function bringAppToFront(win: BrowserWindow | null): void {
   }
 }
 
+/**
+ * SR (Option 1): Keepr raised for linking — the code window sits at the
+ * screen's right edge, so Keepr must not come back MAXIMIZED over it. A
+ * minimized window returns at its normal bounds (never maximized); a
+ * visible window keeps the size the user gave it. Never throws.
+ */
+export function bringAppToFrontForLink(win: BrowserWindow | null): void {
+  try {
+    if (win && !win.isDestroyed() && win.isMinimized()) {
+      win.restore();
+      if (win.isMaximized()) win.unmaximize();
+    }
+  } catch (error) {
+    void logService.warn("Failed to restore the app's window", "BringAppToFront", {
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+  bringAppToFrontOrFlash(win);
+}
+
 /** Windows whose taskbar button is flashing until they get focus. */
 const flashing = new WeakSet<BrowserWindow>();
 

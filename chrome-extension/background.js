@@ -391,7 +391,24 @@ function fromOwnPage(sender) {
   return typeof base === "string" && base.length > 0 && sender.url.startsWith(base);
 }
 
-async function openLinkWindow(now) {
+/** Space between the code window and the screen's right edge. */
+const LINK_WINDOW_EDGE_GAP = 24;
+
+/**
+ * SR (storyboard D03/A06): the code window at the RIGHT edge of the page's
+ * screen, vertically centred — to the right of Keepr's centred modal. Only
+ * finite numbers are used; anything else → Chrome's default place.
+ */
+function linkWindowPlacement(screen) {
+  const s = screen && typeof screen === "object" ? screen : {};
+  const ok = (v) => typeof v === "number" && Number.isFinite(v);
+  if (!ok(s.width) || !ok(s.height) || s.width < LINK_WINDOW_SIZE.width || s.height < LINK_WINDOW_SIZE.height) return {};
+  const left = (ok(s.left) ? s.left : 0) + s.width - LINK_WINDOW_SIZE.width - LINK_WINDOW_EDGE_GAP;
+  const top = (ok(s.top) ? s.top : 0) + Math.round((s.height - LINK_WINDOW_SIZE.height) / 2);
+  return { left: Math.round(left), top };
+}
+
+async function openLinkWindow(now, screen) {
   const at = typeof now === "number" ? now : Date.now();
   if (at - linkWindowAskedAt < LINK_WINDOW_MIN_INTERVAL_MS) return { ok: false, error: "too_soon" };
   linkWindowAskedAt = at;
@@ -407,6 +424,7 @@ async function openLinkWindow(now) {
   try {
     const win = await chrome.windows.create({
       url: chrome.runtime.getURL("link.html"), type: "popup", width: LINK_WINDOW_SIZE.width, height: LINK_WINDOW_SIZE.height, focused: true,
+      ...linkWindowPlacement(screen),
     });
     linkWindowId = win && typeof win.id === "number" ? win.id : null;
     return { ok: true, how: "window" };
@@ -638,7 +656,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   switch (message.type) {
     case "keepr-open-link-window":
       // The page card's "Link with Keepr" (a trusted click): the extension's window.
-      openLinkWindow().then(sendResponse, fail);
+      openLinkWindow(undefined, message.screen).then(sendResponse, fail);
       return true;
     case "keepr-job-api":
       jobApi(message.method, message.path, message.body)

@@ -30,6 +30,7 @@ import { RcsPairingAuth, type PairProtocol, type PairingStore, type RcsPairing }
 import { installPairing, P, uninstallPairing } from "./helpers/pairedWorker";
 import { focusForBrowser } from "../../electron/services/rcsLinkFocus";
 
+
 const SOURCE = fs.readFileSync(path.join(__dirname, "..", "..", "chrome-extension", "background.js"), "utf8");
 const EXTENSION_ID = "nlfohmjehedijceeelokclkglmjnlonj";
 type Listener = (m: Record<string, unknown>, s: { id: string; url?: string }, r: (x: unknown) => void) => boolean;
@@ -69,6 +70,7 @@ beforeEach(async () => {
     onFocusRequested: () =>
       focusForBrowser({
         focus: () => (focused += 1),
+        focusForLink: () => (focused += 1),
         linkState: () => auth.linkState(),
         openLinkScreen: () => (linkScreens += 1),
       }),
@@ -82,13 +84,17 @@ afterEach(async () => {
 });
 
 /** The real worker; its fetch reaches the test bridge (or `override`, a fake "Keepr"). */
-async function worker(override?: (url: string, init: RequestInit) => Promise<Response> | undefined) {
+async function worker(
+  override?: (url: string, init: RequestInit) => Promise<Response> | undefined,
+  extraChrome: Record<string, unknown> = {},
+) {
   const store = await installPairing(false);
   let listener: Listener | null = null;
   const sent: string[] = [];
   const chromeStub = {
     runtime: { id: EXTENSION_ID, getURL: (p: string) => `chrome-extension://${EXTENSION_ID}/${p}`, onMessage: { addListener: (fn: Listener) => (listener = fn) }, getManifest: () => ({ version: "9.9.9" }) },
     tabs: { query: jest.fn(async () => []) },
+    ...extraChrome,
   };
   const fetchShim = async (url: string, init: RequestInit) => {
     sent.push(new URL(url).pathname);
@@ -214,12 +220,47 @@ describe("the worker's link with Keepr (BACKLOG-3666, C1)", () => {
     expect(linkScreens).toBe(1);
   });
 
-  it("/focus with no code waiting only focuses (never opens the link step)", () => {
-    let opened = 0;
-    focusForBrowser({ focus: () => undefined, linkState: () => ({ state: "none" }), openLinkScreen: () => (opened += 1) });
-    focusForBrowser({ focus: () => undefined, linkState: () => ({ state: "locked" }), openLinkScreen: () => (opened += 1) });
-    focusForBrowser({ focus: () => undefined, linkState: () => { throw new Error("x"); }, openLinkScreen: () => (opened += 1) });
-    expect(opened).toBe(0);
+  // SR (O5 inside this suite) + storyboard D03/A06: the page card opens
+  // link.html's small window — never the toolbar popup (it would close when
+  // Keepr comes forward) — at the RIGHT edge of the page's screen, centred
+  // vertically. Mutations: the toolbar popup tried first; no placement → red.
+  it("the page card: link.html at the screen's right edge, centred — never the toolbar popup", async () => {
+    const openPopup = jest.fn(async () => undefined);
+    const created: Array<Record<string, unknown>> = [];
+    const w = await worker(undefined, {
+      action: { openPopup },
+      windows: {
+        create: async (o: Record<string, unknown>) => {
+          created.push(o);
+          return { id: 7 };
+        },
+        update: async () => undefined,
+        onRemoved: { addListener: () => undefined },
+      },
+    });
+    const r = await w.send({ type: "keepr-open-link-window", screen: { left: 1920, top: 0, width: 1920, height: 1040 } });
+    expect(openPopup).not.toHaveBeenCalled();
+    expect(r).toEqual({ ok: true, how: "window" });
+    expect(created).toEqual([
+      { url: `chrome-extension://${EXTENSION_ID}/link.html`, type: "popup", width: 380, height: 380, focused: true, left: 1920 + 1920 - 380 - 24, top: 330 },
+    ]);
+  });
+
+  it("no usable screen numbers: Chrome's default place (never NaN)", async () => {
+    const created: Array<Record<string, unknown>> = [];
+    const w = await worker(undefined, {
+      windows: {
+        create: async (o: Record<string, unknown>) => {
+          created.push(o);
+          return { id: 8 };
+        },
+        update: async () => undefined,
+        onRemoved: { addListener: () => undefined },
+      },
+    });
+    await w.send({ type: "keepr-open-link-window", screen: { width: "wide", height: NaN } });
+    expect(created[0]).not.toHaveProperty("left");
+    expect(created[0]).not.toHaveProperty("top");
   });
 
   // SR (2026-10-03): nothing can mint an 8-character code any more.

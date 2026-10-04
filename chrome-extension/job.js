@@ -2864,7 +2864,15 @@
     renderOverlay(box, text, isError, extras, {
       copy: copyToClipboard, focus: focusKeepr, cancel: cancelJob, stop: stopConfirm,
       close: extras && extras.idle && extras.idle.guide ? dismissGuide : dismiss,
-      openLink: function () { void toWorker({ type: "keepr-open-link-window" }); },
+      // SR (D03/A06): the page's screen (numbers only) so the code window
+      // opens at its right edge, beside Keepr's centred modal.
+      openLink: function () {
+        var sc = root.screen || {};
+        void toWorker({
+          type: "keepr-open-link-window",
+          screen: { left: sc.availLeft, top: sc.availTop, width: sc.availWidth, height: sc.availHeight },
+        });
+      },
       rerender: function () { if (lastShown) showOverlay(lastShown.text, lastShown.isError, lastShown.extras); },
       // C5: "Try again" — Keepr starts a new Sync (signed; only after a failed
       // one); this tab runs it (the chats the failed one saved are skipped).
