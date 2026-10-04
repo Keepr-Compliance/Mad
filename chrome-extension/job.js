@@ -1668,7 +1668,8 @@
     if (extras && extras.idle) return "idle";
     if (extras && extras.ask) return "ask";
     if (isError) return "error";
-    if (extras && extras.details) return "done";
+    // SR U4: the done line is "done" even when the job sent no details.
+    if ((extras && extras.details) || text === DONE_LINE) return "done";
     if (text === PAUSED_TEXT || text === CONNECTING_TEXT || text === UNREACHABLE_TEXT) return "paused";
     return "syncing";
   }
@@ -2020,7 +2021,11 @@
     // done / error: one line (the counts, or the failure), then the bottom row.
     var bodyLine = state === "error" ? text : extras && extras.summary ? extras.summary : "";
     if (bodyLine) box.appendChild(el("div", "progress", bodyStyle, bodyLine));
-    var hasDetails = !!(extras && extras.details);
+    // SR U4 (the mockup): Done ALWAYS has See details (left) + Open Keepr
+    // (right); with no details, See details shows the summary / copy.
+    var hasDetails = !!(extras && extras.details) || state === "done";
+    var detailsText = (extras && (extras.details || extras.summary || extras.copy)) || DONE_TITLE;
+    var copyText = (extras && extras.copy) || detailsText;
 
     // The details card, ABOVE the row (founder: the row's action stays at the
     // box's bottom-right), collapsed by default.
@@ -2032,7 +2037,7 @@
         display: "none", padding: "10px", borderRadius: "10px",
         background: p.detailsBg, color: p.text, border: "1px solid " + p.detailsBorder,
       });
-      var details = el("pre", "details", { whiteSpace: "pre-wrap", margin: "0", font: "inherit", fontSize: "13px" }, extras.details);
+      var details = el("pre", "details", { whiteSpace: "pre-wrap", margin: "0", font: "inherit", fontSize: "13px" }, detailsText);
       var copyButton = button("copy", "Copy details", "secondary");
       copyButton.style.marginTop = "8px";
       card.appendChild(details);
@@ -2046,7 +2051,7 @@
         toggle.setAttribute("aria-expanded", opening ? "true" : "false");
       });
       copyButton.addEventListener("click", function () {
-        Promise.resolve(io.copy(extras.copy)).then(function (ok) {
+        Promise.resolve(io.copy(copyText)).then(function (ok) {
           copyButton.textContent = ok ? "Copied" : "Copy failed";
         }, function () {
           copyButton.textContent = "Copy failed";

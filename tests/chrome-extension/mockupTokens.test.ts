@@ -192,6 +192,30 @@ describe("the page box = the mockups (Box*.dc.html)", () => {
     expect(q(box, "open-keepr").style).toMatchObject({ minHeight: "36px", borderRadius: "8px", fontWeight: "700" });
   });
 
+  // SR U4: Done ALWAYS has See details (left) + Open Keepr (right), even
+  // with no details (See details then shows the summary / copy).
+  // Mutations: the row only with details → red; an empty card → red.
+  it("done with no details: still See details + Open Keepr; See details shows the summary", () => {
+    const copied: string[] = [];
+    const box = render(job.DONE_LINE, false, { summary: "13 chats · 323 messages" }, {
+      theme: "light",
+      copy: async (t: string) => {
+        copied.push(t);
+        return true;
+      },
+    });
+    expect(box.getAttribute("data-keepr-state")).toBe("done");
+    const row = q(box, "bottom-row");
+    expect(Array.from(row.children).map((c) => c.getAttribute("data-keepr"))).toEqual(["details-toggle", "open-keepr"]);
+    q(box, "details-toggle").click();
+    expect(q(box, "details").textContent).toBe("13 chats · 323 messages");
+    q(box, "copy").click();
+    expect(copied).toEqual(["13 chats · 323 messages"]);
+    const bare = render(job.DONE_LINE, false, undefined, { theme: "light" });
+    expect(Array.from(q(bare, "bottom-row").children).map((c) => c.getAttribute("data-keepr"))).toEqual(["details-toggle", "open-keepr"]);
+    expect(q(bare, "details").textContent).toBe("Sync done");
+  });
+
   it("failed: an amber ! badge, #E5C78F border, Try again at the right", () => {
     const box = render("Lost the connection to your phone.", true, { retry: true }, { theme: "light", retry: async () => true });
     expect(q(box, "drag-handle").style.background).toBe(rgb("#B45309"));
