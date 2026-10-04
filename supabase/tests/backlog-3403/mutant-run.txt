@@ -1,4 +1,4 @@
-37 mutants written
+41 mutants written
 M01 [as expected] (draft) drop the storage-object check
     MUTATION APPLIED: 3 line(s); first: 0,
     RED: C1b G3  green: none
@@ -144,6 +144,18 @@ M35 [as expected] (draft) table created without IF NOT EXISTS (not re-runnable)
     MUTATION APPLIED: 2 line(s); first: CREATE TABLE public.submission_attempts (
     RED: G2  green: none
       G2: relation "submission_attempts" already exists
+M36 [as expected] (draft) record_submission_attempt accepts outcome committed from a client
+    MUTATION APPLIED: 3 line(s); first: 
+    RED: SR1  green: none
+      SR1: ASSERT FAILED: SR1 {"ok": true, "outcome": "committed", "unchanged": false}
+M37 [as expected] (draft) attachment-row DELETE policy without the abandoned term
+    MUTATION APPLIED: 3 line(s); first: AND (transaction_submissions.status)::text = 'uploading'::text));
+    RED: RD1  green: none
+      RD1: ASSERT FAILED: RD1 deleted=0
+M38 [as expected] (draft) finalize reads the submission without FOR UPDATE
+    MUTATION APPLIED: 2 line(s); first: SELECT * INTO v_sub FROM public.transaction_submissions WHERE id = p_submission_id;
+    RED: L1  green: none
+      L1: ASSERT FAILED: L1 row locked by this transaction
 RB1 [as expected] (rollback) rollback leaves the new message index
     MUTATION APPLIED: 1 line(s); first: 
     RED: G1  green: none
@@ -152,4 +164,8 @@ RB2 [as expected] (rollback) rollback leaves the reviewer WITH CHECK tightened
     MUTATION APPLIED: 2 line(s); first: OR ((status)::text <> 'uploading'::text AND organization_id IN (SELECT organization_members.organization_id
     RED: G1  green: none
       G1: ASSERT FAILED: G1 after rollback = before
-mutants: 37 run, 0 not as expected
+RB3 [as expected] (rollback) rollback leaves the attachment-row DELETE term
+    MUTATION APPLIED: 2 line(s); first: AND ((transaction_submissions.status)::text = 'uploading'::text) AND coalesce(transaction_submissions.submissi
+    RED: G1  green: none
+      G1: ASSERT FAILED: G1 after rollback = before
+mutants: 41 run, 0 not as expected

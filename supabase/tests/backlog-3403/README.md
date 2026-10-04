@@ -55,6 +55,9 @@ ROLLBACK
 |---|---|
 | C1–C17 | `finalize_submission`: each refusal (counts only), success, idempotence, resubmit, nothing written on refusal |
 | R3, F1 | abandon fence: fence first → `abandoned`; after finalize the fence matches 0 rows |
+| L1 | finalize locks the submission row (`FOR UPDATE`) even when it refuses (row `xmax` = this transaction) |
+| RD1, SR2, SR3 | attachment-row delete needs the fence; the 2.38 cleanup order still empties every row (parent cascade); fenced delete works |
+| SR1 | `record_submission_attempt` refuses outcome `committed` (only finalize writes it) |
 | E1 | `submission_metadata.excluded_files` is kept by finalize and not counted |
 | P1–P11 | RLS: retried inserts, rows only while `uploading`, the 2.38 path still works, storage DELETE |
 | H1, H1b, H2, X1 | attachment rows only inside their own `{org}/{submission}/` folder |
@@ -71,7 +74,9 @@ the run aborts; the runner refuses a mutant whose diff is empty and prints
 `MUTATION APPLIED` with the first changed line. M01–M12 keep the plan
 pre-run's numbering. Most likely wrong implementations: M02 (message COUNT
 instead of the id set), M17 (finalize ignores the fence), M19 (free-text
-reason), M13 (the storage DELETE policy without the `abandoned` term).
+reason), M13 (the storage DELETE policy without the `abandoned` term), M36
+(a client may record `committed`), M37 (row-delete policy without the fence
+term), M38 (finalize without `FOR UPDATE`).
 
 ## Live run (`live/`)
 
@@ -89,4 +94,7 @@ from `supabase status -o env`.
   reads per role.
 - `live-mutant-m13.txt`: the same run with the storage DELETE policy minus its
   `abandoned` term; the race then removes a finalized submission's file.
+- `live-mutants-m37-m38.txt`: the run with the row-delete fence term removed
+  (R1-row red: a finalized submission loses its attachment row) and with
+  finalize's `FOR UPDATE` removed (L6 red: the fence no longer waits).
 - `apply-run.txt`: the migration applied with `psql -1 -f` on the venue.

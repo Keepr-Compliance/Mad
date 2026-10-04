@@ -12,15 +12,19 @@ PASS L3c fence on an uploading submission: 1 row :: {"rows":1,"error":null,"ms":
 PASS L3d broker after the fence: remove() removes nothing :: {"removed":0}
 PASS L3e submitter, fenced: remove() removes the object :: {"removed":1}
 PASS L3e bytes gone (service download fails)
-PASS L3f after finalize: fence matches 0 rows :: {"rows":0,"error":null,"ms":3}
+PASS L3f after finalize: fence matches 0 rows :: {"rows":0,"error":null,"ms":2}
 PASS L3f after finalize: remove() removes nothing, bytes still there :: {"removed":[0,0]}
 PASS R1 remove() while finalize holds the row (no fence): removes nothing :: {"removed":0}
-PASS R2 fence waits for finalize, then matches 0 rows :: {"rows":0,"error":null,"ms":3007}
+PASS R2 fence waits for finalize, then matches 0 rows :: {"rows":0,"error":null,"ms":3048}
 PASS R1/R2 finalize committed; object still there :: {"fin":"{\"sub\":\"<id>\",\"role\":\"authenticated\"}\nFIN:{\"ok\": true, \"status\": \"submitted\", \"already_final\": false}","status":"submitted","objects":1}
 PASS R2 remove() after the 0-row fence: removes nothing :: {"removed":0}
 PASS R3 fence first (1 row), then finalize: abandoned, still uploading :: {"fence":1,"fin":{"ok":false,"code":"abandoned"}}
 PASS R3 abandoned upload: remove() removes the object :: {"removed":1}
+PASS R1-row attachment-row delete during finalize (no fence): deletes nothing :: {"deleted":0}
+PASS R1-row finalize committed with its attachment row :: {"status":"submitted","rows":1}
+PASS L6 finalize that refuses still holds the row: the fence waits, then matches 1 row :: {"fence":{"rows":1,"error":null,"ms":3052},"fin":"FIN:{\"ok\": false, \"code\": \"incomplete\", \"messages_extra\": 1, \"objects_missing\": 0, \"checklists_found\": 0, \"messages_missing\": 0, \"checklists_expected\": null, \"attachment_rows_extra\": 0, \"attachment_rows_missing\": 0, \"paths_outside_submission\": 0, \"attachment_message_links_wrong\": 0}"}
 PASS L5 record_submission_attempt as the agent: ok :: {"ok":true,"outcome":"failed","unchanged":false}
+PASS SR1 record_submission_attempt refuses outcome committed :: {"ok":false,"code":"committed_is_server_only"}
 PASS L5 record_submission_attempt with the anon key: refused :: "42501"
 PASS L5 agent sees own attempt; counts kept only numbers :: [{"submission_id":"<id>","outcome":"failed","counts":{"messages":4,"attachments":2}}]
 PASS L5 broker of the org sees it :: 1
@@ -29,4 +33,4 @@ PASS L5 agent of another org does not :: 0
 PASS L5 another agent of the same org does not :: 0
 PASS L5 direct INSERT into submission_attempts: refused :: "42501"
 PASS L5 finalize wrote the attempt row as committed :: [{"outcome":"committed","stage":"finalize"}]
-live-run post: 31 pass, 0 fail
+live-run post: 35 pass, 0 fail

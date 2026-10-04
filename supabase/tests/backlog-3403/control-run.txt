@@ -24,6 +24,7 @@ H1-other-submission-folder               GREEN 1 assertions
 H1b-other-org-folder                     GREEN 1 assertions
 H2-own-folder-3-segment                  GREEN 1 assertions
 K1-checklist-insert-unchanged            GREEN 1 assertions
+L1-finalize-locks-the-row                GREEN 3 assertions
 P1-parent-retry                          GREEN 1 assertions
 P10-rows-first                           GREEN 1 assertions
 P11-broker                               GREEN 1 assertions
@@ -37,6 +38,10 @@ P7-own-finalized                         GREEN 1 assertions
 P8-same-org-agent                        GREEN 1 assertions
 P9-legacy-orphan                         GREEN 1 assertions
 R3-fence-then-finalize                   GREEN 3 assertions
+RD1-unfenced-row-delete                  GREEN 1 assertions
+SR1-committed-is-server-only             GREEN 3 assertions
+SR2-238-cleanup-still-empties            GREEN 4 assertions
+SR3-fenced-row-delete                    GREEN 1 assertions
 T1-record-and-sanitise                   GREEN 4 assertions
 T2-visibility                            GREEN 5 assertions
 T3-no-direct-writes                      GREEN 4 assertions
@@ -52,4 +57,4 @@ X2b-broker-needs-changes                 GREEN 1 assertions
 X3-execute-grants                        GREEN 5 assertions
 X4-anon-call                             GREEN 1 assertions
 X5-submitter-back-to-uploading           GREEN 1 assertions
-controls: 54 green / 54
+controls: 59 green / 59
