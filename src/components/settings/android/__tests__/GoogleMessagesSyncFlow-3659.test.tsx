@@ -19,7 +19,6 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import "@testing-library/jest-dom";
 import type { RcsExtensionState, RcsJobInfo } from "../../../../../electron/types/ipc/window-api-rcs-import";
 import { googleMessagesStep } from "../googleMessagesSyncSteps";
-import { requestLinkStep } from "../androidSyncIntent";
 
 let mockState: RcsExtensionState;
 let progressListener: ((j: RcsJobInfo) => void) | null = null;
@@ -272,8 +271,7 @@ describe("GoogleMessagesSyncFlow", () => {
   // when the new code succeeds. Mutation: the request ignored → red.
   it("opened at the link step (Relink): the link card, even when linked", async () => {
     mockState = INSTALLED; // linked
-    requestLinkStep();
-    render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);
+    render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} startAtLink />);
     expect(await screen.findByTestId("gm-link-step-1")).toBeInTheDocument();
     expect(screen.getByTestId("gm-link-step-2")).toBeInTheDocument();
     expect(screen.queryByTestId("gm-sync-now")).toBeNull();

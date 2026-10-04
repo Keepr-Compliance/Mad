@@ -116,6 +116,11 @@ export function AppModals({ app }: AppModalsProps) {
     closeSettings();
     openAndroidSync();
   }, [closeSettings, openAndroidSync]);
+  // Founder: Settings › Google Messages' Link / Relink — the same modal, at its link step.
+  const handleLinkGoogleMessagesFromSettings = useCallback(() => {
+    closeSettings();
+    openAndroidSync("link");
+  }, [closeSettings, openAndroidSync]);
 
   return (
     <>
@@ -150,6 +155,7 @@ export function AppModals({ app }: AppModalsProps) {
           onEmailConnected={handleEmailConnectedFromSettings}
           onEmailDisconnected={handleEmailDisconnectedFromSettings}
           onConnectAndroid={handleConnectAndroidFromSettings}
+          onLinkGoogleMessages={handleLinkGoogleMessagesFromSettings}
         />
       )}
 
@@ -219,6 +225,7 @@ export function AppModals({ app }: AppModalsProps) {
           userId={currentUser.id}
           onClose={closeAndroidSync}
           app={androidApp}
+          startAtLink={modalState.androidSyncStart === "link"}
           onOpenSettings={(target) => {
             openSettings();
             scrollToSettingsSection(target);

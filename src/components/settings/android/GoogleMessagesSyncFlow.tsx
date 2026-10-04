@@ -23,7 +23,6 @@ import type { RcsExtensionState, RcsJobInfo } from "../../../../electron/types/i
 import { doneSummaryLines, googleMessagesStep } from "./googleMessagesSyncSteps";
 import { LinkBrowserPanel } from "./LinkBrowserPanel";
 import { syncFailureLine } from "./syncFailureLines";
-import { consumeLinkStepRequest } from "./androidSyncIntent";
 import { EXTENSION_PUBLISHED, readBetaInstallPreference, wantsBetaInstall } from "./extensionDistribution";
 
 const POLL_MS = 3000;
@@ -40,6 +39,8 @@ interface GoogleMessagesSyncFlowProps {
   pollMs?: number;
   /** Test seam: the extension is in the Chrome Web Store (default EXTENSION_PUBLISHED). */
   published?: boolean;
+  /** Opened at the link step (Settings' Link / Relink, keepr://link) — even when linked. */
+  startAtLink?: boolean;
 }
 
 /** The storyboards' numbered circle: 28px, #EEF0FF / #312E81. */
@@ -61,6 +62,7 @@ export function GoogleMessagesSyncFlow({
   userId,
   pollMs = POLL_MS,
   published = EXTENSION_PUBLISHED,
+  startAtLink = false,
 }: GoogleMessagesSyncFlowProps) {
   const [state, setState] = useState<RcsExtensionState | null>(null);
   const [job, setJob] = useState<RcsJobInfo | null>(null);
@@ -69,8 +71,6 @@ export function GoogleMessagesSyncFlow({
   /** A code typed in the link card just linked: its "Sync now" is the Sync (no second screen). */
   const [justLinked, setJustLinked] = useState(false);
   const [betaPref, setBetaPref] = useState(false);
-  /** Opened from Settings' Link / Relink (or keepr://link): the link step, even when linked. */
-  const [startAtLink] = useState(() => consumeLinkStepRequest());
   const jobIdRef = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {

@@ -55,10 +55,12 @@ interface SettingsComponentProps {
   onEmailDisconnected?: (provider: "google" | "microsoft") => void;
   /** BACKLOG-2347: open the guided Android sync wizard from Settings. */
   onConnectAndroid?: () => void;
+  /** Settings › Google Messages' Link / Relink: the Sync Android modal at its link step. */
+  onLinkGoogleMessages?: () => void;
 }
 
 /** Settings — tab container that delegates to focused sub-components. */
-function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconnected, onConnectAndroid }: SettingsComponentProps) {
+function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconnected, onConnectAndroid, onLinkGoogleMessages }: SettingsComponentProps) {
   const { isAllowed } = useFeatureGate();
   const hasAIAddon = isAllowed("ai_detection");
   // BACKLOG-3423: lets a source change re-gate iPhone USB detection live.
@@ -227,7 +229,7 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
                 ) : activeImportSource === 'android-messages-web' ? (
                   /* BACKLOG-3659 P3d: Android with Google Messages (Keepr's
                      extension): its status, auto-delete and its own reset. */
-                  <GoogleMessagesSettings userId={userId} onOpenSyncAndroid={onConnectAndroid} />
+                  <GoogleMessagesSettings userId={userId} onOpenSyncAndroid={onLinkGoogleMessages} />
                 ) : (
                   /* BACKLOG-2335: macOS panel renders for every non-Android
                      source, but only macos-native can actually import — the

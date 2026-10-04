@@ -16,7 +16,6 @@
  */
 import React from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { consumeLinkStepRequest } from "../android/androidSyncIntent";
 import "@testing-library/jest-dom";
 import type { RcsExtensionState } from "../../../../electron/types/ipc/window-api-rcs-import";
 
@@ -263,18 +262,35 @@ describe("GoogleMessagesSettings", () => {
     expect(link.className).toBe(screen.getByRole("button", { name: "Force Re-import" }).className);
     fireEvent.click(link);
     expect(onOpen).toHaveBeenCalledTimes(1);
-    expect(consumeLinkStepRequest()).toBe(true);
-    expect(consumeLinkStepRequest()).toBe(false);
     view.unmount();
     mockState = { ...mockState, extensionPaired: true };
     render(<GoogleMessagesSettings userId="user-1" onOpenSyncAndroid={onOpen} />);
     await waitFor(() => expect(screen.getByTestId("gm-pairing-line")).toHaveTextContent(/^Linked$/));
     expect(screen.getByTestId("gm-link-open")).toHaveTextContent(/^Relink$/);
-    fireEvent.click(screen.getByTestId("gm-link-forget"));
-    await waitFor(() => expect(mockForget).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByTestId("gm-link-open"));
     expect(onOpen).toHaveBeenCalledTimes(2);
-    expect(consumeLinkStepRequest()).toBe(true);
+  });
+
+  // SR: Forget link uses the screen's link style (no hex classes) and asks
+  // first, worded as the popup's Unlink. Mutations: forgets on the first
+  // click; another wording; a one-off style → red.
+  it("Forget link: the screen's link style; asks first (as the popup's Unlink); Cancel keeps the link", async () => {
+    mockState = { ...mockState, extensionPaired: true };
+    render(<GoogleMessagesSettings userId="user-1" onOpenSyncAndroid={jest.fn()} />);
+    const forget = await screen.findByTestId("gm-link-forget");
+    expect(forget.className).toBe("text-sm text-indigo-700 hover:text-indigo-900 font-medium");
+    expect(forget.className).not.toMatch(/#/);
+    fireEvent.click(forget);
+    expect(mockForget).not.toHaveBeenCalled();
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const popup = require("../../../../chrome-extension/popup.js") as { COPY: { unlinkAsk: string } };
+    expect(screen.getByTestId("gm-forget-confirm")).toHaveTextContent(popup.COPY.unlinkAsk);
+    fireEvent.click(screen.getByTestId("gm-forget-cancel"));
+    expect(screen.queryByTestId("gm-forget-confirm")).toBeNull();
+    expect(mockForget).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("gm-link-forget"));
+    fireEvent.click(screen.getByTestId("gm-forget-yes"));
+    await waitFor(() => expect(mockForget).toHaveBeenCalledTimes(1));
   });
 
   it("the Beta row is the screen's checkbox row (as its neighbours)", async () => {

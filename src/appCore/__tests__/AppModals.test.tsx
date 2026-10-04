@@ -64,8 +64,10 @@ jest.mock("../modals/IPhoneSyncModal", () => ({
 }));
 
 jest.mock("../modals/AndroidSyncModal", () => ({
-  AndroidSyncModal: ({ userId, app }: { userId: string; app?: string }) => (
-    <div data-testid="android-sync-modal" data-user-id={userId} data-app={app}>Android Sync Modal</div>
+  AndroidSyncModal: ({ userId, app, startAtLink }: { userId: string; app?: string; startAtLink?: boolean }) => (
+    <div data-testid="android-sync-modal" data-user-id={userId} data-app={app} data-start-at-link={String(!!startAtLink)}>
+      Android Sync Modal
+    </div>
   ),
 }));
 
@@ -99,6 +101,7 @@ const createModalState = (
   showTermsModal: false,
   showIPhoneSync: false,
   showAndroidSync: false,
+  androidSyncStart: "default",
   ...overrides,
 });
 
@@ -567,6 +570,22 @@ describe("AppModals", () => {
       });
       render(<AppModals app={app} />);
       expect(await screen.findByTestId("android-sync-modal")).toHaveAttribute("data-app", "google-messages");
+    });
+
+    // SR: the start is modal state handed to the modal as a prop.
+    // Mutation: the prop not passed → red.
+    it("passes the link start to the modal (Settings' Link / keepr://link); a default open does not", async () => {
+      mockMessagesSource = "android-messages-web";
+      const linkApp = createAppStateMock({
+        modalState: createModalState({ showAndroidSync: true, androidSyncStart: "link" }),
+        currentUser: mockUser,
+      });
+      const view = render(<AppModals app={linkApp} />);
+      expect(await screen.findByTestId("android-sync-modal")).toHaveAttribute("data-start-at-link", "true");
+      view.unmount();
+      const plain = createAppStateMock({ modalState: createModalState({ showAndroidSync: true }), currentUser: mockUser });
+      render(<AppModals app={plain} />);
+      expect(await screen.findByTestId("android-sync-modal")).toHaveAttribute("data-start-at-link", "false");
     });
 
     it("should not render AndroidSyncModal when showAndroidSync is false", () => {

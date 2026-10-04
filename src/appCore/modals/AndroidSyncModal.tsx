@@ -25,9 +25,11 @@ interface AndroidSyncModalProps {
   app?: "google-messages" | "companion";
   /** Open Settings scrolled to a section (by element id): Google Messages' "Change". */
   onOpenSettings?: (target: string) => void;
+  /** Opened from Settings' Link / Relink or keepr://link: the link step. */
+  startAtLink?: boolean;
 }
 
-export function AndroidSyncModal({ userId, onClose, app = "companion", onOpenSettings }: AndroidSyncModalProps) {
+export function AndroidSyncModal({ userId, onClose, app = "companion", onOpenSettings, startAtLink = false }: AndroidSyncModalProps) {
   const [shown, setShown] = useState(app);
   useEffect(() => {
     logger.info("[AndroidSyncModal] Mounted");
@@ -63,6 +65,7 @@ export function AndroidSyncModal({ userId, onClose, app = "companion", onOpenSet
             <GoogleMessagesSyncFlow
               onClose={onClose}
               userId={userId}
+              startAtLink={startAtLink}
               onUseCompanion={() => setShown("companion")}
               onOpenSettings={
                 onOpenSettings

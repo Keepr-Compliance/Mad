@@ -42,7 +42,6 @@ import { settingsService } from "../../services";
 import { LookbackMonthsSelect, lastMonthsPhrase, parseLookbackOption } from "./LookbackMonthsSelect";
 import { AndroidForceReimportWarning, androidClearedText } from "./AndroidForceReimportWarning";
 import { NotSyncedChatsModal } from "./android/NotSyncedChatsModal";
-import { requestLinkStep } from "./android/androidSyncIntent";
 import {
   EXTENSION_PUBLISHED,
   betaInstallPreferencePatch,
@@ -51,6 +50,8 @@ import {
 
 /** The link row's status (founder 2026-10-04): "Linked" / "Not linked". */
 export const LINK_STATUS = { linked: "Linked", notLinked: "Not linked" } as const;
+/** SR: Forget link asks first, worded as the popup's Unlink (popup.js COPY.unlinkAsk). */
+export const FORGET_ASK = "Unlink from Keepr? You'll need to link again to sync";
 import { readMessageImportPreferences, resolveStoredLookbackMonths } from "./messageImportPreferences";
 
 import { GM_LOOKBACK_TARGET } from "./android/googleMessagesSyncSteps";
@@ -75,6 +76,8 @@ export function GoogleMessagesSettings({ userId, onOpenSyncAndroid }: GoogleMess
   const [state, setState] = useState<RcsExtensionState | null>(null);
   const [lookbackMonths, setLookbackMonths] = useState<number | null>(resolveStoredLookbackMonths(undefined));
   const [prefsSettled, setPrefsSettled] = useState(false);
+  /** SR: Forget link's inline confirm is open. */
+  const [forgetAsk, setForgetAsk] = useState(false);
   /** Founder (J flow): the account's "Beta extension install" (default off). */
   const [betaInstall, setBetaInstall] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -231,16 +234,42 @@ export function GoogleMessagesSettings({ userId, onOpenSyncAndroid }: GoogleMess
           open the Sync Android modal at its link step (a new link replaces
           the old one only once its code succeeds). */}
       <div className="p-4 bg-white rounded-lg border border-gray-200" data-testid="gm-pairing">
+        {forgetAsk && (
+          <div className="flex items-center justify-between gap-3 mb-3" role="alert" data-testid="gm-forget-confirm">
+            <span className="text-sm text-gray-900">{FORGET_ASK}</span>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                className="text-sm text-indigo-700 hover:text-indigo-900 font-medium"
+                onClick={() => setForgetAsk(false)}
+                data-testid="gm-forget-cancel"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="px-3 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                onClick={() => {
+                  setForgetAsk(false);
+                  void rcsImportService.linkForget().then(refresh);
+                }}
+                data-testid="gm-forget-yes"
+              >
+                Forget link
+              </button>
+            </div>
+          </div>
+        )}
         <div className="flex items-center justify-between">
           <span className="text-sm text-gray-900" data-testid="gm-pairing-line">
             {keeprPaired ? LINK_STATUS.linked : LINK_STATUS.notLinked}
           </span>
           <div className="flex items-center gap-3">
-            {keeprPaired && (
+            {keeprPaired && !forgetAsk && (
               <button
                 type="button"
-                className="text-[14px] text-[#4B5563] hover:text-[#1F2433]"
-                onClick={() => void rcsImportService.linkForget().then(refresh)}
+                className="text-sm text-indigo-700 hover:text-indigo-900 font-medium"
+                onClick={() => setForgetAsk(true)}
                 data-testid="gm-link-forget"
               >
                 Forget link
@@ -249,10 +278,7 @@ export function GoogleMessagesSettings({ userId, onOpenSyncAndroid }: GoogleMess
             {onOpenSyncAndroid && (
               <button
                 type="button"
-                onClick={() => {
-                  requestLinkStep();
-                  onOpenSyncAndroid();
-                }}
+                onClick={() => onOpenSyncAndroid()}
                 className="px-3 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 data-testid="gm-link-open"
               >

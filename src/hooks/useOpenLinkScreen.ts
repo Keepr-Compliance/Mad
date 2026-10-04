@@ -6,14 +6,12 @@
  */
 import { useEffect } from "react";
 import { rcsImportService } from "../services/rcsImportService";
-import { requestLinkStep } from "../components/settings/android/androidSyncIntent";
 
-export function useOpenLinkScreen(openSyncAndroid: () => void): void {
+export function useOpenLinkScreen(openSyncAndroid: (start: "link") => void): void {
   useEffect(
     () =>
       rcsImportService.onOpenLinkScreen(() => {
-        requestLinkStep();
-        openSyncAndroid();
+        openSyncAndroid("link");
       }),
     [openSyncAndroid],
   );
