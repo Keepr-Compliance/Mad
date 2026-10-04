@@ -6,7 +6,7 @@
 <link rel="icon" type="image/png" href="icons/keepr-32.png">
 <title>Link with Keepr</title>
 <style>
-  /* Founder-approved mockups (Popup*.dc.html): 360×340, padding 20, gap 16. */
+  /* Founder G01 (2026-10-04): fits its content — 320 wide, no fixed height, padding 16, gap 14. */
   :root {
     --bg: #FFFFFF; --text: #1F2433; --body: #374151; --muted: #4B5163; --foot: #6B7280;
     --primary: #4F46E5; --primary-text: #FFFFFF; --link: #4F46E5; --link-hover: #3730A3;
@@ -29,12 +29,13 @@
   html, body { margin: 0; background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
   a { color: var(--link); text-decoration: none; cursor: pointer; }
   a:hover { color: var(--link-hover); }
-  main { width: 360px; height: 340px; box-sizing: border-box; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+  main { width: 320px; box-sizing: border-box; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
   .head { display: flex; align-items: center; gap: 12px; }
   .mark { width: 36px; height: 36px; display: block; flex: 0 0 36px; }
   .title { font-size: 16px; font-weight: 700; }
-  .middle { flex-grow: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-align: center; }
-  .middle.code-gap { align-items: stretch; gap: 8px; }
+  .middle { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; text-align: left; }
+  .middle.code-gap { align-items: stretch; gap: 8px; text-align: center; }
+  .expired { font-size: 18px; font-weight: 700; color: var(--danger); }
   .middle.pill-gap { gap: 10px; }
   .pill { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: var(--pill-bg); font-size: 13px; font-weight: 600; color: var(--muted); }
   .pill .dot { background: var(--pill-dot); }

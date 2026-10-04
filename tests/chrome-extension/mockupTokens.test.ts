@@ -60,8 +60,18 @@ describe("the popup = the mockups (Popup*.dc.html)", () => {
   const sheet = css("popup.html");
   const t = tokens(sheet);
 
-  it("360×340, padding 20, gap 16; a 36px brand mark and a 16px bold title", () => {
-    expect(rule(sheet, "main")).toMatchObject({ width: "360px", height: "340px", padding: "20px", gap: "16px" });
+  // Founder G01: the popup fits its content — 320 wide, NO fixed height,
+  // padding 16, gap 14; the status line is not stretched / centred.
+  // Mutations: a fixed height back; the middle flex-grown → red.
+  it("fits its content: 320 wide, no fixed height, padding 16, gap 14; a 36px brand mark and a 16px bold title", () => {
+    const main = rule(sheet, "main");
+    expect(main).toMatchObject({ width: "320px", padding: "16px", gap: "14px" });
+    expect(main.height).toBeUndefined();
+    expect(main["min-height"]).toBeUndefined();
+    const middle = rule(sheet, ".middle");
+    expect(middle["flex-grow"]).toBeUndefined();
+    expect(middle["justify-content"]).toBeUndefined();
+    expect(middle["align-items"]).toBe("flex-start");
     expect(rule(sheet, ".mark")).toMatchObject({ width: "36px", height: "36px" });
     expect(rule(sheet, ".title")).toMatchObject({ "font-size": "16px", "font-weight": "700" });
   });
@@ -118,6 +128,41 @@ describe("the popup = the mockups (Popup*.dc.html)", () => {
     const down = draw({ state: "keepr_down", version: "0.3.41" });
     expect(down.querySelector(".status.warn")!.textContent).toBe("Keepr isn't running");
     expect(down.querySelector(".foot")!.textContent).toBe("Don't have Keepr?Extension 0.3.41");
+  });
+});
+
+// Founder E01: an expired code shows "Code expired" + "Get a new code" —
+// never the old digits (struck through or not). Mutations: the code drawn
+// when expired; no Get a new code → red.
+describe("the link window / popup: an expired code (E01)", () => {
+  const draw = (view: Record<string, unknown>, now: number, calls: string[] = []) => {
+    const box = document.createElement("main");
+    popup.renderPopup(document, box, view, { now: () => now, link: () => calls.push("link"), cancel() {}, openApp() {}, openKeepr() {}, openMessages() {}, unlink() {}, setConfirm() {}, confirmUnlink: false });
+    return box;
+  };
+  it("the countdown ran out: no 6-digit code; Code expired + Get a new code", () => {
+    const calls: string[] = [];
+    const box = draw({ state: "linking", link: { status: "waiting", code: "482913", expiresAt: 1_000 } }, 1_000, calls);
+    expect(/\d{3}\s?\d{3}/.test(box.textContent || "")).toBe(false);
+    expect(box.querySelector('[data-keepr="code"]')).toBeNull();
+    expect(box.querySelector('[data-keepr="expired"]')!.textContent).toBe("Code expired");
+    expect(box.querySelector(".title")!.textContent).toBe("Link with Keepr");
+    const again = box.querySelector('[data-keepr="new-code"]') as HTMLButtonElement;
+    expect(again.textContent).toBe("Get a new code");
+    expect(again.className).toBe("primary");
+    again.click();
+    expect(calls).toEqual(["link"]);
+  });
+  it("the worker said expired: the same, and no code", () => {
+    const box = draw({ state: "not_linked", link: { status: "failed", expired: true, error: "That code expired. Click Link for a new one." } }, 0);
+    expect(box.querySelector('[data-keepr="expired"]')!.textContent).toBe("Code expired");
+    expect(/\d{3}\s?\d{3}/.test(box.textContent || "")).toBe(false);
+    expect(box.textContent).not.toContain("Not linked");
+  });
+  it("link.html is the popup page (same styles) with data-autolink", () => {
+    const p = fs.readFileSync(path.join(EXT, "popup.html"), "utf8");
+    const l = fs.readFileSync(path.join(EXT, "link.html"), "utf8");
+    expect(l).toBe(p.replace('<main id="keepr-popup" aria-live="polite"></main>', '<main id="keepr-popup" data-autolink="1" aria-live="polite"></main>').replace("<title>Keepr</title>", "<title>Link with Keepr</title>"));
   });
 });
 

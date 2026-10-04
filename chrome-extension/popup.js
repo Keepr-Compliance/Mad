@@ -30,6 +30,8 @@
     not_linked: "Not linked",
     notLinkedLine: "Link once to sync your texts.",
     linking: "Type this code in Keepr",
+    expired: "Code expired",
+    newCode: "Get a new code",
     linked: "Linked to Keepr",
     unlinkAsk: "Unlink from Keepr? You'll need to link again to sync",
   };
@@ -55,6 +57,14 @@
   function countdown(ms) {
     var s = Math.max(0, Math.ceil(ms / 1000));
     return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+  }
+
+  /** E01: the code ran out (the countdown reached 0, or the worker said expired). */
+  function isExpired(view, nowMs) {
+    var l = view && view.link;
+    if (!l) return false;
+    if (view.state === "linking" && typeof l.expiresAt === "number" && nowMs >= l.expiresAt) return true;
+    return view.state === "not_linked" && l.status === "failed" && l.expired === true;
   }
 
   /** "123456" → "123 456" (easier to read and type). */
@@ -125,6 +135,14 @@
     } else if (state === "out_of_date") {
       status("warn", COPY.out_of_date);
       middle.appendChild(el(doc, "div", "sub", "This is " + (view.version || "?") + "; Keepr needs " + (view.minVersion || "a newer one") + "."));
+    } else if (isExpired(view, now)) {
+      // Founder (E01): "Code expired" + Get a new code — the old digits never.
+      head.lastChild.textContent = COPY.linkingTitle;
+      middle.className = "middle code-gap";
+      var gone = el(doc, "div", "expired", COPY.expired);
+      gone.setAttribute("data-keepr", "expired");
+      middle.appendChild(gone);
+      button("new-code", COPY.newCode, "primary", io.link);
     } else if (state === "linking") {
       var link = view.link || {};
       middle.className = "middle code-gap";

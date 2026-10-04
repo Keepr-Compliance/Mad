@@ -212,12 +212,15 @@ function linkView() {
     expiresAt: s.expiresAt,
     triesLeft: s.triesLeft,
     error: s.error,
+    // Founder (E01): an expired code is said as such (the code itself is gone).
+    expired: s.status === "failed" && s.expired === true,
   };
 }
 
-function linkFailed(error) {
+function linkFailed(error, expired) {
   if (linkSession) {
     linkSession.status = "failed";
+    linkSession.expired = expired === true;
     linkSession.error = error;
     linkSession.code = undefined;
   }
@@ -254,7 +257,7 @@ async function linkPollLoop(session, sleep) {
   const P = pairLib();
   while (linkSession === session && session.status === "waiting") {
     if (Date.now() > session.expiresAt) {
-      linkFailed("That code expired. Click Link for a new one.");
+      linkFailed("That code expired. Click Link for a new one.", true);
       return;
     }
     const r = await rawPost("/link/poll", JSON.stringify({ sessionId: session.sessionId }));
@@ -263,7 +266,7 @@ async function linkPollLoop(session, sleep) {
       await sleep(LINK_POLL_MS);
       continue;
     }
-    if (r.status === 410) return linkFailed("That code expired. Click Link for a new one.");
+    if (r.status === 410) return linkFailed("That code expired. Click Link for a new one.", true);
     if (r.status !== 200 || !r.body) return linkFailed("Keepr stopped the link. Click Link to try again.");
     if (r.body.state !== "answered") {
       await sleep(LINK_POLL_MS);
