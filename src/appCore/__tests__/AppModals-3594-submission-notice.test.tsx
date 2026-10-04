@@ -204,6 +204,8 @@ describe("BACKLOG-3594 submission came back notice (host: AppModals)", () => {
 
   it("raises nothing for statuses that are not the submission coming back", () => {
     renderHost();
+    // Guard against a vacuous pass: the subscription must exist.
+    expect(listeners.size).toBe(1);
     emit(statusEvent("under_review", { transactionId: "t1" }));
     emit(statusEvent("submitted", { transactionId: "t2" }));
     emit(statusEvent("resubmitted", { transactionId: "t3" }));
