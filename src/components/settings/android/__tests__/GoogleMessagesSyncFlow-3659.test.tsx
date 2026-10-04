@@ -24,6 +24,7 @@ let mockState: RcsExtensionState;
 let progressListener: ((j: RcsJobInfo) => void) | null = null;
 const mockPrepare = jest.fn();
 const mockStartCache = jest.fn();
+const mockRetryCache = jest.fn();
 const mockOpenChrome = jest.fn();
 const mockConsent = jest.fn();
 let mockCurrentJob: RcsJobInfo | null = null;
@@ -36,6 +37,7 @@ jest.mock("../../../../services/rcsImportService", () => ({
     showExtensionFolder: async () => undefined,
     openChromeForExtension: (...a: unknown[]) => mockOpenChrome(...a),
     startCacheJob: (...a: unknown[]) => mockStartCache(...a),
+    retryCacheJob: (...a: unknown[]) => mockRetryCache(...a),
     // C1: the reversed link panel (nothing pending).
     linkState: async () => ({ success: true, data: { link: { state: "none", intrusion: false }, linked: false } }),
     linkEnterCode: async () => ({ success: true }),
@@ -260,5 +262,42 @@ describe("GoogleMessagesSyncFlow", () => {
     render(<GoogleMessagesSyncFlow onClose={() => {}} />);
     expect(await screen.findByTestId("gm-link-panel")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open Google Messages and sync" })).toBeDisabled();
+  });
+
+  /** Sync now, then the run ends as `over` (failed / cancelled). */
+  async function failedRun(over: Partial<RcsJobInfo>): Promise<void> {
+    render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Open Google Messages and sync" }));
+    await screen.findByTestId("gm-step-syncing");
+    mockStartCache.mockClear();
+    act(() => {
+      progressListener?.(job(over));
+    });
+    await screen.findByTestId("gm-step-failed");
+  }
+
+  // Founder (2026-10-04): a FAILED Sync's Try again starts the retry at once
+  // (the chats it saved are skipped; Messages opened by Keepr). A cancelled
+  // one goes back to the start. Mutations: Try again not calling the retry
+  // → red; a cancelled Sync retried → red.
+  it("failed: 'Sync failed', the reason, Try again starts the retry", async () => {
+    mockState = INSTALLED;
+    mockRetryCache.mockResolvedValue({ success: true, data: job({ jobId: "job-2", state: "created" }) });
+    await failedRun({ state: "failed", error: { code: "keepr_lost", message: "Keepr closed or restarted." } } as Partial<RcsJobInfo>);
+    const step = await screen.findByTestId("gm-step-failed");
+    expect(step).toHaveTextContent("Sync failed");
+    expect(step).toHaveTextContent("Keepr closed or restarted.");
+    fireEvent.click(screen.getByTestId("gm-try-again"));
+    await waitFor(() => expect(mockRetryCache).toHaveBeenCalledTimes(1));
+    expect(mockStartCache).not.toHaveBeenCalled();
+    expect(await screen.findByTestId("gm-step-syncing")).toBeInTheDocument();
+  });
+
+  it("cancelled: Try again goes back to the start (no retry)", async () => {
+    mockState = INSTALLED;
+    await failedRun({ state: "cancelled" });
+    fireEvent.click(screen.getByTestId("gm-try-again"));
+    expect(await screen.findByTestId("gm-step-connect")).toBeInTheDocument();
+    expect(mockRetryCache).not.toHaveBeenCalled();
   });
 });

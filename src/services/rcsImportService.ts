@@ -83,6 +83,14 @@ export const rcsImportService = {
     return callJob(() => bridge.startCacheJob(args));
   },
 
+  /** Founder: "Try again" after a failed Google Messages Sync (skips the chats it saved). */
+  async retryCacheJob(): Promise<ApiResult<RcsJobInfo | null>> {
+    const bridge = api();
+    if (!bridge || !bridge.retryCacheJob) return { success: false, error: NOT_AVAILABLE };
+    const retry = bridge.retryCacheJob;
+    return callJob(() => retry());
+  },
+
   /** BACKLOG-3658/3659: is the extension installed / paired, and the cache state. */
   async getExtensionState(): Promise<ApiResult<RcsExtensionState>> {
     const bridge = api();

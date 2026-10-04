@@ -148,6 +148,35 @@ beforeEach(() => {
 
 const start = (args?: unknown) => handlers.get("rcs-import:start-cache-job")!({}, args) as Promise<{ success: boolean }>;
 
+// Founder (2026-10-04): Keepr's own "Try again" for a failed Google Messages
+// Sync — the page's /cache/retry semantics: only after a failed Sync; the
+// Messages tab is opened for the new job as Sync does. Mutations: the
+// failed-run check removed → red; no Messages tab → red.
+describe("rcs-import:retry-cache-job (Keepr's Try again)", () => {
+  const retry = () => handlers.get("rcs-import:retry-cache-job")!({}) as Promise<{ success: boolean; error?: string; job?: { jobId: string } }>;
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { shell } = require("electron") as { shell: { openExternal: jest.Mock } };
+
+  it("no failed Sync: refused, no job, no tab", async () => {
+    mockFailedRunStart = null;
+    shell.openExternal.mockClear();
+    const r = await retry();
+    expect(r).toEqual({ success: false, error: "There is no failed Sync to try again." });
+    expect(created).toHaveLength(0);
+    expect(shell.openExternal).not.toHaveBeenCalled();
+  });
+
+  it("after a failed Sync: a new cache job, and Messages opened for it", async () => {
+    mockFailedRunStart = "2026-10-03T10:00:00.000Z";
+    shell.openExternal.mockClear();
+    const r = await retry();
+    mockFailedRunStart = null;
+    expect(r.success).toBe(true);
+    expect(created).toHaveLength(1);
+    expect(shell.openExternal).toHaveBeenCalledWith(expect.stringMatching(/#keepr-job=job-1$/));
+  });
+});
+
 describe("rcs-import:start-cache-job window (BACKLOG-3658)", () => {
   // BACKLOG-3666: no Sync until the extension is paired. Mutation: the check removed → red.
   it("not paired: the Sync is refused (not_paired), no job created", async () => {

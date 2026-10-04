@@ -28,6 +28,8 @@ import { useFeatureGate } from "../../hooks/useFeatureGate";
 import { useSyncOrchestrator } from "../../hooks/useSyncOrchestrator";
 import type { SyncType, SyncItemStatus, ReconnectProvider } from "../../services/SyncOrchestratorService";
 import logger from "../../utils/logger";
+import { rcsImportService } from "../../services/rcsImportService";
+import { GOOGLE_MESSAGES_SYNC_TYPE } from "../../hooks/googleMessagesSyncStatus";
 import { openEmailSettings } from "../../utils/openEmailSettings";
 import { IMPORT_SOURCE_LABELS } from "../settings/importSourceLabels";
 // BACKLOG-3128: the macOS Messages phase vocabulary, shared with the Settings
@@ -107,6 +109,8 @@ export function SyncStatusIndicator({
 }: SyncStatusIndicatorProps) {
   const [showCompletion, setShowCompletion] = useState(false);
   const [dismissed, setDismissed] = useState(false);
+  /** Founder: Keepr's Try again for a failed Google Messages Sync could not start. */
+  const [gmRetryError, setGmRetryError] = useState<string | null>(null);
   const wasSyncingRef = useRef(false);
   const hadErrorsDuringSync = useRef(false);
   const errorItemsDuringSync = useRef<string[]>([]);
@@ -490,6 +494,9 @@ export function SyncStatusIndicator({
               >
                 {completionSubtitle}
               </p>
+              {gmRetryError && (
+                <p className="text-xs text-amber-800 mt-1" role="alert" data-testid="sync-gm-retry-error">{gmRetryError}</p>
+              )}
               {completionVariant === 'error' && (
                 <p className="text-xs text-amber-600 mt-1">
                   If this persists, please <button type="button" onClick={() => window.dispatchEvent(new CustomEvent('open-support-widget', { detail: { subject: `Sync Error: ${errorItemsDuringSync.current.join(', ')}` } }))} className="underline hover:text-amber-800">submit a support ticket</button>.
@@ -514,6 +521,23 @@ export function SyncStatusIndicator({
                 data-testid="sync-reconnect-button"
               >
                 Reconnect {reconnectProviderDuringSync.current === 'microsoft' ? 'Outlook' : 'Gmail'}
+              </button>
+            )}
+            {/* Founder (2026-10-04): a failed Google Messages Sync tries again
+                from here (the chats it saved are skipped). */}
+            {completionVariant === 'error' && errorItemsDuringSync.current.includes(GOOGLE_MESSAGES_SYNC_TYPE) && (
+              <button
+                onClick={() => {
+                  setGmRetryError(null);
+                  void rcsImportService.retryCacheJob().then((r) => {
+                    if (r.success) handleDismiss();
+                    else setGmRetryError(r.error ?? "Keepr could not start the Sync.");
+                  });
+                }}
+                className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium rounded-lg transition-colors shadow-sm"
+                data-testid="sync-gm-try-again"
+              >
+                Try again
               </button>
             )}
             {completionVariant === 'pending' && onViewPending && (

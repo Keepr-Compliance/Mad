@@ -933,10 +933,7 @@ const bridge = new RcsExtensionBridge({
   currentUserId,
   // C5: "Try again" on the page — only after a failed Sync of the signed-in user.
   onRetryRequested: async () => {
-    const userId = await currentUserId();
-    if (!userId) return { ok: false, status: 401, error: "signed_out" };
-    if (!getFailedRun(userId)) return { ok: false, status: 409, error: "nothing_to_retry", message: "There is no failed Sync to try again." };
-    const r = await startCacheJob({});
+    const r = await retryCacheSync();
     return r.ok ? { ok: true, jobId: r.job.jobId } : { ok: false, status: r.status, error: r.error, message: r.message };
   },
   // C1 (founder): who the browser is linked to — masked by the bridge, signed /status only.
@@ -1023,6 +1020,21 @@ const bridge = new RcsExtensionBridge({
     error: (m) => void logService.error(m, LOG_TAG),
   },
 });
+
+/**
+ * "Try again" after a failed Google Messages Sync (the page's /cache/retry
+ * and Keepr's own button): only when the signed-in user's last Sync failed;
+ * the new run skips the chats the failed one saved (tryAgainSince).
+ */
+export async function retryCacheSync(): Promise<
+  { ok: true; job: RcsJobSnapshot } | { ok: false; status: number; error: string; message?: string }
+> {
+  const userId = await currentUserId();
+  if (!userId) return { ok: false, status: 401, error: "signed_out", message: "Sign in to Keepr first." };
+  if (!getFailedRun(userId)) return { ok: false, status: 409, error: "nothing_to_retry", message: "There is no failed Sync to try again." };
+  const r = await startCacheJob({});
+  return r.ok ? { ok: true, job: r.job } : { ok: false, status: r.status, error: r.error, message: r.message };
+}
 
 /** Start the loopback bridge. Never throws; a taken port leaves it "unavailable". */
 export async function startRcsExtensionBridge(): Promise<void> {
@@ -1190,6 +1202,24 @@ export function registerRcsImportHandlers(): void {
       const jobId = requireString(argsObject(args).jobId, "jobId");
       bridge.cancelJob(jobId);
       return { success: true, job: bridge.getJob() };
+    }, { module: LOG_TAG }),
+  );
+
+  // Founder (2026-10-04): Keepr's own "Try again" for a failed Google
+  // Messages Sync (dashboard bubble, Sync flow) — the page's /cache/retry:
+  // only after a failed Sync (the chats it saved are skipped); the Messages
+  // tab is opened for the job as Sync does.
+  ipcMain.handle(
+    "rcs-import:retry-cache-job",
+    wrapHandler(async (): Promise<RcsImportJobResult> => {
+      if (bridge.getStatus().bridge !== "listening") {
+        const st = bridge.getStatus();
+        return { success: false, error: `Import bridge unavailable${st.reason ? `: ${st.reason}` : ""}.` };
+      }
+      const r = await retryCacheSync();
+      if (!r.ok) return { success: false, error: r.message ?? "Keepr could not start the Sync." };
+      await shell.openExternal(`${RCS_MESSAGES_WEB_URL}#keepr-job=${r.job.jobId}`);
+      return { success: true, job: r.job };
     }, { module: LOG_TAG }),
   );
 

@@ -155,6 +155,20 @@ export function GoogleMessagesSyncFlow({ onClose, onUseCompanion, onOpenSettings
     if (job) await rcsImportService.cancelJob(job.jobId);
   }, [job]);
 
+  /** Founder: a FAILED Sync tries again at once (the chats it saved are skipped). */
+  const retryFailed = useCallback(async () => {
+    setStarting(true);
+    setError(null);
+    const r = await rcsImportService.retryCacheJob();
+    setStarting(false);
+    if (!r.success || !r.data) {
+      setError(r.error ?? "Keepr could not start the Sync.");
+      return;
+    }
+    jobIdRef.current = r.data.jobId;
+    setJob(r.data);
+  }, []);
+
   const tryAgain = useCallback(() => {
     jobIdRef.current = null;
     setJob(null);
@@ -296,9 +310,15 @@ export function GoogleMessagesSyncFlow({ onClose, onUseCompanion, onOpenSettings
 
       {step === "failed" && job && (
         <>
-          <h2 className="text-lg font-bold text-gray-900">The Sync did not finish</h2>
+          <h2 className="text-lg font-bold text-gray-900">{job.state === "failed" ? "Sync failed" : "The Sync did not finish"}</h2>
           <p className="text-sm text-gray-700">{job.error?.message || (job.state === "cancelled" ? "It was cancelled." : "Something went wrong.")}</p>
-          <button type="button" className={primary} onClick={tryAgain}>
+          <button
+            type="button"
+            className={primary}
+            onClick={job.state === "failed" ? () => void retryFailed() : tryAgain}
+            disabled={starting}
+            data-testid="gm-try-again"
+          >
             Try again
           </button>
         </>
