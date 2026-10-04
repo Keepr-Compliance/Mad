@@ -47,7 +47,7 @@ type Written = { verb: keyof RcsOutcomeWriter; row: SyncOutcomeRow };
 
 function fakeWriter(): { writer: RcsOutcomeWriter; written: Written[] } {
   const written: Written[] = [];
-  const w = (verb: keyof RcsOutcomeWriter) => (row: SyncOutcomeRow) => written.push({ verb, row: JSON.parse(JSON.stringify(row)) as SyncOutcomeRow });
+  const w = (verb: keyof RcsOutcomeWriter) => (row: SyncOutcomeRow): void => void written.push({ verb, row: JSON.parse(JSON.stringify(row)) as SyncOutcomeRow });
   return { writer: { start: w("start"), heartbeat: w("heartbeat"), terminal: w("terminal"), metrics: w("metrics") }, written };
 }
 
@@ -211,7 +211,7 @@ describe("RcsSyncOutcomeTracker", () => {
     expect(row.fields).toMatchObject({ chromeVersion: "141.0.7390.55", extensionVersion: "0.3.53" });
   });
 
-  it("a save slower than the wait: terminal at the wait, then a metrics-only follow-up (T8)", () => {
+  it("a save slower than the wait: terminal at the wait, then a metrics-only follow-up (T8)", async () => {
     const { t, written } = make();
     t.created("job-1", "sync");
     t.claimed(snap());
@@ -223,10 +223,53 @@ describe("RcsSyncOutcomeTracker", () => {
     expect(written.filter((w) => w.verb === "terminal")[0].row.sourceMetrics).not.toHaveProperty("saving");
     now += 45_000;
     t.saved(snap({ state: "finished" }), { chats: 30, messages: 880, newMessages: 300, photos: 12 });
+    await Promise.resolve();
+    await Promise.resolve();
     expect(written.map((w) => w.verb)).toEqual(["start", "terminal", "metrics"]);
     const follow = written[2].row;
     expect(follow.runId).toBe("run-1");
     expect(follow.sourceMetrics).toMatchObject({ saving: { messages_saved: 880, ms: 45_000 } });
+  });
+
+  // SR (telemetry approval): the follow-up goes strictly AFTER the terminal
+  // upsert resolves — never concurrently — so the terminal row (no saving
+  // block) can never land last and overwrite it. Mutation: the follow-up
+  // sent at once (not chained) → red.
+  it("the follow-up waits for the terminal write; the saving block survives (last write wins)", async () => {
+    const store: { row?: Record<string, unknown> } = {};
+    const order: string[] = [];
+    let landTerminal: () => void = () => undefined;
+    const writer: RcsOutcomeWriter = {
+      start: () => undefined,
+      heartbeat: () => undefined,
+      terminal: (row) => {
+        order.push("terminal sent");
+        return new Promise<void>((resolve) => {
+          landTerminal = () => {
+            store.row = { ...(row.sourceMetrics ?? {}) };
+            order.push("terminal landed");
+            resolve();
+          };
+        });
+      },
+      metrics: (row) => {
+        order.push("metrics sent");
+        store.row = { ...(row.sourceMetrics ?? {}) };
+      },
+    };
+    const t = new RcsSyncOutcomeTracker(writer, { now: () => now, saveWaitMs: 30_000, newId: () => "run-1" });
+    t.created("job-1", "sync");
+    t.claimed(snap());
+    t.finishing("job-1");
+    t.ended(snap({ state: "finished" }));
+    jest.advanceTimersByTime(30_000); // terminal sent, still in flight
+    t.saved(snap({ state: "finished" }), { chats: 3, messages: 40, newMessages: 10, photos: 2 });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(order).toEqual(["terminal sent"]); // not concurrently
+    landTerminal();
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(order).toEqual(["terminal sent", "terminal landed", "metrics sent"]);
+    expect(store.row).toMatchObject({ saving: { messages_saved: 40, messages_new: 10, photos_saved: 2 } });
   });
 
   it("failed: error + the failure code; Stop sync: cancelled user_stop", () => {

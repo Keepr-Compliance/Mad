@@ -107,7 +107,7 @@ import { loadPairProtocol } from "../services/rcsPairProtocol";
 import { rcsPairingStore } from "../services/db/rcsPairingDbService";
 import { RcsSyncOutcomeTracker } from "../services/rcsSyncOutcome";
 import {
-  recordSyncOutcome,
+  recordSyncOutcomeSettled,
   recordSyncRunMetrics,
   recordSyncRunProgressWhileRunning,
   recordSyncRunStart,
@@ -910,7 +910,7 @@ export const RCS_NOT_PAIRED_ERROR = { status: 409, error: "not_paired", message:
 export const rcsSyncOutcomes = new RcsSyncOutcomeTracker({
   start: recordSyncRunStart,
   heartbeat: recordSyncRunProgressWhileRunning,
-  terminal: recordSyncOutcome,
+  terminal: recordSyncOutcomeSettled,
   metrics: recordSyncRunMetrics,
 });
 

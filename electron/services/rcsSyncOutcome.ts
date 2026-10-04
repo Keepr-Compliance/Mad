@@ -184,7 +184,8 @@ export function rcsOutcomeFor(snap: Pick<RcsJobSnapshot, "state" | "error" | "en
 export interface RcsOutcomeWriter {
   start(row: SyncOutcomeRow): void;
   heartbeat(row: SyncOutcomeRow): void;
-  terminal(row: SyncOutcomeRow): void;
+  /** May return the settled write: a follow-up is chained after it. */
+  terminal(row: SyncOutcomeRow): void | Promise<void>;
   metrics(row: SyncOutcomeRow): void;
 }
 
@@ -199,6 +200,8 @@ interface RunState {
   finishAt?: number;
   terminal?: { outcome: SyncRunState; reasonCode?: string; endedBy?: string; endedAt: number };
   terminalWritten: boolean;
+  /** Settles once the terminal write has landed or been dropped (never rejects). */
+  terminalDone?: Promise<void>;
   waitTimer?: ReturnType<typeof setTimeout>;
   bytesSaved: number;
 }
@@ -318,7 +321,12 @@ export class RcsSyncOutcomeTracker {
       bytesSaved: r.bytesSaved,
     };
     if (r.terminalWritten) {
-      this.writer.metrics(this.row(snap.jobId, snap, r.terminal?.outcome ?? "complete"));
+      // SR: strictly AFTER the terminal upsert resolves, never concurrently —
+      // otherwise the terminal row (no saving block) could land last and
+      // overwrite this one.
+      const followUp = this.row(snap.jobId, snap, r.terminal?.outcome ?? "complete");
+      const after = r.terminalDone ?? Promise.resolve();
+      void after.then(() => this.writer.metrics(followUp)).catch(() => undefined);
       this.runs.delete(snap.jobId);
       return;
     }
@@ -332,7 +340,7 @@ export class RcsSyncOutcomeTracker {
     const r = this.runs.get(snap.jobId);
     if (!r || r.terminalWritten || !r.terminal) return;
     r.terminalWritten = true;
-    this.writer.terminal(this.row(snap.jobId, snap, r.terminal.outcome));
+    r.terminalDone = Promise.resolve(this.writer.terminal(this.row(snap.jobId, snap, r.terminal.outcome))).catch(() => undefined);
     // A finished cache Sync whose save has not answered yet keeps its entry
     // for the follow-up; everything else is done.
     if (!(snap.state === "finished" && snap.kind === "cache" && r.saving === undefined)) this.runs.delete(snap.jobId);
