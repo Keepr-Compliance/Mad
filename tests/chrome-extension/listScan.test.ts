@@ -263,8 +263,11 @@ describe("Sync step log (BACKLOG-3641)", () => {
     const details: string[] = [];
     const copies: string[] = [];
     let open = "";
+    // SR F3: no real time — a fixed clock that moves only when the job sleeps.
+    let clock = Date.parse("2026-10-03T12:00:00.000Z");
     const env = {
       doc: document,
+      now: () => new Date(clock),
       getLocation: () => ({ pathname: `/web/conversations/${open}`, href: `https://messages.google.com/web/conversations/${open}` }),
       api: async (_m: string, p: string, body?: Record<string, unknown>): Promise<ApiReply> => {
         if (p.endsWith("/claim")) {
@@ -278,7 +281,10 @@ describe("Sync step log (BACKLOG-3641)", () => {
       },
       overlay: { show: (t: string, _e?: boolean, x?: { details: string; copy: string }) => { shown.push(t); details.push(x?.details ?? ""); copies.push(x?.copy ?? ""); } },
       log: (line: string) => lines.push(line),
-      sleep: () => Promise.resolve(),
+      sleep: (ms: number) => {
+        clock += ms;
+        return Promise.resolve();
+      },
       click: () => {},
       scroll: () => {},
       openConversation: async (conv: Conv) => {
@@ -303,6 +309,10 @@ describe("Sync step log (BACKLOG-3641)", () => {
 
   it("the step log: stages, list stats, candidates, per-chat reason / number shapes / match, final counts — no names, numbers or text (D1, D2, D3)", async () => {
     const t = diagJob(["aaaaaaaaaaaaaaaaaaa"]);
+    // SR F3 (flaky about 1 in 8): the per-job salt was random, and a random
+    // 6-hex name tag now and then CONTAINS "555" — the PII check below then
+    // failed. A fixed salt (tests only) makes the log the same every run.
+    (t.env as Record<string, unknown>).salt = "fixed";
     const outcome = await job.runJob(JOB, t.env);
     expect(outcome.outcome).toBe("finished");
     const all = t.lines.join("\n");
