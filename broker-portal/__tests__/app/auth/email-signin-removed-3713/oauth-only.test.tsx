@@ -132,7 +132,8 @@ describe('no portal source calls signInWithOtp', () => {
 
   it('finds the source files it is scanning, including both sign-in pages', () => {
     const files = [...walk(path.join(PORTAL_ROOT, 'app'), []), ...walk(path.join(PORTAL_ROOT, 'lib'), [])];
-    const rel = files.map((f) => path.relative(PORTAL_ROOT, f));
+    // Normalise to forward slashes so the expected paths also match on Windows.
+    const rel = files.map((f) => path.relative(PORTAL_ROOT, f).split(path.sep).join('/'));
     expect(rel).toEqual(expect.arrayContaining(['app/login/page.tsx', 'app/auth/desktop/page.tsx']));
     expect(files.length).toBeGreaterThan(50);
 
