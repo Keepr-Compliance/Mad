@@ -353,15 +353,41 @@ describe('buildTicketReplyNotification', () => {
     expect(result.html).toContain('View Full Conversation');
   });
 
-  it('should truncate long reply previews to 200 characters', () => {
-    const longPreview = 'A'.repeat(250);
+  // BACKLOG-3702: the whole reply is sent, never cut at 200 chars.
+  it('should include a reply longer than 200 characters in full (HTML and text)', () => {
+    const longReply = 'A'.repeat(250) + ' END-OF-REPLY';
     const result = buildTicketReplyNotification({
       ...params,
-      replyPreview: longPreview,
+      replyPreview: longReply,
     });
-    // Should contain 200 A's followed by ...
-    expect(result.html).toContain('A'.repeat(200) + '...');
-    expect(result.html).not.toContain('A'.repeat(201));
+    expect(result.html).toContain(longReply);
+    expect(result.text).toContain(longReply);
+    expect(result.html).not.toContain('A'.repeat(200) + '...');
+    expect(result.text).not.toContain('A'.repeat(200) + '...');
+  });
+
+  it('should keep line breaks while escaping HTML in the reply', () => {
+    const result = buildTicketReplyNotification({
+      ...params,
+      replyPreview: 'Hi Pat,\r\n\r\nUse <b>this</b> & that.\nBest, Jane',
+    });
+    expect(result.html).toContain('Hi Pat,<br><br>Use &lt;b&gt;this&lt;/b&gt; &amp; that.<br>Best, Jane');
+    expect(result.html).not.toContain('<b>this</b>');
+    expect(result.text).toContain('Hi Pat,\n\nUse <b>this</b> & that.\nBest, Jane');
+  });
+
+  it('should tell the customer that replies to the email are not read (HTML)', () => {
+    const result = buildTicketReplyNotification(params);
+    expect(result.html).toContain(
+      "Replies to this email aren't read. To respond, click View Full Conversation.",
+    );
+  });
+
+  it('should tell the customer that replies to the email are not read (text)', () => {
+    const result = buildTicketReplyNotification(params);
+    expect(result.text).toContain(
+      "Replies to this email aren't read. To respond, click View Full Conversation.",
+    );
   });
 
   it('should use inline CSS (no style tags)', () => {
