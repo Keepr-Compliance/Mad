@@ -1536,11 +1536,11 @@
   var IDLE_TAB_LINE = "Sync from Keepr";
   /** Founder (BoxNotLinked): the not-linked guide on the page. */
   var GUIDE_TITLE = "Link with Keepr";
-  var GUIDE_LINE_BEFORE = "Click the Keepr icon above, then ";
-  var GUIDE_ARROW = "#F5A524";
+  /** SR (D02 storyboard): the card's heading; the button says Link with Keepr. */
+  var GUIDE_HEADING = "Link this browser";
   /** The guide card's place: top-right, under the toolbar (the mockup). */
-  var GUIDE_TOP = 44;
-  var GUIDE_RIGHT = 16;
+  var GUIDE_TOP = 16;
+  var GUIDE_RIGHT = 24;
   /** C3: an unanswered "Stop the sync?" closes itself after this long (the sync never pauses). */
   var STOP_CONFIRM_AUTO_CLOSE_MS = 10000;
   /** C5 (founder): a real failure of a cache Sync — "Sync failed · Try again". */
@@ -1559,6 +1559,7 @@
       secondaryBg: "#FFFFFF", secondaryBorder: "#CDD1DE", secondaryText: "#1F2433",
       track: "#E5E7EB", fill: "#4F46E5", ok: "#15803D", warn: "#B45309",
       shadow: "0 8px 24px rgba(31,36,51,0.16)",
+      guideShadow: "0 8px 24px rgba(31,36,51,0.18)",
       tab: "linear-gradient(135deg, #4F46E5, #6D5DF0)", tabShadow: "0 4px 12px rgba(31,36,51,0.25)",
       tipBg: "#1F2433", tipText: "#FFFFFF",
       detailsBg: "#F9FAFB", detailsBorder: "#E5E7EB",
@@ -1570,6 +1571,7 @@
       secondaryBg: "#2D2E31", secondaryBorder: "#5F6368", secondaryText: "#E8EAED",
       track: "#44464C", fill: "#8B80F5", ok: "#15803D", warn: "#B45309",
       shadow: "0 8px 24px rgba(0,0,0,0.5)",
+      guideShadow: "0 8px 24px rgba(0,0,0,0.5)",
       tab: "#6D5DF0", tabShadow: "0 4px 12px rgba(0,0,0,0.5)",
       tipBg: "#E8EAED", tipText: "#202124",
       detailsBg: "#202124", detailsBorder: "#44464C",
@@ -1832,16 +1834,13 @@
      * (dismissed for this page load; it comes back on the next while unlinked).
      */
     function renderNotLinkedGuide() {
-      Object.assign(box.style, { width: "300px", padding: "16px", gap: "10px", borderRadius: "16px", overflow: "visible" });
-      box.appendChild(el("div", "guide-arrow", {
-        position: "absolute", right: "2px", top: "-34px", fontSize: "26px", lineHeight: "26px",
-        color: GUIDE_ARROW, fontWeight: "800", pointerEvents: "none",
-      }, "↑"));
+      // SR (D02 storyboard): 320 wide, padding 16, gap 12, radius 16.
+      Object.assign(box.style, { width: "320px", padding: "16px", gap: "12px", borderRadius: "16px", boxShadow: p.guideShadow });
       var row = el("div", "header", { display: "flex", alignItems: "center", gap: "10px" });
       var mark = el("div", "guide-mark", { flex: "0 0 30px", width: "30px", height: "30px" });
       mark.appendChild(brandMark(doc, 30));
       row.appendChild(mark);
-      row.appendChild(el("div", "line", { flex: "1 1 auto", fontSize: "15px", fontWeight: "700", color: p.text }, GUIDE_TITLE));
+      row.appendChild(el("div", "line", { flex: "1 1 auto", fontSize: "15px", fontWeight: "700", color: p.text }, GUIDE_HEADING));
       if (io.close) {
         var x = button("close", "×", "icon");
         x.setAttribute("aria-label", "Close");
@@ -1852,16 +1851,13 @@
       // LinkFlow (SR): the primary "Link with Keepr" opens the extension's own
       // window (the code shows there, never on this page). Trusted clicks only.
       var linkButton = button("link-open", GUIDE_TITLE, "primary");
+      // D02: the full width, 44 high, 14px, radius 10 (no hint line, no arrow).
+      Object.assign(linkButton.style, { width: "100%", minHeight: "44px", fontSize: "14px", borderRadius: "10px", padding: "0 20px" });
       linkButton.addEventListener("click", function (e) {
         if (!e || e.isTrusted !== true) return;
         if (io.openLink) io.openLink();
       });
       box.appendChild(linkButton);
-      var line = el("div", "progress", { fontSize: "13px", lineHeight: "18px", color: p.muted });
-      line.appendChild(doc.createTextNode(GUIDE_LINE_BEFORE));
-      line.appendChild(el("b", null, null, GUIDE_TITLE));
-      line.appendChild(doc.createTextNode("."));
-      box.appendChild(line);
     }
 
     /** C3: the idle K tab (collapsed), or its one line + Open Keepr (expanded). */
@@ -2378,6 +2374,7 @@
     bootPlan: bootPlan,
     guidePosition: guidePosition,
     GUIDE_TITLE: GUIDE_TITLE,
+    GUIDE_HEADING: GUIDE_HEADING,
     transportKind: transportKind,
     KEEPR_LOST_MESSAGES: KEEPR_LOST_MESSAGES,
     launchKeepr: launchKeepr,

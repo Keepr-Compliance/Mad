@@ -36,25 +36,32 @@ const render = (extras: Record<string, unknown>, io: Record<string, unknown> = {
 const q = (box: HTMLElement, key: string) => box.querySelector(`[data-keepr="${key}"]`) as HTMLElement;
 
 describe("the not-linked guide card on the page", () => {
-  it("the guide card: brand mark, 'Link with Keepr', the button, the hint, ↑ and ×", () => {
+  // SR (D02 storyboard): "Link this browser", the full-width "Link with
+  // Keepr" button — no hint line, no ↑. × and the brand mark stay (founder
+  // sign-off pending). Mutations: the hint line or ↑ back; the old heading;
+  // the button not full width / 44 high → red.
+  it("the guide card (D02): brand mark, 'Link this browser', the Link with Keepr button, ×", () => {
     const close = jest.fn();
     const box = render({ idle: { linked: false, guide: true } }, { close });
     expect(box.getAttribute("data-keepr-state")).toBe("not_linked");
-    expect(box.style).toMatchObject({ width: "300px", padding: "16px", borderRadius: "16px", gap: "10px" });
+    expect(box.style).toMatchObject({ width: "320px", padding: "16px", borderRadius: "16px", gap: "12px" });
+    expect(box.style.boxShadow).toBe("0 8px 24px rgba(31,36,51,0.18)");
     expect(q(box, "guide-mark").querySelector('[data-keepr="brand-mark"]')).not.toBeNull();
-    expect(q(box, "line").textContent).toBe("Link with Keepr");
-    expect(q(box, "link-open").textContent).toBe("Link with Keepr");
-    expect(q(box, "progress").textContent).toBe("Click the Keepr icon above, then Link with Keepr.");
-    const arrow = q(box, "guide-arrow");
-    expect(arrow.textContent).toBe("↑");
-    expect(arrow.style.color.toLowerCase()).toMatch(/#f5a524|rgb\(245, 165, 36\)/);
+    expect(q(box, "line").textContent).toBe("Link this browser");
+    const link = q(box, "link-open");
+    expect(link.textContent).toBe("Link with Keepr");
+    expect(link.style).toMatchObject({ width: "100%", minHeight: "44px", fontSize: "14px", borderRadius: "10px" });
+    expect(Array.from(box.children).map((c) => c.getAttribute("data-keepr"))).toEqual(["header", "link-open"]);
+    expect(q(box, "progress")).toBeNull();
+    expect(q(box, "guide-arrow")).toBeNull();
+    expect(box.textContent).not.toContain("Click the Keepr icon");
     // Not a drag handle: the guide stays under the toolbar.
     expect(q(box, "drag-handle")).toBeNull();
     q(box, "close").click();
     expect(close).toHaveBeenCalledTimes(1);
     // Linked (or dismissed): the normal K tab.
     expect(render({ idle: { linked: true } }).getAttribute("data-keepr-state")).toBe("idle");
-    expect(job.guidePosition(300, 1280)).toEqual({ left: 964, top: 44 });
+    expect(job.guidePosition(320, 1280)).toEqual({ left: 936, top: 16 });
   });
 
   it("trusted clicks only open the link window", () => {

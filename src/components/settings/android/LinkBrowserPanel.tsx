@@ -28,14 +28,16 @@ export const LINK_COPY = {
   justLinked: "Linked",
   syncNow: "Sync now",
   usedUp: "Code used up. Get a new code in Chrome.",
+  /** SR (F01): the field's placeholder after a miss. */
+  retype: "Retype the code",
   expired: "Code expired. Get a new code in Chrome.",
   locked: "Another app tried to link — check for unknown software",
 } as const;
 const POLL_MS = 1000;
 
-/** "Code didn't match — 3 tries left". */
+/** "Code didn't match · 3 tries left" (SR, F01 storyboard). */
 export function wrongCodeLine(triesLeft: number): string {
-  return `Code didn't match — ${triesLeft} ${triesLeft === 1 ? "try" : "tries"} left`;
+  return `Code didn't match · ${triesLeft} ${triesLeft === 1 ? "try" : "tries"} left`;
 }
 
 /** "123456" / "123 456" / "123-456" → "123456" (digits only, at most 6). */
@@ -218,7 +220,7 @@ export function LinkBrowserPanel({ onLinked, onJustLinked, onSyncNow }: LinkBrow
                     data-check={check.kind}
                     inputMode="numeric"
                     autoComplete="off"
-                    placeholder="000 000"
+                    placeholder={check.kind === "wrong" ? LINK_COPY.retype : "000 000"}
                     maxLength={7}
                     value={code}
                     readOnly={check.kind === "checking" || justLinked}

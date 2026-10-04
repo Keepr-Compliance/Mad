@@ -121,9 +121,11 @@ describe("LinkBrowserPanel", () => {
       jest.advanceTimersByTime(1000);
     });
     await flush();
-    expect(screen.getByTestId("gm-link-error")).toHaveTextContent("Code didn't match — 4 tries left");
+    // SR (F01): a middle dot; the field cleared with "Retype the code".
+    expect(screen.getByTestId("gm-link-error")).toHaveTextContent("Code didn't match · 4 tries left");
     expect(input.className.split(" ")).toContain("border-[#B42318]");
     expect(input.value).toBe("");
+    expect(input.getAttribute("placeholder")).toBe("Retype the code");
     expect(input.readOnly).toBe(false);
     await act(async () => {
       fireEvent.change(input, { target: { value: "222222" } });
