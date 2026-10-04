@@ -108,6 +108,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  (auditPeriodFromRow as jest.Mock).mockReset();
+  (auditPeriodFromRow as jest.Mock).mockImplementation(jest.requireActual("../submissionAuditPeriod").auditPeriodFromRow);
   resetErrorReporter();
   setPreflightStatForTests(null);
 });
@@ -164,7 +166,6 @@ describe("BACKLOG-3683 — scope preview", () => {
       expect(c[1]).toBe(sentinel.auditStartDate);
       expect(c[2]).toBe(sentinel.auditEndDate);
     }
-    (auditPeriodFromRow as jest.Mock).mockImplementation(jest.requireActual("../submissionAuditPeriod").auditPeriodFromRow);
   });
 
   it("one Sentry info with counts only", async () => {
