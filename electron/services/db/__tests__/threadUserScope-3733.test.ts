@@ -44,6 +44,7 @@ import { getTransactionAllAttachments } from "../attachmentDbService";
 import { prepareTextAttachmentCount } from "../attachmentAuditStatsSql";
 import { GET_CHECKLIST_LINK_MEMBERS_SQL, targetsInTransactionSql } from "../checklistSql";
 import { REMOVED_MESSAGES_SQL } from "../removedCommunicationSql";
+import { getMessagesForContact } from "../contactDbService";
 import {
   buildGlobalTextQuery,
   buildGlobalTextThreadNameQuery,
@@ -257,4 +258,22 @@ describe("BACKLOG-3733: thread links read only the linking user's copies", () =>
   it("unattached texts: a thread linked only by another user is unattached for the owner", () => {
     expect(ids(run(buildUnattachedTextQuery(OWNER, "appraisal", 50)))).toEqual(["m2"]);
   });
+
+  // Site: contactDbService.getMessagesForContact transaction fallback (missed reader, B2)
+  it("contact thread fallback: a thread linked only by another user is not attributed to that user's deal", async () => {
+    db.prepare(
+      "INSERT INTO contacts (id, user_id, display_name) VALUES ('contact-owner', ?, 'Lender Group Contact')",
+    ).run(OWNER);
+    db.prepare(
+      "INSERT INTO contact_phones (id, contact_id, phone_e164, is_primary) VALUES ('ph-owner-1', 'contact-owner', '+15550101', 1)",
+    ).run();
+    const threads = await getMessagesForContact("contact-owner");
+    const chatOther = threads.find((t) => t.thread_id === "chat-other");
+    const chatShared = threads.find((t) => t.thread_id === "chat-shared");
+    // chat-other is linked only by OTHER, to TXN_B — must not come back attributed to it.
+    expect(chatOther?.transaction_id).toBeUndefined();
+    // chat-shared is linked by OWNER, to TXN_A — must still resolve.
+    expect(chatShared?.transaction_id).toBe(TXN_A);
+  });
 });
+
