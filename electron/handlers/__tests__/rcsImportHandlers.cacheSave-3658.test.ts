@@ -35,6 +35,7 @@ const savedRecords: Array<[string, unknown]> = [];
 // 3671 P3: the per-chat records (mocked: this suite has no SQL).
 const mockFailedRuns: Array<[string, string]> = [];
 let mockFailedRunStart: string | null = null;
+let mockConsentVersion: number | null = 1;
 jest.mock("../../services/db/rcsChatCoverageDbService", () => ({
   chatDoneInFailedRun: () => false,
   clearChatCoverage: jest.fn(),
@@ -118,7 +119,7 @@ jest.mock("../../services/databaseService", () => ({
   __esModule: true,
   default: {
     getRcsCacheState: () => ({ optedInAt: "2026-09-01T00:00:00.000Z", lastCacheFinishedAt: null, ownNumber: null }),
-    getRcsConsent: () => ({ consentAt: "2026-09-01T00:00:00.000Z", consentVersion: 1, contactsOnly: false, autoDeleteDays: null }),
+    getRcsConsent: () => ({ consentAt: "2026-09-01T00:00:00.000Z", consentVersion: mockConsentVersion, contactsOnly: false, autoDeleteDays: null }),
     updateRcsCacheState: () => undefined,
     rcsStagingDbOps: () => ({}),
     getTransactionById: async () => ({ id: "tx-1", user_id: "user-1" }),
@@ -192,6 +193,22 @@ const flush = async () => {
 };
 const startCache = () => handlers.get("rcs-import:start-cache-job")!({}, undefined) as Promise<{ success: boolean; error?: string }>;
 const startTx = () => handlers.get("rcs-import:start-job")!({}, { transactionId: "tx-1" }) as Promise<{ success: boolean; error?: string }>;
+
+// SR F2 (founder, 2026-10-05): the per-transaction Sync asks for the same
+// consent as the cache Sync. Mutation: start-job not gated → red.
+describe("per-transaction Sync: the same consent (F2)", () => {
+  afterEach(() => {
+    mockConsentVersion = 1;
+  });
+  it("no current consent → refused with the cache Sync's message; consent current → past the gate", async () => {
+    mockConsentVersion = null;
+    expect(await startTx()).toEqual({ success: false, error: "Agree in Keepr first: Dashboard → Sync Android." });
+    mockConsentVersion = 0;
+    expect((await startTx()).error).toBe("Agree in Keepr first: Dashboard → Sync Android.");
+    mockConsentVersion = 1;
+    expect((await startTx()).error).not.toBe("Agree in Keepr first: Dashboard → Sync Android.");
+  });
+});
 
 describe("a cache Sync being saved (SR B1, S1)", () => {
   // C5: "Try again" from the page starts a new Sync only after a FAILED one.

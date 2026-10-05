@@ -75,6 +75,7 @@ import {
   cacheWindow,
   type CacheEndSnapshot,
   consentIsCurrent,
+  consentRefusal,
   cacheSavedFromCommit,
   consentToRecordOnSync,
   RCS_CONSENT_VERSION,
@@ -1220,6 +1221,11 @@ export function registerRcsImportHandlers(): void {
         return { success: false, error: "Keepr is clearing imported texts. Try Sync again in a moment." };
       }
       if (cacheSaveInFlight()) return { success: false, error: RCS_SAVING_MESSAGE };
+      // SR F2 (founder): the per-transaction Sync needs the SAME consent as the
+      // cache Sync (given once, in the Sync Android modal).
+      const consentUser = tx.user_id ?? (await currentUserId());
+      const consentBlock = consentRefusal(consentUser ? databaseService.getRcsConsent(consentUser)?.consentVersion : null);
+      if (consentBlock) return { success: false, error: consentBlock.message };
       if (bridge.getStatus().bridge !== "listening") {
         const s = bridge.getStatus();
         return { success: false, error: `Import bridge unavailable${s.reason ? `: ${s.reason}` : ""}.` };

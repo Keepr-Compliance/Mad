@@ -235,6 +235,23 @@ export function cacheSavedFromCommit(r: CacheCommitResult): RcsCacheSaved {
  */
 export const RCS_CONSENT_REQUIRED = true;
 
+/** The refusal of any Sync (cache or per-transaction) without a current consent. */
+export const RCS_CONSENT_NEEDED_MESSAGE = "Agree in Keepr first: Dashboard → Sync Android.";
+
+/**
+ * SR F2 (founder, 2026-10-05): EVERY Sync needs the current consent while
+ * RCS_CONSENT_REQUIRED — the cache Sync (decideCacheStart) and the
+ * per-transaction Sync (rcs-import:start-job). → the refusal, or null.
+ */
+export function consentRefusal(
+  consentVersion: number | null | undefined,
+  consentRequired: boolean = RCS_CONSENT_REQUIRED,
+): { status: 403; error: "consent_needed"; message: string } | null {
+  return consentRequired && !consentIsCurrent(consentVersion)
+    ? { status: 403, error: "consent_needed", message: RCS_CONSENT_NEEDED_MESSAGE }
+    : null;
+}
+
 /**
  * The consent version a starting cache Sync records for audit while the
  * consent screen is off: the current version when the record is not current
@@ -265,13 +282,8 @@ export function decideCacheStart(input: {
   if (!input.userId) {
     return { status: 403, error: "signed_out", message: "Sign in to Keepr first." };
   }
-  if ((input.consentRequired ?? RCS_CONSENT_REQUIRED) && !consentIsCurrent(input.consentVersion)) {
-    return {
-      status: 403,
-      error: "consent_needed",
-      message: "Agree in Keepr first: Dashboard → Sync Android.",
-    };
-  }
+  const refusal = consentRefusal(input.consentVersion, input.consentRequired ?? RCS_CONSENT_REQUIRED);
+  if (refusal) return refusal;
   if (input.writesPaused) {
     return { status: 503, error: "busy", message: "Keepr is clearing imported texts. Try again in a moment." };
   }

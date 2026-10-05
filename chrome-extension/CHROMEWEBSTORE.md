@@ -61,8 +61,9 @@ eye), and linking the extension with that Keepr app.
 - **Only to the Keepr desktop app on the same computer** (127.0.0.1). The
   extension itself sends nothing to any server.
 - In Keepr, the texts are stored on that computer (encrypted local database).
-  They leave the computer only when the user submits a transaction to their
-  brokerage, which is the product's core function and is started by the user.
+  They leave the computer only when the user sends them: by submitting a
+  transaction to their brokerage, or (a solo agent) by exporting their records
+  to PDF. Both are started by the user.
 - Diagnostics (counts and timings only, never message content, names or
   numbers) are sent by the Keepr desktop app, not by the extension.
 
@@ -70,10 +71,8 @@ eye), and linking the extension with that Keepr app.
 
 - Before the first Sync, Keepr shows: "Keepr copies your texts from Google
   Messages into Keepr on this computer." with **Agree and sync**. Nothing is
-  copied before that.
-  <!-- TODO(founder, F2): true for the Sync Android (cache) Sync. A Sync started
-  from a transaction (rcs-import:start-job) is not gated on this consent yet;
-  gate it, or reword this line, once the founder decides. --> The consent is recorded with its version; a change of
+  copied before that. Every Sync needs it: the Sync
+  Android one and one started for a single transaction. The consent is recorded with its version; a change of
   practice raises the version and asks again.
 - The user can **withdraw** it in Keepr: Settings › Google Messages. The next
   Sync asks again.
@@ -89,7 +88,7 @@ eye), and linking the extension with that Keepr app.
 
 | Statement | Answer |
 |---|---|
-| I do not sell or transfer user data to third parties, outside of the approved use cases | **Certify.** The extension sends data only to the user's own Keepr app. In Keepr, texts leave the computer only when the user submits a transaction to their brokerage — a user-initiated transfer that is part of keeping the user's transaction records, the reason the texts are copied into Keepr (§2). |
+| I do not sell or transfer user data to third parties, outside of the approved use cases | **Certify.** The extension sends data only to the user's own Keepr app. In Keepr, texts leave the computer only when the user sends them: by submitting a transaction to their brokerage, or (a solo agent) by exporting their records to PDF. Both are user-initiated and part of keeping the user's transaction records, the reason the texts are copied into Keepr (§2). |
 | I do not use or transfer user data for purposes that are unrelated to my item's single purpose | **Certify.** |
 | I do not use or transfer user data to determine creditworthiness or for lending purposes | **Certify.** |
 
@@ -121,7 +120,7 @@ https://keeprcompliance.com/privacy (the founder publishes it):
 > **Where it goes.** Only to the Keepr app on your own computer. The extension
 > does not send your texts to Keepr's servers or anywhere else. Keepr stores
 > them on your computer in an encrypted database. They leave your computer only
-> when you submit a transaction to your brokerage.
+> when you submit a transaction to your brokerage or export your records to PDF.
 >
 > **Your choice.** Keepr asks for your consent before the first Sync. You can
 > withdraw it in Keepr (Settings › Google Messages), switch any chat off with
@@ -194,6 +193,7 @@ Also: the 128×128 icon (`icons/keepr-128.png`, 96 art + 16 padding) and a
 | 0.3.70 | Consent before the first Sync; privacy links on the options page and in the popup. |
 | 0.3.71 | This file (store notes); no code change. |
 | 0.3.72 | Store notes corrected (SR); no code change. |
+| 0.3.73 | Every Sync (also per transaction) needs the consent; PDF export disclosed. |
 
 ## 10. Review history
 
