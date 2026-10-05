@@ -399,14 +399,23 @@ const LINK_WINDOW_EDGE_GAP = 24;
  * screen, vertically centred — to the right of Keepr's centred modal. Only
  * finite numbers are used; anything else → Chrome's default place.
  */
-/** The page's screen numbers are clamped to this range (SR). */
+/**
+ * The page's screen numbers are clamped (SR): left / top to ±20000 (a
+ * monitor left of / above the primary has negative coordinates), width /
+ * height to 1..20000.
+ */
 const LINK_SCREEN_MAX = 20000;
 
 function linkWindowPlacement(screen) {
   const raw = screen && typeof screen === "object" ? screen : {};
   const ok = (v) => typeof v === "number" && Number.isFinite(v);
-  const clamp = (v) => (ok(v) ? Math.min(LINK_SCREEN_MAX, Math.max(0, v)) : undefined);
-  const s = { left: clamp(raw.left), top: clamp(raw.top), width: clamp(raw.width), height: clamp(raw.height) };
+  const clamp = (v, min) => (ok(v) ? Math.min(LINK_SCREEN_MAX, Math.max(min, v)) : undefined);
+  const s = {
+    left: clamp(raw.left, -LINK_SCREEN_MAX),
+    top: clamp(raw.top, -LINK_SCREEN_MAX),
+    width: clamp(raw.width, 1),
+    height: clamp(raw.height, 1),
+  };
   if (!ok(s.width) || !ok(s.height) || s.width < LINK_WINDOW_SIZE.width || s.height < LINK_WINDOW_SIZE.height) return {};
   const left = (ok(s.left) ? s.left : 0) + s.width - LINK_WINDOW_SIZE.width - LINK_WINDOW_EDGE_GAP;
   const top = (ok(s.top) ? s.top : 0) + Math.round((s.height - LINK_WINDOW_SIZE.height) / 2);

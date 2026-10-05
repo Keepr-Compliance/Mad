@@ -269,13 +269,23 @@ describe("the worker's link with Keepr (BACKLOG-3666, C1)", () => {
     let clock = 5_000_000;
     Date.now = () => clock;
     try {
-      await w.send({ type: "keepr-open-link-window", screen: { left: -500, top: -10, width: 99999, height: 1e9 } });
-      expect(created[0]).toMatchObject({ left: 20000 - 380 - 24, top: Math.round((20000 - 380) / 2) });
+      // A monitor left of / above the primary: negative coordinates kept.
+      await w.send({ type: "keepr-open-link-window", screen: { left: -1920, top: -200, width: 1920, height: 1080 } });
+      expect(created[0]).toMatchObject({ left: -1920 + 1920 - 380 - 24, top: -200 + 350 });
+      // Extreme values clamped: left / top to ±20000, width / height to ≤ 20000.
+      clock += 5_000;
+      await w.send({ type: "keepr-open-link-window", screen: { left: -1e9, top: 1e9, width: 99999, height: 1e9 } });
+      expect(created[1]).toMatchObject({ left: -20000 + 20000 - 380 - 24, top: 20000 + Math.round((20000 - 380) / 2) });
+      // Width / height below 1 → 1: too small for the window → unplaced.
+      clock += 5_000;
+      await w.send({ type: "keepr-open-link-window", screen: { left: 0, top: 0, width: -5, height: 0 } });
+      expect(created[2]).not.toHaveProperty("left");
+      created.length = 0;
       refuseBounds = true;
       clock += 5_000;
       const r = await w.send({ type: "keepr-open-link-window", screen: { left: 0, top: 0, width: 1920, height: 1080 } });
       expect(r).toEqual({ ok: true, how: "window" });
-      expect(created.slice(1)).toEqual([
+      expect(created).toEqual([
         { url: `chrome-extension://${EXTENSION_ID}/link.html`, type: "popup", width: 380, height: 380, focused: true, left: 1920 - 380 - 24, top: 350 },
         { url: `chrome-extension://${EXTENSION_ID}/link.html`, type: "popup", width: 380, height: 380, focused: true },
       ]);
