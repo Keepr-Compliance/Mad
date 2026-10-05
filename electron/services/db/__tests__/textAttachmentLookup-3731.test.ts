@@ -30,7 +30,6 @@ import path from "path";
 const mockEnsureDb = jest.fn();
 jest.mock("../core/dbConnection", () => ({
   ensureDb: () => mockEnsureDb(),
-  dbTransaction: <T>(fn: () => T) => fn(),
 }));
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
