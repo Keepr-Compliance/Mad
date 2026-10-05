@@ -10,7 +10,7 @@ import { isEmailMessage, isTextMessage } from "../utils/channelHelpers";
 import { sanitizeFileSystemName } from "../utils/fileUtils";
 // BACKLOG-2771: this service no longer decides its own include set.
 import type { ExportPlan } from "./exportPlan";
-import { auditWindowStart, orderAttachmentComms } from "./exportPlan";
+import { auditWindowEnd, auditWindowStart, orderAttachmentComms } from "./exportPlan";
 
 /**
  * BACKLOG-3734: the start date printed in the CSV and SUMMARY.txt headers.
@@ -21,6 +21,17 @@ import { auditWindowStart, orderAttachmentComms } from "./exportPlan";
 function auditStartDayLabel(startedAt: string): string {
   const start = auditWindowStart(startedAt);
   return start ? start.toLocaleDateString() : "N/A";
+}
+
+/**
+ * BACKLOG-3734: the Closing Date printed in the same two headers. Same bug as
+ * the start: `new Date("2026-09-24")` prints 9/23 west of UTC. `auditWindowEnd`
+ * resolves the closing calendar day to its LOCAL last instant, so the printed
+ * day is the day the agent entered.
+ */
+function auditClosingDayLabel(closedAt: string): string {
+  const end = auditWindowEnd(closedAt);
+  return end ? end.toLocaleDateString() : "N/A";
 }
 // BACKLOG-3367: every format states what the export left out.
 import { exportNoticeLines, type ExportOmissionDetail } from "./exportNotices";
@@ -290,7 +301,7 @@ class EnhancedExportService {
       }`,
       `Closing Date: ${
         transaction.closed_at
-          ? new Date(transaction.closed_at).toLocaleDateString()
+          ? auditClosingDayLabel(transaction.closed_at)
           : "N/A"
       }`,
       `Total Communications: ${communications.length}`,
@@ -518,7 +529,7 @@ class EnhancedExportService {
     lines.push(
       `Closing Date: ${
         transaction.closed_at
-          ? new Date(transaction.closed_at).toLocaleDateString()
+          ? auditClosingDayLabel(transaction.closed_at)
           : "N/A"
       }`,
     );

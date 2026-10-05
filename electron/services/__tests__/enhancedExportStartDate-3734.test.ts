@@ -1,6 +1,7 @@
 /**
- * BACKLOG-3734 — the start date printed in the CSV header and SUMMARY.txt is
- * the day the agent entered, in every zone.
+ * BACKLOG-3734 — the start and closing dates printed in the CSV header and
+ * SUMMARY.txt are the days the agent entered, in every zone (closing date via
+ * `auditWindowEnd`).
  *
  * `new Date("2026-09-24").toLocaleDateString()` prints 9/23 west of UTC (UTC
  * midnight is the previous evening there). The headers now go through
@@ -68,18 +69,20 @@ describe("BACKLOG-3734 — export headers print the entered start day (this zone
     }
   });
 
-  it("CSV header: Representation Start is the local day", async () => {
+  it("CSV header: Representation Start and Closing Date are the local day", async () => {
     await enhancedExportService.exportTransaction(transaction, testExportPlan([], { format: "csv" }), {
       exportFormat: "csv",
     });
     expect(headerLine("Representation Start:")).toBe(`Representation Start: ${LOCAL_DAY}`);
+    expect(headerLine("Closing Date:")).toBe(`Closing Date: ${LOCAL_DAY}`);
   });
 
-  it("SUMMARY.txt: Representation Start Date is the local day", async () => {
+  it("SUMMARY.txt: Representation Start Date and Closing Date are the local day", async () => {
     await enhancedExportService.exportTransaction(transaction, testExportPlan([], { format: "txt_eml" }), {
       exportFormat: "txt_eml",
     });
     expect(headerLine("Representation Start Date:")).toBe(`Representation Start Date: ${LOCAL_DAY}`);
+    expect(headerLine("Closing Date:")).toBe(`Closing Date: ${LOCAL_DAY}`);
   });
 });
 
@@ -121,7 +124,7 @@ describe("BACKLOG-3734 — export headers print the entered start day (this zone
   }
 
   it.each(["America/Chicago", "UTC", "Asia/Tokyo"])(
-    "%s: both headers print the entered day",
+    "%s: both headers print the entered start and closing day",
     (tz) => {
       expectChildGreen(tz);
     },
