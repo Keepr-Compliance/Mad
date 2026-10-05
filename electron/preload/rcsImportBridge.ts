@@ -21,9 +21,6 @@ export const rcsImportBridge = {
   getStatus: (): Promise<RcsImportStatusResult> => ipcRenderer.invoke("rcs-import:get-status"),
 
   // BACKLOG-3620: sync jobs
-  startJob: (args: { transactionId: string }): Promise<RcsImportJobResult> =>
-    ipcRenderer.invoke("rcs-import:start-job", args),
-
   cancelJob: (args: { jobId: string }): Promise<RcsImportJobResult> =>
     ipcRenderer.invoke("rcs-import:cancel-job", args),
 

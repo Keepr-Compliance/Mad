@@ -1,32 +1,10 @@
 /**
- * SQL for the RCS import job — BACKLOG-3620.
- *
- * `TRANSACTION_CONTACT_PHONES_SQL` (`messageMatchingSql.ts`) INNER-joins
- * `contact_phones`, so a contact with no phone is missing from it and could not
- * be reported. This query LEFT-joins instead: one row per (contact, phone), and
- * one row with a NULL phone for a contact that has none.
- *
- * Contacts removed from the transaction (`tc.removed_at`) or deleted
- * (`c.removed_at`) are excluded.
+ * SQL for the RCS (Google Messages) import — BACKLOG-3620, -3658.
+ * (The per-transaction Sync and its contacts query were removed, 2026-10-05.)
  */
 
 import { sql } from "./core/sqlText";
 import { LIVE_TRANSACTION_SQL_PREDICATE } from "./core/transactionEligibilitySql";
-
-/** One bound parameter: transaction id. */
-export const RCS_IMPORT_TRANSACTION_CONTACTS_SQL = sql`
-    SELECT
-      c.id AS contactId,
-      c.display_name AS displayName,
-      cp.phone_e164 AS phoneE164
-    FROM transaction_contacts tc
-    JOIN contacts c ON c.id = tc.contact_id
-    LEFT JOIN contact_phones cp ON cp.contact_id = c.id
-    WHERE tc.transaction_id = ?
-      AND tc.removed_at IS NULL
-      AND c.removed_at IS NULL
-    ORDER BY c.id
-  `;
 
 /** One bound parameter: message id. */
 export const RCS_MARK_MESSAGE_HAS_ATTACHMENTS_SQL = sql`
@@ -45,17 +23,6 @@ export const RCS_INSERT_REACTION_SQL = sql`
       has_attachments, message_type, metadata,
       associated_message_type, associated_message_guid, created_at
     ) VALUES (?, ?, 'sms', ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, CURRENT_TIMESTAMP)
-  `;
-
-/**
- * BACKLOG-3642: the user's removals from one transaction (one bound parameter:
- * transaction id). Thread ids and thread-less message ids; the caller keeps
- * gmweb threads only.
- */
-export const RCS_REMOVALS_SQL = sql`
-    SELECT ic.thread_id AS threadId, ic.original_communication_id AS messageId
-    FROM ignored_communications ic
-    WHERE ic.transaction_id = ?
   `;
 
 /**

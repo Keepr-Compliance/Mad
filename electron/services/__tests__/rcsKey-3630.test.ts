@@ -29,7 +29,7 @@ jest.mock("../logService", () => {
 });
 
 import { setDb } from "../db/core/dbConnection";
-import { findRcsContentDuplicates, getRcsRemovals } from "../db/syncDbService";
+import { findRcsContentDuplicates } from "../db/syncDbService";
 
 const PRODUCTION_SCHEMA = nodePath.join(__dirname, "..", "..", "database", "schema.sql");
 const USER = "user-3630";
@@ -156,17 +156,3 @@ describe("the content guard (findRcsContentDuplicates)", () => {
   });
 });
 
-describe("removals (getRcsRemovals)", () => {
-  it("removals: gmweb2 and legacy gmweb-chat threads; other sources ignored (K4)", () => {
-    const ins = db.prepare(
-      "INSERT INTO ignored_communications (id, user_id, transaction_id, thread_id, original_communication_id, reason) VALUES (?, ?, 'tx-a', ?, ?, 'test')",
-    );
-    ins.run("i1", USER, "gmweb2-abc", null);
-    ins.run("i2", USER, "gmweb-chat-CgiOld", null);
-    ins.run("i3", USER, "android-thread-9", null);
-    ins.run("i4", USER, null, "msg-1");
-    const r = getRcsRemovals("tx-a", USER);
-    expect(Array.from(r.threadIds).sort()).toEqual(["gmweb-chat-CgiOld", "gmweb2-abc"]);
-    expect(Array.from(r.messageIds)).toEqual(["msg-1"]);
-  });
-});

@@ -47,18 +47,16 @@ export interface RcsJobProgressCounts {
 /** BACKLOG-3620: one sync job, as main reports it. */
 export interface RcsJobInfo {
   jobId: string;
-  transactionId: string;
   state: RcsJobState;
   stage: string;
   progress: RcsJobProgressCounts;
-  contactsWithoutPhone: string[];
   error?: { code: string; message: string };
   createdAt: string;
   finishedAt?: string;
-  /** BACKLOG-3661: what is syncing (the transaction's name). */
+  /** BACKLOG-3661: what is syncing. */
   label?: string;
   /** BACKLOG-3658: "cache" for the all-chats cache job. */
-  kind?: "transaction" | "cache";
+  kind?: "cache";
   /** BACKLOG-3663: this cache Sync reads older texts (down to the months setting). */
   readingOlder?: boolean;
   /** BACKLOG-3629: chats left out or imported in part. Names only. */
@@ -134,8 +132,6 @@ export type RcsImportJobResult =
 export interface WindowApiRcsImport {
   /** Bridge state. */
   getStatus: () => Promise<RcsImportStatusResult>;
-  /** BACKLOG-3620: start a sync job (opens Messages for Web in the browser). */
-  startJob: (args: { transactionId: string }) => Promise<RcsImportJobResult>;
   /** BACKLOG-3620: cancel the job, if it is still the one named. */
   cancelJob: (args: { jobId: string }) => Promise<RcsImportJobResult>;
   /** BACKLOG-3620: the current job, if any. */

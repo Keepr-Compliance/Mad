@@ -15,7 +15,7 @@
 import * as http from "http";
 
 import { RCS_EXTENSION_ORIGIN, RCS_RATE_LIMITS, RCS_RATE_WINDOW_MS, RcsExtensionBridge } from "../rcsExtensionBridge";
-import { RcsJobRegistry, type RcsJobContact } from "../rcsImportJob";
+import { RcsJobRegistry } from "../rcsImportJob";
 import { parseBridgeBody, RcsBridgeBodySchemas, RcsHelloBodySchema, RcsLinkBodySchemas } from "../../schemas/rcsBridge";
 import { RCS_ALLOWED_IMAGE_MIME, type RcsImageResult, type RcsIncomingImage } from "../rcsImportMedia";
 import type { RcsImportResult, RcsIncomingChat } from "../rcsImportStore";
@@ -50,30 +50,30 @@ function post(port: number, path: string, body = "{}"): Promise<Reply> {
   });
 }
 
-const CONTACTS: RcsJobContact[] = [{ contactId: "c-1", displayName: "Test Contact A", phonesE164: ["+15555550199"] }];
 const CONV = "aaaaaaaaaaaaaaaaaaa";
 
 describe("bridge hardening (C5)", () => {
   let bridge: RcsExtensionBridge;
   let port: number;
   let clock: number;
-  let importImage: jest.Mock<Promise<RcsImageResult>, [RcsIncomingImage, string]>;
+  let importImage: jest.Mock<Promise<RcsImageResult>, [RcsIncomingImage, string, string, string[], string]>;
   let jobId: string;
 
   beforeEach(async () => {
     clock = 1_000_000;
-    importImage = jest.fn(async (_image: RcsIncomingImage, _tx: string): Promise<RcsImageResult> => ({ stored: true, alreadyPresent: false, filename: "gmweb-1-0.png", bytes: 3 }));
+    importImage = jest.fn(async (_image: RcsIncomingImage, _user: string, _hash: string, _numbers: string[], _job: string): Promise<RcsImageResult> => ({ stored: true, alreadyPresent: false, filename: "gmweb-1-0.png", bytes: 3 }));
     bridge = new RcsExtensionBridge({
-      importChat: jest.fn(async (chat: RcsIncomingChat): Promise<RcsImportResult> => ({
+      importCacheChat: jest.fn(async (chat: RcsIncomingChat): Promise<RcsImportResult> => ({
         received: chat.messages.length, stored: chat.messages.length, alreadyPresent: 0, linked: 0, reactions: 0, reactionsStored: 0,
       })),
-      importImage,
+      importCacheImage: importImage,
+      currentUserId: async () => "user-1",
       jobs: new RcsJobRegistry(),
       now: () => clock,
     });
     expect(await bridge.start(0)).toBe("listening");
     port = bridge.getStatus().port;
-    jobId = bridge.createJob("tx-job", CONTACTS)!.jobId;
+    jobId = bridge.createCacheJob("user-1", { since: "2026-01-01T00:00:00.000Z" })!.jobId;
     expect((await post(port, `/job/${jobId}/claim`)).status).toBe(200);
     expect((await post(port, `/job/${jobId}/match`, JSON.stringify({ conversationId: CONV, numbers: ["(555) 555-0199"] }))).status).toBe(200);
   });

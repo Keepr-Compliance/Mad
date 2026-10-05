@@ -40,9 +40,9 @@ beforeEach(() => {
 });
 
 describe("Google Messages on the dashboard indicator", () => {
-  it("only cache Syncs (I1)", () => {
-    expect(orchestratorStepFor(job({ kind: "transaction" }))).toEqual({ kind: "ignore" });
-    applyGoogleMessagesJob(job({ kind: "transaction" }), new Set());
+  it("only cache Syncs (I1): a job without kind \"cache\" is ignored", () => {
+    expect(orchestratorStepFor(job({ kind: undefined }))).toEqual({ kind: "ignore" });
+    applyGoogleMessagesJob(job({ kind: undefined }), new Set());
     expect(calls).toEqual([]);
   });
 

@@ -289,22 +289,13 @@ export interface RcsReactionRow {
 }
 
 export interface RcsImportDeps {
-  getTransactionUserId: (transactionId: string) => Promise<string | null>;
   batchInsertMessages: (
     rows: RcsInsertRow[],
     batchSize: number,
   ) => { stored: number; skipped: number };
   /** external_id -> id for this user. */
   getMessageIdMap: (userId: string) => Map<string, string>;
-  linkMessages: (messageIds: string[], transactionId: string) => Promise<void>;
   insertReactionRows: (rows: RcsReactionRow[]) => { stored: number; skipped: number };
-  /** Link rows to the transaction without changing transactions.message_count. */
-  linkWithoutCount: (messageIds: string[], transactionId: string, userId: string) => Promise<void>;
-  /**
-   * BACKLOG-3642: what the user removed from this transaction (read at import
-   * time). Absent → nothing is treated as removed.
-   */
-  getRemovals?: (transactionId: string, userId: string) => RcsRemovals;
   /**
    * BACKLOG-3630: for rows about to be inserted, the id of an EXISTING gmweb2
    * row of the user with the same sent_at + direction + body (external_id ->
@@ -327,17 +318,6 @@ function lastSentAt(chat: RcsIncomingChat): string | null {
     if (Number.isFinite(t) && (max === null || t > max)) max = t;
   }
   return max === null ? null : new Date(max).toISOString();
-}
-
-/**
- * The user's removals from one transaction, as the import needs them: removed
- * gmweb thread ids — `gmweb2-<h>` (stable across re-pairs, BACKLOG-3630) and
- * legacy `gmweb-chat-<conversation id>` — and removed message ids (thread-less
- * removals). gmweb only: an SMS phone-backup removal never blocks an RCS chat.
- */
-export interface RcsRemovals {
-  threadIds: Set<string>;
-  messageIds: Set<string>;
 }
 
 export interface RcsImportResult {
@@ -456,90 +436,6 @@ export function mapChatToReactionRows(
     }
   }
   return rows;
-}
-
-/**
- * Store one chat and attach all of its messages to `transactionId`.
- * `people` (BACKLOG-3630) are the chat's Details numbers and names: the key,
- * the thread and participants come from them. A chat with no number is refused.
- */
-export async function importChat(
-  chat: RcsIncomingChat,
-  transactionId: string,
-  deps: RcsImportDeps,
-  people: RcsChatPeople,
-): Promise<RcsImportResult> {
-  if (people.numbers.length === 0) throw new Error(RCS_NO_NUMBER_MESSAGE);
-  const userId = await deps.getTransactionUserId(transactionId);
-  if (!userId) {
-    throw new Error("Transaction not found");
-  }
-
-  const rows = mapChatToRows(chat, userId, people);
-  const threadId = rows.length > 0 ? (rows[0].threadId as string) : `${RCS_THREAD_PREFIX}${rcsChatHash(people.numbers)}`;
-
-  // BACKLOG-3630 content guard: a message already stored under ANOTHER gmweb2
-  // key (same sent_at + direction + body; the key drifts when a group's members
-  // change) is not stored again; that existing row is linked instead.
-  const before = deps.getMessageIdMap(userId);
-  const fresh = rows.filter((r) => !before.has(r.externalId));
-  const sameContent = deps.findContentDuplicates && fresh.length > 0
-    ? deps.findContentDuplicates(userId, fresh)
-    : new Map<string, string>();
-  const toInsert = sameContent.size > 0 ? rows.filter((r) => !sameContent.has(r.externalId)) : rows;
-
-  // Rows are ALWAYS stored (dedup keeps working); only the link respects the
-  // user's removals.
-  const { stored, skipped } = deps.batchInsertMessages(toInsert, 500);
-  // BACKLOG-3670: straight after the insert — numbers seen only in a
-  // transaction Sync count too.
-  deps.recordPeople?.(userId, rcsChatHash(people.numbers), chatPeopleRows(people, chat.title), lastSentAt(chat));
-
-  const reactionRows = mapChatToReactionRows(chat, userId, people);
-  const reactionResult =
-    reactionRows.length > 0 ? deps.insertReactionRows(reactionRows) : { stored: 0, skipped: 0 };
-
-  // BACKLOG-3642: a chat the user removed from this transaction is never linked
-  // again. Its gmweb2 thread id is stable across re-pairs (BACKLOG-3630); a
-  // legacy removal of the same conversation id is honoured too.
-  const removals = deps.getRemovals ? deps.getRemovals(transactionId, userId) : null;
-  const legacyThreadId = `${RCS_LEGACY_THREAD_PREFIX}${chat.conversationId}`;
-  const removedByLegacy = !!removals && removals.threadIds.has(legacyThreadId);
-  const chatRemoved = !!removals && (removals.threadIds.has(threadId) || removedByLegacy);
-  const keep = (id: string): boolean => !chatRemoved && !(removals?.messageIds.has(id) ?? false);
-
-  const idMap = deps.getMessageIdMap(userId);
-  const ids: string[] = [];
-  for (const row of rows) {
-    const id = idMap.get(row.externalId) ?? sameContent.get(row.externalId);
-    if (id) ids.push(id);
-  }
-  const linkIds = ids.filter(keep);
-  if (linkIds.length > 0) {
-    await deps.linkMessages(linkIds, transactionId);
-  }
-
-  // Reactions are linked (the loader joins communications by message id) but
-  // never counted: message_count is a count of messages.
-  const reactionIds: string[] = [];
-  for (const row of reactionRows) {
-    const id = idMap.get(row.externalId);
-    if (id && keep(id)) reactionIds.push(id);
-  }
-  if (reactionIds.length > 0) {
-    await deps.linkWithoutCount(reactionIds, transactionId, userId);
-  }
-
-  return {
-    received: chat.messages.length,
-    stored,
-    alreadyPresent: skipped + sameContent.size,
-    linked: linkIds.length,
-    reactions: reactionRows.length,
-    reactionsStored: reactionResult.stored,
-    removedByUser: ids.length - linkIds.length,
-    sameContent: sameContent.size,
-  };
 }
 
 /** The writers a cache chat uses (all synchronous). */

@@ -35,7 +35,6 @@ const savedRecords: Array<[string, unknown]> = [];
 // 3671 P3: the per-chat records (mocked: this suite has no SQL).
 const mockFailedRuns: Array<[string, string]> = [];
 let mockFailedRunStart: string | null = null;
-let mockConsentVersion: number | null = 1;
 jest.mock("../../services/db/rcsChatCoverageDbService", () => ({
   chatDoneInFailedRun: () => false,
   clearChatCoverage: jest.fn(),
@@ -119,11 +118,10 @@ jest.mock("../../services/databaseService", () => ({
   __esModule: true,
   default: {
     getRcsCacheState: () => ({ optedInAt: "2026-09-01T00:00:00.000Z", lastCacheFinishedAt: null, ownNumber: null }),
-    getRcsConsent: () => ({ consentAt: "2026-09-01T00:00:00.000Z", consentVersion: mockConsentVersion, contactsOnly: false, autoDeleteDays: null }),
+    getRcsConsent: () => ({ consentAt: "2026-09-01T00:00:00.000Z", consentVersion: 1, contactsOnly: false, autoDeleteDays: null }),
     updateRcsCacheState: () => undefined,
     rcsStagingDbOps: () => ({}),
     getTransactionById: async () => ({ id: "tx-1", user_id: "user-1" }),
-    getRcsImportContacts: () => [],
   },
 }));
 jest.mock("../../services/auditCoverageService", () => ({
@@ -192,21 +190,14 @@ const flush = async () => {
   for (let i = 0; i < 10; i++) await Promise.resolve();
 };
 const startCache = () => handlers.get("rcs-import:start-cache-job")!({}, undefined) as Promise<{ success: boolean; error?: string }>;
-const startTx = () => handlers.get("rcs-import:start-job")!({}, { transactionId: "tx-1" }) as Promise<{ success: boolean; error?: string }>;
 
-// SR F2 (founder, 2026-10-05): the per-transaction Sync asks for the same
-// consent as the cache Sync. Mutation: start-job not gated → red.
-describe("per-transaction Sync: the same consent (F2)", () => {
-  afterEach(() => {
-    mockConsentVersion = 1;
-  });
-  it("no current consent → refused with the cache Sync's message; consent current → past the gate", async () => {
-    mockConsentVersion = null;
-    expect(await startTx()).toEqual({ success: false, error: "Agree in Keepr first: Dashboard → Sync Android." });
-    mockConsentVersion = 0;
-    expect((await startTx()).error).toBe("Agree in Keepr first: Dashboard → Sync Android.");
-    mockConsentVersion = 1;
-    expect((await startTx()).error).not.toBe("Agree in Keepr first: Dashboard → Sync Android.");
+// Founder (2026-10-05): the per-transaction Google Messages Sync is removed
+// ("we can always add it again later"). Mutation: the channel registered
+// again → red.
+describe("no per-transaction Sync", () => {
+  it("rcs-import:start-job is not registered", () => {
+    expect(handlers.has("rcs-import:start-job")).toBe(false);
+    expect(handlers.has("rcs-import:start-cache-job")).toBe(true);
   });
 });
 
@@ -261,7 +252,6 @@ describe("a cache Sync being saved (SR B1, S1)", () => {
     // B1: nothing that could sweep the staging or write the same files.
     const cache = await startCache();
     expect(cache).toEqual({ success: false, error: handlersModule.RCS_SAVING_MESSAGE });
-    expect(await startTx()).toEqual({ success: false, error: handlersModule.RCS_SAVING_MESSAGE });
     await expect(handlersModule.clearGoogleMessagesWebTexts("user-1")).rejects.toThrow(handlersModule.RCS_SAVING_MESSAGE);
     expect(broadcasts).toEqual([]);
 
@@ -270,7 +260,6 @@ describe("a cache Sync being saved (SR B1, S1)", () => {
     await flush();
     expect(order).toEqual(["commit", "autolink", `broadcast ${handlersModule.RCS_DATA_CHANGED_CHANNEL}`]);
     expect(handlersModule.cacheSaveInFlight()).toBe(false);
-    expect((await startTx()).error).not.toBe(handlersModule.RCS_SAVING_MESSAGE);
     expect((await startCache()).success).toBe(true);
   });
 

@@ -71,8 +71,7 @@ eye), and linking the extension with that Keepr app.
 
 - Before the first Sync, Keepr shows: "Keepr copies your texts from Google
   Messages into Keepr on this computer." with **Agree and sync**. Nothing is
-  copied before that. Every Sync needs it: the Sync
-  Android one and one started for a single transaction. The consent is recorded with its version; a change of
+  copied before that. The consent is recorded with its version; a change of
   practice raises the version and asks again.
 - The user can **withdraw** it in Keepr: Settings › Google Messages. The next
   Sync asks again.
@@ -194,6 +193,7 @@ Also: the 128×128 icon (`icons/keepr-128.png`, 96 art + 16 padding) and a
 | 0.3.71 | This file (store notes); no code change. |
 | 0.3.72 | Store notes corrected (SR); no code change. |
 | 0.3.73 | Every Sync (also per transaction) needs the consent; PDF export disclosed. |
+| 0.3.74 | The per-transaction Sync is removed: the Sync Android Sync is the only one. |
 
 ## 10. Review history
 

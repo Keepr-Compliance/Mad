@@ -13,7 +13,6 @@ import logService from "../logService";
 import { clearRcsChatPeople, clearRcsChatPeopleForChats } from "./rcsChatPeopleDbService";
 import { exclusionKeysFor, markPendingFullRead } from "./rcsPendingFullSyncDbService";
 import {
-  RCS_IMPORT_TRANSACTION_CONTACTS_SQL,
   RCS_INSERT_REACTION_SQL,
   RCS_MARK_MESSAGE_HAS_ATTACHMENTS_SQL,
   RCS_CLEAR_ATTACHMENT_PATHS_SQL,
@@ -74,7 +73,6 @@ import {
   RCS_CACHE_STATE_SET_OPT_IN_SQL,
   RCS_CACHE_STATE_SET_OWN_NUMBER_SQL,
   RCS_NUMBERS_MATCH_LIVE_CONTACT_SQL,
-  RCS_REMOVALS_SQL,
 } from "./rcsImportSql";
 
 // ============================================
@@ -248,50 +246,11 @@ export function insertAttachment(params: {
 // RCS IMPORT (BACKLOG-3620)
 // ============================================
 
-/** A transaction's contacts with every phone number, including contacts with none. */
-export function getRcsImportContacts(
-  transactionId: string
-): { contactId: string; displayName: string; phoneE164: string | null }[] {
-  const db = ensureDb();
-  return db.prepare(RCS_IMPORT_TRANSACTION_CONTACTS_SQL).all(transactionId) as {
-    contactId: string;
-    displayName: string;
-    phoneE164: string | null;
-  }[];
-}
-
 /**
  * Set has_attachments = 1 on a message stored earlier without it.
  * `batchInsertMessages` is INSERT OR IGNORE, so a row first stored text-only
  * never gets the flag from a later insert. Returns rows changed.
  */
-/**
- * BACKLOG-3642: what the user removed from a transaction, for the RCS import.
- * gmweb thread ids only (an SMS phone-backup removal never blocks RCS), the
- * thread-less message ids, and the participant keys of removed gmweb rows.
- */
-export function getRcsRemovals(
-  transactionId: string,
-  userId: string
-): { threadIds: Set<string>; messageIds: Set<string> } {
-  void userId; // removals are per transaction; kept for the caller's signature
-  const db = ensureDb();
-  const rows = db.prepare(RCS_REMOVALS_SQL).all(transactionId) as {
-    threadId: string | null;
-    messageId: string | null;
-  }[];
-  const threadIds = new Set<string>();
-  const messageIds = new Set<string>();
-  for (const r of rows) {
-    // BACKLOG-3630: gmweb2-<hash> (stable across re-pairs) and legacy gmweb-chat-*.
-    if (r.threadId && (r.threadId.startsWith("gmweb2-") || r.threadId.startsWith("gmweb-chat-"))) {
-      threadIds.add(r.threadId);
-    }
-    if (r.messageId) messageIds.add(r.messageId);
-  }
-  return { threadIds, messageIds };
-}
-
 /**
  * BACKLOG-3630: the content guard — for each row, an existing gmweb2 row of the
  * user under a different key with the same sent_at + direction + body.

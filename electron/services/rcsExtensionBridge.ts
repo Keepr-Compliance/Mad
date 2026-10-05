@@ -60,7 +60,6 @@ import {
   type RcsCacheSaved,
   type RcsImportJob,
   type RcsJobKind,
-  type RcsJobContact,
   type RcsJobProgress,
   type RcsJobSnapshot,
 } from "./rcsImportJob";
@@ -163,16 +162,9 @@ export interface RcsJobEnded {
 }
 
 export interface RcsExtensionBridgeOptions {
-  importChat: (
-    chat: RcsIncomingChat,
-    transactionId: string,
-    people: RcsChatPeople,
-  ) => Promise<RcsImportResult>;
   logger?: RcsBridgeLogger;
   /** Overridable for tests only. */
   allowedOrigin?: string;
-  /** BACKLOG-3620: store one image of a matched chat. */
-  importImage?: (image: RcsIncomingImage, transactionId: string, chatHash: string) => Promise<RcsImageResult>;
   /** BACKLOG-3620: every job state/progress change. */
   onJobChanged?: (job: RcsJobSnapshot) => void;
   /** BACKLOG-3620: the job finished; Keepr brings its window forward. */
@@ -466,24 +458,6 @@ export class RcsExtensionBridge {
   // ---------------------------------------------------------------------------
   // Sync jobs (BACKLOG-3620)
   // ---------------------------------------------------------------------------
-
-  /** Create the one sync job (cancelling any other). */
-  createJob(
-    transactionId: string,
-    contacts: RcsJobContact[],
-    options: { startDate?: string | null; unclaimedMs?: number; label?: string | null; userId?: string | null } = {},
-  ): RcsJobSnapshot | null {
-    // BACKLOG-3661: one Sync at a time — while a job is active nothing is
-    // created (null); the running job is left untouched. Callers check
-    // activeJob() first to tell the user what is running.
-    if (this.jobs.active()) return null;
-    const unclaimedMs = options.unclaimedMs ?? 60_000;
-    const job = this.jobs.create(
-      transactionId, contacts, options.startDate ?? null, options.label ?? null, options.userId ?? null,
-    );
-    this.logger.info(`[RcsBridge] Sync job created for transaction ${transactionId} (${contacts.length} contacts)`);
-    return this.armJob(job, options.unclaimedMs ?? 60_000);
-  }
 
   /**
    * BACKLOG-3658: the cache job — all recent chats of `userId`, back to
@@ -1185,16 +1159,18 @@ export class RcsExtensionBridge {
             return;
           }
         }
-        const allow = job.kind === "cache" && job.userId && this.options.cacheChatAllowed
+        const allow = job.userId && this.options.cacheChatAllowed
           ? (n: string[]) => this.options.cacheChatAllowed!(job.jobId, job.userId as string, n)
           : undefined;
-        const contactIds = job.match(conversationId, shown, allow);
+        job.match(conversationId, shown, allow);
         this.emitJob(job.snapshot());
-        // A cache job keeps every chat with a number (BACKLOG-3658).
-        const matched = job.kind === "cache" ? job.isMatched(conversationId) : contactIds.length > 0;
+        // Every chat with a number is kept (BACKLOG-3658); no contact gate.
+        // (contactIds stays in the reply, always empty, for older pages.)
+        const contactIds: string[] = [];
+        const matched = job.isMatched(conversationId);
         // History v2: whether Keepr keeps this chat's images, so the page runs
         // its image pass only where it matters (a boolean — no names, no numbers).
-        if (job.kind === "cache" && matched && this.options.cacheMediaKept && job.userId) {
+        if (matched && this.options.cacheMediaKept && job.userId) {
           const normalized = participantKey(shown).split(",").filter(Boolean);
           const kept = this.options.cacheMediaKept(job.jobId, job.userId, normalized);
           const floorMs = this.options.cacheChatFloor
@@ -1220,7 +1196,7 @@ export class RcsExtensionBridge {
           return;
         }
         if (!job.isMatched(chat.conversationId)) {
-          sendJson(res, 403, { error: "not_matched", message: "Keepr did not match this chat to a transaction contact." });
+          sendJson(res, 403, { error: "not_matched", message: "Keepr did not check this chat in this Sync." });
           return;
         }
         // BACKLOG-3630: the chat's numbers are the ones THIS job's /match saw
@@ -1235,22 +1211,17 @@ export class RcsExtensionBridge {
           sendJson(res, 409, { error: "user_changed", message: RCS_USER_CHANGED_MESSAGE });
           return;
         }
-        let result: RcsImportResult;
-        if (job.kind === "cache") {
-          if (!this.options.importCacheChat || !job.userId) {
-            sendJson(res, 501, { error: "unsupported", message: "This Keepr build cannot save chats." });
-            return;
-          }
-          // A Cancel (or the user switch) can land while the user was checked:
-          // an ended job stages nothing (BACKLOG-3658 atomic import).
-          if (!job.isActive) {
-            sendJson(res, 410, { error: "job_over", message: "This Sync is over." });
-            return;
-          }
-          result = await this.options.importCacheChat(chat, job.userId, people, job.jobId);
-        } else {
-          result = await this.options.importChat(chat, job.transactionId, people);
+        if (!this.options.importCacheChat || !job.userId) {
+          sendJson(res, 501, { error: "unsupported", message: "This Keepr build cannot save chats." });
+          return;
         }
+        // A Cancel (or the user switch) can land while the user was checked:
+        // an ended job stages nothing (BACKLOG-3658 atomic import).
+        if (!job.isActive) {
+          sendJson(res, 410, { error: "job_over", message: "This Sync is over." });
+          return;
+        }
+        const result: RcsImportResult = await this.options.importCacheChat(chat, job.userId, people, job.jobId);
         job.progress.imported += 1;
         job.progress.messages += result.received;
         job.progress.reactions += result.reactions;
@@ -1271,11 +1242,7 @@ export class RcsExtensionBridge {
           return;
         }
         if (!job.isMatched(image.conversationId)) {
-          sendJson(res, 403, { error: "not_matched", message: "Keepr did not match this chat to a transaction contact." });
-          return;
-        }
-        if (job.kind !== "cache" && !this.options.importImage) {
-          sendJson(res, 501, { error: "unsupported", message: "This Keepr build cannot store images." });
+          sendJson(res, 403, { error: "not_matched", message: "Keepr did not check this chat in this Sync." });
           return;
         }
         const imageNumbers = job.numbersFor(image.conversationId);
@@ -1287,28 +1254,23 @@ export class RcsExtensionBridge {
           sendJson(res, 409, { error: "user_changed", message: RCS_USER_CHANGED_MESSAGE });
           return;
         }
-        let result: RcsImageResult | { stored: false; reason: "not_a_contact" };
-        if (job.kind === "cache") {
-          if (!this.options.importCacheImage || !job.userId) {
-            sendJson(res, 501, { error: "unsupported", message: "This Keepr build cannot store images." });
-            return;
-          }
-          if (!job.isActive) {
-            sendJson(res, 410, { error: "job_over", message: "This Sync is over." });
-            return;
-          }
-          result = await this.options.importCacheImage(image, job.userId, rcsChatHash(imageNumbers), imageNumbers, job.jobId);
-          if (!result.stored && result.reason === "not_a_contact") {
-            // Counted and reported, never silent (BACKLOG-3658): the page lists
-            // it as "images not imported".
-            job.progress.imagesSkipped += 1;
-            this.emitJob(job.snapshot());
-            sendJson(res, 422, { error: "not_a_contact", message: RCS_IMAGE_NOT_A_CONTACT_MESSAGE });
-            return;
-          }
-        } else {
-          if (!this.options.importImage) return;
-          result = await this.options.importImage(image, job.transactionId, rcsChatHash(imageNumbers));
+        if (!this.options.importCacheImage || !job.userId) {
+          sendJson(res, 501, { error: "unsupported", message: "This Keepr build cannot store images." });
+          return;
+        }
+        if (!job.isActive) {
+          sendJson(res, 410, { error: "job_over", message: "This Sync is over." });
+          return;
+        }
+        const result: RcsImageResult | { stored: false; reason: "not_a_contact" } =
+          await this.options.importCacheImage(image, job.userId, rcsChatHash(imageNumbers), imageNumbers, job.jobId);
+        if (!result.stored && result.reason === "not_a_contact") {
+          // Counted and reported, never silent (BACKLOG-3658): the page lists
+          // it as "images not imported".
+          job.progress.imagesSkipped += 1;
+          this.emitJob(job.snapshot());
+          sendJson(res, 422, { error: "not_a_contact", message: RCS_IMAGE_NOT_A_CONTACT_MESSAGE });
+          return;
         }
         if (!result.stored) {
           const status = result.reason === "too_large" ? 413 : result.reason === "message_not_found" ? 409 : 400;

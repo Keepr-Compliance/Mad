@@ -16,7 +16,7 @@ import {
   RCS_EXTENSION_ORIGIN,
   RcsExtensionBridge,
 } from "../rcsExtensionBridge";
-import { RcsJobRegistry, type RcsJobContact, type RcsJobSnapshot } from "../rcsImportJob";
+import { RcsJobRegistry, type RcsJobSnapshot } from "../rcsImportJob";
 import type { RcsImageResult, RcsIncomingImage } from "../rcsImportMedia";
 import type { RcsImportResult, RcsIncomingChat } from "../rcsImportStore";
 
@@ -61,15 +61,17 @@ const CHAT: RcsIncomingChat = {
 // BACKLOG-3630: the page sends the chat's Details rows with every chat.
 const CHAT_JSON = JSON.stringify({ ...CHAT, participants: [{ name: "Test Contact A", number: "(555) 555-0199" }] });
 const JSON_HEADERS = { "Content-Type": "application/json" };
+/** The cache job's history floor (the only job kind since 2026-10-05). */
+const SINCE = "2026-08-01T00:00:00.000Z";
 const EXT_HEADERS = { ...JSON_HEADERS, Origin: RCS_EXTENSION_ORIGIN };
 
 describe("RcsExtensionBridge", () => {
   let bridge: RcsExtensionBridge;
   let port: number;
-  let importChat: jest.Mock<Promise<RcsImportResult>, [RcsIncomingChat, string]>;
+  let importChat: jest.Mock<Promise<RcsImportResult>, [RcsIncomingChat, string, unknown, string]>;
 
   beforeEach(async () => {
-    importChat = jest.fn(async (chat: RcsIncomingChat, _transactionId: string): Promise<RcsImportResult> => ({
+    importChat = jest.fn(async (chat: RcsIncomingChat, _userId: string, _people: unknown, _jobId: string): Promise<RcsImportResult> => ({
       received: chat.messages.length,
       stored: chat.messages.length,
       alreadyPresent: 0,
@@ -77,7 +79,7 @@ describe("RcsExtensionBridge", () => {
       reactions: 0,
       reactionsStored: 0,
     }));
-    bridge = new RcsExtensionBridge({ importChat, jobs: new RcsJobRegistry() });
+    bridge = new RcsExtensionBridge({ importCacheChat: importChat, jobs: new RcsJobRegistry() });
     expect(await bridge.start(0)).toBe("listening");
     port = bridge.getStatus().port;
     expect(port).toBeGreaterThan(0);
@@ -89,7 +91,7 @@ describe("RcsExtensionBridge", () => {
 
   /** A claimed transaction job whose chat matched: its /chat route is open. */
   async function matchedChatPath(): Promise<string> {
-    const jobId = bridge.createJob("tx-1", [{ contactId: "c-1", displayName: "Test Contact A", phonesE164: ["+15555550199"] }])!.jobId;
+    const jobId = bridge.createCacheJob("user-1", { since: SINCE })!.jobId;
     expect((await request(port, "POST", `/job/${jobId}/claim`, EXT_HEADERS)).status).toBe(200);
     await request(port, "POST", `/job/${jobId}/match`, EXT_HEADERS, JSON.stringify({ conversationId: CHAT.conversationId, numbers: ["(555) 555-0199"] }));
     return `/job/${jobId}/chat`;
@@ -220,7 +222,7 @@ describe("RcsExtensionBridge", () => {
     });
 
     it("pausing cancels the running Sync job", async () => {
-      const job = bridge.createJob("tx-1", [{ contactId: "c-1", displayName: "Test Contact A", phonesE164: ["+15555550199"] }])!;
+      const job = bridge.createCacheJob("user-1", { since: SINCE })!;
       await bridge.pauseWrites();
       expect(bridge.getJob()?.state).toBe("cancelled");
       expect(bridge.writesArePaused).toBe(true);
@@ -235,7 +237,7 @@ describe("RcsExtensionBridge", () => {
   describe("POST /focus (Open Keepr)", () => {
     it("asks Keepr to come forward; refused without the pinned Origin, or by GET", async () => {
       const focus = jest.fn();
-      const own = new RcsExtensionBridge({ importChat, onFocusRequested: focus });
+      const own = new RcsExtensionBridge({ importCacheChat: importChat, onFocusRequested: focus });
       expect(await own.start(0)).toBe("listening");
       try {
         const p = own.getStatus().port;
@@ -255,7 +257,7 @@ describe("RcsExtensionBridge", () => {
     it("at most one per 2 s: more → 429, Keepr not raised again", async () => {
       const focus = jest.fn();
       let clock = 10_000;
-      const own = new RcsExtensionBridge({ importChat, onFocusRequested: focus, now: () => clock });
+      const own = new RcsExtensionBridge({ importCacheChat: importChat, onFocusRequested: focus, now: () => clock });
       expect(await own.start(0)).toBe("listening");
       try {
         const p = own.getStatus().port;
@@ -282,7 +284,7 @@ describe("RcsExtensionBridge", () => {
   describe("POST /hello (BACKLOG-3658)", () => {
     it("/hello passes a capped version / paired to Keepr and sends nothing back", async () => {
       const hellos: unknown[] = [];
-      const own = new RcsExtensionBridge({ importChat, onHello: (h) => void hellos.push(h) });
+      const own = new RcsExtensionBridge({ importCacheChat: importChat, onHello: (h) => void hellos.push(h) });
       expect(await own.start(0)).toBe("listening");
       try {
         const p = own.getStatus().port;
@@ -306,7 +308,7 @@ describe("RcsExtensionBridge", () => {
   });
 
   it("a port already in use leaves the bridge unavailable without throwing", async () => {
-    const second = new RcsExtensionBridge({ importChat });
+    const second = new RcsExtensionBridge({ importCacheChat: importChat });
     expect(await second.start(port)).toBe("unavailable");
     expect(second.getStatus()).toMatchObject({ bridge: "unavailable", reason: `Port ${port} is already in use` });
     await second.stop();
@@ -317,24 +319,21 @@ describe("RcsExtensionBridge", () => {
 });
 
 // ---------------------------------------------------------------------------
-// BACKLOG-3620 — Sync jobs. Controls 1, 3, 4 and 8.
+// BACKLOG-3620 — Sync jobs (now cache jobs only). Controls 1, 3, 4 and 8.
 // ---------------------------------------------------------------------------
 
-const JOB_CONTACTS: RcsJobContact[] = [
-  { contactId: "c-1", displayName: "Test Contact A", phonesE164: ["+15555550199"] },
-];
 const EXT = { ...JSON_HEADERS, Origin: RCS_EXTENSION_ORIGIN };
 
 describe("RcsExtensionBridge sync jobs", () => {
   let bridge: RcsExtensionBridge;
   let port: number;
-  let importChat: jest.Mock<Promise<RcsImportResult>, [RcsIncomingChat, string]>;
-  let importImage: jest.Mock<Promise<RcsImageResult>, [RcsIncomingImage, string]>;
+  let importChat: jest.Mock<Promise<RcsImportResult>, [RcsIncomingChat, string, unknown, string]>;
+  let importImage: jest.Mock<Promise<RcsImageResult>, [RcsIncomingImage, string, string, string[], string]>;
   let finished: RcsJobSnapshot[];
   let jobId: string;
 
   beforeEach(async () => {
-    importChat = jest.fn(async (chat: RcsIncomingChat, _transactionId: string): Promise<RcsImportResult> => ({
+    importChat = jest.fn(async (chat: RcsIncomingChat, _userId: string, _people: unknown, _jobId: string): Promise<RcsImportResult> => ({
       received: chat.messages.length,
       stored: chat.messages.length,
       alreadyPresent: 0,
@@ -342,19 +341,20 @@ describe("RcsExtensionBridge sync jobs", () => {
       reactions: 0,
       reactionsStored: 0,
     }));
-    importImage = jest.fn(async (_image: RcsIncomingImage, _transactionId: string): Promise<RcsImageResult> => ({
+    importImage = jest.fn(async (_image: RcsIncomingImage, _userId: string, _hash: string, _numbers: string[], _jobId: string): Promise<RcsImageResult> => ({
       stored: true, alreadyPresent: false, filename: "gmweb-1-0.png", bytes: 3,
     }));
     finished = [];
     bridge = new RcsExtensionBridge({
-      importChat,
-      importImage,
+      importCacheChat: importChat,
+      importCacheImage: importImage,
       onJobFinished: (j) => finished.push(j),
       jobs: new RcsJobRegistry(),
+      finishSaveWaitMs: 0,
     });
     expect(await bridge.start(0)).toBe("listening");
     port = bridge.getStatus().port;
-    jobId = bridge.createJob("tx-job", JOB_CONTACTS)!.jobId;
+    jobId = bridge.createCacheJob("user-1", { since: SINCE })!.jobId;
   });
 
   afterEach(async () => {
@@ -369,46 +369,35 @@ describe("RcsExtensionBridge sync jobs", () => {
     }));
   }
 
-  describe("control 1: only a phone-matched chat is imported", () => {
-    it("a non-matching number matches no contact, and its chat is refused with 403", async () => {
-      const match = await claimAndMatch(["(555) 555-0198"]);
-      expect(match.status).toBe(200);
-      expect(match.body).toEqual({ matched: false, contactIds: [] });
+  // Founder (2026-10-05): no contact gate any more — every chat with a
+  // number is kept; a chat this job's /match never saw is still refused.
+  describe("control 1: only a chat this job checked is imported", () => {
+    it("a chat (or its image) the job never /match'ed is refused with 403", async () => {
+      expect((await request(port, "POST", `/job/${jobId}/claim`, EXT)).status).toBe(200);
       const chat = await request(port, "POST", `/job/${jobId}/chat`, EXT, CHAT_JSON);
       expect(chat.status).toBe(403);
       expect(chat.body.error).toBe("not_matched");
-      expect(importChat).not.toHaveBeenCalled();
-    });
-
-    it("an image for an unmatched chat is refused with 403", async () => {
-      await claimAndMatch(["(555) 555-0198"]);
       const reply = await request(port, "POST", `/job/${jobId}/attachment`, EXT, JSON.stringify({
         conversationId: CHAT.conversationId, msgId: "1", index: 0, mimeType: "image/png", base64: "AAAA",
       }));
       expect(reply.status).toBe(403);
+      expect(importChat).not.toHaveBeenCalled();
       expect(importImage).not.toHaveBeenCalled();
     });
 
-    it("a matching number lets the chat through, into the JOB's transaction", async () => {
+    it("a checked chat goes through, for the job's user", async () => {
       const match = await claimAndMatch(["(555) 555-0199"]);
-      expect(match.body).toEqual({ matched: true, contactIds: ["c-1"] });
+      expect(match.body).toMatchObject({ matched: true, contactIds: [] });
       const chat = await request(port, "POST", `/job/${jobId}/chat`, EXT, CHAT_JSON);
       expect(chat.status).toBe(200);
       expect(importChat).toHaveBeenCalledTimes(1);
-      expect(importChat.mock.calls[0][1]).toBe("tx-job");
+      expect(importChat.mock.calls[0][1]).toBe("user-1");
       expect(bridge.getJob()?.progress).toMatchObject({ imported: 1, messages: 2, matched: 1 });
     });
 
-    it("claim returns names only, never the contacts' numbers", async () => {
+    it("claim: no names, no numbers", async () => {
       const claim = await request(port, "POST", `/job/${jobId}/claim`, EXT);
-      expect(claim.body).toEqual({ jobId, contacts: [{ contactId: "c-1", displayName: "Test Contact A" }], startDate: null, contactsWithoutPhoneCount: 0 });
-    });
-
-    it("claim carries the transaction's start date when the job has one", async () => {
-      bridge.cancelJob(jobId); // one Sync at a time (BACKLOG-3661)
-      jobId = bridge.createJob("tx-job", JOB_CONTACTS, { startDate: "2026-03-01" })!.jobId;
-      const claim = await request(port, "POST", `/job/${jobId}/claim`, EXT);
-      expect(claim.body).toMatchObject({ jobId, startDate: "2026-03-01" });
+      expect(claim.body).toEqual({ jobId, kind: "cache", startDate: SINCE, since: SINCE });
     });
   });
 
@@ -498,15 +487,16 @@ describe("RcsExtensionBridge sync jobs", () => {
     it("stores the named entries (capped at 20, the rest counted) and logs the count only", async () => {
       const logged: string[] = [];
       const own = new RcsExtensionBridge({
-        importChat,
+        importCacheChat: importChat,
         onJobFinished: (j) => finished.push(j),
         jobs: new RcsJobRegistry(),
+        finishSaveWaitMs: 0,
         logger: { info: (m) => logged.push(m), warn: (m) => logged.push(m), error: (m) => logged.push(m) },
       });
       expect(await own.start(0)).toBe("listening");
       try {
         const ownPort = own.getStatus().port;
-        const id = own.createJob("tx-job", JOB_CONTACTS)!.jobId;
+        const id = own.createCacheJob("user-1", { since: SINCE })!.jobId;
         expect((await request(ownPort, "POST", `/job/${id}/claim`, EXT)).status).toBe(200);
         const list = Array.from({ length: 22 }, (_, i) => ({ name: `Chat Name ${i}`, reason: "not_opened" }));
         list[1] = { name: "Chat Name 1", reason: "images_failed", count: 2 } as (typeof list)[number];
@@ -541,14 +531,15 @@ describe("RcsExtensionBridge sync jobs", () => {
     it("/finish logs the time hidden and the history loaded while hidden", async () => {
       const logged: string[] = [];
       const own = new RcsExtensionBridge({
-        importChat,
+        importCacheChat: importChat,
         jobs: new RcsJobRegistry(),
+        finishSaveWaitMs: 0,
         logger: { info: (m) => logged.push(m), warn: (m) => logged.push(m), error: (m) => logged.push(m) },
       });
       expect(await own.start(0)).toBe("listening");
       try {
         const ownPort = own.getStatus().port;
-        const id = own.createJob("tx-job", JOB_CONTACTS)!.jobId;
+        const id = own.createCacheJob("user-1", { since: SINCE })!.jobId;
         await request(ownPort, "POST", `/job/${id}/claim`, EXT);
         await request(ownPort, "POST", `/job/${id}/finish`, EXT, JSON.stringify({
           chats: 0, messages: 0, images: 0, hidden: { ms: 61_400, spells: 2, chats: 3, batches: "x<script>" },
@@ -572,10 +563,10 @@ describe("RcsExtensionBridge sync jobs", () => {
   // BACKLOG-3661. Mutation that turns this red: createJob replacing the
   // running job.
   describe("BACKLOG-3661: one Sync at a time", () => {
-    it("createJob while a job runs creates nothing (null) and leaves the running job; activeJob names it", () => {
-      expect(bridge.createJob("tx-other", JOB_CONTACTS, { label: "9 Other Street" })).toBeNull();
+    it("createCacheJob while a job runs creates nothing (null) and leaves the running job; activeJob names it", () => {
+      expect(bridge.createCacheJob("user-2", { since: SINCE })).toBeNull();
       expect(bridge.activeJob()?.jobId).toBe(jobId);
-      expect(bridge.activeJob()?.transactionId).toBe("tx-job");
+      expect(bridge.activeJob()?.kind).toBe("cache");
       expect(bridge.activeJob()?.state).toBe("created");
     });
   });
@@ -686,7 +677,6 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
     ended = [];
     imageAnswer = { stored: false, reason: "not_a_contact" };
     bridge = new RcsExtensionBridge({
-      importChat: jest.fn(),
       importCacheChat: async (chat, userId, people, forJob) => {
         cacheChats.push([chat.conversationId, userId, people]);
         reachedSeen.push(chat.reachedFloor);
@@ -729,7 +719,9 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
     expect(await bridge.start(0)).toBe("listening");
     port = bridge.getStatus().port;
     jobId = bridge.createCacheJob("user-a", { since: "2026-08-01T00:00:00.000Z" })!.jobId;
-    expect((await request(port, "POST", `/job/${jobId}/claim`, EXT)).body).toMatchObject({ kind: "cache", contacts: [] });
+    const claimed = (await request(port, "POST", `/job/${jobId}/claim`, EXT)).body;
+    expect(claimed).toMatchObject({ kind: "cache" });
+    expect(claimed).not.toHaveProperty("contacts");
   });
 
   afterEach(async () => {
@@ -954,7 +946,6 @@ describe("RcsExtensionBridge exclusions (BACKLOG-3658 P3c)", () => {
     sets = [];
     checks = [];
     bridge = new RcsExtensionBridge({
-      importChat: jest.fn(),
       importCacheChat: jest.fn(),
       currentUserId: async () => user,
       chatExcluded: (userId, hash, conversationId) => {
@@ -991,10 +982,8 @@ describe("RcsExtensionBridge exclusions (BACKLOG-3658 P3c)", () => {
     expect(sets).toEqual([["user-a", "conv-1", true]]);
   });
 
-  it.each(["cache", "transaction"] as const)("/match on a %s Sync: a switched-off chat is refused and COUNTED", async (kind) => {
-    const jobId = kind === "cache"
-      ? bridge.createCacheJob("user-a", { since: "2026-08-01T00:00:00.000Z" })!.jobId
-      : bridge.createJob("tx-1", [{ contactId: "c-1", displayName: "Test Contact A", phonesE164: ["+15555550199"] }])!.jobId;
+  it("/match: a switched-off chat is refused and COUNTED", async () => {
+    const jobId = bridge.createCacheJob("user-a", { since: "2026-08-01T00:00:00.000Z" })!.jobId;
     expect((await request(port, "POST", `/job/${jobId}/claim`, EXT)).status).toBe(200);
     const off = await request(port, "POST", `/job/${jobId}/match`, EXT, JSON.stringify({ conversationId: "conv-off", numbers: ["(555) 555-0199"] }));
     expect(off.body).toEqual({ matched: false, contactIds: [], excluded: true });

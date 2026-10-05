@@ -42,7 +42,7 @@ import {
 } from "../db/syncDbService";
 import { chatPeopleRows, getTextDerivedPeople, isNumberAsName, recordRcsChatPeople } from "../db/rcsChatPeopleDbService";
 import { createContactsBatch, getImportedContactsByUserId, getMessageDerivedContacts, searchContactsForSelection } from "../db/contactDbService";
-import { importChat, participantsJson, peopleFrom, rcsChatHash, senderNumber, storeCacheChatSync, type RcsIncomingChat } from "../rcsImportStore";
+import { participantsJson, peopleFrom, rcsChatHash, senderNumber, storeCacheChatSync, type RcsIncomingChat } from "../rcsImportStore";
 import { clearGoogleMessagesWebData, clearUnlinkedOldChats } from "../rcsClearService";
 import { shapeImportValues } from "../../utils/contactImportValues";
 import { validateContactData } from "../../utils/validation";
@@ -106,15 +106,9 @@ describe("people found in texts (BACKLOG-3670)", () => {
     expect(chatPeopleRows({ numbers: ["Test Shop", "72975"], names: [] }, "x")).toEqual([]);
   });
 
-  it("recorded by the cache commit and by a transaction Sync (P1)", async () => {
+  it("recorded by the cache commit, one row per chat person (P1)", () => {
     storeCacheChatSync(chat("conv-a", "Test Contact A"), USER, storeDeps, peopleFrom([{ name: "Test Contact A", number: NUM_A }], [NUM_A]));
-    db.prepare("INSERT INTO transactions (id, user_id, property_address) VALUES ('tx-1', ?, '1 Test Street')").run(USER);
-    await importChat(chat("conv-b", "Test Contact B"), "tx-1", {
-      ...storeDeps,
-      getTransactionUserId: async () => USER,
-      linkMessages: async () => undefined,
-      linkWithoutCount: async () => undefined,
-    }, peopleFrom([{ name: "Test Contact B", number: NUM_B }], [NUM_B]));
+    storeCacheChatSync(chat("conv-b", "Test Contact B"), USER, storeDeps, peopleFrom([{ name: "Test Contact B", number: NUM_B }], [NUM_B]));
     const people = getTextDerivedPeople(USER);
     expect(people.map((p) => [p.id, p.display_name, p.phone, p.source, p.is_message_derived])).toEqual([
       ["msg_tel_+15555550101", "Test Contact A", NUM_A, "messages", 1],

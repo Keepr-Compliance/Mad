@@ -57,13 +57,6 @@ export const rcsImportService = {
 
   // BACKLOG-3620: sync jobs
 
-  /** Start a sync job: Keepr opens Messages for Web in the browser. */
-  async startJob(transactionId: string): Promise<ApiResult<RcsJobInfo | null>> {
-    const bridge = api();
-    if (!bridge) return { success: false, error: NOT_AVAILABLE };
-    return callJob(() => bridge.startJob({ transactionId }));
-  },
-
   async cancelJob(jobId: string): Promise<ApiResult<RcsJobInfo | null>> {
     const bridge = api();
     if (!bridge) return { success: false, error: NOT_AVAILABLE };

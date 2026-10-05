@@ -2440,19 +2440,10 @@ class DatabaseService implements IDatabaseService {
     return syncDb.insertAttachment(params);
   }
 
-  // BACKLOG-3620: RCS import job
-  getRcsImportContacts(transactionId: string) {
-    return syncDb.getRcsImportContacts(transactionId);
-  }
-
   markMessageHasAttachments(messageId: string) {
     return syncDb.markMessageHasAttachments(messageId);
   }
 
-  // BACKLOG-3642: the user's removals, so an RCS import never re-links them
-  getRcsRemovals(transactionId: string, userId: string) {
-    return syncDb.getRcsRemovals(transactionId, userId);
-  }
 
   // BACKLOG-3665: a legacy chat removal moved onto the chat's gmweb2 thread
 

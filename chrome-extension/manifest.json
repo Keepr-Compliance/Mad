@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Keepr for Google Messages",
-  "version": "0.3.73",
+  "version": "0.3.74",
   "description": "Copies your Google Messages texts to the Keepr desktop app when you start a Sync in Keepr.",
   "icons": {
     "16": "icons/keepr-16.png",

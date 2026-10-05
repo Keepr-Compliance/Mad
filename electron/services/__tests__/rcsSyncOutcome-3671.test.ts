@@ -64,11 +64,9 @@ const EXT_METRICS = {
 function snap(over: Partial<RcsJobSnapshot> = {}): RcsJobSnapshot {
   return {
     jobId: "job-1",
-    transactionId: "",
     state: "running",
     stage: "",
     progress: { listed: 0, candidates: 0, checked: 0, matched: 0, imported: 0, messages: 0, images: 0, reactions: 0, skipped: 0, notChecked: 0, notText: 0, noMessagesYet: 0, removedNotRelinked: 0 } as RcsJobSnapshot["progress"],
-    contactsWithoutPhone: [],
     createdAt: "2026-10-04T10:00:00.000Z",
     kind: "cache",
     ...over,
@@ -381,9 +379,6 @@ describe("through the bridge (privacy, T12)", () => {
     const { writer, written } = fakeWriter();
     const tracker = new RcsSyncOutcomeTracker(writer, { heartbeatMs: 0, newId: () => "run-b" });
     const bridge = new RcsExtensionBridge({
-      importChat: async () => {
-        throw new Error("not used");
-      },
       jobs: new RcsJobRegistry(),
       telemetry: tracker,
       finishSaveWaitMs: 2000,

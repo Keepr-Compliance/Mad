@@ -25,10 +25,9 @@ import { dbTransaction } from "../services/db/core/dbConnection";
 import databaseService from "../services/databaseService";
 import logService from "../services/logService";
 import { RcsExtensionBridge } from "../services/rcsExtensionBridge";
-import { createCommunicationReference } from "../services/messageMatchingService";
-import type { RcsJobContact, RcsJobSnapshot } from "../services/rcsImportJob";
-import { rcsImageFilename, storeImage, type RcsMediaDeps } from "../services/rcsImportMedia";
-import { importChat, rcsChatHash, rcsExternalId, storeCacheChatSync, type RcsImportDeps } from "../services/rcsImportStore";
+import type { RcsJobSnapshot } from "../services/rcsImportJob";
+import { rcsImageFilename, type RcsMediaDeps } from "../services/rcsImportMedia";
+import { rcsChatHash, rcsExternalId, storeCacheChatSync, type RcsCacheChatDeps } from "../services/rcsImportStore";
 import {
   RcsCacheStaging,
   type CacheCommitResult,
@@ -75,7 +74,6 @@ import {
   cacheWindow,
   type CacheEndSnapshot,
   consentIsCurrent,
-  consentRefusal,
   cacheSavedFromCommit,
   consentToRecordOnSync,
   RCS_CONSENT_VERSION,
@@ -97,7 +95,6 @@ import {
   type RcsClearResult,
   type SharedForceClearResult,
 } from "../services/rcsClearService";
-import transactionService from "../services/transactionService";
 import { bringAppToFrontForLink, bringAppToFrontOrFlash } from "../utils/bringAppToFront";
 import { wrapHandler } from "../utils/wrapHandler";
 import { getMainWindow } from "../windowRegistry";
@@ -139,24 +136,10 @@ export const RCS_DATA_CHANGED_CHANNEL = "rcs-import:data-changed";
 /** SR B1: refusal while a finished cache Sync is still being saved. */
 export const RCS_SAVING_MESSAGE = "Keepr is still saving the last Sync. Try again in a moment.";
 
-const deps: RcsImportDeps = {
-  getTransactionUserId: async (transactionId) => {
-    const tx = await databaseService.getTransactionById(transactionId);
-    return tx ? tx.user_id : null;
-  },
+const deps: RcsCacheChatDeps = {
   batchInsertMessages: (rows, batchSize) => databaseService.batchInsertMessages(rows, batchSize),
   getMessageIdMap: (userId) => databaseService.getMessageIdMap(userId),
-  linkMessages: (ids, transactionId) => transactionService.linkMessages(ids, transactionId),
   insertReactionRows: (rows) => databaseService.insertReactionRows(rows),
-  // Reactions: linked like a manual attach, but message_count is left alone.
-  linkWithoutCount: async (ids, transactionId, userId) => {
-    for (const id of ids) {
-      await databaseService.linkMessageToTransaction(id, transactionId);
-      await createCommunicationReference(id, transactionId, userId, "manual", 1.0);
-    }
-  },
-  // BACKLOG-3642: never re-link what the user removed from the transaction.
-  getRemovals: (transactionId, userId) => databaseService.getRcsRemovals(transactionId, userId),
   // BACKLOG-3630: the content guard (same sent_at + direction + body).
   findContentDuplicates: (userId, rows) => databaseService.findRcsContentDuplicates(userId, rows),
   // BACKLOG-3665: a legacy chat removal moves onto the gmweb2 thread.
@@ -930,10 +913,8 @@ export const rcsSyncOutcomes = new RcsSyncOutcomeTracker({
 
 const bridge = new RcsExtensionBridge({
   telemetry: rcsSyncOutcomes,
-  // BACKLOG-3666: one auth gate before routing; "dual" for this one release
-  // (an older extension keeps /status, /focus and the eyes, never a job).
+  // BACKLOG-3666: one auth gate before routing (signatures required).
   pairing: pairingAuth,
-  importChat: (chat, transactionId, people) => importChat(chat, transactionId, deps, people),
   // P3c: chats switched off with the eye on their row ("Don't sync").
   chatExcluded: (userId, chatHash, conversationId) => databaseService.checkRcsExclusion(userId, chatHash, conversationId),
   listExclusions: (userId) => databaseService.listRcsExclusionConversationIds(userId, RCS_EXCLUSIONS_MAX),
@@ -1046,11 +1027,6 @@ const bridge = new RcsExtensionBridge({
           LOG_TAG,
         );
       });
-  },
-  importImage: async (image, transactionId, chatHash) => {
-    const userId = await deps.getTransactionUserId(transactionId);
-    if (!userId) throw new Error("Transaction not found");
-    return storeImage(image, userId, mediaDeps, chatHash);
   },
   onJobChanged: broadcastJob,
   // (A finished or failed job brings Keepr forward from onJobEnded above.)
@@ -1200,55 +1176,6 @@ export function registerRcsImportHandlers(): void {
     "rcs-import:get-status",
     wrapHandler(async (): Promise<RcsImportStatusResult> => {
       return { success: true, status: bridge.getStatus() };
-    }, { module: LOG_TAG }),
-  );
-
-  ipcMain.handle(
-    "rcs-import:start-job",
-    wrapHandler(async (_event, args: unknown): Promise<RcsImportJobResult> => {
-      const transactionId = requireString(argsObject(args).transactionId, "transactionId");
-      const tx = await databaseService.getTransactionById(transactionId);
-      if (!tx) return { success: false, error: "Transaction not found" };
-      // BACKLOG-3661: one Sync at a time — never replace a running one.
-      const running = bridge.activeJob();
-      if (running) {
-        return {
-          success: false,
-          error: `${RCS_ALREADY_SYNCING_MESSAGE}${running.label ? `: ${running.label}` : ""}. Wait for it to finish, or cancel it.`,
-        };
-      }
-      if (bridge.writesArePaused) {
-        return { success: false, error: "Keepr is clearing imported texts. Try Sync again in a moment." };
-      }
-      if (cacheSaveInFlight()) return { success: false, error: RCS_SAVING_MESSAGE };
-      // SR F2 (founder): the per-transaction Sync needs the SAME consent as the
-      // cache Sync (given once, in the Sync Android modal).
-      const consentUser = tx.user_id ?? (await currentUserId());
-      const consentBlock = consentRefusal(consentUser ? databaseService.getRcsConsent(consentUser)?.consentVersion : null);
-      if (consentBlock) return { success: false, error: consentBlock.message };
-      if (bridge.getStatus().bridge !== "listening") {
-        const s = bridge.getStatus();
-        return { success: false, error: `Import bridge unavailable${s.reason ? `: ${s.reason}` : ""}.` };
-      }
-      const contacts = groupContacts(databaseService.getRcsImportContacts(transactionId));
-      if (contacts.length === 0) {
-        return { success: false, error: "This transaction has no contacts to look for." };
-      }
-      // BACKLOG-3666: no Sync until the extension is paired with this Keepr.
-      if (tx.user_id && !pairingAuth.isPaired(tx.user_id)) return { success: false, error: NOT_PAIRED_MESSAGE };
-      // The audit start date: the page loads chat history back past it.
-      const job = bridge.createJob(transactionId, contacts, {
-        startDate: tx.started_at ?? null,
-        label: tx.property_address ?? null,
-        userId: tx.user_id ?? null,
-      });
-      if (job) rcsSyncOutcomes.created(job.jobId, "transaction");
-      if (!job) {
-        // A Sync started between the check above and here.
-        return { success: false, error: `${RCS_ALREADY_SYNCING_MESSAGE}. Wait for it to finish, or cancel it.` };
-      }
-      await shell.openExternal(`${RCS_MESSAGES_WEB_URL}#keepr-job=${job.jobId}`);
-      return { success: true, job };
     }, { module: LOG_TAG }),
   );
 
@@ -1531,18 +1458,3 @@ export function registerRcsImportHandlers(): void {
   );
 }
 
-/** One entry per contact with every E.164 number; a contact with none gets []. */
-export function groupContacts(
-  rows: { contactId: string; displayName: string; phoneE164: string | null }[],
-): RcsJobContact[] {
-  const byId = new Map<string, RcsJobContact>();
-  for (const row of rows) {
-    let c = byId.get(row.contactId);
-    if (!c) {
-      c = { contactId: row.contactId, displayName: row.displayName, phonesE164: [] };
-      byId.set(row.contactId, c);
-    }
-    if (row.phoneE164 && !c.phonesE164.includes(row.phoneE164)) c.phonesE164.push(row.phoneE164);
-  }
-  return [...byId.values()];
-}

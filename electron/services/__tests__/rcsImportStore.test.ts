@@ -11,7 +11,6 @@
 
 import {
   importCacheChat,
-  importChat,
   mapChatToReactionRows,
   mapChatToRows,
   parseIncomingChat,
@@ -31,13 +30,8 @@ import { getContactMergeKey } from "../../../src/utils/threadMergeUtils";
 function makeFakeDb(userId: string) {
   const rows: RcsInsertRow[] = [];
   const reactionRows: RcsReactionRow[] = [];
-  const links = new Set<string>();
-  // transactions.message_count, as linkMessages bumps it (+1 per NEW link).
-  const counts = { messageCount: 0 };
-  const linkCalls: string[][] = [];
-  const uncountedLinkCalls: string[][] = [];
+  void userId;
   const deps: RcsImportDeps = {
-    getTransactionUserId: async (txId) => (txId === "tx-1" ? userId : null),
     batchInsertMessages: (batch) => {
       let stored = 0;
       let skipped = 0;
@@ -60,14 +54,6 @@ function makeFakeDb(userId: string) {
       for (const r of reactionRows) if (r.userId === uid) map.set(r.externalId, r.id);
       return map;
     },
-    linkMessages: async (ids, txId) => {
-      linkCalls.push([...ids]);
-      for (const id of ids) {
-        const key = `${id}|${txId}`;
-        if (!links.has(key)) counts.messageCount += 1;
-        links.add(key);
-      }
-    },
     // Same unique index as messages: (user_id, external_id), INSERT OR IGNORE.
     insertReactionRows: (batch) => {
       let stored = 0;
@@ -84,12 +70,8 @@ function makeFakeDb(userId: string) {
       }
       return { stored, skipped };
     },
-    linkWithoutCount: async (ids, txId) => {
-      uncountedLinkCalls.push([...ids]);
-      for (const id of ids) links.add(`${id}|${txId}`);
-    },
   };
-  return { rows, reactionRows, links, counts, linkCalls, uncountedLinkCalls, deps };
+  return { rows, reactionRows, deps };
 }
 
 const CHAT: RcsIncomingChat = {
@@ -109,30 +91,29 @@ const PEOPLE: RcsChatPeople = { numbers: [NUM_A], names: [{ name: "Test Contact 
 const PEOPLE_B: RcsChatPeople = { numbers: [NUM_B], names: [{ name: "Test Contact B", number: NUM_B }] };
 const H = rcsChatHash([NUM_A]);
 
-describe("importChat", () => {
-  it("stores every message once and attaches all of them to the transaction", async () => {
+// Founder (2026-10-05): the per-transaction Sync (importChat: link to a
+// transaction, honour its removals) was removed; a chat is stored by the
+// cache path only (importCacheChat), linked later by the phone auto-link.
+describe("storing a chat (importCacheChat)", () => {
+  it("stores every message once and links nothing", async () => {
     const db = makeFakeDb("user-1");
-    const result = await importChat(CHAT, "tx-1", db.deps, PEOPLE);
-    expect(result).toEqual({ received: 3, stored: 3, alreadyPresent: 0, linked: 3, reactions: 0, reactionsStored: 0, removedByUser: 0, sameContent: 0 });
+    const result = await importCacheChat(CHAT, "user-1", db.deps, PEOPLE);
+    expect(result).toEqual({ received: 3, stored: 3, alreadyPresent: 0, linked: 0, reactions: 0, reactionsStored: 0, removedByUser: 0, sameContent: 0 });
     expect(db.rows).toHaveLength(3);
-    expect(db.links.size).toBe(3);
   });
 
-  it("re-sending the same chat inserts nothing and links the ORIGINAL rows (msg-id dedup)", async () => {
+  it("re-sending the same chat inserts nothing (msg-id dedup)", async () => {
     const db = makeFakeDb("user-1");
-    await importChat(CHAT, "tx-1", db.deps, PEOPLE);
+    await importCacheChat(CHAT, "user-1", db.deps, PEOPLE);
     const firstIds = db.rows.map((r) => r.id).sort();
-
-    const again = await importChat(CHAT, "tx-1", db.deps, PEOPLE);
-    expect(again).toEqual({ received: 3, stored: 0, alreadyPresent: 3, linked: 3, reactions: 0, reactionsStored: 0, removedByUser: 0, sameContent: 0 });
-    expect(db.rows).toHaveLength(3);
+    const again = await importCacheChat(CHAT, "user-1", db.deps, PEOPLE);
+    expect(again).toMatchObject({ received: 3, stored: 0, alreadyPresent: 3 });
     expect(db.rows.map((r) => r.id).sort()).toEqual(firstIds);
-    expect(db.links.size).toBe(3);
   });
 
   it("a chat that grew since the last send adds only the new message", async () => {
     const db = makeFakeDb("user-1");
-    await importChat(CHAT, "tx-1", db.deps, PEOPLE);
+    await importCacheChat(CHAT, "user-1", db.deps, PEOPLE);
     const grown: RcsIncomingChat = {
       ...CHAT,
       messages: [
@@ -140,7 +121,7 @@ describe("importChat", () => {
         { msgId: "m-4", direction: "outbound", sender: "me", text: "four", sentAt: "2026-09-20T13:08:00.000Z", transport: "rcs" },
       ],
     };
-    const result = await importChat(grown, "tx-1", db.deps, PEOPLE);
+    const result = await importCacheChat(grown, "user-1", db.deps, PEOPLE);
     expect(result.stored).toBe(1);
     expect(db.rows.map((r) => r.externalId).sort()).toEqual([
       `gmweb2:${H}:m-1`,
@@ -152,37 +133,23 @@ describe("importChat", () => {
 
   it("the same msg-id in a chat with DIFFERENT participants is a different message", async () => {
     const db = makeFakeDb("user-1");
-    await importChat(CHAT, "tx-1", db.deps, PEOPLE);
+    await importCacheChat(CHAT, "user-1", db.deps, PEOPLE);
     const other: RcsIncomingChat = { ...CHAT, conversationId: "bbbbbbbbbbbbbbbbbbb", title: "Test Contact B" };
-    const result = await importChat(other, "tx-1", db.deps, PEOPLE_B);
+    const result = await importCacheChat(other, "user-1", db.deps, PEOPLE_B);
     expect(result.stored).toBe(3);
     expect(db.rows).toHaveLength(6);
   });
 
   // BACKLOG-3630. Mutation: put the URL conversation id back into the key → red.
-  it("a re-pair (NEW conversation id, same participants) stores nothing new and links the original rows", async () => {
+  it("a re-pair (NEW conversation id, same participants) stores nothing new", async () => {
     const db = makeFakeDb("user-1");
-    await importChat(CHAT, "tx-1", db.deps, PEOPLE);
+    await importCacheChat(CHAT, "user-1", db.deps, PEOPLE);
     const firstIds = db.rows.map((r) => r.id).sort();
     const repaired: RcsIncomingChat = { ...CHAT, conversationId: "CgiRepairedConversation" };
-    const result = await importChat(repaired, "tx-1", db.deps, PEOPLE);
+    const result = await importCacheChat(repaired, "user-1", db.deps, PEOPLE);
     expect(result.stored).toBe(0);
     expect(db.rows.map((r) => r.id).sort()).toEqual(firstIds);
     expect(new Set(db.rows.map((r) => r.threadId))).toEqual(new Set([`gmweb2-${H}`]));
-  });
-
-  it("a chat with no phone number is refused, nothing written", async () => {
-    const db = makeFakeDb("user-1");
-    await expect(importChat(CHAT, "tx-1", db.deps, { numbers: [], names: [] })).rejects.toThrow(
-      "Open the chat's Details: no phone number found",
-    );
-    expect(db.rows).toHaveLength(0);
-  });
-
-  it("refuses an unknown transaction without writing", async () => {
-    const db = makeFakeDb("user-1");
-    await expect(importChat(CHAT, "tx-missing", db.deps, PEOPLE)).rejects.toThrow("Transaction not found");
-    expect(db.rows).toHaveLength(0);
   });
 });
 
@@ -277,26 +244,13 @@ describe("reactions (controls 6 and 7)", () => {
     expect(reactions[0].sentAt).toBe("2026-09-21T10:00:00.000Z");
   });
 
-  it("control 6: reactions are linked but never counted in message_count", async () => {
-    const db = makeFakeDb("user-1");
-    const result = await importChat(RICH, "tx-1", db.deps, PEOPLE);
-    expect(result).toMatchObject({ received: 3, stored: 3, linked: 3, reactions: 3, reactionsStored: 3 });
-    // N messages -> +N, whatever R is
-    expect(db.counts.messageCount).toBe(3);
-    const reactionIds = new Set(db.reactionRows.map((r) => r.id));
-    expect(db.linkCalls.flat().filter((id) => reactionIds.has(id))).toEqual([]);
-    expect(new Set(db.uncountedLinkCalls.flat())).toEqual(reactionIds);
-    // every row, reaction or not, is attached to the transaction
-    expect(db.links.size).toBe(6);
-  });
-
   it("re-sending a chat with reactions adds no reaction rows", async () => {
     const db = makeFakeDb("user-1");
-    await importChat(RICH, "tx-1", db.deps, PEOPLE);
-    const again = await importChat(RICH, "tx-1", db.deps, PEOPLE);
+    const first = await importCacheChat(RICH, "user-1", db.deps, PEOPLE);
+    expect(first).toMatchObject({ received: 3, stored: 3, reactions: 3, reactionsStored: 3 });
+    const again = await importCacheChat(RICH, "user-1", db.deps, PEOPLE);
     expect(again.reactionsStored).toBe(0);
     expect(db.reactionRows).toHaveLength(3);
-    expect(db.counts.messageCount).toBe(3);
   });
 });
 
@@ -330,61 +284,6 @@ describe("image-only and file-only messages", () => {
 //
 // Mutations that turn these red: drop the thread-id check; drop the legacy
 // check; drop the per-message check; link reactions of a removed chat.
-// ---------------------------------------------------------------------------
-describe("importChat respects the user's removals (BACKLOG-3642, 3630)", () => {
-  const noRemovals = { threadIds: new Set<string>(), messageIds: new Set<string>() };
-
-  function withRemovals(db: ReturnType<typeof makeFakeDb>, removals: Partial<typeof noRemovals>) {
-    db.deps.getRemovals = () => ({ ...noRemovals, ...removals });
-    return db;
-  }
-
-  const REACTED: RcsIncomingChat = {
-    ...CHAT,
-    messages: [{ ...CHAT.messages[0], reactions: [{ emoji: "😡", reactor: "Test Contact A", word: "angry" }] }],
-  };
-
-  it("a removed chat: stored, not linked, counted as removed by you — reactions too", async () => {
-    const db = withRemovals(makeFakeDb("user-1"), { threadIds: new Set([`gmweb2-${H}`]) });
-    const result = await importChat(REACTED, "tx-1", db.deps, PEOPLE);
-    expect(db.rows).toHaveLength(1);
-    expect(db.reactionRows).toHaveLength(1);
-    expect(db.linkCalls).toEqual([]);
-    expect(db.uncountedLinkCalls).toEqual([]);
-    expect(db.links.size).toBe(0);
-    expect(result).toMatchObject({ stored: 1, linked: 0, removedByUser: 1 });
-  });
-
-  it("the removal survives a re-pair: a NEW conversation id with the same numbers is still not linked", async () => {
-    const db = withRemovals(makeFakeDb("user-1"), { threadIds: new Set([`gmweb2-${H}`]) });
-    const repaired: RcsIncomingChat = { ...CHAT, conversationId: "CgiRepairedConversation" };
-    const result = await importChat(repaired, "tx-1", db.deps, PEOPLE);
-    expect(db.links.size).toBe(0);
-    expect(result).toMatchObject({ linked: 0, removedByUser: 3 });
-  });
-
-  it("a legacy removal (gmweb-chat-<conversation id>) is honoured", async () => {
-    const db = withRemovals(makeFakeDb("user-1"), { threadIds: new Set(["gmweb-chat-aaaaaaaaaaaaaaaaaaa"]) });
-    expect(await importChat(CHAT, "tx-1", db.deps, PEOPLE)).toMatchObject({ linked: 0, removedByUser: 3 });
-  });
-
-  it("another chat's removal does not block this one", async () => {
-    const db = withRemovals(makeFakeDb("user-1"), { threadIds: new Set([`gmweb2-${rcsChatHash([NUM_B])}`]) });
-    expect(await importChat(CHAT, "tx-1", db.deps, PEOPLE)).toMatchObject({ linked: 3, removedByUser: 0 });
-  });
-
-  it("a single removed message (thread-less removal) is skipped, the rest are linked", async () => {
-    const db = makeFakeDb("user-1");
-    await importChat(CHAT, "tx-1", db.deps, PEOPLE);
-    const removedId = db.rows.find((r) => r.externalId.endsWith(":m-2"))?.id as string;
-    withRemovals(db, { messageIds: new Set([removedId]) });
-    db.linkCalls.length = 0;
-    const again = await importChat(CHAT, "tx-1", db.deps, PEOPLE);
-    expect(db.linkCalls).toEqual([db.rows.filter((r) => r.id !== removedId).map((r) => r.id)]);
-    expect(again).toMatchObject({ linked: 2, removedByUser: 1 });
-  });
-});
-
 // ---------------------------------------------------------------------------
 // BACKLOG-3630 — the key, participants and the content guard.
 // ---------------------------------------------------------------------------
@@ -454,28 +353,27 @@ describe("group chats (BACKLOG-3630)", () => {
 
 describe("the content guard (BACKLOG-3630)", () => {
   // Mutation: ignore findContentDuplicates (insert anyway) → red.
-  it("a message already stored under another gmweb2 key is not stored again; the existing row is linked", async () => {
+  it("a message already stored under another gmweb2 key is not stored again", async () => {
     const db = makeFakeDb("user-1");
     db.deps.findContentDuplicates = (_uid, rows) => {
       const m = new Map<string, string>();
       for (const r of rows) if (r.bodyText === "two") m.set(r.externalId, "existing-row-id");
       return m;
     };
-    const result = await importChat(CHAT, "tx-1", db.deps, PEOPLE);
+    const result = await importCacheChat(CHAT, "user-1", db.deps, PEOPLE);
     expect(db.rows.map((r) => r.bodyText)).toEqual(["one", "three"]);
-    expect(result).toMatchObject({ stored: 2, sameContent: 1, linked: 3 });
-    expect(db.linkCalls[0]).toContain("existing-row-id");
+    expect(result).toMatchObject({ stored: 2, sameContent: 1, alreadyPresent: 1 });
   });
 
   it("only rows that would be NEW are checked (a plain re-send is not)", async () => {
     const db = makeFakeDb("user-1");
-    await importChat(CHAT, "tx-1", db.deps, PEOPLE);
+    await importCacheChat(CHAT, "user-1", db.deps, PEOPLE);
     const asked: number[] = [];
     db.deps.findContentDuplicates = (_uid, rows) => {
       asked.push(rows.length);
       return new Map();
     };
-    await importChat(CHAT, "tx-1", db.deps, PEOPLE);
+    await importCacheChat(CHAT, "user-1", db.deps, PEOPLE);
     expect(asked).toEqual([]);
   });
 });
@@ -507,8 +405,6 @@ describe("importCacheChat (BACKLOG-3658)", () => {
     expect(result).toMatchObject({ stored: 3, linked: 0 });
     expect(db.rows.every((r) => r.userId === "user-1")).toBe(true);
     expect(db.rows.map((r) => JSON.parse(r.metadata ?? "{}").source)).toEqual(["gmweb-cache", "gmweb-cache", "gmweb-cache"]);
-    expect(db.linkCalls).toEqual([]);
-    expect(db.links.size).toBe(0);
   });
 
   it("a chat without a number is refused", async () => {
