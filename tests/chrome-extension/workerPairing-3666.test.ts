@@ -149,6 +149,21 @@ describe("the worker's link with Keepr (BACKLOG-3666, C1)", () => {
     expect(r).toMatchObject({ ok: false, status: 404, body: { error: "no_job" } }); // signed, routed, verified
   });
 
+  // SR C5: Keepr's rate limit on the link routes (429) is wait-and-ask-again,
+  // never a failed link. Mutation: 429 on /link/poll fails the link → red.
+  it("a 429 on /link/poll: the popup waits and asks again; the link completes", async () => {
+    let polls429 = 0;
+    const w = await worker((url) => {
+      if (new URL(url).pathname === "/link/poll" && polls429 < 2) {
+        polls429 += 1;
+        return Promise.resolve(new Response(JSON.stringify({ error: "rate_limited", retryAfterMs: 1000 }), { status: 429, headers: { "Content-Type": "application/json" } }));
+      }
+      return undefined;
+    });
+    await link(w);
+    expect(polls429).toBe(2);
+  });
+
   it("the key is a non-extractable CryptoKey (W4)", async () => {
     const w = await worker();
     await link(w);

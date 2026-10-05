@@ -301,7 +301,7 @@ describe("RcsExtensionBridge", () => {
     const chatPath = await matchedChatPath();
     const reply = await request(port, "POST", chatPath, EXT_HEADERS, JSON.stringify({ title: "x", messages: [] }));
     expect(reply.status).toBe(400);
-    expect(reply.body.message).toBe("conversationId is required");
+    expect(reply.body.message).toBe("Invalid chat request"); // SR C5: the zod schema
     expect(importChat).not.toHaveBeenCalled();
   });
 

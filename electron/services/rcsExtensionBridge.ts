@@ -64,6 +64,14 @@ import {
   type RcsJobProgress,
   type RcsJobSnapshot,
 } from "./rcsImportJob";
+import {
+  RcsBridgeBodySchemas,
+  RcsExclusionSetBodySchema,
+  RcsHelloBodySchema,
+  RcsLinkBodySchemas,
+  parseBridgeBody,
+  type RcsBridgeJobAction,
+} from "../schemas/rcsBridge";
 import { parseIncomingImage, RCS_ALLOWED_IMAGE_MIME, RCS_IMAGE_TYPE_REFUSED, RCS_MAX_IMAGE_BYTES, type RcsImageResult, type RcsIncomingImage } from "./rcsImportMedia";
 import { NOT_PAIRED_MESSAGE, PAIR_HEADERS, type RcsPairingAuth } from "./rcsPairingAuth";
 import { isConversationId, RCS_EXCLUSIONS_MAX } from "./rcsExclusions";
@@ -394,7 +402,7 @@ async function readJson(
  * extension backs off and retries on 429, it never fails the chat for it.
  */
 export const RCS_RATE_WINDOW_MS = 60_000;
-export const RCS_RATE_LIMITS = { attachment: 1200, job: 600, link: 60, other: 300 } as const;
+export const RCS_RATE_LIMITS = { attachment: 1200, job: 600, link: 120, other: 300 } as const;
 export type RcsRateGroup = keyof typeof RCS_RATE_LIMITS;
 
 const JOB_ROUTE = /^\/job\/([0-9a-fA-F-]{36})(?:\/(claim|match|chat|attachment|progress|finish|error|cancel))?$/;
@@ -795,7 +803,12 @@ export class RcsExtensionBridge {
       if (path === "/hello") {
         const read = await readJson(req, res, 4096);
         if (!read.ok) return;
-        const b = (read.body && typeof read.body === "object" ? read.body : {}) as Record<string, unknown>;
+        const parsedHello = parseBridgeBody(RcsHelloBodySchema, read.body);
+        if (!parsedHello) {
+          sendJson(res, 400, { error: "bad_request" });
+          return;
+        }
+        const b = parsedHello as Record<string, unknown>;
         const hello: RcsHello = {};
         if (typeof b.version === "string") hello.version = b.version.slice(0, 40);
         if (b.paired === true) hello.paired = true;
@@ -965,7 +978,12 @@ export class RcsExtensionBridge {
     };
     // C1: the reversed link (the popup's code typed in Keepr).
     if (LINK_ROUTES.has(path)) {
-      const body = json();
+      // SR C5: the link route's zod schema (400 when it does not parse).
+      const body = parseBridgeBody(RcsLinkBodySchemas[path as keyof typeof RcsLinkBodySchemas], json());
+      if (!body) {
+        sendJson(res, 400, { error: "bad_request" });
+        return "handled";
+      }
       const r = path === "/link/start" ? pairing.linkStart(body) : path === "/link/poll" ? pairing.linkPoll(body) : pairing.linkFinish(body);
       if (r.signWith) {
         const w = r.signWith;
@@ -1115,7 +1133,16 @@ export class RcsExtensionBridge {
 
     const read = await readJson(req, res, action === "attachment" ? MAX_ATTACHMENT_BODY_BYTES : MAX_BODY_BYTES);
     if (!read.ok) return;
-    const body = (read.body && typeof read.body === "object" ? read.body : {}) as Record<string, unknown>;
+    // SR C5: the route's zod schema — a body that does not parse is refused.
+    const schema = Object.prototype.hasOwnProperty.call(RcsBridgeBodySchemas, action)
+      ? RcsBridgeBodySchemas[action as RcsBridgeJobAction]
+      : null;
+    const parsed = schema ? parseBridgeBody(schema, read.body) : null;
+    if (!parsed) {
+      sendJson(res, schema ? 400 : 404, schema ? { error: "bad_request", message: `Invalid ${action} request` } : { error: "not_found" });
+      return;
+    }
+    const body = parsed as Record<string, unknown>;
 
     switch (action) {
       case "match": {
@@ -1383,7 +1410,7 @@ export class RcsExtensionBridge {
       sendJson(res, 200, { conversationIds: this.options.listExclusions(userId).slice(0, RCS_EXCLUSIONS_MAX) });
       return;
     }
-    const b = (read.body && typeof read.body === "object" ? read.body : {}) as Record<string, unknown>;
+    const b = (parseBridgeBody(RcsExclusionSetBodySchema, read.body) ?? {}) as Record<string, unknown>;
     if (!isConversationId(b.conversationId) || typeof b.excluded !== "boolean") {
       sendJson(res, 400, { error: "bad_request", message: "conversationId and excluded are required" });
       return;

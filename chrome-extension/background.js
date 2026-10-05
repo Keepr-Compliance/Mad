@@ -254,7 +254,8 @@ async function linkPollLoop(session, sleep) {
     }
     const r = await rawPost("/link/poll", JSON.stringify({ sessionId: session.sessionId }));
     if (linkSession !== session) return;
-    if (r.status === 0) {
+    // SR C5: unreachable for a moment, or Keepr's rate limit (429): wait and ask again.
+    if (r.status === 0 || r.status === 429) {
       await sleep(LINK_POLL_MS);
       continue;
     }
