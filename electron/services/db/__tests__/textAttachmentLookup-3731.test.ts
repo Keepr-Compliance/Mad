@@ -50,6 +50,7 @@ function createSchema(db: DatabaseType): void {
   db.exec(`
     CREATE TABLE messages (
       id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL DEFAULT 'user-1', -- NOT NULL in schema.sql; BACKLOG-3733 joins on it
       thread_id TEXT,
       external_id TEXT,
       sent_at DATETIME,
@@ -80,6 +81,7 @@ function createSchema(db: DatabaseType): void {
     );
     CREATE TABLE communications (
       id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL DEFAULT 'user-1', -- NOT NULL in schema.sql; BACKLOG-3733 joins on it
       transaction_id TEXT,
       message_id TEXT,
       email_id TEXT,

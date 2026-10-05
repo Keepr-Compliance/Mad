@@ -173,7 +173,7 @@ export const GET_CHECKLIST_LINK_MEMBERS_SQL = sql`
                    SELECT 1 FROM messages msg
                    JOIN communications c3 ON (
                      (c3.message_id IS NOT NULL AND c3.message_id = msg.id)
-                     OR (c3.message_id IS NULL AND c3.thread_id IS NOT NULL AND c3.thread_id = msg.thread_id)
+                     OR (c3.message_id IS NULL AND c3.thread_id IS NOT NULL AND c3.thread_id = msg.thread_id AND msg.user_id = c3.user_id)
                    )
                    WHERE msg.id = a.message_id AND c3.transaction_id = cl.transaction_id
                  )
@@ -321,7 +321,7 @@ export function targetsInTransactionSql(kind: ChecklistLinkKind, count: number):
           SELECT 1 FROM messages m
           JOIN communications c2 ON (
             (c2.message_id IS NOT NULL AND c2.message_id = m.id)
-            OR (c2.message_id IS NULL AND c2.thread_id IS NOT NULL AND c2.thread_id = m.thread_id)
+            OR (c2.message_id IS NULL AND c2.thread_id IS NOT NULL AND c2.thread_id = m.thread_id AND m.user_id = c2.user_id)
           )
           WHERE c2.transaction_id = ?
             AND (
