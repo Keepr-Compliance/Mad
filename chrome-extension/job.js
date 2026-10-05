@@ -835,7 +835,13 @@
           ms: Math.max(0, readingEnd - tm.readingAt), chatsRead: totals.chats, chatsSkipped: progress.skipped,
           chatsFailed: tm.chatsFailed, chatsAlreadySaved: totals.alreadySaved, messagesRead: totals.messages,
           photosRead: media.photos.seen, bytesRead: tm.bytesRead,
-          perChatP50Ms: stats.perChatP50Ms, perChatP90Ms: stats.perChatP90Ms, perChatSlowestMs: stats.perChatSlowestMs, perChatCount: stats.perChatCount,
+          perChatP50Ms: stats.perChatP50Ms, perChatP90Ms: stats.perChatP90Ms, perChatSlowestMs: stats.perChatSlowestMs,
+          // Live (0.3.57): chats_read 5 vs a count of 15 read as a contradiction.
+          // chatsRead = chats whose messages were SENT to Keepr this run (≥ 1
+          // message); chatsOpened = chats the run opened and finished with
+          // (read, no messages, skipped, failed or already saved) — the
+          // per-chat times are over these. chatsOpened ≥ chatsRead.
+          chatsOpened: stats.perChatCount,
         },
         hidden: hiddenSoFar ? { ms: hiddenSoFar.ms, spells: hiddenSoFar.spells } : undefined,
         chromeVersion: chromeVersion || undefined,
@@ -1704,9 +1710,12 @@
   var GUIDE_TITLE = "Link with Keepr";
   /** SR (D02 storyboard): the card's heading; the button says Link with Keepr. */
   var GUIDE_HEADING = "Link this browser";
-  /** The guide card's place: top-right, under the toolbar (the mockup). */
+  /**
+   * Founder (live 0.3.57): the guide card opens at the TOP CENTRE (top 16px)
+   * — never pinned top-right over Google's account / menu buttons — and is
+   * draggable anywhere by its brand mark; its place is remembered.
+   */
   var GUIDE_TOP = 16;
-  var GUIDE_RIGHT = 24;
   /** C3: an unanswered "Stop the sync?" closes itself after this long (the sync never pauses). */
   var STOP_CONFIRM_AUTO_CLOSE_MS = 10000;
   /** C5 (founder): a real failure of a cache Sync — "Sync failed · Try again". */
@@ -2108,7 +2117,10 @@
       // SR (D02 storyboard): 320 wide, padding 16, gap 12, radius 16.
       Object.assign(box.style, { width: "320px", padding: "16px", gap: "12px", borderRadius: "16px", boxShadow: p.guideShadow });
       var row = el("div", "header", { display: "flex", alignItems: "center", gap: "10px" });
-      var mark = el("div", "guide-mark", { flex: "0 0 30px", width: "30px", height: "30px" });
+      // The brand mark is the drag handle, as on every other card.
+      var mark = el("div", "drag-handle", { flex: "0 0 30px", width: "30px", height: "30px", cursor: "grab", touchAction: "none", userSelect: "none" });
+      mark.setAttribute("data-keepr-guide-mark", "1");
+      mark.title = "Keepr — drag to move";
       mark.appendChild(brandMark(doc, 30));
       row.appendChild(mark);
       row.appendChild(el("div", "line", { flex: "1 1 auto", fontSize: "15px", fontWeight: "700", color: p.text }, GUIDE_HEADING));
@@ -2445,9 +2457,22 @@
     return { topFrac: Math.min(1, Math.max(0, raw.topFrac)) };
   }
 
-  /** The not-linked guide's place: top-right, under Chrome's toolbar. */
+  /** The not-linked guide's default place: top centre, 16px down. */
   function guidePosition(width, viewWidth) {
-    return { left: Math.round(Math.max(0, viewWidth - width - GUIDE_RIGHT)), top: GUIDE_TOP };
+    return { left: Math.round(Math.max(0, (viewWidth - width) / 2)), top: GUIDE_TOP };
+  }
+
+  /**
+   * The guide card's remembered place, read back from storage, is UNTRUSTED:
+   * only {left, top} finite numbers, clamped to 0..20000 (then kept inside
+   * the view when placed).
+   */
+  function sanitizeFreePosition(raw) {
+    if (!raw || typeof raw !== "object") return null;
+    var ok = function (v) { return typeof v === "number" && isFinite(v); };
+    if (!ok(raw.left) || !ok(raw.top)) return null;
+    var c = function (v) { return Math.round(Math.min(20000, Math.max(0, v))); };
+    return { left: c(raw.left), top: c(raw.top) };
   }
 
   /** The band fraction of a top position (what is remembered). */
@@ -2507,7 +2532,13 @@
       box.style.bottom = "auto";
       return p;
     }
+    /** The guide card: dragged anywhere (clamped to the view), not along the edge. */
+    function free() {
+      return !!(io.free && io.free());
+    }
+    var mode = null;
     function settle(pos) {
+      if (free()) return place(clampPosition(pos, io.size(), io.view()));
       if (edge) {
         // C3: up and down the right edge only, inside the safe band.
         frac = tabFraction(pos.top, io.size(), io.view());
@@ -2557,6 +2588,10 @@
         if (io.onTap) io.onTap();
         return;
       }
+      if (free()) {
+        if (io.saveFree) io.saveFree(current());
+        return;
+      }
       io.save(edge ? { topFrac: frac } : current());
     }
     grip.addEventListener("pointerup", end);
@@ -2565,6 +2600,12 @@
     return {
       /** Keyboard alternative: the next corner, clockwise from top-right. */
       moveToNextCorner: function () {
+        if (free()) {
+          corner = nextCorner(corner);
+          var at = place(cornerPosition(corner, io.size(), io.view()));
+          if (io.saveFree) io.saveFree(at);
+          return corner;
+        }
         if (edge) {
           // C3: the keyboard moves it along the edge: top, middle, bottom.
           frac = frac < 0.25 ? 0.5 : frac < 0.75 ? 1 : 0;
@@ -2585,11 +2626,17 @@
       },
       /** After a resize (or a taller / wider box): back to its place. */
       keepOnScreen: function () {
-        var pinned = io.pin ? io.pin() : null;
-        if (pinned) {
-          place(pinned);
+        if (free()) {
+          // Entering the guide: its remembered place, else its default (top
+          // centre); while it shows: kept where it is, inside the view.
+          if (mode !== "free") {
+            mode = "free";
+            var at = (io.loadFree && io.loadFree()) || (io.freeDefault ? io.freeDefault() : current());
+            place(clampPosition(at, io.size(), io.view()));
+          } else settle(current());
           return;
         }
+        mode = "edge";
         if (edge) place(tabPosition(frac, io.size(), io.view(), io.rightGap ? io.rightGap() : RIGHT_GAP));
         else if (box.style.left) settle(current());
       },
@@ -2659,6 +2706,7 @@
     FAILURE_LINES: FAILURE_LINES,
     failureLine: failureLine,
     guidePosition: guidePosition,
+    sanitizeFreePosition: sanitizeFreePosition,
     GUIDE_TITLE: GUIDE_TITLE,
     GUIDE_HEADING: GUIDE_HEADING,
     transportKind: transportKind,
@@ -2807,6 +2855,15 @@
       }
     });
   })();
+  /** The guide card's own remembered place (chrome.storage.local). */
+  var GUIDE_POSITION_KEY = "keepr-guide-pos";
+  var guideSaved = null;
+  try {
+    chrome.storage.local.get(GUIDE_POSITION_KEY, function (got) {
+      void chrome.runtime.lastError;
+      guideSaved = sanitizeFreePosition(got && got[GUIDE_POSITION_KEY]);
+    });
+  } catch (_e) { /* none */ }
   // The idle tab's open state; the last thing shown, to redraw it.
   var idleExpanded = false;
   /** SR: the "Stop the sync?" confirm, kept across re-renders until answered or the job ends. */
@@ -2830,10 +2887,19 @@
         rightEdge: true,
         // The mockup: the idle K tab sits flush with the edge; the open box a little in.
         rightGap: function () { return box && box.getAttribute("data-keepr-state") === "idle" && !idleExpanded ? 0 : RIGHT_GAP; },
-        // The not-linked guide sits top-right under the toolbar (BoxNotLinked).
-        pin: function () {
-          if (!box || box.getAttribute("data-keepr-state") !== "not_linked") return null;
-          return guidePosition(box.getBoundingClientRect().width || 300, root.innerWidth);
+        // The not-linked guide: top centre by default, dragged anywhere, its
+        // own place remembered (founder, live 0.3.57: never pinned).
+        free: function () { return !!box && box.getAttribute("data-keepr-state") === "not_linked"; },
+        freeDefault: function () { return guidePosition(box.getBoundingClientRect().width || 320, root.innerWidth); },
+        loadFree: function () { return guideSaved; },
+        saveFree: function (pos) {
+          guideSaved = sanitizeFreePosition(pos);
+          if (!guideSaved) return;
+          try {
+            var item = {};
+            item[GUIDE_POSITION_KEY] = guideSaved;
+            void chrome.storage.local.set(item);
+          } catch (_e) { /* not kept: fine */ }
         },
         onTap: function () {
           if (lastShown && lastShown.extras && lastShown.extras.idle) {

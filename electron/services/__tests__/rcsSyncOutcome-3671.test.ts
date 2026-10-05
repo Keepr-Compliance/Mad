@@ -55,7 +55,7 @@ const EXT_METRICS = {
   finding: { ms: 4200, chatsFound: 180, chatsInRange: 40, chatsSkippedHidden: 3, chatsSkippedDisabled: 2 },
   reading: {
     ms: 61_000, chatsRead: 35, chatsSkipped: 3, chatsFailed: 2, chatsAlreadySaved: 0, messagesRead: 900, photosRead: 12, bytesRead: 3_500_000,
-    perChatP50Ms: 1200, perChatP90Ms: 4800, perChatSlowestMs: 9000, perChatCount: 40,
+    perChatP50Ms: 1200, perChatP90Ms: 4800, perChatSlowestMs: 9000, chatsOpened: 40,
   },
   hidden: { ms: 5000, spells: 1 },
   chromeVersion: "141.0.7390.55",
@@ -94,7 +94,7 @@ describe("buildRcsSourceMetrics (the only writer of source_metrics)", () => {
       finding: { ms: 4200, chats_found: 180, chats_in_range: 40, chats_skipped_hidden: 3, chats_skipped_disabled: 2 },
       reading: {
         ms: 61_000, chats_read: 35, chats_skipped: 3, chats_failed: 2, chats_already_saved: 0, messages_read: 900, photos_read: 12,
-        bytes_read: 3_500_000, per_chat_p50_ms: 1200, per_chat_p90_ms: 4800, per_chat_slowest_ms: 9000, per_chat_count: 40,
+        bytes_read: 3_500_000, per_chat_p50_ms: 1200, per_chat_p90_ms: 4800, per_chat_slowest_ms: 9000, chats_opened: 40,
       },
       saving: { ms: 900, messages_saved: 880, messages_new: 300, photos_saved: 12, bytes_saved: 3_400_000 },
       end: { outcome: "complete", total_ms: 70_000, hidden_ms: 5000, hidden_spells: 1 },

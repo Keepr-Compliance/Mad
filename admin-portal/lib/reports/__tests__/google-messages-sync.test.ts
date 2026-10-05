@@ -91,6 +91,13 @@ describe('the run model', () => {
     }
   });
 
+  it('chats opened: the new name, else the first name (per_chat_count)', () => {
+    const now = buildGoogleMessagesSyncReport([row({ source_metrics: { reading: { chats_read: 5, chats_opened: 15 } } })], []).runs[0];
+    const old = buildGoogleMessagesSyncReport([row({ source_metrics: { reading: { chats_read: 5, per_chat_count: 15 } } })], []).runs[0];
+    expect([now.reading.chatsRead, now.reading.chatsOpened]).toEqual([5, 15]);
+    expect(old.reading.chatsOpened).toBe(15);
+  });
+
   it('a running row is not a result', () => {
     expect(buildGoogleMessagesSyncReport([row({ outcome: 'running' }), row({ id: 'run-2' })], []).runs.map((r) => r.id)).toEqual(['run-2']);
   });

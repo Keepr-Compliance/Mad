@@ -113,13 +113,14 @@ export function GmRunDetail({ run }: { run: GmSyncRun }) {
         <section data-stage="reading">
           <h4 className="mb-2 text-sm font-semibold text-gray-900">Reading · {msLabel(r.ms)}</h4>
           <dl className="space-y-1">
-            <Stat label="Chats read" value={countLabel(r.chatsRead)} />
+            <Stat label="Chats opened" value={countLabel(r.chatsOpened)} />
+            <Stat label="Chats with messages sent" value={countLabel(r.chatsRead)} />
             <Stat label="Skipped / failed" value={`${countLabel(r.chatsSkipped)} / ${countLabel(r.chatsFailed)}`} />
             <Stat label="Already saved" value={countLabel(r.chatsAlreadySaved)} />
             <Stat label="Messages read" value={countLabel(r.messagesRead)} />
             <Stat label="Photos read" value={`${countLabel(r.photosRead)} · ${mbLabel(r.bytesRead)}`} />
             <Stat label="Per chat p50 / p90" value={`${msLabel(r.perChatP50Ms)} / ${msLabel(r.perChatP90Ms)}`} />
-            <Stat label="Slowest chat" value={`${msLabel(r.perChatSlowestMs)} (of ${countLabel(r.perChatCount)})`} />
+            <Stat label="Slowest chat" value={`${msLabel(r.perChatSlowestMs)} (of ${countLabel(r.chatsOpened)} opened)`} />
           </dl>
         </section>
         <section data-stage="saving">

@@ -1165,7 +1165,8 @@ describe("run metrics (BACKLOG-3671 P2)", () => {
     expect(finding.ms).toBeGreaterThan(0);
     expect(finding).toMatchObject({ chatsFound: 3, chatsInRange: 3, chatsSkippedHidden: 0, chatsSkippedDisabled: 0 });
     expect(reading.ms).toBeGreaterThan(0);
-    expect(reading).toMatchObject({ chatsRead: 3, chatsSkipped: 0, chatsFailed: 0, perChatCount: 3, photosRead: 3 });
+    expect(reading).toMatchObject({ chatsRead: 3, chatsSkipped: 0, chatsFailed: 0, chatsOpened: 3, photosRead: 3 });
+    expect(reading).not.toHaveProperty("perChatCount");
     expect(reading.messagesRead).toBe(3);
     expect(reading.bytesRead).toBe(3 * 3); // "AAAA" → 3 bytes, one photo per chat
     expect(reading.perChatP50Ms).toBeGreaterThan(0);
@@ -1174,6 +1175,27 @@ describe("run metrics (BACKLOG-3671 P2)", () => {
     expect(m.chromeVersion).toBe("141.0.7390.55");
     expect(noArrays(m)).toBe(true);
     expect(JSON.stringify(m)).not.toMatch(/Example|5555550|aaaa/);
+  });
+
+  // Live (0.3.57): chats_read 5 vs a count of 15. chatsRead = chats whose
+  // messages were SENT; chatsOpened = every chat opened and finished with
+  // (the per-chat times' sample). Mutations: a chat with no messages counted
+  // as read; the timing sample not the opened chats → red.
+  it("chatsRead counts chats with messages sent; chatsOpened every chat finished with", async () => {
+    const t = cacheEnv({ rows: ROWS, numbers: { [id(0)]: ["+15555550101"], [id(1)]: ["+15555550102"], [id(2)]: ["+15555550103"] } });
+    ticking(t);
+    const extract = t.env.extract;
+    let n = 0;
+    // The second chat opened has no messages (a new group).
+    t.env.extract = ((...a: unknown[]) => {
+      const r = (extract as (...x: unknown[]) => { messages: unknown[] })(...a);
+      return n++ === 1 ? { ...r, messages: [] } : r;
+    }) as typeof t.env.extract;
+    await job.runJob(JOB, t.env);
+    const reading = (t.calls.find(([, p]) => p.endsWith("/finish"))![2] as { metrics: { reading: Record<string, number> } }).metrics.reading;
+    expect(reading.chatsOpened).toBe(3);
+    expect(reading.chatsRead).toBeLessThan(reading.chatsOpened);
+    expect(reading.chatsRead + reading.chatsSkipped).toBe(reading.chatsOpened);
   });
 
   it("a failed run's /error carries the numbers so far", async () => {

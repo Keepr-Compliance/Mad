@@ -46,7 +46,7 @@ describe("the not-linked guide card on the page", () => {
     expect(box.getAttribute("data-keepr-state")).toBe("not_linked");
     expect(box.style).toMatchObject({ width: "320px", padding: "16px", borderRadius: "16px", gap: "12px" });
     expect(box.style.boxShadow).toBe("0 8px 24px rgba(31,36,51,0.18)");
-    expect(q(box, "guide-mark").querySelector('[data-keepr="brand-mark"]')).not.toBeNull();
+    expect(q(box, "drag-handle").querySelector('[data-keepr="brand-mark"]')).not.toBeNull();
     expect(q(box, "line").textContent).toBe("Link this browser");
     const link = q(box, "link-open");
     expect(link.textContent).toBe("Link with Keepr");
@@ -55,13 +55,13 @@ describe("the not-linked guide card on the page", () => {
     expect(q(box, "progress")).toBeNull();
     expect(q(box, "guide-arrow")).toBeNull();
     expect(box.textContent).not.toContain("Click the Keepr icon");
-    // Not a drag handle: the guide stays under the toolbar.
-    expect(q(box, "drag-handle")).toBeNull();
+    // Founder (live 0.3.57): never pinned — its brand mark is the drag handle.
+    expect(box.querySelectorAll('[data-keepr="drag-handle"]')).toHaveLength(1);
     q(box, "close").click();
     expect(close).toHaveBeenCalledTimes(1);
     // Linked (or dismissed): the normal K tab.
     expect(render({ idle: { linked: true } }).getAttribute("data-keepr-state")).toBe("idle");
-    expect(job.guidePosition(320, 1280)).toEqual({ left: 936, top: 16 });
+    expect(job.guidePosition(320, 1280)).toEqual({ left: 480, top: 16 });
   });
 
   it("trusted clicks only open the link window", () => {

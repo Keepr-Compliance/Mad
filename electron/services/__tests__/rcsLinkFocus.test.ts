@@ -81,7 +81,9 @@ describe("bringAppToFrontForLink", () => {
       maximize: () => calls.push("maximize"),
       show: () => calls.push("show"),
       focus: () => calls.push("focus"),
-      setAlwaysOnTop: () => undefined,
+      setAlwaysOnTop: (on: boolean) => calls.push(`top(${String(on)})`),
+      moveTop: () => calls.push("moveTop"),
+      webContents: { focus: () => calls.push("webContents.focus") },
       flashFrame: () => undefined,
       once: () => undefined,
       get maximized() {
@@ -98,6 +100,30 @@ describe("bringAppToFrontForLink", () => {
     expect(w.calls).not.toContain("maximize");
     expect(w.maximized).toBe(false);
     expect(w.calls).toContain("focus");
+  });
+
+  const realPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+  afterEach(() => {
+    if (realPlatform) Object.defineProperty(process, "platform", realPlatform);
+  });
+
+  // Live (0.3.57, Windows): raised but typing went nowhere. The full
+  // foreground + KEYBOARD focus sequence. Mutations: no always-on-top pair;
+  // no moveTop; no webContents.focus; macOS without steal → red.
+  it("Windows: show → on-top → focus → off-top → moveTop → page focus", () => {
+    Object.defineProperty(process, "platform", { value: "win32" });
+    const w = win({ minimized: false, maximizedAfterRestore: false });
+    bringAppToFrontForLink(w as unknown as BrowserWindow);
+    expect(w.calls).toEqual(["show", "top(true)", "focus", "top(false)", "moveTop", "webContents.focus"]);
+  });
+
+  it("macOS: the app activated with steal, then window + page focus", () => {
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    mockAppFocus.mockClear();
+    const w = win({ minimized: false, maximizedAfterRestore: false });
+    bringAppToFrontForLink(w as unknown as BrowserWindow);
+    expect(mockAppFocus).toHaveBeenCalledWith({ steal: true });
+    expect(w.calls).toEqual(["show", "focus", "moveTop", "webContents.focus"]);
   });
 
   it("visible: raised as it is (its size untouched)", () => {

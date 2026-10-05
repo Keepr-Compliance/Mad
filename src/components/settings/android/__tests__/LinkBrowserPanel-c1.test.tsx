@@ -215,6 +215,38 @@ describe("LinkBrowserPanel", () => {
     expect(document.activeElement).toBe(input);
   });
 
+  // Live (0.3.57, Windows): the DOM focus ran before the window had keyboard
+  // focus. After the open-link signal the field is focused again when the
+  // WINDOW reports focus (one retry), with any value selected. Mutations: no
+  // window-focus retry; the retry kept forever; nothing selected → red.
+  it("after the open-link signal: focused again on the window's focus event (once), value selected", async () => {
+    mockLink = waiting();
+    render(<LinkBrowserPanel />);
+    await flush();
+    const input = screen.getByTestId("gm-link-code") as HTMLInputElement;
+    // Elsewhere on the page (another control takes focus, as a click would).
+    const other = document.createElement("button");
+    document.body.appendChild(other);
+    fireEvent.change(input, { target: { value: "12" } });
+    await act(async () => {
+      mockOpenLinkScreen!();
+      jest.advanceTimersByTime(1);
+    });
+    other.focus();
+    expect(document.activeElement).not.toBe(input);
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(document.activeElement).toBe(input);
+    expect([input.selectionStart, input.selectionEnd]).toEqual([0, 2]);
+    // One retry only: a later window focus leaves focus where the user put it.
+    other.focus();
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(document.activeElement).not.toBe(input);
+  });
+
   it("a refused code says why, and the field is cleared", async () => {
     mockLink = waiting();
     mockEnter.mockResolvedValueOnce({ success: false, error: "That code expired. Click Link in the extension for a new one." });

@@ -54,7 +54,8 @@ export interface GmReading extends GmStage {
   perChatP50Ms: number | null;
   perChatP90Ms: number | null;
   perChatSlowestMs: number | null;
-  perChatCount: number | null;
+  /** Chats opened and finished with (any result): the per-chat times' sample. ≥ chatsRead. */
+  chatsOpened: number | null;
 }
 export interface GmSaving extends GmStage {
   messagesSaved: number | null;
@@ -133,7 +134,8 @@ export function parseGmMetrics(raw: unknown): { finding: GmFinding; reading: GmR
       perChatP50Ms: num(r.per_chat_p50_ms),
       perChatP90Ms: num(r.per_chat_p90_ms),
       perChatSlowestMs: num(r.per_chat_slowest_ms),
-      perChatCount: num(r.per_chat_count),
+      // per_chat_count: the same number under its first name (rows before the rename).
+      chatsOpened: num(r.chats_opened) ?? num(r.per_chat_count),
     },
     saving: {
       ms: num(s.ms),

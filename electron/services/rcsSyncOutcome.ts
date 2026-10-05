@@ -69,7 +69,9 @@ export interface RcsExtensionMetrics {
   reading?: {
     ms?: number; chatsRead?: number; chatsSkipped?: number; chatsFailed?: number; chatsAlreadySaved?: number;
     messagesRead?: number; photosRead?: number; bytesRead?: number;
-    perChatP50Ms?: number; perChatP90Ms?: number; perChatSlowestMs?: number; perChatCount?: number;
+    perChatP50Ms?: number; perChatP90Ms?: number; perChatSlowestMs?: number;
+    /** Chats opened and finished with (any result); the per-chat times are over these. ≥ chatsRead. */
+    chatsOpened?: number;
   };
   hidden?: { ms?: number; spells?: number };
   chromeVersion?: string;
@@ -132,7 +134,11 @@ export function buildRcsSourceMetrics(input: {
     per_chat_p50_ms: n(r.perChatP50Ms, MAX_MS),
     per_chat_p90_ms: n(r.perChatP90Ms, MAX_MS),
     per_chat_slowest_ms: n(r.perChatSlowestMs, MAX_MS),
-    per_chat_count: n(r.perChatCount, MAX_COUNT),
+    // chats_read: chats whose messages were sent to Keepr (≥ 1 message);
+    // chats_opened: chats opened and finished with, any result (the per-chat
+    // times' sample). Live 0.3.57: an unnamed "count" next to chats_read read
+    // as a contradiction.
+    chats_opened: n(r.chatsOpened, MAX_COUNT),
   });
   const saving = defined({
     ms: n(s.ms, MAX_MS),

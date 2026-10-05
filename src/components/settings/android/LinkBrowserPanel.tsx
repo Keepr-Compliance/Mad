@@ -119,10 +119,42 @@ export function LinkBrowserPanel({ onLinked, onJustLinked, bare = false }: LinkB
   useEffect(() => {
     const focusField = (): void => {
       const el = input.current;
-      if (el && !el.disabled && !el.readOnly) el.focus();
+      if (el && !el.disabled && !el.readOnly) {
+        el.focus();
+        // Anything already typed is selected: the next digits replace it.
+        el.select();
+      }
     };
     focusField();
-    return rcsImportService.onOpenLinkScreen(() => setTimeout(focusField, 0));
+    // Live (0.3.57, Windows): the DOM focus ran before the WINDOW had
+    // keyboard focus, so typing went nowhere until a click. After the
+    // open-link signal, focus again once the window reports focus (or the
+    // page becomes visible) — one retry, then the listeners go.
+    let pending: (() => void) | null = null;
+    const armRetry = (): void => {
+      if (pending) pending();
+      const once = (): void => {
+        if (document.visibilityState === "hidden") return;
+        cleanup();
+        focusField();
+      };
+      const cleanup = (): void => {
+        window.removeEventListener("focus", once);
+        document.removeEventListener("visibilitychange", once);
+        pending = null;
+      };
+      window.addEventListener("focus", once);
+      document.addEventListener("visibilitychange", once);
+      pending = cleanup;
+    };
+    const off = rcsImportService.onOpenLinkScreen(() => {
+      setTimeout(focusField, 0);
+      armRetry();
+    });
+    return () => {
+      off();
+      if (pending) pending();
+    };
   }, []);
 
   /** The 6th digit (typed or pasted): one try. */

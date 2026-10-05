@@ -107,16 +107,36 @@ export function bringAppToFront(win: BrowserWindow | null): void {
  */
 export function bringAppToFrontForLink(win: BrowserWindow | null): void {
   try {
-    if (win && !win.isDestroyed() && win.isMinimized()) {
-      win.restore();
-      if (win.isMaximized()) win.unmaximize();
+    // macOS: activate the APP (a window focus alone leaves the browser in front).
+    app.focus({ steal: true });
+    if (win && !win.isDestroyed()) {
+      if (win.isMinimized()) {
+        win.restore();
+        if (win.isMaximized()) win.unmaximize();
+      }
+      win.show();
+      // Live (0.3.57, Windows): raised but NOT the keyboard window — typing
+      // went nowhere until a click. The foreground-lock sequence, then the
+      // window and its page take KEYBOARD focus.
+      if (process.platform === "win32") {
+        win.setAlwaysOnTop(true);
+        try {
+          win.focus();
+        } finally {
+          win.setAlwaysOnTop(false);
+        }
+      } else {
+        win.focus();
+      }
+      win.moveTop();
+      win.webContents.focus();
     }
   } catch (error) {
-    void logService.warn("Failed to restore the app's window", "BringAppToFront", {
+    void logService.warn("Failed to bring the app to the front for linking", "BringAppToFront", {
       error: error instanceof Error ? error.message : "Unknown error",
     });
   }
-  bringAppToFrontOrFlash(win);
+  flashUntilFocused(win);
 }
 
 /** Windows whose taskbar button is flashing until they get focus. */
@@ -130,6 +150,11 @@ const flashing = new WeakSet<BrowserWindow>();
  */
 export function bringAppToFrontOrFlash(win: BrowserWindow | null): void {
   bringAppToFront(win);
+  flashUntilFocused(win);
+}
+
+/** Windows refused the foreground change: flash the taskbar button until it is focused. */
+function flashUntilFocused(win: BrowserWindow | null): void {
   try {
     // One flash per window at a time: repeated clicks never pile up
     // once("focus") listeners.
