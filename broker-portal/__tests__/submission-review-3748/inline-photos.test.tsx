@@ -184,6 +184,9 @@ describe('ConversationModal inline photos (BACKLOG-3748)', () => {
     renderModal();
     expect(within(bubbleOf(M_PHOTO)).queryByText(/Media Attachment/)).toBeNull();
     expect(within(bubbleOf(M_VIDEO)).queryByText(/Media Attachment/)).toBeNull();
+    // and no other placeholder line takes its place
+    expect(within(bubbleOf(M_PHOTO)).queryByText(/\[No content\]|\[Media Attachment\]/)).toBeNull();
+    expect(within(bubbleOf(M_VIDEO)).queryByText(/\[No content\]|\[Media Attachment\]/)).toBeNull();
     expect(within(bubbleOf(M_OLD)).getByText('[Media Attachment]')).toBeTruthy();
   });
 
