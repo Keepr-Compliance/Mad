@@ -210,8 +210,10 @@ const TEXTS: TextRow[] = [
   { id: "p-b", thread: "chat-sel", at: at("12:04"), attachments: true },
   { id: "d-a", thread: "chat-sel", at: at("12:05"), body: "Duplicate body" },
   { id: "d-b", thread: "chat-sel", at: at("12:05"), body: "Duplicate body", attachments: true },
-  { id: "hd-hidden", thread: "chat-sel", at: at("12:06"), body: "Hidden duplicate" },
+  // The UNHIDDEN copy goes in first, so plain first-wins would keep it; only
+  // the hidden-copy-wins rule drops it.
   { id: "hd-unhidden", thread: "chat-sel", at: at("12:06"), body: "Hidden duplicate" },
+  { id: "hd-hidden", thread: "chat-sel", at: at("12:06"), body: "Hidden duplicate" },
   { id: "hp", thread: "chat-sel", at: at("12:00", "2026-09-20"), body: "Hidden before window" },
   { id: "r-of-hp", thread: "chat-sel", at: at("12:07"), reactionTo: "guid-hp" },
   { id: "o-before", thread: "chat-sel", at: at("12:00", "2026-09-10"), body: "Before the window" },
