@@ -246,3 +246,33 @@ describe("the computer is offline (pc_offline)", () => {
     expect(t.calls.some(([, p]) => p.endsWith("/finish"))).toBe(false);
   });
 });
+
+/**
+ * SR on 77efbfe8d: (1) the offline fallback is banner-scoped — a message or
+ * a conversation saying "No internet connection…" is no banner, and a long
+ * text is none; (2) a FLAPPING banner (gone at each poll, back at once)
+ * still ends the run once the held time passes 2× the limit. Mutations: the
+ * scope or the length check dropped; no total limit (the test times out) → red.
+ */
+describe("pc_offline: banner-scoped; a flapping banner still ends", () => {
+  it("a message bubble or a conversation saying it: no trigger; a long alert: none", () => {
+    document.body.innerHTML =
+      `<mws-messages-list><mws-message-wrapper><div role="status">No internet connection at the cabin, call me</div></mws-message-wrapper></mws-messages-list>` +
+      `<mws-conversations-list><mws-conversation-list-item><span role="status">No internet connection</span></mws-conversation-list-item></mws-conversations-list>`;
+    expect(scan.connectionBanner(document)).toBeNull();
+    document.body.innerHTML = `<div role="alert">No internet connection ${"x".repeat(90)}</div>`;
+    expect(scan.connectionBanner(document)).toBeNull();
+    document.body.innerHTML = `<div role="alert">No internet connection Make sure your device is connected to the internet.</div>`;
+    expect(scan.connectionBanner(document)).toMatchObject({ kind: "pc_offline" });
+  });
+
+  it("a banner that is gone at every poll but back at once: pc_offline after 2× the limit", async () => {
+    const t = bannerEnv({ onSleep: (n) => { if (n > 200) throw new Error("waited forever"); }, connectionLostMs: 3000 });
+    let calls = 0;
+    // Back on every other look: present at the loop's re-check, gone after each poll.
+    (t.env.scan as Record<string, unknown>).connectionBanner = () => (++calls % 2 === 1 ? { kind: "pc_offline", titleLength: 22 } : null);
+    const out = await job.runJob(JOB, t.env);
+    expect(out.outcome).toBe("pc_offline");
+    expect(t.calls.some(([, p]) => p.endsWith("/finish"))).toBe(false);
+  });
+});

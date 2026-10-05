@@ -887,6 +887,11 @@
      */
     async function holdWhileOffline(resumeText) {
       var held = false;
+      // SR: `waited` restarts each time the banner clears, so a FLAPPING
+      // banner never reached the limit (and the pre-finish check could hang):
+      // the time held across this whole call is capped too.
+      var totalHeld = 0;
+      var totalLimit = 2 * connectionLostMs;
       for (;;) {
         var banner = bannerNow();
         if (!banner) break;
@@ -898,13 +903,14 @@
         pauses += 1;
         await report(bannerText(kind));
         while (banner) {
-          if (waited >= connectionLostMs) {
+          if (waited >= connectionLostMs || totalHeld >= totalLimit) {
             var code = kind === "phone_unreachable" ? "phone_unreachable" : kind === "pc_offline" ? "pc_offline" : "connection_lost";
             log("connection banner for " + Math.round(waited / 1000) + "s: " + code);
             return { code: code, message: CONNECTION_LOST_TEXT[code] };
           }
           await env.sleep(CONNECTION_POLL_MS);
           waited += CONNECTION_POLL_MS;
+          totalHeld += CONNECTION_POLL_MS;
           connection[kind].ms += CONNECTION_POLL_MS;
           banner = bannerNow();
           if (banner && banner.kind !== kind) {

@@ -906,6 +906,10 @@
   var OFFLINE_TITLE = /^no internet connection/i;
   /** UNTRACED: where else an offline banner may sit (alert / status / banner elements). */
   var OFFLINE_BANNER_FALLBACK_SELECTORS = '[role="alert"], [role="status"], mws-banner, .banner, [class*="offline"]';
+  /** Never a banner: the conversation list and the messages. */
+  var OFFLINE_NOT_IN = "mws-conversations-list, mws-conversation-list-item, mws-messages-list, mws-message-wrapper, mws-text-message-part";
+  /** A banner's title + line is short; a longer text is something else. */
+  var OFFLINE_TEXT_MAX = 80;
 
   /**
    * The connection banner on screen, or null:
@@ -941,8 +945,13 @@
     var others = doc.querySelectorAll(OFFLINE_BANNER_FALLBACK_SELECTORS);
     for (var o = 0; o < others.length; o++) {
       if (!isShown(others[o])) continue;
+      // SR: banner-scoped — never anything in the conversation list or the
+      // messages (a text saying "No internet connection…" is not a banner),
+      // and a banner's text is short.
+      if (others[o].closest && others[o].closest(OFFLINE_NOT_IN)) continue;
       var text = normalizeSpace(others[o].textContent || "");
-      if (OFFLINE_TITLE.test(text)) return { kind: "pc_offline", titleLength: Math.min(text.length, 200) };
+      if (text.length > OFFLINE_TEXT_MAX) continue;
+      if (OFFLINE_TITLE.test(text)) return { kind: "pc_offline", titleLength: text.length };
     }
     return null;
   }
