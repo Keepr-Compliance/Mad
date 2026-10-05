@@ -64,7 +64,14 @@ export function useAttachmentThumbnailUrl(
             });
             const resultBlob = Array.isArray(convertedBlob) ? convertedBlob[0] : convertedBlob;
             objectUrl = URL.createObjectURL(resultBlob);
-            if (!cancelled) setUrl(objectUrl);
+            // A conversion that resolves after unmount: the cleanup below already
+            // ran (objectUrl was still null then), so nothing would ever revoke
+            // this one. Revoke it here instead of handing it to state.
+            if (cancelled) {
+              URL.revokeObjectURL(objectUrl);
+            } else {
+              setUrl(objectUrl);
+            }
           } catch (conversionError) {
             console.error('HEIC thumbnail conversion failed:', conversionError);
             if (!cancelled) setError(true);
