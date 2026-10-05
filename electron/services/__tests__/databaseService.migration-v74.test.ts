@@ -10,7 +10,6 @@
  *   M1 a table / index missing from the migration                    → "creates every"
  *   M2 the migration's DDL drifting from schema.sql                   → "identical to schema.sql"
  *   M3 not idempotent (a second run, or an existing table, changes it) → "idempotent"
- *   M4 an older table shape not given its missing columns             → "older shape"
  *   M5 v74 not in the chain (or not the last)                         → "in the chain"
  */
 
@@ -97,8 +96,6 @@ describe("migration v74 — the Google Messages import's local tables", () => {
     for (const i of ["idx_rcs_cache_staging_messages_sent", "idx_rcs_chat_exclusions_conv", "idx_rcs_chat_exclusions_hash", "idx_rcs_pending_full_sync_user", "idx_rcs_chat_people_number"]) {
       expect([i, names(db, "index").includes(i)]).toEqual([i, true]);
     }
-    // The temp reference copies are gone.
-    expect((db.prepare("SELECT name FROM sqlite_temp_master WHERE name LIKE 'v74ref_%'").all() as unknown[]).length).toBe(0);
   });
 
   it("idempotent: a fresh install (schema.sql already ran) and a second run change nothing", () => {
@@ -111,19 +108,5 @@ describe("migration v74 — the Google Messages import's local tables", () => {
     runV74(db);
     expect(V74_RCS_TABLES.map((t) => [t, columns(db, t)])).toEqual(before);
     expect(db.prepare("SELECT consent_version FROM rcs_consent WHERE user_id = 'u1'").get()).toEqual({ consent_version: 1 });
-  });
-
-  it("an older shape (a column added later in the branch) gets the missing columns; rows kept", () => {
-    db = preV74();
-    // rcs_media_options as an early build created it: no last_*_seen, no updated_at.
-    db.exec(`CREATE TABLE rcs_media_options (
-               user_id TEXT PRIMARY KEY,
-               photos_all_chats INTEGER NOT NULL DEFAULT 1,
-               videos_all_chats INTEGER NOT NULL DEFAULT 0)`);
-    db.exec("INSERT INTO rcs_media_options (user_id, photos_all_chats) VALUES ('u1', 0)");
-    runV74(db);
-    const cols = columns(db, "rcs_media_options").map((c) => c.name);
-    expect(cols).toEqual(expect.arrayContaining(["last_photos_seen", "last_videos_seen", "updated_at"]));
-    expect(db.prepare("SELECT photos_all_chats, last_photos_seen FROM rcs_media_options WHERE user_id = 'u1'").get()).toEqual({ photos_all_chats: 0, last_photos_seen: null });
   });
 });

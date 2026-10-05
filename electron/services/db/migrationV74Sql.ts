@@ -10,7 +10,8 @@
  * Every statement is CREATE … IF NOT EXISTS, copied from schema.sql (comments
  * dropped) — a no-op on a fresh install (schema.sql's exec already created
  * them) and on a database that already has them (the founder's test copy);
- * it creates them on any database that does not.
+ * it creates them on any database that does not. No column changes: no
+ * commit on the branch added a column to an existing rcs_* table.
  * databaseService.migration-v74.test.ts holds this list identical to
  * schema.sql's statements: a table changed in one place only fails there.
  *
@@ -46,40 +47,7 @@ export const V74_RCS_LOCAL_TABLES_SQL: readonly string[] = [
   "CREATE TABLE IF NOT EXISTS message_source_coverage (\n  user_id TEXT NOT NULL,\n  source TEXT NOT NULL,\n  covered_since DATETIME,\n  last_sync_at DATETIME,\n  PRIMARY KEY (user_id, source),\n  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE\n);",
 ];
 
-/** The tables among them (for the column check). */
+/** The tables among them. */
 export const V74_RCS_TABLES: readonly string[] = V74_RCS_LOCAL_TABLES_SQL
   .map((s) => /^CREATE TABLE IF NOT EXISTS (\w+)/.exec(s)?.[1])
   .filter((t): t is string => !!t);
-
-/** A table's columns (main), or its reference copy's (temp). Names come from the fixed list above only. */
-export function v74TableInfoSql(which: "main" | "ref", table: string): string {
-  if (!V74_RCS_TABLES.includes(table)) throw new Error(`v74: not an RCS table: ${table}`);
-  return which === "main" ? `PRAGMA main.table_info(${table})` : `PRAGMA temp.table_info(v74ref_${table})`;
-}
-
-/**
- * A table statement as a TEMP reference copy (v74ref_<table>) — what the
- * column check compares against. TEMP, not an attached database: migrations
- * run inside a transaction, where ATTACH is refused.
- */
-export function v74RefTableSql(statement: string): string {
-  return statement.replace(/^CREATE TABLE IF NOT EXISTS (\w+)/, "CREATE TEMP TABLE v74ref_$1");
-}
-
-/** Drop a reference copy. */
-export function v74DropRefSql(table: string): string {
-  if (!V74_RCS_TABLES.includes(table)) throw new Error(`v74: not an RCS table: ${table}`);
-  return `DROP TABLE IF EXISTS temp.v74ref_${table}`;
-}
-
-/** ALTER TABLE … ADD COLUMN for a column the reference has and the database lacks. */
-export function v74AddColumnSql(table: string, column: { name: string; type: string; notnull: number; dflt_value: string | null }): string {
-  if (!V74_RCS_TABLES.includes(table)) throw new Error(`v74: not an RCS table: ${table}`);
-  if (!/^\w+$/.test(column.name) || !/^[\w ()]*$/.test(column.type)) throw new Error("v74: unexpected column shape");
-  // SQLite refuses ADD COLUMN with a non-constant default (CURRENT_TIMESTAMP):
-  // such a column is added plain (nullable) — rows written later fill it.
-  const constantDefault = column.dflt_value !== null && !/^CURRENT_/i.test(column.dflt_value);
-  const dflt = constantDefault ? ` DEFAULT ${column.dflt_value}` : "";
-  const notNull = column.notnull && constantDefault ? " NOT NULL" : "";
-  return `ALTER TABLE ${table} ADD COLUMN ${column.name} ${column.type}${notNull}${dflt}`;
-}

@@ -72,11 +72,6 @@ import {
 // BACKLOG-3619: migration v74 — the RCS import's local tables, same boundary rule.
 import {
   V74_RCS_LOCAL_TABLES_SQL,
-  V74_RCS_TABLES,
-  v74DropRefSql,
-  v74RefTableSql,
-  v74TableInfoSql,
-  v74AddColumnSql,
 } from "./db/migrationV74Sql";
 import {
   SCHEMA_VERSION_UPDATE_SQL,
@@ -1452,35 +1447,9 @@ class DatabaseService implements IDatabaseService {
       description:
         "BACKLOG-3619 Google Messages import: the 18 rcs_* local tables and " +
         "message_source_coverage (with their indexes) in one versioned migration",
-      // Every table / index is CREATE … IF NOT EXISTS (a no-op where schema.sql's
-      // exec already made it). Then a table that exists with an OLDER shape (a
-      // build of this branch before a column was added) gets the missing
-      // columns — those that can be added (nullable or with a default); a
-      // NOT NULL column without one is logged, never forced.
+      // CREATE … IF NOT EXISTS only: a no-op where schema.sql's exec already made them.
       migrate: (d) => {
         for (const statement of V74_RCS_LOCAL_TABLES_SQL) d.exec(statement);
-        try {
-          for (const statement of V74_RCS_LOCAL_TABLES_SQL) {
-            if (statement.startsWith("CREATE TABLE")) d.exec(v74RefTableSql(statement));
-          }
-          let added = 0;
-          for (const table of V74_RCS_TABLES) {
-            type Col = { name: string; type: string; notnull: number; dflt_value: string | null; pk: number };
-            const have = new Set((d.prepare(v74TableInfoSql("main", table)).all() as Col[]).map((c) => c.name));
-            for (const col of d.prepare(v74TableInfoSql("ref", table)).all() as Col[]) {
-              if (have.has(col.name)) continue;
-              if ((col.notnull && col.dflt_value === null) || col.pk) {
-                hostLogger.warn(`[v74] ${table}.${col.name} is missing and cannot be added (NOT NULL without a default)`);
-                continue;
-              }
-              d.exec(v74AddColumnSql(table, col));
-              added += 1;
-            }
-          }
-          if (added > 0) hostLogger.info(`[v74] added ${added} missing RCS column(s)`);
-        } finally {
-          for (const table of V74_RCS_TABLES) d.exec(v74DropRefSql(table));
-        }
       },
     },
   ];
