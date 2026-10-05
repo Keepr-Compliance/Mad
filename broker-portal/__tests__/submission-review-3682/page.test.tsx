@@ -196,7 +196,7 @@ describe('review page attachment sources and excluded files (BACKLOG-3682)', () 
     const notice = screen.getByTestId('excluded-files-notice');
     expect(screen.getAllByTestId('excluded-file').map((li) => li.textContent)).toEqual([
       'Video.movEmail "Signed contract", Oct 3, 2026, 8:00 AMLarger than 50 MB',
-      "A photo or fileText with Gina Example, Oct 3, 2026, 9:05 AMWasn't downloaded to the agent's computer",
+      "A photo or fileText with Gina Example, Oct 3, 2026, 9:05 AMKeepr has no copy on the agent's computer",
     ]);
     const page = container.firstElementChild as HTMLElement;
     expect(page.lastElementChild).toBe(notice);
@@ -223,7 +223,7 @@ describe('review page attachment sources and excluded files (BACKLOG-3682)', () 
     expect(screen.queryByText(/\+14155550101/)).toBeNull();
     expect(screen.queryByText(/Gina Example/)).toBeNull();
     expect(screen.getAllByTestId('excluded-file')[1].textContent).toBe(
-      "A photo or fileA text, Oct 3, 2026, 9:05 AMWasn't downloaded to the agent's computer"
+      "A photo or fileA text, Oct 3, 2026, 9:05 AMKeepr has no copy on the agent's computer"
     );
   });
 });

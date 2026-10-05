@@ -247,3 +247,23 @@ export function prepareUpdateAttachmentMessageId(
       UPDATE ${attachmentsWriteTable(target)} SET message_id = ? WHERE id = ?
     `);
 }
+
+/**
+ * BACKLOG-3731: record why the import did not store a message's attachments,
+ * as `metadata.attachmentSkips` (see `textAttachmentSkips.ts`).
+ *
+ * Bind: `{ skips: <JSON array text>, id: <local message id> }`. The value is replaced whole, so a
+ * message whose skips changed (a file Messages has since downloaded) carries
+ * only the current ones. Writes nothing when the stored value is already the
+ * same, so a re-sync over the whole history is a no-op after the first. A row
+ * whose metadata is not valid JSON is left alone rather than overwritten.
+ */
+export function prepareRecordAttachmentSkips(db: DatabaseType, target: ImportTarget): Statement {
+  return db.prepare(`
+      UPDATE ${messagesWriteTable(target)}
+         SET metadata = json_set(COALESCE(metadata, '{}'), '$.attachmentSkips', json(@skips))
+       WHERE id = @id
+         AND (metadata IS NULL OR json_valid(metadata))
+         AND json_extract(COALESCE(metadata, '{}'), '$.attachmentSkips') IS NOT json(@skips)
+    `);
+}

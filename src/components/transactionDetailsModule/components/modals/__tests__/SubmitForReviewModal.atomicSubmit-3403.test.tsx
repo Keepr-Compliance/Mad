@@ -21,6 +21,8 @@ import {
   SUBMISSION_CANCELLED_COPY,
   SubmitForReviewModal,
   notIncludedLine,
+  notIncludedReasonText,
+  notIncludedSource,
   type NotIncludedItem,
   type SubmitProgress,
 } from "../SubmitForReviewModal";
@@ -38,10 +40,10 @@ const transaction = {
 } as unknown as Transaction;
 
 const ITEMS: NotIncludedItem[] = [
-  { key: "msg:m1", kind: "text", localMessageId: "m1", sentAt: "2026-09-24T15:00:00.000Z", label: "Jane Doe", filename: null, reason: "text_attachment_not_on_this_computer", localAttachmentId: null },
-  { key: "att:a1", kind: "email", localMessageId: "e1", sentAt: "2026-10-02T15:00:00.000Z", label: "Inspection report", filename: "Contract.pdf", reason: "email_attachment_not_downloaded", localAttachmentId: "a1" },
-  { key: "att:a2", kind: "email", localMessageId: "e2", sentAt: "2026-10-03T15:00:00.000Z", label: "Offer", filename: "Offer.pdf", reason: "file_missing_on_this_computer", localAttachmentId: "a2" },
-  { key: "att:a3", kind: "email", localMessageId: "e3", sentAt: "2026-10-03T15:00:00.000Z", label: "Photos", filename: "Video.mov", reason: "file_too_large", localAttachmentId: "a3" },
+  { key: "msg:m1", kind: "text", localMessageId: "m1", threadId: "chat-1", sentAt: "2026-09-24T15:00:00.000Z", label: "Jane Doe", filename: null, reason: "text_attachment_not_on_this_computer", localAttachmentId: null },
+  { key: "att:a1", kind: "email", localMessageId: "e1", threadId: "thread-e1", sentAt: "2026-10-02T15:00:00.000Z", label: "Inspection report", filename: "Contract.pdf", reason: "email_attachment_not_downloaded", localAttachmentId: "a1" },
+  { key: "att:a2", kind: "email", localMessageId: "e2", threadId: "thread-e2", sentAt: "2026-10-03T15:00:00.000Z", label: "Offer", filename: "Offer.pdf", reason: "file_missing_on_this_computer", localAttachmentId: "a2" },
+  { key: "att:a3", kind: "email", localMessageId: "e3", threadId: "thread-e3", sentAt: "2026-10-03T15:00:00.000Z", label: "Photos", filename: "Video.mov", reason: "file_too_large", localAttachmentId: "a3" },
 ];
 
 const UPLOADING: SubmitProgress = { stage: "attachments", stageProgress: 10, overallProgress: 20 };
@@ -77,7 +79,7 @@ function renderModal(overrides: Partial<React.ComponentProps<typeof SubmitForRev
 describe("BACKLOG-3681 — one line per message, which file, why", () => {
   it("every reason reads as its own sentence", () => {
     expect(ITEMS.map(notIncludedLine)).toEqual([
-      "Text with Jane Doe, Sep 24 — a photo or file isn't downloaded to this computer. Open it in Messages to download it.",
+      "Text with Jane Doe, Sep 24 — Keepr doesn't have a copy of a photo or file from this text.",
       'Email "Inspection report", Oct 2 — Contract.pdf couldn\'t be downloaded from the mailbox.',
       'Email "Offer", Oct 3 — Offer.pdf is no longer on this computer.',
       'Email "Photos", Oct 3 — Video.mov is larger than 50 MB.',
@@ -88,7 +90,11 @@ describe("BACKLOG-3681 — one line per message, which file, why", () => {
     renderModal({ progress: COMPLETE, notIncluded: ITEMS });
     const block = screen.getByTestId("submit-review-not-included");
     expect(block).toHaveTextContent(NOT_INCLUDED_HEADING_AFTER);
-    for (const item of ITEMS) expect(block).toHaveTextContent(notIncludedLine(item));
+    // BACKLOG-3731: grouped by conversation — the source heads its group.
+    for (const item of ITEMS) {
+      expect(block).toHaveTextContent(notIncludedSource(item));
+      expect(block).toHaveTextContent(notIncludedReasonText(item));
+    }
   });
 
   it("nothing left out → no block; a failed submit never shows one", () => {

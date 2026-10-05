@@ -29,6 +29,7 @@ import { AttachmentList } from '@/components/submission/AttachmentList';
 import { ExcludedFilesNotice } from '@/components/submission/ExcludedFilesNotice';
 import {
   buildAttachmentSources,
+  excludedReasonText,
   readExcludedFiles,
   type SourceMessage,
 } from '@/lib/submissions/attachmentSources';
@@ -186,14 +187,14 @@ describe('ExcludedFilesNotice', () => {
     const items = within(notice).getAllByTestId('excluded-file').map((li) => li.textContent);
     expect(items).toEqual([
       'Video.movEmail "Photos", Oct 3, 2026, 8:00 AMLarger than 50 MB',
-      "A photo or fileText with Gina ExampleWasn't downloaded to the agent's computer",
+      "A photo or fileText with Gina ExampleKeepr has no copy on the agent's computer",
     ]);
   });
 
   it('drops the label of a channel the broker cannot see', () => {
     render(<ExcludedFilesNotice files={files} showTextLabels={false} showEmailLabels />);
     const items = screen.getAllByTestId('excluded-file').map((li) => li.textContent);
-    expect(items[1]).toBe("A photo or fileA textWasn't downloaded to the agent's computer");
+    expect(items[1]).toBe("A photo or fileA textKeepr has no copy on the agent's computer");
     expect(screen.queryByText(/Gina Example/)).toBeNull();
   });
 
@@ -202,7 +203,7 @@ describe('ExcludedFilesNotice', () => {
     const items = screen.getAllByTestId('excluded-file').map((li) => li.textContent);
     expect(items[0]).toBe('Video.movAn email, Oct 3, 2026, 8:00 AMLarger than 50 MB');
     expect(screen.queryByText(/Photos/)).toBeNull();
-    expect(items[1]).toBe("A photo or fileText with Gina ExampleWasn't downloaded to the agent's computer");
+    expect(items[1]).toBe("A photo or fileText with Gina ExampleKeepr has no copy on the agent's computer");
   });
 
   it('renders nothing when the list is empty', () => {
@@ -223,5 +224,25 @@ describe('ExcludedFilesNotice', () => {
     expect(screen.getByText('<img src=x onerror=alert(1)>')).toBeTruthy();
     expect(screen.getByText('Email "<script>x()</script>"')).toBeTruthy();
     expect(screen.getByText('Not sent')).toBeTruthy();
+  });
+});
+
+describe('BACKLOG-3731 — excludedReasonText for the import skip reasons', () => {
+  it('words each reason the desktop records', () => {
+    expect(
+      [
+        'text_attachment_not_on_this_computer',
+        'text_attachment_not_downloaded_by_messages',
+        'text_attachment_too_large_to_import',
+        'text_attachment_type_not_imported',
+        'text_attachment_unreadable',
+      ].map(excludedReasonText),
+    ).toEqual([
+      "Keepr has no copy on the agent's computer",
+      "Messages never downloaded it to the agent's Mac",
+      'Larger than 100 MB, the largest file Keepr imports',
+      "A type of file Keepr doesn't import",
+      "Couldn't be read on the agent's Mac",
+    ]);
   });
 });

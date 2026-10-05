@@ -109,7 +109,12 @@ export type ExcludedReason =
   | 'email_attachment_not_downloaded'
   | 'text_attachment_not_on_this_computer'
   | 'file_missing_on_this_computer'
-  | 'file_too_large';
+  | 'file_too_large'
+  // BACKLOG-3731: why the agent's macOS import skipped the file.
+  | 'text_attachment_not_downloaded_by_messages'
+  | 'text_attachment_too_large_to_import'
+  | 'text_attachment_type_not_imported'
+  | 'text_attachment_unreadable';
 
 export interface ExcludedFile {
   filename: string | null;
@@ -154,7 +159,15 @@ export function excludedReasonText(reason: string): string {
     case 'email_attachment_not_downloaded':
       return "Couldn't be downloaded from the agent's mailbox";
     case 'text_attachment_not_on_this_computer':
-      return "Wasn't downloaded to the agent's computer";
+      return "Keepr has no copy on the agent's computer";
+    case 'text_attachment_not_downloaded_by_messages':
+      return "Messages never downloaded it to the agent's Mac";
+    case 'text_attachment_too_large_to_import':
+      return 'Larger than 100 MB, the largest file Keepr imports';
+    case 'text_attachment_type_not_imported':
+      return "A type of file Keepr doesn't import";
+    case 'text_attachment_unreadable':
+      return "Couldn't be read on the agent's Mac";
     case 'file_missing_on_this_computer':
       return "No longer on the agent's computer";
     case 'file_too_large':
