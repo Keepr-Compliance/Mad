@@ -71,7 +71,7 @@ import {
 } from "./db/migrationV73Sql";
 // BACKLOG-3619: migration v74 — the RCS import's local tables, same boundary rule.
 import {
-  V74_RCS_LOCAL_TABLES_SQL,
+  V74_RCS_LOCAL_TABLES_DDL,
 } from "./db/migrationV74Sql";
 import {
   SCHEMA_VERSION_UPDATE_SQL,
@@ -1449,7 +1449,7 @@ class DatabaseService implements IDatabaseService {
         "message_source_coverage (with their indexes) in one versioned migration",
       // CREATE … IF NOT EXISTS only: a no-op where schema.sql's exec already made them.
       migrate: (d) => {
-        for (const statement of V74_RCS_LOCAL_TABLES_SQL) d.exec(statement);
+        d.exec(V74_RCS_LOCAL_TABLES_DDL);
       },
     },
   ];
