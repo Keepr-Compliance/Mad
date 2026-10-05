@@ -2100,6 +2100,12 @@
       mark.setAttribute("aria-hidden", "true");
       row.appendChild(mark);
       row.appendChild(el("div", "line", { flex: "1 1 auto", fontSize: "15px", fontWeight: "700", color: p.text }, STOPPED_TITLE));
+      if (io.close) {
+        var xStopped = button("close", "×", "icon");
+        xStopped.setAttribute("aria-label", "Close");
+        xStopped.addEventListener("click", function () { io.close(); });
+        row.appendChild(xStopped);
+      }
       box.appendChild(row);
       box.appendChild(el("div", "progress", bodyStyle, STOPPED_BODY));
       var closeStopped = button("close", "Close", "secondary");
@@ -2191,6 +2197,11 @@
       var row = el("div", "header", { display: "flex", alignItems: "center", gap: "10px" });
       row.appendChild(tab);
       row.appendChild(el("div", "line", { flex: "1 1 auto", fontSize: "15px", fontWeight: "700", color: p.text }, IDLE_TAB_LINE));
+      // Founder (live 0.3.57): every card opened from the K tab has × back to it.
+      var collapse = button("close", "×", "icon");
+      collapse.setAttribute("aria-label", "Close");
+      collapse.addEventListener("click", function () { if (io.onExpand) io.onExpand(false); });
+      row.appendChild(collapse);
       box.appendChild(row);
       // Founder: Open Keepr at the bottom-right of the box.
       var openIdle = button("open-keepr", "Open Keepr", "primary");
@@ -2906,10 +2917,7 @@
           } catch (_e) { /* not kept: fine */ }
         },
         onTap: function () {
-          if (lastShown && lastShown.extras && lastShown.extras.idle) {
-            idleExpanded = !idleExpanded;
-            showOverlay(lastShown.text, lastShown.isError, lastShown.extras);
-          }
+          if (lastShown && lastShown.extras && lastShown.extras.idle) setIdleOpen(!idleExpanded);
         },
         view: function () { return { width: root.innerWidth, height: root.innerHeight }; },
         size: function () { var r = box.getBoundingClientRect(); return { width: r.width, height: r.height }; },
@@ -2951,7 +2959,10 @@
       // Founder: the syncing card never collapses; only the idle tab opens / closes.
       expanded: extras && extras.idle ? idleExpanded : false,
       onExpand: function (open) {
-        if (extras && extras.idle) idleExpanded = open;
+        if (extras && extras.idle) {
+          setIdleOpen(open);
+          return;
+        }
         if (lastShown) showOverlay(lastShown.text, lastShown.isError, lastShown.extras);
       },
     });
@@ -2995,7 +3006,23 @@
     } catch (_e) { idleLinked = undefined; }
     showIdle();
   }
-  /** × on the not-linked guide: the normal K tab for the rest of this page load. */
+  /**
+   * Founder (live 0.3.57): the K tab opens its card and × always brings the
+   * tab back — the same on every open. Not linked, the card is the "Link
+   * this browser" guide again (its × back to the tab); linked, "Sync from
+   * Keepr" (its × back to the tab).
+   */
+  function setIdleOpen(open) {
+    if (open && idleLinked === false && guideDismissed) {
+      idleExpanded = false;
+      guideDismissed = false;
+      showIdle();
+      return;
+    }
+    idleExpanded = !!open;
+    if (lastShown) showOverlay(lastShown.text, lastShown.isError, lastShown.extras);
+  }
+  /** × on the not-linked guide: back to the K tab (a tap on it opens the guide again). */
   function dismissGuide() {
     guideDismissed = true;
     showIdle();
