@@ -141,7 +141,9 @@ function localInstant(
   return new Date(y, m, d + dayOffset, hours, minutes, seconds, ms).toISOString();
 }
 
-const EARLY_OUT = "2025-12-31T23:59:59.999Z"; // before the audit start -> OUT
+// LOCAL 23:59:59.999 the evening before the audit start -> OUT in every zone
+// (BACKLOG-3734: the start is local 00:00, so a fixed UTC string would be IN east of UTC).
+const EARLY_OUT = new Date(2025, 11, 31, 23, 59, 59, 999).toISOString();
 const MID_IN = "2026-06-15T12:00:00.000Z"; // comfortably inside -> IN
 const DAWN = localInstant(0, 30, 0, 0); // 12:30am local ON the closing day (BACKLOG-2781) -> IN
 const EVENING = localInstant(21, 0, 0, 0); // 9pm local on the closing day (BACKLOG-2788) -> IN
