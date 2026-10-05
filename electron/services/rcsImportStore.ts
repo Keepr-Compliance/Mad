@@ -46,8 +46,8 @@ import * as crypto from "crypto";
 
 import { participantKey } from "./rcsImportJob";
 import { rcsReactionExternalId, reactionTypeForEmoji, bareEmoji } from "./rcsReactionMap";
-import { toE164 } from "../utils/phoneNormalization";
-import { chatPeopleRows, type RcsChatPersonRow } from "./db/rcsChatPeopleDbService";
+import { toE164, toLookupKey } from "../utils/phoneNormalization";
+import { chatPeopleRows, isNumberAsName, type RcsChatPersonRow } from "./db/rcsChatPeopleDbService";
 
 export const RCS_IMPORT_SOURCE = "google_messages_web";
 /** BACKLOG-3658: rows saved by the cache job (no transaction at import time). */
@@ -142,11 +142,29 @@ export function samePeople(
 }
 
 /** A group sender's number: only when the shown name maps to exactly one number. */
-function senderNumber(sender: string, people: RcsChatPeople): string | null {
+export function senderNumber(sender: string, people: RcsChatPeople): string | null {
   const wanted = sender.trim().toLowerCase();
   if (!wanted) return null;
   const hits = new Set(people.names.filter((n) => n.name.toLowerCase() === wanted).map((n) => n.number));
-  return hits.size === 1 ? Array.from(hits)[0] : null;
+  if (hits.size === 1) return Array.from(hits)[0];
+  /**
+   * Live (founder's DevTools, 2026-10-04): a group sender with no saved name
+   * is shown by Google Messages as its number in NATIONAL format — "(480)
+   * 555-0123". That string was stored as the message's handle, so the
+   * message-derived contact "msg_(480) 555-0123" never matched the saved
+   * contact's E.164 phone and every press imported another one. A
+   * number-shaped sender is a NUMBER: the member with the same lookup key
+   * (toLookupKey — the repo's one key, BACKLOG-2630), else the number itself
+   * via toE164 (DEFAULT_PHONE_REGION) — never the display string.
+   */
+  if (isNumberAsName(wanted)) {
+    const key = toLookupKey(wanted);
+    const member = people.numbers.filter((n) => toLookupKey(n) === key);
+    if (member.length === 1) return member[0];
+    const e164 = toE164(wanted);
+    if (/^\+[1-9]\d{9,14}$/.test(e164)) return e164;
+  }
+  return null;
 }
 
 /**

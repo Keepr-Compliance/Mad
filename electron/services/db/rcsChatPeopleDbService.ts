@@ -36,6 +36,11 @@ const PHONE_SHAPED = /^\+[1-9][0-9]{9,14}$/;
 /** Digits only, last 10 — the autoLinkSql / contact phone match key. */
 const L10_PERSON = sql`substr(replace(replace(replace(replace(replace(p.number_e164, '+', ''), '-', ''), ' ', ''), '(', ''), ')', ''), -10)`;
 
+/** A "name" that is only a phone number in any format ("(480) 555-0123", "+1 480…"). */
+export function isNumberAsName(name: string): boolean {
+  return /^[\d+()\-.\s]+$/.test(name.trim());
+}
+
 /** One member of a stored chat: its number and the name shown for it (or null). */
 export interface RcsChatPersonRow {
   number: string;
@@ -53,10 +58,13 @@ export function chatPeopleRows(
 ): RcsChatPersonRow[] {
   const out: RcsChatPersonRow[] = [];
   const title = typeof chatTitle === "string" ? chatTitle.trim() : "";
-  const titleIsName = title !== "" && !/^[\d+()\-.\s]+$/.test(title);
+  const titleIsName = title !== "" && !isNumberAsName(title);
   for (const number of people.numbers) {
     if (!PHONE_SHAPED.test(number)) continue;
-    const named = people.names.find((n) => n.number === number && n.name.trim() !== "");
+    // Live: Google Messages shows an unsaved number as its "name" — in
+    // NATIONAL format, "(480) …". That is not a name: the person is nameless
+    // (shown, like every other nameless one, as its E.164 number formatted).
+    const named = people.names.find((n) => n.number === number && n.name.trim() !== "" && !isNumberAsName(n.name));
     const name = named ? named.name.trim() : people.numbers.length === 1 && titleIsName ? title : null;
     out.push({ number, name: name ? name.slice(0, 120) : null });
   }
@@ -247,7 +255,8 @@ function buildAll(userId: string): TextPersonAll[] {
     e.chats.add(r.chatHash);
     if (r.lastMessageAt !== null && (e.last === null || r.lastMessageAt > e.last)) e.last = r.lastMessageAt;
     // The newest non-empty name (by its row's last message).
-    if (r.name !== null && r.name !== "") {
+    // Rows recorded before the fix may hold a number as the name: ignored.
+    if (r.name !== null && r.name !== "" && !isNumberAsName(r.name)) {
       const at = r.lastMessageAt ?? "";
       if (e.name === null || at > (e.nameAt ?? "")) {
         e.name = r.name;

@@ -41,9 +41,9 @@ import {
   rcsClearDbOps,
   repointLegacyRcsRemoval,
 } from "../db/syncDbService";
-import { chatPeopleRows, getTextDerivedPeople, recordRcsChatPeople } from "../db/rcsChatPeopleDbService";
-import { createContactsBatch, getImportedContactsByUserId, searchContactsForSelection } from "../db/contactDbService";
-import { importChat, peopleFrom, rcsChatHash, storeCacheChatSync, type RcsIncomingChat } from "../rcsImportStore";
+import { chatPeopleRows, getTextDerivedPeople, isNumberAsName, recordRcsChatPeople } from "../db/rcsChatPeopleDbService";
+import { createContactsBatch, getImportedContactsByUserId, getMessageDerivedContacts, searchContactsForSelection } from "../db/contactDbService";
+import { importChat, participantsJson, peopleFrom, rcsChatHash, senderNumber, storeCacheChatSync, type RcsIncomingChat } from "../rcsImportStore";
 import { clearGoogleMessagesWebData, clearUnlinkedOldChats } from "../rcsClearService";
 import { shapeImportValues } from "../../utils/contactImportValues";
 import { validateContactData } from "../../utils/validation";
@@ -213,3 +213,53 @@ describe("people found in texts (BACKLOG-3670)", () => {
 });
 
 const count = (q: string, ...p: unknown[]): number => (db.prepare(q).get(...p) as { n: number }).n;
+
+/**
+ * Live root cause (founder's DevTools, 2026-10-04): a group sender with no
+ * saved name is shown by Google Messages as its number in NATIONAL format —
+ * "(480) …". The RCS store kept that display string as the message's handle
+ * (participants.from), which surfaced as the message-derived record
+ * "msg_(480) …"; and the Details "name" of an unsaved number is the same
+ * string. Fixed at the SOURCE only: neither is ever stored as a handle or a
+ * name. Mutations: the store keeping the display string; a number-shaped
+ * name recorded as a name → red.
+ */
+describe("a number shown as a name is never stored as a handle or a name", () => {
+  const NUM = "+14805550123";
+
+  it("the store: a number-shaped sender is the member's number (else its E.164) — never the display string", () => {
+    const group = peopleFrom([{ name: "Test Person B", number: NUM_B }], [NUM, NUM_B]);
+    expect(senderNumber("(480) 555-0123", group)).toBe(NUM);
+    expect(senderNumber("(480) 555-0199", group)).toBe("+14805550199");
+    expect(JSON.parse(participantsJson("inbound", "(480) 555-0123", group)).from).toBe(NUM);
+    expect(senderNumber("Test Person B", group)).toBe(NUM_B);
+    expect(senderNumber("Someone Unknown", group)).toBeNull();
+  });
+
+  it("a group message from '(480) 555-0123' is stored with the E.164 handle — no msg_(…) record arises", () => {
+    const group = peopleFrom([{ name: "Test Person B", number: NUM_B }], [NUM, NUM_B]);
+    const c: RcsIncomingChat = {
+      conversationId: "conv-480",
+      title: "Test Group",
+      messages: [{ msgId: "m1", direction: "inbound", sender: "(480) 555-0123", text: "hello", sentAt: "2026-09-20T10:00:00.000Z", transport: "rcs" }],
+    };
+    storeCacheChatSync(c, USER, storeDeps, group);
+    const stored = db.prepare("SELECT participants FROM messages WHERE user_id = ?").all(USER) as Array<{ participants: string }>;
+    expect(stored.map((m) => JSON.parse(m.participants).from)).toEqual([NUM]);
+    expect(getMessageDerivedContacts(USER).filter((m) => m.id.startsWith("msg_("))).toEqual([]);
+  });
+
+  it("recording: a number-shaped Details name is no name", () => {
+    expect(chatPeopleRows({ numbers: [NUM], names: [{ name: "(480) 555-0123", number: NUM }] }, "(480) 555-0123")).toEqual([{ number: NUM, name: null }]);
+    expect(isNumberAsName("(480) 555-0123")).toBe(true);
+    expect(isNumberAsName("+1 480-555-0123")).toBe(true);
+    expect(isNumberAsName("Test Person 4")).toBe(false);
+  });
+
+  it("an older row holding the number as its name: shown like every nameless person (the formatted E.164)", () => {
+    record(USER, "h-480", [{ number: NUM, name: "(480) 555-0123" }], "2026-09-01T00:00:00.000Z");
+    const [p] = getTextDerivedPeople(USER);
+    expect(p.id).toBe(`msg_tel_${NUM}`);
+    expect(p.display_name).toMatch(/^\+1 /);
+  });
+});

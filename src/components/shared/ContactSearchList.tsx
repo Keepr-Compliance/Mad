@@ -483,6 +483,8 @@ export function ContactSearchList({
   const handleRolesChange = useCallback((next: Set<string>) => setSelectedRoles(next), []);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
+  /** Imports in flight, by row id — read synchronously (double-click guard). */
+  const importingRef = useRef<Set<string>>(new Set());
   const listRef = useRef<HTMLDivElement>(null);
 
   // Which rows are external — by reference, robust regardless of id shape. A
@@ -734,7 +736,7 @@ export function ContactSearchList({
   // Import an external contact (optionally auto-select the imported result).
   const handleImport = useCallback(
     async (contact: ExtendedContact, autoSelect: boolean = false) => {
-      if (!onImportContact || importingIds.has(contact.id)) return;
+      if (!onImportContact || importingIds.has(contact.id) || importingRef.current.has(contact.id)) return;
       /*
         BACKLOG-2672 — THE REFUSAL, not just a greyed button.
 
@@ -751,15 +753,21 @@ export function ContactSearchList({
       */
       if (importBlockedReason(contact, true)) return;
 
+      // Live: a double-click while the import is pending must not start a
+      // second one — a ref, because the state above is stale inside one render.
+      importingRef.current.add(contact.id);
       setImportingIds((prev) => new Set(prev).add(contact.id));
       try {
         const imported = await onImportContact(contact);
-        if (autoSelect) {
+        // Live: an import that returns a contact already selected (the same
+        // person picked again) never adds a second pill.
+        if (autoSelect && !selectedIds.includes(imported.id)) {
           onSelectionChange([...selectedIds, imported.id]);
         }
       } catch (err) {
         logger.error("Failed to import contact:", err);
       } finally {
+        importingRef.current.delete(contact.id);
         setImportingIds((prev) => {
           const next = new Set(prev);
           next.delete(contact.id);
