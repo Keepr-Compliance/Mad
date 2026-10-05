@@ -200,3 +200,34 @@ describe("the Android contacts option is hidden (founder, 2026-10-05)", () => {
     expect(mockUpdatePreferences).not.toHaveBeenCalled();
   });
 });
+
+// SR (after a0d89d8b6): the hidden Android contacts are not a source the
+// screen can show, so a user whose ONLY source they are gets the "no sources"
+// placeholder. Mutation: the empty-state check counting the hidden Android
+// source again → red.
+it("only the hidden Android contacts (Windows, Android phone, no mailbox): the no-sources placeholder", async () => {
+  Object.defineProperty(window, "api", {
+    value: {
+      ...originalApi,
+      system: { ...originalApi?.system, platform: "win32" },
+      contacts: {
+        getExternalSyncStatus: jest.fn().mockResolvedValue({ success: true, lastSyncAt: null, contactCount: 0 }),
+        getSourceStats: jest.fn().mockResolvedValue({ success: true, stats: { android_sync: 389 } }),
+      },
+    },
+    writable: true,
+    configurable: true,
+  });
+  render(
+    <PlatformProvider>
+      <ContactsSettings
+        userId="user-1"
+        initialPreferences={prefs({ androidContacts: true }, "android") as never}
+        isMicrosoftConnected={false}
+        isGoogleConnected={false}
+      />
+    </PlatformProvider>,
+  );
+  expect(await screen.findByText("Connect a Microsoft or Google account, or use macOS to import contacts.")).toBeInTheDocument();
+  expect(screen.queryByLabelText(ANDROID_SWITCH)).not.toBeInTheDocument();
+});

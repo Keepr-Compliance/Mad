@@ -602,7 +602,8 @@ export function ContactsImportSettings({
   // contacts. Its stored preference and the contacts already imported stay as
   // they are; Google Messages never reads this key.
   const showAndroidContacts = ANDROID_CONTACTS_OPTION_SHOWN && hasAndroidContactSource;
-  // BACKLOG-2986: Android counts as a source, for the same reason BACKLOG-2486
+  // BACKLOG-2986: Android counted as a source (while its option is shown —
+  // hidden, a user whose only source it is gets the placeholder), for the same reason BACKLOG-2486
   // added `showIphoneContacts` — a user whose only address book is the phone in
   // their pocket must not hit the "no sources" placeholder.
   // C2 (BACKLOG-3670): a text-message import source (e.g. Android: Google
@@ -610,7 +611,7 @@ export function ContactsImportSettings({
   // Messages / SMS switch must be reachable.
   const hasMessageSource = importSourceLabel(messagesImportSource) !== null;
   const hasAnySources =
-    hasMacOS || hasOutlook || hasGoogle || showIphoneContacts || hasAndroidContactSource || hasMessageSource;
+    hasMacOS || hasOutlook || hasGoogle || showIphoneContacts || showAndroidContacts || hasMessageSource;
 
   const anySyncing = isSyncing || outlookSyncing || googleSyncing;
 
