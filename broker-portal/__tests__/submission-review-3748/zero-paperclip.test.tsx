@@ -104,9 +104,37 @@ describe('BACKLOG-3748: paperclip hidden unless a real attachment exists', () =>
     expect(within(bubble).getByText('1')).toBeTruthy();
   });
 
+  it('an email with a matched attachment row keeps its paperclip with the real count', () => {
+    // FIXTURE PROVENANCE: message_id = the email's own id, as written by
+    // electron/services/submissionService.ts:973,984 (attachmentPlan's
+    // ownerKey for an email row resolves to cloudIdByLocal.get(`email:${row.email_id}`),
+    // which is the SAME id minted for the email's own submission_messages
+    // record at :2279's call site). attachment_count 0 on the email mirrors
+    // submissionService.ts:2279's `(email.attachment_count as number) || 0`
+    // fallback -- the matched row, not the flag, must drive the badge.
+    const email = message({
+      id: 'msg-email-1',
+      channel: 'email',
+      thread_id: null,
+      subject: 'Contract',
+      body_text: 'See the attached contract.',
+      message_type: 'email',
+      has_attachments: true,
+      attachment_count: 0,
+    });
+    const row = attachmentRow('a-email-1', 'Contract.pdf', email.id);
+    const map = groupAttachmentsByMessage([row], [email], true);
+    const thread = groupMessagesIntoThreads([email], map)[0];
+    render(<ConversationModal thread={thread} onClose={() => {}} attachmentsByMessage={map} />);
+
+    expect(thread.totalAttachments).toBe(1);
+    const bubble = bubbleOf('See the attached contract.');
+    expect(within(bubble).getByText('1')).toBeTruthy();
+  });
+
   it('falls back to attachment_count when no attachmentsByMessage row exists for this message', () => {
-    // Mirrors app/dashboard/my-transactions/[id]/page.tsx, which renders
-    // <MessageList messages={...} /> with no attachmentsByMessage map at all.
+    // Mirrors any caller that renders MessageList without an attachmentsByMessage
+    // map (e.g. a page gated with showMessages but attachments disabled).
     const real = message({
       id: 'msg-real-no-map',
       body_text: 'See attached disclosure',
