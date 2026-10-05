@@ -66,19 +66,6 @@ export interface SubmissionScopeIpcResult {
     emailAttachments: number;
     attachmentBytes: number;
   };
-  outOfWindow?: {
-    emailsBefore: number;
-    emailsAfter: number;
-    textsBefore: number;
-    textsAfter: number;
-    undated: number;
-    items: Array<{
-      kind: "email" | "text";
-      sentAt: string | null;
-      label: string;
-      side: "before" | "after" | "undated";
-    }>;
-  };
   error?: string;
 }
 
@@ -1122,10 +1109,7 @@ export interface WindowApiTransactions {
     error?: string;
   }>;
 
-  /**
-   * BACKLOG-3683: what a submission with these (not yet saved) dates would
-   * send, and what is linked but outside them.
-   */
+  /** BACKLOG-3683: what a submission with these (not yet saved) dates would send. */
   getSubmissionScope: (
     transactionId: string,
     candidate: { started_at: string | null; closed_at: string | null }

@@ -26,11 +26,6 @@ import {
 } from "../../../transactionDates";
 import type { Transaction } from "@/types";
 import { useSubmissionScope } from "../../hooks/useSubmissionScope";
-import {
-  outOfWindowItemLine,
-  outOfWindowSentences,
-  outOfWindowTotal,
-} from "./submissionScopeCopy";
 
 export interface SubmitProgress {
   stage:
@@ -887,7 +882,7 @@ export function SubmitForReviewModal({
               </div>
             </div>
 
-            {/* BACKLOG-3683 (founder decision B): linked items the dates leave out. */}
+            {/* BACKLOG-3683: the in-window counts above couldn't be loaded. */}
             {scopeState.status === "failed" && dateStepApplies && (
               <div
                 className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"
@@ -895,31 +890,6 @@ export function SubmitForReviewModal({
                 data-testid="submit-review-scope-failed"
               >
                 Couldn&apos;t count what falls inside these dates. Only emails and texts dated from the start date to the end date will be sent.
-              </div>
-            )}
-            {scopeReady && outOfWindowTotal(scopeReady.scope.outOfWindow) > 0 && (
-              <div
-                className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"
-                role="status"
-                data-testid="submit-review-out-of-window"
-              >
-                {outOfWindowSentences(
-                  scopeReady.scope.outOfWindow,
-                  scopeReady.startDate,
-                  scopeReady.endDate
-                ).map((line) => (
-                  <p key={line} className="mb-1">{line}</p>
-                ))}
-                <ul className="mt-1 list-disc pl-5 text-amber-800">
-                  {scopeReady.scope.outOfWindow.items.map((item, i) => (
-                    <li key={`${item.kind}-${item.sentAt ?? ""}-${i}`}>{outOfWindowItemLine(item)}</li>
-                  ))}
-                </ul>
-                {outOfWindowTotal(scopeReady.scope.outOfWindow) > scopeReady.scope.outOfWindow.items.length && (
-                  <p className="mt-1 text-amber-800" data-testid="submit-review-out-of-window-more">
-                    and {outOfWindowTotal(scopeReady.scope.outOfWindow) - scopeReady.scope.outOfWindow.items.length} more
-                  </p>
-                )}
               </div>
             )}
 

@@ -815,7 +815,7 @@ export function registerTransactionExportHandlers(
   );
 
   // BACKLOG-3683: what a submission with the dates on the date step would
-  // send, and what is linked but outside them. Read-only; downloads nothing.
+  // send. Read-only; downloads nothing.
   ipcMain.handle(
     "transactions:submission-scope",
     wrapHandler(async (
@@ -839,7 +839,6 @@ export function registerTransactionExportHandlers(
       return {
         success: result.success,
         inWindow: result.inWindow,
-        outOfWindow: result.outOfWindow,
         error: result.error,
       };
     }, { module: "Transactions" }),

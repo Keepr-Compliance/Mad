@@ -618,10 +618,7 @@ export const transactionBridge = {
   submitPreflight: (transactionId: string) =>
     ipcRenderer.invoke("transactions:submit-preflight", transactionId),
 
-  /**
-   * BACKLOG-3683: what a submission with these (not yet saved) dates would
-   * send, and what is linked but outside them.
-   */
+  /** BACKLOG-3683: what a submission with these (not yet saved) dates would send. */
   getSubmissionScope: (
     transactionId: string,
     candidate: { started_at: string | null; closed_at: string | null }

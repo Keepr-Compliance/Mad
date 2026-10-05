@@ -16,14 +16,12 @@ import {
 } from "../../transactionDates";
 import type { SubmissionScopeIpcResult } from "@electron/types/ipc/window-api-transactions";
 
-export type SubmissionScope = Required<
-  Pick<SubmissionScopeIpcResult, "inWindow" | "outOfWindow">
->;
+export type SubmissionScope = Required<Pick<SubmissionScopeIpcResult, "inWindow">>;
 
 export type SubmissionScopeState =
   | { status: "idle" }
   | { status: "loading" }
-  | { status: "ready"; scope: SubmissionScope; endDate: string; startDate: string }
+  | { status: "ready"; scope: SubmissionScope }
   | { status: "failed" };
 
 export function useSubmissionScope(transactionId: string): {
@@ -43,13 +41,8 @@ export function useSubmissionScope(transactionId: string): {
         closed_at: update.closed_at,
       });
       if (run !== runRef.current) return;
-      if (answer.success && answer.inWindow && answer.outOfWindow) {
-        setState({
-          status: "ready",
-          scope: { inWindow: answer.inWindow, outOfWindow: answer.outOfWindow },
-          startDate: update.started_at,
-          endDate: update.closed_at,
-        });
+      if (answer.success && answer.inWindow) {
+        setState({ status: "ready", scope: { inWindow: answer.inWindow } });
       } else {
         setState({ status: "failed" });
       }
