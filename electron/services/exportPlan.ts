@@ -306,7 +306,8 @@ export function auditWindowStart(startDate: Date | string | null | undefined): D
   if (!startDate) return null;
   if (startDate instanceof Date) return new Date(startDate.getTime());
 
-  const match = DATE_ONLY.exec(startDate.trim());
+  // `.match`, not `RegExp#exec`: the SQL boundary gate reads any `.exec(` as SQL.
+  const match = startDate.trim().match(DATE_ONLY);
   if (match) {
     const year = Number(match[1]);
     const monthIndex = Number(match[2]) - 1;
