@@ -58,6 +58,9 @@ import type { ContactInferenceStates } from "../../hooks/useContactInferenceStat
 import type { ImportSource } from "../../services/settingsService";
 import { importSourceLabel } from "./importSourceLabels";
 
+/** Founder (2026-10-05): the Android contacts option is hidden (see showAndroidContacts). */
+export const ANDROID_CONTACTS_OPTION_SHOWN = false;
+
 /**
  * BACKLOG-2388: Shared "counts clause" for a contact-sync result so the macOS,
  * Outlook, and Google result banners read consistently. Returns only the
@@ -593,7 +596,12 @@ export function ContactsImportSettings({
    * is legitimately 0 and the user most needs the control.
    */
   const androidContactCount = sourceStats?.android_sync ?? 0;
-  const showAndroidContacts = androidContactsDeclared || androidContactCount > 0;
+  const hasAndroidContactSource = androidContactsDeclared || androidContactCount > 0;
+  // Founder (2026-10-05): the Android contacts option (switch, count, note) is
+  // hidden with the Android Companion's UI — only the Companion pushed these
+  // contacts. Its stored preference and the contacts already imported stay as
+  // they are; Google Messages never reads this key.
+  const showAndroidContacts = ANDROID_CONTACTS_OPTION_SHOWN && hasAndroidContactSource;
   // BACKLOG-2986: Android counts as a source, for the same reason BACKLOG-2486
   // added `showIphoneContacts` — a user whose only address book is the phone in
   // their pocket must not hit the "no sources" placeholder.
@@ -602,7 +610,7 @@ export function ContactsImportSettings({
   // Messages / SMS switch must be reachable.
   const hasMessageSource = importSourceLabel(messagesImportSource) !== null;
   const hasAnySources =
-    hasMacOS || hasOutlook || hasGoogle || showIphoneContacts || showAndroidContacts || hasMessageSource;
+    hasMacOS || hasOutlook || hasGoogle || showIphoneContacts || hasAndroidContactSource || hasMessageSource;
 
   const anySyncing = isSyncing || outlookSyncing || googleSyncing;
 

@@ -107,7 +107,9 @@ function renderSettings(preferences: Record<string, unknown>) {
   );
 }
 
-const ANDROID_SWITCH = "Android Phone Contacts import";
+// Founder (2026-10-05): the Android contacts switch is hidden; these cases
+// drive the Outlook switch (stored OFF) — the same one handler serves all toggles.
+const TOGGLE_SWITCH = "Outlook Contacts import";
 const MACOS_SWITCH = "macOS Contacts import";
 
 /** `phone_type: "iphone"` with `androidContacts` stored OFF — the state the
@@ -115,7 +117,7 @@ const MACOS_SWITCH = "macOS Contacts import";
  *  the click whose lost write this suite is about. */
 const ANDROID_OFF = {
   phone_type: "iphone",
-  contactSources: { direct: { macosContacts: true, androidContacts: false } },
+  contactSources: { direct: { macosContacts: true, androidContacts: false, outlookContacts: false } },
 };
 
 beforeEach(() => {
@@ -139,16 +141,16 @@ describe("BACKLOG-2986 — a resolved { success: false } reverts the switch", ()
     mockUpdatePreferences.mockResolvedValue({ success: false, error: "offline" });
     renderSettings(ANDROID_OFF);
 
-    const toggle = await screen.findByLabelText(ANDROID_SWITCH);
+    const toggle = await screen.findByLabelText(TOGGLE_SWITCH);
     expect(toggle).toHaveAttribute("aria-checked", "false");
 
     fireEvent.click(toggle);
 
     await waitFor(() =>
-      expect(screen.getByLabelText(ANDROID_SWITCH)).toHaveAttribute("aria-checked", "false"),
+      expect(screen.getByLabelText(TOGGLE_SWITCH)).toHaveAttribute("aria-checked", "false"),
     );
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      /Android Phone Contacts could not be saved/i,
+      /Outlook Contacts could not be saved/i,
     );
   });
 
@@ -226,10 +228,10 @@ describe("BACKLOG-2986 — the failure reason reaches the user", () => {
 
     renderWithRealService({ success: false, error: "session expired" });
 
-    fireEvent.click(await screen.findByLabelText(ANDROID_SWITCH));
+    fireEvent.click(await screen.findByLabelText(TOGGLE_SWITCH));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      /Android Phone Contacts could not be saved: session expired/i,
+      /Outlook Contacts could not be saved: session expired/i,
     );
   });
 
@@ -246,10 +248,10 @@ describe("BACKLOG-2986 — the failure reason reaches the user", () => {
 
     renderWithRealService({ success: false });
 
-    fireEvent.click(await screen.findByLabelText(ANDROID_SWITCH));
+    fireEvent.click(await screen.findByLabelText(TOGGLE_SWITCH));
 
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent(/Android Phone Contacts could not be saved\./i);
+    expect(alert).toHaveTextContent(/Outlook Contacts could not be saved\./i);
     expect(alert).not.toHaveTextContent(/could not be saved:/i);
   });
 });
@@ -263,7 +265,7 @@ describe("BACKLOG-2986 — the banner is where the click was", () => {
     mockUpdatePreferences.mockResolvedValue({ success: false, error: "offline" });
     renderSettings(ANDROID_OFF);
 
-    fireEvent.click(await screen.findByLabelText(ANDROID_SWITCH));
+    fireEvent.click(await screen.findByLabelText(TOGGLE_SWITCH));
 
     const alert = await screen.findByRole("alert");
 
@@ -272,7 +274,7 @@ describe("BACKLOG-2986 — the banner is where the click was", () => {
     // the position this replaced.
     //
     // (a) The alert precedes the switch it is about.
-    expect(alert.compareDocumentPosition(screen.getByLabelText(ANDROID_SWITCH)) & 4).toBeTruthy();
+    expect(alert.compareDocumentPosition(screen.getByLabelText(TOGGLE_SWITCH)) & 4).toBeTruthy();
     // (b) And it sits INSIDE the Sources block — after that block's label and
     //     its description, immediately above the source toggle group. The old
     //     position was between the section's <h3> and this panel, which
@@ -303,10 +305,10 @@ describe("BACKLOG-2986 — a thrown error reverts the switch too", () => {
     mockUpdatePreferences.mockRejectedValue(new Error("boom"));
     renderSettings(ANDROID_OFF);
 
-    fireEvent.click(await screen.findByLabelText(ANDROID_SWITCH));
+    fireEvent.click(await screen.findByLabelText(TOGGLE_SWITCH));
 
     await waitFor(() =>
-      expect(screen.getByLabelText(ANDROID_SWITCH)).toHaveAttribute("aria-checked", "false"),
+      expect(screen.getByLabelText(TOGGLE_SWITCH)).toHaveAttribute("aria-checked", "false"),
     );
     expect(await screen.findByRole("alert")).toBeInTheDocument();
   });
@@ -317,10 +319,10 @@ describe("BACKLOG-2986 — a successful write is left alone", () => {
     mockUpdatePreferences.mockResolvedValue({ success: true });
     renderSettings(ANDROID_OFF);
 
-    fireEvent.click(await screen.findByLabelText(ANDROID_SWITCH));
+    fireEvent.click(await screen.findByLabelText(TOGGLE_SWITCH));
 
     await waitFor(() => expect(mockUpdatePreferences).toHaveBeenCalled());
-    expect(screen.getByLabelText(ANDROID_SWITCH)).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByLabelText(TOGGLE_SWITCH)).toHaveAttribute("aria-checked", "true");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
@@ -330,13 +332,13 @@ describe("BACKLOG-2986 — a successful write is left alone", () => {
     mockUpdatePreferences.mockResolvedValueOnce({ success: false, error: "offline" });
     renderSettings(ANDROID_OFF);
 
-    fireEvent.click(await screen.findByLabelText(ANDROID_SWITCH));
+    fireEvent.click(await screen.findByLabelText(TOGGLE_SWITCH));
     expect(await screen.findByRole("alert")).toBeInTheDocument();
 
     mockUpdatePreferences.mockResolvedValue({ success: true });
-    fireEvent.click(screen.getByLabelText(ANDROID_SWITCH));
+    fireEvent.click(screen.getByLabelText(TOGGLE_SWITCH));
 
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
-    expect(screen.getByLabelText(ANDROID_SWITCH)).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByLabelText(TOGGLE_SWITCH)).toHaveAttribute("aria-checked", "true");
   });
 });

@@ -153,6 +153,11 @@ const SOURCE_OPTIONS: SourceConfig[] = [
     selectedBorder: "border-green-400",
     selectedBg: "bg-green-50",
     phoneType: "android",
+    // Founder (2026-10-05): hidden with the Android Companion's UI — only the
+    // Companion pushed these contacts. Google Messages never reads this key
+    // (its people use contactSources.inferred.messages). Not written by Skip
+    // or Continue while hidden; stored values are untouched.
+    hidden: true,
   },
 ];
 
