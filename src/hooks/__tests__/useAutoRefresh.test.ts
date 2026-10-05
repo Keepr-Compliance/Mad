@@ -562,6 +562,26 @@ describe("useAutoRefresh", () => {
       expect(mockRequestSync.mock.calls.some((c) => (c[0] as string[]).includes('messages'))).toBe(false);
     });
 
+    // SR (BACKLOG-3749 follow-up): a failed preferences read falls back to the
+    // Mac default — Mac Messages still runs once the read has settled.
+    // Mutation: the load flag not set on failure → red.
+    it("the preferences read throws: Mac Messages still runs (the Mac default)", async () => {
+      (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
+      mockPreferencesGet.mockRejectedValue(new Error("offline"));
+
+      const { result } = renderHook(() => useAutoRefresh(defaultOptions));
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      mockRequestSync.mockClear();
+      await act(async () => {
+        await result.current.triggerRefresh();
+      });
+
+      expect(mockRequestSync).toHaveBeenCalledWith(['contacts', 'emails', 'messages'], 'test-user-123');
+    });
+
     it("should NOT include messages when import source is iphone-sync on macOS", async () => {
       (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
 
