@@ -7,6 +7,7 @@ import { ReviewActions } from '@/components/submission/ReviewActions';
 import { AttachmentList } from '@/components/submission/AttachmentList';
 import { ExcludedFilesNotice } from '@/components/submission/ExcludedFilesNotice';
 import { buildAttachmentSources, readExcludedFiles } from '@/lib/submissions/attachmentSources';
+import { groupAttachmentsByMessage } from '@/lib/submissions/attachmentKinds';
 import { StatusHistory } from '@/components/submission/StatusHistory';
 import { ChecklistReview } from '@/components/submission/ChecklistReview';
 import { getDataClient } from '@/lib/impersonation-guards';
@@ -291,6 +292,14 @@ export default async function SubmissionDetailPage({ params }: PageProps) {
   const attachmentSources = buildAttachmentSources(attachments, gatedMessages);
   const excludedFiles = readExcludedFiles(submission.submission_metadata);
 
+  // BACKLOG-3748: files shown inside their message's bubble, joined on
+  // message_id over the gated messages; each channel needs its own
+  // attachment flag (texts: broker_text_attachments, emails: broker_email_attachments).
+  const attachmentsByMessage = groupAttachmentsByMessage(attachments, gatedMessages, {
+    text: textAttachmentsEnabled,
+    email: emailAttachmentsEnabled,
+  });
+
   // BACKLOG-3477: the Checklists area, fail-closed on the submission's org.
   // Not shown during impersonation: the scoped support client does not admit
   // the checklist copy tables.
@@ -441,12 +450,13 @@ export default async function SubmissionDetailPage({ params }: PageProps) {
           versionHistory={submission.status_history}
           version={typeof submission.version === 'number' ? submission.version : null}
           linkedCounts={linkedCounts}
+          attachmentsByMessage={showMessages ? attachmentsByMessage : undefined}
         />
       )}
 
       {/* Messages with filter tabs - gated by broker_text_view / broker_email_view (TASK-2158) */}
       {showMessages && (
-        <MessageList messages={gatedMessages} />
+        <MessageList messages={gatedMessages} attachmentsByMessage={attachmentsByMessage} />
       )}
 
       {/* Attachments with viewer - gated by broker_text_attachments / broker_email_attachments (TASK-2158) */}
