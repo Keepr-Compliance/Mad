@@ -28,6 +28,7 @@
     "build": "npm run build:react && npm run build:electron && npm run build:preload",
     "build:react": "vite build",
     "build:electron": "tsc -p tsconfig.electron.json && npm run copy:database && npm run build:pair",
+    "package:extension": "node scripts/package-extension.mjs",
     "build:pair": "esbuild chrome-extension/pair-protocol.js --bundle --platform=node --format=cjs --outfile=dist-electron/pair-protocol.cjs",
     "copy:database": "node scripts/copy-database.js",
     "download:drivers": "node scripts/download-apple-drivers.js",
