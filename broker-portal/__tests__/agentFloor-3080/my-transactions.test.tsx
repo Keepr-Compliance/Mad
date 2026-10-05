@@ -782,6 +782,13 @@ describe('detail page', () => {
     it('a photo text keeps its paperclip with the real count; a link-only text shows none', async () => {
       given3748();
       const element = elementOf(await run(detail(S_A)));
+      // SR review ed5a0a09: the fixture emulator returns full rows regardless
+      // of the select string, so the rendered paperclip alone cannot catch a
+      // regression that drops message_id from the real query. Assert the
+      // column directly.
+      expect(
+        mockEmulator.state.selects.find((s) => s.table === 'submission_attachments')?.columns
+      ).toMatch(/\bmessage_id\b/);
       render(element);
       fireEvent.click(screen.getByRole('button', { name: /View Full/ }));
 
