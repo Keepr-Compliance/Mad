@@ -9,13 +9,17 @@
  * Runs the REAL enhancedExportService → folderExportService path (harness
  * mirrors enhancedExportAttachmentSelector-2771). Four attachment rows:
  *   - present            → copied, not listed
- *   - no local path      → listed "Not downloaded to this computer"
+ *   - no local path      → the export downloads it first; if the mailbox
+ *                          does not return it → listed "Couldn't be
+ *                          downloaded from the mailbox"
  *   - path, file gone    → listed "No longer on this computer"
  *   - copy throws        → listed "Could not be copied"
  *
  * C5a MUTATION: skip the `sections.push` of the files section → red.
  * C5b MUTATION: render the PDF before exporting attachments (old order) →
  *     the list is not known yet → red.
+ * C7 MUTATION: skip the download step in `_exportPDF` → the downloadable
+ *     attachment is listed instead of included → red.
  */
 
 jest.mock("electron", () => ({
@@ -78,6 +82,9 @@ jest.mock("../logService", () => ({
 
 jest.mock("googleapis", () => ({ google: { gmail: jest.fn() }, gmail_v1: {}, Auth: {} }));
 
+// Emails the download step's SQL reports as missing bytes (default: none).
+let missingEmails: Array<{ id: string; external_id: string; source: string; user_id: string }> = [];
+
 const attachmentsTable = [
   { id: "a-ok", message_id: null, email_id: "e1", filename: "agreement.pdf", mime_type: "application/pdf", storage_path: "/cache/agreement.pdf", file_size_bytes: 10 },
   { id: "a-nodl", message_id: null, email_id: "e1", filename: "addendum.pdf", mime_type: "application/pdf", storage_path: null, file_size_bytes: 10 },
@@ -89,7 +96,9 @@ jest.mock("../databaseService", () => ({
   __esModule: true,
   default: {
     getRawDatabase: () => ({
-      prepare: () => ({ get: () => undefined, all: () => [], run: () => undefined }),
+      // The bytes-missing query of the shared download step: the emails it
+      // should fetch from the mailbox.
+      prepare: () => ({ get: () => undefined, all: () => missingEmails, run: () => undefined }),
     }),
     getAttachmentsForEmailExport: (emailId: string) =>
       attachmentsTable.filter((r) => r.email_id === emailId),
@@ -179,6 +188,9 @@ beforeEach(() => {
   jest.clearAllMocks();
   htmlDocs.length = 0;
   copied.length = 0;
+  missingEmails = [];
+  const row = attachmentsTable.find((r) => r.id === "a-nodl");
+  if (row) row.storage_path = null;
 });
 
 describe("BACKLOG-3683 — the export PDF lists files it could not include", () => {
@@ -189,7 +201,8 @@ describe("BACKLOG-3683 — the export PDF lists files it could not include", () 
     expect(doc).toContain("Files not included");
     const section = doc.slice(doc.indexOf('id="files-not-included"'));
     expect(section).toContain("addendum.pdf");
-    expect(section).toContain("Not downloaded to this computer");
+    expect(section).toContain("Couldn&#039;t be downloaded from the mailbox");
+    expect(section).not.toContain("Not downloaded to this computer");
     expect(section).toContain("gone.jpg");
     expect(section).toContain("No longer on this computer");
     expect(section).toContain("Text from Pat Fixture");
@@ -217,5 +230,43 @@ describe("BACKLOG-3683 — the export PDF lists files it could not include", () 
   it("a PDF without attachment files lists nothing", async () => {
     await runPdfExport("none");
     expect(pdfHtml()).not.toContain('id="files-not-included"');
+  });
+
+  describe("download first (founder rule: the same ordering applies to export)", () => {
+    const outlook = () => jest.requireMock("../outlookFetchService").default;
+    const downloader = () => jest.requireMock("../emailAttachmentService").default;
+
+    beforeEach(() => {
+      missingEmails = [{ id: "e1", external_id: "ext-e1", source: "outlook", user_id: "user-123" }];
+      outlook().getAttachments.mockResolvedValue([
+        { id: "g-1", name: "addendum.pdf", contentType: "application/pdf", size: 10 },
+      ]);
+    });
+
+    it("a not-yet-downloaded attachment the mailbox returns is downloaded and included, not listed", async () => {
+      downloader().downloadEmailAttachments.mockImplementation(async () => {
+        const row = attachmentsTable.find((r) => r.id === "a-nodl");
+        if (row) row.storage_path = "/cache/addendum.pdf";
+      });
+      await runPdfExport("all");
+      expect(downloader().downloadEmailAttachments).toHaveBeenCalledWith(
+        "user-123", "e1", "ext-e1", "outlook", expect.any(Array),
+      );
+      expect(copied).toEqual(["/cache/agreement.pdf", "/cache/addendum.pdf"]);
+      const doc = pdfHtml();
+      const section = doc.slice(doc.indexOf('id="files-not-included"'));
+      expect(section).not.toContain("addendum.pdf");
+      expect(section).not.toContain("Couldn&#039;t be downloaded from the mailbox");
+    });
+
+    it("an attachment whose download fails is listed as couldn't be downloaded from the mailbox", async () => {
+      downloader().downloadEmailAttachments.mockRejectedValue(new Error("mailbox 503"));
+      await runPdfExport("all");
+      expect(downloader().downloadEmailAttachments).toHaveBeenCalledTimes(1);
+      expect(copied).toEqual(["/cache/agreement.pdf"]);
+      const doc = pdfHtml();
+      const section = doc.slice(doc.indexOf('id="files-not-included"'));
+      expect(section).toMatch(/addendum\.pdf<\/td>[\s\S]*?Couldn&#039;t be downloaded from the mailbox/);
+    });
   });
 });

@@ -861,7 +861,14 @@ class FolderExportService {
           messagePreview,
           status: "file_not_found",
         });
-        leftOut(comm, originalFilename, "not_on_this_computer");
+        // BACKLOG-3683: the one-PDF export downloads missing email attachments
+        // before this runs, so an email attachment still without a file here is
+        // one the mailbox did not return. A text has no mailbox to fetch from.
+        leftOut(
+          comm,
+          originalFilename,
+          messageType === "email" ? "download_failed" : "not_on_this_computer",
+        );
         continue;
       }
 

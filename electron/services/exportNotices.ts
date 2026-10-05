@@ -77,6 +77,8 @@ export interface ExportOmissionDetail extends ExportOmissions {
 export type ExportFileNotIncludedReason =
   /** The attachment has no file on this computer (never downloaded). */
   | "not_on_this_computer"
+  /** An email attachment the mailbox did not return when the export tried to download it. */
+  | "download_failed"
   /** The attachment's file was here and is gone. */
   | "file_missing"
   /** The file is here but could not be copied. */

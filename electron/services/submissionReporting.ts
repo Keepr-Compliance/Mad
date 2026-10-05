@@ -105,9 +105,9 @@ export function flatAttemptCounts(
 export function inProgressAttemptCounts(
   messages: number,
   attachments: number,
-  excludedFiles: number
+  notIncluded: number
 ): Record<string, number> {
-  return { messages, attachments, excluded_files: excludedFiles };
+  return { messages, attachments, not_included: notIncluded };
 }
 
 export interface AttemptRecord {

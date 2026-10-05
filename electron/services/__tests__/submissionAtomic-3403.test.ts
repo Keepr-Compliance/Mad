@@ -1078,12 +1078,12 @@ describe("BACKLOG-3715 — attempt counts", () => {
    * MUTATION: send `counts: {}` on the in_progress row (pre-3715) → red.
    * The keys must be flat snake_case whole numbers, or the server drops them.
    */
-  it("the in_progress row carries messages, attachments and excluded_files", async () => {
+  it("the in_progress row carries messages, attachments and not_included", async () => {
     const result = await submissionService.submitTransaction(TX, undefined, { acceptedExclusionKeys: ["att:att-pdf"] });
     expect(result.success).toBe(true);
     const started = cloud.attemptCalls.filter((a) => a.p_outcome === "in_progress");
     expect(started).toHaveLength(1);
-    expect(started[0].p_counts).toEqual({ messages: 3, attachments: 1, excluded_files: 1 });
+    expect(started[0].p_counts).toEqual({ messages: 3, attachments: 1, not_included: 1 });
   });
 
   /**
@@ -1099,6 +1099,6 @@ describe("BACKLOG-3715 — attempt counts", () => {
     expect(started.p_outcome).toBe("in_progress");
     expect(ended.p_outcome).toBe("failed");
     const merged = { ...(started.p_counts as Row), ...(ended.p_counts as Row) };
-    expect(merged).toMatchObject({ messages: 3, attachments: 1, excluded_files: 1 });
+    expect(merged).toMatchObject({ messages: 3, attachments: 1, not_included: 1 });
   });
 });

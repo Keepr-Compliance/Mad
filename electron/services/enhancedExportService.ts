@@ -3,6 +3,7 @@ import fs from "fs/promises";
 import { app } from "electron";
 import folderExportService from "./folderExportService";
 import logService from "./logService";
+import { downloadMissingEmailAttachments } from "./emailAttachmentDownload";
 import { Transaction, Communication } from "../types/models";
 import type { TransactionWithDetails } from "./transactionService/types";
 import { isEmailMessage, isTextMessage } from "../utils/channelHelpers";
@@ -170,6 +171,13 @@ class EnhancedExportService {
       // manifest.json encodes array position as `sourceEmailIndex`, so the
       // order is observable and preserved. Nothing re-derives the predicate.
       const attachmentComms = orderAttachmentComms(plan, communications);
+
+      // BACKLOG-3683: download first (the submit's rule applies to export). A
+      // linked email attachment that is not on this computer yet is fetched
+      // from the mailbox now; only one the mailbox does not return is listed.
+      if (attachmentComms.some((c) => isEmailMessage(c))) {
+        await downloadMissingEmailAttachments(transaction.id, "[Export]");
+      }
 
       // Use folderExportService's attachment export
       const filesNotIncluded = await folderExportService.exportAttachments(

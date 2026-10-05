@@ -16,6 +16,7 @@ export const FILES_NOT_INCLUDED_HEADING = "Files not included";
 
 const REASON_TEXT: Record<ExportFileNotIncludedReason, string> = {
   not_on_this_computer: "Not downloaded to this computer",
+  download_failed: "Couldn't be downloaded from the mailbox",
   file_missing: "No longer on this computer",
   copy_failed: "Could not be copied",
 };
