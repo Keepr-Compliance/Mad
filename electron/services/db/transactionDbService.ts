@@ -825,6 +825,24 @@ export function createTransactionWithContactsSync(
   assignments: TransactionContactData[],
 ): Transaction {
   return dbTransaction(() => {
+    // Live FK bug (2026-10-04): a made-up id (a person found in texts, msg_tel_…)
+    // reached here and the insert failed with a bare "FOREIGN KEY constraint
+    // failed". Every party must be one of THIS user's saved contacts; checked
+    // first, inside the same transaction, so nothing is written otherwise. The
+    // ids are not put in the message (a msg_tel_ id carries a phone number).
+    const ids = Array.from(new Set(assignments.map((a) => a.contact_id)));
+    if (ids.length > 0) {
+      const found = dbAll<{ id: string }>(
+        sql`SELECT id FROM contacts WHERE user_id = ? AND id IN (SELECT value FROM json_each(?))`,
+        [transactionData.user_id, JSON.stringify(ids)],
+      );
+      const missing = ids.length - new Set(found.map((r) => r.id)).size;
+      if (missing > 0) {
+        throw new DatabaseError(
+          `${missing === 1 ? "A selected contact isn't" : `${missing} selected contacts aren't`} saved in Keepr. Add them again from the contact list.`,
+        );
+      }
+    }
     const transaction = createTransactionSync(transactionData);
     for (const assignment of assignments) {
       assignContactToTransactionSync(transaction.id, assignment);

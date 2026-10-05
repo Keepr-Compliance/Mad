@@ -1191,10 +1191,11 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
         }
 
         // TASK-1956: Use worker thread to avoid blocking main process during contact load
+        // FK fix (live): people found in texts are NOT saved contacts — they
+        // are offered in the address-book half (contacts:get-available), so
+        // picking one imports it first. Never in the saved lists.
         const importedContacts =
-          await databaseService.getImportedContactsByUserIdAsync(validatedUserId, {
-            textPeople: await textPeopleEnabled(validatedUserId),
-          });
+          await databaseService.getImportedContactsByUserIdAsync(validatedUserId);
 
         logService.debug(
           `[PERF] contacts.getAll: ${Date.now() - t0}ms, ${importedContacts.length} contacts`,
@@ -2105,6 +2106,31 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
           );
         }
 
+        /**
+         * FK fix (live 2026-10-04): PEOPLE FOUND IN GOOGLE MESSAGES TEXTS
+         * (BACKLOG-3670) go in the ADDRESS-BOOK half, exactly as people found
+         * in email (BACKLOG-1717, above): picking one runs contacts:import and
+         * the deal gets the SAVED contact's id. In the saved half their
+         * made-up `msg_tel_` id reached transaction_contacts and the create
+         * failed with "FOREIGN KEY constraint failed". Same gate as before
+         * (Settings → Auto-discover → Messages / SMS); a failed read → none.
+         */
+        try {
+          if (await textPeopleEnabled(validatedUserId)) {
+            const textPeople = databaseService.getTextDerivedPeople(validatedUserId);
+            for (const person of textPeople) {
+              availableContacts.push({ ...person, user_id: validatedUserId } as unknown as (typeof availableContacts)[number]);
+            }
+            logService.info(`[Contacts] Offered ${textPeople.length} people found in texts`, "Contacts");
+          }
+        } catch (textPeopleError) {
+          logService.error(
+            "[Contacts] Could not read people from texts; the rest of the picker is unaffected",
+            "Contacts",
+            { error: textPeopleError },
+          );
+        }
+
         // Contacts are already sorted by last_message_at from shadow table
         // Just need to ensure the combined list respects the order
         // Sort the full list: most recent first, then by name
@@ -2882,7 +2908,6 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
           await databaseService.getContactsSortedByActivity(
             validatedUserId,
             validatedAddress ?? undefined,
-            { textPeople: await textPeopleEnabled(validatedUserId) },
           );
 
         logService.info(
@@ -3809,9 +3834,7 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
             "Contacts",
             { userId, queryLength: query?.length || 0 },
           );
-          const contacts = await databaseService.getContactsSortedByActivity(validatedUserId, undefined, {
-            textPeople: await textPeopleEnabled(validatedUserId),
-          });
+          const contacts = await databaseService.getContactsSortedByActivity(validatedUserId);
           return {
             success: true,
             contacts,
@@ -3838,8 +3861,6 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
         const contacts = databaseService.searchContactsForSelection(
           validatedUserId,
           validatedQuery,
-          undefined,
-          { textPeople: await textPeopleEnabled(validatedUserId) },
         );
 
         logService.info(

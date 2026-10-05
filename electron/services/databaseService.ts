@@ -2509,6 +2509,14 @@ class DatabaseService implements IDatabaseService {
     return syncDb.listRcsExclusionConversationIds(userId, max);
   }
 
+  /**
+   * BACKLOG-3670: the people found in this user's Google Messages texts (not
+   * saved contacts — offered in the picker's address-book half only).
+   */
+  getTextDerivedPeople(userId: string) {
+    return rcsChatPeopleDb.getTextDerivedPeople(userId);
+  }
+
   /** BACKLOG-3670: a stored Google Messages chat's people (numbers + shown names). */
   recordRcsChatPeople(
     userId: string,
