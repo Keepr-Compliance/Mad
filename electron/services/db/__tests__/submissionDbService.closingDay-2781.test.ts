@@ -75,6 +75,7 @@ import {
 } from "../submissionDbService";
 import { auditWindowEnd, resolveExportPlan } from "../../exportPlan";
 import type { Communication } from "../../../types/models";
+import { ALL_TEXT_IDS } from "../../__tests__/helpers/selectedTextIds";
 
 // ---------------------------------------------------------------------------
 // The audit window under test: a transaction closed on 2026-07-29.
@@ -132,6 +133,8 @@ function createSchema(db: DatabaseType): void {
   db.exec(`
     CREATE TABLE messages (
       id TEXT PRIMARY KEY,
+      -- BACKLOG-3733: NOT NULL in schema.sql; the submit's thread arm joins on it.
+      user_id TEXT NOT NULL DEFAULT 'fixture-user',
       thread_id TEXT,
       external_id TEXT,
       sent_at DATETIME,
@@ -158,6 +161,8 @@ function createSchema(db: DatabaseType): void {
     );
     CREATE TABLE communications (
       id TEXT PRIMARY KEY,
+      -- BACKLOG-3733: NOT NULL in schema.sql; the submit's thread arm joins on it.
+      user_id TEXT NOT NULL DEFAULT 'fixture-user',
       transaction_id TEXT,
       message_id TEXT,
       email_id TEXT,
@@ -216,7 +221,7 @@ describe("submissionDbService — closing-day audit window (BACKLOG-2781)", () =
   // Site 1 — getTransactionMessages (submissionDbService.ts:67)
   // -------------------------------------------------------------------------
   it("getTransactionMessages sweeps both edges of the closing-day bound", () => {
-    const rows = getTransactionMessages("T1", auditStart, auditEnd);
+    const rows = getTransactionMessages("T1", auditStart, auditEnd, ALL_TEXT_IDS);
     const ids = new Set(rows.map((r) => (r as unknown as { id: string }).id));
 
     expect(ids).toEqual(new Set(IN_WINDOW.map((k) => `M_${k}`)));
@@ -253,7 +258,7 @@ describe("submissionDbService — closing-day audit window (BACKLOG-2781)", () =
   // closing-day bound through site 1. Reverting site 1 reds this test too.
   // -------------------------------------------------------------------------
   it("getTransactionAttachments sweeps the bound on the TEXT attachment filter", () => {
-    const rows = getTransactionAttachments("T1", auditStart, auditEnd);
+    const rows = getTransactionAttachments("T1", auditStart, auditEnd, ALL_TEXT_IDS);
     const textIds = new Set(
       rows.map((r) => r.id as string).filter((id) => id.startsWith("AT_")),
     );
@@ -269,7 +274,7 @@ describe("submissionDbService — closing-day audit window (BACKLOG-2781)", () =
   // Site 3 — getTransactionAttachments, EMAIL filter (submissionDbService.ts:139)
   // -------------------------------------------------------------------------
   it("getTransactionAttachments sweeps the bound on the EMAIL attachment filter", () => {
-    const rows = getTransactionAttachments("T1", auditStart, auditEnd);
+    const rows = getTransactionAttachments("T1", auditStart, auditEnd, ALL_TEXT_IDS);
     const emailIds = new Set(
       rows.map((r) => r.id as string).filter((id) => id.startsWith("AE_")),
     );
@@ -316,7 +321,7 @@ describe("submissionDbService — closing-day audit window (BACKLOG-2781)", () =
     );
 
     const submitted = new Set(
-      getTransactionMessages("T1", auditStart, auditEnd).map((r) =>
+      getTransactionMessages("T1", auditStart, auditEnd, ALL_TEXT_IDS).map((r) =>
         (r as unknown as { id: string }).id.replace(/^M_/, ""),
       ),
     );

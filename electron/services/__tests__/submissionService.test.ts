@@ -22,6 +22,10 @@ jest.mock("electron", () => ({
 
 import { submissionService } from "../submissionService";
 import databaseService from "../databaseService";
+import { textIdsForTests } from "./helpers/selectedTextIds";
+
+// BACKLOG-3733: the text set the submit passes down; the loader forwards it.
+const SELECTED = textIdsForTests(["msg-1"]);
 
 describe("SubmissionService", () => {
   beforeEach(() => {
@@ -36,7 +40,7 @@ describe("SubmissionService", () => {
   describe("loadTransactionAttachments (internal)", () => {
     // Access the private method through reflection for testing
     const loadAttachments = async (transactionId: string, startDate?: Date, endDate?: Date) => {
-      return (submissionService as any).loadTransactionAttachments(transactionId, startDate, endDate);
+      return (submissionService as any).loadTransactionAttachments(transactionId, startDate, endDate, SELECTED);
     };
 
     it("should return combined text message and email attachments", async () => {
@@ -64,7 +68,7 @@ describe("SubmissionService", () => {
       const result = await loadAttachments("txn-123");
 
       // Verify databaseService was called with the correct transaction ID
-      expect(databaseService.getTransactionAttachments).toHaveBeenCalledWith("txn-123", undefined, undefined);
+      expect(databaseService.getTransactionAttachments).toHaveBeenCalledWith("txn-123", undefined, undefined, SELECTED);
 
       // Verify both attachments are returned
       expect(result).toHaveLength(2);
@@ -137,7 +141,7 @@ describe("SubmissionService", () => {
       await loadAttachments("txn-123", startDate, endDate);
 
       // Verify date filters are passed through to databaseService
-      expect(databaseService.getTransactionAttachments).toHaveBeenCalledWith("txn-123", startDate, endDate);
+      expect(databaseService.getTransactionAttachments).toHaveBeenCalledWith("txn-123", startDate, endDate, SELECTED);
     });
   });
 });

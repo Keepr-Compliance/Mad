@@ -95,6 +95,7 @@ import {
   isTimestampInAuditPeriod,
 } from "../../src/utils/dateRangeUtils";
 import type { Communication } from "../types/models";
+import { ALL_TEXT_IDS } from "../services/__tests__/helpers/selectedTextIds";
 
 // ---------------------------------------------------------------------------
 // The transaction under test: closed 2026-07-29.
@@ -174,7 +175,7 @@ function exportedKeys(): Set<string> {
 /** Surface 2 — the broker submission package (real SQL). */
 function submittedKeys(): Set<string> {
   return new Set(
-    getTransactionMessages("T1", auditStart, auditEnd).map((row) =>
+    getTransactionMessages("T1", auditStart, auditEnd, ALL_TEXT_IDS).map((row) =>
       (row as unknown as { id: string }).id.replace(/^M_/, ""),
     ),
   );
@@ -193,6 +194,8 @@ function createSchema(db: DatabaseType): void {
   db.exec(`
     CREATE TABLE messages (
       id TEXT PRIMARY KEY,
+      -- BACKLOG-3733: NOT NULL in schema.sql; the submit's thread arm joins on it.
+      user_id TEXT NOT NULL DEFAULT 'fixture-user',
       thread_id TEXT,
       sent_at DATETIME,
       direction TEXT,
@@ -207,6 +210,8 @@ function createSchema(db: DatabaseType): void {
     );
     CREATE TABLE communications (
       id TEXT PRIMARY KEY,
+      -- BACKLOG-3733: NOT NULL in schema.sql; the submit's thread arm joins on it.
+      user_id TEXT NOT NULL DEFAULT 'fixture-user',
       transaction_id TEXT,
       message_id TEXT,
       email_id TEXT,
