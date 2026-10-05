@@ -10,7 +10,7 @@ import { ensureDb } from "./core/dbConnection";
 // three independent queries (texts, emails, email attachments), three
 // independent regressions to guard. Text attachments have no window of their
 // own: they follow the texts `getTransactionMessages` returns (BACKLOG-3731).
-import { auditWindowEnd } from "../exportPlan";
+import { auditWindowEnd, type SelectedTextIds } from "../exportPlan";
 import { selectTextAttachmentsForMessages } from "./textAttachmentLookupSql";
 
 /**
@@ -40,11 +40,16 @@ export type SubmissionTransactionRow = {
 /**
  * Load messages linked to a transaction via communications junction table,
  * with optional audit date range filter.
+ *
+ * BACKLOG-3733: only texts in `selected` are returned — the texts the export of
+ * this deal would include (`selectSubmissionTextIds`). Required, so a caller
+ * that has not been switched to the shared set does not compile.
  */
 export function getTransactionMessages(
   transactionId: string,
-  auditStartDate?: Date | null,
-  auditEndDate?: Date | null
+  auditStartDate: Date | null | undefined,
+  auditEndDate: Date | null | undefined,
+  selected: SelectedTextIds
 ): Message[] {
   const db = ensureDb();
 
@@ -54,7 +59,11 @@ export function getTransactionMessages(
     INNER JOIN communications c ON (
       (c.message_id IS NOT NULL AND c.message_id = m.id)
       OR
-      (c.message_id IS NULL AND c.thread_id IS NOT NULL AND c.thread_id = m.thread_id)
+      -- BACKLOG-3733: the same thread arm as the export's reader
+      -- (getCommunicationsWithMessages): an email link that carries a thread
+      -- id is not a text link, and only the linking user's copy of a thread.
+      (c.message_id IS NULL AND c.email_id IS NULL AND c.thread_id IS NOT NULL
+       AND c.thread_id = m.thread_id AND m.user_id = c.user_id)
     )
     WHERE c.transaction_id = ?
   `;
@@ -71,7 +80,8 @@ export function getTransactionMessages(
   }
 
   sql += ` ORDER BY m.sent_at ASC`;
-  return db.prepare(sql).all(...params) as Message[];
+  const rows = db.prepare(sql).all(...params) as Message[];
+  return rows.filter((m) => selected.has(m.id));
 }
 
 /**
@@ -110,17 +120,21 @@ export function getTransactionEmails(
 /**
  * Load attachments linked to a transaction (both text message and email attachments),
  * with optional audit date range filter.
+ *
+ * BACKLOG-3733: text attachments belong to the texts in `selected` only, the
+ * same set {@link getTransactionMessages} sends.
  */
 export function getTransactionAttachments(
   transactionId: string,
-  auditStartDate?: Date | null,
-  auditEndDate?: Date | null
+  auditStartDate: Date | null | undefined,
+  auditEndDate: Date | null | undefined,
+  selected: SelectedTextIds
 ): SubmissionAttachment[] {
   const db = ensureDb();
 
   // BACKLOG-3731: text attachments come from the shared lookup the Messages
   // view uses, over exactly the texts this submission sends. Read-only.
-  const textMessageIds = getTransactionMessages(transactionId, auditStartDate, auditEndDate).map(
+  const textMessageIds = getTransactionMessages(transactionId, auditStartDate, auditEndDate, selected).map(
     (m) => m.id
   );
   const textAttachments: SubmissionAttachment[] = selectTextAttachmentsForMessages<

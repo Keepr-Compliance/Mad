@@ -516,3 +516,26 @@ export function normalizeAttachmentType(
 export function normalizeEmailMode(value: unknown): ExportEmailMode {
   return value === "individual" ? "individual" : "thread";
 }
+
+declare const selectedTextIdsBrand: unique symbol;
+
+/**
+ * BACKLOG-3733 — the message ids of the texts an export of this deal includes:
+ * the owner's copies, hidden texts and reactions to hidden texts removed,
+ * duplicates collapsed. The submit, its pre-flight and the summary counts send
+ * only texts in this set.
+ *
+ * Branded so it can only come from a resolved plan
+ * ({@link selectedTextIdsFromPlan}); a plain `Set<string>` does not type-check
+ * where one is required.
+ */
+export type SelectedTextIds = ReadonlySet<string> & { readonly [selectedTextIdsBrand]: true };
+
+/** The text ids of a resolved plan. Emails are never in the set. */
+export function selectedTextIdsFromPlan(plan: Pick<ExportPlan, "communications">): SelectedTextIds {
+  const ids = new Set<string>();
+  for (const comm of plan.communications) {
+    if (isTextMessage(comm) && typeof comm.id === "string") ids.add(comm.id);
+  }
+  return ids as unknown as SelectedTextIds;
+}
