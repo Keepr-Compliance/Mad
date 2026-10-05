@@ -146,12 +146,6 @@ interface ContactsImportSettingsProps {
    */
   androidContactsDeclared: boolean;
   /**
-   * BACKLOG-2986: is the Android companion the ACTIVE message import source?
-   * Only then is the Android Companion panel — and its Force Re-import — on the
-   * page for the re-import note to point at.
-   */
-  androidCompanionActive: boolean;
-  /**
    * BACKLOG-2986: the "could not be saved" message for the last failed toggle
    * write, or null. Owned by the parent (which owns the handler) and rendered
    * here, immediately above the toggle group, because that is where the click
@@ -200,7 +194,6 @@ export function ContactsImportSettings({
   showIphoneContacts,
   androidContactsEnabled,
   androidContactsDeclared,
-  androidCompanionActive,
   saveError,
   gmailContactsEnabled,
   googleContactsEnabled,
@@ -1135,26 +1128,12 @@ export function ContactsImportSettings({
       */}
       {showAndroidContacts && (
         <div className="mb-3 p-2 rounded text-xs bg-gray-50 text-gray-600 border border-gray-200">
-          <p>
-            Your phone holds the only copy of these contacts — the desktop cannot fetch
-            them again on its own.
-            {androidCompanionActive
-              ? " Re-importing clears the synced messages and contacts together, then the companion app re-sends both."
-              : " Set your message import source to Android above to manage or re-import them."}
+          {/* SR (C6 review): the Companion panel is gone — the shared Android
+              Force re-import (Settings › Google Messages) clears these too. */}
+          <p data-testid="android-contacts-note">
+            Your phone holds the only copy of these contacts — Keepr cannot fetch them again.
+            Android&rsquo;s Force re-import (Settings › Google Messages) deletes them.
           </p>
-          {androidCompanionActive && (
-            <button
-              type="button"
-              onClick={() =>
-                document
-                  .getElementById("settings-android-companion")
-                  ?.scrollIntoView({ behavior: "smooth", block: "start" })
-              }
-              className="mt-1 text-xs font-medium text-blue-600 hover:text-blue-700 underline"
-            >
-              Go to Android Companion re-import
-            </button>
-          )}
         </div>
       )}
 

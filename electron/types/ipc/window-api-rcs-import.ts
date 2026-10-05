@@ -85,6 +85,8 @@ export interface RcsExtensionState {
   pairedAt: string | null;
   /** The consent is current (P3b). */
   optedIn: boolean;
+  /** SR (C6 review): texts from the (no longer offered) Android Companion exist. */
+  companionData?: boolean;
   lastCacheFinishedAt: string | null;
   /** P3b: the version the user accepted (null: never / withdrawn), and the one required now. */
   consentVersion?: number | null;

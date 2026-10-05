@@ -1434,6 +1434,8 @@ export function registerRcsImportHandlers(): void {
           // BACKLOG-3666: the extension is paired with this Keepr, for this user.
           // Live (B1): "linked" only when the extension proved it (a signed call) recently.
           extensionPaired: userId ? pairingAuth.isLinkProven(userId) : false,
+          // SR (C6 review): the Android Companion's texts exist (Force re-import names it only then).
+          companionData: userId ? getSourceCoverage(userId).some((c) => c.source === "android_companion") : false,
           // SR: the pairing code shown was used up by wrong attempts.
         },
       };

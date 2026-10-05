@@ -99,10 +99,9 @@ function renderSettings(
   options: {
     platform?: "darwin" | "win32";
     stats?: Record<string, number>;
-    androidCompanionActive?: boolean;
   } = {},
 ) {
-  const { platform = "darwin", stats = FOUNDER_STATS, androidCompanionActive = false } = options;
+  const { platform = "darwin", stats = FOUNDER_STATS } = options;
 
   Object.defineProperty(window, "api", {
     value: {
@@ -130,7 +129,6 @@ function renderSettings(
         initialPreferences={preferences as never}
         isMicrosoftConnected={true}
         isGoogleConnected={false}
-        androidCompanionActive={androidCompanionActive}
       />
     </PlatformProvider>,
   );
@@ -299,30 +297,18 @@ describe("BACKLOG-2986 — Android Contacts has a switch, and it starts OFF", ()
 });
 
 describe("BACKLOG-2986 — the re-import is findable from the Contacts screen", () => {
-  it("says the phone holds the only copy, and offers the jump when that panel is on the page", async () => {
-    renderSettings(prefs({ androidContacts: true }), { androidCompanionActive: true });
+  // SR (C6 review): the Companion panel is gone — the note names the shared
+  // Android Force re-import (Settings › Google Messages); no jump button.
+  // Mutations: the dead "Go to Android Companion re-import" back; the note
+  // not naming where the re-import is → red.
+  it("says the phone holds the only copy, and where the shared Force re-import is", async () => {
+    renderSettings(prefs({ androidContacts: true }));
 
-    expect(
-      await screen.findByText(/phone holds the only copy/i),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /Go to Android Companion re-import/i }),
-    ).toBeInTheDocument();
-  });
-
-  it("does not offer a jump to a panel that is not rendered", async () => {
-    // `Settings.tsx` renders AndroidMessagesSettings — and with it the working
-    // Force Re-import — only when the active import source is the companion. A
-    // button that scrolled there regardless would land the user on the macOS
-    // panel and claim to have taken them somewhere.
-    renderSettings(prefs({ androidContacts: true }), { androidCompanionActive: false });
-
-    expect(await screen.findByText(/phone holds the only copy/i)).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: /Go to Android Companion re-import/i }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getByText(/Set your message import source to Android/i),
-    ).toBeInTheDocument();
+    const note = await screen.findByTestId("android-contacts-note");
+    expect(note).toHaveTextContent(
+      "Your phone holds the only copy of these contacts — Keepr cannot fetch them again. Android’s Force re-import (Settings › Google Messages) deletes them.",
+    );
+    expect(screen.queryByRole("button", { name: /Android Companion re-import/i })).not.toBeInTheDocument();
+    expect(note.textContent).not.toMatch(/companion/i);
   });
 });

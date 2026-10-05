@@ -10,6 +10,8 @@ import { lastMonthsPhrase } from "./LookbackMonthsSelect";
 
 export const ANDROID_FORCE_REIMPORT_TITLE =
   "Force re-import will delete every text imported from your Android phone (Google Messages and Android Companion)";
+/** SR (C6 review): the title when no Android Companion data exists. */
+export const ANDROID_FORCE_REIMPORT_TITLE_GM = "Force re-import will delete every text imported from Google Messages";
 
 interface AndroidForceReimportWarningProps {
   onConfirm: () => void;
@@ -20,6 +22,11 @@ interface AndroidForceReimportWarningProps {
    * older than it are not copied back unless an audit period covers them.
    */
   windowMonths: number | null;
+  /**
+   * SR (C6 review): the Android Companion's data exists — only then is it
+   * named (like androidClearedText). Default: named (the Companion panel).
+   */
+  companion?: boolean;
 }
 
 /** The line every Android Force dialog states. */
@@ -29,17 +36,25 @@ export function androidForceWindowLine(months: number | null): string {
     : `Syncing again copies texts from ${lastMonthsPhrase(months)}; older texts not in an audit period are not copied back.`;
 }
 
-export function AndroidForceReimportWarning({ onConfirm, onCancel, windowMonths }: AndroidForceReimportWarningProps) {
+export function AndroidForceReimportWarning({ onConfirm, onCancel, windowMonths, companion = true }: AndroidForceReimportWarningProps) {
   return (
     <div className="p-3 bg-amber-50 border border-amber-300 rounded-lg" data-testid="android-force-warning">
-      <p className="text-sm font-medium text-amber-800">{ANDROID_FORCE_REIMPORT_TITLE}</p>
-      <p className="text-xs text-amber-800 mt-1">
-        This deletes every text, reaction and image Keepr copied from Google Messages, and every text and contact the
-        Android Companion app sent, with their links to transactions. Links from checklist items to those
-        messages&rsquo; attachments are removed too. Your iPhone and Mac texts stay. To import them again, click Sync Android on
-        the dashboard, or open the companion app and tap Sync Now. Chats you removed from a transaction stay removed
-        when you sync again; you can restore them from &ldquo;Show removed&rdquo; on the transaction.
-      </p>
+      <p className="text-sm font-medium text-amber-800">{companion ? ANDROID_FORCE_REIMPORT_TITLE : ANDROID_FORCE_REIMPORT_TITLE_GM}</p>
+      {companion ? (
+        <p className="text-xs text-amber-800 mt-1">
+          This deletes every text, reaction and image Keepr copied from Google Messages, and every text and contact the
+          Android Companion app sent, with their links to transactions. Links from checklist items to those
+          messages&rsquo; attachments are removed too. Your iPhone and Mac texts stay. To import them again, click Sync Android on
+          the dashboard, or open the companion app and tap Sync Now. Chats you removed from a transaction stay removed
+          when you sync again; you can restore them from &ldquo;Show removed&rdquo; on the transaction.
+        </p>
+      ) : (
+        <p className="text-xs text-amber-800 mt-1" data-testid="android-force-body-gm">
+          This deletes every text, reaction and image Keepr copied from Google Messages, with their links to
+          transactions and checklist items. Your iPhone and Mac texts stay. Chats you removed from a transaction stay
+          removed when you sync again; you can restore them from &ldquo;Show removed&rdquo; on the transaction.
+        </p>
+      )}
       <p className="text-xs font-medium text-amber-900 mt-1" data-testid="force-window-line">
         {androidForceWindowLine(windowMonths)}
       </p>

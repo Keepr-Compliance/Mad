@@ -32,18 +32,6 @@ interface ContactsSettingsProps {
   initialPreferences: PreferencesResult['preferences'];
   isMicrosoftConnected: boolean;
   isGoogleConnected: boolean;
-  /**
-   * BACKLOG-2986: is the Android companion the ACTIVE message import source?
-   *
-   * Decides only whether the Android re-import affordance can point at a
-   * control that is on the page. `Settings.tsx` renders `AndroidMessagesSettings`
-   * — and with it the Force Re-import button — solely when the active source is
-   * `android-companion`, so a button that scrolled there unconditionally would
-   * land the user on the macOS panel instead. Defaults to `false` because the
-   * active source is loaded asynchronously and is `null` until it arrives; an
-   * absent answer must not draw a control that goes nowhere.
-   */
-  androidCompanionActive?: boolean;
   /** BACKLOG-3670: the selected text-message import source (the Messages / SMS row's label). */
   messagesImportSource?: ImportSource | null;
 }
@@ -53,7 +41,6 @@ export function ContactsSettings({
   initialPreferences,
   isMicrosoftConnected,
   isGoogleConnected,
-  androidCompanionActive = false,
   messagesImportSource = null,
 }: ContactsSettingsProps) {
   const { isMacOS } = usePlatform();
@@ -288,7 +275,6 @@ export function ContactsSettings({
           showIphoneContacts={phoneType !== "android"}
           androidContactsEnabled={androidContactsEnabled}
           androidContactsDeclared={androidContactsDeclared}
-          androidCompanionActive={androidCompanionActive}
           /* BACKLOG-2986: rendered by the child, immediately above the toggle
              group. It first sat at the top of this section, where a user
              flipping one of the lower switches could miss it without scrolling

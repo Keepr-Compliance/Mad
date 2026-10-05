@@ -440,7 +440,12 @@ export function GoogleMessagesSettings({ userId, onOpenSyncAndroid, published = 
       </div>
 
       {showForceWarning && (
-        <AndroidForceReimportWarning windowMonths={lookbackMonths} onConfirm={() => void forceReimport()} onCancel={() => setShowForceWarning(false)} />
+        <AndroidForceReimportWarning
+          windowMonths={lookbackMonths}
+          companion={state?.companionData === true}
+          onConfirm={() => void forceReimport()}
+          onCancel={() => setShowForceWarning(false)}
+        />
       )}
     </div>
   );

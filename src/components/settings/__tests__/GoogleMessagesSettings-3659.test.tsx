@@ -115,6 +115,7 @@ describe("GoogleMessagesSettings", () => {
   // one confirmation naming both sources. Mutation: the old Google-Messages-
   // only warning / result → red.
   it("Force re-import: asks first (one warning naming both Android sources), then says what both lost (S1)", async () => {
+    mockState = { ...mockState, companionData: true };
     render(<GoogleMessagesSettings userId="user-1" />);
     fireEvent.click(await screen.findByRole("button", { name: /force re-import/i }));
     expect(mockClear).not.toHaveBeenCalled();
@@ -132,6 +133,18 @@ describe("GoogleMessagesSettings", () => {
       "Cleared 187 texts and 3 contacts. Sync Android on the dashboard, or Sync Now in the Android Companion, to get them back.",
     );
     expect(mockClear).toHaveBeenCalledTimes(1);
+  });
+
+  // SR (C6 review): no Android Companion data → the warning never names it
+  // (like the result line). Mutation: the Companion always named → red.
+  it("Force re-import with no Companion data: the warning names Google Messages only", async () => {
+    mockState = { ...mockState, companionData: false };
+    render(<GoogleMessagesSettings userId="user-1" />);
+    fireEvent.click(await screen.findByRole("button", { name: /force re-import/i }));
+    const warning = screen.getByTestId("android-force-warning");
+    expect(warning).toHaveTextContent("Force re-import will delete every text imported from Google Messages");
+    expect(warning.textContent).not.toMatch(/Companion|Sync Now/);
+    expect(warning).toHaveTextContent(/you can restore them from “Show removed” on the transaction/);
   });
 
   it("a refused clear shows its error, not a success line (S2)", async () => {
