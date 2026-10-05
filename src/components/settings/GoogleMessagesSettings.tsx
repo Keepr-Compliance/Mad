@@ -53,6 +53,8 @@ import {
 export const LINK_STATUS = { linked: "Linked", notLinked: "Not linked" } as const;
 /** SR: Forget link asks first, worded as the popup's Unlink (popup.js COPY.unlinkAsk). */
 export const FORGET_ASK = "Unlink from Keepr? You'll need to link again to sync";
+/** SR (C7 review): Withdraw consent asks first, in one line. A Sync already running is not stopped. */
+export const WITHDRAW_ASK = "Syncing stops. Texts already in Keepr stay.";
 import { readMessageImportPreferences, resolveStoredLookbackMonths } from "./messageImportPreferences";
 
 import { GM_LOOKBACK_TARGET } from "./android/googleMessagesSyncSteps";
@@ -104,6 +106,7 @@ export function GoogleMessagesSettings({ userId, onOpenSyncAndroid, published = 
     await refreshExcluded();
   }, [refreshExcluded]);
 
+  const [withdrawAsk, setWithdrawAsk] = useState(false);
   /** SR C7: withdraw the consent (Keepr's record); the next Sync asks again. */
   const withdrawConsent = useCallback(async () => {
     const r = await rcsImportService.setCacheConsent(null);
@@ -318,15 +321,46 @@ export function GoogleMessagesSettings({ userId, onOpenSyncAndroid, published = 
           here — the next Sync asks again. Shown only while it is current. */}
       {state?.optedIn === true && (
         <div className="p-4 bg-white rounded-lg border border-gray-200 flex items-center justify-between gap-3" data-testid="gm-consent">
-          <span className="text-sm text-gray-900">You agreed to copy your texts into Keepr.</span>
-          <button
-            type="button"
-            className="text-sm text-indigo-700 hover:text-indigo-900 font-medium"
-            onClick={() => void withdrawConsent()}
-            data-testid="gm-consent-withdraw"
-          >
-            Withdraw consent
-          </button>
+          {withdrawAsk ? (
+            <>
+              <span className="text-sm text-gray-900" role="alert" data-testid="gm-consent-ask">
+                {WITHDRAW_ASK}
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded"
+                  onClick={() => {
+                    setWithdrawAsk(false);
+                    void withdrawConsent();
+                  }}
+                  data-testid="gm-consent-withdraw-yes"
+                >
+                  Withdraw
+                </button>
+                <button
+                  type="button"
+                  className="px-3 py-1.5 bg-white hover:bg-gray-100 text-gray-700 text-sm font-medium rounded border border-gray-300"
+                  onClick={() => setWithdrawAsk(false)}
+                  data-testid="gm-consent-withdraw-cancel"
+                >
+                  Cancel
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <span className="text-sm text-gray-900">You agreed to copy your texts into Keepr.</span>
+              <button
+                type="button"
+                className="text-sm text-indigo-700 hover:text-indigo-900 font-medium"
+                onClick={() => setWithdrawAsk(true)}
+                data-testid="gm-consent-withdraw"
+              >
+                Withdraw consent
+              </button>
+            </>
+          )}
         </div>
       )}
       {manageOpen && (

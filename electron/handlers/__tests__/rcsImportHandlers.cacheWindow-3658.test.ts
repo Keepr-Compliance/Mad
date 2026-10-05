@@ -234,6 +234,17 @@ describe("rcs-import:start-cache-job window (BACKLOG-3658)", () => {
     expect(mockSetConsent).not.toHaveBeenCalled();
   });
 
+  // SR (C7 review) F1: no screen-less consent shortcut in any build — the
+  // P1 "set-cache-opt-in" channel is gone; consent goes only through
+  // set-cache-consent, which refuses an out-of-date version.
+  // Mutation: the shortcut registered again → red.
+  it("no consent shortcut: set-cache-opt-in is not registered; an old version is refused", async () => {
+    expect(handlers.has("rcs-import:set-cache-opt-in")).toBe(false);
+    const stale = (await handlers.get("rcs-import:set-cache-consent")!({}, { version: 0 })) as { success: boolean };
+    expect(stale.success).toBe(false);
+    expect(mockSetConsent).not.toHaveBeenCalled();
+  });
+
   it("a current consent is not re-recorded (K7)", async () => {
     expect((await start()).success).toBe(true);
     expect(mockSetConsent).not.toHaveBeenCalled();

@@ -166,8 +166,6 @@ export interface WindowApiRcsImport {
   startCacheJob: (args?: { sinceDays?: number }) => Promise<RcsImportJobResult>;
   /** Founder: Keepr's "Try again" after a failed Google Messages Sync. */
   retryCacheJob?: () => Promise<RcsImportJobResult>;
-  /** BACKLOG-3658: the local opt-in to keep a copy of recent chats. */
-  setCacheOptIn: (args: { optedIn: boolean }) => Promise<{ success: boolean; error?: string }>;
   /** P3b: accept the consent text of `version`, or withdraw (null). */
   setCacheConsent?: (args: { version: number | null }) => Promise<{ success: boolean; error?: string }>;
   /** P3b: cache options (auto-delete; contacts-only in a development build only). */

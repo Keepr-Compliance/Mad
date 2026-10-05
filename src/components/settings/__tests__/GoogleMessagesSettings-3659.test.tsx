@@ -357,7 +357,14 @@ describe("consent (C7)", () => {
       mockState = { ...mockState, optedIn: false, consentVersion: null };
       return { success: true };
     });
+    // SR (C7 review): asks first, in one line; Cancel keeps the consent.
     fireEvent.click(screen.getByTestId("gm-consent-withdraw"));
+    expect(screen.getByTestId("gm-consent-ask")).toHaveTextContent(/^Syncing stops\. Texts already in Keepr stay\.$/);
+    fireEvent.click(screen.getByTestId("gm-consent-withdraw-cancel"));
+    expect(mockSetConsent).not.toHaveBeenCalled();
+    expect(screen.getByTestId("gm-consent")).toHaveTextContent("You agreed to copy your texts into Keepr.");
+    fireEvent.click(screen.getByTestId("gm-consent-withdraw"));
+    fireEvent.click(screen.getByTestId("gm-consent-withdraw-yes"));
     await waitFor(() => expect(mockSetConsent).toHaveBeenCalledWith(null));
     await waitFor(() => expect(screen.queryByTestId("gm-consent")).toBeNull());
   });

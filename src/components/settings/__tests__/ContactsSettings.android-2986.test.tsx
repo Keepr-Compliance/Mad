@@ -301,12 +301,12 @@ describe("BACKLOG-2986 — the re-import is findable from the Contacts screen", 
   // Android Force re-import (Settings › Google Messages); no jump button.
   // Mutations: the dead "Go to Android Companion re-import" back; the note
   // not naming where the re-import is → red.
-  it("says the phone holds the only copy, and where the shared Force re-import is", async () => {
+  it("says where the shared Force re-import is, and that Keepr can't fetch them again", async () => {
     renderSettings(prefs({ androidContacts: true }));
 
     const note = await screen.findByTestId("android-contacts-note");
     expect(note).toHaveTextContent(
-      "Your phone holds the only copy of these contacts — Keepr cannot fetch them again. Android’s Force re-import (Settings › Google Messages) deletes them.",
+      "Force re-import (Settings › Google Messages) deletes these contacts. Keepr can’t fetch them again.",
     );
     expect(screen.queryByRole("button", { name: /Android Companion re-import/i })).not.toBeInTheDocument();
     expect(note.textContent).not.toMatch(/companion/i);

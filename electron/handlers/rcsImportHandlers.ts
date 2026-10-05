@@ -1289,17 +1289,9 @@ export function registerRcsImportHandlers(): void {
     }, { module: LOG_TAG }),
   );
 
-  ipcMain.handle(
-    "rcs-import:set-cache-opt-in",
-    wrapHandler(async (_event, args: unknown): Promise<{ success: boolean; error?: string }> => {
-      const optedIn = argsObject(args).optedIn === true;
-      const userId = await currentUserId();
-      if (!userId) return { success: false, error: "Sign in to Keepr first." };
-      // Developer shortcut kept from P1: it records (or withdraws) the CURRENT consent.
-      databaseService.setRcsConsent(userId, optedIn ? RCS_CONSENT_VERSION : null, new Date().toISOString());
-      return { success: true };
-    }, { module: LOG_TAG }),
-  );
+  // SR (C7 review) F1: the P1 developer shortcut "set-cache-opt-in" (it wrote
+  // the current consent with no screen and no version check, in any build)
+  // is removed — unused; consent goes only through set-cache-consent.
 
   // P3b: the consent the user read and accepted (version of the text shown),
   // or withdrawn (version null). An out-of-date version is refused.

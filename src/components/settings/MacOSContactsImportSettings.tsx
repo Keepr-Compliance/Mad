@@ -1131,8 +1131,7 @@ export function ContactsImportSettings({
           {/* SR (C6 review): the Companion panel is gone — the shared Android
               Force re-import (Settings › Google Messages) clears these too. */}
           <p data-testid="android-contacts-note">
-            Your phone holds the only copy of these contacts — Keepr cannot fetch them again.
-            Android&rsquo;s Force re-import (Settings › Google Messages) deletes them.
+            Force re-import (Settings › Google Messages) deletes these contacts. Keepr can&rsquo;t fetch them again.
           </p>
         </div>
       )}

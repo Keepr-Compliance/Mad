@@ -37,12 +37,10 @@ export const rcsImportBridge = {
     };
   },
 
-  /** BACKLOG-3658: the cache job, the local opt-in and the extension state. */
+  /** BACKLOG-3658: the cache job and the extension state. */
   retryCacheJob: (): Promise<RcsImportJobResult> => ipcRenderer.invoke("rcs-import:retry-cache-job"),
   startCacheJob: (args?: { sinceDays?: number }): Promise<RcsImportJobResult> =>
     ipcRenderer.invoke("rcs-import:start-cache-job", args),
-  setCacheOptIn: (args: { optedIn: boolean }): Promise<{ success: boolean; error?: string }> =>
-    ipcRenderer.invoke("rcs-import:set-cache-opt-in", args),
   getExtensionState: (): Promise<RcsExtensionStateResult> => ipcRenderer.invoke("rcs-import:get-extension-state"),
   /** P3b: consent and cache options. */
   setCacheConsent: (args: { version: number | null }): Promise<{ success: boolean; error?: string }> =>
