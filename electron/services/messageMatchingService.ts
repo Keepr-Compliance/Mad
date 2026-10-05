@@ -38,7 +38,7 @@ import {
   getIgnoredCommunicationIdsForTransaction,
 } from "./db/communicationDbService";
 import { toE164 } from "../utils/phoneNormalization";
-import { auditWindowEnd } from "./exportPlan";
+import { auditWindowEnd, auditWindowStartParam } from "./exportPlan";
 
 /**
  * Result of matching a message to a contact
@@ -172,7 +172,8 @@ export async function findTextMessagesByPhones(
 
   if (options?.startDate) {
     hasStart = true;
-    params.push(options.startDate);
+    // BACKLOG-3734: a date-only start is LOCAL 00:00 of that day, bound as ISO.
+    params.push(auditWindowStartParam(options.startDate));
   }
   if (options?.endDate) {
     // BACKLOG-2788: the end date is a calendar DAY, and the day ends at the

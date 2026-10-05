@@ -74,6 +74,7 @@ import {
   getTransactionAttachments,
 } from "../submissionDbService";
 import { auditWindowEnd, resolveExportPlan } from "../../exportPlan";
+import { auditPeriodFromRow } from "../../submissionAuditPeriod";
 import type { Communication } from "../../../types/models";
 
 // ---------------------------------------------------------------------------
@@ -82,9 +83,11 @@ import type { Communication } from "../../../types/models";
 const CLOSED_AT = "2026-07-29";
 const STARTED_AT = "2026-01-01";
 
-/** What submissionService.ts:272 actually passes down. */
-const auditStart = new Date(STARTED_AT);
-const auditEnd = new Date(CLOSED_AT);
+/** What the submission actually passes down: `auditPeriodFromRow` (BACKLOG-3683/3734). */
+const { auditStartDate: auditStart, auditEndDate: auditEnd } = auditPeriodFromRow({
+  started_at: STARTED_AT,
+  closed_at: CLOSED_AT,
+});
 
 /** The closing day, as LOCAL wall-clock parts (2026-07-29). */
 const CLOSING_DAY: readonly [number, number, number] = [2026, 6, 29];
@@ -108,7 +111,9 @@ function localInstant(
  * The boundary sweep: four instants around the end bound plus two far from it.
  * These expectations hold in EVERY timezone (see the header).
  */
-const EARLY_OUT = "2025-12-31T23:59:59.999Z"; // before the audit start -> OUT
+// LOCAL 23:59:59.999 the evening before the audit start -> OUT in every zone
+// (BACKLOG-3734: the start is local 00:00, so a fixed UTC string would be IN east of UTC).
+const EARLY_OUT = new Date(2025, 11, 31, 23, 59, 59, 999).toISOString();
 const MID_IN = "2026-06-15T12:00:00.000Z"; // comfortably inside -> IN
 const DAWN = localInstant(0, 30, 0, 0); // 12:30am local ON the closing day (BACKLOG-2781's case) -> IN
 const EVENING = localInstant(21, 0, 0, 0); // 9pm local on the closing day (BACKLOG-2788's case) -> IN

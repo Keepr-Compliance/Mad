@@ -88,6 +88,7 @@ import type { Database as DatabaseType } from "better-sqlite3";
 
 import { auditWindowEnd, resolveExportPlan } from "../services/exportPlan";
 import { getTransactionMessages } from "../services/db/submissionDbService";
+import { auditPeriodFromRow } from "../services/submissionAuditPeriod";
 import { findTextMessagesByPhones } from "../services/messageMatchingService";
 import { computeTransactionDateRange, DEFAULT_BUFFER_DAYS } from "../utils/emailDateRange";
 import {
@@ -102,9 +103,11 @@ import type { Communication } from "../types/models";
 const CLOSED_AT = "2026-07-29";
 const STARTED_AT = "2026-01-01";
 
-/** What submissionService.ts:272 passes down: `new Date(transaction.closed_at)`. */
-const auditStart = new Date(STARTED_AT);
-const auditEnd = new Date(CLOSED_AT);
+/** What the submission passes down: `auditPeriodFromRow` (BACKLOG-3683/3734). */
+const { auditStartDate: auditStart, auditEndDate: auditEnd } = auditPeriodFromRow({
+  started_at: STARTED_AT,
+  closed_at: CLOSED_AT,
+});
 
 /** The closing day, as LOCAL wall-clock parts. */
 const CLOSING_DAY: readonly [number, number, number] = [2026, 6, 29];
@@ -429,6 +432,7 @@ describe("BACKLOG-2788 — the bound in timezones this process cannot enter", ()
     tabPastBound: Record<string, boolean>;
     emailRangeEnd: string;
     tabAtStartEdge: boolean;
+    mainAtStartEdge: boolean;
   }
 
   /**
@@ -552,31 +556,23 @@ describe("BACKLOG-2788 — the bound in timezones this process cannot enter", ()
     }
   }, ZONE_TIMEOUT_MS);
 
-  it("the audit-window START still diverges east of UTC — measured, and out of this contract", () => {
-    // BACKLOG-2788 moved the END of the audit window and nothing else. The
-    // START is still parsed as UTC midnight by the export and the submission
-    // (`new Date("2026-01-01")`) while the Texts tab reads it as a LOCAL day,
-    // so for a start of 2026-01-01 the instant 2025-12-31T23:59:59.999Z is:
+  it("the audit-window START agrees across surfaces in every zone (BACKLOG-3734)", () => {
+    // BACKLOG-2788 moved only the END. Until BACKLOG-3734 the export and the
+    // submission parsed the START as UTC midnight while the Texts tab read it as
+    // a LOCAL day, so the instant 2025-12-31T23:59:59.999Z (start 2026-01-01)
+    // was IN the tab and OUT of the other two in Europe/Berlin. Both now read a
+    // date-only start as local 00:00 (`auditWindowStart`), so they agree:
     //
-    //     UTC / America/Chicago   out on all three surfaces
-    //     Europe/Berlin           out of the export and the submission,
-    //                             IN the tab (local midnight is 23:00Z on 12/31)
-    //
-    // Recorded here rather than fixed: tightening the tab would REMOVE
-    // communications a user currently sees, and loosening the other two would
-    // ADD communications to shipped broker submissions. Either direction is a
-    // founder decision, not a consequence of this one. Found by running this
-    // suite east of UTC — the sweep above deliberately no longer places a
-    // fixture in that gap, so it cannot claim an agreement that does not exist.
-    expect(runInZone("UTC").tabAtStartEdge).toBe(false);
-    expect(runInZone("America/Chicago").tabAtStartEdge).toBe(false);
-    expect(runInZone("Europe/Berlin").tabAtStartEdge).toBe(true);
-
-    // The other two surfaces exclude it in EVERY zone: their start is an
-    // absolute instant, and this fixture is one millisecond before it.
-    expect(new Date("2025-12-31T23:59:59.999Z").getTime()).toBeLessThan(
-      new Date(STARTED_AT).getTime(),
-    );
+    //     UTC / America/Chicago   out everywhere
+    //     Europe/Berlin           IN everywhere (local midnight is 23:00Z on 12/31)
+    for (const [tz, expected] of [
+      ["UTC", false],
+      ["America/Chicago", false],
+      ["Europe/Berlin", true],
+    ] as const) {
+      const report = runInZone(tz);
+      expect([tz, report.tabAtStartEdge, report.mainAtStartEdge]).toEqual([tz, expected, expected]);
+    }
   }, ZONE_TIMEOUT_MS);
 
   it("the email/import window ends with the buffered local day in every zone", () => {
