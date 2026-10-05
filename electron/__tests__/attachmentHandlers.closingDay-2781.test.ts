@@ -171,7 +171,8 @@ const EXPECTED_IN_WINDOW = 4;
 function createSchema(db: DatabaseType): void {
   db.exec(`
     CREATE TABLE emails (id TEXT PRIMARY KEY, sent_at DATETIME);
-    CREATE TABLE messages (id TEXT PRIMARY KEY, thread_id TEXT, sent_at DATETIME);
+    -- user_id: NOT NULL in schema.sql; BACKLOG-3733 joins on it
+    CREATE TABLE messages (id TEXT PRIMARY KEY, user_id TEXT NOT NULL DEFAULT 'user-1', thread_id TEXT, sent_at DATETIME);
     CREATE TABLE attachments (
       id TEXT PRIMARY KEY,
       message_id TEXT,
@@ -182,6 +183,7 @@ function createSchema(db: DatabaseType): void {
     );
     CREATE TABLE communications (
       id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL DEFAULT 'user-1', -- NOT NULL in schema.sql; BACKLOG-3733 joins on it
       transaction_id TEXT,
       message_id TEXT,
       email_id TEXT,
