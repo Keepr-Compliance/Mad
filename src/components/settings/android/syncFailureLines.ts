@@ -27,6 +27,7 @@ export const SYNC_FAILURE_LINES: Readonly<Record<string, string>> = {
   claim_refused: "Keepr couldn't start this Sync.",
   save_failed: "Keepr couldn't save this Sync.",
   scan_failed: "The Sync stopped unexpectedly.",
+  pc_offline: "This computer is offline.",
 };
 
 /** Any code Keepr doesn't know (a newer extension): still short. */

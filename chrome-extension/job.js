@@ -92,6 +92,7 @@
     claim_refused: "Keepr couldn't start this Sync.",
     save_failed: "Keepr couldn't save this Sync.",
     scan_failed: "The Sync stopped unexpectedly.",
+    pc_offline: "This computer is offline.",
   };
   var FAILURE_FALLBACK = "The Sync stopped unexpectedly.";
   function failureLine(code) {
@@ -181,11 +182,14 @@
    */
   var CONNECTING_TEXT = "Reconnecting to your phone…";
   var UNREACHABLE_TEXT = "Your phone isn't reachable — check it's on and connected";
+  /** Live: the computer's own network is off (Google's "No internet connection"). */
+  var OFFLINE_TEXT = "This computer is offline — waiting for the connection";
   var RCS_CONNECTION_LOST_MS = 5 * 60000;
   var CONNECTION_POLL_MS = 1000;
   var CONNECTION_LOST_TEXT = {
     connection_lost: "Keepr stopped: Messages for Web could not reconnect to your phone for 5 minutes. Check your phone, then sync again from Keepr.",
     phone_unreachable: "Keepr stopped: your phone wasn't reachable for 5 minutes. Check it's on and connected, then sync again from Keepr.",
+    pc_offline: "Keepr stopped: this computer was offline for 5 minutes. Connect to the internet, then sync again from Keepr.",
   };
   /** The paused box's line for each pause. */
   var PAUSE_BODIES = {};
@@ -867,7 +871,12 @@
     /** Telemetry (counts and ms only): each banner kind's occurrences and time. */
     var connection = {
       connecting: { count: 0, ms: 0 }, phone_unreachable: { count: 0, ms: 0 }, connection_banner: { count: 0, ms: 0 },
+      pc_offline: { count: 0, ms: 0 },
     };
+    /** The waiting line for a banner kind. */
+    function bannerText(kind) {
+      return kind === "phone_unreachable" ? UNREACHABLE_TEXT : kind === "pc_offline" ? OFFLINE_TEXT : CONNECTING_TEXT;
+    }
     function bannerNow() {
       return env.scan && env.scan.connectionBanner ? env.scan.connectionBanner(env.doc) : null;
     }
@@ -887,10 +896,10 @@
         connection[kind].count += 1;
         log("connection banner: " + kind + (kind === "connection_banner" ? " (title " + banner.titleLength + " chars)" : ""));
         pauses += 1;
-        await report(kind === "phone_unreachable" ? UNREACHABLE_TEXT : CONNECTING_TEXT);
+        await report(bannerText(kind));
         while (banner) {
           if (waited >= connectionLostMs) {
-            var code = kind === "phone_unreachable" ? "phone_unreachable" : "connection_lost";
+            var code = kind === "phone_unreachable" ? "phone_unreachable" : kind === "pc_offline" ? "pc_offline" : "connection_lost";
             log("connection banner for " + Math.round(waited / 1000) + "s: " + code);
             return { code: code, message: CONNECTION_LOST_TEXT[code] };
           }
@@ -902,7 +911,7 @@
             kind = banner.kind;
             connection[kind].count += 1;
             log("connection banner: " + kind);
-            await report(kind === "phone_unreachable" ? UNREACHABLE_TEXT : CONNECTING_TEXT);
+            await report(bannerText(kind));
           }
         }
         log("connection back after " + Math.round(waited / 1000) + "s");
@@ -1014,7 +1023,7 @@
     async function report(stage) {
       log("stage: " + stage);
       // The phone's banner (paused): its own card; anything else: the run's.
-      if (stage === PAUSED_TEXT || stage === CONNECTING_TEXT || stage === UNREACHABLE_TEXT) env.overlay.show(stage, false, RUNNING_EXTRAS);
+      if (stage === PAUSED_TEXT || stage === CONNECTING_TEXT || stage === UNREACHABLE_TEXT || stage === OFFLINE_TEXT) env.overlay.show(stage, false, RUNNING_EXTRAS);
       else env.overlay.show(runningText(), false, runExtras());
       await call("POST", base + "/progress", {
         // Keepr shows the same user line (its own screens and the dashboard).
@@ -1610,6 +1619,10 @@
     }).length;
     tm.chatsFailed = failedChats;
     tm.readEndAt = clock();
+    // Live (2026-10-04): never "Sync done" while the page says it is offline
+    // or disconnected — wait it out (the same grace), else fail with its code.
+    var lostAtEnd = await holdWhileOffline(null);
+    if (lostAtEnd && lostAtEnd.code) return fail(lostAtEnd.code, lostAtEnd.message);
     if (totals.chats === 0 && failedChats > 0 && failedChats >= progress.checked) {
       log("failed: every checked chat failed (" + failedChats + ")");
       return fail("all_failed", "None of the " + failedChats + " chats could be read.");
@@ -1882,7 +1895,7 @@
     if (isError) return "error";
     // SR U4: the done line is "done" even when the job sent no details.
     if ((extras && extras.details) || text === DONE_LINE) return "done";
-    if (text === PAUSED_TEXT || text === CONNECTING_TEXT || text === UNREACHABLE_TEXT) return "paused";
+    if (text === PAUSED_TEXT || text === CONNECTING_TEXT || text === UNREACHABLE_TEXT || text === OFFLINE_TEXT) return "paused";
     return "syncing";
   }
 
@@ -2790,6 +2803,7 @@
     PAUSED_TEXT: PAUSED_TEXT,
     CONNECTING_TEXT: CONNECTING_TEXT,
     UNREACHABLE_TEXT: UNREACHABLE_TEXT,
+    OFFLINE_TEXT: OFFLINE_TEXT,
     CONNECTION_LOST_TEXT: CONNECTION_LOST_TEXT,
     RCS_CONNECTION_LOST_MS: RCS_CONNECTION_LOST_MS,
     CACHE_CHECK_MAX: CACHE_CHECK_MAX,

@@ -185,3 +185,64 @@ describe("the job pauses on the banner (B3, B4, B5, B6)", () => {
     expect(job.RCS_CONNECTION_LOST_MS).toBe(5 * 60000);
   });
 });
+
+/**
+ * Live (2026-10-04): network off — Google showed "No internet connection /
+ * Make sure your device is connected to the internet." and the run went on
+ * and finished "Sync done" (a false complete). Now that is connection lost:
+ * the same pause and grace, then the code pc_offline ("This computer is
+ * offline."); and a run never finishes while a banner is unresolved.
+ * Mutations: the offline title not matched; navigator.onLine ignored; the
+ * fallback element not matched; no end-of-run check → red.
+ */
+describe("the computer is offline (pc_offline)", () => {
+  const OFFLINE_CONTENT = "Make sure your device is connected to the internet.";
+
+  it("kinds: the offline banner title, a status/alert element saying so, or navigator.onLine false", () => {
+    document.body.appendChild(banner("No internet connection", OFFLINE_CONTENT));
+    expect(scan.connectionBanner(document)).toMatchObject({ kind: "pc_offline" });
+    document.body.innerHTML = "";
+    document.querySelectorAll(".information-banner").forEach((b) => b.remove());
+    document.body.innerHTML = `<div role="alert"><span>No internet connection</span><span>${OFFLINE_CONTENT}</span></div>`;
+    expect(scan.connectionBanner(document)).toMatchObject({ kind: "pc_offline" });
+    document.body.innerHTML = "";
+    expect(scan.connectionBanner(document)).toBeNull();
+    const online = jest.spyOn(window.navigator, "onLine", "get").mockReturnValue(false);
+    try {
+      expect(scan.connectionBanner(document)).toEqual({ kind: "pc_offline", titleLength: 0 });
+    } finally {
+      online.mockRestore();
+    }
+  });
+
+  it("offline past the limit: the job ends pc_offline — no chat saved, never 'done'", async () => {
+    document.documentElement.appendChild(banner("No internet connection", OFFLINE_CONTENT));
+    const t = bannerEnv({ onSleep: (n) => { if (n > 50) throw new Error("waited past the limit"); }, connectionLostMs: 3000 });
+    const out = await job.runJob(JOB, t.env);
+    expect(out.outcome).toBe("pc_offline");
+    expect(t.shown).toContain(job.OFFLINE_TEXT);
+    expect(job.overlayState(job.OFFLINE_TEXT, false, { cancel: true })).toBe("paused");
+    const err = t.calls.find(([, p]) => p.endsWith("/error"));
+    expect(err![2]).toMatchObject({ code: "pc_offline", message: job.CONNECTION_LOST_TEXT.pc_offline });
+    expect(t.calls.some(([, p]) => p.endsWith("/finish"))).toBe(false);
+    expect(job.failureLine("pc_offline")).toBe("This computer is offline.");
+  });
+
+  it("offline only once the chats were read: still never 'done' (waits, then pc_offline)", async () => {
+    const t = bannerEnv({
+      onLoad: () => undefined,
+      onSleep: (n) => { if (n > 50) throw new Error("waited past the limit"); },
+      connectionLostMs: 2000,
+    });
+    // The banner appears as the last chat's messages are sent.
+    const api = t.env.api;
+    t.env.api = async (m: string, p: string, b?: Record<string, unknown>) => {
+      const r = await api(m, p, b);
+      if (p.endsWith("/chat")) document.body.appendChild(banner("No internet connection", OFFLINE_CONTENT));
+      return r;
+    };
+    const out = await job.runJob(JOB, t.env);
+    expect(out.outcome).toBe("pc_offline");
+    expect(t.calls.some(([, p]) => p.endsWith("/finish"))).toBe(false);
+  });
+});

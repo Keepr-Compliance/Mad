@@ -28,6 +28,7 @@ export const GM_FAILURE_LINES: Readonly<Record<string, string>> = {
   claim_refused: "Keepr couldn't start this Sync.",
   save_failed: "Keepr couldn't save this Sync.",
   scan_failed: 'The Sync stopped unexpectedly.',
+  pc_offline: 'This computer is offline.',
 };
 
 export const GM_FAILURE_FALLBACK = 'The Sync stopped unexpectedly.';

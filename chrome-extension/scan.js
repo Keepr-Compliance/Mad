@@ -902,6 +902,10 @@
    * container is the match; its title text only tells the states apart.
    */
   var CONNECTION_BANNER_SELECTORS = [".information-banner"];
+  /** Google's offline banner title (live 2026-10-04: "No internet connection"). */
+  var OFFLINE_TITLE = /^no internet connection/i;
+  /** UNTRACED: where else an offline banner may sit (alert / status / banner elements). */
+  var OFFLINE_BANNER_FALLBACK_SELECTORS = '[role="alert"], [role="status"], mws-banner, .banner, [class*="offline"]';
 
   /**
    * The connection banner on screen, or null:
@@ -909,6 +913,18 @@
    * Any other banner title is the generic kind; only its length is reported.
    */
   function connectionBanner(doc) {
+    /*
+     * Live (2026-10-04): with the computer's network off, Google Messages
+     * showed "No internet connection / Make sure your device is connected to
+     * the internet." and the run went on reading what was on screen, then
+     * finished "Sync done" — a false complete. That banner was NOT matched
+     * (its markup is UNTRACED). So, in order: the browser's own offline flag
+     * (navigator.onLine === false, language-independent); the traced banner
+     * with an offline title; any visible alert / status / banner element whose
+     * text says so. All three are the kind "pc_offline".
+     */
+    var view = doc.defaultView;
+    if (view && view.navigator && view.navigator.onLine === false) return { kind: "pc_offline", titleLength: 0 };
     for (var s = 0; s < CONNECTION_BANNER_SELECTORS.length; s++) {
       var banners = doc.querySelectorAll(CONNECTION_BANNER_SELECTORS[s]);
       for (var i = 0; i < banners.length; i++) {
@@ -917,9 +933,16 @@
         var title = normalizeSpace(titleEl ? titleEl.textContent : "");
         var kind = /^connecting\b/i.test(title) ? "connecting"
           : /trying to reach your phone/i.test(title) ? "phone_unreachable"
+          : OFFLINE_TITLE.test(title) ? "pc_offline"
           : "connection_banner";
         return { kind: kind, titleLength: title.length };
       }
+    }
+    var others = doc.querySelectorAll(OFFLINE_BANNER_FALLBACK_SELECTORS);
+    for (var o = 0; o < others.length; o++) {
+      if (!isShown(others[o])) continue;
+      var text = normalizeSpace(others[o].textContent || "");
+      if (OFFLINE_TITLE.test(text)) return { kind: "pc_offline", titleLength: Math.min(text.length, 200) };
     }
     return null;
   }
