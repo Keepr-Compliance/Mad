@@ -104,6 +104,7 @@ const AGENT_ID = '00000000-0000-4000-8000-000000374802'; // pii-allow-uuid: inve
 const EMAIL_MSG = '00000000-0000-4000-8000-000000374803'; // pii-allow-uuid: invented fixture id
 const TEXT_MSG = '00000000-0000-4000-8000-000000374804'; // pii-allow-uuid: invented fixture id
 const PHOTO_MSG = '00000000-0000-4000-8000-000000374805'; // pii-allow-uuid: invented fixture id
+const OTHER_SUB = '00000000-0000-4000-8000-000000374806'; // pii-allow-uuid: invented fixture id
 
 const subRow: Row = {
   id: SUB,
@@ -228,5 +229,22 @@ describe('review page: files inside their message bubble (BACKLOG-3748)', () => 
   it('text view off: text messages are gated out, so their photos are too', async () => {
     given({ textView: false });
     expect(await mapPassed()).toEqual({ [EMAIL_MSG]: ['Contract.pdf'] });
+  });
+
+  // BACKLOG-3748 S1 (SR review efcb3cec): getAttachments scopes to this
+  // submission via .eq('submission_id', submissionId) at page.tsx:118. A
+  // foreign submission's row whose message_id happens to point at THIS
+  // submission's message must never reach the map.
+  it("a foreign submission's attachment pointed at this submission's message never reaches the map", async () => {
+    given({});
+    mockEmulator.state.rows.submission_attachments.push({
+      ...att('f1', 'OtherSubmission.jpg', 'image/jpeg', TEXT_MSG),
+      submission_id: OTHER_SUB,
+    });
+    expect(await mapPassed()).toEqual({
+      [EMAIL_MSG]: ['Contract.pdf'],
+      [TEXT_MSG]: ['Front.jpg'],
+      [PHOTO_MSG]: ['Porch.jpg'],
+    });
   });
 });
