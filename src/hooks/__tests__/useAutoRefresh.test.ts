@@ -338,6 +338,11 @@ describe("useAutoRefresh", () => {
 
       const { result } = renderHook(() => useAutoRefresh(defaultOptions));
 
+      // BACKLOG-3749 follow-up: Mac Messages waits for the preferences read.
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
       await act(async () => {
         await result.current.triggerRefresh();
       });
@@ -528,6 +533,33 @@ describe("useAutoRefresh", () => {
         ['contacts', 'emails', 'messages'],
         'test-user-123'
       );
+    });
+
+    // SR (BACKLOG-3749 follow-up): the source is unknown until the preferences
+    // load — no Mac Messages run before that (an Android user on a Mac must
+    // not get one). Mutation: start at "macos-native" / no load gate → red.
+    it("before the preferences load, no Mac Messages run — then an Android source keeps it skipped", async () => {
+      (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
+      let release: (v: unknown) => void = () => undefined;
+      mockPreferencesGet.mockImplementation(() => new Promise((r) => { release = r; }));
+
+      const { result } = renderHook(() => useAutoRefresh(defaultOptions));
+      await act(async () => {
+        await result.current.triggerRefresh();
+      });
+      expect(mockRequestSync).toHaveBeenCalledWith(['contacts', 'emails'], 'test-user-123');
+      expect(mockRequestSync.mock.calls.some((c) => (c[0] as string[]).includes('messages'))).toBe(false);
+
+      await act(async () => {
+        release({ success: true, preferences: { sync: { autoSyncOnLogin: true }, messages: { source: 'android-messages-web' } } });
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(1500);
+        await Promise.resolve();
+      });
+      expect(mockRequestSync.mock.calls.some((c) => (c[0] as string[]).includes('messages'))).toBe(false);
     });
 
     it("should NOT include messages when import source is iphone-sync on macOS", async () => {
@@ -899,6 +931,11 @@ describe("useAutoRefresh", () => {
 
       const { result } = renderHook(() => useAutoRefresh(defaultOptions));
 
+      // BACKLOG-3749 follow-up: Mac Messages waits for the preferences read.
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
       await act(async () => {
         await result.current.triggerRefresh();
       });
@@ -925,6 +962,11 @@ describe("useAutoRefresh", () => {
     it("should work without waiting for auto-trigger delay", async () => {
       const { result } = renderHook(() => useAutoRefresh(defaultOptions));
 
+      // BACKLOG-3749 follow-up: Mac Messages waits for the preferences read.
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
       await act(async () => {
         await result.current.triggerRefresh();
       });
@@ -1300,6 +1342,11 @@ describe("useAutoRefresh", () => {
 
       const { result } = renderHook(() => useAutoRefresh(defaultOptions));
 
+      // BACKLOG-3749 follow-up: Mac Messages waits for the preferences read.
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
       await act(async () => {
         await Promise.resolve();
         await result.current.triggerRefresh();
