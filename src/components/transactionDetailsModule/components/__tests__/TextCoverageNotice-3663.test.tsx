@@ -27,6 +27,11 @@ jest.mock("../../../../services/rcsImportService", () => ({
     onDataCleared: () => () => undefined,
   },
 }));
+let mockIsMac = true;
+jest.mock("../../../../utils/platform", () => ({
+  ...jest.requireActual("../../../../utils/platform"),
+  isMacOS: () => mockIsMac,
+}));
 jest.mock("../../../../services/settingsService", () => ({
   settingsService: {
     getPreferences: async () => ({ success: true, data: { messages: { source: mockSource } } }),
@@ -62,6 +67,23 @@ describe("TextCoverageNotice", () => {
     expect(chosenTextSource("iphone-sync")).toBe("iphone");
     expect(chosenTextSource("android-companion")).toBe("google_messages"); // SR C6: shown as Google Messages
     expect(chosenTextSource(undefined)).toBeNull();
+  });
+
+  // BACKLOG-3749: a stored value this build does not know asks with the
+  // platform default's source (Mac: mac, else iPhone), never with nothing.
+  // Mutation: the raw value passed to chosenTextSource → red.
+  it("an unknown stored source asks with the platform default (BACKLOG-3749)", async () => {
+    getTextCoverage.mockResolvedValue({ success: true, auditStartISO: "2026-05-01T00:00:00.000Z", gaps: [] });
+    mockSource = "some-future-source";
+    mockIsMac = true;
+    const { unmount } = render(<TextCoverageNotice transactionId="tx-1" userId="user-1" />);
+    await waitFor(() => expect(getTextCoverage).toHaveBeenCalledWith("tx-1", "user-1", "mac"));
+    unmount();
+    getTextCoverage.mockClear();
+    mockIsMac = false;
+    render(<TextCoverageNotice transactionId="tx-1" userId="user-1" />);
+    await waitFor(() => expect(getTextCoverage).toHaveBeenCalledWith("tx-1", "user-1", "iphone"));
+    mockIsMac = true;
   });
 
   it("exact vs approximate: a warning when any gap is exact, a soft note when all are approximate (N2)", async () => {

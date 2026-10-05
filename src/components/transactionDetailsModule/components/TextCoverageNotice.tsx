@@ -10,6 +10,8 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 import { settingsService } from "../../../services/settingsService";
+import { effectiveImportSource } from "../../../services/importSourcePolicy";
+import { isMacOS } from "../../../utils/platform";
 import { rcsImportService } from "../../../services/rcsImportService";
 import { transactionService } from "../../../services/transactionService";
 import type { SourceCoverageGap, TextSource } from "../../../../electron/types/auditCoverage";
@@ -103,7 +105,9 @@ export function TextCoverageNotice({ transactionId, userId }: TextCoverageNotice
     let chosen: TextSource | null = null;
     try {
       const prefs = await settingsService.getPreferences(userId);
-      chosen = chosenTextSource(prefs.success ? prefs.data?.messages?.source : null);
+      const stored = prefs.success ? prefs.data?.messages?.source : null;
+      // BACKLOG-3749: a value this build does not know → the platform default.
+      chosen = chosenTextSource(stored ? effectiveImportSource(stored, isMacOS()) : null);
     } catch {
       chosen = null;
     }
