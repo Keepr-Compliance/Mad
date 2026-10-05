@@ -3,11 +3,10 @@
  *
  * Keepr's Sync opens Messages for Web with `#keepr-job=<jobId>`. This script
  * (a content script, loaded after extract.js and scan.js) picks the job up,
- * checks the page is signed in, claims the job, scans the conversation list
- * for chats whose name looks like a transaction contact, reads each one's phone
- * numbers from Details and asks Keepr whether they match. Only chats Keepr
- * matched are extracted and sent, with their images. At the end Keepr is told
- * the job finished and brings its own window forward.
+ * checks the page is signed in, claims the job (a cache Sync — the only kind
+ * since 2026-10-05), lists the chats newer than its floor, reads each one's
+ * phone numbers from Details and asks Keepr whether to keep it. Kept chats are
+ * extracted and sent, with their images; Keepr saves them when the job ends.
  *
  * `runJob` is testable: every page, network and timing effect comes in through
  * `env`. The chrome.* glue at the bottom runs only in the browser. All traffic
@@ -96,6 +95,8 @@
     keepr_busy: "Keepr is busy. Try again.",
   };
   var FAILURE_FALLBACK = "The Sync stopped unexpectedly.";
+  /** An older Keepr asked for a per-transaction Sync (removed 2026-10-05). */
+  var OLD_KEEPR_CLAIM = "This Keepr is older than the extension. Update Keepr, then Sync again.";
   function failureLine(code) {
     return (code && Object.prototype.hasOwnProperty.call(FAILURE_LINES, code) && FAILURE_LINES[code]) || FAILURE_FALLBACK;
   }
@@ -250,13 +251,7 @@
    * @param {function(string): string} nameOf
    */
   function summaryLines(s, nameOf) {
-    var lines = [s.isCache ? cacheSavedLine(s) :
-      "Scanned " + s.listed + " chats · checked " + s.checked + " · matched " + s.matched +
-        " · imported " + s.messages + " messages" + (s.images > 0 ? ", " + s.images + " images" : ""),
-    ];
-    if (!s.isCache && s.checked > 0 && s.matched === 0) {
-      lines.push("None of the checked chats matched a phone number on this transaction's contacts.");
-    }
+    var lines = [cacheSavedLine(s)];
     var confirmedLine = historyConfirmedLine(s.historyConfirmed);
     if (confirmedLine) lines.push(confirmedLine);
     var depthLine = historyDepthLine(s.depth);
@@ -264,13 +259,9 @@
     var extraLine = extraTimeLine(s.extraTime);
     if (extraLine) lines.push(extraLine);
     if (s.notChecked > 0) {
-      lines.push("Not checked: " + s.notChecked + " chats (name didn't match a contact on this transaction)");
+      lines.push("Not checked: " + s.notChecked + " chats (over this Sync's limit)");
     }
     // A count only: Keepr-only names never go into the page (SR B1).
-    if (s.contactsWithoutPhone > 0) {
-      lines.push(s.contactsWithoutPhone + " contact" + (s.contactsWithoutPhone === 1 ? " has" : "s have") +
-        " no phone number — see Keepr");
-    }
     if (s.notSynced > 0) {
       lines.push(s.notSynced + " chat" + (s.notSynced === 1 ? "" : "s") + " not synced — switched off by you");
     }
@@ -488,10 +479,8 @@
   function copyText(s, tags, logLines, version) {
     // A cache Sync's scan counts (checked / matched / sent) are diagnostics:
     // in the Copy text only, not on screen.
-    var scanCounts = s.isCache
-      ? ["Checked " + s.checked + " · matched " + s.matched + " · sent " + s.chats + " chats / " + s.messages + " messages" +
-        " / " + (s.reactions || 0) + " reactions" + (s.images > 0 ? " / " + s.images + " images" : "")]
-      : [];
+    var scanCounts = ["Checked " + s.checked + " · matched " + s.matched + " · sent " + s.chats + " chats / " + s.messages + " messages" +
+        " / " + (s.reactions || 0) + " reactions" + (s.images > 0 ? " / " + s.images + " images" : "")];
     // Founder: the extension version heads the Copy text.
     return ["Keepr Sync diagnostics" + (version ? " · extension " + version : "")]
       .concat(summaryLines(s, function (n) { return "#" + (tags[n] || "??????"); }))
@@ -657,7 +646,7 @@
       if (err && err.keeprBusy) {
         diag(env, "stopped: Keepr busy (429 past the run's wait budget)");
         var busyExtras = { details: err.message };
-        if (err.isCache) busyExtras.retry = true;
+        busyExtras.retry = true;
         env.overlay.show(failureLine("keepr_busy"), true, busyExtras);
         try {
           await env.api("POST", "/job/" + jobId + "/error", { code: "keepr_busy", message: err.message });
@@ -671,7 +660,7 @@
         // Try again reaches Keepr again (or launches it: the page's retry).
         // SR U1: the short line on the card, the long one in the details.
         var lostExtras = { details: err.message, copy: "Keepr Sync diagnostics: Keepr lost (" + err.keeprLost + ")." };
-        if (err.isCache) lostExtras.retry = true;
+        lostExtras.retry = true;
         env.overlay.show(failureLine("keepr_" + err.keeprLost), true, lostExtras);
         return { outcome: "keepr_lost", reason: err.keeprLost };
       }
@@ -808,9 +797,7 @@
         var after = reply.body && typeof reply.body.retryAfterMs === "number" ? reply.body.retryAfterMs : RATE_LIMIT_DEFAULT_WAIT_MS;
         var waitMs = Math.min(Math.max(after, 250), RATE_LIMIT_DEFAULT_WAIT_MS);
         if (rateWaitedMs + waitMs > RATE_LIMIT_RUN_BUDGET_MS) {
-          var busy = KeeprBusyError();
-          busy.isCache = isCache;
-          throw busy;
+          throw KeeprBusyError();
         }
         rateWaitedMs += waitMs;
         await env.sleep(waitMs);
@@ -818,9 +805,7 @@
       }
       var kind = transportKind(reply);
       if (kind) {
-        var lost = KeeprLostError(kind);
-        lost.isCache = isCache;
-        throw lost;
+        throw KeeprLostError(kind);
       }
       if (jobGone(reply)) throw JobGoneError();
       return reply;
@@ -835,7 +820,6 @@
     var progress = { listed: 0, candidates: 0, checked: 0, skipped: 0, notChecked: 0 };
     var totals = { chats: 0, messages: 0, images: 0, reactions: 0, historyConfirmed: { marker: 0, first_page: 0, no_overflow: 0, date_floor: 0, none: 0 },
       depth: { limit: 0, start: 0, partial: 0, gaps: 0, gapsRecovered: 0, floorDays: null }, removedByUser: 0, imagesNotKept: 0, notText: 0, noMessagesYet: 0, notSynced: 0, alreadySaved: 0 };
-    var contactsWithoutPhone = 0;
     // SR M: every photo / video bubble against what was saved (counts only).
     var media = {
       photos: { seen: 0, saved: 0, notKept: 0, notLoaded: 0, readFailed: 0, tooLarge: 0, failed: 0, recovered: 0 },
@@ -852,7 +836,7 @@
     // BACKLOG-3658: progress lines carry the page's Cancel (this job only).
     var RUNNING_EXTRAS = { cancel: true };
     function stageText(n, of) {
-      return (isCache ? "Chat " : "Checking chat ") + n + " of " + of;
+      return "Chat " + n + " of " + of;
     }
     /**
      * Founder (live B3): the card shows the SAME thing in every phase — list
@@ -1101,7 +1085,6 @@
         media: media,
         extraTime: extraTime,
         notChecked: progress.notChecked,
-        contactsWithoutPhone: contactsWithoutPhone,
         removedByUser: totals.removedByUser,
         imagesNotKept: totals.imagesNotKept,
         notText: totals.notText,
@@ -1109,7 +1092,6 @@
         notSynced: totals.notSynced,
         notReached: reported,
         notReachedMore: notReached.length - reported.length,
-        isCache: isCache,
         saved: saved,
       };
     }
@@ -1127,7 +1109,7 @@
       var version = typeof env.extensionVersion === "string" ? env.extensionVersion : "";
       var detailsLines = detailsText(s);
       // The done box's line (storyboard A10): "20 chats · 412 messages (38 new) · 64 photos".
-      return { details: detailsLines, summary: s.isCache && s.saved && typeof s.saved === "object" ? cacheSummaryLine(s.saved) : String(detailsLines).split("\n")[0], copy: copyText(s, tags, logLines, version), version: version };
+      return { details: detailsLines, summary: s.saved && typeof s.saved === "object" ? cacheSummaryLine(s.saved) : String(detailsLines).split("\n")[0], copy: copyText(s, tags, logLines, version), version: version };
     }
 
     async function fail(code, message) {
@@ -1135,7 +1117,7 @@
       var failExtras = await overlayExtras();
       // C5 (founder): a cache Sync that failed for real says "Sync failed"
       // and offers Try again (Keepr saved the chats it finished).
-      if (isCache) failExtras.retry = true;
+      failExtras.retry = true;
       // SR U1: the card says one short line; the long text is in the details.
       failExtras.details = message + (failExtras.details ? "\n\n" + failExtras.details : "");
       env.overlay.show(failureLine(code), true, failExtras);
@@ -1172,15 +1154,18 @@
       env.overlay.show(failureLine("claim_refused"), true, refusedExtras);
       return { outcome: "claim_refused" };
     }
-    var contacts = (claim.body && claim.body.contacts) || [];
-    var noPhone = claim.body && claim.body.contactsWithoutPhoneCount;
-    contactsWithoutPhone = typeof noPhone === "number" && noPhone > 0 ? Math.floor(noPhone) : 0;
-    var contactTags = [];
-    for (var ct = 0; ct < contacts.length; ct++) contactTags.push(await tag(contacts[ct].displayName));
-    log("claimed: " + contacts.length + " contacts with a phone [" + contactTags.join(", ") + "]");
-    // History floor: the transaction's start date; none → no date floor.
-    // BACKLOG-3658: a cache Sync — every chat, history back to `since`.
-    var isCache = !!(claim.body && claim.body.kind === "cache");
+    // Founder (2026-10-05): the cache Sync is the only kind (the per-
+    // transaction Sync was removed). An older Keepr's transaction claim is
+    // refused with a clear line, never run.
+    if (!(claim.body && claim.body.kind === "cache")) {
+      log("claim refused: not a cache Sync (update Keepr)");
+      var oldExtras = await overlayExtras();
+      oldExtras.details = OLD_KEEPR_CLAIM + (oldExtras.details ? "\n\n" + oldExtras.details : "");
+      env.overlay.show(failureLine("claim_refused"), true, oldExtras);
+      return { outcome: "claim_refused" };
+    }
+    log("claimed");
+    // BACKLOG-3658: every chat, history back to `since`.
     if (typeof env.chromeVersion === "function") {
       try {
         chromeVersion = await env.chromeVersion();
@@ -1189,16 +1174,16 @@
       }
     }
     // Storyboard H03: a Try again run says "skipping saved chats".
-    if (isCache && claim.body && claim.body.retrying === true) RUNNING_EXTRAS.retrying = true;
-    var floorSource = isCache ? claim.body.since : claim.body && claim.body.startDate;
+    if (claim.body.retrying === true) RUNNING_EXTRAS.retrying = true;
+    var floorSource = claim.body.since;
     var floorMs = typeof floorSource === "string" ? Date.parse(floorSource) : NaN;
     if (!isFinite(floorMs)) floorMs = null;
     // Live (0.3.15): chats switched back on — read to the FULL floor even with
     // no new message (Keepr clears them once saved). Conversation ids only.
     var pendingFull = {};
-    var pendingIds = isCache && claim.body && Array.isArray(claim.body.pendingConversationIds) ? claim.body.pendingConversationIds : [];
+    var pendingIds = Array.isArray(claim.body.pendingConversationIds) ? claim.body.pendingConversationIds : [];
     for (var pf = 0; pf < pendingIds.length; pf++) if (typeof pendingIds[pf] === "string") pendingFull[pendingIds[pf]] = true;
-    var fullFloorMs = isCache && claim.body && typeof claim.body.floor === "string" ? Date.parse(claim.body.floor) : NaN;
+    var fullFloorMs = typeof claim.body.floor === "string" ? Date.parse(claim.body.floor) : NaN;
     if (!isFinite(fullFloorMs)) fullFloorMs = floorMs;
     // SR (2026-10-02): chats on a live deal Keepr wants read back to the deal's
     // start — the list scan looks for them past the settings floor, never past
@@ -1206,8 +1191,8 @@
     // comes from /match.
     var dealIds = [];
     var dealSet = {};
-    var dealFloorMs = isCache && claim.body && typeof claim.body.dealFloor === "string" ? Date.parse(claim.body.dealFloor) : NaN;
-    if (isCache && claim.body && Array.isArray(claim.body.dealConversationIds) && isFinite(dealFloorMs)) {
+    var dealFloorMs = typeof claim.body.dealFloor === "string" ? Date.parse(claim.body.dealFloor) : NaN;
+    if (Array.isArray(claim.body.dealConversationIds) && isFinite(dealFloorMs)) {
       for (var di = 0; di < claim.body.dealConversationIds.length; di++) {
         var did = claim.body.dealConversationIds[di];
         if (typeof did === "string" && did && !dealSet[did]) {
@@ -1241,23 +1226,17 @@
     // scroller (top first, then step down with scroll events).
     var lostList = await holdWhileOffline("Loading your conversation list…");
     if (lostList && lostList.code) return fail(lostList.code, lostList.message);
-    var collected = await env.scan.collectConversations(env.doc, isCache
-      ? {
-        scroll: env.scroll, sleep: env.sleep, stopAtOlderThanMs: floorMs, maxItems: CACHE_LIST_MAX, onFound: onFound,
-        mustSee: pendingIds, mustSeeFloorMs: fullFloorMs,
-        mustSeeDeep: dealIds, mustSeeDeepFloorMs: dealFloorMs,
-      }
-      : { scroll: env.scroll, sleep: env.sleep, onFound: onFound });
+    var collected = await env.scan.collectConversations(env.doc, {
+      scroll: env.scroll, sleep: env.sleep, stopAtOlderThanMs: floorMs, maxItems: CACHE_LIST_MAX, onFound: onFound,
+      mustSee: pendingIds, mustSeeFloorMs: fullFloorMs,
+      mustSeeDeep: dealIds, mustSeeDeepFloorMs: dealFloorMs,
+    });
     // BACKLOG-3645: the phone number is the gate, a name only orders the queue.
     // Up to CHECK_ALL_MAX chats every chat is checked; above it, plausible names
     // plus number-only chats, and the rest are reported as not checked.
     // BACKLOG-3658: a cache Sync checks every chat newer than `since` in list
     // order (no names), at most CACHE_CHECK_MAX; the rest are not checked.
-    var plan = isCache
-      ? cachePlan(collected.conversations, floorMs, pendingFull, dealSet)
-      : env.scan.planChecks
-        ? env.scan.planChecks(collected.conversations, contacts)
-        : { queue: env.scan.pickCandidates(collected.conversations, contacts), notChecked: 0 };
+    var plan = cachePlan(collected.conversations, floorMs, pendingFull, dealSet);
     var candidates = plan.queue;
     progress.listed = collected.conversations.length;
     progress.candidates = candidates.length;
@@ -1276,7 +1255,7 @@
     tm.chatsInRange = candidates.length;
     run.total = candidates.length;
     run.index = candidates.length > 0 ? 1 : 0;
-    // Chats, not contacts (founder): "Checking chat i of N" (the step log).
+    // Chats, not contacts (founder): "Chat i of N" (the step log).
     await report(candidates.length > 0 ? stageText(1, candidates.length) : "No chats to check");
     // 4. Each candidate: open, read numbers, close Details, ask Keepr.
     work = candidates.map(function (c) { return { cand: c, attempt: 0 }; });
@@ -1356,17 +1335,14 @@
         var match = await call("POST", base + "/match", { conversationId: conv.conversationId, numbers: numbers });
         if (!match.ok) throw keeprReplyError(match, "Keepr could not check this chat.");
         var isMatch = !!(match.body && match.body.matched);
-        // Keepr says whether it keeps this chat's images (a cache Sync keeps
-        // them only for chats with a transaction contact); a transaction
-        // Sync's matched chat always keeps them.
-        var keepPhotos = isCache
-          ? !!(match.body && (match.body.keepPhotos !== undefined ? match.body.keepPhotos : match.body.keepImages))
-          : true;
-        var keepVideos = isCache ? !!(match.body && match.body.keepVideos) : false;
+        // Keepr says whether it keeps this chat's images (only for chats with
+        // a transaction contact, unless "all chats" is on).
+        var keepPhotos = !!(match.body && (match.body.keepPhotos !== undefined ? match.body.keepPhotos : match.body.keepImages));
+        var keepVideos = !!(match.body && match.body.keepVideos);
         // SR (2026-10-02): a chat on a live deal is read back to Keepr's floor
         // for it (/match floorMs); every other chat keeps the job's floor.
         var chatFloorMs = pendingFull[conv.conversationId] ? fullFloorMs : floorMs;
-        if (isCache && match.body && typeof match.body.floorMs === "number" && isFinite(match.body.floorMs)) {
+        if (match.body && typeof match.body.floorMs === "number" && isFinite(match.body.floorMs)) {
           chatFloorMs = chatFloorMs === null ? match.body.floorMs : Math.min(chatFloorMs, match.body.floorMs);
         }
         var keepImages = keepPhotos;
@@ -1380,7 +1356,7 @@
         if (!isMatch) continue;
         matchedCount += 1;
         // 3671 P3 "Try again": the failed run already saved this chat in full.
-        if (isCache && match.body && match.body.skip === true) {
+        if (match.body && match.body.skip === true) {
           totals.alreadySaved += 1;
           log("  saved by the last run: skipped");
           continue;
@@ -1408,7 +1384,7 @@
           continue;
         }
         // Only the latest messages render on open: load older ones back past
-        // the transaction's start date, then let the set settle.
+        // the floor, then let the set settle.
         var lostHist = await holdWhileOffline(stageText(i + 1, candidates.length));
         if (lostHist && lostHist.code) return fail(lostHist.code, lostHist.message);
         var loc = env.getLocation();
@@ -1516,8 +1492,7 @@
         if (prevSent === undefined) totals.chats += 1;
         totals.messages += Math.max(0, messages.length - (prevSent || 0));
         sentMessages[conv.conversationId] = Math.max(prevSent || 0, messages.length);
-        // BACKLOG-3642: rows the user removed from this transaction are stored
-        // but not linked again; Keepr says how many.
+        // BACKLOG-3642: Keepr may say how many rows it did not re-add.
         var removed = sent.body && typeof sent.body.removedByUser === "number" ? sent.body.removedByUser : 0;
         totals.removedByUser += removed;
         if (removed > 0) log("  removed by you, not re-added: " + removed);
@@ -1679,7 +1654,7 @@
     // A cache Sync: Keepr answers once it has saved, with what it saved.
     // P03: committing to Keepr.
     run.phase = "saving";
-    if (isCache) showPhase(SAVING_TEXT);
+    showPhase(SAVING_TEXT);
     var hiddenNow = hiddenStats.done();
     log("hidden: " + Math.round(hiddenNow.ms / 1000) + "s in " + hiddenNow.spells + " spells; " +
       hiddenNow.batches + " history batches in " + hiddenNow.chats + " chats loaded while hidden");
@@ -1710,7 +1685,7 @@
     if (!finished || !finished.ok) {
       return fail("finish_refused", messageOf(finished, "Keepr could not finish this Sync."));
     }
-    if (isCache && finished && finished.body && Object.prototype.hasOwnProperty.call(finished.body, "saved")) {
+    if (finished && finished.body && Object.prototype.hasOwnProperty.call(finished.body, "saved")) {
       saved = finished.body.saved;
     }
     log("done: listed " + progress.listed + ", candidates " + progress.candidates + ", checked " + progress.checked +

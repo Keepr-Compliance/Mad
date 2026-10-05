@@ -75,10 +75,8 @@ const job = require("../../chrome-extension/job.js") as JobModule;
 
 const LIST = fs.readFileSync(path.join(__dirname, "fixtures", "conversation-list.synthetic.html"), "utf8");
 const JOB = "11111111-2222-4333-8444-555555555555"; // pii-allow-uuid: invented, not from any live row
-const CONTACTS = [
-  { contactId: "c-1", displayName: "Test Contact A" },
-  { contactId: "c-2", displayName: "Test Contact" },
-];
+/** A cache Sync (the only kind since 2026-10-05): its history floor. */
+const SINCE = "2026-01-01T00:00:00.000Z";
 
 let sleeps = 0;
 beforeEach(() => {
@@ -270,7 +268,7 @@ function layoutJob(page: ReturnType<typeof messagesPage>) {
     }),
     api: async (method: string, p: string, body?: Record<string, unknown>): Promise<ApiReply> => {
       calls.push([method, p, body]);
-      if (p.endsWith("/claim")) return { ok: true, status: 200, body: { jobId: JOB, contacts: CONTACTS } };
+      if (p.endsWith("/claim")) return { ok: true, status: 200, body: { jobId: JOB, kind: "cache", since: SINCE } };
       if (p.endsWith("/match")) {
         const matched = body?.conversationId === "aaaaaaaaaaaaaaaaaaa" || body?.conversationId === "eeeeeeeeeeeeeeeeeee";
         return { ok: true, status: 200, body: { matched, contactIds: matched ? ["c-1"] : [] } };
@@ -306,10 +304,10 @@ function layoutJob(page: ReturnType<typeof messagesPage>) {
 }
 
 describe("the Sync job in both layouts", () => {
-  // BACKLOG-3645: every chat of a list under the cap, names first (exact,
-  // loose), then number-only, then the rest.
+  // BACKLOG-3658: a cache Sync checks every chat newer than its floor, in
+  // list order (no name ordering since the per-transaction Sync was removed).
   const CANDIDATES = [
-    "aaaaaaaaaaaaaaaaaaa", "ddddddddddddddddddd", "eeeeeeeeeeeeeeeeeee", "ccccccccccccccccccc", "bbbbbbbbbbbbbbbbbbb",
+    "aaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbb", "ccccccccccccccccccc", "ddddddddddddddddddd", "eeeeeeeeeeeeeeeeeee",
   ];
 
   it("two-pane: every candidate is opened, the back button is never used, nothing is left out", async () => {
@@ -430,13 +428,16 @@ describe("no chat is ever silently left out (BACKLOG-3629)", () => {
     document.body.innerHTML = "<mws-conversation-list-item></mws-conversation-list-item>";
     const env = {
       doc: document,
+      // A fixed clock: the history-depth line names the days back to SINCE.
+      now: () => new Date("2026-10-01T00:00:00.000Z"),
       getLocation: () => ({ pathname: `/web/conversations/${open}`, href: `https://messages.google.com/web/conversations/${open}` }),
       api: async (method: string, p: string, body?: Record<string, unknown>): Promise<ApiReply> => {
         calls.push([method, p, body]);
-        if (p.endsWith("/claim")) return { ok: true, status: 200, body: { jobId: JOB, contacts: CONTACTS } };
+        if (p.endsWith("/claim")) return { ok: true, status: 200, body: { jobId: JOB, kind: "cache", since: SINCE } };
         if (p.endsWith("/match")) {
           const matched = !!byId.get(String(body?.conversationId))?.matched;
-          return { ok: true, status: 200, body: { matched, contactIds: matched ? ["c-1"] : [] } };
+          // A cache Sync keeps a chat's photos only when Keepr says so.
+          return { ok: true, status: 200, body: { matched, contactIds: [], keepPhotos: matched } };
         }
         if (p.endsWith("/chat") && current().chat === "fails") {
           return { ok: false, status: 500, body: { message: "Keepr could not save this chat." } };
@@ -486,7 +487,6 @@ describe("no chat is ever silently left out (BACKLOG-3629)", () => {
       scan: {
         ...scan,
         collectConversations: async () => ({ conversations: convs, stopReason: "stable" }),
-        pickCandidates: () => convs.map((c) => ({ conversation: c, reason: "name" })),
         messageIdSet: () => "",
         readParticipantsAndClose: async () => {
           const list = current().numbers ?? ["(555) 555-0199"];
@@ -576,7 +576,9 @@ describe("no chat is ever silently left out (BACKLOG-3629)", () => {
     expect(t.shown[t.shown.length - 1]).toBe(job.DONE_LINE);
     expect(job.DONE_LINE).toBe("Sync done — switch back to Keepr.");
     const done = t.details[t.details.length - 1];
-    expect(done).toContain("Scanned 9 chats · checked 8 · matched 6 · imported 2 messages");
+    expect(done).toContain("Scanned 9 chats");
+    // The scan counts are diagnostics: in the Copy text (cache Sync).
+    expect(t.copies[t.copies.length - 1]).toContain("Checked 8 · matched 6 · sent ");
     for (const e of expected) expect(done).toContain(e.name);
     expect(done).toContain("images not imported: 2");
     expect(done).toContain("only the newest messages imported");
@@ -591,9 +593,9 @@ describe("no chat is ever silently left out (BACKLOG-3629)", () => {
     expect(t.shown[t.shown.length - 1]).toBe(job.DONE_LINE);
     const done = t.details[t.details.length - 1];
     expect(done).toBe(
-      "Scanned 1 chats · checked 1 · matched 1 · imported 1 messages\n" +
+      "Scanned 1 chat · Keepr is still saving — see Keepr for the result\n" +
         "History start: 0 confirmed by the start marker · 0 complete on the first page · 0 without scrolling · 0 reached the months limit · 1 not confirmed\n" +
-        "History depth: 0 chats reached the months limit · 1 reached the chat's start · 0 not fully loaded",
+        "History depth: 0 chats reached the 9-month limit · 1 reached the chat's start · 0 not fully loaded",
     );
   });
 

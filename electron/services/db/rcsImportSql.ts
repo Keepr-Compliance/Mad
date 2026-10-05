@@ -63,7 +63,7 @@ export const RCS_CLEAR_ATTACHMENT_PATHS_SQL = sql`
 /**
  * Parameters: user id, user id. Per transaction, the gmweb links that were
  * COUNTED into message_count — non-reaction messages; reactions are linked
- * without counting (rcsImportHandlers.linkWithoutCount).
+ * without counting.
  */
 export const RCS_CLEAR_COUNTED_LINKS_SQL = sql`
     SELECT c.transaction_id AS transactionId, COUNT(*) AS counted

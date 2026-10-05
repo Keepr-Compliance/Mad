@@ -5,7 +5,7 @@
  * Sync used to hang on it and then report it as "failed". Now:
  *   - a greyed-out (disabled / aria-disabled) menu or Details button → "not a
  *     text conversation" at once: counted quietly, never a failure, never in
- *     "Not fully imported" (transaction AND cache Syncs);
+ *     "Not fully imported" (cache Syncs);
  *   - no menu, a menu without Details, or Details without participants →
  *     no_numbers, after closing what was opened, within a bounded wait;
  *   - only a Details panel that will not close still stops the read.
@@ -167,7 +167,7 @@ function renderList(names: string[]): void {
 }
 
 /** A job over three chats: an ordinary one, Gemini (not_text), one whose Details won't open. */
-function runWith(kind: "transaction" | "cache") {
+function runWith(kind: "cache") {
   renderList(["Test Contact A", "Gemini", "Test Contact B"]);
   let open = "";
   const calls: Array<[string, Record<string, unknown> | undefined]> = [];
@@ -190,9 +190,8 @@ function runWith(kind: "transaction" | "cache") {
     api: async (_m: string, p: string, body?: Record<string, unknown>) => {
       calls.push([p, body]);
       if (p.endsWith("/claim")) {
-        return kind === "cache"
-          ? { ok: true, status: 200, body: { kind: "cache", contacts: [], since: "2026-08-01T00:00:00.000Z" } }
-          : { ok: true, status: 200, body: { contacts: [{ contactId: "c-1", displayName: "Test Contact A" }] } };
+        void kind; // cache Syncs only since 2026-10-05
+        return { ok: true, status: 200, body: { kind: "cache", since: "2026-08-01T00:00:00.000Z" } };
       }
       if (p.endsWith("/match")) return { ok: true, status: 200, body: { matched: false } };
       return { ok: true, status: 200, body: { ok: true } };
@@ -216,7 +215,7 @@ function runWith(kind: "transaction" | "cache") {
   return { env, calls };
 }
 
-describe.each(["transaction", "cache"] as const)("a %s Sync over a list with an AI chat (G5, G6)", (kind) => {
+describe.each(["cache"] as const)("a %s Sync over a list with an AI chat (G5, G6)", (kind) => {
   it("Gemini is skipped as not a text conversation; a Details that won't open is no_numbers", async () => {
     const t = runWith(kind);
     // The transient retry has its own tests (retry-3671); none here.
@@ -279,7 +278,7 @@ describe("an empty chat vs a load failure", () => {
     expect(await scan.waitForMessageSwap(document, "m-old", { sleep: countingSleep, timeoutMs: 300, stableMs: 100 })).toBe(false);
   });
 
-  it.each(["transaction", "cache"] as const)("a %s Sync counts it as 'no messages yet', never left out (E3)", async (kind) => {
+  it.each(["cache"] as const)("a %s Sync counts it as 'no messages yet', never left out (E3)", async (kind) => {
     const t = runWith(kind);
     const orig = t.env.api;
     t.env.api = async (m: string, p: string, b?: Record<string, unknown>) =>
@@ -296,7 +295,7 @@ describe("an empty chat vs a load failure", () => {
 // BACKLOG-3658 P3c: a chat the user switched off is COUNTED and reported
 // ("N chats not synced — switched off by you"), never silent and never "not
 // fully imported". Mutation: the excluded answer treated as a plain no-match → red.
-describe.each(["transaction", "cache"] as const)("a %s Sync over a chat switched off with the eye", (kind) => {
+describe.each(["cache"] as const)("a %s Sync over a chat switched off with the eye", (kind) => {
   it("is counted as not synced and reported", async () => {
     const t = runWith(kind);
     const orig = t.env.api;

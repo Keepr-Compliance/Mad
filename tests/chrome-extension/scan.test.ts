@@ -36,10 +36,6 @@ interface ScanModule {
       maxMs?: number;
     },
   ) => Promise<{ conversations: Conv[]; stopReason: string }>;
-  pickCandidates: (
-    conversations: Conv[],
-    contacts: Array<{ contactId: string; displayName: string }>,
-  ) => Array<{ conversation: Conv; reason: string }>;
   readParticipantsAndClose: (
     doc: Document,
     io: { click: (el: Element) => void; sleep: (ms: number) => Promise<void>; timeoutMs?: number; escape?: () => void },
@@ -191,32 +187,6 @@ describe("collectConversations (control 10)", () => {
     });
     expect(result.stopReason).toBe("max_items");
     expect(result.conversations).toHaveLength(50);
-  });
-});
-
-describe("pickCandidates", () => {
-  beforeEach(() => {
-    document.body.innerHTML = LIST;
-  });
-
-  it("is loose on names (the phone check is the gate) and always includes number-named chats", () => {
-    const list = scan.readConversationList(document);
-    const picked = scan.pickCandidates(list, [
-      { contactId: "c-1", displayName: "Test Contact A" },
-      { contactId: "c-2", displayName: "Test Contact" },
-      { contactId: "c-3", displayName: "Unknown" },
-    ]);
-    expect(picked.map((p) => [p.conversation.conversationId, p.reason])).toEqual([
-      ["aaaaaaaaaaaaaaaaaaa", "name"],
-      ["ccccccccccccccccccc", "phone_name"],
-      ["ddddddddddddddddddd", "name_loose"],
-      ["eeeeeeeeeeeeeeeeeee", "name_loose"],
-    ]);
-  });
-
-  it("a contact named Unknown matches nothing by name", () => {
-    const list = scan.readConversationList(document).filter((c) => c.conversationId !== "ccccccccccccccccccc");
-    expect(scan.pickCandidates(list, [{ contactId: "c-3", displayName: "Unknown" }])).toEqual([]);
   });
 });
 
@@ -406,14 +376,14 @@ describe("job runner", () => {
       api: async (method: string, p: string, body?: Record<string, unknown>): Promise<ApiReply> => {
         calls.push([method, p, body]);
         if (p.endsWith("/claim")) {
-          return { ok: true, status: 200, body: { jobId: JOB, contacts: [{ contactId: "c-1", displayName: "Test Contact A" }, { contactId: "c-2", displayName: "Test Contact" }] } };
+          return { ok: true, status: 200, body: { jobId: JOB, kind: "cache", since: "2026-01-01T00:00:00.000Z" } };
         }
         if (p.endsWith("/match")) {
           order.push(`match:${String(body?.conversationId)}`);
           // Participant rows must be gone when Keepr is asked.
           expect(document.querySelector("li[data-e2e-details-participant]")).toBeNull();
           const matched = body?.conversationId === "aaaaaaaaaaaaaaaaaaa";
-          return { ok: true, status: 200, body: { matched, contactIds: matched ? ["c-1"] : [] } };
+          return { ok: true, status: 200, body: { matched, contactIds: [], keepPhotos: matched } };
         }
         return { ok: true, status: 200, body: { ok: true } };
       },
@@ -462,16 +432,15 @@ describe("job runner", () => {
       base64: "B64(blob:https://messages.google.com/x-1)",
     });
     expect(posts[posts.length - 1]).toBe("/finish");
-    // BACKLOG-3645: EVERY chat is checked (5 ≤ the cap); names only order the
-    // queue — exact name, loose name, number-only, then the rest. Each match
-    // is asked after its Details closed. The last chat shows no number, so it
-    // is reported (no_numbers) and never sent to /match.
+    // EVERY chat is checked, in list order (a cache Sync). Each match is
+    // asked after its Details closed. Chat b shows no number, so it is
+    // reported (no_numbers) and never sent to /match.
     expect(order).toEqual([
       "open:aaaaaaaaaaaaaaaaaaa", "match:aaaaaaaaaaaaaaaaaaa",
+      "open:bbbbbbbbbbbbbbbbbbb",
+      "open:ccccccccccccccccccc", "match:ccccccccccccccccccc",
       "open:ddddddddddddddddddd", "match:ddddddddddddddddddd",
       "open:eeeeeeeeeeeeeeeeeee", "match:eeeeeeeeeeeeeeeeeee",
-      "open:ccccccccccccccccccc", "match:ccccccccccccccccccc",
-      "open:bbbbbbbbbbbbbbbbbbb",
     ]);
   });
 });
@@ -526,11 +495,11 @@ function jobPage(opts: {
       const custom = opts.api?.(method, p, body);
       if (custom) return custom;
       if (p.endsWith("/claim")) {
-        return { ok: true, status: 200, body: { jobId: JOB, contacts: [{ contactId: "c-1", displayName: "Test Contact A" }, { contactId: "c-2", displayName: "Test Contact" }] } };
+        return { ok: true, status: 200, body: { jobId: JOB, kind: "cache", since: "2026-01-01T00:00:00.000Z" } };
       }
       if (p.endsWith("/match")) {
         const matched = body?.conversationId === "aaaaaaaaaaaaaaaaaaa";
-        return { ok: true, status: 200, body: { matched, contactIds: matched ? ["c-1"] : [] } };
+        return { ok: true, status: 200, body: { matched, contactIds: [], keepPhotos: matched } };
       }
       return { ok: true, status: 200, body: { ok: true } };
     },
@@ -678,7 +647,7 @@ describe("storyboards H03 / H07 in the job", () => {
     const extras: Array<Record<string, unknown> | undefined> = [];
     const t = jobPage({
       swapAfterMs: 0,
-      api: (_m, p) => (p.endsWith("/claim") ? { ok: true, status: 200, body: { jobId: t.JOB, kind: "cache", since: "2026-09-01T00:00:00.000Z", contacts: [], retrying: true } } : undefined),
+      api: (_m, p) => (p.endsWith("/claim") ? { ok: true, status: 200, body: { jobId: t.JOB, kind: "cache", since: "2026-09-01T00:00:00.000Z", retrying: true } } : undefined),
     });
     (t.env as Record<string, unknown>).overlay = { show: (_text: string, _e: boolean, x?: Record<string, unknown>) => extras.push(x) };
     await job.runJob(t.JOB, t.env);
@@ -767,12 +736,12 @@ describe("SR fix 2: Details rows from an earlier chat", () => {
     const outcome = await job.runJob(t.JOB, t.env);
     expect(outcome.outcome).toBe("details_stuck");
     const matches = t.calls.filter(([, p]) => p.endsWith("/match")).map(([, , b]) => b?.conversationId);
-    // The queue is a, d, e (names) then c: c is where Details sticks.
-    expect(matches).toEqual(["aaaaaaaaaaaaaaaaaaa", "ddddddddddddddddddd", "eeeeeeeeeeeeeeeeeee"]);
+    // The queue is the list order (a cache Sync): a, b, then c — where Details sticks.
+    expect(matches).toEqual(["aaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbb"]);
     const err = t.calls.find(([, p]) => p.endsWith("/error"));
     expect(err?.[2]).toMatchObject({ code: "details_stuck" });
     expect(t.posts()).not.toContain("/finish");
-    expect(t.opened).toEqual(["aaaaaaaaaaaaaaaaaaa", "ddddddddddddddddddd", "eeeeeeeeeeeeeeeeeee", "ccccccccccccccccccc"]);
+    expect(t.opened).toEqual(["aaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbb", "ccccccccccccccccccc"]);
   });
 });
 
@@ -1336,11 +1305,11 @@ describe("job runner: loads history before extracting a matched chat", () => {
         const custom = opts.api?.(method, p, body);
         if (custom) return custom;
         if (p.endsWith("/claim")) {
-          return { ok: true, status: 200, body: { jobId: JOB, contacts: [{ contactId: "c-1", displayName: "Test Contact A" }], startDate: opts.startDate } };
+          return { ok: true, status: 200, body: { jobId: JOB, kind: "cache", since: opts.startDate } };
         }
         if (p.endsWith("/match")) {
           const matched = body?.conversationId === "aaaaaaaaaaaaaaaaaaa";
-          return { ok: true, status: 200, body: { matched, contactIds: matched ? ["c-1"] : [] } };
+          return { ok: true, status: 200, body: { matched, contactIds: [], keepPhotos: matched } };
         }
         return { ok: true, status: 200, body: { ok: true } };
       },

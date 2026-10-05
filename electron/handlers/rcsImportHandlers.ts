@@ -127,8 +127,6 @@ export const RCS_MESSAGES_WEB_URL = "https://messages.google.com/web/conversatio
  * EXTENSION_PUBLISHED); held here so the renderer never names a URL to open.
  */
 export const RCS_EXTENSION_STORE_URL = "https://chromewebstore.google.com/detail/keepr-for-google-messages";
-/** BACKLOG-3661: the start-job refusal while another Sync runs. */
-export const RCS_ALREADY_SYNCING_MESSAGE = "Keepr is already syncing";
 /** BACKLOG-3657: Google Messages for Web texts were cleared; open views refetch. */
 export const RCS_DATA_CLEARED_CHANNEL = "rcs-import:data-cleared";
 /** BACKLOG-3658 (SR S1): a cache Sync was saved and auto-linked; open views refetch. */

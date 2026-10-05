@@ -409,143 +409,6 @@
     };
   }
 
-  /** Lower case, emoji and punctuation removed, spaces collapsed. */
-  function normalizeName(s) {
-    return normalizeSpace(
-      String(s || "")
-        .toLowerCase()
-        .replace(/[^\p{L}\p{N}\s]/gu, " ")
-    );
-  }
-
-  function looksLikePhone(s) {
-    var digits = String(s || "").replace(/\D/g, "");
-    return digits.length >= 7 && /^[\d\s()+.\-]+$/.test(String(s || "").trim());
-  }
-
-  /**
-   * Chats worth opening. Loose on purpose — the phone check in Keepr is the
-   * gate. A chat is a candidate when its name equals a contact's name, contains
-   * all of a contact's name words, shares first and last word with it, or (a
-   * group chat) contains a contact's first word; and every chat whose "name"
-   * is a phone number. Contacts named "Unknown" never drive a match.
-   */
-  function pickCandidates(conversations, contacts) {
-    var named = [];
-    for (var i = 0; i < contacts.length; i++) {
-      var n = normalizeName(contacts[i].displayName);
-      if (!n || n === "unknown") continue;
-      named.push({ contactId: contacts[i].contactId, tokens: n.split(" "), full: n });
-    }
-    var out = [];
-    for (var j = 0; j < conversations.length; j++) {
-      var conv = conversations[j];
-      if (looksLikePhone(conv.name)) {
-        out.push({ conversation: conv, reason: "phone_name" });
-        continue;
-      }
-      var name = normalizeName(conv.name);
-      if (!name) continue;
-      var words = name.split(" ");
-      var isGroup = /,| and \d+ others?| & /i.test(conv.name);
-      for (var k = 0; k < named.length; k++) {
-        var c = named[k];
-        var all = c.tokens.every(function (t) { return words.indexOf(t) !== -1; });
-        var firstLast =
-          c.tokens.length > 1 &&
-          words[0] === c.tokens[0] &&
-          words[words.length - 1] === c.tokens[c.tokens.length - 1];
-        var groupFirst = isGroup && words.indexOf(c.tokens[0]) !== -1;
-        if (name === c.full || all || firstLast || groupFirst) {
-          out.push({ conversation: conv, reason: name === c.full ? "name" : "name_loose" });
-          break;
-        }
-      }
-    }
-    return out;
-  }
-
-  // -------------------------------------------------------------------------
-  // BACKLOG-3645: a contact's name never hides a chat
-  // -------------------------------------------------------------------------
-
-  /**
-   * Up to this many chats in the list, EVERY chat's Details number is checked
-   * (about 1.5–2.5 s each); names only order the queue. Above it, only chats a
-   * name could plausibly belong to, plus number-only chats, are checked and the
-   * rest are reported as not checked.
-   */
-  var CHECK_ALL_MAX = 50;
-  /** Over the cap, at most this many chats are checked; the rest count as notChecked. */
-  var OVER_CAP_QUEUE_MAX = 100;
-
-  /** Lower case, accents removed, punctuation → space. */
-  function foldName(s) {
-    return normalizeName(String(s || "").normalize("NFD").replace(/\p{M}+/gu, ""));
-  }
-
-  /**
-   * Over the cap: a chat whose name shares any word of 3+ letters with a
-   * contact's name, or starts with the contact's first name. Case- and
-   * accent-insensitive.
-   */
-  function looseNameMatch(convName, contacts) {
-    var words = foldName(convName).split(" ").filter(Boolean);
-    if (words.length === 0) return false;
-    for (var i = 0; i < contacts.length; i++) {
-      var tokens = foldName(contacts[i].displayName).split(" ").filter(Boolean);
-      if (tokens.length === 0 || tokens.join(" ") === "unknown") continue;
-      // First name: at least 3 letters, so "Al" or "Jo" does not pull in every chat.
-      if (tokens[0].length >= 3 && words[0] === tokens[0]) return true;
-      for (var t = 0; t < tokens.length; t++) {
-        if (tokens[t].length >= 3 && words.indexOf(tokens[t]) !== -1) return true;
-      }
-    }
-    return false;
-  }
-
-  var QUEUE_ORDER = { name: 0, name_loose: 1, name_token: 1, phone_name: 2, unmatched_name: 3 };
-
-  /**
-   * Which chats to check, in what order.
-   *
-   * @param {Array<{conversationId: string, name: string}>} conversations the whole list
-   * @param {Array<{displayName: string}>} contacts
-   * @param {{checkAllMax?: number}} [opts]
-   * @returns {{queue: Array<{conversation: object, reason: string}>, notChecked: number, checkAll: boolean}}
-   *   reason: name | name_loose | phone_name (pickCandidates), name_token (over
-   *   the cap only) or unmatched_name (checked only because the list is small).
-   */
-  function planChecks(conversations, contacts, opts) {
-    var max = (opts && opts.checkAllMax) || CHECK_ALL_MAX;
-    var ranked = pickCandidates(conversations, contacts);
-    var reasonById = {};
-    for (var i = 0; i < ranked.length; i++) reasonById[ranked[i].conversation.conversationId] = ranked[i].reason;
-    var checkAll = conversations.length <= max;
-    var queue = [];
-    for (var j = 0; j < conversations.length; j++) {
-      var conv = conversations[j];
-      var reason = reasonById[conv.conversationId];
-      if (!reason) {
-        if (checkAll) reason = "unmatched_name";
-        else if (looseNameMatch(conv.name, contacts)) reason = "name_token";
-        else continue;
-      }
-      queue.push({ conversation: conv, reason: reason, at: j });
-    }
-    // Stable: by reason group, then list order.
-    queue.sort(function (a, b) {
-      return QUEUE_ORDER[a.reason] - QUEUE_ORDER[b.reason] || a.at - b.at;
-    });
-    // Over the cap the queue itself is bounded: the best-ranked first.
-    if (!checkAll && queue.length > OVER_CAP_QUEUE_MAX) queue = queue.slice(0, OVER_CAP_QUEUE_MAX);
-    return {
-      queue: queue.map(function (q) { return { conversation: q.conversation, reason: q.reason }; }),
-      notChecked: conversations.length - queue.length,
-      checkAll: checkAll,
-    };
-  }
-
   /**
    * Poll until `predicate()` is truthy; resolve its value. Rejects on timeout.
    */
@@ -1574,18 +1437,13 @@
     readConversationList: readConversationList,
     findListScroller: findListScroller,
     collectConversations: collectConversations,
-    normalizeName: normalizeName,
     looksLikePhone: looksLikePhone,
     isShortCode: isShortCode,
-    pickCandidates: pickCandidates,
     parseListTime: parseListTime,
     connectionBanner: connectionBanner,
     CONNECTION_BANNER_SELECTORS: CONNECTION_BANNER_SELECTORS,
     loadingVisible: loadingVisible,
     localeDateOrder: localeDateOrder,
-    planChecks: planChecks,
-    CHECK_ALL_MAX: CHECK_ALL_MAX,
-    OVER_CAP_QUEUE_MAX: OVER_CAP_QUEUE_MAX,
     waitFor: waitFor,
     readParticipantsAndClose: readParticipantsAndClose,
   };

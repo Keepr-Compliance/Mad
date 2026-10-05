@@ -14,7 +14,7 @@
  * Mutations that turn this suite red:
  *   M1 drop the `since` stop in collectConversations         → "stops at the first chat older than since"
  *   M2 cachePlan ignores the cutoff / the cap                 → "cachePlan" cases
- *   M3 a cache job back through planChecks (name planning)    → "checks every chat above the cutoff, in list order"
+ *   M3 a cache job not in list order                          → "checks every chat above the cutoff, in list order"
  *   M4 the no-number chat reported as "error"                 → same test (no_numbers)
  *   M5 a 422 not_a_contact counted as a failed image          → "an image Keepr does not keep"
  *   M6 drop holdWhileHidden before a chat                     → "pauses while hidden"

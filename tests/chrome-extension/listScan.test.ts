@@ -271,7 +271,7 @@ describe("Sync step log (BACKLOG-3641)", () => {
       getLocation: () => ({ pathname: `/web/conversations/${open}`, href: `https://messages.google.com/web/conversations/${open}` }),
       api: async (_m: string, p: string, body?: Record<string, unknown>): Promise<ApiReply> => {
         if (p.endsWith("/claim")) {
-          return { ok: true, status: 200, body: { jobId: JOB, contacts: [{ contactId: "c-1", displayName: "Test Contact A" }, { contactId: "c-2", displayName: "Test Contact" }] } };
+          return { ok: true, status: 200, body: { jobId: JOB, kind: "cache", since: "2026-01-01T00:00:00.000Z" } };
         }
         if (p.endsWith("/match")) {
           const matched = matchIds.includes(String(body?.conversationId));
@@ -319,8 +319,8 @@ describe("Sync step log (BACKLOG-3641)", () => {
     expect(all).toContain("stage: job found");
     expect(all).toContain("stage: loading the conversation list");
     expect(all).toMatch(/listed 5, stopReason \w+, scroll /);
-    expect(all).toMatch(/candidates 5 \{.*"name".*\}/);
-    expect(all).toMatch(/#1\/5 chat [0-9a-f]{6} id [0-9a-f]{6} reason=name/);
+    expect(all).toMatch(/candidates 5 \{"cache":5\}/);
+    expect(all).toMatch(/#1\/5 chat [0-9a-f]{6} id [0-9a-f]{6} reason=cache/);
     expect(all).toContain('numbers ["(ddd) ddd-dddd","+d ddd ddd dddd"]');
     expect(t.lines.filter((l) => /match=(yes|no)/.test(l))).toHaveLength(5);
     expect(all).toContain("match=yes");
@@ -352,15 +352,11 @@ describe("Sync step log (BACKLOG-3641)", () => {
   // SR: per-job salt. Mutation D9: hash the name without the salt → red.
   it("name tags are salted per job: the same chat gets the same tag within a run, a different one across runs", async () => {
     const tagOf = (lines: string[]): string => (lines.find((l) => l.startsWith("#1/5 chat ")) ?? "").split(" ")[2];
-    const contactTags = (lines: string[]): string[] =>
-      ((lines.find((l) => l.startsWith("claimed:")) ?? "").match(/\[(.*)\]/)?.[1] ?? "").split(", ");
     const a = diagJob([]);
     await job.runJob(JOB, a.env);
     const b = diagJob([]);
     await job.runJob(JOB, b.env);
     expect(tagOf(a.lines)).toMatch(/^[0-9a-f]{6}$/);
-    // Chat #1 is "Test Contact A", also contact 1: one run correlates them.
-    expect(contactTags(a.lines)[0]).toBe(tagOf(a.lines));
     expect(tagOf(b.lines)).not.toBe(tagOf(a.lines));
     // A fixed salt (tests only) is deterministic.
     const c = diagJob([]);
@@ -377,16 +373,17 @@ describe("Sync step log (BACKLOG-3641)", () => {
     expect((await job.runJob(JOB, t.env)).outcome).toBe("finished");
   });
 
-  it("checked but none matched: the overlay says so instead of 'imported 0 chats' (D4)", async () => {
+  // Founder (2026-10-05): no per-transaction wording left (the "none of
+  // the checked chats matched … this transaction's contacts" line went with
+  // the per-transaction Sync). Mutation: the line back → red.
+  it("checked but none kept: Details has the cache counts, no transaction wording (D4)", async () => {
     const t = diagJob([]);
     await job.runJob(JOB, t.env);
-    // BACKLOG-3641 founder UX: one line, the reason is in Details. Mutation:
-    // drop the none-matched line from summaryLines → red.
     expect(t.shown[t.shown.length - 1]).toBe(job.DONE_LINE);
     const done = t.details[t.details.length - 1];
-    const doneLines = done.split(/\n/);
-    expect(doneLines[0]).toBe("Scanned 5 chats · checked 5 · matched 0 · imported 0 messages");
-    expect(doneLines[1]).toBe("None of the checked chats matched a phone number on this transaction's contacts.");
-    expect(t.shown.some((s) => s.includes("see the imported messages"))).toBe(false);
+    expect(done.split(/\n/)[0]).toMatch(/^Scanned 5 chats/);
+    expect(done).not.toMatch(/transaction/i);
+    expect(t.copies[t.copies.length - 1]).toContain("Checked 5 · matched 0 · sent 0 chats");
   });
+
 });
