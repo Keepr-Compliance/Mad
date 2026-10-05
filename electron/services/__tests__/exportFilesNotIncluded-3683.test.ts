@@ -82,7 +82,7 @@ jest.mock("../logService", () => ({
 
 jest.mock("googleapis", () => ({ google: { gmail: jest.fn() }, gmail_v1: {}, Auth: {} }));
 
-// Emails the download step's SQL reports as missing bytes (default: none).
+// Emails the download step's SQL reports as missing bytes (set in beforeEach).
 let missingEmails: Array<{ id: string; external_id: string; source: string; user_id: string }> = [];
 
 const attachmentsTable = [
@@ -188,9 +188,12 @@ beforeEach(() => {
   jest.clearAllMocks();
   htmlDocs.length = 0;
   copied.length = 0;
-  missingEmails = [];
+  // a-nodl (email e1, no file) is exactly what the bytes-missing SQL returns.
+  missingEmails = [{ id: "e1", external_id: "ext-e1", source: "outlook", user_id: "user-123" }];
   const row = attachmentsTable.find((r) => r.id === "a-nodl");
   if (row) row.storage_path = null;
+  jest.requireMock("../outlookFetchService").default.getAttachments.mockResolvedValue([]);
+  jest.requireMock("../emailAttachmentService").default.downloadEmailAttachments.mockResolvedValue(undefined);
 });
 
 describe("BACKLOG-3683 — the export PDF lists files it could not include", () => {
@@ -203,6 +206,8 @@ describe("BACKLOG-3683 — the export PDF lists files it could not include", () 
     expect(section).toContain("addendum.pdf");
     expect(section).toContain("Couldn&#039;t be downloaded from the mailbox");
     expect(section).not.toContain("Not downloaded to this computer");
+    // The download was attempted: the mailbox was asked and returned nothing.
+    expect(jest.requireMock("../outlookFetchService").default.getAttachments).toHaveBeenCalledWith("ext-e1");
     expect(section).toContain("gone.jpg");
     expect(section).toContain("No longer on this computer");
     expect(section).toContain("Text from Pat Fixture");
@@ -237,7 +242,6 @@ describe("BACKLOG-3683 — the export PDF lists files it could not include", () 
     const downloader = () => jest.requireMock("../emailAttachmentService").default;
 
     beforeEach(() => {
-      missingEmails = [{ id: "e1", external_id: "ext-e1", source: "outlook", user_id: "user-123" }];
       outlook().getAttachments.mockResolvedValue([
         { id: "g-1", name: "addendum.pdf", contentType: "application/pdf", size: 10 },
       ]);
