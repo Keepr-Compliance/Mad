@@ -380,7 +380,7 @@ beforeEach(() => {
   });
 });
 
-for (const foreignUser of [false]) {
+for (const foreignUser of [false, true]) {
   const corpus = foreignUser ? "two users share the threads" : "single user";
 
   describe(`BACKLOG-3733 export text sets — ${corpus}`, () => {
