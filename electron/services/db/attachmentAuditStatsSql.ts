@@ -96,18 +96,36 @@ const emailWindow = (w: AuditWindowShape): string =>
 /**
  * Attachments on TEXTS linked to a transaction, directly or through a thread.
  * Parameters: the transaction id, then whichever window bounds the shape says.
+ *
+ * Pivots on `messages m` (not `attachments a`) so the thread arm's user scope
+ * (`m.user_id = c.user_id`) picks the linking user's own message row first,
+ * then joins the attachment to THAT row — directly, or, when `m` owns no
+ * direct attachment row, via the same Apple-id fallback as
+ * `targetsInTransactionSql` (`checklistSql.ts`, BACKLOG-3733): a photo can
+ * live only on another signed-in user's copy of the same provider thread,
+ * sharing `external_id`/`external_message_id`. `COUNT(DISTINCT a.id)` and the
+ * `NOT EXISTS` guard together keep a message with its own direct row from
+ * also matching the fallback, so a photo held by both copies is never
+ * counted twice.
  */
 const textStatsSql = (projection: string, w: AuditWindowShape): string => `
         SELECT ${projection}
-        FROM attachments a
-        INNER JOIN messages m ON a.message_id = m.id
+        FROM messages m
         INNER JOIN communications c ON (
           (c.message_id IS NOT NULL AND c.message_id = m.id)
           OR
           (c.message_id IS NULL AND c.thread_id IS NOT NULL AND c.thread_id = m.thread_id AND m.user_id = c.user_id)
         )
+        INNER JOIN attachments a ON (
+          a.message_id = m.id
+          OR (
+            a.email_id IS NULL
+            AND a.external_message_id IS NOT NULL
+            AND m.external_id = a.external_message_id
+            AND NOT EXISTS (SELECT 1 FROM attachments d WHERE d.message_id = m.id)
+          )
+        )
         WHERE c.transaction_id = ?
-        AND a.message_id IS NOT NULL
         AND a.storage_path IS NOT NULL
         ${textWindow(w)}
       `;

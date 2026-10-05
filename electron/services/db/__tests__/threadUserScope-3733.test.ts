@@ -277,3 +277,65 @@ describe("BACKLOG-3733: thread links read only the linking user's copies", () =>
   });
 });
 
+/**
+ * BACKLOG-3733 PR-3 fix round — the founder's real DB shape (blocker B1).
+ *
+ * The default fixture above gives every message copy its OWN attachment row,
+ * which is the SHAPE that already worked (and must keep working — "no double
+ * count" below). The founder's actual closing-day deal has the asymmetric
+ * shape: the owner's 5 photo message copies carry NO attachment row at all;
+ * only the other signed-in user's copies do, sharing the same Apple guid
+ * (`external_id` / `external_message_id`) per photo. Reaching the owner's
+ * transaction through the owner's own thread link must still surface those
+ * photos, via the same Apple-id fallback `targetsInTransactionSql` already
+ * uses.
+ */
+describe("BACKLOG-3733 PR-3 fix round: owner's copies carry no attachment row (B1)", () => {
+  beforeEach(() => {
+    db.prepare(`DELETE FROM attachments WHERE message_id IN (${PHOTOS.map(() => "?").join(",")})`).run(...PHOTOS);
+  });
+
+  const OTHER_ATTACHMENT_IDS = PHOTOS.map((p) => `att-${OTHER_PREFIX}${p}`).sort();
+
+  // Site: attachmentDbService.getTransactionAllAttachments (the Attachments tab)
+  it("Attachments tab: still 5 rows, now the other user's copies, via the Apple-id fallback", () => {
+    const rows = getTransactionAllAttachments(TXN_A);
+    expect(rows.map((r) => r.id).sort()).toEqual(OTHER_ATTACHMENT_IDS);
+  });
+
+  // Site: attachmentAuditStatsSql text arm (was 0 before the fix)
+  it("attachment count: 5, not 0", () => {
+    const row = prepareTextAttachmentCount(db, { hasStart: false, hasEnd: false }).get(TXN_A) as {
+      count: number;
+    };
+    expect(row.count).toBe(5);
+  });
+
+  // Site: checklistSql targetsInTransactionSql (adding a checklist link) — already had the fallback
+  it("checklist link check still accepts the surviving (other user's) attachment row", () => {
+    const rows = db.prepare(targetsInTransactionSql("attachment", 1)).all(`att-${OTHER_PREFIX}p1`, TXN_A, TXN_A);
+    expect(ids(rows)).toEqual([`att-${OTHER_PREFIX}p1`]);
+  });
+
+  // Site: checklistSql GET_CHECKLIST_LINK_MEMBERS_SQL in_transaction (was 0 before the fix)
+  it("checklist member: 1, not 0 — the member row points at the surviving attachment", () => {
+    db.pragma("foreign_keys = OFF");
+    db.prepare(
+      "INSERT INTO transaction_checklists (id, transaction_id, template_id, template_name) VALUES ('cl2', ?, 'tpl', 'Docs')",
+    ).run(TXN_A);
+    db.prepare(
+      "INSERT INTO transaction_checklist_items (id, checklist_id, title) VALUES ('it2', 'cl2', 'Photos')",
+    ).run();
+    db.prepare(
+      "INSERT INTO transaction_checklist_links (id, item_id, kind, label) VALUES ('ln2', 'it2', 'attachment', 'Photos')",
+    ).run();
+    db.prepare(
+      "INSERT INTO transaction_checklist_link_members (id, link_id, kind, attachment_id) VALUES ('m-surv', 'ln2', 'attachment', ?)",
+    ).run(`att-${OTHER_PREFIX}p1`);
+    const rows = db.prepare(GET_CHECKLIST_LINK_MEMBERS_SQL).all("cl2", "cl2") as Array<{
+      id: string;
+      in_transaction: number;
+    }>;
+    expect(rows.map((r) => [r.id, r.in_transaction])).toEqual([["m-surv", 1]]);
+  });
+});

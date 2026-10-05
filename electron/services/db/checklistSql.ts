@@ -152,6 +152,13 @@ export const GET_CHECKLIST_LINKS_SQL = sql`
  * such. A member whose target was DELETED does not appear at all: it cascaded
  * away with the row, which is the force-re-cache behaviour this schema chose
  * deliberately.
+ *
+ * The text arm's second EXISTS carries the same Apple-id fallback as
+ * `targetsInTransactionSql` below (BACKLOG-3733): a photo attachment can live
+ * on one signed-in user's message copy while the thread link scopes to
+ * another user's copy of the same provider thread. `msg.external_id =
+ * a.external_message_id` picks up the attachment through the shared Apple
+ * guid when `msg` itself owns no direct attachment row.
  */
 export const GET_CHECKLIST_LINK_MEMBERS_SQL = sql`
   SELECT m.id, m.link_id, m.kind, m.attachment_id, m.email_id,
@@ -175,7 +182,16 @@ export const GET_CHECKLIST_LINK_MEMBERS_SQL = sql`
                      (c3.message_id IS NOT NULL AND c3.message_id = msg.id)
                      OR (c3.message_id IS NULL AND c3.thread_id IS NOT NULL AND c3.thread_id = msg.thread_id AND msg.user_id = c3.user_id)
                    )
-                   WHERE msg.id = a.message_id AND c3.transaction_id = cl.transaction_id
+                   WHERE c3.transaction_id = cl.transaction_id
+                     AND (
+                       msg.id = a.message_id
+                       OR (
+                         a.email_id IS NULL
+                         AND a.external_message_id IS NOT NULL
+                         AND msg.external_id = a.external_message_id
+                         AND NOT EXISTS (SELECT 1 FROM attachments d WHERE d.message_id = msg.id)
+                       )
+                     )
                  )
                )
            )
