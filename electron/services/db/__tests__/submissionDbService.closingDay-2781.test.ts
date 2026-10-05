@@ -130,6 +130,7 @@ function createSchema(db: DatabaseType): void {
     CREATE TABLE messages (
       id TEXT PRIMARY KEY,
       thread_id TEXT,
+      external_id TEXT,
       sent_at DATETIME,
       direction TEXT,
       participants_flat TEXT
@@ -145,6 +146,7 @@ function createSchema(db: DatabaseType): void {
       id TEXT PRIMARY KEY,
       message_id TEXT,
       email_id TEXT,
+      external_message_id TEXT,
       filename TEXT NOT NULL,
       mime_type TEXT,
       file_size_bytes INTEGER,

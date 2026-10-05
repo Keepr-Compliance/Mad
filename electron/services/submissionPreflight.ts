@@ -30,6 +30,7 @@
 
 import * as fs from "fs";
 import type { Attachment, Message } from "../types/models";
+import type { SubmissionAttachment } from "./db/submissionDbService";
 import {
   MAX_ATTACHMENT_FILE_SIZE,
   resolveAttachmentPath,
@@ -145,9 +146,10 @@ export async function runSubmissionPreflight(
 
   // Files that have a local path: check them the way the uploader will.
   for (const attachment of input.attachments) {
-    const row = attachment as Attachment & { email_id?: string | null };
+    const row = attachment as SubmissionAttachment;
     const kind: "text" | "email" = row.email_id ? "email" : "text";
-    const localMessageId = (row.email_id ?? row.message_id ?? "") as string;
+    // BACKLOG-3731: a text row belongs to the text the shared lookup resolved.
+    const localMessageId = (row.email_id ?? row.resolved_message_id ?? "") as string;
     const stat = await statFile(resolveAttachmentPath(row.storage_path || ""));
     let reason: NotIncludedReason | null = null;
     if (!row.storage_path || stat === null) reason = "file_missing_on_this_computer";
@@ -188,9 +190,10 @@ export async function runSubmissionPreflight(
   const textsWithRows = new Set<string>();
   const emailsWithRows = new Set<string>();
   for (const a of input.attachments) {
-    const row = a as Attachment & { email_id?: string | null };
+    const row = a as SubmissionAttachment;
     if (row.email_id) emailsWithRows.add(row.email_id);
-    else if (row.message_id) textsWithRows.add(row.message_id);
+    // BACKLOG-3731: keyed on the resolved text, with no fallback to message_id.
+    else if (row.resolved_message_id) textsWithRows.add(row.resolved_message_id);
   }
   for (const m of input.messages) {
     const flagged = advertisesAttachment(

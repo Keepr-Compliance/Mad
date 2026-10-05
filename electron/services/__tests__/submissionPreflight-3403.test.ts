@@ -24,8 +24,16 @@ import type { Attachment, Message } from "../../types/models";
 const text = (id: string, has: number) =>
   ({ id, sent_at: "2026-09-20T10:00:00Z", has_attachments: has, direction: "inbound" }) as unknown as Message;
 const email = (id: string, has: number) => ({ id, subject: `Subject ${id}`, sent_at: "2026-09-21T10:00:00Z", has_attachments: has });
+// BACKLOG-3731: a text row arrives from getTransactionAttachments carrying
+// `resolved_message_id` (the shared lookup's owner); the pre-flight keys on it.
 const att = (id: string, owner: { message_id?: string; email_id?: string }, storage_path = `/files/${id}`) =>
-  ({ id, filename: `${id}.pdf`, storage_path, ...owner }) as unknown as Attachment;
+  ({
+    id,
+    filename: `${id}.pdf`,
+    storage_path,
+    ...owner,
+    ...(owner.message_id ? { resolved_message_id: owner.message_id } : {}),
+  }) as unknown as Attachment;
 
 afterEach(() => setPreflightStatForTests(null));
 

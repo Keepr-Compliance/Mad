@@ -73,7 +73,7 @@ import {
   endResubmitChecklistGuard,
 } from "./submissionChecklistPull";
 // BACKLOG-3599: direct, not through the databaseService facade.
-import { getOwedReviewChecklistPullsFor } from "./db/submissionDbService";
+import { getOwedReviewChecklistPullsFor, type SubmissionAttachment } from "./db/submissionDbService";
 // BACKLOG-2758 finding 3: party names come from the SAME resolver the exported
 // PDF uses, not from a second read of the macOS AddressBook. The AddressBook is
 // still consulted — as tier 3 inside that resolver — so no name previously
@@ -1038,8 +1038,9 @@ class SubmissionService {
       const messageRecords = [...textRecords, ...emailRecords];
 
       const attachmentPlan = sendable.map((a) => {
-        const row = a as Attachment & { email_id?: string | null };
-        const ownerKey = row.email_id ? `email:${row.email_id}` : `text:${row.message_id}`;
+        const row = a as SubmissionAttachment;
+        // BACKLOG-3731: a text row is owned by the text the shared lookup resolved.
+        const ownerKey = row.email_id ? `email:${row.email_id}` : `text:${row.resolved_message_id}`;
         const record: SubmissionAttachmentRecord = {
           id: crypto.randomUUID(),
           submission_id: submissionId,
