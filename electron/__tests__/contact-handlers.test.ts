@@ -1004,7 +1004,34 @@ describe("Contact Handlers", () => {
 
     // BACKLOG-2316: the over-suppression regression. These assert EXACT contact
     // identity SETS survive dedup — counts alone hide identity bugs.
+    // Live (Windows freeze): off a Mac the AddressBook is never probed, even
+    // with an empty address-book table. Mutation: the platform guard removed → red.
+    it("win32: get-available never calls getContactNames", async () => {
+      const realPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+      Object.defineProperty(process, "platform", { value: "win32" });
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const externalContactDb = require("../services/db/externalContactDbService");
+        (externalContactDb.getCount as jest.Mock).mockReturnValue(0);
+        (getContactNames as jest.Mock).mockClear();
+        mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([]);
+        mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
+        const result = await registeredHandlers.get("contacts:get-available")(mockEvent, TEST_USER_ID);
+        expect(result.success).toBe(true);
+        expect(getContactNames).not.toHaveBeenCalled();
+      } finally {
+        if (realPlatform) Object.defineProperty(process, "platform", realPlatform);
+      }
+    });
+
     describe("distinct contacts are not over-suppressed (BACKLOG-2316)", () => {
+      // The macOS AddressBook probe runs only on a Mac (live Windows freeze fix).
+      const realPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+      beforeAll(() => Object.defineProperty(process, "platform", { value: "darwin" }));
+      afterAll(() => {
+        if (realPlatform) Object.defineProperty(process, "platform", realPlatform);
+      });
+
       it("keeps BOTH people who share one normalized phone (household/office line)", async () => {
         // Two DISTINCT people (different first names) share one landline. The
         // old predicate suppressed the second on the shared phone alone; both

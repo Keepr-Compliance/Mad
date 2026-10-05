@@ -1643,7 +1643,8 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
         // alone. The two now agree; before this change the automatic path and the
         // manual path could reach opposite conclusions about the same address
         // book.
-        if (macosEnabled) {
+        // Live (Windows freeze): the macOS AddressBook probe only on a Mac.
+        if (macosEnabled && process.platform === "darwin") {
           // Check if shadow table is populated, if not trigger background sync
           const cachedCount = externalContactDb.getCount(validatedUserId);
 

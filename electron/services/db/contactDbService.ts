@@ -1589,7 +1589,8 @@ export async function getContactNamesByPhones(
 
   // Fallback: Check macOS Contacts for any unresolved phones
   const unresolvedPhones = phones.filter(p => !result.has(p));
-  if (unresolvedPhones.length > 0) {
+  // Live (Windows freeze): the macOS AddressBook probe only on a Mac.
+  if (unresolvedPhones.length > 0 && process.platform === "darwin") {
     try {
       const macOSContacts = await getContactNames();
       const contactMap = macOSContacts.contactMap;

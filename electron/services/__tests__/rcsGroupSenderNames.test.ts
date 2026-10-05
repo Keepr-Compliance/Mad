@@ -30,7 +30,8 @@ jest.mock("../logService", () => {
 });
 jest.mock("../contactLinkingScheduler", () => ({ __esModule: true, requestContactLinking: jest.fn() }));
 // No macOS address book here (Source 3 finds nothing).
-jest.mock("../contactsService", () => ({ __esModule: true, getContactNames: async () => ({ contactMap: {} }) }));
+const mockGetContactNames = jest.fn(async () => ({ contactMap: {} }));
+jest.mock("../contactsService", () => ({ __esModule: true, getContactNames: () => mockGetContactNames() }));
 // The real per-table queries behind databaseService's resolution calls.
 jest.mock("../databaseService", () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -164,5 +165,23 @@ describe("group-sender names from Google Messages (Source 4)", () => {
     const parts = await resolveGroupChatParticipants(messages, exported.names);
     expect(parts.find((p) => p.handle === NUM_A)?.name).toBe("Test Person A");
     expect(parts.find((p) => p.handle === NUM_B)?.name).toBe("Test Person B");
+  });
+});
+
+// Live (Windows freeze): the macOS AddressBook probe never runs off a Mac;
+// on a Mac it still does. Mutation: the platform guard removed → red.
+describe("the AddressBook probe is Mac-only", () => {
+  const realPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+  afterEach(() => {
+    if (realPlatform) Object.defineProperty(process, "platform", realPlatform);
+  });
+  it("win32: never called; darwin: called", async () => {
+    mockGetContactNames.mockClear();
+    Object.defineProperty(process, "platform", { value: "win32" });
+    await resolvePhoneNames([NUM_A], USER);
+    expect(mockGetContactNames).not.toHaveBeenCalled();
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    await resolvePhoneNames([NUM_A], USER);
+    expect(mockGetContactNames).toHaveBeenCalledTimes(1);
   });
 });

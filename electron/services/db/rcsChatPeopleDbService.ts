@@ -22,7 +22,7 @@
  * on names.
  */
 
-import { dbAll, dbRun } from "./core/dbConnection";
+import { dbAll, dbRun, ensureDb } from "./core/dbConnection";
 import { sql } from "./core/sqlText";
 import { formatPhoneNumber } from "../../utils/phoneNormalization";
 
@@ -35,9 +35,6 @@ const PHONE_SHAPED = /^\+[1-9][0-9]{9,14}$/;
 
 /** Digits only, last 10 — the autoLinkSql / contact phone match key. */
 const L10_PERSON = sql`substr(replace(replace(replace(replace(replace(p.number_e164, '+', ''), '-', ''), ' ', ''), '(', ''), ')', ''), -10)`;
-const L10_OWN = sql`substr(replace(replace(replace(replace(replace(s.own_number, '+', ''), '-', ''), ' ', ''), '(', ''), ')', ''), -10)`;
-const L10_CONTACT_E164 = sql`substr(replace(replace(replace(replace(replace(cp.phone_e164, '+', ''), '-', ''), ' ', ''), '(', ''), ')', ''), -10)`;
-const L10_CONTACT_DISPLAY = sql`substr(replace(replace(replace(replace(replace(COALESCE(cp.phone_display, ''), '+', ''), '-', ''), ' ', ''), '(', ''), ')', ''), -10)`;
 
 /** One member of a stored chat: its number and the name shown for it (or null). */
 export interface RcsChatPersonRow {
@@ -92,11 +89,13 @@ export function recordRcsChatPeople(
 
 /** Force re-import: every person found in this user's Google Messages texts. */
 export function clearRcsChatPeople(userId: string): number {
+  invalidateTextPeopleCache(userId);
   return dbRun(sql`DELETE FROM rcs_chat_people WHERE user_id = ?`, [userId]).changes;
 }
 
 /** Auto-delete: the people of the chats deleted. */
 export function clearRcsChatPeopleForChats(userId: string, chatHashes: readonly string[]): number {
+  invalidateTextPeopleCache(userId);
   let n = 0;
   for (const h of chatHashes) {
     n += dbRun(sql`DELETE FROM rcs_chat_people WHERE user_id = ? AND chat_hash = ?`, [userId, h]).changes;
@@ -119,53 +118,182 @@ export interface TextDerivedPerson {
   communication_count: number;
 }
 
-const TEXT_PEOPLE_SQL = sql`
-  SELECT
-    p.number_e164 AS number,
-    (SELECT p2.name FROM rcs_chat_people p2
-      WHERE p2.user_id = p.user_id AND p2.number_e164 = p.number_e164
-        AND p2.name IS NOT NULL AND p2.name != ''
-      ORDER BY p2.last_message_at DESC LIMIT 1) AS name,
-    MAX(p.last_message_at) AS last_communication_at,
-    (SELECT COUNT(*) FROM messages m
-      WHERE m.user_id = p.user_id
-        AND m.thread_id IN (SELECT 'gmweb2-' || p3.chat_hash FROM rcs_chat_people p3
-                             WHERE p3.user_id = p.user_id AND p3.number_e164 = p.number_e164)) AS communication_count
+/**
+ * Live (Windows): the contact picker froze Keepr. The old single query
+ * compared a 5-deep replace()/substr() last-10 of EVERY person row against
+ * EVERY contact phone (no index usable) and counted messages per person with
+ * a correlated sub-select — synchronously on the main thread (a 5k-person /
+ * 5k-contact / 100k-message account took minutes). Now: a few indexed reads,
+ * the matching in JS with Sets (one pass each), and a per-user cache keyed by
+ * a cheap fingerprint of everything the answer depends on, so an unchanged
+ * picker reopen costs a handful of COUNT()s.
+ *
+ * Same answer as before: suppressed by NUMBER (last 10 digits of any of the
+ * user's contact phones — E.164 or display — removed contacts included,
+ * BACKLOG-2365) and the user's own number; Don't-sync chats left out; the
+ * newest non-empty name; the newest message time; messages in its chats.
+ */
+
+/** Digits only (the old SQL stripped + - space ( )), last 10 — L10_PERSON / L10_CONTACT_*. */
+function last10(v: string | null | undefined): string {
+  return String(v ?? "").replace(/[+\-\s()]/g, "").slice(-10);
+}
+
+interface PeopleRow {
+  number: string;
+  name: string | null;
+  chatHash: string;
+  lastMessageAt: string | null;
+}
+
+const PEOPLE_ROWS_SQL = sql`
+  SELECT p.number_e164 AS number, p.name AS name, p.chat_hash AS chatHash, p.last_message_at AS lastMessageAt
   FROM rcs_chat_people p
   WHERE p.user_id = ?
-    -- Don't-sync chats (BACKLOG-3658 P3c)
-    AND NOT EXISTS (SELECT 1 FROM rcs_chat_exclusions x WHERE x.user_id = p.user_id AND x.chat_hash = p.chat_hash)
-    -- the user's own number
-    AND NOT EXISTS (SELECT 1 FROM rcs_cache_state s
-                     WHERE s.user_id = p.user_id AND s.own_number IS NOT NULL
-                       AND ${L10_OWN} = ${L10_PERSON})
-    -- already a contact by NUMBER, removed contacts included (BACKLOG-2365)
-    AND NOT EXISTS (SELECT 1 FROM contact_phones cp JOIN contacts c ON c.id = cp.contact_id
-                     WHERE c.user_id = p.user_id
-                       AND (${L10_CONTACT_E164} = ${L10_PERSON}
-                         OR ${L10_CONTACT_DISPLAY} = ${L10_PERSON}))
-  GROUP BY p.number_e164
-  ORDER BY last_communication_at DESC
-  LIMIT ?
-`;
+    AND NOT EXISTS (SELECT 1 FROM rcs_chat_exclusions x WHERE x.user_id = p.user_id AND x.chat_hash = p.chat_hash)`;
+
+const CONTACT_PHONES_SQL = sql`
+  SELECT cp.phone_e164 AS e164, cp.phone_display AS display
+  FROM contacts c JOIN contact_phones cp ON cp.contact_id = c.id
+  WHERE c.user_id = ?`;
+
+const OWN_NUMBER_SQL = sql`SELECT own_number AS own FROM rcs_cache_state WHERE user_id = ? AND own_number IS NOT NULL`;
+
+/**
+ * Messages per Google Messages thread. \`+m.user_id\` keeps the planner on
+ * idx_messages_thread_id (the user filter applies to those rows only).
+ */
+const THREAD_COUNTS_SQL = sql`
+  SELECT m.thread_id AS threadId, COUNT(*) AS n
+  FROM messages m
+  WHERE m.thread_id IN (SELECT value FROM json_each(?)) AND +m.user_id = ?
+  GROUP BY m.thread_id`;
+
+/** What the answer depends on: cheap aggregates (all on indexed columns). */
+const FINGERPRINT_SQL = sql`
+  SELECT
+    (SELECT COUNT(*) || ':' || IFNULL(MAX(updated_at), '') || ':' || IFNULL(MAX(rowid), 0) FROM rcs_chat_people WHERE user_id = ?) AS people,
+    (SELECT COUNT(*) || ':' || IFNULL(MAX(updated_at), '') || ':' || IFNULL(MAX(rowid), 0) FROM contacts WHERE user_id = ?) AS contacts,
+    (SELECT COUNT(*) || ':' || IFNULL(MAX(cp.rowid), 0) FROM contacts c JOIN contact_phones cp ON cp.contact_id = c.id WHERE c.user_id = ?) AS phones,
+    (SELECT COUNT(*) FROM rcs_chat_exclusions WHERE user_id = ?) AS excluded,
+    (SELECT IFNULL(MAX(own_number), '') FROM rcs_cache_state WHERE user_id = ?) AS own`;
+
+/** The reads this module runs (for the query-plan test). */
+export const TEXT_PEOPLE_QUERIES: Record<string, { sql: string; params: (userId: string) => unknown[] }> = {
+  people: { sql: PEOPLE_ROWS_SQL, params: (u) => [u] },
+  contactPhones: { sql: CONTACT_PHONES_SQL, params: (u) => [u] },
+  threadCounts: { sql: THREAD_COUNTS_SQL, params: (u) => [JSON.stringify(["gmweb2-x"]), u] },
+  fingerprint: { sql: FINGERPRINT_SQL, params: (u) => [u, u, u, u, u] },
+};
+
+interface TextPersonAll {
+  number: string;
+  name: string | null;
+  last: string | null;
+  count: number;
+}
+
+/**
+ * Per-user cache: the full, sorted, uncapped list and the fingerprint it was
+ * built for — per database handle (a re-opened / swapped database never
+ * serves another's answer).
+ */
+let cache = new Map<string, { key: string; all: TextPersonAll[] }>();
+let cacheDb: unknown = null;
+
+/** Drop the cache (Force re-import, auto-delete, tests). */
+export function invalidateTextPeopleCache(userId?: string): void {
+  if (userId) cache.delete(userId);
+  else cache.clear();
+}
+
+function fingerprint(userId: string): string {
+  const f = dbAll<Record<string, string | number>>(FINGERPRINT_SQL, [userId, userId, userId, userId, userId])[0] ?? {};
+  return [f.people, f.contacts, f.phones, f.excluded, f.own].join("|");
+}
+
+function buildAll(userId: string): TextPersonAll[] {
+  const rows = dbAll<PeopleRow>(PEOPLE_ROWS_SQL, [userId]);
+  if (rows.length === 0) return [];
+  const suppressed = new Set<string>();
+  for (const p of dbAll<{ e164: string | null; display: string | null }>(CONTACT_PHONES_SQL, [userId])) {
+    const a = last10(p.e164);
+    const b = last10(p.display);
+    if (a) suppressed.add(a);
+    if (b) suppressed.add(b);
+  }
+  for (const o of dbAll<{ own: string }>(OWN_NUMBER_SQL, [userId])) {
+    const k = last10(o.own);
+    if (k) suppressed.add(k);
+  }
+  const byNumber = new Map<string, { number: string; name: string | null; nameAt: string | null; last: string | null; chats: Set<string> }>();
+  for (const r of rows) {
+    if (suppressed.has(last10(r.number))) continue;
+    let e = byNumber.get(r.number);
+    if (!e) {
+      e = { number: r.number, name: null, nameAt: null, last: null, chats: new Set() };
+      byNumber.set(r.number, e);
+    }
+    e.chats.add(r.chatHash);
+    if (r.lastMessageAt !== null && (e.last === null || r.lastMessageAt > e.last)) e.last = r.lastMessageAt;
+    // The newest non-empty name (by its row's last message).
+    if (r.name !== null && r.name !== "") {
+      const at = r.lastMessageAt ?? "";
+      if (e.name === null || at > (e.nameAt ?? "")) {
+        e.name = r.name;
+        e.nameAt = at;
+      }
+    }
+  }
+  const threads = Array.from(new Set(Array.from(byNumber.values()).flatMap((e) => Array.from(e.chats, (h) => `gmweb2-${h}`))));
+  const perThread = new Map<string, number>();
+  for (let i = 0; i < threads.length; i += 900) {
+    for (const t of dbAll<{ threadId: string; n: number }>(THREAD_COUNTS_SQL, [JSON.stringify(threads.slice(i, i + 900)), userId])) {
+      perThread.set(t.threadId, t.n);
+    }
+  }
+  const all: TextPersonAll[] = [];
+  for (const e of byNumber.values()) {
+    let count = 0;
+    for (const h of e.chats) count += perThread.get(`gmweb2-${h}`) ?? 0;
+    all.push({ number: e.number, name: e.name, last: e.last, count });
+  }
+  // Newest first (NULL last, as SQLite's DESC).
+  all.sort((a, b) => (a.last === b.last ? 0 : a.last === null ? 1 : b.last === null ? -1 : a.last < b.last ? 1 : -1));
+  return all;
+}
 
 /**
  * People found in this user's Google Messages texts, newest first, capped.
- * `search` (the picker's query) matches the name or the number's digits.
+ * \`search\` (the picker's query) matches the name or the number's digits —
+ * BEFORE the cap, so a match beyond the newest 200 is still found.
  */
 export function getTextDerivedPeople(userId: string, search?: string, limit: number = TEXT_PEOPLE_CAP): TextDerivedPerson[] {
-  let rows: Array<{ number: string; name: string | null; last_communication_at: string | null; communication_count: number }>;
+  let all: TextPersonAll[];
   try {
-    rows = dbAll(TEXT_PEOPLE_SQL, [userId, Math.min(limit, TEXT_PEOPLE_CAP)]);
+    const handle = ensureDb();
+    if (handle !== cacheDb) {
+      cacheDb = handle;
+      cache = new Map();
+    }
+    const key = fingerprint(userId);
+    const hit = cache.get(userId);
+    if (hit && hit.key === key) all = hit.all;
+    else {
+      all = buildAll(userId);
+      cache.set(userId, { key, all });
+    }
   } catch {
-    // A database without the table yet (or a read failure): no suggestions,
+    // A database without the tables yet (or a read failure): no suggestions,
     // never a broken contacts list.
     return [];
   }
   const needle = (search ?? "").trim().toLowerCase();
   const digits = needle.replace(/\D/g, "");
+  const cap = Math.min(limit, TEXT_PEOPLE_CAP);
   const out: TextDerivedPerson[] = [];
-  for (const r of rows) {
+  for (const r of all) {
+    if (out.length >= cap) break;
     if (!PHONE_SHAPED.test(r.number)) continue;
     const shown = r.name && r.name.trim() !== "" ? r.name.trim() : formatPhoneNumber(r.number);
     if (needle) {
@@ -183,8 +311,8 @@ export function getTextDerivedPeople(userId: string, search?: string, limit: num
       source: "messages",
       is_imported: 0,
       is_message_derived: 1,
-      last_communication_at: r.last_communication_at,
-      communication_count: r.communication_count ?? 0,
+      last_communication_at: r.last,
+      communication_count: r.count,
     });
   }
   return out;

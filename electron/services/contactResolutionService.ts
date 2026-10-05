@@ -381,9 +381,10 @@ export async function resolvePhoneNames(
 
   afterExternal = countResolved();
 
-  // Source 3: macOS Contacts database (AddressBook)
+  // Source 3: macOS Contacts database (AddressBook) — only on a Mac (live:
+  // the probe ran on Windows on every resolution).
   try {
-    const { contactMap } = await getContactNames();
+    const { contactMap } = process.platform === "darwin" ? await getContactNames() : { contactMap: {} as Record<string, string> };
 
     for (const phone of phones) {
       const normalized = normalizePhone(phone);
