@@ -374,7 +374,6 @@ export function GoogleMessagesSettings({ userId, onOpenSyncAndroid, published = 
       {videoConfirm && (
         <div className="p-3 bg-amber-50 border border-amber-300 rounded-lg" role="alert" data-testid="gm-videos-confirm">
           <p className="text-xs text-amber-800" data-testid="gm-videos-estimate">{videoEstimateText(state?.media?.lastVideosSeen)}</p>
-          <p className="text-xs text-amber-800 mt-1">Video download arrives in a coming update; until then videos are counted, not saved.</p>
           <div className="flex gap-2 mt-2">
             <button
               type="button"

@@ -2441,9 +2441,6 @@ class DatabaseService implements IDatabaseService {
   }
 
   // BACKLOG-3665: a legacy chat removal moved onto the chat's gmweb2 thread
-  repointLegacyRcsRemoval(userId: string, legacyThreadId: string, threadId: string, transactionId: string | null) {
-    return syncDb.repointLegacyRcsRemoval(userId, legacyThreadId, threadId, transactionId);
-  }
 
   // BACKLOG-3658: the RCS cache job
   getRcsCacheState(userId: string) {

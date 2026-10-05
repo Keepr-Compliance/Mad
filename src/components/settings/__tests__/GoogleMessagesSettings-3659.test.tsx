@@ -322,3 +322,10 @@ describe("GoogleMessagesSettings", () => {
   });
 
 });
+
+// SR clean-up step 2: no "coming update" copy. Mutation: the line back → red.
+it("no 'coming update' copy on the screen's source", () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const src = (require("fs") as typeof import("fs")).readFileSync(require.resolve("../GoogleMessagesSettings.tsx"), "utf8");
+  expect(src).not.toMatch(/coming update/i);
+});

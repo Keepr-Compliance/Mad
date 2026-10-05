@@ -41,8 +41,6 @@
   var N = Point.fromHex("03d8bbd6c639c62937b04d997f38c3770719c629d7014d49a24b4f98baa1292b49");
 
   /** RFC 4648 base32 without padding: a code is 8 of these (40 bits). */
-  var CODE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-  var CODE_LENGTH = 8;
 
   var hex = noble.bytesToHex;
   var unhex = noble.hexToBytes;
@@ -51,14 +49,6 @@
   function bytesToBigInt(b) {
     var h = hex(b);
     return h.length ? BigInt("0x" + h) : BigInt(0);
-  }
-
-  /** A fresh code from the CSPRNG: 8 characters of CODE_ALPHABET. */
-  function newCode() {
-    var bytes = noble.randomBytes(CODE_LENGTH);
-    var out = "";
-    for (var i = 0; i < CODE_LENGTH; i++) out += CODE_ALPHABET[bytes[i] & 31];
-    return out;
   }
 
   /**
@@ -82,14 +72,6 @@
   function normalizeLinkCode(text) {
     var c = String(text || "").replace(/[\s-]/g, "");
     return /^[0-9]{6}$/.test(c) ? c : null;
-  }
-
-  /** As typed: upper case, spaces and dashes removed. null when it cannot be a code. */
-  function normalizeCode(text) {
-    var c = String(text || "").toUpperCase().replace(/[\s-]/g, "");
-    if (c.length !== CODE_LENGTH) return null;
-    for (var i = 0; i < c.length; i++) if (CODE_ALPHABET.indexOf(c[i]) < 0) return null;
-    return c;
   }
 
   /** w: the code as a non-zero scalar (HKDF, 48 bytes reduced mod n: no bias that matters). */
@@ -213,10 +195,6 @@
 
   var api = {
     VERSION: VERSION,
-    CODE_ALPHABET: CODE_ALPHABET,
-    CODE_LENGTH: CODE_LENGTH,
-    newCode: newCode,
-    normalizeCode: normalizeCode,
     newLinkCode: newLinkCode,
     normalizeLinkCode: normalizeLinkCode,
     startA: startA,

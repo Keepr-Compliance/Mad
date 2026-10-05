@@ -75,8 +75,6 @@ import {
   RCS_CACHE_STATE_SET_OWN_NUMBER_SQL,
   RCS_NUMBERS_MATCH_LIVE_CONTACT_SQL,
   RCS_REMOVALS_SQL,
-  RCS_LEGACY_REMOVAL_DROP_DUPLICATE_SQL,
-  RCS_LEGACY_REMOVAL_REPOINT_SQL,
 } from "./rcsImportSql";
 
 // ============================================
@@ -292,33 +290,6 @@ export function getRcsRemovals(
     if (r.messageId) messageIds.add(r.messageId);
   }
   return { threadIds, messageIds };
-}
-
-/**
- * BACKLOG-3665: move the user's legacy removal of one chat
- * (`gmweb-chat-<conversation id>`) onto its gmweb2 thread — on one
- * transaction, or on every transaction of the user (`transactionId` null:
- * the cache Sync, whose auto-link reads gmweb2 removals only). One SQLite
- * transaction. Returns the removals now on the gmweb2 thread because of this.
- */
-export function repointLegacyRcsRemoval(
-  userId: string,
-  legacyThreadId: string,
-  threadId: string,
-  transactionId: string | null,
-): number {
-  if (!legacyThreadId.startsWith("gmweb-chat-") || !threadId.startsWith("gmweb2-")) return 0;
-  const db = ensureDb();
-  const run = db.transaction((): number => {
-    const dropped = db
-      .prepare(RCS_LEGACY_REMOVAL_DROP_DUPLICATE_SQL)
-      .run(userId, legacyThreadId, transactionId, transactionId, threadId).changes;
-    const moved = db
-      .prepare(RCS_LEGACY_REMOVAL_REPOINT_SQL)
-      .run(legacyThreadId, threadId, threadId, userId, legacyThreadId, transactionId, transactionId).changes;
-    return dropped + moved;
-  });
-  return run();
 }
 
 /**

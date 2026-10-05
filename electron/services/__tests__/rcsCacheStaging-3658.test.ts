@@ -51,7 +51,6 @@ import {
   insertReactionRows,
   markMessageHasAttachments,
   rcsStagingDbOps,
-  repointLegacyRcsRemoval,
 } from "../db/syncDbService";
 import {
   importCacheChat,
@@ -90,7 +89,6 @@ const storeDeps = {
   getMessageIdMap,
   insertReactionRows,
   findContentDuplicates: findRcsContentDuplicates,
-  repointLegacyRemoval: repointLegacyRcsRemoval,
 };
 
 const writer: RcsCommitWriter = {

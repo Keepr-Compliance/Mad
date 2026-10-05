@@ -39,7 +39,6 @@ import {
   insertReactionRows,
   rcsAutoDeleteDbOps,
   rcsClearDbOps,
-  repointLegacyRcsRemoval,
 } from "../db/syncDbService";
 import { chatPeopleRows, getTextDerivedPeople, isNumberAsName, recordRcsChatPeople } from "../db/rcsChatPeopleDbService";
 import { createContactsBatch, getImportedContactsByUserId, getMessageDerivedContacts, searchContactsForSelection } from "../db/contactDbService";
@@ -65,7 +64,6 @@ const storeDeps = {
   getMessageIdMap,
   insertReactionRows,
   findContentDuplicates: findRcsContentDuplicates,
-  repointLegacyRemoval: repointLegacyRcsRemoval,
   recordPeople: record,
 };
 

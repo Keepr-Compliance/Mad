@@ -62,7 +62,7 @@ describe("the main process and the pairing protocol (SR S2)", () => {
     const keepr = require(out) as Record<string, any>;
     const ext = require(path.join(ROOT, "chrome-extension", "pair-protocol.js")) as Record<string, any>;
     /* eslint-enable @typescript-eslint/no-require-imports, @typescript-eslint/no-explicit-any */
-    const code = keepr.newCode();
+    const code = keepr.newLinkCode();
     const a = ext.startA(code);
     const b = keepr.respondB(code, a.pA);
     const f = ext.finishA(a.state, b.pB, b.cB);

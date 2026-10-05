@@ -159,8 +159,6 @@ const deps: RcsImportDeps = {
   // BACKLOG-3630: the content guard (same sent_at + direction + body).
   findContentDuplicates: (userId, rows) => databaseService.findRcsContentDuplicates(userId, rows),
   // BACKLOG-3665: a legacy chat removal moves onto the gmweb2 thread.
-  repointLegacyRemoval: (userId, legacy, threadId, transactionId) =>
-    databaseService.repointLegacyRcsRemoval(userId, legacy, threadId, transactionId),
   // BACKLOG-3670: people found in texts (local only; names never logged).
   recordPeople: (userId, chatHash, rows, lastMessageAt) =>
     databaseService.recordRcsChatPeople(userId, chatHash, rows, lastMessageAt),
@@ -699,7 +697,6 @@ onSessionChanged((change) => {
   // BACKLOG-3666: sign-out or a user switch revokes the earlier user's pairing.
   if (lastSessionUserId && (change.kind === "cleared" || change.userId !== lastSessionUserId)) {
     pairingAuth.revoke(lastSessionUserId);
-    pairingAuth.cancelCode();
   }
   lastSessionUserId = change.kind === "saved" ? change.userId : null;
   // SR F1: a run a crash cut short is settled once we know who is signed in.

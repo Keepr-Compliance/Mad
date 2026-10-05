@@ -29,7 +29,7 @@ const EXT = path.join(__dirname, "..", "..", "chrome-extension");
 
 describe("SPAKE2 pairing (P-256)", () => {
   it("round trip: both sides agree on the confirmation and the key (P2)", () => {
-    const code = P.newCode();
+    const code = P.newLinkCode();
     const a = P.startA(code);
     const b = P.respondB(code, a.pA);
     const f = P.finishA(a.state, b.pB, b.cB);
@@ -46,18 +46,18 @@ describe("SPAKE2 pairing (P-256)", () => {
 
   // A process squatting Keepr's port, without the code shown in Keepr, guesses.
   it("a squatter cannot complete the exchange without the code (P1)", () => {
-    const a = P.startA(P.newCode());
+    const a = P.startA(P.newLinkCode());
     for (let i = 0; i < 5; i++) {
-      const guess = P.respondB(P.newCode(), a.pA);
+      const guess = P.respondB(P.newLinkCode(), a.pA);
       expect(() => P.finishA(a.state, guess.pB, guess.cB)).toThrow("bad_confirm");
     }
     // Nor can it answer with a random point and a made-up confirmation.
-    const fake = P.startA(P.newCode());
+    const fake = P.startA(P.newLinkCode());
     expect(() => P.finishA(a.state, fake.pA, "00".repeat(32))).toThrow("bad_confirm");
   });
 
   it("each run is fresh: same code, different messages and keys", () => {
-    const code = P.newCode();
+    const code = P.newLinkCode();
     const a1 = P.startA(code);
     const a2 = P.startA(code);
     expect(a1.pA).not.toBe(a2.pA);
@@ -71,11 +71,14 @@ describe("SPAKE2 pairing (P-256)", () => {
     expect(() => P.finishA(a.state, "zz", "00")).toThrow();
   });
 
-  it("codes: 8 base32 characters; typed codes normalized", () => {
-    for (let i = 0; i < 20; i++) expect(P.newCode()).toMatch(/^[A-Z2-7]{8}$/);
-    expect(P.normalizeCode(" ab3d-ef7h ")).toBe("AB3DEF7H");
-    expect(P.normalizeCode("AB3DEF7")).toBeNull();
-    expect(P.normalizeCode("AB3DEF71")).toBeNull(); // 1 is not base32
+  // SR clean-up step 2: the old 8-character codes are gone (only the
+  // popup's 6-digit link code remains). Mutation: the helpers back → red.
+  it("codes: 6 digits; typed codes normalized; no 8-character code helpers", () => {
+    for (let i = 0; i < 20; i++) expect(P.newLinkCode()).toMatch(/^[0-9]{6}$/);
+    expect(P.normalizeLinkCode(" 482-913 ")).toBe("482913");
+    expect(P.normalizeLinkCode("48291")).toBeNull();
+    expect(P.newCode).toBeUndefined();
+    expect(P.normalizeCode).toBeUndefined();
   });
 });
 

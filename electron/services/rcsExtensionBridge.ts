@@ -931,10 +931,9 @@ export class RcsExtensionBridge {
       sendJson(res, r.status, r.body);
       return "handled";
     }
-    // LEGACY 8-character codes (≤ 0.3.31 extensions). SR (2026-10-03): gone
-    // NOW — Keepr no longer mints a code (C4), so nothing can complete them:
-    // 410, "update the extension". The code goes after
-    // LEGACY_PAIR_ENDPOINTS_REMOVE_AFTER (rcsPairingAuth.ts; merge notes).
+    // The old 8-character pairing (≤ 0.3.31 extensions) is DELETED (SR clean-
+    // up step 2): its code and its routes' logic are gone. An extension that
+    // old still gets a clear answer — 410, "update the extension" — not a 404.
     if (path === "/pair/start" || path === "/pair/finish") {
       sendJson(res, 410, { error: "gone", message: LEGACY_PAIR_GONE_MESSAGE });
       return "handled";
