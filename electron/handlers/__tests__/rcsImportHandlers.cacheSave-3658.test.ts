@@ -26,6 +26,10 @@ const broadcasts: Array<[string, unknown]> = [];
 const order: string[] = [];
 /** SR F2 (quit): the bridge's running job, when a test sets one. */
 let mockActiveJob: { jobId: string } | null = null;
+/** dev45: the bridge's current job snapshot (getJob), when a test sets one. */
+let mockCurrentJob: { jobId: string; state: string; saved?: unknown } | null = null;
+/** dev45: the staging rows a test plants as "leftover" runs. */
+let mockLeftovers: Array<{ jobId: string; userId: string; startedAt: string; limitsJson: string; readJson: string }> = [];
 let bridgeOptions: Record<string, (...a: unknown[]) => unknown> = {};
 let releaseCommit: (() => void) | null = null;
 const abandoned: string[] = [];
@@ -67,6 +71,9 @@ jest.mock("../../services/rcsExtensionBridge", () => ({
     activeJob() {
       return mockActiveJob;
     }
+    getJob() {
+      return mockCurrentJob;
+    }
     activeJobUserId() {
       return null;
     }
@@ -106,7 +113,7 @@ jest.mock("../../services/rcsCacheStaging", () => ({
       });
     }
     leftoverJobs() {
-      return [];
+      return mockLeftovers;
     }
     beginJob() {}
     noteChat() {}
@@ -351,5 +358,57 @@ describe("a cache Sync being saved (SR B1, S1)", () => {
     await flush();
     expect(coverageWrites).toEqual([["user-1", "google_messages", expected]]);
     expect(mockRunRecords).toEqual([expect.objectContaining({ listStop, reachedFloor: expected !== null, notSettledChats: notSettled, fullRead: true })]);
+  });
+});
+
+// Live bug dev45: an hourly token refresh re-saves the session; the recovery
+// ran on it and committed the LIVE Sync as "a crash cut short" (0 chats),
+// ending it. Now: recovery runs on a sign-in only, and never on a run live
+// in this process. Mutations: recovery on every "saved" again → red; the
+// live-run guard removed → red.
+describe("crash recovery vs a live Sync (dev45)", () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { emitSessionChanged } = require("../../services/authEvents") as typeof import("../../services/authEvents");
+  const leftover = (jobId: string, userId: string) => ({
+    jobId, userId, startedAt: new Date().toISOString(),
+    limitsJson: JSON.stringify({ floorMs: 0, sinceMs: 0, cap: 1000 }),
+    readJson: JSON.stringify({ fullRead: false, floorISO: "2026-01-01T00:00:00.000Z" }),
+  });
+  afterEach(() => {
+    mockLeftovers = [];
+    mockCurrentJob = null;
+    releaseCommit?.();
+  });
+
+  it("a token refresh mid-Sync: no recovery; the live run is never treated as crashed", async () => {
+    expect((await startCache()).success).toBe(true); // job-1, live in this process
+    mockCurrentJob = { jobId: "job-1", state: "running" };
+    mockLeftovers = [leftover("job-1", "user-1")];
+    order.length = 0;
+    emitSessionChanged({ kind: "saved", userId: "user-1" }); // the refresh re-saves the same user
+    await flush();
+    expect(order).not.toContain("commit");
+    // Whatever triggers it, the recovery leaves the live run alone.
+    expect(await handlersModule.recoverLeftoverStaging("user-1")).toEqual({ committed: 0, discarded: 0, kept: 0 });
+    expect(order).not.toContain("commit");
+    // Also when the bridge no longer reports it (between its end and the save):
+    // a run created in this process and not yet settled is never a leftover.
+    mockCurrentJob = null;
+    expect(await handlersModule.recoverLeftoverStaging("user-1")).toEqual({ committed: 0, discarded: 0, kept: 0 });
+  });
+
+  it("a run left over from a previous process is still recovered on sign-in", async () => {
+    mockLeftovers = [leftover("job-from-before", "user-2")];
+    order.length = 0;
+    emitSessionChanged({ kind: "saved", userId: "user-2" }); // a sign-in: a new user
+    await flush();
+    expect(order).toContain("commit");
+    releaseCommit?.();
+    await flush();
+    // The same user's next token refresh does not run it again.
+    order.length = 0;
+    emitSessionChanged({ kind: "saved", userId: "user-2" });
+    await flush();
+    expect(order).not.toContain("commit");
   });
 });

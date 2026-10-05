@@ -557,6 +557,19 @@ export const RCS_LEFTOVER_STAGING_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 /** SR F3: one recovery at a time (app start, sign-in and Sync start share it). */
 let recoveryInFlight: Promise<{ committed: number; discarded: number; kept: number }> | null = null;
 
+/**
+ * Live (dev45): a run is LIVE in this process — created here and not yet
+ * settled (its limits are held until its commit / discard / abandon), or the
+ * bridge's current job while it runs or is being saved. Its staging rows are
+ * not a crash's leftover, whatever triggered the recovery.
+ */
+function liveInThisProcess(jobId: string): boolean {
+  if (cacheLimitsByJob.has(jobId)) return true;
+  const current = bridge.getJob();
+  if (!current || current.jobId !== jobId) return false;
+  return current.state === "created" || current.state === "running" || (current.state === "finished" && current.saved === undefined);
+}
+
 export function recoverLeftoverStaging(
   signedInUserId: string | null,
   nowMs: number = Date.now(),
@@ -565,6 +578,9 @@ export function recoverLeftoverStaging(
   recoveryInFlight = (async () => {
     const out = { committed: 0, discarded: 0, kept: 0 };
     for (const job of cacheStaging().leftoverJobs()) {
+      // Live (dev45): never a run of THIS process — only one a crash / quit
+      // of an earlier process left behind.
+      if (liveInThisProcess(job.jobId)) continue;
       const action = leftoverAction(job, signedInUserId, nowMs);
       // SR F1: nobody signed in (yet): the run is left as it is.
       if (action === "keep") {
@@ -675,14 +691,18 @@ let lastSessionUserId: string | null = null;
 
 onSessionChanged((change) => {
   cachedUserId = undefined;
+  // Live (dev45): a SIGN-IN (a user the session did not name before), not a
+  // token refresh re-saving the same user's session (hourly, mid-Sync).
+  const signedIn = change.kind === "saved" && !!change.userId && change.userId !== lastSessionUserId;
   if (cancelOnSessionChange(change, bridge.activeJobUserId(), !!bridge.activeJob())) bridge.cancelJob();
   // BACKLOG-3666: sign-out or a user switch revokes the earlier user's pairing.
   if (lastSessionUserId && (change.kind === "cleared" || change.userId !== lastSessionUserId)) {
     pairingAuth.revoke(lastSessionUserId);
   }
   lastSessionUserId = change.kind === "saved" ? change.userId : null;
-  // SR F1: a run a crash cut short is settled once we know who is signed in.
-  if (change.kind === "saved") void recoverLeftoverStaging(change.userId).catch(() => undefined);
+  // SR F1: a run a crash cut short is settled once we know who is signed in —
+  // on a sign-in only (app start runs it from startRcsExtensionBridge).
+  if (signedIn) void recoverLeftoverStaging(change.userId).catch(() => undefined);
 });
 
 /**
