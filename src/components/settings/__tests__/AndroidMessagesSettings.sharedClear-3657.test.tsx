@@ -53,7 +53,7 @@ describe("BACKLOG-3657 — the Android Companion's Force re-import is shared wit
     fireEvent.click(await screen.findByRole("button", { name: /force re-import/i }));
     fireEvent.click(await screen.findByRole("button", { name: /continue with re-import/i }));
     expect(await screen.findByRole("status")).toHaveTextContent(
-      "Cleared 50 texts imported from Google Messages and 12 texts and 3 contacts from the Android Companion.",
+      "Cleared 62 texts and 3 contacts. Sync Android on the dashboard, or Sync Now in the Android Companion, to get them back.",
     );
     expect(clearAndroidData).toHaveBeenCalledWith({ userId: "user-3657" });
   });

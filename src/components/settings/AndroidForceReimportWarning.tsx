@@ -63,11 +63,17 @@ export function AndroidForceReimportWarning({ onConfirm, onCancel, windowMonths 
   );
 }
 
-/** The line after a shared Android clear. */
+/**
+ * The line after a shared Android clear (founder, minimal copy): "Cleared
+ * 8,344 texts. Sync Android on the dashboard to get them back." The Android
+ * Companion (and its Sync Now) is named ONLY when it actually cleared texts
+ * or contacts.
+ */
 export function androidClearedText(r: { gmwebMessages: number; companionMessages: number; contacts: number }): string {
-  return (
-    `Cleared ${r.gmwebMessages.toLocaleString()} texts imported from Google Messages and ` +
-    `${r.companionMessages.toLocaleString()} texts and ${r.contacts.toLocaleString()} contacts from the Android Companion. ` +
-    "Click Sync Android on the dashboard (or Sync Now in the companion app) to import them again."
-  );
+  if (r.companionMessages <= 0 && r.contacts <= 0) {
+    return `Cleared ${r.gmwebMessages.toLocaleString()} texts. Sync Android on the dashboard to get them back.`;
+  }
+  const texts = (r.gmwebMessages + r.companionMessages).toLocaleString();
+  const contacts = r.contacts > 0 ? ` and ${r.contacts.toLocaleString()} ${r.contacts === 1 ? "contact" : "contacts"}` : "";
+  return `Cleared ${texts} texts${contacts}. Sync Android on the dashboard, or Sync Now in the Android Companion, to get them back.`;
 }

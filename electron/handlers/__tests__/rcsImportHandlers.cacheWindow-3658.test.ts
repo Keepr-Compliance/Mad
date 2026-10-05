@@ -316,3 +316,15 @@ describe("mediaKeptFor (SR M)", () => {
     expect(mediaKeptFor(undefined, false)).toEqual({ photos: true, videos: false });
   });
 });
+
+// Founder (2026-10-04): the auto-delete switch is removed "for now"; the
+// purge is dormant — even a stored ON value (90 days) never runs it.
+// Mutation: RCS_AUTO_DELETE_ENABLED back on (or the cutoff ignoring it) → red.
+describe("auto-delete (BACKLOG-3658 P3b) is dormant", () => {
+  const { autoDeleteCutoff, RCS_AUTO_DELETE_ENABLED } = require("../rcsImportHandlers") as typeof import("../rcsImportHandlers");
+  it("a stored 90 days: no cutoff, so no purge", () => {
+    expect(RCS_AUTO_DELETE_ENABLED).toBe(false);
+    expect(autoDeleteCutoff(90, Date.UTC(2026, 9, 4))).toBeNull();
+    expect(autoDeleteCutoff(null, Date.UTC(2026, 9, 4))).toBeNull();
+  });
+});

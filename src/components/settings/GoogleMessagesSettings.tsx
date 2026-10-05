@@ -12,7 +12,8 @@
  *   section). Written to `messageImport.filters` — the key the cache Sync's
  *   floor actually reads (importPlanInputs.loadStoredImportFilters); the
  *   companion's `messageImport.android` namespace is not read by it.
- * - Auto-delete (BACKLOG-3658 P3b; off by default, 90 days when on).
+ * - Auto-delete (BACKLOG-3658 P3b): REMOVED from the screen "for now"
+ *   (founder, 2026-10-04); the purge is dormant (RCS_AUTO_DELETE_ENABLED).
  * - Force re-import: Android's SHARED reset (BACKLOG-3657) — every text
  *   imported from Google Messages AND from the Android Companion (one
  *   confirmation naming both, AndroidForceReimportWarning).
@@ -70,9 +71,11 @@ interface GoogleMessagesSettingsProps {
    * dashboard opens (it closes Settings), at its link step.
    */
   onOpenSyncAndroid?: () => void;
+  /** Test seam: the extension is in the Chrome Web Store (default EXTENSION_PUBLISHED). */
+  published?: boolean;
 }
 
-export function GoogleMessagesSettings({ userId, onOpenSyncAndroid }: GoogleMessagesSettingsProps) {
+export function GoogleMessagesSettings({ userId, onOpenSyncAndroid, published = EXTENSION_PUBLISHED }: GoogleMessagesSettingsProps) {
   const [state, setState] = useState<RcsExtensionState | null>(null);
   const [lookbackMonths, setLookbackMonths] = useState<number | null>(resolveStoredLookbackMonths(undefined));
   const [prefsSettled, setPrefsSettled] = useState(false);
@@ -166,12 +169,6 @@ export function GoogleMessagesSettings({ userId, onOpenSyncAndroid }: GoogleMess
   const [videoConfirm, setVideoConfirm] = useState(false);
   const setMedia = useCallback(async (patch: { photosAllChats?: boolean; videosAllChats?: boolean }) => {
     const r = await rcsImportService.setMediaOptions(patch);
-    if (!r.success) setResult({ ok: false, text: r.error ?? "Keepr could not save that." });
-    await refresh();
-  }, [refresh]);
-
-  const toggleAutoDelete = useCallback(async (on: boolean) => {
-    const r = await rcsImportService.setCacheAutoDelete(on);
     if (!r.success) setResult({ ok: false, text: r.error ?? "Keepr could not save that." });
     await refresh();
   }, [refresh]);
@@ -316,39 +313,29 @@ export function GoogleMessagesSettings({ userId, onOpenSyncAndroid }: GoogleMess
         />
       )}
 
-      {/* Founder (J flow): the beta (unpacked) install of the extension. Until
-          the extension is in the Chrome Web Store everyone gets it (forced on). */}
-      <label className="flex items-start gap-3 p-4 bg-white rounded-lg border border-gray-200 cursor-pointer">
-        <input
-          type="checkbox"
-          className="mt-0.5 w-5 h-5"
-          checked={betaInstall || !EXTENSION_PUBLISHED}
-          disabled={!EXTENSION_PUBLISHED}
-          onChange={(e) => void changeBetaInstall(e.target.checked)}
-          data-testid="gm-beta-install"
-        />
-        <span>
-          <span className="block text-sm font-medium text-gray-900">Beta extension install</span>
-          <span className="block text-xs text-gray-600">On until the extension is in the Chrome Web Store.</span>
-        </span>
-      </label>
-
-      <label className="flex items-start gap-3 p-4 bg-white rounded-lg border border-gray-200 cursor-pointer">
-        <input
-          type="checkbox"
-          className="mt-0.5 w-5 h-5"
-          checked={!!state?.autoDeleteDays}
-          onChange={(e) => void toggleAutoDelete(e.target.checked)}
-          data-testid="gm-auto-delete"
-        />
-        <span>
-          <span className="block text-sm font-medium text-gray-900">Delete chats not linked to a transaction after 90 days</span>
-          <span className="block text-xs text-gray-600">
-            Off by default. When on, after each Sync Keepr deletes chats from Google Messages that are linked to no
-            transaction and have had no new message for 90 days.
+      {/* Founder (J flow): the beta (unpacked) install of the extension.
+          Founder (2026-10-04): HIDDEN until the extension is in the Chrome
+          Web Store — until then every account gets the beta (forced), so a
+          switch that cannot be changed is not shown. */}
+      {published && (
+        <label className="flex items-start gap-3 p-4 bg-white rounded-lg border border-gray-200 cursor-pointer">
+          <input
+            type="checkbox"
+            className="mt-0.5 w-5 h-5"
+            checked={betaInstall}
+            onChange={(e) => void changeBetaInstall(e.target.checked)}
+            data-testid="gm-beta-install"
+          />
+          <span>
+            <span className="block text-sm font-medium text-gray-900">Beta extension install</span>
           </span>
-        </span>
-      </label>
+        </label>
+      )}
+
+      {/* BACKLOG-3658 P3b — "Delete chats not linked to a transaction after
+          90 days": REMOVED from the screen "for now" (founder, 2026-10-04).
+          The purge is dormant: RCS_AUTO_DELETE_ENABLED (rcsImportHandlers) is
+          off, so a stored ON value does nothing. */}
 
       {/* SR M: media from chats with no transaction contact. Photos ON, videos OFF by default. */}
       <label className="flex items-start gap-3 p-4 bg-white rounded-lg border border-gray-200 cursor-pointer">

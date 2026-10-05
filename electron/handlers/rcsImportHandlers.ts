@@ -427,12 +427,27 @@ function clearFiles() {
   };
 }
 
-/** P3b: after the auto-link, the optional auto-delete of old chats linked to nothing. */
+/**
+ * BACKLOG-3658 P3b — the optional auto-delete of old chats linked to
+ * nothing. DORMANT (founder, 2026-10-04): its switch is removed from
+ * Settings "for now", so the purge never runs, whatever value is stored.
+ * The code stays (unreachable) for when the switch comes back: turn this on
+ * together with the Settings row.
+ */
+export const RCS_AUTO_DELETE_ENABLED = false;
+
+/** The purge's cutoff for a Sync, or null when it must not run (dormant, or off). */
+export function autoDeleteCutoff(autoDeleteDays: number | null | undefined, nowMs: number): string | null {
+  if (!RCS_AUTO_DELETE_ENABLED || !autoDeleteDays) return null;
+  return new Date(nowMs - autoDeleteDays * 24 * 60 * 60 * 1000).toISOString();
+}
+
+/** P3b: after the auto-link, the optional auto-delete (dormant: see RCS_AUTO_DELETE_ENABLED). */
 async function afterCacheLinked(jobId: string, userId: string): Promise<void> {
   const options = cacheOptionsByJob.get(jobId);
   cacheOptionsByJob.delete(jobId);
-  if (!options?.autoDeleteDays) return;
-  const cutoff = new Date(Date.now() - options.autoDeleteDays * 24 * 60 * 60 * 1000).toISOString();
+  const cutoff = autoDeleteCutoff(options?.autoDeleteDays, Date.now());
+  if (!cutoff) return;
   clearUnlinkedOldChats(userId, cutoff, databaseService.rcsAutoDeleteDbOps(), clearFiles(), (m) => void logService.info(m, LOG_TAG));
 }
 

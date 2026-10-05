@@ -129,7 +129,7 @@ describe("GoogleMessagesSettings", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /continue with re-import/i }));
     expect(await screen.findByRole("status")).toHaveTextContent(
-      "Cleared 175 texts imported from Google Messages and 12 texts and 3 contacts from the Android Companion.",
+      "Cleared 187 texts and 3 contacts. Sync Android on the dashboard, or Sync Now in the Android Companion, to get them back.",
     );
     expect(mockClear).toHaveBeenCalledTimes(1);
   });
@@ -143,12 +143,14 @@ describe("GoogleMessagesSettings", () => {
     expect(screen.queryByText(/^Cleared /)).toBeNull();
   });
 
-  it("auto-delete: off by default; switching it on saves it (S3)", async () => {
+  // Founder (2026-10-04): the auto-delete switch is removed "for now".
+  // Mutation: the row back → red.
+  it("no auto-delete switch on the screen", async () => {
     render(<GoogleMessagesSettings userId="user-1" />);
-    const box = (await screen.findByTestId("gm-auto-delete")) as HTMLInputElement;
-    await waitFor(() => expect(box.checked).toBe(false));
-    fireEvent.click(box);
-    await waitFor(() => expect(mockAutoDelete).toHaveBeenCalledWith(true));
+    await screen.findByRole("button", { name: /force re-import/i });
+    expect(screen.queryByTestId("gm-auto-delete")).toBeNull();
+    expect(screen.queryByText(/after 90 days/)).toBeNull();
+    void mockAutoDelete;
   });
 
   // Founder (2026-10-02): one line + "See hidden list", never an inline list. Mutation:
@@ -293,29 +295,31 @@ describe("GoogleMessagesSettings", () => {
     await waitFor(() => expect(mockForget).toHaveBeenCalledTimes(1));
   });
 
-  it("the Beta row is the screen's checkbox row (as its neighbours)", async () => {
-    render(<GoogleMessagesSettings userId="user-1" />);
-    const beta = (await screen.findByTestId("gm-beta-install")).closest("label")!;
-    const auto = screen.getByTestId("gm-auto-delete").closest("label")!;
-    expect(beta.className).toBe(auto.className);
-    expect(screen.getByTestId("gm-beta-install").className).toBe(screen.getByTestId("gm-auto-delete").className);
+  // Founder (2026-10-04): "Beta extension install" is HIDDEN while the
+  // extension is not published (everyone gets the beta then); once published
+  // it shows, in the screen's checkbox-row style, and saves with the
+  // account's preferences (messageImport.googleMessages.betaExtensionInstall).
+  // Mutations: shown while unpublished; hidden once published; saved under
+  // another key → red.
+  it("Beta extension install: hidden while unpublished", async () => {
+    render(<GoogleMessagesSettings userId="user-1" published={false} />);
+    await screen.findByRole("button", { name: /force re-import/i });
+    expect(screen.queryByTestId("gm-beta-install")).toBeNull();
+    expect(screen.queryByText("Beta extension install")).toBeNull();
   });
 
-  // Founder (J flow): "Beta extension install" — with the account's other
-  // preferences (messageImport.googleMessages.betaExtensionInstall). While the
-  // extension is not published it is forced on (checked, disabled).
-  // Mutations: saved under another key; not forced while unpublished → red.
-  it("Beta extension install: forced on while unpublished; saved with the account's preferences", async () => {
-    render(<GoogleMessagesSettings userId="user-1" />);
+  it("Beta extension install: shown once published, the screen's row style, saved with the account's preferences", async () => {
+    render(<GoogleMessagesSettings userId="user-1" published={true} />);
     const box = (await screen.findByTestId("gm-beta-install")) as HTMLInputElement;
-    expect(box.checked).toBe(true);
-    expect(box.disabled).toBe(true);
+    expect(box.disabled).toBe(false);
     expect(box.closest("label")).toHaveTextContent("Beta extension install");
-    // The save itself (the toggle is enabled once published).
-    box.disabled = false;
+    const photos = screen.getByTestId("gm-photos-all");
+    expect(box.closest("label")!.className).toBe(photos.closest("label")!.className);
+    expect(box.className).toBe(photos.className);
+    await waitFor(() => expect(box.checked).toBe(false));
     fireEvent.click(box);
     await waitFor(() =>
-      expect(mockUpdatePrefs).toHaveBeenCalledWith("user-1", { messageImport: { googleMessages: { betaExtensionInstall: false } } }),
+      expect(mockUpdatePrefs).toHaveBeenCalledWith("user-1", { messageImport: { googleMessages: { betaExtensionInstall: true } } }),
     );
   });
 
