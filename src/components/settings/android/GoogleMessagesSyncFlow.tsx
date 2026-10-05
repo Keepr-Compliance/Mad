@@ -306,12 +306,17 @@ export function GoogleMessagesSyncFlow({
         <div className="flex flex-col gap-4 min-h-[360px]" data-testid="gm-linked-screen">
           <h2 className={title}>Sync Android</h2>
           <div className="flex-1 flex flex-col justify-center gap-4" data-testid="gm-linked-body">
-            <div className="flex items-center gap-2 p-3 rounded-[10px] border border-[#E5E7EB] text-[14px] text-[#111827]" data-testid="gm-linked-row">
-              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="#4F46E5" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M5 12l5 5 9-10" />
-              </svg>
-              <span>Linked with your browser</span>
-            </div>
+            {/* Founder (2026-10-05): before the first Sync, the consent line,
+                Agree and sync and the months note only — the linked row
+                returns once consent is given (B2). */}
+            {!needsConsent && (
+              <div className="flex items-center gap-2 p-3 rounded-[10px] border border-[#E5E7EB] text-[14px] text-[#111827]" data-testid="gm-linked-row">
+                <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="#4F46E5" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M5 12l5 5 9-10" />
+                </svg>
+                <span>Linked with your browser</span>
+              </div>
+            )}
             {needsConsent && (
               <p className="text-[14px] text-[#374151]" data-testid="gm-consent-line">
                 {CONSENT_LINE}

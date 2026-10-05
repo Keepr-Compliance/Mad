@@ -163,6 +163,11 @@ describe("GoogleMessagesSyncFlow", () => {
       /^Keepr copies your texts from Google Messages into Keepr on this computer.$/,
     );
     expect(screen.getByTestId("gm-sync-now")).toHaveTextContent("Agree and sync");
+    // Founder (2026-10-05): only the line, Agree and sync and the months note.
+    // Mutation: the linked row shown before consent → red.
+    expect(screen.queryByTestId("gm-linked-row")).toBeNull();
+    expect(screen.getByTestId("gm-window-note")).toBeInTheDocument();
+    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["Agree and sync"]);
     fireEvent.click(screen.getByTestId("gm-sync-now"));
     await waitFor(() => expect(order).toEqual(["consent:1", "start"]));
   });
@@ -181,6 +186,8 @@ describe("GoogleMessagesSyncFlow", () => {
     render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);
     expect(await screen.findByTestId("gm-sync-now")).toHaveTextContent("Sync now");
     expect(screen.queryByTestId("gm-consent-line")).toBeNull();
+    // B2 again once consent is given: the linked row is back.
+    expect(screen.getByTestId("gm-linked-row")).toHaveTextContent("Linked with your browser");
   });
 
   // Storyboard B02 / I02: linked — "Sync Android", "Linked with your browser
