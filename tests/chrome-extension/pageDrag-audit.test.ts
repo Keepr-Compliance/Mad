@@ -181,3 +181,57 @@ describe("default place per state", () => {
     }
   });
 });
+
+// SR on 68d3b1c3f: a saved place beyond the CURRENT viewport (after a
+// resize, or on a smaller screen) is clamped at render — nothing off-screen.
+// Mutations: the guide's saved place not clamped; the edge cards' place not
+// kept inside a short viewport → red.
+describe("saved places are clamped to the current viewport", () => {
+  const SIZE = { width: 320, height: 200 };
+  function mount(view: { width: number; height: number }, state: "guide" | "syncing", saved: unknown) {
+    document.body.innerHTML = "";
+    const box = state === "guide" ? STATES[0][1]() : STATES[3][1]();
+    document.body.appendChild(box);
+    const mover = job.attachDrag(box, {
+      handleSelector: job.DRAG_HANDLE,
+      rightEdge: true,
+      rightGap: () => 18,
+      free: () => box.getAttribute("data-keepr-state") === "not_linked",
+      freeDefault: () => job.guidePosition(SIZE.width, view.width),
+      loadFree: () => (state === "guide" ? saved : null),
+      saveFree: () => undefined,
+      load: () => (state === "guide" ? null : saved),
+      save: () => undefined,
+      view: () => view,
+      size: () => SIZE,
+    });
+    mover.keepOnScreen();
+    const at = () => ({ left: parseFloat(box.style.left), top: parseFloat(box.style.top) });
+    const inView = () => {
+      const p = at();
+      return p.left >= 0 && p.top >= 0 && p.left + SIZE.width <= view.width && p.top + SIZE.height <= view.height;
+    };
+    return { mover, at, inView, view };
+  }
+
+  it("the guide: a saved place beyond the viewport, and after the window shrinks", () => {
+    const m = mount({ width: 1400, height: 900 }, "guide", { left: 5000, top: 4000 });
+    expect(m.inView()).toBe(true);
+    expect(m.at()).toEqual({ left: 1400 - 320 - 8, top: 900 - 200 - 8 });
+    m.view.width = 800;
+    m.view.height = 500;
+    m.mover.keepOnScreen(); // the resize handler
+    expect(m.inView()).toBe(true);
+    expect(m.at()).toEqual({ left: 800 - 320 - 8, top: 500 - 200 - 8 });
+  });
+
+  it("the right-edge cards: the saved offset stays on screen, even in a short viewport", () => {
+    for (const frac of [0, 0.5, 1]) {
+      const m = mount({ width: 1400, height: 900 }, "syncing", { topFrac: frac });
+      expect([frac, m.inView()]).toEqual([frac, true]);
+      m.view.height = 240; // shorter than the safe band + the card
+      m.mover.keepOnScreen();
+      expect([frac, m.inView()]).toEqual([frac, true]);
+    }
+  });
+});

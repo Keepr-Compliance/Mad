@@ -2442,9 +2442,13 @@
     var rightGap = typeof gap === "number" && isFinite(gap) ? gap : RIGHT_GAP;
     var minTop = SAFE_TOP;
     var maxTop = Math.max(minTop, view.height - SAFE_BOTTOM - size.height);
+    var top = minTop + (maxTop - minTop) * frac;
+    // SR: a viewport too short for the safe band (a small window / screen):
+    // still fully on screen — never below the bottom, never above the top.
+    top = Math.max(0, Math.min(top, view.height - size.height));
     return {
       left: Math.round(Math.max(0, view.width - size.width - rightGap)),
-      top: Math.round(minTop + (maxTop - minTop) * frac),
+      top: Math.round(top),
     };
   }
 
