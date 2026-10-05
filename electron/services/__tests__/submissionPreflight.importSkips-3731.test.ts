@@ -261,8 +261,20 @@ describe("BACKLOG-3731 — each import skip reason reaches the pre-flight", () =
       await chatDbRow("guid-missing", "IMG_9000.HEIC", { write: false, totalBytes: 2048 }),
       await chatDbRow("guid-big", "Tour.mov", { totalBytes: MAX_ATTACHMENT_SIZE + 1 }),
       await chatDbRow("guid-vcf", "Agent.vcf"),
-      await chatDbRow("guid-locked", "Offer.pdf", { mode: 0o000 }),
+      await chatDbRow("guid-locked", "Offer.pdf"),
     ];
+    // Permission denied on the source file. Simulated at fs.access, because
+    // chmod 000 does not make a file unreadable on Windows CI.
+    const lockedPath = rows[3].filename as string;
+    const realAccess = fsSync.promises.access.bind(fsSync.promises);
+    jest.spyOn(fsSync.promises, "access").mockImplementation(async (p, mode) => {
+      if (p === lockedPath) {
+        throw Object.assign(new Error(`EACCES: permission denied, access '${lockedPath}'`), {
+          code: "EACCES",
+        });
+      }
+      return realAccess(p, mode);
+    });
     await storeAttachments(USER, rows, new Map());
 
     expect(metadataOf(missing).attachmentSkips).toEqual([
