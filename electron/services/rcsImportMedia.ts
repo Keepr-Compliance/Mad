@@ -36,8 +36,11 @@ const EXT_BY_MIME: Readonly<Record<string, string>> = {
   "image/webp": ".webp",
   "image/heic": ".heic",
   "image/heif": ".heif",
-  "image/bmp": ".bmp",
 };
+
+/** SR C5 (CASA N21): the only image types Keepr accepts (others → 415). */
+export const RCS_ALLOWED_IMAGE_MIME: ReadonlySet<string> = new Set(Object.keys(EXT_BY_MIME));
+export const RCS_IMAGE_TYPE_REFUSED = "Keepr only keeps JPEG, PNG, GIF, WebP and HEIC photos.";
 
 export interface RcsIncomingImage {
   conversationId: string;
@@ -111,7 +114,7 @@ export async function storeImage(
   chatHash: string,
 ): Promise<RcsImageResult> {
   const mimeType = image.mimeType.toLowerCase();
-  if (!mimeType.startsWith("image/")) return { stored: false, reason: "not_an_image" };
+  if (!RCS_ALLOWED_IMAGE_MIME.has(mimeType)) return { stored: false, reason: "not_an_image" };
 
   const bytes = Buffer.from(image.base64, "base64");
   if (bytes.length === 0) return { stored: false, reason: "empty" };

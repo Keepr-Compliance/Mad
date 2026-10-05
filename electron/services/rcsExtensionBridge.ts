@@ -64,7 +64,7 @@ import {
   type RcsJobProgress,
   type RcsJobSnapshot,
 } from "./rcsImportJob";
-import { parseIncomingImage, RCS_MAX_IMAGE_BYTES, type RcsImageResult, type RcsIncomingImage } from "./rcsImportMedia";
+import { parseIncomingImage, RCS_ALLOWED_IMAGE_MIME, RCS_IMAGE_TYPE_REFUSED, RCS_MAX_IMAGE_BYTES, type RcsImageResult, type RcsIncomingImage } from "./rcsImportMedia";
 import { NOT_PAIRED_MESSAGE, PAIR_HEADERS, type RcsPairingAuth } from "./rcsPairingAuth";
 import { isConversationId, RCS_EXCLUSIONS_MAX } from "./rcsExclusions";
 import type { RcsImportResult, RcsIncomingChat } from "./rcsImportStore";
@@ -387,6 +387,16 @@ async function readJson(
   }
 }
 
+/**
+ * SR C5 (CASA): a general rate limit per route group — one fixed window a
+ * minute each. Generous: a Sync never reaches them in normal use (a photo
+ * heavy chat sends one /attachment per photo, hence its own bucket); the
+ * extension backs off and retries on 429, it never fails the chat for it.
+ */
+export const RCS_RATE_WINDOW_MS = 60_000;
+export const RCS_RATE_LIMITS = { attachment: 1200, job: 600, link: 60, other: 300 } as const;
+export type RcsRateGroup = keyof typeof RCS_RATE_LIMITS;
+
 const JOB_ROUTE = /^\/job\/([0-9a-fA-F-]{36})(?:\/(claim|match|chat|attachment|progress|finish|error|cancel))?$/;
 
 const silentLogger: RcsBridgeLogger = { info: () => {}, warn: () => {}, error: () => {} };
@@ -394,6 +404,29 @@ const silentLogger: RcsBridgeLogger = { info: () => {}, warn: () => {}, error: (
 export class RcsExtensionBridge {
   /** SR: the last /focus honoured (its rate limit). */
   private lastFocusAt: number | null = null;
+  /** SR C5: each route group's current window (start, requests so far). */
+  private rateWindows = new Map<RcsRateGroup, { start: number; count: number }>();
+
+  /** SR C5: which bucket a path counts against. */
+  static rateGroup(path: string): RcsRateGroup {
+    const job = JOB_ROUTE.exec(path);
+    if (job) return job[2] === "attachment" ? "attachment" : "job";
+    if (path.startsWith("/link/") || path.startsWith("/pair/")) return "link";
+    return "other";
+  }
+
+  /** SR C5: count one request; → ms until its window opens again when over the limit, else null. */
+  private overRateLimit(path: string): number | null {
+    const group = RcsExtensionBridge.rateGroup(path);
+    const at = this.options.now ? this.options.now() : Date.now();
+    let w = this.rateWindows.get(group);
+    if (!w || at - w.start >= RCS_RATE_WINDOW_MS) {
+      w = { start: at, count: 0 };
+      this.rateWindows.set(group, w);
+    }
+    w.count += 1;
+    return w.count > RCS_RATE_LIMITS[group] ? Math.max(1, w.start + RCS_RATE_WINDOW_MS - at) : null;
+  }
   private server: http.Server | null = null;
   private state: RcsBridgeState = "stopped";
   private reason: string | undefined;
@@ -743,6 +776,16 @@ export class RcsExtensionBridge {
         const gate = await this.authGate(req, res, path);
         if (gate === "handled") return;
         signedPairing = gate;
+      }
+
+      // SR C5: the rate limit — after the gate, so a linked caller's 429 is
+      // signed like any reply (the extension backs off and retries).
+      const retryAfterMs = this.overRateLimit(path);
+      if (retryAfterMs !== null) {
+        this.logger.warn(`[RcsBridge] Rate limited: ${RcsExtensionBridge.rateGroup(path)}`);
+        res.setHeader("Retry-After", String(Math.ceil(retryAfterMs / 1000)));
+        sendJson(res, 429, { error: "rate_limited", retryAfterMs });
+        return;
       }
 
       // BACKLOG-3641: the page's "Open Keepr" button. Same Host/Origin checks as
@@ -1173,6 +1216,11 @@ export class RcsExtensionBridge {
         const image = parseIncomingImage(body);
         if (typeof image === "string") {
           sendJson(res, 400, { error: "bad_request", message: image });
+          return;
+        }
+        // SR C5 (CASA N21): an allow-list of image types; nothing else is stored.
+        if (!RCS_ALLOWED_IMAGE_MIME.has(image.mimeType.toLowerCase())) {
+          sendJson(res, 415, { error: "unsupported_media_type", message: RCS_IMAGE_TYPE_REFUSED });
           return;
         }
         if (!job.isMatched(image.conversationId)) {

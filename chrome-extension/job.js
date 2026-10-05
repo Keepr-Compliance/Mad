@@ -100,6 +100,9 @@
   }
 
   /** A localhost blip: one more try after this long before Keepr counts as gone. */
+  /** SR C5: on 429, wait (Keepr's retryAfterMs, at most a minute) and resend — up to this many times. */
+  var RATE_LIMIT_MAX_WAITS = 30;
+  var RATE_LIMIT_DEFAULT_WAIT_MS = 60000;
   var TRANSPORT_RETRY_MS = 1500;
   /** Circuit breaker: this many chats IN A ROW refused by Keepr end the run. */
   var KEEPR_ERROR_CHATS_MAX = 3;
@@ -771,6 +774,13 @@
       var reply = await env.api(method, path, body);
       if (reply && reply.status === 0) {
         await env.sleep(TRANSPORT_RETRY_MS);
+        reply = await env.api(method, path, body);
+      }
+      // SR C5: Keepr's rate limit (429) — wait for its window and send again;
+      // never a failed chat for it.
+      for (var waits = 0; reply && reply.status === 429 && waits < RATE_LIMIT_MAX_WAITS; waits++) {
+        var after = reply.body && typeof reply.body.retryAfterMs === "number" ? reply.body.retryAfterMs : RATE_LIMIT_DEFAULT_WAIT_MS;
+        await env.sleep(Math.min(Math.max(after, 250), RATE_LIMIT_DEFAULT_WAIT_MS));
         reply = await env.api(method, path, body);
       }
       var kind = transportKind(reply);

@@ -38,7 +38,7 @@ import * as crypto from "crypto";
 import * as path from "path";
 
 import type { RcsChatPeople, RcsImportResult, RcsIncomingChat, RcsIncomingMessage } from "./rcsImportStore";
-import { RCS_MAX_IMAGE_BYTES, rcsImageExt, type RcsImageResult, type RcsIncomingImage } from "./rcsImportMedia";
+import { RCS_ALLOWED_IMAGE_MIME, RCS_MAX_IMAGE_BYTES, rcsImageExt, type RcsImageResult, type RcsIncomingImage } from "./rcsImportMedia";
 
 /** Staged image bytes per job. Over it, an image is refused as too large (counted, never silent). */
 export const RCS_CACHE_STAGING_MAX_BYTES = 2 * 1024 * 1024 * 1024;
@@ -383,7 +383,7 @@ export class RcsCacheStaging {
   async stageImage(jobId: string, image: RcsIncomingImage, chatHash: string): Promise<RcsImageResult> {
     if (this.ended.has(jobId)) throw new RcsStagingJobEndedError();
     const mimeType = image.mimeType.toLowerCase();
-    if (!mimeType.startsWith("image/")) return { stored: false, reason: "not_an_image" };
+    if (!RCS_ALLOWED_IMAGE_MIME.has(mimeType)) return { stored: false, reason: "not_an_image" };
     const bytes = Buffer.from(image.base64, "base64");
     if (bytes.length === 0) return { stored: false, reason: "empty" };
     if (bytes.length > RCS_MAX_IMAGE_BYTES) return { stored: false, reason: "too_large" };

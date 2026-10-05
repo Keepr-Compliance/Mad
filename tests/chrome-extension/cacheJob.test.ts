@@ -456,6 +456,42 @@ describe("runJob: a cache Sync", () => {
       expect(details(t)).toContain("Photos: 1 saved");
     });
 
+    // SR C5: Keepr's rate limit (429) is back-off-and-retry — never a failed
+    // chat. A 300-photo chat with every third image answered 429 first.
+    // Mutations: 429 not retried → red (photos failed); no wait → red.
+    it("a 300-photo chat under Keepr's rate limit: waits, resends, all 300 saved, the chat not failed", async () => {
+      const t = oneChat();
+      withMatch(t, { keepPhotos: true });
+      const srcs = Array.from({ length: 300 }, (_v, i) => "blob:p" + i);
+      (t.env as Record<string, unknown>).extract = () => ({
+        conversationId: id(0), title: "x", skipped: { noDate: 0, noText: 0 },
+        messages: [{ msgId: "m1", direction: "inbound", sender: "x", text: "", sentAt: new Date(NOW - DAY).toISOString(), transport: "rcs", imageSrcs: srcs, files: [] }],
+      });
+      const base = t.env.api;
+      let attachments = 0;
+      t.env.api = async (method: string, p: string, body?: Record<string, unknown>) => {
+        if (p.endsWith("/attachment")) {
+          attachments += 1;
+          if (attachments % 3 === 1) {
+            t.calls.push([method, p, body]);
+            return { ok: false, status: 429, body: { error: "rate_limited", retryAfterMs: 5000 } } as never;
+          }
+        }
+        return base(method, p, body);
+      };
+      const waits: number[] = [];
+      t.env.sleep = async (ms?: number) => {
+        waits.push(Number(ms));
+      };
+      await job.runJob(JOB, t.env);
+      expect(media(t).photos).toMatchObject({ seen: 300, saved: 300, failed: 0 });
+      expect(waits.filter((w) => w === 5000).length).toBe(150);
+      expect(t.calls.filter(([, p]) => p.endsWith("/chat"))).toHaveLength(1);
+      const finish = t.calls.find(([, p]) => p.endsWith("/finish"))![2] as { notReached?: Array<{ name: string }> };
+      // The photo chat (the only one with numbers) is not among the chats not reached.
+      expect((finish.notReached ?? []).map((n) => n.name)).not.toContain(ROWS[0][0]);
+    });
+
     it("a photo that didn't load is retried at the end and recovered", async () => {
       const t = oneChat();
       withMatch(t, { keepPhotos: true });
