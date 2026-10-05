@@ -86,7 +86,7 @@ const Database = require(
 ) as typeof import("better-sqlite3-multiple-ciphers");
 import type { Database as DatabaseType } from "better-sqlite3";
 
-import { auditWindowEnd, resolveExportPlan } from "../services/exportPlan";
+import { auditWindowEnd, auditWindowStart, resolveExportPlan } from "../services/exportPlan";
 import { getTransactionMessages } from "../services/db/submissionDbService";
 import { auditPeriodFromRow } from "../services/submissionAuditPeriod";
 import { findTextMessagesByPhones } from "../services/messageMatchingService";
@@ -387,6 +387,24 @@ describe("BACKLOG-2788 — every closing-day bound derives from the one helper",
     // Independently of the helper: it is the end of the LOCAL closing day.
     expect(new Date(bound).getHours()).toBe(23);
     expect(new Date(bound).getDate()).toBe(29);
+  });
+
+  it("auto-link binds the START as local 00:00 of the start day, as ISO (BACKLOG-3734)", async () => {
+    await findTextMessagesByPhones(
+      "user-1",
+      [{ contactId: "c1", phone: "+15555550100" }],
+      "T1",
+      { startDate: STARTED_AT },
+    );
+    expect(mockDbAll).toHaveBeenCalledTimes(1);
+    const [sql, params] = mockDbAll.mock.calls[0] as [string, string[]];
+    expect(sql).toContain("m.sent_at >= ?");
+    const bound = params[params.length - 1];
+    // The raw "2026-01-01" the pre-3734 site bound is not an ISO instant, so a
+    // revert reds this in EVERY zone, UTC included.
+    expect(bound).toBe(auditWindowStart(STARTED_AT)!.toISOString());
+    expect(new Date(bound).getHours()).toBe(0);
+    expect(new Date(bound).getDate()).toBe(1);
   });
 
   it("auto-link no longer builds its bound by string concatenation", async () => {
