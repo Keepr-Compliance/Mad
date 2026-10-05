@@ -246,6 +246,44 @@ describe("the worker's link with Keepr (BACKLOG-3666, C1)", () => {
     ]);
   });
 
+  // SR: the page's numbers clamped to 0..20000; bounds Chrome refuses →
+  // once more without placement, so the window always opens. Mutations: no
+  // clamp; no retry → red.
+  it("screen numbers clamped; refused bounds → the window still opens, unplaced", async () => {
+    const created: Array<Record<string, unknown>> = [];
+    let refuseBounds = false;
+    const w = await worker(undefined, {
+      windows: {
+        create: async (o: Record<string, unknown>) => {
+          created.push(o);
+          if (refuseBounds && "left" in o) throw new Error("Invalid value for bounds");
+          return { id: 9 };
+        },
+        update: async () => {
+          throw new Error("gone");
+        },
+        onRemoved: { addListener: () => undefined },
+      },
+    });
+    const realNow = Date.now;
+    let clock = 5_000_000;
+    Date.now = () => clock;
+    try {
+      await w.send({ type: "keepr-open-link-window", screen: { left: -500, top: -10, width: 99999, height: 1e9 } });
+      expect(created[0]).toMatchObject({ left: 20000 - 380 - 24, top: Math.round((20000 - 380) / 2) });
+      refuseBounds = true;
+      clock += 5_000;
+      const r = await w.send({ type: "keepr-open-link-window", screen: { left: 0, top: 0, width: 1920, height: 1080 } });
+      expect(r).toEqual({ ok: true, how: "window" });
+      expect(created.slice(1)).toEqual([
+        { url: `chrome-extension://${EXTENSION_ID}/link.html`, type: "popup", width: 380, height: 380, focused: true, left: 1920 - 380 - 24, top: 350 },
+        { url: `chrome-extension://${EXTENSION_ID}/link.html`, type: "popup", width: 380, height: 380, focused: true },
+      ]);
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
   it("no usable screen numbers: Chrome's default place (never NaN)", async () => {
     const created: Array<Record<string, unknown>> = [];
     const w = await worker(undefined, {

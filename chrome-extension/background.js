@@ -399,9 +399,14 @@ const LINK_WINDOW_EDGE_GAP = 24;
  * screen, vertically centred — to the right of Keepr's centred modal. Only
  * finite numbers are used; anything else → Chrome's default place.
  */
+/** The page's screen numbers are clamped to this range (SR). */
+const LINK_SCREEN_MAX = 20000;
+
 function linkWindowPlacement(screen) {
-  const s = screen && typeof screen === "object" ? screen : {};
+  const raw = screen && typeof screen === "object" ? screen : {};
   const ok = (v) => typeof v === "number" && Number.isFinite(v);
+  const clamp = (v) => (ok(v) ? Math.min(LINK_SCREEN_MAX, Math.max(0, v)) : undefined);
+  const s = { left: clamp(raw.left), top: clamp(raw.top), width: clamp(raw.width), height: clamp(raw.height) };
   if (!ok(s.width) || !ok(s.height) || s.width < LINK_WINDOW_SIZE.width || s.height < LINK_WINDOW_SIZE.height) return {};
   const left = (ok(s.left) ? s.left : 0) + s.width - LINK_WINDOW_SIZE.width - LINK_WINDOW_EDGE_GAP;
   const top = (ok(s.top) ? s.top : 0) + Math.round((s.height - LINK_WINDOW_SIZE.height) / 2);
@@ -421,16 +426,20 @@ async function openLinkWindow(now, screen) {
       linkWindowId = null; // closed meanwhile
     }
   }
-  try {
-    const win = await chrome.windows.create({
-      url: chrome.runtime.getURL("link.html"), type: "popup", width: LINK_WINDOW_SIZE.width, height: LINK_WINDOW_SIZE.height, focused: true,
-      ...linkWindowPlacement(screen),
-    });
-    linkWindowId = win && typeof win.id === "number" ? win.id : null;
-    return { ok: true, how: "window" };
-  } catch (_err) {
-    return { ok: false, error: "no_window" };
+  const base = { url: chrome.runtime.getURL("link.html"), type: "popup", width: LINK_WINDOW_SIZE.width, height: LINK_WINDOW_SIZE.height, focused: true };
+  const placement = linkWindowPlacement(screen);
+  const tries = Object.keys(placement).length > 0 ? [{ ...base, ...placement }, base] : [base];
+  // Chrome refusing the bounds never stops the window: once more, unplaced.
+  for (const opts of tries) {
+    try {
+      const win = await chrome.windows.create(opts);
+      linkWindowId = win && typeof win.id === "number" ? win.id : null;
+      return { ok: true, how: "window" };
+    } catch (_err) {
+      // next try
+    }
   }
+  return { ok: false, error: "no_window" };
 }
 
 if (chrome.windows && chrome.windows.onRemoved && typeof chrome.windows.onRemoved.addListener === "function") {
