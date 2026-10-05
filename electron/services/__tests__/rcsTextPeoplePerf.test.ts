@@ -31,7 +31,7 @@ jest.mock("../logService", () => {
 });
 
 import { setDb } from "../db/core/dbConnection";
-import { getTextDerivedPeople, TEXT_PEOPLE_QUERIES, TEXT_PEOPLE_CAP } from "../db/rcsChatPeopleDbService";
+import { getTextDerivedPeople, recordRcsChatPeople, TEXT_PEOPLE_QUERIES, TEXT_PEOPLE_CAP } from "../db/rcsChatPeopleDbService";
 
 const PRODUCTION_SCHEMA = nodePath.join(__dirname, "..", "..", "database", "schema.sql");
 const USER = "user-perf";
@@ -151,5 +151,37 @@ describe("the same people as before", () => {
     expect(getTextDerivedPeople(USER).map((p) => p.id)).toEqual(["msg_tel_+15555550102"]);
     db.prepare("INSERT INTO rcs_chat_exclusions (id, user_id, chat_hash) VALUES ('x1', ?, 'h-b')").run(USER);
     expect(getTextDerivedPeople(USER)).toEqual([]);
+  });
+});
+
+// SR on 351c5d02e: an in-place phone edit (contact_phones has no updated_at)
+// and a message import refresh the cache. Mutations: the phone digits not in
+// the fingerprint; no invalidation on import → red.
+describe("cache freshness", () => {
+  function add(chat: string, number: string, name: string | null, at: string) {
+    db.prepare("INSERT INTO rcs_chat_people (user_id, chat_hash, number_e164, name, last_message_at) VALUES (?, ?, ?, ?, ?)").run(USER, chat, number, name, at);
+  }
+
+  it("a contact's phone edited in place: suppression follows at once", () => {
+    add("h-a", "+15555550101", "Test Person A", "2026-09-05T10:00:00.000Z");
+    db.prepare("INSERT INTO contacts (id, user_id, display_name, source, is_imported) VALUES ('c1', ?, 'X', 'manual', 1)").run(USER);
+    db.prepare("INSERT INTO contact_phones (id, contact_id, phone_e164, phone_display) VALUES ('p1', 'c1', '+15555550109', NULL)").run();
+    expect(getTextDerivedPeople(USER).map((p) => p.id)).toEqual(["msg_tel_+15555550101"]);
+    db.prepare("UPDATE contact_phones SET phone_e164 = '+15555550101' WHERE id = 'p1'").run();
+    expect(getTextDerivedPeople(USER)).toEqual([]);
+    db.prepare("UPDATE contact_phones SET phone_e164 = '+15555550109' WHERE id = 'p1'").run();
+    expect(getTextDerivedPeople(USER).map((p) => p.id)).toEqual(["msg_tel_+15555550101"]);
+    // Only the display form edited in place.
+    db.prepare("UPDATE contact_phones SET phone_display = '(555) 555-0101' WHERE id = 'p1'").run();
+    expect(getTextDerivedPeople(USER)).toEqual([]);
+  });
+
+  it("messages imported for a chat: the count is fresh (the store records the chat's people)", () => {
+    add("h-a", "+15555550101", "Test Person A", "2026-09-05T10:00:00.000Z");
+    expect(getTextDerivedPeople(USER)[0].communication_count).toBe(0);
+    db.prepare("INSERT INTO messages (id, user_id, channel, direction, body_text, sent_at, thread_id) VALUES ('m1', ?, 'sms', 'inbound', 'x', '2026-09-06', 'gmweb2-h-a')").run(USER);
+    // The import path: the chat's messages, then its people (same second).
+    recordRcsChatPeople(USER, "h-a", [{ number: "+15555550101", name: "Test Person A" }], "2026-09-05T10:00:00.000Z");
+    expect(getTextDerivedPeople(USER)[0].communication_count).toBe(1);
   });
 });

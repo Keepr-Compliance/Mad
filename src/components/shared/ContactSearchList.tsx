@@ -23,7 +23,7 @@
  */
 
 import React, { useState, useMemo, useCallback, useRef, useEffect, useLayoutEffect } from "react";
-import { isUnsavedContactId } from "../../utils/unsavedContactId";
+import { isUnsavedContact } from "../../utils/unsavedContactId";
 import { BADGE_LABELS, ContactRow } from "./ContactRow";
 import { GroupedMultiSelect } from "./GroupedMultiSelect";
 import type { ExtendedContact } from "../../types/components";
@@ -1213,7 +1213,7 @@ export function ContactSearchList({
           visibleContacts.map((contact, index) => {
             // FK fix: a record with no row (msg_ / email_) is always an
             // address-book row, whichever list it came in — picking imports it.
-            const isExternal = externalSet.has(contact) || isUnsavedContactId(contact.id);
+            const isExternal = externalSet.has(contact) || isUnsavedContact(contact);
             const isSelected =
               selectedIds.includes(contact.id) ||
               (!!activeContactId && activeContactId === contact.id);

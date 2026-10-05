@@ -12,7 +12,7 @@
  * between steps 2 and 3.
  */
 import React, { useState, useMemo, useCallback, useEffect, useRef, useContext } from "react";
-import { isUnsavedContactId } from "../../utils/unsavedContactId";
+import { isUnsavedContact } from "../../utils/unsavedContactId";
 import {
   buildRoleOptions,
   resolveDefaultContactRole,
@@ -661,7 +661,7 @@ function ContactAssignmentStep({
       // Check if contact is already in our DB by matching against the contacts list
       // FK fix: a made-up msg_ / email_ id is never "in the database", even
       // when it arrived in the saved list — it is imported first.
-      const isInDatabase = !isUnsavedContactId(contact.id) && contacts.some(c => c.id === contact.id);
+      const isInDatabase = !isUnsavedContact(contact) && contacts.some(c => c.id === contact.id);
       const isExternalContact = !isInDatabase;
 
       if (isExternalContact) {

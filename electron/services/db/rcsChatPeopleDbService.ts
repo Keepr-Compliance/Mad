@@ -70,6 +70,10 @@ export function recordRcsChatPeople(
   rows: readonly RcsChatPersonRow[],
   lastMessageAt: string | null,
 ): void {
+  // SR: a chat was just stored (its messages imported): the per-thread
+  // message counts — and a same-second upsert the fingerprint cannot see —
+  // must not be served from the cache.
+  invalidateTextPeopleCache(userId);
   for (const r of rows) {
     dbRun(
       sql`INSERT INTO rcs_chat_people (user_id, chat_hash, number_e164, name, last_message_at, updated_at)
@@ -174,7 +178,13 @@ const FINGERPRINT_SQL = sql`
   SELECT
     (SELECT COUNT(*) || ':' || IFNULL(MAX(updated_at), '') || ':' || IFNULL(MAX(rowid), 0) FROM rcs_chat_people WHERE user_id = ?) AS people,
     (SELECT COUNT(*) || ':' || IFNULL(MAX(updated_at), '') || ':' || IFNULL(MAX(rowid), 0) FROM contacts WHERE user_id = ?) AS contacts,
-    (SELECT COUNT(*) || ':' || IFNULL(MAX(cp.rowid), 0) FROM contacts c JOIN contact_phones cp ON cp.contact_id = c.id WHERE c.user_id = ?) AS phones,
+    -- SR: contact_phones has no updated_at, so an in-place edit of a number
+    -- changes neither the count nor the max rowid: the digits themselves are
+    -- summed (one pass over this user's phones; no cross product).
+    (SELECT COUNT(*) || ':' || IFNULL(MAX(cp.rowid), 0) || ':' ||
+            TOTAL(CAST(substr(replace(cp.phone_e164, '+', ''), -10) AS INTEGER)) || ':' ||
+            TOTAL(CAST(substr(replace(replace(replace(replace(replace(IFNULL(cp.phone_display, ''), '+', ''), '-', ''), ' ', ''), '(', ''), ')', ''), -10) AS INTEGER))
+       FROM contacts c JOIN contact_phones cp ON cp.contact_id = c.id WHERE c.user_id = ?) AS phones,
     (SELECT COUNT(*) FROM rcs_chat_exclusions WHERE user_id = ?) AS excluded,
     (SELECT IFNULL(MAX(own_number), '') FROM rcs_cache_state WHERE user_id = ?) AS own`;
 
