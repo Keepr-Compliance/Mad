@@ -7,11 +7,12 @@ import { randomUUID } from "crypto";
 import { ensureDb, dbTransaction } from "./core/dbConnection";
 // BACKLOG-2781: the closing-day end bound is the export resolver's canonical
 // one, so the Attachments tab and the submission package agree on where the
-// closing day ends. LATENT today — the tab's only caller
-// (TransactionDetails.tsx) passes no audit window, and deliberately so: the tab
-// shows all linked content, matching the Emails/Texts tabs. Fixed anyway so the
-// next caller that supplies a window does not inherit the wrong day.
+// closing day ends. Live: the tab (TransactionDetails.tsx, via
+// useTransactionAllAttachments) lists every linked attachment, and makes a
+// second, windowed fetch to mark which of them fall inside the audit window
+// (BACKLOG-3730). That windowed fetch uses this bound.
 import { auditWindowEnd } from "../exportPlan";
+import { selectTextAttachmentsForMessages } from "./textAttachmentLookupSql";
 
 // ============================================
 // ATTACHMENT CRUD OPERATIONS
@@ -584,10 +585,10 @@ export interface TransactionAttachmentRow {
  *
  * Linkage mirrors the per-tab display queries:
  *  - Email: `communications.email_id = emails.id`.
- *  - Text : `attachments.message_id = messages.id` joined through communications
- *    (message_id OR thread_id), PLUS an `external_message_id` fallback for rows
- *    whose `message_id` was never backfilled (see
- *    {@link getAttachmentsForMessageWithFallback}).
+ *  - Text : the transaction's texts (communications message_id OR thread_id),
+ *    then the shared lookup `selectTextAttachmentsForMessages` — the rule the
+ *    Messages view and the submit use (BACKLOG-3731). `message_id` on a text
+ *    row is the text it resolved to.
  *
  * The optional audit window filters on the owning email/message `sent_at`. Callers
  * that want the same "everything linked" view the Emails/Texts tabs show should
@@ -640,19 +641,19 @@ export function getTransactionAllAttachments(
     )
     .all(transactionId, ...emailFilter.params) as RawRow[];
 
-  // ---- Text attachments (direct message_id link) -------------------------
+  // ---- Text attachments (BACKLOG-3731: the shared Messages-view lookup) ---
+  // The window's texts, with the columns the tab shows, then the one lookup
+  // the Messages view and the submit use: direct message_id rows, plus the
+  // Apple-id fallback for texts with no direct row. Read-only.
   const textFilter = buildDateFilter("m.sent_at");
-  const textRows = db
+  const textMessages = db
     .prepare(
       `SELECT DISTINCT
-         a.id, a.filename, a.mime_type, a.file_size_bytes, a.storage_path,
-         a.created_at, a.email_id, a.message_id,
+         m.id                AS id,
          m.sent_at           AS source_date,
          m.direction         AS direction,
-         NULL                AS context_subject,
          m.participants_flat AS context_sender
-       FROM attachments a
-       INNER JOIN messages m ON a.message_id = m.id
+       FROM messages m
        INNER JOIN communications c ON (
          (c.message_id IS NOT NULL AND c.message_id = m.id)
          OR
@@ -661,34 +662,32 @@ export function getTransactionAllAttachments(
        WHERE c.transaction_id = ?
          ${textFilter.clause}`
     )
-    .all(transactionId, ...textFilter.params) as RawRow[];
-
-  // ---- Text attachments (external_message_id fallback) -------------------
-  // Some attachments never had their message_id backfilled (only the macOS GUID
-  // in external_message_id). Mirror getAttachmentsForMessageWithFallback so those
-  // still surface on the transaction they belong to.
-  const fallbackFilter = buildDateFilter("m.sent_at");
-  const textFallbackRows = db
-    .prepare(
-      `SELECT DISTINCT
-         a.id, a.filename, a.mime_type, a.file_size_bytes, a.storage_path,
-         a.created_at, a.email_id, a.message_id,
-         m.sent_at           AS source_date,
-         m.direction         AS direction,
-         NULL                AS context_subject,
-         m.participants_flat AS context_sender
-       FROM attachments a
-       INNER JOIN messages m ON a.external_message_id = m.external_id
-       INNER JOIN communications c ON (
-         (c.message_id IS NOT NULL AND c.message_id = m.id)
-         OR
-         (c.message_id IS NULL AND c.thread_id IS NOT NULL AND c.thread_id = m.thread_id)
-       )
-       WHERE c.transaction_id = ?
-         AND a.message_id IS NULL
-         ${fallbackFilter.clause}`
-    )
-    .all(transactionId, ...fallbackFilter.params) as RawRow[];
+    .all(transactionId, ...textFilter.params) as {
+    id: string;
+    source_date: string | null;
+    direction: string | null;
+    context_sender: string | null;
+  }[];
+  const textMessageById = new Map(textMessages.map((m) => [m.id, m]));
+  const textRows: RawRow[] = selectTextAttachmentsForMessages<
+    RawRow & { id: string; message_id: string | null }
+  >(db, textMessages.map((m) => m.id)).map(({ row, resolved_message_id }) => {
+    const m = textMessageById.get(resolved_message_id);
+    return {
+      id: row.id,
+      filename: row.filename,
+      mime_type: row.mime_type,
+      file_size_bytes: row.file_size_bytes,
+      storage_path: row.storage_path,
+      created_at: row.created_at,
+      email_id: row.email_id,
+      message_id: resolved_message_id,
+      source_date: m?.source_date ?? null,
+      direction: m?.direction ?? null,
+      context_subject: null,
+      context_sender: m?.context_sender ?? null,
+    } as RawRow;
+  });
 
   // Merge, tag source, dedupe by attachment id (email ids and text ids are
   // disjoint in practice; the Map guards against any accidental double-match).
@@ -696,7 +695,7 @@ export function getTransactionAllAttachments(
   for (const r of emailRows) {
     if (!byId.has(r.id)) byId.set(r.id, { ...r, source: "email" });
   }
-  for (const r of [...textRows, ...textFallbackRows]) {
+  for (const r of textRows) {
     if (!byId.has(r.id)) byId.set(r.id, { ...r, source: "text" });
   }
 

@@ -12,7 +12,10 @@
  *     TZ=America/Chicago   2026-07-29T04:59:59.999Z   (nearly the whole day cut)
  *     TZ=UTC               2026-07-29T23:59:59.999Z   (still short of the export bound)
  *
- * All four now consume the canonical `auditWindowEnd()` the export surfaces use.
+ * All of them now consume the canonical `auditWindowEnd()` the export surfaces
+ * use. Since BACKLOG-3731 there are three window queries, not four: the text
+ * attachment filter no longer has its own copy, it takes the texts that
+ * `getTransactionMessages` (site 1) returns.
  *
  * ## BACKLOG-2788 moved that bound, and this suite with it
  *
@@ -130,6 +133,7 @@ function createSchema(db: DatabaseType): void {
     CREATE TABLE messages (
       id TEXT PRIMARY KEY,
       thread_id TEXT,
+      external_id TEXT,
       sent_at DATETIME,
       direction TEXT,
       participants_flat TEXT
@@ -145,6 +149,7 @@ function createSchema(db: DatabaseType): void {
       id TEXT PRIMARY KEY,
       message_id TEXT,
       email_id TEXT,
+      external_message_id TEXT,
       filename TEXT NOT NULL,
       mime_type TEXT,
       file_size_bytes INTEGER,
@@ -208,7 +213,7 @@ describe("submissionDbService — closing-day audit window (BACKLOG-2781)", () =
   });
 
   // -------------------------------------------------------------------------
-  // Site 1 — getTransactionMessages (submissionDbService.ts:51)
+  // Site 1 — getTransactionMessages (submissionDbService.ts:67)
   // -------------------------------------------------------------------------
   it("getTransactionMessages sweeps both edges of the closing-day bound", () => {
     const rows = getTransactionMessages("T1", auditStart, auditEnd);
@@ -226,7 +231,7 @@ describe("submissionDbService — closing-day audit window (BACKLOG-2781)", () =
   });
 
   // -------------------------------------------------------------------------
-  // Site 2 — getTransactionEmails (submissionDbService.ts:85)
+  // Site 2 — getTransactionEmails (submissionDbService.ts:100)
   // -------------------------------------------------------------------------
   it("getTransactionEmails sweeps both edges of the closing-day bound", () => {
     const rows = getTransactionEmails("T1", auditStart, auditEnd);
@@ -241,10 +246,11 @@ describe("submissionDbService — closing-day audit window (BACKLOG-2781)", () =
   });
 
   // -------------------------------------------------------------------------
-  // Site 3 — getTransactionAttachments, TEXT filter (submissionDbService.ts:114)
+  // getTransactionAttachments, TEXT attachments — no window of their own.
   //
-  // Sites 3 and 4 are two INDEPENDENT copies inside one function, so they get
-  // two independent assertions: reverting one must red only its own test.
+  // Since BACKLOG-3731 they are the attachments of the texts site 1 returns, so
+  // this sweep guards that the submit's text attachments still honour the
+  // closing-day bound through site 1. Reverting site 1 reds this test too.
   // -------------------------------------------------------------------------
   it("getTransactionAttachments sweeps the bound on the TEXT attachment filter", () => {
     const rows = getTransactionAttachments("T1", auditStart, auditEnd);
@@ -260,7 +266,7 @@ describe("submissionDbService — closing-day audit window (BACKLOG-2781)", () =
   });
 
   // -------------------------------------------------------------------------
-  // Site 4 — getTransactionAttachments, EMAIL filter (submissionDbService.ts:146)
+  // Site 3 — getTransactionAttachments, EMAIL filter (submissionDbService.ts:139)
   // -------------------------------------------------------------------------
   it("getTransactionAttachments sweeps the bound on the EMAIL attachment filter", () => {
     const rows = getTransactionAttachments("T1", auditStart, auditEnd);

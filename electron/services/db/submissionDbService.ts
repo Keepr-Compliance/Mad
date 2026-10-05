@@ -7,8 +7,22 @@ import type { Message, Attachment } from "../../types";
 import { ensureDb } from "./core/dbConnection";
 // BACKLOG-2781: the closing-day end bound is the export resolver's, not a
 // local re-derivation. Each call below is its own call site on purpose —
-// four independent queries, four independent regressions to guard.
+// three independent queries (texts, emails, email attachments), three
+// independent regressions to guard. Text attachments have no window of their
+// own: they follow the texts `getTransactionMessages` returns (BACKLOG-3731).
 import { auditWindowEnd } from "../exportPlan";
+import { selectTextAttachmentsForMessages } from "./textAttachmentLookupSql";
+
+/**
+ * An attachment row as the submit sees it. Text rows carry
+ * `resolved_message_id` — the text they belong to under the shared lookup
+ * (BACKLOG-3731). Key text rows on it, never on `message_id`.
+ */
+export type SubmissionAttachment = Attachment & {
+  email_id?: string | null;
+  external_message_id?: string | null;
+  resolved_message_id?: string;
+};
 
 // ============================================
 // SUBMISSION QUERIES (TASK-2100)
@@ -101,39 +115,19 @@ export function getTransactionAttachments(
   transactionId: string,
   auditStartDate?: Date | null,
   auditEndDate?: Date | null
-): Attachment[] {
+): SubmissionAttachment[] {
   const db = ensureDb();
 
-  // Build date filter conditions for text messages
-  let dateFilter = "";
-  const dateParams: string[] = [];
-  if (auditStartDate) {
-    dateFilter += " AND m.sent_at >= ?";
-    dateParams.push(auditStartDate.toISOString());
-  }
-  const textAttachmentsEnd = auditWindowEnd(auditEndDate);
-  if (textAttachmentsEnd) {
-    dateFilter += " AND m.sent_at <= ?";
-    dateParams.push(textAttachmentsEnd.toISOString());
-  }
-
-  // Query 1: Text message attachments
-  const textAttachmentsSql = `
-    SELECT DISTINCT a.*
-    FROM attachments a
-    INNER JOIN messages m ON a.message_id = m.id
-    INNER JOIN communications c ON (
-      (c.message_id IS NOT NULL AND c.message_id = m.id)
-      OR
-      (c.message_id IS NULL AND c.thread_id IS NOT NULL AND c.thread_id = m.thread_id)
-    )
-    WHERE c.transaction_id = ?
-    AND a.storage_path IS NOT NULL
-    ${dateFilter}
-  `;
-  const textAttachments = db
-    .prepare(textAttachmentsSql)
-    .all(transactionId, ...dateParams) as Attachment[];
+  // BACKLOG-3731: text attachments come from the shared lookup the Messages
+  // view uses, over exactly the texts this submission sends. Read-only.
+  const textMessageIds = getTransactionMessages(transactionId, auditStartDate, auditEndDate).map(
+    (m) => m.id
+  );
+  const textAttachments: SubmissionAttachment[] = selectTextAttachmentsForMessages<
+    SubmissionAttachment & { message_id: string }
+  >(db, textMessageIds)
+    .filter(({ row }) => typeof row.storage_path === "string")
+    .map(({ row, resolved_message_id }) => ({ ...row, resolved_message_id }));
 
   // Build email date filter
   let emailDateFilter = "";

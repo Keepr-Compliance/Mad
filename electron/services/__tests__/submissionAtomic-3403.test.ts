@@ -369,7 +369,7 @@ const EMAILS = [
   { id: "em-1", subject: "Inspection report", sent_at: "2026-09-22T10:00:00Z", has_attachments: 1, direction: "inbound", sender: "inspector@example.test" },
 ];
 const ATTACHMENTS = [
-  { id: "att-photo", message_id: "msg-1", email_id: null, filename: "IMG_0001.jpg", storage_path: "/local/IMG_0001.jpg", mime_type: "image/jpeg", created_at: "2026-09-20T10:00:00Z" },
+  { id: "att-photo", message_id: "msg-1", resolved_message_id: "msg-1", email_id: null, filename: "IMG_0001.jpg", storage_path: "/local/IMG_0001.jpg", mime_type: "image/jpeg", created_at: "2026-09-20T10:00:00Z" },
   { id: "att-pdf", message_id: null, email_id: "em-1", filename: "Inspection.pdf", storage_path: "/local/Inspection.pdf", mime_type: "application/pdf", created_at: "2026-09-22T10:00:00Z" },
 ];
 
@@ -483,6 +483,25 @@ describe("BACKLOG-3403 — a complete submission", () => {
     expect(att.get("att-photo")?.message_id).toBe(msgByLocal.get("msg-1"));
     expect(att.get("att-pdf")?.message_id).toBe(msgByLocal.get("em-1"));
     expect(msgByLocal.get("msg-1")).not.toBe(msgByLocal.get("em-1"));
+  });
+
+  /**
+   * BACKLOG-3731: a text photo whose stored `message_id` is stale (the shared
+   * lookup found it by the text's Apple id) is linked to the text it RESOLVED
+   * to, not to the stale id.
+   * MUTATION: ownerKey on `row.message_id` → message_id null → red.
+   */
+  it("D9 (3731): a photo found by the Apple id is linked to its resolved text", async () => {
+    (databaseService.getTransactionAttachments as jest.Mock).mockReturnValue([
+      { ...ATTACHMENTS[0], message_id: "gone-id", resolved_message_id: "msg-1" },
+      ATTACHMENTS[1],
+    ]);
+    const result = await submit();
+    expect(result).toMatchObject({ success: true, notIncluded: [] });
+    const msgByLocal = new Map(cloud.tables.submission_messages.map((m) => [m.local_message_id, m.id]));
+    const att = new Map(cloud.tables.submission_attachments.map((a) => [a.local_attachment_id, a]));
+    expect(msgByLocal.get("msg-1")).toBeDefined();
+    expect(att.get("att-photo")?.message_id).toBe(msgByLocal.get("msg-1"));
   });
 
   /**
