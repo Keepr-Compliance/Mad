@@ -22,6 +22,7 @@ import logger from '../utils/logger';
 // re-exported by the IPC contract). Type-only is the only safe direction across
 // the renderer-main boundary.
 import type { AttachmentsRefusedForSpace } from '@electron/types/ipc/window-api-messages';
+import { macMessagesSyncOn } from './importSourcePolicy';
 
 export type SyncType = 'contacts' | 'emails' | 'messages' | 'iphone'
   | 'reindex' | 'backup' | 'restore' | 'ccpa-export'
@@ -303,11 +304,11 @@ class SyncOrchestratorServiceClass {
   }
 
   /**
-   * Read the import source preference fresh from DB.
-   * Returns 'macos-native' (default) or 'iphone-sync'.
+   * Read the import source preference fresh from DB (the stored value, as is;
+   * see importSourcePolicy for how it is acted on).
    * TASK-1979: Read at sync time to avoid stale cached values.
    */
-  private async getImportSource(userId: string): Promise<ImportSource> {
+  private async getImportSource(userId: string): Promise<ImportSource | string> {
     try {
       const result = await window.api.preferences.get(userId);
       const prefs = result.preferences as UserPreferences | undefined;
@@ -757,10 +758,11 @@ class SyncOrchestratorServiceClass {
       this.registerSyncFunction('messages', async (userId, onProgress, options, signal) => {
         logger.info('[SyncOrchestrator] Starting messages sync, forceReimport:', !!options?.forceReimport);
 
-        // TASK-1979: Skip macOS Messages import when iphone-sync is selected
-        // BACKLOG-1467: Also skip when android-companion is selected
+        // TASK-1979: Skip macOS Messages import when iphone-sync is selected.
+        // BACKLOG-3749: only then — an Android or unknown source (the stored
+        // value is account-wide) never turns Mac Messages off.
         const importSource = await this.getImportSource(userId);
-        if (importSource !== 'macos-native') {
+        if (!macMessagesSyncOn(importSource)) {
           logger.info(`[SyncOrchestrator] Skipping macOS Messages (import source: ${importSource})`);
           onProgress(100);
           return;

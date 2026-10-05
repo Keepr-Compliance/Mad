@@ -163,7 +163,7 @@ describe("an older Keepr's claim (P9)", () => {
     expect(t.calls.filter(([, p]) => p.endsWith("/match"))).toHaveLength(0);
     const last = t.shown[t.shown.length - 1];
     expect(last.text).toBe("Keepr couldn't start this Sync.");
-    expect(last.extras?.details).toContain("This Keepr is older than the extension. Update Keepr, then Sync again.");
+    expect(last.extras?.details).toContain("Update Keepr, then Sync again.");
     expect(JSON.stringify(t.shown)).not.toContain("Nophone");
   });
 });

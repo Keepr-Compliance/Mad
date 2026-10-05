@@ -96,7 +96,7 @@
   };
   var FAILURE_FALLBACK = "The Sync stopped unexpectedly.";
   /** An older Keepr asked for a per-transaction Sync (removed 2026-10-05). */
-  var OLD_KEEPR_CLAIM = "This Keepr is older than the extension. Update Keepr, then Sync again.";
+  var OLD_KEEPR_CLAIM = "Update Keepr, then Sync again.";
   function failureLine(code) {
     return (code && Object.prototype.hasOwnProperty.call(FAILURE_LINES, code) && FAILURE_LINES[code]) || FAILURE_FALLBACK;
   }
@@ -241,11 +241,11 @@
   var SAVING_TEXT = "Saving in Keepr…";
 
   /**
-   * The Details lines (BACKLOG-3641). `nameOf` renders a chat or contact name:
-   * the name itself on screen, a salted tag in the Copy text.
+   * The Details lines (BACKLOG-3641). `nameOf` renders a chat name: the name
+   * itself on screen, a salted tag in the Copy text.
    *
    * @param {{listed: number, checked: number, matched: number, chats: number, messages: number,
-   *          images: number, notChecked: number, contactsWithoutPhone: number,
+   *          images: number, notChecked: number,
    *          removedByUser: number, notReached: Array<{name: string, reason: string, count?: number}>,
    *          notReachedMore: number}} s
    * @param {function(string): string} nameOf
@@ -1231,11 +1231,8 @@
       mustSee: pendingIds, mustSeeFloorMs: fullFloorMs,
       mustSeeDeep: dealIds, mustSeeDeepFloorMs: dealFloorMs,
     });
-    // BACKLOG-3645: the phone number is the gate, a name only orders the queue.
-    // Up to CHECK_ALL_MAX chats every chat is checked; above it, plausible names
-    // plus number-only chats, and the rest are reported as not checked.
-    // BACKLOG-3658: a cache Sync checks every chat newer than `since` in list
-    // order (no names), at most CACHE_CHECK_MAX; the rest are not checked.
+    // BACKLOG-3658: every chat newer than `since` is checked in list order (no
+    // names), at most CACHE_CHECK_MAX; the rest are reported as not checked.
     var plan = cachePlan(collected.conversations, floorMs, pendingFull, dealSet);
     var candidates = plan.queue;
     progress.listed = collected.conversations.length;

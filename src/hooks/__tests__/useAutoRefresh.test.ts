@@ -468,8 +468,11 @@ describe("useAutoRefresh", () => {
     });
   });
 
-  describe("BACKLOG-1467: skip macOS messages for Android users", () => {
-    it("should NOT include messages when import source is android-companion on macOS", async () => {
+  // BACKLOG-3749 (founder) reverses BACKLOG-1467's skip for Android sources:
+  // the stored source is account-wide, so an Android (or unknown) value never
+  // turns Mac Messages off on a Mac. iPhone Sync still does.
+  describe("Mac Messages and the import source (BACKLOG-1467, BACKLOG-3749)", () => {
+    it("an android-companion source on macOS still includes messages (BACKLOG-3749)", async () => {
       (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
 
       // Return android-companion as import source
@@ -495,9 +498,8 @@ describe("useAutoRefresh", () => {
         await Promise.resolve();
       });
 
-      // Should have contacts + emails but NOT messages
       expect(mockRequestSync).toHaveBeenCalledWith(
-        ['contacts', 'emails'],
+        ['contacts', 'emails', 'messages'],
         'test-user-123'
       );
     });
@@ -568,7 +570,7 @@ describe("useAutoRefresh", () => {
       );
     });
 
-    it("should skip messages via triggerRefresh when import source is android-companion", async () => {
+    it("triggerRefresh with an android-companion source still includes messages on macOS (BACKLOG-3749)", async () => {
       (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
 
       mockPreferencesGet.mockResolvedValue({
@@ -595,7 +597,7 @@ describe("useAutoRefresh", () => {
       });
 
       expect(mockRequestSync).toHaveBeenCalledWith(
-        ['contacts', 'emails'],
+        ['contacts', 'emails', 'messages'],
         'test-user-123'
       );
     });

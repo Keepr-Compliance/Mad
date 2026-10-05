@@ -599,7 +599,9 @@ describe("Settings", () => {
      * the test cannot pass by silently having rendered the other branch.
      */
     // BACKLOG-3659 P3d. Mutation: the android-messages-web branch removed → red.
-    it("Android with Google Messages: the Google Messages section, not the companion or macOS panel", async () => {
+    // BACKLOG-3749: on a Mac (this suite's platform) the macOS panel shows too —
+    // an Android source never turns Mac Messages off.
+    it("Android with Google Messages: the Google Messages section and, on a Mac, the macOS panel; no companion panel", async () => {
       jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
@@ -612,7 +614,31 @@ describe("Settings", () => {
 
       expect(await screen.findByTestId("google-messages-settings")).toBeInTheDocument();
       expect(screen.queryByTestId("android-block-actions")).not.toBeInTheDocument();
-      expect(screen.queryByTestId("macos-messages-import")).not.toBeInTheDocument();
+      expect(await screen.findByTestId("macos-messages-import")).toBeInTheDocument();
+      expect(screen.queryByText(/switch to macOS above/)).not.toBeInTheDocument();
+    });
+
+    // BACKLOG-3749: a stored value this build does not know (e.g. from a newer
+    // build) is read as the platform default — on a Mac, macOS Messages,
+    // checked and live; nothing is written back. Mutation: the raw value used
+    // (no radio checked, the panel disabled) → red.
+    it("an unknown stored source: on a Mac, the macOS radio is checked and its panel is live; nothing written", async () => {
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
+        success: true,
+        preferences: {
+          export: { defaultFormat: "combined-pdf" },
+          messages: { source: "some-future-source" },
+        },
+      });
+
+      const { container } = await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+
+      expect(await screen.findByTestId("macos-messages-import")).toBeInTheDocument();
+      await waitFor(() =>
+        expect((container.querySelector('input[value="macos-native"]') as HTMLInputElement | null)?.checked).toBe(true),
+      );
+      expect(screen.queryByTestId("google-messages-settings")).not.toBeInTheDocument();
+      expect(window.api.preferences.update).not.toHaveBeenCalled();
     });
 
     // SR C6 (founder): the Companion panel is no longer mounted — a stored
@@ -633,7 +659,8 @@ describe("Settings", () => {
       const gm = await screen.findByTestId("google-messages-settings");
       expect(screen.queryByTestId("android-block-preferences")).not.toBeInTheDocument();
       expect(screen.queryByTestId("android-block-actions")).not.toBeInTheDocument();
-      expect(screen.queryByTestId("macos-messages-import")).not.toBeInTheDocument();
+      // BACKLOG-3749: on a Mac the macOS panel shows too (after the GM section).
+      expect(screen.getByTestId("macos-messages-import")).toBeInTheDocument();
       expect(`sources then google messages: ${(sourcesBlock.compareDocumentPosition(gm) & 4) !== 0}`).toBe(
         "sources then google messages: true",
       );

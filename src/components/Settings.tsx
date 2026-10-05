@@ -25,6 +25,7 @@ import { settingsService } from '../services';
 import logger from '../utils/logger';
 import type { ImportSource } from '../services/settingsService';
 import { shownImportSource } from './settings/importSourceLabels';
+import { effectiveImportSource, macMessagesSyncOn } from '../services/importSourcePolicy';
 import type { PreferencesResult } from './settings/types';
 
 const SETTINGS_TABS = [
@@ -120,7 +121,8 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
             | undefined;
           if (messagesPrefs?.source) {
             // SR C6: a stored "android-companion" shows as Google Messages.
-            setActiveImportSource(shownImportSource(messagesPrefs.source));
+            // BACKLOG-3749: a value this build does not know → the platform default.
+            setActiveImportSource(shownImportSource(effectiveImportSource(messagesPrefs.source, isMacOS)));
           } else {
             // No saved source — check phoneType for default
             const phoneResult = await settingsService.getPhoneType(userId);
@@ -221,19 +223,20 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
                 <ImportSourceSettings userId={userId} onSourceChange={handleImportSourceChange} />
                 {/* BACKLOG-1937: iPhone USB toggle moved to the dedicated iPhone Sync category below.
                     SR C6 (founder): the Android Companion panel is no longer mounted. */}
-                {activeImportSource === 'android-messages-web' ? (
+                {activeImportSource === 'android-messages-web' && (
                   /* BACKLOG-3659 P3d: Android with Google Messages (Keepr's
                      extension): its status, auto-delete and its own reset. */
                   <GoogleMessagesSettings userId={userId} onOpenSyncAndroid={onLinkGoogleMessages} />
-                ) : (
-                  /* BACKLOG-2335: macOS panel renders for every non-Android
-                     source, but only macos-native can actually import — the
-                     orchestrator skips macOS Messages for any other source. So
-                     gray it out (disabled controls + note) unless macOS is the
-                     active source, rather than leaving live controls that no-op. */
+                )}
+                {(activeImportSource !== 'android-messages-web' || isMacOS) && (
+                  /* BACKLOG-2335 / 3749: the macOS panel. On a Mac it is live
+                     unless the source is iPhone Sync (the only source that turns
+                     Mac Messages off) — then it says why. An Android source is
+                     another device's choice: the Mac keeps importing its Messages,
+                     so the panel shows under the Google Messages one. */
                   <MacOSMessagesImportSettings
                     userId={userId}
-                    enabled={activeImportSource === 'macos-native'}
+                    enabled={isMacOS ? macMessagesSyncOn(activeImportSource) : activeImportSource === 'macos-native'}
                     disabledReason={
                       activeImportSource === 'iphone-sync'
                         ? 'Your message source is set to iPhone — switch to macOS above to import from Messages.'

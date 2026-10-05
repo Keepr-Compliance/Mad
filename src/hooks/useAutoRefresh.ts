@@ -34,6 +34,7 @@ import { useSyncOrchestrator } from "./useSyncOrchestrator";
 import type { SyncType, SyncItem } from "../services/SyncOrchestratorService";
 import type { ImportSource } from "../services/settingsService";
 import { providerNeedsEmailSync } from "../utils/connectionStatus";
+import { macMessagesSyncOn } from "../services/importSourcePolicy";
 
 // Module-level flag to track if auto-refresh has been triggered this session
 // Using module-level prevents React strict mode from triggering twice
@@ -299,8 +300,9 @@ export function useAutoRefresh({
       if (shouldSyncEmails) {
         typesToSync.push('emails');
       }
-      // BACKLOG-1467: Skip macOS messages when import source is android-companion or iphone-sync
-      if (isMacOS && hasPermissions && importSource === 'macos-native') {
+      // BACKLOG-3749: Mac Messages is off only for iPhone Sync; an Android or
+      // unknown (account-wide) source never turns it off.
+      if (isMacOS && hasPermissions && macMessagesSyncOn(importSource)) {
         typesToSync.push('messages');
       }
 

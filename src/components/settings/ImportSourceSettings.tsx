@@ -26,6 +26,7 @@ import type { ImportSource, UserPreferences } from "../../services/settingsServi
 import { settingsService } from '../../services';
 import logger from '../../utils/logger';
 import { IMPORT_SOURCE_LABELS, shownImportSource } from "./importSourceLabels";
+import { effectiveImportSource } from "../../services/importSourcePolicy";
 
 // Re-export type for consumers
 export type { ImportSource } from "../../services/settingsService";
@@ -56,7 +57,8 @@ export function ImportSourceSettings({ userId, onSourceChange }: ImportSourceSet
         const result = await window.api.preferences.get(userId);
         const prefs = result.preferences as UserPreferences | undefined;
         if (result.success && prefs?.messages?.source) {
-          setSource(shownImportSource(prefs.messages.source));
+          // BACKLOG-3749: a value this build does not know → the platform default.
+          setSource(shownImportSource(effectiveImportSource(prefs.messages.source, isMacOS)));
         } else {
           // BACKLOG-1458: No saved preference — default based on phoneType
           const phoneResult = await settingsService.getPhoneType(userId);
@@ -73,7 +75,7 @@ export function ImportSourceSettings({ userId, onSourceChange }: ImportSourceSet
     };
 
     loadPreference();
-  }, [userId]);
+  }, [userId, isMacOS]);
 
   const handleSourceChange = useCallback(
     async (newSource: ImportSource) => {

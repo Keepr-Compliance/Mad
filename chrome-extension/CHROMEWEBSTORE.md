@@ -195,6 +195,7 @@ Also: the 128×128 icon (`icons/keepr-128.png`, 96 art + 16 padding) and a
 | 0.3.73 | Every Sync (also per transaction) needs the consent; PDF export disclosed. |
 | 0.3.74 | The per-transaction Sync is removed: the Sync Android Sync is the only one. |
 | 0.3.75 | The extension's per-transaction run code removed; an older Keepr's claim is refused with "Update Keepr". |
+| 0.3.76 | Comment tidies; the older-Keepr line is "Update Keepr, then Sync again." |
 
 ## 10. Review history
 
