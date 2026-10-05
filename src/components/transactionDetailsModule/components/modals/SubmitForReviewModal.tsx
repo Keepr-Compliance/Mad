@@ -76,13 +76,20 @@ export type NotIncludedReason =
   | "email_attachment_not_downloaded"
   | "text_attachment_not_on_this_computer"
   | "file_missing_on_this_computer"
-  | "file_too_large";
+  | "file_too_large"
+  // BACKLOG-3731: why the macOS import skipped the file.
+  | "text_attachment_not_downloaded_by_messages"
+  | "text_attachment_too_large_to_import"
+  | "text_attachment_type_not_imported"
+  | "text_attachment_unreadable";
 
 /** One attachment (or one message's attachments) that is not sent. */
 export interface NotIncludedItem {
   key: string;
   kind: "text" | "email";
   localMessageId: string;
+  /** BACKLOG-3731: the conversation, for grouping. Null when unknown. */
+  threadId: string | null;
   sentAt: string | null;
   label: string;
   filename: string | null;
@@ -104,28 +111,145 @@ function shortDate(iso: string | null): string {
 }
 
 /**
+ * BACKLOG-3731: the import's limit for copying a text attachment. Mirrors
+ * `MAX_ATTACHMENT_SIZE` in electron/services/macOSMessagesImportService/types.ts
+ * (restated: the renderer cannot value-import from electron/). A parity test
+ * pins the two together.
+ */
+export const IMPORT_SIZE_LIMIT_MB = 100;
+
+function capitalize(text: string): string {
+  return text.length > 0 ? text[0].toUpperCase() + text.slice(1) : text;
+}
+
+/** Which message the item came from: "Text with X" / "Email "subject"". */
+export function notIncludedSource(item: NotIncludedItem): string {
+  return item.kind === "text"
+    ? `Text with ${item.label || "an unknown sender"}`
+    : `Email "${item.label || "(no subject)"}"`;
+}
+
+/**
+ * BACKLOG-3731: why the item is not sent, as one plain sentence. Each reason
+ * says only what is known: a text with no recorded reason does not claim one.
+ */
+export function notIncludedReasonText(item: NotIncludedItem): string {
+  const file = item.filename || (item.kind === "text" ? "a photo or file" : "an attachment");
+  switch (item.reason) {
+    case "text_attachment_not_on_this_computer":
+      return "Keepr doesn't have a copy of a photo or file from this text.";
+    case "text_attachment_not_downloaded_by_messages":
+      return `${capitalize(file)} isn't on this Mac. To include it, open this chat in Messages on this Mac, download the attachment, then sync your messages.`;
+    case "text_attachment_too_large_to_import":
+      return `${capitalize(file)} is larger than ${IMPORT_SIZE_LIMIT_MB} MB, the largest file Keepr imports.`;
+    case "text_attachment_type_not_imported":
+      return `${capitalize(file)} is a type of file Keepr doesn't import.`;
+    case "text_attachment_unreadable":
+      return `Keepr couldn't read ${file} on this Mac.`;
+    case "email_attachment_not_downloaded":
+      return `${capitalize(file)} couldn't be downloaded from the mailbox.`;
+    case "file_missing_on_this_computer":
+      return `${capitalize(file)} is no longer on this computer.`;
+    case "file_too_large":
+      return `${capitalize(file)} is larger than 50 MB.`;
+  }
+}
+
+/**
  * BACKLOG-3681: one line per item — which message, when, which file, why.
  * Factual; no "submit again" (after a successful submit the deal is with the
  * broker and cannot be resubmitted until it comes back).
  */
 export function notIncludedLine(item: NotIncludedItem): string {
   const when = shortDate(item.sentAt);
-  const source =
-    item.kind === "text"
-      ? `Text with ${item.label || "an unknown sender"}`
-      : `Email "${item.label || "(no subject)"}"`;
+  const source = notIncludedSource(item);
   const head = when ? `${source}, ${when}` : source;
-  const file = item.filename || (item.kind === "text" ? "a photo or file" : "an attachment");
-  switch (item.reason) {
-    case "text_attachment_not_on_this_computer":
-      return `${head} — a photo or file isn't downloaded to this computer. Open it in Messages to download it.`;
-    case "email_attachment_not_downloaded":
-      return `${head} — ${file} couldn't be downloaded from the mailbox.`;
-    case "file_missing_on_this_computer":
-      return `${head} — ${file} is no longer on this computer.`;
-    case "file_too_large":
-      return `${head} — ${file} is larger than 50 MB.`;
+  return `${head} — ${notIncludedReasonText(item)}`;
+}
+
+/** BACKLOG-3731: one conversation's items in the grouped list. */
+export interface NotIncludedGroup {
+  key: string;
+  source: string;
+  items: NotIncludedItem[];
+}
+
+/**
+ * BACKLOG-3731: group items by conversation (thread), in the order each
+ * conversation first appears. An item with no thread groups by its source
+ * line, so it still joins others from the same contact or subject.
+ */
+export function groupNotIncluded(items: NotIncludedItem[]): NotIncludedGroup[] {
+  const groups = new Map<string, NotIncludedGroup>();
+  for (const item of items) {
+    const source = notIncludedSource(item);
+    const key = `${item.kind}:${item.threadId ?? `label:${source}`}`;
+    const group = groups.get(key);
+    if (group) group.items.push(item);
+    else groups.set(key, { key, source, items: [item] });
   }
+  return [...groups.values()];
+}
+
+/** BACKLOG-3731: lines shown before "Show more", across all groups. */
+export const NOT_INCLUDED_VISIBLE_LINES = 5;
+
+/**
+ * BACKLOG-3731 (founder 6e7b4c31): the not-included list, grouped by
+ * conversation with a count, and the first few lines shown until "Show more".
+ * Used before sending (the warning) and after (the success list).
+ */
+export function NotIncludedList({
+  items,
+  testId,
+}: {
+  items: NotIncludedItem[];
+  testId: string;
+}): React.ReactElement {
+  const [expanded, setExpanded] = useState(false);
+  const groups = groupNotIncluded(items);
+  let budget = expanded ? Number.POSITIVE_INFINITY : NOT_INCLUDED_VISIBLE_LINES;
+  const hidden = Math.max(0, items.length - NOT_INCLUDED_VISIBLE_LINES);
+  return (
+    <div data-testid={testId}>
+      <ul className="mt-1 space-y-2">
+        {groups.map((group) => {
+          if (budget <= 0) return null;
+          const shown = group.items.slice(0, budget);
+          budget -= shown.length;
+          const count = group.items.length;
+          return (
+            <li key={group.key} data-testid={`${testId}-group`}>
+              <p className="font-medium">
+                {group.source} — {count} {count === 1 ? "attachment" : "attachments"}
+              </p>
+              <ul className="list-disc pl-5 space-y-1">
+                {shown.map((item) => {
+                  const when = shortDate(item.sentAt);
+                  const text = notIncludedReasonText(item);
+                  return (
+                    <li key={item.key} data-testid={`${testId}-line`}>
+                      {when ? `${when} — ${text}` : text}
+                    </li>
+                  );
+                })}
+              </ul>
+            </li>
+          );
+        })}
+      </ul>
+      {hidden > 0 && (
+        <button
+          type="button"
+          className="mt-1 underline"
+          data-testid={`${testId}-toggle`}
+          onClick={() => setExpanded((v) => !v)}
+        >
+          {expanded ? "Show less" : `Show more (${hidden})`}
+        </button>
+      )}
+    </div>
+  );
 }
 
 /** BACKLOG-3398: shown after a cancel. Mirrors SUBMISSION_CANCELLED_MESSAGE. */
@@ -950,7 +1074,7 @@ export function SubmitForReviewModal({
         )}
         {/*
           BACKLOG-3681 — the submission succeeded without some attachments
-          (the agent chose Continue anyway). One line per message: which one,
+          (the agent chose Continue anyway). Grouped by conversation (BACKLOG-3731); one line per file:
           when, which file, why. Same amber as above.
         */}
         {isSuccess && notIncluded.length > 0 && (
@@ -960,11 +1084,7 @@ export function SubmitForReviewModal({
             className="text-sm text-amber-700 mb-4"
           >
             <p className="font-medium">{NOT_INCLUDED_HEADING_AFTER}</p>
-            <ul className="list-disc pl-5 mt-1 space-y-1">
-              {notIncluded.map((item) => (
-                <li key={item.key}>{notIncludedLine(item)}</li>
-              ))}
-            </ul>
+            <NotIncludedList items={notIncluded} testId="submit-review-not-included-list" />
           </div>
         )}
         {/* BACKLOG-3403 — downloading and checking the files before sending. */}
@@ -992,11 +1112,7 @@ export function SubmitForReviewModal({
               </p>
             )}
             <p className="font-medium">{NOT_INCLUDED_HEADING_BEFORE}</p>
-            <ul className="list-disc pl-5 mt-1 space-y-1">
-              {preflightItems.map((item) => (
-                <li key={item.key}>{notIncludedLine(item)}</li>
-              ))}
-            </ul>
+            <NotIncludedList items={preflightItems} testId="submit-review-preflight-list" />
             <p className="mt-2">
               Continue anyway to send everything else. Your broker will see which files weren't included.
             </p>

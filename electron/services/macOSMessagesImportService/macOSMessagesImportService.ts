@@ -42,6 +42,7 @@ import {
   prepareInsertMessage,
   prepareRetagReaction,
   prepareUpdateAttachmentMessageId,
+  prepareRecordAttachmentSkips,
   selectAttachmentRecords,
   selectAttachmentsByExternalId,
   selectAttachmentStoragePaths,
@@ -49,6 +50,12 @@ import {
   selectExistingMessageIds,
   selectStoredAttachmentKeys,
 } from "../db/messageImportForceSql";
+import {
+  accessErrorReason,
+  unsupportedTypeReason,
+  type TextAttachmentSkip,
+  type TextAttachmentSkipReason,
+} from "../textAttachmentSkips";
 import {
   ALL_ATTACHMENT_STORAGE_PATHS_SQL,
   ALL_MESSAGE_EXTERNAL_IDS_SQL,
@@ -2007,6 +2014,26 @@ class MacOSMessagesImportService {
     // loaded ABOVE, before the pre-flight — the guard needs it to size only the
     // attachments this loop could actually link and write.
 
+    // BACKLOG-3731: why each attachment that was not stored was skipped, keyed
+    // by the chat.db message_guid (NOT the local message id). Written to
+    // `messages.metadata.attachmentSkips` after the loop, scoped to THIS
+    // user's own row via `(user_id, external_id)` — on a DB with more than one
+    // signed-in user, `existingMessageIdMap`/`messageIdMap` can resolve the
+    // guid to either user's copy, and the skip must only ever land on the
+    // IMPORTING user's (R1, BACKLOG-3731 SR review df47f037). See
+    // `textAttachmentSkips.ts`.
+    const skipsByMessage = new Map<string, TextAttachmentSkip[]>();
+    const recordSkip = (
+      guid: string,
+      name: string | null | undefined,
+      reason: TextAttachmentSkipReason
+    ): void => {
+      const list = skipsByMessage.get(guid) ?? [];
+      list.push({ name: name || null, reason });
+      skipsByMessage.set(guid, list);
+    };
+    let completed = true;
+
     // Process attachments with progress reporting and event loop yielding
     const totalAttachments = attachments.length;
     // TASK-2097: Report at ~5% increments (min 1) for smooth progress with any attachment count
@@ -2029,13 +2056,32 @@ class MacOSMessagesImportService {
           `Attachment import cancelled at ${processed}/${totalAttachments}`,
           MacOSMessagesImportService.SERVICE_NAME
         );
+        completed = false;
         break;
       }
 
       try {
-        // Skip unsupported attachment types (TASK-1122: expanded to include videos, audio, documents)
         const filename = attachment.transfer_name || attachment.filename;
+
+        // Get the internal message ID for this attachment's message
+        // First check the current import batch, then existing messages.
+        // BACKLOG-3731: resolved BEFORE the type and size checks, so a skip on
+        // either can be recorded against the message it belongs to.
+        let internalMessageId = messageIdMap.get(attachment.message_guid);
+        if (!internalMessageId) {
+          internalMessageId = existingMessageIdMap.get(attachment.message_guid);
+        }
+        if (!internalMessageId) {
+          // Message not found - skip this attachment
+          skipped++;
+          processed++;
+          continue;
+        }
+
+        // Skip unsupported attachment types (TASK-1122: expanded to include videos, audio, documents)
         if (!isSupportedMediaType(filename)) {
+          // BACKLOG-3731: a link preview is told apart from other types here.
+          recordSkip(attachment.message_guid, filename, unsupportedTypeReason(filename));
           skipped++;
           processed++;
           continue;
@@ -2047,19 +2093,7 @@ class MacOSMessagesImportService {
             `Skipping oversized attachment: ${attachment.total_bytes} bytes`,
             MacOSMessagesImportService.SERVICE_NAME
           );
-          skipped++;
-          processed++;
-          continue;
-        }
-
-        // Get the internal message ID for this attachment's message
-        // First check the current import batch, then existing messages
-        let internalMessageId = messageIdMap.get(attachment.message_guid);
-        if (!internalMessageId) {
-          internalMessageId = existingMessageIdMap.get(attachment.message_guid);
-        }
-        if (!internalMessageId) {
-          // Message not found - skip this attachment
+          recordSkip(attachment.message_guid, filename, "too_large");
           skipped++;
           processed++;
           continue;
@@ -2084,11 +2118,13 @@ class MacOSMessagesImportService {
         // Check if source file exists (async)
         try {
           await fs.promises.access(sourcePath, fs.constants.R_OK);
-        } catch {
+        } catch (accessError) {
           logService.debug(
             `Attachment file not found: ${sourcePath}`,
             MacOSMessagesImportService.SERVICE_NAME
           );
+          // BACKLOG-3731: ENOENT = Messages never downloaded it; else unreadable.
+          recordSkip(attachment.message_guid, filename, accessErrorReason(accessError));
           skipped++;
           processed++;
           continue;
@@ -2257,6 +2293,27 @@ class MacOSMessagesImportService {
 
     // Stop progress bar
     attachProgressBar.stop();
+
+    // BACKLOG-3731: record the skip reasons. Only on a run that went through
+    // the whole list — a cancelled run saw some attachments of a message and
+    // not others, and the value is replaced whole.
+    if (completed && skipsByMessage.size > 0) {
+      try {
+        const recordStmt = prepareRecordAttachmentSkips(db, target);
+        const writeAll = db.transaction(() => {
+          for (const [guid, skips] of skipsByMessage) {
+            recordStmt.run({ skips: JSON.stringify(skips), userId, guid });
+          }
+        });
+        writeAll();
+      } catch (error) {
+        // A note for the pre-flight's wording, never a reason to fail an import.
+        logService.warn(
+          `Could not record attachment skip reasons: ${error instanceof Error ? error.message : String(error)}`,
+          MacOSMessagesImportService.SERVICE_NAME
+        );
+      }
+    }
 
     logService.info(
       `Attachments: ${stored} imported, ${updated} updated, ${skipped} skipped`,

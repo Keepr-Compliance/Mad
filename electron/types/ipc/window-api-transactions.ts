@@ -41,6 +41,8 @@ export interface SubmitNotIncludedItem {
   key: string;
   kind: "text" | "email";
   localMessageId: string;
+  /** BACKLOG-3731: the conversation, for grouping. */
+  threadId: string | null;
   sentAt: string | null;
   label: string;
   filename: string | null;
@@ -48,7 +50,11 @@ export interface SubmitNotIncludedItem {
     | "email_attachment_not_downloaded"
     | "text_attachment_not_on_this_computer"
     | "file_missing_on_this_computer"
-    | "file_too_large";
+    | "file_too_large"
+    | "text_attachment_not_downloaded_by_messages"
+    | "text_attachment_too_large_to_import"
+    | "text_attachment_type_not_imported"
+    | "text_attachment_unreadable";
   localAttachmentId: string | null;
 }
 

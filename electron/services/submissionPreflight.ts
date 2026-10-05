@@ -10,7 +10,7 @@
  * ORDER (founder 58695a05): this runs AFTER the on-demand email attachment
  * download (`downloadMissingEmailAttachments`). An attachment that simply had
  * not been downloaded yet is downloaded first and is never flagged. What is
- * left is one of four reasons:
+ * left is one of these reasons:
  *
  *   email_attachment_not_downloaded       the download failed (or the mailbox
  *                                         was unreachable): its row still has
@@ -22,6 +22,13 @@
  *   file_missing_on_this_computer         the row names a local file that is
  *                                         no longer there
  *   file_too_large                        over the uploader's 50 MB limit
+ *
+ * BACKLOG-3731: for a text with no attachment row, the macOS import now
+ * records why it skipped each file (`textAttachmentSkips.ts`), and the item
+ * carries that reason instead: not downloaded by Messages, over the import's
+ * 100 MB limit, a type the import does not copy, or unreadable. A link preview
+ * is never listed. `text_attachment_not_on_this_computer` remains for a text
+ * with no recorded reason (imported before this, or iPhone sync).
  *
  * The limit and the path resolution are the uploader's own
  * (`submissionAttachmentFiles.ts`), so this check and the upload cannot
@@ -35,12 +42,37 @@ import {
   MAX_ATTACHMENT_FILE_SIZE,
   resolveAttachmentPath,
 } from "./submissionAttachmentFiles";
+import {
+  readAttachmentSkips,
+  type TextAttachmentSkipReason,
+} from "./textAttachmentSkips";
 
 export type NotIncludedReason =
   | "email_attachment_not_downloaded"
+  /** No reason was recorded at import (imported before BACKLOG-3731, or iPhone sync). */
   | "text_attachment_not_on_this_computer"
   | "file_missing_on_this_computer"
-  | "file_too_large";
+  | "file_too_large"
+  // BACKLOG-3731: the reason the macOS import recorded when it skipped the file.
+  | "text_attachment_not_downloaded_by_messages"
+  | "text_attachment_too_large_to_import"
+  | "text_attachment_type_not_imported"
+  | "text_attachment_unreadable";
+
+/**
+ * BACKLOG-3731: the not-included reason for each recorded import skip.
+ * `link_preview` has none: a link preview is never listed, because its URL is
+ * the message text and is sent.
+ */
+export const SKIP_REASON_TO_NOT_INCLUDED: Record<
+  Exclude<TextAttachmentSkipReason, "link_preview">,
+  NotIncludedReason
+> = {
+  not_downloaded: "text_attachment_not_downloaded_by_messages",
+  too_large: "text_attachment_too_large_to_import",
+  unsupported_type: "text_attachment_type_not_imported",
+  unreadable: "text_attachment_unreadable",
+};
 
 /**
  * One attachment (or one message's attachments) that will not be sent.
@@ -48,11 +80,16 @@ export type NotIncludedReason =
  * it holds file names, subjects and contact names.
  */
 export interface NotIncludedItem {
-  /** Stable across the pre-flight and the submit: `att:`, `msg:` or `email:` + local id. */
+  /**
+   * Stable across the pre-flight and the submit: `att:`, `msg:` or `email:` +
+   * local id, or `skip:<local message id>:<n>` for a recorded import skip.
+   */
   key: string;
   kind: "text" | "email";
   /** Local id of the owning text or email. */
   localMessageId: string;
+  /** BACKLOG-3731: the conversation, for grouping the list. Null when unknown. */
+  threadId: string | null;
   sentAt: string | null;
   /** Email subject, or the text's other party. */
   label: string;
@@ -107,6 +144,10 @@ export function setPreflightStatForTests(fn: StatFile | null): void {
 const advertisesAttachment = (value: unknown): boolean =>
   value === true || value === 1 || value === "1";
 
+function stringOrNull(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
 function isoOrNull(value: unknown): string | null {
   if (typeof value !== "string" || value.length === 0) return null;
   const d = new Date(value);
@@ -125,18 +166,20 @@ export async function runSubmissionPreflight(
   const describe = (
     kind: "text" | "email",
     localMessageId: string
-  ): { sentAt: string | null; label: string } => {
+  ): { sentAt: string | null; label: string; threadId: string | null } => {
     if (kind === "email") {
       const e = emailById.get(localMessageId);
       return {
         sentAt: isoOrNull(e?.sent_at),
         label: typeof e?.subject === "string" ? e.subject : "",
+        threadId: stringOrNull(e?.thread_id),
       };
     }
     const m = textById.get(localMessageId);
     return {
       sentAt: isoOrNull(m?.sent_at as unknown),
       label: m ? input.textLabel(m) : "",
+      threadId: stringOrNull((m as unknown as Record<string, unknown> | undefined)?.thread_id),
     };
   };
 
@@ -199,7 +242,11 @@ export async function runSubmissionPreflight(
     const flagged = advertisesAttachment(
       (m as unknown as Record<string, unknown>).has_attachments
     );
-    if (flagged && !textsWithRows.has(m.id)) {
+    if (!flagged || textsWithRows.has(m.id)) continue;
+    // BACKLOG-3731: what the import recorded when it skipped this text's files.
+    const skips = readAttachmentSkips((m as unknown as Record<string, unknown>).metadata);
+    if (skips === null || skips.length === 0) {
+      // Nothing recorded: still listed, worded without claiming a cause.
       notIncluded.push({
         key: `msg:${m.id}`,
         kind: "text",
@@ -209,7 +256,22 @@ export async function runSubmissionPreflight(
         reason: "text_attachment_not_on_this_computer",
         localAttachmentId: null,
       });
+      continue;
     }
+    // One line per skipped file. A link preview is never listed: its URL is
+    // the text, which is sent. Other files on the same text still are.
+    skips.forEach((skip, index) => {
+      if (skip.reason === "link_preview") return;
+      notIncluded.push({
+        key: `skip:${m.id}:${index}`,
+        kind: "text",
+        localMessageId: m.id,
+        ...describe("text", m.id),
+        filename: skip.name,
+        reason: SKIP_REASON_TO_NOT_INCLUDED[skip.reason],
+        localAttachmentId: null,
+      });
+    });
   }
   for (const [id, e] of emailById) {
     if (
