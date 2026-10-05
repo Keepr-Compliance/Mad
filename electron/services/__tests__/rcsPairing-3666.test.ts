@@ -456,6 +456,28 @@ describe("an honest 'linked' (B1)", () => {
     expect(auth.isLinkProven("user-a")).toBe(true);
   });
 
+  // Live (0.3.76): after a restart a saved link is unproven, not "not here";
+  // only an unsigned "no link here" since the last proof (or since start)
+  // makes it so, and a later signed call clears it. Mutation: linkNotHere
+  // true for any unproven link → red.
+  it("linkNotHere: false for a saved, unproven link; true after an unsigned 'no link here'; cleared by a signed call", async () => {
+    const p = await linkWith("user-a");
+    const restarted = new RcsPairingAuth(P, store, { now: () => clock });
+    expect(restarted.isPaired("user-a")).toBe(true);
+    expect(restarted.isLinkProven("user-a")).toBe(false);
+    expect(restarted.linkNotHere("user-a")).toBe(false);
+    restarted.noteExtensionUnlinked();
+    expect(restarted.linkNotHere("user-a")).toBe(true);
+    // On the live bridge: proven, then disowned, then proven again.
+    expect(auth.linkNotHere("user-a")).toBe(false);
+    clock += 1;
+    auth.noteExtensionUnlinked();
+    expect(auth.linkNotHere("user-a")).toBe(true);
+    clock += 1;
+    await post(port, "/job/pending", signed(p, "/job/pending").headers);
+    expect(auth.linkNotHere("user-a")).toBe(false);
+  });
+
   // SR (B1): an unsigned hello NEVER deletes a link — it changes only what
   // Keepr shows. Mutations: the bridge deleting on it → red; the hello not
   // changing the display → red; Forget link not deleting → red.

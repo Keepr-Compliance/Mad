@@ -92,6 +92,54 @@ beforeEach(() => {
   });
 });
 
+// Live (0.3.76): right after Keepr restarts, a SAVED link is unproven (the
+// proof is in memory) — never the link step for it: "Checking the
+// browser…", then the linked screen. The link step only with nothing saved,
+// an extension saying "no link here", or Relink.
+// Mutations: the saved pairing ignored (link step at once) → red; no
+// timeout (checking forever) → red; "no link here" ignored → red.
+describe("a saved link right after Keepr starts (0.3.76)", () => {
+  const SAVED_UNPROVEN: RcsExtensionState = { ...INSTALLED, extensionPaired: false, pairingSaved: true, linkNotHere: false };
+
+  it("checking first, never the link step; then the linked screen when the check window ends", async () => {
+    mockState = SAVED_UNPROVEN;
+    render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} linkCheckMs={150} />);
+    expect(await screen.findByTestId("gm-link-checking-browser")).toHaveTextContent("Checking the browser…");
+    expect(screen.queryByTestId("gm-link-panel")).toBeNull();
+    expect(await screen.findByTestId("gm-linked-screen", {}, { timeout: 2000 })).toBeInTheDocument();
+    expect(screen.queryByTestId("gm-link-panel")).toBeNull();
+    expect(screen.queryByTestId("gm-link-checking-browser")).toBeNull();
+  });
+
+  it("the extension proves the link during the check: the linked screen at once", async () => {
+    mockState = SAVED_UNPROVEN;
+    render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} linkCheckMs={60_000} />);
+    await screen.findByTestId("gm-link-checking-browser");
+    mockState = { ...SAVED_UNPROVEN, extensionPaired: true };
+    expect(await screen.findByTestId("gm-linked-screen")).toBeInTheDocument();
+  });
+
+  it("nothing saved: the link step at once (no check)", async () => {
+    mockState = { ...SAVED_UNPROVEN, pairingSaved: false };
+    render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} linkCheckMs={60_000} />);
+    expect(await screen.findByTestId("gm-link-panel")).toBeInTheDocument();
+    expect(screen.queryByTestId("gm-link-checking-browser")).toBeNull();
+  });
+
+  it("an extension said \"no link here\": the link step at once", async () => {
+    mockState = { ...SAVED_UNPROVEN, linkNotHere: true };
+    render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} linkCheckMs={60_000} />);
+    expect(await screen.findByTestId("gm-link-panel")).toBeInTheDocument();
+  });
+
+  it("Relink (startAtLink): the link step, not the check", async () => {
+    mockState = SAVED_UNPROVEN;
+    render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} linkCheckMs={60_000} startAtLink />);
+    expect(await screen.findByTestId("gm-link-panel")).toBeInTheDocument();
+    expect(screen.queryByTestId("gm-link-checking-browser")).toBeNull();
+  });
+});
+
 describe("googleMessagesStep (G1, G2)", () => {
   it("steps", () => {
     expect(googleMessagesStep({ state: NOT_INSTALLED, job: null, continued: false })).toBe("install");

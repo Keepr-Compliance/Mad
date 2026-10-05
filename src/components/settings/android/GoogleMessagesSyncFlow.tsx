@@ -39,6 +39,8 @@ interface GoogleMessagesSyncFlowProps {
   published?: boolean;
   /** Opened at the link step (Settings' Link / Relink, keepr://link) — even when linked. */
   startAtLink?: boolean;
+  /** Test seam: the "Checking the browser…" window (default LINK_CHECK_MS). */
+  linkCheckMs?: number;
 }
 
 /** The storyboards' numbered circle: 28px, #EEF0FF / #312E81. */
@@ -56,6 +58,10 @@ const secondary =
 
 /** Founder (D05): the green ✓ in the field shows this long before the linked screen. */
 export const LINKED_FLASH_MS = 1000;
+
+/** Live (0.3.76): a saved link not yet proven since Keepr started — this long at most. */
+export const LINK_CHECK_MS = 5000;
+export const CHECKING_BROWSER = "Checking the browser…";
 
 /** SR C7 (founder-approved copy): the one consent line before the first Sync. */
 export const CONSENT_LINE = "Keepr copies your texts from Google Messages into Keepr on this computer.";
@@ -88,6 +94,7 @@ export function GoogleMessagesSyncFlow({
   pollMs = POLL_MS,
   published = EXTENSION_PUBLISHED,
   startAtLink = false,
+  linkCheckMs = LINK_CHECK_MS,
 }: GoogleMessagesSyncFlowProps) {
   const [state, setState] = useState<RcsExtensionState | null>(null);
   const [job, setJob] = useState<RcsJobInfo | null>(null);
@@ -108,6 +115,12 @@ export function GoogleMessagesSyncFlow({
     setTimeout(() => setLinkFlash("done"), LINKED_FLASH_MS);
   }, []);
   const [betaPref, setBetaPref] = useState(false);
+  /** Live (0.3.76): the "Checking the browser…" window is over. */
+  const [linkCheckOver, setLinkCheckOver] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setLinkCheckOver(true), linkCheckMs);
+    return () => clearTimeout(t);
+  }, [linkCheckMs]);
   const jobIdRef = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -165,10 +178,21 @@ export function GoogleMessagesSyncFlow({
   const step = googleMessagesStep({ state, job, continued: false });
   /** BACKLOG-3666: the extension linked with THIS Keepr (a Sync is refused until then). */
   const keeprPaired = state?.extensionPaired === true;
+  /**
+   * Live (0.3.76): Keepr keeps the link's proof in memory, so right after it
+   * starts a SAVED link is unproven until the extension's next signed call.
+   * A saved pairing that no extension disowned is treated as linked: a short
+   * "Checking the browser…" first, then the linked screen (Sync opens Google
+   * Messages, which proves the link). The link step only when nothing is
+   * saved, an extension said "no link here", or the user asked to relink.
+   */
+  const savedLink = state?.pairingSaved === true && state?.linkNotHere !== true;
+  const checkingLink = !keeprPaired && savedLink && !linkCheckOver && !startAtLink && linkFlash === "none";
+  const linkedForScreen = keeprPaired || savedLink;
   const doneLines = step === "done" && job ? doneSummaryLines(job) : null;
   const beta = wantsBetaInstall(betaPref, published);
   /** The link card: not linked, Relink, or a code's green ✓ still showing. */
-  const showLinkCard = linkFlash === "flash" || ((!keeprPaired || startAtLink) && linkFlash !== "done");
+  const showLinkCard = linkFlash === "flash" || ((!linkedForScreen || startAtLink) && linkFlash !== "done");
   // Founder (B2): "Syncs your last N months of texts. Change" — never while
   // a Sync runs (the syncing step shows none).
   const windowNote = (
@@ -294,13 +318,23 @@ export function GoogleMessagesSyncFlow({
         </>
       )}
 
-      {step === "connect" && showLinkCard && (
+      {step === "connect" && checkingLink && (
+        <div className="flex flex-col gap-4 min-h-[360px]" data-testid="gm-link-checking-browser">
+          <h2 className={title}>Sync Android</h2>
+          <div className="flex-1 flex items-center justify-center gap-2 text-[14px] text-[#374151]" role="status">
+            <span className="w-4 h-4 border-2 border-[#4F46E5] border-t-transparent rounded-full animate-spin" aria-hidden="true" />
+            {CHECKING_BROWSER}
+          </div>
+        </div>
+      )}
+
+      {step === "connect" && !checkingLink && showLinkCard && (
         // D01: the link card IS this step (the modal gives it its frame).
         // Relink: the same card; the old link goes only when the new code succeeds.
         <LinkBrowserPanel bare onJustLinked={onJustLinked} />
       )}
 
-      {step === "connect" && !showLinkCard && (
+      {step === "connect" && !checkingLink && !showLinkCard && (
         // B02 / I02 / D05 after the flash: ONE linked screen. The modal keeps
         // its standard size; the row + Sync now sit centred in the body.
         <div className="flex flex-col gap-4 min-h-[360px]" data-testid="gm-linked-screen">

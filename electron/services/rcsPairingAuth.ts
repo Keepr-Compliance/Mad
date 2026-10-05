@@ -138,6 +138,19 @@ export class RcsPairingAuth {
     return this.isPaired(userId);
   }
 
+  /**
+   * Live (0.3.76): proof is kept in memory, so right after Keepr starts a
+   * saved link is unproven until the extension's next signed call. "Not here":
+   * an extension said, unsigned, "no link here" since the last proof (or
+   * since Keepr started, when there is none) — only then is the link step
+   * right while a pairing is saved.
+   */
+  linkNotHere(userId: string): boolean {
+    if (this.unlinkedReportAt === null) return false;
+    const at = this.proven.get(userId);
+    return at === undefined || this.unlinkedReportAt >= at;
+  }
+
   /** SR (B1): an unsigned "no link here" (/hello linked:false) — display only, never a delete. */
   noteExtensionUnlinked(): void {
     this.unlinkedReportAt = this.now();
