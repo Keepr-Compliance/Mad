@@ -83,7 +83,7 @@ const attachments = [
   att('a-unlinked', 'Old.jpg', 'image/jpeg', null),
 ];
 
-const ALL = { text: true, email: true };
+const ALL = true;
 
 /** IntersectionObserver stand-in: nothing is on screen until reveal() is called. */
 let observed: { cb: IntersectionObserverCallback; nodes: Element[] }[] = [];
@@ -154,13 +154,13 @@ describe('groupAttachmentsByMessage (BACKLOG-3748)', () => {
     expect(map[M_PHOTO]?.map((a) => a.filename)).toEqual(['Porch.png']);
   });
 
-  it('each channel needs its own attachment flag', () => {
+  it('allowed is a single on/off switch, not per-channel', () => {
     const email = { ...msg('msg-email', '2026-10-03T17:00:00.000Z', 'email', 'x'), channel: 'email' };
     const both = [...attachments, att('a-email', 'Contract.pdf', 'application/pdf', 'msg-email')];
     const all = [...messages, email];
-    expect(Object.keys(groupAttachmentsByMessage(both, all, { text: false, email: true }))).toEqual(['msg-email']);
-    expect(Object.keys(groupAttachmentsByMessage(both, all, { text: true, email: false })).sort()).toEqual(
-      [M_DOC, M_PHOTO, M_TEXT, M_VIDEO].sort()
+    expect(groupAttachmentsByMessage(both, all, false)).toEqual({});
+    expect(Object.keys(groupAttachmentsByMessage(both, all, true)).sort()).toEqual(
+      [M_DOC, M_PHOTO, M_TEXT, M_VIDEO, 'msg-email'].sort()
     );
   });
 });

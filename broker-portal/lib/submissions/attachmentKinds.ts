@@ -85,22 +85,22 @@ export interface MessageAttachment {
  * message_type are not used: on real rows attachment_count is 0 even when
  * has_attachments is true, and photos arrive on 'text' messages too.
  *
- * Only messages passed in are used (the page passes its feature-gated list),
- * and a message's files are included only when its own channel's attachment
- * flag is on: texts need broker_text_attachments, emails need
- * broker_email_attachments.
+ * Only messages passed in are used (the page passes its feature-gated list).
+ * `allowed` is a single on/off switch, not per-channel: the page passes its
+ * existing either-flag value (showAttachments), the same rule AttachmentList
+ * and the checklist file list already use. There is no product reason for a
+ * stricter per-channel rule (SR review, pm_comments efcb3cec on BACKLOG-3748).
  */
 export function groupAttachmentsByMessage<A extends MessageAttachment & { message_id?: string | null }>(
   attachments: A[],
-  messages: { id: string; channel: string | null }[],
-  allowed: { text: boolean; email: boolean }
+  messages: { id: string }[],
+  allowed: boolean
 ): Record<string, MessageAttachment[]> {
-  const channelById = new Map(messages.map((m) => [m.id, m.channel]));
   const out: Record<string, MessageAttachment[]> = {};
+  if (!allowed) return out;
+  const messageIds = new Set(messages.map((m) => m.id));
   for (const a of attachments) {
-    if (!a.message_id || !channelById.has(a.message_id)) continue;
-    const isEmail = channelById.get(a.message_id) === 'email';
-    if (isEmail ? !allowed.email : !allowed.text) continue;
+    if (!a.message_id || !messageIds.has(a.message_id)) continue;
     const entry: MessageAttachment = {
       id: a.id,
       filename: a.filename,

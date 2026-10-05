@@ -1,7 +1,9 @@
 /**
  * Submission review page — BACKLOG-3748: the page hands MessageList each
  * message's files, joined on submission_attachments.message_id over the gated
- * messages, with each channel behind its own attachment flag. Runs the real
+ * messages, gated by the page's existing either-flag rule (showAttachments —
+ * the same rule AttachmentList and the checklist file list already use, not
+ * a stricter per-channel one; SR review, pm_comments efcb3cec). Runs the real
  * server page and loaders against the BACKLOG-3364 PostgREST emulator (harness
  * copied from __tests__/submission-review-3682/page.test.tsx).
  *
@@ -205,14 +207,22 @@ describe('review page: files inside their message bubble (BACKLOG-3748)', () => 
     });
   });
 
-  it('text attachments off: no files in text bubbles, email files still shown', async () => {
+  it('text attachments off but email attachments on: both channels still show (either-flag rule)', async () => {
     given({ textAtt: false });
-    expect(await mapPassed()).toEqual({ [EMAIL_MSG]: ['Contract.pdf'] });
+    expect(await mapPassed()).toEqual({
+      [EMAIL_MSG]: ['Contract.pdf'],
+      [TEXT_MSG]: ['Front.jpg'],
+      [PHOTO_MSG]: ['Porch.jpg'],
+    });
   });
 
-  it('email attachments off: no files in email bubbles, text photos still shown', async () => {
+  it('email attachments off but text attachments on: both channels still show (either-flag rule)', async () => {
     given({ emailAtt: false });
-    expect(await mapPassed()).toEqual({ [TEXT_MSG]: ['Front.jpg'], [PHOTO_MSG]: ['Porch.jpg'] });
+    expect(await mapPassed()).toEqual({
+      [EMAIL_MSG]: ['Contract.pdf'],
+      [TEXT_MSG]: ['Front.jpg'],
+      [PHOTO_MSG]: ['Porch.jpg'],
+    });
   });
 
   it('text view off: text messages are gated out, so their photos are too', async () => {

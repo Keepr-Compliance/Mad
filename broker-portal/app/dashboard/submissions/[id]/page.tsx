@@ -293,12 +293,11 @@ export default async function SubmissionDetailPage({ params }: PageProps) {
   const excludedFiles = readExcludedFiles(submission.submission_metadata);
 
   // BACKLOG-3748: files shown inside their message's bubble, joined on
-  // message_id over the gated messages; each channel needs its own
-  // attachment flag (texts: broker_text_attachments, emails: broker_email_attachments).
-  const attachmentsByMessage = groupAttachmentsByMessage(attachments, gatedMessages, {
-    text: textAttachmentsEnabled,
-    email: emailAttachmentsEnabled,
-  });
+  // message_id over the gated messages, under the same either-flag rule
+  // (showAttachments) as the rest of the page — AttachmentList (above) and
+  // the checklist file list use it too; no product reason for a stricter
+  // per-channel rule here (SR review, pm_comments efcb3cec on BACKLOG-3748).
+  const attachmentsByMessage = groupAttachmentsByMessage(attachments, gatedMessages, showAttachments);
 
   // BACKLOG-3477: the Checklists area, fail-closed on the submission's org.
   // Not shown during impersonation: the scoped support client does not admit
