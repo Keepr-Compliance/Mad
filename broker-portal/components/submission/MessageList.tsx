@@ -12,6 +12,12 @@
 import { useState, useMemo } from 'react';
 import { EmptyMessages } from '@/components/ui/EmptyState';
 import { ChevronRight, MapPin, Mic, Paperclip, Users, X } from 'lucide-react';
+import { AttachmentViewerModal } from './AttachmentViewerModal';
+import { InlineMessageAttachments } from './InlineMessageAttachments';
+import type { MessageAttachment } from '@/lib/submissions/attachmentKinds';
+
+/** BACKLOG-3748: submission_messages.id -> the files that came with it (groupAttachmentsByMessage). */
+export type AttachmentsByMessage = Record<string, MessageAttachment[]>;
 
 /** Message type values matching desktop app */
 type MessageType = 'text' | 'voice_message' | 'location' | 'attachment_only' | 'system' | 'unknown';
@@ -43,6 +49,8 @@ export interface Message {
 
 interface MessageListProps {
   messages: Message[];
+  /** BACKLOG-3748: files shown inside their message's bubble. Omitted = none. */
+  attachmentsByMessage?: AttachmentsByMessage;
 }
 
 type FilterType = 'all' | 'email' | 'text';
@@ -367,15 +375,20 @@ function MessageTypeIcon({ icon, className }: { icon: 'mic' | 'map-pin' | 'paper
 export function ConversationModal({
   thread,
   onClose,
+  attachmentsByMessage,
 }: {
   thread: Thread;
   onClose: () => void;
+  /** BACKLOG-3748: files shown inside their message's bubble. Omitted = none. */
+  attachmentsByMessage?: AttachmentsByMessage;
 }) {
   const isEmail = thread.channel === 'email';
   // Group chat = more than one unique participant (matching desktop logic)
   const isGroupChat = thread.uniqueParticipantCount > 1;
+  const [viewing, setViewing] = useState<MessageAttachment | null>(null);
 
   return (
+    <>
     <div
       className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
       onClick={onClose}
@@ -419,7 +432,13 @@ export function ConversationModal({
           {thread.messages.map((msg) => {
             const isOutbound = msg.direction === 'outbound';
             const msgText = msg.body_text || '';
-            const typeDisplay = getMessageTypeDisplay(msg.message_type);
+            // BACKLOG-3748: matched only by submission_attachments.message_id.
+            const inline = attachmentsByMessage?.[msg.id] ?? [];
+            const hasInline = inline.length > 0;
+            // A shown file replaces the "Media Attachment" indicator and placeholder.
+            const typeDisplay = hasInline && msg.message_type === 'attachment_only'
+              ? { indicator: null, icon: null }
+              : getMessageTypeDisplay(msg.message_type);
             const isSpecialType = typeDisplay.indicator !== null;
 
             // System messages get special centered styling
@@ -462,17 +481,22 @@ export function ConversationModal({
                       <span className="font-medium text-sm">{typeDisplay.indicator}</span>
                     </div>
                   )}
-                  <p className={`text-sm whitespace-pre-wrap break-words ${
-                    isSpecialType ? 'italic opacity-75' : ''
-                  }`}>
-                    {msgText || (isSpecialType ? `[${typeDisplay.indicator}]` : '[No content]')}
-                  </p>
+                  {hasInline && (
+                    <InlineMessageAttachments attachments={inline} onOpen={setViewing} />
+                  )}
+                  {(msgText || !hasInline) && (
+                    <p className={`text-sm whitespace-pre-wrap break-words ${
+                      isSpecialType ? 'italic opacity-75' : ''
+                    }`}>
+                      {msgText || (isSpecialType ? `[${typeDisplay.indicator}]` : '[No content]')}
+                    </p>
+                  )}
                   <div className={`flex items-center gap-2 mt-1 ${isOutbound ? (isEmail ? 'text-primary-100' : 'text-green-100') : 'text-gray-400'}`}>
                     <span className="text-xs">{formatMessageTime(msg.sent_at)}</span>
-                    {msg.has_attachments && (
+                    {(msg.has_attachments || hasInline) && (
                       <span className="flex items-center gap-1 text-xs">
                         <Paperclip className="w-3 h-3" />
-                        {msg.attachment_count}
+                        {hasInline ? inline.length : msg.attachment_count}
                       </span>
                     )}
                   </div>
@@ -493,6 +517,14 @@ export function ConversationModal({
         </div>
       </div>
     </div>
+    {/* BACKLOG-3748: a sibling of the backdrop, so clicking the viewer's own
+        backdrop closes the viewer and not the conversation behind it. */}
+    <AttachmentViewerModal
+      attachment={viewing}
+      open={!!viewing}
+      onClose={() => setViewing(null)}
+    />
+    </>
   );
 }
 
@@ -599,7 +631,7 @@ function ThreadCard({
   );
 }
 
-export function MessageList({ messages }: MessageListProps) {
+export function MessageList({ messages, attachmentsByMessage }: MessageListProps) {
   const [filter, setFilter] = useState<FilterType>('all');
   const [selectedThread, setSelectedThread] = useState<Thread | null>(null);
 
@@ -674,6 +706,7 @@ export function MessageList({ messages }: MessageListProps) {
         <ConversationModal
           thread={selectedThread}
           onClose={() => setSelectedThread(null)}
+          attachmentsByMessage={attachmentsByMessage}
         />
       )}
     </>

@@ -10,11 +10,11 @@
  * Part of BACKLOG-401.
  */
 
-import { useState, useEffect, useMemo } from 'react';
-import { createClient } from '@/lib/supabase/client';
+import { useState, useMemo } from 'react';
 import { AttachmentViewerModal } from './AttachmentViewerModal';
 import { EmptyAttachments } from '@/components/ui/EmptyState';
-import heic2any from 'heic2any';
+import { useAttachmentThumbnailUrl } from './useAttachmentThumbnailUrl';
+import { formatFileSize, isMediaFile, isVideoFile } from '@/lib/submissions/attachmentKinds';
 import { sourceLine, type AttachmentSource } from '@/lib/submissions/attachmentSources';
 import {
   Eye,
@@ -43,63 +43,6 @@ interface AttachmentListProps {
    * submissions (no message_id), which then render exactly as before.
    */
   sources?: Record<string, AttachmentSource>;
-}
-
-// Media file extensions and MIME types
-const MEDIA_EXTENSIONS = [
-  // Images
-  '.jpg', '.jpeg', '.png', '.gif', '.heic', '.heif', '.webp', '.bmp', '.tiff', '.tif',
-  '.raw', '.cr2', '.nef', '.arw', '.dng', '.orf', '.rw2', '.pef', '.srw',
-  // Videos
-  '.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v', '.wmv', '.flv', '.3gp',
-];
-
-const MEDIA_MIME_TYPES = [
-  'image/', 'video/',
-];
-
-function isMediaFile(attachment: Attachment): boolean {
-  const mimeType = attachment.mime_type?.toLowerCase() || '';
-  const filename = attachment.filename.toLowerCase();
-
-  // Check MIME type
-  if (MEDIA_MIME_TYPES.some(type => mimeType.startsWith(type))) {
-    return true;
-  }
-
-  // Check file extension
-  if (MEDIA_EXTENSIONS.some(ext => filename.endsWith(ext))) {
-    return true;
-  }
-
-  return false;
-}
-
-function isVideoFile(attachment: Attachment): boolean {
-  const mimeType = attachment.mime_type?.toLowerCase() || '';
-  const filename = attachment.filename.toLowerCase();
-
-  if (mimeType.startsWith('video/')) return true;
-
-  const videoExtensions = ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v', '.wmv', '.flv', '.3gp'];
-  return videoExtensions.some(ext => filename.endsWith(ext));
-}
-
-function isHeicFile(attachment: Attachment): boolean {
-  const mimeType = attachment.mime_type?.toLowerCase() || '';
-  const filename = attachment.filename.toLowerCase();
-
-  return mimeType === 'image/heic' ||
-    mimeType === 'image/heif' ||
-    filename.endsWith('.heic') ||
-    filename.endsWith('.heif');
-}
-
-function formatFileSize(bytes: number | null): string {
-  if (!bytes) return 'Unknown size';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function getDocumentIcon(attachment: Attachment): { icon: 'pdf' | 'excel' | 'word' | 'powerpoint' | 'other'; color: string } {
@@ -142,68 +85,9 @@ function MediaThumbnail({
   source?: AttachmentSource;
   onClick: () => void;
 }) {
-  const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
-  const supabase = createClient();
+  // BACKLOG-3748: signing + HEIC conversion moved to a shared hook.
+  const { url: thumbnailUrl, loading, error } = useAttachmentThumbnailUrl(attachment);
   const isVideo = isVideoFile(attachment);
-  const isHeic = isHeicFile(attachment);
-
-  useEffect(() => {
-    if (!attachment.storage_path) {
-      setLoading(false);
-      return;
-    }
-
-    const fetchUrl = async () => {
-      try {
-        const { data, error: storageError } = await supabase.storage
-          .from('submission-attachments')
-          .createSignedUrl(attachment.storage_path!, 3600);
-
-        if (storageError) throw storageError;
-
-        // Convert HEIC to displayable format
-        if (isHeic) {
-          try {
-            const response = await fetch(data.signedUrl);
-            const blob = await response.blob();
-            const convertedBlob = await heic2any({
-              blob,
-              toType: 'image/jpeg',
-              quality: 0.7, // Lower quality for thumbnails
-            });
-            const resultBlob = Array.isArray(convertedBlob) ? convertedBlob[0] : convertedBlob;
-            const objectUrl = URL.createObjectURL(resultBlob);
-            setThumbnailUrl(objectUrl);
-          } catch (conversionError) {
-            console.error('HEIC thumbnail conversion failed:', conversionError);
-            setError(true);
-          }
-        } else {
-          setThumbnailUrl(data.signedUrl);
-        }
-      } catch (err) {
-        console.error('Failed to load attachment thumbnail:', {
-          filename: attachment.filename,
-          storagePath: attachment.storage_path,
-          error: err instanceof Error ? err.message : err,
-        });
-        setError(true);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchUrl();
-
-    // Cleanup object URL on unmount
-    return () => {
-      if (thumbnailUrl && thumbnailUrl.startsWith('blob:')) {
-        URL.revokeObjectURL(thumbnailUrl);
-      }
-    };
-  }, [attachment.storage_path, supabase.storage, isHeic]);
 
   return (
     <button
