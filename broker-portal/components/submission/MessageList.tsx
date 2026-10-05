@@ -273,9 +273,22 @@ function formatDateRange(firstDate: string, lastDate: string): string {
 }
 
 /**
+ * BACKLOG-3748: the real attachment count for one message. `has_attachments`
+ * alone is not trustworthy — Apple sets it true for link-preview texts with
+ * `attachment_count` 0. Matched rows (from `groupAttachmentsByMessage`) are
+ * authoritative when present; otherwise fall back to `attachment_count`.
+ */
+function realAttachmentCount(msg: Message, inline: MessageAttachment[]): number {
+  return inline.length > 0 ? inline.length : msg.attachment_count;
+}
+
+/**
  * Group messages into threads
  */
-export function groupMessagesIntoThreads(messages: Message[]): Thread[] {
+export function groupMessagesIntoThreads(
+  messages: Message[],
+  attachmentsByMessage?: AttachmentsByMessage
+): Thread[] {
   const threadMap = new Map<string, Message[]>();
 
   // Group messages by thread key
@@ -307,7 +320,10 @@ export function groupMessagesIntoThreads(messages: Message[]): Thread[] {
       firstDate: firstMsg.sent_at,
       lastDate: lastMsg.sent_at,
       participantDisplay: participantInfo.display,
-      totalAttachments: sortedMsgs.reduce((sum, m) => sum + m.attachment_count, 0),
+      totalAttachments: sortedMsgs.reduce(
+        (sum, m) => sum + realAttachmentCount(m, attachmentsByMessage?.[m.id] ?? []),
+        0
+      ),
       uniqueParticipantCount: participantInfo.count,
       primaryContactName: participantInfo.primaryName,
       primaryPhone: participantInfo.primaryPhone,
@@ -435,6 +451,7 @@ export function ConversationModal({
             // BACKLOG-3748: matched only by submission_attachments.message_id.
             const inline = attachmentsByMessage?.[msg.id] ?? [];
             const hasInline = inline.length > 0;
+            const realCount = realAttachmentCount(msg, inline);
             // A shown file replaces the "Media Attachment" indicator and placeholder.
             const typeDisplay = hasInline && msg.message_type === 'attachment_only'
               ? { indicator: null, icon: null }
@@ -493,10 +510,13 @@ export function ConversationModal({
                   )}
                   <div className={`flex items-center gap-2 mt-1 ${isOutbound ? (isEmail ? 'text-primary-100' : 'text-green-100') : 'text-gray-400'}`}>
                     <span className="text-xs">{formatMessageTime(msg.sent_at)}</span>
-                    {(msg.has_attachments || hasInline) && (
+                    {/* BACKLOG-3748: has_attachments lies for link-preview texts
+                        (Apple sets it true with attachment_count 0). Gate on a
+                        real count, never the flag alone. */}
+                    {realCount > 0 && (
                       <span className="flex items-center gap-1 text-xs">
                         <Paperclip className="w-3 h-3" />
-                        {hasInline ? inline.length : msg.attachment_count}
+                        {realCount}
                       </span>
                     )}
                   </div>
@@ -644,7 +664,10 @@ export function MessageList({ messages, attachmentsByMessage }: MessageListProps
   });
 
   // Group filtered messages into threads
-  const threads = useMemo(() => groupMessagesIntoThreads(filteredMessages), [filteredMessages]);
+  const threads = useMemo(
+    () => groupMessagesIntoThreads(filteredMessages, attachmentsByMessage),
+    [filteredMessages, attachmentsByMessage]
+  );
 
   const emailCount = messages.filter((m) => m.channel === 'email').length;
   const textCount = messages.filter((m) => m.channel !== 'email').length;
