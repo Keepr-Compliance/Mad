@@ -21,11 +21,9 @@ jest.mock("../../../components/settings/android/AndroidSyncSetup", () => ({
 }));
 
 jest.mock("../../../components/settings/android/GoogleMessagesSyncFlow", () => ({
-  GoogleMessagesSyncFlow: ({ onUseCompanion, onOpenSettings }: { onUseCompanion?: () => void; onOpenSettings?: () => void }) => (
+  GoogleMessagesSyncFlow: ({ onOpenSettings }: { onOpenSettings?: () => void }) => (
     <>
-      <button type="button" data-testid="gm-flow-stub" onClick={onUseCompanion}>
-        google messages flow
-      </button>
+      <div data-testid="gm-flow-stub">google messages flow</div>
       {onOpenSettings && (
         <button type="button" data-testid="gm-change-stub" onClick={onOpenSettings}>
           Change
@@ -36,12 +34,13 @@ jest.mock("../../../components/settings/android/GoogleMessagesSyncFlow", () => (
 }));
 
 describe("AndroidSyncModal", () => {
-  // BACKLOG-3659. Mutation: ignore `app` (always the companion wizard) → red.
-  it("Google Messages users get the extension flow, and can switch to the companion app", () => {
-    render(<AndroidSyncModal userId="user-1" onClose={jest.fn()} app="google-messages" />);
+  // SR C6 (founder): always the Google Messages flow; no way to the
+  // Companion wizard. Mutation: the companion branch back → red.
+  it("always the Google Messages flow — never the Companion wizard", () => {
+    render(<AndroidSyncModal userId="user-1" onClose={jest.fn()} />);
+    expect(screen.getByTestId("gm-flow-stub")).toBeInTheDocument();
     expect(screen.queryByTestId("android-sync-setup-stub")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("gm-flow-stub"));
-    expect(screen.getByTestId("android-sync-setup-stub")).toBeInTheDocument();
+    expect(screen.queryByText(/another texting app/i)).not.toBeInTheDocument();
   });
 
   // Founder: "Change" closes the modal and opens Settings at the Google
@@ -49,7 +48,7 @@ describe("AndroidSyncModal", () => {
   it("Google Messages: Change closes the modal and opens Settings at the months control", () => {
     const onClose = jest.fn();
     const onOpenSettings = jest.fn();
-    render(<AndroidSyncModal userId="user-1" onClose={onClose} app="google-messages" onOpenSettings={onOpenSettings} />);
+    render(<AndroidSyncModal userId="user-1" onClose={onClose} onOpenSettings={onOpenSettings} />);
     fireEvent.click(screen.getByTestId("gm-change-stub"));
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(onOpenSettings).toHaveBeenCalledWith("settings-gm-lookback");
@@ -58,8 +57,8 @@ describe("AndroidSyncModal", () => {
   it("renders the wizard flush inside a scrollable body", () => {
     render(<AndroidSyncModal userId="user-1" onClose={jest.fn()} />);
 
-    // The wizard is mounted in the modal body.
-    expect(screen.getByTestId("android-sync-setup-stub")).toBeInTheDocument();
+    // The flow is mounted in the modal body.
+    expect(screen.getByTestId("gm-flow-stub")).toBeInTheDocument();
 
     // The body scrolls so nothing is unreachable in a narrow/short viewport.
     const body = screen.getByTestId("android-sync-modal-body");

@@ -369,7 +369,7 @@ describe("ContactsImportSettings", () => {
     it.each([
       ["android-messages-web", "(Android: Google Messages)"],
       ["iphone-sync", "(iPhone Sync)"],
-      ["android-companion", "(Android Companion)"],
+      ["android-companion", "(Android: Google Messages)"], // SR C6: a stored Companion source shows as Google Messages
       ["macos-native", "(macOS Messages)"],
     ] as const)("Messages / SMS shows the import source %s as %s", (source, label) => {
       renderWithPlatform(

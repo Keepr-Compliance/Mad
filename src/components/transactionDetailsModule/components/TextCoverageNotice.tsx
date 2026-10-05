@@ -35,8 +35,9 @@ export function chosenTextSource(pref: string | undefined | null): TextSource | 
       return "mac";
     case "iphone-sync":
       return "iphone";
+    // SR C6 (founder): the Companion is no longer offered — a stored
+    // "android-companion" is shown as Google Messages, like everywhere else.
     case "android-companion":
-      return "android_companion";
     case "android-messages-web":
       return "google_messages";
     default:

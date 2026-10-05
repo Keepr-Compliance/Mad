@@ -29,8 +29,6 @@ const POLL_MS = 3000;
 
 interface GoogleMessagesSyncFlowProps {
   onClose: () => void;
-  /** "Use another texting app?": switch to the Keepr companion app flow. */
-  onUseCompanion?: () => void;
   /** Kept for the modal's API (Settings › Messages); the storyboards show no link here. */
   onOpenSettings?: () => void;
   /** The signed-in user (the "Beta extension install" preference). */
@@ -82,7 +80,6 @@ function prefersReducedMotion(): boolean {
 
 export function GoogleMessagesSyncFlow({
   onClose,
-  onUseCompanion,
   onOpenSettings,
   userId,
   pollMs = POLL_MS,
@@ -277,11 +274,6 @@ export function GoogleMessagesSyncFlow({
           <button type="button" className={primary} onClick={() => void rcsImportService.openExtensionStore()} data-testid="gm-add-to-chrome">
             Add to Chrome
           </button>
-          {onUseCompanion && (
-            <button type="button" className="self-start text-[14px] text-[#4338CA] hover:text-[#3730A3]" onClick={onUseCompanion}>
-              Use another texting app?
-            </button>
-          )}
         </>
       )}
 

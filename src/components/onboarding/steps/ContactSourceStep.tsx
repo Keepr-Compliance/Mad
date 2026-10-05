@@ -139,7 +139,7 @@ const SOURCE_OPTIONS: SourceConfig[] = [
   {
     key: "androidContacts",
     label: "Android Phone Contacts",
-    description: "Import contacts synced from your Android companion app",
+    description: "Import contacts from your Android phone",
     icon: (
       <svg className="w-7 h-7 text-green-600" viewBox="0 0 24 24" fill="none" stroke="currentColor">
         <path

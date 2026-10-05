@@ -60,7 +60,7 @@ describe("TextCoverageNotice", () => {
     expect(getTextCoverage).toHaveBeenCalledWith("tx-1", "user-1", "google_messages");
     expect(chosenTextSource("macos-native")).toBe("mac");
     expect(chosenTextSource("iphone-sync")).toBe("iphone");
-    expect(chosenTextSource("android-companion")).toBe("android_companion");
+    expect(chosenTextSource("android-companion")).toBe("google_messages"); // SR C6: shown as Google Messages
     expect(chosenTextSource(undefined)).toBeNull();
   });
 

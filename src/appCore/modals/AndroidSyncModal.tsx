@@ -1,15 +1,14 @@
 /**
  * AndroidSyncModal Component
  *
- * Wraps the guided AndroidSyncSetup wizard in a modal overlay with a minimize
- * button. Mirrors IPhoneSyncModal so the Android companion sync flow launches
- * from the Dashboard "Sync Android Messages" card instead of Settings
- * (BACKLOG-2320).
+ * The Google Messages sync flow (BACKLOG-3659) in a modal overlay with a
+ * minimize button. Mirrors IPhoneSyncModal; launched from the Dashboard's
+ * Android card (BACKLOG-2320). SR C6 (founder): the Android Companion's
+ * wizard is no longer offered here.
  */
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect } from "react";
 import { ResponsiveModal } from "../../components/common/ResponsiveModal";
-import { AndroidSyncSetup } from "../../components/settings/android/AndroidSyncSetup";
 import { GoogleMessagesSyncFlow } from "../../components/settings/android/GoogleMessagesSyncFlow";
 import { GM_LOOKBACK_TARGET } from "../../components/settings/android/googleMessagesSyncSteps";
 import logger from "../../utils/logger";
@@ -18,19 +17,13 @@ interface AndroidSyncModalProps {
   /** The logged-in desktop user id (forwarded to the wizard for BACKLOG-2224 account-match). */
   userId: string;
   onClose: () => void;
-  /**
-   * BACKLOG-3659: which Android app the user texts with — Google Messages
-   * (Keepr's Chrome extension) or another app (the Keepr companion app).
-   */
-  app?: "google-messages" | "companion";
   /** Open Settings scrolled to a section (by element id): Google Messages' "Change". */
   onOpenSettings?: (target: string) => void;
   /** Opened from Settings' Link / Relink or keepr://link: the link step. */
   startAtLink?: boolean;
 }
 
-export function AndroidSyncModal({ userId, onClose, app = "companion", onOpenSettings, startAtLink = false }: AndroidSyncModalProps) {
-  const [shown, setShown] = useState(app);
+export function AndroidSyncModal({ userId, onClose, onOpenSettings, startAtLink = false }: AndroidSyncModalProps) {
   useEffect(() => {
     logger.info("[AndroidSyncModal] Mounted");
     return () => logger.info("[AndroidSyncModal] Unmounted");
@@ -57,16 +50,11 @@ export function AndroidSyncModal({ userId, onClose, app = "companion", onOpenSet
           </button>
         </div>
         {/* The storyboards' frame: 0 24 24 padding under the minimize row. */}
-        <div className={`flex-1 min-h-0 overflow-y-auto ${shown === "google-messages" ? "px-6 pb-6" : "px-4 pb-4"}`} data-testid="android-sync-modal-body">
-          {/* BACKLOG-2323: onComplete auto-dismisses the modal shortly after a
-              live pairing success advances the wizard off the (now-consumed) QR,
-              mirroring how IPhoneSyncModal closes on success. */}
-          {shown === "google-messages" ? (
+        <div className="flex-1 min-h-0 overflow-y-auto px-6 pb-6" data-testid="android-sync-modal-body">
             <GoogleMessagesSyncFlow
               onClose={onClose}
               userId={userId}
               startAtLink={startAtLink}
-              onUseCompanion={() => setShown("companion")}
               onOpenSettings={
                 onOpenSettings
                   ? () => {
@@ -76,9 +64,6 @@ export function AndroidSyncModal({ userId, onClose, app = "companion", onOpenSet
                   : undefined
               }
             />
-          ) : (
-            <AndroidSyncSetup userId={userId} onComplete={onClose} />
-          )}
         </div>
     </ResponsiveModal>
   );

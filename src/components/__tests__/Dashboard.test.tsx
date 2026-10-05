@@ -112,7 +112,7 @@ describe("Dashboard sync cards", () => {
       expect(screen.getByTestId("sync-android-card")).toBeInTheDocument();
       expect(screen.getByText("Sync Android Messages")).toBeInTheDocument();
       // Founder-specified: Wi-Fi, NOT "via USB cable".
-      expect(screen.getByText("Import texts over Wi-Fi")).toBeInTheDocument();
+      expect(screen.getByText("Copy texts from Google Messages")).toBeInTheDocument();
     });
 
     it("does NOT render the Android card when onSyncAndroid is omitted", () => {

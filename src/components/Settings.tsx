@@ -2,7 +2,6 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import { ResponsiveModal } from "./common/ResponsiveModal";
 import { LLMSettings } from "./settings/LLMSettings";
 import { MacOSMessagesImportSettings } from "./settings/MacOSMessagesImportSettings";
-import { AndroidMessagesSettings } from "./settings/AndroidMessagesSettings";
 import { GoogleMessagesSettings } from "./settings/GoogleMessagesSettings";
 import { ImportSourceSettings } from "./settings/ImportSourceSettings";
 import { IphoneSyncSettings } from "./settings/IphoneSyncSettings";
@@ -25,6 +24,7 @@ import { OfflineNotice } from './common/OfflineNotice';
 import { settingsService } from '../services';
 import logger from '../utils/logger';
 import type { ImportSource } from '../services/settingsService';
+import { shownImportSource } from './settings/importSourceLabels';
 import type { PreferencesResult } from './settings/types';
 
 const SETTINGS_TABS = [
@@ -53,14 +53,12 @@ interface SettingsComponentProps {
   onLogout?: () => Promise<void>;
   onEmailConnected?: (email: string, provider: "google" | "microsoft") => void;
   onEmailDisconnected?: (provider: "google" | "microsoft") => void;
-  /** BACKLOG-2347: open the guided Android sync wizard from Settings. */
-  onConnectAndroid?: () => void;
   /** Settings › Google Messages' Link / Relink: the Sync Android modal at its link step. */
   onLinkGoogleMessages?: () => void;
 }
 
 /** Settings — tab container that delegates to focused sub-components. */
-function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconnected, onConnectAndroid, onLinkGoogleMessages }: SettingsComponentProps) {
+function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconnected, onLinkGoogleMessages }: SettingsComponentProps) {
   const { isAllowed } = useFeatureGate();
   const hasAIAddon = isAllowed("ai_detection");
   // BACKLOG-3423: lets a source change re-gate iPhone USB detection live.
@@ -121,12 +119,13 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
             | { source?: ImportSource }
             | undefined;
           if (messagesPrefs?.source) {
-            setActiveImportSource(messagesPrefs.source);
+            // SR C6: a stored "android-companion" shows as Google Messages.
+            setActiveImportSource(shownImportSource(messagesPrefs.source));
           } else {
             // No saved source — check phoneType for default
             const phoneResult = await settingsService.getPhoneType(userId);
             if (phoneResult.success && phoneResult.data === 'android') {
-              setActiveImportSource('android-companion');
+              setActiveImportSource('android-messages-web');
             } else {
               setActiveImportSource(isMacOS ? 'macos-native' : 'iphone-sync');
             }
@@ -219,14 +218,10 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
             <div id="settings-messages" className="mb-8">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">Messages</h3>
               <div className="space-y-4">
-                <ImportSourceSettings userId={userId} onSourceChange={handleImportSourceChange} onConnectAndroid={onConnectAndroid} />
-                {/* BACKLOG-1937: iPhone USB toggle moved to the dedicated iPhone Sync category below */}
-                {activeImportSource === 'android-companion' ? (
-                  /* BACKLOG-2320: the guided install→pair→sync wizard moved to a
-                     Dashboard button (mirroring iOS). Settings keeps only the
-                     device/status management below. */
-                  <AndroidMessagesSettings userId={userId} />
-                ) : activeImportSource === 'android-messages-web' ? (
+                <ImportSourceSettings userId={userId} onSourceChange={handleImportSourceChange} />
+                {/* BACKLOG-1937: iPhone USB toggle moved to the dedicated iPhone Sync category below.
+                    SR C6 (founder): the Android Companion panel is no longer mounted. */}
+                {activeImportSource === 'android-messages-web' ? (
                   /* BACKLOG-3659 P3d: Android with Google Messages (Keepr's
                      extension): its status, auto-delete and its own reset. */
                   <GoogleMessagesSettings userId={userId} onOpenSyncAndroid={onLinkGoogleMessages} />
@@ -282,10 +277,6 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
               initialPreferences={preferences}
               isMicrosoftConnected={isMicrosoftConnected}
               isGoogleConnected={isGoogleConnected}
-              /* BACKLOG-2986: the Android contact re-import note only offers to
-                 jump to the Android Companion panel when that panel is on the
-                 page, which is exactly when this source is active (see :210). */
-              androidCompanionActive={activeImportSource === 'android-companion'}
               messagesImportSource={activeImportSource}
             />
 

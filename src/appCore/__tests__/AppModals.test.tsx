@@ -64,20 +64,13 @@ jest.mock("../modals/IPhoneSyncModal", () => ({
 }));
 
 jest.mock("../modals/AndroidSyncModal", () => ({
-  AndroidSyncModal: ({ userId, app, startAtLink }: { userId: string; app?: string; startAtLink?: boolean }) => (
-    <div data-testid="android-sync-modal" data-user-id={userId} data-app={app} data-start-at-link={String(!!startAtLink)}>
+  AndroidSyncModal: ({ userId, startAtLink, ...rest }: { userId: string; startAtLink?: boolean; app?: string }) => (
+    <div data-testid="android-sync-modal" data-user-id={userId} data-app={rest.app ?? "none"} data-start-at-link={String(!!startAtLink)}>
       Android Sync Modal
     </div>
   ),
 }));
 
-// BACKLOG-3659: the Android flow follows the stored import source.
-let mockMessagesSource: string | undefined;
-jest.mock("../../services/settingsService", () => ({
-  settingsService: {
-    getPreferences: async () => ({ success: true, data: { messages: { source: mockMessagesSource } } }),
-  },
-}));
 
 // Mock useEmailSettingsCallbacks hook
 jest.mock("../hooks/useEmailSettingsCallbacks", () => ({
@@ -548,7 +541,6 @@ describe("AppModals", () => {
   // modal, mirroring the iPhone sync modal.
   describe("Android Sync Modal (BACKLOG-2320)", () => {
     it("should render AndroidSyncModal when showAndroidSync is true and a user exists", async () => {
-      mockMessagesSource = "android-companion";
       const app = createAppStateMock({
         modalState: createModalState({ showAndroidSync: true }),
         currentUser: mockUser,
@@ -558,24 +550,13 @@ describe("AppModals", () => {
       expect(modal).toBeInTheDocument();
       // The desktop user id is forwarded to the wizard (BACKLOG-2224 account-match).
       expect(modal).toHaveAttribute("data-user-id", mockUser.id);
-      expect(modal).toHaveAttribute("data-app", "companion");
-    });
-
-    // BACKLOG-3659. Mutation: always "companion" → red.
-    it("opens the Google Messages flow when the import source is android-messages-web", async () => {
-      mockMessagesSource = "android-messages-web";
-      const app = createAppStateMock({
-        modalState: createModalState({ showAndroidSync: true }),
-        currentUser: mockUser,
-      });
-      render(<AppModals app={app} />);
-      expect(await screen.findByTestId("android-sync-modal")).toHaveAttribute("data-app", "google-messages");
+      // SR C6: no app choice any more — the modal is always Google Messages.
+      expect(modal).toHaveAttribute("data-app", "none");
     });
 
     // SR: the start is modal state handed to the modal as a prop.
     // Mutation: the prop not passed → red.
     it("passes the link start to the modal (Settings' Link / keepr://link); a default open does not", async () => {
-      mockMessagesSource = "android-messages-web";
       const linkApp = createAppStateMock({
         modalState: createModalState({ showAndroidSync: true, androidSyncStart: "link" }),
         currentUser: mockUser,

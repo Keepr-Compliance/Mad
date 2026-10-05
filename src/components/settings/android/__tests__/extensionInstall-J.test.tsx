@@ -56,19 +56,17 @@ describe("the beta-install preference", () => {
 });
 
 describe("A02 (published, preference off): the Chrome Web Store", () => {
-  it("'Install the Keepr extension', 'For Chrome. Takes a minute.', Add to Chrome, Use another texting app?", async () => {
+  // SR C6: "Use another texting app?" is gone (the Companion's UI is removed).
+  it("'Install the Keepr extension', 'For Chrome. Takes a minute.', Add to Chrome — and nothing else", async () => {
     mockPrefs = {};
-    const onUseCompanion = jest.fn();
-    render(<GoogleMessagesSyncFlow onClose={jest.fn()} onUseCompanion={onUseCompanion} userId="user-1" pollMs={20} published />);
+    render(<GoogleMessagesSyncFlow onClose={jest.fn()} userId="user-1" pollMs={20} published />);
     const step = await screen.findByTestId("gm-step-install");
     await waitFor(() => expect(screen.getByRole("heading")).toHaveTextContent("Install the Keepr extension"));
     expect(step).toHaveTextContent("For Chrome. Takes a minute.");
     expect(screen.queryByTestId("gm-beta-label")).toBeNull();
-    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["Add to Chrome", "Use another texting app?"]);
+    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["Add to Chrome"]);
     fireEvent.click(screen.getByTestId("gm-add-to-chrome"));
     expect(mockStore).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole("button", { name: "Use another texting app?" }));
-    expect(onUseCompanion).toHaveBeenCalledTimes(1);
   });
 
   it("the preference on → J01 (beta) even when published", async () => {

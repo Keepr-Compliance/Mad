@@ -506,7 +506,7 @@ function Dashboard({
                     Sync Android Messages
                   </h3>
                   <p className="text-sm text-gray-500">
-                    Import texts over Wi-Fi
+                    Copy texts from Google Messages
                   </p>
                 </div>
                 <svg
