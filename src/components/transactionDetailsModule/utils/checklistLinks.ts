@@ -24,14 +24,11 @@ import {
 /**
  * Attachments the picker may offer.
  *
- * `getTransactionAllAttachments` has a third arm that reaches a legacy text
- * attachment through `external_message_id` alone — its `message_id` and
- * `email_id` are both NULL. Main's membership check
- * (`electron/services/db/checklistSql.ts`, `targetsInTransactionSql`) has no
- * such arm, so offering the row would only lead to a refusal. The current
- * schema's CHECK forbids the shape, so these rows exist only in databases
- * created before it, and `attachmentDbService` back-fills `message_id` when the
- * fallback read runs.
+ * Drops a row with neither `email_id` nor `message_id`. Since BACKLOG-3731 the
+ * Attachments tab gives every text row the `message_id` of the text it belongs
+ * to, so no tab row is dropped today; the filter is a guard. Main's membership
+ * check (`electron/services/db/checklistSql.ts`, `targetsInTransactionSql`)
+ * accepts text rows under the same rule the tab lists them by.
  */
 export function linkableAttachments(attachments: UnifiedAttachment[]): UnifiedAttachment[] {
   return attachments.filter((a) => a.email_id !== null || a.message_id !== null);

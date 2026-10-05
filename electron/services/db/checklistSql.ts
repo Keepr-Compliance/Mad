@@ -284,10 +284,19 @@ export function attachmentLabelSql(count: number): SafeSql {
  * Bound parameters, in order: the N target ids, then the transaction id — once
  * for `email`, twice for `attachment` (its two arms are independent EXISTS).
  *
- * The attachment arms are `submissionDbService.getTransactionAttachments`'s two
- * joins with the audit-date filter and the `storage_path IS NOT NULL` filter
- * removed: those narrow an EXPORT to what can be uploaded, while this asks only
- * whether the attachment belongs to this transaction at all.
+ * The email arm is an email attachment's own email linked to the transaction.
+ * The text arm accepts an attachment when a message linked to the transaction
+ * owns it under the shared text-attachment rule
+ * (`textAttachmentLookupSql.ts`, `selectTextAttachmentsForMessages`):
+ *   - its `message_id` is that message, or
+ *   - it is not an email attachment, its `external_message_id` is that
+ *     message's `external_id`, and that message has no attachment row of its
+ *     own.
+ * The second case is the row whose `message_id` names a message that no longer
+ * exists; the Attachments tab lists it under the text, so linking it must pass.
+ * Unlike the submit, there is no audit-date or `storage_path` filter: those
+ * narrow an EXPORT to what can be uploaded, while this asks only whether the
+ * attachment belongs to this transaction at all.
  */
 export function targetsInTransactionSql(kind: ChecklistLinkKind, count: number): SafeSql {
   const ids = placeholderList(count);
@@ -314,7 +323,16 @@ export function targetsInTransactionSql(kind: ChecklistLinkKind, count: number):
             (c2.message_id IS NOT NULL AND c2.message_id = m.id)
             OR (c2.message_id IS NULL AND c2.thread_id IS NOT NULL AND c2.thread_id = m.thread_id)
           )
-          WHERE m.id = a.message_id AND c2.transaction_id = ?
+          WHERE c2.transaction_id = ?
+            AND (
+              m.id = a.message_id
+              OR (
+                a.email_id IS NULL
+                AND a.external_message_id IS NOT NULL
+                AND m.external_id = a.external_message_id
+                AND NOT EXISTS (SELECT 1 FROM attachments d WHERE d.message_id = m.id)
+              )
+            )
         )
       )
   `;

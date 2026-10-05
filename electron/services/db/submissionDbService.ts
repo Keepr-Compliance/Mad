@@ -7,7 +7,9 @@ import type { Message, Attachment } from "../../types";
 import { ensureDb } from "./core/dbConnection";
 // BACKLOG-2781: the closing-day end bound is the export resolver's, not a
 // local re-derivation. Each call below is its own call site on purpose —
-// four independent queries, four independent regressions to guard.
+// three independent queries (texts, emails, email attachments), three
+// independent regressions to guard. Text attachments have no window of their
+// own: they follow the texts `getTransactionMessages` returns (BACKLOG-3731).
 import { auditWindowEnd } from "../exportPlan";
 import { selectTextAttachmentsForMessages } from "./textAttachmentLookupSql";
 

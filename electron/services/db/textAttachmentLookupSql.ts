@@ -17,7 +17,9 @@
  *
  *   1. rows whose `message_id` is one of the given ids;
  *   2. for each given id with no row in (1): rows whose `external_message_id`
- *      equals that message's `external_id`.
+ *      equals that message's `external_id` and whose `email_id` is NULL (an
+ *      email attachment's `external_message_id` holds the email's provider id,
+ *      never a text's Apple id).
  *
  * Read-only. The Messages view keeps its own repair write; nothing here
  * writes, so the submit and the Attachments tab never mutate.
@@ -103,7 +105,9 @@ export function selectTextAttachmentsForMessages<T extends AttachmentRowBase>(
   const externalIds = Array.from(ownerByExternal.keys());
   for (const part of chunks(externalIds)) {
     const rows = db
-      .prepare(`SELECT * FROM attachments WHERE external_message_id IN (${widthOf(part)})`)
+      .prepare(
+        `SELECT * FROM attachments WHERE external_message_id IN (${widthOf(part)}) AND email_id IS NULL`,
+      )
       .all(...part) as T[];
     for (const row of rows) {
       const owner = ownerByExternal.get(row.external_message_id as string);

@@ -42,6 +42,7 @@ import { selectTextAttachmentsForMessages, TEXT_ATTACHMENT_LOOKUP_CHUNK } from "
 import { getTransactionAttachments, getTransactionMessages } from "../submissionDbService";
 import { getTransactionAllAttachments } from "../attachmentDbService";
 import { runSubmissionPreflight, setPreflightStatForTests } from "../../submissionPreflight";
+import { targetsInTransactionSql } from "../checklistSql";
 
 const DEAL_GUID = "p:0/AAAA-DEAL-GUID";
 
@@ -207,6 +208,56 @@ describe("BACKLOG-3731 — one text-attachment lookup (real sqlite)", () => {
     ids.push("m-deal");
     const resolved = selectTextAttachmentsForMessages<{ id: string; message_id: string | null }>(db, ids);
     expect(resolved.map((r) => [r.row.id, r.resolved_message_id])).toEqual([["a-stale", "m-deal"]]);
+  });
+
+  // An email attachment carrying the deal text's Apple id. No writer emits
+  // that collision; the guard makes the rule explicit.
+  const insertEmailRowWithDealGuid = () => {
+    db.prepare(`INSERT INTO emails (id, sent_at, direction, subject, sender) VALUES ('e-1', '2026-09-24T15:00:00.000Z', 'inbound', 's', 'x@example.com')`).run();
+    db.prepare(
+      `INSERT INTO attachments (id, message_id, email_id, external_message_id, filename) VALUES ('a-email', NULL, 'e-1', ?, 'doc.pdf')`,
+    ).run(DEAL_GUID);
+  };
+
+  it("email guard: an email attachment is never matched by a text's Apple id", () => {
+    insertEmailRowWithDealGuid();
+    const resolved = selectTextAttachmentsForMessages<{ id: string; message_id: string | null }>(db, ["m-deal"]);
+    expect(resolved.map((r) => [r.row.id, r.resolved_message_id])).toEqual([["a-stale", "m-deal"]]);
+  });
+
+  describe("checklist link check accepts what the tab lists (targetsInTransactionSql)", () => {
+    const accepted = (ids: string[], txn = "T1"): string[] =>
+      (
+        db.prepare(targetsInTransactionSql("attachment", ids.length)).all(...ids, txn, txn) as { id: string }[]
+      )
+        .map((r) => r.id)
+        .sort();
+
+    it("a stale-id photo listed in the tab can be linked", () => {
+      const tabTextIds = getTransactionAllAttachments("T1")
+        .filter((r) => r.source === "text")
+        .map((r) => r.id)
+        .sort();
+      expect(tabTextIds).toEqual(["a-direct", "a-stale"]);
+      expect(accepted(tabTextIds)).toEqual(tabTextIds);
+    });
+
+    it("a stale-id photo is refused for a transaction its text is not linked to", () => {
+      expect(accepted(["a-stale", "a-direct"], "T-other")).toEqual([]);
+    });
+
+    it("zero-direct rule: an Apple-id row for a text that has its own row is refused (as the tab omits it)", () => {
+      db.pragma("foreign_keys = OFF");
+      insertAttachment(db, ["a-extra", "gone-2", "p:0/BBBB-DIRECT-GUID", "IMG_0003.HEIC", "image/heic", 1, "/data/c.heic"]);
+      db.pragma("foreign_keys = ON");
+      expect(getTransactionAllAttachments("T1").map((r) => r.id)).not.toContain("a-extra");
+      expect(accepted(["a-extra"])).toEqual([]);
+    });
+
+    it("email guard: an email attachment carrying a text's Apple id is refused when its email is not linked", () => {
+      insertEmailRowWithDealGuid();
+      expect(accepted(["a-email"])).toEqual([]);
+    });
   });
 
   it("empty input returns nothing", () => {
