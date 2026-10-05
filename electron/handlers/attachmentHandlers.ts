@@ -30,7 +30,7 @@ import { getEmailById } from "../services/db/emailDbService";
 // BACKLOG-2781: this handler's counts are meant to match what the submission
 // service uploads, so it must use the SAME closing-day bound the export
 // resolver defines rather than a local end-of-day.
-import { auditWindowEnd } from "../services/exportPlan";
+import { auditWindowEnd, auditWindowStartParam } from "../services/exportPlan";
 import { auditPeriodFromRow } from "../services/submissionAuditPeriod";
 import { wrapHandler } from "../utils/wrapHandler";
 import type { Transaction } from "../types/models";
@@ -519,8 +519,10 @@ export function registerAttachmentHandlers(
 
       if (auditStart) {
         hasStart = true;
-        textDateParams.push(auditStart);
-        emailDateParams.push(auditStart);
+        // BACKLOG-3734: a date-only start is LOCAL 00:00 of that day.
+        const startParam = auditWindowStartParam(auditStart);
+        textDateParams.push(startParam);
+        emailDateParams.push(startParam);
       }
 
       // BACKLOG-2781: `auditEnd` arrives as the caller sent it and is passed

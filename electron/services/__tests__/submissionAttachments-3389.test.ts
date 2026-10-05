@@ -142,6 +142,8 @@ jest.mock("../supabaseStorageService", () => ({
 jest.mock("../databaseService", () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const submissionDb = require("../db/submissionDbService");
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const communicationDb = require("../db/communicationDbService");
   return {
     __esModule: true,
     default: {
@@ -156,6 +158,11 @@ jest.mock("../databaseService", () => {
       getUndownloadedEmailAttachments: (...args: unknown[]) =>
         (submissionDb.getUndownloadedEmailAttachments as (...a: unknown[]) => unknown)(...args),
       updateTransaction: jest.fn(),
+      // BACKLOG-3733: the submit's text set comes from the export's reader,
+      // through transactionService.getTransactionDetails.
+      getCommunicationsByTransaction: (...args: unknown[]) =>
+        (communicationDb.getCommunicationsWithMessages as (...a: unknown[]) => unknown)(...args),
+      getTransactionContactsWithRoles: jest.fn().mockResolvedValue([]),
     },
   };
 });

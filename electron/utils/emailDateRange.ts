@@ -13,7 +13,7 @@
  * one helper owns "where does the user's day end", and this file's 30-day
  * buffer advances from it. See that function for the local-midnight contract.
  */
-import { auditWindowEnd } from "../services/exportPlan";
+import { auditWindowEnd, auditWindowStart } from "../services/exportPlan";
 
 /** Buffer days added after closed_at date to catch post-closing communications */
 export const DEFAULT_BUFFER_DAYS = 30;
@@ -61,8 +61,9 @@ export function computeTransactionDateRange(
 
   // Try started_at first (most meaningful for audit period)
   if (params.started_at) {
-    const d = new Date(params.started_at);
-    if (!isNaN(d.getTime())) start = d;
+    // BACKLOG-3734: a date-only start is LOCAL 00:00 of that day.
+    const d = auditWindowStart(params.started_at);
+    if (d && !isNaN(d.getTime())) start = d;
   }
 
   // Fall back to created_at

@@ -12,7 +12,12 @@
  *
  * The end bound passed on here is the raw `closed_at`; each query widens it
  * to the end of that calendar day with `auditWindowEnd` (`exportPlan.ts`).
+ *
+ * The start bound is read with `auditWindowStart` (BACKLOG-3734): a date-only
+ * `started_at` is LOCAL 00:00 of that day, not UTC midnight.
  */
+
+import { auditWindowStart } from "./exportPlan";
 
 export interface AuditPeriodSource {
   started_at?: string | null;
@@ -26,7 +31,7 @@ export interface AuditPeriod {
 
 export function auditPeriodFromRow(row: AuditPeriodSource): AuditPeriod {
   return {
-    auditStartDate: row.started_at ? new Date(row.started_at) : null,
+    auditStartDate: auditWindowStart(row.started_at),
     auditEndDate: row.closed_at ? new Date(row.closed_at) : null,
   };
 }

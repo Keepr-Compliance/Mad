@@ -49,6 +49,8 @@ import {
 } from "./submissionStageRetry";
 import { abandonSubmission, readSubmissionStatus } from "./submissionAbandon";
 import { auditPeriodFromRow, type AuditPeriodSource } from "./submissionAuditPeriod";
+import { selectSubmissionTextIds } from "./transactionCommunicationSet";
+import type { SelectedTextIds } from "./exportPlan";
 import {
   flatAttemptCounts,
   pickRefusalCounts,
@@ -656,9 +658,16 @@ class SubmissionService {
   ): Promise<SubmissionScopeResult> {
     try {
       const { auditStartDate, auditEndDate } = auditPeriodFromRow(candidate);
-      const texts = databaseService.getTransactionMessages(transactionId, auditStartDate, auditEndDate);
+      // BACKLOG-3733: the texts the export would include, as the submit sends.
+      const selected = await selectSubmissionTextIds(transactionId);
+      const texts = databaseService.getTransactionMessages(transactionId, auditStartDate, auditEndDate, selected);
       const emails = databaseService.getTransactionEmails(transactionId, auditStartDate, auditEndDate);
-      const attachments = databaseService.getTransactionAttachments(transactionId, auditStartDate, auditEndDate);
+      const attachments = databaseService.getTransactionAttachments(
+        transactionId,
+        auditStartDate,
+        auditEndDate,
+        selected
+      );
 
       const inWindow = {
         emails: emails.length,
@@ -736,10 +745,15 @@ class SubmissionService {
       closed_at: transaction.closed_at ?? null,
     });
 
+    // BACKLOG-3733: one text set for the texts AND their attachments — the
+    // texts the export of this deal would include (owner's copies, hidden
+    // texts and reactions to them removed, duplicates collapsed).
+    const selected = await selectSubmissionTextIds(transactionId);
     const messages = await this.loadTransactionMessages(
       transactionId,
       auditStartDate,
-      auditEndDate
+      auditEndDate,
+      selected
     );
     const emails = await this.loadTransactionEmails(
       transactionId,
@@ -750,7 +764,8 @@ class SubmissionService {
     const attachments = await this.loadTransactionAttachments(
       transactionId,
       auditStartDate,
-      auditEndDate
+      auditEndDate,
+      selected
     );
     const emailIds = emails
       .map((e) => e.id)
@@ -1900,10 +1915,11 @@ class SubmissionService {
 
   private async loadTransactionMessages(
     transactionId: string,
-    auditStartDate?: Date | null,
-    auditEndDate?: Date | null
+    auditStartDate: Date | null | undefined,
+    auditEndDate: Date | null | undefined,
+    selected: SelectedTextIds
   ): Promise<Message[]> {
-    const rows = databaseService.getTransactionMessages(transactionId, auditStartDate, auditEndDate);
+    const rows = databaseService.getTransactionMessages(transactionId, auditStartDate, auditEndDate, selected);
 
     logService.info(
       `[Submission] Loaded ${rows.length} text messages for audit period`,
@@ -1956,13 +1972,14 @@ class SubmissionService {
    */
   private async loadTransactionAttachments(
     transactionId: string,
-    auditStartDate?: Date | null,
-    auditEndDate?: Date | null
+    auditStartDate: Date | null | undefined,
+    auditEndDate: Date | null | undefined,
+    selected: SelectedTextIds
   ): Promise<Attachment[]> {
     // Download missing email attachments before returning
     await this.downloadMissingEmailAttachments(transactionId);
 
-    return databaseService.getTransactionAttachments(transactionId, auditStartDate, auditEndDate);
+    return databaseService.getTransactionAttachments(transactionId, auditStartDate, auditEndDate, selected);
   }
 
   private async downloadMissingEmailAttachments(transactionId: string): Promise<void> {

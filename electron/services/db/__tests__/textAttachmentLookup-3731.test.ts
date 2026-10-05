@@ -43,6 +43,7 @@ import { getTransactionAttachments, getTransactionMessages } from "../submission
 import { getTransactionAllAttachments } from "../attachmentDbService";
 import { runSubmissionPreflight, setPreflightStatForTests } from "../../submissionPreflight";
 import { targetsInTransactionSql } from "../checklistSql";
+import { ALL_TEXT_IDS } from "../../__tests__/helpers/selectedTextIds";
 
 const DEAL_GUID = "p:0/AAAA-DEAL-GUID";
 
@@ -50,7 +51,8 @@ function createSchema(db: DatabaseType): void {
   db.exec(`
     CREATE TABLE messages (
       id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL DEFAULT 'user-1', -- NOT NULL in schema.sql; BACKLOG-3733 joins on it
+      -- BACKLOG-3733: NOT NULL in schema.sql; the submit's thread arm joins on it.
+      user_id TEXT NOT NULL DEFAULT 'fixture-user',
       thread_id TEXT,
       external_id TEXT,
       sent_at DATETIME,
@@ -81,7 +83,8 @@ function createSchema(db: DatabaseType): void {
     );
     CREATE TABLE communications (
       id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL DEFAULT 'user-1', -- NOT NULL in schema.sql; BACKLOG-3733 joins on it
+      -- BACKLOG-3733: NOT NULL in schema.sql; the submit's thread arm joins on it.
+      user_id TEXT NOT NULL DEFAULT 'fixture-user',
       transaction_id TEXT,
       message_id TEXT,
       email_id TEXT,
@@ -149,7 +152,7 @@ describe("BACKLOG-3731 — one text-attachment lookup (real sqlite)", () => {
   });
 
   it("C-apple-id: the submit's lookup returns the stale row, resolved to the deal text, and writes nothing", () => {
-    const rows = getTransactionAttachments("T1", null, null);
+    const rows = getTransactionAttachments("T1", null, null, ALL_TEXT_IDS);
     const byId = new Map(rows.map((r) => [r.id, r]));
 
     expect(byId.get("a-stale")?.resolved_message_id).toBe("m-deal");
@@ -163,8 +166,8 @@ describe("BACKLOG-3731 — one text-attachment lookup (real sqlite)", () => {
 
   it("C-apple-id: the pre-flight sends it and does not flag the deal text", async () => {
     setPreflightStatForTests(async () => ({ size: 4096 }));
-    const messages = getTransactionMessages("T1", null, null);
-    const attachments = getTransactionAttachments("T1", null, null);
+    const messages = getTransactionMessages("T1", null, null, ALL_TEXT_IDS);
+    const attachments = getTransactionAttachments("T1", null, null, ALL_TEXT_IDS);
 
     const result = await runSubmissionPreflight({
       messages,
