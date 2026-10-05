@@ -332,8 +332,8 @@ export const transactionService = {
 
   /**
    * BACKLOG-3683: what a submission with these (not yet saved) dates would
-   * send, and what is linked but outside them. `candidate` must come from
-   * `confirmedDatesUpdate` — the same payload the date save writes.
+   * send. `candidate` must come from `confirmedDatesUpdate` — the same
+   * payload the date save writes.
    */
   async getSubmissionScope(
     transactionId: string,

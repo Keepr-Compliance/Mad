@@ -1,6 +1,9 @@
 /**
- * BACKLOG-3683 (founder decision B) — the submit summary counts only what the
- * dates on the date step include, and says plainly what is linked but left out.
+ * BACKLOG-3683 (founder decision B, narrowed 2026-10-05) — the submit summary
+ * counts only what the dates on the date step include. There is no
+ * out-of-window notice: the founder removed it ("i don't think we need this
+ * msg just remove it") because it counted every item ever linked through the
+ * deal's contacts, ignoring the chat/email selection, and read as noise.
  *
  * C1 — the preview converts the dates with `confirmedDatesUpdate`, the same
  *      function the date save uses (SR condition d0e108ff). The module is
@@ -41,18 +44,6 @@ const convertMock = confirmedDatesUpdate as jest.Mock;
 const READY = {
   success: true,
   inWindow: { emails: 3, texts: 9, textThreads: 2, attachments: 4, emailAttachments: 1, attachmentBytes: 4096 },
-  outOfWindow: {
-    emailsBefore: 0,
-    emailsAfter: 2,
-    textsBefore: 0,
-    textsAfter: 1,
-    undated: 0,
-    items: [
-      { kind: "email", sentAt: "2026-09-28T15:00:00.000Z", label: "Final walk-through", side: "after" },
-      { kind: "text", sentAt: "2026-09-29T15:00:00.000Z", label: "the listing agent", side: "after" },
-      { kind: "email", sentAt: "2026-09-30T15:00:00.000Z", label: "Keys", side: "after" },
-    ],
-  },
 };
 
 beforeEach(() => {
@@ -99,27 +90,18 @@ describe("BACKLOG-3683 — the summary counts what the dates include", () => {
     expect(screen.getByTestId("submit-review-attachment-count")).toHaveTextContent("4 files");
   });
 
-  it("warns what is linked but dated outside, with the first items", async () => {
-    renderSubmit();
-    await click(screen.getByTestId("submit-review-next"));
-    const notice = await screen.findByTestId("submit-review-out-of-window");
-    expect(notice).toHaveTextContent(
-      "2 emails and 1 text are dated after the end date (27 Sep) and won't be sent."
-    );
-    expect(notice).toHaveTextContent('28 Sep · Email "Final walk-through"');
-    expect(notice).toHaveTextContent("29 Sep · Text with the listing agent");
-    expect(screen.queryByTestId("submit-review-out-of-window-more")).toBeNull();
-  });
-
-  it("no notice when everything linked is inside the dates", async () => {
-    scopeMock.mockResolvedValue({
-      ...READY,
-      outOfWindow: { emailsBefore: 0, emailsAfter: 0, textsBefore: 0, textsAfter: 0, undated: 0, items: [] },
-    });
+  /**
+   * Founder decision 2026-10-05: no out-of-window notice, ever — regardless
+   * of how the scope answer is shaped. Guards against the amber block (and
+   * its "and N more" line) coming back.
+   */
+  it("never shows an out-of-window notice", async () => {
     renderSubmit();
     await click(screen.getByTestId("submit-review-next"));
     await waitFor(() => expect(screen.getByTestId("submit-review-email-count")).toHaveTextContent("3"));
     expect(screen.queryByTestId("submit-review-out-of-window")).toBeNull();
+    expect(screen.queryByTestId("submit-review-out-of-window-more")).toBeNull();
+    expect(screen.queryByText(/won't be sent/)).toBeNull();
   });
 
   it("a failed count does not fall back to the all-linked totals", async () => {

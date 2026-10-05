@@ -1,8 +1,10 @@
 /**
  * @jest-environment node
  *
- * BACKLOG-3683 (founder decision B) — the scope preview counts exactly what a
- * submission with the same dates sends, and names what is linked but outside.
+ * BACKLOG-3683 (founder decision B, narrowed 2026-10-05) — the scope preview
+ * counts exactly what a submission with the same dates sends. There is no
+ * out-of-window notice: the founder removed it ("i don't think we need this
+ * msg just remove it").
  *
  * The database is a fake whose windowed reads apply the predicate transcribed
  * from submissionDbService.ts (getTransactionMessages :46-54, getTransactionEmails
@@ -126,17 +128,9 @@ describe("BACKLOG-3683 — scope preview", () => {
       emailAttachments: 1,
       attachmentBytes: 1500,
     });
-    expect(r.outOfWindow).toMatchObject({ emailsBefore: 0, emailsAfter: 2, textsBefore: 1, textsAfter: 1, undated: 0 });
-  });
-
-  it("lists the first items oldest first, emails by subject, texts by the other party", async () => {
-    const r = await submissionService.getSubmissionScope(TX, CANDIDATE);
-    expect(r.outOfWindow!.items.map((i) => [i.kind, i.side, i.label])).toEqual([
-      ["text", "before", "Jane Fixture"],
-      ["email", "after", "Final walk-through"],
-      ["text", "after", "Jane Fixture"],
-      ["email", "after", "Keys"],
-    ]);
+    // Founder decision 2026-10-05: no out-of-window notice. The result
+    // carries in-window counts only.
+    expect(r).not.toHaveProperty("outOfWindow");
   });
 
   it("the preview's in-window set is the set the submit gathers for the same saved dates", async () => {
@@ -168,7 +162,7 @@ describe("BACKLOG-3683 — scope preview", () => {
     }
   });
 
-  it("one Sentry info with counts only", async () => {
+  it("one Sentry info with in-window counts only, no out-of-window data", async () => {
     await submissionService.getSubmissionScope(TX, CANDIDATE);
     const events = captured.filter((e) => e.message === "Submission scope previewed");
     expect(events).toHaveLength(1);
@@ -176,9 +170,9 @@ describe("BACKLOG-3683 — scope preview", () => {
       level: "info",
       extra: expect.objectContaining({
         in_window: { emails: 2, texts: 2, textThreads: 2, attachments: 2 },
-        out_of_window: { emails_before: 0, emails_after: 2, texts_before: 1, texts_after: 1, undated: 0 },
       }),
     });
+    expect(events[0].extra).not.toHaveProperty("out_of_window");
     const blob = JSON.stringify(captured);
     for (const forbidden of ["Final walk-through", "Keys", "Contract", "Jane", "+1555"]) {
       expect({ forbidden, found: blob.includes(forbidden) }).toEqual({ forbidden, found: false });

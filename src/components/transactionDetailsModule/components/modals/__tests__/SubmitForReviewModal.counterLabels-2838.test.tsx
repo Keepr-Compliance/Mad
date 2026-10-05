@@ -57,7 +57,6 @@ beforeEach(() => {
   (window.api.transactions as unknown as Record<string, unknown>).getSubmissionScope = jest.fn().mockResolvedValue({
     success: true,
     inWindow: { emails: 99, texts: 40, textThreads: 4, attachments: 12, emailAttachments: 9, attachmentBytes: 1024 },
-    outOfWindow: { emailsBefore: 0, emailsAfter: 0, textsBefore: 0, textsAfter: 0, undated: 0, items: [] },
   });
 });
 
