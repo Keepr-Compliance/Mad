@@ -158,15 +158,15 @@ describe("the worker's link window", () => {
   }
 
   // Founder Option 1: Keepr comes forward as soon as the code shows, and an
-  // action popup closes when it loses focus — so ALWAYS link.html's small
+  // action popup closes when it loses focus — so ALWAYS the link window's small
   // window (it starts the link itself: no second click). Mutation: the
   // toolbar popup tried first → red.
-  it("always link.html in a small popup window — never the toolbar popup", async () => {
+  it("always the link window (popup.html?autolink=1) — never the toolbar popup", async () => {
     const openPopup = jest.fn(async () => undefined);
     const w = worker({ openPopup });
     expect(await w.send({ type: "keepr-open-link-window" })).toEqual({ ok: true, how: "window" });
     expect(openPopup).not.toHaveBeenCalled();
-    expect(w.created).toEqual([{ url: "chrome-extension://ext/link.html", type: "popup", width: 380, height: 380, focused: true }]);
+    expect(w.created).toEqual([{ url: "chrome-extension://ext/popup.html?autolink=1", type: "popup", width: 380, height: 380, focused: true }]);
   });
 
   it("one window at a time, and a rate limit", async () => {
@@ -199,9 +199,9 @@ describe("the worker's link window", () => {
     // Mutations: the sender id not checked; the URL not checked → red.
     const refused = [
       { id: "ext", url: "http://messages.google.com/web" },
-      { id: "ext", url: "https://example.test/chrome-extension://ext/link.html" },
-      { id: "other-extension", url: "chrome-extension://ext/link.html" },
-      { id: "other-extension", url: "chrome-extension://other-extension/link.html" },
+      { id: "ext", url: "https://example.test/chrome-extension://ext/popup.html?autolink=1" },
+      { id: "other-extension", url: "chrome-extension://ext/popup.html?autolink=1" },
+      { id: "other-extension", url: "chrome-extension://other-extension/popup.html?autolink=1" },
       { id: "ext" }, // no URL
       { id: "ext", tab: { id: 9 } }, // a tab is no proof
     ];
@@ -212,17 +212,18 @@ describe("the worker's link window", () => {
       expect([sender, r.error === "not_allowed" || r.sync === true]).toEqual([sender, true]);
     }
     // The extension's own page (popup / link window — which has a tab) is answered.
-    const own = await w.send({ type: "keepr-link-state" }, { id: "ext", url: "chrome-extension://ext/link.html", tab: { id: 12 } });
+    const own = await w.send({ type: "keepr-link-state" }, { id: "ext", url: "chrome-extension://ext/popup.html?autolink=1", tab: { id: 12 } });
     expect(own).toMatchObject({ ok: true });
   });
 });
 
-describe("link.html starts the link", () => {
-  it("is the popup with data-autolink; it starts the link itself once, when not linked", async () => {
-    const html = fs.readFileSync(path.join(EXT, "link.html"), "utf8");
-    expect(html).toContain('<main id="keepr-popup" data-autolink="1" aria-live="polite"></main>');
-    expect(html).toContain('<script src="popup.js"></script>');
-    document.body.innerHTML = '<main id="keepr-popup" data-autolink="1"></main>';
+// SR clean-up: no link.html copy — the link window is popup.html?autolink=1.
+// Mutations: the query not read; link.html back → red.
+describe("the link window (popup.html?autolink=1) starts the link", () => {
+  it("no link.html; the query starts the link itself once, when not linked", async () => {
+    expect(fs.existsSync(path.join(EXT, "link.html"))).toBe(false);
+    window.history.replaceState(null, "", "/popup.html?autolink=1");
+    document.body.innerHTML = '<main id="keepr-popup"></main>';
     const asked: string[] = [];
     let state = "not_linked";
     const chromeStub = {
@@ -242,8 +243,10 @@ describe("link.html starts the link", () => {
       expect(asked.slice(0, 3)).toEqual(["keepr-popup-state", "keepr-link-start", "keepr-popup-state"]);
       expect(asked.filter((t) => t === "keepr-link-start")).toHaveLength(1);
       expect(document.querySelector('[data-keepr="code"]')!.textContent).toBe("482 913");
+      expect(document.title).toBe("Link with Keepr");
     } finally {
       jest.useRealTimers();
+      window.history.replaceState(null, "", "/");
     }
   });
 });

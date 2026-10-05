@@ -89,9 +89,20 @@ async function worker(version = "9.9.9", keepStore = false) {
     new Promise<Record<string, unknown>>((resolve) => {
       if (!listener!(m, { id: EXTENSION_ID, url: `chrome-extension://${EXTENSION_ID}/popup.html` }, (x) => resolve(x as Record<string, unknown>))) resolve({ sync: true });
     });
-  await new Promise((r) => setTimeout(r, 20));
+  // SR (flake): a READY signal, not a delay — the worker's startup hello
+  // has reached Keepr (its body is seen) before the test talks to it.
+  await waitFor(() => bodies.some((b) => b.includes("\"version\"")));
   bodies.length = 0;
   return { send, bodies };
+}
+
+/**
+ * SR (flake): linked on BOTH sides — Keepr stored the pairing AND the worker
+ * saved its key (the worker's save is async: a call made between the two
+ * went out unsigned under load).
+ */
+async function linkedBoth(w: { send: (m: Record<string, unknown>) => Promise<Record<string, unknown>> }, extra: () => boolean = () => true): Promise<void> {
+  await waitFor(async () => rows.length === 1 && extra() && (await w.send({ type: "keepr-pair-status" })).paired === true);
 }
 
 async function waitFor(check: () => Promise<boolean> | boolean, ms = 8000): Promise<void> {
@@ -138,12 +149,12 @@ describe("C1: reversed linking (the popup's 6-digit code, typed in Keepr)", () =
     const first = await worker();
     const l1 = (await first.send({ type: "keepr-link-start" })).link as { code: string };
     auth.linkEnterCode("user-a", l1.code);
-    await waitFor(() => rows.length === 1);
+    await linkedBoth(first);
     const oldId = rows[0].pairId;
     const second = await worker();
     const l2 = (await second.send({ type: "keepr-link-start" })).link as { code: string };
     auth.linkEnterCode("user-a", l2.code);
-    await waitFor(() => rows.length === 1 && rows[0].pairId !== oldId);
+    await linkedBoth(second, () => rows[0].pairId !== oldId);
     // The old browser: unknown to Keepr now → it forgets its link.
     expect((await first.send({ type: "keepr-check-pending" })).status).toBe(401);
     expect((await first.send({ type: "keepr-pair-status" })).paired).toBe(false);
@@ -153,7 +164,7 @@ describe("C1: reversed linking (the popup's 6-digit code, typed in Keepr)", () =
     const w = await worker();
     const l = (await w.send({ type: "keepr-link-start" })).link as { code: string };
     auth.linkEnterCode("user-a", l.code);
-    await waitFor(() => rows.length === 1);
+    await linkedBoth(w);
     expect((await w.send({ type: "keepr-unlink" })).keepr).toBe(true);
     expect(rows).toEqual([]);
     expect((await w.send({ type: "keepr-pair-status" })).paired).toBe(false);
@@ -169,7 +180,7 @@ describe("C1: reversed linking (the popup's 6-digit code, typed in Keepr)", () =
     const w = await worker();
     const l = (await w.send({ type: "keepr-link-start" })).link as { code: string };
     auth.linkEnterCode("user-a", l.code);
-    await waitFor(() => rows.length === 1);
+    await linkedBoth(w);
     expect(await w.send({ type: "keepr-popup-state" })).toMatchObject({ state: "linked", email: "a***@example.test" });
     expect(w.bodies.join("\n")).not.toContain("agent.tester");
   });
@@ -181,7 +192,7 @@ describe("C1: reversed linking (the popup's 6-digit code, typed in Keepr)", () =
     expect((await w.send({ type: "keepr-retry" })).body).toMatchObject({ error: "not_paired" });
     const l = (await w.send({ type: "keepr-link-start" })).link as { code: string };
     auth.linkEnterCode("user-a", l.code);
-    await waitFor(() => rows.length === 1);
+    await linkedBoth(w);
     expect(await w.send({ type: "keepr-retry" })).toMatchObject({ ok: true, body: { ok: true, jobId: "job-retry" } });
     retryAllowed = false;
     expect(await w.send({ type: "keepr-retry" })).toMatchObject({ ok: false, status: 409 });
@@ -200,7 +211,7 @@ describe("C1: reversed linking (the popup's 6-digit code, typed in Keepr)", () =
     const w = await worker();
     const l = (await w.send({ type: "keepr-link-start" })).link as { code: string };
     auth.linkEnterCode("user-a", l.code);
-    await waitFor(() => rows.length === 1);
+    await linkedBoth(w);
     expect(auth.isLinkProven("user-a")).toBe(true);
     const reloaded = await worker("9.9.9", true);
     expect((await reloaded.send({ type: "keepr-pair-status" })).paired).toBe(true);
@@ -211,9 +222,8 @@ describe("C1: reversed linking (the popup's 6-digit code, typed in Keepr)", () =
     const linked = await worker();
     const l = (await linked.send({ type: "keepr-link-start" })).link as { code: string };
     auth.linkEnterCode("user-a", l.code);
-    await waitFor(() => rows.length === 1);
+    await linkedBoth(linked);
     expect(auth.isLinkProven("user-a")).toBe(true);
-    await new Promise((r) => setTimeout(r, 5));
     await worker(); // a second Chrome profile, never linked: its startup hello (unsigned, linked:false)
     await waitFor(() => !auth.isLinkProven("user-a"));
     expect(rows).toHaveLength(1);

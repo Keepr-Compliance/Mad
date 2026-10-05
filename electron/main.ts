@@ -1792,7 +1792,7 @@ app.whenReady().then(async () => {
   registerHiddenTextHandlers();
   // BACKLOG-3475: transaction checklists — broker templates, items, evidence links.
   registerChecklistHandlers();
-  // BACKLOG-3619 POC: RCS import from the Chrome extension. The loopback bridge
+  // BACKLOG-3619: RCS import from the Chrome extension. The loopback bridge
   // never throws; a taken port leaves it "unavailable" and the app runs on.
   registerRcsImportHandlers();
   void startRcsExtensionBridge();
@@ -1971,7 +1971,7 @@ app.on("before-quit", () => {
   cleanupLocalSyncHandlers();
   // Clean up pairing sessions (TASK-1428)
   cleanupPairingHandlers();
-  // BACKLOG-3619 POC: close the RCS import bridge.
+  // BACKLOG-3619: close the RCS import bridge.
   void stopRcsExtensionBridge();
   // BACKLOG-1831: stop the shadow delta sync poller timers (interval hygiene)
   try {

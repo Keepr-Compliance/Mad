@@ -40,9 +40,10 @@
     message: "mws-message-wrapper[msg-id]",
   };
 
-  function normalizeSpace(s) {
-    return String(s || "").replace(/[\s\u00a0\u202f]+/g, " ").trim();
-  }
+  // The one definition (text.js): required under Node, else the page's KeeprText.
+  var normalizeSpace = typeof module !== "undefined" && module.exports
+    ? require("./text.js").normalizeSpace
+    : root.KeeprText.normalizeSpace;
 
   /** "signed_in" | "not_signed_in" | "unknown" from the page path. */
   function signInState(pathname) {

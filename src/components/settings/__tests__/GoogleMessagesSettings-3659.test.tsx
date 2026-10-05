@@ -41,8 +41,6 @@ jest.mock("../../../services/rcsImportService", () => ({
     linkForget: () => mockForget(),
     getExtensionState: async () => ({ success: true, data: mockState }),
     clearTexts: (...a: unknown[]) => mockClear(...a),
-    setCacheAutoDelete: (...a: unknown[]) => mockAutoDelete(...a),
-    setCacheConsent: (...a: unknown[]) => mockConsent(...a),
     setMediaOptions: (...a: unknown[]) => mockSetMedia(...a),
     // C1: the reversed link panel (nothing pending).
     linkState: async () => ({ success: true, data: { link: { state: "none", intrusion: false }, linked: false } }),

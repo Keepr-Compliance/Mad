@@ -221,10 +221,10 @@ describe("the worker's link with Keepr (BACKLOG-3666, C1)", () => {
   });
 
   // SR (O5 inside this suite) + storyboard D03/A06: the page card opens
-  // link.html's small window — never the toolbar popup (it would close when
+  // link window (popup.html?autolink=1) — never the toolbar popup (it would close when
   // Keepr comes forward) — at the RIGHT edge of the page's screen, centred
   // vertically. Mutations: the toolbar popup tried first; no placement → red.
-  it("the page card: link.html at the screen's right edge, centred — never the toolbar popup", async () => {
+  it("the page card: the link window at the screen's right edge, centred — never the toolbar popup", async () => {
     const openPopup = jest.fn(async () => undefined);
     const created: Array<Record<string, unknown>> = [];
     const w = await worker(undefined, {
@@ -242,7 +242,7 @@ describe("the worker's link with Keepr (BACKLOG-3666, C1)", () => {
     expect(openPopup).not.toHaveBeenCalled();
     expect(r).toEqual({ ok: true, how: "window" });
     expect(created).toEqual([
-      { url: `chrome-extension://${EXTENSION_ID}/link.html`, type: "popup", width: 380, height: 380, focused: true, left: 1920 + 1920 - 380 - 24, top: 330 },
+      { url: `chrome-extension://${EXTENSION_ID}/popup.html?autolink=1`, type: "popup", width: 380, height: 380, focused: true, left: 1920 + 1920 - 380 - 24, top: 330 },
     ]);
   });
 
@@ -286,8 +286,8 @@ describe("the worker's link with Keepr (BACKLOG-3666, C1)", () => {
       const r = await w.send({ type: "keepr-open-link-window", screen: { left: 0, top: 0, width: 1920, height: 1080 } });
       expect(r).toEqual({ ok: true, how: "window" });
       expect(created).toEqual([
-        { url: `chrome-extension://${EXTENSION_ID}/link.html`, type: "popup", width: 380, height: 380, focused: true, left: 1920 - 380 - 24, top: 350 },
-        { url: `chrome-extension://${EXTENSION_ID}/link.html`, type: "popup", width: 380, height: 380, focused: true },
+        { url: `chrome-extension://${EXTENSION_ID}/popup.html?autolink=1`, type: "popup", width: 380, height: 380, focused: true, left: 1920 - 380 - 24, top: 350 },
+        { url: `chrome-extension://${EXTENSION_ID}/popup.html?autolink=1`, type: "popup", width: 380, height: 380, focused: true },
       ]);
     } finally {
       Date.now = realNow;

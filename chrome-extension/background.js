@@ -1,5 +1,5 @@
 /**
- * Keepr — service worker (BACKLOG-3619 POC; BACKLOG-3620 Sync jobs).
+ * Keepr — service worker (BACKLOG-3619; BACKLOG-3620 Sync jobs).
  *
  * The ONLY part of the extension that talks to the Keepr desktop app: the
  * page's Sync job (job.js) asks it to post to the loopback bridge. A fetch
@@ -356,7 +356,7 @@ async function openMessages() {
 
 // ---------------------------------------------------------------------------
 // Founder (LinkFlow, SR-approved 2026-10-04; "Option 1"): the page card's
-// "Link with Keepr" opens the extension's OWN small window (link.html),
+// "Link with Keepr" opens the extension's OWN small window (popup.html?autolink=1),
 // which starts the link session AT ONCE (no second click there). The code
 // never reaches the page. One window at a time; a rate limit.
 //
@@ -367,6 +367,8 @@ async function openMessages() {
 // popup-type window stays open beside Keepr.
 // ---------------------------------------------------------------------------
 const LINK_WINDOW_MIN_INTERVAL_MS = 2000;
+/** The link window: the popup page, told to start the link itself (no copy of the page). */
+const LINK_WINDOW_PAGE = "popup.html?autolink=1";
 const LINK_WINDOW_SIZE = { width: 380, height: 380 };
 let linkWindowId = null;
 let linkWindowAskedAt = 0;
@@ -376,9 +378,9 @@ const OWN_PAGE_MESSAGES = new Set(["keepr-popup-state", "keepr-link-start", "kee
 
 /**
  * SR (allow-list): a sender is one of the extension's OWN pages (popup,
- * link.html, welcome) only when it is this extension AND its URL is under
+ * its link window, welcome) only when it is this extension AND its URL is under
  * this extension's origin. A content script on a web page has a web URL; a
- * link.html window has a tab too, so sender.tab is never the test.
+ * link window has a tab too, so sender.tab is never the test.
  */
 function fromOwnPage(sender) {
   if (!sender || sender.id !== chrome.runtime.id || typeof sender.url !== "string") return false;
@@ -435,7 +437,7 @@ async function openLinkWindow(now, screen) {
       linkWindowId = null; // closed meanwhile
     }
   }
-  const base = { url: chrome.runtime.getURL("link.html"), type: "popup", width: LINK_WINDOW_SIZE.width, height: LINK_WINDOW_SIZE.height, focused: true };
+  const base = { url: chrome.runtime.getURL(LINK_WINDOW_PAGE), type: "popup", width: LINK_WINDOW_SIZE.width, height: LINK_WINDOW_SIZE.height, focused: true };
   const placement = linkWindowPlacement(screen);
   const tries = Object.keys(placement).length > 0 ? [{ ...base, ...placement }, base] : [base];
   // Chrome refusing the bounds never stops the window: once more, unplaced.

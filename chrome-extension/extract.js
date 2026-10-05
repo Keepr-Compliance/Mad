@@ -1,5 +1,5 @@
 /**
- * Keepr — conversation extraction for Messages for Web (BACKLOG-3619 POC).
+ * Keepr — conversation extraction for Messages for Web (BACKLOG-3619).
  *
  * A PURE function over a DOM: given the conversation page's document, its URL
  * and "now", it returns every message the page has loaded. It never fetches,
@@ -122,9 +122,10 @@
   /** File label: "<Name> sent a file: <file name>. Sent on …". */
   var FILE_RE = /sent a file: (.+?)\. (?:Sent|Received) on /;
 
-  function normalizeSpace(s) {
-    return String(s || "").replace(/[\s  ]+/g, " ").trim();
-  }
+  // The one definition (text.js): required under Node, else the page's KeeprText.
+  var normalizeSpace = typeof module !== "undefined" && module.exports
+    ? require("./text.js").normalizeSpace
+    : root.KeeprText.normalizeSpace;
 
   function startOfDay(d) {
     return new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -132,7 +133,7 @@
 
   /**
    * The calendar day a date phrase names, in the page's local time zone, or
-   * null. en-US page assumed (POC).
+   * null. en-US page assumed.
    */
   function parseDayPhrase(phrase, now) {
     var p = normalizeSpace(phrase).toLowerCase();

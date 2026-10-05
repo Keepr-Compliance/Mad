@@ -7,6 +7,7 @@
 
 import type { Transaction } from "@/types";
 import logger from '../utils/logger';
+import type { EnsureMessagesCoverageResult, TextCoverageResult } from "../../electron/types/auditCoverage";
 
 /**
  * Valid detection status values
@@ -247,6 +248,21 @@ export const transactionService = {
   /**
    * Get all transactions for a user
    */
+  /**
+   * BACKLOG-3663: per-source text coverage for one transaction (the Texts
+   * tab). null when this build has no such IPC (never an error shown).
+   */
+  async getTextCoverage(transactionId: string, userId: string, chosenSource: string | null): Promise<TextCoverageResult | null> {
+    const get = window.api?.transactions?.getTextCoverage;
+    if (!get) return null;
+    return get(transactionId, userId, chosenSource);
+  },
+
+  /** The Texts tab's "Update now" (Mac): a targeted messages import for an explicit start. */
+  async ensureMessagesCoverage(userId: string, proposedStartISO: string | null, transactionId?: string): Promise<EnsureMessagesCoverageResult> {
+    return window.api.transactions.ensureMessagesCoverage(userId, proposedStartISO, transactionId);
+  },
+
   async getAll(userId: string): Promise<ApiResult<Transaction[]>> {
     try {
       const result = await window.api.transactions.getAll(userId);

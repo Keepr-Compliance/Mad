@@ -11,6 +11,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { settingsService } from "../../../services/settingsService";
 import { rcsImportService } from "../../../services/rcsImportService";
+import { transactionService } from "../../../services/transactionService";
 import type { SourceCoverageGap, TextSource } from "../../../../electron/types/auditCoverage";
 
 const LABEL: Record<TextSource, string> = {
@@ -98,8 +99,6 @@ export function TextCoverageNotice({ transactionId, userId }: TextCoverageNotice
   const [updating, setUpdating] = useState(false);
 
   const load = useCallback(async () => {
-    const getTextCoverage = window.api?.transactions?.getTextCoverage;
-    if (!getTextCoverage) return;
     let chosen: TextSource | null = null;
     try {
       const prefs = await settingsService.getPreferences(userId);
@@ -108,8 +107,9 @@ export function TextCoverageNotice({ transactionId, userId }: TextCoverageNotice
       chosen = null;
     }
     try {
-      const r = await getTextCoverage(transactionId, userId, chosen);
-      if (r.success) {
+      // SR: through the service, never window.api from the component.
+      const r = await transactionService.getTextCoverage(transactionId, userId, chosen);
+      if (r && r.success) {
         setGaps(r.gaps);
         setAuditStart(r.auditStartISO);
       }
@@ -132,7 +132,7 @@ export function TextCoverageNotice({ transactionId, userId }: TextCoverageNotice
   const updateMac = useCallback(async () => {
     setUpdating(true);
     try {
-      await window.api.transactions.ensureMessagesCoverage(userId, auditStart, transactionId);
+      await transactionService.ensureMessagesCoverage(userId, auditStart, transactionId);
     } finally {
       setUpdating(false);
       await load();

@@ -235,9 +235,12 @@
     var draw = function () {
       renderPopup(doc, box, view || { state: "keepr_down" }, io);
     };
-    // link.html (the page card's "Link with Keepr"): the link starts HERE,
-    // in the extension's own window, once — never from the page.
-    var autoLink = !!(box && box.getAttribute("data-autolink") === "1");
+    // popup.html?autolink=1 (the page card's "Link with Keepr" window; SR:
+    // no copy of the page): the link starts HERE, in the extension's own
+    // window, once — never from the page.
+    var search = doc.location && typeof doc.location.search === "string" ? doc.location.search : "";
+    var autoLink = /[?&]autolink=1(?:&|$)/.test(search) || !!(box && box.getAttribute("data-autolink") === "1");
+    if (autoLink) doc.title = "Link with Keepr";
     var refresh = function () {
       return ask({ type: "keepr-popup-state" }).then(function (r) {
         view = r;

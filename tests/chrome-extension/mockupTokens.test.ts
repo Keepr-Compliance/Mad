@@ -159,10 +159,8 @@ describe("the link window / popup: an expired code (E01)", () => {
     expect(/\d{3}\s?\d{3}/.test(box.textContent || "")).toBe(false);
     expect(box.textContent).not.toContain("Not linked");
   });
-  it("link.html is the popup page (same styles) with data-autolink", () => {
-    const p = fs.readFileSync(path.join(EXT, "popup.html"), "utf8");
-    const l = fs.readFileSync(path.join(EXT, "link.html"), "utf8");
-    expect(l).toBe(p.replace('<main id="keepr-popup" aria-live="polite"></main>', '<main id="keepr-popup" data-autolink="1" aria-live="polite"></main>').replace("<title>Keepr</title>", "<title>Link with Keepr</title>"));
+  it("the link window is the popup page itself (no link.html copy)", () => {
+    expect(fs.existsSync(path.join(EXT, "link.html"))).toBe(false);
   });
 });
 
