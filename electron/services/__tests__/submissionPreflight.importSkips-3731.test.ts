@@ -342,4 +342,33 @@ describe("BACKLOG-3731 — each import skip reason reaches the pre-flight", () =
     expect(metadataOf(id).attachmentSkips).toEqual(next);
     expect(metadataOf(id).source).toBe("macos_messages");
   });
+
+  it("a cancelled sync does not overwrite a message's skips with a partial list", async () => {
+    const id = insertText("guid-two", "2026-09-25T15:00:00.000Z", true);
+    const rows = [
+      await chatDbRow("guid-two", "IMG_1.HEIC", { write: false, totalBytes: 10 }),
+      await chatDbRow("guid-two", "IMG_2.HEIC", { write: false, totalBytes: 10 }),
+    ];
+    await storeAttachments(USER, rows, new Map());
+    const full = metadataOf(id).attachmentSkips;
+    expect(full).toHaveLength(2);
+
+    // Second sync: the user cancels after the first attachment was checked.
+    const service = macOSMessagesImportService as unknown as {
+      abortController: AbortController | null;
+    };
+    const controller = new AbortController();
+    service.abortController = controller;
+    const realAccess = fsSync.promises.access.bind(fsSync.promises);
+    jest.spyOn(fsSync.promises, "access").mockImplementation(async (p, mode) => {
+      controller.abort();
+      return realAccess(p, mode);
+    });
+    try {
+      await storeAttachments(USER, rows, new Map());
+    } finally {
+      service.abortController = null;
+    }
+    expect(metadataOf(id).attachmentSkips).toEqual(full);
+  });
 });
