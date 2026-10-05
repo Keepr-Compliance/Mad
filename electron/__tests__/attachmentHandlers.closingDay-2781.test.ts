@@ -173,12 +173,22 @@ const EXPECTED_IN_WINDOW = 4;
 function createSchema(db: DatabaseType): void {
   db.exec(`
     CREATE TABLE emails (id TEXT PRIMARY KEY, sent_at DATETIME);
-    -- user_id: NOT NULL in schema.sql; BACKLOG-3733 joins on it
-    CREATE TABLE messages (id TEXT PRIMARY KEY, user_id TEXT NOT NULL DEFAULT 'user-1', thread_id TEXT, sent_at DATETIME);
+    -- user_id: NOT NULL in schema.sql; BACKLOG-3733 joins on it.
+    -- external_id: the text-side Apple-id fallback (BACKLOG-3733) reads it;
+    -- every row here leaves it NULL, so that fallback never fires.
+    CREATE TABLE messages (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL DEFAULT 'user-1',
+      thread_id TEXT,
+      sent_at DATETIME,
+      external_id TEXT
+    );
+    -- external_message_id: same fallback, attachment side; same reason left NULL.
     CREATE TABLE attachments (
       id TEXT PRIMARY KEY,
       message_id TEXT,
       email_id TEXT,
+      external_message_id TEXT,
       filename TEXT NOT NULL,
       file_size_bytes INTEGER,
       storage_path TEXT
