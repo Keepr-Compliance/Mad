@@ -599,9 +599,10 @@ describe("Settings", () => {
      * the test cannot pass by silently having rendered the other branch.
      */
     // BACKLOG-3659 P3d. Mutation: the android-messages-web branch removed → red.
-    // BACKLOG-3749: on a Mac (this suite's platform) the macOS panel shows too —
-    // an Android source never turns Mac Messages off.
-    it("Android with Google Messages: the Google Messages section and, on a Mac, the macOS panel; no companion panel", async () => {
+    // BACKLOG-1467 stands; BACKLOG-3749: a Mac that skips its Messages because
+    // Google Messages is selected SHOWS that selection (radio + section),
+    // never a blank or greyed panel. Mutation: the macOS panel shown → red.
+    it("Android with Google Messages: the radio and the Google Messages section; no macOS or companion panel", async () => {
       jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
@@ -614,8 +615,10 @@ describe("Settings", () => {
 
       expect(await screen.findByTestId("google-messages-settings")).toBeInTheDocument();
       expect(screen.queryByTestId("android-block-actions")).not.toBeInTheDocument();
-      expect(await screen.findByTestId("macos-messages-import")).toBeInTheDocument();
-      expect(screen.queryByText(/switch to macOS above/)).not.toBeInTheDocument();
+      expect(screen.queryByTestId("macos-messages-import")).not.toBeInTheDocument();
+      await waitFor(() =>
+        expect((document.querySelector('input[value="android-messages-web"]') as HTMLInputElement | null)?.checked).toBe(true),
+      );
     });
 
     // BACKLOG-3749: a stored value this build does not know (e.g. from a newer
@@ -659,8 +662,7 @@ describe("Settings", () => {
       const gm = await screen.findByTestId("google-messages-settings");
       expect(screen.queryByTestId("android-block-preferences")).not.toBeInTheDocument();
       expect(screen.queryByTestId("android-block-actions")).not.toBeInTheDocument();
-      // BACKLOG-3749: on a Mac the macOS panel shows too (after the GM section).
-      expect(screen.getByTestId("macos-messages-import")).toBeInTheDocument();
+      expect(screen.queryByTestId("macos-messages-import")).not.toBeInTheDocument();
       expect(`sources then google messages: ${(sourcesBlock.compareDocumentPosition(gm) & 4) !== 0}`).toBe(
         "sources then google messages: true",
       );

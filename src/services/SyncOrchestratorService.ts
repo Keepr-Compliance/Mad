@@ -758,9 +758,9 @@ class SyncOrchestratorServiceClass {
       this.registerSyncFunction('messages', async (userId, onProgress, options, signal) => {
         logger.info('[SyncOrchestrator] Starting messages sync, forceReimport:', !!options?.forceReimport);
 
-        // TASK-1979: Skip macOS Messages import when iphone-sync is selected.
-        // BACKLOG-3749: only then — an Android or unknown source (the stored
-        // value is account-wide) never turns Mac Messages off.
+        // TASK-1979 / BACKLOG-1467: skip Mac Messages when another known source
+        // (iPhone Sync, Android) is selected. BACKLOG-3749: an unknown value is
+        // the Mac default — it never turns Mac Messages off.
         const importSource = await this.getImportSource(userId);
         if (!macMessagesSyncOn(importSource)) {
           logger.info(`[SyncOrchestrator] Skipping macOS Messages (import source: ${importSource})`);

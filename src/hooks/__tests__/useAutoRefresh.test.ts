@@ -468,11 +468,10 @@ describe("useAutoRefresh", () => {
     });
   });
 
-  // BACKLOG-3749 (founder) reverses BACKLOG-1467's skip for Android sources:
-  // the stored source is account-wide, so an Android (or unknown) value never
-  // turns Mac Messages off on a Mac. iPhone Sync still does.
+  // BACKLOG-1467 stands (founder, 2026-10-05): a known other source skips Mac
+  // Messages; BACKLOG-3749: an unknown value never does.
   describe("Mac Messages and the import source (BACKLOG-1467, BACKLOG-3749)", () => {
-    it("an android-companion source on macOS still includes messages (BACKLOG-3749)", async () => {
+    it("should NOT include messages when import source is android-companion on macOS", async () => {
       (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
 
       // Return android-companion as import source
@@ -493,6 +492,33 @@ describe("useAutoRefresh", () => {
       });
 
       // Trigger auto-refresh after delay
+      await act(async () => {
+        jest.advanceTimersByTime(1500);
+        await Promise.resolve();
+      });
+
+      expect(mockRequestSync).toHaveBeenCalledWith(
+        ['contacts', 'emails'],
+        'test-user-123'
+      );
+    });
+
+    it("an unknown import source on macOS still includes messages (BACKLOG-3749)", async () => {
+      (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
+      mockPreferencesGet.mockResolvedValue({
+        success: true,
+        preferences: {
+          sync: { autoSyncOnLogin: true },
+          messages: { source: 'some-future-source' },
+        },
+      });
+
+      renderHook(() => useAutoRefresh(defaultOptions));
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
       await act(async () => {
         jest.advanceTimersByTime(1500);
         await Promise.resolve();
@@ -570,7 +596,7 @@ describe("useAutoRefresh", () => {
       );
     });
 
-    it("triggerRefresh with an android-companion source still includes messages on macOS (BACKLOG-3749)", async () => {
+    it("should skip messages via triggerRefresh when import source is android-companion", async () => {
       (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
 
       mockPreferencesGet.mockResolvedValue({
@@ -597,7 +623,7 @@ describe("useAutoRefresh", () => {
       });
 
       expect(mockRequestSync).toHaveBeenCalledWith(
-        ['contacts', 'emails', 'messages'],
+        ['contacts', 'emails'],
         'test-user-123'
       );
     });

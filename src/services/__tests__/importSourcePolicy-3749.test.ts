@@ -5,7 +5,8 @@
  *
  * Mutations (each turns a test red):
  *   M1 an unknown value passed through as is            → "unknown → the platform default"
- *   M2 Mac Messages gated on "=== macos-native" again   → "only iPhone Sync turns Mac Messages off"
+ *   M2 an unknown value turning Mac Messages off       → "unknown keeps Mac Messages on"
+ *   M3 a known Android source NOT skipping it          → "known other sources skip it"
  */
 import {
   defaultImportSource,
@@ -32,9 +33,13 @@ describe("importSourcePolicy (BACKLOG-3749)", () => {
     expect(effectiveImportSource("iphone-sync", true)).toBe("iphone-sync");
   });
 
-  it("only iPhone Sync turns Mac Messages off; Android and unknown values never do", () => {
-    expect(macMessagesSyncOn("iphone-sync")).toBe(false);
-    for (const v of ["macos-native", "android-messages-web", "android-companion", "some-future-source", undefined, null]) {
+  // Founder (2026-10-05): an explicit known selection is respected
+  // (BACKLOG-1467 stands); only an unknown value falls back to the default.
+  it("known other sources skip Mac Messages; unknown keeps Mac Messages on", () => {
+    for (const v of ["iphone-sync", "android-messages-web", "android-companion"]) {
+      expect([v, macMessagesSyncOn(v)]).toEqual([v, false]);
+    }
+    for (const v of ["macos-native", "some-future-source", undefined, null, 42]) {
       expect([v, macMessagesSyncOn(v)]).toEqual([v, true]);
     }
   });

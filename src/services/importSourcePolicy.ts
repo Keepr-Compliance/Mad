@@ -8,14 +8,13 @@
  * this, any value other than "macos-native" silently turned Mac Messages sync
  * off on a Mac — including a value the build did not even know.
  *
- * Rules (founder, 2026-10-05: "decide by the device's platform"):
+ * Rules (founder, 2026-10-05):
  * - A value this build does not know is read as the platform's default — it
  *   never switches anything off. The stored value is never rewritten here.
- * - On a Mac, Mac Messages sync is off ONLY when the stored source is iPhone
- *   Sync (the other Apple path for the same texts). An Android source (Google
- *   Messages, the Companion) is another device's choice and never turns Mac
- *   Messages off. (This reverses BACKLOG-1467's skip for Android sources.)
- * - When Mac Messages sync IS off, the UI says why (Settings › Messages).
+ * - An explicit, KNOWN selection is respected (BACKLOG-1467 stands): on a Mac,
+ *   Mac Messages sync runs only for "macos-native" — iPhone Sync or a known
+ *   Android source (Google Messages, the Companion) skips it, as before.
+ * - When it is skipped, Settings › Messages shows the selected source.
  */
 
 import type { ImportSource } from "./settingsService";
@@ -45,10 +44,10 @@ export function effectiveImportSource(stored: unknown, isMacOS: boolean): Import
 }
 
 /**
- * Does THIS Mac import its Messages? Off only for iPhone Sync; an Android or
- * unknown source never turns it off. (Callers still require macOS and the
- * Full Disk Access permission.)
+ * Does THIS Mac import its Messages? Yes for "macos-native" and for a value
+ * this build does not know (the Mac default); no for an explicit known other
+ * source. (Callers still require macOS and the Full Disk Access permission.)
  */
 export function macMessagesSyncOn(stored: unknown): boolean {
-  return stored !== "iphone-sync";
+  return effectiveImportSource(stored, true) === "macos-native";
 }

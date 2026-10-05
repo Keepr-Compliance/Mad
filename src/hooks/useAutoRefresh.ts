@@ -300,8 +300,8 @@ export function useAutoRefresh({
       if (shouldSyncEmails) {
         typesToSync.push('emails');
       }
-      // BACKLOG-3749: Mac Messages is off only for iPhone Sync; an Android or
-      // unknown (account-wide) source never turns it off.
+      // BACKLOG-1467: skip Mac Messages for another known source (iPhone,
+      // Android). BACKLOG-3749: an unknown value never turns it off.
       if (isMacOS && hasPermissions && macMessagesSyncOn(importSource)) {
         typesToSync.push('messages');
       }

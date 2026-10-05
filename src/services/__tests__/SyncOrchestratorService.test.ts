@@ -1505,12 +1505,33 @@ describe('SyncOrchestratorService', () => {
       platformMock.isMacOS.mockReturnValue(true);
     });
 
-    // BACKLOG-3749 (founder): the stored source is account-wide; an Android
-    // source (another device's choice) or a value this build does not know
-    // never turns Mac Messages off on a Mac. Mutation: gate on
-    // "=== macos-native" again → red.
-    it.each(['android-companion', 'android-messages-web', 'some-future-source'])(
-      'a stored %s source does NOT turn Mac Messages sync off (BACKLOG-3749)',
+    // BACKLOG-1467 stands (founder, 2026-10-05): a known Android selection
+    // skips Mac Messages on a Mac. Mutation: Android not skipped → red.
+    it.each(['android-companion', 'android-messages-web'])(
+      'a stored %s source skips Mac Messages (BACKLOG-1467)',
+      async (source) => {
+        (window as any).api.preferences.get = jest.fn().mockResolvedValue({
+          success: true,
+          preferences: { messages: { source } },
+        });
+
+        syncOrchestrator.initializeSyncFunctions();
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const syncFn = (syncOrchestrator as any).syncFunctions.get('messages');
+        const onProgress = jest.fn();
+        await syncFn('test-user', onProgress);
+
+        expect((window as any).api.messages.importMacOSMessages).not.toHaveBeenCalled();
+        expect(onProgress).toHaveBeenCalledWith(100);
+      },
+    );
+
+    // BACKLOG-3749: a value this build does not know (e.g. from a newer build)
+    // never silently turns Mac Messages off. Mutation: gate on
+    // "=== macos-native" of the raw value again → red.
+    it.each(['some-future-source'])(
+      'an unknown stored source (%s) does NOT turn Mac Messages sync off (BACKLOG-3749)',
       async (source) => {
         (window as any).api.preferences.get = jest.fn().mockResolvedValue({
           success: true,
