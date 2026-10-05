@@ -112,7 +112,7 @@ async function hmacHex(key, text) {
   return toHex(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(text)));
 }
 
-/** One unsigned POST (only /pair/* and, unpaired, the dual routes). → {status, body, text, sig} */
+/** One unsigned POST (only the open routes while unlinked). → {status, body, text, sig} */
 async function rawPost(path, bodyText, headers) {
   let response;
   try {
@@ -150,27 +150,16 @@ async function rawPost(path, bodyText, headers) {
  */
 /** The routes an unlinked extension may always call (unsigned): presence and linking. */
 const UNSIGNED_ALWAYS = new Set(["/hello", "/link/start", "/link/poll", "/link/finish", "/focus"]);
-const NOT_LINKED_HERE_BACKOFF_MS = 60 * 1000;
-let notLinkedHereUntil = 0;
-function NOT_LINKED_HERE_REPLY() {
-  return { ok: false, status: 401, body: { error: "not_linked_here", message: NOT_PAIRED } };
-}
 
 async function bridgeFetch(path, bodyText, opts) {
   const P = pairLib();
   const pairing = P ? await currentPairing() : null;
   if (!pairing) {
     if (opts && opts.requirePaired) return { ok: false, status: 0, body: { error: "not_paired", message: NOT_PAIRED } };
-    // Live (founder 2026-10-03): Keepr has a link for its user that this
-    // browser lacks — it refuses every unsigned call. Don't keep asking
-    // (the page's eyes polled every 2 s): one refusal holds them off a minute.
-    const gated = !UNSIGNED_ALWAYS.has(path);
-    if (gated && Date.now() < notLinkedHereUntil) return NOT_LINKED_HERE_REPLY();
+    // SR C4 ("required"): Keepr refuses every unsigned call outside the open
+    // routes, so an unlinked browser never sends one (the eyes polled every 2 s).
+    if (!UNSIGNED_ALWAYS.has(path)) return { ok: false, status: 401, body: { error: "not_paired", message: NOT_PAIRED } };
     const r = await rawPost(path, bodyText);
-    if (gated && r.status === 401 && r.body && r.body.error === "signature_required") {
-      notLinkedHereUntil = Date.now() + NOT_LINKED_HERE_BACKOFF_MS;
-      return NOT_LINKED_HERE_REPLY();
-    }
     return { ok: r.status >= 200 && r.status < 300, status: r.status, body: r.body };
   }
   const ts = String(Date.now());

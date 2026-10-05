@@ -18,7 +18,7 @@
  *   A11 a link replacing the old one outside one transaction    → "a failed save keeps the old link"
  *   A8 the nonce store unbounded / never evicted                → "nonce store"
  *   A9 /hello revealing more than paired yes / no               → "hello"
- *   A10 dual routes open in "required" mode                     → "dual"
+ *   A10 an unsigned /status or /exclusions accepted (dual mode back) → "required"
  */
 import * as http from "http";
 
@@ -94,7 +94,7 @@ let auth: RcsPairingAuth;
 let bridge: RcsExtensionBridge;
 let port: number;
 
-async function startBridge(mode: "dual" | "required" = "dual"): Promise<void> {
+async function startBridge(): Promise<void> {
   store = memoryStore();
   auth = new RcsPairingAuth(P, store, { now: () => clock });
   bridge = new RcsExtensionBridge({
@@ -105,7 +105,6 @@ async function startBridge(mode: "dual" | "required" = "dual"): Promise<void> {
     setExclusion: () => {},
     jobs: new RcsJobRegistry(),
     pairing: auth,
-    pairingMode: mode,
   } as never);
   expect(await bridge.start(0)).toBe("listening");
   port = bridge.getStatus().port;
@@ -295,15 +294,20 @@ describe("the auth gate (BACKLOG-3666)", () => {
     expect(r.body.error).not.toBe("signature_required");
   });
 
-  it("dual mode: an older, unpaired extension keeps the eyes and /status, never a job (A10)", async () => {
-    auth.revoke("user-a"); // this user has no pairing: the older extension's unsigned calls
-    expect((await post(port, "/exclusions/list", {}, "{}")).status).not.toBe(401);
-    expect((await post(port, "/status", {})).status).toBe(200);
-    expect((await post(port, "/job/pending", {})).status).toBe(401);
-    await bridge.stop();
-    await startBridge("required");
-    expect((await post(port, "/exclusions/list", {}, "{}")).body.error).toBe("not_paired");
-    expect((await post(port, "/status", {})).body.error).toBe("not_paired");
+  // SR P0 / CASA N18: "required" — unsigned, only the open routes answer,
+  // even before this user has a link. Mutation: the dual exception back → red.
+  it("required: unsigned /status and /exclusions are refused even with no link (A10)", async () => {
+    auth.revoke("user-a"); // no pairing: an older extension's unsigned calls
+    for (const route of ["/status", "/exclusions/list", "/exclusions/set", "/job/pending"]) {
+      const r = await post(port, route, {}, "{}");
+      expect([route, r.status, r.body.error]).toEqual([route, 401, "not_paired"]);
+    }
+    // The open routes still answer: /hello says only paired yes / no and the minimum version.
+    const hello = await post(port, "/hello", {}, JSON.stringify({ version: "0.3.40" }));
+    expect(hello.status).toBe(200);
+    expect(hello.body).toEqual({ ok: true, paired: false, minExtensionVersion: RCS_MIN_EXTENSION_VERSION });
+    expect((await post(port, "/focus", {}, "")).status).not.toBe(401);
+    expect((await post(port, "/pair/start", {}, "{}")).status).toBe(410);
   });
 });
 
@@ -520,7 +524,6 @@ describe("signed out while a signed request is past the gate (S3)", () => {
       },
       jobs: new RcsJobRegistry(),
       pairing: auth,
-      pairingMode: "dual",
     } as never);
     expect(await bridge.start(0)).toBe("listening");
     port = bridge.getStatus().port;

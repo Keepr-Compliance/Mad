@@ -250,17 +250,18 @@ export interface RcsExtensionBridgeOptions {
   finishSaveWaitMs?: number;
   /**
    * BACKLOG-3666: pairing. With it, ONE auth gate runs before routing: every
-   * request is signed (except /hello and /pair/*; and, in "dual" mode for one
-   * release, the routes an older extension needs that start no job:
-   * /status, /focus, /exclusions/*), every reply to a signed request is
-   * signed, and job routes are refused until paired.
+   * request is signed (except the open routes: /hello, /link/*, the rate-
+   * limited /focus, and the 410 on the deleted /pair/*), every reply to a
+   * signed request is signed. SR P0 / CASA N18: "required" only.
    */
   pairing?: RcsPairingAuth;
-  pairingMode?: "dual" | "required";
 }
 
 /** BACKLOG-3666: requests whose body the auth gate already read (it signs the body). */
 const prereadBodies = new WeakMap<http.IncomingMessage, string>();
+
+/** Routes that a pre-"required" extension called unsigned (no job): a linked user hitting them unsigned gets signature_required. */
+const FORMERLY_UNSIGNED_ROUTES = new Set(["/status", "/exclusions/list", "/exclusions/set"]);
 /** BACKLOG-3666: replies to sign, with what the signature binds. */
 const replySigners = new WeakMap<http.ServerResponse, { sign: (status: number, body: string) => string }>();
 
@@ -290,8 +291,6 @@ export function maskEmail(email: string | null | undefined): string | null {
   if (at < 1 || at === email.length - 1) return null;
   return email[0] + "***" + email.slice(at);
 }
-/** "dual" mode only (one release): what an older, unpaired extension still needs. Never a job route. */
-const PAIR_DUAL_ROUTES = new Set(["/status", "/exclusions/list", "/exclusions/set"]);
 /** SR B1: an unsigned request although this user's extension is paired. */
 const SIGNATURE_REQUIRED_MESSAGE = "This extension is paired with Keepr: its requests must be signed. Update or reload the Keepr extension.";
 
@@ -860,7 +859,7 @@ export class RcsExtensionBridge {
    * BACKLOG-3666: the auth gate. Reads the body once (the signature covers
    * it), handles /pair/*, verifies a signed request (and signs its reply,
    * errors included except "unknown pairing"), refuses an unsigned one
-   * outside the open (and, in dual mode, the dual) routes. → the verified
+   * outside the open routes. → the verified
    * pairing, null (unsigned, allowed), or "handled" (replied).
    */
   /** SR B1: does the signed-in user have an active pairing? */
@@ -894,10 +893,14 @@ export class RcsExtensionBridge {
       const pre = pairing.precheck(req.headers);
       if (!pre.ok) return refuse(pre.status, pre.error, pre.keyHex, pre.nonce);
     } else if (!PAIR_OPEN_ROUTES.has(path)) {
-      // SR B1: the dual routes go unsigned ONLY while the signed-in user has
-      // no pairing; once paired, everything must be signed.
-      if ((this.options.pairingMode ?? "dual") !== "dual" || !PAIR_DUAL_ROUTES.has(path)) return refuse(401, "not_paired");
-      if (await this.signedInUserIsPaired()) return refuse(401, "signature_required");
+      // SR P0 / CASA N18 ("required"; the one-release "dual" mode is gone):
+      // EVERY route but the open ones (/hello, /link/*, the rate-limited
+      // /focus, and the 410 for the deleted /pair/*) must be signed — the
+      // Origin pin is never the only gate. An unsigned call while this user
+      // IS linked, on a route an older build called unsigned, is told the
+      // signature is required (update / reload the extension); else not_paired.
+      if (FORMERLY_UNSIGNED_ROUTES.has(path) && (await this.signedInUserIsPaired())) return refuse(401, "signature_required");
+      return refuse(401, "not_paired");
     }
     // SR S1: then the body, with its route's cap (the large one only for an image).
     const cap = JOB_ROUTE.exec(path)?.[2] === "attachment" ? MAX_ATTACHMENT_BODY_BYTES : MAX_BODY_BYTES;

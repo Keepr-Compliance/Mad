@@ -188,22 +188,21 @@ describe("service worker: signed when linked; quiet when Keepr has a link it lac
     expect(w.chromeStub.tabs.update).not.toHaveBeenCalled();
   });
 
-  it("not linked here while Keepr has a link: one refusal, then a minute of silence; /focus still asked (open)", async () => {
+  // SR C4 ("required"): Keepr refuses every unsigned call outside the open
+  // routes, so an unlinked browser never sends one. Mutation: the gated
+  // route sent unsigned again → red (fetch called).
+  it("not linked: /exclusions and /status are never sent unsigned; /focus still asked (open)", async () => {
     const w = await loadWorker();
-    w.fetchStub.mockImplementation(async (url: string) =>
-      (url.endsWith("/hello") || url.endsWith("/focus")
-        ? { status: 200, json: async () => ({ ok: true }) }
-        : { status: 401, json: async () => ({ error: "signature_required" }) }) as never,
-    );
-    const first = await w.send({ type: "keepr-exclusions-list" });
-    expect(first).toMatchObject({ ok: false, status: 401, body: { error: "not_linked_here" } });
-    expect(String((first.body as { message: string }).message)).toBe("Not linked. Click the Keepr icon in Chrome's toolbar to link.");
-    expect(w.fetchStub).toHaveBeenCalledTimes(1);
-    for (let i = 0; i < 5; i++) await w.send({ type: "keepr-exclusions-list" });
-    expect(w.fetchStub).toHaveBeenCalledTimes(1);
+    w.fetchStub.mockImplementation(async () => ({ status: 200, json: async () => ({ ok: true }) }) as never);
+    for (let i = 0; i < 5; i++) {
+      const r = await w.send({ type: "keepr-exclusions-list" });
+      expect(r).toMatchObject({ ok: false, status: 401, body: { error: "not_paired" } });
+      expect(String((r.body as { message: string }).message)).toBe("Not linked. Click the Keepr icon in Chrome's toolbar to link.");
+    }
+    expect(w.fetchStub).toHaveBeenCalledTimes(0);
     // SR: /focus is open — Keepr comes forward with no OS prompt.
     expect(await w.send({ type: "keepr-focus" })).toEqual({ ok: true });
-    expect(w.fetchStub).toHaveBeenCalledTimes(2);
+    expect(w.fetchStub).toHaveBeenCalledTimes(1);
   });
 
   // SR: keepr://open ONLY when Keepr is unreachable; 429 (asked twice) is done.

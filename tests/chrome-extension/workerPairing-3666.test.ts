@@ -66,7 +66,6 @@ beforeEach(async () => {
     currentUserId: async () => currentUser,
     jobs: new RcsJobRegistry(),
     pairing: auth,
-    pairingMode: "dual",
     onFocusRequested: () =>
       focusForBrowser({
         focus: () => (focused += 1),

@@ -38,7 +38,7 @@ export const LEGACY_DEFAULT_LOOKBACK_MONTHS = 3;
 
 /**
  * The release that ships the 1.5-month default. Accounts created before it
- * keep 3. RELEASE OWNER: set this to the actual release date before shipping.
+ * keep 3. Final (founder, 2026-10-04): 2026-10-05.
  */
 export const LOOKBACK_DEFAULT_CUTOVER_ISO = "2026-10-05T00:00:00.000Z";
 

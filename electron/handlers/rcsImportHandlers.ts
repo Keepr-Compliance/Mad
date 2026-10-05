@@ -932,7 +932,6 @@ const bridge = new RcsExtensionBridge({
   // BACKLOG-3666: one auth gate before routing; "dual" for this one release
   // (an older extension keeps /status, /focus and the eyes, never a job).
   pairing: pairingAuth,
-  pairingMode: "dual",
   importChat: (chat, transactionId, people) => importChat(chat, transactionId, deps, people),
   // P3c: chats switched off with the eye on their row ("Don't sync").
   chatExcluded: (userId, chatHash, conversationId) => databaseService.checkRcsExclusion(userId, chatHash, conversationId),

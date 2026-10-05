@@ -59,7 +59,6 @@ beforeEach(async () => {
     onRetryRequested: async () => (retryAllowed ? { ok: true, jobId: "job-retry" } : { ok: false, status: 409, error: "nothing_to_retry" }),
     jobs: new RcsJobRegistry(),
     pairing: auth,
-    pairingMode: "dual",
   } as never);
   expect(await bridge.start(0)).toBe("listening");
   port = bridge.getStatus().port;
