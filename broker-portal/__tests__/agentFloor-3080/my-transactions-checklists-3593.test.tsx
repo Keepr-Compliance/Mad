@@ -377,6 +377,29 @@ describe('the section renders for the agent', () => {
     expect(screen.getAllByText('body of Disclosure email').length).toBeGreaterThan(0);
   });
 
+  /**
+   * BACKLOG-3748 (SR review ed5a0a09, suggestion 1): `attachmentsByMessage`
+   * reaches ChecklistReview as its own prop, separate from `attachments` and
+   * `messages` already covered above. A photo linked only by
+   * submission_attachments.message_id (not by a checklist link member) shows
+   * inside the "View Disclosure email" viewer solely because that map was
+   * wired through — the same map page.tsx builds for MessageList.
+   */
+  it('BACKLOG-3748: the Disclosure email viewer shows an inline photo keyed by message_id', async () => {
+    given();
+    const PHOTO = '00000000-0000-4000-8000-0000003593f3'; // pii-allow-uuid: invented fixture id
+    mockEmulator.state.rows.submission_attachments = [
+      ...(mockEmulator.state.rows.submission_attachments ?? []),
+      {
+        ...attachmentRow({ id: PHOTO, submissionId: SUB, organizationId: BROKERAGE, filename: 'disclosure-photo.jpg', mimeType: 'image/jpeg' }),
+        message_id: MSG,
+      },
+    ];
+    renderExpanded(await page());
+    fireEvent.click(screen.getByRole('button', { name: 'View Disclosure email' }));
+    expect(screen.getByRole('button', { name: 'disclosure-photo.jpg' })).toBeInTheDocument();
+  });
+
   it('zero checklists: the section says none were submitted', async () => {
     given({ checklists: [], items: [] });
     render(await page());

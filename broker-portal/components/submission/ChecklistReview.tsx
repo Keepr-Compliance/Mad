@@ -255,7 +255,10 @@ export function ChecklistReview({
   const [pickerOpen, setPickerOpen] = useState(false);
   const [viewer, setViewer] = useState<ChipTarget>({ attachment: null, thread: null });
 
-  const threads = useMemo(() => groupMessagesIntoThreads(messages), [messages]);
+  const threads = useMemo(
+    () => groupMessagesIntoThreads(messages, attachmentsByMessage),
+    [messages, attachmentsByMessage]
+  );
   const attachmentsById = useMemo(() => new Map(attachments.map((a) => [a.id, a])), [attachments]);
 
   const chipTarget = useCallback(
