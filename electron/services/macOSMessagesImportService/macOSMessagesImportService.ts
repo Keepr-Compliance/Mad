@@ -2014,19 +2014,23 @@ class MacOSMessagesImportService {
     // loaded ABOVE, before the pre-flight — the guard needs it to size only the
     // attachments this loop could actually link and write.
 
-    // BACKLOG-3731: why each attachment that was not stored was skipped, per
-    // local message id. Written to `messages.metadata.attachmentSkips` after
-    // the loop, so the submit pre-flight can say what happened (and say
-    // nothing for a link preview). See `textAttachmentSkips.ts`.
+    // BACKLOG-3731: why each attachment that was not stored was skipped, keyed
+    // by the chat.db message_guid (NOT the local message id). Written to
+    // `messages.metadata.attachmentSkips` after the loop, scoped to THIS
+    // user's own row via `(user_id, external_id)` — on a DB with more than one
+    // signed-in user, `existingMessageIdMap`/`messageIdMap` can resolve the
+    // guid to either user's copy, and the skip must only ever land on the
+    // IMPORTING user's (R1, BACKLOG-3731 SR review df47f037). See
+    // `textAttachmentSkips.ts`.
     const skipsByMessage = new Map<string, TextAttachmentSkip[]>();
     const recordSkip = (
-      messageId: string,
+      guid: string,
       name: string | null | undefined,
       reason: TextAttachmentSkipReason
     ): void => {
-      const list = skipsByMessage.get(messageId) ?? [];
+      const list = skipsByMessage.get(guid) ?? [];
       list.push({ name: name || null, reason });
-      skipsByMessage.set(messageId, list);
+      skipsByMessage.set(guid, list);
     };
     let completed = true;
 
@@ -2077,7 +2081,7 @@ class MacOSMessagesImportService {
         // Skip unsupported attachment types (TASK-1122: expanded to include videos, audio, documents)
         if (!isSupportedMediaType(filename)) {
           // BACKLOG-3731: a link preview is told apart from other types here.
-          recordSkip(internalMessageId, filename, unsupportedTypeReason(filename));
+          recordSkip(attachment.message_guid, filename, unsupportedTypeReason(filename));
           skipped++;
           processed++;
           continue;
@@ -2089,7 +2093,7 @@ class MacOSMessagesImportService {
             `Skipping oversized attachment: ${attachment.total_bytes} bytes`,
             MacOSMessagesImportService.SERVICE_NAME
           );
-          recordSkip(internalMessageId, filename, "too_large");
+          recordSkip(attachment.message_guid, filename, "too_large");
           skipped++;
           processed++;
           continue;
@@ -2120,7 +2124,7 @@ class MacOSMessagesImportService {
             MacOSMessagesImportService.SERVICE_NAME
           );
           // BACKLOG-3731: ENOENT = Messages never downloaded it; else unreadable.
-          recordSkip(internalMessageId, filename, accessErrorReason(accessError));
+          recordSkip(attachment.message_guid, filename, accessErrorReason(accessError));
           skipped++;
           processed++;
           continue;
@@ -2297,8 +2301,8 @@ class MacOSMessagesImportService {
       try {
         const recordStmt = prepareRecordAttachmentSkips(db, target);
         const writeAll = db.transaction(() => {
-          for (const [messageId, skips] of skipsByMessage) {
-            recordStmt.run({ skips: JSON.stringify(skips), id: messageId });
+          for (const [guid, skips] of skipsByMessage) {
+            recordStmt.run({ skips: JSON.stringify(skips), userId, guid });
           }
         });
         writeAll();

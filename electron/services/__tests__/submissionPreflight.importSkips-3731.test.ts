@@ -347,10 +347,15 @@ describe("BACKLOG-3731 — each import skip reason reaches the pre-flight", () =
     expect(metadataOf(id)).toEqual(before);
     // The import's own statement reports no change for the same value...
     const record = prepareRecordAttachmentSkips(mockDb, { mode: "delta" });
-    expect(record.run({ skips: JSON.stringify(before.attachmentSkips), id }).changes).toBe(0);
+    expect(
+      record.run({ skips: JSON.stringify(before.attachmentSkips), userId: USER, guid: "guid-idem" })
+        .changes,
+    ).toBe(0);
     // ...and replaces a different one whole.
     const next = [{ name: "X.vcf", reason: "unsupported_type" }];
-    expect(record.run({ skips: JSON.stringify(next), id }).changes).toBe(1);
+    expect(record.run({ skips: JSON.stringify(next), userId: USER, guid: "guid-idem" }).changes).toBe(
+      1,
+    );
     expect(metadataOf(id).attachmentSkips).toEqual(next);
     expect(metadataOf(id).source).toBe("macos_messages");
   });
@@ -383,4 +388,70 @@ describe("BACKLOG-3731 — each import skip reason reaches the pre-flight", () =
     }
     expect(metadataOf(id).attachmentSkips).toEqual(full);
   });
+});
+
+describe("BACKLOG-3731 R1 — two users share one chat.db guid on the same DB", () => {
+  // SR PR review df47f037: `existingMessageIdMap`/`messageIdMap` resolve a
+  // guid to whichever user's row was inserted, with no user filter. The skip
+  // must land on the IMPORTING user's own copy regardless of insert order,
+  // and must never touch the other user's copy.
+  const USER_B = "user-b-3731";
+
+  function insertTextFor(user: string, guid: string): string {
+    const id = `local-${user}-${guid}`;
+    prepareInsertMessage(mockDb, { mode: "delta" }).run(
+      id,
+      user,
+      "imessage",
+      guid,
+      "inbound",
+      "",
+      JSON.stringify({ from: "+15550100", to: ["me"] }),
+      "15550100",
+      THREAD,
+      "2026-09-24T17:04:00.000Z",
+      1,
+      "attachment_only",
+      JSON.stringify({ source: "macos_messages", originalId: 1, service: "iMessage" }),
+      null,
+      null,
+    );
+    return id;
+  }
+
+  for (const order of ["A-first", "B-first"] as const) {
+    it(`the skip reaches the importing user's copy only (${order})`, async () => {
+      mockDb
+        .prepare(
+          `INSERT INTO users_local (id, email, oauth_provider, oauth_id) VALUES (?, ?, 'google', ?)`,
+        )
+        .run(USER_B, "b@example.test", "oauth-b");
+
+      let a: string, b: string;
+      if (order === "A-first") {
+        a = insertTextFor(USER, "guid-shared");
+        b = insertTextFor(USER_B, "guid-shared");
+      } else {
+        b = insertTextFor(USER_B, "guid-shared");
+        a = insertTextFor(USER, "guid-shared");
+      }
+
+      await storeAttachments(
+        USER,
+        [await chatDbRow("guid-shared", "A1.pluginPayloadAttachment")],
+        new Map(),
+      );
+
+      // The importing user's (A's) copy gets the skip...
+      expect(metadataOf(a).attachmentSkips).toEqual([
+        { name: "A1.pluginPayloadAttachment", reason: "link_preview" },
+      ]);
+      // ...and B's copy is untouched, even though it shares the same guid.
+      expect(metadataOf(b).attachmentSkips).toBeUndefined();
+
+      // A's pre-flight must not list a link preview.
+      const preflight = await preflightFor([a]);
+      expect(preflight.notIncluded).toEqual([]);
+    });
+  }
 });

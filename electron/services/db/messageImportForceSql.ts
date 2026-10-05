@@ -252,17 +252,22 @@ export function prepareUpdateAttachmentMessageId(
  * BACKLOG-3731: record why the import did not store a message's attachments,
  * as `metadata.attachmentSkips` (see `textAttachmentSkips.ts`).
  *
- * Bind: `{ skips: <JSON array text>, id: <local message id> }`. The value is replaced whole, so a
- * message whose skips changed (a file Messages has since downloaded) carries
- * only the current ones. Writes nothing when the stored value is already the
- * same, so a re-sync over the whole history is a no-op after the first. A row
- * whose metadata is not valid JSON is left alone rather than overwritten.
+ * Bind: `{ skips: <JSON array text>, userId: <importing user>, guid: <chat.db message_guid> }`.
+ * Keyed by `(user_id, external_id)` rather than the local message id — on a DB
+ * with more than one signed-in user, the same guid exists as one row per user,
+ * and this import must only ever mark the IMPORTING user's own copy (R1,
+ * BACKLOG-3731 SR review df47f037). The value is replaced whole, so a message
+ * whose skips changed (a file Messages has since downloaded) carries only the
+ * current ones. Writes nothing when the stored value is already the same, so
+ * a re-sync over the whole history is a no-op after the first. A row whose
+ * metadata is not valid JSON is left alone rather than overwritten.
  */
 export function prepareRecordAttachmentSkips(db: DatabaseType, target: ImportTarget): Statement {
   return db.prepare(`
       UPDATE ${messagesWriteTable(target)}
          SET metadata = json_set(COALESCE(metadata, '{}'), '$.attachmentSkips', json(@skips))
-       WHERE id = @id
+       WHERE user_id = @userId
+         AND external_id = @guid
          AND (metadata IS NULL OR json_valid(metadata))
          AND json_extract(COALESCE(metadata, '{}'), '$.attachmentSkips') IS NOT json(@skips)
     `);

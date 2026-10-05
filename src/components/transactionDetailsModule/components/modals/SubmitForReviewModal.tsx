@@ -139,7 +139,7 @@ export function notIncludedReasonText(item: NotIncludedItem): string {
     case "text_attachment_not_on_this_computer":
       return "Keepr doesn't have a copy of a photo or file from this text.";
     case "text_attachment_not_downloaded_by_messages":
-      return `Messages never downloaded ${file} to this Mac. To include it, open this chat in Messages on this Mac, download the attachment, then re-import your messages.`;
+      return `${capitalize(file)} isn't on this Mac. To include it, open this chat in Messages on this Mac, download the attachment, then sync your messages.`;
     case "text_attachment_too_large_to_import":
       return `${capitalize(file)} is larger than ${IMPORT_SIZE_LIMIT_MB} MB, the largest file Keepr imports.`;
     case "text_attachment_type_not_imported":

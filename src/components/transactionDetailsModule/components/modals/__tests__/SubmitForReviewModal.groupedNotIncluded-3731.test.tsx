@@ -51,12 +51,12 @@ describe("BACKLOG-3731 — wording per reason", () => {
         item(6, "text_attachment_not_downloaded_by_messages", { filename: null }),
       ].map(notIncludedLine),
     ).toEqual([
-      "Text with Paul Example, Sep 24 — Messages never downloaded IMG_1.HEIC to this Mac. To include it, open this chat in Messages on this Mac, download the attachment, then re-import your messages.",
+      "Text with Paul Example, Sep 24 — IMG_1.HEIC isn't on this Mac. To include it, open this chat in Messages on this Mac, download the attachment, then sync your messages.",
       "Text with Paul Example, Sep 24 — Tour.mov is larger than 100 MB, the largest file Keepr imports.",
       "Text with Paul Example, Sep 24 — Agent.vcf is a type of file Keepr doesn't import.",
       "Text with Paul Example, Sep 24 — Keepr couldn't read Offer.pdf on this Mac.",
       "Text with Paul Example, Sep 24 — Keepr doesn't have a copy of a photo or file from this text.",
-      "Text with Paul Example, Sep 24 — Messages never downloaded a photo or file to this Mac. To include it, open this chat in Messages on this Mac, download the attachment, then re-import your messages.",
+      "Text with Paul Example, Sep 24 — A photo or file isn't on this Mac. To include it, open this chat in Messages on this Mac, download the attachment, then sync your messages.",
     ]);
   });
 
@@ -112,7 +112,7 @@ describe("BACKLOG-3731 — grouped by conversation, Show more after 5 lines", ()
     expect(headers[0]).toHaveTextContent("Text with Paul Example — 7 attachments");
     expect(screen.getAllByTestId("list-line")).toHaveLength(NOT_INCLUDED_VISIBLE_LINES);
     expect(screen.getAllByTestId("list-line")[0]).toHaveTextContent(
-      "Sep 24 — Messages never downloaded IMG_0.HEIC to this Mac.",
+      "Sep 24 — IMG_0.HEIC isn't on this Mac.",
     );
 
     fireEvent.click(screen.getByTestId("list-toggle"));
