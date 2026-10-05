@@ -17,7 +17,7 @@
 
 import * as crypto from "crypto";
 import * as os from "os";
-import { app, net } from "electron";
+import { app } from "electron";
 import supabaseService from "./supabaseService";
 /**
  * BACKLOG-2868 — the refusal copy is CANONICAL in its own module because the
@@ -48,22 +48,23 @@ import {
   type SubmissionStageName,
 } from "./submissionStageRetry";
 import { abandonSubmission, readSubmissionStatus } from "./submissionAbandon";
+import { auditPeriodFromRow, type AuditPeriodSource } from "./submissionAuditPeriod";
+import { auditWindowEnd } from "./exportPlan";
 import {
   flatAttemptCounts,
   pickRefusalCounts,
   recordSubmissionAttempt,
   reportSubmissionExclusions,
   reportSubmissionFailure,
+  reportSubmissionScope,
   type FinalizeRefusalCounts,
   type ManifestCounts,
   type SubmissionFailureReason,
+  inProgressAttemptCounts,
 } from "./submissionReporting";
 import databaseService from "./databaseService";
 import logService from "./logService";
-import emailAttachmentService from "./emailAttachmentService";
-import gmailFetchService from "./gmailFetchService";
-import outlookFetchService from "./outlookFetchService";
-import { TRANSACTION_EMAILS_MISSING_ATTACHMENTS_SQL } from "./db/submissionEmailSql";
+import { downloadMissingEmailAttachments as downloadMissingEmailAttachmentsShared } from "./emailAttachmentDownload";
 import { snapshotSubmissionChecklists } from "./submissionChecklistSnapshot";
 import {
   notifyChecklistsChanged,
@@ -154,6 +155,41 @@ export interface SubmissionPreflightResult {
   notIncluded: NotIncludedItem[];
   error?: string;
 }
+
+/** BACKLOG-3683: one linked email or text that falls outside the dates. Display only. */
+export interface SubmissionScopeItem {
+  kind: "email" | "text";
+  sentAt: string | null;
+  /** Email subject, or the text's other party. Never logged. */
+  label: string;
+  side: "before" | "after" | "undated";
+}
+
+/** BACKLOG-3683: what a submission with these dates would send. */
+export interface SubmissionScopeResult {
+  success: boolean;
+  inWindow?: {
+    emails: number;
+    texts: number;
+    textThreads: number;
+    attachments: number;
+    emailAttachments: number;
+    attachmentBytes: number;
+  };
+  outOfWindow?: {
+    emailsBefore: number;
+    emailsAfter: number;
+    textsBefore: number;
+    textsAfter: number;
+    undated: number;
+    /** The first few, oldest first. */
+    items: SubmissionScopeItem[];
+  };
+  error?: string;
+}
+
+/** How many out-of-window items the preview names. */
+export const SCOPE_ITEMS_LISTED = 5;
 
 /** BACKLOG-3398: the answer to `transactions:cancel-submit`. */
 export interface CancelSubmissionResult {
@@ -628,6 +664,116 @@ class SubmissionService {
   }
 
   /**
+   * BACKLOG-3683 (founder decision B): what a submission with these dates
+   * would send, and what is linked but falls outside them. The dates are the
+   * ones on the date step, not yet saved — `candidate` is the payload the
+   * renderer will save (`confirmedDatesUpdate`), read through the same
+   * `auditPeriodFromRow` and the same queries the submit uses. Nothing is
+   * downloaded here; the pre-flight after the save stays the authority on
+   * which files can be sent.
+   */
+  async getSubmissionScope(
+    transactionId: string,
+    candidate: AuditPeriodSource
+  ): Promise<SubmissionScopeResult> {
+    try {
+      const { auditStartDate, auditEndDate } = auditPeriodFromRow(candidate);
+      const texts = databaseService.getTransactionMessages(transactionId, auditStartDate, auditEndDate);
+      const emails = databaseService.getTransactionEmails(transactionId, auditStartDate, auditEndDate);
+      const attachments = databaseService.getTransactionAttachments(transactionId, auditStartDate, auditEndDate);
+      const allTexts = databaseService.getTransactionMessages(transactionId, null, null);
+      const allEmails = databaseService.getTransactionEmails(transactionId, null, null);
+
+      // The queries' own predicate (`sent_at >= start AND sent_at <= end`,
+      // compared as stored strings), so the split agrees with what they left out.
+      const startIso = auditStartDate ? auditStartDate.toISOString() : null;
+      const endIso = auditWindowEnd(auditEndDate)?.toISOString() ?? null;
+      const sideOf = (sentAt: unknown): SubmissionScopeItem["side"] => {
+        if (typeof sentAt !== "string" || sentAt.length === 0) return "undated";
+        if (startIso && sentAt < startIso) return "before";
+        if (endIso && sentAt > endIso) return "after";
+        return "undated";
+      };
+
+      const textIds = new Set(texts.map((m) => m.id));
+      const emailIds = new Set(emails.map((e) => e.id));
+      const outTexts = allTexts.filter((m) => !textIds.has(m.id));
+      const outEmails = allEmails.filter((e) => !emailIds.has(e.id));
+
+      const counts = { emailsBefore: 0, emailsAfter: 0, textsBefore: 0, textsAfter: 0, undated: 0 };
+      const raw: { kind: "email" | "text"; sentAt: string | null; side: SubmissionScopeItem["side"]; email?: Record<string, unknown>; text?: Message }[] = [];
+      for (const e of outEmails) {
+        const side = sideOf(e.sent_at);
+        if (side === "before") counts.emailsBefore++;
+        else if (side === "after") counts.emailsAfter++;
+        else counts.undated++;
+        raw.push({ kind: "email", sentAt: typeof e.sent_at === "string" ? e.sent_at : null, side, email: e });
+      }
+      for (const m of outTexts) {
+        const side = sideOf(m.sent_at);
+        if (side === "before") counts.textsBefore++;
+        else if (side === "after") counts.textsAfter++;
+        else counts.undated++;
+        raw.push({ kind: "text", sentAt: typeof m.sent_at === "string" ? (m.sent_at as string) : null, side, text: m });
+      }
+      raw.sort((a, b) => (a.sentAt ?? "").localeCompare(b.sentAt ?? ""));
+      const listed = raw.slice(0, SCOPE_ITEMS_LISTED);
+
+      // Names only for the texts actually listed.
+      let partyNames: HandleNameResolution = { names: {}, matches: {} };
+      const listedTexts = listed.filter((r) => r.text).map((r) => r.text as Message);
+      if (listedTexts.length > 0) {
+        try {
+          const currentUserId = await this.getCurrentUserId();
+          partyNames = await resolveHandles(
+            extractParticipantHandles(listedTexts),
+            currentUserId,
+            { userId: currentUserId, transactionId }
+          );
+        } catch {
+          // A text is then named by its handle.
+        }
+      }
+      const items: SubmissionScopeItem[] = listed.map((r) => ({
+        kind: r.kind,
+        sentAt: r.sentAt,
+        side: r.side,
+        label:
+          r.kind === "email"
+            ? typeof r.email?.subject === "string" ? (r.email.subject as string) : ""
+            : this.textOtherPartyLabel(r.text as Message, partyNames),
+      }));
+
+      const inWindow = {
+        emails: emails.length,
+        texts: texts.length,
+        textThreads: new Set(texts.map((m) => m.thread_id || `msg:${m.id}`)).size,
+        attachments: attachments.length,
+        emailAttachments: attachments.filter((a) => (a as Attachment & { email_id?: string | null }).email_id).length,
+        attachmentBytes: attachments.reduce((sum, a) => sum + (Number(a.file_size_bytes) || 0), 0),
+      };
+
+      reportSubmissionScope(transactionId, {
+        inWindow: {
+          emails: inWindow.emails,
+          texts: inWindow.texts,
+          textThreads: inWindow.textThreads,
+          attachments: inWindow.attachments,
+        },
+        outOfWindow: counts,
+      });
+
+      return { success: true, inWindow, outOfWindow: { ...counts, items } };
+    } catch (error) {
+      logService.warn(
+        `[Submission] Scope preview failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+        "SubmissionService"
+      );
+      return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
+    }
+  }
+
+  /**
    * BACKLOG-3398: stop the running submission. Refused once the final step has
    * begun — from then the server decides, and a cancel could only lie about
    * the outcome.
@@ -669,12 +815,11 @@ class SubmissionService {
     preflight: Awaited<ReturnType<typeof runSubmissionPreflight>>;
   }> {
     const transaction = await this.loadTransaction(transactionId);
-    const auditStartDate = transaction.started_at
-      ? new Date(transaction.started_at)
-      : null;
-    const auditEndDate = transaction.closed_at
-      ? new Date(transaction.closed_at)
-      : null;
+    // BACKLOG-3683: the same reader the scope preview uses.
+    const { auditStartDate, auditEndDate } = auditPeriodFromRow({
+      started_at: transaction.started_at ?? null,
+      closed_at: transaction.closed_at ?? null,
+    });
 
     const messages = await this.loadTransactionMessages(
       transactionId,
@@ -972,7 +1117,14 @@ class SubmissionService {
         stage: "parent",
         reasonCode: null,
         retryCount: 0,
-        counts: {},
+        // BACKLOG-3715 (coordinator ruling): what this attempt is about to
+        // send, flat snake_case whole numbers. The server merges counts with
+        // `||`, so a later update keeps these unless it sends the same key.
+        counts: inProgressAttemptCounts(
+          messageRecords.length,
+          attachmentPlan.length,
+          excludedFiles.length
+        ),
         isResubmit,
       });
       parentSent = true;
@@ -1897,131 +2049,9 @@ class SubmissionService {
     return databaseService.getTransactionAttachments(transactionId, auditStartDate, auditEndDate);
   }
 
-  /**
-   * BACKLOG-1369: Download missing email attachments for a transaction.
-   * Finds emails linked to this transaction that have has_attachments=true and
-   * are missing the BYTES of at least one attachment, then downloads from the
-   * provider.
-   *
-   * BACKLOG-3389: "missing the bytes" replaced "have no attachment records".
-   * A normal sync writes a metadata-only row (`storage_path` NULL), which
-   * satisfied the old row-existence test — so the download was skipped and the
-   * gather then discarded the row for having nothing to upload. The predicate
-   * and the reasoning live in `db/submissionEmailSql.ts`.
-   */
   private async downloadMissingEmailAttachments(transactionId: string): Promise<void> {
-    // Check network connectivity first
-    try {
-      if (!net.isOnline()) {
-        logService.warn(
-          "[Submission] Cannot download missing attachments: device is offline",
-          "SubmissionService",
-          { transactionId }
-        );
-        return;
-      }
-    } catch {
-      // net.isOnline() may not be available in all contexts; proceed anyway
-    }
-
-    try {
-      const db = databaseService.getRawDatabase();
-
-      // Find emails linked to this transaction that have attachments but no records
-      const emailsMissing = db
-        .prepare(TRANSACTION_EMAILS_MISSING_ATTACHMENTS_SQL)
-        .all(transactionId) as { id: string; external_id: string; source: string; user_id: string }[];
-
-      if (emailsMissing.length === 0) return;
-
-      logService.info(
-        `[Submission] Downloading attachments for ${emailsMissing.length} emails before export`,
-        "SubmissionService",
-        { transactionId }
-      );
-
-      // Group by source for efficient provider initialization
-      const outlookEmails = emailsMissing.filter(e => e.source === "outlook");
-      const gmailEmails = emailsMissing.filter(e => e.source === "gmail");
-
-      if (outlookEmails.length > 0) {
-        const userId = outlookEmails[0].user_id;
-        try {
-          const isReady = await outlookFetchService.initialize(userId);
-          if (isReady) {
-            for (const email of outlookEmails) {
-              try {
-                const graphAttachments = await outlookFetchService.getAttachments(email.external_id);
-                if (graphAttachments.length > 0) {
-                  await emailAttachmentService.downloadEmailAttachments(
-                    email.user_id, email.id, email.external_id, "outlook",
-                    graphAttachments.map((att: { id: string; name: string; contentType: string; size: number }) => ({
-                      filename: att.name || "attachment",
-                      mimeType: att.contentType || "application/octet-stream",
-                      size: att.size || 0,
-                      // BACKLOG-3187: a Graph attachment has no MIME part, so no identity
-                      // beyond its own id. Explicitly null — the field is required so this
-                      // decision cannot be left unmade at a new call site.
-                      partId: null,
-                      attachmentId: att.id,
-                    })),
-                  );
-                }
-              } catch (err) {
-                logService.warn("[Submission] Failed to download Outlook attachment for export", "SubmissionService", {
-                  emailId: email.id, error: err instanceof Error ? err.message : "Unknown",
-                });
-              }
-            }
-          }
-        } catch (err) {
-          logService.warn("[Submission] Outlook init failed for attachment download", "SubmissionService", {
-            error: err instanceof Error ? err.message : "Unknown",
-          });
-        }
-      }
-
-      if (gmailEmails.length > 0) {
-        const userId = gmailEmails[0].user_id;
-        try {
-          const isReady = await gmailFetchService.initialize(userId);
-          if (isReady) {
-            for (const email of gmailEmails) {
-              try {
-                const fullEmail = await gmailFetchService.getEmailById(email.external_id);
-                if (fullEmail.attachments && fullEmail.attachments.length > 0) {
-                  await emailAttachmentService.downloadEmailAttachments(
-                    email.user_id, email.id, email.external_id, "gmail",
-                    fullEmail.attachments.map((att: { filename?: string; name?: string; mimeType?: string; contentType?: string; size?: number; partId?: string; attachmentId?: string; id?: string }) => ({
-                      filename: att.filename || att.name || "attachment",
-                      mimeType: att.mimeType || att.contentType || "application/octet-stream",
-                      size: att.size || 0,
-                      // BACKLOG-3187: identity (Gmail's immutable MIME part id) travels
-                      // separately from the fetch token below, which rotates between calls.
-                      partId: att.partId ?? null,
-                      attachmentId: att.attachmentId || att.id || "",
-                    })),
-                  );
-                }
-              } catch (err) {
-                logService.warn("[Submission] Failed to download Gmail attachment for export", "SubmissionService", {
-                  emailId: email.id, error: err instanceof Error ? err.message : "Unknown",
-                });
-              }
-            }
-          }
-        } catch (err) {
-          logService.warn("[Submission] Gmail init failed for attachment download", "SubmissionService", {
-            error: err instanceof Error ? err.message : "Unknown",
-          });
-        }
-      }
-    } catch (err) {
-      logService.warn("[Submission] Failed to download missing email attachments for export", "SubmissionService", {
-        transactionId,
-        error: err instanceof Error ? err.message : "Unknown",
-      });
-    }
+    // BACKLOG-3683: moved to emailAttachmentDownload.ts (shared with the PDF export).
+    await downloadMissingEmailAttachmentsShared(transactionId, "[Submission]");
   }
 
   private async getUserOrganizationId(): Promise<string | null> {

@@ -1062,3 +1062,43 @@ describe("BACKLOG-3403 / 3681 — files that can never be sent", () => {
     ]);
   });
 });
+
+// ============================================================================
+// BACKLOG-3715 — the in_progress attempt row carries what it is about to send
+// ============================================================================
+
+describe("BACKLOG-3715 — attempt counts", () => {
+  beforeEach(() => {
+    setPreflightStatForTests(async (p: string) =>
+      p.endsWith("Inspection.pdf") ? { size: 50 * 1024 * 1024 + 1 } : { size: 2048 }
+    );
+  });
+
+  /**
+   * MUTATION: send `counts: {}` on the in_progress row (pre-3715) → red.
+   * The keys must be flat snake_case whole numbers, or the server drops them.
+   */
+  it("the in_progress row carries messages, attachments and not_included", async () => {
+    const result = await submissionService.submitTransaction(TX, undefined, { acceptedExclusionKeys: ["att:att-pdf"] });
+    expect(result.success).toBe(true);
+    const started = cloud.attemptCalls.filter((a) => a.p_outcome === "in_progress");
+    expect(started).toHaveLength(1);
+    expect(started[0].p_counts).toEqual({ messages: 3, attachments: 1, not_included: 1 });
+  });
+
+  /**
+   * The server merges `counts || new`, so a later update replaces any key it
+   * re-sends. A failure's final update must not re-send these keys with other
+   * values (e.g. a 0 from a manifest that was never built).
+   */
+  it("a failure's final update keeps the started counts", async () => {
+    cloud.script["submission_messages:insert"] = ["network", "network", "network"];
+    const result = await submissionService.submitTransaction(TX, undefined, { acceptedExclusionKeys: ["att:att-pdf"] });
+    expect(result.success).toBe(false);
+    const [started, ended] = cloud.attemptCalls;
+    expect(started.p_outcome).toBe("in_progress");
+    expect(ended.p_outcome).toBe("failed");
+    const merged = { ...(started.p_counts as Row), ...(ended.p_counts as Row) };
+    expect(merged).toMatchObject({ messages: 3, attachments: 1, not_included: 1 });
+  });
+});

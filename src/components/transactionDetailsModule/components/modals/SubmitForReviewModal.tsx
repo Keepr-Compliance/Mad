@@ -25,6 +25,12 @@ import {
   validateTransactionDates,
 } from "../../../transactionDates";
 import type { Transaction } from "@/types";
+import { useSubmissionScope } from "../../hooks/useSubmissionScope";
+import {
+  outOfWindowItemLine,
+  outOfWindowSentences,
+  outOfWindowTotal,
+} from "./submissionScopeCopy";
 
 export interface SubmitProgress {
   stage:
@@ -484,6 +490,24 @@ export function SubmitForReviewModal({
   const commission = useCommissionForm(transaction);
   const [datesError, setDatesError] = useState<string | null>(null);
   const [savingDates, setSavingDates] = useState(false);
+  // BACKLOG-3683: the summary counts what the dates on this step include.
+  const { state: scopeState, load: loadScope } = useSubmissionScope(transaction.id);
+  /**
+   * Where the date step applies, the summary's numbers are the in-window
+   * ones — never the all-linked totals passed in, which include items the
+   * submission will not send (founder decision B).
+   */
+  const scopeApplies = dateStepApplies && scopeState.status !== "idle";
+  const scopeReady = dateStepApplies && scopeState.status === "ready" ? scopeState : null;
+  const scopePending = scopeApplies && scopeReady === null;
+  const shownEmailCount = scopeReady ? scopeReady.scope.inWindow.emails : emailCount;
+  const shownEmailAttachmentCount = scopeReady
+    ? scopeReady.scope.inWindow.emailAttachments
+    : emailAttachmentCount;
+  const shownTextThreadCount = scopeReady ? scopeReady.scope.inWindow.textThreads : textThreadCount;
+  const shownAttachmentCount = scopeReady ? scopeReady.scope.inWindow.attachments : attachmentCount;
+  const shownTotalSizeBytes = scopeReady ? scopeReady.scope.inWindow.attachmentBytes : totalSizeBytes;
+  const pendingMark = scopeState.status === "failed" ? "—" : "…";
   const showDateStep =
     dateStepApplies &&
     screen === "dates" &&
@@ -532,6 +556,7 @@ export function SubmitForReviewModal({
     // by the commission block. An EMPTY commission never does: the block shows
     // an inline warning and Next proceeds.
     if (!commission.parsed.ok) return;
+    void loadScope(dates);
     setScreen("summary");
   };
 
@@ -799,11 +824,11 @@ export function SubmitForReviewModal({
                     />
                   </svg>
                   <span className="text-gray-600">Emails:</span>
-                  <span className="font-medium text-gray-900">
-                    {emailCount}
-                    {emailAttachmentCount > 0 && (
+                  <span className="font-medium text-gray-900" data-testid="submit-review-email-count">
+                    {scopePending ? pendingMark : shownEmailCount}
+                    {!scopePending && shownEmailAttachmentCount > 0 && (
                       <span className="text-gray-500 font-normal">
-                        {" "}({emailAttachmentCount} {emailAttachmentCount === 1 ? "attachment" : "attachments"})
+                        {" "}({shownEmailAttachmentCount} {shownEmailAttachmentCount === 1 ? "attachment" : "attachments"})
                       </span>
                     )}
                   </span>
@@ -825,8 +850,8 @@ export function SubmitForReviewModal({
                     />
                   </svg>
                   <span className="text-gray-600">Text threads:</span>
-                  <span className="font-medium text-gray-900">
-                    {textThreadCount}
+                  <span className="font-medium text-gray-900" data-testid="submit-review-text-thread-count">
+                    {scopePending ? pendingMark : shownTextThreadCount}
                   </span>
                 </div>
 
@@ -846,17 +871,57 @@ export function SubmitForReviewModal({
                     />
                   </svg>
                   <span className="text-gray-600">Total attachments:</span>
-                  <span className="font-medium text-gray-900">
-                    {attachmentCount} {attachmentCount === 1 ? "file" : "files"}
-                    {totalSizeBytes > 0 && (
-                      <span className="text-gray-500 font-normal">
-                        {" "}({formatBytes(totalSizeBytes)})
-                      </span>
+                  <span className="font-medium text-gray-900" data-testid="submit-review-attachment-count">
+                    {scopePending ? pendingMark : (
+                      <>
+                        {shownAttachmentCount} {shownAttachmentCount === 1 ? "file" : "files"}
+                        {shownTotalSizeBytes > 0 && (
+                          <span className="text-gray-500 font-normal">
+                            {" "}({formatBytes(shownTotalSizeBytes)})
+                          </span>
+                        )}
+                      </>
                     )}
                   </span>
                 </div>
               </div>
             </div>
+
+            {/* BACKLOG-3683 (founder decision B): linked items the dates leave out. */}
+            {scopeState.status === "failed" && dateStepApplies && (
+              <div
+                className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"
+                role="status"
+                data-testid="submit-review-scope-failed"
+              >
+                Couldn&apos;t count what falls inside these dates. Only emails and texts dated from the start date to the end date will be sent.
+              </div>
+            )}
+            {scopeReady && outOfWindowTotal(scopeReady.scope.outOfWindow) > 0 && (
+              <div
+                className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"
+                role="status"
+                data-testid="submit-review-out-of-window"
+              >
+                {outOfWindowSentences(
+                  scopeReady.scope.outOfWindow,
+                  scopeReady.startDate,
+                  scopeReady.endDate
+                ).map((line) => (
+                  <p key={line} className="mb-1">{line}</p>
+                ))}
+                <ul className="mt-1 list-disc pl-5 text-amber-800">
+                  {scopeReady.scope.outOfWindow.items.map((item, i) => (
+                    <li key={`${item.kind}-${item.sentAt ?? ""}-${i}`}>{outOfWindowItemLine(item)}</li>
+                  ))}
+                </ul>
+                {outOfWindowTotal(scopeReady.scope.outOfWindow) > scopeReady.scope.outOfWindow.items.length && (
+                  <p className="mt-1 text-amber-800" data-testid="submit-review-out-of-window-more">
+                    and {outOfWindowTotal(scopeReady.scope.outOfWindow) - scopeReady.scope.outOfWindow.items.length} more
+                  </p>
+                )}
+              </div>
+            )}
 
             {/*
               BACKLOG-2849 — the pre-submit export SECTION is gone: the blue

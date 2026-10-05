@@ -255,7 +255,9 @@ export function registerTransactionExportHandlers(
         details,
         pdfPlan.communications,
         pdfPath,
-        { hiddenTextCount: pdfPlan.hiddenTextCount, hiddenTexts: pdfPlan.hiddenTexts },
+        // BACKLOG-3683: `attachmentType: "none"` — this channel writes no
+        // attachment files, so none can be left out.
+        { hiddenTextCount: pdfPlan.hiddenTextCount, hiddenTexts: pdfPlan.hiddenTexts, filesNotIncluded: [] },
       );
 
       // BACKLOG-2006a — funnel: export-completed (main-side, non-throwing).
@@ -807,6 +809,37 @@ export function registerTransactionExportHandlers(
       return {
         success: result.success,
         notIncluded: result.notIncluded,
+        error: result.error,
+      };
+    }, { module: "Transactions" }),
+  );
+
+  // BACKLOG-3683: what a submission with the dates on the date step would
+  // send, and what is linked but outside them. Read-only; downloads nothing.
+  ipcMain.handle(
+    "transactions:submission-scope",
+    wrapHandler(async (
+      event: IpcMainInvokeEvent,
+      transactionId: string,
+      candidate: { started_at?: unknown; closed_at?: unknown },
+    ): Promise<TransactionResponse> => {
+      const validatedTransactionId = validateTransactionId(transactionId);
+      if (!validatedTransactionId) {
+        throw new ValidationError(
+          "Transaction ID validation failed",
+          "transactionId",
+        );
+      }
+      const asDate = (v: unknown): string | null =>
+        typeof v === "string" && v.length > 0 && v.length <= 40 ? v : null;
+      const result = await submissionService.getSubmissionScope(validatedTransactionId, {
+        started_at: asDate(candidate?.started_at),
+        closed_at: asDate(candidate?.closed_at),
+      });
+      return {
+        success: result.success,
+        inWindow: result.inWindow,
+        outOfWindow: result.outOfWindow,
         error: result.error,
       };
     }, { module: "Transactions" }),
