@@ -309,12 +309,18 @@ function TransactionDetails({
   // + text/iMessage) for the transaction via a dedicated IPC query, independent
   // of which communications channels have been loaded. No audit-date window is
   // applied (matches the Emails/Texts tabs, which show all linked content).
+  // BACKLOG-3730: `inWindowIds` marks the ones inside the transaction dates
+  // (main's submit window), which the Attachments tab shows by default.
   const {
     attachments,
     loading: attachmentsLoading,
     error: attachmentsError,
     refresh: refreshAttachments,
-  } = useTransactionAllAttachments(transaction.id);
+    inWindowIds: attachmentsInWindowIds,
+  } = useTransactionAllAttachments(transaction.id, undefined, undefined, {
+    startedAt: transaction.started_at,
+    closedAt: transaction.closed_at,
+  });
 
   // Refresh messages by reloading text communications from the parent state.
   // This ensures derivedMessages (from useTransactionMessages) updates correctly,
@@ -1502,6 +1508,7 @@ function TransactionDetails({
               loading={attachmentsLoading}
               error={attachmentsError}
               refresh={refreshAttachments}
+              inWindowIds={attachmentsInWindowIds}
             />
           )}
 

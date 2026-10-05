@@ -31,6 +31,7 @@ import { getEmailById } from "../services/db/emailDbService";
 // service uploads, so it must use the SAME closing-day bound the export
 // resolver defines rather than a local end-of-day.
 import { auditWindowEnd } from "../services/exportPlan";
+import { auditPeriodFromRow } from "../services/submissionAuditPeriod";
 import { wrapHandler } from "../utils/wrapHandler";
 import type { Transaction } from "../types/models";
 import {
@@ -374,8 +375,13 @@ export function registerAttachmentHandlers(
         throw new ValidationError("Transaction ID validation failed", "transactionId");
       }
 
-      const startDate = auditStart ? new Date(auditStart) : null;
-      const endDate = auditEnd ? new Date(auditEnd) : null;
+      // BACKLOG-3730: the Attachments tab passes the transaction's raw
+      // started_at / closed_at; read them through the same reader the submit
+      // uses so the tab's window is the submission's window.
+      const { auditStartDate: startDate, auditEndDate: endDate } = auditPeriodFromRow({
+        started_at: auditStart ?? null,
+        closed_at: auditEnd ?? null,
+      });
 
       const data = databaseService.getTransactionAllAttachments(
         validatedTransactionId,
