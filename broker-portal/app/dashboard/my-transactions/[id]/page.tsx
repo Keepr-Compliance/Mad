@@ -45,6 +45,7 @@ import { AttachmentList } from '@/components/submission/AttachmentList';
 import { StatusHistory } from '@/components/submission/StatusHistory';
 import { ChecklistReview } from '@/components/submission/ChecklistReview';
 import { UpsellPanel } from '@/components/my-transactions/UpsellPanel';
+import { groupAttachmentsByMessage } from '@/lib/submissions/attachmentKinds';
 import { agentChannelVisibility, getMyTransactionsGate } from '@/lib/my-transactions-access';
 import { resolveHistoryActors, withoutBrokerReviewEntries, type StatusHistoryEntry } from '@/lib/submissions/history';
 import { resolveUserNames } from '@/lib/submissions/names';
@@ -111,6 +112,8 @@ interface Attachment {
   file_size_bytes: number | null;
   storage_path: string | null;
   document_type: string | null;
+  /** BACKLOG-3682: the submission_messages row the file came from (null before 2.39). */
+  message_id?: string | null;
 }
 
 const BASE_PATH = '/dashboard/my-transactions';
@@ -122,7 +125,7 @@ const SUBMISSION_COLUMNS =
 const PARENT_COLUMNS = 'id, status_history, parent_submission_id, created_at';
 const MESSAGE_COLUMNS =
   'id, channel, direction, subject, body_text, sent_at, has_attachments, attachment_count, thread_id, message_type, participants';
-const ATTACHMENT_COLUMNS = 'id, filename, mime_type, file_size_bytes, storage_path, document_type';
+const ATTACHMENT_COLUMNS = 'id, filename, mime_type, file_size_bytes, storage_path, document_type, message_id';
 
 async function getOwnSubmission(
   supabase: SessionClient,
@@ -266,6 +269,12 @@ export default async function MyTransactionDetailPage({ params }: PageProps) {
   const shownMessages = messages.filter((m) => (m.channel === 'email' ? visibility.email : visibility.text));
   const showMessages = visibility.text || visibility.email;
 
+  // BACKLOG-3748: files shown inside their message's bubble, joined on
+  // message_id over the shown messages, under the same either-flag rule
+  // (visibility.attachments) as the rest of the page — built the same way as
+  // app/dashboard/submissions/[id]/page.tsx.
+  const attachmentsByMessage = groupAttachmentsByMessage(attachments, shownMessages, visibility.attachments);
+
   return (
     <div className="max-w-7xl mx-auto space-y-6 pb-24">
       <Link href={BASE_PATH} className="inline-flex items-center text-sm text-gray-500 hover:text-gray-700">
@@ -323,10 +332,11 @@ export default async function MyTransactionDetailPage({ params }: PageProps) {
           templates={[]}
           messages={showMessages ? shownMessages : []}
           attachments={visibility.attachments ? attachments : []}
+          attachmentsByMessage={showMessages ? attachmentsByMessage : undefined}
         />
       )}
 
-      {showMessages && <MessageList messages={shownMessages} />}
+      {showMessages && <MessageList messages={shownMessages} attachmentsByMessage={attachmentsByMessage} />}
 
       {visibility.attachments && <AttachmentList attachments={attachments} />}
     </div>
