@@ -24,6 +24,7 @@ import { doneSummaryLines, googleMessagesStep } from "./googleMessagesSyncSteps"
 import { LinkBrowserPanel } from "./LinkBrowserPanel";
 import { syncFailureLine } from "./syncFailureLines";
 import { EXTENSION_PUBLISHED, readBetaInstallPreference, wantsBetaInstall } from "./extensionDistribution";
+import { browserLinkView, CHECKING_BROWSER, LINK_CHECK_MS, useLinkCheckOver } from "./browserLinkState";
 
 const POLL_MS = 3000;
 
@@ -59,9 +60,7 @@ const secondary =
 /** Founder (D05): the green ✓ in the field shows this long before the linked screen. */
 export const LINKED_FLASH_MS = 1000;
 
-/** Live (0.3.76): a saved link not yet proven since Keepr started — this long at most. */
-export const LINK_CHECK_MS = 5000;
-export const CHECKING_BROWSER = "Checking the browser…";
+export { LINK_CHECK_MS, CHECKING_BROWSER } from "./browserLinkState";
 
 /** SR C7 (founder-approved copy): the one consent line before the first Sync. */
 export const CONSENT_LINE = "Keepr copies your texts from Google Messages into Keepr on this computer.";
@@ -116,11 +115,7 @@ export function GoogleMessagesSyncFlow({
   }, []);
   const [betaPref, setBetaPref] = useState(false);
   /** Live (0.3.76): the "Checking the browser…" window is over. */
-  const [linkCheckOver, setLinkCheckOver] = useState(false);
-  useEffect(() => {
-    const t = setTimeout(() => setLinkCheckOver(true), linkCheckMs);
-    return () => clearTimeout(t);
-  }, [linkCheckMs]);
+  const linkCheckOver = useLinkCheckOver(linkCheckMs);
   const jobIdRef = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -176,19 +171,15 @@ export function GoogleMessagesSyncFlow({
   }, []);
 
   const step = googleMessagesStep({ state, job, continued: false });
-  /** BACKLOG-3666: the extension linked with THIS Keepr (a Sync is refused until then). */
-  const keeprPaired = state?.extensionPaired === true;
   /**
-   * Live (0.3.76): Keepr keeps the link's proof in memory, so right after it
-   * starts a SAVED link is unproven until the extension's next signed call.
-   * A saved pairing that no extension disowned is treated as linked: a short
-   * "Checking the browser…" first, then the linked screen (Sync opens Google
-   * Messages, which proves the link). The link step only when nothing is
-   * saved, an extension said "no link here", or the user asked to relink.
+   * Live (0.3.76): a saved, not-disowned link reads "Checking the browser…"
+   * briefly, then linked (browserLinkState — the rule Settings uses too; Sync
+   * opens Google Messages, which proves the link). The link step only when
+   * nothing is saved, an extension said "no link here", or Relink.
    */
-  const savedLink = state?.pairingSaved === true && state?.linkNotHere !== true;
-  const checkingLink = !keeprPaired && savedLink && !linkCheckOver && !startAtLink && linkFlash === "none";
-  const linkedForScreen = keeprPaired || savedLink;
+  const linkView = browserLinkView(state, linkCheckOver);
+  const checkingLink = linkView === "checking" && !startAtLink && linkFlash === "none";
+  const linkedForScreen = linkView !== "notLinked";
   const doneLines = step === "done" && job ? doneSummaryLines(job) : null;
   const beta = wantsBetaInstall(betaPref, published);
   /** The link card: not linked, Relink, or a code's green ✓ still showing. */

@@ -58,6 +58,7 @@ export const WITHDRAW_ASK = "Syncing stops. Texts already in Keepr stay.";
 import { readMessageImportPreferences, resolveStoredLookbackMonths } from "./messageImportPreferences";
 
 import { GM_LOOKBACK_TARGET } from "./android/googleMessagesSyncSteps";
+import { browserLinkView, CHECKING_BROWSER, LINK_CHECK_MS, useLinkCheckOver } from "./android/browserLinkState";
 import type { RcsExtensionState } from "../../../electron/types/ipc/window-api-rcs-import";
 
 function formatWhen(iso: string | null | undefined): string {
@@ -75,9 +76,11 @@ interface GoogleMessagesSettingsProps {
   onOpenSyncAndroid?: () => void;
   /** Test seam: the extension is in the Chrome Web Store (default EXTENSION_PUBLISHED). */
   published?: boolean;
+  /** Test seam: the "Checking the browser…" window (default LINK_CHECK_MS). */
+  linkCheckMs?: number;
 }
 
-export function GoogleMessagesSettings({ userId, onOpenSyncAndroid, published = EXTENSION_PUBLISHED }: GoogleMessagesSettingsProps) {
+export function GoogleMessagesSettings({ userId, onOpenSyncAndroid, published = EXTENSION_PUBLISHED, linkCheckMs = LINK_CHECK_MS }: GoogleMessagesSettingsProps) {
   const [state, setState] = useState<RcsExtensionState | null>(null);
   const [lookbackMonths, setLookbackMonths] = useState<number | null>(resolveStoredLookbackMonths(undefined));
   const [prefsSettled, setPrefsSettled] = useState(false);
@@ -91,8 +94,13 @@ export function GoogleMessagesSettings({ userId, onOpenSyncAndroid, published = 
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [excluded, setExcluded] = useState<Array<{ id: string; title: string | null }>>([]);
   const [manageOpen, setManageOpen] = useState(false);
-  // BACKLOG-3666: Pair / Re-pair the extension with this Keepr.
-  const keeprPaired = state?.extensionPaired === true;
+  // BACKLOG-3666: Pair / Re-pair the extension with this Keepr. Live
+  // (0.3.76): the same rule as the Sync Android modal (browserLinkState) — a
+  // saved link reads "Checking the browser…" briefly after Keepr starts, then
+  // Linked.
+  const linkCheckOver = useLinkCheckOver(linkCheckMs);
+  const linkView = browserLinkView(state, linkCheckOver);
+  const keeprPaired = linkView !== "notLinked";
 
   const refreshExcluded = useCallback(async () => {
     const r = await rcsImportService.listExclusions();
@@ -269,7 +277,12 @@ export function GoogleMessagesSettings({ userId, onOpenSyncAndroid, published = 
         )}
         <div className="flex items-center justify-between">
           <span className="text-sm text-gray-900" data-testid="gm-pairing-line">
-            {keeprPaired ? LINK_STATUS.linked : LINK_STATUS.notLinked}
+            {linkView === "checking" ? (
+              <span className="inline-flex items-center gap-2" role="status" data-testid="gm-pairing-checking">
+                <span className="w-3.5 h-3.5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" aria-hidden="true" />
+                {CHECKING_BROWSER}
+              </span>
+            ) : keeprPaired ? LINK_STATUS.linked : LINK_STATUS.notLinked}
           </span>
           <div className="flex items-center gap-3">
             {keeprPaired && !forgetAsk && (

@@ -376,3 +376,29 @@ describe("consent (C7)", () => {
     expect(screen.queryByTestId("gm-consent")).toBeNull();
   });
 });
+
+// Live (0.3.76): the same rule as the Sync Android modal (browserLinkState):
+// right after Keepr starts, a saved, not-disowned link reads "Checking the
+// browser…" briefly, then Linked — never "Not linked". Mutations: Settings
+// on extensionPaired alone again → red; "no link here" ignored → red.
+describe("the link line right after Keepr starts (0.3.76)", () => {
+  it("a saved, unproven link: 'Checking the browser…', then Linked (Forget link, Relink)", async () => {
+    mockState = { ...mockState, extensionPaired: false, pairingSaved: true, linkNotHere: false };
+    render(<GoogleMessagesSettings userId="user-1" onOpenSyncAndroid={() => undefined} linkCheckMs={150} />);
+    expect(await screen.findByTestId("gm-pairing-checking")).toHaveTextContent("Checking the browser…");
+    await waitFor(() => expect(screen.getByTestId("gm-pairing-line")).toHaveTextContent(/^Linked$/), { timeout: 2000 });
+    expect(screen.getByTestId("gm-link-forget")).toBeInTheDocument();
+    expect(screen.getByTestId("gm-link-open")).toHaveTextContent("Relink");
+  });
+
+  it("nothing saved, or an extension said 'no link here': Not linked at once", async () => {
+    mockState = { ...mockState, extensionPaired: false, pairingSaved: false };
+    const a = render(<GoogleMessagesSettings userId="user-1" onOpenSyncAndroid={() => undefined} linkCheckMs={60_000} />);
+    await waitFor(() => expect(screen.getByTestId("gm-pairing-line")).toHaveTextContent(/^Not linked$/));
+    expect(screen.queryByTestId("gm-pairing-checking")).toBeNull();
+    a.unmount();
+    mockState = { ...mockState, extensionPaired: false, pairingSaved: true, linkNotHere: true };
+    render(<GoogleMessagesSettings userId="user-1" onOpenSyncAndroid={() => undefined} linkCheckMs={60_000} />);
+    await waitFor(() => expect(screen.getByTestId("gm-pairing-line")).toHaveTextContent(/^Not linked$/));
+  });
+});
