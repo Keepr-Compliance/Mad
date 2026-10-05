@@ -34,7 +34,7 @@ eye), and linking the extension with that Keepr app.
 
 | Permission / host | Why it is needed |
 |---|---|
-| `storage` | Small local settings only: the time of the last Sync, where the user dragged the Sync box on the page, and a short-lived note that a Sync is running. No message content is stored. |
+| `storage` | Small settings only, never message content: `storage.local` keeps the time of the last Sync and where the user dragged the Sync box and the link guide on the page; `storage.session` keeps when the extension last told Keepr it is installed (cleared when the browser closes). The link window's state is kept in memory only. The link key with Keepr is a non-extractable WebCrypto key kept in the extension's IndexedDB (never readable, never sent). |
 | `https://messages.google.com/*` (host) and the content scripts on `https://messages.google.com/web/*` | The extension's only website. During a Sync the user started in Keepr, it reads the open conversations on Google Messages for Web and shows its Sync box and the per-chat eye there. It never changes, sends or deletes a message. |
 | `http://127.0.0.1:38619/*` (host) | The Keepr desktop app on the same computer. Texts are sent only there — never to a server. Every request and reply is signed with a key agreed when the user links the extension with Keepr (a 6-digit code typed in Keepr), so no other local program can take or forge them. |
 | `chrome.tabs` / `chrome.windows` APIs (no `tabs` permission requested) | Used only on Google Messages tabs (covered by the host permission): find or open the Google Messages tab when the user clicks Sync or "Go to Google Messages", bring that window forward, keep the tab from being discarded while a Sync runs, and open the link window. The extension never reads the URL or title of any other tab. |
@@ -70,7 +70,10 @@ eye), and linking the extension with that Keepr app.
 
 - Before the first Sync, Keepr shows: "Keepr copies your texts from Google
   Messages into Keepr on this computer." with **Agree and sync**. Nothing is
-  copied before that. The consent is recorded with its version; a change of
+  copied before that.
+  <!-- TODO(founder, F2): true for the Sync Android (cache) Sync. A Sync started
+  from a transaction (rcs-import:start-job) is not gated on this consent yet;
+  gate it, or reword this line, once the founder decides. --> The consent is recorded with its version; a change of
   practice raises the version and asks again.
 - The user can **withdraw** it in Keepr: Settings › Google Messages. The next
   Sync asks again.
@@ -86,7 +89,7 @@ eye), and linking the extension with that Keepr app.
 
 | Statement | Answer |
 |---|---|
-| I do not sell or transfer user data to third parties, outside of the approved use cases | **Certify.** Data goes only to the user's own Keepr app; the brokerage submission is user-initiated and is the single purpose. |
+| I do not sell or transfer user data to third parties, outside of the approved use cases | **Certify.** The extension sends data only to the user's own Keepr app. In Keepr, texts leave the computer only when the user submits a transaction to their brokerage — a user-initiated transfer that is part of keeping the user's transaction records, the reason the texts are copied into Keepr (§2). |
 | I do not use or transfer user data for purposes that are unrelated to my item's single purpose | **Certify.** |
 | I do not use or transfer user data to determine creditworthiness or for lending purposes | **Certify.** |
 
@@ -98,8 +101,8 @@ Further Limited Use points:
   security or legal obligations, or as aggregated, anonymised data.
 - **Secure handling:** the local link is signed with a key agreed by a
   password-authenticated key exchange (SPAKE2 over P-256); requests are
-  checked for size, type and rate; images are limited to JPEG, PNG, GIF, WebP
-  and HEIC.
+  checked for size, type and rate; images are limited to JPEG, PNG, GIF, WebP,
+  HEIC and HEIF.
 
 ## 5. Privacy policy — the section for this extension
 
@@ -111,8 +114,9 @@ https://keeprcompliance.com/privacy (the founder publishes it):
 > **What it reads.** When you start a Sync in Keepr, the extension reads the
 > conversations in Google Messages for Web for the period set in Keepr: the
 > texts, the images in them, reactions, and the names and phone numbers of the
-> people in each chat. It reads nothing when no Sync is running, and nothing
-> outside messages.google.com.
+> people in each chat. When no Sync is running, it only looks at the chat list
+> to show its switches; it copies nothing. It reads nothing outside
+> messages.google.com.
 >
 > **Where it goes.** Only to the Keepr app on your own computer. The extension
 > does not send your texts to Keepr's servers or anywhere else. Keepr stores
@@ -189,6 +193,7 @@ Also: the 128×128 icon (`icons/keepr-128.png`, 96 art + 16 padding) and a
 |---|---|
 | 0.3.70 | Consent before the first Sync; privacy links on the options page and in the popup. |
 | 0.3.71 | This file (store notes); no code change. |
+| 0.3.72 | Store notes corrected (SR); no code change. |
 
 ## 10. Review history
 
