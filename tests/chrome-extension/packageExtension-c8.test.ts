@@ -109,7 +109,7 @@ describe("the Chrome Web Store package (C8)", () => {
   });
 
   it("dev-only: the build entry, the vendor notes and the SBOM are left out; the licence ships", () => {
-    for (const dev of ["vendor/noble-p256.entry.mjs", "vendor/README.md", "vendor/SBOM.json"]) {
+    for (const dev of ["CHROMEWEBSTORE.md", "vendor/noble-p256.entry.mjs", "vendor/README.md", "vendor/SBOM.json"]) {
       expect([dev, files.has(dev)]).toEqual([dev, false]);
     }
     expect(files.has("vendor/LICENSE-noble.txt")).toBe(true);
@@ -117,7 +117,7 @@ describe("the Chrome Web Store package (C8)", () => {
   });
 
   it("same bytes: every other source file, unchanged", () => {
-    const expected = sourceFiles(EXT).filter((f) => !["vendor/noble-p256.entry.mjs", "vendor/README.md", "vendor/SBOM.json"].includes(f));
+    const expected = sourceFiles(EXT).filter((f) => !["CHROMEWEBSTORE.md", "vendor/noble-p256.entry.mjs", "vendor/README.md", "vendor/SBOM.json"].includes(f));
     expect([...files.keys()].sort()).toEqual(expected);
     for (const f of expected) {
       if (f === "manifest.json") continue;

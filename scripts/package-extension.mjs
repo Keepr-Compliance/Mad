@@ -23,7 +23,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const EXTENSION_DIR = path.join(ROOT, "chrome-extension");
 
 /** Never in the store package (paths relative to chrome-extension/, "/" separated). */
-export const DEV_ONLY = new Set(["vendor/noble-p256.entry.mjs", "vendor/README.md", "vendor/SBOM.json"]);
+export const DEV_ONLY = new Set(["CHROMEWEBSTORE.md", "vendor/noble-p256.entry.mjs", "vendor/README.md", "vendor/SBOM.json"]);
 
 /** Is this file left out of the store package? */
 export function isDevOnly(rel) {
