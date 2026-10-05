@@ -402,6 +402,10 @@ async function readJson(
  * extension backs off and retries on 429, it never fails the chat for it.
  */
 export const RCS_RATE_WINDOW_MS = 60_000;
+/** SR (C4–C5 review) S1: the open routes (/hello, /link/*, /focus) carry small bodies. */
+export const OPEN_ROUTE_MAX_BODY_BYTES = 8 * 1024;
+/** Requests already counted by the pre-body limit (unsigned open routes). */
+const prelimited = new WeakSet<http.IncomingMessage>();
 export const RCS_RATE_LIMITS = { attachment: 1200, job: 600, link: 120, other: 300 } as const;
 export type RcsRateGroup = keyof typeof RCS_RATE_LIMITS;
 
@@ -788,7 +792,7 @@ export class RcsExtensionBridge {
 
       // SR C5: the rate limit — after the gate, so a linked caller's 429 is
       // signed like any reply (the extension backs off and retries).
-      const retryAfterMs = this.overRateLimit(path);
+      const retryAfterMs = prelimited.has(req) ? null : this.overRateLimit(path);
       if (retryAfterMs !== null) {
         this.logger.warn(`[RcsBridge] Rate limited: ${RcsExtensionBridge.rateGroup(path)}`);
         res.setHeader("Retry-After", String(Math.ceil(retryAfterMs / 1000)));
@@ -958,8 +962,24 @@ export class RcsExtensionBridge {
       if (FORMERLY_UNSIGNED_ROUTES.has(path) && (await this.signedInUserIsPaired())) return refuse(401, "signature_required");
       return refuse(401, "not_paired");
     }
-    // SR S1: then the body, with its route's cap (the large one only for an image).
-    const cap = JOB_ROUTE.exec(path)?.[2] === "attachment" ? MAX_ATTACHMENT_BODY_BYTES : MAX_BODY_BYTES;
+    // SR (C4–C5 review) S1: an unsigned call reaching here is an open route —
+    // rate-limited from its headers, BEFORE any body is read (counted once:
+    // the general limit after the gate skips it).
+    if (!signed) {
+      const retryAfterMs = this.overRateLimit(path);
+      if (retryAfterMs !== null) {
+        res.setHeader("Connection", "close");
+        res.setHeader("Retry-After", String(Math.ceil(retryAfterMs / 1000)));
+        sendJson(res, 429, { error: "rate_limited", retryAfterMs });
+        return "handled";
+      }
+      prelimited.add(req);
+    }
+    // SR S1: then the body, with its route's cap (the large one only for an
+    // image; the open routes' small bodies at most OPEN_ROUTE_MAX_BODY_BYTES).
+    const cap = PAIR_OPEN_ROUTES.has(path)
+      ? OPEN_ROUTE_MAX_BODY_BYTES
+      : JOB_ROUTE.exec(path)?.[2] === "attachment" ? MAX_ATTACHMENT_BODY_BYTES : MAX_BODY_BYTES;
     let raw: string;
     try {
       raw = await readBody(req, cap);

@@ -27,7 +27,7 @@ jest.mock("../logService", () => {
   return { __esModule: true, default: { info: noop, warn: noop, error: noop, debug: noop } };
 });
 
-import { LEGACY_PAIR_GONE_MESSAGE, RcsExtensionBridge, RCS_EXTENSION_ORIGIN, RCS_MIN_EXTENSION_VERSION } from "../rcsExtensionBridge";
+import { LEGACY_PAIR_GONE_MESSAGE, OPEN_ROUTE_MAX_BODY_BYTES, RcsExtensionBridge, RCS_EXTENSION_ORIGIN, RCS_MIN_EXTENSION_VERSION, RCS_RATE_LIMITS } from "../rcsExtensionBridge";
 import { RcsJobRegistry } from "../rcsImportJob";
 import {
   LINK_PROOF_MS,
@@ -347,6 +347,22 @@ describe("headers before the body (S1)", () => {
     const stale = signed(p, "/job/pending", "", { ts: String(clock - PAIR_TS_WINDOW_MS - 5) }).headers;
     expect(await endless("/job/pending", stale)).toMatchObject({ status: 401, body: { error: "stale" } });
     expect(await endless("/job/pending", {})).toMatchObject({ status: 401, body: { error: "not_paired" } });
+  });
+
+  // SR (C4–C5 review) S1: unsigned open routes are rate-limited from their
+  // headers, before the body; and their bodies are small (8 KB).
+  // Mutations: the pre-body limit removed (the refusal waits for the body →
+  // "no reply") → red; the open routes' cap back to the general one → red.
+  it("unsigned open routes: the rate limit answers before any body is read (429)", async () => {
+    for (let i = 0; i < RCS_RATE_LIMITS.link; i++) await post(port, "/link/poll", {}, JSON.stringify({ sessionId: "x" }));
+    expect(await endless("/link/poll", {})).toMatchObject({ status: 429, body: { error: "rate_limited" } });
+  });
+
+  it("open routes: a body over 8 KB is refused (413); a small one is answered", async () => {
+    // /link/start has no smaller cap of its own: only the open-route cap refuses it.
+    const big = JSON.stringify({ pA: "x", pad: "y".repeat(OPEN_ROUTE_MAX_BODY_BYTES) });
+    expect((await post(port, "/link/start", {}, big)).status).toBe(413);
+    expect((await post(port, "/hello", {}, JSON.stringify({ version: "0.3.68" }))).status).toBe(200);
   });
 
   it("each route has its own cap: an oversized body on a non-image route is refused (413)", async () => {

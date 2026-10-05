@@ -474,7 +474,7 @@ describe("runJob: a cache Sync", () => {
           attachments += 1;
           if (attachments % 3 === 1) {
             t.calls.push([method, p, body]);
-            return { ok: false, status: 429, body: { error: "rate_limited", retryAfterMs: 5000 } } as never;
+            return { ok: false, status: 429, body: { error: "rate_limited", retryAfterMs: 1000 } } as never;
           }
         }
         return base(method, p, body);
@@ -485,11 +485,39 @@ describe("runJob: a cache Sync", () => {
       };
       await job.runJob(JOB, t.env);
       expect(media(t).photos).toMatchObject({ seen: 300, saved: 300, failed: 0 });
-      expect(waits.filter((w) => w === 5000).length).toBe(150);
+      expect(waits.filter((w) => w === 1000).length).toBe(150); // 150 s: inside the run's 5-minute budget
       expect(t.calls.filter(([, p]) => p.endsWith("/chat"))).toHaveLength(1);
       const finish = t.calls.find(([, p]) => p.endsWith("/finish"))![2] as { notReached?: Array<{ name: string }> };
       // The photo chat (the only one with numbers) is not among the chats not reached.
       expect((finish.notReached ?? []).map((n) => n.name)).not.toContain(ROWS[0][0]);
+    });
+
+    // SR (C5 review): the 429 waits of one run share a 5-minute budget; past
+    // it the run fails as keepr_busy — Keepr told, the short line on the card.
+    // Mutations: no budget (waits forever) → red; the busy error swallowed as
+    // a photo failure → red.
+    it("Keepr answering 429 past the run's 5-minute wait budget: the run fails as keepr_busy", async () => {
+      const t = oneChat();
+      withMatch(t, { keepPhotos: true });
+      const base = t.env.api;
+      t.env.api = async (method: string, p: string, body?: Record<string, unknown>) => {
+        if (p.endsWith("/attachment")) {
+          t.calls.push([method, p, body]);
+          return { ok: false, status: 429, body: { error: "rate_limited", retryAfterMs: 60000 } } as never;
+        }
+        return base(method, p, body);
+      };
+      const waits: number[] = [];
+      t.env.sleep = async (ms?: number) => {
+        waits.push(Number(ms));
+      };
+      const outcome = await job.runJob(JOB, t.env);
+      expect(outcome).toEqual({ outcome: "keepr_busy" });
+      expect(waits.filter((w) => w === 60000)).toHaveLength(5); // 5 × 1 min = the budget; the 6th is refused
+      const err = t.calls.find(([, p]) => p.endsWith("/error"));
+      expect(err?.[2]).toMatchObject({ code: "keepr_busy" });
+      expect(t.shown[t.shown.length - 1][0]).toBe("Keepr is busy. Try again.");
+      expect(t.calls.some(([, p]) => p.endsWith("/finish"))).toBe(false);
     });
 
     it("a photo that didn't load is retried at the end and recovered", async () => {

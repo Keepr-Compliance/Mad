@@ -93,6 +93,7 @@
     save_failed: "Keepr couldn't save this Sync.",
     scan_failed: "The Sync stopped unexpectedly.",
     pc_offline: "This computer is offline.",
+    keepr_busy: "Keepr is busy. Try again.",
   };
   var FAILURE_FALLBACK = "The Sync stopped unexpectedly.";
   function failureLine(code) {
@@ -103,6 +104,15 @@
   /** SR C5: on 429, wait (Keepr's retryAfterMs, at most a minute) and resend — up to this many times. */
   var RATE_LIMIT_MAX_WAITS = 30;
   var RATE_LIMIT_DEFAULT_WAIT_MS = 60000;
+  /** SR (C5 review): all the 429 waits of ONE run together; past this the run fails as keepr_busy. */
+  var RATE_LIMIT_RUN_BUDGET_MS = 5 * 60000;
+  var KEEPR_BUSY_MESSAGE = "Keepr stopped: Keepr was too busy to take this Sync for 5 minutes. Sync again from Keepr in a moment.";
+  /** SR: Keepr kept answering 429 past the run's wait budget. */
+  function KeeprBusyError() {
+    var err = new Error(KEEPR_BUSY_MESSAGE);
+    err.keeprBusy = true;
+    return err;
+  }
   var TRANSPORT_RETRY_MS = 1500;
   /** Circuit breaker: this many chats IN A ROW refused by Keepr end the run. */
   var KEEPR_ERROR_CHATS_MAX = 3;
@@ -642,6 +652,20 @@
         env.overlay.show(CANCELLED, true);
         return { outcome: "job_gone" };
       }
+      // SR: Keepr kept refusing with 429 past the run's budget — a failure
+      // Keepr records (it is reachable), with Try again on a cache Sync.
+      if (err && err.keeprBusy) {
+        diag(env, "stopped: Keepr busy (429 past the run's wait budget)");
+        var busyExtras = { details: err.message };
+        if (err.isCache) busyExtras.retry = true;
+        env.overlay.show(failureLine("keepr_busy"), true, busyExtras);
+        try {
+          await env.api("POST", "/job/" + jobId + "/error", { code: "keepr_busy", message: err.message });
+        } catch (_e) {
+          /* Keepr is told when it can be; the page already says so. */
+        }
+        return { outcome: "keepr_busy" };
+      }
       if (err && err.keeprLost) {
         diag(env, "stopped: Keepr lost (" + err.keeprLost + ")");
         // Try again reaches Keepr again (or launches it: the page's retry).
@@ -770,6 +794,7 @@
      * unknown job (Keepr restarted), refused (401) — ends the run at once with
      * its reason; a job that is over (410, or a bare 404) ends it as cancelled.
      */
+    var rateWaitedMs = 0;
     async function call(method, path, body) {
       var reply = await env.api(method, path, body);
       if (reply && reply.status === 0) {
@@ -777,10 +802,18 @@
         reply = await env.api(method, path, body);
       }
       // SR C5: Keepr's rate limit (429) — wait for its window and send again;
-      // never a failed chat for it.
+      // never a failed chat for it. The run's waits share one budget: past
+      // it, the run fails as keepr_busy (never waits forever).
       for (var waits = 0; reply && reply.status === 429 && waits < RATE_LIMIT_MAX_WAITS; waits++) {
         var after = reply.body && typeof reply.body.retryAfterMs === "number" ? reply.body.retryAfterMs : RATE_LIMIT_DEFAULT_WAIT_MS;
-        await env.sleep(Math.min(Math.max(after, 250), RATE_LIMIT_DEFAULT_WAIT_MS));
+        var waitMs = Math.min(Math.max(after, 250), RATE_LIMIT_DEFAULT_WAIT_MS);
+        if (rateWaitedMs + waitMs > RATE_LIMIT_RUN_BUDGET_MS) {
+          var busy = KeeprBusyError();
+          busy.isCache = isCache;
+          throw busy;
+        }
+        rateWaitedMs += waitMs;
+        await env.sleep(waitMs);
         reply = await env.api(method, path, body);
       }
       var kind = transportKind(reply);
@@ -963,7 +996,7 @@
         }
         return "failed";
       } catch (imgErr) {
-        if (imgErr && imgErr.jobGone) throw imgErr;
+        if (imgErr && (imgErr.jobGone || imgErr.keeprBusy)) throw imgErr;
         return "readFailed";
       }
     }
@@ -1026,7 +1059,7 @@
             }
           }
         } catch (err) {
-          if (err && err.jobGone) throw err;
+          if (err && (err.jobGone || err.keeprBusy)) throw err;
         } finally {
           if (env.returnToList) await env.returnToList();
         }
@@ -1573,7 +1606,7 @@
           mediaRetry.push({ conv: conv, msgIds: missingIds, oldestMs: missingOldest, floorMs: chatFloorMs });
         }
       } catch (err) {
-        if (err && (err.jobGone || err.keeprLost)) {
+        if (err && (err.jobGone || err.keeprLost || err.keeprBusy)) {
           gone = true;
           throw err;
         }
