@@ -311,11 +311,24 @@ export class RcsImportJob {
     this.saved = saved ? { ...saved } : null;
   }
 
+  /**
+   * SR (live): an extension said, unsigned, "no link here" while this job
+   * waited. A hint only (a second, unlinked Chrome profile says it too, and
+   * the linked profile may still claim): if the job then expires unclaimed it
+   * ends as keepr_refused with this message instead of not_opened.
+   */
+  private unlinkedHint: string | null = null;
+
+  markUnlinkedHint(message: string): void {
+    if (this.state === "created") this.unlinkedHint = message;
+  }
+
   /** Expire an unclaimed job. Returns true when this call expired it. */
   expireIfUnclaimed(nowMs: number): boolean {
     if (this.state !== "created") return false;
     if (nowMs - this.createdAtMs < RCS_JOB_UNCLAIMED_MS) return false;
-    this.fail("not_opened", RCS_JOB_NOT_OPENED_MESSAGE, nowMs);
+    if (this.unlinkedHint !== null) this.fail("keepr_refused", this.unlinkedHint, nowMs);
+    else this.fail("not_opened", RCS_JOB_NOT_OPENED_MESSAGE, nowMs);
     return true;
   }
 

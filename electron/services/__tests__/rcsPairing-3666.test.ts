@@ -28,7 +28,7 @@ jest.mock("../logService", () => {
 });
 
 import { LEGACY_PAIR_GONE_MESSAGE, OPEN_ROUTE_MAX_BODY_BYTES, RcsExtensionBridge, RCS_EXTENSION_ORIGIN, RCS_MIN_EXTENSION_VERSION, RCS_RATE_LIMITS } from "../rcsExtensionBridge";
-import { RcsJobRegistry } from "../rcsImportJob";
+import { RCS_JOB_UNCLAIMED_MS, RcsJobRegistry } from "../rcsImportJob";
 import {
   LINK_PROOF_MS,
   LINK_INTERRUPTED_MESSAGE,
@@ -103,7 +103,8 @@ async function startBridge(): Promise<void> {
     currentUserId: async () => currentUser,
     listExclusions: () => [],
     setExclusion: () => {},
-    jobs: new RcsJobRegistry(),
+    // The suite's clock, so a test can let a waiting job expire.
+    jobs: new RcsJobRegistry(() => clock),
     pairing: auth,
   } as never);
   expect(await bridge.start(0)).toBe("listening");
@@ -608,12 +609,13 @@ describe("Stop sync on the page (ended_by=user_page)", () => {
   });
 });
 
-// SR (live): a reinstalled extension (new key → unknown_pair) or an unsigned
-// "no link here" can never claim the waiting job — it ends at once as
-// keepr_refused ("This browser isn't linked."), not 60 s later as
-// not_opened. A job already running is left alone.
-// Mutations: no fail on unknown_pair / on "no link here" → red; a running
-// job failed too → red.
+// SR (live): a signed unknown_pair (a reinstalled extension's new key, or a
+// pairing revoked meanwhile) ends the waiting job at once as keepr_refused
+// ("This browser isn't linked."); an unsigned "no link here" only marks it
+// (unclaimed, it then expires as keepr_refused, not not_opened). A job
+// already running is left alone. Mutations: no fail on either unknown_pair
+// path → red; "no link here" ending the job at once → red; no hint → red; a
+// running job failed too → red.
 describe("a waiting job and a browser that is not linked (live)", () => {
   it("unknown_pair: the waiting job ends now as keepr_refused", async () => {
     await linkWith("user-a");
@@ -624,19 +626,75 @@ describe("a waiting job and a browser that is not linked (live)", () => {
     expect(bridge.getJob()).toMatchObject({ jobId: job.jobId, state: "failed", error: { code: "keepr_refused" } });
   });
 
-  it("an unsigned 'no link here' (/hello linked:false): the waiting job ends now as keepr_refused", async () => {
+  // SR: an unsigned "no link here" is a HINT (a second, unlinked Chrome
+  // profile sends it too) — the waiting job is NOT ended; it can still be
+  // claimed; unclaimed, it expires as keepr_refused instead of not_opened.
+  it("an unsigned 'no link here': the waiting job keeps waiting; unclaimed, it expires as keepr_refused", async () => {
     await linkWith("user-a");
     const job = bridge.createCacheJob("user-a", { since: "2026-08-01T00:00:00.000Z" })!;
     await post(port, "/hello", {}, JSON.stringify({ version: "0.3.76", linked: false }));
+    expect(bridge.getJob()).toMatchObject({ jobId: job.jobId, state: "created" });
+    clock += RCS_JOB_UNCLAIMED_MS;
     expect(bridge.getJob()).toMatchObject({ jobId: job.jobId, state: "failed", error: { code: "keepr_refused" } });
   });
+
+  it("an unsigned 'no link here' then the linked profile claims: the Sync runs", async () => {
+    const p = await linkWith("user-a");
+    const job = bridge.createCacheJob("user-a", { since: "2026-08-01T00:00:00.000Z" })!;
+    await post(port, "/hello", {}, JSON.stringify({ version: "0.3.76", linked: false }));
+    const claimPath = `/job/${job.jobId}/claim`;
+    expect((await post(port, claimPath, signed(p, claimPath, "").headers, "")).status).toBe(200);
+    expect(bridge.getJob()).toMatchObject({ jobId: job.jobId, state: "running" });
+  });
+
+  it("no hint: an unclaimed job still expires as not_opened", async () => {
+    await linkWith("user-a");
+    const job = bridge.createCacheJob("user-a", { since: "2026-08-01T00:00:00.000Z" })!;
+    clock += RCS_JOB_UNCLAIMED_MS;
+    expect(bridge.getJob()).toMatchObject({ jobId: job.jobId, state: "failed", error: { code: "not_opened" } });
+  });
+
+  // SR: the pairing revoked while the body is read (after the header check,
+  // before the full verify) → unknown_pair from the verify — the waiting job
+  // ends at once too. Mutation: no fail on the verify's unknown_pair → red.
+  it("the pairing revoked mid-body-read: unknown_pair, and the waiting job ends as keepr_refused", async () => {
+    const p = await linkWith("user-a");
+    const job = bridge.createCacheJob("user-a", { since: "2026-08-01T00:00:00.000Z" })!;
+    const body = JSON.stringify({ pad: "x".repeat(64) });
+    const s2 = signed(p, "/status", body);
+    const reply = await new Promise<{ status: number; body: Record<string, unknown> }>((resolve, reject) => {
+      const req = http.request(
+        {
+          host: "127.0.0.1", port, method: "POST", path: "/status",
+          headers: { "Content-Type": "application/json", Origin: RCS_EXTENSION_ORIGIN, "Content-Length": String(Buffer.byteLength(body)), ...s2.headers },
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (c: Buffer) => chunks.push(c));
+          res.on("end", () => resolve({ status: res.statusCode ?? 0, body: JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") }));
+        },
+      );
+      req.on("error", reject);
+      req.write(body.slice(0, 10));
+      // The header check has passed; revoke before the rest of the body.
+      setTimeout(() => {
+        auth.revoke("user-a");
+        req.end(body.slice(10));
+      }, 100);
+    });
+    expect(reply).toMatchObject({ status: 401, body: { error: "unknown_pair" } });
+    expect(bridge.getJob()).toMatchObject({ jobId: job.jobId, state: "failed", error: { code: "keepr_refused" } });
+  });
+
 
   it("a job already running is not ended by it", async () => {
     const p = await linkWith("user-a");
     const job = bridge.createCacheJob("user-a", { since: "2026-08-01T00:00:00.000Z" })!;
     const claimPath = `/job/${job.jobId}/claim`;
     expect((await post(port, claimPath, signed(p, claimPath, "").headers, "")).status).toBe(200);
-    await post(port, "/hello", {}, JSON.stringify({ version: "0.3.76", linked: false }));
+    // A stranger's signed call (unknown_pair) does not end a RUNNING Sync.
+    const stranger = { pairId: "e".repeat(32), keyHex: "ab".repeat(32) };
+    expect((await post(port, "/job/pending", signed(stranger, "/job/pending").headers)).body.error).toBe("unknown_pair");
     expect(bridge.getJob()).toMatchObject({ jobId: job.jobId, state: "running" });
   });
 });

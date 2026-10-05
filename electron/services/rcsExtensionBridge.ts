@@ -520,10 +520,11 @@ export class RcsExtensionBridge {
   }
 
   /**
-   * SR (live): a browser that is not linked to this Keepr (a reinstalled
-   * extension's new key → unknown_pair, or an unsigned "no link here") can
-   * never claim the job waiting for it — end that job now as keepr_refused
-   * ("This browser isn't linked."), not 60 s later as not_opened.
+   * SR (live): a signed call from a browser whose pairing Keepr does not know
+   * (a reinstalled extension's new key, or a pairing revoked meanwhile →
+   * unknown_pair) can never claim the job waiting for it — end that job now as
+   * keepr_refused ("This browser isn't linked."), not 60 s later as
+   * not_opened. (An unsigned "no link here" only marks it: see /hello.)
    */
   private failWaitingJobAsUnlinked(): void {
     const waiting = this.jobs.pending();
@@ -810,7 +811,10 @@ export class RcsExtensionBridge {
         // (SR: anyone local can send it; a second profile sends it too).
         if (!signedPairing && b.linked === false && this.options.pairing) {
           this.options.pairing.noteExtensionUnlinked();
-          this.failWaitingJobAsUnlinked();
+          // SR: a hint only — a second, unlinked Chrome profile says this too,
+          // and the linked profile may still claim. Unclaimed, the job then
+          // ends as keepr_refused instead of not_opened.
+          this.jobs.pending()?.markUnlinkedHint(NOT_PAIRED_MESSAGE);
         }
         this.options.onHello?.(hello);
         this.tel((t) => t.hello(hello.version));
