@@ -33,6 +33,7 @@ import {
   type SelectedTextIds,
 } from "./exportPlan";
 import type { ExportEntitlementDecision } from "../types/entitlement";
+import type { Communication } from "../types/models";
 
 export interface PreparedTransactionCommunications {
   /** The deal as loaded in step 1 (or the caller's fallback). */
@@ -53,47 +54,44 @@ interface PrepareArgs {
    * still exports what was there before the sync.
    */
   fallback?: TransactionWithDetails;
-  /**
-   * "export" (default): run the paywall gate. "none": skip it — only for the
-   * submit, which is not an export.
-   */
-  gate?: "export" | "none";
 }
 
-/** The submit's result: same load and plan, no paywall decision. */
-export type PreparedWithoutGate = Omit<PreparedTransactionCommunications, "decision"> & {
-  decision: null;
-};
-
-export async function prepareTransactionCommunications(
-  args: PrepareArgs & { gate?: "export" },
-): Promise<PreparedTransactionCommunications | null>;
-export async function prepareTransactionCommunications(
-  args: PrepareArgs & { gate: "none" },
-): Promise<PreparedWithoutGate | null>;
-export async function prepareTransactionCommunications(
+/**
+ * The three steps, with the gate supplied by the caller. Not exported: the
+ * export channels get the paywall gate through
+ * {@link prepareTransactionCommunications}; the submit gets none through
+ * {@link selectSubmissionTextIds}. Same load, same resolve.
+ */
+async function loadGateResolve<D>(
   args: PrepareArgs,
-): Promise<PreparedTransactionCommunications | PreparedWithoutGate | null> {
-  const { transactionId, request, fallback, gate: gateMode = "export" } = args;
+  gate: (details: TransactionWithDetails) => Promise<{ decision: D; communications: Communication[] }>,
+): Promise<{ details: TransactionWithDetails; decision: D; plan: ExportPlan } | null> {
+  const { transactionId, request, fallback } = args;
 
   // 1. Load.
   const details = (await transactionService.getTransactionDetails(transactionId)) ?? fallback ?? null;
   if (!details) return null;
 
-  // 2. Gate. Throws PaywallLockedError for a locked deal.
-  const gate =
-    gateMode === "export"
-      ? await enforceExportGate({
-          transactionId,
-          userId: details.user_id,
-          communications: details.communications || [],
-        })
-      : { decision: null, communications: details.communications || [] };
+  // 2. Gate.
+  const gated = await gate(details);
 
   // 3. Resolve, once, over the gate's output.
-  const plan = resolveExportPlan(request(details), gate.communications);
+  const plan = resolveExportPlan(request(details), gated.communications);
 
-  return { details, decision: gate.decision, plan };
+  return { details, decision: gated.decision, plan };
+}
+
+export async function prepareTransactionCommunications(
+  args: PrepareArgs,
+): Promise<PreparedTransactionCommunications | null> {
+  // Throws PaywallLockedError for a locked deal.
+  return loadGateResolve(args, (details) =>
+    enforceExportGate({
+      transactionId: args.transactionId,
+      userId: details.user_id,
+      communications: details.communications || [],
+    }),
+  );
 }
 
 /**
@@ -116,10 +114,10 @@ export const SUBMISSION_TEXT_REQUEST: ExportPlanRequest = {
  * this deal would include. Empty when the deal does not load.
  */
 export async function selectSubmissionTextIds(transactionId: string): Promise<SelectedTextIds> {
-  const prepared = await prepareTransactionCommunications({
-    transactionId,
-    request: () => SUBMISSION_TEXT_REQUEST,
-    gate: "none",
-  });
+  // Submitting is not an export: no paywall step.
+  const prepared = await loadGateResolve(
+    { transactionId, request: () => SUBMISSION_TEXT_REQUEST },
+    async (details) => ({ decision: null, communications: details.communications || [] }),
+  );
   return selectedTextIdsFromPlan(prepared?.plan ?? { communications: [] });
 }
