@@ -227,13 +227,13 @@ export function cacheSavedFromCommit(r: CacheCommitResult): RcsCacheSaved {
 }
 
 /**
- * Founder decision (2026-10-01): no separate consent screen — users accept
- * Keepr's terms at sign-up, and the Sync screen says in one line what is
- * copied. While false, a cache Sync is not refused for a missing consent; the
- * first Sync records consent_at + the version for audit instead. Set true to
- * bring the gate back (the rcs_consent plumbing is kept for that).
+ * SR clean-up C7 (founder, 2026-10-04): consent is required before the first
+ * cache Sync — one line and [Agree and sync] in the Sync Android modal
+ * (CHROMEWEBSTORE / CASA). Withdrawn in Settings › Google Messages; the next
+ * Sync asks again. (While it was false, the first Sync recorded the current
+ * version for audit — those records stay valid.)
  */
-export const RCS_CONSENT_REQUIRED = false;
+export const RCS_CONSENT_REQUIRED = true;
 
 /**
  * The consent version a starting cache Sync records for audit while the
@@ -269,7 +269,7 @@ export function decideCacheStart(input: {
     return {
       status: 403,
       error: "consent_needed",
-      message: "Review what Keepr copies from Google Messages and agree first (Dashboard → Sync Android).",
+      message: "Agree in Keepr first: Dashboard → Sync Android.",
     };
   }
   if (input.writesPaused) {

@@ -222,16 +222,16 @@ describe("rcs-import:start-cache-job window (BACKLOG-3658)", () => {
     expect(created[0]).toEqual({ userId: "user-1", since: "2026-07-01T00:00:00.000Z" });
   });
 
-  // Founder, 2026-10-01: no consent screen (RCS_CONSENT_REQUIRED false). The
-  // first Sync starts and records consent_at + the version for audit.
-  // Mutation: the record not written by the start → red.
-  it("no consent yet: the Sync starts and records the current version (K6)", async () => {
+  // SR C7 (founder, 2026-10-04): consent is required (RCS_CONSENT_REQUIRED
+  // true) — no current consent, no Sync, nothing recorded by the start; the
+  // modal's [Agree and sync] records it first. Mutation: the gate off → red.
+  it("no consent yet: the Sync is refused (consent_needed) and nothing is recorded (K6)", async () => {
     mockConsentVersion = null;
     const r = (await start()) as { success: boolean; error?: string };
-    expect(r.success).toBe(true);
-    expect(created).toHaveLength(1);
-    expect(mockSetConsent).toHaveBeenCalledTimes(1);
-    expect(mockSetConsent).toHaveBeenCalledWith("user-1", 1, expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/));
+    expect(r.success).toBe(false);
+    expect(r.error).toBe("Agree in Keepr first: Dashboard → Sync Android.");
+    expect(created).toHaveLength(0);
+    expect(mockSetConsent).not.toHaveBeenCalled();
   });
 
   it("a current consent is not re-recorded (K7)", async () => {

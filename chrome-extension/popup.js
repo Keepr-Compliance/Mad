@@ -76,6 +76,9 @@
    * Draw one state into `box`. io: { link, cancel, openKeepr, openApp,
    * openMessages, unlink, help, getKeepr, now, confirmUnlink (bool), setConfirm }.
    */
+  /** SR C7: Keepr's privacy policy (the Chrome Web Store listing names the same page). */
+  var PRIVACY_URL = "https://keeprcompliance.com/privacy";
+
   function renderPopup(doc, box, view, io) {
     while (box.firstChild) box.removeChild(box.firstChild);
     var state = view && view.state;
@@ -124,6 +127,15 @@
       foot = el(doc, "div", "foot");
       return foot;
     };
+    /** SR C7: Keepr's privacy policy, in every footer (a new tab). */
+    var privacy = function () {
+      var a = el(doc, "a", null, "Privacy");
+      a.setAttribute("href", PRIVACY_URL);
+      a.setAttribute("target", "_blank");
+      a.setAttribute("rel", "noopener noreferrer");
+      a.setAttribute("data-keepr", "privacy");
+      foot.appendChild(a);
+    };
     var now = io.now ? io.now() : Date.now();
 
     if (state === "keepr_down") {
@@ -131,6 +143,7 @@
       button("open-app", "Open Keepr", "primary", io.openApp);
       footer();
       anchor(foot, "get-keepr", "Don't have Keepr?", null, io.getKeepr || function () {});
+      privacy();
       foot.appendChild(el(doc, "span", null, version));
     } else if (state === "out_of_date") {
       status("warn", COPY.out_of_date);
@@ -166,6 +179,7 @@
         button("open-keepr", "Open Keepr", "secondary", io.openKeepr);
         footer();
         anchor(foot, "unlink", "Unlink", null, function () { io.setConfirm(true); });
+        privacy();
         foot.appendChild(el(doc, "span", null, version));
       }
     } else {
@@ -182,6 +196,7 @@
       anchor(actions, "open-messages", "Go to Google Messages", "action", io.openMessages);
       footer();
       foot.appendChild(el(doc, "span", null, version));
+      privacy();
       anchor(foot, "help", "Help", null, io.help || function () {});
     }
     if (actions.firstChild) box.appendChild(actions);

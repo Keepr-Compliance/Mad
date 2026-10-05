@@ -46,7 +46,8 @@ describe("first-run (C4)", () => {
   });
 
   it("is informational: the agreement is given in Keepr (F3)", () => {
-    expect(read("options.html")).toMatch(/You agree to this in Keepr itself/);
+    // SR C7: the agreement is asked in Keepr before the first sync.
+    expect(read("options.html")).toMatch(/Before your first sync, Keepr asks you to agree/);
     for (const f of ["options.js", "welcome.js"]) expect(read(f)).not.toMatch(/fetch\(|127\.0\.0\.1|consent/i);
   });
 

@@ -36,9 +36,11 @@ jest.mock("../../../services", () => ({
 }));
 
 const mockForget = jest.fn(async () => undefined);
+const mockSetConsent = jest.fn(async (_v: number | null) => ({ success: true }));
 jest.mock("../../../services/rcsImportService", () => ({
   rcsImportService: {
     linkForget: () => mockForget(),
+    setCacheConsent: (v: number | null) => mockSetConsent(v),
     getExtensionState: async () => ({ success: true, data: mockState }),
     clearTexts: (...a: unknown[]) => mockClear(...a),
     setMediaOptions: (...a: unknown[]) => mockSetMedia(...a),
@@ -328,4 +330,29 @@ it("no 'coming update' copy on the screen's source", () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const src = (require("fs") as typeof import("fs")).readFileSync(require.resolve("../GoogleMessagesSettings.tsx"), "utf8");
   expect(src).not.toMatch(/coming update/i);
+});
+
+// SR C7 (founder): Withdraw consent — shown only while consent is current;
+// it clears Keepr's record (the next Sync asks again). Mutations: the row
+// shown without consent; withdraw not clearing (null) → red.
+describe("consent (C7)", () => {
+  it("current consent: the row and Withdraw consent → the record cleared, the row gone", async () => {
+    render(<GoogleMessagesSettings userId="user-1" />);
+    const row = await screen.findByTestId("gm-consent");
+    expect(row).toHaveTextContent("You agreed to copy your texts into Keepr.");
+    mockSetConsent.mockImplementationOnce(async () => {
+      mockState = { ...mockState, optedIn: false, consentVersion: null };
+      return { success: true };
+    });
+    fireEvent.click(screen.getByTestId("gm-consent-withdraw"));
+    await waitFor(() => expect(mockSetConsent).toHaveBeenCalledWith(null));
+    await waitFor(() => expect(screen.queryByTestId("gm-consent")).toBeNull());
+  });
+
+  it("no consent: no row", async () => {
+    mockState = { ...mockState, optedIn: false, consentVersion: null };
+    render(<GoogleMessagesSettings userId="user-1" />);
+    await screen.findByTestId("gm-pairing");
+    expect(screen.queryByTestId("gm-consent")).toBeNull();
+  });
 });

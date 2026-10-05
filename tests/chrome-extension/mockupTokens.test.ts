@@ -116,18 +116,21 @@ describe("the popup = the mockups (Popup*.dc.html)", () => {
     expect(Array.from(notLinked.children).map((c) => c.className)).toEqual(["head", "middle pill-gap", "actions", "foot"]);
     expect(notLinked.querySelector(".head img")!.getAttribute("src")).toBe("icons/keepr-mark.svg");
     expect(keys(notLinked, ".actions > *")).toEqual(["link", "open-messages"]);
-    expect(notLinked.querySelector(".foot")!.textContent).toBe("Extension 0.3.41Help");
+    // SR C7 (founder): a Privacy link in every footer (a new tab, Keepr's policy).
+    expect(notLinked.querySelector(".foot")!.textContent).toBe("Extension 0.3.41PrivacyHelp");
+    const priv = notLinked.querySelector('[data-keepr="privacy"]')!;
+    expect([priv.getAttribute("href"), priv.getAttribute("target"), priv.getAttribute("rel")]).toEqual(["https://keeprcompliance.com/privacy", "_blank", "noopener noreferrer"]);
     const linked = draw({ state: "linked", email: "a***@example.test", version: "0.3.41" });
     expect(keys(linked, ".actions > *")).toEqual(["open-messages", "open-keepr"]);
     expect(linked.querySelector('[data-keepr="open-keepr"]')!.className).toBe("secondary");
-    expect(linked.querySelector(".foot")!.textContent).toBe("UnlinkExtension 0.3.41");
+    expect(linked.querySelector(".foot")!.textContent).toBe("UnlinkPrivacyExtension 0.3.41");
     const linking = draw({ state: "linking", link: { code: "482913", expiresAt: 112_000 } });
     expect(linking.querySelector(".title")!.textContent).toBe("Link with Keepr");
     expect(linking.querySelector(".middle")!.textContent).toBe("Type this code in Keepr482 913Expires in 1:52");
     expect(keys(linking, ".actions > *")).toEqual(["open-app", "cancel"]);
     const down = draw({ state: "keepr_down", version: "0.3.41" });
     expect(down.querySelector(".status.warn")!.textContent).toBe("Keepr isn't running");
-    expect(down.querySelector(".foot")!.textContent).toBe("Don't have Keepr?Extension 0.3.41");
+    expect(down.querySelector(".foot")!.textContent).toBe("Don't have Keepr?PrivacyExtension 0.3.41");
   });
 });
 

@@ -130,19 +130,19 @@ describe("who may start a cache Sync (R2)", () => {
     expect(decideCacheStart({ ...req, consentVersion: RCS_CONSENT_VERSION - 1 })).toMatchObject({ status: 403, error: "consent_needed" });
     expect(decideCacheStart(req)).toEqual({ ok: true, userId: "u-1" });
   });
-  // Founder, 2026-10-01: no consent screen. Mutation: the gate not behind
-  // RCS_CONSENT_REQUIRED → red.
-  it("consent not required (the shipped default): no consent_needed (K2)", () => {
-    expect(RCS_CONSENT_REQUIRED).toBe(false);
-    expect(decideCacheStart({ ...ok, consentVersion: null })).toEqual({ ok: true, userId: "u-1" });
-    expect(decideCacheStart({ ...ok, consentVersion: RCS_CONSENT_VERSION - 1, consentRequired: false })).toEqual({ ok: true, userId: "u-1" });
+  // SR C7 (founder, 2026-10-04): consent required (the shipped default) —
+  // no current consent → consent_needed. Mutation: the gate off → red.
+  it("consent required (the shipped default): no current consent → consent_needed (K2)", () => {
+    expect(RCS_CONSENT_REQUIRED).toBe(true);
+    expect(decideCacheStart({ ...ok, consentVersion: null })).toMatchObject({ status: 403, error: "consent_needed" });
+    expect(decideCacheStart({ ...ok, consentVersion: RCS_CONSENT_VERSION - 1 })).toMatchObject({ error: "consent_needed" });
+    expect(decideCacheStart({ ...ok, consentVersion: RCS_CONSENT_VERSION })).toEqual({ ok: true, userId: "u-1" });
+    expect(decideCacheStart({ ...ok, consentVersion: null, consentRequired: false })).toEqual({ ok: true, userId: "u-1" });
   });
-  it("the first Sync records the current version; a current record is left alone (K3)", () => {
-    expect(consentToRecordOnSync(null)).toBe(RCS_CONSENT_VERSION);
-    expect(consentToRecordOnSync(RCS_CONSENT_VERSION - 1)).toBe(RCS_CONSENT_VERSION);
-    expect(consentToRecordOnSync(RCS_CONSENT_VERSION)).toBeNull();
-    // With the screen back on, the screen records it, not the Sync.
-    expect(consentToRecordOnSync(null, true)).toBeNull();
+  it("the Sync never records consent while it is required (the modal does); off, the first Sync would (K3)", () => {
+    expect(consentToRecordOnSync(null)).toBeNull();
+    expect(consentToRecordOnSync(null, false)).toBe(RCS_CONSENT_VERSION);
+    expect(consentToRecordOnSync(RCS_CONSENT_VERSION, false)).toBeNull();
   });
   it("a Force re-import is clearing texts: 503", () => {
     expect(decideCacheStart({ ...ok, writesPaused: true })).toMatchObject({ status: 503, error: "busy" });

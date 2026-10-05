@@ -39,6 +39,7 @@ jest.mock("../../../../services/rcsImportService", () => ({
     openChromeForExtension: (...a: unknown[]) => mockOpenChrome(...a),
     startCacheJob: (...a: unknown[]) => mockStartCache(...a),
     retryCacheJob: (...a: unknown[]) => mockRetryCache(...a),
+    setCacheConsent: (...a: unknown[]) => mockConsent(...a),
     // C1: the reversed link panel (nothing pending).
     linkState: async () => mockLinkState(),
     linkEnterCode: async () => ({ success: true }),
@@ -133,12 +134,53 @@ describe("GoogleMessagesSyncFlow", () => {
     expect(await screen.findByTestId("gm-step-connect")).toBeInTheDocument();
   });
 
-  it("no consent step: never consented → straight to Connect, nothing recorded by the screen (C1)", async () => {
+  it("no consent screen: never consented → straight to Connect, nothing recorded by opening it (C1)", async () => {
     mockState = INSTALLED_NO_CONSENT;
     render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);
     expect(await screen.findByTestId("gm-step-connect")).toBeInTheDocument();
     expect(screen.queryByText(/I agree/)).toBeNull();
     expect(mockConsent).not.toHaveBeenCalled();
+  });
+
+  // SR C7 (founder-approved copy): before the first Sync, ONE line and
+  // [Agree and sync] — the consent recorded (its version), then the Sync.
+  // Mutations: the line missing; Sync started without recording consent;
+  // a failed save still starting the Sync → red.
+  it("first Sync: the consent line and Agree and sync — consent recorded, then the Sync", async () => {
+    mockState = { ...INSTALLED_NO_CONSENT, extensionPaired: true };
+    const order: string[] = [];
+    mockConsent.mockImplementation(async (v: unknown) => {
+      order.push("consent:" + String(v));
+      mockState = INSTALLED;
+      return { success: true };
+    });
+    mockStartCache.mockImplementation(async () => {
+      order.push("start");
+      return { success: true, data: job() };
+    });
+    render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);
+    expect(await screen.findByTestId("gm-consent-line")).toHaveTextContent(
+      /^Keepr copies your texts from Google Messages into Keepr on this computer.$/,
+    );
+    expect(screen.getByTestId("gm-sync-now")).toHaveTextContent("Agree and sync");
+    fireEvent.click(screen.getByTestId("gm-sync-now"));
+    await waitFor(() => expect(order).toEqual(["consent:1", "start"]));
+  });
+
+  it("first Sync: the consent not saved → its error, no Sync", async () => {
+    mockState = { ...INSTALLED_NO_CONSENT, extensionPaired: true };
+    mockConsent.mockResolvedValue({ success: false, error: "Sign in to Keepr first." });
+    render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);
+    fireEvent.click(await screen.findByText("Agree and sync"));
+    expect(await screen.findByText("Sign in to Keepr first.")).toBeInTheDocument();
+    expect(mockStartCache).not.toHaveBeenCalled();
+  });
+
+  it("consent current: no line, Sync now", async () => {
+    mockState = INSTALLED;
+    render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);
+    expect(await screen.findByTestId("gm-sync-now")).toHaveTextContent("Sync now");
+    expect(screen.queryByTestId("gm-consent-line")).toBeNull();
   });
 
   // Storyboard B02 / I02: linked — "Sync Android", "Linked with your browser

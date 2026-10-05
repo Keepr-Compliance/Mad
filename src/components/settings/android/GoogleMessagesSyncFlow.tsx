@@ -57,6 +57,9 @@ const secondary =
 /** Founder (D05): the green ✓ in the field shows this long before the linked screen. */
 export const LINKED_FLASH_MS = 1000;
 
+/** SR C7 (founder-approved copy): the one consent line before the first Sync. */
+export const CONSENT_LINE = "Keepr copies your texts from Google Messages into Keepr on this computer.";
+
 /**
  * Founder (B2): the note under Sync now — "Syncs your last 1.5 months of
  * texts." (12 → "your last year", 1 → "your last month", All time → "Syncs
@@ -205,6 +208,20 @@ export function GoogleMessagesSyncFlow({
     setJob(r.data);
   }, []);
 
+  /** SR C7: no current consent yet — the one line and [Agree and sync] before the first Sync. */
+  const needsConsent = state !== null && state.optedIn !== true;
+  const agreeAndSync = useCallback(async () => {
+    setError(null);
+    const r = await rcsImportService.setCacheConsent(state?.consentRequired ?? 1);
+    if (!r.success) {
+      setError(r.error ?? "Keepr could not save your answer.");
+      return;
+    }
+    await refresh();
+    await startSync();
+  }, [state?.consentRequired, refresh, startSync]);
+
+
   const cancel = useCallback(async () => {
     if (job) await rcsImportService.cancelJob(job.jobId);
   }, [job]);
@@ -295,8 +312,19 @@ export function GoogleMessagesSyncFlow({
               </svg>
               <span>Linked with your browser</span>
             </div>
-            <button type="button" className={primary} onClick={() => void startSync()} disabled={starting} data-testid="gm-sync-now">
-              {starting ? "Starting…" : "Sync now"}
+            {needsConsent && (
+              <p className="text-[14px] text-[#374151]" data-testid="gm-consent-line">
+                {CONSENT_LINE}
+              </p>
+            )}
+            <button
+              type="button"
+              className={primary}
+              onClick={() => void (needsConsent ? agreeAndSync() : startSync())}
+              disabled={starting}
+              data-testid="gm-sync-now"
+            >
+              {starting ? "Starting…" : needsConsent ? "Agree and sync" : "Sync now"}
             </button>
           </div>
           {windowNote}

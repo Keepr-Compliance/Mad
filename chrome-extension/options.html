@@ -16,12 +16,14 @@
   button:hover { background: #4338CA; }
   .done { color: #3730A3; font-weight: 600; }
   .version { font-size: 12px; color: #6B7280; margin: 16px 0 0; }
+  a { color: #4F46E5; }
   @media (prefers-color-scheme: dark) {
     body { background: #111827; color: #F3F4F6; }
     main { background: #1F2937; border-color: #374151; }
     p, li { color: #D1D5DB; }
     .done { color: #A5B4FC; }
     .version { color: #9CA3AF; }
+    a { color: #A5B4FC; }
   }
 </style>
 </head>
@@ -33,9 +35,10 @@
     <li>It works only when you click <b>Sync Android</b> in Keepr, and only on messages.google.com.</li>
     <li>When you sync, it reads ALL your conversations from the period set in Keepr and sends them to the Keepr app on this computer only.</li>
     <li>An eye on each chat in Google Messages switches syncing to Keepr off or on for that chat. Keyboard: <b>Alt+Shift+E</b> switches the selected chat (change the key at chrome://extensions/shortcuts).</li>
-    <li>You agree to this in Keepr itself, before your first sync. Keepr explains there what it keeps, how texts are linked to transactions, and how to delete them.</li>
+    <li>Before your first sync, Keepr asks you to agree. You can withdraw it in Keepr: Settings › Google Messages.</li>
   </ul>
   <p>Linking and status: click the Keepr icon in Chrome's toolbar.</p>
+  <p><a href="https://keeprcompliance.com/privacy" target="_blank" rel="noopener noreferrer">Privacy policy</a></p>
   <p id="keepr-version" class="version"></p>
 </main>
 <script src="options.js"></script>

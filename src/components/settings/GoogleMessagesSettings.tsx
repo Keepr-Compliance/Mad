@@ -104,6 +104,13 @@ export function GoogleMessagesSettings({ userId, onOpenSyncAndroid, published = 
     await refreshExcluded();
   }, [refreshExcluded]);
 
+  /** SR C7: withdraw the consent (Keepr's record); the next Sync asks again. */
+  const withdrawConsent = useCallback(async () => {
+    const r = await rcsImportService.setCacheConsent(null);
+    if (!r.success) setResult({ ok: false, text: r.error ?? "Keepr could not save that." });
+    await refresh();
+  }, [refresh]);
+
   // The stored window (absent key → the default, null → All time).
   useEffect(() => {
     let live = true;
@@ -306,6 +313,22 @@ export function GoogleMessagesSettings({ userId, onOpenSyncAndroid, published = 
           texts already in Keepr stay.
         </p>
       </div>
+
+      {/* SR C7 (founder): the consent given before the first Sync, withdrawn
+          here — the next Sync asks again. Shown only while it is current. */}
+      {state?.optedIn === true && (
+        <div className="p-4 bg-white rounded-lg border border-gray-200 flex items-center justify-between gap-3" data-testid="gm-consent">
+          <span className="text-sm text-gray-900">You agreed to copy your texts into Keepr.</span>
+          <button
+            type="button"
+            className="text-sm text-indigo-700 hover:text-indigo-900 font-medium"
+            onClick={() => void withdrawConsent()}
+            data-testid="gm-consent-withdraw"
+          >
+            Withdraw consent
+          </button>
+        </div>
+      )}
       {manageOpen && (
         <NotSyncedChatsModal
           chats={excluded}

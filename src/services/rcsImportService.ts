@@ -91,6 +91,21 @@ export const rcsImportService = {
     return callJob(() => retry());
   },
 
+  /**
+   * SR C7: the consent the user agreed to (the version of the line shown), or
+   * withdrawn (null) — Keepr's rcs_consent record.
+   */
+  async setCacheConsent(version: number | null): Promise<ApiResult<void>> {
+    const bridge = api();
+    if (!bridge || !bridge.setCacheConsent) return { success: false, error: NOT_AVAILABLE };
+    try {
+      const r = await bridge.setCacheConsent({ version });
+      return r.success ? { success: true } : { success: false, error: r.error };
+    } catch (err) {
+      return { success: false, error: getErrorMessage(err) };
+    }
+  },
+
   /** BACKLOG-3658/3659: is the extension installed / paired, and the cache state. */
   async getExtensionState(): Promise<ApiResult<RcsExtensionState>> {
     const bridge = api();
