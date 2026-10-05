@@ -519,6 +519,21 @@ export class RcsExtensionBridge {
     }
   }
 
+  /**
+   * SR (live): a browser that is not linked to this Keepr (a reinstalled
+   * extension's new key → unknown_pair, or an unsigned "no link here") can
+   * never claim the job waiting for it — end that job now as keepr_refused
+   * ("This browser isn't linked."), not 60 s later as not_opened.
+   */
+  private failWaitingJobAsUnlinked(): void {
+    const waiting = this.jobs.pending();
+    if (!waiting) return;
+    waiting.fail("keepr_refused", NOT_PAIRED_MESSAGE, this.jobs.nowMs());
+    this.logger.warn("[RcsBridge] The browser is not linked: the waiting Sync ended (keepr_refused)");
+    this.emitJob(waiting.snapshot());
+    this.announceEnded(waiting);
+  }
+
   /** Tell the owner, once, that a job ended (BACKLOG-3658). */
   private announceEnded(job: RcsImportJob): void {
     if (job.isActive || this.endedAnnounced.has(job.jobId)) return;
@@ -793,7 +808,10 @@ export class RcsExtensionBridge {
         // Live (B1): an extension says, unsigned, it has NO link. Keepr only
         // SHOWS "Not linked in this browser" — never deletes a link on it
         // (SR: anyone local can send it; a second profile sends it too).
-        if (!signedPairing && b.linked === false && this.options.pairing) this.options.pairing.noteExtensionUnlinked();
+        if (!signedPairing && b.linked === false && this.options.pairing) {
+          this.options.pairing.noteExtensionUnlinked();
+          this.failWaitingJobAsUnlinked();
+        }
         this.options.onHello?.(hello);
         this.tel((t) => t.hello(hello.version));
         // BACKLOG-3666: only "paired: yes / no" (yes = a valid signature of a
@@ -912,6 +930,7 @@ export class RcsExtensionBridge {
     const refuse = (status: number, error: string, keyHex?: string, nonce?: string): "handled" => {
       if (keyHex) replySigners.set(res, { sign: (st, body) => pairing.signReply(keyHex, st, path, nonce ?? "", body) });
       this.logger.warn(`[RcsBridge] Refused a request: ${error}`);
+      if (error === "unknown_pair") this.failWaitingJobAsUnlinked();
       const message = error === "re_pair" || error === "unknown_pair" || error === "not_paired"
         ? NOT_PAIRED_MESSAGE
         : error === "signature_required" ? SIGNATURE_REQUIRED_MESSAGE : undefined;
@@ -1006,6 +1025,7 @@ export class RcsExtensionBridge {
         replySigners.set(res, { sign: (status, body) => pairing.signReply(keyHex, status, path, nonce, body) });
       }
       this.logger.warn(`[RcsBridge] Refused a signed request: ${v.error}`);
+      if (v.error === "unknown_pair") this.failWaitingJobAsUnlinked();
       sendJson(res, v.status, { error: v.error, ...(v.error === "re_pair" || v.error === "unknown_pair" ? { message: NOT_PAIRED_MESSAGE } : {}) });
       return "handled";
     }

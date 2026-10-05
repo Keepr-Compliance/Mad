@@ -607,3 +607,36 @@ describe("Stop sync on the page (ended_by=user_page)", () => {
     expect(bridge.activeJob()).not.toBeNull();
   });
 });
+
+// SR (live): a reinstalled extension (new key → unknown_pair) or an unsigned
+// "no link here" can never claim the waiting job — it ends at once as
+// keepr_refused ("This browser isn't linked."), not 60 s later as
+// not_opened. A job already running is left alone.
+// Mutations: no fail on unknown_pair / on "no link here" → red; a running
+// job failed too → red.
+describe("a waiting job and a browser that is not linked (live)", () => {
+  it("unknown_pair: the waiting job ends now as keepr_refused", async () => {
+    await linkWith("user-a");
+    const job = bridge.createCacheJob("user-a", { since: "2026-08-01T00:00:00.000Z" })!;
+    const stranger = { pairId: "e".repeat(32), keyHex: "ab".repeat(32) };
+    const r = await post(port, "/job/pending", signed(stranger, "/job/pending").headers);
+    expect(r.body.error).toBe("unknown_pair");
+    expect(bridge.getJob()).toMatchObject({ jobId: job.jobId, state: "failed", error: { code: "keepr_refused" } });
+  });
+
+  it("an unsigned 'no link here' (/hello linked:false): the waiting job ends now as keepr_refused", async () => {
+    await linkWith("user-a");
+    const job = bridge.createCacheJob("user-a", { since: "2026-08-01T00:00:00.000Z" })!;
+    await post(port, "/hello", {}, JSON.stringify({ version: "0.3.76", linked: false }));
+    expect(bridge.getJob()).toMatchObject({ jobId: job.jobId, state: "failed", error: { code: "keepr_refused" } });
+  });
+
+  it("a job already running is not ended by it", async () => {
+    const p = await linkWith("user-a");
+    const job = bridge.createCacheJob("user-a", { since: "2026-08-01T00:00:00.000Z" })!;
+    const claimPath = `/job/${job.jobId}/claim`;
+    expect((await post(port, claimPath, signed(p, claimPath, "").headers, "")).status).toBe(200);
+    await post(port, "/hello", {}, JSON.stringify({ version: "0.3.76", linked: false }));
+    expect(bridge.getJob()).toMatchObject({ jobId: job.jobId, state: "running" });
+  });
+});
