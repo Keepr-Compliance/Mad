@@ -696,6 +696,13 @@
    * answering. Counted on the wall clock too (see tick()).
    */
   var HISTORY_NO_PROGRESS_MS = 75000;
+  /**
+   * SR F2: under throttling a minute of wall time can be ONE poll — the wall
+   * clock counts towards the budgets (and the no-progress end) only after
+   * this many real polls, so a slowly growing hidden chat is not cut after
+   * one or two attempts.
+   */
+  var HISTORY_MIN_POLLS_FOR_WALL = 30;
   var HISTORY_BUDGET_CAP_MS = 300000;
   /**
    * SR: the extra time is a per-RUN pool, shared by every chat of a Sync.
@@ -927,8 +934,13 @@
     // last hours. It now follows the wall clock whenever that is further on.
     var clockNow = typeof io.now === "function" ? io.now : function () { return Date.now(); };
     var startedAt = clockNow();
+    var nominal = 0;
+    var polls = 0;
     function tick(ms) {
-      spent = Math.max(spent + ms, clockNow() - startedAt);
+      nominal += ms;
+      polls += 1;
+      // SR F2: the wall clock only after a minimum of real polls.
+      spent = Math.max(spent, polls >= HISTORY_MIN_POLLS_FOR_WALL ? Math.max(nominal, clockNow() - startedAt) : nominal);
     }
 
     function absorb() {
@@ -1450,6 +1462,7 @@
     HISTORY_BUDGET_CAP_MS: HISTORY_BUDGET_CAP_MS,
     RCS_HISTORY_EXTENSION_POOL_MS: RCS_HISTORY_EXTENSION_POOL_MS,
     HISTORY_NO_PROGRESS_MS: HISTORY_NO_PROGRESS_MS,
+    HISTORY_MIN_POLLS_FOR_WALL: HISTORY_MIN_POLLS_FOR_WALL,
     HISTORY_SMALL_CHAT: HISTORY_SMALL_CHAT,
     HISTORY_FIRST_GROWTH_MS: HISTORY_FIRST_GROWTH_MS,
     HISTORY_NUDGE_WATCH_MS: HISTORY_NUDGE_WATCH_MS,

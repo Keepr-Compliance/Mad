@@ -1459,8 +1459,13 @@
         }
         history.push({ conversationId: conv.conversationId, stopReason: hist.stopReason, count: hist.count });
         // Live (2026-10-05): the time Google's side has given nothing, across
-        // chats — a chat that grew restarts it from its own trailing idle.
-        noProgressRunMs = (hist.count > 0 && hist.idleMs < (hist.elapsedMs || 0) ? 0 : noProgressRunMs) + (hist.idleMs || 0);
+        // chats. SR F1: only chats that ended STALLED (noProgress / not_settled)
+        // add their idle time; a chat that loaded a batch restarts the count
+        // (from its own trailing idle); a chat that confirmed its start
+        // (no_more, date_floor, cap) clears it — short healthy chats never add up.
+        var stalledChat = !!hist.noProgress || hist.stopReason === "not_settled";
+        if (!stalledChat) noProgressRunMs = 0;
+        else noProgressRunMs = ((hist.batches || 0) > 0 ? 0 : noProgressRunMs) + (hist.idleMs || 0);
         if (hist.noProgress) log("  history stopped growing for " + Math.round((hist.idleMs || 0) / 1000) + "s");
         if (noProgressRunMs >= RUN_NO_PROGRESS_MS) {
           log("  stopped: no new messages from Google for " + Math.round(noProgressRunMs / 1000) + "s");

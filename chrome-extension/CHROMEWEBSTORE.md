@@ -197,6 +197,7 @@ Also: the 128×128 icon (`icons/keepr-128.png`, 96 art + 16 padding) and a
 | 0.3.75 | The extension's per-transaction run code removed; an older Keepr's claim is refused with "Update Keepr". |
 | 0.3.76 | Comment tidies; the older-Keepr line is "Update Keepr, then Sync again." |
 | 0.3.77 | History budgets on the wall clock (hidden tabs); a stalled chat ends; "Google Messages stopped responding." |
+| 0.3.78 | Stalled-run count only from stalled chats; the wall clock counts after 30 real polls. |
 
 ## 10. Review history
 

@@ -661,11 +661,28 @@ describe("runJob: a cache Sync", () => {
     expect(t.shown[t.shown.length - 1][0]).toBe("Google Messages stopped responding.");
   });
 
+  // SR F1: a healthy short chat confirmed at its start has idleMs == elapsedMs
+  // (its confirm wait) — it must never count towards "no progress". Before
+  // the fix, ~40–80 such chats (or 4 slow ones here, 100 s each) added up
+  // to a false google_unresponsive. Mutation: confirmed chats counted → red.
+  it("short chats that confirmed their start never add up to google_unresponsive (SR F1)", async () => {
+    const t = cacheEnv({ rows: ROWS, numbers: { [id(0)]: ["+15555550101"], [id(1)]: ["+15555550102"], [id(2)]: ["+15555550103"], [id(3)]: ["+15555550104"] } });
+    const confirmed = [
+      { stopReason: "no_more", confirmedBy: "first_page", count: 3, elapsedMs: 100_000, idleMs: 100_000 },
+      { stopReason: "date_floor", count: 5, elapsedMs: 100_000, idleMs: 100_000 },
+      { stopReason: "no_more", confirmedBy: "marker", count: 2, elapsedMs: 100_000, idleMs: 100_000 },
+      { stopReason: "cap", count: 2000, elapsedMs: 100_000, idleMs: 100_000 },
+    ];
+    let n = 0;
+    (t.env.scan as Record<string, unknown>).loadHistory = async () => confirmed[n++ % confirmed.length];
+    expect((await job.runJob(JOB, t.env)).outcome).toBe("finished");
+  });
+
   it("a chat that loaded something restarts the count: no failure for one idle chat after a growing one", async () => {
     const t = cacheEnv({ rows: ROWS, numbers: { [id(0)]: ["+15555550101"], [id(1)]: ["+15555550102"] } });
     const stops = [
       { stopReason: "not_settled", count: 0, elapsedMs: 250_000, idleMs: 250_000, noProgress: true },
-      { stopReason: "not_settled", count: 2000, elapsedMs: 200_000, idleMs: 80_000, noProgress: true }, // 250 + 80 s would pass 5 min
+      { stopReason: "not_settled", count: 2000, batches: 12, elapsedMs: 200_000, idleMs: 80_000, noProgress: true }, // loaded batches: restarts (250 + 80 s would pass 5 min)
     ];
     let n = 0;
     (t.env.scan as Record<string, unknown>).loadHistory = async () => stops[n++];
