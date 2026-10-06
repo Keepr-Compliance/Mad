@@ -196,6 +196,13 @@ export function GoogleMessagesSyncFlow({
       )}
     </p>
   );
+  // Live (founder): the "update ready" line on every Connect screen (checking,
+  // the link card, linked) — wherever the extension is shown.
+  const updateLine = showExtensionUpdateReady(state?.extensionUpdateReady, published) ? (
+    <p className="text-[14px] text-[#374151]" role="status" data-testid="gm-extension-update">
+      {EXTENSION_UPDATE_READY_LINE}
+    </p>
+  ) : null;
   const stepRef = useRef(step);
   stepRef.current = step;
   const preparedRef = useRef(false);
@@ -312,6 +319,7 @@ export function GoogleMessagesSyncFlow({
       {step === "connect" && checkingLink && (
         <div className="flex flex-col gap-4 min-h-[360px]" data-testid="gm-link-checking-browser">
           <h2 className={title}>Sync Android</h2>
+          {updateLine}
           <div className="flex-1 flex items-center justify-center gap-2 text-[14px] text-[#374151]" role="status">
             <span className="w-4 h-4 border-2 border-[#4F46E5] border-t-transparent rounded-full animate-spin" aria-hidden="true" />
             {CHECKING_BROWSER}
@@ -322,7 +330,10 @@ export function GoogleMessagesSyncFlow({
       {step === "connect" && !checkingLink && showLinkCard && (
         // D01: the link card IS this step (the modal gives it its frame).
         // Relink: the same card; the old link goes only when the new code succeeds.
-        <LinkBrowserPanel bare onJustLinked={onJustLinked} />
+        <>
+          {updateLine}
+          <LinkBrowserPanel bare onJustLinked={onJustLinked} />
+        </>
       )}
 
       {step === "connect" && !checkingLink && !showLinkCard && (
@@ -331,11 +342,7 @@ export function GoogleMessagesSyncFlow({
         <div className="flex flex-col gap-4 min-h-[360px]" data-testid="gm-linked-screen">
           <h2 className={title}>Sync Android</h2>
           <div className="flex-1 flex flex-col justify-center gap-4" data-testid="gm-linked-body">
-            {showExtensionUpdateReady(state?.extensionUpdateReady, published) && (
-              <p className="text-[14px] text-[#374151]" role="status" data-testid="gm-extension-update">
-                {EXTENSION_UPDATE_READY_LINE}
-              </p>
-            )}
+            {updateLine}
             {/* Founder (2026-10-05): before the first Sync, the consent line,
                 Agree and sync and the months note only — the linked row
                 returns once consent is given (B2). */}

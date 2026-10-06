@@ -231,6 +231,21 @@ describe("GoogleMessagesSyncFlow", () => {
 
   // Live (founder): Chrome runs the old unpacked copy until it is reloaded.
   // Mutations: the line not shown; shown for a store install → red.
+  // Live (founder): the line on EVERY Connect screen — the check and the
+  // link card too, not only the linked screen. Mutation: on the linked
+  // screen only → red.
+  it("\"update ready\" on the checking screen and on the link card too", async () => {
+    mockState = { ...INSTALLED, extensionPaired: false, pairingSaved: true, linkNotHere: false, extensionUpdateReady: true };
+    const { unmount } = render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} linkCheckMs={60_000} />);
+    expect(await screen.findByTestId("gm-link-checking-browser")).toBeInTheDocument();
+    expect(screen.getByTestId("gm-extension-update")).toBeInTheDocument();
+    unmount();
+    mockState = { ...INSTALLED, extensionPaired: false, pairingSaved: false, extensionUpdateReady: true };
+    render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);
+    expect(await screen.findByTestId("gm-extension-update")).toBeInTheDocument();
+    expect(screen.queryByTestId("gm-linked-screen")).toBeNull();
+  });
+
   it("an older extension seen: one \"update ready\" line (unpacked only)", async () => {
     mockState = { ...INSTALLED, extensionUpdateReady: true };
     const { unmount } = render(<GoogleMessagesSyncFlow onClose={jest.fn()} pollMs={20} />);

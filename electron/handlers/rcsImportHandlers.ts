@@ -766,6 +766,11 @@ const helloPersistedAt = new Map<string, number>();
 async function onHello(hello: { version?: string; paired?: boolean }): Promise<void> {
   const now = new Date().toISOString();
   if (hello.version) {
+    // Live (founder): which version the extension reports, when it changes
+    // (version only) — so "update ready" can be checked from the log.
+    if (hello.version !== extensionPresence.version) {
+      void logService.info(`[RcsImport] Extension reports ${hello.version}`, LOG_TAG);
+    }
     extensionPresence.version = hello.version;
     extensionPresence.seenAt = now;
   }

@@ -16,6 +16,9 @@ const DAY = 24 * 60 * 60 * 1000;
 export {};
 
 let mockLastCacheOptions: unknown = null;
+/** The options Keepr built its bridge with (its onHello). */
+let mockBridgeOptions: { onHello?: (h: { version?: string; paired?: boolean }) => void } | null = null;
+const mockLogInfo = jest.fn().mockResolvedValue(undefined);
 const handlers = new Map<string, (event: unknown, args?: unknown) => Promise<unknown>>();
 const created: Array<{ userId: string; since: string }> = [];
 let mockLastFinished: string | null = null;
@@ -50,6 +53,9 @@ jest.mock("electron", () => ({
 }));
 jest.mock("../../services/rcsExtensionBridge", () => ({
   RcsExtensionBridge: class {
+    constructor(options: unknown) {
+      mockBridgeOptions = options as typeof mockBridgeOptions;
+    }
     writesArePaused = false;
     getStatus() {
       return { bridge: "listening", port: 1 };
@@ -70,6 +76,7 @@ jest.mock("../../services/rcsExtensionBridge", () => ({
 jest.mock("../../services/databaseService", () => ({
   __esModule: true,
   default: {
+    updateRcsCacheState: () => undefined,
     getRcsCacheState: () => ({ optedInAt: "2026-09-01T00:00:00.000Z", lastCacheFinishedAt: mockLastFinished, ownNumber: null }),
     getRcsConsent: () => ({ consentAt: "2026-09-01T00:00:00.000Z", consentVersion: mockConsentVersion, contactsOnly: false, autoDeleteDays: null }),
     rcsStagingDbOps: () => ({ deleteAll: () => undefined, journalRows: () => [], jobs: () => [], putJob: () => undefined, putChatMeta: () => undefined }),
@@ -87,7 +94,7 @@ jest.mock("../../services/sessionService", () => ({
 }));
 jest.mock("../../services/logService", () => {
   const noop = jest.fn().mockResolvedValue(undefined);
-  return { __esModule: true, default: { info: noop, warn: noop, error: noop, debug: noop } };
+  return { __esModule: true, default: { info: (...a: unknown[]) => mockLogInfo(...a), warn: noop, error: noop, debug: noop } };
 });
 jest.mock("../../services/autoLinkService", () => ({ autoLinkNewMessagesForUser: jest.fn() }));
 jest.mock("../../services/messageMatchingService", () => ({ createCommunicationReference: jest.fn() }));
@@ -254,6 +261,19 @@ describe("rcs-import:start-cache-job window (BACKLOG-3658)", () => {
   // (messageImport.filters). Mutation: another key / no default → red.
   // Live (B1): a pairing row alone is NOT "linked" — the extension must have
   // proved it (a signed call). Mutation: extensionPaired from the row → red.
+  // Live (founder): which version the extension reports, logged when it
+  // changes (version only) — so "update ready" can be checked from the log.
+  // Mutation: no log line, or one per hello → red.
+  it("the extension's reported version is logged once per change (version only)", async () => {
+    mockLogInfo.mockClear();
+    mockBridgeOptions!.onHello!({ version: "0.3.85" });
+    mockBridgeOptions!.onHello!({ version: "0.3.85", paired: true });
+    mockBridgeOptions!.onHello!({ version: "0.3.86" });
+    await new Promise((r) => setTimeout(r, 0));
+    const lines = mockLogInfo.mock.calls.map((c) => String(c[0])).filter((l) => l.includes("Extension reports"));
+    expect(lines).toEqual(["[RcsImport] Extension reports 0.3.85", "[RcsImport] Extension reports 0.3.86"]);
+  });
+
   it("get-extension-state: a row nobody proved is not 'linked'", async () => {
     mockPaired = true;
     const r = (await handlers.get("rcs-import:get-extension-state")!({})) as { state: { extensionPaired?: boolean } };
