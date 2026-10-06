@@ -2529,6 +2529,11 @@ class DatabaseService implements IDatabaseService {
     return rcsChatPeopleDb.recordRcsChatPeople(userId, chatHash, rows, lastMessageAt);
   }
 
+  /** Live (founder): a Google Messages group's name (message_thread_names); null removes it. */
+  recordRcsThreadName(userId: string, threadId: string, name: string | null) {
+    return rcsChatPeopleDb.recordRcsThreadName(userId, threadId, name);
+  }
+
   setRcsExclusion(userId: string, conversationId: string, excluded: boolean) {
     return syncDb.setRcsExclusion(userId, conversationId, excluded);
   }

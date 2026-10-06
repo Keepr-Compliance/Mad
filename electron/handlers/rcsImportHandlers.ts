@@ -144,6 +144,8 @@ const deps: RcsCacheChatDeps = {
   // BACKLOG-3670: people found in texts (local only; names never logged).
   recordPeople: (userId, chatHash, rows, lastMessageAt) =>
     databaseService.recordRcsChatPeople(userId, chatHash, rows, lastMessageAt),
+  // Live (founder): a group's name, in the table search and thread cards read.
+  recordThreadName: (userId, threadId, name) => databaseService.recordRcsThreadName(userId, threadId, name),
 };
 
 const mediaDeps: RcsMediaDeps = {

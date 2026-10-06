@@ -10,7 +10,7 @@ import { updateTransactionThreadCountSync } from "./communicationDbService";
 import { samePeople } from "../rcsImportStore";
 import { withLiveTransactionParam } from "./core/transactionEligibilitySql";
 import logService from "../logService";
-import { clearRcsChatPeople, clearRcsChatPeopleForChats } from "./rcsChatPeopleDbService";
+import { clearRcsChatPeople, clearRcsChatPeopleForChats, clearRcsThreadNames, clearRcsThreadNamesForThreads } from "./rcsChatPeopleDbService";
 import { exclusionKeysFor, markPendingFullRead } from "./rcsPendingFullSyncDbService";
 import {
   RCS_INSERT_REACTION_SQL,
@@ -301,8 +301,8 @@ export function rcsClearDbOps(): import("../rcsClearService").RcsClearDbOps {
   const db = ensureDb();
   return {
     transaction: <T>(fn: () => T): T => db.transaction(fn)(),
-    // BACKLOG-3670: the people found in the cleared texts.
-    deletePeople: (userId) => clearRcsChatPeople(userId),
+    // BACKLOG-3670: the people found in the cleared texts; their group names.
+    deletePeople: (userId) => clearRcsChatPeople(userId) + clearRcsThreadNames(userId),
     attachmentPaths: (userId) =>
       (db.prepare(RCS_CLEAR_ATTACHMENT_PATHS_SQL).all(userId) as { storagePath: string | null }[])
         .map((r) => r.storagePath)
@@ -502,7 +502,7 @@ export function rcsAutoDeleteDbOps(): import("../rcsClearService").RcsAutoDelete
       clearRcsChatPeopleForChats(
         userId,
         threadIds.filter((t) => t.startsWith("gmweb2-")).map((t) => t.slice("gmweb2-".length)),
-      ),
+      ) + clearRcsThreadNamesForThreads(userId, threadIds),
     unlinkedOldThreads: (userId, cutoffIso) =>
       (db.prepare(RCS_UNLINKED_OLD_THREADS_SQL).all(userId, userId, userId, userId, userId, cutoffIso) as Array<{ threadId: string }>)
         .map((r) => r.threadId),

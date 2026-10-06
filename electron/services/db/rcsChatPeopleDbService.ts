@@ -24,6 +24,7 @@
 
 import { dbAll, dbRun, ensureDb } from "./core/dbConnection";
 import { sql } from "./core/sqlText";
+import { UPSERT_THREAD_NAME_SQL, deleteThreadNamesByIdsSync } from "./messageThreadNameSql";
 import { formatPhoneNumber } from "../../utils/phoneNormalization";
 
 /** The id prefix of a person found in texts by number (`msg_tel_<e164>`). */
@@ -103,6 +104,28 @@ export function recordRcsChatPeople(
 export function clearRcsChatPeople(userId: string): number {
   invalidateTextPeopleCache(userId);
   return dbRun(sql`DELETE FROM rcs_chat_people WHERE user_id = ?`, [userId]).changes;
+}
+
+/**
+ * Live (founder): a Google Messages GROUP's name, in the same table and with
+ * the same statements the Mac / iPhone import uses (message_thread_names),
+ * so search and the thread cards show it. null removes a stale one. Runs on
+ * the caller's connection — inside the cache commit's transaction.
+ */
+export function recordRcsThreadName(userId: string, threadId: string, name: string | null): void {
+  const db = ensureDb();
+  if (name === null) deleteThreadNamesByIdsSync(db, userId, [threadId]);
+  else db.prepare(UPSERT_THREAD_NAME_SQL).run(userId, threadId, name);
+}
+
+/** Clear: every Google Messages thread name (gmweb2-…) of the user. */
+export function clearRcsThreadNames(userId: string): number {
+  return dbRun(sql`DELETE FROM message_thread_names WHERE user_id = ? AND thread_id LIKE 'gmweb2-%'`, [userId]).changes;
+}
+
+/** Auto-delete: the thread names of the chats deleted (gmweb2-… ids only). */
+export function clearRcsThreadNamesForThreads(userId: string, threadIds: readonly string[]): number {
+  return deleteThreadNamesByIdsSync(ensureDb(), userId, threadIds.filter((t) => t.startsWith("gmweb2-")));
 }
 
 /** Auto-delete: the people of the chats deleted. */

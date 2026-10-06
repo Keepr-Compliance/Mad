@@ -442,7 +442,32 @@ export function mapChatToReactionRows(
 export type RcsCacheChatDeps = Pick<
   RcsImportDeps,
   "batchInsertMessages" | "getMessageIdMap" | "insertReactionRows" | "findContentDuplicates" | "recordPeople"
->;
+> & {
+  /** Live (founder): a group's name in message_thread_names (null → none). */
+  recordThreadName?: (userId: string, threadId: string, name: string | null) => void;
+};
+
+/**
+ * A GROUP's own name from the page's chat title, or null. Google shows an
+ * unnamed group as its members' names joined ("Ana, Ben and Cy", "Ana, Ben
+ * +2"); that is not a name. Nor is a number, or nothing.
+ */
+export function rcsGroupThreadName(title: string | undefined, people: RcsChatPeople): string | null {
+  const t = (title ?? "").trim();
+  if (t === "" || /^[\d+()\-.\s]+$/.test(t)) return null;
+  const member = new Set<string>();
+  for (const p of people.names) {
+    const n = p.name.trim().toLowerCase();
+    if (n === "") continue;
+    member.add(n);
+    member.add(n.split(/\s+/)[0]);
+  }
+  // "Ana, Ben +2 more": the trailing count is not part of a name.
+  const parts = t.toLowerCase().replace(/\s*\+\d+(?:\s+(?:more|others?))?\s*$/, "").split(/\s*(?:,|&|\band\b)\s*/).map((x) => x.trim()).filter((x) => x !== "");
+  const joined = parts.length > 0 && parts.every((x) =>
+    member.has(x) || /^[\d+()\-.\s]+$/.test(x) || /^\+?\d+(?:\s+(?:more|others?))?$/.test(x));
+  return joined ? null : t;
+}
 
 /**
  * BACKLOG-3658: store one chat of the cache job for `userId`: same key, rows
@@ -480,6 +505,10 @@ export function storeCacheChatSync(
   const { stored, skipped } = deps.batchInsertMessages(toInsert, 500);
   // BACKLOG-3670: inside the cache commit's transaction (this runs in it).
   deps.recordPeople?.(userId, rcsChatHash(people.numbers), chatPeopleRows(people, chat.title), lastSentAt(chat));
+  // Live (founder): a group's own name — searchable, and the thread card's title.
+  if (people.numbers.length > 1) {
+    deps.recordThreadName?.(userId, `${RCS_THREAD_PREFIX}${rcsChatHash(people.numbers)}`, rcsGroupThreadName(chat.title, people));
+  }
   const reactionRows = mapChatToReactionRows(chat, userId, people, RCS_CACHE_SOURCE);
   const reactionResult =
     reactionRows.length > 0 ? deps.insertReactionRows(reactionRows) : { stored: 0, skipped: 0 };
