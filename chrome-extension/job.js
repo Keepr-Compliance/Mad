@@ -29,6 +29,11 @@
     var rest = String(hash || "").replace(/^#/, "").split("&").filter(function (p) { return p && p !== "keepr-link"; });
     return rest.length ? "#" + rest.join("&") : "";
   }
+  /** BACKLOG-3668 L1: the hash without the keepr-job token ("" when nothing is left). */
+  function withoutJobHash(hash) {
+    var rest = String(hash || "").replace(/^#/, "").split("&").filter(function (p) { return p && !/^keepr-job=/.test(p); });
+    return rest.length ? "#" + rest.join("&") : "";
+  }
   /** How long this tab waits to be signed in before it opens the link window itself. */
   var LINK_SIGNED_IN_WAIT_MS = 60000;
   var LIST_ITEM = "mws-conversation-list-item";
@@ -3043,6 +3048,7 @@
   var api = {
     handleLinkHash: handleLinkHash,
     withoutLinkHash: withoutLinkHash,
+    withoutJobHash: withoutJobHash,
     LINK_HASH_RE: LINK_HASH_RE,
     bootPlan: bootPlan,
     FAILURE_LINES: FAILURE_LINES,
@@ -3157,6 +3163,13 @@
   try {
     if (hashJob) sessionStorage.setItem(STORAGE_KEY, hashJob);
   } catch (_e) { /* storage blocked: the hash is still in hand */ }
+  // BACKLOG-3668 L1: read once — the job id leaves the URL (history, a shared
+  // or bookmarked link); this tab keeps its copy above.
+  if (hashJob) {
+    try {
+      history.replaceState(history.state, "", location.pathname + location.search + withoutJobHash(location.hash));
+    } catch (_e) { /* the job still runs */ }
+  }
   var storedJob = null;
   try {
     storedJob = sessionStorage.getItem(STORAGE_KEY);

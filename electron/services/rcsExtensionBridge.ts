@@ -20,8 +20,10 @@
  *
  * ## Sync jobs (BACKLOG-3620)
  * "Sync" in Keepr creates a job ({@link RcsJobRegistry}) and opens Messages for
- * Web with `#keepr-job=<jobId>`. Every job route names the job id, which is
- * random and doubles as the job's secret; the Origin pin applies too.
+ * Web with `#keepr-job=<jobId>` (the page removes it from the URL once read,
+ * BACKLOG-3668 L1). Every job route names the job id. The id is random but
+ * is NOT a secret: a job route must also be a request signed by the paired
+ * extension (BACKLOG-3666, see authGate), and the Origin pin applies too.
  * - `POST /job/pending`         — an unclaimed job, for a page that lost the hash.
  * - `POST /job/:id/claim`       — claim; returns contact NAMES only. Once.
  * - `POST /job/:id/match`       — {conversationId, numbers[]} → matched contacts.
