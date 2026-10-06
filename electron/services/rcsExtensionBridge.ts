@@ -1353,6 +1353,7 @@ export class RcsExtensionBridge {
           typeof body.notText === "number" ? body.notText : undefined,
           typeof body.noMessagesYet === "number" ? body.noMessagesYet : undefined,
           typeof body.listStop === "string" ? body.listStop : undefined,
+          body.phoneDisconnected === true,
         );
         const snap = job.snapshot();
         // Counts only: chat names never go to the log. One chat can have two

@@ -394,6 +394,33 @@ describe("runJob: a cache Sync", () => {
         expect(t.calls.some(([, p]) => p.endsWith("/finish"))).toBe(false);
         expect(t.shown[t.shown.length - 1][0]).toBe("Your phone isn't connected.");
       });
+      // SR (on f9dec047c): the phone gone PARTWAY — a chat saved, then the
+      // rest empty. Not complete: those chats are "not fully synced", and
+      // Keepr is told (phoneDisconnected) to move neither "last synced" nor
+      // the coverage. Mutations: no flag; the streak not counted → red.
+      it("a saved chat, then 2 trailing empty chats: Done with the not-fully line, phoneDisconnected sent", async () => {
+        const t = cacheEnv({ rows: ROWS, numbers: { [id(0)]: ["+15555550101"], [id(1)]: ["+15555550102"], [id(2)]: ["+15555550103"] } });
+        let opened = 0;
+        (t.env.scan as Record<string, unknown>).waitForMessageSwap = async (_d: unknown, _b: unknown, io?: { reportEmpty?: boolean }) =>
+          (io && io.reportEmpty ? (++opened === 1 ? true : "empty") : true);
+        await job.runJob(JOB, t.env);
+        const fin = t.calls.find(([, p]) => p.endsWith("/finish"))![2] as { phoneDisconnected?: boolean; noMessagesYet: number; notReached: Array<{ reason: string }> };
+        expect(fin.phoneDisconnected).toBe(true);
+        expect(fin.noMessagesYet).toBe(0);
+        expect(fin.notReached.filter((e) => e.reason === "phone_not_connected")).toHaveLength(2);
+        const last = t.shown[t.shown.length - 1] as [string, boolean, { notFullyLine?: string }];
+        expect(last[2].notFullyLine).toBe("2 chats not fully synced. Sync again to finish.");
+      });
+
+      it("a connection banner seen during the run: phoneDisconnected sent, even with no empty chat", async () => {
+        const t = cacheEnv({ rows: ROWS, numbers: { [id(0)]: ["+15555550101"] } });
+        let checks = 0;
+        (t.env.scan as Record<string, unknown>).connectionBanner = () => (++checks === 2 ? { kind: "connecting", titleLength: 10 } : null);
+        await job.runJob(JOB, t.env);
+        const fin = t.calls.find(([, p]) => p.endsWith("/finish"))![2] as { phoneDisconnected?: boolean };
+        expect(fin.phoneDisconnected).toBe(true);
+      });
+
       it("two empty chats beside a saved one: Done as before (the phone was connected)", async () => {
         const t = cacheEnv({ rows: ROWS, numbers: { [id(0)]: ["+15555550101"], [id(1)]: ["+15555550102"], [id(2)]: ["+15555550103"] } });
         let opened = 0;
@@ -401,7 +428,10 @@ describe("runJob: a cache Sync", () => {
           (io && io.reportEmpty ? (++opened <= 2 ? "empty" : true) : true);
         const out = await job.runJob(JOB, t.env);
         expect(out.outcome).not.toBe("phone_unreachable");
-        expect(t.calls.some(([, p]) => p.endsWith("/finish"))).toBe(true);
+        const fin = t.calls.find(([, p]) => p.endsWith("/finish"))![2] as { phoneDisconnected?: boolean; noMessagesYet: number };
+        // Empty chats BEFORE the saved one: not a trailing run — genuinely empty.
+        expect(fin.phoneDisconnected).toBe(false);
+        expect(fin.noMessagesYet).toBe(2);
       });
 
       it("one empty chat beside a saved one: Done as before", async () => {

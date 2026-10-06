@@ -348,6 +348,8 @@ export interface CacheEndSnapshot {
   createdAt?: string;
   jobId: string;
   progress?: { notChecked?: number; imported?: number; matched?: number; noMessagesYet?: number };
+  /** SR: the page says the phone was gone at some point in the run. */
+  phoneDisconnected?: boolean;
   notReached?: Array<{ reason: string; name?: string }>;
   notReachedMore?: number;
   /** L2: how the page's list scan stopped (since | stable | max_items | max_time). */
@@ -374,6 +376,15 @@ export function isNormalListStop(listStop: string | null | undefined): boolean {
  * NOTHING: it must not mark coverage, advance "last synced", or settle a
  * pending media read / an earlier failed run.
  */
+/**
+ * SR (on f9dec047c): a run that must not count as a complete read — it read
+ * nothing, or the phone was gone partway (phoneDisconnected). Neither moves
+ * "last synced" nor marks coverage.
+ */
+export function cacheRunNotComplete(snapshot: CacheEndSnapshot): boolean {
+  return snapshot.phoneDisconnected === true || cacheRunReadNothing(snapshot);
+}
+
 export function cacheRunReadNothing(snapshot: CacheEndSnapshot): boolean {
   const p = snapshot.progress ?? {};
   const empty = p.noMessagesYet ?? 0;
@@ -404,7 +415,7 @@ export function backfillCoverageFrom(run: { floorISO: string; fullRead: boolean;
  */
 export function cacheRunReachedFloor(fullRead: boolean, snapshot: CacheEndSnapshot): boolean {
   if (!fullRead || snapshot.state !== "finished") return false;
-  if (cacheRunReadNothing(snapshot)) return false;
+  if (cacheRunNotComplete(snapshot)) return false;
   if (!isNormalListStop(snapshot.listStop)) return false;
   if ((snapshot.progress?.notChecked ?? 0) > 0) return false;
   if ((snapshot.notReachedMore ?? 0) > 0) return false;
@@ -450,7 +461,7 @@ export async function handleCacheJobEnded(
   // next time (since = this − 1 day anyway). Only a fully finished run.
   // Live: a run that read nothing does not move "last synced" (the next
   // Sync would skip chats active before it).
-  if (!failed && !cacheRunReadNothing(ended.snapshot)) {
+  if (!failed && !cacheRunNotComplete(ended.snapshot)) {
     deps.saveFinishedAt(userId, ended.snapshot.createdAt ?? new Date(deps.now()).toISOString());
   }
   try {

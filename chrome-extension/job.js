@@ -139,7 +139,7 @@
   /** Circuit breaker: this many chats IN A ROW refused by Keepr end the run. */
   var KEEPR_ERROR_CHATS_MAX = 3;
   /** Reasons a chat was not read because something failed (not a choice / an empty chat). */
-  var FAILED_REASONS = { error: true, not_opened: true, messages_not_loaded: true, history_not_settled: true, details_timeout: true };
+  var FAILED_REASONS = { error: true, not_opened: true, messages_not_loaded: true, history_not_settled: true, details_timeout: true, phone_not_connected: true };
 
   /** The kind of transport failure a bridge reply is, or null. 410 (over / cancelled) is not one. */
   function transportKind(reply) {
@@ -336,6 +336,7 @@
     business: "a named sender with no phone number (e.g. a business)",
     messages_not_loaded: "messages did not load",
     history_not_settled: "older messages did not finish loading — sync again later",
+    phone_not_connected: "messages did not load — your phone wasn't connected",
     no_messages: "no messages found",
     error: "failed",
     images_failed: "images not imported",
@@ -1413,6 +1414,9 @@
     };
     /** Messages already sent per chat: a retried chat is not counted twice. */
     var sentMessages = {};
+    /** SR: chats that came back empty (in order), and the run of them since the last saved chat. */
+    var emptyChats = [];
+    var trailingEmpty = [];
     /**
      * Live (founder, 0.3.80): a chat's oldest message sent this run (ms), by
      * conversation. A retry that reads LESS far back than an earlier attempt
@@ -1536,6 +1540,9 @@
           // BACKLOG-3664: a chat with no messages yet (e.g. a new group):
           // counted quietly, never "not fully imported".
           totals.noMessagesYet += 1;
+          // SR: kept in order — a trailing run of these may be the phone gone.
+          emptyChats.push(conv);
+          trailingEmpty.push(conv);
           log("  no messages yet");
           continue;
         }
@@ -1685,6 +1692,8 @@
         chatTiming.commit = clock() - commitAt;
         if (!sent.ok) throw keeprReplyError(sent, "Keepr could not save this chat.");
         keeprErrorChats = 0;
+        // A chat with messages: the phone was there up to here.
+        trailingEmpty = [];
         var prevSent = sentMessages[conv.conversationId];
         if (prevSent === undefined) totals.chats += 1;
         totals.messages += Math.max(0, messages.length - (prevSent || 0));
@@ -1835,6 +1844,23 @@
     if (extraTime.usedMs > 0) {
       log("extra time used: " + Math.ceil(extraTime.usedMs / 60000) + " min of " + Math.round(extraTime.poolMs / 60000));
     }
+    // SR (on f9dec047c): the phone gone PARTWAY — some chats saved, then the
+    // rest came back empty (the banner not recognised) — must not finish as
+    // complete. A trailing run of ≥ EMPTY_RUN_MIN_CHATS empty chats, or a
+    // connection banner seen at any point: those empty chats are "not fully
+    // synced" (the Done line), and Keepr is told (phoneDisconnected) not to
+    // move "last synced" or the coverage. One genuinely empty chat stays
+    // "no messages yet". (All empty with nothing saved: the backstop below.)
+    var bannerSeen = connection.phone_unreachable.count + connection.connecting.count + connection.connection_banner.count + connection.pc_offline.count > 0;
+    var phoneDisconnected = totals.chats > 0 && (trailingEmpty.length >= EMPTY_RUN_MIN_CHATS || bannerSeen);
+    if (phoneDisconnected) {
+      var unsure = bannerSeen ? emptyChats : trailingEmpty;
+      log("phone gone partway: " + unsure.length + " empty chats not fully synced" + (bannerSeen ? " (a connection banner was seen)" : ""));
+      for (var ue = 0; ue < unsure.length; ue++) {
+        totals.noMessagesYet -= 1;
+        leaveOut(unsure[ue], "phone_not_connected");
+      }
+    }
     // 5. Done: Keepr brings itself forward. Every chat left out (or imported
     // in part) is named here and on the page — never a silent skip.
     var reported = notReached.slice(0, NOT_REACHED_CAP);
@@ -1891,6 +1917,9 @@
       hidden: hiddenNow,
       // L2: how the list scan stopped (Keepr records the coverage only for a normal stop).
       listStop: collected.stopReason,
+      // SR: the phone was gone at some point — Keepr moves neither "last
+      // synced" nor the coverage.
+      phoneDisconnected: phoneDisconnected,
       // BACKLOG-3671 P2: the run's numbers (counts, ms, Chrome's version only).
       metrics: runMetrics(),
     });

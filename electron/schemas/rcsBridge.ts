@@ -54,6 +54,7 @@ export const RcsBridgeBodySchemas = {
     notText: count,
     noMessagesYet: count,
     listStop: text(100),
+    phoneDisconnected: z.boolean().nullish(),
     media: anyObject,
     hidden: anyObject,
     metrics: anyObject,

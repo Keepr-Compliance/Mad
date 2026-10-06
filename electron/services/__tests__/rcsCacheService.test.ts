@@ -191,6 +191,17 @@ describe("when a cache Sync ends", () => {
   // every chat it checked came back empty read NOTHING — "last synced" must
   // not move (the next Sync would skip chats active before it). Mutation:
   // the time saved anyway → red.
+  // SR (on f9dec047c): the phone gone partway — the page says so; the run
+  // moves neither "last synced" nor the coverage. Mutation: the flag ignored → red.
+  it("finished with phoneDisconnected: no time saved, never \"reached\"", async () => {
+    const d = deps();
+    const snapshot = { state: "finished", jobId: "job-1", listStop: "stable", phoneDisconnected: true, progress: { imported: 4, matched: 6, noMessagesYet: 0 } };
+    await handleCacheJobEnded({ kind: "cache", userId: "u-1", snapshot, detectedOwnNumber: null }, d.deps);
+    expect(d.calls.some((c) => c.startsWith("finished "))).toBe(false);
+    expect(d.calls).toContain("commit job-1 u-1"); // the chats it did read are kept
+    expect(cacheRunReachedFloor(true, snapshot)).toBe(false);
+  });
+
   it("finished but read nothing (every chat empty, 0 imported): no time saved", async () => {
     const d = deps();
     await handleCacheJobEnded(

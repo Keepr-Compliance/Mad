@@ -149,6 +149,8 @@ export interface RcsJobSnapshot {
   saved?: RcsCacheSaved | null;
   /** L2: how the page's list scan stopped (from /finish). */
   listStop?: string;
+  /** SR: the phone was gone at some point (the page said so at /finish). */
+  phoneDisconnected?: boolean;
 }
 
 /** What a cache job's commit saved: the counts the done screens show. */
@@ -249,6 +251,8 @@ export class RcsImportJob {
   saved?: RcsCacheSaved | null;
   /** L2: how the page's list scan stopped (since | stable | max_items | max_time), from /finish. */
   listStop: string | null = null;
+  /** SR: the page says the phone was gone at some point in this run. */
+  phoneDisconnected = false;
   /** BACKLOG-3661: what is syncing, for "Syncing: <label>". */
   label: string | null = null;
   /** BACKLOG-3658: the job kind; the user it was started for (rows go to that user only). */
@@ -301,6 +305,7 @@ export class RcsImportJob {
         : {}),
       ...(this.saved !== undefined ? { saved: this.saved ? { ...this.saved } : null } : {}),
       ...(this.listStop ? { listStop: this.listStop } : {}),
+      ...(this.phoneDisconnected ? { phoneDisconnected: true } : {}),
       ...(this.endedBy ? { endedBy: this.endedBy } : {}),
     };
   }
@@ -442,8 +447,10 @@ export class RcsImportJob {
     notText?: number,
     noMessagesYet?: number,
     listStop?: string,
+    phoneDisconnected?: boolean,
   ): void {
     if (!this.isActive) return;
+    if (phoneDisconnected === true) this.phoneDisconnected = true;
     if (typeof listStop === "string" && /^(since|stable|max_items|max_time)$/.test(listStop)) this.listStop = listStop;
     if (typeof noMessagesYet === "number" && Number.isFinite(noMessagesYet) && noMessagesYet >= 0) {
       this.progress.noMessagesYet = Math.min(Math.floor(noMessagesYet), 100_000);

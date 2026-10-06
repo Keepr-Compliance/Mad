@@ -136,6 +136,21 @@ describe("parseNotReached (the page's /finish list)", () => {
     job.finish(jobs.nowMs(), { entries: [{ name: "Chat A", reason: "no_numbers" }], more: 0 });
     expect(job.snapshot()).toMatchObject({ state: "finished", notReached: [{ name: "Chat A", reason: "no_numbers" }], notReachedMore: 0 });
   });
+
+  // SR (on f9dec047c): the page's "phone gone partway" reaches the end
+  // snapshot (Keepr then moves neither "last synced" nor coverage). Absent →
+  // not set. Mutation: not kept on the snapshot → red.
+  it("finish() keeps phoneDisconnected on the snapshot (only when true)", () => {
+    const { jobs } = registry();
+    const a = jobs.createCache("u-1", SINCE);
+    a.claim(jobs.nowMs());
+    a.finish(jobs.nowMs(), undefined, undefined, undefined, undefined, "stable", true);
+    expect(a.snapshot()).toMatchObject({ state: "finished", phoneDisconnected: true });
+    const b = jobs.createCache("u-1", SINCE);
+    b.claim(jobs.nowMs());
+    b.finish(jobs.nowMs(), undefined, undefined, undefined, undefined, "stable", false);
+    expect(b.snapshot()).not.toHaveProperty("phoneDisconnected");
+  });
 });
 
 // BACKLOG-3642. Mutations: unsorted key, or a key that keeps unnormalized
