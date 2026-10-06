@@ -359,6 +359,8 @@ async function openMessages() {
 const LINK_WINDOW_MIN_INTERVAL_MS = 2000;
 /** The link window: the popup page, told to start the link itself (no copy of the page). */
 const LINK_WINDOW_PAGE = "popup.html?autolink=1";
+/** The same window when already linked: the popup's linked view (no link started). */
+const LINKED_VIEW_PAGE = "popup.html";
 const LINK_WINDOW_SIZE = { width: 380, height: 380 };
 let linkWindowId = null;
 let linkWindowAskedAt = 0;
@@ -427,7 +429,10 @@ async function openLinkWindow(now, screen) {
       linkWindowId = null; // closed meanwhile
     }
   }
-  const base = { url: chrome.runtime.getURL(LINK_WINDOW_PAGE), type: "popup", width: LINK_WINDOW_SIZE.width, height: LINK_WINDOW_SIZE.height, focused: true };
+  // SR: already linked (a link key held) → the popup's linked view, never a
+  // new link session (popup.html without autolink).
+  const page = (await currentPairing()) ? LINKED_VIEW_PAGE : LINK_WINDOW_PAGE;
+  const base = { url: chrome.runtime.getURL(page), type: "popup", width: LINK_WINDOW_SIZE.width, height: LINK_WINDOW_SIZE.height, focused: true };
   const placement = linkWindowPlacement(screen);
   const tries = Object.keys(placement).length > 0 ? [{ ...base, ...placement }, base] : [base];
   // Chrome refusing the bounds never stops the window: once more, unplaced.
@@ -622,28 +627,46 @@ function askTab(tabId, message) {
  * run the job there (a second tab lands on the sign-in page — observed), bring
  * it forward and close the new tab. Otherwise the new tab runs it.
  */
-async function routeJob(jobId, senderTab) {
-  if (!senderTab || senderTab.id === undefined) return { handedOff: false };
+/**
+ * SR: the other open Messages tabs that are SIGNED IN (each with its ping
+ * answer), in tab order — one helper for routeJob and routeLink.
+ */
+async function signedInMessagesTabs(excludeId) {
   let tabs = [];
   try {
     tabs = await chrome.tabs.query({ url: "https://messages.google.com/web/*" });
   } catch (_err) {
     tabs = [];
   }
-  for (const tab of tabs) {
-    if (tab.id === undefined || tab.id === senderTab.id) continue;
+  const out = [];
+  for (const tab of tabs || []) {
+    if (tab.id === undefined || tab.id === excludeId) continue;
     const state = await askTab(tab.id, { type: "keepr-ping" });
+    if (state && state.signedIn) out.push({ tab, state });
+  }
+  return out;
+}
+
+/** Bring a tab and its window to the front; close the tab that asked. */
+async function moveToTab(tab, senderTab) {
+  try {
+    await chrome.tabs.update(tab.id, { active: true });
+    if (tab.windowId !== undefined) await chrome.windows.update(tab.windowId, { focused: true });
+    await chrome.tabs.remove(senderTab.id);
+  } catch (_err) {
+    // The other tab is in front either way.
+  }
+}
+
+async function routeJob(jobId, senderTab) {
+  if (!senderTab || senderTab.id === undefined) return { handedOff: false };
+  for (const { tab, state } of await signedInMessagesTabs(senderTab.id)) {
     // A tab still running another job would drop this one.
-    if (!state || !state.signedIn || state.running) continue;
+    if (state.running) continue;
     const accepted = await askTab(tab.id, { type: "keepr-run-job", jobId });
     if (!accepted || !accepted.ok) continue;
-    try {
-      await chrome.tabs.update(tab.id, { active: true });
-      if (tab.windowId !== undefined) await chrome.windows.update(tab.windowId, { focused: true });
-      await chrome.tabs.remove(senderTab.id);
-    } catch (_err) {
-      // The job is running in the other tab either way.
-    }
+    // The job is running in the other tab either way.
+    await moveToTab(tab, senderTab);
     return { handedOff: true };
   }
   return { handedOff: false };
@@ -659,27 +682,11 @@ async function routeJob(jobId, senderTab) {
  */
 async function routeLink(senderTab, screen) {
   if (!senderTab || senderTab.id === undefined) return { handedOff: false };
-  let tabs = [];
-  try {
-    tabs = await chrome.tabs.query({ url: "https://messages.google.com/web/*" });
-  } catch (_err) {
-    tabs = [];
-  }
-  for (const tab of tabs) {
-    if (tab.id === undefined || tab.id === senderTab.id) continue;
-    const state = await askTab(tab.id, { type: "keepr-ping" });
-    if (!state || !state.signedIn) continue;
-    try {
-      await chrome.tabs.update(tab.id, { active: true });
-      if (tab.windowId !== undefined) await chrome.windows.update(tab.windowId, { focused: true });
-      await chrome.tabs.remove(senderTab.id);
-    } catch (_err) {
-      // The other tab is in front either way.
-    }
-    await openLinkWindow(undefined, screen).catch(() => undefined);
-    return { handedOff: true };
-  }
-  return { handedOff: false };
+  const found = await signedInMessagesTabs(senderTab.id);
+  if (found.length === 0) return { handedOff: false };
+  await moveToTab(found[0].tab, senderTab);
+  await openLinkWindow(undefined, screen).catch(() => undefined);
+  return { handedOff: true };
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

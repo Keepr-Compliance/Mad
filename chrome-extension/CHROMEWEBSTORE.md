@@ -207,7 +207,7 @@ Also: the 128×128 icon (`icons/keepr-128.png`, 96 art + 16 padding) and a
 | 0.3.85 | A chat read back past its date floor is complete for that Sync even if the page never settled; the Done box says when chats were not fully synced. |
 | 0.3.86 | "Read past the floor" is decided by the top of the loaded history, never by one oldest date anywhere. |
 | 0.3.87 | Phone not connected: "Trying to reach your phone" recognised in more places; a run where every chat came back empty fails as "Your phone isn't connected." instead of Done. A phone gone partway (empty chats at the end, or a connection banner): those chats are not fully synced and Keepr does not move "last synced". After an update, open Google Messages tabs are reloaded so the new version runs (no new permission). The history's date-range stop uses the top of the loaded history (one misdated message never stops it early). |
-| 0.3.88 | Keepr comes forward only on "Copy code and open Keepr" (not when the code is shown). Keepr's "Open Google Messages" goes to the Messages tab already open (closing the new one) and opens the link window there; on the QR page nothing opens. |
+| 0.3.88 | Keepr comes forward only on "Copy code and open Keepr" (not when the code is shown). Keepr's "Open Google Messages" goes to the Messages tab already open (closing the new one) and opens the link window there; on the QR page nothing opens. Already linked: that window shows the linked state (no new link); the request is read once. |
 
 ## 10. Review history
 

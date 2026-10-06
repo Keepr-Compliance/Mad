@@ -10,6 +10,7 @@ export {};
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const job = require("../../chrome-extension/job.js") as {
+  withoutLinkHash: (hash: string) => string;
   handleLinkHash: (io: { toWorker: (m: { type: string }) => Promise<unknown>; sleep: (ms: number) => Promise<void>; signedIn: () => boolean }) => Promise<string>;
   LINK_HASH_RE: RegExp;
 };
@@ -36,6 +37,20 @@ describe("#keepr-link on a new Messages tab", () => {
     expect(job.LINK_HASH_RE.test("#keepr-link")).toBe(true);
     expect(job.LINK_HASH_RE.test("#a=1&keepr-link")).toBe(true);
     expect(job.LINK_HASH_RE.test("#keepr-job=00000000-0000-4000-8000-000000000000")).toBe(false); // pii-allow-uuid: invented
+  });
+
+  // SR: read once — the token is removed (history.replaceState) so a reload
+  // or a restored session never asks again. Mutations: the token kept; the
+  // replaceState call gone → red.
+  it("the hash is cleared once read: only the keepr-link token goes", () => {
+    expect(job.withoutLinkHash("#keepr-link")).toBe("");
+    expect(job.withoutLinkHash("#a=1&keepr-link")).toBe("#a=1");
+    expect(job.withoutLinkHash("#keepr-link&b=2")).toBe("#b=2");
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const src = (require("fs") as typeof import("fs")).readFileSync(require("path").join(__dirname, "..", "..", "chrome-extension", "job.js"), "utf8");
+    const at = src.indexOf("LINK_HASH_RE.test(location.hash");
+    const next = src.slice(at, at + 400);
+    expect(next).toMatch(/history\.replaceState\(history\.state, "", location\.pathname \+ location\.search \+ withoutLinkHash\(location\.hash\)\)/);
   });
 
   it("handed off to an open signed-in tab: this tab opens nothing", async () => {

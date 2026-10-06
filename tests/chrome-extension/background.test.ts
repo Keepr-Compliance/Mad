@@ -91,8 +91,8 @@ async function loadWorker(opts: { storage?: Record<string, unknown>; paired?: bo
 // chosen; the new tab not closed; no link window → red.
 describe("service worker: keepr-link-found", () => {
   const NEW_TAB = { id: EXTENSION_ID, url: "https://messages.google.com/web/conversations#keepr-link", tab: { id: 50, url: "https://messages.google.com/web/conversations#keepr-link" } };
-  async function setup(other: Array<{ id: number; windowId: number; signedIn: boolean }>) {
-    const w = await loadWorker();
+  async function setup(other: Array<{ id: number; windowId: number; signedIn: boolean }>, paired = false) {
+    const w = await loadWorker({ paired });
     const tabs = w.chromeStub.tabs as unknown as Record<string, jest.Mock>;
     tabs.query = jest.fn(async () => [{ id: 50, windowId: 1 }, ...other.map((o) => ({ id: o.id, windowId: o.windowId }))]);
     tabs.sendMessage = jest.fn((id: number, _m: unknown, cb: (r: unknown) => void) => cb({ signedIn: other.find((o) => o.id === id)?.signedIn ?? false, running: false }));
@@ -118,6 +118,34 @@ describe("service worker: keepr-link-found", () => {
     expect(tabs.update).not.toHaveBeenCalledWith(7, { active: true });
     expect(tabs.remove).toHaveBeenCalledWith(50);
     expect(created).toHaveLength(1);
+  });
+
+  // SR: already linked (a link key held) → the popup's linked view, never a
+  // new link session. Mutation: the autolink page while linked → red.
+  it("already linked: the tab comes forward and the window shows the linked view (no autolink)", async () => {
+    const { w, created } = await setup([{ id: 8, windowId: 3, signedIn: true }], true);
+    expect(await w.send({ type: "keepr-link-found", screen: {} }, NEW_TAB)).toEqual({ handedOff: true });
+    expect(created).toHaveLength(1);
+    expect((created[0] as { url: string }).url).toBe("chrome-extension://x/popup.html");
+    expect(w.fetchStub.mock.calls.some(([u]) => String(u).includes("/link/start"))).toBe(false);
+  });
+
+  it("not linked: the link window (autolink)", async () => {
+    const { w, created } = await setup([{ id: 8, windowId: 3, signedIn: true }]);
+    await w.send({ type: "keepr-link-found", screen: {} }, NEW_TAB);
+    expect((created[0] as { url: string }).url).toBe("chrome-extension://x/popup.html?autolink=1");
+  });
+
+  // SR: one helper for both routes. Mutation: a route with its own tab scan → red.
+  it("routeJob and routeLink share signedInMessagesTabs / moveToTab", () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const src = (require("fs") as typeof import("fs")).readFileSync(require("path").join(__dirname, "..", "..", "chrome-extension", "background.js"), "utf8");
+    for (const fn of ["routeJob", "routeLink"]) {
+      const body = src.slice(src.indexOf("async function " + fn + "("), src.indexOf("\n}\n", src.indexOf("async function " + fn + "(")));
+      expect(body).toContain("signedInMessagesTabs(senderTab.id)");
+      expect(body).toContain("moveToTab(");
+      expect(body).not.toContain("chrome.tabs.query");
+    }
   });
 
   it("no signed-in Messages tab: the new tab stays, nothing opened here", async () => {

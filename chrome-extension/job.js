@@ -24,6 +24,11 @@
   var JOB_HASH_RE = /(?:^#|&)keepr-job=([0-9a-fA-F-]{36})(?:&|$)/;
   /** Keepr's "Open Google Messages" on its link screen (see background.js routeLink). */
   var LINK_HASH_RE = /(?:^#|&)keepr-link(?:&|$)/;
+  /** The hash without the keepr-link token ("" when nothing is left). */
+  function withoutLinkHash(hash) {
+    var rest = String(hash || "").replace(/^#/, "").split("&").filter(function (p) { return p && p !== "keepr-link"; });
+    return rest.length ? "#" + rest.join("&") : "";
+  }
   /** How long this tab waits to be signed in before it opens the link window itself. */
   var LINK_SIGNED_IN_WAIT_MS = 60000;
   var LIST_ITEM = "mws-conversation-list-item";
@@ -3010,6 +3015,7 @@
 
   var api = {
     handleLinkHash: handleLinkHash,
+    withoutLinkHash: withoutLinkHash,
     LINK_HASH_RE: LINK_HASH_RE,
     bootPlan: bootPlan,
     FAILURE_LINES: FAILURE_LINES,
@@ -3711,6 +3717,10 @@
 
   (async function boot() {
     if (!hashJob && !storedJob && LINK_HASH_RE.test(location.hash || "")) {
+      // SR: read once — a reload or a restored session never asks again.
+      try {
+        history.replaceState(history.state, "", location.pathname + location.search + withoutLinkHash(location.hash));
+      } catch (_e) { /* the request still runs once */ }
       void handleLinkHash({
         toWorker: toWorker,
         sleep: function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); },
