@@ -885,6 +885,10 @@ export const transactionBridge = {
   checkExportCompleteness: (transactionId: string, userId: string) =>
     ipcRenderer.invoke("transactions:check-export-completeness", transactionId, userId),
 
+  /** BACKLOG-3663: per-source text coverage for one transaction (the Texts tab). */
+  getTextCoverage: (transactionId: string, userId: string, chosenSource: string | null) =>
+    ipcRenderer.invoke("transactions:get-text-coverage", transactionId, userId, chosenSource),
+
   /**
    * The "Update now" action: run a targeted messages import + expansion for an
    * explicit proposed start (may be unsaved). Progress streams over

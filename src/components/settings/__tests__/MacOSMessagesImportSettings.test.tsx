@@ -167,10 +167,10 @@ describe("MacOSMessagesImportSettings — effective import window label (BACKLOG
 
     renderStrict(<MacOSMessagesImportSettings userId={userId} />);
 
-    // Default UI state is 3 months + 50,000 cap, so the combined pref copy shows.
+    // Default UI state is 1.5 months + 50,000 cap, so the combined pref copy shows.
     await waitFor(() => {
       expect(
-        screen.getByText(/Importing last 3 months, up to 50,000 messages/i),
+        screen.getByText(/Importing the last 1\.5 months, up to 50,000 messages/i),
       ).toBeInTheDocument();
     });
 
@@ -211,6 +211,10 @@ describe("MacOSMessagesImportSettings — Force Re-import confirm dialog (BACKLO
     const modal = await screen.findByTestId("force-reimport-confirm-modal");
     expect(modal).toHaveTextContent(
       /Links from checklist items to their attachments are removed too\./,
+    );
+    // SR F1: the window it keeps. Mutation: line missing → red.
+    expect(screen.getByTestId("force-window-line")).toHaveTextContent(
+      "Keeps texts from the last 1.5 months; older texts not in an audit period are removed.",
     );
   });
 
@@ -584,7 +588,7 @@ describe("MacOSMessagesImportSettings — disk space guard (BACKLOG-2743)", () =
     await waitFor(() =>
       expect(window.api.messages.getImportCount).toHaveBeenCalledWith(
         userId,
-        expect.objectContaining({ lookbackMonths: 3 }),
+        expect.objectContaining({ lookbackMonths: 1.5 }),
       ),
     );
 

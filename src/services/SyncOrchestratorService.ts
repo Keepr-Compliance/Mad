@@ -22,9 +22,12 @@ import logger from '../utils/logger';
 // re-exported by the IPC contract). Type-only is the only safe direction across
 // the renderer-main boundary.
 import type { AttachmentsRefusedForSpace } from '@electron/types/ipc/window-api-messages';
+import { macMessagesSyncOn } from './importSourcePolicy';
 
 export type SyncType = 'contacts' | 'emails' | 'messages' | 'iphone'
-  | 'reindex' | 'backup' | 'restore' | 'ccpa-export';
+  | 'reindex' | 'backup' | 'restore' | 'ccpa-export'
+  // BACKLOG-3658: the Google Messages cache Sync (an external sync, like iPhone).
+  | 'google-messages';
 
 /**
  * BACKLOG-2794 added `'skipped'`: the run reached this leg and did not run it,
@@ -121,6 +124,11 @@ export interface SyncItem {
   indeterminate?: boolean;
   /** Optional warning message (e.g., message cap exceeded) */
   warning?: string;
+  /**
+   * BACKLOG-3658: an external sync's own result line for the completion card
+   * (e.g. the Google Messages saved counts). Counts only.
+   */
+  summary?: string;
   /**
    * BACKLOG-2329: actual number of rows the sync imported (e.g. messages).
    * Propagated from the sync function's structured result so the settings UI
@@ -296,11 +304,11 @@ class SyncOrchestratorServiceClass {
   }
 
   /**
-   * Read the import source preference fresh from DB.
-   * Returns 'macos-native' (default) or 'iphone-sync'.
+   * Read the import source preference fresh from DB (the stored value, as is;
+   * see importSourcePolicy for how it is acted on).
    * TASK-1979: Read at sync time to avoid stale cached values.
    */
-  private async getImportSource(userId: string): Promise<ImportSource> {
+  private async getImportSource(userId: string): Promise<ImportSource | string> {
     try {
       const result = await window.api.preferences.get(userId);
       const prefs = result.preferences as UserPreferences | undefined;
@@ -750,10 +758,11 @@ class SyncOrchestratorServiceClass {
       this.registerSyncFunction('messages', async (userId, onProgress, options, signal) => {
         logger.info('[SyncOrchestrator] Starting messages sync, forceReimport:', !!options?.forceReimport);
 
-        // TASK-1979: Skip macOS Messages import when iphone-sync is selected
-        // BACKLOG-1467: Also skip when android-companion is selected
+        // TASK-1979 / BACKLOG-1467: skip Mac Messages when another known source
+        // (iPhone Sync, Android) is selected. BACKLOG-3749: an unknown value is
+        // the Mac default — it never turns Mac Messages off.
         const importSource = await this.getImportSource(userId);
-        if (importSource !== 'macos-native') {
+        if (!macMessagesSyncOn(importSource)) {
           logger.info(`[SyncOrchestrator] Skipping macOS Messages (import source: ${importSource})`);
           onProgress(100);
           return;
@@ -1192,7 +1201,7 @@ class SyncOrchestratorServiceClass {
   /**
    * Update progress/phase for an external sync.
    */
-  updateExternalSync(type: SyncType, updates: Partial<Pick<SyncItem, 'progress' | 'phase'>>): void {
+  updateExternalSync(type: SyncType, updates: Partial<Pick<SyncItem, 'progress' | 'phase' | 'indeterminate'>>): void {
     const existing = this.state.queue.find((item) => item.type === type && item.external);
     if (!existing) return;
 
@@ -1203,7 +1212,7 @@ class SyncOrchestratorServiceClass {
    * Mark an external sync as complete or error.
    * After completion, recalculates isRunning from remaining queue items.
    */
-  completeExternalSync(type: SyncType, result: { status: 'complete' | 'error'; error?: string }): void {
+  completeExternalSync(type: SyncType, result: { status: 'complete' | 'error'; error?: string; summary?: string }): void {
     const existing = this.state.queue.find((item) => item.type === type && item.external);
     if (!existing) return;
 
@@ -1214,6 +1223,7 @@ class SyncOrchestratorServiceClass {
       progress: result.status === 'complete' ? 100 : existing.progress,
       error: result.error,
       phase: undefined,
+      ...(result.summary ? { summary: result.summary } : {}),
     });
 
     // Recalculate isRunning: true if any item is still running

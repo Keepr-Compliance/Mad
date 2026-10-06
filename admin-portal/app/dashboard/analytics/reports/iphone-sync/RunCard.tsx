@@ -37,7 +37,7 @@ const OUTCOME_CHIP: Record<OutcomeTone, string> = {
   neutral: 'text-gray-700 bg-gray-50 border-gray-200',
 };
 
-export function OutcomeChip({ run }: { run: SyncRun }) {
+export function OutcomeChip({ run }: { run: Pick<SyncRun, 'outcome' | 'outcomeTone'> }) {
   const Icon = OUTCOME_ICON[run.outcomeTone];
   return (
     <span

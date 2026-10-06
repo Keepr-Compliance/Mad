@@ -12,6 +12,7 @@
 import supabaseService from "../services/supabaseService";
 import logService from "../services/logService";
 import { EMAIL_CACHE_DURATION_MONTHS_DEFAULT } from "../constants";
+import { lookbackStartMs } from "./lookbackWindow";
 import {
   BACKEND_DERIVED_DEFAULT_KEYS,
   isContactSourceKey,
@@ -248,7 +249,7 @@ export async function isContactSourceEnabled(
  *   2. `emailSync.lookbackMonths` — the pre-TASK-2072 name for the same
  *      setting. No writer produces it any more; it survives only in the stored
  *      preferences of users who set the value before the rename.
- *   3. `EMAIL_CACHE_DURATION_MONTHS_DEFAULT` (3).
+ *   3. `EMAIL_CACHE_DURATION_MONTHS_DEFAULT` (1.5).
  *
  * THE DEFECT THIS CLOSES: the Settings screen has honoured the legacy key
  * since TASK-2072 (`EmailSettings.tsx:40-44`, the `??` fallback) while this
@@ -361,12 +362,35 @@ export async function isShadowDeltaSyncEnabled(userId: string): Promise<boolean>
 }
 
 /**
+ * BACKLOG-3670 C1 (founder decision b): are people found in Google Messages
+ * texts offered? The Settings → Contacts → Auto-discover → Messages / SMS
+ * switch decides; with NO stored value it is ON for a user whose import
+ * source is Android: Google Messages, off otherwise. An explicit off stays off.
+ * Pure, so both defaults are tested apart from the read.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- matches getPreferences
+export function resolveTextPeopleEnabled(preferences: Record<string, any> | null | undefined): boolean {
+  const stored = preferences?.contactSources?.inferred?.messages;
+  if (typeof stored === "boolean") return stored;
+  return preferences?.messages?.source === "android-messages-web";
+}
+
+/** BACKLOG-3670 C1: the read; a failed or timed-out read → off. */
+export async function isTextPeopleEnabled(userId: string): Promise<boolean> {
+  try {
+    return resolveTextPeopleEnabled(await readPreferences(userId));
+  } catch {
+    return false;
+  }
+}
+
+/**
  * BACKLOG-1361: Compute the email cache since-date based on the user's preference.
  *
  * @param durationMonths - Number of months to look back
  * @returns Date representing the earliest email date to fetch
  */
-export function computeEmailCacheSinceDate(durationMonths: number): Date {
-  // Approximate: 30 days per month is sufficient for cache window purposes
-  return new Date(Date.now() - durationMonths * 30 * 24 * 60 * 60 * 1000);
+export function computeEmailCacheSinceDate(durationMonths: number, nowMs: number = Date.now()): Date {
+  // The one months→days rule for every window (utils/lookbackWindow): 1.5 months = 46 days.
+  return new Date(lookbackStartMs(durationMonths, nowMs));
 }

@@ -227,3 +227,49 @@ describe("BACKLOG-2486 — iPhone Contacts has a switch of its own", () => {
     expect(screen.getByLabelText(IPHONE_SWITCH)).toBeInTheDocument();
   });
 });
+
+// BACKLOG-3670 C1 (founder decision b): the Messages / SMS auto-discover
+// switch shows ON when unset for an Android: Google Messages user, off for
+// other sources; an explicit off stays off. Mutation: the default not tied to
+// the import source → red.
+describe("Messages / SMS auto-discover default (BACKLOG-3670 C1)", () => {
+  function renderWith(preferences: Record<string, unknown>, source: "android-messages-web" | "iphone-sync") {
+    Object.defineProperty(window, "api", {
+      value: {
+        ...originalApi,
+        system: { ...originalApi?.system, platform: "win32" },
+        contacts: {
+          getExternalSyncStatus: jest.fn().mockResolvedValue({ success: true, lastSyncAt: null, contactCount: 0 }),
+          getSourceStats: jest.fn().mockResolvedValue({ success: true, stats: {} }),
+        },
+      },
+      writable: true,
+      configurable: true,
+    });
+    return render(
+      <PlatformProvider>
+        <ContactsSettings
+          userId="user-1"
+          initialPreferences={preferences as never}
+          isMicrosoftConnected={true}
+          isGoogleConnected={false}
+          messagesImportSource={source}
+        />
+      </PlatformProvider>,
+    );
+  }
+  const messagesSwitch = () => screen.getByRole("switch", { name: "Messages SMS auto-discover" });
+
+  it("unset: on for Android: Google Messages, off for iPhone Sync", async () => {
+    const view = renderWith(prefs({}), "android-messages-web");
+    expect(await screen.findByRole("switch", { name: "Messages SMS auto-discover" })).toHaveAttribute("aria-checked", "true");
+    view.unmount();
+    renderWith(prefs({}), "iphone-sync");
+    expect(messagesSwitch()).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("an explicit off stays off for Android: Google Messages", () => {
+    renderWith({ ...prefs({}), contactSources: { direct: {}, inferred: { messages: false } } }, "android-messages-web");
+    expect(messagesSwitch()).toHaveAttribute("aria-checked", "false");
+  });
+});

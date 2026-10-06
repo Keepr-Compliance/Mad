@@ -13,6 +13,7 @@ import {
   type SqlFragment,
 } from "../db/macosMessageWindowSql";
 import path from "path";
+import { lookbackStartMs } from "../../utils/lookbackWindow";
 import fs from "fs";
 import cliProgress from "cli-progress";
 import type { Database as DatabaseType } from "better-sqlite3";
@@ -55,8 +56,12 @@ const NANOS_PER_MS = 1_000_000;
  * independent literal `3`s inside `messageImportHandlers.ts` (the import handler
  * and the effective-window label handler). Two copies of a default is how the
  * import and its own label drift apart.
+ *
+ * Founder (2026-10-02): 1.5 months for every message source (was 3). Only
+ * FUTURE imports read it; nothing already imported is removed, and a deal's
+ * audit period still widens the window.
  */
-export const DEFAULT_LOOKBACK_MONTHS = 3;
+export const DEFAULT_LOOKBACK_MONTHS = 1.5;
 
 /**
  * BACKLOG-2561: Resolve the stored `lookbackMonths` preference, distinguishing
@@ -136,8 +141,8 @@ export function computeImportCutoffNano(
   }
 
   if (filters?.lookbackMonths && filters.lookbackMonths > 0) {
-    const cutoffDate = new Date(now.getTime());
-    cutoffDate.setMonth(cutoffDate.getMonth() - filters.lookbackMonths);
+    // One months→days rule (utils/lookbackWindow): setMonth truncated 1.5 to 1.
+    const cutoffDate = new Date(lookbackStartMs(filters.lookbackMonths, now.getTime()));
     cutoffs.push((cutoffDate.getTime() - MAC_EPOCH) * NANOS_PER_MS);
   }
 
@@ -217,8 +222,7 @@ export function computeEffectiveImportWindow(
   // it always reaches back at least as far as any audit period.
   let lookbackCutoff: Date | null = null;
   if (lookbackMonths && lookbackMonths > 0) {
-    lookbackCutoff = new Date(now.getTime());
-    lookbackCutoff.setMonth(lookbackCutoff.getMonth() - lookbackMonths);
+    lookbackCutoff = new Date(lookbackStartMs(lookbackMonths, now.getTime()));
   }
 
   const parsedAudit = auditStartISO ? new Date(auditStartISO) : null;

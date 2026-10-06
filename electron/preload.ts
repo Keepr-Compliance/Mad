@@ -59,6 +59,7 @@ import {
   failureLogBridge,
   featureGateBridge,
   checklistBridge,
+  rcsImportBridge,
   entitlementBridge,
   paymentBridge,
   paymentEventBridge,
@@ -157,6 +158,9 @@ contextBridge.exposeInMainWorld("api", {
 
   // Transaction checklists (BACKLOG-3475)
   checklists: checklistBridge,
+
+  // RCS import from the Chrome extension (BACKLOG-3619)
+  rcsImport: rcsImportBridge,
 
   // Per-transaction paywall entitlement (BACKLOG-2006a)
   entitlement: entitlementBridge,

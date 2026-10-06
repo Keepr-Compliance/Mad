@@ -30,6 +30,8 @@ import {
   unlinkedMessagesInThreadsSql,
 } from "./db/autoLinkSql";
 import logService from "./logService";
+import { exclusionAutolinkThreads, RCS_EXCLUSION_STOPS_AUTOLINK } from "./rcsExclusions";
+import { rcsExclusionHashes } from "./db/syncDbService";
 import { normalizePhone, createCommunicationReference } from "./messageMatchingService";
 import { linkMessageToTransaction } from "./db/messageDbService";
 import {
@@ -842,6 +844,9 @@ export async function autoLinkCommunicationsForContact(
     // This prevents deleted conversations from reappearing after re-sync.
     const ignoredEmailIds = await getIgnoredEmailIdsForTransaction(transactionId);
     const ignoredThreadIds = await getIgnoredThreadIdsForTransaction(transactionId);
+    // BACKLOG-3658 P3c (pending founder decision, RCS_EXCLUSION_STOPS_AUTOLINK,
+    // default off): chats switched off in Google Messages stop auto-linking too.
+    for (const t of exclusionAutolinkThreads(RCS_EXCLUSION_STOPS_AUTOLINK ? rcsExclusionHashes(userId) : [])) ignoredThreadIds.add(t);
     // BACKLOG-1560: Per-message suppression for messages without a valid thread_id
     const ignoredCommIds = await getIgnoredCommunicationIdsForTransaction(transactionId);
 

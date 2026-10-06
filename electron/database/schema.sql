@@ -715,6 +715,263 @@ CREATE TABLE IF NOT EXISTS message_import_state (
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
 );
 
+-- BACKLOG-3658: Google Messages for Web cache state, per user, on THIS device.
+-- opted_in_at: the user agreed to keep a local copy of recent chats (local only).
+-- last_cache_finished_at: the last cache Sync that finished (next one starts 1 day before).
+-- own_number: the user's own number, once 3+ chats agreed (left out of chat keys).
+-- extension_*: what the extension last reported (POST /hello).
+CREATE TABLE IF NOT EXISTS rcs_cache_state (
+  user_id TEXT PRIMARY KEY,
+  opted_in_at DATETIME,
+  last_cache_finished_at DATETIME,
+  own_number TEXT,
+  extension_version TEXT,
+  extension_seen_at DATETIME,
+  paired_at DATETIME,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- BACKLOG-3658: the cache Sync's staging area. A cache job COLLECTS every
+-- chat here first; only a finished job commits it to messages (one database
+-- transaction, limited by the user's months / max-messages settings).
+-- Cancel, error, a user switch or app quit discards the job's rows. Rows
+-- exist only while a job runs (any found when a new job starts are stale).
+-- Images are staged as files under <userData>/rcs-cache-staging/<job id>/.
+CREATE TABLE IF NOT EXISTS rcs_cache_staging_chats (
+  job_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  chat_hash TEXT NOT NULL,               -- rcsChatHash of the Details numbers
+  conversation_id TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  people_json TEXT NOT NULL,             -- RcsChatPeople
+  staged_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (job_id, chat_hash)
+);
+
+CREATE TABLE IF NOT EXISTS rcs_cache_staging_messages (
+  job_id TEXT NOT NULL,
+  chat_hash TEXT NOT NULL,
+  msg_id TEXT NOT NULL,
+  sent_at TEXT NOT NULL,                 -- ISO-8601, as the page sent it
+  seq INTEGER NOT NULL,                  -- position in the chat as sent
+  message_json TEXT NOT NULL,            -- RcsIncomingMessage, reactions included
+  PRIMARY KEY (job_id, chat_hash, msg_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rcs_cache_staging_messages_sent ON rcs_cache_staging_messages(job_id, sent_at);
+
+CREATE TABLE IF NOT EXISTS rcs_cache_staging_images (
+  job_id TEXT NOT NULL,
+  chat_hash TEXT NOT NULL,
+  msg_id TEXT NOT NULL,
+  idx INTEGER NOT NULL,
+  mime_type TEXT NOT NULL,
+  byte_size INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  temp_path TEXT NOT NULL,
+  PRIMARY KEY (job_id, chat_hash, msg_id, idx)
+);
+
+-- 3671 P3 (SR 2026-10-03): per-chat commits. A cache job's own record, kept
+-- with its staging so a run a crash cut short can still save its finished
+-- chats at the next start (same user, started within 7 days): the user, the
+-- start time, the limits (JSON) and the read (JSON). Gone with the staging.
+CREATE TABLE IF NOT EXISTS rcs_cache_staging_jobs (
+  job_id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  started_at TEXT NOT NULL,              -- ISO-8601
+  limits_json TEXT NOT NULL,             -- CacheLimits (chat floors excluded)
+  read_json TEXT NOT NULL                -- { fullRead, floorISO, mediaPending }
+);
+
+-- 3671 P3: what the page said of each staged chat — its own floor (a live
+-- deal), the floor it was asked to read down to, whether it got there, and
+-- when it was read. Chat hashes only. Gone with the staging.
+CREATE TABLE IF NOT EXISTS rcs_cache_staging_chat_meta (
+  job_id TEXT NOT NULL,
+  chat_hash TEXT NOT NULL,
+  chat_floor_ms INTEGER,
+  read_floor_ms INTEGER,
+  reached_floor INTEGER NOT NULL DEFAULT 0,
+  read_at TEXT NOT NULL,                 -- ISO-8601
+  PRIMARY KEY (job_id, chat_hash)
+);
+
+-- 3671 P3: when each saved chat was last read, and whether down to its floor
+-- (chat hash, never a conversation id). "Try again" after a failed run skips
+-- a chat read at or after that run's start that reached its floor.
+CREATE TABLE IF NOT EXISTS rcs_chat_reads (
+  user_id TEXT NOT NULL,
+  chat_hash TEXT NOT NULL,
+  read_at TEXT NOT NULL,                 -- ISO-8601
+  reached_floor INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, chat_hash),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- 3671 P3: the user's last cache run FAILED (its finished chats were saved);
+-- the next run is "Try again". Cleared by a fully finished run and by Force
+-- re-import.
+CREATE TABLE IF NOT EXISTS rcs_cache_failed_run (
+  user_id TEXT PRIMARY KEY,
+  started_at TEXT NOT NULL,              -- ISO-8601
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- BACKLOG-3658 (SR S2): files a cache commit moves into message-attachments,
+-- journaled before the move and cleared once the commit is done. A
+-- row left behind (a crash) names a file the next sweep deletes when no
+-- attachments row uses it.
+CREATE TABLE IF NOT EXISTS rcs_cache_placed_files (
+  path TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL,
+  placed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- BACKLOG-3658 P3b: the user's consent to the Google Messages cache, and its
+-- options. Keepr's record is the ONLY gate for a cache Sync: a consent_version
+-- below the current one blocks the NEXT Sync (re-consent). contacts_only
+-- (feature flag, off) keeps only chats with a transaction contact;
+-- auto_delete_days (off = NULL; 90 when on) deletes chats linked to nothing
+-- whose last message is older than that. A new table (not a column) so this
+-- branch needs no versioned migration; it folds into one at merge.
+CREATE TABLE IF NOT EXISTS rcs_consent (
+  user_id TEXT PRIMARY KEY,
+  consent_at DATETIME,
+  consent_version INTEGER,
+  contacts_only INTEGER NOT NULL DEFAULT 0,
+  auto_delete_days INTEGER,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- BACKLOG-3658 P3c: chats the user switched off ("Don't sync") with the eye on
+-- their row in Google Messages. conversation_id is what the page knows; the
+-- chat's hash (gmweb2 key) is recorded at the next /match so the exclusion
+-- survives a re-pair. Nothing already imported is deleted.
+CREATE TABLE IF NOT EXISTS rcs_chat_exclusions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  chat_hash TEXT,
+  conversation_id TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rcs_chat_exclusions_conv ON rcs_chat_exclusions(user_id, conversation_id) WHERE conversation_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_rcs_chat_exclusions_hash ON rcs_chat_exclusions(user_id, chat_hash);
+
+-- Live (0.3.15): chats switched back ON. The next cache Sync reads them in
+-- full whatever their age; each row is cleared once its chat is saved.
+CREATE TABLE IF NOT EXISTS rcs_pending_full_sync (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  conversation_id TEXT,
+  chat_hash TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_rcs_pending_full_sync_user ON rcs_pending_full_sync(user_id);
+
+-- BACKLOG-3666: the extension paired with this Keepr (SPAKE2, pair-protocol.js).
+-- key_hex: the session key (HMAC-SHA256), in this encrypted database only.
+-- One pairing per user: a re-pair replaces it; sign-out removes it.
+CREATE TABLE IF NOT EXISTS rcs_extension_pairings (
+  pair_id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  key_hex TEXT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- SR M (2026-10-02): Google Messages media options, per user, on THIS device.
+-- photos_all_chats: keep photos of every chat in the window (default ON), not
+-- only chats with a transaction contact; videos_all_chats likewise (default
+-- OFF; videos are counted, not downloaded, until the video bubble is traced).
+-- last_*_seen: the bubbles the last Sync counted (the video storage estimate).
+CREATE TABLE IF NOT EXISTS rcs_media_options (
+  user_id TEXT PRIMARY KEY,
+  photos_all_chats INTEGER NOT NULL DEFAULT 1,
+  videos_all_chats INTEGER NOT NULL DEFAULT 0,
+  last_photos_seen INTEGER,
+  last_videos_seen INTEGER,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- SR M: a media toggle was switched ON: the next cache Sync reads every chat
+-- down to the floor so existing chats get their media; cleared by its commit.
+CREATE TABLE IF NOT EXISTS rcs_pending_media (
+  user_id TEXT PRIMARY KEY,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- BACKLOG-3670: people found in texts. One row per (chat, member number) of a
+-- Google Messages chat Keepr stored, with the name the phone's address book
+-- shows for that number (Details rows; a 1:1 chat's title). LOCAL ONLY: never
+-- sent anywhere. Read as contact suggestions (number = the key, never the
+-- name); cleared with the texts by both Android Force re-imports and auto-delete.
+CREATE TABLE IF NOT EXISTS rcs_chat_people (
+  user_id TEXT NOT NULL,
+  chat_hash TEXT NOT NULL,
+  number_e164 TEXT NOT NULL,
+  name TEXT,
+  last_message_at DATETIME,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, chat_hash, number_e164),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_rcs_chat_people_number ON rcs_chat_people(user_id, number_e164);
+
+-- BACKLOG-3658 L2: the last finished Google Messages cache run per user (its
+-- floor, full read or not, how the list scan stopped, whether it reached its
+-- floor, and how many chats it could not confirm complete). Backfills the
+-- coverage; drives "N chats may be incomplete". Cleared by Force re-import.
+CREATE TABLE IF NOT EXISTS rcs_cache_runs (
+  user_id TEXT PRIMARY KEY,
+  floor_iso DATETIME NOT NULL,
+  full_read INTEGER NOT NULL DEFAULT 0,
+  list_stop TEXT,
+  reached_floor INTEGER NOT NULL DEFAULT 0,
+  not_settled_chats INTEGER NOT NULL DEFAULT 0,
+  finished_at DATETIME NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+-- BACKLOG-3663: how far back each text source's import is known to reach
+-- ("covered since"), per user. General (any source); today written by the
+-- Google Messages cache — in its commit transaction, and only when that run
+-- read down to its floor. Mac reads message_import_state; iPhone and the
+-- Android companion fall back to MIN(sent_at) ("approximate") until their
+-- importers write here (follow-up).
+-- SR (2026-10-02): per-chat coverage of Google Messages, keyed by the CHAT
+-- HASH (never a conversation id). A chat on a live deal may be read further
+-- back than the months setting (to the deal's audit start); the source row
+-- below keeps its meaning (every chat down to the settings floor) and is
+-- never raised by such a chat. Written in the cache commit's transaction,
+-- only for a chat whose history reached its floor. A chat with no row is
+-- covered as far as the source row says. Cleared by Force re-import.
+CREATE TABLE IF NOT EXISTS rcs_chat_coverage (
+  user_id TEXT NOT NULL,
+  chat_hash TEXT NOT NULL,
+  covered_since DATETIME NOT NULL,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, chat_hash),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS message_source_coverage (
+  user_id TEXT NOT NULL,
+  source TEXT NOT NULL,                   -- iphone | mac | android_companion | google_messages
+  covered_since DATETIME,
+  last_sync_at DATETIME,
+  PRIMARY KEY (user_id, source),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS message_thread_names (
   user_id TEXT NOT NULL,
   thread_id TEXT NOT NULL,               -- Matches messages.thread_id ("macos-chat-<chat ROWID>")

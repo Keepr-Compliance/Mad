@@ -1,4 +1,5 @@
 import React, { useState, useCallback } from "react";
+import type { SourceCoverageGap } from "../../electron/types/auditCoverage";
 import { ResponsiveModal, MODAL_PANEL } from "./common/ResponsiveModal";
 import {
   FloatingActionBar,
@@ -12,6 +13,9 @@ import { useAuditTransaction } from "../hooks/useAuditTransaction";
 import { OfflineNotice } from "./common/OfflineNotice";
 import { useAuditCoverageCheck } from "../hooks/useAuditCoverageCheck";
 import { AuditCoveragePrompt } from "./transactionDetailsModule/components/AuditCoveragePrompt";
+import { dialogTextSource } from "./transactionDetailsModule/components/TextCoverageNotice";
+import { useImportSource } from "../hooks/useImportSource";
+import { usePlatform } from "../contexts/PlatformContext";
 import { parseMoney } from "./transactionDates/commission";
 
 // Type definitions
@@ -50,12 +54,18 @@ function AuditTransactionModal({
   // BACKLOG-2292 (Layer 1): audit-window completeness prompt at date selection.
   const { checkCoverage, runMessagesImport, importing, progress, indeterminate } =
     useAuditCoverageCheck(userId);
+  // Live (founder): the dialog names only the user's own text source.
+  const { isMacOS } = usePlatform();
+  const importSource = useImportSource(userId, false);
   const [coveragePrompt, setCoveragePrompt] = useState<{
     hasGap: boolean;
     importerAvailable: boolean;
     // BACKLOG-2305: failsafe/error notice; when present the prompt stays open with
     // re-enabled actions so the user can retry or skip (never trapped).
     notice?: string | null;
+    // BACKLOG-3663: other sources that do not reach this range (soft lines).
+    sourceGaps?: SourceCoverageGap[];
+    proposedStartISO?: string | null;
   } | null>(null);
   const originalStartedAt = editTransaction?.started_at ?? null;
 
@@ -134,6 +144,8 @@ function AuditTransactionModal({
     setCoveragePrompt({
       hasGap,
       importerAvailable: !!coverage?.messagesImporterAvailable,
+      sourceGaps: coverage?.sourceGaps ?? [],
+      proposedStartISO: proposed ?? null,
     });
   }, [
     step,
@@ -415,6 +427,9 @@ function AuditTransactionModal({
             onUpdateNow={handleUpdateNow}
             onSkip={proceedAfterPrompt}
             onCancel={() => setCoveragePrompt(null)}
+            sourceGaps={coveragePrompt.sourceGaps}
+            proposedStartISO={coveragePrompt.proposedStartISO}
+            chosenSource={dialogTextSource(importSource, isMacOS)}
           />
         )}
     </ResponsiveModal>
