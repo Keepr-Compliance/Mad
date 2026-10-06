@@ -157,7 +157,17 @@ export function InfoTooltip({ text, wide = false }: { text: React.ReactNode; wid
     };
   }, [host, show, tooltipId]);
 
-  useEffect(() => {
+  // BACKLOG-3604: this was a plain `useEffect`. Passive effects are scheduled
+  // AFTER the commit that flips `show` to true — on a separate task the
+  // browser (or, under CI's `--maxWorkers=2` CPU contention, the scheduler)
+  // is free to run late. A scroll landing in that gap found no listener yet
+  // attached, and the bubble stayed open: ~12% of runs under parallel load
+  // (measured locally, 100-run loop), matching the macOS Test & Lint flake.
+  // `useLayoutEffect` commits synchronously in the SAME pass that opens the
+  // bubble — as the sibling host/aria-describedby effects above already do —
+  // so the listener is always in place before the DOM update is visible to
+  // anything that could scroll in response to it.
+  useLayoutEffect(() => {
     if (!show) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") close();

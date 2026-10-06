@@ -6,6 +6,7 @@
  */
 
 import type { Transaction } from "@/types";
+import type { SubmissionScopeIpcResult } from "@electron/types/ipc/window-api-transactions";
 import logger from '../utils/logger';
 
 /**
@@ -323,6 +324,23 @@ export const transactionService = {
         return { success: true, data: { hidden: !!result.hidden } };
       }
       return { success: false, error: result.error };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      return { success: false, error: message };
+    }
+  },
+
+  /**
+   * BACKLOG-3683: what a submission with these (not yet saved) dates would
+   * send. `candidate` must come from `confirmedDatesUpdate` — the same
+   * payload the date save writes.
+   */
+  async getSubmissionScope(
+    transactionId: string,
+    candidate: { started_at: string | null; closed_at: string | null },
+  ): Promise<SubmissionScopeIpcResult> {
+    try {
+      return await window.api.transactions.getSubmissionScope(transactionId, candidate);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       return { success: false, error: message };

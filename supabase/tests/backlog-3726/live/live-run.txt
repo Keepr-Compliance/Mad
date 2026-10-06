@@ -1,0 +1,36 @@
+PASS reset: no live fixture objects left
+live reset: 1 pass, 0 fail
+PASS L1 remove(folder prefix) removes nothing
+PASS L1 child object still there
+PASS L2 venue has the protect_delete trigger
+PASS L2 remove(exact) removes 1 (a missing name is a no-op)
+PASS L2 object row and bytes gone
+live storage: 5 pass, 0 fail
+PASS L3a dry run row ok
+PASS L3a counts
+PASS L3a nothing removed
+PASS L3a nothing fenced
+PASS L3a run row has no path
+live dry: 5 pass, 0 fail
+PASS L3b live run row ok
+PASS L3b files removed (row's two + orphan)
+PASS L3b stalled row deleted
+PASS L3b submitted submission and its file untouched
+PASS L3b an upload created 3 h ago that added a file 10 min ago is not fenced and keeps its file
+live live: 5 pass, 0 fail
+PASS L4 live claim returned in 53 ms while finalize held the lock
+PASS L4 the in-flight row was not fenced or listed
+PASS L4 finalize committed; row submitted, not fenced
+live race: 3 pass, 0 fail
+PASS L5 wrong / missing secret -> 401
+PASS L5 no run row written
+live badsecret: 2 pass, 0 fail
+PASS L3c run of >= 8 s finished and recorded
+INFO pg_net response for the long run: 200|false|
+PASS L3c pg_net got the 200 (no timeout at 150 s)
+live delay: 2 pass, 0 fail
+MUTATION APPLIED: submission_sweep_invoke timeout_milliseconds 150000 -> 5000 (live venue)
+INFO with timeout 5000: pg_net response null|null|Timeout of 5000 ms reached. Total time: 5002.525000 ms (DNS time: 0.016000 ms, TCP/SSL handshake time: -0.016000 ms, HTTP Request/Response time: 5002.453000 ms); run row {"id":"<id>","mode":"live","outcome":"ok","counts":{"fenced":1,"rows_kept":0,"would_fence":0,"rows_deleted":1,"remove_errors":0,"stalled_listed":1,"objects_removed":1,"orphans_removed":0,"abandoned_listed":0,"objects_targeted":1,"orphans_targeted":0,"referenced_as_parent":0,"unreferenced_in_live_submissions":0},"secs":8.015832} running=0
+PASS L3d pg_net reports a timeout at 5 s
+live timeout: 1 pass, 0 fail
+live run exit 0

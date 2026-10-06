@@ -57,6 +57,18 @@ function canEditChecklistTemplates(orgId: unknown): boolean {
   });
 }
 /**
+ * can_create_own_checklist_templates, transcribed from
+ * supabase/migrations/20261001054306_backlog_3618_agent_checklist_templates.sql
+ * §2: the caller is a member of p_org_id (any role) AND the feature is
+ * allowed (taken as ON, same convention as above). BACKLOG-3618 deliberately
+ * admits brokerage agents to the Checklists page through this function.
+ */
+function canCreateOwnChecklistTemplates(orgId: unknown): boolean {
+  return (mockEmulator.state.rows.organization_members ?? []).some(
+    (m) => m.organization_id === orgId && m.user_id === FIXTURE_USER_ID
+  );
+}
+/**
  * can_review_submission, transcribed from
  * supabase/migrations/20260925073000_backlog_3477_submission_checklist_review.sql
  * §3: the caller is a member of p_org_id with role broker / admin / it_admin.
@@ -74,6 +86,8 @@ function canReviewSubmission(orgId: unknown): boolean {
 const mockRpc = jest.fn(async (name: string, args?: Record<string, unknown>) =>
   name === 'can_edit_checklist_templates'
     ? { data: canEditChecklistTemplates(args?.p_org_id), error: null }
+    : name === 'can_create_own_checklist_templates'
+      ? { data: canCreateOwnChecklistTemplates(args?.p_org_id), error: null }
     : name === 'can_review_submission'
       ? { data: canReviewSubmission(args?.p_org_id), error: null }
       : { data: null, error: null }
@@ -160,6 +174,10 @@ const INVITE = pendingInvite('invitee-3080@fixture.example.test', 'agent');
 const TEMPLATE_ID = '00000000-0000-4000-8000-000000308020'; // pii-allow-uuid: invented fixture id
 /** A checklist template in the personal organization, for the admitted-owner control only (BACKLOG-3535). */
 const PERSONAL_TEMPLATE_ID = '00000000-0000-4000-8000-000000353520'; // pii-allow-uuid: invented fixture id
+/** BACKLOG-3618: the fixture user's OWN template in the brokerage. */
+const OWN_TEMPLATE_ID = '00000000-0000-4000-8000-000000361801'; // pii-allow-uuid: invented fixture id
+/** BACKLOG-3618: another member's own template in the brokerage (RLS hides it; the page check must too). */
+const PEER_TEMPLATE_ID = '00000000-0000-4000-8000-000000361802'; // pii-allow-uuid: invented fixture id
 
 /** BACKLOG-3080 (My Transactions): the fixture user's OWN submission in the brokerage. */
 const OWN_SUBMISSION_ID = '00000000-0000-4000-8000-000000308031'; // pii-allow-uuid: invented fixture id
@@ -192,6 +210,34 @@ function given(memberships: readonly Row[]): void {
           archived_by: null,
           archived_at: null,
           updated_at: '2026-09-01T00:00:00Z',
+          owner_user_id: null,
+          include_in_submission: true,
+          checklist_template_items: [],
+        },
+        {
+          id: OWN_TEMPLATE_ID,
+          organization_id: FIXTURE_BROKERAGE_ORG_ID,
+          name: 'Fixture own template',
+          created_by: null,
+          updated_by: null,
+          archived_by: null,
+          archived_at: null,
+          updated_at: '2026-09-01T00:00:00Z',
+          owner_user_id: FIXTURE_USER_ID,
+          include_in_submission: true,
+          checklist_template_items: [],
+        },
+        {
+          id: PEER_TEMPLATE_ID,
+          organization_id: FIXTURE_BROKERAGE_ORG_ID,
+          name: 'Fixture peer template',
+          created_by: null,
+          updated_by: null,
+          archived_by: null,
+          archived_at: null,
+          updated_at: '2026-09-01T00:00:00Z',
+          owner_user_id: FIXTURE_OTHER_USER_ID,
+          include_in_submission: true,
           checklist_template_items: [],
         },
         {
@@ -203,6 +249,8 @@ function given(memberships: readonly Row[]): void {
           archived_by: null,
           archived_at: null,
           updated_at: '2026-09-01T00:00:00Z',
+          owner_user_id: null,
+          include_in_submission: true,
           checklist_template_items: [],
         },
       ],
@@ -315,9 +363,15 @@ const FLOOR_PAGES = [
 ];
 
 /**
- * D4: these carry their own gate (lib/checklist-access.ts). Refused to every
- * brokerage agent. BACKLOG-3535 admits the owner of a personal organization
- * (feature on), so the owner is asserted admitted, not refused.
+ * D4: these carry their own gate (lib/checklist-access.ts). BACKLOG-3535 admits
+ * the owner of a personal organization (feature on).
+ *
+ * BACKLOG-3618 CHANGED THIS DELIBERATELY: a brokerage agent is now ADMITTED to
+ * the list and to /new (their own checklists; the brokerage's read-only),
+ * through can_create_own_checklist_templates. What still refuses an agent is
+ * a brokerage template's editor (`[id]` on TEMPLATE_ID) and another member's
+ * own template (PEER_TEMPLATE_ID). `refused` below is what a REFUSED agent
+ * gets; AGENT_ADMITTED_PAGES lists the pages that no longer refuse them.
  */
 const OWN_GATE_PAGES: Record<string, PageEntry> = {
   'app/dashboard/checklists/page.tsx': {
@@ -352,6 +406,9 @@ const OWN_GATE_PERSONAS = {
   '[brokerage agent, personal-org owner]': [brokerageMembership('agent'), personalMembership()],
 } as const;
 const ownGatePersonaNames = Object.keys(OWN_GATE_PERSONAS) as (keyof typeof OWN_GATE_PERSONAS)[];
+/** BACKLOG-3618: pages a brokerage agent now reaches (feature on). */
+const AGENT_ADMITTED_PAGES = ['app/dashboard/checklists/page.tsx', 'app/dashboard/checklists/new/page.tsx'];
+const editPage = (id: string) => async () => (await import('@/app/dashboard/checklists/[id]/page')).default(idParams(id));
 
 /**
  * BACKLOG-3080 (My Transactions): gated by lib/my-transactions-access.ts. Only a
@@ -438,13 +495,19 @@ const REFUSED_ACTIONS: Record<string, ActionEntry> = {
 
 /**
  * D4 for actions: the checklist writes carry the same own gate as the checklist
- * pages (lib/checklist-access.ts). Refused to every brokerage agent; admitted
- * to a brokerage admin and to the personal-org owner (BACKLOG-3535).
+ * pages (lib/checklist-access.ts). Admitted to a brokerage admin and to the
+ * personal-org owner (BACKLOG-3535).
+ *
+ * BACKLOG-3618 CHANGED THIS DELIBERATELY: a brokerage agent passes the gate
+ * (they keep their own checklists), so these entries no longer refuse an agent
+ * at the gate. Each is run against the BROKERAGE template instead, and
+ * AGENT_ACTION_OUTCOMES pins what the agent gets: nothing written, a plain
+ * message.
  */
 const OWN_GATE_ACTIONS: Record<string, ActionEntry> = {
   'lib/actions/checklists.ts#saveChecklistTemplate': act(checklists, 'saveChecklistTemplate', {}),
-  'lib/actions/checklists.ts#archiveChecklistTemplate': act(checklists, 'archiveChecklistTemplate', 'tpl-3080'),
-  'lib/actions/checklists.ts#restoreChecklistTemplate': act(checklists, 'restoreChecklistTemplate', 'tpl-3080'),
+  'lib/actions/checklists.ts#archiveChecklistTemplate': act(checklists, 'archiveChecklistTemplate', TEMPLATE_ID),
+  'lib/actions/checklists.ts#restoreChecklistTemplate': act(checklists, 'restoreChecklistTemplate', TEMPLATE_ID),
 };
 
 /**
@@ -544,6 +607,18 @@ const OWN_GATE_REFUSALS: Record<string, Outcome> = {
   },
   'lib/actions/checklists.ts#archiveChecklistTemplate': CHECKLIST_REFUSED,
   'lib/actions/checklists.ts#restoreChecklistTemplate': CHECKLIST_REFUSED,
+};
+/** BACKLOG-3618: what an admitted agent gets from each own-gate action, run against the brokerage template. */
+const BROKERAGE_READ_ONLY: Outcome = {
+  returned: { ok: false, message: 'Only your broker or an admin can change brokerage checklists.' },
+};
+const AGENT_ACTION_OUTCOMES: Record<string, Outcome> = {
+  // An empty payload: the gate admits, validation refuses before the database.
+  'lib/actions/checklists.ts#saveChecklistTemplate': {
+    returned: { ok: false, reason: 'invalid', message: 'Some fields could not be saved. Check the template and try again.' },
+  },
+  'lib/actions/checklists.ts#archiveChecklistTemplate': BROKERAGE_READ_ONLY,
+  'lib/actions/checklists.ts#restoreChecklistTemplate': BROKERAGE_READ_ONLY,
 };
 
 function refusalFor(name: string, persona: Persona): Outcome {
@@ -839,6 +914,7 @@ describe('set completeness', () => {
     expect(new Set(classified).size).toBe(classified.length);
     expect(Object.keys(REFUSALS).sort()).toEqual(Object.keys(REFUSED_ACTIONS).sort());
     expect(Object.keys(OWN_GATE_REFUSALS).sort()).toEqual(Object.keys(OWN_GATE_ACTIONS).sort());
+    expect(Object.keys(AGENT_ACTION_OUTCOMES).sort()).toEqual(Object.keys(OWN_GATE_ACTIONS).sort());
     for (const name of Object.keys(READS_BEFORE_REFUSAL)) expect(REFUSED_ACTIONS).toHaveProperty([name]);
     expect(discoverServerActions()).toEqual([...classified].sort());
   });
@@ -907,15 +983,21 @@ describe('refused pages', () => {
 });
 
 describe('own-gate pages (D4)', () => {
-  const cases = Object.entries(OWN_GATE_PAGES).flatMap(([page, entry]) =>
-    ownGatePersonaNames.map((persona) => [page, persona, entry] as const)
-  );
+  const cases = Object.entries(OWN_GATE_PAGES)
+    .filter(([page]) => !AGENT_ADMITTED_PAGES.includes(page))
+    .flatMap(([page, entry]) => ownGatePersonaNames.map((persona) => [page, persona, entry] as const));
+
+  it('BACKLOG-3618: every own-gate page is either agent-admitted or agent-refused, and both lists are live', () => {
+    for (const page of AGENT_ADMITTED_PAGES) expect(OWN_GATE_PAGES).toHaveProperty([page]);
+    expect(cases.length).toBeGreaterThan(0);
+  });
 
   it.each(cases)('%s refuses the %s', async (_page, persona, entry) => {
     given(OWN_GATE_PERSONAS[persona]);
-    // A persona who owns a personal org opens that org's template, so a 404 here is the gate, not the org filter.
-    const invoke = persona === '[brokerage agent, personal-org owner]' ? (entry.invokeAsOwner ?? entry.invoke) : entry.invoke;
-    expect(await run(invoke)).toEqual(entry.refused);
+    // BACKLOG-3618: both personas now pass the gate on the brokerage row, so
+    // each opens the BROKERAGE template: the 404 is the editor check in
+    // [id]/page.tsx, not the org filter (the personal template would be).
+    expect(await run(entry.invoke)).toEqual(entry.refused);
     expect(mockEmulator.state.writes).toEqual([]);
   });
 
@@ -928,6 +1010,32 @@ describe('own-gate pages (D4)', () => {
     given(PERSONAS['personal-org owner']);
     expect(await run(entry.invokeAsOwner ?? entry.invoke)).not.toEqual(entry.refused);
   });
+
+  // BACKLOG-3618: agents are admitted here on purpose (see OWN_GATE_PAGES).
+  const admitted = AGENT_ADMITTED_PAGES.flatMap((page) => ownGatePersonaNames.map((persona) => [page, persona] as const));
+  it.each(admitted)('BACKLOG-3618: %s admits the %s, and writes nothing', async (page, persona) => {
+    given(OWN_GATE_PERSONAS[persona]);
+    const outcome = await run(OWN_GATE_PAGES[page].invoke);
+    expect(outcome).not.toHaveProperty('notFound');
+    expect(outcome).not.toHaveProperty('threw');
+    expect(outcome).not.toHaveProperty('redirect');
+    expect(mockEmulator.state.writes).toEqual([]);
+  });
+
+  it.each(ownGatePersonaNames)("BACKLOG-3618: [id] opens the %s's own template", async (persona) => {
+    given(OWN_GATE_PERSONAS[persona]);
+    const outcome = await run(editPage(OWN_TEMPLATE_ID));
+    expect(outcome).not.toHaveProperty('notFound');
+    expect(outcome).not.toHaveProperty('threw');
+  });
+
+  it.each([...ownGatePersonaNames, 'brokerage admin'] as const)(
+    "BACKLOG-3618: [id] refuses another member's own template to the %s",
+    async (persona) => {
+      given(persona === 'brokerage admin' ? ADMIN : OWN_GATE_PERSONAS[persona]);
+      expect(await run(editPage(PEER_TEMPLATE_ID))).toEqual({ notFound: true });
+    }
+  );
 });
 
 describe('own-gate server actions (D4)', () => {
@@ -935,12 +1043,27 @@ describe('own-gate server actions (D4)', () => {
     ownGatePersonaNames.map((persona) => [name, persona] as const)
   );
 
-  it.each(cases)('%s refuses the %s, and writes nothing', async (name, persona) => {
+  // BACKLOG-3618: the agent passes the gate; on the brokerage template each
+  // action still writes nothing and says why.
+  it.each(cases)('%s gives the %s the agent outcome on a brokerage template, and writes nothing', async (name, persona) => {
     given(OWN_GATE_PERSONAS[persona]);
-    expect(await run(OWN_GATE_ACTIONS[name])).toEqual(OWN_GATE_REFUSALS[name]);
+    expect(await run(OWN_GATE_ACTIONS[name])).toEqual(AGENT_ACTION_OUTCOMES[name]);
     expect(mockEmulator.state.writes).toEqual([]);
-    for (const table of tablesRead()) expect(['organization_members']).toContain(table);
+    expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_checklist_template');
+    for (const table of tablesRead()) expect(['organization_members', 'checklist_templates']).toContain(table);
   });
+
+  it.each(['lib/actions/checklists.ts#archiveChecklistTemplate', 'lib/actions/checklists.ts#restoreChecklistTemplate'])(
+    'BACKLOG-3618: %s reaches the agent\'s own template (the write is attempted)',
+    async (name) => {
+      given(OWN_GATE_PERSONAS['brokerage agent']);
+      const fn = name.endsWith('archiveChecklistTemplate') ? 'archiveChecklistTemplate' : 'restoreChecklistTemplate';
+      await run(act(checklists, fn as 'archiveChecklistTemplate', OWN_TEMPLATE_ID));
+      expect(mockEmulator.state.writes).toEqual([
+        expect.objectContaining({ table: 'checklist_templates', op: 'update' }),
+      ]);
+    }
+  );
 
   it.each(Object.keys(OWN_GATE_ACTIONS))('%s admits a brokerage admin', async (name) => {
     given(ADMIN);

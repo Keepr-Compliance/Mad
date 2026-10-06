@@ -1,0 +1,17 @@
+H1 MUTATION APPLIED: a failed remove still finishes the row
+  red 1/17: ['live run › a failed remove leaves that submission out of finish and marks the run partial']
+H2 MUTATION APPLIED: unset mode = live
+  red 3/17: ['mode › is a dry run when SUBMISSION_SWEEP_MODE is unset: claims dry, removes nothing, finishes no id', 'mode › is a dry run for any value other than exactly "live"']
+H3 MUTATION APPLIED: body can upgrade to live
+  red 2/17: ['mode › a request body cannot make a run live', 'mode › a request body can downgrade a live environment to a dry run']
+H4 MUTATION APPLIED: log carries ids and paths
+  red 1/17: ['counts only › log line, response, run counts and Sentry payloads never carry an id, path, file name or response body']
+H5 MUTATION APPLIED: error carries the response body
+  red 1/17: ['failures › a claim error returns 500 with stage and status, reports to Sentry, removes nothing']
+H6 MUTATION APPLIED: secret not compared
+  red 1/17: ['authentication › rejects a missing or wrong secret with 401 and never claims']
+H7 MUTATION APPLIED: test delay honoured in production
+  red 1/17: ['local delay hook › is honoured only against a local stack']
+H8 MUTATION APPLIED: no chunking
+  red 1/17: ['live run › splits a submission with more than 100 paths into chunks of 100']
+handler mutants: 8 run, 0 not red

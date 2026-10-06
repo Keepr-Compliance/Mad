@@ -1,7 +1,19 @@
 /**
  * Live thousands-separator formatting for a dollar amount typed into a text
- * input (BACKLOG-3614): 100 -> 1,000 -> 1,000,000 as the user types, with the
- * caret kept beside the character it was next to.
+ * input: 100 -> 1,000 -> 1,000,000 as the user types (BACKLOG-3614), using the
+ * standard live-format algorithm (BACKLOG-3677):
+ *
+ *   1. Keep only the significant characters (digits and one ".") and count how
+ *      many of them sit left of the caret.
+ *   2. Normalise: at most two decimals, no leading zeros on the whole part.
+ *   3. Group the whole part with Intl.NumberFormat("en-US").
+ *   4. Put the caret after the same number of significant characters.
+ *
+ * Blank, not 0 (founder rule for optional prices, pm_comments 882e5ecc on
+ * BACKLOG-3500): an amount whose whole part has no non-zero digit and no "."
+ * renders as "" — so backspacing the leading 1 of 1,000,000 leaves the box
+ * empty. This reverses SR review 3008b20f on BACKLOG-3614, which kept leading
+ * zeros while typing ("00,000") and was the cause of the saved 0.
  *
  * Pure functions only; `LiveMoneyInput` wires them to an <input>. The text this
  * produces is display text — callers still parse it with `parseMoney`, which
@@ -13,9 +25,18 @@ function isSignificant(ch: string): boolean {
   return (ch >= "0" && ch <= "9") || ch === ".";
 }
 
-/** Group an all-digit string in threes: "1234567" -> "1,234,567". */
+const GROUPING = new Intl.NumberFormat("en-US", {
+  useGrouping: true,
+  maximumFractionDigits: 0,
+});
+
+/**
+ * Group an all-digit string (no leading zeros) in threes: "1234567" -> "1,234,567".
+ * BigInt, not Number, so a long pasted number keeps every digit.
+ */
 function groupThousands(digits: string): string {
-  return digits.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  if (digits === "") return "";
+  return GROUPING.format(BigInt(digits));
 }
 
 /** Cents are the finest unit an amount is shown in (matches `formatSaleInput`). */
@@ -30,14 +51,14 @@ export interface LiveMoneyResult {
 
 /**
  * Normalise a run of significant characters (digits and dots) to an amount:
- * one dot at most, at most two decimals. `keep` is how many of the input's
- * significant characters sit left of the caret; the result says how many of the
- * OUTPUT's characters do. `dropped[i]` is true when input character i was
- * discarded.
+ * one dot at most, at most two decimals, no leading zeros on the whole part,
+ * and "0" before a bare "." (".5" -> "0.5"). A whole part with no non-zero
+ * digit and no "." becomes "" (blank, never 0).
  *
- * Leading zeros are NOT stripped here (SR review 3008b20f): deleting the 5 in
- * 500,000 must leave 00,000 so typing 6 gives 600,000. `trimLeadingZeros`
- * removes them when the field loses focus, and `parseMoney` ignores them.
+ * `keep` is how many of the input's significant characters sit left of the
+ * caret; the result says how many of the OUTPUT's characters do. `dropped[i]`
+ * is true when input character i was discarded as a second "." or a third
+ * decimal (stripped leading zeros are not counted: they carry no value).
  */
 function normalise(
   sig: string,
@@ -66,10 +87,22 @@ function normalise(
       if (i < keep) outKeep++;
     }
   }
+
+  // Strip leading zeros from the whole part.
+  let strip = 0;
+  while (strip < out.length && out[strip] === "0") strip++;
+  out = out.slice(strip);
+  outKeep = Math.max(outKeep - strip, 0);
+
+  if (out.startsWith(".")) {
+    // ".5" or "0.5" -> "0.5". The caret stays after the dot if it was after it.
+    out = "0" + out;
+    if (outKeep > 0) outKeep++;
+  }
   return { sig: out, keep: outKeep, dropped };
 }
 
-/** Format a run of significant characters and place the caret after `keep` of them. */
+/** Format a normalised run of significant characters and place the caret after `keep` of them. */
 function render(sig: string, keep: number): LiveMoneyResult {
   const dot = sig.indexOf(".");
   const whole = dot === -1 ? sig : sig.slice(0, dot);
@@ -155,18 +188,13 @@ export function formatMoneyEdit(
 }
 
 /**
- * Remove leading zeros from the whole part, for when the field loses focus:
- * "00,000" -> "0", "007" -> "7", "00.5" -> "0.5". ".5" and "" are unchanged.
+ * Tidy the text when the field loses focus: a zero amount ("0.", "0.00")
+ * becomes "" (blank, never 0), and a trailing "." is removed ("12." -> "12").
  */
-export function trimLeadingZeros(text: string): string {
+export function settleMoneyOnBlur(text: string): string {
   const { sig } = significant(text, text.length);
-  const dot = sig.indexOf(".");
-  const whole = dot === -1 ? sig : sig.slice(0, dot);
-  let strip = 0;
-  while (strip < whole.length - 1 && whole[strip] === "0") strip++;
-  if (strip === 0) return text;
-  const trimmed = sig.slice(strip);
-  return render(trimmed, trimmed.length).text;
+  if (!/[1-9]/.test(sig)) return "";
+  return sig.endsWith(".") ? text.slice(0, text.lastIndexOf(".")) : text;
 }
 
 /**

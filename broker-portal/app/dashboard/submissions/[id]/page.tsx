@@ -5,6 +5,9 @@ import { formatCurrency, formatDate, getStatusColor, formatStatus } from '@/lib/
 import { MessageList } from '@/components/submission/MessageList';
 import { ReviewActions } from '@/components/submission/ReviewActions';
 import { AttachmentList } from '@/components/submission/AttachmentList';
+import { ExcludedFilesNotice } from '@/components/submission/ExcludedFilesNotice';
+import { buildAttachmentSources, readExcludedFiles } from '@/lib/submissions/attachmentSources';
+import { groupAttachmentsByMessage } from '@/lib/submissions/attachmentKinds';
 import { StatusHistory } from '@/components/submission/StatusHistory';
 import { ChecklistReview } from '@/components/submission/ChecklistReview';
 import { getDataClient } from '@/lib/impersonation-guards';
@@ -68,6 +71,8 @@ interface Attachment {
   document_type: string | null;
   /** The desktop's id for the file (BACKLOG-3607 counts: one file, one document). */
   local_attachment_id?: string | null;
+  /** BACKLOG-3682: the submission_messages row the file came from (null before 2.39). */
+  message_id?: string | null;
 }
 
 async function getSubmission(id: string, client: SupabaseClient) {
@@ -209,7 +214,9 @@ export default async function SubmissionDetailPage({ params }: PageProps) {
     getAttachments(id, client),
   ]);
 
-  if (!submission) {
+  // BACKLOG-3403: a submission still 'uploading' is not finished; it opens as
+  // not found, before anything below reads it or marks it under review.
+  if (!submission || submission.status === 'uploading') {
     notFound();
   }
 
@@ -278,6 +285,19 @@ export default async function SubmissionDetailPage({ params }: PageProps) {
 
   // Determine if messages section should be shown at all
   const showMessages = textEnabled || emailEnabled;
+
+  // BACKLOG-3682: each file's source message (from gated messages only, so a
+  // hidden channel never shows its sender or subject) and the files the agent
+  // left out (submission_metadata.excluded_files, absent before 2.39).
+  const attachmentSources = buildAttachmentSources(attachments, gatedMessages);
+  const excludedFiles = readExcludedFiles(submission.submission_metadata);
+
+  // BACKLOG-3748: files shown inside their message's bubble, joined on
+  // message_id over the gated messages, under the same either-flag rule
+  // (showAttachments) as the rest of the page — AttachmentList (above) and
+  // the checklist file list use it too; no product reason for a stricter
+  // per-channel rule here (SR review, pm_comments efcb3cec on BACKLOG-3748).
+  const attachmentsByMessage = groupAttachmentsByMessage(attachments, gatedMessages, showAttachments);
 
   // BACKLOG-3477: the Checklists area, fail-closed on the submission's org.
   // Not shown during impersonation: the scoped support client does not admit
@@ -429,17 +449,27 @@ export default async function SubmissionDetailPage({ params }: PageProps) {
           versionHistory={submission.status_history}
           version={typeof submission.version === 'number' ? submission.version : null}
           linkedCounts={linkedCounts}
+          attachmentsByMessage={showMessages ? attachmentsByMessage : undefined}
         />
       )}
 
       {/* Messages with filter tabs - gated by broker_text_view / broker_email_view (TASK-2158) */}
       {showMessages && (
-        <MessageList messages={gatedMessages} />
+        <MessageList messages={gatedMessages} attachmentsByMessage={attachmentsByMessage} />
       )}
 
       {/* Attachments with viewer - gated by broker_text_attachments / broker_email_attachments (TASK-2158) */}
       {showAttachments && (
-        <AttachmentList attachments={attachments} />
+        <AttachmentList attachments={attachments} sources={attachmentSources} />
+      )}
+
+      {/* BACKLOG-3682: files the agent did not include. Last on the page; hidden when empty. */}
+      {showAttachments && (
+        <ExcludedFilesNotice
+          files={excludedFiles}
+          showTextLabels={textEnabled}
+          showEmailLabels={emailEnabled}
+        />
       )}
     </div>
   );

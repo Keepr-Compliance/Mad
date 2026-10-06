@@ -1,0 +1,617 @@
+/**
+ * Tests for scripts/ci/check-migration-grants.mjs (BACKLOG-3611).
+ *
+ * Runs in CI: jest.config.js `testMatch` includes '<rootDir>/scripts/__tests__/**'.
+ * The guard is spawned as a subprocess (same as auditGuard.test.ts), so the
+ * exact CLI that CI runs is what is tested.
+ *
+ * ## Fixtures are transcripts, not inventions
+ *
+ *   fixtures/migration-grants/real/       Verbatim copies of real migrations. Must PASS.
+ *     20261001044453_backlog_3611_function_execute_grants.sql   supabase/migrations
+ *     20261001044523_backlog_3646_support_agent_checks.sql      supabase/migrations
+ *     20261001050116_backlog_3549_revoke_truncate.sql           supabase/migrations
+ *     20261001054306_backlog_3618_agent_checklist_templates.sql supabase/migrations
+ *     20261003030219_backlog_3611_license_self_only.sql         branch fix/BACKLOG-3611-license-self-only @ cee77b925
+ *     20261003030614_backlog_3611_r1_service_only_grants.sql    branch fix/BACKLOG-3611-r1-service-only @ 521355fb8
+ *   fixtures/migration-grants/base/       Verbatim copies of the older migrations that first
+ *                                         created the five functions 3646 re-creates. This is
+ *                                         the "base branch" catalog for the re-create exemption.
+ *   fixtures/migration-grants/negative/
+ *     20260308_cleanup_expired_impersonation_sessions.sql  verbatim: REVOKE ALL ... FROM PUBLIC
+ *                                         only, anon not named -> FAIL; definer body with no
+ *                                         auth.uid()/auth.role() -> WARN.
+ *     new_function_no_revoke.sql          044453 lines 1-22, function renamed, REVOKE removed.
+ *     new_function_intentionally_public.sql       the same plus an `-- Intentionally callable by anon:` marker.
+ *     new_table_no_truncate_revoke.sql    20260906000000_backlog_2077 lines 47-75, renamed.
+ *     new_table_with_truncate_revoke.sql  the same plus the TRUNCATE revoke.
+ *     recreate_base_dropped_function.sql  20260924190429_backlog_3474 lines 34-136: the
+ *                                         6-argument save_checklist_template, no REVOKE.
+ *   fixtures/migration-grants/base-drop/  Verbatim 20260924190429_backlog_3474 (creates it) and
+ *                                         20261001054306_backlog_3618 (DROPs it).
+ *                                         A base catalog in which that function no longer exists.
+ *
+ * The inline cases below are built from the new_function_no_revoke.sql text so the SQL
+ * shape (dollar-quoted plpgsql body, SECURITY DEFINER, DEFAULT args) is the real one.
+ */
+import { spawnSync, execFileSync } from 'child_process';
+import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, rmSync, renameSync } from 'fs';
+import * as os from 'os';
+import * as fs from 'fs';
+import * as path from 'path';
+import { pathToFileURL } from 'url';
+
+const REPO = path.resolve(__dirname, '..', '..');
+const GUARD = path.join(REPO, 'scripts', 'ci', 'check-migration-grants.mjs');
+const FIX = path.join(__dirname, 'fixtures', 'migration-grants');
+const BASE = path.join(FIX, 'base');
+const EMPTY_CATALOG = path.join(FIX, 'negative'); // has none of the 3646 functions
+
+interface Finding {
+  line: number;
+  rule: string;
+  object: string;
+  message: string;
+}
+interface FileResult {
+  file: string;
+  failures: Finding[];
+  warnings: Finding[];
+  passes: { line: number; object: string; reason: string }[];
+}
+interface Result {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+  json?: { files: FileResult[]; failCount: number; warnCount: number };
+}
+
+/**
+ * The environment with every GIT_* variable removed.
+ *
+ * A git hook (pre-push) runs with GIT_DIR, GIT_INDEX_FILE etc. exported. A git
+ * command in a child process inherits them and acts on THAT repository instead
+ * of the one in its cwd. Measured during this PR: the scratch-repo `git init`
+ * below, run from the pre-push hook, re-initialised the real repository and set
+ * `core.bare = true` in its shared config. Every git call this file makes, and
+ * every guard it spawns, gets this scrubbed environment.
+ */
+function cleanEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(process.env)) if (!k.startsWith('GIT_')) env[k] = v;
+  env.GITHUB_ACTIONS = '';
+  return env;
+}
+
+function run(args: string[], cwd = REPO): Result {
+  const res = spawnSync(process.execPath, [GUARD, ...args], {
+    cwd,
+    encoding: 'utf8',
+    env: cleanEnv(),
+  });
+  const out: Result = { status: res.status, stdout: res.stdout, stderr: res.stderr };
+  if (args.includes('--json') && res.status !== 2) out.json = JSON.parse(res.stdout);
+  return out;
+}
+
+function check(files: string[], catalogDir?: string): Result {
+  const args = ['--json', '--files', ...files];
+  if (catalogDir) args.push('--catalog-dir', catalogDir);
+  return run(args);
+}
+
+let tmp: string;
+beforeAll(() => {
+  tmp = mkdtempSync(path.join(os.tmpdir(), 'migration-grants-'));
+});
+afterAll(() => {
+  rmSync(tmp, { recursive: true, force: true });
+});
+
+/**
+ * Read a fixture as LF text. .gitattributes pins these files to LF, but a
+ * checkout made without it (or a future edit) must not turn every slice and
+ * replace below into a silent no-op on Windows.
+ */
+function readFixture(p: string): string {
+  return readFileSync(p, 'utf8').replace(/\r\n/g, '\n');
+}
+
+let counter = 0;
+function sqlFile(sql: string, name?: string): string {
+  counter += 1;
+  const p = path.join(tmp, name ?? `case_${counter}.sql`);
+  writeFileSync(p, sql);
+  return p;
+}
+
+const NEW_FN = readFixture(path.join(FIX, 'negative', 'new_function_no_revoke.sql'));
+const SIG = 'public.support_update_template_copy(uuid, text, text, text, boolean)';
+
+function rules(r: Result): string[] {
+  return r.json!.files.flatMap((f) => f.failures.map((x) => x.rule));
+}
+
+describe('real migrations pass', () => {
+  const real = [
+    '20261001044453_backlog_3611_function_execute_grants.sql',
+    '20261001044523_backlog_3646_support_agent_checks.sql',
+    '20261001050116_backlog_3549_revoke_truncate.sql',
+    '20261001054306_backlog_3618_agent_checklist_templates.sql',
+    '20261003030219_backlog_3611_license_self_only.sql',
+    '20261003030614_backlog_3611_r1_service_only_grants.sql',
+  ];
+  it.each(real)('%s', (name) => {
+    const r = check([path.join(FIX, 'real', name)], BASE);
+    expect(r.json!.failCount).toBe(0);
+    expect(r.status).toBe(0);
+  });
+
+  it('3646 passes through the re-create exemption, one pass per function', () => {
+    const r = check([path.join(FIX, 'real', real[1])], BASE);
+    const reasons = r.json!.files[0].passes.map((p) => `${p.object} | ${p.reason}`);
+    expect(reasons).toEqual([
+      'public.support_search_requesters(text) | re-create of an existing function; its grants are unchanged',
+      'public.support_requester_recent_tickets(text) | re-create of an existing function; its grants are unchanged',
+      'public.support_agent_analytics(integer) | re-create of an existing function; its grants are unchanged',
+      'public.support_get_related_tickets(uuid) | re-create of an existing function; its grants are unchanged',
+      'public.support_search_tickets_for_link(text,uuid) | re-create of an existing function; its grants are unchanged',
+    ]);
+  });
+
+  it('3646 FAILS without the base catalog: the exemption is what passes it', () => {
+    const r = check([path.join(FIX, 'real', real[1])], EMPTY_CATALOG);
+    expect(r.status).toBe(1);
+    expect(rules(r)).toEqual(Array(5).fill('function-missing-revoke'));
+  });
+
+  it('044453 matches a REVOKE written without parameter names or DEFAULTs', () => {
+    const r = check([path.join(FIX, 'real', real[0])]);
+    expect(r.json!.files[0].passes[0].reason).toBe('EXECUTE revoked from PUBLIC and anon');
+  });
+});
+
+describe('negative fixtures', () => {
+  it('a new function with no REVOKE fails', () => {
+    const r = check([path.join(FIX, 'negative', 'new_function_no_revoke.sql')], BASE);
+    expect(r.status).toBe(1);
+    expect(rules(r)).toEqual(['function-missing-revoke']);
+  });
+
+  it('a REVOKE naming PUBLIC but not anon fails, and the definer warning fires', () => {
+    const r = check([path.join(FIX, 'negative', '20260308_cleanup_expired_impersonation_sessions.sql')]);
+    expect(r.status).toBe(1);
+    const f = r.json!.files[0];
+    expect(f.failures.map((x) => x.rule)).toEqual(['function-missing-revoke']);
+    expect(f.failures[0].message).toContain('FROM anon in this file');
+    expect(f.warnings.map((x) => x.rule)).toEqual(['definer-without-caller-check']);
+  });
+
+  it('the intentionally-public marker passes', () => {
+    const r = check([path.join(FIX, 'negative', 'new_function_intentionally_public.sql')]);
+    expect(r.status).toBe(0);
+    expect(r.json!.files[0].passes[0].reason).toBe('intentionally-public marker');
+  });
+
+  it('a new table with no TRUNCATE revoke fails', () => {
+    const r = check([path.join(FIX, 'negative', 'new_table_no_truncate_revoke.sql')]);
+    expect(r.status).toBe(1);
+    expect(rules(r)).toEqual(['table-missing-truncate-revoke']);
+  });
+
+  it('a new table with the TRUNCATE revoke passes', () => {
+    const r = check([path.join(FIX, 'negative', 'new_table_with_truncate_revoke.sql')]);
+    expect(r.status).toBe(0);
+  });
+});
+
+describe('lexing: REVOKE text that is not a statement does not count', () => {
+  it('a REVOKE inside a dollar-quoted body', () => {
+    const sql = NEW_FN.replace(
+      'RETURN jsonb_build_object',
+      `EXECUTE 'REVOKE EXECUTE ON FUNCTION ${SIG} FROM PUBLIC, anon';\n  RETURN jsonb_build_object`,
+    );
+    expect(sql).not.toBe(NEW_FN);
+    expect(rules(check([sqlFile(sql)]))).toEqual(['function-missing-revoke']);
+  });
+
+  it('a REVOKE statement inside a plpgsql function body', () => {
+    // Directly after a `;` inside the body, so a lexer that splits bodies on
+    // semicolons would see a statement starting with REVOKE.
+    const sql = NEW_FN.replace('  END IF;\n', `  END IF;\n  REVOKE EXECUTE ON FUNCTION ${SIG} FROM PUBLIC, anon;\n`);
+    expect(sql).not.toBe(NEW_FN);
+    expect(rules(check([sqlFile(sql)]))).toEqual(['function-missing-revoke']);
+  });
+
+  it('a REVOKE inside a DO block', () => {
+    const sql = `${NEW_FN}\nDO $$ BEGIN PERFORM 1; REVOKE EXECUTE ON FUNCTION ${SIG} FROM PUBLIC, anon; END $$;\n`;
+    expect(rules(check([sqlFile(sql)]))).toEqual(['function-missing-revoke']);
+  });
+
+  it('a REVOKE in a line comment and in a block comment', () => {
+    const sql = `${NEW_FN}\n-- REVOKE EXECUTE ON FUNCTION ${SIG} FROM PUBLIC, anon;\n/* REVOKE EXECUTE ON FUNCTION ${SIG} FROM PUBLIC, anon; */\n`;
+    expect(rules(check([sqlFile(sql)]))).toEqual(['function-missing-revoke']);
+  });
+
+  it('a REVOKE inside a string literal', () => {
+    const sql = `${NEW_FN}\nCOMMENT ON FUNCTION ${SIG} IS 'REVOKE EXECUTE ON FUNCTION ${SIG} FROM PUBLIC, anon;';\n`;
+    expect(rules(check([sqlFile(sql)]))).toEqual(['function-missing-revoke']);
+  });
+});
+
+describe('signature normalisation and string escapes', () => {
+  it('OUT parameters are not part of the signature', () => {
+    const sql = NEW_FN.replace('p_is_active boolean DEFAULT true)', 'p_is_active boolean DEFAULT true, OUT o_updated boolean)');
+    expect(sql).not.toBe(NEW_FN);
+    const r = check([sqlFile(`${sql}\nREVOKE EXECUTE ON FUNCTION ${SIG} FROM PUBLIC, anon;\n`)]);
+    expect(r.status).toBe(0);
+    expect(r.json!.files[0].passes[0].object).toBe('public.support_update_template_copy(uuid,text,text,text,boolean)');
+  });
+
+  it("an E'' string with a backslash-escaped quote stays one string", () => {
+    // Without escape handling the string would end at \' and the REVOKE after
+    // the next ';' would read as a real statement.
+    const sql = `${NEW_FN}\nCOMMENT ON FUNCTION ${SIG} IS E'don\\'t; REVOKE EXECUTE ON FUNCTION ${SIG} FROM PUBLIC, anon; --';\n`;
+    expect(sql).toContain("E'don\\'t;");
+    expect(rules(check([sqlFile(sql)]))).toEqual(['function-missing-revoke']);
+  });
+});
+
+/**
+ * BACKLOG-3611 — CodeQL js/redos (high): `normType`'s array-marker regex used
+ * to be `((?:\s*\[\s*\d*\s*\])+|\s+array)$`. With `\d*` allowed to match zero
+ * digits, the two `\s*` runs flanking it become interchangeable for the same
+ * whitespace, and that ambiguity multiplies across the repeated group —
+ * exponential backtracking on a long run of bracket pairs that never finds a
+ * trailing match. Spawns a standalone probe script (not through jest's own
+ * module loader, since this repo's jest config does not transform `.mjs`)
+ * that imports the real exported `normType` and times one call. The import
+ * specifier is a `file://` URL (not a bare OS path) so this also works on
+ * Windows CI — a `C:\...` path is not a valid ES module specifier and node
+ * rejects it with ERR_UNSUPPORTED_ESM_URL_SCHEME.
+ */
+describe('array type normalisation (ReDoS guard)', () => {
+  const GUARD_URL = pathToFileURL(GUARD).href;
+
+  function runNormType(input: string): { elapsed: number; result: string } {
+    const probe = path.join(tmp, `redos-probe-${counter++}.mjs`);
+    writeFileSync(
+      probe,
+      `import { normType } from ${JSON.stringify(GUARD_URL)};\n` +
+        `const start = Date.now();\n` +
+        `const result = normType(${JSON.stringify(input)});\n` +
+        `process.stdout.write(JSON.stringify({ elapsed: Date.now() - start, result }));\n`,
+    );
+    const res = spawnSync(process.execPath, [probe], { encoding: 'utf8', timeout: 5000 });
+    if (res.status !== 0) throw new Error(`probe failed (status ${res.status}): ${res.stderr}`);
+    return JSON.parse(res.stdout);
+  }
+
+  it('a long run of bracket pairs with no closing match finishes in well under a second', () => {
+    // Before the fix this took 126s at n=40 (measured) and did not plateau;
+    // n=200 is 5x that with room to spare under the 5s subprocess timeout.
+    // This is the control: it fails (probe times out past 5s) against the
+    // pre-fix regex — verified by reverting the fix locally and rerunning.
+    const pathological = 'text[' + ' ]['.repeat(200);
+    expect(runNormType(pathological).elapsed).toBeLessThan(1000);
+  });
+
+  // Parity pin, not a control for the ReDoS fix: this also passes under the
+  // pre-fix regex (same strings, same non-pathological inputs), so reverting
+  // the fix does not turn it red. It exists to pin normType's output shape
+  // now that the array-marker regex has changed, independent of backtracking.
+  it('still normalises real array markers the same way (text[], spaced brackets, dimensions, ARRAY)', () => {
+    expect(runNormType('text[]').result).toBe('text[]');
+    expect(runNormType('text [ ]').result).toBe('text[]');
+    expect(runNormType('int4[]').result).toBe('integer[]');
+    expect(runNormType('text[3]').result).toBe('text[]');
+    expect(runNormType('text[3][4]').result).toBe('text[][]');
+    expect(runNormType('text array').result).toBe('text[]');
+    expect(runNormType('text ARRAY').result).toBe('text[]');
+  });
+});
+
+describe('CRLF input', () => {
+  it('a CRLF migration is checked the same as an LF one', () => {
+    const crlf = (t: string) => t.replace(/\n/g, '\r\n');
+    const marked = `-- Intentionally callable by anon: public support form\n${NEW_FN}`;
+    const revoked = `${NEW_FN}\nREVOKE EXECUTE ON FUNCTION ${SIG} FROM PUBLIC, anon;\n`;
+    expect(rules(check([sqlFile(crlf(NEW_FN))]))).toEqual(['function-missing-revoke']);
+    expect(check([sqlFile(crlf(marked))]).status).toBe(0);
+    expect(check([sqlFile(crlf(revoked))]).status).toBe(0);
+  });
+});
+
+describe('REVOKE / GRANT replay', () => {
+  it('PUBLIC and anon revoked in two statements passes', () => {
+    const sql = `${NEW_FN}\nREVOKE EXECUTE ON FUNCTION ${SIG} FROM PUBLIC;\nREVOKE ALL ON FUNCTION ${SIG} FROM anon;\n`;
+    expect(check([sqlFile(sql)]).status).toBe(0);
+  });
+
+  it('a GRANT to anon after the REVOKE fails', () => {
+    const sql = `${NEW_FN}\nREVOKE EXECUTE ON FUNCTION ${SIG} FROM PUBLIC, anon;\nGRANT EXECUTE ON FUNCTION ${SIG} TO anon, authenticated;\n`;
+    expect(rules(check([sqlFile(sql)]))).toEqual(['function-granted-to-anon']);
+  });
+
+  it('REVOKE GRANT OPTION FOR does not count', () => {
+    const sql = `${NEW_FN}\nREVOKE GRANT OPTION FOR EXECUTE ON FUNCTION ${SIG} FROM PUBLIC, anon;\n`;
+    expect(rules(check([sqlFile(sql)]))).toEqual(['function-missing-revoke']);
+  });
+
+  it('REVOKE ... ON ALL FUNCTIONS IN SCHEMA public counts', () => {
+    const sql = `${NEW_FN}\nREVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, anon;\n`;
+    expect(check([sqlFile(sql)]).status).toBe(0);
+  });
+});
+
+describe('re-creating an existing function (catalog = base/)', () => {
+  // support_agent_analytics(p_period_days INT DEFAULT 30) is created in
+  // base/20260313_support_analytics_rpc.sql.
+  const RECREATE = readFixture(path.join(FIX, 'real', '20261001044523_backlog_3646_support_agent_checks.sql'))
+    .split('\n')
+    .slice(71, 131)
+    .join('\n');
+
+  it('the slice is the support_agent_analytics statement', () => {
+    expect(RECREATE).toMatch(/^CREATE OR REPLACE FUNCTION public\.support_agent_analytics\(/);
+    expect(RECREATE.trimEnd()).toMatch(/\$function\$\n;$/);
+  });
+
+  it('plain re-create passes (INT in the base, integer in the re-create)', () => {
+    expect(check([sqlFile(RECREATE)], BASE).status).toBe(0);
+  });
+
+  it('re-create after DROP FUNCTION fails (DROP resets the grants)', () => {
+    const sql = `DROP FUNCTION IF EXISTS public.support_agent_analytics(integer);\n${RECREATE}`;
+    const r = check([sqlFile(sql)], BASE);
+    expect(rules(r)).toEqual(['function-missing-revoke']);
+    expect(r.json!.files[0].failures[0].message).toContain('drops and re-creates');
+  });
+
+  it('re-create with a GRANT to PUBLIC fails', () => {
+    const sql = `${RECREATE}\nGRANT EXECUTE ON FUNCTION public.support_agent_analytics(integer) TO PUBLIC;\n`;
+    expect(rules(check([sqlFile(sql)], BASE))).toEqual(['function-granted-to-anon']);
+  });
+
+  it('a changed argument list is a NEW overload and fails', () => {
+    const sql = RECREATE.replace(
+      'support_agent_analytics(p_period_days integer DEFAULT 30)',
+      'support_agent_analytics(p_period_days integer DEFAULT 30, p_agent uuid DEFAULT NULL)',
+    );
+    expect(sql).not.toBe(RECREATE);
+    expect(rules(check([sqlFile(sql)], BASE))).toEqual(['function-missing-revoke']);
+  });
+
+  it('CREATE without OR REPLACE is never treated as a re-create', () => {
+    const sql = RECREATE.replace('CREATE OR REPLACE FUNCTION', 'CREATE FUNCTION');
+    expect(rules(check([sqlFile(sql)], BASE))).toEqual(['function-missing-revoke']);
+  });
+});
+
+describe('base-branch DROP FUNCTION is replayed into the catalog', () => {
+  // save_checklist_template(uuid, uuid, text, text, text, jsonb) is created in
+  // base-drop/20260924190429_backlog_3474 and DROPPED in base-drop/20261001054306_backlog_3618
+  // (which creates an 8-argument version instead). Nothing re-creates the 6-argument one.
+  const BASE_DROP = path.join(FIX, 'base-drop');
+  const RECREATE_DROPPED = path.join(FIX, 'negative', 'recreate_base_dropped_function.sql');
+  const CREATE_3474 = readFixture(path.join(BASE_DROP, '20260924190429_backlog_3474_save_checklist_template.sql'));
+  const DROP_3618 = readFixture(path.join(BASE_DROP, '20261001054306_backlog_3618_agent_checklist_templates.sql'));
+
+  function catalogDir(name: string, files: Record<string, string>): string {
+    const dir = path.join(tmp, name);
+    mkdirSync(dir, { recursive: true });
+    for (const [f, text] of Object.entries(files)) writeFileSync(path.join(dir, f), text);
+    return dir;
+  }
+
+  it('re-creating a function the base dropped is treated as new and needs the REVOKE', () => {
+    const r = check([RECREATE_DROPPED], BASE_DROP);
+    expect(r.status).toBe(1);
+    expect(r.json!.files[0].failures.map((f) => f.object)).toEqual([
+      'public.save_checklist_template(uuid,uuid,text,text,text,jsonb)',
+    ]);
+  });
+
+  it('control: with only the creating migration in the base, the same file passes as a re-create', () => {
+    const dir = catalogDir('only-create', { '20260924190429_backlog_3474_save_checklist_template.sql': CREATE_3474 });
+    const r = check([RECREATE_DROPPED], dir);
+    expect(r.status).toBe(0);
+    expect(r.json!.files[0].passes[0].reason).toBe('re-create of an existing function; its grants are unchanged');
+  });
+
+  it('a function dropped and then re-created later in the base still exists', () => {
+    const dir = catalogDir('drop-then-create', {
+      '20260924190429_backlog_3474_save_checklist_template.sql': CREATE_3474,
+      '20261001054306_backlog_3618_agent_checklist_templates.sql': DROP_3618,
+      '20261002000000_recreate.sql': CREATE_3474,
+    });
+    expect(check([RECREATE_DROPPED], dir).status).toBe(0);
+  });
+
+  it('base files replay in version order: "20260924_x" before "20260924190429_y"', () => {
+    // Lexical order would put the DROP file ("2026092419...") first and the CREATE
+    // file ("20260924_...") second, leaving the function in the catalog.
+    const dir = catalogDir('version-order', {
+      '20260924_create.sql': CREATE_3474,
+      '20260924190429_drop.sql': 'DROP FUNCTION IF EXISTS public.save_checklist_template(uuid, uuid, text, text, text, jsonb);\n',
+    });
+    expect(rules(check([RECREATE_DROPPED], dir))).toEqual(['function-missing-revoke']);
+  });
+
+  it('a DROP without an argument list removes every overload', () => {
+    const dir = catalogDir('drop-by-name', {
+      '20260924190429_backlog_3474_save_checklist_template.sql': CREATE_3474,
+      '20260925000000_drop.sql': 'DROP FUNCTION public.save_checklist_template;\n',
+    });
+    expect(rules(check([RECREATE_DROPPED], dir))).toEqual(['function-missing-revoke']);
+  });
+});
+
+describe('overloads and identifiers', () => {
+  const second = NEW_FN.replace(
+    /\(p_id uuid, p_name text, p_body text, p_category text DEFAULT NULL::text, p_is_active boolean DEFAULT true\)/,
+    '(p_id uuid, p_name text)',
+  );
+
+  it('two overloads, REVOKE names one signature: the other fails', () => {
+    expect(second).not.toBe(NEW_FN);
+    const sql = `${NEW_FN}\n${second}\nREVOKE EXECUTE ON FUNCTION ${SIG} FROM PUBLIC, anon;\n`;
+    const r = check([sqlFile(sql)]);
+    expect(r.json!.files[0].failures.map((f) => f.object)).toEqual([
+      'public.support_update_template_copy(uuid,text)',
+    ]);
+  });
+
+  it('a REVOKE without an argument list covers every overload', () => {
+    const sql = `${NEW_FN}\n${second}\nREVOKE EXECUTE ON FUNCTION public.support_update_template_copy FROM PUBLIC, anon;\n`;
+    expect(check([sqlFile(sql)]).status).toBe(0);
+  });
+
+  it('quoted identifier: matching quoted REVOKE passes, unquoted REVOKE fails', () => {
+    const quoted = NEW_FN.replace('public.support_update_template_copy(', 'public."Support_Copy"(');
+    const ok = `${quoted}\nREVOKE EXECUTE ON FUNCTION public."Support_Copy"(uuid, text, text, text, boolean) FROM PUBLIC, anon;\n`;
+    const bad = `${quoted}\nREVOKE EXECUTE ON FUNCTION public.support_copy(uuid, text, text, text, boolean) FROM PUBLIC, anon;\n`;
+    expect(check([sqlFile(ok)]).status).toBe(0);
+    expect(rules(check([sqlFile(bad)]))).toEqual(['function-missing-revoke']);
+  });
+
+  it('a function in another schema is not checked', () => {
+    const sql = NEW_FN.replace('public.support_update_template_copy(', 'private.support_update_template_copy(');
+    expect(check([sqlFile(sql)]).status).toBe(0);
+  });
+});
+
+describe('markers and exemptions', () => {
+  it('the retired `-- anon-allowed:` spelling does not pass', () => {
+    const sql = `-- anon-allowed: public support form\n${NEW_FN}`;
+    expect(rules(check([sqlFile(sql)]))).toEqual(['function-missing-revoke']);
+  });
+
+  it('a marker with no reason does not pass', () => {
+    const sql = `-- Intentionally callable by anon:\n${NEW_FN}`;
+    expect(rules(check([sqlFile(sql)]))).toEqual(['function-missing-revoke']);
+  });
+
+  it('a trigger function needs no REVOKE', () => {
+    const sql = `CREATE OR REPLACE FUNCTION public.touch_updated_at()\nRETURNS trigger LANGUAGE plpgsql SECURITY DEFINER AS $$\nBEGIN NEW.updated_at = now(); RETURN NEW; END;\n$$;\n`;
+    const r = check([sqlFile(sql)]);
+    expect(r.status).toBe(0);
+    expect(r.json!.warnCount).toBe(0);
+  });
+});
+
+describe('tables', () => {
+  const TABLE = readFixture(path.join(FIX, 'negative', 'new_table_no_truncate_revoke.sql'));
+
+  it('REVOKE ALL counts; REVOKE ... ON ALL TABLES IN SCHEMA public counts', () => {
+    expect(check([sqlFile(`${TABLE}\nREVOKE ALL ON TABLE public.account_suspensions_copy FROM anon, authenticated;\n`)]).status).toBe(0);
+    expect(check([sqlFile(`${TABLE}\nREVOKE TRUNCATE ON ALL TABLES IN SCHEMA public FROM anon, authenticated;\n`)]).status).toBe(0);
+  });
+
+  it('naming only anon fails', () => {
+    const r = check([sqlFile(`${TABLE}\nREVOKE TRUNCATE ON public.account_suspensions_copy FROM anon;\n`)]);
+    expect(rules(r)).toEqual(['table-missing-truncate-revoke']);
+  });
+
+  it('a GRANT ALL to authenticated after the revoke fails', () => {
+    const r = check([
+      sqlFile(
+        `${TABLE}\nREVOKE TRUNCATE ON public.account_suspensions_copy FROM anon, authenticated;\nGRANT ALL ON public.account_suspensions_copy TO authenticated;\n`,
+      ),
+    ]);
+    expect(rules(r)).toEqual(['table-missing-truncate-revoke']);
+  });
+
+  it('temp tables and other schemas are not checked', () => {
+    const temp = TABLE.replace('CREATE TABLE IF NOT EXISTS public.account_suspensions_copy', 'CREATE TEMP TABLE account_suspensions_copy');
+    const other = TABLE.replace('CREATE TABLE IF NOT EXISTS public.', 'CREATE TABLE IF NOT EXISTS audit.');
+    expect(temp).not.toBe(TABLE);
+    expect(other).not.toBe(TABLE);
+    expect(check([sqlFile(temp)]).status).toBe(0);
+    expect(check([sqlFile(other)]).status).toBe(0);
+  });
+});
+
+describe('PR mode (--base): only files ADDED under supabase/migrations', () => {
+  let repo: string;
+  const git = (...args: string[]) =>
+    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false', ...args], {
+      cwd: repo,
+      encoding: 'utf8',
+      env: cleanEnv(),
+    });
+
+  beforeAll(() => {
+    repo = path.join(tmp, 'repo');
+    mkdirSync(path.join(repo, 'supabase', 'migrations'), { recursive: true });
+    mkdirSync(path.join(repo, 'supabase', 'parked'), { recursive: true });
+    git('init', '-q', '-b', 'base');
+    // Belt and braces: the scratch repo must be its own top level, never the real repo.
+    // realpathSync.native expands Windows 8.3 short names (RUNNER~1 -> runneradmin),
+    // which the JS realpathSync does not; Windows paths compare case-insensitively.
+    const canon = (p: string) => {
+      const real = path.resolve(fs.realpathSync.native(p));
+      return process.platform === 'win32' ? real.toLowerCase() : real;
+    };
+    expect(canon(git('rev-parse', '--show-toplevel').trim())).toBe(canon(repo));
+    // An old migration with no REVOKE (grandfathered) that also creates support_agent_analytics.
+    writeFileSync(
+      path.join(repo, 'supabase', 'migrations', '20260313_support_analytics_rpc.sql'),
+      readFixture(path.join(BASE, '20260313_support_analytics_rpc.sql')),
+    );
+    writeFileSync(path.join(repo, 'supabase', 'parked', '20261005_parked.sql'), NEW_FN);
+    git('add', '-A');
+    git('commit', '-q', '-m', 'base');
+    git('checkout', '-q', '-b', 'head');
+  });
+
+  it('no added migration: exit 0, nothing to check', () => {
+    const r = run(['--base', 'base'], repo);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('no migration files added');
+  });
+
+  it('a modified existing migration is not checked; an added one is; a re-create uses the base catalog', () => {
+    const old = path.join(repo, 'supabase', 'migrations', '20260313_support_analytics_rpc.sql');
+    writeFileSync(old, `${readFileSync(old, 'utf8')}\n-- edited\n`);
+    const recreate = readFixture(path.join(FIX, 'real', '20261001044523_backlog_3646_support_agent_checks.sql'))
+      .split('\n')
+      .slice(71, 131)
+      .join('\n');
+    writeFileSync(path.join(repo, 'supabase', 'migrations', '20261004_recreate.sql'), recreate);
+    writeFileSync(path.join(repo, 'supabase', 'migrations', '20261004_new.sql'), NEW_FN);
+    git('add', '-A');
+    git('commit', '-q', '-m', 'head');
+    const r = run(['--json', '--base', 'base'], repo);
+    expect(r.status).toBe(1);
+    const byFile = Object.fromEntries(r.json!.files.map((f) => [f.file, f.failures.map((x) => x.rule)]));
+    expect(byFile).toEqual({
+      'supabase/migrations/20261004_new.sql': ['function-missing-revoke'],
+      'supabase/migrations/20261004_recreate.sql': [],
+    });
+  });
+
+  it('a file moved in from supabase/parked counts as added', () => {
+    renameSync(
+      path.join(repo, 'supabase', 'parked', '20261005_parked.sql'),
+      path.join(repo, 'supabase', 'migrations', '20261005_parked.sql'),
+    );
+    git('add', '-A');
+    git('commit', '-q', '-m', 'move');
+    const r = run(['--json', '--base', 'base'], repo);
+    expect(r.json!.files.map((f) => f.file)).toContain('supabase/migrations/20261005_parked.sql');
+  });
+
+  it('an unresolvable base ref exits 2', () => {
+    expect(run(['--base', 'no-such-ref'], repo).status).toBe(2);
+  });
+});
+
+describe('usage', () => {
+  it('no arguments exits 2', () => {
+    expect(run([]).status).toBe(2);
+  });
+  it('an unreadable file exits 2', () => {
+    expect(run(['--files', path.join(tmp, 'missing.sql')]).status).toBe(2);
+  });
+});

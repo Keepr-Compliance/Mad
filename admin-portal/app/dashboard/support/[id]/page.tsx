@@ -13,6 +13,8 @@ import { useParams, useRouter } from 'next/navigation';
 import { ArrowLeft, Hash, Eye, EyeOff, Trash2 } from 'lucide-react';
 import { Button } from '@keepr/design-system';
 import { usePermissions } from '@/components/providers/PermissionsProvider';
+import { useAuth } from '@/components/providers/AuthProvider';
+import { getStaffDisplayName } from '@/lib/support-reply';
 import { PERMISSIONS } from '@/lib/permissions';
 import { getTicketDetail, getTicketDiagnostics, deleteTicket } from '@/lib/support-queries';
 import type { TicketDetailResponse } from '@/lib/support-types';
@@ -29,6 +31,7 @@ export default function TicketDetailPage() {
   const ticketId = params.id as string;
 
   const { hasPermission } = usePermissions();
+  const { user } = useAuth();
 
   const [detail, setDetail] = useState<TicketDetailResponse | null>(null);
   const [diagnostics, setDiagnostics] = useState<Record<string, unknown> | null>(null);
@@ -182,6 +185,7 @@ export default function TicketDetailPage() {
             onMessageSent={handleMessageSent}
             requesterName={ticket.requester_name}
             ticketNumber={ticket.ticket_number}
+            agentName={getStaffDisplayName(user)}
             ticketSubject={ticket.subject}
             requesterEmail={ticket.requester_email}
           />

@@ -44,11 +44,12 @@
  * THE LIMIT
  * ============================================================================
  *
- * sessionStorage is per-TAB. The magic-link sign-in opens its callback from the
- * user's mail client, which is a new tab with no marker, so that path still
- * falls through to the `devices` check and a first-ever desktop user arriving
- * that way can still be shown Download. Narrowing that needs a different
- * carrier than sessionStorage and is not attempted here.
+ * sessionStorage is per-TAB. A callback opened in a different tab from the one
+ * the desktop app launched carries no marker, so it falls through to the
+ * `devices` check and a first-ever desktop user arriving that way can still be
+ * shown Download. (BACKLOG-3713 removed email sign-in, which was the usual way
+ * that happened.) Narrowing that needs a different carrier than sessionStorage
+ * and is not attempted here.
  */
 
 /** Query parameter the desktop app appends when it opens the browser. */

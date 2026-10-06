@@ -1,0 +1,171 @@
+41 mutants written
+M01 [as expected] (draft) drop the storage-object check
+    MUTATION APPLIED: 3 line(s); first: 0,
+    RED: C1b G3  green: none
+      C1b: ASSERT FAILED: C1b {"ok": true, "status": "submitted", "already_final": false}
+      G3: ASSERT FAILED: G3 after = pinned
+M02 [as expected] (draft) MOST LIKELY WRONG: compare message COUNT, not the id set
+    MUTATION APPLIED: 6 line(s); first: SELECT greatest(cardinality(v_msgs) - count(*), 0) INTO v_msg_missing FROM public.submission_messages m WHERE 
+    RED: C11  green: none
+      C11: ASSERT FAILED: C11 {"ok": true, "status": "submitted", "already_final": false}
+M03 [as expected] (draft) drop the folder-scope check in finalize
+    MUTATION APPLIED: 2 line(s); first: 0,
+    RED: C12  green: none
+      C12: ASSERT FAILED: C12 {"ok": true, "status": "submitted", "already_final": false}
+M04 [as expected] (draft) drop the checklist check
+    MUTATION APPLIED: 2 line(s); first: THEN
+    RED: C3  green: none
+      C3: ASSERT FAILED: C3 {"ok": true, "status": "submitted", "already_final": false}
+M05 [as expected] (draft) drop the owner check in finalize
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: C4  green: none
+      C4: ASSERT FAILED: C4 {"ok": true, "status": "submitted", "already_final": false}
+M06 [as expected] (draft) drop the idempotent branch
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: C6  green: none
+      C6: ASSERT FAILED: C6 {"ok": false, "code": "not_uploading"}
+M07 [as expected] (draft) drop the attachment-to-message link check
+    MUTATION APPLIED: 3 line(s); first: 0,
+    RED: C13  green: none
+      C13: ASSERT FAILED: C13 {"ok": true, "status": "submitted", "already_final": false}
+M08 [as expected] (draft) drop the undeclared-attachment check
+    MUTATION APPLIED: 2 line(s); first: AND false;
+    RED: C14  green: none
+      C14: ASSERT FAILED: C14 {"ok": true, "status": "submitted", "already_final": false}
+M09 [as expected] (draft) message insert rule without the uploading term
+    MUTATION APPLIED: 3 line(s); first: WHERE transaction_submissions.submitted_by = (SELECT auth.uid() AS uid)));
+    RED: P3  green: none
+      P3: P3 was allowed
+M10 [as expected] (draft) storage DELETE policy without the status term
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: P7  green: none
+      P7: ASSERT FAILED: P7 deleted=0
+M11 [as expected] (draft) storage DELETE policy without the submitter term
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: P11  green: none
+      P11: ASSERT FAILED: P11 deleted=0
+M12 [as expected] (draft) target status always submitted
+    MUTATION APPLIED: 2 line(s); first: v_target := 'submitted';
+    RED: C7  green: none
+      C7: ASSERT FAILED: C7 {"ok": true, "status": "submitted", "already_final": false}
+M13 [as expected] (draft) storage DELETE policy without the abandoned term (the SR-reviewed draft text)
+    MUTATION APPLIED: 3 line(s); first: AND (s.status)::text = 'uploading'::text)));
+    RED: P6n  green: none
+      P6n: ASSERT FAILED: P6n deleted=0
+M14 [as expected] (draft) reviewer WITH CHECK still accepts 'uploading'
+    MUTATION APPLIED: 2 line(s); first: OR ((true)
+    RED: X2  green: none
+      X2: X2 was allowed
+M15 [as expected] (draft) finalize REVOKE names PUBLIC only
+    MUTATION APPLIED: 2 line(s); first: REVOKE EXECUTE ON FUNCTION public.finalize_submission(uuid, jsonb) FROM PUBLIC;
+    RED: X3 X4  green: none
+      X3: ASSERT FAILED: X3 anon finalize
+      X4: X4 was allowed
+M16 [as expected] (draft) finalize REVOKE names anon only
+    MUTATION APPLIED: 2 line(s); first: REVOKE EXECUTE ON FUNCTION public.finalize_submission(uuid, jsonb) FROM anon;
+    RED: X3 X4  green: none
+      X3: ASSERT FAILED: X3 anon finalize
+      X4: X4 was allowed
+M17 [as expected] (draft) MOST LIKELY WRONG: finalize ignores the abandon fence
+    MUTATION APPLIED: 3 line(s); first: 
+    RED: R3  green: none
+      R3: ASSERT FAILED: R3 {"ok": true, "status": "submitted", "already_final": false}
+M18 [as expected] (draft) finalize replaces submission_metadata instead of merging
+    MUTATION APPLIED: 3 line(s); first: submission_metadata = jsonb_build_object('finalized_by', 'finalize_submission')
+    RED: E1  green: none
+      E1: ASSERT FAILED: E1 metadata {"finalized_by": "finalize_submission"}
+M19 [as expected] (draft) MOST LIKELY WRONG for the report: reason_code accepts free text
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: T8  green: none
+      T8: T8 free text accepted
+M20 [as expected] (draft) attempts SELECT without the own-row term
+    MUTATION APPLIED: 2 line(s); first: false
+    RED: T2  green: none
+      T2: ASSERT FAILED: T2 agent
+M21 [as expected] (draft) attempts SELECT without the reviewer term
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: T2  green: none
+      T2: ASSERT FAILED: T2 broker
+M22 [as expected] (draft) attempts SELECT without the internal-user term
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: T2  green: none
+      T2: ASSERT FAILED: T2 staff
+M23 [as expected] (draft) a committed attempt can be overwritten
+    MUTATION APPLIED: 5 line(s); first: WHERE a.user_id = v_uid
+    RED: T7  green: none
+      T7: ASSERT FAILED: T7 unchanged
+M24 [as expected] (draft) finalize does not mark an existing attempt committed
+    MUTATION APPLIED: 4 line(s); first: SET updated_at = now()
+    RED: T6  green: none
+      T6: ASSERT FAILED: T6 existing in_progress
+M25 [as expected] (draft) counts stored as sent (no sanitising)
+    MUTATION APPLIED: 1 line(s); first: v_counts := p_counts;
+    RED: T1  green: none
+      T1: ASSERT FAILED: T1 row {"neg": -1, "frac": 1.5, "note": "contract.pdf", "nested": {"a": 1}, "Bad Key": 5, "messages": 2, "attachments": 1}
+M26 [as expected] (draft) record_submission_attempt without the membership check
+    MUTATION APPLIED: 4 line(s); first: 
+    RED: T4  green: none
+      T4: ASSERT FAILED: T4
+M27 [as expected] (draft) attachment_count from the manifest length, not distinct ids
+    MUTATION APPLIED: 2 line(s); first: attachment_count = jsonb_array_length(v_att),
+    RED: C5b  green: none
+      C5b: ASSERT FAILED: C5b attachment_count=2
+M28 [as expected] (draft) record_submission_attempt without the submission-owner check
+    MUTATION APPLIED: 5 line(s); first: 
+    RED: T5  green: none
+      T5: ASSERT FAILED: T5 vs submission
+M29 [as expected] (draft) record_submission_attempt REVOKE names PUBLIC only
+    MUTATION APPLIED: 2 line(s); first: REVOKE EXECUTE ON FUNCTION public.record_submission_attempt(uuid, uuid, text, text, text, integer, jsonb, bool
+    RED: X3  green: none
+      X3: ASSERT FAILED: X3 anon record
+M30 [as expected] (draft) no REVOKE on the new table (default client grants stay)
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: T3 X3  green: none
+      T3: T3 update was allowed
+      X3: ASSERT FAILED: X3 anon cannot read attempts
+M31 [as expected] (draft) finalize as SECURITY INVOKER
+    MUTATION APPLIED: 2 line(s); first: SECURITY INVOKER
+    RED: C5  green: none
+      C5: permission denied for table submission_attempts
+M32 [as expected] (draft) attachment insert rule without the folder segment-2 term
+    MUTATION APPLIED: 3 line(s); first: AND split_part(submission_attachments.storage_path, '/'::text, 1) = (ts.organization_id)::text));
+    RED: H1 X1  green: none
+      H1: H1 was allowed
+      X1: X1 was allowed
+M33 [as expected] (draft) attachment insert rule without the folder segment-1 term
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: H1b  green: none
+      H1b: H1b was allowed
+M34 [as expected] (draft) attachment insert rule without the uploading term
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: P4  green: none
+      P4: P4 was allowed
+M35 [as expected] (draft) table created without IF NOT EXISTS (not re-runnable)
+    MUTATION APPLIED: 2 line(s); first: CREATE TABLE public.submission_attempts (
+    RED: G2  green: none
+      G2: relation "submission_attempts" already exists
+M36 [as expected] (draft) record_submission_attempt accepts outcome committed from a client
+    MUTATION APPLIED: 3 line(s); first: 
+    RED: SR1  green: none
+      SR1: ASSERT FAILED: SR1 {"ok": true, "outcome": "committed", "unchanged": false}
+M37 [as expected] (draft) attachment-row DELETE policy without the abandoned term
+    MUTATION APPLIED: 3 line(s); first: AND (transaction_submissions.status)::text = 'uploading'::text));
+    RED: RD1  green: none
+      RD1: ASSERT FAILED: RD1 deleted=0
+M38 [as expected] (draft) finalize reads the submission without FOR UPDATE
+    MUTATION APPLIED: 2 line(s); first: SELECT * INTO v_sub FROM public.transaction_submissions WHERE id = p_submission_id;
+    RED: L1  green: none
+      L1: ASSERT FAILED: L1 row locked by this transaction
+RB1 [as expected] (rollback) rollback leaves the new message index
+    MUTATION APPLIED: 1 line(s); first: 
+    RED: G1  green: none
+      G1: ASSERT FAILED: G1 after rollback = before
+RB2 [as expected] (rollback) rollback leaves the reviewer WITH CHECK tightened
+    MUTATION APPLIED: 2 line(s); first: OR ((status)::text <> 'uploading'::text AND organization_id IN (SELECT organization_members.organization_id
+    RED: G1  green: none
+      G1: ASSERT FAILED: G1 after rollback = before
+RB3 [as expected] (rollback) rollback leaves the attachment-row DELETE term
+    MUTATION APPLIED: 2 line(s); first: AND ((transaction_submissions.status)::text = 'uploading'::text) AND coalesce(transaction_submissions.submissi
+    RED: G1  green: none
+      G1: ASSERT FAILED: G1 after rollback = before
+mutants: 41 run, 0 not as expected

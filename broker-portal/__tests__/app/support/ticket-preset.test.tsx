@@ -196,6 +196,25 @@ describe('TicketForm with a preset', () => {
     });
   });
 
+  it('BACKLOG-3712: the confirmation call posts only the ticket id', async () => {
+    const fetchSpy = jest.fn(async () => new Response('{}', { status: 200 }));
+    const original = global.fetch;
+    global.fetch = fetchSpy as unknown as typeof fetch;
+    try {
+      render(<TicketForm preset={FIXED} />);
+      await waitFor(() => expect(field('subcategory')?.value).toBe(PLAN_SEAT_ID));
+      fireEvent.click(screen.getByRole('button', { name: 'Submit Ticket' }));
+      await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+      const calls = (fetchSpy.mock.calls as unknown as Array<[string, RequestInit]>).filter(
+        ([url]) => url === '/api/email/ticket-confirmation'
+      );
+      expect(calls).toHaveLength(1);
+      expect(JSON.parse(String(calls[0][1].body))).toEqual({ ticketId: 'ticket-3080' });
+    } finally {
+      global.fetch = original;
+    }
+  });
+
   it('without a preset the form is blank', async () => {
     render(<TicketForm />);
     await waitFor(() => expect(mockGetCategories).toHaveBeenCalled());

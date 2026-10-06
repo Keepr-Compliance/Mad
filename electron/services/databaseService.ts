@@ -125,6 +125,7 @@ import type {
 import { databaseEncryptionService } from "./databaseEncryptionService";
 import { initializationBroadcaster } from "./initializationBroadcaster";
 import type { AuditLogEntry } from "./auditService";
+import type { SelectedTextIds } from "./exportPlan";
 
 // Import domain services for delegation
 import * as userDb from "./db/userDbService";
@@ -2359,16 +2360,31 @@ class DatabaseService implements IDatabaseService {
   // SUBMISSION QUERIES (Delegate to submissionDbService)
   // ============================================
 
-  getTransactionMessages(transactionId: string, auditStartDate?: Date | null, auditEndDate?: Date | null) {
-    return submissionDb.getTransactionMessages(transactionId, auditStartDate, auditEndDate);
+  getTransactionMessages(
+    transactionId: string,
+    auditStartDate: Date | null | undefined,
+    auditEndDate: Date | null | undefined,
+    selected: SelectedTextIds
+  ) {
+    return submissionDb.getTransactionMessages(transactionId, auditStartDate, auditEndDate, selected);
   }
 
   getTransactionEmails(transactionId: string, auditStartDate?: Date | null, auditEndDate?: Date | null) {
     return submissionDb.getTransactionEmails(transactionId, auditStartDate, auditEndDate);
   }
 
-  getTransactionAttachments(transactionId: string, auditStartDate?: Date | null, auditEndDate?: Date | null) {
-    return submissionDb.getTransactionAttachments(transactionId, auditStartDate, auditEndDate);
+  getTransactionAttachments(
+    transactionId: string,
+    auditStartDate: Date | null | undefined,
+    auditEndDate: Date | null | undefined,
+    selected: SelectedTextIds
+  ) {
+    return submissionDb.getTransactionAttachments(transactionId, auditStartDate, auditEndDate, selected);
+  }
+
+  /** BACKLOG-3403: email attachment rows the on-demand download could not fill. */
+  getUndownloadedEmailAttachments(emailIds: string[]) {
+    return submissionDb.getUndownloadedEmailAttachments(emailIds);
   }
 
   getTransactionBySubmissionId(submissionId: string) {

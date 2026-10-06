@@ -450,8 +450,8 @@ describe("STK — every add fails on a transaction with no checklist", () => {
     expect(await screen.findByTestId("checklist-add-result")).toHaveTextContent(
       'Couldn\'t add "Probe template" — try again.',
     );
-    // Still the "No checklist yet" chooser, with its sentence.
-    expect(screen.getByText("No checklist yet")).toBeInTheDocument();
+    // Still the "No checklist added yet." chooser, with its sentence.
+    expect(screen.getByText("No checklist added yet.")).toBeInTheDocument();
     await waitFor(() => expect(api().listTemplates).toHaveBeenCalledTimes(2));
 
     // A checklist lands from elsewhere (another window), then the tab re-reads.

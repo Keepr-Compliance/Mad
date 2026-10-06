@@ -113,6 +113,9 @@ import {
   type SnapshotChecklistPayload,
 } from "../submissionChecklistSnapshot";
 import { CHECKLISTS_NOT_SENT_ERROR } from "../submissionService";
+import { buildAttachmentStoragePath } from "../submissionAttachmentFiles";
+import { setPreflightStatForTests } from "../submissionPreflight";
+import { setStageRetryDelaysForTests } from "../submissionStageRetry";
 import { retryOwedReviewChecklistPull } from "../submissionChecklistPull";
 import { getOwedReviewChecklistPullsFor, markReviewChecklistPullOwed } from "../db/submissionDbService";
 import * as Sentry from "@sentry/electron/main";
@@ -197,6 +200,8 @@ class FakeSupabase {
     let limitN: number | null = null;
     let mode: "select" | "insert" | "update" | "delete" = "select";
     let payload: Row | Row[] | null = null;
+    /** BACKLOG-3403: upsert(…, { ignoreDuplicates }) = ON CONFLICT (id) DO NOTHING. */
+    let ignoreDuplicateIds = false;
     const matched = () => all().filter((r) => filters.every((f) => f(r)));
 
     const run = (): { data: unknown; error: PgError | null } => {
@@ -213,8 +218,11 @@ class FakeSupabase {
         return { data: limitN === null ? out : out.slice(0, limitN), error: null };
       }
       if (mode === "update") {
-        for (const r of matched()) Object.assign(r, payload as Row);
-        return { data: matched(), error: null };
+        // RETURNING: the rows the WHERE matched, as updated (BACKLOG-3403's
+        // fence filters on the column it sets).
+        const hit = matched();
+        for (const r of hit) Object.assign(r, payload as Row);
+        return { data: hit, error: null };
       }
       if (mode === "delete") {
         const gone = new Set(matched());
@@ -223,13 +231,19 @@ class FakeSupabase {
       }
       const incoming = Array.isArray(payload) ? payload : [payload as Row];
       this.insertCalls[tableName] = (this.insertCalls[tableName] ?? 0) + 1;
-      for (const rec of incoming) all().push({ id: rec.id ?? this.id(tableName), ...rec });
+      for (const rec of incoming) {
+        if (ignoreDuplicateIds && rec.id !== undefined && all().some((r) => r.id === rec.id)) continue;
+        all().push({ id: rec.id ?? this.id(tableName), ...rec });
+      }
       return { data: incoming, error: null };
     };
 
     const builder: Record<string, unknown> = {
       select: () => builder,
       insert: (p: Row | Row[]) => ((mode = "insert"), (payload = p), builder),
+      upsert: (p: Row | Row[], opts?: { ignoreDuplicates?: boolean }) => (
+        (mode = "insert"), (payload = p), (ignoreDuplicateIds = opts?.ignoreDuplicates === true), builder
+      ),
       update: (p: Row) => ((mode = "update"), (payload = p), builder),
       delete: () => ((mode = "delete"), builder),
       eq: (c: string, v: unknown) => (filters.push((r) => r[c] === v), builder),
@@ -274,9 +288,44 @@ class FakeSupabase {
     return header ? this.checklistsFeatureAllowed : true;
   }
 
+  /** BACKLOG-3403: storage objects by path; abandon removes by exact path. */
+  objects = new Set<string>();
+  storage = {
+    from: (_bucket: string) => ({
+      remove: async (paths: string[]) => {
+        const gone = paths.filter((p) => this.objects.delete(p));
+        return { data: gone.map((name) => ({ name })), error: null };
+      },
+    }),
+  };
+
+  /**
+   * BACKLOG-3403: finalize_submission's success and state branches, transcribed
+   * from 20261004192647_backlog_3403_finalize_submission.sql:237-302 (the
+   * manifest check itself is covered by submissionAtomic-3403 and the SQL
+   * suite). record_submission_attempt answers as :208.
+   */
+  private submissionRpc(fn: string, args: Row): Promise<{ data: unknown; error: PgError | null }> | null {
+    if (fn === "record_submission_attempt") {
+      return Promise.resolve({ data: { ok: true, outcome: args.p_outcome, unchanged: false }, error: null });
+    }
+    if (fn !== "finalize_submission") return null;
+    const sub = this.tables.transaction_submissions.find((s) => s.id === args.p_submission_id);
+    if (!sub) return Promise.resolve({ data: { ok: false, code: "not_found" }, error: null });
+    if (sub.submitted_by !== USER) return Promise.resolve({ data: { ok: false, code: "not_owner" }, error: null });
+    const target = sub.parent_submission_id ? "resubmitted" : "submitted";
+    if (sub.status === target) return Promise.resolve({ data: { ok: true, already_final: true, status: target }, error: null });
+    if (sub.status !== "uploading") return Promise.resolve({ data: { ok: false, code: "not_uploading" }, error: null });
+    if (sub.abandoned_at) return Promise.resolve({ data: { ok: false, code: "abandoned" }, error: null });
+    sub.status = target;
+    return Promise.resolve({ data: { ok: true, already_final: false, status: target }, error: null });
+  }
+
   rpc(fn: string, args: Row): Promise<{ data: unknown; error: PgError | null }> {
     if (fn !== SNAPSHOT_RPC) {
       this.otherRpcCalls.push({ fn, args });
+      const answered = this.submissionRpc(fn, args);
+      if (answered) return answered;
       return this.runSnapshot(args, fn);
     }
     const parent = this.tables.transaction_submissions.find((s) => s.id === args.p_submission_id);
@@ -538,24 +587,41 @@ beforeEach(() => {
     if (keys.length) run(`UPDATE transactions SET ${keys.map((k) => `${k} = ?`).join(", ")} WHERE id = ?`, ...keys.map((k) => u[k]), id);
   });
 
-  // The real uploader's shape: one result per input, in order, localId = path.
-  (supabaseStorageService.uploadAttachments as jest.Mock).mockImplementation(
-    async (org: string, sub: string, list: { id: string; localPath: string; filename: string }[]) => ({
-      totalCount: list.length,
-      successCount: list.length,
-      failedCount: 0,
-      results: list.map((a, i) => ({
-        localId: a.localPath,
-        storagePath: `${org}/${sub}/${i}-${a.filename}`,
-        success: true,
-        mimeType: "application/pdf",
-        fileSizeBytes: 2048,
-      })),
-    }),
+  // BACKLOG-3403: the real uploader's shape, one file per call, stored under
+  // the path the manifest declared (buildAttachmentStoragePath).
+  (supabaseStorageService.uploadAttachmentWithRetry as jest.Mock).mockImplementation(
+    async (org: string, sub: string, id: string, localPath: string, filename: string) => {
+      const storagePath = buildAttachmentStoragePath(org, sub, id, filename);
+      fake.objects.add(storagePath);
+      return { localId: localPath, storagePath, success: true, mimeType: "application/pdf", fileSizeBytes: 2048 };
+    },
   );
+  // The fixture's local paths stand for files on disk.
+  setPreflightStatForTests(async () => ({ size: 2048 }));
+  setStageRetryDelaysForTests([0]);
 });
 
+/**
+ * BACKLOG-3403: Submit is two steps — the pre-flight lists what cannot be sent
+ * (here `att-nobytes`, an email attachment never downloaded) and the agent
+ * confirms. These controls are about the checklist copy, so they confirm.
+ */
+async function submitConfirmed() {
+  const preflight = await submissionService.preflightSubmission(TX);
+  return submissionService.submitTransaction(TX, undefined, {
+    acceptedExclusionKeys: preflight.notIncluded.map((i) => i.key),
+  });
+}
+async function resubmitConfirmed() {
+  const preflight = await submissionService.preflightSubmission(TX);
+  return submissionService.resubmitTransaction(TX, undefined, {
+    acceptedExclusionKeys: preflight.notIncluded.map((i) => i.key),
+  });
+}
+
 afterEach(() => {
+  setPreflightStatForTests(null);
+  setStageRetryDelaysForTests([1000, 2000]);
   db.close();
 });
 
@@ -579,7 +645,7 @@ function memberLocalIds(itemTitle: string): string[] {
 describe("BACKLOG-3477 — submit copies the transaction's checklists", () => {
   it("copies EVERY checklist, while the submission is uploading, with its evidence linked", async () => {
     await seedChecklists();
-    const result = await submissionService.submitTransaction(TX);
+    const result = await submitConfirmed();
 
     expect(result.success).toBe(true);
     const sub = fake.tables.transaction_submissions.find((s) => s.id === result.submissionId)!;
@@ -608,7 +674,7 @@ describe("BACKLOG-3477 — submit copies the transaction's checklists", () => {
 
   it("writes local_attachment_id per uploaded row, pairing same-bytes files by row, not by path", async () => {
     await seedChecklists();
-    const result = await submissionService.submitTransaction(TX);
+    const result = await submitConfirmed();
     expect(result.success).toBe(true);
 
     // Two uploads of one content-addressed file; each keeps its own local id.
@@ -623,56 +689,17 @@ describe("BACKLOG-3477 — submit copies the transaction's checklists", () => {
     expect(fake.tables.submission_checklist_links).toHaveLength(3);
   });
 
-  it("a FAILED upload ahead of a same-bytes pair does not shift the pairing", async () => {
-    // A file whose bytes are gone from disk, attached earlier than the pair, so
-    // it is uploaded (and fails) first.
-    run(
-      `INSERT INTO attachments (id, email_id, filename, mime_type, storage_path, created_at) VALUES
-         ('att-gone', 'e-offer', 'gone.pdf', 'application/pdf', '/attachments/gone.pdf', '2026-02-28T10:00:00Z')`,
-    );
-    const uploaderInputs: string[] = [];
-    (supabaseStorageService.uploadAttachments as jest.Mock).mockImplementation(
-      async (org: string, sub: string, list: { id: string; localPath: string; filename: string }[]) => {
-        uploaderInputs.push(...list.map((a) => a.id));
-        const results = list.map((a, i) =>
-          a.localPath === "/attachments/gone.pdf"
-            ? // Transcribed from the real failure return,
-              // electron/services/supabaseStorageService.ts:177-182 (ENOENT branch):
-              //   { localId: localPath, storagePath: "", success: false, error }
-              //   with error = `File not found: ${absolutePath}`.
-              { localId: a.localPath, storagePath: "", success: false, error: `File not found: ${a.localPath}` }
-            : {
-                localId: a.localPath,
-                storagePath: `${org}/${sub}/${i}-${a.filename}`,
-                success: true,
-                mimeType: "application/pdf",
-                fileSizeBytes: 2048,
-              },
-        );
-        const ok = results.filter((r) => r.success).length;
-        return { totalCount: list.length, successCount: ok, failedCount: list.length - ok, results };
-      },
-    );
-    await seedChecklists();
-
-    const result = await submissionService.submitTransaction(TX);
-    expect(result.success).toBe(true);
-
-    // Premise: the failed upload precedes both halves of the same-bytes pair.
-    const gone = uploaderInputs.indexOf("att-gone");
-    expect(gone).toBeGreaterThanOrEqual(0);
-    expect(gone).toBeLessThan(uploaderInputs.indexOf("att-offer"));
-    expect(gone).toBeLessThan(uploaderInputs.indexOf("att-fwd"));
-
-    // The failed upload writes no row; each of the pair keeps its own id.
-    expect(fake.tables.submission_attachments.map((a) => a.local_attachment_id).sort()).toEqual(["att-fwd", "att-offer"]);
-    expect(memberLocalIds("Signed purchase agreement")).toEqual(["att-offer"]);
-    expect(memberLocalIds("Earnest money receipt")).toEqual(["att-fwd"]);
-  });
+  // BACKLOG-3403 retired "a FAILED upload ahead of a same-bytes pair does not
+  // shift the pairing" on purpose. Its premise — a failed upload and the
+  // submission still going through — is gone: a failed upload now fails the
+  // whole submission, and attachment rows are built from the manifest (one
+  // minted row per local attachment, before upload), so there is no
+  // upload-result-to-row pairing left to shift. The same-bytes property is
+  // still held by the test above.
 
   it("sends exactly the contract's keys, and no reviewer values", async () => {
     await seedChecklists();
-    await submissionService.submitTransaction(TX);
+    await submitConfirmed();
     const payload = fake.rpcCalls[0].args.p_checklists as Row[];
     expect(Object.keys(fake.rpcCalls[0].args).sort()).toEqual(["p_checklists", "p_submission_id"]);
     expect(Object.keys(payload[0]).sort()).toEqual(["items", "sort_order", "template_id", "template_name"]);
@@ -695,11 +722,11 @@ describe("BACKLOG-3477 — submit copies the transaction's checklists", () => {
 
   it("a resubmit writes its own copy onto the new version", async () => {
     await seedChecklists();
-    const first = await submissionService.submitTransaction(TX);
+    const first = await submitConfirmed();
     expect(first.success).toBe(true);
     fake.tables.transaction_submissions.find((s) => s.id === first.submissionId)!.status = "needs_changes";
 
-    const second = await submissionService.resubmitTransaction(TX);
+    const second = await resubmitConfirmed();
     expect(second.success).toBe(true);
     expect(fake.rpcCalls.map((c) => [c.args.p_submission_id, c.parentStatusAtCall])).toEqual([
       [first.submissionId, "uploading"],
@@ -714,7 +741,7 @@ describe("BACKLOG-3477 — submit copies the transaction's checklists", () => {
     await seedChecklists();
     fake.checklistsFeatureAllowed = false;
 
-    const result = await submissionService.submitTransaction(TX);
+    const result = await submitConfirmed();
 
     expect(result.success).toBe(true);
     expect(fake.tables.transaction_submissions.find((s) => s.id === result.submissionId)!.status).toBe("submitted");
@@ -731,7 +758,7 @@ describe("BACKLOG-3477 — submit copies the transaction's checklists", () => {
   // transaction with none sends [] and the server records any checklist the
   // agent removed since the previous version.
   it("C9a: no checklist on the transaction -> [] is sent, written, and the agent is told nothing", async () => {
-    const result = await submissionService.submitTransaction(TX);
+    const result = await submitConfirmed();
     expect(result.success).toBe(true);
     expect("checklistsNotSent" in result).toBe(false);
     expect(fake.rpcCalls).toHaveLength(1);
@@ -747,7 +774,7 @@ describe("BACKLOG-3477 — submit copies the transaction's checklists", () => {
     // version -> the carry returns {status: 'not_in_plan'}; the snapshot call
     // succeeds with zero counts.
     fake.checklistsFeatureAllowed = false;
-    const result = await submissionService.submitTransaction(TX);
+    const result = await submitConfirmed();
     expect(result.success).toBe(true);
     expect("checklistsNotSent" in result).toBe(false);
     expect(fake.rpcCalls).toHaveLength(1);
@@ -758,7 +785,7 @@ describe("BACKLOG-3477 — submit copies the transaction's checklists", () => {
     // Before 20260929120000 the carry (20260928170000) checks the feature
     // before anything else: RAISE EXCEPTION 'not_authorized' USING ERRCODE '42501'.
     fake.rpcScript = [{ code: "42501", message: "not_authorized" }];
-    const result = await submissionService.submitTransaction(TX);
+    const result = await submitConfirmed();
     expect(result.success).toBe(true);
     expect("checklistsNotSent" in result).toBe(false);
     expect(fake.rpcCalls).toHaveLength(1);
@@ -823,7 +850,7 @@ describe("BACKLOG-3596 — the snapshot sends each item's local id", () => {
   it("every item on every checklist carries its own local item id", async () => {
     await seedChecklists();
     const tplSame = await seedSameTitleChecklist();
-    const result = await submissionService.submitTransaction(TX);
+    const result = await submitConfirmed();
     expect(result.success).toBe(true);
 
     const payload = fake.rpcCalls[0].args.p_checklists as Row[];
@@ -858,10 +885,10 @@ describe("BACKLOG-3596 — the snapshot sends each item's local id", () => {
 
   it("the ids are the same on the resubmitted version (stable across snapshots)", async () => {
     await seedChecklists();
-    const first = await submissionService.submitTransaction(TX);
+    const first = await submitConfirmed();
     expect(first.success).toBe(true);
     fake.tables.transaction_submissions.find((s) => s.id === first.submissionId)!.status = "needs_changes";
-    const second = await submissionService.resubmitTransaction(TX);
+    const second = await resubmitConfirmed();
     expect(second.success).toBe(true);
 
     expect(fake.rpcCalls).toHaveLength(2);
@@ -938,7 +965,7 @@ describe("BACKLOG-3600 — the checklist copy is retried, then fails the submit"
     fake.rpcScript = ["network", "network", "network"];
     const before = localStatus();
 
-    const result = await submissionService.submitTransaction(TX);
+    const result = await submitConfirmed();
 
     expect(result.success).toBe(false);
     expect(result.error).toBe(CHECKLISTS_NOT_SENT_ERROR);
@@ -956,7 +983,7 @@ describe("BACKLOG-3600 — the checklist copy is retried, then fails the submit"
     await seedChecklists();
     fake.rpcScript = ["network"];
 
-    const result = await submissionService.submitTransaction(TX);
+    const result = await submitConfirmed();
 
     expect(result.success).toBe(true);
     expect("checklistsNotSent" in result).toBe(false);
@@ -966,7 +993,8 @@ describe("BACKLOG-3600 — the checklist copy is retried, then fails the submit"
     expect(fake.tables.submission_checklists).toHaveLength(2);
     expect(fake.tables.transaction_submissions.map((s) => s.status)).toEqual(["submitted"]);
     // The retry did not re-run anything upstream of it.
-    expect(supabaseStorageService.uploadAttachments as jest.Mock).toHaveBeenCalledTimes(1);
+    // BACKLOG-3403: one upload per sendable attachment (att-offer, att-fwd).
+    expect(supabaseStorageService.uploadAttachmentWithRetry as jest.Mock).toHaveBeenCalledTimes(2);
     expect(fake.insertCalls.submission_attachments).toBe(1);
     expect(fake.tables.submission_attachments).toHaveLength(2);
   });
@@ -975,7 +1003,7 @@ describe("BACKLOG-3600 — the checklist copy is retried, then fails the submit"
     await seedChecklists();
     fake.rpcScript = ["lost"];
 
-    const result = await submissionService.submitTransaction(TX);
+    const result = await submitConfirmed();
 
     expect(result.success).toBe(true);
     expect("checklistsNotSent" in result).toBe(false);
@@ -990,7 +1018,7 @@ describe("BACKLOG-3600 — the checklist copy is retried, then fails the submit"
     await seedChecklists();
     fake.checklistsFeatureAllowed = false;
 
-    const result = await submissionService.submitTransaction(TX);
+    const result = await submitConfirmed();
 
     expect(result.success).toBe(true);
     expect(result.checklistsNotSent).toBe("not_in_plan");
@@ -1002,7 +1030,7 @@ describe("BACKLOG-3600 — the checklist copy is retried, then fails the submit"
     await seedChecklists();
     fake.rpcScript = [{ code: "23505", message: "duplicate key value violates unique constraint" }];
 
-    const result = await submissionService.submitTransaction(TX);
+    const result = await submitConfirmed();
 
     expect(result.success).toBe(true);
     expect(result.checklistsNotSent).toBe("refused");
@@ -1016,7 +1044,7 @@ describe("BACKLOG-3600 — the checklist copy is retried, then fails the submit"
     fake.rpcScript = ["hang", "hang", "hang"];
 
     const started = Date.now();
-    const result = await submissionService.submitTransaction(TX);
+    const result = await submitConfirmed();
 
     expect(result.success).toBe(false);
     expect(result.error).toBe(CHECKLISTS_NOT_SENT_ERROR);
@@ -1039,7 +1067,7 @@ describe("BACKLOG-3600 — the checklist copy is retried, then fails the submit"
     await seedChecklists();
     fake.rpcScript = [{ code, message }];
 
-    const result = await submissionService.submitTransaction(TX);
+    const result = await submitConfirmed();
 
     expect(result.success).toBe(true);
     expect("checklistsNotSent" in result).toBe(false);
@@ -1056,7 +1084,7 @@ describe("BACKLOG-3600 — the checklist copy is retried, then fails the submit"
     await seedChecklists();
     fake.rpcScript = [{ code, message }];
 
-    const result = await submissionService.submitTransaction(TX);
+    const result = await submitConfirmed();
 
     expect(result.success).toBe(true);
     expect(result.checklistsNotSent).toBe("refused");
@@ -1067,7 +1095,7 @@ describe("BACKLOG-3600 — the checklist copy is retried, then fails the submit"
 
   it("C9b: a transient failure on [] still fails the submit (nothing reaches the broker)", async () => {
     fake.rpcScript = ["network", "network", "network"];
-    const result = await submissionService.submitTransaction(TX);
+    const result = await submitConfirmed();
     expect(result.success).toBe(false);
     expect(result.error).toBe(CHECKLISTS_NOT_SENT_ERROR);
     expect(fake.rpcCalls).toHaveLength(3);
@@ -1081,7 +1109,7 @@ describe("BACKLOG-3600 — the checklist copy is retried, then fails the submit"
       .spyOn(checklistDbModule, "getChecklistsForTransaction")
       .mockRejectedValue(new Error("SQLITE_BUSY: database is locked"));
     try {
-      const result = await submissionService.submitTransaction(TX);
+      const result = await submitConfirmed();
 
       expect(spy).toHaveBeenCalled();
       expect(result.success).toBe(false);
@@ -1095,14 +1123,14 @@ describe("BACKLOG-3600 — the checklist copy is retried, then fails the submit"
 
   it("a resubmit that loses the network on every attempt leaves the earlier version and local state alone", async () => {
     await seedChecklists();
-    const first = await submissionService.submitTransaction(TX);
+    const first = await submitConfirmed();
     expect(first.success).toBe(true);
     fake.tables.transaction_submissions.find((s) => s.id === first.submissionId)!.status = "needs_changes";
     run(`UPDATE transactions SET submission_status = 'needs_changes' WHERE id = ?`, TX);
     // The script is indexed by call number; call 1 was the first submit.
     fake.rpcScript = [undefined, "network", "network", "network"];
 
-    const second = await submissionService.resubmitTransaction(TX);
+    const second = await resubmitConfirmed();
 
     expect(second.success).toBe(false);
     expect(second.error).toBe(CHECKLISTS_NOT_SENT_ERROR);
@@ -1122,7 +1150,7 @@ describe("BACKLOG-3599 — resubmit with an owed broker checklist pull", () => {
   /** v1 submitted, the broker added a checklist at review, the pull is owed. */
   async function submittedWithOwedPull(): Promise<string> {
     await seedChecklists();
-    const first = await submissionService.submitTransaction(TX);
+    const first = await submitConfirmed();
     expect(first.success).toBe(true);
     const sid = first.submissionId!;
     fake.tables.transaction_submissions.find((s) => s.id === sid)!.status = "needs_changes";
@@ -1157,7 +1185,7 @@ describe("BACKLOG-3599 — resubmit with an owed broker checklist pull", () => {
   it("C8: the owed pull lands first, so the new version's snapshot carries the broker checklist", async () => {
     const v1 = await submittedWithOwedPull();
 
-    const second = await submissionService.resubmitTransaction(TX);
+    const second = await resubmitConfirmed();
 
     expect(second.success).toBe(true);
     expect("checklistsNotSent" in second).toBe(false);
@@ -1177,7 +1205,7 @@ describe("BACKLOG-3599 — resubmit with an owed broker checklist pull", () => {
     const v1 = await submittedWithOwedPull();
     fake.failReadsOf.add("submission_checklists");
 
-    const second = await submissionService.resubmitTransaction(TX);
+    const second = await resubmitConfirmed();
 
     expect(second.success).toBe(true);
     expect(second.checklistsNotSent).toBe("brokerChecklistsNotDownloaded");
@@ -1191,7 +1219,7 @@ describe("BACKLOG-3599 — resubmit with an owed broker checklist pull", () => {
     fake.failReadsOf.add("submission_checklists");
     fake.checklistsFeatureAllowed = false;
 
-    const second = await submissionService.resubmitTransaction(TX);
+    const second = await resubmitConfirmed();
 
     expect(second.success).toBe(true);
     expect(second.checklistsNotSent).toBe("not_in_plan");
@@ -1201,7 +1229,7 @@ describe("BACKLOG-3599 — resubmit with an owed broker checklist pull", () => {
   // the cloud. v1's broker removal must not reach the local set behind v2.
   it("C-B1e: an owed pull for v1 after v2 exists is dropped at the next resubmit; v3 still carries the checklist", async () => {
     await seedChecklists();
-    const first = await submissionService.submitTransaction(TX);
+    const first = await submitConfirmed();
     expect(first.success).toBe(true);
     const v1 = first.submissionId!;
     fake.tables.transaction_submissions.find((s) => s.id === v1)!.status = "needs_changes";
@@ -1215,7 +1243,7 @@ describe("BACKLOG-3599 — resubmit with an owed broker checklist pull", () => {
 
     // v2: the pre-pull fails, so v2 is sent WITH the checklist and v1 stays owed.
     fake.failReadsOf.add("submission_checklists");
-    const second = await submissionService.resubmitTransaction(TX);
+    const second = await resubmitConfirmed();
     expect(second.success).toBe(true);
     expect(second.checklistsNotSent).toBe("brokerChecklistsNotDownloaded");
     expect(getOwedReviewChecklistPullsFor(TX)).toEqual([v1]);
@@ -1226,7 +1254,7 @@ describe("BACKLOG-3599 — resubmit with an owed broker checklist pull", () => {
     run(`UPDATE transactions SET submission_status = 'needs_changes' WHERE id = ?`, TX);
     const callsBefore = fake.rpcCalls.length;
 
-    const third = await submissionService.resubmitTransaction(TX);
+    const third = await resubmitConfirmed();
 
     expect(third.success).toBe(true);
     expect("checklistsNotSent" in third).toBe(false);
@@ -1244,7 +1272,7 @@ describe("BACKLOG-3599 — resubmit with an owed broker checklist pull", () => {
     // The script is indexed by call number; call 1 was the first submit.
     fake.rpcScript = [undefined, "network", "network", "network"];
 
-    const second = await submissionService.resubmitTransaction(TX);
+    const second = await resubmitConfirmed();
 
     expect(second.success).toBe(false);
     expect(getOwedReviewChecklistPullsFor(TX)).toEqual([v1]);
@@ -1274,7 +1302,7 @@ describe("BACKLOG-3599 — resubmit with an owed broker checklist pull", () => {
       });
     let second: Awaited<ReturnType<typeof submissionService.resubmitTransaction>>;
     try {
-      second = await submissionService.resubmitTransaction(TX);
+      second = await resubmitConfirmed();
     } finally {
       spy.mockRestore();
     }
@@ -1301,7 +1329,7 @@ describe("BACKLOG-3599 — resubmit with an owed broker checklist pull", () => {
       )
       .mockRejectedValueOnce(new Error("boom"));
     try {
-      await expect(submissionService.resubmitTransaction(TX)).rejects.toThrow("boom");
+      await expect(resubmitConfirmed()).rejects.toThrow("boom");
     } finally {
       spy.mockRestore();
     }
@@ -1333,7 +1361,7 @@ describe("BACKLOG-3599 — resubmit with an owed broker checklist pull", () => {
     });
     let second: Awaited<ReturnType<typeof submissionService.resubmitTransaction>>;
     try {
-      second = await submissionService.resubmitTransaction(TX);
+      second = await resubmitConfirmed();
     } finally {
       spy.mockRestore();
     }
@@ -1360,7 +1388,7 @@ describe("BACKLOG-3599 — resubmit with an owed broker checklist pull", () => {
   it("SR-X3: a leftover `uploading` child, then resubmit -> v2 carries v1's broker checklist, no warning", async () => {
     const v1 = await submittedWithOwedPull();
     leaveStaleUploading(v1);
-    const second = await submissionService.resubmitTransaction(TX);
+    const second = await resubmitConfirmed();
     expect(second.success).toBe(true);
     expect("checklistsNotSent" in second).toBe(false);
     const payload = fake.rpcCalls[fake.rpcCalls.length - 1].args.p_checklists as Row[];
@@ -1386,7 +1414,7 @@ describe("BACKLOG-3599 — resubmit with an owed broker checklist pull", () => {
       await submittedWithOwedPull();
       const before = localChecklistCount();
 
-      const second = await submissionService.resubmitTransaction(TX);
+      const second = await resubmitConfirmed();
 
       expect(second.success).toBe(true);
       expect(sent).toEqual([
@@ -1398,7 +1426,7 @@ describe("BACKLOG-3599 — resubmit with an owed broker checklist pull", () => {
     // at review (migration 20260929120000 section 6 sets both markers).
     it("the pre-pull only REMOVES a checklist -> transaction-checklists-changed once, after the delete; the new version omits it", async () => {
       await seedChecklists();
-      const first = await submissionService.submitTransaction(TX);
+      const first = await submitConfirmed();
       expect(first.success).toBe(true);
       const sid = first.submissionId!;
       fake.tables.transaction_submissions.find((s) => s.id === sid)!.status = "needs_changes";
@@ -1411,7 +1439,7 @@ describe("BACKLOG-3599 — resubmit with an owed broker checklist pull", () => {
       expect(markReviewChecklistPullOwed(TX, sid)).toBe(true);
       const before = localChecklistCount();
 
-      const second = await submissionService.resubmitTransaction(TX);
+      const second = await resubmitConfirmed();
 
       expect(second.success).toBe(true);
       expect("checklistsNotSent" in second).toBe(false);
@@ -1427,7 +1455,7 @@ describe("BACKLOG-3599 — resubmit with an owed broker checklist pull", () => {
       await submittedWithOwedPull();
       fake.failReadsOf.add("submission_checklists");
 
-      await submissionService.resubmitTransaction(TX);
+      await resubmitConfirmed();
 
       expect(sent).toEqual([]);
     });
@@ -1435,11 +1463,11 @@ describe("BACKLOG-3599 — resubmit with an owed broker checklist pull", () => {
 
   it("nothing owed -> no pull, no field", async () => {
     await seedChecklists();
-    const first = await submissionService.submitTransaction(TX);
+    const first = await submitConfirmed();
     fake.tables.transaction_submissions.find((s) => s.id === first.submissionId)!.status = "needs_changes";
     run(`UPDATE transactions SET submission_status = 'needs_changes' WHERE id = ?`, TX);
 
-    const second = await submissionService.resubmitTransaction(TX);
+    const second = await resubmitConfirmed();
 
     expect(second.success).toBe(true);
     expect("checklistsNotSent" in second).toBe(false);

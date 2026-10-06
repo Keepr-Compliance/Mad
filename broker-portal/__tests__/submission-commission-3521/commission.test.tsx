@@ -213,3 +213,45 @@ describe('formatting (BACKLOG-3521)', () => {
     expect(gross(12500)).toBe('$12,500');
   });
 });
+
+/**
+ * Edge values the DB allows but the production fixtures above never carry
+ * (SR review of PR #2765, mutations M4 and M5 survived):
+ *  - a 0% rate: the CHECK on commission_*_rate allows 0, and 0 is a figure,
+ *    not an empty cell.
+ *  - an amount with cents: commission_gross_amount is numeric(12,2). The desktop
+ *    writer (src/components/transactionDates/commission.ts computeGross) stores
+ *    whole dollars rounded HALF UP; a row written any other way must display by
+ *    the same rule, so 12500.50 -> $12,501 (half-even would give $12,500).
+ */
+describe('edge values (BACKLOG-3521)', () => {
+  it('a 0% rate renders "0%", never "–"', () => {
+    expect(offeredCell(readCommission({ ...NO_FIGURES, commission_offered_rate: 0 }))).toBe('0%');
+    expect(offeredCell(readCommission({ ...NO_FIGURES, commission_offered_rate: '0.000' }))).toBe('0%');
+    expect(actualCell(readCommission({ ...NO_FIGURES, commission_actual_rate: 0 }))).toBe('0%');
+    expect(actualCell(readCommission({ commission_offered_rate: 0, commission_actual_rate: 0, commission_gross_amount: 0 }))).toBe(
+      '0% · $0'
+    );
+  });
+
+  it('a 0% rate on the page header shows "0%"', async () => {
+    await renderPage({ commission_offered_rate: 0, commission_actual_rate: 0, commission_gross_amount: 0 });
+    expect(headerCell('Commission Offered')).toBe('0%');
+    expect(headerCell('Commission Actual')).toBe('0% · $0');
+  });
+
+  it('an amount with cents shows whole dollars, rounded half up like the desktop', () => {
+    const gross = (v: string | number) => formatGross(readCommission({ ...NO_FIGURES, commission_gross_amount: v }).grossAmount!);
+    expect(gross(12500.5)).toBe('$12,501');
+    expect(gross('12500.50')).toBe('$12,501');
+    expect(gross(12500.49)).toBe('$12,500');
+    expect(gross('12500.40')).toBe('$12,500');
+    expect(gross(12500.51)).toBe('$12,501');
+    expect(gross(0.5)).toBe('$1');
+  });
+
+  it('an amount with cents on the page header shows whole dollars', async () => {
+    await renderPage({ commission_offered_rate: 3, commission_actual_rate: 2.5, commission_gross_amount: 12500.5 });
+    expect(headerCell('Commission Actual')).toBe('2.5% · $12,501');
+  });
+});

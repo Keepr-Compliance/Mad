@@ -1,8 +1,11 @@
 /**
  * A text input for a dollar amount that adds thousands separators as you type
- * (BACKLOG-3614): 100 -> 1,000 -> 1,000,000. The caret stays beside the digit
- * it was next to on insert and delete, including in the middle of the number;
- * deleting a comma deletes the digit on the far side of it.
+ * (BACKLOG-3614): 100 -> 1,000 -> 1,000,000. The one price input for the app
+ * (BACKLOG-3677): New Transaction's Listing Price and the Verify step's Sale
+ * Price both use it. The caret is kept by digit index — it stays beside the
+ * digit it was next to on insert and delete, including in the middle of the
+ * number; deleting a comma deletes the digit on the far side of it. An amount
+ * with no non-zero digit is blank, never 0.
  *
  * Controlled: `value` is the display text ("1,000,000") and `onValueChange`
  * receives the new display text. Parse it with `parseMoney` to get the plain
@@ -13,7 +16,7 @@ import React, { useLayoutEffect, useRef } from "react";
 import {
   deleteAcrossSeparator,
   formatMoneyEdit,
-  trimLeadingZeros,
+  settleMoneyOnBlur,
 } from "../../utils/liveMoneyFormat";
 
 type NativeInputProps = Omit<
@@ -62,12 +65,12 @@ function LiveMoneyInput({
     onKeyUp?.(e);
   };
 
-  // Leading zeros are kept while typing (so 500,000 -> 00,000 -> 600,000 works)
-  // and removed when the field loses focus.
+  // A zero amount left in the field ("0.") becomes blank, and a trailing "."
+  // is dropped, when the field loses focus.
   const handleBlur = (e: React.FocusEvent<HTMLInputElement>) => {
     lastDeleteKey.current = null;
-    const trimmed = trimLeadingZeros(value);
-    if (trimmed !== value) onValueChange(trimmed);
+    const settled = settleMoneyOnBlur(value);
+    if (settled !== value) onValueChange(settled);
     onBlur?.(e);
   };
 

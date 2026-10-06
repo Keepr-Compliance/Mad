@@ -74,6 +74,12 @@ if (typeof window !== 'undefined') {
       // about review state behave as they did before the gate existed. Suites
       // that ARE about it set their own value.
       getReviewState: jest.fn().mockResolvedValue({ items: [], count: 0 }),
+      // BACKLOG-3403: Submit asks first which attachments cannot be sent.
+      // Default = nothing to list, so suites that are not about the
+      // pre-flight submit as they did before it existed.
+      submitPreflight: jest.fn().mockResolvedValue({ success: true, notIncluded: [] }),
+      // BACKLOG-3398: Cancel really cancels.
+      cancelSubmit: jest.fn().mockResolvedValue({ success: true, cancelled: true }),
       bulkDelete: jest.fn(),
       bulkUpdateStatus: jest.fn(),
       batchUpdateContacts: jest.fn(),
@@ -399,6 +405,13 @@ if (typeof window !== 'undefined') {
       // Never gated in the main process, so the default is the working answer.
       remove: jest.fn().mockResolvedValue({ success: true, changed: false }),
       invalidateTemplates: jest.fn().mockResolvedValue({ success: true }),
+      // BACKLOG-3617: gated like listTemplates, so the default is the refusal
+      // — which the chooser reads as "unknown", never as a creator.
+      canEditTemplates: jest.fn().mockResolvedValue({
+        success: false,
+        error: 'Transaction checklists are not available.',
+      }),
+      openTemplatesPortal: jest.fn().mockResolvedValue({ success: true }),
     },
     // BACKLOG-2006a: per-transaction paywall entitlement. Default is fail-closed
     // (LOCKED) so any test that forgets to override cannot accidentally reveal content.

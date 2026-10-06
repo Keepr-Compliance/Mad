@@ -45,7 +45,7 @@ jest.mock('@/lib/impersonation', () => ({
   getImpersonationSession: jest.fn(async () => null),
 }));
 jest.mock('@/lib/checklist-access', () => ({
-  isChecklistEditorEnabled: jest.fn(async () => false),
+  isChecklistPageEnabled: jest.fn(async () => false),
 }));
 jest.mock('next/link', () => ({
   __esModule: true,

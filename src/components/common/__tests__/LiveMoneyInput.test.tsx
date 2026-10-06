@@ -144,30 +144,36 @@ describe("LiveMoneyInput — caret position", () => {
 
 // SR review (pm_comments 3008b20f on BACKLOG-3614): three defects in the first cut.
 describe("LiveMoneyInput — SR fixes", () => {
-  it("R1: 500,000 -> Backspace the 5 -> type 6 -> 600,000 (leading zeros kept while typing)", async () => {
+  // BACKLOG-3677 reverses R1 (leading zeros kept while typing): it was the
+  // cause of the founder's "backspacing the leading 1 of 1,000,000 saves 0".
+  // A whole part with no non-zero digit is now blank (pm_comments 882e5ecc).
+  it("R1 (3677): 500,000 -> Backspace the 5 -> blank; replacing a leading digit is select-and-type", async () => {
     const { input, user } = setup("500,000");
     await typeAt(user, input, "{Backspace}", 1);
-    expect(input.value).toBe("00,000");
-    expect(input.selectionStart).toBe(0);
-    await typeAt(user, input, "6", 0);
+    expect(input.value).toBe("");
+  });
+
+  it("R1 (3677): select the 5 of 500,000 and type 6 -> 600,000", async () => {
+    const { input, user } = setup("500,000");
+    await user.type(input, "6", { initialSelectionStart: 0, initialSelectionEnd: 1 });
     expect(input.value).toBe("600,000");
     expect(input.selectionStart).toBe(1);
   });
 
-  it("R1b: Backspace over the comma in 1,|000,000 keeps the zeros", async () => {
-    const { input, user } = setup("1,000,000");
+  it("R1b (3677): Backspace over the comma in 1,|000,000 deletes the 1 and leaves the box blank", async () => {
+    const { input, user, onText } = setup("1,000,000");
     await typeAt(user, input, "{Backspace}", 2);
-    expect(input.value).toBe("000,000");
-    await typeAt(user, input, "2", 0);
-    expect(input.value).toBe("2,000,000");
+    expect(input.value).toBe("");
+    expect(onText).toHaveBeenLastCalledWith("");
   });
 
-  it("R1c: leading zeros are trimmed when the field loses focus", async () => {
-    const { input, user, onText } = setup("500,000");
-    await typeAt(user, input, "{Backspace}", 1);
+  it("R1c (3677): a zero amount left in the field is blank after blur, never 0", async () => {
+    const { input, user, onText } = setup();
+    await user.type(input, ".");
+    expect(input.value).toBe("0.");
     fireEvent.blur(input);
-    expect(input.value).toBe("0");
-    expect(onText).toHaveBeenLastCalledWith("0");
+    expect(input.value).toBe("");
+    expect(onText).toHaveBeenLastCalledWith("");
   });
 
   it("R2: a second . typed mid-number is ignored; no digits are lost", async () => {
@@ -204,5 +210,105 @@ describe("LiveMoneyInput — SR fixes", () => {
     input.setSelectionRange(1, 2);
     await user.cut();
     expect(input.value).toBe("1,234");
+  });
+});
+
+// BACKLOG-3677 — the founder's bug, and a table sweep of typing, deleting and
+// pasting. Each row starts from `initial` with the caret (or selection) at
+// [start, end], sends `keys`, and checks the text and the caret.
+describe("LiveMoneyInput — BACKLOG-3677 leading-digit fix", () => {
+  it("backspacing the leading 1 of 1,000,000 leaves the box BLANK (not 0), before and after blur", async () => {
+    const { input, user, onText } = setup("1,000,000");
+    await typeAt(user, input, "{Backspace}", 1);
+    expect(input.value).toBe("");
+    expect(onText).toHaveBeenLastCalledWith("");
+    fireEvent.blur(input);
+    expect(input.value).toBe("");
+  });
+
+  it("Delete on the leading 1 of 1,000,000 also leaves the box blank", async () => {
+    const { input, user } = setup("1,000,000");
+    await typeAt(user, input, "{Delete}", 0);
+    expect(input.value).toBe("");
+  });
+});
+
+type Row = [label: string, initial: string, start: number, end: number, keys: string, text: string, caret: number];
+
+const SWEEP: Row[] = [
+  // typing: caret at the start, middle and end
+  ["type at start", "234", 0, 0, "1", "1,234", 1],
+  ["type in middle", "1,034", 2, 2, "2", "12,034", 2],
+  ["type at end", "1,23", 4, 4, "4", "1,234", 5],
+  // comma boundaries
+  ["999 -> 1,000 (type at end)", "999", 3, 3, "9", "9,999", 5],
+  ["999 -> 1,000 (type at start)", "999", 0, 0, "1", "1,999", 1],
+  ["999,999 -> 1,000,000 boundary (type at end)", "99,999", 6, 6, "9", "999,999", 7],
+  ["999,999 + 9 at end -> 9,999,999", "999,999", 7, 7, "9", "9,999,999", 9],
+  ["999,999 + 1 at start -> 1,999,999", "999,999", 0, 0, "1", "1,999,999", 1],
+  ["1,000 -> backspace last -> 100", "1,000", 5, 5, "{Backspace}", "100", 3],
+  ["1,000,000 -> backspace last -> 100,000", "1,000,000", 9, 9, "{Backspace}", "100,000", 7],
+  // deleting: start, middle, end, across a comma
+  ["backspace at start does nothing", "1,234", 0, 0, "{Backspace}", "1,234", 0],
+  ["delete at start", "1,234", 0, 0, "{Delete}", "234", 0],
+  ["backspace in middle", "12,345", 4, 4, "{Backspace}", "1,245", 3],
+  ["backspace at end", "12,345", 6, 6, "{Backspace}", "1,234", 5],
+  ["delete at end does nothing", "12,345", 6, 6, "{Delete}", "12,345", 6],
+  ["backspace across a comma", "12,345", 3, 3, "{Backspace}", "1,345", 1],
+  ["delete across a comma", "12,345", 2, 2, "{Delete}", "1,245", 3],
+  ["backspace the leading digit, zeros follow", "1,000,000", 1, 1, "{Backspace}", "", 0],
+  ["backspace the leading digit, a non-zero follows", "1,050", 1, 1, "{Backspace}", "50", 0],
+  // selections
+  ["select-all + Backspace -> blank", "1,234,567", 0, 9, "{Backspace}", "", 0],
+  ["select-all + Delete -> blank", "1,234,567", 0, 9, "{Delete}", "", 0],
+  ["select-all + type -> replaces", "1,234,567", 0, 9, "8", "8", 1],
+  ["select a middle run + type", "1,234,567", 2, 5, "9", "19,567", 2],
+  // decimals
+  ["type a dot at end", "1,234", 5, 5, ".", "1,234.", 6],
+  ["type cents", "1,234.", 6, 6, "50", "1,234.50", 8],
+  ["third decimal is ignored", "1,234.50", 8, 8, "1", "1,234.50", 8],
+  ["a dot into an empty box gives 0.", "", 0, 0, ".", "0.", 2],
+  ["backspace the dot rejoins the digits", "1,234.5", 6, 6, "{Backspace}", "12,345", 5],
+  // leading zeros
+  ["a lone 0 is blank", "", 0, 0, "0", "", 0],
+  ["leading zeros are dropped as typed", "", 0, 0, "007", "7", 1],
+  ["a zero typed before the number is dropped", "123", 0, 0, "0", "123", 0],
+  ["0 then .5 gives 0.5", "", 0, 0, "0.5", "0.5", 3],
+];
+
+describe("LiveMoneyInput — BACKLOG-3677 table sweep (typing and deleting)", () => {
+  it.each(SWEEP)("%s: %j [%i,%i] + %s -> %j @%i", async (_label, initial, start, end, keys, text, caret) => {
+    const { input, user } = setup(initial);
+    await user.type(input, keys, { initialSelectionStart: start, initialSelectionEnd: end });
+    expect(input.value).toBe(text);
+    expect(input.selectionStart).toBe(caret);
+  });
+});
+
+describe("LiveMoneyInput — BACKLOG-3677 table sweep (pasting)", () => {
+  it.each([
+    // [paste, initial, start, end, text, caret]
+    ["$1,234.50", "", 0, 0, "1,234.50", 8],
+    ["$1,234.567", "", 0, 0, "1,234.56", 8],
+    ["1000000", "", 0, 0, "1,000,000", 9],
+    ["000123", "", 0, 0, "123", 3],
+    ["$0.00", "", 0, 0, "0.00", 4],
+    ["99", "1,000", 1, 1, "199,000", 3],
+    ["$2,500", "1,234,567", 0, 9, "2,500", 5],
+  ])("paste %j into %j [%i,%i] -> %j @%i", async (paste, initial, start, end, text, caret) => {
+    const { input, user } = setup(initial);
+    input.focus();
+    input.setSelectionRange(start, end);
+    await user.paste(paste);
+    expect(input.value).toBe(text);
+    expect(input.selectionStart).toBe(caret);
+  });
+
+  it("a pasted $0.00 is blank once the field loses focus", async () => {
+    const { input, user } = setup();
+    input.focus();
+    await user.paste("$0.00");
+    fireEvent.blur(input);
+    expect(input.value).toBe("");
   });
 });
