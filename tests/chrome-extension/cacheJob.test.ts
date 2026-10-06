@@ -784,6 +784,16 @@ describe("runJob: a cache Sync", () => {
       expect(details(t)).toContain("1 too large");
     });
 
+    // BACKLOG-3668 L2: readImage stopped at the cap before reading it in full.
+    it("a photo stopped at the cap ({ tooLarge }) is not sent and counts as too large", async () => {
+      const t = oneChat();
+      withMatch(t, { keepPhotos: true });
+      t.env.readImage = async () => ({ tooLarge: true }) as unknown as { mimeType: string; base64: string };
+      await job.runJob(JOB, t.env);
+      expect(t.calls.some(([, p]) => p.endsWith("/attachment"))).toBe(false);
+      expect(media(t).photos).toMatchObject({ tooLarge: 1, saved: 0 });
+    });
+
     it("videos: counted; not downloaded yet when kept (not supported), not kept when off", async () => {
       const video = { msgId: "v1", direction: "inbound", sender: "x", text: "", sentAt: new Date(NOW - DAY).toISOString(), transport: "rcs", imageSrcs: [], files: [{ name: "clip_01.mp4", size: "" }] };
       const on = oneChat();

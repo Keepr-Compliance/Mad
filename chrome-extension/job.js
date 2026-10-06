@@ -210,6 +210,66 @@
   var RCS_MAX_PHOTO_BYTES = 25 * 1024 * 1024;
   var RCS_MAX_VIDEO_BYTES = 200 * 1024 * 1024;
   var RCS_MEDIA_RETRY_POOL_MS = 5 * 60000;
+
+  /**
+   * BACKLOG-3668 L2: where a photo may be read from. Messages for Web shows a
+   * message's images as blob: URLs of its own origin (extract.js
+   * messageImages; the fixtures); Google's image host is allowed as well.
+   * Anything else (another site, data:, http:) is never fetched.
+   */
+  var IMAGE_SRC_ALLOWED = [
+    /^blob:https:\/\/messages\.google\.com\//i,
+    /^https:\/\/(?:[a-z0-9-]+\.)*googleusercontent\.com\//i,
+  ];
+  function imageSrcAllowed(src) {
+    var s = String(src || "");
+    for (var i = 0; i < IMAGE_SRC_ALLOWED.length; i++) if (IMAGE_SRC_ALLOWED[i].test(s)) return true;
+    return false;
+  }
+
+  /**
+   * BACKLOG-3668 L2: read one photo, never more than `maxBytes` (default
+   * RCS_MAX_PHOTO_BYTES): a Content-Length over it, or a body that grows past
+   * it, stops the read → { tooLarge: true } (counted like any oversize photo).
+   * An src off the allow-list or a failed response → null ("didn't load").
+   * io: { fetch(src), toBase64(blob), maxBytes? }.
+   */
+  async function readImageCapped(src, io) {
+    var max = typeof io.maxBytes === "number" ? io.maxBytes : RCS_MAX_PHOTO_BYTES;
+    if (!imageSrcAllowed(src)) return null;
+    var res = await io.fetch(src);
+    if (!res || res.ok === false) return null;
+    var header = function (name) {
+      return res.headers && typeof res.headers.get === "function" ? res.headers.get(name) : null;
+    };
+    var declared = Number(header("content-length"));
+    if (header("content-length") !== null && isFinite(declared) && declared > max) {
+      try { if (res.body && typeof res.body.cancel === "function") await res.body.cancel(); } catch (_e) { /* dropped anyway */ }
+      return { tooLarge: true };
+    }
+    var type = String(header("content-type") || "").split(";")[0].trim();
+    var blob;
+    if (res.body && typeof res.body.getReader === "function") {
+      var reader = res.body.getReader();
+      var chunks = [];
+      var total = 0;
+      for (;;) {
+        var step = await reader.read();
+        if (step.done) break;
+        total += step.value ? step.value.byteLength : 0;
+        if (total > max) {
+          try { await reader.cancel(); } catch (_e) { /* dropped anyway */ }
+          return { tooLarge: true };
+        }
+        chunks.push(step.value);
+      }
+      blob = new Blob(chunks, { type: type });
+    } else {
+      blob = await res.blob();
+      if (blob.size > max) return { tooLarge: true };
+    }
+    return { mimeType: blob.type || type || "application/octet-stream", base64: await io.toBase64(blob) };
+  }
   /**
    * SR (3671 P1): a chat that failed for a TRANSIENT reason (its messages did
    * not load, it could not be opened / found, Details timed out, its history
@@ -1140,6 +1200,8 @@
         var readAt = clock();
         var img = await env.readImage(src);
         if (chatTiming) chatTiming.photoRead.push(clock() - readAt);
+        // BACKLOG-3668 L2: stopped at the size cap before it was read in full.
+        if (img && img.tooLarge) return "tooLarge";
         if (!img || !/^image\//.test(img.mimeType)) return "readFailed";
         if (typeof img.base64 === "string" && Math.floor(img.base64.length * 3 / 4) > RCS_MAX_PHOTO_BYTES) return "tooLarge";
         var uploadAt = clock();
@@ -3095,6 +3157,8 @@
     chatAlreadyOpen: chatAlreadyOpen,
     ALREADY_OPEN_STABLE_MS: ALREADY_OPEN_STABLE_MS,
     RCS_MAX_PHOTO_BYTES: RCS_MAX_PHOTO_BYTES,
+    imageSrcAllowed: imageSrcAllowed,
+    readImageCapped: readImageCapped,
     RCS_MAX_VIDEO_BYTES: RCS_MAX_VIDEO_BYTES,
     RCS_MEDIA_RETRY_POOL_MS: RCS_MEDIA_RETRY_POOL_MS,
     RCS_TRANSIENT_RETRY_POOL_MS: RCS_TRANSIENT_RETRY_POOL_MS,
@@ -3628,9 +3692,11 @@
     return root.KeeprScan.returnToList(document, layoutIo);
   }
 
-  async function readImage(src) {
-    var res = await fetch(src);
-    var blob = await res.blob();
+  function readImage(src) {
+    return readImageCapped(src, { fetch: function (u) { return fetch(u); }, toBase64: blobToBase64 });
+  }
+
+  async function blobToBase64(blob) {
     var dataUrl = await new Promise(function (resolve, reject) {
       var r = new FileReader();
       r.onload = function () { resolve(String(r.result || "")); };
@@ -3638,7 +3704,7 @@
       r.readAsDataURL(blob);
     });
     var comma = dataUrl.indexOf(",");
-    return { mimeType: blob.type || "application/octet-stream", base64: comma >= 0 ? dataUrl.slice(comma + 1) : "" };
+    return comma >= 0 ? dataUrl.slice(comma + 1) : "";
   }
 
   /** This extension's version (manifest.json), or "" when it cannot be read. */
