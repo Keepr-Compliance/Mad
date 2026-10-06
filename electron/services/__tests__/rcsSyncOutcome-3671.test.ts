@@ -102,6 +102,15 @@ describe("buildRcsSourceMetrics (the only writer of source_metrics)", () => {
 
   // Live A/B (visible vs hidden tab): the run step totals pass as named
   // numeric keys. Mutation: a key not mapped → red.
+  // SR (on eb040dde7): the empty-chat count and phone_disconnected (a
+  // boolean, never a string). Mutation: either key not mapped → red.
+  it("empty_chats and phone_disconnected", () => {
+    const m = buildRcsSourceMetrics({ runKind: "sync", extension: { reading: { emptyChats: 3, phoneDisconnected: true } } });
+    expect(m.reading).toEqual({ empty_chats: 3, phone_disconnected: true });
+    const bad = buildRcsSourceMetrics({ runKind: "sync", extension: { reading: { emptyChats: 1, phoneDisconnected: "yes" as unknown as boolean } } });
+    expect(bad.reading).toEqual({ empty_chats: 1 });
+  });
+
   it("the run step totals: named ms keys", () => {
     const m = buildRcsSourceMetrics({
       runKind: "sync",

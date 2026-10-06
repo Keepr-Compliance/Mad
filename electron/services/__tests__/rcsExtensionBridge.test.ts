@@ -17,6 +17,7 @@ import {
   RcsExtensionBridge,
 } from "../rcsExtensionBridge";
 import { RcsJobRegistry, type RcsJobSnapshot } from "../rcsImportJob";
+import { handleCacheJobEnded } from "../rcsCacheService";
 import type { RcsImageResult, RcsIncomingImage } from "../rcsImportMedia";
 import type { RcsImportResult, RcsIncomingChat } from "../rcsImportStore";
 
@@ -652,6 +653,8 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
   let current: string | null;
   let cacheChats: Array<[string, string, unknown]>;
   let ended: Array<{ state: string; kind: string; userId: string | null }>;
+  /** The end snapshots as Keepr's handlers receive them. */
+  const endedSnapshots: RcsJobSnapshot[] = [];
   let imageAnswer: { stored: false; reason: "not_a_contact" } | { stored: true; alreadyPresent: false; filename: string; bytes: number };
   let jobId: string;
   let focus: string[];
@@ -694,6 +697,7 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
       },
       onJobEnded: (e) => {
         ended.push({ state: e.snapshot.state, kind: e.kind, userId: e.userId });
+        endedSnapshots.push(e.snapshot);
         // Keepr's save (handlers: commitCacheJob) answers a moment later.
         if (e.snapshot.state === "finished" && savedAnswer !== undefined) {
           const answer = savedAnswer;
@@ -726,6 +730,28 @@ describe("RcsExtensionBridge cache jobs (BACKLOG-3658)", () => {
 
   afterEach(async () => {
     await bridge.stop();
+  });
+
+  // SR (on eb040dde7): the page's phoneDisconnected reaches Keepr's end
+  // snapshot through the bridge, and Keepr then does not move "last synced".
+  // Mutation: the bridge dropping it → red.
+  it("POST /finish with phoneDisconnected: on the end snapshot; lastCacheFinishedAt not advanced", async () => {
+    const body = JSON.stringify({ chats: 1, messages: 2, images: 0, notReached: [], notReachedMore: 0, listStop: "stable", phoneDisconnected: true });
+    expect((await request(port, "POST", `/job/${jobId}/finish`, EXT, body)).status).toBe(200);
+    const snap = endedSnapshots[endedSnapshots.length - 1];
+    expect(snap).toMatchObject({ state: "finished", phoneDisconnected: true });
+    const saved: string[] = [];
+    await handleCacheJobEnded({ kind: "cache", userId: "user-a", snapshot: snap, detectedOwnNumber: null }, {
+      saveFinishedAt: (u: string, iso: string) => void saved.push(u + " " + iso),
+      saveOwnNumber: () => undefined,
+      commit: async () => undefined,
+      discard: async () => undefined,
+      autoLink: async () => undefined,
+      afterLink: async () => undefined,
+      onSaved: () => undefined,
+      now: () => Date.now(),
+    } as unknown as Parameters<typeof handleCacheJobEnded>[1]);
+    expect(saved).toEqual([]);
   });
 
   it("every chat with a number is matched; /chat stores it for the job's user with the numbers /match saw", async () => {

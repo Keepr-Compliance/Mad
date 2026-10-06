@@ -1007,6 +1007,10 @@
           // (read, no messages, skipped, failed or already saved) — the
           // per-chat times are over these. chatsOpened ≥ chatsRead.
           chatsOpened: stats.perChatCount,
+          // SR: chats that came back empty, and whether the phone was gone partway.
+          // (Both are set late in the run: an early failure reports 0 / false.)
+          emptyChats: emptyChats ? emptyChats.length : 0,
+          phoneDisconnected: typeof phoneDisconnected === "boolean" ? phoneDisconnected : false,
           detailsMs: steps.details, historyMs: steps.history, settleMs: steps.settle, commitMs: steps.commit,
           photoReadMs: steps.photoRead, photoUploadMs: steps.photoUpload,
           photoReadMaxMs: steps.photoReadMax, photoUploadMaxMs: steps.photoUploadMax,
@@ -1852,7 +1856,9 @@
     // move "last synced" or the coverage. One genuinely empty chat stays
     // "no messages yet". (All empty with nothing saved: the backstop below.)
     var bannerSeen = connection.phone_unreachable.count + connection.connecting.count + connection.connection_banner.count + connection.pc_offline.count > 0;
-    var phoneDisconnected = totals.chats > 0 && (trailingEmpty.length >= EMPTY_RUN_MIN_CHATS || bannerSeen);
+    // SR: a brief banner with every chat read fine is a blip — only a banner
+    // WITH empty chats (or a trailing run of them) counts.
+    var phoneDisconnected = totals.chats > 0 && (trailingEmpty.length >= EMPTY_RUN_MIN_CHATS || (bannerSeen && emptyChats.length > 0));
     if (phoneDisconnected) {
       var unsure = bannerSeen ? emptyChats : trailingEmpty;
       log("phone gone partway: " + unsure.length + " empty chats not fully synced" + (bannerSeen ? " (a connection banner was seen)" : ""));

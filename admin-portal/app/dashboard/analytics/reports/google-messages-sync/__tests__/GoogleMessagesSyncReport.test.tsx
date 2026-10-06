@@ -81,6 +81,17 @@ describe('GoogleMessagesSyncReport', () => {
     expect(html).toContain('Chrome 141.0.7390.55');
   });
 
+  // SR: the empty-chat count and "phone gone partway"; older rows say "not
+  // recorded". Mutation: the keys not parsed → red.
+  it('the open row: empty chats and phone gone partway', () => {
+    const run = buildGoogleMessagesSyncReport([row({ source_metrics: { reading: { ms: 1000, empty_chats: 2, phone_disconnected: true } } })], []).runs[0];
+    expect(run.reading).toMatchObject({ emptyChats: 2, phoneDisconnected: true });
+    const html = renderToStaticMarkup(<GmRunDetail run={run} />);
+    expect(html).toMatch(/Empty chats[\s\S]*>2<[\s\S]*Phone gone partway[\s\S]*>yes</);
+    const old = buildGoogleMessagesSyncReport([row({ source_metrics: { reading: { ms: 1000 } } })], []).runs[0];
+    expect(old.reading).toMatchObject({ emptyChats: null, phoneDisconnected: null });
+  });
+
   // Live A/B (visible vs hidden tab): the step totals and the hidden time.
   // Mutations: a key not parsed; "not recorded" missing for an older row → red.
   it('the open row: the steps and the hidden time; older rows say "not recorded"', () => {

@@ -75,6 +75,8 @@ export interface RcsExtensionMetrics {
     /** Live A/B (visible vs hidden tab): run totals of each step (ms), and the slowest photo. */
     detailsMs?: number; historyMs?: number; settleMs?: number; commitMs?: number;
     photoReadMs?: number; photoUploadMs?: number; photoReadMaxMs?: number; photoUploadMaxMs?: number;
+    /** SR: chats that came back empty; the phone gone partway (a boolean). */
+    emptyChats?: number; phoneDisconnected?: boolean;
   };
   hidden?: { ms?: number; spells?: number };
   chromeVersion?: string;
@@ -150,6 +152,8 @@ export function buildRcsSourceMetrics(input: {
     photo_upload_ms: n(r.photoUploadMs, MAX_MS),
     photo_read_max_ms: n(r.photoReadMaxMs, MAX_MS),
     photo_upload_max_ms: n(r.photoUploadMaxMs, MAX_MS),
+    empty_chats: n(r.emptyChats, MAX_COUNT),
+    phone_disconnected: typeof r.phoneDisconnected === "boolean" ? r.phoneDisconnected : undefined,
   });
   const saving = defined({
     ms: n(s.ms, MAX_MS),

@@ -121,6 +121,8 @@ export function GmRunDetail({ run }: { run: GmSyncRun }) {
             <Stat label="Messages read" value={countLabel(r.messagesRead)} />
             <Stat label="Photos read" value={`${countLabel(r.photosRead)} · ${mbLabel(r.bytesRead)}`} />
             <Stat label="Per chat p50 / p90" value={`${msLabel(r.perChatP50Ms)} / ${msLabel(r.perChatP90Ms)}`} />
+            <Stat label="Empty chats" value={r.emptyChats === null ? 'not recorded' : countLabel(r.emptyChats)} />
+            <Stat label="Phone gone partway" value={r.phoneDisconnected === null ? 'not recorded' : r.phoneDisconnected ? 'yes' : 'no'} />
             <Stat label="Slowest chat" value={`${msLabel(r.perChatSlowestMs)} (of ${countLabel(r.chatsOpened)} opened)`} />
           </dl>
         </section>

@@ -65,6 +65,9 @@ export interface GmReading extends GmStage {
   photoUploadMs: number | null;
   photoReadMaxMs: number | null;
   photoUploadMaxMs: number | null;
+  /** SR: chats that came back empty; whether the phone was gone partway (null: not recorded). */
+  emptyChats: number | null;
+  phoneDisconnected: boolean | null;
 }
 export interface GmSaving extends GmStage {
   messagesSaved: number | null;
@@ -156,6 +159,8 @@ export function parseGmMetrics(raw: unknown): { finding: GmFinding; reading: GmR
       photoUploadMs: num(r.photo_upload_ms),
       photoReadMaxMs: num(r.photo_read_max_ms),
       photoUploadMaxMs: num(r.photo_upload_max_ms),
+      emptyChats: num(r.empty_chats),
+      phoneDisconnected: typeof r.phone_disconnected === 'boolean' ? r.phone_disconnected : null,
     },
     saving: {
       ms: num(s.ms),

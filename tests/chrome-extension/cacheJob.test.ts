@@ -412,13 +412,29 @@ describe("runJob: a cache Sync", () => {
         expect(last[2].notFullyLine).toBe("2 chats not fully synced. Sync again to finish.");
       });
 
-      it("a connection banner seen during the run: phoneDisconnected sent, even with no empty chat", async () => {
+      // SR: a brief banner with every chat read fine is a blip — "last synced"
+      // moves as usual; a banner WITH an empty chat counts. Mutations: any
+      // banner counting; a banner with empties not counting → red.
+      it("a brief banner, every chat read fine: no phoneDisconnected (a blip)", async () => {
         const t = cacheEnv({ rows: ROWS, numbers: { [id(0)]: ["+15555550101"] } });
         let checks = 0;
         (t.env.scan as Record<string, unknown>).connectionBanner = () => (++checks === 2 ? { kind: "connecting", titleLength: 10 } : null);
         await job.runJob(JOB, t.env);
         const fin = t.calls.find(([, p]) => p.endsWith("/finish"))![2] as { phoneDisconnected?: boolean };
+        expect(fin.phoneDisconnected).toBe(false);
+      });
+
+      it("a banner and one empty chat after a saved one: phoneDisconnected, that chat not fully synced", async () => {
+        const t = cacheEnv({ rows: ROWS, numbers: { [id(0)]: ["+15555550101"], [id(1)]: ["+15555550102"] } });
+        let checks = 0;
+        (t.env.scan as Record<string, unknown>).connectionBanner = () => (++checks === 2 ? { kind: "connecting", titleLength: 10 } : null);
+        let opened = 0;
+        (t.env.scan as Record<string, unknown>).waitForMessageSwap = async (_d: unknown, _b: unknown, io?: { reportEmpty?: boolean }) =>
+          (io && io.reportEmpty ? (++opened === 1 ? true : "empty") : true);
+        await job.runJob(JOB, t.env);
+        const fin = t.calls.find(([, p]) => p.endsWith("/finish"))![2] as { phoneDisconnected?: boolean; notReached: Array<{ reason: string }> };
         expect(fin.phoneDisconnected).toBe(true);
+        expect(fin.notReached.filter((e) => e.reason === "phone_not_connected")).toHaveLength(1);
       });
 
       it("two empty chats beside a saved one: Done as before (the phone was connected)", async () => {
