@@ -136,8 +136,13 @@ describe("buildRcsSourceMetrics (the only writer of source_metrics)", () => {
   });
 
   it("enums from fixed sets; versions must look like versions (T3)", () => {
+    // SR: a code that is not ^[a-z_]{1,40}$ is stored as "other" — never free text.
     const m = buildRcsSourceMetrics({ runKind: "weird", end: { outcome: "exploded", reasonCode: "Test Person A said no" } });
-    expect(m).toEqual({ v: 1 });
+    expect(m).toEqual({ v: 1, end: { reason_code: "other" } });
+    for (const bad of ["code1", "Phone_unreachable", "a".repeat(41), "", "a-b"]) {
+      expect(buildRcsSourceMetrics({ end: { outcome: "error", reasonCode: bad } }).end).toEqual({ outcome: "error", reason_code: "other" });
+    }
+    expect(buildRcsSourceMetrics({ end: { outcome: "error", reasonCode: "a".repeat(40) } }).end).toEqual({ outcome: "error", reason_code: "a".repeat(40) });
     expect(buildRcsSourceMetrics({ runKind: "retry", end: { outcome: "error", reasonCode: "phone_unreachable" } })).toEqual({
       v: 1, run_kind: "retry", end: { outcome: "error", reason_code: "phone_unreachable" },
     });
@@ -151,7 +156,7 @@ describe("outcome map (T4)", () => {
   it("finished → complete; failed → error + its code; Stop sync → cancelled user_stop; Keepr's cancel → cancelled", () => {
     expect(rcsOutcomeFor({ state: "finished" })).toEqual({ outcome: "complete" });
     expect(rcsOutcomeFor({ state: "failed", error: { code: "phone_unreachable", message: "x" } })).toEqual({ outcome: "error", reasonCode: "phone_unreachable" });
-    expect(rcsOutcomeFor({ state: "failed", error: { code: "Not A Code!", message: "x" } })).toEqual({ outcome: "error", reasonCode: "unknown" });
+    expect(rcsOutcomeFor({ state: "failed", error: { code: "Not A Code!", message: "x" } })).toEqual({ outcome: "error", reasonCode: "other" });
     expect(rcsOutcomeFor({ state: "cancelled", endedBy: "user_page" })).toEqual({ outcome: "cancelled", reasonCode: "user_stop", endedBy: "user_page" });
     expect(rcsOutcomeFor({ state: "cancelled" })).toEqual({ outcome: "cancelled", reasonCode: "keepr_cancel", endedBy: "keepr" });
   });

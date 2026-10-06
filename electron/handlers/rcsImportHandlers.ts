@@ -109,7 +109,7 @@ import { RCS_MEDIA_DEFAULTS, clearPendingMediaRead, getRcsMediaOptions, hasPendi
 import { NOT_PAIRED_MESSAGE, RcsPairingAuth, type LinkState } from "../services/rcsPairingAuth";
 import { loadPairProtocol } from "../services/rcsPairProtocol";
 import { rcsPairingStore } from "../services/db/rcsPairingDbService";
-import { RcsSyncOutcomeTracker } from "../services/rcsSyncOutcome";
+import { RcsSyncOutcomeTracker, cleanReasonCode } from "../services/rcsSyncOutcome";
 import { focusForBrowser, RCS_OPEN_LINK_SCREEN_CHANNEL, linkCodeFromClipboard, clearLinkCodeFromClipboard, linkCodeAutoFillOn } from "../services/rcsLinkFocus";
 import {
   recordSyncOutcomeSettled,
@@ -1279,7 +1279,9 @@ export function googleMessagesDiagnostics(userId: string | null): GoogleMessages
     extension_seen_at: extensionPresence.seenAt ?? state?.extensionSeenAt ?? null,
     link,
     last_cache_finished_at: state?.lastCacheFinishedAt ?? null,
-    last_run: lastRunEnded ? { state: lastRunEnded.state, reason_code: lastRunEnded.reasonCode, ended_at: lastRunEnded.endedAt } : null,
+    last_run: lastRunEnded
+      ? { state: lastRunEnded.state, reason_code: lastRunEnded.reasonCode === null ? null : cleanReasonCode(lastRunEnded.reasonCode), ended_at: lastRunEnded.endedAt }
+      : null,
     failed_run_started_at: userId ? getFailedRun(userId) : null,
   };
 }

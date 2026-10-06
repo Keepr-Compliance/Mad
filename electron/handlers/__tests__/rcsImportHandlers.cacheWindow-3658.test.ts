@@ -286,6 +286,11 @@ describe("rcs-import:start-cache-job window (BACKLOG-3658)", () => {
     expect(JSON.stringify(d)).not.toMatch(/Keepr stopped/);
     expect(["linked", "saved", "none"]).toContain(d.link);
     expect(mod.googleMessagesDiagnostics(null).link).toBe("none");
+    // SR: a code that is not ^[a-z_]{1,40}$ is "other". Mutation: passed through → red.
+    (mockBridgeOptions as unknown as { onJobEnded: (e: unknown) => void }).onJobEnded({
+      kind: "other", userId: null, snapshot: { state: "failed", jobId: "j-2", error: { code: "Not A Code 42", message: "x" } }, detectedOwnNumber: null,
+    });
+    expect(mod.googleMessagesDiagnostics("user-1").last_run).toMatchObject({ reason_code: "other" });
   });
 
   it("link-state: clipboardFill follows the platform rule", async () => {

@@ -100,7 +100,14 @@ export interface RcsEndMetrics {
 
 const OUTCOMES = new Set(["running", "complete", "cancelled", "error"]);
 /** A failure / stop code: lower snake case, short. */
-const CODE_PATTERN = /^[a-z][a-z0-9_]{0,47}$/;
+/**
+ * SR: a failure code as stored / shown — lower-case letters and "_" only,
+ * 1–40 long; anything else is "other" (a code is never free text).
+ */
+export const RCS_REASON_CODE_PATTERN = /^[a-z_]{1,40}$/;
+export function cleanReasonCode(code: unknown): string {
+  return typeof code === "string" && RCS_REASON_CODE_PATTERN.test(code) ? code : "other";
+}
 
 /**
  * THE ONLY WRITER of sync_outcomes.source_metrics. Named keys only; numbers
@@ -164,7 +171,7 @@ export function buildRcsSourceMetrics(input: {
   });
   const end = defined({
     outcome: typeof e.outcome === "string" && OUTCOMES.has(e.outcome) ? e.outcome : undefined,
-    reason_code: typeof e.reasonCode === "string" && CODE_PATTERN.test(e.reasonCode) ? e.reasonCode : undefined,
+    reason_code: e.reasonCode === undefined ? undefined : cleanReasonCode(e.reasonCode),
     total_ms: n(e.totalMs, MAX_MS),
     hidden_ms: n(h.ms, MAX_MS),
     hidden_spells: n(h.spells, MAX_COUNT),
@@ -190,7 +197,7 @@ export function rcsOutcomeFor(snap: Pick<RcsJobSnapshot, "state" | "error" | "en
       return { outcome: "complete" };
     case "failed": {
       const code = snap.error?.code;
-      return { outcome: "error", reasonCode: typeof code === "string" && CODE_PATTERN.test(code) ? code : "unknown" };
+      return { outcome: "error", reasonCode: cleanReasonCode(code) };
     }
     case "cancelled":
       return snap.endedBy === "user_page"
