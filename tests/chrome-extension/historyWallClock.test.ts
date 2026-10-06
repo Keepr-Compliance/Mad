@@ -162,6 +162,31 @@ describe("history loading in a throttled hidden tab (live, 2026-10-05; SR F2)", 
     expect(r.stopReason).toBe("not_settled");
   });
 
+  // BACKLOG-3752: the loop's own date_floor stop uses the same TOP-of-run
+  // rule — a misdated message lower down never stops the history early; the
+  // top crossing the floor does. Mutation: the oldest date anywhere → red.
+  it("the loop: a misdated message lower down does not stop it; the top past the floor does", async () => {
+    const t = slowGrowingHiddenChat(1, 60_000);
+    const now = t.now();
+    const day = (d: number) => new Date(now - d * 864e5).toISOString();
+    let polls = 0;
+    const r = await scan.loadHistory(document, {
+      now: t.now,
+      sleep: async () => { polls += 1; await t.sleep(); },
+      scrollUp: () => undefined, hasScroller: () => true,
+      startMarkerSelectors: [], loadingSelectors: [], cap: 100_000,
+      floorMs: now - 30 * 864e5,
+      // Top first: 12 days for the first polls, then 45 days (past the floor);
+      // a 380-day misdated message sits lower down the whole time.
+      extractBatch: () => [
+        { msgId: "top", sentAt: day(polls < 3 ? 12 : 45) },
+        { msgId: "misdated", sentAt: day(380) },
+      ],
+    });
+    expect(r.stopReason).toBe("date_floor");
+    expect(polls).toBeGreaterThanOrEqual(3);
+  });
+
   it("never read past the floor: still not_settled", async () => {
     const t = slowGrowingHiddenChat(1, 60_000);
     const now = t.now();

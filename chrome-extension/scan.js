@@ -1290,13 +1290,23 @@
      * must not mark it complete.
      */
     function readPastFloor() {
-      if (!io.extractBatch) return false;
+      var top = topOfRunMs();
+      return typeof top === "number" && top < floorMs;
+    }
+    /**
+     * The date of the TOP of the loaded run: the first dated message in page
+     * order (SR; BACKLOG-3752 — the loop's date_floor stop and the not_settled
+     * end use this ONE rule, never the oldest date anywhere on screen). A
+     * caller without extractBatch gives its own oldestMs.
+     */
+    function topOfRunMs() {
+      if (!io.extractBatch) return typeof io.oldestMs === "function" ? io.oldestMs() : null;
       var batch = io.extractBatch() || [];
       for (var i = 0; i < batch.length; i++) {
         var t = batch[i] ? Date.parse(batch[i].sentAt) : NaN;
-        if (isFinite(t)) return t < floorMs;
+        if (isFinite(t)) return t;
       }
-      return false;
+      return null;
     }
     function imagesCollected() {
       var n = 0;
@@ -1308,8 +1318,8 @@
       if (io.onProgress) io.onProgress(count);
       if (count >= cap) return finish("cap");
       if (floorMs !== null) {
-        var oldest = io.oldestMs();
-        // Date-range stop: a message older than the floor is loaded — no more requests.
+        var oldest = topOfRunMs();
+        // Date-range stop: the top of the loaded run is older than the floor — no more requests.
         if (typeof oldest === "number" && oldest < floorMs) return finish("date_floor");
       }
       if (atStart()) return finish("no_more", "marker");

@@ -1163,15 +1163,6 @@
             floorMs: typeof item.oldestMs === "number" ? item.oldestMs - 1 : item.floorMs,
             budgetMs: Math.max(1000, Math.min(60000, poolMs - used)), extensionPoolLeftMs: 0,
             extractBatch: function () { return env.extract(env.doc, loc.href, env.now ? env.now() : new Date()).messages; },
-            oldestMs: function () {
-              var ex = env.extract(env.doc, loc.href, env.now ? env.now() : new Date());
-              var min = null;
-              for (var q = 0; q < ex.messages.length; q++) {
-                var t = Date.parse(ex.messages[q].sentAt);
-                if (isFinite(t) && (min === null || t < min)) min = t;
-              }
-              return min;
-            },
           });
           used += hist.elapsedMs || 0;
           var want = {};
@@ -1585,15 +1576,6 @@
           floorMs: chatFloorMs,
           cap: env.historyCap,
           noNewTimeoutMs: env.historyNoNewMs,
-          oldestMs: function () {
-            var ex = env.extract(env.doc, loc.href, env.now ? env.now() : new Date());
-            var min = null;
-            for (var q = 0; q < ex.messages.length; q++) {
-              var t = Date.parse(ex.messages[q].sentAt);
-              if (isFinite(t) && (min === null || t < min)) min = t;
-            }
-            return min;
-          },
           onProgress: function (n) {
             showPhase("Loading history… " + n + " messages");
           },
