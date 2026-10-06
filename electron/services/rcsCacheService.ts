@@ -347,7 +347,7 @@ export interface CacheEndSnapshot {
   state: string;
   createdAt?: string;
   jobId: string;
-  progress?: { notChecked?: number; imported?: number };
+  progress?: { notChecked?: number; imported?: number; matched?: number; noMessagesYet?: number };
   notReached?: Array<{ reason: string; name?: string }>;
   notReachedMore?: number;
   /** L2: how the page's list scan stopped (since | stable | max_items | max_time). */
@@ -365,6 +365,19 @@ const HISTORY_SHORT_REASONS = new Set(["history_truncated", "history_gap", "mess
 /** A list scan that ended normally: at `since`, or the list stopped growing (not a cap or a timeout). */
 export function isNormalListStop(listStop: string | null | undefined): boolean {
   return listStop === "since" || listStop === "stable";
+}
+
+/**
+ * Live (founder, 2026-10-05): Google Messages could not reach the phone; the
+ * page showed every chat empty and the run "finished" with 0 chats. A run
+ * that saved nothing while every chat it checked came back empty read
+ * NOTHING: it must not mark coverage, advance "last synced", or settle a
+ * pending media read / an earlier failed run.
+ */
+export function cacheRunReadNothing(snapshot: CacheEndSnapshot): boolean {
+  const p = snapshot.progress ?? {};
+  const empty = p.noMessagesYet ?? 0;
+  return (p.imported ?? 0) === 0 && empty > 0 && empty >= (p.matched ?? 0);
 }
 
 /** L2: what a finished cache run says about the coverage. */
@@ -391,6 +404,7 @@ export function backfillCoverageFrom(run: { floorISO: string; fullRead: boolean;
  */
 export function cacheRunReachedFloor(fullRead: boolean, snapshot: CacheEndSnapshot): boolean {
   if (!fullRead || snapshot.state !== "finished") return false;
+  if (cacheRunReadNothing(snapshot)) return false;
   if (!isNormalListStop(snapshot.listStop)) return false;
   if ((snapshot.progress?.notChecked ?? 0) > 0) return false;
   if ((snapshot.notReachedMore ?? 0) > 0) return false;
@@ -434,7 +448,11 @@ export async function handleCacheJobEnded(
   }
   // The job's START time (SR): chats that changed while it ran are re-read
   // next time (since = this − 1 day anyway). Only a fully finished run.
-  if (!failed) deps.saveFinishedAt(userId, ended.snapshot.createdAt ?? new Date(deps.now()).toISOString());
+  // Live: a run that read nothing does not move "last synced" (the next
+  // Sync would skip chats active before it).
+  if (!failed && !cacheRunReadNothing(ended.snapshot)) {
+    deps.saveFinishedAt(userId, ended.snapshot.createdAt ?? new Date(deps.now()).toISOString());
+  }
   try {
     await deps.autoLink(userId);
   } catch (err) {

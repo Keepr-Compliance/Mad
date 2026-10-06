@@ -793,6 +793,17 @@
   var OFFLINE_NOT_IN = "mws-conversations-list, mws-conversation-list-item, mws-messages-list, mws-message-wrapper, mws-text-message-part";
   /** A banner's title + line is short; a longer text is something else. */
   var OFFLINE_TEXT_MAX = 80;
+  /** Google's phone-unreachable banner title (live 2026-10-05, markup UNTRACED). */
+  // No \b: the title and its line are separate elements, so their text joins
+  // as "…phoneCheck that…".
+  var UNREACHABLE_TITLE = /^trying to reach your phone/i;
+  /** Its title + "Check that your phone is on and connected…" line. */
+  var UNREACHABLE_TEXT_MAX = 200;
+  /** Where a matched fallback banner sits (tag and class only — never its text). */
+  function bannerWhere(el) {
+    var cls = typeof el.className === "string" ? el.className.trim().split(/\s+/).slice(0, 3).join(".") : "";
+    return String(el.tagName || "").toLowerCase() + (cls ? "." + cls : "");
+  }
 
   /**
    * The connection banner on screen, or null:
@@ -835,6 +846,15 @@
       var text = normalizeSpace(others[o].textContent || "");
       if (text.length > OFFLINE_TEXT_MAX) continue;
       if (OFFLINE_TITLE.test(text)) return { kind: "pc_offline", titleLength: text.length };
+    }
+    // Live (founder, 2026-10-05): "Trying to reach your phone" was on screen
+    // but not as the traced banner — the run read empty chats and said Done.
+    for (var u = 0; u < others.length; u++) {
+      if (!isShown(others[u])) continue;
+      if (others[u].closest && others[u].closest(OFFLINE_NOT_IN)) continue;
+      var utext = normalizeSpace(others[u].textContent || "");
+      if (utext.length > UNREACHABLE_TEXT_MAX) continue;
+      if (UNREACHABLE_TITLE.test(utext)) return { kind: "phone_unreachable", titleLength: utext.length, where: bannerWhere(others[u]) };
     }
     return null;
   }

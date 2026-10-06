@@ -206,6 +206,7 @@ Also: the 128×128 icon (`icons/keepr-128.png`, 96 art + 16 padding) and a
 | 0.3.84 | While a Sync runs, each wait is one short message to the service worker, answered from its own timer (a hidden tab throttles the page's timers); the page timer is the fallback; nothing when no Sync runs, no port, no keepalive. Within the service-worker rules: https://developer.chrome.com/docs/extensions/develop/concepts/service-workers/lifecycle and https://developer.chrome.com/docs/extensions/develop/migrate/to-service-workers |
 | 0.3.85 | A chat read back past its date floor is complete for that Sync even if the page never settled; the Done box says when chats were not fully synced. |
 | 0.3.86 | "Read past the floor" is decided by the top of the loaded history, never by one oldest date anywhere. |
+| 0.3.87 | Phone not connected: "Trying to reach your phone" recognised in more places; a run where every chat came back empty fails as "Your phone isn't connected." instead of Done. |
 
 ## 10. Review history
 

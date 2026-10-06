@@ -75,7 +75,7 @@
    */
   var FAILURE_LINES = {
     connection_lost: "Lost the connection to your phone.",
-    phone_unreachable: "Lost the connection to your phone.",
+    phone_unreachable: "Your phone isn't connected.",
     not_signed_in: "Google Messages isn't signed in.",
     page_gone: "The Messages tab was closed.",
     page_not_ready: "Google Messages didn't finish loading.",
@@ -221,9 +221,12 @@
   var OFFLINE_TEXT = "This computer is offline — waiting for the connection";
   var RCS_CONNECTION_LOST_MS = 5 * 60000;
   var CONNECTION_POLL_MS = 1000;
+  /** Live: at least this many chats, all empty, nothing saved → the phone is not connected. */
+  var EMPTY_RUN_MIN_CHATS = 2;
+  var PHONE_EMPTY_TEXT = "Keepr stopped: Google Messages showed no messages in any chat — your phone isn't connected. Open Messages on your phone, then Try again.";
   var CONNECTION_LOST_TEXT = {
     connection_lost: "Keepr stopped: Messages for Web could not reconnect to your phone for 5 minutes. Check your phone, then sync again from Keepr.",
-    phone_unreachable: "Keepr stopped: your phone wasn't reachable for 5 minutes. Check it's on and connected, then sync again from Keepr.",
+    phone_unreachable: "Keepr stopped: your phone wasn't reachable for 5 minutes. Open Messages on your phone, then Try again.",
     pc_offline: "Keepr stopped: this computer was offline for 5 minutes. Connect to the internet, then sync again from Keepr.",
   };
   /**
@@ -1059,7 +1062,8 @@
         var kind = banner.kind;
         var waited = 0;
         connection[kind].count += 1;
-        log("connection banner: " + kind + (kind === "connection_banner" ? " (title " + banner.titleLength + " chars)" : ""));
+        log("connection banner: " + kind + (kind === "connection_banner" ? " (title " + banner.titleLength + " chars)" : "") +
+          (banner.where ? " (" + banner.where + ")" : ""));
         pauses += 1;
         await report(bannerText(kind));
         while (banner) {
@@ -1846,6 +1850,15 @@
     // or disconnected — wait it out (the same grace), else fail with its code.
     var lostAtEnd = await holdWhileOffline(null);
     if (lostAtEnd && lostAtEnd.code) return fail(lostAtEnd.code, lostAtEnd.message);
+    // Live (founder, 2026-10-05): the phone was unreachable but no banner was
+    // seen; every chat opened came back empty and the run said "Done · 0
+    // chats". Several chats, all empty, nothing saved: the page has no data —
+    // the phone is not connected. Never Done; Keepr records nothing.
+    var openedForMessages = matchedCount - totals.alreadySaved;
+    if (totals.chats === 0 && totals.noMessagesYet >= EMPTY_RUN_MIN_CHATS && totals.noMessagesYet >= openedForMessages) {
+      log("failed: every chat opened was empty (" + totals.noMessagesYet + "): the phone is not connected");
+      return fail("phone_unreachable", PHONE_EMPTY_TEXT);
+    }
     if (totals.chats === 0 && failedChats > 0 && failedChats >= progress.checked) {
       log("failed: every checked chat failed (" + failedChats + ")");
       return fail("all_failed", "None of the " + failedChats + " chats could be read.");

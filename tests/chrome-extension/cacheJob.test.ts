@@ -377,6 +377,44 @@ describe("runJob: a cache Sync", () => {
     // Founder: ONE line in the Done box when a chat is really not fully
     // synced (history that did not reach its floor); none when all are
     // complete. Mutations: the line not passed / not counted → red.
+    // Live (founder, 2026-10-05): the phone was unreachable (no banner seen);
+    // every chat opened came back empty; the run said "Done · 0 chats".
+    // Several chats, all empty, nothing saved → phone_unreachable via /error
+    // (never /finish). One genuinely empty chat beside saved ones stays Done.
+    // Mutations: the backstop removed; firing for a run that saved chats → red.
+    describe("every chat empty: the phone is not connected (live)", () => {
+      const twoChats = () => cacheEnv({ rows: ROWS, numbers: { [id(0)]: ["+15555550101"], [id(1)]: ["+15555550102"] } });
+      it("all empty, nothing saved: fails as phone_unreachable, no /finish", async () => {
+        const t = twoChats();
+        (t.env.scan as Record<string, unknown>).waitForMessageSwap = async (_d: unknown, _b: unknown, io?: { reportEmpty?: boolean }) => (io && io.reportEmpty ? "empty" : true);
+        const out = await job.runJob(JOB, t.env);
+        expect(out.outcome).toBe("phone_unreachable");
+        const err = t.calls.find(([, p]) => p.endsWith("/error"));
+        expect(err?.[2]).toMatchObject({ code: "phone_unreachable" });
+        expect(t.calls.some(([, p]) => p.endsWith("/finish"))).toBe(false);
+        expect(t.shown[t.shown.length - 1][0]).toBe("Your phone isn't connected.");
+      });
+      it("two empty chats beside a saved one: Done as before (the phone was connected)", async () => {
+        const t = cacheEnv({ rows: ROWS, numbers: { [id(0)]: ["+15555550101"], [id(1)]: ["+15555550102"], [id(2)]: ["+15555550103"] } });
+        let opened = 0;
+        (t.env.scan as Record<string, unknown>).waitForMessageSwap = async (_d: unknown, _b: unknown, io?: { reportEmpty?: boolean }) =>
+          (io && io.reportEmpty ? (++opened <= 2 ? "empty" : true) : true);
+        const out = await job.runJob(JOB, t.env);
+        expect(out.outcome).not.toBe("phone_unreachable");
+        expect(t.calls.some(([, p]) => p.endsWith("/finish"))).toBe(true);
+      });
+
+      it("one empty chat beside a saved one: Done as before", async () => {
+        const t = twoChats();
+        let opened = 0;
+        (t.env.scan as Record<string, unknown>).waitForMessageSwap = async (_d: unknown, _b: unknown, io?: { reportEmpty?: boolean }) =>
+          (io && io.reportEmpty ? (++opened === 1 ? "empty" : true) : true);
+        const out = await job.runJob(JOB, t.env);
+        expect(out.outcome).not.toBe("phone_unreachable");
+        expect(t.calls.some(([, p]) => p.endsWith("/finish"))).toBe(true);
+      });
+    });
+
     describe("the Done box: chats not fully synced", () => {
       const doneExtras = (t: Env) => {
         const last = t.shown[t.shown.length - 1] as [string, boolean, { notFullyLine?: string }];

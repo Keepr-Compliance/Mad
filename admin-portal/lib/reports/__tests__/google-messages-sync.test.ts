@@ -115,12 +115,12 @@ describe('the run model', () => {
       []
     );
     expect(failureBreakdown(runs)).toEqual([
-      { code: 'phone_unreachable', line: 'Lost the connection to your phone.', runs: 2 },
+      { code: 'phone_unreachable', line: "Your phone isn't connected.", runs: 2 },
       { code: 'not_recorded', line: 'Not recorded', runs: 1 },
       { code: 'something_new', line: 'The Sync stopped unexpectedly.', runs: 1 },
       { code: 'user_stop', line: 'Stopped on the page (Stop sync).', runs: 1 },
     ]);
-    expect(runs.find((r) => r.id === 'a')!.reasonLine).toBe('Lost the connection to your phone.');
+    expect(runs.find((r) => r.id === 'a')!.reasonLine).toBe("Your phone isn't connected.");
     expect(gmReasonLine(null)).toBeNull();
   });
 

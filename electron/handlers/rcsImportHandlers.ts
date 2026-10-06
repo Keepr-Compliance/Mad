@@ -72,6 +72,7 @@ import {
 import {
   backfillCoverageFrom,
   cacheRunCoverage,
+  cacheRunReadNothing,
   chatFloorDecision,
   effectiveChatCoverageMs,
   pickDealChats,
@@ -500,11 +501,20 @@ export async function commitCacheStaging(
   run: { complete: boolean; startedAt: string; snapshot?: CacheEndSnapshot },
 ): Promise<CacheCommitResult> {
   const coverage = read && run.snapshot && run.complete ? cacheRunCoverage(read.fullRead, run.snapshot) : { reached: false, notSettledChats: 0 };
+  // Live: a run that read nothing records nothing (no coverage, no last-sync
+  // time, no run record; a pending media read / failed run stays as it was).
+  const readNothing = !!run.snapshot && cacheRunReadNothing(run.snapshot);
   const r = await cacheStaging().commit(jobId, userId, limits, commitWriter, {
     // SR: a chat switched to Don't sync since it was read is not saved.
     chatExcluded: (u, hash, conversationId) => databaseService.checkRcsExclusion(u, hash, conversationId),
     perChat: (chat) => cacheChatCommitted(userId, chat),
-    runDone: () => cacheCommitInsideTransaction(userId, read, coverage.reached, coverage.notSettledChats, run.snapshot?.listStop ?? null),
+    runDone: () => {
+      if (readNothing) {
+        void logService.warn("[RcsCache] The Sync read no messages (every chat empty): nothing recorded", LOG_TAG);
+        return;
+      }
+      cacheCommitInsideTransaction(userId, read, coverage.reached, coverage.notSettledChats, run.snapshot?.listStop ?? null);
+    },
     log: (m) => void logService.warn(m, LOG_TAG),
   }, { complete: run.complete });
   // Not complete (failed, crash-cut, a chat that failed, or stopped by the save

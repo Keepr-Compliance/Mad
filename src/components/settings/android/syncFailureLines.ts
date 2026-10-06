@@ -11,7 +11,7 @@
 /** The one short line for each failure code. */
 export const SYNC_FAILURE_LINES: Readonly<Record<string, string>> = {
   connection_lost: "Lost the connection to your phone.",
-  phone_unreachable: "Lost the connection to your phone.",
+  phone_unreachable: "Your phone isn't connected.",
   not_signed_in: "Google Messages isn't signed in.",
   page_gone: "The Messages tab was closed.",
   page_not_ready: "Google Messages didn't finish loading.",

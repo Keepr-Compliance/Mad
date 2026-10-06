@@ -61,7 +61,7 @@ describe('GoogleMessagesSyncReport', () => {
     expect(html).toContain('25%');
     expect(html).toContain('4.8 s');
     expect(html).toContain('phone_unreachable');
-    expect(html).toMatch(/data-code="phone_unreachable"[\s\S]*Lost the connection to your phone\./);
+    expect(html).toMatch(/data-code="phone_unreachable"[\s\S]*Your phone isn(?:'|&#x27;|&#39;)t connected\./);
     expect(html).toContain('Average duration per finished run');
   });
 

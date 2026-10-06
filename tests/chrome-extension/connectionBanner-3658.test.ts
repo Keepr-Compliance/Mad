@@ -58,6 +58,18 @@ describe("connectionBanner (B1)", () => {
     expect(scan.connectionBanner(document)).toBeNull();
   });
 
+  // Live (founder, 2026-10-05): "Trying to reach your phone" was on screen,
+  // but not as the traced banner. Matched as a banner-like element (alert /
+  // status / banner), never inside the list or messages; its place logged by
+  // tag and class only. Mutation: the fallback not matching it → red.
+  it("the untraced phone-unreachable banner (status / alert element): phone_unreachable, its place by tag and class", () => {
+    document.body.innerHTML = `<div role="status" class="mws-net warn"><span>Trying to reach your phone</span><span>Check that your phone is on and connected to Wi-Fi or your mobile network.</span></div>`;
+    expect(scan.connectionBanner(document)).toMatchObject({ kind: "phone_unreachable", where: "div.mws-net.warn" });
+    document.body.innerHTML = `<mws-conversation-list-item><div role="status">Trying to reach your phone</div></mws-conversation-list-item>`;
+    expect(scan.connectionBanner(document)).toBeNull();
+    document.body.innerHTML = "";
+  });
+
   it("the text alone is not a banner: no .information-banner, no match", () => {
     document.body.innerHTML = `<div><h2 class="title">Trying to reach your phone</h2></div>`;
     expect(scan.connectionBanner(document)).toBeNull();

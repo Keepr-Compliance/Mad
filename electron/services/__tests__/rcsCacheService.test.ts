@@ -33,6 +33,7 @@ import {
   backfillCoverageFrom,
   cacheRunCoverage,
   cacheRunReachedFloor,
+  cacheRunReadNothing,
   cacheWindow,
   chatFloorDecision,
   clampSinceDays,
@@ -184,6 +185,26 @@ describe("when a cache Sync ends", () => {
   }
   const ended = (state: string, kind = "cache", own: string | null = null) => ({
     kind, userId: "u-1", snapshot: { state, jobId: "job-1" }, detectedOwnNumber: own,
+  });
+
+  // Live (founder, 2026-10-05): a "finished" run that saved nothing while
+  // every chat it checked came back empty read NOTHING — "last synced" must
+  // not move (the next Sync would skip chats active before it). Mutation:
+  // the time saved anyway → red.
+  it("finished but read nothing (every chat empty, 0 imported): no time saved", async () => {
+    const d = deps();
+    await handleCacheJobEnded(
+      { kind: "cache", userId: "u-1", snapshot: { state: "finished", jobId: "job-1", progress: { imported: 0, matched: 3, noMessagesYet: 3 } }, detectedOwnNumber: null },
+      d.deps,
+    );
+    expect(d.calls.some((c) => c.startsWith("finished "))).toBe(false);
+    expect(cacheRunReadNothing({ state: "finished", jobId: "j", progress: { imported: 0, matched: 3, noMessagesYet: 3 } })).toBe(true);
+    // A real run: something saved, or a chat that was not empty.
+    expect(cacheRunReadNothing({ state: "finished", jobId: "j", progress: { imported: 2, matched: 3, noMessagesYet: 1 } })).toBe(false);
+    expect(cacheRunReadNothing({ state: "finished", jobId: "j", progress: { imported: 0, matched: 3, noMessagesYet: 1 } })).toBe(false);
+    expect(cacheRunReadNothing({ state: "finished", jobId: "j", progress: { imported: 0, matched: 0, noMessagesYet: 0 } })).toBe(false);
+    // Never "reached the floor".
+    expect(cacheRunReachedFloor(true, { state: "finished", jobId: "j", listStop: "stable", progress: { imported: 0, matched: 3, noMessagesYet: 3 } })).toBe(false);
   });
 
   it("finished: committed (one transaction), then the time is saved, then the auto-link for that user", async () => {
