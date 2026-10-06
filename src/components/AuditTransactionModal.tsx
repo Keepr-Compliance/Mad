@@ -13,6 +13,9 @@ import { useAuditTransaction } from "../hooks/useAuditTransaction";
 import { OfflineNotice } from "./common/OfflineNotice";
 import { useAuditCoverageCheck } from "../hooks/useAuditCoverageCheck";
 import { AuditCoveragePrompt } from "./transactionDetailsModule/components/AuditCoveragePrompt";
+import { dialogTextSource } from "./transactionDetailsModule/components/TextCoverageNotice";
+import { useImportSource } from "../hooks/useImportSource";
+import { usePlatform } from "../contexts/PlatformContext";
 import { parseMoney } from "./transactionDates/commission";
 
 // Type definitions
@@ -51,6 +54,9 @@ function AuditTransactionModal({
   // BACKLOG-2292 (Layer 1): audit-window completeness prompt at date selection.
   const { checkCoverage, runMessagesImport, importing, progress, indeterminate } =
     useAuditCoverageCheck(userId);
+  // Live (founder): the dialog names only the user's own text source.
+  const { isMacOS } = usePlatform();
+  const importSource = useImportSource(userId, false);
   const [coveragePrompt, setCoveragePrompt] = useState<{
     hasGap: boolean;
     importerAvailable: boolean;
@@ -423,6 +429,7 @@ function AuditTransactionModal({
             onCancel={() => setCoveragePrompt(null)}
             sourceGaps={coveragePrompt.sourceGaps}
             proposedStartISO={coveragePrompt.proposedStartISO}
+            chosenSource={dialogTextSource(importSource, isMacOS)}
           />
         )}
     </ResponsiveModal>

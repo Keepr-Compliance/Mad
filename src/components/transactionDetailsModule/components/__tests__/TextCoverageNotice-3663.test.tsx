@@ -155,6 +155,7 @@ describe("audit prompt (N4)", () => {
         onCancel={jest.fn()}
         sourceGaps={[gm, { ...iphone, source: "mac" }]}
         proposedStartISO="2026-05-01T00:00:00.000Z"
+        chosenSource="google_messages"
       />,
     );
     const list = screen.getByTestId("audit-coverage-source-gaps");

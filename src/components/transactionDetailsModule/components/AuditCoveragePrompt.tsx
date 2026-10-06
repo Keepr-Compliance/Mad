@@ -19,7 +19,7 @@
 import React from "react";
 import { ResponsiveModal } from "../../common/ResponsiveModal";
 import type { CoverageImportProgress } from "../../../hooks/useAuditCoverageCheck";
-import type { SourceCoverageGap } from "../../../../electron/types/auditCoverage";
+import type { SourceCoverageGap, TextSource } from "../../../../electron/types/auditCoverage";
 import { gapLine, googleMessagesGapLine } from "./TextCoverageNotice";
 
 export interface AuditCoveragePromptProps {
@@ -55,6 +55,12 @@ export interface AuditCoveragePromptProps {
   sourceGaps?: SourceCoverageGap[];
   /** The proposed start, for those lines. */
   proposedStartISO?: string | null;
+  /**
+   * Live (founder): the user's own text source (dialogTextSource) — the only
+   * one the dialog names: Mac → the Mac lines; Google Messages / iPhone →
+   * that source's one line; none (e.g. the parked Companion) → no text line.
+   */
+  chosenSource: TextSource | null;
 }
 
 export function AuditCoveragePrompt({
@@ -69,9 +75,12 @@ export function AuditCoveragePrompt({
   onCancel,
   sourceGaps = [],
   proposedStartISO = null,
+  chosenSource,
 }: AuditCoveragePromptProps): React.ReactElement {
-  // The Mac import has its own lines above; the other sources are listed here.
-  const otherGaps = sourceGaps.filter((g) => g.source !== "mac");
+  // One gap line, one action: the Mac lines for the Mac source; otherwise
+  // only the chosen source's line.
+  const macSource = chosenSource === "mac";
+  const otherGaps = macSource ? [] : sourceGaps.filter((g) => g.source === chosenSource);
   const canImport = hasGap && importerAvailable;
   const percent = progress ? Math.max(0, Math.min(100, Math.round(progress.percent))) : 0;
   // BACKLOG-2305: fall back to indeterminate whenever we lack a trustworthy
@@ -122,13 +131,13 @@ export function AuditCoveragePrompt({
         </p>
 
         {/* Layer 2 — ADDITIVE, only when a real data gap exists. */}
-        {hasGap && importerAvailable && (
+        {hasGap && macSource && importerAvailable && (
           <p className="text-sm text-gray-700 mb-3" data-testid="audit-coverage-import-line">
             Because this range starts earlier than your imported message history,
             older messages will be imported to cover it.
           </p>
         )}
-        {hasGap && !importerAvailable && (
+        {hasGap && macSource && !importerAvailable && (
           <p className="text-sm text-amber-700 mb-3" data-testid="audit-coverage-degrade-line">
             This range starts earlier than your imported message history. Older
             messages can only be imported on a Mac with Full Disk Access — the

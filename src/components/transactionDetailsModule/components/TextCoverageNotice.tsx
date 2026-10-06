@@ -31,6 +31,17 @@ const ACTION: Record<TextSource, string> = {
 };
 
 /** The user's import source preference → the coverage source. */
+/**
+ * Live (founder, 2026-10-05): the date-range dialog names ONLY the user's
+ * own source and its action — never one they didn't pick. The Mac source
+ * counts only on a Mac; anything else (the parked Android Companion
+ * included) maps through chosenTextSource.
+ */
+export function dialogTextSource(effective: string, onMac: boolean): TextSource | null {
+  const chosen = chosenTextSource(effective);
+  return chosen === "mac" && !onMac ? null : chosen;
+}
+
 export function chosenTextSource(pref: string | undefined | null): TextSource | null {
   switch (pref) {
     case "macos-native":
