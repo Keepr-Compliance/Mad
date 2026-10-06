@@ -62,6 +62,15 @@ export const RCS_LEGACY_THREAD_PREFIX = "gmweb-chat-";
 export const RCS_NO_NUMBER_MESSAGE = "Open the chat's Details: no phone number found";
 
 /**
+ * BACKLOG-3668 M3: per-message bounds. A message over either is refused on its
+ * own (left out of the chat, counted in `refusedOversize`); the rest of the
+ * chat is kept. Real Messages for Web ids are short and an RCS text is a few
+ * KB at most, so a real Sync never meets these.
+ */
+export const RCS_MAX_MSG_ID_CHARS = 128;
+export const RCS_MAX_TEXT_BYTES = 64 * 1024;
+
+/**
  * BACKLOG-3630: who is in a chat, from its Details panel. `numbers` are the
  * normalized E.164 numbers, sorted and unique (the user's own excluded);
  * `names` pairs a shown name with its number, to resolve group senders.
@@ -255,6 +264,8 @@ export interface RcsIncomingChat {
    * (not cut by the cap, not unsettled, no gap). A boolean only.
    */
   reachedFloor?: boolean;
+  /** BACKLOG-3668 M3: messages refused for size (msgId or text over the bound). A count only. */
+  refusedOversize?: number;
 }
 
 export interface RcsInsertRow {
@@ -534,6 +545,7 @@ export function parseIncomingChat(body: unknown): RcsIncomingChat | string {
   }
   if (!Array.isArray(b.messages)) return "messages must be an array";
   const messages: RcsIncomingMessage[] = [];
+  let refusedOversize = 0;
   for (const raw of b.messages as unknown[]) {
     if (!raw || typeof raw !== "object") return "each message must be an object";
     const m = raw as Record<string, unknown>;
@@ -541,6 +553,11 @@ export function parseIncomingChat(body: unknown): RcsIncomingChat | string {
     if (m.direction !== "inbound" && m.direction !== "outbound") return "message.direction is invalid";
     if (typeof m.sender !== "string") return "message.sender must be a string";
     if (typeof m.text !== "string") return "message.text must be a string";
+    // BACKLOG-3668 M3: an oversize message is refused on its own, and counted.
+    if (m.msgId.length > RCS_MAX_MSG_ID_CHARS || Buffer.byteLength(m.text, "utf8") > RCS_MAX_TEXT_BYTES) {
+      refusedOversize += 1;
+      continue;
+    }
     const images = m.images ?? 0;
     if (typeof images !== "number" || !Number.isInteger(images) || images < 0 || images > 99) {
       return "message.images must be an integer 0-99";
@@ -573,11 +590,13 @@ export function parseIncomingChat(body: unknown): RcsIncomingChat | string {
       ...(replyTo ? { replyTo } : {}),
     });
   }
+  if (messages.length === 0 && refusedOversize > 0) return "every message is over the size limit";
   return {
     conversationId: b.conversationId,
     title: b.title,
     messages,
     ...(b.reachedFloor === true ? { reachedFloor: true } : {}),
+    ...(refusedOversize > 0 ? { refusedOversize } : {}),
   };
 }
 

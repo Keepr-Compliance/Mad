@@ -11,6 +11,7 @@
 
 import type { CacheCommitResult, CacheLimits } from "./rcsCacheStaging";
 import type { RcsCacheSaved } from "./rcsImportJob";
+import { scrubRcsText } from "../utils/redactSensitive";
 
 /** How far back a first cache Sync reaches when no floor is given (tests; the app passes the user's setting). */
 export const RCS_CACHE_WINDOW_DAYS = 60;
@@ -265,6 +266,13 @@ export function consentToRecordOnSync(
   return consentIsCurrent(consentVersion) ? null : RCS_CONSENT_VERSION;
 }
 
+/** BACKLOG-3668 M3: a Sync refused before staging — too little free disk space. */
+export const RCS_DISK_SPACE_REFUSAL: CacheStartRefusal = {
+  status: 507,
+  error: "disk_space",
+  message: "Not enough free disk space to sync. Free up space and try again.",
+};
+
 /**
  * Who may start a cache Sync: a signed-in user (whose consent, Keepr's
  * record, is current — only while RCS_CONSENT_REQUIRED), while no Sync runs
@@ -276,6 +284,12 @@ export function decideCacheStart(input: {
   consentVersion: number | null | undefined;
   activeLabel: string | null | undefined;
   writesPaused: boolean;
+  /**
+   * BACKLOG-3668 M3: the free-disk check (checkDiskSpaceForOperation
+   * "rcsCacheSync") passed. `false` refuses the start before any staging.
+   * Omitted: not checked (treated as enough, as the check itself does on error).
+   */
+  diskSufficient?: boolean;
   /** Test seam: defaults to RCS_CONSENT_REQUIRED. */
   consentRequired?: boolean;
 }): { ok: true; userId: string } | CacheStartRefusal {
@@ -294,6 +308,7 @@ export function decideCacheStart(input: {
       message: `Keepr is already syncing${input.activeLabel ? `: ${input.activeLabel}` : ""}. Wait for it to finish, or cancel it.`,
     };
   }
+  if (input.diskSufficient === false) return RCS_DISK_SPACE_REFUSAL;
   return { ok: true, userId: input.userId };
 }
 
@@ -447,14 +462,14 @@ export async function handleCacheJobEnded(
         );
       }
     } catch (err) {
-      deps.log?.(`[RcsCache] Discarding the cache Sync's staging failed: ${err instanceof Error ? err.message : String(err)}`);
+      deps.log?.(`[RcsCache] Discarding the cache Sync's staging failed: ${scrubRcsText(err)}`);
     }
     return;
   }
   try {
     await deps.commit(jobId, userId, ended.snapshot);
   } catch (err) {
-    deps.log?.(`[RcsCache] The cache Sync could not be saved; nothing was imported: ${err instanceof Error ? err.message : String(err)}`);
+    deps.log?.(`[RcsCache] The cache Sync could not be saved; nothing was imported: ${scrubRcsText(err)}`);
     return;
   }
   // The job's START time (SR): chats that changed while it ran are re-read
@@ -467,13 +482,13 @@ export async function handleCacheJobEnded(
   try {
     await deps.autoLink(userId);
   } catch (err) {
-    deps.log?.(`[RcsCache] Auto-link after the cache Sync failed: ${err instanceof Error ? err.message : String(err)}`);
+    deps.log?.(`[RcsCache] Auto-link after the cache Sync failed: ${scrubRcsText(err)}`);
   }
   if (deps.afterLink) {
     try {
       await deps.afterLink(userId);
     } catch (err) {
-      deps.log?.(`[RcsCache] After the auto-link: ${err instanceof Error ? err.message : String(err)}`);
+      deps.log?.(`[RcsCache] After the auto-link: ${scrubRcsText(err)}`);
     }
   }
   // Even when the auto-link failed, the saved texts are new to open views.

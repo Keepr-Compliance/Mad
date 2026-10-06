@@ -103,6 +103,9 @@ import {
 } from "../services/rcsClearService";
 import { bringAppToFrontForLink, bringAppToFrontOrFlash } from "../utils/bringAppToFront";
 import { wrapHandler } from "../utils/wrapHandler";
+import { checkDiskSpaceForOperation } from "../services/diagnostics/diskSpaceDiagnostics";
+import { scrubRcsText } from "../utils/redactSensitive";
+import { RCS_SENTRY_TAGS } from "../services/rcsSentryScrub";
 import { getMainWindow } from "../windowRegistry";
 import { ValidationError } from "../utils/validation";
 import { RCS_MEDIA_DEFAULTS, clearPendingMediaRead, getRcsMediaOptions, hasPendingMediaRead, recordRcsMediaSeen, setRcsMediaOptions } from "../services/db/rcsMediaDbService";
@@ -125,6 +128,8 @@ import type {
 } from "../types/ipc/window-api-rcs-import";
 
 const LOG_TAG = "RcsImport";
+/** BACKLOG-3668 L3: RCS handler errors are tagged for the Sentry scrub and logged scrubbed. */
+const RCS_HANDLER_OPTIONS = { module: LOG_TAG, sentryTags: { ...RCS_SENTRY_TAGS }, scrubLogText: (err: unknown) => scrubRcsText(err) };
 export const RCS_JOB_PROGRESS_CHANNEL = "rcs-import:job-progress";
 export const RCS_MESSAGES_WEB_URL = "https://messages.google.com/web/conversations";
 /** Keepr's "Open Google Messages" on its link screen: the extension's link window, in the open Messages tab. */
@@ -337,7 +342,7 @@ export function cacheChatFloorFor(jobId: string, userId: string, conversationId:
     st.maxWidenDays = Math.max(st.maxWidenDays, d.widenDays);
     return d.floorMs;
   } catch (err) {
-    void logService.warn("[RcsCache] Deal floor for a chat failed (settings floor kept): " + (err instanceof Error ? err.message : String(err)), LOG_TAG);
+    void logService.warn("[RcsCache] Deal floor for a chat failed (settings floor kept): " + scrubRcsText(err), LOG_TAG);
     return null;
   }
 }
@@ -671,7 +676,7 @@ async function settleLeftoverJob(
       return "discarded";
     }
   } catch (err) {
-    void logService.warn(`[RcsCache] Leftover staging not settled: ${err instanceof Error ? err.message : String(err)}`, LOG_TAG);
+    void logService.warn(`[RcsCache] Leftover staging not settled: ${scrubRcsText(err)}`, LOG_TAG);
     return "discarded";
   }
 }
@@ -833,12 +838,15 @@ async function startCacheJobOnce(opts: { sinceDays?: unknown }): Promise<
   const state = userId ? databaseService.getRcsCacheState(userId) : null;
   // P3b: Keepr's consent record (a gate only while RCS_CONSENT_REQUIRED).
   const consent = userId ? databaseService.getRcsConsent(userId) : null;
+  // BACKLOG-3668 M3: free disk space, before any staging (sufficient on a check error).
+  const disk = userId ? await checkDiskSpaceForOperation("rcsCacheSync").catch(() => null) : null;
   const active = bridge.activeJob();
   const decision = decideCacheStart({
     userId,
     consentVersion: consent?.consentVersion,
     activeLabel: active ? active.label ?? "" : null,
     writesPaused: bridge.writesArePaused,
+    diskSufficient: disk ? disk.sufficient : undefined,
   });
   if (!("ok" in decision)) return { ok: false, ...decision };
   // BACKLOG-3666: no Sync until the extension is paired with this Keepr.
@@ -955,7 +963,7 @@ export function dealChatsForClaim(userId: string, settingsFloorMs: number, sourc
     }
     return { ids, floorISO: floorMs === null ? null : new Date(floorMs).toISOString() };
   } catch (err) {
-    void logService.warn("[RcsCache] Deal chats not read (settings floor only): " + (err instanceof Error ? err.message : String(err)), LOG_TAG);
+    void logService.warn("[RcsCache] Deal chats not read (settings floor only): " + scrubRcsText(err), LOG_TAG);
     return { ids: [], floorISO: null };
   }
 }
@@ -1108,7 +1116,7 @@ const bridge = new RcsExtensionBridge({
       })
       .catch((err: unknown) => {
         void logService.error(
-          `[RcsCache] After the cache Sync: ${err instanceof Error ? err.message : String(err)}`,
+          `[RcsCache] After the cache Sync: ${scrubRcsText(err)}`,
           LOG_TAG,
         );
       });
@@ -1294,7 +1302,7 @@ export function registerRcsImportHandlers(): void {
     "rcs-import:get-status",
     wrapHandler(async (): Promise<RcsImportStatusResult> => {
       return { success: true, status: bridge.getStatus() };
-    }, { module: LOG_TAG }),
+    }, RCS_HANDLER_OPTIONS),
   );
 
   ipcMain.handle(
@@ -1303,7 +1311,7 @@ export function registerRcsImportHandlers(): void {
       const jobId = requireString(argsObject(args).jobId, "jobId");
       bridge.cancelJob(jobId);
       return { success: true, job: bridge.getJob() };
-    }, { module: LOG_TAG }),
+    }, RCS_HANDLER_OPTIONS),
   );
 
   // Founder (2026-10-04): Keepr's own "Try again" for a failed Google
@@ -1321,7 +1329,7 @@ export function registerRcsImportHandlers(): void {
       if (!r.ok) return { success: false, error: r.message ?? "Keepr could not start the Sync." };
       await shell.openExternal(`${RCS_MESSAGES_WEB_URL}#keepr-job=${r.job.jobId}`);
       return { success: true, job: r.job };
-    }, { module: LOG_TAG }),
+    }, RCS_HANDLER_OPTIONS),
   );
 
   // BACKLOG-3658: the cache job (the dashboard's "Sync Android" uses it, P3).
@@ -1337,7 +1345,7 @@ export function registerRcsImportHandlers(): void {
       if (!started.ok) return { success: false, error: started.message };
       await shell.openExternal(`${RCS_MESSAGES_WEB_URL}#keepr-job=${started.job.jobId}`);
       return { success: true, job: started.job };
-    }, { module: LOG_TAG }),
+    }, RCS_HANDLER_OPTIONS),
   );
 
   // SR (C7 review) F1: the P1 developer shortcut "set-cache-opt-in" (it wrote
@@ -1357,7 +1365,7 @@ export function registerRcsImportHandlers(): void {
       }
       databaseService.setRcsConsent(userId, version as number | null, new Date().toISOString());
       return { success: true };
-    }, { module: LOG_TAG }),
+    }, RCS_HANDLER_OPTIONS),
   );
 
   // P3b: cache options. autoDelete: a user setting (off by default; 90 days).
@@ -1373,7 +1381,7 @@ export function registerRcsImportHandlers(): void {
       if (typeof a.contactsOnly === "boolean" && !app.isPackaged) patch.contactsOnly = a.contactsOnly;
       databaseService.setRcsCacheOptions(userId, patch);
       return { success: true };
-    }, { module: LOG_TAG }),
+    }, RCS_HANDLER_OPTIONS),
   );
 
   // SR M: Settings → Google Messages → "Download photos / videos from all chats".
@@ -1388,7 +1396,7 @@ export function registerRcsImportHandlers(): void {
       if (typeof a.videosAllChats === "boolean") patch.videosAllChats = a.videosAllChats;
       setRcsMediaOptions(userId, patch);
       return { success: true };
-    }, { module: LOG_TAG }),
+    }, RCS_HANDLER_OPTIONS),
   );
 
   // C4 (UX redesign): Keepr no longer makes pairing codes — the extension's
@@ -1407,7 +1415,7 @@ export function registerRcsImportHandlers(): void {
         // (the same rule as the fill) — the link screen says so.
         clipboardFill: linkCodeAutoFillOn(process.platform),
       };
-    }, { module: LOG_TAG }),
+    }, RCS_HANDLER_OPTIONS),
   );
 
   ipcMain.handle(
@@ -1429,7 +1437,7 @@ export function registerRcsImportHandlers(): void {
         return { success: true };
       }
       return { success: false, error: LINK_ENTER_ERRORS[r.reason] };
-    }, { module: LOG_TAG }),
+    }, RCS_HANDLER_OPTIONS),
   );
 
   // SR (B1): Keepr's own "Forget link" — one of the only ways a link is deleted
@@ -1440,7 +1448,7 @@ export function registerRcsImportHandlers(): void {
       const userId = await currentUserId();
       if (userId) pairingAuth.forgetLink(userId);
       return { success: true };
-    }, { module: LOG_TAG }),
+    }, RCS_HANDLER_OPTIONS),
   );
 
   // Founder (KeeprLinkPrompt): "Open Google Messages" on the link screen —
@@ -1453,7 +1461,7 @@ export function registerRcsImportHandlers(): void {
       // no extension, a plain Messages tab as before.
       await shell.openExternal(`${RCS_MESSAGES_WEB_URL}#${RCS_LINK_HASH}`);
       return { success: true };
-    }, { module: LOG_TAG }),
+    }, RCS_HANDLER_OPTIONS),
   );
 
   // A02: "Add to Chrome" — the store listing (a fixed URL, nothing from the renderer).
@@ -1462,7 +1470,7 @@ export function registerRcsImportHandlers(): void {
     wrapHandler(async (): Promise<{ success: true }> => {
       await shell.openExternal(RCS_EXTENSION_STORE_URL);
       return { success: true };
-    }, { module: LOG_TAG }),
+    }, RCS_HANDLER_OPTIONS),
   );
 
   ipcMain.handle(
@@ -1470,7 +1478,7 @@ export function registerRcsImportHandlers(): void {
     wrapHandler(async (): Promise<{ success: true }> => {
       pairingAuth.clearLinkIntrusion();
       return { success: true };
-    }, { module: LOG_TAG }),
+    }, RCS_HANDLER_OPTIONS),
   );
 
   ipcMain.handle(
@@ -1509,7 +1517,7 @@ export function registerRcsImportHandlers(): void {
           // SR: the pairing code shown was used up by wrong attempts.
         },
       };
-    }, { module: LOG_TAG }),
+    }, RCS_HANDLER_OPTIONS),
   );
 
   // BACKLOG-3658 P3c: Settings → Google Messages → chats not synced (read-only
@@ -1520,7 +1528,7 @@ export function registerRcsImportHandlers(): void {
       const userId = await currentUserId();
       if (!userId) return { success: false, error: "Sign in to Keepr first." };
       return { success: true, chats: databaseService.listRcsExclusionsForSettings(userId) };
-    }, { module: LOG_TAG }),
+    }, RCS_HANDLER_OPTIONS),
   );
 
   // BACKLOG-3659 P3d: Settings → Google Messages → Force re-import (its own,
@@ -1541,7 +1549,7 @@ export function registerRcsImportHandlers(): void {
         androidMessagesDeleted: r.messagesDeleted,
         contactsDeleted: r.contactsDeleted,
       };
-    }, { module: LOG_TAG }),
+    }, RCS_HANDLER_OPTIONS),
   );
 
   // BACKLOG-3659: deliver the extension (Release 1: unpacked, from Downloads).
@@ -1555,7 +1563,7 @@ export function registerRcsImportHandlers(): void {
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
       }
-    }, { module: LOG_TAG }),
+    }, RCS_HANDLER_OPTIONS),
   );
 
   // Live (founder): at app start (the renderer, while the extension is not in
@@ -1567,7 +1575,7 @@ export function registerRcsImportHandlers(): void {
       if (r.refreshed) void logService.info("[RcsImport] Extension folder refreshed to " + r.bundledVersion, LOG_TAG);
       else if (r.error) void logService.warn("[RcsImport] Extension folder not refreshed (in use)", LOG_TAG);
       return { success: true, ...r };
-    }, { module: LOG_TAG }),
+    }, RCS_HANDLER_OPTIONS),
   );
 
   ipcMain.handle(
@@ -1575,7 +1583,7 @@ export function registerRcsImportHandlers(): void {
     wrapHandler(async (): Promise<{ success: boolean }> => {
       shell.showItemInFolder(path.join(extensionTargetDir(app.getPath("downloads")), "manifest.json"));
       return { success: true };
-    }, { module: LOG_TAG }),
+    }, RCS_HANDLER_OPTIONS),
   );
 
   // Chrome refuses chrome:// addresses from other apps: copy it, start Chrome.
@@ -1592,14 +1600,14 @@ export function registerRcsImportHandlers(): void {
             : spawn(candidate, [], { detached: true, stdio: "ignore" }),
       );
       return { success: true, copied: true, opened };
-    }, { module: LOG_TAG }),
+    }, RCS_HANDLER_OPTIONS),
   );
 
   ipcMain.handle(
     "rcs-import:get-job",
     wrapHandler(async (): Promise<RcsImportJobResult> => {
       return { success: true, job: bridge.getJob() };
-    }, { module: LOG_TAG }),
+    }, RCS_HANDLER_OPTIONS),
   );
 }
 
