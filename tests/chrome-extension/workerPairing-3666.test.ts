@@ -219,19 +219,17 @@ describe("the worker's link with Keepr (BACKLOG-3666, C1)", () => {
     expect(await w2.send({ type: "keepr-pair-status" })).toEqual({ ok: true, paired: false });
   });
 
-  // Founder Option 1: as soon as the code shows, Keepr comes forward ONCE
-  // per session and opens its link step (the code field focused there).
-  // Mutations: no /focus on a new session; /focus again for the same session;
-  // Keepr not opening the link step while a code waits → red.
-  it("a new code: /focus once per session; Keepr opens its link step", async () => {
+  // Live (founder, 0.3.87): a new code does NOT bring Keepr forward (it
+  // showed an empty box). Only "Copy code and open Keepr" (keepr://link)
+  // does. Mutation: /focus sent on a new session → red.
+  it("a new code: no /focus — Keepr stays where it is until Copy code and open Keepr", async () => {
     const w = await worker();
     await w.send({ type: "keepr-link-start" });
-    await waitFor(() => focused === 1);
-    await w.send({ type: "keepr-link-start" }); // the same session, still waiting
+    await waitFor(async () => ((await w.send({ type: "keepr-link-state" })).link as { status: string }).status === "waiting");
     await new Promise((r) => setTimeout(r, 100));
-    expect(w.sent.filter((p) => p === "/focus")).toHaveLength(1);
-    expect(focused).toBe(1);
-    expect(linkScreens).toBe(1);
+    expect(w.sent.filter((p) => p === "/focus")).toHaveLength(0);
+    expect(focused).toBe(0);
+    expect(linkScreens).toBe(0);
   });
 
   // SR (O5 inside this suite) + storyboard D03/A06: the page card opens

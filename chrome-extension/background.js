@@ -237,9 +237,9 @@ async function linkStart(opts) {
   }
   const ttl = typeof s.body.expiresInMs === "number" ? s.body.expiresInMs : 120000;
   linkSession = { code, state: a.state, sessionId: s.body.sessionId, expiresAt: Date.now() + ttl, triesLeft: 5, status: "waiting", error: undefined };
-  // Founder Option 1: the code is shown now — Keepr comes forward ONCE per
-  // session (the existing /focus; Keepr opens its link step, field focused).
-  void focusKeepr().catch(() => undefined);
+  // Live (founder, 0.3.87): Keepr no longer comes forward when the code is
+  // shown — it showed an EMPTY box before the user copied anything. Only
+  // "Copy code and open Keepr" (keepr://link) brings Keepr forward now.
   void linkPollLoop(linkSession, (opts && opts.sleep) || ((ms) => new Promise((r) => setTimeout(r, ms))));
   return { ok: true, link: linkView() };
 }
