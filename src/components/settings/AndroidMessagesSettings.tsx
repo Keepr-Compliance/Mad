@@ -16,6 +16,8 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { settingsService } from '../../services';
 import logger from '../../utils/logger';
+import { LookbackMonthsSelect, lastMonthsPhrase } from "./LookbackMonthsSelect";
+import { AndroidForceReimportWarning, androidClearedText } from "./AndroidForceReimportWarning";
 import {
   DEFAULT_LOOKBACK_MONTHS,
   DEFAULT_MAX_MESSAGES,
@@ -73,7 +75,12 @@ export function AndroidMessagesSettings({ userId }: AndroidMessagesSettingsProps
   const [loading, setLoading] = useState(true);
   const [showForceWarning, setShowForceWarning] = useState(false);
   const [resetting, setResetting] = useState(false);
-  const [clearResult, setClearResult] = useState<{ messagesDeleted: number; contactsDeleted: number } | null>(null);
+  const [clearResult, setClearResult] = useState<{
+    messagesDeleted: number;
+    contactsDeleted: number;
+    gmwebMessagesDeleted?: number;
+    error?: string;
+  } | null>(null);
 
   // Import filter state
   const [lookbackMonths, setLookbackMonths] = useState<number | null>(
@@ -248,11 +255,18 @@ export function AndroidMessagesSettings({ userId }: AndroidMessagesSettingsProps
       </div>{/* /panel identity group */}
 
       {/* Clear result display (BACKLOG-1468) */}
-      {clearResult && (
-        <div className="text-xs text-green-700 bg-green-50 rounded p-2 border border-green-200">
-          Cleared {clearResult.messagesDeleted.toLocaleString()} messages and{" "}
-          {clearResult.contactsDeleted.toLocaleString()} contacts. Open the companion app and
-          tap Sync Now to re-import.
+      {clearResult?.error && (
+        <div className="text-xs text-red-700 bg-red-50 rounded p-2 border border-red-200" role="alert">
+          {clearResult.error}
+        </div>
+      )}
+      {clearResult && !clearResult.error && (
+        <div className="text-xs text-green-700 bg-green-50 rounded p-2 border border-green-200" role="status">
+          {androidClearedText({
+            gmwebMessages: clearResult.gmwebMessagesDeleted ?? 0,
+            companionMessages: clearResult.messagesDeleted,
+            contacts: clearResult.contactsDeleted,
+          })}
         </div>
       )}
 
@@ -287,20 +301,12 @@ export function AndroidMessagesSettings({ userId }: AndroidMessagesSettingsProps
         {/* Date Range Filter */}
         <div className="flex items-center justify-between mb-2">
           <span className="text-xs text-gray-600">Import messages from</span>
-          <select
-            value={lookbackMonths ?? "all"}
-            onChange={(e) => handleLookbackChange(e.target.value)}
+          <LookbackMonthsSelect
+            value={lookbackMonths}
+            onChange={(v) => handleLookbackChange(v)}
             disabled={!prefsSettled}
             className="text-xs border border-gray-300 rounded px-2 py-1 bg-white text-gray-900 disabled:opacity-50"
-          >
-            <option value="3">Last 3 months</option>
-            <option value="6">Last 6 months</option>
-            <option value="9">Last 9 months</option>
-            <option value="12">Last 12 months</option>
-            <option value="18">Last 18 months</option>
-            <option value="24">Last 24 months</option>
-            <option value="all">All time</option>
-          </select>
+          />
         </div>
 
         {/* Message Count Cap */}
@@ -341,7 +347,7 @@ export function AndroidMessagesSettings({ userId }: AndroidMessagesSettingsProps
             states nothing, rather than stating a limit no run enforces. */}
         {lookbackMonths !== null && (
           <p className="text-xs text-blue-600 mt-2">
-            {`Importing messages from the last ${lookbackMonths} months`}
+            {`Importing messages from ${lastMonthsPhrase(lookbackMonths)}`}
           </p>
         )}
       </div>{/* /BACKLOG-3156 stage E — Import Preferences block (its own card) */}
@@ -375,37 +381,9 @@ export function AndroidMessagesSettings({ userId }: AndroidMessagesSettingsProps
 
       {/* Force re-import warning confirmation */}
       {showForceWarning && (
-        <div className="mt-3 p-3 bg-amber-50 border border-amber-300 rounded-lg">
-          <div className="flex items-start gap-2">
-            <svg className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
-            </svg>
-            <div className="flex-1">
-              <p className="text-sm font-medium text-amber-800">
-                Force re-import will delete all Android data
-              </p>
-              <p className="text-xs text-amber-700 mt-1">
-                This deletes all synced messages and contacts from the local database,
-                then stops the sync server. Open the companion app and tap Sync Now to
-                re-import everything from scratch. Links from checklist items to
-                those messages&rsquo; attachments are removed too.
-              </p>
-              <div className="flex gap-2 mt-2">
-                <button
-                  onClick={handleForceReimport}
-                  className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-medium rounded transition-all"
-                >
-                  Continue with Re-import
-                </button>
-                <button
-                  onClick={() => setShowForceWarning(false)}
-                  className="px-3 py-1.5 bg-white hover:bg-gray-100 text-gray-700 text-xs font-medium rounded border border-gray-300 transition-all"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </div>
+        <div className="mt-3">
+          {/* BACKLOG-3657: the ONE Android confirmation, shared with Google Messages. */}
+          <AndroidForceReimportWarning windowMonths={lookbackMonths} onConfirm={() => void handleForceReimport()} onCancel={() => setShowForceWarning(false)} />
         </div>
       )}
     </div>

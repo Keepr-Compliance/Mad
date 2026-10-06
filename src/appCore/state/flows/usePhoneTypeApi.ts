@@ -177,9 +177,13 @@ export function usePhoneTypeApi({
         // must keep falling through to it.
         //
         // Best-effort: a failure is non-fatal (log-but-continue).
+        // BACKLOG-3659: a NEW Android answer defaults to Google Messages
+        // through Keepr's extension (the companion app stays one click away).
+        // Installs that never stored a source keep falling through to the
+        // companion default elsewhere, so no existing user's source changes.
         const importSource: ImportSource =
           phoneType === "android"
-            ? "android-companion"
+            ? "android-messages-web"
             : isMacOS
               ? "macos-native"
               : "iphone-sync";

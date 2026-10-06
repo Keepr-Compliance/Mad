@@ -26,7 +26,9 @@ import {
 import {
   getAuditCoverage,
   checkExportCompleteness,
+  getTransactionTextCoverage,
 } from "../services/auditCoverageService";
+import type { TextCoverageResult, TextSource } from "../types/auditCoverage";
 import type { ImportProgressCallback } from "../services/macOSMessagesImportService";
 import type {
   AuditCoverageResult,
@@ -644,6 +646,33 @@ export function registerTransactionCrudHandlers(
    * coverage complete for its saved audit window? Read-only detection; the
    * renderer ExportModal decides whether to prompt.
    */
+  /**
+   * BACKLOG-3663: per-source text coverage for one transaction (the Texts tab).
+   * `chosenSource` is the user's import source (renderer preference); sources
+   * the user has texts from are checked too. Read-only; never blocks anything.
+   */
+  ipcMain.handle(
+    "transactions:get-text-coverage",
+    wrapHandler(async (
+      _event: IpcMainInvokeEvent,
+      transactionId: string,
+      userId: string,
+      chosenSource: string | null,
+    ): Promise<TextCoverageResult> => {
+      const validatedTransactionId = validateTransactionId(transactionId);
+      if (!validatedTransactionId) {
+        throw new ValidationError("Transaction ID validation failed", "transactionId");
+      }
+      const validatedUserId = validateUserId(userId);
+      if (!validatedUserId) {
+        throw new ValidationError("User ID validation failed", "userId");
+      }
+      const known: readonly string[] = ["iphone", "mac", "android_companion", "google_messages"];
+      const chosen = typeof chosenSource === "string" && known.includes(chosenSource) ? (chosenSource as TextSource) : null;
+      return getTransactionTextCoverage(validatedTransactionId, validatedUserId as string, chosen);
+    }, { module: "Transactions" }),
+  );
+
   ipcMain.handle(
     "transactions:check-export-completeness",
     wrapHandler(async (

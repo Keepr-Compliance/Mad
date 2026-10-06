@@ -237,7 +237,11 @@ describe("BACKLOG-3156 — Emails", () => {
     expect(label.tagName).toBe("SPAN");
     expect(label.closest("select")).toBeNull();
     // …and the value reads the way both Messages filters read.
-    expect(screen.getByDisplayValue("Last 3 months")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Last 1.5 months (default)")).toBeInTheDocument();
+    // Founder (2026-10-02): the shared months list, the 1.5-month default.
+    // Mutation: email's own 1/3/6/12 select back, or a default of 3 → red.
+    const select = screen.getByRole("combobox", { name: "Import emails from" }) as HTMLSelectElement;
+    expect(Array.from(select.options).map((o) => o.value)).toEqual(["1", "1.5", "2", "3", "4", "5", "6", "12"]);
   });
 
   it("puts the actions outside every card, primary before destructive", async () => {

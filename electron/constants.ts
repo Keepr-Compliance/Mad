@@ -83,8 +83,8 @@ export const WINDOW_CONFIG: WindowConfig = {
 // Scan & Email Settings (TASK-2072: smart scan window + separate email cache):
 //   1. Transaction Detection — automatic, uses last_sync_at per provider (no user setting)
 //      First-ever scan looks back FIRST_SCAN_LOOKBACK_MONTHS (1 month)
-//   2. emailCache.durationMonths (default 3) — how much email to cache locally
-//   3. messageImport.filters.lookbackMonths (default 3) — how far back iMessage import looks
+//   2. emailCache.durationMonths (default 1.5) — how much email to cache locally
+//   3. messageImport.filters.lookbackMonths (default 1.5) — how far back message imports look
 // Previously removed:
 //   - scan.lookbackMonths (TASK-2072) — replaced with smart scan window (last_sync_at-based)
 //   - DEFAULT_EMAIL_SYNC_LOOKBACK_MONTHS (TASK-2069) — first-time sync now uses FIRST_SCAN_LOOKBACK_MONTHS
@@ -93,8 +93,11 @@ export const WINDOW_CONFIG: WindowConfig = {
 // TASK-2072: First-ever scan lookback (1 month for new users)
 export const FIRST_SCAN_LOOKBACK_MONTHS: number = 1;
 
-// TASK-2072: Default email cache duration (how much email to keep locally)
-export const EMAIL_CACHE_DURATION_MONTHS_DEFAULT: number = 3;
+// TASK-2072: Default email cache duration (how much email to keep locally).
+// Founder (2026-10-02): 1.5 months, the same default as messages (was 3).
+// MIRRORED in src/components/settings/messageImportPreferences.ts
+// (DEFAULT_EMAIL_CACHE_MONTHS): the renderer cannot import electron/.
+export const EMAIL_CACHE_DURATION_MONTHS_DEFAULT: number = 1.5;
 
 // Development
 export const DEV_SERVER_URL: string = "http://localhost:5173";

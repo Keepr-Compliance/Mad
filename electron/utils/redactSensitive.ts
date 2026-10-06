@@ -152,3 +152,41 @@ export function redactLocalPaths(input: string): string {
       .replace(/(?<![\w:/])\/(?:[\w.@~+-]+\/)+[\w.@~+-]*/g, "<path>")
   );
 }
+
+/**
+ * Redact phone numbers EMBEDDED IN a free-form string: a run of 7–15 digits,
+ * optionally led by "+", with spaces, dashes or parentheses between them. An
+ * ISO date (2026-10-06...) is left alone. Not exported: use
+ * {@link scrubRcsText}. [SECURITY — BACKLOG-3668 L3]
+ */
+function redactPhonesInText(input: string): string {
+  return input.replace(/(?<![\w.+])\+?\(?\d(?:[\s()-]*\d){6,14}(?![\w.])/g, (match) =>
+    /^\d{4}-\d{2}-\d{2}/.test(match) ? match : "<phone>",
+  );
+}
+
+/**
+ * Redact double-quoted runs of 4+ characters: where a parser or driver error
+ * echoes the input it choked on (a JSON body, a message's text), it quotes
+ * it. Not exported: use {@link scrubRcsText}. [SECURITY — BACKLOG-3668 L3]
+ */
+function redactQuotedText(input: string): string {
+  return input.replace(/"[^"\n]{4,}"/g, '"<text>"');
+}
+
+/**
+ * Scrub an error from the Google Messages (RCS) import before it is logged or
+ * sent to Sentry: {@link scrubServerErrorText} (emails, local paths,
+ * truncation), then phone numbers and quoted text — an RCS error can carry
+ * a participant's number or a message's words. Takes the error itself or
+ * its message. [SECURITY — BACKLOG-3668 L3]
+ *
+ * @example
+ *   scrubRcsText(new Error('bad "hello there" from +1 555 555 0199'))
+ *   // 'bad "<text>" from <phone>'
+ */
+export function scrubRcsText(err: unknown, maxLength = 300): string {
+  const raw = err instanceof Error ? err.message : typeof err === "string" ? err : String(err);
+  // Phones and quoted text first: truncation must never leave half a number.
+  return scrubServerErrorText(redactPhonesInText(redactQuotedText(raw)), maxLength);
+}

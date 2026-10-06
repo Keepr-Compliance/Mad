@@ -56,7 +56,15 @@ export interface ModalState {
   showTermsModal: boolean;
   showIPhoneSync: boolean;
   showAndroidSync: boolean;
+  /**
+   * SR: where the Sync Android modal starts — "link" from Settings' Link /
+   * Relink or keepr://link, else "default". Set when it opens, reset on close.
+   */
+  androidSyncStart: AndroidSyncStart;
 }
+
+/** Where the Sync Android modal starts. */
+export type AndroidSyncStart = "default" | "link";
 
 /**
  * AppStateMachine Interface
@@ -174,7 +182,7 @@ export interface AppStateMachine {
   closeIPhoneSync(): void;
 
   // Android sync modal
-  openAndroidSync(): void;
+  openAndroidSync(start?: AndroidSyncStart): void;
   closeAndroidSync(): void;
 
   // ============================================

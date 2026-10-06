@@ -111,8 +111,7 @@ describe("BACKLOG-2561 · computeImportCutoffNano — explicit All time is unbou
 
   it("keeps the explicit lookback when the audit period is NEWER", () => {
     const auditISO = "2026-08-01T00:00:00.000Z"; // newer than 3 months ago
-    const expected = new Date(NOW.getTime());
-    expected.setMonth(expected.getMonth() - 3);
+    const expected = new Date(NOW.getTime() - 91 * 24 * 60 * 60 * 1000); // 3 months × 30.4375 days
     expect(
       nanoToISO(computeImportCutoffNano({ lookbackMonths: 3, auditPeriodStart: auditISO }, NOW))
     ).toBe(expected.toISOString());
@@ -316,8 +315,7 @@ describe("BACKLOG-2561 · the BACKLOG-2276 audit floor still widens the window",
   });
 
   it("ignores an unparseable audit start rather than bounding on NaN", () => {
-    const expected = new Date(NOW.getTime());
-    expected.setMonth(expected.getMonth() - 3);
+    const expected = new Date(NOW.getTime() - 91 * 24 * 60 * 60 * 1000); // 3 months × 30.4375 days
     expect(
       nanoToISO(computeImportCutoffNano({ lookbackMonths: 3, auditPeriodStart: "not-a-date" }, NOW))
     ).toBe(expected.toISOString());

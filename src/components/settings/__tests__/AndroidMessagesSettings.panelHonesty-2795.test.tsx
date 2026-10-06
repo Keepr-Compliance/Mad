@@ -77,7 +77,7 @@ describe("BACKLOG-2795 · the Android cap dropdown tells the truth about stored 
     renderStrict(<AndroidMessagesSettings userId="user-2795" />);
 
     await waitFor(() => {
-      expect(screen.getByDisplayValue("Last 18 months")).toBeInTheDocument();
+      expect(screen.getByDisplayValue("Custom: 18 months")).toBeInTheDocument();
     });
     expect(screen.getByDisplayValue("50,000")).toBeInTheDocument();
     expect(screen.queryByDisplayValue("Unlimited")).not.toBeInTheDocument();
@@ -93,7 +93,7 @@ describe("BACKLOG-2795 · the Android cap dropdown tells the truth about stored 
     await waitFor(() => {
       expect(screen.getByDisplayValue("Unlimited")).toBeInTheDocument();
     });
-    expect(screen.getByDisplayValue("Last 18 months")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Custom: 18 months")).toBeInTheDocument();
   });
 
   it("shows the stored cap when one is stored", async () => {

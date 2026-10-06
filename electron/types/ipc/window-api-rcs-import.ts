@@ -1,0 +1,195 @@
+/**
+ * WindowApi RCS import sub-interface — BACKLOG-3619 (proof of concept).
+ *
+ * The renderer's view of `window.api.rcsImport`: the bridge's state, the Sync
+ * jobs, the Google Messages cache Sync and its setup (BACKLOG-3658/3659). The
+ * manual import session is gone (BACKLOG-3662).
+ */
+
+export type RcsBridgeState = "stopped" | "listening" | "unavailable";
+
+export interface RcsImportStatus {
+  bridge: RcsBridgeState;
+  port: number;
+  reason?: string;
+}
+
+export type RcsImportStatusResult =
+  | { success: true; status: RcsImportStatus }
+  | { success: false; error: string };
+
+export type RcsJobState = "created" | "running" | "finished" | "failed" | "cancelled";
+
+export interface RcsJobProgressCounts {
+  listed: number;
+  candidates: number;
+  checked: number;
+  matched: number;
+  imported: number;
+  messages: number;
+  images: number;
+  reactions: number;
+  skipped: number;
+  /** BACKLOG-3645: chats the page did not check (list over the cap). */
+  notChecked?: number;
+  /** BACKLOG-3664: not text conversations (e.g. an AI chat), skipped. */
+  notText?: number;
+  /** Chats with no messages yet (e.g. a new group). */
+  noMessagesYet?: number;
+  /** BACKLOG-3642: messages stored but not linked again — the user removed them. */
+  removedNotRelinked?: number;
+  /** BACKLOG-3658: cache images not kept (no transaction contact in the chat). */
+  imagesSkipped?: number;
+  /** BACKLOG-3658 P3c: chats not synced because the user switched them off. */
+  notSynced?: number;
+}
+
+/** BACKLOG-3620: one sync job, as main reports it. */
+export interface RcsJobInfo {
+  jobId: string;
+  state: RcsJobState;
+  stage: string;
+  progress: RcsJobProgressCounts;
+  error?: { code: string; message: string };
+  createdAt: string;
+  finishedAt?: string;
+  /** BACKLOG-3661: what is syncing. */
+  label?: string;
+  /** BACKLOG-3658: "cache" for the all-chats cache job. */
+  kind?: "cache";
+  /** BACKLOG-3663: this cache Sync reads older texts (down to the months setting). */
+  readingOlder?: boolean;
+  /** BACKLOG-3629: chats left out or imported in part. Names only. */
+  notReached?: Array<{ name: string; reason: string; count?: number }>;
+  notReachedMore?: number;
+  /**
+   * A finished cache Sync: what Keepr SAVED (null: the save failed; absent:
+   * still saving). The done screens show these, not the staged counts.
+   */
+  saved?: { chats: number; messages: number; newMessages: number; reactions?: number; newReactions?: number; photos?: number } | null;
+}
+
+/** BACKLOG-3658: the extension and cache state, for the setup wizard. */
+/** C1: the reversed link, as Keepr's link screen sees it (rcsPairingAuth.LinkState). */
+export type RcsLinkState =
+  | { state: "none"; intrusion: boolean }
+  | { state: "waiting"; expiresAt: number; triesLeft: number; intrusion: boolean }
+  | { state: "answered"; expiresAt: number; triesLeft: number; intrusion: boolean }
+  | { state: "locked"; until: number; intrusion: boolean };
+
+export interface RcsExtensionState {
+  extensionVersion: string | null;
+  /** Live (founder): the extension seen is older than the one this Keepr ships. */
+  extensionUpdateReady?: boolean;
+  extensionSeenAt: string | null;
+  pairedAt: string | null;
+  /** The consent is current (P3b). */
+  optedIn: boolean;
+  /** SR (C6 review): texts from the (no longer offered) Android Companion exist. */
+  companionData?: boolean;
+  lastCacheFinishedAt: string | null;
+  /** P3b: the version the user accepted (null: never / withdrawn), and the one required now. */
+  consentVersion?: number | null;
+  consentRequired?: number;
+  consentAt?: string | null;
+  /** P3b: auto-delete of old chats linked to nothing (null = off). */
+  autoDeleteDays?: number | null;
+  /** The months a cache Sync copies (messageImport.filters); null = All time. */
+  lookbackMonths?: number | null;
+  /** SR M: the media toggles (local), and the bubbles the last Sync counted (for the video estimate). */
+  media?: { photosAllChats: boolean; videosAllChats: boolean; lastPhotosSeen: number | null; lastVideosSeen: number | null };
+  /** BACKLOG-3666: the extension is paired with this Keepr for the signed-in user. */
+  extensionPaired?: boolean;
+  /** Live (0.3.76): a pairing is saved for this user (proven or not since Keepr started). */
+  pairingSaved?: boolean;
+  /** Live (0.3.76): an extension said "no link here" since the last proof. */
+  linkNotHere?: boolean;
+}
+
+export type RcsExtensionStateResult =
+  | { success: true; state: RcsExtensionState }
+  | { success: false; error: string };
+
+/**
+ * Android's shared Force re-import, from the Google Messages section
+ * (BACKLOG-3657): `messagesDeleted` are the Google Messages texts; the
+ * companion's texts and contacts are counted apart.
+ */
+export type RcsClearTextsResult =
+  | {
+      success: true;
+      messagesDeleted: number;
+      linksDeleted: number;
+      filesDeleted: number;
+      androidMessagesDeleted?: number;
+      contactsDeleted?: number;
+    }
+  | { success: false; error: string };
+
+/** BACKLOG-3659: the extension copied to Downloads. */
+export type RcsPrepareExtensionResult =
+  | { success: true; folder: string; version: string }
+  | { success: false; error: string };
+
+export type RcsImportJobResult =
+  | { success: true; job: RcsJobInfo | null }
+  | { success: false; error: string };
+
+export interface WindowApiRcsImport {
+  /** Bridge state. */
+  getStatus: () => Promise<RcsImportStatusResult>;
+  /** BACKLOG-3620: cancel the job, if it is still the one named. */
+  cancelJob: (args: { jobId: string }) => Promise<RcsImportJobResult>;
+  /** BACKLOG-3620: the current job, if any. */
+  getJob: () => Promise<RcsImportJobResult>;
+  /** BACKLOG-3620: every job change. Returns an unsubscribe. */
+  onJobProgress: (callback: (job: RcsJobInfo) => void) => () => void;
+  /** BACKLOG-3657: Google Messages for Web texts were cleared. Returns an unsubscribe. */
+  onDataCleared: (callback: (event: { messagesDeleted: number }) => void) => () => void;
+  /** BACKLOG-3658: a cache Sync was saved and auto-linked. Returns an unsubscribe. */
+  onDataChanged?: (callback: (event: { reason: string }) => void) => () => void;
+  /** C1: Keepr's "Enter the code from your browser" screen. */
+  /** clipboardFill: the link box fills itself from "Copy code and open Keepr" (Windows). */
+  linkState?: () => Promise<{ success: true; link: RcsLinkState; linked: boolean; clipboardFill?: boolean }>;
+  linkEnterCode?: (args: { code: string }) => Promise<{ success: true } | { success: false; error: string }>;
+  linkDismissWarning?: () => Promise<{ success: true }>;
+  /** SR (B1): Keepr's "Forget link". */
+  linkForget?: () => Promise<{ success: true }>;
+  /** The link screen's "Open Google Messages" (no link needed). */
+  openGoogleMessages?: () => Promise<{ success: true }>;
+  /** A02: the extension's Chrome Web Store listing. */
+  openExtensionStore?: () => Promise<{ success: true }>;
+  /** C1: keepr://link asked for the link screen. Returns an unsubscribe. */
+  /** keepr://link (Windows): the link code from the clipboard, when it was exactly the code. */
+  onOpenLinkScreen?: (callback: (payload: { code?: string }) => void) => () => void;
+  /**
+   * BACKLOG-3658: start the cache job (all recent chats), for the signed-in
+   * user. `sinceDays` (1..3650) is a DEV-ONLY window override, ignored in a
+   * packaged build.
+   */
+  startCacheJob: (args?: { sinceDays?: number }) => Promise<RcsImportJobResult>;
+  /** Founder: Keepr's "Try again" after a failed Google Messages Sync. */
+  retryCacheJob?: () => Promise<RcsImportJobResult>;
+  /** P3b: accept the consent text of `version`, or withdraw (null). */
+  setCacheConsent?: (args: { version: number | null }) => Promise<{ success: boolean; error?: string }>;
+  /** P3b: cache options (auto-delete; contacts-only in a development build only). */
+  setCacheOptions?: (args: { autoDelete?: boolean; contactsOnly?: boolean }) => Promise<{ success: boolean; error?: string }>;
+  /** SR M: "Download photos / videos from all chats". */
+  setMediaOptions?: (args: { photosAllChats?: boolean; videosAllChats?: boolean }) => Promise<{ success: boolean; error?: string }>;
+  /** BACKLOG-3658: is the extension installed / paired, opted in, last cache Sync. */
+  getExtensionState: () => Promise<RcsExtensionStateResult>;
+  /** BACKLOG-3658 P3c: the chats switched off ("Don't sync"), with stored titles when Keepr has them. */
+  listExclusions?: () => Promise<
+    { success: true; chats: Array<{ id: string; title: string | null; createdAt: string }> } | { success: false; error: string }
+  >;
+  /** Android's shared Force re-import: Google Messages + the companion's texts and contacts (BACKLOG-3657). */
+  clearTexts?: () => Promise<RcsClearTextsResult>;
+  /** BACKLOG-3659: copy the extension to Downloads/"Keepr Extension". */
+  prepareExtension?: () => Promise<RcsPrepareExtensionResult>;
+  /** Live (founder): refresh an older Downloads/"Keepr Extension" (app start). */
+  refreshExtensionFolder?: () => Promise<{ success: boolean; refreshed?: boolean; bundledVersion?: string | null; error?: string }>;
+  /** BACKLOG-3659: show that folder in the file manager. */
+  showExtensionFolder?: () => Promise<{ success: boolean }>;
+  /** BACKLOG-3659: copy "chrome://extensions" and start Chrome. */
+  openChromeForExtension?: () => Promise<{ success: true; copied: boolean; opened: boolean }>;
+}

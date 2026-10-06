@@ -45,10 +45,21 @@ export const BASELINE_Y = PAD_TOP + PLOT_HEIGHT;
 
 // ─── Buckets ─────────────────────────────────────────────────────
 
-export interface DayBucket {
+/**
+ * What a chart needs of a run — any report's run (iPhone, Google Messages)
+ * that has these can be bucketed and drawn by the same charts.
+ */
+export interface ChartRun {
+  createdAtIso: string;
+  elapsedMs: number | null;
+  outcome: string;
+  stalled: boolean;
+}
+
+export interface DayBucket<R extends ChartRun = SyncRun> {
   dayIso: string;
   dayLabel: string;
-  runs: SyncRun[];
+  runs: R[];
   /** Runs that finished with a duration, i.e. what the duration chart averages. */
   finishedRuns: number;
   /** Mean elapsed of those runs, in minutes. NULL when there are none. */
@@ -69,8 +80,8 @@ export interface DayBucket {
  * is NULL rather than 0 for an empty day, because "no syncs" and "syncs that
  * took no time" are different statements and only one of them is true.
  */
-export function bucketByDay(runs: SyncRun[], range: PeriodRange): DayBucket[] {
-  const byDay = new Map<string, SyncRun[]>();
+export function bucketByDay<R extends ChartRun>(runs: R[], range: PeriodRange): DayBucket<R>[] {
+  const byDay = new Map<string, R[]>();
   for (const day of daysInRange(range)) byDay.set(day, []);
   for (const run of runs) {
     // A pure string slice on an ISO-8601 UTC timestamp — no Date, no local TZ.
@@ -193,7 +204,7 @@ export interface DurationSeries {
   max: number;
 }
 
-export function buildDurationSeries(buckets: DayBucket[]): DurationSeries {
+export function buildDurationSeries(buckets: DayBucket<ChartRun>[]): DurationSeries {
   const points = buckets.map((b) => ({
     dayIso: b.dayIso,
     dayLabel: b.dayLabel,
@@ -216,7 +227,7 @@ export interface FailureSeries {
   max: number;
 }
 
-export function buildFailureSeries(buckets: DayBucket[]): FailureSeries {
+export function buildFailureSeries(buckets: DayBucket<ChartRun>[]): FailureSeries {
   const points = buckets.map((b) => ({
     dayIso: b.dayIso,
     dayLabel: b.dayLabel,
@@ -270,7 +281,7 @@ export function stackSegments(point: FailurePoint, max: number): StackSegment[] 
  *
  * Wording transcribed from the approved mockup (artifact v5).
  */
-export function durationTooltipLines(bucket: DayBucket): string[] {
+export function durationTooltipLines(bucket: DayBucket<ChartRun>): string[] {
   if (bucket.finishedRuns === 0 || bucket.averageMinutes == null) {
     return [bucket.dayLabel, 'No finished runs'];
   }
@@ -282,7 +293,7 @@ export function durationTooltipLines(bucket: DayBucket): string[] {
   ];
 }
 
-export function failureTooltipLines(bucket: DayBucket): string[] {
+export function failureTooltipLines(bucket: DayBucket<ChartRun>): string[] {
   if (bucket.runs.length === 0) {
     return [bucket.dayLabel, 'No runs'];
   }

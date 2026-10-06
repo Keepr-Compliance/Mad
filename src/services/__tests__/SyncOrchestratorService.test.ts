@@ -1493,7 +1493,7 @@ describe('SyncOrchestratorService', () => {
     });
   });
 
-  describe('BACKLOG-1467: skip macOS messages for android-companion', () => {
+  describe('Mac Messages and the import source (BACKLOG-1467, BACKLOG-3749)', () => {
     beforeEach(() => {
       (window as any).api.messages.importMacOSMessages = jest.fn().mockResolvedValue({
         success: true,
@@ -1505,24 +1505,48 @@ describe('SyncOrchestratorService', () => {
       platformMock.isMacOS.mockReturnValue(true);
     });
 
-    it('should skip macOS messages import when import source is android-companion', async () => {
-      (window as any).api.preferences.get = jest.fn().mockResolvedValue({
-        success: true,
-        preferences: { messages: { source: 'android-companion' } },
-      });
+    // BACKLOG-1467 stands (founder, 2026-10-05): a known Android selection
+    // skips Mac Messages on a Mac. Mutation: Android not skipped → red.
+    it.each(['android-companion', 'android-messages-web'])(
+      'a stored %s source skips Mac Messages (BACKLOG-1467)',
+      async (source) => {
+        (window as any).api.preferences.get = jest.fn().mockResolvedValue({
+          success: true,
+          preferences: { messages: { source } },
+        });
 
-      syncOrchestrator.initializeSyncFunctions();
+        syncOrchestrator.initializeSyncFunctions();
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const syncFn = (syncOrchestrator as any).syncFunctions.get('messages');
-      const onProgress = jest.fn();
-      await syncFn('test-user', onProgress);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const syncFn = (syncOrchestrator as any).syncFunctions.get('messages');
+        const onProgress = jest.fn();
+        await syncFn('test-user', onProgress);
 
-      // Should NOT have called importMacOSMessages
-      expect((window as any).api.messages.importMacOSMessages).not.toHaveBeenCalled();
-      // Should have set progress to 100 (skipped cleanly)
-      expect(onProgress).toHaveBeenCalledWith(100);
-    });
+        expect((window as any).api.messages.importMacOSMessages).not.toHaveBeenCalled();
+        expect(onProgress).toHaveBeenCalledWith(100);
+      },
+    );
+
+    // BACKLOG-3749: a value this build does not know (e.g. from a newer build)
+    // never silently turns Mac Messages off. Mutation: gate on
+    // "=== macos-native" of the raw value again → red.
+    it.each(['some-future-source'])(
+      'an unknown stored source (%s) does NOT turn Mac Messages sync off (BACKLOG-3749)',
+      async (source) => {
+        (window as any).api.preferences.get = jest.fn().mockResolvedValue({
+          success: true,
+          preferences: { messages: { source } },
+        });
+
+        syncOrchestrator.initializeSyncFunctions();
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const syncFn = (syncOrchestrator as any).syncFunctions.get('messages');
+        await syncFn('test-user', jest.fn());
+
+        expect((window as any).api.messages.importMacOSMessages).toHaveBeenCalled();
+      },
+    );
 
     it('should skip macOS messages import when import source is iphone-sync', async () => {
       (window as any).api.preferences.get = jest.fn().mockResolvedValue({

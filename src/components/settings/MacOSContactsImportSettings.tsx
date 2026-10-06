@@ -55,6 +55,11 @@ import { ImportInfoPopover } from "./ImportInfoPopover";
 import logger from '../../utils/logger';
 import { safeErrorMessage } from '../../utils/formatUtils';
 import type { ContactInferenceStates } from "../../hooks/useContactInferenceState";
+import type { ImportSource } from "../../services/settingsService";
+import { importSourceLabel } from "./importSourceLabels";
+
+/** Founder (2026-10-05): the Android contacts option is hidden (see showAndroidContacts). */
+export const ANDROID_CONTACTS_OPTION_SHOWN = false;
 
 /**
  * BACKLOG-2388: Shared "counts clause" for a contact-sync result so the macOS,
@@ -144,12 +149,6 @@ interface ContactsImportSettingsProps {
    */
   androidContactsDeclared: boolean;
   /**
-   * BACKLOG-2986: is the Android companion the ACTIVE message import source?
-   * Only then is the Android Companion panel — and its Force Re-import — on the
-   * page for the re-import note to point at.
-   */
-  androidCompanionActive: boolean;
-  /**
    * BACKLOG-2986: the "could not be saved" message for the last failed toggle
    * write, or null. Owned by the parent (which owns the handler) and rendered
    * here, immediately above the toggle group, because that is where the click
@@ -174,6 +173,11 @@ interface ContactsImportSettingsProps {
   contactInference: ContactInferenceStates;
   gmailEmailsInferred: boolean;
   messagesInferred: boolean;
+  /**
+   * BACKLOG-3670: the selected text-message import source, shown as the
+   * Messages / SMS row's inline label (the source its people come from).
+   */
+  messagesImportSource?: ImportSource | null;
   loadingPreferences: boolean;
   onToggleSource: (category: "direct" | "inferred", key: string, currentValue: boolean) => void;
 }
@@ -193,7 +197,6 @@ export function ContactsImportSettings({
   showIphoneContacts,
   androidContactsEnabled,
   androidContactsDeclared,
-  androidCompanionActive,
   saveError,
   gmailContactsEnabled,
   googleContactsEnabled,
@@ -201,6 +204,7 @@ export function ContactsImportSettings({
   contactInference,
   gmailEmailsInferred,
   messagesInferred,
+  messagesImportSource,
   loadingPreferences,
   onToggleSource,
 }: ContactsImportSettingsProps) {
@@ -592,12 +596,22 @@ export function ContactsImportSettings({
    * is legitimately 0 and the user most needs the control.
    */
   const androidContactCount = sourceStats?.android_sync ?? 0;
-  const showAndroidContacts = androidContactsDeclared || androidContactCount > 0;
-  // BACKLOG-2986: Android counts as a source, for the same reason BACKLOG-2486
+  const hasAndroidContactSource = androidContactsDeclared || androidContactCount > 0;
+  // Founder (2026-10-05): the Android contacts option (switch, count, note) is
+  // hidden with the Android Companion's UI — only the Companion pushed these
+  // contacts. Its stored preference and the contacts already imported stay as
+  // they are; Google Messages never reads this key.
+  const showAndroidContacts = ANDROID_CONTACTS_OPTION_SHOWN && hasAndroidContactSource;
+  // BACKLOG-2986: Android counted as a source (while its option is shown —
+  // hidden, a user whose only source it is gets the placeholder), for the same reason BACKLOG-2486
   // added `showIphoneContacts` — a user whose only address book is the phone in
   // their pocket must not hit the "no sources" placeholder.
+  // C2 (BACKLOG-3670): a text-message import source (e.g. Android: Google
+  // Messages on Windows with no mailbox) is a source too — its Auto-discover
+  // Messages / SMS switch must be reachable.
+  const hasMessageSource = importSourceLabel(messagesImportSource) !== null;
   const hasAnySources =
-    hasMacOS || hasOutlook || hasGoogle || showIphoneContacts || showAndroidContacts;
+    hasMacOS || hasOutlook || hasGoogle || showIphoneContacts || showAndroidContacts || hasMessageSource;
 
   const anySyncing = isSyncing || outlookSyncing || googleSyncing;
 
@@ -972,6 +986,14 @@ export function ContactsImportSettings({
           <div className="flex items-center justify-between py-1">
             <div className="flex items-center gap-2">
               <span className="text-sm text-gray-700">Messages / SMS</span>
+              {/* BACKLOG-3670: the selected import source, in the inline-label
+                  slot the email rows use for their one reason. This row has no
+                  plan or connection reason today; one would replace it. */}
+              {importSourceLabel(messagesImportSource) && (
+                <span className="text-xs text-gray-400" data-testid="autodiscover-messages-source">
+                  ({importSourceLabel(messagesImportSource)})
+                </span>
+              )}
             </div>
             <button
               onClick={() => onToggleSource("inferred", "messages", messagesInferred)}
@@ -1115,26 +1137,11 @@ export function ContactsImportSettings({
       */}
       {showAndroidContacts && (
         <div className="mb-3 p-2 rounded text-xs bg-gray-50 text-gray-600 border border-gray-200">
-          <p>
-            Your phone holds the only copy of these contacts — the desktop cannot fetch
-            them again on its own.
-            {androidCompanionActive
-              ? " Re-importing clears the synced messages and contacts together, then the companion app re-sends both."
-              : " Set your message import source to Android above to manage or re-import them."}
+          {/* SR (C6 review): the Companion panel is gone — the shared Android
+              Force re-import (Settings › Google Messages) clears these too. */}
+          <p data-testid="android-contacts-note">
+            Force re-import (Settings › Google Messages) deletes these contacts. Keepr can&rsquo;t fetch them again.
           </p>
-          {androidCompanionActive && (
-            <button
-              type="button"
-              onClick={() =>
-                document
-                  .getElementById("settings-android-companion")
-                  ?.scrollIntoView({ behavior: "smooth", block: "start" })
-              }
-              className="mt-1 text-xs font-medium text-blue-600 hover:text-blue-700 underline"
-            >
-              Go to Android Companion re-import
-            </button>
-          )}
         </div>
       )}
 

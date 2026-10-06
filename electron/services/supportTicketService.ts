@@ -114,6 +114,31 @@ export interface IphoneSyncDiagnostics {
  * Diagnostics data collected from the app for support tickets.
  * All fields are PII-safe.
  */
+/**
+ * Founder (2026-10-06): Google Messages Sync in a ticket — local state only.
+ * NO step log, no chat / contact data, no link codes or keys.
+ */
+export interface GoogleMessagesDiagnostics {
+  /** The extension version Keepr last heard (/hello), or null. */
+  extension_version_seen: string | null;
+  /** When it was last heard (ISO), or null. */
+  extension_seen_at: string | null;
+  /** "linked" (proven recently) | "saved" (a link saved, not proven since start) | "none". */
+  link: "linked" | "saved" | "none";
+  /** The last Google Messages Sync that finished and was saved (ISO), or null. */
+  last_cache_finished_at: string | null;
+  /** The last Sync that ended since Keepr started: its state and failure code (no message text). */
+  last_run: { state: string; reason_code: string | null; ended_at: string } | null;
+  /** A failed run's start when the next Sync is "Try again", or null. */
+  failed_run_started_at: string | null;
+}
+
+/** Filled by rcsImportHandlers (no import cycle); null until then. */
+let googleMessagesDiagnosticsProvider: (() => GoogleMessagesDiagnostics | null) | null = null;
+export function setGoogleMessagesDiagnosticsProvider(fn: (() => GoogleMessagesDiagnostics | null) | null): void {
+  googleMessagesDiagnosticsProvider = fn;
+}
+
 export interface AppDiagnostics {
   app_version: string;
   electron_version: string;
@@ -145,6 +170,8 @@ export interface AppDiagnostics {
   uptime_seconds: number;
   /** BACKLOG-1918: iPhone-sync / Apple-driver diagnostics section. */
   iphone_sync: IphoneSyncDiagnostics;
+  /** Founder (2026-10-06): Google Messages Sync — local state only; null when not available. */
+  google_messages?: GoogleMessagesDiagnostics | null;
   /**
    * BACKLOG-2394: contacts pipeline, LIVE (address books on disk, permissions)
    * and RECORDED (the BACKLOG-2391 funnel, each stage carrying its timestamp).
@@ -429,6 +456,14 @@ export async function collectDiagnostics(): Promise<AppDiagnostics> {
     diagnostics.uptime_seconds = Math.round(process.uptime());
   } catch {
     /* ignore */
+  }
+
+  // Founder (2026-10-06): Google Messages Sync, local state only. Wrapped:
+  // a failure never breaks collection.
+  try {
+    diagnostics.google_messages = googleMessagesDiagnosticsProvider ? googleMessagesDiagnosticsProvider() : null;
+  } catch {
+    diagnostics.google_messages = null;
   }
 
   // BACKLOG-1918: iPhone-sync / Apple-driver diagnostics. Wrapped so partial

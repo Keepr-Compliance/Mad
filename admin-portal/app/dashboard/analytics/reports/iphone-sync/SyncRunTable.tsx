@@ -12,6 +12,7 @@
  * tested on full id sequences rather than on rendered order.
  */
 
+import { Fragment, type ReactNode } from 'react';
 import { ArrowDown, ArrowUp, ArrowUpDown, X } from 'lucide-react';
 import { formatCount, type SyncRun } from '@/lib/reports/iphone-sync';
 import {
@@ -22,29 +23,75 @@ import {
 } from '@/lib/reports/iphone-sync-filters';
 import { OutcomeChip, RunCard, StalledChip } from './RunCard';
 
-const COLUMNS: { key: SortKey; align: 'left' | 'right' }[] = [
-  { key: 'when', align: 'left' },
-  { key: 'user', align: 'left' },
-  { key: 'platform', align: 'left' },
-  { key: 'version', align: 'left' },
-  { key: 'outcome', align: 'left' },
-  { key: 'duration', align: 'right' },
-  { key: 'backup', align: 'right' },
-  { key: 'rate', align: 'right' },
-  { key: 'messages', align: 'right' },
-  { key: 'type', align: 'left' },
+/**
+ * One column of a run table: its sort key, header, alignment and cell. The
+ * iPhone report's ten columns are below; another report (Google Messages)
+ * passes its own to {@link RunTable}.
+ */
+export interface RunTableColumn<R, K extends string = string> {
+  key: K;
+  label: string;
+  align: 'left' | 'right';
+  cell: (run: R) => ReactNode;
+}
+
+const NUM = 'py-2 px-3 text-right tabular-nums text-gray-700';
+const TXT = 'py-2 px-3 text-gray-700';
+
+/** The iPhone report's columns — the cells exactly as before the table was shared. */
+const IPHONE_COLUMNS: RunTableColumn<SyncRun, SortKey>[] = [
+  { key: 'when', label: SORT_SPECS.when.label, align: 'left', cell: (run) => <td className="whitespace-nowrap py-2 px-3 text-gray-700">{run.whenUtc}</td> },
+  { key: 'user', label: SORT_SPECS.user.label, align: 'left', cell: (run) => <td className="py-2 px-3 text-gray-900">{run.userLabel}</td> },
+  { key: 'platform', label: SORT_SPECS.platform.label, align: 'left', cell: (run) => <td className={TXT}>{run.platform}</td> },
+  { key: 'version', label: SORT_SPECS.version.label, align: 'left', cell: (run) => <td className={TXT}>{run.appVersion}</td> },
+  {
+    key: 'outcome',
+    label: SORT_SPECS.outcome.label,
+    align: 'left',
+    cell: (run) => (
+      <td className="py-2 px-3">
+        <span className="flex flex-wrap items-center gap-1.5">
+          <OutcomeChip run={run} />
+          {run.stalled ? <StalledChip /> : null}
+        </span>
+      </td>
+    ),
+  },
+  { key: 'duration', label: SORT_SPECS.duration.label, align: 'right', cell: (run) => <td className={NUM}>{run.durationLabel}</td> },
+  {
+    key: 'backup',
+    label: SORT_SPECS.backup.label,
+    align: 'right',
+    cell: (run) => (
+      <td className={NUM}>
+        {run.backupUnmeasured ? 'not measured' : run.backupGb == null ? '—' : `${run.backupGb.toFixed(1)} GB`}
+      </td>
+    ),
+  },
+  { key: 'rate', label: SORT_SPECS.rate.label, align: 'right', cell: (run) => <td className={NUM}>{run.rateLabel}</td> },
+  {
+    key: 'messages',
+    label: SORT_SPECS.messages.label,
+    align: 'right',
+    cell: (run) => (
+      <td className={NUM}>
+        {run.messagesExtracted == null || run.messagesExtracted === 0 ? 'none' : formatCount(run.messagesExtracted)}
+      </td>
+    ),
+  },
+  { key: 'type', label: SORT_SPECS.type.label, align: 'left', cell: (run) => <td className={TXT}>{run.syncTypeLabel}</td> },
 ];
 
-function SortHeader({
+function SortHeader<K extends string>({
   column,
   sortKey,
   sortDirection,
   onSort,
 }: {
-  column: { key: SortKey; align: 'left' | 'right' };
-  sortKey: SortKey;
+  column: { key: K; label: string; align: 'left' | 'right' };
+  sortKey: K;
   sortDirection: SortDirection;
-  onSort: (key: SortKey) => void;
+  onSort: (key: K) => void;
 }) {
   const active = sortKey === column.key;
   const Icon = !active ? ArrowUpDown : sortDirection === 'asc' ? ArrowUp : ArrowDown;
@@ -59,7 +106,7 @@ function SortHeader({
         onClick={() => onSort(column.key)}
         className={`inline-flex items-center gap-1 hover:text-gray-900 ${active ? 'text-gray-900' : ''}`}
       >
-        {SORT_SPECS[column.key].label}
+        {column.label}
         <Icon className="h-3 w-3" aria-hidden="true" />
       </button>
     </th>
@@ -82,8 +129,40 @@ export interface SyncRunTableProps {
   onToggleRow: (id: string) => void;
 }
 
-export function SyncRunTable({
+/** The iPhone report's table: the shared {@link RunTable} with its ten columns and RunCard. */
+export function SyncRunTable(props: SyncRunTableProps) {
+  return <RunTable<SyncRun, SortKey> {...props} columns={IPHONE_COLUMNS} renderDetail={(run) => <RunCard run={run} />} />;
+}
+
+/** What the shared table needs of a run. */
+export interface TableRun {
+  id: string;
+  userLabel: string;
+  whenUtc: string;
+}
+
+export interface RunTableProps<R extends TableRun, K extends string> {
+  runs: R[];
+  columns: RunTableColumn<R, K>[];
+  /** The open row's detail card. */
+  renderDetail: (run: R) => ReactNode;
+  visibleCount: number;
+  sortKey: K;
+  sortDirection: SortDirection;
+  openRunId: string | null;
+  truncated: boolean;
+  rowCap: number;
+  periodLabel: string;
+  onSort: (key: K) => void;
+  onShowMore: () => void;
+  onShowAll: () => void;
+  onToggleRow: (id: string) => void;
+}
+
+export function RunTable<R extends TableRun, K extends string>({
   runs,
+  columns,
+  renderDetail,
   visibleCount,
   sortKey,
   sortDirection,
@@ -95,7 +174,7 @@ export function SyncRunTable({
   onShowMore,
   onShowAll,
   onToggleRow,
-}: SyncRunTableProps) {
+}: RunTableProps<R, K>) {
   const visible = runs.slice(0, visibleCount);
   const openRun = runs.find((r) => r.id === openRunId) ?? null;
   const more = runs.length - visible.length;
@@ -126,8 +205,8 @@ export function SyncRunTable({
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-200">
-                {COLUMNS.map((column) => (
-                  <SortHeader
+                {columns.map((column) => (
+                  <SortHeader<K>
                     key={column.key}
                     column={column}
                     sortKey={sortKey}
@@ -147,33 +226,9 @@ export function SyncRunTable({
                     openRunId === run.id ? 'bg-primary-50' : ''
                   }`}
                 >
-                  <td className="whitespace-nowrap py-2 px-3 text-gray-700">{run.whenUtc}</td>
-                  <td className="py-2 px-3 text-gray-900">{run.userLabel}</td>
-                  <td className="py-2 px-3 text-gray-700">{run.platform}</td>
-                  <td className="py-2 px-3 text-gray-700">{run.appVersion}</td>
-                  <td className="py-2 px-3">
-                    <span className="flex flex-wrap items-center gap-1.5">
-                      <OutcomeChip run={run} />
-                      {run.stalled ? <StalledChip /> : null}
-                    </span>
-                  </td>
-                  <td className="py-2 px-3 text-right tabular-nums text-gray-700">
-                    {run.durationLabel}
-                  </td>
-                  <td className="py-2 px-3 text-right tabular-nums text-gray-700">
-                    {run.backupUnmeasured
-                      ? 'not measured'
-                      : run.backupGb == null
-                        ? '—'
-                        : `${run.backupGb.toFixed(1)} GB`}
-                  </td>
-                  <td className="py-2 px-3 text-right tabular-nums text-gray-700">{run.rateLabel}</td>
-                  <td className="py-2 px-3 text-right tabular-nums text-gray-700">
-                    {run.messagesExtracted == null || run.messagesExtracted === 0
-                      ? 'none'
-                      : formatCount(run.messagesExtracted)}
-                  </td>
-                  <td className="py-2 px-3 text-gray-700">{run.syncTypeLabel}</td>
+                  {columns.map((column) => (
+                    <Fragment key={column.key}>{column.cell(run)}</Fragment>
+                  ))}
                 </tr>
               ))}
             </tbody>
@@ -223,7 +278,7 @@ export function SyncRunTable({
               Close
             </button>
           </div>
-          <RunCard run={openRun} />
+          {renderDetail(openRun)}
         </div>
       ) : null}
     </section>

@@ -9,15 +9,18 @@ import {
   groupMessagesByThread,
   sortThreadsByRecent,
   type MessageLike,
+  MessageThreadCard,
+  extractPhoneFromThread,
 } from "../MessageThreadCard";
 import {
   mergeThreadsByContact,
-  getContactMergeKey,
   getHandleMergeKey,
   mergeItemsByKey,
   type MergedThreadEntry,
 } from "../../../../utils/threadMergeUtils";
 import { formatDate } from "../../../../utils/formatUtils";
+import { extractAllHandles } from "../../../../utils/phoneNormalization";
+import { highlightMatch } from "../../../../utils/highlightMatch";
 
 interface AttachMessagesModalProps {
   /** User ID to fetch unlinked messages for */
@@ -74,16 +77,15 @@ interface MergedContact {
 }
 
 /**
- * Normalize phone number to digits only for comparison
+ * BACKLOG-3753: the group names in the order the roster row shows them — names
+ * the search matched first (same lowercase-substring rule as the filter), the
+ * rest after, each keeping its relative order.
  */
-function normalizePhone(phone: string): string {
-  if (phone.includes("@")) return phone.toLowerCase();
-  const digits = phone.replace(/\D/g, "");
-  // Remove leading 1 for US numbers to normalize 10 and 11 digit formats
-  if (digits.length === 11 && digits.startsWith("1")) {
-    return digits.slice(1);
-  }
-  return digits;
+function groupNamesForSearch(names: string[], searchQuery: string): string[] {
+  const query = searchQuery.trim().toLowerCase();
+  if (!query) return names;
+  const matched = names.filter((n) => n.toLowerCase().includes(query));
+  return [...matched, ...names.filter((n) => !matched.includes(n))];
 }
 
 /**
@@ -98,114 +100,6 @@ function formatPhoneNumber(phone: string): string {
     return `+1 (${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`;
   }
   return phone;
-}
-
-/**
- * Get thread date range from messages
- */
-function getThreadDateRange(messages: MessageLike[]): string {
-  if (messages.length === 0) return "";
-
-  const dates = messages
-    .map(m => new Date(m.sent_at || m.received_at || 0).getTime())
-    .filter(d => d > 0)
-    .sort((a, b) => a - b);
-
-  if (dates.length === 0) return "";
-
-  const firstDate = new Date(dates[0]);
-  const lastDate = new Date(dates[dates.length - 1]);
-
-  const formatOpts: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", year: "numeric" };
-  const first = firstDate.toLocaleDateString(undefined, formatOpts);
-  const last = lastDate.toLocaleDateString(undefined, formatOpts);
-
-  // If same day, just show one date
-  if (first === last) {
-    return first;
-  }
-  return `${first} - ${last}`;
-}
-
-/**
- * Get all unique participants in a thread
- * Uses chat_members (actual group membership) when available,
- * falls back to collecting from/to from individual messages
- */
-function getThreadParticipants(messages: MessageLike[], selectedContact: string): string[] {
-  // First, try to get chat_members from any message (they all share the same chat)
-  for (const msg of messages) {
-    try {
-      if (msg.participants) {
-        const parsed = typeof msg.participants === 'string'
-          ? JSON.parse(msg.participants)
-          : msg.participants;
-
-        // If chat_members exists, use it (authoritative group membership)
-        if (parsed.chat_members && Array.isArray(parsed.chat_members)) {
-          const members = new Set<string>(parsed.chat_members);
-          members.delete(selectedContact);
-          members.delete('me');
-          // Normalize selected contact for comparison (handle +1 prefix)
-          const selectedNormalized = normalizePhone(selectedContact);
-          for (const m of members) {
-            if (normalizePhone(m) === selectedNormalized) {
-              members.delete(m);
-            }
-          }
-          return Array.from(members);
-        }
-      }
-    } catch {
-      // Continue to next message
-    }
-  }
-
-  // Fallback: use message direction to identify the OTHER person
-  // For 1:1 chats, we need to identify who is NOT the user
-  // - Inbound messages: `from` is the other person
-  // - Outbound messages: `to` is the other person
-  const participants = new Set<string>();
-
-  for (const msg of messages) {
-    try {
-      if (msg.participants) {
-        const parsed = typeof msg.participants === 'string'
-          ? JSON.parse(msg.participants)
-          : msg.participants;
-
-        // Use message direction to identify the OTHER person
-        if (msg.direction === 'inbound' && parsed.from) {
-          const from = parsed.from;
-          if (from !== 'me' && from !== 'unknown') {
-            participants.add(from);
-          }
-        }
-        if (msg.direction === 'outbound' && parsed.to) {
-          const toList = Array.isArray(parsed.to) ? parsed.to : [parsed.to];
-          toList.forEach((p: string) => {
-            if (p && p !== 'me' && p !== 'unknown') {
-              participants.add(p);
-            }
-          });
-        }
-      }
-    } catch {
-      // Skip malformed participants
-    }
-  }
-
-  // Remove the selected contact from the list
-  participants.delete(selectedContact);
-  // Also try normalized phone comparison
-  const selectedNormalized = normalizePhone(selectedContact);
-  for (const p of participants) {
-    if (normalizePhone(p) === selectedNormalized) {
-      participants.delete(p);
-    }
-  }
-
-  return Array.from(participants);
 }
 
 export function AttachMessagesModal({
@@ -241,9 +135,6 @@ export function AttachMessagesModal({
 
   // Selection state
   const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(new Set());
-
-  // Viewing thread messages state
-  const [viewingThreadId, setViewingThreadId] = useState<string | null>(null);
 
   // UI state
   const [searchQuery, setSearchQuery] = useState("");
@@ -401,7 +292,28 @@ export function AttachMessagesModal({
             }
           }
 
-          const grouped = groupMessagesByThread(Array.from(byId.values()));
+          const loaded = Array.from(byId.values());
+
+          // Name every member and sender of these chats with the same shared
+          // resolver the attached list uses (incl. the names Google Messages
+          // showed). The roster resolve above only covered roster handles; a
+          // group member can be absent from it. Still NO transactionId here —
+          // see BACKLOG-2758 above.
+          const resolveHandlesFn = window.api?.contacts?.resolveHandles;
+          const threadHandles = extractAllHandles(loaded);
+          if (resolveHandlesFn && threadHandles.length > 0) {
+            try {
+              const namesResult = await resolveHandlesFn(threadHandles, userId);
+              if (namesResult.success && namesResult.names) {
+                const names = namesResult.names;
+                setResolvedNames((prev) => ({ ...prev, ...names }));
+              }
+            } catch {
+              // Non-fatal: the cards fall back to the raw handle.
+            }
+          }
+
+          const grouped = groupMessagesByThread(loaded);
           setThreads(grouped);
           setView("threads");
         } catch (err) {
@@ -595,39 +507,6 @@ export function AttachMessagesModal({
     () => mergeThreadsByContact(sortedThreads, contactNamesRecord),
     [sortedThreads, contactNamesRecord]
   );
-
-  // BACKLOG-2263: the read-only viewer targets a merged entry (its displayKey),
-  // so pull the merged entry's FULL message set — not a single raw thread.
-  const viewingMessages = useMemo(
-    () =>
-      viewingThreadId
-        ? mergedThreads.find(([key]) => key === viewingThreadId)?.[1] ?? null
-        : null,
-    [viewingThreadId, mergedThreads]
-  );
-
-  // Create a phone-to-name lookup map for resolving participant names
-  const phoneToNameMap = useMemo(() => {
-    const map = new Map<string, string>();
-    // First add from all contacts (comprehensive list)
-    for (const c of allContacts) {
-      map.set(normalizePhone(c.phone), c.name);
-    }
-    // Then add from message contacts (may have more accurate names)
-    for (const c of contacts) {
-      if (c.contactName) {
-        map.set(normalizePhone(c.contact), c.contactName);
-      }
-    }
-    return map;
-  }, [contacts, allContacts]);
-
-  // Resolve phone number to name if available
-  const resolveParticipantName = (phone: string): string => {
-    const normalized = normalizePhone(phone);
-    const name = phoneToNameMap.get(normalized);
-    return name || formatPhoneNumber(phone);
-  };
 
   const handleSelectContact = (merged: MergedContact) => {
     setSelectedContact(merged.primaryContact);
@@ -882,6 +761,20 @@ export function AttachMessagesModal({
                             )}
                             <span>Last: {formatDate(contact.lastMessageAt)}</span>
                           </div>
+                          {/* Live (founder): the group chats this person is in, by name (searchable too).
+                              BACKLOG-3753: a group name the search matched leads the line (so the
+                              truncation never hides it), with the match marked by the app's shared
+                              search highlighter. */}
+                          {contact.threadNames.length > 0 && (
+                            <p className="text-xs text-gray-500 mt-0.5 truncate" data-testid="picker-contact-groups">
+                              {groupNamesForSearch(contact.threadNames, searchQuery).map((name, i) => (
+                                <React.Fragment key={`${i}:${name}`}>
+                                  {i > 0 && ", "}
+                                  {highlightMatch(name, searchQuery)}
+                                </React.Fragment>
+                              ))}
+                            </p>
+                          )}
                         </div>
                         <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
@@ -895,7 +788,10 @@ export function AttachMessagesModal({
             </>
           )}
 
-          {/* Threads List */}
+          {/* Threads List — the attached list's own card (MessageThreadCard),
+              in its selection mode. Its View opens the attached view's
+              ConversationViewModal, so both screens show members and senders
+              through the same component and the same resolved names. */}
           {view === "threads" && !loadingThreads && !error && (
             <>
               {mergedThreads.length === 0 ? (
@@ -906,109 +802,23 @@ export function AttachMessagesModal({
                   <p className="text-gray-600 mb-2">No chats found with this contact</p>
                 </div>
               ) : (
-                <div className="grid gap-3">
+                <div data-testid="picker-thread-list">
                   {mergedThreads.map(([threadId, messages]) => {
-                    const isSelected = selectedThreadIds.has(threadId);
-                    const otherParticipants = getThreadParticipants(messages, selectedContact || "");
-                    const dateRange = getThreadDateRange(messages);
-
-                    // Resolve names and deduplicate (same person may have multiple phones)
-                    const uniqueParticipantNames = [...new Set(
-                      otherParticipants.map(p => resolveParticipantName(p))
-                    )];
-                    // BACKLOG-2263: decide group-vs-1:1 with the SAME rule as the
-                    // attached list — a null merge key means a real group chat.
-                    // (A merged 1:1 spanning several handles must NOT be mislabeled
-                    // a group just because it has multiple raw participant handles.)
-                    const isGroup = getContactMergeKey(messages, contactNamesRecord) === null;
-
+                    // Same header lookup as the Texts tab's thread list.
+                    const phoneNumber = extractPhoneFromThread(messages);
+                    const normalized = phoneNumber.replace(/\D/g, "").slice(-10);
                     return (
-                      <div
+                      <MessageThreadCard
                         key={threadId}
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => handleToggleThread(threadId)}
-                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleToggleThread(threadId); } }}
-                        className={`text-left w-full max-w-full min-w-0 overflow-hidden p-3 sm:p-4 rounded-lg border sm:border-2 transition-all cursor-pointer ${
-                          isSelected
-                            ? "border-green-500 bg-green-50"
-                            : "border-gray-200 bg-white hover:border-green-300 hover:bg-green-50"
-                        }`}
-                        data-testid={`thread-${threadId}`}
-                      >
-                        <div className="flex items-start gap-2 sm:gap-3">
-                          {/* Checkbox */}
-                          <div
-                            className={`w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 mt-0.5 ${
-                              isSelected ? "bg-green-500 border-green-500" : "border-gray-300 bg-white"
-                            }`}
-                          >
-                            {isSelected && (
-                              <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                              </svg>
-                            )}
-                          </div>
-
-                          {/* Chat Icon — hidden on mobile */}
-                          <div className={`w-10 h-10 rounded-full items-center justify-center flex-shrink-0 hidden sm:flex ${
-                            isGroup ? "bg-purple-100" : "bg-blue-100"
-                          }`}>
-                            {isGroup ? (
-                              <svg className="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-                              </svg>
-                            ) : (
-                              <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                              </svg>
-                            )}
-                          </div>
-
-                          {/* Thread Info */}
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-1.5 min-w-0">
-                              <h4 className="font-semibold text-gray-900 text-sm truncate">
-                                {isGroup ? "Group Chat" : `Chat with ${selectedContactName || formatPhoneNumber(selectedContact || "")}`}
-                              </h4>
-                              {isGroup && (
-                                <span className="inline-block px-2 py-0.5 bg-purple-100 text-purple-700 text-xs font-medium rounded-full flex-shrink-0">
-                                  {uniqueParticipantNames.length + 1}
-                                </span>
-                              )}
-                            </div>
-
-                            {/* Other participants in group */}
-                            {isGroup && uniqueParticipantNames.length > 0 && (
-                              <p className="text-xs text-gray-500 mt-0.5 truncate">
-                                {uniqueParticipantNames.slice(0, 3).join(", ")}
-                                {uniqueParticipantNames.length > 3 && ` +${uniqueParticipantNames.length - 3} more`}
-                              </p>
-                            )}
-
-                            {/* Metadata row */}
-                            <div className="flex items-center justify-between mt-1.5 text-xs text-gray-500">
-                              <div className="flex items-center gap-2">
-                                <span>{messages.length} {messages.length === 1 ? "msg" : "msgs"}</span>
-                                <span className="text-gray-400">•</span>
-                                <span>{dateRange}</span>
-                              </div>
-                              {/* View button */}
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setViewingThreadId(threadId);
-                                }}
-                                className="text-blue-600 hover:text-blue-800 font-medium flex-shrink-0"
-                                data-testid={`view-thread-${threadId}`}
-                              >
-                                View
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
+                        threadId={threadId}
+                        messages={messages}
+                        phoneNumber={phoneNumber}
+                        contactName={contactNamesRecord[phoneNumber] || contactNamesRecord[normalized]}
+                        contactNames={contactNamesRecord}
+                        selectionMode
+                        isSelected={selectedThreadIds.has(threadId)}
+                        onToggleSelect={() => handleToggleThread(threadId)}
+                      />
                     );
                   })}
                 </div>
@@ -1058,77 +868,6 @@ export function AttachMessagesModal({
           </div>
         </div>
 
-      {/* Message Viewer Panel */}
-      {viewingThreadId && viewingMessages && (
-        <ResponsiveModal onClose={() => setViewingThreadId(null)} zIndex="z-[80]" overlayClassName="bg-black bg-opacity-50" panelBg="bg-gray-100" panelClassName="max-w-md sm:h-[600px] sm:rounded-2xl sm:overflow-hidden">
-            {/* Phone-style header */}
-            <div className="bg-gradient-to-r from-blue-500 to-blue-600 px-4 py-3 flex items-center gap-3">
-              <button
-                onClick={() => setViewingThreadId(null)}
-                className="text-white hover:bg-white hover:bg-opacity-20 rounded-full p-1"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                </svg>
-              </button>
-              <div className="flex-1">
-                <h4 className="text-white font-semibold">
-                  {selectedContactName || formatPhoneNumber(selectedContact || "")}
-                </h4>
-                <p className="text-blue-100 text-xs">
-                  {viewingMessages.length} messages
-                </p>
-              </div>
-            </div>
-
-            {/* Messages list - phone style */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-3">
-              {viewingMessages
-                .slice()
-                .sort((a, b) => new Date(a.sent_at || 0).getTime() - new Date(b.sent_at || 0).getTime())
-                .map((msg) => {
-                  const isOutbound = msg.direction === "outbound";
-                  const msgText = msg.body_text || ("body" in msg ? (msg as { body?: string }).body : "") || "";
-                  const msgTime = new Date(msg.sent_at || msg.received_at || 0);
-
-                  return (
-                    <div
-                      key={msg.id}
-                      className={`flex ${isOutbound ? "justify-end" : "justify-start"}`}
-                    >
-                      <div
-                        className={`max-w-[80%] rounded-2xl px-4 py-2 ${
-                          isOutbound
-                            ? "bg-blue-500 text-white rounded-br-md"
-                            : "bg-white text-gray-900 rounded-bl-md shadow-sm"
-                        }`}
-                      >
-                        <p className="text-sm whitespace-pre-wrap break-words">{msgText || "(No content)"}</p>
-                        <p className={`text-xs mt-1 ${isOutbound ? "text-blue-100" : "text-gray-400"}`}>
-                          {msgTime.toLocaleString(undefined, {
-                            month: "short",
-                            day: "numeric",
-                            hour: "numeric",
-                            minute: "2-digit",
-                          })}
-                        </p>
-                      </div>
-                    </div>
-                  );
-                })}
-            </div>
-
-            {/* Footer */}
-            <div className="bg-white border-t px-4 py-3 flex justify-center">
-              <button
-                onClick={() => setViewingThreadId(null)}
-                className="px-6 py-2 bg-gray-200 hover:bg-gray-300 rounded-full text-sm font-medium text-gray-700 transition-all"
-              >
-                Close
-              </button>
-            </div>
-        </ResponsiveModal>
-      )}
     </ResponsiveModal>
   );
 }

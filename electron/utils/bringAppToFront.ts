@@ -35,6 +35,10 @@
  * call is made unconditionally rather than behind a `process.platform` branch
  * that nothing could exercise on the other side.
  *
+ * On Windows the foreground lock turns a background `focus()` into a taskbar
+ * flash; see {@link raiseOnWindows} (BACKLOG-3636). Callers: mailbox connect
+ * (BACKLOG-3394) and the end of an RCS Sync job (BACKLOG-3636).
+ *
  * ============================================================================
  * WHY IT NEVER THROWS
  * ============================================================================
@@ -51,6 +55,22 @@ import { app, BrowserWindow } from "electron";
 import logService from "../services/logService";
 
 /**
+ * Windows (BACKLOG-3636): the foreground lock lets `focus()` from a background
+ * app only flash the taskbar button. Briefly making the window always-on-top
+ * puts it in front; the flag is ALWAYS cleared again (finally), so a throw
+ * from show/focus can never leave Keepr pinned above every other window.
+ */
+function raiseOnWindows(win: BrowserWindow): void {
+  win.setAlwaysOnTop(true);
+  try {
+    win.show();
+    win.focus();
+  } finally {
+    win.setAlwaysOnTop(false);
+  }
+}
+
+/**
  * Activate the application and raise its main window.
  *
  * @param win The main window, or null when the app has no window (the focus
@@ -62,8 +82,12 @@ export function bringAppToFront(win: BrowserWindow | null): void {
 
     if (win && !win.isDestroyed()) {
       if (win.isMinimized()) win.restore();
-      if (!win.isVisible()) win.show();
-      win.focus();
+      if (process.platform === "win32") {
+        raiseOnWindows(win);
+      } else {
+        if (!win.isVisible()) win.show();
+        win.focus();
+      }
     }
   } catch (error) {
     // Cosmetic only — see the header. Never rethrow.
@@ -72,5 +96,79 @@ export function bringAppToFront(win: BrowserWindow | null): void {
       "BringAppToFront",
       { error: error instanceof Error ? error.message : "Unknown error" },
     );
+  }
+}
+
+/**
+ * SR (Option 1): Keepr raised for linking — the code window sits at the
+ * screen's right edge, so Keepr must not come back MAXIMIZED over it. A
+ * minimized window returns at its normal bounds (never maximized); a
+ * visible window keeps the size the user gave it. Never throws.
+ */
+export function bringAppToFrontForLink(win: BrowserWindow | null): void {
+  try {
+    // macOS: activate the APP (a window focus alone leaves the browser in front).
+    app.focus({ steal: true });
+    if (win && !win.isDestroyed()) {
+      if (win.isMinimized()) {
+        win.restore();
+        if (win.isMaximized()) win.unmaximize();
+      }
+      win.show();
+      // Live (0.3.57, Windows): raised but NOT the keyboard window — typing
+      // went nowhere until a click. The foreground-lock sequence, then the
+      // window and its page take KEYBOARD focus.
+      if (process.platform === "win32") {
+        win.setAlwaysOnTop(true);
+        try {
+          win.focus();
+        } finally {
+          win.setAlwaysOnTop(false);
+        }
+      } else {
+        win.focus();
+      }
+      win.moveTop();
+      win.webContents.focus();
+    }
+  } catch (error) {
+    void logService.warn("Failed to bring the app to the front for linking", "BringAppToFront", {
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+  flashUntilFocused(win);
+}
+
+/** Windows whose taskbar button is flashing until they get focus. */
+const flashing = new WeakSet<BrowserWindow>();
+
+/**
+ * BACKLOG-3641: the user asked from the browser ("Open Keepr"). Bring Keepr
+ * forward; if Windows still refuses the foreground change (the window is not
+ * focused afterwards), flash its taskbar button until it gets focus. Never
+ * throws (cosmetic, as above).
+ */
+export function bringAppToFrontOrFlash(win: BrowserWindow | null): void {
+  bringAppToFront(win);
+  flashUntilFocused(win);
+}
+
+/** Windows refused the foreground change: flash the taskbar button until it is focused. */
+function flashUntilFocused(win: BrowserWindow | null): void {
+  try {
+    // One flash per window at a time: repeated clicks never pile up
+    // once("focus") listeners.
+    if (win && !win.isDestroyed() && !win.isFocused() && !flashing.has(win)) {
+      flashing.add(win);
+      win.flashFrame(true);
+      win.once("focus", () => {
+        flashing.delete(win);
+        if (!win.isDestroyed()) win.flashFrame(false);
+      });
+    }
+  } catch (error) {
+    void logService.warn("Failed to flash the app's window", "BringAppToFront", {
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
   }
 }

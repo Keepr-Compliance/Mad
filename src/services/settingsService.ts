@@ -17,8 +17,10 @@ export type PhoneType = "iphone" | "android";
  * - 'macos-native': Import from macOS Messages.app and Contacts (default)
  * - 'iphone-sync': Import from connected iPhone via backup
  * - 'android-companion': Import from Android phone via WiFi companion app
+ * - 'android-messages-web': Android with Google Messages, through Keepr's
+ *   Chrome extension on Messages for Web (BACKLOG-3659; the Android default)
  */
-export type ImportSource = "macos-native" | "iphone-sync" | "android-companion";
+export type ImportSource = "macos-native" | "iphone-sync" | "android-companion" | "android-messages-web";
 
 /**
  * Messages-related preferences

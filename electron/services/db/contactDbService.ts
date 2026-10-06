@@ -22,6 +22,7 @@ import { getContactNames } from "../contactsService";
 import { queryContacts, isPoolReady } from "../../workers/contactWorkerPool";
 import { ContactSchema, validateResponse } from "../../schemas";
 import { IMPORTED_CONTACT_LAST_COMMUNICATION_SQL } from "./contactRecencySql";
+import { getTextDerivedPeople } from "./rcsChatPeopleDbService";
 import {
   IMPORTED_CONTACT_ADDRESSES_SQL,
   IMPORTED_CONTACTS_SELECT_SQL,
@@ -823,8 +824,29 @@ function parseContactAddressAggregates<T extends ContactAddressAggregates>(
  * crosswalk rows by construction and must keep answering to their `source`
  * scalar — which is what the Inferred filter reads.
  */
-function messageDerivedAsContacts(userId: string): Contact[] {
-  return getMessageDerivedContacts(userId).map(
+/**
+ * BACKLOG-3670: whether the people found in Google Messages texts are added,
+ * decided by the caller (Settings → Contacts → Auto-discover → Messages / SMS).
+ * Absent → not added.
+ */
+export interface TextPeopleOption {
+  textPeople?: boolean;
+}
+
+/**
+ * BACKLOG-3670: the macOS message-derived rows (getMessageDerivedContacts,
+ * UNCHANGED) and, when asked, the people found in Google Messages texts —
+ * read SEPARATELY with their own cap, merged here, so they never take the
+ * macOS rows' slots and a user with none gets exactly the old list.
+ */
+function messageDerivedWithTextPeople(userId: string, opts?: TextPeopleOption): MessageDerivedContact[] {
+  const mac = getMessageDerivedContacts(userId);
+  if (!opts?.textPeople) return mac;
+  return [...mac, ...getTextDerivedPeople(userId)];
+}
+
+function messageDerivedAsContacts(userId: string, opts?: TextPeopleOption): Contact[] {
+  return messageDerivedWithTextPeople(userId, opts).map(
     (mc) =>
       ({
         id: mc.id,
@@ -844,6 +866,7 @@ function messageDerivedAsContacts(userId: string): Contact[] {
 
 export async function getImportedContactsByUserId(
   userId: string,
+  opts?: TextPeopleOption,
 ): Promise<Contact[]> {
   // BACKLOG-2514: THE imported-contacts statement, shared with the worker's
   // `runImportedQuery` rather than duplicated beside it. It used to be two
@@ -867,7 +890,7 @@ export async function getImportedContactsByUserId(
   // an ordinary card.
   const allContacts = [
     ...attachReviewState(userId, attachLiveSources(userId, contactsWithArrays)),
-    ...messageDerivedAsContacts(userId),
+    ...messageDerivedAsContacts(userId, opts),
   ];
 
   // Sort alphabetically by display_name/name
@@ -888,10 +911,11 @@ export async function getImportedContactsByUserId(
 export async function getImportedContactsByUserIdAsync(
   userId: string,
   timeoutMs: number = 30_000,
+  opts?: TextPeopleOption,
 ): Promise<Contact[]> {
   if (!isPoolReady()) {
     // Fallback to sync version if pool not initialized
-    return getImportedContactsByUserId(userId);
+    return getImportedContactsByUserId(userId, opts);
   }
 
   // Run imported contacts SQL in persistent worker thread
@@ -916,7 +940,7 @@ export async function getImportedContactsByUserIdAsync(
   // BACKLOG-2471 PR F — stamped here too; see the sync producer above.
   return [
     ...attachReviewState(userId, attachLiveSources(userId, contactsWithArrays)),
-    ...messageDerivedAsContacts(userId),
+    ...messageDerivedAsContacts(userId, opts),
   ].sort(
     (a, b) => {
       const nameA = (a.display_name || a.name || '').toLowerCase();
@@ -1220,6 +1244,7 @@ export async function backfillContactCommunicationDates(userId: string): Promise
 export async function getContactsSortedByActivity(
   userId: string,
   _propertyAddress?: string,
+  opts?: TextPeopleOption,
 ): Promise<ContactWithActivity[]> {
   // Check if backfill has ever run (single lightweight query)
   // BACKLOG-2365: removed contacts excluded so the probe matches the population
@@ -1291,7 +1316,7 @@ ${IMPORTED_CONTACT_ADDRESSES_SQL},
     );
 
     // Get message-derived contacts (already have last_communication_at from their source)
-    const messageDerivedContacts = getMessageDerivedContacts(userId);
+    const messageDerivedContacts = messageDerivedWithTextPeople(userId, opts);
 
     const messageDerivedWithActivity: ContactWithActivity[] = messageDerivedContacts.map(mc => ({
       id: mc.id,
@@ -1564,7 +1589,8 @@ export async function getContactNamesByPhones(
 
   // Fallback: Check macOS Contacts for any unresolved phones
   const unresolvedPhones = phones.filter(p => !result.has(p));
-  if (unresolvedPhones.length > 0) {
+  // Live (Windows freeze): the macOS AddressBook probe only on a Mac.
+  if (unresolvedPhones.length > 0 && process.platform === "darwin") {
     try {
       const macOSContacts = await getContactNames();
       const contactMap = macOSContacts.contactMap;
@@ -2509,7 +2535,8 @@ export async function getRemovedContactIdentifiers(
 export function searchContactsForSelection(
   userId: string,
   query: string,
-  limit: number = 50
+  limit: number = 50,
+  opts?: TextPeopleOption,
 ): ContactWithActivity[] {
   const searchPattern = `%${query}%`;
 
@@ -2694,8 +2721,17 @@ export function searchContactsForSelection(
       return !(name && namesOwningThemselves.has(name.toLowerCase()));
     });
 
+    // BACKLOG-3670: people found in Google Messages texts, matched on their
+    // shown name or number — suppressed by NUMBER in their own query, so the
+    // 2618 name filter above does not apply to them.
+    const textPeople: ContactWithActivity[] = opts?.textPeople
+      ? getTextDerivedPeople(userId, query).map(
+          (p) => ({ ...p, user_id: userId, title: null, address_mention_count: 0 }) as unknown as ContactWithActivity,
+        )
+      : [];
+
     // Merge results: imported first, then message-derived
-    const allResults = [...importedResults, ...filteredMessageResults];
+    const allResults = [...importedResults, ...filteredMessageResults, ...textPeople];
 
     // Sort by name match first, then by communication date
     allResults.sort((a, b) => {

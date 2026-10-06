@@ -312,6 +312,53 @@ describe("SessionService", () => {
     });
   });
 
+  // BACKLOG-3658: listeners (e.g. the Google Messages Sync) hear sign-in,
+  // refresh and sign-out. Mutation: drop an emit, or emit before the write
+  // succeeded → red.
+  describe("session change events (BACKLOG-3658)", () => {
+    const user = {
+      id: "user-123", email: "test@example.com", oauth_provider: "google" as const, oauth_id: "google-123",
+      subscription_tier: "free" as const, subscription_status: "trial" as const, is_active: true,
+      created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    };
+    async function listen() {
+      const events = await import("../authEvents");
+      const heard: Array<{ kind: string; userId: string | null }> = [];
+      events.onSessionChanged((c) => void heard.push(c));
+      return heard;
+    }
+
+    it("a saved session announces its user; a failed write announces nothing", async () => {
+      const heard = await listen();
+      const data = { user, sessionToken: "t", provider: "google" as const, expiresAt: Date.now() + 1e6, createdAt: Date.now() };
+      await sessionService.saveSession(data);
+      expect(heard).toEqual([{ kind: "saved", userId: "user-123" }]);
+      mockFs.writeFile.mockRejectedValueOnce(new Error("disk full"));
+      await sessionService.saveSession(data);
+      expect(heard).toHaveLength(1);
+    });
+
+    it("a cleared session (or one already gone) announces the sign-out; a failed delete does not", async () => {
+      const heard = await listen();
+      await sessionService.clearSession();
+      const gone: NodeJS.ErrnoException = new Error("ENOENT");
+      gone.code = "ENOENT";
+      mockFs.unlink.mockRejectedValueOnce(gone);
+      await sessionService.clearSession();
+      mockFs.unlink.mockRejectedValueOnce(new Error("Permission denied"));
+      await sessionService.clearSession();
+      expect(heard).toEqual([{ kind: "cleared", userId: null }, { kind: "cleared", userId: null }]);
+    });
+
+    it("a listener that throws never breaks the session write", async () => {
+      const events = await import("../authEvents");
+      events.onSessionChanged(() => {
+        throw new Error("listener bug");
+      });
+      await expect(sessionService.clearSession()).resolves.toBe(true);
+    });
+  });
+
   describe("clearSession", () => {
     it("should delete session file successfully", async () => {
       const result = await sessionService.clearSession();

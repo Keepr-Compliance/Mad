@@ -69,6 +69,10 @@ import {
   V73_TRANSACTIONS_TABLE_INFO_SQL,
   V73_ADD_COMMISSION_COLUMNS_SQL,
 } from "./db/migrationV73Sql";
+// BACKLOG-3619: migration v74 — the RCS import's local tables, same boundary rule.
+import {
+  V74_RCS_LOCAL_TABLES_DDL,
+} from "./db/migrationV74Sql";
 import {
   SCHEMA_VERSION_UPDATE_SQL,
   SCHEMA_VERSION_TABLE_EXISTS_SQL,
@@ -142,6 +146,7 @@ import * as diagnosticDb from "./db/diagnosticDbService";
 import * as attachmentDb from "./db/attachmentDbService";
 import * as submissionDb from "./db/submissionDbService";
 import * as syncDb from "./db/syncDbService";
+import * as rcsChatPeopleDb from "./db/rcsChatPeopleDbService";
 import * as maintenanceDb from "./db/maintenanceDbService";
 
 // Re-export types for backward compatibility
@@ -1438,6 +1443,16 @@ class DatabaseService implements IDatabaseService {
         }
       },
     },
+    {
+      version: 74,
+      description:
+        "BACKLOG-3619 Google Messages import: the 18 rcs_* local tables and " +
+        "message_source_coverage (with their indexes) in one versioned migration",
+      // CREATE … IF NOT EXISTS only: a no-op where schema.sql's exec already made them.
+      migrate: (d) => {
+        d.exec(V74_RCS_LOCAL_TABLES_DDL);
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {
@@ -1705,12 +1720,12 @@ class DatabaseService implements IDatabaseService {
     return contactDb.getContacts(filters);
   }
 
-  async getImportedContactsByUserId(userId: string): Promise<Contact[]> {
-    return contactDb.getImportedContactsByUserId(userId);
+  async getImportedContactsByUserId(userId: string, opts?: contactDb.TextPeopleOption): Promise<Contact[]> {
+    return contactDb.getImportedContactsByUserId(userId, opts);
   }
 
-  async getImportedContactsByUserIdAsync(userId: string): Promise<Contact[]> {
-    return contactDb.getImportedContactsByUserIdAsync(userId);
+  async getImportedContactsByUserIdAsync(userId: string, opts?: contactDb.TextPeopleOption): Promise<Contact[]> {
+    return contactDb.getImportedContactsByUserIdAsync(userId, undefined, opts);
   }
 
   async getUnimportedContactsByUserId(userId: string): Promise<Contact[]> {
@@ -1760,8 +1775,12 @@ class DatabaseService implements IDatabaseService {
     return contactDb.backfillContactPhones(contactId, phones, source);
   }
 
-  async getContactsSortedByActivity(userId: string, propertyAddress?: string): Promise<contactDb.ContactWithActivity[]> {
-    return contactDb.getContactsSortedByActivity(userId, propertyAddress);
+  async getContactsSortedByActivity(
+    userId: string,
+    propertyAddress?: string,
+    opts?: contactDb.TextPeopleOption,
+  ): Promise<contactDb.ContactWithActivity[]> {
+    return contactDb.getContactsSortedByActivity(userId, propertyAddress, opts);
   }
 
   async backfillContactCommunicationDates(userId: string): Promise<number> {
@@ -1772,8 +1791,13 @@ class DatabaseService implements IDatabaseService {
     return contactDb.searchContacts(query, userId);
   }
 
-  searchContactsForSelection(userId: string, query: string, limit?: number): contactDb.ContactWithActivity[] {
-    return contactDb.searchContactsForSelection(userId, query, limit);
+  searchContactsForSelection(
+    userId: string,
+    query: string,
+    limit?: number,
+    opts?: contactDb.TextPeopleOption,
+  ): contactDb.ContactWithActivity[] {
+    return contactDb.searchContactsForSelection(userId, query, limit, opts);
   }
 
   async updateContact(contactId: string, updates: ContactUpdateFields): Promise<void> {
@@ -2430,6 +2454,121 @@ class DatabaseService implements IDatabaseService {
 
   insertAttachment(params: Parameters<typeof syncDb.insertAttachment>[0]) {
     return syncDb.insertAttachment(params);
+  }
+
+  markMessageHasAttachments(messageId: string) {
+    return syncDb.markMessageHasAttachments(messageId);
+  }
+
+
+  // BACKLOG-3665: a legacy chat removal moved onto the chat's gmweb2 thread
+
+  // BACKLOG-3658: the RCS cache job
+  getRcsCacheState(userId: string) {
+    return syncDb.getRcsCacheState(userId);
+  }
+
+  updateRcsCacheState(userId: string, patch: Parameters<typeof syncDb.updateRcsCacheState>[1]) {
+    return syncDb.updateRcsCacheState(userId, patch);
+  }
+
+  resetRcsCacheState(userId: string) {
+    return syncDb.resetRcsCacheState(userId);
+  }
+
+  rcsNumbersMatchLiveContact(userId: string, numbers: readonly string[]) {
+    return syncDb.rcsNumbersMatchLiveContact(userId, numbers);
+  }
+
+  // BACKLOG-3630: the RCS content guard
+  findRcsContentDuplicates(
+    userId: string,
+    rows: {
+      externalId: string;
+      sentAt: string;
+      direction: string;
+      bodyText: string | null;
+      participants: string;
+      participantsFlat: string;
+    }[],
+  ) {
+    return syncDb.findRcsContentDuplicates(userId, rows);
+  }
+
+  // BACKLOG-3657: database operations for clearing Google Messages for Web texts
+  rcsClearDbOps() {
+    return syncDb.rcsClearDbOps();
+  }
+
+  // BACKLOG-3658: the cache Sync's staging area
+  rcsStagingDbOps() {
+    return syncDb.rcsStagingDbOps();
+  }
+
+  // BACKLOG-3658 P3b: consent + cache options + auto-delete
+  getRcsConsent(userId: string) {
+    return syncDb.getRcsConsent(userId);
+  }
+
+  setRcsConsent(userId: string, version: number | null, nowIso: string) {
+    return syncDb.setRcsConsent(userId, version, nowIso);
+  }
+
+  setRcsCacheOptions(userId: string, patch: Parameters<typeof syncDb.setRcsCacheOptions>[1]) {
+    return syncDb.setRcsCacheOptions(userId, patch);
+  }
+
+  rcsAutoDeleteDbOps() {
+    return syncDb.rcsAutoDeleteDbOps();
+  }
+
+  // BACKLOG-3658 P3c: per-chat exclusions ("Don't sync")
+  listRcsExclusionConversationIds(userId: string, max: number) {
+    return syncDb.listRcsExclusionConversationIds(userId, max);
+  }
+
+  /**
+   * BACKLOG-3670: the people found in this user's Google Messages texts (not
+   * saved contacts — offered in the picker's address-book half only).
+   */
+  getTextDerivedPeople(userId: string) {
+    return rcsChatPeopleDb.getTextDerivedPeople(userId);
+  }
+
+  /** BACKLOG-3670: a stored Google Messages chat's people (numbers + shown names). */
+  recordRcsChatPeople(
+    userId: string,
+    chatHash: string,
+    rows: import("./db/rcsChatPeopleDbService").RcsChatPersonRow[],
+    lastMessageAt: string | null,
+  ) {
+    return rcsChatPeopleDb.recordRcsChatPeople(userId, chatHash, rows, lastMessageAt);
+  }
+
+  /** Live (founder): a Google Messages group's name (message_thread_names); null removes it. */
+  recordRcsThreadName(userId: string, threadId: string, name: string | null) {
+    return rcsChatPeopleDb.recordRcsThreadName(userId, threadId, name);
+  }
+
+  setRcsExclusion(userId: string, conversationId: string, excluded: boolean) {
+    return syncDb.setRcsExclusion(userId, conversationId, excluded);
+  }
+
+
+  checkRcsExclusion(userId: string, chatHash: string, conversationId: string) {
+    return syncDb.checkRcsExclusion(userId, chatHash, conversationId);
+  }
+
+  listRcsExclusionsForSettings(userId: string) {
+    return syncDb.listRcsExclusionsForSettings(userId);
+  }
+
+  rcsExclusionHashes(userId: string) {
+    return syncDb.rcsExclusionHashes(userId);
+  }
+
+  insertReactionRows(rows: Parameters<typeof syncDb.insertReactionRows>[0]) {
+    return syncDb.insertReactionRows(rows);
   }
 
   // ============================================

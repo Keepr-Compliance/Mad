@@ -6,6 +6,7 @@ import type { Transaction, Communication, ExportFormat } from "../models";
 import type {
   AuditCoverageResult,
   ExportCompletenessResult,
+  TextCoverageResult,
   EnsureMessagesCoverageResult,
 } from "../auditCoverage";
 // BACKLOG-2367. TYPE-ONLY, fully erased at build time — the renderer gains the
@@ -1181,6 +1182,12 @@ export interface WindowApiTransactions {
     transactionId: string,
     userId: string,
   ) => Promise<ExportCompletenessResult>;
+  /** BACKLOG-3663: per-source text coverage for one transaction (the Texts tab). */
+  getTextCoverage?: (
+    transactionId: string,
+    userId: string,
+    chosenSource: string | null,
+  ) => Promise<TextCoverageResult>;
 
   /**
    * The "Update now" action: run a targeted messages import + expansion for an

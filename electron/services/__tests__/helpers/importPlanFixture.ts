@@ -94,9 +94,10 @@ export function testImportPlan(options: TestImportPlanOptions = {}): ImportPlan 
  * green — the exact failure mode BACKLOG-2561 was made of.
  */
 export function monthsBack(months: number, now: Date = FIXED_NOW): Date {
-  const cutoff = new Date(now.getTime());
-  cutoff.setMonth(cutoff.getMonth() - months);
-  return cutoff;
+  // Founder (2026-10-02): a month is 30.4375 days, rounded to whole days
+  // (electron/utils/lookbackWindow.ts). Restated as a LITERAL here, so a
+  // mutated helper cannot move the expectation along with the code.
+  return new Date(now.getTime() - Math.round(months * 30.4375) * 24 * 60 * 60 * 1000);
 }
 
 /** `monthsBack` as the ISO instant a plan's `fetchStartISO` carries. */
