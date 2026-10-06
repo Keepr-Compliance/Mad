@@ -11,6 +11,7 @@
 
 import type { CacheCommitResult, CacheLimits } from "./rcsCacheStaging";
 import type { RcsCacheSaved } from "./rcsImportJob";
+import { scrubRcsText } from "../utils/redactSensitive";
 
 /** How far back a first cache Sync reaches when no floor is given (tests; the app passes the user's setting). */
 export const RCS_CACHE_WINDOW_DAYS = 60;
@@ -461,14 +462,14 @@ export async function handleCacheJobEnded(
         );
       }
     } catch (err) {
-      deps.log?.(`[RcsCache] Discarding the cache Sync's staging failed: ${err instanceof Error ? err.message : String(err)}`);
+      deps.log?.(`[RcsCache] Discarding the cache Sync's staging failed: ${scrubRcsText(err)}`);
     }
     return;
   }
   try {
     await deps.commit(jobId, userId, ended.snapshot);
   } catch (err) {
-    deps.log?.(`[RcsCache] The cache Sync could not be saved; nothing was imported: ${err instanceof Error ? err.message : String(err)}`);
+    deps.log?.(`[RcsCache] The cache Sync could not be saved; nothing was imported: ${scrubRcsText(err)}`);
     return;
   }
   // The job's START time (SR): chats that changed while it ran are re-read
@@ -481,13 +482,13 @@ export async function handleCacheJobEnded(
   try {
     await deps.autoLink(userId);
   } catch (err) {
-    deps.log?.(`[RcsCache] Auto-link after the cache Sync failed: ${err instanceof Error ? err.message : String(err)}`);
+    deps.log?.(`[RcsCache] Auto-link after the cache Sync failed: ${scrubRcsText(err)}`);
   }
   if (deps.afterLink) {
     try {
       await deps.afterLink(userId);
     } catch (err) {
-      deps.log?.(`[RcsCache] After the auto-link: ${err instanceof Error ? err.message : String(err)}`);
+      deps.log?.(`[RcsCache] After the auto-link: ${scrubRcsText(err)}`);
     }
   }
   // Even when the auto-link failed, the saved texts are new to open views.

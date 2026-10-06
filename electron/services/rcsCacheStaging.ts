@@ -39,6 +39,7 @@ import * as path from "path";
 
 import type { RcsChatPeople, RcsImportResult, RcsIncomingChat, RcsIncomingMessage } from "./rcsImportStore";
 import { RCS_ALLOWED_IMAGE_MIME, RCS_MAX_IMAGE_BYTES, rcsImageExt, type RcsImageResult, type RcsIncomingImage } from "./rcsImportMedia";
+import { scrubRcsText } from "../utils/redactSensitive";
 
 /** Staged image bytes per job. Over it, an image is refused as too large (counted, never silent). */
 export const RCS_CACHE_STAGING_MAX_BYTES = 2 * 1024 * 1024 * 1024;
@@ -561,7 +562,7 @@ export class RcsCacheStaging {
           }
           if (out.stopped) break;
           out.chatsFailed = (out.chatsFailed ?? 0) + 1;
-          h.log?.(`[RcsCache] A chat could not be saved (the others are kept): ${err instanceof Error ? err.message : String(err)}`);
+          h.log?.(`[RcsCache] A chat could not be saved (the others are kept): ${scrubRcsText(err)}`);
         }
       }
       // A complete run: the run-level records, in one last transaction.
@@ -571,7 +572,7 @@ export class RcsCacheStaging {
         } catch (err) {
           // The chats are saved; only the run's records are not (the next run is "Try again").
           out.runRecordFailed = true;
-          h.log?.(`[RcsCache] The run's records could not be saved (its chats are): ${err instanceof Error ? err.message : String(err)}`);
+          h.log?.(`[RcsCache] The run's records could not be saved (its chats are): ${scrubRcsText(err)}`);
         }
       }
       return out;

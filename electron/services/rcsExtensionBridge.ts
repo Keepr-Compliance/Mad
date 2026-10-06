@@ -55,6 +55,8 @@
 
 import * as http from "http";
 
+import { scrubRcsText } from "../utils/redactSensitive";
+
 import {
   parseNotReached,
   participantKey,
@@ -706,14 +708,14 @@ export class RcsExtensionBridge {
         this.reason =
           err.code === "EADDRINUSE"
             ? `Port ${port} is already in use`
-            : `Could not listen on port ${port}: ${err.code ?? err.message}`;
+            : `Could not listen on port ${port}: ${err.code ?? scrubRcsText(err)}`;
         this.logger.warn(`[RcsBridge] ${this.reason}; import bridge unavailable`);
         resolve(this.state);
       };
       server.once("error", onError);
       server.listen(port, RCS_BRIDGE_HOST, () => {
         server.removeListener("error", onError);
-        server.on("error", (err) => this.logger.error(`[RcsBridge] Server error: ${err.message}`));
+        server.on("error", (err) => this.logger.error(`[RcsBridge] Server error: ${scrubRcsText(err)}`));
         const addr = server.address();
         this.port = typeof addr === "object" && addr ? addr.port : port;
         this.server = server;
@@ -920,7 +922,7 @@ export class RcsExtensionBridge {
         }
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = scrubRcsText(err);
       this.logger.error(`[RcsBridge] Request failed: ${message}`);
       if (!res.headersSent) sendJson(res, 500, { error: "internal", message: "Keepr could not save this chat." });
     }

@@ -72,6 +72,7 @@ import log from "electron-log";
 import dotenv from "dotenv";
 import * as Sentry from "@sentry/electron/main";
 import { scrubUpdaterEventPII } from "../services/updateDiagnostics";
+import { scrubRcsEventPII } from "../services/rcsSentryScrub";
 
 // Load environment files based on whether app is packaged or in development
 if (app.isPackaged) {
@@ -100,12 +101,23 @@ Sentry.init({
   // tags.component === "auto-updater" so non-updater events are untouched,
   // and never mutates `fingerprint`, so grouping is unaffected. Guarded so a
   // throwing beforeSend can never silently drop the event.
+  // BACKLOG-3668 L3: then RCS events (tags component "rcs" / source
+  // "google-messages"): phone numbers, emails, quoted text — see
+  // scrubRcsEventPII. The updater scrub runs first, unchanged; an RCS event
+  // whose scrub throws is dropped (its text may hold a number or a message).
   beforeSend(event) {
+    let scrubbed = event;
     try {
-      return scrubUpdaterEventPII(event);
+      scrubbed = scrubUpdaterEventPII(event);
     } catch (scrubError) {
       log.error("[Sentry] beforeSend PII scrub failed, sending event unscrubbed:", scrubError);
       return event;
+    }
+    try {
+      return scrubRcsEventPII(scrubbed);
+    } catch (scrubError) {
+      log.error("[Sentry] beforeSend RCS scrub failed, event dropped:", scrubError);
+      return null;
     }
   },
 });

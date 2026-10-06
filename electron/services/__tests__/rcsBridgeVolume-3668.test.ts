@@ -92,20 +92,23 @@ describe("/chat schema: 5,000 messages per POST (M3)", () => {
   });
 });
 
+/** A number in the reserved fictional range: +1 <area> 555-0100..0199, one area per 100. */
+const fictional = (i: number) => `+1${200 + Math.floor(i / 100)}5550${100 + (i % 100)}`;
+
 describe("RcsImportJob: per-job chat cap (M3)", () => {
   it(`chat ${RCS_JOB_MAX_CHATS + 1} is not recorded nor matched, and counted; a chat already seen still re-matches`, () => {
     const jobs = new RcsJobRegistry(() => 1_000_000);
     const job = jobs.createCache("u-1", "2026-01-01T00:00:00.000Z") as RcsImportJob;
     job.claim(1_000_000);
     for (let i = 0; i < RCS_JOB_MAX_CHATS; i++) {
-      expect(job.match(`c${i}`, [`+1555${String(i).padStart(7, "0")}`])).toBe(true);
+      expect(job.match(`c${i}`, [fictional(i)])).toBe(true);
     }
-    expect(job.match("one-too-many", ["+15559999999"])).toBe(false);
+    expect(job.match("one-too-many", [fictional(RCS_JOB_MAX_CHATS)])).toBe(false);
     expect(job.isMatched("one-too-many")).toBe(false);
     expect(job.numbersFor("one-too-many")).toEqual([]);
     expect(job.chatsOverCap).toBe(1);
     // A retry of a chat already checked is not a new chat.
-    expect(job.match("c0", ["+15550000000"])).toBe(true);
+    expect(job.match("c0", [fictional(0)])).toBe(true);
     expect(job.isMatched("c0")).toBe(true);
   });
 });
@@ -124,7 +127,7 @@ describe("bridge: oversize count, concurrent writes, chat cap (M3)", () => {
   let bridge: RcsExtensionBridge;
   let port: number;
   let jobId: string;
-  let importCacheChat: jest.Mock<Promise<RcsImportResult>, [RcsIncomingChat, string, unknown, string]>;
+  let importCacheChat: jest.Mock<Promise<RcsImportResult>, [RcsIncomingChat]>;
   let gate: Promise<void> | null;
   const warn = jest.fn();
 
