@@ -11,8 +11,9 @@
  * EXTENSION_PUBLISHED is false and EVERY account gets the beta path.
  */
 
-/** Flip to true once the extension is live in the Chrome Web Store. */
-export const EXTENSION_PUBLISHED = false;
+/** Shared with the main process (electron/constants/extensionDistribution.ts): flip it there. */
+import { EXTENSION_PUBLISHED } from "../../../../electron/constants/extensionDistribution";
+export { EXTENSION_PUBLISHED };
 
 /** Where the preference lives in the account's preferences. */
 export const BETA_INSTALL_PREF_PATH = ["messageImport", "googleMessages", "betaExtensionInstall"] as const;

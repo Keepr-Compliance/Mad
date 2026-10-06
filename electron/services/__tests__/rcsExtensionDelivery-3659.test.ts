@@ -91,6 +91,18 @@ describe("the extension folder refreshed at app start (live)", () => {
     }
   });
 
+  // SR: the main process gates it too (the shared EXTENSION_PUBLISHED).
+  // Mutation: the gate removed → red.
+  it("published (a store install): never refreshed, whoever calls", async () => {
+    const r = withOldManifest("0.3.4");
+    try {
+      expect(await refreshExtensionFolderIfOlder(r.src, r.downloads, r.fsOps(), true)).toEqual({ refreshed: false, bundledVersion: null });
+      expect(nodeFs.readFileSync(path.join(r.old, "job.js"), "utf8")).toBe("old");
+    } finally {
+      r.cleanup();
+    }
+  });
+
   it("isOlderVersion: numeric parts, not text", () => {
     expect(isOlderVersion("0.3.80", "0.3.84")).toBe(true);
     expect(isOlderVersion("0.3.9", "0.3.10")).toBe(true);

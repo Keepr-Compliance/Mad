@@ -13,6 +13,7 @@
  */
 
 import * as path from "path";
+import { EXTENSION_PUBLISHED } from "../constants/extensionDistribution";
 
 /** The folder name the user picks in Chrome's "Load unpacked". */
 export const RCS_EXTENSION_FOLDER_NAME = "Keepr Extension";
@@ -164,7 +165,10 @@ export async function refreshExtensionFolderIfOlder(
   sourceDir: string,
   downloadsDir: string,
   fs: DeliveryFs,
+  published: boolean = EXTENSION_PUBLISHED,
 ): Promise<{ refreshed: boolean; bundledVersion: string | null; error?: string }> {
+  // SR: never after publication, whoever calls (a store install updates itself).
+  if (published) return { refreshed: false, bundledVersion: null };
   const bundledVersion = await folderExtensionVersion(sourceDir, fs);
   const folder = extensionTargetDir(downloadsDir);
   if (!bundledVersion || !(await fs.exists(folder))) return { refreshed: false, bundledVersion };
