@@ -56,6 +56,15 @@ export interface GmReading extends GmStage {
   perChatSlowestMs: number | null;
   /** Chats opened and finished with (any result): the per-chat times' sample. ≥ chatsRead. */
   chatsOpened: number | null;
+  /** Live A/B (extension 0.3.79+): the run's step totals (ms); null on older rows. */
+  detailsMs: number | null;
+  historyMs: number | null;
+  settleMs: number | null;
+  commitMs: number | null;
+  photoReadMs: number | null;
+  photoUploadMs: number | null;
+  photoReadMaxMs: number | null;
+  photoUploadMaxMs: number | null;
 }
 export interface GmSaving extends GmStage {
   messagesSaved: number | null;
@@ -89,6 +98,9 @@ export interface GmSyncRun {
   messages: number | null;
   /** Time the Messages tab was hidden, as a % of the run. */
   hiddenPct: number | null;
+  /** The hidden time itself (ms) and how many times it was hidden. */
+  hiddenMs: number | null;
+  hiddenSpells: number | null;
   perChatP90Ms: number | null;
   reasonCode: string | null;
   reasonLine: string | null;
@@ -136,6 +148,14 @@ export function parseGmMetrics(raw: unknown): { finding: GmFinding; reading: GmR
       perChatSlowestMs: num(r.per_chat_slowest_ms),
       // per_chat_count: the same number under its first name (rows before the rename).
       chatsOpened: num(r.chats_opened) ?? num(r.per_chat_count),
+      detailsMs: num(r.details_ms),
+      historyMs: num(r.history_ms),
+      settleMs: num(r.settle_ms),
+      commitMs: num(r.commit_ms),
+      photoReadMs: num(r.photo_read_ms),
+      photoUploadMs: num(r.photo_upload_ms),
+      photoReadMaxMs: num(r.photo_read_max_ms),
+      photoUploadMaxMs: num(r.photo_upload_max_ms),
     },
     saving: {
       ms: num(s.ms),
@@ -173,6 +193,8 @@ export function buildGmRun(row: GmSyncOutcomeRow, users: Map<string, ReportUser>
     chats: m.reading.chatsRead ?? m.finding.chatsInRange,
     messages: m.saving.messagesSaved ?? m.reading.messagesRead,
     hiddenPct: hiddenMs !== null && elapsed !== null && elapsed > 0 ? Math.min(100, Math.round((hiddenMs / elapsed) * 100)) : null,
+    hiddenMs,
+    hiddenSpells: num(m.end.hidden_spells),
     perChatP90Ms: m.reading.perChatP90Ms,
     reasonCode: row.outcome === 'complete' ? null : reasonCode,
     reasonLine: row.outcome === 'complete' ? null : gmReasonLine(reasonCode),
@@ -273,6 +295,10 @@ export function msLabel(ms: number | null): string {
   if (ms < 1000) return `${Math.round(ms)} ms`;
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`;
   return formatDuration(ms);
+}
+/** A step time an older run did not record. */
+export function recordedMsLabel(ms: number | null): string {
+  return ms === null ? 'not recorded' : msLabel(ms);
 }
 export function countLabel(n: number | null): string {
   return n === null ? '—' : formatCount(n);

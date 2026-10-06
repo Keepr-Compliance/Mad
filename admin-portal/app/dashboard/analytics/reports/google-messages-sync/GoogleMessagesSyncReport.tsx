@@ -31,6 +31,7 @@ import {
   type GmSortKey,
   type GmSyncReportModel,
   type GmSyncRun,
+  recordedMsLabel,
 } from '@/lib/reports/google-messages-sync';
 import { SyncCharts } from '../iphone-sync/SyncCharts';
 import { SyncFilterBar } from '../iphone-sync/SyncFilterBar';
@@ -121,6 +122,22 @@ export function GmRunDetail({ run }: { run: GmSyncRun }) {
             <Stat label="Photos read" value={`${countLabel(r.photosRead)} · ${mbLabel(r.bytesRead)}`} />
             <Stat label="Per chat p50 / p90" value={`${msLabel(r.perChatP50Ms)} / ${msLabel(r.perChatP90Ms)}`} />
             <Stat label="Slowest chat" value={`${msLabel(r.perChatSlowestMs)} (of ${countLabel(r.chatsOpened)} opened)`} />
+          </dl>
+        </section>
+        {/* Live A/B (visible vs hidden tab): where the reading time went. */}
+        <section data-stage="steps">
+          <h4 className="mb-2 text-sm font-semibold text-gray-900">Steps</h4>
+          <dl className="space-y-1">
+            <Stat label="Details open / close" value={recordedMsLabel(r.detailsMs)} />
+            <Stat label="History load" value={recordedMsLabel(r.historyMs)} />
+            <Stat label="Settle" value={recordedMsLabel(r.settleMs)} />
+            <Stat label="Commit (send)" value={recordedMsLabel(r.commitMs)} />
+            <Stat label="Photo read · slowest" value={r.photoReadMs === null ? 'not recorded' : `${msLabel(r.photoReadMs)} · ${msLabel(r.photoReadMaxMs)}`} />
+            <Stat label="Photo upload · slowest" value={r.photoUploadMs === null ? 'not recorded' : `${msLabel(r.photoUploadMs)} · ${msLabel(r.photoUploadMaxMs)}`} />
+            <Stat
+              label="Tab hidden"
+              value={run.hiddenMs === null ? 'not recorded' : `${msLabel(run.hiddenMs)} · ${countLabel(run.hiddenSpells)} times · ${run.hiddenPct === null ? '—' : `${run.hiddenPct}%`}`}
+            />
           </dl>
         </section>
         <section data-stage="saving">

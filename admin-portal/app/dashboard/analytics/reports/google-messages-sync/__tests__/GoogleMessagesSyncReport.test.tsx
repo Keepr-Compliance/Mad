@@ -80,4 +80,29 @@ describe('GoogleMessagesSyncReport', () => {
     expect(html).toContain('extension 0.3.53');
     expect(html).toContain('Chrome 141.0.7390.55');
   });
+
+  // Live A/B (visible vs hidden tab): the step totals and the hidden time.
+  // Mutations: a key not parsed; "not recorded" missing for an older row → red.
+  it('the open row: the steps and the hidden time; older rows say "not recorded"', () => {
+    const timed = buildGoogleMessagesSyncReport([
+      row({
+        source_metrics: {
+          reading: {
+            ms: 60_000, details_ms: 2_100, history_ms: 30_000, settle_ms: 4_987, commit_ms: 600,
+            photo_read_ms: 800, photo_upload_ms: 120, photo_read_max_ms: 500, photo_upload_max_ms: 40,
+          },
+          end: { hidden_ms: 22_154, hidden_spells: 3 },
+        },
+      }),
+    ], []).runs[0];
+    expect(timed.reading).toMatchObject({ detailsMs: 2_100, historyMs: 30_000, settleMs: 4_987, commitMs: 600, photoReadMs: 800, photoUploadMs: 120, photoReadMaxMs: 500, photoUploadMaxMs: 40 });
+    const html = renderToStaticMarkup(<GmRunDetail run={timed} />);
+    expect(html).toMatch(/data-stage="steps"[\s\S]*Details open \/ close[\s\S]*2\.1 s[\s\S]*History load[\s\S]*30\.0 s[\s\S]*Settle[\s\S]*5\.0 s[\s\S]*Commit \(send\)[\s\S]*600 ms/);
+    expect(html).toMatch(/Photo read · slowest[\s\S]*800 ms · 500 ms[\s\S]*Photo upload · slowest[\s\S]*120 ms · 40 ms/);
+    expect(html).toMatch(/Tab hidden[\s\S]*22\.2 s · 3 times · 22%/);
+    const old = buildGoogleMessagesSyncReport([row({ source_metrics: { reading: { ms: 1000 } } })], []).runs[0];
+    const oldHtml = renderToStaticMarkup(<GmRunDetail run={old} />);
+    const steps = oldHtml.slice(oldHtml.indexOf('data-stage="steps"'), oldHtml.indexOf('data-stage="saving"'));
+    expect(steps.match(/not recorded/g)?.length).toBe(7);
+  });
 });
