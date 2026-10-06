@@ -40,6 +40,7 @@ import {
   ORG_WITHOUT_PLAN_FEATURES,
   withFeature,
 } from '../../../fixtures/orgFeatures';
+import { BROKERAGE_ORG_POST } from '../../../helpers/postgrestEmulator';
 
 /** DERIVED from the transcribed no-plan base: the same org, able to submit. */
 const CAN_SUBMIT_FEATURES = withFeature(
@@ -99,6 +100,19 @@ const ROWS: Record<string, unknown> = {
   organizations: { name: 'Northwind Realty', retention_years: 5 },
 };
 
+/**
+ * BACKLOG-3552: getAccountView's own membership read awaits the ordered query
+ * (every row, with the transcribed organizations embed). getDataClient's
+ * `.maybeSingle()` read still gets the object in ROWS.
+ */
+const MEMBERSHIP_ROWS = [
+  {
+    role: 'agent',
+    organization_id: TARGET_ORG_ID,
+    organizations: { ...BROKERAGE_ORG_POST, id: TARGET_ORG_ID },
+  },
+];
+
 /** A service-role client stand-in. Unscoped by design — the scoping under test
  *  is the Proxy's, not this stub's. */
 function serviceClientStub() {
@@ -110,6 +124,10 @@ function serviceClientStub() {
     for (const m of ['select', 'eq', 'in', 'order', 'limit']) q[m] = jest.fn(chain);
     q.maybeSingle = jest.fn(async () => ({ data: ROWS[table] ?? null, error: null }));
     q.single = q.maybeSingle;
+    if (table === 'organization_members') {
+      q.then = (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) =>
+        Promise.resolve({ data: MEMBERSHIP_ROWS, error: null }).then(res, rej);
+    }
     return q;
   });
   return { client: { from, auth: {} }, seen };

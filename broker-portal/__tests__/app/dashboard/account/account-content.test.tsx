@@ -60,6 +60,7 @@ import {
   withFeature,
   type TableResult,
 } from '../../../fixtures/orgFeatures';
+import { BROKERAGE_ORG_POST } from '../../../helpers/postgrestEmulator';
 
 /** DERIVED from the transcribed no-plan base: the same org, able to submit. */
 const CAN_SUBMIT_FEATURES = withFeature(
@@ -113,8 +114,15 @@ function stubFetch(opts: {
 }) {
   const rec = recordingClient({
     users: { data: USER_ROW, error: null },
+    // BACKLOG-3552: every row, ordered, with the transcribed organizations embed.
     organization_members: opts.membership ?? {
-      data: { role: 'agent', organization_id: 'org-1' },
+      data: [
+        {
+          role: 'agent',
+          organization_id: 'org-1',
+          organizations: { ...BROKERAGE_ORG_POST, id: 'org-1' },
+        },
+      ],
       error: null,
     },
     organizations: opts.organization ?? {
