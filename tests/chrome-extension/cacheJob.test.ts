@@ -456,6 +456,57 @@ describe("runJob: a cache Sync", () => {
       expect(details(t)).toContain("Photos: 1 saved");
     });
 
+    // Live A/B (visible vs hidden tab): one timing line per chat + one photo
+    // line — ms only, no PII — and the run totals in /finish metrics.
+    // Mutations: a step not timed, p50 as the mean, totals not summed → red.
+    it("per-chat timing: one line per chat, one photo line, run totals in the metrics", async () => {
+      const t = oneChat();
+      withMatch(t, { keepPhotos: true });
+      let clock = NOW;
+      const lines: string[] = [];
+      const e = t.env as Record<string, unknown>;
+      e.now = () => new Date(clock);
+      e.log = (l: string) => lines.push(l);
+      e.extract = () => ({
+        conversationId: id(0), title: "Pat Example", skipped: { noDate: 0, noText: 0 },
+        messages: [{ msgId: "m1", direction: "inbound", sender: "Pat Example", text: "hello there", sentAt: new Date(NOW - DAY).toISOString(), transport: "rcs", imageSrcs: ["blob:a", "blob:b", "blob:c"], files: [] }],
+      });
+      const reads = [100, 500, 200]; // p50 200 ≠ mean 267
+      let r = 0;
+      e.readImage = async () => { clock += reads[r++ % 3]; return { mimeType: "image/jpeg", base64: "AAAA" }; };
+      const scanIo = t.env.scan as Record<string, (...a: unknown[]) => unknown>;
+      const wrap = (name: string, ms: number) => {
+        const orig = scanIo[name];
+        scanIo[name] = async (...a: unknown[]) => { const v = await orig(...a); clock += ms; return v; };
+      };
+      wrap("readParticipantsAndClose", 700);
+      wrap("loadHistory", 2000);
+      wrap("waitForMessageSwap", 500);
+      const api = t.env.api;
+      t.env.api = async (m: string, p: string, b?: Record<string, unknown>) => {
+        const v = await api(m, p, b);
+        if (p.endsWith("/attachment")) clock += 40;
+        if (p.endsWith("/chat")) clock += 60;
+        return v;
+      };
+      await job.runJob(JOB, t.env);
+      const timing = lines.filter((l) => l.startsWith("  timing:"));
+      // One line per chat opened (the others are left out after Details).
+      expect(timing).toHaveLength(3);
+      expect(timing[1]).toMatch(/details 700 · history 0 · settle 0 · commit 0 · hidden 0$/);
+      expect(timing[0]).toMatch(/details 700 · history 2000 · settle 500 · commit 60 · hidden 0$/);
+      expect(lines.filter((l) => l.startsWith("  photos:"))).toEqual([
+        "  photos: 3 · read total 800 max 500 p50 200 · upload total 120 max 40 p50 40",
+      ]);
+      // No PII in the timing lines.
+      for (const l of lines.filter((x) => /^  (timing|photos):/.test(x))) expect(l).not.toMatch(/Pat|hello|5555/);
+      const fin = t.calls.find(([, p]) => p.endsWith("/finish"));
+      expect((fin?.[2] as { metrics: { reading: Record<string, number> } }).metrics.reading).toMatchObject({
+        detailsMs: 2100, historyMs: 2000, settleMs: 500, commitMs: 60, // details: 3 chats × 700
+        photoReadMs: 800, photoUploadMs: 120, photoReadMaxMs: 500, photoUploadMaxMs: 40,
+      });
+    });
+
     // SR C5: Keepr's rate limit (429) is back-off-and-retry — never a failed
     // chat. A 300-photo chat with every third image answered 429 first.
     // Mutations: 429 not retried → red (photos failed); no wait → red.

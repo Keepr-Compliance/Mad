@@ -100,6 +100,24 @@ describe("buildRcsSourceMetrics (the only writer of source_metrics)", () => {
     expect(JSON.stringify(m)).not.toMatch(/Test Person|\+1555|abc|chatNames|perChatMs/);
   });
 
+  // Live A/B (visible vs hidden tab): the run step totals pass as named
+  // numeric keys. Mutation: a key not mapped → red.
+  it("the run step totals: named ms keys", () => {
+    const m = buildRcsSourceMetrics({
+      runKind: "sync",
+      extension: {
+        reading: {
+          detailsMs: 2100, historyMs: 2000, settleMs: 500, commitMs: 60,
+          photoReadMs: 600, photoUploadMs: 120, photoReadMaxMs: 300, photoUploadMaxMs: 40,
+        },
+      },
+    });
+    expect(m.reading).toEqual({
+      details_ms: 2100, history_ms: 2000, settle_ms: 500, commit_ms: 60,
+      photo_read_ms: 600, photo_upload_ms: 120, photo_read_max_ms: 300, photo_upload_max_ms: 40,
+    });
+  });
+
   it("non-finite / negative / non-number values dropped; huge values clamped; fractions rounded (T2)", () => {
     const m = buildRcsSourceMetrics({
       extension: { finding: { ms: Infinity, chatsFound: -1, chatsInRange: NaN, chatsSkippedHidden: "3", chatsSkippedDisabled: 2.6 }, reading: { messagesRead: 1e12, bytesRead: 1e20 } },

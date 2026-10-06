@@ -72,6 +72,9 @@ export interface RcsExtensionMetrics {
     perChatP50Ms?: number; perChatP90Ms?: number; perChatSlowestMs?: number;
     /** Chats opened and finished with (any result); the per-chat times are over these. ≥ chatsRead. */
     chatsOpened?: number;
+    /** Live A/B (visible vs hidden tab): run totals of each step (ms), and the slowest photo. */
+    detailsMs?: number; historyMs?: number; settleMs?: number; commitMs?: number;
+    photoReadMs?: number; photoUploadMs?: number; photoReadMaxMs?: number; photoUploadMaxMs?: number;
   };
   hidden?: { ms?: number; spells?: number };
   chromeVersion?: string;
@@ -139,6 +142,14 @@ export function buildRcsSourceMetrics(input: {
     // times' sample). Live 0.3.57: an unnamed "count" next to chats_read read
     // as a contradiction.
     chats_opened: n(r.chatsOpened, MAX_COUNT),
+    details_ms: n(r.detailsMs, MAX_MS),
+    history_ms: n(r.historyMs, MAX_MS),
+    settle_ms: n(r.settleMs, MAX_MS),
+    commit_ms: n(r.commitMs, MAX_MS),
+    photo_read_ms: n(r.photoReadMs, MAX_MS),
+    photo_upload_ms: n(r.photoUploadMs, MAX_MS),
+    photo_read_max_ms: n(r.photoReadMaxMs, MAX_MS),
+    photo_upload_max_ms: n(r.photoUploadMaxMs, MAX_MS),
   });
   const saving = defined({
     ms: n(s.ms, MAX_MS),

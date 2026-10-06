@@ -96,6 +96,26 @@
     google_unresponsive: "Google Messages stopped responding.",
   };
   var FAILURE_FALLBACK = "The Sync stopped unexpectedly.";
+  /**
+   * Live A/B (visible vs hidden tab): one compact timing line per chat —
+   * milliseconds only, no names, numbers or text.
+   */
+  function timingLine(t, totalMs, hiddenMs) {
+    var commitMs = t.commit || 0;
+    return "  timing: total " + Math.round(totalMs) + "ms · details " + Math.round(t.details) + " · history " + Math.round(t.history) +
+      " · settle " + Math.round(t.settle) + " · commit " + Math.round(commitMs) + " · hidden " + Math.round(Math.max(0, hiddenMs));
+  }
+  /** The chat's photos: count, total / max / p50 for reading and uploading (ms). */
+  function photoTimingLine(t) {
+    function stats(xs) {
+      var sorted = xs.slice().sort(function (a, b) { return a - b; });
+      var total = 0;
+      for (var i = 0; i < sorted.length; i++) total += sorted[i];
+      var p50 = sorted.length ? sorted[Math.floor((sorted.length - 1) / 2)] : 0;
+      return "total " + Math.round(total) + " max " + Math.round(sorted.length ? sorted[sorted.length - 1] : 0) + " p50 " + Math.round(p50);
+    }
+    return "  photos: " + t.photoRead.length + " · read " + stats(t.photoRead) + " · upload " + stats(t.photoUpload);
+  }
   /** An older Keepr asked for a per-transaction Sync (removed 2026-10-05). */
   var OLD_KEEPR_CLAIM = "Update Keepr, then Sync again.";
   function failureLine(code) {
@@ -860,7 +880,16 @@
     var clock = function () { return (env.now ? env.now() : new Date()).getTime(); };
     /** Live (2026-10-05): see RUN_NO_PROGRESS_MS. */
     var noProgressRunMs = 0;
+    /** Live A/B: the current chat's timings (see timingLine). */
+    var chatTiming = null;
     var tm = { findingAt: null, readingAt: null, readEndAt: null, chatMs: [], bytesRead: 0, chatsFound: 0, chatsInRange: 0, chatsFailed: 0 };
+    // Live A/B: the run's step totals (ms), summed from each chat's timings.
+    var steps = { details: 0, history: 0, settle: 0, commit: 0, photoRead: 0, photoUpload: 0, photoReadMax: 0, photoUploadMax: 0 };
+    function addSteps(t) {
+      steps.details += t.details; steps.history += t.history; steps.settle += t.settle; steps.commit += t.commit;
+      for (var r = 0; r < t.photoRead.length; r++) { steps.photoRead += t.photoRead[r]; steps.photoReadMax = Math.max(steps.photoReadMax, t.photoRead[r]); }
+      for (var u = 0; u < t.photoUpload.length; u++) { steps.photoUpload += t.photoUpload[u]; steps.photoUploadMax = Math.max(steps.photoUploadMax, t.photoUpload[u]); }
+    }
     var chromeVersion = null;
     function runMetrics() {
       var now = clock();
@@ -884,6 +913,9 @@
           // (read, no messages, skipped, failed or already saved) — the
           // per-chat times are over these. chatsOpened ≥ chatsRead.
           chatsOpened: stats.perChatCount,
+          detailsMs: steps.details, historyMs: steps.history, settleMs: steps.settle, commitMs: steps.commit,
+          photoReadMs: steps.photoRead, photoUploadMs: steps.photoUpload,
+          photoReadMaxMs: steps.photoReadMax, photoUploadMaxMs: steps.photoUploadMax,
         },
         hidden: hiddenSoFar ? { ms: hiddenSoFar.ms, spells: hiddenSoFar.spells } : undefined,
         chromeVersion: chromeVersion || undefined,
@@ -972,12 +1004,16 @@
      */
     async function uploadPhoto(conv, msgId, index, src) {
       try {
+        var readAt = clock();
         var img = await env.readImage(src);
+        if (chatTiming) chatTiming.photoRead.push(clock() - readAt);
         if (!img || !/^image\//.test(img.mimeType)) return "readFailed";
         if (typeof img.base64 === "string" && Math.floor(img.base64.length * 3 / 4) > RCS_MAX_PHOTO_BYTES) return "tooLarge";
+        var uploadAt = clock();
         var up = await call("POST", base + "/attachment", {
           conversationId: conv.conversationId, msgId: msgId, index: index, mimeType: img.mimeType, base64: img.base64,
         });
+        if (chatTiming) chatTiming.photoUpload.push(clock() - uploadAt);
         if (up.ok) {
           totals.images += 1;
           tm.bytesRead += Math.floor(img.base64.length * 3 / 4);
@@ -1300,6 +1336,8 @@
       var gone = false;
       var imagesFailed = 0;
       var chatAt = clock();
+      // Live A/B (visible vs hidden tab): this chat's timings (ms, counts only).
+      chatTiming = { details: 0, history: 0, settle: 0, commit: 0, photoRead: [], photoUpload: [], hiddenAt: hiddenStats.peek().ms };
       run.index = i + 1;
       var lostChat = await holdWhileOffline(stageText(i + 1, candidates.length));
       if (lostChat && lostChat.code) return fail(lostChat.code, lostChat.message);
@@ -1318,7 +1356,9 @@
         if (alreadyOpen) log("  already open: read as shown");
         await env.openConversation(conv);
         opened = true;
+        var detailsAt = clock();
         var numbers = await env.scan.readParticipantsAndClose(env.doc, { click: env.click, sleep: env.sleep });
+        chatTiming.details = clock() - detailsAt;
         // BACKLOG-3630: name + number rows (group senders); Keepr keys the chat
         // on the numbers its /match saw.
         var people = (numbers && numbers.rows) || (numbers || []).map(function (n) { return { name: "", number: n }; });
@@ -1447,7 +1487,9 @@
           },
         };
         var histHidden = hiddenStats.hidden();
+        var historyAt = clock();
         var hist = await env.scan.loadHistory(env.doc, histIo);
+        chatTiming.history = clock() - historyAt;
         hiddenStats.history(histHidden, hist);
         // The banner came up while this chat loaded: what was read may stop
         // short. Once it clears, the chat's history is loaded again.
@@ -1471,11 +1513,13 @@
           log("  stopped: no new messages from Google for " + Math.round(noProgressRunMs / 1000) + "s");
           return fail("google_unresponsive", GOOGLE_UNRESPONSIVE_MESSAGE);
         }
+        var settleAt = clock();
         var settled = await env.scan.waitForMessageSwap(env.doc, "", {
           sleep: env.sleep,
           timeoutMs: env.messagesTimeoutMs,
           stableMs: env.messagesStableMs,
         });
+        chatTiming.settle = clock() - settleAt;
         if (!settled) {
           // Still changing (or emptied) after the history load: do not import
           // a set that is moving under us.
@@ -1503,6 +1547,7 @@
           leaveOut(conv, "no_messages");
           continue;
         }
+        var commitAt = clock();
         var sent = await call("POST", base + "/chat", {
           conversationId: conv.conversationId,
           title: extracted.title || conv.name,
@@ -1511,6 +1556,7 @@
           // Read down to its floor (not cut by the cap, not unsettled, no gap): a boolean.
           reachedFloor: depthKind(hist) !== "partial",
         });
+        chatTiming.commit = clock() - commitAt;
         if (!sent.ok) throw keeprReplyError(sent, "Keepr could not save this chat.");
         keeprErrorChats = 0;
         var prevSent = sentMessages[conv.conversationId];
@@ -1639,6 +1685,12 @@
         // P02: a chat finished (read, skipped or failed) — the bar advances, never back.
         if (item.attempt === 0) run.done = Math.min(run.total, run.done + 1);
         if (item.attempt === 0 && !gone) tm.chatMs.push(Math.max(0, clock() - chatAt));
+        if (chatTiming) {
+          log(timingLine(chatTiming, clock() - chatAt, hiddenStats.peek().ms - chatTiming.hiddenAt));
+          if (chatTiming.photoRead.length > 0) log(photoTimingLine(chatTiming));
+          addSteps(chatTiming);
+          chatTiming = null;
+        }
       }
       // Also the cancel check between chats: a job Keepr dropped answers 404/410.
       if (i + 1 < candidates.length) run.index = i + 2;
