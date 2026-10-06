@@ -11,9 +11,11 @@
  *   - picker renders its own row / viewer again        → "same component" tests
  *   - picker stops resolving the loaded chats' handles → member + sender names
  *   - picker passes no contactNames to the card         → member + sender names
+ *   - card's selection checkbox not a focusable checkbox → keyboard test
  */
 import React from "react";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { formatMessageTime } from "../../../../../utils/messageFormatUtils";
 import type { Communication } from "../../../types";
 
@@ -152,5 +154,22 @@ describe("Attach messages renders chats through the attached view's components",
     expect(senders.map((s) => s.textContent).sort()).toEqual(["Casey Member", "Jordan Example"]);
     expect(screen.getByText(formatMessageTime(new Date(T1)))).toBeInTheDocument();
     expect(screen.getByText(formatMessageTime(new Date(T2)))).toBeInTheDocument();
+  });
+
+  // SR: the old picker row toggled from the keyboard; the shared card's
+  // selection checkbox must too (one fix, both screens).
+  it("the selection checkbox is a focusable checkbox toggled by Space and Enter", async () => {
+    const card = await openPickerThreads();
+    const box = within(card).getByRole("checkbox", { name: "Select conversation" });
+    expect(box).toHaveAttribute("aria-checked", "false");
+
+    box.focus();
+    expect(box).toHaveFocus();
+    await userEvent.keyboard(" ");
+    expect(box).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByText(/1 selected/i)).toBeInTheDocument();
+
+    await userEvent.keyboard("{Enter}");
+    expect(box).toHaveAttribute("aria-checked", "false");
   });
 });

@@ -768,7 +768,7 @@ export function AttachMessagesModal({
                           {contact.threadNames.length > 0 && (
                             <p className="text-xs text-gray-500 mt-0.5 truncate" data-testid="picker-contact-groups">
                               {groupNamesForSearch(contact.threadNames, searchQuery).map((name, i) => (
-                                <React.Fragment key={name}>
+                                <React.Fragment key={`${i}:${name}`}>
                                   {i > 0 && ", "}
                                   {highlightMatch(name, searchQuery)}
                                 </React.Fragment>
