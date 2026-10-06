@@ -269,6 +269,25 @@ describe("rcs-import:start-cache-job window (BACKLOG-3658)", () => {
   // window). Mutation: the plain URL → red.
   // Founder: link-state says whether the box fills itself here (main's one
   // platform rule). Mutation: the field missing → red.
+  // Founder (2026-10-06): the ticket's Google Messages section — local state
+  // only, exactly these keys (no step log, chat data, codes or keys); the last
+  // ended run's state and code. Mutations: an extra key; the run not kept → red.
+  it("googleMessagesDiagnostics: the allowed keys only; the last run's state and code", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const mod = require("../rcsImportHandlers") as typeof import("../rcsImportHandlers");
+    mockBridgeOptions!.onHello!({ version: "0.3.88" });
+    (mockBridgeOptions as unknown as { onJobEnded: (e: unknown) => void }).onJobEnded({
+      kind: "other", userId: null, snapshot: { state: "failed", jobId: "j-1", error: { code: "phone_unreachable", message: "Keepr stopped: …" } }, detectedOwnNumber: null,
+    });
+    const d = mod.googleMessagesDiagnostics("user-1");
+    expect(Object.keys(d).sort()).toEqual(["extension_seen_at", "extension_version_seen", "failed_run_started_at", "last_cache_finished_at", "last_run", "link"]);
+    expect(d.extension_version_seen).toBe("0.3.88");
+    expect(d.last_run).toMatchObject({ state: "failed", reason_code: "phone_unreachable" });
+    expect(JSON.stringify(d)).not.toMatch(/Keepr stopped/);
+    expect(["linked", "saved", "none"]).toContain(d.link);
+    expect(mod.googleMessagesDiagnostics(null).link).toBe("none");
+  });
+
   it("link-state: clipboardFill follows the platform rule", async () => {
     const r = (await handlers.get("rcs-import:link-state")!({})) as { clipboardFill?: boolean };
     expect(r.clipboardFill).toBe(process.platform === "win32");

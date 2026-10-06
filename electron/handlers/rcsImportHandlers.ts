@@ -15,6 +15,7 @@
  */
 
 import * as fs from "fs";
+import { setGoogleMessagesDiagnosticsProvider, type GoogleMessagesDiagnostics } from "../services/supportTicketService";
 import * as path from "path";
 
 import { spawn } from "child_process";
@@ -1040,6 +1041,12 @@ const bridge = new RcsExtensionBridge({
   },
   onHello: (hello) => void onHello(hello),
   onJobEnded: (ended) => {
+    // For a support ticket's diagnostics: the state and the code only.
+    lastRunEnded = {
+      state: ended.snapshot.state,
+      reasonCode: ended.snapshot.error?.code ?? null,
+      endedAt: new Date().toISOString(),
+    };
     // Founder (2026-10-01): a Sync that is done or failed brings Keepr to the
     // front by itself (the page's "Open Keepr" stays as the fallback); a
     // cancel does not. The /focus route's mechanism, incl. the taskbar flash.
@@ -1249,6 +1256,28 @@ export function rcsLinkCodeForDeepLink(): string | null {
 export function focusKeeprFromBrowser(): void {
   bringAppToFrontOrFlash(getMainWindow());
 }
+
+/** The last Sync that ended since Keepr started (state + code only; for ticket diagnostics). */
+let lastRunEnded: { state: string; reasonCode: string | null; endedAt: string } | null = null;
+
+/** Founder (2026-10-06): the Google Messages section of a support ticket — local state only. */
+export function googleMessagesDiagnostics(userId: string | null): GoogleMessagesDiagnostics {
+  const state = userId ? databaseService.getRcsCacheState(userId) : null;
+  const link: GoogleMessagesDiagnostics["link"] = userId
+    ? pairingAuth.isLinkProven(userId) ? "linked" : pairingAuth.isPaired(userId) ? "saved" : "none"
+    : "none";
+  return {
+    extension_version_seen: extensionPresence.version ?? state?.extensionVersion ?? null,
+    extension_seen_at: extensionPresence.seenAt ?? state?.extensionSeenAt ?? null,
+    link,
+    last_cache_finished_at: state?.lastCacheFinishedAt ?? null,
+    last_run: lastRunEnded ? { state: lastRunEnded.state, reason_code: lastRunEnded.reasonCode, ended_at: lastRunEnded.endedAt } : null,
+    failed_run_started_at: userId ? getFailedRun(userId) : null,
+  };
+}
+
+/** The signed-in user, read synchronously for the ticket (the session's last known user). */
+setGoogleMessagesDiagnosticsProvider(() => googleMessagesDiagnostics(lastSessionUserId));
 
 export function registerRcsImportHandlers(): void {
   ipcMain.handle(
