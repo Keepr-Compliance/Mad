@@ -649,6 +649,39 @@ async function routeJob(jobId, senderTab) {
   return { handedOff: false };
 }
 
+/**
+ * Live (founder): Keepr's "Open Google Messages" (link screen) opened a NEW
+ * tab — Messages for Web then fights the tab already open. The new tab
+ * (#keepr-link) asks here: an already SIGNED-IN Messages tab is brought to
+ * the front (its window too), the new tab closes, and the link window opens
+ * (or comes forward) — routeJob's pattern. No such tab: the new tab stays
+ * ({handedOff: false}); it opens the link window itself once signed in.
+ */
+async function routeLink(senderTab, screen) {
+  if (!senderTab || senderTab.id === undefined) return { handedOff: false };
+  let tabs = [];
+  try {
+    tabs = await chrome.tabs.query({ url: "https://messages.google.com/web/*" });
+  } catch (_err) {
+    tabs = [];
+  }
+  for (const tab of tabs) {
+    if (tab.id === undefined || tab.id === senderTab.id) continue;
+    const state = await askTab(tab.id, { type: "keepr-ping" });
+    if (!state || !state.signedIn) continue;
+    try {
+      await chrome.tabs.update(tab.id, { active: true });
+      if (tab.windowId !== undefined) await chrome.windows.update(tab.windowId, { focused: true });
+      await chrome.tabs.remove(senderTab.id);
+    } catch (_err) {
+      // The other tab is in front either way.
+    }
+    await openLinkWindow(undefined, screen).catch(() => undefined);
+    return { handedOff: true };
+  }
+  return { handedOff: false };
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message) return false;
   // Only accept messages from this extension's own content scripts.
@@ -708,6 +741,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     case "keepr-check-pending":
       jobApi("POST", "/job/pending").then(sendResponse, fail);
+      return true;
+    case "keepr-link-found":
+      // Keepr's "Open Google Messages" (#keepr-link): the open tab, the link window.
+      routeLink(sender.tab, message.screen).then(sendResponse, fail);
       return true;
     case "keepr-job-found":
       routeJob(message.jobId, sender.tab).then(sendResponse, fail);

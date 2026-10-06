@@ -264,6 +264,17 @@ describe("rcs-import:start-cache-job window (BACKLOG-3658)", () => {
   // Live (founder): which version the extension reports, logged when it
   // changes (version only) — so "update ready" can be checked from the log.
   // Mutation: no log line, or one per hello → red.
+  // Live (founder): the link screen's "Open Google Messages" opens Messages
+  // with #keepr-link (the extension moves to the open tab and opens its link
+  // window). Mutation: the plain URL → red.
+  it("Open Google Messages: the Messages URL with #keepr-link", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { shell } = require("electron") as { shell: { openExternal: jest.Mock } };
+    shell.openExternal.mockClear();
+    await handlers.get("rcs-import:open-google-messages")!({});
+    expect(shell.openExternal).toHaveBeenCalledWith("https://messages.google.com/web/conversations#keepr-link");
+  });
+
   it("the extension's reported version is logged once per change (version only)", async () => {
     mockLogInfo.mockClear();
     mockBridgeOptions!.onHello!({ version: "0.3.85" });

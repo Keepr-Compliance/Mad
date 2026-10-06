@@ -126,6 +126,8 @@ import type {
 const LOG_TAG = "RcsImport";
 export const RCS_JOB_PROGRESS_CHANNEL = "rcs-import:job-progress";
 export const RCS_MESSAGES_WEB_URL = "https://messages.google.com/web/conversations";
+/** Keepr's "Open Google Messages" on its link screen: the extension's link window, in the open Messages tab. */
+export const RCS_LINK_HASH = "keepr-link";
 /**
  * The Keepr extension's Chrome Web Store listing (storyboard A02 "Add to
  * Chrome"). Only used once the extension is published (the renderer's
@@ -1400,7 +1402,10 @@ export function registerRcsImportHandlers(): void {
   ipcMain.handle(
     "rcs-import:open-google-messages",
     wrapHandler(async (): Promise<{ success: true }> => {
-      await shell.openExternal(RCS_MESSAGES_WEB_URL);
+      // Live (founder): #keepr-link — the extension moves to the Messages tab
+      // already open (closing this new one) and opens its link window. With
+      // no extension, a plain Messages tab as before.
+      await shell.openExternal(`${RCS_MESSAGES_WEB_URL}#${RCS_LINK_HASH}`);
       return { success: true };
     }, { module: LOG_TAG }),
   );

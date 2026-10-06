@@ -22,6 +22,10 @@
   var SIGN_IN_BEFORE = "Sign in or scan the QR code, then ";
   var SIGN_IN_AFTER = " in Keepr.";
   var JOB_HASH_RE = /(?:^#|&)keepr-job=([0-9a-fA-F-]{36})(?:&|$)/;
+  /** Keepr's "Open Google Messages" on its link screen (see background.js routeLink). */
+  var LINK_HASH_RE = /(?:^#|&)keepr-link(?:&|$)/;
+  /** How long this tab waits to be signed in before it opens the link window itself. */
+  var LINK_SIGNED_IN_WAIT_MS = 60000;
   var LIST_ITEM = "mws-conversation-list-item";
 
   function jobIdFromHash(hash) {
@@ -2983,7 +2987,30 @@
   /** The drag handle inside the box (renderOverlay's badge). */
   var DRAG_HANDLE = '[data-keepr="drag-handle"]';
 
+  /**
+   * #keepr-link: the worker moves to an already signed-in Messages tab (this
+   * one closes) and opens the link window. Else this tab opens it itself —
+   * only once Messages is signed in here (on the QR page nothing happens: the
+   * page card shows "Link this browser" after pairing, as before).
+   */
+  async function handleLinkHash(io) {
+    var sc = root.screen || {};
+    var screenBox = { left: sc.availLeft, top: sc.availTop, width: sc.availWidth, height: sc.availHeight };
+    var route = await io.toWorker({ type: "keepr-link-found", screen: screenBox });
+    if (route && route.handedOff) return "handed_off";
+    for (var waited = 0; waited < LINK_SIGNED_IN_WAIT_MS; waited += 1000) {
+      if (io.signedIn()) {
+        await io.toWorker({ type: "keepr-open-link-window", screen: screenBox });
+        return "opened_here";
+      }
+      await io.sleep(1000);
+    }
+    return "not_signed_in";
+  }
+
   var api = {
+    handleLinkHash: handleLinkHash,
+    LINK_HASH_RE: LINK_HASH_RE,
     bootPlan: bootPlan,
     FAILURE_LINES: FAILURE_LINES,
     failureLine: failureLine,
@@ -3683,6 +3710,16 @@
   }
 
   (async function boot() {
+    if (!hashJob && !storedJob && LINK_HASH_RE.test(location.hash || "")) {
+      void handleLinkHash({
+        toWorker: toWorker,
+        sleep: function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); },
+        signedIn: function () {
+          return root.KeeprScan.signInState(location.pathname) === "signed_in" &&
+            !!(document.querySelector(LIST_ITEM) || document.querySelector(root.KeeprScan.SELECTORS.headerTitle));
+        },
+      });
+    }
     var pendingJob = null;
     if (!hashJob && !storedJob) {
       var pending = await toWorker({ type: "keepr-check-pending" });

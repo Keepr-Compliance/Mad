@@ -85,6 +85,49 @@ async function loadWorker(opts: { storage?: Record<string, unknown>; paired?: bo
   return { send, fetchStub, startupCalls, chromeStub };
 }
 
+// Live (founder): Keepr's "Open Google Messages" (#keepr-link). An already
+// signed-in Messages tab comes to the front, the new tab closes, the link
+// window opens; with none, the new tab stays. Mutations: a not-signed-in tab
+// chosen; the new tab not closed; no link window → red.
+describe("service worker: keepr-link-found", () => {
+  const NEW_TAB = { id: EXTENSION_ID, url: "https://messages.google.com/web/conversations#keepr-link", tab: { id: 50, url: "https://messages.google.com/web/conversations#keepr-link" } };
+  async function setup(other: Array<{ id: number; windowId: number; signedIn: boolean }>) {
+    const w = await loadWorker();
+    const tabs = w.chromeStub.tabs as unknown as Record<string, jest.Mock>;
+    tabs.query = jest.fn(async () => [{ id: 50, windowId: 1 }, ...other.map((o) => ({ id: o.id, windowId: o.windowId }))]);
+    tabs.sendMessage = jest.fn((id: number, _m: unknown, cb: (r: unknown) => void) => cb({ signedIn: other.find((o) => o.id === id)?.signedIn ?? false, running: false }));
+    tabs.update = jest.fn(async () => undefined);
+    tabs.remove = jest.fn(async () => undefined);
+    const created: unknown[] = [];
+    (w.chromeStub.runtime as Record<string, unknown>).getURL = (p: string) => "chrome-extension://x/" + p;
+    (w.chromeStub as Record<string, unknown>).windows = {
+      update: jest.fn(async () => undefined),
+      create: jest.fn(async (o: unknown) => {
+        created.push(o);
+        return { id: 9 };
+      }),
+      getCurrent: jest.fn(async () => ({})),
+    };
+    return { w, tabs, created };
+  }
+
+  it("a signed-in Messages tab: brought forward, the new tab closed, the link window opened", async () => {
+    const { w, tabs, created } = await setup([{ id: 7, windowId: 2, signedIn: false }, { id: 8, windowId: 3, signedIn: true }]);
+    expect(await w.send({ type: "keepr-link-found", screen: {} }, NEW_TAB)).toEqual({ handedOff: true });
+    expect(tabs.update).toHaveBeenCalledWith(8, { active: true });
+    expect(tabs.update).not.toHaveBeenCalledWith(7, { active: true });
+    expect(tabs.remove).toHaveBeenCalledWith(50);
+    expect(created).toHaveLength(1);
+  });
+
+  it("no signed-in Messages tab: the new tab stays, nothing opened here", async () => {
+    const { w, tabs, created } = await setup([{ id: 7, windowId: 2, signedIn: false }]);
+    expect(await w.send({ type: "keepr-link-found", screen: {} }, NEW_TAB)).toEqual({ handedOff: false });
+    expect(tabs.remove).not.toHaveBeenCalled();
+    expect(created).toHaveLength(0);
+  });
+});
+
 // Live A/B (Step A): a running Sync's waits are answered from the worker's
 // own timer. Only from a messages.google.com tab of this extension; capped.
 // Mutations: the origin check removed; no cap → red.
