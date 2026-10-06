@@ -1262,14 +1262,21 @@
         }
       }
     }
-    /** The oldest message read so far (kept or on screen) is older than the floor. */
+    /**
+     * The TOP of the loaded run is older than the floor: the first dated
+     * message in page order, read now (the history is scrolled to its top
+     * when it ends). SR: never the oldest date anywhere — one misdated
+     * message (a year rollback, a time-only label) in a half-loaded chat
+     * must not mark it complete.
+     */
     function readPastFloor() {
-      var oldest = typeof io.oldestMs === "function" ? io.oldestMs() : null;
-      for (var id in collected) {
-        var t = Date.parse(collected[id].sentAt);
-        if (isFinite(t) && (oldest === null || t < oldest)) oldest = t;
+      if (!io.extractBatch) return false;
+      var batch = io.extractBatch() || [];
+      for (var i = 0; i < batch.length; i++) {
+        var t = batch[i] ? Date.parse(batch[i].sentAt) : NaN;
+        if (isFinite(t)) return t < floorMs;
       }
-      return typeof oldest === "number" && oldest < floorMs;
+      return false;
     }
     function imagesCollected() {
       var n = 0;

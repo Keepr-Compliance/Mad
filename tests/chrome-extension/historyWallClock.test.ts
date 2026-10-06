@@ -140,6 +140,28 @@ describe("history loading in a throttled hidden tab (live, 2026-10-05; SR F2)", 
     expect(r.noProgress).toBeUndefined();
   });
 
+  // SR: the TOP of the loaded run decides, never the oldest date anywhere —
+  // a half-loaded chat with ONE misdated message (a year rollback) stays
+  // not_settled. Mutation: the oldest date anywhere → red.
+  it("half-loaded with one misdated message lower down: still not_settled", async () => {
+    const t = slowGrowingHiddenChat(1, 60_000);
+    const now = t.now();
+    const day = (d: number) => new Date(now - d * 864e5).toISOString();
+    const r = await scan.loadHistory(document, {
+      now: t.now, sleep: t.sleep, scrollUp: () => undefined, hasScroller: () => true,
+      startMarkerSelectors: [], loadingSelectors: [], cap: 100_000,
+      floorMs: now - 30 * 864e5, oldestMs: () => null,
+      // Page order, top first: the top is 12 days old; a message further down
+      // reads as 380 days (its "Sep 20" taken as last year).
+      extractBatch: () => [
+        { msgId: "top", sentAt: day(12) },
+        { msgId: "misdated", sentAt: day(380) },
+        { msgId: "newest", sentAt: day(1) },
+      ],
+    });
+    expect(r.stopReason).toBe("not_settled");
+  });
+
   it("never read past the floor: still not_settled", async () => {
     const t = slowGrowingHiddenChat(1, 60_000);
     const now = t.now();
