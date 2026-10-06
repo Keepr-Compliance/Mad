@@ -18,14 +18,15 @@ export {};
 const scan = require("../../chrome-extension/scan.js") as {
   loadHistory: (doc: Document, io: Record<string, unknown>) => Promise<{ stopReason: string; count: number; noProgress?: boolean }>;
   HISTORY_MIN_POLLS_FOR_WALL: number;
+  HISTORY_WALL_CEILING_MS: number;
 };
 /* eslint-enable @typescript-eslint/no-require-imports */
 
 /**
- * A hidden tab: every sleep costs a throttled minute. The chat grows by one
- * message every `every` sleeps — slowly, but it never stalls for long.
+ * A hidden tab: every sleep costs `tickMs` of wall time. The chat grows by
+ * one message every `every` sleeps — slowly, but it never stalls for long.
  */
-function slowGrowingHiddenChat(every: number) {
+function slowGrowingHiddenChat(every: number, tickMs: number) {
   let clock = 1_000_000;
   let sleeps = 0;
   let n = 0;
@@ -39,7 +40,7 @@ function slowGrowingHiddenChat(every: number) {
     now: () => clock,
     sleep: async () => {
       sleeps += 1;
-      clock += 60_000;
+      clock += tickMs;
       if (sleeps % every === 0) add();
     },
     sleeps: () => sleeps,
@@ -52,7 +53,8 @@ describe("history loading in a throttled hidden tab (live, 2026-10-05; SR F2)", 
   });
 
   it("not cut early, and bounded: a slowly growing hidden chat gets ≥ the minimum polls, then ends on wall time", async () => {
-    const t = slowGrowingHiddenChat(3);
+    // 15 s per poll: the minimum polls (7.5 min) come before the wall ceiling.
+    const t = slowGrowingHiddenChat(3, 15_000);
     const r = await scan.loadHistory(document, {
       now: t.now,
       sleep: t.sleep,
@@ -69,5 +71,23 @@ describe("history loading in a throttled hidden tab (live, 2026-10-05; SR F2)", 
     // cap) meant thousands of throttled minutes; now it ends soon after.
     expect(t.sleeps()).toBeLessThanOrEqual(scan.HISTORY_MIN_POLLS_FOR_WALL + 10);
     expect(r.stopReason).toBe("not_settled");
+  });
+
+  // SR: an absolute wall-clock ceiling per chat, whatever the poll count.
+  // Mutation: no ceiling → red (~30 throttled minutes on one chat).
+  it("ceiling: at 1 min per poll a chat that keeps growing ends at 10 minutes (not_settled)", async () => {
+    const t = slowGrowingHiddenChat(1, 60_000);
+    const r = await scan.loadHistory(document, {
+      now: t.now,
+      sleep: t.sleep,
+      scrollUp: () => undefined,
+      hasScroller: () => true,
+      startMarkerSelectors: [],
+      loadingSelectors: [],
+      cap: 100_000,
+    });
+    expect(t.sleeps()).toBeLessThanOrEqual(scan.HISTORY_WALL_CEILING_MS / 60_000 + 1);
+    expect(r.stopReason).toBe("not_settled");
+    expect((r as { wallCeiling?: boolean }).wallCeiling).toBe(true);
   });
 });

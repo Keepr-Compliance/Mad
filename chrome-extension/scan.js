@@ -703,6 +703,12 @@
    * one or two attempts.
    */
   var HISTORY_MIN_POLLS_FOR_WALL = 30;
+  /**
+   * SR (2026-10-05): an absolute wall-clock ceiling per chat, whatever the
+   * poll count — a heavily throttled hidden tab (1 min per poll) cannot
+   * spend ~30 min on one stuck chat. Ends the chat not_settled.
+   */
+  var HISTORY_WALL_CEILING_MS = 10 * 60000;
   var HISTORY_BUDGET_CAP_MS = 300000;
   /**
    * SR: the extra time is a per-RUN pool, shared by every chat of a Sync.
@@ -935,6 +941,7 @@
     var clockNow = typeof io.now === "function" ? io.now : function () { return Date.now(); };
     var startedAt = clockNow();
     var nominal = 0;
+    var wallCeiling = false;
     var polls = 0;
     function tick(ms) {
       nominal += ms;
@@ -959,6 +966,10 @@
     }
     /** Budget left? Out of it while still growing → extended (up to the cap). */
     function inBudget() {
+      if (clockNow() - startedAt >= HISTORY_WALL_CEILING_MS) {
+        wallCeiling = true;
+        return false;
+      }
       // Live (2026-10-05): no growth for HISTORY_NO_PROGRESS_MS ends the chat.
       if (spent - Math.max(lastGrowthAt, 0) > HISTORY_NO_PROGRESS_MS) {
         noProgress = true;
@@ -1050,6 +1061,7 @@
       // Live (2026-10-05): how long the history had not grown when it ended (ms).
       r.idleMs = Math.max(0, spent - Math.max(lastGrowthAt, 0));
       if (noProgress) r.noProgress = true;
+      if (wallCeiling) r.wallCeiling = true;
       if (confirmedBy) r.confirmedBy = confirmedBy;
       if (gapsDetected > 0) {
         r.gapsDetected = gapsDetected;
@@ -1463,6 +1475,7 @@
     RCS_HISTORY_EXTENSION_POOL_MS: RCS_HISTORY_EXTENSION_POOL_MS,
     HISTORY_NO_PROGRESS_MS: HISTORY_NO_PROGRESS_MS,
     HISTORY_MIN_POLLS_FOR_WALL: HISTORY_MIN_POLLS_FOR_WALL,
+    HISTORY_WALL_CEILING_MS: HISTORY_WALL_CEILING_MS,
     HISTORY_SMALL_CHAT: HISTORY_SMALL_CHAT,
     HISTORY_FIRST_GROWTH_MS: HISTORY_FIRST_GROWTH_MS,
     HISTORY_NUDGE_WATCH_MS: HISTORY_NUDGE_WATCH_MS,

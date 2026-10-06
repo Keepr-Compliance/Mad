@@ -199,6 +199,7 @@ Also: the 128×128 icon (`icons/keepr-128.png`, 96 art + 16 padding) and a
 | 0.3.77 | History budgets on the wall clock (hidden tabs); a stalled chat ends; "Google Messages stopped responding." |
 | 0.3.78 | Stalled-run count only from stalled chats; the wall clock counts after 30 real polls. |
 | 0.3.79 | Step timings in the diagnostics log (one line per chat, one photo line) and as run totals in the Sync metrics. |
+| 0.3.80 | A chat ends after 10 minutes of loading history, however few polls ran. |
 
 ## 10. Review history
 
